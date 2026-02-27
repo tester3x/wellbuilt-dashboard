@@ -1,0 +1,43 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(tasklist:*)",
+      "Bash(findstr:*)",
+      "Bash(taskkill:*)",
+      "Bash(npm run dev:*)",
+      "Bash(timeout:*)",
+      "Bash(npx tsc --noEmit)",
+      "Bash(powershell -Command:*)",
+      "Bash(curl:*)",
+      "Bash(dir:*)",
+      "Bash(node:*)",
+      "Bash(npx firebase database:get:*)",
+      "Bash(npx firebase:*)",
+      "Bash(cmd //c \"dir C:\\\\wellbuilt\\\\vba /s /b 2>nul\")",
+      "Bash(cmd //c \"if exist C:\\\\wellbuilt\\\\vba \\(dir C:\\\\wellbuilt\\\\vba\\) else \\(echo folder not found\\)\")",
+      "Bash(cmd //c \"dir C:\\\\Users\\\\WellBuilt\\\\*modFirebase* /s /b 2>nul\")",
+      "Bash(head:*)",
+      "Bash(npm run build:*)",
+      "Bash(firebase experiments:enable:*)",
+      "Bash(npx firebase-tools experiments:enable webframeworks)",
+      "Bash(npx firebase-tools deploy:*)",
+      "Bash(npx ts-node:*)",
+      "Bash(firebase functions:list:*)",
+      "Bash(npx firebase-tools:*)",
+      "Bash(npm run start:*)",
+      "Bash(netstat:*)",
+      "Bash(npm run deploy:*)",
+      "Bash(npx expo export:*)",
+      "Bash(ls -la \"C:\\\\wellbuilt-dashboard\\\\src\\\\components\"\" 2>nul || echo \"No components directory found \")",
+      "Bash(git -C C:wellbuilt-dashboard diff HEAD~1 -- src/lib/wells.ts)",
+      "Bash(npx next build:*)",
+      "Bash(cmd /c dir:*)",
+      "Bash(find:*)",
+      "Bash(cd:*)",
+      "Bash(ls \"C:\"\" 2>/dev/null | grep -i -E \"ticket)",
+      "Bash(water:*)",
+      "Bash(wellbuilt\" || echo \"checking other locations...\" && ls \"C:UsersWellBuiltProjects\" 2>/dev/null || ls \"C:UsersWellBuilt\" 2>/dev/null | grep -i -E \"ticket)",
+      "Bash(wellbuilt \")"
+    ]
+  }
+}

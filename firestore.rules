@@ -1,0 +1,70 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    // Companies — dashboard needs read/write (DEV_MODE has no auth)
+    match /companies/{companyId} {
+      allow read, write: if true;
+    }
+
+    // Invoices — WB T app reads/writes
+    match /invoices/{invoiceId} {
+      allow read, write: if true;
+    }
+
+    // Water tickets
+    match /tickets/{ticketId} {
+      allow read, write: if true;
+    }
+
+    // Invoice number blocks
+    match /invoiceBlocks/{blockId} {
+      allow read, write: if true;
+    }
+
+    // NDIC operators cache
+    match /operators/{opId} {
+      allow read: if true;
+      allow write: if true;
+    }
+
+    // NDIC wells cache
+    match /wells/{wellId} {
+      allow read: if true;
+      allow write: if true;
+    }
+
+    // NDIC disposals
+    match /disposals/{disposalId} {
+      allow read: if true;
+      allow write: if true;
+    }
+
+    // Location corrections from drivers
+    match /locationCorrections/{correctionId} {
+      allow read, write: if true;
+    }
+
+    // Custom locations
+    match /customLocations/{locId} {
+      allow read, write: if true;
+    }
+
+    // Operator aliases
+    match /operatorAliases/{aliasId} {
+      allow read, write: if true;
+    }
+
+    // Unmatched companies/locations logging from app
+    match /unmatchedCompanies/{docId} {
+      allow read, write: if true;
+    }
+    match /unmatchedLocations/{docId} {
+      allow read, write: if true;
+    }
+
+    // Default: deny everything else
+    match /{document=**} {
+      allow read, write: if false;
+    }
+  }
+}
