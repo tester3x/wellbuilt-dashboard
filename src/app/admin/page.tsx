@@ -685,6 +685,8 @@ export default function AdminPage() {
   };
 
   // Add pull
+  const [addingPull, setAddingPull] = useState(false);
+
   const handleAddPull = async () => {
     if (!pullWell) {
       showMessage('Select a well');
@@ -694,36 +696,45 @@ export default function AdminPage() {
       showMessage('Enter tank level');
       return;
     }
+    if (addingPull) return;
+    setAddingPull(true);
 
-    const db = getFirebaseDatabase();
-    const levelFeet = (parseFloat(pullFeet) || 0) + (parseFloat(pullInches) || 0) / 12;
-    const dt = new Date(pullDateTime);
-    const packetId = `${dt.toISOString().replace(/[-:T]/g, '').slice(0, 15)}_${pullWell.replace(/\s/g, '')}_dashboard`;
+    try {
+      const db = getFirebaseDatabase();
+      const levelFeet = (parseFloat(pullFeet) || 0) + (parseFloat(pullInches) || 0) / 12;
+      const dt = new Date(pullDateTime);
+      const packetId = `${dt.toISOString().replace(/[-:T]/g, '').slice(0, 15)}_${pullWell.replace(/\s/g, '')}_dashboard`;
 
-    const packet = {
-      packetId,
-      wellName: pullWell.replace(/([a-z])(\d)/gi, '$1 $2'), // Add space back for display
-      tankLevelFeet: levelFeet,
-      bblsTaken: parseInt(pullBbls) || 0,
-      dateTime: dt.toLocaleString(),
-      dateTimeUTC: dt.toISOString(),
-      driverName: user?.displayName || user?.email || 'Dashboard',
-      driverId: user?.uid || 'dashboard',
-      requestType: 'pull',
-      timezone: Intl.DateTimeFormat().resolvedOptions().timeZone,
-      wellDown: false,
-    };
+      const packet = {
+        packetId,
+        wellName: pullWell.replace(/([a-z])(\d)/gi, '$1 $2'), // Add space back for display
+        tankLevelFeet: levelFeet,
+        bblsTaken: parseInt(pullBbls) || 0,
+        dateTime: dt.toLocaleString(),
+        dateTimeUTC: dt.toISOString(),
+        driverName: user?.displayName || user?.email || 'Dashboard',
+        driverId: user?.uid || 'dashboard',
+        requestType: 'pull',
+        timezone: Intl.DateTimeFormat().resolvedOptions().timeZone,
+        wellDown: false,
+      };
 
-    await set(ref(db, `packets/incoming/${packetId}`), packet);
-    showMessage(`Pull added for ${pullWell}`);
+      await set(ref(db, `packets/incoming/${packetId}`), packet);
+      showMessage(`Pull added for ${pullWell}`);
 
-    // Reset form
-    setPullFeet('');
-    setPullInches('');
-    setPullBbls('140');
-    const now = new Date();
-    const local = new Date(now.getTime() - now.getTimezoneOffset() * 60000);
-    setPullDateTime(local.toISOString().slice(0, 16));
+      // Reset form
+      setPullFeet('');
+      setPullInches('');
+      setPullBbls('140');
+      const now = new Date();
+      const local = new Date(now.getTime() - now.getTimezoneOffset() * 60000);
+      setPullDateTime(local.toISOString().slice(0, 16));
+    } catch (error) {
+      console.error('Error adding pull:', error);
+      showMessage('Failed to add pull. Check connection and try again.');
+    } finally {
+      setAddingPull(false);
+    }
   };
 
   if (loading) {
@@ -1196,9 +1207,10 @@ export default function AdminPage() {
 
                 <button
                   onClick={handleAddPull}
-                  className="w-full px-4 py-2 bg-green-600 hover:bg-green-700 text-white rounded font-medium"
+                  disabled={addingPull}
+                  className={`w-full px-4 py-2 text-white rounded font-medium ${addingPull ? 'bg-green-800 cursor-wait' : 'bg-green-600 hover:bg-green-700'}`}
                 >
-                  Add Pull
+                  {addingPull ? 'Adding...' : 'Add Pull'}
                 </button>
               </div>
             </div>

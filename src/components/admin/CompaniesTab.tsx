@@ -390,8 +390,16 @@ export function CompaniesTab({ scopeCompanyId, isWbAdmin = false }: CompaniesTab
     setLogoFile(null);
     setLogoPreview(company.logoUrl || null);
     setExtractedColor(company.primaryColor || null);
-    setExtractedPalette([]);
     setManualColor(company.primaryColor || '');
+
+    // Extract color palette from existing logo (so user doesn't have to re-upload)
+    if (company.logoUrl) {
+      extractColorPalette(company.logoUrl)
+        .then(palette => setExtractedPalette(palette))
+        .catch(() => setExtractedPalette([]));
+    } else {
+      setExtractedPalette([]);
+    }
   };
 
   const saveBranding = async () => {
