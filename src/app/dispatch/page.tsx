@@ -9,6 +9,7 @@ import { ref, get } from 'firebase/database';
 import { getFirebaseDatabase } from '@/lib/firebase';
 import { getFirestoreDb } from '@/lib/firebase';
 import { collection, addDoc, getDocs, query, where, orderBy, Timestamp, doc, updateDoc, onSnapshot } from 'firebase/firestore';
+import { loadDisposals, searchDisposals, type NdicWell } from '@/lib/firestoreWells';
 
 // ─── Types ───────────────────────────────────────────────────────────────────
 
@@ -42,6 +43,11 @@ interface DispatchJob {
   currentLevel?: string;
   flowRate?: string;
   disposal?: string;  // Pre-assigned SWD disposal location
+  disposalLat?: number;
+  disposalLng?: number;
+  disposalApiNo?: string;
+  disposalLegalDesc?: string;
+  disposalCounty?: string;
 }
 
 // Priority levels for PW queue
@@ -225,6 +231,10 @@ export default function DispatchPage() {
   const [assignDriverHash, setAssignDriverHash] = useState('');
   const [assignNotes, setAssignNotes] = useState('');
   const [assignDisposal, setAssignDisposal] = useState('');
+  const [assignDisposalWell, setAssignDisposalWell] = useState<NdicWell | null>(null);
+  const [disposalSearch, setDisposalSearch] = useState('');
+  const [disposalResults, setDisposalResults] = useState<NdicWell[]>([]);
+  const [allDisposals, setAllDisposals] = useState<NdicWell[]>([]);
   const [assigning, setAssigning] = useState(false);
 
   // Service work form state
@@ -251,9 +261,10 @@ export default function DispatchPage() {
     return unsubscribe;
   }, []);
 
-  // Load drivers
+  // Load drivers + disposals
   useEffect(() => {
     loadDrivers();
+    loadDisposals().then(setAllDisposals).catch(() => {});
   }, []);
 
   // Subscribe to active dispatches in real-time
@@ -420,6 +431,9 @@ export default function DispatchPage() {
     setAssignDriverHash('');
     setAssignNotes('');
     setAssignDisposal('');
+    setAssignDisposalWell(null);
+    setDisposalSearch('');
+    setDisposalResults([]);
     setShowAssignModal(true);
   }
 
@@ -447,7 +461,14 @@ export default function DispatchPage() {
         estimatedPullTime: assignTarget.nextPullTimeUTC || '',
         currentLevel: assignTarget.currentLevel || '',
         flowRate: assignTarget.flowRate || '',
-        ...(assignDisposal ? { disposal: assignDisposal } : {}),
+        ...(assignDisposal ? {
+          disposal: assignDisposal,
+          ...(assignDisposalWell?.latitude ? { disposalLat: assignDisposalWell.latitude } : {}),
+          ...(assignDisposalWell?.longitude ? { disposalLng: assignDisposalWell.longitude } : {}),
+          ...(assignDisposalWell?.api_no ? { disposalApiNo: assignDisposalWell.api_no } : {}),
+          ...(assignDisposalWell?.legal_desc ? { disposalLegalDesc: assignDisposalWell.legal_desc } : {}),
+          ...(assignDisposalWell?.county ? { disposalCounty: assignDisposalWell.county } : {}),
+        } : {}),
       };
 
       await addDoc(collection(firestore, 'dispatches'), job);
@@ -933,15 +954,54 @@ export default function DispatchPage() {
             </div>
 
             {/* Disposal */}
-            <div className="mb-4">
+            <div className="mb-4 relative">
               <label className="block text-sm text-gray-400 mb-1">Disposal Location (optional)</label>
-              <input
-                type="text"
-                value={assignDisposal}
-                onChange={(e) => setAssignDisposal(e.target.value)}
-                placeholder="e.g. Hydro Clear SWD, Nuverra..."
-                className="w-full px-3 py-2 bg-gray-900 border border-gray-700 rounded-lg text-white text-sm placeholder-gray-500 focus:outline-none focus:border-blue-500"
-              />
+              {assignDisposalWell ? (
+                <div className="flex items-center gap-2 px-3 py-2 bg-gray-900 border border-cyan-700 rounded-lg">
+                  <span className="text-cyan-400 text-sm flex-1 truncate">{assignDisposal}</span>
+                  <span className="text-gray-500 text-xs">{assignDisposalWell.county || ''}</span>
+                  <button
+                    onClick={() => { setAssignDisposal(''); setAssignDisposalWell(null); setDisposalSearch(''); }}
+                    className="text-gray-400 hover:text-white text-xs ml-1"
+                  >&#10005;</button>
+                </div>
+              ) : (
+                <input
+                  type="text"
+                  value={disposalSearch}
+                  onChange={(e) => {
+                    const val = e.target.value;
+                    setDisposalSearch(val);
+                    if (val.length >= 2) {
+                      setDisposalResults(searchDisposals(val, allDisposals));
+                    } else {
+                      setDisposalResults([]);
+                    }
+                  }}
+                  placeholder="Search SWD / disposal facilities..."
+                  className="w-full px-3 py-2 bg-gray-900 border border-gray-700 rounded-lg text-white text-sm placeholder-gray-500 focus:outline-none focus:border-blue-500"
+                />
+              )}
+              {disposalResults.length > 0 && !assignDisposalWell && (
+                <div className="absolute z-50 w-full mt-1 bg-gray-800 border border-gray-600 rounded-lg max-h-48 overflow-y-auto shadow-lg">
+                  {disposalResults.map((d, i) => (
+                    <button
+                      key={d.api_no || i}
+                      onClick={() => {
+                        setAssignDisposal(d.well_name);
+                        setAssignDisposalWell(d);
+                        setDisposalSearch('');
+                        setDisposalResults([]);
+                      }}
+                      className="w-full text-left px-3 py-2 hover:bg-gray-700 border-b border-gray-700/50 last:border-0"
+                    >
+                      <span className="text-white text-sm">{d.well_name}</span>
+                      <span className="text-gray-400 text-xs ml-2">{d.operator}</span>
+                      {d.county && <span className="text-gray-500 text-xs ml-2">{d.county} Co.</span>}
+                    </button>
+                  ))}
+                </div>
+              )}
             </div>
 
             {/* Notes */}

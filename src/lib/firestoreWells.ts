@@ -99,6 +99,40 @@ export function searchWellsByName(
   return matches.slice(0, maxResults);
 }
 
+// ── Disposals (SWD facilities) ──────────────────────────────────────────────
+
+let disposalsCache: NdicWell[] | null = null;
+
+export async function loadDisposals(): Promise<NdicWell[]> {
+  if (disposalsCache) return disposalsCache;
+
+  const db = getFirestoreDb();
+  const q = query(collection(db, 'disposals'), orderBy('well_name'));
+  const snapshot = await getDocs(q);
+  disposalsCache = snapshot.docs.map(d => d.data() as NdicWell);
+  console.log(`[firestoreWells] Loaded ${disposalsCache.length} disposals`);
+  return disposalsCache;
+}
+
+export function searchDisposals(
+  searchText: string,
+  disposals: NdicWell[],
+  maxResults: number = 15,
+): NdicWell[] {
+  if (!searchText || searchText.length < 2) return [];
+
+  const lower = searchText.toLowerCase().trim();
+  const words = lower.split(/\s+/).filter(w => w.length > 0);
+
+  const matches = disposals.filter(disp => {
+    const name = (disp.search_name || disp.well_name || '').toLowerCase();
+    const op = (disp.search_operator || disp.operator || '').toLowerCase();
+    return words.every(w => name.includes(w) || op.includes(w));
+  });
+
+  return matches.slice(0, maxResults);
+}
+
 // ── Search operators ────────────────────────────────────────────────────────
 
 export function searchOperators(
