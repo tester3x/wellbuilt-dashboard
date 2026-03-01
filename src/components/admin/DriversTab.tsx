@@ -230,7 +230,11 @@ export function DriversTab({ scopeCompanyId, isWbAdmin = false }: DriversTabProp
         companyId: assignCompanyId.trim().toLowerCase() || null,
         companyName: assignCompanyName.trim() || null,
       };
-      await update(ref(db, `drivers/approved/${companyTarget.key}`), updates);
+      if (companyTarget._legacy && companyTarget._legacyDeviceId) {
+        await update(ref(db, `drivers/approved/${companyTarget.key}/${companyTarget._legacyDeviceId}`), updates);
+      } else {
+        await update(ref(db, `drivers/approved/${companyTarget.key}`), updates);
+      }
       setMessage(
         assignCompanyId.trim()
           ? `${companyTarget.displayName} assigned to ${assignCompanyName.trim() || assignCompanyId.trim()}`
