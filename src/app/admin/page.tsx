@@ -13,6 +13,7 @@ import {
   loadWellsForOperator,
   searchWellsByName,
   searchOperators,
+  loadInactiveWellsForOperator,
   type NdicWell,
   type NdicOperator,
 } from '@/lib/firestoreWells';
@@ -63,7 +64,7 @@ export default function AdminPage() {
   const [ndicOperators, setNdicOperators] = useState<NdicOperator[]>([]);
   const [ndicOperatorSearch, setNdicOperatorSearch] = useState('');
   const [ndicOperatorResults, setNdicOperatorResults] = useState<NdicOperator[]>([]);
-  const [ndicSelectedOperator, setNdicSelectedOperator] = useState('');
+  const [ndicCheckedOperators, setNdicCheckedOperators] = useState<string[]>([]);
   const [ndicOperatorWells, setNdicOperatorWells] = useState<NdicWell[]>([]);
   const [ndicWellSearch, setNdicWellSearch] = useState('');
   const [ndicWellResults, setNdicWellResults] = useState<NdicWell[]>([]);
@@ -229,32 +230,48 @@ export default function AdminPage() {
     }
   }, [ndicOperatorSearch, ndicOperators]);
 
-  // When NDIC operator selected, load their wells
+  // When checked operators change, load all their wells
   useEffect(() => {
-    if (!ndicSelectedOperator) {
+    if (ndicCheckedOperators.length === 0) {
       setNdicOperatorWells([]);
       setNdicWellResults([]);
       return;
     }
     setNdicLoadingWells(true);
-    loadWellsForOperator(ndicSelectedOperator)
-      .then(wells => {
-        setNdicOperatorWells(wells);
+    Promise.all(ndicCheckedOperators.map(async op => {
+      const [active, inactive] = await Promise.all([
+        loadWellsForOperator(op),
+        loadInactiveWellsForOperator(op),
+      ]);
+      return [...active, ...inactive];
+    }))
+      .then(results => {
+        const merged = results.flat();
+        // Deduplicate by API number (active takes priority over inactive)
+        const seen = new Map<string, typeof merged[0]>();
+        for (const well of merged) {
+          if (!seen.has(well.api_no)) {
+            seen.set(well.api_no, well);
+          }
+        }
+        const deduped = Array.from(seen.values());
+        deduped.sort((a, b) => a.well_name.localeCompare(b.well_name));
+        setNdicOperatorWells(deduped);
         setNdicLoadingWells(false);
       })
       .catch(err => {
-        console.error('[admin] Failed to load wells for operator:', err);
+        console.error('[admin] Failed to load wells for operators:', err);
         setNdicLoadingWells(false);
       });
-  }, [ndicSelectedOperator]);
+  }, [ndicCheckedOperators]);
 
   // When NDIC well search changes, filter results
   useEffect(() => {
     if (ndicWellSearch.length >= 2 && ndicOperatorWells.length > 0) {
-      setNdicWellResults(searchWellsByName(ndicWellSearch, ndicOperatorWells));
+      setNdicWellResults(searchWellsByName(ndicWellSearch, ndicOperatorWells, 50));
     } else if (ndicWellSearch.length < 2) {
-      // Show first 20 wells when search is empty (preview)
-      setNdicWellResults(ndicOperatorWells.slice(0, 20));
+      // Show all wells for scrolling when search is empty
+      setNdicWellResults(ndicOperatorWells);
     }
   }, [ndicWellSearch, ndicOperatorWells]);
 
@@ -291,11 +308,18 @@ export default function AdminPage() {
     setNdicPickerTarget(target);
     setShowNdicPicker(true);
     setNdicOperatorSearch('');
-    setNdicSelectedOperator('');
-    setNdicWellSearch('');
+    setNdicCheckedOperators([]);
     setNdicSelectedWell(null);
     setNdicWellResults([]);
     setNdicOperatorResults([]);
+    // Pre-fill well search with the name being edited/added
+    if (target === 'edit' && selectedWell) {
+      setNdicWellSearch(selectedWell);
+    } else if (target === 'add' && newWellName.trim()) {
+      setNdicWellSearch(newWellName.trim());
+    } else {
+      setNdicWellSearch('');
+    }
   };
 
   // Confirm NDIC selection and close picker
@@ -510,7 +534,7 @@ export default function AdminPage() {
     };
 
     await set(ref(db, `well_config/${wellName}`), config);
-    showMessage(`Well "${wellName}" created${ndicSelectedWell ? ` (linked to NDIC: ${ndicSelectedWell.api_no})` : ''}`);
+    showMessage(`Well "${wellName}" created${ndicSelectedWell ? ` (linked: ${ndicSelectedWell.api_no})` : ''}`);
     setNewWellName('');
     setNdicSelectedWell(null);
   };
@@ -942,7 +966,7 @@ export default function AdminPage() {
                     <div className="text-white font-medium">{wellName}</div>
                     <div className="text-gray-400 text-sm">Route: {configs[wellName].route || 'Unrouted'}</div>
                     {configs[wellName].ndicApiNo && (
-                      <div className="text-teal-400 text-xs">NDIC: {configs[wellName].ndicApiNo}</div>
+                      <div className="text-teal-400 text-xs">API: {configs[wellName].ndicApiNo}</div>
                     )}
                   </div>
                 ))}
@@ -966,15 +990,15 @@ export default function AdminPage() {
                     <button
                       onClick={() => openNdicPicker('add')}
                       className="px-3 py-2 bg-teal-700 hover:bg-teal-600 text-white text-sm rounded whitespace-nowrap"
-                      title="Search NDIC wells to auto-fill name and link API number"
+                      title="Search well database to auto-fill name and link API number"
                     >
-                      NDIC
+                      Link Well
                     </button>
                   </div>
                   {ndicSelectedWell && (
                     <div className="bg-gray-900 rounded p-2 text-xs">
                       <div className="flex justify-between items-center">
-                        <span className="text-teal-400">NDIC Linked</span>
+                        <span className="text-teal-400">Well Linked</span>
                         <button
                           onClick={() => clearNdicLink('add')}
                           className="text-red-400 hover:text-red-300 text-xs"
@@ -1055,13 +1079,13 @@ export default function AdminPage() {
                     {/* NDIC Linkage */}
                     <div className="bg-gray-900 rounded p-2">
                       <div className="flex justify-between items-center mb-1">
-                        <label className="text-gray-400 text-sm">NDIC Well Link</label>
+                        <label className="text-gray-400 text-sm">Well Database Link</label>
                         <button
                           onClick={() => openNdicPicker('edit')}
                           className="px-2 py-1 bg-teal-700 hover:bg-teal-600 text-white text-xs rounded"
                           disabled={isRenaming}
                         >
-                          {editNdicName ? 'Change' : 'Link NDIC'}
+                          {editNdicName ? 'Change' : 'Link Well'}
                         </button>
                       </div>
                       {editNdicName ? (
@@ -1076,7 +1100,7 @@ export default function AdminPage() {
                           </button>
                         </div>
                       ) : (
-                        <div className="text-gray-600 text-xs">Not linked to NDIC well</div>
+                        <div className="text-gray-600 text-xs">Not linked to well database</div>
                       )}
                     </div>
                     <div>
@@ -1311,7 +1335,7 @@ export default function AdminPage() {
           <div className="fixed inset-0 bg-black bg-opacity-60 flex items-center justify-center z-50">
             <div className="bg-gray-800 rounded-lg p-6 max-w-lg w-full mx-4 max-h-[80vh] flex flex-col">
               <div className="flex justify-between items-center mb-4">
-                <h3 className="text-xl font-semibold text-white">Link NDIC Well</h3>
+                <h3 className="text-xl font-semibold text-white">Link Well</h3>
                 <button
                   onClick={() => setShowNdicPicker(false)}
                   className="text-gray-400 hover:text-white text-2xl leading-none"
@@ -1328,38 +1352,72 @@ export default function AdminPage() {
                   value={ndicOperatorSearch}
                   onChange={(e) => {
                     setNdicOperatorSearch(e.target.value);
-                    setNdicSelectedOperator('');
-                    setNdicWellSearch('');
                     setNdicSelectedWell(null);
                   }}
                   placeholder="Search operators (e.g., Slawson, Continental)"
                   className="w-full px-3 py-2 bg-gray-700 text-white rounded mt-1"
                   autoFocus
                 />
-                {ndicOperatorResults.length > 0 && !ndicSelectedOperator && (
-                  <div className="bg-gray-900 rounded mt-1 max-h-32 overflow-y-auto">
+                {ndicOperatorResults.length > 0 && (
+                  <div className="bg-gray-900 rounded mt-1 max-h-48 overflow-y-auto">
                     {ndicOperatorResults.map(op => (
                       <div
                         key={op.name}
                         onClick={() => {
-                          setNdicSelectedOperator(op.name);
-                          setNdicOperatorSearch(op.name);
-                          setNdicOperatorResults([]);
+                          setNdicCheckedOperators(prev =>
+                            prev.includes(op.name)
+                              ? prev.filter(n => n !== op.name)
+                              : [...prev, op.name]
+                          );
                         }}
-                        className="px-3 py-2 hover:bg-gray-700 cursor-pointer text-white text-sm"
+                        className={`px-3 py-2 hover:bg-gray-700 cursor-pointer text-white text-sm flex items-center gap-2 ${ndicCheckedOperators.includes(op.name) ? 'bg-gray-700' : ''}`}
                       >
-                        {op.name}
-                        {op.well_count && (
-                          <span className="text-gray-500 ml-2">({op.well_count} wells)</span>
-                        )}
+                        <input
+                          type="checkbox"
+                          checked={ndicCheckedOperators.includes(op.name)}
+                          readOnly
+                          className="accent-teal-500 pointer-events-none"
+                        />
+                        <span className="flex-1">
+                          {op.name}
+                          {op.state && (
+                            <span className={`ml-2 text-xs px-1.5 py-0.5 rounded ${op.state === 'MT' ? 'bg-yellow-900 text-yellow-300' : 'bg-blue-900 text-blue-300'}`}>{op.state}</span>
+                          )}
+                          {op.well_count && (
+                            <span className="text-gray-500 ml-2">({op.well_count} wells)</span>
+                          )}
+                        </span>
                       </div>
                     ))}
+                  </div>
+                )}
+                {/* Checked operator pills */}
+                {ndicCheckedOperators.length > 0 && (
+                  <div className="flex flex-wrap gap-1 mt-2">
+                    {ndicCheckedOperators.map(name => {
+                      const matchingOps = ndicOperators.filter(o => o.name === name);
+                      return (
+                        <span
+                          key={name}
+                          className="inline-flex items-center gap-1 px-2 py-1 bg-teal-900 text-teal-300 text-xs rounded"
+                        >
+                          {name}
+                          {matchingOps.map(op => op.state && (
+                            <span key={op.state} className={`text-xs px-1 rounded ${op.state === 'MT' ? 'bg-yellow-900 text-yellow-300' : 'bg-blue-900 text-blue-300'}`}>{op.state}</span>
+                          ))}
+                          <button
+                            onClick={() => setNdicCheckedOperators(prev => prev.filter(n => n !== name))}
+                            className="text-teal-500 hover:text-white ml-1"
+                          >&times;</button>
+                        </span>
+                      );
+                    })}
                   </div>
                 )}
               </div>
 
               {/* Step 2: Search well (after operator selected) */}
-              {ndicSelectedOperator && (
+              {ndicCheckedOperators.length > 0 && (
                 <div className="mb-3">
                   <label className="text-gray-400 text-sm">Well Name</label>
                   <input
@@ -1377,8 +1435,8 @@ export default function AdminPage() {
               )}
 
               {/* Well results list */}
-              {ndicSelectedOperator && ndicWellResults.length > 0 && (
-                <div className="flex-1 overflow-y-auto bg-gray-900 rounded mb-3">
+              {ndicCheckedOperators.length > 0 && ndicWellResults.length > 0 && (
+                <div className="flex-1 overflow-y-auto bg-gray-900 rounded mb-3" style={{ maxHeight: '400px' }}>
                   {ndicWellResults.map(well => (
                     <div
                       key={well.api_no}
@@ -1389,7 +1447,12 @@ export default function AdminPage() {
                           : 'hover:bg-gray-700'
                       }`}
                     >
-                      <div className="text-white text-sm">{well.well_name}</div>
+                      <div className="text-white text-sm">
+                        {well.well_name}
+                        {well.state && (
+                          <span className={`ml-2 text-xs px-1.5 py-0.5 rounded ${well.state === 'MT' ? 'bg-yellow-900 text-yellow-300' : 'bg-blue-900 text-blue-300'}`}>{well.state}</span>
+                        )}
+                      </div>
                       <div className="text-gray-500 text-xs">
                         API: {well.api_no}
                         {well.county && ` | ${well.county} Co.`}
@@ -1405,7 +1468,15 @@ export default function AdminPage() {
                 </div>
               )}
 
-              {ndicSelectedOperator && ndicWellResults.length === 0 && !ndicLoadingWells && (
+              {ndicCheckedOperators.length > 0 && !ndicLoadingWells && ndicOperatorWells.length > 0 && (
+                <div className="text-gray-500 text-xs text-right mb-1">
+                  {ndicWellSearch.length >= 2
+                    ? `${ndicWellResults.length} of ${ndicOperatorWells.length} wells`
+                    : `${ndicOperatorWells.length} wells`}
+                </div>
+              )}
+
+              {ndicCheckedOperators.length > 0 && ndicWellResults.length === 0 && !ndicLoadingWells && (
                 <div className="text-gray-500 text-sm text-center py-4">
                   {ndicWellSearch.length >= 2 ? 'No wells match your search' : 'Type to search wells or scroll the list'}
                 </div>

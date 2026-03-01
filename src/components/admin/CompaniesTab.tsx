@@ -938,7 +938,7 @@ export function CompaniesTab({ scopeCompanyId, isWbAdmin = false }: CompaniesTab
           <div className="bg-gray-800 rounded-lg p-6 max-w-md w-full mx-4">
             <h3 className="text-white font-medium mb-1">Add Oil Company</h3>
             <p className="text-gray-400 text-xs mb-4">
-              Search NDIC operators and click to add.
+              Search operators and click to add.
             </p>
 
             <input

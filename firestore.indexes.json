@@ -23,6 +23,14 @@
         { "fieldPath": "driverHash", "order": "ASCENDING" },
         { "fieldPath": "status", "order": "ASCENDING" }
       ]
+    },
+    {
+      "collectionGroup": "wells_inactive",
+      "queryScope": "COLLECTION",
+      "fields": [
+        { "fieldPath": "operator", "order": "ASCENDING" },
+        { "fieldPath": "well_name", "order": "ASCENDING" }
+      ]
     }
   ],
   "fieldOverrides": []

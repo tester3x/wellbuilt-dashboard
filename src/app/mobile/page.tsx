@@ -33,6 +33,7 @@ export default function MobilePage() {
   });
   const [dataLoading, setDataLoading] = useState(true);
   const [viewMode, setViewMode] = useState<ViewMode>('table');
+  const [wellSearch, setWellSearch] = useState('');
 
   // Independent sort state per route
   const [routeSorts, setRouteSorts] = useState<Record<string, RouteSort>>({});
@@ -212,9 +213,16 @@ export default function MobilePage() {
     });
   };
 
+  // Filter wells by search (routes auto-hide when they have no matching wells)
+  const wellSearchTerm = wellSearch.trim().toLowerCase();
+  const filteredRoutes = routes;
+
   // Group wells by route with sorting + pullBbls override
   const getWellsForRoute = (route: string, paginate = true): WellResponse[] => {
-    const routeWells = wells.filter((w) => w.route === route);
+    let routeWells = wells.filter((w) => w.route === route);
+    if (wellSearchTerm) {
+      routeWells = routeWells.filter(w => w.wellName.toLowerCase().includes(wellSearchTerm));
+    }
     const overrideBbls = routePullBbls[route];
 
     // Apply pullBbls override if set (recalculates Tank @ Level and Time Till Pull)
@@ -256,12 +264,29 @@ export default function MobilePage() {
       <main className="px-4 py-8">
         {/* Title and Controls */}
         <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-4 mb-6">
-          <h2 className="text-xl font-semibold text-white">
-            Well Status
-            <span className="text-gray-400 text-base font-normal ml-2">
-              ({wells.length} wells)
-            </span>
-          </h2>
+          <div className="flex items-center gap-8">
+            <h2 className="text-xl font-semibold text-white">
+              Well Status
+              <span className="text-gray-400 text-base font-normal ml-2">
+                ({wells.length} wells)
+              </span>
+            </h2>
+            <div className="relative">
+              <input
+                type="text"
+                value={wellSearch}
+                onChange={(e) => setWellSearch(e.target.value)}
+                placeholder="Search wells..."
+                className="px-3 py-1.5 pr-8 bg-gray-700 text-white text-sm rounded border border-gray-600 focus:border-teal-500 focus:outline-none w-64"
+              />
+              {wellSearch && (
+                <button
+                  onClick={() => setWellSearch('')}
+                  className="absolute right-2 top-1/2 -translate-y-1/2 text-gray-400 hover:text-white text-sm"
+                >&times;</button>
+              )}
+            </div>
+          </div>
 
           <div className="flex flex-wrap items-center gap-4">
             {/* Performance link */}
@@ -322,12 +347,12 @@ export default function MobilePage() {
         ) : viewMode === 'cards' ? (
           /* Cards View - Grouped by Route */
           <div className="space-y-4">
-            {routes.map((route) => (
+            {filteredRoutes.filter(route => getWellsForRoute(route, false).length > 0).map((route) => (
               <div key={route}>
                 <RouteSection
                   route={route}
                   wells={getWellsForRoute(route)}
-                  isExpanded={expandedRoutes.has(route)}
+                  isExpanded={wellSearchTerm ? true : expandedRoutes.has(route)}
                   onToggle={() => toggleRoute(route)}
                   pullBbls={routePullBbls[route] || 140}
                   defaultPullBbls={wells.find(w => w.route === route)?.pullBbls || 140}
@@ -347,12 +372,12 @@ export default function MobilePage() {
         ) : (
           /* Table View - Grouped by Route */
           <div className="space-y-4">
-            {routes.map((route) => (
+            {filteredRoutes.filter(route => getWellsForRoute(route, false).length > 0).map((route) => (
               <div key={route}>
                 <RouteTable
                   route={route}
                   wells={getWellsForRoute(route)}
-                  isExpanded={expandedRoutes.has(route)}
+                  isExpanded={wellSearchTerm ? true : expandedRoutes.has(route)}
                   onToggle={() => toggleRoute(route)}
                   sortState={routeSorts[route] || { field: 'wellName', dir: 'asc' }}
                   onSort={(field) => handleRouteSort(route, field)}

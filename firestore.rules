@@ -27,8 +27,12 @@ service cloud.firestore {
       allow write: if true;
     }
 
-    // NDIC wells cache
+    // Well database (active + inactive)
     match /wells/{wellId} {
+      allow read: if true;
+      allow write: if true;
+    }
+    match /wells_inactive/{wellId} {
       allow read: if true;
       allow write: if true;
     }

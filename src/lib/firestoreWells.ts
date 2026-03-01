@@ -1,6 +1,6 @@
-// Firestore NDIC well data queries
+// Firestore well data queries (ND + MT)
 // Uses the same `wellbuilt-sync` Firestore that WB Tickets populates via scripts/importWellData.ts
-// Collections: operators (~103), wells (~19,276), disposals (~1,007)
+// Collections: operators (ND ~103 + MT), wells (ND ~19K + MT ~13K), disposals (ND ~1K + MT)
 
 import { getFirestoreDb } from './firebase';
 import {
@@ -23,12 +23,14 @@ export interface NdicWell {
   field_name?: string;
   search_name?: string;
   search_operator?: string;
+  state?: string; // 'ND' | 'MT'
 }
 
 export interface NdicOperator {
   name: string;
   well_count?: number;
   search_name?: string;
+  state?: string; // 'ND' | 'MT'
 }
 
 // ── In-memory cache ─────────────────────────────────────────────────────────
@@ -69,16 +71,72 @@ export async function loadWellsForOperator(operatorName: string): Promise<NdicWe
   return wells;
 }
 
+// ── Inactive wells fallback ────────────────────────────────────────────────
+
+let inactiveWellsCacheByOperator: Record<string, NdicWell[]> = {};
+
+export async function loadInactiveWellsForOperator(operatorName: string): Promise<NdicWell[]> {
+  if (inactiveWellsCacheByOperator[operatorName]) {
+    return inactiveWellsCacheByOperator[operatorName];
+  }
+
+  const db = getFirestoreDb();
+  const q = query(
+    collection(db, 'wells_inactive'),
+    where('operator', '==', operatorName),
+    orderBy('well_name'),
+  );
+  const snapshot = await getDocs(q);
+  const wells = snapshot.docs.map(d => d.data() as NdicWell);
+  inactiveWellsCacheByOperator[operatorName] = wells;
+  console.log(`[firestoreWells] Loaded ${wells.length} inactive wells for ${operatorName}`);
+  return wells;
+}
+
+/**
+ * Find a well by exact name. Checks active wells first, falls back to inactive.
+ * Used when a well_config entry references a name not in the active collection.
+ */
+export async function findWellByName(wellName: string, operatorWells?: NdicWell[]): Promise<NdicWell | null> {
+  const lower = wellName.toLowerCase();
+
+  // 1. Check provided operator wells
+  if (operatorWells) {
+    const match = operatorWells.find(w => (w.search_name || w.well_name.toLowerCase()) === lower);
+    if (match) return match;
+  }
+
+  // 2. Query active wells collection
+  const db = getFirestoreDb();
+  const activeQuery = query(
+    collection(db, 'wells'),
+    where('search_name', '==', lower),
+    limit(1),
+  );
+  const activeSnap = await getDocs(activeQuery);
+  if (!activeSnap.empty) return activeSnap.docs[0].data() as NdicWell;
+
+  // 3. Fallback: query inactive wells collection
+  const inactiveQuery = query(
+    collection(db, 'wells_inactive'),
+    where('search_name', '==', lower),
+    limit(1),
+  );
+  const inactiveSnap = await getDocs(inactiveQuery);
+  if (!inactiveSnap.empty) {
+    console.log(`[firestoreWells] Found "${wellName}" in inactive wells`);
+    return inactiveSnap.docs[0].data() as NdicWell;
+  }
+
+  return null;
+}
+
 // ── Search wells across all operators (by well name substring) ──────────────
 
 /**
- * Search NDIC wells by name across all operators.
- * Uses the search_name field (lowercase, no noise words) for matching.
+ * Search wells by name across all operators (ND + MT).
+ * Uses the search_name field (lowercase) for matching.
  * Returns up to `maxResults` matches.
- *
- * NOTE: Firestore doesn't support LIKE/contains queries, so for global search
- * we load all wells for matched operators or do client-side filtering.
- * For the dashboard admin well picker, we search by operator first (more practical).
  */
 export function searchWellsByName(
   searchText: string,
