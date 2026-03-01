@@ -1046,8 +1046,15 @@ export const processEditRequest = functionsV1.database
       return null;
     }
 
-    const originalPacketId = data.originalPacketId;
+    // WB M sends the original packet ID as "packetId", dashboard sends as "originalPacketId"
+    const originalPacketId = data.originalPacketId || data.packetId;
     const wellName = data.wellName;
+
+    if (!originalPacketId) {
+      console.error(`Edit failed: no originalPacketId or packetId on edit packet`);
+      await snapshot.ref.remove();
+      return null;
+    }
 
     console.log(`Processing edit for ${wellName}: ${originalPacketId}`);
 
