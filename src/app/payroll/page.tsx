@@ -65,6 +65,7 @@ export default function PayrollPage() {
   const [showDeductionModal, setShowDeductionModal] = useState(false);
   const [showDeductionList, setShowDeductionList] = useState(false);
   const [driverNames, setDriverNames] = useState<string[]>([]);
+  const [legalNameMap, setLegalNameMap] = useState<Record<string, string>>({});
   const [dedDriver, setDedDriver] = useState('');
   const [dedReason, setDedReason] = useState('');
   const [dedCustomReason, setDedCustomReason] = useState('');
@@ -111,11 +112,17 @@ export default function PayrollPage() {
       const snapshot = await get(ref(db, 'drivers/approved'));
       if (!snapshot.exists()) return;
       const names: string[] = [];
+      const legalMap: Record<string, string> = {};
       snapshot.forEach(child => {
         const data = child.val();
-        if (data?.displayName) names.push(data.displayName);
+        if (data?.displayName) {
+          names.push(data.displayName);
+          const legal = data.legalName || data.profile?.legalName;
+          if (legal) legalMap[data.displayName] = legal;
+        }
       });
       setDriverNames([...new Set(names)].sort());
+      setLegalNameMap(legalMap);
     } catch (err) {
       console.error('Failed to load driver names:', err);
     }
@@ -406,6 +413,7 @@ export default function PayrollPage() {
                         badge={badge}
                         isExpanded={isExpanded}
                         onToggle={() => setExpandedDriver(isExpanded ? null : ts.driverName)}
+                        legalNameMap={legalNameMap}
                       />
                     );
                   })}
@@ -704,11 +712,13 @@ function DriverRow({
   badge,
   isExpanded,
   onToggle,
+  legalNameMap = {},
 }: {
   summary: DriverTimesheetSummary;
   badge: { label: string; color: string };
   isExpanded: boolean;
   onToggle: () => void;
+  legalNameMap?: Record<string, string>;
 }) {
   return (
     <>
@@ -718,7 +728,10 @@ function DriverRow({
         onClick={onToggle}
       >
         <td className="px-4 py-3">
-          <div className="text-white font-medium">{summary.driverName}</div>
+          <div className="text-white font-medium">{legalNameMap[summary.driverName] || summary.driverName}</div>
+          {legalNameMap[summary.driverName] && legalNameMap[summary.driverName] !== summary.driverName && (
+            <div className="text-gray-500 text-xs">{summary.driverName}</div>
+          )}
           {summary.truckNumber && (
             <div className="text-gray-500 text-xs">Truck {summary.truckNumber}</div>
           )}
@@ -752,7 +765,7 @@ function DriverRow({
       {isExpanded && (
         <tr>
           <td colSpan={10} className="p-0">
-            <DriverTimesheetDetail summary={summary} />
+            <DriverTimesheetDetail summary={summary} legalNameMap={legalNameMap} />
           </td>
         </tr>
       )}
@@ -762,13 +775,16 @@ function DriverRow({
 
 // ─── Individual Driver Timesheet Detail ──────────────────────────────────────
 
-function DriverTimesheetDetail({ summary }: { summary: DriverTimesheetSummary }) {
+function DriverTimesheetDetail({ summary, legalNameMap = {} }: { summary: DriverTimesheetSummary; legalNameMap?: Record<string, string> }) {
   return (
     <div className="bg-gray-900/50 border-t border-gray-700 px-6 py-4">
       {/* Driver Header */}
       <div className="flex items-center justify-between mb-4">
         <div>
-          <h3 className="text-lg font-bold text-white">{summary.driverName}</h3>
+          <h3 className="text-lg font-bold text-white">{legalNameMap[summary.driverName] || summary.driverName}</h3>
+          {legalNameMap[summary.driverName] && legalNameMap[summary.driverName] !== summary.driverName && (
+            <p className="text-gray-500 text-xs">Login: {summary.driverName}</p>
+          )}
           <p className="text-gray-400 text-sm">
             {summary.totalLoads} loads &middot; {summary.totalBBLs.toLocaleString()} BBL
             {summary.totalHours > 0 && ` · ${summary.totalHours.toFixed(2)} hrs`}

@@ -14,6 +14,7 @@ interface AssignedCustomer {
 interface ApprovedDriver {
   key: string;           // passcode hash (Firebase key)
   displayName: string;
+  legalName?: string;    // full legal name for payroll/printed docs
   name?: string;         // legacy field
   isAdmin?: boolean;
   isViewer?: boolean;
@@ -35,6 +36,7 @@ interface DriversTabProps {
 interface PendingDriver {
   key: string;
   displayName: string;
+  legalName?: string;      // full legal name from registration
   passcodeHash: string;
   timestamp?: number;
   companyName?: string;    // company name driver entered during registration
@@ -86,6 +88,7 @@ export function DriversTab({ scopeCompanyId, isWbAdmin = false }: DriversTabProp
             approved.push({
               key: hash,
               displayName: val.displayName || val.name || 'Unknown',
+              legalName: val.legalName || val.profile?.legalName || undefined,
               name: val.name,
               isAdmin: val.isAdmin || false,
               isViewer: val.isViewer || false,
@@ -151,6 +154,7 @@ export function DriversTab({ scopeCompanyId, isWbAdmin = false }: DriversTabProp
           pending.push({
             key,
             displayName: val.displayName || 'Unknown',
+            legalName: val.legalName || undefined,
             passcodeHash: val.passcodeHash || '',
             timestamp: val.timestamp || (val.requestedAt ? new Date(val.requestedAt).getTime() : undefined),
             companyName: val.companyName || undefined,
@@ -251,6 +255,7 @@ export function DriversTab({ scopeCompanyId, isWbAdmin = false }: DriversTabProp
       // Also carry forward the companyName the driver entered during registration
       const approvedData: Record<string, any> = {
         displayName: driver.displayName,
+        legalName: driver.legalName || driver.displayName,
         name: driver.displayName,
         active: true,
         isAdmin: false,
@@ -497,6 +502,9 @@ export function DriversTab({ scopeCompanyId, isWbAdmin = false }: DriversTabProp
               <div key={driver.key} className="flex items-center justify-between bg-gray-700 rounded p-3">
                 <div>
                   <span className="text-white font-medium">{driver.displayName}</span>
+                  {driver.legalName && driver.legalName !== driver.displayName && (
+                    <span className="text-gray-400 text-xs ml-2">({driver.legalName})</span>
+                  )}
                   {driver.companyName && (
                     <span className="px-1.5 py-0.5 bg-teal-700 text-teal-200 text-xs rounded font-medium ml-2">
                       {driver.companyName}
@@ -578,7 +586,12 @@ export function DriversTab({ scopeCompanyId, isWbAdmin = false }: DriversTabProp
                 >
                   <div className="flex items-center gap-3">
                     <span className={`w-2 h-2 rounded-full ${driver.active ? 'bg-green-400' : 'bg-gray-500'}`} />
-                    <span className="text-white font-medium">{driver.displayName}</span>
+                    <div className="flex flex-col">
+                      <span className="text-white font-medium">{driver.displayName}</span>
+                      {driver.legalName && driver.legalName !== driver.displayName && (
+                        <span className="text-gray-400 text-xs">{driver.legalName}</span>
+                      )}
+                    </div>
                     {isWbAdmin && driver._legacy && (
                       <span className="px-1.5 py-0.5 bg-orange-700 text-orange-200 text-xs rounded font-medium">Legacy</span>
                     )}

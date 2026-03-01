@@ -39,6 +39,7 @@ export interface DriverTimesheetRow {
 
 export interface DriverTimesheetSummary {
   driverName: string;
+  legalName?: string;
   driverHash?: string;
   companyId?: string;
   companyName?: string;
