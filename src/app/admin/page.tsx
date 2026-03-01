@@ -757,6 +757,15 @@ export default function AdminPage() {
           <div className="mb-4 p-3 bg-blue-900 text-blue-200 rounded">{message}</div>
         )}
 
+        {/* Section Title */}
+        <h2 className="text-xl font-bold text-white mb-3">
+          {activeTab === 'pulls' ? 'Manual Pull Entry' :
+           activeTab === 'wells' ? 'Well Configuration' :
+           activeTab === 'routes' ? 'Route Management' :
+           activeTab === 'drivers' ? 'Driver Management' :
+           'Company Management'}
+        </h2>
+
         {/* Tabs */}
         <div className="flex gap-2 mb-6 flex-wrap">
           <button
