@@ -28,6 +28,19 @@ const TIER_DESCRIPTIONS: Record<Tier, string> = {
 
 const TIER_ORDER: Tier[] = ['field-basics', 'full-field', 'suite'];
 
+interface RateEntry {
+  jobType: string;
+  method: 'per_bbl' | 'hourly';
+  rate: number;
+}
+
+interface PayConfig {
+  defaultSplit: number;       // e.g. 0.25 for 25%
+  payrollRounding: 'match_billing' | 'none' | 'quarter_hour' | 'half_hour';
+  payPeriod: 'weekly' | 'biweekly' | 'monthly';
+  autoApproveHours?: number;  // hours before auto-approve (0 = disabled)
+}
+
 interface CompanyConfig {
   id: string;
   name: string;
@@ -38,7 +51,9 @@ interface CompanyConfig {
   invoicePrefix?: string;
   invoiceBook?: boolean;
   ticketPrefix?: string;
-  rateSheet?: Record<string, number>;
+  rateSheet?: Record<string, number>;  // legacy simple format
+  rateSheets?: Record<string, RateEntry[]>;  // per-operator rate sheets
+  payConfig?: PayConfig;
   notes?: string;
   assignedOperators?: string[];
   logoUrl?: string;
@@ -96,6 +111,19 @@ export function CompaniesTab({ scopeCompanyId, isWbAdmin = false }: CompaniesTab
   const [manualColor, setManualColor] = useState('');
   const [brandingSaving, setBrandingSaving] = useState(false);
   const logoInputRef = useRef<HTMLInputElement>(null);
+
+  // Rate sheet state
+  const [rateSheetCompany, setRateSheetCompany] = useState<CompanyConfig | null>(null);
+  const [rateSheetOperator, setRateSheetOperator] = useState('');
+  const [rateSheetEntries, setRateSheetEntries] = useState<RateEntry[]>([]);
+  const [rateSheetSaving, setRateSheetSaving] = useState(false);
+
+  // Pay config state
+  const [payConfigCompany, setPayConfigCompany] = useState<CompanyConfig | null>(null);
+  const [payConfigSplit, setPayConfigSplit] = useState('25');
+  const [payConfigRounding, setPayConfigRounding] = useState<PayConfig['payrollRounding']>('match_billing');
+  const [payConfigPeriod, setPayConfigPeriod] = useState<PayConfig['payPeriod']>('weekly');
+  const [payConfigAutoApprove, setPayConfigAutoApprove] = useState('48');
 
   const firestore = getFirestoreDb();
 
@@ -275,6 +303,94 @@ export function CompaniesTab({ scopeCompanyId, isWbAdmin = false }: CompaniesTab
     } catch (err) {
       console.error('Failed to remove operator:', err);
       setMessage('Failed to remove operator');
+    }
+  };
+
+  // ── Rate Sheet helpers ──
+
+  const JOB_TYPES = ['Production %', 'Service Work', 'Rig Move', 'Hot Shot', 'Frac Water', 'Other'];
+  const BILLING_METHODS: { value: 'per_bbl' | 'hourly'; label: string }[] = [
+    { value: 'per_bbl', label: '$/BBL' },
+    { value: 'hourly', label: '$/hr' },
+  ];
+
+  const openRateSheet = (company: CompanyConfig, operator: string) => {
+    setRateSheetCompany(company);
+    setRateSheetOperator(operator);
+    const existing = company.rateSheets?.[operator] || [];
+    setRateSheetEntries(existing.length > 0 ? [...existing] : [
+      { jobType: 'Production %', method: 'per_bbl', rate: 0 },
+    ]);
+  };
+
+  const addRateEntry = () => {
+    setRateSheetEntries(prev => [...prev, { jobType: '', method: 'per_bbl', rate: 0 }]);
+  };
+
+  const removeRateEntry = (idx: number) => {
+    setRateSheetEntries(prev => prev.filter((_, i) => i !== idx));
+  };
+
+  const updateRateEntry = (idx: number, field: keyof RateEntry, value: any) => {
+    setRateSheetEntries(prev => prev.map((entry, i) =>
+      i === idx ? { ...entry, [field]: value } : entry
+    ));
+  };
+
+  const saveRateSheet = async () => {
+    if (!rateSheetCompany || !rateSheetOperator) return;
+    setRateSheetSaving(true);
+    try {
+      const validEntries = rateSheetEntries.filter(e => e.jobType && e.rate > 0);
+      const updatedSheets = { ...(rateSheetCompany.rateSheets || {}) };
+      if (validEntries.length > 0) {
+        updatedSheets[rateSheetOperator] = validEntries;
+      } else {
+        delete updatedSheets[rateSheetOperator];
+      }
+      await updateDoc(doc(firestore, 'companies', rateSheetCompany.id), {
+        rateSheets: updatedSheets,
+      });
+      setMessage(`Rate sheet saved for ${rateSheetOperator}`);
+      setRateSheetCompany(null);
+      await loadCompanies();
+    } catch (err) {
+      console.error('Failed to save rate sheet:', err);
+      setMessage('Failed to save rate sheet');
+    } finally {
+      setRateSheetSaving(false);
+    }
+  };
+
+  // ── Pay Config helpers ──
+
+  const openPayConfig = (company: CompanyConfig) => {
+    setPayConfigCompany(company);
+    const cfg = company.payConfig;
+    setPayConfigSplit(cfg?.defaultSplit ? String(Math.round(cfg.defaultSplit * 100)) : '25');
+    setPayConfigRounding(cfg?.payrollRounding || 'match_billing');
+    setPayConfigPeriod(cfg?.payPeriod || 'weekly');
+    setPayConfigAutoApprove(cfg?.autoApproveHours != null ? String(cfg.autoApproveHours) : '48');
+  };
+
+  const savePayConfig = async () => {
+    if (!payConfigCompany) return;
+    try {
+      const config: PayConfig = {
+        defaultSplit: Number(payConfigSplit) / 100,
+        payrollRounding: payConfigRounding,
+        payPeriod: payConfigPeriod,
+        autoApproveHours: Number(payConfigAutoApprove) || 48,
+      };
+      await updateDoc(doc(firestore, 'companies', payConfigCompany.id), {
+        payConfig: config,
+      });
+      setMessage(`Pay config saved for ${payConfigCompany.name}`);
+      setPayConfigCompany(null);
+      await loadCompanies();
+    } catch (err) {
+      console.error('Failed to save pay config:', err);
+      setMessage('Failed to save pay config');
     }
   };
 
@@ -694,6 +810,83 @@ export function CompaniesTab({ scopeCompanyId, isWbAdmin = false }: CompaniesTab
                       )}
                     </div>
 
+                    {/* ── Rate Sheets (per operator) ── */}
+                    {(company.assignedOperators?.length || 0) > 0 && (
+                      <div className="border-t border-gray-600 pt-3">
+                        <h4 className="text-green-400 text-sm font-medium mb-2">
+                          Rate Sheets
+                        </h4>
+                        <div className="space-y-1">
+                          {company.assignedOperators!.map(op => {
+                            const rates = company.rateSheets?.[op];
+                            const hasRates = rates && rates.length > 0;
+                            return (
+                              <div
+                                key={op}
+                                className="flex items-center justify-between px-2 py-1.5 bg-gray-700/30 rounded text-sm"
+                              >
+                                <div className="flex items-center gap-2">
+                                  <span className="text-gray-300">{op}</span>
+                                  {hasRates ? (
+                                    <span className="text-green-400 text-xs">
+                                      {rates!.length} rate{rates!.length !== 1 ? 's' : ''}
+                                      {' · '}
+                                      {rates!.map(r => `${r.jobType}: $${r.rate}${r.method === 'per_bbl' ? '/bbl' : '/hr'}`).join(', ')}
+                                    </span>
+                                  ) : (
+                                    <span className="text-gray-500 text-xs">No rates set</span>
+                                  )}
+                                </div>
+                                <button
+                                  onClick={(e) => { e.stopPropagation(); openRateSheet(company, op); }}
+                                  className="px-2 py-0.5 text-xs rounded bg-green-700 hover:bg-green-600 text-white"
+                                >
+                                  {hasRates ? 'Edit' : '+ Set Rates'}
+                                </button>
+                              </div>
+                            );
+                          })}
+                        </div>
+                      </div>
+                    )}
+
+                    {/* ── Pay Config ── */}
+                    <div className="border-t border-gray-600 pt-3">
+                      <div className="flex items-center justify-between mb-2">
+                        <h4 className="text-cyan-400 text-sm font-medium">
+                          Payroll Config
+                        </h4>
+                        <button
+                          onClick={(e) => { e.stopPropagation(); openPayConfig(company); }}
+                          className="px-2 py-1 text-xs rounded bg-cyan-700 hover:bg-cyan-600 text-white"
+                        >
+                          {company.payConfig ? 'Edit Config' : '+ Set Up Payroll'}
+                        </button>
+                      </div>
+                      {company.payConfig ? (
+                        <div className="flex flex-wrap gap-3 text-xs">
+                          <span className="text-gray-400">
+                            Split: <span className="text-cyan-300">{Math.round(company.payConfig.defaultSplit * 100)}%</span>
+                          </span>
+                          <span className="text-gray-400">
+                            Period: <span className="text-cyan-300">{company.payConfig.payPeriod}</span>
+                          </span>
+                          <span className="text-gray-400">
+                            Rounding: <span className="text-cyan-300">
+                              {company.payConfig.payrollRounding === 'match_billing' ? 'Match billing' : company.payConfig.payrollRounding}
+                            </span>
+                          </span>
+                          <span className="text-gray-400">
+                            Auto-approve: <span className="text-cyan-300">{company.payConfig.autoApproveHours || 48}h</span>
+                          </span>
+                        </div>
+                      ) : (
+                        <div className="text-gray-500 text-xs py-1">
+                          Not configured yet. Set up employee split, pay period, and rounding.
+                        </div>
+                      )}
+                    </div>
+
                     {/* ── Branding ── */}
                     <div className="border-t border-gray-600 pt-3">
                       <div className="flex items-center justify-between mb-2">
@@ -1084,6 +1277,191 @@ export function CompaniesTab({ scopeCompanyId, isWbAdmin = false }: CompaniesTab
               </button>
               <button
                 onClick={() => setBrandingCompany(null)}
+                className="px-4 py-2 bg-gray-600 hover:bg-gray-500 text-white rounded"
+              >
+                Cancel
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* ── Rate Sheet Modal ── */}
+      {rateSheetCompany && (
+        <div className="fixed inset-0 bg-black bg-opacity-60 flex items-center justify-center z-50">
+          <div className="bg-gray-800 rounded-lg p-6 max-w-lg w-full mx-4">
+            <h3 className="text-white font-medium mb-1">Rate Sheet</h3>
+            <p className="text-gray-400 text-xs mb-4">
+              {rateSheetCompany.name} → {rateSheetOperator}
+            </p>
+
+            <div className="space-y-3 mb-4 max-h-80 overflow-y-auto">
+              {rateSheetEntries.map((entry, idx) => (
+                <div key={idx} className="flex items-center gap-2">
+                  {/* Job Type */}
+                  <select
+                    value={entry.jobType}
+                    onChange={e => updateRateEntry(idx, 'jobType', e.target.value)}
+                    className="flex-1 px-2 py-1.5 bg-gray-700 text-white rounded text-sm"
+                  >
+                    <option value="">Select job type...</option>
+                    {JOB_TYPES.map(jt => (
+                      <option key={jt} value={jt}>{jt}</option>
+                    ))}
+                  </select>
+
+                  {/* Billing Method */}
+                  <select
+                    value={entry.method}
+                    onChange={e => updateRateEntry(idx, 'method', e.target.value)}
+                    className="w-24 px-2 py-1.5 bg-gray-700 text-white rounded text-sm"
+                  >
+                    {BILLING_METHODS.map(bm => (
+                      <option key={bm.value} value={bm.value}>{bm.label}</option>
+                    ))}
+                  </select>
+
+                  {/* Rate */}
+                  <div className="relative w-28">
+                    <span className="absolute left-2 top-1/2 -translate-y-1/2 text-gray-400 text-sm">$</span>
+                    <input
+                      type="number"
+                      step="0.01"
+                      min="0"
+                      value={entry.rate || ''}
+                      onChange={e => updateRateEntry(idx, 'rate', parseFloat(e.target.value) || 0)}
+                      className="w-full pl-6 pr-2 py-1.5 bg-gray-700 text-white rounded text-sm"
+                      placeholder="0.00"
+                    />
+                  </div>
+
+                  {/* Remove */}
+                  <button
+                    onClick={() => removeRateEntry(idx)}
+                    className="text-red-400 hover:text-red-300 text-sm px-1"
+                    title="Remove"
+                  >
+                    ✕
+                  </button>
+                </div>
+              ))}
+            </div>
+
+            <button
+              onClick={addRateEntry}
+              className="text-green-400 hover:text-green-300 text-xs mb-4"
+            >
+              + Add Rate
+            </button>
+
+            <div className="flex gap-2">
+              <button
+                onClick={saveRateSheet}
+                disabled={rateSheetSaving}
+                className="flex-1 px-4 py-2 bg-green-600 hover:bg-green-500 text-white rounded disabled:opacity-50"
+              >
+                {rateSheetSaving ? 'Saving...' : 'Save Rates'}
+              </button>
+              <button
+                onClick={() => setRateSheetCompany(null)}
+                className="px-4 py-2 bg-gray-600 hover:bg-gray-500 text-white rounded"
+              >
+                Cancel
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* ── Pay Config Modal ── */}
+      {payConfigCompany && (
+        <div className="fixed inset-0 bg-black bg-opacity-60 flex items-center justify-center z-50">
+          <div className="bg-gray-800 rounded-lg p-6 max-w-md w-full mx-4">
+            <h3 className="text-white font-medium mb-1">Payroll Configuration</h3>
+            <p className="text-gray-400 text-xs mb-4">{payConfigCompany.name}</p>
+
+            <div className="space-y-4">
+              {/* Employee Split */}
+              <div>
+                <label className="block text-gray-400 text-xs mb-1">Employee Split (%)</label>
+                <div className="flex items-center gap-2">
+                  <input
+                    type="number"
+                    min="0"
+                    max="100"
+                    value={payConfigSplit}
+                    onChange={e => setPayConfigSplit(e.target.value)}
+                    className="w-24 px-3 py-2 bg-gray-700 text-white rounded text-sm"
+                  />
+                  <span className="text-gray-400 text-sm">%</span>
+                  <span className="text-gray-500 text-xs ml-2">
+                    (driver gets {payConfigSplit}% of amount billed)
+                  </span>
+                </div>
+              </div>
+
+              {/* Pay Period */}
+              <div>
+                <label className="block text-gray-400 text-xs mb-1">Pay Period</label>
+                <select
+                  value={payConfigPeriod}
+                  onChange={e => setPayConfigPeriod(e.target.value as PayConfig['payPeriod'])}
+                  className="w-full px-3 py-2 bg-gray-700 text-white rounded text-sm"
+                >
+                  <option value="weekly">Weekly</option>
+                  <option value="biweekly">Bi-Weekly</option>
+                  <option value="monthly">Monthly</option>
+                </select>
+              </div>
+
+              {/* Payroll Rounding */}
+              <div>
+                <label className="block text-gray-400 text-xs mb-1">Payroll Time Rounding</label>
+                <select
+                  value={payConfigRounding}
+                  onChange={e => setPayConfigRounding(e.target.value as PayConfig['payrollRounding'])}
+                  className="w-full px-3 py-2 bg-gray-700 text-white rounded text-sm"
+                >
+                  <option value="match_billing">Match billing rounding (per operator)</option>
+                  <option value="none">No rounding (to the minute)</option>
+                  <option value="quarter_hour">Quarter hour</option>
+                  <option value="half_hour">Half hour</option>
+                </select>
+                {payConfigRounding === 'match_billing' && (
+                  <p className="text-gray-500 text-xs mt-1">
+                    Payroll hours will match whatever rounding each oil company uses for billing.
+                  </p>
+                )}
+              </div>
+
+              {/* Auto-Approve */}
+              <div>
+                <label className="block text-gray-400 text-xs mb-1">Auto-Approve Deadline (hours)</label>
+                <div className="flex items-center gap-2">
+                  <input
+                    type="number"
+                    min="0"
+                    value={payConfigAutoApprove}
+                    onChange={e => setPayConfigAutoApprove(e.target.value)}
+                    className="w-24 px-3 py-2 bg-gray-700 text-white rounded text-sm"
+                  />
+                  <span className="text-gray-400 text-sm">hours</span>
+                </div>
+                <p className="text-gray-500 text-xs mt-1">
+                  If driver doesn&apos;t respond within this time, timesheet is auto-approved. Set 0 to disable.
+                </p>
+              </div>
+            </div>
+
+            <div className="flex gap-2 mt-6">
+              <button
+                onClick={savePayConfig}
+                className="flex-1 px-4 py-2 bg-cyan-600 hover:bg-cyan-500 text-white rounded"
+              >
+                Save Config
+              </button>
+              <button
+                onClick={() => setPayConfigCompany(null)}
                 className="px-4 py-2 bg-gray-600 hover:bg-gray-500 text-white rounded"
               >
                 Cancel
