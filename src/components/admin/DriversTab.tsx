@@ -4,6 +4,7 @@ import { useEffect, useState } from 'react';
 import { getFirebaseDatabase, getFirestoreDb } from '@/lib/firebase';
 import { ref, get, set, remove, update } from 'firebase/database';
 import { collection, getDocs } from 'firebase/firestore';
+import { fetchRouteNames } from '@/lib/wells';
 
 interface AssignedCustomer {
   name: string;
@@ -20,6 +21,8 @@ interface ApprovedDriver {
   companyId?: string;    // which trucking company this driver belongs to
   companyName?: string;  // display name of the company
   assignedCustomers?: AssignedCustomer[];
+  assignedRoutes?: string[];   // routes this driver can see
+  assignedWells?: string[];    // one-off well assignments (dispatch overrides)
   _legacy?: boolean;     // true if stored in old {hash}/{deviceId}/ format
   _legacyDeviceId?: string; // the device sub-key for legacy records
 }
@@ -58,6 +61,12 @@ export function DriversTab({ scopeCompanyId, isWbAdmin = false }: DriversTabProp
   const [assignCompanyName, setAssignCompanyName] = useState('');
   const [companiesList, setCompaniesList] = useState<{ id: string; name: string; assignedOperators: string[] }[]>([]);
 
+  // Assign routes modal
+  const [showRoutesModal, setShowRoutesModal] = useState(false);
+  const [routeTarget, setRouteTarget] = useState<ApprovedDriver | null>(null);
+  const [selectedRoutes, setSelectedRoutes] = useState<string[]>([]);
+  const [availableRoutes, setAvailableRoutes] = useState<string[]>([]);
+
   // Expanded driver (shows details + assigned customers)
   const [expandedDriver, setExpandedDriver] = useState<string | null>(null);
 
@@ -84,6 +93,8 @@ export function DriversTab({ scopeCompanyId, isWbAdmin = false }: DriversTabProp
               companyId: val.companyId || undefined,
               companyName: val.companyName || undefined,
               assignedCustomers: Array.isArray(val.assignedCustomers) ? val.assignedCustomers : [],
+              assignedRoutes: Array.isArray(val.assignedRoutes) ? val.assignedRoutes : [],
+              assignedWells: Array.isArray(val.assignedWells) ? val.assignedWells : [],
             });
           } else {
             // Legacy structure: drivers/approved/{hash}/{deviceId}/ = { displayName, active, ... }
@@ -118,6 +129,8 @@ export function DriversTab({ scopeCompanyId, isWbAdmin = false }: DriversTabProp
               isViewer: foundViewer,
               active: foundActive,
               assignedCustomers: Array.isArray(val.assignedCustomers) ? val.assignedCustomers : [],
+              assignedRoutes: Array.isArray(val.assignedRoutes) ? val.assignedRoutes : [],
+              assignedWells: Array.isArray(val.assignedWells) ? val.assignedWells : [],
               _legacy: true,
               _legacyDeviceId: legacyDeviceId,
             });
@@ -175,6 +188,35 @@ export function DriversTab({ scopeCompanyId, isWbAdmin = false }: DriversTabProp
       }
     })();
   }, []);
+
+  // Load available routes from well_config
+  useEffect(() => {
+    (async () => {
+      try {
+        const routes = await fetchRouteNames();
+        setAvailableRoutes(routes.filter(r => r !== 'Unrouted'));
+      } catch (err) {
+        console.error('Failed to load routes:', err);
+      }
+    })();
+  }, []);
+
+  // ── Assign routes to driver ──
+  const assignDriverRoutes = async () => {
+    if (!routeTarget) return;
+    try {
+      await update(ref(db, `drivers/approved/${routeTarget.key}`), {
+        assignedRoutes: selectedRoutes.length > 0 ? selectedRoutes : null,
+      });
+      setMessage(`Assigned ${selectedRoutes.length} route(s) to ${routeTarget.displayName}`);
+      setShowRoutesModal(false);
+      setRouteTarget(null);
+      await loadDrivers();
+    } catch (err) {
+      console.error('Failed to assign routes:', err);
+      setMessage('Failed to assign routes');
+    }
+  };
 
   // ── Assign driver to a company (WB admin only) ──
   const assignDriverCompany = async () => {
@@ -557,6 +599,11 @@ export function DriversTab({ scopeCompanyId, isWbAdmin = false }: DriversTabProp
                         {driver.assignedCustomers!.length} customer{driver.assignedCustomers!.length > 1 ? 's' : ''}
                       </span>
                     )}
+                    {(driver.assignedRoutes?.length || 0) > 0 && (
+                      <span className="px-1.5 py-0.5 bg-blue-600 text-blue-200 text-xs rounded font-medium">
+                        {driver.assignedRoutes!.length} route{driver.assignedRoutes!.length > 1 ? 's' : ''}
+                      </span>
+                    )}
                   </div>
                   <span className="text-gray-400 text-sm">
                     {expandedDriver === driver.key ? '▲' : '▼'}
@@ -598,6 +645,16 @@ export function DriversTab({ scopeCompanyId, isWbAdmin = false }: DriversTabProp
                         className="px-3 py-1 text-sm rounded bg-yellow-600 hover:bg-yellow-500 text-white"
                       >
                         + Assign Customer
+                      </button>
+                      <button
+                        onClick={() => {
+                          setRouteTarget(driver);
+                          setSelectedRoutes(driver.assignedRoutes || []);
+                          setShowRoutesModal(true);
+                        }}
+                        className="px-3 py-1 text-sm rounded bg-blue-600 hover:bg-blue-500 text-white"
+                      >
+                        {(driver.assignedRoutes?.length || 0) > 0 ? 'Edit Routes' : '+ Assign Routes'}
                       </button>
                       {isWbAdmin && (
                         <button
@@ -653,6 +710,24 @@ export function DriversTab({ scopeCompanyId, isWbAdmin = false }: DriversTabProp
                                 Remove
                               </button>
                             </div>
+                          ))}
+                        </div>
+                      )}
+                    </div>
+
+                    {/* Assigned Routes */}
+                    <div>
+                      <h4 className="text-gray-400 text-xs font-medium uppercase tracking-wider mb-2">
+                        Assigned Routes
+                      </h4>
+                      {(driver.assignedRoutes?.length || 0) === 0 ? (
+                        <p className="text-gray-500 text-sm">No routes assigned (sees all wells)</p>
+                      ) : (
+                        <div className="flex flex-wrap gap-1">
+                          {driver.assignedRoutes!.map(route => (
+                            <span key={route} className="px-2 py-1 bg-blue-900 text-blue-200 text-sm rounded">
+                              {route}
+                            </span>
                           ))}
                         </div>
                       )}
@@ -806,6 +881,63 @@ export function DriversTab({ scopeCompanyId, isWbAdmin = false }: DriversTabProp
                   setAssignTarget(null);
                   setNewCustomerName('');
                   setNewCustomerCompanyId('');
+                }}
+                className="px-4 py-2 bg-gray-600 hover:bg-gray-500 text-white rounded"
+              >
+                Cancel
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* ── Assign Routes Modal ── */}
+      {showRoutesModal && routeTarget && (
+        <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50">
+          <div className="bg-gray-800 rounded-lg p-6 max-w-md w-full mx-4">
+            <h3 className="text-white font-medium mb-1">Assign Routes</h3>
+            <p className="text-gray-400 text-sm mb-4">
+              Select routes for <span className="text-white">{routeTarget.displayName}</span>
+            </p>
+
+            {availableRoutes.length === 0 ? (
+              <p className="text-yellow-400 text-sm">No routes found in well_config.</p>
+            ) : (
+              <div className="space-y-2 max-h-64 overflow-y-auto">
+                {availableRoutes.map(route => (
+                  <label key={route} className="flex items-center gap-3 cursor-pointer hover:bg-gray-700 rounded p-2">
+                    <input
+                      type="checkbox"
+                      checked={selectedRoutes.includes(route)}
+                      onChange={(e) => {
+                        if (e.target.checked) {
+                          setSelectedRoutes([...selectedRoutes, route]);
+                        } else {
+                          setSelectedRoutes(selectedRoutes.filter(r => r !== route));
+                        }
+                      }}
+                      className="w-4 h-4 rounded"
+                    />
+                    <span className="text-white text-sm">{route}</span>
+                  </label>
+                ))}
+              </div>
+            )}
+
+            <div className="flex gap-2 mt-4">
+              <button
+                onClick={assignDriverRoutes}
+                className="flex-1 px-4 py-2 bg-blue-600 hover:bg-blue-500 text-white rounded"
+              >
+                {selectedRoutes.length > 0
+                  ? `Assign ${selectedRoutes.length} Route${selectedRoutes.length > 1 ? 's' : ''}`
+                  : 'Remove All Routes'}
+              </button>
+              <button
+                onClick={() => {
+                  setShowRoutesModal(false);
+                  setRouteTarget(null);
+                  setSelectedRoutes([]);
                 }}
                 className="px-4 py-2 bg-gray-600 hover:bg-gray-500 text-white rounded"
               >

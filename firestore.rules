@@ -62,6 +62,11 @@ service cloud.firestore {
       allow read, write: if true;
     }
 
+    // Dispatches — dashboard creates, WB T app reads/updates
+    match /dispatches/{jobId} {
+      allow read, write: if true;
+    }
+
     // Default: deny everything else
     match /{document=**} {
       allow read, write: if false;

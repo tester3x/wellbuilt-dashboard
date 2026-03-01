@@ -22,7 +22,15 @@ export default function MobilePage() {
   const router = useRouter();
   const [wells, setWells] = useState<WellResponse[]>([]);
   const [routes, setRoutes] = useState<string[]>([]);
-  const [expandedRoutes, setExpandedRoutes] = useState<Set<string>>(new Set());
+  const [expandedRoutes, setExpandedRoutes] = useState<Set<string>>(() => {
+    if (typeof window !== 'undefined') {
+      try {
+        const saved = localStorage.getItem('wellbuilt-expanded-routes');
+        if (saved) return new Set(JSON.parse(saved));
+      } catch {}
+    }
+    return new Set();
+  });
   const [dataLoading, setDataLoading] = useState(true);
   const [viewMode, setViewMode] = useState<ViewMode>('table');
 
@@ -31,6 +39,10 @@ export default function MobilePage() {
 
   // Per-route pull BBLs override (visual planning only — doesn't save to config)
   const [routePullBbls, setRoutePullBbls] = useState<Record<string, number>>({});
+
+  // Unrouted pagination (limit how many show at once)
+  const UNROUTED_PAGE_SIZE = 20;
+  const [unroutedShowAll, setUnroutedShowAll] = useState(false);
 
   // Edge case loads — tickets for wells not in well_config
   const [edgeCaseTickets, setEdgeCaseTickets] = useState<Ticket[]>([]);
@@ -51,13 +63,15 @@ export default function MobilePage() {
     const unsubscribe = subscribeToWellStatusesUnified((wellData, routeList) => {
       // Always update wells and routes - this is the data that changes
       setWells(wellData);
-      setRoutes(routeList);
+      // Always include "Unrouted" even if no wells have it yet
+      const routesWithUnrouted = routeList.includes('Unrouted')
+        ? routeList
+        : [...routeList, 'Unrouted'];
+      setRoutes(routesWithUnrouted);
 
       // Only do initial setup ONCE, not on every Firebase update
       if (!initialSetupDone) {
-        // Always start collapsed - don't restore from localStorage
-        // Users can expand what they need each session
-        setExpandedRoutes(new Set());
+        // expandedRoutes already restored from localStorage in useState init
 
         // Initialize sort state for each route
         const initialSorts: Record<string, RouteSort> = {};
@@ -199,7 +213,7 @@ export default function MobilePage() {
   };
 
   // Group wells by route with sorting + pullBbls override
-  const getWellsForRoute = (route: string): WellResponse[] => {
+  const getWellsForRoute = (route: string, paginate = true): WellResponse[] => {
     const routeWells = wells.filter((w) => w.route === route);
     const overrideBbls = routePullBbls[route];
 
@@ -209,8 +223,18 @@ export default function MobilePage() {
       : routeWells;
 
     const sortState = routeSorts[route] || { field: 'wellName', dir: 'asc' };
-    return sortWells(adjustedWells, sortState);
+    const sorted = sortWells(adjustedWells, sortState);
+
+    // Paginate Unrouted group to prevent massive lists
+    if (paginate && route === 'Unrouted' && !unroutedShowAll && sorted.length > UNROUTED_PAGE_SIZE) {
+      return sorted.slice(0, UNROUTED_PAGE_SIZE);
+    }
+
+    return sorted;
   };
+
+  // Total unrouted wells (for "show more" button)
+  const totalUnroutedWells = wells.filter((w) => w.route === 'Unrouted').length;
 
   if (loading) {
     return (
@@ -229,7 +253,7 @@ export default function MobilePage() {
       <AppHeader />
 
       {/* Main Content */}
-      <main className="max-w-7xl mx-auto px-4 py-8">
+      <main className="px-4 py-8">
         {/* Title and Controls */}
         <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-4 mb-6">
           <h2 className="text-xl font-semibold text-white">
@@ -299,34 +323,52 @@ export default function MobilePage() {
           /* Cards View - Grouped by Route */
           <div className="space-y-4">
             {routes.map((route) => (
-              <RouteSection
-                key={route}
-                route={route}
-                wells={getWellsForRoute(route)}
-                isExpanded={expandedRoutes.has(route)}
-                onToggle={() => toggleRoute(route)}
-                pullBbls={routePullBbls[route] || 140}
-                defaultPullBbls={wells.find(w => w.route === route)?.pullBbls || 140}
-                onPullBblsChange={(val) => setRoutePullBbls(prev => ({ ...prev, [route]: val }))}
-              />
+              <div key={route}>
+                <RouteSection
+                  route={route}
+                  wells={getWellsForRoute(route)}
+                  isExpanded={expandedRoutes.has(route)}
+                  onToggle={() => toggleRoute(route)}
+                  pullBbls={routePullBbls[route] || 140}
+                  defaultPullBbls={wells.find(w => w.route === route)?.pullBbls || 140}
+                  onPullBblsChange={(val) => setRoutePullBbls(prev => ({ ...prev, [route]: val }))}
+                />
+                {route === 'Unrouted' && !unroutedShowAll && totalUnroutedWells > UNROUTED_PAGE_SIZE && expandedRoutes.has(route) && (
+                  <button
+                    onClick={() => setUnroutedShowAll(true)}
+                    className="w-full mt-1 py-2 text-sm text-blue-400 hover:text-blue-300 transition-colors"
+                  >
+                    Showing {UNROUTED_PAGE_SIZE} of {totalUnroutedWells} wells — Show all
+                  </button>
+                )}
+              </div>
             ))}
           </div>
         ) : (
           /* Table View - Grouped by Route */
           <div className="space-y-4">
             {routes.map((route) => (
-              <RouteTable
-                key={route}
-                route={route}
-                wells={getWellsForRoute(route)}
-                isExpanded={expandedRoutes.has(route)}
-                onToggle={() => toggleRoute(route)}
-                sortState={routeSorts[route] || { field: 'wellName', dir: 'asc' }}
-                onSort={(field) => handleRouteSort(route, field)}
-                pullBbls={routePullBbls[route] || 140}
-                defaultPullBbls={wells.find(w => w.route === route)?.pullBbls || 140}
-                onPullBblsChange={(val) => setRoutePullBbls(prev => ({ ...prev, [route]: val }))}
-              />
+              <div key={route}>
+                <RouteTable
+                  route={route}
+                  wells={getWellsForRoute(route)}
+                  isExpanded={expandedRoutes.has(route)}
+                  onToggle={() => toggleRoute(route)}
+                  sortState={routeSorts[route] || { field: 'wellName', dir: 'asc' }}
+                  onSort={(field) => handleRouteSort(route, field)}
+                  pullBbls={routePullBbls[route] || 140}
+                  defaultPullBbls={wells.find(w => w.route === route)?.pullBbls || 140}
+                  onPullBblsChange={(val) => setRoutePullBbls(prev => ({ ...prev, [route]: val }))}
+                />
+                {route === 'Unrouted' && !unroutedShowAll && totalUnroutedWells > UNROUTED_PAGE_SIZE && expandedRoutes.has(route) && (
+                  <button
+                    onClick={() => setUnroutedShowAll(true)}
+                    className="w-full mt-1 py-2 text-sm text-blue-400 hover:text-blue-300 transition-colors"
+                  >
+                    Showing {UNROUTED_PAGE_SIZE} of {totalUnroutedWells} wells — Show all
+                  </button>
+                )}
+              </div>
             ))}
           </div>
         )}
@@ -770,7 +812,7 @@ function WellCard({ well }: { well: WellResponse }) {
   return (
     <Link href={`/well/${encodeURIComponent(well.wellName)}`}>
       <div
-        className={`p-4 rounded-lg border transition-all hover:scale-102 hover:shadow-lg cursor-pointer ${
+        className={`p-4 rounded-lg border transition-all hover:scale-102 hover:shadow-lg cursor-pointer h-full ${
           isDown
             ? 'bg-red-900/30 border-red-700'
             : 'bg-gray-700 border-gray-600 hover:border-gray-500'
@@ -785,35 +827,35 @@ function WellCard({ well }: { well: WellResponse }) {
           )}
         </div>
 
-        {!isDown && (
-          <>
-            <div className="grid grid-cols-2 gap-2 text-sm">
-              <div>
-                <p className="text-gray-400">Tank @ Level</p>
-                <p className="text-white text-lg font-mono">{well.tankAtLevel || `${tanks} @ --`}</p>
-              </div>
-              <div>
-                <p className="text-gray-400">Time Till Pull</p>
-                <p className="text-white text-lg font-mono">{well.timeTillPull || well.etaToMax || '--'}</p>
-              </div>
-            </div>
+        <div className="grid grid-cols-2 gap-2 text-sm">
+          <div>
+            <p className="text-gray-400">Tank @ Level</p>
+            <p className={`text-lg font-mono ${isDown ? 'text-red-300/50' : 'text-white'}`}>
+              {isDown ? '--' : (well.tankAtLevel || `${tanks} @ --`)}
+            </p>
+          </div>
+          <div>
+            <p className="text-gray-400">Time Till Pull</p>
+            <p className={`text-lg font-mono ${isDown ? 'text-red-300' : 'text-white'}`}>
+              {isDown ? 'Down' : (well.timeTillPull || well.etaToMax || '--')}
+            </p>
+          </div>
+        </div>
 
-            <div className="mt-3 pt-3 border-t border-gray-600 space-y-1">
-              <div className="flex justify-between text-sm">
-                <span className="text-gray-400">Next Pull</span>
-                <span className="text-white font-mono text-xs">{formatNextPull()}</span>
-              </div>
-              <div className="flex justify-between text-sm">
-                <span className="text-gray-400">Flow Rate</span>
-                <span className="text-white font-mono">{well.flowRate || '--'}</span>
-              </div>
-            </div>
-          </>
-        )}
-
-        {isDown && (
-          <p className="text-red-300 text-sm mt-2">Well is currently down</p>
-        )}
+        <div className="mt-3 pt-3 border-t border-gray-600 space-y-1">
+          <div className="flex justify-between text-sm">
+            <span className="text-gray-400">Next Pull</span>
+            <span className={`font-mono text-xs ${isDown ? 'text-red-300/50' : 'text-white'}`}>
+              {isDown ? '--' : formatNextPull()}
+            </span>
+          </div>
+          <div className="flex justify-between text-sm">
+            <span className="text-gray-400">Flow Rate</span>
+            <span className={`font-mono ${isDown ? 'text-red-300/50' : 'text-white'}`}>
+              {isDown ? '--' : (well.flowRate || '--')}
+            </span>
+          </div>
+        </div>
       </div>
     </Link>
   );

@@ -70,7 +70,7 @@ export default function TicketsPage() {
     <div className="min-h-screen bg-gray-900">
       <AppHeader />
 
-      <main className="max-w-7xl mx-auto px-4 py-8">
+      <main className="px-4 py-8">
         {/* Title and Controls */}
         <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-4 mb-6">
           <h2 className="text-xl font-semibold text-white">

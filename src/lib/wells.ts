@@ -144,6 +144,44 @@ export async function fetchRouteNames(): Promise<string[]> {
   return Array.from(routes).sort();
 }
 
+// Subscribe to well_config for lightweight well name + route list (used by well detail nav)
+export interface WellNavItem {
+  wellName: string;
+  route: string;
+}
+
+export function subscribeToWellNavList(
+  callback: (wells: WellNavItem[]) => void
+): () => void {
+  const db = getFirebaseDatabase();
+  const configRef = ref(db, 'well_config');
+
+  const unsubscribe = onValue(configRef, (snapshot) => {
+    const wells: WellNavItem[] = [];
+    if (snapshot.exists()) {
+      snapshot.forEach((child) => {
+        const config = child.val();
+        wells.push({
+          wellName: child.key!,
+          route: config.route || 'Unrouted',
+        });
+      });
+    }
+    // Sort by route order (alphabetical, Unrouted last), then by well name within each route
+    wells.sort((a, b) => {
+      if (a.route !== b.route) {
+        if (a.route === 'Unrouted') return 1;
+        if (b.route === 'Unrouted') return -1;
+        return a.route.localeCompare(b.route);
+      }
+      return a.wellName.localeCompare(b.wellName);
+    });
+    callback(wells);
+  });
+
+  return unsubscribe;
+}
+
 // Fetch all current well statuses (from outgoing/)
 export async function fetchAllWellStatuses(): Promise<WellResponse[]> {
   const db = getFirebaseDatabase();
@@ -287,7 +325,7 @@ export function subscribeToWellStatusesUnified(callback: (wells: WellResponse[],
 
         allWells.push({
           ...outgoing,
-          route: config.route || 'Unassigned',
+          route: config.route || 'Unrouted',
           tanks,
           tankAtLevel,
           pullBbls,
@@ -307,7 +345,7 @@ export function subscribeToWellStatusesUnified(callback: (wells: WellResponse[],
           etaToMax: '--',
           flowRate: '--',
           timestamp: '',
-          route: config.route || 'Unassigned',
+          route: config.route || 'Unrouted',
           tanks,
           tankAtLevel,
           pullBbls,
@@ -316,7 +354,13 @@ export function subscribeToWellStatusesUnified(callback: (wells: WellResponse[],
       }
     });
 
-    const routes = Array.from(new Set(allWells.map((w) => w.route).filter((r): r is string => !!r))).sort();
+    const routes = Array.from(new Set(allWells.map((w) => w.route).filter((r): r is string => !!r)))
+      .sort((a, b) => {
+        // "Unrouted" always sorts last
+        if (a === 'Unrouted') return 1;
+        if (b === 'Unrouted') return -1;
+        return a.localeCompare(b);
+      });
     callback(allWells.sort((a, b) => a.wellName.localeCompare(b.wellName)), routes);
   };
 
@@ -427,7 +471,7 @@ export function subscribeToWellStatuses(callback: (wells: WellResponse[], routes
         // Has outgoing data - use it with route and tanks from config
         allWells.push({
           ...outgoing,
-          route: config.route || 'Unassigned',
+          route: config.route || 'Unrouted',
           tanks: config.tanks || 1,
         });
       } else {
@@ -439,7 +483,7 @@ export function subscribeToWellStatuses(callback: (wells: WellResponse[], routes
           etaToMax: '--',
           flowRate: '--',
           timestamp: '',
-          route: config.route || 'Unassigned',
+          route: config.route || 'Unrouted',
           maxLevel: config.maxLevel,
           bottomLevel: config.bottomLevel,
           tanks: config.tanks || 1,
@@ -1270,7 +1314,7 @@ export async function buildPerformanceSummary(): Promise<{
     });
 
     const wellName = configEntry ? configEntry[0] : perfKey;
-    const route = configEntry?.[1]?.route || 'Unassigned';
+    const route = configEntry?.[1]?.route || 'Unrouted';
 
     const processed = processPerformanceRows(rawRows);
     const stats = calcWellStats(wellName, route, processed);

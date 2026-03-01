@@ -50,7 +50,7 @@ export default function WellPerformanceDetailPage() {
 
         // Find route from config
         const configEntry = Object.entries(configs).find(([key]) => key === wellName);
-        const route = configEntry?.[1]?.route || 'Unassigned';
+        const route = configEntry?.[1]?.route || 'Unrouted';
 
         const processed = processPerformanceRows(rawRows);
         const wellStats = calcWellStats(wellName, route, processed);

@@ -7,15 +7,16 @@ import { canEditPull, canDeletePull } from '@/lib/auth';
 import {
   PullPacket,
   WellResponse,
+  WellNavItem,
   fetchWellHistoryUnified,
   deletePull,
   editPull,
+  subscribeToWellNavList,
 } from '@/lib/wells';
 import { getDatabase, ref, onValue } from 'firebase/database';
 import { getFirebaseApp } from '@/lib/firebase';
 import Link from 'next/link';
 import { AppHeader } from '@/components/AppHeader';
-import { SubHeader } from '@/components/SubHeader';
 
 // Format inches to feet'inches" display
 function formatLevelFtIn(inches: number | undefined): string {
@@ -78,6 +79,11 @@ export default function WellDetailPage() {
   const [deletingPull, setDeletingPull] = useState<PullPacket | null>(null);
   const [deleteSubmitting, setDeleteSubmitting] = useState(false);
 
+  // Well navigation list (all wells for prev/next + picker)
+  const [allWells, setAllWells] = useState<WellNavItem[]>([]);
+  const [showWellPicker, setShowWellPicker] = useState(false);
+  const [wellSearchQuery, setWellSearchQuery] = useState('');
+
   // Current time tick for live level estimation
   const [currentTime, setCurrentTime] = useState(Date.now());
 
@@ -122,6 +128,19 @@ export default function WellDetailPage() {
 
     return estimatedInches;
   })();
+
+  // Subscribe to well nav list for prev/next navigation
+  useEffect(() => {
+    const unsubscribe = subscribeToWellNavList((wells) => {
+      setAllWells(wells);
+    });
+    return unsubscribe;
+  }, []);
+
+  // Compute prev/next wells
+  const currentIndex = allWells.findIndex((w) => w.wellName === wellName);
+  const prevWell = currentIndex > 0 ? allWells[currentIndex - 1] : null;
+  const nextWell = currentIndex < allWells.length - 1 ? allWells[currentIndex + 1] : null;
 
   // Subscribe to well status for real-time current level updates
   // Reads from packets/outgoing which is where Cloud Functions write responses
@@ -292,28 +311,66 @@ export default function WellDetailPage() {
   return (
     <div className="min-h-screen bg-gray-900">
       <AppHeader />
-      <SubHeader
-        backHref="/mobile"
-        title={wellName as string}
-        subtitle="Well History"
-        actions={
-          <button
-            onClick={handleRefresh}
-            disabled={dataLoading}
-            className="px-4 py-2 bg-blue-600 hover:bg-blue-700 disabled:bg-gray-600 text-white rounded transition-colors flex items-center gap-2"
-          >
-            {dataLoading ? (
-              <span className="animate-spin">⟳</span>
-            ) : (
-              <span>⟳</span>
-            )}
-            Refresh
-          </button>
-        }
-      />
+      {/* Well Navigation Header */}
+      <div className="bg-gray-800/50 border-b border-gray-700">
+        <div className="max-w-7xl mx-auto px-4 py-3">
+          <div className="flex items-center justify-between">
+            {/* Back button - separated from well nav */}
+            <Link href="/mobile" className="text-gray-400 hover:text-white transition-colors text-sm mr-8 shrink-0">
+              ← Routes
+            </Link>
+
+            {/* Well name with prev/next arrows */}
+            <div className="flex items-center gap-3 flex-1 justify-center min-w-0">
+              {prevWell ? (
+                <Link
+                  href={`/well/${encodeURIComponent(prevWell.wellName)}`}
+                  className="text-gray-400 hover:text-white transition-colors text-xl px-2 shrink-0"
+                  title={prevWell.wellName}
+                >
+                  ‹
+                </Link>
+              ) : (
+                <span className="text-gray-700 text-xl px-2 shrink-0">‹</span>
+              )}
+
+              <button
+                onClick={() => { setShowWellPicker(true); setWellSearchQuery(''); }}
+                className="text-lg font-semibold text-white hover:text-blue-400 transition-colors cursor-pointer truncate"
+                title="Click to browse all wells"
+              >
+                {wellName}
+              </button>
+
+              {nextWell ? (
+                <Link
+                  href={`/well/${encodeURIComponent(nextWell.wellName)}`}
+                  className="text-gray-400 hover:text-white transition-colors text-xl px-2 shrink-0"
+                  title={nextWell.wellName}
+                >
+                  ›
+                </Link>
+              ) : (
+                <span className="text-gray-700 text-xl px-2 shrink-0">›</span>
+              )}
+            </div>
+
+            {/* Refresh button */}
+            <button
+              onClick={handleRefresh}
+              disabled={dataLoading}
+              className="px-4 py-2 bg-blue-600 hover:bg-blue-700 disabled:bg-gray-600 text-white rounded transition-colors flex items-center gap-2 shrink-0 ml-8"
+            >
+              <span className={dataLoading ? 'animate-spin' : ''}>⟳</span>
+              Refresh
+            </button>
+          </div>
+        </div>
+      </div>
 
       {/* Main Content - full width for table */}
       <main className="mx-auto px-4 py-8">
+        <h1 className="text-2xl font-bold text-white mb-6">Well History</h1>
         {error && (
           <div className="bg-red-900/50 border border-red-500 text-red-200 px-4 py-3 rounded mb-6">
             {error}
@@ -626,6 +683,98 @@ export default function WellDetailPage() {
                 className="px-4 py-2 bg-red-600 hover:bg-red-700 disabled:bg-red-800 text-white rounded transition-colors"
               >
                 {deleteSubmitting ? 'Deleting...' : 'Delete'}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Well Picker Modal */}
+      {showWellPicker && (
+        <div className="fixed inset-0 bg-black/60 flex items-start justify-center z-50 pt-16" onClick={() => setShowWellPicker(false)}>
+          <div className="bg-gray-800 rounded-lg w-full max-w-lg max-h-[70vh] flex flex-col" onClick={(e) => e.stopPropagation()}>
+            {/* Search bar */}
+            <div className="p-4 border-b border-gray-700">
+              <input
+                type="text"
+                autoFocus
+                placeholder="Search wells..."
+                value={wellSearchQuery}
+                onChange={(e) => setWellSearchQuery(e.target.value)}
+                className="w-full px-4 py-2 bg-gray-700 border border-gray-600 rounded text-white placeholder-gray-400 focus:outline-none focus:border-blue-500"
+              />
+            </div>
+
+            {/* Well list grouped by route */}
+            <div className="overflow-y-auto flex-1 p-2">
+              {(() => {
+                const q = wellSearchQuery.toLowerCase();
+                const filtered = q
+                  ? allWells.filter((w) => w.wellName.toLowerCase().includes(q))
+                  : allWells;
+
+                // Group by route
+                const grouped: Record<string, WellNavItem[]> = {};
+                filtered.forEach((w) => {
+                  if (!grouped[w.route]) grouped[w.route] = [];
+                  grouped[w.route].push(w);
+                });
+
+                // Build route list: all routes from full well list + always include Unrouted
+                const allRouteNames = new Set(allWells.map((w) => w.route));
+                allRouteNames.add('Unrouted');
+                // If searching, only show routes that have matches (except always show Unrouted)
+                const routeNames = Array.from(allRouteNames)
+                  .filter((r) => !q || grouped[r]?.length || r === 'Unrouted')
+                  .sort((a, b) => {
+                    if (a === 'Unrouted') return 1;
+                    if (b === 'Unrouted') return -1;
+                    return a.localeCompare(b);
+                  });
+
+                if (q && Object.keys(grouped).length === 0) {
+                  return <p className="text-gray-400 text-center py-8">No wells found</p>;
+                }
+
+                return routeNames.map((route) => {
+                  const routeWells = grouped[route] || [];
+                  return (
+                    <div key={route} className="mb-2">
+                      <div className="text-xs font-medium text-gray-500 uppercase tracking-wider px-3 py-1">
+                        {route} {routeWells.length === 0 && <span className="text-gray-600">(0 wells)</span>}
+                      </div>
+                      {routeWells.length === 0 ? (
+                        <div className="px-3 py-1 text-xs text-gray-600 italic">No wells</div>
+                      ) : (
+                        routeWells.map((w) => (
+                          <Link
+                            key={w.wellName}
+                            href={`/well/${encodeURIComponent(w.wellName)}`}
+                            onClick={() => setShowWellPicker(false)}
+                            className={`block px-3 py-2 rounded text-sm transition-colors ${
+                              w.wellName === wellName
+                                ? 'bg-blue-600 text-white'
+                                : 'text-gray-300 hover:bg-gray-700 hover:text-white'
+                            }`}
+                          >
+                            {w.wellName}
+                          </Link>
+                        ))
+                      )}
+                    </div>
+                  );
+                });
+              })()}
+            </div>
+
+            {/* Close */}
+            <div className="p-3 border-t border-gray-700 flex justify-between items-center">
+              <span className="text-xs text-gray-500">{allWells.length} wells</span>
+              <button
+                onClick={() => setShowWellPicker(false)}
+                className="px-4 py-1.5 bg-gray-600 hover:bg-gray-500 text-white text-sm rounded transition-colors"
+              >
+                Close
               </button>
             </div>
           </div>

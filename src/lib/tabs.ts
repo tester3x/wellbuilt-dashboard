@@ -25,6 +25,12 @@ export const TABS: TabConfig[] = [
     matchPrefixes: ['/tickets'],
   },
   {
+    id: 'dispatch',
+    label: 'Dispatch',
+    href: '/dispatch',
+    matchPrefixes: ['/dispatch'],
+  },
+  {
     id: 'billing',
     label: 'WB Billing',
     href: '/billing',

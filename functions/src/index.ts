@@ -68,11 +68,41 @@ export const watchdogStrandedPackets = functionsV2.onSchedule('every 5 minutes',
     return;
   }
 
-  console.log(`[Watchdog] Found ${strandedPackets.length} stranded packets - reprocessing`);
+  console.log(`[Watchdog] Found ${strandedPackets.length} stranded packets - checking`);
+
+  let retriggeredCount = 0;
+  let alreadyProcessedCount = 0;
 
   // Delete and re-write each stranded packet to re-trigger onCreate
   for (const packet of strandedPackets) {
     const { key, data } = packet;
+
+    // FIX: Check if this packet was already processed before re-triggering.
+    // Race condition: if processIncomingPull was slow (cold start), the packet
+    // may still be in incoming/ even though it was already processed + outgoing written.
+    // Re-triggering would cause processIncomingPull to run AGAIN, overwriting any
+    // edits that were applied to the outgoing in between.
+    const processedSnap = await db.ref(`packets/processed/${key}`).once('value');
+    if (processedSnap.exists()) {
+      console.log(`[Watchdog] ${data.wellName}: already processed (${key}), cleaning up stale incoming`);
+      await db.ref(`packets/incoming/${key}`).remove();
+      alreadyProcessedCount++;
+      continue;
+    }
+
+    // For edit packets, check if the original was already processed + edited
+    if (data.requestType === 'edit' && data.originalPacketId) {
+      const origProcessedSnap = await db.ref(`packets/processed/${data.originalPacketId}`).once('value');
+      if (origProcessedSnap.exists()) {
+        const origPacket = origProcessedSnap.val();
+        if (origPacket.editedAt) {
+          console.log(`[Watchdog] ${data.wellName}: edit already applied to ${data.originalPacketId}, cleaning up`);
+          await db.ref(`packets/incoming/${key}`).remove();
+          alreadyProcessedCount++;
+          continue;
+        }
+      }
+    }
 
     // Delete old entry
     await db.ref(`packets/incoming/${key}`).remove();
@@ -88,15 +118,17 @@ export const watchdogStrandedPackets = functionsV2.onSchedule('every 5 minutes',
     data.requestType = data.requestType || 'pull';
     data._retriggeredBy = 'watchdog';
     data._retriggeredAt = new Date().toISOString();
+    data._originalKey = key; // Track original key for debugging
 
     await db.ref(`packets/incoming/${newKey}`).set(data);
     console.log(`[Watchdog] Retriggered: ${data.wellName} (${key} -> ${newKey})`);
+    retriggeredCount++;
 
     // Small delay between writes
     await new Promise(r => setTimeout(r, 200));
   }
 
-  console.log(`[Watchdog] Done - retriggered ${strandedPackets.length} packets`);
+  console.log(`[Watchdog] Done - retriggered ${retriggeredCount}, already processed ${alreadyProcessedCount}`);
 
   // Update health status
   await db.ref('system_health/watchdog').set({
@@ -725,6 +757,26 @@ export const processIncomingPull = functionsV1.database
       prevResponse = prev;
     });
 
+    // FIX: Stale/duplicate detection — prevents watchdog re-triggers from
+    // overwriting edits. If the outgoing already has data for this pull
+    // (same or newer timestamp), skip processing.
+    if (prevResponse) {
+      const incomingTimeMs = new Date(data.dateTimeUTC).getTime();
+      const outgoingTimeMs = new Date(prevResponse.lastPullDateTimeUTC).getTime();
+
+      if (!isNaN(incomingTimeMs) && !isNaN(outgoingTimeMs) && incomingTimeMs <= outgoingTimeMs) {
+        // This pull is the same age or older than what's in the outgoing.
+        // Could be: watchdog re-trigger, duplicate upload, or a pull that was
+        // already processed and the outgoing was subsequently edited.
+        console.log(`[STALE] ${wellName}: incoming (${data.dateTimeUTC}) not newer than outgoing (${prevResponse.lastPullDateTimeUTC}), skipping`);
+        if (prevResponse.isEdit) {
+          console.log(`[STALE] ${wellName}: outgoing has isEdit=true — this re-trigger would have overwritten the edit!`);
+        }
+        await snapshot.ref.remove();
+        return null;
+      }
+    }
+
     // Calculate all fields
     const tankTopInches = data.tankLevelFeet * 12;
     const bblsInInches = data.bblsTaken > 0 ? (data.bblsTaken / 20 / tanks) * 12 : 0;
@@ -763,6 +815,17 @@ export const processIncomingPull = functionsV1.database
     const bblPerFoot = tanks * 20;
     const historicalPulls = await getHistoricalPulls(wellName, 500);
     const pullTimeMs = new Date(data.dateTimeUTC).getTime();
+
+    // Include current pull in historical data — it's not in packets/processed yet
+    historicalPulls.push({
+      key: packetId,
+      timestamp: pullTimeMs,
+      tankLevelFeet: parseFloat(String(data.tankLevelFeet)) || 0,
+      bblsTaken: parseFloat(String(data.bblsTaken)) || 0,
+      wellDown: data.wellDown === true || data.wellDown === ('true' as any),
+    });
+    historicalPulls.sort((a, b) => a.timestamp - b.timestamp);
+
     const windowBblsDay = calculateWindowBblsPerDay(historicalPulls, bblPerFoot, pullTimeMs);
     const overnightBblsDay = calculateOvernightBblsPerDay(historicalPulls, bblPerFoot, pullTimeMs);
     console.log(`[BblsDay] ${wellName}: window=${windowBblsDay} overnight=${overnightBblsDay}`);

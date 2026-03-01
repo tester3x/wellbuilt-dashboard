@@ -170,7 +170,7 @@ export default function AdminPage() {
         const wellsByRoute: RouteWells = {};
 
         Object.entries(data).forEach(([wellName, config]) => {
-          const route = config.route || 'Unassigned';
+          const route = config.route || 'Unrouted';
           routeSet.add(route);
           if (!wellsByRoute[route]) {
             wellsByRoute[route] = [];
@@ -203,7 +203,7 @@ export default function AdminPage() {
     if (selectedWell && configs[selectedWell]) {
       const config = configs[selectedWell];
       setEditWellName(selectedWell); // Set the editable name
-      setEditWellRoute(config.route || 'Unassigned');
+      setEditWellRoute(config.route || 'Unrouted');
       setEditWellBottom(String(config.bottomLevel || 3));
       setEditWellTanks(String(config.tanks || 1));
       setEditWellPullBbls(String(config.pullBbls || 140));
@@ -356,7 +356,7 @@ export default function AdminPage() {
 
   // Delete route - show modal for choice
   const handleDeleteRoute = () => {
-    if (!selectedRoute || selectedRoute === 'Unassigned') {
+    if (!selectedRoute || selectedRoute === 'Unrouted') {
       showMessage('Select a route to delete');
       return;
     }
@@ -374,12 +374,12 @@ export default function AdminPage() {
       // Move all wells to Unassigned
       const updates: Record<string, string> = {};
       for (const wellName of wellsInRoute) {
-        updates[`well_config/${wellName}/route`] = 'Unassigned';
+        updates[`well_config/${wellName}/route`] = 'Unrouted';
       }
       if (Object.keys(updates).length > 0) {
         await update(ref(db), updates);
       }
-      showMessage(`Route "${selectedRoute}" deleted, ${wellsInRoute.length} wells moved to Unassigned`);
+      showMessage(`Route "${selectedRoute}" deleted, ${wellsInRoute.length} wells moved to Unrouted`);
     } else if (action === 'delete') {
       // Permanently delete wells and their history
       for (const wellName of wellsInRoute) {
@@ -431,7 +431,7 @@ export default function AdminPage() {
 
   // Rename route
   const handleRenameRoute = async () => {
-    if (!selectedRoute || selectedRoute === 'Unassigned') {
+    if (!selectedRoute || selectedRoute === 'Unrouted') {
       showMessage('Select a route to rename');
       return;
     }
@@ -495,7 +495,7 @@ export default function AdminPage() {
 
     const db = getFirebaseDatabase();
     const config: WellConfig = {
-      route: newWellRoute || 'Unassigned',
+      route: newWellRoute || 'Unrouted',
       bottomLevel: parseFloat(newWellBottom) || 3,
       tanks: parseInt(newWellTanks) || 1,
       // Also write app-compatible field names
@@ -540,7 +540,7 @@ export default function AdminPage() {
     }
 
     const config: WellConfig = {
-      route: editWellRoute || 'Unassigned',
+      route: editWellRoute || 'Unrouted',
       bottomLevel: parseFloat(editWellBottom) || 3,
       tanks: parseInt(editWellTanks) || 1,
       // Also write app-compatible field names
@@ -633,8 +633,8 @@ export default function AdminPage() {
 
     if (action === 'unassign') {
       // Just move to Unassigned route, keep all data
-      await set(ref(db, `well_config/${selectedWell}/route`), 'Unassigned');
-      showMessage(`Well "${selectedWell}" moved to Unassigned`);
+      await set(ref(db, `well_config/${selectedWell}/route`), 'Unrouted');
+      showMessage(`Well "${selectedWell}" moved to Unrouted`);
     } else if (action === 'delete') {
       // Permanently delete well and all its history
       const wellName = selectedWell;
@@ -851,7 +851,7 @@ export default function AdminPage() {
                   <h3 className="text-white font-medium mb-3">Edit Route</h3>
 
                   {/* Route Name (editable for non-Unassigned) */}
-                  {selectedRoute !== 'Unassigned' ? (
+                  {selectedRoute !== 'Unrouted' ? (
                     <div className="mb-3">
                       <label className="text-gray-400 text-sm">Route Name</label>
                       <input
@@ -870,7 +870,7 @@ export default function AdminPage() {
                   ) : (
                     <div className="mb-3">
                       <div className="text-gray-400 text-sm">Route Name</div>
-                      <div className="text-white">Unassigned (cannot rename)</div>
+                      <div className="text-white">Unrouted (cannot rename)</div>
                     </div>
                   )}
 
@@ -881,7 +881,7 @@ export default function AdminPage() {
                     </div>
                   </div>
 
-                  {selectedRoute !== 'Unassigned' && (
+                  {selectedRoute !== 'Unrouted' && (
                     <div className="flex gap-2">
                       <button
                         onClick={handleRenameRoute}
@@ -931,7 +931,7 @@ export default function AdminPage() {
                     className={`p-3 rounded cursor-pointer ${selectedWell === wellName ? 'bg-blue-600' : 'bg-gray-700 hover:bg-gray-600'}`}
                   >
                     <div className="text-white font-medium">{wellName}</div>
-                    <div className="text-gray-400 text-sm">Route: {configs[wellName].route || 'Unassigned'}</div>
+                    <div className="text-gray-400 text-sm">Route: {configs[wellName].route || 'Unrouted'}</div>
                     {configs[wellName].ndicApiNo && (
                       <div className="text-teal-400 text-xs">NDIC: {configs[wellName].ndicApiNo}</div>
                     )}
@@ -1234,7 +1234,7 @@ export default function AdminPage() {
                   onClick={() => executeDeleteRouteWithAction('unassign')}
                   className="w-full px-4 py-3 bg-yellow-600 hover:bg-yellow-700 text-white rounded text-left"
                 >
-                  <div className="font-medium">Move to Unassigned</div>
+                  <div className="font-medium">Move to Unrouted</div>
                   <div className="text-sm text-yellow-200">Keep wells and history, just remove from this route</div>
                 </button>
 
@@ -1274,7 +1274,7 @@ export default function AdminPage() {
                   onClick={() => executeDeleteWellWithAction('unassign')}
                   className="w-full px-4 py-3 bg-yellow-600 hover:bg-yellow-700 text-white rounded text-left"
                 >
-                  <div className="font-medium">Move to Unassigned</div>
+                  <div className="font-medium">Move to Unrouted</div>
                   <div className="text-sm text-yellow-200">Keep well and all history, just remove from current route</div>
                 </button>
 
