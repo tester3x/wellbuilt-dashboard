@@ -65,6 +65,7 @@ export default function WellDetailPage() {
 
   const [pulls, setPulls] = useState<PullPacket[]>([]);
   const [wellStatus, setWellStatus] = useState<WellResponse | null>(null);
+  const [wellTanks, setWellTanks] = useState<number>(1);
   const [dataLoading, setDataLoading] = useState(true);
   const [error, setError] = useState('');
 
@@ -166,6 +167,21 @@ export default function WellDetailPage() {
       }
     });
 
+    return () => unsubscribe();
+  }, [wellName]);
+
+  // Fetch well_config for tanks count
+  useEffect(() => {
+    if (!wellName) return;
+    const app = getFirebaseApp();
+    const db = getDatabase(app);
+    const configRef = ref(db, `well_config/${wellName}`);
+    const unsubscribe = onValue(configRef, (snapshot) => {
+      if (snapshot.exists()) {
+        const config = snapshot.val();
+        setWellTanks(config.tanks || config.numTanks || 1);
+      }
+    });
     return () => unsubscribe();
   }, [wellName]);
 
@@ -334,13 +350,18 @@ export default function WellDetailPage() {
                 <span className="text-gray-700 text-xl px-2 shrink-0">‹</span>
               )}
 
-              <button
-                onClick={() => { setShowWellPicker(true); setWellSearchQuery(''); }}
-                className="text-lg font-semibold text-white hover:text-blue-400 transition-colors cursor-pointer truncate"
-                title="Click to browse all wells"
-              >
-                {wellName}
-              </button>
+              <div className="flex flex-col items-center min-w-0">
+                <button
+                  onClick={() => { setShowWellPicker(true); setWellSearchQuery(''); }}
+                  className="text-lg font-semibold text-white hover:text-blue-400 transition-colors cursor-pointer truncate"
+                  title="Click to browse all wells"
+                >
+                  {wellName}
+                </button>
+                {wellTanks > 1 && (
+                  <span className="text-xs text-gray-400">{wellTanks} tanks</span>
+                )}
+              </div>
 
               {nextWell ? (
                 <Link
@@ -559,7 +580,7 @@ export default function WellDetailPage() {
                       </td>
                       <td className="px-3 py-2 text-white font-mono text-sm text-center">
                         {pull.flowRateDays && pull.flowRateDays > 0
-                          ? Math.round((1 / pull.flowRateDays) * (wellStatus?.tanks || 1) * 20)
+                          ? Math.round((1 / pull.flowRateDays) * wellTanks * 20)
                           : '--'}
                       </td>
                       {(userCanDelete || user.role === 'driver') && (
