@@ -347,7 +347,7 @@ export default function MobilePage() {
         ) : viewMode === 'cards' ? (
           /* Cards View - Grouped by Route */
           <div className="space-y-4">
-            {filteredRoutes.filter(route => getWellsForRoute(route, false).length > 0).map((route) => (
+            {filteredRoutes.filter(route => route === 'Unrouted' || getWellsForRoute(route, false).length > 0).map((route) => (
               <div key={route}>
                 <RouteSection
                   route={route}
@@ -372,7 +372,7 @@ export default function MobilePage() {
         ) : (
           /* Table View - Grouped by Route */
           <div className="space-y-4">
-            {filteredRoutes.filter(route => getWellsForRoute(route, false).length > 0).map((route) => (
+            {filteredRoutes.filter(route => route === 'Unrouted' || getWellsForRoute(route, false).length > 0).map((route) => (
               <div key={route}>
                 <RouteTable
                   route={route}

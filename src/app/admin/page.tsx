@@ -167,8 +167,8 @@ export default function AdminPage() {
         setConfigs(data);
 
         // Extract routes and organize wells by route
-        const routeSet = new Set<string>();
-        const wellsByRoute: RouteWells = {};
+        const routeSet = new Set<string>(['Unrouted']);
+        const wellsByRoute: RouteWells = { 'Unrouted': [] };
 
         Object.entries(data).forEach(([wellName, config]) => {
           const route = config.route || 'Unrouted';
@@ -727,7 +727,7 @@ export default function AdminPage() {
       const db = getFirebaseDatabase();
       const levelFeet = (parseFloat(pullFeet) || 0) + (parseFloat(pullInches) || 0) / 12;
       const dt = new Date(pullDateTime);
-      const packetId = `${dt.toISOString().replace(/[-:T]/g, '').slice(0, 15)}_${pullWell.replace(/\s/g, '')}_dashboard`;
+      const packetId = `${dt.toISOString().replace(/[-:T.]/g, '').slice(0, 14)}_${pullWell.replace(/\s/g, '')}_dashboard`;
 
       const packet = {
         packetId,

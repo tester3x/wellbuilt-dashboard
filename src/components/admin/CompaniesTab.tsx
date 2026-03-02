@@ -1,32 +1,33 @@
 'use client';
 
 import { useEffect, useState, useRef } from 'react';
-import { getFirestoreDb, getFirebaseStorage } from '@/lib/firebase';
+import { getFirestoreDb, getFirebaseStorage, getFirebaseDatabase } from '@/lib/firebase';
 import { collection, getDocs, doc, setDoc, deleteDoc, updateDoc } from 'firebase/firestore';
 import { ref as storageRef, uploadBytes, getDownloadURL } from 'firebase/storage';
+import { ref as dbRef, get as dbGet, update as dbUpdate } from 'firebase/database';
 import { loadOperators, searchOperators, NdicOperator } from '@/lib/firestoreWells';
 
-type Tier = 'field-basics' | 'full-field' | 'suite';
+type Tier = 'free' | 'field' | 'god';
 
 const TIER_LABELS: Record<Tier, string> = {
-  'field-basics': 'Field Basics',
-  'full-field': 'Full Field',
-  'suite': 'Suite',
+  'free': 'Free',
+  'field': 'Field',
+  'god': 'God',
 };
 
 const TIER_COLORS: Record<Tier, string> = {
-  'field-basics': 'bg-gray-600 text-gray-200',
-  'full-field': 'bg-blue-600 text-blue-100',
-  'suite': 'bg-yellow-600 text-yellow-100',
+  'free': 'bg-gray-600 text-gray-200',
+  'field': 'bg-blue-600 text-blue-100',
+  'god': 'bg-yellow-600 text-yellow-100',
 };
 
 const TIER_DESCRIPTIONS: Record<Tier, string> = {
-  'field-basics': 'Single app — WB Tickets or WB Mobile',
-  'full-field': 'Tickets + Mobile + Dashboard',
-  'suite': 'Everything — Hub + Tickets + Mobile + Dashboard + Billing & Payroll',
+  'free': 'WB Mobile only — 5 well cap, demo monitoring',
+  'field': 'WB Mobile + WB Tickets — no well cap',
+  'god': 'Everything — Hub + Tickets + Mobile + Dashboard + Billing & Payroll',
 };
 
-const TIER_ORDER: Tier[] = ['field-basics', 'full-field', 'suite'];
+const TIER_ORDER: Tier[] = ['free', 'field', 'god'];
 
 interface RateEntry {
   jobType: string;
@@ -659,9 +660,14 @@ export function CompaniesTab({ scopeCompanyId, isWbAdmin = false }: CompaniesTab
                         Invoice Book
                       </span>
                     )}
-                    <span className={`px-1.5 py-0.5 text-xs rounded ${TIER_COLORS[company.tier || 'suite']}`}>
-                      {TIER_LABELS[company.tier || 'suite']}
+                    <span className={`px-1.5 py-0.5 text-xs rounded ${TIER_COLORS[company.tier || 'god']}`}>
+                      {TIER_LABELS[company.tier || 'god']}
                     </span>
+                    {(company.tier === 'free') && (
+                      <span className="px-1.5 py-0.5 bg-orange-800 text-orange-200 text-xs rounded">
+                        5 Well Cap
+                      </span>
+                    )}
                     {(company.assignedOperators?.length || 0) > 0 && (
                       <span className="px-1.5 py-0.5 bg-yellow-700 text-yellow-200 text-xs rounded">
                         {company.assignedOperators!.length} oil {company.assignedOperators!.length === 1 ? 'co' : 'cos'}
@@ -737,12 +743,12 @@ export function CompaniesTab({ scopeCompanyId, isWbAdmin = false }: CompaniesTab
                     <div className="border-t border-gray-600 pt-3">
                       <div className="flex items-center justify-between mb-2">
                         <h4 className="text-green-400 text-sm font-medium">Subscription</h4>
-                        <span className={`px-2 py-0.5 text-xs rounded font-medium ${TIER_COLORS[company.tier || 'suite']}`}>
-                          {TIER_LABELS[company.tier || 'suite']}
+                        <span className={`px-2 py-0.5 text-xs rounded font-medium ${TIER_COLORS[company.tier || 'god']}`}>
+                          {TIER_LABELS[company.tier || 'god']}
                         </span>
                       </div>
                       <p className="text-gray-400 text-xs mb-2">
-                        {TIER_DESCRIPTIONS[company.tier || 'suite']}
+                        {TIER_DESCRIPTIONS[company.tier || 'god']}
                       </p>
                       {isWbAdmin && (
                         <div className="flex gap-1.5">
@@ -753,6 +759,24 @@ export function CompaniesTab({ scopeCompanyId, isWbAdmin = false }: CompaniesTab
                                 e.stopPropagation();
                                 try {
                                   await updateDoc(doc(firestore, 'companies', company.id), { tier });
+                                  // Sync tier to all drivers in this company (RTDB)
+                                  try {
+                                    const rtdb = getFirebaseDatabase();
+                                    const driversSnap = await dbGet(dbRef(rtdb, 'drivers/approved'));
+                                    if (driversSnap.exists()) {
+                                      const updates: Record<string, any> = {};
+                                      Object.entries(driversSnap.val()).forEach(([hash, data]: [string, any]) => {
+                                        if (data.companyId === company.id) {
+                                          updates[`drivers/approved/${hash}/tier`] = tier;
+                                        }
+                                      });
+                                      if (Object.keys(updates).length > 0) {
+                                        await dbUpdate(dbRef(rtdb), updates);
+                                      }
+                                    }
+                                  } catch (syncErr) {
+                                    console.warn('Tier sync to drivers failed (non-blocking):', syncErr);
+                                  }
                                   setMessage(`${company.name} → ${TIER_LABELS[tier]}`);
                                   await loadCompanies();
                                 } catch (err) {
@@ -760,7 +784,7 @@ export function CompaniesTab({ scopeCompanyId, isWbAdmin = false }: CompaniesTab
                                 }
                               }}
                               className={`px-2.5 py-1 text-xs rounded transition-all ${
-                                (company.tier || 'suite') === tier
+                                (company.tier || 'god') === tier
                                   ? TIER_COLORS[tier] + ' ring-1 ring-white/30'
                                   : 'bg-gray-600/50 text-gray-400 hover:bg-gray-600 hover:text-gray-200'
                               }`}

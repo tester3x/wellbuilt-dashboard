@@ -230,6 +230,21 @@ export function DriversTab({ scopeCompanyId, isWbAdmin = false }: DriversTabProp
         companyId: assignCompanyId.trim().toLowerCase() || null,
         companyName: assignCompanyName.trim() || null,
       };
+      // Sync tier from company doc
+      if (assignCompanyId.trim()) {
+        try {
+          const firestore = getFirestoreDb();
+          const { getDoc, doc: firestoreDoc } = await import('firebase/firestore');
+          const companySnap = await getDoc(firestoreDoc(firestore, 'companies', assignCompanyId.trim().toLowerCase()));
+          if (companySnap.exists()) {
+            const tier = companySnap.data().tier;
+            if (tier) updates.tier = tier;
+            else updates.tier = null;
+          }
+        } catch { /* tier sync is non-blocking */ }
+      } else {
+        updates.tier = null;
+      }
       if (companyTarget._legacy && companyTarget._legacyDeviceId) {
         await update(ref(db, `drivers/approved/${companyTarget.key}/${companyTarget._legacyDeviceId}`), updates);
       } else {
@@ -269,6 +284,19 @@ export function DriversTab({ scopeCompanyId, isWbAdmin = false }: DriversTabProp
       if (scopeCompanyId) {
         // Company admin approving — assign to their company
         approvedData.companyId = scopeCompanyId;
+        // Look up company tier
+        try {
+          const firestore = getFirestoreDb();
+          const { getDoc, doc: firestoreDoc } = await import('firebase/firestore');
+          const companySnap = await getDoc(firestoreDoc(firestore, 'companies', scopeCompanyId));
+          if (companySnap.exists()) {
+            const companyData = companySnap.data();
+            if (companyData.tier) approvedData.tier = companyData.tier;
+            if (companyData.name) approvedData.companyName = companyData.name;
+          }
+        } catch (tierErr) {
+          console.warn('Company tier lookup failed (non-blocking):', tierErr);
+        }
       } else if (driver.companyName) {
         // WB admin approving — try to auto-match company name to Firestore companies
         try {
@@ -284,6 +312,7 @@ export function DriversTab({ scopeCompanyId, isWbAdmin = false }: DriversTabProp
                 driverCoLower.includes(coNameLower)) {
               approvedData.companyId = d.id;
               approvedData.companyName = data.name;
+              if (data.tier) approvedData.tier = data.tier;
             }
           });
         } catch (matchErr) {
