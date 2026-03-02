@@ -1,70 +1,22 @@
 'use client';
 
 import { useEffect, useState, useRef } from 'react';
-import { getFirestoreDb, getFirebaseStorage, getFirebaseDatabase } from '@/lib/firebase';
+import { getFirestoreDb, getFirebaseDatabase } from '@/lib/firebase';
 import { collection, getDocs, doc, setDoc, deleteDoc, updateDoc } from 'firebase/firestore';
-import { ref as storageRef, uploadBytes, getDownloadURL } from 'firebase/storage';
 import { ref as dbRef, get as dbGet, update as dbUpdate } from 'firebase/database';
 import { loadOperators, searchOperators, NdicOperator } from '@/lib/firestoreWells';
-
-type Tier = 'free' | 'field' | 'god';
-
-const TIER_LABELS: Record<Tier, string> = {
-  'free': 'Free',
-  'field': 'Field',
-  'god': 'God',
-};
-
-const TIER_COLORS: Record<Tier, string> = {
-  'free': 'bg-gray-600 text-gray-200',
-  'field': 'bg-blue-600 text-blue-100',
-  'god': 'bg-yellow-600 text-yellow-100',
-};
-
-const TIER_DESCRIPTIONS: Record<Tier, string> = {
-  'free': 'WB Mobile only — 5 well cap, demo monitoring',
-  'field': 'WB Mobile + WB Tickets — no well cap',
-  'god': 'Everything — Hub + Tickets + Mobile + Dashboard + Billing & Payroll',
-};
-
-const TIER_ORDER: Tier[] = ['free', 'field', 'god'];
-
-interface RateEntry {
-  jobType: string;
-  method: 'per_bbl' | 'hourly';
-  rate: number;
-}
-
-interface PayConfig {
-  defaultSplit: number;       // e.g. 0.25 for 25%
-  payrollRounding: 'match_billing' | 'none' | 'quarter_hour' | 'half_hour';
-  payPeriod: 'weekly' | 'biweekly' | 'monthly';
-  autoApproveHours?: number;  // hours before auto-approve (0 = disabled)
-}
-
-interface CompanyConfig {
-  id: string;
-  name: string;
-  address?: string;
-  city?: string;
-  state?: string;
-  zip?: string;
-  invoicePrefix?: string;
-  invoiceBook?: boolean;
-  ticketPrefix?: string;
-  rateSheet?: Record<string, number>;  // legacy simple format
-  rateSheets?: Record<string, RateEntry[]>;  // per-operator rate sheets
-  payConfig?: PayConfig;
-  notes?: string;
-  assignedOperators?: string[];
-  logoUrl?: string;
-  primaryColor?: string;
-  phone?: string;
-  splitTickets?: boolean;
-  tier?: Tier;
-  enabledApps?: string[];
-  requiredApps?: string[];
-}
+import {
+  type Tier,
+  type RateEntry,
+  type PayConfig,
+  type CompanyConfig,
+  TIER_LABELS,
+  TIER_COLORS,
+  TIER_DESCRIPTIONS,
+  TIER_ORDER,
+  JOB_TYPES,
+  BILLING_METHODS,
+} from '@/lib/companySettings';
 
 interface CompaniesTabProps {
   scopeCompanyId?: string;  // if set, only show this company
@@ -91,6 +43,7 @@ export function CompaniesTab({ scopeCompanyId, isWbAdmin = false }: CompaniesTab
   const [formTicketPrefix, setFormTicketPrefix] = useState('');
   const [formPhone, setFormPhone] = useState('');
   const [formNotes, setFormNotes] = useState('');
+  const [formTransferRequiresApproval, setFormTransferRequiresApproval] = useState(false);
 
   // Expanded company
   const [expandedCompany, setExpandedCompany] = useState<string | null>(null);
@@ -165,6 +118,7 @@ export function CompaniesTab({ scopeCompanyId, isWbAdmin = false }: CompaniesTab
     setFormTicketPrefix('');
     setFormPhone('');
     setFormNotes('');
+    setFormTransferRequiresApproval(false);
     setEditingCompany(null);
   };
 
@@ -186,6 +140,7 @@ export function CompaniesTab({ scopeCompanyId, isWbAdmin = false }: CompaniesTab
     setFormTicketPrefix(company.ticketPrefix || '');
     setFormPhone(company.phone || '');
     setFormNotes(company.notes || '');
+    setFormTransferRequiresApproval(company.transferRequiresApproval || false);
     setShowForm(true);
   };
 
@@ -205,6 +160,7 @@ export function CompaniesTab({ scopeCompanyId, isWbAdmin = false }: CompaniesTab
     if (formZip.trim()) data.zip = formZip.trim();
     if (formInvoicePrefix.trim()) data.invoicePrefix = formInvoicePrefix.trim();
     data.invoiceBook = formInvoiceBook;
+    data.transferRequiresApproval = formTransferRequiresApproval;
     if (formTicketPrefix.trim()) data.ticketPrefix = formTicketPrefix.trim();
     if (formPhone.trim()) data.phone = formPhone.trim();
     if (formNotes.trim()) data.notes = formNotes.trim();
@@ -309,11 +265,7 @@ export function CompaniesTab({ scopeCompanyId, isWbAdmin = false }: CompaniesTab
 
   // ── Rate Sheet helpers ──
 
-  const JOB_TYPES = ['Production %', 'Service Work', 'Rig Move', 'Hot Shot', 'Frac Water', 'Other'];
-  const BILLING_METHODS: { value: 'per_bbl' | 'hourly'; label: string }[] = [
-    { value: 'per_bbl', label: '$/BBL' },
-    { value: 'hourly', label: '$/hr' },
-  ];
+  // JOB_TYPES and BILLING_METHODS imported from companySettings.ts
 
   const openRateSheet = (company: CompanyConfig, operator: string) => {
     setRateSheetCompany(company);
@@ -1131,6 +1083,18 @@ export function CompaniesTab({ scopeCompanyId, isWbAdmin = false }: CompaniesTab
                 />
                 <label htmlFor="invoiceBook" className="text-gray-300 text-sm">
                   Uses Invoice Book (sequential invoice numbering)
+                </label>
+              </div>
+              <div className="flex items-center gap-2">
+                <input
+                  type="checkbox"
+                  id="transferApproval"
+                  checked={formTransferRequiresApproval}
+                  onChange={e => setFormTransferRequiresApproval(e.target.checked)}
+                  className="rounded"
+                />
+                <label htmlFor="transferApproval" className="text-gray-300 text-sm">
+                  Load transfers require dispatch approval
                 </label>
               </div>
               <div>

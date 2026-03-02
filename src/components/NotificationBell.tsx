@@ -212,6 +212,59 @@ export function NotificationBell() {
     return () => unsubscribe();
   }, [user, prefs, soundEnabled]);
 
+  // ── Transfer approval request listener (Firestore) ──
+  useEffect(() => {
+    if (!user || !prefs.includes('dispatch_update')) return;
+
+    const firestore = getFirestoreDb();
+    const q = query(
+      collection(firestore, 'dispatches'),
+      where('status', '==', 'pending_approval'),
+      where('type', '==', 'transfer')
+    );
+
+    const unsubscribe = onSnapshot(q, (snapshot) => {
+      const items: NotificationItem[] = [];
+      snapshot.forEach(doc => {
+        const data = doc.data();
+        const id = `transfer_${doc.id}`;
+        if (dismissedRef.current.has(id)) return;
+
+        const ts = data.transferredAt?.toMillis?.() || data.assignedAt?.toMillis?.() || Date.now();
+        items.push({
+          id,
+          category: 'dispatch_update',
+          title: 'Transfer Requested',
+          message: `${data.transferFromDriver || 'Driver'} requests transfer at ${data.wellName || 'well'}`,
+          timestamp: ts,
+          read: false,
+          actionLabel: 'View',
+          actionHref: '/dispatch',
+        });
+      });
+
+      // Play sound for new transfer requests
+      const newItems = items.filter(n => !knownIdsRef.current.has(n.id));
+      if (newItems.length > 0 && soundEnabled) {
+        playNotificationSound();
+      }
+      items.forEach(n => knownIdsRef.current.add(n.id));
+
+      setNotifications(prev => {
+        // Remove old transfer notifications, keep everything else
+        const nonTransfer = prev.filter(n => !n.id.startsWith('transfer_'));
+        const merged = [...nonTransfer, ...items];
+        const seen = new Set<string>();
+        return merged.filter(n => { if (seen.has(n.id)) return false; seen.add(n.id); return true; })
+          .sort((a, b) => b.timestamp - a.timestamp);
+      });
+    }, (err) => {
+      console.warn('[Notifications] Transfer listener error:', err.message);
+    });
+
+    return () => unsubscribe();
+  }, [user, prefs, soundEnabled]);
+
   // ── Actions ──
   const markAsRead = useCallback((id: string) => {
     readIdsRef.current.add(id);

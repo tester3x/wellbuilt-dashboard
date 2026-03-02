@@ -6,6 +6,7 @@ import { usePathname } from 'next/navigation';
 import { ref, onValue } from 'firebase/database';
 import { useAuth } from '@/contexts/AuthContext';
 import { TABS, getActiveTab } from '@/lib/tabs';
+import { hasRole } from '@/lib/auth';
 import { NotificationBell } from './NotificationBell';
 import { getFirebaseDatabase } from '@/lib/firebase';
 
@@ -76,7 +77,7 @@ export function AppHeader() {
             </p>
           </div>
           <nav className="flex gap-0">
-            {TABS.map((tab) => {
+            {TABS.filter(tab => !tab.minRole || hasRole(user, tab.minRole)).map((tab) => {
               const isActive = tab.id === activeTabId;
               return (
                 <Link

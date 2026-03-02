@@ -33,7 +33,7 @@ interface DispatchJob {
   route?: string;
   jobType: 'pw' | 'service';
   serviceType?: string;
-  status: 'pending' | 'accepted' | 'in_progress' | 'paused' | 'completed' | 'cancelled';
+  status: 'pending' | 'pending_approval' | 'accepted' | 'in_progress' | 'paused' | 'completed' | 'cancelled';
   notes?: string;
   priority: number;
   assignedAt: any;  // Firestore Timestamp
@@ -48,6 +48,14 @@ interface DispatchJob {
   disposalApiNo?: string;
   disposalLegalDesc?: string;
   disposalCounty?: string;
+  // Load transfer fields
+  type?: 'dispatch' | 'transfer';
+  transferFromDriver?: string;
+  transferFromDriverHash?: string;
+  sourceInvoiceDocId?: string;
+  sourceInvoiceNumber?: string;
+  intendedDriverHash?: string;
+  intendedDriverName?: string;
 }
 
 // Priority levels for PW queue
@@ -272,7 +280,7 @@ export default function DispatchPage() {
     const firestore = getFirestoreDb();
     const q = query(
       collection(firestore, 'dispatches'),
-      where('status', 'in', ['pending', 'accepted', 'in_progress', 'paused']),
+      where('status', 'in', ['pending', 'pending_approval', 'accepted', 'in_progress', 'paused']),
       orderBy('assignedAt', 'desc')
     );
     const unsub = onSnapshot(q, (snap) => {
@@ -346,7 +354,7 @@ export default function DispatchPage() {
       const firestore = getFirestoreDb();
       const q = query(
         collection(firestore, 'dispatches'),
-        where('status', 'in', ['pending', 'accepted', 'in_progress', 'paused']),
+        where('status', 'in', ['pending', 'pending_approval', 'accepted', 'in_progress', 'paused']),
         orderBy('assignedAt', 'desc')
       );
       const snap = await getDocs(q);
@@ -538,6 +546,22 @@ export default function DispatchPage() {
       });
       setMessage('Dispatch cancelled');
       await loadDispatches();
+      setTimeout(() => setMessage(''), 3000);
+    } catch (err: any) {
+      setMessage(`Error: ${err.message}`);
+      setTimeout(() => setMessage(''), 5000);
+    }
+  }
+
+  async function assignTransfer(jobId: string, driverHash: string, driverName: string) {
+    try {
+      const firestore = getFirestoreDb();
+      await updateDoc(doc(firestore, 'dispatches', jobId), {
+        driverHash,
+        driverName,
+        status: 'pending', // Approve: move from pending_approval → pending so driver sees it
+      });
+      setMessage(`Transfer approved → assigned to ${driverName}`);
       setTimeout(() => setMessage(''), 3000);
     } catch (err: any) {
       setMessage(`Error: ${err.message}`);
@@ -769,7 +793,7 @@ export default function DispatchPage() {
               {dispatches.filter(d => d.jobType === 'pw').length === 0 ? (
                 <div className="text-center text-gray-500">No active dispatches</div>
               ) : (
-                <ActiveDispatchTable dispatches={dispatches.filter(d => d.jobType === 'pw')} cancelDispatch={cancelDispatch} />
+                <ActiveDispatchTable dispatches={dispatches.filter(d => d.jobType === 'pw')} cancelDispatch={cancelDispatch} drivers={drivers} assignTransfer={assignTransfer} />
               )}
             </div>
             </div>
@@ -873,6 +897,9 @@ export default function DispatchPage() {
                       </div>
                       <div className="text-sm text-gray-400 space-y-1">
                         <div>Driver: <span className="text-gray-300">{job.driverName}</span></div>
+                        {job.type === 'transfer' && job.transferFromDriver && (
+                          <div><span className="px-1.5 py-0.5 bg-orange-600/30 text-orange-300 text-xs rounded font-medium">Transfer from {job.transferFromDriver}</span></div>
+                        )}
                         <div>Assigned: <span className="text-gray-300">{formatDispatchTime(job.assignedAt)}</span></div>
                         {job.notes && <div>Notes: <span className="text-gray-300">{job.notes}</span></div>}
                       </div>
@@ -1126,6 +1153,7 @@ function ModalPredictionBanner({ well }: { well: WellResponse }) {
 function StatusBadge({ status }: { status: string }) {
   const styles: Record<string, string> = {
     pending: 'bg-yellow-600/30 text-yellow-300',
+    pending_approval: 'bg-orange-600/30 text-orange-300 animate-pulse',
     accepted: 'bg-blue-600/30 text-blue-300',
     in_progress: 'bg-purple-600/30 text-purple-300',
     paused: 'bg-amber-600/30 text-amber-300',
@@ -1135,6 +1163,7 @@ function StatusBadge({ status }: { status: string }) {
 
   const labels: Record<string, string> = {
     pending: 'Pending',
+    pending_approval: 'Needs Approval',
     accepted: 'Accepted',
     in_progress: 'In Progress',
     paused: 'Paused',
@@ -1150,22 +1179,37 @@ function StatusBadge({ status }: { status: string }) {
 }
 
 // Active dispatch table with driver grouping — compact rows, driver badge + dropdown
-function ActiveDispatchTable({ dispatches, cancelDispatch }: { dispatches: DispatchJob[]; cancelDispatch: (id: string) => void }) {
+function ActiveDispatchTable({ dispatches, cancelDispatch, drivers, assignTransfer }: {
+  dispatches: DispatchJob[];
+  cancelDispatch: (id: string) => void;
+  drivers?: { key: string; displayName: string }[];
+  assignTransfer?: (jobId: string, driverHash: string, driverName: string) => void;
+}) {
   const [expandedDriver, setExpandedDriver] = useState<string | null>(null);
 
-  // Group dispatches by driver
+  // Split: unassigned transfers (dispatch needs to pick driver) vs assigned dispatches
+  // Unassigned = dispatch-requested transfers (no driverHash) OR pending_approval transfers
+  const unassigned = dispatches.filter(d => d.type === 'transfer' && (!d.driverHash || d.status === 'pending_approval'));
+  const assigned = dispatches.filter(d => !(d.type === 'transfer' && (!d.driverHash || d.status === 'pending_approval')));
+
+  // Group assigned dispatches by driver
   const grouped = useMemo(() => {
     const map = new Map<string, DispatchJob[]>();
-    dispatches.forEach(d => {
+    assigned.forEach(d => {
       const key = d.driverHash;
       if (!map.has(key)) map.set(key, []);
       map.get(key)!.push(d);
     });
     return map;
-  }, [dispatches]);
+  }, [assigned]);
 
   return (
     <div className="space-y-1">
+      {/* Unassigned transfers — dispatch requested, needs driver assignment */}
+      {unassigned.map(job => (
+        <UnassignedTransferRow key={job.id} job={job} drivers={drivers || []} assignTransfer={assignTransfer} cancelDispatch={cancelDispatch} />
+      ))}
+
       {Array.from(grouped.entries()).map(([driverHash, jobs]) => {
         const isExpanded = expandedDriver === driverHash;
         const hasMultiple = jobs.length > 1;
@@ -1177,6 +1221,9 @@ function ActiveDispatchTable({ dispatches, cancelDispatch }: { dispatches: Dispa
             <div key={job.id} className="flex items-center gap-2 px-3 py-2 bg-gray-900/50 rounded hover:bg-gray-900/80 text-sm">
               <span className="text-white font-medium truncate flex-shrink-0" style={{ minWidth: 80 }}>{job.wellName}</span>
               <span className="text-gray-400 truncate flex-1">{job.driverName}</span>
+              {job.type === 'transfer' && job.transferFromDriver && (
+                <span className="px-1.5 py-0.5 bg-orange-600/30 text-orange-300 text-xs rounded font-medium truncate">Transfer from {job.transferFromDriver}</span>
+              )}
               {job.disposal && <span className="text-cyan-400 text-xs truncate">&#8594; {job.disposal}</span>}
               <StatusBadge status={job.status} />
               {job.status === 'pending' && (
@@ -1205,6 +1252,9 @@ function ActiveDispatchTable({ dispatches, cancelDispatch }: { dispatches: Dispa
                 {jobs.map(job => (
                   <div key={job.id} className="flex items-center gap-2 px-3 py-1.5 bg-gray-800/50 rounded text-sm">
                     <span className="text-white truncate flex-shrink-0" style={{ minWidth: 80 }}>{job.wellName}</span>
+                    {job.type === 'transfer' && job.transferFromDriver && (
+                      <span className="px-1.5 py-0.5 bg-orange-600/30 text-orange-300 text-xs rounded font-medium truncate">Transfer from {job.transferFromDriver}</span>
+                    )}
                     {job.disposal && <span className="text-cyan-400 text-xs truncate">&#8594; {job.disposal}</span>}
                     <span className="flex-1" />
                     <StatusBadge status={job.status} />
@@ -1218,6 +1268,67 @@ function ActiveDispatchTable({ dispatches, cancelDispatch }: { dispatches: Dispa
           </div>
         );
       })}
+    </div>
+  );
+}
+
+// Row for unassigned transfer requests — pulsing orange, driver dropdown for dispatch to assign
+function UnassignedTransferRow({ job, drivers, assignTransfer, cancelDispatch }: {
+  job: DispatchJob;
+  drivers: { key: string; displayName: string }[];
+  assignTransfer?: (jobId: string, driverHash: string, driverName: string) => void;
+  cancelDispatch: (id: string) => void;
+}) {
+  // Pre-select intended driver if Driver A picked someone (pending_approval flow)
+  const [selectedHash, setSelectedHash] = useState(job.intendedDriverHash || '');
+  const isPendingApproval = job.status === 'pending_approval';
+
+  const handleAssign = () => {
+    if (!selectedHash || !job.id || !assignTransfer) return;
+    const driver = drivers.find(d => d.key === selectedHash);
+    if (driver) assignTransfer(job.id, driver.key, driver.displayName);
+  };
+
+  return (
+    <div className="px-3 py-2 bg-orange-950/40 border border-orange-600/40 rounded text-sm space-y-2">
+      <div className="flex items-center gap-2">
+        <span className="relative flex h-2.5 w-2.5 flex-shrink-0">
+          <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-orange-400 opacity-75" />
+          <span className="relative inline-flex rounded-full h-2.5 w-2.5 bg-orange-500" />
+        </span>
+        <span className="text-white font-medium truncate">{job.wellName}</span>
+        <span className="px-1.5 py-0.5 bg-orange-600/30 text-orange-300 text-xs rounded font-medium">
+          Transfer from {job.transferFromDriver}
+        </span>
+        {isPendingApproval && job.intendedDriverName && (
+          <span className="text-gray-400 text-xs">→ requested for {job.intendedDriverName}</span>
+        )}
+        {job.sourceInvoiceNumber && (
+          <span className="text-gray-500 text-xs">Invoice #{job.sourceInvoiceNumber}</span>
+        )}
+        <span className="flex-1" />
+        <button onClick={() => job.id && cancelDispatch(job.id)} className="text-red-400 hover:text-red-300 text-xs flex-shrink-0">&#10005;</button>
+      </div>
+      <div className="flex items-center gap-2">
+        <span className="text-orange-300 text-xs font-medium">{isPendingApproval ? 'Approve to:' : 'Assign to:'}</span>
+        <select
+          value={selectedHash}
+          onChange={(e) => setSelectedHash(e.target.value)}
+          className="flex-1 px-2 py-1 bg-gray-900 border border-gray-700 rounded text-white text-xs focus:outline-none focus:border-orange-500"
+        >
+          <option value="">Select driver...</option>
+          {drivers.map(d => (
+            <option key={d.key} value={d.key}>{d.displayName}</option>
+          ))}
+        </select>
+        <button
+          onClick={handleAssign}
+          disabled={!selectedHash}
+          className="px-3 py-1 bg-orange-600 hover:bg-orange-500 disabled:bg-gray-700 disabled:text-gray-500 text-white text-xs font-medium rounded transition-colors"
+        >
+          {isPendingApproval ? 'Approve' : 'Assign'}
+        </button>
+      </div>
     </div>
   );
 }

@@ -1,8 +1,11 @@
+import type { UserRole } from './auth';
+
 export interface TabConfig {
   id: string;
   label: string;
   href: string;
   matchPrefixes: string[];
+  minRole?: UserRole;  // minimum role level to see this tab
 }
 
 export const TABS: TabConfig[] = [
@@ -41,6 +44,13 @@ export const TABS: TabConfig[] = [
     label: 'WB Payroll',
     href: '/payroll',
     matchPrefixes: ['/payroll'],
+  },
+  {
+    id: 'settings',
+    label: 'Settings',
+    href: '/settings',
+    matchPrefixes: ['/settings'],
+    minRole: 'admin',
   },
 ];
 
