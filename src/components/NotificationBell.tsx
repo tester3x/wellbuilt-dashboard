@@ -1,6 +1,7 @@
 'use client';
 
 import { useEffect, useRef, useState, useCallback } from 'react';
+import { usePathname } from 'next/navigation';
 import { ref, onValue } from 'firebase/database';
 import { collection, query, where, onSnapshot, Timestamp } from 'firebase/firestore';
 import { getFirebaseDatabase, getFirestoreDb } from '@/lib/firebase';
@@ -23,6 +24,7 @@ import {
 
 export function NotificationBell() {
   const { user } = useAuth();
+  const pathname = usePathname();
   const [notifications, setNotifications] = useState<NotificationItem[]>([]);
   const [isOpen, setIsOpen] = useState(false);
   const [showSettings, setShowSettings] = useState(false);
@@ -59,6 +61,29 @@ export function NotificationBell() {
     }
     if (pruned) saveReadIds(readIdsRef.current);
   }, [notifications]);
+
+  // Auto-mark notifications as read when user navigates to the relevant page (ISBP)
+  // e.g., landing on /admin auto-reads driver_registration notifications
+  useEffect(() => {
+    if (!pathname || notifications.length === 0) return;
+
+    let changed = false;
+    notifications.forEach(n => {
+      if (readIdsRef.current.has(n.id)) return; // already read
+      if (!n.actionHref) return; // no destination to match
+
+      // If user is on the page this notification links to, mark as read
+      if (pathname.startsWith(n.actionHref)) {
+        readIdsRef.current.add(n.id);
+        changed = true;
+      }
+    });
+
+    if (changed) {
+      saveReadIds(readIdsRef.current);
+      setReadVersion(v => v + 1);
+    }
+  }, [pathname, notifications]);
 
   // Close panel on outside click
   useEffect(() => {
