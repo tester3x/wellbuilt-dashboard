@@ -88,6 +88,16 @@ export default function AdminPage() {
   const [message, setMessage] = useState('');
   const [activeTab, setActiveTab] = useState<'routes' | 'wells' | 'pulls' | 'drivers' | 'companies'>('pulls');
 
+  // Read ?tab= from URL to deep-link into specific admin section (e.g. from pulsing Admin badge)
+  useEffect(() => {
+    const params = new URLSearchParams(window.location.search);
+    const tab = params.get('tab');
+    const validTabs = ['routes', 'wells', 'pulls', 'drivers', 'companies'];
+    if (tab && validTabs.includes(tab)) {
+      setActiveTab(tab as any);
+    }
+  }, []);
+
   // Search filters
   const [wellSearch, setWellSearch] = useState('');
   const [routeSearch, setRouteSearch] = useState('');

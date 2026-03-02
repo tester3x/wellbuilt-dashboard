@@ -45,11 +45,11 @@ export function AppHeader() {
         <div className="flex items-center gap-2 px-4 pt-3">
           {(user.role === 'admin' || user.role === 'it') && (
             <Link
-              href="/admin"
+              href={pendingDriverCount > 0 ? '/admin?tab=drivers' : '/admin'}
               className="relative px-4 py-2 bg-blue-600 hover:bg-blue-700 text-white rounded-lg transition-colors text-sm"
             >
               Admin
-              {pendingDriverCount > 0 && (
+              {pendingDriverCount > 0 && !pathname.startsWith('/admin') && (
                 <span className="absolute -top-1.5 -right-1.5 flex h-5 w-5">
                   <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-red-400 opacity-75"></span>
                   <span className="relative inline-flex rounded-full h-5 w-5 bg-red-500 text-[10px] text-white items-center justify-center font-bold">
