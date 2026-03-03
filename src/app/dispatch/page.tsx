@@ -5,7 +5,7 @@ import { useRouter } from 'next/navigation';
 import { useAuth } from '@/contexts/AuthContext';
 import { WellResponse, subscribeToWellStatusesUnified } from '@/lib/wells';
 import { AppHeader } from '@/components/AppHeader';
-import { ref, get } from 'firebase/database';
+import { ref, get, set } from 'firebase/database';
 import { getFirebaseDatabase } from '@/lib/firebase';
 import { getFirestoreDb } from '@/lib/firebase';
 import { collection, addDoc, getDocs, query, where, orderBy, Timestamp, doc, updateDoc, onSnapshot } from 'firebase/firestore';
@@ -13,7 +13,7 @@ import { loadDisposals, searchDisposals, type NdicWell } from '@/lib/firestoreWe
 
 // ─── Types ───────────────────────────────────────────────────────────────────
 
-type SubTab = 'pw' | 'service';
+type SubTab = 'pw' | 'service' | 'addpull';
 
 interface ApprovedDriver {
   key: string;           // passcodeHash
@@ -252,6 +252,14 @@ export default function DispatchPage() {
   const [swDriverHash, setSwDriverHash] = useState('');
   const [swSubmitting, setSwSubmitting] = useState(false);
 
+  // Add Pull form state
+  const [pullWell, setPullWell] = useState('');
+  const [pullFeet, setPullFeet] = useState('');
+  const [pullInches, setPullInches] = useState('');
+  const [pullBbls, setPullBbls] = useState('140');
+  const [pullDateTime, setPullDateTime] = useState('');
+  const [addingPull, setAddingPull] = useState(false);
+
   // Auth redirect
   useEffect(() => {
     if (!loading && !user) {
@@ -366,6 +374,69 @@ export default function DispatchPage() {
     } catch (err) {
       console.error('Failed to load dispatches:', err);
       // Collection might not exist yet — that's fine
+    }
+  }
+
+  // Set default datetime for Add Pull form
+  useEffect(() => {
+    const now = new Date();
+    const local = new Date(now.getTime() - now.getTimezoneOffset() * 60000);
+    setPullDateTime(local.toISOString().slice(0, 16));
+  }, []);
+
+  // ─── Add Pull Handler ──────────────────────────────────────────────────────
+
+  async function handleAddPull() {
+    if (!pullWell) {
+      setMessage('Select a well');
+      setTimeout(() => setMessage(''), 3000);
+      return;
+    }
+    if (!pullFeet && !pullInches) {
+      setMessage('Enter tank level');
+      setTimeout(() => setMessage(''), 3000);
+      return;
+    }
+    if (addingPull) return;
+    setAddingPull(true);
+
+    try {
+      const db = getFirebaseDatabase();
+      const levelFeet = (parseFloat(pullFeet) || 0) + (parseFloat(pullInches) || 0) / 12;
+      const dt = new Date(pullDateTime);
+      const packetId = `${dt.toISOString().replace(/[-:T.]/g, '').slice(0, 14)}_${pullWell.replace(/\s/g, '')}_dashboard`;
+
+      const packet = {
+        packetId,
+        wellName: pullWell,
+        tankLevelFeet: levelFeet,
+        bblsTaken: parseInt(pullBbls) || 0,
+        dateTime: dt.toLocaleString(),
+        dateTimeUTC: dt.toISOString(),
+        driverName: user?.displayName || user?.email || 'Dashboard',
+        driverId: user?.uid || 'dashboard',
+        requestType: 'pull',
+        timezone: Intl.DateTimeFormat().resolvedOptions().timeZone,
+        wellDown: false,
+      };
+
+      await set(ref(db, `packets/incoming/${packetId}`), packet);
+      setMessage(`Pull added for ${pullWell}`);
+
+      // Reset form
+      setPullFeet('');
+      setPullInches('');
+      setPullBbls('140');
+      const now = new Date();
+      const local = new Date(now.getTime() - now.getTimezoneOffset() * 60000);
+      setPullDateTime(local.toISOString().slice(0, 16));
+      setTimeout(() => setMessage(''), 3000);
+    } catch (error) {
+      console.error('Error adding pull:', error);
+      setMessage('Failed to add pull. Check connection and try again.');
+      setTimeout(() => setMessage(''), 5000);
+    } finally {
+      setAddingPull(false);
     }
   }
 
@@ -675,6 +746,16 @@ export default function DispatchPage() {
             >
               Service Work
             </button>
+            <button
+              onClick={() => setSubTab('addpull')}
+              className={`px-4 py-2 text-sm rounded-md font-medium transition-colors ${
+                subTab === 'addpull'
+                  ? 'bg-green-600 text-white'
+                  : 'text-gray-400 hover:text-white'
+              }`}
+            >
+              Add Pull
+            </button>
           </div>
 
           {/* Active Dispatches Count */}
@@ -915,6 +996,88 @@ export default function DispatchPage() {
                   ))}
                 </div>
               )}
+            </div>
+          </div>
+        )}
+
+        {/* ─── ADD PULL TAB ────────────────────────────────────────────────── */}
+        {subTab === 'addpull' && (
+          <div className="max-w-lg">
+            <div className="bg-gray-800 rounded-lg border border-gray-700 p-6">
+              <h3 className="text-lg font-semibold text-white mb-4">Manual Pull Entry</h3>
+              <p className="text-gray-500 text-sm mb-4">Submit a pull directly from the dashboard. The packet will be processed by the Cloud Function just like a driver pull.</p>
+              <div className="space-y-4">
+                {/* Well Selection */}
+                <div>
+                  <label className="block text-sm text-gray-400 mb-1">Well</label>
+                  <select
+                    value={pullWell}
+                    onChange={(e) => setPullWell(e.target.value)}
+                    className="w-full px-3 py-2 bg-gray-900 border border-gray-700 rounded-lg text-white text-sm focus:outline-none focus:border-blue-500"
+                  >
+                    <option value="">Select Well</option>
+                    {[...new Set(wells.map(w => w.wellName))].sort().map(w => (
+                      <option key={w} value={w}>{w}</option>
+                    ))}
+                  </select>
+                </div>
+
+                {/* Tank Level */}
+                <div>
+                  <label className="block text-sm text-gray-400 mb-1">Tank Level</label>
+                  <div className="flex gap-2">
+                    <div className="flex-1">
+                      <input
+                        type="number"
+                        value={pullFeet}
+                        onChange={(e) => setPullFeet(e.target.value)}
+                        placeholder="Feet"
+                        className="w-full px-3 py-2 bg-gray-900 border border-gray-700 rounded-lg text-white text-sm placeholder-gray-500 focus:outline-none focus:border-blue-500"
+                      />
+                    </div>
+                    <div className="flex-1">
+                      <input
+                        type="number"
+                        value={pullInches}
+                        onChange={(e) => setPullInches(e.target.value)}
+                        placeholder="Inches"
+                        max="11"
+                        className="w-full px-3 py-2 bg-gray-900 border border-gray-700 rounded-lg text-white text-sm placeholder-gray-500 focus:outline-none focus:border-blue-500"
+                      />
+                    </div>
+                  </div>
+                </div>
+
+                {/* BBLs */}
+                <div>
+                  <label className="block text-sm text-gray-400 mb-1">BBLs Taken</label>
+                  <input
+                    type="number"
+                    value={pullBbls}
+                    onChange={(e) => setPullBbls(e.target.value)}
+                    className="w-full px-3 py-2 bg-gray-900 border border-gray-700 rounded-lg text-white text-sm placeholder-gray-500 focus:outline-none focus:border-blue-500"
+                  />
+                </div>
+
+                {/* Date/Time */}
+                <div>
+                  <label className="block text-sm text-gray-400 mb-1">Date/Time</label>
+                  <input
+                    type="datetime-local"
+                    value={pullDateTime}
+                    onChange={(e) => setPullDateTime(e.target.value)}
+                    className="w-full px-3 py-2 bg-gray-900 border border-gray-700 rounded-lg text-white text-sm focus:outline-none focus:border-blue-500"
+                  />
+                </div>
+
+                <button
+                  onClick={handleAddPull}
+                  disabled={addingPull}
+                  className={`w-full px-4 py-2.5 text-white rounded-lg font-medium transition-colors ${addingPull ? 'bg-green-800 cursor-wait' : 'bg-green-600 hover:bg-green-700'}`}
+                >
+                  {addingPull ? 'Adding...' : 'Add Pull'}
+                </button>
+              </div>
             </div>
           </div>
         )}

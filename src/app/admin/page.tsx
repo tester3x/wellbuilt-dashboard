@@ -78,21 +78,14 @@ export default function AdminPage() {
   const [editNdicName, setEditNdicName] = useState('');
   const [editNdicApiNo, setEditNdicApiNo] = useState('');
 
-  // Add pull form
-  const [pullWell, setPullWell] = useState('');
-  const [pullFeet, setPullFeet] = useState('');
-  const [pullInches, setPullInches] = useState('');
-  const [pullBbls, setPullBbls] = useState('140');
-  const [pullDateTime, setPullDateTime] = useState('');
-
   const [message, setMessage] = useState('');
-  const [activeTab, setActiveTab] = useState<'routes' | 'wells' | 'pulls' | 'drivers' | 'companies'>('pulls');
+  const [activeTab, setActiveTab] = useState<'routes' | 'wells' | 'drivers' | 'companies'>('wells');
 
   // Read ?tab= from URL to deep-link into specific admin section (e.g. from pulsing Admin badge)
   useEffect(() => {
     const params = new URLSearchParams(window.location.search);
     const tab = params.get('tab');
-    const validTabs = ['routes', 'wells', 'pulls', 'drivers', 'companies'];
+    const validTabs = ['routes', 'wells', 'drivers', 'companies'];
     if (tab && validTabs.includes(tab)) {
       setActiveTab(tab as any);
     }
@@ -200,13 +193,6 @@ export default function AdminPage() {
     });
 
     return () => unsubscribe();
-  }, []);
-
-  // Set default datetime for pull form
-  useEffect(() => {
-    const now = new Date();
-    const local = new Date(now.getTime() - now.getTimezoneOffset() * 60000);
-    setPullDateTime(local.toISOString().slice(0, 16));
   }, []);
 
   // Load selected well config into edit form
@@ -718,59 +704,6 @@ export default function AdminPage() {
     setSelectedWell('');
   };
 
-  // Add pull
-  const [addingPull, setAddingPull] = useState(false);
-
-  const handleAddPull = async () => {
-    if (!pullWell) {
-      showMessage('Select a well');
-      return;
-    }
-    if (!pullFeet && !pullInches) {
-      showMessage('Enter tank level');
-      return;
-    }
-    if (addingPull) return;
-    setAddingPull(true);
-
-    try {
-      const db = getFirebaseDatabase();
-      const levelFeet = (parseFloat(pullFeet) || 0) + (parseFloat(pullInches) || 0) / 12;
-      const dt = new Date(pullDateTime);
-      const packetId = `${dt.toISOString().replace(/[-:T.]/g, '').slice(0, 14)}_${pullWell.replace(/\s/g, '')}_dashboard`;
-
-      const packet = {
-        packetId,
-        wellName: pullWell.replace(/([a-z])(\d)/gi, '$1 $2'), // Add space back for display
-        tankLevelFeet: levelFeet,
-        bblsTaken: parseInt(pullBbls) || 0,
-        dateTime: dt.toLocaleString(),
-        dateTimeUTC: dt.toISOString(),
-        driverName: user?.displayName || user?.email || 'Dashboard',
-        driverId: user?.uid || 'dashboard',
-        requestType: 'pull',
-        timezone: Intl.DateTimeFormat().resolvedOptions().timeZone,
-        wellDown: false,
-      };
-
-      await set(ref(db, `packets/incoming/${packetId}`), packet);
-      showMessage(`Pull added for ${pullWell}`);
-
-      // Reset form
-      setPullFeet('');
-      setPullInches('');
-      setPullBbls('140');
-      const now = new Date();
-      const local = new Date(now.getTime() - now.getTimezoneOffset() * 60000);
-      setPullDateTime(local.toISOString().slice(0, 16));
-    } catch (error) {
-      console.error('Error adding pull:', error);
-      showMessage('Failed to add pull. Check connection and try again.');
-    } finally {
-      setAddingPull(false);
-    }
-  };
-
   if (loading) {
     return <div className="min-h-screen bg-gray-900 flex items-center justify-center">
       <div className="text-white">Loading...</div>
@@ -793,8 +726,7 @@ export default function AdminPage() {
 
         {/* Section Title */}
         <h2 className="text-xl font-bold text-white mb-3">
-          {activeTab === 'pulls' ? 'Manual Pull Entry' :
-           activeTab === 'wells' ? 'Well Configuration' :
+          {activeTab === 'wells' ? 'Well Configuration' :
            activeTab === 'routes' ? 'Route Management' :
            activeTab === 'drivers' ? 'Driver Management' :
            'Company Management'}
@@ -802,12 +734,6 @@ export default function AdminPage() {
 
         {/* Tabs */}
         <div className="flex gap-2 mb-6 flex-wrap">
-          <button
-            onClick={() => setActiveTab('pulls')}
-            className={`px-4 py-2 rounded ${activeTab === 'pulls' ? 'bg-blue-600 text-white' : 'bg-gray-700 text-gray-300'}`}
-          >
-            Add Pull
-          </button>
           <button
             onClick={() => setActiveTab('wells')}
             className={`px-4 py-2 rounded ${activeTab === 'wells' ? 'bg-blue-600 text-white' : 'bg-gray-700 text-gray-300'}`}
@@ -1175,87 +1101,6 @@ export default function AdminPage() {
                   </div>
                 </div>
               )}
-            </div>
-          </div>
-        )}
-
-        {/* Add Pull Tab */}
-        {activeTab === 'pulls' && (
-          <div className="max-w-lg">
-            <div className="bg-gray-800 rounded-lg p-4">
-              <h2 className="text-lg font-semibold text-white mb-4">Add New Pull</h2>
-              <div className="space-y-4">
-                {/* Well Selection */}
-                <div>
-                  <label className="text-gray-400 text-sm">Well</label>
-                  <select
-                    value={pullWell}
-                    onChange={(e) => setPullWell(e.target.value)}
-                    className="w-full px-3 py-2 bg-gray-700 text-white rounded"
-                  >
-                    <option value="">Select Well</option>
-                    {Object.keys(configs).sort().map(w => (
-                      <option key={w} value={w}>{w}</option>
-                    ))}
-                  </select>
-                </div>
-
-                {/* Tank Level */}
-                <div>
-                  <label className="text-gray-400 text-sm">Tank Level</label>
-                  <div className="flex gap-2">
-                    <div className="flex-1">
-                      <input
-                        type="number"
-                        value={pullFeet}
-                        onChange={(e) => setPullFeet(e.target.value)}
-                        placeholder="Feet"
-                        className="w-full px-3 py-2 bg-gray-700 text-white rounded"
-                      />
-                    </div>
-                    <div className="flex-1">
-                      <input
-                        type="number"
-                        value={pullInches}
-                        onChange={(e) => setPullInches(e.target.value)}
-                        placeholder="Inches"
-                        max="11"
-                        className="w-full px-3 py-2 bg-gray-700 text-white rounded"
-                      />
-                    </div>
-                  </div>
-                </div>
-
-                {/* BBLs */}
-                <div>
-                  <label className="text-gray-400 text-sm">BBLs Taken</label>
-                  <input
-                    type="number"
-                    value={pullBbls}
-                    onChange={(e) => setPullBbls(e.target.value)}
-                    className="w-full px-3 py-2 bg-gray-700 text-white rounded"
-                  />
-                </div>
-
-                {/* Date/Time */}
-                <div>
-                  <label className="text-gray-400 text-sm">Date/Time</label>
-                  <input
-                    type="datetime-local"
-                    value={pullDateTime}
-                    onChange={(e) => setPullDateTime(e.target.value)}
-                    className="w-full px-3 py-2 bg-gray-700 text-white rounded"
-                  />
-                </div>
-
-                <button
-                  onClick={handleAddPull}
-                  disabled={addingPull}
-                  className={`w-full px-4 py-2 text-white rounded font-medium ${addingPull ? 'bg-green-800 cursor-wait' : 'bg-green-600 hover:bg-green-700'}`}
-                >
-                  {addingPull ? 'Adding...' : 'Add Pull'}
-                </button>
-              </div>
             </div>
           </div>
         )}
