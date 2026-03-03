@@ -228,6 +228,7 @@ interface PullPacket {
   timezone?: string;
   wellDown?: boolean;
   predictedLevelInches?: number;
+  jobType?: string; // Commodity type from WB T (e.g. "Production Water", "Fresh Water")
 }
 
 interface ProcessedPacket extends PullPacket {
@@ -244,6 +245,7 @@ interface ProcessedPacket extends PullPacket {
   estTimeToPull: string; // "H:MM" format
   estDateTimePull: string; // ISO string
   processedAt: string;
+  noLevel?: boolean; // True when driver didn't enter a top level (non-PW source)
 }
 
 interface OutgoingResponse {
@@ -778,7 +780,38 @@ export const processIncomingPull = functionsV1.database
     }
 
     // Calculate all fields
-    const tankTopInches = data.tankLevelFeet * 12;
+    const tankTopInches = (parseFloat(String(data.tankLevelFeet)) || 0) * 12;
+
+    // No top level = not a production tank pull (fresh water, service work, etc.)
+    // Log the packet but skip all tank math — don't corrupt existing well data
+    if (tankTopInches <= 0) {
+      console.log(`[NO-LEVEL] ${wellName}: No top level entered, skipping tank math`);
+
+      const processedPacket: ProcessedPacket = {
+        ...data,
+        packetId,
+        tankTopInches: 0,
+        tankAfterInches: 0,
+        tankAfterFeet: '',
+        timeDif: '',
+        timeDifDays: 0,
+        recoveryInches: 0,
+        flowRate: '',
+        flowRateDays: 0,
+        recoveryNeeded: 0,
+        estTimeToPull: '',
+        estDateTimePull: '',
+        processedAt: new Date().toISOString(),
+        noLevel: true,
+      };
+
+      await db.ref(`packets/processed/${packetId}`).set(processedPacket);
+      await snapshot.ref.remove();
+
+      console.log(`[NO-LEVEL] ${wellName}: Stored to processed (bbls=${data.bblsTaken}), existing well status preserved`);
+      return null;
+    }
+
     const bblsInInches = data.bblsTaken > 0 ? (data.bblsTaken / 20 / tanks) * 12 : 0;
     const tankAfterInches = tankTopInches - bblsInInches;
 
