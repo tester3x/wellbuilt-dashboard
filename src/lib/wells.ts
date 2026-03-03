@@ -107,6 +107,9 @@ export interface PullPacket {
   // Edit tracking
   editedAt?: string;        // ISO string - when the edit was made
   editedBy?: string;        // who made the edit (e.g. 'dashboard')
+  // No-level flag (non-production-tank pull — fresh water, service work, etc.)
+  noLevel?: boolean;
+  jobType?: string;          // Commodity type from WB T (e.g. "Production Water")
 }
 
 export interface PerformanceRow {
@@ -752,6 +755,8 @@ export async function fetchWellHistoryUnified(wellName: string, limit: number = 
         flowRateDays: data.flowRateDays,
         editedAt: data.editedAt,
         editedBy: data.editedBy,
+        noLevel: data.noLevel || false,
+        jobType: data.jobType,
       });
     }
   });

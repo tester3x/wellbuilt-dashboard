@@ -76,6 +76,11 @@ service cloud.firestore {
       allow read, write: if true;
     }
 
+    // Payroll additions (bonuses/reimbursements) — dashboard manages
+    match /additions/{additionId} {
+      allow read, write: if true;
+    }
+
     // Default: deny everything else
     match /{document=**} {
       allow read, write: if false;

@@ -536,7 +536,9 @@ export default function WellDetailPage() {
                   // Level 1 (IT Review): flagged but included - yellow
                   // Level 0 (Normal): no color
                   let rowBgClass = 'hover:bg-gray-750';
-                  if (pull.anomalyLevel === 2) {
+                  if (pull.noLevel) {
+                    rowBgClass = 'bg-gray-800/60 hover:bg-gray-800/80'; // No gauge - dimmed
+                  } else if (pull.anomalyLevel === 2) {
                     rowBgClass = 'bg-orange-900/40 hover:bg-orange-900/60'; // Anomaly - excluded
                   } else if (pull.anomalyLevel === 1) {
                     rowBgClass = 'bg-yellow-900/30 hover:bg-yellow-900/50'; // IT Review - flagged
@@ -548,40 +550,49 @@ export default function WellDetailPage() {
                       <td className="px-3 py-2 text-white font-mono text-sm whitespace-nowrap">
                         {formatDateTime(pull.timestamp)}
                       </td>
-                      <td className="px-3 py-2 text-white font-mono text-sm text-center">
-                        {formatLevelFtIn(pull.tankTopLevel)}
+                      <td className="px-3 py-2 font-mono text-sm text-center">
+                        {pull.noLevel ? (
+                          <span className="text-gray-500 italic text-xs">No Gauge</span>
+                        ) : (
+                          <span className="text-white">{formatLevelFtIn(pull.tankTopLevel)}</span>
+                        )}
                       </td>
                       <td className="px-3 py-2 text-white font-mono text-sm text-center">
                         {pull.bblsTaken}
                       </td>
                       <td className="px-3 py-2 text-gray-400 text-sm">
                         {pull.driverName || '--'}
+                        {pull.noLevel && (
+                          <span className="ml-2 px-1.5 py-0.5 bg-gray-600/70 text-gray-300 text-xs rounded" title={pull.jobType || 'No tank gauge'}>
+                            {pull.jobType || 'No Level'}
+                          </span>
+                        )}
                         {pull.editedAt && (
                           <span className="ml-2 px-1.5 py-0.5 bg-orange-600/70 text-orange-100 text-xs rounded" title={`Edited ${pull.editedAt} by ${pull.editedBy || 'unknown'}`}>
                             Edited
                           </span>
                         )}
                       </td>
-                      {/* Calculated - Historical data */}
+                      {/* Calculated - Historical data (all blank for noLevel) */}
                       <td className="px-3 py-2 text-white font-mono text-sm text-center">
-                        {formatLevelFtIn(pull.tankAfter)}
+                        {pull.noLevel ? '' : formatLevelFtIn(pull.tankAfter)}
                       </td>
                       <td className="px-3 py-2 text-white font-mono text-sm text-center">
-                        {pull.timeDif || '--'}
+                        {pull.noLevel ? '' : (pull.timeDif || '--')}
                       </td>
                       <td className="px-3 py-2 text-white font-mono text-sm text-center">
-                        {pull.recoveryInches !== undefined ? Math.round(pull.recoveryInches) : '--'}
+                        {pull.noLevel ? '' : (pull.recoveryInches !== undefined ? Math.round(pull.recoveryInches) : '--')}
                       </td>
                       <td className="px-3 py-2 text-white font-mono text-sm text-center">
-                        {formatOneInchFlowRate(pull.flowRateDays ? pull.flowRateDays * 24 * 60 : parseFlowRateToMinutes(pull.flowRate))}
+                        {pull.noLevel ? '' : formatOneInchFlowRate(pull.flowRateDays ? pull.flowRateDays * 24 * 60 : parseFlowRateToMinutes(pull.flowRate))}
                       </td>
                       <td className="px-3 py-2 text-white font-mono text-sm text-center">
-                        {pull.flowRate || '--'}
+                        {pull.noLevel ? '' : (pull.flowRate || '--')}
                       </td>
                       <td className="px-3 py-2 text-white font-mono text-sm text-center">
-                        {pull.flowRateDays && pull.flowRateDays > 0
+                        {pull.noLevel ? '' : (pull.flowRateDays && pull.flowRateDays > 0
                           ? Math.round((1 / pull.flowRateDays) * wellTanks * 20)
-                          : '--'}
+                          : '--')}
                       </td>
                       {(userCanDelete || user.role === 'driver') && (
                         <td className="px-3 py-2 text-right space-x-2 whitespace-nowrap">

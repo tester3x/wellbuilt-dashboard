@@ -1124,6 +1124,25 @@ export const processEditRequest = functionsV1.database
     const newDateTimeUTC = data.dateTimeUTC || origPacket.dateTimeUTC;
     const newDateTime = data.dateTime || origPacket.dateTime;
 
+    // No top level = non-production-tank edit. Update basic fields only, skip tank math.
+    if (newTankTopInches <= 0) {
+      console.log(`[NO-LEVEL EDIT] ${wellName}: No top level, skipping tank math`);
+      await db.ref(`packets/processed/${originalPacketId}`).update({
+        tankTopInches: 0,
+        tankLevelFeet: 0,
+        bblsTaken: newBblsTaken,
+        tankAfterInches: 0,
+        tankAfterFeet: '',
+        dateTimeUTC: newDateTimeUTC,
+        dateTime: newDateTime,
+        editedAt: new Date().toISOString(),
+        editedBy: data.source || 'dashboard',
+        noLevel: true,
+      });
+      await snapshot.ref.remove();
+      return null;
+    }
+
     // Recalculate tankAfter
     const bblsInInches = newBblsTaken > 0 ? (newBblsTaken / 20 / tanks) * 12 : 0;
     const newTankAfterInches = newTankTopInches - bblsInInches;

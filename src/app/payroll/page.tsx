@@ -10,18 +10,26 @@ import {
   DriverTimesheetRow,
   TimesheetStatus,
   Deduction,
+  Addition,
   DeductionType,
   AmountType,
   DeductionFrequency,
   DEDUCTION_PRESETS,
+  BONUS_PRESETS,
   getPayPeriods,
   fetchPayrollInvoices,
   fetchDeductions,
+  fetchAdditions,
   saveDeduction,
+  saveAddition,
   deactivateDeduction,
+  deactivateAddition,
+  calculatePeriodDeduction,
+  calculatePeriodAddition,
   formatCurrency,
   formatPeriodRange,
 } from '@/lib/payroll';
+import { type CompanyConfig, loadAllCompanies } from '@/lib/companySettings';
 import { Timestamp } from 'firebase/firestore';
 import { ref, get } from 'firebase/database';
 import { getFirebaseDatabase } from '@/lib/firebase';
@@ -77,6 +85,21 @@ export default function PayrollPage() {
   const [dedNotes, setDedNotes] = useState('');
   const [dedSaving, setDedSaving] = useState(false);
 
+  // Additions (bonuses/reimbursements) state
+  const [additions, setAdditions] = useState<Addition[]>([]);
+  const [showAdditionModal, setShowAdditionModal] = useState(false);
+  const [showAdditionList, setShowAdditionList] = useState(false);
+  const [addDriver, setAddDriver] = useState('');
+  const [addReason, setAddReason] = useState('');
+  const [addCustomReason, setAddCustomReason] = useState('');
+  const [addType, setAddType] = useState<DeductionType>('one_time');
+  const [addFrequency, setAddFrequency] = useState<DeductionFrequency>('weekly');
+  const [addAmountType, setAddAmountType] = useState<AmountType>('flat');
+  const [addAmount, setAddAmount] = useState('');
+  const [addTotal, setAddTotal] = useState('');
+  const [addNotes, setAddNotes] = useState('');
+  const [addSaving, setAddSaving] = useState(false);
+
   const selectedPeriod = payPeriods[selectedPeriodIdx];
 
   // Auth guard
@@ -90,10 +113,11 @@ export default function PayrollPage() {
     loadPayrollData();
   }, [user, selectedPeriodIdx]);
 
-  // Load deductions + driver names on mount
+  // Load deductions + additions + driver names on mount
   useEffect(() => {
     if (!user) return;
     loadDeductions();
+    loadAdditions();
     loadDriverNames();
   }, [user]);
 
@@ -103,6 +127,15 @@ export default function PayrollPage() {
       setDeductions(data);
     } catch (err) {
       console.error('Failed to load deductions:', err);
+    }
+  };
+
+  const loadAdditions = async () => {
+    try {
+      const data = await fetchAdditions();
+      setAdditions(data);
+    } catch (err) {
+      console.error('Failed to load additions:', err);
     }
   };
 
@@ -132,7 +165,13 @@ export default function PayrollPage() {
     try {
       setDataLoading(true);
       setError(null);
-      const data = await fetchPayrollInvoices(selectedPeriod);
+
+      // Load company configs for rate sheet + pay config lookup
+      const companies = await loadAllCompanies();
+      const companyMap = new Map<string, CompanyConfig>();
+      companies.forEach(c => companyMap.set(c.id, c));
+
+      const data = await fetchPayrollInvoices(selectedPeriod, companyMap);
       setTimesheets(data);
     } catch (err: any) {
       console.error('Failed to fetch payroll data:', err);
@@ -204,7 +243,69 @@ export default function PayrollPage() {
     }
   };
 
-  // Active deduction count per driver
+  // Addition handlers
+  const resetAdditionForm = () => {
+    setAddDriver('');
+    setAddReason('');
+    setAddCustomReason('');
+    setAddType('one_time');
+    setAddFrequency('weekly');
+    setAddAmountType('flat');
+    setAddAmount('');
+    setAddTotal('');
+    setAddNotes('');
+  };
+
+  const openAddAddition = (preselectedDriver?: string) => {
+    resetAdditionForm();
+    if (preselectedDriver) setAddDriver(preselectedDriver);
+    setShowAdditionModal(true);
+  };
+
+  const handleSaveAddition = async () => {
+    const reason = addReason === 'Other' ? addCustomReason.trim() : addReason;
+    if (!addDriver || !reason || !addAmount) return;
+
+    setAddSaving(true);
+    try {
+      const amount = parseFloat(addAmount);
+      const totalOwed = addType === 'recurring' ? parseFloat(addTotal) || amount : amount;
+
+      await saveAddition({
+        driverName: addDriver,
+        reason,
+        additionType: addType,
+        frequency: addType === 'recurring' ? addFrequency : undefined,
+        amountType: addAmountType,
+        amountPerPeriod: amount,
+        totalOwed,
+        totalPaid: 0,
+        active: true,
+        createdAt: Timestamp.now(),
+        notes: addNotes.trim() || undefined,
+      });
+
+      setShowAdditionModal(false);
+      resetAdditionForm();
+      await loadAdditions();
+    } catch (err) {
+      console.error('Failed to save addition:', err);
+    } finally {
+      setAddSaving(false);
+    }
+  };
+
+  const handleRemoveAddition = async (id: string) => {
+    if (!confirm('Remove this bonus/reimbursement?')) return;
+    try {
+      await deactivateAddition(id);
+      await loadAdditions();
+    } catch (err) {
+      console.error('Failed to remove addition:', err);
+    }
+  };
+
+  // Active deductions per driver
   const driverDeductions = useMemo(() => {
     const map = new Map<string, Deduction[]>();
     deductions.forEach(d => {
@@ -214,15 +315,49 @@ export default function PayrollPage() {
     return map;
   }, [deductions]);
 
+  // Active additions per driver
+  const driverAdditions = useMemo(() => {
+    const map = new Map<string, Addition[]>();
+    additions.forEach(a => {
+      if (!map.has(a.driverName)) map.set(a.driverName, []);
+      map.get(a.driverName)!.push(a);
+    });
+    return map;
+  }, [additions]);
+
+  // Apply deductions + additions to each driver summary
+  const processedTimesheets = useMemo(() => {
+    return timesheets.map(ts => {
+      const driverDeds = driverDeductions.get(ts.driverName) || [];
+      const driverAdds = driverAdditions.get(ts.driverName) || [];
+
+      const totalDeductions = driverDeds.reduce(
+        (sum, d) => sum + calculatePeriodDeduction(d, ts.employeePay), 0
+      );
+      const totalAdditions = driverAdds.reduce(
+        (sum, a) => sum + calculatePeriodAddition(a, ts.employeePay), 0
+      );
+
+      const netPay = Math.round((ts.employeePay + totalAdditions - totalDeductions) * 100) / 100;
+
+      return {
+        ...ts,
+        deductions: Math.round(totalDeductions * 100) / 100,
+        additions: Math.round(totalAdditions * 100) / 100,
+        netPay: Math.max(0, netPay),
+      };
+    });
+  }, [timesheets, driverDeductions, driverAdditions]);
+
   // Filter by search
   const filtered = useMemo(() => {
-    if (!search.trim()) return timesheets;
+    if (!search.trim()) return processedTimesheets;
     const q = search.toLowerCase();
-    return timesheets.filter(ts =>
+    return processedTimesheets.filter(ts =>
       ts.driverName.toLowerCase().includes(q) ||
       ts.companyName?.toLowerCase().includes(q)
     );
-  }, [timesheets, search]);
+  }, [processedTimesheets, search]);
 
   // Totals
   const totals = useMemo(() => {
@@ -233,10 +368,11 @@ export default function PayrollPage() {
         bbls: acc.bbls + ts.totalBBLs,
         billed: acc.billed + ts.grossBilled,
         pay: acc.pay + ts.employeePay,
+        additions: acc.additions + ts.additions,
         deductions: acc.deductions + ts.deductions,
         net: acc.net + ts.netPay,
       }),
-      { loads: 0, hours: 0, bbls: 0, billed: 0, pay: 0, deductions: 0, net: 0 }
+      { loads: 0, hours: 0, bbls: 0, billed: 0, pay: 0, additions: 0, deductions: 0, net: 0 }
     );
   }, [filtered]);
 
@@ -309,7 +445,18 @@ export default function PayrollPage() {
               Export All
             </button>
             <button
-              onClick={() => setShowDeductionList(!showDeductionList)}
+              onClick={() => { setShowAdditionList(!showAdditionList); setShowDeductionList(false); }}
+              className="bg-green-700 hover:bg-green-600 text-white px-4 py-2 rounded-lg text-sm font-medium transition-colors relative"
+            >
+              Bonuses
+              {additions.length > 0 && (
+                <span className="absolute -top-1 -right-1 bg-green-500 text-white text-xs w-5 h-5 rounded-full flex items-center justify-center">
+                  {additions.length}
+                </span>
+              )}
+            </button>
+            <button
+              onClick={() => { setShowDeductionList(!showDeductionList); setShowAdditionList(false); }}
               className="bg-red-700 hover:bg-red-600 text-white px-4 py-2 rounded-lg text-sm font-medium transition-colors relative"
             >
               Deductions
@@ -395,6 +542,7 @@ export default function PayrollPage() {
                     <th className="text-right text-gray-400 font-medium px-4 py-3">BBLs</th>
                     <th className="text-right text-gray-400 font-medium px-4 py-3">Gross Billed</th>
                     <th className="text-right text-gray-400 font-medium px-4 py-3">Employee Pay</th>
+                    <th className="text-right text-gray-400 font-medium px-4 py-3">Bonuses</th>
                     <th className="text-right text-gray-400 font-medium px-4 py-3">Deductions</th>
                     <th className="text-right text-gray-400 font-medium px-4 py-3">Net Pay</th>
                     <th className="text-center text-gray-400 font-medium px-4 py-3">Status</th>
@@ -428,6 +576,9 @@ export default function PayrollPage() {
                     <td className="text-right px-4 py-3 text-white">{totals.bbls.toLocaleString()}</td>
                     <td className="text-right px-4 py-3 text-white">{formatCurrency(totals.billed)}</td>
                     <td className="text-right px-4 py-3 text-white">{formatCurrency(totals.pay)}</td>
+                    <td className="text-right px-4 py-3 text-green-400">
+                      {totals.additions > 0 ? `+${formatCurrency(totals.additions)}` : '—'}
+                    </td>
                     <td className="text-right px-4 py-3 text-red-400">
                       {totals.deductions > 0 ? `-${formatCurrency(totals.deductions)}` : '—'}
                     </td>
@@ -514,6 +665,92 @@ export default function PayrollPage() {
                             onClick={() => handleRemoveDeduction(ded.id)}
                             className="text-red-400 hover:text-red-300 text-xs"
                             title="Remove deduction"
+                          >
+                            Remove
+                          </button>
+                        </td>
+                      </tr>
+                    );
+                  })}
+                </tbody>
+              </table>
+            )}
+          </div>
+        )}
+
+        {/* ── Additions (Bonuses) List Panel ── */}
+        {showAdditionList && (
+          <div className="mt-6 bg-gray-800 rounded-lg border border-gray-700 overflow-hidden">
+            <div className="flex items-center justify-between px-4 py-3 border-b border-gray-700">
+              <h3 className="text-white font-medium">Active Bonuses &amp; Reimbursements</h3>
+              <button
+                onClick={() => openAddAddition()}
+                className="bg-green-600 hover:bg-green-500 text-white px-3 py-1.5 rounded text-xs font-medium"
+              >
+                + Add Bonus
+              </button>
+            </div>
+
+            {additions.length === 0 ? (
+              <div className="px-4 py-8 text-center text-gray-500">
+                No active bonuses or reimbursements. Click &quot;+ Add Bonus&quot; to create one.
+              </div>
+            ) : (
+              <table className="w-full text-sm">
+                <thead>
+                  <tr className="border-b border-gray-700 bg-gray-800/50">
+                    <th className="text-left text-gray-400 font-medium px-4 py-2">Driver</th>
+                    <th className="text-left text-gray-400 font-medium px-4 py-2">Reason</th>
+                    <th className="text-center text-gray-400 font-medium px-4 py-2">Type</th>
+                    <th className="text-right text-gray-400 font-medium px-4 py-2">Per Period</th>
+                    <th className="text-right text-gray-400 font-medium px-4 py-2">Total Owed</th>
+                    <th className="text-right text-gray-400 font-medium px-4 py-2">Paid</th>
+                    <th className="text-right text-gray-400 font-medium px-4 py-2">Remaining</th>
+                    <th className="text-center text-gray-400 font-medium px-4 py-2"></th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {additions.map(add => {
+                    const remaining = add.totalOwed - add.totalPaid;
+                    return (
+                      <tr key={add.id} className="border-b border-gray-700/30 hover:bg-gray-700/20">
+                        <td className="px-4 py-2 text-white">{add.driverName}</td>
+                        <td className="px-4 py-2 text-gray-300">
+                          {add.reason}
+                          {add.notes && (
+                            <span className="text-gray-500 text-xs ml-2" title={add.notes}>
+                              ({add.notes})
+                            </span>
+                          )}
+                        </td>
+                        <td className="text-center px-4 py-2">
+                          <span className={`px-2 py-0.5 rounded text-xs font-medium ${
+                            add.additionType === 'one_time'
+                              ? 'bg-green-600/20 text-green-400'
+                              : 'bg-emerald-600/20 text-emerald-400'
+                          }`}>
+                            {add.additionType === 'one_time' ? 'One-Time' : `Recurring (${add.frequency})`}
+                          </span>
+                        </td>
+                        <td className="text-right px-4 py-2 text-gray-300">
+                          {add.amountType === 'percentage'
+                            ? `${add.amountPerPeriod}%`
+                            : formatCurrency(add.amountPerPeriod)}
+                        </td>
+                        <td className="text-right px-4 py-2 text-gray-300">
+                          {formatCurrency(add.totalOwed)}
+                        </td>
+                        <td className="text-right px-4 py-2 text-green-400">
+                          {formatCurrency(add.totalPaid)}
+                        </td>
+                        <td className="text-right px-4 py-2 text-green-400 font-medium">
+                          {formatCurrency(remaining)}
+                        </td>
+                        <td className="text-center px-4 py-2">
+                          <button
+                            onClick={() => handleRemoveAddition(add.id)}
+                            className="text-red-400 hover:text-red-300 text-xs"
+                            title="Remove bonus"
                           >
                             Remove
                           </button>
@@ -701,6 +938,180 @@ export default function PayrollPage() {
           </div>
         </div>
       )}
+
+      {/* ── Add Bonus/Reimbursement Modal ── */}
+      {showAdditionModal && (
+        <div className="fixed inset-0 bg-black bg-opacity-60 flex items-center justify-center z-50">
+          <div className="bg-gray-800 rounded-lg p-6 max-w-md w-full mx-4">
+            <h3 className="text-white font-medium mb-4">Add Bonus / Reimbursement</h3>
+
+            <div className="space-y-4">
+              {/* Driver */}
+              <div>
+                <label className="block text-gray-400 text-xs mb-1">Driver</label>
+                <select
+                  value={addDriver}
+                  onChange={e => setAddDriver(e.target.value)}
+                  className="w-full px-3 py-2 bg-gray-700 text-white rounded text-sm"
+                >
+                  <option value="">Select driver...</option>
+                  {driverNames.map(name => (
+                    <option key={name} value={name}>{name}</option>
+                  ))}
+                </select>
+              </div>
+
+              {/* Reason */}
+              <div>
+                <label className="block text-gray-400 text-xs mb-1">Reason</label>
+                <select
+                  value={addReason}
+                  onChange={e => setAddReason(e.target.value)}
+                  className="w-full px-3 py-2 bg-gray-700 text-white rounded text-sm"
+                >
+                  <option value="">Select reason...</option>
+                  {BONUS_PRESETS.map(r => (
+                    <option key={r} value={r}>{r}</option>
+                  ))}
+                </select>
+                {addReason === 'Other' && (
+                  <input
+                    type="text"
+                    value={addCustomReason}
+                    onChange={e => setAddCustomReason(e.target.value)}
+                    placeholder="Describe the bonus/reimbursement..."
+                    className="w-full mt-2 px-3 py-2 bg-gray-700 text-white rounded text-sm placeholder-gray-500"
+                  />
+                )}
+              </div>
+
+              {/* Type */}
+              <div>
+                <label className="block text-gray-400 text-xs mb-1">Type</label>
+                <div className="flex gap-2">
+                  <button
+                    onClick={() => setAddType('one_time')}
+                    className={`flex-1 px-3 py-2 rounded text-sm font-medium transition-colors ${
+                      addType === 'one_time'
+                        ? 'bg-green-600 text-white'
+                        : 'bg-gray-700 text-gray-400 hover:bg-gray-600'
+                    }`}
+                  >
+                    One-Time
+                  </button>
+                  <button
+                    onClick={() => setAddType('recurring')}
+                    className={`flex-1 px-3 py-2 rounded text-sm font-medium transition-colors ${
+                      addType === 'recurring'
+                        ? 'bg-emerald-600 text-white'
+                        : 'bg-gray-700 text-gray-400 hover:bg-gray-600'
+                    }`}
+                  >
+                    Recurring
+                  </button>
+                </div>
+              </div>
+
+              {/* Frequency (recurring only) */}
+              {addType === 'recurring' && (
+                <div>
+                  <label className="block text-gray-400 text-xs mb-1">Frequency</label>
+                  <select
+                    value={addFrequency}
+                    onChange={e => setAddFrequency(e.target.value as DeductionFrequency)}
+                    className="w-full px-3 py-2 bg-gray-700 text-white rounded text-sm"
+                  >
+                    <option value="weekly">Weekly</option>
+                    <option value="biweekly">Bi-Weekly</option>
+                    <option value="monthly">Monthly</option>
+                  </select>
+                </div>
+              )}
+
+              {/* Amount */}
+              <div>
+                <label className="block text-gray-400 text-xs mb-1">
+                  {addType === 'one_time' ? 'Amount' : 'Amount Per Period'}
+                </label>
+                <div className="flex gap-2">
+                  <select
+                    value={addAmountType}
+                    onChange={e => setAddAmountType(e.target.value as AmountType)}
+                    className="w-24 px-2 py-2 bg-gray-700 text-white rounded text-sm"
+                  >
+                    <option value="flat">$ Flat</option>
+                    <option value="percentage">%</option>
+                  </select>
+                  <div className="relative flex-1">
+                    <span className="absolute left-2 top-1/2 -translate-y-1/2 text-gray-400 text-sm">
+                      {addAmountType === 'flat' ? '$' : '%'}
+                    </span>
+                    <input
+                      type="number"
+                      step={addAmountType === 'flat' ? '0.01' : '1'}
+                      min="0"
+                      value={addAmount}
+                      onChange={e => setAddAmount(e.target.value)}
+                      className="w-full pl-7 pr-2 py-2 bg-gray-700 text-white rounded text-sm"
+                      placeholder="0.00"
+                    />
+                  </div>
+                </div>
+              </div>
+
+              {/* Total Amount (recurring only) */}
+              {addType === 'recurring' && (
+                <div>
+                  <label className="block text-gray-400 text-xs mb-1">Total Amount</label>
+                  <div className="relative">
+                    <span className="absolute left-2 top-1/2 -translate-y-1/2 text-gray-400 text-sm">$</span>
+                    <input
+                      type="number"
+                      step="0.01"
+                      min="0"
+                      value={addTotal}
+                      onChange={e => setAddTotal(e.target.value)}
+                      className="w-full pl-7 pr-2 py-2 bg-gray-700 text-white rounded text-sm"
+                      placeholder="Total to pay out over time"
+                    />
+                  </div>
+                  <p className="text-gray-500 text-xs mt-1">
+                    Bonus stops automatically when this amount is fully paid.
+                  </p>
+                </div>
+              )}
+
+              {/* Notes */}
+              <div>
+                <label className="block text-gray-400 text-xs mb-1">Notes (optional)</label>
+                <input
+                  type="text"
+                  value={addNotes}
+                  onChange={e => setAddNotes(e.target.value)}
+                  placeholder="e.g., 90-day sign-on bonus"
+                  className="w-full px-3 py-2 bg-gray-700 text-white rounded text-sm placeholder-gray-500"
+                />
+              </div>
+            </div>
+
+            <div className="flex gap-2 mt-6">
+              <button
+                onClick={handleSaveAddition}
+                disabled={addSaving || !addDriver || !addReason || !addAmount}
+                className="flex-1 px-4 py-2 bg-green-600 hover:bg-green-500 text-white rounded font-medium disabled:opacity-50 disabled:cursor-not-allowed"
+              >
+                {addSaving ? 'Saving...' : 'Add Bonus'}
+              </button>
+              <button
+                onClick={() => { setShowAdditionModal(false); resetAdditionForm(); }}
+                className="px-4 py-2 bg-gray-600 hover:bg-gray-500 text-white rounded"
+              >
+                Cancel
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }
@@ -745,6 +1156,9 @@ function DriverRow({
         <td className="text-right px-4 py-3 text-gray-300">
           {summary.employeePay > 0 ? formatCurrency(summary.employeePay) : '—'}
         </td>
+        <td className="text-right px-4 py-3 text-green-400">
+          {summary.additions > 0 ? `+${formatCurrency(summary.additions)}` : '—'}
+        </td>
         <td className="text-right px-4 py-3 text-red-400">
           {summary.deductions > 0 ? `-${formatCurrency(summary.deductions)}` : '—'}
         </td>
@@ -764,7 +1178,7 @@ function DriverRow({
       {/* Expanded Detail — Individual Timesheet */}
       {isExpanded && (
         <tr>
-          <td colSpan={10} className="p-0">
+          <td colSpan={11} className="p-0">
             <DriverTimesheetDetail summary={summary} legalNameMap={legalNameMap} />
           </td>
         </tr>
@@ -844,6 +1258,17 @@ function DriverTimesheetDetail({ summary, legalNameMap = {} }: { summary: Driver
               <td className="px-3 py-2" />
             </tr>
 
+            {/* Bonuses row */}
+            {summary.additions > 0 && (
+              <tr className="bg-gray-800/30">
+                <td colSpan={8} className="px-3 py-2 text-gray-400 text-right">Bonuses / Reimbursements</td>
+                <td className="text-right px-3 py-2 text-green-400 font-medium">
+                  +{formatCurrency(summary.additions)}
+                </td>
+                <td className="px-3 py-2" />
+              </tr>
+            )}
+
             {/* Deductions row */}
             {summary.deductions > 0 && (
               <tr className="bg-gray-800/30">
@@ -856,7 +1281,7 @@ function DriverTimesheetDetail({ summary, legalNameMap = {} }: { summary: Driver
             )}
 
             {/* Net Pay row */}
-            {(summary.grossBilled > 0 || summary.deductions > 0) && (
+            {(summary.grossBilled > 0 || summary.deductions > 0 || summary.additions > 0) && (
               <tr className="bg-gray-800/30 border-t border-gray-700">
                 <td colSpan={8} className="px-3 py-2 text-white text-right font-bold">Net Pay</td>
                 <td className="text-right px-3 py-2 text-green-400 font-bold text-base">

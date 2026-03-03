@@ -1,5 +1,6 @@
 import { getFirestoreDb } from './firebase';
 import { collection, getDocs, query, where, orderBy, Timestamp, doc, setDoc, updateDoc, deleteDoc } from 'firebase/firestore';
+import { type CompanyConfig, type PayConfig, JOB_TYPE_ALIASES } from './companySettings';
 
 // ─── Types ───────────────────────────────────────────────────────────────────
 
@@ -50,6 +51,7 @@ export interface DriverTimesheetSummary {
   grossBilled: number;
   employeePay: number;
   deductions: number;
+  additions: number;
   netPay: number;
   status: TimesheetStatus;
   rows: DriverTimesheetRow[];
@@ -138,20 +140,35 @@ export function lookupRate(
 ): RateEntry | null {
   const operatorRates = rateSheets[operator];
   if (!operatorRates) return null;
-  return operatorRates.find(r => r.jobType === jobType) || null;
+
+  // Direct match first
+  const direct = operatorRates.find(r => r.jobType === jobType);
+  if (direct) return direct;
+
+  // Try alias match (legacy rate sheet entries → current commodity types)
+  // Check both directions: invoice jobType might match an alias key, or
+  // rate sheet entry might use a legacy name that aliases to the invoice jobType
+  for (const entry of operatorRates) {
+    const normalizedEntry = JOB_TYPE_ALIASES[entry.jobType] || entry.jobType;
+    const normalizedJob = JOB_TYPE_ALIASES[jobType] || jobType;
+    if (normalizedEntry === jobType || entry.jobType === normalizedJob || normalizedEntry === normalizedJob) {
+      return entry;
+    }
+  }
+
+  return null;
 }
 
 // ─── Fetch Payroll Data ──────────────────────────────────────────────────────
 
 export async function fetchPayrollInvoices(
   period: PayPeriod,
+  companyConfigs: Map<string, CompanyConfig>,
   companyId?: string
 ): Promise<DriverTimesheetSummary[]> {
   const db = getFirestoreDb();
 
   // Query invoices within the pay period date range
-  // Invoices have 'createdAt' as Firestore Timestamp and 'date' as string
-  // Try querying by createdAt timestamp range
   const constraints = [
     where('createdAt', '>=', Timestamp.fromDate(period.start)),
     where('createdAt', '<=', Timestamp.fromDate(period.end)),
@@ -165,7 +182,7 @@ export async function fetchPayrollInvoices(
   const snapshot = await getDocs(q);
 
   // Group invoices by driver
-  const driverMap = new Map<string, DriverTimesheetRow[]>();
+  const driverMap = new Map<string, { rows: DriverTimesheetRow[]; companyId?: string }>();
 
   snapshot.docs.forEach(docSnap => {
     const d = docSnap.data();
@@ -175,31 +192,57 @@ export async function fetchPayrollInvoices(
     if (status === 'open') return;
 
     const driverName = d.driver || 'Unknown';
+    const invoiceCompanyId = d.companyId || '';
+    const operator = d.operator || '';
+    const jobType = d.commodityType || d.jobType || '';
+
+    // Look up rate from the driver's company rate sheet
+    let rate = 0;
+    let amountBilled = 0;
+    let employeeTake = 0;
+    const company = invoiceCompanyId ? companyConfigs.get(invoiceCompanyId) : null;
+    const rateSheets = company?.rateSheets || {};
+    const split = company?.payConfig?.defaultSplit || 0;
+
+    const rateEntry = lookupRate(rateSheets, operator, jobType);
+    if (rateEntry) {
+      rate = rateEntry.rate;
+      const bbls = d.totalBBL || 0;
+      const hours = d.totalHours || 0;
+      amountBilled = rateEntry.method === 'per_bbl' ? bbls * rate : hours * rate;
+      amountBilled = Math.round(amountBilled * 100) / 100;
+      employeeTake = Math.round(amountBilled * split * 100) / 100;
+    }
+
     const row: DriverTimesheetRow = {
       id: docSnap.id,
       date: d.date || '',
       invoiceNumber: d.invoiceNumber || '',
-      operator: d.operator || '',
+      operator,
       wellName: d.wellName || '',
-      jobType: d.commodityType || d.jobType || '',
+      jobType,
       bbls: d.totalBBL || 0,
       hours: d.totalHours || 0,
-      rate: 0,           // Populated from rate sheet
-      amountBilled: 0,   // Calculated from rate
-      employeeTake: 0,   // Calculated from split
+      rate,
+      amountBilled,
+      employeeTake,
       tickets: d.tickets || [],
     };
 
     if (!driverMap.has(driverName)) {
-      driverMap.set(driverName, []);
+      driverMap.set(driverName, { rows: [], companyId: invoiceCompanyId });
     }
-    driverMap.get(driverName)!.push(row);
+    driverMap.get(driverName)!.rows.push(row);
+    // Keep the companyId from the most recent invoice
+    if (invoiceCompanyId) {
+      driverMap.get(driverName)!.companyId = invoiceCompanyId;
+    }
   });
 
   // Build summaries per driver
   const summaries: DriverTimesheetSummary[] = [];
 
-  driverMap.forEach((rows, driverName) => {
+  driverMap.forEach(({ rows, companyId: driverCompanyId }, driverName) => {
     // Sort rows by date
     rows.sort((a, b) => a.date.localeCompare(b.date));
 
@@ -209,18 +252,20 @@ export async function fetchPayrollInvoices(
     const grossBilled = rows.reduce((sum, r) => sum + r.amountBilled, 0);
     const employeePay = rows.reduce((sum, r) => sum + r.employeeTake, 0);
 
-    // Get truck number from first row (typically consistent per driver)
-    const truckNumber = rows[0]?.invoiceNumber ? '' : '';
+    const company = driverCompanyId ? companyConfigs.get(driverCompanyId) : null;
 
     summaries.push({
       driverName,
-      truckNumber: '',  // TODO: pull from driver record or first invoice
+      companyId: driverCompanyId,
+      companyName: company?.name,
+      truckNumber: rows[0]?.invoiceNumber ? '' : '',
       totalLoads,
       totalHours: Math.round(totalHours * 100) / 100,
       totalBBLs: Math.round(totalBBLs),
       grossBilled: Math.round(grossBilled * 100) / 100,
       employeePay: Math.round(employeePay * 100) / 100,
-      deductions: 0,    // TODO: pull from deductions collection
+      deductions: 0,
+      additions: 0,
       netPay: Math.round(employeePay * 100) / 100,
       status: 'building',
       rows,
@@ -379,6 +424,105 @@ export function calculatePeriodDeduction(deduction: Deduction, employeePay: numb
   }
 
   // Don't deduct more than remaining balance
+  return Math.min(periodAmount, remaining);
+}
+
+// ─── Bonuses & Reimbursements ────────────────────────────────────────────────
+
+export const BONUS_PRESETS = [
+  'Sign-On Bonus',
+  'Safety Bonus',
+  'Performance Bonus',
+  'Mileage Reimbursement',
+  'Per Diem',
+  'Referral Bonus',
+  'Other',
+];
+
+// Reuse same shape as Deduction — stored in 'additions' Firestore collection
+export interface Addition {
+  id: string;
+  driverName: string;
+  driverHash?: string;
+  companyId?: string;
+  reason: string;
+  additionType: DeductionType;     // 'one_time' | 'recurring'
+  frequency?: DeductionFrequency;
+  amountType: AmountType;          // 'flat' | 'percentage'
+  amountPerPeriod: number;
+  totalOwed: number;               // total to pay out (recurring)
+  totalPaid: number;               // how much paid so far
+  active: boolean;
+  createdAt: any;
+  notes?: string;
+}
+
+export async function fetchAdditions(companyId?: string): Promise<Addition[]> {
+  const db = getFirestoreDb();
+  const snapshot = await getDocs(collection(db, 'additions'));
+  const results: Addition[] = [];
+  snapshot.docs.forEach(docSnap => {
+    const d = docSnap.data();
+    if (d.active === false) return;
+    results.push({
+      id: docSnap.id,
+      driverName: d.driverName || '',
+      driverHash: d.driverHash || '',
+      companyId: d.companyId || '',
+      reason: d.reason || '',
+      additionType: d.additionType || 'one_time',
+      frequency: d.frequency,
+      amountType: d.amountType || 'flat',
+      amountPerPeriod: d.amountPerPeriod || 0,
+      totalOwed: d.totalOwed || 0,
+      totalPaid: d.totalPaid || 0,
+      active: true,
+      createdAt: d.createdAt,
+      notes: d.notes || '',
+    });
+  });
+  results.sort((a, b) => {
+    const aTime = a.createdAt?.toMillis?.() || 0;
+    const bTime = b.createdAt?.toMillis?.() || 0;
+    return bTime - aTime;
+  });
+  return results;
+}
+
+export async function saveAddition(addition: Omit<Addition, 'id'>): Promise<string> {
+  const db = getFirestoreDb();
+  const docRef = doc(collection(db, 'additions'));
+  await setDoc(docRef, {
+    ...addition,
+    createdAt: Timestamp.now(),
+  });
+  return docRef.id;
+}
+
+export async function deactivateAddition(id: string): Promise<void> {
+  const db = getFirestoreDb();
+  await updateDoc(doc(db, 'additions', id), { active: false });
+}
+
+export function calculatePeriodAddition(addition: Addition, employeePay: number): number {
+  if (!addition.active) return 0;
+
+  if (addition.additionType === 'one_time') {
+    const remaining = addition.totalOwed - addition.totalPaid;
+    return remaining > 0 ? remaining : 0;
+  }
+
+  // Recurring
+  const remaining = addition.totalOwed - addition.totalPaid;
+  if (remaining <= 0) return 0;
+
+  let periodAmount: number;
+  if (addition.amountType === 'percentage') {
+    periodAmount = employeePay * (addition.amountPerPeriod / 100);
+  } else {
+    periodAmount = addition.amountPerPeriod;
+  }
+
   return Math.min(periodAmount, remaining);
 }
 

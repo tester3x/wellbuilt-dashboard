@@ -66,7 +66,30 @@ export interface CompanyConfig {
   transferRequiresApproval?: boolean;
 }
 
-export const JOB_TYPES = ['Production %', 'Service Work', 'Rig Move', 'Hot Shot', 'Frac Water', 'Other'];
+// Must match WB T's COMMODITY_TYPES + HOURLY_COMMODITY_TYPES in utils/constants.ts
+export const JOB_TYPES = [
+  'Production Water',
+  'Fresh Water',
+  'Flowback Water',
+  'Pit Water',
+  'Invert',
+  'Service Work',
+  'Vac Work',
+  'Pushers',
+  'Rig Work',
+  'Fuel Service',
+  'Other',
+];
+
+// Aliases: legacy rate sheet names → current WB T commodity types,
+// and old invoice commodity types → current names
+export const JOB_TYPE_ALIASES: Record<string, string> = {
+  'Production %': 'Production Water',
+  'Frac Water': 'Fresh Water',
+  'Hot Shot': 'Fuel Service',
+  'Flowback': 'Flowback Water',
+  'Pit': 'Pit Water',
+};
 
 export const BILLING_METHODS: { value: 'per_bbl' | 'hourly'; label: string }[] = [
   { value: 'per_bbl', label: '$/BBL' },
