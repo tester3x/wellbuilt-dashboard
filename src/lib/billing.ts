@@ -124,6 +124,18 @@ export function calculateFuelSurcharge(
     case 'flat': {
       return config.fuelSurchargeRate || 0;
     }
+    case 'flat_doe': {
+      // Bakken-style tiered flat per-load FSC
+      // FSC = multiplier × (floor(DOE / step) × step − baseline)
+      const diesel = currentDieselPrice || 0;
+      const baseline = config.fuelSurchargeBaseline || 3.25;
+      const multiplier = config.fuelSurchargeMultiplier || 8;
+      const step = config.fuelSurchargeStep || 0.10;
+      const stepped = Math.floor(diesel / step) * step;
+      const diff = stepped - baseline;
+      if (diff <= 0) return 0;
+      return Math.round(multiplier * diff * 100) / 100;
+    }
     default:
       return 0;
   }
@@ -136,6 +148,7 @@ export function getFuelSurchargeLabel(config: OperatorBillingConfig | undefined)
     case 'per_mile': return `DOE/mi (${config.fuelSurchargeMPG || 6}MPG)`;
     case 'percentage': return `${((config.fuelSurchargePercent || 0) * 100).toFixed(1)}%`;
     case 'flat': return `$${config.fuelSurchargeRate || 0}/load`;
+    case 'flat_doe': return `DOE flat (×${config.fuelSurchargeMultiplier || 8}, base $${config.fuelSurchargeBaseline || 3.25})`;
     default: return 'None';
   }
 }
@@ -380,6 +393,62 @@ export async function saveDieselPrice(
   await updateDoc(doc(db, 'companies', companyId), {
     currentDieselPrice: price,
   });
+}
+
+// ─── EIA API — Auto-fetch diesel prices ─────────────────────────────────────
+
+/** Map our DoeRegion codes to EIA API duoarea codes */
+const DOE_REGION_TO_EIA: Record<string, string> = {
+  us: 'NUS',
+  padd1: 'R10',
+  padd1a: 'R1X',
+  padd1b: 'R1Y',
+  padd1c: 'R1Z',
+  padd2: 'R20',
+  padd3: 'R30',
+  padd4: 'R40',
+  padd5: 'R50',
+  padd5_no_ca: 'R5XCA',
+  california: 'SCA',
+};
+
+export interface EiaFetchResult {
+  price: number;
+  date: string;
+  region: string;
+}
+
+/**
+ * Fetch the latest weekly retail diesel price from the EIA API.
+ * Uses the free DEMO_KEY — 30 requests/hr limit.
+ * Production: get a real key from https://www.eia.gov/opendata/register.php
+ */
+export async function fetchEiaDieselPrice(doeRegion: string): Promise<EiaFetchResult> {
+  const duoarea = DOE_REGION_TO_EIA[doeRegion] || 'NUS';
+  const apiKey = 'DEMO_KEY';
+  const url = `https://api.eia.gov/v2/petroleum/pri/gnd/data?api_key=${apiKey}`
+    + `&frequency=weekly`
+    + `&data[0]=value`
+    + `&facets[duoarea][]=${duoarea}`
+    + `&facets[product][]=EPD2D`
+    + `&sort[0][column]=period`
+    + `&sort[0][direction]=desc`
+    + `&length=1`;
+
+  const res = await fetch(url);
+  if (!res.ok) {
+    throw new Error(`EIA API error: ${res.status} ${res.statusText}`);
+  }
+  const json = await res.json();
+  const row = json?.response?.data?.[0];
+  if (!row || !row.value) {
+    throw new Error('No diesel price data returned from EIA');
+  }
+  return {
+    price: parseFloat(row.value),
+    date: row.period || new Date().toISOString().split('T')[0],
+    region: row['duoarea-name'] || doeRegion,
+  };
 }
 
 export async function fetchDieselPriceHistory(companyId?: string): Promise<DieselPriceEntry[]> {

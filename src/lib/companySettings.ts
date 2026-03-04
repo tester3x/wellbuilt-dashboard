@@ -43,17 +43,19 @@ export interface PayConfig {
 
 // ── Billing Types ────────────────────────────────────────────────────────────
 
-export type FuelSurchargeMethod = 'none' | 'hourly' | 'per_mile' | 'percentage' | 'flat';
+export type FuelSurchargeMethod = 'none' | 'hourly' | 'per_mile' | 'percentage' | 'flat' | 'flat_doe';
 export type PaymentTerms = 'due_on_receipt' | 'net_30' | 'net_60' | 'net_90';
 
 export interface OperatorBillingConfig {
   paymentTerms: PaymentTerms;
   fuelSurchargeMethod: FuelSurchargeMethod;
-  fuelSurchargeRate?: number;       // $/load (flat only)
+  fuelSurchargeRate?: number;       // $/load (flat manual only)
   fuelSurchargePercent?: number;    // decimal: 0.08 = 8%
-  fuelSurchargeBaseline?: number;   // DOE baseline $/gal (hourly + per_mile)
+  fuelSurchargeBaseline?: number;   // DOE baseline $/gal (hourly, per_mile, flat_doe)
   fuelSurchargeMPG?: number;        // truck fuel efficiency (hourly + per_mile, default 6)
   fuelSurchargeSpeed?: number;      // average speed MPH (hourly only, default 30)
+  fuelSurchargeMultiplier?: number; // gallons per load (flat_doe only, default 8)
+  fuelSurchargeStep?: number;       // rounding step (flat_doe only, default 0.10)
 }
 
 export const PAYMENT_TERMS_OPTIONS: { value: PaymentTerms; label: string }[] = [
@@ -65,10 +67,11 @@ export const PAYMENT_TERMS_OPTIONS: { value: PaymentTerms; label: string }[] = [
 
 export const FUEL_SURCHARGE_METHODS: { value: FuelSurchargeMethod; label: string }[] = [
   { value: 'none', label: 'None' },
+  { value: 'flat_doe', label: 'Flat per Load (DOE-auto)' },
   { value: 'hourly', label: 'Per Hour (DOE-based)' },
   { value: 'per_mile', label: 'Per Mile (DOE-based)' },
   { value: 'percentage', label: '% of Linehaul' },
-  { value: 'flat', label: 'Flat per Load ($)' },
+  { value: 'flat', label: 'Flat per Load (manual)' },
 ];
 
 // ── DOE/EIA PADD Regions ────────────────────────────────────────────────────

@@ -82,6 +82,7 @@ export function BillingConfigCard({ company, onSave }: Props) {
                       {cfg.fuelSurchargeMethod === 'flat' && cfg.fuelSurchargeRate ? ` ($${cfg.fuelSurchargeRate}/load)` : ''}
                       {cfg.fuelSurchargeMethod === 'percentage' && cfg.fuelSurchargePercent ? ` (${(cfg.fuelSurchargePercent * 100).toFixed(1)}%)` : ''}
                       {cfg.fuelSurchargeMethod === 'per_mile' ? ` (base $${cfg.fuelSurchargeBaseline || 0}/gal, ${cfg.fuelSurchargeMPG || 6} MPG)` : ''}
+                      {cfg.fuelSurchargeMethod === 'flat_doe' ? ` (×${cfg.fuelSurchargeMultiplier || 8}, base $${cfg.fuelSurchargeBaseline || 3.25})` : ''}
                     </span>
                   ) : (
                     <span className="text-gray-500 text-xs">Not configured</span>
@@ -246,7 +247,88 @@ export function BillingConfigCard({ company, onSave }: Props) {
                       placeholder="15.00"
                     />
                   </div>
+                  <p className="text-gray-500 text-xs mt-1">Manually entered — oil company texts you the weekly rate</p>
                 </div>
+              )}
+
+              {config.fuelSurchargeMethod === 'flat_doe' && (
+                <>
+                  <div className="bg-blue-900/30 border border-blue-500/20 rounded p-3 text-xs text-blue-300">
+                    Bakken-style: auto-calculates a flat $/load FSC from the DOE diesel price each week.
+                    Formula: multiplier × (floor(DOE ÷ step) × step − baseline)
+                  </div>
+                  <div>
+                    <label className="block text-gray-400 text-xs mb-1">Baseline Diesel Price ($/gal)</label>
+                    <div className="relative">
+                      <span className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400">$</span>
+                      <input
+                        type="number"
+                        step="0.01"
+                        min="0"
+                        value={config.fuelSurchargeBaseline || ''}
+                        onChange={e => setConfig({ ...config, fuelSurchargeBaseline: parseFloat(e.target.value) || 0 })}
+                        className="w-full pl-7 pr-3 py-2 bg-gray-700 text-white rounded text-sm border border-gray-600 focus:outline-none focus:border-blue-500"
+                        placeholder="3.25"
+                      />
+                    </div>
+                    <p className="text-gray-500 text-xs mt-1">No surcharge when diesel is at or below this price</p>
+                  </div>
+                  <div>
+                    <label className="block text-gray-400 text-xs mb-1">Multiplier (gallons per load)</label>
+                    <input
+                      type="number"
+                      step="1"
+                      min="1"
+                      value={config.fuelSurchargeMultiplier || ''}
+                      onChange={e => setConfig({ ...config, fuelSurchargeMultiplier: parseFloat(e.target.value) || 8 })}
+                      className="w-full px-3 py-2 bg-gray-700 text-white rounded text-sm border border-gray-600 focus:outline-none focus:border-blue-500"
+                      placeholder="8"
+                    />
+                    <p className="text-gray-500 text-xs mt-1">~gallons burned per round-trip load (Bakken default: 8)</p>
+                  </div>
+                  <div>
+                    <label className="block text-gray-400 text-xs mb-1">Rounding Step ($)</label>
+                    <div className="relative">
+                      <span className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400">$</span>
+                      <input
+                        type="number"
+                        step="0.01"
+                        min="0.01"
+                        value={config.fuelSurchargeStep || ''}
+                        onChange={e => setConfig({ ...config, fuelSurchargeStep: parseFloat(e.target.value) || 0.10 })}
+                        className="w-full pl-7 pr-3 py-2 bg-gray-700 text-white rounded text-sm border border-gray-600 focus:outline-none focus:border-blue-500"
+                        placeholder="0.10"
+                      />
+                    </div>
+                    <p className="text-gray-500 text-xs mt-1">DOE price floored to nearest step before calculating (Bakken default: $0.10)</p>
+                  </div>
+                  {/* Live preview */}
+                  {company.currentDieselPrice && (config.fuelSurchargeBaseline || 0) > 0 && (
+                    <div className="bg-gray-700/50 rounded p-3 text-xs">
+                      <div className="text-gray-400 mb-1">Live calculation preview:</div>
+                      <div className="text-white">
+                        {(() => {
+                          const diesel = company.currentDieselPrice!;
+                          const baseline = config.fuelSurchargeBaseline || 3.25;
+                          const multiplier = config.fuelSurchargeMultiplier || 8;
+                          const step = config.fuelSurchargeStep || 0.10;
+                          const stepped = Math.floor(diesel / step) * step;
+                          const diff = stepped - baseline;
+                          const fsc = diff > 0 ? Math.round(multiplier * diff * 100) / 100 : 0;
+                          return (
+                            <>
+                              {multiplier} × (floor(${diesel.toFixed(3)} ÷ ${step.toFixed(2)}) × ${step.toFixed(2)} − ${baseline.toFixed(2)})
+                              {' = '}
+                              {multiplier} × (${stepped.toFixed(2)} − ${baseline.toFixed(2)})
+                              {' = '}
+                              <span className="text-green-400 font-medium">${fsc.toFixed(2)}/load</span>
+                            </>
+                          );
+                        })()}
+                      </div>
+                    </div>
+                  )}
+                </>
               )}
             </div>
 

@@ -12,6 +12,7 @@ import {
   updateBillingStatus,
   saveDieselPrice,
   fetchDieselPriceHistory,
+  fetchEiaDieselPrice,
   calculateFuelSurcharge,
   getFuelSurchargeLabel,
   getBillingStatusColor,
@@ -57,6 +58,8 @@ export default function BillingPage() {
   const [newPrice, setNewPrice] = useState('');
   const [priceSource, setPriceSource] = useState('DOE/EIA');
   const [savingPrice, setSavingPrice] = useState(false);
+  const [fetchingEia, setFetchingEia] = useState(false);
+  const [eiaResult, setEiaResult] = useState<string | null>(null);
 
   useEffect(() => {
     if (!loading && !user) router.push('/login');
@@ -195,6 +198,21 @@ export default function BillingPage() {
       setCompanies(map);
     } catch (err) {
       console.error('Failed to save DOE region:', err);
+    }
+  };
+
+  const handleFetchEia = async () => {
+    try {
+      setFetchingEia(true);
+      setEiaResult(null);
+      const result = await fetchEiaDieselPrice(currentRegion);
+      setNewPrice(result.price.toFixed(3));
+      setPriceSource('EIA API');
+      setEiaResult(`Fetched $${result.price.toFixed(3)}/gal for ${result.region} (week of ${result.date})`);
+    } catch (err: any) {
+      setEiaResult(`Error: ${err?.message || 'Failed to fetch from EIA'}`);
+    } finally {
+      setFetchingEia(false);
     }
   };
 
@@ -410,17 +428,40 @@ export default function BillingPage() {
                 {' '}→ look at the <span className="text-blue-400">{regionLabel}</span> row.
               </p>
 
-              {/* Update form */}
+              {/* Auto-fetch from EIA */}
+              <div className="flex items-center gap-3 mb-4">
+                <button
+                  onClick={handleFetchEia}
+                  disabled={fetchingEia}
+                  className="px-4 py-2 bg-blue-600 hover:bg-blue-500 text-white rounded-lg transition-colors text-sm disabled:opacity-50 flex items-center gap-2"
+                >
+                  {fetchingEia ? (
+                    <>
+                      <span className="animate-spin">&#9696;</span>
+                      Fetching...
+                    </>
+                  ) : (
+                    <>Fetch from EIA</>
+                  )}
+                </button>
+                {eiaResult && (
+                  <span className={`text-sm ${eiaResult.startsWith('Error') ? 'text-red-400' : 'text-green-400'}`}>
+                    {eiaResult}
+                  </span>
+                )}
+              </div>
+
+              {/* Manual update form */}
               <div className="flex items-center gap-3">
                 <div className="relative">
                   <span className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400">$</span>
                   <input
                     type="number"
-                    step="0.01"
+                    step="0.001"
                     min="0"
                     value={newPrice}
                     onChange={(e) => setNewPrice(e.target.value)}
-                    placeholder="0.00"
+                    placeholder="0.000"
                     className="pl-7 pr-3 py-2 bg-gray-700 border border-gray-600 rounded-lg text-white text-sm w-32 focus:outline-none focus:border-blue-500"
                   />
                 </div>
@@ -430,6 +471,7 @@ export default function BillingPage() {
                   className="px-3 py-2 bg-gray-700 border border-gray-600 rounded-lg text-white text-sm focus:outline-none focus:border-blue-500"
                 >
                   <option value="DOE/EIA">DOE/EIA</option>
+                  <option value="EIA API">EIA API</option>
                   <option value="Manual">Manual</option>
                 </select>
                 <button
@@ -437,7 +479,7 @@ export default function BillingPage() {
                   disabled={savingPrice || !newPrice}
                   className="px-4 py-2 bg-green-600 hover:bg-green-500 text-white rounded-lg transition-colors text-sm disabled:opacity-50"
                 >
-                  {savingPrice ? 'Saving...' : 'Update Price'}
+                  {savingPrice ? 'Saving...' : 'Save Price'}
                 </button>
               </div>
             </div>
