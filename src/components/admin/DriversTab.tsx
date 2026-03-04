@@ -69,6 +69,14 @@ export function DriversTab({ scopeCompanyId, isWbAdmin = false }: DriversTabProp
   const [selectedRoutes, setSelectedRoutes] = useState<string[]>([]);
   const [availableRoutes, setAvailableRoutes] = useState<string[]>([]);
 
+  // Combined approval modal (forces company + customers + route on approve)
+  const [showApprovalModal, setShowApprovalModal] = useState(false);
+  const [approvalTarget, setApprovalTarget] = useState<PendingDriver | null>(null);
+  const [approvalCompanyId, setApprovalCompanyId] = useState('');
+  const [approvalCompanyName, setApprovalCompanyName] = useState('');
+  const [approvalCustomers, setApprovalCustomers] = useState<string[]>([]);
+  const [approvalRoutes, setApprovalRoutes] = useState<string[]>([]);
+
   // Expanded driver (shows details + assigned customers)
   const [expandedDriver, setExpandedDriver] = useState<string | null>(null);
 
@@ -198,7 +206,7 @@ export function DriversTab({ scopeCompanyId, isWbAdmin = false }: DriversTabProp
     (async () => {
       try {
         const routes = await fetchRouteNames();
-        setAvailableRoutes(routes.filter(r => r !== 'Unrouted'));
+        setAvailableRoutes(routes);
       } catch (err) {
         console.error('Failed to load routes:', err);
       }
@@ -329,6 +337,77 @@ export function DriversTab({ scopeCompanyId, isWbAdmin = false }: DriversTabProp
         status: 'approved',
       });
       setMessage(`Approved: ${driver.displayName}`);
+      await loadDrivers();
+    } catch (err) {
+      console.error('Failed to approve driver:', err);
+      setMessage('Failed to approve driver');
+    }
+  };
+
+  // ── Approve driver with forced assignments (company + customers + route) ──
+  const approveDriverWithAssignments = async () => {
+    if (!approvalTarget) return;
+    if (!approvalCompanyId) {
+      setMessage('Please select a company');
+      return;
+    }
+    if (approvalCustomers.length === 0) {
+      setMessage('Please assign at least one customer (operator)');
+      return;
+    }
+    if (approvalRoutes.length === 0) {
+      setMessage('Please assign at least one route');
+      return;
+    }
+
+    try {
+      const approvedData: Record<string, any> = {
+        displayName: approvalTarget.displayName,
+        legalName: approvalTarget.legalName || approvalTarget.displayName,
+        name: approvalTarget.displayName,
+        active: true,
+        isAdmin: false,
+        isViewer: false,
+        approvedAt: Date.now(),
+        companyId: approvalCompanyId,
+        companyName: approvalCompanyName,
+        assignedCustomers: approvalCustomers.map(name => ({
+          name,
+          companyId: approvalCompanyId,
+        })),
+        assignedRoutes: approvalRoutes,
+      };
+
+      // Sync tier from company doc
+      try {
+        const firestore = getFirestoreDb();
+        const { getDoc, doc: firestoreDoc } = await import('firebase/firestore');
+        const companySnap = await getDoc(firestoreDoc(firestore, 'companies', approvalCompanyId));
+        if (companySnap.exists()) {
+          const tier = companySnap.data().tier;
+          if (tier) approvedData.tier = tier;
+        }
+      } catch { /* tier sync is non-blocking */ }
+
+      if (approvalTarget.companyName) {
+        approvedData.registrationCompany = approvalTarget.companyName;
+      }
+
+      // Single write — complete record at once
+      await set(ref(db, `drivers/approved/${approvalTarget.passcodeHash}`), approvedData);
+
+      // Mark pending as approved
+      await update(ref(db, `drivers/pending/${approvalTarget.key}`), {
+        status: 'approved',
+      });
+
+      setMessage(`Approved: ${approvalTarget.displayName} with ${approvalCustomers.length} customer(s) and ${approvalRoutes.length} route(s)`);
+      setShowApprovalModal(false);
+      setApprovalTarget(null);
+      setApprovalCompanyId('');
+      setApprovalCompanyName('');
+      setApprovalCustomers([]);
+      setApprovalRoutes([]);
       await loadDrivers();
     } catch (err) {
       console.error('Failed to approve driver:', err);
@@ -551,7 +630,34 @@ export function DriversTab({ scopeCompanyId, isWbAdmin = false }: DriversTabProp
                 </div>
                 <div className="flex gap-2">
                   <button
-                    onClick={() => approveDriver(driver)}
+                    onClick={() => {
+                      setApprovalTarget(driver);
+                      // Pre-select company
+                      if (scopeCompanyId) {
+                        const match = companiesList.find(c => c.id === scopeCompanyId);
+                        setApprovalCompanyId(scopeCompanyId);
+                        setApprovalCompanyName(match?.name || '');
+                      } else if (driver.companyName) {
+                        const driverCoLower = driver.companyName.toLowerCase().trim();
+                        const match = companiesList.find(c => {
+                          const coNameLower = c.name.toLowerCase().trim();
+                          return coNameLower === driverCoLower || coNameLower.includes(driverCoLower) || driverCoLower.includes(coNameLower);
+                        });
+                        if (match) {
+                          setApprovalCompanyId(match.id);
+                          setApprovalCompanyName(match.name);
+                        } else {
+                          setApprovalCompanyId('');
+                          setApprovalCompanyName('');
+                        }
+                      } else {
+                        setApprovalCompanyId('');
+                        setApprovalCompanyName('');
+                      }
+                      setApprovalCustomers([]);
+                      setApprovalRoutes([]);
+                      setShowApprovalModal(true);
+                    }}
                     className="px-3 py-1 bg-green-600 hover:bg-green-500 text-white text-sm rounded"
                   >
                     Approve
@@ -936,6 +1042,150 @@ export function DriversTab({ scopeCompanyId, isWbAdmin = false }: DriversTabProp
           </div>
         </div>
       )}
+
+      {/* ── Combined Approval Modal ── */}
+      {showApprovalModal && approvalTarget && (() => {
+        const selectedCompany = companiesList.find(c => c.id === approvalCompanyId);
+        const operators = selectedCompany?.assignedOperators || [];
+        const isCompanyScoped = !!scopeCompanyId;
+        const canApprove = approvalCompanyId && approvalCustomers.length > 0 && approvalRoutes.length > 0;
+
+        return (
+          <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50">
+            <div className="bg-gray-800 rounded-lg p-6 max-w-lg w-full mx-4 max-h-[90vh] overflow-y-auto">
+              <h3 className="text-white font-medium text-lg mb-1">Approve Driver</h3>
+              <p className="text-gray-400 text-sm mb-4">
+                <span className="text-white font-medium">{approvalTarget.displayName}</span>
+                {approvalTarget.legalName && approvalTarget.legalName !== approvalTarget.displayName && (
+                  <span className="text-gray-500 ml-1">({approvalTarget.legalName})</span>
+                )}
+                {approvalTarget.companyName && (
+                  <span className="text-teal-400 ml-2">registered as: {approvalTarget.companyName}</span>
+                )}
+              </p>
+
+              {/* Section 1: Company */}
+              <div className="mb-4">
+                <label className="text-gray-400 text-xs font-medium uppercase tracking-wider block mb-2">
+                  Company <span className="text-red-400">*</span>
+                </label>
+                <select
+                  value={approvalCompanyId}
+                  onChange={e => {
+                    const id = e.target.value;
+                    setApprovalCompanyId(id);
+                    const match = companiesList.find(c => c.id === id);
+                    setApprovalCompanyName(match?.name || '');
+                    setApprovalCustomers([]); // Reset customers when company changes
+                  }}
+                  disabled={isCompanyScoped}
+                  className="w-full px-3 py-2 bg-gray-700 text-white rounded text-sm disabled:opacity-60"
+                >
+                  <option value="">Select a company...</option>
+                  {companiesList.map(c => (
+                    <option key={c.id} value={c.id}>{c.name}</option>
+                  ))}
+                </select>
+              </div>
+
+              {/* Section 2: Customers (Operators) */}
+              <div className="mb-4">
+                <label className="text-gray-400 text-xs font-medium uppercase tracking-wider block mb-2">
+                  Customers (Operators) <span className="text-red-400">*</span>
+                  {approvalCustomers.length > 0 && (
+                    <span className="text-yellow-400 ml-2 normal-case">{approvalCustomers.length} selected</span>
+                  )}
+                </label>
+                {!approvalCompanyId ? (
+                  <p className="text-gray-500 text-sm">Select a company first</p>
+                ) : operators.length === 0 ? (
+                  <p className="text-yellow-400 text-sm">
+                    {selectedCompany?.name} has no oil companies configured. Add them on the Companies tab.
+                  </p>
+                ) : (
+                  <div className="space-y-1 max-h-40 overflow-y-auto bg-gray-900 rounded p-2">
+                    {operators.map(op => (
+                      <label key={op} className="flex items-center gap-3 cursor-pointer hover:bg-gray-700 rounded p-1.5">
+                        <input
+                          type="checkbox"
+                          checked={approvalCustomers.includes(op)}
+                          onChange={e => {
+                            if (e.target.checked) {
+                              setApprovalCustomers([...approvalCustomers, op]);
+                            } else {
+                              setApprovalCustomers(approvalCustomers.filter(c => c !== op));
+                            }
+                          }}
+                          className="w-4 h-4 rounded"
+                        />
+                        <span className="text-yellow-300 text-sm">{op}</span>
+                      </label>
+                    ))}
+                  </div>
+                )}
+              </div>
+
+              {/* Section 3: Routes */}
+              <div className="mb-4">
+                <label className="text-gray-400 text-xs font-medium uppercase tracking-wider block mb-2">
+                  Route <span className="text-red-400">*</span>
+                  {approvalRoutes.length > 0 && (
+                    <span className="text-blue-400 ml-2 normal-case">{approvalRoutes.length} selected</span>
+                  )}
+                </label>
+                {availableRoutes.length === 0 ? (
+                  <p className="text-gray-500 text-sm">No routes found in well_config</p>
+                ) : (
+                  <div className="space-y-1 max-h-40 overflow-y-auto bg-gray-900 rounded p-2">
+                    {availableRoutes.map(route => (
+                      <label key={route} className="flex items-center gap-3 cursor-pointer hover:bg-gray-700 rounded p-1.5">
+                        <input
+                          type="checkbox"
+                          checked={approvalRoutes.includes(route)}
+                          onChange={e => {
+                            if (e.target.checked) {
+                              setApprovalRoutes([...approvalRoutes, route]);
+                            } else {
+                              setApprovalRoutes(approvalRoutes.filter(r => r !== route));
+                            }
+                          }}
+                          className="w-4 h-4 rounded"
+                        />
+                        <span className={`text-sm ${route.startsWith('Unrouted') ? 'text-gray-400' : 'text-white'}`}>
+                          {route}
+                        </span>
+                      </label>
+                    ))}
+                  </div>
+                )}
+              </div>
+
+              <div className="flex gap-2">
+                <button
+                  onClick={approveDriverWithAssignments}
+                  disabled={!canApprove}
+                  className="flex-1 px-4 py-2 bg-green-600 hover:bg-green-500 text-white rounded font-medium disabled:opacity-30 disabled:cursor-not-allowed"
+                >
+                  Approve Driver
+                </button>
+                <button
+                  onClick={() => {
+                    setShowApprovalModal(false);
+                    setApprovalTarget(null);
+                    setApprovalCompanyId('');
+                    setApprovalCompanyName('');
+                    setApprovalCustomers([]);
+                    setApprovalRoutes([]);
+                  }}
+                  className="px-4 py-2 bg-gray-600 hover:bg-gray-500 text-white rounded"
+                >
+                  Cancel
+                </button>
+              </div>
+            </div>
+          </div>
+        );
+      })()}
 
       {/* ── Assign Routes Modal ── */}
       {showRoutesModal && routeTarget && (
