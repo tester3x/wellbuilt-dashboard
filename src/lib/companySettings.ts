@@ -49,10 +49,11 @@ export type PaymentTerms = 'due_on_receipt' | 'net_30' | 'net_60' | 'net_90';
 export interface OperatorBillingConfig {
   paymentTerms: PaymentTerms;
   fuelSurchargeMethod: FuelSurchargeMethod;
-  fuelSurchargeRate?: number;       // $/hr (hourly) or $/load (flat)
+  fuelSurchargeRate?: number;       // $/load (flat only)
   fuelSurchargePercent?: number;    // decimal: 0.08 = 8%
-  fuelSurchargeBaseline?: number;   // per-mile: baseline $/gal
-  fuelSurchargeMPG?: number;        // per-mile: truck efficiency (default 6)
+  fuelSurchargeBaseline?: number;   // DOE baseline $/gal (hourly + per_mile)
+  fuelSurchargeMPG?: number;        // truck fuel efficiency (hourly + per_mile, default 6)
+  fuelSurchargeSpeed?: number;      // average speed MPH (hourly only, default 30)
 }
 
 export const PAYMENT_TERMS_OPTIONS: { value: PaymentTerms; label: string }[] = [
@@ -64,11 +65,52 @@ export const PAYMENT_TERMS_OPTIONS: { value: PaymentTerms; label: string }[] = [
 
 export const FUEL_SURCHARGE_METHODS: { value: FuelSurchargeMethod; label: string }[] = [
   { value: 'none', label: 'None' },
-  { value: 'hourly', label: 'Per Hour ($/hr)' },
+  { value: 'hourly', label: 'Per Hour (DOE-based)' },
   { value: 'per_mile', label: 'Per Mile (DOE-based)' },
   { value: 'percentage', label: '% of Linehaul' },
   { value: 'flat', label: 'Flat per Load ($)' },
 ];
+
+// ── DOE/EIA PADD Regions ────────────────────────────────────────────────────
+// Weekly diesel prices published by DOE Energy Information Administration
+// https://www.eia.gov/petroleum/gasdiesel/
+
+export type DoeRegion = 'us' | 'padd1' | 'padd1a' | 'padd1b' | 'padd1c' | 'padd2' | 'padd3' | 'padd4' | 'padd5' | 'padd5_no_ca' | 'california';
+
+export const DOE_REGIONS: { value: DoeRegion; label: string; description: string }[] = [
+  { value: 'us', label: 'U.S. Average', description: 'National average' },
+  { value: 'padd1', label: 'East Coast (PADD 1)', description: 'All East Coast states' },
+  { value: 'padd1a', label: 'New England (PADD 1A)', description: 'CT, ME, MA, NH, RI, VT' },
+  { value: 'padd1b', label: 'Central Atlantic (PADD 1B)', description: 'DE, DC, MD, NJ, NY, PA' },
+  { value: 'padd1c', label: 'Lower Atlantic (PADD 1C)', description: 'FL, GA, NC, SC, VA, WV' },
+  { value: 'padd2', label: 'Midwest (PADD 2)', description: 'IL, IN, IA, KS, KY, MI, MN, MO, NE, ND, SD, OH, OK, TN, WI' },
+  { value: 'padd3', label: 'Gulf Coast (PADD 3)', description: 'AL, AR, LA, MS, NM, TX' },
+  { value: 'padd4', label: 'Rocky Mountain (PADD 4)', description: 'CO, ID, MT, UT, WY' },
+  { value: 'padd5', label: 'West Coast (PADD 5)', description: 'AK, AZ, CA, HI, NV, OR, WA' },
+  { value: 'padd5_no_ca', label: 'West Coast less CA', description: 'AK, AZ, HI, NV, OR, WA' },
+  { value: 'california', label: 'California', description: 'California only' },
+];
+
+/** Map US state abbreviation to DOE PADD region */
+export const STATE_TO_PADD: Record<string, DoeRegion> = {
+  // PADD 1A — New England
+  CT: 'padd1a', ME: 'padd1a', MA: 'padd1a', NH: 'padd1a', RI: 'padd1a', VT: 'padd1a',
+  // PADD 1B — Central Atlantic
+  DE: 'padd1b', DC: 'padd1b', MD: 'padd1b', NJ: 'padd1b', NY: 'padd1b', PA: 'padd1b',
+  // PADD 1C — Lower Atlantic
+  FL: 'padd1c', GA: 'padd1c', NC: 'padd1c', SC: 'padd1c', VA: 'padd1c', WV: 'padd1c',
+  // PADD 2 — Midwest (includes ND, SD)
+  IL: 'padd2', IN: 'padd2', IA: 'padd2', KS: 'padd2', KY: 'padd2', MI: 'padd2',
+  MN: 'padd2', MO: 'padd2', NE: 'padd2', ND: 'padd2', SD: 'padd2', OH: 'padd2',
+  OK: 'padd2', TN: 'padd2', WI: 'padd2',
+  // PADD 3 — Gulf Coast
+  AL: 'padd3', AR: 'padd3', LA: 'padd3', MS: 'padd3', NM: 'padd3', TX: 'padd3',
+  // PADD 4 — Rocky Mountain (includes MT)
+  CO: 'padd4', ID: 'padd4', MT: 'padd4', UT: 'padd4', WY: 'padd4',
+  // PADD 5 — West Coast
+  AK: 'padd5', AZ: 'padd5', HI: 'padd5', NV: 'padd5', OR: 'padd5', WA: 'padd5',
+  CA: 'california',
+};
 
 // ── Ticket Template Types ─────────────────────────────────────────────────
 
@@ -236,7 +278,8 @@ export interface CompanyConfig {
   rateSheets?: Record<string, RateEntry[]>;  // per-operator rate sheets
   payConfig?: PayConfig;
   billingConfig?: Record<string, OperatorBillingConfig>;  // per-operator billing config
-  currentDieselPrice?: number;  // admin-set DOE price, updated weekly
+  currentDieselPrice?: number;  // admin-set DOE regional price, updated weekly
+  doeRegion?: DoeRegion;        // DOE PADD region for diesel price lookup
   notes?: string;
   assignedOperators?: string[];
   logoUrl?: string;

@@ -4,7 +4,7 @@ import { useEffect, useState } from 'react';
 import { useRouter } from 'next/navigation';
 import { useAuth } from '@/contexts/AuthContext';
 import { AppHeader } from '@/components/AppHeader';
-import { loadAllCompanies, type CompanyConfig } from '@/lib/companySettings';
+import { loadAllCompanies, updateCompanyFields, type CompanyConfig, type DoeRegion, DOE_REGIONS, STATE_TO_PADD } from '@/lib/companySettings';
 import {
   fetchBillingData,
   fetchBillingRecords,
@@ -176,10 +176,27 @@ export default function BillingPage() {
     }
   };
 
-  // Get current diesel price for display
-  const currentDiesel = user?.companyId
-    ? companies.get(user.companyId)?.currentDieselPrice
-    : undefined;
+  // Get current diesel price + DOE region for display
+  const companyConfig = user?.companyId ? companies.get(user.companyId) : undefined;
+  const currentDiesel = companyConfig?.currentDieselPrice;
+  const currentRegion = companyConfig?.doeRegion
+    || (companyConfig?.state ? STATE_TO_PADD[companyConfig.state.toUpperCase()] : undefined)
+    || 'us';
+  const regionLabel = DOE_REGIONS.find(r => r.value === currentRegion)?.label || 'U.S. Average';
+
+  const handleRegionChange = async (region: DoeRegion) => {
+    const companyId = user?.companyId;
+    if (!companyId) return;
+    try {
+      await updateCompanyFields(companyId, { doeRegion: region });
+      const list = await loadAllCompanies();
+      const map = new Map<string, CompanyConfig>();
+      list.forEach(c => map.set(c.id, c));
+      setCompanies(map);
+    } catch (err) {
+      console.error('Failed to save DOE region:', err);
+    }
+  };
 
   if (loading) {
     return (
@@ -352,20 +369,45 @@ export default function BillingPage() {
         {/* ─── Fuel Prices Tab ─── */}
         {activeTab === 'fuel' && (
           <div className="space-y-6">
+            {/* DOE Region */}
+            <div className="bg-gray-800 rounded-lg border border-gray-700 p-6">
+              <h3 className="text-lg font-semibold text-white mb-3">DOE Region</h3>
+              <p className="text-gray-500 text-sm mb-3">
+                Your region determines which DOE/EIA diesel price column to use.{' '}
+                {companyConfig?.state && (
+                  <span className="text-gray-400">
+                    Auto-detected from company state ({companyConfig.state}): <span className="text-blue-400">{regionLabel}</span>
+                  </span>
+                )}
+              </p>
+              <select
+                value={currentRegion}
+                onChange={e => handleRegionChange(e.target.value as DoeRegion)}
+                className="w-full max-w-md px-3 py-2 bg-gray-700 text-white rounded text-sm border border-gray-600 focus:outline-none focus:border-blue-500"
+              >
+                {DOE_REGIONS.map(r => (
+                  <option key={r.value} value={r.value}>
+                    {r.label} — {r.description}
+                  </option>
+                ))}
+              </select>
+            </div>
+
             {/* Current Price */}
             <div className="bg-gray-800 rounded-lg border border-gray-700 p-6">
-              <h3 className="text-lg font-semibold text-white mb-4">Current Diesel Price</h3>
+              <h3 className="text-lg font-semibold text-white mb-4">Current Diesel Price — {regionLabel}</h3>
               <div className="flex items-baseline gap-2 mb-4">
                 <span className="text-4xl font-bold text-green-400">
-                  {currentDiesel ? `$${currentDiesel.toFixed(2)}` : '--'}
+                  {currentDiesel ? `$${currentDiesel.toFixed(3)}` : '--'}
                 </span>
                 <span className="text-gray-400">/gallon</span>
               </div>
               <p className="text-gray-500 text-sm mb-4">
-                Used for per-mile fuel surcharge calculations. Update weekly from{' '}
+                Used for DOE-based fuel surcharge calculations (hourly + per-mile). Update weekly from{' '}
                 <a href="https://www.eia.gov/petroleum/gasdiesel/" target="_blank" rel="noopener noreferrer" className="text-blue-400 hover:underline">
                   DOE/EIA weekly diesel prices
                 </a>
+                {' '}→ look at the <span className="text-blue-400">{regionLabel}</span> row.
               </p>
 
               {/* Update form */}

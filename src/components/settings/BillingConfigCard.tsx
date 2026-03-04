@@ -78,7 +78,7 @@ export function BillingConfigCard({ company, onSave }: Props) {
                   {cfg ? (
                     <span className="text-blue-400 text-xs truncate">
                       {termsLabel(cfg.paymentTerms)} · FSC: {fscMethodLabel(cfg.fuelSurchargeMethod)}
-                      {cfg.fuelSurchargeMethod === 'hourly' && cfg.fuelSurchargeRate ? ` ($${cfg.fuelSurchargeRate}/hr)` : ''}
+                      {cfg.fuelSurchargeMethod === 'hourly' ? ` (base $${cfg.fuelSurchargeBaseline || 0}/gal, ${cfg.fuelSurchargeMPG || 6} MPG, ${cfg.fuelSurchargeSpeed || 30} MPH)` : ''}
                       {cfg.fuelSurchargeMethod === 'flat' && cfg.fuelSurchargeRate ? ` ($${cfg.fuelSurchargeRate}/load)` : ''}
                       {cfg.fuelSurchargeMethod === 'percentage' && cfg.fuelSurchargePercent ? ` (${(cfg.fuelSurchargePercent * 100).toFixed(1)}%)` : ''}
                       {cfg.fuelSurchargeMethod === 'per_mile' ? ` (base $${cfg.fuelSurchargeBaseline || 0}/gal, ${cfg.fuelSurchargeMPG || 6} MPG)` : ''}
@@ -138,25 +138,7 @@ export function BillingConfigCard({ company, onSave }: Props) {
               </div>
 
               {/* Dynamic fields based on method */}
-              {config.fuelSurchargeMethod === 'hourly' && (
-                <div>
-                  <label className="block text-gray-400 text-xs mb-1">Rate ($/hr)</label>
-                  <div className="relative">
-                    <span className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400">$</span>
-                    <input
-                      type="number"
-                      step="0.01"
-                      min="0"
-                      value={config.fuelSurchargeRate || ''}
-                      onChange={e => setConfig({ ...config, fuelSurchargeRate: parseFloat(e.target.value) || 0 })}
-                      className="w-full pl-7 pr-3 py-2 bg-gray-700 text-white rounded text-sm border border-gray-600 focus:outline-none focus:border-blue-500"
-                      placeholder="12.00"
-                    />
-                  </div>
-                </div>
-              )}
-
-              {config.fuelSurchargeMethod === 'per_mile' && (
+              {(config.fuelSurchargeMethod === 'hourly' || config.fuelSurchargeMethod === 'per_mile') && (
                 <>
                   <div>
                     <label className="block text-gray-400 text-xs mb-1">Baseline Diesel Price ($/gal)</label>
@@ -187,6 +169,45 @@ export function BillingConfigCard({ company, onSave }: Props) {
                     />
                     <p className="text-gray-500 text-xs mt-1">Water haulers typically 5-6 MPG loaded</p>
                   </div>
+                  {config.fuelSurchargeMethod === 'hourly' && (
+                    <div>
+                      <label className="block text-gray-400 text-xs mb-1">Average Speed (MPH)</label>
+                      <input
+                        type="number"
+                        step="1"
+                        min="1"
+                        max="80"
+                        value={config.fuelSurchargeSpeed || ''}
+                        onChange={e => setConfig({ ...config, fuelSurchargeSpeed: parseFloat(e.target.value) || 30 })}
+                        className="w-full px-3 py-2 bg-gray-700 text-white rounded text-sm border border-gray-600 focus:outline-none focus:border-blue-500"
+                        placeholder="30"
+                      />
+                      <p className="text-gray-500 text-xs mt-1">Converts per-mile FSC to per-hour. Set per operator contract.</p>
+                    </div>
+                  )}
+                  {/* Live preview of the calculated rate */}
+                  {company.currentDieselPrice && (config.fuelSurchargeBaseline || 0) > 0 && (
+                    <div className="bg-gray-700/50 rounded p-3 text-xs">
+                      <div className="text-gray-400 mb-1">Live calculation preview:</div>
+                      <div className="text-white">
+                        (${company.currentDieselPrice.toFixed(3)} − ${(config.fuelSurchargeBaseline || 0).toFixed(2)}) ÷ {config.fuelSurchargeMPG || 6} MPG
+                        {config.fuelSurchargeMethod === 'hourly' ? ` × ${config.fuelSurchargeSpeed || 30} MPH` : ''}
+                        {' = '}
+                        <span className="text-green-400 font-medium">
+                          ${((() => {
+                            const diff = company.currentDieselPrice! - (config.fuelSurchargeBaseline || 0);
+                            if (diff <= 0) return '0.00';
+                            const perMile = diff / (config.fuelSurchargeMPG || 6);
+                            if (config.fuelSurchargeMethod === 'hourly') {
+                              return (perMile * (config.fuelSurchargeSpeed || 30)).toFixed(2);
+                            }
+                            return perMile.toFixed(4);
+                          })())}
+                          {config.fuelSurchargeMethod === 'hourly' ? '/hr' : '/mi'}
+                        </span>
+                      </div>
+                    </div>
+                  )}
                 </>
               )}
 

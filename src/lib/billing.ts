@@ -100,8 +100,15 @@ export function calculateFuelSurcharge(
 
   switch (config.fuelSurchargeMethod) {
     case 'hourly': {
+      // DOE-automated: (diesel - baseline) / MPG × speed = $/hr
+      const diesel = currentDieselPrice || 0;
+      const baseline = config.fuelSurchargeBaseline || 0;
+      const mpg = config.fuelSurchargeMPG || 6;
+      const speed = config.fuelSurchargeSpeed || 30;
+      if (diesel <= baseline) return 0;
+      const perHour = ((diesel - baseline) / mpg) * speed;
       const hours = fuelMinutes / 60;
-      return Math.round(hours * (config.fuelSurchargeRate || 0) * 100) / 100;
+      return Math.round(hours * perHour * 100) / 100;
     }
     case 'per_mile': {
       const diesel = currentDieselPrice || 0;
@@ -125,8 +132,8 @@ export function calculateFuelSurcharge(
 export function getFuelSurchargeLabel(config: OperatorBillingConfig | undefined): string {
   if (!config || config.fuelSurchargeMethod === 'none') return 'None';
   switch (config.fuelSurchargeMethod) {
-    case 'hourly': return `$${config.fuelSurchargeRate || 0}/hr`;
-    case 'per_mile': return `DOE-based (${config.fuelSurchargeMPG || 6} MPG)`;
+    case 'hourly': return `DOE/hr (${config.fuelSurchargeMPG || 6}MPG, ${config.fuelSurchargeSpeed || 30}mph)`;
+    case 'per_mile': return `DOE/mi (${config.fuelSurchargeMPG || 6}MPG)`;
     case 'percentage': return `${((config.fuelSurchargePercent || 0) * 100).toFixed(1)}%`;
     case 'flat': return `$${config.fuelSurchargeRate || 0}/load`;
     default: return 'None';
