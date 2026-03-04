@@ -149,13 +149,13 @@ export function BillingConfigCard({ company, onSave }: Props) {
                         type="number"
                         step="0.01"
                         min="0"
-                        value={config.fuelSurchargeBaseline || ''}
+                        value={config.fuelSurchargeBaseline ?? 0}
                         onChange={e => setConfig({ ...config, fuelSurchargeBaseline: parseFloat(e.target.value) || 0 })}
                         className="w-full pl-7 pr-3 py-2 bg-gray-700 text-white rounded text-sm border border-gray-600 focus:outline-none focus:border-blue-500"
                         placeholder="2.50"
                       />
                     </div>
-                    <p className="text-gray-500 text-xs mt-1">Surcharge kicks in when diesel exceeds this price</p>
+                    <p className="text-gray-500 text-xs mt-1">Surcharge kicks in when diesel exceeds this price (empty = 0)</p>
                   </div>
                   <div>
                     <label className="block text-gray-400 text-xs mb-1">Truck MPG (loaded)</label>
@@ -163,8 +163,8 @@ export function BillingConfigCard({ company, onSave }: Props) {
                       type="number"
                       step="0.1"
                       min="1"
-                      value={config.fuelSurchargeMPG || ''}
-                      onChange={e => setConfig({ ...config, fuelSurchargeMPG: parseFloat(e.target.value) || 6 })}
+                      value={config.fuelSurchargeMPG ?? 0}
+                      onChange={e => setConfig({ ...config, fuelSurchargeMPG: parseFloat(e.target.value) || 0 })}
                       className="w-full px-3 py-2 bg-gray-700 text-white rounded text-sm border border-gray-600 focus:outline-none focus:border-blue-500"
                       placeholder="6"
                     />
@@ -178,8 +178,8 @@ export function BillingConfigCard({ company, onSave }: Props) {
                         step="1"
                         min="1"
                         max="80"
-                        value={config.fuelSurchargeSpeed || ''}
-                        onChange={e => setConfig({ ...config, fuelSurchargeSpeed: parseFloat(e.target.value) || 30 })}
+                        value={config.fuelSurchargeSpeed ?? 0}
+                        onChange={e => setConfig({ ...config, fuelSurchargeSpeed: parseFloat(e.target.value) || 0 })}
                         className="w-full px-3 py-2 bg-gray-700 text-white rounded text-sm border border-gray-600 focus:outline-none focus:border-blue-500"
                         placeholder="30"
                       />
@@ -187,16 +187,16 @@ export function BillingConfigCard({ company, onSave }: Props) {
                     </div>
                   )}
                   {/* Live preview of the calculated rate */}
-                  {company.currentDieselPrice && (config.fuelSurchargeBaseline || 0) > 0 && (
+                  {company.currentDieselPrice != null && (
                     <div className="bg-gray-700/50 rounded p-3 text-xs">
                       <div className="text-gray-400 mb-1">Live calculation preview:</div>
                       <div className="text-white">
-                        (${company.currentDieselPrice.toFixed(3)} − ${(config.fuelSurchargeBaseline || 0).toFixed(2)}) ÷ {config.fuelSurchargeMPG || 6} MPG
-                        {config.fuelSurchargeMethod === 'hourly' ? ` × ${config.fuelSurchargeSpeed || 30} MPH` : ''}
+                        (${company.currentDieselPrice.toFixed(3)} − ${(config.fuelSurchargeBaseline ?? 0).toFixed(2)}) ÷ {config.fuelSurchargeMPG ?? 6} MPG
+                        {config.fuelSurchargeMethod === 'hourly' ? ` × ${config.fuelSurchargeSpeed ?? 30} MPH` : ''}
                         {' = '}
                         <span className="text-green-400 font-medium">
                           ${((() => {
-                            const diff = company.currentDieselPrice! - (config.fuelSurchargeBaseline || 0);
+                            const diff = company.currentDieselPrice! - (config.fuelSurchargeBaseline ?? 0);
                             if (diff <= 0) return '0.00';
                             const perMile = diff / (config.fuelSurchargeMPG || 6);
                             if (config.fuelSurchargeMethod === 'hourly') {
@@ -241,7 +241,7 @@ export function BillingConfigCard({ company, onSave }: Props) {
                       type="number"
                       step="0.01"
                       min="0"
-                      value={config.fuelSurchargeRate || ''}
+                      value={config.fuelSurchargeRate ?? 0}
                       onChange={e => setConfig({ ...config, fuelSurchargeRate: parseFloat(e.target.value) || 0 })}
                       className="w-full pl-7 pr-3 py-2 bg-gray-700 text-white rounded text-sm border border-gray-600 focus:outline-none focus:border-blue-500"
                       placeholder="15.00"
@@ -254,8 +254,8 @@ export function BillingConfigCard({ company, onSave }: Props) {
               {config.fuelSurchargeMethod === 'flat_doe' && (
                 <>
                   <div className="bg-blue-900/30 border border-blue-500/20 rounded p-3 text-xs text-blue-300">
-                    Bakken-style: auto-calculates a flat $/load FSC from the DOE diesel price each week.
-                    Formula: multiplier × (floor(DOE ÷ step) × step − baseline)
+                    Bakken-style: auto-calculates a $/hr FSC rate from the DOE diesel price each week.
+                    Formula: multiplier × (floor(DOE ÷ step) × step − baseline) = rate/hr × job hours
                   </div>
                   <div>
                     <label className="block text-gray-400 text-xs mb-1">Baseline Diesel Price ($/gal)</label>
@@ -265,7 +265,7 @@ export function BillingConfigCard({ company, onSave }: Props) {
                         type="number"
                         step="0.01"
                         min="0"
-                        value={config.fuelSurchargeBaseline || ''}
+                        value={config.fuelSurchargeBaseline ?? 0}
                         onChange={e => setConfig({ ...config, fuelSurchargeBaseline: parseFloat(e.target.value) || 0 })}
                         className="w-full pl-7 pr-3 py-2 bg-gray-700 text-white rounded text-sm border border-gray-600 focus:outline-none focus:border-blue-500"
                         placeholder="3.25"
@@ -274,17 +274,17 @@ export function BillingConfigCard({ company, onSave }: Props) {
                     <p className="text-gray-500 text-xs mt-1">No surcharge when diesel is at or below this price</p>
                   </div>
                   <div>
-                    <label className="block text-gray-400 text-xs mb-1">Multiplier (gallons per load)</label>
+                    <label className="block text-gray-400 text-xs mb-1">Multiplier</label>
                     <input
                       type="number"
                       step="1"
                       min="1"
-                      value={config.fuelSurchargeMultiplier || ''}
-                      onChange={e => setConfig({ ...config, fuelSurchargeMultiplier: parseFloat(e.target.value) || 8 })}
+                      value={config.fuelSurchargeMultiplier ?? 0}
+                      onChange={e => setConfig({ ...config, fuelSurchargeMultiplier: parseFloat(e.target.value) || 0 })}
                       className="w-full px-3 py-2 bg-gray-700 text-white rounded text-sm border border-gray-600 focus:outline-none focus:border-blue-500"
                       placeholder="8"
                     />
-                    <p className="text-gray-500 text-xs mt-1">~gallons burned per round-trip load (Bakken default: 8)</p>
+                    <p className="text-gray-500 text-xs mt-1">Bakken default: 8</p>
                   </div>
                   <div>
                     <label className="block text-gray-400 text-xs mb-1">Rounding Step ($)</label>
@@ -294,8 +294,8 @@ export function BillingConfigCard({ company, onSave }: Props) {
                         type="number"
                         step="0.01"
                         min="0.01"
-                        value={config.fuelSurchargeStep || ''}
-                        onChange={e => setConfig({ ...config, fuelSurchargeStep: parseFloat(e.target.value) || 0.10 })}
+                        value={config.fuelSurchargeStep ?? 0}
+                        onChange={e => setConfig({ ...config, fuelSurchargeStep: parseFloat(e.target.value) || 0 })}
                         className="w-full pl-7 pr-3 py-2 bg-gray-700 text-white rounded text-sm border border-gray-600 focus:outline-none focus:border-blue-500"
                         placeholder="0.10"
                       />
@@ -303,7 +303,7 @@ export function BillingConfigCard({ company, onSave }: Props) {
                     <p className="text-gray-500 text-xs mt-1">DOE price floored to nearest step before calculating (Bakken default: $0.10)</p>
                   </div>
                   {/* Live preview */}
-                  {company.currentDieselPrice && (config.fuelSurchargeBaseline || 0) > 0 && (
+                  {company.currentDieselPrice != null && (
                     <div className="bg-gray-700/50 rounded p-3 text-xs">
                       <div className="text-gray-400 mb-1">Live calculation preview:</div>
                       <div className="text-white">
@@ -321,7 +321,7 @@ export function BillingConfigCard({ company, onSave }: Props) {
                               {' = '}
                               {multiplier} × (${stepped.toFixed(2)} − ${baseline.toFixed(2)})
                               {' = '}
-                              <span className="text-green-400 font-medium">${fsc.toFixed(2)}/load</span>
+                              <span className="text-green-400 font-medium">${fsc.toFixed(2)}/hr</span>
                             </>
                           );
                         })()}

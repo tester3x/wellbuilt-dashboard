@@ -15,6 +15,7 @@ import {
   fetchEiaDieselPrice,
   calculateFuelSurcharge,
   getFuelSurchargeLabel,
+  getFuelSurchargeRate,
   getBillingStatusColor,
   getPayPeriods,
   formatCurrency,
@@ -37,6 +38,7 @@ export default function BillingPage() {
 
   // Shared state
   const [companies, setCompanies] = useState<Map<string, CompanyConfig>>(new Map());
+  const [selectedCompanyId, setSelectedCompanyId] = useState<string | null>(null);
   const [periods] = useState(() => getPayPeriods());
   const [selectedPeriod, setSelectedPeriod] = useState<PayPeriod>(() => getPayPeriods()[0]);
   const [dataLoading, setDataLoading] = useState(true);
@@ -72,6 +74,10 @@ export default function BillingPage() {
       const map = new Map<string, CompanyConfig>();
       list.forEach(c => map.set(c.id, c));
       setCompanies(map);
+      // WB admin: auto-select first company if none chosen
+      if (!user.companyId && !selectedCompanyId && list.length > 0) {
+        setSelectedCompanyId(list[0].id);
+      }
     });
   }, [user]);
 
@@ -79,13 +85,13 @@ export default function BillingPage() {
   useEffect(() => {
     if (!user || companies.size === 0) return;
     loadData();
-  }, [user, companies, selectedPeriod]);
+  }, [user, companies, selectedPeriod, selectedCompanyId]);
 
   const loadData = async () => {
     try {
       setDataLoading(true);
       setError(null);
-      const companyId = user?.companyId || undefined;
+      const companyId = effectiveCompanyId || undefined;
       const [sums, records] = await Promise.all([
         fetchBillingData(selectedPeriod, companies, companyId),
         fetchBillingRecords(selectedPeriod, companyId),
@@ -102,7 +108,7 @@ export default function BillingPage() {
 
   const loadFuelPrices = async () => {
     try {
-      const history = await fetchDieselPriceHistory(user?.companyId);
+      const history = await fetchDieselPriceHistory(effectiveCompanyId || undefined);
       setDieselHistory(history);
     } catch (err: any) {
       console.error('Failed to load diesel prices:', err);
@@ -111,7 +117,7 @@ export default function BillingPage() {
 
   useEffect(() => {
     if (activeTab === 'fuel' && user) loadFuelPrices();
-  }, [activeTab, user]);
+  }, [activeTab, user, selectedCompanyId]);
 
   const handleGenerateBill = async (summary: OperatorBillingSummary) => {
     if (!user) return;
@@ -156,15 +162,13 @@ export default function BillingPage() {
   const handleSavePrice = async () => {
     const price = parseFloat(newPrice);
     if (isNaN(price) || price <= 0) return;
-    const companyId = user?.companyId;
-    if (!companyId) {
-      // WB admin — pick first company or skip
-      setError('Select a company to set diesel price');
+    if (!effectiveCompanyId) {
+      setError('No company selected');
       return;
     }
     try {
       setSavingPrice(true);
-      await saveDieselPrice(companyId, price, priceSource, user?.displayName || 'Admin');
+      await saveDieselPrice(effectiveCompanyId, price, priceSource, user?.displayName || 'Admin');
       setNewPrice('');
       await loadFuelPrices();
       // Refresh companies to get updated currentDieselPrice
@@ -179,8 +183,11 @@ export default function BillingPage() {
     }
   };
 
+  // Effective company ID: hauler admin uses their own, WB admin uses picker
+  const effectiveCompanyId = user?.companyId || selectedCompanyId || null;
+
   // Get current diesel price + DOE region for display
-  const companyConfig = user?.companyId ? companies.get(user.companyId) : undefined;
+  const companyConfig = effectiveCompanyId ? companies.get(effectiveCompanyId) : undefined;
   const currentDiesel = companyConfig?.currentDieselPrice;
   const currentRegion = companyConfig?.doeRegion
     || (companyConfig?.state ? STATE_TO_PADD[companyConfig.state.toUpperCase()] : undefined)
@@ -188,10 +195,9 @@ export default function BillingPage() {
   const regionLabel = DOE_REGIONS.find(r => r.value === currentRegion)?.label || 'U.S. Average';
 
   const handleRegionChange = async (region: DoeRegion) => {
-    const companyId = user?.companyId;
-    if (!companyId) return;
+    if (!effectiveCompanyId) return;
     try {
-      await updateCompanyFields(companyId, { doeRegion: region });
+      await updateCompanyFields(effectiveCompanyId, { doeRegion: region });
       const list = await loadAllCompanies();
       const map = new Map<string, CompanyConfig>();
       list.forEach(c => map.set(c.id, c));
@@ -256,6 +262,18 @@ export default function BillingPage() {
                 Fuel Prices
               </button>
             </div>
+            {/* WB admin company picker */}
+            {!user.companyId && companies.size > 0 && (
+              <select
+                value={selectedCompanyId || ''}
+                onChange={(e) => setSelectedCompanyId(e.target.value)}
+                className="px-3 py-2 bg-gray-800 border border-gray-600 rounded-lg text-white text-sm focus:outline-none focus:border-blue-500"
+              >
+                {Array.from(companies.values()).map(c => (
+                  <option key={c.id} value={c.id}>{c.name}</option>
+                ))}
+              </select>
+            )}
           </div>
 
           {activeTab === 'receivables' && (
@@ -290,6 +308,21 @@ export default function BillingPage() {
         {/* ─── Receivables Tab ─── */}
         {activeTab === 'receivables' && (
           <>
+            {/* Warn if no diesel price set but DOE-based FSC configured */}
+            {!currentDiesel && summaries.some(s =>
+              s.billingConfig?.fuelSurchargeMethod === 'hourly' ||
+              s.billingConfig?.fuelSurchargeMethod === 'per_mile' ||
+              s.billingConfig?.fuelSurchargeMethod === 'flat_doe'
+            ) && (
+              <div className="mb-4 p-3 bg-yellow-900/40 border border-yellow-500/30 text-yellow-200 rounded-lg flex items-center gap-3">
+                <span className="text-yellow-400 text-lg">&#9888;</span>
+                <div>
+                  <span className="font-medium">No diesel price set.</span>{' '}
+                  Fuel surcharges show $0.00 because there&apos;s no DOE diesel price saved.
+                  Go to <button onClick={() => setActiveTab('fuel')} className="text-blue-400 underline">Fuel Prices</button> → Fetch from EIA → Save Price.
+                </div>
+              </div>
+            )}
             {dataLoading ? (
               <div className="text-gray-400">Loading billing data...</div>
             ) : summaries.length === 0 ? (
@@ -314,16 +347,21 @@ export default function BillingPage() {
                         </tr>
                       </thead>
                       <tbody className="divide-y divide-gray-700">
-                        {summaries.map(summary => (
-                          <OperatorRow
-                            key={summary.operator}
-                            summary={summary}
-                            isExpanded={expandedOp === summary.operator}
-                            onToggle={() => setExpandedOp(expandedOp === summary.operator ? null : summary.operator)}
-                            onGenerate={() => handleGenerateBill(summary)}
-                            generating={generating === summary.operator}
-                          />
-                        ))}
+                        {summaries.map(summary => {
+                          const alreadyBilled = billingRecords.some(r => r.operator === summary.operator);
+                          return (
+                            <OperatorRow
+                              key={summary.operator}
+                              summary={summary}
+                              dieselPrice={currentDiesel}
+                              isExpanded={expandedOp === summary.operator}
+                              onToggle={() => setExpandedOp(expandedOp === summary.operator ? null : summary.operator)}
+                              onGenerate={() => handleGenerateBill(summary)}
+                              generating={generating === summary.operator}
+                              alreadyBilled={alreadyBilled}
+                            />
+                          );
+                        })}
                       </tbody>
                       <tfoot className="bg-gray-750 border-t border-gray-600">
                         <tr>
@@ -565,17 +603,22 @@ export default function BillingPage() {
 
 function OperatorRow({
   summary,
+  dieselPrice,
   isExpanded,
   onToggle,
   onGenerate,
   generating,
+  alreadyBilled,
 }: {
   summary: OperatorBillingSummary;
+  dieselPrice: number | undefined;
   isExpanded: boolean;
   onToggle: () => void;
   onGenerate: () => void;
   generating: boolean;
+  alreadyBilled: boolean;
 }) {
+  const rateInfo = getFuelSurchargeRate(summary.billingConfig, dieselPrice);
   return (
     <>
       <tr className="hover:bg-gray-750 cursor-pointer" onClick={onToggle}>
@@ -586,15 +629,26 @@ function OperatorRow({
         <td className="px-4 py-3 text-right text-white font-mono">{formatCurrency(summary.subtotal)}</td>
         <td className="px-4 py-3 text-right text-yellow-400 font-mono">{formatCurrency(summary.totalFuelSurcharge)}</td>
         <td className="px-4 py-3 text-right text-green-400 font-mono font-semibold">{formatCurrency(summary.grandTotal)}</td>
-        <td className="px-4 py-3 text-right text-gray-400 text-sm">{getFuelSurchargeLabel(summary.billingConfig)}</td>
+        <td className="px-4 py-3 text-right text-sm">
+          <span className="text-gray-400">{getFuelSurchargeLabel(summary.billingConfig)}</span>
+          {rateInfo && rateInfo.rate > 0 && (
+            <span className="block text-cyan-400 font-mono text-xs mt-0.5">
+              ${rateInfo.rate.toFixed(2)}{rateInfo.unit}
+            </span>
+          )}
+        </td>
         <td className="px-4 py-3 text-center" onClick={(e) => e.stopPropagation()}>
-          <button
-            onClick={onGenerate}
-            disabled={generating}
-            className="px-3 py-1 bg-blue-600 hover:bg-blue-500 text-white rounded text-xs font-medium disabled:opacity-50"
-          >
-            {generating ? 'Generating...' : 'Generate Bill'}
-          </button>
+          {alreadyBilled ? (
+            <span className="px-3 py-1 bg-green-600/20 text-green-400 rounded text-xs font-medium">Billed</span>
+          ) : (
+            <button
+              onClick={onGenerate}
+              disabled={generating}
+              className="px-3 py-1 bg-blue-600 hover:bg-blue-500 text-white rounded text-xs font-medium disabled:opacity-50"
+            >
+              {generating ? 'Generating...' : 'Generate Bill'}
+            </button>
+          )}
         </td>
       </tr>
       {isExpanded && (

@@ -39,6 +39,14 @@
         { "fieldPath": "operator", "order": "ASCENDING" },
         { "fieldPath": "well_name", "order": "ASCENDING" }
       ]
+    },
+    {
+      "collectionGroup": "diesel_prices",
+      "queryScope": "COLLECTION",
+      "fields": [
+        { "fieldPath": "companyId", "order": "ASCENDING" },
+        { "fieldPath": "date", "order": "ASCENDING" }
+      ]
     }
   ],
   "fieldOverrides": []

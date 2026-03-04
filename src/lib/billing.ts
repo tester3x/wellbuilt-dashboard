@@ -92,7 +92,7 @@ export function getBillingStatusColor(status: BillingStatus): string {
 export function calculateFuelSurcharge(
   config: OperatorBillingConfig | undefined,
   baseAmount: number,
-  fuelMinutes: number,
+  totalHours: number,
   driveDistanceMiles: number,
   currentDieselPrice: number | undefined
 ): number {
@@ -100,15 +100,14 @@ export function calculateFuelSurcharge(
 
   switch (config.fuelSurchargeMethod) {
     case 'hourly': {
-      // DOE-automated: (diesel - baseline) / MPG × speed = $/hr
+      // DOE-automated: (diesel - baseline) / MPG × speed = $/hr × total job hours
       const diesel = currentDieselPrice || 0;
       const baseline = config.fuelSurchargeBaseline || 0;
       const mpg = config.fuelSurchargeMPG || 6;
       const speed = config.fuelSurchargeSpeed || 30;
       if (diesel <= baseline) return 0;
       const perHour = ((diesel - baseline) / mpg) * speed;
-      const hours = fuelMinutes / 60;
-      return Math.round(hours * perHour * 100) / 100;
+      return Math.round(totalHours * perHour * 100) / 100;
     }
     case 'per_mile': {
       const diesel = currentDieselPrice || 0;
@@ -125,8 +124,9 @@ export function calculateFuelSurcharge(
       return config.fuelSurchargeRate || 0;
     }
     case 'flat_doe': {
-      // Bakken-style tiered flat per-load FSC
-      // FSC = multiplier × (floor(DOE / step) × step − baseline)
+      // Bakken-style DOE-tiered FSC — paid per HOUR
+      // Rate = multiplier × (floor(DOE / step) × step − baseline)
+      // Then: rate × total job hours = FSC for this load
       const diesel = currentDieselPrice || 0;
       const baseline = config.fuelSurchargeBaseline || 3.25;
       const multiplier = config.fuelSurchargeMultiplier || 8;
@@ -134,10 +134,48 @@ export function calculateFuelSurcharge(
       const stepped = Math.floor(diesel / step) * step;
       const diff = stepped - baseline;
       if (diff <= 0) return 0;
-      return Math.round(multiplier * diff * 100) / 100;
+      const perHour = multiplier * diff;
+      return Math.round(totalHours * perHour * 100) / 100;
     }
     default:
       return 0;
+  }
+}
+
+/** Get the calculated FSC rate ($/hr, $/mi, etc.) for display */
+export function getFuelSurchargeRate(
+  config: OperatorBillingConfig | undefined,
+  currentDieselPrice: number | undefined
+): { rate: number; unit: string } | null {
+  if (!config || config.fuelSurchargeMethod === 'none') return null;
+  const diesel = currentDieselPrice || 0;
+
+  switch (config.fuelSurchargeMethod) {
+    case 'hourly': {
+      const baseline = config.fuelSurchargeBaseline || 0;
+      const mpg = config.fuelSurchargeMPG || 6;
+      const speed = config.fuelSurchargeSpeed || 30;
+      if (diesel <= baseline) return { rate: 0, unit: '/hr' };
+      return { rate: Math.round(((diesel - baseline) / mpg) * speed * 100) / 100, unit: '/hr' };
+    }
+    case 'per_mile': {
+      const baseline = config.fuelSurchargeBaseline || 0;
+      const mpg = config.fuelSurchargeMPG || 6;
+      if (diesel <= baseline) return { rate: 0, unit: '/mi' };
+      return { rate: Math.round(((diesel - baseline) / mpg) * 100) / 100, unit: '/mi' };
+    }
+    case 'flat_doe': {
+      const baseline = config.fuelSurchargeBaseline || 3.25;
+      const multiplier = config.fuelSurchargeMultiplier || 8;
+      const step = config.fuelSurchargeStep || 0.10;
+      const stepped = Math.floor(diesel / step) * step;
+      const diff = stepped - baseline;
+      if (diff <= 0) return { rate: 0, unit: '/hr' };
+      return { rate: Math.round(multiplier * diff * 100) / 100, unit: '/hr' };
+    }
+    case 'percentage': return { rate: (config.fuelSurchargePercent || 0) * 100, unit: '%' };
+    case 'flat': return { rate: config.fuelSurchargeRate || 0, unit: '/load' };
+    default: return null;
   }
 }
 
@@ -148,7 +186,7 @@ export function getFuelSurchargeLabel(config: OperatorBillingConfig | undefined)
     case 'per_mile': return `DOE/mi (${config.fuelSurchargeMPG || 6}MPG)`;
     case 'percentage': return `${((config.fuelSurchargePercent || 0) * 100).toFixed(1)}%`;
     case 'flat': return `$${config.fuelSurchargeRate || 0}/load`;
-    case 'flat_doe': return `DOE flat (×${config.fuelSurchargeMultiplier || 8}, base $${config.fuelSurchargeBaseline || 3.25})`;
+    case 'flat_doe': return `DOE/hr (×${config.fuelSurchargeMultiplier || 8}, base $${config.fuelSurchargeBaseline || 3.25})`;
     default: return 'None';
   }
 }
@@ -206,7 +244,7 @@ export async function fetchBillingData(
       : Math.round(hours * rate * 100) / 100;
 
     const fuelSurcharge = calculateFuelSurcharge(
-      billingConfig, baseAmount, fuelMinutes, driveDistanceMiles, currentDiesel
+      billingConfig, baseAmount, hours, driveDistanceMiles, currentDiesel
     );
 
     const item: BillingLineItem = {
@@ -377,19 +415,40 @@ export async function saveDieselPrice(
   updatedBy: string
 ): Promise<void> {
   const db = getFirestoreDb();
+  const today = new Date().toISOString().split('T')[0];
 
-  // Save to price history
-  const priceRef = doc(collection(db, 'diesel_prices'));
-  await setDoc(priceRef, {
-    companyId,
-    price,
-    date: new Date().toISOString().split('T')[0],
-    source,
-    updatedBy,
-    createdAt: Timestamp.now(),
-  });
+  // Check if we already have a price for this company today — one save per day
+  const existingSnap = await getDocs(
+    query(
+      collection(db, 'diesel_prices'),
+      where('companyId', '==', companyId),
+      where('date', '==', today)
+    )
+  );
 
-  // Update company's current price
+  if (existingSnap.empty) {
+    // First save today — create new history entry
+    const priceRef = doc(collection(db, 'diesel_prices'));
+    await setDoc(priceRef, {
+      companyId,
+      price,
+      date: today,
+      source,
+      updatedBy,
+      createdAt: Timestamp.now(),
+    });
+  } else {
+    // Already saved today — update existing entry
+    const existingDoc = existingSnap.docs[0];
+    await updateDoc(existingDoc.ref, {
+      price,
+      source,
+      updatedBy,
+      updatedAt: Timestamp.now(),
+    });
+  }
+
+  // Always update company's current price
   await updateDoc(doc(db, 'companies', companyId), {
     currentDieselPrice: price,
   });
@@ -425,7 +484,7 @@ export interface EiaFetchResult {
  */
 export async function fetchEiaDieselPrice(doeRegion: string): Promise<EiaFetchResult> {
   const duoarea = DOE_REGION_TO_EIA[doeRegion] || 'NUS';
-  const apiKey = 'DEMO_KEY';
+  const apiKey = '8mXuoSgL8cBJv4EXnzV2g201GToEOdQRalVHo1ej';
   const url = `https://api.eia.gov/v2/petroleum/pri/gnd/data?api_key=${apiKey}`
     + `&frequency=weekly`
     + `&data[0]=value`

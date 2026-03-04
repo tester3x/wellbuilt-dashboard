@@ -67,7 +67,7 @@ export const PAYMENT_TERMS_OPTIONS: { value: PaymentTerms; label: string }[] = [
 
 export const FUEL_SURCHARGE_METHODS: { value: FuelSurchargeMethod; label: string }[] = [
   { value: 'none', label: 'None' },
-  { value: 'flat_doe', label: 'Flat per Load (DOE-auto)' },
+  { value: 'flat_doe', label: 'DOE per Hour (Bakken-style)' },
   { value: 'hourly', label: 'Per Hour (DOE-based)' },
   { value: 'per_mile', label: 'Per Mile (DOE-based)' },
   { value: 'percentage', label: '% of Linehaul' },
