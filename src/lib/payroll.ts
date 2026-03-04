@@ -345,6 +345,7 @@ export interface Deduction {
   totalCollected: number;     // how much collected so far
   active: boolean;
   createdAt: any;             // Firestore Timestamp
+  effectiveDate?: any;        // Firestore Timestamp — first pay period this applies to
   notes?: string;
 }
 
@@ -370,6 +371,7 @@ export async function fetchDeductions(companyId?: string): Promise<Deduction[]> 
       totalCollected: d.totalCollected || 0,
       active: true,
       createdAt: d.createdAt,
+      effectiveDate: d.effectiveDate || null,
       notes: d.notes || '',
     });
   });
@@ -402,17 +404,48 @@ export async function deactivateDeduction(id: string): Promise<void> {
   await updateDoc(doc(db, 'deductions', id), { active: false });
 }
 
+// Check if a recurring item should apply to this pay period based on effectiveDate + frequency
+function shouldApplyToPeriod(
+  effectiveDate: any,
+  frequency: DeductionFrequency | undefined,
+  period: PayPeriod
+): boolean {
+  if (!effectiveDate) return true; // no effective date = always apply (legacy behavior)
+
+  const effective = effectiveDate?.toDate?.() || new Date(effectiveDate);
+  // Period hasn't started yet relative to effective date
+  if (effective > period.end) return false;
+
+  // For biweekly: count weeks from effectiveDate to period start, apply every other week
+  if (frequency === 'biweekly') {
+    const msPerWeek = 7 * 24 * 60 * 60 * 1000;
+    const weeksDiff = Math.floor((period.start.getTime() - effective.getTime()) / msPerWeek);
+    // Apply on even-numbered weeks (0, 2, 4...) from the effective date
+    return weeksDiff >= 0 && weeksDiff % 2 === 0;
+  }
+
+  return true;
+}
+
 // Calculate deduction amount for a single pay period
-export function calculatePeriodDeduction(deduction: Deduction, employeePay: number): number {
+export function calculatePeriodDeduction(deduction: Deduction, employeePay: number, period?: PayPeriod): number {
   if (!deduction.active) return 0;
 
   if (deduction.deductionType === 'one_time') {
-    // One-time: deduct full amount (minus anything already collected)
+    // One-time: check effectiveDate if set — must be on/before period end
+    if (deduction.effectiveDate && period) {
+      const effective = deduction.effectiveDate?.toDate?.() || new Date(deduction.effectiveDate);
+      if (effective > period.end) return 0;
+    }
     const remaining = deduction.totalOwed - deduction.totalCollected;
     return remaining > 0 ? remaining : 0;
   }
 
-  // Recurring
+  // Recurring — check effectiveDate + frequency cadence
+  if (period && !shouldApplyToPeriod(deduction.effectiveDate, deduction.frequency, period)) {
+    return 0;
+  }
+
   const remaining = deduction.totalOwed - deduction.totalCollected;
   if (remaining <= 0) return 0;
 
@@ -454,6 +487,7 @@ export interface Addition {
   totalPaid: number;               // how much paid so far
   active: boolean;
   createdAt: any;
+  effectiveDate?: any;             // Firestore Timestamp — first pay period this applies to
   notes?: string;
 }
 
@@ -478,6 +512,7 @@ export async function fetchAdditions(companyId?: string): Promise<Addition[]> {
       totalPaid: d.totalPaid || 0,
       active: true,
       createdAt: d.createdAt,
+      effectiveDate: d.effectiveDate || null,
       notes: d.notes || '',
     });
   });
@@ -504,15 +539,24 @@ export async function deactivateAddition(id: string): Promise<void> {
   await updateDoc(doc(db, 'additions', id), { active: false });
 }
 
-export function calculatePeriodAddition(addition: Addition, employeePay: number): number {
+export function calculatePeriodAddition(addition: Addition, employeePay: number, period?: PayPeriod): number {
   if (!addition.active) return 0;
 
   if (addition.additionType === 'one_time') {
+    // One-time: check effectiveDate if set
+    if (addition.effectiveDate && period) {
+      const effective = addition.effectiveDate?.toDate?.() || new Date(addition.effectiveDate);
+      if (effective > period.end) return 0;
+    }
     const remaining = addition.totalOwed - addition.totalPaid;
     return remaining > 0 ? remaining : 0;
   }
 
-  // Recurring
+  // Recurring — check effectiveDate + frequency cadence
+  if (period && !shouldApplyToPeriod(addition.effectiveDate, addition.frequency, period)) {
+    return 0;
+  }
+
   const remaining = addition.totalOwed - addition.totalPaid;
   if (remaining <= 0) return 0;
 

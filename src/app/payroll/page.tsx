@@ -83,6 +83,7 @@ export default function PayrollPage() {
   const [dedAmount, setDedAmount] = useState('');
   const [dedTotal, setDedTotal] = useState('');
   const [dedNotes, setDedNotes] = useState('');
+  const [dedStartDate, setDedStartDate] = useState('');  // YYYY-MM-DD for effectiveDate
   const [dedSaving, setDedSaving] = useState(false);
 
   // Additions (bonuses/reimbursements) state
@@ -98,6 +99,7 @@ export default function PayrollPage() {
   const [addAmount, setAddAmount] = useState('');
   const [addTotal, setAddTotal] = useState('');
   const [addNotes, setAddNotes] = useState('');
+  const [addStartDate, setAddStartDate] = useState('');  // YYYY-MM-DD for effectiveDate
   const [addSaving, setAddSaving] = useState(false);
 
   const selectedPeriod = payPeriods[selectedPeriodIdx];
@@ -192,6 +194,7 @@ export default function PayrollPage() {
     setDedAmount('');
     setDedTotal('');
     setDedNotes('');
+    setDedStartDate('');
   };
 
   const openAddDeduction = (preselectedDriver?: string) => {
@@ -220,6 +223,7 @@ export default function PayrollPage() {
         totalCollected: 0,
         active: true,
         createdAt: Timestamp.now(),
+        effectiveDate: dedStartDate ? Timestamp.fromDate(new Date(dedStartDate + 'T00:00:00')) : undefined,
         notes: dedNotes.trim() || undefined,
       });
 
@@ -254,6 +258,7 @@ export default function PayrollPage() {
     setAddAmount('');
     setAddTotal('');
     setAddNotes('');
+    setAddStartDate('');
   };
 
   const openAddAddition = (preselectedDriver?: string) => {
@@ -282,6 +287,7 @@ export default function PayrollPage() {
         totalPaid: 0,
         active: true,
         createdAt: Timestamp.now(),
+        effectiveDate: addStartDate ? Timestamp.fromDate(new Date(addStartDate + 'T00:00:00')) : undefined,
         notes: addNotes.trim() || undefined,
       });
 
@@ -325,17 +331,17 @@ export default function PayrollPage() {
     return map;
   }, [additions]);
 
-  // Apply deductions + additions to each driver summary
+  // Apply deductions + additions to each driver summary (period-aware)
   const processedTimesheets = useMemo(() => {
     return timesheets.map(ts => {
       const driverDeds = driverDeductions.get(ts.driverName) || [];
       const driverAdds = driverAdditions.get(ts.driverName) || [];
 
       const totalDeductions = driverDeds.reduce(
-        (sum, d) => sum + calculatePeriodDeduction(d, ts.employeePay), 0
+        (sum, d) => sum + calculatePeriodDeduction(d, ts.employeePay, selectedPeriod), 0
       );
       const totalAdditions = driverAdds.reduce(
-        (sum, a) => sum + calculatePeriodAddition(a, ts.employeePay), 0
+        (sum, a) => sum + calculatePeriodAddition(a, ts.employeePay, selectedPeriod), 0
       );
 
       const netPay = Math.round((ts.employeePay + totalAdditions - totalDeductions) * 100) / 100;
@@ -347,7 +353,7 @@ export default function PayrollPage() {
         netPay: Math.max(0, netPay),
       };
     });
-  }, [timesheets, driverDeductions, driverAdditions]);
+  }, [timesheets, driverDeductions, driverAdditions, selectedPeriod]);
 
   // Filter by search
   const filtered = useMemo(() => {
@@ -616,6 +622,7 @@ export default function PayrollPage() {
                     <th className="text-left text-gray-400 font-medium px-4 py-2">Driver</th>
                     <th className="text-left text-gray-400 font-medium px-4 py-2">Reason</th>
                     <th className="text-center text-gray-400 font-medium px-4 py-2">Type</th>
+                    <th className="text-center text-gray-400 font-medium px-4 py-2">Starts</th>
                     <th className="text-right text-gray-400 font-medium px-4 py-2">Per Period</th>
                     <th className="text-right text-gray-400 font-medium px-4 py-2">Total Owed</th>
                     <th className="text-right text-gray-400 font-medium px-4 py-2">Collected</th>
@@ -626,6 +633,9 @@ export default function PayrollPage() {
                 <tbody>
                   {deductions.map(ded => {
                     const remaining = ded.totalOwed - ded.totalCollected;
+                    const effectiveStr = ded.effectiveDate
+                      ? (ded.effectiveDate?.toDate?.() || new Date(ded.effectiveDate)).toLocaleDateString('en-US', { month: 'short', day: 'numeric' })
+                      : null;
                     return (
                       <tr key={ded.id} className="border-b border-gray-700/30 hover:bg-gray-700/20">
                         <td className="px-4 py-2 text-white">{ded.driverName}</td>
@@ -645,6 +655,9 @@ export default function PayrollPage() {
                           }`}>
                             {ded.deductionType === 'one_time' ? 'One-Time' : `Recurring (${ded.frequency})`}
                           </span>
+                        </td>
+                        <td className="text-center px-4 py-2 text-gray-400 text-xs">
+                          {effectiveStr || '—'}
                         </td>
                         <td className="text-right px-4 py-2 text-gray-300">
                           {ded.amountType === 'percentage'
@@ -702,6 +715,7 @@ export default function PayrollPage() {
                     <th className="text-left text-gray-400 font-medium px-4 py-2">Driver</th>
                     <th className="text-left text-gray-400 font-medium px-4 py-2">Reason</th>
                     <th className="text-center text-gray-400 font-medium px-4 py-2">Type</th>
+                    <th className="text-center text-gray-400 font-medium px-4 py-2">Starts</th>
                     <th className="text-right text-gray-400 font-medium px-4 py-2">Per Period</th>
                     <th className="text-right text-gray-400 font-medium px-4 py-2">Total Owed</th>
                     <th className="text-right text-gray-400 font-medium px-4 py-2">Paid</th>
@@ -712,6 +726,9 @@ export default function PayrollPage() {
                 <tbody>
                   {additions.map(add => {
                     const remaining = add.totalOwed - add.totalPaid;
+                    const effectiveStr = add.effectiveDate
+                      ? (add.effectiveDate?.toDate?.() || new Date(add.effectiveDate)).toLocaleDateString('en-US', { month: 'short', day: 'numeric' })
+                      : null;
                     return (
                       <tr key={add.id} className="border-b border-gray-700/30 hover:bg-gray-700/20">
                         <td className="px-4 py-2 text-white">{add.driverName}</td>
@@ -731,6 +748,9 @@ export default function PayrollPage() {
                           }`}>
                             {add.additionType === 'one_time' ? 'One-Time' : `Recurring (${add.frequency})`}
                           </span>
+                        </td>
+                        <td className="text-center px-4 py-2 text-gray-400 text-xs">
+                          {effectiveStr || '—'}
                         </td>
                         <td className="text-right px-4 py-2 text-gray-300">
                           {add.amountType === 'percentage'
@@ -853,6 +873,24 @@ export default function PayrollPage() {
                   </select>
                 </div>
               )}
+
+              {/* Starting Date */}
+              <div>
+                <label className="block text-gray-400 text-xs mb-1">
+                  Starting On {dedType === 'one_time' ? '(optional)' : ''}
+                </label>
+                <input
+                  type="date"
+                  value={dedStartDate}
+                  onChange={e => setDedStartDate(e.target.value)}
+                  className="w-full px-3 py-2 bg-gray-700 text-white rounded text-sm"
+                />
+                <p className="text-gray-500 text-xs mt-1">
+                  {dedType === 'recurring'
+                    ? `Won't apply to pay periods ending before this date.${dedFrequency === 'biweekly' ? ' Bi-weekly cadence starts from this date.' : ''}`
+                    : 'Leave blank to apply immediately, or set a future date.'}
+                </p>
+              </div>
 
               {/* Amount */}
               <div>
@@ -1027,6 +1065,24 @@ export default function PayrollPage() {
                   </select>
                 </div>
               )}
+
+              {/* Starting Date */}
+              <div>
+                <label className="block text-gray-400 text-xs mb-1">
+                  Starting On {addType === 'one_time' ? '(optional)' : ''}
+                </label>
+                <input
+                  type="date"
+                  value={addStartDate}
+                  onChange={e => setAddStartDate(e.target.value)}
+                  className="w-full px-3 py-2 bg-gray-700 text-white rounded text-sm"
+                />
+                <p className="text-gray-500 text-xs mt-1">
+                  {addType === 'recurring'
+                    ? `Won't apply to pay periods ending before this date.${addFrequency === 'biweekly' ? ' Bi-weekly cadence starts from this date.' : ''}`
+                    : 'Leave blank to apply immediately, or set a future date.'}
+                </p>
+              </div>
 
               {/* Amount */}
               <div>
