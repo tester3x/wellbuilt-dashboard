@@ -81,6 +81,21 @@ service cloud.firestore {
       allow read, write: if true;
     }
 
+    // Billing invoices — dashboard manages
+    match /billing_invoices/{billingId} {
+      allow read, write: if true;
+    }
+
+    // Billing number counters — dashboard auto-increment
+    match /billing_counters/{companyId} {
+      allow read, write: if true;
+    }
+
+    // Diesel price history — dashboard manages
+    match /diesel_prices/{priceId} {
+      allow read, write: if true;
+    }
+
     // Default: deny everything else
     match /{document=**} {
       allow read, write: if false;

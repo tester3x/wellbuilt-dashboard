@@ -17,6 +17,16 @@ export interface DashboardInvoice {
   date: string;
   tickets: string[];
   notes: string;
+  companyId: string;
+  fuelMinutes: number;
+  hauledTo: string;
+  state: string;
+  startTime: string;
+  stopTime: string;
+  actualDriveMinutes: number;
+  driveDistanceMiles: number;
+  closedAt: any;
+  createdAt: any;
 }
 
 export async function fetchInvoices(limitCount = 200): Promise<DashboardInvoice[]> {
@@ -44,6 +54,16 @@ export async function fetchInvoices(limitCount = 200): Promise<DashboardInvoice[
       date: d.date || '',
       tickets: d.tickets || [],
       notes: d.notes || '',
+      companyId: d.companyId || '',
+      fuelMinutes: d.fuelMinutes || 0,
+      hauledTo: d.hauledTo || '',
+      state: d.state || '',
+      startTime: d.startTime || '',
+      stopTime: d.stopTime || '',
+      actualDriveMinutes: d.actualDriveMinutes || 0,
+      driveDistanceMiles: d.driveDistanceMiles || 0,
+      closedAt: d.closedAt || null,
+      createdAt: d.createdAt || null,
     };
   });
 }

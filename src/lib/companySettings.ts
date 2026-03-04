@@ -41,6 +41,187 @@ export interface PayConfig {
   autoApproveHours?: number;  // hours before auto-approve (0 = disabled)
 }
 
+// ── Billing Types ────────────────────────────────────────────────────────────
+
+export type FuelSurchargeMethod = 'none' | 'hourly' | 'per_mile' | 'percentage' | 'flat';
+export type PaymentTerms = 'due_on_receipt' | 'net_30' | 'net_60' | 'net_90';
+
+export interface OperatorBillingConfig {
+  paymentTerms: PaymentTerms;
+  fuelSurchargeMethod: FuelSurchargeMethod;
+  fuelSurchargeRate?: number;       // $/hr (hourly) or $/load (flat)
+  fuelSurchargePercent?: number;    // decimal: 0.08 = 8%
+  fuelSurchargeBaseline?: number;   // per-mile: baseline $/gal
+  fuelSurchargeMPG?: number;        // per-mile: truck efficiency (default 6)
+}
+
+export const PAYMENT_TERMS_OPTIONS: { value: PaymentTerms; label: string }[] = [
+  { value: 'due_on_receipt', label: 'Due on Receipt' },
+  { value: 'net_30', label: 'Net 30' },
+  { value: 'net_60', label: 'Net 60' },
+  { value: 'net_90', label: 'Net 90' },
+];
+
+export const FUEL_SURCHARGE_METHODS: { value: FuelSurchargeMethod; label: string }[] = [
+  { value: 'none', label: 'None' },
+  { value: 'hourly', label: 'Per Hour ($/hr)' },
+  { value: 'per_mile', label: 'Per Mile (DOE-based)' },
+  { value: 'percentage', label: '% of Linehaul' },
+  { value: 'flat', label: 'Flat per Load ($)' },
+];
+
+// ── Ticket Template Types ─────────────────────────────────────────────────
+
+export interface TicketTemplate {
+  // Header / Branding
+  companyLogo: boolean;
+  companyName: boolean;
+  companyAddress: boolean;
+  // Ticket Identity
+  ticketNumber: boolean;
+  ticketDate: boolean;
+  timeGauged: boolean;
+  // Pickup Location
+  pickupCompany: boolean;
+  pickupLocation: boolean;
+  pickupApiNo: boolean;
+  pickupGps: boolean;
+  pickupLegalDesc: boolean;
+  pickupCounty: boolean;
+  // Drop-off Location
+  dropoffLocation: boolean;
+  dropoffApiNo: boolean;
+  dropoffGps: boolean;
+  dropoffCounty: boolean;
+  dropoffLegalDesc: boolean;
+  // Invoice
+  invoiceNumber: boolean;
+  // Measurements
+  jobType: boolean;
+  quantity: boolean;
+  tankTop: boolean;
+  tankBottom: boolean;
+  // Notes
+  notes: boolean;
+  // Time Tracking
+  startTime: boolean;
+  stopTime: boolean;
+  hours: boolean;
+  // Driver Info
+  driverName: boolean;
+  truckNumber: boolean;
+  trailerNumber: boolean;
+  // Signatures
+  driverSignature: boolean;
+  receiverSignature: boolean;
+}
+
+export const DEFAULT_TICKET_TEMPLATE: TicketTemplate = {
+  companyLogo: true, companyName: true, companyAddress: true,
+  ticketNumber: true, ticketDate: true, timeGauged: true,
+  pickupCompany: true, pickupLocation: true, pickupApiNo: true,
+  pickupGps: true, pickupLegalDesc: true, pickupCounty: true,
+  dropoffLocation: true, dropoffApiNo: true, dropoffGps: true,
+  dropoffCounty: true, dropoffLegalDesc: true,
+  invoiceNumber: true,
+  jobType: true, quantity: true, tankTop: true, tankBottom: true,
+  notes: true,
+  startTime: true, stopTime: true, hours: true,
+  driverName: true, truckNumber: true, trailerNumber: true,
+  driverSignature: true, receiverSignature: true,
+};
+
+export interface TemplateFieldGroup {
+  id: string;
+  label: string;
+  color: string;
+  fields: { key: keyof TicketTemplate; label: string; required?: boolean }[];
+}
+
+export const TEMPLATE_FIELD_GROUPS: TemplateFieldGroup[] = [
+  {
+    id: 'header', label: 'Header / Branding', color: 'yellow',
+    fields: [
+      { key: 'companyLogo', label: 'Company Logo' },
+      { key: 'companyName', label: 'Company Name' },
+      { key: 'companyAddress', label: 'Address & Phone' },
+    ],
+  },
+  {
+    id: 'identity', label: 'Ticket Identity', color: 'yellow',
+    fields: [
+      { key: 'ticketNumber', label: 'Ticket #', required: true },
+      { key: 'ticketDate', label: 'Date', required: true },
+      { key: 'timeGauged', label: 'Time Gauged' },
+    ],
+  },
+  {
+    id: 'pickup', label: 'Pickup Location', color: 'green',
+    fields: [
+      { key: 'pickupCompany', label: 'Operator / Company' },
+      { key: 'pickupLocation', label: 'Well Name' },
+      { key: 'pickupApiNo', label: 'API #' },
+      { key: 'pickupGps', label: 'GPS Coordinates' },
+      { key: 'pickupLegalDesc', label: 'Legal Description' },
+      { key: 'pickupCounty', label: 'County' },
+    ],
+  },
+  {
+    id: 'dropoff', label: 'Drop-off Location', color: 'blue',
+    fields: [
+      { key: 'dropoffLocation', label: 'Location Name' },
+      { key: 'dropoffApiNo', label: 'API #' },
+      { key: 'dropoffGps', label: 'GPS Coordinates' },
+      { key: 'dropoffCounty', label: 'County' },
+      { key: 'dropoffLegalDesc', label: 'Legal Description' },
+    ],
+  },
+  {
+    id: 'invoice', label: 'Invoice', color: 'purple',
+    fields: [
+      { key: 'invoiceNumber', label: 'Invoice #' },
+    ],
+  },
+  {
+    id: 'measurements', label: 'Measurements', color: 'orange',
+    fields: [
+      { key: 'jobType', label: 'Type' },
+      { key: 'quantity', label: 'Quantity (BBLs)', required: true },
+      { key: 'tankTop', label: 'Tank Top' },
+      { key: 'tankBottom', label: 'Tank Bottom' },
+    ],
+  },
+  {
+    id: 'notes', label: 'Notes', color: 'gray',
+    fields: [
+      { key: 'notes', label: 'Notes / Remarks' },
+    ],
+  },
+  {
+    id: 'time', label: 'Time Tracking', color: 'cyan',
+    fields: [
+      { key: 'startTime', label: 'Start Time' },
+      { key: 'stopTime', label: 'Stop Time' },
+      { key: 'hours', label: 'Hours' },
+    ],
+  },
+  {
+    id: 'driver', label: 'Driver Info', color: 'indigo',
+    fields: [
+      { key: 'driverName', label: 'Driver Name' },
+      { key: 'truckNumber', label: 'Truck #' },
+      { key: 'trailerNumber', label: 'Trailer #' },
+    ],
+  },
+  {
+    id: 'signatures', label: 'Signatures', color: 'red',
+    fields: [
+      { key: 'driverSignature', label: 'Driver Signature' },
+      { key: 'receiverSignature', label: 'Receiver Signature' },
+    ],
+  },
+];
+
 export interface CompanyConfig {
   id: string;
   name: string;
@@ -54,6 +235,8 @@ export interface CompanyConfig {
   rateSheet?: Record<string, number>;  // legacy simple format
   rateSheets?: Record<string, RateEntry[]>;  // per-operator rate sheets
   payConfig?: PayConfig;
+  billingConfig?: Record<string, OperatorBillingConfig>;  // per-operator billing config
+  currentDieselPrice?: number;  // admin-set DOE price, updated weekly
   notes?: string;
   assignedOperators?: string[];
   logoUrl?: string;
@@ -64,6 +247,7 @@ export interface CompanyConfig {
   enabledApps?: string[];
   requiredApps?: string[];
   transferRequiresApproval?: boolean;
+  ticketTemplates?: Record<string, TicketTemplate>;
 }
 
 // Must match WB T's COMMODITY_TYPES + HOURLY_COMMODITY_TYPES in utils/constants.ts
