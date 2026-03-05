@@ -19,6 +19,7 @@ import {
 } from '@/lib/firestoreWells';
 import { DriversTab } from '@/components/admin/DriversTab';
 import { CompaniesTab } from '@/components/admin/CompaniesTab';
+import RouteManager from '@/components/admin/RouteManager';
 
 interface WellConfig {
   route?: string;
@@ -31,6 +32,8 @@ interface WellConfig {
   // NDIC well linkage — used by WB Tickets for WB Mobile integration
   ndicName?: string;   // Full NDIC well name (e.g. "GABRIEL 1-36-25H")
   ndicApiNo?: string;  // NDIC API number (e.g. "33-053-06789-00-00")
+  // Route recording — GPS breadcrumb capture for wells with bad Google Maps directions
+  routeRecording?: boolean;
 }
 
 interface RouteWells {
@@ -59,6 +62,9 @@ export default function AdminPage() {
   const [editWellBottom, setEditWellBottom] = useState('');
   const [editWellTanks, setEditWellTanks] = useState('');
   const [editWellPullBbls, setEditWellPullBbls] = useState('');
+
+  // Route recording toggle
+  const [editRouteRecording, setEditRouteRecording] = useState(false);
 
   // NDIC well picker — shared between Add and Edit forms
   const [ndicOperators, setNdicOperators] = useState<NdicOperator[]>([]);
@@ -207,6 +213,8 @@ export default function AdminPage() {
       // Load NDIC linkage if present
       setEditNdicName(config.ndicName || '');
       setEditNdicApiNo(config.ndicApiNo || '');
+      // Load route recording flag
+      setEditRouteRecording(!!config.routeRecording);
     }
   }, [selectedWell, configs]);
 
@@ -570,6 +578,8 @@ export default function AdminPage() {
       // NDIC linkage
       ...(editNdicName ? { ndicName: editNdicName } : {}),
       ...(editNdicApiNo ? { ndicApiNo: editNdicApiNo } : {}),
+      // Route recording
+      ...(editRouteRecording ? { routeRecording: true } : {}),
     };
 
     if (isNameChanged) {
@@ -899,7 +909,12 @@ export default function AdminPage() {
                     onClick={() => setSelectedWell(wellName)}
                     className={`p-3 rounded cursor-pointer ${selectedWell === wellName ? 'bg-blue-600' : 'bg-gray-700 hover:bg-gray-600'}`}
                   >
-                    <div className="text-white font-medium">{wellName}</div>
+                    <div className="text-white font-medium">
+                      {wellName}
+                      {configs[wellName].routeRecording && (
+                        <span className="ml-2 text-xs text-orange-400 font-bold">REC</span>
+                      )}
+                    </div>
                     <div className="text-gray-400 text-sm">Route: {configs[wellName].route || 'Unrouted'}</div>
                     {configs[wellName].ndicApiNo && (
                       <div className="text-teal-400 text-xs">API: {configs[wellName].ndicApiNo}</div>
@@ -1012,6 +1027,32 @@ export default function AdminPage() {
                         </p>
                       )}
                     </div>
+                    {/* Route Recording Toggle */}
+                    <div className="flex items-center justify-between bg-gray-900 rounded p-3">
+                      <div>
+                        <label className="text-gray-300 text-sm font-medium">Route Recording</label>
+                        <div className="text-gray-500 text-xs mt-0.5">
+                          Record GPS breadcrumbs when drivers drive to this well
+                        </div>
+                      </div>
+                      <button
+                        onClick={() => setEditRouteRecording(!editRouteRecording)}
+                        className={`relative inline-flex h-6 w-11 items-center rounded-full transition-colors ${
+                          editRouteRecording ? 'bg-orange-500' : 'bg-gray-600'
+                        }`}
+                        disabled={isRenaming}
+                      >
+                        <span
+                          className={`inline-block h-4 w-4 rounded-full bg-white transform transition-transform ${
+                            editRouteRecording ? 'translate-x-6' : 'translate-x-1'
+                          }`}
+                        />
+                      </button>
+                    </div>
+                    {/* Route Manager — shows recorded trips when route recording is on */}
+                    {editRouteRecording && (
+                      <RouteManager wellName={selectedWell} />
+                    )}
                     {/* NDIC Linkage */}
                     <div className="bg-gray-900 rounded p-2">
                       <div className="flex justify-between items-center mb-1">
