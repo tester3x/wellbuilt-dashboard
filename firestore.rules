@@ -1,46 +1,93 @@
 rules_version = '2';
 service cloud.firestore {
   match /databases/{database}/documents {
-    // Companies — dashboard needs read/write (DEV_MODE has no auth)
-    match /companies/{companyId} {
-      allow read, write: if true;
-    }
-
-    // Invoices — WB T app reads/writes
-    match /invoices/{invoiceId} {
-      allow read, write: if true;
-    }
-
-    // Water tickets
-    match /tickets/{ticketId} {
-      allow read, write: if true;
-    }
-
-    // Invoice number blocks
-    match /invoiceBlocks/{blockId} {
-      allow read, write: if true;
-    }
-
-    // NDIC operators cache
-    match /operators/{opId} {
+    // Well data collections — read-only from clients
+    match /operators/{docId} {
       allow read: if true;
-      allow write: if true;
+      allow write: if false;
+    }
+    match /wells/{docId} {
+      allow read: if true;
+      allow write: if false;
+    }
+    match /wells_inactive/{docId} {
+      allow read: if true;
+      allow write: if false;
+    }
+    match /disposals/{docId} {
+      allow read: if true;
+      allow write: if false;
+    }
+    match /customers/{docId} {
+      allow read: if true;
+      allow write: if false;
     }
 
-    // Well database (active + inactive)
-    match /wells/{wellId} {
+    // Operator aliases — read-only from clients (admin writes via Admin SDK)
+    match /operatorAliases/{docId} {
       allow read: if true;
-      allow write: if true;
-    }
-    match /wells_inactive/{wellId} {
-      allow read: if true;
-      allow write: if true;
+      allow write: if false;
     }
 
-    // NDIC disposals
-    match /disposals/{disposalId} {
+    // Custom locations — driver-typed names saved on submit, readable for autocomplete
+    match /customLocations/{docId} {
       allow read: if true;
-      allow write: if true;
+      allow create, update: if true;
+      allow delete: if false;
+    }
+
+    // Unmatched entries — clients can create, nobody can read (admin reads via Admin SDK)
+    match /unmatchedLocations/{docId} {
+      allow create: if true;
+      allow read, update, delete: if false;
+    }
+    match /unmatchedCompanies/{docId} {
+      allow create: if true;
+      allow read, update, delete: if false;
+    }
+
+    // Company config — read-only from clients (admin writes via Admin SDK or dashboard)
+    match /companies/{docId} {
+      allow read: if true;
+      allow write: if false;
+    }
+
+    // Invoices — clients can read and create/update (status transitions, attach tickets)
+    match /invoices/{docId} {
+      allow read: if true;
+      allow create, update: if true;
+      allow delete: if false;
+    }
+
+    // Invoice blocks — read-only (assigned via Cloud Functions with Admin SDK)
+    match /invoiceBlocks/{docId} {
+      allow read: if true;
+      allow write: if false;
+    }
+
+    // Tickets — clients can read (dashboard review), writes go through Cloud Functions
+    match /tickets/{docId} {
+      allow read: if true;
+      allow write: if false;
+    }
+
+    // Ticket blocks — read-only (assigned via Cloud Functions with Admin SDK)
+    match /ticketBlocks/{docId} {
+      allow read: if true;
+      allow write: if false;
+    }
+
+    // Route recordings — GPS breadcrumb trips recorded by drivers
+    match /route_recordings/{slug} {
+      allow read, write: if true;
+      match /trips/{tripId} {
+        allow read, write: if true;
+      }
+    }
+
+    // Route overrides — golden routes selected by admin
+    match /route_overrides/{slug} {
+      allow read, write: if true;
     }
 
     // Location corrections from drivers
@@ -48,26 +95,13 @@ service cloud.firestore {
       allow read, write: if true;
     }
 
-    // Custom locations
-    match /customLocations/{locId} {
-      allow read, write: if true;
-    }
-
-    // Operator aliases
-    match /operatorAliases/{aliasId} {
-      allow read, write: if true;
-    }
-
-    // Unmatched companies/locations logging from app
-    match /unmatchedCompanies/{docId} {
-      allow read, write: if true;
-    }
-    match /unmatchedLocations/{docId} {
-      allow read, write: if true;
-    }
-
     // Dispatches — dashboard creates, WB T app reads/updates
     match /dispatches/{jobId} {
+      allow read, write: if true;
+    }
+
+    // Load transfers — driver-to-driver handoff
+    match /transfers/{transferId} {
       allow read, write: if true;
     }
 
@@ -81,7 +115,7 @@ service cloud.firestore {
       allow read, write: if true;
     }
 
-    // Billing invoices — dashboard manages
+    // Billing records — dashboard manages
     match /billing_invoices/{billingId} {
       allow read, write: if true;
     }
@@ -96,7 +130,7 @@ service cloud.firestore {
       allow read, write: if true;
     }
 
-    // Default: deny everything else
+    // Everything else — deny (Cloud Functions use Admin SDK which bypasses rules)
     match /{document=**} {
       allow read, write: if false;
     }

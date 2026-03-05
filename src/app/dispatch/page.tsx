@@ -48,6 +48,7 @@ interface DispatchJob {
   disposalApiNo?: string;
   disposalLegalDesc?: string;
   disposalCounty?: string;
+  loadCount?: number;  // Number of loads for this well (default 1)
   // Load transfer fields
   type?: 'dispatch' | 'transfer';
   transferFromDriver?: string;
@@ -233,7 +234,7 @@ export default function DispatchPage() {
   const [priorityFilter, setPriorityFilter] = useState<PriorityLevel | 'all'>('all');
   const [message, setMessage] = useState('');
 
-  // Assign modal state
+  // Assign modal state (single-well legacy)
   const [showAssignModal, setShowAssignModal] = useState(false);
   const [assignTarget, setAssignTarget] = useState<WellResponse | null>(null);
   const [assignDriverHash, setAssignDriverHash] = useState('');
@@ -244,6 +245,16 @@ export default function DispatchPage() {
   const [disposalResults, setDisposalResults] = useState<NdicWell[]>([]);
   const [allDisposals, setAllDisposals] = useState<NdicWell[]>([]);
   const [assigning, setAssigning] = useState(false);
+
+  // Multi-select dispatch state
+  const [selectedWells, setSelectedWells] = useState<Map<string, number>>(new Map()); // wellName → load count
+  const [bulkDriverHash, setBulkDriverHash] = useState('');
+  const [bulkNotes, setBulkNotes] = useState('');
+  const [bulkDisposal, setBulkDisposal] = useState('');
+  const [bulkDisposalWell, setBulkDisposalWell] = useState<NdicWell | null>(null);
+  const [bulkDisposalSearch, setBulkDisposalSearch] = useState('');
+  const [bulkDisposalResults, setBulkDisposalResults] = useState<NdicWell[]>([]);
+  const [bulkDispatching, setBulkDispatching] = useState(false);
 
   // Service work form state
   const [swWellName, setSwWellName] = useState('');
@@ -640,6 +651,119 @@ export default function DispatchPage() {
     }
   }
 
+  // ─── Multi-Select Helpers ──────────────────────────────────────────────────
+
+  function toggleWellSelection(wellName: string) {
+    setSelectedWells(prev => {
+      const next = new Map(prev);
+      if (next.has(wellName)) {
+        next.delete(wellName);
+      } else {
+        next.set(wellName, 1);
+      }
+      return next;
+    });
+  }
+
+  function setWellLoadCount(wellName: string, count: number) {
+    setSelectedWells(prev => {
+      const next = new Map(prev);
+      next.set(wellName, Math.max(1, count));
+      return next;
+    });
+  }
+
+  function toggleSelectAll() {
+    // Only toggle non-dispatched wells visible in the current filtered queue
+    const dispatchedWells = new Set(
+      dispatches.filter(d => d.jobType === 'pw' && ['pending', 'accepted', 'in_progress', 'paused'].includes(d.status))
+        .map(d => d.wellName)
+    );
+    const selectableWells = pwQueue.filter(q => !q.dispatched).map(q => q.well.wellName);
+
+    if (selectableWells.every(w => selectedWells.has(w))) {
+      // All selected → deselect all
+      setSelectedWells(new Map());
+    } else {
+      // Select all undispatched
+      const next = new Map(selectedWells);
+      selectableWells.forEach(w => {
+        if (!next.has(w)) next.set(w, 1);
+      });
+      setSelectedWells(next);
+    }
+  }
+
+  const totalSelectedLoads = useMemo(() => {
+    let total = 0;
+    selectedWells.forEach(count => total += count);
+    return total;
+  }, [selectedWells]);
+
+  // ─── Bulk Dispatch ──────────────────────────────────────────────────────────
+
+  async function submitBulkDispatch() {
+    if (selectedWells.size === 0 || !bulkDriverHash) return;
+    setBulkDispatching(true);
+    try {
+      const driver = drivers.find(d => d.key === bulkDriverHash);
+      if (!driver) throw new Error('Driver not found');
+      const firestore = getFirestoreDb();
+
+      // Create one dispatch doc per well with loadCount
+      const promises: Promise<any>[] = [];
+      selectedWells.forEach((loadCount, wellName) => {
+        const well = wells.find(w => w.wellName === wellName);
+        const priority = well ? getPriority(well) : { sortOrder: 5 };
+
+        const job: Omit<DispatchJob, 'id'> = {
+          driverHash: bulkDriverHash,
+          driverName: driver.displayName,
+          wellName,
+          route: well?.route || '',
+          jobType: 'pw',
+          status: 'pending',
+          notes: bulkNotes || '',
+          priority: priority.sortOrder,
+          assignedAt: Timestamp.now(),
+          assignedBy: user?.email || 'dashboard',
+          estimatedPullTime: well?.nextPullTimeUTC || '',
+          currentLevel: well?.currentLevel || '',
+          flowRate: well?.flowRate || '',
+          ...(loadCount > 1 ? { loadCount } : {}),
+          ...(bulkDisposal ? {
+            disposal: bulkDisposal,
+            ...(bulkDisposalWell?.latitude ? { disposalLat: bulkDisposalWell.latitude } : {}),
+            ...(bulkDisposalWell?.longitude ? { disposalLng: bulkDisposalWell.longitude } : {}),
+            ...(bulkDisposalWell?.api_no ? { disposalApiNo: bulkDisposalWell.api_no } : {}),
+            ...(bulkDisposalWell?.legal_desc ? { disposalLegalDesc: bulkDisposalWell.legal_desc } : {}),
+            ...(bulkDisposalWell?.county ? { disposalCounty: bulkDisposalWell.county } : {}),
+          } : {}),
+        };
+        promises.push(addDoc(collection(firestore, 'dispatches'), job));
+      });
+
+      await Promise.all(promises);
+      setMessage(`Dispatched ${totalSelectedLoads} load${totalSelectedLoads !== 1 ? 's' : ''} across ${selectedWells.size} well${selectedWells.size !== 1 ? 's' : ''} to ${driver.displayName}`);
+
+      // Reset
+      setSelectedWells(new Map());
+      setBulkDriverHash('');
+      setBulkNotes('');
+      setBulkDisposal('');
+      setBulkDisposalWell(null);
+      setBulkDisposalSearch('');
+      setBulkDisposalResults([]);
+      await loadDispatches();
+      setTimeout(() => setMessage(''), 5000);
+    } catch (err: any) {
+      setMessage(`Error: ${err.message}`);
+      setTimeout(() => setMessage(''), 5000);
+    } finally {
+      setBulkDispatching(false);
+    }
+  }
+
   // ─── Render Guards ─────────────────────────────────────────────────────────
 
   if (loading) {
@@ -794,6 +918,110 @@ export default function DispatchPage() {
             <div className="grid grid-cols-1 lg:grid-cols-2 gap-8">
             {/* Left: Well Queue */}
             <div className="min-w-0">
+              {/* Bulk Dispatch Bar — shows when wells are selected */}
+              {selectedWells.size > 0 && (
+                <div className="bg-blue-900/40 border border-blue-600/50 rounded-lg p-4 mb-4">
+                  <div className="flex items-center justify-between mb-3">
+                    <div className="text-white text-sm font-medium">
+                      {selectedWells.size} well{selectedWells.size !== 1 ? 's' : ''} selected
+                      {totalSelectedLoads !== selectedWells.size && (
+                        <span className="text-blue-300 ml-1">({totalSelectedLoads} total loads)</span>
+                      )}
+                    </div>
+                    <button
+                      onClick={() => setSelectedWells(new Map())}
+                      className="text-gray-400 hover:text-white text-xs"
+                    >
+                      Clear Selection
+                    </button>
+                  </div>
+                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 mb-3">
+                    {/* Driver */}
+                    <div>
+                      <label className="block text-xs text-gray-400 mb-1">Driver</label>
+                      <select
+                        value={bulkDriverHash}
+                        onChange={(e) => setBulkDriverHash(e.target.value)}
+                        className="w-full px-2 py-1.5 bg-gray-900 border border-gray-700 rounded text-white text-sm focus:outline-none focus:border-blue-500"
+                      >
+                        <option value="">Select driver...</option>
+                        {drivers.map(d => (
+                          <option key={d.key} value={d.key}>{d.displayName}</option>
+                        ))}
+                      </select>
+                    </div>
+                    {/* Disposal */}
+                    <div className="relative">
+                      <label className="block text-xs text-gray-400 mb-1">Disposal (optional)</label>
+                      {bulkDisposalWell ? (
+                        <div className="flex items-center gap-2 px-2 py-1.5 bg-gray-900 border border-cyan-700 rounded">
+                          <span className="text-cyan-400 text-sm flex-1 truncate">{bulkDisposal}</span>
+                          <button
+                            onClick={() => { setBulkDisposal(''); setBulkDisposalWell(null); setBulkDisposalSearch(''); }}
+                            className="text-gray-400 hover:text-white text-xs"
+                          >&#10005;</button>
+                        </div>
+                      ) : (
+                        <input
+                          type="text"
+                          value={bulkDisposalSearch}
+                          onChange={(e) => {
+                            const val = e.target.value;
+                            setBulkDisposalSearch(val);
+                            if (val.length >= 2) {
+                              setBulkDisposalResults(searchDisposals(val, allDisposals));
+                            } else {
+                              setBulkDisposalResults([]);
+                            }
+                          }}
+                          placeholder="Search SWD..."
+                          className="w-full px-2 py-1.5 bg-gray-900 border border-gray-700 rounded text-white text-sm placeholder-gray-500 focus:outline-none focus:border-blue-500"
+                        />
+                      )}
+                      {bulkDisposalResults.length > 0 && !bulkDisposalWell && (
+                        <div className="absolute z-50 w-full mt-1 bg-gray-800 border border-gray-600 rounded max-h-40 overflow-y-auto shadow-lg">
+                          {bulkDisposalResults.map((d, i) => (
+                            <button
+                              key={d.api_no || i}
+                              onClick={() => {
+                                setBulkDisposal(d.well_name);
+                                setBulkDisposalWell(d);
+                                setBulkDisposalSearch('');
+                                setBulkDisposalResults([]);
+                              }}
+                              className="w-full text-left px-3 py-2 hover:bg-gray-700 border-b border-gray-700/50 last:border-0"
+                            >
+                              <span className="text-white text-sm">{d.well_name}</span>
+                              <span className="text-gray-400 text-xs ml-2">{d.operator}</span>
+                            </button>
+                          ))}
+                        </div>
+                      )}
+                    </div>
+                  </div>
+                  {/* Notes + Dispatch */}
+                  <div className="flex items-end gap-3">
+                    <div className="flex-1">
+                      <label className="block text-xs text-gray-400 mb-1">Notes (optional)</label>
+                      <input
+                        type="text"
+                        value={bulkNotes}
+                        onChange={(e) => setBulkNotes(e.target.value)}
+                        placeholder="Instructions for all selected..."
+                        className="w-full px-2 py-1.5 bg-gray-900 border border-gray-700 rounded text-white text-sm placeholder-gray-500 focus:outline-none focus:border-blue-500"
+                      />
+                    </div>
+                    <button
+                      onClick={submitBulkDispatch}
+                      disabled={!bulkDriverHash || bulkDispatching}
+                      className="px-4 py-1.5 bg-blue-600 hover:bg-blue-500 disabled:bg-gray-600 disabled:cursor-not-allowed text-white text-sm font-medium rounded transition-colors whitespace-nowrap"
+                    >
+                      {bulkDispatching ? 'Dispatching...' : `Dispatch ${totalSelectedLoads} Load${totalSelectedLoads !== 1 ? 's' : ''}`}
+                    </button>
+                  </div>
+                </div>
+              )}
+
               {/* PW Queue Table */}
               {dataLoading ? (
                 <div className="text-gray-400 py-8 text-center">Loading well data...</div>
@@ -807,6 +1035,14 @@ export default function DispatchPage() {
                     <table className="w-full">
                       <thead className="bg-gray-700">
                         <tr>
+                          <th className="px-2 py-2 text-center w-8">
+                            <input
+                              type="checkbox"
+                              checked={pwQueue.filter(q => !q.dispatched).length > 0 && pwQueue.filter(q => !q.dispatched).every(q => selectedWells.has(q.well.wellName))}
+                              onChange={toggleSelectAll}
+                              className="w-4 h-4 rounded border-gray-600 bg-gray-800 text-blue-600 focus:ring-blue-500 focus:ring-offset-0 cursor-pointer"
+                            />
+                          </th>
                           <th className="px-3 py-2 text-left text-xs font-medium text-gray-300 w-16">Priority</th>
                           <th className="px-3 py-2 text-left text-xs font-medium text-gray-300">Well</th>
                           <th className="px-3 py-2 text-left text-xs font-medium text-gray-300">Route</th>
@@ -816,17 +1052,30 @@ export default function DispatchPage() {
                           <th className="px-3 py-2 text-left text-xs font-medium text-gray-300">Next Pull</th>
                           <th className="px-3 py-2 text-left text-xs font-medium text-gray-300">BBLs/Day</th>
                           <th className="px-3 py-2 text-left text-xs font-medium text-gray-300">Pulls/Day</th>
-                          <th className="px-3 py-2 text-center text-xs font-medium text-gray-300 w-24">Action</th>
+                          <th className="px-3 py-2 text-center text-xs font-medium text-gray-300 w-28">Action</th>
                         </tr>
                       </thead>
                       <tbody className="divide-y divide-gray-700">
-                        {pwQueue.map(({ well, priority, dispatched }) => (
+                        {pwQueue.map(({ well, priority, dispatched }) => {
+                          const isSelected = selectedWells.has(well.wellName);
+                          const loadCount = selectedWells.get(well.wellName) || 1;
+                          return (
                           <tr
                             key={well.responseId || well.wellName}
                             className={`hover:bg-gray-750 transition-colors ${
                               dispatched ? 'opacity-50' : ''
-                            } ${priority.level === 'overdue' ? 'bg-red-900/10' : ''}`}
+                            } ${priority.level === 'overdue' ? 'bg-red-900/10' : ''} ${isSelected ? 'bg-blue-900/20' : ''}`}
                           >
+                            <td className="px-2 py-2 text-center">
+                              {!dispatched && (
+                                <input
+                                  type="checkbox"
+                                  checked={isSelected}
+                                  onChange={() => toggleWellSelection(well.wellName)}
+                                  className="w-4 h-4 rounded border-gray-600 bg-gray-800 text-blue-600 focus:ring-blue-500 focus:ring-offset-0 cursor-pointer"
+                                />
+                              )}
+                            </td>
                             <td className="px-3 py-2">
                               <span className={`px-2 py-0.5 text-xs font-bold rounded ${priority.color} ${priority.textColor}`}>
                                 {priority.label}
@@ -843,6 +1092,18 @@ export default function DispatchPage() {
                             <td className="px-3 py-2 text-center">
                               {dispatched ? (
                                 <span className="text-blue-400 text-xs font-medium">Dispatched</span>
+                              ) : isSelected ? (
+                                <div className="flex items-center justify-center gap-1">
+                                  <span className="text-gray-400 text-xs">Loads:</span>
+                                  <input
+                                    type="number"
+                                    min={1}
+                                    max={20}
+                                    value={loadCount}
+                                    onChange={(e) => setWellLoadCount(well.wellName, parseInt(e.target.value) || 1)}
+                                    className="w-12 px-1 py-0.5 bg-gray-900 border border-blue-600 rounded text-white text-xs text-center focus:outline-none focus:border-blue-400"
+                                  />
+                                </div>
                               ) : (
                                 <button
                                   onClick={() => openAssignModal(well)}
@@ -853,7 +1114,8 @@ export default function DispatchPage() {
                               )}
                             </td>
                           </tr>
-                        ))}
+                          );
+                        })}
                       </tbody>
                     </table>
                   </div>
@@ -984,14 +1246,12 @@ export default function DispatchPage() {
                         <div>Assigned: <span className="text-gray-300">{formatDispatchTime(job.assignedAt)}</span></div>
                         {job.notes && <div>Notes: <span className="text-gray-300">{job.notes}</span></div>}
                       </div>
-                      {job.status === 'pending' && (
-                        <button
-                          onClick={() => job.id && cancelDispatch(job.id)}
-                          className="mt-3 px-2 py-1 bg-red-600/30 hover:bg-red-600/50 text-red-300 text-xs rounded transition-colors"
-                        >
-                          Cancel
-                        </button>
-                      )}
+                      <button
+                        onClick={() => job.id && cancelDispatch(job.id)}
+                        className="mt-3 px-2 py-1 bg-red-600/30 hover:bg-red-600/50 text-red-300 text-xs rounded transition-colors"
+                      >
+                        Cancel
+                      </button>
                     </div>
                   ))}
                 </div>
@@ -1383,15 +1643,16 @@ function ActiveDispatchTable({ dispatches, cancelDispatch, drivers, assignTransf
           return (
             <div key={job.id} className="flex items-center gap-2 px-3 py-2 bg-gray-900/50 rounded hover:bg-gray-900/80 text-sm">
               <span className="text-white font-medium truncate flex-shrink-0" style={{ minWidth: 80 }}>{job.wellName}</span>
+              {(job.loadCount || 0) > 1 && (
+                <span className="px-1.5 py-0.5 bg-yellow-600/30 text-yellow-300 text-xs rounded font-bold flex-shrink-0">{job.loadCount} loads</span>
+              )}
               <span className="text-gray-400 truncate flex-1">{job.driverName}</span>
               {job.type === 'transfer' && job.transferFromDriver && (
                 <span className="px-1.5 py-0.5 bg-orange-600/30 text-orange-300 text-xs rounded font-medium truncate">Transfer from {job.transferFromDriver}</span>
               )}
               {job.disposal && <span className="text-cyan-400 text-xs truncate">&#8594; {job.disposal}</span>}
               <StatusBadge status={job.status} />
-              {job.status === 'pending' && (
-                <button onClick={() => job.id && cancelDispatch(job.id)} className="text-red-400 hover:text-red-300 text-xs flex-shrink-0">&#10005;</button>
-              )}
+              <button onClick={() => job.id && cancelDispatch(job.id)} className="text-red-400 hover:text-red-300 text-xs flex-shrink-0" title="Cancel dispatch">&#10005;</button>
             </div>
           );
         }
@@ -1415,15 +1676,16 @@ function ActiveDispatchTable({ dispatches, cancelDispatch, drivers, assignTransf
                 {jobs.map(job => (
                   <div key={job.id} className="flex items-center gap-2 px-3 py-1.5 bg-gray-800/50 rounded text-sm">
                     <span className="text-white truncate flex-shrink-0" style={{ minWidth: 80 }}>{job.wellName}</span>
+                    {(job.loadCount || 0) > 1 && (
+                      <span className="px-1.5 py-0.5 bg-yellow-600/30 text-yellow-300 text-xs rounded font-bold flex-shrink-0">{job.loadCount} loads</span>
+                    )}
                     {job.type === 'transfer' && job.transferFromDriver && (
                       <span className="px-1.5 py-0.5 bg-orange-600/30 text-orange-300 text-xs rounded font-medium truncate">Transfer from {job.transferFromDriver}</span>
                     )}
                     {job.disposal && <span className="text-cyan-400 text-xs truncate">&#8594; {job.disposal}</span>}
                     <span className="flex-1" />
                     <StatusBadge status={job.status} />
-                    {job.status === 'pending' && (
-                      <button onClick={() => job.id && cancelDispatch(job.id)} className="text-red-400 hover:text-red-300 text-xs flex-shrink-0">&#10005;</button>
-                    )}
+                    <button onClick={() => job.id && cancelDispatch(job.id)} className="text-red-400 hover:text-red-300 text-xs flex-shrink-0" title="Cancel dispatch">&#10005;</button>
                   </div>
                 ))}
               </div>
