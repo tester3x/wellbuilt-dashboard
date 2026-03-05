@@ -117,6 +117,8 @@ export const STATE_TO_PADD: Record<string, DoeRegion> = {
 
 // ── Ticket Template Types ─────────────────────────────────────────────────
 
+export type FieldSize = 'normal' | 'small' | 'tiny';
+
 export interface TicketTemplate {
   // Header / Branding
   companyLogo: boolean;
@@ -159,6 +161,11 @@ export interface TicketTemplate {
   // Signatures
   driverSignature: boolean;
   receiverSignature: boolean;
+  // Timeline
+  timelineStamps: boolean;
+  // Layout customization
+  fieldSizes?: Partial<Record<string, FieldSize>>;
+  groupOrder?: string[];
 }
 
 export const DEFAULT_TICKET_TEMPLATE: TicketTemplate = {
@@ -174,6 +181,20 @@ export const DEFAULT_TICKET_TEMPLATE: TicketTemplate = {
   startTime: true, stopTime: true, hours: true,
   driverName: true, truckNumber: true, trailerNumber: true,
   driverSignature: true, receiverSignature: true,
+  timelineStamps: true,
+};
+
+export const DEFAULT_GROUP_ORDER: string[] = [
+  'header', 'identity', 'pickup', 'dropoff', 'invoice',
+  'measurements', 'notes', 'time', 'timeline', 'driver', 'signatures',
+];
+
+export const DEFAULT_FIELD_SIZES: Record<string, FieldSize> = {
+  header: 'normal', identity: 'normal',
+  pickup: 'normal', pickup_legal: 'small',
+  dropoff: 'normal', dropoff_legal: 'small',
+  invoice: 'normal', measurements: 'normal', notes: 'normal',
+  time: 'normal', timeline: 'normal', driver: 'normal', signatures: 'normal',
 };
 
 export interface TemplateFieldGroup {
@@ -248,6 +269,12 @@ export const TEMPLATE_FIELD_GROUPS: TemplateFieldGroup[] = [
       { key: 'startTime', label: 'Start Time' },
       { key: 'stopTime', label: 'Stop Time' },
       { key: 'hours', label: 'Hours' },
+    ],
+  },
+  {
+    id: 'timeline', label: 'Timeline Stamps', color: 'cyan',
+    fields: [
+      { key: 'timelineStamps', label: 'Timeline Events' },
     ],
   },
   {

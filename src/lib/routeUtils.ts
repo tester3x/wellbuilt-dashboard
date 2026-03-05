@@ -111,3 +111,27 @@ function perpendicularDistanceMeters(
 export function metersToMiles(meters: number): string {
   return (meters / 1609.344).toFixed(1);
 }
+
+/**
+ * Generate a short unique route ID for approved routes.
+ */
+export function generateRouteId(): string {
+  return Date.now().toString(36) + Math.random().toString(36).substring(2, 6);
+}
+
+/**
+ * Build a shareable Google Maps URL from simplified waypoints.
+ * No origin — Google uses the recipient's current location.
+ * Waypoints are pipe-separated lat,lng pairs.
+ */
+export function buildGoogleMapsUrl(
+  waypoints: Array<{ lat: number; lng: number }>,
+  destLat: number,
+  destLng: number,
+): string {
+  const dest = `&destination=${destLat},${destLng}`;
+  const wp = waypoints.length > 0
+    ? `&waypoints=${waypoints.map(w => `${w.lat},${w.lng}`).join('|')}`
+    : '';
+  return `https://www.google.com/maps/dir/?api=1${dest}${wp}&travelmode=driving`;
+}

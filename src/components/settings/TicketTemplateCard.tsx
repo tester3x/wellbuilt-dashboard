@@ -4,7 +4,10 @@ import { useState, useMemo } from 'react';
 import {
   type CompanyConfig,
   type TicketTemplate,
+  type FieldSize,
   DEFAULT_TICKET_TEMPLATE,
+  DEFAULT_GROUP_ORDER,
+  DEFAULT_FIELD_SIZES,
   TEMPLATE_FIELD_GROUPS,
   updateCompanyFields,
 } from '@/lib/companySettings';
@@ -14,10 +17,139 @@ interface Props {
   onSave: () => void;
 }
 
+// Groups that have separate "legal" sub-fields with their own size control
+const LEGAL_SUBGROUPS: Record<string, string[]> = {
+  pickup: ['pickupApiNo', 'pickupGps', 'pickupLegalDesc', 'pickupCounty'],
+  dropoff: ['dropoffApiNo', 'dropoffGps', 'dropoffCounty', 'dropoffLegalDesc'],
+};
+
+const LEGAL_PRIMARY: Record<string, string[]> = {
+  pickup: ['pickupCompany', 'pickupLocation'],
+  dropoff: ['dropoffLocation'],
+};
+
 // ── Preview HTML builder ─────────────────────────────────────────────────────
 
 function buildPreviewHtml(T: TicketTemplate): string {
-  // Mirrors WB T's buildReceiptHtml() structure with sample data
+  const sizes = { ...DEFAULT_FIELD_SIZES, ...(T.fieldSizes || {}) };
+  const order = T.groupOrder || DEFAULT_GROUP_ORDER;
+
+  const sizeCSS = (groupId: string) => {
+    const s = sizes[groupId] || 'normal';
+    if (s === 'small') return 'font-size:10px;color:#333;';
+    if (s === 'tiny') return 'font-size:8px;color:#555;';
+    return '';
+  };
+
+  const rowStyle = (groupId: string) => {
+    const s = sizes[groupId] || 'normal';
+    if (s === 'small') return ' style="font-size:10px;color:#333;"';
+    if (s === 'tiny') return ' style="font-size:8px;color:#555;"';
+    return '';
+  };
+
+  const sectionBuilders: Record<string, () => string> = {
+    header: () => {
+      let h = '';
+      if (T.companyLogo || T.companyAddress) {
+        h += `<div class="header-top">
+          ${T.companyLogo ? '<div style="width:60px;height:40px;background:#ddd;display:flex;align-items:center;justify-content:center;font-size:8px;color:#666;border-radius:4px;">LOGO</div>' : ''}
+          ${T.companyAddress ? '<div class="addr-block">P.O. Box 4447<br/>Williston, ND 58801<br/>(701) 555-0123</div>' : ''}
+        </div>`;
+      }
+      if (T.companyName) h += '<div class="company-name">SAMPLE TRUCKING LLC</div>';
+      if (T.companyLogo || T.companyName || T.companyAddress) h += '<div class="company-divider"></div>';
+      return h;
+    },
+
+    identity: () => `
+      <div class="ticket-title">WATER TICKET</div>
+      <div class="ticket-meta">
+        ${T.ticketNumber ? '<span># 11305</span>' : '<span></span>'}
+        <span>${T.ticketDate ? '03/03/2026' : ''}${T.timeGauged ? '  1:21 PM' : ''}</span>
+      </div>`,
+
+    pickup: () => {
+      let h = '';
+      // Primary fields
+      const ps = rowStyle('pickup');
+      if (T.pickupCompany) h += `<div class="row"${ps}><span class="row-label">Company</span><span class="row-value">Slawson Exploration</span></div>`;
+      if (T.pickupLocation) h += `<div class="row"${ps}><span class="row-label">Pickup Location</span><span class="row-value">ATLAS 1-16-21H</span></div>`;
+      // Legal sub-fields
+      const ls = rowStyle('pickup_legal');
+      if (T.pickupApiNo) h += `<div class="row"${ls}><span class="row-label">API #</span><span class="row-value">33-105-03422</span></div>`;
+      if (T.pickupGps) h += `<div class="row"${ls}><span class="row-label">GPS</span><span class="row-value">48.1234, -103.5678</span></div>`;
+      if (T.pickupLegalDesc) h += `<div class="row"${ls}><span class="row-label">Legal</span><span class="row-value">NWSW 16-152N-99W</span></div>`;
+      if (T.pickupCounty) h += `<div class="row"${ls}><span class="row-label">County</span><span class="row-value">Williams</span></div>`;
+      return h;
+    },
+
+    dropoff: () => {
+      let h = '';
+      const ps = rowStyle('dropoff');
+      if (T.dropoffLocation) h += `<div class="row"${ps}><span class="row-label">Drop-off</span><span class="row-value">HYDRO CLEAR SWD</span></div>`;
+      const ls = rowStyle('dropoff_legal');
+      if (T.dropoffApiNo) h += `<div class="row"${ls}><span class="row-label">Drop-off API #</span><span class="row-value">33-053-05201</span></div>`;
+      if (T.dropoffGps) h += `<div class="row"${ls}><span class="row-label">Drop-off GPS</span><span class="row-value">47.9501, -103.3366</span></div>`;
+      if (T.dropoffCounty) h += `<div class="row"${ls}><span class="row-label">Drop-off County</span><span class="row-value">McKenzie</span></div>`;
+      if (T.dropoffLegalDesc) h += `<div class="row"${ls}><span class="row-label">Drop-off Legal</span><span class="row-value">NENE 30-151N-99W</span></div>`;
+      return h;
+    },
+
+    invoice: () => T.invoiceNumber ? '<div class="row"><span class="row-label">Invoice #</span><span class="row-value">LG-1042</span></div>' : '',
+
+    measurements: () => {
+      const boxes: string[] = [];
+      if (T.jobType) boxes.push('<div class="split-box"><div class="split-label">TYPE</div><div class="split-value">PW</div></div>');
+      if (T.quantity) boxes.push('<div class="split-box"><div class="split-label">QTY</div><div class="split-value">130</div></div>');
+      if (T.tankTop) boxes.push('<div class="split-box"><div class="split-label">TOP</div><div class="split-value">10\' 4"</div></div>');
+      if (T.tankBottom) boxes.push('<div class="split-box"><div class="split-label">BOTTOM</div><div class="split-value">3\' 8"</div></div>');
+      return boxes.length > 0 ? `<div class="split-section">${boxes.join('')}</div>` : '';
+    },
+
+    notes: () => T.notes ? '<div class="notes-section"><div class="notes-label">NOTES</div>Frac tank fill — load 2 of 3</div>' : '',
+
+    time: () => {
+      const boxes: string[] = [];
+      if (T.startTime) boxes.push('<div class="split-box"><div class="split-label">START</div><div class="split-value">12:17</div></div>');
+      if (T.stopTime) boxes.push('<div class="split-box"><div class="split-label">STOP</div><div class="split-value">14:18</div></div>');
+      if (T.hours) boxes.push('<div class="split-box"><div class="split-label">HOURS</div><div class="split-value">2.0</div></div>');
+      return boxes.length > 0 ? `<div class="split-section">${boxes.join('')}</div>` : '';
+    },
+
+    timeline: () => {
+      if (!T.timelineStamps) return '';
+      return `<div style="margin:6px 0;padding:6px 0;border-top:1px dotted #666;">
+        <div style="font-size:9px;font-weight:bold;color:#444;margin-bottom:3px;">TIMELINE</div>
+        <div style="font-size:9px;color:#333;line-height:1.6;">
+          <div>Departed 12:17 PM</div><div>Arrival 12:42 PM</div>
+          <div>Departure 1:21 PM</div><div>Arrival (SWD) 1:55 PM</div>
+        </div>
+      </div>`;
+    },
+
+    driver: () => {
+      let h = '';
+      const ds = rowStyle('driver');
+      if (T.driverName) h += `<div class="row"${ds}><span class="row-label">Driver</span><span class="row-value">John Smith</span></div>`;
+      if (T.truckNumber) h += `<div class="row"${ds}><span class="row-label">Truck #</span><span class="row-value">LG-134</span></div>`;
+      if (T.trailerNumber) h += `<div class="row"${ds}><span class="row-label">Trailer #</span><span class="row-value">T-22</span></div>`;
+      return h;
+    },
+
+    signatures: () => {
+      if (!T.driverSignature && !T.receiverSignature) return '';
+      return `<div class="footer">
+        ${T.driverSignature ? '<div class="sig-block"><div class="sig-line-blank">Driver Signature</div></div>' : ''}
+        ${T.receiverSignature ? '<div class="sig-block"><div class="sig-line-blank">Receiver Signature</div></div>' : ''}
+      </div>`;
+    },
+  };
+
+  const bodyHtml = order
+    .map(id => sectionBuilders[id]?.() || '')
+    .join('\n');
+
   return `<html>
 <head>
   <style>
@@ -45,56 +177,7 @@ function buildPreviewHtml(T: TicketTemplate): string {
   </style>
 </head>
 <body>
-  ${T.companyLogo || T.companyAddress ? `<div class="header-top">
-    ${T.companyLogo ? '<div style="width:60px;height:40px;background:#ddd;display:flex;align-items:center;justify-content:center;font-size:8px;color:#666;border-radius:4px;">LOGO</div>' : ''}
-    ${T.companyAddress ? '<div class="addr-block">P.O. Box 4447<br/>Williston, ND 58801<br/>(701) 555-0123</div>' : ''}
-  </div>` : ''}
-
-  ${T.companyName ? '<div class="company-name">SAMPLE TRUCKING LLC</div><div class="company-divider"></div>' : ''}
-
-  <div class="ticket-title">WATER TICKET</div>
-
-  <div class="ticket-meta">
-    ${T.ticketNumber ? '<span># 11305</span>' : '<span></span>'}
-    <span>${T.ticketDate ? '03/03/2026' : ''}${T.timeGauged ? '  1:21 PM' : ''}</span>
-  </div>
-
-  ${T.pickupCompany ? '<div class="row"><span class="row-label">Company</span><span class="row-value">Slawson Exploration</span></div>' : ''}
-  ${T.pickupLocation ? '<div class="row"><span class="row-label">Pickup Location</span><span class="row-value">ATLAS 1-16-21H</span></div>' : ''}
-  ${T.pickupApiNo ? '<div class="row"><span class="row-label">API #</span><span class="row-value">33-105-03422</span></div>' : ''}
-  ${T.pickupGps ? '<div class="row"><span class="row-label">GPS</span><span class="row-value">48.1234, -103.5678</span></div>' : ''}
-  ${T.pickupLegalDesc ? '<div class="row"><span class="row-label">Legal</span><span class="row-value">NWSW 16-152N-99W</span></div>' : ''}
-  ${T.pickupCounty ? '<div class="row"><span class="row-label">County</span><span class="row-value">Williams</span></div>' : ''}
-  ${T.dropoffLocation ? '<div class="row"><span class="row-label">Drop-off Location</span><span class="row-value">HYDRO CLEAR SWD</span></div>' : ''}
-  ${T.dropoffApiNo ? '<div class="row"><span class="row-label">Drop-off API #</span><span class="row-value">33-053-05201</span></div>' : ''}
-  ${T.dropoffGps ? '<div class="row"><span class="row-label">Drop-off GPS</span><span class="row-value">47.9501, -103.3366</span></div>' : ''}
-  ${T.dropoffCounty ? '<div class="row"><span class="row-label">Drop-off County</span><span class="row-value">McKenzie</span></div>' : ''}
-  ${T.dropoffLegalDesc ? '<div class="row"><span class="row-label">Drop-off Legal</span><span class="row-value">NENE 30-151N-99W</span></div>' : ''}
-  ${T.invoiceNumber ? '<div class="row"><span class="row-label">Invoice #</span><span class="row-value">LG-1042</span></div>' : ''}
-
-  ${T.jobType || T.quantity || T.tankTop || T.tankBottom ? `<div class="split-section">
-    ${T.jobType ? '<div class="split-box"><div class="split-label">TYPE</div><div class="split-value">PW</div></div>' : ''}
-    ${T.quantity ? '<div class="split-box"><div class="split-label">QTY</div><div class="split-value">130</div></div>' : ''}
-    ${T.tankTop ? '<div class="split-box"><div class="split-label">TOP</div><div class="split-value">10\' 4"</div></div>' : ''}
-    ${T.tankBottom ? '<div class="split-box"><div class="split-label">BOTTOM</div><div class="split-value">3\' 8"</div></div>' : ''}
-  </div>` : ''}
-
-  ${T.notes ? '<div class="notes-section"><div class="notes-label">NOTES</div>Frac tank fill — load 2 of 3</div>' : ''}
-
-  ${T.startTime || T.stopTime || T.hours ? `<div class="split-section">
-    ${T.startTime ? '<div class="split-box"><div class="split-label">START</div><div class="split-value">12:17</div></div>' : ''}
-    ${T.stopTime ? '<div class="split-box"><div class="split-label">STOP</div><div class="split-value">14:18</div></div>' : ''}
-    ${T.hours ? '<div class="split-box"><div class="split-label">HOURS</div><div class="split-value">2.0</div></div>' : ''}
-  </div>` : ''}
-
-  ${T.driverName ? '<div class="row"><span class="row-label">Driver</span><span class="row-value">John Smith</span></div>' : ''}
-  ${T.truckNumber ? '<div class="row"><span class="row-label">Truck #</span><span class="row-value">LG-134</span></div>' : ''}
-  ${T.trailerNumber ? '<div class="row"><span class="row-label">Trailer #</span><span class="row-value">T-22</span></div>' : ''}
-
-  ${T.driverSignature || T.receiverSignature ? `<div class="footer">
-    ${T.driverSignature ? '<div class="sig-block"><div class="sig-line-blank">Driver Signature</div></div>' : ''}
-    ${T.receiverSignature ? '<div class="sig-block"><div class="sig-line-blank">Receiver Signature</div></div>' : ''}
-  </div>` : ''}
+  ${bodyHtml}
 </body>
 </html>`;
 }
@@ -113,11 +196,57 @@ const GROUP_COLORS: Record<string, string> = {
   red: 'border-red-500/40 bg-red-900/20 text-red-400',
 };
 
+const GROUP_BORDER_COLORS: Record<string, string> = {
+  yellow: 'border-l-yellow-500',
+  green: 'border-l-green-500',
+  blue: 'border-l-blue-500',
+  purple: 'border-l-purple-500',
+  orange: 'border-l-orange-500',
+  gray: 'border-l-gray-500',
+  cyan: 'border-l-cyan-500',
+  indigo: 'border-l-indigo-500',
+  red: 'border-l-red-500',
+};
+
+// ── Size picker component ────────────────────────────────────────────────────
+
+function SizePicker({ value, onChange, label }: { value: FieldSize; onChange: (s: FieldSize) => void; label?: string }) {
+  const opts: { key: FieldSize; lbl: string }[] = [
+    { key: 'normal', lbl: 'N' },
+    { key: 'small', lbl: 'S' },
+    { key: 'tiny', lbl: 'T' },
+  ];
+  return (
+    <div className="flex items-center gap-1">
+      {label && <span className="text-[10px] text-gray-500 mr-0.5">{label}</span>}
+      <div className="flex gap-0.5">
+        {opts.map(o => (
+          <button
+            key={o.key}
+            onClick={() => onChange(o.key)}
+            className={`text-[10px] px-1.5 py-0.5 rounded ${
+              value === o.key
+                ? 'bg-purple-600 text-white'
+                : 'bg-gray-600 text-gray-400 hover:text-white'
+            }`}
+            title={o.key === 'normal' ? 'Normal' : o.key === 'small' ? 'Small' : 'Tiny'}
+          >
+            {o.lbl}
+          </button>
+        ))}
+      </div>
+    </div>
+  );
+}
+
 // ── Component ────────────────────────────────────────────────────────────────
 
 export function TicketTemplateCard({ company, onSave }: Props) {
-  const [editTarget, setEditTarget] = useState<string | null>(null); // operator name or '_default'
+  const [editTarget, setEditTarget] = useState<string | null>(null);
   const [template, setTemplate] = useState<TicketTemplate>({ ...DEFAULT_TICKET_TEMPLATE });
+  const [fieldSizes, setFieldSizes] = useState<Record<string, FieldSize>>({ ...DEFAULT_FIELD_SIZES });
+  const [groupOrder, setGroupOrder] = useState<string[]>([...DEFAULT_GROUP_ORDER]);
+  const [reorderMode, setReorderMode] = useState(false);
   const [saving, setSaving] = useState(false);
 
   const operators = company.assignedOperators || [];
@@ -125,6 +254,9 @@ export function TicketTemplateCard({ company, onSave }: Props) {
   const openEditor = (target: string) => {
     const existing = company.ticketTemplates?.[target];
     setTemplate(existing ? { ...existing } : { ...DEFAULT_TICKET_TEMPLATE });
+    setFieldSizes(existing?.fieldSizes ? { ...DEFAULT_FIELD_SIZES, ...(existing.fieldSizes as Record<string, FieldSize>) } : { ...DEFAULT_FIELD_SIZES });
+    setGroupOrder(existing?.groupOrder ? [...existing.groupOrder] : [...DEFAULT_GROUP_ORDER]);
+    setReorderMode(false);
     setEditTarget(target);
   };
 
@@ -138,15 +270,33 @@ export function TicketTemplateCard({ company, onSave }: Props) {
     setTemplate(prev => {
       const next = { ...prev };
       group.fields.forEach(f => {
-        if (!f.required) next[f.key] = value;
+        if (!f.required) (next as any)[f.key] = value;
       });
+      return next;
+    });
+  };
+
+  const setGroupSize = (groupId: string, size: FieldSize) => {
+    setFieldSizes(prev => ({ ...prev, [groupId]: size }));
+  };
+
+  const moveGroup = (index: number, dir: -1 | 1) => {
+    const newIdx = index + dir;
+    if (newIdx < 0 || newIdx >= groupOrder.length) return;
+    setGroupOrder(prev => {
+      const next = [...prev];
+      [next[index], next[newIdx]] = [next[newIdx], next[index]];
       return next;
     });
   };
 
   const copyFromDefault = () => {
     const def = company.ticketTemplates?.['_default'];
-    if (def) setTemplate({ ...def });
+    if (def) {
+      setTemplate({ ...def });
+      setFieldSizes(def.fieldSizes ? { ...DEFAULT_FIELD_SIZES, ...(def.fieldSizes as Record<string, FieldSize>) } : { ...DEFAULT_FIELD_SIZES });
+      setGroupOrder(def.groupOrder ? [...def.groupOrder] : [...DEFAULT_GROUP_ORDER]);
+    }
   };
 
   const save = async () => {
@@ -154,7 +304,7 @@ export function TicketTemplateCard({ company, onSave }: Props) {
     setSaving(true);
     try {
       const updated = { ...(company.ticketTemplates || {}) };
-      updated[editTarget] = template;
+      updated[editTarget] = { ...template, fieldSizes, groupOrder };
       await updateCompanyFields(company.id, { ticketTemplates: updated });
       setEditTarget(null);
       onSave();
@@ -165,17 +315,19 @@ export function TicketTemplateCard({ company, onSave }: Props) {
     }
   };
 
+  // Build template with layout for preview
+  const templateWithLayout = useMemo(
+    () => ({ ...template, fieldSizes, groupOrder }),
+    [template, fieldSizes, groupOrder]
+  );
+
   const openPrintTest = () => {
-    const html = buildPreviewHtml(template);
+    const html = buildPreviewHtml(templateWithLayout);
     const win = window.open('', '_blank');
-    if (win) {
-      win.document.write(html);
-      win.document.close();
-    }
+    if (win) { win.document.write(html); win.document.close(); }
   };
 
-  // Live preview HTML
-  const previewHtml = useMemo(() => buildPreviewHtml(template), [template]);
+  const previewHtml = useMemo(() => buildPreviewHtml(templateWithLayout), [templateWithLayout]);
 
   const getTemplateStatus = (opName: string) => {
     if (company.ticketTemplates?.[opName]) return 'custom';
@@ -191,9 +343,15 @@ export function TicketTemplateCard({ company, onSave }: Props) {
     }
   };
 
-  // Count enabled fields
-  const enabledCount = Object.values(template).filter(Boolean).length;
-  const totalCount = Object.keys(template).length;
+  const enabledCount = Object.entries(template).filter(([k, v]) => typeof v === 'boolean' && v).length;
+  const totalBooleans = Object.entries(template).filter(([k, v]) => typeof v === 'boolean').length;
+
+  // Ordered groups for both checkbox grid and reorder view
+  const orderedGroups = useMemo(() => {
+    return groupOrder
+      .map(id => TEMPLATE_FIELD_GROUPS.find(g => g.id === id))
+      .filter(Boolean) as typeof TEMPLATE_FIELD_GROUPS;
+  }, [groupOrder]);
 
   return (
     <>
@@ -215,10 +373,7 @@ export function TicketTemplateCard({ company, onSave }: Props) {
           {operators.map(op => {
             const status = getTemplateStatus(op);
             return (
-              <div
-                key={op}
-                className="flex items-center justify-between px-3 py-2 bg-gray-700/30 rounded text-sm"
-              >
+              <div key={op} className="flex items-center justify-between px-3 py-2 bg-gray-700/30 rounded text-sm">
                 <div className="flex items-center gap-2 min-w-0">
                   <span className="text-gray-300 truncate">{op}</span>
                   {statusLabel(status)}
@@ -241,7 +396,19 @@ export function TicketTemplateCard({ company, onSave }: Props) {
           <div className="bg-gray-800 rounded-lg p-6 max-w-5xl w-full mx-4 max-h-[90vh] flex flex-col">
             <div className="flex items-center justify-between mb-1">
               <h3 className="text-white font-medium">Ticket Template</h3>
-              <span className="text-gray-500 text-xs">{enabledCount}/{totalCount} fields</span>
+              <div className="flex items-center gap-3">
+                <button
+                  onClick={() => setReorderMode(!reorderMode)}
+                  className={`px-2 py-0.5 text-xs rounded ${
+                    reorderMode
+                      ? 'bg-purple-600 text-white'
+                      : 'bg-gray-700 text-gray-400 hover:text-white'
+                  }`}
+                >
+                  {reorderMode ? 'Done Reordering' : 'Edit Order'}
+                </button>
+                <span className="text-gray-500 text-xs">{enabledCount}/{totalBooleans} fields</span>
+              </div>
             </div>
             <p className="text-gray-400 text-xs mb-4">
               {editTarget === '_default'
@@ -250,48 +417,111 @@ export function TicketTemplateCard({ company, onSave }: Props) {
             </p>
 
             <div className="flex gap-6 flex-1 min-h-0 overflow-hidden">
-              {/* Left: Checkbox Grid */}
+              {/* Left: Checkbox Grid or Reorder List */}
               <div className="flex-[3] overflow-y-auto pr-2 space-y-3">
-                {TEMPLATE_FIELD_GROUPS.map(group => {
-                  const allChecked = group.fields.every(f => template[f.key]);
-                  const noneChecked = group.fields.every(f => f.required || !template[f.key]);
-                  return (
-                    <div key={group.id} className="rounded overflow-hidden">
-                      <div className={`px-3 py-1.5 border-l-2 flex items-center justify-between ${GROUP_COLORS[group.color] || GROUP_COLORS.gray}`}>
-                        <span className="text-xs font-medium">{group.label}</span>
-                        <div className="flex gap-1">
-                          <button
-                            onClick={() => toggleGroup(group.id, true)}
-                            className={`text-xs px-1.5 py-0.5 rounded ${allChecked ? 'text-gray-600' : 'text-gray-400 hover:text-white'}`}
-                            disabled={allChecked}
-                          >All</button>
-                          <button
-                            onClick={() => toggleGroup(group.id, false)}
-                            className={`text-xs px-1.5 py-0.5 rounded ${noneChecked ? 'text-gray-600' : 'text-gray-400 hover:text-white'}`}
-                            disabled={noneChecked}
-                          >None</button>
+                {reorderMode ? (
+                  /* ── Reorder Mode ── */
+                  <>
+                    <p className="text-gray-500 text-xs mb-2">Drag sections up or down to change print order:</p>
+                    {orderedGroups.map((group, idx) => (
+                      <div
+                        key={group.id}
+                        className={`flex items-center gap-2 px-3 py-2 bg-gray-700/30 rounded border-l-2 ${GROUP_BORDER_COLORS[group.color] || 'border-l-gray-500'}`}
+                      >
+                        <span className="text-sm text-gray-300 flex-1">{group.label}</span>
+                        <button
+                          onClick={() => moveGroup(idx, -1)}
+                          disabled={idx === 0}
+                          className="text-gray-400 hover:text-white disabled:text-gray-700 px-1"
+                          title="Move up"
+                        >
+                          ▲
+                        </button>
+                        <button
+                          onClick={() => moveGroup(idx, 1)}
+                          disabled={idx === orderedGroups.length - 1}
+                          className="text-gray-400 hover:text-white disabled:text-gray-700 px-1"
+                          title="Move down"
+                        >
+                          ▼
+                        </button>
+                      </div>
+                    ))}
+                    <button
+                      onClick={() => setGroupOrder([...DEFAULT_GROUP_ORDER])}
+                      className="text-xs text-gray-500 hover:text-gray-300 mt-2"
+                    >
+                      Reset to default order
+                    </button>
+                  </>
+                ) : (
+                  /* ── Checkbox Grid ── */
+                  orderedGroups.map(group => {
+                    const allChecked = group.fields.every(f => (template as any)[f.key]);
+                    const noneChecked = group.fields.every(f => f.required || !(template as any)[f.key]);
+                    const hasLegal = LEGAL_SUBGROUPS[group.id];
+                    const legalKey = `${group.id}_legal`;
+
+                    return (
+                      <div key={group.id} className="rounded overflow-hidden">
+                        <div className={`px-3 py-1.5 border-l-2 flex items-center justify-between ${GROUP_COLORS[group.color] || GROUP_COLORS.gray}`}>
+                          <span className="text-xs font-medium">{group.label}</span>
+                          <div className="flex items-center gap-2">
+                            {/* Size picker(s) */}
+                            {hasLegal ? (
+                              <>
+                                <SizePicker
+                                  value={fieldSizes[group.id] || 'normal'}
+                                  onChange={s => setGroupSize(group.id, s)}
+                                  label="Primary"
+                                />
+                                <SizePicker
+                                  value={fieldSizes[legalKey] || 'small'}
+                                  onChange={s => setGroupSize(legalKey, s)}
+                                  label="Legal"
+                                />
+                              </>
+                            ) : (
+                              <SizePicker
+                                value={fieldSizes[group.id] || 'normal'}
+                                onChange={s => setGroupSize(group.id, s)}
+                              />
+                            )}
+                            <div className="flex gap-1 ml-1">
+                              <button
+                                onClick={() => toggleGroup(group.id, true)}
+                                className={`text-xs px-1.5 py-0.5 rounded ${allChecked ? 'text-gray-600' : 'text-gray-400 hover:text-white'}`}
+                                disabled={allChecked}
+                              >All</button>
+                              <button
+                                onClick={() => toggleGroup(group.id, false)}
+                                className={`text-xs px-1.5 py-0.5 rounded ${noneChecked ? 'text-gray-600' : 'text-gray-400 hover:text-white'}`}
+                                disabled={noneChecked}
+                              >None</button>
+                            </div>
+                          </div>
+                        </div>
+                        <div className="bg-gray-700/20 px-3 py-2 space-y-1">
+                          {group.fields.map(field => (
+                            <label key={field.key} className="flex items-center gap-2 cursor-pointer">
+                              <input
+                                type="checkbox"
+                                checked={(template as any)[field.key]}
+                                onChange={() => !field.required && toggleField(field.key)}
+                                disabled={field.required}
+                                className="rounded bg-gray-600 border-gray-500 text-purple-500 focus:ring-purple-500 focus:ring-offset-0 disabled:opacity-50"
+                              />
+                              <span className={`text-sm ${field.required ? 'text-gray-400' : 'text-gray-300'}`}>
+                                {field.label}
+                                {field.required && <span className="text-gray-600 text-xs ml-1">(required)</span>}
+                              </span>
+                            </label>
+                          ))}
                         </div>
                       </div>
-                      <div className="bg-gray-700/20 px-3 py-2 space-y-1">
-                        {group.fields.map(field => (
-                          <label key={field.key} className="flex items-center gap-2 cursor-pointer">
-                            <input
-                              type="checkbox"
-                              checked={template[field.key]}
-                              onChange={() => !field.required && toggleField(field.key)}
-                              disabled={field.required}
-                              className="rounded bg-gray-600 border-gray-500 text-purple-500 focus:ring-purple-500 focus:ring-offset-0 disabled:opacity-50"
-                            />
-                            <span className={`text-sm ${field.required ? 'text-gray-400' : 'text-gray-300'}`}>
-                              {field.label}
-                              {field.required && <span className="text-gray-600 text-xs ml-1">(required)</span>}
-                            </span>
-                          </label>
-                        ))}
-                      </div>
-                    </div>
-                  );
-                })}
+                    );
+                  })
+                )}
               </div>
 
               {/* Right: Live Preview */}
@@ -301,12 +531,7 @@ export function TicketTemplateCard({ company, onSave }: Props) {
                   <iframe
                     srcDoc={previewHtml}
                     className="absolute top-0 left-0 border-0"
-                    style={{
-                      width: '384px',
-                      height: '720px',
-                      transform: 'scale(0.48)',
-                      transformOrigin: 'top left',
-                    }}
+                    style={{ width: '384px', height: '720px', transform: 'scale(0.48)', transformOrigin: 'top left' }}
                     title="Ticket preview"
                   />
                 </div>
@@ -322,15 +547,16 @@ export function TicketTemplateCard({ company, onSave }: Props) {
             {/* Footer Actions */}
             <div className="flex gap-2 mt-4 pt-4 border-t border-gray-700">
               {editTarget !== '_default' && company.ticketTemplates?.['_default'] && (
-                <button
-                  onClick={copyFromDefault}
-                  className="px-3 py-2 text-xs rounded bg-gray-700 hover:bg-gray-600 text-gray-300"
-                >
+                <button onClick={copyFromDefault} className="px-3 py-2 text-xs rounded bg-gray-700 hover:bg-gray-600 text-gray-300">
                   Copy from Default
                 </button>
               )}
               <button
-                onClick={() => setTemplate({ ...DEFAULT_TICKET_TEMPLATE })}
+                onClick={() => {
+                  setTemplate({ ...DEFAULT_TICKET_TEMPLATE });
+                  setFieldSizes({ ...DEFAULT_FIELD_SIZES });
+                  setGroupOrder([...DEFAULT_GROUP_ORDER]);
+                }}
                 className="px-3 py-2 text-xs rounded bg-gray-700 hover:bg-gray-600 text-gray-300"
               >
                 Reset All

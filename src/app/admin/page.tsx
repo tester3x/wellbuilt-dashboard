@@ -786,7 +786,7 @@ export default function AdminPage() {
                   className="w-1/3 px-3 py-1 bg-gray-700 text-white rounded text-sm"
                 />
               </div>
-              <div className="space-y-2 max-h-96 overflow-y-auto">
+              <div className="space-y-2 overflow-y-auto" style={{ maxHeight: 'calc(100vh - 220px)' }}>
                 {routes
                   .filter(route => route.toLowerCase().includes(routeSearch.toLowerCase()))
                   .map(route => (
@@ -899,7 +899,7 @@ export default function AdminPage() {
                   className="w-1/3 px-3 py-1 bg-gray-700 text-white rounded text-sm"
                 />
               </div>
-              <div className="space-y-2 max-h-96 overflow-y-auto">
+              <div className="space-y-2 overflow-y-auto" style={{ maxHeight: 'calc(100vh - 220px)' }}>
                 {Object.keys(configs)
                   .filter(wellName => wellName.toLowerCase().includes(wellSearch.toLowerCase()))
                   .sort()
