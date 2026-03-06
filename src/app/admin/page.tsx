@@ -20,6 +20,7 @@ import {
 import { DriversTab } from '@/components/admin/DriversTab';
 import { CompaniesTab } from '@/components/admin/CompaniesTab';
 import RouteManager from '@/components/admin/RouteManager';
+import GpsRoutesTab from '@/components/admin/GpsRoutesTab';
 
 interface WellConfig {
   route?: string;
@@ -85,13 +86,13 @@ export default function AdminPage() {
   const [editNdicApiNo, setEditNdicApiNo] = useState('');
 
   const [message, setMessage] = useState('');
-  const [activeTab, setActiveTab] = useState<'routes' | 'wells' | 'drivers' | 'companies'>('wells');
+  const [activeTab, setActiveTab] = useState<'routes' | 'wells' | 'drivers' | 'companies' | 'gpsroutes'>('wells');
 
   // Read ?tab= from URL to deep-link into specific admin section (e.g. from pulsing Admin badge)
   useEffect(() => {
     const params = new URLSearchParams(window.location.search);
     const tab = params.get('tab');
-    const validTabs = ['routes', 'wells', 'drivers', 'companies'];
+    const validTabs = ['routes', 'wells', 'drivers', 'companies', 'gpsroutes'];
     if (tab && validTabs.includes(tab)) {
       setActiveTab(tab as any);
     }
@@ -737,7 +738,8 @@ export default function AdminPage() {
         {/* Section Title */}
         <h2 className="text-xl font-bold text-white mb-3">
           {activeTab === 'wells' ? 'Well Configuration' :
-           activeTab === 'routes' ? 'Route Management' :
+           activeTab === 'routes' ? 'Route Groups' :
+           activeTab === 'gpsroutes' ? 'GPS Route Recording' :
            activeTab === 'drivers' ? 'Driver Management' :
            'Company Management'}
         </h2>
@@ -754,7 +756,13 @@ export default function AdminPage() {
             onClick={() => setActiveTab('routes')}
             className={`px-4 py-2 rounded ${activeTab === 'routes' ? 'bg-blue-600 text-white' : 'bg-gray-700 text-gray-300'}`}
           >
-            Routes
+            Route Groups
+          </button>
+          <button
+            onClick={() => setActiveTab('gpsroutes')}
+            className={`px-4 py-2 rounded ${activeTab === 'gpsroutes' ? 'bg-cyan-600 text-white' : 'bg-gray-700 text-gray-300'}`}
+          >
+            GPS Routes
           </button>
           <div className="w-px bg-gray-600 mx-1 self-stretch" />
           <button
@@ -1417,6 +1425,11 @@ export default function AdminPage() {
               </div>
             </div>
           </div>
+        )}
+
+        {/* GPS Routes Tab */}
+        {activeTab === 'gpsroutes' && (
+          <GpsRoutesTab />
         )}
 
         {/* Drivers Tab */}

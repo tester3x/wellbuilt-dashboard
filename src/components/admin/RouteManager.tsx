@@ -85,15 +85,222 @@ function formatDate(ts: Timestamp | null): string {
   });
 }
 
+// SVG route preview — renders waypoints as a polyline scaled to fit
+function RoutePreview({ waypoints, width = 700, height = 400, highlightColor = '#22d3ee' }: {
+  waypoints: Array<{ lat: number; lng: number }>;
+  width?: number;
+  height?: number;
+  highlightColor?: string;
+}) {
+  if (waypoints.length < 2) return <div className="text-gray-500 text-sm">Not enough points to display</div>;
+
+  const padding = 40;
+  const lats = waypoints.map(w => w.lat);
+  const lngs = waypoints.map(w => w.lng);
+  const minLat = Math.min(...lats), maxLat = Math.max(...lats);
+  const minLng = Math.min(...lngs), maxLng = Math.max(...lngs);
+  const latRange = maxLat - minLat || 0.001;
+  const lngRange = maxLng - minLng || 0.001;
+
+  const scaleX = (width - padding * 2) / lngRange;
+  const scaleY = (height - padding * 2) / latRange;
+  const scale = Math.min(scaleX, scaleY);
+  const offsetX = (width - lngRange * scale) / 2;
+  const offsetY = (height - latRange * scale) / 2;
+
+  const toX = (lng: number) => offsetX + (lng - minLng) * scale;
+  const toY = (lat: number) => height - offsetY - (lat - minLat) * scale;
+
+  const points = waypoints.map(w => `${toX(w.lng).toFixed(1)},${toY(w.lat).toFixed(1)}`).join(' ');
+  const start = waypoints[0];
+  const end = waypoints[waypoints.length - 1];
+
+  return (
+    <svg width="100%" viewBox={`0 0 ${width} ${height}`} className="bg-gray-950 rounded-lg border border-gray-700">
+      {/* Route line */}
+      <polyline
+        points={points}
+        fill="none"
+        stroke={highlightColor}
+        strokeWidth="3"
+        strokeLinecap="round"
+        strokeLinejoin="round"
+        opacity="0.9"
+      />
+      {/* Waypoint dots */}
+      {waypoints.map((w, i) => (
+        <circle key={i} cx={toX(w.lng)} cy={toY(w.lat)} r="4" fill={highlightColor} opacity="0.5" />
+      ))}
+      {/* Start marker (green) */}
+      <circle cx={toX(start.lng)} cy={toY(start.lat)} r="8" fill="#22c55e" stroke="#fff" strokeWidth="2" />
+      <text x={toX(start.lng) + 14} y={toY(start.lat) + 5} fill="#22c55e" fontSize="13" fontWeight="bold">Start</text>
+      {/* End marker (red/orange) */}
+      <circle cx={toX(end.lng)} cy={toY(end.lat)} r="8" fill="#ef4444" stroke="#fff" strokeWidth="2" />
+      <text x={toX(end.lng) + 14} y={toY(end.lat) + 5} fill="#ef4444" fontSize="13" fontWeight="bold">Well</text>
+      {/* Waypoint count */}
+      <text x="10" y="18" fill="#666" fontSize="11">{waypoints.length} waypoints</text>
+    </svg>
+  );
+}
+
+// ── Route Viewer Modal ──
+function RouteViewerModal({
+  title,
+  waypoints,
+  trip,
+  approvedRoute,
+  highlightColor = '#22d3ee',
+  onClose,
+  onApprove,
+  saving,
+}: {
+  title: string;
+  waypoints: Array<{ lat: number; lng: number }>;
+  trip?: RouteTripDoc;
+  approvedRoute?: ApprovedRoute;
+  highlightColor?: string;
+  onClose: () => void;
+  onApprove?: (trimStart: number, trimEnd: number, label: string) => void;
+  saving?: boolean;
+}) {
+  const [trimStart, setTrimStart] = useState(0);
+  const [trimEnd, setTrimEnd] = useState(0);
+  const [labelInput, setLabelInput] = useState('');
+
+  const totalPts = waypoints.length;
+  const trimmedWps = waypoints.slice(trimStart, totalPts - trimEnd || undefined);
+  const canTrim = totalPts > 4;
+  const maxTrim = Math.floor(totalPts / 3);
+
+  // Build Google Maps URL with origin (start of route) so direction is correct
+  const start = trimmedWps[0];
+  const end = trimmedWps[trimmedWps.length - 1];
+  const middleWps = trimmedWps.length > 2
+    ? simplifyRoute(trimmedWps.slice(1, -1), 23)
+    : [];
+  const wpParam = middleWps.length > 0
+    ? `&waypoints=${middleWps.map(w => `${w.lat},${w.lng}`).join('|')}`
+    : '';
+  const mapsUrl = start && end
+    ? `https://www.google.com/maps/dir/?api=1&origin=${start.lat},${start.lng}&destination=${end.lat},${end.lng}${wpParam}&travelmode=driving`
+    : '#';
+
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/70" onClick={onClose}>
+      <div
+        className="bg-gray-900 rounded-xl border border-gray-700 shadow-2xl w-full max-w-3xl mx-4 max-h-[90vh] overflow-y-auto"
+        onClick={(e) => e.stopPropagation()}
+      >
+        {/* Header */}
+        <div className="flex items-center justify-between p-4 border-b border-gray-700">
+          <div>
+            <h3 className="text-lg font-semibold text-white">{title}</h3>
+            {trip && (
+              <div className="text-sm text-gray-400 mt-1">
+                {trip.driverName} &middot; {formatDate(trip.recordedAt)} &middot; {metersToMiles(trip.totalDistanceMeters)} mi &middot; {Math.round(trip.durationMinutes)} min
+              </div>
+            )}
+            {approvedRoute && (
+              <div className="text-sm text-gray-400 mt-1">
+                {approvedRoute.sourceDriverName} &middot; {metersToMiles(approvedRoute.totalDistanceMeters)} mi &middot; {Math.round(approvedRoute.durationMinutes)} min &middot; {approvedRoute.waypoints.length} simplified waypoints
+              </div>
+            )}
+          </div>
+          <button onClick={onClose} className="text-gray-400 hover:text-white text-2xl leading-none px-2">&times;</button>
+        </div>
+
+        {/* Map */}
+        <div className="p-4">
+          <RoutePreview waypoints={trimmedWps} highlightColor={highlightColor} />
+        </div>
+
+        {/* Trim controls (trips only) */}
+        {canTrim && onApprove && (
+          <div className="px-4 pb-2 space-y-2">
+            <div className="text-xs text-gray-500 uppercase tracking-wider">Trim Route</div>
+            <div className="flex items-center gap-3 text-sm">
+              <span className="text-gray-400 w-24">Trim start:</span>
+              <input
+                type="range"
+                min={0}
+                max={maxTrim}
+                value={trimStart}
+                onChange={(e) => setTrimStart(Number(e.target.value))}
+                className="flex-1 accent-cyan-500"
+              />
+              <span className="text-gray-500 w-20 text-right font-mono">
+                {trimStart > 0 ? `−${trimStart} pts` : 'none'}
+              </span>
+            </div>
+            <div className="flex items-center gap-3 text-sm">
+              <span className="text-gray-400 w-24">Trim end:</span>
+              <input
+                type="range"
+                min={0}
+                max={maxTrim}
+                value={trimEnd}
+                onChange={(e) => setTrimEnd(Number(e.target.value))}
+                className="flex-1 accent-cyan-500"
+              />
+              <span className="text-gray-500 w-20 text-right font-mono">
+                {trimEnd > 0 ? `−${trimEnd} pts` : 'none'}
+              </span>
+            </div>
+          </div>
+        )}
+
+        {/* Actions */}
+        <div className="p-4 border-t border-gray-700 flex items-center gap-3">
+          <a
+            href={mapsUrl}
+            target="_blank"
+            rel="noopener noreferrer"
+            className="px-4 py-2 bg-cyan-800 hover:bg-cyan-700 text-cyan-200 text-sm rounded-lg"
+          >
+            Open in Google Maps
+          </a>
+          {onApprove && (
+            <>
+              <input
+                type="text"
+                value={labelInput}
+                onChange={(e) => setLabelInput(e.target.value)}
+                placeholder="Route label (e.g., From Watford)"
+                className="flex-1 px-3 py-2 bg-gray-800 text-white rounded-lg text-sm border border-gray-600 focus:border-cyan-500 outline-none"
+                onKeyDown={(e) => {
+                  if (e.key === 'Enter') onApprove(trimStart, trimEnd, labelInput);
+                }}
+              />
+              <button
+                onClick={() => onApprove(trimStart, trimEnd, labelInput)}
+                disabled={saving}
+                className="px-4 py-2 bg-green-700 hover:bg-green-600 text-white text-sm rounded-lg font-medium whitespace-nowrap"
+              >
+                {saving ? 'Saving...' : 'Approve Route'}
+              </button>
+            </>
+          )}
+          <button
+            onClick={onClose}
+            className="px-4 py-2 bg-gray-700 hover:bg-gray-600 text-white text-sm rounded-lg"
+          >
+            Close
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 export default function RouteManager({ wellName }: RouteManagerProps) {
   const [trips, setTrips] = useState<RouteTripDoc[]>([]);
   const [overrideDoc, setOverrideDoc] = useState<RouteOverrideDoc | null>(null);
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [message, setMessage] = useState('');
-  const [showLabelFor, setShowLabelFor] = useState<string | null>(null); // tripId being labeled
-  const [labelInput, setLabelInput] = useState('');
   const [copiedRouteId, setCopiedRouteId] = useState<string | null>(null);
+  const [modalTrip, setModalTrip] = useState<RouteTripDoc | null>(null);
+  const [modalRoute, setModalRoute] = useState<ApprovedRoute | null>(null);
 
   const slug = wellSlug(wellName);
   const approvedRoutes = overrideDoc?.approvedRoutes || [];
@@ -120,10 +327,9 @@ export default function RouteManager({ wellName }: RouteManagerProps) {
       if (overrideSnap.exists()) {
         const data = overrideSnap.data();
         if (data.approvedRoutes && data.approvedRoutes.length > 0) {
-          // New multi-route format
           setOverrideDoc(data as RouteOverrideDoc);
         } else if (data.active && data.waypoints) {
-          // Legacy single-route format — wrap into approvedRoutes[0]
+          // Legacy single-route format
           setOverrideDoc({
             wellName: data.wellName,
             approvedRoutes: [{
@@ -159,23 +365,26 @@ export default function RouteManager({ wellName }: RouteManagerProps) {
     loadData();
   }, [loadData]);
 
-  const handleApproveRoute = async (trip: RouteTripDoc, label?: string) => {
+  const handleApproveRoute = async (trip: RouteTripDoc, trimStart: number, trimEnd: number, label: string) => {
     setSaving(true);
     setMessage('');
     try {
       const db = getFirestoreDb();
-      const rawPoints = trip.waypoints.map(w => ({ lat: w.lat, lng: w.lng }));
+      const trimmedWps = trip.waypoints.slice(trimStart, trip.waypoints.length - trimEnd || undefined);
+      const rawPoints = trimmedWps.map(w => ({ lat: w.lat, lng: w.lng }));
       const simplified = simplifyRoute(rawPoints, 23);
+      const actualStart = trimmedWps[0] || trip.waypoints[0];
+      const actualEnd = trimmedWps[trimmedWps.length - 1] || trip.waypoints[trip.waypoints.length - 1];
 
       const newRoute: ApprovedRoute = {
         routeId: generateRouteId(),
         label: label?.trim() || undefined,
         waypoints: simplified,
         fullWaypoints: rawPoints,
-        startLat: trip.startLat,
-        startLng: trip.startLng,
-        endLat: trip.endLat,
-        endLng: trip.endLng,
+        startLat: actualStart.lat,
+        startLng: actualStart.lng,
+        endLat: actualEnd.lat,
+        endLng: actualEnd.lng,
         sourceTripId: trip.id,
         sourceDriverName: trip.driverName,
         totalDistanceMeters: trip.totalDistanceMeters,
@@ -189,8 +398,7 @@ export default function RouteManager({ wellName }: RouteManagerProps) {
 
       await setDoc(doc(db, 'route_overrides', slug), newDoc);
       setOverrideDoc(newDoc);
-      setShowLabelFor(null);
-      setLabelInput('');
+      setModalTrip(null);
       setMessage(`Route approved! ${rawPoints.length} pts → ${simplified.length} waypoints. ${updated.length} route(s) total.`);
     } catch (err: any) {
       console.error('[RouteManager] Failed to save:', err);
@@ -234,7 +442,6 @@ export default function RouteManager({ wellName }: RouteManagerProps) {
     try {
       await navigator.clipboard.writeText(url);
     } catch {
-      // Fallback for older browsers
       const ta = document.createElement('textarea');
       ta.value = url;
       document.body.appendChild(ta);
@@ -306,11 +513,17 @@ export default function RouteManager({ wellName }: RouteManagerProps) {
                 </div>
                 <div className="flex items-center gap-1 ml-2">
                   <button
+                    onClick={() => setModalRoute(route)}
+                    className="px-2 py-1 bg-gray-600 hover:bg-gray-500 text-white text-xs rounded whitespace-nowrap"
+                  >
+                    View
+                  </button>
+                  <button
                     onClick={() => handleCopyLink(route)}
                     className="px-2 py-1 bg-cyan-800 hover:bg-cyan-700 text-cyan-200 text-xs rounded whitespace-nowrap"
                     title="Copy Google Maps link to clipboard"
                   >
-                    {copiedRouteId === route.routeId ? '✓ Copied!' : '📋 Copy Link'}
+                    {copiedRouteId === route.routeId ? '✓ Copied!' : 'Copy Link'}
                   </button>
                   <button
                     onClick={() => handleRemoveRoute(route.routeId)}
@@ -356,50 +569,24 @@ export default function RouteManager({ wellName }: RouteManagerProps) {
                         {metersToMiles(trip.totalDistanceMeters)} mi · {Math.round(trip.durationMinutes)} min
                       </div>
                     </div>
-                    {!isApproved && showLabelFor !== trip.id && (
+                    <div className="flex items-center gap-1 ml-2">
                       <button
-                        onClick={() => {
-                          setShowLabelFor(trip.id);
-                          setLabelInput('');
-                        }}
-                        disabled={saving}
-                        className="px-2 py-1 bg-blue-700 hover:bg-blue-600 text-white text-xs rounded ml-2 whitespace-nowrap"
+                        onClick={() => setModalTrip(trip)}
+                        className="px-2 py-1 bg-gray-600 hover:bg-gray-500 text-white text-xs rounded whitespace-nowrap"
                       >
-                        Approve
+                        View
                       </button>
-                    )}
-                  </div>
-
-                  {/* Inline label input */}
-                  {showLabelFor === trip.id && (
-                    <div className="flex items-center gap-2 mt-2 pt-2 border-t border-gray-700">
-                      <input
-                        type="text"
-                        value={labelInput}
-                        onChange={(e) => setLabelInput(e.target.value)}
-                        placeholder="Label (e.g., From Watford)"
-                        className="flex-1 px-2 py-1 bg-gray-700 text-white rounded text-xs"
-                        autoFocus
-                        onKeyDown={(e) => {
-                          if (e.key === 'Enter') handleApproveRoute(trip, labelInput);
-                          if (e.key === 'Escape') setShowLabelFor(null);
-                        }}
-                      />
-                      <button
-                        onClick={() => handleApproveRoute(trip, labelInput)}
-                        disabled={saving}
-                        className="px-2 py-1 bg-green-700 hover:bg-green-600 text-white text-xs rounded whitespace-nowrap"
-                      >
-                        {saving ? '...' : 'Save'}
-                      </button>
-                      <button
-                        onClick={() => setShowLabelFor(null)}
-                        className="px-2 py-1 bg-gray-600 hover:bg-gray-500 text-white text-xs rounded"
-                      >
-                        Cancel
-                      </button>
+                      {!isApproved && (
+                        <button
+                          onClick={() => setModalTrip(trip)}
+                          disabled={saving}
+                          className="px-2 py-1 bg-blue-700 hover:bg-blue-600 text-white text-xs rounded whitespace-nowrap"
+                        >
+                          Approve
+                        </button>
+                      )}
                     </div>
-                  )}
+                  </div>
                 </div>
               );
             })}
@@ -415,6 +602,32 @@ export default function RouteManager({ wellName }: RouteManagerProps) {
 
       {message && (
         <div className="text-xs text-cyan-400 mt-2">{message}</div>
+      )}
+
+      {/* Trip Viewer Modal */}
+      {modalTrip && (
+        <RouteViewerModal
+          title={`Route to ${wellName}`}
+          waypoints={modalTrip.waypoints.map(w => ({ lat: w.lat, lng: w.lng }))}
+          trip={modalTrip}
+          highlightColor="#22d3ee"
+          onClose={() => setModalTrip(null)}
+          onApprove={approvedTripIds.has(modalTrip.id) ? undefined : (ts, te, label) => {
+            handleApproveRoute(modalTrip, ts, te, label);
+          }}
+          saving={saving}
+        />
+      )}
+
+      {/* Approved Route Viewer Modal */}
+      {modalRoute && (
+        <RouteViewerModal
+          title={modalRoute.label || `Route to ${wellName}`}
+          waypoints={modalRoute.fullWaypoints.length > 0 ? modalRoute.fullWaypoints : modalRoute.waypoints}
+          approvedRoute={modalRoute}
+          highlightColor="#22c55e"
+          onClose={() => setModalRoute(null)}
+        />
       )}
     </div>
   );
