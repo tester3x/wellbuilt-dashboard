@@ -321,6 +321,9 @@ export interface CompanyConfig {
   requiredApps?: string[];
   transferRequiresApproval?: boolean;
   ticketTemplates?: Record<string, TicketTemplate>;
+  // Well monitoring — true = company uses WB M for flow rate/level tracking
+  // false/undefined = WB T only, no RTDB packet sync
+  wellMonitoring?: boolean;
 }
 
 // Must match WB T's COMMODITY_TYPES + HOURLY_COMMODITY_TYPES in utils/constants.ts

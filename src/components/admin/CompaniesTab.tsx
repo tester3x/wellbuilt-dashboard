@@ -44,6 +44,7 @@ export function CompaniesTab({ scopeCompanyId, isWbAdmin = false }: CompaniesTab
   const [formPhone, setFormPhone] = useState('');
   const [formNotes, setFormNotes] = useState('');
   const [formTransferRequiresApproval, setFormTransferRequiresApproval] = useState(false);
+  const [formWellMonitoring, setFormWellMonitoring] = useState(false);
 
   // Expanded company
   const [expandedCompany, setExpandedCompany] = useState<string | null>(null);
@@ -119,6 +120,7 @@ export function CompaniesTab({ scopeCompanyId, isWbAdmin = false }: CompaniesTab
     setFormPhone('');
     setFormNotes('');
     setFormTransferRequiresApproval(false);
+    setFormWellMonitoring(false);
     setEditingCompany(null);
   };
 
@@ -141,6 +143,7 @@ export function CompaniesTab({ scopeCompanyId, isWbAdmin = false }: CompaniesTab
     setFormPhone(company.phone || '');
     setFormNotes(company.notes || '');
     setFormTransferRequiresApproval(company.transferRequiresApproval || false);
+    setFormWellMonitoring(company.wellMonitoring || false);
     setShowForm(true);
   };
 
@@ -161,6 +164,7 @@ export function CompaniesTab({ scopeCompanyId, isWbAdmin = false }: CompaniesTab
     if (formInvoicePrefix.trim()) data.invoicePrefix = formInvoicePrefix.trim();
     data.invoiceBook = formInvoiceBook;
     data.transferRequiresApproval = formTransferRequiresApproval;
+    data.wellMonitoring = formWellMonitoring;
     if (formTicketPrefix.trim()) data.ticketPrefix = formTicketPrefix.trim();
     if (formPhone.trim()) data.phone = formPhone.trim();
     if (formNotes.trim()) data.notes = formNotes.trim();
@@ -1095,6 +1099,18 @@ export function CompaniesTab({ scopeCompanyId, isWbAdmin = false }: CompaniesTab
                 />
                 <label htmlFor="transferApproval" className="text-gray-300 text-sm">
                   Load transfers require dispatch approval
+                </label>
+              </div>
+              <div className="flex items-center gap-2">
+                <input
+                  type="checkbox"
+                  id="wellMonitoring"
+                  checked={formWellMonitoring}
+                  onChange={e => setFormWellMonitoring(e.target.checked)}
+                  className="rounded"
+                />
+                <label htmlFor="wellMonitoring" className="text-gray-300 text-sm">
+                  Well monitoring (syncs ticket data to WB Mobile for flow rates &amp; levels)
                 </label>
               </div>
               <div>
