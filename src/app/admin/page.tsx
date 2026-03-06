@@ -641,8 +641,9 @@ export default function AdminPage() {
         setIsRenaming(false);
       }
     } else {
-      // Just update config, no rename
-      await set(ref(db, `well_config/${selectedWell}`), config);
+      // Merge update — preserves avgFlowRate, avgFlowRateMinutes, and other
+      // fields written by Cloud Functions that aren't in the admin edit form
+      await update(ref(db, `well_config/${selectedWell}`), config);
       showMessage(`Well "${selectedWell}" updated`);
     }
   };
