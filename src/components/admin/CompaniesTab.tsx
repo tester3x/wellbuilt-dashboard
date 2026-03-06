@@ -79,6 +79,8 @@ export function CompaniesTab({ scopeCompanyId, isWbAdmin = false }: CompaniesTab
   const [payConfigRounding, setPayConfigRounding] = useState<PayConfig['payrollRounding']>('match_billing');
   const [payConfigPeriod, setPayConfigPeriod] = useState<PayConfig['payPeriod']>('weekly');
   const [payConfigAutoApprove, setPayConfigAutoApprove] = useState('48');
+  const [payConfigFrostStart, setPayConfigFrostStart] = useState('');
+  const [payConfigFrostEnd, setPayConfigFrostEnd] = useState('');
 
   const firestore = getFirestoreDb();
 
@@ -328,6 +330,8 @@ export function CompaniesTab({ scopeCompanyId, isWbAdmin = false }: CompaniesTab
     setPayConfigRounding(cfg?.payrollRounding || 'match_billing');
     setPayConfigPeriod(cfg?.payPeriod || 'weekly');
     setPayConfigAutoApprove(cfg?.autoApproveHours != null ? String(cfg.autoApproveHours) : '48');
+    setPayConfigFrostStart(cfg?.frostSeason?.startDate || '');
+    setPayConfigFrostEnd(cfg?.frostSeason?.endDate || '');
   };
 
   const savePayConfig = async () => {
@@ -338,6 +342,9 @@ export function CompaniesTab({ scopeCompanyId, isWbAdmin = false }: CompaniesTab
         payrollRounding: payConfigRounding,
         payPeriod: payConfigPeriod,
         autoApproveHours: Number(payConfigAutoApprove) || 48,
+        ...(payConfigFrostStart ? {
+          frostSeason: { startDate: payConfigFrostStart, endDate: payConfigFrostEnd || '' },
+        } : {}),
       };
       await updateDoc(doc(firestore, 'companies', payConfigCompany.id), {
         payConfig: config,
@@ -567,7 +574,7 @@ export function CompaniesTab({ scopeCompanyId, isWbAdmin = false }: CompaniesTab
       <div className="bg-gray-800 rounded-lg p-4">
         <div className="flex items-center justify-between mb-4">
           <h3 className="text-white font-medium">
-            {scopeCompanyId ? 'Your Company' : `Companies (${scopedCompanies.length})`}
+            {scopeCompanyId ? 'Your Company' : `Customers (${scopedCompanies.length})`}
           </h3>
           <div className="flex gap-2">
             {!scopeCompanyId && (
@@ -584,7 +591,7 @@ export function CompaniesTab({ scopeCompanyId, isWbAdmin = false }: CompaniesTab
                 onClick={openAddForm}
                 className="px-3 py-1.5 bg-green-600 hover:bg-green-500 text-white text-sm rounded"
               >
-                + Add Company
+                + Add Customer
               </button>
             )}
           </div>
@@ -622,6 +629,11 @@ export function CompaniesTab({ scopeCompanyId, isWbAdmin = false }: CompaniesTab
                     {(company.tier === 'free') && (
                       <span className="px-1.5 py-0.5 bg-orange-800 text-orange-200 text-xs rounded">
                         5 Well Cap
+                      </span>
+                    )}
+                    {company.wellMonitoring && (
+                      <span className="px-1.5 py-0.5 bg-purple-700 text-purple-200 text-xs rounded">
+                        Monitoring
                       </span>
                     )}
                     {(company.assignedOperators?.length || 0) > 0 && (
@@ -811,7 +823,7 @@ export function CompaniesTab({ scopeCompanyId, isWbAdmin = false }: CompaniesTab
                                     <span className="text-green-400 text-xs">
                                       {rates!.length} rate{rates!.length !== 1 ? 's' : ''}
                                       {' · '}
-                                      {rates!.map(r => `${r.jobType}: $${r.rate}${r.method === 'per_bbl' ? '/bbl' : '/hr'}`).join(', ')}
+                                      {rates!.map(r => `${r.jobType}: $${r.rate}${r.method === 'per_bbl' ? '/bbl' : '/hr'}${r.frostRate ? ` (❄$${r.frostRate})` : ''}`).join(', ')}
                                     </span>
                                   ) : (
                                     <span className="text-gray-500 text-xs">No rates set</span>
@@ -859,6 +871,11 @@ export function CompaniesTab({ scopeCompanyId, isWbAdmin = false }: CompaniesTab
                           <span className="text-gray-400">
                             Auto-approve: <span className="text-cyan-300">{company.payConfig.autoApproveHours || 48}h</span>
                           </span>
+                          {company.payConfig.frostSeason?.startDate && (
+                            <span className="text-blue-300">
+                              ❄ {company.payConfig.frostSeason.startDate}{company.payConfig.frostSeason.endDate ? ` → ${company.payConfig.frostSeason.endDate}` : ' (active)'}
+                            </span>
+                          )}
                         </div>
                       ) : (
                         <div className="text-gray-500 text-xs py-1">
@@ -970,7 +987,7 @@ export function CompaniesTab({ scopeCompanyId, isWbAdmin = false }: CompaniesTab
         <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50">
           <div className="bg-gray-800 rounded-lg p-6 max-w-lg w-full mx-4 max-h-[85vh] overflow-y-auto">
             <h3 className="text-white font-medium mb-4">
-              {editingCompany ? `Edit: ${editingCompany.name || editingCompany.id}` : 'Add New Company'}
+              {editingCompany ? `Edit: ${editingCompany.name || editingCompany.id}` : 'Add New Customer'}
             </h3>
 
             <div className="space-y-3">
@@ -1326,7 +1343,7 @@ export function CompaniesTab({ scopeCompanyId, isWbAdmin = false }: CompaniesTab
                   </select>
 
                   {/* Rate */}
-                  <div className="relative w-28">
+                  <div className="relative w-24">
                     <span className="absolute left-2 top-1/2 -translate-y-1/2 text-gray-400 text-sm">$</span>
                     <input
                       type="number"
@@ -1335,7 +1352,21 @@ export function CompaniesTab({ scopeCompanyId, isWbAdmin = false }: CompaniesTab
                       value={entry.rate || ''}
                       onChange={e => updateRateEntry(idx, 'rate', parseFloat(e.target.value) || 0)}
                       className="w-full pl-6 pr-2 py-1.5 bg-gray-700 text-white rounded text-sm"
-                      placeholder="0.00"
+                      placeholder="Rate"
+                    />
+                  </div>
+
+                  {/* Frost Rate */}
+                  <div className="relative w-24">
+                    <span className="absolute left-2 top-1/2 -translate-y-1/2 text-blue-400 text-sm">❄</span>
+                    <input
+                      type="number"
+                      step="0.01"
+                      min="0"
+                      value={entry.frostRate || ''}
+                      onChange={e => updateRateEntry(idx, 'frostRate', parseFloat(e.target.value) || 0)}
+                      className="w-full pl-6 pr-2 py-1.5 bg-gray-700 text-white rounded text-sm border border-transparent focus:border-blue-500"
+                      placeholder="Frost"
                     />
                   </div>
 
@@ -1454,6 +1485,39 @@ export function CompaniesTab({ scopeCompanyId, isWbAdmin = false }: CompaniesTab
                 <p className="text-gray-500 text-xs mt-1">
                   If driver doesn&apos;t respond within this time, timesheet is auto-approved. Set 0 to disable.
                 </p>
+              </div>
+
+              {/* Frost Season */}
+              <div className="border-t border-gray-600 pt-4">
+                <label className="block text-blue-400 text-sm font-medium mb-2">❄ Frost Season</label>
+                <p className="text-gray-500 text-xs mb-3">
+                  During frost season, per-BBL rates switch to frost rates (set on each operator&apos;s rate sheet).
+                </p>
+                <div className="flex gap-3">
+                  <div className="flex-1">
+                    <label className="block text-gray-400 text-xs mb-1">Start Date</label>
+                    <input
+                      type="date"
+                      value={payConfigFrostStart}
+                      onChange={e => setPayConfigFrostStart(e.target.value)}
+                      className="w-full px-3 py-2 bg-gray-700 text-white rounded text-sm"
+                    />
+                  </div>
+                  <div className="flex-1">
+                    <label className="block text-gray-400 text-xs mb-1">End Date</label>
+                    <input
+                      type="date"
+                      value={payConfigFrostEnd}
+                      onChange={e => setPayConfigFrostEnd(e.target.value)}
+                      className="w-full px-3 py-2 bg-gray-700 text-white rounded text-sm"
+                    />
+                  </div>
+                </div>
+                {payConfigFrostStart && (
+                  <p className="text-blue-300 text-xs mt-2">
+                    ❄ Frost rates active from {payConfigFrostStart}{payConfigFrostEnd ? ` → ${payConfigFrostEnd}` : ' (open-ended until end date set)'}
+                  </p>
+                )}
               </div>
             </div>
 

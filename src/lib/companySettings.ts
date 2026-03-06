@@ -32,6 +32,12 @@ export interface RateEntry {
   jobType: string;
   method: 'per_bbl' | 'hourly';
   rate: number;
+  frostRate?: number;         // seasonal override rate during frost season
+}
+
+export interface FrostSeason {
+  startDate: string;          // ISO date string (YYYY-MM-DD)
+  endDate?: string;           // ISO date string (YYYY-MM-DD), empty = open-ended
 }
 
 export interface PayConfig {
@@ -39,6 +45,7 @@ export interface PayConfig {
   payrollRounding: 'match_billing' | 'none' | 'quarter_hour' | 'half_hour';
   payPeriod: 'weekly' | 'biweekly' | 'monthly';
   autoApproveHours?: number;  // hours before auto-approve (0 = disabled)
+  frostSeason?: FrostSeason;  // date range when frost rates apply
 }
 
 // ── Billing Types ────────────────────────────────────────────────────────────

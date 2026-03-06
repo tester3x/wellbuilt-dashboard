@@ -46,10 +46,10 @@ service cloud.firestore {
       allow read, update, delete: if false;
     }
 
-    // Company config — read-only from clients (admin writes via Admin SDK or dashboard)
+    // Company config — dashboard manages
     match /companies/{docId} {
       allow read: if true;
-      allow write: if false;
+      allow write: if true;
     }
 
     // Invoices — clients can read and create/update (status transitions, attach tickets)

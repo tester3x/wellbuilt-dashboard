@@ -1,6 +1,6 @@
 import { getFirestoreDb } from './firebase';
 import { collection, getDocs, query, where, orderBy, Timestamp, doc, setDoc, updateDoc, deleteDoc } from 'firebase/firestore';
-import { type CompanyConfig, type PayConfig, JOB_TYPE_ALIASES } from './companySettings';
+import { type CompanyConfig, type PayConfig, type FrostSeason, JOB_TYPE_ALIASES } from './companySettings';
 
 // ─── Types ───────────────────────────────────────────────────────────────────
 
@@ -19,6 +19,22 @@ export interface RateEntry {
   jobType: string;
   method: 'per_bbl' | 'hourly';
   rate: number;
+  frostRate?: number;
+}
+
+// ─── Frost Season Helper ────────────────────────────────────────────────────
+
+/** Returns the effective rate for a rate entry, using frost rate if the date falls within frost season */
+function getEffectiveRate(entry: RateEntry, invoiceDate: string, frostSeason?: FrostSeason): number {
+  if (!frostSeason?.startDate || !entry.frostRate) return entry.rate;
+  // Compare YYYY-MM-DD strings directly (lexicographic works for ISO dates)
+  // No end date = frost season still active (open-ended)
+  const afterStart = invoiceDate >= frostSeason.startDate;
+  const beforeEnd = !frostSeason.endDate || invoiceDate <= frostSeason.endDate;
+  if (afterStart && beforeEnd) {
+    return entry.frostRate;
+  }
+  return entry.rate;
 }
 
 export interface DriverTimesheetRow {
@@ -206,7 +222,8 @@ export async function fetchPayrollInvoices(
 
     const rateEntry = lookupRate(rateSheets, operator, jobType);
     if (rateEntry) {
-      rate = rateEntry.rate;
+      const invoiceDate = d.date || '';
+      rate = getEffectiveRate(rateEntry, invoiceDate, company?.payConfig?.frostSeason);
       const bbls = d.totalBBL || 0;
       const hours = d.totalHours || 0;
       amountBilled = rateEntry.method === 'per_bbl' ? bbls * rate : hours * rate;
@@ -283,13 +300,14 @@ export async function fetchPayrollInvoices(
 export function applyRatesToTimesheet(
   summary: DriverTimesheetSummary,
   rateSheets: CompanyRateSheets,
-  employeeSplit: number  // e.g. 0.25 for 25%
+  employeeSplit: number,  // e.g. 0.25 for 25%
+  frostSeason?: FrostSeason
 ): DriverTimesheetSummary {
   const updatedRows = summary.rows.map(row => {
     const rateEntry = lookupRate(rateSheets, row.operator, row.jobType);
     if (!rateEntry) return row;
 
-    const rate = rateEntry.rate;
+    const rate = getEffectiveRate(rateEntry, row.date, frostSeason);
     const amountBilled = rateEntry.method === 'per_bbl'
       ? row.bbls * rate
       : row.hours * rate;

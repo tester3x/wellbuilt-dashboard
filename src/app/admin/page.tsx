@@ -742,7 +742,7 @@ export default function AdminPage() {
            activeTab === 'routes' ? 'Route Groups' :
            activeTab === 'gpsroutes' ? 'GPS Route Recording' :
            activeTab === 'drivers' ? 'Driver Management' :
-           'Company Management'}
+           'Customer Management'}
         </h2>
 
         {/* Tabs */}
@@ -776,7 +776,7 @@ export default function AdminPage() {
             onClick={() => setActiveTab('companies')}
             className={`px-4 py-2 rounded ${activeTab === 'companies' ? 'bg-blue-600 text-white' : 'bg-gray-700 text-gray-300'}`}
           >
-            Companies
+            Customers
           </button>
         </div>
 
