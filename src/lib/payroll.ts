@@ -1,6 +1,6 @@
 import { getFirestoreDb } from './firebase';
 import { collection, getDocs, query, where, orderBy, Timestamp, doc, setDoc, updateDoc, deleteDoc } from 'firebase/firestore';
-import { type CompanyConfig, type PayConfig, type FrostSeason, JOB_TYPE_ALIASES } from './companySettings';
+import { type CompanyConfig, type PayConfig, type FrostSeason, type FrostZone, JOB_TYPE_ALIASES } from './companySettings';
 
 // ─── Types ───────────────────────────────────────────────────────────────────
 
@@ -20,21 +20,110 @@ export interface RateEntry {
   method: 'per_bbl' | 'hourly';
   rate: number;
   frostRate?: number;
+  frostRates?: Record<string, number>;
 }
 
 // ─── Frost Season Helper ────────────────────────────────────────────────────
 
-/** Returns the effective rate for a rate entry, using frost rate if the date falls within frost season */
-function getEffectiveRate(entry: RateEntry, invoiceDate: string, frostSeason?: FrostSeason): number {
-  if (!frostSeason?.startDate || !entry.frostRate) return entry.rate;
-  // Compare YYYY-MM-DD strings directly (lexicographic works for ISO dates)
-  // No end date = frost season still active (open-ended)
-  const afterStart = invoiceDate >= frostSeason.startDate;
-  const beforeEnd = !frostSeason.endDate || invoiceDate <= frostSeason.endDate;
-  if (afterStart && beforeEnd) {
-    return entry.frostRate;
+/** Normalize date to YYYY-MM-DD for comparison. Handles MM/DD/YYYY (invoice format) and YYYY-MM-DD (date picker). */
+function toISODate(dateStr: string): string {
+  if (!dateStr) return '';
+  // Already YYYY-MM-DD?
+  if (/^\d{4}-\d{2}-\d{2}$/.test(dateStr)) return dateStr;
+  // MM/DD/YYYY → YYYY-MM-DD
+  const m = dateStr.match(/^(\d{1,2})\/(\d{1,2})\/(\d{4})$/);
+  if (m) return `${m[3]}-${m[1].padStart(2, '0')}-${m[2].padStart(2, '0')}`;
+  return dateStr;
+}
+
+/** Check if a date falls within a frost zone's active period */
+function isInFrostZone(isoDate: string, zone: FrostZone): boolean {
+  if (!zone.startDate) return false;
+  const afterStart = isoDate >= zone.startDate;
+  const beforeEnd = !zone.endDate || isoDate <= zone.endDate;
+  return afterStart && beforeEnd;
+}
+
+/**
+ * Returns the effective rate for a rate entry, using frost rate if the date
+ * falls within an active frost zone for the invoice's county.
+ *
+ * If the load exceeds the county's maxBbls frost limit, falls back to normal rate.
+ * Priority: frostZones[county] + frostRates[county] → legacy frostSeason + frostRate
+ */
+function getEffectiveRate(
+  entry: RateEntry,
+  invoiceDate: string,
+  county: string,
+  frostZones?: Record<string, FrostZone>,
+  legacyFrostSeason?: FrostSeason,
+  bbls?: number,
+): number {
+  if (entry.method !== 'per_bbl') return entry.rate;
+  const isoDate = toISODate(invoiceDate);
+  if (!isoDate) return entry.rate;
+
+  // Per-county frost zones (new system)
+  if (frostZones) {
+    // Case-insensitive county lookup (NDIC stores "MCKENZIE", config stores "McKenzie")
+    const countyLower = county.toLowerCase();
+    const matchedCounty = Object.keys(frostZones).find(k => k.toLowerCase() === countyLower);
+    // Use matched county, or fall back to "All Counties" catch-all
+    const effectiveCounty = matchedCounty || (frostZones['All Counties'] ? 'All Counties' : '');
+    if (effectiveCounty) {
+      const zone = frostZones[effectiveCounty];
+      if (zone && isInFrostZone(isoDate, zone)) {
+        // BBL limit check: use the well's actual county zone limit first,
+        // then fall back to the effective zone's limit. County road weight
+        // limits apply regardless of which zone provides the rate.
+        const countyZone = matchedCounty ? frostZones[matchedCounty] : undefined;
+        const maxBbls = countyZone?.maxBbls || zone.maxBbls;
+        if (maxBbls && bbls && bbls > maxBbls) return entry.rate;
+        // Check per-county frost rate (try exact matched county first, then effectiveCounty)
+        const countyRate = matchedCounty
+          ? (entry.frostRates?.[matchedCounty] ?? entry.frostRates?.[effectiveCounty])
+          : entry.frostRates?.[effectiveCounty];
+        if (countyRate && countyRate > 0) return countyRate;
+        // Fall back to legacy single frost rate
+        if (entry.frostRate && entry.frostRate > 0) return entry.frostRate;
+      }
+    }
   }
+
+  // Legacy single frost season (backward compat)
+  if (legacyFrostSeason?.startDate && entry.frostRate && entry.frostRate > 0) {
+    if (isInFrostZone(isoDate, { startDate: legacyFrostSeason.startDate, endDate: legacyFrostSeason.endDate || '' })) {
+      return entry.frostRate;
+    }
+  }
+
   return entry.rate;
+}
+
+// ─── Well → County Lookup ───────────────────────────────────────────────────
+
+/** Build a map of wellName (lowercase) → county from Firestore wells collection */
+export async function buildWellCountyMap(operators: string[]): Promise<Map<string, string>> {
+  const db = getFirestoreDb();
+  const countyMap = new Map<string, string>();
+  if (operators.length === 0) return countyMap;
+
+  // Load wells for each operator
+  for (const op of operators) {
+    try {
+      const q = query(collection(db, 'wells'), where('operator', '==', op));
+      const snap = await getDocs(q);
+      snap.docs.forEach(d => {
+        const data = d.data();
+        if (data.well_name && data.county) {
+          countyMap.set(data.well_name.toLowerCase(), data.county);
+        }
+      });
+    } catch {
+      // Skip operator on error
+    }
+  }
+  return countyMap;
 }
 
 export interface DriverTimesheetRow {
@@ -180,7 +269,8 @@ export function lookupRate(
 export async function fetchPayrollInvoices(
   period: PayPeriod,
   companyConfigs: Map<string, CompanyConfig>,
-  companyId?: string
+  companyId?: string,
+  wellCountyMap?: Map<string, string>
 ): Promise<DriverTimesheetSummary[]> {
   const db = getFirestoreDb();
 
@@ -211,6 +301,10 @@ export async function fetchPayrollInvoices(
     const invoiceCompanyId = d.companyId || '';
     const operator = d.operator || '';
     const jobType = d.commodityType || d.jobType || '';
+    const wellName = d.wellName || '';
+
+    // Look up county from well name (for frost rate calculation)
+    const county = d.county || wellCountyMap?.get(wellName.toLowerCase()) || '';
 
     // Look up rate from the driver's company rate sheet
     let rate = 0;
@@ -223,8 +317,8 @@ export async function fetchPayrollInvoices(
     const rateEntry = lookupRate(rateSheets, operator, jobType);
     if (rateEntry) {
       const invoiceDate = d.date || '';
-      rate = getEffectiveRate(rateEntry, invoiceDate, company?.payConfig?.frostSeason);
       const bbls = d.totalBBL || 0;
+      rate = getEffectiveRate(rateEntry, invoiceDate, county, company?.payConfig?.frostZones, company?.payConfig?.frostSeason, bbls);
       const hours = d.totalHours || 0;
       amountBilled = rateEntry.method === 'per_bbl' ? bbls * rate : hours * rate;
       amountBilled = Math.round(amountBilled * 100) / 100;
@@ -301,13 +395,16 @@ export function applyRatesToTimesheet(
   summary: DriverTimesheetSummary,
   rateSheets: CompanyRateSheets,
   employeeSplit: number,  // e.g. 0.25 for 25%
-  frostSeason?: FrostSeason
+  frostZones?: Record<string, FrostZone>,
+  legacyFrostSeason?: FrostSeason,
+  wellCountyMap?: Map<string, string>
 ): DriverTimesheetSummary {
   const updatedRows = summary.rows.map(row => {
     const rateEntry = lookupRate(rateSheets, row.operator, row.jobType);
     if (!rateEntry) return row;
 
-    const rate = getEffectiveRate(rateEntry, row.date, frostSeason);
+    const county = wellCountyMap?.get(row.wellName.toLowerCase()) || '';
+    const rate = getEffectiveRate(rateEntry, row.date, county, frostZones, legacyFrostSeason, row.bbls);
     const amountBilled = rateEntry.method === 'per_bbl'
       ? row.bbls * rate
       : row.hours * rate;

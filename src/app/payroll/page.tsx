@@ -173,7 +173,13 @@ export default function PayrollPage() {
       const companyMap = new Map<string, CompanyConfig>();
       companies.forEach(c => companyMap.set(c.id, c));
 
-      const data = await fetchPayrollInvoices(selectedPeriod, companyMap);
+      // Build well→county map for frost rate lookup
+      const allOperators = new Set<string>();
+      companies.forEach(c => c.assignedOperators?.forEach(op => allOperators.add(op)));
+      const { buildWellCountyMap } = await import('@/lib/payroll');
+      const countyMap = await buildWellCountyMap([...allOperators]);
+
+      const data = await fetchPayrollInvoices(selectedPeriod, companyMap, undefined, countyMap);
       setTimesheets(data);
     } catch (err: any) {
       console.error('Failed to fetch payroll data:', err);

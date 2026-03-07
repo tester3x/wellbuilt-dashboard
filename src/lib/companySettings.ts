@@ -32,7 +32,8 @@ export interface RateEntry {
   jobType: string;
   method: 'per_bbl' | 'hourly';
   rate: number;
-  frostRate?: number;         // seasonal override rate during frost season
+  frostRate?: number;         // legacy single frost rate (backward compat)
+  frostRates?: Record<string, number>;  // per-county frost rates: { "McKenzie": 3, "Mountrail": 4 }
 }
 
 export interface FrostSeason {
@@ -40,13 +41,26 @@ export interface FrostSeason {
   endDate?: string;           // ISO date string (YYYY-MM-DD), empty = open-ended
 }
 
+export interface FrostZone {
+  startDate: string;          // ISO date string (YYYY-MM-DD)
+  endDate: string;            // ISO date string (YYYY-MM-DD), empty = open-ended
+  maxBbls?: number;           // weight limit in BBLs during frost season
+}
+
 export interface PayConfig {
   defaultSplit: number;       // e.g. 0.25 for 25%
   payrollRounding: 'match_billing' | 'none' | 'quarter_hour' | 'half_hour';
   payPeriod: 'weekly' | 'biweekly' | 'monthly';
   autoApproveHours?: number;  // hours before auto-approve (0 = disabled)
-  frostSeason?: FrostSeason;  // date range when frost rates apply
+  frostSeason?: FrostSeason;  // legacy single frost season (backward compat)
+  frostZones?: Record<string, FrostZone>;  // per-county frost zones: { "McKenzie": {...}, "Mountrail": {...} }
 }
+
+// Common Bakken counties for frost zone picker
+export const BAKKEN_COUNTIES = [
+  'McKenzie', 'Mountrail', 'Williams', 'Dunn', 'Divide', 'Burke', 'Ward',
+  'Richland', 'Roosevelt', 'Sheridan',  // MT counties
+];
 
 // ── Billing Types ────────────────────────────────────────────────────────────
 
@@ -331,6 +345,8 @@ export interface CompanyConfig {
   // Well monitoring — true = company uses WB M for flow rate/level tracking
   // false/undefined = WB T only, no RTDB packet sync
   wellMonitoring?: boolean;
+  // Cancel job behavior: recycle = delete + reuse numbers, void = keep as VOID for audit
+  cancelledNumberHandling?: 'recycle' | 'void';
 }
 
 // Must match WB T's COMMODITY_TYPES + HOURLY_COMMODITY_TYPES in utils/constants.ts

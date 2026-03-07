@@ -23,6 +23,18 @@ export function OperationsCard({ company, onSave }: Props) {
     }
   };
 
+  const setCancelMode = async (mode: 'recycle' | 'void') => {
+    setSaving('cancelledNumberHandling');
+    try {
+      await updateCompanyFields(company.id, { cancelledNumberHandling: mode });
+      onSave();
+    } catch (err) {
+      console.error('Failed to update cancel mode:', err);
+    } finally {
+      setSaving(null);
+    }
+  };
+
   return (
     <div className="bg-gray-800 rounded-lg overflow-hidden">
       <div className="px-4 py-3 border-b border-orange-500/30 bg-orange-900/20">
@@ -66,6 +78,38 @@ export function OperationsCard({ company, onSave }: Props) {
               company.transferRequiresApproval ? 'translate-x-5' : 'translate-x-0'
             }`} />
           </button>
+        </div>
+
+        {/* Cancelled Number Handling segmented picker */}
+        <div className="flex items-center justify-between">
+          <div>
+            <div className="text-white text-sm">Cancelled Job Numbers</div>
+            <div className="text-gray-500 text-xs">Recycle deletes &amp; reuses numbers. Void keeps for audit trail.</div>
+          </div>
+          <div className={`flex rounded-md overflow-hidden border border-gray-600 ${saving === 'cancelledNumberHandling' ? 'opacity-50' : ''}`}>
+            <button
+              onClick={() => setCancelMode('recycle')}
+              disabled={saving === 'cancelledNumberHandling'}
+              className={`px-3 py-1 text-xs font-medium transition-colors ${
+                (company.cancelledNumberHandling || 'recycle') === 'recycle'
+                  ? 'bg-orange-500 text-black'
+                  : 'bg-gray-700 text-gray-400 hover:bg-gray-600'
+              }`}
+            >
+              Recycle
+            </button>
+            <button
+              onClick={() => setCancelMode('void')}
+              disabled={saving === 'cancelledNumberHandling'}
+              className={`px-3 py-1 text-xs font-medium transition-colors ${
+                company.cancelledNumberHandling === 'void'
+                  ? 'bg-orange-500 text-black'
+                  : 'bg-gray-700 text-gray-400 hover:bg-gray-600'
+              }`}
+            >
+              Void
+            </button>
+          </div>
         </div>
       </div>
     </div>

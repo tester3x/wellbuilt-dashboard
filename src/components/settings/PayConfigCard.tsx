@@ -1,7 +1,7 @@
 'use client';
 
 import { useState } from 'react';
-import { type CompanyConfig, type PayConfig, updateCompanyFields } from '@/lib/companySettings';
+import { type CompanyConfig, type PayConfig, type FrostZone, BAKKEN_COUNTIES, updateCompanyFields } from '@/lib/companySettings';
 
 interface Props {
   company: CompanyConfig;
@@ -16,6 +16,9 @@ export function PayConfigCard({ company, onSave }: Props) {
   const [rounding, setRounding] = useState<PayConfig['payrollRounding']>('match_billing');
   const [period, setPeriod] = useState<PayConfig['payPeriod']>('weekly');
   const [autoApprove, setAutoApprove] = useState('48');
+  const [frostZones, setFrostZones] = useState<Record<string, FrostZone>>({});
+  const [addingCounty, setAddingCounty] = useState(false);
+  const [newCounty, setNewCounty] = useState('');
 
   const startEdit = () => {
     const cfg = company.payConfig;
@@ -23,17 +26,58 @@ export function PayConfigCard({ company, onSave }: Props) {
     setRounding(cfg?.payrollRounding || 'match_billing');
     setPeriod(cfg?.payPeriod || 'weekly');
     setAutoApprove(cfg?.autoApproveHours != null ? String(cfg.autoApproveHours) : '48');
+    // Load frost zones, falling back to legacy single frost season
+    if (cfg?.frostZones && Object.keys(cfg.frostZones).length > 0) {
+      setFrostZones({ ...cfg.frostZones });
+    } else if (cfg?.frostSeason?.startDate) {
+      // Migrate legacy single frost season as "All Counties"
+      setFrostZones({ 'All Counties': { startDate: cfg.frostSeason.startDate, endDate: cfg.frostSeason.endDate || '' } });
+    } else {
+      setFrostZones({});
+    }
+    setAddingCounty(false);
+    setNewCounty('');
     setEditing(true);
+  };
+
+  const addCounty = (county: string) => {
+    if (!county || frostZones[county]) return;
+    setFrostZones(prev => ({ ...prev, [county]: { startDate: '', endDate: '', maxBbls: undefined } }));
+    setAddingCounty(false);
+    setNewCounty('');
+  };
+
+  const removeCounty = (county: string) => {
+    setFrostZones(prev => {
+      const next = { ...prev };
+      delete next[county];
+      return next;
+    });
+  };
+
+  const updateZone = (county: string, field: keyof FrostZone, value: any) => {
+    setFrostZones(prev => ({
+      ...prev,
+      [county]: { ...prev[county], [field]: value },
+    }));
   };
 
   const save = async () => {
     setSaving(true);
     try {
+      // Clean up zones: only keep ones with a start date
+      const validZones: Record<string, FrostZone> = {};
+      for (const [county, zone] of Object.entries(frostZones)) {
+        if (zone.startDate) {
+          validZones[county] = zone;
+        }
+      }
       const config: PayConfig = {
         defaultSplit: Number(split) / 100,
         payrollRounding: rounding,
         payPeriod: period,
         autoApproveHours: Number(autoApprove) || 48,
+        frostZones: Object.keys(validZones).length > 0 ? validZones : undefined,
       };
       await updateCompanyFields(company.id, { payConfig: config });
       setEditing(false);
@@ -44,6 +88,10 @@ export function PayConfigCard({ company, onSave }: Props) {
       setSaving(false);
     }
   };
+
+  // Counties already added (for filtering suggestions)
+  const usedCounties = new Set(Object.keys(frostZones));
+  const availableCounties = BAKKEN_COUNTIES.filter(c => !usedCounties.has(c));
 
   return (
     <div className="bg-gray-800 rounded-lg overflow-hidden">
@@ -133,6 +181,102 @@ export function PayConfigCard({ company, onSave }: Props) {
               </p>
             </div>
 
+            {/* Frost Zones by County */}
+            <div>
+              <label className="block text-blue-300 text-xs mb-1">❄ Frost Seasons (by County)</label>
+              <p className="text-gray-500 text-xs mb-2">
+                Each county has its own frost law dates and weight limits. Per-BBL rates switch to frost rates during active frost season.
+              </p>
+
+              {Object.keys(frostZones).length > 0 && (
+                <div className="space-y-2 mb-3">
+                  {Object.entries(frostZones).sort(([a], [b]) => a === 'All Counties' ? -1 : b === 'All Counties' ? 1 : a.localeCompare(b)).map(([county, zone]) => (
+                    <div key={county} className="bg-gray-700/50 rounded p-2">
+                      <div className="flex items-center justify-between mb-1.5">
+                        <span className="text-blue-300 text-xs font-medium">{county}</span>
+                        <button
+                          onClick={() => removeCounty(county)}
+                          className="text-red-400 hover:text-red-300 text-xs px-1"
+                          title="Remove county"
+                        >
+                          ✕
+                        </button>
+                      </div>
+                      <div className="flex items-center gap-2 flex-wrap">
+                        <input
+                          type="date"
+                          value={zone.startDate}
+                          onChange={e => updateZone(county, 'startDate', e.target.value)}
+                          className="px-2 py-1 bg-gray-700 text-white rounded text-xs"
+                        />
+                        <span className="text-gray-400 text-xs">→</span>
+                        <input
+                          type="date"
+                          value={zone.endDate}
+                          onChange={e => updateZone(county, 'endDate', e.target.value)}
+                          className="px-2 py-1 bg-gray-700 text-white rounded text-xs"
+                          placeholder="Open-ended"
+                        />
+                        <div className="flex items-center gap-1 ml-2">
+                          <input
+                            type="number"
+                            min="0"
+                            value={zone.maxBbls || ''}
+                            onChange={e => updateZone(county, 'maxBbls', e.target.value ? Number(e.target.value) : undefined)}
+                            className="w-16 px-2 py-1 bg-gray-700 text-white rounded text-xs"
+                            placeholder="—"
+                          />
+                          <span className="text-gray-500 text-xs">BBL max</span>
+                        </div>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              )}
+
+              {addingCounty ? (
+                <div className="flex items-center gap-2">
+                  <select
+                    value={newCounty}
+                    onChange={e => setNewCounty(e.target.value)}
+                    className="flex-1 px-2 py-1.5 bg-gray-700 text-white rounded text-xs"
+                  >
+                    <option value="">Select county...</option>
+                    {availableCounties.map(c => (
+                      <option key={c} value={c}>{c}</option>
+                    ))}
+                  </select>
+                  <input
+                    type="text"
+                    value={newCounty}
+                    onChange={e => setNewCounty(e.target.value)}
+                    placeholder="Or type name..."
+                    className="flex-1 px-2 py-1.5 bg-gray-700 text-white rounded text-xs"
+                  />
+                  <button
+                    onClick={() => addCounty(newCounty)}
+                    disabled={!newCounty}
+                    className="px-2 py-1.5 text-xs rounded bg-blue-700 hover:bg-blue-600 text-white disabled:opacity-30"
+                  >
+                    Add
+                  </button>
+                  <button
+                    onClick={() => { setAddingCounty(false); setNewCounty(''); }}
+                    className="text-gray-400 hover:text-gray-300 text-xs"
+                  >
+                    Cancel
+                  </button>
+                </div>
+              ) : (
+                <button
+                  onClick={() => setAddingCounty(true)}
+                  className="text-blue-400 hover:text-blue-300 text-xs"
+                >
+                  + Add County
+                </button>
+              )}
+            </div>
+
             <div className="flex gap-2 pt-1">
               <button
                 onClick={save}
@@ -150,21 +294,38 @@ export function PayConfigCard({ company, onSave }: Props) {
             </div>
           </div>
         ) : company.payConfig ? (
-          <div className="flex flex-wrap gap-3 text-xs">
-            <span className="text-gray-400">
-              Split: <span className="text-cyan-300">{Math.round(company.payConfig.defaultSplit * 100)}%</span>
-            </span>
-            <span className="text-gray-400">
-              Period: <span className="text-cyan-300">{company.payConfig.payPeriod}</span>
-            </span>
-            <span className="text-gray-400">
-              Rounding: <span className="text-cyan-300">
-                {company.payConfig.payrollRounding === 'match_billing' ? 'Match billing' : company.payConfig.payrollRounding}
+          <div className="space-y-2">
+            <div className="flex flex-wrap gap-3 text-xs">
+              <span className="text-gray-400">
+                Split: <span className="text-cyan-300">{Math.round(company.payConfig.defaultSplit * 100)}%</span>
               </span>
-            </span>
-            <span className="text-gray-400">
-              Auto-approve: <span className="text-cyan-300">{company.payConfig.autoApproveHours || 48}h</span>
-            </span>
+              <span className="text-gray-400">
+                Period: <span className="text-cyan-300">{company.payConfig.payPeriod}</span>
+              </span>
+              <span className="text-gray-400">
+                Rounding: <span className="text-cyan-300">
+                  {company.payConfig.payrollRounding === 'match_billing' ? 'Match billing' : company.payConfig.payrollRounding}
+                </span>
+              </span>
+              <span className="text-gray-400">
+                Auto-approve: <span className="text-cyan-300">{company.payConfig.autoApproveHours || 48}h</span>
+              </span>
+            </div>
+            {/* Frost zones display */}
+            {company.payConfig.frostZones && Object.keys(company.payConfig.frostZones).length > 0 ? (
+              <div className="flex flex-wrap gap-2">
+                {Object.entries(company.payConfig.frostZones).sort(([a], [b]) => a === 'All Counties' ? -1 : b === 'All Counties' ? 1 : a.localeCompare(b)).map(([county, zone]) => (
+                  <span key={county} className="text-blue-300 text-xs bg-blue-900/30 px-2 py-0.5 rounded">
+                    ❄ {county}: {zone.startDate}{zone.endDate ? ` → ${zone.endDate}` : ' (active)'}
+                    {zone.maxBbls ? ` · ${zone.maxBbls} BBL` : ''}
+                  </span>
+                ))}
+              </div>
+            ) : company.payConfig.frostSeason?.startDate ? (
+              <span className="text-blue-300 text-xs">
+                ❄ {company.payConfig.frostSeason.startDate}{company.payConfig.frostSeason.endDate ? ` → ${company.payConfig.frostSeason.endDate}` : ' (active)'}
+              </span>
+            ) : null}
           </div>
         ) : (
           <div className="text-gray-500 text-xs py-1">

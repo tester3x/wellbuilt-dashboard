@@ -76,6 +76,7 @@ export function DriversTab({ scopeCompanyId, isWbAdmin = false }: DriversTabProp
   const [approvalCompanyName, setApprovalCompanyName] = useState('');
   const [approvalCustomers, setApprovalCustomers] = useState<string[]>([]);
   const [approvalRoutes, setApprovalRoutes] = useState<string[]>([]);
+  const [approvalRoles, setApprovalRoles] = useState<string[]>(['driver']);
 
   // Expanded driver (shows details + assigned customers)
   const [expandedDriver, setExpandedDriver] = useState<string | null>(null);
@@ -288,6 +289,7 @@ export function DriversTab({ scopeCompanyId, isWbAdmin = false }: DriversTabProp
         isAdmin: false,
         isViewer: false,
         approvedAt: Date.now(),
+        roles: ['driver'],
       };
       if (scopeCompanyId) {
         // Company admin approving — assign to their company
@@ -376,6 +378,7 @@ export function DriversTab({ scopeCompanyId, isWbAdmin = false }: DriversTabProp
           companyId: approvalCompanyId,
         })),
         assignedRoutes: approvalRoutes,
+        roles: approvalRoles,
       };
 
       // Sync tier from company doc
@@ -408,6 +411,7 @@ export function DriversTab({ scopeCompanyId, isWbAdmin = false }: DriversTabProp
       setApprovalCompanyName('');
       setApprovalCustomers([]);
       setApprovalRoutes([]);
+      setApprovalRoles(['driver']);
       await loadDrivers();
     } catch (err) {
       console.error('Failed to approve driver:', err);
@@ -1053,7 +1057,7 @@ export function DriversTab({ scopeCompanyId, isWbAdmin = false }: DriversTabProp
         return (
           <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50">
             <div className="bg-gray-800 rounded-lg p-6 max-w-lg w-full mx-4 max-h-[90vh] overflow-y-auto">
-              <h3 className="text-white font-medium text-lg mb-1">Approve Driver</h3>
+              <h3 className="text-white font-medium text-lg mb-1">Approve Employee</h3>
               <p className="text-gray-400 text-sm mb-4">
                 <span className="text-white font-medium">{approvalTarget.displayName}</span>
                 {approvalTarget.legalName && approvalTarget.legalName !== approvalTarget.displayName && (
@@ -1088,7 +1092,36 @@ export function DriversTab({ scopeCompanyId, isWbAdmin = false }: DriversTabProp
                 </select>
               </div>
 
-              {/* Section 2: Customers (Operators) */}
+              {/* Section 2: Roles / Titles */}
+              <div className="mb-4">
+                <label className="text-gray-400 text-xs font-medium uppercase tracking-wider block mb-2">
+                  Roles <span className="text-red-400">*</span>
+                  {approvalRoles.length > 0 && (
+                    <span className="text-cyan-400 ml-2 normal-case">{approvalRoles.length} selected</span>
+                  )}
+                </label>
+                <div className="space-y-1 bg-gray-900 rounded p-2">
+                  {['driver', 'dispatcher', 'billing', 'payroll', 'mechanic', 'admin', 'manager'].map(role => (
+                    <label key={role} className="flex items-center gap-3 cursor-pointer hover:bg-gray-700 rounded p-1.5">
+                      <input
+                        type="checkbox"
+                        checked={approvalRoles.includes(role)}
+                        onChange={e => {
+                          if (e.target.checked) {
+                            setApprovalRoles([...approvalRoles, role]);
+                          } else {
+                            setApprovalRoles(approvalRoles.filter(r => r !== role));
+                          }
+                        }}
+                        className="w-4 h-4 rounded"
+                      />
+                      <span className="text-cyan-300 text-sm capitalize">{role}</span>
+                    </label>
+                  ))}
+                </div>
+              </div>
+
+              {/* Section 3: Customers (Operators) */}
               <div className="mb-4">
                 <label className="text-gray-400 text-xs font-medium uppercase tracking-wider block mb-2">
                   Customers (Operators) <span className="text-red-400">*</span>
@@ -1166,7 +1199,7 @@ export function DriversTab({ scopeCompanyId, isWbAdmin = false }: DriversTabProp
                   disabled={!canApprove}
                   className="flex-1 px-4 py-2 bg-green-600 hover:bg-green-500 text-white rounded font-medium disabled:opacity-30 disabled:cursor-not-allowed"
                 >
-                  Approve Driver
+                  Approve Employee
                 </button>
                 <button
                   onClick={() => {
@@ -1176,6 +1209,7 @@ export function DriversTab({ scopeCompanyId, isWbAdmin = false }: DriversTabProp
                     setApprovalCompanyName('');
                     setApprovalCustomers([]);
                     setApprovalRoutes([]);
+                    setApprovalRoles(['driver']);
                   }}
                   className="px-4 py-2 bg-gray-600 hover:bg-gray-500 text-white rounded"
                 >
