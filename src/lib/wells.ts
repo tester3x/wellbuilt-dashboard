@@ -34,6 +34,8 @@ export interface WellResponse {
   lastPullBbls?: string;
   lastPullTopLevel?: string;
   lastPullBottomLevel?: string;
+  // NDIC linkage from well_config
+  ndicName?: string;           // Full NDIC well name (e.g. "GABRIEL 1-36-25H")
 }
 
 export interface WellConfig {
@@ -339,6 +341,7 @@ export function subscribeToWellStatusesUnified(callback: (wells: WellResponse[],
           etaToMax: timeTillPull,
           isDown,
           timestampUTC: outgoing.lastPullDateTimeUTC || outgoing.timestampUTC,
+          ndicName: (config as any).ndicName || '',
         });
       } else {
         // No outgoing data — placeholder (well exists in config but no pulls yet)
@@ -353,6 +356,7 @@ export function subscribeToWellStatusesUnified(callback: (wells: WellResponse[],
           tankAtLevel,
           pullBbls,
           bottomLevel: bottomLevelFeet,
+          ndicName: (config as any).ndicName || '',
         });
       }
     });

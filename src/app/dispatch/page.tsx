@@ -29,6 +29,7 @@ interface DispatchJob {
   driverHash: string;
   driverName: string;
   wellName: string;
+  ndicWellName?: string;  // Full NDIC name (e.g. "GABRIEL 1-36-25H")
   operator?: string;
   route?: string;
   jobType: 'pw' | 'service';
@@ -541,6 +542,7 @@ export default function DispatchPage() {
         driverHash: assignDriverHash,
         driverName: driver.displayName,
         wellName: assignTarget.wellName,
+        ndicWellName: assignTarget.ndicName || assignTarget.wellName,
         route: assignTarget.route || '',
         jobType: 'pw',
         status: 'pending',
