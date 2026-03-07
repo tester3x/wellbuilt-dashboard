@@ -1,6 +1,6 @@
 // GpsRoutesTab.tsx — Dedicated admin tab for GPS route recording management.
 // Shows all wells with routeRecording enabled, their recorded trips, and approved routes.
-// Embeds RouteManager per well so you can view/approve/trim without leaving this tab.
+// Wells grouped by pad (via routeGroupWell field) share a single RouteManager.
 
 'use client';
 
@@ -26,6 +26,10 @@ interface WellRouteStatus {
   approvedCount: number;
   lastTripDate?: Date;
   loading: boolean;
+  // Pad grouping
+  routeGroupWell?: string;
+  isPrimary?: boolean;
+  groupMembers?: string[];
 }
 
 export default function GpsRoutesTab() {
@@ -47,17 +51,56 @@ export default function GpsRoutesTab() {
         return;
       }
 
-      // Get all wells with routeRecording enabled
+      // Build a map of all configs for grouping
+      const allConfigs = data as Record<string, any>;
+
+      // Build pad groups: primaryWell -> [member wells]
+      const padGroups = new Map<string, string[]>();
+      for (const [name, config] of Object.entries(allConfigs)) {
+        if (config.routeGroupWell) {
+          const primary = config.routeGroupWell;
+          if (!padGroups.has(primary)) padGroups.set(primary, []);
+          if (name !== primary) {
+            padGroups.get(primary)!.push(name);
+          }
+        }
+      }
+
+      // Get all wells that should appear: routeRecording enabled OR is a group primary for recording wells
       const routeWells: WellRouteStatus[] = [];
-      for (const [name, config] of Object.entries(data) as [string, any][]) {
-        if (config.routeRecording) {
+      const seen = new Set<string>();
+
+      for (const [name, config] of Object.entries(allConfigs)) {
+        // Skip if already handled as part of a group
+        if (seen.has(name)) continue;
+
+        const isRecording = !!config.routeRecording;
+        const groupPrimary = config.routeGroupWell;
+
+        // This well has recording enabled — it's a primary or standalone
+        if (isRecording) {
+          const members = padGroups.get(name) || [];
+          seen.add(name);
+          members.forEach(m => seen.add(m));
+
           routeWells.push({
             wellName: name,
             route: config.route,
             tripCount: 0,
             approvedCount: 0,
             loading: true,
+            routeGroupWell: groupPrimary,
+            isPrimary: members.length > 0,
+            groupMembers: members.length > 0 ? members.sort() : undefined,
           });
+          continue;
+        }
+
+        // This well is a group member pointing to a recording-enabled primary
+        if (groupPrimary && groupPrimary !== name && allConfigs[groupPrimary]?.routeRecording) {
+          // The primary will handle this well — skip it
+          seen.add(name);
+          continue;
         }
       }
 
@@ -187,9 +230,21 @@ export default function GpsRoutesTab() {
                     ▶
                   </span>
                   <div>
-                    <div className="text-white font-medium">{well.wellName}</div>
+                    <div className="flex items-center gap-2">
+                      <span className="text-white font-medium">{well.wellName}</span>
+                      {well.groupMembers && well.groupMembers.length > 0 && (
+                        <span className="text-xs bg-orange-900/50 text-orange-300 border border-orange-800 px-1.5 py-0.5 rounded">
+                          Pad: {well.groupMembers.length + 1} wells
+                        </span>
+                      )}
+                    </div>
                     {well.route && (
                       <div className="text-gray-500 text-xs">Route: {well.route}</div>
+                    )}
+                    {well.groupMembers && well.groupMembers.length > 0 && (
+                      <div className="text-gray-500 text-xs">
+                        + {well.groupMembers.join(', ')}
+                      </div>
                     )}
                   </div>
                 </div>
@@ -232,7 +287,7 @@ export default function GpsRoutesTab() {
               {/* Expanded: RouteManager */}
               {expandedWell === well.wellName && (
                 <div className="p-3 pt-0">
-                  <RouteManager wellName={well.wellName} />
+                  <RouteManager wellName={well.wellName} groupMembers={well.groupMembers} />
                 </div>
               )}
             </div>

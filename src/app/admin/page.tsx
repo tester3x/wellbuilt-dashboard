@@ -1,6 +1,6 @@
 'use client';
 
-import { useEffect, useState } from 'react';
+import { useEffect, useState, useCallback } from 'react';
 import { useRouter } from 'next/navigation';
 import Link from 'next/link';
 import { useAuth } from '@/contexts/AuthContext';
@@ -14,6 +14,7 @@ import {
   searchWellsByName,
   searchOperators,
   loadInactiveWellsForOperator,
+  findWellByName,
   type NdicWell,
   type NdicOperator,
 } from '@/lib/firestoreWells';
@@ -21,6 +22,7 @@ import { DriversTab } from '@/components/admin/DriversTab';
 import { CompaniesTab } from '@/components/admin/CompaniesTab';
 import RouteManager from '@/components/admin/RouteManager';
 import GpsRoutesTab from '@/components/admin/GpsRoutesTab';
+import { haversineMeters, PAD_RADIUS_METERS } from '@/lib/routeUtils';
 
 interface WellConfig {
   route?: string;
@@ -35,6 +37,8 @@ interface WellConfig {
   ndicApiNo?: string;  // NDIC API number (e.g. "33-053-06789-00-00")
   // Route recording — GPS breadcrumb capture for wells with bad Google Maps directions
   routeRecording?: boolean;
+  // Well pad grouping — wells on the same pad share routes with a primary well
+  routeGroupWell?: string;
 }
 
 interface RouteWells {
@@ -66,6 +70,10 @@ export default function AdminPage() {
 
   // Route recording toggle
   const [editRouteRecording, setEditRouteRecording] = useState(false);
+
+  // Well pad grouping
+  const [editRouteGroupWell, setEditRouteGroupWell] = useState('');
+  const [nearbyWells, setNearbyWells] = useState<Array<{ name: string; distance: number }>>([]);
 
   // NDIC well picker — shared between Add and Edit forms
   const [ndicOperators, setNdicOperators] = useState<NdicOperator[]>([]);
@@ -216,6 +224,9 @@ export default function AdminPage() {
       setEditNdicApiNo(config.ndicApiNo || '');
       // Load route recording flag
       setEditRouteRecording(!!config.routeRecording);
+      // Load well pad grouping
+      setEditRouteGroupWell(config.routeGroupWell || '');
+      setNearbyWells([]);
     }
   }, [selectedWell, configs]);
 
@@ -544,6 +555,90 @@ export default function AdminPage() {
     setNdicSelectedWell(null);
   };
 
+  // Detect nearby wells on the same pad using NDIC GPS coords
+  const detectNearbyWells = useCallback(async (wellName: string) => {
+    const config = configs[wellName];
+    if (!config?.ndicName) {
+      setNearbyWells([]);
+      return;
+    }
+
+    try {
+      // Look up GPS coords for the selected well
+      const selectedNdic = await findWellByName(config.ndicName);
+      if (!selectedNdic?.latitude || !selectedNdic?.longitude) {
+        setNearbyWells([]);
+        return;
+      }
+
+      // Check all other well_config entries with ndicName
+      const nearby: Array<{ name: string; distance: number }> = [];
+      const promises = Object.entries(configs)
+        .filter(([name, cfg]) => name !== wellName && cfg.ndicName)
+        .map(async ([name, cfg]) => {
+          try {
+            const ndic = await findWellByName(cfg.ndicName!);
+            if (ndic?.latitude && ndic?.longitude) {
+              const dist = haversineMeters(
+                selectedNdic.latitude!, selectedNdic.longitude!,
+                ndic.latitude!, ndic.longitude!,
+              );
+              if (dist <= PAD_RADIUS_METERS) {
+                nearby.push({ name, distance: Math.round(dist) });
+              }
+            }
+          } catch { /* skip wells with no NDIC match */ }
+        });
+
+      await Promise.all(promises);
+      nearby.sort((a, b) => a.distance - b.distance);
+      setNearbyWells(nearby);
+    } catch (err) {
+      console.error('[admin] Failed to detect nearby wells:', err);
+      setNearbyWells([]);
+    }
+  }, [configs]);
+
+  // Auto-detect nearby wells when a well is selected and has NDIC linkage
+  useEffect(() => {
+    if (selectedWell && configs[selectedWell]?.ndicName) {
+      detectNearbyWells(selectedWell);
+    } else {
+      setNearbyWells([]);
+    }
+  }, [selectedWell, configs, detectNearbyWells]);
+
+  // Group all nearby wells under a primary
+  const handleGroupAll = async (primaryWell: string, members: string[]) => {
+    const db = getFirebaseDatabase();
+    const updates: Record<string, any> = {};
+    // Set the primary as its own group primary
+    updates[`well_config/${primaryWell}/routeGroupWell`] = primaryWell;
+    // Set all members to point to the primary
+    for (const member of members) {
+      updates[`well_config/${member}/routeGroupWell`] = primaryWell;
+    }
+    await update(ref(db), updates);
+    setEditRouteGroupWell(primaryWell);
+    showMessage(`Grouped ${members.length + 1} wells under ${primaryWell}`);
+  };
+
+  // Ungroup a well (remove routeGroupWell from all members)
+  const handleUngroupAll = async () => {
+    if (!editRouteGroupWell) return;
+    const db = getFirebaseDatabase();
+    const updates: Record<string, any> = {};
+    // Find all wells pointing to the same primary
+    for (const [name, cfg] of Object.entries(configs)) {
+      if (cfg.routeGroupWell === editRouteGroupWell) {
+        updates[`well_config/${name}/routeGroupWell`] = null;
+      }
+    }
+    await update(ref(db), updates);
+    setEditRouteGroupWell('');
+    showMessage('Well pad group removed');
+  };
+
   // Update well config (with optional rename)
   const handleUpdateWell = async () => {
     if (!selectedWell) {
@@ -581,6 +676,8 @@ export default function AdminPage() {
       ...(editNdicApiNo ? { ndicApiNo: editNdicApiNo } : {}),
       // Route recording
       ...(editRouteRecording ? { routeRecording: true } : {}),
+      // Well pad grouping
+      ...(editRouteGroupWell ? { routeGroupWell: editRouteGroupWell } : {}),
     };
 
     if (isNameChanged) {
@@ -643,7 +740,16 @@ export default function AdminPage() {
     } else {
       // Merge update — preserves avgFlowRate, avgFlowRateMinutes, and other
       // fields written by Cloud Functions that aren't in the admin edit form
-      await update(ref(db, `well_config/${selectedWell}`), config);
+      const updateData: Record<string, any> = { ...config };
+      // If routeRecording was toggled off, explicitly remove it from RTDB
+      if (!editRouteRecording && configs[selectedWell]?.routeRecording) {
+        updateData.routeRecording = null;
+      }
+      // If routeGroupWell was cleared, explicitly remove it from RTDB
+      if (!editRouteGroupWell && configs[selectedWell]?.routeGroupWell) {
+        updateData.routeGroupWell = null;
+      }
+      await update(ref(db, `well_config/${selectedWell}`), updateData);
       showMessage(`Well "${selectedWell}" updated`);
     }
   };
@@ -1058,9 +1164,102 @@ export default function AdminPage() {
                         />
                       </button>
                     </div>
+                    {/* Well Pad Grouping — group nearby wells to share routes */}
+                    {(editRouteRecording || editRouteGroupWell) && (
+                      <div className="bg-gray-900 rounded p-3 space-y-2">
+                        <div className="flex items-center justify-between">
+                          <div>
+                            <label className="text-gray-300 text-sm font-medium">Well Pad Group</label>
+                            <div className="text-gray-500 text-xs mt-0.5">
+                              Wells on the same pad share approved routes
+                            </div>
+                          </div>
+                        </div>
+
+                        {/* Current group status */}
+                        {editRouteGroupWell ? (
+                          <div className="flex items-center justify-between bg-gray-800 rounded p-2">
+                            <div>
+                              <span className="text-orange-400 text-sm font-medium">
+                                {editRouteGroupWell === selectedWell ? '★ Primary' : `→ ${editRouteGroupWell}`}
+                              </span>
+                              {editRouteGroupWell !== selectedWell && (
+                                <div className="text-gray-500 text-xs">
+                                  Shares routes with {editRouteGroupWell}
+                                </div>
+                              )}
+                              {/* Show group members if this is the primary */}
+                              {editRouteGroupWell === selectedWell && (() => {
+                                const members = Object.entries(configs)
+                                  .filter(([name, cfg]) => cfg.routeGroupWell === selectedWell && name !== selectedWell)
+                                  .map(([name]) => name);
+                                return members.length > 0 ? (
+                                  <div className="text-gray-400 text-xs mt-0.5">
+                                    Shared with: {members.join(', ')}
+                                  </div>
+                                ) : null;
+                              })()}
+                            </div>
+                            <button
+                              onClick={handleUngroupAll}
+                              className="px-2 py-1 bg-red-800 hover:bg-red-700 text-red-200 text-xs rounded"
+                            >
+                              Ungroup
+                            </button>
+                          </div>
+                        ) : (
+                          <>
+                            {/* Group primary dropdown — pick an existing well */}
+                            <div>
+                              <select
+                                value={editRouteGroupWell}
+                                onChange={(e) => setEditRouteGroupWell(e.target.value)}
+                                className="w-full px-3 py-2 bg-gray-700 text-white rounded text-sm"
+                              >
+                                <option value="">Standalone (no group)</option>
+                                {Object.keys(configs).sort().map(name => (
+                                  <option key={name} value={name}>{name}</option>
+                                ))}
+                              </select>
+                            </div>
+
+                            {/* Auto-detected nearby wells suggestion */}
+                            {nearbyWells.length > 0 && (
+                              <div className="bg-gray-800 rounded p-2 border border-orange-900/50">
+                                <div className="text-orange-400 text-xs font-medium mb-1">
+                                  📍 Nearby wells detected ({nearbyWells.length})
+                                </div>
+                                <div className="space-y-1">
+                                  {nearbyWells.map(nw => (
+                                    <div key={nw.name} className="flex items-center justify-between text-xs">
+                                      <span className="text-gray-300">{nw.name}</span>
+                                      <span className="text-gray-500">{nw.distance}m away</span>
+                                    </div>
+                                  ))}
+                                </div>
+                                <button
+                                  onClick={() => handleGroupAll(selectedWell, nearbyWells.map(nw => nw.name))}
+                                  className="mt-2 w-full px-3 py-1.5 bg-orange-700 hover:bg-orange-600 text-white text-xs rounded font-medium"
+                                >
+                                  Group All ({nearbyWells.length + 1} wells) — {selectedWell} as primary
+                                </button>
+                              </div>
+                            )}
+                          </>
+                        )}
+                      </div>
+                    )}
                     {/* Route Manager — shows recorded trips when route recording is on */}
-                    {editRouteRecording && (
-                      <RouteManager wellName={selectedWell} />
+                    {/* If well is grouped, show RouteManager for the group primary */}
+                    {(editRouteRecording || (editRouteGroupWell && configs[editRouteGroupWell]?.routeRecording)) && (
+                      <RouteManager
+                        wellName={editRouteGroupWell && editRouteGroupWell !== selectedWell ? editRouteGroupWell : selectedWell}
+                        groupMembers={editRouteGroupWell ? (
+                          Object.entries(configs)
+                            .filter(([name, cfg]) => cfg.routeGroupWell === editRouteGroupWell && name !== (editRouteGroupWell || selectedWell))
+                            .map(([name]) => name)
+                        ) : undefined}
+                      />
                     )}
                     {/* NDIC Linkage */}
                     <div className="bg-gray-900 rounded p-2">

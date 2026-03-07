@@ -65,6 +65,7 @@ interface RouteOverrideDoc {
 
 interface RouteManagerProps {
   wellName: string;
+  groupMembers?: string[];
 }
 
 function wellSlug(name: string): string {
@@ -293,7 +294,7 @@ function RouteViewerModal({
   );
 }
 
-export default function RouteManager({ wellName }: RouteManagerProps) {
+export default function RouteManager({ wellName, groupMembers }: RouteManagerProps) {
   const [trips, setTrips] = useState<RouteTripDoc[]>([]);
   const [overrideDoc, setOverrideDoc] = useState<RouteOverrideDoc | null>(null);
   const [loading, setLoading] = useState(true);
@@ -506,6 +507,14 @@ export default function RouteManager({ wellName }: RouteManagerProps) {
           </button>
         )}
       </div>
+
+      {/* Pad group members badge */}
+      {groupMembers && groupMembers.length > 0 && (
+        <div className="mb-2 px-2 py-1.5 bg-orange-900/30 border border-orange-800/50 rounded text-xs text-orange-300">
+          <span className="font-medium">Shared with:</span>{' '}
+          {groupMembers.join(', ')}
+        </div>
+      )}
 
       {/* Approved Routes */}
       {approvedRoutes.length > 0 && (
