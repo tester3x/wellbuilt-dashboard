@@ -26,9 +26,8 @@ interface WellRouteStatus {
   approvedCount: number;
   lastTripDate?: Date;
   loading: boolean;
-  // Pad grouping
+  // Pad grouping — all wells equal, groupId = shared Firestore slug
   routeGroupWell?: string;
-  isPrimary?: boolean;
   groupMembers?: string[];
 }
 
@@ -54,54 +53,53 @@ export default function GpsRoutesTab() {
       // Build a map of all configs for grouping
       const allConfigs = data as Record<string, any>;
 
-      // Build pad groups: primaryWell -> [member wells]
+      // Build pad groups: groupId -> [all member wells]
+      // All wells in a group are equal — groupId is just a shared Firestore slug
       const padGroups = new Map<string, string[]>();
       for (const [name, config] of Object.entries(allConfigs)) {
         if (config.routeGroupWell) {
-          const primary = config.routeGroupWell;
-          if (!padGroups.has(primary)) padGroups.set(primary, []);
-          if (name !== primary) {
-            padGroups.get(primary)!.push(name);
-          }
+          const groupId = config.routeGroupWell;
+          if (!padGroups.has(groupId)) padGroups.set(groupId, []);
+          padGroups.get(groupId)!.push(name);
         }
       }
 
-      // Get all wells that should appear: routeRecording enabled OR is a group primary for recording wells
+      // Build display list: one entry per standalone well or pad group
       const routeWells: WellRouteStatus[] = [];
       const seen = new Set<string>();
 
+      // First pass: grouped wells — one card per pad group
+      for (const [groupId, members] of padGroups) {
+        members.sort();
+        members.forEach(m => seen.add(m));
+
+        // Use the group ID well's config for route display
+        const groupConfig = allConfigs[groupId] || allConfigs[members[0]];
+        const otherMembers = members.filter(m => m !== groupId);
+
+        routeWells.push({
+          wellName: groupId,
+          route: groupConfig?.route,
+          tripCount: 0,
+          approvedCount: 0,
+          loading: true,
+          routeGroupWell: groupId,
+          groupMembers: otherMembers.length > 0 ? otherMembers : undefined,
+        });
+      }
+
+      // Second pass: standalone wells with routeRecording enabled
       for (const [name, config] of Object.entries(allConfigs)) {
-        // Skip if already handled as part of a group
         if (seen.has(name)) continue;
+        if (!config.routeRecording) continue;
 
-        const isRecording = !!config.routeRecording;
-        const groupPrimary = config.routeGroupWell;
-
-        // This well has recording enabled — it's a primary or standalone
-        if (isRecording) {
-          const members = padGroups.get(name) || [];
-          seen.add(name);
-          members.forEach(m => seen.add(m));
-
-          routeWells.push({
-            wellName: name,
-            route: config.route,
-            tripCount: 0,
-            approvedCount: 0,
-            loading: true,
-            routeGroupWell: groupPrimary,
-            isPrimary: members.length > 0,
-            groupMembers: members.length > 0 ? members.sort() : undefined,
-          });
-          continue;
-        }
-
-        // This well is a group member pointing to a recording-enabled primary
-        if (groupPrimary && groupPrimary !== name && allConfigs[groupPrimary]?.routeRecording) {
-          // The primary will handle this well — skip it
-          seen.add(name);
-          continue;
-        }
+        routeWells.push({
+          wellName: name,
+          route: config.route,
+          tripCount: 0,
+          approvedCount: 0,
+          loading: true,
+        });
       }
 
       // Sort alphabetically

@@ -508,11 +508,11 @@ export default function RouteManager({ wellName, groupMembers }: RouteManagerPro
         )}
       </div>
 
-      {/* Pad group members badge */}
+      {/* Pad group badge — all wells share this route pool */}
       {groupMembers && groupMembers.length > 0 && (
         <div className="mb-2 px-2 py-1.5 bg-orange-900/30 border border-orange-800/50 rounded text-xs text-orange-300">
-          <span className="font-medium">Shared with:</span>{' '}
-          {groupMembers.join(', ')}
+          <span className="font-medium">Pad group:</span>{' '}
+          {wellName}, {groupMembers.join(', ')} — all recording to this pool
         </div>
       )}
 

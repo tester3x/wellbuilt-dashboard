@@ -609,18 +609,21 @@ export default function AdminPage() {
   }, [selectedWell, configs, detectNearbyWells]);
 
   // Group all nearby wells under a primary
-  const handleGroupAll = async (primaryWell: string, members: string[]) => {
+  // Group all nearby wells — all equal, all record, shared slug = first well's name
+  const handleGroupAll = async (anchorWell: string, members: string[]) => {
     const db = getFirebaseDatabase();
     const updates: Record<string, any> = {};
-    // Set the primary as its own group primary
-    updates[`well_config/${primaryWell}/routeGroupWell`] = primaryWell;
-    // Set all members to point to the primary
-    for (const member of members) {
-      updates[`well_config/${member}/routeGroupWell`] = primaryWell;
+    // All wells point to the same group ID (anchor well name = shared Firestore slug)
+    // All wells get routeRecording enabled so every trip contributes
+    const allWells = [anchorWell, ...members];
+    for (const well of allWells) {
+      updates[`well_config/${well}/routeGroupWell`] = anchorWell;
+      updates[`well_config/${well}/routeRecording`] = true;
     }
     await update(ref(db), updates);
-    setEditRouteGroupWell(primaryWell);
-    showMessage(`Grouped ${members.length + 1} wells under ${primaryWell}`);
+    setEditRouteGroupWell(anchorWell);
+    setEditRouteRecording(true);
+    showMessage(`Grouped ${allWells.length} wells — all recording to shared pool`);
   };
 
   // Ungroup a well (remove routeGroupWell from all members)
@@ -1167,49 +1170,40 @@ export default function AdminPage() {
                     {/* Well Pad Grouping — group nearby wells to share routes */}
                     {(editRouteRecording || editRouteGroupWell) && (
                       <div className="bg-gray-900 rounded p-3 space-y-2">
-                        <div className="flex items-center justify-between">
-                          <div>
-                            <label className="text-gray-300 text-sm font-medium">Well Pad Group</label>
-                            <div className="text-gray-500 text-xs mt-0.5">
-                              Wells on the same pad share approved routes
-                            </div>
+                        <div>
+                          <label className="text-gray-300 text-sm font-medium">Well Pad Group</label>
+                          <div className="text-gray-500 text-xs mt-0.5">
+                            Wells on the same pad share routes — every well records, every trip feeds the shared pool
                           </div>
                         </div>
 
                         {/* Current group status */}
-                        {editRouteGroupWell ? (
-                          <div className="flex items-center justify-between bg-gray-800 rounded p-2">
-                            <div>
-                              <span className="text-orange-400 text-sm font-medium">
-                                {editRouteGroupWell === selectedWell ? '★ Primary' : `→ ${editRouteGroupWell}`}
-                              </span>
-                              {editRouteGroupWell !== selectedWell && (
-                                <div className="text-gray-500 text-xs">
-                                  Shares routes with {editRouteGroupWell}
+                        {editRouteGroupWell ? (() => {
+                          const groupWells = Object.entries(configs)
+                            .filter(([, cfg]) => cfg.routeGroupWell === editRouteGroupWell)
+                            .map(([name]) => name)
+                            .sort();
+                          return (
+                            <div className="flex items-center justify-between bg-gray-800 rounded p-2">
+                              <div>
+                                <div className="text-orange-400 text-sm font-medium">
+                                  Pad Group ({groupWells.length} wells)
                                 </div>
-                              )}
-                              {/* Show group members if this is the primary */}
-                              {editRouteGroupWell === selectedWell && (() => {
-                                const members = Object.entries(configs)
-                                  .filter(([name, cfg]) => cfg.routeGroupWell === selectedWell && name !== selectedWell)
-                                  .map(([name]) => name);
-                                return members.length > 0 ? (
-                                  <div className="text-gray-400 text-xs mt-0.5">
-                                    Shared with: {members.join(', ')}
-                                  </div>
-                                ) : null;
-                              })()}
+                                <div className="text-gray-400 text-xs mt-0.5">
+                                  {groupWells.join(', ')}
+                                </div>
+                              </div>
+                              <button
+                                onClick={handleUngroupAll}
+                                className="px-2 py-1 bg-red-800 hover:bg-red-700 text-red-200 text-xs rounded"
+                              >
+                                Ungroup
+                              </button>
                             </div>
-                            <button
-                              onClick={handleUngroupAll}
-                              className="px-2 py-1 bg-red-800 hover:bg-red-700 text-red-200 text-xs rounded"
-                            >
-                              Ungroup
-                            </button>
-                          </div>
-                        ) : (
+                          );
+                        })() : (
                           <>
-                            {/* Group primary dropdown — pick an existing well */}
+                            {/* Manual group join — pick an existing group or well */}
                             <div>
                               <select
                                 value={editRouteGroupWell}
@@ -1227,13 +1221,13 @@ export default function AdminPage() {
                             {nearbyWells.length > 0 && (
                               <div className="bg-gray-800 rounded p-2 border border-orange-900/50">
                                 <div className="text-orange-400 text-xs font-medium mb-1">
-                                  📍 Nearby wells detected ({nearbyWells.length})
+                                  Nearby wells detected ({nearbyWells.length})
                                 </div>
                                 <div className="space-y-1">
                                   {nearbyWells.map(nw => (
                                     <div key={nw.name} className="flex items-center justify-between text-xs">
                                       <span className="text-gray-300">{nw.name}</span>
-                                      <span className="text-gray-500">{nw.distance}m away</span>
+                                      <span className="text-gray-500">{nw.distance}m</span>
                                     </div>
                                   ))}
                                 </div>
@@ -1241,7 +1235,7 @@ export default function AdminPage() {
                                   onClick={() => handleGroupAll(selectedWell, nearbyWells.map(nw => nw.name))}
                                   className="mt-2 w-full px-3 py-1.5 bg-orange-700 hover:bg-orange-600 text-white text-xs rounded font-medium"
                                 >
-                                  Group All ({nearbyWells.length + 1} wells) — {selectedWell} as primary
+                                  Group All — {nearbyWells.length + 1} wells share routes
                                 </button>
                               </div>
                             )}
@@ -1249,18 +1243,24 @@ export default function AdminPage() {
                         )}
                       </div>
                     )}
-                    {/* Route Manager — shows recorded trips when route recording is on */}
-                    {/* If well is grouped, show RouteManager for the group primary */}
-                    {(editRouteRecording || (editRouteGroupWell && configs[editRouteGroupWell]?.routeRecording)) && (
-                      <RouteManager
-                        wellName={editRouteGroupWell && editRouteGroupWell !== selectedWell ? editRouteGroupWell : selectedWell}
-                        groupMembers={editRouteGroupWell ? (
-                          Object.entries(configs)
-                            .filter(([name, cfg]) => cfg.routeGroupWell === editRouteGroupWell && name !== (editRouteGroupWell || selectedWell))
+                    {/* Route Manager — shows shared route pool for the pad group */}
+                    {/* All grouped wells use the same Firestore slug (the routeGroupWell value) */}
+                    {(editRouteRecording || editRouteGroupWell) && (() => {
+                      const routeSlugWell = editRouteGroupWell || selectedWell;
+                      const groupWells = editRouteGroupWell
+                        ? Object.entries(configs)
+                            .filter(([, cfg]) => cfg.routeGroupWell === editRouteGroupWell)
                             .map(([name]) => name)
-                        ) : undefined}
-                      />
-                    )}
+                            .filter(name => name !== routeSlugWell)
+                            .sort()
+                        : undefined;
+                      return (
+                        <RouteManager
+                          wellName={routeSlugWell}
+                          groupMembers={groupWells}
+                        />
+                      );
+                    })()}
                     {/* NDIC Linkage */}
                     <div className="bg-gray-900 rounded p-2">
                       <div className="flex justify-between items-center mb-1">
