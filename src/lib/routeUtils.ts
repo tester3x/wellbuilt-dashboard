@@ -121,17 +121,23 @@ export function generateRouteId(): string {
 
 /**
  * Build a shareable Google Maps URL from simplified waypoints.
- * No origin — Google uses the recipient's current location.
- * Waypoints are pipe-separated lat,lng pairs.
+ * Origin = start of route, Destination = end of route.
+ * Middle waypoints (excluding first/last which duplicate origin/dest) are intermediate stops.
+ * Without an explicit origin, Google uses "Your location" which adds an unwanted extra leg.
  */
 export function buildGoogleMapsUrl(
   waypoints: Array<{ lat: number; lng: number }>,
+  startLat: number,
+  startLng: number,
   destLat: number,
   destLng: number,
 ): string {
+  const origin = `&origin=${startLat},${startLng}`;
   const dest = `&destination=${destLat},${destLng}`;
-  const wp = waypoints.length > 0
-    ? `&waypoints=${waypoints.map(w => `${w.lat},${w.lng}`).join('|')}`
+  // Skip first and last waypoints — they duplicate origin/destination
+  const midWps = waypoints.length > 2 ? waypoints.slice(1, -1) : [];
+  const wp = midWps.length > 0
+    ? `&waypoints=${midWps.map(w => `${w.lat},${w.lng}`).join('|')}`
     : '';
-  return `https://www.google.com/maps/dir/?api=1${dest}${wp}&travelmode=driving`;
+  return `https://www.google.com/maps/dir/?api=1${origin}${dest}${wp}&travelmode=driving`;
 }

@@ -12,6 +12,7 @@ import {
   doc,
   getDoc,
   setDoc,
+  deleteDoc,
   orderBy,
   query,
   Timestamp,
@@ -437,8 +438,22 @@ export default function RouteManager({ wellName }: RouteManagerProps) {
     setSaving(false);
   };
 
+  const handleDeleteTrip = async (tripId: string) => {
+    setSaving(true);
+    try {
+      const db = getFirestoreDb();
+      await deleteDoc(doc(db, 'route_recordings', slug, 'trips', tripId));
+      setTrips(prev => prev.filter(t => t.id !== tripId));
+      setMessage('Trip deleted');
+    } catch (err: any) {
+      console.error('[RouteManager] Failed to delete trip:', err);
+      setMessage('Failed to delete trip');
+    }
+    setSaving(false);
+  };
+
   const handleCopyLink = async (route: ApprovedRoute) => {
-    const url = buildGoogleMapsUrl(route.waypoints, route.endLat, route.endLng);
+    const url = buildGoogleMapsUrl(route.waypoints, route.startLat, route.startLng, route.endLat, route.endLng);
     try {
       await navigator.clipboard.writeText(url);
     } catch {
@@ -540,30 +555,18 @@ export default function RouteManager({ wellName }: RouteManagerProps) {
         </div>
       )}
 
-      {/* Recorded Trips */}
-      {trips.length > 0 && (
-        <>
-          <div className="text-xs text-gray-500 uppercase tracking-wider mb-1">Recorded Trips</div>
-          <div className="space-y-1 max-h-48 overflow-y-auto">
-            {trips.map((trip) => {
-              const isApproved = approvedTripIds.has(trip.id);
-              return (
-                <div
-                  key={trip.id}
-                  className={`p-2 rounded text-xs ${
-                    isApproved
-                      ? 'bg-green-900/10 border border-green-800/30'
-                      : 'bg-gray-800'
-                  }`}
-                >
+      {/* Recorded Trips — only show unapproved trips (approved ones already visible in Approved Routes) */}
+      {(() => {
+        const pendingTrips = trips.filter(t => !approvedTripIds.has(t.id));
+        return pendingTrips.length > 0 ? (
+          <>
+            <div className="text-xs text-gray-500 uppercase tracking-wider mb-1">Recorded Trips</div>
+            <div className="space-y-1 max-h-48 overflow-y-auto">
+              {pendingTrips.map((trip) => (
+                <div key={trip.id} className="p-2 rounded text-xs bg-gray-800">
                   <div className="flex items-center justify-between">
                     <div className="flex-1">
-                      <div className="text-white">
-                        {trip.driverName}
-                        {isApproved && (
-                          <span className="ml-1 text-green-400">✓ approved</span>
-                        )}
-                      </div>
+                      <div className="text-white">{trip.driverName}</div>
                       <div className="text-gray-500">
                         {formatDate(trip.recordedAt)} · {trip.waypoints.length} pts ·{' '}
                         {metersToMiles(trip.totalDistanceMeters)} mi · {Math.round(trip.durationMinutes)} min
@@ -576,23 +579,29 @@ export default function RouteManager({ wellName }: RouteManagerProps) {
                       >
                         View
                       </button>
-                      {!isApproved && (
-                        <button
-                          onClick={() => setModalTrip(trip)}
-                          disabled={saving}
-                          className="px-2 py-1 bg-blue-700 hover:bg-blue-600 text-white text-xs rounded whitespace-nowrap"
-                        >
-                          Approve
-                        </button>
-                      )}
+                      <button
+                        onClick={() => setModalTrip(trip)}
+                        disabled={saving}
+                        className="px-2 py-1 bg-blue-700 hover:bg-blue-600 text-white text-xs rounded whitespace-nowrap"
+                      >
+                        Approve
+                      </button>
+                      <button
+                        onClick={() => handleDeleteTrip(trip.id)}
+                        disabled={saving}
+                        className="px-2 py-1 bg-red-900 hover:bg-red-800 text-red-300 text-xs rounded whitespace-nowrap"
+                        title="Delete this recorded trip"
+                      >
+                        ✕
+                      </button>
                     </div>
                   </div>
                 </div>
-              );
-            })}
-          </div>
-        </>
-      )}
+              ))}
+            </div>
+          </>
+        ) : null;
+      })()}
 
       {trips.length === 0 && approvedRoutes.length === 0 && (
         <div className="text-gray-500 text-xs">
