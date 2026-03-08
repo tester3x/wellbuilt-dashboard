@@ -190,7 +190,7 @@ export function getFuelSurchargeLabel(config: OperatorBillingConfig | undefined)
     case 'per_mile': return `DOE/mi (${config.fuelSurchargeMPG || 6}MPG)`;
     case 'percentage': return `${((config.fuelSurchargePercent || 0) * 100).toFixed(1)}%`;
     case 'flat': return `$${config.fuelSurchargeRate || 0}/load`;
-    case 'flat_doe': return `DOE/hr (×${config.fuelSurchargeMultiplier || 8}, base $${config.fuelSurchargeBaseline || 3.25})`;
+    case 'flat_doe': return `DOE/hr (x${config.fuelSurchargeMultiplier || 8}, base $${config.fuelSurchargeBaseline || 3.25})`;
     default: return 'None';
   }
 }
