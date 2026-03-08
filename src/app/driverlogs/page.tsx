@@ -132,22 +132,30 @@ export default function DriverLogsPage() {
       setDataLoading(true);
       setError(null);
       try {
-        const [shifts, invoices] = await Promise.all([
-          fetchDriverShifts(filteredDrivers.map((d) => d.key), selectedDate),
-          fetchInvoicesForDate(selectedDate, effectiveCompanyId),
-        ]);
+        // Fetch shifts and invoices independently — shift data should always load
+        // even if the invoice index is still building
+        const driverKeys = filteredDrivers.map((d) => d.key);
+        const shiftsPromise = fetchDriverShifts(driverKeys, selectedDate);
+        const invoicesPromise = fetchInvoicesForDate(selectedDate, effectiveCompanyId)
+          .catch((err: any) => {
+            const msg = err?.message || '';
+            if (msg.includes('currently building')) {
+              setError('Invoice index is building — showing shift data only. Refresh in a minute.');
+            } else if (msg.includes('requires an index')) {
+              setError('Invoice index is building — showing shift data only. Refresh in a minute.');
+            } else {
+              console.error('Failed to load invoices:', err);
+              setError('Failed to load invoice data.');
+            }
+            return [] as Awaited<ReturnType<typeof fetchInvoicesForDate>>;
+          });
 
+        const [shifts, invoices] = await Promise.all([shiftsPromise, invoicesPromise]);
         const logs = buildDriverDayLogs(filteredDrivers, shifts, invoices);
         setDriverLogs(logs);
       } catch (err: any) {
         console.error('Failed to load driver logs:', err);
-        const msg = err?.message || 'Failed to load logs';
-        // Don't show index-building errors as scary red — it's temporary
-        if (msg.includes('currently building')) {
-          setError('Firestore index is building. Please wait a minute and refresh.');
-        } else {
-          setError(msg);
-        }
+        setError(err?.message || 'Failed to load logs');
       } finally {
         setDataLoading(false);
       }
