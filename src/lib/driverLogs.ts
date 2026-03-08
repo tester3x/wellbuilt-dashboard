@@ -82,15 +82,16 @@ export interface DriverDayLog {
   displayName: string;
   companyId?: string;
   companyName?: string;
-  shiftStart: string | null;  // ISO — login time
-  shiftEnd: string | null;    // ISO — logout time
+  shiftStart: string | null;  // ISO — login time (from WB S shift or inferred from first job event)
+  shiftEnd: string | null;    // ISO — logout time (from WB S shift or inferred from last job event)
   shiftSynthetic?: boolean;   // Was the logout auto-generated?
   totalLoads: number;
   totalBBL: number;
   totalHours: number;
   invoices: LogInvoice[];
   timeline: UnifiedEvent[];   // Merged + sorted chronologically
-  hasShiftData: boolean;
+  hasShiftData: boolean;      // True = WB S shift bookends exist
+  inferredTimes: boolean;     // True = start/end inferred from job activity (no WB S)
 }
 
 // ── Data fetching ────────────────────────────────────────────────────────────
@@ -272,13 +273,27 @@ export function buildDriverDayLogs(
     const totalBBL = driverInvoices.reduce((sum, i) => sum + i.totalBBL, 0);
     const totalHours = driverInvoices.reduce((sum, i) => sum + i.totalHours, 0);
 
+    // If no shift bookends from WB S, infer effective start/end from job activity
+    let inferredTimes = false;
+    let effectiveStart = loginEvent?.timestamp || null;
+    let effectiveEnd = logoutEvent?.timestamp || null;
+
+    if (!shift && timeline.length > 0) {
+      inferredTimes = true;
+      // First job event = effective start
+      effectiveStart = timeline[0].timestamp;
+      // Last job event = effective end (only if there's a 'close' event)
+      const lastClose = [...timeline].reverse().find((e) => e.type === 'close');
+      effectiveEnd = lastClose?.timestamp || null;
+    }
+
     logs.push({
       driverHash: driver.key,
       displayName: driver.displayName,
       companyId: driver.companyId,
       companyName: driver.companyName,
-      shiftStart: loginEvent?.timestamp || null,
-      shiftEnd: logoutEvent?.timestamp || null,
+      shiftStart: effectiveStart,
+      shiftEnd: effectiveEnd,
       shiftSynthetic: logoutEvent?.synthetic,
       totalLoads,
       totalBBL,
@@ -286,6 +301,7 @@ export function buildDriverDayLogs(
       invoices: driverInvoices,
       timeline,
       hasShiftData: !!shift,
+      inferredTimes,
     });
   }
 

@@ -295,6 +295,13 @@ export default function DriverLogsPage() {
           </div>
         </div>
 
+        {/* ── Info banner: drivers without shift bookends ───── */}
+        {!dataLoading && visibleLogs.some((l) => l.inferredTimes) && (
+          <div className="mb-4 p-3 rounded bg-blue-900/30 border border-blue-800/50 text-blue-200 text-sm">
+            <span className="text-yellow-500 mr-1">~</span> = No shift bookends. Showing job activity only. Install WB Suite for GPS clock in/out.
+          </div>
+        )}
+
         {/* ── Error ───────────────────────────────────────────── */}
         {error && (
           <div className="mb-4 p-3 rounded bg-red-900/50 text-red-200 text-sm">
@@ -342,18 +349,23 @@ function DriverCard({
   // Status indicator
   const isActive = log.shiftStart && !log.shiftEnd;
   const hasShift = log.hasShiftData;
+  const hasJobs = log.totalLoads > 0;
 
   const statusColor = isActive
     ? 'bg-green-500'
     : hasShift
       ? 'bg-gray-500'
-      : 'bg-yellow-600';
+      : hasJobs
+        ? 'bg-yellow-600'
+        : 'bg-red-500';
 
   const statusLabel = isActive
     ? 'Active'
     : hasShift
       ? 'Shift Ended'
-      : 'No Shift Data';
+      : hasJobs
+        ? 'Job Activity Only'
+        : 'No Activity';
 
   const shiftDuration = log.shiftStart && log.shiftEnd
     ? formatDuration(log.shiftStart, log.shiftEnd)
@@ -387,6 +399,7 @@ function DriverCard({
             {/* Shift time */}
             {log.shiftStart && (
               <span className="text-gray-400">
+                {log.inferredTimes && <span className="text-yellow-600 mr-1" title="Inferred from job activity (no WB S shift data)">~</span>}
                 {formatTime12h(log.shiftStart)}
                 {log.shiftEnd ? ` - ${formatTime12h(log.shiftEnd)}` : ' - ...'}
                 {shiftDuration && (
