@@ -331,7 +331,7 @@ export async function fetchBillingData(
 
 // ─── Billing Record CRUD ─────────────────────────────────────────────────────
 
-function calculateDueDate(periodEnd: Date, terms: string): Date {
+export function calculateDueDate(periodEnd: Date, terms: string): Date {
   const due = new Date(periodEnd);
   switch (terms) {
     case 'net_30': due.setDate(due.getDate() + 30); break;

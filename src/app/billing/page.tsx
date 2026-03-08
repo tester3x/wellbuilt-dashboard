@@ -7,6 +7,19 @@ import { AppHeader } from '@/components/AppHeader';
 import { loadAllCompanies, updateCompanyFields, type CompanyConfig, type DoeRegion, DOE_REGIONS, STATE_TO_PADD } from '@/lib/companySettings';
 import { ref, get } from 'firebase/database';
 import { getFirebaseDatabase } from '@/lib/firebase';
+import { Timestamp } from 'firebase/firestore';
+import {
+  type InvoiceGrouping,
+  groupInvoiceData,
+  getNextInvoiceNumbers,
+  generateInvoicePDF,
+  generateInvoiceCSV,
+  downloadBlob,
+  saveBillingExport,
+  fetchRecentExports,
+  getExportFilename,
+  type BillingExportRecord,
+} from '@/lib/billingExport';
 import {
   fetchBillingData,
   fetchBillingRecords,
@@ -29,7 +42,7 @@ import {
   type PayPeriod,
 } from '@/lib/billing';
 
-type SubTab = 'receivables' | 'fuel';
+type SubTab = 'receivables' | 'fuel' | 'export';
 
 export default function BillingPage() {
   const { user, loading } = useAuth();
@@ -64,6 +77,19 @@ export default function BillingPage() {
   const [savingPrice, setSavingPrice] = useState(false);
   const [fetchingEia, setFetchingEia] = useState(false);
   const [eiaResult, setEiaResult] = useState<string | null>(null);
+
+  // Export state
+  const [exportOperator, setExportOperator] = useState<string | null>(null);
+  const [exportGrouping, setExportGrouping] = useState<InvoiceGrouping>('well_day');
+  const [exportLoading, setExportLoading] = useState(false);
+  const [recentExports, setRecentExports] = useState<BillingExportRecord[]>([]);
+  const [exportPeriodType, setExportPeriodType] = useState<string>('this-week');
+  const [exportDateFrom, setExportDateFrom] = useState(() => {
+    const d = new Date(); d.setDate(d.getDate() - d.getDay() + (d.getDay() === 0 ? -6 : 1)); return d.toISOString().slice(0, 10);
+  });
+  const [exportDateTo, setExportDateTo] = useState(() => new Date().toISOString().slice(0, 10));
+  const [exportSummaries, setExportSummaries] = useState<OperatorBillingSummary[]>([]);
+  const [exportDataLoading, setExportDataLoading] = useState(false);
 
   // Driver name resolution
   const [legalNameMap, setLegalNameMap] = useState<Record<string, string>>({});
@@ -222,6 +248,27 @@ export default function BillingPage() {
     || 'us';
   const regionLabel = DOE_REGIONS.find(r => r.value === currentRegion)?.label || 'U.S. Average';
 
+  // Load recent exports when Export tab opened
+  useEffect(() => {
+    if (activeTab === 'export' && effectiveCompanyId) {
+      fetchRecentExports(effectiveCompanyId).then(setRecentExports).catch(() => {});
+    }
+  }, [activeTab, effectiveCompanyId]);
+
+  // Load export data independently when export dates change
+  useEffect(() => {
+    if (activeTab !== 'export' || !effectiveCompanyId || companies.size === 0) return;
+    const from = new Date(exportDateFrom); from.setHours(0, 0, 0, 0);
+    const to = new Date(exportDateTo); to.setHours(23, 59, 59, 999);
+    if (isNaN(from.getTime()) || isNaN(to.getTime()) || from > to) return;
+    const exportPeriod: PayPeriod = { type: 'custom' as any, start: from, end: to, label: '' };
+    setExportDataLoading(true);
+    fetchBillingData(exportPeriod, companies, effectiveCompanyId)
+      .then(setExportSummaries)
+      .catch(() => setExportSummaries([]))
+      .finally(() => setExportDataLoading(false));
+  }, [activeTab, exportDateFrom, exportDateTo, effectiveCompanyId, companies]);
+
   const handleRegionChange = async (region: DoeRegion) => {
     if (!effectiveCompanyId) return;
     try {
@@ -288,6 +335,16 @@ export default function BillingPage() {
                 }`}
               >
                 Fuel Prices
+              </button>
+              <button
+                onClick={() => setActiveTab('export')}
+                className={`px-3 py-1.5 rounded-md text-sm font-medium transition-colors ${
+                  activeTab === 'export'
+                    ? 'bg-green-600 text-white'
+                    : 'text-gray-400 hover:text-white'
+                }`}
+              >
+                Export
               </button>
             </div>
             {/* WB admin company picker */}
@@ -586,6 +643,258 @@ export default function BillingPage() {
                 </table>
               )}
             </div>
+          </div>
+        )}
+
+        {/* ─── Export Tab ─── */}
+        {activeTab === 'export' && (
+          <div className="space-y-6">
+            <div className="bg-gray-800 rounded-lg border border-gray-700 p-6">
+              <h3 className="text-lg font-semibold text-white mb-4">Generate Invoices</h3>
+
+              {/* Date Range */}
+              <div className="mb-4">
+                <label className="block text-sm text-gray-400 mb-2">Period</label>
+                <div className="flex items-center gap-3 flex-wrap">
+                  <select
+                    value={exportPeriodType}
+                    onChange={(e) => {
+                      const v = e.target.value;
+                      setExportPeriodType(v);
+                      if (v !== 'custom') {
+                        const p = periods.find(p => p.type === v);
+                        if (p) {
+                          setExportDateFrom(p.start.toISOString().slice(0, 10));
+                          setExportDateTo(p.end.toISOString().slice(0, 10));
+                        }
+                      }
+                    }}
+                    className="px-3 py-2 bg-gray-700 border border-gray-600 rounded-lg text-white text-sm focus:outline-none focus:border-green-500"
+                  >
+                    {periods.map(p => (
+                      <option key={p.type} value={p.type}>{p.label}</option>
+                    ))}
+                    <option value="custom">Custom Range</option>
+                  </select>
+                  <div className="flex items-center gap-2">
+                    <input
+                      type="date"
+                      value={exportDateFrom}
+                      onChange={(e) => { setExportDateFrom(e.target.value); setExportPeriodType('custom'); }}
+                      className="px-3 py-2 bg-gray-700 border border-gray-600 rounded-lg text-white text-sm focus:outline-none focus:border-green-500"
+                    />
+                    <span className="text-gray-500 text-sm">to</span>
+                    <input
+                      type="date"
+                      value={exportDateTo}
+                      onChange={(e) => { setExportDateTo(e.target.value); setExportPeriodType('custom'); }}
+                      className="px-3 py-2 bg-gray-700 border border-gray-600 rounded-lg text-white text-sm focus:outline-none focus:border-green-500"
+                    />
+                  </div>
+                  {exportDataLoading && <span className="text-gray-400 text-xs">Loading...</span>}
+                </div>
+              </div>
+
+              {/* Operator filter */}
+              <div className="mb-4">
+                <label className="block text-sm text-gray-400 mb-1">Operator</label>
+                <select
+                  value={exportOperator || ''}
+                  onChange={(e) => setExportOperator(e.target.value || null)}
+                  className="w-full max-w-sm px-3 py-2 bg-gray-700 border border-gray-600 rounded-lg text-white text-sm focus:outline-none focus:border-blue-500"
+                >
+                  <option value="">All Operators</option>
+                  {exportSummaries.map(s => (
+                    <option key={s.operator} value={s.operator}>{s.operator}</option>
+                  ))}
+                </select>
+              </div>
+
+              {/* Grouping */}
+              <div className="mb-4">
+                <label className="block text-sm text-gray-400 mb-2">Grouping</label>
+                <div className="space-y-2">
+                  {([
+                    ['well_day', 'Per Well, Per Day', 'Industry standard — 1 invoice per well per day'],
+                    ['well_period', 'Per Well, Per Period', '1 invoice per well for the entire period'],
+                    ['operator_summary', 'Summary', '1 invoice per operator for the period'],
+                  ] as [InvoiceGrouping, string, string][]).map(([value, label, desc]) => (
+                    <label key={value} className="flex items-start gap-3 cursor-pointer group">
+                      <input
+                        type="radio"
+                        name="grouping"
+                        value={value}
+                        checked={exportGrouping === value}
+                        onChange={() => setExportGrouping(value)}
+                        className="mt-1 accent-green-500"
+                      />
+                      <div>
+                        <span className="text-white text-sm group-hover:text-green-400 transition-colors">{label}</span>
+                        <p className="text-gray-500 text-xs">{desc}</p>
+                      </div>
+                    </label>
+                  ))}
+                </div>
+              </div>
+
+              {/* Preview */}
+              {(() => {
+                const groups = groupInvoiceData(exportSummaries, exportGrouping, exportOperator || undefined);
+                const grandTotal = groups.reduce((s, g) => s + g.grandTotal, 0);
+                return (
+                  <div className="mb-6 p-3 bg-gray-750 rounded-lg border border-gray-600">
+                    <p className="text-white text-sm">
+                      <span className="text-green-400 font-mono font-bold">{groups.length}</span> invoice{groups.length !== 1 ? 's' : ''} will be generated
+                      {grandTotal > 0 && (
+                        <span className="text-gray-400 ml-2">— Total: <span className="text-green-400 font-mono">{formatCurrency(grandTotal)}</span></span>
+                      )}
+                    </p>
+                    {groups.length === 0 && !exportDataLoading && (
+                      <p className="text-yellow-400 text-xs mt-1">No invoices found for the selected period and operator.</p>
+                    )}
+                  </div>
+                );
+              })()}
+
+              {/* Generate buttons */}
+              <div className="flex gap-3">
+                <button
+                  onClick={async () => {
+                    const groups = groupInvoiceData(exportSummaries, exportGrouping, exportOperator || undefined);
+                    if (groups.length === 0) return;
+                    setExportLoading(true);
+                    try {
+                      const companyId = effectiveCompanyId!;
+                      const company = companies.get(companyId)!;
+                      const prefix = company.invoicePrefix || 'INV';
+                      const from = new Date(exportDateFrom); from.setHours(0, 0, 0, 0);
+                      const to = new Date(exportDateTo); to.setHours(23, 59, 59, 999);
+                      const exportPeriod: PayPeriod = { type: 'custom' as any, start: from, end: to, label: '' };
+                      const numbers = await getNextInvoiceNumbers(companyId, groups.length, prefix);
+                      const pdf = await generateInvoicePDF(
+                        groups, numbers, company, company.billingConfig,
+                        company.currentDieselPrice, exportPeriod, legalNameMap,
+                      );
+                      const blob = pdf.output('blob');
+                      downloadBlob(blob, getExportFilename(prefix, exportPeriod, exportOperator, 'pdf'));
+                      await saveBillingExport({
+                        companyId,
+                        operator: exportOperator,
+                        grouping: exportGrouping,
+                        periodStart: Timestamp.fromDate(from),
+                        periodEnd: Timestamp.fromDate(to),
+                        invoiceNumberStart: numbers[0],
+                        invoiceNumberEnd: numbers[numbers.length - 1],
+                        invoiceCount: groups.length,
+                        grandTotal: groups.reduce((s, g) => s + g.grandTotal, 0),
+                        format: 'pdf',
+                        generatedAt: Timestamp.now(),
+                      });
+                      // Refresh recent exports
+                      fetchRecentExports(companyId).then(setRecentExports).catch(() => {});
+                    } catch (err: any) {
+                      console.error('PDF generation failed:', err);
+                      setError(err?.message || 'PDF generation failed');
+                    } finally {
+                      setExportLoading(false);
+                    }
+                  }}
+                  disabled={exportLoading || exportSummaries.length === 0}
+                  className="px-5 py-2 bg-green-600 hover:bg-green-500 disabled:opacity-50 text-white rounded-lg text-sm font-medium transition-colors"
+                >
+                  {exportLoading ? 'Generating...' : 'Generate PDF'}
+                </button>
+                <button
+                  onClick={async () => {
+                    const groups = groupInvoiceData(exportSummaries, exportGrouping, exportOperator || undefined);
+                    if (groups.length === 0) return;
+                    setExportLoading(true);
+                    try {
+                      const companyId = effectiveCompanyId!;
+                      const company = companies.get(companyId)!;
+                      const prefix = company.invoicePrefix || 'INV';
+                      const from = new Date(exportDateFrom); from.setHours(0, 0, 0, 0);
+                      const to = new Date(exportDateTo); to.setHours(23, 59, 59, 999);
+                      const exportPeriod: PayPeriod = { type: 'custom' as any, start: from, end: to, label: '' };
+                      const numbers = await getNextInvoiceNumbers(companyId, groups.length, prefix);
+                      const csv = generateInvoiceCSV(groups, numbers, legalNameMap);
+                      const blob = new Blob([csv], { type: 'text/csv;charset=utf-8;' });
+                      downloadBlob(blob, getExportFilename(prefix, exportPeriod, exportOperator, 'csv'));
+                      await saveBillingExport({
+                        companyId,
+                        operator: exportOperator,
+                        grouping: exportGrouping,
+                        periodStart: Timestamp.fromDate(from),
+                        periodEnd: Timestamp.fromDate(to),
+                        invoiceNumberStart: numbers[0],
+                        invoiceNumberEnd: numbers[numbers.length - 1],
+                        invoiceCount: groups.length,
+                        grandTotal: groups.reduce((s, g) => s + g.grandTotal, 0),
+                        format: 'csv',
+                        generatedAt: Timestamp.now(),
+                      });
+                      fetchRecentExports(companyId).then(setRecentExports).catch(() => {});
+                    } catch (err: any) {
+                      console.error('CSV export failed:', err);
+                      setError(err?.message || 'CSV export failed');
+                    } finally {
+                      setExportLoading(false);
+                    }
+                  }}
+                  disabled={exportLoading || exportSummaries.length === 0}
+                  className="px-5 py-2 bg-blue-600 hover:bg-blue-500 disabled:opacity-50 text-white rounded-lg text-sm font-medium transition-colors"
+                >
+                  Export CSV
+                </button>
+              </div>
+            </div>
+
+            {/* Recent Exports */}
+            {recentExports.length > 0 && (
+              <div className="bg-gray-800 rounded-lg border border-gray-700 p-6">
+                <h3 className="text-lg font-semibold text-white mb-3">Recent Exports</h3>
+                <table className="w-full">
+                  <thead>
+                    <tr className="text-xs text-gray-500">
+                      <th className="px-4 py-2 text-left">Invoice Range</th>
+                      <th className="px-4 py-2 text-left">Operator</th>
+                      <th className="px-4 py-2 text-left">Grouping</th>
+                      <th className="px-4 py-2 text-right">Count</th>
+                      <th className="px-4 py-2 text-right">Total</th>
+                      <th className="px-4 py-2 text-left">Format</th>
+                      <th className="px-4 py-2 text-left">Date</th>
+                    </tr>
+                  </thead>
+                  <tbody className="divide-y divide-gray-700">
+                    {recentExports.map(exp => (
+                      <tr key={exp.id} className="text-sm hover:bg-gray-750">
+                        <td className="px-4 py-2 text-blue-400 font-mono text-xs">
+                          {exp.invoiceNumberStart === exp.invoiceNumberEnd
+                            ? exp.invoiceNumberStart
+                            : `${exp.invoiceNumberStart} .. ${exp.invoiceNumberEnd}`}
+                        </td>
+                        <td className="px-4 py-2 text-gray-300">{exp.operator || 'All'}</td>
+                        <td className="px-4 py-2 text-gray-400">
+                          {exp.grouping === 'well_day' ? 'Well/Day' : exp.grouping === 'well_period' ? 'Well/Period' : 'Summary'}
+                        </td>
+                        <td className="px-4 py-2 text-right text-white font-mono">{exp.invoiceCount}</td>
+                        <td className="px-4 py-2 text-right text-green-400 font-mono">{formatCurrency(exp.grandTotal)}</td>
+                        <td className="px-4 py-2">
+                          <span className={`px-2 py-0.5 rounded text-xs font-medium ${
+                            exp.format === 'pdf' ? 'bg-red-600/20 text-red-400' : 'bg-blue-600/20 text-blue-400'
+                          }`}>
+                            {exp.format.toUpperCase()}
+                          </span>
+                        </td>
+                        <td className="px-4 py-2 text-gray-400 text-xs">
+                          {exp.generatedAt?.toDate ? exp.generatedAt.toDate().toLocaleDateString() : '--'}
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            )}
           </div>
         )}
 
