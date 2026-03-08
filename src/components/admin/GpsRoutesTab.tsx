@@ -44,10 +44,12 @@ export default function GpsRoutesTab() {
   // Add Well modal
   const [showAddModal, setShowAddModal] = useState(false);
   const [addWellSearch, setAddWellSearch] = useState('');
-  const [addWellSelected, setAddWellSelected] = useState('');
-  const [nearbyWells, setNearbyWells] = useState<Array<{ name: string; distance: number }>>([]);
-  const [detectingNearby, setDetectingNearby] = useState(false);
   const [addMessage, setAddMessage] = useState('');
+  const [addingWell, setAddingWell] = useState(false);
+
+  // Find Pad Wells on existing wells
+  const [padSearchingWell, setPadSearchingWell] = useState<string | null>(null);
+  const [padMessage, setPadMessage] = useState<{ well: string; text: string } | null>(null);
 
   // Load wells from RTDB, then fetch trip/override counts from Firestore
   useEffect(() => {
@@ -80,8 +82,11 @@ export default function GpsRoutesTab() {
       const routeWells: WellRouteStatus[] = [];
       const seen = new Set<string>();
 
-      // First pass: grouped wells — one card per pad group
+      // First pass: grouped wells — one card per pad group (only if at least one is recording)
       for (const [groupId, members] of padGroups) {
+        const anyRecording = members.some(m => configs[m]?.routeRecording);
+        if (!anyRecording) continue; // Released pad — don't show on GPS Routes tab
+
         members.sort();
         members.forEach(m => seen.add(m));
 
@@ -160,26 +165,104 @@ export default function GpsRoutesTab() {
     return () => unsub();
   }, []);
 
-  // Detect nearby wells when a well is selected in the Add modal
-  const detectNearby = useCallback(async (wellName: string) => {
+  // Auto-detect nearby wells and group them when adding a well to recording.
+  // If the well already belongs to a pad group, re-activates ALL members.
+  const handleAutoAdd = useCallback(async (wellName: string) => {
+    setAddingWell(true);
+    setAddMessage('');
+
     const config = allConfigs[wellName];
-    if (!config?.ndicName) {
-      setNearbyWells([]);
+    const db = getFirebaseDatabase();
+
+    // Check if this well already belongs to a pad group (from a previous session)
+    if (config?.routeGroupWell) {
+      const groupId = config.routeGroupWell;
+      const groupMembers = Object.entries(allConfigs)
+        .filter(([, cfg]) => cfg.routeGroupWell === groupId)
+        .map(([name]) => name);
+
+      const updates: Record<string, any> = {};
+      for (const w of groupMembers) {
+        updates[`well_config/${w}/routeRecording`] = true;
+      }
+      await update(ref(db), updates);
+      setAddMessage(`Pad group reactivated! ${groupMembers.length} wells: ${groupMembers.join(', ')}`);
+      setAddingWell(false);
       return;
     }
 
-    setDetectingNearby(true);
+    // New well — auto-detect nearby wells on the same pad
+    let nearby: string[] = [];
+    if (config?.ndicName) {
+      try {
+        const selectedNdic = await findWellByName(config.ndicName);
+        if (selectedNdic?.latitude && selectedNdic?.longitude) {
+          const promises = Object.entries(allConfigs)
+            .filter(([name, cfg]) => name !== wellName && cfg.ndicName && !cfg.routeRecording && !cfg.routeGroupWell)
+            .map(async ([name, cfg]) => {
+              try {
+                const ndic = await findWellByName(cfg.ndicName);
+                if (ndic?.latitude && ndic?.longitude) {
+                  const dist = haversineMeters(
+                    selectedNdic.latitude!, selectedNdic.longitude!,
+                    ndic.latitude!, ndic.longitude!,
+                  );
+                  if (dist <= PAD_RADIUS_METERS) return name;
+                }
+              } catch { /* skip */ }
+              return null;
+            });
+
+          const results = await Promise.all(promises);
+          nearby = results.filter((n): n is string => n !== null);
+        }
+      } catch (err) {
+        console.error('[GpsRoutesTab] Nearby detection failed:', err);
+      }
+    }
+
+    // Auto-add and group
+    if (nearby.length > 0) {
+      const updates: Record<string, any> = {};
+      const padWells = [wellName, ...nearby];
+      for (const w of padWells) {
+        updates[`well_config/${w}/routeRecording`] = true;
+        updates[`well_config/${w}/routeGroupWell`] = wellName;
+      }
+      await update(ref(db), updates);
+      setAddMessage(`Pad detected! Added ${padWells.length} wells: ${padWells.join(', ')}`);
+    } else {
+      await update(ref(db, `well_config/${wellName}`), { routeRecording: true });
+      setAddMessage(`Recording enabled for ${wellName}`);
+    }
+    setAddingWell(false);
+  }, [allConfigs]);
+
+  // Find and group nearby pad wells for an EXISTING well already in the list
+  const handleFindPadWells = useCallback(async (wellName: string) => {
+    setPadSearchingWell(wellName);
+    setPadMessage(null);
+
+    const config = allConfigs[wellName];
+    if (!config?.ndicName) {
+      setPadMessage({ well: wellName, text: 'No NDIC link — cannot detect pad' });
+      setPadSearchingWell(null);
+      setTimeout(() => setPadMessage(null), 3000);
+      return;
+    }
+
     try {
       const selectedNdic = await findWellByName(config.ndicName);
       if (!selectedNdic?.latitude || !selectedNdic?.longitude) {
-        setNearbyWells([]);
-        setDetectingNearby(false);
+        setPadMessage({ well: wellName, text: 'No GPS coords for this well' });
+        setPadSearchingWell(null);
+        setTimeout(() => setPadMessage(null), 3000);
         return;
       }
 
-      const nearby: Array<{ name: string; distance: number }> = [];
+      const nearby: string[] = [];
       const promises = Object.entries(allConfigs)
-        .filter(([name, cfg]) => name !== wellName && cfg.ndicName && !cfg.routeRecording && !cfg.routeGroupWell)
+        .filter(([name, cfg]) => name !== wellName && cfg.ndicName && !cfg.routeGroupWell)
         .map(async ([name, cfg]) => {
           try {
             const ndic = await findWellByName(cfg.ndicName);
@@ -188,50 +271,53 @@ export default function GpsRoutesTab() {
                 selectedNdic.latitude!, selectedNdic.longitude!,
                 ndic.latitude!, ndic.longitude!,
               );
-              if (dist <= PAD_RADIUS_METERS) {
-                nearby.push({ name, distance: Math.round(dist) });
-              }
+              if (dist <= PAD_RADIUS_METERS) return name;
             }
           } catch { /* skip */ }
+          return null;
         });
 
-      await Promise.all(promises);
-      nearby.sort((a, b) => a.distance - b.distance);
-      setNearbyWells(nearby);
+      const results = await Promise.all(promises);
+      const found = results.filter((n): n is string => n !== null);
+
+      if (found.length === 0) {
+        setPadMessage({ well: wellName, text: 'No nearby wells found on this pad' });
+        setTimeout(() => setPadMessage(null), 3000);
+      } else {
+        const db = getFirebaseDatabase();
+        const updates: Record<string, any> = {};
+        const padWells = [wellName, ...found];
+        for (const w of padWells) {
+          updates[`well_config/${w}/routeRecording`] = true;
+          updates[`well_config/${w}/routeGroupWell`] = wellName;
+        }
+        await update(ref(db), updates);
+        setPadMessage({ well: wellName, text: `Grouped ${padWells.length} wells: ${found.join(', ')}` });
+        setTimeout(() => setPadMessage(null), 5000);
+      }
     } catch (err) {
-      console.error('[GpsRoutesTab] Nearby detection failed:', err);
-      setNearbyWells([]);
+      console.error('[GpsRoutesTab] Pad detection failed:', err);
+      setPadMessage({ well: wellName, text: 'Detection failed' });
+      setTimeout(() => setPadMessage(null), 3000);
     }
-    setDetectingNearby(false);
+    setPadSearchingWell(null);
   }, [allConfigs]);
 
-  // Enable recording on a single well
-  const handleAddWell = async (wellName: string) => {
-    const db = getFirebaseDatabase();
-    await update(ref(db, `well_config/${wellName}`), { routeRecording: true });
-    setAddMessage(`Recording enabled for ${wellName}`);
-    setAddWellSelected('');
-    setNearbyWells([]);
-  };
-
-  // Enable recording + group all nearby wells
-  const handleAddWithGroup = async (wellName: string, nearby: string[]) => {
+  // Release a well (or whole pad group) from GPS Routes — clears recording, keeps grouping + approved routes
+  const handleRelease = useCallback(async (well: WellRouteStatus) => {
     const db = getFirebaseDatabase();
     const updates: Record<string, any> = {};
-    const allWells = [wellName, ...nearby];
-    for (const w of allWells) {
-      updates[`well_config/${w}/routeRecording`] = true;
-      updates[`well_config/${w}/routeGroupWell`] = wellName;
+    const allMembers = [well.wellName, ...(well.groupMembers || [])];
+    for (const w of allMembers) {
+      updates[`well_config/${w}/routeRecording`] = null;
+      // routeGroupWell persists — pad geometry is permanent
     }
     await update(ref(db), updates);
-    setAddMessage(`Grouped ${allWells.length} wells — all recording`);
-    setAddWellSelected('');
-    setNearbyWells([]);
-  };
+  }, []);
 
-  // Wells available to add (not already recording or grouped)
+  // Wells available to add (not already actively recording)
   const availableWells = Object.entries(allConfigs)
-    .filter(([, cfg]) => !cfg.routeRecording && !cfg.routeGroupWell)
+    .filter(([, cfg]) => !cfg.routeRecording)
     .map(([name]) => name)
     .sort();
 
@@ -289,7 +375,7 @@ export default function GpsRoutesTab() {
         </button>
 
         <button
-          onClick={() => { setShowAddModal(true); setAddMessage(''); setAddWellSearch(''); setAddWellSelected(''); setNearbyWells([]); }}
+          onClick={() => { setShowAddModal(true); setAddMessage(''); setAddWellSearch(''); }}
           className="px-3 py-1.5 rounded-full text-sm font-medium bg-orange-600 hover:bg-orange-500 text-white transition"
         >
           + Add Well
@@ -300,7 +386,7 @@ export default function GpsRoutesTab() {
         </div>
       </div>
 
-      {/* Add Well Modal */}
+      {/* Add Well Modal — auto-detects + groups nearby pad wells */}
       {showAddModal && (
         <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50">
           <div className="bg-gray-800 rounded-lg p-5 max-w-md w-full mx-4 max-h-[80vh] flex flex-col">
@@ -320,108 +406,66 @@ export default function GpsRoutesTab() {
               </div>
             )}
 
+            {addingWell && (
+              <div className="mb-3 px-3 py-2 bg-blue-900/50 border border-blue-700 rounded text-blue-300 text-sm">
+                Adding well and checking for nearby pad wells...
+              </div>
+            )}
+
             {/* Search */}
             <input
               type="text"
               placeholder="Search wells..."
               value={addWellSearch}
-              onChange={(e) => { setAddWellSearch(e.target.value); setAddWellSelected(''); setNearbyWells([]); }}
+              onChange={(e) => setAddWellSearch(e.target.value)}
               className="w-full px-3 py-2 bg-gray-700 text-white rounded mb-3 text-sm"
               autoFocus
+              disabled={addingWell}
             />
 
-            {/* Well list or selected well detail */}
-            {addWellSelected ? (
-              <div className="space-y-3">
-                <div className="flex items-center justify-between bg-gray-700 rounded p-3">
-                  <div>
-                    <div className="text-white font-medium">{addWellSelected}</div>
-                    {allConfigs[addWellSelected]?.route && (
-                      <div className="text-gray-400 text-xs">Route: {allConfigs[addWellSelected].route}</div>
-                    )}
-                  </div>
-                  <button
-                    onClick={() => { setAddWellSelected(''); setNearbyWells([]); }}
-                    className="text-gray-400 hover:text-white text-sm"
-                  >
-                    Change
-                  </button>
+            {/* Well list — click to auto-add + auto-group */}
+            <div className="overflow-y-auto flex-1 min-h-0">
+              {filteredAvailable.length === 0 ? (
+                <div className="text-gray-500 text-sm text-center py-4">
+                  {availableWells.length === 0
+                    ? 'All wells are already recording or grouped'
+                    : 'No wells match your search'}
                 </div>
-
-                {/* Nearby wells detection */}
-                {detectingNearby ? (
-                  <div className="text-gray-400 text-xs">Checking for nearby wells on the same pad...</div>
-                ) : nearbyWells.length > 0 ? (
-                  <div className="bg-gray-700 rounded p-3 border border-orange-900/50">
-                    <div className="text-orange-400 text-xs font-medium mb-2">
-                      Nearby wells detected — same pad
-                    </div>
-                    <div className="space-y-1 mb-3">
-                      {nearbyWells.map(nw => (
-                        <div key={nw.name} className="flex items-center justify-between text-xs">
-                          <span className="text-gray-300">{nw.name}</span>
-                          <span className="text-gray-500">{nw.distance}m</span>
-                        </div>
-                      ))}
-                    </div>
-                    <div className="flex gap-2">
-                      <button
-                        onClick={() => handleAddWithGroup(addWellSelected, nearbyWells.map(nw => nw.name))}
-                        className="flex-1 px-3 py-2 bg-orange-600 hover:bg-orange-500 text-white text-sm rounded font-medium"
-                      >
-                        Group All ({nearbyWells.length + 1})
-                      </button>
-                      <button
-                        onClick={() => handleAddWell(addWellSelected)}
-                        className="px-3 py-2 bg-gray-600 hover:bg-gray-500 text-white text-sm rounded"
-                      >
-                        Just This Well
-                      </button>
-                    </div>
-                  </div>
-                ) : (
-                  <button
-                    onClick={() => handleAddWell(addWellSelected)}
-                    className="w-full px-3 py-2 bg-orange-600 hover:bg-orange-500 text-white text-sm rounded font-medium"
-                  >
-                    Enable Recording
-                  </button>
-                )}
-              </div>
-            ) : (
-              <div className="overflow-y-auto flex-1 min-h-0">
-                {filteredAvailable.length === 0 ? (
-                  <div className="text-gray-500 text-sm text-center py-4">
-                    {availableWells.length === 0
-                      ? 'All wells are already recording or grouped'
-                      : 'No wells match your search'}
-                  </div>
-                ) : (
-                  <div className="space-y-1">
-                    {filteredAvailable.slice(0, 50).map(name => (
+              ) : (
+                <div className="space-y-1">
+                  {filteredAvailable.slice(0, 50).map(name => {
+                    const cfg = allConfigs[name];
+                    const hasGroup = cfg?.routeGroupWell;
+                    const groupCount = hasGroup
+                      ? Object.values(allConfigs).filter((c: any) => c.routeGroupWell === cfg.routeGroupWell).length
+                      : 0;
+                    return (
                       <button
                         key={name}
-                        onClick={() => {
-                          setAddWellSelected(name);
-                          detectNearby(name);
-                        }}
-                        className="w-full text-left px-3 py-2 bg-gray-700 hover:bg-gray-600 text-white text-sm rounded flex justify-between items-center"
+                        onClick={() => handleAutoAdd(name)}
+                        disabled={addingWell}
+                        className="w-full text-left px-3 py-2 bg-gray-700 hover:bg-gray-600 text-white text-sm rounded flex justify-between items-center disabled:opacity-50"
                       >
                         <span>{name}</span>
-                        {allConfigs[name]?.route && (
-                          <span className="text-gray-500 text-xs">{allConfigs[name].route}</span>
-                        )}
+                        <div className="flex items-center gap-2">
+                          {hasGroup && (
+                            <span className="text-xs text-orange-400">Pad: {groupCount} wells</span>
+                          )}
+                          {cfg?.route && !hasGroup && (
+                            <span className="text-gray-500 text-xs">{cfg.route}</span>
+                          )}
+                        </div>
                       </button>
-                    ))}
-                    {filteredAvailable.length > 50 && (
-                      <div className="text-gray-500 text-xs text-center py-2">
-                        {filteredAvailable.length - 50} more — type to search
-                      </div>
-                    )}
-                  </div>
-                )}
-              </div>
-            )}
+                    );
+                  })}
+                  {filteredAvailable.length > 50 && (
+                    <div className="text-gray-500 text-xs text-center py-2">
+                      {filteredAvailable.length - 50} more — type to search
+                    </div>
+                  )}
+                </div>
+              )}
+            </div>
           </div>
         </div>
       )}
@@ -471,6 +515,27 @@ export default function GpsRoutesTab() {
                 </div>
 
                 <div className="flex items-center gap-2">
+                  {/* Release — stop recording, keep routes */}
+                  {well.approvedCount > 0 && (
+                    <button
+                      onClick={(e) => { e.stopPropagation(); handleRelease(well); }}
+                      className="text-xs px-2 py-0.5 rounded bg-gray-700 text-gray-400 hover:bg-red-900/50 hover:text-red-300 hover:border-red-800 border border-gray-600 transition whitespace-nowrap"
+                      title="Stop recording — approved routes are kept"
+                    >
+                      Release
+                    </button>
+                  )}
+                  {/* Find Pad Wells button — only for standalone wells (not already grouped) */}
+                  {!well.routeGroupWell && !well.groupMembers && (
+                    <button
+                      onClick={(e) => { e.stopPropagation(); handleFindPadWells(well.wellName); }}
+                      disabled={padSearchingWell === well.wellName}
+                      className="text-xs px-2 py-0.5 rounded bg-orange-900/50 text-orange-300 border border-orange-800 hover:bg-orange-800/50 transition whitespace-nowrap"
+                      title="Auto-detect and group nearby wells on the same pad"
+                    >
+                      {padSearchingWell === well.wellName ? 'Scanning...' : 'Find Pad Wells'}
+                    </button>
+                  )}
                   {/* Trip count badge */}
                   {well.loading ? (
                     <span className="text-xs text-gray-500">loading...</span>
@@ -504,6 +569,13 @@ export default function GpsRoutesTab() {
                   )}
                 </div>
               </div>
+
+              {/* Pad detection message */}
+              {padMessage?.well === well.wellName && (
+                <div className="mx-3 mb-1 px-3 py-1.5 bg-cyan-900/30 border border-cyan-800/50 rounded text-xs text-cyan-300">
+                  {padMessage.text}
+                </div>
+              )}
 
               {/* Expanded: RouteManager */}
               {expandedWell === well.wellName && (

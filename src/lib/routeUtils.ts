@@ -24,6 +24,18 @@ export function simplifyRoute(
     simplified = douglasPeucker(points, tolerance);
   }
 
+  // Prevent over-simplification: a 2-point result loses ALL turn info and
+  // gives Google Maps a straight line.  Keep at least 5 evenly-spaced points
+  // so the route stays on the correct roads.
+  const minPoints = Math.min(5, points.length);
+  if (simplified.length < minPoints) {
+    const step = (points.length - 1) / (minPoints - 1);
+    simplified = [];
+    for (let i = 0; i < minPoints; i++) {
+      simplified.push(points[Math.round(i * step)]);
+    }
+  }
+
   // Safety net: if still too many (extremely winding route), take evenly spaced subset
   if (simplified.length > maxPoints) {
     const step = simplified.length / maxPoints;
@@ -122,6 +134,45 @@ export function haversineMeters(
 
 /** Well pad proximity threshold — wells within this distance share routes. */
 export const PAD_RADIUS_METERS = 150;
+
+/**
+ * Check if a new recorded trip is a duplicate of an existing approved route.
+ * Samples evenly-spaced points from both routes and compares average deviation.
+ * Used to auto-discard identical daily runs and only surface genuinely new routes.
+ */
+export function isDuplicateRoute(
+  newRoute: Array<{ lat: number; lng: number }>,
+  existingRoute: Array<{ lat: number; lng: number }>,
+  thresholdMeters: number = 500,
+): boolean {
+  if (newRoute.length < 2 || existingRoute.length < 2) return false;
+
+  // Fast reject: check start and end points first
+  const startDist = haversineMeters(
+    newRoute[0].lat, newRoute[0].lng,
+    existingRoute[0].lat, existingRoute[0].lng,
+  );
+  const endDist = haversineMeters(
+    newRoute[newRoute.length - 1].lat, newRoute[newRoute.length - 1].lng,
+    existingRoute[existingRoute.length - 1].lat, existingRoute[existingRoute.length - 1].lng,
+  );
+  if (startDist > thresholdMeters * 2 || endDist > thresholdMeters * 2) return false;
+
+  // Sample 10 evenly-spaced points from each route, compare average deviation
+  const sampleCount = 10;
+  let totalDeviation = 0;
+  for (let i = 0; i < sampleCount; i++) {
+    const t = i / (sampleCount - 1);
+    const newIdx = Math.round(t * (newRoute.length - 1));
+    const existIdx = Math.round(t * (existingRoute.length - 1));
+    totalDeviation += haversineMeters(
+      newRoute[newIdx].lat, newRoute[newIdx].lng,
+      existingRoute[existIdx].lat, existingRoute[existIdx].lng,
+    );
+  }
+
+  return (totalDeviation / sampleCount) < thresholdMeters;
+}
 
 /**
  * Convert meters to miles (for display).

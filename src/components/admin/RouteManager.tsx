@@ -17,7 +17,7 @@ import {
   query,
   Timestamp,
 } from 'firebase/firestore';
-import { simplifyRoute, metersToMiles, generateRouteId, buildGoogleMapsUrl } from '@/lib/routeUtils';
+import { simplifyRoute, metersToMiles, generateRouteId, buildGoogleMapsUrl, isDuplicateRoute } from '@/lib/routeUtils';
 
 interface RouteWaypoint {
   lat: number;
@@ -39,6 +39,7 @@ interface RouteTripDoc {
   startLng: number;
   endLat: number;
   endLng: number;
+  sourceSlug?: string; // Which well's route_recordings this trip lives in
 }
 
 interface ApprovedRoute {
@@ -155,6 +156,7 @@ function RouteViewerModal({
   onClose,
   onApprove,
   saving,
+  initialLabel,
 }: {
   title: string;
   waypoints: Array<{ lat: number; lng: number }>;
@@ -164,10 +166,11 @@ function RouteViewerModal({
   onClose: () => void;
   onApprove?: (trimStart: number, trimEnd: number, label: string) => void;
   saving?: boolean;
+  initialLabel?: string;
 }) {
   const [trimStart, setTrimStart] = useState(0);
   const [trimEnd, setTrimEnd] = useState(0);
-  const [labelInput, setLabelInput] = useState('');
+  const [labelInput, setLabelInput] = useState(initialLabel || '');
 
   const totalPts = waypoints.length;
   const trimmedWps = waypoints.slice(trimStart, totalPts - trimEnd || undefined);
@@ -276,9 +279,11 @@ function RouteViewerModal({
               <button
                 onClick={() => onApprove(trimStart, trimEnd, labelInput)}
                 disabled={saving}
-                className="px-4 py-2 bg-green-700 hover:bg-green-600 text-white text-sm rounded-lg font-medium whitespace-nowrap"
+                className={`px-4 py-2 text-white text-sm rounded-lg font-medium whitespace-nowrap ${
+                  approvedRoute ? 'bg-blue-700 hover:bg-blue-600' : 'bg-green-700 hover:bg-green-600'
+                }`}
               >
-                {saving ? 'Saving...' : 'Approve Route'}
+                {saving ? 'Saving...' : approvedRoute ? 'Save Changes' : 'Approve Route'}
               </button>
             </>
           )}
@@ -303,6 +308,7 @@ export default function RouteManager({ wellName, groupMembers }: RouteManagerPro
   const [copiedRouteId, setCopiedRouteId] = useState<string | null>(null);
   const [modalTrip, setModalTrip] = useState<RouteTripDoc | null>(null);
   const [modalRoute, setModalRoute] = useState<ApprovedRoute | null>(null);
+  const [editingRoute, setEditingRoute] = useState<ApprovedRoute | null>(null);
 
   const slug = wellSlug(wellName);
   const approvedRoutes = overrideDoc?.approvedRoutes || [];
@@ -313,15 +319,25 @@ export default function RouteManager({ wellName, groupMembers }: RouteManagerPro
     try {
       const db = getFirestoreDb();
 
-      // Load trips
-      const tripsRef = collection(db, 'route_recordings', slug, 'trips');
-      const q = query(tripsRef, orderBy('recordedAt', 'desc'));
-      const snap = await getDocs(q);
-      const tripDocs: RouteTripDoc[] = snap.docs.map(d => ({
-        id: d.id,
-        ...d.data(),
-      })) as RouteTripDoc[];
-      setTrips(tripDocs);
+      // Load trips from leader + all pad members
+      const slugsToQuery = [slug, ...(groupMembers || []).map(m => wellSlug(m))];
+      const uniqueSlugs = [...new Set(slugsToQuery)];
+      const allTrips: RouteTripDoc[] = [];
+      for (const s of uniqueSlugs) {
+        const tripsRef = collection(db, 'route_recordings', s, 'trips');
+        const q = query(tripsRef, orderBy('recordedAt', 'desc'));
+        const snap = await getDocs(q);
+        snap.docs.forEach(d => {
+          allTrips.push({ id: d.id, sourceSlug: s, ...d.data() } as RouteTripDoc);
+        });
+      }
+      // Sort all trips by recordedAt desc
+      allTrips.sort((a, b) => {
+        const aTime = a.recordedAt?.toMillis?.() || 0;
+        const bTime = b.recordedAt?.toMillis?.() || 0;
+        return bTime - aTime;
+      });
+      setTrips(allTrips);
 
       // Load override (backward compatible)
       const overrideRef = doc(db, 'route_overrides', slug);
@@ -361,7 +377,7 @@ export default function RouteManager({ wellName, groupMembers }: RouteManagerPro
       setMessage('Failed to load route data');
     }
     setLoading(false);
-  }, [slug]);
+  }, [slug, groupMembers]);
 
   useEffect(() => {
     loadData();
@@ -425,6 +441,42 @@ export default function RouteManager({ wellName, groupMembers }: RouteManagerPro
     setSaving(false);
   };
 
+  const handleEditRoute = async (route: ApprovedRoute, trimStart: number, trimEnd: number, label: string) => {
+    setSaving(true);
+    setMessage('');
+    try {
+      const db = getFirestoreDb();
+      const rawPoints = route.fullWaypoints.length > 0 ? route.fullWaypoints : route.waypoints;
+      const trimmedRaw = rawPoints.slice(trimStart, rawPoints.length - trimEnd || undefined);
+      const simplified = simplifyRoute(trimmedRaw, 23);
+      const actualStart = trimmedRaw[0] || rawPoints[0];
+      const actualEnd = trimmedRaw[trimmedRaw.length - 1] || rawPoints[rawPoints.length - 1];
+
+      const updatedRoute: ApprovedRoute = {
+        ...route,
+        label: label?.trim() || undefined,
+        waypoints: simplified,
+        fullWaypoints: trimmedRaw,
+        startLat: actualStart.lat,
+        startLng: actualStart.lng,
+        endLat: actualEnd.lat,
+        endLng: actualEnd.lng,
+      };
+
+      const updatedAll = approvedRoutes.map(r => r.routeId === route.routeId ? updatedRoute : r);
+      const newDoc: RouteOverrideDoc = { wellName, approvedRoutes: updatedAll };
+
+      await setDoc(doc(db, 'route_overrides', slug), newDoc);
+      setOverrideDoc(newDoc);
+      setEditingRoute(null);
+      setMessage(`Route updated! ${trimmedRaw.length} pts → ${simplified.length} waypoints.`);
+    } catch (err: any) {
+      console.error('[RouteManager] Failed to edit route:', err);
+      setMessage('Failed to save changes');
+    }
+    setSaving(false);
+  };
+
   const handleClearAll = async () => {
     setSaving(true);
     try {
@@ -439,11 +491,12 @@ export default function RouteManager({ wellName, groupMembers }: RouteManagerPro
     setSaving(false);
   };
 
-  const handleDeleteTrip = async (tripId: string) => {
+  const handleDeleteTrip = async (tripId: string, tripSourceSlug?: string) => {
     setSaving(true);
     try {
       const db = getFirestoreDb();
-      await deleteDoc(doc(db, 'route_recordings', slug, 'trips', tripId));
+      const deleteSlug = tripSourceSlug || slug;
+      await deleteDoc(doc(db, 'route_recordings', deleteSlug, 'trips', tripId));
       setTrips(prev => prev.filter(t => t.id !== tripId));
       setMessage('Trip deleted');
     } catch (err: any) {
@@ -543,6 +596,12 @@ export default function RouteManager({ wellName, groupMembers }: RouteManagerPro
                     View
                   </button>
                   <button
+                    onClick={() => setEditingRoute(route)}
+                    className="px-2 py-1 bg-blue-800 hover:bg-blue-700 text-blue-200 text-xs rounded whitespace-nowrap"
+                  >
+                    Edit
+                  </button>
+                  <button
                     onClick={() => handleCopyLink(route)}
                     className="px-2 py-1 bg-cyan-800 hover:bg-cyan-700 text-cyan-200 text-xs rounded whitespace-nowrap"
                     title="Copy Google Maps link to clipboard"
@@ -564,9 +623,20 @@ export default function RouteManager({ wellName, groupMembers }: RouteManagerPro
         </div>
       )}
 
-      {/* Recorded Trips — only show unapproved trips (approved ones already visible in Approved Routes) */}
+      {/* Recorded Trips — hide approved + auto-discard duplicates of approved routes */}
       {(() => {
-        const pendingTrips = trips.filter(t => !approvedTripIds.has(t.id));
+        const pendingTrips = trips.filter(t => {
+          if (approvedTripIds.has(t.id)) return false;
+          // Smart dedup: compare against all approved routes
+          if (approvedRoutes.length > 0 && t.waypoints.length >= 2) {
+            const tripPoints = t.waypoints.map(w => ({ lat: w.lat, lng: w.lng }));
+            for (const ar of approvedRoutes) {
+              const arPoints = ar.fullWaypoints.length > 0 ? ar.fullWaypoints : ar.waypoints;
+              if (isDuplicateRoute(tripPoints, arPoints)) return false;
+            }
+          }
+          return true;
+        });
         return pendingTrips.length > 0 ? (
           <>
             <div className="text-xs text-gray-500 uppercase tracking-wider mb-1">Recorded Trips</div>
@@ -596,7 +666,7 @@ export default function RouteManager({ wellName, groupMembers }: RouteManagerPro
                         Approve
                       </button>
                       <button
-                        onClick={() => handleDeleteTrip(trip.id)}
+                        onClick={() => handleDeleteTrip(trip.id, trip.sourceSlug)}
                         disabled={saving}
                         className="px-2 py-1 bg-red-900 hover:bg-red-800 text-red-300 text-xs rounded whitespace-nowrap"
                         title="Delete this recorded trip"
@@ -637,7 +707,7 @@ export default function RouteManager({ wellName, groupMembers }: RouteManagerPro
         />
       )}
 
-      {/* Approved Route Viewer Modal */}
+      {/* Approved Route Viewer Modal (read-only) */}
       {modalRoute && (
         <RouteViewerModal
           title={modalRoute.label || `Route to ${wellName}`}
@@ -645,6 +715,20 @@ export default function RouteManager({ wellName, groupMembers }: RouteManagerPro
           approvedRoute={modalRoute}
           highlightColor="#22c55e"
           onClose={() => setModalRoute(null)}
+        />
+      )}
+
+      {/* Edit Route Modal — rename, trim, re-simplify */}
+      {editingRoute && (
+        <RouteViewerModal
+          title={`Edit: ${editingRoute.label || `Route to ${wellName}`}`}
+          waypoints={editingRoute.fullWaypoints.length > 0 ? editingRoute.fullWaypoints : editingRoute.waypoints}
+          approvedRoute={editingRoute}
+          highlightColor="#3b82f6"
+          initialLabel={editingRoute.label || ''}
+          onClose={() => setEditingRoute(null)}
+          onApprove={(trimStart, trimEnd, label) => handleEditRoute(editingRoute, trimStart, trimEnd, label)}
+          saving={saving}
         />
       )}
     </div>
