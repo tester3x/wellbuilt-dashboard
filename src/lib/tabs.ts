@@ -46,6 +46,12 @@ export const TABS: TabConfig[] = [
     matchPrefixes: ['/payroll'],
   },
   {
+    id: 'driverlogs',
+    label: 'Driver Logs',
+    href: '/driverlogs',
+    matchPrefixes: ['/driverlogs'],
+  },
+  {
     id: 'settings',
     label: 'Settings',
     href: '/settings',
