@@ -130,6 +130,21 @@ service cloud.firestore {
       allow read, write: if true;
     }
 
+    // Billing export invoice counters — dashboard auto-increment
+    match /billing_invoice_counters/{companyId} {
+      allow read, write: if true;
+    }
+
+    // Billing export audit trail — dashboard manages
+    match /billing_exports/{exportId} {
+      allow read, write: if true;
+    }
+
+    // Driver shift tracking — DOT compliance
+    match /driver_shifts/{shiftId} {
+      allow read, write: if true;
+    }
+
     // Everything else — deny (Cloud Functions use Admin SDK which bypasses rules)
     match /{document=**} {
       allow read, write: if false;
