@@ -25,6 +25,8 @@ export interface BillingLineItem {
   rate: number;
   baseAmount: number;
   fuelSurcharge: number;
+  detentionPay: number;
+  swdWaitMinutes: number;
   total: number;
 }
 
@@ -37,6 +39,7 @@ export interface OperatorBillingSummary {
   totalFuelMinutes: number;
   subtotal: number;
   totalFuelSurcharge: number;
+  totalDetentionPay: number;
   grandTotal: number;
   lineItems: BillingLineItem[];
   billingConfig?: OperatorBillingConfig;
@@ -56,6 +59,7 @@ export interface BillingRecord {
   lineItems: BillingLineItem[];
   subtotal: number;
   totalFuelSurcharge: number;
+  totalDetentionPay: number;
   grandTotal: number;
   paymentTerms: string;
   dueDate: any;
@@ -247,6 +251,23 @@ export async function fetchBillingData(
       billingConfig, baseAmount, hours, driveDistanceMiles, currentDiesel
     );
 
+    // Detention pay: for per_bbl jobs where driver waited at SWD past threshold
+    const swdWaitMinutes = d.swdWaitMinutes || 0;
+    let detentionPay = 0;
+    if (rateMethod === 'per_bbl' && billingConfig?.detentionEnabled && swdWaitMinutes > 0) {
+      const threshold = billingConfig.detentionThresholdMinutes || 60;
+      if (swdWaitMinutes > threshold) {
+        const billableMinutes = swdWaitMinutes - threshold;
+        // Rate: use configured detention rate, or fall back to operator's hourly rate from rate sheet
+        let detentionRate = billingConfig.detentionHourlyRate || 0;
+        if (!detentionRate) {
+          const hourlyEntry = rateSheets[operator]?.find(r => r.method === 'hourly');
+          detentionRate = hourlyEntry?.rate || 0;
+        }
+        detentionPay = Math.round((billableMinutes / 60) * detentionRate * 100) / 100;
+      }
+    }
+
     const item: BillingLineItem = {
       invoiceId: docSnap.id,
       invoiceNumber: d.invoiceNumber || '',
@@ -263,7 +284,9 @@ export async function fetchBillingData(
       rate,
       baseAmount,
       fuelSurcharge,
-      total: Math.round((baseAmount + fuelSurcharge) * 100) / 100,
+      detentionPay,
+      swdWaitMinutes,
+      total: Math.round((baseAmount + fuelSurcharge + detentionPay) * 100) / 100,
     };
 
     if (!operatorMap.has(operator)) {
@@ -294,6 +317,7 @@ export async function fetchBillingData(
       totalFuelMinutes: items.reduce((s, i) => s + i.fuelMinutes, 0),
       subtotal: Math.round(items.reduce((s, i) => s + i.baseAmount, 0) * 100) / 100,
       totalFuelSurcharge: Math.round(items.reduce((s, i) => s + i.fuelSurcharge, 0) * 100) / 100,
+      totalDetentionPay: Math.round(items.reduce((s, i) => s + i.detentionPay, 0) * 100) / 100,
       grandTotal: Math.round(items.reduce((s, i) => s + i.total, 0) * 100) / 100,
       lineItems: items,
       billingConfig,
@@ -355,6 +379,7 @@ export async function generateBillingRecord(
     lineItems: summary.lineItems,
     subtotal: summary.subtotal,
     totalFuelSurcharge: summary.totalFuelSurcharge,
+    totalDetentionPay: summary.totalDetentionPay,
     grandTotal: summary.grandTotal,
     paymentTerms: summary.paymentTerms,
     dueDate: Timestamp.fromDate(dueDate),

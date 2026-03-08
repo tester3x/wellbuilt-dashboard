@@ -137,6 +137,8 @@ export interface DriverTimesheetRow {
   hours: number;
   rate: number;
   amountBilled: number;
+  detentionPay: number;
+  swdWaitMinutes: number;
   employeeTake: number;
   tickets: string[];
   flagged?: boolean;
@@ -315,6 +317,8 @@ export async function fetchPayrollInvoices(
     const split = company?.payConfig?.defaultSplit || 0;
 
     const rateEntry = lookupRate(rateSheets, operator, jobType);
+    const swdWaitMinutes = d.swdWaitMinutes || 0;
+    let detentionPay = 0;
     if (rateEntry) {
       const invoiceDate = d.date || '';
       const bbls = d.totalBBL || 0;
@@ -322,7 +326,23 @@ export async function fetchPayrollInvoices(
       const hours = d.totalHours || 0;
       amountBilled = rateEntry.method === 'per_bbl' ? bbls * rate : hours * rate;
       amountBilled = Math.round(amountBilled * 100) / 100;
-      employeeTake = Math.round(amountBilled * split * 100) / 100;
+
+      // Detention pay: for per_bbl jobs where driver waited at SWD past threshold
+      const billingConfig = company?.billingConfig?.[operator];
+      if (rateEntry.method === 'per_bbl' && billingConfig?.detentionEnabled && swdWaitMinutes > 0) {
+        const threshold = billingConfig.detentionThresholdMinutes || 60;
+        if (swdWaitMinutes > threshold) {
+          const billableMinutes = swdWaitMinutes - threshold;
+          let detentionRate = billingConfig.detentionHourlyRate || 0;
+          if (!detentionRate) {
+            const hourlyEntry = rateSheets[operator]?.find(r => r.method === 'hourly');
+            detentionRate = hourlyEntry?.rate || 0;
+          }
+          detentionPay = Math.round((billableMinutes / 60) * detentionRate * 100) / 100;
+        }
+      }
+
+      employeeTake = Math.round((amountBilled + detentionPay) * split * 100) / 100;
     }
 
     const row: DriverTimesheetRow = {
@@ -336,6 +356,8 @@ export async function fetchPayrollInvoices(
       hours: d.totalHours || 0,
       rate,
       amountBilled,
+      detentionPay,
+      swdWaitMinutes,
       employeeTake,
       tickets: d.tickets || [],
     };
@@ -360,7 +382,7 @@ export async function fetchPayrollInvoices(
     const totalLoads = rows.length;
     const totalHours = rows.reduce((sum, r) => sum + r.hours, 0);
     const totalBBLs = rows.reduce((sum, r) => sum + r.bbls, 0);
-    const grossBilled = rows.reduce((sum, r) => sum + r.amountBilled, 0);
+    const grossBilled = rows.reduce((sum, r) => sum + r.amountBilled + r.detentionPay, 0);
     const employeePay = rows.reduce((sum, r) => sum + r.employeeTake, 0);
 
     const company = driverCompanyId ? companyConfigs.get(driverCompanyId) : null;

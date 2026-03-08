@@ -77,6 +77,10 @@ export interface OperatorBillingConfig {
   fuelSurchargeSpeed?: number;      // average speed MPH (hourly only, default 30)
   fuelSurchargeMultiplier?: number; // gallons per load (flat_doe only, default 8)
   fuelSurchargeStep?: number;       // rounding step (flat_doe only, default 0.10)
+  // SWD detention — hourly pay for waiting at drop-off beyond threshold (BBL-rate jobs only)
+  detentionEnabled?: boolean;
+  detentionThresholdMinutes?: number;  // Default 60 — minutes before hourly kicks in
+  detentionHourlyRate?: number;        // $/hr — blank/0 falls back to operator's hourly rate
 }
 
 export const PAYMENT_TERMS_OPTIONS: { value: PaymentTerms; label: string }[] = [

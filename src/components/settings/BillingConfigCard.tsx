@@ -83,6 +83,7 @@ export function BillingConfigCard({ company, onSave }: Props) {
                       {cfg.fuelSurchargeMethod === 'percentage' && cfg.fuelSurchargePercent ? ` (${(cfg.fuelSurchargePercent * 100).toFixed(1)}%)` : ''}
                       {cfg.fuelSurchargeMethod === 'per_mile' ? ` (base $${cfg.fuelSurchargeBaseline || 0}/gal, ${cfg.fuelSurchargeMPG || 6} MPG)` : ''}
                       {cfg.fuelSurchargeMethod === 'flat_doe' ? ` (×${cfg.fuelSurchargeMultiplier || 8}, base $${cfg.fuelSurchargeBaseline || 3.25})` : ''}
+                      {cfg.detentionEnabled ? ` · Detention: $${cfg.detentionHourlyRate || '(hourly rate)'}/hr after ${cfg.detentionThresholdMinutes || 60}min` : ''}
                     </span>
                   ) : (
                     <span className="text-gray-500 text-xs">Not configured</span>
@@ -330,6 +331,58 @@ export function BillingConfigCard({ company, onSave }: Props) {
                   )}
                 </>
               )}
+              {/* SWD Detention */}
+              <div className="border-t border-gray-600 pt-4">
+                <div className="flex items-center gap-2 mb-2">
+                  <input
+                    type="checkbox"
+                    id="detentionEnabled"
+                    checked={config.detentionEnabled || false}
+                    onChange={e => setConfig({ ...config, detentionEnabled: e.target.checked })}
+                    className="rounded"
+                  />
+                  <label htmlFor="detentionEnabled" className="text-gray-300 text-sm font-medium">
+                    SWD Detention Pay
+                  </label>
+                  <span className="text-gray-500 text-xs">(BBL-rate jobs only)</span>
+                </div>
+                {config.detentionEnabled && (
+                  <div className="space-y-3 ml-5">
+                    <div className="bg-orange-900/20 border border-orange-500/20 rounded p-2 text-xs text-orange-300">
+                      When a driver waits at an SWD longer than the threshold, hourly pay kicks in on top of the BBL rate.
+                    </div>
+                    <div>
+                      <label className="block text-gray-400 text-xs mb-1">Wait Threshold (minutes)</label>
+                      <input
+                        type="number"
+                        step="1"
+                        min="1"
+                        value={config.detentionThresholdMinutes ?? 60}
+                        onChange={e => setConfig({ ...config, detentionThresholdMinutes: parseInt(e.target.value) || 60 })}
+                        className="w-full px-3 py-2 bg-gray-700 text-white rounded text-sm border border-gray-600 focus:outline-none focus:border-blue-500"
+                        placeholder="60"
+                      />
+                      <p className="text-gray-500 text-xs mt-1">Hourly pay starts after this many minutes at the SWD</p>
+                    </div>
+                    <div>
+                      <label className="block text-gray-400 text-xs mb-1">Detention Rate ($/hr)</label>
+                      <div className="relative">
+                        <span className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400">$</span>
+                        <input
+                          type="number"
+                          step="0.01"
+                          min="0"
+                          value={config.detentionHourlyRate ?? ''}
+                          onChange={e => setConfig({ ...config, detentionHourlyRate: parseFloat(e.target.value) || 0 })}
+                          className="w-full pl-7 pr-3 py-2 bg-gray-700 text-white rounded text-sm border border-gray-600 focus:outline-none focus:border-blue-500"
+                          placeholder="Leave blank to use hourly rate"
+                        />
+                      </div>
+                      <p className="text-gray-500 text-xs mt-1">Leave blank to use the operator&apos;s hourly rate from the rate sheet</p>
+                    </div>
+                  </div>
+                )}
+              </div>
             </div>
 
             <div className="flex gap-2">

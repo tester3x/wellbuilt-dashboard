@@ -1280,6 +1280,7 @@ function DriverTimesheetDetail({ summary, legalNameMap = {} }: { summary: Driver
       </div>
 
       {/* Timesheet Table */}
+      {(() => { const hasDetention = summary.rows.some(r => r.detentionPay > 0); return (
       <div className="overflow-x-auto rounded-lg border border-gray-700">
         <table className="w-full text-sm">
           <thead>
@@ -1292,13 +1293,14 @@ function DriverTimesheetDetail({ summary, legalNameMap = {} }: { summary: Driver
               <th className="text-right text-gray-400 font-medium px-3 py-2">Time (hrs)</th>
               <th className="text-right text-gray-400 font-medium px-3 py-2">Rate</th>
               <th className="text-right text-gray-400 font-medium px-3 py-2">Amount Billed</th>
+              {hasDetention && <th className="text-right text-gray-400 font-medium px-3 py-2">Detention</th>}
               <th className="text-right text-gray-400 font-medium px-3 py-2">Employee Take</th>
               <th className="text-center text-gray-400 font-medium px-3 py-2">Flag</th>
             </tr>
           </thead>
           <tbody>
             {summary.rows.map(row => (
-              <TimesheetRow key={row.id} row={row} />
+              <TimesheetRow key={row.id} row={row} showDetention={hasDetention} />
             ))}
 
             {/* Subtotal */}
@@ -1314,6 +1316,11 @@ function DriverTimesheetDetail({ summary, legalNameMap = {} }: { summary: Driver
               <td className="text-right px-3 py-2 text-white">
                 {summary.grossBilled > 0 ? formatCurrency(summary.grossBilled) : '—'}
               </td>
+              {hasDetention && (
+                <td className="text-right px-3 py-2 text-orange-400">
+                  {formatCurrency(summary.rows.reduce((s, r) => s + r.detentionPay, 0))}
+                </td>
+              )}
               <td className="text-right px-3 py-2 text-green-400">
                 {summary.employeePay > 0 ? formatCurrency(summary.employeePay) : '—'}
               </td>
@@ -1323,7 +1330,7 @@ function DriverTimesheetDetail({ summary, legalNameMap = {} }: { summary: Driver
             {/* Bonuses row */}
             {summary.additions > 0 && (
               <tr className="bg-gray-800/30">
-                <td colSpan={8} className="px-3 py-2 text-gray-400 text-right">Bonuses / Reimbursements</td>
+                <td colSpan={hasDetention ? 9 : 8} className="px-3 py-2 text-gray-400 text-right">Bonuses / Reimbursements</td>
                 <td className="text-right px-3 py-2 text-green-400 font-medium">
                   +{formatCurrency(summary.additions)}
                 </td>
@@ -1334,7 +1341,7 @@ function DriverTimesheetDetail({ summary, legalNameMap = {} }: { summary: Driver
             {/* Deductions row */}
             {summary.deductions > 0 && (
               <tr className="bg-gray-800/30">
-                <td colSpan={8} className="px-3 py-2 text-gray-400 text-right">Deductions</td>
+                <td colSpan={hasDetention ? 9 : 8} className="px-3 py-2 text-gray-400 text-right">Deductions</td>
                 <td className="text-right px-3 py-2 text-red-400 font-medium">
                   -{formatCurrency(summary.deductions)}
                 </td>
@@ -1345,7 +1352,7 @@ function DriverTimesheetDetail({ summary, legalNameMap = {} }: { summary: Driver
             {/* Net Pay row */}
             {(summary.grossBilled > 0 || summary.deductions > 0 || summary.additions > 0) && (
               <tr className="bg-gray-800/30 border-t border-gray-700">
-                <td colSpan={8} className="px-3 py-2 text-white text-right font-bold">Net Pay</td>
+                <td colSpan={hasDetention ? 9 : 8} className="px-3 py-2 text-white text-right font-bold">Net Pay</td>
                 <td className="text-right px-3 py-2 text-green-400 font-bold text-base">
                   {formatCurrency(summary.netPay)}
                 </td>
@@ -1355,13 +1362,14 @@ function DriverTimesheetDetail({ summary, legalNameMap = {} }: { summary: Driver
           </tbody>
         </table>
       </div>
+      ); })()}
     </div>
   );
 }
 
 // ─── Individual Timesheet Row ────────────────────────────────────────────────
 
-function TimesheetRow({ row }: { row: DriverTimesheetRow }) {
+function TimesheetRow({ row, showDetention }: { row: DriverTimesheetRow; showDetention: boolean }) {
   return (
     <tr className="border-b border-gray-700/30 hover:bg-gray-800/30 transition-colors">
       <td className="px-3 py-2 text-gray-300">{row.date}</td>
@@ -1376,6 +1384,11 @@ function TimesheetRow({ row }: { row: DriverTimesheetRow }) {
       <td className="text-right px-3 py-2 text-gray-300">
         {row.amountBilled > 0 ? formatCurrency(row.amountBilled) : '—'}
       </td>
+      {showDetention && (
+        <td className="text-right px-3 py-2 text-orange-400">
+          {row.detentionPay > 0 ? formatCurrency(row.detentionPay) : '—'}
+        </td>
+      )}
       <td className="text-right px-3 py-2 text-gray-300">
         {row.employeeTake > 0 ? formatCurrency(row.employeeTake) : '—'}
       </td>

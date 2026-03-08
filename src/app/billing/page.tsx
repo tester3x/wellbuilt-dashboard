@@ -5,6 +5,8 @@ import { useRouter } from 'next/navigation';
 import { useAuth } from '@/contexts/AuthContext';
 import { AppHeader } from '@/components/AppHeader';
 import { loadAllCompanies, updateCompanyFields, type CompanyConfig, type DoeRegion, DOE_REGIONS, STATE_TO_PADD } from '@/lib/companySettings';
+import { ref, get } from 'firebase/database';
+import { getFirebaseDatabase } from '@/lib/firebase';
 import {
   fetchBillingData,
   fetchBillingRecords,
@@ -63,6 +65,9 @@ export default function BillingPage() {
   const [fetchingEia, setFetchingEia] = useState(false);
   const [eiaResult, setEiaResult] = useState<string | null>(null);
 
+  // Driver name resolution
+  const [legalNameMap, setLegalNameMap] = useState<Record<string, string>>({});
+
   useEffect(() => {
     if (!loading && !user) router.push('/login');
   }, [user, loading, router]);
@@ -79,6 +84,29 @@ export default function BillingPage() {
         setSelectedCompanyId(list[0].id);
       }
     });
+  }, [user]);
+
+  // Load driver name map for display name → legal name resolution
+  useEffect(() => {
+    if (!user) return;
+    (async () => {
+      try {
+        const db = getFirebaseDatabase();
+        const snapshot = await get(ref(db, 'drivers/approved'));
+        if (!snapshot.exists()) return;
+        const legalMap: Record<string, string> = {};
+        snapshot.forEach(child => {
+          const data = child.val();
+          if (data?.displayName) {
+            const legal = data.legalName || data.profile?.legalName;
+            if (legal) legalMap[data.displayName] = legal;
+          }
+        });
+        setLegalNameMap(legalMap);
+      } catch (err) {
+        console.error('Failed to load driver names:', err);
+      }
+    })();
   }, [user]);
 
   // Load data when period changes or companies load
@@ -330,6 +358,7 @@ export default function BillingPage() {
             ) : (
               <>
                 {/* Operator Summary Table */}
+                {(() => { const hasDetention = summaries.some(s => s.totalDetentionPay > 0); return (
                 <div className="bg-gray-800 rounded-lg border border-gray-700 overflow-hidden mb-8">
                   <div className="overflow-x-auto">
                     <table className="w-full">
@@ -341,6 +370,7 @@ export default function BillingPage() {
                           <th className="px-4 py-2 text-right text-sm font-medium text-gray-300">Hours</th>
                           <th className="px-4 py-2 text-right text-sm font-medium text-gray-300">Base Amount</th>
                           <th className="px-4 py-2 text-right text-sm font-medium text-gray-300">Fuel Surcharge</th>
+                          {hasDetention && <th className="px-4 py-2 text-right text-sm font-medium text-gray-300">Detention</th>}
                           <th className="px-4 py-2 text-right text-sm font-medium text-gray-300">Total</th>
                           <th className="px-4 py-2 text-right text-sm font-medium text-gray-300">FSC Method</th>
                           <th className="px-4 py-2 text-center text-sm font-medium text-gray-300">Actions</th>
@@ -359,6 +389,8 @@ export default function BillingPage() {
                               onGenerate={() => handleGenerateBill(summary)}
                               generating={generating === summary.operator}
                               alreadyBilled={alreadyBilled}
+                              showDetention={hasDetention}
+                              legalNameMap={legalNameMap}
                             />
                           );
                         })}
@@ -371,6 +403,7 @@ export default function BillingPage() {
                           <td className="px-4 py-2 text-right text-white font-mono">{summaries.reduce((s, o) => s + o.totalHours, 0).toFixed(1)}</td>
                           <td className="px-4 py-2 text-right text-white font-mono">{formatCurrency(summaries.reduce((s, o) => s + o.subtotal, 0))}</td>
                           <td className="px-4 py-2 text-right text-yellow-400 font-mono">{formatCurrency(summaries.reduce((s, o) => s + o.totalFuelSurcharge, 0))}</td>
+                          {hasDetention && <td className="px-4 py-2 text-right text-orange-400 font-mono">{formatCurrency(summaries.reduce((s, o) => s + o.totalDetentionPay, 0))}</td>}
                           <td className="px-4 py-2 text-right text-green-400 font-mono font-semibold">{formatCurrency(summaries.reduce((s, o) => s + o.grandTotal, 0))}</td>
                           <td colSpan={2} />
                         </tr>
@@ -378,6 +411,7 @@ export default function BillingPage() {
                     </table>
                   </div>
                 </div>
+                ); })()}
 
                 {/* Generated Bills */}
                 {billingRecords.length > 0 && (
@@ -609,6 +643,8 @@ function OperatorRow({
   onGenerate,
   generating,
   alreadyBilled,
+  showDetention,
+  legalNameMap = {},
 }: {
   summary: OperatorBillingSummary;
   dieselPrice: number | undefined;
@@ -617,6 +653,8 @@ function OperatorRow({
   onGenerate: () => void;
   generating: boolean;
   alreadyBilled: boolean;
+  showDetention: boolean;
+  legalNameMap?: Record<string, string>;
 }) {
   const rateInfo = getFuelSurchargeRate(summary.billingConfig, dieselPrice);
   return (
@@ -628,6 +666,7 @@ function OperatorRow({
         <td className="px-4 py-3 text-right text-white font-mono">{summary.totalHours.toFixed(1)}</td>
         <td className="px-4 py-3 text-right text-white font-mono">{formatCurrency(summary.subtotal)}</td>
         <td className="px-4 py-3 text-right text-yellow-400 font-mono">{formatCurrency(summary.totalFuelSurcharge)}</td>
+        {showDetention && <td className="px-4 py-3 text-right text-orange-400 font-mono">{summary.totalDetentionPay > 0 ? formatCurrency(summary.totalDetentionPay) : '--'}</td>}
         <td className="px-4 py-3 text-right text-green-400 font-mono font-semibold">{formatCurrency(summary.grandTotal)}</td>
         <td className="px-4 py-3 text-right text-sm">
           <span className="text-gray-400">{getFuelSurchargeLabel(summary.billingConfig)}</span>
@@ -653,7 +692,7 @@ function OperatorRow({
       </tr>
       {isExpanded && (
         <tr>
-          <td colSpan={9} className="px-0 py-0">
+          <td colSpan={showDetention ? 11 : 10} className="px-0 py-0">
             <div className="bg-gray-850 border-t border-gray-700">
               <table className="w-full">
                 <thead>
@@ -668,6 +707,7 @@ function OperatorRow({
                     <th className="px-4 py-1 text-right">Fuel Min</th>
                     <th className="px-4 py-1 text-right">Base</th>
                     <th className="px-4 py-1 text-right">FSC</th>
+                    {showDetention && <th className="px-4 py-1 text-right">Detention</th>}
                     <th className="px-4 py-1 text-right">Total</th>
                   </tr>
                 </thead>
@@ -678,12 +718,13 @@ function OperatorRow({
                       <td className="px-4 py-1.5 text-gray-300">{item.date}</td>
                       <td className="px-4 py-1.5 text-gray-300">{item.wellName}</td>
                       <td className="px-4 py-1.5 text-gray-400">{item.hauledTo || '--'}</td>
-                      <td className="px-4 py-1.5 text-gray-400">{item.driver}</td>
+                      <td className="px-4 py-1.5 text-gray-400">{legalNameMap[item.driver] || item.driver}</td>
                       <td className="px-4 py-1.5 text-right text-white font-mono">{item.bbls || '--'}</td>
                       <td className="px-4 py-1.5 text-right text-white font-mono">{item.hours || '--'}</td>
                       <td className="px-4 py-1.5 text-right text-gray-400 font-mono">{item.fuelMinutes || '--'}</td>
                       <td className="px-4 py-1.5 text-right text-white font-mono">{formatCurrency(item.baseAmount)}</td>
                       <td className="px-4 py-1.5 text-right text-yellow-400 font-mono">{item.fuelSurcharge > 0 ? formatCurrency(item.fuelSurcharge) : '--'}</td>
+                      {showDetention && <td className="px-4 py-1.5 text-right text-orange-400 font-mono">{item.detentionPay > 0 ? formatCurrency(item.detentionPay) : '--'}</td>}
                       <td className="px-4 py-1.5 text-right text-green-400 font-mono">{formatCurrency(item.total)}</td>
                     </tr>
                   ))}

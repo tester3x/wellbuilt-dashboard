@@ -780,6 +780,10 @@ export const processIncomingPull = functionsV1.database
       }
     }
 
+    // Immediately update down/up status so the app reflects the change
+    // before the heavy AFR/bbls calculations finish
+    await db.ref(`wells/${wellName}/status/isDown`).set(data.wellDown || false);
+
     // Calculate all fields
     const tankTopInches = (parseFloat(String(data.tankLevelFeet)) || 0) * 12;
 
