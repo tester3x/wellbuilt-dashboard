@@ -10,14 +10,20 @@ import { getFirebaseDatabase } from '@/lib/firebase';
 import { Timestamp } from 'firebase/firestore';
 import {
   type InvoiceGrouping,
+  type ExportFormat,
+  EXPORT_FORMATS,
   groupInvoiceData,
   getNextInvoiceNumbers,
   generateInvoicePDF,
   generateInvoiceCSV,
+  generateQuickBooksCSV,
+  generateInvoiceJSON,
   downloadBlob,
   saveBillingExport,
   fetchRecentExports,
   getExportFilename,
+  loadRealWellNames,
+  filterTestWells,
   type BillingExportRecord,
 } from '@/lib/billingExport';
 import {
@@ -90,6 +96,9 @@ export default function BillingPage() {
   const [exportDateTo, setExportDateTo] = useState(() => new Date().toISOString().slice(0, 10));
   const [exportSummaries, setExportSummaries] = useState<OperatorBillingSummary[]>([]);
   const [exportDataLoading, setExportDataLoading] = useState(false);
+  const [exportFormat, setExportFormat] = useState<ExportFormat>('pdf');
+  const [excludeTestWells, setExcludeTestWells] = useState(true);
+  const [realWellNames, setRealWellNames] = useState<Set<string> | null>(null);
 
   // Driver name resolution
   const [legalNameMap, setLegalNameMap] = useState<Record<string, string>>({});
@@ -248,10 +257,11 @@ export default function BillingPage() {
     || 'us';
   const regionLabel = DOE_REGIONS.find(r => r.value === currentRegion)?.label || 'U.S. Average';
 
-  // Load recent exports when Export tab opened
+  // Load recent exports + real well names when Export tab opened
   useEffect(() => {
     if (activeTab === 'export' && effectiveCompanyId) {
       fetchRecentExports(effectiveCompanyId).then(setRecentExports).catch(() => {});
+      if (!realWellNames) loadRealWellNames().then(setRealWellNames).catch(() => {});
     }
   }, [activeTab, effectiveCompanyId]);
 
@@ -737,10 +747,26 @@ export default function BillingPage() {
                 </div>
               </div>
 
+              {/* Test well filter */}
+              <div className="mb-4">
+                <label className="flex items-center gap-2 cursor-pointer">
+                  <input
+                    type="checkbox"
+                    checked={excludeTestWells}
+                    onChange={(e) => setExcludeTestWells(e.target.checked)}
+                    className="accent-green-500"
+                  />
+                  <span className="text-white text-sm">Exclude test wells</span>
+                  <span className="text-gray-500 text-xs">(only include wells found in NDIC/MBOGC database)</span>
+                </label>
+              </div>
+
               {/* Preview */}
               {(() => {
-                const groups = groupInvoiceData(exportSummaries, exportGrouping, exportOperator || undefined);
+                const src = excludeTestWells && realWellNames ? filterTestWells(exportSummaries, realWellNames) : exportSummaries;
+                const groups = groupInvoiceData(src, exportGrouping, exportOperator || undefined);
                 const grandTotal = groups.reduce((s, g) => s + g.grandTotal, 0);
+                const excluded = exportSummaries.reduce((s, o) => s + o.loads, 0) - src.reduce((s, o) => s + o.loads, 0);
                 return (
                   <div className="mb-6 p-3 bg-gray-750 rounded-lg border border-gray-600">
                     <p className="text-white text-sm">
@@ -749,6 +775,9 @@ export default function BillingPage() {
                         <span className="text-gray-400 ml-2">— Total: <span className="text-green-400 font-mono">{formatCurrency(grandTotal)}</span></span>
                       )}
                     </p>
+                    {excluded > 0 && (
+                      <p className="text-yellow-400 text-xs mt-1">{excluded} test well load{excluded !== 1 ? 's' : ''} excluded</p>
+                    )}
                     {groups.length === 0 && !exportDataLoading && (
                       <p className="text-yellow-400 text-xs mt-1">No invoices found for the selected period and operator.</p>
                     )}
@@ -756,11 +785,21 @@ export default function BillingPage() {
                 );
               })()}
 
-              {/* Generate buttons */}
-              <div className="flex gap-3">
+              {/* Format + Generate */}
+              <div className="flex items-center gap-3">
+                <select
+                  value={exportFormat}
+                  onChange={(e) => setExportFormat(e.target.value as ExportFormat)}
+                  className="px-3 py-2 bg-gray-700 border border-gray-600 rounded-lg text-white text-sm focus:outline-none focus:border-green-500"
+                >
+                  {EXPORT_FORMATS.map(f => (
+                    <option key={f.value} value={f.value}>{f.label}</option>
+                  ))}
+                </select>
                 <button
                   onClick={async () => {
-                    const groups = groupInvoiceData(exportSummaries, exportGrouping, exportOperator || undefined);
+                    const src = excludeTestWells && realWellNames ? filterTestWells(exportSummaries, realWellNames) : exportSummaries;
+                    const groups = groupInvoiceData(src, exportGrouping, exportOperator || undefined);
                     if (groups.length === 0) return;
                     setExportLoading(true);
                     try {
@@ -771,12 +810,35 @@ export default function BillingPage() {
                       const to = new Date(exportDateTo); to.setHours(23, 59, 59, 999);
                       const exportPeriod: PayPeriod = { type: 'custom' as any, start: from, end: to, label: '' };
                       const numbers = await getNextInvoiceNumbers(companyId, groups.length, prefix);
-                      const pdf = await generateInvoicePDF(
-                        groups, numbers, company, company.billingConfig,
-                        company.currentDieselPrice, exportPeriod, legalNameMap,
-                      );
-                      const blob = pdf.output('blob');
-                      downloadBlob(blob, getExportFilename(prefix, exportPeriod, exportOperator, 'pdf'));
+
+                      let blob: Blob;
+                      switch (exportFormat) {
+                        case 'pdf': {
+                          const pdf = await generateInvoicePDF(
+                            groups, numbers, company, company.billingConfig,
+                            company.currentDieselPrice, exportPeriod, legalNameMap,
+                          );
+                          blob = pdf.output('blob');
+                          break;
+                        }
+                        case 'csv': {
+                          const csv = generateInvoiceCSV(groups, numbers, legalNameMap);
+                          blob = new Blob([csv], { type: 'text/csv;charset=utf-8;' });
+                          break;
+                        }
+                        case 'quickbooks': {
+                          const qbCsv = generateQuickBooksCSV(groups, numbers, company, company.billingConfig, exportPeriod, legalNameMap);
+                          blob = new Blob([qbCsv], { type: 'text/csv;charset=utf-8;' });
+                          break;
+                        }
+                        case 'json': {
+                          const json = generateInvoiceJSON(groups, numbers, company, company.billingConfig, exportPeriod, legalNameMap);
+                          blob = new Blob([json], { type: 'application/json;charset=utf-8;' });
+                          break;
+                        }
+                      }
+
+                      downloadBlob(blob, getExportFilename(prefix, exportPeriod, exportOperator, exportFormat));
                       await saveBillingExport({
                         companyId,
                         operator: exportOperator,
@@ -787,14 +849,13 @@ export default function BillingPage() {
                         invoiceNumberEnd: numbers[numbers.length - 1],
                         invoiceCount: groups.length,
                         grandTotal: groups.reduce((s, g) => s + g.grandTotal, 0),
-                        format: 'pdf',
+                        format: exportFormat,
                         generatedAt: Timestamp.now(),
                       });
-                      // Refresh recent exports
                       fetchRecentExports(companyId).then(setRecentExports).catch(() => {});
                     } catch (err: any) {
-                      console.error('PDF generation failed:', err);
-                      setError(err?.message || 'PDF generation failed');
+                      console.error('Export failed:', err);
+                      setError(err?.message || 'Export failed');
                     } finally {
                       setExportLoading(false);
                     }
@@ -802,50 +863,11 @@ export default function BillingPage() {
                   disabled={exportLoading || exportSummaries.length === 0}
                   className="px-5 py-2 bg-green-600 hover:bg-green-500 disabled:opacity-50 text-white rounded-lg text-sm font-medium transition-colors"
                 >
-                  {exportLoading ? 'Generating...' : 'Generate PDF'}
+                  {exportLoading ? 'Generating...' : 'Generate'}
                 </button>
-                <button
-                  onClick={async () => {
-                    const groups = groupInvoiceData(exportSummaries, exportGrouping, exportOperator || undefined);
-                    if (groups.length === 0) return;
-                    setExportLoading(true);
-                    try {
-                      const companyId = effectiveCompanyId!;
-                      const company = companies.get(companyId)!;
-                      const prefix = company.invoicePrefix || 'INV';
-                      const from = new Date(exportDateFrom); from.setHours(0, 0, 0, 0);
-                      const to = new Date(exportDateTo); to.setHours(23, 59, 59, 999);
-                      const exportPeriod: PayPeriod = { type: 'custom' as any, start: from, end: to, label: '' };
-                      const numbers = await getNextInvoiceNumbers(companyId, groups.length, prefix);
-                      const csv = generateInvoiceCSV(groups, numbers, legalNameMap);
-                      const blob = new Blob([csv], { type: 'text/csv;charset=utf-8;' });
-                      downloadBlob(blob, getExportFilename(prefix, exportPeriod, exportOperator, 'csv'));
-                      await saveBillingExport({
-                        companyId,
-                        operator: exportOperator,
-                        grouping: exportGrouping,
-                        periodStart: Timestamp.fromDate(from),
-                        periodEnd: Timestamp.fromDate(to),
-                        invoiceNumberStart: numbers[0],
-                        invoiceNumberEnd: numbers[numbers.length - 1],
-                        invoiceCount: groups.length,
-                        grandTotal: groups.reduce((s, g) => s + g.grandTotal, 0),
-                        format: 'csv',
-                        generatedAt: Timestamp.now(),
-                      });
-                      fetchRecentExports(companyId).then(setRecentExports).catch(() => {});
-                    } catch (err: any) {
-                      console.error('CSV export failed:', err);
-                      setError(err?.message || 'CSV export failed');
-                    } finally {
-                      setExportLoading(false);
-                    }
-                  }}
-                  disabled={exportLoading || exportSummaries.length === 0}
-                  className="px-5 py-2 bg-blue-600 hover:bg-blue-500 disabled:opacity-50 text-white rounded-lg text-sm font-medium transition-colors"
-                >
-                  Export CSV
-                </button>
+                <span className="text-gray-500 text-xs">
+                  {EXPORT_FORMATS.find(f => f.value === exportFormat)?.description}
+                </span>
               </div>
             </div>
 
@@ -881,9 +903,12 @@ export default function BillingPage() {
                         <td className="px-4 py-2 text-right text-green-400 font-mono">{formatCurrency(exp.grandTotal)}</td>
                         <td className="px-4 py-2">
                           <span className={`px-2 py-0.5 rounded text-xs font-medium ${
-                            exp.format === 'pdf' ? 'bg-red-600/20 text-red-400' : 'bg-blue-600/20 text-blue-400'
+                            exp.format === 'pdf' ? 'bg-red-600/20 text-red-400'
+                              : exp.format === 'quickbooks' ? 'bg-emerald-600/20 text-emerald-400'
+                              : exp.format === 'json' ? 'bg-purple-600/20 text-purple-400'
+                              : 'bg-blue-600/20 text-blue-400'
                           }`}>
-                            {exp.format.toUpperCase()}
+                            {exp.format === 'quickbooks' ? 'QB CSV' : exp.format.toUpperCase()}
                           </span>
                         </td>
                         <td className="px-4 py-2 text-gray-400 text-xs">

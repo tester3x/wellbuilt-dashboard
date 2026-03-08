@@ -6,6 +6,17 @@ import { formatCurrency, type PayPeriod } from './payroll';
 import jsPDF from 'jspdf';
 import autoTable from 'jspdf-autotable';
 
+// ─── Export Formats ─────────────────────────────────────────────────────────
+
+export type ExportFormat = 'pdf' | 'csv' | 'quickbooks' | 'json';
+
+export const EXPORT_FORMATS: { value: ExportFormat; label: string; description: string }[] = [
+  { value: 'pdf', label: 'PDF Invoices', description: 'Professional multi-page invoice document' },
+  { value: 'csv', label: 'CSV (Generic)', description: 'Universal spreadsheet format — works everywhere' },
+  { value: 'quickbooks', label: 'QuickBooks CSV', description: 'Import-ready for QuickBooks Desktop & Online' },
+  { value: 'json', label: 'JSON (API)', description: 'Structured data for system integrations' },
+];
+
 // ─── Types ───────────────────────────────────────────────────────────────────
 
 export type InvoiceGrouping = 'well_day' | 'well_period' | 'operator_summary';
@@ -37,8 +48,57 @@ export interface BillingExportRecord {
   invoiceNumberEnd: string;
   invoiceCount: number;
   grandTotal: number;
-  format: 'pdf' | 'csv';
+  format: ExportFormat;
   generatedAt: any;
+}
+
+// ─── Test Well Filter ────────────────────────────────────────────────────────
+
+/**
+ * Load all real well names (NDIC + MBOGC) as a Set for fast lookup.
+ * Used to filter out test wells from billing exports.
+ */
+export async function loadRealWellNames(): Promise<Set<string>> {
+  const db = getFirestoreDb();
+  const snap = await getDocs(collection(db, 'wells'));
+  const names = new Set<string>();
+  snap.forEach(d => {
+    const data = d.data();
+    if (data.well_name) names.add(data.well_name.toLowerCase().trim());
+    if (data.search_name) names.add(data.search_name.toLowerCase().trim());
+  });
+  return names;
+}
+
+/**
+ * Filter line items to only include real wells (matched against NDIC/MBOGC database).
+ * Test data with made-up well names gets excluded automatically.
+ */
+export function filterTestWells(
+  summaries: OperatorBillingSummary[],
+  realWellNames: Set<string>,
+): OperatorBillingSummary[] {
+  return summaries.map(summary => {
+    const filtered = summary.lineItems.filter(item => {
+      const norm = item.wellName.toLowerCase().trim();
+      return realWellNames.has(norm);
+    });
+    if (filtered.length === 0) return null;
+    const subtotal = filtered.reduce((s, i) => s + i.baseAmount, 0);
+    const totalFuelSurcharge = filtered.reduce((s, i) => s + i.fuelSurcharge, 0);
+    const totalDetentionPay = filtered.reduce((s, i) => s + i.detentionPay, 0);
+    return {
+      ...summary,
+      lineItems: filtered,
+      loads: filtered.length,
+      totalBBLs: filtered.reduce((s, i) => s + i.bbls, 0),
+      totalHours: Math.round(filtered.reduce((s, i) => s + i.hours, 0) * 10) / 10,
+      subtotal: Math.round(subtotal * 100) / 100,
+      totalFuelSurcharge: Math.round(totalFuelSurcharge * 100) / 100,
+      totalDetentionPay: Math.round(totalDetentionPay * 100) / 100,
+      grandTotal: Math.round((subtotal + totalFuelSurcharge + totalDetentionPay) * 100) / 100,
+    };
+  }).filter(Boolean) as OperatorBillingSummary[];
 }
 
 // ─── Grouping Logic ──────────────────────────────────────────────────────────
@@ -469,6 +529,154 @@ export function generateInvoiceCSV(
   return csvContent;
 }
 
+// ─── QuickBooks CSV Generation ───────────────────────────────────────────────
+
+/**
+ * Generate QuickBooks-compatible CSV for import into QB Desktop or Online.
+ * Uses QB's standard invoice import column headers.
+ */
+export function generateQuickBooksCSV(
+  groups: GroupedInvoice[],
+  invoiceNumbers: string[],
+  company: CompanyConfig,
+  billingConfigs: Record<string, OperatorBillingConfig> | undefined,
+  period: PayPeriod,
+  legalNameMap: Record<string, string>,
+): string {
+  // QB Online invoice import headers
+  const headers = [
+    'InvoiceNo', 'Customer', 'InvoiceDate', 'DueDate', 'Terms',
+    'ItemDescription', 'ItemQuantity', 'ItemRate', 'ItemAmount',
+    'Memo',
+  ];
+
+  const rows: string[][] = [];
+  const today = formatDate(new Date());
+
+  groups.forEach((group, gi) => {
+    const invNum = invoiceNumbers[gi];
+    const terms = billingConfigs?.[group.operator]?.paymentTerms || 'net_30';
+    const termsLabel = terms.replace('_', ' ').replace(/\b\w/g, c => c.toUpperCase());
+    const dueDate = formatDate(calculateDueDate(period.end, terms));
+
+    // Line items
+    group.lineItems.forEach(item => {
+      const driver = legalNameMap[item.driver] || item.driver;
+      const desc = [
+        item.wellName,
+        item.hauledTo ? `-> ${item.hauledTo}` : '',
+        `${item.bbls} BBLs`,
+        driver,
+        item.date,
+      ].filter(Boolean).join(' | ');
+
+      rows.push([
+        invNum, group.operator, today, dueDate, termsLabel,
+        desc, '1', item.baseAmount.toFixed(2), item.baseAmount.toFixed(2),
+        `${item.wellName} - ${item.date}`,
+      ]);
+    });
+
+    // FSC as separate line item
+    if (group.totalFuelSurcharge > 0) {
+      rows.push([
+        invNum, group.operator, today, dueDate, termsLabel,
+        'Fuel Surcharge', '1', group.totalFuelSurcharge.toFixed(2),
+        group.totalFuelSurcharge.toFixed(2), '',
+      ]);
+    }
+
+    // Detention as separate line item
+    if (group.totalDetentionPay > 0) {
+      rows.push([
+        invNum, group.operator, today, dueDate, termsLabel,
+        'SWD Detention Pay', '1', group.totalDetentionPay.toFixed(2),
+        group.totalDetentionPay.toFixed(2), '',
+      ]);
+    }
+  });
+
+  return [
+    headers.join(','),
+    ...rows.map(r => r.map(cell => `"${String(cell).replace(/"/g, '""')}"`).join(',')),
+  ].join('\n');
+}
+
+// ─── JSON Export ─────────────────────────────────────────────────────────────
+
+/**
+ * Generate structured JSON export for API/system integrations.
+ * Clean, well-typed data ready for programmatic consumption.
+ */
+export function generateInvoiceJSON(
+  groups: GroupedInvoice[],
+  invoiceNumbers: string[],
+  company: CompanyConfig,
+  billingConfigs: Record<string, OperatorBillingConfig> | undefined,
+  period: PayPeriod,
+  legalNameMap: Record<string, string>,
+): string {
+  const today = new Date().toISOString();
+
+  const invoices = groups.map((group, gi) => {
+    const invNum = invoiceNumbers[gi];
+    const terms = billingConfigs?.[group.operator]?.paymentTerms || 'net_30';
+    const dueDate = calculateDueDate(period.end, terms).toISOString().slice(0, 10);
+
+    return {
+      invoiceNumber: invNum,
+      invoiceDate: today.slice(0, 10),
+      dueDate,
+      paymentTerms: terms,
+      vendor: {
+        name: company.name,
+        address: buildCompanyAddress(company) || undefined,
+        phone: company.phone || undefined,
+      },
+      billTo: {
+        name: group.operator,
+      },
+      well: group.wellName || undefined,
+      period: group.dateRange,
+      lineItems: group.lineItems.map(item => ({
+        date: item.date,
+        wbInvoiceNumber: item.invoiceNumber,
+        wellName: item.wellName,
+        dropOff: item.hauledTo || undefined,
+        driver: legalNameMap[item.driver] || item.driver,
+        jobType: item.jobType || undefined,
+        bbls: item.bbls,
+        hours: item.hours,
+        rateMethod: item.rateMethod,
+        rate: item.rate,
+        baseAmount: item.baseAmount,
+        fuelSurcharge: item.fuelSurcharge,
+        detentionPay: item.detentionPay,
+        swdWaitMinutes: item.swdWaitMinutes || undefined,
+        total: item.total,
+      })),
+      subtotal: group.subtotal,
+      fuelSurcharge: group.totalFuelSurcharge,
+      detentionPay: group.totalDetentionPay,
+      grandTotal: group.grandTotal,
+      totalBBLs: group.totalBBLs,
+      totalHours: group.totalHours,
+      loads: group.loads,
+    };
+  });
+
+  return JSON.stringify({
+    exportDate: today,
+    generatedBy: 'WellBuilt Suite',
+    company: company.name,
+    periodStart: period.start.toISOString().slice(0, 10),
+    periodEnd: period.end.toISOString().slice(0, 10),
+    invoiceCount: invoices.length,
+    grandTotal: invoices.reduce((s, i) => s + i.grandTotal, 0),
+    invoices,
+  }, null, 2);
+}
+
 // ─── Download Helper ─────────────────────────────────────────────────────────
 
 export function downloadBlob(blob: Blob, filename: string) {
@@ -522,11 +730,13 @@ export function getExportFilename(
   prefix: string,
   period: PayPeriod,
   operator: string | null,
-  ext: 'pdf' | 'csv',
+  format: ExportFormat,
 ): string {
   const months = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
   const month = months[period.start.getMonth()];
   const year = period.start.getFullYear();
   const opLabel = operator ? operator.replace(/[^a-zA-Z0-9]/g, '-').replace(/-+/g, '-').substring(0, 30) : 'All';
-  return `${prefix}-Invoices-${month}-${year}-${opLabel}.${ext}`;
+  const ext = format === 'quickbooks' ? 'csv' : format;
+  const suffix = format === 'quickbooks' ? '-QB' : '';
+  return `${prefix}-Invoices-${month}-${year}-${opLabel}${suffix}.${ext}`;
 }
