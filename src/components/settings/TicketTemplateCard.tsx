@@ -1,6 +1,6 @@
 'use client';
 
-import { useState, useMemo } from 'react';
+import { useState, useMemo, useRef, useEffect, useCallback } from 'react';
 import {
   type CompanyConfig,
   type TicketTemplate,
@@ -118,13 +118,19 @@ function buildPreviewHtml(T: TicketTemplate): string {
     },
 
     timeline: () => {
-      if (!T.timelineStamps) return '';
-      return `<div style="margin:6px 0;padding:6px 0;border-top:1px dotted #666;">
-        <div style="font-size:9px;font-weight:bold;color:#444;margin-bottom:3px;">TIMELINE</div>
-        <div style="font-size:9px;color:#333;line-height:1.6;">
-          <div>Departed 12:17 PM</div><div>Arrival 12:42 PM</div>
-          <div>Departure 1:21 PM</div><div>Arrival (SWD) 1:55 PM</div>
-        </div>
+      const hasAny = T.tlStartTime || T.tlPickupArrival || T.tlLoadedDeparture || T.tlDropoffArrival || T.tlUnloadedStop;
+      if (!hasAny) return '';
+      const row = (label: string, time: string) =>
+        `<div style="display:flex;justify-content:space-between;padding:1px 0;"><span style="font-weight:bold;">${label}</span><span>${time}</span></div>`;
+      let rows = '';
+      if (T.tlStartTime) rows += row('Start Time', '12:17 PM');
+      if (T.tlPickupArrival) rows += row('Pickup Arrival', '12:42 PM');
+      if (T.tlLoadedDeparture) rows += row('Loaded / Departure', '1:21 PM');
+      if (T.tlDropoffArrival) rows += row('Drop-off Arrival', '1:55 PM');
+      if (T.tlUnloadedStop) rows += row('Unloaded / Stop Time', '2:18 PM');
+      return `<div style="margin:6px 0;padding:6px 0;border-top:1px solid #999;">
+        <div style="font-size:10px;font-weight:bold;color:#444;margin-bottom:3px;">JOB TIMELINE</div>
+        <div style="font-size:10px;color:#000;">${rows}</div>
       </div>`;
     },
 
@@ -235,6 +241,43 @@ function SizePicker({ value, onChange, label }: { value: FieldSize; onChange: (s
           </button>
         ))}
       </div>
+    </div>
+  );
+}
+
+// ── Auto-scaling preview pane ────────────────────────────────────────────────
+
+function PreviewPane({ previewHtml }: { previewHtml: string }) {
+  const containerRef = useRef<HTMLDivElement>(null);
+  const [scale, setScale] = useState(1);
+
+  const updateScale = useCallback(() => {
+    if (containerRef.current) {
+      const containerWidth = containerRef.current.clientWidth;
+      setScale(containerWidth / 384); // 384px = receipt paper width
+    }
+  }, []);
+
+  useEffect(() => {
+    updateScale();
+    const ro = new ResizeObserver(updateScale);
+    if (containerRef.current) ro.observe(containerRef.current);
+    return () => ro.disconnect();
+  }, [updateScale]);
+
+  return (
+    <div ref={containerRef} className="flex-1 bg-white rounded overflow-y-auto overflow-x-hidden relative">
+      <iframe
+        srcDoc={previewHtml}
+        className="border-0"
+        style={{
+          width: '384px',
+          height: '1200px',
+          transform: `scale(${scale})`,
+          transformOrigin: 'top left',
+        }}
+        title="Ticket preview"
+      />
     </div>
   );
 }
@@ -527,14 +570,7 @@ export function TicketTemplateCard({ company, onSave }: Props) {
               {/* Right: Live Preview */}
               <div className="flex-[2] flex flex-col min-w-0">
                 <p className="text-gray-500 text-xs mb-2">Live Preview</p>
-                <div className="flex-1 bg-white rounded overflow-hidden relative">
-                  <iframe
-                    srcDoc={previewHtml}
-                    className="absolute top-0 left-0 border-0"
-                    style={{ width: '384px', height: '720px', transform: 'scale(0.48)', transformOrigin: 'top left' }}
-                    title="Ticket preview"
-                  />
-                </div>
+                <PreviewPane previewHtml={previewHtml} />
                 <button
                   onClick={openPrintTest}
                   className="mt-2 px-3 py-1.5 text-xs rounded bg-gray-600 hover:bg-gray-500 text-white"

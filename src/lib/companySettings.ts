@@ -187,7 +187,12 @@ export interface TicketTemplate {
   driverSignature: boolean;
   receiverSignature: boolean;
   // Timeline
-  timelineStamps: boolean;
+  timelineStamps?: boolean; // Legacy master toggle (backward compat)
+  tlStartTime: boolean;
+  tlPickupArrival: boolean;
+  tlLoadedDeparture: boolean;
+  tlDropoffArrival: boolean;
+  tlUnloadedStop: boolean;
   // Layout customization
   fieldSizes?: Partial<Record<string, FieldSize>>;
   groupOrder?: string[];
@@ -206,7 +211,8 @@ export const DEFAULT_TICKET_TEMPLATE: TicketTemplate = {
   startTime: true, stopTime: true, hours: true,
   driverName: true, truckNumber: true, trailerNumber: true,
   driverSignature: true, receiverSignature: true,
-  timelineStamps: true,
+  tlStartTime: true, tlPickupArrival: true, tlLoadedDeparture: true,
+  tlDropoffArrival: true, tlUnloadedStop: true,
 };
 
 export const DEFAULT_GROUP_ORDER: string[] = [
@@ -297,9 +303,13 @@ export const TEMPLATE_FIELD_GROUPS: TemplateFieldGroup[] = [
     ],
   },
   {
-    id: 'timeline', label: 'Timeline Stamps', color: 'cyan',
+    id: 'timeline', label: 'Job Timeline', color: 'cyan',
     fields: [
-      { key: 'timelineStamps', label: 'Timeline Events' },
+      { key: 'tlStartTime', label: 'Start Time' },
+      { key: 'tlPickupArrival', label: 'Pickup Arrival' },
+      { key: 'tlLoadedDeparture', label: 'Loaded / Departure' },
+      { key: 'tlDropoffArrival', label: 'Drop-off Arrival' },
+      { key: 'tlUnloadedStop', label: 'Unloaded / Stop Time' },
     ],
   },
   {
