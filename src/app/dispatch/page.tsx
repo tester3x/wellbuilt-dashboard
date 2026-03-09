@@ -51,6 +51,7 @@ interface DispatchJob {
   disposalCounty?: string;
   loadCount?: number;  // Number of loads for this well (default 1)
   serviceGroupId?: string;  // Links multi-driver service work dispatches
+  assignedDrivers?: string[];  // Crew list for multi-driver service work (denormalized)
   // Load transfer fields
   type?: 'dispatch' | 'transfer';
   transferFromDriver?: string;
@@ -595,6 +596,8 @@ export default function DispatchPage() {
 
       // Generate a group ID so Dashboard can link related service work dispatches
       const serviceGroupId = selectedDrivers.length > 1 ? `sg_${Date.now()}_${Math.random().toString(36).slice(2, 8)}` : undefined;
+      // Crew list — each driver sees who else is assigned (denormalized for zero extra queries)
+      const assignedDrivers = selectedDrivers.length > 1 ? selectedDrivers.map(d => d.displayName) : undefined;
 
       const promises = selectedDrivers.map(driver => {
         const job: Omit<DispatchJob, 'id'> = {
@@ -609,6 +612,7 @@ export default function DispatchPage() {
           assignedAt: Timestamp.now(),
           assignedBy: user?.email || 'dashboard',
           ...(serviceGroupId ? { serviceGroupId } : {}),
+          ...(assignedDrivers ? { assignedDrivers } : {}),
         };
         return addDoc(collection(firestore, 'dispatches'), job);
       });
