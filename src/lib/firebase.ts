@@ -7,6 +7,7 @@ import { getStorage as _getStorage, FirebaseStorage } from 'firebase/storage';
 
 const firebaseConfig = {
   apiKey: "AIzaSyAGWXa-doFGzo7T5SxHVD_v5-SHXIc8wAI",
+  authDomain: "wellbuilt-sync.firebaseapp.com",
   databaseURL: "https://wellbuilt-sync-default-rtdb.firebaseio.com",
   projectId: "wellbuilt-sync",
   storageBucket: "wellbuilt-sync.firebasestorage.app",

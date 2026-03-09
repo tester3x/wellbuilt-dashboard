@@ -1,7 +1,7 @@
 // Shared types and helpers for company settings
 // Used by both CompaniesTab (admin) and Settings page (self-service)
 
-import { getFirestoreDb, getFirebaseStorage } from '@/lib/firebase';
+import { getFirestoreDb } from '@/lib/firebase';
 import { collection, getDocs, doc, getDoc, updateDoc } from 'firebase/firestore';
 
 // ── Types ──────────────────────────────────────────────────────────────────────
@@ -348,6 +348,7 @@ export interface CompanyConfig {
   notes?: string;
   assignedOperators?: string[];
   logoUrl?: string;
+  thermalLogoUrl?: string;
   primaryColor?: string;
   phone?: string;
   splitTickets?: boolean;
@@ -493,25 +494,80 @@ export function extractColorPalette(imageUrl: string): Promise<string[]> {
   });
 }
 
+/** Convert a File or Blob to a base64 data URL string */
+function fileToDataUrl(file: File | Blob): Promise<string> {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => resolve(reader.result as string);
+    reader.onerror = () => reject(new Error('Failed to read file'));
+    reader.readAsDataURL(file);
+  });
+}
+
+/**
+ * "Upload" company logo — converts to base64 data URL and returns it.
+ * The caller saves it to Firestore via updateCompanyFields (no Firebase Storage needed).
+ */
 export async function uploadCompanyLogo(
-  companyId: string,
+  _companyId: string,
   file: File
 ): Promise<string> {
-  const bucket = 'wellbuilt-sync.firebasestorage.app';
-  const objectPath = `companies/${companyId}/logo.png`;
-  const uploadUrl = `https://storage.googleapis.com/upload/storage/v1/b/${encodeURIComponent(bucket)}/o?uploadType=media&name=${encodeURIComponent(objectPath)}`;
+  return fileToDataUrl(file);
+}
 
-  const uploadRes = await fetch(uploadUrl, {
-    method: 'POST',
-    headers: { 'Content-Type': file.type },
-    body: file,
+/**
+ * "Upload" thermal logo — converts to base64 data URL and returns it.
+ */
+export async function uploadCompanyThermalLogo(
+  _companyId: string,
+  file: File | Blob
+): Promise<string> {
+  return fileToDataUrl(file);
+}
+
+/**
+ * Auto-generate a thermal-printer-friendly B&W version of a color logo.
+ * Canvas: resize → greyscale → threshold → monochrome PNG blob.
+ */
+export function generateThermalLogo(imageUrl: string, maxWidth = 160): Promise<Blob> {
+  return new Promise((resolve, reject) => {
+    const img = new Image();
+    img.crossOrigin = 'anonymous';
+    img.onload = () => {
+      const scale = Math.min(maxWidth / img.width, 1);
+      const w = Math.round(img.width * scale);
+      const h = Math.round(img.height * scale);
+
+      const canvas = document.createElement('canvas');
+      canvas.width = w;
+      canvas.height = h;
+      const ctx = canvas.getContext('2d');
+      if (!ctx) { reject(new Error('No canvas context')); return; }
+
+      // Draw on white background (transparency → white for thermal)
+      ctx.fillStyle = '#FFFFFF';
+      ctx.fillRect(0, 0, w, h);
+      ctx.drawImage(img, 0, 0, w, h);
+
+      const imageData = ctx.getImageData(0, 0, w, h);
+      const data = imageData.data;
+
+      // Convert to greyscale then threshold to pure B&W
+      for (let i = 0; i < data.length; i += 4) {
+        const grey = data[i] * 0.299 + data[i + 1] * 0.587 + data[i + 2] * 0.114;
+        const bw = grey < 128 ? 0 : 255;
+        data[i] = bw;
+        data[i + 1] = bw;
+        data[i + 2] = bw;
+      }
+
+      ctx.putImageData(imageData, 0, 0);
+      canvas.toBlob(blob => {
+        if (blob) resolve(blob);
+        else reject(new Error('Canvas toBlob failed'));
+      }, 'image/png');
+    };
+    img.onerror = () => reject(new Error('Failed to load image for thermal conversion'));
+    img.src = imageUrl;
   });
-
-  if (!uploadRes.ok) {
-    const errBody = await uploadRes.text();
-    throw new Error(`Upload failed (${uploadRes.status}): ${errBody.slice(0, 100)}`);
-  }
-
-  await uploadRes.json();
-  return `https://storage.googleapis.com/${bucket}/${objectPath}`;
 }
