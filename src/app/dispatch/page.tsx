@@ -18,6 +18,7 @@ type SubTab = 'pw' | 'service' | 'addpull';
 interface ApprovedDriver {
   key: string;           // passcodeHash
   displayName: string;
+  legalName?: string;    // Real name from registration (e.g. "Michael Burger")
   active?: boolean;
   companyId?: string;
   companyName?: string;
@@ -28,6 +29,7 @@ interface DispatchJob {
   id?: string;
   driverHash: string;
   driverName: string;
+  driverFirstName?: string;  // First name from legalName (privacy — don't expose logins)
   wellName: string;
   ndicWellName?: string;  // Full NDIC name (e.g. "GABRIEL 1-36-25H")
   operator?: string;
@@ -337,6 +339,7 @@ export default function DispatchPage() {
               approved.push({
                 key: hash,
                 displayName: val.displayName,
+                legalName: val.legalName || val.profile?.legalName || '',
                 active: val.active,
                 companyId: val.companyId,
                 companyName: val.companyName,
@@ -352,6 +355,7 @@ export default function DispatchPage() {
                 approved.push({
                   key: hash,
                   displayName: first.displayName,
+                  legalName: first.legalName || first.profile?.legalName || '',
                   active: first.active,
                   companyId: first.companyId,
                   companyName: first.companyName,
@@ -542,9 +546,13 @@ export default function DispatchPage() {
       const priority = getPriority(assignTarget);
       const firestore = getFirestoreDb();
 
+      // Extract first name from legalName for privacy-safe display
+      const driverFirstName = driver.legalName ? driver.legalName.split(' ')[0] : driver.displayName;
+
       const job: Omit<DispatchJob, 'id'> = {
         driverHash: assignDriverHash,
         driverName: driver.displayName,
+        driverFirstName,
         wellName: assignTarget.wellName,
         ndicWellName: assignTarget.ndicName || assignTarget.wellName,
         route: assignTarget.route || '',
@@ -569,7 +577,7 @@ export default function DispatchPage() {
       };
 
       await addDoc(collection(firestore, 'dispatches'), job);
-      setMessage(`Dispatched ${assignTarget.wellName} to ${driver.displayName}`);
+      setMessage(`Dispatched ${assignTarget.wellName} to ${driver.legalName || driver.displayName}`);
       setShowAssignModal(false);
       setAssignTarget(null);
       await loadDispatches();
@@ -596,13 +604,18 @@ export default function DispatchPage() {
 
       // Generate a group ID so Dashboard can link related service work dispatches
       const serviceGroupId = selectedDrivers.length > 1 ? `sg_${Date.now()}_${Math.random().toString(36).slice(2, 8)}` : undefined;
-      // Crew list — each driver sees who else is assigned (denormalized for zero extra queries)
-      const assignedDrivers = selectedDrivers.length > 1 ? selectedDrivers.map(d => d.displayName) : undefined;
+      // Crew list — first names from legalName so logins stay private
+      const getFirstName = (d: ApprovedDriver) => {
+        if (d.legalName) return d.legalName.split(' ')[0];
+        return d.displayName; // fallback if no legalName
+      };
+      const assignedDrivers = selectedDrivers.length > 1 ? selectedDrivers.map(getFirstName) : undefined;
 
       const promises = selectedDrivers.map(driver => {
         const job: Omit<DispatchJob, 'id'> = {
           driverHash: driver.key,
           driverName: driver.displayName,
+          ...(driver.legalName ? { driverFirstName: getFirstName(driver) } : {}),
           wellName: swWellName.trim(),
           jobType: 'service',
           serviceType: swServiceType.trim(),
@@ -618,7 +631,7 @@ export default function DispatchPage() {
       });
 
       await Promise.all(promises);
-      const names = selectedDrivers.map(d => d.displayName).join(', ');
+      const names = selectedDrivers.map(d => d.legalName || d.displayName).join(', ');
       setMessage(`Service work dispatched to ${names}`);
       setSwWellName('');
       setSwServiceType('');
@@ -655,12 +668,15 @@ export default function DispatchPage() {
   async function assignTransfer(jobId: string, driverHash: string, driverName: string) {
     try {
       const firestore = getFirestoreDb();
+      const driver = drivers.find(d => d.key === driverHash);
+      const driverFirstName = driver?.legalName ? driver.legalName.split(' ')[0] : driverName;
       await updateDoc(doc(firestore, 'dispatches', jobId), {
         driverHash,
         driverName,
+        driverFirstName,
         status: 'pending', // Approve: move from pending_approval → pending so driver sees it
       });
-      setMessage(`Transfer approved → assigned to ${driverName}`);
+      setMessage(`Transfer approved → assigned to ${driverFirstName}`);
       setTimeout(() => setMessage(''), 3000);
     } catch (err: any) {
       setMessage(`Error: ${err.message}`);
@@ -733,9 +749,11 @@ export default function DispatchPage() {
         const well = wells.find(w => w.wellName === wellName);
         const priority = well ? getPriority(well) : { sortOrder: 5 };
 
+        const driverFirstName = driver.legalName ? driver.legalName.split(' ')[0] : driver.displayName;
         const job: Omit<DispatchJob, 'id'> = {
           driverHash: bulkDriverHash,
           driverName: driver.displayName,
+          driverFirstName,
           wellName,
           route: well?.route || '',
           jobType: 'pw',
@@ -761,7 +779,7 @@ export default function DispatchPage() {
       });
 
       await Promise.all(promises);
-      setMessage(`Dispatched ${totalSelectedLoads} load${totalSelectedLoads !== 1 ? 's' : ''} across ${selectedWells.size} well${selectedWells.size !== 1 ? 's' : ''} to ${driver.displayName}`);
+      setMessage(`Dispatched ${totalSelectedLoads} load${totalSelectedLoads !== 1 ? 's' : ''} across ${selectedWells.size} well${selectedWells.size !== 1 ? 's' : ''} to ${driver.legalName || driver.displayName}`);
 
       // Reset
       setSelectedWells(new Map());
@@ -963,7 +981,7 @@ export default function DispatchPage() {
                       >
                         <option value="">Select driver...</option>
                         {drivers.map(d => (
-                          <option key={d.key} value={d.key}>{d.displayName}</option>
+                          <option key={d.key} value={d.key}>{d.legalName || d.displayName}</option>
                         ))}
                       </select>
                     </div>
@@ -1170,16 +1188,22 @@ export default function DispatchPage() {
               <h3 className="text-lg font-semibold text-white mb-4">New Service Work Job</h3>
 
               <div className="space-y-4">
-                {/* Well/Location */}
+                {/* Well/Location — autocomplete from loaded wells */}
                 <div>
                   <label className="block text-sm text-gray-400 mb-1">Well / Location</label>
                   <input
                     type="text"
                     value={swWellName}
                     onChange={(e) => setSwWellName(e.target.value)}
-                    placeholder="Enter well name or location"
+                    placeholder="Type to search wells..."
+                    list="sw-well-suggestions"
                     className="w-full px-3 py-2 bg-gray-900 border border-gray-700 rounded-lg text-white text-sm placeholder-gray-500 focus:outline-none focus:border-blue-500"
                   />
+                  <datalist id="sw-well-suggestions">
+                    {wells.map(w => (
+                      <option key={w.wellName} value={w.wellName} />
+                    ))}
+                  </datalist>
                 </div>
 
                 {/* Service Type */}
@@ -1234,7 +1258,7 @@ export default function DispatchPage() {
                             readOnly
                             className="w-4 h-4 rounded border-gray-600 bg-gray-800 text-blue-600 focus:ring-blue-500 focus:ring-offset-0 pointer-events-none"
                           />
-                          <span>{d.displayName}</span>
+                          <span>{d.legalName || d.displayName}</span>
                         </button>
                       );
                     })}
@@ -1269,7 +1293,7 @@ export default function DispatchPage() {
               </div>
             </div>
 
-            {/* Active Service Work Dispatches */}
+            {/* Active Service Work Dispatches — grouped by serviceGroupId */}
             <div className="bg-gray-800 rounded-lg border border-gray-700 p-6">
               <h3 className="text-lg font-semibold text-white mb-4">Active Service Jobs</h3>
               {dispatches.filter(d => d.jobType === 'service').length === 0 ? (
@@ -1278,31 +1302,94 @@ export default function DispatchPage() {
                 </div>
               ) : (
                 <div className="space-y-3">
-                  {dispatches.filter(d => d.jobType === 'service').map((job) => (
-                    <div key={job.id} className="bg-gray-800 rounded-lg border border-gray-700 p-4">
-                      <div className="flex items-start justify-between mb-2">
-                        <div>
-                          <span className="text-white font-medium">{job.wellName}</span>
-                          <span className="text-gray-500 text-sm ml-2">{job.serviceType}</span>
+                  {(() => {
+                    const serviceJobs = dispatches.filter(d => d.jobType === 'service');
+                    // Group by serviceGroupId — ungrouped jobs get their own card
+                    const groups = new Map<string, DispatchJob[]>();
+                    const standalone: DispatchJob[] = [];
+                    for (const job of serviceJobs) {
+                      if (job.serviceGroupId) {
+                        const existing = groups.get(job.serviceGroupId) || [];
+                        existing.push(job);
+                        groups.set(job.serviceGroupId, existing);
+                      } else {
+                        standalone.push(job);
+                      }
+                    }
+                    const cards: React.ReactNode[] = [];
+
+                    // Grouped service jobs — one card per group
+                    groups.forEach((jobs, groupId) => {
+                      const first = jobs[0];
+                      cards.push(
+                        <div key={groupId} className="bg-gray-800 rounded-lg border border-gray-700 p-4">
+                          <div className="flex items-start justify-between mb-2">
+                            <div>
+                              <span className="text-white font-medium">{first.wellName}</span>
+                              <span className="text-gray-500 text-sm ml-2">{first.serviceType}</span>
+                              <span className="ml-2 px-1.5 py-0.5 bg-blue-600/30 text-blue-300 text-xs rounded font-medium">{jobs.length} drivers</span>
+                            </div>
+                          </div>
+                          <div className="text-sm text-gray-400 space-y-1.5">
+                            <div className="text-gray-500 text-xs font-medium uppercase tracking-wider">Crew</div>
+                            {jobs.map(j => {
+                              const accepted = j.status === 'accepted' || j.status === 'in_progress' || j.status === 'paused';
+                              const firstName = j.driverFirstName || j.driverName;
+                              return (
+                                <div key={j.id} className="flex items-center justify-between ml-1">
+                                  <div className="flex items-center gap-2">
+                                    <span className={accepted ? 'text-green-400' : 'text-gray-300'}>
+                                      {accepted ? '✓ ' : '○ '}{firstName}
+                                    </span>
+                                    {j.status === 'paused' && <span className="text-yellow-500 text-xs">(paused)</span>}
+                                  </div>
+                                  <button
+                                    onClick={() => j.id && cancelDispatch(j.id)}
+                                    className="px-1.5 py-0.5 bg-red-600/30 hover:bg-red-600/50 text-red-300 text-xs rounded transition-colors opacity-60 hover:opacity-100"
+                                  >
+                                    ✕
+                                  </button>
+                                </div>
+                              );
+                            })}
+                            <div className="pt-1">Assigned: <span className="text-gray-300">{formatDispatchTime(first.assignedAt)}</span></div>
+                            {first.notes && <div>Notes: <span className="text-gray-300">{first.notes}</span></div>}
+                          </div>
                         </div>
-                        <StatusBadge status={job.status} />
-                      </div>
-                      <div className="text-sm text-gray-400 space-y-1">
-                        <div>Driver: <span className="text-gray-300">{job.driverName}</span></div>
-                        {job.type === 'transfer' && job.transferFromDriver && (
-                          <div><span className="px-1.5 py-0.5 bg-orange-600/30 text-orange-300 text-xs rounded font-medium">Transfer from {job.transferFromDriver}</span></div>
-                        )}
-                        <div>Assigned: <span className="text-gray-300">{formatDispatchTime(job.assignedAt)}</span></div>
-                        {job.notes && <div>Notes: <span className="text-gray-300">{job.notes}</span></div>}
-                      </div>
-                      <button
-                        onClick={() => job.id && cancelDispatch(job.id)}
-                        className="mt-3 px-2 py-1 bg-red-600/30 hover:bg-red-600/50 text-red-300 text-xs rounded transition-colors"
-                      >
-                        Cancel
-                      </button>
-                    </div>
-                  ))}
+                      );
+                    });
+
+                    // Standalone service jobs — individual cards
+                    standalone.forEach(job => {
+                      cards.push(
+                        <div key={job.id} className="bg-gray-800 rounded-lg border border-gray-700 p-4">
+                          <div className="flex items-start justify-between mb-2">
+                            <div>
+                              <span className="text-white font-medium">{job.wellName}</span>
+                              <span className="text-gray-500 text-sm ml-2">{job.serviceType}</span>
+                            </div>
+                            <StatusBadge status={job.status} />
+                          </div>
+                          <div className="text-sm text-gray-400 space-y-1">
+                            <div>Driver: <span className="text-gray-300">{job.driverFirstName || job.driverName}</span></div>
+                            {job.type === 'transfer' && job.transferFromDriver && (
+                              <div><span className="px-1.5 py-0.5 bg-orange-600/30 text-orange-300 text-xs rounded font-medium">Transfer from {job.transferFromDriver}</span></div>
+                            )}
+                            <div>Assigned: <span className="text-gray-300">{formatDispatchTime(job.assignedAt)}</span></div>
+                            {job.notes && <div>Notes: <span className="text-gray-300">{job.notes}</span></div>}
+                          </div>
+                          <button
+                            onClick={() => job.id && cancelDispatch(job.id)}
+                            className="mt-3 px-2 py-1 bg-red-600/30 hover:bg-red-600/50 text-red-300 text-xs rounded transition-colors"
+                          >
+                            Cancel
+                          </button>
+                        </div>
+                      );
+                    });
+
+                    return cards;
+                  })()}
                 </div>
               )}
             </div>
@@ -1439,14 +1526,14 @@ export default function DispatchPage() {
                     {drivers
                       .filter(d => d.assignedRoutes?.includes(assignTarget.route!))
                       .map(d => (
-                        <option key={d.key} value={d.key}>{d.displayName}</option>
+                        <option key={d.key} value={d.key}>{d.legalName || d.displayName}</option>
                       ))
                     }
                   </optgroup>
                 )}
                 <optgroup label="All Drivers">
                   {drivers.map(d => (
-                    <option key={d.key} value={d.key}>{d.displayName}</option>
+                    <option key={d.key} value={d.key}>{d.legalName || d.displayName}</option>
                   ))}
                 </optgroup>
               </select>
@@ -1667,7 +1754,7 @@ function StatusBadge({ status }: { status: string }) {
 function ActiveDispatchTable({ dispatches, cancelDispatch, drivers, assignTransfer }: {
   dispatches: DispatchJob[];
   cancelDispatch: (id: string) => void;
-  drivers?: { key: string; displayName: string }[];
+  drivers?: { key: string; displayName: string; legalName?: string }[];
   assignTransfer?: (jobId: string, driverHash: string, driverName: string) => void;
 }) {
   const [expandedDriver, setExpandedDriver] = useState<string | null>(null);
@@ -1708,7 +1795,7 @@ function ActiveDispatchTable({ dispatches, cancelDispatch, drivers, assignTransf
               {(job.loadCount || 0) > 1 && (
                 <span className="px-1.5 py-0.5 bg-yellow-600/30 text-yellow-300 text-xs rounded font-bold flex-shrink-0">{job.loadCount} loads</span>
               )}
-              <span className="text-gray-400 truncate flex-1">{job.driverName}</span>
+              <span className="text-gray-400 truncate flex-1">{job.driverFirstName || job.driverName}</span>
               {job.type === 'transfer' && job.transferFromDriver && (
                 <span className="px-1.5 py-0.5 bg-orange-600/30 text-orange-300 text-xs rounded font-medium truncate">Transfer from {job.transferFromDriver}</span>
               )}
@@ -1726,7 +1813,7 @@ function ActiveDispatchTable({ dispatches, cancelDispatch, drivers, assignTransf
               onClick={() => setExpandedDriver(isExpanded ? null : driverHash)}
               className="w-full flex items-center gap-2 px-3 py-2 bg-gray-900/50 rounded hover:bg-gray-900/80 text-sm text-left"
             >
-              <span className="text-white font-medium">{jobs[0].driverName}</span>
+              <span className="text-white font-medium">{jobs[0].driverFirstName || jobs[0].driverName}</span>
               <span className="px-1.5 py-0.5 bg-blue-600 text-white text-xs rounded-full font-bold">{jobs.length}</span>
               <span className="text-gray-500 text-xs flex-1 truncate">
                 {jobs.map(j => j.wellName).join(', ')}
@@ -1762,7 +1849,7 @@ function ActiveDispatchTable({ dispatches, cancelDispatch, drivers, assignTransf
 // Row for unassigned transfer requests — pulsing orange, driver dropdown for dispatch to assign
 function UnassignedTransferRow({ job, drivers, assignTransfer, cancelDispatch }: {
   job: DispatchJob;
-  drivers: { key: string; displayName: string }[];
+  drivers: { key: string; displayName: string; legalName?: string }[];
   assignTransfer?: (jobId: string, driverHash: string, driverName: string) => void;
   cancelDispatch: (id: string) => void;
 }) {
@@ -1805,7 +1892,7 @@ function UnassignedTransferRow({ job, drivers, assignTransfer, cancelDispatch }:
         >
           <option value="">Select driver...</option>
           {drivers.map(d => (
-            <option key={d.key} value={d.key}>{d.displayName}</option>
+            <option key={d.key} value={d.key}>{d.legalName || d.displayName}</option>
           ))}
         </select>
         <button
