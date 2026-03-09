@@ -51,13 +51,9 @@ function buildPreviewHtml(T: TicketTemplate): string {
   const sectionBuilders: Record<string, () => string> = {
     header: () => {
       let h = '';
-      if (T.companyLogo || T.companyAddress) {
-        h += `<div class="header-top">
-          ${T.companyLogo ? '<div style="width:60px;height:40px;background:#ddd;display:flex;align-items:center;justify-content:center;font-size:8px;color:#666;border-radius:4px;">LOGO</div>' : ''}
-          ${T.companyAddress ? '<div class="addr-block">P.O. Box 4447<br/>Williston, ND 58801<br/>(701) 555-0123</div>' : ''}
-        </div>`;
-      }
+      if (T.companyLogo) h += '<div class="logo-row"><div style="width:60px;height:40px;background:#ddd;display:inline-flex;align-items:center;justify-content:center;font-size:8px;color:#666;border-radius:4px;">LOGO</div></div>';
       if (T.companyName) h += '<div class="company-name">SAMPLE TRUCKING LLC</div>';
+      if (T.companyAddress) h += '<div class="addr-row">P.O. Box 4447 · Williston, ND 58801 · (701) 555-0123</div>';
       if (T.companyLogo || T.companyName || T.companyAddress) h += '<div class="company-divider"></div>';
       return h;
     },
@@ -70,68 +66,58 @@ function buildPreviewHtml(T: TicketTemplate): string {
       </div>`,
 
     pickup: () => {
-      let h = '';
-      // Primary fields
+      let h = '<div class="section-hdr">PICKUP</div>';
+      if (T.tlPickupArrival) h += '<div class="row"><span class="row-label">Arrival</span><span class="row-value">12:42 PM</span></div>';
       const ps = rowStyle('pickup');
       if (T.pickupCompany) h += `<div class="row"${ps}><span class="row-label">Company</span><span class="row-value">Slawson Exploration</span></div>`;
-      if (T.pickupLocation) h += `<div class="row"${ps}><span class="row-label">Pickup Location</span><span class="row-value">ATLAS 1-16-21H</span></div>`;
-      // Legal sub-fields
+      if (T.pickupLocation) h += `<div class="row"${ps}><span class="row-label">Location</span><span class="row-value">ATLAS 1-16-21H</span></div>`;
       const ls = rowStyle('pickup_legal');
       if (T.pickupApiNo) h += `<div class="row"${ls}><span class="row-label">API #</span><span class="row-value">33-105-03422</span></div>`;
       if (T.pickupGps) h += `<div class="row"${ls}><span class="row-label">GPS</span><span class="row-value">48.1234, -103.5678</span></div>`;
       if (T.pickupLegalDesc) h += `<div class="row"${ls}><span class="row-label">Legal</span><span class="row-value">NWSW 16-152N-99W</span></div>`;
       if (T.pickupCounty) h += `<div class="row"${ls}><span class="row-label">County</span><span class="row-value">Williams</span></div>`;
+      if (T.tlLoadedDeparture) h += '<div class="row"><span class="row-label">Loaded / Departure</span><span class="row-value">1:21 PM</span></div>';
       return h;
     },
 
     dropoff: () => {
-      let h = '';
+      let h = '<div class="section-hdr">DROP-OFF</div>';
+      if (T.tlDropoffArrival) h += '<div class="row"><span class="row-label">Arrival</span><span class="row-value">1:55 PM</span></div>';
       const ps = rowStyle('dropoff');
-      if (T.dropoffLocation) h += `<div class="row"${ps}><span class="row-label">Drop-off</span><span class="row-value">HYDRO CLEAR SWD</span></div>`;
+      if (T.dropoffLocation) h += `<div class="row"${ps}><span class="row-label">Location</span><span class="row-value">HYDRO CLEAR SWD</span></div>`;
       const ls = rowStyle('dropoff_legal');
-      if (T.dropoffApiNo) h += `<div class="row"${ls}><span class="row-label">Drop-off API #</span><span class="row-value">33-053-05201</span></div>`;
-      if (T.dropoffGps) h += `<div class="row"${ls}><span class="row-label">Drop-off GPS</span><span class="row-value">47.9501, -103.3366</span></div>`;
-      if (T.dropoffCounty) h += `<div class="row"${ls}><span class="row-label">Drop-off County</span><span class="row-value">McKenzie</span></div>`;
-      if (T.dropoffLegalDesc) h += `<div class="row"${ls}><span class="row-label">Drop-off Legal</span><span class="row-value">NENE 30-151N-99W</span></div>`;
+      if (T.dropoffApiNo) h += `<div class="row"${ls}><span class="row-label">API #</span><span class="row-value">33-053-05201</span></div>`;
+      if (T.dropoffGps) h += `<div class="row"${ls}><span class="row-label">GPS</span><span class="row-value">47.9501, -103.3366</span></div>`;
+      if (T.dropoffCounty) h += `<div class="row"${ls}><span class="row-label">County</span><span class="row-value">McKenzie</span></div>`;
+      if (T.dropoffLegalDesc) h += `<div class="row"${ls}><span class="row-label">Legal</span><span class="row-value">NENE 30-151N-99W</span></div>`;
+      if (T.tlUnloadedStop) h += '<div class="row"><span class="row-label">Unloaded / Stop</span><span class="row-value">2:18 PM</span></div>';
       return h;
     },
 
     invoice: () => T.invoiceNumber ? '<div class="row"><span class="row-label">Invoice #</span><span class="row-value">LG-1042</span></div>' : '',
 
     measurements: () => {
-      const boxes: string[] = [];
-      if (T.jobType) boxes.push('<div class="split-box"><div class="split-label">TYPE</div><div class="split-value">PW</div></div>');
-      if (T.quantity) boxes.push('<div class="split-box"><div class="split-label">QTY</div><div class="split-value">130</div></div>');
-      if (T.tankTop) boxes.push('<div class="split-box"><div class="split-label">TOP</div><div class="split-value">10\' 4"</div></div>');
-      if (T.tankBottom) boxes.push('<div class="split-box"><div class="split-label">BOTTOM</div><div class="split-value">3\' 8"</div></div>');
-      return boxes.length > 0 ? `<div class="split-section">${boxes.join('')}</div>` : '';
+      let h = '';
+      if (T.jobType) h += '<div class="row"><span class="row-label">Type</span><span class="row-value">PW</span></div>';
+      if (T.quantity) h += '<div class="row"><span class="row-label">Quantity</span><span class="row-value">130</span></div>';
+      if (T.tankTop) h += '<div class="row"><span class="row-label">Tank Top</span><span class="row-value">10\' 4"</span></div>';
+      if (T.tankBottom) h += '<div class="row"><span class="row-label">Tank Bottom</span><span class="row-value">3\' 8"</span></div>';
+      return h;
     },
 
     notes: () => T.notes ? '<div class="notes-section"><div class="notes-label">NOTES</div>Frac tank fill — load 2 of 3</div>' : '',
 
     time: () => {
-      const boxes: string[] = [];
-      if (T.startTime) boxes.push('<div class="split-box"><div class="split-label">START</div><div class="split-value">12:17</div></div>');
-      if (T.stopTime) boxes.push('<div class="split-box"><div class="split-label">STOP</div><div class="split-value">14:18</div></div>');
-      if (T.hours) boxes.push('<div class="split-box"><div class="split-label">HOURS</div><div class="split-value">2.0</div></div>');
-      return boxes.length > 0 ? `<div class="split-section">${boxes.join('')}</div>` : '';
+      let h = '';
+      if (T.startTime) h += '<div class="row"><span class="row-label">Start</span><span class="row-value">12:17</span></div>';
+      if (T.stopTime) h += '<div class="row"><span class="row-label">Stop</span><span class="row-value">14:18</span></div>';
+      if (T.hours) h += '<div class="row"><span class="row-label">Hours</span><span class="row-value">2.0</span></div>';
+      return h;
     },
 
     timeline: () => {
-      const hasAny = T.tlStartTime || T.tlPickupArrival || T.tlLoadedDeparture || T.tlDropoffArrival || T.tlUnloadedStop;
-      if (!hasAny) return '';
-      const row = (label: string, time: string) =>
-        `<div style="display:flex;justify-content:space-between;padding:1px 0;"><span style="font-weight:bold;">${label}</span><span>${time}</span></div>`;
-      let rows = '';
-      if (T.tlStartTime) rows += row('Start Time', '12:17 PM');
-      if (T.tlPickupArrival) rows += row('Pickup Arrival', '12:42 PM');
-      if (T.tlLoadedDeparture) rows += row('Loaded / Departure', '1:21 PM');
-      if (T.tlDropoffArrival) rows += row('Drop-off Arrival', '1:55 PM');
-      if (T.tlUnloadedStop) rows += row('Unloaded / Stop Time', '2:18 PM');
-      return `<div style="margin:6px 0;padding:6px 0;border-top:1px solid #999;">
-        <div style="font-size:10px;font-weight:bold;color:#444;margin-bottom:3px;">JOB TIMELINE</div>
-        <div style="font-size:10px;color:#000;">${rows}</div>
-      </div>`;
+      if (!T.tlStartTime) return '';
+      return '<div class="row"><span class="row-label">Job Start</span><span class="row-value">12:17 PM</span></div>';
     },
 
     driver: () => {
@@ -161,9 +147,9 @@ function buildPreviewHtml(T: TicketTemplate): string {
   <style>
     * { margin: 0; padding: 0; box-sizing: border-box; }
     body { font-family: Arial, Helvetica, sans-serif; width: 384px; padding: 16px 12px; font-size: 14px; color: #000; }
-    .header-top { display: flex; align-items: center; justify-content: space-between; margin-bottom: 6px; }
-    .header-top img { width: 60px; height: auto; }
-    .addr-block { text-align: right; font-size: 11px; line-height: 1.4; }
+    .logo-row { text-align: center; margin-bottom: 4px; }
+    .logo-row img { width: 60px; height: auto; }
+    .addr-row { text-align: center; font-size: 11px; line-height: 1.3; margin-bottom: 4px; }
     .company-name { font-family: 'Arial Black', Arial, sans-serif; font-size: 18px; font-weight: 900; text-align: center; line-height: 1.2; margin-bottom: 8px; }
     .company-divider { border-bottom: 2px solid #000; margin-bottom: 8px; }
     .ticket-title { font-size: 22px; font-weight: bold; text-align: center; margin: 8px 0; letter-spacing: 3px; }
@@ -171,10 +157,7 @@ function buildPreviewHtml(T: TicketTemplate): string {
     .row { display: flex; justify-content: space-between; border-bottom: 1px dotted #666; padding: 4px 0; }
     .row-label { font-weight: bold; font-size: 13px; min-width: 90px; }
     .row-value { text-align: right; font-size: 14px; flex: 1; }
-    .split-section { display: flex; gap: 6px; margin: 8px 0; }
-    .split-box { flex: 1; border: 2px solid #000; padding: 4px 6px; text-align: center; }
-    .split-label { font-size: 9px; font-weight: bold; color: #444; }
-    .split-value { font-size: 16px; font-weight: bold; }
+    .section-hdr { font-size: 12px; font-weight: 900; text-align: center; padding: 4px 0 2px; margin-top: 6px; border-top: 1px solid #000; letter-spacing: 1px; }
     .notes-section { border: 1px solid #666; padding: 6px 8px; margin: 8px 0; min-height: 24px; font-size: 13px; }
     .notes-label { font-size: 9px; font-weight: bold; color: #444; }
     .footer { border-top: 2px solid #000; margin-top: 14px; padding-top: 6px; display: flex; justify-content: space-between; align-items: flex-end; }
