@@ -305,7 +305,6 @@ export const TEMPLATE_FIELD_GROUPS: TemplateFieldGroup[] = [
   {
     id: 'timeline', label: 'Job Timeline', color: 'cyan',
     fields: [
-      { key: 'tlStartTime', label: 'Start Time' },
       { key: 'tlPickupArrival', label: 'Pickup Arrival' },
       { key: 'tlLoadedDeparture', label: 'Loaded / Departure' },
       { key: 'tlDropoffArrival', label: 'Drop-off Arrival' },

@@ -116,8 +116,8 @@ function buildPreviewHtml(T: TicketTemplate): string {
     },
 
     timeline: () => {
-      if (!T.tlStartTime) return '';
-      return '<div class="row"><span class="row-label">Job Start</span><span class="row-value">12:17 PM</span></div>';
+      // Start time already shown in time section (Start/Stop/Hours) — no longer duplicated here
+      return '';
     },
 
     driver: () => {
