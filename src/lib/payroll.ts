@@ -272,7 +272,8 @@ export async function fetchPayrollInvoices(
   period: PayPeriod,
   companyConfigs: Map<string, CompanyConfig>,
   companyId?: string,
-  wellCountyMap?: Map<string, string>
+  wellCountyMap?: Map<string, string>,
+  legalNameMap?: Record<string, string>,
 ): Promise<DriverTimesheetSummary[]> {
   const db = getFirestoreDb();
 
@@ -299,7 +300,9 @@ export async function fetchPayrollInvoices(
     const status = d.status || 'open';
     if (status === 'open') return;
 
-    const driverName = d.driver || 'Unknown';
+    const rawDriverName = d.driver || 'Unknown';
+    // Group by legal name so all logins for the same person merge into one row
+    const driverName = legalNameMap?.[rawDriverName] || rawDriverName;
     const invoiceCompanyId = d.companyId || '';
     const operator = d.operator || '';
     const jobType = d.commodityType || d.jobType || '';

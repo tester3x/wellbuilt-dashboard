@@ -20,6 +20,22 @@ import {
   type LogInvoice,
 } from '@/lib/driverLogs';
 
+// ── Helpers ──────────────────────────────────────────────────────────────────
+
+/** Get YYYY-MM-DD in local time (NOT UTC — toISOString is UTC and breaks after 6 PM CT). */
+function getLocalDateString(d: Date = new Date()): string {
+  const year = d.getFullYear();
+  const month = String(d.getMonth() + 1).padStart(2, '0');
+  const day = String(d.getDate()).padStart(2, '0');
+  return `${year}-${month}-${day}`;
+}
+
+/** Format a YYYY-MM-DD string as "M/D/YYYY" (e.g., "3/25/2026"). */
+function formatShortDate(dateStr: string): string {
+  const d = new Date(dateStr + 'T12:00:00');
+  return `${d.getMonth() + 1}/${d.getDate()}/${d.getFullYear()}`;
+}
+
 // ── Types ────────────────────────────────────────────────────────────────────
 
 interface ApprovedDriver {
@@ -27,6 +43,7 @@ interface ApprovedDriver {
   displayName: string;
   companyId?: string;
   companyName?: string;
+  allNames: string[]; // All known names for matching (displayName, profile.displayName, legalName)
 }
 
 // ── Page ─────────────────────────────────────────────────────────────────────
@@ -41,13 +58,7 @@ export default function DriverLogsPage() {
   const [error, setError] = useState<string | null>(null);
 
   // Filters
-  const [selectedDate, setSelectedDate] = useState(() => {
-    const d = new Date();
-    const year = d.getFullYear();
-    const month = String(d.getMonth() + 1).padStart(2, '0');
-    const day = String(d.getDate()).padStart(2, '0');
-    return `${year}-${month}-${day}`; // YYYY-MM-DD in local time
-  });
+  const [selectedDate, setSelectedDate] = useState(() => getLocalDateString());
   const [driverFilter, setDriverFilter] = useState<string>('all');
   const [expandedDrivers, setExpandedDrivers] = useState<Set<string>>(new Set());
 
@@ -84,11 +95,24 @@ export default function DriverLogsPage() {
             if (val.displayName) {
               // Flat format
               if (val.active !== false) {
+                // Collect all known names for this driver (top-level, profile, legalName)
+                const names = new Set<string>();
+                names.add(val.displayName);
+                if (val.legalName) names.add(val.legalName.trim());
+                if (val.profile?.displayName) names.add(val.profile.displayName.trim());
+                if (val.profile?.legalName) names.add(val.profile.legalName.trim());
+
+                // Prefer profile displayName or legalName for display
+                const bestName = val.profile?.displayName?.trim()
+                  || val.legalName?.trim()
+                  || val.displayName;
+
                 approved.push({
                   key: hash,
-                  displayName: val.displayName,
-                  companyId: val.companyId,
-                  companyName: val.companyName,
+                  displayName: bestName,
+                  companyId: val.companyId || val.profile?.companyId,
+                  companyName: val.companyName || val.profile?.companyName,
+                  allNames: [...names],
                 });
               }
             } else {
@@ -102,6 +126,7 @@ export default function DriverLogsPage() {
                     displayName: first.displayName,
                     companyId: first.companyId,
                     companyName: first.companyName,
+                    allNames: [first.displayName],
                   });
                 }
               }
@@ -130,6 +155,9 @@ export default function DriverLogsPage() {
     // Wait for company selection for WB admin
     if (!user || authLoading || filteredDrivers.length === 0) return;
     if (isWbAdmin && !effectiveCompanyId) return;
+
+    // Collapse all cards when switching dates/filters
+    setExpandedDrivers(new Set());
 
     const loadLogs = async () => {
       setDataLoading(true);
@@ -187,10 +215,10 @@ export default function DriverLogsPage() {
   const shiftDate = (days: number) => {
     const d = new Date(selectedDate + 'T12:00:00');
     d.setDate(d.getDate() + days);
-    setSelectedDate(d.toISOString().slice(0, 10));
+    setSelectedDate(getLocalDateString(d));
   };
 
-  const isToday = selectedDate === new Date().toISOString().slice(0, 10);
+  const isToday = selectedDate === getLocalDateString();
 
   // ── Summary stats ──────────────────────────────────────────────────────────
   const totalDriversActive = driverLogs.length;
@@ -270,13 +298,20 @@ export default function DriverLogsPage() {
             {/* Today button */}
             {!isToday && (
               <button
-                onClick={() => setSelectedDate(new Date().toISOString().slice(0, 10))}
+                onClick={() => setSelectedDate(getLocalDateString())}
                 className="px-3 py-2 bg-blue-600 text-white text-sm rounded-lg hover:bg-blue-500 transition-colors"
               >
                 Today
               </button>
             )}
           </div>
+        </div>
+
+        {/* ── Date Heading ───────────────────────────────────── */}
+        <div className="mb-4 text-center">
+          <h2 className="text-lg font-semibold text-gray-300">
+            {new Date(selectedDate + 'T12:00:00').toLocaleDateString('en-US', { weekday: 'long', month: 'long', day: 'numeric', year: 'numeric' })}
+          </h2>
         </div>
 
         {/* ── Summary Badges ──────────────────────────────────── */}
@@ -328,6 +363,7 @@ export default function DriverLogsPage() {
             log={log}
             expanded={expandedDrivers.has(log.driverHash)}
             onToggle={() => toggleExpand(log.driverHash)}
+            dateLabel={formatShortDate(selectedDate)}
           />
         ))}
       </main>
@@ -341,10 +377,12 @@ function DriverCard({
   log,
   expanded,
   onToggle,
+  dateLabel,
 }: {
   log: DriverDayLog;
   expanded: boolean;
   onToggle: () => void;
+  dateLabel: string;
 }) {
   // Status indicator
   const isActive = log.shiftStart && !log.shiftEnd;
@@ -396,6 +434,9 @@ function DriverCard({
           </div>
 
           <div className="flex items-center gap-4 text-sm">
+            {/* Date stamp */}
+            <span className="text-gray-500 font-mono">{dateLabel}</span>
+
             {/* Shift time */}
             {log.shiftStart && (
               <span className="text-gray-400">
@@ -415,8 +456,11 @@ function DriverCard({
             {log.totalBBL > 0 && (
               <span className="text-cyan-400">{Math.round(log.totalBBL)} BBL</span>
             )}
-            {log.totalHours > 0 && (
-              <span className="text-gray-400">{log.totalHours.toFixed(1)}h</span>
+            {log.driveMinutes > 0 && (
+              <span className="text-purple-400" title="Drive time">{formatMinutes(log.driveMinutes)} drive</span>
+            )}
+            {log.onSiteMinutes > 0 && (
+              <span className="text-orange-400" title="On-site time">{formatMinutes(log.onSiteMinutes)} on-site</span>
             )}
 
             {/* Expand arrow */}
@@ -437,7 +481,12 @@ function DriverCard({
           ) : (
             <div className="relative">
               {log.timeline.map((evt, i) => (
-                <TimelineRow key={i} event={evt} isLast={i === log.timeline.length - 1} />
+                <TimelineRow
+                  key={i}
+                  event={evt}
+                  nextEvent={i < log.timeline.length - 1 ? log.timeline[i + 1] : undefined}
+                  isLast={i === log.timeline.length - 1}
+                />
               ))}
             </div>
           )}
@@ -445,7 +494,10 @@ function DriverCard({
           {/* Invoice summary section */}
           {log.invoices.length > 0 && (
             <div className="mt-4 pt-4 border-t border-gray-800">
-              <div className="text-xs text-gray-500 uppercase mb-2">Jobs</div>
+              <div className="flex items-center justify-between mb-2">
+                <span className="text-xs text-gray-500 uppercase">Jobs</span>
+                <span className="text-xs text-gray-500 font-mono">{dateLabel}</span>
+              </div>
               <div className="grid gap-2">
                 {log.invoices.map((inv) => (
                   <InvoiceSummaryRow key={inv.id} invoice={inv} />
@@ -459,9 +511,50 @@ function DriverCard({
   );
 }
 
+// ── Helpers ──────────────────────────────────────────────────────────────────
+
+function formatMinutes(mins: number): string {
+  if (mins < 60) return `${mins}m`;
+  const h = Math.floor(mins / 60);
+  const m = mins % 60;
+  return m > 0 ? `${h}h ${m}m` : `${h}h`;
+}
+
+/** Get segment label (drive vs on-site) between two consecutive events. */
+function getSegmentLabel(curr: UnifiedEvent, next: UnifiedEvent): { label: string; color: string } | null {
+  const currTime = new Date(curr.timestamp).getTime();
+  const nextTime = new Date(next.timestamp).getTime();
+  if (isNaN(currTime) || isNaN(nextTime) || nextTime <= currTime) return null;
+  const mins = Math.round((nextTime - currTime) / 60000);
+  const timeLabel = mins === 0 ? '< 1m' : formatMinutes(mins);
+
+  // Drive: leaving → arriving
+  if ((curr.type === 'depart' || curr.type === 'depart_site') && next.type === 'arrive') {
+    return { label: `${timeLabel} drive`, color: 'text-purple-500' };
+  }
+  // Drive to first job: shift start → first departure
+  if (curr.type === 'login' && next.type === 'depart') {
+    return { label: `${timeLabel} to first job`, color: 'text-purple-500' };
+  }
+  // Return drive: depart_return → logout (explicit return-to-yard)
+  if (curr.type === 'depart_return' && next.type === 'logout') {
+    return { label: `${timeLabel} return drive`, color: 'text-purple-500' };
+  }
+  // Return drive (legacy/fallback): last close/depart_site → shift end
+  if ((curr.type === 'close' || curr.type === 'depart_site') && next.type === 'logout') {
+    return { label: `${timeLabel} return drive`, color: 'text-purple-500' };
+  }
+  // On-site: at location → leaving or closing
+  if (curr.type === 'arrive' && (next.type === 'depart_site' || next.type === 'close')) {
+    return { label: `${timeLabel} on-site`, color: 'text-orange-500' };
+  }
+  return null;
+}
+
 // ── Timeline Row ─────────────────────────────────────────────────────────────
 
-function TimelineRow({ event, isLast }: { event: UnifiedEvent; isLast: boolean }) {
+function TimelineRow({ event, nextEvent, isLast }: { event: UnifiedEvent; nextEvent?: UnifiedEvent; isLast: boolean }) {
+  const segment = nextEvent ? getSegmentLabel(event, nextEvent) : null;
   return (
     <div className="flex items-start gap-3 relative">
       {/* Connector line */}
@@ -483,6 +576,12 @@ function TimelineRow({ event, isLast }: { event: UnifiedEvent; isLast: boolean }
           </span>
           {event.invoiceNumber && (
             <span className="text-xs text-gray-600">#{event.invoiceNumber}</span>
+          )}
+          {/* Segment duration annotation (drive/on-site) */}
+          {segment && (
+            <span className={`text-xs font-medium ${segment.color}`}>
+              ← {segment.label}
+            </span>
           )}
         </div>
         {/* GPS coords — subtle */}
@@ -525,6 +624,12 @@ function InvoiceSummaryRow({ invoice }: { invoice: LogInvoice }) {
         )}
         {invoice.totalHours > 0 && (
           <span className="text-gray-400">{invoice.totalHours.toFixed(1)}h</span>
+        )}
+        {invoice.driveMinutes > 0 && (
+          <span className="text-purple-400 text-xs">{formatMinutes(invoice.driveMinutes)} drive</span>
+        )}
+        {invoice.onSiteMinutes > 0 && (
+          <span className="text-orange-400 text-xs">{formatMinutes(invoice.onSiteMinutes)} on-site</span>
         )}
         <span className={`px-2 py-0.5 rounded text-xs font-medium ${statusColors[invoice.status] || statusColors.closed}`}>
           {invoice.status}

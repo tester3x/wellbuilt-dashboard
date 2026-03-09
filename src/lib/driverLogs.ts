@@ -53,6 +53,8 @@ export interface LogInvoice {
   timeline: TimelineEvent[];
   createdAt: any;
   closedAt: any;
+  driveMinutes: number;
+  onSiteMinutes: number;
 }
 
 /** Unified event for the driver's daily timeline. */
@@ -88,10 +90,36 @@ export interface DriverDayLog {
   totalLoads: number;
   totalBBL: number;
   totalHours: number;
+  driveMinutes: number;       // Total time driving between locations
+  onSiteMinutes: number;      // Total time at wells/SWDs (loading/unloading/waiting)
   invoices: LogInvoice[];
   timeline: UnifiedEvent[];   // Merged + sorted chronologically
   hasShiftData: boolean;      // True = WB S shift bookends exist
   inferredTimes: boolean;     // True = start/end inferred from job activity (no WB S)
+}
+
+// ── Per-invoice time calculation ─────────────────────────────────────────────
+
+/** Calculate drive and on-site time from a single invoice's timeline events. */
+function calculateTimelineSegments(timeline: TimelineEvent[]): { driveMinutes: number; onSiteMinutes: number } {
+  if (!timeline.length) return { driveMinutes: 0, onSiteMinutes: 0 };
+  let driveMs = 0;
+  let onSiteMs = 0;
+  const sorted = [...timeline].sort((a, b) => new Date(a.timestamp).getTime() - new Date(b.timestamp).getTime());
+  for (let i = 0; i < sorted.length - 1; i++) {
+    const curr = sorted[i];
+    const next = sorted[i + 1];
+    const currTime = new Date(curr.timestamp).getTime();
+    const nextTime = new Date(next.timestamp).getTime();
+    if (isNaN(currTime) || isNaN(nextTime) || nextTime <= currTime) continue;
+    const diffMs = nextTime - currTime;
+    if ((curr.type === 'depart' || curr.type === 'depart_site') && next.type === 'arrive') {
+      driveMs += diffMs;
+    } else if (curr.type === 'arrive' && (next.type === 'depart_site' || next.type === 'close')) {
+      onSiteMs += diffMs;
+    }
+  }
+  return { driveMinutes: Math.round(driveMs / 60000), onSiteMinutes: Math.round(onSiteMs / 60000) };
 }
 
 // ── Data fetching ────────────────────────────────────────────────────────────
@@ -164,6 +192,8 @@ export async function fetchInvoicesForDate(
   const snapshot = await getDocs(q);
   return snapshot.docs.map((d) => {
     const data = d.data();
+    const timeline = data.timeline || [];
+    const segments = calculateTimelineSegments(timeline);
     return {
       id: d.id,
       invoiceNumber: data.invoiceNumber || '',
@@ -176,9 +206,11 @@ export async function fetchInvoicesForDate(
       commodityType: data.commodityType || '',
       driver: data.driver || '',
       companyId: data.companyId || '',
-      timeline: data.timeline || [],
+      timeline,
       createdAt: data.createdAt || null,
       closedAt: data.closedAt || null,
+      driveMinutes: segments.driveMinutes,
+      onSiteMinutes: segments.onSiteMinutes,
     };
   });
 }
@@ -247,17 +279,33 @@ export function buildDriverTimeline(
  * Matches invoices to drivers by displayName.
  */
 export function buildDriverDayLogs(
-  drivers: { key: string; displayName: string; companyId?: string; companyName?: string }[],
+  drivers: { key: string; displayName: string; companyId?: string; companyName?: string; allNames?: string[] }[],
   shifts: Map<string, ShiftDoc>,
   invoices: LogInvoice[],
 ): DriverDayLog[] {
   const logs: DriverDayLog[] = [];
 
-  for (const driver of drivers) {
+  // Exclusive invoice assignment: each invoice goes to exactly one driver.
+  // Prefer driver with shift data for the day, then first match.
+  const claimedInvoiceIds = new Set<string>();
+
+  // Sort drivers: those with shift data first (they're the "real" active driver for the day)
+  const sortedDrivers = [...drivers].sort((a, b) => {
+    const aHasShift = shifts.has(a.key) ? 1 : 0;
+    const bHasShift = shifts.has(b.key) ? 1 : 0;
+    return bHasShift - aHasShift;
+  });
+
+  for (const driver of sortedDrivers) {
     const shift = shifts.get(driver.key);
-    const driverInvoices = invoices.filter(
-      (inv) => inv.driver === driver.displayName,
-    );
+    // Match invoices by any known name for this driver (handles displayName vs profile name divergence)
+    const nameSet = new Set(driver.allNames || [driver.displayName]);
+    const driverInvoices = invoices.filter((inv) => {
+      if (claimedInvoiceIds.has(inv.id)) return false;
+      return nameSet.has(inv.driver) || nameSet.has(inv.driver?.trim());
+    });
+    // Claim these invoices so no other driver gets them
+    driverInvoices.forEach((inv) => claimedInvoiceIds.add(inv.id));
 
     // Skip drivers with no activity
     if (!shift && driverInvoices.length === 0) continue;
@@ -287,6 +335,8 @@ export function buildDriverDayLogs(
       effectiveEnd = lastClose?.timestamp || null;
     }
 
+    const { driveMinutes, onSiteMinutes } = calculateDriveAndOnSiteTime(timeline);
+
     logs.push({
       driverHash: driver.key,
       displayName: driver.displayName,
@@ -298,6 +348,8 @@ export function buildDriverDayLogs(
       totalLoads,
       totalBBL,
       totalHours,
+      driveMinutes,
+      onSiteMinutes,
       invoices: driverInvoices,
       timeline,
       hasShiftData: !!shift,
@@ -316,6 +368,60 @@ export function buildDriverDayLogs(
   });
 
   return logs;
+}
+
+// ── Drive / On-site time calculation ─────────────────────────────────────────
+
+/**
+ * Calculate total drive time and on-site time from a timeline.
+ *
+ * Drive time = time between leaving one place and arriving at the next:
+ *   depart → arrive, depart_site → arrive
+ *
+ * On-site time = time at a location:
+ *   arrive → depart_site, arrive → close (final stop)
+ */
+export function calculateDriveAndOnSiteTime(timeline: UnifiedEvent[]): {
+  driveMinutes: number;
+  onSiteMinutes: number;
+} {
+  let driveMs = 0;
+  let onSiteMs = 0;
+
+  for (let i = 0; i < timeline.length - 1; i++) {
+    const curr = timeline[i];
+    const next = timeline[i + 1];
+    const currTime = new Date(curr.timestamp).getTime();
+    const nextTime = new Date(next.timestamp).getTime();
+    if (isNaN(currTime) || isNaN(nextTime) || nextTime <= currTime) continue;
+    const diffMs = nextTime - currTime;
+
+    // Drive segments: leaving → arriving somewhere
+    if ((curr.type === 'depart' || curr.type === 'depart_site') && next.type === 'arrive') {
+      driveMs += diffMs;
+    }
+    // Drive to first job: shift start → first departure
+    else if (curr.type === 'login' && next.type === 'depart') {
+      driveMs += diffMs;
+    }
+    // Return drive: depart_return → logout (explicit return-to-yard)
+    else if (curr.type === 'depart_return' && next.type === 'logout') {
+      driveMs += diffMs;
+    }
+    // Return drive (legacy/fallback): last close/depart_site → shift end
+    else if ((curr.type === 'close' || curr.type === 'depart_site') && next.type === 'logout') {
+      driveMs += diffMs;
+    }
+    // On-site segments: at a location → leaving or closing
+    else if (curr.type === 'arrive' && (next.type === 'depart_site' || next.type === 'close')) {
+      onSiteMs += diffMs;
+    }
+  }
+
+  return {
+    driveMinutes: Math.round(driveMs / 60000),
+    onSiteMinutes: Math.round(onSiteMs / 60000),
+  };
 }
 
 // ── Helpers ──────────────────────────────────────────────────────────────────
@@ -360,7 +466,7 @@ export function getEventLabel(evt: UnifiedEvent): string {
     case 'logout':
       return evt.synthetic ? 'Shift End (auto)' : 'Shift End';
     case 'depart':
-      return evt.wellName ? `Departed for ${evt.wellName}` : 'Departed';
+      return evt.wellName ? `Left for ${evt.wellName}` : 'Left';
     case 'arrive':
       return evt.locationName || evt.wellName
         ? `Arrived at ${evt.locationName || evt.wellName}`
@@ -368,9 +474,7 @@ export function getEventLabel(evt: UnifiedEvent): string {
     case 'depart_site':
       return evt.locationName
         ? `Left ${evt.locationName}`
-        : evt.hauledTo
-          ? `Left for ${evt.hauledTo}`
-          : 'Left site';
+        : 'Left site';
     case 'close':
       return evt.invoiceNumber ? `Closed Job ${evt.invoiceNumber}` : 'Closed Job';
     case 'pause':
@@ -379,6 +483,8 @@ export function getEventLabel(evt: UnifiedEvent): string {
       return 'Resumed';
     case 'transfer':
       return 'Load Transferred';
+    case 'depart_return':
+      return 'Returning to Yard';
     case 'reroute':
       return 'Rerouted';
     default:
@@ -397,6 +503,7 @@ export function getEventColor(type: string): string {
     case 'close': return 'text-gray-400';
     case 'pause': return 'text-orange-400';
     case 'resume': return 'text-green-400';
+    case 'depart_return': return 'text-yellow-400';
     case 'transfer': return 'text-purple-400';
     default: return 'text-gray-500';
   }
@@ -413,6 +520,7 @@ export function getEventDotColor(type: string): string {
     case 'close': return 'bg-gray-500';
     case 'pause': return 'bg-orange-500';
     case 'resume': return 'bg-green-500';
+    case 'depart_return': return 'bg-yellow-500';
     case 'transfer': return 'bg-purple-500';
     default: return 'bg-gray-600';
   }

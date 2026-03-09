@@ -179,7 +179,25 @@ export default function PayrollPage() {
       const { buildWellCountyMap } = await import('@/lib/payroll');
       const countyMap = await buildWellCountyMap([...allOperators]);
 
-      const data = await fetchPayrollInvoices(selectedPeriod, companyMap, undefined, countyMap);
+      // Build legalNameMap from RTDB (can't rely on state — may not be loaded yet)
+      let currentLegalMap = legalNameMap;
+      if (Object.keys(currentLegalMap).length === 0) {
+        try {
+          const driversSnap = await get(ref(getFirebaseDatabase(), 'drivers/approved'));
+          if (driversSnap.exists()) {
+            const map: Record<string, string> = {};
+            driversSnap.forEach(child => {
+              const d = child.val();
+              const legal = d?.legalName || d?.profile?.legalName;
+              if (d?.displayName && legal) map[d.displayName] = legal;
+            });
+            currentLegalMap = map;
+            setLegalNameMap(map);
+          }
+        } catch {}
+      }
+
+      const data = await fetchPayrollInvoices(selectedPeriod, companyMap, undefined, countyMap, currentLegalMap);
       setTimesheets(data);
     } catch (err: any) {
       console.error('Failed to fetch payroll data:', err);

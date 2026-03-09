@@ -1399,9 +1399,29 @@ export const processDeleteRequest = functionsV1.database
         }
       });
 
+      // Clean up performance data for the deleted packet
+      if (deletedPacket.dateTimeUTC) {
+        try {
+          const delTime = new Date(deletedPacket.dateTimeUTC);
+          const perfTimestamp = `${delTime.getFullYear()}${String(delTime.getMonth() + 1).padStart(2, '0')}${String(delTime.getDate()).padStart(2, '0')}_${String(delTime.getHours()).padStart(2, '0')}${String(delTime.getMinutes()).padStart(2, '0')}${String(delTime.getSeconds()).padStart(2, '0')}`;
+          const wellKey = wellName.replace(/\s+/g, '_');
+          await db.ref(`performance/${wellKey}/rows/${perfTimestamp}`).remove();
+          console.log(`Delete: Cleaned up performance row ${perfTimestamp} for ${wellName}`);
+        } catch (perfErr) {
+          console.error(`Delete: Failed to clean performance data:`, perfErr);
+        }
+      }
+
       if (latestPacket) {
         // Recalculate AFR from remaining packets
         const afr = await calculateAFR(wellName, latestPacket.flowRateDays || 0);
+
+        // Calculate windowBblsDay and overnightBblsDay from remaining historical pulls
+        const bblPerFoot = tanks * 20;
+        const latestTimeMs = new Date(latestPacket.dateTimeUTC).getTime();
+        const historicalPulls = await getHistoricalPulls(wellName, 500);
+        const windowBblsDay = calculateWindowBblsPerDay(historicalPulls, bblPerFoot, latestTimeMs);
+        const overnightBblsDay = calculateOvernightBblsPerDay(historicalPulls, bblPerFoot, latestTimeMs);
 
         const tankAfterInches = latestPacket.tankAfterInches || 0;
         const pullHeightInches = (pullBbls / 20 / tanks) * 12;
@@ -1456,6 +1476,8 @@ export const processDeleteRequest = functionsV1.database
           status: 'success',
           timestamp: timestamp.toISOString(),
           timestampUTC: timestamp.toISOString(),
+          windowBblsDay: windowBblsDay > 0 ? windowBblsDay.toString() : null,
+          overnightBblsDay: overnightBblsDay > 0 ? overnightBblsDay.toString() : null,
         });
 
         // Update well_config AFR
@@ -1467,7 +1489,7 @@ export const processDeleteRequest = functionsV1.database
           });
         }
 
-        console.log(`Delete: Rebuilt outgoing for ${wellName} from remaining data`);
+        console.log(`Delete: Rebuilt outgoing for ${wellName} from remaining data (windowBblsDay=${windowBblsDay}, overnightBblsDay=${overnightBblsDay})`);
       } else {
         // No remaining pulls — remove outgoing response entirely
         const oldResponses = await db.ref('packets/outgoing')
@@ -1485,7 +1507,20 @@ export const processDeleteRequest = functionsV1.database
       }
     }
 
-    // Delete the delete request
+    // Archive delete request for audit trail (instead of just removing it)
+    const auditData = {
+      ...data,
+      processedAt: new Date().toISOString(),
+      deletedPacketData: deletedPacket ? {
+        wellName: deletedPacket.wellName,
+        dateTimeUTC: deletedPacket.dateTimeUTC,
+        tankLevelFeet: deletedPacket.tankLevelFeet,
+        bblsTaken: deletedPacket.bblsTaken,
+        driverName: deletedPacket.driverName,
+      } : null,
+      result: deletedPacket ? 'rebuilt_from_previous' : 'packet_not_found',
+    };
+    await db.ref(`packets/processed/delete_${targetPacketId}`).set(auditData);
     await snapshot.ref.remove();
 
     console.log(`Delete complete for ${wellName}: ${targetPacketId}`);
