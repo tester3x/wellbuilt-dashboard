@@ -50,6 +50,7 @@ interface DispatchJob {
   disposalLegalDesc?: string;
   disposalCounty?: string;
   loadCount?: number;  // Number of loads for this well (default 1)
+  serviceGroupId?: string;  // Links multi-driver service work dispatches
   // Load transfer fields
   type?: 'dispatch' | 'transfer';
   transferFromDriver?: string;
@@ -242,6 +243,7 @@ export default function DispatchPage() {
   const [assignNotes, setAssignNotes] = useState('');
   const [assignDisposal, setAssignDisposal] = useState('');
   const [assignDisposalWell, setAssignDisposalWell] = useState<NdicWell | null>(null);
+  const [assignLoadCount, setAssignLoadCount] = useState(1);
   const [disposalSearch, setDisposalSearch] = useState('');
   const [disposalResults, setDisposalResults] = useState<NdicWell[]>([]);
   const [allDisposals, setAllDisposals] = useState<NdicWell[]>([]);
@@ -261,7 +263,7 @@ export default function DispatchPage() {
   const [swWellName, setSwWellName] = useState('');
   const [swServiceType, setSwServiceType] = useState('');
   const [swNotes, setSwNotes] = useState('');
-  const [swDriverHash, setSwDriverHash] = useState('');
+  const [swDriverHashes, setSwDriverHashes] = useState<Set<string>>(new Set());
   const [swSubmitting, setSwSubmitting] = useState(false);
 
   // Add Pull form state
@@ -521,6 +523,7 @@ export default function DispatchPage() {
     setAssignTarget(well);
     setAssignDriverHash('');
     setAssignNotes('');
+    setAssignLoadCount(1);
     setAssignDisposal('');
     setAssignDisposalWell(null);
     setDisposalSearch('');
@@ -553,6 +556,7 @@ export default function DispatchPage() {
         estimatedPullTime: assignTarget.nextPullTimeUTC || '',
         currentLevel: assignTarget.currentLevel || '',
         flowRate: assignTarget.flowRate || '',
+        ...(assignLoadCount > 1 ? { loadCount: assignLoadCount } : {}),
         ...(assignDisposal ? {
           disposal: assignDisposal,
           ...(assignDisposalWell?.latitude ? { disposalLat: assignDisposalWell.latitude } : {}),
@@ -582,33 +586,40 @@ export default function DispatchPage() {
   // ─── Submit Service Work Job ───────────────────────────────────────────────
 
   async function submitServiceWork() {
-    if (!swWellName.trim() || !swServiceType.trim() || !swDriverHash) return;
+    if (!swWellName.trim() || !swServiceType.trim() || swDriverHashes.size === 0) return;
     setSwSubmitting(true);
     try {
-      const driver = drivers.find(d => d.key === swDriverHash);
-      if (!driver) throw new Error('Driver not found');
-
       const firestore = getFirestoreDb();
+      const selectedDrivers = drivers.filter(d => swDriverHashes.has(d.key));
+      if (selectedDrivers.length === 0) throw new Error('No drivers found');
 
-      const job: Omit<DispatchJob, 'id'> = {
-        driverHash: swDriverHash,
-        driverName: driver.displayName,
-        wellName: swWellName.trim(),
-        jobType: 'service',
-        serviceType: swServiceType.trim(),
-        status: 'pending',
-        notes: swNotes || '',
-        priority: 5,
-        assignedAt: Timestamp.now(),
-        assignedBy: user?.email || 'dashboard',
-      };
+      // Generate a group ID so Dashboard can link related service work dispatches
+      const serviceGroupId = selectedDrivers.length > 1 ? `sg_${Date.now()}_${Math.random().toString(36).slice(2, 8)}` : undefined;
 
-      await addDoc(collection(firestore, 'dispatches'), job);
-      setMessage(`Service work dispatched to ${driver.displayName}`);
+      const promises = selectedDrivers.map(driver => {
+        const job: Omit<DispatchJob, 'id'> = {
+          driverHash: driver.key,
+          driverName: driver.displayName,
+          wellName: swWellName.trim(),
+          jobType: 'service',
+          serviceType: swServiceType.trim(),
+          status: 'pending',
+          notes: swNotes || '',
+          priority: 5,
+          assignedAt: Timestamp.now(),
+          assignedBy: user?.email || 'dashboard',
+          ...(serviceGroupId ? { serviceGroupId } : {}),
+        };
+        return addDoc(collection(firestore, 'dispatches'), job);
+      });
+
+      await Promise.all(promises);
+      const names = selectedDrivers.map(d => d.displayName).join(', ');
+      setMessage(`Service work dispatched to ${names}`);
       setSwWellName('');
       setSwServiceType('');
       setSwNotes('');
-      setSwDriverHash('');
+      setSwDriverHashes(new Set());
       await loadDispatches();
       setTimeout(() => setMessage(''), 4000);
     } catch (err: any) {
@@ -1037,14 +1048,6 @@ export default function DispatchPage() {
                     <table className="w-full">
                       <thead className="bg-gray-700">
                         <tr>
-                          <th className="px-2 py-2 text-center w-8">
-                            <input
-                              type="checkbox"
-                              checked={pwQueue.filter(q => !q.dispatched).length > 0 && pwQueue.filter(q => !q.dispatched).every(q => selectedWells.has(q.well.wellName))}
-                              onChange={toggleSelectAll}
-                              className="w-4 h-4 rounded border-gray-600 bg-gray-800 text-blue-600 focus:ring-blue-500 focus:ring-offset-0 cursor-pointer"
-                            />
-                          </th>
                           <th className="px-3 py-2 text-left text-xs font-medium text-gray-300 w-16">Priority</th>
                           <th className="px-3 py-2 text-left text-xs font-medium text-gray-300">Well</th>
                           <th className="px-3 py-2 text-left text-xs font-medium text-gray-300">Route</th>
@@ -1054,7 +1057,17 @@ export default function DispatchPage() {
                           <th className="px-3 py-2 text-left text-xs font-medium text-gray-300">Next Pull</th>
                           <th className="px-3 py-2 text-left text-xs font-medium text-gray-300">BBLs/Day</th>
                           <th className="px-3 py-2 text-left text-xs font-medium text-gray-300">Pulls/Day</th>
-                          <th className="px-3 py-2 text-center text-xs font-medium text-gray-300 w-28">Action</th>
+                          <th className="px-3 py-2 text-right text-xs font-medium text-gray-300 w-36">
+                            <div className="flex items-center justify-end gap-2">
+                              <span>Action</span>
+                              <input
+                                type="checkbox"
+                                checked={pwQueue.filter(q => !q.dispatched).length > 0 && pwQueue.filter(q => !q.dispatched).every(q => selectedWells.has(q.well.wellName))}
+                                onChange={toggleSelectAll}
+                                className="w-4 h-4 rounded border-gray-600 bg-gray-800 text-blue-600 focus:ring-blue-500 focus:ring-offset-0 cursor-pointer"
+                              />
+                            </div>
+                          </th>
                         </tr>
                       </thead>
                       <tbody className="divide-y divide-gray-700">
@@ -1068,16 +1081,6 @@ export default function DispatchPage() {
                               dispatched ? 'opacity-50' : ''
                             } ${priority.level === 'overdue' ? 'bg-red-900/10' : ''} ${isSelected ? 'bg-blue-900/20' : ''}`}
                           >
-                            <td className="px-2 py-2 text-center">
-                              {!dispatched && (
-                                <input
-                                  type="checkbox"
-                                  checked={isSelected}
-                                  onChange={() => toggleWellSelection(well.wellName)}
-                                  className="w-4 h-4 rounded border-gray-600 bg-gray-800 text-blue-600 focus:ring-blue-500 focus:ring-offset-0 cursor-pointer"
-                                />
-                              )}
-                            </td>
                             <td className="px-3 py-2">
                               <span className={`px-2 py-0.5 text-xs font-bold rounded ${priority.color} ${priority.textColor}`}>
                                 {priority.label}
@@ -1091,28 +1094,38 @@ export default function DispatchPage() {
                             <td className="px-3 py-2 text-white font-mono text-xs">{formatNextPull(well)}</td>
                             <td className="px-3 py-2 text-white font-mono text-xs">{well.windowBblsDay || well.bbls24hrs || '--'}</td>
                             <td className="px-3 py-2"><PullsPredictionCell well={well} /></td>
-                            <td className="px-3 py-2 text-center">
+                            <td className="px-3 py-2 text-right">
                               {dispatched ? (
                                 <span className="text-blue-400 text-xs font-medium">Dispatched</span>
-                              ) : isSelected ? (
-                                <div className="flex items-center justify-center gap-1">
-                                  <span className="text-gray-400 text-xs">Loads:</span>
+                              ) : (
+                                <div className="flex items-center justify-end gap-2">
+                                  {isSelected ? (
+                                    <div className="flex items-center gap-1">
+                                      <span className="text-gray-400 text-xs">Loads:</span>
+                                      <input
+                                        type="number"
+                                        min={1}
+                                        max={20}
+                                        value={loadCount}
+                                        onChange={(e) => setWellLoadCount(well.wellName, parseInt(e.target.value) || 1)}
+                                        className="w-12 px-1 py-0.5 bg-gray-900 border border-blue-600 rounded text-white text-xs text-center focus:outline-none focus:border-blue-400"
+                                      />
+                                    </div>
+                                  ) : (
+                                    <button
+                                      onClick={() => openAssignModal(well)}
+                                      className="px-2 py-1 bg-blue-600 hover:bg-blue-500 text-white text-xs font-medium rounded transition-colors"
+                                    >
+                                      Assign
+                                    </button>
+                                  )}
                                   <input
-                                    type="number"
-                                    min={1}
-                                    max={20}
-                                    value={loadCount}
-                                    onChange={(e) => setWellLoadCount(well.wellName, parseInt(e.target.value) || 1)}
-                                    className="w-12 px-1 py-0.5 bg-gray-900 border border-blue-600 rounded text-white text-xs text-center focus:outline-none focus:border-blue-400"
+                                    type="checkbox"
+                                    checked={isSelected}
+                                    onChange={() => toggleWellSelection(well.wellName)}
+                                    className="w-4 h-4 rounded border-gray-600 bg-gray-800 text-blue-600 focus:ring-blue-500 focus:ring-offset-0 cursor-pointer"
                                   />
                                 </div>
-                              ) : (
-                                <button
-                                  onClick={() => openAssignModal(well)}
-                                  className="px-2 py-1 bg-blue-600 hover:bg-blue-500 text-white text-xs font-medium rounded transition-colors"
-                                >
-                                  Assign
-                                </button>
                               )}
                             </td>
                           </tr>
@@ -1184,19 +1197,47 @@ export default function DispatchPage() {
                   </select>
                 </div>
 
-                {/* Assign to Driver */}
+                {/* Assign to Driver(s) */}
                 <div>
-                  <label className="block text-sm text-gray-400 mb-1">Assign to Driver</label>
-                  <select
-                    value={swDriverHash}
-                    onChange={(e) => setSwDriverHash(e.target.value)}
-                    className="w-full px-3 py-2 bg-gray-900 border border-gray-700 rounded-lg text-white text-sm focus:outline-none focus:border-blue-500"
-                  >
-                    <option value="">Select driver...</option>
-                    {drivers.map(d => (
-                      <option key={d.key} value={d.key}>{d.displayName}</option>
-                    ))}
-                  </select>
+                  <label className="block text-sm text-gray-400 mb-1">
+                    Assign to Driver{swDriverHashes.size > 1 ? 's' : ''}
+                    {swDriverHashes.size > 0 && (
+                      <span className="ml-2 px-1.5 py-0.5 bg-blue-600 text-white text-xs rounded-full">{swDriverHashes.size}</span>
+                    )}
+                  </label>
+                  <div className="bg-gray-900 border border-gray-700 rounded-lg max-h-40 overflow-y-auto">
+                    {drivers.map(d => {
+                      const checked = swDriverHashes.has(d.key);
+                      return (
+                        <button
+                          key={d.key}
+                          type="button"
+                          onClick={() => {
+                            setSwDriverHashes(prev => {
+                              const next = new Set(prev);
+                              if (next.has(d.key)) next.delete(d.key);
+                              else next.add(d.key);
+                              return next;
+                            });
+                          }}
+                          className={`w-full flex items-center gap-2 px-3 py-2 text-sm text-left border-b border-gray-800 last:border-0 transition-colors ${
+                            checked ? 'bg-blue-900/30 text-white' : 'text-gray-300 hover:bg-gray-800'
+                          }`}
+                        >
+                          <input
+                            type="checkbox"
+                            checked={checked}
+                            readOnly
+                            className="w-4 h-4 rounded border-gray-600 bg-gray-800 text-blue-600 focus:ring-blue-500 focus:ring-offset-0 pointer-events-none"
+                          />
+                          <span>{d.displayName}</span>
+                        </button>
+                      );
+                    })}
+                    {drivers.length === 0 && (
+                      <div className="px-3 py-2 text-gray-500 text-sm">No drivers available</div>
+                    )}
+                  </div>
                 </div>
 
                 {/* Notes */}
@@ -1214,10 +1255,12 @@ export default function DispatchPage() {
                 {/* Submit */}
                 <button
                   onClick={submitServiceWork}
-                  disabled={!swWellName.trim() || !swServiceType || !swDriverHash || swSubmitting}
+                  disabled={!swWellName.trim() || !swServiceType || swDriverHashes.size === 0 || swSubmitting}
                   className="w-full px-4 py-2.5 bg-blue-600 hover:bg-blue-500 disabled:bg-gray-600 disabled:cursor-not-allowed text-white font-medium rounded-lg transition-colors"
                 >
-                  {swSubmitting ? 'Dispatching...' : 'Dispatch Service Job'}
+                  {swSubmitting ? 'Dispatching...' : swDriverHashes.size > 1
+                    ? `Dispatch to ${swDriverHashes.size} Drivers`
+                    : 'Dispatch Service Job'}
                 </button>
               </div>
             </div>
@@ -1456,16 +1499,29 @@ export default function DispatchPage() {
               )}
             </div>
 
-            {/* Notes */}
-            <div className="mb-4">
-              <label className="block text-sm text-gray-400 mb-1">Notes (optional)</label>
-              <textarea
-                value={assignNotes}
-                onChange={(e) => setAssignNotes(e.target.value)}
-                placeholder="Special instructions..."
-                rows={2}
-                className="w-full px-3 py-2 bg-gray-900 border border-gray-700 rounded-lg text-white text-sm placeholder-gray-500 focus:outline-none focus:border-blue-500 resize-none"
-              />
+            {/* Loads + Notes side by side */}
+            <div className="flex gap-3 mb-4">
+              <div className="w-20">
+                <label className="block text-sm text-gray-400 mb-1">Loads</label>
+                <input
+                  type="number"
+                  min={1}
+                  max={20}
+                  value={assignLoadCount}
+                  onChange={(e) => setAssignLoadCount(Math.max(1, parseInt(e.target.value) || 1))}
+                  className="w-full px-3 py-2 bg-gray-900 border border-gray-700 rounded-lg text-white text-sm text-center focus:outline-none focus:border-blue-500"
+                />
+              </div>
+              <div className="flex-1">
+                <label className="block text-sm text-gray-400 mb-1">Notes (optional)</label>
+                <input
+                  type="text"
+                  value={assignNotes}
+                  onChange={(e) => setAssignNotes(e.target.value)}
+                  placeholder="Special instructions..."
+                  className="w-full px-3 py-2 bg-gray-900 border border-gray-700 rounded-lg text-white text-sm placeholder-gray-500 focus:outline-none focus:border-blue-500"
+                />
+              </div>
             </div>
 
             {/* Buttons */}
@@ -1481,7 +1537,7 @@ export default function DispatchPage() {
                 disabled={!assignDriverHash || assigning}
                 className="flex-1 px-4 py-2 bg-blue-600 hover:bg-blue-500 disabled:bg-gray-600 disabled:cursor-not-allowed text-white font-medium rounded-lg transition-colors"
               >
-                {assigning ? 'Dispatching...' : 'Dispatch'}
+                {assigning ? 'Dispatching...' : assignLoadCount > 1 ? `Dispatch ${assignLoadCount} Loads` : 'Dispatch'}
               </button>
             </div>
           </div>
