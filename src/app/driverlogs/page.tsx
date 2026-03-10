@@ -15,6 +15,7 @@ import {
   getEventLabel,
   getEventColor,
   getEventDotColor,
+  haversineMeters,
   type DriverDayLog,
   type UnifiedEvent,
   type LogInvoice,
@@ -459,6 +460,12 @@ function DriverCard({
             {log.driveMinutes > 0 && (
               <span className="text-purple-400" title="Drive time">{formatMinutes(log.driveMinutes)} drive</span>
             )}
+            {log.driveMiles > 0 && (
+              <span className="text-purple-300" title={`GPS distance · avg ${log.avgSpeedMph} mph`}>{log.driveMiles} mi</span>
+            )}
+            {log.avgSpeedMph > 0 && (
+              <span className="text-indigo-400" title="Average driving speed">⌀ {log.avgSpeedMph} mph</span>
+            )}
             {log.onSiteMinutes > 0 && (
               <span className="text-orange-400" title="On-site time">{formatMinutes(log.onSiteMinutes)} on-site</span>
             )}
@@ -520,6 +527,18 @@ function formatMinutes(mins: number): string {
   return m > 0 ? `${h}h ${m}m` : `${h}h`;
 }
 
+/** Calculate avg speed for a drive segment with GPS coords. */
+function calcSpeedSuffix(curr: UnifiedEvent, next: UnifiedEvent, mins: number): string {
+  if (!curr.lat || !curr.lng || !next.lat || !next.lng || mins < 1) return '';
+  const meters = haversineMeters(curr.lat, curr.lng, next.lat, next.lng);
+  const miles = meters / 1609.34;
+  const hours = mins / 60;
+  if (hours > 0 && miles >= 0.1) {
+    return ` · ${Math.round(miles / hours)} mph`;
+  }
+  return '';
+}
+
 /** Get segment label (drive vs on-site) between two consecutive events. */
 function getSegmentLabel(curr: UnifiedEvent, next: UnifiedEvent): { label: string; color: string } | null {
   const currTime = new Date(curr.timestamp).getTime();
@@ -530,19 +549,19 @@ function getSegmentLabel(curr: UnifiedEvent, next: UnifiedEvent): { label: strin
 
   // Drive: leaving → arriving
   if ((curr.type === 'depart' || curr.type === 'depart_site') && next.type === 'arrive') {
-    return { label: `${timeLabel} drive`, color: 'text-purple-500' };
+    return { label: `${timeLabel} drive${calcSpeedSuffix(curr, next, mins)}`, color: 'text-purple-500' };
   }
   // Drive to first job: shift start → first departure
   if (curr.type === 'login' && next.type === 'depart') {
-    return { label: `${timeLabel} to first job`, color: 'text-purple-500' };
+    return { label: `${timeLabel} to first job${calcSpeedSuffix(curr, next, mins)}`, color: 'text-purple-500' };
   }
   // Return drive: depart_return → logout (explicit return-to-yard)
   if (curr.type === 'depart_return' && next.type === 'logout') {
-    return { label: `${timeLabel} return drive`, color: 'text-purple-500' };
+    return { label: `${timeLabel} return drive${calcSpeedSuffix(curr, next, mins)}`, color: 'text-purple-500' };
   }
   // Return drive (legacy/fallback): last close/depart_site → shift end
   if ((curr.type === 'close' || curr.type === 'depart_site') && next.type === 'logout') {
-    return { label: `${timeLabel} return drive`, color: 'text-purple-500' };
+    return { label: `${timeLabel} return drive${calcSpeedSuffix(curr, next, mins)}`, color: 'text-purple-500' };
   }
   // On-site: at location → leaving or closing
   if (curr.type === 'arrive' && (next.type === 'depart_site' || next.type === 'close')) {

@@ -92,10 +92,25 @@ export interface DriverDayLog {
   totalHours: number;
   driveMinutes: number;       // Total time driving between locations
   onSiteMinutes: number;      // Total time at wells/SWDs (loading/unloading/waiting)
+  driveMiles: number;         // Total GPS-calculated driving distance
+  avgSpeedMph: number;        // Average driving speed (driveMiles / driveHours)
   invoices: LogInvoice[];
   timeline: UnifiedEvent[];   // Merged + sorted chronologically
   hasShiftData: boolean;      // True = WB S shift bookends exist
   inferredTimes: boolean;     // True = start/end inferred from job activity (no WB S)
+}
+
+// ── GPS distance ─────────────────────────────────────────────────────────────
+
+/** Haversine distance between two GPS points in meters. */
+export function haversineMeters(lat1: number, lng1: number, lat2: number, lng2: number): number {
+  const R = 6371000;
+  const dLat = (lat2 - lat1) * Math.PI / 180;
+  const dLng = (lng2 - lng1) * Math.PI / 180;
+  const a = Math.sin(dLat / 2) ** 2 +
+    Math.cos(lat1 * Math.PI / 180) * Math.cos(lat2 * Math.PI / 180) *
+    Math.sin(dLng / 2) ** 2;
+  return R * 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
 }
 
 // ── Per-invoice time calculation ─────────────────────────────────────────────
@@ -335,7 +350,11 @@ export function buildDriverDayLogs(
       effectiveEnd = lastClose?.timestamp || null;
     }
 
-    const { driveMinutes, onSiteMinutes } = calculateDriveAndOnSiteTime(timeline);
+    const { driveMinutes, onSiteMinutes, driveMiles } = calculateDriveAndOnSiteTime(timeline);
+    const driveHours = driveMinutes / 60;
+    const avgSpeedMph = driveHours > 0 && driveMiles > 0
+      ? Math.round(driveMiles / driveHours)
+      : 0;
 
     logs.push({
       driverHash: driver.key,
@@ -350,6 +369,8 @@ export function buildDriverDayLogs(
       totalHours,
       driveMinutes,
       onSiteMinutes,
+      driveMiles,
+      avgSpeedMph,
       invoices: driverInvoices,
       timeline,
       hasShiftData: !!shift,
@@ -384,9 +405,11 @@ export function buildDriverDayLogs(
 export function calculateDriveAndOnSiteTime(timeline: UnifiedEvent[]): {
   driveMinutes: number;
   onSiteMinutes: number;
+  driveMiles: number;
 } {
   let driveMs = 0;
   let onSiteMs = 0;
+  let driveMeters = 0;
 
   for (let i = 0; i < timeline.length - 1; i++) {
     const curr = timeline[i];
@@ -396,31 +419,43 @@ export function calculateDriveAndOnSiteTime(timeline: UnifiedEvent[]): {
     if (isNaN(currTime) || isNaN(nextTime) || nextTime <= currTime) continue;
     const diffMs = nextTime - currTime;
 
+    let isDrive = false;
+
     // Drive segments: leaving → arriving somewhere
     if ((curr.type === 'depart' || curr.type === 'depart_site') && next.type === 'arrive') {
       driveMs += diffMs;
+      isDrive = true;
     }
     // Drive to first job: shift start → first departure
     else if (curr.type === 'login' && next.type === 'depart') {
       driveMs += diffMs;
+      isDrive = true;
     }
     // Return drive: depart_return → logout (explicit return-to-yard)
     else if (curr.type === 'depart_return' && next.type === 'logout') {
       driveMs += diffMs;
+      isDrive = true;
     }
     // Return drive (legacy/fallback): last close/depart_site → shift end
     else if ((curr.type === 'close' || curr.type === 'depart_site') && next.type === 'logout') {
       driveMs += diffMs;
+      isDrive = true;
     }
     // On-site segments: at a location → leaving or closing
     else if (curr.type === 'arrive' && (next.type === 'depart_site' || next.type === 'close')) {
       onSiteMs += diffMs;
+    }
+
+    // Accumulate GPS distance for drive segments
+    if (isDrive && curr.lat && curr.lng && next.lat && next.lng) {
+      driveMeters += haversineMeters(curr.lat, curr.lng, next.lat, next.lng);
     }
   }
 
   return {
     driveMinutes: Math.round(driveMs / 60000),
     onSiteMinutes: Math.round(onSiteMs / 60000),
+    driveMiles: Math.round(driveMeters / 1609.34 * 10) / 10, // 1 decimal
   };
 }
 
