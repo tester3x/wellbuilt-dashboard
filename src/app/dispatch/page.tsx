@@ -470,11 +470,15 @@ export default function DispatchPage() {
       return true;
     });
 
-    // Already-dispatched well names (pending/active jobs)
-    const dispatchedWells = new Set(
-      dispatches.filter(d => d.jobType === 'pw' && ['pending', 'accepted', 'in_progress', 'paused'].includes(d.status))
-        .map(d => d.wellName)
-    );
+    // Already-dispatched wells → list of assigned driver first names
+    const dispatchedWellDrivers = new Map<string, string[]>();
+    dispatches
+      .filter(d => d.jobType === 'pw' && ['pending', 'accepted', 'in_progress', 'paused'].includes(d.status))
+      .forEach(d => {
+        const drivers = dispatchedWellDrivers.get(d.wellName) || [];
+        drivers.push(d.driverFirstName || d.driverName || '?');
+        dispatchedWellDrivers.set(d.wellName, drivers);
+      });
 
     // Apply search filter
     if (search.trim()) {
@@ -497,7 +501,7 @@ export default function DispatchPage() {
 
     // Sort by priority: overdue first (sorted by most overdue), then soonest pull time
     return filtered
-      .map(w => ({ well: w, priority: getPriority(w), dispatched: dispatchedWells.has(w.wellName) }))
+      .map(w => ({ well: w, priority: getPriority(w), dispatched: dispatchedWellDrivers.has(w.wellName), assignedDrivers: dispatchedWellDrivers.get(w.wellName) || [] }))
       .sort((a, b) => {
         // Already-dispatched go to bottom
         if (a.dispatched !== b.dispatched) return a.dispatched ? 1 : -1;
@@ -707,18 +711,13 @@ export default function DispatchPage() {
   }
 
   function toggleSelectAll() {
-    // Only toggle non-dispatched wells visible in the current filtered queue
-    const dispatchedWells = new Set(
-      dispatches.filter(d => d.jobType === 'pw' && ['pending', 'accepted', 'in_progress', 'paused'].includes(d.status))
-        .map(d => d.wellName)
-    );
-    const selectableWells = pwQueue.filter(q => !q.dispatched).map(q => q.well.wellName);
+    const selectableWells = pwQueue.map(q => q.well.wellName);
 
     if (selectableWells.every(w => selectedWells.has(w))) {
       // All selected → deselect all
       setSelectedWells(new Map());
     } else {
-      // Select all undispatched
+      // Select all
       const next = new Map(selectedWells);
       selectableWells.forEach(w => {
         if (!next.has(w)) next.set(w, 1);
@@ -755,6 +754,7 @@ export default function DispatchPage() {
           driverName: driver.displayName,
           driverFirstName,
           wellName,
+          ndicWellName: well?.ndicName || wellName,
           route: well?.route || '',
           jobType: 'pw',
           status: 'pending',
@@ -1084,24 +1084,22 @@ export default function DispatchPage() {
                               <span>Action</span>
                               <input
                                 type="checkbox"
-                                checked={pwQueue.filter(q => !q.dispatched).length > 0 && pwQueue.filter(q => !q.dispatched).every(q => selectedWells.has(q.well.wellName))}
+                                checked={pwQueue.length > 0 && pwQueue.every(q => selectedWells.has(q.well.wellName))}
                                 onChange={toggleSelectAll}
-                                className="w-4 h-4 rounded border-gray-600 bg-gray-800 text-blue-600 focus:ring-blue-500 focus:ring-offset-0 cursor-pointer"
+                                className="w-5 h-5 rounded border-gray-600 bg-gray-800 text-blue-600 focus:ring-blue-500 focus:ring-offset-0 cursor-pointer"
                               />
                             </div>
                           </th>
                         </tr>
                       </thead>
                       <tbody className="divide-y divide-gray-700">
-                        {pwQueue.map(({ well, priority, dispatched }) => {
+                        {pwQueue.map(({ well, priority, dispatched, assignedDrivers }) => {
                           const isSelected = selectedWells.has(well.wellName);
                           const loadCount = selectedWells.get(well.wellName) || 1;
                           return (
                           <tr
                             key={well.responseId || well.wellName}
-                            className={`hover:bg-gray-750 transition-colors ${
-                              dispatched ? 'opacity-50' : ''
-                            } ${priority.level === 'overdue' ? 'bg-red-900/10' : ''} ${isSelected ? 'bg-blue-900/20' : ''}`}
+                            className={`hover:bg-gray-750 transition-colors ${priority.level === 'overdue' ? 'bg-red-900/10' : ''} ${isSelected ? 'bg-blue-900/20' : ''}`}
                           >
                             <td className="px-3 py-2">
                               <span className={`px-2 py-0.5 text-xs font-bold rounded ${priority.color} ${priority.textColor}`}>
@@ -1117,38 +1115,43 @@ export default function DispatchPage() {
                             <td className="px-3 py-2 text-white font-mono text-xs">{well.windowBblsDay || well.bbls24hrs || '--'}</td>
                             <td className="px-3 py-2"><PullsPredictionCell well={well} /></td>
                             <td className="px-3 py-2 text-right">
-                              {dispatched ? (
-                                <span className="text-blue-400 text-xs font-medium">Dispatched</span>
-                              ) : (
-                                <div className="flex items-center justify-end gap-2">
-                                  {isSelected ? (
-                                    <div className="flex items-center gap-1">
-                                      <span className="text-gray-400 text-xs">Loads:</span>
-                                      <input
-                                        type="number"
-                                        min={1}
-                                        max={20}
-                                        value={loadCount}
-                                        onChange={(e) => setWellLoadCount(well.wellName, parseInt(e.target.value) || 1)}
-                                        className="w-12 px-1 py-0.5 bg-gray-900 border border-blue-600 rounded text-white text-xs text-center focus:outline-none focus:border-blue-400"
-                                      />
-                                    </div>
-                                  ) : (
-                                    <button
-                                      onClick={() => openAssignModal(well)}
-                                      className="px-2 py-1 bg-blue-600 hover:bg-blue-500 text-white text-xs font-medium rounded transition-colors"
-                                    >
-                                      Assign
-                                    </button>
-                                  )}
-                                  <input
-                                    type="checkbox"
-                                    checked={isSelected}
-                                    onChange={() => toggleWellSelection(well.wellName)}
-                                    className="w-4 h-4 rounded border-gray-600 bg-gray-800 text-blue-600 focus:ring-blue-500 focus:ring-offset-0 cursor-pointer"
-                                  />
-                                </div>
-                              )}
+                              <div className="flex items-center justify-end gap-4">
+                                {assignedDrivers.length > 0 && (
+                                  <div className="flex items-center gap-1 flex-wrap justify-end">
+                                    {assignedDrivers.map((name, i) => (
+                                      <span key={i} className="px-1.5 py-0.5 bg-blue-900/50 text-blue-300 text-[10px] font-medium rounded">
+                                        {name}
+                                      </span>
+                                    ))}
+                                  </div>
+                                )}
+                                {isSelected ? (
+                                  <div className="flex items-center gap-1">
+                                    <span className="text-gray-400 text-xs">Loads:</span>
+                                    <input
+                                      type="number"
+                                      min={1}
+                                      max={20}
+                                      value={loadCount}
+                                      onChange={(e) => setWellLoadCount(well.wellName, parseInt(e.target.value) || 1)}
+                                      className="w-12 px-1 py-0.5 bg-gray-900 border border-blue-600 rounded text-white text-xs text-center focus:outline-none focus:border-blue-400"
+                                    />
+                                  </div>
+                                ) : (
+                                  <button
+                                    onClick={() => openAssignModal(well)}
+                                    className="px-3 py-1.5 bg-blue-600 hover:bg-blue-500 text-white text-xs font-medium rounded transition-colors"
+                                  >
+                                    Assign
+                                  </button>
+                                )}
+                                <input
+                                  type="checkbox"
+                                  checked={isSelected}
+                                  onChange={() => toggleWellSelection(well.wellName)}
+                                  className="w-5 h-5 rounded border-gray-600 bg-gray-800 text-blue-600 focus:ring-blue-500 focus:ring-offset-0 cursor-pointer"
+                                />
+                              </div>
                             </td>
                           </tr>
                           );
