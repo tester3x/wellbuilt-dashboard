@@ -9,6 +9,39 @@
       ]
     },
     {
+      "collectionGroup": "invoices",
+      "queryScope": "COLLECTION",
+      "fields": [
+        { "fieldPath": "companyId", "order": "ASCENDING" },
+        { "fieldPath": "createdAt", "order": "ASCENDING" }
+      ]
+    },
+    {
+      "collectionGroup": "invoices",
+      "queryScope": "COLLECTION",
+      "fields": [
+        { "fieldPath": "companyId", "order": "ASCENDING" },
+        { "fieldPath": "status", "order": "ASCENDING" }
+      ]
+    },
+    {
+      "collectionGroup": "invoices",
+      "queryScope": "COLLECTION",
+      "fields": [
+        { "fieldPath": "companyId", "order": "ASCENDING" },
+        { "fieldPath": "wellName", "order": "ASCENDING" },
+        { "fieldPath": "date", "order": "ASCENDING" },
+        { "fieldPath": "status", "order": "ASCENDING" }
+      ]
+    },
+    {
+      "collectionGroup": "invoices",
+      "queryScope": "COLLECTION",
+      "fields": [
+        { "fieldPath": "splitGroupId", "order": "ASCENDING" }
+      ]
+    },
+    {
       "collectionGroup": "dispatches",
       "queryScope": "COLLECTION",
       "fields": [
@@ -33,7 +66,15 @@
       ]
     },
     {
-      "collectionGroup": "wells_inactive",
+      "collectionGroup": "invoiceBlocks",
+      "queryScope": "COLLECTION",
+      "fields": [
+        { "fieldPath": "companyId", "order": "ASCENDING" },
+        { "fieldPath": "end", "order": "DESCENDING" }
+      ]
+    },
+    {
+      "collectionGroup": "wells",
       "queryScope": "COLLECTION",
       "fields": [
         { "fieldPath": "operator", "order": "ASCENDING" },
@@ -41,11 +82,11 @@
       ]
     },
     {
-      "collectionGroup": "invoices",
+      "collectionGroup": "wells_inactive",
       "queryScope": "COLLECTION",
       "fields": [
-        { "fieldPath": "companyId", "order": "ASCENDING" },
-        { "fieldPath": "createdAt", "order": "ASCENDING" }
+        { "fieldPath": "operator", "order": "ASCENDING" },
+        { "fieldPath": "well_name", "order": "ASCENDING" }
       ]
     },
     {
