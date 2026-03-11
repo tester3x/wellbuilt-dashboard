@@ -368,8 +368,8 @@ export function DriversTab({ scopeCompanyId, isWbAdmin = false }: DriversTabProp
         legalName: approvalTarget.legalName || approvalTarget.displayName,
         name: approvalTarget.displayName,
         active: true,
-        isAdmin: false,
-        isViewer: false,
+        isAdmin: approvalRoles.includes('admin'),
+        isViewer: approvalRoles.includes('viewer'),
         approvedAt: Date.now(),
         companyId: approvalCompanyId,
         companyName: approvalCompanyName,
@@ -525,7 +525,7 @@ export function DriversTab({ scopeCompanyId, isWbAdmin = false }: DriversTabProp
     }
   };
 
-  // ── Assign a customer to a driver ──
+  // ── Assign an operator to a driver ──
   const assignCustomer = async () => {
     if (!assignTarget || !newCustomerName.trim() || !newCustomerCompanyId.trim()) return;
 
@@ -560,7 +560,7 @@ export function DriversTab({ scopeCompanyId, isWbAdmin = false }: DriversTabProp
     const updated = (driver.assignedCustomers || []).filter(c => c.companyId !== companyId);
     try {
       await set(ref(db, `drivers/approved/${driver.key}/assignedCustomers`), updated);
-      setMessage(`Removed customer assignment from ${driver.displayName}`);
+      setMessage(`Removed operator assignment from ${driver.displayName}`);
       await loadDrivers();
     } catch (err) {
       console.error('Failed to remove customer:', err);
@@ -800,7 +800,7 @@ export function DriversTab({ scopeCompanyId, isWbAdmin = false }: DriversTabProp
                         }}
                         className="px-3 py-1 text-sm rounded bg-yellow-600 hover:bg-yellow-500 text-white"
                       >
-                        + Assign Customer
+                        + Assign Operator
                       </button>
                       <button
                         onClick={() => {
@@ -822,7 +822,7 @@ export function DriversTab({ scopeCompanyId, isWbAdmin = false }: DriversTabProp
                           }}
                           className="px-3 py-1 text-sm rounded bg-teal-600 hover:bg-teal-500 text-white"
                         >
-                          {driver.companyId ? 'Change Company' : 'Assign Company'}
+                          {driver.companyId ? 'Change Customer' : 'Assign Customer'}
                         </button>
                       )}
                       {isWbAdmin && driver._legacy && (
@@ -844,13 +844,13 @@ export function DriversTab({ scopeCompanyId, isWbAdmin = false }: DriversTabProp
                       )}
                     </div>
 
-                    {/* Assigned Customers */}
+                    {/* Assigned Operators */}
                     <div>
                       <h4 className="text-gray-400 text-xs font-medium uppercase tracking-wider mb-2">
-                        Assigned Customers
+                        Assigned Operators
                       </h4>
                       {(driver.assignedCustomers?.length || 0) === 0 ? (
-                        <p className="text-gray-500 text-sm">No customers assigned</p>
+                        <p className="text-gray-500 text-sm">No operators assigned</p>
                       ) : (
                         <div className="space-y-1">
                           {driver.assignedCustomers!.map(c => (
@@ -900,7 +900,7 @@ export function DriversTab({ scopeCompanyId, isWbAdmin = false }: DriversTabProp
                         )}
                         {driver.companyId && (
                           <span className="text-teal-400 ml-2">
-                            Company: {driver.companyId}
+                            Customer: {driver.companyId}
                           </span>
                         )}
                       </div>
@@ -917,14 +917,14 @@ export function DriversTab({ scopeCompanyId, isWbAdmin = false }: DriversTabProp
       {showCompanyModal && companyTarget && (
         <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50">
           <div className="bg-gray-800 rounded-lg p-6 max-w-md w-full mx-4">
-            <h3 className="text-white font-medium mb-1">Assign to Company</h3>
+            <h3 className="text-white font-medium mb-1">Assign to Customer</h3>
             <p className="text-gray-400 text-sm mb-4">
-              Assign <span className="text-white">{companyTarget.displayName}</span> to a trucking company
+              Assign <span className="text-white">{companyTarget.displayName}</span> to a customer
             </p>
 
             <div className="space-y-3">
               <div>
-                <label className="text-gray-400 text-sm block mb-1">Company</label>
+                <label className="text-gray-400 text-sm block mb-1">Customer</label>
                 <select
                   value={assignCompanyId}
                   onChange={e => {
@@ -936,7 +936,7 @@ export function DriversTab({ scopeCompanyId, isWbAdmin = false }: DriversTabProp
                   className="w-full px-3 py-2 bg-gray-700 text-white rounded text-sm"
                   autoFocus
                 >
-                  <option value="">— No Company (Remove) —</option>
+                  <option value="">— No Customer (Remove) —</option>
                   {companiesList.map(c => (
                     <option key={c.id} value={c.id}>{c.name}</option>
                   ))}
@@ -949,7 +949,7 @@ export function DriversTab({ scopeCompanyId, isWbAdmin = false }: DriversTabProp
                 onClick={assignDriverCompany}
                 className="flex-1 px-4 py-2 bg-teal-600 hover:bg-teal-500 text-white rounded"
               >
-                {assignCompanyId.trim() ? 'Assign' : 'Remove from Company'}
+                {assignCompanyId.trim() ? 'Assign' : 'Remove from Customer'}
               </button>
               <button
                 onClick={() => {
@@ -967,13 +967,13 @@ export function DriversTab({ scopeCompanyId, isWbAdmin = false }: DriversTabProp
         </div>
       )}
 
-      {/* ── Assign Customer Modal ── */}
+      {/* ── Assign Operator Modal ── */}
       {showAssignModal && assignTarget && (
         <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50">
           <div className="bg-gray-800 rounded-lg p-6 max-w-md w-full mx-4">
-            <h3 className="text-white font-medium mb-1">Assign Customer</h3>
+            <h3 className="text-white font-medium mb-1">Assign Operator</h3>
             <p className="text-gray-400 text-sm mb-4">
-              Assign a customer to <span className="text-white">{assignTarget.displayName}</span>
+              Assign an operator to <span className="text-white">{assignTarget.displayName}</span>
             </p>
 
             {(() => {
@@ -989,7 +989,7 @@ export function DriversTab({ scopeCompanyId, isWbAdmin = false }: DriversTabProp
                 <div className="space-y-3">
                   {!assignTarget.companyId ? (
                     <p className="text-yellow-400 text-sm">
-                      This driver is not assigned to a company yet. Assign a company first, then add customers.
+                      This driver is not assigned to a customer yet. Assign a customer first, then add operators.
                     </p>
                   ) : operators.length === 0 ? (
                     <p className="text-yellow-400 text-sm">
@@ -1068,10 +1068,10 @@ export function DriversTab({ scopeCompanyId, isWbAdmin = false }: DriversTabProp
                 )}
               </p>
 
-              {/* Section 1: Company */}
+              {/* Section 1: Customer */}
               <div className="mb-4">
                 <label className="text-gray-400 text-xs font-medium uppercase tracking-wider block mb-2">
-                  Company <span className="text-red-400">*</span>
+                  Customer <span className="text-red-400">*</span>
                 </label>
                 <select
                   value={approvalCompanyId}
@@ -1080,12 +1080,12 @@ export function DriversTab({ scopeCompanyId, isWbAdmin = false }: DriversTabProp
                     setApprovalCompanyId(id);
                     const match = companiesList.find(c => c.id === id);
                     setApprovalCompanyName(match?.name || '');
-                    setApprovalCustomers([]); // Reset customers when company changes
+                    setApprovalCustomers([]); // Reset operators when customer changes
                   }}
                   disabled={isCompanyScoped}
                   className="w-full px-3 py-2 bg-gray-700 text-white rounded text-sm disabled:opacity-60"
                 >
-                  <option value="">Select a company...</option>
+                  <option value="">Select a customer...</option>
                   {companiesList.map(c => (
                     <option key={c.id} value={c.id}>{c.name}</option>
                   ))}
@@ -1121,16 +1121,16 @@ export function DriversTab({ scopeCompanyId, isWbAdmin = false }: DriversTabProp
                 </div>
               </div>
 
-              {/* Section 3: Customers (Operators) */}
+              {/* Section 3: Operators */}
               <div className="mb-4">
                 <label className="text-gray-400 text-xs font-medium uppercase tracking-wider block mb-2">
-                  Customers (Operators) <span className="text-red-400">*</span>
+                  Operators <span className="text-red-400">*</span>
                   {approvalCustomers.length > 0 && (
                     <span className="text-yellow-400 ml-2 normal-case">{approvalCustomers.length} selected</span>
                   )}
                 </label>
                 {!approvalCompanyId ? (
-                  <p className="text-gray-500 text-sm">Select a company first</p>
+                  <p className="text-gray-500 text-sm">Select a customer first</p>
                 ) : operators.length === 0 ? (
                   <p className="text-yellow-400 text-sm">
                     {selectedCompany?.name} has no oil companies configured. Add them on the Companies tab.
