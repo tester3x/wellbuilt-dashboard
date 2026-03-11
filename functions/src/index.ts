@@ -1568,7 +1568,7 @@ async function fetchDieselFromEIA(doeRegion: string): Promise<{ price: number; d
 }
 
 export const weeklyDieselPriceFetch = functionsV2.onSchedule(
-  { schedule: 'every monday 16:00', timeZone: 'UTC' },
+  { schedule: 'every tuesday 16:00', timeZone: 'UTC' },
   async () => {
     console.log('[DieselFetch] Starting weekly diesel price update...');
     const firestore = admin.firestore();
