@@ -1,5 +1,5 @@
 import { getFirestoreDb } from './firebase';
-import { collection, getDocs, query, where, orderBy, Timestamp, doc, setDoc, updateDoc, getDoc } from 'firebase/firestore';
+import { collection, getDocs, query, where, orderBy, Timestamp, doc, setDoc, updateDoc, getDoc, deleteDoc } from 'firebase/firestore';
 import { type CompanyConfig, type OperatorBillingConfig } from './companySettings';
 import { lookupRate, formatCurrency, type PayPeriod, type CompanyRateSheets } from './payroll';
 
@@ -44,6 +44,8 @@ export interface OperatorBillingSummary {
   lineItems: BillingLineItem[];
   billingConfig?: OperatorBillingConfig;
   paymentTerms: string;
+  /** The diesel price used for FSC calculations (historical, not current) */
+  dieselPriceUsed?: number;
 }
 
 export type BillingStatus = 'draft' | 'sent' | 'paid' | 'overdue' | 'partial';
@@ -195,6 +197,62 @@ export function getFuelSurchargeLabel(config: OperatorBillingConfig | undefined)
   }
 }
 
+// ─── Historical Diesel Price Lookup ──────────────────────────────────────────
+
+/** Normalize date string to YYYY-MM-DD for consistent comparison.
+ * Invoice dates are stored as MM/DD/YYYY, diesel prices as YYYY-MM-DD. */
+function normalizeToYMD(dateStr: string): string {
+  if (!dateStr) return '';
+  // Already YYYY-MM-DD?
+  if (/^\d{4}-\d{2}-\d{2}/.test(dateStr)) return dateStr.slice(0, 10);
+  // MM/DD/YYYY → YYYY-MM-DD
+  const match = dateStr.match(/^(\d{1,2})\/(\d{1,2})\/(\d{4})$/);
+  if (match) return `${match[3]}-${match[1].padStart(2, '0')}-${match[2].padStart(2, '0')}`;
+  return dateStr;
+}
+
+/** Sorted array of {date, price} for a company, loaded once per billing query */
+interface DieselPriceTimeline {
+  entries: { date: string; price: number }[];
+}
+
+/**
+ * Load all diesel prices for a company into a sorted timeline.
+ * Called once per company per billing query — very few entries (~52/year).
+ */
+async function loadDieselPriceTimeline(companyId: string): Promise<DieselPriceTimeline> {
+  const db = getFirestoreDb();
+  const q = query(
+    collection(db, 'diesel_prices'),
+    where('companyId', '==', companyId),
+    orderBy('date', 'asc')
+  );
+  const snap = await getDocs(q);
+  const entries = snap.docs.map(d => ({ date: d.data().date as string, price: d.data().price as number }));
+  return { entries };
+}
+
+/**
+ * Get the diesel price in effect on a specific date (per-invoice lookup).
+ * Finds the most recent price BEFORE the given date (strictly less than).
+ * EIA publishes on Monday — that price takes effect Tuesday.
+ * Monday loads use last week's price (drivers dispatched before new price known).
+ */
+function getDieselPriceForDate(timeline: DieselPriceTimeline, dateStr: string): number | undefined {
+  if (timeline.entries.length === 0) return undefined;
+
+  let bestPrice: number | undefined;
+  for (const entry of timeline.entries) {
+    if (entry.date < dateStr) {
+      bestPrice = entry.price;
+    } else {
+      break; // sorted ascending
+    }
+  }
+  // If no price on or before this date, use earliest as stable fallback
+  return bestPrice ?? timeline.entries[0].price;
+}
+
 // ─── Fetch + Aggregate Billing Data ──────────────────────────────────────────
 
 export async function fetchBillingData(
@@ -212,6 +270,13 @@ export async function fetchBillingData(
 
   const q = query(collection(db, 'invoices'), ...constraints);
   const snapshot = await getDocs(q);
+
+  // Pre-load diesel price timelines (one query per company, reused per-invoice)
+  const dieselTimelines = new Map<string, DieselPriceTimeline>();
+  for (const [cid] of companyConfigs) {
+    if (companyId && cid !== companyId) continue;
+    dieselTimelines.set(cid, await loadDieselPriceTimeline(cid));
+  }
 
   // Group by operator
   const operatorMap = new Map<string, { items: BillingLineItem[]; companyId: string }>();
@@ -238,7 +303,11 @@ export async function fetchBillingData(
     const company = invoiceCompanyId ? companyConfigs.get(invoiceCompanyId) : null;
     const rateSheets = company?.rateSheets || {};
     const billingConfig = company?.billingConfig?.[operator];
-    const currentDiesel = company?.currentDieselPrice;
+    // Per-invoice diesel price: uses the price in effect on the invoice date,
+    // so Monday loads get last week's FSC and Tuesday-Sunday get this week's
+    const invoiceDate = normalizeToYMD(d.date || d.createdAt?.toDate?.()?.toISOString?.()?.split('T')?.[0] || '');
+    const timeline = invoiceCompanyId ? dieselTimelines.get(invoiceCompanyId) : undefined;
+    const currentDiesel = (timeline && invoiceDate ? getDieselPriceForDate(timeline, invoiceDate) : undefined) ?? company?.currentDieselPrice;
 
     const rateEntry = lookupRate(rateSheets, operator, jobType);
     const rate = rateEntry?.rate || 0;
@@ -308,9 +377,15 @@ export async function fetchBillingData(
     const billingConfig = company?.billingConfig?.[operator];
     const paymentTerms = billingConfig?.paymentTerms || 'net_30';
 
+    // For the summary-level diesel price, use the latest price from any invoice in this period
+    const opTimeline = opCompanyId ? dieselTimelines.get(opCompanyId) : undefined;
+    const lastItemDate = normalizeToYMD(items[items.length - 1]?.date || '');
+    const summaryDiesel = (opTimeline && lastItemDate ? getDieselPriceForDate(opTimeline, lastItemDate) : undefined) ?? company?.currentDieselPrice;
+
     summaries.push({
       operator,
       companyId: opCompanyId,
+      dieselPriceUsed: summaryDiesel,
       loads: items.length,
       totalBBLs: Math.round(items.reduce((s, i) => s + i.bbls, 0)),
       totalHours: Math.round(items.reduce((s, i) => s + i.hours, 0) * 100) / 100,
@@ -437,10 +512,12 @@ export async function saveDieselPrice(
   companyId: string,
   price: number,
   source: string,
-  updatedBy: string
+  updatedBy: string,
+  /** Optional date override (YYYY-MM-DD). EIA fetches should pass the EIA period date, not today. */
+  dateOverride?: string
 ): Promise<void> {
   const db = getFirestoreDb();
-  const today = new Date().toISOString().split('T')[0];
+  const today = dateOverride || new Date().toISOString().split('T')[0];
 
   // Check if we already have a price for this company today — one save per day
   const existingSnap = await getDocs(
@@ -473,10 +550,13 @@ export async function saveDieselPrice(
     });
   }
 
-  // Always update company's current price
-  await updateDoc(doc(db, 'companies', companyId), {
-    currentDieselPrice: price,
-  });
+  // Only update company's current price if this is the most recent entry
+  const todayStr = new Date().toISOString().split('T')[0];
+  if (today >= todayStr || !dateOverride) {
+    await updateDoc(doc(db, 'companies', companyId), {
+      currentDieselPrice: price,
+    });
+  }
 }
 
 // ─── EIA API — Auto-fetch diesel prices ─────────────────────────────────────
@@ -507,7 +587,7 @@ export interface EiaFetchResult {
  * Uses the free DEMO_KEY — 30 requests/hr limit.
  * Production: get a real key from https://www.eia.gov/opendata/register.php
  */
-export async function fetchEiaDieselPrice(doeRegion: string): Promise<EiaFetchResult> {
+export async function fetchEiaDieselPrice(doeRegion: string, weeks: number = 1): Promise<EiaFetchResult[]> {
   const duoarea = DOE_REGION_TO_EIA[doeRegion] || 'NUS';
   const apiKey = '8mXuoSgL8cBJv4EXnzV2g201GToEOdQRalVHo1ej';
   const url = `https://api.eia.gov/v2/petroleum/pri/gnd/data?api_key=${apiKey}`
@@ -517,22 +597,29 @@ export async function fetchEiaDieselPrice(doeRegion: string): Promise<EiaFetchRe
     + `&facets[product][]=EPD2D`
     + `&sort[0][column]=period`
     + `&sort[0][direction]=desc`
-    + `&length=1`;
+    + `&length=${weeks}`;
 
   const res = await fetch(url);
   if (!res.ok) {
     throw new Error(`EIA API error: ${res.status} ${res.statusText}`);
   }
   const json = await res.json();
-  const row = json?.response?.data?.[0];
-  if (!row || !row.value) {
+  const rows = json?.response?.data;
+  if (!rows || rows.length === 0) {
     throw new Error('No diesel price data returned from EIA');
   }
-  return {
-    price: parseFloat(row.value),
-    date: row.period || new Date().toISOString().split('T')[0],
-    region: row['duoarea-name'] || doeRegion,
-  };
+  return rows
+    .filter((row: any) => row.value)
+    .map((row: any) => ({
+      price: parseFloat(row.value),
+      date: row.period || new Date().toISOString().split('T')[0],
+      region: row['duoarea-name'] || doeRegion,
+    }));
+}
+
+export async function deleteDieselPrice(priceId: string): Promise<void> {
+  const db = getFirestoreDb();
+  await deleteDoc(doc(db, 'diesel_prices', priceId));
 }
 
 export async function fetchDieselPriceHistory(companyId?: string): Promise<DieselPriceEntry[]> {

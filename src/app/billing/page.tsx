@@ -33,6 +33,7 @@ import {
   updateBillingStatus,
   saveDieselPrice,
   fetchDieselPriceHistory,
+  deleteDieselPrice,
   fetchEiaDieselPrice,
   calculateFuelSurcharge,
   getFuelSurchargeLabel,
@@ -83,6 +84,7 @@ export default function BillingPage() {
   const [savingPrice, setSavingPrice] = useState(false);
   const [fetchingEia, setFetchingEia] = useState(false);
   const [eiaResult, setEiaResult] = useState<string | null>(null);
+  const [eiaDate, setEiaDate] = useState<string>(() => new Date().toISOString().split('T')[0]);
 
   // Export state
   const [exportOperator, setExportOperator] = useState<string | null>(null);
@@ -231,8 +233,10 @@ export default function BillingPage() {
     }
     try {
       setSavingPrice(true);
-      await saveDieselPrice(effectiveCompanyId, price, priceSource, user?.displayName || 'Admin');
+      // Pass the effective date so the price aligns with the correct billing period
+      await saveDieselPrice(effectiveCompanyId, price, priceSource, user?.displayName || 'Admin', eiaDate);
       setNewPrice('');
+      setEiaDate(new Date().toISOString().split('T')[0]); // Reset to today
       await loadFuelPrices();
       // Refresh companies to get updated currentDieselPrice
       const list = await loadAllCompanies();
@@ -256,6 +260,15 @@ export default function BillingPage() {
     || (companyConfig?.state ? STATE_TO_PADD[companyConfig.state.toUpperCase()] : undefined)
     || 'us';
   const regionLabel = DOE_REGIONS.find(r => r.value === currentRegion)?.label || 'U.S. Average';
+
+  // First DOE-based operator config — used for FSC rate column in price history
+  const historyFscConfig = (() => {
+    const bc = companyConfig?.billingConfig;
+    if (!bc) return undefined;
+    return Object.values(bc).find(c =>
+      c.fuelSurchargeMethod === 'flat_doe' || c.fuelSurchargeMethod === 'hourly' || c.fuelSurchargeMethod === 'per_mile'
+    );
+  })();
 
   // Load recent exports + real well names when Export tab opened
   useEffect(() => {
@@ -296,12 +309,40 @@ export default function BillingPage() {
     try {
       setFetchingEia(true);
       setEiaResult(null);
-      const result = await fetchEiaDieselPrice(currentRegion);
+      const results = await fetchEiaDieselPrice(currentRegion);
+      const result = results[0];
       setNewPrice(result.price.toFixed(3));
       setPriceSource('EIA API');
+      setEiaDate(result.date); // Auto-fill effective date to EIA period date
       setEiaResult(`Fetched $${result.price.toFixed(3)}/gal for ${result.region} (week of ${result.date})`);
     } catch (err: any) {
       setEiaResult(`Error: ${err?.message || 'Failed to fetch from EIA'}`);
+    } finally {
+      setFetchingEia(false);
+    }
+  };
+
+  const handleBackfillHistory = async () => {
+    if (!effectiveCompanyId) return;
+    try {
+      setFetchingEia(true);
+      setEiaResult(null);
+      const results = await fetchEiaDieselPrice(currentRegion, 12);
+      let saved = 0;
+      // Save each week's price with its correct EIA date (oldest first)
+      for (const r of results.reverse()) {
+        await saveDieselPrice(effectiveCompanyId, r.price, 'EIA Backfill', user?.displayName || 'Admin', r.date);
+        saved++;
+      }
+      setEiaResult(`Backfilled ${saved} weeks of diesel prices from EIA`);
+      await loadFuelPrices();
+      // Refresh billing data too
+      if (companies.size > 0) {
+        const data = await fetchBillingData(selectedPeriod, companies, effectiveCompanyId);
+        setSummaries(data);
+      }
+    } catch (err: any) {
+      setEiaResult(`Error: ${err?.message || 'Backfill failed'}`);
     } finally {
       setFetchingEia(false);
     }
@@ -450,7 +491,7 @@ export default function BillingPage() {
                             <OperatorRow
                               key={summary.operator}
                               summary={summary}
-                              dieselPrice={currentDiesel}
+                              dieselPrice={summary.dieselPriceUsed ?? currentDiesel}
                               isExpanded={expandedOp === summary.operator}
                               onToggle={() => setExpandedOp(expandedOp === summary.operator ? null : summary.operator)}
                               onGenerate={() => handleGenerateBill(summary)}
@@ -568,7 +609,7 @@ export default function BillingPage() {
               </p>
 
               {/* Auto-fetch from EIA */}
-              <div className="flex items-center gap-3 mb-4">
+              <div className="flex items-center gap-3 mb-4 flex-wrap">
                 <button
                   onClick={handleFetchEia}
                   disabled={fetchingEia}
@@ -583,6 +624,13 @@ export default function BillingPage() {
                     <>Fetch from EIA</>
                   )}
                 </button>
+                <button
+                  onClick={handleBackfillHistory}
+                  disabled={fetchingEia || !effectiveCompanyId}
+                  className="px-4 py-2 bg-yellow-600 hover:bg-yellow-500 text-white rounded-lg transition-colors text-sm disabled:opacity-50"
+                >
+                  Backfill 12 Weeks
+                </button>
                 {eiaResult && (
                   <span className={`text-sm ${eiaResult.startsWith('Error') ? 'text-red-400' : 'text-green-400'}`}>
                     {eiaResult}
@@ -591,7 +639,7 @@ export default function BillingPage() {
               </div>
 
               {/* Manual update form */}
-              <div className="flex items-center gap-3">
+              <div className="flex items-center gap-3 flex-wrap">
                 <div className="relative">
                   <span className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400">$</span>
                   <input
@@ -602,6 +650,15 @@ export default function BillingPage() {
                     onChange={(e) => setNewPrice(e.target.value)}
                     placeholder="0.000"
                     className="pl-7 pr-3 py-2 bg-gray-700 border border-gray-600 rounded-lg text-white text-sm w-32 focus:outline-none focus:border-blue-500"
+                  />
+                </div>
+                <div className="flex items-center gap-1.5">
+                  <span className="text-gray-500 text-xs">Effective</span>
+                  <input
+                    type="date"
+                    value={eiaDate}
+                    onChange={(e) => setEiaDate(e.target.value)}
+                    className="px-2 py-2 bg-gray-700 border border-gray-600 rounded-lg text-white text-sm focus:outline-none focus:border-blue-500"
                   />
                 </div>
                 <select
@@ -636,19 +693,43 @@ export default function BillingPage() {
                     <tr>
                       <th className="px-4 py-2 text-left text-sm font-medium text-gray-300">Date</th>
                       <th className="px-4 py-2 text-right text-sm font-medium text-gray-300">Price/Gal</th>
+                      {historyFscConfig && <th className="px-4 py-2 text-right text-sm font-medium text-gray-300">FSC Rate</th>}
                       <th className="px-4 py-2 text-left text-sm font-medium text-gray-300">Source</th>
                       <th className="px-4 py-2 text-left text-sm font-medium text-gray-300">Updated By</th>
+                      <th className="px-4 py-2 w-8"></th>
                     </tr>
                   </thead>
                   <tbody className="divide-y divide-gray-700">
-                    {dieselHistory.map(entry => (
+                    {dieselHistory.map(entry => {
+                      const rateInfo = historyFscConfig ? getFuelSurchargeRate(historyFscConfig, entry.price) : null;
+                      return (
                       <tr key={entry.id} className="hover:bg-gray-750">
                         <td className="px-4 py-2 text-white text-sm">{entry.date}</td>
                         <td className="px-4 py-2 text-right text-green-400 font-mono">${entry.price.toFixed(2)}</td>
+                        {historyFscConfig && (
+                          <td className="px-4 py-2 text-right text-cyan-400 font-mono text-sm">
+                            {rateInfo && rateInfo.rate > 0 ? `$${rateInfo.rate.toFixed(2)}${rateInfo.unit}` : '--'}
+                          </td>
+                        )}
                         <td className="px-4 py-2 text-gray-400 text-sm">{entry.source}</td>
                         <td className="px-4 py-2 text-gray-400 text-sm">{entry.updatedBy}</td>
+                        <td className="px-4 py-1">
+                          <button
+                            onClick={async () => {
+                              if (!confirm(`Delete price entry for ${entry.date}?`)) return;
+                              await deleteDieselPrice(entry.id);
+                              const history = await fetchDieselPriceHistory(effectiveCompanyId || undefined);
+                              setDieselHistory(history);
+                            }}
+                            className="text-red-500 hover:text-red-400 text-xs opacity-40 hover:opacity-100 transition-opacity"
+                            title="Delete"
+                          >
+                            &times;
+                          </button>
+                        </td>
                       </tr>
-                    ))}
+                      );
+                    })}
                   </tbody>
                 </table>
               )}
