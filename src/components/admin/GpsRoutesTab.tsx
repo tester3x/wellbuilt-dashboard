@@ -29,6 +29,7 @@ interface WellRouteStatus {
   approvedCount: number;
   lastTripDate?: Date;
   loading: boolean;
+  isRecording: boolean;
   // Pad grouping — all wells equal, groupId = shared Firestore slug
   routeGroupWell?: string;
   groupMembers?: string[];
@@ -82,11 +83,9 @@ export default function GpsRoutesTab() {
       const routeWells: WellRouteStatus[] = [];
       const seen = new Set<string>();
 
-      // First pass: grouped wells — one card per pad group (only if at least one is recording)
+      // First pass: grouped wells — one card per pad group (show ALL groups, even released ones)
       for (const [groupId, members] of padGroups) {
         const anyRecording = members.some(m => configs[m]?.routeRecording);
-        if (!anyRecording) continue; // Released pad — don't show on GPS Routes tab
-
         members.sort();
         members.forEach(m => seen.add(m));
 
@@ -99,12 +98,13 @@ export default function GpsRoutesTab() {
           tripCount: 0,
           approvedCount: 0,
           loading: true,
+          isRecording: anyRecording,
           routeGroupWell: groupId,
           groupMembers: otherMembers.length > 0 ? otherMembers : undefined,
         });
       }
 
-      // Second pass: standalone wells with routeRecording enabled
+      // Second pass: standalone wells with routeRecording enabled (legacy — no routeGroupWell set)
       for (const [name, config] of Object.entries(configs)) {
         if (seen.has(name)) continue;
         if (!config.routeRecording) continue;
@@ -115,6 +115,7 @@ export default function GpsRoutesTab() {
           tripCount: 0,
           approvedCount: 0,
           loading: true,
+          isRecording: true,
         });
       }
 
@@ -232,7 +233,7 @@ export default function GpsRoutesTab() {
       await update(ref(db), updates);
       setAddMessage(`Pad detected! Added ${padWells.length} wells: ${padWells.join(', ')}`);
     } else {
-      await update(ref(db, `well_config/${wellName}`), { routeRecording: true });
+      await update(ref(db, `well_config/${wellName}`), { routeRecording: true, routeGroupWell: wellName });
       setAddMessage(`Recording enabled for ${wellName}`);
     }
     setAddingWell(false);
@@ -281,7 +282,10 @@ export default function GpsRoutesTab() {
       const found = results.filter((n): n is string => n !== null);
 
       if (found.length === 0) {
-        setPadMessage({ well: wellName, text: 'No nearby wells found on this pad' });
+        // Mark as "group of one" — searched, nothing found. Hides the Find Pad Wells button.
+        const db2 = getFirebaseDatabase();
+        await update(ref(db2, `well_config/${wellName}`), { routeGroupWell: wellName });
+        setPadMessage({ well: wellName, text: 'No nearby wells found — marked as standalone' });
         setTimeout(() => setPadMessage(null), 3000);
       } else {
         const db = getFirebaseDatabase();
@@ -303,21 +307,22 @@ export default function GpsRoutesTab() {
     setPadSearchingWell(null);
   }, [allConfigs]);
 
-  // Release a well (or whole pad group) from GPS Routes — clears recording, keeps grouping + approved routes
-  const handleRelease = useCallback(async (well: WellRouteStatus) => {
+  // Toggle recording on/off for a well (or whole pad group) — keeps grouping + approved routes
+  const handleToggleRecording = useCallback(async (well: WellRouteStatus) => {
     const db = getFirebaseDatabase();
     const updates: Record<string, any> = {};
     const allMembers = [well.wellName, ...(well.groupMembers || [])];
+    const newState = !well.isRecording;
     for (const w of allMembers) {
-      updates[`well_config/${w}/routeRecording`] = null;
+      updates[`well_config/${w}/routeRecording`] = newState ? true : null;
       // routeGroupWell persists — pad geometry is permanent
     }
     await update(ref(db), updates);
   }, []);
 
-  // Wells available to add (not already actively recording)
+  // Wells available to add (not already in GPS Routes — no recording AND no group membership)
   const availableWells = Object.entries(allConfigs)
-    .filter(([, cfg]) => !cfg.routeRecording)
+    .filter(([, cfg]) => !cfg.routeRecording && !cfg.routeGroupWell)
     .map(([name]) => name)
     .sort();
 
@@ -382,7 +387,7 @@ export default function GpsRoutesTab() {
         </button>
 
         <div className="ml-auto text-xs text-gray-500">
-          {wells.length} wells recording &middot; {totalTrips} trips &middot; {totalApproved} approved routes
+          {wells.length} wells &middot; {wells.filter(w => w.isRecording).length} recording &middot; {totalTrips} trips &middot; {totalApproved} approved routes
         </div>
       </div>
 
@@ -474,7 +479,7 @@ export default function GpsRoutesTab() {
       {filtered.length === 0 ? (
         <div className="text-gray-500 text-sm bg-gray-800 rounded-lg p-6 text-center">
           {filter === 'all'
-            ? 'No wells have GPS route recording enabled yet. Click "+ Add Well" above to get started.'
+            ? 'No wells in GPS Routes yet. Click "+ Add Well" above to get started.'
             : filter === 'pending'
               ? 'No wells with unreviewed trips.'
               : 'No wells with approved routes yet.'}
@@ -496,6 +501,7 @@ export default function GpsRoutesTab() {
                   </span>
                   <div>
                     <div className="flex items-center gap-2">
+                      <span className={`w-2 h-2 rounded-full flex-shrink-0 ${well.isRecording ? 'bg-red-500 animate-pulse' : 'bg-gray-600'}`} />
                       <span className="text-white font-medium">{well.wellName}</span>
                       {well.groupMembers && well.groupMembers.length > 0 && (
                         <span className="text-xs bg-orange-900/50 text-orange-300 border border-orange-800 px-1.5 py-0.5 rounded">
@@ -515,16 +521,18 @@ export default function GpsRoutesTab() {
                 </div>
 
                 <div className="flex items-center gap-2">
-                  {/* Release — stop recording, keep routes */}
-                  {well.approvedCount > 0 && (
-                    <button
-                      onClick={(e) => { e.stopPropagation(); handleRelease(well); }}
-                      className="text-xs px-2 py-0.5 rounded bg-gray-700 text-gray-400 hover:bg-red-900/50 hover:text-red-300 hover:border-red-800 border border-gray-600 transition whitespace-nowrap"
-                      title="Stop recording — approved routes are kept"
-                    >
-                      Release
-                    </button>
-                  )}
+                  {/* Record toggle — red when recording, grey when not */}
+                  <button
+                    onClick={(e) => { e.stopPropagation(); handleToggleRecording(well); }}
+                    className={`text-xs px-2 py-0.5 rounded border transition whitespace-nowrap ${
+                      well.isRecording
+                        ? 'bg-red-900/50 text-red-300 border-red-800 hover:bg-red-800/50'
+                        : 'bg-gray-700 text-gray-400 border-gray-600 hover:bg-gray-600'
+                    }`}
+                    title={well.isRecording ? 'Stop recording new trips' : 'Start recording trips'}
+                  >
+                    {well.isRecording ? '● Recording' : '○ Record'}
+                  </button>
                   {/* Find Pad Wells button — only for standalone wells (not already grouped) */}
                   {!well.routeGroupWell && !well.groupMembers && (
                     <button
