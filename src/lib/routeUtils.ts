@@ -206,7 +206,7 @@ export function buildGoogleMapsUrl(
   // Skip first and last waypoints — they duplicate origin/destination
   const midWps = waypoints.length > 2 ? waypoints.slice(1, -1) : [];
   const wp = midWps.length > 0
-    ? `&waypoints=${midWps.map(w => `${w.lat},${w.lng}`).join('|')}`
+    ? `&waypoints=${midWps.map(w => `via:${w.lat},${w.lng}`).join('|')}`
     : '';
   return `https://www.google.com/maps/dir/?api=1${origin}${dest}${wp}&travelmode=driving`;
 }
