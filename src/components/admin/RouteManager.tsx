@@ -168,6 +168,7 @@ function RouteViewerModal({
   onApprove,
   saving,
   initialLabel,
+  labelLocked,
 }: {
   title: string;
   waypoints: Array<{ lat: number; lng: number }>;
@@ -178,10 +179,16 @@ function RouteViewerModal({
   onApprove?: (trimStart: number, trimEnd: number, label: string) => void;
   saving?: boolean;
   initialLabel?: string;
+  labelLocked?: boolean;
 }) {
   const [trimStart, setTrimStart] = useState(0);
   const [trimEnd, setTrimEnd] = useState(0);
   const [labelInput, setLabelInput] = useState(initialLabel || '');
+
+  // Sync when initialLabel arrives asynchronously (e.g., reverse geocode completes)
+  useEffect(() => {
+    if (initialLabel && !labelInput) setLabelInput(initialLabel);
+  }, [initialLabel]);
 
   const totalPts = waypoints.length;
   const trimmedWps = waypoints.slice(trimStart, totalPts - trimEnd || undefined);
@@ -280,9 +287,14 @@ function RouteViewerModal({
               <input
                 type="text"
                 value={labelInput}
-                onChange={(e) => setLabelInput(e.target.value)}
-                placeholder="Route label (e.g., From Watford)"
-                className="flex-1 px-3 py-2 bg-gray-800 text-white rounded-lg text-sm border border-gray-600 focus:border-cyan-500 outline-none"
+                onChange={(e) => !labelLocked && setLabelInput(e.target.value)}
+                readOnly={labelLocked}
+                placeholder={labelLocked ? 'Auto-naming...' : 'Route label (e.g., From Watford)'}
+                className={`flex-1 px-3 py-2 rounded-lg text-sm border outline-none ${
+                  labelLocked
+                    ? 'bg-gray-900 text-gray-300 border-gray-700 cursor-default'
+                    : 'bg-gray-800 text-white border-gray-600 focus:border-cyan-500'
+                }`}
                 onKeyDown={(e) => {
                   if (e.key === 'Enter') onApprove(trimStart, trimEnd, labelInput);
                 }}
@@ -318,6 +330,7 @@ export default function RouteManager({ wellName, groupMembers }: RouteManagerPro
   const [message, setMessage] = useState('');
   const [copiedRouteId, setCopiedRouteId] = useState<string | null>(null);
   const [modalTrip, setModalTrip] = useState<RouteTripDoc | null>(null);
+  const [modalTripAutoLabel, setModalTripAutoLabel] = useState('');
   const [modalRoute, setModalRoute] = useState<ApprovedRoute | null>(null);
   const [editingRoute, setEditingRoute] = useState<ApprovedRoute | null>(null);
 
@@ -393,6 +406,24 @@ export default function RouteManager({ wellName, groupMembers }: RouteManagerPro
   useEffect(() => {
     loadData();
   }, [loadData]);
+
+  const openTripModal = async (trip: RouteTripDoc) => {
+    setModalTrip(trip);
+    setModalTripAutoLabel('');
+    // Pre-compute auto-label in background so it's ready in the input field
+    try {
+      const start = trip.waypoints[0];
+      const end = trip.waypoints[trip.waypoints.length - 1];
+      const { compass } = computeRouteBearing(end.lat, end.lng, start.lat, start.lng);
+      const landmark = await reverseGeocodeStartPoint(start.lat, start.lng);
+      const distMiles = trip.totalDistanceMeters / 1609.34;
+      const existingLabels = approvedRoutes.map(r => r.autoLabel).filter((l): l is string => !!l);
+      const auto = buildAutoLabel(compass, landmark, distMiles, existingLabels);
+      setModalTripAutoLabel(auto);
+    } catch {
+      // Fallback: leave empty, handleApproveRoute will compute it anyway
+    }
+  };
 
   const handleApproveRoute = async (trip: RouteTripDoc, trimStart: number, trimEnd: number, label: string) => {
     setSaving(true);
@@ -690,13 +721,13 @@ export default function RouteManager({ wellName, groupMembers }: RouteManagerPro
                     </div>
                     <div className="flex items-center gap-1 ml-2">
                       <button
-                        onClick={() => setModalTrip(trip)}
+                        onClick={() => openTripModal(trip)}
                         className="px-2 py-1 bg-gray-600 hover:bg-gray-500 text-white text-xs rounded whitespace-nowrap"
                       >
                         View
                       </button>
                       <button
-                        onClick={() => setModalTrip(trip)}
+                        onClick={() => openTripModal(trip)}
                         disabled={saving}
                         className="px-2 py-1 bg-blue-700 hover:bg-blue-600 text-white text-xs rounded whitespace-nowrap"
                       >
@@ -743,6 +774,8 @@ export default function RouteManager({ wellName, groupMembers }: RouteManagerPro
             handleApproveRoute(modalTrip, ts, te, label);
           }}
           saving={saving}
+          initialLabel={modalTripAutoLabel}
+          labelLocked
         />
       )}
 
@@ -765,6 +798,7 @@ export default function RouteManager({ wellName, groupMembers }: RouteManagerPro
           approvedRoute={editingRoute}
           highlightColor="#3b82f6"
           initialLabel={editingRoute.label || editingRoute.autoLabel || ''}
+          labelLocked
           onClose={() => setEditingRoute(null)}
           onApprove={(trimStart, trimEnd, label) => handleEditRoute(editingRoute, trimStart, trimEnd, label)}
           saving={saving}
