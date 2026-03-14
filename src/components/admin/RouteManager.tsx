@@ -654,6 +654,7 @@ export default function RouteManager({ wellName, groupMembers }: RouteManagerPro
 
       {/* Recorded Trips — hide approved + auto-discard duplicates of approved routes */}
       {(() => {
+        let dedupCount = 0;
         const pendingTrips = trips.filter(t => {
           if (approvedTripIds.has(t.id)) return false;
           // Smart dedup: compare against all approved routes
@@ -661,12 +662,19 @@ export default function RouteManager({ wellName, groupMembers }: RouteManagerPro
             const tripPoints = t.waypoints.map(w => ({ lat: w.lat, lng: w.lng }));
             for (const ar of approvedRoutes) {
               const arPoints = ar.fullWaypoints.length > 0 ? ar.fullWaypoints : ar.waypoints;
-              if (isDuplicateRoute(tripPoints, arPoints)) return false;
+              if (isDuplicateRoute(tripPoints, arPoints)) { dedupCount++; return false; }
             }
           }
           return true;
         });
-        return pendingTrips.length > 0 ? (
+        return (
+          <>
+            {dedupCount > 0 && (
+              <div className="text-xs text-yellow-500 bg-yellow-500/10 border border-yellow-500/30 rounded px-2 py-1 mb-1">
+                {dedupCount} duplicate trip{dedupCount > 1 ? 's' : ''} auto-removed (matched existing approved route{dedupCount > 1 ? 's' : ''})
+              </div>
+            )}
+            {pendingTrips.length > 0 ? (
           <>
             <div className="text-xs text-gray-500 uppercase tracking-wider mb-1">Recorded Trips</div>
             <div className="space-y-1 max-h-48 overflow-y-auto">
@@ -708,7 +716,9 @@ export default function RouteManager({ wellName, groupMembers }: RouteManagerPro
               ))}
             </div>
           </>
-        ) : null;
+        ) : null}
+          </>
+        );
       })()}
 
       {trips.length === 0 && approvedRoutes.length === 0 && (
