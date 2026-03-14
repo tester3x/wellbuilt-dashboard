@@ -210,3 +210,122 @@ export function buildGoogleMapsUrl(
     : '';
   return `https://www.google.com/maps/dir/?api=1${origin}${dest}${wp}&travelmode=driving`;
 }
+
+// ── Compass bearing + reverse geocoding for auto-naming routes ──
+
+const COMPASS_LABELS = ['N', 'NE', 'E', 'SE', 'S', 'SW', 'W', 'NW'] as const;
+
+/**
+ * Compute compass bearing from a well to a route's start point.
+ * Returns the direction the driver approaches FROM (looking outward from the well).
+ */
+export function computeRouteBearing(
+  wellLat: number,
+  wellLng: number,
+  startLat: number,
+  startLng: number,
+): { degrees: number; compass: string } {
+  const lat1 = wellLat * DEG_TO_RAD;
+  const lat2 = startLat * DEG_TO_RAD;
+  const dLng = (startLng - wellLng) * DEG_TO_RAD;
+  const y = Math.sin(dLng) * Math.cos(lat2);
+  const x = Math.cos(lat1) * Math.sin(lat2) - Math.sin(lat1) * Math.cos(lat2) * Math.cos(dLng);
+  const degrees = (Math.atan2(y, x) * (180 / Math.PI) + 360) % 360;
+  // Map to 8-point compass (each sector = 45 degrees, offset by 22.5)
+  const idx = Math.round(degrees / 45) % 8;
+  return { degrees, compass: COMPASS_LABELS[idx] };
+}
+
+const GEOCODING_API_KEY = 'AIzaSyDY_JNtqytvj-QQcwSF1zT1QD67Xlorurw';
+
+/**
+ * Reverse geocode a GPS coordinate to get the nearest road, town, or county name.
+ * Used to auto-name routes on approval (e.g., "From NW via US-85").
+ * Returns null on any failure — never throws.
+ */
+export async function reverseGeocodeStartPoint(
+  lat: number,
+  lng: number,
+): Promise<string | null> {
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), 5000);
+
+  try {
+    const url =
+      `https://maps.googleapis.com/maps/api/geocode/json` +
+      `?latlng=${lat},${lng}` +
+      `&result_type=route|locality|administrative_area_level_2` +
+      `&key=${GEOCODING_API_KEY}`;
+
+    const res = await fetch(url, { signal: controller.signal });
+    const data = await res.json();
+
+    if (data.status !== 'OK' || !data.results?.length) return null;
+
+    // Priority: road/highway > town > county
+    for (const result of data.results) {
+      const types: string[] = result.types || [];
+      if (types.includes('route')) {
+        return cleanRoadName(result.address_components?.[0]?.long_name || result.formatted_address);
+      }
+    }
+    for (const result of data.results) {
+      const types: string[] = result.types || [];
+      if (types.includes('locality')) {
+        return result.address_components?.[0]?.long_name || null;
+      }
+    }
+    for (const result of data.results) {
+      const types: string[] = result.types || [];
+      if (types.includes('administrative_area_level_2')) {
+        return result.address_components?.[0]?.long_name || null;
+      }
+    }
+
+    // Last resort: first segment of formatted address
+    const first = data.results[0]?.formatted_address;
+    if (first) return first.split(',')[0].trim();
+
+    return null;
+  } catch {
+    return null;
+  } finally {
+    clearTimeout(timeout);
+  }
+}
+
+/** Clean up road names for display: "US Route 85" → "US-85", etc. */
+function cleanRoadName(name: string): string {
+  if (!name) return name;
+  return name
+    .replace(/^United States Highway\s+/i, 'US-')
+    .replace(/^US Route\s+/i, 'US-')
+    .replace(/^US Highway\s+/i, 'US-')
+    .replace(/^North Dakota Highway\s+/i, 'Hwy ')
+    .replace(/^Montana Highway\s+/i, 'Hwy ')
+    .replace(/^State Highway\s+/i, 'Hwy ')
+    .replace(/^State Route\s+/i, 'Hwy ')
+    .replace(/^County Road\s+/i, 'CR ')
+    .replace(/^County Route\s+/i, 'CR ')
+    .replace(/^Township Road\s+/i, 'Twp Rd ')
+    .trim();
+}
+
+/**
+ * Generate an auto-label for an approved route based on compass bearing + landmark.
+ * Checks for collisions with existing routes to disambiguate.
+ */
+export function buildAutoLabel(
+  compass: string,
+  landmark: string | null,
+  distanceMiles: number,
+  existingLabels: string[],
+): string {
+  const base = landmark ? `From ${compass} via ${landmark}` : `From ${compass}`;
+
+  // Check if this label already exists (collision)
+  if (!existingLabels.some(l => l === base)) return base;
+
+  // Collision — append distance to disambiguate
+  return `${base} (${distanceMiles.toFixed(0)} mi)`;
+}

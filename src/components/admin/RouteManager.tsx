@@ -17,7 +17,16 @@ import {
   query,
   Timestamp,
 } from 'firebase/firestore';
-import { simplifyRoute, metersToMiles, generateRouteId, buildGoogleMapsUrl, isDuplicateRoute } from '@/lib/routeUtils';
+import {
+  simplifyRoute,
+  metersToMiles,
+  generateRouteId,
+  buildGoogleMapsUrl,
+  isDuplicateRoute,
+  computeRouteBearing,
+  reverseGeocodeStartPoint,
+  buildAutoLabel,
+} from '@/lib/routeUtils';
 
 interface RouteWaypoint {
   lat: number;
@@ -45,6 +54,8 @@ interface RouteTripDoc {
 interface ApprovedRoute {
   routeId: string;
   label?: string;
+  autoLabel?: string;
+  bearing?: number;
   waypoints: Array<{ lat: number; lng: number }>;
   fullWaypoints: Array<{ lat: number; lng: number }>;
   startLat: number;
@@ -394,9 +405,22 @@ export default function RouteManager({ wellName, groupMembers }: RouteManagerPro
       const actualStart = trimmedWps[0] || trip.waypoints[0];
       const actualEnd = trimmedWps[trimmedWps.length - 1] || trip.waypoints[trip.waypoints.length - 1];
 
+      // Auto-name: compass bearing + reverse geocode landmark
+      const { degrees: bearing, compass } = computeRouteBearing(
+        actualEnd.lat, actualEnd.lng, actualStart.lat, actualStart.lng,
+      );
+      const landmark = await reverseGeocodeStartPoint(actualStart.lat, actualStart.lng);
+      const distMiles = trip.totalDistanceMeters / 1609.34;
+      const existingAutoLabels = approvedRoutes
+        .map(r => r.autoLabel)
+        .filter((l): l is string => !!l);
+      const autoLabel = buildAutoLabel(compass, landmark, distMiles, existingAutoLabels);
+
       const newRoute: ApprovedRoute = {
         routeId: generateRouteId(),
         label: label?.trim() || undefined,
+        autoLabel,
+        bearing,
         waypoints: simplified,
         fullWaypoints: rawPoints,
         startLat: actualStart.lat,
@@ -581,9 +605,14 @@ export default function RouteManager({ wellName, groupMembers }: RouteManagerPro
               <div className="flex items-center justify-between">
                 <div className="flex-1">
                   <div className="text-green-300 font-medium">
-                    {route.label || `Route ${idx + 1}`}
+                    {route.label || route.autoLabel || `Route ${idx + 1}`}
                   </div>
                   <div className="text-gray-500">
+                    {route.bearing != null && (
+                      <span className="inline-block bg-cyan-900/50 text-cyan-300 px-1.5 py-0.5 rounded text-[10px] font-mono mr-1.5">
+                        {computeRouteBearing(route.endLat, route.endLng, route.startLat, route.startLng).compass}
+                      </span>
+                    )}
                     {route.sourceDriverName} · {metersToMiles(route.totalDistanceMeters)} mi ·{' '}
                     {Math.round(route.durationMinutes)} min · {route.waypoints.length} waypoints
                   </div>
@@ -710,7 +739,7 @@ export default function RouteManager({ wellName, groupMembers }: RouteManagerPro
       {/* Approved Route Viewer Modal (read-only) */}
       {modalRoute && (
         <RouteViewerModal
-          title={modalRoute.label || `Route to ${wellName}`}
+          title={modalRoute.label || modalRoute.autoLabel || `Route to ${wellName}`}
           waypoints={modalRoute.fullWaypoints.length > 0 ? modalRoute.fullWaypoints : modalRoute.waypoints}
           approvedRoute={modalRoute}
           highlightColor="#22c55e"
@@ -721,11 +750,11 @@ export default function RouteManager({ wellName, groupMembers }: RouteManagerPro
       {/* Edit Route Modal — rename, trim, re-simplify */}
       {editingRoute && (
         <RouteViewerModal
-          title={`Edit: ${editingRoute.label || `Route to ${wellName}`}`}
+          title={`Edit: ${editingRoute.label || editingRoute.autoLabel || `Route to ${wellName}`}`}
           waypoints={editingRoute.fullWaypoints.length > 0 ? editingRoute.fullWaypoints : editingRoute.waypoints}
           approvedRoute={editingRoute}
           highlightColor="#3b82f6"
-          initialLabel={editingRoute.label || ''}
+          initialLabel={editingRoute.label || editingRoute.autoLabel || ''}
           onClose={() => setEditingRoute(null)}
           onApprove={(trimStart, trimEnd, label) => handleEditRoute(editingRoute, trimStart, trimEnd, label)}
           saving={saving}

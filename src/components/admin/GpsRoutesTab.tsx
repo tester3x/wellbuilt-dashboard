@@ -475,126 +475,152 @@ export default function GpsRoutesTab() {
         </div>
       )}
 
-      {/* Well list */}
-      {filtered.length === 0 ? (
-        <div className="text-gray-500 text-sm bg-gray-800 rounded-lg p-6 text-center">
-          {filter === 'all'
-            ? 'No wells in GPS Routes yet. Click "+ Add Well" above to get started.'
-            : filter === 'pending'
-              ? 'No wells with unreviewed trips.'
-              : 'No wells with approved routes yet.'}
-        </div>
-      ) : (
-        <div className="space-y-2">
-          {filtered.map((well) => (
-            <div key={well.wellName} className="bg-gray-800 rounded-lg overflow-hidden">
-              {/* Well header row — click to expand */}
-              <div
-                onClick={() => setExpandedWell(expandedWell === well.wellName ? null : well.wellName)}
-                className={`flex items-center justify-between p-3 cursor-pointer hover:bg-gray-750 transition ${
-                  expandedWell === well.wellName ? 'bg-gray-750 border-b border-gray-700' : ''
-                }`}
-              >
-                <div className="flex items-center gap-3">
-                  <span className={`text-lg ${expandedWell === well.wellName ? 'rotate-90' : ''} transition-transform text-gray-500`}>
-                    ▶
-                  </span>
-                  <div>
-                    <div className="flex items-center gap-2">
-                      <span className={`w-2 h-2 rounded-full flex-shrink-0 ${well.isRecording ? 'bg-red-500 animate-pulse' : 'bg-gray-600'}`} />
-                      <span className="text-white font-medium">{well.wellName}</span>
-                      {well.groupMembers && well.groupMembers.length > 0 && (
-                        <span className="text-xs bg-orange-900/50 text-orange-300 border border-orange-800 px-1.5 py-0.5 rounded">
-                          Pad: {well.groupMembers.length + 1} wells
-                        </span>
-                      )}
-                    </div>
-                    {well.route && (
-                      <div className="text-gray-500 text-xs">Route: {well.route}</div>
-                    )}
+      {/* Split into Recording + Route Library sections */}
+      {(() => {
+        const recordingWells = filtered.filter(w => w.isRecording);
+        const libraryWells = filtered.filter(w => !w.isRecording && (w.approvedCount > 0 || w.routeGroupWell));
+
+        const renderWellCard = (well: WellRouteStatus) => (
+          <div key={well.wellName} className="bg-gray-800 rounded-lg overflow-hidden">
+            <div
+              onClick={() => setExpandedWell(expandedWell === well.wellName ? null : well.wellName)}
+              className={`flex items-center justify-between p-3 cursor-pointer hover:bg-gray-750 transition ${
+                expandedWell === well.wellName ? 'bg-gray-750 border-b border-gray-700' : ''
+              }`}
+            >
+              <div className="flex items-center gap-3">
+                <span className={`text-lg ${expandedWell === well.wellName ? 'rotate-90' : ''} transition-transform text-gray-500`}>
+                  ▶
+                </span>
+                <div>
+                  <div className="flex items-center gap-2">
+                    <span className={`w-2 h-2 rounded-full flex-shrink-0 ${well.isRecording ? 'bg-red-500 animate-pulse' : well.approvedCount > 0 ? 'bg-green-500' : 'bg-gray-600'}`} />
+                    <span className="text-white font-medium">{well.wellName}</span>
                     {well.groupMembers && well.groupMembers.length > 0 && (
-                      <div className="text-gray-500 text-xs">
-                        + {well.groupMembers.join(', ')}
-                      </div>
+                      <span className="text-xs bg-orange-900/50 text-orange-300 border border-orange-800 px-1.5 py-0.5 rounded">
+                        Pad: {well.groupMembers.length + 1} wells
+                      </span>
                     )}
                   </div>
-                </div>
-
-                <div className="flex items-center gap-2">
-                  {/* Record toggle — red when recording, grey when not */}
-                  <button
-                    onClick={(e) => { e.stopPropagation(); handleToggleRecording(well); }}
-                    className={`text-xs px-2 py-0.5 rounded border transition whitespace-nowrap ${
-                      well.isRecording
-                        ? 'bg-red-900/50 text-red-300 border-red-800 hover:bg-red-800/50'
-                        : 'bg-gray-700 text-gray-400 border-gray-600 hover:bg-gray-600'
-                    }`}
-                    title={well.isRecording ? 'Stop recording new trips' : 'Start recording trips'}
-                  >
-                    {well.isRecording ? '● Recording' : '○ Record'}
-                  </button>
-                  {/* Find Pad Wells button — only for standalone wells (not already grouped) */}
-                  {!well.routeGroupWell && !well.groupMembers && (
-                    <button
-                      onClick={(e) => { e.stopPropagation(); handleFindPadWells(well.wellName); }}
-                      disabled={padSearchingWell === well.wellName}
-                      className="text-xs px-2 py-0.5 rounded bg-orange-900/50 text-orange-300 border border-orange-800 hover:bg-orange-800/50 transition whitespace-nowrap"
-                      title="Auto-detect and group nearby wells on the same pad"
-                    >
-                      {padSearchingWell === well.wellName ? 'Scanning...' : 'Find Pad Wells'}
-                    </button>
-                  )}
-                  {/* Trip count badge */}
-                  {well.loading ? (
-                    <span className="text-xs text-gray-500">loading...</span>
-                  ) : (
-                    <>
-                      {well.tripCount > 0 && (
-                        <span className={`text-xs px-2 py-0.5 rounded-full ${
-                          well.approvedCount === 0
-                            ? 'bg-orange-900/50 text-orange-300 border border-orange-700'
-                            : 'bg-gray-700 text-gray-400'
-                        }`}>
-                          {well.tripCount} trip{well.tripCount !== 1 ? 's' : ''}
-                        </span>
-                      )}
-                      {well.approvedCount > 0 && (
-                        <span className="text-xs px-2 py-0.5 rounded-full bg-green-900/50 text-green-300 border border-green-700">
-                          {well.approvedCount} route{well.approvedCount !== 1 ? 's' : ''} approved
-                        </span>
-                      )}
-                      {well.tripCount === 0 && well.approvedCount === 0 && (
-                        <span className="text-xs px-2 py-0.5 rounded-full bg-gray-700 text-gray-500">
-                          Waiting for trips
-                        </span>
-                      )}
-                      {well.lastTripDate && (
-                        <span className="text-xs text-gray-600">
-                          Last: {well.lastTripDate.toLocaleDateString('en-US', { month: 'short', day: 'numeric' })}
-                        </span>
-                      )}
-                    </>
+                  {well.groupMembers && well.groupMembers.length > 0 && (
+                    <div className="text-gray-500 text-xs">
+                      + {well.groupMembers.join(', ')}
+                    </div>
                   )}
                 </div>
               </div>
 
-              {/* Pad detection message */}
-              {padMessage?.well === well.wellName && (
-                <div className="mx-3 mb-1 px-3 py-1.5 bg-cyan-900/30 border border-cyan-800/50 rounded text-xs text-cyan-300">
-                  {padMessage.text}
-                </div>
-              )}
-
-              {/* Expanded: RouteManager */}
-              {expandedWell === well.wellName && (
-                <div className="p-3 pt-0">
-                  <RouteManager wellName={well.wellName} groupMembers={well.groupMembers} />
-                </div>
-              )}
+              <div className="flex items-center gap-2">
+                <button
+                  onClick={(e) => { e.stopPropagation(); handleToggleRecording(well); }}
+                  className={`text-xs px-2 py-0.5 rounded border transition whitespace-nowrap ${
+                    well.isRecording
+                      ? 'bg-red-900/50 text-red-300 border-red-800 hover:bg-red-800/50'
+                      : 'bg-gray-700 text-gray-400 border-gray-600 hover:bg-gray-600'
+                  }`}
+                  title={well.isRecording ? 'Stop recording new trips' : 'Start recording trips'}
+                >
+                  {well.isRecording ? '● Recording' : '○ Record'}
+                </button>
+                {!well.routeGroupWell && !well.groupMembers && (
+                  <button
+                    onClick={(e) => { e.stopPropagation(); handleFindPadWells(well.wellName); }}
+                    disabled={padSearchingWell === well.wellName}
+                    className="text-xs px-2 py-0.5 rounded bg-orange-900/50 text-orange-300 border border-orange-800 hover:bg-orange-800/50 transition whitespace-nowrap"
+                  >
+                    {padSearchingWell === well.wellName ? 'Scanning...' : 'Find Pad Wells'}
+                  </button>
+                )}
+                {well.loading ? (
+                  <span className="text-xs text-gray-500">loading...</span>
+                ) : (
+                  <>
+                    {well.tripCount > 0 && (
+                      <span className={`text-xs px-2 py-0.5 rounded-full ${
+                        well.approvedCount === 0
+                          ? 'bg-orange-900/50 text-orange-300 border border-orange-700'
+                          : 'bg-gray-700 text-gray-400'
+                      }`}>
+                        {well.tripCount} trip{well.tripCount !== 1 ? 's' : ''}
+                      </span>
+                    )}
+                    {well.approvedCount > 0 && (
+                      <span className="text-xs px-2 py-0.5 rounded-full bg-green-900/50 text-green-300 border border-green-700">
+                        {well.approvedCount} route{well.approvedCount !== 1 ? 's' : ''}
+                      </span>
+                    )}
+                    {well.tripCount === 0 && well.approvedCount === 0 && (
+                      <span className="text-xs px-2 py-0.5 rounded-full bg-gray-700 text-gray-500">
+                        Waiting for trips
+                      </span>
+                    )}
+                  </>
+                )}
+              </div>
             </div>
-          ))}
-        </div>
-      )}
+
+            {padMessage?.well === well.wellName && (
+              <div className="mx-3 mb-1 px-3 py-1.5 bg-cyan-900/30 border border-cyan-800/50 rounded text-xs text-cyan-300">
+                {padMessage.text}
+              </div>
+            )}
+
+            {expandedWell === well.wellName && (
+              <div className="p-3 pt-0">
+                <RouteManager wellName={well.wellName} groupMembers={well.groupMembers} />
+              </div>
+            )}
+          </div>
+        );
+
+        if (filtered.length === 0) {
+          return (
+            <div className="text-gray-500 text-sm bg-gray-800 rounded-lg p-6 text-center">
+              {filter === 'all'
+                ? 'No wells in GPS Routes yet. Click "+ Add Well" above to get started.'
+                : filter === 'pending'
+                  ? 'No wells with unreviewed trips.'
+                  : 'No wells with approved routes yet.'}
+            </div>
+          );
+        }
+
+        return (
+          <div className="space-y-4">
+            {/* ── RECORDING section ── */}
+            {recordingWells.length > 0 && (
+              <div>
+                <div className="flex items-center gap-2 mb-2">
+                  <span className="w-2 h-2 rounded-full bg-red-500 animate-pulse" />
+                  <span className="text-sm font-semibold text-red-300 uppercase tracking-wider">
+                    Recording
+                  </span>
+                  <span className="text-xs text-gray-500">({recordingWells.length})</span>
+                </div>
+                <div className="space-y-2">
+                  {recordingWells.map(renderWellCard)}
+                </div>
+              </div>
+            )}
+
+            {/* ── ROUTE LIBRARY section ── */}
+            {libraryWells.length > 0 && (
+              <div>
+                <div className="flex items-center gap-2 mb-2">
+                  <span className="w-2 h-2 rounded-full bg-green-500" />
+                  <span className="text-sm font-semibold text-green-300 uppercase tracking-wider">
+                    Route Library
+                  </span>
+                  <span className="text-xs text-gray-500">({libraryWells.length})</span>
+                </div>
+                <div className="space-y-2">
+                  {libraryWells.map(renderWellCard)}
+                </div>
+              </div>
+            )}
+          </div>
+        );
+      })()}
     </div>
   );
 }
