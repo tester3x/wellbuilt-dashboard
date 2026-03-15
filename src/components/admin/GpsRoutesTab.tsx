@@ -251,7 +251,10 @@ export default function GpsRoutesTab() {
     try {
       const selectedNdic = await findWellByName(lookupName);
       if (!selectedNdic?.latitude || !selectedNdic?.longitude) {
-        setPadMessage({ well: wellName, text: 'No GPS coords found in wells or disposals' });
+        // Custom location not in any collection — mark as standalone group of one
+        const db2 = getFirebaseDatabase();
+        await update(ref(db2, `well_config/${wellName}`), { routeGroupWell: wellName });
+        setPadMessage({ well: wellName, text: 'Custom location — marked as standalone' });
         setPadSearchingWell(null);
         setTimeout(() => setPadMessage(null), 3000);
         return;
