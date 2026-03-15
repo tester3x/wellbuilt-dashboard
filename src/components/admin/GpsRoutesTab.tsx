@@ -311,7 +311,11 @@ export default function GpsRoutesTab() {
     const newState = !well.isRecording;
     for (const w of allMembers) {
       updates[`well_config/${w}/routeRecording`] = newState ? true : null;
-      // routeGroupWell persists — pad geometry is permanent
+      // Ensure routeGroupWell is set — keeps well in GPS Routes list after recording stops.
+      // Wells added before this fix may not have it, so set it retroactively.
+      if (!allConfigs[w]?.routeGroupWell) {
+        updates[`well_config/${w}/routeGroupWell`] = well.routeGroupWell || well.wellName;
+      }
     }
     await update(ref(db), updates);
   }, []);
