@@ -49,6 +49,7 @@ interface RouteTripDoc {
   endLat: number;
   endLng: number;
   sourceSlug?: string; // Which well's route_recordings this trip lives in
+  label?: string;      // Auto-generated at recording time: "To {dest} from {origin}"
 }
 
 interface ApprovedRoute {
@@ -409,6 +410,12 @@ export default function RouteManager({ wellName, groupMembers }: RouteManagerPro
 
   const openTripModal = async (trip: RouteTripDoc) => {
     setModalTrip(trip);
+    // Use trip label from WB T (e.g., "To HYDRO CLEAR SWD 1 from GABRIEL 4-36-152-99")
+    // if available, otherwise fall back to auto-generated compass + landmark label
+    if (trip.label) {
+      setModalTripAutoLabel(trip.label);
+      return;
+    }
     setModalTripAutoLabel('');
     // Pre-compute auto-label in background so it's ready in the input field
     try {
@@ -713,6 +720,9 @@ export default function RouteManager({ wellName, groupMembers }: RouteManagerPro
                 <div key={trip.id} className="p-2 rounded text-xs bg-gray-800">
                   <div className="flex items-center justify-between">
                     <div className="flex-1">
+                      {trip.label && (
+                        <div className="text-cyan-400 text-[11px] mb-0.5">{trip.label}</div>
+                      )}
                       <div className="text-white">{trip.driverName}</div>
                       <div className="text-gray-500">
                         {formatDate(trip.recordedAt)} · {trip.waypoints.length} pts ·{' '}
@@ -775,7 +785,6 @@ export default function RouteManager({ wellName, groupMembers }: RouteManagerPro
           }}
           saving={saving}
           initialLabel={modalTripAutoLabel}
-          labelLocked
         />
       )}
 

@@ -193,33 +193,33 @@ export default function GpsRoutesTab() {
     }
 
     // New well — auto-detect nearby wells on the same pad
+    // Try ndicName first, then fall back to wellName (covers disposals + custom locations)
     let nearby: string[] = [];
-    if (config?.ndicName) {
-      try {
-        const selectedNdic = await findWellByName(config.ndicName);
-        if (selectedNdic?.latitude && selectedNdic?.longitude) {
-          const promises = Object.entries(allConfigs)
-            .filter(([name, cfg]) => name !== wellName && cfg.ndicName && !cfg.routeRecording && !cfg.routeGroupWell)
-            .map(async ([name, cfg]) => {
-              try {
-                const ndic = await findWellByName(cfg.ndicName);
-                if (ndic?.latitude && ndic?.longitude) {
-                  const dist = haversineMeters(
-                    selectedNdic.latitude!, selectedNdic.longitude!,
-                    ndic.latitude!, ndic.longitude!,
-                  );
-                  if (dist <= PAD_RADIUS_METERS) return name;
-                }
-              } catch { /* skip */ }
-              return null;
-            });
+    const lookupName = config?.ndicName || wellName;
+    try {
+      const selectedNdic = await findWellByName(lookupName);
+      if (selectedNdic?.latitude && selectedNdic?.longitude) {
+        const promises = Object.entries(allConfigs)
+          .filter(([name, cfg]) => name !== wellName && !cfg.routeRecording && !cfg.routeGroupWell)
+          .map(async ([name, cfg]) => {
+            try {
+              const ndic = await findWellByName(cfg.ndicName || name);
+              if (ndic?.latitude && ndic?.longitude) {
+                const dist = haversineMeters(
+                  selectedNdic.latitude!, selectedNdic.longitude!,
+                  ndic.latitude!, ndic.longitude!,
+                );
+                if (dist <= PAD_RADIUS_METERS) return name;
+              }
+            } catch { /* skip */ }
+            return null;
+          });
 
-          const results = await Promise.all(promises);
-          nearby = results.filter((n): n is string => n !== null);
-        }
-      } catch (err) {
-        console.error('[GpsRoutesTab] Nearby detection failed:', err);
+        const results = await Promise.all(promises);
+        nearby = results.filter((n): n is string => n !== null);
       }
+    } catch (err) {
+      console.error('[GpsRoutesTab] Nearby detection failed:', err);
     }
 
     // Auto-add and group
@@ -245,17 +245,13 @@ export default function GpsRoutesTab() {
     setPadMessage(null);
 
     const config = allConfigs[wellName];
-    if (!config?.ndicName) {
-      setPadMessage({ well: wellName, text: 'No NDIC link — cannot detect pad' });
-      setPadSearchingWell(null);
-      setTimeout(() => setPadMessage(null), 3000);
-      return;
-    }
+    // Try ndicName first, then well name (covers disposals + custom locations)
+    const lookupName = config?.ndicName || wellName;
 
     try {
-      const selectedNdic = await findWellByName(config.ndicName);
+      const selectedNdic = await findWellByName(lookupName);
       if (!selectedNdic?.latitude || !selectedNdic?.longitude) {
-        setPadMessage({ well: wellName, text: 'No GPS coords for this well' });
+        setPadMessage({ well: wellName, text: 'No GPS coords found in wells or disposals' });
         setPadSearchingWell(null);
         setTimeout(() => setPadMessage(null), 3000);
         return;
@@ -263,10 +259,10 @@ export default function GpsRoutesTab() {
 
       const nearby: string[] = [];
       const promises = Object.entries(allConfigs)
-        .filter(([name, cfg]) => name !== wellName && cfg.ndicName && !cfg.routeGroupWell)
+        .filter(([name, cfg]) => name !== wellName && !cfg.routeGroupWell)
         .map(async ([name, cfg]) => {
           try {
-            const ndic = await findWellByName(cfg.ndicName);
+            const ndic = await findWellByName(cfg.ndicName || name);
             if (ndic?.latitude && ndic?.longitude) {
               const dist = haversineMeters(
                 selectedNdic.latitude!, selectedNdic.longitude!,

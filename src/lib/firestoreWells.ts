@@ -128,6 +128,18 @@ export async function findWellByName(wellName: string, operatorWells?: NdicWell[
     return inactiveSnap.docs[0].data() as NdicWell;
   }
 
+  // 4. Fallback: search disposals (SWD facilities)
+  const disposalQuery = query(
+    collection(db, 'disposals'),
+    where('search_name', '==', lower),
+    limit(1),
+  );
+  const disposalSnap = await getDocs(disposalQuery);
+  if (!disposalSnap.empty) {
+    console.log(`[firestoreWells] Found "${wellName}" in disposals`);
+    return disposalSnap.docs[0].data() as NdicWell;
+  }
+
   return null;
 }
 
