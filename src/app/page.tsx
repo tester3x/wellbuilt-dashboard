@@ -127,7 +127,7 @@ export default function HomePage() {
           <Link href="/payroll" className="block h-full">
             <div className="bg-gray-800 rounded-lg border border-gray-700 p-6 hover:border-blue-500 transition-colors cursor-pointer h-full">
               <div className="flex items-center gap-3 mb-2">
-                <img src="/payroll-icon.png" alt="WB Payroll" className="w-10 h-10 rounded-lg" />
+                <img src="/payroll-icon.png" alt="WB Payroll" className="w-24 h-24" />
                 <h3 className="text-lg font-semibold text-white">WB Payroll</h3>
               </div>
               <p className="text-gray-400 text-sm mb-4">Employee timesheets &amp; payroll</p>
