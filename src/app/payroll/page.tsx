@@ -34,6 +34,252 @@ import { Timestamp } from 'firebase/firestore';
 import { ref, get } from 'firebase/database';
 import { getFirebaseDatabase } from '@/lib/firebase';
 
+// ─── Export Helpers ──────────────────────────────────────────────────────────
+
+function sanitizeFilename(name: string): string {
+  return name.replace(/[^a-zA-Z0-9]/g, '');
+}
+
+function formatPeriodForFilename(period: PayPeriod): string {
+  const fmt = (d: Date) => `${d.toLocaleString('en-US', { month: 'short' })}${d.getDate()}`;
+  return `${fmt(period.start)}-${fmt(period.end)}`;
+}
+
+function downloadCSV(csv: string, filename: string) {
+  const blob = new Blob([csv], { type: 'text/csv;charset=utf-8;' });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = filename;
+  document.body.appendChild(a);
+  a.click();
+  document.body.removeChild(a);
+  URL.revokeObjectURL(url);
+}
+
+function escapeCSV(val: string | number): string {
+  const s = String(val);
+  if (s.includes(',') || s.includes('"') || s.includes('\n')) {
+    return `"${s.replace(/"/g, '""')}"`;
+  }
+  return s;
+}
+
+function exportDriverCSV(
+  summary: DriverTimesheetSummary,
+  legalNameMap: Record<string, string>,
+  period: PayPeriod
+) {
+  const driverLabel = legalNameMap[summary.driverName] || summary.driverName;
+  const hasDetention = summary.rows.some(r => r.detentionPay > 0);
+
+  const headers = ['Date', 'Invoice #', 'Operator', 'Well', 'Product', 'BBLs', 'Hours', 'Rate', 'Amount Billed'];
+  if (hasDetention) headers.push('Detention');
+  headers.push('Employee Take');
+
+  const rows: string[][] = [];
+  for (const r of summary.rows) {
+    const row = [
+      escapeCSV(r.date),
+      escapeCSV(r.invoiceNumber),
+      escapeCSV(r.operator),
+      escapeCSV(r.wellName),
+      escapeCSV(r.jobType),
+      String(r.bbls),
+      r.hours.toFixed(2),
+      r.rate.toFixed(2),
+      r.amountBilled.toFixed(2),
+    ];
+    if (hasDetention) row.push(r.detentionPay.toFixed(2));
+    row.push(r.employeeTake.toFixed(2));
+    rows.push(row);
+  }
+
+  // Totals row
+  const totalsRow = ['TOTALS', '', '', '', '', String(summary.totalBBLs), summary.totalHours.toFixed(2), '', summary.grossBilled.toFixed(2)];
+  if (hasDetention) totalsRow.push('');
+  totalsRow.push(summary.employeePay.toFixed(2));
+  rows.push(totalsRow);
+
+  // Blank separator
+  const blankRow = headers.map(() => '');
+  rows.push(blankRow);
+
+  // Additions
+  if (summary.additions > 0) {
+    const addRow = blankRow.slice();
+    addRow[0] = 'Bonuses';
+    addRow[addRow.length - 1] = summary.additions.toFixed(2);
+    rows.push(addRow);
+  }
+
+  // Deductions
+  if (summary.deductions > 0) {
+    const dedRow = blankRow.slice();
+    dedRow[0] = 'Deductions';
+    dedRow[dedRow.length - 1] = (-summary.deductions).toFixed(2);
+    rows.push(dedRow);
+  }
+
+  // Net pay
+  const netRow = blankRow.slice();
+  netRow[0] = 'NET PAY';
+  netRow[netRow.length - 1] = summary.netPay.toFixed(2);
+  rows.push(netRow);
+
+  const csv = [headers.join(','), ...rows.map(r => r.join(','))].join('\n');
+  const filename = `payroll_${sanitizeFilename(driverLabel)}_${formatPeriodForFilename(period)}.csv`;
+  downloadCSV(csv, filename);
+}
+
+function exportAllCSV(
+  filtered: DriverTimesheetSummary[],
+  legalNameMap: Record<string, string>,
+  period: PayPeriod
+) {
+  const headers = ['Driver', 'Loads', 'Hours', 'BBLs', 'Gross Billed', 'Employee Pay', 'Bonuses', 'Deductions', 'Net Pay'];
+
+  const rows: string[][] = [];
+  for (const s of filtered) {
+    const name = legalNameMap[s.driverName] || s.driverName;
+    rows.push([
+      escapeCSV(name),
+      String(s.totalLoads),
+      s.totalHours.toFixed(2),
+      String(s.totalBBLs),
+      s.grossBilled.toFixed(2),
+      s.employeePay.toFixed(2),
+      s.additions.toFixed(2),
+      (-s.deductions).toFixed(2),
+      s.netPay.toFixed(2),
+    ]);
+  }
+
+  // Totals
+  const totals = filtered.reduce(
+    (acc, ts) => ({
+      loads: acc.loads + ts.totalLoads,
+      hours: acc.hours + ts.totalHours,
+      bbls: acc.bbls + ts.totalBBLs,
+      billed: acc.billed + ts.grossBilled,
+      pay: acc.pay + ts.employeePay,
+      additions: acc.additions + ts.additions,
+      deductions: acc.deductions + ts.deductions,
+      net: acc.net + ts.netPay,
+    }),
+    { loads: 0, hours: 0, bbls: 0, billed: 0, pay: 0, additions: 0, deductions: 0, net: 0 }
+  );
+  rows.push([
+    'TOTALS',
+    String(totals.loads),
+    totals.hours.toFixed(2),
+    String(totals.bbls),
+    totals.billed.toFixed(2),
+    totals.pay.toFixed(2),
+    totals.additions.toFixed(2),
+    (-totals.deductions).toFixed(2),
+    totals.net.toFixed(2),
+  ]);
+
+  const csv = [headers.join(','), ...rows.map(r => r.join(','))].join('\n');
+  const filename = `payroll_all_${formatPeriodForFilename(period)}.csv`;
+  downloadCSV(csv, filename);
+}
+
+function exportDriverPDF(
+  summary: DriverTimesheetSummary,
+  legalNameMap: Record<string, string>,
+  period: PayPeriod
+) {
+  const driverLabel = legalNameMap[summary.driverName] || summary.driverName;
+  const periodLabel = formatPeriodRange(period);
+  const hasDetention = summary.rows.some(r => r.detentionPay > 0);
+
+  const tableHeaders = `
+    <th>Date</th><th>Invoice #</th><th>Operator</th><th>Well</th><th>Product</th>
+    <th class="r">BBLs</th><th class="r">Hours</th><th class="r">Rate</th>
+    <th class="r">Amount Billed</th>
+    ${hasDetention ? '<th class="r">Detention</th>' : ''}
+    <th class="r">Employee Take</th>
+  `;
+
+  const tableRows = summary.rows.map(r => `
+    <tr>
+      <td>${r.date}</td><td>${r.invoiceNumber}</td>
+      <td>${r.operator}</td><td>${r.wellName}</td><td>${r.jobType}</td>
+      <td class="r">${r.bbls}</td><td class="r">${r.hours.toFixed(2)}</td>
+      <td class="r">$${r.rate.toFixed(2)}</td><td class="r">${formatCurrency(r.amountBilled)}</td>
+      ${hasDetention ? `<td class="r">${formatCurrency(r.detentionPay)}</td>` : ''}
+      <td class="r">${formatCurrency(r.employeeTake)}</td>
+    </tr>
+  `).join('');
+
+  const colCount = hasDetention ? 11 : 10;
+
+  const html = `<!DOCTYPE html>
+<html><head><title>Payroll - ${driverLabel}</title>
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; background: #111; color: #e5e7eb; padding: 24px; }
+  h1 { font-size: 20px; color: #fff; margin-bottom: 4px; }
+  .sub { color: #9ca3af; font-size: 13px; margin-bottom: 16px; }
+  table { width: 100%; border-collapse: collapse; font-size: 12px; }
+  th { background: #1f2937; color: #9ca3af; font-weight: 600; text-align: left; padding: 8px 10px; border-bottom: 1px solid #374151; }
+  td { padding: 6px 10px; border-bottom: 1px solid #1f2937; color: #d1d5db; }
+  tr:nth-child(even) td { background: rgba(255,255,255,0.02); }
+  .r { text-align: right; }
+  .totals td { font-weight: 700; color: #fff; border-top: 2px solid #374151; background: #1f2937; }
+  .summary { margin-top: 16px; display: flex; gap: 24px; flex-wrap: wrap; }
+  .summary-item { background: #1f2937; border-radius: 8px; padding: 12px 16px; min-width: 140px; }
+  .summary-item .label { color: #9ca3af; font-size: 11px; text-transform: uppercase; }
+  .summary-item .value { color: #fff; font-size: 18px; font-weight: 700; margin-top: 4px; }
+  .summary-item .value.green { color: #4ade80; }
+  .summary-item .value.red { color: #f87171; }
+  @media print {
+    body { background: #fff; color: #111; padding: 12px; }
+    th { background: #f3f4f6; color: #374151; border-bottom: 2px solid #9ca3af; }
+    td { color: #111; border-bottom: 1px solid #e5e7eb; }
+    tr:nth-child(even) td { background: #f9fafb; }
+    .totals td { background: #f3f4f6; color: #111; border-top: 2px solid #374151; }
+    .summary-item { background: #f3f4f6; border: 1px solid #e5e7eb; }
+    .summary-item .label { color: #6b7280; }
+    .summary-item .value { color: #111; }
+    .summary-item .value.green { color: #16a34a; }
+    .summary-item .value.red { color: #dc2626; }
+  }
+</style></head><body>
+  <h1>Payroll: ${driverLabel}</h1>
+  <p class="sub">Period: ${periodLabel}</p>
+  <table>
+    <thead><tr>${tableHeaders}</tr></thead>
+    <tbody>
+      ${tableRows}
+      <tr class="totals">
+        <td colspan="5">TOTALS</td>
+        <td class="r">${summary.totalBBLs.toLocaleString()}</td>
+        <td class="r">${summary.totalHours.toFixed(2)}</td>
+        <td></td><td class="r">${formatCurrency(summary.grossBilled)}</td>
+        ${hasDetention ? '<td></td>' : ''}
+        <td class="r">${formatCurrency(summary.employeePay)}</td>
+      </tr>
+    </tbody>
+  </table>
+  <div class="summary">
+    <div class="summary-item"><div class="label">Employee Pay</div><div class="value">${formatCurrency(summary.employeePay)}</div></div>
+    ${summary.additions > 0 ? `<div class="summary-item"><div class="label">Bonuses</div><div class="value green">+${formatCurrency(summary.additions)}</div></div>` : ''}
+    ${summary.deductions > 0 ? `<div class="summary-item"><div class="label">Deductions</div><div class="value red">-${formatCurrency(summary.deductions)}</div></div>` : ''}
+    <div class="summary-item"><div class="label">Net Pay</div><div class="value green">${formatCurrency(summary.netPay)}</div></div>
+  </div>
+</body></html>`;
+
+  const w = window.open('', '_blank', 'width=1000,height=700');
+  if (w) {
+    w.document.write(html);
+    w.document.close();
+    setTimeout(() => w.print(), 300);
+  }
+}
+
 // ─── Status Helpers ──────────────────────────────────────────────────────────
 
 function getStatusBadge(status: TimesheetStatus) {
@@ -472,7 +718,7 @@ export default function PayrollPage() {
               Lock Period
             </button>
             <button
-              onClick={() => {/* TODO: Export all timesheets */}}
+              onClick={() => exportAllCSV(filtered, legalNameMap, selectedPeriod)}
               className="bg-gray-700 hover:bg-gray-600 text-white px-4 py-2 rounded-lg text-sm font-medium transition-colors"
             >
               Export All
@@ -595,6 +841,7 @@ export default function PayrollPage() {
                         isExpanded={isExpanded}
                         onToggle={() => setExpandedDriver(isExpanded ? null : ts.driverName)}
                         legalNameMap={legalNameMap}
+                        selectedPeriod={selectedPeriod}
                       />
                     );
                   })}
@@ -1207,12 +1454,14 @@ function DriverRow({
   isExpanded,
   onToggle,
   legalNameMap = {},
+  selectedPeriod,
 }: {
   summary: DriverTimesheetSummary;
   badge: { label: string; color: string };
   isExpanded: boolean;
   onToggle: () => void;
   legalNameMap?: Record<string, string>;
+  selectedPeriod: PayPeriod;
 }) {
   return (
     <>
@@ -1262,7 +1511,7 @@ function DriverRow({
       {isExpanded && (
         <tr>
           <td colSpan={11} className="p-0">
-            <DriverTimesheetDetail summary={summary} legalNameMap={legalNameMap} />
+            <DriverTimesheetDetail summary={summary} legalNameMap={legalNameMap} selectedPeriod={selectedPeriod} />
           </td>
         </tr>
       )}
@@ -1272,7 +1521,7 @@ function DriverRow({
 
 // ─── Individual Driver Timesheet Detail ──────────────────────────────────────
 
-function DriverTimesheetDetail({ summary, legalNameMap = {} }: { summary: DriverTimesheetSummary; legalNameMap?: Record<string, string> }) {
+function DriverTimesheetDetail({ summary, legalNameMap = {}, selectedPeriod }: { summary: DriverTimesheetSummary; legalNameMap?: Record<string, string>; selectedPeriod: PayPeriod }) {
   return (
     <div className="bg-gray-900/50 border-t border-gray-700 px-6 py-4">
       {/* Driver Header */}
@@ -1291,10 +1540,10 @@ function DriverTimesheetDetail({ summary, legalNameMap = {} }: { summary: Driver
           <button className="bg-blue-600 hover:bg-blue-700 text-white px-3 py-1.5 rounded text-xs font-medium transition-colors">
             Send to Driver
           </button>
-          <button className="bg-gray-700 hover:bg-gray-600 text-white px-3 py-1.5 rounded text-xs font-medium transition-colors">
+          <button onClick={() => exportDriverPDF(summary, legalNameMap, selectedPeriod)} className="bg-gray-700 hover:bg-gray-600 text-white px-3 py-1.5 rounded text-xs font-medium transition-colors">
             Export PDF
           </button>
-          <button className="bg-gray-700 hover:bg-gray-600 text-white px-3 py-1.5 rounded text-xs font-medium transition-colors">
+          <button onClick={() => exportDriverCSV(summary, legalNameMap, selectedPeriod)} className="bg-gray-700 hover:bg-gray-600 text-white px-3 py-1.5 rounded text-xs font-medium transition-colors">
             Export CSV
           </button>
         </div>

@@ -365,6 +365,7 @@ export default function BillingPage() {
         {/* Title + Sub-tabs */}
         <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-4 mb-6">
           <div className="flex items-center gap-4">
+            <img src="/billing-icon.png" alt="WB Billing" className="w-28 h-28" />
             <h2 className="text-xl font-semibold text-white">Billing</h2>
             <div className="flex gap-1 bg-gray-800 rounded-lg p-1">
               <button

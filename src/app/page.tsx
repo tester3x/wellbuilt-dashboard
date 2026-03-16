@@ -106,7 +106,10 @@ export default function HomePage() {
           {/* WB Billing Card */}
           <Link href="/billing" className="block h-full">
             <div className="bg-gray-800 rounded-lg border border-gray-700 p-6 hover:border-blue-500 transition-colors cursor-pointer h-full">
-              <h3 className="text-lg font-semibold text-white mb-2">WB Billing</h3>
+              <div className="flex items-center gap-3 mb-2">
+                <img src="/billing-icon.png" alt="WB Billing" className="w-24 h-24" />
+                <h3 className="text-lg font-semibold text-white">WB Billing</h3>
+              </div>
               <p className="text-gray-400 text-sm mb-4">Invoices &amp; billing</p>
               <div className="space-y-2">
                 <div className="flex justify-between">
