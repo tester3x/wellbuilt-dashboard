@@ -435,9 +435,12 @@ export default function PayrollPage() {
       <main className="max-w-7xl mx-auto px-4 py-6">
         {/* ── Header Row ── */}
         <div className="flex flex-wrap items-center justify-between gap-4 mb-6">
-          <div>
-            <h1 className="text-2xl font-bold text-white">WB Payroll</h1>
-            <p className="text-gray-400 text-sm mt-1">Employee Timesheets &amp; Pay</p>
+          <div className="flex items-center gap-3">
+            <img src="/payroll-icon.png" alt="WB Payroll" className="w-12 h-12 rounded-lg" />
+            <div>
+              <h1 className="text-2xl font-bold text-white">WB Payroll</h1>
+              <p className="text-gray-400 text-sm mt-1">Employee Timesheets &amp; Pay</p>
+            </div>
           </div>
 
           <div className="flex items-center gap-3">

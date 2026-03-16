@@ -126,10 +126,16 @@ export default function HomePage() {
           {/* WB Payroll Card */}
           <Link href="/payroll" className="block h-full">
             <div className="bg-gray-800 rounded-lg border border-gray-700 p-6 hover:border-blue-500 transition-colors cursor-pointer h-full">
-              <h3 className="text-lg font-semibold text-white mb-2">WB Payroll</h3>
+              <div className="flex items-center gap-3 mb-2">
+                <img src="/payroll-icon.png" alt="WB Payroll" className="w-10 h-10 rounded-lg" />
+                <h3 className="text-lg font-semibold text-white">WB Payroll</h3>
+              </div>
               <p className="text-gray-400 text-sm mb-4">Employee timesheets &amp; payroll</p>
-              <div className="flex items-center justify-center py-4">
-                <span className="text-gray-500 text-sm">Coming Soon</span>
+              <div className="space-y-2">
+                <div className="flex justify-between">
+                  <span className="text-gray-400">Status</span>
+                  <span className="text-green-400 font-mono">Active</span>
+                </div>
               </div>
             </div>
           </Link>
