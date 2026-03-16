@@ -18,7 +18,6 @@ import {
   Timestamp,
 } from 'firebase/firestore';
 import {
-  simplifyRoute,
   metersToMiles,
   generateRouteId,
   buildGoogleMapsUrl,
@@ -199,9 +198,18 @@ function RouteViewerModal({
   // Build Google Maps URL with origin (start of route) so direction is correct
   const start = trimmedWps[0];
   const end = trimmedWps[trimmedWps.length - 1];
-  const middleWps = trimmedWps.length > 2
-    ? simplifyRoute(trimmedWps.slice(1, -1), 23)
-    : [];
+  // Use raw waypoints directly — no simplification. Downsample to 9 for Maps URL limit.
+  const allMid = trimmedWps.length > 2 ? trimmedWps.slice(1, -1) : [];
+  const MAX_PREVIEW_WPS = 9;
+  let middleWps = allMid;
+  if (allMid.length > MAX_PREVIEW_WPS) {
+    const sampled: typeof allMid = [];
+    for (let i = 0; i < MAX_PREVIEW_WPS; i++) {
+      const idx = Math.round(i * (allMid.length - 1) / (MAX_PREVIEW_WPS - 1));
+      sampled.push(allMid[idx]);
+    }
+    middleWps = sampled;
+  }
   const wpParam = middleWps.length > 0
     ? `&waypoints=${middleWps.map(w => `${w.lat},${w.lng}`).join('|')}`
     : '';
@@ -439,7 +447,6 @@ export default function RouteManager({ wellName, groupMembers }: RouteManagerPro
       const db = getFirestoreDb();
       const trimmedWps = trip.waypoints.slice(trimStart, trip.waypoints.length - trimEnd || undefined);
       const rawPoints = trimmedWps.map(w => ({ lat: w.lat, lng: w.lng }));
-      const simplified = simplifyRoute(rawPoints, 23);
       const actualStart = trimmedWps[0] || trip.waypoints[0];
       const actualEnd = trimmedWps[trimmedWps.length - 1] || trip.waypoints[trip.waypoints.length - 1];
 
@@ -459,7 +466,7 @@ export default function RouteManager({ wellName, groupMembers }: RouteManagerPro
         label: label?.trim() || undefined,
         autoLabel,
         bearing,
-        waypoints: simplified,
+        waypoints: rawPoints,
         fullWaypoints: rawPoints,
         startLat: actualStart.lat,
         startLng: actualStart.lng,
@@ -479,7 +486,7 @@ export default function RouteManager({ wellName, groupMembers }: RouteManagerPro
       await setDoc(doc(db, 'route_overrides', slug), newDoc);
       setOverrideDoc(newDoc);
       setModalTrip(null);
-      setMessage(`Route approved! ${rawPoints.length} pts → ${simplified.length} waypoints. ${updated.length} route(s) total.`);
+      setMessage(`Route approved! ${rawPoints.length} waypoints. ${updated.length} route(s) total.`);
     } catch (err: any) {
       console.error('[RouteManager] Failed to save:', err);
       setMessage('Failed to save route');
@@ -492,9 +499,15 @@ export default function RouteManager({ wellName, groupMembers }: RouteManagerPro
     try {
       const db = getFirestoreDb();
       const updated = approvedRoutes.filter(r => r.routeId !== routeId);
-      const newDoc: RouteOverrideDoc = { wellName, approvedRoutes: updated };
-      await setDoc(doc(db, 'route_overrides', slug), newDoc);
-      setOverrideDoc(updated.length > 0 ? newDoc : null);
+      if (updated.length > 0) {
+        const newDoc: RouteOverrideDoc = { wellName, approvedRoutes: updated };
+        await setDoc(doc(db, 'route_overrides', slug), newDoc);
+        setOverrideDoc(newDoc);
+      } else {
+        // Delete the Firestore doc entirely — prevents ghost routes on reload
+        await deleteDoc(doc(db, 'route_overrides', slug));
+        setOverrideDoc(null);
+      }
       setMessage(`Route removed. ${updated.length} route(s) remaining.`);
     } catch (err: any) {
       console.error('[RouteManager] Failed to remove:', err);
@@ -510,14 +523,13 @@ export default function RouteManager({ wellName, groupMembers }: RouteManagerPro
       const db = getFirestoreDb();
       const rawPoints = route.fullWaypoints.length > 0 ? route.fullWaypoints : route.waypoints;
       const trimmedRaw = rawPoints.slice(trimStart, rawPoints.length - trimEnd || undefined);
-      const simplified = simplifyRoute(trimmedRaw, 23);
       const actualStart = trimmedRaw[0] || rawPoints[0];
       const actualEnd = trimmedRaw[trimmedRaw.length - 1] || rawPoints[rawPoints.length - 1];
 
       const updatedRoute: ApprovedRoute = {
         ...route,
         label: label?.trim() || undefined,
-        waypoints: simplified,
+        waypoints: trimmedRaw,
         fullWaypoints: trimmedRaw,
         startLat: actualStart.lat,
         startLng: actualStart.lng,
@@ -531,7 +543,7 @@ export default function RouteManager({ wellName, groupMembers }: RouteManagerPro
       await setDoc(doc(db, 'route_overrides', slug), newDoc);
       setOverrideDoc(newDoc);
       setEditingRoute(null);
-      setMessage(`Route updated! ${trimmedRaw.length} pts → ${simplified.length} waypoints.`);
+      setMessage(`Route updated! ${trimmedRaw.length} waypoints.`);
     } catch (err: any) {
       console.error('[RouteManager] Failed to edit route:', err);
       setMessage('Failed to save changes');
