@@ -2043,7 +2043,17 @@ function ActiveDispatchPanel({ dispatches, cancelDispatch, drivers, assignTransf
                     <span className="text-white font-medium text-sm truncate">{wellName}</span>
                     {ago && <span className="text-gray-600 text-[10px] flex-shrink-0">{ago}</span>}
                     <span className="flex-1" />
-                    <span className="text-purple-400/60 text-xs flex-shrink-0" title="Edit crew">&#9998;</span>
+                    <button
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        if (confirm(`Cancel entire crew job at ${wellName}? This will cancel all ${crewJobs.length} dispatches.`)) {
+                          crewJobs.forEach(j => { if (j.id) cancelDispatch(j.id); });
+                        }
+                      }}
+                      className="text-red-400/50 hover:text-red-300 text-xs font-medium flex-shrink-0 transition-colors px-2 py-0.5 rounded hover:bg-red-400/10"
+                      title="Cancel entire crew job"
+                    >Cancel Job</button>
+                    <span className="text-purple-400/60 text-xs flex-shrink-0 ml-1" title="Edit crew">&#9998;</span>
                   </div>
                   {notes && (
                     <div className="text-gray-500 text-xs mt-1 italic truncate">{notes}</div>
