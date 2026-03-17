@@ -62,6 +62,10 @@ interface DispatchJob {
   sourceInvoiceNumber?: string;
   intendedDriverHash?: string;
   intendedDriverName?: string;
+  // Driver stage — written by WB T at each state transition
+  driverStage?: 'en_route_pickup' | 'on_site_pickup' | 'en_route_dropoff' | 'on_site_dropoff' | 'paused' | 'completed';
+  driverDest?: string;  // Where driver is heading (well name or SWD name)
+  stageUpdatedAt?: any;
 }
 
 // Priority levels for PW queue
@@ -1371,7 +1375,7 @@ export default function DispatchPage() {
                               <span className="text-white font-medium">{job.ndicWellName || job.wellName}</span>
                               <span className="text-gray-500 text-sm ml-2">{job.serviceType}</span>
                             </div>
-                            <StatusBadge status={job.status} />
+                            <StatusBadge status={job.status} driverStage={job.driverStage} driverDest={job.driverDest} />
                           </div>
                           <div className="text-sm text-gray-400 space-y-1">
                             <div>Driver: <span className="text-gray-300">{job.driverFirstName || job.driverName}</span></div>
@@ -1725,7 +1729,34 @@ function ModalPredictionBanner({ well }: { well: WellResponse }) {
   );
 }
 
-function StatusBadge({ status }: { status: string }) {
+function StatusBadge({ status, driverStage, driverDest }: { status: string; driverStage?: string; driverDest?: string }) {
+  // Driver stage takes priority over generic status when available
+  const stageStyles: Record<string, string> = {
+    en_route_pickup: 'bg-blue-600/30 text-blue-300',
+    on_site_pickup: 'bg-emerald-600/30 text-emerald-300',
+    en_route_dropoff: 'bg-indigo-600/30 text-indigo-300',
+    on_site_dropoff: 'bg-teal-600/30 text-teal-300',
+    paused: 'bg-amber-600/30 text-amber-300',
+    completed: 'bg-green-600/30 text-green-300',
+  };
+  const stageLabels: Record<string, string> = {
+    en_route_pickup: '🚛 → Pickup',
+    on_site_pickup: '⛽ At Pickup',
+    en_route_dropoff: '🚛 → Drop-off',
+    on_site_dropoff: '🏭 At Drop-off',
+    paused: '⏸️ Paused',
+    completed: '✅ Done',
+  };
+
+  if (driverStage && stageLabels[driverStage]) {
+    return (
+      <span className={`px-2 py-0.5 text-xs font-medium rounded ${stageStyles[driverStage]}`} title={driverDest || ''}>
+        {stageLabels[driverStage]}
+      </span>
+    );
+  }
+
+  // Fallback to generic status
   const styles: Record<string, string> = {
     pending: 'bg-yellow-600/30 text-yellow-300',
     pending_approval: 'bg-orange-600/30 text-orange-300 animate-pulse',
@@ -1803,7 +1834,7 @@ function ActiveDispatchTable({ dispatches, cancelDispatch, drivers, assignTransf
                 <span className="px-1.5 py-0.5 bg-orange-600/30 text-orange-300 text-xs rounded font-medium truncate">Transfer from {job.transferFromDriver}</span>
               )}
               {job.disposal && <span className="text-cyan-400 text-xs truncate">&#8594; {job.disposal}</span>}
-              <StatusBadge status={job.status} />
+              <StatusBadge status={job.status} driverStage={job.driverStage} driverDest={job.driverDest} />
               <button onClick={() => job.id && cancelDispatch(job.id)} className="text-red-400 hover:text-red-300 text-xs flex-shrink-0" title="Cancel dispatch">&#10005;</button>
             </div>
           );
@@ -1836,7 +1867,7 @@ function ActiveDispatchTable({ dispatches, cancelDispatch, drivers, assignTransf
                     )}
                     {job.disposal && <span className="text-cyan-400 text-xs truncate">&#8594; {job.disposal}</span>}
                     <span className="flex-1" />
-                    <StatusBadge status={job.status} />
+                    <StatusBadge status={job.status} driverStage={job.driverStage} driverDest={job.driverDest} />
                     <button onClick={() => job.id && cancelDispatch(job.id)} className="text-red-400 hover:text-red-300 text-xs flex-shrink-0" title="Cancel dispatch">&#10005;</button>
                   </div>
                 ))}
