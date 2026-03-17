@@ -13,8 +13,6 @@ import { loadDisposals, searchDisposals, type NdicWell } from '@/lib/firestoreWe
 
 // ─── Types ───────────────────────────────────────────────────────────────────
 
-type ActionPanel = 'service' | 'addpull';
-
 interface ApprovedDriver {
   key: string;           // passcodeHash
   displayName: string;
@@ -259,7 +257,6 @@ export default function DispatchPage() {
   const [driversLoading, setDriversLoading] = useState(true);
 
   // UI state
-  const [actionPanel, setActionPanel] = useState<ActionPanel>('service');
   const [search, setSearch] = useState('');
   const [routeFilter, setRouteFilter] = useState<string>('all');
   const [priorityFilter, setPriorityFilter] = useState<PriorityLevel | 'all'>('all');
@@ -947,6 +944,16 @@ export default function DispatchPage() {
     }
   }
 
+  // Toolbar form state (must be before render guards — React hooks can't be conditional)
+  const [toolbarMode, setToolbarMode] = useState<'none' | 'sw' | 'pull'>('none');
+
+  // Active jobs panel — count active drivers
+  const activeDriverCount = useMemo(() => {
+    const driverSet = new Set<string>();
+    dispatches.forEach(d => driverSet.add(d.driverHash));
+    return driverSet.size;
+  }, [dispatches]);
+
   // ─── Render Guards ─────────────────────────────────────────────────────────
 
   if (loading) {
@@ -962,566 +969,374 @@ export default function DispatchPage() {
   // ─── Render ────────────────────────────────────────────────────────────────
 
   return (
-    <div className="min-h-screen bg-gray-900">
+    <div className="min-h-screen bg-gray-900 flex flex-col">
       <AppHeader />
 
-      <main className="px-4 py-6">
-        {/* Page Header + Priority Badges */}
-        <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-4 mb-5">
-          <h2 className="text-xl font-semibold text-white">
-            Dispatch
-            <span className="text-gray-400 text-base font-normal ml-2">
-              Job Assignment
-            </span>
-          </h2>
-
-          {/* Priority Summary Badges */}
-          <div className="flex items-center gap-2">
-            <span className="text-gray-500 text-xs mr-1">Queue:</span>
-            <button
-              onClick={() => setPriorityFilter(priorityFilter === 'overdue' ? 'all' : 'overdue')}
-              className={`px-2 py-0.5 text-xs font-bold rounded ${
-                priorityFilter === 'overdue' ? 'ring-2 ring-white' : ''
-              } bg-red-600 text-white`}
-            >
-              {priorityCounts.overdue} Overdue
-            </button>
-            <button
-              onClick={() => setPriorityFilter(priorityFilter === 'soon' ? 'all' : 'soon')}
-              className={`px-2 py-0.5 text-xs font-bold rounded ${
-                priorityFilter === 'soon' ? 'ring-2 ring-white' : ''
-              } bg-orange-600 text-white`}
-            >
-              {priorityCounts.soon} Soon
-            </button>
-            <button
-              onClick={() => setPriorityFilter(priorityFilter === 'today' ? 'all' : 'today')}
-              className={`px-2 py-0.5 text-xs font-bold rounded ${
-                priorityFilter === 'today' ? 'ring-2 ring-white' : ''
-              } bg-yellow-600 text-white`}
-            >
-              {priorityCounts.today} Today
-            </button>
-            <button
-              onClick={() => setPriorityFilter(priorityFilter === 'later' ? 'all' : 'later')}
-              className={`px-2 py-0.5 text-xs font-bold rounded ${
-                priorityFilter === 'later' ? 'ring-2 ring-white' : ''
-              } bg-green-700 text-white`}
-            >
-              {priorityCounts.later} Later
-            </button>
-            {priorityFilter !== 'all' && (
-              <button
-                onClick={() => setPriorityFilter('all')}
-                className="text-gray-400 hover:text-white text-xs ml-1"
-              >
-                Clear
-              </button>
-            )}
-          </div>
-        </div>
-
-        {/* Status Message */}
-        {message && (
-          <div className={`mb-4 p-3 rounded text-sm ${
-            message.startsWith('Error') ? 'bg-red-900/50 text-red-200' : 'bg-blue-900 text-blue-200'
-          }`}>
-            {message}
-          </div>
-        )}
+      <main className="flex-1 flex flex-col px-4 py-4 overflow-hidden">
 
         {/* ═══════════════════════════════════════════════════════════════════════
-            SECTION 1: ACTIVE DISPATCHES — Hero panel, always visible at top
+            DISPATCH TOOLBAR — Always visible at top. Quick actions + inline forms.
             ═══════════════════════════════════════════════════════════════════════ */}
-        <div className="mb-6">
-          <div className="bg-gray-800 rounded-lg border border-gray-700 p-5">
-            <div className="flex items-center justify-between mb-4">
-              <h3 className="text-lg font-semibold text-white">
-                Active Dispatches
-              </h3>
-              <div className="flex items-center gap-2">
-                {dispatches.filter(d => d.jobType === 'pw').length > 0 && (
-                  <span className="px-1.5 py-0.5 bg-blue-600/20 text-blue-400 text-[10px] rounded font-bold">
-                    {dispatches.filter(d => d.jobType === 'pw').length} PW
-                  </span>
-                )}
-                {dispatches.filter(d => d.jobType === 'service').length > 0 && (
-                  <span className="px-1.5 py-0.5 bg-purple-600/20 text-purple-400 text-[10px] rounded font-bold">
-                    {dispatches.filter(d => d.jobType === 'service').length} SW
-                  </span>
-                )}
-                {dispatches.length > 0 && (
-                  <span className="px-2 py-0.5 bg-gray-700 text-gray-300 text-xs rounded-full font-bold">
-                    {dispatches.length}
-                  </span>
-                )}
-              </div>
-            </div>
-            <ActiveDispatchPanel
-              dispatches={dispatches}
-              cancelDispatch={cancelDispatch}
-              drivers={drivers}
-              assignTransfer={assignTransfer}
-              onEditServiceWork={openEditSwModal}
-            />
-          </div>
-        </div>
+        <div className="flex-shrink-0 mb-4">
+          {/* Top bar: title + priority badges + action buttons */}
+          <div className="flex items-center gap-4 mb-3">
+            <h2 className="text-lg font-semibold text-white flex-shrink-0">Dispatch</h2>
 
-        {/* ═══════════════════════════════════════════════════════════════════════
-            SECTION 2: Two-column layout — PW Queue (left) + Action Panel (right)
-            ═══════════════════════════════════════════════════════════════════════ */}
-        <div className="grid grid-cols-1 xl:grid-cols-5 gap-6">
-
-          {/* ─── LEFT: PW QUEUE (3/5 width on xl) ──────────────────────────── */}
-          <div className="xl:col-span-3 min-w-0">
-            {/* Filters Row */}
-            <div className="flex flex-col sm:flex-row gap-3 mb-4">
-              <input
-                type="text"
-                placeholder="Search wells..."
-                value={search}
-                onChange={(e) => setSearch(e.target.value)}
-                className="px-3 py-2 bg-gray-800 border border-gray-700 rounded-lg text-white text-sm placeholder-gray-500 focus:outline-none focus:border-blue-500 w-full sm:w-64"
-              />
-              <select
-                value={routeFilter}
-                onChange={(e) => setRouteFilter(e.target.value)}
-                className="px-3 py-2 bg-gray-800 border border-gray-700 rounded-lg text-white text-sm focus:outline-none focus:border-blue-500"
-              >
-                <option value="all">All Routes</option>
-                {routes.map(r => (
-                  <option key={r} value={r}>{r}</option>
-                ))}
-              </select>
-            </div>
-
-            {/* Bulk Dispatch Bar — shows when wells are selected */}
-            {selectedWells.size > 0 && (
-              <div className="bg-blue-900/40 border border-blue-600/50 rounded-lg p-4 mb-4">
-                <div className="flex items-center justify-between mb-3">
-                  <div className="text-white text-sm font-medium">
-                    {selectedWells.size} well{selectedWells.size !== 1 ? 's' : ''} selected
-                    {totalSelectedLoads !== selectedWells.size && (
-                      <span className="text-blue-300 ml-1">({totalSelectedLoads} total loads)</span>
-                    )}
-                  </div>
+            {/* Priority badges */}
+            <div className="flex items-center gap-1.5 flex-shrink-0">
+              {(['overdue', 'soon', 'today', 'later'] as const).map(level => {
+                const cfg = {
+                  overdue: { bg: 'bg-red-600', label: 'Overdue' },
+                  soon:    { bg: 'bg-orange-600', label: 'Soon' },
+                  today:   { bg: 'bg-yellow-600', label: 'Today' },
+                  later:   { bg: 'bg-green-700', label: 'Later' },
+                }[level];
+                return (
                   <button
-                    onClick={() => setSelectedWells(new Map())}
-                    className="text-gray-400 hover:text-white text-xs"
+                    key={level}
+                    onClick={() => setPriorityFilter(priorityFilter === level ? 'all' : level)}
+                    className={`px-2 py-0.5 text-xs font-bold rounded ${cfg.bg} text-white ${priorityFilter === level ? 'ring-2 ring-white' : ''}`}
                   >
-                    Clear Selection
+                    {priorityCounts[level]} {cfg.label}
                   </button>
-                </div>
-                <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 mb-3">
-                  {/* Driver */}
-                  <div>
-                    <label className="block text-xs text-gray-400 mb-1">Driver</label>
-                    <select
-                      value={bulkDriverHash}
-                      onChange={(e) => setBulkDriverHash(e.target.value)}
-                      className="w-full px-2 py-1.5 bg-gray-900 border border-gray-700 rounded text-white text-sm focus:outline-none focus:border-blue-500"
-                    >
-                      <option value="">Select driver...</option>
-                      {drivers.map(d => (
-                        <option key={d.key} value={d.key}>{d.legalName || d.displayName}</option>
-                      ))}
-                    </select>
-                  </div>
-                  {/* Disposal */}
-                  <div className="relative">
-                    <label className="block text-xs text-gray-400 mb-1">Disposal (optional)</label>
-                    {bulkDisposalWell ? (
-                      <div className="flex items-center gap-2 px-2 py-1.5 bg-gray-900 border border-cyan-700 rounded">
-                        <span className="text-cyan-400 text-sm flex-1 truncate">{bulkDisposal}</span>
-                        <button
-                          onClick={() => { setBulkDisposal(''); setBulkDisposalWell(null); setBulkDisposalSearch(''); }}
-                          className="text-gray-400 hover:text-white text-xs"
-                        >&#10005;</button>
-                      </div>
-                    ) : (
-                      <input
-                        type="text"
-                        value={bulkDisposalSearch}
-                        onChange={(e) => {
-                          const val = e.target.value;
-                          setBulkDisposalSearch(val);
-                          if (val.length >= 2) {
-                            setBulkDisposalResults(searchDisposals(val, allDisposals));
-                          } else {
-                            setBulkDisposalResults([]);
-                          }
-                        }}
-                        placeholder="Search SWD..."
-                        className="w-full px-2 py-1.5 bg-gray-900 border border-gray-700 rounded text-white text-sm placeholder-gray-500 focus:outline-none focus:border-blue-500"
-                      />
-                    )}
-                    {bulkDisposalResults.length > 0 && !bulkDisposalWell && (
-                      <div className="absolute z-50 w-full mt-1 bg-gray-800 border border-gray-600 rounded max-h-40 overflow-y-auto shadow-lg">
-                        {bulkDisposalResults.map((d, i) => (
-                          <button
-                            key={d.api_no || i}
-                            onClick={() => {
-                              setBulkDisposal(d.well_name);
-                              setBulkDisposalWell(d);
-                              setBulkDisposalSearch('');
-                              setBulkDisposalResults([]);
-                            }}
-                            className="w-full text-left px-3 py-2 hover:bg-gray-700 border-b border-gray-700/50 last:border-0"
-                          >
-                            <span className="text-white text-sm">{d.well_name}</span>
-                            <span className="text-gray-400 text-xs ml-2">{d.operator}</span>
+                );
+              })}
+              {priorityFilter !== 'all' && (
+                <button onClick={() => setPriorityFilter('all')} className="text-gray-400 hover:text-white text-xs">✕</button>
+              )}
+            </div>
+
+            <span className="flex-1" />
+
+            {/* Action buttons */}
+            <button
+              onClick={() => setToolbarMode(toolbarMode === 'sw' ? 'none' : 'sw')}
+              className={`px-3 py-1.5 text-xs font-medium rounded-lg transition-colors flex items-center gap-1.5 ${
+                toolbarMode === 'sw' ? 'bg-purple-600 text-white' : 'bg-gray-800 text-purple-400 hover:bg-gray-700 border border-gray-700'
+              }`}
+            >
+              <span className="text-sm">+</span> Service Work
+            </button>
+            <button
+              onClick={() => setToolbarMode(toolbarMode === 'pull' ? 'none' : 'pull')}
+              className={`px-3 py-1.5 text-xs font-medium rounded-lg transition-colors flex items-center gap-1.5 ${
+                toolbarMode === 'pull' ? 'bg-green-600 text-white' : 'bg-gray-800 text-green-400 hover:bg-gray-700 border border-gray-700'
+              }`}
+            >
+              <span className="text-sm">+</span> Add Pull
+            </button>
+          </div>
+
+          {/* Expandable toolbar forms */}
+          {toolbarMode === 'sw' && (
+            <div className="bg-gray-800 border border-purple-600/40 rounded-lg p-4 mb-3">
+              <div className="flex items-start gap-4">
+                {/* Well search */}
+                <div className="w-64 relative flex-shrink-0">
+                  <label className="block text-xs text-gray-400 mb-1">Well / Location</label>
+                  <input
+                    type="text"
+                    value={swWellName}
+                    onChange={(e) => setSwWellName(e.target.value)}
+                    placeholder="Type to search..."
+                    className="w-full px-3 py-1.5 bg-gray-900 border border-gray-700 rounded text-white text-sm placeholder-gray-500 focus:outline-none focus:border-purple-500"
+                  />
+                  {swWellName.trim().length >= 2 && !wells.some(w => (w.ndicName || w.wellName) === swWellName.trim()) && wells.filter(w => (w.ndicName || w.wellName).toLowerCase().includes(swWellName.trim().toLowerCase())).length > 0 && (
+                    <div className="absolute z-50 w-full mt-1 bg-gray-800 border border-gray-600 rounded max-h-48 overflow-y-auto shadow-lg">
+                      {wells
+                        .filter(w => (w.ndicName || w.wellName).toLowerCase().includes(swWellName.trim().toLowerCase()))
+                        .slice(0, 12)
+                        .map(w => (
+                          <button key={w.wellName} type="button" onClick={() => setSwWellName(w.ndicName || w.wellName)}
+                            className="w-full text-left px-3 py-1.5 hover:bg-gray-700 border-b border-gray-700/50 last:border-0 text-white text-sm">
+                            {w.ndicName || w.wellName}
+                            {w.route && <span className="text-gray-500 text-xs ml-2">{w.route}</span>}
                           </button>
-                        ))}
-                      </div>
-                    )}
-                  </div>
+                        ))
+                      }
+                    </div>
+                  )}
                 </div>
-                {/* Notes + Dispatch */}
-                <div className="flex items-end gap-3">
-                  <div className="flex-1">
-                    <label className="block text-xs text-gray-400 mb-1">Notes (optional)</label>
-                    <input
-                      type="text"
-                      value={bulkNotes}
-                      onChange={(e) => setBulkNotes(e.target.value)}
-                      placeholder="Instructions for all selected..."
-                      className="w-full px-2 py-1.5 bg-gray-900 border border-gray-700 rounded text-white text-sm placeholder-gray-500 focus:outline-none focus:border-blue-500"
-                    />
-                  </div>
-                  <button
-                    onClick={submitBulkDispatch}
-                    disabled={!bulkDriverHash || bulkDispatching}
-                    className="px-4 py-1.5 bg-blue-600 hover:bg-blue-500 disabled:bg-gray-600 disabled:cursor-not-allowed text-white text-sm font-medium rounded transition-colors whitespace-nowrap"
-                  >
-                    {bulkDispatching ? 'Dispatching...' : `Dispatch ${totalSelectedLoads} Load${totalSelectedLoads !== 1 ? 's' : ''}`}
-                  </button>
-                </div>
-              </div>
-            )}
 
-            {/* PW Queue Table */}
-            {dataLoading ? (
-              <div className="text-gray-400 py-8 text-center">Loading well data...</div>
-            ) : pwQueue.length === 0 ? (
-              <div className="text-gray-400 py-8 text-center">
-                No wells match current filters
+                {/* Service type */}
+                <div className="w-44 flex-shrink-0">
+                  <label className="block text-xs text-gray-400 mb-1">Service Type</label>
+                  <select value={swServiceType} onChange={(e) => setSwServiceType(e.target.value)}
+                    className="w-full px-3 py-1.5 bg-gray-900 border border-gray-700 rounded text-white text-sm focus:outline-none focus:border-purple-500">
+                    <option value="">Select type...</option>
+                    <option value="Hot Shot">Hot Shot</option>
+                    <option value="Equipment Delivery">Equipment Delivery</option>
+                    <option value="Tank Cleanout">Tank Cleanout</option>
+                    <option value="Flowback">Flowback</option>
+                    <option value="Frac Water">Frac Water</option>
+                    <option value="Rig Move">Rig Move</option>
+                    <option value="Other">Other</option>
+                  </select>
+                </div>
+
+                {/* Driver picker */}
+                <div className="w-52 flex-shrink-0">
+                  <label className="block text-xs text-gray-400 mb-1">
+                    Driver{swDriverHashes.size > 1 ? 's' : ''}
+                    {swDriverHashes.size > 0 && <span className="ml-1 px-1.5 py-0.5 bg-purple-600 text-white text-[10px] rounded-full">{swDriverHashes.size}</span>}
+                  </label>
+                  <div className="bg-gray-900 border border-gray-700 rounded max-h-24 overflow-y-auto">
+                    {drivers.map(d => {
+                      const checked = swDriverHashes.has(d.key);
+                      return (
+                        <button key={d.key} type="button" onClick={() => { setSwDriverHashes(prev => { const next = new Set(prev); if (next.has(d.key)) next.delete(d.key); else next.add(d.key); return next; }); }}
+                          className={`w-full flex items-center gap-2 px-2 py-1 text-xs text-left border-b border-gray-800 last:border-0 transition-colors ${checked ? 'bg-purple-900/30 text-white' : 'text-gray-300 hover:bg-gray-800'}`}>
+                          <input type="checkbox" checked={checked} readOnly className="w-3 h-3 rounded border-gray-600 bg-gray-800 text-purple-600 pointer-events-none" />
+                          <span>{d.legalName || d.displayName}</span>
+                        </button>
+                      );
+                    })}
+                  </div>
+                </div>
+
+                {/* Notes + dispatch button */}
+                <div className="flex-1 min-w-0">
+                  <label className="block text-xs text-gray-400 mb-1">Notes</label>
+                  <div className="flex gap-2">
+                    <input type="text" value={swNotes} onChange={(e) => setSwNotes(e.target.value)} placeholder="Instructions..."
+                      className="flex-1 px-3 py-1.5 bg-gray-900 border border-gray-700 rounded text-white text-sm placeholder-gray-500 focus:outline-none focus:border-purple-500" />
+                    <button onClick={submitServiceWork}
+                      disabled={!swWellName.trim() || !swServiceType || swDriverHashes.size === 0 || swSubmitting}
+                      className="px-4 py-1.5 bg-purple-600 hover:bg-purple-500 disabled:bg-gray-600 disabled:cursor-not-allowed text-white text-xs font-medium rounded transition-colors whitespace-nowrap">
+                      {swSubmitting ? 'Sending...' : 'Dispatch'}
+                    </button>
+                  </div>
+                </div>
               </div>
-            ) : (
-              <div className="bg-gray-800 rounded-lg border border-gray-700 overflow-hidden">
-                <div className="overflow-x-auto">
+            </div>
+          )}
+
+          {toolbarMode === 'pull' && (
+            <div className="bg-gray-800 border border-green-600/40 rounded-lg p-4 mb-3">
+              <div className="flex items-end gap-4">
+                <div className="w-48 flex-shrink-0">
+                  <label className="block text-xs text-gray-400 mb-1">Well</label>
+                  <select value={pullWell} onChange={(e) => setPullWell(e.target.value)}
+                    className="w-full px-2 py-1.5 bg-gray-900 border border-gray-700 rounded text-white text-sm focus:outline-none focus:border-green-500">
+                    <option value="">Select...</option>
+                    {[...new Set(wells.map(w => w.wellName))].sort().map(w => (
+                      <option key={w} value={w}>{w}</option>
+                    ))}
+                  </select>
+                </div>
+                <div className="w-32 flex-shrink-0">
+                  <label className="block text-xs text-gray-400 mb-1">Level (ft / in)</label>
+                  <div className="flex gap-1">
+                    <input type="number" value={pullFeet} onChange={(e) => setPullFeet(e.target.value)} placeholder="ft" className="w-full px-2 py-1.5 bg-gray-900 border border-gray-700 rounded text-white text-sm placeholder-gray-500 focus:outline-none focus:border-green-500" />
+                    <input type="number" value={pullInches} onChange={(e) => setPullInches(e.target.value)} placeholder="in" max="11" className="w-full px-2 py-1.5 bg-gray-900 border border-gray-700 rounded text-white text-sm placeholder-gray-500 focus:outline-none focus:border-green-500" />
+                  </div>
+                </div>
+                <div className="w-24 flex-shrink-0">
+                  <label className="block text-xs text-gray-400 mb-1">BBLs</label>
+                  <input type="number" value={pullBbls} onChange={(e) => setPullBbls(e.target.value)} className="w-full px-2 py-1.5 bg-gray-900 border border-gray-700 rounded text-white text-sm focus:outline-none focus:border-green-500" />
+                </div>
+                <div className="w-52 flex-shrink-0">
+                  <label className="block text-xs text-gray-400 mb-1">Date/Time</label>
+                  <input type="datetime-local" value={pullDateTime} onChange={(e) => setPullDateTime(e.target.value)} className="w-full px-2 py-1.5 bg-gray-900 border border-gray-700 rounded text-white text-sm focus:outline-none focus:border-green-500" />
+                </div>
+                <button onClick={handleAddPull} disabled={addingPull}
+                  className={`px-4 py-1.5 text-white rounded font-medium text-sm transition-colors whitespace-nowrap ${addingPull ? 'bg-green-800 cursor-wait' : 'bg-green-600 hover:bg-green-500'}`}>
+                  {addingPull ? 'Adding...' : 'Add Pull'}
+                </button>
+              </div>
+            </div>
+          )}
+
+          {/* Status message */}
+          {message && (
+            <div className={`p-2.5 rounded text-sm ${message.startsWith('Error') ? 'bg-red-900/50 text-red-200' : 'bg-blue-900/60 text-blue-200'}`}>
+              {message}
+            </div>
+          )}
+        </div>
+
+        {/* ═══════════════════════════════════════════════════════════════════════
+            MAIN WORKSPACE — 40/60 split. PW Queue left, Active Jobs right.
+            Both panels scroll independently, flush tops.
+            ═══════════════════════════════════════════════════════════════════════ */}
+        <div className="flex-1 flex gap-4 min-h-0">
+
+          {/* ═══════ LEFT PANEL (40%): PW Well Queue ═══════ */}
+          <div className="w-[40%] flex-shrink-0 flex flex-col min-h-0">
+            <div className="bg-gray-800 rounded-lg border border-gray-700 flex-1 flex flex-col overflow-hidden">
+              {/* Panel header with filters */}
+              <div className="flex items-center gap-3 px-4 py-2.5 border-b border-gray-700 flex-shrink-0">
+                <h3 className="text-sm font-semibold text-white flex-shrink-0">Well Queue</h3>
+                <input
+                  type="text"
+                  placeholder="Search wells..."
+                  value={search}
+                  onChange={(e) => setSearch(e.target.value)}
+                  className="px-2.5 py-1 bg-gray-900 border border-gray-700 rounded text-white text-xs placeholder-gray-500 focus:outline-none focus:border-blue-500 w-40"
+                />
+                <select value={routeFilter} onChange={(e) => setRouteFilter(e.target.value)}
+                  className="px-2 py-1 bg-gray-900 border border-gray-700 rounded text-white text-xs focus:outline-none focus:border-blue-500">
+                  <option value="all">All Routes</option>
+                  {routes.map(r => <option key={r} value={r}>{r}</option>)}
+                </select>
+                <span className="flex-1" />
+                <span className="text-gray-500 text-xs">{pwQueue.length} wells</span>
+              </div>
+
+              {/* Bulk dispatch bar */}
+              {selectedWells.size > 0 && (
+                <div className="bg-blue-900/30 border-b border-blue-600/30 px-4 py-3 flex-shrink-0">
+                  <div className="flex items-center gap-3 mb-2">
+                    <span className="text-white text-xs font-medium">
+                      {selectedWells.size} well{selectedWells.size !== 1 ? 's' : ''} selected
+                      {totalSelectedLoads !== selectedWells.size && <span className="text-blue-300 ml-1">({totalSelectedLoads} loads)</span>}
+                    </span>
+                    <span className="flex-1" />
+                    <button onClick={() => setSelectedWells(new Map())} className="text-gray-400 hover:text-white text-xs">Clear</button>
+                  </div>
+                  <div className="flex items-end gap-2">
+                    <div className="flex-1">
+                      <select value={bulkDriverHash} onChange={(e) => setBulkDriverHash(e.target.value)}
+                        className="w-full px-2 py-1 bg-gray-900 border border-gray-700 rounded text-white text-xs focus:outline-none focus:border-blue-500">
+                        <option value="">Select driver...</option>
+                        {drivers.map(d => <option key={d.key} value={d.key}>{d.legalName || d.displayName}</option>)}
+                      </select>
+                    </div>
+                    <div className="relative flex-1">
+                      {bulkDisposalWell ? (
+                        <div className="flex items-center gap-1 px-2 py-1 bg-gray-900 border border-cyan-700 rounded">
+                          <span className="text-cyan-400 text-xs flex-1 truncate">{bulkDisposal}</span>
+                          <button onClick={() => { setBulkDisposal(''); setBulkDisposalWell(null); setBulkDisposalSearch(''); }} className="text-gray-400 hover:text-white text-[10px]">✕</button>
+                        </div>
+                      ) : (
+                        <input type="text" value={bulkDisposalSearch}
+                          onChange={(e) => { const val = e.target.value; setBulkDisposalSearch(val); setBulkDisposalResults(val.length >= 2 ? searchDisposals(val, allDisposals) : []); }}
+                          placeholder="SWD (optional)..."
+                          className="w-full px-2 py-1 bg-gray-900 border border-gray-700 rounded text-white text-xs placeholder-gray-500 focus:outline-none focus:border-blue-500" />
+                      )}
+                      {bulkDisposalResults.length > 0 && !bulkDisposalWell && (
+                        <div className="absolute z-50 w-full mt-1 bg-gray-800 border border-gray-600 rounded max-h-32 overflow-y-auto shadow-lg">
+                          {bulkDisposalResults.map((d, i) => (
+                            <button key={d.api_no || i} onClick={() => { setBulkDisposal(d.well_name); setBulkDisposalWell(d); setBulkDisposalSearch(''); setBulkDisposalResults([]); }}
+                              className="w-full text-left px-2 py-1.5 hover:bg-gray-700 border-b border-gray-700/50 last:border-0 text-white text-xs">
+                              {d.well_name} <span className="text-gray-400">{d.operator}</span>
+                            </button>
+                          ))}
+                        </div>
+                      )}
+                    </div>
+                    <button onClick={submitBulkDispatch} disabled={!bulkDriverHash || bulkDispatching}
+                      className="px-3 py-1 bg-blue-600 hover:bg-blue-500 disabled:bg-gray-600 disabled:cursor-not-allowed text-white text-xs font-medium rounded transition-colors whitespace-nowrap">
+                      {bulkDispatching ? '...' : `Dispatch ${totalSelectedLoads}`}
+                    </button>
+                  </div>
+                </div>
+              )}
+
+              {/* Scrollable well table */}
+              <div className="flex-1 overflow-y-auto overflow-x-auto">
+                {dataLoading ? (
+                  <div className="text-gray-400 py-8 text-center">Loading well data...</div>
+                ) : pwQueue.length === 0 ? (
+                  <div className="text-gray-400 py-8 text-center">No wells match filters</div>
+                ) : (
                   <table className="w-full">
-                    <thead className="bg-gray-700">
+                    <thead className="bg-gray-700 sticky top-0 z-10">
                       <tr>
-                        <th className="px-3 py-2 text-left text-xs font-medium text-gray-300 w-16">Priority</th>
-                        <th className="px-3 py-2 text-left text-xs font-medium text-gray-300">Well</th>
-                        <th className="px-3 py-2 text-left text-xs font-medium text-gray-300">Route</th>
-                        <th className="px-3 py-2 text-left text-xs font-medium text-gray-300">Level</th>
-                        <th className="px-3 py-2 text-left text-xs font-medium text-gray-300">Flow Rate</th>
-                        <th className="px-3 py-2 text-left text-xs font-medium text-gray-300">Time Till Pull</th>
-                        <th className="px-3 py-2 text-left text-xs font-medium text-gray-300">Next Pull</th>
-                        <th className="px-3 py-2 text-left text-xs font-medium text-gray-300">BBLs/Day</th>
-                        <th className="px-3 py-2 text-left text-xs font-medium text-gray-300">Pulls/Day</th>
-                        <th className="px-3 py-2 text-right text-xs font-medium text-gray-300 w-36">
-                          <div className="flex items-center justify-end gap-2">
+                        <th className="px-2 py-2 text-left text-[11px] font-medium text-gray-300 w-14">Priority</th>
+                        <th className="px-2 py-2 text-left text-[11px] font-medium text-gray-300">Well</th>
+                        <th className="px-2 py-2 text-left text-[11px] font-medium text-gray-300">Level</th>
+                        <th className="px-2 py-2 text-left text-[11px] font-medium text-gray-300">Flow</th>
+                        <th className="px-2 py-2 text-left text-[11px] font-medium text-gray-300">TTP</th>
+                        <th className="px-2 py-2 text-left text-[11px] font-medium text-gray-300">Pulls/Day</th>
+                        <th className="px-2 py-2 text-right text-[11px] font-medium text-gray-300 w-28">
+                          <div className="flex items-center justify-end gap-1.5">
                             <span>Action</span>
-                            <input
-                              type="checkbox"
-                              checked={pwQueue.length > 0 && pwQueue.every(q => selectedWells.has(q.well.wellName))}
-                              onChange={toggleSelectAll}
-                              className="w-5 h-5 rounded border-gray-600 bg-gray-800 text-blue-600 focus:ring-blue-500 focus:ring-offset-0 cursor-pointer"
-                            />
+                            <input type="checkbox" checked={pwQueue.length > 0 && pwQueue.every(q => selectedWells.has(q.well.wellName))} onChange={toggleSelectAll} className="w-4 h-4 rounded border-gray-600 bg-gray-800 text-blue-600 focus:ring-blue-500 focus:ring-offset-0 cursor-pointer" />
                           </div>
                         </th>
                       </tr>
                     </thead>
-                    <tbody className="divide-y divide-gray-700">
+                    <tbody className="divide-y divide-gray-700/50">
                       {pwQueue.map(({ well, priority, dispatched, assignedDrivers: wellAssignedDrivers }) => {
                         const isSelected = selectedWells.has(well.wellName);
                         const loadCount = selectedWells.get(well.wellName) || 1;
                         return (
-                        <tr
-                          key={well.responseId || well.wellName}
-                          className={`hover:bg-gray-750 transition-colors ${priority.level === 'overdue' ? 'bg-red-900/10' : ''} ${isSelected ? 'bg-blue-900/20' : ''}`}
-                        >
-                          <td className="px-3 py-2">
-                            <span className={`px-2 py-0.5 text-xs font-bold rounded ${priority.color} ${priority.textColor}`}>
-                              {priority.label}
-                            </span>
-                          </td>
-                          <td className="px-3 py-2 text-white font-medium text-sm">{well.wellName}</td>
-                          <td className="px-3 py-2 text-gray-400 text-xs">{well.route || 'Unrouted'}</td>
-                          <td className="px-3 py-2 text-white font-mono text-sm">{well.currentLevel || '--'}</td>
-                          <td className="px-3 py-2 text-white font-mono text-xs">{well.flowRate || '--'}</td>
-                          <td className="px-3 py-2 text-white font-mono text-xs">{well.timeTillPull || well.etaToMax || '--'}</td>
-                          <td className="px-3 py-2 text-white font-mono text-xs">{formatNextPull(well)}</td>
-                          <td className="px-3 py-2 text-white font-mono text-xs">{well.windowBblsDay || well.bbls24hrs || '--'}</td>
-                          <td className="px-3 py-2"><PullsPredictionCell well={well} /></td>
-                          <td className="px-3 py-2 text-right">
-                            <div className="flex items-center justify-end gap-4">
+                          <tr key={well.responseId || well.wellName} className={`hover:bg-gray-750 transition-colors ${priority.level === 'overdue' ? 'bg-red-900/10' : ''} ${isSelected ? 'bg-blue-900/20' : ''}`}>
+                            <td className="px-2 py-1.5">
+                              <span className={`px-1.5 py-0.5 text-[10px] font-bold rounded ${priority.color} ${priority.textColor}`}>{priority.label}</span>
+                            </td>
+                            <td className="px-2 py-1.5">
+                              <div className="text-white font-medium text-xs">{well.wellName}</div>
+                              <div className="text-gray-500 text-[10px]">{well.route || 'Unrouted'}</div>
                               {wellAssignedDrivers.length > 0 && (
-                                <div className="flex items-center gap-1 flex-wrap justify-end">
+                                <div className="flex gap-1 mt-0.5">
                                   {wellAssignedDrivers.map((name, i) => (
-                                    <span key={i} className="px-1.5 py-0.5 bg-blue-900/50 text-blue-300 text-[10px] font-medium rounded">
-                                      {name}
-                                    </span>
+                                    <span key={i} className="px-1 py-0 bg-blue-900/50 text-blue-300 text-[9px] font-medium rounded">{name}</span>
                                   ))}
                                 </div>
                               )}
-                              {isSelected ? (
-                                <div className="flex items-center gap-1">
-                                  <span className="text-gray-400 text-xs">Loads:</span>
-                                  <input
-                                    type="number"
-                                    min={1}
-                                    max={20}
-                                    value={loadCount}
-                                    onChange={(e) => setWellLoadCount(well.wellName, parseInt(e.target.value) || 1)}
-                                    className="w-12 px-1 py-0.5 bg-gray-900 border border-blue-600 rounded text-white text-xs text-center focus:outline-none focus:border-blue-400"
-                                  />
-                                </div>
-                              ) : (
-                                <button
-                                  onClick={() => openAssignModal(well)}
-                                  className="px-3 py-1.5 bg-blue-600 hover:bg-blue-500 text-white text-xs font-medium rounded transition-colors"
-                                >
-                                  Assign
-                                </button>
-                              )}
-                              <input
-                                type="checkbox"
-                                checked={isSelected}
-                                onChange={() => toggleWellSelection(well.wellName)}
-                                className="w-5 h-5 rounded border-gray-600 bg-gray-800 text-blue-600 focus:ring-blue-500 focus:ring-offset-0 cursor-pointer"
-                              />
-                            </div>
-                          </td>
-                        </tr>
+                            </td>
+                            <td className="px-2 py-1.5 text-white font-mono text-xs">{well.currentLevel || '--'}</td>
+                            <td className="px-2 py-1.5 text-white font-mono text-[10px]">{well.flowRate || '--'}</td>
+                            <td className="px-2 py-1.5 text-white font-mono text-[10px]">{well.timeTillPull || well.etaToMax || '--'}</td>
+                            <td className="px-2 py-1.5"><PullsPredictionCell well={well} /></td>
+                            <td className="px-2 py-1.5 text-right">
+                              <div className="flex items-center justify-end gap-2">
+                                {isSelected ? (
+                                  <div className="flex items-center gap-1">
+                                    <input type="number" min={1} max={20} value={loadCount} onChange={(e) => setWellLoadCount(well.wellName, parseInt(e.target.value) || 1)}
+                                      className="w-10 px-1 py-0.5 bg-gray-900 border border-blue-600 rounded text-white text-[10px] text-center focus:outline-none" />
+                                  </div>
+                                ) : (
+                                  <button onClick={() => openAssignModal(well)} className="px-2 py-1 bg-blue-600 hover:bg-blue-500 text-white text-[10px] font-medium rounded transition-colors">Assign</button>
+                                )}
+                                <input type="checkbox" checked={isSelected} onChange={() => toggleWellSelection(well.wellName)} className="w-4 h-4 rounded border-gray-600 bg-gray-800 text-blue-600 focus:ring-blue-500 focus:ring-offset-0 cursor-pointer" />
+                              </div>
+                            </td>
+                          </tr>
                         );
                       })}
                     </tbody>
                   </table>
-                </div>
+                )}
               </div>
-            )}
+            </div>
           </div>
 
-          {/* ─── RIGHT: ACTION PANEL (2/5 width on xl) ─────────────────────── */}
-          <div className="xl:col-span-2 min-w-0">
-            {/* Toggle between Service Work and Add Pull */}
-            <div className="flex items-center gap-1 mb-4 bg-gray-800 rounded-lg p-1 border border-gray-700">
-              <button
-                onClick={() => setActionPanel('service')}
-                className={`flex-1 px-3 py-1.5 text-sm rounded-md font-medium transition-colors ${
-                  actionPanel === 'service'
-                    ? 'bg-purple-600 text-white'
-                    : 'text-gray-400 hover:text-white'
-                }`}
-              >
-                New Service Work
-              </button>
-              <button
-                onClick={() => setActionPanel('addpull')}
-                className={`flex-1 px-3 py-1.5 text-sm rounded-md font-medium transition-colors ${
-                  actionPanel === 'addpull'
-                    ? 'bg-green-600 text-white'
-                    : 'text-gray-400 hover:text-white'
-                }`}
-              >
-                Add Pull
-              </button>
+          {/* ═══════ RIGHT PANEL (60%): Active Jobs ═══════ */}
+          <div className="flex-1 flex flex-col min-h-0">
+            <div className="bg-gray-800 rounded-lg border border-gray-700 flex-1 flex flex-col overflow-hidden">
+              {/* Panel header */}
+              <div className="flex items-center justify-between px-4 py-2.5 border-b border-gray-700 flex-shrink-0">
+                <div className="flex items-center gap-3">
+                  <h3 className="text-sm font-semibold text-white">Active Jobs</h3>
+                  <span className="text-gray-500 text-xs">{activeDriverCount} driver{activeDriverCount !== 1 ? 's' : ''}</span>
+                </div>
+                <div className="flex items-center gap-1.5">
+                  {dispatches.filter(d => d.jobType === 'pw').length > 0 && (
+                    <span className="px-1.5 py-0.5 bg-blue-600/20 text-blue-400 text-[10px] rounded font-bold">
+                      {dispatches.filter(d => d.jobType === 'pw').length} PW
+                    </span>
+                  )}
+                  {dispatches.filter(d => d.jobType === 'service').length > 0 && (
+                    <span className="px-1.5 py-0.5 bg-purple-600/20 text-purple-400 text-[10px] rounded font-bold">
+                      {dispatches.filter(d => d.jobType === 'service').length} SW
+                    </span>
+                  )}
+                </div>
+              </div>
+              {/* Scrollable job list */}
+              <div className="flex-1 overflow-y-auto p-3">
+                <ActiveDispatchPanel
+                  dispatches={dispatches}
+                  cancelDispatch={cancelDispatch}
+                  drivers={drivers}
+                  assignTransfer={assignTransfer}
+                  onEditServiceWork={openEditSwModal}
+                />
+              </div>
             </div>
-
-            {/* ─── SERVICE WORK FORM ─────────────────────────────────────── */}
-            {actionPanel === 'service' && (
-              <div className="bg-gray-800 rounded-lg border border-gray-700 p-5">
-                <h3 className="text-base font-semibold text-white mb-4">New Service Work Job</h3>
-
-                <div className="space-y-3">
-                  {/* Well/Location */}
-                  <div>
-                    <label className="block text-xs text-gray-400 mb-1">Well / Location</label>
-                    <input
-                      type="text"
-                      value={swWellName}
-                      onChange={(e) => setSwWellName(e.target.value)}
-                      placeholder="Type to search wells..."
-                      list="sw-well-suggestions"
-                      className="w-full px-3 py-2 bg-gray-900 border border-gray-700 rounded-lg text-white text-sm placeholder-gray-500 focus:outline-none focus:border-purple-500"
-                    />
-                    <datalist id="sw-well-suggestions">
-                      {wells.map(w => (
-                        <option key={w.wellName} value={w.ndicName || w.wellName} />
-                      ))}
-                    </datalist>
-                  </div>
-
-                  {/* Service Type */}
-                  <div>
-                    <label className="block text-xs text-gray-400 mb-1">Service Type</label>
-                    <select
-                      value={swServiceType}
-                      onChange={(e) => setSwServiceType(e.target.value)}
-                      className="w-full px-3 py-2 bg-gray-900 border border-gray-700 rounded-lg text-white text-sm focus:outline-none focus:border-purple-500"
-                    >
-                      <option value="">Select service type...</option>
-                      <option value="Hot Shot">Hot Shot</option>
-                      <option value="Equipment Delivery">Equipment Delivery</option>
-                      <option value="Tank Cleanout">Tank Cleanout</option>
-                      <option value="Flowback">Flowback</option>
-                      <option value="Frac Water">Frac Water</option>
-                      <option value="Rig Move">Rig Move</option>
-                      <option value="Other">Other</option>
-                    </select>
-                  </div>
-
-                  {/* Assign to Driver(s) */}
-                  <div>
-                    <label className="block text-xs text-gray-400 mb-1">
-                      Assign to Driver{swDriverHashes.size > 1 ? 's' : ''}
-                      {swDriverHashes.size > 0 && (
-                        <span className="ml-2 px-1.5 py-0.5 bg-purple-600 text-white text-xs rounded-full">{swDriverHashes.size}</span>
-                      )}
-                    </label>
-                    <div className="bg-gray-900 border border-gray-700 rounded-lg max-h-36 overflow-y-auto">
-                      {drivers.map(d => {
-                        const checked = swDriverHashes.has(d.key);
-                        return (
-                          <button
-                            key={d.key}
-                            type="button"
-                            onClick={() => {
-                              setSwDriverHashes(prev => {
-                                const next = new Set(prev);
-                                if (next.has(d.key)) next.delete(d.key);
-                                else next.add(d.key);
-                                return next;
-                              });
-                            }}
-                            className={`w-full flex items-center gap-2 px-3 py-1.5 text-sm text-left border-b border-gray-800 last:border-0 transition-colors ${
-                              checked ? 'bg-purple-900/30 text-white' : 'text-gray-300 hover:bg-gray-800'
-                            }`}
-                          >
-                            <input
-                              type="checkbox"
-                              checked={checked}
-                              readOnly
-                              className="w-4 h-4 rounded border-gray-600 bg-gray-800 text-purple-600 focus:ring-purple-500 focus:ring-offset-0 pointer-events-none"
-                            />
-                            <span>{d.legalName || d.displayName}</span>
-                          </button>
-                        );
-                      })}
-                      {drivers.length === 0 && (
-                        <div className="px-3 py-2 text-gray-500 text-sm">No drivers available</div>
-                      )}
-                    </div>
-                  </div>
-
-                  {/* Notes */}
-                  <div>
-                    <label className="block text-xs text-gray-400 mb-1">Notes / Instructions</label>
-                    <textarea
-                      value={swNotes}
-                      onChange={(e) => setSwNotes(e.target.value)}
-                      placeholder="Special instructions..."
-                      rows={2}
-                      className="w-full px-3 py-2 bg-gray-900 border border-gray-700 rounded-lg text-white text-sm placeholder-gray-500 focus:outline-none focus:border-purple-500 resize-none"
-                    />
-                  </div>
-
-                  {/* Submit */}
-                  <button
-                    onClick={submitServiceWork}
-                    disabled={!swWellName.trim() || !swServiceType || swDriverHashes.size === 0 || swSubmitting}
-                    className="w-full px-4 py-2.5 bg-purple-600 hover:bg-purple-500 disabled:bg-gray-600 disabled:cursor-not-allowed text-white font-medium rounded-lg transition-colors"
-                  >
-                    {swSubmitting ? 'Dispatching...' : swDriverHashes.size > 1
-                      ? `Dispatch to ${swDriverHashes.size} Drivers`
-                      : 'Dispatch Service Job'}
-                  </button>
-                </div>
-              </div>
-            )}
-
-            {/* ─── ADD PULL FORM ─────────────────────────────────────────── */}
-            {actionPanel === 'addpull' && (
-              <div className="bg-gray-800 rounded-lg border border-gray-700 p-5">
-                <h3 className="text-base font-semibold text-white mb-3">Manual Pull Entry</h3>
-                <p className="text-gray-500 text-xs mb-3">Submit a pull from the dashboard. Processed by Cloud Function like a driver pull.</p>
-                <div className="space-y-3">
-                  {/* Well Selection */}
-                  <div>
-                    <label className="block text-xs text-gray-400 mb-1">Well</label>
-                    <select
-                      value={pullWell}
-                      onChange={(e) => setPullWell(e.target.value)}
-                      className="w-full px-3 py-2 bg-gray-900 border border-gray-700 rounded-lg text-white text-sm focus:outline-none focus:border-green-500"
-                    >
-                      <option value="">Select Well</option>
-                      {[...new Set(wells.map(w => w.wellName))].sort().map(w => (
-                        <option key={w} value={w}>{w}</option>
-                      ))}
-                    </select>
-                  </div>
-
-                  {/* Tank Level */}
-                  <div>
-                    <label className="block text-xs text-gray-400 mb-1">Tank Level</label>
-                    <div className="flex gap-2">
-                      <div className="flex-1">
-                        <input
-                          type="number"
-                          value={pullFeet}
-                          onChange={(e) => setPullFeet(e.target.value)}
-                          placeholder="Feet"
-                          className="w-full px-3 py-2 bg-gray-900 border border-gray-700 rounded-lg text-white text-sm placeholder-gray-500 focus:outline-none focus:border-green-500"
-                        />
-                      </div>
-                      <div className="flex-1">
-                        <input
-                          type="number"
-                          value={pullInches}
-                          onChange={(e) => setPullInches(e.target.value)}
-                          placeholder="Inches"
-                          max="11"
-                          className="w-full px-3 py-2 bg-gray-900 border border-gray-700 rounded-lg text-white text-sm placeholder-gray-500 focus:outline-none focus:border-green-500"
-                        />
-                      </div>
-                    </div>
-                  </div>
-
-                  {/* BBLs */}
-                  <div>
-                    <label className="block text-xs text-gray-400 mb-1">BBLs Taken</label>
-                    <input
-                      type="number"
-                      value={pullBbls}
-                      onChange={(e) => setPullBbls(e.target.value)}
-                      className="w-full px-3 py-2 bg-gray-900 border border-gray-700 rounded-lg text-white text-sm placeholder-gray-500 focus:outline-none focus:border-green-500"
-                    />
-                  </div>
-
-                  {/* Date/Time */}
-                  <div>
-                    <label className="block text-xs text-gray-400 mb-1">Date/Time</label>
-                    <input
-                      type="datetime-local"
-                      value={pullDateTime}
-                      onChange={(e) => setPullDateTime(e.target.value)}
-                      className="w-full px-3 py-2 bg-gray-900 border border-gray-700 rounded-lg text-white text-sm focus:outline-none focus:border-green-500"
-                    />
-                  </div>
-
-                  <button
-                    onClick={handleAddPull}
-                    disabled={addingPull}
-                    className={`w-full px-4 py-2.5 text-white rounded-lg font-medium transition-colors ${addingPull ? 'bg-green-800 cursor-wait' : 'bg-green-600 hover:bg-green-700'}`}
-                  >
-                    {addingPull ? 'Adding...' : 'Add Pull'}
-                  </button>
-                </div>
-              </div>
-            )}
           </div>
         </div>
       </main>
