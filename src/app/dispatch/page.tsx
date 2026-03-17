@@ -1328,7 +1328,7 @@ export default function DispatchPage() {
                         <div key={groupId} className="bg-gray-800 rounded-lg border border-gray-700 p-4">
                           <div className="flex items-start justify-between mb-2">
                             <div>
-                              <span className="text-white font-medium">{first.wellName}</span>
+                              <span className="text-white font-medium">{first.ndicWellName || first.wellName}</span>
                               <span className="text-gray-500 text-sm ml-2">{first.serviceType}</span>
                               <span className="ml-2 px-1.5 py-0.5 bg-blue-600/30 text-blue-300 text-xs rounded font-medium">{jobs.length} drivers</span>
                             </div>
@@ -1368,7 +1368,7 @@ export default function DispatchPage() {
                         <div key={job.id} className="bg-gray-800 rounded-lg border border-gray-700 p-4">
                           <div className="flex items-start justify-between mb-2">
                             <div>
-                              <span className="text-white font-medium">{job.wellName}</span>
+                              <span className="text-white font-medium">{job.ndicWellName || job.wellName}</span>
                               <span className="text-gray-500 text-sm ml-2">{job.serviceType}</span>
                             </div>
                             <StatusBadge status={job.status} />
@@ -1488,7 +1488,7 @@ export default function DispatchPage() {
           <div className="bg-gray-800 rounded-lg p-6 max-w-md w-full mx-4 border border-gray-700">
             <h3 className="text-lg font-semibold text-white mb-1">Assign Job</h3>
             <p className="text-gray-400 text-sm mb-4">
-              Dispatch <span className="text-white font-medium">{assignTarget.wellName}</span> to a driver
+              Dispatch <span className="text-white font-medium">{assignTarget.ndicName || assignTarget.wellName}</span> to a driver
             </p>
 
             {/* Well Info Summary */}
@@ -1794,7 +1794,7 @@ function ActiveDispatchTable({ dispatches, cancelDispatch, drivers, assignTransf
           const job = jobs[0];
           return (
             <div key={job.id} className="flex items-center gap-2 px-3 py-2 bg-gray-900/50 rounded hover:bg-gray-900/80 text-sm">
-              <span className="text-white font-medium truncate flex-shrink-0" style={{ minWidth: 80 }}>{job.wellName}</span>
+              <span className="text-white font-medium truncate flex-shrink-0" style={{ minWidth: 80 }}>{job.ndicWellName || job.wellName}</span>
               {(job.loadCount || 0) > 1 && (
                 <span className="px-1.5 py-0.5 bg-yellow-600/30 text-yellow-300 text-xs rounded font-bold flex-shrink-0">{job.loadCount} loads</span>
               )}
@@ -1819,7 +1819,7 @@ function ActiveDispatchTable({ dispatches, cancelDispatch, drivers, assignTransf
               <span className="text-white font-medium">{jobs[0].driverFirstName || jobs[0].driverName}</span>
               <span className="px-1.5 py-0.5 bg-blue-600 text-white text-xs rounded-full font-bold">{jobs.length}</span>
               <span className="text-gray-500 text-xs flex-1 truncate">
-                {jobs.map(j => j.wellName).join(', ')}
+                {jobs.map(j => j.ndicWellName || j.wellName).join(', ')}
               </span>
               <span className="text-gray-500 text-xs">{isExpanded ? '▲' : '▼'}</span>
             </button>
@@ -1827,7 +1827,7 @@ function ActiveDispatchTable({ dispatches, cancelDispatch, drivers, assignTransf
               <div className="ml-4 mt-1 space-y-1">
                 {jobs.map(job => (
                   <div key={job.id} className="flex items-center gap-2 px-3 py-1.5 bg-gray-800/50 rounded text-sm">
-                    <span className="text-white truncate flex-shrink-0" style={{ minWidth: 80 }}>{job.wellName}</span>
+                    <span className="text-white truncate flex-shrink-0" style={{ minWidth: 80 }}>{job.ndicWellName || job.wellName}</span>
                     {(job.loadCount || 0) > 1 && (
                       <span className="px-1.5 py-0.5 bg-yellow-600/30 text-yellow-300 text-xs rounded font-bold flex-shrink-0">{job.loadCount} loads</span>
                     )}
@@ -1873,7 +1873,7 @@ function UnassignedTransferRow({ job, drivers, assignTransfer, cancelDispatch }:
           <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-orange-400 opacity-75" />
           <span className="relative inline-flex rounded-full h-2.5 w-2.5 bg-orange-500" />
         </span>
-        <span className="text-white font-medium truncate">{job.wellName}</span>
+        <span className="text-white font-medium truncate">{job.ndicWellName || job.wellName}</span>
         <span className="px-1.5 py-0.5 bg-orange-600/30 text-orange-300 text-xs rounded font-medium">
           Transfer from {job.transferFromDriver}
         </span>
