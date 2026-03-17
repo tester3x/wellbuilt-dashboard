@@ -66,6 +66,9 @@ interface DispatchJob {
   driverStage?: 'en_route_pickup' | 'on_site_pickup' | 'en_route_dropoff' | 'on_site_dropoff' | 'paused' | 'completed';
   driverDest?: string;  // Where driver is heading (well name or SWD name)
   stageUpdatedAt?: any;
+  // Live job info — written by WB T as driver progresses
+  invoiceNumber?: string;  // Invoice # for this dispatch
+  hauledTo?: string;  // Current drop-off destination (driver may change mid-job)
 }
 
 // Priority levels for PW queue
@@ -619,12 +622,17 @@ export default function DispatchPage() {
       };
       const assignedDrivers = selectedDrivers.length > 1 ? selectedDrivers.map(getFirstName) : undefined;
 
+      // Look up NDIC name from wells list
+      const matchedWell = wells.find(w => w.wellName === swWellName.trim() || w.ndicName === swWellName.trim());
+      const swNdicName = matchedWell?.ndicName || swWellName.trim();
+
       const promises = selectedDrivers.map(driver => {
         const job: Omit<DispatchJob, 'id'> = {
           driverHash: driver.key,
           driverName: driver.displayName,
           ...(driver.legalName ? { driverFirstName: getFirstName(driver) } : {}),
-          wellName: swWellName.trim(),
+          wellName: matchedWell?.wellName || swWellName.trim(),
+          ndicWellName: swNdicName,
           jobType: 'service',
           serviceType: swServiceType.trim(),
           status: 'pending',
@@ -923,12 +931,13 @@ export default function DispatchPage() {
 
           {/* Active Dispatches Count */}
           {dispatches.length > 0 && (
-            <span className="text-gray-400 text-sm">
-              {dispatches.length} active dispatch{dispatches.length !== 1 ? 'es' : ''}
-              {dispatches.filter(d => d.jobType === 'pw').length > 0 && dispatches.filter(d => d.jobType === 'service').length > 0 && (
-                <span className="text-gray-500 ml-1">
-                  ({dispatches.filter(d => d.jobType === 'pw').length} PW, {dispatches.filter(d => d.jobType === 'service').length} SW)
-                </span>
+            <span className="text-gray-400 text-sm flex items-center gap-1.5">
+              {dispatches.length} active
+              {dispatches.filter(d => d.jobType === 'pw').length > 0 && (
+                <span className="px-1.5 py-0.5 bg-blue-600/20 text-blue-400 text-[10px] rounded font-bold">{dispatches.filter(d => d.jobType === 'pw').length} PW</span>
+              )}
+              {dispatches.filter(d => d.jobType === 'service').length > 0 && (
+                <span className="px-1.5 py-0.5 bg-purple-600/20 text-purple-400 text-[10px] rounded font-bold">{dispatches.filter(d => d.jobType === 'service').length} SW</span>
               )}
             </span>
           )}
@@ -1172,51 +1181,31 @@ export default function DispatchPage() {
               )}
             </div>
 
-            {/* Right: ALL Active Dispatches — PW + Service Work unified */}
-            <div className="bg-gray-800 rounded-lg border border-gray-700 p-6" style={{ minWidth: 340 }}>
-              <h3 className="text-lg font-semibold text-white mb-4">
-                Active Dispatches
-                {dispatches.length > 0 && (
-                  <span className="ml-2 px-2 py-0.5 bg-blue-600 text-white text-xs rounded-full">
-                    {dispatches.length}
-                  </span>
-                )}
-              </h3>
-              {dispatches.length === 0 ? (
-                <div className="text-center text-gray-500">No active dispatches</div>
-              ) : (
-                <div className="space-y-4">
-                  {/* PW Dispatches */}
+            {/* Right: Active Dispatches — Driver-centric, all job types */}
+            <div className="bg-gray-800 rounded-lg border border-gray-700 p-5" style={{ minWidth: 380 }}>
+              <div className="flex items-center justify-between mb-4">
+                <h3 className="text-lg font-semibold text-white">
+                  Active Dispatches
+                </h3>
+                <div className="flex items-center gap-2">
                   {dispatches.filter(d => d.jobType === 'pw').length > 0 && (
-                    <div>
-                      {dispatches.filter(d => d.jobType === 'service').length > 0 && (
-                        <div className="flex items-center gap-2 mb-2">
-                          <span className="text-xs font-medium text-gray-500 uppercase tracking-wider">Production Water</span>
-                          <span className="px-1.5 py-0.5 bg-blue-600/30 text-blue-300 text-xs rounded-full font-bold">
-                            {dispatches.filter(d => d.jobType === 'pw').length}
-                          </span>
-                          <div className="flex-1 border-t border-gray-700" />
-                        </div>
-                      )}
-                      <ActiveDispatchTable dispatches={dispatches.filter(d => d.jobType === 'pw')} cancelDispatch={cancelDispatch} drivers={drivers} assignTransfer={assignTransfer} />
-                    </div>
+                    <span className="px-1.5 py-0.5 bg-blue-600/20 text-blue-400 text-[10px] rounded font-bold">
+                      {dispatches.filter(d => d.jobType === 'pw').length} PW
+                    </span>
                   )}
-
-                  {/* Service Work Dispatches */}
                   {dispatches.filter(d => d.jobType === 'service').length > 0 && (
-                    <div>
-                      <div className="flex items-center gap-2 mb-2">
-                        <span className="text-xs font-medium text-gray-500 uppercase tracking-wider">Service Work</span>
-                        <span className="px-1.5 py-0.5 bg-purple-600/30 text-purple-300 text-xs rounded-full font-bold">
-                          {dispatches.filter(d => d.jobType === 'service').length}
-                        </span>
-                        <div className="flex-1 border-t border-gray-700" />
-                      </div>
-                      <ActiveDispatchTable dispatches={dispatches.filter(d => d.jobType === 'service')} cancelDispatch={cancelDispatch} drivers={drivers} assignTransfer={assignTransfer} />
-                    </div>
+                    <span className="px-1.5 py-0.5 bg-purple-600/20 text-purple-400 text-[10px] rounded font-bold">
+                      {dispatches.filter(d => d.jobType === 'service').length} SW
+                    </span>
+                  )}
+                  {dispatches.length > 0 && (
+                    <span className="px-2 py-0.5 bg-gray-700 text-gray-300 text-xs rounded-full font-bold">
+                      {dispatches.length}
+                    </span>
                   )}
                 </div>
-              )}
+              </div>
+              <ActiveDispatchPanel dispatches={dispatches} cancelDispatch={cancelDispatch} drivers={drivers} assignTransfer={assignTransfer} />
             </div>
             </div>
           </div>
@@ -1243,7 +1232,7 @@ export default function DispatchPage() {
                   />
                   <datalist id="sw-well-suggestions">
                     {wells.map(w => (
-                      <option key={w.wellName} value={w.wellName} />
+                      <option key={w.wellName} value={w.ndicName || w.wellName} />
                     ))}
                   </datalist>
                 </div>
@@ -1335,105 +1324,17 @@ export default function DispatchPage() {
               </div>
             </div>
 
-            {/* Active Service Work Dispatches — grouped by serviceGroupId */}
-            <div className="bg-gray-800 rounded-lg border border-gray-700 p-6">
-              <h3 className="text-lg font-semibold text-white mb-4">Active Service Jobs</h3>
-              {dispatches.filter(d => d.jobType === 'service').length === 0 ? (
-                <div className="text-center text-gray-500">
-                  No active service jobs
-                </div>
-              ) : (
-                <div className="space-y-3">
-                  {(() => {
-                    const serviceJobs = dispatches.filter(d => d.jobType === 'service');
-                    // Group by serviceGroupId — ungrouped jobs get their own card
-                    const groups = new Map<string, DispatchJob[]>();
-                    const standalone: DispatchJob[] = [];
-                    for (const job of serviceJobs) {
-                      if (job.serviceGroupId) {
-                        const existing = groups.get(job.serviceGroupId) || [];
-                        existing.push(job);
-                        groups.set(job.serviceGroupId, existing);
-                      } else {
-                        standalone.push(job);
-                      }
-                    }
-                    const cards: React.ReactNode[] = [];
-
-                    // Grouped service jobs — one card per group
-                    groups.forEach((jobs, groupId) => {
-                      const first = jobs[0];
-                      cards.push(
-                        <div key={groupId} className="bg-gray-800 rounded-lg border border-gray-700 p-4">
-                          <div className="flex items-start justify-between mb-2">
-                            <div>
-                              <span className="text-white font-medium">{first.ndicWellName || first.wellName}</span>
-                              <span className="text-gray-500 text-sm ml-2">{first.serviceType}</span>
-                              <span className="ml-2 px-1.5 py-0.5 bg-blue-600/30 text-blue-300 text-xs rounded font-medium">{jobs.length} drivers</span>
-                            </div>
-                          </div>
-                          <div className="text-sm text-gray-400 space-y-1.5">
-                            <div className="text-gray-500 text-xs font-medium uppercase tracking-wider">Crew</div>
-                            {jobs.map(j => {
-                              const accepted = j.status === 'accepted' || j.status === 'in_progress' || j.status === 'paused';
-                              const firstName = j.driverFirstName || j.driverName;
-                              return (
-                                <div key={j.id} className="flex items-center justify-between ml-1">
-                                  <div className="flex items-center gap-2">
-                                    <span className={accepted ? 'text-green-400' : 'text-gray-300'}>
-                                      {accepted ? '✓ ' : '○ '}{firstName}
-                                    </span>
-                                    <StatusBadge status={j.status} driverStage={j.driverStage} driverDest={j.driverDest} />
-                                  </div>
-                                  <button
-                                    onClick={() => j.id && cancelDispatch(j.id)}
-                                    className="px-1.5 py-0.5 bg-red-600/30 hover:bg-red-600/50 text-red-300 text-xs rounded transition-colors opacity-60 hover:opacity-100"
-                                  >
-                                    ✕
-                                  </button>
-                                </div>
-                              );
-                            })}
-                            <div className="pt-1">Assigned: <span className="text-gray-300">{formatDispatchTime(first.assignedAt)}</span></div>
-                            {first.notes && <div>Notes: <span className="text-gray-300">{first.notes}</span></div>}
-                          </div>
-                        </div>
-                      );
-                    });
-
-                    // Standalone service jobs — individual cards
-                    standalone.forEach(job => {
-                      cards.push(
-                        <div key={job.id} className="bg-gray-800 rounded-lg border border-gray-700 p-4">
-                          <div className="flex items-start justify-between mb-2">
-                            <div>
-                              <span className="text-white font-medium">{job.ndicWellName || job.wellName}</span>
-                              <span className="text-gray-500 text-sm ml-2">{job.serviceType}</span>
-                            </div>
-                            <StatusBadge status={job.status} driverStage={job.driverStage} driverDest={job.driverDest} />
-                          </div>
-                          <div className="text-sm text-gray-400 space-y-1">
-                            <div>Driver: <span className="text-gray-300">{job.driverFirstName || job.driverName}</span></div>
-                            {job.type === 'transfer' && job.transferFromDriver && (
-                              <div><span className="px-1.5 py-0.5 bg-orange-600/30 text-orange-300 text-xs rounded font-medium">Transfer from {job.transferFromDriver}</span></div>
-                            )}
-                            <div>Assigned: <span className="text-gray-300">{formatDispatchTime(job.assignedAt)}</span></div>
-                            {job.notes && <div>Notes: <span className="text-gray-300">{job.notes}</span></div>}
-                          </div>
-                          <button
-                            onClick={() => job.id && cancelDispatch(job.id)}
-                            className="mt-3 px-2 py-1 bg-red-600/30 hover:bg-red-600/50 text-red-300 text-xs rounded transition-colors"
-                          >
-                            Cancel
-                          </button>
-                        </div>
-                      );
-                    });
-
-                    return cards;
-                  })()}
-                </div>
-              )}
+            {/* Active Service Work Dispatches — same driver-centric panel, filtered to SW */}
+            <div className="bg-gray-800 rounded-lg border border-gray-700 p-5">
+              <h3 className="text-lg font-semibold text-white mb-4">
+                Active Service Jobs
+                {dispatches.filter(d => d.jobType === 'service').length > 0 && (
+                  <span className="ml-2 px-2 py-0.5 bg-purple-600/20 text-purple-400 text-xs rounded-full font-bold">
+                    {dispatches.filter(d => d.jobType === 'service').length}
+                  </span>
+                )}
+              </h3>
+              <ActiveDispatchPanel dispatches={dispatches.filter(d => d.jobType === 'service')} cancelDispatch={cancelDispatch} drivers={drivers} assignTransfer={assignTransfer} />
             </div>
           </div>
         )}
@@ -1764,63 +1665,136 @@ function ModalPredictionBanner({ well }: { well: WellResponse }) {
   );
 }
 
-function StatusBadge({ status, driverStage, driverDest }: { status: string; driverStage?: string; driverDest?: string }) {
-  // Driver stage takes priority over generic status when available
-  const stageStyles: Record<string, string> = {
-    en_route_pickup: 'bg-blue-600/30 text-blue-300',
-    on_site_pickup: 'bg-emerald-600/30 text-emerald-300',
-    en_route_dropoff: 'bg-indigo-600/30 text-indigo-300',
-    on_site_dropoff: 'bg-teal-600/30 text-teal-300',
-    paused: 'bg-amber-600/30 text-amber-300',
-    completed: 'bg-green-600/30 text-green-300',
-  };
-  const stageLabels: Record<string, string> = {
-    en_route_pickup: '🚛 → Pickup',
-    on_site_pickup: '⛽ At Pickup',
-    en_route_dropoff: '🚛 → Drop-off',
-    on_site_dropoff: '🏭 At Drop-off',
-    paused: '⏸️ Paused',
-    completed: '✅ Done',
+function StageBadge({ job }: { job: DispatchJob }) {
+  const stageConfig: Record<string, { bg: string; text: string; icon: string; label: string }> = {
+    en_route_pickup:  { bg: 'bg-blue-600/30',    text: 'text-blue-300',    icon: '🚛', label: '→ Pickup' },
+    on_site_pickup:   { bg: 'bg-emerald-600/30',  text: 'text-emerald-300', icon: '⛽', label: 'At Pickup' },
+    en_route_dropoff: { bg: 'bg-indigo-600/30',   text: 'text-indigo-300',  icon: '🚛', label: '→ Drop-off' },
+    on_site_dropoff:  { bg: 'bg-teal-600/30',     text: 'text-teal-300',    icon: '🏭', label: 'At Drop-off' },
+    paused:           { bg: 'bg-amber-600/30',     text: 'text-amber-300',   icon: '⏸️', label: 'Paused' },
+    completed:        { bg: 'bg-green-600/30',     text: 'text-green-300',   icon: '✅', label: 'Done' },
   };
 
-  if (driverStage && stageLabels[driverStage]) {
+  const statusFallback: Record<string, { bg: string; text: string; label: string }> = {
+    pending:           { bg: 'bg-yellow-600/30',  text: 'text-yellow-300', label: 'Pending' },
+    pending_approval:  { bg: 'bg-orange-600/30',  text: 'text-orange-300', label: 'Needs Approval' },
+    accepted:          { bg: 'bg-blue-600/30',    text: 'text-blue-300',   label: 'Accepted' },
+    in_progress:       { bg: 'bg-purple-600/30',  text: 'text-purple-300', label: 'In Progress' },
+    paused:            { bg: 'bg-amber-600/30',   text: 'text-amber-300',  label: 'Paused' },
+  };
+
+  // Use driver stage if available, otherwise fall back to dispatch status
+  if (job.driverStage && stageConfig[job.driverStage]) {
+    const cfg = stageConfig[job.driverStage];
+    const dest = job.driverDest;
     return (
-      <span className={`px-2 py-0.5 text-xs font-medium rounded ${stageStyles[driverStage]}`} title={driverDest || ''}>
-        {stageLabels[driverStage]}
-      </span>
+      <div className="flex items-center gap-1.5">
+        <span className={`px-2 py-0.5 text-xs font-medium rounded ${cfg.bg} ${cfg.text}`}>
+          {cfg.icon} {cfg.label}
+        </span>
+        {dest && (job.driverStage === 'en_route_pickup' || job.driverStage === 'en_route_dropoff') && (
+          <span className="text-gray-500 text-xs truncate max-w-[140px]" title={dest}>{dest}</span>
+        )}
+      </div>
     );
   }
 
-  // Fallback to generic status
-  const styles: Record<string, string> = {
-    pending: 'bg-yellow-600/30 text-yellow-300',
-    pending_approval: 'bg-orange-600/30 text-orange-300 animate-pulse',
-    accepted: 'bg-blue-600/30 text-blue-300',
-    in_progress: 'bg-purple-600/30 text-purple-300',
-    paused: 'bg-amber-600/30 text-amber-300',
-    completed: 'bg-green-600/30 text-green-300',
-    cancelled: 'bg-gray-600/30 text-gray-400',
-  };
-
-  const labels: Record<string, string> = {
-    pending: 'Pending',
-    pending_approval: 'Needs Approval',
-    accepted: 'Accepted',
-    in_progress: 'In Progress',
-    paused: 'Paused',
-    completed: 'Completed',
-    cancelled: 'Cancelled',
-  };
-
+  const fb = statusFallback[job.status] || statusFallback.pending;
   return (
-    <span className={`px-2 py-0.5 text-xs font-medium rounded ${styles[status] || styles.pending}`}>
-      {labels[status] || status}
+    <span className={`px-2 py-0.5 text-xs font-medium rounded ${fb.bg} ${fb.text} ${job.status === 'pending_approval' ? 'animate-pulse' : ''}`}>
+      {fb.label}
     </span>
   );
 }
 
-// Active dispatch table with driver grouping — compact rows, driver badge + dropdown
-function ActiveDispatchTable({ dispatches, cancelDispatch, drivers, assignTransfer }: {
+// Job type badge — small colored tag
+function JobTypeBadge({ type, serviceType }: { type: 'pw' | 'service'; serviceType?: string }) {
+  if (type === 'service') {
+    return (
+      <span className="px-1.5 py-0.5 bg-purple-600/30 text-purple-300 text-[10px] font-bold rounded uppercase tracking-wider flex-shrink-0">
+        SW{serviceType ? ` · ${serviceType}` : ''}
+      </span>
+    );
+  }
+  return (
+    <span className="px-1.5 py-0.5 bg-blue-600/30 text-blue-300 text-[10px] font-bold rounded uppercase tracking-wider flex-shrink-0">
+      PW
+    </span>
+  );
+}
+
+// Single job row — shows all info a dispatcher needs
+function DispatchJobRow({ job, cancelDispatch, compact }: {
+  job: DispatchJob;
+  cancelDispatch: (id: string) => void;
+  compact?: boolean;
+}) {
+  const dropoff = job.hauledTo || job.disposal;
+
+  return (
+    <div className={`${compact ? 'py-2 px-3' : 'py-3 px-4'} bg-gray-900/50 rounded-lg hover:bg-gray-900/80 transition-colors`}>
+      <div className="flex items-center gap-2">
+        {/* Job type badge */}
+        <JobTypeBadge type={job.jobType} serviceType={job.serviceType} />
+
+        {/* Well name — primary info */}
+        <span className="text-white font-medium text-sm truncate" style={{ minWidth: 100 }}>
+          {job.ndicWellName || job.wellName}
+        </span>
+
+        {/* Load count */}
+        {(job.loadCount || 0) > 1 && (
+          <span className="px-1.5 py-0.5 bg-yellow-600/30 text-yellow-300 text-[10px] rounded font-bold flex-shrink-0">
+            ×{job.loadCount}
+          </span>
+        )}
+
+        {/* Transfer badge */}
+        {job.type === 'transfer' && job.transferFromDriver && (
+          <span className="px-1.5 py-0.5 bg-orange-600/30 text-orange-300 text-[10px] rounded font-medium flex-shrink-0">
+            ← {job.transferFromDriver}
+          </span>
+        )}
+
+        <span className="flex-1" />
+
+        {/* Stage badge */}
+        <StageBadge job={job} />
+
+        {/* Cancel button */}
+        <button
+          onClick={() => job.id && cancelDispatch(job.id)}
+          className="text-red-400/60 hover:text-red-300 text-xs flex-shrink-0 transition-colors"
+          title="Cancel dispatch"
+        >✕</button>
+      </div>
+
+      {/* Detail row — invoice #, drop-off, notes */}
+      {(job.invoiceNumber || dropoff || job.notes) && (
+        <div className="flex items-center gap-3 mt-1.5 ml-[42px] text-xs">
+          {job.invoiceNumber && (
+            <span className="text-gray-400">
+              <span className="text-gray-600">#</span>{job.invoiceNumber}
+            </span>
+          )}
+          {dropoff && (
+            <span className="text-cyan-400/70 truncate max-w-[200px]" title={dropoff}>
+              → {dropoff}
+            </span>
+          )}
+          {job.notes && (
+            <span className="text-gray-500 truncate max-w-[200px] italic" title={job.notes}>
+              {job.notes}
+            </span>
+          )}
+        </div>
+      )}
+    </div>
+  );
+}
+
+// Driver-centric active dispatch panel — groups ALL jobs by driver
+function ActiveDispatchPanel({ dispatches, cancelDispatch, drivers, assignTransfer }: {
   dispatches: DispatchJob[];
   cancelDispatch: (id: string) => void;
   drivers?: { key: string; displayName: string; legalName?: string }[];
@@ -1828,12 +1802,11 @@ function ActiveDispatchTable({ dispatches, cancelDispatch, drivers, assignTransf
 }) {
   const [expandedDriver, setExpandedDriver] = useState<string | null>(null);
 
-  // Split: unassigned transfers (dispatch needs to pick driver) vs assigned dispatches
-  // Unassigned = dispatch-requested transfers (no driverHash) OR pending_approval transfers
+  // Unassigned transfers need driver assignment
   const unassigned = dispatches.filter(d => d.type === 'transfer' && (!d.driverHash || d.status === 'pending_approval'));
   const assigned = dispatches.filter(d => !(d.type === 'transfer' && (!d.driverHash || d.status === 'pending_approval')));
 
-  // Group assigned dispatches by driver
+  // Group ALL assigned dispatches by driver (PW + SW together)
   const grouped = useMemo(() => {
     const map = new Map<string, DispatchJob[]>();
     assigned.forEach(d => {
@@ -1841,70 +1814,93 @@ function ActiveDispatchTable({ dispatches, cancelDispatch, drivers, assignTransf
       if (!map.has(key)) map.set(key, []);
       map.get(key)!.push(d);
     });
-    return map;
+    // Sort: drivers with more active (non-pending) jobs first
+    return new Map(
+      Array.from(map.entries()).sort(([, a], [, b]) => {
+        const aActive = a.filter(j => j.status !== 'pending').length;
+        const bActive = b.filter(j => j.status !== 'pending').length;
+        return bActive - aActive;
+      })
+    );
   }, [assigned]);
 
+  if (dispatches.length === 0) {
+    return <div className="text-center text-gray-500 py-8">No active dispatches</div>;
+  }
+
   return (
-    <div className="space-y-1">
-      {/* Unassigned transfers — dispatch requested, needs driver assignment */}
+    <div className="space-y-3">
+      {/* Unassigned transfers — urgent, pulsing */}
       {unassigned.map(job => (
         <UnassignedTransferRow key={job.id} job={job} drivers={drivers || []} assignTransfer={assignTransfer} cancelDispatch={cancelDispatch} />
       ))}
 
+      {/* Driver cards */}
       {Array.from(grouped.entries()).map(([driverHash, jobs]) => {
-        const isExpanded = expandedDriver === driverHash;
-        const hasMultiple = jobs.length > 1;
+        const isExpanded = expandedDriver === driverHash || jobs.length === 1;
+        const driverName = jobs[0].driverFirstName || jobs[0].driverName;
+        const pwCount = jobs.filter(j => j.jobType === 'pw').length;
+        const swCount = jobs.filter(j => j.jobType === 'service').length;
 
-        if (!hasMultiple) {
-          // Single job — compact row
-          const job = jobs[0];
-          return (
-            <div key={job.id} className="flex items-center gap-2 px-3 py-2 bg-gray-900/50 rounded hover:bg-gray-900/80 text-sm">
-              <span className="text-white font-medium truncate flex-shrink-0" style={{ minWidth: 80 }}>{job.ndicWellName || job.wellName}</span>
-              {(job.loadCount || 0) > 1 && (
-                <span className="px-1.5 py-0.5 bg-yellow-600/30 text-yellow-300 text-xs rounded font-bold flex-shrink-0">{job.loadCount} loads</span>
-              )}
-              <span className="text-gray-400 truncate flex-1">{job.driverFirstName || job.driverName}</span>
-              {job.type === 'transfer' && job.transferFromDriver && (
-                <span className="px-1.5 py-0.5 bg-orange-600/30 text-orange-300 text-xs rounded font-medium truncate">Transfer from {job.transferFromDriver}</span>
-              )}
-              {job.disposal && <span className="text-cyan-400 text-xs truncate">&#8594; {job.disposal}</span>}
-              <StatusBadge status={job.status} driverStage={job.driverStage} driverDest={job.driverDest} />
-              <button onClick={() => job.id && cancelDispatch(job.id)} className="text-red-400 hover:text-red-300 text-xs flex-shrink-0" title="Cancel dispatch">&#10005;</button>
-            </div>
-          );
-        }
+        // Determine overall driver status — what's the most "active" thing they're doing?
+        const activeJob = jobs.find(j => j.driverStage && !['completed', 'paused'].includes(j.driverStage));
+        const isPaused = jobs.some(j => j.driverStage === 'paused' || j.status === 'paused');
+        const allPending = jobs.every(j => j.status === 'pending');
 
-        // Multiple jobs for same driver — collapsible group
         return (
-          <div key={driverHash}>
+          <div key={driverHash} className="border border-gray-700/50 rounded-lg overflow-hidden">
+            {/* Driver header */}
             <button
-              onClick={() => setExpandedDriver(isExpanded ? null : driverHash)}
-              className="w-full flex items-center gap-2 px-3 py-2 bg-gray-900/50 rounded hover:bg-gray-900/80 text-sm text-left"
+              onClick={() => jobs.length > 1 && setExpandedDriver(isExpanded && jobs.length > 1 ? null : driverHash)}
+              className={`w-full flex items-center gap-3 px-4 py-3 text-left transition-colors ${
+                allPending ? 'bg-gray-800/50' : 'bg-gray-800'
+              } hover:bg-gray-750`}
             >
-              <span className="text-white font-medium">{jobs[0].driverFirstName || jobs[0].driverName}</span>
-              <span className="px-1.5 py-0.5 bg-blue-600 text-white text-xs rounded-full font-bold">{jobs.length}</span>
-              <span className="text-gray-500 text-xs flex-1 truncate">
-                {jobs.map(j => j.ndicWellName || j.wellName).join(', ')}
-              </span>
-              <span className="text-gray-500 text-xs">{isExpanded ? '▲' : '▼'}</span>
-            </button>
-            {isExpanded && (
-              <div className="ml-4 mt-1 space-y-1">
-                {jobs.map(job => (
-                  <div key={job.id} className="flex items-center gap-2 px-3 py-1.5 bg-gray-800/50 rounded text-sm">
-                    <span className="text-white truncate flex-shrink-0" style={{ minWidth: 80 }}>{job.ndicWellName || job.wellName}</span>
-                    {(job.loadCount || 0) > 1 && (
-                      <span className="px-1.5 py-0.5 bg-yellow-600/30 text-yellow-300 text-xs rounded font-bold flex-shrink-0">{job.loadCount} loads</span>
-                    )}
-                    {job.type === 'transfer' && job.transferFromDriver && (
-                      <span className="px-1.5 py-0.5 bg-orange-600/30 text-orange-300 text-xs rounded font-medium truncate">Transfer from {job.transferFromDriver}</span>
-                    )}
-                    {job.disposal && <span className="text-cyan-400 text-xs truncate">&#8594; {job.disposal}</span>}
-                    <span className="flex-1" />
-                    <StatusBadge status={job.status} driverStage={job.driverStage} driverDest={job.driverDest} />
-                    <button onClick={() => job.id && cancelDispatch(job.id)} className="text-red-400 hover:text-red-300 text-xs flex-shrink-0" title="Cancel dispatch">&#10005;</button>
+              {/* Driver avatar circle */}
+              <div className={`w-8 h-8 rounded-full flex items-center justify-center text-xs font-bold flex-shrink-0 ${
+                activeJob ? 'bg-blue-600 text-white' : isPaused ? 'bg-amber-600 text-white' : allPending ? 'bg-gray-600 text-gray-300' : 'bg-gray-600 text-white'
+              }`}>
+                {driverName.charAt(0).toUpperCase()}
+              </div>
+
+              <div className="flex-1 min-w-0">
+                <div className="flex items-center gap-2">
+                  <span className="text-white font-semibold text-sm">{driverName}</span>
+                  {/* Job count badges */}
+                  {pwCount > 0 && (
+                    <span className="px-1.5 py-0.5 bg-blue-600/20 text-blue-400 text-[10px] rounded font-bold">
+                      {pwCount} PW
+                    </span>
+                  )}
+                  {swCount > 0 && (
+                    <span className="px-1.5 py-0.5 bg-purple-600/20 text-purple-400 text-[10px] rounded font-bold">
+                      {swCount} SW
+                    </span>
+                  )}
+                </div>
+                {/* Quick summary when collapsed */}
+                {!isExpanded && jobs.length > 1 && (
+                  <div className="text-gray-500 text-xs mt-0.5 truncate">
+                    {jobs.map(j => j.ndicWellName || j.wellName).join(' · ')}
                   </div>
+                )}
+              </div>
+
+              {/* Current stage summary on driver header */}
+              {activeJob && (
+                <StageBadge job={activeJob} />
+              )}
+
+              {jobs.length > 1 && (
+                <span className="text-gray-500 text-xs flex-shrink-0">{isExpanded ? '▲' : '▼'}</span>
+              )}
+            </button>
+
+            {/* Job rows — always show for single, toggle for multi */}
+            {isExpanded && (
+              <div className="space-y-1 p-2 bg-gray-900/30">
+                {jobs.map(job => (
+                  <DispatchJobRow key={job.id} job={job} cancelDispatch={cancelDispatch} compact={jobs.length > 2} />
                 ))}
               </div>
             )}
