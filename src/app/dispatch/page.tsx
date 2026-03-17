@@ -1867,6 +1867,7 @@ function DispatchJobRow({ job, cancelDispatch, compact, onClickServiceWork }: {
 }
 
 // Driver-centric active dispatch panel — groups ALL jobs by driver
+// Multi-driver SW jobs shown separately at bottom with all crew visible
 function ActiveDispatchPanel({ dispatches, cancelDispatch, drivers, assignTransfer, onEditServiceWork }: {
   dispatches: DispatchJob[];
   cancelDispatch: (id: string) => void;
@@ -1880,15 +1881,41 @@ function ActiveDispatchPanel({ dispatches, cancelDispatch, drivers, assignTransf
   const unassigned = dispatches.filter(d => d.type === 'transfer' && (!d.driverHash || d.status === 'pending_approval'));
   const assigned = dispatches.filter(d => !(d.type === 'transfer' && (!d.driverHash || d.status === 'pending_approval')));
 
-  // Group ALL assigned dispatches by driver (PW + SW together)
+  // Identify multi-driver SW groups (serviceGroupId with 2+ dispatches)
+  const { crewGroups, nonCrewJobs } = useMemo(() => {
+    const groupMap = new Map<string, DispatchJob[]>();
+    const soloJobs: DispatchJob[] = [];
+
+    assigned.forEach(d => {
+      if (d.serviceGroupId) {
+        if (!groupMap.has(d.serviceGroupId)) groupMap.set(d.serviceGroupId, []);
+        groupMap.get(d.serviceGroupId)!.push(d);
+      } else {
+        soloJobs.push(d);
+      }
+    });
+
+    // Multi-driver groups go to crew section, single-member "groups" stay with driver
+    const crews: DispatchJob[][] = [];
+    groupMap.forEach((jobs, _groupId) => {
+      if (jobs.length >= 2) {
+        crews.push(jobs);
+      } else {
+        soloJobs.push(...jobs);
+      }
+    });
+
+    return { crewGroups: crews, nonCrewJobs: soloJobs };
+  }, [assigned]);
+
+  // Group non-crew jobs by driver
   const grouped = useMemo(() => {
     const map = new Map<string, DispatchJob[]>();
-    assigned.forEach(d => {
+    nonCrewJobs.forEach(d => {
       const key = d.driverHash;
       if (!map.has(key)) map.set(key, []);
       map.get(key)!.push(d);
     });
-    // Sort: drivers with more active (non-pending) jobs first
     return new Map(
       Array.from(map.entries()).sort(([, a], [, b]) => {
         const aActive = a.filter(j => j.status !== 'pending').length;
@@ -1896,7 +1923,7 @@ function ActiveDispatchPanel({ dispatches, cancelDispatch, drivers, assignTransf
         return bActive - aActive;
       })
     );
-  }, [assigned]);
+  }, [nonCrewJobs]);
 
   function toggleDriver(hash: string) {
     setExpandedDrivers(prev => {
@@ -1918,21 +1945,18 @@ function ActiveDispatchPanel({ dispatches, cancelDispatch, drivers, assignTransf
         <UnassignedTransferRow key={job.id} job={job} drivers={drivers || []} assignTransfer={assignTransfer} cancelDispatch={cancelDispatch} />
       ))}
 
-      {/* Driver cards */}
+      {/* Driver cards (solo jobs + single-driver SW) */}
       {Array.from(grouped.entries()).map(([driverHash, jobs]) => {
-        // Auto-expand: 1-2 jobs always expanded. 3+ collapsed unless user toggled
         const autoExpand = jobs.length <= 2;
         const isExpanded = autoExpand || expandedDrivers.has(driverHash);
         const driverName = jobs[0].driverFirstName || jobs[0].driverName;
         const pwCount = jobs.filter(j => j.jobType === 'pw').length;
         const swCount = jobs.filter(j => j.jobType === 'service').length;
 
-        // Determine overall driver status — what's the most "active" thing they're doing?
         const activeJob = jobs.find(j => j.driverStage && !['completed', 'paused'].includes(j.driverStage));
         const isPaused = jobs.some(j => j.driverStage === 'paused' || j.status === 'paused');
         const allPending = jobs.every(j => j.status === 'pending');
 
-        // Time since earliest assigned
         const earliestAssigned = jobs.reduce((earliest, j) => {
           if (!j.assignedAt) return earliest;
           const ts = j.assignedAt.toDate ? j.assignedAt.toDate() : (j.assignedAt.seconds ? new Date(j.assignedAt.seconds * 1000) : new Date(j.assignedAt));
@@ -1943,14 +1967,12 @@ function ActiveDispatchPanel({ dispatches, cancelDispatch, drivers, assignTransf
 
         return (
           <div key={driverHash} className="border border-gray-700/50 rounded-lg overflow-hidden">
-            {/* Driver header */}
             <button
               onClick={() => !autoExpand && toggleDriver(driverHash)}
-              className={`w-full flex items-center gap-3 px-4 py-3 text-left transition-colors ${
+              className={`w-full flex items-center gap-3 px-4 py-2.5 text-left transition-colors ${
                 allPending ? 'bg-gray-800/50' : 'bg-gray-800'
               } hover:bg-gray-750 ${autoExpand ? 'cursor-default' : 'cursor-pointer'}`}
             >
-              {/* Driver avatar circle */}
               <div className={`w-8 h-8 rounded-full flex items-center justify-center text-xs font-bold flex-shrink-0 ${
                 activeJob ? 'bg-blue-600 text-white' : isPaused ? 'bg-amber-600 text-white' : allPending ? 'bg-gray-600 text-gray-300' : 'bg-gray-600 text-white'
               }`}>
@@ -1960,23 +1982,14 @@ function ActiveDispatchPanel({ dispatches, cancelDispatch, drivers, assignTransf
               <div className="flex-1 min-w-0">
                 <div className="flex items-center gap-2">
                   <span className="text-white font-semibold text-sm">{driverName}</span>
-                  {/* Job count badges */}
                   {pwCount > 0 && (
-                    <span className="px-1.5 py-0.5 bg-blue-600/20 text-blue-400 text-[10px] rounded font-bold">
-                      {pwCount} PW
-                    </span>
+                    <span className="px-1.5 py-0.5 bg-blue-600/20 text-blue-400 text-[10px] rounded font-bold">{pwCount} PW</span>
                   )}
                   {swCount > 0 && (
-                    <span className="px-1.5 py-0.5 bg-purple-600/20 text-purple-400 text-[10px] rounded font-bold">
-                      {swCount} SW
-                    </span>
+                    <span className="px-1.5 py-0.5 bg-purple-600/20 text-purple-400 text-[10px] rounded font-bold">{swCount} SW</span>
                   )}
-                  {/* Time since assigned */}
-                  {driverTimeAgo && (
-                    <span className="text-gray-600 text-[10px]">{driverTimeAgo}</span>
-                  )}
+                  {driverTimeAgo && <span className="text-gray-600 text-[10px]">{driverTimeAgo}</span>}
                 </div>
-                {/* Quick summary when collapsed */}
                 {!isExpanded && jobs.length > 2 && (
                   <div className="text-gray-500 text-xs mt-0.5 truncate">
                     {jobs.map(j => j.ndicWellName || j.wellName).join(' · ')}
@@ -1984,17 +1997,10 @@ function ActiveDispatchPanel({ dispatches, cancelDispatch, drivers, assignTransf
                 )}
               </div>
 
-              {/* Current stage summary on driver header */}
-              {activeJob && (
-                <StageBadge job={activeJob} />
-              )}
-
-              {!autoExpand && (
-                <span className="text-gray-500 text-xs flex-shrink-0">{isExpanded ? '▲' : '▼'}</span>
-              )}
+              {activeJob && <StageBadge job={activeJob} />}
+              {!autoExpand && <span className="text-gray-500 text-xs flex-shrink-0">{isExpanded ? '▲' : '▼'}</span>}
             </button>
 
-            {/* Job rows — always show for 1-2, toggle for 3+ */}
             {isExpanded && (
               <div className="space-y-1 p-2 bg-gray-900/30">
                 {jobs.map(job => (
@@ -2011,6 +2017,71 @@ function ActiveDispatchPanel({ dispatches, cancelDispatch, drivers, assignTransf
           </div>
         );
       })}
+
+      {/* ─── Multi-Driver Crew Jobs ─── */}
+      {crewGroups.length > 0 && (
+        <>
+          <div className="flex items-center gap-2 pt-2">
+            <div className="h-px bg-purple-600/30 flex-1" />
+            <span className="text-purple-400 text-[10px] font-bold uppercase tracking-wider flex-shrink-0">Crew Jobs</span>
+            <div className="h-px bg-purple-600/30 flex-1" />
+          </div>
+
+          {crewGroups.map((crewJobs, groupIdx) => {
+            const firstJob = crewJobs[0];
+            const wellName = firstJob.ndicWellName || firstJob.wellName;
+            const serviceType = firstJob.serviceType || 'Service Work';
+            const notes = firstJob.notes;
+            const ago = timeAgo(firstJob.assignedAt);
+
+            return (
+              <div
+                key={firstJob.serviceGroupId || `crew-${groupIdx}`}
+                className="border border-purple-600/30 rounded-lg overflow-hidden bg-gray-800/50 cursor-pointer hover:bg-gray-800 transition-colors"
+                onClick={() => onEditServiceWork?.(firstJob)}
+              >
+                {/* Job header */}
+                <div className="px-4 py-2.5 border-b border-gray-700/50">
+                  <div className="flex items-center gap-2">
+                    <span className="px-1.5 py-0.5 bg-purple-600/30 text-purple-300 text-[10px] font-bold rounded uppercase tracking-wider flex-shrink-0">
+                      SW · {serviceType}
+                    </span>
+                    <span className="text-white font-medium text-sm truncate">{wellName}</span>
+                    {ago && <span className="text-gray-600 text-[10px] flex-shrink-0">{ago}</span>}
+                    <span className="flex-1" />
+                    <span className="text-purple-400/60 text-xs flex-shrink-0" title="Edit crew">&#9998;</span>
+                  </div>
+                  {notes && (
+                    <div className="text-gray-500 text-xs mt-1 italic truncate">{notes}</div>
+                  )}
+                </div>
+
+                {/* Crew list — each driver with their stage */}
+                <div className="px-4 py-2 space-y-1.5">
+                  {crewJobs.map(j => (
+                    <div key={j.id} className="flex items-center gap-2">
+                      <div className="w-6 h-6 rounded-full bg-purple-600/30 flex items-center justify-center text-[10px] font-bold text-purple-300 flex-shrink-0">
+                        {(j.driverFirstName || j.driverName || '?').charAt(0).toUpperCase()}
+                      </div>
+                      <span className="text-white text-xs font-medium">{j.driverFirstName || j.driverName}</span>
+                      <StageBadge job={j} />
+                      {j.invoiceNumber && (
+                        <span className="text-gray-500 text-[10px]">#{j.invoiceNumber}</span>
+                      )}
+                      <span className="flex-1" />
+                      <button
+                        onClick={(e) => { e.stopPropagation(); j.id && cancelDispatch(j.id); }}
+                        className="text-red-400/40 hover:text-red-300 text-[10px] flex-shrink-0 transition-colors"
+                        title="Remove from crew"
+                      >✕</button>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            );
+          })}
+        </>
+      )}
     </div>
   );
 }
