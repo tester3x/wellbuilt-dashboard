@@ -925,6 +925,11 @@ export default function DispatchPage() {
           {dispatches.length > 0 && (
             <span className="text-gray-400 text-sm">
               {dispatches.length} active dispatch{dispatches.length !== 1 ? 'es' : ''}
+              {dispatches.filter(d => d.jobType === 'pw').length > 0 && dispatches.filter(d => d.jobType === 'service').length > 0 && (
+                <span className="text-gray-500 ml-1">
+                  ({dispatches.filter(d => d.jobType === 'pw').length} PW, {dispatches.filter(d => d.jobType === 'service').length} SW)
+                </span>
+              )}
             </span>
           )}
         </div>
@@ -1167,20 +1172,50 @@ export default function DispatchPage() {
               )}
             </div>
 
-            {/* Right: Active PW Dispatches — matching card like Service Work */}
+            {/* Right: ALL Active Dispatches — PW + Service Work unified */}
             <div className="bg-gray-800 rounded-lg border border-gray-700 p-6" style={{ minWidth: 340 }}>
               <h3 className="text-lg font-semibold text-white mb-4">
                 Active Dispatches
-                {dispatches.filter(d => d.jobType === 'pw').length > 0 && (
+                {dispatches.length > 0 && (
                   <span className="ml-2 px-2 py-0.5 bg-blue-600 text-white text-xs rounded-full">
-                    {dispatches.filter(d => d.jobType === 'pw').length}
+                    {dispatches.length}
                   </span>
                 )}
               </h3>
-              {dispatches.filter(d => d.jobType === 'pw').length === 0 ? (
+              {dispatches.length === 0 ? (
                 <div className="text-center text-gray-500">No active dispatches</div>
               ) : (
-                <ActiveDispatchTable dispatches={dispatches.filter(d => d.jobType === 'pw')} cancelDispatch={cancelDispatch} drivers={drivers} assignTransfer={assignTransfer} />
+                <div className="space-y-4">
+                  {/* PW Dispatches */}
+                  {dispatches.filter(d => d.jobType === 'pw').length > 0 && (
+                    <div>
+                      {dispatches.filter(d => d.jobType === 'service').length > 0 && (
+                        <div className="flex items-center gap-2 mb-2">
+                          <span className="text-xs font-medium text-gray-500 uppercase tracking-wider">Production Water</span>
+                          <span className="px-1.5 py-0.5 bg-blue-600/30 text-blue-300 text-xs rounded-full font-bold">
+                            {dispatches.filter(d => d.jobType === 'pw').length}
+                          </span>
+                          <div className="flex-1 border-t border-gray-700" />
+                        </div>
+                      )}
+                      <ActiveDispatchTable dispatches={dispatches.filter(d => d.jobType === 'pw')} cancelDispatch={cancelDispatch} drivers={drivers} assignTransfer={assignTransfer} />
+                    </div>
+                  )}
+
+                  {/* Service Work Dispatches */}
+                  {dispatches.filter(d => d.jobType === 'service').length > 0 && (
+                    <div>
+                      <div className="flex items-center gap-2 mb-2">
+                        <span className="text-xs font-medium text-gray-500 uppercase tracking-wider">Service Work</span>
+                        <span className="px-1.5 py-0.5 bg-purple-600/30 text-purple-300 text-xs rounded-full font-bold">
+                          {dispatches.filter(d => d.jobType === 'service').length}
+                        </span>
+                        <div className="flex-1 border-t border-gray-700" />
+                      </div>
+                      <ActiveDispatchTable dispatches={dispatches.filter(d => d.jobType === 'service')} cancelDispatch={cancelDispatch} drivers={drivers} assignTransfer={assignTransfer} />
+                    </div>
+                  )}
+                </div>
               )}
             </div>
             </div>
@@ -1348,7 +1383,7 @@ export default function DispatchPage() {
                                     <span className={accepted ? 'text-green-400' : 'text-gray-300'}>
                                       {accepted ? '✓ ' : '○ '}{firstName}
                                     </span>
-                                    {j.status === 'paused' && <span className="text-yellow-500 text-xs">(paused)</span>}
+                                    <StatusBadge status={j.status} driverStage={j.driverStage} driverDest={j.driverDest} />
                                   </div>
                                   <button
                                     onClick={() => j.id && cancelDispatch(j.id)}
