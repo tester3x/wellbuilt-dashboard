@@ -1882,36 +1882,30 @@ function ActiveDispatchPanel({ dispatches, cancelDispatch, drivers, assignTransf
   const assigned = dispatches.filter(d => !(d.type === 'transfer' && (!d.driverHash || d.status === 'pending_approval')));
 
   // Identify multi-driver SW groups (serviceGroupId with 2+ dispatches)
-  const { crewGroups, nonCrewJobs } = useMemo(() => {
+  // These appear in BOTH the driver's individual list AND the Crew Jobs section
+  const crewGroups = useMemo(() => {
     const groupMap = new Map<string, DispatchJob[]>();
-    const soloJobs: DispatchJob[] = [];
 
     assigned.forEach(d => {
       if (d.serviceGroupId) {
         if (!groupMap.has(d.serviceGroupId)) groupMap.set(d.serviceGroupId, []);
         groupMap.get(d.serviceGroupId)!.push(d);
-      } else {
-        soloJobs.push(d);
       }
     });
 
-    // Multi-driver groups go to crew section, single-member "groups" stay with driver
     const crews: DispatchJob[][] = [];
-    groupMap.forEach((jobs, _groupId) => {
-      if (jobs.length >= 2) {
-        crews.push(jobs);
-      } else {
-        soloJobs.push(...jobs);
-      }
+    groupMap.forEach((jobs) => {
+      if (jobs.length >= 2) crews.push(jobs);
     });
 
-    return { crewGroups: crews, nonCrewJobs: soloJobs };
+    return crews;
   }, [assigned]);
 
-  // Group non-crew jobs by driver
+  // Group ALL jobs by driver — every dispatch shows in the driver's personal list
+  // (multi-driver SW jobs also appear in Crew Jobs section for at-a-glance crew view)
   const grouped = useMemo(() => {
     const map = new Map<string, DispatchJob[]>();
-    nonCrewJobs.forEach(d => {
+    assigned.forEach(d => {
       const key = d.driverHash;
       if (!map.has(key)) map.set(key, []);
       map.get(key)!.push(d);
@@ -1923,7 +1917,7 @@ function ActiveDispatchPanel({ dispatches, cancelDispatch, drivers, assignTransf
         return bActive - aActive;
       })
     );
-  }, [nonCrewJobs]);
+  }, [assigned]);
 
   function toggleDriver(hash: string) {
     setExpandedDrivers(prev => {
