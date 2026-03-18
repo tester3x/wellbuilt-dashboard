@@ -47,6 +47,34 @@ export interface FrostZone {
   maxBbls?: number;           // weight limit in BBLs during frost season
 }
 
+export interface PayrollColumn {
+  id: string;
+  label: string;
+  align: 'left' | 'right' | 'center';
+  field: string;     // key on DriverTimesheetRow
+  format?: 'currency' | 'number' | 'decimal' | 'text';
+}
+
+export const ALL_PAYROLL_COLUMNS: PayrollColumn[] = [
+  { id: 'date',         label: 'Date',          align: 'left',  field: 'date',          format: 'text' },
+  { id: 'invoiceNumber',label: 'Invoice #',     align: 'left',  field: 'invoiceNumber', format: 'text' },
+  { id: 'operator',     label: 'Company',       align: 'left',  field: 'operator',      format: 'text' },
+  { id: 'wellName',     label: 'Well',          align: 'left',  field: 'wellName',      format: 'text' },
+  { id: 'jobType',      label: 'Product',       align: 'left',  field: 'jobType',       format: 'text' },
+  { id: 'bbls',         label: 'Qty (BBL)',     align: 'right', field: 'bbls',          format: 'number' },
+  { id: 'hours',        label: 'Time (hrs)',    align: 'right', field: 'hours',         format: 'decimal' },
+  { id: 'rate',         label: 'Rate',          align: 'right', field: 'rate',          format: 'currency' },
+  { id: 'amountBilled', label: 'Amount Billed', align: 'right', field: 'amountBilled',  format: 'currency' },
+  { id: 'detentionPay', label: 'Detention',     align: 'right', field: 'detentionPay',  format: 'currency' },
+  { id: 'employeeTake', label: 'Employee Take', align: 'right', field: 'employeeTake',  format: 'currency' },
+];
+
+export const DEFAULT_PAYROLL_COLUMNS = ['date', 'invoiceNumber', 'operator', 'jobType', 'bbls', 'hours', 'rate', 'amountBilled', 'employeeTake'];
+
+export interface PayrollTemplate {
+  columns: string[];     // ordered list of column IDs that are enabled
+}
+
 export interface PayConfig {
   defaultSplit: number;       // e.g. 0.25 for 25%
   payrollRounding: 'match_billing' | 'none' | 'quarter_hour' | 'half_hour';
@@ -54,6 +82,7 @@ export interface PayConfig {
   autoApproveHours?: number;  // hours before auto-approve (0 = disabled)
   frostSeason?: FrostSeason;  // legacy single frost season (backward compat)
   frostZones?: Record<string, FrostZone>;  // per-county frost zones: { "McKenzie": {...}, "Mountrail": {...} }
+  payrollTemplate?: PayrollTemplate;  // customizable column visibility + order
 }
 
 // Common Bakken counties for frost zone picker

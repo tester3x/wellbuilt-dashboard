@@ -29,7 +29,7 @@ import {
   formatCurrency,
   formatPeriodRange,
 } from '@/lib/payroll';
-import { type CompanyConfig, loadAllCompanies } from '@/lib/companySettings';
+import { type CompanyConfig, loadAllCompanies, ALL_PAYROLL_COLUMNS, DEFAULT_PAYROLL_COLUMNS, type PayrollColumn } from '@/lib/companySettings';
 import { Timestamp } from 'firebase/firestore';
 import { ref, get } from 'firebase/database';
 import { getFirebaseDatabase } from '@/lib/firebase';
@@ -65,47 +65,63 @@ function escapeCSV(val: string | number): string {
   return s;
 }
 
+// Format a cell value based on column definition
+function formatCellValue(row: DriverTimesheetRow, col: PayrollColumn): string {
+  const val = (row as any)[col.field];
+  if (val == null) return '';
+  switch (col.format) {
+    case 'currency': return `$${Number(val).toFixed(2)}`;
+    case 'decimal': return Number(val).toFixed(2);
+    case 'number': return String(val);
+    default: return String(val);
+  }
+}
+
+function formatCellRaw(row: DriverTimesheetRow, col: PayrollColumn): string {
+  const val = (row as any)[col.field];
+  if (val == null) return '';
+  switch (col.format) {
+    case 'currency': return Number(val).toFixed(2);
+    case 'decimal': return Number(val).toFixed(2);
+    case 'number': return String(val);
+    default: return String(val);
+  }
+}
+
+// Totals value for a column
+function totalsCellValue(summary: DriverTimesheetSummary, col: PayrollColumn): string {
+  switch (col.id) {
+    case 'bbls': return summary.totalBBLs.toLocaleString();
+    case 'hours': return summary.totalHours > 0 ? summary.totalHours.toFixed(2) : '';
+    case 'amountBilled': return summary.grossBilled > 0 ? formatCurrency(summary.grossBilled) : '';
+    case 'employeeTake': return summary.employeePay > 0 ? formatCurrency(summary.employeePay) : '';
+    case 'detentionPay': return formatCurrency(summary.rows.reduce((s, r) => s + r.detentionPay, 0));
+    default: return '';
+  }
+}
+
 function exportDriverCSV(
   summary: DriverTimesheetSummary,
   legalNameMap: Record<string, string>,
-  period: PayPeriod
+  period: PayPeriod,
+  cols: PayrollColumn[]
 ) {
   const driverLabel = legalNameMap[summary.driverName] || summary.driverName;
-  const hasDetention = summary.rows.some(r => r.detentionPay > 0);
 
-  const headers = ['Date', 'Invoice #', 'Operator', 'Well', 'Product', 'BBLs', 'Hours', 'Rate', 'Amount Billed'];
-  if (hasDetention) headers.push('Detention');
-  headers.push('Employee Take');
-
+  const headers = cols.map(c => c.label);
   const rows: string[][] = [];
+
   for (const r of summary.rows) {
-    const row = [
-      escapeCSV(r.date),
-      escapeCSV(r.invoiceNumber),
-      escapeCSV(r.operator),
-      escapeCSV(r.wellName),
-      escapeCSV(r.jobType),
-      String(r.bbls),
-      r.hours.toFixed(2),
-      r.rate.toFixed(2),
-      r.amountBilled.toFixed(2),
-    ];
-    if (hasDetention) row.push(r.detentionPay.toFixed(2));
-    row.push(r.employeeTake.toFixed(2));
-    rows.push(row);
+    rows.push(cols.map(c => escapeCSV(formatCellRaw(r, c))));
   }
 
   // Totals row
-  const totalsRow = ['TOTALS', '', '', '', '', String(summary.totalBBLs), summary.totalHours.toFixed(2), '', summary.grossBilled.toFixed(2)];
-  if (hasDetention) totalsRow.push('');
-  totalsRow.push(summary.employeePay.toFixed(2));
-  rows.push(totalsRow);
+  rows.push(cols.map((c, i) => i === 0 ? 'TOTALS' : totalsCellValue(summary, c).replace('$', '')));
 
   // Blank separator
-  const blankRow = headers.map(() => '');
+  const blankRow = cols.map(() => '');
   rows.push(blankRow);
 
-  // Additions
   if (summary.additions > 0) {
     const addRow = blankRow.slice();
     addRow[0] = 'Bonuses';
@@ -113,7 +129,6 @@ function exportDriverCSV(
     rows.push(addRow);
   }
 
-  // Deductions
   if (summary.deductions > 0) {
     const dedRow = blankRow.slice();
     dedRow[0] = 'Deductions';
@@ -121,14 +136,13 @@ function exportDriverCSV(
     rows.push(dedRow);
   }
 
-  // Net pay
   const netRow = blankRow.slice();
   netRow[0] = 'NET PAY';
   netRow[netRow.length - 1] = summary.netPay.toFixed(2);
   rows.push(netRow);
 
   const csv = [headers.join(','), ...rows.map(r => r.join(','))].join('\n');
-  const filename = `payroll_${sanitizeFilename(driverLabel)}_${formatPeriodForFilename(period)}.csv`;
+  const filename = `${driverLabel} ${formatPeriodForFilename(period)}.csv`;
   downloadCSV(csv, filename);
 }
 
@@ -189,95 +203,74 @@ function exportAllCSV(
 function exportDriverPDF(
   summary: DriverTimesheetSummary,
   legalNameMap: Record<string, string>,
-  period: PayPeriod
+  period: PayPeriod,
+  cols: PayrollColumn[]
 ) {
   const driverLabel = legalNameMap[summary.driverName] || summary.driverName;
   const periodLabel = formatPeriodRange(period);
-  const hasDetention = summary.rows.some(r => r.detentionPay > 0);
+  const periodFile = formatPeriodForFilename(period);
 
-  const tableHeaders = `
-    <th>Date</th><th>Invoice #</th><th>Operator</th><th>Well</th><th>Product</th>
-    <th class="r">BBLs</th><th class="r">Hours</th><th class="r">Rate</th>
-    <th class="r">Amount Billed</th>
-    ${hasDetention ? '<th class="r">Detention</th>' : ''}
-    <th class="r">Employee Take</th>
-  `;
+  Promise.all([
+    import('jspdf'),
+    import('jspdf-autotable'),
+  ]).then(([jsPDFModule]) => {
+    const doc = new jsPDFModule.jsPDF({ orientation: 'landscape', unit: 'pt', format: 'letter' });
 
-  const tableRows = summary.rows.map(r => `
-    <tr>
-      <td>${r.date}</td><td>${r.invoiceNumber}</td>
-      <td>${r.operator}</td><td>${r.wellName}</td><td>${r.jobType}</td>
-      <td class="r">${r.bbls}</td><td class="r">${r.hours.toFixed(2)}</td>
-      <td class="r">$${r.rate.toFixed(2)}</td><td class="r">${formatCurrency(r.amountBilled)}</td>
-      ${hasDetention ? `<td class="r">${formatCurrency(r.detentionPay)}</td>` : ''}
-      <td class="r">${formatCurrency(r.employeeTake)}</td>
-    </tr>
-  `).join('');
+    doc.setFontSize(18);
+    doc.setTextColor(33, 33, 33);
+    doc.text(`Payroll: ${driverLabel}`, 40, 40);
+    doc.setFontSize(11);
+    doc.setTextColor(120, 120, 120);
+    doc.text(`Period: ${periodLabel}`, 40, 58);
 
-  const colCount = hasDetention ? 11 : 10;
+    const headers = cols.map(c => c.label);
+    const rows = summary.rows.map(r => cols.map(c => formatCellValue(r, c)));
+    const totalsRow = cols.map((c, i) => i === 0 ? 'TOTALS' : totalsCellValue(summary, c));
 
-  const html = `<!DOCTYPE html>
-<html><head><title>Payroll - ${driverLabel}</title>
-<style>
-  * { margin: 0; padding: 0; box-sizing: border-box; }
-  body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; background: #111; color: #e5e7eb; padding: 24px; }
-  h1 { font-size: 20px; color: #fff; margin-bottom: 4px; }
-  .sub { color: #9ca3af; font-size: 13px; margin-bottom: 16px; }
-  table { width: 100%; border-collapse: collapse; font-size: 12px; }
-  th { background: #1f2937; color: #9ca3af; font-weight: 600; text-align: left; padding: 8px 10px; border-bottom: 1px solid #374151; }
-  td { padding: 6px 10px; border-bottom: 1px solid #1f2937; color: #d1d5db; }
-  tr:nth-child(even) td { background: rgba(255,255,255,0.02); }
-  .r { text-align: right; }
-  .totals td { font-weight: 700; color: #fff; border-top: 2px solid #374151; background: #1f2937; }
-  .summary { margin-top: 16px; display: flex; gap: 24px; flex-wrap: wrap; }
-  .summary-item { background: #1f2937; border-radius: 8px; padding: 12px 16px; min-width: 140px; }
-  .summary-item .label { color: #9ca3af; font-size: 11px; text-transform: uppercase; }
-  .summary-item .value { color: #fff; font-size: 18px; font-weight: 700; margin-top: 4px; }
-  .summary-item .value.green { color: #4ade80; }
-  .summary-item .value.red { color: #f87171; }
-  @media print {
-    body { background: #fff; color: #111; padding: 12px; }
-    th { background: #f3f4f6; color: #374151; border-bottom: 2px solid #9ca3af; }
-    td { color: #111; border-bottom: 1px solid #e5e7eb; }
-    tr:nth-child(even) td { background: #f9fafb; }
-    .totals td { background: #f3f4f6; color: #111; border-top: 2px solid #374151; }
-    .summary-item { background: #f3f4f6; border: 1px solid #e5e7eb; }
-    .summary-item .label { color: #6b7280; }
-    .summary-item .value { color: #111; }
-    .summary-item .value.green { color: #16a34a; }
-    .summary-item .value.red { color: #dc2626; }
-  }
-</style></head><body>
-  <h1>Payroll: ${driverLabel}</h1>
-  <p class="sub">Period: ${periodLabel}</p>
-  <table>
-    <thead><tr>${tableHeaders}</tr></thead>
-    <tbody>
-      ${tableRows}
-      <tr class="totals">
-        <td colspan="5">TOTALS</td>
-        <td class="r">${summary.totalBBLs.toLocaleString()}</td>
-        <td class="r">${summary.totalHours.toFixed(2)}</td>
-        <td></td><td class="r">${formatCurrency(summary.grossBilled)}</td>
-        ${hasDetention ? '<td></td>' : ''}
-        <td class="r">${formatCurrency(summary.employeePay)}</td>
-      </tr>
-    </tbody>
-  </table>
-  <div class="summary">
-    <div class="summary-item"><div class="label">Employee Pay</div><div class="value">${formatCurrency(summary.employeePay)}</div></div>
-    ${summary.additions > 0 ? `<div class="summary-item"><div class="label">Bonuses</div><div class="value green">+${formatCurrency(summary.additions)}</div></div>` : ''}
-    ${summary.deductions > 0 ? `<div class="summary-item"><div class="label">Deductions</div><div class="value red">-${formatCurrency(summary.deductions)}</div></div>` : ''}
-    <div class="summary-item"><div class="label">Net Pay</div><div class="value green">${formatCurrency(summary.netPay)}</div></div>
-  </div>
-</body></html>`;
+    const rightIndices = new Set(cols.map((c, i) => c.align === 'right' ? i : -1).filter(i => i >= 0));
 
-  const w = window.open('', '_blank', 'width=1000,height=700');
-  if (w) {
-    w.document.write(html);
-    w.document.close();
-    setTimeout(() => w.print(), 300);
-  }
+    (doc as any).autoTable({
+      head: [headers],
+      body: [...rows, totalsRow],
+      startY: 72,
+      margin: { left: 40, right: 40 },
+      styles: { fontSize: 9, cellPadding: 4, textColor: [51, 51, 51] },
+      headStyles: { fillColor: [55, 65, 81], textColor: [209, 213, 219], fontStyle: 'bold', fontSize: 8 },
+      columnStyles: Object.fromEntries(
+        Array.from(rightIndices).map(i => [i, { halign: 'right' }])
+      ),
+      willDrawCell: (data: any) => {
+        if (data.section === 'body' && data.row.index === rows.length) {
+          data.cell.styles.fontStyle = 'bold';
+          data.cell.styles.fillColor = [243, 244, 246];
+        }
+      },
+    });
+
+    const finalY = (doc as any).lastAutoTable.finalY + 20;
+    const items: { label: string; value: string; color?: [number, number, number] }[] = [
+      { label: 'EMPLOYEE PAY', value: formatCurrency(summary.employeePay) },
+    ];
+    if (summary.additions > 0) items.push({ label: 'BONUSES', value: `+${formatCurrency(summary.additions)}`, color: [34, 197, 94] });
+    if (summary.deductions > 0) items.push({ label: 'DEDUCTIONS', value: `-${formatCurrency(summary.deductions)}`, color: [239, 68, 68] });
+    items.push({ label: 'NET PAY', value: formatCurrency(summary.netPay), color: [34, 197, 94] });
+
+    let xPos = 40;
+    for (const item of items) {
+      doc.setFillColor(243, 244, 246);
+      doc.roundedRect(xPos, finalY, 140, 44, 4, 4, 'F');
+      doc.setFontSize(8);
+      doc.setTextColor(120, 120, 120);
+      doc.text(item.label, xPos + 10, finalY + 14);
+      doc.setFontSize(14);
+      doc.setTextColor(...(item.color || [33, 33, 33]));
+      doc.text(item.value, xPos + 10, finalY + 34);
+      xPos += 152;
+    }
+
+    const filename = `${driverLabel} ${periodFile}.pdf`;
+    doc.save(filename);
+  });
 }
 
 // ─── Status Helpers ──────────────────────────────────────────────────────────
@@ -320,6 +313,7 @@ export default function PayrollPage() {
   const [showDeductionList, setShowDeductionList] = useState(false);
   const [driverNames, setDriverNames] = useState<string[]>([]);
   const [legalNameMap, setLegalNameMap] = useState<Record<string, string>>({});
+  const [payrollColumns, setPayrollColumns] = useState<string[]>(DEFAULT_PAYROLL_COLUMNS);
   const [dedDriver, setDedDriver] = useState('');
   const [dedReason, setDedReason] = useState('');
   const [dedCustomReason, setDedCustomReason] = useState('');
@@ -349,6 +343,13 @@ export default function PayrollPage() {
   const [addSaving, setAddSaving] = useState(false);
 
   const selectedPeriod = payPeriods[selectedPeriodIdx];
+
+  // Resolve active payroll columns from template
+  const activeColumns = useMemo(() => {
+    return payrollColumns
+      .map(id => ALL_PAYROLL_COLUMNS.find(c => c.id === id))
+      .filter(Boolean) as PayrollColumn[];
+  }, [payrollColumns]);
 
   // Auth guard
   useEffect(() => {
@@ -418,6 +419,12 @@ export default function PayrollPage() {
       const companies = await loadAllCompanies();
       const companyMap = new Map<string, CompanyConfig>();
       companies.forEach(c => companyMap.set(c.id, c));
+
+      // Load payroll template from company config
+      const targetCompany = user?.companyId ? companyMap.get(user.companyId) : companies[0];
+      if (targetCompany?.payConfig?.payrollTemplate?.columns?.length) {
+        setPayrollColumns(targetCompany.payConfig.payrollTemplate.columns);
+      }
 
       // Build well→county map for frost rate lookup
       const allOperators = new Set<string>();
@@ -842,6 +849,7 @@ export default function PayrollPage() {
                         onToggle={() => setExpandedDriver(isExpanded ? null : ts.driverName)}
                         legalNameMap={legalNameMap}
                         selectedPeriod={selectedPeriod}
+                        activeColumns={activeColumns}
                       />
                     );
                   })}
@@ -1455,6 +1463,7 @@ function DriverRow({
   onToggle,
   legalNameMap = {},
   selectedPeriod,
+  activeColumns,
 }: {
   summary: DriverTimesheetSummary;
   badge: { label: string; color: string };
@@ -1462,6 +1471,7 @@ function DriverRow({
   onToggle: () => void;
   legalNameMap?: Record<string, string>;
   selectedPeriod: PayPeriod;
+  activeColumns: PayrollColumn[];
 }) {
   return (
     <>
@@ -1511,7 +1521,7 @@ function DriverRow({
       {isExpanded && (
         <tr>
           <td colSpan={11} className="p-0">
-            <DriverTimesheetDetail summary={summary} legalNameMap={legalNameMap} selectedPeriod={selectedPeriod} />
+            <DriverTimesheetDetail summary={summary} legalNameMap={legalNameMap} selectedPeriod={selectedPeriod} activeColumns={activeColumns} />
           </td>
         </tr>
       )}
@@ -1521,7 +1531,7 @@ function DriverRow({
 
 // ─── Individual Driver Timesheet Detail ──────────────────────────────────────
 
-function DriverTimesheetDetail({ summary, legalNameMap = {}, selectedPeriod }: { summary: DriverTimesheetSummary; legalNameMap?: Record<string, string>; selectedPeriod: PayPeriod }) {
+function DriverTimesheetDetail({ summary, legalNameMap = {}, selectedPeriod, activeColumns }: { summary: DriverTimesheetSummary; legalNameMap?: Record<string, string>; selectedPeriod: PayPeriod; activeColumns: PayrollColumn[] }) {
   return (
     <div className="bg-gray-900/50 border-t border-gray-700 px-6 py-4">
       {/* Driver Header */}
@@ -1540,67 +1550,54 @@ function DriverTimesheetDetail({ summary, legalNameMap = {}, selectedPeriod }: {
           <button className="bg-blue-600 hover:bg-blue-700 text-white px-3 py-1.5 rounded text-xs font-medium transition-colors">
             Send to Driver
           </button>
-          <button onClick={() => exportDriverPDF(summary, legalNameMap, selectedPeriod)} className="bg-gray-700 hover:bg-gray-600 text-white px-3 py-1.5 rounded text-xs font-medium transition-colors">
+          <button onClick={() => exportDriverPDF(summary, legalNameMap, selectedPeriod, activeColumns)} className="bg-gray-700 hover:bg-gray-600 text-white px-3 py-1.5 rounded text-xs font-medium transition-colors">
             Export PDF
           </button>
-          <button onClick={() => exportDriverCSV(summary, legalNameMap, selectedPeriod)} className="bg-gray-700 hover:bg-gray-600 text-white px-3 py-1.5 rounded text-xs font-medium transition-colors">
+          <button onClick={() => exportDriverCSV(summary, legalNameMap, selectedPeriod, activeColumns)} className="bg-gray-700 hover:bg-gray-600 text-white px-3 py-1.5 rounded text-xs font-medium transition-colors">
             Export CSV
           </button>
         </div>
       </div>
 
       {/* Timesheet Table */}
-      {(() => { const hasDetention = summary.rows.some(r => r.detentionPay > 0); return (
+      {(() => { return (
       <div className="overflow-x-auto rounded-lg border border-gray-700">
         <table className="w-full text-sm">
           <thead>
             <tr className="bg-gray-800 border-b border-gray-700">
-              <th className="text-left text-gray-400 font-medium px-3 py-2">Date</th>
-              <th className="text-left text-gray-400 font-medium px-3 py-2">Invoice #</th>
-              <th className="text-left text-gray-400 font-medium px-3 py-2">Company</th>
-              <th className="text-left text-gray-400 font-medium px-3 py-2">Product</th>
-              <th className="text-right text-gray-400 font-medium px-3 py-2">Qty (BBL)</th>
-              <th className="text-right text-gray-400 font-medium px-3 py-2">Time (hrs)</th>
-              <th className="text-right text-gray-400 font-medium px-3 py-2">Rate</th>
-              <th className="text-right text-gray-400 font-medium px-3 py-2">Amount Billed</th>
-              {hasDetention && <th className="text-right text-gray-400 font-medium px-3 py-2">Detention</th>}
-              <th className="text-right text-gray-400 font-medium px-3 py-2">Employee Take</th>
+              {activeColumns.map(col => (
+                <th key={col.id} className={`${col.align === 'right' ? 'text-right' : 'text-left'} text-gray-400 font-medium px-3 py-2`}>
+                  {col.label}
+                </th>
+              ))}
               <th className="text-center text-gray-400 font-medium px-3 py-2">Flag</th>
             </tr>
           </thead>
           <tbody>
             {summary.rows.map(row => (
-              <TimesheetRow key={row.id} row={row} showDetention={hasDetention} />
+              <TimesheetRow key={row.id} row={row} columns={activeColumns} />
             ))}
 
             {/* Subtotal */}
             <tr className="border-t border-gray-600 bg-gray-800/50 font-bold">
-              <td colSpan={4} className="px-3 py-2 text-white">TOTAL</td>
-              <td className="text-right px-3 py-2 text-white">
-                {summary.totalBBLs.toLocaleString()}
-              </td>
-              <td className="text-right px-3 py-2 text-white">
-                {summary.totalHours > 0 ? summary.totalHours.toFixed(2) : ''}
-              </td>
-              <td className="px-3 py-2" />
-              <td className="text-right px-3 py-2 text-white">
-                {summary.grossBilled > 0 ? formatCurrency(summary.grossBilled) : '—'}
-              </td>
-              {hasDetention && (
-                <td className="text-right px-3 py-2 text-orange-400">
-                  {formatCurrency(summary.rows.reduce((s, r) => s + r.detentionPay, 0))}
-                </td>
-              )}
-              <td className="text-right px-3 py-2 text-green-400">
-                {summary.employeePay > 0 ? formatCurrency(summary.employeePay) : '—'}
-              </td>
+              {activeColumns.map((col, i) => {
+                if (i === 0) return <td key={col.id} className="px-3 py-2 text-white">TOTAL</td>;
+                const val = totalsCellValue(summary, col);
+                const isGreen = col.id === 'employeeTake';
+                const isOrange = col.id === 'detentionPay';
+                return (
+                  <td key={col.id} className={`${col.align === 'right' ? 'text-right' : ''} px-3 py-2 ${isGreen ? 'text-green-400' : isOrange ? 'text-orange-400' : 'text-white'}`}>
+                    {val || ''}
+                  </td>
+                );
+              })}
               <td className="px-3 py-2" />
             </tr>
 
             {/* Bonuses row */}
             {summary.additions > 0 && (
               <tr className="bg-gray-800/30">
-                <td colSpan={hasDetention ? 9 : 8} className="px-3 py-2 text-gray-400 text-right">Bonuses / Reimbursements</td>
+                <td colSpan={activeColumns.length - 1} className="px-3 py-2 text-gray-400 text-right">Bonuses / Reimbursements</td>
                 <td className="text-right px-3 py-2 text-green-400 font-medium">
                   +{formatCurrency(summary.additions)}
                 </td>
@@ -1611,7 +1608,7 @@ function DriverTimesheetDetail({ summary, legalNameMap = {}, selectedPeriod }: {
             {/* Deductions row */}
             {summary.deductions > 0 && (
               <tr className="bg-gray-800/30">
-                <td colSpan={hasDetention ? 9 : 8} className="px-3 py-2 text-gray-400 text-right">Deductions</td>
+                <td colSpan={activeColumns.length - 1} className="px-3 py-2 text-gray-400 text-right">Deductions</td>
                 <td className="text-right px-3 py-2 text-red-400 font-medium">
                   -{formatCurrency(summary.deductions)}
                 </td>
@@ -1622,7 +1619,7 @@ function DriverTimesheetDetail({ summary, legalNameMap = {}, selectedPeriod }: {
             {/* Net Pay row */}
             {(summary.grossBilled > 0 || summary.deductions > 0 || summary.additions > 0) && (
               <tr className="bg-gray-800/30 border-t border-gray-700">
-                <td colSpan={hasDetention ? 9 : 8} className="px-3 py-2 text-white text-right font-bold">Net Pay</td>
+                <td colSpan={activeColumns.length - 1} className="px-3 py-2 text-white text-right font-bold">Net Pay</td>
                 <td className="text-right px-3 py-2 text-green-400 font-bold text-base">
                   {formatCurrency(summary.netPay)}
                 </td>
@@ -1639,29 +1636,28 @@ function DriverTimesheetDetail({ summary, legalNameMap = {}, selectedPeriod }: {
 
 // ─── Individual Timesheet Row ────────────────────────────────────────────────
 
-function TimesheetRow({ row, showDetention }: { row: DriverTimesheetRow; showDetention: boolean }) {
+function TimesheetRow({ row, columns }: { row: DriverTimesheetRow; columns: PayrollColumn[] }) {
   return (
     <tr className="border-b border-gray-700/30 hover:bg-gray-800/30 transition-colors">
-      <td className="px-3 py-2 text-gray-300">{row.date}</td>
-      <td className="px-3 py-2 text-gray-300">{row.invoiceNumber}</td>
-      <td className="px-3 py-2 text-gray-300">{row.operator}</td>
-      <td className="px-3 py-2 text-gray-300">{row.jobType}</td>
-      <td className="text-right px-3 py-2 text-gray-300">{row.bbls || ''}</td>
-      <td className="text-right px-3 py-2 text-gray-300">{row.hours || ''}</td>
-      <td className="text-right px-3 py-2 text-gray-300">
-        {row.rate > 0 ? formatCurrency(row.rate) : '—'}
-      </td>
-      <td className="text-right px-3 py-2 text-gray-300">
-        {row.amountBilled > 0 ? formatCurrency(row.amountBilled) : '—'}
-      </td>
-      {showDetention && (
-        <td className="text-right px-3 py-2 text-orange-400">
-          {row.detentionPay > 0 ? formatCurrency(row.detentionPay) : '—'}
-        </td>
-      )}
-      <td className="text-right px-3 py-2 text-gray-300">
-        {row.employeeTake > 0 ? formatCurrency(row.employeeTake) : '—'}
-      </td>
+      {columns.map(col => {
+        const val = (row as any)[col.field];
+        const isOrange = col.id === 'detentionPay';
+        let display: string;
+        if (col.format === 'currency') {
+          display = val > 0 ? formatCurrency(val) : '—';
+        } else if (col.format === 'decimal') {
+          display = val ? Number(val).toFixed(2) : '';
+        } else if (col.format === 'number') {
+          display = val ? String(val) : '';
+        } else {
+          display = val ? String(val) : '';
+        }
+        return (
+          <td key={col.id} className={`px-3 py-2 ${col.align === 'right' ? 'text-right' : ''} ${isOrange && val > 0 ? 'text-orange-400' : 'text-gray-300'}`}>
+            {display}
+          </td>
+        );
+      })}
       <td className="text-center px-3 py-2">
         {row.flagged ? (
           <span className="text-red-400 cursor-pointer" title={row.flagNote || 'Flagged'}>
