@@ -35,13 +35,6 @@
       ]
     },
     {
-      "collectionGroup": "invoices",
-      "queryScope": "COLLECTION",
-      "fields": [
-        { "fieldPath": "splitGroupId", "order": "ASCENDING" }
-      ]
-    },
-    {
       "collectionGroup": "dispatches",
       "queryScope": "COLLECTION",
       "fields": [
@@ -95,6 +88,14 @@
       "fields": [
         { "fieldPath": "companyId", "order": "ASCENDING" },
         { "fieldPath": "date", "order": "ASCENDING" }
+      ]
+    },
+    {
+      "collectionGroup": "vehicle_documents",
+      "queryScope": "COLLECTION",
+      "fields": [
+        { "fieldPath": "companyId", "order": "ASCENDING" },
+        { "fieldPath": "updatedAt", "order": "DESCENDING" }
       ]
     }
   ],
