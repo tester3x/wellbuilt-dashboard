@@ -33,6 +33,7 @@ interface WellConfig {
   // NDIC well linkage — used by WB Tickets for WB Mobile integration
   ndicName?: string;   // Full NDIC well name (e.g. "GABRIEL 1-36-25H")
   ndicApiNo?: string;  // NDIC API number (e.g. "33-053-06789-00-00")
+  avgFlowRate?: string;
   // Route recording — GPS breadcrumb capture for wells with bad Google Maps directions
   routeRecording?: boolean;
   // Well pad grouping — wells on the same pad share routes with a primary well
