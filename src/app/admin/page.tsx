@@ -212,7 +212,7 @@ export default function AdminPage() {
       setEditWellName(selectedWell); // Set the editable name
       setEditWellRoute(config.route || 'Unrouted');
       setEditWellBottom(String(config.bottomLevel || 3));
-      setEditWellTanks(String(config.tanks || 1));
+      setEditWellTanks(String(config.tanks || config.numTanks || 1));
       setEditWellPullBbls(String(config.pullBbls || 140));
       // Load NDIC linkage if present
       setEditNdicName(config.ndicName || '');
@@ -972,6 +972,14 @@ export default function AdminPage() {
                       )}
                     </div>
                     <div className="text-gray-400 text-sm">Route: {configs[wellName].route || 'Unrouted'}</div>
+                    <div className="flex gap-3 text-xs text-gray-500 mt-0.5">
+                      <span>Tanks: {configs[wellName].tanks || configs[wellName].numTanks || 1}</span>
+                      <span>Bottom: {configs[wellName].bottomLevel || 3}&apos;</span>
+                      <span>Pull: {configs[wellName].pullBbls || 140} BBL</span>
+                      {configs[wellName].avgFlowRate && (
+                        <span>AFR: {configs[wellName].avgFlowRate}</span>
+                      )}
+                    </div>
                     {configs[wellName].ndicApiNo && (
                       <div className="text-teal-400 text-xs">API: {configs[wellName].ndicApiNo}</div>
                     )}
@@ -1296,6 +1304,12 @@ export default function AdminPage() {
                 >
                   &times;
                 </button>
+              </div>
+              <div className="bg-gray-700 rounded px-3 py-2 mb-3 text-sm">
+                <span className="text-gray-400">Linking: </span>
+                <span className="text-white font-medium">
+                  {ndicPickerTarget === 'edit' ? (selectedWell || 'Unknown') : (newWellName.trim() || 'New Well')}
+                </span>
               </div>
 
               {/* Step 1: Search operator */}
