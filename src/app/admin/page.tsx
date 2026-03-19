@@ -21,6 +21,7 @@ import {
 import { DriversTab } from '@/components/admin/DriversTab';
 import { CompaniesTab } from '@/components/admin/CompaniesTab';
 import GpsRoutesTab from '@/components/admin/GpsRoutesTab';
+import { EquipmentTab } from '@/components/admin/EquipmentTab';
 
 interface WellConfig {
   route?: string;
@@ -90,13 +91,13 @@ export default function AdminPage() {
   const [editNdicApiNo, setEditNdicApiNo] = useState('');
 
   const [message, setMessage] = useState('');
-  const [activeTab, setActiveTab] = useState<'routes' | 'wells' | 'drivers' | 'companies' | 'gpsroutes'>('wells');
+  const [activeTab, setActiveTab] = useState<'routes' | 'wells' | 'drivers' | 'companies' | 'gpsroutes' | 'equipment'>('wells');
 
   // Read ?tab= from URL to deep-link into specific admin section (e.g. from pulsing Admin badge)
   useEffect(() => {
     const params = new URLSearchParams(window.location.search);
     const tab = params.get('tab');
-    const validTabs = ['routes', 'wells', 'drivers', 'companies', 'gpsroutes'];
+    const validTabs = ['routes', 'wells', 'drivers', 'companies', 'gpsroutes', 'equipment'];
     if (tab && validTabs.includes(tab)) {
       setActiveTab(tab as any);
     }
@@ -790,6 +791,7 @@ export default function AdminPage() {
            activeTab === 'routes' ? 'Route Groups' :
            activeTab === 'gpsroutes' ? 'GPS Route Recording' :
            activeTab === 'drivers' ? 'Driver Management' :
+           activeTab === 'equipment' ? 'Equipment Documents' :
            'Customer Management'}
         </h2>
 
@@ -825,6 +827,12 @@ export default function AdminPage() {
             className={`px-4 py-2 rounded ${activeTab === 'companies' ? 'bg-blue-600 text-white' : 'bg-gray-700 text-gray-300'}`}
           >
             Customers
+          </button>
+          <button
+            onClick={() => setActiveTab('equipment')}
+            className={`px-4 py-2 rounded ${activeTab === 'equipment' ? 'bg-emerald-600 text-white' : 'bg-gray-700 text-gray-300'}`}
+          >
+            Equipment
           </button>
         </div>
 
@@ -1508,6 +1516,14 @@ export default function AdminPage() {
         {/* Companies Tab */}
         {activeTab === 'companies' && (
           <CompaniesTab
+            scopeCompanyId={user?.companyId}
+            isWbAdmin={!user?.companyId && (user?.role === 'it' || user?.role === 'admin')}
+          />
+        )}
+
+        {/* Equipment Tab */}
+        {activeTab === 'equipment' && (
+          <EquipmentTab
             scopeCompanyId={user?.companyId}
             isWbAdmin={!user?.companyId && (user?.role === 'it' || user?.role === 'admin')}
           />
