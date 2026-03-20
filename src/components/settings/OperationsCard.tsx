@@ -1,6 +1,7 @@
 'use client';
 
 import { useState } from 'react';
+import { deleteField } from 'firebase/firestore';
 import { type CompanyConfig, updateCompanyFields } from '@/lib/companySettings';
 
 interface Props {
@@ -11,7 +12,7 @@ interface Props {
 export function OperationsCard({ company, onSave }: Props) {
   const [saving, setSaving] = useState<string | null>(null);
 
-  const toggle = async (field: 'splitTickets' | 'transferRequiresApproval', current: boolean) => {
+  const toggle = async (field: 'splitTickets' | 'transferRequiresApproval' | 'liveDispatchSync', current: boolean) => {
     setSaving(field);
     try {
       await updateCompanyFields(company.id, { [field]: !current });
@@ -78,6 +79,75 @@ export function OperationsCard({ company, onSave }: Props) {
               company.transferRequiresApproval ? 'translate-x-5' : 'translate-x-0'
             }`} />
           </button>
+        </div>
+
+        {/* Live Dispatch Sync — three-state: undefined (off), true (sync), false (dispatch-only) */}
+        <div>
+          <div className="flex items-center justify-between mb-1">
+            <div>
+              <div className="text-white text-sm">Live Dispatch Sync</div>
+              <div className="text-gray-500 text-xs">
+                {company.liveDispatchSync === true
+                  ? 'Driver jobs sync to dispatch board. Drivers can start their own loads.'
+                  : company.liveDispatchSync === false
+                  ? 'Dispatch-only mode. Drivers cannot start their own loads.'
+                  : 'Off — no dispatch sync. Drivers work independently.'}
+              </div>
+            </div>
+          </div>
+          <div className={`flex rounded-md overflow-hidden border border-gray-600 ${saving === 'liveDispatchSync' ? 'opacity-50' : ''}`}>
+            <button
+              onClick={async () => {
+                setSaving('liveDispatchSync');
+                try {
+                  await updateCompanyFields(company.id, { liveDispatchSync: deleteField() as any });
+                  onSave();
+                } catch (err) { console.error(err); } finally { setSaving(null); }
+              }}
+              disabled={saving === 'liveDispatchSync'}
+              className={`px-3 py-1 text-xs font-medium transition-colors ${
+                company.liveDispatchSync === undefined || company.liveDispatchSync === null
+                  ? 'bg-orange-500 text-black'
+                  : 'bg-gray-700 text-gray-400 hover:bg-gray-600'
+              }`}
+            >
+              Off
+            </button>
+            <button
+              onClick={async () => {
+                setSaving('liveDispatchSync');
+                try {
+                  await updateCompanyFields(company.id, { liveDispatchSync: true });
+                  onSave();
+                } catch (err) { console.error(err); } finally { setSaving(null); }
+              }}
+              disabled={saving === 'liveDispatchSync'}
+              className={`px-3 py-1 text-xs font-medium transition-colors ${
+                company.liveDispatchSync === true
+                  ? 'bg-orange-500 text-black'
+                  : 'bg-gray-700 text-gray-400 hover:bg-gray-600'
+              }`}
+            >
+              Sync
+            </button>
+            <button
+              onClick={async () => {
+                setSaving('liveDispatchSync');
+                try {
+                  await updateCompanyFields(company.id, { liveDispatchSync: false });
+                  onSave();
+                } catch (err) { console.error(err); } finally { setSaving(null); }
+              }}
+              disabled={saving === 'liveDispatchSync'}
+              className={`px-3 py-1 text-xs font-medium transition-colors ${
+                company.liveDispatchSync === false
+                  ? 'bg-orange-500 text-black'
+                  : 'bg-gray-700 text-gray-400 hover:bg-gray-600'
+              }`}
+            >
+              Dispatch Only
+            </button>
+          </div>
         </div>
 
         {/* Cancelled Number Handling segmented picker */}

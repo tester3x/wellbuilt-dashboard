@@ -6,6 +6,19 @@ import * as admin from 'firebase-admin';
 admin.initializeApp();
 const db = admin.database();
 
+// Format a Date to "MM/DD/YYYY H:MM AM/PM" (no comma — matches WB M/WB T format)
+// Node's toLocaleString() produces "M/D/YYYY, H:MM:SS AM/PM" which Hermes can't parse
+function formatLocalDateTime(d: Date): string {
+  const month = String(d.getMonth() + 1).padStart(2, '0');
+  const day = String(d.getDate()).padStart(2, '0');
+  const year = d.getFullYear();
+  let hours = d.getHours();
+  const mins = String(d.getMinutes()).padStart(2, '0');
+  const ampm = hours >= 12 ? 'PM' : 'AM';
+  hours = hours % 12 || 12;
+  return `${month}/${day}/${year} ${hours}:${mins} ${ampm}`;
+}
+
 // ============================================================
 // WATCHDOG: Catches stranded packets that failed to process
 // Runs every 5 minutes, reprocesses any packets stuck in incoming/
@@ -677,11 +690,16 @@ async function calculateAFR(wellName: string, newFlowRateDays: number): Promise<
   if (allRates.length === 0) return 0;
   if (allRates.length < 3) return allRates[allRates.length - 1];
 
+  // DIAG: Log raw rates for debugging
+  console.log(`[AFR-DIAG] ${wellName}: ${allRates.length} raw rates: [${allRates.map(r => r.toFixed(4)).join(', ')}]`);
+
   // Filter out anomalies (5x off median) before calculating AFR
   const rates = filterAnomalies(allRates);
 
-  if (rates.length === 0) return allRates[allRates.length - 1]; // Fallback to newest
-  if (rates.length < 3) return rates[rates.length - 1];
+  console.log(`[AFR-DIAG] ${wellName}: ${rates.length} after anomaly filter: [${rates.map(r => r.toFixed(4)).join(', ')}]`);
+
+  if (rates.length === 0) { console.log(`[AFR-DIAG] ${wellName}: fallback to newest (no rates after filter)`); return allRates[allRates.length - 1]; }
+  if (rates.length < 3) { const result = rates[rates.length - 1]; console.log(`[AFR-DIAG] ${wellName}: <3 rates, returning last: ${result}`); return result; }
 
   // Step detection: Check if last 3 are ALL >10% off in same direction
   const STEP_THRESHOLD = 0.10;
@@ -702,6 +720,7 @@ async function calculateAFR(wellName: string, newFlowRateDays: number): Promise<
     if (allHigher || allLower) {
       // Step detected - use median of last 3
       const sorted = [...recentRates].sort((a, b) => a - b);
+      console.log(`[AFR-DIAG] ${wellName}: STEP DETECTED, median of last 3: ${sorted[1]}`);
       return sorted[1];
     }
   }
@@ -709,7 +728,9 @@ async function calculateAFR(wellName: string, newFlowRateDays: number): Promise<
   // Use 5-pull rolling average (or all if less than 5)
   const windowSize = Math.min(5, rates.length);
   const recentRates = rates.slice(-windowSize);
-  return recentRates.reduce((a, b) => a + b, 0) / recentRates.length;
+  const result = recentRates.reduce((a, b) => a + b, 0) / recentRates.length;
+  console.log(`[AFR-DIAG] ${wellName}: rolling avg of ${windowSize}: ${result.toFixed(6)} (${recentRates.map(r => r.toFixed(4)).join(', ')})`);
+  return result;
 }
 
 // Main function: Process incoming pull packets
@@ -928,9 +949,9 @@ export const processIncomingPull = functionsV1.database
       flowRate: afr > 0 ? daysToHMMSS(afr) : 'Unknown',
       bbls24hrs,
       timeTillPull: data.wellDown ? 'Down' : (estTimeToPull || 'Calculating...'),
-      nextPullTime: estDateTimePull ? new Date(estDateTimePull).toLocaleString() : 'Unknown',
+      nextPullTime: estDateTimePull ? formatLocalDateTime(new Date(estDateTimePull)) : 'Unknown',
       nextPullTimeUTC: estDateTimePull,
-      lastPullDateTime: data.dateTime || new Date(data.dateTimeUTC).toLocaleString(),
+      lastPullDateTime: data.dateTime || formatLocalDateTime(new Date(data.dateTimeUTC)),
       lastPullDateTimeUTC: data.dateTimeUTC,
       lastPullBbls: data.bblsTaken.toString(),
       lastPullTopLevel: inchesToFeetInches(tankTopInches),
@@ -1035,7 +1056,7 @@ export const processIncomingPull = functionsV1.database
         asOf: new Date().toISOString(),
       },
       lastPull: {
-        dateTime: data.dateTime || new Date(data.dateTimeUTC).toLocaleString(),
+        dateTime: data.dateTime || formatLocalDateTime(new Date(data.dateTimeUTC)),
         dateTimeUTC: data.dateTimeUTC,
         topLevel: inchesToFeetInches(tankTopInches),
         topLevelInches: tankTopInches,
@@ -1049,7 +1070,7 @@ export const processIncomingPull = functionsV1.database
         flowRate: afr > 0 ? daysToHMMSS(afr) : 'Unknown',
         flowRateMinutes: Math.round(afrMinutes * 100) / 100,
         bbls24hrs: parseInt(bbls24hrs) || 0,
-        nextPullTime: estDateTimePull ? new Date(estDateTimePull).toLocaleString() : 'Unknown',
+        nextPullTime: estDateTimePull ? formatLocalDateTime(new Date(estDateTimePull)) : 'Unknown',
         nextPullTimeUTC: estDateTimePull || '',
         timeTillPull: data.wellDown ? 'Down' : (estTimeToPull || 'Calculating...'),
       },
@@ -1221,6 +1242,41 @@ export const processEditRequest = functionsV1.database
 
     await db.ref(`packets/processed/${originalPacketId}`).update(updates);
 
+    // CASCADE: Recalculate flowRateDays on the NEXT packet after the edited one.
+    // That packet's recovery was based on our old tankAfterInches — now stale.
+    let nextPacketKey: string | null = null;
+    let nextPacket: any = null;
+    let closestNextTime = Infinity;
+
+    prevOutgoingSnap.forEach((child) => {
+      if (child.key === originalPacketId) return;
+      const pkt = child.val();
+      const pktTime = new Date(pkt.dateTimeUTC).getTime();
+      if (pktTime > editedTime && pktTime < closestNextTime) {
+        closestNextTime = pktTime;
+        nextPacketKey = child.key;
+        nextPacket = pkt;
+      }
+    });
+
+    if (nextPacketKey && nextPacket && nextPacket.tankTopInches > 0) {
+      // Recalculate the next packet's recovery + flowRate using our NEW tankAfterInches
+      const nextRecovery = Math.max(0, nextPacket.tankTopInches - newTankAfterInches);
+      const nextTimeDifDays = (closestNextTime - editedTime) / (1000 * 60 * 60 * 24);
+      let nextFlowRateDays = 0;
+      let nextFlowRate = '';
+      if (nextRecovery > 0 && nextTimeDifDays > 0) {
+        nextFlowRateDays = (nextTimeDifDays / nextRecovery) * 12;
+        nextFlowRate = daysToHMMSS(nextFlowRateDays);
+      }
+      await db.ref(`packets/processed/${nextPacketKey}`).update({
+        recoveryInches: nextRecovery,
+        flowRateDays: nextFlowRateDays,
+        flowRate: nextFlowRate,
+      });
+      console.log(`Edit cascade: Updated next packet ${nextPacketKey} — recovery=${nextRecovery.toFixed(1)}", flowRate=${nextFlowRate}`);
+    }
+
     // Recalculate AFR and update outgoing response if this was the most recent pull
     const afr = await calculateAFR(wellName, flowRateDays);
 
@@ -1288,10 +1344,10 @@ export const processEditRequest = functionsV1.database
             lastPullTopLevel: inchesToFeetInches(newTankTopInches),
             lastPullBottomLevel: inchesToFeetInches(newTankAfterInches),
             lastPullBbls: newBblsTaken.toString(),
-            lastPullDateTime: newDateTime || new Date(newDateTimeUTC).toLocaleString(),
+            lastPullDateTime: newDateTime || formatLocalDateTime(new Date(newDateTimeUTC)),
             lastPullDateTimeUTC: newDateTimeUTC,
             timeTillPull: origPacket.wellDown ? 'Down' : (estTimeToPull || 'Calculating...'),
-            nextPullTime: estDateTimePull ? new Date(estDateTimePull).toLocaleString() : 'Unknown',
+            nextPullTime: estDateTimePull ? formatLocalDateTime(new Date(estDateTimePull)) : 'Unknown',
             nextPullTimeUTC: estDateTimePull,
             isEdit: true,
             originalPacketId,
@@ -1311,10 +1367,10 @@ export const processEditRequest = functionsV1.database
           lastPullTopLevel: inchesToFeetInches(newTankTopInches),
           lastPullBottomLevel: inchesToFeetInches(newTankAfterInches),
           lastPullBbls: newBblsTaken.toString(),
-          lastPullDateTime: newDateTime || new Date(newDateTimeUTC).toLocaleString(),
+          lastPullDateTime: newDateTime || formatLocalDateTime(new Date(newDateTimeUTC)),
           lastPullDateTimeUTC: newDateTimeUTC,
           timeTillPull: origPacket.wellDown ? 'Down' : (estTimeToPull || 'Calculating...'),
-          nextPullTime: estDateTimePull ? new Date(estDateTimePull).toLocaleString() : 'Unknown',
+          nextPullTime: estDateTimePull ? formatLocalDateTime(new Date(estDateTimePull)) : 'Unknown',
           nextPullTimeUTC: estDateTimePull,
           wellDown: origPacket.wellDown || false,
           status: 'success',
@@ -1336,6 +1392,40 @@ export const processEditRequest = functionsV1.database
       });
 
       console.log(`Edit: Updated outgoing + AFR for ${wellName}`);
+    }
+
+    // Update performance/ row (WB M reads from here)
+    // processIncomingPull writes these on initial pull, but edits were never synced — fix that
+    try {
+      const perfPullTime = new Date(newDateTimeUTC);
+      const perfTimestamp = `${perfPullTime.getFullYear()}${String(perfPullTime.getMonth() + 1).padStart(2, '0')}${String(perfPullTime.getDate()).padStart(2, '0')}_${String(perfPullTime.getHours()).padStart(2, '0')}${String(perfPullTime.getMinutes()).padStart(2, '0')}${String(perfPullTime.getSeconds()).padStart(2, '0')}`;
+      const perfDateStr = `${perfPullTime.getFullYear()}-${String(perfPullTime.getMonth() + 1).padStart(2, '0')}-${String(perfPullTime.getDate()).padStart(2, '0')}`;
+      const perfWellKey = wellName.replace(/\s+/g, '_');
+      const actualInches = Math.floor(newTankTopInches);
+
+      // If date was edited, clean up the OLD performance row (different timestamp key)
+      if (data.dateTimeUTC && data.dateTimeUTC !== origPacket.dateTimeUTC) {
+        const oldPullTime = new Date(origPacket.dateTimeUTC);
+        const oldPerfTimestamp = `${oldPullTime.getFullYear()}${String(oldPullTime.getMonth() + 1).padStart(2, '0')}${String(oldPullTime.getDate()).padStart(2, '0')}_${String(oldPullTime.getHours()).padStart(2, '0')}${String(oldPullTime.getMinutes()).padStart(2, '0')}${String(oldPullTime.getSeconds()).padStart(2, '0')}`;
+        await db.ref(`performance/${perfWellKey}/rows/${oldPerfTimestamp}`).remove();
+        console.log(`Edit: Removed old performance row ${oldPerfTimestamp} for ${wellName}`);
+      }
+
+      // Use predicted from original packet if available, otherwise default to actual
+      const predictedInches = origPacket.predictedLevelInches
+        ? Math.floor(Number(origPacket.predictedLevelInches))
+        : actualInches;
+
+      await db.ref(`performance/${perfWellKey}/rows/${perfTimestamp}`).set({
+        d: perfDateStr,
+        a: actualInches,
+        p: predictedInches,
+      });
+      await db.ref(`performance/${perfWellKey}/wellName`).set(wellName);
+      await db.ref(`performance/${perfWellKey}/updated`).set(new Date().toISOString());
+      console.log(`Edit: Updated performance/ for ${wellName}: a=${actualInches} p=${predictedInches}`);
+    } catch (perfError) {
+      console.error(`Edit: Error updating performance/ for ${wellName}:`, perfError);
     }
 
     // Delete the edit request
@@ -1363,6 +1453,58 @@ export const processDeleteRequest = functionsV1.database
     // Read the packet before deleting (to check if it was the latest)
     const targetSnap = await db.ref(`packets/processed/${targetPacketId}`).once('value');
     const deletedPacket = targetSnap.exists() ? targetSnap.val() : null;
+
+    // CASCADE: Before deleting, fix the next packet's flowRateDays.
+    // The next packet's recovery was measured from this packet's tankAfterInches.
+    // After deletion, it should use the PREVIOUS packet's tankAfterInches instead.
+    if (deletedPacket && deletedPacket.dateTimeUTC) {
+      const allWellSnap = await db.ref('packets/processed')
+        .orderByChild('wellName')
+        .equalTo(wellName)
+        .once('value');
+
+      const deletedTime = new Date(deletedPacket.dateTimeUTC).getTime();
+      let prevPkt: any = null;
+      let prevTime = 0;
+      let nextKey: string | null = null;
+      let nextPkt: any = null;
+      let nextTime = Infinity;
+
+      allWellSnap.forEach((child) => {
+        if (child.key === targetPacketId) return;
+        const pkt = child.val();
+        const pktTime = new Date(pkt.dateTimeUTC).getTime();
+        if (pktTime < deletedTime && pktTime > prevTime) {
+          prevTime = pktTime;
+          prevPkt = pkt;
+        }
+        if (pktTime > deletedTime && pktTime < nextTime) {
+          nextTime = pktTime;
+          nextKey = child.key;
+          nextPkt = pkt;
+        }
+      });
+
+      if (nextKey && nextPkt && nextPkt.tankTopInches > 0) {
+        const prevAfterInches = prevPkt?.tankAfterInches || 0;
+        const nextRecovery = prevAfterInches > 0 ? Math.max(0, nextPkt.tankTopInches - prevAfterInches) : 0;
+        const nextTimeDif = prevTime > 0 ? (nextTime - prevTime) / (1000 * 60 * 60 * 24) : 0;
+        let nextFlowRateDays = 0;
+        let nextFlowRate = '';
+        if (nextRecovery > 0 && nextTimeDif > 0) {
+          nextFlowRateDays = (nextTimeDif / nextRecovery) * 12;
+          nextFlowRate = daysToHMMSS(nextFlowRateDays);
+        }
+        await db.ref(`packets/processed/${nextKey}`).update({
+          recoveryInches: nextRecovery,
+          flowRateDays: nextFlowRateDays,
+          flowRate: nextFlowRate,
+          timeDifDays: nextTimeDif,
+          timeDif: nextTimeDif > 0 ? daysToHMM(nextTimeDif) : '',
+        });
+        console.log(`Delete cascade: Updated next packet ${nextKey} — recovery=${nextRecovery.toFixed(1)}", flowRate=${nextFlowRate}`);
+      }
+    }
 
     // Delete from processed
     await db.ref(`packets/processed/${targetPacketId}`).remove();
@@ -1465,9 +1607,9 @@ export const processDeleteRequest = functionsV1.database
           flowRate: afr > 0 ? daysToHMMSS(afr) : 'Unknown',
           bbls24hrs,
           timeTillPull: latestPacket.wellDown ? 'Down' : (estTimeToPull || 'Calculating...'),
-          nextPullTime: estDateTimePull ? new Date(estDateTimePull).toLocaleString() : 'Unknown',
+          nextPullTime: estDateTimePull ? formatLocalDateTime(new Date(estDateTimePull)) : 'Unknown',
           nextPullTimeUTC: estDateTimePull,
-          lastPullDateTime: latestPacket.dateTime || new Date(latestPacket.dateTimeUTC).toLocaleString(),
+          lastPullDateTime: latestPacket.dateTime || formatLocalDateTime(new Date(latestPacket.dateTimeUTC)),
           lastPullDateTimeUTC: latestPacket.dateTimeUTC,
           lastPullBbls: latestPacket.bblsTaken.toString(),
           lastPullTopLevel: inchesToFeetInches(latestPacket.tankTopInches),

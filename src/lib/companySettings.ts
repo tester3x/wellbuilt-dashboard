@@ -390,6 +390,11 @@ export interface CompanyConfig {
   wellMonitoring?: boolean;
   // Cancel job behavior: recycle = delete + reuse numbers, void = keep as VOID for audit
   cancelledNumberHandling?: 'recycle' | 'void';
+  // Live Dispatch Sync — controls driver-initiated job visibility on dispatch board
+  // undefined = no dispatch sync (standalone WB T)
+  // true = driver can create jobs AND they sync to dispatch (dedicated route drivers)
+  // false = dispatch-only mode, driver's New Job button greyed out
+  liveDispatchSync?: boolean;
 }
 
 // Must match WB T's COMMODITY_TYPES + HOURLY_COMMODITY_TYPES in utils/constants.ts

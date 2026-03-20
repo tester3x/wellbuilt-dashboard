@@ -50,6 +50,7 @@ interface DispatchJob {
   disposalLegalDesc?: string;
   disposalCounty?: string;
   loadCount?: number;  // Number of loads for this well (default 1)
+  loadsCompleted?: number;  // How many loads finished so far
   serviceGroupId?: string;  // Links multi-driver service work dispatches
   assignedDrivers?: string[];  // Crew list for multi-driver service work (denormalized)
   // Load transfer fields
@@ -67,6 +68,9 @@ interface DispatchJob {
   // Live job info — written by WB T as driver progresses
   invoiceNumber?: string;  // Invoice # for this dispatch
   hauledTo?: string;  // Current drop-off destination (driver may change mid-job)
+  // Driver-initiated job tracking (liveDispatchSync)
+  source?: 'driver';  // Present when driver started the job (not dispatched)
+  invoiceDocId?: string;  // Firestore invoice doc ID
 }
 
 // Priority levels for PW queue
@@ -1285,7 +1289,13 @@ export default function DispatchPage() {
                               <div className="flex items-center justify-end gap-2">
                                 {isSelected ? (
                                   <div className="flex items-center gap-1">
-                                    <input type="number" min={1} max={20} value={loadCount} onChange={(e) => setWellLoadCount(well.wellName, parseInt(e.target.value) || 1)}
+                                    <input type="text" inputMode="numeric" pattern="[0-9]*" value={loadCount}
+                                      onFocus={(e) => e.target.select()}
+                                      onChange={(e) => {
+                                        const val = parseInt(e.target.value) || 0;
+                                        if (val >= 1 && val <= 20) setWellLoadCount(well.wellName, val);
+                                        else if (e.target.value === '') setWellLoadCount(well.wellName, 1);
+                                      }}
                                       className="w-10 px-1 py-0.5 bg-gray-900 border border-blue-600 rounded text-white text-[10px] text-center focus:outline-none" />
                                   </div>
                                 ) : (
@@ -1803,17 +1813,27 @@ function DispatchJobRow({ job, cancelDispatch, compact, onClickServiceWork }: {
           {job.ndicWellName || job.wellName}
         </span>
 
-        {/* Load count */}
-        {(job.loadCount || 0) > 1 && (
-          <span className="px-1.5 py-0.5 bg-yellow-600/30 text-yellow-300 text-[10px] rounded font-bold flex-shrink-0">
-            x{job.loadCount}
-          </span>
-        )}
+        {/* Load count — show remaining loads */}
+        {(() => {
+          const remaining = (job.loadCount || 1) - (job.loadsCompleted || 0);
+          return remaining > 1 ? (
+            <span className="px-1.5 py-0.5 bg-yellow-600/30 text-yellow-300 text-[10px] rounded font-bold flex-shrink-0">
+              x{remaining}
+            </span>
+          ) : null;
+        })()}
 
         {/* Transfer badge */}
         {job.type === 'transfer' && job.transferFromDriver && (
           <span className="px-1.5 py-0.5 bg-orange-600/30 text-orange-300 text-[10px] rounded font-medium flex-shrink-0">
             from {job.transferFromDriver}
+          </span>
+        )}
+
+        {/* Driver-initiated badge (liveDispatchSync) */}
+        {job.source === 'driver' && (
+          <span className="px-1.5 py-0.5 bg-emerald-600/30 text-emerald-300 text-[10px] rounded font-medium flex-shrink-0">
+            Driver Started
           </span>
         )}
 
