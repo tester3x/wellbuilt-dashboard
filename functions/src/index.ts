@@ -283,6 +283,9 @@ interface OutgoingResponse {
   originalPacketId?: string;
   windowBblsDay?: string | null;
   overnightBblsDay?: string | null;
+  lastPullDriverId?: string | null;
+  lastPullDriverName?: string | null;
+  lastPullPacketId?: string | null;
 }
 
 // NEW UNIFIED STRUCTURE - Single source of truth
@@ -956,6 +959,9 @@ export const processIncomingPull = functionsV1.database
       lastPullBbls: data.bblsTaken.toString(),
       lastPullTopLevel: inchesToFeetInches(tankTopInches),
       lastPullBottomLevel: inchesToFeetInches(tankAfterInches),
+      lastPullDriverId: data.driverId || null,
+      lastPullDriverName: data.driverName || null,
+      lastPullPacketId: packetId,
       wellDown: data.wellDown || false,
       status: 'success',
       timestamp: timestamp.toISOString(),
@@ -1351,6 +1357,9 @@ export const processEditRequest = functionsV1.database
             nextPullTimeUTC: estDateTimePull,
             isEdit: true,
             originalPacketId,
+            lastPullDriverId: origPacket.driverId || null,
+            lastPullDriverName: origPacket.driverName || null,
+            lastPullPacketId: originalPacketId,
             windowBblsDay: editWindowBblsDay > 0 ? editWindowBblsDay.toString() : null,
             overnightBblsDay: editOvernightBblsDay > 0 ? editOvernightBblsDay.toString() : null,
           });
@@ -1378,6 +1387,9 @@ export const processEditRequest = functionsV1.database
           timestampUTC: responseTimestamp.toISOString(),
           isEdit: true,
           originalPacketId,
+          lastPullDriverId: origPacket.driverId || null,
+          lastPullDriverName: origPacket.driverName || null,
+          lastPullPacketId: originalPacketId,
           windowBblsDay: editWindowBblsDay > 0 ? editWindowBblsDay.toString() : null,
           overnightBblsDay: editOvernightBblsDay > 0 ? editOvernightBblsDay.toString() : null,
         });
@@ -1614,6 +1626,9 @@ export const processDeleteRequest = functionsV1.database
           lastPullBbls: latestPacket.bblsTaken.toString(),
           lastPullTopLevel: inchesToFeetInches(latestPacket.tankTopInches),
           lastPullBottomLevel: inchesToFeetInches(tankAfterInches),
+          lastPullDriverId: latestPacket.driverId || null,
+          lastPullDriverName: latestPacket.driverName || null,
+          lastPullPacketId: latestPacket.packetId || null,
           wellDown: latestPacket.wellDown || false,
           status: 'success',
           timestamp: timestamp.toISOString(),

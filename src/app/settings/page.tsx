@@ -20,6 +20,7 @@ import { BrandingCard } from '@/components/settings/BrandingCard';
 import { BillingConfigCard } from '@/components/settings/BillingConfigCard';
 import { TicketTemplateCard } from '@/components/settings/TicketTemplateCard';
 import { PayrollTemplateCard } from '@/components/settings/PayrollTemplateCard';
+import { PackagesCard } from '@/components/settings/PackagesCard';
 
 export default function SettingsPage() {
   const { user, loading: authLoading } = useAuth();
@@ -169,6 +170,7 @@ export default function SettingsPage() {
         ) : (
           <div className="space-y-4">
             <CompanyProfileCard company={company} onSave={handleRefresh} />
+            <PackagesCard company={company} onSave={handleRefresh} />
             <InvoiceConfigCard company={company} onSave={handleRefresh} />
             <OperationsCard company={company} onSave={handleRefresh} />
             <OilCompaniesCard company={company} onSave={handleRefresh} />

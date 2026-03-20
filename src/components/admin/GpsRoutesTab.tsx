@@ -119,13 +119,37 @@ export default function GpsRoutesTab() {
         });
       }
 
+      // ── Third pass: custom destinations from Firestore route_recordings ──
+      // Any route_recordings doc whose slug ISN'T already represented gets added.
+      const fsDb = getFirestoreDb();
+      const toSlug = (name: string) =>
+        name.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '').substring(0, 120);
+
+      const knownSlugs = new Set(routeWells.map(w => toSlug(w.wellName)));
+
+      try {
+        const rrSnap = await getDocs(collection(fsDb, 'route_recordings'));
+        for (const rrDoc of rrSnap.docs) {
+          if (knownSlugs.has(rrDoc.id)) continue;
+          const data = rrDoc.data();
+          routeWells.push({
+            wellName: data.wellName || rrDoc.id,
+            tripCount: 0,
+            approvedCount: 0,
+            loading: true,
+            isRecording: false,
+          });
+        }
+      } catch (err) {
+        console.error('[GpsRoutesTab] Error scanning route_recordings:', err);
+      }
+
       // Sort alphabetically
       routeWells.sort((a, b) => a.wellName.localeCompare(b.wellName));
       setWells(routeWells);
       setLoading(false);
 
       // Now fetch Firestore data for each well (trips + overrides)
-      const fsDb = getFirestoreDb();
       const updated = [...routeWells];
 
       await Promise.all(updated.map(async (well, idx) => {

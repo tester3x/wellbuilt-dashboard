@@ -395,6 +395,8 @@ export interface CompanyConfig {
   // true = driver can create jobs AND they sync to dispatch (dedicated route drivers)
   // false = dispatch-only mode, driver's New Job button greyed out
   liveDispatchSync?: boolean;
+  // Active job packages — references to job_packages/{packageId} docs
+  activePackages?: string[];
 }
 
 // Must match WB T's COMMODITY_TYPES + HOURLY_COMMODITY_TYPES in utils/constants.ts

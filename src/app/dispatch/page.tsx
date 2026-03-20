@@ -1,6 +1,6 @@
 'use client';
 
-import { useEffect, useState, useMemo } from 'react';
+import { useEffect, useState, useMemo, useRef } from 'react';
 import { useRouter } from 'next/navigation';
 import { useAuth } from '@/contexts/AuthContext';
 import { WellResponse, subscribeToWellStatusesUnified } from '@/lib/wells';
@@ -10,6 +10,7 @@ import { getFirebaseDatabase } from '@/lib/firebase';
 import { getFirestoreDb } from '@/lib/firebase';
 import { collection, addDoc, getDocs, query, where, orderBy, Timestamp, doc, updateDoc, onSnapshot } from 'firebase/firestore';
 import { loadDisposals, searchDisposals, type NdicWell } from '@/lib/firestoreWells';
+import { loadCompanyById } from '@/lib/companySettings';
 
 // ─── Types ───────────────────────────────────────────────────────────────────
 
@@ -298,8 +299,9 @@ export default function DispatchPage() {
 
   // Add Pull form state
   const [pullWell, setPullWell] = useState('');
-  const [pullFeet, setPullFeet] = useState('');
-  const [pullInches, setPullInches] = useState('');
+  const [pullLevel, setPullLevel] = useState('');
+  const [pullWellSearch, setPullWellSearch] = useState('');
+  const [showWellDropdown, setShowWellDropdown] = useState(false);
   const [pullBbls, setPullBbls] = useState('140');
   const [pullDateTime, setPullDateTime] = useState('');
   const [addingPull, setAddingPull] = useState(false);
@@ -309,6 +311,10 @@ export default function DispatchPage() {
   const [editSwNotes, setEditSwNotes] = useState('');
   const [editSwAddDriverHashes, setEditSwAddDriverHashes] = useState<Set<string>>(new Set());
   const [editSwSaving, setEditSwSaving] = useState(false);
+
+  // Dynamic service types from job packages (falls back to hardcoded)
+  const FALLBACK_SERVICE_TYPES = ['Hot Shot', 'Equipment Delivery', 'Tank Cleanout', 'Flowback', 'Frac Water', 'Rig Move', 'Other'];
+  const [dynamicServiceTypes, setDynamicServiceTypes] = useState<string[]>(FALLBACK_SERVICE_TYPES);
 
   // Auth redirect
   useEffect(() => {
@@ -332,6 +338,43 @@ export default function DispatchPage() {
     loadDriversData();
     loadDisposals().then(setAllDisposals).catch(() => {});
   }, []);
+
+  // Load dynamic service types from company's active job packages
+  useEffect(() => {
+    if (!user) return;
+    const loadPackageJobTypes = async () => {
+      try {
+        const companyId = user.companyId;
+        if (!companyId) return; // WB admin — keep fallback list
+        const company = await loadCompanyById(companyId);
+        if (!company?.activePackages?.length) return; // no packages — keep fallback
+
+        const firestore = getFirestoreDb();
+        const snap = await getDocs(collection(firestore, 'job_packages'));
+        const allJobTypes: string[] = [];
+        snap.forEach(d => {
+          if (company.activePackages!.includes(d.id)) {
+            const pkg = d.data();
+            if (pkg.jobTypes && Array.isArray(pkg.jobTypes)) {
+              for (const jt of pkg.jobTypes) {
+                if (!allJobTypes.includes(jt)) allJobTypes.push(jt);
+              }
+            }
+          }
+        });
+
+        if (allJobTypes.length > 0) {
+          // Always include "Other" as escape hatch
+          if (!allJobTypes.includes('Other')) allJobTypes.push('Other');
+          setDynamicServiceTypes(allJobTypes);
+        }
+      } catch (err) {
+        console.error('Failed to load job package types:', err);
+        // Keep fallback on error
+      }
+    };
+    loadPackageJobTypes();
+  }, [user]);
 
   // Subscribe to active dispatches in real-time
   useEffect(() => {
@@ -436,6 +479,73 @@ export default function DispatchPage() {
     setPullDateTime(local.toISOString().slice(0, 16));
   }, []);
 
+  // ── Level parsing (same logic as WB T TicketForm) ──
+  function parseLevelInput(input: string): number | null {
+    const trimmed = input.trim();
+    if (!trimmed) return null;
+    const apostropheMatch = trimmed.match(/^(\d+)'(\d+(?:\.\d+)?)"?$/);
+    if (apostropheMatch) return parseInt(apostropheMatch[1], 10) + parseFloat(apostropheMatch[2]) / 12;
+    const spaceMatch = trimmed.match(/^(\d+)\s+(\d+(?:\.\d+)?)$/);
+    if (spaceMatch) return parseInt(spaceMatch[1], 10) + parseFloat(spaceMatch[2]) / 12;
+    if (trimmed.includes('.') && !trimmed.includes(' ')) {
+      const val = parseFloat(trimmed);
+      return isNaN(val) ? null : val;
+    }
+    const val = parseInt(trimmed, 10);
+    return isNaN(val) ? null : val;
+  }
+
+  function formatLevelDisplay(feet: number): string {
+    const totalInches = Math.floor(feet * 12 + 0.0001);
+    const ft = Math.floor(totalInches / 12);
+    const inches = totalInches % 12;
+    return `${ft}'${inches}"`;
+  }
+
+  const levelTimerRef = useRef<NodeJS.Timeout | null>(null);
+
+  function handleLevelChange(value: string) {
+    setPullLevel(value);
+    if (levelTimerRef.current) clearTimeout(levelTimerRef.current);
+    const trimmed = value.trim();
+
+    // Space-separated: "13 7"
+    const spaceMatch = trimmed.match(/^(\d+)\s+(\d+(?:\.\d+)?)$/);
+    if (spaceMatch) {
+      const inchStr = spaceMatch[2];
+      const inchVal = parseFloat(inchStr);
+      if (inchStr.length >= 2 || inchVal >= 2) {
+        const parsed = parseLevelInput(trimmed);
+        if (parsed !== null) setPullLevel(formatLevelDisplay(parsed));
+        return;
+      }
+      levelTimerRef.current = setTimeout(() => {
+        const parsed = parseLevelInput(trimmed);
+        if (parsed !== null) setPullLevel(formatLevelDisplay(parsed));
+      }, 600);
+      return;
+    }
+
+    // Decimal: "12.4"
+    const decimalMatch = trimmed.match(/^(\d+)\.(\d+)$/);
+    if (decimalMatch) {
+      levelTimerRef.current = setTimeout(() => {
+        const parsed = parseLevelInput(trimmed);
+        if (parsed !== null) setPullLevel(formatLevelDisplay(parsed));
+      }, 600);
+      return;
+    }
+
+    // Plain integer: "10"
+    const intMatch = trimmed.match(/^(\d+)$/);
+    if (intMatch) {
+      levelTimerRef.current = setTimeout(() => {
+        const parsed = parseLevelInput(trimmed);
+        if (parsed !== null) setPullLevel(formatLevelDisplay(parsed));
+      }, 600);
+    }
+  }
+
   // ─── Add Pull Handler ──────────────────────────────────────────────────────
 
   async function handleAddPull() {
@@ -444,7 +554,7 @@ export default function DispatchPage() {
       setTimeout(() => setMessage(''), 3000);
       return;
     }
-    if (!pullFeet && !pullInches) {
+    if (!pullLevel.trim()) {
       setMessage('Enter tank level');
       setTimeout(() => setMessage(''), 3000);
       return;
@@ -454,7 +564,8 @@ export default function DispatchPage() {
 
     try {
       const db = getFirebaseDatabase();
-      const levelFeet = (parseFloat(pullFeet) || 0) + (parseFloat(pullInches) || 0) / 12;
+      const parsed = parseLevelInput(pullLevel);
+      const levelFeet = parsed ?? 0;
       const dt = new Date(pullDateTime);
       const packetId = `${dt.toISOString().replace(/[-:T.]/g, '').slice(0, 14)}_${pullWell.replace(/\s/g, '')}_dashboard`;
 
@@ -476,8 +587,7 @@ export default function DispatchPage() {
       setMessage(`Pull added for ${pullWell}`);
 
       // Reset form
-      setPullFeet('');
-      setPullInches('');
+      setPullLevel('');
       setPullBbls('140');
       const now = new Date();
       const local = new Date(now.getTime() - now.getTimezoneOffset() * 60000);
@@ -1068,13 +1178,9 @@ export default function DispatchPage() {
                   <select value={swServiceType} onChange={(e) => setSwServiceType(e.target.value)}
                     className="w-full px-3 py-1.5 bg-gray-900 border border-gray-700 rounded text-white text-sm focus:outline-none focus:border-purple-500">
                     <option value="">Select type...</option>
-                    <option value="Hot Shot">Hot Shot</option>
-                    <option value="Equipment Delivery">Equipment Delivery</option>
-                    <option value="Tank Cleanout">Tank Cleanout</option>
-                    <option value="Flowback">Flowback</option>
-                    <option value="Frac Water">Frac Water</option>
-                    <option value="Rig Move">Rig Move</option>
-                    <option value="Other">Other</option>
+                    {dynamicServiceTypes.map(st => (
+                      <option key={st} value={st}>{st}</option>
+                    ))}
                   </select>
                 </div>
 
@@ -1118,22 +1224,50 @@ export default function DispatchPage() {
           {toolbarMode === 'pull' && (
             <div className="bg-gray-800 border border-green-600/40 rounded-lg p-4 mb-3">
               <div className="flex items-end gap-4">
-                <div className="w-48 flex-shrink-0">
+                <div className="w-48 flex-shrink-0 relative">
                   <label className="block text-xs text-gray-400 mb-1">Well</label>
-                  <select value={pullWell} onChange={(e) => setPullWell(e.target.value)}
-                    className="w-full px-2 py-1.5 bg-gray-900 border border-gray-700 rounded text-white text-sm focus:outline-none focus:border-green-500">
-                    <option value="">Select...</option>
-                    {[...new Set(wells.map(w => w.wellName))].sort().map(w => (
-                      <option key={w} value={w}>{w}</option>
-                    ))}
-                  </select>
+                  <input
+                    type="text"
+                    value={pullWellSearch}
+                    onChange={(e) => {
+                      setPullWellSearch(e.target.value);
+                      setPullWell('');
+                      setShowWellDropdown(true);
+                    }}
+                    onFocus={() => setShowWellDropdown(true)}
+                    placeholder="Search wells..."
+                    className="w-full px-2 py-1.5 bg-gray-900 border border-gray-700 rounded text-white text-sm placeholder-gray-500 focus:outline-none focus:border-green-500"
+                  />
+                  {showWellDropdown && pullWellSearch && (
+                    <div className="absolute z-50 top-full left-0 w-72 mt-1 bg-gray-900 border border-gray-600 rounded-lg shadow-lg max-h-48 overflow-y-auto">
+                      {[...new Set(wells.map(w => w.wellName))].sort()
+                        .filter(w => w.toLowerCase().includes(pullWellSearch.toLowerCase()))
+                        .slice(0, 10)
+                        .map(w => (
+                          <button key={w} onClick={() => { setPullWell(w); setPullWellSearch(w); setShowWellDropdown(false); }}
+                            className="w-full text-left px-3 py-1.5 text-sm text-white hover:bg-gray-700 transition-colors">
+                            {w}
+                          </button>
+                        ))
+                      }
+                    </div>
+                  )}
                 </div>
                 <div className="w-32 flex-shrink-0">
-                  <label className="block text-xs text-gray-400 mb-1">Level (ft / in)</label>
-                  <div className="flex gap-1">
-                    <input type="number" value={pullFeet} onChange={(e) => setPullFeet(e.target.value)} placeholder="ft" className="w-full px-2 py-1.5 bg-gray-900 border border-gray-700 rounded text-white text-sm placeholder-gray-500 focus:outline-none focus:border-green-500" />
-                    <input type="number" value={pullInches} onChange={(e) => setPullInches(e.target.value)} placeholder="in" max="11" className="w-full px-2 py-1.5 bg-gray-900 border border-gray-700 rounded text-white text-sm placeholder-gray-500 focus:outline-none focus:border-green-500" />
-                  </div>
+                  <label className="block text-xs text-gray-400 mb-1">Level</label>
+                  <input
+                    type="text"
+                    value={pullLevel}
+                    onChange={(e) => handleLevelChange(e.target.value)}
+                    onBlur={() => {
+                      const raw = pullLevel.trim();
+                      if (!raw || raw.includes("'") || raw.includes('"')) return;
+                      const parsed = parseLevelInput(raw);
+                      if (parsed !== null) setPullLevel(formatLevelDisplay(parsed));
+                    }}
+                    placeholder={`10'3"`}
+                    className="w-full px-2 py-1.5 bg-gray-900 border border-gray-700 rounded text-white text-sm placeholder-gray-500 focus:outline-none focus:border-green-500"
+                  />
                 </div>
                 <div className="w-24 flex-shrink-0">
                   <label className="block text-xs text-gray-400 mb-1">BBLs</label>
