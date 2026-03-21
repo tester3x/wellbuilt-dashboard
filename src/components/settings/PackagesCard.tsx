@@ -5,16 +5,14 @@ import { collection, getDocs } from 'firebase/firestore';
 import { getFirestoreDb } from '@/lib/firebase';
 import { type CompanyConfig, updateCompanyFields } from '@/lib/companySettings';
 
-// ── Job Package type (mirrors Firestore job_packages/{packageId}) ──────────
-
 interface JobPackage {
   id: string;
   name: string;
-  icon?: string;            // emoji or short string
-  industry: string;         // e.g. "Oil & Gas", "Construction", "Agriculture"
-  unit?: string;            // e.g. "BBL", "ton", "hour"
-  jobTypes?: any[];          // objects {id, label, icon, color} or strings
-  capabilities?: any;        // Record<string, boolean> or string[]
+  icon?: string;
+  industry: string;
+  unit?: string;
+  jobTypes?: any[];
+  capabilities?: any;
   description?: string;
 }
 
@@ -22,8 +20,6 @@ interface Props {
   company: CompanyConfig;
   onSave: () => void;
 }
-
-// ── Package icon map (Firestore stores identifiers, we display emojis) ──────
 
 const PACKAGE_ICONS: Record<string, string> = {
   'water': '💧',
@@ -35,23 +31,10 @@ const PACKAGE_ICONS: Record<string, string> = {
   'wrench': '🔧',
   'oil': '🛢️',
   'barrel': '🛢️',
+  'fire': '🔥',
+  'vacuum': '🫗',
+  'bolt': '⚡',
 };
-
-// ── Capability badge colors ─────────────────────────────────────────────────
-
-const CAPABILITY_COLORS: Record<string, string> = {
-  'Level Tracking': 'bg-blue-900/50 text-blue-300 border-blue-700/50',
-  'Weight Tickets': 'bg-green-900/50 text-green-300 border-green-700/50',
-  'FSC': 'bg-yellow-900/50 text-yellow-300 border-yellow-700/50',
-  'GPS Routing': 'bg-purple-900/50 text-purple-300 border-purple-700/50',
-  'Dispatch': 'bg-orange-900/50 text-orange-300 border-orange-700/50',
-};
-
-function getCapabilityColor(cap: string): string {
-  return CAPABILITY_COLORS[cap] || 'bg-gray-700/50 text-gray-300 border-gray-600/50';
-}
-
-// ── Industry badge colors ───────────────────────────────────────────────────
 
 const INDUSTRY_COLORS: Record<string, string> = {
   'Oil & Gas': 'text-amber-400',
@@ -59,6 +42,7 @@ const INDUSTRY_COLORS: Record<string, string> = {
   'Agriculture': 'text-green-400',
   'Mining': 'text-stone-400',
   'General': 'text-gray-400',
+  'Oilfield Services': 'text-blue-400',
 };
 
 function getIndustryColor(industry: string): string {
@@ -73,7 +57,6 @@ export function PackagesCard({ company, onSave }: Props) {
 
   const activePackages = company.activePackages || [];
 
-  // Load all available job packages from Firestore
   useEffect(() => {
     const load = async () => {
       setLoading(true);
@@ -97,36 +80,50 @@ export function PackagesCard({ company, onSave }: Props) {
     load();
   }, []);
 
-  const togglePackage = async (packageId: string) => {
-    const isActive = activePackages.includes(packageId);
-
-    // Prevent turning off the last active package
-    if (isActive && activePackages.length <= 1) return;
-
+  const installPackage = async (packageId: string) => {
+    if (activePackages.includes(packageId)) return;
     setSaving(packageId);
     try {
-      const updated = isActive
-        ? activePackages.filter(id => id !== packageId)
-        : [...activePackages, packageId];
+      const updated = [...activePackages, packageId];
       await updateCompanyFields(company.id, { activePackages: updated });
       onSave();
     } catch (err) {
-      console.error('Failed to toggle package:', err);
+      console.error('Failed to install package:', err);
     } finally {
       setSaving(null);
     }
   };
+
+  const removePackage = async (packageId: string) => {
+    if (activePackages.length <= 1) return;
+    setSaving(packageId);
+    try {
+      const updated = activePackages.filter(id => id !== packageId);
+      await updateCompanyFields(company.id, { activePackages: updated });
+      onSave();
+    } catch (err) {
+      console.error('Failed to remove package:', err);
+    } finally {
+      setSaving(null);
+    }
+  };
+
+  const installedPackages = packages.filter(p => activePackages.includes(p.id));
+  const availablePackages = packages.filter(p => !activePackages.includes(p.id));
 
   return (
     <div className="bg-gray-800 rounded-lg overflow-hidden">
       <div className="px-4 py-3 border-b border-cyan-500/30 bg-cyan-900/20">
         <div className="flex items-center justify-between">
           <h3 className="text-cyan-400 font-medium text-sm">Job Packages</h3>
-          {activePackages.length > 0 && (
-            <span className="text-xs text-gray-400">
-              {activePackages.length} active
-            </span>
-          )}
+          <a
+            href="https://wellbuiltsuite.com/#packages"
+            target="_blank"
+            rel="noopener noreferrer"
+            className="text-[11px] text-gray-500 hover:text-cyan-400 transition-colors"
+          >
+            Browse all packages →
+          </a>
         </div>
       </div>
 
@@ -135,111 +132,101 @@ export function PackagesCard({ company, onSave }: Props) {
           <div className="text-gray-500 text-sm text-center py-4">Loading packages...</div>
         ) : error ? (
           <div className="text-red-400 text-sm text-center py-4">{error}</div>
-        ) : packages.length === 0 ? (
-          <div className="text-gray-500 text-sm text-center py-4">
-            No job packages configured yet. Add packages to the <code className="text-gray-400">job_packages</code> collection in Firestore.
-          </div>
         ) : (
-          <div className="space-y-2">
-            {packages.map(pkg => {
-              const isActive = activePackages.includes(pkg.id);
-              const isSaving = saving === pkg.id;
-              const isLastActive = isActive && activePackages.length <= 1;
-
-              return (
-                <div
-                  key={pkg.id}
-                  className={`flex items-start gap-3 p-3 rounded-lg border transition-colors ${
-                    isActive
-                      ? 'border-cyan-700/50 bg-cyan-900/10'
-                      : 'border-gray-700 bg-gray-800/50'
-                  }`}
+          <>
+            {/* ── Add Package Dropdown ── */}
+            {availablePackages.length > 0 && (
+              <div className="mb-4">
+                <label className="text-gray-400 text-xs block mb-1">Add a package</label>
+                <select
+                  value=""
+                  onChange={e => {
+                    if (e.target.value) installPackage(e.target.value);
+                  }}
+                  disabled={saving !== null}
+                  className="w-full px-3 py-2 bg-gray-900 border border-gray-700 rounded text-sm text-white focus:outline-none focus:border-cyan-500"
                 >
-                  {/* Icon */}
-                  <div className="text-2xl flex-shrink-0 mt-0.5">
-                    {PACKAGE_ICONS[pkg.icon || ''] || pkg.icon || '📦'}
-                  </div>
+                  <option value="">Select a package to install...</option>
+                  {availablePackages.map(pkg => (
+                    <option key={pkg.id} value={pkg.id}>
+                      {PACKAGE_ICONS[pkg.icon || ''] || '📦'} {pkg.name} — {pkg.industry} ({pkg.unit || 'unit'})
+                    </option>
+                  ))}
+                </select>
+              </div>
+            )}
 
-                  {/* Info */}
-                  <div className="flex-1 min-w-0">
-                    <div className="flex items-center gap-2 mb-0.5">
-                      <span className="text-white text-sm font-medium">{pkg.name}</span>
-                      <span className={`text-[10px] uppercase tracking-wider ${getIndustryColor(pkg.industry)}`}>
-                        {pkg.industry}
-                      </span>
-                      {pkg.unit && (
-                        <span className="text-[10px] text-gray-500 uppercase">
-                          {pkg.unit}
-                        </span>
-                      )}
-                    </div>
-
-                    {pkg.description && (
-                      <p className="text-gray-500 text-xs mb-1.5">{pkg.description}</p>
-                    )}
-
-                    {/* Job types */}
-                    {pkg.jobTypes && pkg.jobTypes.length > 0 && (
-                      <div className="flex flex-wrap gap-1 mb-1.5">
-                        {pkg.jobTypes.map((jt: any, i: number) => {
-                          const label = typeof jt === 'string' ? jt : jt.label || jt.id || String(jt);
-                          const key = typeof jt === 'string' ? jt : jt.id || `jt-${i}`;
-                          return (
-                            <span
-                              key={key}
-                              className="px-1.5 py-0.5 text-[10px] bg-gray-700/60 text-gray-300 rounded"
-                            >
-                              {label}
-                            </span>
-                          );
-                        })}
-                      </div>
-                    )}
-
-                    {/* Capabilities */}
-                    {pkg.capabilities && (() => {
-                      const caps = Array.isArray(pkg.capabilities)
-                        ? pkg.capabilities as string[]
-                        : Object.entries(pkg.capabilities).filter(([, v]) => v).map(([k]) => k);
-                      return caps.length > 0 ? (
-                        <div className="flex flex-wrap gap-1">
-                          {caps.map((cap: string) => (
-                            <span
-                              key={cap}
-                              className={`px-1.5 py-0.5 text-[10px] rounded border ${getCapabilityColor(cap)}`}
-                            >
-                              {cap}
-                            </span>
-                          ))}
-                        </div>
-                      ) : null;
-                    })()}
-                  </div>
-
-                  {/* Toggle */}
-                  <div className="flex flex-col items-end flex-shrink-0 mt-0.5">
-                    <button
-                      onClick={() => togglePackage(pkg.id)}
-                      disabled={isSaving || isLastActive}
-                      title={isLastActive ? 'At least one package must remain active' : ''}
-                      className={`relative w-11 h-6 rounded-full transition-colors ${
-                        isActive ? 'bg-cyan-500' : 'bg-gray-600'
-                      } ${isSaving || isLastActive ? 'opacity-50 cursor-not-allowed' : ''}`}
-                    >
-                      <span
-                        className={`absolute top-0.5 left-0.5 w-5 h-5 rounded-full bg-white transition-transform ${
-                          isActive ? 'translate-x-5' : 'translate-x-0'
-                        }`}
-                      />
-                    </button>
-                    {isLastActive && (
-                      <span className="text-[9px] text-amber-400/70 mt-1 whitespace-nowrap">Min 1 required</span>
-                    )}
-                  </div>
+            {/* ── Installed Packages ── */}
+            {installedPackages.length === 0 ? (
+              <div className="text-gray-500 text-sm text-center py-4">
+                No packages installed. Select one above to get started.
+              </div>
+            ) : (
+              <div className="space-y-2">
+                <div className="flex items-center justify-between mb-1">
+                  <span className="text-gray-400 text-xs">{installedPackages.length} installed</span>
                 </div>
-              );
-            })}
-          </div>
+                {installedPackages.map(pkg => {
+                  const isSaving = saving === pkg.id;
+                  const isLastActive = activePackages.length <= 1;
+
+                  return (
+                    <div
+                      key={pkg.id}
+                      className="flex items-start gap-3 p-3 rounded-lg border border-cyan-700/50 bg-cyan-900/10"
+                    >
+                      <div className="text-2xl flex-shrink-0 mt-0.5">
+                        {PACKAGE_ICONS[pkg.icon || ''] || pkg.icon || '📦'}
+                      </div>
+
+                      <div className="flex-1 min-w-0">
+                        <div className="flex items-center gap-2 mb-0.5">
+                          <span className="text-white text-sm font-medium">{pkg.name}</span>
+                          <span className={`text-[10px] uppercase tracking-wider ${getIndustryColor(pkg.industry)}`}>
+                            {pkg.industry}
+                          </span>
+                          {pkg.unit && (
+                            <span className="text-[10px] text-gray-500 uppercase">{pkg.unit}</span>
+                          )}
+                        </div>
+
+                        {pkg.description && (
+                          <p className="text-gray-500 text-xs mb-1.5">{pkg.description}</p>
+                        )}
+
+                        {pkg.jobTypes && pkg.jobTypes.length > 0 && (
+                          <div className="flex flex-wrap gap-1">
+                            {pkg.jobTypes.map((jt: any, i: number) => {
+                              const label = typeof jt === 'string' ? jt : jt.label || jt.id || String(jt);
+                              const key = typeof jt === 'string' ? jt : jt.id || `jt-${i}`;
+                              return (
+                                <span key={key} className="px-1.5 py-0.5 text-[10px] bg-gray-700/60 text-gray-300 rounded">
+                                  {label}
+                                </span>
+                              );
+                            })}
+                          </div>
+                        )}
+                      </div>
+
+                      <button
+                        onClick={() => removePackage(pkg.id)}
+                        disabled={isSaving || isLastActive}
+                        title={isLastActive ? 'At least one package must remain active' : 'Remove package'}
+                        className={`text-xs px-2 py-1 rounded transition-colors flex-shrink-0 ${
+                          isLastActive
+                            ? 'text-gray-600 cursor-not-allowed'
+                            : 'text-red-400/70 hover:text-red-400 hover:bg-red-900/20'
+                        }`}
+                      >
+                        {isSaving ? '...' : 'Remove'}
+                      </button>
+                    </div>
+                  );
+                })}
+              </div>
+            )}
+          </>
         )}
       </div>
     </div>
