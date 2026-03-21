@@ -36,12 +36,16 @@ interface DispatchJob {
   jobType: 'pw' | 'service';
   serviceType?: string;
   packageId?: string;  // Job package ID (e.g. 'water-hauling', 'aggregate')
-  status: 'pending' | 'pending_approval' | 'accepted' | 'in_progress' | 'paused' | 'completed' | 'cancelled';
+  status: 'pending' | 'pending_approval' | 'accepted' | 'in_progress' | 'paused' | 'completed' | 'cancelled' | 'declined';
   notes?: string;
   priority: number;
   assignedAt: any;  // Firestore Timestamp
   assignedBy: string;
   completedAt?: any;
+  // Decline fields — written by WB T when driver declines
+  declinedAt?: any;
+  declineReason?: string;
+  declinedBy?: string;
   estimatedPullTime?: string;
   currentLevel?: string;
   flowRate?: string;
@@ -313,6 +317,11 @@ export default function DispatchPage() {
   const [editSwAddDriverHashes, setEditSwAddDriverHashes] = useState<Set<string>>(new Set());
   const [editSwSaving, setEditSwSaving] = useState(false);
 
+  // Reassign declined job state
+  const [reassignJob, setReassignJob] = useState<DispatchJob | null>(null);
+  const [reassignDriverHash, setReassignDriverHash] = useState('');
+  const [reassigning, setReassigning] = useState(false);
+
   // Dynamic service types from job packages (falls back to hardcoded)
   const FALLBACK_SERVICE_TYPES = ['Hot Shot', 'Equipment Delivery', 'Tank Cleanout', 'Flowback', 'Frac Water', 'Rig Move', 'Other'];
   const [dynamicServiceTypes, setDynamicServiceTypes] = useState<string[]>(FALLBACK_SERVICE_TYPES);
@@ -390,7 +399,7 @@ export default function DispatchPage() {
     const firestore = getFirestoreDb();
     const q = query(
       collection(firestore, 'dispatches'),
-      where('status', 'in', ['pending', 'pending_approval', 'accepted', 'in_progress', 'paused']),
+      where('status', 'in', ['pending', 'pending_approval', 'accepted', 'in_progress', 'paused', 'declined']),
       orderBy('assignedAt', 'desc')
     );
     const unsub = onSnapshot(q, (snap) => {
@@ -466,7 +475,7 @@ export default function DispatchPage() {
       const firestore = getFirestoreDb();
       const q = query(
         collection(firestore, 'dispatches'),
-        where('status', 'in', ['pending', 'pending_approval', 'accepted', 'in_progress', 'paused']),
+        where('status', 'in', ['pending', 'pending_approval', 'accepted', 'in_progress', 'paused', 'declined']),
         orderBy('assignedAt', 'desc')
       );
       const snap = await getDocs(q);
@@ -822,6 +831,78 @@ export default function DispatchPage() {
     } catch (err: any) {
       setMessage(`Error: ${err.message}`);
       setTimeout(() => setMessage(''), 5000);
+    }
+  }
+
+  // ─── Reassign Declined Job ────────────────────────────────────────────────
+
+  function openReassignModal(job: DispatchJob) {
+    setReassignJob(job);
+    setReassignDriverHash('');
+  }
+
+  async function submitReassign() {
+    if (!reassignJob || !reassignDriverHash) return;
+    setReassigning(true);
+    try {
+      const driver = drivers.find(d => d.key === reassignDriverHash);
+      if (!driver) throw new Error('Driver not found');
+
+      const firestore = getFirestoreDb();
+      const driverFirstName = driver.legalName ? driver.legalName.split(' ')[0] : driver.displayName;
+
+      // Create a new dispatch with the same job details but new driver
+      const newJob: Record<string, any> = {
+        driverHash: reassignDriverHash,
+        driverName: driver.displayName,
+        driverFirstName,
+        wellName: reassignJob.wellName,
+        ndicWellName: reassignJob.ndicWellName || reassignJob.wellName,
+        route: reassignJob.route || '',
+        jobType: reassignJob.jobType,
+        packageId: reassignJob.packageId || 'water-hauling',
+        status: 'pending',
+        notes: reassignJob.notes || '',
+        priority: reassignJob.priority,
+        assignedAt: Timestamp.now(),
+        assignedBy: user?.email || 'dashboard',
+        estimatedPullTime: reassignJob.estimatedPullTime || '',
+        currentLevel: reassignJob.currentLevel || '',
+        flowRate: reassignJob.flowRate || '',
+      };
+
+      // Carry over disposal info
+      if (reassignJob.disposal) newJob.disposal = reassignJob.disposal;
+      if (reassignJob.disposalLat) newJob.disposalLat = reassignJob.disposalLat;
+      if (reassignJob.disposalLng) newJob.disposalLng = reassignJob.disposalLng;
+      if (reassignJob.disposalApiNo) newJob.disposalApiNo = reassignJob.disposalApiNo;
+      if (reassignJob.disposalCounty) newJob.disposalCounty = reassignJob.disposalCounty;
+      // Carry over load count
+      if (reassignJob.loadCount && reassignJob.loadCount > 1) newJob.loadCount = reassignJob.loadCount;
+      // Carry over service work fields
+      if (reassignJob.serviceType) newJob.serviceType = reassignJob.serviceType;
+      if (reassignJob.serviceGroupId) newJob.serviceGroupId = reassignJob.serviceGroupId;
+
+      await addDoc(collection(firestore, 'dispatches'), newJob);
+
+      // Mark the old declined job as cancelled (cleaned up)
+      if (reassignJob.id) {
+        await updateDoc(doc(firestore, 'dispatches', reassignJob.id), {
+          status: 'cancelled',
+          cancelledAt: Timestamp.now(),
+          reassignedTo: driver.displayName,
+        });
+      }
+
+      setMessage(`Reassigned ${reassignJob.ndicWellName || reassignJob.wellName} to ${driverFirstName}`);
+      setReassignJob(null);
+      setReassignDriverHash('');
+      setTimeout(() => setMessage(''), 4000);
+    } catch (err: any) {
+      setMessage(`Error: ${err.message}`);
+      setTimeout(() => setMessage(''), 5000);
+    } finally {
+      setReassigning(false);
     }
   }
 
@@ -1489,6 +1570,7 @@ export default function DispatchPage() {
                   drivers={drivers}
                   assignTransfer={assignTransfer}
                   onEditServiceWork={openEditSwModal}
+                  onReassignDeclined={openReassignModal}
                 />
               </div>
             </div>
@@ -1648,6 +1730,86 @@ export default function DispatchPage() {
                 className="flex-1 px-4 py-2 bg-blue-600 hover:bg-blue-500 disabled:bg-gray-600 disabled:cursor-not-allowed text-white font-medium rounded-lg transition-colors"
               >
                 {assigning ? 'Dispatching...' : assignLoadCount > 1 ? `Dispatch ${assignLoadCount} Loads` : 'Dispatch'}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* ═══════════════════════════════════════════════════════════════════════════
+          REASSIGN DECLINED JOB MODAL
+          ═══════════════════════════════════════════════════════════════════════════ */}
+      {reassignJob && (
+        <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50">
+          <div className="bg-gray-800 rounded-lg p-6 max-w-md w-full mx-4 border border-gray-700">
+            <h3 className="text-lg font-semibold text-white mb-1">Reassign Job</h3>
+            <p className="text-gray-400 text-sm mb-4">
+              <span className="text-white font-medium">{reassignJob.ndicWellName || reassignJob.wellName}</span>
+              {' '}was declined by{' '}
+              <span className="text-red-400">{reassignJob.declinedBy || reassignJob.driverFirstName || reassignJob.driverName}</span>
+            </p>
+
+            {/* Decline reason */}
+            {reassignJob.declineReason && (
+              <div className="bg-red-950/30 border border-red-600/20 rounded-lg px-3 py-2 mb-4">
+                <span className="text-gray-500 text-xs">Reason: </span>
+                <span className="text-gray-300 text-sm italic">&ldquo;{reassignJob.declineReason}&rdquo;</span>
+              </div>
+            )}
+
+            {/* Job summary */}
+            <div className="bg-gray-900 rounded-lg p-3 mb-4 grid grid-cols-2 gap-2 text-sm">
+              <div>
+                <span className="text-gray-500">Level:</span>
+                <span className="text-white ml-2 font-mono">{reassignJob.currentLevel || '--'}</span>
+              </div>
+              <div>
+                <span className="text-gray-500">Flow Rate:</span>
+                <span className="text-white ml-2 font-mono">{reassignJob.flowRate || '--'}</span>
+              </div>
+              {reassignJob.disposal && (
+                <div className="col-span-2">
+                  <span className="text-gray-500">Disposal:</span>
+                  <span className="text-cyan-400 ml-2">{reassignJob.disposal}</span>
+                </div>
+              )}
+              {reassignJob.notes && (
+                <div className="col-span-2">
+                  <span className="text-gray-500">Notes:</span>
+                  <span className="text-gray-300 ml-2 italic">{reassignJob.notes}</span>
+                </div>
+              )}
+            </div>
+
+            {/* Driver picker */}
+            <div className="mb-4">
+              <label className="block text-sm text-gray-400 mb-1">Assign to Driver</label>
+              <select
+                value={reassignDriverHash}
+                onChange={(e) => setReassignDriverHash(e.target.value)}
+                className="w-full px-3 py-2 bg-gray-900 border border-gray-700 rounded-lg text-white text-sm focus:outline-none focus:border-blue-500"
+              >
+                <option value="">Select driver...</option>
+                {drivers.map(d => (
+                  <option key={d.key} value={d.key}>{d.legalName || d.displayName}</option>
+                ))}
+              </select>
+            </div>
+
+            {/* Buttons */}
+            <div className="flex gap-3">
+              <button
+                onClick={() => { setReassignJob(null); setReassignDriverHash(''); }}
+                className="flex-1 px-4 py-2 bg-gray-700 hover:bg-gray-600 text-white rounded-lg transition-colors"
+              >
+                Cancel
+              </button>
+              <button
+                onClick={submitReassign}
+                disabled={!reassignDriverHash || reassigning}
+                className="flex-1 px-4 py-2 bg-blue-600 hover:bg-blue-500 disabled:bg-gray-600 disabled:cursor-not-allowed text-white font-medium rounded-lg transition-colors"
+              >
+                {reassigning ? 'Reassigning...' : 'Reassign'}
               </button>
             </div>
           </div>
@@ -1889,6 +2051,7 @@ function StageBadge({ job }: { job: DispatchJob }) {
     pending:           { bg: 'bg-yellow-600/30',  text: 'text-yellow-300', label: 'Pending' },
     pending_approval:  { bg: 'bg-orange-600/30',  text: 'text-orange-300', label: 'Needs Approval' },
     accepted:          { bg: 'bg-blue-600/30',    text: 'text-blue-300',   label: 'Accepted' },
+    declined:          { bg: 'bg-red-600/30',     text: 'text-red-300',    label: 'Declined' },
     in_progress:       { bg: 'bg-purple-600/30',  text: 'text-purple-300', label: 'In Progress' },
     paused:            { bg: 'bg-amber-600/30',   text: 'text-amber-300',  label: 'Paused' },
   };
@@ -2033,18 +2196,23 @@ function DispatchJobRow({ job, cancelDispatch, compact, onClickServiceWork }: {
 
 // Driver-centric active dispatch panel — groups ALL jobs by driver
 // Multi-driver SW jobs shown separately at bottom with all crew visible
-function ActiveDispatchPanel({ dispatches, cancelDispatch, drivers, assignTransfer, onEditServiceWork }: {
+function ActiveDispatchPanel({ dispatches, cancelDispatch, drivers, assignTransfer, onEditServiceWork, onReassignDeclined }: {
   dispatches: DispatchJob[];
   cancelDispatch: (id: string) => void;
-  drivers?: { key: string; displayName: string; legalName?: string }[];
+  drivers?: { key: string; displayName: string; legalName?: string; assignedRoutes?: string[] }[];
   assignTransfer?: (jobId: string, driverHash: string, driverName: string) => void;
   onEditServiceWork?: (job: DispatchJob) => void;
+  onReassignDeclined?: (job: DispatchJob) => void;
 }) {
   const [expandedDrivers, setExpandedDrivers] = useState<Set<string>>(new Set());
 
+  // Separate declined jobs — show in their own section with reassign option
+  const declinedJobs = dispatches.filter(d => d.status === 'declined');
+  const nonDeclined = dispatches.filter(d => d.status !== 'declined');
+
   // Unassigned transfers need driver assignment
-  const unassigned = dispatches.filter(d => d.type === 'transfer' && (!d.driverHash || d.status === 'pending_approval'));
-  const assigned = dispatches.filter(d => !(d.type === 'transfer' && (!d.driverHash || d.status === 'pending_approval')));
+  const unassigned = nonDeclined.filter(d => d.type === 'transfer' && (!d.driverHash || d.status === 'pending_approval'));
+  const assigned = nonDeclined.filter(d => !(d.type === 'transfer' && (!d.driverHash || d.status === 'pending_approval')));
 
   // Identify multi-driver SW groups (serviceGroupId with 2+ dispatches)
   // These appear in BOTH the driver's individual list AND the Crew Jobs section
@@ -2099,6 +2267,61 @@ function ActiveDispatchPanel({ dispatches, cancelDispatch, drivers, assignTransf
 
   return (
     <div className="space-y-3">
+      {/* Declined jobs — need dispatcher attention */}
+      {declinedJobs.length > 0 && (
+        <>
+          <div className="flex items-center gap-2">
+            <div className="h-px bg-red-600/30 flex-1" />
+            <span className="text-red-400 text-[10px] font-bold uppercase tracking-wider flex-shrink-0">Declined ({declinedJobs.length})</span>
+            <div className="h-px bg-red-600/30 flex-1" />
+          </div>
+          {declinedJobs.map(job => (
+            <div key={job.id} className="border border-red-600/30 rounded-lg overflow-hidden bg-red-950/20">
+              <div className="px-4 py-3">
+                <div className="flex items-center gap-2">
+                  <JobTypeBadge type={job.jobType} serviceType={job.serviceType} />
+                  <span className="text-white font-medium text-sm truncate">{job.ndicWellName || job.wellName}</span>
+                  {(() => {
+                    const remaining = (job.loadCount || 1) - (job.loadsCompleted || 0);
+                    return remaining > 1 ? (
+                      <span className="px-1.5 py-0.5 bg-yellow-600/30 text-yellow-300 text-[10px] rounded font-bold flex-shrink-0">x{remaining}</span>
+                    ) : null;
+                  })()}
+                  <span className="px-2 py-0.5 bg-red-600/30 text-red-300 text-[10px] font-bold rounded">DECLINED</span>
+                  <span className="flex-1" />
+                  <button
+                    onClick={() => onReassignDeclined?.(job)}
+                    className="px-3 py-1 bg-blue-600 hover:bg-blue-500 text-white text-xs font-medium rounded transition-colors"
+                  >Reassign</button>
+                  <button
+                    onClick={() => job.id && cancelDispatch(job.id)}
+                    className="px-3 py-1 bg-gray-700 hover:bg-gray-600 text-gray-300 text-xs font-medium rounded transition-colors"
+                    title="Accept decline and dismiss"
+                  >Dismiss</button>
+                </div>
+                {/* Decline details */}
+                <div className="mt-2 ml-[42px] space-y-1">
+                  <div className="flex items-center gap-2 text-xs">
+                    <span className="text-red-400/80 font-medium">
+                      {job.declinedBy || job.driverFirstName || job.driverName}
+                    </span>
+                    {job.declinedAt && (
+                      <span className="text-gray-600">{timeAgo(job.declinedAt)}</span>
+                    )}
+                  </div>
+                  {job.declineReason && (
+                    <div className="text-gray-400 text-xs italic">&ldquo;{job.declineReason}&rdquo;</div>
+                  )}
+                  {job.disposal && (
+                    <span className="text-cyan-400/70 text-xs">→ {job.disposal}</span>
+                  )}
+                </div>
+              </div>
+            </div>
+          ))}
+        </>
+      )}
+
       {/* Unassigned transfers — urgent, pulsing */}
       {unassigned.map(job => (
         <UnassignedTransferRow key={job.id} job={job} drivers={drivers || []} assignTransfer={assignTransfer} cancelDispatch={cancelDispatch} />
