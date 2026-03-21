@@ -13,8 +13,8 @@ interface JobPackage {
   icon?: string;            // emoji or short string
   industry: string;         // e.g. "Oil & Gas", "Construction", "Agriculture"
   unit?: string;            // e.g. "BBL", "ton", "hour"
-  jobTypes?: string[];       // job types this package provides
-  capabilities?: string[];   // e.g. ["Level Tracking", "Weight Tickets", "FSC"]
+  jobTypes?: any[];          // objects {id, label, icon, color} or strings
+  capabilities?: any;        // Record<string, boolean> or string[]
   description?: string;
 }
 
@@ -22,6 +22,20 @@ interface Props {
   company: CompanyConfig;
   onSave: () => void;
 }
+
+// ── Package icon map (Firestore stores identifiers, we display emojis) ──────
+
+const PACKAGE_ICONS: Record<string, string> = {
+  'water': '💧',
+  'water-plus': '💧',
+  'water-alert': '💧',
+  'water-pump': '💧',
+  'dump-truck': '🚛',
+  'truck-delivery': '🚚',
+  'wrench': '🔧',
+  'oil': '🛢️',
+  'barrel': '🛢️',
+};
 
 // ── Capability badge colors ─────────────────────────────────────────────────
 
@@ -84,9 +98,13 @@ export function PackagesCard({ company, onSave }: Props) {
   }, []);
 
   const togglePackage = async (packageId: string) => {
+    const isActive = activePackages.includes(packageId);
+
+    // Prevent turning off the last active package
+    if (isActive && activePackages.length <= 1) return;
+
     setSaving(packageId);
     try {
-      const isActive = activePackages.includes(packageId);
       const updated = isActive
         ? activePackages.filter(id => id !== packageId)
         : [...activePackages, packageId];
@@ -126,6 +144,7 @@ export function PackagesCard({ company, onSave }: Props) {
             {packages.map(pkg => {
               const isActive = activePackages.includes(pkg.id);
               const isSaving = saving === pkg.id;
+              const isLastActive = isActive && activePackages.length <= 1;
 
               return (
                 <div
@@ -138,7 +157,7 @@ export function PackagesCard({ company, onSave }: Props) {
                 >
                   {/* Icon */}
                   <div className="text-2xl flex-shrink-0 mt-0.5">
-                    {pkg.icon || '📦'}
+                    {PACKAGE_ICONS[pkg.icon || ''] || pkg.icon || '📦'}
                   </div>
 
                   {/* Info */}
@@ -162,46 +181,61 @@ export function PackagesCard({ company, onSave }: Props) {
                     {/* Job types */}
                     {pkg.jobTypes && pkg.jobTypes.length > 0 && (
                       <div className="flex flex-wrap gap-1 mb-1.5">
-                        {pkg.jobTypes.map(jt => (
-                          <span
-                            key={jt}
-                            className="px-1.5 py-0.5 text-[10px] bg-gray-700/60 text-gray-300 rounded"
-                          >
-                            {jt}
-                          </span>
-                        ))}
+                        {pkg.jobTypes.map((jt: any, i: number) => {
+                          const label = typeof jt === 'string' ? jt : jt.label || jt.id || String(jt);
+                          const key = typeof jt === 'string' ? jt : jt.id || `jt-${i}`;
+                          return (
+                            <span
+                              key={key}
+                              className="px-1.5 py-0.5 text-[10px] bg-gray-700/60 text-gray-300 rounded"
+                            >
+                              {label}
+                            </span>
+                          );
+                        })}
                       </div>
                     )}
 
                     {/* Capabilities */}
-                    {pkg.capabilities && pkg.capabilities.length > 0 && (
-                      <div className="flex flex-wrap gap-1">
-                        {pkg.capabilities.map(cap => (
-                          <span
-                            key={cap}
-                            className={`px-1.5 py-0.5 text-[10px] rounded border ${getCapabilityColor(cap)}`}
-                          >
-                            {cap}
-                          </span>
-                        ))}
-                      </div>
-                    )}
+                    {pkg.capabilities && (() => {
+                      const caps = Array.isArray(pkg.capabilities)
+                        ? pkg.capabilities as string[]
+                        : Object.entries(pkg.capabilities).filter(([, v]) => v).map(([k]) => k);
+                      return caps.length > 0 ? (
+                        <div className="flex flex-wrap gap-1">
+                          {caps.map((cap: string) => (
+                            <span
+                              key={cap}
+                              className={`px-1.5 py-0.5 text-[10px] rounded border ${getCapabilityColor(cap)}`}
+                            >
+                              {cap}
+                            </span>
+                          ))}
+                        </div>
+                      ) : null;
+                    })()}
                   </div>
 
                   {/* Toggle */}
-                  <button
-                    onClick={() => togglePackage(pkg.id)}
-                    disabled={isSaving}
-                    className={`relative w-11 h-6 rounded-full transition-colors flex-shrink-0 mt-0.5 ${
-                      isActive ? 'bg-cyan-500' : 'bg-gray-600'
-                    } ${isSaving ? 'opacity-50' : ''}`}
-                  >
-                    <span
-                      className={`absolute top-0.5 left-0.5 w-5 h-5 rounded-full bg-white transition-transform ${
-                        isActive ? 'translate-x-5' : 'translate-x-0'
-                      }`}
-                    />
-                  </button>
+                  <div className="flex flex-col items-end flex-shrink-0 mt-0.5">
+                    <button
+                      onClick={() => togglePackage(pkg.id)}
+                      disabled={isSaving || isLastActive}
+                      title={isLastActive ? 'At least one package must remain active' : ''}
+                      className={`relative w-11 h-6 rounded-full transition-colors ${
+                        isActive ? 'bg-cyan-500' : 'bg-gray-600'
+                      } ${isSaving || isLastActive ? 'opacity-50 cursor-not-allowed' : ''}`}
+                    >
+                      <span
+                        className={`absolute top-0.5 left-0.5 w-5 h-5 rounded-full bg-white transition-transform ${
+                          isActive ? 'translate-x-5' : 'translate-x-0'
+                        }`}
+                      />
+                    </button>
+                    {isLastActive && (
+                      <span className="text-[9px] text-amber-400/70 mt-1 whitespace-nowrap">Min 1 required</span>
+                    )}
+                  </div>
                 </div>
               );
             })}

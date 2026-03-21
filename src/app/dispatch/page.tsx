@@ -35,6 +35,7 @@ interface DispatchJob {
   route?: string;
   jobType: 'pw' | 'service';
   serviceType?: string;
+  packageId?: string;  // Job package ID (e.g. 'water-hauling', 'aggregate')
   status: 'pending' | 'pending_approval' | 'accepted' | 'in_progress' | 'paused' | 'completed' | 'cancelled';
   notes?: string;
   priority: number;
@@ -315,6 +316,8 @@ export default function DispatchPage() {
   // Dynamic service types from job packages (falls back to hardcoded)
   const FALLBACK_SERVICE_TYPES = ['Hot Shot', 'Equipment Delivery', 'Tank Cleanout', 'Flowback', 'Frac Water', 'Rig Move', 'Other'];
   const [dynamicServiceTypes, setDynamicServiceTypes] = useState<string[]>(FALLBACK_SERVICE_TYPES);
+  // Map job type label → packageId (for stamping dispatch docs)
+  const [jobTypeToPackageId, setJobTypeToPackageId] = useState<Record<string, string>>({});
 
   // Auth redirect
   useEffect(() => {
@@ -352,12 +355,17 @@ export default function DispatchPage() {
         const firestore = getFirestoreDb();
         const snap = await getDocs(collection(firestore, 'job_packages'));
         const allJobTypes: string[] = [];
+        const pkgMap: Record<string, string> = {};
         snap.forEach(d => {
           if (company.activePackages!.includes(d.id)) {
             const pkg = d.data();
             if (pkg.jobTypes && Array.isArray(pkg.jobTypes)) {
               for (const jt of pkg.jobTypes) {
-                if (!allJobTypes.includes(jt)) allJobTypes.push(jt);
+                const label = typeof jt === 'string' ? jt : jt.label || jt.id || String(jt);
+                if (!allJobTypes.includes(label)) {
+                  allJobTypes.push(label);
+                  pkgMap[label] = d.id;
+                }
               }
             }
           }
@@ -367,6 +375,7 @@ export default function DispatchPage() {
           // Always include "Other" as escape hatch
           if (!allJobTypes.includes('Other')) allJobTypes.push('Other');
           setDynamicServiceTypes(allJobTypes);
+          setJobTypeToPackageId(pkgMap);
         }
       } catch (err) {
         console.error('Failed to load job package types:', err);
@@ -704,6 +713,7 @@ export default function DispatchPage() {
         ndicWellName: assignTarget.ndicName || assignTarget.wellName,
         route: assignTarget.route || '',
         jobType: 'pw',
+        packageId: 'water-hauling',
         status: 'pending',
         notes: assignNotes || '',
         priority: priority.sortOrder,
@@ -770,6 +780,7 @@ export default function DispatchPage() {
           ndicWellName: swNdicName,
           jobType: 'service',
           serviceType: swServiceType.trim(),
+          packageId: jobTypeToPackageId[swServiceType.trim()] || undefined,
           status: 'pending',
           notes: swNotes || '',
           priority: 5,

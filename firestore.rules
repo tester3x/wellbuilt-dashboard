@@ -147,6 +147,12 @@ service cloud.firestore {
       allow read, write: if true;
     }
 
+    // Job packages — config-driven job types (water hauling, aggregate, etc.)
+    match /job_packages/{packageId} {
+      allow read: if true;
+      allow write: if false;
+    }
+
     // Everything else — deny (Cloud Functions use Admin SDK which bypasses rules)
     match /{document=**} {
       allow read, write: if false;
