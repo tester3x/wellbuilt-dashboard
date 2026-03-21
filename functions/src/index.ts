@@ -932,6 +932,26 @@ export const processIncomingPull = functionsV1.database
     // Write to processed/
     await db.ref(`packets/processed/${packetId}`).set(processedPacket);
 
+    // Write to driver_pulls/{driverId}/{packetId} — driver-scoped pull history
+    // WB M reads this small node instead of downloading ALL processed packets
+    if (data.driverId) {
+      try {
+        await db.ref(`driver_pulls/${data.driverId}/${packetId}`).set({
+          wellName,
+          dateTime: data.dateTime || formatLocalDateTime(new Date(data.dateTimeUTC)),
+          dateTimeUTC: data.dateTimeUTC,
+          tankLevelFeet: data.tankLevelFeet,
+          bblsTaken: data.bblsTaken,
+          wellDown: data.wellDown || false,
+          driverName: data.driverName || null,
+          processedAt: new Date().toISOString(),
+        });
+        console.log(`[DriverPulls] Wrote driver_pulls/${data.driverId.slice(0, 8)}.../${packetId}`);
+      } catch (dpErr) {
+        console.error(`[DriverPulls] Failed to write:`, dpErr);
+      }
+    }
+
     // Calculate current level (for outgoing response)
     // At time of pull, current level = tank after
     // This will be updated by a scheduled function to reflect growth over time
@@ -1440,8 +1460,36 @@ export const processEditRequest = functionsV1.database
       console.error(`Edit: Error updating performance/ for ${wellName}:`, perfError);
     }
 
+    // Update driver_pulls if the original packet had a driverId
+    if (origPacket.driverId) {
+      try {
+        await db.ref(`driver_pulls/${origPacket.driverId}/${originalPacketId}`).update({
+          wellName,
+          dateTime: newDateTime || origPacket.dateTime,
+          dateTimeUTC: newDateTimeUTC,
+          tankLevelFeet: newTankTopInches / 12,
+          bblsTaken: newBblsTaken,
+          wellDown: origPacket.wellDown || false,
+          editedAt: new Date().toISOString(),
+        });
+        console.log(`Edit: Updated driver_pulls/${origPacket.driverId.slice(0, 8)}.../${originalPacketId}`);
+      } catch (dpErr) {
+        console.error(`Edit: Failed to update driver_pulls:`, dpErr);
+      }
+    }
+
     // Delete the edit request
     await snapshot.ref.remove();
+
+    // Increment incoming_version so WB M app knows to refresh
+    try {
+      const versionSnap = await db.ref('packets/incoming_version').once('value');
+      const currentVersion = parseInt(versionSnap.val(), 10) || 0;
+      await db.ref('packets/incoming_version').set(currentVersion + 1);
+      console.log(`Edit: Incremented incoming_version to ${currentVersion + 1}`);
+    } catch (versionErr) {
+      console.error('Edit: Failed to increment incoming_version:', versionErr);
+    }
 
     console.log(`Edit complete for ${wellName}: ${originalPacketId}`);
     return null;
@@ -1521,6 +1569,16 @@ export const processDeleteRequest = functionsV1.database
     // Delete from processed
     await db.ref(`packets/processed/${targetPacketId}`).remove();
 
+    // Remove from driver_pulls if the deleted packet had a driverId
+    if (deletedPacket?.driverId) {
+      try {
+        await db.ref(`driver_pulls/${deletedPacket.driverId}/${targetPacketId}`).remove();
+        console.log(`Delete: Removed driver_pulls/${deletedPacket.driverId.slice(0, 8)}.../${targetPacketId}`);
+      } catch (dpErr) {
+        console.error(`Delete: Failed to remove from driver_pulls:`, dpErr);
+      }
+    }
+
     // If the deleted packet was the latest pull, recalculate outgoing from the new latest
     if (deletedPacket) {
       const cleanName = wellName.replace(/\s/g, '');
@@ -1566,102 +1624,129 @@ export const processDeleteRequest = functionsV1.database
         }
       }
 
-      if (latestPacket) {
-        // Recalculate AFR from remaining packets
-        const afr = await calculateAFR(wellName, latestPacket.flowRateDays || 0);
+      // Always rebuild outgoing — wrapped in try/catch so delete completes even if rebuild fails
+      try {
+        if (latestPacket) {
+          console.log(`Delete: Rebuilding outgoing for ${wellName} from packet ${latestPacket.packetId || 'unknown'} (dateTimeUTC=${latestPacket.dateTimeUTC})`);
 
-        // Calculate windowBblsDay and overnightBblsDay from remaining historical pulls
-        const bblPerFoot = tanks * 20;
-        const latestTimeMs = new Date(latestPacket.dateTimeUTC).getTime();
-        const historicalPulls = await getHistoricalPulls(wellName, 500);
-        const windowBblsDay = calculateWindowBblsPerDay(historicalPulls, bblPerFoot, latestTimeMs);
-        const overnightBblsDay = calculateOvernightBblsPerDay(historicalPulls, bblPerFoot, latestTimeMs);
+          // Recalculate AFR from remaining packets
+          const afr = await calculateAFR(wellName, latestPacket.flowRateDays || 0);
+          console.log(`Delete: AFR for ${wellName} = ${afr}`);
 
-        const tankAfterInches = latestPacket.tankAfterInches || 0;
-        const pullHeightInches = (pullBbls / 20 / tanks) * 12;
-        const targetLevel = bottomInches + pullHeightInches;
-        const recoveryNeeded = Math.max(0, targetLevel - tankAfterInches);
+          // Calculate windowBblsDay and overnightBblsDay from remaining historical pulls
+          const bblPerFoot = tanks * 20;
+          const latestTimeMs = new Date(latestPacket.dateTimeUTC).getTime();
+          const historicalPulls = await getHistoricalPulls(wellName, 500);
+          const windowBblsDay = calculateWindowBblsPerDay(historicalPulls, bblPerFoot, latestTimeMs);
+          const overnightBblsDay = calculateOvernightBblsPerDay(historicalPulls, bblPerFoot, latestTimeMs);
 
-        let estTimeToPull = '';
-        let estDateTimePull = '';
-        if (afr > 0 && recoveryNeeded > 0) {
-          const estDays = (recoveryNeeded / 12) * afr;
-          estTimeToPull = daysToHMM(estDays);
-          const pullDate = new Date(latestPacket.dateTimeUTC);
-          const estDate = new Date(pullDate.getTime() + estDays * 24 * 60 * 60 * 1000);
-          estDateTimePull = estDate.toISOString();
-        } else if (recoveryNeeded === 0) {
-          estTimeToPull = '0:00';
-          estDateTimePull = latestPacket.dateTimeUTC;
-        }
+          const tankAfterInches = latestPacket.tankAfterInches || 0;
+          const pullHeightInches = (pullBbls / 20 / tanks) * 12;
+          const targetLevel = bottomInches + pullHeightInches;
+          const recoveryNeeded = Math.max(0, targetLevel - tankAfterInches);
 
-        const bbls24 = afr > 0 ? (1 / afr) * 20 * tanks : 0;
-        const bbls24hrs = Math.round(bbls24).toString();
+          let estTimeToPull = '';
+          let estDateTimePull = '';
+          if (afr > 0 && recoveryNeeded > 0) {
+            const estDays = (recoveryNeeded / 12) * afr;
+            estTimeToPull = daysToHMM(estDays);
+            const pullDate = new Date(latestPacket.dateTimeUTC);
+            const estDate = new Date(pullDate.getTime() + estDays * 24 * 60 * 60 * 1000);
+            estDateTimePull = estDate.toISOString();
+          } else if (recoveryNeeded === 0) {
+            estTimeToPull = '0:00';
+            estDateTimePull = latestPacket.dateTimeUTC;
+          }
 
-        // Delete old outgoing responses for this well and write new one
-        const oldResponses = await db.ref('packets/outgoing')
-          .orderByChild('wellName')
-          .equalTo(wellName)
-          .once('value');
+          const bbls24 = afr > 0 ? (1 / afr) * 20 * tanks : 0;
+          const bbls24hrs = Math.round(bbls24).toString();
 
-        const deletePromises: Promise<void>[] = [];
-        oldResponses.forEach((child) => {
-          deletePromises.push(child.ref.remove());
-        });
-        await Promise.all(deletePromises);
+          // Delete old outgoing responses for this well and write new one
+          const oldResponses = await db.ref('packets/outgoing')
+            .orderByChild('wellName')
+            .equalTo(wellName)
+            .once('value');
 
-        const timestamp = new Date();
-        const responseId = `response_${timestamp.toISOString().replace(/[-:]/g, '').replace('T', '_').split('.')[0]}_${cleanName}`;
-
-        await db.ref(`packets/outgoing/${responseId}`).set({
-          wellName,
-          currentLevel: inchesToFeetInches(tankAfterInches),
-          flowRate: afr > 0 ? daysToHMMSS(afr) : 'Unknown',
-          bbls24hrs,
-          timeTillPull: latestPacket.wellDown ? 'Down' : (estTimeToPull || 'Calculating...'),
-          nextPullTime: estDateTimePull ? formatLocalDateTime(new Date(estDateTimePull)) : 'Unknown',
-          nextPullTimeUTC: estDateTimePull,
-          lastPullDateTime: latestPacket.dateTime || formatLocalDateTime(new Date(latestPacket.dateTimeUTC)),
-          lastPullDateTimeUTC: latestPacket.dateTimeUTC,
-          lastPullBbls: latestPacket.bblsTaken.toString(),
-          lastPullTopLevel: inchesToFeetInches(latestPacket.tankTopInches),
-          lastPullBottomLevel: inchesToFeetInches(tankAfterInches),
-          lastPullDriverId: latestPacket.driverId || null,
-          lastPullDriverName: latestPacket.driverName || null,
-          lastPullPacketId: latestPacket.packetId || null,
-          wellDown: latestPacket.wellDown || false,
-          status: 'success',
-          timestamp: timestamp.toISOString(),
-          timestampUTC: timestamp.toISOString(),
-          windowBblsDay: windowBblsDay > 0 ? windowBblsDay.toString() : null,
-          overnightBblsDay: overnightBblsDay > 0 ? overnightBblsDay.toString() : null,
-        });
-
-        // Update well_config AFR
-        if (afr > 0) {
-          const afrMinutes = afr * 24 * 60;
-          await db.ref(`well_config/${wellName}`).update({
-            avgFlowRate: daysToHMMSS(afr),
-            avgFlowRateMinutes: Math.round(afrMinutes * 100) / 100,
+          const deleteOldPromises: Promise<void>[] = [];
+          oldResponses.forEach((child) => {
+            deleteOldPromises.push(child.ref.remove());
           });
+          await Promise.all(deleteOldPromises);
+
+          const timestamp = new Date();
+          const responseId = `response_${timestamp.toISOString().replace(/[-:]/g, '').replace('T', '_').split('.')[0]}_${cleanName}`;
+
+          await db.ref(`packets/outgoing/${responseId}`).set({
+            wellName,
+            currentLevel: inchesToFeetInches(tankAfterInches),
+            flowRate: afr > 0 ? daysToHMMSS(afr) : 'Unknown',
+            bbls24hrs,
+            timeTillPull: latestPacket.wellDown ? 'Down' : (estTimeToPull || 'Calculating...'),
+            nextPullTime: estDateTimePull ? formatLocalDateTime(new Date(estDateTimePull)) : 'Unknown',
+            nextPullTimeUTC: estDateTimePull,
+            lastPullDateTime: latestPacket.dateTime || formatLocalDateTime(new Date(latestPacket.dateTimeUTC)),
+            lastPullDateTimeUTC: latestPacket.dateTimeUTC,
+            lastPullBbls: latestPacket.bblsTaken.toString(),
+            lastPullTopLevel: inchesToFeetInches(latestPacket.tankTopInches),
+            lastPullBottomLevel: inchesToFeetInches(tankAfterInches),
+            lastPullDriverId: latestPacket.driverId || null,
+            lastPullDriverName: latestPacket.driverName || null,
+            lastPullPacketId: latestPacket.packetId || null,
+            wellDown: latestPacket.wellDown || false,
+            status: 'success',
+            timestamp: timestamp.toISOString(),
+            timestampUTC: timestamp.toISOString(),
+            windowBblsDay: windowBblsDay > 0 ? windowBblsDay.toString() : null,
+            overnightBblsDay: overnightBblsDay > 0 ? overnightBblsDay.toString() : null,
+          });
+
+          // Update well_config AFR
+          if (afr > 0) {
+            const afrMinutes = afr * 24 * 60;
+            await db.ref(`well_config/${wellName}`).update({
+              avgFlowRate: daysToHMMSS(afr),
+              avgFlowRateMinutes: Math.round(afrMinutes * 100) / 100,
+            });
+          }
+
+          console.log(`Delete: Rebuilt outgoing for ${wellName} from remaining data (windowBblsDay=${windowBblsDay}, overnightBblsDay=${overnightBblsDay})`);
+        } else {
+          // No remaining pulls — remove outgoing response entirely
+          const oldResponses = await db.ref('packets/outgoing')
+            .orderByChild('wellName')
+            .equalTo(wellName)
+            .once('value');
+
+          const deleteOldPromises: Promise<void>[] = [];
+          oldResponses.forEach((child) => {
+            deleteOldPromises.push(child.ref.remove());
+          });
+          await Promise.all(deleteOldPromises);
+
+          console.log(`Delete: No remaining pulls for ${wellName}, cleared outgoing`);
         }
-
-        console.log(`Delete: Rebuilt outgoing for ${wellName} from remaining data (windowBblsDay=${windowBblsDay}, overnightBblsDay=${overnightBblsDay})`);
-      } else {
-        // No remaining pulls — remove outgoing response entirely
-        const oldResponses = await db.ref('packets/outgoing')
-          .orderByChild('wellName')
-          .equalTo(wellName)
-          .once('value');
-
-        const deletePromises: Promise<void>[] = [];
-        oldResponses.forEach((child) => {
-          deletePromises.push(child.ref.remove());
-        });
-        await Promise.all(deletePromises);
-
-        console.log(`Delete: No remaining pulls for ${wellName}, cleared outgoing`);
+      } catch (rebuildErr) {
+        console.error(`Delete: FAILED to rebuild outgoing for ${wellName}:`, rebuildErr);
+        // Outgoing is now stale, but at least the processed packet is deleted
+        // Log the error details for debugging
+        console.error(`Delete: latestPacket was:`, latestPacket ? {
+          packetId: latestPacket.packetId,
+          wellName: latestPacket.wellName,
+          dateTimeUTC: latestPacket.dateTimeUTC,
+          tankAfterInches: latestPacket.tankAfterInches,
+          flowRateDays: latestPacket.flowRateDays,
+        } : 'null');
       }
+    }
+
+    // Increment incoming_version so WB M app knows to refresh
+    try {
+      const versionSnap = await db.ref('packets/incoming_version').once('value');
+      const currentVersion = parseInt(versionSnap.val(), 10) || 0;
+      await db.ref('packets/incoming_version').set(currentVersion + 1);
+      console.log(`Delete: Incremented incoming_version to ${currentVersion + 1}`);
+    } catch (versionErr) {
+      console.error('Delete: Failed to increment incoming_version:', versionErr);
     }
 
     // Archive delete request for audit trail (instead of just removing it)

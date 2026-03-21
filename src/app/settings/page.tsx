@@ -21,6 +21,7 @@ import { BillingConfigCard } from '@/components/settings/BillingConfigCard';
 import { TicketTemplateCard } from '@/components/settings/TicketTemplateCard';
 import { PayrollTemplateCard } from '@/components/settings/PayrollTemplateCard';
 import { PackagesCard } from '@/components/settings/PackagesCard';
+import { SWDDirectoryCard } from '@/components/settings/SWDDirectoryCard';
 
 export default function SettingsPage() {
   const { user, loading: authLoading } = useAuth();
@@ -174,6 +175,7 @@ export default function SettingsPage() {
             <InvoiceConfigCard company={company} onSave={handleRefresh} />
             <OperationsCard company={company} onSave={handleRefresh} />
             <OilCompaniesCard company={company} onSave={handleRefresh} />
+            <SWDDirectoryCard company={company} onSave={handleRefresh} />
             <RateSheetsCard company={company} onSave={handleRefresh} />
             <BillingConfigCard company={company} onSave={handleRefresh} />
             <TicketTemplateCard company={company} onSave={handleRefresh} />
