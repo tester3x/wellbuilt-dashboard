@@ -926,6 +926,8 @@ export default function DispatchPage() {
       // Carry over service work fields
       if (reassignJob.serviceType) newJob.serviceType = reassignJob.serviceType;
       if (reassignJob.serviceGroupId) newJob.serviceGroupId = reassignJob.serviceGroupId;
+      if (reassignJob.assignedDrivers) newJob.assignedDrivers = reassignJob.assignedDrivers;
+      if (reassignJob.disposalLegalDesc) newJob.disposalLegalDesc = reassignJob.disposalLegalDesc;
 
       await addDoc(collection(firestore, 'dispatches'), newJob);
 
