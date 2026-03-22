@@ -932,26 +932,6 @@ export const processIncomingPull = functionsV1.database
     // Write to processed/
     await db.ref(`packets/processed/${packetId}`).set(processedPacket);
 
-    // Write to driver_pulls/{driverId}/{packetId} — driver-scoped pull history
-    // WB M reads this small node instead of downloading ALL processed packets
-    if (data.driverId) {
-      try {
-        await db.ref(`driver_pulls/${data.driverId}/${packetId}`).set({
-          wellName,
-          dateTime: data.dateTime || formatLocalDateTime(new Date(data.dateTimeUTC)),
-          dateTimeUTC: data.dateTimeUTC,
-          tankLevelFeet: data.tankLevelFeet,
-          bblsTaken: data.bblsTaken,
-          wellDown: data.wellDown || false,
-          driverName: data.driverName || null,
-          processedAt: new Date().toISOString(),
-        });
-        console.log(`[DriverPulls] Wrote driver_pulls/${data.driverId.slice(0, 8)}.../${packetId}`);
-      } catch (dpErr) {
-        console.error(`[DriverPulls] Failed to write:`, dpErr);
-      }
-    }
-
     // Calculate current level (for outgoing response)
     // At time of pull, current level = tank after
     // This will be updated by a scheduled function to reflect growth over time
@@ -1460,24 +1440,6 @@ export const processEditRequest = functionsV1.database
       console.error(`Edit: Error updating performance/ for ${wellName}:`, perfError);
     }
 
-    // Update driver_pulls if the original packet had a driverId
-    if (origPacket.driverId) {
-      try {
-        await db.ref(`driver_pulls/${origPacket.driverId}/${originalPacketId}`).update({
-          wellName,
-          dateTime: newDateTime || origPacket.dateTime,
-          dateTimeUTC: newDateTimeUTC,
-          tankLevelFeet: newTankTopInches / 12,
-          bblsTaken: newBblsTaken,
-          wellDown: origPacket.wellDown || false,
-          editedAt: new Date().toISOString(),
-        });
-        console.log(`Edit: Updated driver_pulls/${origPacket.driverId.slice(0, 8)}.../${originalPacketId}`);
-      } catch (dpErr) {
-        console.error(`Edit: Failed to update driver_pulls:`, dpErr);
-      }
-    }
-
     // Delete the edit request
     await snapshot.ref.remove();
 
@@ -1568,16 +1530,6 @@ export const processDeleteRequest = functionsV1.database
 
     // Delete from processed
     await db.ref(`packets/processed/${targetPacketId}`).remove();
-
-    // Remove from driver_pulls if the deleted packet had a driverId
-    if (deletedPacket?.driverId) {
-      try {
-        await db.ref(`driver_pulls/${deletedPacket.driverId}/${targetPacketId}`).remove();
-        console.log(`Delete: Removed driver_pulls/${deletedPacket.driverId.slice(0, 8)}.../${targetPacketId}`);
-      } catch (dpErr) {
-        console.error(`Delete: Failed to remove from driver_pulls:`, dpErr);
-      }
-    }
 
     // If the deleted packet was the latest pull, recalculate outgoing from the new latest
     if (deletedPacket) {

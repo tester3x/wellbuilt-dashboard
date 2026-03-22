@@ -8,6 +8,7 @@ import Link from 'next/link';
 import { AppHeader } from '@/components/AppHeader';
 import { AddPullModal } from '@/components/AddPullModal';
 import { fetchTickets, type Ticket } from '@/lib/tickets';
+import { getRouteColor } from '@/lib/routeColor';
 
 type ViewMode = 'cards' | 'table';
 type SortField = 'wellName' | 'tanks' | 'nextPull' | 'level' | 'flowRate' | 'timeTillPull' | 'status';
@@ -787,8 +788,10 @@ function RouteSection({
 }) {
   const downCount = wells.filter((w) => w.isDown || w.currentLevel === 'DOWN').length;
 
+  const routeColor = getRouteColor(route);
+
   return (
-    <div className="bg-gray-800 rounded-lg border border-gray-700 overflow-hidden">
+    <div className="bg-gray-800 rounded-lg border border-gray-700 overflow-hidden" style={{ borderLeftColor: routeColor, borderLeftWidth: 3 }}>
       {/* Route Header - Clickable */}
       <button
         onClick={onToggle}
@@ -798,7 +801,7 @@ function RouteSection({
           <span className="text-gray-400 text-lg">
             {isExpanded ? '▼' : '▶'}
           </span>
-          <h3 className="text-lg font-semibold text-white">{route}</h3>
+          <h3 className="text-lg font-semibold" style={{ color: routeColor }}>{route}</h3>
           <span className="text-gray-400 text-sm">
             ({wells.length} wells)
           </span>
