@@ -659,9 +659,10 @@ function RouteTable({
   onPullBblsChange: (value: number) => void;
 }) {
   const downCount = wells.filter((w) => w.isDown || w.currentLevel === 'DOWN').length;
+  const routeColor = getRouteColor(route);
 
   return (
-    <div className="bg-gray-800 rounded-lg border border-gray-700 overflow-hidden">
+    <div className="bg-gray-800 rounded-lg border border-gray-700 overflow-hidden" style={{ borderLeftColor: routeColor, borderLeftWidth: 3 }}>
       {/* Route Header - Clickable to collapse */}
       <button
         onClick={onToggle}
@@ -671,7 +672,7 @@ function RouteTable({
           <span className="text-gray-400 text-lg">
             {isExpanded ? '▼' : '▶'}
           </span>
-          <h3 className="text-lg font-semibold text-white">{route}</h3>
+          <h3 className="text-lg font-semibold" style={{ color: routeColor }}>{route}</h3>
           <span className="text-gray-400 text-sm">({wells.length} wells)</span>
           {downCount > 0 && (
             <span className="px-2 py-0.5 bg-red-600 text-white text-xs font-bold rounded">
