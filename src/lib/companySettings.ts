@@ -398,7 +398,12 @@ export interface CompanyConfig {
   // Active job packages — references to job_packages/{packageId} docs
   activePackages?: string[];
   // Custom job types added by the company (R&D pipeline — popular ones get promoted to official)
-  customJobTypes?: string[];
+  customJobTypes?: CustomJobType[];
+}
+
+export interface CustomJobType {
+  label: string;
+  packages: string[];  // which packages this type appears in, e.g. ['water-hauling', 'aggregate']
 }
 
 // Must match WB T's COMMODITY_TYPES + HOURLY_COMMODITY_TYPES in utils/constants.ts

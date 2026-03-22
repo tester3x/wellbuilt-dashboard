@@ -17,6 +17,7 @@ import { getDatabase, ref, onValue } from 'firebase/database';
 import { getFirebaseApp } from '@/lib/firebase';
 import Link from 'next/link';
 import { AppHeader } from '@/components/AppHeader';
+import { AddPullModal } from '@/components/AddPullModal';
 
 // Format inches to feet'inches" display
 function formatLevelFtIn(inches: number | undefined): string {
@@ -92,6 +93,14 @@ function WellDetailPage() {
   const [allWells, setAllWells] = useState<WellNavItem[]>([]);
   const [showWellPicker, setShowWellPicker] = useState(false);
   const [wellSearchQuery, setWellSearchQuery] = useState('');
+
+  // Add Pull modal
+  const [showAddPull, setShowAddPull] = useState(false);
+
+  // Service work toggle
+  const [showServiceWork, setShowServiceWork] = useState(false);
+  const swCount = pulls.filter(p => p.noLevel).length;
+  const filteredPulls = showServiceWork ? pulls : pulls.filter(p => !p.noLevel);
 
   // Current time tick for live level estimation
   const [currentTime, setCurrentTime] = useState(Date.now());
@@ -393,6 +402,12 @@ function WellDetailPage() {
               <span className={dataLoading ? 'animate-spin' : ''}>⟳</span>
               Refresh
             </button>
+            <button
+              onClick={() => setShowAddPull(true)}
+              className="px-3 py-2 text-sm font-medium rounded transition-colors flex items-center gap-1.5 bg-gray-800 text-green-400 hover:bg-gray-700 border border-gray-700 shrink-0 ml-4"
+            >
+              <span className="text-sm">+</span> Add Pull
+            </button>
           </div>
         </div>
       </div>
@@ -457,7 +472,21 @@ function WellDetailPage() {
 
         {/* Pull History Table */}
         <div className="flex items-center justify-between mb-3">
-          <h2 className="text-lg font-semibold text-white">Well History</h2>
+          <div className="flex items-center gap-4">
+            <h2 className="text-lg font-semibold text-white">Well History</h2>
+            <button
+              onClick={() => swCount > 0 && setShowServiceWork(!showServiceWork)}
+              className={`text-sm font-medium px-3 py-1 rounded transition-colors ${
+                swCount === 0
+                  ? 'text-gray-600 border border-gray-800 cursor-default'
+                  : showServiceWork
+                    ? 'bg-blue-600 text-white border border-blue-500 hover:bg-blue-500'
+                    : 'bg-amber-600/80 text-white border border-amber-500 hover:bg-amber-500'
+              }`}
+            >
+              Show SW
+            </button>
+          </div>
           <div className="flex items-center gap-4 text-xs">
             <span className="flex items-center gap-1">
               <span className="inline-block w-3 h-3 bg-orange-900/60 rounded"></span>
@@ -535,7 +564,7 @@ function WellDetailPage() {
                 </tr>
               </thead>
               <tbody className="divide-y divide-gray-700">
-                {pulls.map((pull) => {
+                {filteredPulls.map((pull) => {
                   const pullTime = new Date(pull.timestamp).getTime();
                   const userCanEdit = canEditPull(user, pull.driverId || '', pullTime, 30);
 
@@ -819,6 +848,24 @@ function WellDetailPage() {
             </div>
           </div>
         </div>
+      )}
+
+      {showAddPull && (
+        <AddPullModal
+          preselectedWell={wellName}
+          onClose={() => setShowAddPull(false)}
+          onSuccess={(submittedWell) => {
+            // If they submitted for the current well, refresh in place
+            if (submittedWell === wellName) {
+              setTimeout(async () => {
+                const history = await fetchWellHistoryUnified(wellName);
+                setPulls(history);
+              }, 2000);
+            }
+            // If they switched to a different well, navigate there
+            // (navigateOnSuccess handles this)
+          }}
+        />
       )}
     </div>
   );

@@ -303,7 +303,8 @@ export default function DispatchPage() {
   const [swDriverHashes, setSwDriverHashes] = useState<Set<string>>(new Set());
   const [swSubmitting, setSwSubmitting] = useState(false);
 
-  // Add Pull form state
+  // Add Pull modal state
+  const [showAddPullModal, setShowAddPullModal] = useState(false);
   const [pullWell, setPullWell] = useState('');
   const [pullLevel, setPullLevel] = useState('');
   const [pullWellSearch, setPullWellSearch] = useState('');
@@ -311,6 +312,7 @@ export default function DispatchPage() {
   const [pullBbls, setPullBbls] = useState('140');
   const [pullDateTime, setPullDateTime] = useState('');
   const [addingPull, setAddingPull] = useState(false);
+  const [pullWellDown, setPullWellDown] = useState(false);
 
   // Edit Service Work modal state
   const [editSwJob, setEditSwJob] = useState<DispatchJob | null>(null);
@@ -322,6 +324,7 @@ export default function DispatchPage() {
   const [reassignJob, setReassignJob] = useState<DispatchJob | null>(null);
   const [reassignDriverHash, setReassignDriverHash] = useState('');
   const [reassigning, setReassigning] = useState(false);
+  const [reassignLoads, setReassignLoads] = useState(0); // 0 = all loads
 
   // Dynamic service types from job packages (falls back to hardcoded)
   const FALLBACK_SERVICE_TYPES = ['Hot Shot', 'Equipment Delivery', 'Tank Cleanout', 'Flowback', 'Frac Water', 'Rig Move', 'Other'];
@@ -389,26 +392,26 @@ export default function DispatchPage() {
         });
 
         // Also load custom job types from company config
-        if (companyId) {
-          const customTypes = companyConfig?.customJobTypes || [];
-          for (const ct of customTypes) {
-            if (!allJobTypes.includes(ct)) {
-              allJobTypes.push(ct);
-              pkgMap[ct] = 'custom'; // Mark as custom for tracking
+        const mergeCustomTypes = (rawTypes: any[]) => {
+          for (const ct of rawTypes) {
+            // Support both old string format and new { label, packages } format
+            const label = typeof ct === 'string' ? ct : ct?.label;
+            if (label && !allJobTypes.includes(label)) {
+              allJobTypes.push(label);
+              pkgMap[label] = 'custom';
             }
           }
+        };
+
+        if (companyId) {
+          mergeCustomTypes(companyConfig?.customJobTypes || []);
         } else {
           // WB admin — load custom types from ALL companies
           const allCompaniesSnap = await getDocs(collection(firestore, 'companies'));
           allCompaniesSnap.forEach(compDoc => {
             const compData = compDoc.data();
             if (compData.customJobTypes && Array.isArray(compData.customJobTypes)) {
-              for (const ct of compData.customJobTypes) {
-                if (!allJobTypes.includes(ct)) {
-                  allJobTypes.push(ct);
-                  pkgMap[ct] = 'custom';
-                }
-              }
+              mergeCustomTypes(compData.customJobTypes);
             }
           });
         }
@@ -631,19 +634,12 @@ export default function DispatchPage() {
         driverId: user?.uid || 'dashboard',
         requestType: 'pull',
         timezone: Intl.DateTimeFormat().resolvedOptions().timeZone,
-        wellDown: false,
+        wellDown: pullWellDown,
       };
 
       await set(ref(db, `packets/incoming/${packetId}`), packet);
-      setMessage(`Pull added for ${pullWell}`);
-
-      // Reset form
-      setPullLevel('');
-      setPullBbls('140');
-      const now = new Date();
-      const local = new Date(now.getTime() - now.getTimezoneOffset() * 60000);
-      setPullDateTime(local.toISOString().slice(0, 16));
-      setTimeout(() => setMessage(''), 3000);
+      setShowAddPullModal(false);
+      router.push(`/well?name=${encodeURIComponent(pullWell)}`);
     } catch (error) {
       console.error('Error adding pull:', error);
       setMessage('Failed to add pull. Check connection and try again.');
@@ -882,6 +878,7 @@ export default function DispatchPage() {
   function openReassignModal(job: DispatchJob) {
     setReassignJob(job);
     setReassignDriverHash('');
+    setReassignLoads(0); // default: all remaining loads
   }
 
   async function submitReassign() {
@@ -920,24 +917,37 @@ export default function DispatchPage() {
       if (reassignJob.disposalLng) newJob.disposalLng = reassignJob.disposalLng;
       if (reassignJob.disposalApiNo) newJob.disposalApiNo = reassignJob.disposalApiNo;
       if (reassignJob.disposalCounty) newJob.disposalCounty = reassignJob.disposalCounty;
-      // Carry over load count
-      if (reassignJob.loadCount && reassignJob.loadCount > 1) newJob.loadCount = reassignJob.loadCount;
+      // Handle load counts for multi-load jobs
+      const remainingLoads = (reassignJob.loadCount || 1) - (reassignJob.loadsCompleted || 0);
+      const loadsToReassign = reassignLoads > 0 ? Math.min(reassignLoads, remainingLoads) : remainingLoads;
+      const loadsKept = remainingLoads - loadsToReassign;
+
+      if (loadsToReassign > 1) newJob.loadCount = loadsToReassign;
       // Carry over service work fields
       if (reassignJob.serviceType) newJob.serviceType = reassignJob.serviceType;
       if (reassignJob.serviceGroupId) newJob.serviceGroupId = reassignJob.serviceGroupId;
 
       await addDoc(collection(firestore, 'dispatches'), newJob);
 
-      // Mark the old declined job as cancelled (cleaned up)
+      // Update the original job
       if (reassignJob.id) {
-        await updateDoc(doc(firestore, 'dispatches', reassignJob.id), {
-          status: 'cancelled',
-          cancelledAt: Timestamp.now(),
-          reassignedTo: driver.displayName,
-        });
+        if (loadsKept > 0) {
+          // Partial reassign — reduce load count on original, keep it active
+          await updateDoc(doc(firestore, 'dispatches', reassignJob.id), {
+            loadCount: (reassignJob.loadsCompleted || 0) + loadsKept,
+          });
+        } else {
+          // Full reassign — cancel the original
+          await updateDoc(doc(firestore, 'dispatches', reassignJob.id), {
+            status: 'cancelled',
+            cancelledAt: Timestamp.now(),
+            reassignedTo: driver.displayName,
+          });
+        }
       }
 
-      setMessage(`Reassigned ${reassignJob.ndicWellName || reassignJob.wellName} to ${driverFirstName}`);
+      const loadLabel = loadsToReassign > 1 ? ` (${loadsToReassign} loads)` : '';
+      setMessage(`Reassigned ${reassignJob.ndicWellName || reassignJob.wellName}${loadLabel} to ${driverFirstName}`);
       setReassignJob(null);
       setReassignDriverHash('');
       setTimeout(() => setMessage(''), 4000);
@@ -1267,10 +1277,18 @@ export default function DispatchPage() {
               <span className="text-sm">+</span> Service Work
             </button>
             <button
-              onClick={() => setToolbarMode(toolbarMode === 'pull' ? 'none' : 'pull')}
-              className={`px-3 py-1.5 text-xs font-medium rounded-lg transition-colors flex items-center gap-1.5 ${
-                toolbarMode === 'pull' ? 'bg-green-600 text-white' : 'bg-gray-800 text-green-400 hover:bg-gray-700 border border-gray-700'
-              }`}
+              onClick={() => {
+                const now = new Date();
+                const local = new Date(now.getTime() - now.getTimezoneOffset() * 60000);
+                setPullDateTime(local.toISOString().slice(0, 16));
+                setPullWell('');
+                setPullWellSearch('');
+                setPullLevel('');
+                setPullBbls('140');
+                setPullWellDown(false);
+                setShowAddPullModal(true);
+              }}
+              className="px-3 py-1.5 text-xs font-medium rounded-lg transition-colors flex items-center gap-1.5 bg-gray-800 text-green-400 hover:bg-gray-700 border border-gray-700"
             >
               <span className="text-sm">+</span> Add Pull
             </button>
@@ -1356,69 +1374,7 @@ export default function DispatchPage() {
             </div>
           )}
 
-          {toolbarMode === 'pull' && (
-            <div className="bg-gray-800 border border-green-600/40 rounded-lg p-4 mb-3">
-              <div className="flex items-end gap-4">
-                <div className="w-48 flex-shrink-0 relative">
-                  <label className="block text-xs text-gray-400 mb-1">Well</label>
-                  <input
-                    type="text"
-                    value={pullWellSearch}
-                    onChange={(e) => {
-                      setPullWellSearch(e.target.value);
-                      setPullWell('');
-                      setShowWellDropdown(true);
-                    }}
-                    onFocus={() => setShowWellDropdown(true)}
-                    placeholder="Search wells..."
-                    className="w-full px-2 py-1.5 bg-gray-900 border border-gray-700 rounded text-white text-sm placeholder-gray-500 focus:outline-none focus:border-green-500"
-                  />
-                  {showWellDropdown && pullWellSearch && (
-                    <div className="absolute z-50 top-full left-0 w-72 mt-1 bg-gray-900 border border-gray-600 rounded-lg shadow-lg max-h-48 overflow-y-auto">
-                      {[...new Set(wells.map(w => w.wellName))].sort()
-                        .filter(w => w.toLowerCase().includes(pullWellSearch.toLowerCase()))
-                        .slice(0, 10)
-                        .map(w => (
-                          <button key={w} onClick={() => { setPullWell(w); setPullWellSearch(w); setShowWellDropdown(false); }}
-                            className="w-full text-left px-3 py-1.5 text-sm text-white hover:bg-gray-700 transition-colors">
-                            {w}
-                          </button>
-                        ))
-                      }
-                    </div>
-                  )}
-                </div>
-                <div className="w-32 flex-shrink-0">
-                  <label className="block text-xs text-gray-400 mb-1">Level</label>
-                  <input
-                    type="text"
-                    value={pullLevel}
-                    onChange={(e) => handleLevelChange(e.target.value)}
-                    onBlur={() => {
-                      const raw = pullLevel.trim();
-                      if (!raw || raw.includes("'") || raw.includes('"')) return;
-                      const parsed = parseLevelInput(raw);
-                      if (parsed !== null) setPullLevel(formatLevelDisplay(parsed));
-                    }}
-                    placeholder={`10'3"`}
-                    className="w-full px-2 py-1.5 bg-gray-900 border border-gray-700 rounded text-white text-sm placeholder-gray-500 focus:outline-none focus:border-green-500"
-                  />
-                </div>
-                <div className="w-24 flex-shrink-0">
-                  <label className="block text-xs text-gray-400 mb-1">BBLs</label>
-                  <input type="number" value={pullBbls} onChange={(e) => setPullBbls(e.target.value)} className="w-full px-2 py-1.5 bg-gray-900 border border-gray-700 rounded text-white text-sm focus:outline-none focus:border-green-500" />
-                </div>
-                <div className="w-52 flex-shrink-0">
-                  <label className="block text-xs text-gray-400 mb-1">Date/Time</label>
-                  <input type="datetime-local" value={pullDateTime} onChange={(e) => setPullDateTime(e.target.value)} className="w-full px-2 py-1.5 bg-gray-900 border border-gray-700 rounded text-white text-sm focus:outline-none focus:border-green-500" />
-                </div>
-                <button onClick={handleAddPull} disabled={addingPull}
-                  className={`px-4 py-1.5 text-white rounded font-medium text-sm transition-colors whitespace-nowrap ${addingPull ? 'bg-green-800 cursor-wait' : 'bg-green-600 hover:bg-green-500'}`}>
-                  {addingPull ? 'Adding...' : 'Add Pull'}
-                </button>
-              </div>
-            </div>
-          )}
+          {/* Add Pull form removed — now uses modal */}
 
           {/* Status message */}
           {message && (
@@ -1782,14 +1738,222 @@ export default function DispatchPage() {
       {/* ═══════════════════════════════════════════════════════════════════════════
           REASSIGN DECLINED JOB MODAL
           ═══════════════════════════════════════════════════════════════════════════ */}
+      {/* ═══════════════════════════════════════════════════════════════════════════
+          ADD PULL MODAL — with well info box + reverse flow rate calculator
+          ═══════════════════════════════════════════════════════════════════════════ */}
+      {showAddPullModal && (
+        <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50">
+          <div className="bg-gray-800 rounded-lg p-6 max-w-md w-full mx-4 border border-gray-700">
+            <h3 className="text-lg font-semibold text-white mb-4">Record Load</h3>
+
+            {/* Well search */}
+            <div className="mb-4 relative">
+              <label className="block text-sm text-gray-400 mb-1">Well</label>
+              <input
+                type="text"
+                value={pullWellSearch}
+                onChange={(e) => {
+                  setPullWellSearch(e.target.value);
+                  setPullWell('');
+                  setShowWellDropdown(true);
+                }}
+                onFocus={() => setShowWellDropdown(true)}
+                placeholder="Search wells..."
+                className="w-full px-3 py-2 bg-gray-900 border border-gray-700 rounded-lg text-white text-sm placeholder-gray-500 focus:outline-none focus:border-green-500"
+              />
+              {showWellDropdown && pullWellSearch && (
+                <div className="absolute z-50 top-full left-0 w-full mt-1 bg-gray-900 border border-gray-600 rounded-lg shadow-lg max-h-48 overflow-y-auto">
+                  {[...new Set(wells.map(w => w.wellName))].sort()
+                    .filter(w => w.toLowerCase().includes(pullWellSearch.toLowerCase()))
+                    .slice(0, 10)
+                    .map(w => (
+                      <button key={w} onClick={() => { setPullWell(w); setPullWellSearch(w); setShowWellDropdown(false); }}
+                        className="w-full text-left px-3 py-2 text-sm text-white hover:bg-gray-700 transition-colors">
+                        {w}
+                      </button>
+                    ))
+                  }
+                </div>
+              )}
+            </div>
+
+            {/* Well info box — shows when well is selected */}
+            {(() => {
+              const selectedWell = pullWell ? wells.find(w => w.wellName === pullWell) : null;
+              if (!selectedWell) return null;
+
+              // Parse flow rate from response packet (H:M:S format)
+              let flowRateMinutes = 0;
+              if (selectedWell.flowRate && selectedWell.flowRate !== '--') {
+                const parts = selectedWell.flowRate.split(':');
+                if (parts.length === 3) {
+                  flowRateMinutes = (parseInt(parts[0]) || 0) * 60 + (parseInt(parts[1]) || 0) + (parseInt(parts[2]) || 0) / 60;
+                } else if (parts.length === 2) {
+                  flowRateMinutes = (parseInt(parts[0]) || 0) * 60 + (parseInt(parts[1]) || 0);
+                }
+              }
+
+              // Use bottom level after last pull as base (NOT currentLevel which is already estimated)
+              // This avoids double-counting growth that's already baked into currentLevel
+              let bottomAfterPullInches = 0;
+              if (selectedWell.lastPullBottomLevel) {
+                const blMatch = selectedWell.lastPullBottomLevel.match(/(\d+)'(\d+)"/);
+                if (blMatch) bottomAfterPullInches = parseInt(blMatch[1]) * 12 + parseInt(blMatch[2]);
+              }
+
+              // Base timestamp = time of last pull (when bottom level was measured)
+              let baseTimestamp = 0;
+              if (selectedWell.lastPullDateTimeUTC) {
+                baseTimestamp = new Date(selectedWell.lastPullDateTimeUTC).getTime();
+              } else if (selectedWell.timestampUTC) {
+                baseTimestamp = new Date(selectedWell.timestampUTC).getTime();
+              } else if (selectedWell.timestamp) {
+                baseTimestamp = new Date(selectedWell.timestamp).getTime();
+              }
+
+              // Calculate estimated level at selected date/time
+              // flowRateMinutes is per FOOT — divide by 12 to get minutes per inch
+              let estLevelDisplay = selectedWell.currentLevel || '--';
+              let estBbls = selectedWell.bbls || 0;
+              if (baseTimestamp > 0 && flowRateMinutes > 0 && bottomAfterPullInches > 0 && pullDateTime) {
+                const selectedTime = new Date(pullDateTime).getTime();
+                const minutesElapsed = (selectedTime - baseTimestamp) / (1000 * 60);
+                const minutesPerInch = flowRateMinutes / 12;
+                let estInches = bottomAfterPullInches + (minutesElapsed / minutesPerInch);
+                estInches = Math.max(0, estInches);
+                const estFeet = Math.floor(estInches / 12);
+                const estRemInches = Math.round(estInches % 12);
+                estLevelDisplay = `${estFeet}'${estRemInches}"`;
+                // Rough BBL estimate (20 BBL per foot is common, but depends on tank)
+                const currentLevelInches = selectedWell.currentLevelInches || estInches;
+                const bblPerFoot = selectedWell.bbls && currentLevelInches > 0
+                  ? (selectedWell.bbls / (currentLevelInches / 12))
+                  : 20;
+                estBbls = Math.max(0, Math.round((estInches / 12) * bblPerFoot));
+              }
+
+              // Last pull info
+              const lastPullStr = selectedWell.lastPullDateTime
+                ? `${selectedWell.lastPullDateTime}${selectedWell.lastPullBbls ? ` • ${selectedWell.lastPullBbls} bbl` : ''}`
+                : null;
+
+              return (
+                <div className="bg-gray-900 border border-gray-700 rounded-lg p-3 mb-4 text-sm space-y-1">
+                  <div>
+                    <span className="text-gray-500">Estimated tank level:  </span>
+                    <span className="text-white font-semibold">{estLevelDisplay}</span>
+                    {estBbls > 0 && <span className="text-gray-400"> - {estBbls} BBL</span>}
+                  </div>
+                  <div>
+                    <span className="text-gray-500">Estimated flow rate:  </span>
+                    <span className="text-white font-semibold">{selectedWell.flowRate || '--'}</span>
+                  </div>
+                  {lastPullStr && (
+                    <div>
+                      <span className="text-gray-500">Last pull:  </span>
+                      <span className="text-white font-semibold">{lastPullStr}</span>
+                    </div>
+                  )}
+                </div>
+              );
+            })()}
+
+            {/* Well DOWN checkbox */}
+            <div className="flex justify-end mb-3">
+              <label className="flex items-center gap-2 cursor-pointer text-sm">
+                <span className={pullWellDown ? 'text-red-400 font-medium' : 'text-gray-500'}>Well DOWN</span>
+                <input
+                  type="checkbox"
+                  checked={pullWellDown}
+                  onChange={(e) => setPullWellDown(e.target.checked)}
+                  className="rounded border-gray-500 text-red-500 focus:ring-red-500 bg-gray-800"
+                />
+              </label>
+            </div>
+
+            {/* Date/Time row */}
+            <div className="grid grid-cols-2 gap-3 mb-4">
+              <div>
+                <label className="block text-sm text-gray-400 mb-1">Date/Time</label>
+                <input
+                  type="datetime-local"
+                  value={pullDateTime}
+                  onChange={(e) => setPullDateTime(e.target.value)}
+                  className="w-full px-3 py-2 bg-gray-900 border border-gray-700 rounded-lg text-white text-sm focus:outline-none focus:border-green-500"
+                />
+              </div>
+              <div />
+            </div>
+
+            {/* Tank Level */}
+            <div className="mb-4">
+              <label className="block text-sm text-gray-400 mb-1">Tank Level</label>
+              <input
+                type="text"
+                value={pullLevel}
+                onChange={(e) => handleLevelChange(e.target.value)}
+                onBlur={() => {
+                  const raw = pullLevel.trim();
+                  if (!raw || raw.includes("'") || raw.includes('"')) return;
+                  const parsed = parseLevelInput(raw);
+                  if (parsed !== null) setPullLevel(formatLevelDisplay(parsed));
+                }}
+                placeholder="e.g. 10 8 or 10' 8&quot;"
+                className="w-full px-3 py-2 bg-gray-900 border border-gray-700 rounded-lg text-white text-sm placeholder-gray-500 focus:outline-none focus:border-green-500"
+              />
+              <p className="text-green-500 text-xs mt-1">e.g. 10 6 or 10 5.5</p>
+            </div>
+
+            {/* Barrels Taken */}
+            <div className="mb-6">
+              <label className="block text-sm text-gray-400 mb-1">Barrels Taken</label>
+              <input
+                type="number"
+                value={pullBbls}
+                onChange={(e) => setPullBbls(e.target.value)}
+                className="w-full px-3 py-2 bg-gray-900 border border-gray-700 rounded-lg text-white text-sm focus:outline-none focus:border-green-500"
+              />
+            </div>
+
+            {/* Buttons */}
+            <div className="flex gap-3">
+              <button
+                onClick={() => setShowAddPullModal(false)}
+                className="flex-1 px-4 py-3 bg-gray-700 hover:bg-gray-600 text-white rounded-lg transition-colors"
+              >
+                Cancel
+              </button>
+              <button
+                onClick={handleAddPull}
+                disabled={addingPull || !pullWell}
+                className="flex-1 px-4 py-3 bg-blue-600 hover:bg-blue-500 disabled:bg-gray-600 disabled:cursor-not-allowed text-white font-medium rounded-lg transition-colors"
+              >
+                {addingPull ? 'Adding...' : 'Submit Pull'}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
       {reassignJob && (
         <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50">
           <div className="bg-gray-800 rounded-lg p-6 max-w-md w-full mx-4 border border-gray-700">
             <h3 className="text-lg font-semibold text-white mb-1">Reassign Job</h3>
-            <p className="text-gray-400 text-sm mb-4">
+            <p className="text-gray-400 text-sm mb-4 flex items-center gap-2 flex-wrap">
+              <JobTypeBadge type={reassignJob.jobType} serviceType={reassignJob.serviceType} />
               <span className="text-white font-medium">{reassignJob.ndicWellName || reassignJob.wellName}</span>
-              {' '}was declined by{' '}
-              <span className="text-red-400">{reassignJob.declinedBy || reassignJob.driverFirstName || reassignJob.driverName}</span>
+              {reassignJob.status === 'declined' && (
+                <>
+                  {' '}was declined by{' '}
+                  <span className="text-red-400">{reassignJob.declinedBy || reassignJob.driverFirstName || reassignJob.driverName}</span>
+                </>
+              )}
+              {reassignJob.status !== 'declined' && (
+                <>
+                  {' '}currently assigned to{' '}
+                  <span className="text-amber-400">{reassignJob.driverFirstName || reassignJob.driverName}</span>
+                </>
+              )}
             </p>
 
             {/* Decline reason */}
@@ -1823,6 +1987,34 @@ export default function DispatchPage() {
                 </div>
               )}
             </div>
+
+            {/* Load count picker — only for multi-load jobs */}
+            {(() => {
+              const remaining = (reassignJob.loadCount || 1) - (reassignJob.loadsCompleted || 0);
+              if (remaining <= 1) return null;
+              return (
+                <div className="mb-4">
+                  <label className="block text-sm text-gray-400 mb-1">Loads to Reassign</label>
+                  <div className="flex items-center gap-2">
+                    <select
+                      value={reassignLoads}
+                      onChange={(e) => setReassignLoads(parseInt(e.target.value))}
+                      className="flex-1 px-3 py-2 bg-gray-900 border border-gray-700 rounded-lg text-white text-sm focus:outline-none focus:border-blue-500"
+                    >
+                      <option value={0}>All {remaining} loads</option>
+                      {Array.from({ length: remaining - 1 }, (_, i) => i + 1).map(n => (
+                        <option key={n} value={n}>{n} of {remaining} loads</option>
+                      ))}
+                    </select>
+                    {reassignLoads > 0 && (
+                      <span className="text-gray-500 text-xs whitespace-nowrap">
+                        {remaining - reassignLoads} stays with {reassignJob.driverFirstName || reassignJob.driverName}
+                      </span>
+                    )}
+                  </div>
+                </div>
+              );
+            })()}
 
             {/* Driver picker */}
             <div className="mb-4">
@@ -2140,11 +2332,12 @@ function JobTypeBadge({ type, serviceType }: { type: 'pw' | 'service'; serviceTy
 }
 
 // Single job row — shows all info a dispatcher needs
-function DispatchJobRow({ job, cancelDispatch, compact, onClickServiceWork }: {
+function DispatchJobRow({ job, cancelDispatch, compact, onClickServiceWork, onReassign }: {
   job: DispatchJob;
   cancelDispatch: (id: string) => void;
   compact?: boolean;
   onClickServiceWork?: (job: DispatchJob) => void;
+  onReassign?: (job: DispatchJob) => void;
 }) {
   const dropoff = job.hauledTo || job.disposal;
   const isClickable = job.jobType === 'service' && !!onClickServiceWork;
@@ -2203,6 +2396,15 @@ function DispatchJobRow({ job, cancelDispatch, compact, onClickServiceWork }: {
           <span className="text-purple-400/60 hover:text-purple-300 text-xs flex-shrink-0" title="Edit service work">
             &#9998;
           </span>
+        )}
+
+        {/* Reassign button — for pending/accepted jobs */}
+        {onReassign && (job.status === 'pending' || job.status === 'accepted') && (
+          <button
+            onClick={(e) => { e.stopPropagation(); onReassign(job); }}
+            className="text-blue-400/60 hover:text-blue-300 text-xs flex-shrink-0 transition-colors"
+            title="Reassign to another driver"
+          >👯</button>
         )}
 
         {/* Cancel button */}
@@ -2435,6 +2637,7 @@ function ActiveDispatchPanel({ dispatches, cancelDispatch, drivers, assignTransf
                     cancelDispatch={cancelDispatch}
                     compact={jobs.length > 2}
                     onClickServiceWork={job.jobType === 'service' ? onEditServiceWork : undefined}
+                    onReassign={onReassignDeclined}
                   />
                 ))}
               </div>

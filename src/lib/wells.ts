@@ -36,6 +36,8 @@ export interface WellResponse {
   lastPullBottomLevel?: string;
   // NDIC linkage from well_config
   ndicName?: string;           // Full NDIC well name (e.g. "GABRIEL 1-36-25H")
+  // Raw numeric level for precision (avoids parsing formatted string)
+  currentLevelInches?: number; // Total inches — used by Add Pull modal
 }
 
 export interface WellConfig {
@@ -314,13 +316,19 @@ export function subscribeToWellStatusesUnified(callback: (wells: WellResponse[],
         const afrMinutes = (config as any).avgFlowRateMinutes || 0;
 
         // Estimate current level from bottom level after last pull + flow rate + time elapsed
+        let currentLevelInches: number | undefined;
         if (!isDown && outgoing.lastPullDateTimeUTC && outgoing.lastPullBottomLevel && afrMinutes > 0) {
           const bottomAfterPull = parseFeetInchesStr(outgoing.lastPullBottomLevel);
           const estInches = estimateCurrentLevel(bottomAfterPull, outgoing.lastPullDateTimeUTC, afrMinutes);
           if (estInches !== null) {
+            currentLevelInches = estInches;
             currentLevel = inchesToDisplay(estInches);
             timeTillPull = calcTimeTillPull(estInches, tankAtInches, afrMinutes);
           }
+        }
+        // Fallback: parse from formatted string if no estimation was done
+        if (currentLevelInches === undefined && currentLevel !== '--') {
+          currentLevelInches = parseFeetInchesStr(currentLevel);
         }
 
         // Use the stored AFR display string if we have it
@@ -336,6 +344,7 @@ export function subscribeToWellStatusesUnified(callback: (wells: WellResponse[],
           pullBbls,
           bottomLevel: bottomLevelFeet,
           currentLevel,
+          currentLevelInches,
           flowRate,
           timeTillPull,
           etaToMax: timeTillPull,

@@ -6,6 +6,7 @@ import { useAuth } from '@/contexts/AuthContext';
 import { WellResponse, subscribeToWellStatusesUnified } from '@/lib/wells';
 import Link from 'next/link';
 import { AppHeader } from '@/components/AppHeader';
+import { AddPullModal } from '@/components/AddPullModal';
 import { fetchTickets, type Ticket } from '@/lib/tickets';
 
 type ViewMode = 'cards' | 'table';
@@ -48,6 +49,9 @@ export default function MobilePage() {
   // Edge case loads — tickets for wells not in well_config
   const [edgeCaseTickets, setEdgeCaseTickets] = useState<Ticket[]>([]);
   const [edgeCaseExpanded, setEdgeCaseExpanded] = useState(false);
+
+  // Add Pull modal
+  const [showAddPull, setShowAddPull] = useState(false);
 
   // Redirect to login if not authenticated
   useEffect(() => {
@@ -286,6 +290,12 @@ export default function MobilePage() {
                 >&times;</button>
               )}
             </div>
+            <button
+              onClick={() => setShowAddPull(true)}
+              className="px-3 py-1.5 text-sm font-medium rounded transition-colors flex items-center gap-1.5 bg-gray-800 text-green-400 hover:bg-gray-700 border border-gray-700"
+            >
+              <span className="text-sm">+</span> Add Pull
+            </button>
           </div>
 
           <div className="flex flex-wrap items-center gap-4">
@@ -457,6 +467,13 @@ export default function MobilePage() {
           </div>
         )}
       </main>
+
+      {showAddPull && (
+        <AddPullModal
+          wells={wells}
+          onClose={() => setShowAddPull(false)}
+        />
+      )}
     </div>
   );
 }
