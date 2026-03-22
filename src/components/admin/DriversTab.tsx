@@ -24,6 +24,7 @@ interface ApprovedDriver {
   assignedCustomers?: AssignedCustomer[];
   assignedRoutes?: string[];   // routes this driver can see
   assignedWells?: string[];    // one-off well assignments (dispatch overrides)
+  defaultPackageId?: string;   // default job package for shift start
   _legacy?: boolean;     // true if stored in old {hash}/{deviceId}/ format
   _legacyDeviceId?: string; // the device sub-key for legacy records
 }
@@ -78,6 +79,12 @@ export function DriversTab({ scopeCompanyId, isWbAdmin = false }: DriversTabProp
   const [approvalRoutes, setApprovalRoutes] = useState<string[]>([]);
   const [approvalRoles, setApprovalRoles] = useState<string[]>(['driver']);
 
+  // Default package modal
+  const [showPackageModal, setShowPackageModal] = useState(false);
+  const [packageTarget, setPackageTarget] = useState<ApprovedDriver | null>(null);
+  const [selectedPackageId, setSelectedPackageId] = useState('');
+  const [availablePackages, setAvailablePackages] = useState<{ id: string; name: string }[]>([]);
+
   // Expanded driver (shows details + assigned customers)
   const [expandedDriver, setExpandedDriver] = useState<string | null>(null);
 
@@ -107,6 +114,7 @@ export function DriversTab({ scopeCompanyId, isWbAdmin = false }: DriversTabProp
               assignedCustomers: Array.isArray(val.assignedCustomers) ? val.assignedCustomers : [],
               assignedRoutes: Array.isArray(val.assignedRoutes) ? val.assignedRoutes : [],
               assignedWells: Array.isArray(val.assignedWells) ? val.assignedWells : [],
+              defaultPackageId: val.defaultPackageId || undefined,
             });
           } else {
             // Legacy structure: drivers/approved/{hash}/{deviceId}/ = { displayName, active, ... }
@@ -213,6 +221,47 @@ export function DriversTab({ scopeCompanyId, isWbAdmin = false }: DriversTabProp
       }
     })();
   }, []);
+
+  // Load available job packages
+  useEffect(() => {
+    (async () => {
+      try {
+        const firestore = getFirestoreDb();
+        const snap = await getDocs(collection(firestore, 'job_packages'));
+        const list: { id: string; name: string }[] = [];
+        snap.forEach(d => {
+          const data = d.data();
+          list.push({ id: d.id, name: data.name || d.id });
+        });
+        list.sort((a, b) => a.name.localeCompare(b.name));
+        setAvailablePackages(list);
+      } catch (err) {
+        console.error('Failed to load packages:', err);
+      }
+    })();
+  }, []);
+
+  // ── Set default package for driver ──
+  const setDriverDefaultPackage = async () => {
+    if (!packageTarget) return;
+    try {
+      await update(ref(db, `drivers/approved/${packageTarget.key}`), {
+        defaultPackageId: selectedPackageId || null,
+      });
+      setMessage(
+        selectedPackageId
+          ? `Default package set for ${packageTarget.displayName}`
+          : `Default package cleared for ${packageTarget.displayName}`
+      );
+      setShowPackageModal(false);
+      setPackageTarget(null);
+      setSelectedPackageId('');
+      await loadDrivers();
+    } catch (err) {
+      console.error('Failed to set default package:', err);
+      setMessage('Failed to set default package');
+    }
+  };
 
   // ── Assign routes to driver ──
   const assignDriverRoutes = async () => {
@@ -760,6 +809,11 @@ export function DriversTab({ scopeCompanyId, isWbAdmin = false }: DriversTabProp
                         {driver.assignedRoutes!.length} route{driver.assignedRoutes!.length > 1 ? 's' : ''}
                       </span>
                     )}
+                    {driver.defaultPackageId && (
+                      <span className="px-1.5 py-0.5 bg-indigo-600 text-indigo-200 text-xs rounded font-medium">
+                        {availablePackages.find(p => p.id === driver.defaultPackageId)?.name || driver.defaultPackageId}
+                      </span>
+                    )}
                   </div>
                   <span className="text-gray-400 text-sm">
                     {expandedDriver === driver.key ? '▲' : '▼'}
@@ -811,6 +865,22 @@ export function DriversTab({ scopeCompanyId, isWbAdmin = false }: DriversTabProp
                         className="px-3 py-1 text-sm rounded bg-blue-600 hover:bg-blue-500 text-white"
                       >
                         {(driver.assignedRoutes?.length || 0) > 0 ? 'Edit Routes' : '+ Assign Routes'}
+                      </button>
+                      <button
+                        onClick={() => {
+                          setPackageTarget(driver);
+                          setSelectedPackageId(driver.defaultPackageId || '');
+                          setShowPackageModal(true);
+                        }}
+                        className={`px-3 py-1 text-sm rounded ${
+                          driver.defaultPackageId
+                            ? 'bg-indigo-600 hover:bg-indigo-500 text-white'
+                            : 'bg-gray-600 hover:bg-gray-500 text-gray-300'
+                        }`}
+                      >
+                        {driver.defaultPackageId
+                          ? `Pkg: ${availablePackages.find(p => p.id === driver.defaultPackageId)?.name || driver.defaultPackageId}`
+                          : 'Default Package'}
                       </button>
                       {isWbAdmin && (
                         <button
@@ -1268,6 +1338,53 @@ export function DriversTab({ scopeCompanyId, isWbAdmin = false }: DriversTabProp
                   setShowRoutesModal(false);
                   setRouteTarget(null);
                   setSelectedRoutes([]);
+                }}
+                className="px-4 py-2 bg-gray-600 hover:bg-gray-500 text-white rounded"
+              >
+                Cancel
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* ── Default Package Modal ── */}
+      {showPackageModal && packageTarget && (
+        <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50">
+          <div className="bg-gray-800 rounded-lg p-6 max-w-md w-full mx-4">
+            <h3 className="text-white font-medium mb-1">Default Job Package</h3>
+            <p className="text-gray-400 text-sm mb-4">
+              Set the default package for <span className="text-white">{packageTarget.displayName}</span>.
+              This is pre-selected when the driver starts their shift.
+            </p>
+
+            <div>
+              <label className="text-gray-400 text-sm block mb-1">Package</label>
+              <select
+                value={selectedPackageId}
+                onChange={e => setSelectedPackageId(e.target.value)}
+                className="w-full px-3 py-2 bg-gray-700 text-white rounded text-sm"
+                autoFocus
+              >
+                <option value="">— No Default —</option>
+                {availablePackages.map(pkg => (
+                  <option key={pkg.id} value={pkg.id}>{pkg.name}</option>
+                ))}
+              </select>
+            </div>
+
+            <div className="flex gap-2 mt-4">
+              <button
+                onClick={setDriverDefaultPackage}
+                className="flex-1 px-4 py-2 bg-indigo-600 hover:bg-indigo-500 text-white rounded"
+              >
+                {selectedPackageId ? 'Set Default' : 'Clear Default'}
+              </button>
+              <button
+                onClick={() => {
+                  setShowPackageModal(false);
+                  setPackageTarget(null);
+                  setSelectedPackageId('');
                 }}
                 className="px-4 py-2 bg-gray-600 hover:bg-gray-500 text-white rounded"
               >
