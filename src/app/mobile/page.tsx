@@ -730,7 +730,7 @@ function WellRow({ well }: { well: WellResponse }) {
   return (
     <tr className={`hover:bg-gray-750 ${isDown ? 'bg-red-900/20' : ''}`}>
       <td className="px-4 py-3">
-        <Link href={`/well/${encodeURIComponent(well.wellName)}`} className="text-blue-400 hover:text-blue-300 font-medium">
+        <Link href={`/well?name=${encodeURIComponent(well.wellName)}`} className="text-blue-400 hover:text-blue-300 font-medium">
           {well.wellName}
         </Link>
       </td>
@@ -835,7 +835,7 @@ function WellCard({ well }: { well: WellResponse }) {
   };
 
   return (
-    <Link href={`/well/${encodeURIComponent(well.wellName)}`}>
+    <Link href={`/well?name=${encodeURIComponent(well.wellName)}`}>
       <div
         className={`p-4 rounded-lg border transition-all hover:scale-102 hover:shadow-lg cursor-pointer h-full ${
           isDown

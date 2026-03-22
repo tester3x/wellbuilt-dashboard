@@ -1,7 +1,7 @@
 'use client';
 
-import { useEffect, useState, useMemo } from 'react';
-import { useRouter, useParams } from 'next/navigation';
+import { Suspense, useEffect, useState, useMemo } from 'react';
+import { useRouter, useSearchParams } from 'next/navigation';
 import { useAuth } from '@/contexts/AuthContext';
 import {
   PerformanceRow,
@@ -21,11 +21,19 @@ import { SubHeader } from '@/components/SubHeader';
 
 type SortField = 'date' | 'accuracy';
 
-export default function WellPerformanceDetailPage() {
+export default function Page() {
+  return (
+    <Suspense fallback={<div className="min-h-screen bg-gray-900 flex items-center justify-center"><div className="text-white text-xl">Loading...</div></div>}>
+      <WellPerformanceDetailPage />
+    </Suspense>
+  );
+}
+
+function WellPerformanceDetailPage() {
   const { user, loading } = useAuth();
   const router = useRouter();
-  const params = useParams();
-  const wellName = decodeURIComponent(params.wellName as string);
+  const searchParams = useSearchParams();
+  const wellName = searchParams.get('name') || '';
 
   const [stats, setStats] = useState<WellPerformanceStats | null>(null);
   const [dataLoading, setDataLoading] = useState(true);
@@ -137,7 +145,7 @@ export default function WellPerformanceDetailPage() {
   if (!user) return null;
 
   const backHref = stats?.route
-    ? `/performance/${encodeURIComponent(stats.route)}`
+    ? `/performance/route?name=${encodeURIComponent(stats.route)}`
     : '/performance';
 
   return (

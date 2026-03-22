@@ -397,6 +397,8 @@ export interface CompanyConfig {
   liveDispatchSync?: boolean;
   // Active job packages — references to job_packages/{packageId} docs
   activePackages?: string[];
+  // Custom job types added by the company (R&D pipeline — popular ones get promoted to official)
+  customJobTypes?: string[];
 }
 
 // Must match WB T's COMMODITY_TYPES + HOURLY_COMMODITY_TYPES in utils/constants.ts

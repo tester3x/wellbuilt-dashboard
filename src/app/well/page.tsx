@@ -1,7 +1,7 @@
 'use client';
 
-import { useEffect, useState } from 'react';
-import { useRouter, useParams } from 'next/navigation';
+import { Suspense, useEffect, useState } from 'react';
+import { useRouter, useSearchParams } from 'next/navigation';
 import { useAuth } from '@/contexts/AuthContext';
 import { canEditPull, canDeletePull } from '@/lib/auth';
 import {
@@ -57,11 +57,19 @@ function parseFlowRateToMinutes(flowRate: string | undefined): number {
   return 0;
 }
 
-export default function WellDetailPage() {
+export default function Page() {
+  return (
+    <Suspense fallback={<div className="min-h-screen bg-gray-900 flex items-center justify-center"><div className="text-white text-xl">Loading...</div></div>}>
+      <WellDetailPage />
+    </Suspense>
+  );
+}
+
+function WellDetailPage() {
   const { user, loading } = useAuth();
   const router = useRouter();
-  const params = useParams();
-  const wellName = decodeURIComponent(params.wellName as string);
+  const searchParams = useSearchParams();
+  const wellName = searchParams.get('name') || '';
 
   const [pulls, setPulls] = useState<PullPacket[]>([]);
   const [wellStatus, setWellStatus] = useState<WellResponse | null>(null);
@@ -340,7 +348,7 @@ export default function WellDetailPage() {
             <div className="flex items-center gap-3 flex-1 justify-center min-w-0">
               {prevWell ? (
                 <Link
-                  href={`/well/${encodeURIComponent(prevWell.wellName)}`}
+                  href={`/well?name=${encodeURIComponent(prevWell.wellName)}`}
                   className="text-gray-400 hover:text-white transition-colors text-xl px-2 shrink-0"
                   title={prevWell.wellName}
                 >
@@ -365,7 +373,7 @@ export default function WellDetailPage() {
 
               {nextWell ? (
                 <Link
-                  href={`/well/${encodeURIComponent(nextWell.wellName)}`}
+                  href={`/well?name=${encodeURIComponent(nextWell.wellName)}`}
                   className="text-gray-400 hover:text-white transition-colors text-xl px-2 shrink-0"
                   title={nextWell.wellName}
                 >
@@ -781,7 +789,7 @@ export default function WellDetailPage() {
                         routeWells.map((w) => (
                           <Link
                             key={w.wellName}
-                            href={`/well/${encodeURIComponent(w.wellName)}`}
+                            href={`/well?name=${encodeURIComponent(w.wellName)}`}
                             onClick={() => setShowWellPicker(false)}
                             className={`block px-3 py-2 rounded text-sm transition-colors ${
                               w.wellName === wellName

@@ -22,6 +22,8 @@ import { TicketTemplateCard } from '@/components/settings/TicketTemplateCard';
 import { PayrollTemplateCard } from '@/components/settings/PayrollTemplateCard';
 import { PackagesCard } from '@/components/settings/PackagesCard';
 import { SWDDirectoryCard } from '@/components/settings/SWDDirectoryCard';
+import { CustomJobTypesCard } from '@/components/settings/CustomJobTypesCard';
+import { JobTypeRnDCard } from '@/components/settings/JobTypeRnDCard';
 
 export default function SettingsPage() {
   const { user, loading: authLoading } = useAuth();
@@ -172,6 +174,7 @@ export default function SettingsPage() {
           <div className="space-y-4">
             <CompanyProfileCard company={company} onSave={handleRefresh} />
             <PackagesCard company={company} onSave={handleRefresh} />
+            <CustomJobTypesCard company={company} onSave={handleRefresh} />
             <InvoiceConfigCard company={company} onSave={handleRefresh} />
             <OperationsCard company={company} onSave={handleRefresh} />
             <OilCompaniesCard company={company} onSave={handleRefresh} />
@@ -182,6 +185,8 @@ export default function SettingsPage() {
             <PayrollTemplateCard company={company} onSave={handleRefresh} />
             <PayConfigCard company={company} onSave={handleRefresh} />
             <BrandingCard company={company} onSave={handleRefresh} />
+            {/* WB Admin only — R&D pipeline for job type auto-promote/prune */}
+            {isWbAdmin && <JobTypeRnDCard />}
           </div>
         )}
       </main>

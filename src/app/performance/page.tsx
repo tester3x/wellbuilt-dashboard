@@ -102,7 +102,7 @@ export default function PerformancePage() {
             {routes.map((route) => (
               <Link
                 key={route.routeName}
-                href={`/performance/${encodeURIComponent(route.routeName)}`}
+                href={`/performance/route?name=${encodeURIComponent(route.routeName)}`}
                 className="block h-full"
               >
                 <div className="bg-gray-800 rounded-lg border border-gray-700 p-5 hover:border-blue-500 transition-colors h-full flex flex-col">

@@ -1,7 +1,7 @@
 'use client';
 
-import { useEffect, useState } from 'react';
-import { useRouter, useParams } from 'next/navigation';
+import { Suspense, useEffect, useState } from 'react';
+import { useRouter, useSearchParams } from 'next/navigation';
 import { useAuth } from '@/contexts/AuthContext';
 import {
   WellPerformanceStats,
@@ -16,11 +16,19 @@ import { SubHeader } from '@/components/SubHeader';
 
 type SortField = 'name' | 'pulls' | 'accuracy' | 'trend';
 
-export default function RoutePerformancePage() {
+export default function Page() {
+  return (
+    <Suspense fallback={<div className="min-h-screen bg-gray-900 flex items-center justify-center"><div className="text-white text-xl">Loading...</div></div>}>
+      <RoutePerformancePage />
+    </Suspense>
+  );
+}
+
+function RoutePerformancePage() {
   const { user, loading } = useAuth();
   const router = useRouter();
-  const params = useParams();
-  const routeName = decodeURIComponent(params.route as string);
+  const searchParams = useSearchParams();
+  const routeName = searchParams.get('name') || '';
 
   const [wells, setWells] = useState<WellPerformanceStats[]>([]);
   const [routeAvg, setRouteAvg] = useState(0);
@@ -187,7 +195,7 @@ export default function RoutePerformancePage() {
               return (
                 <Link
                   key={well.wellName}
-                  href={`/performance/well/${encodeURIComponent(well.wellName)}`}
+                  href={`/performance/well?name=${encodeURIComponent(well.wellName)}`}
                   className="block"
                 >
                   <div className="bg-gray-800 rounded-lg border border-gray-700 p-4 hover:border-blue-500 transition-colors flex items-center gap-4">

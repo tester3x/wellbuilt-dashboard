@@ -50,6 +50,11 @@ service cloud.firestore {
     match /companies/{docId} {
       allow read: if true;
       allow write: if true;
+
+      // SWD Directory — company-scoped disposal site aliases/customs
+      match /swd_directory/{entryId} {
+        allow read, write: if true;
+      }
     }
 
     // Invoices — clients can read, create, update, delete (cancel/recycle flow)
@@ -151,6 +156,11 @@ service cloud.firestore {
     match /job_packages/{packageId} {
       allow read: if true;
       allow write: if false;
+    }
+
+    // Job type usage tracking — R&D pipeline for custom job type promotion/pruning
+    match /job_type_usage/{typeId} {
+      allow read, write: if true;
     }
 
     // Everything else — deny (Cloud Functions use Admin SDK which bypasses rules)

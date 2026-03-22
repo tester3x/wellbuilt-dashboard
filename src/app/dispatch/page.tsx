@@ -11,6 +11,7 @@ import { getFirestoreDb } from '@/lib/firebase';
 import { collection, addDoc, getDocs, query, where, orderBy, Timestamp, doc, updateDoc, onSnapshot } from 'firebase/firestore';
 import { loadDisposals, searchDisposals, type NdicWell } from '@/lib/firestoreWells';
 import { loadCompanyById } from '@/lib/companySettings';
+import { trackJobTypeUsage } from '@/lib/jobTypeUsage';
 
 // ─── Types ───────────────────────────────────────────────────────────────────
 
@@ -351,34 +352,66 @@ export default function DispatchPage() {
     loadDisposals().then(setAllDisposals).catch(() => {});
   }, []);
 
-  // Load dynamic service types from company's active job packages
+  // Load dynamic service types from job packages
+  // WB admin (no companyId): loads ALL packages so dispatch has full service type list
+  // Hauler admin: loads only their company's active packages
   useEffect(() => {
     if (!user) return;
     const loadPackageJobTypes = async () => {
       try {
         const companyId = user.companyId;
-        if (!companyId) return; // WB admin — keep fallback list
-        const company = await loadCompanyById(companyId);
-        if (!company?.activePackages?.length) return; // no packages — keep fallback
+        let activeFilter: string[] | null = null; // null = load all (WB admin)
+        let companyConfig: any = null;
+
+        if (companyId) {
+          companyConfig = await loadCompanyById(companyId);
+          if (!companyConfig?.activePackages?.length) return; // no packages — keep fallback
+          activeFilter = companyConfig.activePackages;
+        }
 
         const firestore = getFirestoreDb();
         const snap = await getDocs(collection(firestore, 'job_packages'));
         const allJobTypes: string[] = [];
         const pkgMap: Record<string, string> = {};
         snap.forEach(d => {
-          if (company.activePackages!.includes(d.id)) {
-            const pkg = d.data();
-            if (pkg.jobTypes && Array.isArray(pkg.jobTypes)) {
-              for (const jt of pkg.jobTypes) {
-                const label = typeof jt === 'string' ? jt : jt.label || jt.id || String(jt);
-                if (!allJobTypes.includes(label)) {
-                  allJobTypes.push(label);
-                  pkgMap[label] = d.id;
-                }
+          // WB admin sees all packages; hauler admin sees only active ones
+          if (activeFilter && !activeFilter.includes(d.id)) return;
+          const pkg = d.data();
+          if (pkg.jobTypes && Array.isArray(pkg.jobTypes)) {
+            for (const jt of pkg.jobTypes) {
+              const label = typeof jt === 'string' ? jt : jt.label || jt.id || String(jt);
+              if (!allJobTypes.includes(label)) {
+                allJobTypes.push(label);
+                pkgMap[label] = d.id;
               }
             }
           }
         });
+
+        // Also load custom job types from company config
+        if (companyId) {
+          const customTypes = companyConfig?.customJobTypes || [];
+          for (const ct of customTypes) {
+            if (!allJobTypes.includes(ct)) {
+              allJobTypes.push(ct);
+              pkgMap[ct] = 'custom'; // Mark as custom for tracking
+            }
+          }
+        } else {
+          // WB admin — load custom types from ALL companies
+          const allCompaniesSnap = await getDocs(collection(firestore, 'companies'));
+          allCompaniesSnap.forEach(compDoc => {
+            const compData = compDoc.data();
+            if (compData.customJobTypes && Array.isArray(compData.customJobTypes)) {
+              for (const ct of compData.customJobTypes) {
+                if (!allJobTypes.includes(ct)) {
+                  allJobTypes.push(ct);
+                  pkgMap[ct] = 'custom';
+                }
+              }
+            }
+          });
+        }
 
         if (allJobTypes.length > 0) {
           // Always include "Other" as escape hatch
@@ -743,6 +776,11 @@ export default function DispatchPage() {
       };
 
       await addDoc(collection(firestore, 'dispatches'), job);
+
+      // Track PW usage for R&D pipeline (non-blocking)
+      const compId = user?.companyId || driver.companyId || 'unknown';
+      trackJobTypeUsage('Production Water', compId, 'water-hauling');
+
       setMessage(`Dispatched ${assignTarget.wellName} to ${driver.legalName || driver.displayName}`);
       setShowAssignModal(false);
       setAssignTarget(null);
@@ -802,6 +840,11 @@ export default function DispatchPage() {
       });
 
       await Promise.all(promises);
+
+      // Track job type usage for R&D pipeline (non-blocking)
+      const compId = user?.companyId || selectedDrivers[0]?.companyId || 'unknown';
+      trackJobTypeUsage(swServiceType.trim(), compId, jobTypeToPackageId[swServiceType.trim()] || 'custom');
+
       const names = selectedDrivers.map(d => d.legalName || d.displayName).join(', ');
       setMessage(`Service work dispatched to ${names}`);
       setSwWellName('');
