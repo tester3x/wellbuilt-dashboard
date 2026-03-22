@@ -1,6 +1,6 @@
 'use client';
 
-import { useEffect, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { useRouter } from 'next/navigation';
 import { useAuth } from '@/contexts/AuthContext';
 import { WellResponse, subscribeToWellStatusesUnified } from '@/lib/wells';
@@ -8,7 +8,7 @@ import Link from 'next/link';
 import { AppHeader } from '@/components/AppHeader';
 import { AddPullModal } from '@/components/AddPullModal';
 import { fetchTickets, type Ticket } from '@/lib/tickets';
-import { getRouteColor } from '@/lib/routeColor';
+import { assignRouteColors, getRouteColor } from '@/lib/routeColor';
 
 type ViewMode = 'cards' | 'table';
 type SortField = 'wellName' | 'tanks' | 'nextPull' | 'level' | 'flowRate' | 'timeTillPull' | 'status';
@@ -222,6 +222,9 @@ export default function MobilePage() {
   const wellSearchTerm = wellSearch.trim().toLowerCase();
   const filteredRoutes = routes;
 
+  // Compute unique colors for all routes (collision-free)
+  const routeColorMap = useMemo(() => assignRouteColors(routes), [routes]);
+
   // Group wells by route with sorting + pullBbls override
   const getWellsForRoute = (route: string, paginate = true): WellResponse[] => {
     let routeWells = wells.filter((w) => w.route === route);
@@ -368,6 +371,7 @@ export default function MobilePage() {
                   pullBbls={routePullBbls[route] || 140}
                   defaultPullBbls={wells.find(w => w.route === route)?.pullBbls || 140}
                   onPullBblsChange={(val) => setRoutePullBbls(prev => ({ ...prev, [route]: val }))}
+                  routeColor={routeColorMap.get(route) || '#888888'}
                 />
                 {route === 'Unrouted' && !unroutedShowAll && totalUnroutedWells > UNROUTED_PAGE_SIZE && expandedRoutes.has(route) && (
                   <button
@@ -395,6 +399,7 @@ export default function MobilePage() {
                   pullBbls={routePullBbls[route] || 140}
                   defaultPullBbls={wells.find(w => w.route === route)?.pullBbls || 140}
                   onPullBblsChange={(val) => setRoutePullBbls(prev => ({ ...prev, [route]: val }))}
+                  routeColor={routeColorMap.get(route) || '#888888'}
                 />
                 {route === 'Unrouted' && !unroutedShowAll && totalUnroutedWells > UNROUTED_PAGE_SIZE && expandedRoutes.has(route) && (
                   <button
@@ -647,6 +652,7 @@ function RouteTable({
   pullBbls,
   defaultPullBbls,
   onPullBblsChange,
+  routeColor,
 }: {
   route: string;
   wells: WellResponse[];
@@ -657,9 +663,9 @@ function RouteTable({
   pullBbls: number;
   defaultPullBbls: number;
   onPullBblsChange: (value: number) => void;
+  routeColor: string;
 }) {
   const downCount = wells.filter((w) => w.isDown || w.currentLevel === 'DOWN').length;
-  const routeColor = getRouteColor(route);
 
   return (
     <div className="bg-gray-800 rounded-lg border border-gray-700 overflow-hidden" style={{ borderLeftColor: routeColor, borderLeftWidth: 3 }}>
@@ -778,6 +784,7 @@ function RouteSection({
   pullBbls,
   defaultPullBbls,
   onPullBblsChange,
+  routeColor,
 }: {
   route: string;
   wells: WellResponse[];
@@ -786,10 +793,9 @@ function RouteSection({
   pullBbls: number;
   defaultPullBbls: number;
   onPullBblsChange: (value: number) => void;
+  routeColor: string;
 }) {
   const downCount = wells.filter((w) => w.isDown || w.currentLevel === 'DOWN').length;
-
-  const routeColor = getRouteColor(route);
 
   return (
     <div className="bg-gray-800 rounded-lg border border-gray-700 overflow-hidden" style={{ borderLeftColor: routeColor, borderLeftWidth: 3 }}>
