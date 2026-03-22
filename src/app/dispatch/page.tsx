@@ -8,8 +8,8 @@ import { AppHeader } from '@/components/AppHeader';
 import { ref, get, set } from 'firebase/database';
 import { getFirebaseDatabase } from '@/lib/firebase';
 import { getFirestoreDb } from '@/lib/firebase';
-import { collection, addDoc, getDocs, query, where, orderBy, Timestamp, doc, updateDoc, onSnapshot } from 'firebase/firestore';
-import { loadDisposals, searchDisposals, type NdicWell } from '@/lib/firestoreWells';
+import { collection, addDoc, getDocs, query, where, orderBy, Timestamp, doc, updateDoc, onSnapshot, deleteDoc } from 'firebase/firestore';
+import { loadDisposals, searchDisposals, type NdicWell, loadOperators, searchOperators, type NdicOperator } from '@/lib/firestoreWells';
 import { loadCompanyById } from '@/lib/companySettings';
 import { trackJobTypeUsage } from '@/lib/jobTypeUsage';
 
@@ -78,6 +78,37 @@ interface DispatchJob {
   // Driver-initiated job tracking (liveDispatchSync)
   source?: 'driver';  // Present when driver started the job (not dispatched)
   invoiceDocId?: string;  // Firestore invoice doc ID
+  // Project link
+  projectId?: string;  // Links this dispatch to a project
+}
+
+// ─── Project Types ────────────────────────────────────────────────────────
+
+interface Project {
+  id?: string;
+  name: string;
+  wellNames: string[];
+  operatorName: string;
+  companyId?: string;
+  createdBy: string;
+  createdAt: any;
+  startDate: string;           // ISO date
+  projectedEndDate?: string;   // ISO date
+  actualEndDate?: string;
+  status: 'active' | 'paused' | 'completed';
+  notes?: string;
+  driverSchedule: { [isoDate: string]: string[] }; // date -> driverHashes
+}
+
+interface ProjectInvoice {
+  id: string;
+  invoiceNumber?: string;
+  driverName?: string;
+  wellName?: string;
+  totalBarrels?: number;
+  createdAt: any;
+  status?: string;
+  ticketCount?: number;
 }
 
 // Priority levels for PW queue
@@ -326,6 +357,26 @@ export default function DispatchPage() {
   const [reassigning, setReassigning] = useState(false);
   const [reassignLoads, setReassignLoads] = useState(0); // 0 = all loads
 
+  // Right panel tab
+  const [rightPanelTab, setRightPanelTab] = useState<'jobs' | 'projects'>('jobs');
+
+  // Projects state
+  const [projects, setProjects] = useState<Project[]>([]);
+  const [selectedProject, setSelectedProject] = useState<Project | null>(null);
+  const [projectInvoices, setProjectInvoices] = useState<ProjectInvoice[]>([]);
+  const [projectDispatches, setProjectDispatches] = useState<DispatchJob[]>([]);
+  const [showCreateProject, setShowCreateProject] = useState(false);
+  const [newProjectName, setNewProjectName] = useState('');
+  const [newProjectWells, setNewProjectWells] = useState<string[]>([]);
+  const [newProjectOperator, setNewProjectOperator] = useState('');
+  const [allOperators, setAllOperators] = useState<NdicOperator[]>([]);
+  const [operatorSuggestions, setOperatorSuggestions] = useState<NdicOperator[]>([]);
+  const [newProjectNotes, setNewProjectNotes] = useState('');
+  const [newProjectEndDate, setNewProjectEndDate] = useState('');
+  const [newProjectDriverHashes, setNewProjectDriverHashes] = useState<Set<string>>(new Set());
+  const [creatingProject, setCreatingProject] = useState(false);
+  const [projectWellSearch, setProjectWellSearch] = useState('');
+
   // Dynamic service types from job packages (falls back to hardcoded)
   const FALLBACK_SERVICE_TYPES = ['Hot Shot', 'Equipment Delivery', 'Tank Cleanout', 'Flowback', 'Frac Water', 'Rig Move', 'Other'];
   const [dynamicServiceTypes, setDynamicServiceTypes] = useState<string[]>(FALLBACK_SERVICE_TYPES);
@@ -353,6 +404,7 @@ export default function DispatchPage() {
   useEffect(() => {
     loadDriversData();
     loadDisposals().then(setAllDisposals).catch(() => {});
+    loadOperators().then(setAllOperators).catch(console.error);
   }, []);
 
   // Load dynamic service types from job packages
@@ -451,6 +503,88 @@ export default function DispatchPage() {
     });
     return () => unsub();
   }, []);
+
+  // Subscribe to projects in real-time
+  useEffect(() => {
+    const firestore = getFirestoreDb();
+    const q = query(
+      collection(firestore, 'projects'),
+      where('status', 'in', ['active', 'paused']),
+      orderBy('createdAt', 'desc')
+    );
+    const unsub = onSnapshot(q, (snap) => {
+      const items: Project[] = [];
+      snap.forEach((d) => {
+        items.push({ id: d.id, ...d.data() } as Project);
+      });
+      setProjects(items);
+    }, (err) => {
+      console.error('Projects listener error:', err);
+    });
+    return () => unsub();
+  }, []);
+
+  // Load project dispatches + invoices when a project is selected
+  useEffect(() => {
+    if (!selectedProject?.id) {
+      setProjectDispatches([]);
+      setProjectInvoices([]);
+      return;
+    }
+    const firestore = getFirestoreDb();
+
+    // Subscribe to dispatches for this project
+    const dq = query(
+      collection(firestore, 'dispatches'),
+      where('projectId', '==', selectedProject.id)
+    );
+    const unsubDispatches = onSnapshot(dq, (snap) => {
+      const jobs: DispatchJob[] = [];
+      snap.forEach((d) => jobs.push({ id: d.id, ...d.data() } as DispatchJob));
+      // Sort: active first, then by date
+      jobs.sort((a, b) => {
+        const aActive = ['in_progress', 'accepted', 'pending'].includes(a.status) ? 0 : 1;
+        const bActive = ['in_progress', 'accepted', 'pending'].includes(b.status) ? 0 : 1;
+        if (aActive !== bActive) return aActive - bActive;
+        const aTime = a.assignedAt?.toMillis?.() || 0;
+        const bTime = b.assignedAt?.toMillis?.() || 0;
+        return bTime - aTime;
+      });
+      setProjectDispatches(jobs);
+    });
+
+    // Subscribe to invoices for this project
+    const iq = query(
+      collection(firestore, 'invoices'),
+      where('projectId', '==', selectedProject.id),
+      orderBy('createdAt', 'desc')
+    );
+    const unsubInvoices = onSnapshot(iq, (snap) => {
+      const inv: ProjectInvoice[] = [];
+      snap.forEach((d) => {
+        const data = d.data();
+        inv.push({
+          id: d.id,
+          invoiceNumber: data.invoiceNumber,
+          driverName: data.driverName || data.driver,
+          wellName: data.wellName,
+          totalBarrels: data.totalBarrels,
+          createdAt: data.createdAt,
+          status: data.status,
+          ticketCount: data.tickets?.length || data.ticketCount || 0,
+        });
+      });
+      setProjectInvoices(inv);
+    }, () => {
+      // Index might not exist yet — that's fine
+      setProjectInvoices([]);
+    });
+
+    return () => {
+      unsubDispatches();
+      unsubInvoices();
+    };
+  }, [selectedProject?.id]);
 
   async function loadDriversData() {
     setDriversLoading(true);
@@ -867,6 +1001,140 @@ export default function DispatchPage() {
       });
       setMessage('Dispatch cancelled');
       setTimeout(() => setMessage(''), 3000);
+    } catch (err: any) {
+      setMessage(`Error: ${err.message}`);
+      setTimeout(() => setMessage(''), 5000);
+    }
+  }
+
+  // ─── Project CRUD ───────────────────────────────────────────────────────
+
+  async function createProject() {
+    if (!newProjectName.trim() || newProjectWells.length === 0) return;
+    setCreatingProject(true);
+    try {
+      const firestore = getFirestoreDb();
+      const today = new Date().toISOString().slice(0, 10);
+      // Build initial driver schedule for today
+      const schedule: Record<string, string[]> = {};
+      if (newProjectDriverHashes.size > 0) {
+        schedule[today] = Array.from(newProjectDriverHashes);
+      }
+      const projectData: Omit<Project, 'id'> = {
+        name: newProjectName.trim(),
+        wellNames: newProjectWells,
+        operatorName: newProjectOperator.trim(),
+        companyId: user?.companyId || '',
+        createdBy: user?.email || '',
+        createdAt: Timestamp.now(),
+        startDate: today,
+        projectedEndDate: newProjectEndDate || undefined,
+        status: 'active',
+        notes: newProjectNotes.trim() || undefined,
+        driverSchedule: schedule,
+      };
+      const docRef = await addDoc(collection(firestore, 'projects'), projectData);
+
+      // Create dispatches for today's assigned drivers
+      if (newProjectDriverHashes.size > 0) {
+        for (const wellName of newProjectWells) {
+          const wellData = wells.find(w => w.wellName === wellName);
+          for (const driverHash of newProjectDriverHashes) {
+            const driver = drivers.find(d => d.key === driverHash);
+            if (!driver) continue;
+            const driverFirstName = driver.legalName ? driver.legalName.split(' ')[0] : driver.displayName;
+            await addDoc(collection(firestore, 'dispatches'), {
+              driverHash,
+              driverName: driver.displayName,
+              driverFirstName,
+              wellName,
+              ndicWellName: wellData?.ndicName || wellName,
+              operator: newProjectOperator.trim(),
+              route: wellData?.route || '',
+              jobType: 'pw',
+              status: 'pending',
+              priority: 500,
+              assignedAt: Timestamp.now(),
+              assignedBy: user?.email || '',
+              projectId: docRef.id,
+              notes: newProjectNotes.trim() || undefined,
+            });
+          }
+        }
+      }
+
+      // Reset form
+      setNewProjectName('');
+      setNewProjectWells([]);
+      setNewProjectOperator('');
+      setNewProjectNotes('');
+      setNewProjectEndDate('');
+      setNewProjectDriverHashes(new Set());
+      setShowCreateProject(false);
+      setProjectWellSearch('');
+      setMessage('Project created');
+      setTimeout(() => setMessage(''), 3000);
+    } catch (err: any) {
+      setMessage(`Error creating project: ${err.message}`);
+      setTimeout(() => setMessage(''), 5000);
+    } finally {
+      setCreatingProject(false);
+    }
+  }
+
+  async function updateProjectStatus(projectId: string, status: 'active' | 'paused' | 'completed') {
+    try {
+      const firestore = getFirestoreDb();
+      const updates: Record<string, any> = { status };
+      if (status === 'completed') updates.actualEndDate = new Date().toISOString().slice(0, 10);
+      await updateDoc(doc(firestore, 'projects', projectId), updates);
+      if (status === 'completed') {
+        setSelectedProject(null);
+      }
+      setMessage(`Project ${status === 'completed' ? 'completed' : status === 'paused' ? 'paused' : 'resumed'}`);
+      setTimeout(() => setMessage(''), 3000);
+    } catch (err: any) {
+      setMessage(`Error: ${err.message}`);
+      setTimeout(() => setMessage(''), 5000);
+    }
+  }
+
+  async function addDriverToProjectToday(projectId: string, driverHash: string) {
+    const today = new Date().toISOString().slice(0, 10);
+    const project = projects.find(p => p.id === projectId);
+    if (!project) return;
+    try {
+      const firestore = getFirestoreDb();
+      const currentSchedule = project.driverSchedule || {};
+      const todayDrivers = currentSchedule[today] || [];
+      if (todayDrivers.includes(driverHash)) return;
+      await updateDoc(doc(firestore, 'projects', projectId), {
+        [`driverSchedule.${today}`]: [...todayDrivers, driverHash],
+      });
+
+      // Create dispatches for this driver for project wells
+      const driver = drivers.find(d => d.key === driverHash);
+      if (driver) {
+        const driverFirstName = driver.legalName ? driver.legalName.split(' ')[0] : driver.displayName;
+        for (const wellName of project.wellNames) {
+          const wellData = wells.find(w => w.wellName === wellName);
+          await addDoc(collection(firestore, 'dispatches'), {
+            driverHash,
+            driverName: driver.displayName,
+            driverFirstName,
+            wellName,
+            ndicWellName: wellData?.ndicName || wellName,
+            operator: project.operatorName || '',
+            route: wellData?.route || '',
+            jobType: 'pw',
+            status: 'pending',
+            priority: 500,
+            assignedAt: Timestamp.now(),
+            assignedBy: user?.email || '',
+            projectId: projectId,
+          });
+        }
+      }
     } catch (err: any) {
       setMessage(`Error: ${err.message}`);
       setTimeout(() => setMessage(''), 5000);
@@ -1541,43 +1809,254 @@ export default function DispatchPage() {
             </div>
           </div>
 
-          {/* ═══════ RIGHT PANEL (60%): Active Jobs ═══════ */}
+          {/* ═══════ RIGHT PANEL (60%): Active Jobs / Projects ═══════ */}
           <div className="flex-1 flex flex-col min-h-0">
             <div className="bg-gray-800 rounded-lg border border-gray-700 flex-1 flex flex-col overflow-hidden">
-              {/* Panel header */}
+              {/* Panel header with tabs */}
               <div className="flex items-center justify-between px-4 py-2.5 border-b border-gray-700 flex-shrink-0">
-                <div className="flex items-center gap-3">
-                  <h3 className="text-sm font-semibold text-white">Active Jobs</h3>
-                  <span className="text-gray-500 text-xs">{activeDriverCount} driver{activeDriverCount !== 1 ? 's' : ''}</span>
+                <div className="flex items-center gap-1">
+                  <button
+                    onClick={() => { setRightPanelTab('jobs'); setSelectedProject(null); }}
+                    className={`px-3 py-1 rounded text-sm font-medium transition-colors ${
+                      rightPanelTab === 'jobs'
+                        ? 'bg-blue-600 text-white'
+                        : 'text-gray-400 hover:text-white hover:bg-gray-700'
+                    }`}
+                  >
+                    Active Jobs
+                  </button>
+                  <button
+                    onClick={() => setRightPanelTab('projects')}
+                    className={`px-3 py-1 rounded text-sm font-medium transition-colors flex items-center gap-1.5 ${
+                      rightPanelTab === 'projects'
+                        ? 'bg-emerald-600 text-white'
+                        : 'text-gray-400 hover:text-white hover:bg-gray-700'
+                    }`}
+                  >
+                    Projects
+                    {projects.length > 0 && (
+                      <span className={`px-1.5 py-0.5 text-[10px] rounded font-bold ${
+                        rightPanelTab === 'projects' ? 'bg-emerald-500/40 text-emerald-100' : 'bg-emerald-600/20 text-emerald-400'
+                      }`}>{projects.length}</span>
+                    )}
+                  </button>
                 </div>
                 <div className="flex items-center gap-1.5">
-                  {dispatches.filter(d => d.jobType === 'pw').length > 0 && (
-                    <span className="px-1.5 py-0.5 bg-blue-600/20 text-blue-400 text-[10px] rounded font-bold">
-                      {dispatches.filter(d => d.jobType === 'pw').length} PW
-                    </span>
+                  {rightPanelTab === 'jobs' && (
+                    <>
+                      {dispatches.filter(d => d.jobType === 'pw').length > 0 && (
+                        <span className="px-1.5 py-0.5 bg-blue-600/20 text-blue-400 text-[10px] rounded font-bold">
+                          {dispatches.filter(d => d.jobType === 'pw').length} PW
+                        </span>
+                      )}
+                      {dispatches.filter(d => d.jobType === 'service').length > 0 && (
+                        <span className="px-1.5 py-0.5 bg-purple-600/20 text-purple-400 text-[10px] rounded font-bold">
+                          {dispatches.filter(d => d.jobType === 'service').length} SW
+                        </span>
+                      )}
+                    </>
                   )}
-                  {dispatches.filter(d => d.jobType === 'service').length > 0 && (
-                    <span className="px-1.5 py-0.5 bg-purple-600/20 text-purple-400 text-[10px] rounded font-bold">
-                      {dispatches.filter(d => d.jobType === 'service').length} SW
-                    </span>
+                  {rightPanelTab === 'projects' && !selectedProject && (
+                    <button
+                      onClick={() => setShowCreateProject(true)}
+                      className="px-2.5 py-1 bg-emerald-600 hover:bg-emerald-500 text-white text-xs font-medium rounded transition-colors"
+                    >
+                      + New Project
+                    </button>
+                  )}
+                  {rightPanelTab === 'projects' && selectedProject && (
+                    <button
+                      onClick={() => setSelectedProject(null)}
+                      className="px-2.5 py-1 bg-gray-700 hover:bg-gray-600 text-white text-xs font-medium rounded transition-colors"
+                    >
+                      ← All Projects
+                    </button>
                   )}
                 </div>
               </div>
-              {/* Scrollable job list */}
+              {/* Scrollable content */}
               <div className="flex-1 overflow-y-auto p-3">
-                <ActiveDispatchPanel
-                  dispatches={dispatches}
-                  cancelDispatch={cancelDispatch}
-                  drivers={drivers}
-                  assignTransfer={assignTransfer}
-                  onEditServiceWork={openEditSwModal}
-                  onReassignDeclined={openReassignModal}
-                />
+                {rightPanelTab === 'jobs' && (
+                  <ActiveDispatchPanel
+                    dispatches={dispatches}
+                    cancelDispatch={cancelDispatch}
+                    drivers={drivers}
+                    assignTransfer={assignTransfer}
+                    onEditServiceWork={openEditSwModal}
+                    onReassignDeclined={openReassignModal}
+                  />
+                )}
+                {rightPanelTab === 'projects' && !selectedProject && (
+                  <ProjectsListPanel
+                    projects={projects}
+                    dispatches={dispatches}
+                    drivers={drivers}
+                    onSelect={(p) => setSelectedProject(p)}
+                  />
+                )}
+                {rightPanelTab === 'projects' && selectedProject && (
+                  <ProjectDetailPanel
+                    project={selectedProject}
+                    projectDispatches={projectDispatches}
+                    projectInvoices={projectInvoices}
+                    drivers={drivers}
+                    cancelDispatch={cancelDispatch}
+                    onStatusChange={updateProjectStatus}
+                    onAddDriver={(hash) => addDriverToProjectToday(selectedProject.id!, hash)}
+                  />
+                )}
               </div>
             </div>
           </div>
         </div>
       </main>
+
+      {/* ═══════════════════════════════════════════════════════════════════════════
+          CREATE PROJECT MODAL
+          ═══════════════════════════════════════════════════════════════════════════ */}
+      {showCreateProject && (
+        <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50">
+          <div className="bg-gray-800 rounded-lg p-6 max-w-lg w-full mx-4 border border-gray-700 max-h-[85vh] overflow-y-auto">
+            <h3 className="text-lg font-semibold text-white mb-4">New Project</h3>
+
+            {/* Project Name */}
+            <label className="block text-gray-400 text-xs mb-1">Project Name</label>
+            <input
+              type="text"
+              value={newProjectName}
+              onChange={(e) => setNewProjectName(e.target.value)}
+              placeholder="e.g. Hess Flowback - Antelope Creek"
+              className="w-full px-3 py-2 bg-gray-900 border border-gray-700 rounded text-white text-sm placeholder-gray-500 focus:outline-none focus:border-emerald-500 mb-3"
+            />
+
+            {/* Operator */}
+            <label className="block text-gray-400 text-xs mb-1">Operator</label>
+            <div className="relative">
+              <input
+                type="text"
+                value={newProjectOperator}
+                onChange={(e) => {
+                  setNewProjectOperator(e.target.value);
+                  setOperatorSuggestions(searchOperators(e.target.value, allOperators));
+                }}
+                placeholder="e.g. Hess, Slawson"
+                className="w-full px-3 py-2 bg-gray-900 border border-gray-700 rounded text-white text-sm placeholder-gray-500 focus:outline-none focus:border-emerald-500"
+              />
+              {operatorSuggestions.length > 0 && (
+                <div className="absolute z-10 w-full bg-gray-900 border border-gray-700 rounded mt-0.5 max-h-32 overflow-y-auto">
+                  {operatorSuggestions.map(op => (
+                    <button
+                      key={op.name}
+                      onClick={() => { setNewProjectOperator(op.name); setOperatorSuggestions([]); }}
+                      className="w-full text-left px-3 py-1.5 hover:bg-gray-700 text-white text-xs border-b border-gray-800 last:border-0"
+                    >
+                      {op.name}
+                    </button>
+                  ))}
+                </div>
+              )}
+            </div>
+            <div className="mb-3" />
+
+            {/* Wells */}
+            <label className="block text-gray-400 text-xs mb-1">Wells ({newProjectWells.length} selected)</label>
+            <input
+              type="text"
+              value={projectWellSearch}
+              onChange={(e) => setProjectWellSearch(e.target.value)}
+              placeholder="Search wells..."
+              className="w-full px-3 py-2 bg-gray-900 border border-gray-700 rounded text-white text-sm placeholder-gray-500 focus:outline-none focus:border-emerald-500 mb-1"
+            />
+            {/* Selected wells */}
+            {newProjectWells.length > 0 && (
+              <div className="flex flex-wrap gap-1 mb-1">
+                {newProjectWells.map(w => (
+                  <span key={w} className="px-2 py-0.5 bg-emerald-600/30 text-emerald-300 text-xs rounded flex items-center gap-1">
+                    {w}
+                    <button onClick={() => setNewProjectWells(prev => prev.filter(n => n !== w))} className="text-emerald-400 hover:text-white">×</button>
+                  </span>
+                ))}
+              </div>
+            )}
+            {/* Well search results */}
+            {projectWellSearch.length >= 2 && (
+              <div className="bg-gray-900 border border-gray-700 rounded max-h-32 overflow-y-auto mb-3">
+                {wells
+                  .filter(w => w.wellName.toLowerCase().includes(projectWellSearch.toLowerCase()) && !newProjectWells.includes(w.wellName))
+                  .slice(0, 10)
+                  .map(w => (
+                    <button
+                      key={w.wellName}
+                      onClick={() => { setNewProjectWells(prev => [...prev, w.wellName]); setProjectWellSearch(''); }}
+                      className="w-full text-left px-3 py-1.5 hover:bg-gray-700 text-white text-xs border-b border-gray-800 last:border-0"
+                    >
+                      {w.ndicName || w.wellName} <span className="text-gray-500">{w.route}</span>
+                    </button>
+                  ))}
+              </div>
+            )}
+
+            {/* Projected End Date */}
+            <label className="block text-gray-400 text-xs mb-1">Projected End Date (optional)</label>
+            <input
+              type="date"
+              value={newProjectEndDate}
+              onChange={(e) => setNewProjectEndDate(e.target.value)}
+              className="w-full px-3 py-2 bg-gray-900 border border-gray-700 rounded text-white text-sm focus:outline-none focus:border-emerald-500 mb-3"
+            />
+
+            {/* Assign Drivers for Today */}
+            <label className="block text-gray-400 text-xs mb-1">Assign Drivers for Today (optional)</label>
+            <div className="bg-gray-900 border border-gray-700 rounded max-h-32 overflow-y-auto mb-3">
+              {drivers.map(d => (
+                <label key={d.key} className="flex items-center gap-2 px-3 py-1.5 hover:bg-gray-800 cursor-pointer border-b border-gray-800 last:border-0">
+                  <input
+                    type="checkbox"
+                    checked={newProjectDriverHashes.has(d.key)}
+                    onChange={(e) => {
+                      setNewProjectDriverHashes(prev => {
+                        const next = new Set(prev);
+                        if (e.target.checked) next.add(d.key);
+                        else next.delete(d.key);
+                        return next;
+                      });
+                    }}
+                    className="rounded border-gray-600 bg-gray-800 text-emerald-500 focus:ring-emerald-500"
+                  />
+                  <span className="text-white text-xs">{d.legalName || d.displayName}</span>
+                </label>
+              ))}
+            </div>
+
+            {/* Notes */}
+            <label className="block text-gray-400 text-xs mb-1">Notes</label>
+            <textarea
+              value={newProjectNotes}
+              onChange={(e) => setNewProjectNotes(e.target.value)}
+              placeholder="Special instructions, equipment needed, etc."
+              rows={2}
+              className="w-full px-3 py-2 bg-gray-900 border border-gray-700 rounded text-white text-sm placeholder-gray-500 focus:outline-none focus:border-emerald-500 mb-4 resize-none"
+            />
+
+            {/* Buttons */}
+            <div className="flex justify-end gap-2">
+              <button
+                onClick={() => { setShowCreateProject(false); setProjectWellSearch(''); }}
+                className="px-4 py-2 bg-gray-700 hover:bg-gray-600 text-white text-sm rounded transition-colors"
+              >
+                Cancel
+              </button>
+              <button
+                onClick={createProject}
+                disabled={!newProjectName.trim() || newProjectWells.length === 0 || creatingProject}
+                className="px-4 py-2 bg-emerald-600 hover:bg-emerald-500 disabled:bg-gray-600 disabled:cursor-not-allowed text-white text-sm font-medium rounded transition-colors"
+              >
+                {creatingProject ? 'Creating...' : 'Create Project'}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
 
       {/* ═══════════════════════════════════════════════════════════════════════════
           ASSIGN MODAL (PW — unchanged)
@@ -2783,6 +3262,370 @@ function UnassignedTransferRow({ job, drivers, assignTransfer, cancelDispatch }:
           {isPendingApproval ? 'Approve' : 'Assign'}
         </button>
       </div>
+    </div>
+  );
+}
+
+// ─── Projects List Panel ──────────────────────────────────────────────────
+
+function ProjectsListPanel({ projects, dispatches, drivers, onSelect }: {
+  projects: Project[];
+  dispatches: DispatchJob[];
+  drivers: { key: string; displayName: string; legalName?: string }[];
+  onSelect: (p: Project) => void;
+}) {
+  if (projects.length === 0) {
+    return (
+      <div className="text-center py-12">
+        <div className="text-gray-500 text-sm mb-2">No active projects</div>
+        <div className="text-gray-600 text-xs">Create a project for long-running jobs like flowback, frac cleanup, or extended campaigns.</div>
+      </div>
+    );
+  }
+
+  function getDriverName(hash: string) {
+    const d = drivers.find(dr => dr.key === hash);
+    return d?.legalName?.split(' ')[0] || d?.displayName || hash.slice(0, 6);
+  }
+
+  const today = new Date().toISOString().slice(0, 10);
+
+  return (
+    <div className="space-y-3">
+      {projects.map(project => {
+        const projectJobs = dispatches.filter((d: any) => d.projectId === project.id);
+        const activeJobs = projectJobs.filter(j => ['pending', 'accepted', 'in_progress'].includes(j.status));
+        const todayDriverHashes = project.driverSchedule?.[today] || [];
+        const daysActive = Math.max(1, Math.ceil((Date.now() - new Date(project.startDate).getTime()) / 86400000));
+
+        return (
+          <button
+            key={project.id}
+            onClick={() => onSelect(project)}
+            className="w-full text-left bg-gray-900 border border-gray-700 rounded-lg p-4 hover:border-emerald-600/50 transition-colors"
+          >
+            <div className="flex items-center justify-between mb-2">
+              <div className="flex items-center gap-2">
+                <h4 className="text-white font-medium text-sm">{project.name}</h4>
+                <span className={`px-1.5 py-0.5 text-[10px] rounded font-bold ${
+                  project.status === 'active' ? 'bg-emerald-600/20 text-emerald-400' :
+                  project.status === 'paused' ? 'bg-amber-600/20 text-amber-400' :
+                  'bg-gray-600/20 text-gray-400'
+                }`}>
+                  {project.status.toUpperCase()}
+                </span>
+              </div>
+              <span className="text-gray-500 text-xs">{daysActive}d active</span>
+            </div>
+
+            <div className="flex items-center gap-3 text-xs text-gray-400 mb-2">
+              <span>{project.operatorName}</span>
+              <span>·</span>
+              <span>{project.wellNames.length} well{project.wellNames.length !== 1 ? 's' : ''}</span>
+              {project.projectedEndDate && (
+                <>
+                  <span>·</span>
+                  <span>→ {project.projectedEndDate}</span>
+                </>
+              )}
+            </div>
+
+            <div className="flex items-center gap-3">
+              {activeJobs.length > 0 && (
+                <span className="px-1.5 py-0.5 bg-blue-600/20 text-blue-400 text-[10px] rounded font-bold">
+                  {activeJobs.length} active
+                </span>
+              )}
+              {todayDriverHashes.length > 0 && (
+                <div className="flex items-center gap-1">
+                  {todayDriverHashes.slice(0, 4).map(hash => (
+                    <span key={hash} className="px-1.5 py-0.5 bg-gray-700 text-gray-300 text-[10px] rounded">
+                      {getDriverName(hash)}
+                    </span>
+                  ))}
+                  {todayDriverHashes.length > 4 && (
+                    <span className="text-gray-500 text-[10px]">+{todayDriverHashes.length - 4}</span>
+                  )}
+                </div>
+              )}
+            </div>
+
+            {activeJobs.length > 0 && (
+              <div className="mt-2 flex flex-wrap gap-1">
+                {activeJobs.map(job => (
+                  <span key={job.id} className="flex items-center gap-1 px-1.5 py-0.5 bg-gray-800 rounded text-[10px]">
+                    <span className="text-gray-400">{getDriverName(job.driverHash)}</span>
+                    <StageBadge job={job} />
+                  </span>
+                ))}
+              </div>
+            )}
+          </button>
+        );
+      })}
+    </div>
+  );
+}
+
+// ─── Project Detail Panel ─────────────────────────────────────────────────
+
+function ProjectDetailPanel({ project, projectDispatches, projectInvoices, drivers, cancelDispatch, onStatusChange, onAddDriver }: {
+  project: Project;
+  projectDispatches: DispatchJob[];
+  projectInvoices: ProjectInvoice[];
+  drivers: { key: string; displayName: string; legalName?: string }[];
+  cancelDispatch: (id: string) => void;
+  onStatusChange: (id: string, status: 'active' | 'paused' | 'completed') => void;
+  onAddDriver: (hash: string) => void;
+}) {
+  const [detailTab, setDetailTab] = useState<'activity' | 'history' | 'schedule'>('activity');
+  const [addDriverHash, setAddDriverHash] = useState('');
+
+  const today = new Date().toISOString().slice(0, 10);
+  const todayDriverHashes = project.driverSchedule?.[today] || [];
+  const daysActive = Math.max(1, Math.ceil((Date.now() - new Date(project.startDate).getTime()) / 86400000));
+
+  function getDriverName(hash: string) {
+    const d = drivers.find(dr => dr.key === hash);
+    return d?.legalName?.split(' ')[0] || d?.displayName || hash.slice(0, 6);
+  }
+
+  const totalBbls = projectInvoices.reduce((sum, inv) => sum + (inv.totalBarrels || 0), 0);
+  const totalLoads = projectInvoices.length;
+  const bblsByDriver = useMemo(() => {
+    const map = new Map<string, number>();
+    projectInvoices.forEach(inv => {
+      const name = inv.driverName || 'Unknown';
+      map.set(name, (map.get(name) || 0) + (inv.totalBarrels || 0));
+    });
+    return Array.from(map.entries()).sort((a, b) => b[1] - a[1]);
+  }, [projectInvoices]);
+
+  const activeJobs = projectDispatches.filter(j => ['pending', 'accepted', 'in_progress', 'paused'].includes(j.status));
+  const completedJobs = projectDispatches.filter(j => j.status === 'completed' || j.status === 'cancelled');
+
+  return (
+    <div className="space-y-3">
+      {/* Project header */}
+      <div className="bg-gray-900 rounded-lg p-4 border border-gray-700">
+        <div className="flex items-center justify-between mb-2">
+          <h3 className="text-white font-semibold text-base">{project.name}</h3>
+          <div className="flex items-center gap-1.5">
+            {project.status === 'active' && (
+              <>
+                <button onClick={() => onStatusChange(project.id!, 'paused')} className="px-2 py-1 bg-amber-600/20 text-amber-400 text-[10px] font-bold rounded hover:bg-amber-600/30">PAUSE</button>
+                <button onClick={() => onStatusChange(project.id!, 'completed')} className="px-2 py-1 bg-gray-700 text-gray-300 text-[10px] font-bold rounded hover:bg-gray-600">COMPLETE</button>
+              </>
+            )}
+            {project.status === 'paused' && (
+              <>
+                <button onClick={() => onStatusChange(project.id!, 'active')} className="px-2 py-1 bg-emerald-600/20 text-emerald-400 text-[10px] font-bold rounded hover:bg-emerald-600/30">RESUME</button>
+                <button onClick={() => onStatusChange(project.id!, 'completed')} className="px-2 py-1 bg-gray-700 text-gray-300 text-[10px] font-bold rounded hover:bg-gray-600">COMPLETE</button>
+              </>
+            )}
+          </div>
+        </div>
+
+        <div className="flex items-center gap-3 text-xs text-gray-400 mb-3">
+          <span>{project.operatorName}</span>
+          <span>·</span>
+          <span>{project.wellNames.join(', ')}</span>
+        </div>
+
+        {project.notes && (
+          <div className="text-xs text-gray-500 mb-3 italic">{project.notes}</div>
+        )}
+
+        <div className="grid grid-cols-4 gap-2">
+          <div className="bg-gray-800 rounded px-3 py-2 text-center">
+            <div className="text-emerald-400 font-bold text-lg">{totalBbls.toLocaleString()}</div>
+            <div className="text-gray-500 text-[10px]">BBLs</div>
+          </div>
+          <div className="bg-gray-800 rounded px-3 py-2 text-center">
+            <div className="text-blue-400 font-bold text-lg">{totalLoads}</div>
+            <div className="text-gray-500 text-[10px]">Loads</div>
+          </div>
+          <div className="bg-gray-800 rounded px-3 py-2 text-center">
+            <div className="text-white font-bold text-lg">{daysActive}</div>
+            <div className="text-gray-500 text-[10px]">Days</div>
+          </div>
+          <div className="bg-gray-800 rounded px-3 py-2 text-center">
+            <div className="text-amber-400 font-bold text-lg">{todayDriverHashes.length}</div>
+            <div className="text-gray-500 text-[10px]">Drivers Today</div>
+          </div>
+        </div>
+      </div>
+
+      {/* Detail tabs */}
+      <div className="flex items-center gap-1 border-b border-gray-700 pb-1">
+        {(['activity', 'history', 'schedule'] as const).map(tab => (
+          <button
+            key={tab}
+            onClick={() => setDetailTab(tab)}
+            className={`px-3 py-1.5 text-xs font-medium rounded-t transition-colors ${
+              detailTab === tab ? 'bg-gray-700 text-white' : 'text-gray-500 hover:text-gray-300'
+            }`}
+          >
+            {tab === 'activity' ? `Activity (${activeJobs.length})` :
+             tab === 'history' ? `Pull History (${projectInvoices.length})` :
+             'Schedule'}
+          </button>
+        ))}
+      </div>
+
+      {/* Activity tab */}
+      {detailTab === 'activity' && (
+        <div className="space-y-2">
+          {activeJobs.length === 0 && (
+            <div className="text-gray-500 text-sm text-center py-4">No active jobs right now</div>
+          )}
+          {activeJobs.map(job => (
+            <div key={job.id} className="bg-gray-900 border border-gray-700 rounded-lg px-4 py-3">
+              <div className="flex items-center gap-2">
+                <JobTypeBadge type={job.jobType} serviceType={job.serviceType} />
+                <span className="text-white font-medium text-sm truncate">{job.ndicWellName || job.wellName}</span>
+                {(() => {
+                  const remaining = (job.loadCount || 1) - (job.loadsCompleted || 0);
+                  return remaining > 1 ? (
+                    <span className="px-1.5 py-0.5 bg-yellow-600/30 text-yellow-300 text-[10px] rounded font-bold flex-shrink-0">x{remaining}</span>
+                  ) : null;
+                })()}
+                <span className="flex-1" />
+                <StageBadge job={job} />
+              </div>
+              <div className="flex items-center gap-2 mt-1.5 text-xs text-gray-400">
+                <span>{getDriverName(job.driverHash)}</span>
+                {job.driverDest && (
+                  <>
+                    <span>→</span>
+                    <span className="text-gray-300">{job.driverDest}</span>
+                  </>
+                )}
+                {job.invoiceNumber && <span className="text-gray-600">#{job.invoiceNumber}</span>}
+                {job.hauledTo && <span className="text-cyan-400/60">→ {job.hauledTo}</span>}
+                <span className="flex-1" />
+                <button onClick={() => job.id && cancelDispatch(job.id)} className="text-red-400/50 hover:text-red-400 text-[10px]">Cancel</button>
+              </div>
+            </div>
+          ))}
+
+          {completedJobs.length > 0 && (
+            <>
+              <div className="flex items-center gap-2 mt-3">
+                <div className="h-px bg-gray-700 flex-1" />
+                <span className="text-gray-500 text-[10px] font-bold uppercase tracking-wider">Completed ({completedJobs.length})</span>
+                <div className="h-px bg-gray-700 flex-1" />
+              </div>
+              {completedJobs.map(job => (
+                <div key={job.id} className="bg-gray-900/50 border border-gray-800 rounded-lg px-4 py-2 opacity-60">
+                  <div className="flex items-center gap-2 text-xs">
+                    <span className="text-gray-400">{getDriverName(job.driverHash)}</span>
+                    <span className="text-gray-600">·</span>
+                    <span className="text-gray-500">{job.ndicWellName || job.wellName}</span>
+                    <span className="flex-1" />
+                    <span className="text-emerald-400/50 text-[10px]">Done</span>
+                  </div>
+                </div>
+              ))}
+            </>
+          )}
+
+          {/* Add driver */}
+          <div className="flex items-center gap-2 mt-3 pt-3 border-t border-gray-700">
+            <select
+              value={addDriverHash}
+              onChange={(e) => setAddDriverHash(e.target.value)}
+              className="flex-1 px-2 py-1.5 bg-gray-900 border border-gray-700 rounded text-white text-xs focus:outline-none focus:border-emerald-500"
+            >
+              <option value="">Add driver to today...</option>
+              {drivers
+                .filter(d => !todayDriverHashes.includes(d.key))
+                .map(d => (
+                  <option key={d.key} value={d.key}>{d.legalName || d.displayName}</option>
+                ))}
+            </select>
+            <button
+              onClick={() => { if (addDriverHash) { onAddDriver(addDriverHash); setAddDriverHash(''); } }}
+              disabled={!addDriverHash}
+              className="px-3 py-1.5 bg-emerald-600 hover:bg-emerald-500 disabled:bg-gray-700 disabled:text-gray-500 text-white text-xs font-medium rounded transition-colors"
+            >
+              Add
+            </button>
+          </div>
+        </div>
+      )}
+
+      {/* Pull History tab */}
+      {detailTab === 'history' && (
+        <div className="space-y-1">
+          {bblsByDriver.length > 0 && (
+            <div className="bg-gray-900 rounded-lg p-3 border border-gray-700 mb-3">
+              <div className="text-gray-400 text-[10px] font-bold uppercase tracking-wider mb-2">BBLs by Driver</div>
+              <div className="space-y-1">
+                {bblsByDriver.map(([name, bbls]) => (
+                  <div key={name} className="flex items-center justify-between text-xs">
+                    <span className="text-gray-300">{name}</span>
+                    <span className="text-emerald-400 font-medium">{bbls.toLocaleString()} BBL</span>
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
+
+          {projectInvoices.length === 0 && (
+            <div className="text-gray-500 text-sm text-center py-4">No tickets yet</div>
+          )}
+          {projectInvoices.map(inv => {
+            const date = inv.createdAt?.toDate?.() || new Date();
+            return (
+              <div key={inv.id} className="bg-gray-900 border border-gray-700 rounded px-4 py-2">
+                <div className="flex items-center gap-2 text-xs">
+                  <span className="text-white font-medium">{inv.invoiceNumber || '—'}</span>
+                  <span className="text-gray-500">·</span>
+                  <span className="text-gray-400">{inv.driverName}</span>
+                  <span className="text-gray-500">·</span>
+                  <span className="text-gray-400">{inv.wellName}</span>
+                  <span className="flex-1" />
+                  <span className="text-emerald-400 font-medium">{inv.totalBarrels?.toLocaleString() || '—'} BBL</span>
+                </div>
+                <div className="flex items-center gap-2 text-[10px] text-gray-500 mt-0.5">
+                  <span>{date.toLocaleDateString()} {date.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}</span>
+                  {inv.ticketCount ? <span>· {inv.ticketCount} ticket{inv.ticketCount !== 1 ? 's' : ''}</span> : null}
+                  {inv.status && <span>· {inv.status}</span>}
+                </div>
+              </div>
+            );
+          })}
+        </div>
+      )}
+
+      {/* Schedule tab */}
+      {detailTab === 'schedule' && (
+        <div className="space-y-2">
+          {Object.entries(project.driverSchedule || {})
+            .sort(([a], [b]) => b.localeCompare(a))
+            .map(([date, hashes]) => (
+              <div key={date} className="bg-gray-900 border border-gray-700 rounded-lg px-4 py-3">
+                <div className="flex items-center justify-between mb-1.5">
+                  <span className={`text-sm font-medium ${date === today ? 'text-emerald-400' : 'text-gray-300'}`}>
+                    {date === today ? 'Today' : new Date(date + 'T12:00:00').toLocaleDateString(undefined, { weekday: 'short', month: 'short', day: 'numeric' })}
+                  </span>
+                  <span className="text-gray-500 text-xs">{hashes.length} driver{hashes.length !== 1 ? 's' : ''}</span>
+                </div>
+                <div className="flex flex-wrap gap-1">
+                  {hashes.map(hash => (
+                    <span key={hash} className="px-2 py-0.5 bg-gray-800 text-gray-300 text-xs rounded">
+                      {getDriverName(hash)}
+                    </span>
+                  ))}
+                </div>
+              </div>
+            ))}
+          {Object.keys(project.driverSchedule || {}).length === 0 && (
+            <div className="text-gray-500 text-sm text-center py-4">No schedule entries yet</div>
+          )}
+        </div>
+      )}
     </div>
   );
 }

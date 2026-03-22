@@ -163,6 +163,11 @@ service cloud.firestore {
       allow read, write: if true;
     }
 
+    // Projects — long-running multi-day job containers
+    match /projects/{projectId} {
+      allow read, write: if true;
+    }
+
     // Everything else — deny (Cloud Functions use Admin SDK which bypasses rules)
     match /{document=**} {
       allow read, write: if false;

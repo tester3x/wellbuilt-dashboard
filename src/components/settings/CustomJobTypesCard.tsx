@@ -145,7 +145,7 @@ export function CustomJobTypesCard({ company, onSave }: Props) {
       : selectedPackages.map(id => getPackageName(id)).join(', ');
 
   return (
-    <div className="bg-gray-800 rounded-lg border border-gray-700 overflow-hidden">
+    <div className={`bg-gray-800 rounded-lg border border-gray-700 overflow-visible relative ${showPackageDropdown ? 'z-20' : ''}`}>
       <div className="px-4 py-3 border-b border-gray-700 flex items-center justify-between">
         <div>
           <h3 className="text-white font-semibold text-sm">Custom Job Types</h3>

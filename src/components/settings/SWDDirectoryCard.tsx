@@ -12,6 +12,7 @@ import { useState, useEffect } from 'react';
 import { collection, getDocs, doc, setDoc, deleteDoc, addDoc } from 'firebase/firestore';
 import { getFirestoreDb } from '@/lib/firebase';
 import { type CompanyConfig } from '@/lib/companySettings';
+import { loadOperators, searchOperators, loadDisposals, searchDisposals, type NdicOperator, type NdicWell } from '@/lib/firestoreWells';
 
 export interface SWDEntry {
   id: string;
@@ -38,6 +39,12 @@ export function SWDDirectoryCard({ company, onSave }: Props) {
   const [saving, setSaving] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
 
+  // Autocomplete state
+  const [allOperators, setAllOperators] = useState<NdicOperator[]>([]);
+  const [operatorSuggestions, setOperatorSuggestions] = useState<NdicOperator[]>([]);
+  const [allDisposals, setAllDisposals] = useState<NdicWell[]>([]);
+  const [disposalSuggestions, setDisposalSuggestions] = useState<NdicWell[]>([]);
+
   // Add/Edit form state
   const [showForm, setShowForm] = useState(false);
   const [editingId, setEditingId] = useState<string | null>(null);
@@ -54,6 +61,12 @@ export function SWDDirectoryCard({ company, onSave }: Props) {
   useEffect(() => {
     loadEntries();
   }, [company.id]);
+
+  // Load operators + disposals for autocomplete
+  useEffect(() => {
+    loadOperators().then(setAllOperators).catch(console.error);
+    loadDisposals().then(setAllDisposals).catch(console.error);
+  }, []);
 
   const loadEntries = async () => {
     setLoading(true);
@@ -88,6 +101,8 @@ export function SWDDirectoryCard({ company, onSave }: Props) {
     setFormLatitude('');
     setFormLongitude('');
     setFormCounty('');
+    setOperatorSuggestions([]);
+    setDisposalSuggestions([]);
   };
 
   const startEdit = (entry: SWDEntry) => {
@@ -232,17 +247,43 @@ export function SWDDirectoryCard({ company, onSave }: Props) {
                   </button>
                 </div>
 
-                {/* NDIC Name (alias mode only) */}
+                {/* NDIC Name (alias mode only) — autocomplete from disposals */}
                 {formMode === 'alias' && (
                   <div className="mb-2">
                     <label className="text-gray-400 text-xs block mb-1">NDIC Well Name (original)</label>
-                    <input
-                      type="text"
-                      value={formNdicName}
-                      onChange={e => setFormNdicName(e.target.value)}
-                      placeholder="e.g., NYGAARD SWD 1"
-                      className="w-full px-3 py-2 bg-gray-700 text-white rounded text-sm placeholder-gray-500"
-                    />
+                    <div className="relative">
+                      <input
+                        type="text"
+                        value={formNdicName}
+                        onChange={e => {
+                          setFormNdicName(e.target.value);
+                          setDisposalSuggestions(searchDisposals(e.target.value, allDisposals));
+                        }}
+                        placeholder="e.g., NYGAARD SWD 1"
+                        className="w-full px-3 py-2 bg-gray-700 text-white rounded text-sm placeholder-gray-500"
+                      />
+                      {disposalSuggestions.length > 0 && (
+                        <div className="absolute z-10 w-full bg-gray-800 border border-gray-600 rounded mt-0.5 max-h-40 overflow-y-auto">
+                          {disposalSuggestions.map(d => (
+                            <button
+                              key={d.api_no || d.well_name}
+                              onClick={() => {
+                                setFormNdicName(d.well_name);
+                                setFormOperator(d.operator || '');
+                                setFormApiNo(d.api_no || '');
+                                setFormLatitude(d.latitude?.toString() || '');
+                                setFormLongitude(d.longitude?.toString() || '');
+                                setFormCounty(d.county || '');
+                                setDisposalSuggestions([]);
+                              }}
+                              className="w-full text-left px-3 py-1.5 hover:bg-gray-700 text-white text-xs border-b border-gray-700 last:border-0"
+                            >
+                              {d.well_name} <span className="text-gray-500">{d.operator}</span>
+                            </button>
+                          ))}
+                        </div>
+                      )}
+                    </div>
                   </div>
                 )}
 
@@ -260,16 +301,34 @@ export function SWDDirectoryCard({ company, onSave }: Props) {
                   />
                 </div>
 
-                {/* Operator */}
+                {/* Operator — autocomplete from operators */}
                 <div className="mb-2">
                   <label className="text-gray-400 text-xs block mb-1">Operator / Owner</label>
-                  <input
-                    type="text"
-                    value={formOperator}
-                    onChange={e => setFormOperator(e.target.value)}
-                    placeholder="e.g., Aqua Terra Water Management"
-                    className="w-full px-3 py-2 bg-gray-700 text-white rounded text-sm placeholder-gray-500"
-                  />
+                  <div className="relative">
+                    <input
+                      type="text"
+                      value={formOperator}
+                      onChange={e => {
+                        setFormOperator(e.target.value);
+                        setOperatorSuggestions(searchOperators(e.target.value, allOperators));
+                      }}
+                      placeholder="e.g., Aqua Terra Water Management"
+                      className="w-full px-3 py-2 bg-gray-700 text-white rounded text-sm placeholder-gray-500"
+                    />
+                    {operatorSuggestions.length > 0 && (
+                      <div className="absolute z-10 w-full bg-gray-800 border border-gray-600 rounded mt-0.5 max-h-32 overflow-y-auto">
+                        {operatorSuggestions.map(op => (
+                          <button
+                            key={op.name}
+                            onClick={() => { setFormOperator(op.name); setOperatorSuggestions([]); }}
+                            className="w-full text-left px-3 py-1.5 hover:bg-gray-700 text-white text-xs border-b border-gray-700 last:border-0"
+                          >
+                            {op.name}
+                          </button>
+                        ))}
+                      </div>
+                    )}
+                  </div>
                 </div>
 
                 {/* API # */}
