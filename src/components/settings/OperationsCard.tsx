@@ -150,6 +150,75 @@ export function OperationsCard({ company, onSave }: Props) {
           </div>
         </div>
 
+        {/* Invoicing Mode — three-state: invoice_tickets (default), ticket_only, hybrid */}
+        <div>
+          <div className="flex items-center justify-between mb-1">
+            <div>
+              <div className="text-white text-sm">Invoicing Mode</div>
+              <div className="text-gray-500 text-xs">
+                {(company.invoicingMode || 'invoice_tickets') === 'invoice_tickets'
+                  ? 'Invoice wraps tickets. Full billing documents with grouped loads.'
+                  : company.invoicingMode === 'ticket_only'
+                  ? 'No invoice wrapper. Each ticket is a standalone billing document.'
+                  : 'Single ticket = standalone. Multi-ticket jobs auto-create invoice wrapper.'}
+              </div>
+            </div>
+          </div>
+          <div className={`flex rounded-md overflow-hidden border border-gray-600 ${saving === 'invoicingMode' ? 'opacity-50' : ''}`}>
+            <button
+              onClick={async () => {
+                setSaving('invoicingMode');
+                try {
+                  await updateCompanyFields(company.id, { invoicingMode: 'invoice_tickets' });
+                  onSave();
+                } catch (err) { console.error(err); } finally { setSaving(null); }
+              }}
+              disabled={saving === 'invoicingMode'}
+              className={`flex-1 px-3 py-1 text-xs font-medium transition-colors ${
+                (company.invoicingMode || 'invoice_tickets') === 'invoice_tickets'
+                  ? 'bg-orange-500 text-black'
+                  : 'bg-gray-700 text-gray-400 hover:bg-gray-600'
+              }`}
+            >
+              Invoice + Tickets
+            </button>
+            <button
+              onClick={async () => {
+                setSaving('invoicingMode');
+                try {
+                  await updateCompanyFields(company.id, { invoicingMode: 'ticket_only' });
+                  onSave();
+                } catch (err) { console.error(err); } finally { setSaving(null); }
+              }}
+              disabled={saving === 'invoicingMode'}
+              className={`flex-1 px-3 py-1 text-xs font-medium transition-colors ${
+                company.invoicingMode === 'ticket_only'
+                  ? 'bg-orange-500 text-black'
+                  : 'bg-gray-700 text-gray-400 hover:bg-gray-600'
+              }`}
+            >
+              Ticket Only
+            </button>
+            <button
+              onClick={async () => {
+                setSaving('invoicingMode');
+                try {
+                  await updateCompanyFields(company.id, { invoicingMode: 'hybrid' });
+                  onSave();
+                } catch (err) { console.error(err); } finally { setSaving(null); }
+              }}
+              disabled={saving === 'invoicingMode'}
+              className={`flex-1 px-3 py-1 text-xs font-medium transition-colors ${
+                company.invoicingMode === 'hybrid'
+                  ? 'bg-orange-500 text-black'
+                  : 'bg-gray-700 text-gray-400 hover:bg-gray-600'
+              }`}
+            >
+              Hybrid
+            </button>
+          </div>
+        </div>
+
         {/* Cancelled Number Handling segmented picker */}
         <div className="flex items-center justify-between">
           <div>

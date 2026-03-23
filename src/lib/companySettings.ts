@@ -399,6 +399,11 @@ export interface CompanyConfig {
   activePackages?: string[];
   // Custom job types added by the company (R&D pipeline — popular ones get promoted to official)
   customJobTypes?: CustomJobType[];
+  // Invoicing mode — how invoices and tickets relate
+  // invoice_tickets (default): Invoice wraps 1+ tickets. Full billing docs.
+  // ticket_only: No invoice wrapper. Ticket = billing doc. Driver skips invoice screen.
+  // hybrid: Single ticket acts standalone. Second load auto-creates invoice wrapper.
+  invoicingMode?: 'invoice_tickets' | 'ticket_only' | 'hybrid';
 }
 
 export interface CustomJobType {
