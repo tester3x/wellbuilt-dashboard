@@ -6,9 +6,12 @@ import { useAuth } from '@/contexts/AuthContext';
 import { WellResponse, subscribeToWellStatusesUnified } from '@/lib/wells';
 import Link from 'next/link';
 import { AppHeader } from '@/components/AppHeader';
-import { AddPullModal } from '@/components/AddPullModal';
+import { AddPullModal, type ApprovedDriver } from '@/components/AddPullModal';
 import { fetchTickets, type Ticket } from '@/lib/tickets';
 import { assignRouteColors, getRouteColor } from '@/lib/routeColor';
+import { ref, get } from 'firebase/database';
+import { getFirebaseDatabase } from '@/lib/firebase';
+import { loadDisposals, type NdicWell } from '@/lib/firestoreWells';
 
 type ViewMode = 'cards' | 'table';
 type SortField = 'wellName' | 'tanks' | 'nextPull' | 'level' | 'flowRate' | 'timeTillPull' | 'status';
@@ -53,6 +56,8 @@ export default function MobilePage() {
 
   // Add Pull modal
   const [showAddPull, setShowAddPull] = useState(false);
+  const [addPullDrivers, setAddPullDrivers] = useState<ApprovedDriver[]>([]);
+  const [addPullDisposals, setAddPullDisposals] = useState<NdicWell[]>([]);
 
   // Redirect to login if not authenticated
   useEffect(() => {
@@ -295,7 +300,37 @@ export default function MobilePage() {
               )}
             </div>
             <button
-              onClick={() => setShowAddPull(true)}
+              onClick={async () => {
+                setShowAddPull(true);
+                // Lazy-load drivers + disposals for Create Ticket feature
+                if (addPullDrivers.length === 0) {
+                  try {
+                    const db = getFirebaseDatabase();
+                    const snap = await get(ref(db, 'drivers/approved'));
+                    if (snap.exists()) {
+                      const approved: ApprovedDriver[] = [];
+                      Object.entries(snap.val()).forEach(([hash, val]: [string, any]) => {
+                        if (val.displayName && val.active !== false) {
+                          approved.push({ key: hash, displayName: val.displayName, legalName: val.legalName || '', companyId: val.companyId, companyName: val.companyName });
+                        } else {
+                          const devKeys = Object.keys(val);
+                          if (devKeys.length > 0) {
+                            const first = val[devKeys[0]];
+                            if (first?.displayName && first.active !== false) {
+                              approved.push({ key: hash, displayName: first.displayName, legalName: first.legalName || '', companyId: first.companyId, companyName: first.companyName });
+                            }
+                          }
+                        }
+                      });
+                      approved.sort((a, b) => a.displayName.localeCompare(b.displayName));
+                      setAddPullDrivers(approved);
+                    }
+                  } catch {}
+                }
+                if (addPullDisposals.length === 0) {
+                  loadDisposals().then(setAddPullDisposals).catch(() => {});
+                }
+              }}
               className="px-3 py-1.5 text-sm font-medium rounded transition-colors flex items-center gap-1.5 bg-gray-800 text-green-400 hover:bg-gray-700 border border-gray-700"
             >
               <span className="text-sm">+</span> Add Pull
@@ -477,6 +512,8 @@ export default function MobilePage() {
       {showAddPull && (
         <AddPullModal
           wells={wells}
+          drivers={addPullDrivers}
+          allDisposals={addPullDisposals}
           onClose={() => setShowAddPull(false)}
         />
       )}

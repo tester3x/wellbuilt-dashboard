@@ -13,11 +13,13 @@ import {
   editPull,
   subscribeToWellNavList,
 } from '@/lib/wells';
-import { getDatabase, ref, onValue } from 'firebase/database';
+import { getDatabase, ref, onValue, get } from 'firebase/database';
 import { getFirebaseApp } from '@/lib/firebase';
 import Link from 'next/link';
 import { AppHeader } from '@/components/AppHeader';
-import { AddPullModal } from '@/components/AddPullModal';
+import { AddPullModal, type ApprovedDriver } from '@/components/AddPullModal';
+import { getFirebaseDatabase } from '@/lib/firebase';
+import { loadDisposals, type NdicWell } from '@/lib/firestoreWells';
 
 // Format inches to feet'inches" display
 function formatLevelFtIn(inches: number | undefined): string {
@@ -96,6 +98,8 @@ function WellDetailPage() {
 
   // Add Pull modal
   const [showAddPull, setShowAddPull] = useState(false);
+  const [addPullDrivers, setAddPullDrivers] = useState<ApprovedDriver[]>([]);
+  const [addPullDisposals, setAddPullDisposals] = useState<NdicWell[]>([]);
 
   // Service work toggle
   const [showServiceWork, setShowServiceWork] = useState(false);
@@ -403,7 +407,36 @@ function WellDetailPage() {
               Refresh
             </button>
             <button
-              onClick={() => setShowAddPull(true)}
+              onClick={async () => {
+                setShowAddPull(true);
+                if (addPullDrivers.length === 0) {
+                  try {
+                    const db = getFirebaseDatabase();
+                    const snap = await get(ref(db, 'drivers/approved'));
+                    if (snap.exists()) {
+                      const approved: ApprovedDriver[] = [];
+                      Object.entries(snap.val()).forEach(([hash, val]: [string, any]) => {
+                        if (val.displayName && val.active !== false) {
+                          approved.push({ key: hash, displayName: val.displayName, legalName: val.legalName || '', companyId: val.companyId, companyName: val.companyName });
+                        } else {
+                          const devKeys = Object.keys(val);
+                          if (devKeys.length > 0) {
+                            const first = val[devKeys[0]];
+                            if (first?.displayName && first.active !== false) {
+                              approved.push({ key: hash, displayName: first.displayName, legalName: first.legalName || '', companyId: first.companyId, companyName: first.companyName });
+                            }
+                          }
+                        }
+                      });
+                      approved.sort((a, b) => a.displayName.localeCompare(b.displayName));
+                      setAddPullDrivers(approved);
+                    }
+                  } catch {}
+                }
+                if (addPullDisposals.length === 0) {
+                  loadDisposals().then(setAddPullDisposals).catch(() => {});
+                }
+              }}
               className="px-3 py-2 text-sm font-medium rounded transition-colors flex items-center gap-1.5 bg-gray-800 text-green-400 hover:bg-gray-700 border border-gray-700 shrink-0 ml-4"
             >
               <span className="text-sm">+</span> Add Pull
@@ -853,17 +886,16 @@ function WellDetailPage() {
       {showAddPull && (
         <AddPullModal
           preselectedWell={wellName}
+          drivers={addPullDrivers}
+          allDisposals={addPullDisposals}
           onClose={() => setShowAddPull(false)}
           onSuccess={(submittedWell) => {
-            // If they submitted for the current well, refresh in place
             if (submittedWell === wellName) {
               setTimeout(async () => {
                 const history = await fetchWellHistoryUnified(wellName);
                 setPulls(history);
               }, 2000);
             }
-            // If they switched to a different well, navigate there
-            // (navigateOnSuccess handles this)
           }}
         />
       )}

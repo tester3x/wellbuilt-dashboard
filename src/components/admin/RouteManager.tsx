@@ -166,6 +166,7 @@ function RouteViewerModal({
   highlightColor = '#22d3ee',
   onClose,
   onApprove,
+  onReject,
   saving,
   initialLabel,
   labelLocked,
@@ -177,6 +178,7 @@ function RouteViewerModal({
   highlightColor?: string;
   onClose: () => void;
   onApprove?: (trimStart: number, trimEnd: number, label: string) => void;
+  onReject?: () => void;
   saving?: boolean;
   initialLabel?: string;
   labelLocked?: boolean;
@@ -319,6 +321,15 @@ function RouteViewerModal({
               </button>
             </>
           )}
+          {onReject && (
+            <button
+              onClick={onReject}
+              disabled={saving}
+              className="px-4 py-2 bg-red-900 hover:bg-red-800 text-red-300 text-sm rounded-lg font-medium"
+            >
+              Reject
+            </button>
+          )}
           <button
             onClick={onClose}
             className="px-4 py-2 bg-gray-700 hover:bg-gray-600 text-white text-sm rounded-lg"
@@ -450,16 +461,19 @@ export default function RouteManager({ wellName, groupMembers }: RouteManagerPro
       const actualStart = trimmedWps[0] || trip.waypoints[0];
       const actualEnd = trimmedWps[trimmedWps.length - 1] || trip.waypoints[trip.waypoints.length - 1];
 
-      // Auto-name: compass bearing + reverse geocode landmark
+      // Auto-name: prefer WB T trip label, fall back to compass + geocode
       const { degrees: bearing, compass } = computeRouteBearing(
         actualEnd.lat, actualEnd.lng, actualStart.lat, actualStart.lng,
       );
-      const landmark = await reverseGeocodeStartPoint(actualStart.lat, actualStart.lng);
-      const distMiles = trip.totalDistanceMeters / 1609.34;
-      const existingAutoLabels = approvedRoutes
-        .map(r => r.autoLabel)
-        .filter((l): l is string => !!l);
-      const autoLabel = buildAutoLabel(compass, landmark, distMiles, existingAutoLabels);
+      let autoLabel = trip.label || '';
+      if (!autoLabel) {
+        const landmark = await reverseGeocodeStartPoint(actualStart.lat, actualStart.lng);
+        const distMiles = trip.totalDistanceMeters / 1609.34;
+        const existingAutoLabels = approvedRoutes
+          .map(r => r.autoLabel)
+          .filter((l): l is string => !!l);
+        autoLabel = buildAutoLabel(compass, landmark, distMiles, existingAutoLabels);
+      }
 
       const newRoute: ApprovedRoute = {
         routeId: generateRouteId(),
@@ -794,6 +808,10 @@ export default function RouteManager({ wellName, groupMembers }: RouteManagerPro
           onClose={() => setModalTrip(null)}
           onApprove={approvedTripIds.has(modalTrip.id) ? undefined : (ts, te, label) => {
             handleApproveRoute(modalTrip, ts, te, label);
+          }}
+          onReject={approvedTripIds.has(modalTrip.id) ? undefined : () => {
+            handleDeleteTrip(modalTrip.id, modalTrip.sourceSlug);
+            setModalTrip(null);
           }}
           saving={saving}
           initialLabel={modalTripAutoLabel}

@@ -1,6 +1,6 @@
 'use client';
 
-import { useEffect, useState, useMemo, useRef } from 'react';
+import { useEffect, useState, useMemo } from 'react';
 import { useRouter } from 'next/navigation';
 import { useAuth } from '@/contexts/AuthContext';
 import { WellResponse, subscribeToWellStatusesUnified } from '@/lib/wells';
@@ -8,7 +8,8 @@ import { AppHeader } from '@/components/AppHeader';
 import { ref, get, set } from 'firebase/database';
 import { getFirebaseDatabase } from '@/lib/firebase';
 import { getFirestoreDb } from '@/lib/firebase';
-import { collection, addDoc, getDocs, query, where, orderBy, Timestamp, doc, updateDoc, onSnapshot, deleteDoc } from 'firebase/firestore';
+import { AddPullModal } from '@/components/AddPullModal';
+import { collection, addDoc, getDocs, getDoc, setDoc, query, where, orderBy, Timestamp, doc, updateDoc, onSnapshot, deleteDoc } from 'firebase/firestore';
 import { loadDisposals, searchDisposals, type NdicWell, loadOperators, searchOperators, type NdicOperator } from '@/lib/firestoreWells';
 import { loadCompanyById } from '@/lib/companySettings';
 import { trackJobTypeUsage } from '@/lib/jobTypeUsage';
@@ -84,6 +85,13 @@ interface DispatchJob {
 
 // ─── Project Types ────────────────────────────────────────────────────────
 
+interface ProjectUpdate {
+  text: string;
+  author: string;
+  shift: 'day' | 'night';
+  timestamp: string;           // ISO
+}
+
 interface Project {
   id?: string;
   name: string;
@@ -96,8 +104,11 @@ interface Project {
   projectedEndDate?: string;   // ISO date
   actualEndDate?: string;
   status: 'active' | 'paused' | 'completed';
-  notes?: string;
-  driverSchedule: { [isoDate: string]: string[] }; // date -> driverHashes
+  notes?: string;              // Job description (editable)
+  updates?: ProjectUpdate[];   // Shift handoff log
+  dayDriverHashes?: string[];  // Day shift drivers
+  nightDriverHashes?: string[];// Night shift drivers
+  driverSchedule: { [isoDate: string]: string[] }; // date -> driverHashes (legacy)
 }
 
 interface ProjectInvoice {
@@ -334,22 +345,21 @@ export default function DispatchPage() {
   const [swDriverHashes, setSwDriverHashes] = useState<Set<string>>(new Set());
   const [swSubmitting, setSwSubmitting] = useState(false);
 
-  // Add Pull modal state
+  // Add Pull modal state (shared component handles its own form state)
   const [showAddPullModal, setShowAddPullModal] = useState(false);
-  const [pullWell, setPullWell] = useState('');
-  const [pullLevel, setPullLevel] = useState('');
-  const [pullWellSearch, setPullWellSearch] = useState('');
-  const [showWellDropdown, setShowWellDropdown] = useState(false);
-  const [pullBbls, setPullBbls] = useState('140');
-  const [pullDateTime, setPullDateTime] = useState('');
-  const [addingPull, setAddingPull] = useState(false);
-  const [pullWellDown, setPullWellDown] = useState(false);
 
-  // Edit Service Work modal state
+  // Edit dispatch modal state (shared for PW + SW)
   const [editSwJob, setEditSwJob] = useState<DispatchJob | null>(null);
   const [editSwNotes, setEditSwNotes] = useState('');
+  const [editSwWellName, setEditSwWellName] = useState('');
   const [editSwAddDriverHashes, setEditSwAddDriverHashes] = useState<Set<string>>(new Set());
   const [editSwSaving, setEditSwSaving] = useState(false);
+  // PW-specific fields on edit modal
+  const [editPwDisposal, setEditPwDisposal] = useState('');
+  const [editPwDisposalResults, setEditPwDisposalResults] = useState<NdicWell[]>([]);
+  const [editPwShowDisposalDropdown, setEditPwShowDisposalDropdown] = useState(false);
+  const [editPwSplitLoads, setEditPwSplitLoads] = useState(1);
+  const [editPwSplitDriver, setEditPwSplitDriver] = useState('');
 
   // Reassign declined job state
   const [reassignJob, setReassignJob] = useState<DispatchJob | null>(null);
@@ -414,8 +424,12 @@ export default function DispatchPage() {
     if (!user) return;
     const loadPackageJobTypes = async () => {
       try {
-        const companyId = user.companyId;
-        let activeFilter: string[] | null = null; // null = load all (WB admin)
+        // Use user's company, or for WB admin derive from first driver's company
+        let companyId: string | undefined = user.companyId;
+        if (!companyId && drivers.length > 0) {
+          companyId = drivers.find(d => d.companyId)?.companyId;
+        }
+        let activeFilter: string[] | null = null;
         let companyConfig: any = null;
 
         if (companyId) {
@@ -480,7 +494,7 @@ export default function DispatchPage() {
       }
     };
     loadPackageJobTypes();
-  }, [user]);
+  }, [user, drivers.length]);
 
   // Subscribe to active dispatches in real-time
   useEffect(() => {
@@ -504,14 +518,19 @@ export default function DispatchPage() {
     return () => unsub();
   }, []);
 
-  // Subscribe to projects in real-time
+  // Subscribe to projects in real-time (scoped to company for hauler admins)
   useEffect(() => {
+    if (!user) return;
     const firestore = getFirestoreDb();
-    const q = query(
-      collection(firestore, 'projects'),
+    const constraints: any[] = [
       where('status', 'in', ['active', 'paused']),
-      orderBy('createdAt', 'desc')
-    );
+      orderBy('createdAt', 'desc'),
+    ];
+    // Hauler admin: only their company's projects. WB admin: all.
+    if (user.companyId) {
+      constraints.unshift(where('companyId', '==', user.companyId));
+    }
+    const q = query(collection(firestore, 'projects'), ...constraints);
     const unsub = onSnapshot(q, (snap) => {
       const items: Project[] = [];
       snap.forEach((d) => {
@@ -522,7 +541,7 @@ export default function DispatchPage() {
       console.error('Projects listener error:', err);
     });
     return () => unsub();
-  }, []);
+  }, [user]);
 
   // Load project dispatches + invoices when a project is selected
   useEffect(() => {
@@ -657,129 +676,6 @@ export default function DispatchPage() {
     } catch (err) {
       console.error('Failed to load dispatches:', err);
       // Collection might not exist yet — that's fine
-    }
-  }
-
-  // Set default datetime for Add Pull form
-  useEffect(() => {
-    const now = new Date();
-    const local = new Date(now.getTime() - now.getTimezoneOffset() * 60000);
-    setPullDateTime(local.toISOString().slice(0, 16));
-  }, []);
-
-  // ── Level parsing (same logic as WB T TicketForm) ──
-  function parseLevelInput(input: string): number | null {
-    const trimmed = input.trim();
-    if (!trimmed) return null;
-    const apostropheMatch = trimmed.match(/^(\d+)'(\d+(?:\.\d+)?)"?$/);
-    if (apostropheMatch) return parseInt(apostropheMatch[1], 10) + parseFloat(apostropheMatch[2]) / 12;
-    const spaceMatch = trimmed.match(/^(\d+)\s+(\d+(?:\.\d+)?)$/);
-    if (spaceMatch) return parseInt(spaceMatch[1], 10) + parseFloat(spaceMatch[2]) / 12;
-    if (trimmed.includes('.') && !trimmed.includes(' ')) {
-      const val = parseFloat(trimmed);
-      return isNaN(val) ? null : val;
-    }
-    const val = parseInt(trimmed, 10);
-    return isNaN(val) ? null : val;
-  }
-
-  function formatLevelDisplay(feet: number): string {
-    const totalInches = Math.floor(feet * 12 + 0.0001);
-    const ft = Math.floor(totalInches / 12);
-    const inches = totalInches % 12;
-    return `${ft}'${inches}"`;
-  }
-
-  const levelTimerRef = useRef<NodeJS.Timeout | null>(null);
-
-  function handleLevelChange(value: string) {
-    setPullLevel(value);
-    if (levelTimerRef.current) clearTimeout(levelTimerRef.current);
-    const trimmed = value.trim();
-
-    // Space-separated: "13 7"
-    const spaceMatch = trimmed.match(/^(\d+)\s+(\d+(?:\.\d+)?)$/);
-    if (spaceMatch) {
-      const inchStr = spaceMatch[2];
-      const inchVal = parseFloat(inchStr);
-      if (inchStr.length >= 2 || inchVal >= 2) {
-        const parsed = parseLevelInput(trimmed);
-        if (parsed !== null) setPullLevel(formatLevelDisplay(parsed));
-        return;
-      }
-      levelTimerRef.current = setTimeout(() => {
-        const parsed = parseLevelInput(trimmed);
-        if (parsed !== null) setPullLevel(formatLevelDisplay(parsed));
-      }, 600);
-      return;
-    }
-
-    // Decimal: "12.4"
-    const decimalMatch = trimmed.match(/^(\d+)\.(\d+)$/);
-    if (decimalMatch) {
-      levelTimerRef.current = setTimeout(() => {
-        const parsed = parseLevelInput(trimmed);
-        if (parsed !== null) setPullLevel(formatLevelDisplay(parsed));
-      }, 600);
-      return;
-    }
-
-    // Plain integer: "10"
-    const intMatch = trimmed.match(/^(\d+)$/);
-    if (intMatch) {
-      levelTimerRef.current = setTimeout(() => {
-        const parsed = parseLevelInput(trimmed);
-        if (parsed !== null) setPullLevel(formatLevelDisplay(parsed));
-      }, 600);
-    }
-  }
-
-  // ─── Add Pull Handler ──────────────────────────────────────────────────────
-
-  async function handleAddPull() {
-    if (!pullWell) {
-      setMessage('Select a well');
-      setTimeout(() => setMessage(''), 3000);
-      return;
-    }
-    if (!pullLevel.trim()) {
-      setMessage('Enter tank level');
-      setTimeout(() => setMessage(''), 3000);
-      return;
-    }
-    if (addingPull) return;
-    setAddingPull(true);
-
-    try {
-      const db = getFirebaseDatabase();
-      const parsed = parseLevelInput(pullLevel);
-      const levelFeet = parsed ?? 0;
-      const dt = new Date(pullDateTime);
-      const packetId = `${dt.toISOString().replace(/[-:T.]/g, '').slice(0, 14)}_${pullWell.replace(/\s/g, '')}_dashboard`;
-
-      const packet = {
-        packetId,
-        wellName: pullWell,
-        tankLevelFeet: levelFeet,
-        bblsTaken: parseInt(pullBbls) || 0,
-        dateTime: dt.toLocaleString(),
-        dateTimeUTC: dt.toISOString(),
-        driverName: user?.displayName || user?.email || 'Dashboard',
-        driverId: user?.uid || 'dashboard',
-        requestType: 'pull',
-        timezone: Intl.DateTimeFormat().resolvedOptions().timeZone,
-        wellDown: pullWellDown,
-      };
-
-      await set(ref(db, `packets/incoming/${packetId}`), packet);
-      setShowAddPullModal(false);
-      router.push(`/well?name=${encodeURIComponent(pullWell)}`);
-    } catch (error) {
-      console.error('Error adding pull:', error);
-      setMessage('Failed to add pull. Check connection and try again.');
-      setTimeout(() => setMessage(''), 5000);
-    } finally {
-      setAddingPull(false);
     }
   }
 
@@ -1363,7 +1259,14 @@ export default function DispatchPage() {
   function openEditSwModal(job: DispatchJob) {
     setEditSwJob(job);
     setEditSwNotes(job.notes || '');
+    setEditSwWellName(job.ndicWellName || job.wellName || '');
     setEditSwAddDriverHashes(new Set());
+    // PW-specific
+    setEditPwDisposal(job.disposal || job.hauledTo || '');
+    setEditPwDisposalResults([]);
+    setEditPwShowDisposalDropdown(false);
+    setEditPwSplitLoads(1);
+    setEditPwSplitDriver('');
   }
 
   // Get all dispatches in the same service group
@@ -1387,7 +1290,24 @@ export default function DispatchPage() {
     try {
       const firestore = getFirestoreDb();
 
-      // 1. Update notes on all group jobs
+      // 1a. Update well name if changed (PW jobs — GPS resolved when driver accepts)
+      const origWell = editSwJob.ndicWellName || editSwJob.wellName || '';
+      if (editSwWellName.trim() && editSwWellName.trim() !== origWell && editSwJob.id) {
+        await updateDoc(doc(firestore, 'dispatches', editSwJob.id), {
+          wellName: editSwWellName.trim(),
+          ndicWellName: editSwWellName.trim(),
+        });
+      }
+
+      // 1b. Update disposal if changed (PW jobs)
+      if (editSwJob.jobType !== 'service' && editSwJob.id) {
+        const origDisposal = editSwJob.disposal || editSwJob.hauledTo || '';
+        if (editPwDisposal.trim() !== origDisposal) {
+          await updateDoc(doc(firestore, 'dispatches', editSwJob.id), { disposal: editPwDisposal.trim() });
+        }
+      }
+
+      // 1c. Update notes on all group jobs (SW) or single job (PW)
       if (editSwNotes !== (editSwJob.notes || '')) {
         const updatePromises = editSwGroupJobs.map(j => {
           if (!j.id) return Promise.resolve();
@@ -1447,7 +1367,7 @@ export default function DispatchPage() {
         await Promise.all(updateCrewPromises);
       }
 
-      setMessage('Service work updated');
+      setMessage('Dispatch updated');
       setEditSwJob(null);
       setTimeout(() => setMessage(''), 3000);
     } catch (err: any) {
@@ -1470,6 +1390,64 @@ export default function DispatchPage() {
     } catch (err: any) {
       setMessage(`Error: ${err.message}`);
       setTimeout(() => setMessage(''), 5000);
+    }
+  }
+
+  // ─── PW Split Loads Handler ────────────────────────────────────────────────
+
+  async function splitPwLoads() {
+    if (!editSwJob?.id || !editPwSplitDriver || editPwSplitLoads < 1) return;
+    setEditSwSaving(true);
+    try {
+      const driver = drivers.find(d => d.key === editPwSplitDriver);
+      if (!driver) throw new Error('Driver not found');
+
+      const firestore = getFirestoreDb();
+      const driverFirstName = driver.legalName ? driver.legalName.split(' ')[0] : driver.displayName;
+      const remaining = (editSwJob.loadCount || 1) - (editSwJob.loadsCompleted || 0);
+      const loadsToGive = Math.min(editPwSplitLoads, remaining - 1);
+      const loadsKept = remaining - loadsToGive;
+
+      const newJob: Record<string, any> = {
+        driverHash: editPwSplitDriver,
+        driverName: driver.displayName,
+        driverFirstName,
+        wellName: editSwJob.wellName,
+        ndicWellName: editSwJob.ndicWellName || editSwJob.wellName,
+        route: editSwJob.route || '',
+        jobType: 'pw',
+        packageId: editSwJob.packageId || 'water-hauling',
+        status: 'pending',
+        notes: editSwJob.notes || '',
+        priority: editSwJob.priority,
+        assignedAt: Timestamp.now(),
+        assignedBy: user?.email || 'dashboard',
+        estimatedPullTime: editSwJob.estimatedPullTime || '',
+        currentLevel: editSwJob.currentLevel || '',
+        flowRate: editSwJob.flowRate || '',
+      };
+      if (editSwJob.disposal) newJob.disposal = editSwJob.disposal;
+      if (editSwJob.disposalLat) newJob.disposalLat = editSwJob.disposalLat;
+      if (editSwJob.disposalLng) newJob.disposalLng = editSwJob.disposalLng;
+      if (editSwJob.disposalApiNo) newJob.disposalApiNo = editSwJob.disposalApiNo;
+      if (editSwJob.disposalCounty) newJob.disposalCounty = editSwJob.disposalCounty;
+      if (editSwJob.disposalLegalDesc) newJob.disposalLegalDesc = editSwJob.disposalLegalDesc;
+      if (loadsToGive > 1) newJob.loadCount = loadsToGive;
+
+      await addDoc(collection(firestore, 'dispatches'), newJob);
+
+      await updateDoc(doc(firestore, 'dispatches', editSwJob.id), {
+        loadCount: (editSwJob.loadsCompleted || 0) + loadsKept,
+      });
+
+      setMessage(`Gave ${loadsToGive} load${loadsToGive > 1 ? 's' : ''} to ${driverFirstName}`);
+      setEditSwJob(null);
+      setTimeout(() => setMessage(''), 4000);
+    } catch (err: any) {
+      setMessage(`Error: ${err.message}`);
+      setTimeout(() => setMessage(''), 5000);
+    } finally {
+      setEditSwSaving(false);
     }
   }
 
@@ -1547,17 +1525,7 @@ export default function DispatchPage() {
               <span className="text-sm">+</span> Service Work
             </button>
             <button
-              onClick={() => {
-                const now = new Date();
-                const local = new Date(now.getTime() - now.getTimezoneOffset() * 60000);
-                setPullDateTime(local.toISOString().slice(0, 16));
-                setPullWell('');
-                setPullWellSearch('');
-                setPullLevel('');
-                setPullBbls('140');
-                setPullWellDown(false);
-                setShowAddPullModal(true);
-              }}
+              onClick={() => setShowAddPullModal(true)}
               className="px-3 py-1.5 text-xs font-medium rounded-lg transition-colors flex items-center gap-1.5 bg-gray-800 text-green-400 hover:bg-gray-700 border border-gray-700"
             >
               <span className="text-sm">+</span> Add Pull
@@ -1567,6 +1535,7 @@ export default function DispatchPage() {
           {/* Expandable toolbar forms */}
           {toolbarMode === 'sw' && (
             <div className="bg-gray-800 border border-purple-600/40 rounded-lg p-4 mb-3">
+              <div className="text-purple-400 text-xs font-medium uppercase tracking-wider mb-3">Dispatch Service Work</div>
               <div className="flex items-start gap-4">
                 {/* Well search */}
                 <div className="w-64 relative flex-shrink-0">
@@ -1630,15 +1599,14 @@ export default function DispatchPage() {
                 {/* Notes + dispatch button */}
                 <div className="flex-1 min-w-0">
                   <label className="block text-xs text-gray-400 mb-1">Notes</label>
-                  <div className="flex gap-2">
-                    <input type="text" value={swNotes} onChange={(e) => setSwNotes(e.target.value)} placeholder="Instructions..."
-                      className="flex-1 px-3 py-1.5 bg-gray-900 border border-gray-700 rounded text-white text-sm placeholder-gray-500 focus:outline-none focus:border-purple-500" />
-                    <button onClick={submitServiceWork}
-                      disabled={!swWellName.trim() || !swServiceType || swDriverHashes.size === 0 || swSubmitting}
-                      className="px-4 py-1.5 bg-purple-600 hover:bg-purple-500 disabled:bg-gray-600 disabled:cursor-not-allowed text-white text-xs font-medium rounded transition-colors whitespace-nowrap">
-                      {swSubmitting ? 'Sending...' : 'Dispatch'}
-                    </button>
-                  </div>
+                  <textarea value={swNotes} onChange={(e) => setSwNotes(e.target.value)} placeholder="Special instructions, equipment needed, etc."
+                    rows={3}
+                    className="w-full px-3 py-1.5 bg-gray-900 border border-gray-700 rounded text-white text-sm placeholder-gray-500 focus:outline-none focus:border-purple-500 resize-none mb-2" />
+                  <button onClick={submitServiceWork}
+                    disabled={!swWellName.trim() || !swServiceType || swDriverHashes.size === 0 || swSubmitting}
+                    className="w-full px-4 py-1.5 bg-purple-600 hover:bg-purple-500 disabled:bg-gray-600 disabled:cursor-not-allowed text-white text-xs font-medium rounded transition-colors">
+                    {swSubmitting ? 'Sending...' : 'Dispatch'}
+                  </button>
                 </div>
               </div>
             </div>
@@ -1903,6 +1871,14 @@ export default function DispatchPage() {
                     cancelDispatch={cancelDispatch}
                     onStatusChange={updateProjectStatus}
                     onAddDriver={(hash) => addDriverToProjectToday(selectedProject.id!, hash)}
+                    onUpdateProject={async (id, data) => {
+                      try {
+                        const firestore = getFirestoreDb();
+                        await updateDoc(doc(firestore, 'projects', id), data as any);
+                      } catch (err) {
+                        console.error('Failed to update project:', err);
+                      }
+                    }}
                   />
                 )}
               </div>
@@ -2034,8 +2010,8 @@ export default function DispatchPage() {
               value={newProjectNotes}
               onChange={(e) => setNewProjectNotes(e.target.value)}
               placeholder="Special instructions, equipment needed, etc."
-              rows={2}
-              className="w-full px-3 py-2 bg-gray-900 border border-gray-700 rounded text-white text-sm placeholder-gray-500 focus:outline-none focus:border-emerald-500 mb-4 resize-none"
+              rows={4}
+              className="w-full px-3 py-2 bg-gray-900 border border-gray-700 rounded text-white text-sm placeholder-gray-500 focus:outline-none focus:border-emerald-500 mb-4 resize-y"
             />
 
             {/* Buttons */}
@@ -2219,201 +2195,17 @@ export default function DispatchPage() {
       {/* ═══════════════════════════════════════════════════════════════════════════
           REASSIGN DECLINED JOB MODAL
           ═══════════════════════════════════════════════════════════════════════════ */}
-      {/* ═══════════════════════════════════════════════════════════════════════════
-          ADD PULL MODAL — with well info box + reverse flow rate calculator
-          ═══════════════════════════════════════════════════════════════════════════ */}
+      {/* ADD PULL MODAL — shared component */}
       {showAddPullModal && (
-        <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50">
-          <div className="bg-gray-800 rounded-lg p-6 max-w-md w-full mx-4 border border-gray-700">
-            <h3 className="text-lg font-semibold text-white mb-4">Record Load</h3>
+        <AddPullModal
+          wells={wells}
+          drivers={drivers}
+          allDisposals={allDisposals}
+          onClose={() => setShowAddPullModal(false)}
+          onMessage={(msg) => { setMessage(msg); setTimeout(() => setMessage(''), 5000); }}
+          navigateOnSuccess={false}
+        />
 
-            {/* Well search */}
-            <div className="mb-4 relative">
-              <label className="block text-sm text-gray-400 mb-1">Well</label>
-              <input
-                type="text"
-                value={pullWellSearch}
-                onChange={(e) => {
-                  setPullWellSearch(e.target.value);
-                  setPullWell('');
-                  setShowWellDropdown(true);
-                }}
-                onFocus={() => setShowWellDropdown(true)}
-                placeholder="Search wells..."
-                className="w-full px-3 py-2 bg-gray-900 border border-gray-700 rounded-lg text-white text-sm placeholder-gray-500 focus:outline-none focus:border-green-500"
-              />
-              {showWellDropdown && pullWellSearch && (
-                <div className="absolute z-50 top-full left-0 w-full mt-1 bg-gray-900 border border-gray-600 rounded-lg shadow-lg max-h-48 overflow-y-auto">
-                  {[...new Set(wells.map(w => w.wellName))].sort()
-                    .filter(w => w.toLowerCase().includes(pullWellSearch.toLowerCase()))
-                    .slice(0, 10)
-                    .map(w => (
-                      <button key={w} onClick={() => { setPullWell(w); setPullWellSearch(w); setShowWellDropdown(false); }}
-                        className="w-full text-left px-3 py-2 text-sm text-white hover:bg-gray-700 transition-colors">
-                        {w}
-                      </button>
-                    ))
-                  }
-                </div>
-              )}
-            </div>
-
-            {/* Well info box — shows when well is selected */}
-            {(() => {
-              const selectedWell = pullWell ? wells.find(w => w.wellName === pullWell) : null;
-              if (!selectedWell) return null;
-
-              // Parse flow rate from response packet (H:M:S format)
-              let flowRateMinutes = 0;
-              if (selectedWell.flowRate && selectedWell.flowRate !== '--') {
-                const parts = selectedWell.flowRate.split(':');
-                if (parts.length === 3) {
-                  flowRateMinutes = (parseInt(parts[0]) || 0) * 60 + (parseInt(parts[1]) || 0) + (parseInt(parts[2]) || 0) / 60;
-                } else if (parts.length === 2) {
-                  flowRateMinutes = (parseInt(parts[0]) || 0) * 60 + (parseInt(parts[1]) || 0);
-                }
-              }
-
-              // Use bottom level after last pull as base (NOT currentLevel which is already estimated)
-              // This avoids double-counting growth that's already baked into currentLevel
-              let bottomAfterPullInches = 0;
-              if (selectedWell.lastPullBottomLevel) {
-                const blMatch = selectedWell.lastPullBottomLevel.match(/(\d+)'(\d+)"/);
-                if (blMatch) bottomAfterPullInches = parseInt(blMatch[1]) * 12 + parseInt(blMatch[2]);
-              }
-
-              // Base timestamp = time of last pull (when bottom level was measured)
-              let baseTimestamp = 0;
-              if (selectedWell.lastPullDateTimeUTC) {
-                baseTimestamp = new Date(selectedWell.lastPullDateTimeUTC).getTime();
-              } else if (selectedWell.timestampUTC) {
-                baseTimestamp = new Date(selectedWell.timestampUTC).getTime();
-              } else if (selectedWell.timestamp) {
-                baseTimestamp = new Date(selectedWell.timestamp).getTime();
-              }
-
-              // Calculate estimated level at selected date/time
-              // flowRateMinutes is per FOOT — divide by 12 to get minutes per inch
-              let estLevelDisplay = selectedWell.currentLevel || '--';
-              let estBbls = selectedWell.bbls || 0;
-              if (baseTimestamp > 0 && flowRateMinutes > 0 && bottomAfterPullInches > 0 && pullDateTime) {
-                const selectedTime = new Date(pullDateTime).getTime();
-                const minutesElapsed = (selectedTime - baseTimestamp) / (1000 * 60);
-                const minutesPerInch = flowRateMinutes / 12;
-                let estInches = bottomAfterPullInches + (minutesElapsed / minutesPerInch);
-                estInches = Math.max(0, estInches);
-                const estFeet = Math.floor(estInches / 12);
-                const estRemInches = Math.round(estInches % 12);
-                estLevelDisplay = `${estFeet}'${estRemInches}"`;
-                // Rough BBL estimate (20 BBL per foot is common, but depends on tank)
-                const currentLevelInches = selectedWell.currentLevelInches || estInches;
-                const bblPerFoot = selectedWell.bbls && currentLevelInches > 0
-                  ? (selectedWell.bbls / (currentLevelInches / 12))
-                  : 20;
-                estBbls = Math.max(0, Math.round((estInches / 12) * bblPerFoot));
-              }
-
-              // Last pull info
-              const lastPullStr = selectedWell.lastPullDateTime
-                ? `${selectedWell.lastPullDateTime}${selectedWell.lastPullBbls ? ` • ${selectedWell.lastPullBbls} bbl` : ''}`
-                : null;
-
-              return (
-                <div className="bg-gray-900 border border-gray-700 rounded-lg p-3 mb-4 text-sm space-y-1">
-                  <div>
-                    <span className="text-gray-500">Estimated tank level:  </span>
-                    <span className="text-white font-semibold">{estLevelDisplay}</span>
-                    {estBbls > 0 && <span className="text-gray-400"> - {estBbls} BBL</span>}
-                  </div>
-                  <div>
-                    <span className="text-gray-500">Estimated flow rate:  </span>
-                    <span className="text-white font-semibold">{selectedWell.flowRate || '--'}</span>
-                  </div>
-                  {lastPullStr && (
-                    <div>
-                      <span className="text-gray-500">Last pull:  </span>
-                      <span className="text-white font-semibold">{lastPullStr}</span>
-                    </div>
-                  )}
-                </div>
-              );
-            })()}
-
-            {/* Well DOWN checkbox */}
-            <div className="flex justify-end mb-3">
-              <label className="flex items-center gap-2 cursor-pointer text-sm">
-                <span className={pullWellDown ? 'text-red-400 font-medium' : 'text-gray-500'}>Well DOWN</span>
-                <input
-                  type="checkbox"
-                  checked={pullWellDown}
-                  onChange={(e) => setPullWellDown(e.target.checked)}
-                  className="rounded border-gray-500 text-red-500 focus:ring-red-500 bg-gray-800"
-                />
-              </label>
-            </div>
-
-            {/* Date/Time row */}
-            <div className="grid grid-cols-2 gap-3 mb-4">
-              <div>
-                <label className="block text-sm text-gray-400 mb-1">Date/Time</label>
-                <input
-                  type="datetime-local"
-                  value={pullDateTime}
-                  onChange={(e) => setPullDateTime(e.target.value)}
-                  className="w-full px-3 py-2 bg-gray-900 border border-gray-700 rounded-lg text-white text-sm focus:outline-none focus:border-green-500"
-                />
-              </div>
-              <div />
-            </div>
-
-            {/* Tank Level */}
-            <div className="mb-4">
-              <label className="block text-sm text-gray-400 mb-1">Tank Level</label>
-              <input
-                type="text"
-                value={pullLevel}
-                onChange={(e) => handleLevelChange(e.target.value)}
-                onBlur={() => {
-                  const raw = pullLevel.trim();
-                  if (!raw || raw.includes("'") || raw.includes('"')) return;
-                  const parsed = parseLevelInput(raw);
-                  if (parsed !== null) setPullLevel(formatLevelDisplay(parsed));
-                }}
-                placeholder="e.g. 10 8 or 10' 8&quot;"
-                className="w-full px-3 py-2 bg-gray-900 border border-gray-700 rounded-lg text-white text-sm placeholder-gray-500 focus:outline-none focus:border-green-500"
-              />
-              <p className="text-green-500 text-xs mt-1">e.g. 10 6 or 10 5.5</p>
-            </div>
-
-            {/* Barrels Taken */}
-            <div className="mb-6">
-              <label className="block text-sm text-gray-400 mb-1">Barrels Taken</label>
-              <input
-                type="number"
-                value={pullBbls}
-                onChange={(e) => setPullBbls(e.target.value)}
-                className="w-full px-3 py-2 bg-gray-900 border border-gray-700 rounded-lg text-white text-sm focus:outline-none focus:border-green-500"
-              />
-            </div>
-
-            {/* Buttons */}
-            <div className="flex gap-3">
-              <button
-                onClick={() => setShowAddPullModal(false)}
-                className="flex-1 px-4 py-3 bg-gray-700 hover:bg-gray-600 text-white rounded-lg transition-colors"
-              >
-                Cancel
-              </button>
-              <button
-                onClick={handleAddPull}
-                disabled={addingPull || !pullWell}
-                className="flex-1 px-4 py-3 bg-blue-600 hover:bg-blue-500 disabled:bg-gray-600 disabled:cursor-not-allowed text-white font-medium rounded-lg transition-colors"
-              >
-                {addingPull ? 'Adding...' : 'Submit Pull'}
-              </button>
-            </div>
-          </div>
-        </div>
       )}
 
       {reassignJob && (
@@ -2533,13 +2325,15 @@ export default function DispatchPage() {
       )}
 
       {/* ═══════════════════════════════════════════════════════════════════════════
-          EDIT SERVICE WORK MODAL
+          EDIT DISPATCH MODAL — unified for PW + SW, conditional rendering by jobType
           ═══════════════════════════════════════════════════════════════════════════ */}
       {editSwJob && (
         <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50">
           <div className="bg-gray-800 rounded-lg p-6 max-w-lg w-full mx-4 border border-gray-700 max-h-[90vh] overflow-y-auto">
             <div className="flex items-center justify-between mb-4">
-              <h3 className="text-lg font-semibold text-white">Edit Service Work</h3>
+              <h3 className="text-lg font-semibold text-white">
+                Edit {editSwJob.jobType === 'service' ? 'Service Work' : 'Dispatch'}
+              </h3>
               <button
                 onClick={() => setEditSwJob(null)}
                 className="text-gray-400 hover:text-white"
@@ -2549,119 +2343,300 @@ export default function DispatchPage() {
             {/* Job Info Header */}
             <div className="bg-gray-900 rounded-lg p-3 mb-4">
               <div className="flex items-center gap-2 mb-1">
-                <span className="px-1.5 py-0.5 bg-purple-600/30 text-purple-300 text-[10px] font-bold rounded uppercase">
-                  SW{editSwJob.serviceType ? ` · ${editSwJob.serviceType}` : ''}
-                </span>
+                <JobTypeBadge type={editSwJob.jobType} serviceType={editSwJob.serviceType} />
                 <span className="text-white font-medium text-sm">{editSwJob.ndicWellName || editSwJob.wellName}</span>
+                {/* Multi-load badge */}
+                {(() => {
+                  const remaining = (editSwJob.loadCount || 1) - (editSwJob.loadsCompleted || 0);
+                  return remaining > 1 ? (
+                    <span className="px-1.5 py-0.5 bg-yellow-600/30 text-yellow-300 text-[10px] rounded font-bold">
+                      {editSwJob.loadsCompleted || 0}/{editSwJob.loadCount} loads done · {remaining} remaining
+                    </span>
+                  ) : null;
+                })()}
               </div>
               <div className="text-gray-500 text-xs">
                 Assigned {formatDispatchTime(editSwJob.assignedAt)} by {editSwJob.assignedBy}
               </div>
             </div>
 
-            {/* Current Crew List */}
-            <div className="mb-4">
-              <label className="block text-sm text-gray-400 mb-2">Current Crew ({editSwGroupJobs.length})</label>
-              <div className="space-y-1">
-                {editSwGroupJobs.map(j => (
-                  <div key={j.id} className="flex items-center justify-between px-3 py-2 bg-gray-900 rounded">
-                    <div className="flex items-center gap-2">
-                      <div className="w-6 h-6 rounded-full bg-purple-600/40 flex items-center justify-center text-[10px] font-bold text-purple-300 flex-shrink-0">
-                        {(j.driverFirstName || j.driverName || '?').charAt(0).toUpperCase()}
+            {/* ── PW Layout ─────────────────────────────────────────────── */}
+            {editSwJob.jobType !== 'service' && (
+              <>
+                {/* Pickup Well — editable with autocomplete */}
+                <div className="mb-4">
+                  <label className="block text-sm text-gray-400 mb-1">Pickup Well</label>
+                  <div className="relative">
+                    <input
+                      type="text"
+                      value={editSwWellName}
+                      onChange={(e) => setEditSwWellName(e.target.value)}
+                      className="w-full px-3 py-2 bg-gray-900 border border-gray-700 rounded text-white text-sm focus:outline-none focus:border-blue-500"
+                    />
+                    {editSwWellName.trim().length >= 2 && editSwWellName.trim() !== (editSwJob.ndicWellName || editSwJob.wellName) && wells.filter(w => (w.ndicName || w.wellName).toLowerCase().includes(editSwWellName.trim().toLowerCase())).length > 0 && (
+                      <div className="absolute z-50 w-full mt-1 bg-gray-800 border border-gray-600 rounded max-h-40 overflow-y-auto shadow-lg">
+                        {wells
+                          .filter(w => (w.ndicName || w.wellName).toLowerCase().includes(editSwWellName.trim().toLowerCase()))
+                          .slice(0, 10)
+                          .map(w => (
+                            <button key={w.wellName} type="button" onClick={() => setEditSwWellName(w.ndicName || w.wellName)}
+                              className="w-full text-left px-3 py-1.5 hover:bg-gray-700 border-b border-gray-700/50 last:border-0 text-white text-sm">
+                              {w.ndicName || w.wellName}
+                              {w.route && <span className="text-gray-500 text-xs ml-2">{w.route}</span>}
+                            </button>
+                          ))
+                        }
                       </div>
-                      <span className="text-white text-sm">{j.driverFirstName || j.driverName}</span>
-                      <StageBadge job={j} />
-                      {j.assignedAt && (
-                        <span className="text-gray-600 text-xs">{timeAgo(j.assignedAt)}</span>
-                      )}
-                    </div>
-                    {editSwGroupJobs.length > 1 && (
-                      <button
-                        onClick={() => j.id && cancelSwDriverAssignment(j.id)}
-                        className="text-red-400/60 hover:text-red-300 text-xs px-2 py-0.5 rounded hover:bg-red-900/20 transition-colors"
-                      >
-                        Remove
-                      </button>
                     )}
                   </div>
-                ))}
-              </div>
-            </div>
-
-            {/* Add Drivers */}
-            <div className="mb-4">
-              <label className="block text-sm text-gray-400 mb-2">Add Drivers</label>
-              <div className="bg-gray-900 border border-gray-700 rounded-lg max-h-36 overflow-y-auto">
-                {drivers
-                  .filter(d => !editSwAssignedDriverHashes.has(d.key))
-                  .map(d => {
-                    const checked = editSwAddDriverHashes.has(d.key);
-                    return (
-                      <button
-                        key={d.key}
-                        type="button"
-                        onClick={() => {
-                          setEditSwAddDriverHashes(prev => {
-                            const next = new Set(prev);
-                            if (next.has(d.key)) next.delete(d.key);
-                            else next.add(d.key);
-                            return next;
-                          });
-                        }}
-                        className={`w-full flex items-center gap-2 px-3 py-1.5 text-sm text-left border-b border-gray-800 last:border-0 transition-colors ${
-                          checked ? 'bg-purple-900/30 text-white' : 'text-gray-300 hover:bg-gray-800'
-                        }`}
-                      >
-                        <input
-                          type="checkbox"
-                          checked={checked}
-                          readOnly
-                          className="w-4 h-4 rounded border-gray-600 bg-gray-800 text-purple-600 focus:ring-purple-500 focus:ring-offset-0 pointer-events-none"
-                        />
-                        <span>{d.legalName || d.displayName}</span>
-                      </button>
-                    );
-                  })
-                }
-                {drivers.filter(d => !editSwAssignedDriverHashes.has(d.key)).length === 0 && (
-                  <div className="px-3 py-2 text-gray-500 text-sm">All drivers already assigned</div>
-                )}
-              </div>
-              {editSwAddDriverHashes.size > 0 && (
-                <div className="text-purple-400 text-xs mt-1">
-                  +{editSwAddDriverHashes.size} driver{editSwAddDriverHashes.size !== 1 ? 's' : ''} will be added
                 </div>
-              )}
-            </div>
 
-            {/* Edit Notes */}
-            <div className="mb-5">
-              <label className="block text-sm text-gray-400 mb-1">Notes / Instructions</label>
-              <textarea
-                value={editSwNotes}
-                onChange={(e) => setEditSwNotes(e.target.value)}
-                placeholder="Special instructions..."
-                rows={2}
-                className="w-full px-3 py-2 bg-gray-900 border border-gray-700 rounded-lg text-white text-sm placeholder-gray-500 focus:outline-none focus:border-purple-500 resize-none"
-              />
-            </div>
+                {/* Drop-off / SWD — searchable */}
+                <div className="mb-4 relative">
+                  <label className="block text-sm text-gray-400 mb-1">Drop-off / SWD</label>
+                  <input
+                    type="text"
+                    value={editPwDisposal}
+                    onChange={(e) => {
+                      const val = e.target.value;
+                      setEditPwDisposal(val);
+                      setEditPwDisposalResults(val.length >= 2 ? searchDisposals(val, allDisposals) : []);
+                      setEditPwShowDisposalDropdown(val.length >= 2);
+                    }}
+                    onFocus={() => { if (editPwDisposal.length >= 2) setEditPwShowDisposalDropdown(true); }}
+                    onBlur={() => setTimeout(() => setEditPwShowDisposalDropdown(false), 200)}
+                    placeholder="Search SWDs..."
+                    className="w-full px-3 py-2 bg-gray-900 border border-gray-700 rounded text-white text-sm placeholder-gray-500 focus:outline-none focus:border-blue-500"
+                  />
+                  {editPwShowDisposalDropdown && editPwDisposalResults.length > 0 && (
+                    <div className="absolute z-50 top-full left-0 w-full mt-1 bg-gray-900 border border-gray-600 rounded-lg shadow-lg max-h-40 overflow-y-auto">
+                      {editPwDisposalResults.map((d, i) => (
+                        <button
+                          key={`${d.well_name}-${i}`}
+                          onMouseDown={(e) => e.preventDefault()}
+                          onClick={() => { setEditPwDisposal(d.well_name); setEditPwShowDisposalDropdown(false); }}
+                          className="w-full text-left px-3 py-2 text-sm text-white hover:bg-gray-700 transition-colors"
+                        >
+                          <span>{d.well_name}</span>
+                          {d.operator && <span className="text-gray-500 ml-2 text-xs">{d.operator}</span>}
+                        </button>
+                      ))}
+                    </div>
+                  )}
+                </div>
 
-            {/* Action Buttons */}
-            <div className="flex gap-3">
-              <button
-                onClick={() => setEditSwJob(null)}
-                className="flex-1 px-4 py-2 bg-gray-700 hover:bg-gray-600 text-white rounded-lg transition-colors"
-              >
-                Cancel
-              </button>
-              <button
-                onClick={saveEditServiceWork}
-                disabled={editSwSaving}
-                className="flex-1 px-4 py-2 bg-purple-600 hover:bg-purple-500 disabled:bg-gray-600 disabled:cursor-not-allowed text-white font-medium rounded-lg transition-colors"
-              >
-                {editSwSaving ? 'Saving...' : 'Save Changes'}
-              </button>
-            </div>
+                {/* Notes */}
+                <div className="mb-4">
+                  <label className="block text-sm text-gray-400 mb-1">Notes</label>
+                  <textarea
+                    value={editSwNotes}
+                    onChange={(e) => setEditSwNotes(e.target.value)}
+                    placeholder="Special instructions..."
+                    rows={2}
+                    className="w-full px-3 py-2 bg-gray-900 border border-gray-700 rounded-lg text-white text-sm placeholder-gray-500 focus:outline-none focus:border-blue-500 resize-none"
+                  />
+                </div>
+
+                {/* Driver row — show current + Reassign button */}
+                <div className="mb-4 px-3 py-2.5 bg-gray-900 rounded-lg flex items-center gap-2">
+                  <div className="w-7 h-7 rounded-full bg-blue-600/40 flex items-center justify-center text-xs font-bold text-blue-300 flex-shrink-0">
+                    {(editSwJob.driverFirstName || editSwJob.driverName || '?').charAt(0).toUpperCase()}
+                  </div>
+                  <div className="flex-1 min-w-0">
+                    <span className="text-white text-sm font-medium">{editSwJob.driverFirstName || editSwJob.driverName}</span>
+                    <div className="flex items-center gap-2">
+                      <StageBadge job={editSwJob} />
+                      {editSwJob.assignedAt && <span className="text-gray-600 text-xs">{timeAgo(editSwJob.assignedAt)}</span>}
+                    </div>
+                  </div>
+                  <button
+                    onClick={() => { setEditSwJob(null); openReassignModal(editSwJob); }}
+                    className="px-3 py-1.5 bg-blue-600 hover:bg-blue-500 text-white text-xs font-medium rounded transition-colors flex-shrink-0"
+                  >
+                    Reassign
+                  </button>
+                </div>
+
+                {/* Multi-load: split loads to another driver */}
+                {(() => {
+                  const remaining = (editSwJob.loadCount || 1) - (editSwJob.loadsCompleted || 0);
+                  if (remaining <= 1) return null;
+                  return (
+                    <div className="mb-4 p-3 rounded-lg border border-yellow-600/30 bg-yellow-950/20">
+                      <label className="block text-sm text-yellow-400 font-medium mb-2">Give loads to another driver</label>
+                      <div className="flex items-center gap-2">
+                        <select
+                          value={editPwSplitLoads}
+                          onChange={(e) => setEditPwSplitLoads(parseInt(e.target.value))}
+                          className="px-2 py-1.5 bg-gray-800 border border-gray-700 rounded text-white text-sm focus:outline-none focus:border-yellow-500"
+                        >
+                          {Array.from({ length: remaining - 1 }, (_, i) => i + 1).map(n => (
+                            <option key={n} value={n}>{n} load{n > 1 ? 's' : ''}</option>
+                          ))}
+                        </select>
+                        <span className="text-gray-500 text-sm">→</span>
+                        <select
+                          value={editPwSplitDriver}
+                          onChange={(e) => setEditPwSplitDriver(e.target.value)}
+                          className="flex-1 px-2 py-1.5 bg-gray-800 border border-gray-700 rounded text-white text-sm focus:outline-none focus:border-yellow-500"
+                        >
+                          <option value="">Select driver...</option>
+                          {drivers
+                            .filter(d => d.key !== editSwJob.driverHash)
+                            .map(d => (
+                              <option key={d.key} value={d.key}>{d.legalName || d.displayName}</option>
+                            ))
+                          }
+                        </select>
+                        <button
+                          onClick={splitPwLoads}
+                          disabled={!editPwSplitDriver || editSwSaving}
+                          className="px-3 py-1.5 bg-yellow-600 hover:bg-yellow-500 disabled:bg-gray-600 disabled:cursor-not-allowed text-white text-xs font-medium rounded transition-colors flex-shrink-0"
+                        >
+                          Split
+                        </button>
+                      </div>
+                      <p className="text-gray-500 text-xs mt-1.5">
+                        {remaining - editPwSplitLoads} load{remaining - editPwSplitLoads !== 1 ? 's' : ''} stays with {editSwJob.driverFirstName || editSwJob.driverName}
+                      </p>
+                    </div>
+                  );
+                })()}
+
+                {/* Action Buttons */}
+                <div className="flex gap-3">
+                  <button
+                    onClick={() => { if (editSwJob.id && confirm(`Cancel this dispatch for ${editSwJob.ndicWellName || editSwJob.wellName}?`)) { cancelDispatch(editSwJob.id); setEditSwJob(null); } }}
+                    className="px-4 py-2 bg-gray-700 hover:bg-red-900/50 text-gray-300 hover:text-red-300 rounded-lg transition-colors text-sm"
+                  >
+                    Cancel Job
+                  </button>
+                  <span className="flex-1" />
+                  <button
+                    onClick={() => setEditSwJob(null)}
+                    className="px-4 py-2 bg-gray-700 hover:bg-gray-600 text-white rounded-lg transition-colors"
+                  >
+                    Close
+                  </button>
+                  <button
+                    onClick={saveEditServiceWork}
+                    disabled={editSwSaving}
+                    className="px-4 py-2 bg-blue-600 hover:bg-blue-500 disabled:bg-gray-600 disabled:cursor-not-allowed text-white font-medium rounded-lg transition-colors"
+                  >
+                    {editSwSaving ? 'Saving...' : 'Save Changes'}
+                  </button>
+                </div>
+              </>
+            )}
+
+            {/* ── SW Layout ─────────────────────────────────────────────── */}
+            {editSwJob.jobType === 'service' && (
+              <>
+                {/* Current Crew List */}
+                <div className="mb-4">
+                  <label className="block text-sm text-gray-400 mb-2">Current Crew ({editSwGroupJobs.length})</label>
+                  <div className="space-y-1">
+                    {editSwGroupJobs.map(j => (
+                      <div key={j.id} className="flex items-center justify-between px-3 py-2 bg-gray-900 rounded">
+                        <div className="flex items-center gap-2">
+                          <div className="w-6 h-6 rounded-full bg-purple-600/40 flex items-center justify-center text-[10px] font-bold text-purple-300 flex-shrink-0">
+                            {(j.driverFirstName || j.driverName || '?').charAt(0).toUpperCase()}
+                          </div>
+                          <span className="text-white text-sm">{j.driverFirstName || j.driverName}</span>
+                          <StageBadge job={j} />
+                          {j.assignedAt && (
+                            <span className="text-gray-600 text-xs">{timeAgo(j.assignedAt)}</span>
+                          )}
+                        </div>
+                        {editSwGroupJobs.length > 1 && (
+                          <button
+                            onClick={() => j.id && cancelSwDriverAssignment(j.id)}
+                            className="text-red-400/60 hover:text-red-300 text-xs px-2 py-0.5 rounded hover:bg-red-900/20 transition-colors"
+                          >
+                            Remove
+                          </button>
+                        )}
+                      </div>
+                    ))}
+                  </div>
+                </div>
+
+                {/* Add Drivers */}
+                <div className="mb-4">
+                  <label className="block text-sm text-gray-400 mb-2">Add Drivers</label>
+                  <div className="bg-gray-900 border border-gray-700 rounded-lg max-h-36 overflow-y-auto">
+                    {drivers
+                      .filter(d => !editSwAssignedDriverHashes.has(d.key))
+                      .map(d => {
+                        const checked = editSwAddDriverHashes.has(d.key);
+                        return (
+                          <button
+                            key={d.key}
+                            type="button"
+                            onClick={() => {
+                              setEditSwAddDriverHashes(prev => {
+                                const next = new Set(prev);
+                                if (next.has(d.key)) next.delete(d.key);
+                                else next.add(d.key);
+                                return next;
+                              });
+                            }}
+                            className={`w-full flex items-center gap-2 px-3 py-1.5 text-sm text-left border-b border-gray-800 last:border-0 transition-colors ${
+                              checked ? 'bg-purple-900/30 text-white' : 'text-gray-300 hover:bg-gray-800'
+                            }`}
+                          >
+                            <input
+                              type="checkbox"
+                              checked={checked}
+                              readOnly
+                              className="w-4 h-4 rounded border-gray-600 bg-gray-800 text-purple-600 focus:ring-purple-500 focus:ring-offset-0 pointer-events-none"
+                            />
+                            <span>{d.legalName || d.displayName}</span>
+                          </button>
+                        );
+                      })
+                    }
+                    {drivers.filter(d => !editSwAssignedDriverHashes.has(d.key)).length === 0 && (
+                      <div className="px-3 py-2 text-gray-500 text-sm">All drivers already assigned</div>
+                    )}
+                  </div>
+                  {editSwAddDriverHashes.size > 0 && (
+                    <div className="text-purple-400 text-xs mt-1">
+                      +{editSwAddDriverHashes.size} driver{editSwAddDriverHashes.size !== 1 ? 's' : ''} will be added
+                    </div>
+                  )}
+                </div>
+
+                {/* Edit Notes */}
+                <div className="mb-5">
+                  <label className="block text-sm text-gray-400 mb-1">Notes / Instructions</label>
+                  <textarea
+                    value={editSwNotes}
+                    onChange={(e) => setEditSwNotes(e.target.value)}
+                    placeholder="Special instructions..."
+                    rows={2}
+                    className="w-full px-3 py-2 bg-gray-900 border border-gray-700 rounded-lg text-white text-sm placeholder-gray-500 focus:outline-none focus:border-purple-500 resize-none"
+                  />
+                </div>
+
+                {/* Action Buttons */}
+                <div className="flex gap-3">
+                  <button
+                    onClick={() => setEditSwJob(null)}
+                    className="flex-1 px-4 py-2 bg-gray-700 hover:bg-gray-600 text-white rounded-lg transition-colors"
+                  >
+                    Cancel
+                  </button>
+                  <button
+                    onClick={saveEditServiceWork}
+                    disabled={editSwSaving}
+                    className="flex-1 px-4 py-2 bg-purple-600 hover:bg-purple-500 disabled:bg-gray-600 disabled:cursor-not-allowed text-white font-medium rounded-lg transition-colors"
+                  >
+                    {editSwSaving ? 'Saving...' : 'Save Changes'}
+                  </button>
+                </div>
+              </>
+            )}
           </div>
         </div>
       )}
@@ -2821,7 +2796,7 @@ function DispatchJobRow({ job, cancelDispatch, compact, onClickServiceWork, onRe
   onReassign?: (job: DispatchJob) => void;
 }) {
   const dropoff = job.hauledTo || job.disposal;
-  const isClickable = job.jobType === 'service' && !!onClickServiceWork;
+  const isClickable = !!onClickServiceWork;
   const ago = timeAgo(job.assignedAt);
 
   return (
@@ -2872,9 +2847,9 @@ function DispatchJobRow({ job, cancelDispatch, compact, onClickServiceWork, onRe
         {/* Stage badge */}
         <StageBadge job={job} />
 
-        {/* Edit icon for service work */}
+        {/* Edit icon */}
         {isClickable && (
-          <span className="text-purple-400/60 hover:text-purple-300 text-xs flex-shrink-0" title="Edit service work">
+          <span className="text-gray-500 hover:text-gray-300 text-xs flex-shrink-0" title="Edit dispatch">
             &#9998;
           </span>
         )}
@@ -3117,7 +3092,7 @@ function ActiveDispatchPanel({ dispatches, cancelDispatch, drivers, assignTransf
                     job={job}
                     cancelDispatch={cancelDispatch}
                     compact={jobs.length > 2}
-                    onClickServiceWork={job.jobType === 'service' ? onEditServiceWork : undefined}
+                    onClickServiceWork={onEditServiceWork}
                     onReassign={onReassignDeclined}
                   />
                 ))}
@@ -3369,7 +3344,7 @@ function ProjectsListPanel({ projects, dispatches, drivers, onSelect }: {
 
 // ─── Project Detail Panel ─────────────────────────────────────────────────
 
-function ProjectDetailPanel({ project, projectDispatches, projectInvoices, drivers, cancelDispatch, onStatusChange, onAddDriver }: {
+function ProjectDetailPanel({ project, projectDispatches, projectInvoices, drivers, cancelDispatch, onStatusChange, onAddDriver, onUpdateProject }: {
   project: Project;
   projectDispatches: DispatchJob[];
   projectInvoices: ProjectInvoice[];
@@ -3377,9 +3352,15 @@ function ProjectDetailPanel({ project, projectDispatches, projectInvoices, drive
   cancelDispatch: (id: string) => void;
   onStatusChange: (id: string, status: 'active' | 'paused' | 'completed') => void;
   onAddDriver: (hash: string) => void;
+  onUpdateProject?: (id: string, data: Partial<Project>) => void;
 }) {
   const [detailTab, setDetailTab] = useState<'activity' | 'history' | 'schedule'>('activity');
   const [addDriverHash, setAddDriverHash] = useState('');
+  const [addDriverShift, setAddDriverShift] = useState<'day' | 'night'>('day');
+  const [editNotes, setEditNotes] = useState(project.notes || '');
+  const [showNotesEdit, setShowNotesEdit] = useState(false);
+  const [newUpdate, setNewUpdate] = useState('');
+  const [updateShift, setUpdateShift] = useState<'day' | 'night'>('day');
 
   const today = new Date().toISOString().slice(0, 10);
   const todayDriverHashes = project.driverSchedule?.[today] || [];
@@ -3432,8 +3413,33 @@ function ProjectDetailPanel({ project, projectDispatches, projectInvoices, drive
           <span>{project.wellNames.join(', ')}</span>
         </div>
 
-        {project.notes && (
-          <div className="text-xs text-gray-500 mb-3 italic">{project.notes}</div>
+        {/* Editable job description */}
+        {showNotesEdit ? (
+          <div className="mb-3">
+            <textarea
+              value={editNotes}
+              onChange={(e) => setEditNotes(e.target.value)}
+              rows={3}
+              className="w-full px-3 py-2 bg-gray-800 border border-gray-600 rounded text-white text-xs resize-y focus:outline-none focus:border-emerald-500 mb-1"
+              placeholder="Job description, scope, equipment needed..."
+            />
+            <div className="flex gap-1 justify-end">
+              <button onClick={() => { setShowNotesEdit(false); setEditNotes(project.notes || ''); }}
+                className="px-2 py-1 text-gray-400 text-[10px] hover:text-white">Cancel</button>
+              <button onClick={() => {
+                onUpdateProject?.(project.id!, { notes: editNotes });
+                setShowNotesEdit(false);
+              }} className="px-2 py-1 bg-emerald-600 text-white text-[10px] rounded hover:bg-emerald-500">Save</button>
+            </div>
+          </div>
+        ) : (
+          <div
+            className="text-xs text-gray-500 mb-3 italic cursor-pointer hover:text-gray-300 transition-colors"
+            onClick={() => setShowNotesEdit(true)}
+            title="Click to edit job description"
+          >
+            {project.notes || 'No description — click to add'}
+          </div>
         )}
 
         <div className="grid grid-cols-4 gap-2">
@@ -3530,27 +3536,138 @@ function ProjectDetailPanel({ project, projectDispatches, projectInvoices, drive
             </>
           )}
 
-          {/* Add driver */}
-          <div className="flex items-center gap-2 mt-3 pt-3 border-t border-gray-700">
+          {/* Day Shift Drivers */}
+          <div className="mt-3 pt-3 border-t border-gray-700">
+            <div className="text-amber-400 text-[10px] font-bold uppercase tracking-wider mb-1.5">Day Shift</div>
+            <div className="flex flex-wrap gap-1 mb-2">
+              {(project.dayDriverHashes || []).map(hash => (
+                <span key={hash} className="px-2 py-0.5 bg-amber-600/20 text-amber-300 text-[10px] rounded-full flex items-center gap-1">
+                  {getDriverName(hash)}
+                  <button onClick={() => {
+                    const updated = (project.dayDriverHashes || []).filter(h => h !== hash);
+                    onUpdateProject?.(project.id!, { dayDriverHashes: updated });
+                  }} className="text-amber-500 hover:text-white ml-0.5">&times;</button>
+                </span>
+              ))}
+              {(project.dayDriverHashes || []).length === 0 && <span className="text-gray-600 text-[10px]">No day drivers assigned</span>}
+            </div>
+          </div>
+
+          {/* Night Shift Drivers */}
+          <div className="mt-2">
+            <div className="text-blue-400 text-[10px] font-bold uppercase tracking-wider mb-1.5">Night Shift</div>
+            <div className="flex flex-wrap gap-1 mb-2">
+              {(project.nightDriverHashes || []).map(hash => (
+                <span key={hash} className="px-2 py-0.5 bg-blue-600/20 text-blue-300 text-[10px] rounded-full flex items-center gap-1">
+                  {getDriverName(hash)}
+                  <button onClick={() => {
+                    const updated = (project.nightDriverHashes || []).filter(h => h !== hash);
+                    onUpdateProject?.(project.id!, { nightDriverHashes: updated });
+                  }} className="text-blue-500 hover:text-white ml-0.5">&times;</button>
+                </span>
+              ))}
+              {(project.nightDriverHashes || []).length === 0 && <span className="text-gray-600 text-[10px]">No night drivers assigned</span>}
+            </div>
+          </div>
+
+          {/* Add driver to shift */}
+          <div className="flex items-center gap-2 mt-2 pt-2 border-t border-gray-700/50">
+            <select value={addDriverShift} onChange={(e) => setAddDriverShift(e.target.value as 'day' | 'night')}
+              className="px-2 py-1.5 bg-gray-900 border border-gray-700 rounded text-white text-xs w-20">
+              <option value="day">Day</option>
+              <option value="night">Night</option>
+            </select>
             <select
               value={addDriverHash}
               onChange={(e) => setAddDriverHash(e.target.value)}
               className="flex-1 px-2 py-1.5 bg-gray-900 border border-gray-700 rounded text-white text-xs focus:outline-none focus:border-emerald-500"
             >
-              <option value="">Add driver to today...</option>
+              <option value="">Add driver...</option>
               {drivers
-                .filter(d => !todayDriverHashes.includes(d.key))
+                .filter(d => !(project.dayDriverHashes || []).includes(d.key) && !(project.nightDriverHashes || []).includes(d.key))
                 .map(d => (
                   <option key={d.key} value={d.key}>{d.legalName || d.displayName}</option>
                 ))}
             </select>
             <button
-              onClick={() => { if (addDriverHash) { onAddDriver(addDriverHash); setAddDriverHash(''); } }}
+              onClick={() => {
+                if (!addDriverHash) return;
+                const field = addDriverShift === 'day' ? 'dayDriverHashes' : 'nightDriverHashes';
+                const current = (addDriverShift === 'day' ? project.dayDriverHashes : project.nightDriverHashes) || [];
+                onUpdateProject?.(project.id!, { [field]: [...current, addDriverHash] });
+                onAddDriver(addDriverHash);
+                setAddDriverHash('');
+              }}
               disabled={!addDriverHash}
               className="px-3 py-1.5 bg-emerald-600 hover:bg-emerald-500 disabled:bg-gray-700 disabled:text-gray-500 text-white text-xs font-medium rounded transition-colors"
             >
               Add
             </button>
+          </div>
+
+          {/* Shift Updates Log */}
+          <div className="mt-4 pt-3 border-t border-gray-700">
+            <div className="text-gray-400 text-[10px] font-bold uppercase tracking-wider mb-2">Shift Updates</div>
+            <div className="max-h-32 overflow-y-auto space-y-1 mb-2">
+              {(project.updates || []).length === 0 && (
+                <div className="text-gray-600 text-[10px]">No updates yet</div>
+              )}
+              {[...(project.updates || [])].reverse().map((u, i) => (
+                <div key={i} className="text-xs px-2 py-1.5 bg-gray-900/60 rounded">
+                  <div className="flex items-center gap-1.5 mb-0.5">
+                    <span className={`px-1 py-0.5 text-[9px] font-bold rounded ${u.shift === 'day' ? 'bg-amber-600/20 text-amber-400' : 'bg-blue-600/20 text-blue-400'}`}>
+                      {u.shift === 'day' ? 'DAY' : 'NIGHT'}
+                    </span>
+                    <span className="text-gray-400">{u.author}</span>
+                    <span className="text-gray-600 text-[10px]">{new Date(u.timestamp).toLocaleString([], { month: 'numeric', day: 'numeric', hour: 'numeric', minute: '2-digit' })}</span>
+                  </div>
+                  <div className="text-gray-300">{u.text}</div>
+                </div>
+              ))}
+            </div>
+            <div className="flex gap-1.5">
+              <select value={updateShift} onChange={(e) => setUpdateShift(e.target.value as 'day' | 'night')}
+                className="px-2 py-1.5 bg-gray-900 border border-gray-700 rounded text-white text-xs w-20">
+                <option value="day">Day</option>
+                <option value="night">Night</option>
+              </select>
+              <input
+                type="text"
+                value={newUpdate}
+                onChange={(e) => setNewUpdate(e.target.value)}
+                placeholder="Update for next shift..."
+                className="flex-1 px-2 py-1.5 bg-gray-900 border border-gray-700 rounded text-white text-xs focus:outline-none focus:border-emerald-500"
+                onKeyDown={(e) => {
+                  if (e.key === 'Enter' && newUpdate.trim()) {
+                    const update: ProjectUpdate = {
+                      text: newUpdate.trim(),
+                      author: 'Dispatch',
+                      shift: updateShift,
+                      timestamp: new Date().toISOString(),
+                    };
+                    onUpdateProject?.(project.id!, { updates: [...(project.updates || []), update] });
+                    setNewUpdate('');
+                  }
+                }}
+              />
+              <button
+                onClick={() => {
+                  if (!newUpdate.trim()) return;
+                  const update: ProjectUpdate = {
+                    text: newUpdate.trim(),
+                    author: 'Dispatch',
+                    shift: updateShift,
+                    timestamp: new Date().toISOString(),
+                  };
+                  onUpdateProject?.(project.id!, { updates: [...(project.updates || []), update] });
+                  setNewUpdate('');
+                }}
+                disabled={!newUpdate.trim()}
+                className="px-3 py-1.5 bg-emerald-600 hover:bg-emerald-500 disabled:bg-gray-700 disabled:text-gray-500 text-white text-xs font-medium rounded transition-colors"
+              >
+                Post
+              </button>
+            </div>
           </div>
         </div>
       )}

@@ -666,7 +666,11 @@ function filterAnomalies(flowRates: number[]): number[] {
   return filtered;
 }
 
-// Calculate AFR from recent flow rates (with anomaly detection)
+// Calculate AFR from recent flow rates using Exponential Moving Average (EMA).
+// EMA tracks gradual well slowdowns better than a fixed-window rolling average.
+// Alpha = 0.4 gives ~60% weight to recent pulls while smoothing noise.
+const EMA_ALPHA = 0.4;
+
 async function calculateAFR(wellName: string, newFlowRateDays: number): Promise<number> {
 
   // Get recent processed packets for this well
@@ -693,18 +697,18 @@ async function calculateAFR(wellName: string, newFlowRateDays: number): Promise<
   if (allRates.length === 0) return 0;
   if (allRates.length < 3) return allRates[allRates.length - 1];
 
-  // DIAG: Log raw rates for debugging
-  console.log(`[AFR-DIAG] ${wellName}: ${allRates.length} raw rates: [${allRates.map(r => r.toFixed(4)).join(', ')}]`);
+  console.log(`[AFR] ${wellName}: ${allRates.length} raw rates`);
 
-  // Filter out anomalies (5x off median) before calculating AFR
+  // Filter out anomalies (2x off progressive median) before calculating AFR
   const rates = filterAnomalies(allRates);
 
-  console.log(`[AFR-DIAG] ${wellName}: ${rates.length} after anomaly filter: [${rates.map(r => r.toFixed(4)).join(', ')}]`);
+  console.log(`[AFR] ${wellName}: ${rates.length} after anomaly filter`);
 
-  if (rates.length === 0) { console.log(`[AFR-DIAG] ${wellName}: fallback to newest (no rates after filter)`); return allRates[allRates.length - 1]; }
-  if (rates.length < 3) { const result = rates[rates.length - 1]; console.log(`[AFR-DIAG] ${wellName}: <3 rates, returning last: ${result}`); return result; }
+  if (rates.length === 0) return allRates[allRates.length - 1];
+  if (rates.length < 3) return rates[rates.length - 1];
 
   // Step detection: Check if last 3 are ALL >10% off in same direction
+  // Catches sudden regime changes (e.g., well workover, pump change)
   const STEP_THRESHOLD = 0.10;
   if (rates.length >= 5) {
     const preStepRates = rates.slice(0, -3);
@@ -721,19 +725,23 @@ async function calculateAFR(wellName: string, newFlowRateDays: number): Promise<
     }
 
     if (allHigher || allLower) {
-      // Step detected - use median of last 3
+      // Step detected - use median of last 3 to reset quickly
       const sorted = [...recentRates].sort((a, b) => a - b);
-      console.log(`[AFR-DIAG] ${wellName}: STEP DETECTED, median of last 3: ${sorted[1]}`);
+      console.log(`[AFR] ${wellName}: STEP DETECTED, median of last 3: ${sorted[1].toFixed(6)}`);
       return sorted[1];
     }
   }
 
-  // Use 5-pull rolling average (or all if less than 5)
-  const windowSize = Math.min(5, rates.length);
-  const recentRates = rates.slice(-windowSize);
-  const result = recentRates.reduce((a, b) => a + b, 0) / recentRates.length;
-  console.log(`[AFR-DIAG] ${wellName}: rolling avg of ${windowSize}: ${result.toFixed(6)} (${recentRates.map(r => r.toFixed(4)).join(', ')})`);
-  return result;
+  // EMA: Exponential Moving Average (alpha=0.4)
+  // Seed with the first rate, then apply EMA formula chronologically.
+  // Recent pulls get exponentially more weight, tracking drift without lag.
+  let ema = rates[0];
+  for (let i = 1; i < rates.length; i++) {
+    ema = EMA_ALPHA * rates[i] + (1 - EMA_ALPHA) * ema;
+  }
+
+  console.log(`[AFR] ${wellName}: EMA(${rates.length} rates, α=${EMA_ALPHA}) = ${ema.toFixed(6)} (${(ema * 24 * 60).toFixed(1)} min/ft)`);
+  return ema;
 }
 
 // Main function: Process incoming pull packets

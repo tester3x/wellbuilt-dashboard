@@ -331,17 +331,23 @@ export default function GpsRoutesTab() {
   }, [allConfigs]);
 
   // Toggle recording on/off for a well (or whole pad group) — keeps grouping + approved routes
+  // Sanitize RTDB-illegal chars (. # $ [ ]) from well names used as RTDB keys
+  const sanitizeRtdbKey = (name: string) => name.replace(/[.#$[\]]/g, '').trim();
+
   const handleToggleRecording = useCallback(async (well: WellRouteStatus) => {
     const db = getFirebaseDatabase();
     const updates: Record<string, any> = {};
     const allMembers = [well.wellName, ...(well.groupMembers || [])];
     const newState = !well.isRecording;
+    const safeGroupWell = sanitizeRtdbKey(well.routeGroupWell || well.wellName);
     for (const w of allMembers) {
-      updates[`well_config/${w}/routeRecording`] = newState ? true : null;
+      const safeKey = sanitizeRtdbKey(w);
+      if (!safeKey) continue;
+      updates[`well_config/${safeKey}/routeRecording`] = newState ? true : null;
       // Ensure routeGroupWell is set — keeps well in GPS Routes list after recording stops.
       // Wells added before this fix may not have it, so set it retroactively.
       if (!allConfigs[w]?.routeGroupWell) {
-        updates[`well_config/${w}/routeGroupWell`] = well.routeGroupWell || well.wellName;
+        updates[`well_config/${safeKey}/routeGroupWell`] = safeGroupWell;
       }
     }
     await update(ref(db), updates);
@@ -410,7 +416,7 @@ export default function GpsRoutesTab() {
           onClick={() => { setShowAddModal(true); setAddMessage(''); setAddWellSearch(''); }}
           className="px-3 py-1.5 rounded-full text-sm font-medium bg-orange-600 hover:bg-orange-500 text-white transition"
         >
-          + Add Well
+          + Add Destination
         </button>
 
         <div className="ml-auto text-xs text-gray-500">
@@ -423,7 +429,7 @@ export default function GpsRoutesTab() {
         <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50">
           <div className="bg-gray-800 rounded-lg p-5 max-w-md w-full mx-4 max-h-[80vh] flex flex-col">
             <div className="flex justify-between items-center mb-3">
-              <h3 className="text-white font-medium">Add Well to Route Recording</h3>
+              <h3 className="text-white font-medium">Add Destination to Route Recording</h3>
               <button
                 onClick={() => setShowAddModal(false)}
                 className="text-gray-400 hover:text-white text-xl leading-none"
@@ -447,7 +453,7 @@ export default function GpsRoutesTab() {
             {/* Search */}
             <input
               type="text"
-              placeholder="Search wells..."
+              placeholder="Search wells or type any destination name..."
               value={addWellSearch}
               onChange={(e) => setAddWellSearch(e.target.value)}
               className="w-full px-3 py-2 bg-gray-700 text-white rounded mb-3 text-sm"
@@ -455,13 +461,40 @@ export default function GpsRoutesTab() {
               disabled={addingWell}
             />
 
+            {/* Add custom destination — any name, not just NDIC wells */}
+            {addWellSearch.trim().length >= 2 && !filteredAvailable.some(n => n.toLowerCase() === addWellSearch.trim().toLowerCase()) && (
+              <button
+                onClick={async () => {
+                  const name = addWellSearch.trim();
+                  setAddingWell(true);
+                  setAddMessage('');
+                  const db = getFirebaseDatabase();
+                  const safeKey = sanitizeRtdbKey(name);
+                  if (safeKey) {
+                    await update(ref(db, `well_config/${safeKey}`), { routeRecording: true, routeGroupWell: safeKey });
+                  }
+                  setAddMessage(`Recording enabled for ${name}`);
+                  setAddingWell(false);
+                }}
+                disabled={addingWell}
+                className="w-full mb-3 px-3 py-2.5 bg-green-900/50 hover:bg-green-800/50 border border-green-700 text-green-300 text-sm rounded flex items-center gap-2 disabled:opacity-50"
+              >
+                <span className="text-green-400 font-bold text-lg leading-none">+</span>
+                <span>Add custom destination: <strong className="text-white">{addWellSearch.trim()}</strong></span>
+              </button>
+            )}
+
             {/* Well list — click to auto-add + auto-group */}
             <div className="overflow-y-auto flex-1 min-h-0">
-              {filteredAvailable.length === 0 ? (
+              {filteredAvailable.length === 0 && !addWellSearch.trim() ? (
                 <div className="text-gray-500 text-sm text-center py-4">
                   {availableWells.length === 0
                     ? 'All wells are already recording or grouped'
                     : 'No wells match your search'}
+                </div>
+              ) : filteredAvailable.length === 0 && addWellSearch.trim() ? (
+                <div className="text-gray-500 text-sm text-center py-4">
+                  No wells match — use the button above to add a custom destination
                 </div>
               ) : (
                 <div className="space-y-1">
@@ -505,7 +538,7 @@ export default function GpsRoutesTab() {
       {/* Split into Recording + Route Library sections */}
       {(() => {
         const recordingWells = filtered.filter(w => w.isRecording);
-        const libraryWells = filtered.filter(w => !w.isRecording && (w.approvedCount > 0 || w.routeGroupWell));
+        const libraryWells = filtered.filter(w => !w.isRecording && (w.approvedCount > 0 || w.routeGroupWell || w.tripCount > 0));
 
         const renderWellCard = (well: WellRouteStatus) => (
           <div key={well.wellName} className="bg-gray-800 rounded-lg overflow-hidden">

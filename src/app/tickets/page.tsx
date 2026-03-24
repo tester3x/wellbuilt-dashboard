@@ -5,6 +5,7 @@ import { useRouter } from 'next/navigation';
 import { useAuth } from '@/contexts/AuthContext';
 import { AppHeader } from '@/components/AppHeader';
 import { Ticket, fetchTickets } from '@/lib/tickets';
+import { TicketDetailModal } from '@/components/TicketDetailModal';
 
 export default function TicketsPage() {
   const { user, loading } = useAuth();
@@ -13,6 +14,7 @@ export default function TicketsPage() {
   const [dataLoading, setDataLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [search, setSearch] = useState('');
+  const [selectedTicket, setSelectedTicket] = useState<Ticket | null>(null);
 
   useEffect(() => {
     if (!loading && !user) {
@@ -74,7 +76,7 @@ export default function TicketsPage() {
         {/* Title and Controls */}
         <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-4 mb-6">
           <h2 className="text-xl font-semibold text-white">
-            Water Tickets
+            Tickets
             <span className="text-gray-400 text-base font-normal ml-2">
               ({filtered.length}{search ? ` of ${tickets.length}` : ''})
             </span>
@@ -112,7 +114,7 @@ export default function TicketsPage() {
               <table className="w-full">
                 <thead className="bg-gray-700">
                   <tr>
-                    <th className="px-4 py-2 text-left text-sm font-medium text-gray-300 whitespace-nowrap min-w-[120px]">Ticket #</th>
+                    <th className="px-4 py-2 text-left text-sm font-medium text-gray-300 whitespace-nowrap min-w-[80px]">Ticket #</th>
                     <th className="px-4 py-2 text-left text-sm font-medium text-gray-300">Invoice #</th>
                     <th className="px-4 py-2 text-left text-sm font-medium text-gray-300">Date</th>
                     <th className="px-4 py-2 text-left text-sm font-medium text-gray-300">Company</th>
@@ -123,16 +125,21 @@ export default function TicketsPage() {
                     <th className="px-4 py-2 text-left text-sm font-medium text-gray-300">Top</th>
                     <th className="px-4 py-2 text-left text-sm font-medium text-gray-300">Bottom</th>
                     <th className="px-4 py-2 text-left text-sm font-medium text-gray-300">Driver</th>
+                    <th className="px-4 py-2 text-left text-sm font-medium text-gray-300">Status</th>
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-gray-700">
                   {filtered.map((ticket) => (
-                    <tr key={ticket.id} className="hover:bg-gray-750">
+                    <tr
+                      key={ticket.id}
+                      className="hover:bg-gray-700/50 cursor-pointer transition-colors"
+                      onClick={() => setSelectedTicket(ticket)}
+                    >
                       <td className="px-4 py-3 text-blue-400 font-mono whitespace-nowrap">{ticket.ticketNumber}</td>
                       <td className="px-4 py-3 whitespace-nowrap">
                         {ticket.invoiceNumber ? (
                           <button
-                            onClick={() => router.push(`/billing?search=${ticket.invoiceNumber}`)}
+                            onClick={(e) => { e.stopPropagation(); router.push(`/billing?search=${ticket.invoiceNumber}`); }}
                             className="text-blue-400 font-mono text-sm hover:underline"
                           >
                             {ticket.invoiceNumber}
@@ -150,6 +157,13 @@ export default function TicketsPage() {
                       <td className="px-4 py-3 text-white font-mono">{ticket.top || '--'}</td>
                       <td className="px-4 py-3 text-white font-mono">{ticket.bottom || '--'}</td>
                       <td className="px-4 py-3 text-gray-400">{ticket.driver}</td>
+                      <td className="px-4 py-3 whitespace-nowrap">
+                        {ticket.status === 'void' ? (
+                          <span className="px-2 py-0.5 bg-red-900/40 text-red-400 text-xs font-medium rounded">VOID</span>
+                        ) : (
+                          <span className="px-2 py-0.5 bg-gray-600/30 text-gray-400 text-xs rounded">Active</span>
+                        )}
+                      </td>
                     </tr>
                   ))}
                 </tbody>
@@ -158,6 +172,15 @@ export default function TicketsPage() {
           </div>
         )}
       </main>
+
+      {/* Paper-style detail modal */}
+      {selectedTicket && (
+        <TicketDetailModal
+          ticket={selectedTicket}
+          onClose={() => setSelectedTicket(null)}
+          onNavigateTicket={(t) => setSelectedTicket(t)}
+        />
+      )}
     </div>
   );
 }

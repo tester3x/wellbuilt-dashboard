@@ -55,6 +55,11 @@ service cloud.firestore {
       match /swd_directory/{entryId} {
         allow read, write: if true;
       }
+
+      // Counters — invoice/ticket number auto-increment from Dashboard Add Pull
+      match /counters/{counterId} {
+        allow read, write: if true;
+      }
     }
 
     // Invoices — clients can read, create, update, delete (cancel/recycle flow)

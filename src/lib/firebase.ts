@@ -4,6 +4,7 @@ import { getAuth, Auth } from 'firebase/auth';
 import { getDatabase, Database } from 'firebase/database';
 import { getFirestore as _getFirestore, Firestore } from 'firebase/firestore';
 import { getStorage as _getStorage, FirebaseStorage } from 'firebase/storage';
+import { getFunctions, Functions, httpsCallable } from 'firebase/functions';
 
 const firebaseConfig = {
   apiKey: "AIzaSyAGWXa-doFGzo7T5SxHVD_v5-SHXIc8wAI",
@@ -19,6 +20,7 @@ let auth: Auth | null = null;
 let database: Database | null = null;
 let firestore: Firestore | null = null;
 let storage: FirebaseStorage | null = null;
+let functions: Functions | null = null;
 
 export function getFirebaseApp(): FirebaseApp {
   if (!app) {
@@ -54,4 +56,33 @@ export function getFirebaseStorage(): FirebaseStorage {
     storage = _getStorage(getFirebaseApp());
   }
   return storage;
+}
+
+export function getFirebaseFunctions(): Functions {
+  if (!functions) {
+    functions = getFunctions(getFirebaseApp());
+  }
+  return functions;
+}
+
+/**
+ * Get next invoice number from the shared block system (same as WB T).
+ * Calls the assignInvoiceBlock Cloud Function which uses Firestore transactions
+ * to atomically assign blocks — no duplicates possible.
+ */
+export async function getNextInvoiceNumber(companyId: string): Promise<{ number: number; prefix: string }> {
+  const fn = httpsCallable(getFirebaseFunctions(), 'assignInvoiceBlock');
+  const result: any = await fn({ companyId });
+  const block = result.data;
+  return { number: block.start, prefix: block.prefix || '' };
+}
+
+/**
+ * Get next ticket number from the shared block system (same as WB T).
+ */
+export async function getNextTicketNumber(): Promise<number> {
+  const fn = httpsCallable(getFirebaseFunctions(), 'assignTicketBlock');
+  const result: any = await fn({});
+  const block = result.data;
+  return block.start;
 }
