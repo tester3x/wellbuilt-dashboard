@@ -781,6 +781,7 @@ export async function fetchWellHistoryUnified(wellName: string, limit: number = 
         editedBy: data.editedBy,
         noLevel: data.noLevel || false,
         jobType: data.jobType,
+        wellDown: data.wellDown || false,
       });
     }
   });
