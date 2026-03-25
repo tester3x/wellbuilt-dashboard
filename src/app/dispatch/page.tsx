@@ -329,6 +329,7 @@ export default function DispatchPage() {
   // Assign modal state (single-well PW)
   // showAssignModal removed — PW card is always visible, assignTarget fills it
   const [assignTarget, setAssignTarget] = useState<WellResponse | null>(null);
+  const [assignWellSearch, setAssignWellSearch] = useState('');
   const [assignDriverHash, setAssignDriverHash] = useState('');
   const [assignNotes, setAssignNotes] = useState('');
   const [assignDisposal, setAssignDisposal] = useState('');
@@ -1871,17 +1872,33 @@ export default function DispatchPage() {
                 ) : (
                   <>
                     <input type="text"
-                      value={assignTarget ? (assignTarget.ndicName || assignTarget.wellName) : ''}
+                      value={assignTarget ? (assignTarget.ndicName || assignTarget.wellName) : assignWellSearch}
                       onChange={(e) => {
-                        if (assignTarget) setAssignTarget(null);
+                        if (assignTarget) { setAssignTarget(null); setAssignDriverHash(''); }
+                        setAssignWellSearch(e.target.value);
                       }}
-                      readOnly={!!assignTarget}
-                      placeholder="Click Assign below or type to search..."
+                      placeholder="Search wells or click Assign below..."
                       className={`w-full px-3 py-1.5 bg-gray-900 border rounded text-white text-sm focus:outline-none ${assignTarget ? 'border-blue-500 font-bold' : 'border-gray-700'}`}
                     />
                     {assignTarget && (
-                      <button onClick={() => { setAssignTarget(null); setAssignDriverHash(''); }}
+                      <button onClick={() => { setAssignTarget(null); setAssignDriverHash(''); setAssignWellSearch(''); }}
                         className="absolute right-2 top-7 text-gray-400 hover:text-white text-xs">✕</button>
+                    )}
+                    {!assignTarget && assignWellSearch.length >= 2 && (
+                      <div className="absolute z-10 w-full bg-gray-900 border border-gray-700 rounded mt-0.5 max-h-32 overflow-y-auto">
+                        {wells
+                          .filter(w => (w.ndicName || w.wellName).toLowerCase().includes(assignWellSearch.toLowerCase()))
+                          .slice(0, 8)
+                          .map(w => (
+                            <button key={w.wellName} onClick={() => { setAssignTarget(w); setAssignWellSearch(''); }}
+                              className="w-full text-left px-3 py-1.5 hover:bg-gray-700 text-white text-xs border-b border-gray-800 last:border-0">
+                              {w.ndicName || w.wellName} <span className="text-gray-500">{w.route}</span>
+                            </button>
+                          ))}
+                        {wells.filter(w => (w.ndicName || w.wellName).toLowerCase().includes(assignWellSearch.toLowerCase())).length === 0 && (
+                          <div className="px-3 py-1.5 text-gray-500 text-xs">No wells found</div>
+                        )}
+                      </div>
                     )}
                   </>
                 )}
