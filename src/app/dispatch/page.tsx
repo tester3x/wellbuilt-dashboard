@@ -1583,14 +1583,7 @@ export default function DispatchPage() {
             <span className="flex-1" />
 
             {/* Action buttons */}
-            <button
-              onClick={() => setToolbarMode(toolbarMode === 'sw' ? 'none' : 'sw')}
-              className={`px-3 py-1.5 text-xs font-medium rounded-lg transition-colors flex items-center gap-1.5 ${
-                toolbarMode === 'sw' ? 'bg-purple-600 text-white' : 'bg-gray-800 text-purple-400 hover:bg-gray-700 border border-gray-700'
-              }`}
-            >
-              <span className="text-sm">+</span> Service Work
-            </button>
+            {/* Service Work button removed — form always visible */}
             <button
               onClick={() => setShowAddPullModal(true)}
               className="px-3 py-1.5 text-xs font-medium rounded-lg transition-colors flex items-center gap-1.5 bg-gray-800 text-green-400 hover:bg-gray-700 border border-gray-700"
@@ -1600,7 +1593,7 @@ export default function DispatchPage() {
           </div>
 
           {/* Expandable toolbar forms */}
-          {toolbarMode === 'sw' && (
+          {(
             <div className="bg-gray-800 border border-purple-600/40 rounded-lg p-4 mb-3">
               <div className="text-purple-400 text-xs font-medium uppercase tracking-wider mb-3">Dispatch Service Work</div>
               <div className="flex items-start gap-4">
