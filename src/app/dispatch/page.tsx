@@ -11,6 +11,7 @@ import { getFirestoreDb } from '@/lib/firebase';
 import { AddPullModal } from '@/components/AddPullModal';
 import { collection, addDoc, getDocs, getDoc, setDoc, query, where, orderBy, Timestamp, doc, updateDoc, onSnapshot, deleteDoc } from 'firebase/firestore';
 import { loadDisposals, searchDisposals, type NdicWell, loadOperators, searchOperators, type NdicOperator, loadWellsForOperator } from '@/lib/firestoreWells';
+import { calculateDriverETAs, applyDeadline, type DriverEtaResult } from '@/lib/driverEta';
 import { loadCompanyById } from '@/lib/companySettings';
 import { trackJobTypeUsage } from '@/lib/jobTypeUsage';
 
@@ -73,6 +74,13 @@ interface DispatchJob {
   driverStage?: 'en_route_pickup' | 'on_site_pickup' | 'en_route_dropoff' | 'on_site_dropoff' | 'paused' | 'completed';
   driverDest?: string;  // Where driver is heading (well name or SWD name)
   stageUpdatedAt?: any;
+  // Driver GPS — written by WB T updateDriverStage() for Dashboard ETA
+  driverLat?: number;
+  driverLng?: number;
+  driverGpsAt?: string;
+  // Service work fields
+  disposalName?: string;  // Drop-off for SW jobs
+  onsiteBy?: string;  // "Be onsite by" deadline (HH:MM)
   // Live job info — written by WB T as driver progresses
   invoiceNumber?: string;  // Invoice # for this dispatch
   hauledTo?: string;  // Current drop-off destination (driver may change mid-job)
@@ -347,6 +355,51 @@ export default function DispatchPage() {
   const [swNotes, setSwNotes] = useState('');
   const [swDriverHashes, setSwDriverHashes] = useState<Set<string>>(new Set());
   const [swSubmitting, setSwSubmitting] = useState(false);
+  const [swDriverETAs, setSwDriverETAs] = useState<Map<string, DriverEtaResult>>(new Map());
+  const [swEtaLoading, setSwEtaLoading] = useState(false);
+
+  // Calculate driver ETAs when SW onsiteBy + well are set
+  useEffect(() => {
+    if (!swOnsiteBy || !swWellName.trim()) {
+      setSwDriverETAs(new Map());
+      return;
+    }
+
+    // Parse onsiteBy to minutes from now
+    const [h, m] = swOnsiteBy.split(':').map(Number);
+    if (isNaN(h) || isNaN(m)) return;
+    const now = new Date();
+    const target = new Date(now.getFullYear(), now.getMonth(), now.getDate(), h, m);
+    const onsiteByMinutes = (target.getTime() - now.getTime()) / 60000;
+    if (onsiteByMinutes <= 0) return; // Past deadline
+
+    // Find target well GPS coords
+    const matchedWell = wells.find(w =>
+      (w.ndicName || w.wellName).toLowerCase() === swWellName.trim().toLowerCase()
+    );
+    const targetNdic = allOperatorWells.find(w =>
+      w.well_name.toLowerCase() === swWellName.trim().toLowerCase()
+    );
+    const targetLat = (matchedWell as any)?.expectedLat ?? targetNdic?.latitude ?? null;
+    const targetLng = (matchedWell as any)?.expectedLng ?? targetNdic?.longitude ?? null;
+    if (!targetLat || !targetLng) {
+      // No GPS for target — can't calculate drive times
+      return;
+    }
+
+    // Calculate ETAs for all drivers
+    setSwEtaLoading(true);
+    const driverHashes = drivers.map(d => d.key);
+    calculateDriverETAs(driverHashes, dispatches, { lat: targetLat, lng: targetLng, name: swWellName.trim() })
+      .then(results => {
+        const withDeadline = applyDeadline(results, onsiteByMinutes);
+        const map = new Map<string, DriverEtaResult>();
+        withDeadline.forEach(r => map.set(r.driverHash, r));
+        setSwDriverETAs(map);
+      })
+      .catch(console.warn)
+      .finally(() => setSwEtaLoading(false));
+  }, [swOnsiteBy, swWellName, dispatches, drivers, wells, allOperatorWells]);
 
   // Add Pull modal state (shared component handles its own form state)
   const [showAddPullModal, setShowAddPullModal] = useState(false);
@@ -1664,20 +1717,41 @@ export default function DispatchPage() {
                   </div>
                 </div>
 
-                {/* Driver picker */}
-                <div className="w-52 flex-shrink-0">
+                {/* Driver picker with ETA indicators */}
+                <div className="w-64 flex-shrink-0">
                   <label className="block text-xs text-gray-400 mb-1">
                     Driver{swDriverHashes.size > 1 ? 's' : ''}
                     {swDriverHashes.size > 0 && <span className="ml-1 px-1.5 py-0.5 bg-purple-600 text-white text-[10px] rounded-full">{swDriverHashes.size}</span>}
+                    {swEtaLoading && <span className="ml-1 text-gray-500 text-[10px]">calculating ETAs...</span>}
                   </label>
-                  <div className="bg-gray-900 border border-gray-700 rounded max-h-24 overflow-y-auto">
+                  <div className="bg-gray-900 border border-gray-700 rounded max-h-32 overflow-y-auto">
                     {drivers.map(d => {
                       const checked = swDriverHashes.has(d.key);
+                      const eta = swDriverETAs.get(d.key);
+                      // Active job stage for context
+                      const activeJob = dispatches.find(j => j.driverHash === d.key && ['accepted', 'in_progress', 'paused'].includes(j.status));
+                      const stageLabel = activeJob?.driverStage?.replace(/_/g, ' ') || (activeJob ? 'on job' : '');
+
+                      const etaColor = eta?.status === 'can_make_it' ? '#22c55e'
+                        : eta?.status === 'tight' ? '#eab308'
+                        : eta?.status === 'cant_make_it' ? '#ef4444'
+                        : '#666';
+
                       return (
                         <button key={d.key} type="button" onClick={() => { setSwDriverHashes(prev => { const next = new Set(prev); if (next.has(d.key)) next.delete(d.key); else next.add(d.key); return next; }); }}
-                          className={`w-full flex items-center gap-2 px-2 py-1 text-xs text-left border-b border-gray-800 last:border-0 transition-colors ${checked ? 'bg-purple-900/30 text-white' : 'text-gray-300 hover:bg-gray-800'}`}>
-                          <input type="checkbox" checked={checked} readOnly className="w-3 h-3 rounded border-gray-600 bg-gray-800 text-purple-600 pointer-events-none" />
-                          <span>{d.legalName || d.displayName}</span>
+                          className={`w-full flex items-center gap-2 px-2 py-1.5 text-xs text-left border-b border-gray-800 last:border-0 transition-colors ${checked ? 'bg-purple-900/30 text-white' : 'text-gray-300 hover:bg-gray-800'}`}>
+                          <input type="checkbox" checked={checked} readOnly className="w-3 h-3 rounded border-gray-600 bg-gray-800 text-purple-600 pointer-events-none flex-shrink-0" />
+                          <span className="flex-1 min-w-0 truncate">{d.legalName || d.displayName}</span>
+                          {/* ETA indicator — only when onsiteBy is set */}
+                          {eta && swOnsiteBy && (
+                            <span className="flex-shrink-0 font-bold text-[10px]" style={{ color: etaColor }}>
+                              {eta.display}
+                            </span>
+                          )}
+                          {/* Stage label — when no ETA but driver is on a job */}
+                          {!eta && stageLabel && !swOnsiteBy && (
+                            <span className="flex-shrink-0 text-[10px] text-gray-500">{stageLabel}</span>
+                          )}
                         </button>
                       );
                     })}
