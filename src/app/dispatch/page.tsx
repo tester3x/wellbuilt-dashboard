@@ -113,6 +113,7 @@ interface Project {
   projectedEndDate?: string;   // ISO date
   actualEndDate?: string;
   status: 'active' | 'paused' | 'completed';
+  jobType?: 'service' | 'pw';  // Default: 'service' (99% of projects are SW)
   notes?: string;              // Job description (editable)
   updates?: ProjectUpdate[];   // Shift handoff log
   dayDriverHashes?: string[];  // Day shift drivers
@@ -439,6 +440,8 @@ export default function DispatchPage() {
   const [newProjectNotes, setNewProjectNotes] = useState('');
   const [newProjectEndDate, setNewProjectEndDate] = useState('');
   const [newProjectDriverHashes, setNewProjectDriverHashes] = useState<Set<string>>(new Set());
+  const [newProjectDriverShifts, setNewProjectDriverShifts] = useState<Map<string, 'day' | 'night'>>(new Map());
+  const [newProjectJobType, setNewProjectJobType] = useState<'service' | 'pw'>('service');
   const [creatingProject, setCreatingProject] = useState(false);
   const [projectWellSearch, setProjectWellSearch] = useState('');
 
@@ -989,6 +992,15 @@ export default function DispatchPage() {
       if (newProjectDriverHashes.size > 0) {
         schedule[today] = Array.from(newProjectDriverHashes);
       }
+      // Build day/night driver arrays from shift assignments
+      const dayHashes: string[] = [];
+      const nightHashes: string[] = [];
+      for (const hash of newProjectDriverHashes) {
+        const shift = newProjectDriverShifts.get(hash) || 'day';
+        if (shift === 'day') dayHashes.push(hash);
+        else nightHashes.push(hash);
+      }
+
       const projectData: Omit<Project, 'id'> = {
         name: newProjectName.trim(),
         wellNames: newProjectWells,
@@ -999,8 +1011,11 @@ export default function DispatchPage() {
         startDate: today,
         projectedEndDate: newProjectEndDate || undefined,
         status: 'active',
+        jobType: newProjectJobType,
         notes: newProjectNotes.trim() || undefined,
         driverSchedule: schedule,
+        dayDriverHashes: dayHashes.length > 0 ? dayHashes : undefined,
+        nightDriverHashes: nightHashes.length > 0 ? nightHashes : undefined,
       };
       const docRef = await addDoc(collection(firestore, 'projects'), projectData);
 
@@ -1020,7 +1035,7 @@ export default function DispatchPage() {
               ndicWellName: wellData?.ndicName || wellName,
               operator: newProjectOperator.trim(),
               route: wellData?.route || '',
-              jobType: 'pw',
+              jobType: newProjectJobType,
               status: 'pending',
               priority: 500,
               assignedAt: Timestamp.now(),
@@ -1039,6 +1054,8 @@ export default function DispatchPage() {
       setNewProjectNotes('');
       setNewProjectEndDate('');
       setNewProjectDriverHashes(new Set());
+      setNewProjectDriverShifts(new Map());
+      setNewProjectJobType('service');
       setShowCreateProject(false);
       setProjectWellSearch('');
       setMessage('Project created');
@@ -1095,7 +1112,7 @@ export default function DispatchPage() {
             ndicWellName: wellData?.ndicName || wellName,
             operator: project.operatorName || '',
             route: wellData?.route || '',
-            jobType: 'pw',
+            jobType: project.jobType || 'service',
             status: 'pending',
             priority: 500,
             assignedAt: Timestamp.now(),
@@ -1147,7 +1164,7 @@ export default function DispatchPage() {
             ndicWellName: wellData?.ndicName || wellName,
             operator: project.operatorName || '',
             route: wellData?.route || '',
-            jobType: 'pw',
+            jobType: project.jobType || 'service',
             status: 'pending',
             priority: 500,
             assignedAt: Timestamp.now(),
@@ -1692,15 +1709,15 @@ export default function DispatchPage() {
 
             {/* PW + SW side by side — OR — Create Project form overlay */}
             {showCreateProject ? (
-              <div className="bg-gray-800 border border-emerald-600/40 rounded-lg p-4 flex-shrink-0">
+              <div className="bg-gray-800 border border-emerald-600/40 rounded-lg p-4 flex-shrink-0 flex flex-col" style={{ minHeight: '280px' }}>
                 <div className="flex items-center justify-between mb-3">
-                  <h3 className="text-emerald-400 text-xs font-medium uppercase tracking-wider">New Project</h3>
-                  <button onClick={() => { setShowCreateProject(false); setProjectWellSearch(''); }}
+                  <h3 className="text-emerald-400 text-xs font-medium uppercase tracking-wider">New Project Builder</h3>
+                  <button onClick={() => { setShowCreateProject(false); setProjectWellSearch(''); setNewProjectDriverShifts(new Map()); }}
                     className="text-gray-400 hover:text-white text-xs">Cancel</button>
                 </div>
-                <div className="flex gap-4">
-                  {/* Left column: Name, Operator, Wells, End Date */}
-                  <div className="flex-1 space-y-2">
+                <div className="flex gap-4 flex-1 min-h-0">
+                  {/* Left column: Name, Operator, Wells, Job Type, End Date */}
+                  <div className="flex-1 space-y-2 overflow-y-auto">
                     <div>
                       <label className="block text-xs text-gray-400 mb-1">Project Name</label>
                       <input type="text" value={newProjectName} onChange={(e) => setNewProjectName(e.target.value)}
@@ -1751,24 +1768,56 @@ export default function DispatchPage() {
                         </div>
                       )}
                     </div>
-                    <div>
-                      <label className="block text-xs text-gray-400 mb-1">Projected End Date (optional)</label>
-                      <input type="date" value={newProjectEndDate} onChange={(e) => setNewProjectEndDate(e.target.value)}
-                        className="w-full px-3 py-1.5 bg-gray-900 border border-gray-700 rounded text-white text-sm focus:outline-none focus:border-emerald-500" />
+                    <div className="flex gap-3">
+                      <div className="flex-1">
+                        <label className="block text-xs text-gray-400 mb-1">Job Type</label>
+                        <div className="flex gap-1">
+                          <button onClick={() => setNewProjectJobType('service')}
+                            className={`flex-1 px-2 py-1.5 text-xs font-medium rounded transition-colors ${newProjectJobType === 'service' ? 'bg-purple-600 text-white' : 'bg-gray-900 text-gray-400 border border-gray-700 hover:text-white'}`}>
+                            Service Work
+                          </button>
+                          <button onClick={() => setNewProjectJobType('pw')}
+                            className={`flex-1 px-2 py-1.5 text-xs font-medium rounded transition-colors ${newProjectJobType === 'pw' ? 'bg-blue-600 text-white' : 'bg-gray-900 text-gray-400 border border-gray-700 hover:text-white'}`}>
+                            Production Water
+                          </button>
+                        </div>
+                      </div>
+                      <div className="flex-1">
+                        <label className="block text-xs text-gray-400 mb-1">End Date (optional)</label>
+                        <input type="date" value={newProjectEndDate} onChange={(e) => setNewProjectEndDate(e.target.value)}
+                          className="w-full px-3 py-1.5 bg-gray-900 border border-gray-700 rounded text-white text-sm focus:outline-none focus:border-emerald-500" />
+                      </div>
                     </div>
                   </div>
-                  {/* Middle column: Drivers */}
-                  <div className="w-48 flex flex-col">
-                    <label className="block text-xs text-gray-400 mb-1">Assign Drivers for Today</label>
-                    <div className="bg-gray-900 border border-gray-700 rounded flex-1 overflow-y-auto max-h-48">
-                      {drivers.map(d => (
-                        <label key={d.key} className="flex items-center gap-2 px-2 py-1 hover:bg-gray-800 cursor-pointer border-b border-gray-800 last:border-0">
-                          <input type="checkbox" checked={newProjectDriverHashes.has(d.key)}
-                            onChange={(e) => { setNewProjectDriverHashes(prev => { const next = new Set(prev); if (e.target.checked) next.add(d.key); else next.delete(d.key); return next; }); }}
-                            className="w-3 h-3 rounded border-gray-600 bg-gray-800 text-emerald-500 focus:ring-emerald-500" />
-                          <span className="text-white text-xs truncate">{d.legalName || d.displayName}</span>
-                        </label>
-                      ))}
+                  {/* Middle column: Drivers with shift toggle */}
+                  <div className="w-56 flex flex-col">
+                    <label className="block text-xs text-gray-400 mb-1">Assign Drivers ({newProjectDriverHashes.size} selected)</label>
+                    <div className="bg-gray-900 border border-gray-700 rounded flex-1 overflow-y-auto">
+                      {drivers.map(d => {
+                        const checked = newProjectDriverHashes.has(d.key);
+                        const shift = newProjectDriverShifts.get(d.key) || 'day';
+                        return (
+                          <div key={d.key} className="flex items-center gap-1.5 px-2 py-1 hover:bg-gray-800 border-b border-gray-800 last:border-0">
+                            <input type="checkbox" checked={checked}
+                              onChange={(e) => {
+                                setNewProjectDriverHashes(prev => { const next = new Set(prev); if (e.target.checked) next.add(d.key); else next.delete(d.key); return next; });
+                                if (!e.target.checked) setNewProjectDriverShifts(prev => { const next = new Map(prev); next.delete(d.key); return next; });
+                              }}
+                              className="w-3 h-3 rounded border-gray-600 bg-gray-800 text-emerald-500 focus:ring-emerald-500 flex-shrink-0" />
+                            <span className="text-white text-xs truncate flex-1">{d.legalName || d.displayName}</span>
+                            {checked && (
+                              <button onClick={() => {
+                                setNewProjectDriverShifts(prev => { const next = new Map(prev); next.set(d.key, shift === 'day' ? 'night' : 'day'); return next; });
+                              }}
+                                className={`px-1.5 py-0.5 text-[9px] font-bold rounded flex-shrink-0 transition-colors ${
+                                  shift === 'day' ? 'bg-amber-600/30 text-amber-400 hover:bg-amber-600/50' : 'bg-blue-600/30 text-blue-400 hover:bg-blue-600/50'
+                                }`}>
+                                {shift === 'day' ? 'DAY' : 'NIGHT'}
+                              </button>
+                            )}
+                          </div>
+                        );
+                      })}
                     </div>
                   </div>
                   {/* Right column: Notes + Create button */}
@@ -3820,7 +3869,7 @@ function ProjectDetailPanel({ project, projectDispatches, projectInvoices, drive
             </div>
           )}
 
-          {/* Add driver to shift */}
+          {/* Add / move driver to shift */}
           <div className="flex items-center gap-2 mt-2 pt-2 border-t border-gray-700/50">
             <select value={addDriverShift} onChange={(e) => setAddDriverShift(e.target.value as 'day' | 'night')}
               className="px-2 py-1.5 bg-gray-900 border border-gray-700 rounded text-white text-xs w-20">
@@ -3832,26 +3881,52 @@ function ProjectDetailPanel({ project, projectDispatches, projectInvoices, drive
               onChange={(e) => setAddDriverHash(e.target.value)}
               className="flex-1 px-2 py-1.5 bg-gray-900 border border-gray-700 rounded text-white text-xs focus:outline-none focus:border-emerald-500"
             >
-              <option value="">Add driver...</option>
+              <option value="">Add / move driver...</option>
               {drivers
-                .filter(d => !(project.dayDriverHashes || []).includes(d.key) && !(project.nightDriverHashes || []).includes(d.key))
-                .map(d => (
-                  <option key={d.key} value={d.key}>{d.legalName || d.displayName}</option>
-                ))}
+                .filter(d => {
+                  // Hide drivers already in the SELECTED shift
+                  const targetList = addDriverShift === 'day' ? (project.dayDriverHashes || []) : (project.nightDriverHashes || []);
+                  return !targetList.includes(d.key);
+                })
+                .map(d => {
+                  const inDay = (project.dayDriverHashes || []).includes(d.key);
+                  const inNight = (project.nightDriverHashes || []).includes(d.key);
+                  const label = d.legalName || d.displayName;
+                  return (
+                    <option key={d.key} value={d.key}>
+                      {label}{inDay ? ' (day → move)' : inNight ? ' (night → move)' : ''}
+                    </option>
+                  );
+                })}
             </select>
             <button
               onClick={() => {
                 if (!addDriverHash) return;
-                const field = addDriverShift === 'day' ? 'dayDriverHashes' : 'nightDriverHashes';
-                const current = (addDriverShift === 'day' ? project.dayDriverHashes : project.nightDriverHashes) || [];
-                onUpdateProject?.(project.id!, { [field]: [...current, addDriverHash] });
-                onAddDriver(addDriverHash);
+                const targetField = addDriverShift === 'day' ? 'dayDriverHashes' : 'nightDriverHashes';
+                const otherField = addDriverShift === 'day' ? 'nightDriverHashes' : 'dayDriverHashes';
+                const targetList = (addDriverShift === 'day' ? project.dayDriverHashes : project.nightDriverHashes) || [];
+                const otherList = (addDriverShift === 'day' ? project.nightDriverHashes : project.dayDriverHashes) || [];
+                // Remove from other shift if present
+                const updates: Record<string, any> = {};
+                if (otherList.includes(addDriverHash)) {
+                  updates[otherField] = otherList.filter(h => h !== addDriverHash);
+                }
+                // Add to target shift
+                if (!targetList.includes(addDriverHash)) {
+                  updates[targetField] = [...targetList, addDriverHash];
+                }
+                if (Object.keys(updates).length > 0) {
+                  onUpdateProject?.(project.id!, updates);
+                }
+                // Only create dispatches if driver is NEW to the project
+                const isNew = !(project.dayDriverHashes || []).includes(addDriverHash) && !(project.nightDriverHashes || []).includes(addDriverHash);
+                if (isNew) onAddDriver(addDriverHash);
                 setAddDriverHash('');
               }}
               disabled={!addDriverHash}
               className="px-3 py-1.5 bg-emerald-600 hover:bg-emerald-500 disabled:bg-gray-700 disabled:text-gray-500 text-white text-xs font-medium rounded transition-colors"
             >
-              Add
+              {addDriverHash && ((project.dayDriverHashes || []).includes(addDriverHash) || (project.nightDriverHashes || []).includes(addDriverHash)) ? 'Move' : 'Add'}
             </button>
           </div>
 
