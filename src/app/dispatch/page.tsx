@@ -343,6 +343,7 @@ export default function DispatchPage() {
   const [swWellName, setSwWellName] = useState('');
   const [swDropoff, setSwDropoff] = useState('');
   const [swServiceType, setSwServiceType] = useState('');
+  const [swOnsiteBy, setSwOnsiteBy] = useState('');
   const [swNotes, setSwNotes] = useState('');
   const [swDriverHashes, setSwDriverHashes] = useState<Set<string>>(new Set());
   const [swSubmitting, setSwSubmitting] = useState(false);
@@ -863,6 +864,7 @@ export default function DispatchPage() {
           wellName: matchedWell?.wellName || swWellName.trim(),
           ndicWellName: swNdicName,
           ...(swDropoff.trim() ? { disposalName: swDropoff.trim() } : {}),
+          ...(swOnsiteBy ? { onsiteBy: swOnsiteBy } : {}),
           jobType: 'service',
           serviceType: swServiceType.trim(),
           packageId: jobTypeToPackageId[swServiceType.trim()] || undefined,
@@ -888,6 +890,7 @@ export default function DispatchPage() {
       setSwWellName('');
       setSwDropoff('');
       setSwServiceType('');
+      setSwOnsiteBy('');
       setSwNotes('');
       setSwDriverHashes(new Set());
       setTimeout(() => setMessage(''), 4000);
@@ -1638,16 +1641,27 @@ export default function DispatchPage() {
                   </div>
                 </div>
 
-                {/* Service type */}
-                <div className="w-44 flex-shrink-0">
-                  <label className="block text-xs text-gray-400 mb-1">Service Type</label>
-                  <select value={swServiceType} onChange={(e) => setSwServiceType(e.target.value)}
-                    className="w-full px-3 py-1.5 bg-gray-900 border border-gray-700 rounded text-white text-sm focus:outline-none focus:border-purple-500">
-                    <option value="">Select type...</option>
-                    {dynamicServiceTypes.map(st => (
-                      <option key={st} value={st}>{st}</option>
-                    ))}
-                  </select>
+                {/* Service type + Be onsite by */}
+                <div className="w-44 flex-shrink-0 space-y-2">
+                  <div>
+                    <label className="block text-xs text-gray-400 mb-1">Service Type</label>
+                    <select value={swServiceType} onChange={(e) => setSwServiceType(e.target.value)}
+                      className="w-full px-3 py-1.5 bg-gray-900 border border-gray-700 rounded text-white text-sm focus:outline-none focus:border-purple-500">
+                      <option value="">Select type...</option>
+                      {dynamicServiceTypes.map(st => (
+                        <option key={st} value={st}>{st}</option>
+                      ))}
+                    </select>
+                  </div>
+                  <div>
+                    <label className="block text-xs text-gray-400 mb-1">Be onsite by</label>
+                    <input
+                      type="time"
+                      value={swOnsiteBy}
+                      onChange={(e) => setSwOnsiteBy(e.target.value)}
+                      className="w-full px-3 py-1.5 bg-gray-900 border border-gray-700 rounded text-white text-sm focus:outline-none focus:border-purple-500"
+                    />
+                  </div>
                 </div>
 
                 {/* Driver picker */}
