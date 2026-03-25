@@ -10,7 +10,7 @@ import { getFirebaseDatabase } from '@/lib/firebase';
 import { getFirestoreDb } from '@/lib/firebase';
 import { AddPullModal } from '@/components/AddPullModal';
 import { collection, addDoc, getDocs, getDoc, setDoc, query, where, orderBy, Timestamp, doc, updateDoc, onSnapshot, deleteDoc } from 'firebase/firestore';
-import { loadDisposals, searchDisposals, type NdicWell, loadOperators, searchOperators, type NdicOperator } from '@/lib/firestoreWells';
+import { loadDisposals, searchDisposals, type NdicWell, loadOperators, searchOperators, type NdicOperator, loadWellsForOperator } from '@/lib/firestoreWells';
 import { loadCompanyById } from '@/lib/companySettings';
 import { trackJobTypeUsage } from '@/lib/jobTypeUsage';
 
@@ -326,6 +326,7 @@ export default function DispatchPage() {
   const [disposalSearch, setDisposalSearch] = useState('');
   const [disposalResults, setDisposalResults] = useState<NdicWell[]>([]);
   const [allDisposals, setAllDisposals] = useState<NdicWell[]>([]);
+  const [allOperatorWells, setAllOperatorWells] = useState<NdicWell[]>([]);
   const [assigning, setAssigning] = useState(false);
 
   // Multi-select dispatch state
@@ -437,6 +438,15 @@ export default function DispatchPage() {
           companyConfig = await loadCompanyById(companyId);
           if (!companyConfig?.activePackages?.length) return; // no packages — keep fallback
           activeFilter = companyConfig.activePackages;
+
+          // Load all operator wells for SW well search (not just route wells)
+          if (companyConfig.assignedOperators?.length && allOperatorWells.length === 0) {
+            Promise.all(
+              companyConfig.assignedOperators.map((op: string) => loadWellsForOperator(op))
+            ).then(results => {
+              setAllOperatorWells(results.flat());
+            }).catch(console.warn);
+          }
         }
 
         const firestore = getFirestoreDb();
@@ -1555,16 +1565,21 @@ export default function DispatchPage() {
                       const q = swWellName.trim().toLowerCase();
                       if (q.length < 2) return null;
                       const exactMatch = wells.some(w => (w.ndicName || w.wellName).toLowerCase() === q) ||
+                        allOperatorWells.some(w => w.well_name.toLowerCase() === q) ||
                         allDisposals.some(d => d.well_name.toLowerCase() === q);
                       if (exactMatch) return null;
-                      // Search route wells + disposals together
+                      // Search route wells + operator wells + disposals
+                      const seen = new Set<string>();
                       const wellMatches = wells
                         .filter(w => (w.ndicName || w.wellName).toLowerCase().includes(q))
-                        .map(w => ({ label: w.ndicName || w.wellName, sub: w.route || '', value: w.ndicName || w.wellName }));
+                        .map(w => { seen.add((w.ndicName || w.wellName).toLowerCase()); return { label: w.ndicName || w.wellName, sub: w.route || '', value: w.ndicName || w.wellName }; });
+                      const operatorMatches = allOperatorWells
+                        .filter(w => w.well_name.toLowerCase().includes(q) && !seen.has(w.well_name.toLowerCase()))
+                        .map(w => { seen.add(w.well_name.toLowerCase()); return { label: w.well_name, sub: w.operator || 'NDIC', value: w.well_name }; });
                       const disposalMatches = allDisposals
-                        .filter(d => d.well_name.toLowerCase().includes(q))
+                        .filter(d => d.well_name.toLowerCase().includes(q) && !seen.has(d.well_name.toLowerCase()))
                         .map(d => ({ label: d.well_name, sub: 'SWD', value: d.well_name }));
-                      const combined = [...wellMatches, ...disposalMatches].slice(0, 12);
+                      const combined = [...wellMatches, ...operatorMatches, ...disposalMatches].slice(0, 15);
                       if (combined.length === 0) return null;
                       return (
                         <div className="absolute z-50 w-full mt-1 bg-gray-800 border border-gray-600 rounded max-h-48 overflow-y-auto shadow-lg">
@@ -1592,6 +1607,7 @@ export default function DispatchPage() {
                       const q = swDropoff.trim().toLowerCase();
                       if (q.length < 2) return null;
                       const exactMatch = wells.some(w => (w.ndicName || w.wellName).toLowerCase() === q) ||
+                        allOperatorWells.some(w => w.well_name.toLowerCase() === q) ||
                         allDisposals.some(d => d.well_name.toLowerCase() === q);
                       if (exactMatch) return null;
                       const wellMatches = wells
