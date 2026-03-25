@@ -1740,14 +1740,20 @@ export default function DispatchPage() {
                           className={`w-full flex items-center gap-2 px-2 py-1.5 text-xs text-left border-b border-gray-800 last:border-0 transition-colors ${checked ? 'bg-purple-900/30 text-white' : 'text-gray-300 hover:bg-gray-800'}`}>
                           <input type="checkbox" checked={checked} readOnly className="w-3 h-3 rounded border-gray-600 bg-gray-800 text-purple-600 pointer-events-none flex-shrink-0" />
                           <span className="flex-1 min-w-0 truncate">{d.legalName || d.displayName}</span>
-                          {/* ETA indicator — only when onsiteBy is set */}
+                          {/* "On Job" badge when driver has active dispatch */}
+                          {activeJob && (
+                            <span className="flex-shrink-0 px-1.5 py-0.5 rounded text-[9px] font-bold bg-blue-900/50 text-blue-400 border border-blue-800">
+                              On Job
+                            </span>
+                          )}
+                          {/* ETA indicator — when onsiteBy is set */}
                           {eta && swOnsiteBy && (
                             <span className="flex-shrink-0 font-bold text-[10px]" style={{ color: etaColor }}>
                               {eta.display}
                             </span>
                           )}
-                          {/* Stage label — when no ETA but driver is on a job */}
-                          {!eta && stageLabel && !swOnsiteBy && (
+                          {/* Stage label — always show when driver is on a job */}
+                          {stageLabel && (
                             <span className="flex-shrink-0 text-[10px] text-gray-500">{stageLabel}</span>
                           )}
                         </button>
