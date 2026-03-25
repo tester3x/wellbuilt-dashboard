@@ -114,6 +114,7 @@ interface Project {
   actualEndDate?: string;
   status: 'active' | 'paused' | 'completed';
   jobType?: 'service' | 'pw';  // Default: 'service' (99% of projects are SW)
+  serviceType?: string;        // e.g. 'Flowback', 'Rig Move', 'Mud Move'
   notes?: string;              // Job description (editable)
   updates?: ProjectUpdate[];   // Shift handoff log
   dayDriverHashes?: string[];  // Day shift drivers
@@ -442,6 +443,7 @@ export default function DispatchPage() {
   const [newProjectDriverHashes, setNewProjectDriverHashes] = useState<Set<string>>(new Set());
   const [newProjectDriverShifts, setNewProjectDriverShifts] = useState<Map<string, 'day' | 'night'>>(new Map());
   const [newProjectJobType, setNewProjectJobType] = useState<'service' | 'pw'>('service');
+  const [newProjectServiceType, setNewProjectServiceType] = useState('');
   const [creatingProject, setCreatingProject] = useState(false);
   const [projectWellSearch, setProjectWellSearch] = useState('');
 
@@ -604,6 +606,12 @@ export default function DispatchPage() {
         items.push({ id: d.id, ...d.data() } as Project);
       });
       setProjects(items);
+      // Sync selectedProject with latest data from Firestore
+      setSelectedProject(prev => {
+        if (!prev?.id) return prev;
+        const updated = items.find(p => p.id === prev.id);
+        return updated || null;
+      });
     }, (err) => {
       console.error('Projects listener error:', err);
     });
@@ -1012,6 +1020,7 @@ export default function DispatchPage() {
         projectedEndDate: newProjectEndDate || undefined,
         status: 'active',
         jobType: newProjectJobType,
+        serviceType: newProjectServiceType || undefined,
         notes: newProjectNotes.trim() || undefined,
         driverSchedule: schedule,
         dayDriverHashes: dayHashes.length > 0 ? dayHashes : undefined,
@@ -1036,6 +1045,7 @@ export default function DispatchPage() {
               operator: newProjectOperator.trim(),
               route: wellData?.route || '',
               jobType: newProjectJobType,
+              serviceType: newProjectServiceType || undefined,
               status: 'pending',
               priority: 500,
               assignedAt: Timestamp.now(),
@@ -1056,6 +1066,7 @@ export default function DispatchPage() {
       setNewProjectDriverHashes(new Set());
       setNewProjectDriverShifts(new Map());
       setNewProjectJobType('service');
+      setNewProjectServiceType('');
       setShowCreateProject(false);
       setProjectWellSearch('');
       setMessage('Project created');
@@ -1113,6 +1124,7 @@ export default function DispatchPage() {
             operator: project.operatorName || '',
             route: wellData?.route || '',
             jobType: project.jobType || 'service',
+            serviceType: project.serviceType || undefined,
             status: 'pending',
             priority: 500,
             assignedAt: Timestamp.now(),
@@ -1165,6 +1177,7 @@ export default function DispatchPage() {
             operator: project.operatorName || '',
             route: wellData?.route || '',
             jobType: project.jobType || 'service',
+            serviceType: project.serviceType || undefined,
             status: 'pending',
             priority: 500,
             assignedAt: Timestamp.now(),
@@ -1770,21 +1783,26 @@ export default function DispatchPage() {
                     </div>
                     <div className="flex gap-3">
                       <div className="flex-1">
-                        <label className="block text-xs text-gray-400 mb-1">Job Type</label>
-                        <div className="flex gap-1">
-                          <button onClick={() => setNewProjectJobType('service')}
-                            className={`flex-1 px-2 py-1.5 text-xs font-medium rounded transition-colors ${newProjectJobType === 'service' ? 'bg-purple-600 text-white' : 'bg-gray-900 text-gray-400 border border-gray-700 hover:text-white'}`}>
-                            Service Work
-                          </button>
-                          <button onClick={() => setNewProjectJobType('pw')}
-                            className={`flex-1 px-2 py-1.5 text-xs font-medium rounded transition-colors ${newProjectJobType === 'pw' ? 'bg-blue-600 text-white' : 'bg-gray-900 text-gray-400 border border-gray-700 hover:text-white'}`}>
-                            Production Water
-                          </button>
-                        </div>
+                        <label className="block text-xs text-gray-400 mb-1">Service Type</label>
+                        <select
+                          value={newProjectServiceType}
+                          onChange={(e) => {
+                            setNewProjectServiceType(e.target.value);
+                            setNewProjectJobType(e.target.value === 'Production Water' ? 'pw' : 'service');
+                          }}
+                          className="w-full px-3 py-1.5 bg-gray-900 border border-gray-700 rounded text-white text-sm focus:outline-none focus:border-emerald-500"
+                        >
+                          <option value="">Select type...</option>
+                          {dynamicServiceTypes.map(t => (
+                            <option key={t} value={t}>{t}</option>
+                          ))}
+                          <option value="Production Water">Production Water</option>
+                        </select>
                       </div>
                       <div className="flex-1">
                         <label className="block text-xs text-gray-400 mb-1">End Date (optional)</label>
                         <input type="date" value={newProjectEndDate} onChange={(e) => setNewProjectEndDate(e.target.value)}
+                          min={new Date().toISOString().slice(0, 10)}
                           className="w-full px-3 py-1.5 bg-gray-900 border border-gray-700 rounded text-white text-sm focus:outline-none focus:border-emerald-500" />
                       </div>
                     </div>
