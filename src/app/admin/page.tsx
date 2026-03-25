@@ -78,6 +78,8 @@ export default function AdminPage() {
   const [editWellPullBbls, setEditWellPullBbls] = useState('');
   const [editWellTankCapacity, setEditWellTankCapacity] = useState('');
   const [editWellTankHeight, setEditWellTankHeight] = useState('');
+  const [showEditTankCalc, setShowEditTankCalc] = useState(false);
+  const [editCalcDiameter, setEditCalcDiameter] = useState('');
 
   // Read-only route info for Edit Well panel
   const [wellRouteInfo, setWellRouteInfo] = useState<{ labels: string[]; count: number } | null>(null);
@@ -1344,6 +1346,67 @@ export default function AdminPage() {
                     <div className="text-xs text-gray-500 mt-1">
                       BBL/ft: {(((parseInt(editWellTankCapacity) || 400) / (parseInt(editWellTankHeight) || 20)) * (parseInt(editWellTanks) || 1)).toFixed(1)} per foot
                     </div>
+                    <button
+                      type="button"
+                      onClick={() => setShowEditTankCalc(!showEditTankCalc)}
+                      className="text-xs text-amber-500 hover:text-amber-400 mt-1"
+                    >
+                      {showEditTankCalc ? '▾ Hide calculator' : '▸ No nameplate? Calculate from diameter'}
+                    </button>
+                    {showEditTankCalc && (
+                      <div className="bg-gray-800 rounded p-3 mt-1 border border-gray-700">
+                        <div className="flex gap-3 items-end">
+                          <div className="flex-1">
+                            <label className="text-gray-400 text-xs">Diameter (ft, e.g. 13.5)</label>
+                            <input
+                              type="number"
+                              step="0.1"
+                              value={editCalcDiameter}
+                              onChange={(e) => {
+                                setEditCalcDiameter(e.target.value);
+                                const d = parseFloat(e.target.value);
+                                const h = parseInt(editWellTankHeight) || 20;
+                                if (d > 0 && h > 0) {
+                                  const r = d / 2;
+                                  const cubicFt = Math.PI * r * r * h;
+                                  const bbl = Math.round(cubicFt / 5.6146);
+                                  setEditWellTankCapacity(String(bbl));
+                                }
+                              }}
+                              placeholder="e.g. 13.5"
+                              className="w-full px-3 py-2 bg-gray-700 text-white rounded text-sm"
+                              disabled={isRenaming}
+                            />
+                          </div>
+                          <div className="text-gray-400 text-xs pb-2">×</div>
+                          <div className="flex-1">
+                            <label className="text-gray-400 text-xs">Height (ft)</label>
+                            <input
+                              type="number"
+                              value={editWellTankHeight}
+                              onChange={(e) => {
+                                setEditWellTankHeight(e.target.value);
+                                const d = parseFloat(editCalcDiameter);
+                                const h = parseInt(e.target.value) || 20;
+                                if (d > 0 && h > 0) {
+                                  const r = d / 2;
+                                  const cubicFt = Math.PI * r * r * h;
+                                  const bbl = Math.round(cubicFt / 5.6146);
+                                  setEditWellTankCapacity(String(bbl));
+                                }
+                              }}
+                              className="w-full px-3 py-2 bg-gray-700 text-white rounded text-sm"
+                              disabled={isRenaming}
+                            />
+                          </div>
+                          <div className="text-amber-400 text-sm font-bold pb-2">
+                            = {editCalcDiameter && parseFloat(editCalcDiameter) > 0
+                              ? `${Math.round(Math.PI * Math.pow(parseFloat(editCalcDiameter) / 2, 2) * (parseInt(editWellTankHeight) || 20) / 5.6146)} BBL`
+                              : '—'}
+                          </div>
+                        </div>
+                      </div>
+                    )}
                     <div className="flex gap-2 mt-2">
                       <button
                         onClick={handleUpdateWell}
