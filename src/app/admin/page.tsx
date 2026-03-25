@@ -852,8 +852,8 @@ export default function AdminPage() {
            'Customer Management'}
         </h2>
 
-        {/* Tabs */}
-        <div className="flex gap-2 mb-6 flex-wrap">
+        {/* Tabs — sticky so they stay visible while scrolling */}
+        <div className="flex gap-2 mb-6 flex-wrap sticky top-0 z-10 bg-gray-900 py-2 -mx-6 px-6">
           <button
             onClick={() => setActiveTab('wells')}
             className={`px-4 py-2 rounded ${activeTab === 'wells' ? 'bg-blue-600 text-white' : 'bg-gray-700 text-gray-300'}`}
