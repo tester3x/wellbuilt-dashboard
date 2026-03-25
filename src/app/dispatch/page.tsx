@@ -3996,7 +3996,7 @@ function ProjectDetailPanel({ project, projectDispatches, projectInvoices, drive
                     <span className="text-gray-400">{u.author}</span>
                     <span className="text-gray-600 text-[10px]">{new Date(u.timestamp).toLocaleString([], { month: 'numeric', day: 'numeric', hour: 'numeric', minute: '2-digit' })}</span>
                   </div>
-                  <div className="text-gray-300">{u.text}</div>
+                  <div className="text-gray-300 whitespace-pre-wrap">{u.text}</div>
                 </div>
               ))}
             </div>
@@ -4006,14 +4006,15 @@ function ProjectDetailPanel({ project, projectDispatches, projectInvoices, drive
                 <option value="day">Day</option>
                 <option value="night">Night</option>
               </select>
-              <input
-                type="text"
+              <textarea
                 value={newUpdate}
                 onChange={(e) => setNewUpdate(e.target.value)}
                 placeholder="Update for next shift..."
-                className="flex-1 px-2 py-1.5 bg-gray-900 border border-gray-700 rounded text-white text-xs focus:outline-none focus:border-emerald-500"
+                rows={2}
+                className="flex-1 px-2 py-1.5 bg-gray-900 border border-gray-700 rounded text-white text-xs focus:outline-none focus:border-emerald-500 resize-none"
                 onKeyDown={(e) => {
-                  if (e.key === 'Enter' && newUpdate.trim()) {
+                  if (e.key === 'Enter' && !e.shiftKey && newUpdate.trim()) {
+                    e.preventDefault();
                     const update: ProjectUpdate = {
                       text: newUpdate.trim(),
                       author: 'Dispatch',
@@ -4024,7 +4025,7 @@ function ProjectDetailPanel({ project, projectDispatches, projectInvoices, drive
                     setNewUpdate('');
                   }
                 }}
-              />
+              ></textarea>
               <button
                 onClick={() => {
                   if (!newUpdate.trim()) return;
