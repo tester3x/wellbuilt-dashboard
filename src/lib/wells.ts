@@ -119,6 +119,7 @@ export interface PullPacket {
   // No-level flag (non-production-tank pull — fresh water, service work, etc.)
   noLevel?: boolean;
   jobType?: string;          // Commodity type from WB T (e.g. "Production Water")
+  wellDown?: boolean;        // Well is down (not producing)
 }
 
 export interface PerformanceRow {
@@ -1101,7 +1102,8 @@ export async function editPull(
   wellName: string,
   newLevelInches: number,
   newBbls: number,
-  newDateTimeUTC?: string
+  newDateTimeUTC?: string,
+  wellDown?: boolean
 ): Promise<void> {
   const db = getFirebaseDatabase();
   const timestamp = Date.now();
@@ -1116,6 +1118,7 @@ export async function editPull(
     bblsTaken: newBbls,
     timestamp: new Date().toISOString(),
     source: 'dashboard',
+    wellDown: wellDown || false,
   };
 
   if (newDateTimeUTC) {

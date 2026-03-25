@@ -85,6 +85,7 @@ function WellDetailPage() {
   const [editLevel, setEditLevel] = useState('');
   const [editBbls, setEditBbls] = useState('');
   const [editDateTime, setEditDateTime] = useState('');
+  const [editWellDown, setEditWellDown] = useState(false);
   const [editSubmitting, setEditSubmitting] = useState(false);
 
   // Delete confirmation state
@@ -278,6 +279,7 @@ function WellDetailPage() {
     } else {
       setEditDateTime('');
     }
+    setEditWellDown(pull.wellDown || false);
   };
 
   const submitEdit = async () => {
@@ -295,7 +297,8 @@ function WellDetailPage() {
         editingPull.wellName,
         Number(editLevel),
         Number(editBbls),
-        dateTimeChanged ? newDt.toISOString() : undefined
+        dateTimeChanged ? newDt.toISOString() : undefined,
+        editWellDown
       );
       // Refresh data
       const history = await fetchWellHistoryUnified(wellName);
@@ -736,6 +739,17 @@ function WellDetailPage() {
                   className="w-full px-4 py-2 bg-gray-700 border border-gray-600 rounded text-white"
                 />
               </div>
+            </div>
+
+            <div className="flex items-center gap-2 mt-4">
+              <input
+                type="checkbox"
+                id="editWellDown"
+                checked={editWellDown}
+                onChange={(e) => setEditWellDown(e.target.checked)}
+                className="w-4 h-4 rounded border-gray-600 bg-gray-700 text-red-500 focus:ring-red-500"
+              />
+              <label htmlFor="editWellDown" className="text-sm font-medium text-red-400">Well DOWN</label>
             </div>
 
             <div className="flex justify-end gap-3 mt-6">
