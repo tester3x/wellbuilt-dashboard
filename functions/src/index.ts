@@ -1164,6 +1164,9 @@ export const processEditRequest = functionsV1.database
     const newDateTimeUTC = data.dateTimeUTC || origPacket.dateTimeUTC;
     const newDateTime = data.dateTime || origPacket.dateTime;
 
+    // Apply wellDown edit — use edited value if present, otherwise keep original
+    const newWellDown = data.wellDown !== undefined ? (data.wellDown === true || data.wellDown === 'true') : (origPacket.wellDown || false);
+
     // No top level = non-production-tank edit. Update basic fields only, skip tank math.
     if (newTankTopInches <= 0) {
       console.log(`[NO-LEVEL EDIT] ${wellName}: No top level, skipping tank math`);
@@ -1178,7 +1181,9 @@ export const processEditRequest = functionsV1.database
         editedAt: new Date().toISOString(),
         editedBy: data.source || 'dashboard',
         noLevel: true,
+        wellDown: newWellDown,
       });
+      await db.ref(`wells/${wellName}/status/isDown`).set(newWellDown);
       await snapshot.ref.remove();
       return null;
     }
@@ -1252,9 +1257,13 @@ export const processEditRequest = functionsV1.database
       dateTime: newDateTime,
       editedAt: new Date().toISOString(),
       editedBy: data.source || 'dashboard',
+      wellDown: newWellDown,
     };
 
     await db.ref(`packets/processed/${originalPacketId}`).update(updates);
+
+    // Update well down status if this is the latest packet
+    await db.ref(`wells/${wellName}/status/isDown`).set(newWellDown);
 
     // CASCADE: Recalculate flowRateDays on the NEXT packet after the edited one.
     // That packet's recovery was based on our old tankAfterInches — now stale.
@@ -1360,7 +1369,7 @@ export const processEditRequest = functionsV1.database
             lastPullBbls: newBblsTaken.toString(),
             lastPullDateTime: newDateTime || formatLocalDateTime(new Date(newDateTimeUTC)),
             lastPullDateTimeUTC: newDateTimeUTC,
-            timeTillPull: origPacket.wellDown ? 'Down' : (estTimeToPull || 'Calculating...'),
+            timeTillPull: newWellDown ? 'Down' : (estTimeToPull || 'Calculating...'),
             nextPullTime: estDateTimePull ? formatLocalDateTime(new Date(estDateTimePull)) : 'Unknown',
             nextPullTimeUTC: estDateTimePull,
             isEdit: true,
@@ -1389,7 +1398,7 @@ export const processEditRequest = functionsV1.database
           timeTillPull: origPacket.wellDown ? 'Down' : (estTimeToPull || 'Calculating...'),
           nextPullTime: estDateTimePull ? formatLocalDateTime(new Date(estDateTimePull)) : 'Unknown',
           nextPullTimeUTC: estDateTimePull,
-          wellDown: origPacket.wellDown || false,
+          wellDown: newWellDown,
           status: 'success',
           timestamp: responseTimestamp.toISOString(),
           timestampUTC: responseTimestamp.toISOString(),
