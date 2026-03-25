@@ -340,6 +340,7 @@ export default function DispatchPage() {
 
   // Service work form state
   const [swWellName, setSwWellName] = useState('');
+  const [swDropoff, setSwDropoff] = useState('');
   const [swServiceType, setSwServiceType] = useState('');
   const [swNotes, setSwNotes] = useState('');
   const [swDriverHashes, setSwDriverHashes] = useState<Set<string>>(new Set());
@@ -851,6 +852,7 @@ export default function DispatchPage() {
           ...(driver.legalName ? { driverFirstName: getFirstName(driver) } : {}),
           wellName: matchedWell?.wellName || swWellName.trim(),
           ndicWellName: swNdicName,
+          ...(swDropoff.trim() ? { disposalName: swDropoff.trim() } : {}),
           jobType: 'service',
           serviceType: swServiceType.trim(),
           packageId: jobTypeToPackageId[swServiceType.trim()] || undefined,
@@ -874,6 +876,7 @@ export default function DispatchPage() {
       const names = selectedDrivers.map(d => d.legalName || d.displayName).join(', ');
       setMessage(`Service work dispatched to ${names}`);
       setSwWellName('');
+      setSwDropoff('');
       setSwServiceType('');
       setSwNotes('');
       setSwDriverHashes(new Set());
@@ -1537,31 +1540,81 @@ export default function DispatchPage() {
             <div className="bg-gray-800 border border-purple-600/40 rounded-lg p-4 mb-3">
               <div className="text-purple-400 text-xs font-medium uppercase tracking-wider mb-3">Dispatch Service Work</div>
               <div className="flex items-start gap-4">
-                {/* Well search */}
-                <div className="w-64 relative flex-shrink-0">
-                  <label className="block text-xs text-gray-400 mb-1">Well / Location</label>
-                  <input
-                    type="text"
-                    value={swWellName}
-                    onChange={(e) => setSwWellName(e.target.value)}
-                    placeholder="Type to search..."
-                    className="w-full px-3 py-1.5 bg-gray-900 border border-gray-700 rounded text-white text-sm placeholder-gray-500 focus:outline-none focus:border-purple-500"
-                  />
-                  {swWellName.trim().length >= 2 && !wells.some(w => (w.ndicName || w.wellName) === swWellName.trim()) && wells.filter(w => (w.ndicName || w.wellName).toLowerCase().includes(swWellName.trim().toLowerCase())).length > 0 && (
-                    <div className="absolute z-50 w-full mt-1 bg-gray-800 border border-gray-600 rounded max-h-48 overflow-y-auto shadow-lg">
-                      {wells
-                        .filter(w => (w.ndicName || w.wellName).toLowerCase().includes(swWellName.trim().toLowerCase()))
-                        .slice(0, 12)
-                        .map(w => (
-                          <button key={w.wellName} type="button" onClick={() => setSwWellName(w.ndicName || w.wellName)}
-                            className="w-full text-left px-3 py-1.5 hover:bg-gray-700 border-b border-gray-700/50 last:border-0 text-white text-sm">
-                            {w.ndicName || w.wellName}
-                            {w.route && <span className="text-gray-500 text-xs ml-2">{w.route}</span>}
-                          </button>
-                        ))
-                      }
-                    </div>
-                  )}
+                {/* Well search + Drop-off */}
+                <div className="w-64 flex-shrink-0 space-y-2">
+                  <div className="relative">
+                    <label className="block text-xs text-gray-400 mb-1">Well / Location</label>
+                    <input
+                      type="text"
+                      value={swWellName}
+                      onChange={(e) => setSwWellName(e.target.value)}
+                      placeholder="Type to search..."
+                      className="w-full px-3 py-1.5 bg-gray-900 border border-gray-700 rounded text-white text-sm placeholder-gray-500 focus:outline-none focus:border-purple-500"
+                    />
+                    {(() => {
+                      const q = swWellName.trim().toLowerCase();
+                      if (q.length < 2) return null;
+                      const exactMatch = wells.some(w => (w.ndicName || w.wellName).toLowerCase() === q) ||
+                        allDisposals.some(d => d.well_name.toLowerCase() === q);
+                      if (exactMatch) return null;
+                      // Search route wells + disposals together
+                      const wellMatches = wells
+                        .filter(w => (w.ndicName || w.wellName).toLowerCase().includes(q))
+                        .map(w => ({ label: w.ndicName || w.wellName, sub: w.route || '', value: w.ndicName || w.wellName }));
+                      const disposalMatches = allDisposals
+                        .filter(d => d.well_name.toLowerCase().includes(q))
+                        .map(d => ({ label: d.well_name, sub: 'SWD', value: d.well_name }));
+                      const combined = [...wellMatches, ...disposalMatches].slice(0, 12);
+                      if (combined.length === 0) return null;
+                      return (
+                        <div className="absolute z-50 w-full mt-1 bg-gray-800 border border-gray-600 rounded max-h-48 overflow-y-auto shadow-lg">
+                          {combined.map((item, i) => (
+                            <button key={`${item.value}-${i}`} type="button" onClick={() => setSwWellName(item.value)}
+                              className="w-full text-left px-3 py-1.5 hover:bg-gray-700 border-b border-gray-700/50 last:border-0 text-white text-sm">
+                              {item.label}
+                              {item.sub && <span className="text-gray-500 text-xs ml-2">{item.sub}</span>}
+                            </button>
+                          ))}
+                        </div>
+                      );
+                    })()}
+                  </div>
+                  <div className="relative">
+                    <label className="block text-xs text-gray-400 mb-1">Drop-off (optional)</label>
+                    <input
+                      type="text"
+                      value={swDropoff}
+                      onChange={(e) => setSwDropoff(e.target.value)}
+                      placeholder="SWD or well..."
+                      className="w-full px-3 py-1.5 bg-gray-900 border border-gray-700 rounded text-white text-sm placeholder-gray-500 focus:outline-none focus:border-purple-500"
+                    />
+                    {(() => {
+                      const q = swDropoff.trim().toLowerCase();
+                      if (q.length < 2) return null;
+                      const exactMatch = wells.some(w => (w.ndicName || w.wellName).toLowerCase() === q) ||
+                        allDisposals.some(d => d.well_name.toLowerCase() === q);
+                      if (exactMatch) return null;
+                      const wellMatches = wells
+                        .filter(w => (w.ndicName || w.wellName).toLowerCase().includes(q))
+                        .map(w => ({ label: w.ndicName || w.wellName, sub: w.route || '', value: w.ndicName || w.wellName }));
+                      const disposalMatches = allDisposals
+                        .filter(d => d.well_name.toLowerCase().includes(q))
+                        .map(d => ({ label: d.well_name, sub: 'SWD', value: d.well_name }));
+                      const combined = [...wellMatches, ...disposalMatches].slice(0, 12);
+                      if (combined.length === 0) return null;
+                      return (
+                        <div className="absolute z-50 w-full mt-1 bg-gray-800 border border-gray-600 rounded max-h-48 overflow-y-auto shadow-lg">
+                          {combined.map((item, i) => (
+                            <button key={`${item.value}-${i}`} type="button" onClick={() => setSwDropoff(item.value)}
+                              className="w-full text-left px-3 py-1.5 hover:bg-gray-700 border-b border-gray-700/50 last:border-0 text-white text-sm">
+                              {item.label}
+                              {item.sub && <span className="text-gray-500 text-xs ml-2">{item.sub}</span>}
+                            </button>
+                          ))}
+                        </div>
+                      );
+                    })()}
+                  </div>
                 </div>
 
                 {/* Service type */}
