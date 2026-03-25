@@ -1928,7 +1928,7 @@ export default function DispatchPage() {
                         setAssignWellSearch(e.target.value);
                       }}
                       placeholder="Search wells or click Assign below..."
-                      className={`w-full px-3 py-1.5 bg-gray-900 border rounded text-white text-sm focus:outline-none ${assignTarget ? 'border-blue-500 font-bold' : 'border-gray-700'}`}
+                      className={`w-full px-3 py-1.5 bg-gray-900 border rounded text-white text-sm focus:outline-none ${assignTarget ? 'border-blue-500 font-bold' : 'border-gray-700 focus:border-blue-500'}`}
                     />
                     {assignTarget && (
                       <button onClick={() => { setAssignTarget(null); setAssignDriverHash(''); setAssignWellSearch(''); }}
