@@ -445,6 +445,7 @@ export default function DispatchPage() {
   const [newProjectDriverShifts, setNewProjectDriverShifts] = useState<Map<string, 'day' | 'night'>>(new Map());
   const [newProjectJobType, setNewProjectJobType] = useState<'service' | 'pw'>('service');
   const [newProjectServiceType, setNewProjectServiceType] = useState('');
+  const [npbTab, setNpbTab] = useState<'details' | 'drivers' | 'notes'>('details');
   const [creatingProject, setCreatingProject] = useState(false);
   const [projectWellSearch, setProjectWellSearch] = useState('');
 
@@ -1724,34 +1725,56 @@ export default function DispatchPage() {
             {/* PW + SW side by side — OR — Create Project form overlay */}
             {showCreateProject ? (
               <div className="bg-gray-800 border border-emerald-600/40 rounded-lg p-4 flex-shrink-0 flex flex-col" style={{ minHeight: '280px' }}>
-                <div className="flex items-center justify-between mb-3">
+                <div className="flex items-center justify-between mb-2">
                   <h3 className="text-emerald-400 text-xs font-medium uppercase tracking-wider">New Project Builder</h3>
-                  <button onClick={() => { setShowCreateProject(false); setProjectWellSearch(''); setNewProjectDriverShifts(new Map()); }}
+                  <button onClick={() => { setShowCreateProject(false); setProjectWellSearch(''); setNewProjectDriverShifts(new Map()); setNpbTab('details'); }}
                     className="text-gray-400 hover:text-white text-xs">Cancel</button>
                 </div>
-                <div className="flex gap-4 flex-1 min-h-0">
-                  {/* Left column: Name, Operator, Wells, Job Type, End Date */}
-                  <div className="flex-1 space-y-2 overflow-y-auto">
-                    <div>
-                      <label className="block text-xs text-gray-400 mb-1">Project Name</label>
-                      <input type="text" value={newProjectName} onChange={(e) => setNewProjectName(e.target.value)}
-                        placeholder="e.g. Hess Flowback - Antelope Creek"
-                        className="w-full px-3 py-1.5 bg-gray-900 border border-gray-700 rounded text-white text-sm placeholder-gray-500 focus:outline-none focus:border-emerald-500" />
-                    </div>
-                    <div className="relative">
-                      <label className="block text-xs text-gray-400 mb-1">Operator</label>
-                      <input type="text" value={newProjectOperator}
-                        onChange={(e) => { setNewProjectOperator(e.target.value); setOperatorSuggestions(searchOperators(e.target.value, allOperators)); }}
-                        placeholder="e.g. Hess, Slawson"
-                        className="w-full px-3 py-1.5 bg-gray-900 border border-gray-700 rounded text-white text-sm placeholder-gray-500 focus:outline-none focus:border-emerald-500" />
-                      {operatorSuggestions.length > 0 && (
-                        <div className="absolute z-10 w-full bg-gray-900 border border-gray-700 rounded mt-0.5 max-h-32 overflow-y-auto">
-                          {operatorSuggestions.map(op => (
-                            <button key={op.name} onClick={() => { setNewProjectOperator(op.name); setOperatorSuggestions([]); }}
-                              className="w-full text-left px-3 py-1.5 hover:bg-gray-700 text-white text-xs border-b border-gray-800 last:border-0">{op.name}</button>
-                          ))}
-                        </div>
-                      )}
+                {/* NPB Tab bar */}
+                <div className="flex items-center gap-1 mb-3 border-b border-gray-700 pb-2">
+                  {([
+                    { key: 'details' as const, label: 'Details', badge: newProjectName ? newProjectWells.length > 0 ? '✓' : '' : '' },
+                    { key: 'drivers' as const, label: 'Drivers', badge: newProjectDriverHashes.size > 0 ? `${newProjectDriverHashes.size}` : '' },
+                    { key: 'notes' as const, label: 'Notes', badge: newProjectNotes.trim() ? '✓' : '' },
+                  ]).map(tab => (
+                    <button key={tab.key} onClick={() => setNpbTab(tab.key)}
+                      className={`px-3 py-1 text-xs font-medium rounded transition-colors ${npbTab === tab.key ? 'bg-emerald-600/30 text-emerald-400' : 'text-gray-400 hover:text-white hover:bg-gray-700'}`}>
+                      {tab.label}
+                      {tab.badge && <span className="ml-1.5 px-1 py-0.5 bg-emerald-600/20 text-emerald-400 text-[9px] rounded font-bold">{tab.badge}</span>}
+                    </button>
+                  ))}
+                  <span className="flex-1" />
+                  <button onClick={createProject}
+                    disabled={!newProjectName.trim() || newProjectWells.length === 0 || creatingProject}
+                    className="px-4 py-1 bg-emerald-600 hover:bg-emerald-500 disabled:bg-gray-600 disabled:cursor-not-allowed text-white text-xs font-medium rounded transition-colors">
+                    {creatingProject ? 'Creating...' : 'Create Project'}
+                  </button>
+                </div>
+                {/* Details tab */}
+                {npbTab === 'details' && (
+                  <div className="space-y-2 overflow-y-auto flex-1">
+                    <div className="flex gap-3">
+                      <div className="flex-1">
+                        <label className="block text-xs text-gray-400 mb-1">Project Name</label>
+                        <input type="text" value={newProjectName} onChange={(e) => setNewProjectName(e.target.value)}
+                          placeholder="e.g. Hess Flowback - Antelope Creek"
+                          className="w-full px-3 py-1.5 bg-gray-900 border border-gray-700 rounded text-white text-sm placeholder-gray-500 focus:outline-none focus:border-emerald-500" />
+                      </div>
+                      <div className="flex-1 relative">
+                        <label className="block text-xs text-gray-400 mb-1">Operator</label>
+                        <input type="text" value={newProjectOperator}
+                          onChange={(e) => { setNewProjectOperator(e.target.value); setOperatorSuggestions(searchOperators(e.target.value, allOperators)); }}
+                          placeholder="e.g. Hess, Slawson"
+                          className="w-full px-3 py-1.5 bg-gray-900 border border-gray-700 rounded text-white text-sm placeholder-gray-500 focus:outline-none focus:border-emerald-500" />
+                        {operatorSuggestions.length > 0 && (
+                          <div className="absolute z-10 w-full bg-gray-900 border border-gray-700 rounded mt-0.5 max-h-32 overflow-y-auto">
+                            {operatorSuggestions.map(op => (
+                              <button key={op.name} onClick={() => { setNewProjectOperator(op.name); setOperatorSuggestions([]); }}
+                                className="w-full text-left px-3 py-1.5 hover:bg-gray-700 text-white text-xs border-b border-gray-800 last:border-0">{op.name}</button>
+                            ))}
+                          </div>
+                        )}
+                      </div>
                     </div>
                     <div>
                       <label className="block text-xs text-gray-400 mb-1">Wells ({newProjectWells.length} selected)</label>
@@ -1808,50 +1831,77 @@ export default function DispatchPage() {
                       </div>
                     </div>
                   </div>
-                  {/* Middle column: Drivers with shift toggle */}
-                  <div className="w-56 flex flex-col">
-                    <label className="block text-xs text-gray-400 mb-1">Assign Drivers ({newProjectDriverHashes.size} selected)</label>
-                    <div className="bg-gray-900 border border-gray-700 rounded flex-1 overflow-y-auto">
-                      {drivers.map(d => {
-                        const checked = newProjectDriverHashes.has(d.key);
-                        const shift = newProjectDriverShifts.get(d.key) || 'day';
-                        return (
-                          <div key={d.key} className="flex items-center gap-1.5 px-2 py-1 hover:bg-gray-800 border-b border-gray-800 last:border-0">
-                            <input type="checkbox" checked={checked}
-                              onChange={(e) => {
-                                setNewProjectDriverHashes(prev => { const next = new Set(prev); if (e.target.checked) next.add(d.key); else next.delete(d.key); return next; });
-                                if (!e.target.checked) setNewProjectDriverShifts(prev => { const next = new Map(prev); next.delete(d.key); return next; });
-                              }}
-                              className="w-3 h-3 rounded border-gray-600 bg-gray-800 text-emerald-500 focus:ring-emerald-500 flex-shrink-0" />
-                            <span className="text-white text-xs truncate flex-1">{d.legalName || d.displayName}</span>
-                            {checked && (
-                              <button onClick={() => {
-                                setNewProjectDriverShifts(prev => { const next = new Map(prev); next.set(d.key, shift === 'day' ? 'night' : 'day'); return next; });
-                              }}
-                                className={`px-1.5 py-0.5 text-[9px] font-bold rounded flex-shrink-0 transition-colors ${
-                                  shift === 'day' ? 'bg-amber-600/30 text-amber-400 hover:bg-amber-600/50' : 'bg-blue-600/30 text-blue-400 hover:bg-blue-600/50'
-                                }`}>
-                                {shift === 'day' ? 'DAY' : 'NIGHT'}
-                              </button>
-                            )}
-                          </div>
-                        );
-                      })}
+                )}
+                {/* Drivers tab */}
+                {npbTab === 'drivers' && (
+                  <div className="flex-1 overflow-y-auto">
+                    <div className="grid grid-cols-2 gap-3 h-full">
+                      {/* Day shift column */}
+                      <div className="flex flex-col">
+                        <div className="text-amber-400 text-[10px] font-bold uppercase tracking-wider mb-1">Day Shift ({Array.from(newProjectDriverHashes).filter(h => (newProjectDriverShifts.get(h) || 'day') === 'day').length})</div>
+                        <div className="bg-gray-900 border border-amber-600/20 rounded flex-1 overflow-y-auto">
+                          {drivers.map(d => {
+                            const checked = newProjectDriverHashes.has(d.key);
+                            const shift = newProjectDriverShifts.get(d.key) || 'day';
+                            if (checked && shift !== 'day') return null;
+                            return (
+                              <label key={d.key} className="flex items-center gap-2 px-2 py-1 hover:bg-gray-800 cursor-pointer border-b border-gray-800/50 last:border-0">
+                                <input type="checkbox" checked={checked && shift === 'day'}
+                                  onChange={(e) => {
+                                    if (e.target.checked) {
+                                      setNewProjectDriverHashes(prev => { const next = new Set(prev); next.add(d.key); return next; });
+                                      setNewProjectDriverShifts(prev => { const next = new Map(prev); next.set(d.key, 'day'); return next; });
+                                    } else {
+                                      setNewProjectDriverHashes(prev => { const next = new Set(prev); next.delete(d.key); return next; });
+                                      setNewProjectDriverShifts(prev => { const next = new Map(prev); next.delete(d.key); return next; });
+                                    }
+                                  }}
+                                  className="w-3 h-3 rounded border-gray-600 bg-gray-800 text-amber-500 focus:ring-amber-500 flex-shrink-0" />
+                                <span className={`text-xs truncate ${checked && shift === 'day' ? 'text-white' : 'text-gray-400'}`}>{d.legalName || d.displayName}</span>
+                              </label>
+                            );
+                          })}
+                        </div>
+                      </div>
+                      {/* Night shift column */}
+                      <div className="flex flex-col">
+                        <div className="text-blue-400 text-[10px] font-bold uppercase tracking-wider mb-1">Night Shift ({Array.from(newProjectDriverHashes).filter(h => newProjectDriverShifts.get(h) === 'night').length})</div>
+                        <div className="bg-gray-900 border border-blue-600/20 rounded flex-1 overflow-y-auto">
+                          {drivers.map(d => {
+                            const checked = newProjectDriverHashes.has(d.key);
+                            const shift = newProjectDriverShifts.get(d.key) || 'day';
+                            if (checked && shift !== 'night') return null;
+                            return (
+                              <label key={d.key} className="flex items-center gap-2 px-2 py-1 hover:bg-gray-800 cursor-pointer border-b border-gray-800/50 last:border-0">
+                                <input type="checkbox" checked={checked && shift === 'night'}
+                                  onChange={(e) => {
+                                    if (e.target.checked) {
+                                      setNewProjectDriverHashes(prev => { const next = new Set(prev); next.add(d.key); return next; });
+                                      setNewProjectDriverShifts(prev => { const next = new Map(prev); next.set(d.key, 'night'); return next; });
+                                    } else {
+                                      setNewProjectDriverHashes(prev => { const next = new Set(prev); next.delete(d.key); return next; });
+                                      setNewProjectDriverShifts(prev => { const next = new Map(prev); next.delete(d.key); return next; });
+                                    }
+                                  }}
+                                  className="w-3 h-3 rounded border-gray-600 bg-gray-800 text-blue-500 focus:ring-blue-500 flex-shrink-0" />
+                                <span className={`text-xs truncate ${checked && shift === 'night' ? 'text-white' : 'text-gray-400'}`}>{d.legalName || d.displayName}</span>
+                              </label>
+                            );
+                          })}
+                        </div>
+                      </div>
                     </div>
                   </div>
-                  {/* Right column: Notes + Create button */}
+                )}
+                {/* Notes tab */}
+                {npbTab === 'notes' && (
                   <div className="flex-1 flex flex-col">
-                    <label className="block text-xs text-gray-400 mb-1">Notes</label>
+                    <label className="block text-xs text-gray-400 mb-1">Job Description & Instructions</label>
                     <textarea value={newProjectNotes} onChange={(e) => setNewProjectNotes(e.target.value)}
-                      placeholder="Job description, equipment needed, special instructions..."
-                      className="w-full flex-1 px-3 py-1.5 bg-gray-900 border border-gray-700 rounded text-white text-sm placeholder-gray-500 focus:outline-none focus:border-emerald-500 resize-none min-h-[120px]" />
-                    <button onClick={createProject}
-                      disabled={!newProjectName.trim() || newProjectWells.length === 0 || creatingProject}
-                      className="w-full mt-2 px-4 py-1.5 bg-emerald-600 hover:bg-emerald-500 disabled:bg-gray-600 disabled:cursor-not-allowed text-white text-xs font-medium rounded transition-colors">
-                      {creatingProject ? 'Creating...' : 'Create Project'}
-                    </button>
+                      placeholder={"Be on location loaded at 7:00am\n\nEmpty truck to Pad 379. Suck up rain water by the Recycle pump. Haul to SWD.\n\nYou will meet the roustabout crew around 1:30-2:00pm to clear the Recycle line at Pad 379.\n\nOnce finished follow the crew to Atlas Pad."}
+                      className="w-full flex-1 px-3 py-2 bg-gray-900 border border-gray-700 rounded text-white text-sm placeholder-gray-500 focus:outline-none focus:border-emerald-500 resize-none" />
                   </div>
-                </div>
+                )}
               </div>
             ) : (
             <div className="flex gap-3 flex-shrink-0">
@@ -3593,7 +3643,7 @@ function ProjectDetailPanel({ project, projectDispatches, projectInvoices, drive
   onUpdateProject?: (id: string, data: Partial<Project>) => void;
   onBatchDispatch?: (shift: 'day' | 'night') => void;
 }) {
-  const [detailTab, setDetailTab] = useState<'activity' | 'history' | 'schedule'>('activity');
+  const [detailTab, setDetailTab] = useState<'activity' | 'history' | 'drivers'>('activity');
   const [addDriverHash, setAddDriverHash] = useState('');
   const [addDriverShift, setAddDriverShift] = useState<'day' | 'night'>('day');
   const [editNotes, setEditNotes] = useState(project.notes || '');
@@ -3788,7 +3838,7 @@ function ProjectDetailPanel({ project, projectDispatches, projectInvoices, drive
 
       {/* Detail tabs */}
       <div className="flex items-center gap-1 border-b border-gray-700 pb-1">
-        {(['activity', 'history', 'schedule'] as const).map(tab => (
+        {(['activity', 'history', 'drivers'] as const).map(tab => (
           <button
             key={tab}
             onClick={() => setDetailTab(tab)}
@@ -3798,7 +3848,7 @@ function ProjectDetailPanel({ project, projectDispatches, projectInvoices, drive
           >
             {tab === 'activity' ? `Activity (${activeJobs.length})` :
              tab === 'history' ? `Pull History (${projectInvoices.length})` :
-             'Schedule'}
+             `Drivers (${(project.dayDriverHashes || []).length + (project.nightDriverHashes || []).length})`}
           </button>
         ))}
       </div>
@@ -3923,63 +3973,6 @@ function ProjectDetailPanel({ project, projectDispatches, projectInvoices, drive
             );
           })()}
 
-          {/* Add / move driver to shift */}
-          <div className="flex items-center gap-2 mt-3 pt-2 border-t border-gray-700/50">
-            <select value={addDriverShift} onChange={(e) => setAddDriverShift(e.target.value as 'day' | 'night')}
-              className="px-2 py-1.5 bg-gray-900 border border-gray-700 rounded text-white text-xs w-20">
-              <option value="day">Day</option>
-              <option value="night">Night</option>
-            </select>
-            <select
-              value={addDriverHash}
-              onChange={(e) => setAddDriverHash(e.target.value)}
-              className="flex-1 px-2 py-1.5 bg-gray-900 border border-gray-700 rounded text-white text-xs focus:outline-none focus:border-emerald-500"
-            >
-              <option value="">Add / move driver...</option>
-              {drivers
-                .filter(d => {
-                  const targetList = addDriverShift === 'day' ? (project.dayDriverHashes || []) : (project.nightDriverHashes || []);
-                  return !targetList.includes(d.key);
-                })
-                .map(d => {
-                  const inDay = (project.dayDriverHashes || []).includes(d.key);
-                  const inNight = (project.nightDriverHashes || []).includes(d.key);
-                  const label = d.legalName || d.displayName;
-                  return (
-                    <option key={d.key} value={d.key}>
-                      {label}{inDay ? ' (day → move)' : inNight ? ' (night → move)' : ''}
-                    </option>
-                  );
-                })}
-            </select>
-            <button
-              onClick={() => {
-                if (!addDriverHash) return;
-                const targetField = addDriverShift === 'day' ? 'dayDriverHashes' : 'nightDriverHashes';
-                const otherField = addDriverShift === 'day' ? 'nightDriverHashes' : 'dayDriverHashes';
-                const targetList = (addDriverShift === 'day' ? project.dayDriverHashes : project.nightDriverHashes) || [];
-                const otherList = (addDriverShift === 'day' ? project.nightDriverHashes : project.dayDriverHashes) || [];
-                const updates: Record<string, any> = {};
-                if (otherList.includes(addDriverHash)) {
-                  updates[otherField] = otherList.filter(h => h !== addDriverHash);
-                }
-                if (!targetList.includes(addDriverHash)) {
-                  updates[targetField] = [...targetList, addDriverHash];
-                }
-                if (Object.keys(updates).length > 0) {
-                  onUpdateProject?.(project.id!, updates);
-                }
-                const isNew = !(project.dayDriverHashes || []).includes(addDriverHash) && !(project.nightDriverHashes || []).includes(addDriverHash);
-                if (isNew) onAddDriver(addDriverHash);
-                setAddDriverHash('');
-              }}
-              disabled={!addDriverHash}
-              className="px-3 py-1.5 bg-emerald-600 hover:bg-emerald-500 disabled:bg-gray-700 disabled:text-gray-500 text-white text-xs font-medium rounded transition-colors"
-            >
-              {addDriverHash && ((project.dayDriverHashes || []).includes(addDriverHash) || (project.nightDriverHashes || []).includes(addDriverHash)) ? 'Move' : 'Add'}
-            </button>
-          </div>
-
           {/* Shift Updates Log */}
           <div className="mt-4 pt-3 border-t border-gray-700">
             <div className="text-gray-400 text-[10px] font-bold uppercase tracking-wider mb-2">Shift Updates</div>
@@ -4093,30 +4086,101 @@ function ProjectDetailPanel({ project, projectDispatches, projectInvoices, drive
       )}
 
       {/* Schedule tab */}
-      {detailTab === 'schedule' && (
-        <div className="space-y-2">
-          {Object.entries(project.driverSchedule || {})
-            .sort(([a], [b]) => b.localeCompare(a))
-            .map(([date, hashes]) => (
-              <div key={date} className="bg-gray-900 border border-gray-700 rounded-lg px-4 py-3">
-                <div className="flex items-center justify-between mb-1.5">
-                  <span className={`text-sm font-medium ${date === today ? 'text-emerald-400' : 'text-gray-300'}`}>
-                    {date === today ? 'Today' : new Date(date + 'T12:00:00').toLocaleDateString(undefined, { weekday: 'short', month: 'short', day: 'numeric' })}
-                  </span>
-                  <span className="text-gray-500 text-xs">{hashes.length} driver{hashes.length !== 1 ? 's' : ''}</span>
-                </div>
-                <div className="flex flex-wrap gap-1">
-                  {hashes.map(hash => (
-                    <span key={hash} className="px-2 py-0.5 bg-gray-800 text-gray-300 text-xs rounded">
-                      {getDriverName(hash)}
-                    </span>
-                  ))}
-                </div>
+      {/* Drivers tab */}
+      {detailTab === 'drivers' && (
+        <div className="space-y-3">
+          {/* Day / Night roster side by side */}
+          <div className="grid grid-cols-2 gap-3">
+            {/* Day shift */}
+            <div>
+              <div className="text-amber-400 text-[10px] font-bold uppercase tracking-wider mb-1.5">Day Shift ({(project.dayDriverHashes || []).length})</div>
+              <div className="space-y-1">
+                {(project.dayDriverHashes || []).map(hash => (
+                  <div key={hash} className="flex items-center justify-between bg-gray-900 border border-amber-600/20 rounded px-3 py-1.5">
+                    <span className="text-white text-xs">{getDriverName(hash)}</span>
+                    <button onClick={() => {
+                      const updated = (project.dayDriverHashes || []).filter(h => h !== hash);
+                      onUpdateProject?.(project.id!, { dayDriverHashes: updated });
+                    }} className="text-red-400/50 hover:text-red-400 text-[10px]">Remove</button>
+                  </div>
+                ))}
+                {(project.dayDriverHashes || []).length === 0 && <div className="text-gray-600 text-[10px] py-2">No day drivers</div>}
               </div>
-            ))}
-          {Object.keys(project.driverSchedule || {}).length === 0 && (
-            <div className="text-gray-500 text-sm text-center py-4">No schedule entries yet</div>
-          )}
+            </div>
+            {/* Night shift */}
+            <div>
+              <div className="text-blue-400 text-[10px] font-bold uppercase tracking-wider mb-1.5">Night Shift ({(project.nightDriverHashes || []).length})</div>
+              <div className="space-y-1">
+                {(project.nightDriverHashes || []).map(hash => (
+                  <div key={hash} className="flex items-center justify-between bg-gray-900 border border-blue-600/20 rounded px-3 py-1.5">
+                    <span className="text-white text-xs">{getDriverName(hash)}</span>
+                    <button onClick={() => {
+                      const updated = (project.nightDriverHashes || []).filter(h => h !== hash);
+                      onUpdateProject?.(project.id!, { nightDriverHashes: updated });
+                    }} className="text-red-400/50 hover:text-red-400 text-[10px]">Remove</button>
+                  </div>
+                ))}
+                {(project.nightDriverHashes || []).length === 0 && <div className="text-gray-600 text-[10px] py-2">No night drivers</div>}
+              </div>
+            </div>
+          </div>
+
+          {/* Add / move driver */}
+          <div className="flex items-center gap-2 pt-2 border-t border-gray-700/50">
+            <select value={addDriverShift} onChange={(e) => setAddDriverShift(e.target.value as 'day' | 'night')}
+              className="px-2 py-1.5 bg-gray-900 border border-gray-700 rounded text-white text-xs w-20">
+              <option value="day">Day</option>
+              <option value="night">Night</option>
+            </select>
+            <select
+              value={addDriverHash}
+              onChange={(e) => setAddDriverHash(e.target.value)}
+              className="flex-1 px-2 py-1.5 bg-gray-900 border border-gray-700 rounded text-white text-xs focus:outline-none focus:border-emerald-500"
+            >
+              <option value="">Add / move driver...</option>
+              {drivers
+                .filter(d => {
+                  const targetList = addDriverShift === 'day' ? (project.dayDriverHashes || []) : (project.nightDriverHashes || []);
+                  return !targetList.includes(d.key);
+                })
+                .map(d => {
+                  const inDay = (project.dayDriverHashes || []).includes(d.key);
+                  const inNight = (project.nightDriverHashes || []).includes(d.key);
+                  const label = d.legalName || d.displayName;
+                  return (
+                    <option key={d.key} value={d.key}>
+                      {label}{inDay ? ' (day → move)' : inNight ? ' (night → move)' : ''}
+                    </option>
+                  );
+                })}
+            </select>
+            <button
+              onClick={() => {
+                if (!addDriverHash) return;
+                const targetField = addDriverShift === 'day' ? 'dayDriverHashes' : 'nightDriverHashes';
+                const otherField = addDriverShift === 'day' ? 'nightDriverHashes' : 'dayDriverHashes';
+                const targetList = (addDriverShift === 'day' ? project.dayDriverHashes : project.nightDriverHashes) || [];
+                const otherList = (addDriverShift === 'day' ? project.nightDriverHashes : project.dayDriverHashes) || [];
+                const updates: Record<string, any> = {};
+                if (otherList.includes(addDriverHash)) {
+                  updates[otherField] = otherList.filter(h => h !== addDriverHash);
+                }
+                if (!targetList.includes(addDriverHash)) {
+                  updates[targetField] = [...targetList, addDriverHash];
+                }
+                if (Object.keys(updates).length > 0) {
+                  onUpdateProject?.(project.id!, updates);
+                }
+                const isNew = !(project.dayDriverHashes || []).includes(addDriverHash) && !(project.nightDriverHashes || []).includes(addDriverHash);
+                if (isNew) onAddDriver(addDriverHash);
+                setAddDriverHash('');
+              }}
+              disabled={!addDriverHash}
+              className="px-3 py-1.5 bg-emerald-600 hover:bg-emerald-500 disabled:bg-gray-700 disabled:text-gray-500 text-white text-xs font-medium rounded transition-colors"
+            >
+              {addDriverHash && ((project.dayDriverHashes || []).includes(addDriverHash) || (project.nightDriverHashes || []).includes(addDriverHash)) ? 'Move' : 'Add'}
+            </button>
+          </div>
         </div>
       )}
     </div>
