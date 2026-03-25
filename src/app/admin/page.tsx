@@ -263,6 +263,28 @@ export default function AdminPage() {
     }
   }, [selectedWell, configs]);
 
+  // Auto-link NDIC for Edit Well — if selected well has no ndicName, try to find a match
+  useEffect(() => {
+    if (!selectedWell || autoLinkWells.length === 0) return;
+    const config = configs[selectedWell];
+    if (config?.ndicName) return; // Already linked
+
+    const matches = searchWellsByName(selectedWell, autoLinkWells, 10);
+    if (matches.length === 1) {
+      setEditNdicName(matches[0].well_name);
+      setEditNdicApiNo(matches[0].api_no);
+    } else if (matches.length > 1) {
+      const exactish = matches.find(m =>
+        m.well_name.toLowerCase().startsWith(selectedWell.toLowerCase() + ' ') ||
+        m.well_name.toLowerCase().startsWith(selectedWell.toLowerCase() + '-')
+      );
+      if (exactish) {
+        setEditNdicName(exactish.well_name);
+        setEditNdicApiNo(exactish.api_no);
+      }
+    }
+  }, [selectedWell, autoLinkWells, configs]);
+
   // Load route info + pad group for selected well (read-only display)
   useEffect(() => {
     if (!selectedWell) {
@@ -655,8 +677,10 @@ export default function AdminPage() {
       showMessage(nameError);
       return;
     }
-    if (configs[wellName]) {
-      showMessage('Well already exists');
+    // Case-insensitive duplicate check
+    const duplicate = Object.keys(configs).find(k => k.toLowerCase() === wellName.toLowerCase());
+    if (duplicate) {
+      showMessage(`Well already exists as "${duplicate}"`);
       return;
     }
 
@@ -884,11 +908,11 @@ export default function AdminPage() {
   }
 
   return (
-    <div className="min-h-screen bg-gray-900">
+    <div className="h-screen bg-gray-900 flex flex-col overflow-hidden">
       <AppHeader />
       <SubHeader backHref="/" title="Admin Panel" />
 
-      <main className="p-6">
+      <main className="p-6 flex-1 flex flex-col min-h-0 overflow-auto">
         {message && (
           <div className="mb-4 p-3 bg-blue-900 text-blue-200 rounded">{message}</div>
         )}
@@ -1059,10 +1083,10 @@ export default function AdminPage() {
 
         {/* Wells Tab */}
         {activeTab === 'wells' && (
-          <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+          <div className="flex-1 grid grid-cols-1 lg:grid-cols-2 gap-6 min-h-0">
             {/* Well List */}
-            <div className="bg-gray-800 rounded-lg p-4">
-              <div className="flex items-center justify-between mb-4">
+            <div className="bg-gray-800 rounded-lg p-4 flex flex-col min-h-0 overflow-hidden">
+              <div className="flex items-center justify-between mb-4 flex-shrink-0">
                 <h2 className="text-lg font-semibold text-white">Wells</h2>
                 <input
                   type="text"
@@ -1072,7 +1096,7 @@ export default function AdminPage() {
                   className="w-1/3 px-3 py-1 bg-gray-700 text-white rounded text-sm"
                 />
               </div>
-              <div className="space-y-2 overflow-y-auto" style={{ maxHeight: 'calc(100vh - 220px)' }}>
+              <div className="space-y-2 overflow-y-auto flex-1 min-h-0">
                 {Object.keys(configs)
                   .filter(wellName => wellName.toLowerCase().includes(wellSearch.toLowerCase()))
                   .sort()
@@ -1106,8 +1130,8 @@ export default function AdminPage() {
               </div>
             </div>
 
-            {/* Well Actions */}
-            <div className="space-y-4">
+            {/* Well Actions — scrollable right column */}
+            <div className="space-y-4 overflow-y-auto min-h-0">
               {/* Add Well */}
               <div className="bg-gray-800 rounded-lg p-4">
                 <h3 className="text-white font-medium mb-3">Add New Well</h3>
@@ -1273,13 +1297,19 @@ export default function AdminPage() {
                       </div>
                     </div>
                   )}
-                  <button
-                    onClick={handleAddWell}
-                    disabled={!ndicSelectedWell}
-                    className={`w-full px-4 py-2 text-white rounded mt-2 ${ndicSelectedWell ? 'bg-green-600 hover:bg-green-700' : 'bg-gray-600 cursor-not-allowed'}`}
-                  >
-                    {ndicSelectedWell ? 'Add Well' : 'Link Well First'}
-                  </button>
+                  {(() => {
+                    const isDuplicate = newWellName.trim().length > 0 && Object.keys(configs).some(k => k.toLowerCase() === newWellName.trim().toLowerCase());
+                    const canAdd = ndicSelectedWell && !isDuplicate;
+                    return (
+                      <button
+                        onClick={handleAddWell}
+                        disabled={!canAdd}
+                        className={`w-full px-4 py-2 text-white rounded mt-2 ${isDuplicate ? 'bg-red-800 cursor-not-allowed' : canAdd ? 'bg-green-600 hover:bg-green-700' : 'bg-gray-600 cursor-not-allowed'}`}
+                      >
+                        {isDuplicate ? 'Well Already Exists' : ndicSelectedWell ? 'Add Well' : 'Link Well First'}
+                      </button>
+                    );
+                  })()}
                 </div>
               </div>
 
