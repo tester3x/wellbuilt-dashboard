@@ -164,6 +164,28 @@ export default function AdminPage() {
     return null; // valid (forbidden chars already filtered out on input)
   };
 
+  // Parse level input: "10 4" | "10.33" | "10'4\"" | "10'4" → decimal feet
+  const parseLevelToFeet = (input: string): number => {
+    const s = input.trim();
+    if (!s) return 0;
+    // "10'4\"" or "10'4" — feet'inches
+    const feetInchMatch = s.match(/^(\d+)\s*['']\s*(\d+)\s*[""]?\s*$/);
+    if (feetInchMatch) return parseInt(feetInchMatch[1]) + parseInt(feetInchMatch[2]) / 12;
+    // "10 4" — space separated feet inches
+    const spaceMatch = s.match(/^(\d+)\s+(\d+)\s*$/);
+    if (spaceMatch) return parseInt(spaceMatch[1]) + parseInt(spaceMatch[2]) / 12;
+    // Plain number (decimal feet)
+    const num = parseFloat(s);
+    return isNaN(num) ? 0 : num;
+  };
+
+  // Format decimal feet to display: 3.33 → "3'4\""
+  const feetToDisplay = (ft: number): string => {
+    const wholeFeet = Math.floor(ft);
+    const inches = Math.round((ft - wholeFeet) * 12);
+    return `${wholeFeet}'${inches}"`;
+  };
+
   // Edit well name state
   const [editWellName, setEditWellName] = useState('');
   const [isRenaming, setIsRenaming] = useState(false);
@@ -593,12 +615,13 @@ export default function AdminPage() {
     const numTanks = parseInt(newWellTanks) || 1;
     const bblPerFoot = (tankCap / tankHt) * numTanks;
 
+    const parsedBottom = parseLevelToFeet(newWellBottom) || 3;
     const config: WellConfig = {
       route: newWellRoute || 'Unrouted',
-      bottomLevel: parseFloat(newWellBottom) || 3,
+      bottomLevel: parsedBottom,
       tanks: numTanks,
       // Also write app-compatible field names
-      allowedBottom: parseFloat(newWellBottom) || 3,
+      allowedBottom: parsedBottom,
       numTanks,
       pullBbls: parseInt(newWellPullBbls) || 140,
       // Tank dimensions + derived bblPerFoot
@@ -647,12 +670,13 @@ export default function AdminPage() {
     const editNumTanks = parseInt(editWellTanks) || 1;
     const editBblPerFoot = (editTankCap / editTankHt) * editNumTanks;
 
+    const editParsedBottom = parseLevelToFeet(editWellBottom) || 3;
     const config: WellConfig = {
       route: editWellRoute || 'Unrouted',
-      bottomLevel: parseFloat(editWellBottom) || 3,
+      bottomLevel: editParsedBottom,
       tanks: editNumTanks,
       // Also write app-compatible field names
-      allowedBottom: parseFloat(editWellBottom) || 3,
+      allowedBottom: editParsedBottom,
       numTanks: editNumTanks,
       pullBbls: parseInt(editWellPullBbls) || 140,
       // Tank dimensions + derived bblPerFoot
@@ -1080,13 +1104,13 @@ export default function AdminPage() {
                     <div>
                       <label className="text-gray-400 text-sm">Bottom (ft)</label>
                       <input
-                        type="number"
-                        step="0.01"
+                        type="text"
                         value={newWellBottom}
                         onChange={(e) => setNewWellBottom(e.target.value)}
+                        placeholder="3, 1 4, 1'4&quot;"
                         className="w-full px-3 py-2 bg-gray-700 text-white rounded"
                       />
-                      <div className="text-xs text-gray-500 mt-0.5">= {Math.floor(parseFloat(newWellBottom) || 0)}&apos;{Math.round(((parseFloat(newWellBottom) || 0) % 1) * 12)}&quot;</div>
+                      <div className="text-xs text-gray-500 mt-0.5">= {feetToDisplay(parseLevelToFeet(newWellBottom))}</div>
                     </div>
                     <div>
                       <label className="text-gray-400 text-sm">Tanks</label>
@@ -1290,14 +1314,14 @@ export default function AdminPage() {
                       <div>
                         <label className="text-gray-400 text-sm">Bottom (ft)</label>
                         <input
-                          type="number"
-                          step="0.01"
+                          type="text"
                           value={editWellBottom}
                           onChange={(e) => setEditWellBottom(e.target.value)}
+                          placeholder="3, 1 4, 1'4&quot;"
                           className="w-full px-3 py-2 bg-gray-700 text-white rounded"
                           disabled={isRenaming}
                         />
-                        <div className="text-xs text-gray-500 mt-0.5">= {Math.floor(parseFloat(editWellBottom) || 0)}&apos;{Math.round(((parseFloat(editWellBottom) || 0) % 1) * 12)}&quot;</div>
+                        <div className="text-xs text-gray-500 mt-0.5">= {feetToDisplay(parseLevelToFeet(editWellBottom))}</div>
                       </div>
                       <div>
                         <label className="text-gray-400 text-sm">Tanks</label>
