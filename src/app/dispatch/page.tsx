@@ -3702,25 +3702,10 @@ function ProjectDetailPanel({ project, projectDispatches, projectInvoices, drive
     setTimeout(() => setCopied(false), 2000);
   }
 
-  function textDrivers() {
-    // Collect all assigned driver phones
-    const allHashes = new Set([...(project.dayDriverHashes || []), ...(project.nightDriverHashes || [])]);
-    const phones = Array.from(allHashes)
-      .map(h => drivers.find(d => d.key === h)?.phone)
-      .filter((p): p is string => !!p && p.length >= 7);
-    if (phones.length === 0) return;
-    const body = encodeURIComponent(generateSummary());
-    const recipients = phones.join(',');
-    window.open(`sms:${recipients}?body=${body}`, '_blank');
+  function openWhatsApp(shift?: 'day' | 'night') {
+    const text = encodeURIComponent(generateSummary(shift));
+    window.open(`https://web.whatsapp.com/send?text=${text}`, '_blank');
   }
-
-  const assignedPhoneCount = (() => {
-    const allHashes = new Set([...(project.dayDriverHashes || []), ...(project.nightDriverHashes || [])]);
-    return Array.from(allHashes).filter(h => {
-      const d = drivers.find(dr => dr.key === h);
-      return d?.phone && d.phone.length >= 7;
-    }).length;
-  })();
 
   return (
     <div className="space-y-3">
@@ -3777,12 +3762,11 @@ function ProjectDetailPanel({ project, projectDispatches, projectInvoices, drive
               {copied ? '✓ Copied' : 'Copy All'}
             </button>
             <button
-              onClick={textDrivers}
-              disabled={assignedPhoneCount === 0}
-              className="px-2 py-1 bg-emerald-600/20 text-emerald-400 text-[10px] font-medium rounded hover:bg-emerald-600/30 disabled:opacity-30 disabled:cursor-not-allowed transition-colors"
-              title={assignedPhoneCount > 0 ? `Text ${assignedPhoneCount} driver${assignedPhoneCount !== 1 ? 's' : ''}` : 'No driver phone numbers on file'}
+              onClick={() => openWhatsApp()}
+              className="px-2 py-1 bg-emerald-600/20 text-emerald-400 text-[10px] font-medium rounded hover:bg-emerald-600/30 transition-colors"
+              title="Open WhatsApp Web with project summary"
             >
-              Text Drivers{assignedPhoneCount > 0 ? ` (${assignedPhoneCount})` : ''}
+              WhatsApp
             </button>
           </div>
         </div>
@@ -3973,38 +3957,60 @@ function ProjectDetailPanel({ project, projectDispatches, projectInvoices, drive
             );
           })()}
 
-          {/* Shift Updates Log */}
-          <div className="mt-4 pt-3 border-t border-gray-700">
+          {/* Shift Updates */}
+          <div className="mt-4 pt-3 border-t border-gray-700 flex flex-col">
             <div className="text-gray-400 text-[10px] font-bold uppercase tracking-wider mb-2">Shift Updates</div>
-            <div className="max-h-32 overflow-y-auto space-y-1 mb-2">
+            {/* Messages */}
+            <div className="flex-1 overflow-y-auto space-y-1.5 mb-3" style={{ maxHeight: '200px' }}>
               {(project.updates || []).length === 0 && (
-                <div className="text-gray-600 text-[10px]">No updates yet</div>
+                <div className="text-gray-600 text-[10px] py-4 text-center">No updates yet — post one for the next shift</div>
               )}
               {[...(project.updates || [])].reverse().map((u, i) => (
-                <div key={i} className="text-xs px-2 py-1.5 bg-gray-900/60 rounded">
-                  <div className="flex items-center gap-1.5 mb-0.5">
-                    <span className={`px-1 py-0.5 text-[9px] font-bold rounded ${u.shift === 'day' ? 'bg-amber-600/20 text-amber-400' : 'bg-blue-600/20 text-blue-400'}`}>
+                <div key={i} className="text-xs px-3 py-2 bg-gray-900/60 rounded-lg">
+                  <div className="flex items-center gap-1.5 mb-1">
+                    <span className={`px-1.5 py-0.5 text-[9px] font-bold rounded ${u.shift === 'day' ? 'bg-amber-600/20 text-amber-400' : 'bg-blue-600/20 text-blue-400'}`}>
                       {u.shift === 'day' ? 'DAY' : 'NIGHT'}
                     </span>
                     <span className="text-gray-400">{u.author}</span>
                     <span className="text-gray-600 text-[10px]">{new Date(u.timestamp).toLocaleString([], { month: 'numeric', day: 'numeric', hour: 'numeric', minute: '2-digit' })}</span>
                   </div>
-                  <div className="text-gray-300 whitespace-pre-wrap">{u.text}</div>
+                  <div className="text-gray-300 whitespace-pre-wrap leading-relaxed">{u.text}</div>
                 </div>
               ))}
             </div>
-            <div className="flex gap-1.5">
-              <select value={updateShift} onChange={(e) => setUpdateShift(e.target.value as 'day' | 'night')}
-                className="px-2 py-1.5 bg-gray-900 border border-gray-700 rounded text-white text-xs w-20">
-                <option value="day">Day</option>
-                <option value="night">Night</option>
-              </select>
+            {/* Input at bottom */}
+            <div className="bg-gray-900 border border-gray-700 rounded-lg p-2">
+              <div className="flex items-center gap-1.5 mb-1.5">
+                <select value={updateShift} onChange={(e) => setUpdateShift(e.target.value as 'day' | 'night')}
+                  className="px-2 py-1 bg-gray-800 border border-gray-600 rounded text-white text-[10px] font-medium">
+                  <option value="day">Day</option>
+                  <option value="night">Night</option>
+                </select>
+                <span className="flex-1" />
+                <button
+                  onClick={() => {
+                    if (!newUpdate.trim()) return;
+                    const update: ProjectUpdate = {
+                      text: newUpdate.trim(),
+                      author: 'Dispatch',
+                      shift: updateShift,
+                      timestamp: new Date().toISOString(),
+                    };
+                    onUpdateProject?.(project.id!, { updates: [...(project.updates || []), update] });
+                    setNewUpdate('');
+                  }}
+                  disabled={!newUpdate.trim()}
+                  className="px-3 py-1 bg-emerald-600 hover:bg-emerald-500 disabled:bg-gray-700 disabled:text-gray-500 text-white text-[10px] font-medium rounded transition-colors"
+                >
+                  Post
+                </button>
+              </div>
               <textarea
                 value={newUpdate}
                 onChange={(e) => setNewUpdate(e.target.value)}
                 placeholder="Update for next shift..."
-                rows={2}
-                className="flex-1 px-2 py-1.5 bg-gray-900 border border-gray-700 rounded text-white text-xs focus:outline-none focus:border-emerald-500 resize-none"
+                rows={4}
+                className="w-full px-2 py-1.5 bg-gray-800 border border-gray-600 rounded text-white text-xs focus:outline-none focus:border-emerald-500 resize-none"
                 onKeyDown={(e) => {
                   if (e.key === 'Enter' && !e.shiftKey && newUpdate.trim()) {
                     e.preventDefault();
@@ -4019,23 +4025,7 @@ function ProjectDetailPanel({ project, projectDispatches, projectInvoices, drive
                   }
                 }}
               ></textarea>
-              <button
-                onClick={() => {
-                  if (!newUpdate.trim()) return;
-                  const update: ProjectUpdate = {
-                    text: newUpdate.trim(),
-                    author: 'Dispatch',
-                    shift: updateShift,
-                    timestamp: new Date().toISOString(),
-                  };
-                  onUpdateProject?.(project.id!, { updates: [...(project.updates || []), update] });
-                  setNewUpdate('');
-                }}
-                disabled={!newUpdate.trim()}
-                className="px-3 py-1.5 bg-emerald-600 hover:bg-emerald-500 disabled:bg-gray-700 disabled:text-gray-500 text-white text-xs font-medium rounded transition-colors"
-              >
-                Post
-              </button>
+              <div className="text-gray-600 text-[9px] mt-1">Shift+Enter for new line</div>
             </div>
           </div>
         </div>
