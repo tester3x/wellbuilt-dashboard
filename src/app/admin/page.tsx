@@ -1079,10 +1079,12 @@ export default function AdminPage() {
                       <label className="text-gray-400 text-sm">Bottom (ft)</label>
                       <input
                         type="number"
+                        step="0.01"
                         value={newWellBottom}
                         onChange={(e) => setNewWellBottom(e.target.value)}
                         className="w-full px-3 py-2 bg-gray-700 text-white rounded"
                       />
+                      <div className="text-xs text-gray-500 mt-0.5">= {Math.floor(parseFloat(newWellBottom) || 0)}&apos;{Math.round(((parseFloat(newWellBottom) || 0) % 1) * 12)}&quot;</div>
                     </div>
                     <div>
                       <label className="text-gray-400 text-sm">Tanks</label>
@@ -1287,11 +1289,13 @@ export default function AdminPage() {
                         <label className="text-gray-400 text-sm">Bottom (ft)</label>
                         <input
                           type="number"
+                          step="0.01"
                           value={editWellBottom}
                           onChange={(e) => setEditWellBottom(e.target.value)}
                           className="w-full px-3 py-2 bg-gray-700 text-white rounded"
                           disabled={isRenaming}
                         />
+                        <div className="text-xs text-gray-500 mt-0.5">= {Math.floor(parseFloat(editWellBottom) || 0)}&apos;{Math.round(((parseFloat(editWellBottom) || 0) % 1) * 12)}&quot;</div>
                       </div>
                       <div>
                         <label className="text-gray-400 text-sm">Tanks</label>
