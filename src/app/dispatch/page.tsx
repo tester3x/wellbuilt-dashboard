@@ -1610,13 +1610,18 @@ export default function DispatchPage() {
                         allOperatorWells.some(w => w.well_name.toLowerCase() === q) ||
                         allDisposals.some(d => d.well_name.toLowerCase() === q);
                       if (exactMatch) return null;
+                      // Search route wells + operator wells + disposals
+                      const seen2 = new Set<string>();
                       const wellMatches = wells
                         .filter(w => (w.ndicName || w.wellName).toLowerCase().includes(q))
-                        .map(w => ({ label: w.ndicName || w.wellName, sub: w.route || '', value: w.ndicName || w.wellName }));
+                        .map(w => { seen2.add((w.ndicName || w.wellName).toLowerCase()); return { label: w.ndicName || w.wellName, sub: w.route || '', value: w.ndicName || w.wellName }; });
+                      const operatorMatches = allOperatorWells
+                        .filter(w => w.well_name.toLowerCase().includes(q) && !seen2.has(w.well_name.toLowerCase()))
+                        .map(w => { seen2.add(w.well_name.toLowerCase()); return { label: w.well_name, sub: w.operator || 'NDIC', value: w.well_name }; });
                       const disposalMatches = allDisposals
-                        .filter(d => d.well_name.toLowerCase().includes(q))
+                        .filter(d => d.well_name.toLowerCase().includes(q) && !seen2.has(d.well_name.toLowerCase()))
                         .map(d => ({ label: d.well_name, sub: 'SWD', value: d.well_name }));
-                      const combined = [...wellMatches, ...disposalMatches].slice(0, 12);
+                      const combined = [...wellMatches, ...operatorMatches, ...disposalMatches].slice(0, 15);
                       if (combined.length === 0) return null;
                       return (
                         <div className="absolute z-50 w-full mt-1 bg-gray-800 border border-gray-600 rounded max-h-48 overflow-y-auto shadow-lg">
