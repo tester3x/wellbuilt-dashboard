@@ -1724,7 +1724,7 @@ export default function DispatchPage() {
 
             {/* PW + SW side by side — OR — Create Project form overlay */}
             {showCreateProject ? (
-              <div className="bg-gray-800 border border-emerald-600/40 rounded-lg p-4 flex-shrink-0 flex flex-col" style={{ minHeight: '280px' }}>
+              <div className="bg-gray-800 border border-emerald-600/40 rounded-lg p-4 flex-shrink-0 flex flex-col h-[460px]">
                 <div className="flex items-center justify-between mb-2">
                   <h3 className="text-emerald-400 text-xs font-medium uppercase tracking-wider">New Project Builder</h3>
                   <button onClick={() => { setShowCreateProject(false); setProjectWellSearch(''); setNewProjectDriverShifts(new Map()); setNpbTab('details'); }}
