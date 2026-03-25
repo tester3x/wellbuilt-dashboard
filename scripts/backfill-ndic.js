@@ -1,12 +1,13 @@
 /**
- * Backfill NDIC well names and API numbers into well_config
+ * Backfill NDIC/MBOGC well names and API numbers into well_config
  *
- * For each well in well_config, tries to find a matching NDIC well in Firestore
- * and writes ndicName + ndicApiNo to the well_config entry.
+ * For each well in well_config that's missing ndicName/ndicApiNo,
+ * loads ALL wells from assigned operators and matches by name.
  *
  * Matching strategy:
- * 1. Search the wells collection for well_name containing the well_config key
- * 2. Use the extractShortWellName regex to match NDIC names back to short names
+ * 1. Extract short name from NDIC name (e.g., "BAYONET 21-36-25H" → "Bayonet 21")
+ * 2. Match against well_config key
+ * 3. Also try containment match (NDIC name contains well_config key)
  *
  * Usage: node scripts/backfill-ndic.js [--dry-run]
  */
@@ -36,53 +37,69 @@ async function rtdbPatch(path, data) {
   return resp.json();
 }
 
-async function firestoreQuery(collectionId, fieldPath, op, value, orderByField, pageSize) {
+async function firestoreQueryAll(collectionId, fieldPath, op, value) {
   const url = `${FIRESTORE_URL}:runQuery?key=${API_KEY}`;
-  const body = {
-    structuredQuery: {
-      from: [{ collectionId }],
-      where: {
-        fieldFilter: {
-          field: { fieldPath },
-          op,
-          value: { stringValue: value },
-        },
-      },
-      orderBy: orderByField ? [{ field: { fieldPath: orderByField }, direction: 'ASCENDING' }] : undefined,
-      limit: pageSize || 100,
-    },
-  };
+  const allDocs = [];
+  let pageToken = null;
 
-  const resp = await fetch(url, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify(body),
-  });
-  if (!resp.ok) {
-    const text = await resp.text();
-    throw new Error(`Firestore query failed: ${resp.status} ${text}`);
-  }
-  const results = await resp.json();
-  // Extract documents from Firestore response
-  return results
-    .filter(r => r.document)
-    .map(r => {
-      const fields = r.document.fields || {};
-      const doc = {};
-      for (const [key, val] of Object.entries(fields)) {
-        if (val.stringValue !== undefined) doc[key] = val.stringValue;
-        else if (val.doubleValue !== undefined) doc[key] = val.doubleValue;
-        else if (val.integerValue !== undefined) doc[key] = parseInt(val.integerValue);
-        else if (val.booleanValue !== undefined) doc[key] = val.booleanValue;
-      }
-      return doc;
+  do {
+    const body = {
+      structuredQuery: {
+        from: [{ collectionId }],
+        where: {
+          fieldFilter: {
+            field: { fieldPath },
+            op,
+            value: { stringValue: value },
+          },
+        },
+        limit: 500,
+        ...(pageToken ? { startAt: { values: [{ referenceValue: pageToken }] } } : {}),
+      },
+    };
+
+    const resp = await fetch(url, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(body),
     });
+    if (!resp.ok) {
+      const text = await resp.text();
+      throw new Error(`Firestore query failed: ${resp.status} ${text}`);
+    }
+    const results = await resp.json();
+    const docs = results
+      .filter(r => r.document)
+      .map(r => {
+        const fields = r.document.fields || {};
+        const doc = {};
+        for (const [key, val] of Object.entries(fields)) {
+          if (val.stringValue !== undefined) doc[key] = val.stringValue;
+          else if (val.doubleValue !== undefined) doc[key] = val.doubleValue;
+          else if (val.integerValue !== undefined) doc[key] = parseInt(val.integerValue);
+          else if (val.booleanValue !== undefined) doc[key] = val.booleanValue;
+        }
+        doc._ref = r.document.name;
+        return doc;
+      });
+    allDocs.push(...docs);
+    // No more pages if fewer results than limit
+    if (docs.length < 500) break;
+    pageToken = docs[docs.length - 1]._ref;
+  } while (true);
+
+  return allDocs;
 }
 
-function extractShortWellName(ndicName) {
+function extractShortName(ndicName) {
   if (!ndicName) return null;
+  // "BAYONET 21-36-25H" → "Bayonet 21"
+  // "GABRIEL 1-36-25H" → "Gabriel 1"
+  // "SAIL AND ANCHOR 4-36-25H" → "Sail And Anchor 4"
+  // "STAMPEDE 2-36-25H-158-100" → "Stampede 2"
   const cleaned = ndicName.replace(/#/g, '').trim();
-  const match = cleaned.match(/^([A-Za-z\s]+?)\s*(\d+)\s*-/);
+  // Match: NAME(s) NUMBER-section-township...
+  const match = cleaned.match(/^([A-Za-z\s]+?)\s+(\d+)\s*-/);
   if (!match) return null;
   const baseName = match[1].trim();
   const number = match[2];
@@ -90,178 +107,150 @@ function extractShortWellName(ndicName) {
   return `${titleCase} ${number}`;
 }
 
+function normalizeForMatch(name) {
+  return name.toLowerCase().replace(/[^a-z0-9]/g, '');
+}
+
 async function main() {
-  console.log(`Backfill NDIC data into well_config${isDryRun ? ' (DRY RUN)' : ''}`);
+  console.log(`Backfill NDIC/MBOGC data into well_config${isDryRun ? ' (DRY RUN)' : ''}`);
   console.log('='.repeat(60));
 
   // 1. Load well_config
   const wellConfig = await rtdbGet('well_config');
   const wellNames = Object.keys(wellConfig).sort();
-  console.log(`\nFound ${wellNames.length} wells in well_config\n`);
+  console.log(`\nFound ${wellNames.length} wells in well_config`);
 
-  // 2. Load ALL operators from Firestore to get the operator names
-  // We'll search wells by each well_config key against Firestore
+  // 2. Find wells that need backfill
+  const needsBackfill = wellNames.filter(key => !wellConfig[key].ndicApiNo);
+  const alreadyLinked = wellNames.length - needsBackfill.length;
+  console.log(`Already linked: ${alreadyLinked}, Needs backfill: ${needsBackfill.length}\n`);
+
+  if (needsBackfill.length === 0) {
+    console.log('All wells already linked!');
+    return;
+  }
+
+  // 3. Load ALL operators to get operator names
+  console.log('Loading operators from Firestore...');
+  const operatorsUrl = `${FIRESTORE_URL}/operators?key=${API_KEY}&pageSize=500`;
+  const opResp = await fetch(operatorsUrl);
+  const opData = await opResp.json();
+  const operators = (opData.documents || []).map(d => {
+    const fields = d.fields || {};
+    return {
+      name: fields.name?.stringValue || '',
+      state: fields.state?.stringValue || 'ND',
+    };
+  });
+  console.log(`Found ${operators.length} operators (ND + MT)\n`);
+
+  // 4. Load wells for ALL operators (batch by operator)
+  console.log('Loading wells from all operators...');
+  const allNdicWells = [];
+  for (const op of operators) {
+    try {
+      const wells = await firestoreQueryAll('wells', 'operator', 'EQUAL', op.name);
+      allNdicWells.push(...wells);
+      if (wells.length > 0) {
+        process.stdout.write(`  ${op.name}: ${wells.length} wells\n`);
+      }
+    } catch (err) {
+      console.log(`  [ERROR] ${op.name}: ${err.message}`);
+    }
+    // Small delay between operator queries
+    await new Promise(r => setTimeout(r, 50));
+  }
+  console.log(`\nTotal NDIC/MBOGC wells loaded: ${allNdicWells.length}\n`);
+
+  // 5. Build lookup maps
+  // Map from normalized short name → NDIC well
+  const shortNameMap = new Map();
+  // Map from normalized full name → NDIC well
+  const fullNameMap = new Map();
+
+  for (const well of allNdicWells) {
+    if (!well.well_name) continue;
+    const shortName = extractShortName(well.well_name);
+    if (shortName) {
+      const key = normalizeForMatch(shortName);
+      if (!shortNameMap.has(key)) shortNameMap.set(key, well);
+    }
+    fullNameMap.set(normalizeForMatch(well.well_name), well);
+  }
+  console.log(`Short name index: ${shortNameMap.size} entries`);
+  console.log(`Full name index: ${fullNameMap.size} entries\n`);
+
+  // 6. Match each unlinked well
   let matched = 0;
-  let skipped = 0;
   let notFound = 0;
   const notFoundList = [];
 
-  for (const wellKey of wellNames) {
-    const config = wellConfig[wellKey];
+  for (const wellKey of needsBackfill) {
+    const normalized = normalizeForMatch(wellKey);
+    // Strip SOG suffix for matching
+    const withoutSog = wellKey.replace(/\s*SOG\s*$/i, '').trim();
+    const normalizedNoSog = normalizeForMatch(withoutSog);
 
-    // Skip if already has NDIC data
-    if (config.ndicApiNo) {
-      console.log(`  [SKIP] ${wellKey} — already linked (${config.ndicApiNo})`);
-      skipped++;
-      continue;
-    }
-
-    // Extract the base name and number from the key
-    // "Gabriel 1" → search for wells with "GABRIEL" and "1" in the name
-    const parts = wellKey.match(/^(.+?)\s*(\d+)?\s*(SOG)?$/i);
-    let searchName = wellKey;
-    if (parts) {
-      searchName = parts[1].trim();
-    }
-
-    // Try to find matching NDIC wells by operator name
-    // Search Firestore wells where search_name contains the well key components
-    let ndicWells = [];
-    try {
-      // Use REST API to query Firestore
-      // Since Firestore doesn't support CONTAINS/LIKE, we'll use a different approach:
-      // Search by operator name and then filter client-side
-      // Actually, let's use the search_name field with EQUAL (exact) first,
-      // then fall back to loading by likely operators
-
-      // Strategy: Load wells from likely operators and match
-      // First, let's see if any operator name matches part of the well name
-      const searchTerm = searchName.toUpperCase();
-
-      // Try to find wells from all operators that match this well name
-      // Since we can't do full-text search on Firestore, we'll query by
-      // the Firestore REST API with a range query on search_name
-
-      // Actually, simplest approach: query wells collection where well_name starts with the search term
-      // Firestore supports >= and < for range prefix queries
-      const prefix = searchTerm;
-      const prefixEnd = prefix.slice(0, -1) + String.fromCharCode(prefix.charCodeAt(prefix.length - 1) + 1);
-
-      const url = `${FIRESTORE_URL}/wells?key=${API_KEY}&orderBy=well_name&pageSize=50`;
-      const startAt = encodeURIComponent(`well_name >= "${prefix}"`);
-
-      // Use structured query for prefix match
-      const queryUrl = `${FIRESTORE_URL}:runQuery?key=${API_KEY}`;
-      const queryBody = {
-        structuredQuery: {
-          from: [{ collectionId: 'wells' }],
-          where: {
-            compositeFilter: {
-              op: 'AND',
-              filters: [
-                {
-                  fieldFilter: {
-                    field: { fieldPath: 'well_name' },
-                    op: 'GREATER_THAN_OR_EQUAL',
-                    value: { stringValue: prefix },
-                  },
-                },
-                {
-                  fieldFilter: {
-                    field: { fieldPath: 'well_name' },
-                    op: 'LESS_THAN',
-                    value: { stringValue: prefixEnd },
-                  },
-                },
-              ],
-            },
-          },
-          orderBy: [{ field: { fieldPath: 'well_name' }, direction: 'ASCENDING' }],
-          limit: 50,
-        },
-      };
-
-      const resp = await fetch(queryUrl, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(queryBody),
-      });
-
-      if (resp.ok) {
-        const results = await resp.json();
-        ndicWells = results
-          .filter(r => r.document)
-          .map(r => {
-            const fields = r.document.fields || {};
-            const doc = {};
-            for (const [key, val] of Object.entries(fields)) {
-              if (val.stringValue !== undefined) doc[key] = val.stringValue;
-              else if (val.doubleValue !== undefined) doc[key] = val.doubleValue;
-              else if (val.integerValue !== undefined) doc[key] = parseInt(val.integerValue);
-            }
-            return doc;
-          });
-      }
-    } catch (err) {
-      console.log(`  [ERROR] ${wellKey} — Firestore query failed: ${err.message}`);
-    }
-
-    // Now match: find the NDIC well whose short name matches the well_config key
     let bestMatch = null;
 
-    for (const ndicWell of ndicWells) {
-      const shortName = extractShortWellName(ndicWell.well_name);
-      if (shortName && shortName.toLowerCase() === wellKey.toLowerCase()) {
-        bestMatch = ndicWell;
-        break;
-      }
-      // Also try exact match on well_name
-      if (ndicWell.well_name && ndicWell.well_name.toLowerCase() === wellKey.toLowerCase()) {
-        bestMatch = ndicWell;
-        break;
-      }
+    // Strategy 1: Exact short name match ("Gabriel 1" → "GABRIEL 1-36-25H")
+    bestMatch = shortNameMap.get(normalized) || shortNameMap.get(normalizedNoSog);
+
+    // Strategy 2: Full name exact match
+    if (!bestMatch) {
+      bestMatch = fullNameMap.get(normalized) || fullNameMap.get(normalizedNoSog);
     }
 
-    // Also try: well_config key contains the NDIC well or vice versa
+    // Strategy 3: NDIC name contains the well_config key (case-insensitive)
     if (!bestMatch) {
-      for (const ndicWell of ndicWells) {
-        const ndicLower = (ndicWell.well_name || '').toLowerCase();
-        const keyLower = wellKey.toLowerCase();
-        if (ndicLower.includes(keyLower) || keyLower.includes(ndicLower.split('-')[0].trim().toLowerCase())) {
-          bestMatch = ndicWell;
-          break;
-        }
+      const keyLower = withoutSog.toLowerCase();
+      bestMatch = allNdicWells.find(w => {
+        const ndicLower = (w.well_name || '').toLowerCase();
+        // NDIC name starts with the well key base name
+        return ndicLower.startsWith(keyLower + ' ') || ndicLower.startsWith(keyLower + '-');
+      });
+    }
+
+    // Strategy 4: Containment — well key base matches start of NDIC name word
+    if (!bestMatch) {
+      const keyParts = withoutSog.toLowerCase().split(/\s+/);
+      if (keyParts.length >= 2) {
+        const baseName = keyParts.slice(0, -1).join(' ');
+        const number = keyParts[keyParts.length - 1];
+        bestMatch = allNdicWells.find(w => {
+          const ndicLower = (w.well_name || '').toLowerCase();
+          // Base name must match at start of NDIC name (word boundary)
+          const nameStart = ndicLower.split(/\s+/)[0];
+          return nameStart === baseName && ndicLower.includes(number);
+        });
       }
     }
 
     if (bestMatch) {
-      console.log(`  [MATCH] ${wellKey} → ${bestMatch.well_name} (API: ${bestMatch.api_no})`);
+      console.log(`  [MATCH] ${wellKey} → ${bestMatch.well_name} (${bestMatch.api_no || 'no API'}) [${bestMatch.state || 'ND'}]`);
       matched++;
 
       if (!isDryRun) {
-        await rtdbPatch(`well_config/${wellKey}`, {
-          ndicName: bestMatch.well_name,
-          ndicApiNo: bestMatch.api_no,
-        });
+        const patch = { ndicName: bestMatch.well_name };
+        if (bestMatch.api_no) patch.ndicApiNo = bestMatch.api_no;
+        await rtdbPatch(`well_config/${wellKey}`, patch);
       }
     } else {
-      console.log(`  [MISS]  ${wellKey} — no NDIC match found (${ndicWells.length} candidates)`);
+      console.log(`  [MISS]  ${wellKey}`);
       notFound++;
       notFoundList.push(wellKey);
     }
-
-    // Small delay to avoid rate limiting
-    await new Promise(r => setTimeout(r, 100));
   }
 
   console.log('\n' + '='.repeat(60));
-  console.log(`Results: ${matched} matched, ${skipped} already linked, ${notFound} not found`);
+  console.log(`Results: ${matched} matched, ${alreadyLinked} already linked, ${notFound} not found`);
   if (notFoundList.length > 0) {
-    console.log(`\nNot found (need manual linking via dashboard):`);
+    console.log(`\nNot found (custom locations or need manual linking):`);
     notFoundList.forEach(n => console.log(`  - ${n}`));
   }
   if (isDryRun) {
     console.log('\nThis was a DRY RUN — no changes were written.');
+    console.log('Run without --dry-run to write changes.');
   }
 }
 

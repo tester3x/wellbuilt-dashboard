@@ -99,6 +99,10 @@ export default function AdminPage() {
   // Which form is using the NDIC picker: 'add' or 'edit'
   const [ndicPickerTarget, setNdicPickerTarget] = useState<'add' | 'edit'>('add');
 
+  // Auto-link: pre-loaded operator wells for instant matching
+  const [autoLinkWells, setAutoLinkWells] = useState<NdicWell[]>([]);
+  const [autoLinkStatus, setAutoLinkStatus] = useState<'idle' | 'loading' | 'matched' | 'no_match'>('idle');
+
   // NDIC picker for edit form — stored NDIC link
   const [editNdicName, setEditNdicName] = useState('');
   const [editNdicApiNo, setEditNdicApiNo] = useState('');
@@ -306,12 +310,59 @@ export default function AdminPage() {
     }).catch(() => setWellRouteInfo(null));
   }, [selectedWell, configs]);
 
-  // Load NDIC operators on mount (once)
+  // Load NDIC operators on mount (once), then pre-load all operator wells for auto-linking
   useEffect(() => {
-    loadOperators().then(setNdicOperators).catch(err => {
+    loadOperators().then(ops => {
+      setNdicOperators(ops);
+      // Pre-load wells from all operators for auto-link (cached after first load)
+      Promise.all(ops.map(op => loadWellsForOperator(op.name).catch(() => [] as NdicWell[])))
+        .then(results => {
+          const all = results.flat();
+          setAutoLinkWells(all);
+          console.log(`[admin] Pre-loaded ${all.length} operator wells for auto-link`);
+        });
+    }).catch(err => {
       console.error('[admin] Failed to load NDIC operators:', err);
     });
   }, []);
+
+  // Auto-link: when well name changes and we have operator wells, search for a match
+  useEffect(() => {
+    const name = newWellName.trim();
+    if (name.length < 2 || autoLinkWells.length === 0) {
+      if (!ndicSelectedWell) setAutoLinkStatus('idle');
+      return;
+    }
+    // Don't override manual selection
+    if (ndicSelectedWell) return;
+
+    const timer = setTimeout(() => {
+      setAutoLinkStatus('loading');
+      const matches = searchWellsByName(name, autoLinkWells, 10);
+
+      if (matches.length === 1) {
+        // Single match — auto-link
+        setNdicSelectedWell(matches[0]);
+        setAutoLinkStatus('matched');
+      } else if (matches.length > 1) {
+        // Multiple matches — check if first is exact-ish (name starts with typed name)
+        const exactish = matches.find(m =>
+          m.well_name.toLowerCase().startsWith(name.toLowerCase() + ' ') ||
+          m.well_name.toLowerCase().startsWith(name.toLowerCase() + '-')
+        );
+        if (exactish) {
+          setNdicSelectedWell(exactish);
+          setAutoLinkStatus('matched');
+        } else {
+          setAutoLinkStatus('no_match');
+        }
+      } else {
+        setAutoLinkStatus('no_match');
+      }
+    }, 600);
+
+    return () => clearTimeout(timer);
+  }, [newWellName, autoLinkWells, ndicSelectedWell]);
 
   // When NDIC operator search changes, filter results
   useEffect(() => {
@@ -1065,7 +1116,7 @@ export default function AdminPage() {
                     <input
                       type="text"
                       value={newWellName}
-                      onChange={(e) => filterForbiddenChars(e.target.value, setNewWellName)}
+                      onChange={(e) => { filterForbiddenChars(e.target.value, setNewWellName); setNdicSelectedWell(null); setAutoLinkStatus('idle'); }}
                       placeholder="Well name (e.g., Gabriel 1)"
                       className="flex-1 px-3 py-2 bg-gray-700 text-white rounded"
                     />
@@ -1077,21 +1128,28 @@ export default function AdminPage() {
                       Link Well
                     </button>
                   </div>
-                  {ndicSelectedWell && (
+                  {/* Auto-link / linked status */}
+                  {ndicSelectedWell ? (
                     <div className="bg-gray-900 rounded p-2 text-xs">
                       <div className="flex justify-between items-center">
-                        <span className="text-teal-400">Well Linked</span>
+                        <span className="text-teal-400">{autoLinkStatus === 'matched' ? 'Auto-Linked' : 'Well Linked'}</span>
                         <button
-                          onClick={() => clearNdicLink('add')}
+                          onClick={() => { clearNdicLink('add'); setAutoLinkStatus('idle'); }}
                           className="text-red-400 hover:text-red-300 text-xs"
                         >
                           Unlink
                         </button>
                       </div>
                       <div className="text-gray-300 mt-1">{ndicSelectedWell.well_name}</div>
-                      <div className="text-gray-500">API: {ndicSelectedWell.api_no}</div>
+                      <div className="text-gray-500">API: {ndicSelectedWell.api_no} {ndicSelectedWell.state && `(${ndicSelectedWell.state})`}</div>
                     </div>
-                  )}
+                  ) : autoLinkStatus === 'no_match' && newWellName.trim().length >= 2 ? (
+                    <div className="bg-red-900/30 border border-red-700/50 rounded p-2 text-xs text-red-300">
+                      No auto-match found — use <strong>Link Well</strong> to search manually
+                    </div>
+                  ) : autoLinkStatus === 'loading' ? (
+                    <div className="text-gray-500 text-xs">Searching...</div>
+                  ) : null}
                   <select
                     value={newWellRoute}
                     onChange={(e) => setNewWellRoute(e.target.value)}
@@ -1217,9 +1275,10 @@ export default function AdminPage() {
                   )}
                   <button
                     onClick={handleAddWell}
-                    className="w-full px-4 py-2 bg-green-600 hover:bg-green-700 text-white rounded mt-2"
+                    disabled={!ndicSelectedWell}
+                    className={`w-full px-4 py-2 text-white rounded mt-2 ${ndicSelectedWell ? 'bg-green-600 hover:bg-green-700' : 'bg-gray-600 cursor-not-allowed'}`}
                   >
-                    Add Well
+                    {ndicSelectedWell ? 'Add Well' : 'Link Well First'}
                   </button>
                 </div>
               </div>
