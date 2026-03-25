@@ -3573,7 +3573,7 @@ function ProjectDetailPanel({ project, projectDispatches, projectInvoices, drive
 
   function getDriverName(hash: string) {
     const d = drivers.find(dr => dr.key === hash);
-    return d?.legalName?.split(' ')[0] || d?.displayName || hash.slice(0, 6);
+    return d?.legalName || d?.displayName || hash.slice(0, 6);
   }
 
   const totalBbls = projectInvoices.reduce((sum, inv) => sum + (inv.totalBarrels || 0), 0);
