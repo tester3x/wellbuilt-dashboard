@@ -1618,7 +1618,102 @@ export default function DispatchPage() {
           {/* ═══════ LEFT HALF (50%): dispatch cards + well queue ═══════ */}
           <div className="w-[50%] flex-shrink-0 flex flex-col gap-3 min-h-0 overflow-hidden">
 
-            {/* PW + SW side by side */}
+            {/* PW + SW side by side — OR — Create Project form overlay */}
+            {showCreateProject ? (
+              <div className="bg-gray-800 border border-emerald-600/40 rounded-lg p-4 flex-shrink-0">
+                <div className="flex items-center justify-between mb-3">
+                  <h3 className="text-emerald-400 text-xs font-medium uppercase tracking-wider">New Project</h3>
+                  <button onClick={() => { setShowCreateProject(false); setProjectWellSearch(''); }}
+                    className="text-gray-400 hover:text-white text-xs">Cancel</button>
+                </div>
+                <div className="flex gap-4">
+                  {/* Left column: Name, Operator, Wells, End Date */}
+                  <div className="flex-1 space-y-2">
+                    <div>
+                      <label className="block text-xs text-gray-400 mb-1">Project Name</label>
+                      <input type="text" value={newProjectName} onChange={(e) => setNewProjectName(e.target.value)}
+                        placeholder="e.g. Hess Flowback - Antelope Creek"
+                        className="w-full px-3 py-1.5 bg-gray-900 border border-gray-700 rounded text-white text-sm placeholder-gray-500 focus:outline-none focus:border-emerald-500" />
+                    </div>
+                    <div className="relative">
+                      <label className="block text-xs text-gray-400 mb-1">Operator</label>
+                      <input type="text" value={newProjectOperator}
+                        onChange={(e) => { setNewProjectOperator(e.target.value); setOperatorSuggestions(searchOperators(e.target.value, allOperators)); }}
+                        placeholder="e.g. Hess, Slawson"
+                        className="w-full px-3 py-1.5 bg-gray-900 border border-gray-700 rounded text-white text-sm placeholder-gray-500 focus:outline-none focus:border-emerald-500" />
+                      {operatorSuggestions.length > 0 && (
+                        <div className="absolute z-10 w-full bg-gray-900 border border-gray-700 rounded mt-0.5 max-h-32 overflow-y-auto">
+                          {operatorSuggestions.map(op => (
+                            <button key={op.name} onClick={() => { setNewProjectOperator(op.name); setOperatorSuggestions([]); }}
+                              className="w-full text-left px-3 py-1.5 hover:bg-gray-700 text-white text-xs border-b border-gray-800 last:border-0">{op.name}</button>
+                          ))}
+                        </div>
+                      )}
+                    </div>
+                    <div>
+                      <label className="block text-xs text-gray-400 mb-1">Wells ({newProjectWells.length} selected)</label>
+                      <input type="text" value={projectWellSearch} onChange={(e) => setProjectWellSearch(e.target.value)}
+                        placeholder="Search wells..."
+                        className="w-full px-3 py-1.5 bg-gray-900 border border-gray-700 rounded text-white text-sm placeholder-gray-500 focus:outline-none focus:border-emerald-500" />
+                      {newProjectWells.length > 0 && (
+                        <div className="flex flex-wrap gap-1 mt-1">
+                          {newProjectWells.map(w => (
+                            <span key={w} className="px-2 py-0.5 bg-emerald-600/30 text-emerald-300 text-[10px] rounded flex items-center gap-1">
+                              {w}
+                              <button onClick={() => setNewProjectWells(prev => prev.filter(n => n !== w))} className="text-emerald-400 hover:text-white">×</button>
+                            </span>
+                          ))}
+                        </div>
+                      )}
+                      {projectWellSearch.length >= 2 && (
+                        <div className="bg-gray-900 border border-gray-700 rounded max-h-24 overflow-y-auto mt-1">
+                          {wells
+                            .filter(w => w.wellName.toLowerCase().includes(projectWellSearch.toLowerCase()) && !newProjectWells.includes(w.wellName))
+                            .slice(0, 10)
+                            .map(w => (
+                              <button key={w.wellName} onClick={() => { setNewProjectWells(prev => [...prev, w.wellName]); setProjectWellSearch(''); }}
+                                className="w-full text-left px-3 py-1.5 hover:bg-gray-700 text-white text-xs border-b border-gray-800 last:border-0">
+                                {w.ndicName || w.wellName} <span className="text-gray-500">{w.route}</span>
+                              </button>
+                            ))}
+                        </div>
+                      )}
+                    </div>
+                    <div>
+                      <label className="block text-xs text-gray-400 mb-1">Projected End Date (optional)</label>
+                      <input type="date" value={newProjectEndDate} onChange={(e) => setNewProjectEndDate(e.target.value)}
+                        className="w-full px-3 py-1.5 bg-gray-900 border border-gray-700 rounded text-white text-sm focus:outline-none focus:border-emerald-500" />
+                    </div>
+                  </div>
+                  {/* Middle column: Drivers */}
+                  <div className="w-48 flex flex-col">
+                    <label className="block text-xs text-gray-400 mb-1">Assign Drivers for Today</label>
+                    <div className="bg-gray-900 border border-gray-700 rounded flex-1 overflow-y-auto max-h-48">
+                      {drivers.map(d => (
+                        <label key={d.key} className="flex items-center gap-2 px-2 py-1 hover:bg-gray-800 cursor-pointer border-b border-gray-800 last:border-0">
+                          <input type="checkbox" checked={newProjectDriverHashes.has(d.key)}
+                            onChange={(e) => { setNewProjectDriverHashes(prev => { const next = new Set(prev); if (e.target.checked) next.add(d.key); else next.delete(d.key); return next; }); }}
+                            className="w-3 h-3 rounded border-gray-600 bg-gray-800 text-emerald-500 focus:ring-emerald-500" />
+                          <span className="text-white text-xs truncate">{d.legalName || d.displayName}</span>
+                        </label>
+                      ))}
+                    </div>
+                  </div>
+                  {/* Right column: Notes + Create button */}
+                  <div className="flex-1 flex flex-col">
+                    <label className="block text-xs text-gray-400 mb-1">Notes</label>
+                    <textarea value={newProjectNotes} onChange={(e) => setNewProjectNotes(e.target.value)}
+                      placeholder="Job description, equipment needed, special instructions..."
+                      className="w-full flex-1 px-3 py-1.5 bg-gray-900 border border-gray-700 rounded text-white text-sm placeholder-gray-500 focus:outline-none focus:border-emerald-500 resize-none min-h-[120px]" />
+                    <button onClick={createProject}
+                      disabled={!newProjectName.trim() || newProjectWells.length === 0 || creatingProject}
+                      className="w-full mt-2 px-4 py-1.5 bg-emerald-600 hover:bg-emerald-500 disabled:bg-gray-600 disabled:cursor-not-allowed text-white text-xs font-medium rounded transition-colors">
+                      {creatingProject ? 'Creating...' : 'Create Project'}
+                    </button>
+                  </div>
+                </div>
+              </div>
+            ) : (
             <div className="flex gap-3 flex-shrink-0">
 
           {/* ── PW Dispatch Card — single well (Assign) or multi-well (checkboxes) ── */}
@@ -1919,7 +2014,8 @@ export default function DispatchPage() {
             </button>
           </div>{/* end SW card */}
 
-            </div>{/* end PW+SW side by side */}
+            </div>
+            )}{/* end PW+SW side by side / Create Project ternary */}
 
             {/* ═══════ Well Queue (fills remaining left half) ═══════ */}
             <div className="bg-gray-800 rounded-lg border border-gray-700 flex-1 flex flex-col overflow-hidden">
@@ -2150,149 +2246,7 @@ export default function DispatchPage() {
       {/* ═══════════════════════════════════════════════════════════════════════════
           CREATE PROJECT MODAL
           ═══════════════════════════════════════════════════════════════════════════ */}
-      {showCreateProject && (
-        <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50">
-          <div className="bg-gray-800 rounded-lg p-6 max-w-lg w-full mx-4 border border-gray-700 max-h-[85vh] overflow-y-auto">
-            <h3 className="text-lg font-semibold text-white mb-4">New Project</h3>
-
-            {/* Project Name */}
-            <label className="block text-gray-400 text-xs mb-1">Project Name</label>
-            <input
-              type="text"
-              value={newProjectName}
-              onChange={(e) => setNewProjectName(e.target.value)}
-              placeholder="e.g. Hess Flowback - Antelope Creek"
-              className="w-full px-3 py-2 bg-gray-900 border border-gray-700 rounded text-white text-sm placeholder-gray-500 focus:outline-none focus:border-emerald-500 mb-3"
-            />
-
-            {/* Operator */}
-            <label className="block text-gray-400 text-xs mb-1">Operator</label>
-            <div className="relative">
-              <input
-                type="text"
-                value={newProjectOperator}
-                onChange={(e) => {
-                  setNewProjectOperator(e.target.value);
-                  setOperatorSuggestions(searchOperators(e.target.value, allOperators));
-                }}
-                placeholder="e.g. Hess, Slawson"
-                className="w-full px-3 py-2 bg-gray-900 border border-gray-700 rounded text-white text-sm placeholder-gray-500 focus:outline-none focus:border-emerald-500"
-              />
-              {operatorSuggestions.length > 0 && (
-                <div className="absolute z-10 w-full bg-gray-900 border border-gray-700 rounded mt-0.5 max-h-32 overflow-y-auto">
-                  {operatorSuggestions.map(op => (
-                    <button
-                      key={op.name}
-                      onClick={() => { setNewProjectOperator(op.name); setOperatorSuggestions([]); }}
-                      className="w-full text-left px-3 py-1.5 hover:bg-gray-700 text-white text-xs border-b border-gray-800 last:border-0"
-                    >
-                      {op.name}
-                    </button>
-                  ))}
-                </div>
-              )}
-            </div>
-            <div className="mb-3" />
-
-            {/* Wells */}
-            <label className="block text-gray-400 text-xs mb-1">Wells ({newProjectWells.length} selected)</label>
-            <input
-              type="text"
-              value={projectWellSearch}
-              onChange={(e) => setProjectWellSearch(e.target.value)}
-              placeholder="Search wells..."
-              className="w-full px-3 py-2 bg-gray-900 border border-gray-700 rounded text-white text-sm placeholder-gray-500 focus:outline-none focus:border-emerald-500 mb-1"
-            />
-            {/* Selected wells */}
-            {newProjectWells.length > 0 && (
-              <div className="flex flex-wrap gap-1 mb-1">
-                {newProjectWells.map(w => (
-                  <span key={w} className="px-2 py-0.5 bg-emerald-600/30 text-emerald-300 text-xs rounded flex items-center gap-1">
-                    {w}
-                    <button onClick={() => setNewProjectWells(prev => prev.filter(n => n !== w))} className="text-emerald-400 hover:text-white">×</button>
-                  </span>
-                ))}
-              </div>
-            )}
-            {/* Well search results */}
-            {projectWellSearch.length >= 2 && (
-              <div className="bg-gray-900 border border-gray-700 rounded max-h-32 overflow-y-auto mb-3">
-                {wells
-                  .filter(w => w.wellName.toLowerCase().includes(projectWellSearch.toLowerCase()) && !newProjectWells.includes(w.wellName))
-                  .slice(0, 10)
-                  .map(w => (
-                    <button
-                      key={w.wellName}
-                      onClick={() => { setNewProjectWells(prev => [...prev, w.wellName]); setProjectWellSearch(''); }}
-                      className="w-full text-left px-3 py-1.5 hover:bg-gray-700 text-white text-xs border-b border-gray-800 last:border-0"
-                    >
-                      {w.ndicName || w.wellName} <span className="text-gray-500">{w.route}</span>
-                    </button>
-                  ))}
-              </div>
-            )}
-
-            {/* Projected End Date */}
-            <label className="block text-gray-400 text-xs mb-1">Projected End Date (optional)</label>
-            <input
-              type="date"
-              value={newProjectEndDate}
-              onChange={(e) => setNewProjectEndDate(e.target.value)}
-              className="w-full px-3 py-2 bg-gray-900 border border-gray-700 rounded text-white text-sm focus:outline-none focus:border-emerald-500 mb-3"
-            />
-
-            {/* Assign Drivers for Today */}
-            <label className="block text-gray-400 text-xs mb-1">Assign Drivers for Today (optional)</label>
-            <div className="bg-gray-900 border border-gray-700 rounded max-h-32 overflow-y-auto mb-3">
-              {drivers.map(d => (
-                <label key={d.key} className="flex items-center gap-2 px-3 py-1.5 hover:bg-gray-800 cursor-pointer border-b border-gray-800 last:border-0">
-                  <input
-                    type="checkbox"
-                    checked={newProjectDriverHashes.has(d.key)}
-                    onChange={(e) => {
-                      setNewProjectDriverHashes(prev => {
-                        const next = new Set(prev);
-                        if (e.target.checked) next.add(d.key);
-                        else next.delete(d.key);
-                        return next;
-                      });
-                    }}
-                    className="rounded border-gray-600 bg-gray-800 text-emerald-500 focus:ring-emerald-500"
-                  />
-                  <span className="text-white text-xs">{d.legalName || d.displayName}</span>
-                </label>
-              ))}
-            </div>
-
-            {/* Notes */}
-            <label className="block text-gray-400 text-xs mb-1">Notes</label>
-            <textarea
-              value={newProjectNotes}
-              onChange={(e) => setNewProjectNotes(e.target.value)}
-              placeholder="Special instructions, equipment needed, etc."
-              rows={4}
-              className="w-full px-3 py-2 bg-gray-900 border border-gray-700 rounded text-white text-sm placeholder-gray-500 focus:outline-none focus:border-emerald-500 mb-4 resize-y"
-            />
-
-            {/* Buttons */}
-            <div className="flex justify-end gap-2">
-              <button
-                onClick={() => { setShowCreateProject(false); setProjectWellSearch(''); }}
-                className="px-4 py-2 bg-gray-700 hover:bg-gray-600 text-white text-sm rounded transition-colors"
-              >
-                Cancel
-              </button>
-              <button
-                onClick={createProject}
-                disabled={!newProjectName.trim() || newProjectWells.length === 0 || creatingProject}
-                className="px-4 py-2 bg-emerald-600 hover:bg-emerald-500 disabled:bg-gray-600 disabled:cursor-not-allowed text-white text-sm font-medium rounded transition-colors"
-              >
-                {creatingProject ? 'Creating...' : 'Create Project'}
-              </button>
-            </div>
-          </div>
-        </div>
-      )}
+      {/* Old Create Project modal removed — now inline over PW+SW cards */}
 
       {/* PW ASSIGN MODAL removed — replaced by inline PW dispatch card above */}
 
