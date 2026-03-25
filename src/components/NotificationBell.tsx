@@ -212,6 +212,64 @@ export function NotificationBell() {
     return () => unsubscribe();
   }, [user, prefs, soundEnabled]);
 
+  // ── Dispatch declined listener (Firestore) ──
+  const declineInitialLoadDone = useRef(false);
+  useEffect(() => {
+    if (!user || !prefs.includes('dispatch_update')) return;
+
+    const firestore = getFirestoreDb();
+    const cutoff = Timestamp.fromDate(new Date(Date.now() - 24 * 60 * 60 * 1000));
+    const q = query(
+      collection(firestore, 'dispatches'),
+      where('status', '==', 'declined'),
+      where('declinedAt', '>=', cutoff)
+    );
+
+    const unsubDecline = onSnapshot(q, (snapshot) => {
+      const items: NotificationItem[] = [];
+      snapshot.forEach(doc => {
+        const data = doc.data();
+        const id = `decline_${doc.id}`;
+        if (dismissedRef.current.has(id)) return;
+
+        const ts = data.declinedAt?.toMillis?.() || Date.now();
+        const reason = data.declineReason ? ` — ${data.declineReason}` : '';
+        items.push({
+          id,
+          category: 'dispatch_update',
+          title: '⚠️ Dispatch Declined',
+          message: `${data.driverFirstName || data.driverName || 'Driver'} declined ${data.wellName || 'job'}${reason}`,
+          timestamp: ts,
+          read: false,
+          actionLabel: 'Reassign',
+          actionHref: '/dispatch',
+        });
+      });
+
+      if (declineInitialLoadDone.current) {
+        const newItems = items.filter(n => !knownIdsRef.current.has(n.id));
+        if (newItems.length > 0 && soundEnabled) {
+          playNotificationSound();
+        }
+      }
+
+      items.forEach(n => knownIdsRef.current.add(n.id));
+      declineInitialLoadDone.current = true;
+
+      setNotifications(prev => {
+        const nonDecline = prev.filter(n => !n.id.startsWith('decline_'));
+        const merged = [...nonDecline, ...items];
+        const seen = new Set<string>();
+        return merged.filter(n => { if (seen.has(n.id)) return false; seen.add(n.id); return true; })
+          .sort((a, b) => b.timestamp - a.timestamp);
+      });
+    }, (err) => {
+      console.warn('[Notifications] Decline listener error:', err.message);
+    });
+
+    return () => unsubDecline();
+  }, [user, prefs, soundEnabled]);
+
   // ── Transfer approval request listener (Firestore) ──
   useEffect(() => {
     if (!user || !prefs.includes('dispatch_update')) return;
