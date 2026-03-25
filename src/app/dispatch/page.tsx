@@ -3771,130 +3771,125 @@ function ProjectDetailPanel({ project, projectDispatches, projectInvoices, drive
       {/* Activity tab */}
       {detailTab === 'activity' && (
         <div className="space-y-2">
-          {activeJobs.length === 0 && (
-            <div className="text-gray-500 text-sm text-center py-4">No active jobs right now</div>
-          )}
-          {activeJobs.map(job => (
-            <div key={job.id} className="bg-gray-900 border border-gray-700 rounded-lg px-4 py-3">
-              <div className="flex items-center gap-2">
-                <JobTypeBadge type={job.jobType} serviceType={job.serviceType} />
-                <span className="text-white font-medium text-sm truncate">{job.ndicWellName || job.wellName}</span>
-                {(() => {
-                  const remaining = (job.loadCount || 1) - (job.loadsCompleted || 0);
-                  return remaining > 1 ? (
-                    <span className="px-1.5 py-0.5 bg-yellow-600/30 text-yellow-300 text-[10px] rounded font-bold flex-shrink-0">x{remaining}</span>
-                  ) : null;
-                })()}
-                <span className="flex-1" />
-                <StageBadge job={job} />
-              </div>
-              <div className="flex items-center gap-2 mt-1.5 text-xs text-gray-400">
-                <span>{getDriverName(job.driverHash)}</span>
-                {job.driverDest && (
-                  <>
-                    <span>→</span>
-                    <span className="text-gray-300">{job.driverDest}</span>
-                  </>
-                )}
-                {job.invoiceNumber && <span className="text-gray-600">#{job.invoiceNumber}</span>}
-                {job.hauledTo && <span className="text-cyan-400/60">→ {job.hauledTo}</span>}
-                <span className="flex-1" />
-                <button onClick={() => job.id && cancelDispatch(job.id)} className="text-red-400/50 hover:text-red-400 text-[10px]">Cancel</button>
-              </div>
-            </div>
-          ))}
-
-          {completedJobs.length > 0 && (
-            <>
-              <div className="flex items-center gap-2 mt-3">
-                <div className="h-px bg-gray-700 flex-1" />
-                <span className="text-gray-500 text-[10px] font-bold uppercase tracking-wider">Completed ({completedJobs.length})</span>
-                <div className="h-px bg-gray-700 flex-1" />
-              </div>
-              {completedJobs.map(job => (
-                <div key={job.id} className="bg-gray-900/50 border border-gray-800 rounded-lg px-4 py-2 opacity-60">
-                  <div className="flex items-center gap-2 text-xs">
-                    <span className="text-gray-400">{getDriverName(job.driverHash)}</span>
-                    <span className="text-gray-600">·</span>
-                    <span className="text-gray-500">{job.ndicWellName || job.wellName}</span>
-                    <span className="flex-1" />
-                    <span className="text-emerald-400/50 text-[10px]">Done</span>
+          {/* Render a shift section */}
+          {(['day', 'night'] as const).map(shift => {
+            const shiftHashes = shift === 'day' ? (project.dayDriverHashes || []) : (project.nightDriverHashes || []);
+            const isDay = shift === 'day';
+            const shiftJobs = activeJobs.filter(j => shiftHashes.includes(j.driverHash));
+            const shiftCompleted = completedJobs.filter(j => shiftHashes.includes(j.driverHash));
+            const activeStatuses = ['pending', 'accepted', 'in_progress', 'paused'];
+            const activeCombos = new Set(projectDispatches.filter(d => activeStatuses.includes(d.status)).map(d => `${d.driverHash}::${d.wellName}`));
+            const newCount = shiftHashes.filter(h => project.wellNames.some(w => !activeCombos.has(`${h}::${w}`))).length;
+            return (
+              <div key={shift}>
+                <div className={`flex items-center justify-between mb-1.5 ${shift === 'night' ? 'mt-3 pt-3 border-t border-gray-700' : ''}`}>
+                  <div className="flex items-center gap-2">
+                    <span className={`text-[10px] font-bold uppercase tracking-wider ${isDay ? 'text-amber-400' : 'text-blue-400'}`}>{shift} Shift</span>
+                    <span className="text-gray-600 text-[10px]">({shiftHashes.length} driver{shiftHashes.length !== 1 ? 's' : ''})</span>
                   </div>
+                  {project.status === 'active' && shiftHashes.length > 0 && (
+                    <button
+                      onClick={() => onBatchDispatch?.(shift)}
+                      disabled={newCount === 0}
+                      className={`px-2 py-0.5 text-[10px] font-bold rounded disabled:opacity-30 disabled:cursor-not-allowed transition-colors ${isDay ? 'bg-amber-600/20 text-amber-400 hover:bg-amber-600/30' : 'bg-blue-600/20 text-blue-400 hover:bg-blue-600/30'}`}
+                    >
+                      {newCount > 0 ? `Dispatch (${newCount} new)` : 'All dispatched'}
+                    </button>
+                  )}
                 </div>
-              ))}
-            </>
-          )}
+                {shiftHashes.length === 0 && (
+                  <div className="text-gray-600 text-[10px] py-2">No {shift} drivers assigned</div>
+                )}
+                {shiftJobs.map(job => (
+                  <div key={job.id} className={`bg-gray-900 border rounded-lg px-4 py-2.5 mb-1.5 ${isDay ? 'border-amber-600/20' : 'border-blue-600/20'}`}>
+                    <div className="flex items-center gap-2">
+                      <JobTypeBadge type={job.jobType} serviceType={job.serviceType} />
+                      <span className="text-white font-medium text-sm truncate">{job.ndicWellName || job.wellName}</span>
+                      {(() => {
+                        const remaining = (job.loadCount || 1) - (job.loadsCompleted || 0);
+                        return remaining > 1 ? (
+                          <span className="px-1.5 py-0.5 bg-yellow-600/30 text-yellow-300 text-[10px] rounded font-bold flex-shrink-0">x{remaining}</span>
+                        ) : null;
+                      })()}
+                      <span className="flex-1" />
+                      <StageBadge job={job} />
+                    </div>
+                    <div className="flex items-center gap-2 mt-1 text-xs text-gray-400">
+                      <span>{getDriverName(job.driverHash)}</span>
+                      {job.driverDest && <><span>→</span><span className="text-gray-300">{job.driverDest}</span></>}
+                      {job.invoiceNumber && <span className="text-gray-600">#{job.invoiceNumber}</span>}
+                      {job.hauledTo && <span className="text-cyan-400/60">→ {job.hauledTo}</span>}
+                      <span className="flex-1" />
+                      <button onClick={() => {
+                        if (!job.id) return;
+                        cancelDispatch(job.id);
+                        // Also remove from shift roster
+                        const field = shift === 'day' ? 'dayDriverHashes' : 'nightDriverHashes';
+                        const updated = shiftHashes.filter(h => h !== job.driverHash);
+                        onUpdateProject?.(project.id!, { [field]: updated });
+                      }} className="text-red-400/50 hover:text-red-400 text-[10px]">Remove</button>
+                    </div>
+                  </div>
+                ))}
+                {/* Drivers assigned to shift but no active dispatch */}
+                {shiftHashes.filter(h => !shiftJobs.some(j => j.driverHash === h) && !shiftCompleted.some(j => j.driverHash === h)).map(hash => (
+                  <div key={hash} className={`bg-gray-900/50 border border-gray-800 rounded-lg px-4 py-2 mb-1.5`}>
+                    <div className="flex items-center gap-2 text-xs">
+                      <span className="text-gray-400">{getDriverName(hash)}</span>
+                      <span className="text-gray-600 text-[10px]">No dispatch</span>
+                      <span className="flex-1" />
+                      <button onClick={() => {
+                        const field = shift === 'day' ? 'dayDriverHashes' : 'nightDriverHashes';
+                        const updated = shiftHashes.filter(h => h !== hash);
+                        onUpdateProject?.(project.id!, { [field]: updated });
+                      }} className="text-red-400/50 hover:text-red-400 text-[10px]">Remove</button>
+                    </div>
+                  </div>
+                ))}
+                {shiftCompleted.length > 0 && shiftCompleted.map(job => (
+                  <div key={job.id} className="bg-gray-900/50 border border-gray-800 rounded-lg px-4 py-1.5 mb-1 opacity-50">
+                    <div className="flex items-center gap-2 text-xs">
+                      <span className="text-gray-400">{getDriverName(job.driverHash)}</span>
+                      <span className="text-gray-600">·</span>
+                      <span className="text-gray-500">{job.ndicWellName || job.wellName}</span>
+                      <span className="flex-1" />
+                      <span className="text-emerald-400/50 text-[10px]">Done</span>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            );
+          })}
 
-          {/* Day Shift Drivers */}
-          <div className="mt-3 pt-3 border-t border-gray-700">
-            <div className="text-amber-400 text-[10px] font-bold uppercase tracking-wider mb-1.5">Day Shift</div>
-            <div className="flex flex-wrap gap-1 mb-2">
-              {(project.dayDriverHashes || []).map(hash => (
-                <span key={hash} className="px-2 py-0.5 bg-amber-600/20 text-amber-300 text-[10px] rounded-full flex items-center gap-1">
-                  {getDriverName(hash)}
-                  <button onClick={() => {
-                    const updated = (project.dayDriverHashes || []).filter(h => h !== hash);
-                    onUpdateProject?.(project.id!, { dayDriverHashes: updated });
-                  }} className="text-amber-500 hover:text-white ml-0.5">&times;</button>
-                </span>
-              ))}
-              {(project.dayDriverHashes || []).length === 0 && <span className="text-gray-600 text-[10px]">No day drivers assigned</span>}
-            </div>
-          </div>
-
-          {/* Night Shift Drivers */}
-          <div className="mt-2">
-            <div className="text-blue-400 text-[10px] font-bold uppercase tracking-wider mb-1.5">Night Shift</div>
-            <div className="flex flex-wrap gap-1 mb-2">
-              {(project.nightDriverHashes || []).map(hash => (
-                <span key={hash} className="px-2 py-0.5 bg-blue-600/20 text-blue-300 text-[10px] rounded-full flex items-center gap-1">
-                  {getDriverName(hash)}
-                  <button onClick={() => {
-                    const updated = (project.nightDriverHashes || []).filter(h => h !== hash);
-                    onUpdateProject?.(project.id!, { nightDriverHashes: updated });
-                  }} className="text-blue-500 hover:text-white ml-0.5">&times;</button>
-                </span>
-              ))}
-              {(project.nightDriverHashes || []).length === 0 && <span className="text-gray-600 text-[10px]">No night drivers assigned</span>}
-            </div>
-          </div>
-
-          {/* Batch dispatch buttons */}
-          {project.status === 'active' && (
-            <div className="flex items-center gap-2 mt-2 pt-2 border-t border-gray-700/50">
-              {(() => {
-                const activeStatuses = ['pending', 'accepted', 'in_progress', 'paused'];
-                const activeCombos = new Set(projectDispatches.filter(d => activeStatuses.includes(d.status)).map(d => `${d.driverHash}::${d.wellName}`));
-                const dayHashes = project.dayDriverHashes || [];
-                const nightHashes = project.nightDriverHashes || [];
-                const dayNew = dayHashes.filter(h => project.wellNames.some(w => !activeCombos.has(`${h}::${w}`))).length;
-                const nightNew = nightHashes.filter(h => project.wellNames.some(w => !activeCombos.has(`${h}::${w}`))).length;
-                const dayTotal = dayHashes.length * project.wellNames.length;
-                const nightTotal = nightHashes.length * project.wellNames.length;
-                return (
-                  <>
-                    <button
-                      onClick={() => onBatchDispatch?.('day')}
-                      disabled={dayHashes.length === 0 || dayNew === 0}
-                      className="flex-1 px-2 py-1.5 bg-amber-600/20 text-amber-400 text-[10px] font-bold rounded hover:bg-amber-600/30 disabled:opacity-30 disabled:cursor-not-allowed transition-colors"
-                    >
-                      Dispatch Day{dayHashes.length > 0 ? ` (${dayNew > 0 ? dayNew + ' new' : 'all sent'})` : ''}
-                    </button>
-                    <button
-                      onClick={() => onBatchDispatch?.('night')}
-                      disabled={nightHashes.length === 0 || nightNew === 0}
-                      className="flex-1 px-2 py-1.5 bg-blue-600/20 text-blue-400 text-[10px] font-bold rounded hover:bg-blue-600/30 disabled:opacity-30 disabled:cursor-not-allowed transition-colors"
-                    >
-                      Dispatch Night{nightHashes.length > 0 ? ` (${nightNew > 0 ? nightNew + ' new' : 'all sent'})` : ''}
-                    </button>
-                  </>
-                );
-              })()}
-            </div>
-          )}
+          {/* Unassigned dispatches (legacy projects without shift assignment) */}
+          {(() => {
+            const allShiftHashes = new Set([...(project.dayDriverHashes || []), ...(project.nightDriverHashes || [])]);
+            const unassigned = activeJobs.filter(j => !allShiftHashes.has(j.driverHash));
+            if (unassigned.length === 0) return null;
+            return (
+              <div className="mt-2 pt-2 border-t border-gray-700/50">
+                <div className="text-gray-500 text-[10px] font-bold uppercase tracking-wider mb-1.5">Unassigned Shift</div>
+                {unassigned.map(job => (
+                  <div key={job.id} className="bg-gray-900 border border-gray-700 rounded-lg px-4 py-2.5 mb-1.5">
+                    <div className="flex items-center gap-2">
+                      <JobTypeBadge type={job.jobType} serviceType={job.serviceType} />
+                      <span className="text-white font-medium text-sm truncate">{job.ndicWellName || job.wellName}</span>
+                      <span className="flex-1" />
+                      <StageBadge job={job} />
+                    </div>
+                    <div className="flex items-center gap-2 mt-1 text-xs text-gray-400">
+                      <span>{getDriverName(job.driverHash)}</span>
+                      <span className="flex-1" />
+                      <button onClick={() => job.id && cancelDispatch(job.id)} className="text-red-400/50 hover:text-red-400 text-[10px]">Cancel</button>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            );
+          })()}
 
           {/* Add / move driver to shift */}
-          <div className="flex items-center gap-2 mt-2 pt-2 border-t border-gray-700/50">
+          <div className="flex items-center gap-2 mt-3 pt-2 border-t border-gray-700/50">
             <select value={addDriverShift} onChange={(e) => setAddDriverShift(e.target.value as 'day' | 'night')}
               className="px-2 py-1.5 bg-gray-900 border border-gray-700 rounded text-white text-xs w-20">
               <option value="day">Day</option>
@@ -3908,7 +3903,6 @@ function ProjectDetailPanel({ project, projectDispatches, projectInvoices, drive
               <option value="">Add / move driver...</option>
               {drivers
                 .filter(d => {
-                  // Hide drivers already in the SELECTED shift
                   const targetList = addDriverShift === 'day' ? (project.dayDriverHashes || []) : (project.nightDriverHashes || []);
                   return !targetList.includes(d.key);
                 })
@@ -3930,19 +3924,16 @@ function ProjectDetailPanel({ project, projectDispatches, projectInvoices, drive
                 const otherField = addDriverShift === 'day' ? 'nightDriverHashes' : 'dayDriverHashes';
                 const targetList = (addDriverShift === 'day' ? project.dayDriverHashes : project.nightDriverHashes) || [];
                 const otherList = (addDriverShift === 'day' ? project.nightDriverHashes : project.dayDriverHashes) || [];
-                // Remove from other shift if present
                 const updates: Record<string, any> = {};
                 if (otherList.includes(addDriverHash)) {
                   updates[otherField] = otherList.filter(h => h !== addDriverHash);
                 }
-                // Add to target shift
                 if (!targetList.includes(addDriverHash)) {
                   updates[targetField] = [...targetList, addDriverHash];
                 }
                 if (Object.keys(updates).length > 0) {
                   onUpdateProject?.(project.id!, updates);
                 }
-                // Only create dispatches if driver is NEW to the project
                 const isNew = !(project.dayDriverHashes || []).includes(addDriverHash) && !(project.nightDriverHashes || []).includes(addDriverHash);
                 if (isNew) onAddDriver(addDriverHash);
                 setAddDriverHash('');
