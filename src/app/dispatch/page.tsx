@@ -324,7 +324,7 @@ export default function DispatchPage() {
   const [message, setMessage] = useState('');
 
   // Assign modal state (single-well PW)
-  const [showAssignModal, setShowAssignModal] = useState(false);
+  // showAssignModal removed — PW card is always visible, assignTarget fills it
   const [assignTarget, setAssignTarget] = useState<WellResponse | null>(null);
   const [assignDriverHash, setAssignDriverHash] = useState('');
   const [assignNotes, setAssignNotes] = useState('');
@@ -820,7 +820,8 @@ export default function DispatchPage() {
     setAssignDisposalWell(null);
     setDisposalSearch('');
     setDisposalResults([]);
-    setShowAssignModal(true);
+    // Scroll to top so PW card is visible (no modal — card is always visible)
+    window.scrollTo({ top: 0, behavior: 'smooth' });
   }
 
   async function submitPWDispatch() {
@@ -871,11 +872,9 @@ export default function DispatchPage() {
       trackJobTypeUsage('Production Water', compId, 'water-hauling');
 
       setMessage(`Dispatched ${assignTarget.wellName} to ${driver.legalName || driver.displayName}`);
-      setShowAssignModal(false);
       setAssignTarget(null);
       setTimeout(() => setMessage(''), 4000);
     } catch (err: any) {
-      setShowAssignModal(false);
       setAssignTarget(null);
       setMessage(`Error: ${err.message}`);
       setTimeout(() => setMessage(''), 5000);
@@ -1592,10 +1591,98 @@ export default function DispatchPage() {
             </button>
           </div>
 
-          {/* Expandable toolbar forms */}
-          {(
-            <div className="bg-gray-800 border border-purple-600/40 rounded-lg p-4 mb-3">
-              <div className="text-purple-400 text-xs font-medium uppercase tracking-wider mb-3">Dispatch Service Work</div>
+          {/* Dispatch cards — PW + SW side by side */}
+          <div className="grid grid-cols-2 gap-3 mb-3">
+
+          {/* ── PW Dispatch Card ── */}
+          <div className="bg-gray-800 border border-blue-600/40 rounded-lg p-4">
+            <div className="text-blue-400 text-xs font-medium uppercase tracking-wider mb-3">Dispatch Production Water</div>
+            {assignTarget ? (
+              <div className="space-y-3">
+                {/* Well info */}
+                <div className="bg-gray-900 rounded p-2 text-sm">
+                  <div className="text-white font-bold">{assignTarget.ndicName || assignTarget.wellName}</div>
+                  <div className="grid grid-cols-2 gap-1 mt-1 text-xs">
+                    <span className="text-gray-500">Level: <span className="text-white font-mono">{assignTarget.currentLevel || '--'}</span></span>
+                    <span className="text-gray-500">Flow: <span className="text-white font-mono">{assignTarget.flowRate || '--'}</span></span>
+                    <span className="text-gray-500">TTP: <span className="text-white font-mono">{assignTarget.timeTillPull || '--'}</span></span>
+                    <span className="text-gray-500">Route: <span className="text-white">{assignTarget.route || '--'}</span></span>
+                  </div>
+                </div>
+                {/* Driver */}
+                <div>
+                  <label className="block text-xs text-gray-400 mb-1">Driver</label>
+                  <select value={assignDriverHash} onChange={(e) => setAssignDriverHash(e.target.value)}
+                    className="w-full px-3 py-1.5 bg-gray-900 border border-gray-700 rounded text-white text-sm focus:outline-none focus:border-blue-500">
+                    <option value="">Select driver...</option>
+                    {assignTarget.route && drivers.filter(d => d.assignedRoutes?.includes(assignTarget.route!)).length > 0 && (
+                      <optgroup label={`Route: ${assignTarget.route}`}>
+                        {drivers.filter(d => d.assignedRoutes?.includes(assignTarget.route!)).map(d => (
+                          <option key={d.key} value={d.key}>{d.legalName || d.displayName}</option>
+                        ))}
+                      </optgroup>
+                    )}
+                    <optgroup label="All Drivers">
+                      {drivers.map(d => (<option key={d.key} value={d.key}>{d.legalName || d.displayName}</option>))}
+                    </optgroup>
+                  </select>
+                </div>
+                {/* Disposal */}
+                <div className="relative">
+                  <label className="block text-xs text-gray-400 mb-1">Disposal</label>
+                  {assignDisposalWell ? (
+                    <div className="flex items-center gap-2 px-3 py-1.5 bg-gray-900 border border-cyan-700 rounded text-sm">
+                      <span className="text-cyan-400 flex-1 truncate">{assignDisposal}</span>
+                      <button onClick={() => { setAssignDisposal(''); setAssignDisposalWell(null); setDisposalSearch(''); }} className="text-gray-400 hover:text-white text-xs">✕</button>
+                    </div>
+                  ) : (
+                    <input type="text" value={disposalSearch}
+                      onChange={(e) => { setDisposalSearch(e.target.value); setDisposalResults(e.target.value.length >= 2 ? searchDisposals(e.target.value, allDisposals) : []); }}
+                      placeholder="Search SWD..." className="w-full px-3 py-1.5 bg-gray-900 border border-gray-700 rounded text-white text-sm placeholder-gray-500 focus:outline-none focus:border-blue-500" />
+                  )}
+                  {disposalResults.length > 0 && !assignDisposalWell && (
+                    <div className="absolute z-50 w-full mt-1 bg-gray-800 border border-gray-600 rounded max-h-36 overflow-y-auto shadow-lg">
+                      {disposalResults.map((d, i) => (
+                        <button key={d.api_no || i} onClick={() => { setAssignDisposal(d.well_name); setAssignDisposalWell(d); setDisposalSearch(''); setDisposalResults([]); }}
+                          className="w-full text-left px-3 py-1.5 hover:bg-gray-700 border-b border-gray-700/50 last:border-0 text-white text-sm">
+                          {d.well_name} <span className="text-gray-400 text-xs ml-1">{d.county || ''}</span>
+                        </button>
+                      ))}
+                    </div>
+                  )}
+                </div>
+                {/* Loads + Notes */}
+                <div className="flex gap-2">
+                  <div className="w-16">
+                    <label className="block text-xs text-gray-400 mb-1">Loads</label>
+                    <input type="number" min={1} max={20} value={assignLoadCount}
+                      onChange={(e) => setAssignLoadCount(Math.max(1, parseInt(e.target.value) || 1))}
+                      className="w-full px-2 py-1.5 bg-gray-900 border border-gray-700 rounded text-white text-sm text-center focus:outline-none focus:border-blue-500" />
+                  </div>
+                  <div className="flex-1">
+                    <label className="block text-xs text-gray-400 mb-1">Notes</label>
+                    <input type="text" value={assignNotes} onChange={(e) => setAssignNotes(e.target.value)}
+                      placeholder="Special instructions..." className="w-full px-3 py-1.5 bg-gray-900 border border-gray-700 rounded text-white text-sm placeholder-gray-500 focus:outline-none focus:border-blue-500" />
+                  </div>
+                </div>
+                {/* Dispatch + Clear */}
+                <div className="flex gap-2">
+                  <button onClick={() => { setAssignTarget(null); setAssignDriverHash(''); setAssignNotes(''); setAssignLoadCount(1); setAssignDisposal(''); setAssignDisposalWell(null); setDisposalSearch(''); }}
+                    className="px-3 py-1.5 bg-gray-700 hover:bg-gray-600 text-white text-xs rounded">Clear</button>
+                  <button onClick={submitPWDispatch} disabled={!assignDriverHash || assigning}
+                    className="flex-1 px-4 py-1.5 bg-blue-600 hover:bg-blue-500 disabled:bg-gray-600 disabled:cursor-not-allowed text-white text-xs font-medium rounded transition-colors">
+                    {assigning ? 'Sending...' : assignLoadCount > 1 ? `Dispatch ${assignLoadCount} Loads` : 'Dispatch'}
+                  </button>
+                </div>
+              </div>
+            ) : (
+              <div className="text-gray-500 text-sm text-center py-6">Click <span className="text-blue-400 font-medium">Assign</span> on a well in the queue below</div>
+            )}
+          </div>
+
+          {/* ── SW Dispatch Card ── */}
+          <div className="bg-gray-800 border border-purple-600/40 rounded-lg p-4">
+            <div className="text-purple-400 text-xs font-medium uppercase tracking-wider mb-3">Dispatch Service Work</div>
               <div className="flex items-start gap-4">
                 {/* Well search + Drop-off */}
                 <div className="w-64 flex-shrink-0 space-y-2">
@@ -1769,7 +1856,7 @@ export default function DispatchPage() {
                 </div>
               </div>
             </div>
-          )}
+          </div>{/* end grid */}
 
           {/* Add Pull form removed — now uses modal */}
 
@@ -2193,163 +2280,7 @@ export default function DispatchPage() {
         </div>
       )}
 
-      {/* ═══════════════════════════════════════════════════════════════════════════
-          ASSIGN MODAL (PW — unchanged)
-          ═══════════════════════════════════════════════════════════════════════════ */}
-      {showAssignModal && assignTarget && (
-        <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50">
-          <div className="bg-gray-800 rounded-lg p-6 max-w-md w-full mx-4 border border-gray-700">
-            <h3 className="text-lg font-semibold text-white mb-1">Assign Job</h3>
-            <p className="text-gray-400 text-sm mb-4">
-              Dispatch <span className="text-white font-medium">{assignTarget.ndicName || assignTarget.wellName}</span> to a driver
-            </p>
-
-            {/* Well Info Summary */}
-            <div className="bg-gray-900 rounded-lg p-3 mb-4 grid grid-cols-2 gap-2 text-sm">
-              <div>
-                <span className="text-gray-500">Level:</span>
-                <span className="text-white ml-2 font-mono">{assignTarget.currentLevel || '--'}</span>
-              </div>
-              <div>
-                <span className="text-gray-500">Flow Rate:</span>
-                <span className="text-white ml-2 font-mono">{assignTarget.flowRate || '--'}</span>
-              </div>
-              <div>
-                <span className="text-gray-500">Time Till Pull:</span>
-                <span className="text-white ml-2 font-mono">{assignTarget.timeTillPull || assignTarget.etaToMax || '--'}</span>
-              </div>
-              <div>
-                <span className="text-gray-500">Route:</span>
-                <span className="text-white ml-2">{assignTarget.route || 'Unrouted'}</span>
-              </div>
-            </div>
-
-            {/* Prediction Warning */}
-            <ModalPredictionBanner well={assignTarget} />
-
-            {/* Driver Select */}
-            <div className="mb-4">
-              <label className="block text-sm text-gray-400 mb-1">Assign to Driver</label>
-              <select
-                value={assignDriverHash}
-                onChange={(e) => setAssignDriverHash(e.target.value)}
-                className="w-full px-3 py-2 bg-gray-900 border border-gray-700 rounded-lg text-white text-sm focus:outline-none focus:border-blue-500"
-              >
-                <option value="">Select driver...</option>
-                {/* Show drivers assigned to this route first */}
-                {assignTarget.route && drivers.filter(d => d.assignedRoutes?.includes(assignTarget.route!)).length > 0 && (
-                  <optgroup label={`Route: ${assignTarget.route}`}>
-                    {drivers
-                      .filter(d => d.assignedRoutes?.includes(assignTarget.route!))
-                      .map(d => (
-                        <option key={d.key} value={d.key}>{d.legalName || d.displayName}</option>
-                      ))
-                    }
-                  </optgroup>
-                )}
-                <optgroup label="All Drivers">
-                  {drivers.map(d => (
-                    <option key={d.key} value={d.key}>{d.legalName || d.displayName}</option>
-                  ))}
-                </optgroup>
-              </select>
-            </div>
-
-            {/* Disposal */}
-            <div className="mb-4 relative">
-              <label className="block text-sm text-gray-400 mb-1">Disposal Location (optional)</label>
-              {assignDisposalWell ? (
-                <div className="flex items-center gap-2 px-3 py-2 bg-gray-900 border border-cyan-700 rounded-lg">
-                  <span className="text-cyan-400 text-sm flex-1 truncate">{assignDisposal}</span>
-                  <span className="text-gray-500 text-xs">{assignDisposalWell.county || ''}</span>
-                  <button
-                    onClick={() => { setAssignDisposal(''); setAssignDisposalWell(null); setDisposalSearch(''); }}
-                    className="text-gray-400 hover:text-white text-xs ml-1"
-                  >&#10005;</button>
-                </div>
-              ) : (
-                <input
-                  type="text"
-                  value={disposalSearch}
-                  onChange={(e) => {
-                    const val = e.target.value;
-                    setDisposalSearch(val);
-                    if (val.length >= 2) {
-                      setDisposalResults(searchDisposals(val, allDisposals));
-                    } else {
-                      setDisposalResults([]);
-                    }
-                  }}
-                  placeholder="Search SWD / disposal facilities..."
-                  className="w-full px-3 py-2 bg-gray-900 border border-gray-700 rounded-lg text-white text-sm placeholder-gray-500 focus:outline-none focus:border-blue-500"
-                />
-              )}
-              {disposalResults.length > 0 && !assignDisposalWell && (
-                <div className="absolute z-50 w-full mt-1 bg-gray-800 border border-gray-600 rounded-lg max-h-48 overflow-y-auto shadow-lg">
-                  {disposalResults.map((d, i) => (
-                    <button
-                      key={d.api_no || i}
-                      onClick={() => {
-                        setAssignDisposal(d.well_name);
-                        setAssignDisposalWell(d);
-                        setDisposalSearch('');
-                        setDisposalResults([]);
-                      }}
-                      className="w-full text-left px-3 py-2 hover:bg-gray-700 border-b border-gray-700/50 last:border-0"
-                    >
-                      <span className="text-white text-sm">{d.well_name}</span>
-                      <span className="text-gray-400 text-xs ml-2">{d.operator}</span>
-                      {d.county && <span className="text-gray-500 text-xs ml-2">{d.county} Co.</span>}
-                    </button>
-                  ))}
-                </div>
-              )}
-            </div>
-
-            {/* Loads + Notes side by side */}
-            <div className="flex gap-3 mb-4">
-              <div className="w-20">
-                <label className="block text-sm text-gray-400 mb-1">Loads</label>
-                <input
-                  type="number"
-                  min={1}
-                  max={20}
-                  value={assignLoadCount}
-                  onChange={(e) => setAssignLoadCount(Math.max(1, parseInt(e.target.value) || 1))}
-                  className="w-full px-3 py-2 bg-gray-900 border border-gray-700 rounded-lg text-white text-sm text-center focus:outline-none focus:border-blue-500"
-                />
-              </div>
-              <div className="flex-1">
-                <label className="block text-sm text-gray-400 mb-1">Notes (optional)</label>
-                <input
-                  type="text"
-                  value={assignNotes}
-                  onChange={(e) => setAssignNotes(e.target.value)}
-                  placeholder="Special instructions..."
-                  className="w-full px-3 py-2 bg-gray-900 border border-gray-700 rounded-lg text-white text-sm placeholder-gray-500 focus:outline-none focus:border-blue-500"
-                />
-              </div>
-            </div>
-
-            {/* Buttons */}
-            <div className="flex gap-3">
-              <button
-                onClick={() => { setShowAssignModal(false); setAssignTarget(null); }}
-                className="flex-1 px-4 py-2 bg-gray-700 hover:bg-gray-600 text-white rounded-lg transition-colors"
-              >
-                Cancel
-              </button>
-              <button
-                onClick={submitPWDispatch}
-                disabled={!assignDriverHash || assigning}
-                className="flex-1 px-4 py-2 bg-blue-600 hover:bg-blue-500 disabled:bg-gray-600 disabled:cursor-not-allowed text-white font-medium rounded-lg transition-colors"
-              >
-                {assigning ? 'Dispatching...' : assignLoadCount > 1 ? `Dispatch ${assignLoadCount} Loads` : 'Dispatch'}
-              </button>
-            </div>
-          </div>
-        </div>
-      )}
+      {/* PW ASSIGN MODAL removed — replaced by inline PW dispatch card above */}
 
       {/* ═══════════════════════════════════════════════════════════════════════════
           REASSIGN DECLINED JOB MODAL
