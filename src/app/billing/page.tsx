@@ -157,8 +157,13 @@ export default function BillingPage() {
       setDataLoading(true);
       setError(null);
       const companyId = effectiveCompanyId || undefined;
+      // Build well→county map for frost rate lookup (same as payroll)
+      const allOperators = new Set<string>();
+      companies.forEach(c => c.assignedOperators?.forEach(op => allOperators.add(op)));
+      const { buildWellCountyMap } = await import('@/lib/payroll');
+      const countyMap = await buildWellCountyMap([...allOperators]);
       const [sums, records] = await Promise.all([
-        fetchBillingData(selectedPeriod, companies, companyId),
+        fetchBillingData(selectedPeriod, companies, companyId, countyMap),
         fetchBillingRecords(selectedPeriod, companyId),
       ]);
       setSummaries(sums);
@@ -286,8 +291,14 @@ export default function BillingPage() {
     if (isNaN(from.getTime()) || isNaN(to.getTime()) || from > to) return;
     const exportPeriod: PayPeriod = { type: 'custom' as any, start: from, end: to, label: '' };
     setExportDataLoading(true);
-    fetchBillingData(exportPeriod, companies, effectiveCompanyId)
-      .then(setExportSummaries)
+    // Build county map for frost rates
+    const allOps = new Set<string>();
+    companies.forEach(c => c.assignedOperators?.forEach(op => allOps.add(op)));
+    import('@/lib/payroll').then(({ buildWellCountyMap }) =>
+      buildWellCountyMap([...allOps]).then(cm =>
+        fetchBillingData(exportPeriod, companies, effectiveCompanyId, cm)
+      )
+    ).then(setExportSummaries)
       .catch(() => setExportSummaries([]))
       .finally(() => setExportDataLoading(false));
   }, [activeTab, exportDateFrom, exportDateTo, effectiveCompanyId, companies]);
@@ -338,7 +349,11 @@ export default function BillingPage() {
       await loadFuelPrices();
       // Refresh billing data too
       if (companies.size > 0) {
-        const data = await fetchBillingData(selectedPeriod, companies, effectiveCompanyId);
+        const allOps2 = new Set<string>();
+        companies.forEach(c => c.assignedOperators?.forEach(op => allOps2.add(op)));
+        const { buildWellCountyMap: buildMap } = await import('@/lib/payroll');
+        const cm2 = await buildMap([...allOps2]);
+        const data = await fetchBillingData(selectedPeriod, companies, effectiveCompanyId, cm2);
         setSummaries(data);
       }
     } catch (err: any) {

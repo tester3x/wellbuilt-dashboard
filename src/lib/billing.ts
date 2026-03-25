@@ -1,7 +1,7 @@
 import { getFirestoreDb } from './firebase';
 import { collection, getDocs, query, where, orderBy, Timestamp, doc, setDoc, updateDoc, getDoc, deleteDoc } from 'firebase/firestore';
 import { type CompanyConfig, type OperatorBillingConfig } from './companySettings';
-import { lookupRate, formatCurrency, type PayPeriod, type CompanyRateSheets } from './payroll';
+import { lookupRate, getEffectiveRate, formatCurrency, type PayPeriod, type CompanyRateSheets } from './payroll';
 
 // Re-export for convenience
 export { formatCurrency, type PayPeriod };
@@ -276,7 +276,8 @@ function getDieselPriceForDate(timeline: DieselPriceTimeline, dateStr: string): 
 export async function fetchBillingData(
   period: PayPeriod,
   companyConfigs: Map<string, CompanyConfig>,
-  companyId?: string
+  companyId?: string,
+  wellCountyMap?: Map<string, string>,
 ): Promise<OperatorBillingSummary[]> {
   const db = getFirestoreDb();
 
@@ -328,8 +329,12 @@ export async function fetchBillingData(
     const currentDiesel = (timeline && invoiceDate ? getDieselPriceForDate(timeline, invoiceDate) : undefined) ?? company?.currentDieselPrice;
 
     const rateEntry = lookupRate(rateSheets, operator, jobType);
-    const rate = rateEntry?.rate || 0;
     const rateMethod = rateEntry?.method || 'per_bbl';
+    const wellName = d.wellName || '';
+    const county = d.county || wellCountyMap?.get(wellName.toLowerCase()) || '';
+    const rate = rateEntry
+      ? getEffectiveRate(rateEntry, invoiceDate, county, company?.payConfig?.frostZones, company?.payConfig?.frostSeason, bbls)
+      : 0;
     const baseAmount = rateMethod === 'per_bbl'
       ? Math.round(bbls * rate * 100) / 100
       : Math.round(hours * rate * 100) / 100;

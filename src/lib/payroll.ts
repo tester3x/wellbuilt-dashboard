@@ -51,7 +51,7 @@ function isInFrostZone(isoDate: string, zone: FrostZone): boolean {
  * If the load exceeds the county's maxBbls frost limit, falls back to normal rate.
  * Priority: frostZones[county] + frostRates[county] → legacy frostSeason + frostRate
  */
-function getEffectiveRate(
+export function getEffectiveRate(
   entry: RateEntry,
   invoiceDate: string,
   county: string,
