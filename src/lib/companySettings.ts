@@ -106,6 +106,8 @@ export interface OperatorBillingConfig {
   fuelSurchargeSpeed?: number;      // average speed MPH (hourly only, default 30)
   fuelSurchargeMultiplier?: number; // gallons per load (flat_doe only, default 8)
   fuelSurchargeStep?: number;       // rounding step (flat_doe only, default 0.10)
+  fuelSurchargeFloor?: number;      // Minimum FSC $/hr (Bakken consensus: $1.20)
+  fuelSurchargeCeiling?: number;    // Maximum FSC $/hr (Bakken consensus: $14.00)
   // SWD detention — hourly pay for waiting at drop-off beyond threshold (BBL-rate jobs only)
   detentionEnabled?: boolean;
   detentionThresholdMinutes?: number;  // Default 60 — minutes before hourly kicks in

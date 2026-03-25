@@ -132,15 +132,19 @@ export function calculateFuelSurcharge(
     case 'flat_doe': {
       // Bakken-style DOE-tiered FSC — paid per HOUR
       // Rate = multiplier × (floor(DOE / step) × step − baseline)
-      // Then: rate × total job hours = FSC for this load
+      // Then: clamp(rate, floor, ceiling) × total job hours = FSC for this load
       const diesel = currentDieselPrice || 0;
       const baseline = config.fuelSurchargeBaseline || 3.25;
       const multiplier = config.fuelSurchargeMultiplier || 8;
       const step = config.fuelSurchargeStep || 0.10;
+      const floor = config.fuelSurchargeFloor;
+      const ceiling = config.fuelSurchargeCeiling;
       const stepped = Math.floor(diesel / step) * step;
       const diff = stepped - baseline;
-      if (diff <= 0) return 0;
-      const perHour = multiplier * diff;
+      if (diff <= 0) return floor ? Math.round(totalHours * floor * 100) / 100 : 0;
+      let perHour = multiplier * diff;
+      if (floor && perHour < floor) perHour = floor;
+      if (ceiling && perHour > ceiling) perHour = ceiling;
       return Math.round(totalHours * perHour * 100) / 100;
     }
     default:
@@ -174,10 +178,15 @@ export function getFuelSurchargeRate(
       const baseline = config.fuelSurchargeBaseline || 3.25;
       const multiplier = config.fuelSurchargeMultiplier || 8;
       const step = config.fuelSurchargeStep || 0.10;
+      const floor = config.fuelSurchargeFloor;
+      const ceiling = config.fuelSurchargeCeiling;
       const stepped = Math.floor(diesel / step) * step;
       const diff = stepped - baseline;
-      if (diff <= 0) return { rate: 0, unit: '/hr' };
-      return { rate: Math.round(multiplier * diff * 100) / 100, unit: '/hr' };
+      if (diff <= 0) return { rate: floor || 0, unit: '/hr' };
+      let perHour = Math.round(multiplier * diff * 100) / 100;
+      if (floor && perHour < floor) perHour = floor;
+      if (ceiling && perHour > ceiling) perHour = ceiling;
+      return { rate: perHour, unit: '/hr' };
     }
     case 'percentage': return { rate: (config.fuelSurchargePercent || 0) * 100, unit: '%' };
     case 'flat': return { rate: config.fuelSurchargeRate || 0, unit: '/load' };
@@ -192,7 +201,16 @@ export function getFuelSurchargeLabel(config: OperatorBillingConfig | undefined)
     case 'per_mile': return `DOE/mi (${config.fuelSurchargeMPG || 6}MPG)`;
     case 'percentage': return `${((config.fuelSurchargePercent || 0) * 100).toFixed(1)}%`;
     case 'flat': return `$${config.fuelSurchargeRate || 0}/load`;
-    case 'flat_doe': return `DOE/hr (x${config.fuelSurchargeMultiplier || 8}, base $${config.fuelSurchargeBaseline || 3.25})`;
+    case 'flat_doe': {
+      let label = `DOE/hr (x${config.fuelSurchargeMultiplier || 8}, base $${config.fuelSurchargeBaseline || 3.25})`;
+      if (config.fuelSurchargeFloor || config.fuelSurchargeCeiling) {
+        const parts = [];
+        if (config.fuelSurchargeFloor) parts.push(`min $${config.fuelSurchargeFloor}`);
+        if (config.fuelSurchargeCeiling) parts.push(`max $${config.fuelSurchargeCeiling}`);
+        label += ` [${parts.join(', ')}]`;
+      }
+      return label;
+    }
     default: return 'None';
   }
 }
