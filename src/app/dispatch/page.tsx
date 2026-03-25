@@ -25,6 +25,7 @@ interface ApprovedDriver {
   companyId?: string;
   companyName?: string;
   assignedRoutes?: string[];
+  phone?: string;        // From profile subpath (WB S settings)
 }
 
 interface DispatchJob {
@@ -690,6 +691,7 @@ export default function DispatchPage() {
                 companyId: val.companyId,
                 companyName: val.companyName,
                 assignedRoutes: val.assignedRoutes || [],
+                phone: val.profile?.phone || '',
               });
             }
           } else {
@@ -706,6 +708,7 @@ export default function DispatchPage() {
                   companyId: first.companyId,
                   companyName: first.companyName,
                   assignedRoutes: first.assignedRoutes || [],
+                  phone: first.profile?.phone || '',
                 });
               }
             }
@@ -1101,6 +1104,75 @@ export default function DispatchPage() {
           });
         }
       }
+    } catch (err: any) {
+      setMessage(`Error: ${err.message}`);
+      setTimeout(() => setMessage(''), 5000);
+    }
+  }
+
+  // ─── Batch Dispatch for Project Shift ─────────────────────────────────────
+
+  async function batchDispatchShift(projectId: string, shift: 'day' | 'night') {
+    const project = projects.find(p => p.id === projectId);
+    if (!project) return;
+    const driverHashes = shift === 'day' ? (project.dayDriverHashes || []) : (project.nightDriverHashes || []);
+    if (driverHashes.length === 0) return;
+
+    try {
+      const firestore = getFirestoreDb();
+      const today = new Date().toISOString().slice(0, 10);
+
+      // Build set of existing active dispatch combos to prevent duplicates
+      const activeStatuses = ['pending', 'accepted', 'in_progress', 'paused'];
+      const existingCombos = new Set(
+        projectDispatches
+          .filter(d => activeStatuses.includes(d.status))
+          .map(d => `${d.driverHash}::${d.wellName}`)
+      );
+
+      let created = 0;
+      for (const wellName of project.wellNames) {
+        const wellData = wells.find(w => w.wellName === wellName);
+        for (const driverHash of driverHashes) {
+          const combo = `${driverHash}::${wellName}`;
+          if (existingCombos.has(combo)) continue;
+          const driver = drivers.find(d => d.key === driverHash);
+          if (!driver) continue;
+          const driverFirstName = driver.legalName ? driver.legalName.split(' ')[0] : driver.displayName;
+          await addDoc(collection(firestore, 'dispatches'), {
+            driverHash,
+            driverName: driver.displayName,
+            driverFirstName,
+            wellName,
+            ndicWellName: wellData?.ndicName || wellName,
+            operator: project.operatorName || '',
+            route: wellData?.route || '',
+            jobType: 'pw',
+            status: 'pending',
+            priority: 500,
+            assignedAt: Timestamp.now(),
+            assignedBy: user?.email || '',
+            projectId,
+            notes: project.notes || undefined,
+          });
+          created++;
+        }
+      }
+
+      // Merge drivers into today's schedule
+      const currentSchedule = project.driverSchedule || {};
+      const todayDrivers = new Set(currentSchedule[today] || []);
+      driverHashes.forEach(h => todayDrivers.add(h));
+      await updateDoc(doc(firestore, 'projects', projectId), {
+        [`driverSchedule.${today}`]: Array.from(todayDrivers),
+      });
+
+      if (created > 0) {
+        setMessage(`Created ${created} ${shift} shift dispatch${created !== 1 ? 'es' : ''}`);
+      } else {
+        setMessage(`All ${shift} shift drivers already dispatched`);
+      }
+      setTimeout(() => setMessage(''), 3000);
     } catch (err: any) {
       setMessage(`Error: ${err.message}`);
       setTimeout(() => setMessage(''), 5000);
@@ -2198,6 +2270,29 @@ export default function DispatchPage() {
                   )}
                 </div>
               </div>
+              {/* Project quick-switch pills */}
+              {rightPanelTab === 'projects' && projects.length > 0 && (
+                <div className="flex items-center gap-1.5 px-3 py-2 border-b border-gray-700/50 overflow-x-auto flex-shrink-0" style={{ scrollbarWidth: 'none' }}>
+                  {projects.map(p => {
+                    const isSelected = selectedProject?.id === p.id;
+                    const colors = p.status === 'active'
+                      ? isSelected ? 'bg-emerald-600 text-white' : 'border border-emerald-600/40 text-emerald-400 hover:bg-emerald-600/20'
+                      : p.status === 'paused'
+                      ? isSelected ? 'bg-amber-600 text-white' : 'border border-amber-600/40 text-amber-400 hover:bg-amber-600/20'
+                      : isSelected ? 'bg-gray-600 text-white' : 'border border-gray-600 text-gray-400 hover:bg-gray-700';
+                    return (
+                      <button
+                        key={p.id}
+                        onClick={() => setSelectedProject(isSelected ? null : p)}
+                        className={`px-2.5 py-1 rounded-full text-[11px] font-medium whitespace-nowrap transition-colors flex-shrink-0 ${colors}`}
+                        title={`${p.name} (${p.status})`}
+                      >
+                        {p.name.length > 24 ? p.name.slice(0, 22) + '…' : p.name}
+                      </button>
+                    );
+                  })}
+                </div>
+              )}
               {/* Scrollable content */}
               <div className="flex-1 overflow-y-auto p-3">
                 {rightPanelTab === 'jobs' && (
@@ -2235,6 +2330,7 @@ export default function DispatchPage() {
                         console.error('Failed to update project:', err);
                       }
                     }}
+                    onBatchDispatch={(shift) => batchDispatchShift(selectedProject.id!, shift)}
                   />
                 )}
               </div>
@@ -3402,15 +3498,16 @@ function ProjectsListPanel({ projects, dispatches, drivers, onSelect }: {
 
 // ─── Project Detail Panel ─────────────────────────────────────────────────
 
-function ProjectDetailPanel({ project, projectDispatches, projectInvoices, drivers, cancelDispatch, onStatusChange, onAddDriver, onUpdateProject }: {
+function ProjectDetailPanel({ project, projectDispatches, projectInvoices, drivers, cancelDispatch, onStatusChange, onAddDriver, onUpdateProject, onBatchDispatch }: {
   project: Project;
   projectDispatches: DispatchJob[];
   projectInvoices: ProjectInvoice[];
-  drivers: { key: string; displayName: string; legalName?: string }[];
+  drivers: { key: string; displayName: string; legalName?: string; phone?: string }[];
   cancelDispatch: (id: string) => void;
   onStatusChange: (id: string, status: 'active' | 'paused' | 'completed') => void;
   onAddDriver: (hash: string) => void;
   onUpdateProject?: (id: string, data: Partial<Project>) => void;
+  onBatchDispatch?: (shift: 'day' | 'night') => void;
 }) {
   const [detailTab, setDetailTab] = useState<'activity' | 'history' | 'schedule'>('activity');
   const [addDriverHash, setAddDriverHash] = useState('');
@@ -3419,6 +3516,7 @@ function ProjectDetailPanel({ project, projectDispatches, projectInvoices, drive
   const [showNotesEdit, setShowNotesEdit] = useState(false);
   const [newUpdate, setNewUpdate] = useState('');
   const [updateShift, setUpdateShift] = useState<'day' | 'night'>('day');
+  const [copied, setCopied] = useState(false);
 
   const today = new Date().toISOString().slice(0, 10);
   const todayDriverHashes = project.driverSchedule?.[today] || [];
@@ -3443,6 +3541,47 @@ function ProjectDetailPanel({ project, projectDispatches, projectInvoices, drive
   const activeJobs = projectDispatches.filter(j => ['pending', 'accepted', 'in_progress', 'paused'].includes(j.status));
   const completedJobs = projectDispatches.filter(j => j.status === 'completed' || j.status === 'cancelled');
 
+  function generateSummary() {
+    const dayNames = (project.dayDriverHashes || []).map(h => getDriverName(h));
+    const nightNames = (project.nightDriverHashes || []).map(h => getDriverName(h));
+    const lines = [
+      `${project.name} — ${project.operatorName}`,
+      `Wells: ${project.wellNames.join(', ')}`,
+      `Date: ${new Date().toLocaleDateString()}`,
+    ];
+    if (dayNames.length > 0) lines.push(`Day: ${dayNames.join(', ')}`);
+    if (nightNames.length > 0) lines.push(`Night: ${nightNames.join(', ')}`);
+    if (totalBbls > 0) lines.push(`Total: ${totalBbls.toLocaleString()} BBL (${totalLoads} loads)`);
+    if (project.notes) lines.push(`Notes: ${project.notes}`);
+    return lines.join('\n');
+  }
+
+  function copySummary() {
+    navigator.clipboard.writeText(generateSummary());
+    setCopied(true);
+    setTimeout(() => setCopied(false), 2000);
+  }
+
+  function textDrivers() {
+    // Collect all assigned driver phones
+    const allHashes = new Set([...(project.dayDriverHashes || []), ...(project.nightDriverHashes || [])]);
+    const phones = Array.from(allHashes)
+      .map(h => drivers.find(d => d.key === h)?.phone)
+      .filter((p): p is string => !!p && p.length >= 7);
+    if (phones.length === 0) return;
+    const body = encodeURIComponent(generateSummary());
+    const recipients = phones.join(',');
+    window.open(`sms:${recipients}?body=${body}`, '_blank');
+  }
+
+  const assignedPhoneCount = (() => {
+    const allHashes = new Set([...(project.dayDriverHashes || []), ...(project.nightDriverHashes || [])]);
+    return Array.from(allHashes).filter(h => {
+      const d = drivers.find(dr => dr.key === h);
+      return d?.phone && d.phone.length >= 7;
+    }).length;
+  })();
+
   return (
     <div className="space-y-3">
       {/* Project header */}
@@ -3465,10 +3604,29 @@ function ProjectDetailPanel({ project, projectDispatches, projectInvoices, drive
           </div>
         </div>
 
-        <div className="flex items-center gap-3 text-xs text-gray-400 mb-3">
-          <span>{project.operatorName}</span>
-          <span>·</span>
-          <span>{project.wellNames.join(', ')}</span>
+        <div className="flex items-center justify-between mb-3">
+          <div className="flex items-center gap-3 text-xs text-gray-400">
+            <span>{project.operatorName}</span>
+            <span>·</span>
+            <span>{project.wellNames.join(', ')}</span>
+          </div>
+          <div className="flex items-center gap-1">
+            <button
+              onClick={copySummary}
+              className="px-2 py-1 bg-gray-700 text-gray-300 text-[10px] font-medium rounded hover:bg-gray-600 transition-colors"
+              title="Copy project summary to clipboard"
+            >
+              {copied ? '✓ Copied' : 'Copy Summary'}
+            </button>
+            <button
+              onClick={textDrivers}
+              disabled={assignedPhoneCount === 0}
+              className="px-2 py-1 bg-emerald-600/20 text-emerald-400 text-[10px] font-medium rounded hover:bg-emerald-600/30 disabled:opacity-30 disabled:cursor-not-allowed transition-colors"
+              title={assignedPhoneCount > 0 ? `Text ${assignedPhoneCount} driver${assignedPhoneCount !== 1 ? 's' : ''}` : 'No driver phone numbers on file'}
+            >
+              Text Drivers{assignedPhoneCount > 0 ? ` (${assignedPhoneCount})` : ''}
+            </button>
+          </div>
         </div>
 
         {/* Editable job description */}
@@ -3627,6 +3785,40 @@ function ProjectDetailPanel({ project, projectDispatches, projectInvoices, drive
               {(project.nightDriverHashes || []).length === 0 && <span className="text-gray-600 text-[10px]">No night drivers assigned</span>}
             </div>
           </div>
+
+          {/* Batch dispatch buttons */}
+          {project.status === 'active' && (
+            <div className="flex items-center gap-2 mt-2 pt-2 border-t border-gray-700/50">
+              {(() => {
+                const activeStatuses = ['pending', 'accepted', 'in_progress', 'paused'];
+                const activeCombos = new Set(projectDispatches.filter(d => activeStatuses.includes(d.status)).map(d => `${d.driverHash}::${d.wellName}`));
+                const dayHashes = project.dayDriverHashes || [];
+                const nightHashes = project.nightDriverHashes || [];
+                const dayNew = dayHashes.filter(h => project.wellNames.some(w => !activeCombos.has(`${h}::${w}`))).length;
+                const nightNew = nightHashes.filter(h => project.wellNames.some(w => !activeCombos.has(`${h}::${w}`))).length;
+                const dayTotal = dayHashes.length * project.wellNames.length;
+                const nightTotal = nightHashes.length * project.wellNames.length;
+                return (
+                  <>
+                    <button
+                      onClick={() => onBatchDispatch?.('day')}
+                      disabled={dayHashes.length === 0 || dayNew === 0}
+                      className="flex-1 px-2 py-1.5 bg-amber-600/20 text-amber-400 text-[10px] font-bold rounded hover:bg-amber-600/30 disabled:opacity-30 disabled:cursor-not-allowed transition-colors"
+                    >
+                      Dispatch Day{dayHashes.length > 0 ? ` (${dayNew > 0 ? dayNew + ' new' : 'all sent'})` : ''}
+                    </button>
+                    <button
+                      onClick={() => onBatchDispatch?.('night')}
+                      disabled={nightHashes.length === 0 || nightNew === 0}
+                      className="flex-1 px-2 py-1.5 bg-blue-600/20 text-blue-400 text-[10px] font-bold rounded hover:bg-blue-600/30 disabled:opacity-30 disabled:cursor-not-allowed transition-colors"
+                    >
+                      Dispatch Night{nightHashes.length > 0 ? ` (${nightNew > 0 ? nightNew + ' new' : 'all sent'})` : ''}
+                    </button>
+                  </>
+                );
+              })()}
+            </div>
+          )}
 
           {/* Add driver to shift */}
           <div className="flex items-center gap-2 mt-2 pt-2 border-t border-gray-700/50">
