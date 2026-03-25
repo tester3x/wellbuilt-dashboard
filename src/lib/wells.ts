@@ -38,6 +38,8 @@ export interface WellResponse {
   ndicName?: string;           // Full NDIC well name (e.g. "GABRIEL 1-36-25H")
   // Raw numeric level for precision (avoids parsing formatted string)
   currentLevelInches?: number; // Total inches — used by Add Pull modal
+  // Tank dimensions from well_config
+  bblPerFoot?: number;         // Stored BBL/ft (overrides numTanks * 20 default)
 }
 
 export interface WellConfig {
@@ -357,6 +359,7 @@ export function subscribeToWellStatusesUnified(callback: (wells: WellResponse[],
           isDown,
           timestampUTC: outgoing.lastPullDateTimeUTC || outgoing.timestampUTC,
           ndicName: (config as any).ndicName || '',
+          bblPerFoot: (config as any).bblPerFoot || undefined,
         });
       } else {
         // No outgoing data — placeholder (well exists in config but no pulls yet)
@@ -372,6 +375,7 @@ export function subscribeToWellStatusesUnified(callback: (wells: WellResponse[],
           pullBbls,
           bottomLevel: bottomLevelFeet,
           ndicName: (config as any).ndicName || '',
+          bblPerFoot: (config as any).bblPerFoot || undefined,
         });
       }
     });
@@ -875,6 +879,7 @@ export async function fetchWellHistory(wellName: string, limit: number = 0): Pro
   let tanks = 1;
   let pullBbls = 140;
   let bottomLevel = 3; // feet
+  let bblPerFootPerTank = 20; // default: standard 400 BBL / 20' tank
   if (configSnapshot.exists()) {
     configSnapshot.forEach((child) => {
       const key = child.key || '';
@@ -883,6 +888,7 @@ export async function fetchWellHistory(wellName: string, limit: number = 0): Pro
         tanks = config.tanks || config.numTanks || 1;
         pullBbls = config.pullBbls || 140;
         bottomLevel = config.bottomLevel || config.allowedBottom || 3;
+        bblPerFootPerTank = config.bblPerFoot ? config.bblPerFoot / tanks : 20;
       }
     });
   }
