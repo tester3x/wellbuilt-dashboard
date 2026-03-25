@@ -3590,7 +3590,7 @@ function ProjectDetailPanel({ project, projectDispatches, projectInvoices, drive
   const activeJobs = projectDispatches.filter(j => ['pending', 'accepted', 'in_progress', 'paused'].includes(j.status));
   const completedJobs = projectDispatches.filter(j => j.status === 'completed' || j.status === 'cancelled');
 
-  function generateSummary() {
+  function generateSummary(shift?: 'day' | 'night') {
     const dayNames = (project.dayDriverHashes || []).map(h => getDriverName(h));
     const nightNames = (project.nightDriverHashes || []).map(h => getDriverName(h));
     const lines = [
@@ -3598,15 +3598,21 @@ function ProjectDetailPanel({ project, projectDispatches, projectInvoices, drive
       `Wells: ${project.wellNames.join(', ')}`,
       `Date: ${new Date().toLocaleDateString()}`,
     ];
-    if (dayNames.length > 0) lines.push(`Day: ${dayNames.join(', ')}`);
-    if (nightNames.length > 0) lines.push(`Night: ${nightNames.join(', ')}`);
+    if (shift === 'day') {
+      lines.push(`Day Shift: ${dayNames.join(', ') || 'None assigned'}`);
+    } else if (shift === 'night') {
+      lines.push(`Night Shift: ${nightNames.join(', ') || 'None assigned'}`);
+    } else {
+      if (dayNames.length > 0) lines.push(`Day: ${dayNames.join(', ')}`);
+      if (nightNames.length > 0) lines.push(`Night: ${nightNames.join(', ')}`);
+    }
     if (totalBbls > 0) lines.push(`Total: ${totalBbls.toLocaleString()} BBL (${totalLoads} loads)`);
     if (project.notes) lines.push(`Notes: ${project.notes}`);
     return lines.join('\n');
   }
 
-  function copySummary() {
-    navigator.clipboard.writeText(generateSummary());
+  function copySummary(shift?: 'day' | 'night') {
+    navigator.clipboard.writeText(generateSummary(shift));
     setCopied(true);
     setTimeout(() => setCopied(false), 2000);
   }
@@ -3660,12 +3666,30 @@ function ProjectDetailPanel({ project, projectDispatches, projectInvoices, drive
             <span>{project.wellNames.join(', ')}</span>
           </div>
           <div className="flex items-center gap-1">
+            {(project.dayDriverHashes || []).length > 0 && (
+              <button
+                onClick={() => copySummary('day')}
+                className="px-2 py-1 bg-amber-600/20 text-amber-400 text-[10px] font-medium rounded hover:bg-amber-600/30 transition-colors"
+                title="Copy summary with day shift roster"
+              >
+                {copied ? '✓' : 'Copy Day'}
+              </button>
+            )}
+            {(project.nightDriverHashes || []).length > 0 && (
+              <button
+                onClick={() => copySummary('night')}
+                className="px-2 py-1 bg-blue-600/20 text-blue-400 text-[10px] font-medium rounded hover:bg-blue-600/30 transition-colors"
+                title="Copy summary with night shift roster"
+              >
+                {copied ? '✓' : 'Copy Night'}
+              </button>
+            )}
             <button
-              onClick={copySummary}
+              onClick={() => copySummary()}
               className="px-2 py-1 bg-gray-700 text-gray-300 text-[10px] font-medium rounded hover:bg-gray-600 transition-colors"
-              title="Copy project summary to clipboard"
+              title="Copy full project summary"
             >
-              {copied ? '✓ Copied' : 'Copy Summary'}
+              {copied ? '✓ Copied' : 'Copy All'}
             </button>
             <button
               onClick={textDrivers}
