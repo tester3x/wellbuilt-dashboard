@@ -365,12 +365,10 @@ export default function DispatchPage() {
       return;
     }
 
-    // Parse onsiteBy to minutes from now
-    const [h, m] = swOnsiteBy.split(':').map(Number);
-    if (isNaN(h) || isNaN(m)) return;
-    const now = new Date();
-    const target = new Date(now.getFullYear(), now.getMonth(), now.getDate(), h, m);
-    const onsiteByMinutes = (target.getTime() - now.getTime()) / 60000;
+    // Parse onsiteBy (datetime-local format: "2026-03-24T22:00") to minutes from now
+    const target = new Date(swOnsiteBy);
+    if (isNaN(target.getTime())) return;
+    const onsiteByMinutes = (target.getTime() - Date.now()) / 60000;
     if (onsiteByMinutes <= 0) return; // Past deadline
 
     // Find target well GPS coords
@@ -1709,7 +1707,7 @@ export default function DispatchPage() {
                   <div>
                     <label className="block text-xs text-gray-400 mb-1">Be onsite by</label>
                     <input
-                      type="time"
+                      type="datetime-local"
                       value={swOnsiteBy}
                       onChange={(e) => setSwOnsiteBy(e.target.value)}
                       className="w-full px-3 py-1.5 bg-gray-900 border border-gray-700 rounded text-white text-sm focus:outline-none focus:border-purple-500"
