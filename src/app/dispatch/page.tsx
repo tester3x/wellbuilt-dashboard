@@ -3702,11 +3702,6 @@ function ProjectDetailPanel({ project, projectDispatches, projectInvoices, drive
     setTimeout(() => setCopied(false), 2000);
   }
 
-  function openWhatsApp(shift?: 'day' | 'night') {
-    const text = encodeURIComponent(generateSummary(shift));
-    window.open(`https://web.whatsapp.com/send?text=${text}`, '_blank');
-  }
-
   return (
     <div className="space-y-3">
       {/* Project header */}
@@ -3760,13 +3755,6 @@ function ProjectDetailPanel({ project, projectDispatches, projectInvoices, drive
               title="Copy full project summary"
             >
               {copied ? '✓ Copied' : 'Copy All'}
-            </button>
-            <button
-              onClick={() => openWhatsApp()}
-              className="px-2 py-1 bg-emerald-600/20 text-emerald-400 text-[10px] font-medium rounded hover:bg-emerald-600/30 transition-colors"
-              title="Open WhatsApp Web with project summary"
-            >
-              WhatsApp
             </button>
           </div>
         </div>
