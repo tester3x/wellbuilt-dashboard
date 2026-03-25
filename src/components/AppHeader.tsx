@@ -39,7 +39,7 @@ export function AppHeader() {
   if (!user) return null;
 
   return (
-    <header className="bg-gray-800 border-b border-gray-700">
+    <header className="bg-gray-800 border-b border-gray-700 sticky top-0 z-40">
       {/* Three-column grid: buttons | title+tabs | bell */}
       <div className="w-full grid grid-cols-[auto_1fr_auto] items-start">
         {/* LEFT: Admin + Sign Out, pinned to left edge */}
