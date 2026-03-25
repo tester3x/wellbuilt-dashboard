@@ -1592,7 +1592,7 @@ export default function DispatchPage() {
           </div>
 
           {/* Dispatch cards — PW + SW side by side */}
-          <div className="grid grid-cols-2 gap-3 mb-3">
+          <div className="grid grid-cols-4 gap-3 mb-3">
 
           {/* ── PW Dispatch Card ── */}
           <div className="bg-gray-800 border border-blue-600/40 rounded-lg p-4">
@@ -1878,7 +1878,7 @@ export default function DispatchPage() {
         </div>
 
         {/* ═══════════════════════════════════════════════════════════════════════
-            MAIN WORKSPACE — 50/50 split. PW Queue left, Active Jobs right.
+            MAIN WORKSPACE — 50/50 split. Well Queue left, Active Jobs right.
             Both panels scroll independently, flush tops.
             ═══════════════════════════════════════════════════════════════════════ */}
         <div className="flex-1 flex gap-4 min-h-0">
