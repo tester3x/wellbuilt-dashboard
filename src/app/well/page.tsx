@@ -266,9 +266,40 @@ function WellDetailPage() {
     }
   };
 
+  // Convert inches to "feet inches" input format (e.g. 75 → "6 3")
+  const inchesToInput = (totalInches: number): string => {
+    const rounded = Math.floor(totalInches + 0.0001);
+    const ft = Math.floor(rounded / 12);
+    const inches = rounded % 12;
+    return `${ft} ${inches}`;
+  };
+
+  // Parse "feet inches" or "feet'inches" input back to total inches
+  const parseEditLevel = (input: string): number => {
+    const trimmed = input.trim();
+    // "6 3" or "6'3" or "6'3\"" → 75 inches
+    const match = trimmed.match(/^(\d+)[\s']+(\d+)"?$/);
+    if (match) return parseInt(match[1]) * 12 + parseInt(match[2]);
+    // Plain number — treat as feet: "6" → 72 inches
+    const plain = parseInt(trimmed, 10);
+    if (!isNaN(plain) && trimmed.length <= 2) return plain * 12;
+    // Already inches (larger number)
+    return Number(trimmed) || 0;
+  };
+
+  // Hint for level input
+  const getEditLevelHint = (): string => {
+    if (!editLevel.trim()) return '';
+    const inches = parseEditLevel(editLevel);
+    if (inches <= 0) return '';
+    const ft = Math.floor(inches / 12);
+    const rem = inches % 12;
+    return `= ${ft}'${rem}"`;
+  };
+
   const handleEdit = (pull: PullPacket) => {
     setEditingPull(pull);
-    setEditLevel(String(pull.tankTopLevel));
+    setEditLevel(inchesToInput(pull.tankTopLevel));
     setEditBbls(String(pull.bblsTaken));
     // Convert ISO timestamp to datetime-local format (YYYY-MM-DDTHH:MM)
     const dt = new Date(pull.timestamp);
@@ -295,7 +326,7 @@ function WellDetailPage() {
       await editPull(
         editingPull.packetId,
         editingPull.wellName,
-        Number(editLevel),
+        parseEditLevel(editLevel),
         Number(editBbls),
         dateTimeChanged ? newDt.toISOString() : undefined,
         editWellDown
@@ -719,14 +750,18 @@ function WellDetailPage() {
               </div>
               <div>
                 <label className="block text-sm font-medium text-gray-300 mb-2">
-                  Tank Top Level (inches)
+                  Tank Level
                 </label>
                 <input
-                  type="number"
+                  type="text"
                   value={editLevel}
                   onChange={(e) => setEditLevel(e.target.value)}
+                  placeholder="6 3"
                   className="w-full px-4 py-2 bg-gray-700 border border-gray-600 rounded text-white"
                 />
+                {getEditLevelHint() && (
+                  <span className="text-emerald-400 text-xs mt-1 block">{getEditLevelHint()}</span>
+                )}
               </div>
               <div>
                 <label className="block text-sm font-medium text-gray-300 mb-2">
