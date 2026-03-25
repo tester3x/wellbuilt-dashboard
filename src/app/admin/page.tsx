@@ -28,6 +28,10 @@ interface WellConfig {
   bottomLevel?: number;
   tanks?: number;
   pullBbls?: number;
+  // Tank dimensions — derive bblPerFoot from these
+  tankCapacity?: number;  // BBL per tank (default 400)
+  tankHeight?: number;    // feet per tank (default 20)
+  bblPerFoot?: number;    // calculated: (tankCapacity / tankHeight) * numTanks
   // App-compatible field names (duplicates for compatibility)
   allowedBottom?: number;
   numTanks?: number;
@@ -61,12 +65,19 @@ export default function AdminPage() {
   const [newWellBottom, setNewWellBottom] = useState('3');
   const [newWellTanks, setNewWellTanks] = useState('1');
   const [newWellPullBbls, setNewWellPullBbls] = useState('140');
+  const [newWellTankCapacity, setNewWellTankCapacity] = useState('400');
+  const [newWellTankHeight, setNewWellTankHeight] = useState('20');
+  // Tank calculator (optional — for when there's no nameplate)
+  const [showTankCalc, setShowTankCalc] = useState(false);
+  const [calcDiameter, setCalcDiameter] = useState('');
 
   // Edit well form
   const [editWellRoute, setEditWellRoute] = useState('');
   const [editWellBottom, setEditWellBottom] = useState('');
   const [editWellTanks, setEditWellTanks] = useState('');
   const [editWellPullBbls, setEditWellPullBbls] = useState('');
+  const [editWellTankCapacity, setEditWellTankCapacity] = useState('');
+  const [editWellTankHeight, setEditWellTankHeight] = useState('');
 
   // Read-only route info for Edit Well panel
   const [wellRouteInfo, setWellRouteInfo] = useState<{ labels: string[]; count: number } | null>(null);
@@ -216,6 +227,8 @@ export default function AdminPage() {
       setEditWellBottom(String(config.bottomLevel || 3));
       setEditWellTanks(String(config.tanks || config.numTanks || 1));
       setEditWellPullBbls(String(config.pullBbls || 140));
+      setEditWellTankCapacity(String(config.tankCapacity || 400));
+      setEditWellTankHeight(String(config.tankHeight || 20));
       // Load NDIC linkage if present
       setEditNdicName(config.ndicName || '');
       setEditNdicApiNo(config.ndicApiNo || '');
@@ -573,14 +586,23 @@ export default function AdminPage() {
     }
 
     const db = getFirebaseDatabase();
+    const tankCap = parseInt(newWellTankCapacity) || 400;
+    const tankHt = parseInt(newWellTankHeight) || 20;
+    const numTanks = parseInt(newWellTanks) || 1;
+    const bblPerFoot = (tankCap / tankHt) * numTanks;
+
     const config: WellConfig = {
       route: newWellRoute || 'Unrouted',
       bottomLevel: parseFloat(newWellBottom) || 3,
-      tanks: parseInt(newWellTanks) || 1,
+      tanks: numTanks,
       // Also write app-compatible field names
       allowedBottom: parseFloat(newWellBottom) || 3,
-      numTanks: parseInt(newWellTanks) || 1,
+      numTanks,
       pullBbls: parseInt(newWellPullBbls) || 140,
+      // Tank dimensions + derived bblPerFoot
+      tankCapacity: tankCap,
+      tankHeight: tankHt,
+      bblPerFoot,
       // NDIC linkage (from NDIC picker, if used)
       ...(ndicSelectedWell ? {
         ndicName: ndicSelectedWell.well_name,
@@ -618,14 +640,23 @@ export default function AdminPage() {
       return;
     }
 
+    const editTankCap = parseInt(editWellTankCapacity) || 400;
+    const editTankHt = parseInt(editWellTankHeight) || 20;
+    const editNumTanks = parseInt(editWellTanks) || 1;
+    const editBblPerFoot = (editTankCap / editTankHt) * editNumTanks;
+
     const config: WellConfig = {
       route: editWellRoute || 'Unrouted',
       bottomLevel: parseFloat(editWellBottom) || 3,
-      tanks: parseInt(editWellTanks) || 1,
+      tanks: editNumTanks,
       // Also write app-compatible field names
       allowedBottom: parseFloat(editWellBottom) || 3,
-      numTanks: parseInt(editWellTanks) || 1,
+      numTanks: editNumTanks,
       pullBbls: parseInt(editWellPullBbls) || 140,
+      // Tank dimensions + derived bblPerFoot
+      tankCapacity: editTankCap,
+      tankHeight: editTankHt,
+      bblPerFoot: editBblPerFoot,
       // NDIC linkage
       ...(editNdicName ? { ndicName: editNdicName } : {}),
       ...(editNdicApiNo ? { ndicApiNo: editNdicApiNo } : {}),
@@ -985,6 +1016,7 @@ export default function AdminPage() {
                       <span>Tanks: {configs[wellName].tanks || configs[wellName].numTanks || 1}</span>
                       <span>Bottom: {configs[wellName].bottomLevel || 3}&apos;</span>
                       <span>Pull: {configs[wellName].pullBbls || 140} BBL</span>
+                      <span>{configs[wellName].bblPerFoot ? `${configs[wellName].bblPerFoot} BBL/ft` : `${(configs[wellName].tanks || configs[wellName].numTanks || 1) * 20} BBL/ft`}</span>
                       {configs[wellName].avgFlowRate && (
                         <span>AFR: {configs[wellName].avgFlowRate}</span>
                       )}
@@ -1071,9 +1103,93 @@ export default function AdminPage() {
                       />
                     </div>
                   </div>
+                  {/* Tank dimensions */}
+                  <div className="grid grid-cols-2 gap-3 mt-2">
+                    <div>
+                      <label className="text-gray-400 text-sm">Tank Capacity (BBL)</label>
+                      <input
+                        type="number"
+                        value={newWellTankCapacity}
+                        onChange={(e) => setNewWellTankCapacity(e.target.value)}
+                        className="w-full px-3 py-2 bg-gray-700 text-white rounded"
+                      />
+                    </div>
+                    <div>
+                      <label className="text-gray-400 text-sm">Tank Height (ft)</label>
+                      <input
+                        type="number"
+                        value={newWellTankHeight}
+                        onChange={(e) => setNewWellTankHeight(e.target.value)}
+                        className="w-full px-3 py-2 bg-gray-700 text-white rounded"
+                      />
+                    </div>
+                  </div>
+                  <div className="text-xs text-gray-500 mt-1">
+                    BBL/ft: {(((parseInt(newWellTankCapacity) || 400) / (parseInt(newWellTankHeight) || 20)) * (parseInt(newWellTanks) || 1)).toFixed(1)} per foot ({parseInt(newWellTanks) || 1} tank{(parseInt(newWellTanks) || 1) > 1 ? 's' : ''})
+                  </div>
+                  {/* Tank calculator — measure diameter when no nameplate */}
+                  <button
+                    type="button"
+                    onClick={() => setShowTankCalc(!showTankCalc)}
+                    className="text-xs text-amber-500 hover:text-amber-400 mt-1"
+                  >
+                    {showTankCalc ? '▾ Hide calculator' : '▸ No nameplate? Calculate from diameter'}
+                  </button>
+                  {showTankCalc && (
+                    <div className="bg-gray-800 rounded p-3 mt-1 border border-gray-700">
+                      <div className="flex gap-3 items-end">
+                        <div className="flex-1">
+                          <label className="text-gray-400 text-xs">Diameter (ft, e.g. 13.5)</label>
+                          <input
+                            type="number"
+                            step="0.1"
+                            value={calcDiameter}
+                            onChange={(e) => {
+                              setCalcDiameter(e.target.value);
+                              const d = parseFloat(e.target.value);
+                              const h = parseInt(newWellTankHeight) || 20;
+                              if (d > 0 && h > 0) {
+                                const r = d / 2;
+                                const cubicFt = Math.PI * r * r * h;
+                                const bbl = Math.round(cubicFt / 5.6146);
+                                setNewWellTankCapacity(String(bbl));
+                              }
+                            }}
+                            placeholder="e.g. 13.5"
+                            className="w-full px-3 py-2 bg-gray-700 text-white rounded text-sm"
+                          />
+                        </div>
+                        <div className="text-gray-400 text-xs pb-2">×</div>
+                        <div className="flex-1">
+                          <label className="text-gray-400 text-xs">Height (ft)</label>
+                          <input
+                            type="number"
+                            value={newWellTankHeight}
+                            onChange={(e) => {
+                              setNewWellTankHeight(e.target.value);
+                              const d = parseFloat(calcDiameter);
+                              const h = parseInt(e.target.value) || 20;
+                              if (d > 0 && h > 0) {
+                                const r = d / 2;
+                                const cubicFt = Math.PI * r * r * h;
+                                const bbl = Math.round(cubicFt / 5.6146);
+                                setNewWellTankCapacity(String(bbl));
+                              }
+                            }}
+                            className="w-full px-3 py-2 bg-gray-700 text-white rounded text-sm"
+                          />
+                        </div>
+                        <div className="text-amber-400 text-sm font-bold pb-2">
+                          = {calcDiameter && parseFloat(calcDiameter) > 0
+                            ? `${Math.round(Math.PI * Math.pow(parseFloat(calcDiameter) / 2, 2) * (parseInt(newWellTankHeight) || 20) / 5.6146)} BBL`
+                            : '—'}
+                        </div>
+                      </div>
+                    </div>
+                  )}
                   <button
                     onClick={handleAddWell}
-                    className="w-full px-4 py-2 bg-green-600 hover:bg-green-700 text-white rounded"
+                    className="w-full px-4 py-2 bg-green-600 hover:bg-green-700 text-white rounded mt-2"
                   >
                     Add Well
                   </button>
@@ -1198,7 +1314,33 @@ export default function AdminPage() {
                         />
                       </div>
                     </div>
-                    <div className="flex gap-2">
+                    {/* Tank dimensions */}
+                    <div className="grid grid-cols-2 gap-3 mt-2">
+                      <div>
+                        <label className="text-gray-400 text-sm">Tank Capacity (BBL)</label>
+                        <input
+                          type="number"
+                          value={editWellTankCapacity}
+                          onChange={(e) => setEditWellTankCapacity(e.target.value)}
+                          className="w-full px-3 py-2 bg-gray-700 text-white rounded"
+                          disabled={isRenaming}
+                        />
+                      </div>
+                      <div>
+                        <label className="text-gray-400 text-sm">Tank Height (ft)</label>
+                        <input
+                          type="number"
+                          value={editWellTankHeight}
+                          onChange={(e) => setEditWellTankHeight(e.target.value)}
+                          className="w-full px-3 py-2 bg-gray-700 text-white rounded"
+                          disabled={isRenaming}
+                        />
+                      </div>
+                    </div>
+                    <div className="text-xs text-gray-500 mt-1">
+                      BBL/ft: {(((parseInt(editWellTankCapacity) || 400) / (parseInt(editWellTankHeight) || 20)) * (parseInt(editWellTanks) || 1)).toFixed(1)} per foot
+                    </div>
+                    <div className="flex gap-2 mt-2">
                       <button
                         onClick={handleUpdateWell}
                         disabled={isRenaming}

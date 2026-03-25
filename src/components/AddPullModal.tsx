@@ -113,9 +113,10 @@ export function AddPullModal({
     setPullDateTime(local.toISOString().slice(0, 16));
   }, []);
 
-  // BBL per foot using tank count from well config (same formula as WB M)
+  // BBL per foot — use stored bblPerFoot from well_config if available, else legacy formula
   function getWellBblPerFoot(): number {
     const selectedWell = pullWell ? wells.find(w => w.wellName === pullWell) : null;
+    if (selectedWell?.bblPerFoot) return selectedWell.bblPerFoot;
     const numTanks = selectedWell?.tanks || 1;
     return numTanks * 20;
   }

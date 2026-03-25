@@ -46,6 +46,9 @@ export interface WellConfig {
   bottomLevel?: number;
   tanks?: number;
   pullBbls?: number;
+  tankCapacity?: number;  // BBL per tank (default 400)
+  tankHeight?: number;    // feet per tank (default 20)
+  bblPerFoot?: number;    // (tankCapacity / tankHeight) * numTanks
 }
 
 // NEW UNIFIED STRUCTURE - matches Cloud Function output
@@ -221,9 +224,10 @@ function parseFeetInchesStr(str: string): number {
 }
 
 // Helper: Calculate Tank @ Level from config values
-function calcTankAtLevel(tanks: number, pullBbls: number, bottomInches: number): { tankAtInches: number; tankAtLevel: string } {
+// bblPerFootPerTank: per-tank BBL/ft (default 20 for standard 400BBL/20' tanks)
+function calcTankAtLevel(tanks: number, pullBbls: number, bottomInches: number, bblPerFootPerTank: number = 20): { tankAtInches: number; tankAtLevel: string } {
   const bblsPerTank = pullBbls / tanks;
-  const tankAtInches = ((bblsPerTank / 20) * 12) + bottomInches;
+  const tankAtInches = ((bblsPerTank / bblPerFootPerTank) * 12) + bottomInches;
   const tankAtFeet = Math.floor(tankAtInches / 12);
   const tankAtRemainder = Math.round(tankAtInches - (tankAtFeet * 12));
   return { tankAtInches, tankAtLevel: `${tanks} @ ${tankAtFeet}'${tankAtRemainder}"` };
@@ -299,7 +303,9 @@ export function subscribeToWellStatusesUnified(callback: (wells: WellResponse[],
       const pullBbls = config.pullBbls || 140;
       const bottomLevelFeet = config.bottomLevel || (config as any).allowedBottom || 3;
       const bottomInches = bottomLevelFeet * 12;
-      const { tankAtInches, tankAtLevel } = calcTankAtLevel(tanks, pullBbls, bottomInches);
+      // Use stored bblPerFoot if available, else legacy 20 BBL/ft per tank
+      const bblPerFootPerTank = (config as any).bblPerFoot ? (config as any).bblPerFoot / tanks : 20;
+      const { tankAtInches, tankAtLevel } = calcTankAtLevel(tanks, pullBbls, bottomInches, bblPerFootPerTank);
 
       // Look for outgoing response packet for this well
       const configKeyNoSpaces = wellKey.replace(/\s/g, '');
@@ -1001,7 +1007,7 @@ export async function fetchWellHistory(wellName: string, limit: number = 0): Pro
 
     // Recovery Needed
     if (mostRecent.recoveryNeeded === undefined) {
-      const pullHeightInches = (pullBbls / (20 * tanks)) * 12;
+      const pullHeightInches = (pullBbls / (bblPerFootPerTank * tanks)) * 12;
       const targetLevel = bottomInches + pullHeightInches;
       mostRecent.recoveryNeeded = Math.max(0, targetLevel - (mostRecent.tankAfter || 0));
     }

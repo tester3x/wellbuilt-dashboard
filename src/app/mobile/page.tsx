@@ -564,9 +564,10 @@ function recalcWellForPullBbls(well: WellResponse, overridePullBbls: number): We
   const bottomLevelFeet = well.bottomLevel || 3;
   const bottomInches = bottomLevelFeet * 12;
 
-  // VBA formula: tankHeightInches = ((pullBbls / tanks / 20) * 12) + bottomInches
+  // Tank @ Level: use stored bblPerFoot if available, else legacy 20 BBL/ft per tank
+  const bblPerFootPerTank = (well as any).bblPerFoot ? (well as any).bblPerFoot / tanks : 20;
   const bblsPerTank = overridePullBbls / tanks;
-  const tankAtInches = ((bblsPerTank / 20) * 12) + bottomInches;
+  const tankAtInches = ((bblsPerTank / bblPerFootPerTank) * 12) + bottomInches;
   const tankAtFeet = Math.floor(tankAtInches / 12);
   const tankAtRemainder = Math.round(tankAtInches - (tankAtFeet * 12));
   const tankAtLevel = `${tanks} @ ${tankAtFeet}'${tankAtRemainder}"`;
