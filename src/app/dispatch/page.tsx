@@ -85,6 +85,7 @@ interface DispatchJob {
   // Live job info — written by WB T as driver progresses
   invoiceNumber?: string;  // Invoice # for this dispatch
   hauledTo?: string;  // Current drop-off destination (driver may change mid-job)
+  totalBBL?: number;  // Total BBLs hauled (written on job complete)
   // Driver-initiated job tracking (liveDispatchSync)
   source?: 'driver';  // Present when driver started the job (not dispatched)
   invoiceDocId?: string;  // Firestore invoice doc ID
@@ -3502,6 +3503,47 @@ function CompletedJobsPanel({ jobs, drivers }: {
   const [customFrom, setCustomFrom] = useState('');
   const [customTo, setCustomTo] = useState('');
   const [expandedJobId, setExpandedJobId] = useState<string | null>(null);
+  const [editingJobId, setEditingJobId] = useState<string | null>(null);
+  const [editForm, setEditForm] = useState<Record<string, string>>({});
+  const [saving, setSaving] = useState(false);
+
+  function startEdit(job: DispatchJob) {
+    const completed = toDate(job.completedAt);
+    const assigned = toDate(job.assignedAt);
+    setEditingJobId(job.id || null);
+    setEditForm({
+      wellName: job.ndicWellName || job.wellName || '',
+      disposal: job.hauledTo || job.disposal || job.disposalName || '',
+      totalBBL: String(job.totalBBL || ''),
+      notes: job.notes || '',
+      operator: job.operator || '',
+      invoiceNumber: job.invoiceNumber || '',
+      date: completed ? completed.toISOString().split('T')[0] : '',
+      startTime: assigned ? assigned.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', hour12: false }) : '',
+      stopTime: completed ? completed.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', hour12: false }) : '',
+    });
+  }
+
+  async function saveEdit(jobId: string) {
+    setSaving(true);
+    try {
+      const firestore = getFirestoreDb();
+      const ref = doc(firestore, 'dispatches', jobId);
+      const updates: Record<string, any> = {};
+      if (editForm.wellName) updates.wellName = editForm.wellName;
+      if (editForm.disposal !== undefined) { updates.hauledTo = editForm.disposal; updates.disposal = editForm.disposal; }
+      if (editForm.totalBBL !== undefined) updates.totalBBL = parseFloat(editForm.totalBBL) || 0;
+      if (editForm.notes !== undefined) updates.notes = editForm.notes;
+      if (editForm.operator !== undefined) updates.operator = editForm.operator;
+      if (editForm.invoiceNumber !== undefined) updates.invoiceNumber = editForm.invoiceNumber;
+      await updateDoc(ref, updates);
+      setEditingJobId(null);
+    } catch (err) {
+      console.error('Failed to save completed job edit:', err);
+    } finally {
+      setSaving(false);
+    }
+  }
 
   function toDate(ts: any): Date | null {
     if (!ts) return null;
@@ -3708,6 +3750,7 @@ function CompletedJobsPanel({ jobs, drivers }: {
                 </div>
                 <div className="flex items-center gap-3 mt-1.5 ml-8 text-xs text-gray-500">
                   <span>{driverName}</span>
+                  {(job.totalBBL || 0) > 0 && <span className="text-blue-400">{job.totalBBL} BBL</span>}
                   {loads > 1 && <span>{loads} load{loads !== 1 ? 's' : ''}</span>}
                   {dateStr && <span>{dateStr}</span>}
                   {job.invoiceNumber && <span className="text-cyan-400/50">#{job.invoiceNumber}</span>}
@@ -3721,9 +3764,75 @@ function CompletedJobsPanel({ jobs, drivers }: {
               </div>
 
               {/* Expanded detail */}
-              {isExpanded && (
+              {isExpanded && editingJobId === job.id ? (
+                /* ── EDIT MODE ── */
+                <div className="border-t border-green-600/30 px-4 py-3 space-y-2" onClick={e => e.stopPropagation()}>
+                  <div className="grid grid-cols-2 gap-x-4 gap-y-2 text-xs">
+                    <label className="block">
+                      <span className="text-gray-500">Well</span>
+                      <input value={editForm.wellName || ''} onChange={e => setEditForm(f => ({ ...f, wellName: e.target.value }))}
+                        className="w-full bg-gray-900 border border-gray-600 text-white text-xs rounded px-2 py-1.5 mt-0.5" />
+                    </label>
+                    <label className="block">
+                      <span className="text-gray-500">Drop-off</span>
+                      <input value={editForm.disposal || ''} onChange={e => setEditForm(f => ({ ...f, disposal: e.target.value }))}
+                        className="w-full bg-gray-900 border border-gray-600 text-white text-xs rounded px-2 py-1.5 mt-0.5" />
+                    </label>
+                    <label className="block">
+                      <span className="text-gray-500">BBLs</span>
+                      <input type="number" value={editForm.totalBBL || ''} onChange={e => setEditForm(f => ({ ...f, totalBBL: e.target.value }))}
+                        className="w-full bg-gray-900 border border-gray-600 text-white text-xs rounded px-2 py-1.5 mt-0.5" />
+                    </label>
+                    <label className="block">
+                      <span className="text-gray-500">Invoice #</span>
+                      <input value={editForm.invoiceNumber || ''} onChange={e => setEditForm(f => ({ ...f, invoiceNumber: e.target.value }))}
+                        className="w-full bg-gray-900 border border-gray-600 text-white text-xs rounded px-2 py-1.5 mt-0.5" />
+                    </label>
+                    <label className="block">
+                      <span className="text-gray-500">Operator</span>
+                      <input value={editForm.operator || ''} onChange={e => setEditForm(f => ({ ...f, operator: e.target.value }))}
+                        className="w-full bg-gray-900 border border-gray-600 text-white text-xs rounded px-2 py-1.5 mt-0.5" />
+                    </label>
+                    <label className="block">
+                      <span className="text-gray-500">Date</span>
+                      <input type="date" value={editForm.date || ''} onChange={e => setEditForm(f => ({ ...f, date: e.target.value }))}
+                        className="w-full bg-gray-900 border border-gray-600 text-gray-300 text-xs rounded px-2 py-1.5 mt-0.5" />
+                    </label>
+                    <label className="block">
+                      <span className="text-gray-500">Start Time</span>
+                      <input type="time" value={editForm.startTime || ''} onChange={e => setEditForm(f => ({ ...f, startTime: e.target.value }))}
+                        className="w-full bg-gray-900 border border-gray-600 text-gray-300 text-xs rounded px-2 py-1.5 mt-0.5" />
+                    </label>
+                    <label className="block">
+                      <span className="text-gray-500">Stop Time</span>
+                      <input type="time" value={editForm.stopTime || ''} onChange={e => setEditForm(f => ({ ...f, stopTime: e.target.value }))}
+                        className="w-full bg-gray-900 border border-gray-600 text-gray-300 text-xs rounded px-2 py-1.5 mt-0.5" />
+                    </label>
+                  </div>
+                  <label className="block text-xs">
+                    <span className="text-gray-500">Notes</span>
+                    <textarea value={editForm.notes || ''} onChange={e => setEditForm(f => ({ ...f, notes: e.target.value }))}
+                      rows={2} className="w-full bg-gray-900 border border-gray-600 text-white text-xs rounded px-2 py-1.5 mt-0.5 resize-none" />
+                  </label>
+                  <div className="flex items-center gap-2 pt-1">
+                    <button
+                      onClick={() => job.id && saveEdit(job.id)}
+                      disabled={saving}
+                      className="px-3 py-1 bg-green-600 hover:bg-green-500 text-white text-xs font-medium rounded transition-colors disabled:opacity-50"
+                    >
+                      {saving ? 'Saving...' : 'Save'}
+                    </button>
+                    <button
+                      onClick={() => setEditingJobId(null)}
+                      className="px-3 py-1 bg-gray-700 hover:bg-gray-600 text-gray-300 text-xs rounded transition-colors"
+                    >
+                      Cancel
+                    </button>
+                  </div>
+                </div>
+              ) : isExpanded ? (
+                /* ── VIEW MODE ── */
                 <div className="border-t border-gray-700/50 px-4 py-3 space-y-3">
-                  {/* Detail grid */}
                   <div className="grid grid-cols-2 gap-x-6 gap-y-2 text-xs">
                     <div>
                       <span className="text-gray-500">Driver</span>
@@ -3746,21 +3855,20 @@ function CompletedJobsPanel({ jobs, drivers }: {
                       <span className="text-gray-500">Drop-off</span>
                       <div className="text-gray-200">{job.hauledTo || job.disposal || job.disposalName || '—'}</div>
                     </div>
+                    <div>
+                      <span className="text-gray-500">BBLs</span>
+                      <div className="text-blue-300 font-medium">{job.totalBBL || '—'}</div>
+                    </div>
                     {(job.loadCount || 0) > 1 && (
-                      <>
-                        <div>
-                          <span className="text-gray-500">Loads</span>
-                          <div className="text-gray-200">{job.loadsCompleted || job.loadCount} / {job.loadCount}</div>
-                        </div>
-                        <div />
-                      </>
-                    )}
-                    {job.invoiceNumber && (
                       <div>
-                        <span className="text-gray-500">Invoice #</span>
-                        <div className="text-cyan-300">{job.invoiceNumber}</div>
+                        <span className="text-gray-500">Loads</span>
+                        <div className="text-gray-200">{job.loadsCompleted || job.loadCount} / {job.loadCount}</div>
                       </div>
                     )}
+                    <div>
+                      <span className="text-gray-500">Invoice #</span>
+                      <div className="text-cyan-300">{job.invoiceNumber || '—'}</div>
+                    </div>
                     {job.operator && (
                       <div>
                         <span className="text-gray-500">Operator</span>
@@ -3808,8 +3916,26 @@ function CompletedJobsPanel({ jobs, drivers }: {
                       <div className="text-gray-300 text-xs">{job.notes}</div>
                     </div>
                   )}
+
+                  {/* Actions */}
+                  <div className="border-t border-gray-700/30 pt-2 flex items-center gap-2">
+                    <button
+                      onClick={(e) => { e.stopPropagation(); startEdit(job); }}
+                      className="px-3 py-1 bg-blue-600 hover:bg-blue-500 text-white text-xs font-medium rounded transition-colors"
+                    >
+                      Edit
+                    </button>
+                    {job.invoiceNumber && (
+                      <button
+                        onClick={(e) => { e.stopPropagation(); window.open(`/tickets?search=${job.invoiceNumber || ''}`, '_blank'); }}
+                        className="px-3 py-1 bg-gray-700 hover:bg-gray-600 text-cyan-400 text-xs rounded transition-colors"
+                      >
+                        View Ticket
+                      </button>
+                    )}
+                  </div>
                 </div>
-              )}
+              ) : null}
             </div>
           );
         })
