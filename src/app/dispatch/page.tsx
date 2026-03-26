@@ -3498,7 +3498,9 @@ function CompletedJobsPanel({ jobs, drivers }: {
 }) {
   const [driverFilter, setDriverFilter] = useState<string>('all');
   const [searchQuery, setSearchQuery] = useState('');
-  const [dateRange, setDateRange] = useState<'today' | '7d' | '30d' | 'all'>('today');
+  const [dateRange, setDateRange] = useState<'today' | '7d' | '30d' | 'custom' | 'all'>('today');
+  const [customFrom, setCustomFrom] = useState('');
+  const [customTo, setCustomTo] = useState('');
   const [expandedJobId, setExpandedJobId] = useState<string | null>(null);
 
   function toDate(ts: any): Date | null {
@@ -3549,6 +3551,16 @@ function CompletedJobsPanel({ jobs, drivers }: {
       } else if (dateRange === '30d') {
         const cutoff = new Date(now.getTime() - 30 * 24 * 60 * 60 * 1000);
         if (!completed || completed < cutoff) return false;
+      } else if (dateRange === 'custom') {
+        if (!completed) return false;
+        if (customFrom) {
+          const from = new Date(customFrom + 'T00:00:00');
+          if (completed < from) return false;
+        }
+        if (customTo) {
+          const to = new Date(customTo + 'T23:59:59');
+          if (completed > to) return false;
+        }
       }
 
       // Search filter
@@ -3568,7 +3580,7 @@ function CompletedJobsPanel({ jobs, drivers }: {
       const bTime = toDate(b.completedAt)?.getTime() || 0;
       return bTime - aTime;
     });
-  }, [jobs, driverFilter, searchQuery, dateRange, drivers]);
+  }, [jobs, driverFilter, searchQuery, dateRange, customFrom, customTo, drivers]);
 
   return (
     <div className="space-y-2">
@@ -3606,7 +3618,7 @@ function CompletedJobsPanel({ jobs, drivers }: {
 
         {/* Date range pills */}
         <div className="flex items-center bg-gray-900 border border-gray-700 rounded overflow-hidden">
-          {(['today', '7d', '30d', 'all'] as const).map(range => (
+          {(['today', '7d', '30d', 'custom', 'all'] as const).map(range => (
             <button
               key={range}
               onClick={() => setDateRange(range)}
@@ -3616,16 +3628,42 @@ function CompletedJobsPanel({ jobs, drivers }: {
                   : 'text-gray-500 hover:text-gray-300 hover:bg-gray-800'
               }`}
             >
-              {range === 'today' ? 'Today' : range === '7d' ? '7 Day' : range === '30d' ? '30 Day' : 'All'}
+              {range === 'today' ? 'Today' : range === '7d' ? '7d' : range === '30d' ? '30d' : range === 'custom' ? 'Custom' : 'All'}
             </button>
           ))}
         </div>
       </div>
 
+      {/* Custom date range inputs */}
+      {dateRange === 'custom' && (
+        <div className="flex items-center gap-2 text-xs">
+          <span className="text-gray-500">From</span>
+          <input
+            type="date"
+            value={customFrom}
+            onChange={e => setCustomFrom(e.target.value)}
+            className="bg-gray-900 border border-gray-700 text-gray-300 text-xs rounded px-2 py-1"
+          />
+          <span className="text-gray-500">To</span>
+          <input
+            type="date"
+            value={customTo}
+            onChange={e => setCustomTo(e.target.value)}
+            className="bg-gray-900 border border-gray-700 text-gray-300 text-xs rounded px-2 py-1"
+          />
+          {(customFrom || customTo) && (
+            <button
+              onClick={() => { setCustomFrom(''); setCustomTo(''); }}
+              className="text-gray-500 hover:text-gray-300 text-xs"
+            >Clear</button>
+          )}
+        </div>
+      )}
+
       {/* ── Count ── */}
       <div className="text-gray-500 text-xs">
         {filtered.length} completed job{filtered.length !== 1 ? 's' : ''}
-        {driverFilter !== 'all' || searchQuery || dateRange !== 'today' ? ' (filtered)' : ''}
+        {driverFilter !== 'all' || searchQuery || dateRange !== 'today' ? ` (filtered${dateRange === 'custom' && customFrom ? ` from ${customFrom}` : ''}${dateRange === 'custom' && customTo ? ` to ${customTo}` : ''})` : ''}
       </div>
 
       {/* ── Job list ── */}
