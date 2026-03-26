@@ -4020,47 +4020,138 @@ function CompletedJobsPanel({ jobs, drivers, allWells, allDisposals }: {
                     )}
                   </div>
 
-                  {/* Inline ticket detail */}
+                  {/* Inline paper-style ticket detail */}
                   {ticketDetailJobId === job.id && (
-                    <div className="border-t border-gray-700/30 pt-2 mt-2">
+                    <div className="mt-3">
                       {ticketDetailLoading ? (
-                        <div className="text-gray-500 text-xs animate-pulse">Loading ticket data...</div>
-                      ) : ticketDetailData ? (
-                        <div className="space-y-2">
-                          {ticketDetailData.tickets.length > 0 ? ticketDetailData.tickets.map((t: any, idx: number) => (
-                            <div key={idx} className="bg-gray-800/50 rounded p-2 space-y-1">
+                        <div className="bg-[#FAFAF8] rounded-lg p-6 text-center text-gray-400 text-sm animate-pulse">Loading...</div>
+                      ) : ticketDetailData?.invoice ? (
+                        <div className="bg-[#FAFAF8] rounded-lg shadow border-l-4 border-yellow-500">
+                          <div className="p-4 space-y-0">
+                            {/* Header */}
+                            <div className="flex items-start justify-between mb-3">
+                              <h4 className="text-[#111] font-black text-lg tracking-tight">
+                                {ticketDetailData.tickets.length <= 1 ? 'WATER TICKET' : 'INVOICE'}
+                              </h4>
+                              <span className="px-2 py-0.5 rounded-full text-[10px] font-semibold border border-gray-400 text-gray-600">
+                                {(ticketDetailData.invoice.status || 'closed').toUpperCase()}
+                              </span>
+                            </div>
+
+                            {/* Invoice # / Date */}
+                            <div className="flex items-center justify-between py-1 border-b border-gray-200">
+                              <span className="text-xs text-gray-500">{ticketDetailData.tickets.length <= 1 ? 'Ticket #' : 'Invoice #'}</span>
+                              <span className="text-xs text-[#111] font-mono font-semibold">{job.invoiceNumber}</span>
+                            </div>
+                            <div className="flex items-center justify-between py-1 border-b border-gray-200">
+                              <span className="text-xs text-gray-500">Date</span>
+                              <span className="text-xs text-[#111]">{ticketDetailData.invoice.date || '--'}</span>
+                            </div>
+
+                            {/* Job Details */}
+                            <h5 className="text-[#111] font-extrabold text-[10px] tracking-[1.5px] uppercase pt-3 pb-1">JOB DETAILS</h5>
+                            <div className="flex items-center justify-between py-1 border-b border-gray-200">
+                              <span className="text-xs text-gray-500">Operator</span>
+                              <span className="text-xs text-[#111] text-right">{ticketDetailData.invoice.operator || '--'}</span>
+                            </div>
+                            <div className="flex items-center justify-between py-1 border-b border-gray-200">
+                              <span className="text-xs text-gray-500">Well</span>
+                              <span className="text-xs text-[#111] text-right">{ticketDetailData.invoice.wellName || '--'}</span>
+                            </div>
+                            <div className="flex items-center justify-between py-1 border-b border-gray-200">
+                              <span className="text-xs text-gray-500">Drop-off</span>
+                              <span className="text-xs text-[#111] text-right">{ticketDetailData.invoice.hauledTo || '--'}</span>
+                            </div>
+
+                            {/* Driver & Vehicle */}
+                            <h5 className="text-[#111] font-extrabold text-[10px] tracking-[1.5px] uppercase pt-3 pb-1">DRIVER & VEHICLE</h5>
+                            <div className="flex items-center justify-between py-1 border-b border-gray-200">
+                              <span className="text-xs text-gray-500">Driver</span>
+                              <span className="text-xs text-[#111]">{ticketDetailData.invoice.driver || '--'}</span>
+                            </div>
+                            <div className="flex items-center justify-between py-1 border-b border-gray-200">
+                              <span className="text-xs text-gray-500">Truck #</span>
+                              <span className="text-xs text-[#111]">{ticketDetailData.invoice.truckNumber || '--'}</span>
+                            </div>
+
+                            {/* Time */}
+                            {(ticketDetailData.invoice.startTime || ticketDetailData.invoice.stopTime) && (
+                              <>
+                                <h5 className="text-[#111] font-extrabold text-[10px] tracking-[1.5px] uppercase pt-3 pb-1">TIME</h5>
+                                {ticketDetailData.invoice.startTime && (
+                                  <div className="flex items-center justify-between py-1 border-b border-gray-200">
+                                    <span className="text-xs text-gray-500">Start</span>
+                                    <span className="text-xs text-[#111] font-mono">{ticketDetailData.invoice.startTime}</span>
+                                  </div>
+                                )}
+                                {ticketDetailData.invoice.stopTime && (
+                                  <div className="flex items-center justify-between py-1 border-b border-gray-200">
+                                    <span className="text-xs text-gray-500">Stop</span>
+                                    <span className="text-xs text-[#111] font-mono">{ticketDetailData.invoice.stopTime}</span>
+                                  </div>
+                                )}
+                              </>
+                            )}
+
+                            {/* Ticket cards */}
+                            <h5 className="text-[#111] font-extrabold text-[10px] tracking-[1.5px] uppercase pt-3 pb-1">LINE ITEMS</h5>
+                            {ticketDetailData.tickets.map((t: any, idx: number) => (
+                              <div key={idx} className="border border-gray-300 rounded-lg overflow-hidden mb-2">
+                                <div className="flex items-center justify-between px-3 py-1.5 bg-gray-100 border-b border-gray-300">
+                                  <span className="text-[10px] font-bold tracking-wide text-red-500">WATER TICKET</span>
+                                  <span className="text-[#111] font-mono font-semibold text-xs">#{t.ticketNumber}</span>
+                                </div>
+                                <div className="px-3 py-2 space-y-0.5">
+                                  {t.location && <div className="flex justify-between"><span className="text-[10px] text-gray-500">Pickup</span><span className="text-[10px] text-[#111]">{t.location}</span></div>}
+                                  {t.hauledTo && <div className="flex justify-between"><span className="text-[10px] text-gray-500">Drop-off</span><span className="text-[10px] text-[#111]">{t.hauledTo}</span></div>}
+                                  {t.timeGauged && <div className="flex justify-between"><span className="text-[10px] text-gray-500">Time Gauged</span><span className="text-[10px] text-[#111]">{t.timeGauged}</span></div>}
+                                </div>
+                                <div className="grid grid-cols-4 border-t border-gray-300">
+                                  <div className="text-center py-1.5 border-r border-gray-300"><div className="text-[8px] text-gray-400 uppercase">TYPE</div><div className="text-xs font-semibold text-[#111] font-mono">{t.type || 'PW'}</div></div>
+                                  <div className="text-center py-1.5 border-r border-gray-300"><div className="text-[8px] text-gray-400 uppercase">QTY (BBL)</div><div className="text-xs font-semibold text-[#111] font-mono">{t.qty || '--'}</div></div>
+                                  <div className="text-center py-1.5 border-r border-gray-300"><div className="text-[8px] text-gray-400 uppercase">TOP</div><div className="text-xs font-semibold text-[#111] font-mono">{t.top || '--'}</div></div>
+                                  <div className="text-center py-1.5"><div className="text-[8px] text-gray-400 uppercase">BOTTOM</div><div className="text-xs font-semibold text-[#111] font-mono">{t.bottom || '--'}</div></div>
+                                </div>
+                                {(t.apiNo || t.legalDesc) && (
+                                  <div className="px-3 py-1.5 border-t border-gray-200">
+                                    {t.apiNo && <p className="text-[9px] text-gray-400">API# {t.apiNo}</p>}
+                                    {t.legalDesc && <p className="text-[9px] text-gray-400">{t.legalDesc}</p>}
+                                  </div>
+                                )}
+                              </div>
+                            ))}
+
+                            {ticketDetailData.tickets.length === 0 && (
+                              <div className="text-xs text-gray-400 py-2">No ticket records found</div>
+                            )}
+
+                            {/* Notes */}
+                            {ticketDetailData.invoice.notes && (
+                              <>
+                                <h5 className="text-[#111] font-extrabold text-[10px] tracking-[1.5px] uppercase pt-3 pb-1">REMARKS</h5>
+                                <p className="text-xs text-[#111] whitespace-pre-wrap">{ticketDetailData.invoice.notes}</p>
+                              </>
+                            )}
+
+                            {/* Totals */}
+                            <div className="border-t-2 border-yellow-500 mt-4 pt-2">
                               <div className="flex items-center justify-between">
-                                <span className="text-cyan-400 text-xs font-bold">Ticket #{t.ticketNumber}</span>
-                                <span className="text-white text-xs font-medium">{t.qty || t.bblQty || '--'} BBL</span>
+                                <span className="text-xs font-semibold text-[#111]">Total BBL</span>
+                                <span className="text-xs font-semibold text-[#111] font-mono">{ticketDetailData.invoice.totalBBL || '--'}</span>
                               </div>
-                              <div className="grid grid-cols-2 gap-x-4 gap-y-1 text-[11px]">
-                                {t.top && <div><span className="text-gray-500">Top:</span> <span className="text-gray-300">{t.top}</span></div>}
-                                {t.bottom && <div><span className="text-gray-500">Bottom:</span> <span className="text-gray-300">{t.bottom}</span></div>}
-                                {t.timeGauged && <div><span className="text-gray-500">Gauged:</span> <span className="text-gray-300">{t.timeGauged}</span></div>}
-                                {t.dateGauged && <div><span className="text-gray-500">Date:</span> <span className="text-gray-300">{t.dateGauged}</span></div>}
-                                {t.hauledTo && <div className="col-span-2"><span className="text-gray-500">Drop-off:</span> <span className="text-gray-300">{t.hauledTo}</span></div>}
-                                {t.type && <div><span className="text-gray-500">Type:</span> <span className="text-gray-300">{t.type}</span></div>}
-                                {(t.apiNo || t.api_no) && <div><span className="text-gray-500">API #:</span> <span className="text-gray-300">{t.apiNo || t.api_no}</span></div>}
-                                {(t.legalDesc || t.legal_desc) && <div className="col-span-2"><span className="text-gray-500">Legal:</span> <span className="text-gray-300">{t.legalDesc || t.legal_desc}</span></div>}
-                                {t.notes && <div className="col-span-2"><span className="text-gray-500">Notes:</span> <span className="text-gray-300">{t.notes}</span></div>}
+                              <div className="flex items-center justify-between">
+                                <span className="text-xs font-semibold text-[#111]">Tickets</span>
+                                <span className="text-xs font-semibold text-[#111] font-mono">{ticketDetailData.tickets.length}</span>
                               </div>
                             </div>
-                          )) : (
-                            <div className="text-gray-500 text-xs">No ticket records found</div>
-                          )}
-                          {/* Invoice-level info */}
-                          {ticketDetailData.invoice && (
-                            <div className="text-[10px] text-gray-500 flex flex-wrap gap-x-3 gap-y-0.5 pt-1 border-t border-gray-700/20">
-                              {ticketDetailData.invoice.startTime && <span>Start: {ticketDetailData.invoice.startTime}</span>}
-                              {ticketDetailData.invoice.stopTime && <span>Stop: {ticketDetailData.invoice.stopTime}</span>}
-                              {ticketDetailData.invoice.totalHours > 0 && <span>Hours: {ticketDetailData.invoice.totalHours}</span>}
-                              {ticketDetailData.invoice.driver && <span>Driver: {ticketDetailData.invoice.driver}</span>}
-                              {ticketDetailData.invoice.truckNumber && <span>Truck: {ticketDetailData.invoice.truckNumber}</span>}
+
+                            <div className="text-center pt-3 pb-1">
+                              <span className="text-[10px] text-gray-400 tracking-wider">WellBuilt Tickets</span>
                             </div>
-                          )}
+                          </div>
                         </div>
                       ) : (
-                        <div className="text-gray-500 text-xs">No invoice found for #{job.invoiceNumber}</div>
+                        <div className="bg-[#FAFAF8] rounded-lg p-4 text-center text-gray-400 text-xs">No invoice found for #{job.invoiceNumber}</div>
                       )}
                     </div>
                   )}
