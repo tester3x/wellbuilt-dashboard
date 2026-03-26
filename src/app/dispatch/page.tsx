@@ -3538,7 +3538,7 @@ function CompletedJobsPanel({ jobs, drivers, allWells, allDisposals }: {
       const firestore = getFirestoreDb();
       const ref = doc(firestore, 'dispatches', jobId);
       const updates: Record<string, any> = {};
-      if (editForm.wellName) updates.wellName = editForm.wellName;
+      if (editForm.wellName) { updates.ndicWellName = editForm.wellName; updates.wellName = editForm.wellName; }
       if (editForm.disposal !== undefined) { updates.hauledTo = editForm.disposal; updates.disposal = editForm.disposal; }
       if (editForm.totalBBL !== undefined) updates.totalBBL = parseFloat(editForm.totalBBL) || 0;
       if (editForm.notes !== undefined) updates.notes = editForm.notes;
@@ -3576,7 +3576,7 @@ function CompletedJobsPanel({ jobs, drivers, allWells, allDisposals }: {
     const map = new Map<string, string>();
     jobs.forEach(j => {
       if (!map.has(j.driverHash)) {
-        map.set(j.driverHash, j.driverFirstName || getDriverName(j.driverHash));
+        map.set(j.driverHash, getDriverFullName(j.driverHash));
       }
     });
     return Array.from(map.entries()).sort((a, b) => a[1].localeCompare(b[1]));
@@ -3619,7 +3619,7 @@ function CompletedJobsPanel({ jobs, drivers, allWells, allDisposals }: {
         const wellName = (job.ndicWellName || job.wellName || '').toLowerCase();
         const disposal = (job.disposal || job.hauledTo || '').toLowerCase();
         const invoiceNum = (job.invoiceNumber || '').toLowerCase();
-        const driverName = (job.driverFirstName || getDriverName(job.driverHash)).toLowerCase();
+        const driverName = getDriverFullName(job.driverHash).toLowerCase();
         const serviceType = (job.serviceType || '').toLowerCase();
         if (!wellName.includes(q) && !disposal.includes(q) && !invoiceNum.includes(q) && !driverName.includes(q) && !serviceType.includes(q)) return false;
       }
@@ -3727,7 +3727,7 @@ function CompletedJobsPanel({ jobs, drivers, allWells, allDisposals }: {
           const assigned = toDate(job.assignedAt);
           const timeStr = completed ? completed.toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' }) : '';
           const dateStr = completed ? completed.toLocaleDateString([], { month: 'short', day: 'numeric' }) : '';
-          const driverName = job.driverFirstName || getDriverName(job.driverHash);
+          const driverName = getDriverFullName(job.driverHash);
           const loads = job.loadsCompleted || job.loadCount || 1;
           const isExpanded = expandedJobId === job.id;
 
