@@ -3514,6 +3514,43 @@ function CompletedJobsPanel({ jobs, drivers, allWells, allDisposals }: {
   const [disposalResults, setDisposalResults] = useState<NdicWell[]>([]);
   const [showWellDropdown, setShowWellDropdown] = useState(false);
   const [showDisposalDropdown, setShowDisposalDropdown] = useState(false);
+  const [ticketDetailJobId, setTicketDetailJobId] = useState<string | null>(null);
+  const [ticketDetailData, setTicketDetailData] = useState<any>(null);
+  const [ticketDetailLoading, setTicketDetailLoading] = useState(false);
+
+  // Fetch invoice/ticket data from Firestore for inline viewing
+  async function loadTicketDetail(invoiceNumber: string, jobId: string) {
+    if (ticketDetailJobId === jobId) { setTicketDetailJobId(null); return; } // toggle off
+    setTicketDetailJobId(jobId);
+    setTicketDetailLoading(true);
+    try {
+      const { collection, query, where, getDocs } = await import('firebase/firestore');
+      const { getFirestoreDb } = await import('@/lib/firebase');
+      const db = getFirestoreDb();
+      // Search invoices by invoiceNumber
+      const q = query(collection(db, 'invoices'), where('invoiceNumber', '==', invoiceNumber));
+      const snap = await getDocs(q);
+      if (!snap.empty) {
+        const inv = snap.docs[0].data();
+        // Also fetch child tickets
+        const ticketNumbers = inv.tickets || [];
+        const tickets: any[] = [];
+        if (ticketNumbers.length > 0) {
+          const tq = query(collection(db, 'tickets'), where('ticketNumber', 'in', ticketNumbers.slice(0, 10)));
+          const tsnap = await getDocs(tq);
+          tsnap.forEach(d => tickets.push(d.data()));
+        }
+        setTicketDetailData({ invoice: inv, tickets });
+      } else {
+        setTicketDetailData(null);
+      }
+    } catch (err) {
+      console.error('[CompletedJobs] Failed to fetch ticket detail:', err);
+      setTicketDetailData(null);
+    } finally {
+      setTicketDetailLoading(false);
+    }
+  }
 
   function startEdit(job: DispatchJob) {
     const completed = toDate(job.completedAt);
@@ -3975,13 +4012,58 @@ function CompletedJobsPanel({ jobs, drivers, allWells, allDisposals }: {
                     </button>
                     {job.invoiceNumber && (
                       <button
-                        onClick={(e) => { e.stopPropagation(); window.open(`/tickets?search=${job.invoiceNumber || ''}`, '_blank'); }}
-                        className="px-3 py-1 bg-gray-700 hover:bg-gray-600 text-cyan-400 text-xs rounded transition-colors"
+                        onClick={(e) => { e.stopPropagation(); loadTicketDetail(job.invoiceNumber!, job.id!); }}
+                        className={`px-3 py-1 text-xs rounded transition-colors ${ticketDetailJobId === job.id ? 'bg-cyan-600 text-white' : 'bg-gray-700 hover:bg-gray-600 text-cyan-400'}`}
                       >
-                        View Ticket
+                        {ticketDetailJobId === job.id ? 'Hide Ticket' : 'View Ticket'}
                       </button>
                     )}
                   </div>
+
+                  {/* Inline ticket detail */}
+                  {ticketDetailJobId === job.id && (
+                    <div className="border-t border-gray-700/30 pt-2 mt-2">
+                      {ticketDetailLoading ? (
+                        <div className="text-gray-500 text-xs animate-pulse">Loading ticket data...</div>
+                      ) : ticketDetailData ? (
+                        <div className="space-y-2">
+                          {ticketDetailData.tickets.length > 0 ? ticketDetailData.tickets.map((t: any, idx: number) => (
+                            <div key={idx} className="bg-gray-800/50 rounded p-2 space-y-1">
+                              <div className="flex items-center justify-between">
+                                <span className="text-cyan-400 text-xs font-bold">Ticket #{t.ticketNumber}</span>
+                                <span className="text-white text-xs font-medium">{t.qty || t.bblQty || '--'} BBL</span>
+                              </div>
+                              <div className="grid grid-cols-2 gap-x-4 gap-y-1 text-[11px]">
+                                {t.top && <div><span className="text-gray-500">Top:</span> <span className="text-gray-300">{t.top}</span></div>}
+                                {t.bottom && <div><span className="text-gray-500">Bottom:</span> <span className="text-gray-300">{t.bottom}</span></div>}
+                                {t.timeGauged && <div><span className="text-gray-500">Gauged:</span> <span className="text-gray-300">{t.timeGauged}</span></div>}
+                                {t.dateGauged && <div><span className="text-gray-500">Date:</span> <span className="text-gray-300">{t.dateGauged}</span></div>}
+                                {t.hauledTo && <div className="col-span-2"><span className="text-gray-500">Drop-off:</span> <span className="text-gray-300">{t.hauledTo}</span></div>}
+                                {t.type && <div><span className="text-gray-500">Type:</span> <span className="text-gray-300">{t.type}</span></div>}
+                                {(t.apiNo || t.api_no) && <div><span className="text-gray-500">API #:</span> <span className="text-gray-300">{t.apiNo || t.api_no}</span></div>}
+                                {(t.legalDesc || t.legal_desc) && <div className="col-span-2"><span className="text-gray-500">Legal:</span> <span className="text-gray-300">{t.legalDesc || t.legal_desc}</span></div>}
+                                {t.notes && <div className="col-span-2"><span className="text-gray-500">Notes:</span> <span className="text-gray-300">{t.notes}</span></div>}
+                              </div>
+                            </div>
+                          )) : (
+                            <div className="text-gray-500 text-xs">No ticket records found</div>
+                          )}
+                          {/* Invoice-level info */}
+                          {ticketDetailData.invoice && (
+                            <div className="text-[10px] text-gray-500 flex flex-wrap gap-x-3 gap-y-0.5 pt-1 border-t border-gray-700/20">
+                              {ticketDetailData.invoice.startTime && <span>Start: {ticketDetailData.invoice.startTime}</span>}
+                              {ticketDetailData.invoice.stopTime && <span>Stop: {ticketDetailData.invoice.stopTime}</span>}
+                              {ticketDetailData.invoice.totalHours > 0 && <span>Hours: {ticketDetailData.invoice.totalHours}</span>}
+                              {ticketDetailData.invoice.driver && <span>Driver: {ticketDetailData.invoice.driver}</span>}
+                              {ticketDetailData.invoice.truckNumber && <span>Truck: {ticketDetailData.invoice.truckNumber}</span>}
+                            </div>
+                          )}
+                        </div>
+                      ) : (
+                        <div className="text-gray-500 text-xs">No invoice found for #{job.invoiceNumber}</div>
+                      )}
+                    </div>
+                  )}
                 </div>
               ) : null}
             </div>
