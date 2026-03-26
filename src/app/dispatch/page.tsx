@@ -426,7 +426,7 @@ export default function DispatchPage() {
   const [reassignLoads, setReassignLoads] = useState(0); // 0 = all loads
 
   // Right panel tab
-  const [rightPanelTab, setRightPanelTab] = useState<'jobs' | 'projects'>('jobs');
+  const [rightPanelTab, setRightPanelTab] = useState<'jobs' | 'completed' | 'projects'>('jobs');
 
   // Projects state
   const [projects, setProjects] = useState<Project[]>([]);
@@ -2356,6 +2356,21 @@ export default function DispatchPage() {
                     Active Jobs
                   </button>
                   <button
+                    onClick={() => setRightPanelTab('completed')}
+                    className={`px-3 py-1 rounded text-sm font-medium transition-colors flex items-center gap-1.5 ${
+                      rightPanelTab === 'completed'
+                        ? 'bg-green-600 text-white'
+                        : 'text-gray-400 hover:text-white hover:bg-gray-700'
+                    }`}
+                  >
+                    Completed
+                    {dispatches.filter(d => d.status === 'completed').length > 0 && (
+                      <span className={`px-1.5 py-0.5 text-[10px] rounded font-bold ${
+                        rightPanelTab === 'completed' ? 'bg-green-500/40 text-green-100' : 'bg-green-600/20 text-green-400'
+                      }`}>{dispatches.filter(d => d.status === 'completed').length}</span>
+                    )}
+                  </button>
+                  <button
                     onClick={() => setRightPanelTab('projects')}
                     className={`px-3 py-1 rounded text-sm font-medium transition-colors flex items-center gap-1.5 ${
                       rightPanelTab === 'projects'
@@ -2431,12 +2446,18 @@ export default function DispatchPage() {
               <div className="flex-1 overflow-y-auto p-3">
                 {rightPanelTab === 'jobs' && (
                   <ActiveDispatchPanel
-                    dispatches={dispatches}
+                    dispatches={dispatches.filter(d => d.status !== 'completed')}
                     cancelDispatch={cancelDispatch}
                     drivers={drivers}
                     assignTransfer={assignTransfer}
                     onEditServiceWork={openEditSwModal}
                     onReassignDeclined={openReassignModal}
+                  />
+                )}
+                {rightPanelTab === 'completed' && (
+                  <CompletedJobsPanel
+                    jobs={dispatches.filter(d => d.status === 'completed')}
+                    drivers={drivers}
                   />
                 )}
                 {rightPanelTab === 'projects' && !selectedProject && (
@@ -3195,12 +3216,9 @@ function ActiveDispatchPanel({ dispatches, cancelDispatch, drivers, assignTransf
 }) {
   const [expandedDrivers, setExpandedDrivers] = useState<Set<string>>(new Set());
 
-  // Separate completed + declined jobs from active
-  const completedJobs = dispatches.filter(d => d.status === 'completed');
-  const [dismissedIds, setDismissedIds] = useState<Set<string>>(new Set());
-  const visibleCompleted = completedJobs.filter(d => d.id && !dismissedIds.has(d.id));
+  // Separate declined jobs from active (completed filtered out before passing to this component)
   const declinedJobs = dispatches.filter(d => d.status === 'declined');
-  const nonDeclined = dispatches.filter(d => d.status !== 'declined' && d.status !== 'completed');
+  const nonDeclined = dispatches.filter(d => d.status !== 'declined');
 
   // Unassigned transfers need driver assignment
   const unassigned = nonDeclined.filter(d => d.type === 'transfer' && (!d.driverHash || d.status === 'pending_approval'));
@@ -3253,8 +3271,7 @@ function ActiveDispatchPanel({ dispatches, cancelDispatch, drivers, assignTransf
     });
   }
 
-  const activeCount = dispatches.filter(d => d.status !== 'completed').length;
-  if (activeCount === 0 && visibleCompleted.length === 0) {
+  if (dispatches.length === 0) {
     return <div className="text-center text-gray-500 py-8">No active dispatches</div>;
   }
 
@@ -3469,64 +3486,75 @@ function ActiveDispatchPanel({ dispatches, cancelDispatch, drivers, assignTransf
         </>
       )}
 
-      {/* ─── Completed Jobs ─── */}
-      {visibleCompleted.length > 0 && (
-        <>
-          <div className="flex items-center gap-2 mt-4">
-            <div className="h-px bg-green-600/30 flex-1" />
-            <span className="text-green-400 text-[10px] font-bold uppercase tracking-wider flex-shrink-0">Completed ({visibleCompleted.length})</span>
-            <div className="h-px bg-green-600/30 flex-1" />
-            {visibleCompleted.length > 1 && (
-              <button
-                onClick={() => setDismissedIds(prev => {
-                  const next = new Set(prev);
-                  visibleCompleted.forEach(j => j.id && next.add(j.id));
-                  return next;
-                })}
-                className="text-gray-500 hover:text-gray-300 text-[10px] font-medium transition-colors"
-              >Clear All</button>
-            )}
-          </div>
-          {visibleCompleted.map(job => {
-            const completedTime = job.completedAt?.toDate
-              ? job.completedAt.toDate()
-              : job.completedAt?.seconds
-              ? new Date(job.completedAt.seconds * 1000)
-              : null;
-            const timeStr = completedTime
-              ? completedTime.toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' })
-              : '';
-            return (
-              <div key={job.id} className="border border-green-600/20 rounded-lg bg-green-950/10 px-4 py-2.5 flex items-center gap-3">
-                <div className="w-6 h-6 rounded-full bg-green-600/30 flex items-center justify-center flex-shrink-0">
-                  <span className="text-green-300 text-xs">✓</span>
-                </div>
-                <div className="flex-1 min-w-0">
-                  <div className="flex items-center gap-2">
-                    <JobTypeBadge type={job.jobType} serviceType={job.serviceType} />
-                    <span className="text-gray-300 font-medium text-sm truncate">{job.ndicWellName || job.wellName}</span>
-                    {job.disposal && (
-                      <span className="text-cyan-400/60 text-xs truncate">→ {job.disposal}</span>
-                    )}
-                  </div>
-                  <div className="flex items-center gap-2 mt-0.5">
-                    <span className="text-gray-500 text-xs">{job.driverFirstName || job.driverName}</span>
-                    {timeStr && <span className="text-gray-600 text-xs">{timeStr}</span>}
-                    {(job.loadCount || 0) > 1 && (
-                      <span className="text-gray-600 text-xs">{job.loadsCompleted || job.loadCount} loads</span>
-                    )}
-                  </div>
-                </div>
-                <button
-                  onClick={() => job.id && setDismissedIds(prev => new Set(prev).add(job.id!))}
-                  className="text-gray-600 hover:text-gray-400 text-sm transition-colors flex-shrink-0"
-                  title="Dismiss"
-                >✕</button>
+    </div>
+  );
+}
+
+// ─── Completed Jobs Panel (own tab) ──────────────────────────────────────────
+
+function CompletedJobsPanel({ jobs, drivers }: {
+  jobs: DispatchJob[];
+  drivers?: { key: string; displayName: string; legalName?: string }[];
+}) {
+  if (jobs.length === 0) {
+    return <div className="text-center text-gray-500 py-8">No completed jobs today</div>;
+  }
+
+  // Group by date, most recent first
+  const sorted = [...jobs].sort((a, b) => {
+    const aTime = a.completedAt?.toDate ? a.completedAt.toDate().getTime() : a.completedAt?.seconds ? a.completedAt.seconds * 1000 : 0;
+    const bTime = b.completedAt?.toDate ? b.completedAt.toDate().getTime() : b.completedAt?.seconds ? b.completedAt.seconds * 1000 : 0;
+    return bTime - aTime;
+  });
+
+  function getDriverName(hash: string) {
+    const d = drivers?.find(dr => dr.key === hash);
+    return d?.legalName?.split(' ')[0] || d?.displayName || hash?.slice(0, 6) || 'Unknown';
+  }
+
+  return (
+    <div className="space-y-2">
+      <div className="text-gray-500 text-xs mb-2">{jobs.length} completed job{jobs.length !== 1 ? 's' : ''}</div>
+      {sorted.map(job => {
+        const completedTime = job.completedAt?.toDate
+          ? job.completedAt.toDate()
+          : job.completedAt?.seconds
+          ? new Date(job.completedAt.seconds * 1000)
+          : null;
+        const timeStr = completedTime
+          ? completedTime.toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' })
+          : '';
+        const dateStr = completedTime
+          ? completedTime.toLocaleDateString([], { month: 'short', day: 'numeric' })
+          : '';
+        const driverName = job.driverFirstName || getDriverName(job.driverHash);
+        const loads = job.loadsCompleted || job.loadCount || 1;
+
+        return (
+          <div key={job.id} className="border border-gray-700/50 rounded-lg bg-gray-800/50 px-4 py-3">
+            <div className="flex items-center gap-2">
+              <div className="w-6 h-6 rounded-full bg-green-600/30 flex items-center justify-center flex-shrink-0">
+                <span className="text-green-300 text-xs">✓</span>
               </div>
-            );
-          })}
-        </>
-      )}
+              <JobTypeBadge type={job.jobType} serviceType={job.serviceType} />
+              <span className="text-white font-medium text-sm truncate">{job.ndicWellName || job.wellName}</span>
+              {job.disposal && (
+                <span className="text-cyan-400/60 text-xs truncate">→ {job.disposal}</span>
+              )}
+              <span className="flex-1" />
+              <span className="text-gray-500 text-xs flex-shrink-0">{timeStr}</span>
+            </div>
+            <div className="flex items-center gap-3 mt-1.5 ml-8 text-xs text-gray-500">
+              <span>{driverName}</span>
+              {loads > 1 && <span>{loads} loads</span>}
+              {dateStr && <span>{dateStr}</span>}
+              {job.source === 'driver' && (
+                <span className="px-1.5 py-0.5 bg-gray-700 text-gray-400 rounded text-[10px]">Driver Started</span>
+              )}
+            </div>
+          </div>
+        );
+      })}
     </div>
   );
 }
