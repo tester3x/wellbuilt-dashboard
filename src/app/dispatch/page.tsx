@@ -4126,6 +4126,43 @@ function CompletedJobsPanel({ jobs, drivers, allWells, allDisposals }: {
                             )}
 
                             {/* Notes */}
+                            {/* GPS Timeline */}
+                            {ticketDetailData.invoice.timeline?.length > 0 && (
+                              <>
+                                <h5 className="text-[#111] font-extrabold text-[10px] tracking-[1.5px] uppercase pt-3 pb-1">JOB TIMELINE</h5>
+                                <div className="space-y-2 ml-1">
+                                  {[...ticketDetailData.invoice.timeline]
+                                    .sort((a: any, b: any) => new Date(a.timestamp).getTime() - new Date(b.timestamp).getTime())
+                                    .map((ev: any, i: number) => {
+                                      const t = new Date(ev.timestamp);
+                                      const time = t.toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit' });
+                                      const dotColor = ev.type === 'depart' || ev.type === 'depart_site' ? 'bg-blue-400'
+                                        : ev.type === 'arrive' ? 'bg-green-400'
+                                        : ev.type === 'close' ? 'bg-red-400'
+                                        : ev.type === 'pause' ? 'bg-yellow-400'
+                                        : 'bg-gray-400';
+                                      const label = ev.type === 'depart' || ev.type === 'depart_site' ? 'Departed'
+                                        : ev.type === 'arrive' ? 'Arrived'
+                                        : ev.type === 'close' ? 'Closed'
+                                        : ev.type === 'pause' ? 'Paused'
+                                        : ev.type === 'resume' ? 'Resumed'
+                                        : ev.type === 'reroute' ? 'Rerouted'
+                                        : ev.type;
+                                      return (
+                                        <div key={i} className="flex items-start gap-2">
+                                          <div className={`w-2 h-2 rounded-full mt-1 shrink-0 ${dotColor}`} />
+                                          <span className="text-[10px] font-mono text-gray-500 w-14 shrink-0">{time}</span>
+                                          <div>
+                                            <span className="text-xs font-semibold text-[#111]">{label}</span>
+                                            {ev.locationName && <div className="text-[10px] text-gray-400">{ev.locationName}</div>}
+                                          </div>
+                                        </div>
+                                      );
+                                    })}
+                                </div>
+                              </>
+                            )}
+
                             {ticketDetailData.invoice.notes && (
                               <>
                                 <h5 className="text-[#111] font-extrabold text-[10px] tracking-[1.5px] uppercase pt-3 pb-1">REMARKS</h5>
