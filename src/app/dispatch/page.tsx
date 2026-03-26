@@ -567,12 +567,12 @@ export default function DispatchPage() {
     loadPackageJobTypes();
   }, [user, drivers.length]);
 
-  // Subscribe to active dispatches in real-time
+  // Subscribe to active + completed dispatches in real-time
   useEffect(() => {
     const firestore = getFirestoreDb();
     const q = query(
       collection(firestore, 'dispatches'),
-      where('status', 'in', ['pending', 'pending_approval', 'accepted', 'in_progress', 'paused', 'declined']),
+      where('status', 'in', ['pending', 'pending_approval', 'accepted', 'in_progress', 'paused', 'declined', 'completed']),
       orderBy('assignedAt', 'desc')
     );
     const unsub = onSnapshot(q, (snap) => {
@@ -2374,14 +2374,14 @@ export default function DispatchPage() {
                 <div className="flex items-center gap-1.5">
                   {rightPanelTab === 'jobs' && (
                     <>
-                      {dispatches.filter(d => d.jobType === 'pw').length > 0 && (
+                      {dispatches.filter(d => d.jobType === 'pw' && d.status !== 'completed').length > 0 && (
                         <span className="px-1.5 py-0.5 bg-blue-600/20 text-blue-400 text-[10px] rounded font-bold">
-                          {dispatches.filter(d => d.jobType === 'pw').length} PW
+                          {dispatches.filter(d => d.jobType === 'pw' && d.status !== 'completed').length} PW
                         </span>
                       )}
-                      {dispatches.filter(d => d.jobType === 'service').length > 0 && (
+                      {dispatches.filter(d => d.jobType === 'service' && d.status !== 'completed').length > 0 && (
                         <span className="px-1.5 py-0.5 bg-purple-600/20 text-purple-400 text-[10px] rounded font-bold">
-                          {dispatches.filter(d => d.jobType === 'service').length} SW
+                          {dispatches.filter(d => d.jobType === 'service' && d.status !== 'completed').length} SW
                         </span>
                       )}
                     </>
@@ -3195,9 +3195,12 @@ function ActiveDispatchPanel({ dispatches, cancelDispatch, drivers, assignTransf
 }) {
   const [expandedDrivers, setExpandedDrivers] = useState<Set<string>>(new Set());
 
-  // Separate declined jobs — show in their own section with reassign option
+  // Separate completed + declined jobs from active
+  const completedJobs = dispatches.filter(d => d.status === 'completed');
+  const [dismissedIds, setDismissedIds] = useState<Set<string>>(new Set());
+  const visibleCompleted = completedJobs.filter(d => d.id && !dismissedIds.has(d.id));
   const declinedJobs = dispatches.filter(d => d.status === 'declined');
-  const nonDeclined = dispatches.filter(d => d.status !== 'declined');
+  const nonDeclined = dispatches.filter(d => d.status !== 'declined' && d.status !== 'completed');
 
   // Unassigned transfers need driver assignment
   const unassigned = nonDeclined.filter(d => d.type === 'transfer' && (!d.driverHash || d.status === 'pending_approval'));
@@ -3250,7 +3253,8 @@ function ActiveDispatchPanel({ dispatches, cancelDispatch, drivers, assignTransf
     });
   }
 
-  if (dispatches.length === 0) {
+  const activeCount = dispatches.filter(d => d.status !== 'completed').length;
+  if (activeCount === 0 && visibleCompleted.length === 0) {
     return <div className="text-center text-gray-500 py-8">No active dispatches</div>;
   }
 
@@ -3459,6 +3463,65 @@ function ActiveDispatchPanel({ dispatches, cancelDispatch, drivers, assignTransf
                     </div>
                   ))}
                 </div>
+              </div>
+            );
+          })}
+        </>
+      )}
+
+      {/* ─── Completed Jobs ─── */}
+      {visibleCompleted.length > 0 && (
+        <>
+          <div className="flex items-center gap-2 mt-4">
+            <div className="h-px bg-green-600/30 flex-1" />
+            <span className="text-green-400 text-[10px] font-bold uppercase tracking-wider flex-shrink-0">Completed ({visibleCompleted.length})</span>
+            <div className="h-px bg-green-600/30 flex-1" />
+            {visibleCompleted.length > 1 && (
+              <button
+                onClick={() => setDismissedIds(prev => {
+                  const next = new Set(prev);
+                  visibleCompleted.forEach(j => j.id && next.add(j.id));
+                  return next;
+                })}
+                className="text-gray-500 hover:text-gray-300 text-[10px] font-medium transition-colors"
+              >Clear All</button>
+            )}
+          </div>
+          {visibleCompleted.map(job => {
+            const completedTime = job.completedAt?.toDate
+              ? job.completedAt.toDate()
+              : job.completedAt?.seconds
+              ? new Date(job.completedAt.seconds * 1000)
+              : null;
+            const timeStr = completedTime
+              ? completedTime.toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' })
+              : '';
+            return (
+              <div key={job.id} className="border border-green-600/20 rounded-lg bg-green-950/10 px-4 py-2.5 flex items-center gap-3">
+                <div className="w-6 h-6 rounded-full bg-green-600/30 flex items-center justify-center flex-shrink-0">
+                  <span className="text-green-300 text-xs">✓</span>
+                </div>
+                <div className="flex-1 min-w-0">
+                  <div className="flex items-center gap-2">
+                    <JobTypeBadge type={job.jobType} serviceType={job.serviceType} />
+                    <span className="text-gray-300 font-medium text-sm truncate">{job.ndicWellName || job.wellName}</span>
+                    {job.disposal && (
+                      <span className="text-cyan-400/60 text-xs truncate">→ {job.disposal}</span>
+                    )}
+                  </div>
+                  <div className="flex items-center gap-2 mt-0.5">
+                    <span className="text-gray-500 text-xs">{job.driverFirstName || job.driverName}</span>
+                    {timeStr && <span className="text-gray-600 text-xs">{timeStr}</span>}
+                    {(job.loadCount || 0) > 1 && (
+                      <span className="text-gray-600 text-xs">{job.loadsCompleted || job.loadCount} loads</span>
+                    )}
+                  </div>
+                </div>
+                <button
+                  onClick={() => job.id && setDismissedIds(prev => new Set(prev).add(job.id!))}
+                  className="text-gray-600 hover:text-gray-400 text-sm transition-colors flex-shrink-0"
+                  title="Dismiss"
+                >✕</button>
               </div>
             );
           })}
