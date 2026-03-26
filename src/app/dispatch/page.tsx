@@ -2459,6 +2459,8 @@ export default function DispatchPage() {
                   <CompletedJobsPanel
                     jobs={dispatches.filter(d => d.status === 'completed')}
                     drivers={drivers}
+                    allWells={allOperatorWells}
+                    allDisposals={allDisposals}
                   />
                 )}
                 {rightPanelTab === 'projects' && !selectedProject && (
@@ -3493,9 +3495,11 @@ function ActiveDispatchPanel({ dispatches, cancelDispatch, drivers, assignTransf
 
 // ─── Completed Jobs Panel (own tab) ──────────────────────────────────────────
 
-function CompletedJobsPanel({ jobs, drivers }: {
+function CompletedJobsPanel({ jobs, drivers, allWells, allDisposals }: {
   jobs: DispatchJob[];
   drivers?: { key: string; displayName: string; legalName?: string }[];
+  allWells?: NdicWell[];
+  allDisposals?: NdicWell[];
 }) {
   const [driverFilter, setDriverFilter] = useState<string>('all');
   const [searchQuery, setSearchQuery] = useState('');
@@ -3506,6 +3510,10 @@ function CompletedJobsPanel({ jobs, drivers }: {
   const [editingJobId, setEditingJobId] = useState<string | null>(null);
   const [editForm, setEditForm] = useState<Record<string, string>>({});
   const [saving, setSaving] = useState(false);
+  const [wellResults, setWellResults] = useState<NdicWell[]>([]);
+  const [disposalResults, setDisposalResults] = useState<NdicWell[]>([]);
+  const [showWellDropdown, setShowWellDropdown] = useState(false);
+  const [showDisposalDropdown, setShowDisposalDropdown] = useState(false);
 
   function startEdit(job: DispatchJob) {
     const completed = toDate(job.completedAt);
@@ -3768,16 +3776,56 @@ function CompletedJobsPanel({ jobs, drivers }: {
                 /* ── EDIT MODE ── */
                 <div className="border-t border-green-600/30 px-4 py-3 space-y-2" onClick={e => e.stopPropagation()}>
                   <div className="grid grid-cols-2 gap-x-4 gap-y-2 text-xs">
-                    <label className="block">
+                    <div className="relative">
                       <span className="text-gray-500">Well</span>
-                      <input value={editForm.wellName || ''} onChange={e => setEditForm(f => ({ ...f, wellName: e.target.value }))}
+                      <input value={editForm.wellName || ''} onChange={e => {
+                        const v = e.target.value;
+                        setEditForm(f => ({ ...f, wellName: v }));
+                        if (v.length >= 2 && allWells) {
+                          const q = v.toLowerCase();
+                          setWellResults(allWells.filter(w => w.well_name.toLowerCase().includes(q)).slice(0, 8));
+                          setShowWellDropdown(true);
+                        } else { setShowWellDropdown(false); }
+                      }}
+                        onFocus={() => { if (wellResults.length > 0) setShowWellDropdown(true); }}
+                        onBlur={() => setTimeout(() => setShowWellDropdown(false), 150)}
                         className="w-full bg-gray-900 border border-gray-600 text-white text-xs rounded px-2 py-1.5 mt-0.5" />
-                    </label>
-                    <label className="block">
+                      {showWellDropdown && wellResults.length > 0 && (
+                        <div className="absolute z-50 left-0 right-0 mt-0.5 bg-gray-800 border border-gray-600 rounded shadow-lg max-h-36 overflow-y-auto">
+                          {wellResults.map((w, i) => (
+                            <button key={i} type="button"
+                              onMouseDown={() => { setEditForm(f => ({ ...f, wellName: w.well_name, operator: w.operator || f.operator })); setShowWellDropdown(false); }}
+                              className="w-full text-left px-2 py-1 text-xs text-gray-200 hover:bg-gray-700 truncate"
+                            >{w.well_name} <span className="text-gray-500">{w.operator}</span></button>
+                          ))}
+                        </div>
+                      )}
+                    </div>
+                    <div className="relative">
                       <span className="text-gray-500">Drop-off</span>
-                      <input value={editForm.disposal || ''} onChange={e => setEditForm(f => ({ ...f, disposal: e.target.value }))}
+                      <input value={editForm.disposal || ''} onChange={e => {
+                        const v = e.target.value;
+                        setEditForm(f => ({ ...f, disposal: v }));
+                        if (v.length >= 2 && allDisposals) {
+                          const q = v.toLowerCase();
+                          setDisposalResults(allDisposals.filter(d => d.well_name.toLowerCase().includes(q)).slice(0, 8));
+                          setShowDisposalDropdown(true);
+                        } else { setShowDisposalDropdown(false); }
+                      }}
+                        onFocus={() => { if (disposalResults.length > 0) setShowDisposalDropdown(true); }}
+                        onBlur={() => setTimeout(() => setShowDisposalDropdown(false), 150)}
                         className="w-full bg-gray-900 border border-gray-600 text-white text-xs rounded px-2 py-1.5 mt-0.5" />
-                    </label>
+                      {showDisposalDropdown && disposalResults.length > 0 && (
+                        <div className="absolute z-50 left-0 right-0 mt-0.5 bg-gray-800 border border-gray-600 rounded shadow-lg max-h-36 overflow-y-auto">
+                          {disposalResults.map((d, i) => (
+                            <button key={i} type="button"
+                              onMouseDown={() => { setEditForm(f => ({ ...f, disposal: d.well_name })); setShowDisposalDropdown(false); }}
+                              className="w-full text-left px-2 py-1 text-xs text-gray-200 hover:bg-gray-700 truncate"
+                            >{d.well_name} <span className="text-gray-500">{d.operator}</span></button>
+                          ))}
+                        </div>
+                      )}
+                    </div>
                     <label className="block">
                       <span className="text-gray-500">BBLs</span>
                       <input type="number" value={editForm.totalBBL || ''} onChange={e => setEditForm(f => ({ ...f, totalBBL: e.target.value }))}

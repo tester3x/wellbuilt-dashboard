@@ -1,19 +1,28 @@
 'use client';
 
-import { useEffect, useState } from 'react';
-import { useRouter } from 'next/navigation';
+import { Suspense, useEffect, useState } from 'react';
+import { useRouter, useSearchParams } from 'next/navigation';
 import { useAuth } from '@/contexts/AuthContext';
 import { AppHeader } from '@/components/AppHeader';
 import { Ticket, fetchTickets } from '@/lib/tickets';
 import { TicketDetailModal } from '@/components/TicketDetailModal';
 
 export default function TicketsPage() {
+  return (
+    <Suspense fallback={<div className="min-h-screen bg-gray-900 flex items-center justify-center"><div className="text-white">Loading...</div></div>}>
+      <TicketsPageInner />
+    </Suspense>
+  );
+}
+
+function TicketsPageInner() {
   const { user, loading } = useAuth();
   const router = useRouter();
+  const searchParams = useSearchParams();
   const [tickets, setTickets] = useState<Ticket[]>([]);
   const [dataLoading, setDataLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
-  const [search, setSearch] = useState('');
+  const [search, setSearch] = useState(searchParams.get('search') || '');
   const [selectedTicket, setSelectedTicket] = useState<Ticket | null>(null);
 
   useEffect(() => {
@@ -57,6 +66,13 @@ export default function TicketsPage() {
         );
       })
     : tickets;
+
+  // Auto-open ticket detail when URL search matches exactly one result
+  useEffect(() => {
+    if (!dataLoading && searchParams.get('search') && filtered.length === 1 && !selectedTicket) {
+      setSelectedTicket(filtered[0]);
+    }
+  }, [dataLoading, filtered.length]);
 
   if (loading) {
     return (
