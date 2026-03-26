@@ -3496,65 +3496,286 @@ function CompletedJobsPanel({ jobs, drivers }: {
   jobs: DispatchJob[];
   drivers?: { key: string; displayName: string; legalName?: string }[];
 }) {
-  if (jobs.length === 0) {
-    return <div className="text-center text-gray-500 py-8">No completed jobs today</div>;
-  }
+  const [driverFilter, setDriverFilter] = useState<string>('all');
+  const [searchQuery, setSearchQuery] = useState('');
+  const [dateRange, setDateRange] = useState<'today' | '7d' | '30d' | 'all'>('today');
+  const [expandedJobId, setExpandedJobId] = useState<string | null>(null);
 
-  // Group by date, most recent first
-  const sorted = [...jobs].sort((a, b) => {
-    const aTime = a.completedAt?.toDate ? a.completedAt.toDate().getTime() : a.completedAt?.seconds ? a.completedAt.seconds * 1000 : 0;
-    const bTime = b.completedAt?.toDate ? b.completedAt.toDate().getTime() : b.completedAt?.seconds ? b.completedAt.seconds * 1000 : 0;
-    return bTime - aTime;
-  });
+  function toDate(ts: any): Date | null {
+    if (!ts) return null;
+    if (ts.toDate) return ts.toDate();
+    if (ts.seconds) return new Date(ts.seconds * 1000);
+    if (typeof ts === 'string') return new Date(ts);
+    return null;
+  }
 
   function getDriverName(hash: string) {
     const d = drivers?.find(dr => dr.key === hash);
     return d?.legalName?.split(' ')[0] || d?.displayName || hash?.slice(0, 6) || 'Unknown';
   }
 
+  function getDriverFullName(hash: string) {
+    const d = drivers?.find(dr => dr.key === hash);
+    return d?.legalName || d?.displayName || hash?.slice(0, 8) || 'Unknown';
+  }
+
+  // Get unique drivers from completed jobs
+  const uniqueDrivers = useMemo(() => {
+    const map = new Map<string, string>();
+    jobs.forEach(j => {
+      if (!map.has(j.driverHash)) {
+        map.set(j.driverHash, j.driverFirstName || getDriverName(j.driverHash));
+      }
+    });
+    return Array.from(map.entries()).sort((a, b) => a[1].localeCompare(b[1]));
+  }, [jobs, drivers]);
+
+  // Filter + search
+  const filtered = useMemo(() => {
+    const now = new Date();
+    const startOfToday = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+
+    return jobs.filter(job => {
+      // Driver filter
+      if (driverFilter !== 'all' && job.driverHash !== driverFilter) return false;
+
+      // Date range filter
+      const completed = toDate(job.completedAt);
+      if (dateRange === 'today') {
+        if (!completed || completed < startOfToday) return false;
+      } else if (dateRange === '7d') {
+        const cutoff = new Date(now.getTime() - 7 * 24 * 60 * 60 * 1000);
+        if (!completed || completed < cutoff) return false;
+      } else if (dateRange === '30d') {
+        const cutoff = new Date(now.getTime() - 30 * 24 * 60 * 60 * 1000);
+        if (!completed || completed < cutoff) return false;
+      }
+
+      // Search filter
+      if (searchQuery.trim()) {
+        const q = searchQuery.toLowerCase().trim();
+        const wellName = (job.ndicWellName || job.wellName || '').toLowerCase();
+        const disposal = (job.disposal || job.hauledTo || '').toLowerCase();
+        const invoiceNum = (job.invoiceNumber || '').toLowerCase();
+        const driverName = (job.driverFirstName || getDriverName(job.driverHash)).toLowerCase();
+        const serviceType = (job.serviceType || '').toLowerCase();
+        if (!wellName.includes(q) && !disposal.includes(q) && !invoiceNum.includes(q) && !driverName.includes(q) && !serviceType.includes(q)) return false;
+      }
+
+      return true;
+    }).sort((a, b) => {
+      const aTime = toDate(a.completedAt)?.getTime() || 0;
+      const bTime = toDate(b.completedAt)?.getTime() || 0;
+      return bTime - aTime;
+    });
+  }, [jobs, driverFilter, searchQuery, dateRange, drivers]);
+
   return (
     <div className="space-y-2">
-      <div className="text-gray-500 text-xs mb-2">{jobs.length} completed job{jobs.length !== 1 ? 's' : ''}</div>
-      {sorted.map(job => {
-        const completedTime = job.completedAt?.toDate
-          ? job.completedAt.toDate()
-          : job.completedAt?.seconds
-          ? new Date(job.completedAt.seconds * 1000)
-          : null;
-        const timeStr = completedTime
-          ? completedTime.toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' })
-          : '';
-        const dateStr = completedTime
-          ? completedTime.toLocaleDateString([], { month: 'short', day: 'numeric' })
-          : '';
-        const driverName = job.driverFirstName || getDriverName(job.driverHash);
-        const loads = job.loadsCompleted || job.loadCount || 1;
+      {/* ── Filter bar ── */}
+      <div className="flex items-center gap-2 flex-wrap">
+        {/* Driver dropdown */}
+        <select
+          value={driverFilter}
+          onChange={e => setDriverFilter(e.target.value)}
+          className="bg-gray-900 border border-gray-700 text-gray-300 text-xs rounded px-2 py-1.5 min-w-[120px]"
+        >
+          <option value="all">All Drivers</option>
+          {uniqueDrivers.map(([hash, name]) => (
+            <option key={hash} value={hash}>{name}</option>
+          ))}
+        </select>
 
-        return (
-          <div key={job.id} className="border border-gray-700/50 rounded-lg bg-gray-800/50 px-4 py-3">
-            <div className="flex items-center gap-2">
-              <div className="w-6 h-6 rounded-full bg-green-600/30 flex items-center justify-center flex-shrink-0">
-                <span className="text-green-300 text-xs">✓</span>
+        {/* Search */}
+        <div className="relative flex-1 min-w-[140px]">
+          <input
+            type="text"
+            placeholder="Search well, SWD, invoice#..."
+            value={searchQuery}
+            onChange={e => setSearchQuery(e.target.value)}
+            className="w-full bg-gray-900 border border-gray-700 text-gray-300 text-xs rounded px-2 py-1.5 pl-7"
+          />
+          <span className="absolute left-2 top-1/2 -translate-y-1/2 text-gray-600 text-xs">⌕</span>
+          {searchQuery && (
+            <button
+              onClick={() => setSearchQuery('')}
+              className="absolute right-1.5 top-1/2 -translate-y-1/2 text-gray-500 hover:text-gray-300 text-xs"
+            >×</button>
+          )}
+        </div>
+
+        {/* Date range pills */}
+        <div className="flex items-center bg-gray-900 border border-gray-700 rounded overflow-hidden">
+          {(['today', '7d', '30d', 'all'] as const).map(range => (
+            <button
+              key={range}
+              onClick={() => setDateRange(range)}
+              className={`px-2 py-1 text-[10px] font-medium transition-colors ${
+                dateRange === range
+                  ? 'bg-green-600 text-white'
+                  : 'text-gray-500 hover:text-gray-300 hover:bg-gray-800'
+              }`}
+            >
+              {range === 'today' ? 'Today' : range === '7d' ? '7 Day' : range === '30d' ? '30 Day' : 'All'}
+            </button>
+          ))}
+        </div>
+      </div>
+
+      {/* ── Count ── */}
+      <div className="text-gray-500 text-xs">
+        {filtered.length} completed job{filtered.length !== 1 ? 's' : ''}
+        {driverFilter !== 'all' || searchQuery || dateRange !== 'today' ? ' (filtered)' : ''}
+      </div>
+
+      {/* ── Job list ── */}
+      {filtered.length === 0 ? (
+        <div className="text-center text-gray-600 py-6 text-sm">
+          {jobs.length === 0 ? 'No completed jobs yet' : 'No jobs match filters'}
+        </div>
+      ) : (
+        filtered.map(job => {
+          const completed = toDate(job.completedAt);
+          const assigned = toDate(job.assignedAt);
+          const timeStr = completed ? completed.toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' }) : '';
+          const dateStr = completed ? completed.toLocaleDateString([], { month: 'short', day: 'numeric' }) : '';
+          const driverName = job.driverFirstName || getDriverName(job.driverHash);
+          const loads = job.loadsCompleted || job.loadCount || 1;
+          const isExpanded = expandedJobId === job.id;
+
+          return (
+            <div
+              key={job.id}
+              className={`border rounded-lg transition-colors cursor-pointer ${
+                isExpanded
+                  ? 'border-green-600/50 bg-gray-800/80'
+                  : 'border-gray-700/50 bg-gray-800/50 hover:border-gray-600/50'
+              }`}
+              onClick={() => setExpandedJobId(isExpanded ? null : (job.id || null))}
+            >
+              {/* Summary row */}
+              <div className="px-4 py-3">
+                <div className="flex items-center gap-2">
+                  <div className="w-6 h-6 rounded-full bg-green-600/30 flex items-center justify-center flex-shrink-0">
+                    <span className="text-green-300 text-xs">✓</span>
+                  </div>
+                  <JobTypeBadge type={job.jobType} serviceType={job.serviceType} />
+                  <span className="text-white font-medium text-sm truncate">{job.ndicWellName || job.wellName}</span>
+                  {job.disposal && (
+                    <span className="text-cyan-400/60 text-xs truncate">→ {job.disposal}</span>
+                  )}
+                  <span className="flex-1" />
+                  <span className="text-gray-500 text-xs flex-shrink-0">{timeStr}</span>
+                  <span className={`text-gray-600 text-xs transition-transform ${isExpanded ? 'rotate-180' : ''}`}>▾</span>
+                </div>
+                <div className="flex items-center gap-3 mt-1.5 ml-8 text-xs text-gray-500">
+                  <span>{driverName}</span>
+                  {loads > 1 && <span>{loads} load{loads !== 1 ? 's' : ''}</span>}
+                  {dateStr && <span>{dateStr}</span>}
+                  {job.invoiceNumber && <span className="text-cyan-400/50">#{job.invoiceNumber}</span>}
+                  {job.source === 'driver' && (
+                    <span className="px-1.5 py-0.5 bg-gray-700 text-gray-400 rounded text-[10px]">Driver Started</span>
+                  )}
+                  {job.projectId && (
+                    <span className="px-1.5 py-0.5 bg-emerald-700/40 text-emerald-400 rounded text-[10px]">Project</span>
+                  )}
+                </div>
               </div>
-              <JobTypeBadge type={job.jobType} serviceType={job.serviceType} />
-              <span className="text-white font-medium text-sm truncate">{job.ndicWellName || job.wellName}</span>
-              {job.disposal && (
-                <span className="text-cyan-400/60 text-xs truncate">→ {job.disposal}</span>
+
+              {/* Expanded detail */}
+              {isExpanded && (
+                <div className="border-t border-gray-700/50 px-4 py-3 space-y-3">
+                  {/* Detail grid */}
+                  <div className="grid grid-cols-2 gap-x-6 gap-y-2 text-xs">
+                    <div>
+                      <span className="text-gray-500">Driver</span>
+                      <div className="text-gray-200">{getDriverFullName(job.driverHash)}</div>
+                    </div>
+                    <div>
+                      <span className="text-gray-500">Job Type</span>
+                      <div className="text-gray-200">
+                        {job.jobType === 'pw' ? 'Production Water' : `Service Work${job.serviceType ? ` — ${job.serviceType}` : ''}`}
+                        {job.packageId && job.packageId !== 'water-hauling' && (
+                          <span className="ml-1 text-gray-500">({job.packageId})</span>
+                        )}
+                      </div>
+                    </div>
+                    <div>
+                      <span className="text-gray-500">Well</span>
+                      <div className="text-gray-200">{job.ndicWellName || job.wellName}</div>
+                    </div>
+                    <div>
+                      <span className="text-gray-500">Drop-off</span>
+                      <div className="text-gray-200">{job.hauledTo || job.disposal || job.disposalName || '—'}</div>
+                    </div>
+                    {(job.loadCount || 0) > 1 && (
+                      <>
+                        <div>
+                          <span className="text-gray-500">Loads</span>
+                          <div className="text-gray-200">{job.loadsCompleted || job.loadCount} / {job.loadCount}</div>
+                        </div>
+                        <div />
+                      </>
+                    )}
+                    {job.invoiceNumber && (
+                      <div>
+                        <span className="text-gray-500">Invoice #</span>
+                        <div className="text-cyan-300">{job.invoiceNumber}</div>
+                      </div>
+                    )}
+                    {job.operator && (
+                      <div>
+                        <span className="text-gray-500">Operator</span>
+                        <div className="text-gray-200">{job.operator}</div>
+                      </div>
+                    )}
+                    {job.route && (
+                      <div>
+                        <span className="text-gray-500">Route</span>
+                        <div className="text-gray-200">{job.route}</div>
+                      </div>
+                    )}
+                  </div>
+
+                  {/* Timeline */}
+                  <div className="border-t border-gray-700/30 pt-2">
+                    <div className="text-gray-500 text-[10px] uppercase tracking-wider mb-1.5">Timeline</div>
+                    <div className="flex items-center gap-4 text-xs">
+                      {assigned && (
+                        <div className="flex items-center gap-1.5">
+                          <div className="w-1.5 h-1.5 rounded-full bg-blue-500" />
+                          <span className="text-gray-400">Dispatched</span>
+                          <span className="text-gray-300">{assigned.toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' })}</span>
+                        </div>
+                      )}
+                      {completed && (
+                        <div className="flex items-center gap-1.5">
+                          <div className="w-1.5 h-1.5 rounded-full bg-green-500" />
+                          <span className="text-gray-400">Completed</span>
+                          <span className="text-gray-300">{completed.toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' })}</span>
+                        </div>
+                      )}
+                      {assigned && completed && (
+                        <span className="text-gray-600 text-[10px]">
+                          ({Math.round((completed.getTime() - assigned.getTime()) / 60000)} min)
+                        </span>
+                      )}
+                    </div>
+                  </div>
+
+                  {/* Notes */}
+                  {job.notes && (
+                    <div className="border-t border-gray-700/30 pt-2">
+                      <div className="text-gray-500 text-[10px] uppercase tracking-wider mb-1">Notes</div>
+                      <div className="text-gray-300 text-xs">{job.notes}</div>
+                    </div>
+                  )}
+                </div>
               )}
-              <span className="flex-1" />
-              <span className="text-gray-500 text-xs flex-shrink-0">{timeStr}</span>
             </div>
-            <div className="flex items-center gap-3 mt-1.5 ml-8 text-xs text-gray-500">
-              <span>{driverName}</span>
-              {loads > 1 && <span>{loads} loads</span>}
-              {dateStr && <span>{dateStr}</span>}
-              {job.source === 'driver' && (
-                <span className="px-1.5 py-0.5 bg-gray-700 text-gray-400 rounded text-[10px]">Driver Started</span>
-              )}
-            </div>
-          </div>
-        );
-      })}
+          );
+        })
+      )}
     </div>
   );
 }
