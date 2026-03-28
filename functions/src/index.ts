@@ -1666,6 +1666,8 @@ export const processDeleteRequest = functionsV1.database
             status: 'success',
             timestamp: timestamp.toISOString(),
             timestampUTC: timestamp.toISOString(),
+            isEdit: true,  // Force WB M to accept this even though lastPullDateTimeUTC is older
+            isDeleteRebuild: true,
             windowBblsDay: windowBblsDay > 0 ? windowBblsDay.toString() : null,
             overnightBblsDay: overnightBblsDay > 0 ? overnightBblsDay.toString() : null,
           });
