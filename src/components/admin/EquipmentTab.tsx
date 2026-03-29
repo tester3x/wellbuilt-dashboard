@@ -132,7 +132,27 @@ export function EquipmentTab({ scopeCompanyId, isWbAdmin }: Props) {
         fetchVehicleDocuments(effectiveCompanyId),
         fetchEquipmentSpecs(effectiveCompanyId),
       ]);
-      setGroups(groupByEquipment(docs));
+      const docGroups = groupByEquipment(docs);
+
+      // Merge specs-only equipment (no documents yet) into the groups list
+      for (const [key, spec] of specs) {
+        const exists = docGroups.some(g => `${g.equipmentType}_${g.equipmentNumber}` === key);
+        if (!exists) {
+          docGroups.push({
+            equipmentType: spec.equipmentType,
+            equipmentNumber: spec.equipmentNumber,
+            documents: [],
+            worstExpiration: 'none',
+          });
+        }
+      }
+      // Re-sort: trucks first, then by number
+      docGroups.sort((a, b) => {
+        if (a.equipmentType !== b.equipmentType) return a.equipmentType === 'truck' ? -1 : 1;
+        return a.equipmentNumber.localeCompare(b.equipmentNumber);
+      });
+
+      setGroups(docGroups);
       setSpecsMap(specs);
     } catch (err) {
       console.error('[EquipmentTab] Failed to load:', err);
@@ -220,12 +240,23 @@ export function EquipmentTab({ scopeCompanyId, isWbAdmin }: Props) {
     }
   };
 
-  // Add equipment = just open upload form for that number
-  const handleAddEquipment = () => {
-    if (!addNumber.trim()) return;
-    setUploadTarget({ type: addType, number: addNumber.trim().toUpperCase() });
-    setShowAddForm(false);
-    setAddNumber('');
+  // Add equipment — create specs entry so it appears in the list (no doc required)
+  const handleAddEquipment = async () => {
+    if (!addNumber.trim() || !effectiveCompanyId) return;
+    const number = addNumber.trim().toUpperCase();
+    try {
+      await saveEquipmentSpecs(effectiveCompanyId, {
+        equipmentType: addType,
+        equipmentNumber: number,
+      });
+      setMessage(`${addType === 'truck' ? 'Truck' : 'Trailer'} ${number} added`);
+      setShowAddForm(false);
+      setAddNumber('');
+      await loadDocs();
+    } catch (err) {
+      console.error('[EquipmentTab] Add failed:', err);
+      setMessage('Failed to add equipment');
+    }
   };
 
   const handleSaveSpecs = async (group: EquipmentGroup) => {
