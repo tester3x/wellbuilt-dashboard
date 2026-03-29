@@ -60,6 +60,11 @@ service cloud.firestore {
       match /counters/{counterId} {
         allow read, write: if true;
       }
+
+      // Equipment specs — tare weight, capacity, make/model
+      match /equipment_specs/{specId} {
+        allow read, write: if true;
+      }
     }
 
     // Invoices — clients can read, create, update, delete (cancel/recycle flow)

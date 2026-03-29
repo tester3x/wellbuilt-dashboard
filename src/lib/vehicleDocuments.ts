@@ -3,7 +3,7 @@
 import { getFirestoreDb, getFirebaseStorage } from './firebase';
 import {
   collection, query, where, getDocs, addDoc, deleteDoc, doc,
-  Timestamp, orderBy,
+  Timestamp, orderBy, getDoc, setDoc,
 } from 'firebase/firestore';
 import { ref, uploadBytes, getDownloadURL, deleteObject } from 'firebase/storage';
 
@@ -248,4 +248,37 @@ export function groupByEquipment(docs: VehicleDocument[]): EquipmentGroup[] {
   });
 
   return groups;
+}
+
+// ── Equipment Specs ─────────────────────────────────────────────────────────
+// Physical specs for trucks and trailers (tare weight, capacity, etc.)
+// Stored in Firestore: companies/{companyId}/equipment_specs/{type}_{number}
+
+export interface EquipmentSpecs {
+  equipmentType: 'truck' | 'trailer';
+  equipmentNumber: string;
+  tareWeight?: number;       // lbs, empty vehicle weight
+  bblCapacity?: number;      // trailer only: max BBLs
+  make?: string;             // e.g. "Peterbilt", "Heil"
+  model?: string;            // e.g. "389", "9400 gal"
+  year?: string;             // e.g. "2022"
+}
+
+/** Fetch equipment specs for a company. Returns a map keyed by "type_number". */
+export async function fetchEquipmentSpecs(companyId: string): Promise<Map<string, EquipmentSpecs>> {
+  const db = getFirestoreDb();
+  const snap = await getDocs(collection(db, 'companies', companyId, 'equipment_specs'));
+  const map = new Map<string, EquipmentSpecs>();
+  snap.forEach(d => {
+    const data = d.data() as EquipmentSpecs;
+    map.set(d.id, data);
+  });
+  return map;
+}
+
+/** Save equipment specs. */
+export async function saveEquipmentSpecs(companyId: string, specs: EquipmentSpecs): Promise<void> {
+  const db = getFirestoreDb();
+  const key = `${specs.equipmentType}_${specs.equipmentNumber}`;
+  await setDoc(doc(db, 'companies', companyId, 'equipment_specs', key), specs, { merge: true });
 }

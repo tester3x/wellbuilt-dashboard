@@ -1,13 +1,61 @@
 'use client';
 
-import { useEffect, useState, useRef } from 'react';
+import { useEffect, useState, useRef, useMemo } from 'react';
 import { useAuth } from '@/contexts/AuthContext';
+
+// ── Common oilfield vehicle specs (hardcoded quick-lookup) ──────────────
+// Tare weights are approximate mid-range for typical water hauler configs.
+// Admin can always override after selecting.
+
+interface VehiclePreset {
+  make: string;
+  model: string;
+  tareWeight: number; // lbs
+  bblCapacity?: number; // trailers only
+}
+
+const TRUCK_PRESETS: VehiclePreset[] = [
+  { make: 'Peterbilt', model: '389', tareWeight: 18500 },
+  { make: 'Peterbilt', model: '367', tareWeight: 19000 },
+  { make: 'Peterbilt', model: '567', tareWeight: 19000 },
+  { make: 'Peterbilt', model: '579', tareWeight: 18000 },
+  { make: 'Kenworth', model: 'T800', tareWeight: 19500 },
+  { make: 'Kenworth', model: 'W900', tareWeight: 18000 },
+  { make: 'Kenworth', model: 'T880', tareWeight: 19500 },
+  { make: 'Kenworth', model: 'C500', tareWeight: 21000 },
+  { make: 'Freightliner', model: '122SD', tareWeight: 19500 },
+  { make: 'Freightliner', model: 'Cascadia', tareWeight: 17500 },
+  { make: 'Mack', model: 'Granite', tareWeight: 20000 },
+  { make: 'Mack', model: 'Pinnacle', tareWeight: 19000 },
+  { make: 'Western Star', model: '4900', tareWeight: 19500 },
+  { make: 'Western Star', model: '4700', tareWeight: 18500 },
+  { make: 'International', model: 'HX', tareWeight: 19000 },
+  { make: 'Volvo', model: 'VNX', tareWeight: 18500 },
+];
+
+const TRAILER_PRESETS: VehiclePreset[] = [
+  { make: 'Heil', model: '9400 gal Aluminum', tareWeight: 6500, bblCapacity: 130 },
+  { make: 'Heil', model: '7000 gal Aluminum', tareWeight: 5500, bblCapacity: 100 },
+  { make: 'Heil', model: '5500 gal Steel', tareWeight: 8500, bblCapacity: 80 },
+  { make: 'Polar', model: '9500 gal Aluminum', tareWeight: 7000, bblCapacity: 135 },
+  { make: 'Polar', model: '7000 gal Aluminum', tareWeight: 5800, bblCapacity: 100 },
+  { make: 'Tremcar', model: '9400 gal Aluminum', tareWeight: 6800, bblCapacity: 130 },
+  { make: 'Tremcar', model: '7000 gal Aluminum', tareWeight: 5600, bblCapacity: 100 },
+  { make: 'Dragon', model: '130 BBL Steel', tareWeight: 9500, bblCapacity: 130 },
+  { make: 'Dragon', model: '100 BBL Steel', tareWeight: 8000, bblCapacity: 100 },
+  { make: 'Stephens', model: '130 BBL', tareWeight: 7500, bblCapacity: 130 },
+  { make: 'Tiger', model: 'DOT 412', tareWeight: 8500, bblCapacity: 130 },
+  { make: 'Brenner', model: '9000 gal Aluminum', tareWeight: 6500, bblCapacity: 128 },
+  { make: 'LBT', model: '130 BBL', tareWeight: 7000, bblCapacity: 130 },
+  { make: 'Custom', model: 'Vacuum Trailer', tareWeight: 9000, bblCapacity: 120 },
+];
 import { loadAllCompanies, type CompanyConfig } from '@/lib/companySettings';
 import {
   fetchVehicleDocuments, uploadVehicleDocument, deleteVehicleDocument,
   groupByEquipment, getExpirationStatus, daysUntilExpiration,
+  fetchEquipmentSpecs, saveEquipmentSpecs,
   VEHICLE_DOC_TYPES, VEHICLE_DOC_TYPE_LABELS,
-  type VehicleDocument, type VehicleDocType, type EquipmentGroup,
+  type VehicleDocument, type VehicleDocType, type EquipmentGroup, type EquipmentSpecs,
 } from '@/lib/vehicleDocuments';
 
 interface Props {
@@ -27,6 +75,12 @@ export function EquipmentTab({ scopeCompanyId, isWbAdmin }: Props) {
   const [groups, setGroups] = useState<EquipmentGroup[]>([]);
   const [loading, setLoading] = useState(false);
   const [expandedKey, setExpandedKey] = useState<string | null>(null);
+
+  // Equipment specs (tare weight, capacity, make/model)
+  const [specsMap, setSpecsMap] = useState<Map<string, EquipmentSpecs>>(new Map());
+  const [editingSpecs, setEditingSpecs] = useState<string | null>(null); // key of group being edited
+  const [specsDraft, setSpecsDraft] = useState<Partial<EquipmentSpecs>>({});
+  const [savingSpecs, setSavingSpecs] = useState(false);
 
   // Filter
   const [typeFilter, setTypeFilter] = useState<'all' | 'truck' | 'trailer'>('all');
@@ -74,8 +128,12 @@ export function EquipmentTab({ scopeCompanyId, isWbAdmin }: Props) {
     if (!effectiveCompanyId) return;
     setLoading(true);
     try {
-      const docs = await fetchVehicleDocuments(effectiveCompanyId);
+      const [docs, specs] = await Promise.all([
+        fetchVehicleDocuments(effectiveCompanyId),
+        fetchEquipmentSpecs(effectiveCompanyId),
+      ]);
       setGroups(groupByEquipment(docs));
+      setSpecsMap(specs);
     } catch (err) {
       console.error('[EquipmentTab] Failed to load:', err);
     } finally {
@@ -168,6 +226,45 @@ export function EquipmentTab({ scopeCompanyId, isWbAdmin }: Props) {
     setUploadTarget({ type: addType, number: addNumber.trim().toUpperCase() });
     setShowAddForm(false);
     setAddNumber('');
+  };
+
+  const handleSaveSpecs = async (group: EquipmentGroup) => {
+    if (!effectiveCompanyId) return;
+    setSavingSpecs(true);
+    try {
+      const specs: EquipmentSpecs = {
+        equipmentType: group.equipmentType,
+        equipmentNumber: group.equipmentNumber,
+        tareWeight: specsDraft.tareWeight ? Number(specsDraft.tareWeight) : undefined,
+        bblCapacity: specsDraft.bblCapacity ? Number(specsDraft.bblCapacity) : undefined,
+        make: specsDraft.make || undefined,
+        model: specsDraft.model || undefined,
+        year: specsDraft.year || undefined,
+      };
+      await saveEquipmentSpecs(effectiveCompanyId, specs);
+      const key = `${group.equipmentType}_${group.equipmentNumber}`;
+      setSpecsMap(prev => new Map(prev).set(key, specs));
+      setEditingSpecs(null);
+      setMessage('Equipment specs saved');
+    } catch (err) {
+      console.error('[EquipmentTab] Save specs failed:', err);
+      setMessage('Failed to save specs');
+    } finally {
+      setSavingSpecs(false);
+    }
+  };
+
+  const startEditSpecs = (group: EquipmentGroup) => {
+    const key = `${group.equipmentType}_${group.equipmentNumber}`;
+    const existing = specsMap.get(key);
+    setSpecsDraft({
+      tareWeight: existing?.tareWeight,
+      bblCapacity: existing?.bblCapacity,
+      make: existing?.make || '',
+      model: existing?.model || '',
+      year: existing?.year || '',
+    });
+    setEditingSpecs(key);
   };
 
   const expirationBadge = (expDate?: string) => {
@@ -315,14 +412,160 @@ export function EquipmentTab({ scopeCompanyId, isWbAdmin }: Props) {
                     </span>
                     <span className={`w-2.5 h-2.5 rounded-full ${statusDot}`} />
                   </div>
-                  <span className="text-gray-400 text-sm">{group.documents.length} document{group.documents.length !== 1 ? 's' : ''}</span>
+                  <span className="text-gray-400 text-sm">
+                    {group.documents.length} document{group.documents.length !== 1 ? 's' : ''}
+                    {(() => {
+                      const s = specsMap.get(`${group.equipmentType}_${group.equipmentNumber}`);
+                      if (!s) return null;
+                      const parts = [];
+                      if (s.make) parts.push(`${s.year ? s.year + ' ' : ''}${s.make}`);
+                      if (s.tareWeight) parts.push(`${(s.tareWeight / 1000).toFixed(1)}k lbs`);
+                      if (s.bblCapacity) parts.push(`${s.bblCapacity} BBL`);
+                      return parts.length > 0 ? <span className="text-gray-500 ml-2">· {parts.join(' · ')}</span> : null;
+                    })()}
+                  </span>
                 </div>
                 <span className="text-gray-400 text-xl">{isExpanded ? '▾' : '▸'}</span>
               </button>
 
-              {/* Expanded: document list + upload button */}
+              {/* Expanded: specs + document list + upload button */}
               {isExpanded && (
                 <div className="border-t border-gray-700 p-4">
+                  {/* Equipment specs */}
+                  {(() => {
+                    const specsKey = `${group.equipmentType}_${group.equipmentNumber}`;
+                    const specs = specsMap.get(specsKey);
+                    const isEditing = editingSpecs === specsKey;
+
+                    return (
+                      <div className="mb-4 pb-4 border-b border-gray-700/50">
+                        <div className="flex items-center justify-between mb-2">
+                          <span className="text-gray-400 text-xs font-bold uppercase tracking-wider">Vehicle Specs</span>
+                          {!isEditing && (
+                            <button
+                              onClick={() => startEditSpecs(group)}
+                              className="text-xs text-blue-400 hover:text-blue-300"
+                            >
+                              {specs ? 'Edit' : '+ Add Specs'}
+                            </button>
+                          )}
+                        </div>
+
+                        {isEditing ? (
+                          <div className="space-y-2">
+                            {/* Quick-select from common oilfield vehicles */}
+                            {(() => {
+                              const presets = group.equipmentType === 'truck' ? TRUCK_PRESETS : TRAILER_PRESETS;
+                              const searchVal = `${specsDraft.make || ''} ${specsDraft.model || ''}`.trim().toLowerCase();
+                              const filtered = searchVal.length >= 1
+                                ? presets.filter(p => `${p.make} ${p.model}`.toLowerCase().includes(searchVal))
+                                : presets;
+                              const hasExactMatch = presets.some(p => p.make === specsDraft.make && p.model === specsDraft.model);
+                              return !hasExactMatch && filtered.length > 0 ? (
+                                <div className="flex flex-wrap gap-1">
+                                  {filtered.slice(0, 8).map((p, i) => (
+                                    <button
+                                      key={i}
+                                      className="px-2 py-1 bg-gray-700 hover:bg-gray-600 text-xs text-gray-300 rounded border border-gray-600"
+                                      onClick={() => setSpecsDraft(d => ({
+                                        ...d,
+                                        make: p.make,
+                                        model: p.model,
+                                        tareWeight: p.tareWeight,
+                                        ...(p.bblCapacity ? { bblCapacity: p.bblCapacity } : {}),
+                                      }))}
+                                    >
+                                      {p.make} {p.model} <span className="text-gray-500">~{(p.tareWeight/1000).toFixed(1)}k{p.bblCapacity ? ` ${p.bblCapacity}BBL` : ''}</span>
+                                    </button>
+                                  ))}
+                                </div>
+                              ) : null;
+                            })()}
+                            <div className="grid grid-cols-3 gap-2">
+                              <div>
+                                <label className="text-gray-500 text-xs">Make</label>
+                                <input
+                                  type="text"
+                                  value={specsDraft.make || ''}
+                                  onChange={e => setSpecsDraft(d => ({ ...d, make: e.target.value }))}
+                                  placeholder="e.g. Peterbilt"
+                                  className="w-full px-2 py-1.5 bg-gray-700 text-white rounded text-sm"
+                                />
+                              </div>
+                              <div>
+                                <label className="text-gray-500 text-xs">Model</label>
+                                <input
+                                  type="text"
+                                  value={specsDraft.model || ''}
+                                  onChange={e => setSpecsDraft(d => ({ ...d, model: e.target.value }))}
+                                  placeholder="e.g. 389"
+                                  className="w-full px-2 py-1.5 bg-gray-700 text-white rounded text-sm"
+                                />
+                              </div>
+                              <div>
+                                <label className="text-gray-500 text-xs">Year</label>
+                                <input
+                                  type="text"
+                                  value={specsDraft.year || ''}
+                                  onChange={e => setSpecsDraft(d => ({ ...d, year: e.target.value }))}
+                                  placeholder="e.g. 2022"
+                                  className="w-full px-2 py-1.5 bg-gray-700 text-white rounded text-sm"
+                                />
+                              </div>
+                            </div>
+                            <div className="grid grid-cols-2 gap-2">
+                              <div>
+                                <label className="text-gray-500 text-xs">Tare Weight (lbs)</label>
+                                <input
+                                  type="number"
+                                  value={specsDraft.tareWeight || ''}
+                                  onChange={e => setSpecsDraft(d => ({ ...d, tareWeight: e.target.value ? Number(e.target.value) : undefined }))}
+                                  placeholder={group.equipmentType === 'truck' ? 'e.g. 18000' : 'e.g. 6500'}
+                                  className="w-full px-2 py-1.5 bg-gray-700 text-white rounded text-sm"
+                                />
+                              </div>
+                              {group.equipmentType === 'trailer' && (
+                                <div>
+                                  <label className="text-gray-500 text-xs">BBL Capacity</label>
+                                  <input
+                                    type="number"
+                                    value={specsDraft.bblCapacity || ''}
+                                    onChange={e => setSpecsDraft(d => ({ ...d, bblCapacity: e.target.value ? Number(e.target.value) : undefined }))}
+                                    placeholder="e.g. 130"
+                                    className="w-full px-2 py-1.5 bg-gray-700 text-white rounded text-sm"
+                                  />
+                                </div>
+                              )}
+                            </div>
+                            <div className="flex gap-2 mt-1">
+                              <button
+                                onClick={() => handleSaveSpecs(group)}
+                                disabled={savingSpecs}
+                                className="px-3 py-1 bg-blue-600 hover:bg-blue-700 text-white rounded text-sm disabled:opacity-50"
+                              >
+                                {savingSpecs ? 'Saving...' : 'Save'}
+                              </button>
+                              <button
+                                onClick={() => setEditingSpecs(null)}
+                                className="px-3 py-1 bg-gray-600 hover:bg-gray-500 text-white rounded text-sm"
+                              >
+                                Cancel
+                              </button>
+                            </div>
+                          </div>
+                        ) : specs ? (
+                          <div className="flex flex-wrap gap-x-6 gap-y-1 text-sm">
+                            {specs.make && <span className="text-gray-300">{specs.year ? `${specs.year} ` : ''}{specs.make}{specs.model ? ` ${specs.model}` : ''}</span>}
+                            {specs.tareWeight && <span className="text-gray-400">Tare: <span className="text-white font-mono">{specs.tareWeight.toLocaleString()} lbs</span></span>}
+                            {specs.bblCapacity && <span className="text-gray-400">Capacity: <span className="text-white font-mono">{specs.bblCapacity} BBL</span></span>}
+                          </div>
+                        ) : (
+                          <span className="text-gray-600 text-xs">No specs entered</span>
+                        )}
+                      </div>
+                    );
+                  })()}
+
                   {/* Document list */}
                   {group.documents.map(d => (
                     <div key={d.id} className="flex items-center gap-3 py-3 border-b border-gray-700/50 last:border-0">
