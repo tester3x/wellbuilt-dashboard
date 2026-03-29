@@ -260,8 +260,11 @@ export interface EquipmentSpecs {
   tareWeight?: number;       // lbs, empty vehicle weight
   bblCapacity?: number;      // trailer only: max BBLs
   make?: string;             // e.g. "Peterbilt", "Heil"
-  model?: string;            // e.g. "389", "9400 gal"
+  model?: string;            // e.g. "389"
   year?: string;             // e.g. "2022"
+  // Trailer-specific
+  material?: 'aluminum' | 'steel' | 'fiberglass';
+  axles?: 2 | 3 | 4;
 }
 
 /** Fetch equipment specs for a company. Returns a map keyed by "type_number". */

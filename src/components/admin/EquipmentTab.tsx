@@ -33,22 +33,46 @@ const TRUCK_PRESETS: VehiclePreset[] = [
   { make: 'Volvo', model: 'VNX', tareWeight: 18500 },
 ];
 
-const TRAILER_PRESETS: VehiclePreset[] = [
-  { make: 'Heil', model: '130 BBL Aluminum', tareWeight: 6500, bblCapacity: 130 },
-  { make: 'Heil', model: '100 BBL Aluminum', tareWeight: 5500, bblCapacity: 100 },
-  { make: 'Heil', model: '80 BBL Steel', tareWeight: 8500, bblCapacity: 80 },
-  { make: 'Polar', model: '135 BBL Aluminum', tareWeight: 7000, bblCapacity: 135 },
-  { make: 'Polar', model: '100 BBL Aluminum', tareWeight: 5800, bblCapacity: 100 },
-  { make: 'Tremcar', model: '130 BBL Aluminum', tareWeight: 6800, bblCapacity: 130 },
-  { make: 'Tremcar', model: '100 BBL Aluminum', tareWeight: 5600, bblCapacity: 100 },
-  { make: 'Dragon', model: '130 BBL Steel', tareWeight: 9500, bblCapacity: 130 },
-  { make: 'Dragon', model: '100 BBL Steel', tareWeight: 8000, bblCapacity: 100 },
-  { make: 'Stephens', model: '130 BBL', tareWeight: 7500, bblCapacity: 130 },
-  { make: 'Tiger', model: 'DOT 412 130 BBL', tareWeight: 8500, bblCapacity: 130 },
-  { make: 'Brenner', model: '128 BBL Aluminum', tareWeight: 6500, bblCapacity: 128 },
-  { make: 'LBT', model: '130 BBL', tareWeight: 7000, bblCapacity: 130 },
-  { make: 'Custom', model: 'Vacuum 120 BBL', tareWeight: 9000, bblCapacity: 120 },
+// Trailer tare weight lookup: material × size × axles
+// These are approximate — admin can override
+interface TrailerConfig {
+  material: 'aluminum' | 'steel' | 'fiberglass';
+  bblCapacity: number;
+  axles: 2 | 3 | 4;
+  tareWeight: number;
+}
+
+const TRAILER_CONFIGS: TrailerConfig[] = [
+  // Aluminum — lighter
+  { material: 'aluminum', bblCapacity: 130, axles: 2, tareWeight: 6500 },
+  { material: 'aluminum', bblCapacity: 130, axles: 3, tareWeight: 7500 },
+  { material: 'aluminum', bblCapacity: 100, axles: 2, tareWeight: 5500 },
+  { material: 'aluminum', bblCapacity: 100, axles: 3, tareWeight: 6200 },
+  { material: 'aluminum', bblCapacity: 135, axles: 3, tareWeight: 7800 },
+  { material: 'aluminum', bblCapacity: 150, axles: 3, tareWeight: 8500 },
+  // Steel — heavier
+  { material: 'steel', bblCapacity: 130, axles: 2, tareWeight: 9000 },
+  { material: 'steel', bblCapacity: 130, axles: 3, tareWeight: 10000 },
+  { material: 'steel', bblCapacity: 100, axles: 2, tareWeight: 7500 },
+  { material: 'steel', bblCapacity: 100, axles: 3, tareWeight: 8500 },
+  // Fiberglass
+  { material: 'fiberglass', bblCapacity: 130, axles: 2, tareWeight: 6000 },
+  { material: 'fiberglass', bblCapacity: 130, axles: 3, tareWeight: 7000 },
 ];
+
+function lookupTrailerTare(material: string, bbls: number, axles: number): number | null {
+  // Exact match first
+  const exact = TRAILER_CONFIGS.find(c => c.material === material && c.bblCapacity === bbls && c.axles === axles);
+  if (exact) return exact.tareWeight;
+  // Closest match by material + axles, interpolate by size
+  const sameType = TRAILER_CONFIGS.filter(c => c.material === material && c.axles === axles);
+  if (sameType.length === 0) return null;
+  // Simple linear interpolation from closest
+  sameType.sort((a, b) => Math.abs(a.bblCapacity - bbls) - Math.abs(b.bblCapacity - bbls));
+  const closest = sameType[0];
+  const ratio = bbls / closest.bblCapacity;
+  return Math.round(closest.tareWeight * ratio);
+}
 import { loadAllCompanies, type CompanyConfig } from '@/lib/companySettings';
 import {
   fetchVehicleDocuments, uploadVehicleDocument, deleteVehicleDocument,
@@ -79,7 +103,7 @@ export function EquipmentTab({ scopeCompanyId, isWbAdmin }: Props) {
   // Equipment specs (tare weight, capacity, make/model)
   const [specsMap, setSpecsMap] = useState<Map<string, EquipmentSpecs>>(new Map());
   const [editingSpecs, setEditingSpecs] = useState<string | null>(null); // key of group being edited
-  const [specsDraft, setSpecsDraft] = useState<Partial<EquipmentSpecs>>({});
+  const [specsDraft, setSpecsDraft] = useState<Record<string, any>>({});
   const [savingSpecs, setSavingSpecs] = useState(false);
 
   // Filter
@@ -275,6 +299,10 @@ export function EquipmentTab({ scopeCompanyId, isWbAdmin }: Props) {
         make: specsDraft.make || undefined,
         model: specsDraft.model || undefined,
         year: specsDraft.year || undefined,
+        ...(group.equipmentType === 'trailer' ? {
+          material: specsDraft.material || undefined,
+          axles: specsDraft.axles ? Number(specsDraft.axles) as 2 | 3 | 4 : undefined,
+        } : {}),
       };
       await saveEquipmentSpecs(effectiveCompanyId, specs);
       const key = `${group.equipmentType}_${group.equipmentNumber}`;
@@ -298,6 +326,8 @@ export function EquipmentTab({ scopeCompanyId, isWbAdmin }: Props) {
       make: existing?.make || '',
       model: existing?.model || '',
       year: existing?.year || '',
+      material: (existing as any)?.material || '',
+      axles: (existing as any)?.axles || '',
     });
     setEditingSpecs(key);
   };
@@ -427,7 +457,7 @@ export function EquipmentTab({ scopeCompanyId, isWbAdmin }: Props) {
         {filtered.map(group => {
           const key = `${group.equipmentType}_${group.equipmentNumber}`;
           const isExpanded = expandedKey === key;
-          const icon = group.equipmentType === 'truck' ? '🚛' : '🚜';
+          const icon = group.equipmentType === 'truck' ? '🚛' : '🛢️';
           const statusDot = group.worstExpiration === 'expired' ? 'bg-red-500' :
                             group.worstExpiration === 'expiring' ? 'bg-yellow-500' :
                             group.worstExpiration === 'valid' ? 'bg-green-500' : 'bg-gray-600';
@@ -488,111 +518,138 @@ export function EquipmentTab({ scopeCompanyId, isWbAdmin }: Props) {
 
                         {isEditing ? (
                           <div className="space-y-2">
-                            {/* Quick-select from common oilfield vehicles */}
-                            {(() => {
-                              const presets = group.equipmentType === 'truck' ? TRUCK_PRESETS : TRAILER_PRESETS;
-                              const searchVal = `${specsDraft.make || ''} ${specsDraft.model || ''}`.trim().toLowerCase();
-                              const filtered = searchVal.length >= 1
-                                ? presets.filter(p => `${p.make} ${p.model}`.toLowerCase().includes(searchVal))
-                                : presets;
-                              const hasExactMatch = presets.some(p => p.make === specsDraft.make && p.model === specsDraft.model);
-                              return !hasExactMatch && filtered.length > 0 ? (
-                                <div className="flex flex-wrap gap-1">
-                                  {filtered.slice(0, 8).map((p, i) => (
-                                    <button
-                                      key={i}
-                                      className="px-2 py-1 bg-gray-700 hover:bg-gray-600 text-xs text-gray-300 rounded border border-gray-600"
-                                      onClick={() => setSpecsDraft(d => ({
-                                        ...d,
-                                        make: p.make,
-                                        model: p.model,
-                                        tareWeight: p.tareWeight,
-                                        ...(p.bblCapacity ? { bblCapacity: p.bblCapacity } : {}),
-                                      }))}
-                                    >
-                                      {p.make} {p.model} <span className="text-gray-500">~{(p.tareWeight/1000).toFixed(1)}k{p.bblCapacity ? ` ${p.bblCapacity}BBL` : ''}</span>
-                                    </button>
-                                  ))}
+                            {group.equipmentType === 'truck' ? (
+                              <>
+                                {/* Truck: quick-select presets */}
+                                {(() => {
+                                  const searchVal = `${specsDraft.make || ''} ${specsDraft.model || ''}`.trim().toLowerCase();
+                                  const filtered = searchVal.length >= 1
+                                    ? TRUCK_PRESETS.filter(p => `${p.make} ${p.model}`.toLowerCase().includes(searchVal))
+                                    : TRUCK_PRESETS;
+                                  const hasExactMatch = TRUCK_PRESETS.some(p => p.make === specsDraft.make && p.model === specsDraft.model);
+                                  return !hasExactMatch && filtered.length > 0 ? (
+                                    <div className="flex flex-wrap gap-1">
+                                      {filtered.slice(0, 8).map((p, i) => (
+                                        <button key={i} className="px-2 py-1 bg-gray-700 hover:bg-gray-600 text-xs text-gray-300 rounded border border-gray-600"
+                                          onClick={() => setSpecsDraft(d => ({ ...d, make: p.make, model: p.model, tareWeight: p.tareWeight }))}
+                                        >
+                                          {p.make} {p.model} <span className="text-gray-500">~{(p.tareWeight/1000).toFixed(1)}k</span>
+                                        </button>
+                                      ))}
+                                    </div>
+                                  ) : null;
+                                })()}
+                                <div className="grid grid-cols-3 gap-2">
+                                  <div>
+                                    <label className="text-gray-500 text-xs">Make</label>
+                                    <input type="text" value={specsDraft.make || ''} onChange={e => setSpecsDraft(d => ({ ...d, make: e.target.value }))}
+                                      placeholder="e.g. Peterbilt" className="w-full px-2 py-1.5 bg-gray-700 text-white rounded text-sm" />
+                                  </div>
+                                  <div>
+                                    <label className="text-gray-500 text-xs">Model</label>
+                                    <input type="text" value={specsDraft.model || ''} onChange={e => setSpecsDraft(d => ({ ...d, model: e.target.value }))}
+                                      placeholder="e.g. 389" className="w-full px-2 py-1.5 bg-gray-700 text-white rounded text-sm" />
+                                  </div>
+                                  <div>
+                                    <label className="text-gray-500 text-xs">Year</label>
+                                    <input type="text" value={specsDraft.year || ''} onChange={e => setSpecsDraft(d => ({ ...d, year: e.target.value }))}
+                                      placeholder="e.g. 2022" className="w-full px-2 py-1.5 bg-gray-700 text-white rounded text-sm" />
+                                  </div>
                                 </div>
-                              ) : null;
-                            })()}
-                            <div className="grid grid-cols-3 gap-2">
-                              <div>
-                                <label className="text-gray-500 text-xs">Make</label>
-                                <input
-                                  type="text"
-                                  value={specsDraft.make || ''}
-                                  onChange={e => setSpecsDraft(d => ({ ...d, make: e.target.value }))}
-                                  placeholder="e.g. Peterbilt"
-                                  className="w-full px-2 py-1.5 bg-gray-700 text-white rounded text-sm"
-                                />
-                              </div>
-                              <div>
-                                <label className="text-gray-500 text-xs">Model</label>
-                                <input
-                                  type="text"
-                                  value={specsDraft.model || ''}
-                                  onChange={e => setSpecsDraft(d => ({ ...d, model: e.target.value }))}
-                                  placeholder="e.g. 389"
-                                  className="w-full px-2 py-1.5 bg-gray-700 text-white rounded text-sm"
-                                />
-                              </div>
-                              <div>
-                                <label className="text-gray-500 text-xs">Year</label>
-                                <input
-                                  type="text"
-                                  value={specsDraft.year || ''}
-                                  onChange={e => setSpecsDraft(d => ({ ...d, year: e.target.value }))}
-                                  placeholder="e.g. 2022"
-                                  className="w-full px-2 py-1.5 bg-gray-700 text-white rounded text-sm"
-                                />
-                              </div>
-                            </div>
-                            <div className="grid grid-cols-2 gap-2">
-                              <div>
-                                <label className="text-gray-500 text-xs">Tare Weight (lbs)</label>
-                                <input
-                                  type="number"
-                                  value={specsDraft.tareWeight || ''}
-                                  onChange={e => setSpecsDraft(d => ({ ...d, tareWeight: e.target.value ? Number(e.target.value) : undefined }))}
-                                  placeholder={group.equipmentType === 'truck' ? 'e.g. 18000' : 'e.g. 6500'}
-                                  className="w-full px-2 py-1.5 bg-gray-700 text-white rounded text-sm"
-                                />
-                              </div>
-                              {group.equipmentType === 'trailer' && (
                                 <div>
-                                  <label className="text-gray-500 text-xs">BBL Capacity</label>
-                                  <input
-                                    type="number"
-                                    value={specsDraft.bblCapacity || ''}
-                                    onChange={e => setSpecsDraft(d => ({ ...d, bblCapacity: e.target.value ? Number(e.target.value) : undefined }))}
-                                    placeholder="e.g. 130"
-                                    className="w-full px-2 py-1.5 bg-gray-700 text-white rounded text-sm"
-                                  />
+                                  <label className="text-gray-500 text-xs">Tare Weight (lbs)</label>
+                                  <input type="number" value={specsDraft.tareWeight || ''} onChange={e => setSpecsDraft(d => ({ ...d, tareWeight: e.target.value ? Number(e.target.value) : undefined }))}
+                                    placeholder="e.g. 18000" className="w-full px-2 py-1.5 bg-gray-700 text-white rounded text-sm" />
                                 </div>
-                              )}
-                            </div>
+                              </>
+                            ) : (
+                              <>
+                                {/* Trailer: material, BBLs, axles → auto-lookup tare weight */}
+                                <div className="grid grid-cols-3 gap-2">
+                                  <div>
+                                    <label className="text-gray-500 text-xs">Material</label>
+                                    <select value={specsDraft.material || ''}
+                                      onChange={e => {
+                                        const mat = e.target.value as any;
+                                        const tare = lookupTrailerTare(mat, Number(specsDraft.bblCapacity) || 130, Number(specsDraft.axles) || 2);
+                                        setSpecsDraft(d => ({ ...d, material: mat, ...(tare ? { tareWeight: tare } : {}) }));
+                                      }}
+                                      className="w-full px-2 py-1.5 bg-gray-700 text-white rounded text-sm"
+                                    >
+                                      <option value="">Select...</option>
+                                      <option value="aluminum">Aluminum</option>
+                                      <option value="steel">Steel</option>
+                                      <option value="fiberglass">Fiberglass</option>
+                                    </select>
+                                  </div>
+                                  <div>
+                                    <label className="text-gray-500 text-xs">BBL Capacity</label>
+                                    <input type="number" value={specsDraft.bblCapacity || ''}
+                                      onChange={e => {
+                                        const bbls = Number(e.target.value) || 0;
+                                        const tare = lookupTrailerTare(specsDraft.material || '', bbls, Number(specsDraft.axles) || 2);
+                                        setSpecsDraft(d => ({ ...d, bblCapacity: bbls || undefined, ...(tare ? { tareWeight: tare } : {}) }));
+                                      }}
+                                      placeholder="e.g. 130" className="w-full px-2 py-1.5 bg-gray-700 text-white rounded text-sm" />
+                                  </div>
+                                  <div>
+                                    <label className="text-gray-500 text-xs">Axles</label>
+                                    <select value={specsDraft.axles || ''}
+                                      onChange={e => {
+                                        const ax = Number(e.target.value) || 2;
+                                        const tare = lookupTrailerTare(specsDraft.material || '', Number(specsDraft.bblCapacity) || 130, ax);
+                                        setSpecsDraft(d => ({ ...d, axles: ax, ...(tare ? { tareWeight: tare } : {}) }));
+                                      }}
+                                      className="w-full px-2 py-1.5 bg-gray-700 text-white rounded text-sm"
+                                    >
+                                      <option value="">Select...</option>
+                                      <option value="2">2-axle</option>
+                                      <option value="3">3-axle</option>
+                                      <option value="4">4-axle</option>
+                                    </select>
+                                  </div>
+                                </div>
+                                <div className="grid grid-cols-2 gap-2">
+                                  <div>
+                                    <label className="text-gray-500 text-xs">Tare Weight (lbs) <span className="text-gray-600">— auto-estimated, override if known</span></label>
+                                    <input type="number" value={specsDraft.tareWeight || ''} onChange={e => setSpecsDraft(d => ({ ...d, tareWeight: e.target.value ? Number(e.target.value) : undefined }))}
+                                      placeholder="e.g. 6500" className="w-full px-2 py-1.5 bg-gray-700 text-white rounded text-sm" />
+                                  </div>
+                                  <div>
+                                    <label className="text-gray-500 text-xs">Make / Model <span className="text-gray-600">— optional</span></label>
+                                    <input type="text" value={`${specsDraft.make || ''}${specsDraft.model ? ' ' + specsDraft.model : ''}`}
+                                      onChange={e => {
+                                        const parts = e.target.value.split(' ');
+                                        setSpecsDraft(d => ({ ...d, make: parts[0] || '', model: parts.slice(1).join(' ') || '' }));
+                                      }}
+                                      placeholder="e.g. Heil, Dragon..." className="w-full px-2 py-1.5 bg-gray-700 text-white rounded text-sm" />
+                                  </div>
+                                </div>
+                              </>
+                            )}
+                            {/* Save / Cancel — shared */}
                             <div className="flex gap-2 mt-1">
-                              <button
-                                onClick={() => handleSaveSpecs(group)}
-                                disabled={savingSpecs}
+                              <button onClick={() => handleSaveSpecs(group)} disabled={savingSpecs}
                                 className="px-3 py-1 bg-blue-600 hover:bg-blue-700 text-white rounded text-sm disabled:opacity-50"
-                              >
-                                {savingSpecs ? 'Saving...' : 'Save'}
-                              </button>
-                              <button
-                                onClick={() => setEditingSpecs(null)}
+                              >{savingSpecs ? 'Saving...' : 'Save'}</button>
+                              <button onClick={() => setEditingSpecs(null)}
                                 className="px-3 py-1 bg-gray-600 hover:bg-gray-500 text-white rounded text-sm"
-                              >
-                                Cancel
-                              </button>
+                              >Cancel</button>
                             </div>
                           </div>
                         ) : specs ? (
                           <div className="flex flex-wrap gap-x-6 gap-y-1 text-sm">
-                            {specs.make && <span className="text-gray-300">{specs.year ? `${specs.year} ` : ''}{specs.make}{specs.model ? ` ${specs.model}` : ''}</span>}
+                            {group.equipmentType === 'truck' && specs.make && (
+                              <span className="text-gray-300">{specs.year ? `${specs.year} ` : ''}{specs.make}{specs.model ? ` ${specs.model}` : ''}</span>
+                            )}
+                            {group.equipmentType === 'trailer' && (specs as any).material && (
+                              <span className="text-gray-300 capitalize">{(specs as any).material}{(specs as any).axles ? ` ${(specs as any).axles}-axle` : ''}</span>
+                            )}
                             {specs.tareWeight && <span className="text-gray-400">Tare: <span className="text-white font-mono">{specs.tareWeight.toLocaleString()} lbs</span></span>}
                             {specs.bblCapacity && <span className="text-gray-400">Capacity: <span className="text-white font-mono">{specs.bblCapacity} BBL</span></span>}
+                            {group.equipmentType === 'trailer' && specs.make && (
+                              <span className="text-gray-500 text-xs">{specs.make}{specs.model ? ` ${specs.model}` : ''}</span>
+                            )}
                           </div>
                         ) : (
                           <span className="text-gray-600 text-xs">No specs entered</span>
