@@ -2,6 +2,14 @@
 
 import { useEffect, useState, useRef, useMemo } from 'react';
 import { useAuth } from '@/contexts/AuthContext';
+import { loadAllCompanies, type CompanyConfig } from '@/lib/companySettings';
+import {
+  fetchVehicleDocuments, uploadVehicleDocument, deleteVehicleDocument,
+  groupByEquipment, getExpirationStatus, daysUntilExpiration,
+  fetchEquipmentSpecs, saveEquipmentSpecs,
+  VEHICLE_DOC_TYPES, VEHICLE_DOC_TYPE_LABELS,
+  type VehicleDocument, type VehicleDocType, type EquipmentGroup, type EquipmentSpecs,
+} from '@/lib/vehicleDocuments';
 
 // ── Common oilfield vehicle specs (hardcoded quick-lookup) ──────────────
 // Tare weights are approximate mid-range for typical water hauler configs.
@@ -73,14 +81,6 @@ function lookupTrailerTare(material: string, bbls: number, axles: number): numbe
   const ratio = bbls / closest.bblCapacity;
   return Math.round(closest.tareWeight * ratio);
 }
-import { loadAllCompanies, type CompanyConfig } from '@/lib/companySettings';
-import {
-  fetchVehicleDocuments, uploadVehicleDocument, deleteVehicleDocument,
-  groupByEquipment, getExpirationStatus, daysUntilExpiration,
-  fetchEquipmentSpecs, saveEquipmentSpecs,
-  VEHICLE_DOC_TYPES, VEHICLE_DOC_TYPE_LABELS,
-  type VehicleDocument, type VehicleDocType, type EquipmentGroup, type EquipmentSpecs,
-} from '@/lib/vehicleDocuments';
 
 interface Props {
   scopeCompanyId?: string;
