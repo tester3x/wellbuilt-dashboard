@@ -260,8 +260,12 @@ export function EquipmentTab({ scopeCompanyId, isWbAdmin }: Props) {
   };
 
   const handleSaveSpecs = async (group: EquipmentGroup) => {
-    if (!effectiveCompanyId) return;
+    if (!effectiveCompanyId) {
+      setMessage('No company selected');
+      return;
+    }
     setSavingSpecs(true);
+    console.log('[EquipmentTab] Saving specs for', group.equipmentType, group.equipmentNumber, 'company:', effectiveCompanyId);
     try {
       const specs: EquipmentSpecs = {
         equipmentType: group.equipmentType,
