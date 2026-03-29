@@ -39,6 +39,9 @@ interface WellConfig {
   ndicName?: string;   // Full NDIC well name (e.g. "GABRIEL 1-36-25H")
   ndicApiNo?: string;  // NDIC API number (e.g. "33-053-06789-00-00")
   avgFlowRate?: string;
+  // Water properties — used for smart dispatch (service work sourcing)
+  waterWeight?: number;     // lbs/gal (default ~8.34 for fresh, 8.5-10+ for produced)
+  h2sStatus?: 'none' | 'low' | 'high' | 'unknown';  // H2S presence at well
   // Route recording — GPS breadcrumb capture for wells with bad Google Maps directions
   routeRecording?: boolean;
   // Well pad grouping — wells on the same pad share routes with a primary well
@@ -67,6 +70,8 @@ export default function AdminPage() {
   const [newWellPullBbls, setNewWellPullBbls] = useState('140');
   const [newWellTankCapacity, setNewWellTankCapacity] = useState('400');
   const [newWellTankHeight, setNewWellTankHeight] = useState('20');
+  const [newWellWaterWeight, setNewWellWaterWeight] = useState('');
+  const [newWellH2s, setNewWellH2s] = useState<'none' | 'low' | 'high' | 'unknown'>('unknown');
   // Tank calculator (optional — for when there's no nameplate)
   const [showTankCalc, setShowTankCalc] = useState(false);
   const [calcDiameter, setCalcDiameter] = useState('');
@@ -78,6 +83,8 @@ export default function AdminPage() {
   const [editWellPullBbls, setEditWellPullBbls] = useState('');
   const [editWellTankCapacity, setEditWellTankCapacity] = useState('');
   const [editWellTankHeight, setEditWellTankHeight] = useState('');
+  const [editWellWaterWeight, setEditWellWaterWeight] = useState('');
+  const [editWellH2s, setEditWellH2s] = useState<'none' | 'low' | 'high' | 'unknown'>('unknown');
   const [showEditTankCalc, setShowEditTankCalc] = useState(false);
   const [editCalcDiameter, setEditCalcDiameter] = useState('');
 
@@ -257,6 +264,8 @@ export default function AdminPage() {
       setEditWellPullBbls(String(config.pullBbls || 140));
       setEditWellTankCapacity(String(config.tankCapacity || 400));
       setEditWellTankHeight(String(config.tankHeight || 20));
+      setEditWellWaterWeight(config.waterWeight ? String(config.waterWeight) : '');
+      setEditWellH2s((config as any).h2sStatus || 'unknown');
       // Load NDIC linkage if present
       setEditNdicName(config.ndicName || '');
       setEditNdicApiNo(config.ndicApiNo || '');
@@ -708,6 +717,9 @@ export default function AdminPage() {
         ndicName: ndicSelectedWell.well_name,
         ndicApiNo: ndicSelectedWell.api_no,
       } : {}),
+      // Water properties
+      ...(newWellWaterWeight ? { waterWeight: parseFloat(newWellWaterWeight) } : {}),
+      h2sStatus: newWellH2s,
     };
 
     await set(ref(db, `well_config/${wellName}`), config);
@@ -761,6 +773,9 @@ export default function AdminPage() {
       // NDIC linkage
       ...(editNdicName ? { ndicName: editNdicName } : {}),
       ...(editNdicApiNo ? { ndicApiNo: editNdicApiNo } : {}),
+      // Water properties
+      ...(editWellWaterWeight ? { waterWeight: parseFloat(editWellWaterWeight) } : {}),
+      h2sStatus: editWellH2s,
     };
 
     if (isNameChanged) {
@@ -1297,6 +1312,36 @@ export default function AdminPage() {
                       </div>
                     </div>
                   )}
+                  {/* Water properties */}
+                  <div className="grid grid-cols-2 gap-3 mt-3">
+                    <div>
+                      <label className="text-gray-400 text-sm">Water Weight (lbs/gal)</label>
+                      <input
+                        type="number"
+                        step="0.1"
+                        value={newWellWaterWeight}
+                        onChange={(e) => setNewWellWaterWeight(e.target.value)}
+                        placeholder="e.g. 8.34"
+                        className="w-full px-3 py-2 bg-gray-700 text-white rounded"
+                      />
+                    </div>
+                    <div>
+                      <label className="text-gray-400 text-sm">H₂S Status</label>
+                      <select
+                        value={newWellH2s}
+                        onChange={(e) => setNewWellH2s(e.target.value as any)}
+                        className="w-full px-3 py-2 bg-gray-700 text-white rounded"
+                      >
+                        <option value="unknown">Unknown</option>
+                        <option value="none">None</option>
+                        <option value="low">Low</option>
+                        <option value="high">High</option>
+                      </select>
+                    </div>
+                  </div>
+                  <div className="text-xs text-gray-600 mt-1">
+                    Fresh water ≈ 8.34 lbs/gal · Produced water ≈ 8.5–10+ lbs/gal
+                  </div>
                   {(() => {
                     const isDuplicate = newWellName.trim().length > 0 && Object.keys(configs).some(k => k.toLowerCase() === newWellName.trim().toLowerCase());
                     const canAdd = ndicSelectedWell && !isDuplicate;
@@ -1520,6 +1565,38 @@ export default function AdminPage() {
                         </div>
                       </div>
                     )}
+                    {/* Water properties */}
+                    <div className="grid grid-cols-2 gap-3 mt-3">
+                      <div>
+                        <label className="text-gray-400 text-sm">Water Weight (lbs/gal)</label>
+                        <input
+                          type="number"
+                          step="0.1"
+                          value={editWellWaterWeight}
+                          onChange={(e) => setEditWellWaterWeight(e.target.value)}
+                          placeholder="e.g. 8.34"
+                          className="w-full px-3 py-2 bg-gray-700 text-white rounded"
+                          disabled={isRenaming}
+                        />
+                      </div>
+                      <div>
+                        <label className="text-gray-400 text-sm">H₂S Status</label>
+                        <select
+                          value={editWellH2s}
+                          onChange={(e) => setEditWellH2s(e.target.value as any)}
+                          className="w-full px-3 py-2 bg-gray-700 text-white rounded"
+                          disabled={isRenaming}
+                        >
+                          <option value="unknown">Unknown</option>
+                          <option value="none">None</option>
+                          <option value="low">Low</option>
+                          <option value="high">High</option>
+                        </select>
+                      </div>
+                    </div>
+                    <div className="text-xs text-gray-600 mt-1">
+                      Fresh water ≈ 8.34 lbs/gal · Produced water ≈ 8.5–10+ lbs/gal
+                    </div>
                     <div className="flex gap-2 mt-2">
                       <button
                         onClick={handleUpdateWell}
