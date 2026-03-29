@@ -34,20 +34,20 @@ const TRUCK_PRESETS: VehiclePreset[] = [
 ];
 
 const TRAILER_PRESETS: VehiclePreset[] = [
-  { make: 'Heil', model: '9400 gal Aluminum', tareWeight: 6500, bblCapacity: 130 },
-  { make: 'Heil', model: '7000 gal Aluminum', tareWeight: 5500, bblCapacity: 100 },
-  { make: 'Heil', model: '5500 gal Steel', tareWeight: 8500, bblCapacity: 80 },
-  { make: 'Polar', model: '9500 gal Aluminum', tareWeight: 7000, bblCapacity: 135 },
-  { make: 'Polar', model: '7000 gal Aluminum', tareWeight: 5800, bblCapacity: 100 },
-  { make: 'Tremcar', model: '9400 gal Aluminum', tareWeight: 6800, bblCapacity: 130 },
-  { make: 'Tremcar', model: '7000 gal Aluminum', tareWeight: 5600, bblCapacity: 100 },
+  { make: 'Heil', model: '130 BBL Aluminum', tareWeight: 6500, bblCapacity: 130 },
+  { make: 'Heil', model: '100 BBL Aluminum', tareWeight: 5500, bblCapacity: 100 },
+  { make: 'Heil', model: '80 BBL Steel', tareWeight: 8500, bblCapacity: 80 },
+  { make: 'Polar', model: '135 BBL Aluminum', tareWeight: 7000, bblCapacity: 135 },
+  { make: 'Polar', model: '100 BBL Aluminum', tareWeight: 5800, bblCapacity: 100 },
+  { make: 'Tremcar', model: '130 BBL Aluminum', tareWeight: 6800, bblCapacity: 130 },
+  { make: 'Tremcar', model: '100 BBL Aluminum', tareWeight: 5600, bblCapacity: 100 },
   { make: 'Dragon', model: '130 BBL Steel', tareWeight: 9500, bblCapacity: 130 },
   { make: 'Dragon', model: '100 BBL Steel', tareWeight: 8000, bblCapacity: 100 },
   { make: 'Stephens', model: '130 BBL', tareWeight: 7500, bblCapacity: 130 },
-  { make: 'Tiger', model: 'DOT 412', tareWeight: 8500, bblCapacity: 130 },
-  { make: 'Brenner', model: '9000 gal Aluminum', tareWeight: 6500, bblCapacity: 128 },
+  { make: 'Tiger', model: 'DOT 412 130 BBL', tareWeight: 8500, bblCapacity: 130 },
+  { make: 'Brenner', model: '128 BBL Aluminum', tareWeight: 6500, bblCapacity: 128 },
   { make: 'LBT', model: '130 BBL', tareWeight: 7000, bblCapacity: 130 },
-  { make: 'Custom', model: 'Vacuum Trailer', tareWeight: 9000, bblCapacity: 120 },
+  { make: 'Custom', model: 'Vacuum 120 BBL', tareWeight: 9000, bblCapacity: 120 },
 ];
 import { loadAllCompanies, type CompanyConfig } from '@/lib/companySettings';
 import {
