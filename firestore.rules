@@ -168,6 +168,18 @@ service cloud.firestore {
       allow write: if false;
     }
 
+    // App registry — WB ecosystem app switcher (read-only, WB admin writes via Admin SDK)
+    match /app_registry/{appId} {
+      allow read: if true;
+      allow write: if false;
+    }
+
+    // Overweight fine schedules — per-state (read-only, WB admin writes via Admin SDK)
+    match /overweight_fines/{stateId} {
+      allow read: if true;
+      allow write: if false;
+    }
+
     // Job type usage tracking — R&D pipeline for custom job type promotion/pruning
     match /job_type_usage/{typeId} {
       allow read, write: if true;
