@@ -1921,3 +1921,66 @@ export const triggerDieselFetch = httpsV2.onRequest(
     res.json({ success: true, updated: results.length, results });
   }
 );
+
+// ============================================================
+// PHOTO CLEANUP: Auto-delete expired CYA photos from Storage
+// Runs daily at 3am. Per-company retention from photoRetentionDays.
+// ============================================================
+export const cleanupExpiredPhotos = functionsV2.onSchedule('every day 03:00', async (event) => {
+  console.log('[PhotoCleanup] Starting expired photo cleanup...');
+  const firestore = admin.firestore();
+  const storage = admin.storage().bucket();
+
+  // 1. Load all companies to get per-company retention
+  const companiesSnap = await firestore.collection('companies').get();
+  const retentionByCompany: Record<string, number> = {};
+  companiesSnap.docs.forEach(doc => {
+    const data = doc.data();
+    retentionByCompany[doc.id] = data.photoRetentionDays || 30;
+  });
+
+  // 2. Query closed invoices with photos
+  const invoicesSnap = await firestore.collection('invoices')
+    .where('status', '==', 'closed')
+    .get();
+
+  let deletedCount = 0;
+  let cleanedInvoices = 0;
+
+  for (const doc of invoicesSnap.docs) {
+    const data = doc.data();
+    const photos: string[] = data.photos || [];
+    if (photos.length === 0) continue;
+
+    // Check if past retention window
+    const closedAt = data.closedAt?.toDate?.() || data.closedAt;
+    if (!closedAt) continue;
+
+    const companyId = data.companyId || '';
+    const retentionDays = retentionByCompany[companyId] || 30;
+    const cutoff = new Date();
+    cutoff.setDate(cutoff.getDate() - retentionDays);
+
+    const closedDate = closedAt instanceof Date ? closedAt : new Date(closedAt);
+    if (closedDate > cutoff) continue; // Not expired yet
+
+    // 3. Delete each photo from Storage
+    for (const url of photos) {
+      try {
+        const match = url.match(/\/o\/(.+?)\?/);
+        if (!match) continue;
+        const filePath = decodeURIComponent(match[1]);
+        await storage.file(filePath).delete().catch(() => {});
+        deletedCount++;
+      } catch (err) {
+        console.warn('[PhotoCleanup] Failed to delete photo:', err);
+      }
+    }
+
+    // 4. Clear photos array on invoice
+    await doc.ref.update({ photos: [] });
+    cleanedInvoices++;
+  }
+
+  console.log(`[PhotoCleanup] Done. Deleted ${deletedCount} photos from ${cleanedInvoices} invoices.`);
+});

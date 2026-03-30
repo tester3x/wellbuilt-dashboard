@@ -406,6 +406,10 @@ export interface CompanyConfig {
   // ticket_only: No invoice wrapper. Ticket = billing doc. Driver skips invoice screen.
   // hybrid: Single ticket acts standalone. Second load auto-creates invoice wrapper.
   invoicingMode?: 'invoice_tickets' | 'ticket_only' | 'hybrid';
+  // Photo capture settings
+  requirePhotos?: boolean;       // Require CYA photos before closing a job
+  minPhotoCount?: number;        // Minimum photos required (default 1 when required)
+  photoRetentionDays?: number;   // Auto-delete photos after N days (default 30)
 }
 
 export interface CustomJobType {
