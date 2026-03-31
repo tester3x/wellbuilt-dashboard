@@ -1,7 +1,7 @@
 'use client';
 
-import { useEffect, useState, useMemo } from 'react';
-import { useRouter } from 'next/navigation';
+import { useEffect, useState, useMemo, useCallback, Suspense } from 'react';
+import { useRouter, useSearchParams } from 'next/navigation';
 import { useAuth } from '@/contexts/AuthContext';
 import { WellResponse, subscribeToWellStatusesUnified } from '@/lib/wells';
 import { AppHeader } from '@/components/AppHeader';
@@ -310,7 +310,7 @@ function timeAgo(ts: any): string {
 
 // ─── Main Component ──────────────────────────────────────────────────────────
 
-export default function DispatchPage() {
+function DispatchPageInner() {
   const { user, loading } = useAuth();
   const router = useRouter();
 
@@ -428,7 +428,21 @@ export default function DispatchPage() {
   const [reassignLoads, setReassignLoads] = useState(0); // 0 = all loads
 
   // Right panel tab
+  const searchParams = useSearchParams();
   const [rightPanelTab, setRightPanelTab] = useState<'jobs' | 'completed' | 'projects'>('jobs');
+  const [highlightJobId, setHighlightJobId] = useState<string | null>(null);
+
+  // Handle URL params from notification deep links (e.g., ?tab=completed&highlight=abc123)
+  useEffect(() => {
+    const tab = searchParams.get('tab');
+    const highlight = searchParams.get('highlight');
+    if (tab === 'completed') {
+      setRightPanelTab('completed');
+      if (highlight) setHighlightJobId(highlight);
+    } else if (tab === 'projects') {
+      setRightPanelTab('projects');
+    }
+  }, [searchParams]);
 
   // Projects state
   const [projects, setProjects] = useState<Project[]>([]);
@@ -2475,6 +2489,8 @@ export default function DispatchPage() {
                     drivers={drivers}
                     allWells={allOperatorWells}
                     allDisposals={allDisposals}
+                    highlightJobId={highlightJobId}
+                    onHighlightClear={() => setHighlightJobId(null)}
                   />
                 )}
                 {rightPanelTab === 'projects' && !selectedProject && (
@@ -3539,11 +3555,13 @@ function ActiveDispatchPanel({ dispatches, cancelDispatch, drivers, assignTransf
 
 // ─── Completed Jobs Panel (own tab) ──────────────────────────────────────────
 
-function CompletedJobsPanel({ jobs, drivers, allWells, allDisposals }: {
+function CompletedJobsPanel({ jobs, drivers, allWells, allDisposals, highlightJobId, onHighlightClear }: {
   jobs: DispatchJob[];
   drivers?: { key: string; displayName: string; legalName?: string }[];
   allWells?: NdicWell[];
   allDisposals?: NdicWell[];
+  highlightJobId?: string | null;
+  onHighlightClear?: () => void;
 }) {
   const [driverFilter, setDriverFilter] = useState<string>('all');
   const [searchQuery, setSearchQuery] = useState('');
@@ -3559,6 +3577,17 @@ function CompletedJobsPanel({ jobs, drivers, allWells, allDisposals }: {
   const [showWellDropdown, setShowWellDropdown] = useState(false);
   const [showDisposalDropdown, setShowDisposalDropdown] = useState(false);
   const [ticketDetailJobId, setTicketDetailJobId] = useState<string | null>(null);
+
+  // Auto-expand highlighted job from notification deep link
+  useEffect(() => {
+    if (highlightJobId && jobs.some(j => j.id === highlightJobId)) {
+      setExpandedJobId(highlightJobId);
+      setDateRange('all'); // Ensure the job is visible regardless of date filter
+      // Clear highlight after 5 seconds
+      const timer = setTimeout(() => onHighlightClear?.(), 5000);
+      return () => clearTimeout(timer);
+    }
+  }, [highlightJobId, jobs]);
   const [ticketDetailData, setTicketDetailData] = useState<any>(null);
   const [ticketDetailLoading, setTicketDetailLoading] = useState(false);
 
@@ -3825,12 +3854,15 @@ function CompletedJobsPanel({ jobs, drivers, allWells, allDisposals }: {
           const driverName = getDriverFullName(job.driverHash);
           const loads = job.loadsCompleted || job.loadCount || 1;
           const isExpanded = expandedJobId === job.id;
+          const isHighlighted = highlightJobId === job.id;
 
           return (
             <div
               key={job.id}
               className={`border rounded-lg transition-colors cursor-pointer ${
-                isExpanded
+                isHighlighted
+                  ? 'border-cyan-500 bg-cyan-950/30 ring-1 ring-cyan-500/50'
+                  : isExpanded
                   ? 'border-green-600/50 bg-gray-800/80'
                   : 'border-gray-700/50 bg-gray-800/50 hover:border-gray-600/50'
               }`}
@@ -4954,5 +4986,14 @@ function ProjectDetailPanel({ project, projectDispatches, projectInvoices, drive
         </div>
       )}
     </div>
+  );
+}
+
+// Wrap in Suspense for useSearchParams
+export default function DispatchPage() {
+  return (
+    <Suspense fallback={null}>
+      <DispatchPageInner />
+    </Suspense>
   );
 }

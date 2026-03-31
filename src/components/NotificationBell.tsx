@@ -182,7 +182,7 @@ export function NotificationBell() {
           timestamp: ts,
           read: false, // read state computed at render time from readIdsRef
           actionLabel: 'View',
-          actionHref: '/dispatch',
+          actionHref: `/dispatch?tab=completed&highlight=${doc.id}`,
         });
       });
 
