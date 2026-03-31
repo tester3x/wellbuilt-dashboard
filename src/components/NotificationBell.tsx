@@ -178,7 +178,7 @@ export function NotificationBell() {
           id,
           category: 'dispatch_update',
           title: 'Dispatch Completed',
-          message: `${data.driverName || 'Driver'} completed ${data.wellName || 'job'}`,
+          message: `${data.driver || data.driverFirstName || data.driverName || 'Driver'} completed ${data.wellName || 'job'}`,
           timestamp: ts,
           read: false, // read state computed at render time from readIdsRef
           actionLabel: 'View',
