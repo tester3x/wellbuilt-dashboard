@@ -2181,7 +2181,13 @@ function DispatchPageInner() {
                     <input
                       type="datetime-local"
                       value={swOnsiteBy}
-                      onChange={(e) => setSwOnsiteBy(e.target.value)}
+                      onChange={(e) => {
+                        const val = e.target.value;
+                        // Guard against malformed years (e.g., 202600 from extra keystrokes)
+                        if (val && val.length > 16) return;
+                        setSwOnsiteBy(val);
+                      }}
+                      max="2099-12-31T23:59"
                       className="w-full px-3 py-1.5 bg-gray-900 border border-gray-700 rounded text-white text-sm focus:outline-none focus:border-purple-500"
                     />
                   </div>
