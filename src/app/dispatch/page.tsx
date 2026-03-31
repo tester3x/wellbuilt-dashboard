@@ -895,6 +895,12 @@ export default function DispatchPage() {
 
       setMessage(`Dispatched ${assignTarget.wellName} to ${driver.legalName || driver.displayName}`);
       setAssignTarget(null);
+      setAssignDriverHash('');
+      setAssignNotes('');
+      setAssignDisposal('');
+      setAssignDisposalWell(null);
+      setDisposalSearch('');
+      setDisposalResults([]);
       setTimeout(() => setMessage(''), 4000);
     } catch (err: any) {
       setAssignTarget(null);
