@@ -2356,7 +2356,7 @@ export default function DispatchPage() {
                   >
                     Active Jobs
                     {(() => {
-                      const activeCount = dispatches.filter(d => !['completed', 'cancelled', 'dismissed', 'declined'].includes(d.status)).length;
+                      const activeCount = dispatches.filter(d => !['completed', 'dismissed'].includes(d.status)).length;
                       return activeCount > 0 ? (
                         <span className={`ml-1 px-1.5 py-0.5 text-[10px] rounded font-bold ${
                           rightPanelTab === 'jobs' ? 'bg-blue-500/40 text-blue-100' : 'bg-blue-600/20 text-blue-400'
