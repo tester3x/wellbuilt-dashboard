@@ -3807,6 +3807,7 @@ function CompletedJobsPanel({ jobs, drivers, allWells, allDisposals }: {
       ) : (
         filtered.map(job => {
           const completed = toDate(job.completedAt);
+          const accepted = toDate((job as any).acceptedAt) || toDate(job.assignedAt);
           const assigned = toDate(job.assignedAt);
           const timeStr = completed ? completed.toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' }) : '';
           const dateStr = completed ? completed.toLocaleDateString([], { month: 'short', day: 'numeric' }) : '';
@@ -4018,11 +4019,11 @@ function CompletedJobsPanel({ jobs, drivers, allWells, allDisposals }: {
                   <div className="border-t border-gray-700/30 pt-2">
                     <div className="text-gray-500 text-[10px] uppercase tracking-wider mb-1.5">Timeline</div>
                     <div className="flex items-center gap-4 text-xs">
-                      {assigned && (
+                      {(accepted || assigned) && (
                         <div className="flex items-center gap-1.5">
                           <div className="w-1.5 h-1.5 rounded-full bg-blue-500" />
-                          <span className="text-gray-400">Dispatched</span>
-                          <span className="text-gray-300">{assigned.toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' })}</span>
+                          <span className="text-gray-400">{accepted ? 'Accepted' : 'Dispatched'}</span>
+                          <span className="text-gray-300">{(accepted || assigned)!.toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' })}</span>
                         </div>
                       )}
                       {completed && (
