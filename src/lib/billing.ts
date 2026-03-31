@@ -362,7 +362,7 @@ export async function fetchBillingData(
 
     const item: BillingLineItem = {
       invoiceId: docSnap.id,
-      invoiceNumber: d.invoiceNumber || '',
+      invoiceNumber: d.invoiceNumber || (d.tickets?.length ? d.tickets[0] : ''),
       date: d.date || '',
       wellName: d.wellName || '',
       hauledTo: d.hauledTo || '',

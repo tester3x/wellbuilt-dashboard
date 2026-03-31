@@ -83,7 +83,8 @@ interface DispatchJob {
   disposalName?: string;  // Drop-off for SW jobs
   onsiteBy?: string;  // "Be onsite by" deadline (HH:MM)
   // Live job info — written by WB T as driver progresses
-  invoiceNumber?: string;  // Invoice # for this dispatch
+  invoiceNumber?: string;  // Invoice # for this dispatch (i+t mode)
+  ticketNumber?: string;  // Ticket # for this dispatch (s_t mode)
   hauledTo?: string;  // Current drop-off destination (driver may change mid-job)
   totalBBL?: number;  // Total BBLs hauled (written on job complete)
   // Driver-initiated job tracking (liveDispatchSync)
@@ -3184,11 +3185,11 @@ function DispatchJobRow({ job, cancelDispatch, compact, onClickServiceWork, onRe
       </div>
 
       {/* Detail row — invoice #, drop-off, notes */}
-      {(job.invoiceNumber || dropoff || job.notes) && (
+      {(job.invoiceNumber || job.ticketNumber || dropoff || job.notes) && (
         <div className="flex items-center gap-3 mt-1.5 ml-[42px] text-xs">
-          {job.invoiceNumber && (
+          {(job.invoiceNumber || job.ticketNumber) && (
             <span className="text-gray-400">
-              <span className="text-gray-600">#</span>{job.invoiceNumber}
+              <span className="text-gray-600">#</span>{job.invoiceNumber || job.ticketNumber}
             </span>
           )}
           {dropoff && (
@@ -3519,19 +3520,32 @@ function CompletedJobsPanel({ jobs, drivers, allWells, allDisposals }: {
   const [ticketDetailLoading, setTicketDetailLoading] = useState(false);
 
   // Fetch invoice/ticket data from Firestore for inline viewing
-  async function loadTicketDetail(invoiceNumber: string, jobId: string) {
+  // Supports lookup by invoiceDocId (preferred for s_t) or invoiceNumber (fallback for i+t)
+  async function loadTicketDetail(identifier: string, jobId: string, invoiceDocId?: string) {
     if (ticketDetailJobId === jobId) { setTicketDetailJobId(null); return; } // toggle off
     setTicketDetailJobId(jobId);
     setTicketDetailLoading(true);
     try {
-      const { collection, query, where, getDocs } = await import('firebase/firestore');
+      const { collection, query, where, getDocs, doc, getDoc } = await import('firebase/firestore');
       const { getFirestoreDb } = await import('@/lib/firebase');
       const db = getFirestoreDb();
-      // Search invoices by invoiceNumber
-      const q = query(collection(db, 'invoices'), where('invoiceNumber', '==', invoiceNumber));
-      const snap = await getDocs(q);
-      if (!snap.empty) {
-        const inv = snap.docs[0].data();
+
+      let inv: any = null;
+
+      // Prefer direct doc lookup by invoiceDocId (reliable for both s_t and i+t)
+      if (invoiceDocId) {
+        const docSnap = await getDoc(doc(db, 'invoices', invoiceDocId));
+        if (docSnap.exists()) inv = docSnap.data();
+      }
+
+      // Fallback: search by invoiceNumber (legacy i+t jobs without invoiceDocId on dispatch)
+      if (!inv && identifier) {
+        const q = query(collection(db, 'invoices'), where('invoiceNumber', '==', identifier));
+        const snap = await getDocs(q);
+        if (!snap.empty) inv = snap.docs[0].data();
+      }
+
+      if (inv) {
         // Also fetch child tickets
         const ticketNumbers = inv.tickets || [];
         const tickets: any[] = [];
@@ -3655,7 +3669,7 @@ function CompletedJobsPanel({ jobs, drivers, allWells, allDisposals }: {
         const q = searchQuery.toLowerCase().trim();
         const wellName = (job.ndicWellName || job.wellName || '').toLowerCase();
         const disposal = (job.disposal || job.hauledTo || '').toLowerCase();
-        const invoiceNum = (job.invoiceNumber || '').toLowerCase();
+        const invoiceNum = (job.invoiceNumber || job.ticketNumber || '').toLowerCase();
         const driverName = getDriverFullName(job.driverHash).toLowerCase();
         const serviceType = (job.serviceType || '').toLowerCase();
         if (!wellName.includes(q) && !disposal.includes(q) && !invoiceNum.includes(q) && !driverName.includes(q) && !serviceType.includes(q)) return false;
@@ -3798,7 +3812,7 @@ function CompletedJobsPanel({ jobs, drivers, allWells, allDisposals }: {
                   {(job.totalBBL || 0) > 0 && <span className="text-blue-400">{job.totalBBL} BBL</span>}
                   {loads > 1 && <span>{loads} load{loads !== 1 ? 's' : ''}</span>}
                   {dateStr && <span>{dateStr}</span>}
-                  {job.invoiceNumber && <span className="text-cyan-400/50">#{job.invoiceNumber}</span>}
+                  {(job.invoiceNumber || job.ticketNumber) && <span className="text-cyan-400/50">#{job.invoiceNumber || job.ticketNumber}</span>}
                   {job.source === 'driver' && (
                     <span className="px-1.5 py-0.5 bg-gray-700 text-gray-400 rounded text-[10px]">Driver Started</span>
                   )}
@@ -3951,8 +3965,8 @@ function CompletedJobsPanel({ jobs, drivers, allWells, allDisposals }: {
                       </div>
                     )}
                     <div>
-                      <span className="text-gray-500">Invoice #</span>
-                      <div className="text-cyan-300">{job.invoiceNumber || '—'}</div>
+                      <span className="text-gray-500">{job.invoiceNumber ? 'Invoice #' : 'Ticket #'}</span>
+                      <div className="text-cyan-300">{job.invoiceNumber || job.ticketNumber || '—'}</div>
                     </div>
                     {job.operator && (
                       <div>
@@ -4010,9 +4024,9 @@ function CompletedJobsPanel({ jobs, drivers, allWells, allDisposals }: {
                     >
                       Edit
                     </button>
-                    {job.invoiceNumber && (
+                    {(job.invoiceNumber || job.ticketNumber || (job as any).invoiceDocId) && (
                       <button
-                        onClick={(e) => { e.stopPropagation(); loadTicketDetail(job.invoiceNumber!, job.id!); }}
+                        onClick={(e) => { e.stopPropagation(); loadTicketDetail(job.invoiceNumber || job.ticketNumber || '', job.id!, (job as any).invoiceDocId); }}
                         className={`px-3 py-1 text-xs rounded transition-colors ${ticketDetailJobId === job.id ? 'bg-cyan-600 text-white' : 'bg-gray-700 hover:bg-gray-600 text-cyan-400'}`}
                       >
                         {ticketDetailJobId === job.id ? 'Hide Ticket' : 'View Ticket'}
