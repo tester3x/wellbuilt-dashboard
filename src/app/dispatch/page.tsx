@@ -4022,7 +4022,7 @@ function CompletedJobsPanel({ jobs, drivers, allWells, allDisposals }: {
                       {(accepted || assigned) && (
                         <div className="flex items-center gap-1.5">
                           <div className="w-1.5 h-1.5 rounded-full bg-blue-500" />
-                          <span className="text-gray-400">{accepted ? 'Accepted' : 'Dispatched'}</span>
+                          <span className="text-gray-400">{job.source === 'driver' ? 'Created' : accepted ? 'Accepted' : 'Dispatched'}</span>
                           <span className="text-gray-300">{(accepted || assigned)!.toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' })}</span>
                         </div>
                       )}
