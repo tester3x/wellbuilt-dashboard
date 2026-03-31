@@ -3386,14 +3386,33 @@ function ActiveDispatchPanel({ dispatches, cancelDispatch, drivers, assignTransf
                   )}
                   {driverTimeAgo && <span className="text-gray-600 text-[10px]">{driverTimeAgo}</span>}
                 </div>
-                {!isExpanded && jobs.length > 2 && (
+                {/* Active job detail line — shows what the driver is currently doing */}
+                {!isExpanded && activeJob && (
+                  <div className="flex items-center gap-1.5 mt-0.5 text-xs">
+                    <span className="text-white font-medium truncate">{activeJob.ndicWellName || activeJob.wellName}</span>
+                    {(activeJob.hauledTo || activeJob.disposal || activeJob.disposalName) && (
+                      <>
+                        <span className="text-gray-600">→</span>
+                        <span className="text-gray-400 truncate">{activeJob.hauledTo || activeJob.disposal || activeJob.disposalName}</span>
+                      </>
+                    )}
+                    <div className="flex-shrink-0 ml-auto"><StageBadge job={activeJob} /></div>
+                  </div>
+                )}
+                {!isExpanded && !activeJob && jobs.length > 2 && (
                   <div className="text-gray-500 text-xs mt-0.5 truncate">
                     {jobs.map(j => j.ndicWellName || j.wellName).join(' · ')}
                   </div>
                 )}
+                {!isExpanded && activeJob && jobs.length > 1 && (
+                  <div className="text-gray-500 text-[10px] mt-0.5 truncate">
+                    {jobs.filter(j => j.id !== activeJob.id).map(j => j.ndicWellName || j.wellName).join(' · ')}
+                  </div>
+                )}
               </div>
 
-              {activeJob && <StageBadge job={activeJob} />}
+              {/* Stage badge only shows standalone when no active job line (pending/paused drivers) */}
+              {activeJob && isExpanded && <StageBadge job={activeJob} />}
               {!autoExpand && <span className="text-gray-500 text-xs flex-shrink-0">{isExpanded ? '▲' : '▼'}</span>}
             </button>
 
