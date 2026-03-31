@@ -574,7 +574,7 @@ export default function DispatchPage() {
     const firestore = getFirestoreDb();
     const q = query(
       collection(firestore, 'dispatches'),
-      where('status', 'in', ['pending', 'pending_approval', 'accepted', 'in_progress', 'paused', 'declined', 'completed']),
+      where('status', 'in', ['pending', 'pending_approval', 'accepted', 'in_progress', 'paused', 'declined', 'cancelled', 'completed']),
       orderBy('assignedAt', 'desc')
     );
     const unsub = onSnapshot(q, (snap) => {
@@ -745,7 +745,7 @@ export default function DispatchPage() {
       const firestore = getFirestoreDb();
       const q = query(
         collection(firestore, 'dispatches'),
-        where('status', 'in', ['pending', 'pending_approval', 'accepted', 'in_progress', 'paused', 'declined']),
+        where('status', 'in', ['pending', 'pending_approval', 'accepted', 'in_progress', 'paused', 'declined', 'cancelled']),
         orderBy('assignedAt', 'desc')
       );
       const snap = await getDocs(q);
@@ -3220,9 +3220,9 @@ function ActiveDispatchPanel({ dispatches, cancelDispatch, drivers, assignTransf
 }) {
   const [expandedDrivers, setExpandedDrivers] = useState<Set<string>>(new Set());
 
-  // Separate declined jobs from active (completed filtered out before passing to this component)
-  const declinedJobs = dispatches.filter(d => d.status === 'declined');
-  const nonDeclined = dispatches.filter(d => d.status !== 'declined');
+  // Separate declined/cancelled jobs from active (completed filtered out before passing to this component)
+  const declinedJobs = dispatches.filter(d => d.status === 'declined' || d.status === 'cancelled');
+  const nonDeclined = dispatches.filter(d => d.status !== 'declined' && d.status !== 'cancelled');
 
   // Unassigned transfers need driver assignment
   const unassigned = nonDeclined.filter(d => d.type === 'transfer' && (!d.driverHash || d.status === 'pending_approval'));
@@ -3301,7 +3301,7 @@ function ActiveDispatchPanel({ dispatches, cancelDispatch, drivers, assignTransf
                       <span className="px-1.5 py-0.5 bg-yellow-600/30 text-yellow-300 text-[10px] rounded font-bold flex-shrink-0">x{remaining}</span>
                     ) : null;
                   })()}
-                  <span className="px-2 py-0.5 bg-red-600/30 text-red-300 text-[10px] font-bold rounded">DECLINED</span>
+                  <span className="px-2 py-0.5 bg-red-600/30 text-red-300 text-[10px] font-bold rounded">{job.status === 'cancelled' ? 'CANCELLED' : 'DECLINED'}</span>
                   <span className="flex-1" />
                   <button
                     onClick={() => onReassignDeclined?.(job)}
