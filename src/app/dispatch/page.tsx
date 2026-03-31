@@ -3307,7 +3307,13 @@ function ActiveDispatchPanel({ dispatches, cancelDispatch, drivers, assignTransf
                     className="px-3 py-1 bg-blue-600 hover:bg-blue-500 text-white text-xs font-medium rounded transition-colors"
                   >Reassign</button>
                   <button
-                    onClick={() => job.id && cancelDispatch(job.id)}
+                    onClick={async () => {
+                      if (!job.id) return;
+                      try {
+                        const firestore = getFirestoreDb();
+                        await updateDoc(doc(firestore, 'dispatches', job.id), { status: 'dismissed', dismissedAt: Timestamp.now() });
+                      } catch (err) { console.error('Dismiss failed:', err); }
+                    }}
                     className="px-3 py-1 bg-gray-700 hover:bg-gray-600 text-gray-300 text-xs font-medium rounded transition-colors"
                     title="Accept decline and dismiss"
                   >Dismiss</button>
