@@ -3189,11 +3189,16 @@ function DispatchJobRow({ job, cancelDispatch, compact, onClickServiceWork, onRe
           >👯</button>
         )}
 
-        {/* Cancel button */}
+        {/* Remove button — dispatcher dismissing, not driver canceling */}
         <button
-          onClick={(e) => { e.stopPropagation(); job.id && cancelDispatch(job.id); }}
+          onClick={async (e) => {
+            e.stopPropagation();
+            if (!job.id) return;
+            const firestore = getFirestoreDb();
+            await updateDoc(doc(firestore, 'dispatches', job.id), { status: 'dismissed', dismissedAt: Timestamp.now() }).catch(() => {});
+          }}
           className="text-red-400/60 hover:text-red-300 text-xs flex-shrink-0 transition-colors"
-          title="Cancel dispatch"
+          title="Remove dispatch"
         >&#10005;</button>
       </div>
 
