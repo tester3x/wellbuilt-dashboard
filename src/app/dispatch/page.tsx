@@ -983,8 +983,7 @@ export default function DispatchPage() {
         status: 'cancelled',
         cancelledAt: Timestamp.now(),
       });
-      setMessage('Dispatch cancelled');
-      setTimeout(() => setMessage(''), 3000);
+      // No toast — dismissed inline, no need to shift layout
     } catch (err: any) {
       setMessage(`Error: ${err.message}`);
       setTimeout(() => setMessage(''), 5000);
