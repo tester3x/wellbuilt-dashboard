@@ -547,11 +547,11 @@ function WellDetailPage() {
                 swCount === 0
                   ? 'text-gray-600 border border-gray-800 cursor-default'
                   : showServiceWork
-                    ? 'bg-blue-600 text-white border border-blue-500 hover:bg-blue-500'
-                    : 'bg-amber-600/80 text-white border border-amber-500 hover:bg-amber-500'
+                    ? 'bg-emerald-600 text-white border border-emerald-500 hover:bg-emerald-500'
+                    : 'bg-red-600/80 text-white border border-red-500 hover:bg-red-500'
               }`}
             >
-              Show SW
+              {showServiceWork ? 'Showing SW' : 'Show SW'}
             </button>
           </div>
           <div className="flex items-center gap-4 text-xs">
