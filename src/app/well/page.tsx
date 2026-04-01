@@ -24,7 +24,7 @@ import { loadDisposals, type NdicWell } from '@/lib/firestoreWells';
 // Format inches to feet'inches" display
 function formatLevelFtIn(inches: number | undefined): string {
   if (inches === undefined || isNaN(inches)) return '--';
-  const totalInches = Math.round(inches);
+  const totalInches = Math.floor(inches);
   const feet = Math.floor(totalInches / 12);
   const remainingInches = totalInches % 12;
   return `${feet}'${remainingInches}"`;
@@ -625,8 +625,8 @@ function WellDetailPage() {
                     <div>BBLs</div>
                     <div>/ Day</div>
                   </th>
-                  {(userCanDelete || user.role === 'driver') && (
-                    <th className="px-3 py-2 text-right text-xs font-medium text-gray-300">Actions</th>
+                  {userCanDelete && (
+                    <th className="px-3 py-2 text-center text-xs font-medium text-gray-300 w-10"></th>
                   )}
                 </tr>
               </thead>
@@ -685,7 +685,7 @@ function WellDetailPage() {
                         {pull.noLevel ? '' : (pull.timeDif || '--')}
                       </td>
                       <td className="px-3 py-2 text-white font-mono text-sm text-center">
-                        {pull.noLevel ? '' : (pull.recoveryInches !== undefined ? Math.round(pull.recoveryInches) : '--')}
+                        {pull.noLevel ? '' : (pull.recoveryInches !== undefined ? Math.floor(pull.recoveryInches) : '--')}
                       </td>
                       <td className="px-3 py-2 text-white font-mono text-sm text-center">
                         {pull.noLevel ? '' : formatOneInchFlowRate(pull.flowRateDays ? pull.flowRateDays * 24 * 60 : parseFlowRateToMinutes(pull.flowRate))}
@@ -698,24 +698,20 @@ function WellDetailPage() {
                           ? Math.round((1 / pull.flowRateDays) * wellTanks * 20)
                           : '--')}
                       </td>
-                      {(userCanDelete || user.role === 'driver') && (
-                        <td className="px-3 py-2 text-right space-x-2 whitespace-nowrap">
+                      {userCanDelete && (
+                        <td className="px-1 py-2 text-center whitespace-nowrap">
                           {userCanEdit && (
                             <button
                               onClick={() => handleEdit(pull)}
-                              className="px-2 py-1 bg-blue-600 hover:bg-blue-700 text-white text-xs rounded transition-colors"
-                            >
-                              Edit
-                            </button>
+                              className="p-1 text-gray-600 hover:text-blue-400 transition-colors"
+                              title="Edit pull"
+                            >✏️</button>
                           )}
-                          {userCanDelete && (
-                            <button
-                              onClick={() => handleDelete(pull)}
-                              className="px-2 py-1 bg-red-600 hover:bg-red-700 text-white text-xs rounded transition-colors"
-                            >
-                              Delete
-                            </button>
-                          )}
+                          <button
+                            onClick={() => handleDelete(pull)}
+                            className="p-1 text-gray-600 hover:text-red-400 transition-colors"
+                            title="Delete pull"
+                          >🗑</button>
                         </td>
                       )}
                     </tr>

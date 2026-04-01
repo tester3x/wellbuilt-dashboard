@@ -420,6 +420,11 @@ function DispatchPageInner() {
   const [editPwShowDisposalDropdown, setEditPwShowDisposalDropdown] = useState(false);
   const [editPwSplitLoads, setEditPwSplitLoads] = useState(1);
   const [editPwSplitDriver, setEditPwSplitDriver] = useState('');
+  // SW-specific edit fields
+  const [editSwDisposal, setEditSwDisposal] = useState('');
+  const [editSwDisposalResults, setEditSwDisposalResults] = useState<NdicWell[]>([]);
+  const [editSwShowDisposalDropdown, setEditSwShowDisposalDropdown] = useState(false);
+  const [editSwOnsiteBy, setEditSwOnsiteBy] = useState('');
 
   // Reassign declined job state
   const [reassignJob, setReassignJob] = useState<DispatchJob | null>(null);
@@ -911,6 +916,7 @@ function DispatchPageInner() {
       setAssignTarget(null);
       setAssignDriverHash('');
       setAssignNotes('');
+      setAssignLoadCount(1);
       setAssignDisposal('');
       setAssignDisposalWell(null);
       setDisposalSearch('');
@@ -1443,6 +1449,7 @@ function DispatchPageInner() {
       setAssignTarget(null);
       setAssignDriverHash('');
       setAssignNotes('');
+      setAssignLoadCount(1);
       setAssignDisposal('');
       setAssignDisposalWell(null);
       setDisposalSearch('');
@@ -1469,6 +1476,11 @@ function DispatchPageInner() {
     setEditPwShowDisposalDropdown(false);
     setEditPwSplitLoads(1);
     setEditPwSplitDriver('');
+    // SW-specific
+    setEditSwDisposal(job.disposalName || '');
+    setEditSwDisposalResults([]);
+    setEditSwShowDisposalDropdown(false);
+    setEditSwOnsiteBy(job.onsiteBy || '');
   }
 
   // Get all dispatches in the same service group
@@ -1506,6 +1518,25 @@ function DispatchPageInner() {
         const origDisposal = editSwJob.disposal || editSwJob.hauledTo || '';
         if (editPwDisposal.trim() !== origDisposal) {
           await updateDoc(doc(firestore, 'dispatches', editSwJob.id), { disposal: editPwDisposal.trim() });
+        }
+      }
+
+      // 1b2. Update disposalName + onsiteBy if changed (SW jobs)
+      if (editSwJob.jobType === 'service' && editSwJob.id) {
+        const swUpdates: Record<string, any> = {};
+        if (editSwDisposal.trim() !== (editSwJob.disposalName || '')) {
+          swUpdates.disposalName = editSwDisposal.trim();
+        }
+        if (editSwOnsiteBy !== (editSwJob.onsiteBy || '')) {
+          swUpdates.onsiteBy = editSwOnsiteBy || null;
+        }
+        if (Object.keys(swUpdates).length > 0) {
+          // Update all jobs in the service group
+          const groupUpdatePromises = editSwGroupJobs.map(j => {
+            if (!j.id) return Promise.resolve();
+            return updateDoc(doc(firestore, 'dispatches', j.id), swUpdates);
+          });
+          await Promise.all(groupUpdatePromises);
         }
       }
 
@@ -2955,6 +2986,52 @@ function DispatchPageInner() {
                   )}
                 </div>
 
+                {/* Drop-off / SWD */}
+                <div className="mb-4 relative">
+                  <label className="block text-sm text-gray-400 mb-1">Drop-off (optional)</label>
+                  <input
+                    type="text"
+                    value={editSwDisposal}
+                    onChange={(e) => {
+                      const val = e.target.value;
+                      setEditSwDisposal(val);
+                      setEditSwDisposalResults(val.length >= 2 ? searchDisposals(val, allDisposals) : []);
+                      setEditSwShowDisposalDropdown(val.length >= 2);
+                    }}
+                    onFocus={() => { if (editSwDisposal.length >= 2) setEditSwShowDisposalDropdown(true); }}
+                    onBlur={() => setTimeout(() => setEditSwShowDisposalDropdown(false), 200)}
+                    placeholder="Search SWDs..."
+                    className="w-full px-3 py-2 bg-gray-900 border border-gray-700 rounded text-white text-sm placeholder-gray-500 focus:outline-none focus:border-purple-500"
+                  />
+                  {editSwShowDisposalDropdown && editSwDisposalResults.length > 0 && (
+                    <div className="absolute z-50 top-full left-0 w-full mt-1 bg-gray-900 border border-gray-600 rounded-lg shadow-lg max-h-40 overflow-y-auto">
+                      {editSwDisposalResults.map((d, i) => (
+                        <button
+                          key={`${d.well_name}-${i}`}
+                          onMouseDown={(e) => e.preventDefault()}
+                          onClick={() => { setEditSwDisposal(d.well_name); setEditSwShowDisposalDropdown(false); }}
+                          className="w-full text-left px-3 py-2 text-sm text-white hover:bg-gray-700 transition-colors"
+                        >
+                          <span>{d.well_name}</span>
+                          {d.operator && <span className="text-gray-500 ml-2 text-xs">{d.operator}</span>}
+                        </button>
+                      ))}
+                    </div>
+                  )}
+                </div>
+
+                {/* Be Onsite By */}
+                <div className="mb-4">
+                  <label className="block text-sm text-gray-400 mb-1">Be onsite by</label>
+                  <input
+                    type="datetime-local"
+                    value={editSwOnsiteBy}
+                    onChange={(e) => setEditSwOnsiteBy(e.target.value)}
+                    max="9999-12-31T23:59"
+                    className="w-full px-3 py-2 bg-gray-900 border border-gray-700 rounded text-white text-sm focus:outline-none focus:border-purple-500"
+                  />
+                </div>
+
                 {/* Edit Notes */}
                 <div className="mb-5">
                   <label className="block text-sm text-gray-400 mb-1">Notes / Instructions</label>
@@ -2970,10 +3047,17 @@ function DispatchPageInner() {
                 {/* Action Buttons */}
                 <div className="flex gap-3">
                   <button
-                    onClick={() => setEditSwJob(null)}
-                    className="flex-1 px-4 py-2 bg-gray-700 hover:bg-gray-600 text-white rounded-lg transition-colors"
+                    onClick={() => { if (editSwJob?.id && confirm(`Cancel this service work for ${editSwJob.ndicWellName || editSwJob.wellName}?`)) { cancelDispatch(editSwJob.id); setEditSwJob(null); } }}
+                    className="px-4 py-2 bg-gray-700 hover:bg-red-900/50 text-gray-300 hover:text-red-300 rounded-lg transition-colors text-sm"
                   >
-                    Cancel
+                    Cancel Job
+                  </button>
+                  <span className="flex-1" />
+                  <button
+                    onClick={() => setEditSwJob(null)}
+                    className="px-4 py-2 bg-gray-700 hover:bg-gray-600 text-white rounded-lg transition-colors"
+                  >
+                    Close
                   </button>
                   <button
                     onClick={saveEditServiceWork}
@@ -3371,6 +3455,9 @@ function ActiveDispatchPanel({ dispatches, cancelDispatch, drivers, assignTransf
                   </div>
                   {job.declineReason && (
                     <div className="text-gray-400 text-xs italic">&ldquo;{job.declineReason}&rdquo;</div>
+                  )}
+                  {(job.invoiceNumber || job.ticketNumber) && (
+                    <span className="text-gray-400 text-xs"><span className="text-gray-600">#</span>{job.invoiceNumber || job.ticketNumber}</span>
                   )}
                   {job.disposal && (
                     <span className="text-cyan-400/70 text-xs">→ {job.disposal}</span>
@@ -4263,6 +4350,20 @@ function CompletedJobsPanel({ jobs, drivers, allWells, allDisposals, highlightJo
                               <>
                                 <h5 className="text-[#111] font-extrabold text-[10px] tracking-[1.5px] uppercase pt-3 pb-1">REMARKS</h5>
                                 <p className="text-xs text-[#111] whitespace-pre-wrap">{ticketDetailData.invoice.notes}</p>
+                              </>
+                            )}
+
+                            {/* Photos */}
+                            {ticketDetailData.invoice.photos?.length > 0 && (
+                              <>
+                                <h5 className="text-[#111] font-extrabold text-[10px] tracking-[1.5px] uppercase pt-3 pb-1">PHOTOS ({ticketDetailData.invoice.photos.length})</h5>
+                                <div className="flex gap-2 overflow-x-auto pb-2">
+                                  {ticketDetailData.invoice.photos.map((url: string, i: number) => (
+                                    <a key={i} href={url} target="_blank" rel="noopener noreferrer" className="flex-shrink-0">
+                                      <img src={url} alt={`Photo ${i + 1}`} className="w-16 h-16 object-cover rounded border border-gray-300 hover:border-yellow-500 transition-colors cursor-pointer" />
+                                    </a>
+                                  ))}
+                                </div>
                               </>
                             )}
 
