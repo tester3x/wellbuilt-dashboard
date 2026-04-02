@@ -352,7 +352,7 @@ export async function fetchPayrollInvoices(
     const row: DriverTimesheetRow = {
       id: docSnap.id,
       date: d.date || '',
-      invoiceNumber: d.invoiceNumber || (d.tickets?.length ? d.tickets[0] : '') || wellName || '',
+      invoiceNumber: d.invoiceNumber || (d.tickets?.length ? d.tickets[0] : ''),
       operator,
       wellName: d.wellName || '',
       jobType,
