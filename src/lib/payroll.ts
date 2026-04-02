@@ -324,7 +324,8 @@ export async function fetchPayrollInvoices(
     let detentionPay = 0;
     if (rateEntry) {
       const invoiceDate = d.date || '';
-      const bbls = d.totalBBL || 0;
+      // BBLs: try totalBBL first, then fall back to ticket-level fields (s_t mode may not write totalBBL)
+      const bbls = d.totalBBL || parseFloat(d.bbls || '0') || parseFloat(d.qty || '0') || 0;
       rate = getEffectiveRate(rateEntry, invoiceDate, county, company?.payConfig?.frostZones, company?.payConfig?.frostSeason, bbls);
       const hours = d.totalHours || 0;
       amountBilled = rateEntry.method === 'per_bbl' ? bbls * rate : hours * rate;
@@ -351,11 +352,11 @@ export async function fetchPayrollInvoices(
     const row: DriverTimesheetRow = {
       id: docSnap.id,
       date: d.date || '',
-      invoiceNumber: d.invoiceNumber || (d.tickets?.length ? d.tickets[0] : ''),
+      invoiceNumber: d.invoiceNumber || (d.tickets?.length ? d.tickets[0] : '') || wellName || '',
       operator,
       wellName: d.wellName || '',
       jobType,
-      bbls: d.totalBBL || 0,
+      bbls,
       hours: d.totalHours || 0,
       rate,
       amountBilled,
