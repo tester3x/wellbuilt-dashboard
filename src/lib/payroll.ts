@@ -322,10 +322,10 @@ export async function fetchPayrollInvoices(
     const rateEntry = lookupRate(rateSheets, operator, jobType);
     const swdWaitMinutes = d.swdWaitMinutes || 0;
     let detentionPay = 0;
+    // BBLs: try totalBBL first, then fall back to ticket-level fields (s_t mode may not write totalBBL)
+    const bbls = d.totalBBL || parseFloat(d.bbls || '0') || parseFloat(d.qty || '0') || 0;
     if (rateEntry) {
       const invoiceDate = d.date || '';
-      // BBLs: try totalBBL first, then fall back to ticket-level fields (s_t mode may not write totalBBL)
-      const bbls = d.totalBBL || parseFloat(d.bbls || '0') || parseFloat(d.qty || '0') || 0;
       rate = getEffectiveRate(rateEntry, invoiceDate, county, company?.payConfig?.frostZones, company?.payConfig?.frostSeason, bbls);
       const hours = d.totalHours || 0;
       amountBilled = rateEntry.method === 'per_bbl' ? bbls * rate : hours * rate;
