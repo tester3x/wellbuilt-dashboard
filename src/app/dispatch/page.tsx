@@ -3534,7 +3534,7 @@ function ActiveDispatchPanel({ dispatches, cancelDispatch, drivers, assignTransf
                     <div className="flex-shrink-0 ml-auto"><StageBadge job={activeJob} /></div>
                   </div>
                 )}
-                {!isExpanded && !activeJob && jobs.length > 2 && (
+                {!isExpanded && !activeJob && jobs.length >= 1 && (
                   <div className="text-gray-500 text-xs mt-0.5 truncate">
                     {jobs.map(j => j.ndicWellName || j.wellName).join(' · ')}
                   </div>
