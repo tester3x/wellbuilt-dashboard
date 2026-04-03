@@ -561,11 +561,11 @@ function WellDetailPage() {
           </div>
           <div className="flex items-center gap-4 text-xs">
             <span className="flex items-center gap-1">
-              <span className="inline-block w-3 h-3 bg-orange-900/60 rounded"></span>
+              <span className="inline-block w-3 h-3 bg-red-900/60 rounded"></span>
               <span className="text-gray-400">Anomaly (excluded from AFR)</span>
             </span>
             <span className="flex items-center gap-1">
-              <span className="inline-block w-3 h-3 bg-yellow-900/50 rounded"></span>
+              <span className="inline-block w-3 h-3 bg-purple-900/50 rounded"></span>
               <span className="text-gray-400">IT Review (1.5x off)</span>
             </span>
           </div>
@@ -640,17 +640,17 @@ function WellDetailPage() {
                   const pullTime = new Date(pull.timestamp).getTime();
                   const userCanEdit = canEditPull(user, pull.driverId || '', pullTime, 30);
 
-                  // Anomaly level coloring (matches VBA: 2 = peach, 1 = yellow)
-                  // Level 2 (Anomaly): excluded from AFR - peach/orange
-                  // Level 1 (IT Review): flagged but included - yellow
+                  // Anomaly level coloring
+                  // Level 2 (Anomaly): excluded from AFR - red tint
+                  // Level 1 (IT Review): flagged but included - purple tint
                   // Level 0 (Normal): no color
                   let rowBgClass = 'hover:bg-gray-750';
                   if (pull.noLevel) {
                     rowBgClass = 'bg-gray-800/60 hover:bg-gray-800/80'; // No gauge - dimmed
                   } else if (pull.anomalyLevel === 2) {
-                    rowBgClass = 'bg-orange-900/40 hover:bg-orange-900/60'; // Anomaly - excluded
+                    rowBgClass = 'bg-red-900/40 hover:bg-red-900/60'; // Anomaly - excluded
                   } else if (pull.anomalyLevel === 1) {
-                    rowBgClass = 'bg-yellow-900/30 hover:bg-yellow-900/50'; // IT Review - flagged
+                    rowBgClass = 'bg-purple-900/30 hover:bg-purple-900/50'; // IT Review - flagged
                   }
 
                   return (
