@@ -620,6 +620,7 @@ function WellDetailPage() {
                   </th>
                   <th className="px-3 py-2 text-center text-xs font-medium text-gray-300">
                     <div>1&quot; Flow Rate</div>
+                    <div>(H:M:S)</div>
                   </th>
                   <th className="px-3 py-2 text-center text-xs font-medium text-gray-300">
                     <div>1&apos; Flow Rate</div>
