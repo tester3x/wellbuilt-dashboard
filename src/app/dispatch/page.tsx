@@ -3476,9 +3476,7 @@ function ActiveDispatchPanel({ dispatches, cancelDispatch, drivers, assignTransf
 
       {/* Driver cards (solo jobs + single-driver SW) */}
       {Array.from(grouped.entries()).map(([driverHash, jobs]) => {
-        const hasActiveJob = jobs.some(j => j.status === 'accepted' || j.status === 'in_progress');
-        const autoExpand = jobs.length <= 2 && hasActiveJob;
-        const isExpanded = autoExpand || expandedDrivers.has(driverHash);
+        const isExpanded = expandedDrivers.has(driverHash);
         const driverRecord = drivers?.find(d => d.key === driverHash);
         const driverName = driverRecord?.legalName || jobs[0].driverName || jobs[0].driverFirstName || 'Unknown';
         const pwCount = jobs.filter(j => j.jobType === 'pw').length;
@@ -3499,10 +3497,10 @@ function ActiveDispatchPanel({ dispatches, cancelDispatch, drivers, assignTransf
         return (
           <div key={driverHash} className="border border-gray-700/50 rounded-lg overflow-hidden">
             <button
-              onClick={() => !autoExpand && toggleDriver(driverHash)}
+              onClick={() => toggleDriver(driverHash)}
               className={`w-full flex items-center gap-3 px-4 py-2.5 text-left transition-colors ${
                 allPending ? 'bg-gray-800/50' : 'bg-gray-800'
-              } hover:bg-gray-750 ${autoExpand ? 'cursor-default' : 'cursor-pointer'}`}
+              } hover:bg-gray-750 cursor-pointer`}
             >
               <div className={`w-8 h-8 rounded-full flex items-center justify-center text-xs font-bold flex-shrink-0 ${
                 activeJob ? 'bg-blue-600 text-white' : isPaused ? 'bg-amber-600 text-white' : allPending ? 'bg-gray-600 text-gray-300' : 'bg-gray-600 text-white'
@@ -3548,7 +3546,7 @@ function ActiveDispatchPanel({ dispatches, cancelDispatch, drivers, assignTransf
 
               {/* Stage badge only shows standalone when no active job line (pending/paused drivers) */}
               {activeJob && isExpanded && <StageBadge job={activeJob} />}
-              {!autoExpand && <span className="text-gray-500 text-xs flex-shrink-0">{isExpanded ? '▲' : '▼'}</span>}
+              <span className="text-gray-500 text-xs flex-shrink-0">{isExpanded ? '▲' : '▼'}</span>
             </button>
 
             {isExpanded && (
