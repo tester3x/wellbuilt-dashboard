@@ -3476,9 +3476,11 @@ function ActiveDispatchPanel({ dispatches, cancelDispatch, drivers, assignTransf
 
       {/* Driver cards (solo jobs + single-driver SW) */}
       {Array.from(grouped.entries()).map(([driverHash, jobs]) => {
-        const autoExpand = jobs.length <= 2;
+        const hasActiveJob = jobs.some(j => j.status === 'accepted' || j.status === 'in_progress');
+        const autoExpand = jobs.length <= 2 && hasActiveJob;
         const isExpanded = autoExpand || expandedDrivers.has(driverHash);
-        const driverName = jobs[0].driverFirstName || jobs[0].driverName;
+        const driverRecord = drivers?.find(d => d.key === driverHash);
+        const driverName = driverRecord?.legalName || jobs[0].driverName || jobs[0].driverFirstName || 'Unknown';
         const pwCount = jobs.filter(j => j.jobType === 'pw').length;
         const swCount = jobs.filter(j => j.jobType === 'service').length;
 
