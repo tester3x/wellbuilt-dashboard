@@ -32,12 +32,17 @@ function formatLevelFtIn(inches: number | undefined): string {
 
 // Calculate 1" flow rate from 1' flow rate (divide by 12)
 // Input: flowRateMinutes = minutes per foot
-// Output: M:SS format for minutes per inch
+// Output: H:MM:SS when >= 60 min, M:SS when < 60 min
 function formatOneInchFlowRate(flowRateMinutes: number | undefined): string {
   if (!flowRateMinutes || flowRateMinutes <= 0) return '--';
   const minutesPerInch = flowRateMinutes / 12;
-  const mins = Math.floor(minutesPerInch);
-  const secs = Math.round((minutesPerInch - mins) * 60);
+  const totalSecs = Math.round(minutesPerInch * 60);
+  const hours = Math.floor(totalSecs / 3600);
+  const mins = Math.floor((totalSecs % 3600) / 60);
+  const secs = totalSecs % 60;
+  if (hours > 0) {
+    return `${hours}:${mins.toString().padStart(2, '0')}:${secs.toString().padStart(2, '0')}`;
+  }
   return `${mins}:${secs.toString().padStart(2, '0')}`;
 }
 
@@ -615,7 +620,6 @@ function WellDetailPage() {
                   </th>
                   <th className="px-3 py-2 text-center text-xs font-medium text-gray-300">
                     <div>1&quot; Flow Rate</div>
-                    <div>(M:S)</div>
                   </th>
                   <th className="px-3 py-2 text-center text-xs font-medium text-gray-300">
                     <div>1&apos; Flow Rate</div>
