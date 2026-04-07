@@ -227,6 +227,9 @@ export interface TicketTemplate {
   // Layout customization
   fieldSizes?: Partial<Record<string, FieldSize>>;
   groupOrder?: string[];
+  // Package-driven field toggles (keyed by field ID from package fieldGroups)
+  // Default: all visible. Set to false to hide a specific field on the receipt.
+  fieldToggles?: Record<string, boolean>;
 }
 
 export const DEFAULT_TICKET_TEMPLATE: TicketTemplate = {
