@@ -80,7 +80,7 @@ interface DispatchJob {
   driverLng?: number;
   driverGpsAt?: string;
   // Service work fields
-  disposalName?: string;  // Drop-off for SW jobs
+  disposalName?: string;  // LEGACY — old SW docs used this. New ones write `disposal`
   onsiteBy?: string;  // "Be onsite by" deadline (HH:MM)
   // Live job info — written by WB T as driver progresses
   invoiceNumber?: string;  // Invoice # for this dispatch (i+t mode)
@@ -961,7 +961,7 @@ function DispatchPageInner() {
           ...(driver.legalName ? { driverFirstName: getFirstName(driver) } : {}),
           wellName: matchedWell?.wellName || swWellName.trim(),
           ndicWellName: swNdicName,
-          ...(swDropoff.trim() ? { disposalName: swDropoff.trim() } : {}),
+          ...(swDropoff.trim() ? { disposal: swDropoff.trim() } : {}),
           ...(swOnsiteBy ? { onsiteBy: swOnsiteBy } : {}),
           jobType: 'service',
           serviceType: swServiceType.trim(),
@@ -1477,7 +1477,7 @@ function DispatchPageInner() {
     setEditPwSplitLoads(1);
     setEditPwSplitDriver('');
     // SW-specific
-    setEditSwDisposal(job.disposalName || '');
+    setEditSwDisposal(job.disposal || job.disposalName || '');
     setEditSwDisposalResults([]);
     setEditSwShowDisposalDropdown(false);
     setEditSwOnsiteBy(job.onsiteBy || '');
@@ -1521,11 +1521,11 @@ function DispatchPageInner() {
         }
       }
 
-      // 1b2. Update disposalName + onsiteBy if changed (SW jobs)
+      // 1b2. Update disposal + onsiteBy if changed (SW jobs)
       if (editSwJob.jobType === 'service' && editSwJob.id) {
         const swUpdates: Record<string, any> = {};
-        if (editSwDisposal.trim() !== (editSwJob.disposalName || '')) {
-          swUpdates.disposalName = editSwDisposal.trim();
+        if (editSwDisposal.trim() !== (editSwJob.disposal || editSwJob.disposalName || '')) {
+          swUpdates.disposal = editSwDisposal.trim();
         }
         if (editSwOnsiteBy !== (editSwJob.onsiteBy || '')) {
           swUpdates.onsiteBy = editSwOnsiteBy || null;
