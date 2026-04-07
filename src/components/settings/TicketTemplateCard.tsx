@@ -369,8 +369,10 @@ export function TicketTemplateCard({ company, onSave }: Props) {
     }
   };
 
-  const enabledCount = Object.entries(template).filter(([k, v]) => typeof v === 'boolean' && v).length;
-  const totalBooleans = Object.entries(template).filter(([k, v]) => typeof v === 'boolean').length;
+  // Count only fields that appear in the UI (exclude legacy fields like timelineStamps)
+  const uiFieldKeys = new Set(TEMPLATE_FIELD_GROUPS.flatMap(g => g.fields.map(f => f.key)));
+  const enabledCount = Object.entries(template).filter(([k, v]) => typeof v === 'boolean' && v && uiFieldKeys.has(k as any)).length;
+  const totalBooleans = uiFieldKeys.size;
 
   // Ordered groups for both checkbox grid and reorder view
   const orderedGroups = useMemo(() => {
