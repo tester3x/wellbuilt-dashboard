@@ -62,7 +62,7 @@ function buildPreviewHtml(T: TicketTemplate): string {
       <div class="ticket-title">WATER TICKET</div>
       <div class="ticket-meta">
         ${T.ticketNumber ? '<span># 11305</span>' : '<span></span>'}
-        <span>${T.ticketDate ? '03/03/2026' : ''}${T.timeGauged ? '  1:21 PM' : ''}</span>
+        <span>${T.ticketDate ? '03/03/2026' : ''}${T.timeGauged ? '  12:17 PM' : ''}</span>
       </div>`,
 
     pickup: () => {
