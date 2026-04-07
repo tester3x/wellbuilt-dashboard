@@ -122,6 +122,7 @@ interface Project {
   dayDriverHashes?: string[];  // Day shift drivers
   nightDriverHashes?: string[];// Night shift drivers
   driverSchedule: { [isoDate: string]: string[] }; // date -> driverHashes (legacy)
+  driverDisposals?: { [driverHash: string]: { name: string; lat?: number; lng?: number } }; // Per-driver SWD assignment
 }
 
 interface ProjectInvoice {
@@ -464,6 +465,7 @@ function DispatchPageInner() {
   const [newProjectEndDate, setNewProjectEndDate] = useState('');
   const [newProjectDriverHashes, setNewProjectDriverHashes] = useState<Set<string>>(new Set());
   const [newProjectDriverShifts, setNewProjectDriverShifts] = useState<Map<string, 'day' | 'night'>>(new Map());
+  const [newProjectDriverDisposals, setNewProjectDriverDisposals] = useState<{ [hash: string]: { name: string; lat?: number; lng?: number } }>({});
   const [newProjectJobType, setNewProjectJobType] = useState<'service' | 'pw'>('service');
   const [newProjectServiceType, setNewProjectServiceType] = useState('');
   const [npbTab, setNpbTab] = useState<'details' | 'drivers' | 'notes'>('details');
@@ -1054,6 +1056,7 @@ function DispatchPageInner() {
         driverSchedule: schedule,
         dayDriverHashes: dayHashes.length > 0 ? dayHashes : undefined,
         nightDriverHashes: nightHashes.length > 0 ? nightHashes : undefined,
+        ...(Object.keys(newProjectDriverDisposals).length > 0 ? { driverDisposals: newProjectDriverDisposals } : {}),
       };
       const docRef = await addDoc(collection(firestore, 'projects'), projectData);
 
@@ -1065,6 +1068,7 @@ function DispatchPageInner() {
             const driver = drivers.find(d => d.key === driverHash);
             if (!driver) continue;
             const driverFirstName = driver.legalName ? driver.legalName.split(' ')[0] : driver.displayName;
+            const driverDisposal = newProjectDriverDisposals[driverHash];
             await addDoc(collection(firestore, 'dispatches'), {
               driverHash,
               driverName: driver.displayName,
@@ -1081,6 +1085,7 @@ function DispatchPageInner() {
               assignedBy: user?.email || '',
               projectId: docRef.id,
               notes: newProjectNotes.trim() || undefined,
+              ...(driverDisposal ? { disposal: driverDisposal.name, disposalLat: driverDisposal.lat, disposalLng: driverDisposal.lng } : {}),
             });
           }
         }
@@ -1094,6 +1099,7 @@ function DispatchPageInner() {
       setNewProjectEndDate('');
       setNewProjectDriverHashes(new Set());
       setNewProjectDriverShifts(new Map());
+      setNewProjectDriverDisposals({});
       setNewProjectJobType('service');
       setNewProjectServiceType('');
       setShowCreateProject(false);
@@ -1144,6 +1150,7 @@ function DispatchPageInner() {
         const driverFirstName = driver.legalName ? driver.legalName.split(' ')[0] : driver.displayName;
         for (const wellName of project.wellNames) {
           const wellData = wells.find(w => w.wellName === wellName);
+          const driverDisposal = project.driverDisposals?.[driverHash];
           await addDoc(collection(firestore, 'dispatches'), {
             driverHash,
             driverName: driver.displayName,
@@ -1159,6 +1166,7 @@ function DispatchPageInner() {
             assignedAt: Timestamp.now(),
             assignedBy: user?.email || '',
             projectId: projectId,
+            ...(driverDisposal ? { disposal: driverDisposal.name, disposalLat: driverDisposal.lat, disposalLng: driverDisposal.lng } : {}),
           });
         }
       }
@@ -1197,6 +1205,7 @@ function DispatchPageInner() {
           const driver = drivers.find(d => d.key === driverHash);
           if (!driver) continue;
           const driverFirstName = driver.legalName ? driver.legalName.split(' ')[0] : driver.displayName;
+          const driverDisposal = project.driverDisposals?.[driverHash];
           await addDoc(collection(firestore, 'dispatches'), {
             driverHash,
             driverName: driver.displayName,
@@ -1213,6 +1222,7 @@ function DispatchPageInner() {
             assignedBy: user?.email || '',
             projectId,
             notes: project.notes || undefined,
+            ...(driverDisposal ? { disposal: driverDisposal.name, disposalLat: driverDisposal.lat, disposalLng: driverDisposal.lng } : {}),
           });
           created++;
         }
@@ -1943,6 +1953,41 @@ function DispatchPageInner() {
                         </div>
                       </div>
                     </div>
+                    {/* Drop-off assignments for selected drivers */}
+                    {newProjectDriverHashes.size > 0 && (
+                      <div className="mt-3 pt-3 border-t border-gray-700/50">
+                        <div className="text-gray-400 text-[10px] font-bold uppercase tracking-wider mb-1.5">Drop-off Assignments</div>
+                        <div className="space-y-1">
+                          {Array.from(newProjectDriverHashes).map(hash => {
+                            const driver = drivers.find(d => d.key === hash);
+                            if (!driver) return null;
+                            return (
+                              <DriverDisposalRow
+                                key={hash}
+                                hash={hash}
+                                name={driver.legalName || driver.displayName}
+                                disposal={newProjectDriverDisposals[hash]}
+                                borderColor="border-gray-700"
+                                allDisposals={allDisposals}
+                                onRemove={() => {
+                                  setNewProjectDriverHashes(prev => { const next = new Set(prev); next.delete(hash); return next; });
+                                  setNewProjectDriverShifts(prev => { const next = new Map(prev); next.delete(hash); return next; });
+                                  setNewProjectDriverDisposals(prev => { const next = { ...prev }; delete next[hash]; return next; });
+                                }}
+                                onSetDisposal={(disp) => {
+                                  setNewProjectDriverDisposals(prev => {
+                                    const next = { ...prev };
+                                    if (disp) next[hash] = disp;
+                                    else delete next[hash];
+                                    return next;
+                                  });
+                                }}
+                              />
+                            );
+                          })}
+                        </div>
+                      </div>
+                    )}
                   </div>
                 )}
                 {/* Notes tab */}
@@ -2544,6 +2589,7 @@ function DispatchPageInner() {
                     projectDispatches={projectDispatches}
                     projectInvoices={projectInvoices}
                     drivers={drivers}
+                    allDisposals={allDisposals}
                     cancelDispatch={cancelDispatch}
                     onStatusChange={updateProjectStatus}
                     onAddDriver={(hash) => addDriverToProjectToday(selectedProject.id!, hash)}
@@ -4460,6 +4506,83 @@ function UnassignedTransferRow({ job, drivers, assignTransfer, cancelDispatch }:
   );
 }
 
+// ─── Driver Disposal Row (Projects) ──────────────────────────────────────
+
+function DriverDisposalRow({ hash, name, disposal, borderColor, allDisposals, onRemove, onSetDisposal }: {
+  hash: string;
+  name: string;
+  disposal?: { name: string; lat?: number; lng?: number };
+  borderColor: string;
+  allDisposals: NdicWell[];
+  onRemove: () => void;
+  onSetDisposal: (disp: { name: string; lat?: number; lng?: number } | null) => void;
+}) {
+  const [editing, setEditing] = useState(false);
+  const [search, setSearch] = useState('');
+  const results = search.length >= 2 ? searchDisposals(search, allDisposals) : [];
+
+  return (
+    <div className={`bg-gray-900 border ${borderColor} rounded px-3 py-1.5`}>
+      <div className="flex items-center justify-between">
+        <span className="text-white text-xs">{name}</span>
+        <button onClick={onRemove} className="text-red-400/50 hover:text-red-400 text-[10px]">Remove</button>
+      </div>
+      {!editing ? (
+        <button
+          onClick={() => { setEditing(true); setSearch(disposal?.name || ''); }}
+          className="text-[10px] mt-0.5 text-left w-full"
+        >
+          {disposal?.name
+            ? <span className="text-cyan-400">{disposal.name}</span>
+            : <span className="text-gray-500 italic">No drop-off assigned</span>
+          }
+        </button>
+      ) : (
+        <div className="mt-1 relative">
+          <div className="flex items-center gap-1">
+            <input
+              type="text"
+              value={search}
+              onChange={(e) => setSearch(e.target.value)}
+              placeholder="Search SWD..."
+              autoFocus
+              className="flex-1 px-2 py-1 bg-gray-800 border border-gray-600 rounded text-white text-[11px] focus:outline-none focus:border-cyan-500"
+            />
+            {disposal && (
+              <button
+                onClick={() => { onSetDisposal(null); setEditing(false); setSearch(''); }}
+                className="text-red-400 text-[10px] px-1"
+              >Clear</button>
+            )}
+            <button
+              onClick={() => { setEditing(false); setSearch(''); }}
+              className="text-gray-400 text-[10px] px-1"
+            >Done</button>
+          </div>
+          {results.length > 0 && (
+            <div className="absolute z-50 left-0 right-0 top-full mt-1 bg-gray-800 border border-gray-600 rounded max-h-32 overflow-y-auto shadow-lg">
+              {results.slice(0, 8).map((d, i) => (
+                <button
+                  key={i}
+                  onClick={() => {
+                    onSetDisposal({ name: d.well_name, lat: d.latitude || undefined, lng: d.longitude || undefined });
+                    setEditing(false);
+                    setSearch('');
+                  }}
+                  className="block w-full text-left px-2 py-1.5 hover:bg-gray-700 text-[11px]"
+                >
+                  <div className="text-white">{d.well_name}</div>
+                  {d.operator && <div className="text-gray-400 text-[10px]">{d.operator}</div>}
+                </button>
+              ))}
+            </div>
+          )}
+        </div>
+      )}
+    </div>
+  );
+}
+
 // ─── Projects List Panel ──────────────────────────────────────────────────
 
 function ProjectsListPanel({ projects, dispatches, drivers, onSelect }: {
@@ -4563,11 +4686,12 @@ function ProjectsListPanel({ projects, dispatches, drivers, onSelect }: {
 
 // ─── Project Detail Panel ─────────────────────────────────────────────────
 
-function ProjectDetailPanel({ project, projectDispatches, projectInvoices, drivers, cancelDispatch, onStatusChange, onAddDriver, onUpdateProject, onBatchDispatch }: {
+function ProjectDetailPanel({ project, projectDispatches, projectInvoices, drivers, allDisposals, cancelDispatch, onStatusChange, onAddDriver, onUpdateProject, onBatchDispatch }: {
   project: Project;
   projectDispatches: DispatchJob[];
   projectInvoices: ProjectInvoice[];
   drivers: { key: string; displayName: string; legalName?: string; phone?: string }[];
+  allDisposals: NdicWell[];
   cancelDispatch: (id: string) => void;
   onStatusChange: (id: string, status: 'active' | 'paused' | 'completed') => void;
   onAddDriver: (hash: string) => void;
@@ -5005,13 +5129,21 @@ function ProjectDetailPanel({ project, projectDispatches, projectInvoices, drive
               <div className="text-amber-400 text-[10px] font-bold uppercase tracking-wider mb-1.5">Day Shift ({(project.dayDriverHashes || []).length})</div>
               <div className="space-y-1">
                 {(project.dayDriverHashes || []).map(hash => (
-                  <div key={hash} className="flex items-center justify-between bg-gray-900 border border-amber-600/20 rounded px-3 py-1.5">
-                    <span className="text-white text-xs">{getDriverName(hash)}</span>
-                    <button onClick={() => {
+                  <DriverDisposalRow
+                    key={hash}
+                    hash={hash}
+                    name={getDriverName(hash)}
+                    disposal={project.driverDisposals?.[hash]}
+                    borderColor="border-amber-600/20"
+                    allDisposals={allDisposals}
+                    onRemove={() => {
                       const updated = (project.dayDriverHashes || []).filter(h => h !== hash);
                       onUpdateProject?.(project.id!, { dayDriverHashes: updated });
-                    }} className="text-red-400/50 hover:text-red-400 text-[10px]">Remove</button>
-                  </div>
+                    }}
+                    onSetDisposal={(disp) => {
+                      onUpdateProject?.(project.id!, { [`driverDisposals.${hash}`]: disp || null });
+                    }}
+                  />
                 ))}
                 {(project.dayDriverHashes || []).length === 0 && <div className="text-gray-600 text-[10px] py-2">No day drivers</div>}
               </div>
@@ -5021,13 +5153,21 @@ function ProjectDetailPanel({ project, projectDispatches, projectInvoices, drive
               <div className="text-blue-400 text-[10px] font-bold uppercase tracking-wider mb-1.5">Night Shift ({(project.nightDriverHashes || []).length})</div>
               <div className="space-y-1">
                 {(project.nightDriverHashes || []).map(hash => (
-                  <div key={hash} className="flex items-center justify-between bg-gray-900 border border-blue-600/20 rounded px-3 py-1.5">
-                    <span className="text-white text-xs">{getDriverName(hash)}</span>
-                    <button onClick={() => {
+                  <DriverDisposalRow
+                    key={hash}
+                    hash={hash}
+                    name={getDriverName(hash)}
+                    disposal={project.driverDisposals?.[hash]}
+                    borderColor="border-blue-600/20"
+                    allDisposals={allDisposals}
+                    onRemove={() => {
                       const updated = (project.nightDriverHashes || []).filter(h => h !== hash);
                       onUpdateProject?.(project.id!, { nightDriverHashes: updated });
-                    }} className="text-red-400/50 hover:text-red-400 text-[10px]">Remove</button>
-                  </div>
+                    }}
+                    onSetDisposal={(disp) => {
+                      onUpdateProject?.(project.id!, { [`driverDisposals.${hash}`]: disp || null });
+                    }}
+                  />
                 ))}
                 {(project.nightDriverHashes || []).length === 0 && <div className="text-gray-600 text-[10px] py-2">No night drivers</div>}
               </div>
