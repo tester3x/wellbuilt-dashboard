@@ -99,7 +99,7 @@ function buildPreviewHtml(T: TicketTemplate): string {
     measurements: () => {
       let h = '';
       if (T.jobType) h += '<div class="row"><span class="row-label">Type</span><span class="row-value">PW</span></div>';
-      if (T.quantity) h += '<div class="row"><span class="row-label">Quantity</span><span class="row-value">130</span></div>';
+      if (T.quantity) h += '<div class="row"><span class="row-label">BBLs</span><span class="row-value">130</span></div>';
       if (T.tankTop) h += '<div class="row"><span class="row-label">Tank Top</span><span class="row-value">10\' 4"</span></div>';
       if (T.tankBottom) h += '<div class="row"><span class="row-label">Tank Bottom</span><span class="row-value">3\' 8"</span></div>';
       return h;

@@ -286,22 +286,26 @@ export const TEMPLATE_FIELD_GROUPS: TemplateFieldGroup[] = [
   {
     id: 'pickup', label: 'Pickup Location', color: 'green',
     fields: [
+      { key: 'tlPickupArrival', label: 'Arrival Time' },
       { key: 'pickupCompany', label: 'Operator / Company' },
       { key: 'pickupLocation', label: 'Well Name' },
       { key: 'pickupApiNo', label: 'API #' },
       { key: 'pickupGps', label: 'GPS Coordinates' },
       { key: 'pickupLegalDesc', label: 'Legal Description' },
       { key: 'pickupCounty', label: 'County' },
+      { key: 'tlLoadedDeparture', label: 'Loaded / Departure Time' },
     ],
   },
   {
     id: 'dropoff', label: 'Drop-off Location', color: 'blue',
     fields: [
+      { key: 'tlDropoffArrival', label: 'Arrival Time' },
       { key: 'dropoffLocation', label: 'Location Name' },
       { key: 'dropoffApiNo', label: 'API #' },
       { key: 'dropoffGps', label: 'GPS Coordinates' },
       { key: 'dropoffCounty', label: 'County' },
       { key: 'dropoffLegalDesc', label: 'Legal Description' },
+      { key: 'tlUnloadedStop', label: 'Unloaded / Stop Time' },
     ],
   },
   {
@@ -333,15 +337,7 @@ export const TEMPLATE_FIELD_GROUPS: TemplateFieldGroup[] = [
       { key: 'hours', label: 'Hours' },
     ],
   },
-  {
-    id: 'timeline', label: 'Job Timeline', color: 'cyan',
-    fields: [
-      { key: 'tlPickupArrival', label: 'Pickup Arrival' },
-      { key: 'tlLoadedDeparture', label: 'Loaded / Departure' },
-      { key: 'tlDropoffArrival', label: 'Drop-off Arrival' },
-      { key: 'tlUnloadedStop', label: 'Unloaded / Stop Time' },
-    ],
-  },
+  // Job Timeline group removed — arrival/departure fields moved into Pickup/Drop-off groups
   {
     id: 'driver', label: 'Driver Info', color: 'indigo',
     fields: [
