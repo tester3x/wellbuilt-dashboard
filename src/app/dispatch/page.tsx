@@ -2310,8 +2310,9 @@ function DispatchPageInner() {
                 {/* Notes */}
                 <div className="flex-1 flex flex-col min-h-0">
                   <label className="block text-xs text-gray-400 mb-1">Notes</label>
-                  <textarea value={swNotes} onChange={(e) => setSwNotes(e.target.value)} placeholder="Special instructions, equipment needed, etc."
+                  <textarea value={swNotes} onChange={(e) => setSwNotes(e.target.value.slice(0, 150))} maxLength={150} placeholder="Special instructions, equipment needed, etc."
                     className="w-full flex-1 px-3 py-1.5 bg-gray-900 border border-gray-700 rounded text-white text-sm placeholder-gray-500 focus:outline-none focus:border-purple-500 resize-none" />
+                  <div className={`text-[10px] text-right mt-0.5 ${swNotes.length >= 150 ? 'text-red-400' : 'text-gray-500'}`}>{swNotes.length}/150</div>
                 </div>
               </div>{/* end bottom row */}
             </div>{/* end SW body */}
@@ -4125,8 +4126,9 @@ function CompletedJobsPanel({ jobs, drivers, allWells, allDisposals, highlightJo
                   </div>
                   <label className="block text-xs">
                     <span className="text-gray-500">Notes</span>
-                    <textarea value={editForm.notes || ''} onChange={e => setEditForm(f => ({ ...f, notes: e.target.value }))}
+                    <textarea value={editForm.notes || ''} onChange={e => setEditForm(f => ({ ...f, notes: e.target.value.slice(0, 150) }))} maxLength={150}
                       rows={2} className="w-full bg-gray-900 border border-gray-600 text-white text-xs rounded px-2 py-1.5 mt-0.5 resize-none" />
+                    <div className={`text-[10px] text-right mt-0.5 ${(editForm.notes?.length || 0) >= 150 ? 'text-red-400' : 'text-gray-500'}`}>{editForm.notes?.length || 0}/150</div>
                   </label>
                   <div className="flex items-center gap-2 pt-1">
                     <button
