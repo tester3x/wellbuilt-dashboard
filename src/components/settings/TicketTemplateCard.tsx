@@ -97,7 +97,7 @@ function buildPreviewHtml(T: TicketTemplate): string {
     invoice: () => T.invoiceNumber ? '<div class="row"><span class="row-label">Invoice #</span><span class="row-value">LG-1042</span></div>' : '',
 
     measurements: () => {
-      let h = '';
+      let h = '<div class="section-divider"></div>';
       if (T.jobType) h += '<div class="row"><span class="row-label">Type</span><span class="row-value">PW</span></div>';
       if (T.quantity) h += '<div class="row"><span class="row-label">BBLs</span><span class="row-value">130</span></div>';
       if (T.tankTop) h += '<div class="row"><span class="row-label">Tank Top</span><span class="row-value">10\' 4"</span></div>';
@@ -108,7 +108,7 @@ function buildPreviewHtml(T: TicketTemplate): string {
     notes: () => T.notes ? '<div class="notes-section"><div class="notes-label">NOTES</div>Frac tank fill — load 2 of 3</div>' : '',
 
     time: () => {
-      let h = '';
+      let h = '<div class="section-divider"></div>';
       if (T.startTime) h += '<div class="row"><span class="row-label">Start</span><span class="row-value">12:17</span></div>';
       if (T.stopTime) h += '<div class="row"><span class="row-label">Stop</span><span class="row-value">14:18</span></div>';
       if (T.hours) h += '<div class="row"><span class="row-label">Hours</span><span class="row-value">2.0</span></div>';
@@ -121,7 +121,7 @@ function buildPreviewHtml(T: TicketTemplate): string {
     },
 
     driver: () => {
-      let h = '';
+      let h = '<div class="section-divider"></div>';
       const ds = rowStyle('driver');
       if (T.driverName) h += `<div class="row"${ds}><span class="row-label">Driver</span><span class="row-value">John Smith</span></div>`;
       if (T.truckNumber) h += `<div class="row"${ds}><span class="row-label">Truck #</span><span class="row-value">LG-134</span></div>`;
@@ -158,6 +158,7 @@ function buildPreviewHtml(T: TicketTemplate): string {
     .row-label { font-weight: bold; font-size: 13px; min-width: 90px; }
     .row-value { text-align: right; font-size: 14px; flex: 1; }
     .section-hdr { font-size: 12px; font-weight: 900; text-align: center; padding: 4px 0 2px; margin-top: 6px; border-top: 1px solid #000; letter-spacing: 1px; }
+    .section-divider { border-top: 1px solid #999; margin: 6px 0 4px 0; }
     .notes-section { border: 1px solid #666; padding: 6px 8px; margin: 8px 0; min-height: 24px; font-size: 13px; }
     .notes-label { font-size: 9px; font-weight: bold; color: #444; }
     .footer { border-top: 2px solid #000; margin-top: 14px; padding-top: 6px; display: flex; justify-content: space-between; align-items: flex-end; }
