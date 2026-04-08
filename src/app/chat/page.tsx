@@ -587,23 +587,15 @@ export default function ChatPage() {
           ))}
         </div>
 
-        {/* New Message / New Group buttons */}
-        <div className="flex gap-2 px-3 py-2 border-b border-gray-800">
+        {/* New Direct Message button */}
+        <div className="px-3 py-2 border-b border-gray-800">
           <button
-            onClick={() => { setShowDriverPicker(!showDriverPicker); setShowGroupCreator(false); if (!showDriverPicker) loadDrivers(); }}
-            className={`flex-1 py-2 rounded-lg border text-sm font-semibold transition-colors ${
+            onClick={() => { setShowDriverPicker(!showDriverPicker); if (!showDriverPicker) loadDrivers(); }}
+            className={`w-full py-2 rounded-lg border text-sm font-semibold transition-colors ${
               showDriverPicker ? 'bg-[#FFD700]/20 border-[#FFD700] text-[#FFD700]' : 'bg-[#FFD700]/10 border-[#FFD700]/30 text-[#FFD700] hover:bg-[#FFD700]/20'
             }`}
           >
-            Direct
-          </button>
-          <button
-            onClick={() => { setShowGroupCreator(!showGroupCreator); setShowDriverPicker(false); if (!showGroupCreator) loadDrivers(); }}
-            className={`flex-1 py-2 rounded-lg border text-sm font-semibold transition-colors ${
-              showGroupCreator ? 'bg-[#FFD700]/20 border-[#FFD700] text-[#FFD700]' : 'bg-[#111] border-gray-700 text-gray-400 hover:border-gray-500 hover:text-white'
-            }`}
-          >
-            Group
+            New Direct Message
           </button>
         </div>
 
@@ -631,99 +623,6 @@ export default function ChatPage() {
             {filteredDrivers.length === 0 && (
               <p className="px-3 py-4 text-xs text-gray-600 text-center">No drivers found</p>
             )}
-          </div>
-        ) : showGroupCreator ? (
-          <div className="flex-1 overflow-y-auto bg-[#0d0d0d]">
-            {/* Group name */}
-            <div className="px-3 py-2 border-b border-gray-800">
-              <input
-                type="text"
-                value={groupName}
-                onChange={(e) => setGroupName(e.target.value)}
-                placeholder="Group name..."
-                className="w-full bg-[#1a1a1a] border border-gray-700 rounded px-3 py-2 text-sm text-white placeholder-gray-500 focus:outline-none focus:border-[#FFD700]/50"
-                autoFocus
-              />
-            </div>
-            {/* Group type */}
-            <div className="flex flex-wrap gap-1 px-3 py-2 border-b border-gray-800">
-              {(['service_group', 'well', 'project', 'shift'] as ThreadType[]).map((t) => (
-                <button
-                  key={t}
-                  onClick={() => setGroupType(t)}
-                  className={`px-2 py-1 rounded text-xs font-semibold border transition-colors ${
-                    groupType === t
-                      ? 'bg-[#FFD700]/20 border-[#FFD700] text-[#FFD700]'
-                      : 'bg-[#111] border-gray-700 text-gray-400 hover:border-gray-500'
-                  }`}
-                >
-                  {t === 'service_group' ? 'Crew' : t.charAt(0).toUpperCase() + t.slice(1)}
-                </button>
-              ))}
-            </div>
-            {/* Selected members */}
-            {groupMembers.length > 0 && (
-              <div className="px-3 py-2 border-b border-gray-800">
-                <div className="flex flex-wrap gap-1">
-                  {groupMembers.map((m) => (
-                    <span key={m.hash} className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full bg-[#FFD700]/15 text-[#FFD700] text-xs">
-                      {m.name.split(' ')[0]}
-                      <button onClick={() => setGroupMembers((prev) => prev.filter((p) => p.hash !== m.hash))} className="hover:text-red-400">✕</button>
-                    </span>
-                  ))}
-                </div>
-              </div>
-            )}
-            {/* Broadcast toggle */}
-            <div className="px-3 py-2 border-b border-gray-800">
-              <button
-                onClick={() => setGroupBroadcast(!groupBroadcast)}
-                className={`w-full flex items-center justify-between py-1.5 px-2 rounded text-xs transition-colors ${
-                  groupBroadcast ? 'bg-[#FFD700]/15 text-[#FFD700]' : 'text-gray-500 hover:text-gray-300'
-                }`}
-              >
-                <span>Broadcast only (drivers can't reply)</span>
-                <span className={`w-8 h-4 rounded-full relative transition-colors ${groupBroadcast ? 'bg-[#FFD700]' : 'bg-gray-700'}`}>
-                  <span className={`absolute top-0.5 w-3 h-3 rounded-full bg-white transition-transform ${groupBroadcast ? 'left-4' : 'left-0.5'}`} />
-                </span>
-              </button>
-            </div>
-            {/* Create button */}
-            <div className="px-3 py-2 border-b border-gray-800">
-              <button
-                onClick={createGroupThread}
-                disabled={!groupName.trim() || groupMembers.length === 0}
-                className={`w-full py-2 rounded-lg text-sm font-semibold transition-colors ${
-                  groupName.trim() && groupMembers.length > 0
-                    ? 'bg-[#FFD700] text-black hover:bg-[#FFD700]/90'
-                    : 'bg-gray-800 text-gray-600 cursor-not-allowed'
-                }`}
-              >
-                Create Group ({groupMembers.length} member{groupMembers.length !== 1 ? 's' : ''})
-              </button>
-            </div>
-            {/* Driver list to add */}
-            <div className="px-3 py-1 border-b border-gray-800">
-              <input
-                type="text"
-                value={driverSearch}
-                onChange={(e) => setDriverSearch(e.target.value)}
-                placeholder="Search drivers to add..."
-                className="w-full bg-transparent text-white text-sm placeholder-gray-500 focus:outline-none py-1"
-              />
-            </div>
-            {drivers.filter((d) => !groupMembers.some((m) => m.hash === d.hash))
-              .filter((d) => !driverSearch || d.name.toLowerCase().includes(driverSearch.toLowerCase()))
-              .map((d) => (
-              <div
-                key={d.hash}
-                onClick={() => setGroupMembers((prev) => [...prev, { hash: d.hash, name: d.name }])}
-                className="w-full text-left px-3 py-2.5 text-sm text-gray-300 hover:bg-[#FFD700]/10 hover:text-white cursor-pointer transition-colors border-b border-gray-800/30"
-                role="button"
-              >
-                + {d.name}
-              </div>
-            ))}
           </div>
         ) : (
           <div className="flex-1 overflow-y-auto">
@@ -761,9 +660,29 @@ export default function ChatPage() {
                     </span>
                     {unread && <span className="w-2 h-2 rounded-full bg-[#FFD700] flex-shrink-0" />}
                   </div>
-                  <span className="text-[9px] text-gray-600 ml-6 uppercase tracking-wider">
-                    {threadTypeLabel(thread.type)}
-                  </span>
+                  <div className="flex items-center gap-2 ml-6 mt-0.5">
+                    <span className="text-[9px] text-gray-600 uppercase tracking-wider">
+                      {threadTypeLabel(thread.type)}
+                    </span>
+                    {thread.type !== 'direct' && (
+                      <button
+                        onClick={async (e) => {
+                          e.stopPropagation();
+                          const db = getFirestoreDb();
+                          if (!db) return;
+                          await updateDoc(doc(db, 'chat_threads', thread.id), { broadcast: !(thread as any).broadcast });
+                        }}
+                        className={`text-[9px] px-1.5 py-0.5 rounded transition-colors ${
+                          (thread as any).broadcast
+                            ? 'bg-[#FFD700]/15 text-[#FFD700]'
+                            : 'text-gray-700 hover:text-gray-400'
+                        }`}
+                        title={(thread as any).broadcast ? 'Broadcast ON' : 'Click to enable broadcast'}
+                      >
+                        {(thread as any).broadcast ? '📢 BROADCAST' : '📢'}
+                      </button>
+                    )}
+                  </div>
                 </button>
               );
             })}
@@ -856,19 +775,98 @@ export default function ChatPage() {
                           </div>
                         ))
                       ) : (
-                        // Thread picker for group profiles
-                        matchingThreads.filter((t) => !assignedThreadIds.has(t.id) || t.id === slot?.threadId).map((t) => (
-                          <div
-                            key={t.id}
-                            onClick={() => assignSlot(index, { threadId: t.id, threadTitle: t.title })}
-                            className="px-3 py-2 text-sm text-gray-300 hover:bg-[#FFD700]/10 hover:text-white cursor-pointer border-b border-gray-800/30"
-                          >
-                            {t.title} <span className="text-[10px] text-gray-600">({t.participants?.length || 0} members)</span>
+                        // Thread picker + inline create for group profiles
+                        <>
+                          {matchingThreads.filter((t) => !assignedThreadIds.has(t.id) || t.id === slot?.threadId).map((t) => (
+                            <div
+                              key={t.id}
+                              onClick={() => assignSlot(index, { threadId: t.id, threadTitle: t.title })}
+                              className="px-3 py-2 text-sm text-gray-300 hover:bg-[#FFD700]/10 hover:text-white cursor-pointer border-b border-gray-800/30"
+                            >
+                              {t.title} <span className="text-[10px] text-gray-600">({t.participants?.length || 0})</span>
+                            </div>
+                          ))}
+                          {/* Inline group creation */}
+                          <div className="p-2 border-t border-gray-700">
+                            <input
+                              type="text"
+                              value={groupName}
+                              onChange={(e) => setGroupName(e.target.value)}
+                              placeholder="New group name..."
+                              className="w-full bg-[#1a1a1a] border border-gray-700 rounded px-2 py-1 text-xs text-white placeholder-gray-500 focus:outline-none focus:border-[#FFD700]/50 mb-1"
+                            />
+                            {/* Member chips */}
+                            {groupMembers.length > 0 && (
+                              <div className="flex flex-wrap gap-1 mb-1">
+                                {groupMembers.map((m) => (
+                                  <span key={m.hash} className="inline-flex items-center gap-0.5 px-1.5 py-0.5 rounded-full bg-[#FFD700]/15 text-[#FFD700] text-[10px]">
+                                    {m.name.split(' ')[0]}
+                                    <button onClick={() => setGroupMembers((prev) => prev.filter((p) => p.hash !== m.hash))} className="hover:text-red-400">✕</button>
+                                  </span>
+                                ))}
+                              </div>
+                            )}
+                            {/* Broadcast toggle */}
+                            <button
+                              onClick={() => setGroupBroadcast(!groupBroadcast)}
+                              className={`w-full flex items-center justify-between py-1 px-1 rounded text-[10px] mb-1 ${groupBroadcast ? 'text-[#FFD700]' : 'text-gray-600'}`}
+                            >
+                              <span>Broadcast (no replies)</span>
+                              <span>{groupBroadcast ? '📢' : '💬'}</span>
+                            </button>
+                            {/* Driver list */}
+                            <div className="max-h-24 overflow-y-auto border border-gray-800 rounded mb-1">
+                              {drivers.filter((d) => !groupMembers.some((m) => m.hash === d.hash)).map((d) => (
+                                <div
+                                  key={d.hash}
+                                  onClick={() => setGroupMembers((prev) => [...prev, { hash: d.hash, name: d.name }])}
+                                  className="px-2 py-1 text-[11px] text-gray-400 hover:bg-[#FFD700]/10 hover:text-white cursor-pointer border-b border-gray-800/30"
+                                >
+                                  + {d.name}
+                                </div>
+                              ))}
+                            </div>
+                            <button
+                              onClick={async () => {
+                                if (!groupName.trim() || groupMembers.length === 0) return;
+                                setGroupType(profileType as ThreadType);
+                                // Need to wait for state to update, so set it directly on the function
+                                const db = getFirestoreDb();
+                                if (!db) return;
+                                const senderName = user?.displayName || 'Dispatch';
+                                const participants = [myParticipantId, ...groupMembers.map((m) => `driver:${m.hash}`)];
+                                const participantNames: Record<string, string> = { [myParticipantId]: senderName };
+                                groupMembers.forEach((m) => { participantNames[`driver:${m.hash}`] = m.name; });
+                                const now = serverTimestamp();
+                                const systemText = `${senderName} created "${groupName.trim()}" with ${groupMembers.map((m) => m.name.split(' ')[0]).join(', ')}`;
+                                const threadRef = await addDoc(collection(db, 'chat_threads'), {
+                                  type: profileType,
+                                  companyId: companyId || '',
+                                  title: groupName.trim(),
+                                  participants,
+                                  participantNames,
+                                  broadcast: groupBroadcast,
+                                  status: 'active',
+                                  createdAt: now,
+                                  updatedAt: now,
+                                  lastRead: {},
+                                  lastMessage: { text: systemText, senderId: 'system', senderName: 'System', timestamp: now, type: 'system' },
+                                });
+                                await addDoc(collection(db, 'chat_threads', threadRef.id, 'messages'), {
+                                  text: systemText, senderId: 'system', senderName: 'System', timestamp: now, type: 'system',
+                                });
+                                // Assign to slot immediately
+                                assignSlot(index, { threadId: threadRef.id, threadTitle: groupName.trim() });
+                              }}
+                              disabled={!groupName.trim() || groupMembers.length === 0}
+                              className={`w-full py-1 rounded text-xs font-semibold ${
+                                groupName.trim() && groupMembers.length > 0 ? 'bg-[#FFD700] text-black' : 'bg-gray-800 text-gray-600'
+                              }`}
+                            >
+                              Create + Assign ({groupMembers.length})
+                            </button>
                           </div>
-                        ))
-                      )}
-                      {!isDirectProfile && matchingThreads.length === 0 && (
-                        <p className="px-3 py-4 text-xs text-gray-600 text-center">No {profileType} chats yet — create one first</p>
+                        </>
                       )}
                     </div>
                   </div>
