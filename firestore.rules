@@ -199,6 +199,11 @@ service cloud.firestore {
       }
     }
 
+    // Chat monitor profiles — dispatch grid configurations
+    match /chat_monitors/{monitorId} {
+      allow read, write: if true;
+    }
+
     // JSA records — Job Safety Analysis forms
     match /jsas/{jsaId} {
       allow read, write: if true;

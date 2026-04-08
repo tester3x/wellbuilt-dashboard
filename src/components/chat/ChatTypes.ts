@@ -123,17 +123,16 @@ export function threadTypeLabel(type: ThreadType): string {
   return THREAD_TYPE_LABELS[type] || type;
 }
 
-// SVG-friendly icon names for web (not Ionicons)
 const THREAD_TYPE_ICONS: Record<ThreadType, string> = {
-  shift: 'briefcase',
-  service_group: 'users',
-  project: 'wrench',
-  well: 'droplet',
-  direct: 'chat',
+  shift: '',
+  service_group: '',
+  project: '',
+  well: '',
+  direct: '',
 };
 
 export function threadTypeIcon(type: ThreadType): string {
-  return THREAD_TYPE_ICONS[type] || 'chat';
+  return THREAD_TYPE_ICONS[type] || '';
 }
 
 // ── Unread Helper ───────────────────────────────────────────────────────────
@@ -163,14 +162,16 @@ export function formatChatTime(ts: Timestamp | string | undefined): string {
   const diffMin = Math.floor(diffMs / 60000);
   const diffHr = Math.floor(diffMs / 3600000);
 
+  const time = date.toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit' });
+
   if (diffMin < 1) return 'now';
   if (diffMin < 60) return `${diffMin}m`;
-  if (diffHr < 24) return `${diffHr}h`;
+  if (diffHr < 24) return time; // "2:30 PM"
 
-  // Same year: "Mar 5"
+  // Same year: "Mar 5, 2:30 PM"
   if (date.getFullYear() === now.getFullYear()) {
-    return date.toLocaleDateString('en-US', { month: 'short', day: 'numeric' });
+    return `${date.toLocaleDateString('en-US', { month: 'short', day: 'numeric' })}, ${time}`;
   }
-  // Different year: "3/5/25"
-  return date.toLocaleDateString('en-US', { month: 'numeric', day: 'numeric', year: '2-digit' });
+  // Different year: "3/5/25, 2:30 PM"
+  return `${date.toLocaleDateString('en-US', { month: 'numeric', day: 'numeric', year: '2-digit' })}, ${time}`;
 }
