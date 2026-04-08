@@ -875,7 +875,13 @@ export const processIncomingPull = functionsV1.database
     let flowRate = '';
     if (recoveryInches > 0 && timeDifDays > 0) {
       flowRateDays = (timeDifDays / recoveryInches) * 12;
-      flowRate = daysToHMMSS(flowRateDays);
+      // Reject unreasonable flow rates (matches windowBblsPerDay safeguard)
+      if (flowRateDays >= 365) {
+        console.log(`[FlowRate] ${wellName}: rejecting anomalous ${flowRateDays.toFixed(2)} days/ft (timeDif=${timeDifDays.toFixed(4)}d, recovery=${recoveryInches}in)`);
+        flowRateDays = 0;
+      } else {
+        flowRate = daysToHMMSS(flowRateDays);
+      }
     }
 
     // Calculate AFR
@@ -1238,7 +1244,12 @@ export const processEditRequest = functionsV1.database
 
     if (recoveryInches > 0 && timeDifDays > 0) {
       flowRateDays = (timeDifDays / recoveryInches) * 12;
-      flowRate = daysToHMMSS(flowRateDays);
+      if (flowRateDays >= 365) {
+        console.log(`[FlowRate-Edit] Rejecting anomalous ${flowRateDays.toFixed(2)} days/ft`);
+        flowRateDays = 0;
+      } else {
+        flowRate = daysToHMMSS(flowRateDays);
+      }
     }
 
     // Update the processed packet with new values
@@ -1984,3 +1995,426 @@ export const cleanupExpiredPhotos = functionsV2.onSchedule('every day 03:00', as
 
   console.log(`[PhotoCleanup] Done. Deleted ${deletedCount} photos from ${cleanedInvoices} invoices.`);
 });
+
+// ============================================================
+// WB CHAT — Auto-create threads and post system messages
+// ============================================================
+
+const firestoreDb = admin.firestore();
+
+/** Get dispatch/admin user participant IDs for a company */
+async function getDispatchParticipants(companyId: string): Promise<{ ids: string[]; names: Record<string, string> }> {
+  const usersSnap = await db.ref('users').once('value');
+  const users = usersSnap.val() || {};
+  const ids: string[] = [];
+  const names: Record<string, string> = {};
+  for (const [uid, userData] of Object.entries(users) as [string, any][]) {
+    if (!userData.role || !['admin', 'manager', 'it'].includes(userData.role)) continue;
+    // WB admin (no companyId) sees all, hauler admin sees their company only
+    if (userData.companyId && userData.companyId !== companyId) continue;
+    const pid = `user:${uid}`;
+    ids.push(pid);
+    names[pid] = userData.displayName || userData.email || 'Dispatch';
+  }
+  return { ids, names };
+}
+
+/** Post a system message to a thread */
+async function postSystemMessage(
+  threadId: string,
+  text: string,
+  systemType: string,
+  systemData?: Record<string, any>,
+) {
+  const now = admin.firestore.Timestamp.now();
+  await firestoreDb.collection('chat_threads').doc(threadId).collection('messages').add({
+    text,
+    senderId: 'system',
+    senderName: 'WellBuilt',
+    timestamp: now,
+    type: 'system',
+    systemType,
+    ...(systemData ? { systemData } : {}),
+  });
+  // Update thread lastMessage
+  await firestoreDb.collection('chat_threads').doc(threadId).update({
+    lastMessage: {
+      text: text.length > 100 ? text.substring(0, 100) + '...' : text,
+      senderId: 'system',
+      senderName: 'WellBuilt',
+      timestamp: now,
+      type: 'system',
+    },
+    updatedAt: now,
+  });
+}
+
+// ── onShiftCreate: Create shift thread when driver starts shift ────────────
+export const onShiftCreate = functionsV1.firestore
+  .document('driver_shifts/{shiftId}')
+  .onCreate(async (snap, context) => {
+    const shift = snap.data();
+    if (!shift) return;
+
+    const driverId = shift.driverId || shift.driverHash || '';
+    const driverName = shift.driverName || shift.displayName || 'Driver';
+    const companyId = shift.companyId || '';
+    if (!driverId || !companyId) return;
+
+    const driverPid = `driver:${driverId}`;
+    const { ids: dispatchIds, names: dispatchNames } = await getDispatchParticipants(companyId);
+
+    const participants = [driverPid, ...dispatchIds];
+    const participantNames: Record<string, string> = { [driverPid]: driverName, ...dispatchNames };
+
+    const now = admin.firestore.Timestamp.now();
+    const threadRef = await firestoreDb.collection('chat_threads').add({
+      type: 'shift',
+      companyId,
+      shiftId: context.params.shiftId,
+      title: driverName,
+      subtitle: 'Shift',
+      participants,
+      participantNames,
+      status: 'active',
+      createdAt: now,
+      updatedAt: now,
+      lastRead: {},
+    });
+
+    await postSystemMessage(threadRef.id, `${driverName} started their shift`, 'shift_started', { driverName });
+    console.log(`[WBChat] Shift thread created: ${threadRef.id} for ${driverName}`);
+  });
+
+// ── onShiftUpdate: Archive shift thread when shift ends ────────────────────
+export const onShiftUpdate = functionsV1.firestore
+  .document('driver_shifts/{shiftId}')
+  .onUpdate(async (change, context) => {
+    const before = change.before.data();
+    const after = change.after.data();
+    if (!after) return;
+
+    // Detect shift end (logoutAt set, or status changed to ended)
+    const shiftEnded = (!before.logoutAt && after.logoutAt) || (!before.endedAt && after.endedAt);
+    if (!shiftEnded) return;
+
+    // Find the shift thread and archive it
+    const threadsSnap = await firestoreDb.collection('chat_threads')
+      .where('type', '==', 'shift')
+      .where('shiftId', '==', context.params.shiftId)
+      .limit(1)
+      .get();
+
+    if (!threadsSnap.empty) {
+      const threadDoc = threadsSnap.docs[0];
+      const driverName = after.driverName || after.displayName || 'Driver';
+      await postSystemMessage(threadDoc.id, `${driverName} ended their shift`, 'shift_ended', { driverName });
+      await threadDoc.ref.update({ status: 'archived', updatedAt: admin.firestore.Timestamp.now() });
+      console.log(`[WBChat] Shift thread archived: ${threadDoc.id}`);
+    }
+  });
+
+// ── onDispatchCreate: Post to shift thread + create well/group threads ─────
+export const onDispatchCreate = functionsV1.firestore
+  .document('dispatches/{jobId}')
+  .onCreate(async (snap, context) => {
+    const job = snap.data();
+    if (!job) return;
+
+    const driverHash = job.driverHash || '';
+    const driverName = job.driverFirstName || job.driverName || 'Driver';
+    const companyId = job.companyId || '';
+    const wellName = job.ndicWellName || job.wellName || '';
+    if (!driverHash || !companyId) return;
+
+    const driverPid = `driver:${driverHash}`;
+
+    // 1. Post to driver's active shift thread
+    const shiftThreads = await firestoreDb.collection('chat_threads')
+      .where('type', '==', 'shift')
+      .where('participants', 'array-contains', driverPid)
+      .where('status', '==', 'active')
+      .orderBy('createdAt', 'desc')
+      .limit(1)
+      .get();
+
+    if (!shiftThreads.empty) {
+      const shiftThread = shiftThreads.docs[0];
+      const jobType = job.jobType === 'service' ? 'Service Work' : 'Production Water';
+      await postSystemMessage(
+        shiftThread.id,
+        `Job assigned: ${wellName} (${jobType})`,
+        'job_assigned',
+        { wellName, driverName, jobType },
+      );
+    }
+
+    // 2. Service group thread
+    if (job.serviceGroupId) {
+      const existingGroup = await firestoreDb.collection('chat_threads')
+        .where('type', '==', 'service_group')
+        .where('serviceGroupId', '==', job.serviceGroupId)
+        .where('companyId', '==', companyId)
+        .limit(1)
+        .get();
+
+      if (existingGroup.empty) {
+        // Create new service group thread
+        const { ids: dispatchIds, names: dispatchNames } = await getDispatchParticipants(companyId);
+        const now = admin.firestore.Timestamp.now();
+        const threadRef = await firestoreDb.collection('chat_threads').add({
+          type: 'service_group',
+          companyId,
+          serviceGroupId: job.serviceGroupId,
+          title: wellName || 'Service Crew',
+          subtitle: job.serviceType || 'Service Work',
+          participants: [driverPid, ...dispatchIds],
+          participantNames: { [driverPid]: driverName, ...dispatchNames },
+          status: 'active',
+          createdAt: now,
+          updatedAt: now,
+          lastRead: {},
+        });
+        await postSystemMessage(threadRef.id, `${driverName} joined the crew`, 'driver_joined', { driverName });
+      } else {
+        // Add driver to existing group thread
+        const threadDoc = existingGroup.docs[0];
+        const existing = threadDoc.data();
+        if (!existing.participants.includes(driverPid)) {
+          await threadDoc.ref.update({
+            participants: admin.firestore.FieldValue.arrayUnion(driverPid),
+            [`participantNames.${driverPid}`]: driverName,
+            updatedAt: admin.firestore.Timestamp.now(),
+          });
+          await postSystemMessage(threadDoc.id, `${driverName} joined the crew`, 'driver_joined', { driverName });
+        }
+      }
+    }
+
+    // 3. Well thread — create/update when 2+ drivers have active jobs at same well
+    if (wellName) {
+      const sameWellJobs = await firestoreDb.collection('dispatches')
+        .where('wellName', '==', job.wellName)
+        .where('companyId', '==', companyId)
+        .where('status', 'in', ['pending', 'accepted', 'in_progress'])
+        .get();
+
+      // Collect unique driver hashes
+      const driverHashes = new Set<string>();
+      const driverNames: Record<string, string> = {};
+      sameWellJobs.docs.forEach(d => {
+        const data = d.data();
+        if (data.driverHash) {
+          driverHashes.add(data.driverHash);
+          driverNames[`driver:${data.driverHash}`] = data.driverFirstName || data.driverName || 'Driver';
+        }
+      });
+
+      if (driverHashes.size >= 2) {
+        const existingWell = await firestoreDb.collection('chat_threads')
+          .where('type', '==', 'well')
+          .where('wellName', '==', wellName)
+          .where('companyId', '==', companyId)
+          .where('status', '==', 'active')
+          .limit(1)
+          .get();
+
+        const { ids: dispatchIds, names: dispatchNames } = await getDispatchParticipants(companyId);
+        const allParticipants = [...Array.from(driverHashes).map(h => `driver:${h}`), ...dispatchIds];
+        const allNames = { ...driverNames, ...dispatchNames };
+
+        if (existingWell.empty) {
+          const now = admin.firestore.Timestamp.now();
+          const threadRef = await firestoreDb.collection('chat_threads').add({
+            type: 'well',
+            companyId,
+            wellName,
+            title: wellName,
+            subtitle: `${driverHashes.size} drivers`,
+            participants: allParticipants,
+            participantNames: allNames,
+            status: 'active',
+            createdAt: now,
+            updatedAt: now,
+            lastRead: {},
+          });
+          await postSystemMessage(threadRef.id, `${driverHashes.size} drivers at ${wellName}`, 'driver_joined', { wellName });
+          console.log(`[WBChat] Well thread created: ${threadRef.id} for ${wellName}`);
+        } else {
+          // Update participants
+          const threadDoc = existingWell.docs[0];
+          await threadDoc.ref.update({
+            participants: allParticipants,
+            participantNames: allNames,
+            subtitle: `${driverHashes.size} drivers`,
+            updatedAt: admin.firestore.Timestamp.now(),
+          });
+        }
+      }
+    }
+
+    console.log(`[WBChat] Dispatch created: ${context.params.jobId} for ${driverName} at ${wellName}`);
+  });
+
+// ── onDispatchUpdate: Post status changes to shift thread ──────────────────
+export const onDispatchUpdate = functionsV1.firestore
+  .document('dispatches/{jobId}')
+  .onUpdate(async (change) => {
+    const before = change.before.data();
+    const after = change.after.data();
+    if (!after || !before) return;
+
+    // Only post on status changes
+    if (before.status === after.status) return;
+
+    const driverHash = after.driverHash || '';
+    const driverName = after.driverFirstName || after.driverName || 'Driver';
+    const wellName = after.ndicWellName || after.wellName || '';
+    const companyId = after.companyId || '';
+    if (!driverHash) return;
+
+    const driverPid = `driver:${driverHash}`;
+
+    // Find driver's active shift thread
+    const shiftThreads = await firestoreDb.collection('chat_threads')
+      .where('type', '==', 'shift')
+      .where('participants', 'array-contains', driverPid)
+      .where('status', '==', 'active')
+      .orderBy('createdAt', 'desc')
+      .limit(1)
+      .get();
+
+    if (shiftThreads.empty) return;
+    const shiftThreadId = shiftThreads.docs[0].id;
+
+    // Status change messages
+    const statusMessages: Record<string, string> = {
+      accepted: `${driverName} accepted ${wellName}`,
+      in_progress: `${driverName} en route to ${wellName}`,
+      completed: `${driverName} completed ${wellName}${after.bbls ? ` — ${after.bbls} BBL` : ''}`,
+      declined: `${driverName} declined ${wellName}${after.declineReason ? `: ${after.declineReason}` : ''}`,
+      cancelled: `Job cancelled: ${wellName}`,
+    };
+
+    const msg = statusMessages[after.status];
+    if (msg) {
+      await postSystemMessage(shiftThreadId, msg, 'status_change', {
+        status: after.status,
+        wellName,
+        driverName,
+        bbls: after.bbls,
+      });
+    }
+
+    // Archive service group thread when all jobs completed
+    if (after.status === 'completed' && after.serviceGroupId) {
+      const groupJobs = await firestoreDb.collection('dispatches')
+        .where('serviceGroupId', '==', after.serviceGroupId)
+        .where('companyId', '==', companyId)
+        .get();
+      const allDone = groupJobs.docs.every(d => {
+        const s = d.data().status;
+        return s === 'completed' || s === 'cancelled';
+      });
+      if (allDone) {
+        const groupThreads = await firestoreDb.collection('chat_threads')
+          .where('type', '==', 'service_group')
+          .where('serviceGroupId', '==', after.serviceGroupId)
+          .limit(1)
+          .get();
+        if (!groupThreads.empty) {
+          await groupThreads.docs[0].ref.update({ status: 'archived', updatedAt: admin.firestore.Timestamp.now() });
+        }
+      }
+    }
+  });
+
+// ── onProjectWrite: Create/update project thread ───────────────────────────
+export const onProjectWrite = functionsV1.firestore
+  .document('projects/{projectId}')
+  .onWrite(async (change, context) => {
+    const after = change.after.exists ? change.after.data() : null;
+    if (!after) return; // Deleted
+
+    const companyId = after.companyId || '';
+    const projectName = after.name || 'Project';
+
+    // Collect all driver participants
+    const driverHashes = new Set<string>();
+    (after.dayDriverHashes || []).forEach((h: string) => driverHashes.add(h));
+    (after.nightDriverHashes || []).forEach((h: string) => driverHashes.add(h));
+    // Also check driverSchedule
+    if (after.driverSchedule) {
+      Object.values(after.driverSchedule).forEach((hashes: any) => {
+        if (Array.isArray(hashes)) hashes.forEach((h: string) => driverHashes.add(h));
+      });
+    }
+
+    // Look up driver names from RTDB
+    const driverNames: Record<string, string> = {};
+    for (const hash of driverHashes) {
+      const driverSnap = await db.ref(`drivers/approved/${hash}`).once('value');
+      const driverData = driverSnap.val();
+      if (driverData) {
+        const name = driverData.legalName?.split(' ')[0] || driverData.displayName || 'Driver';
+        driverNames[`driver:${hash}`] = name;
+      }
+    }
+
+    const { ids: dispatchIds, names: dispatchNames } = await getDispatchParticipants(companyId);
+    const allParticipants = [...Array.from(driverHashes).map(h => `driver:${h}`), ...dispatchIds];
+    const allNames = { ...driverNames, ...dispatchNames };
+
+    // Check for existing project thread
+    const existing = await firestoreDb.collection('chat_threads')
+      .where('type', '==', 'project')
+      .where('projectId', '==', context.params.projectId)
+      .limit(1)
+      .get();
+
+    const now = admin.firestore.Timestamp.now();
+
+    if (existing.empty) {
+      // Create project thread
+      const threadRef = await firestoreDb.collection('chat_threads').add({
+        type: 'project',
+        companyId,
+        projectId: context.params.projectId,
+        title: projectName,
+        subtitle: after.serviceType || 'Project',
+        participants: allParticipants,
+        participantNames: allNames,
+        status: after.status === 'completed' ? 'archived' : 'active',
+        createdAt: now,
+        updatedAt: now,
+        lastRead: {},
+      });
+      await postSystemMessage(threadRef.id, `Project started: ${projectName}`, 'job_assigned', { wellName: projectName });
+      console.log(`[WBChat] Project thread created: ${threadRef.id} for ${projectName}`);
+    } else {
+      // Update participants and status
+      const threadDoc = existing.docs[0];
+      await threadDoc.ref.update({
+        participants: allParticipants,
+        participantNames: allNames,
+        title: projectName,
+        subtitle: `${driverHashes.size} drivers · ${after.serviceType || 'Project'}`,
+        status: after.status === 'completed' ? 'archived' : 'active',
+        updatedAt: now,
+      });
+
+      // Post shift handoff notes as messages
+      const before = change.before.exists ? change.before.data() : null;
+      if (before && after.updates && after.updates.length > (before.updates?.length || 0)) {
+        const newUpdates = after.updates.slice(before.updates?.length || 0);
+        for (const update of newUpdates) {
+          await postSystemMessage(
+            threadDoc.id,
+            update.text || update.note || 'Shift update',
+            'status_change',
+            { driverName: update.author || 'Unknown' },
+          );
+        }
+      }
+    }
+  });

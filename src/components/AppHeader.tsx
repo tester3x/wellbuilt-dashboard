@@ -8,6 +8,8 @@ import { useAuth } from '@/contexts/AuthContext';
 import { TABS, getActiveTab } from '@/lib/tabs';
 import { hasRole } from '@/lib/auth';
 import { NotificationBell } from './NotificationBell';
+import { ChatIcon } from './chat/ChatIcon';
+import { ChatSidebar } from './chat/ChatSidebar';
 import { getFirebaseDatabase } from '@/lib/firebase';
 
 export function AppHeader() {
@@ -15,6 +17,8 @@ export function AppHeader() {
   const pathname = usePathname();
   const activeTabId = getActiveTab(pathname);
   const [pendingDriverCount, setPendingDriverCount] = useState(0);
+  const [chatOpen, setChatOpen] = useState(false);
+  const [chatUnread, setChatUnread] = useState(0);
 
   // Real-time listener: pending driver count → drives Admin button pulse
   // This is independent of the notification bell. Bell = awareness, pulse = persistent reminder.
@@ -96,11 +100,21 @@ export function AppHeader() {
           </nav>
         </div>
 
-        {/* RIGHT: Bell, pinned to right edge */}
-        <div className="px-4 pt-3 flex items-center">
+        {/* RIGHT: Chat + Bell, pinned to right edge */}
+        <div className="px-4 pt-3 flex items-center gap-2">
+          <ChatIcon onClick={() => setChatOpen(!chatOpen)} unreadCount={chatUnread} />
           <NotificationBell />
         </div>
       </div>
+
+      {/* Chat Sidebar */}
+      <ChatSidebar
+        visible={chatOpen}
+        onClose={() => setChatOpen(false)}
+        userId={user?.uid || 'dev'}
+        companyId={user?.companyId || ''}
+        onUnreadChange={setChatUnread}
+      />
     </header>
   );
 }
