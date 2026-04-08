@@ -646,8 +646,7 @@ export default function ChatPage() {
                 {hasThread && <span className="text-[10px] text-gray-600">open</span>}
               </div>
               );
-            }
-            ))}
+            })}
             {filteredDrivers.length === 0 && (
               <p className="px-3 py-4 text-xs text-gray-600 text-center">No drivers found</p>
             )}

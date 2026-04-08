@@ -409,6 +409,11 @@ export interface CompanyConfig {
   requirePhotos?: boolean;       // Require CYA photos before closing a job
   minPhotoCount?: number;        // Minimum photos required (default 1 when required)
   photoRetentionDays?: number;   // Auto-delete photos after N days (default 30)
+  // JSA (Job Safety Analysis) enforcement mode
+  // off (default): JSA available in overflow menu but not required
+  // per_shift: JSA required once at shift start before first job
+  // per_location: JSA required at each new well location (plus shift start)
+  jsaMode?: 'off' | 'per_shift' | 'per_location';
 }
 
 export interface CustomJobType {
