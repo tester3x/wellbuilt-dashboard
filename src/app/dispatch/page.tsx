@@ -2458,7 +2458,7 @@ function DispatchPageInner() {
                   >
                     Active Jobs
                     {(() => {
-                      const activeCount = dispatches.filter(d => !['completed', 'dismissed'].includes(d.status)).length;
+                      const activeCount = dispatches.filter(d => !['completed', 'dismissed'].includes(d.status)).reduce((sum, d) => sum + ((d as any).loadCount || 1), 0);
                       return activeCount > 0 ? (
                         <span className={`ml-1 px-1.5 py-0.5 text-[10px] rounded font-bold ${
                           rightPanelTab === 'jobs' ? 'bg-blue-500/40 text-blue-100' : 'bg-blue-600/20 text-blue-400'
@@ -2500,16 +2500,16 @@ function DispatchPageInner() {
                 <div className="flex items-center gap-1.5">
                   {rightPanelTab === 'jobs' && (
                     <>
-                      {dispatches.filter(d => d.jobType === 'pw' && d.status !== 'completed').length > 0 && (
+                      {(() => { const pw = dispatches.filter(d => d.jobType === 'pw' && d.status !== 'completed'); const pwLoads = pw.reduce((s, d) => s + ((d as any).loadCount || 1), 0); return pwLoads > 0 ? (
                         <span className="px-1.5 py-0.5 bg-blue-600/20 text-blue-400 text-[10px] rounded font-bold">
-                          {dispatches.filter(d => d.jobType === 'pw' && d.status !== 'completed').length} PW
+                          {pwLoads} PW
                         </span>
-                      )}
-                      {dispatches.filter(d => d.jobType === 'service' && d.status !== 'completed').length > 0 && (
+                      ) : null; })()}
+                      {(() => { const sw = dispatches.filter(d => d.jobType === 'service' && d.status !== 'completed'); const swLoads = sw.reduce((s, d) => s + ((d as any).loadCount || 1), 0); return swLoads > 0 ? (
                         <span className="px-1.5 py-0.5 bg-purple-600/20 text-purple-400 text-[10px] rounded font-bold">
-                          {dispatches.filter(d => d.jobType === 'service' && d.status !== 'completed').length} SW
+                          {swLoads} SW
                         </span>
-                      )}
+                      ) : null; })()}
                     </>
                   )}
                   {rightPanelTab === 'projects' && !selectedProject && (
@@ -3525,8 +3525,8 @@ function ActiveDispatchPanel({ dispatches, cancelDispatch, drivers, assignTransf
         const isExpanded = expandedDrivers.has(driverHash);
         const driverRecord = drivers?.find(d => d.key === driverHash);
         const driverName = driverRecord?.legalName || jobs[0].driverName || jobs[0].driverFirstName || 'Unknown';
-        const pwCount = jobs.filter(j => j.jobType === 'pw').length;
-        const swCount = jobs.filter(j => j.jobType === 'service').length;
+        const pwCount = jobs.filter(j => j.jobType === 'pw').reduce((s, j) => s + ((j as any).loadCount || 1), 0);
+        const swCount = jobs.filter(j => j.jobType === 'service').reduce((s, j) => s + ((j as any).loadCount || 1), 0);
 
         const activeJob = jobs.find(j => j.driverStage && !['completed', 'paused'].includes(j.driverStage));
         const isPaused = jobs.some(j => j.driverStage === 'paused' || j.status === 'paused');
