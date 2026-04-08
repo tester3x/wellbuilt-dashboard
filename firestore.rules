@@ -190,6 +190,20 @@ service cloud.firestore {
       allow read, write: if true;
     }
 
+    // Chat threads — real-time messaging between drivers and dispatch
+    match /chat_threads/{threadId} {
+      allow read, write: if true;
+      match /messages/{messageId} {
+        allow read, create: if true;
+        allow update, delete: if false; // Messages are immutable
+      }
+    }
+
+    // JSA records — Job Safety Analysis forms
+    match /jsas/{jsaId} {
+      allow read, write: if true;
+    }
+
     // Everything else — deny (Cloud Functions use Admin SDK which bypasses rules)
     match /{document=**} {
       allow read, write: if false;
