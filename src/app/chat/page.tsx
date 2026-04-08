@@ -405,15 +405,29 @@ export default function ChatPage() {
       ? nonEmptyThreads.filter((t) => t.status !== 'archived')
       : nonEmptyThreads.filter((t) => t.type === filter && t.status !== 'archived');
 
-  const driversWithThreads = new Set(
+  // Unread counts by thread type — for chip glow indicators
+  const unreadByType = useMemo(() => {
+    const counts: Record<string, number> = {};
+    for (const t of nonEmptyThreads) {
+      if (t.status === 'archived') continue;
+      if (isThreadUnread(t, myParticipantId)) {
+        counts[t.type] = (counts[t.type] || 0) + 1;
+        counts['all'] = (counts['all'] || 0) + 1;
+      }
+    }
+    return counts;
+  }, [nonEmptyThreads, myParticipantId]);
+
+  // Show all drivers in the picker — clicking one with an existing thread opens it,
+  // clicking one without creates a new thread. No more hiding drivers after first message.
+  const driversWithThreads = new Map<string, string>(
     threads.filter((t) => t.type === 'direct').flatMap((t) =>
-      t.participants.filter((p) => p.startsWith('driver:')).map((p) => p.replace('driver:', ''))
+      t.participants.filter((p) => p.startsWith('driver:')).map((p) => [p.replace('driver:', ''), t.id] as [string, string])
     )
   );
-  const availableDrivers = drivers.filter((d) => !driversWithThreads.has(d.hash));
   const filteredDrivers = driverSearch
-    ? availableDrivers.filter(d => d.name.toLowerCase().includes(driverSearch.toLowerCase()))
-    : availableDrivers;
+    ? drivers.filter(d => d.name.toLowerCase().includes(driverSearch.toLowerCase()))
+    : drivers;
 
   const getTitle = (thread: ChatThread) => {
     if (thread.type === 'direct') {
@@ -428,7 +442,7 @@ export default function ChatPage() {
 
   // --- Render ---
   return (
-    <div className="h-screen bg-[#0a0a0a] text-white flex">
+    <div className="h-dvh bg-[#0a0a0a] text-white flex">
       {/* Left: Sidebar */}
       <div className="w-80 border-r border-gray-800 flex flex-col">
         {/* Header — gear opens everything, profile name is just a label */}
@@ -572,19 +586,28 @@ export default function ChatPage() {
 
         {/* Filter chips */}
         <div className="flex flex-wrap gap-1.5 px-3 py-2 border-b border-gray-800">
-          {FILTERS.map((f) => (
+          {FILTERS.map((f) => {
+            const hasUnread = (unreadByType[f.value] || 0) > 0;
+            const isActive = filter === f.value;
+            return (
             <button
               key={f.value}
               onClick={() => setFilter(f.value)}
-              className={`px-2.5 py-1 rounded-full text-xs font-semibold border transition-colors ${
-                filter === f.value
+              className={`px-2.5 py-1 rounded-full text-xs font-semibold border transition-colors relative ${
+                isActive
                   ? 'bg-[#FFD700]/20 border-[#FFD700] text-[#FFD700]'
-                  : 'bg-[#111] border-gray-700 text-gray-400 hover:border-gray-500'
+                  : hasUnread
+                    ? 'bg-[#FFD700]/10 border-[#FFD700]/50 text-[#FFD700]/80 animate-pulse'
+                    : 'bg-[#111] border-gray-700 text-gray-400 hover:border-gray-500'
               }`}
             >
               {f.label}
+              {hasUnread && !isActive && (
+                <span className="absolute -top-1 -right-1 w-2.5 h-2.5 rounded-full bg-[#FFD700]" />
+              )}
             </button>
-          ))}
+            );
+          })}
         </div>
 
         {/* New Direct Message button */}
@@ -610,15 +633,20 @@ export default function ChatPage() {
               className="w-full px-3 py-2 bg-transparent text-white text-sm placeholder-gray-500 border-b border-gray-800 focus:outline-none sticky top-0 bg-[#0d0d0d] z-10"
               autoFocus
             />
-            {filteredDrivers.map((d) => (
+            {filteredDrivers.map((d) => {
+              const hasThread = driversWithThreads.has(d.hash);
+              return (
               <div
                 key={d.hash}
                 onClick={() => { ensureDriverThread(d.hash, d.name, d.companyId); setShowDriverPicker(false); }}
-                className="w-full text-left px-3 py-3 text-sm text-gray-300 hover:bg-[#FFD700]/10 hover:text-white cursor-pointer transition-colors border-b border-gray-800/30"
+                className={`w-full text-left px-3 py-3 text-sm hover:bg-[#FFD700]/10 hover:text-white cursor-pointer transition-colors border-b border-gray-800/30 flex items-center justify-between ${hasThread ? 'text-gray-500' : 'text-gray-300'}`}
                 role="button"
               >
-                {d.name}
+                <span>{d.name}</span>
+                {hasThread && <span className="text-[10px] text-gray-600">open</span>}
               </div>
+              );
+            }
             ))}
             {filteredDrivers.length === 0 && (
               <p className="px-3 py-4 text-xs text-gray-600 text-center">No drivers found</p>
@@ -640,6 +668,15 @@ export default function ChatPage() {
                   onClick={() => {
                     // If in setup mode, don't open — setup handles slot assignment
                     if (setupMode) return;
+                    // Open thread in the first empty grid slot (or replace last if full)
+                    if (activeProfile && slots.length > 0) {
+                      const emptyIdx = openPanes.findIndex((p) => !p);
+                      const targetIdx = emptyIdx >= 0 ? emptyIdx : slots.length - 1;
+                      const newSlots = [...slots];
+                      // Assign as thread slot (works for any thread type)
+                      newSlots[targetIdx] = { threadId: thread.id, threadTitle: getTitle(thread) };
+                      saveProfileSlots(newSlots);
+                    }
                   }}
                   className={`w-full text-left px-3 py-3 border-b border-gray-800/50 hover:bg-[#111] transition-colors ${
                     isOpen ? 'bg-[#111] border-l-2 border-l-[#FFD700]' : ''
@@ -1034,7 +1071,7 @@ export default function ChatPage() {
                       <div className={`max-w-[80%] rounded-xl px-3 py-1.5 ${
                         isMine ? 'bg-[#FFD700] text-black rounded-br-sm' : 'bg-[#1a1a1a] text-gray-200 rounded-bl-sm'
                       }`}>
-                        {!isMine && <p className="text-[10px] font-semibold mb-0.5 text-[#FFD700]">{msg.senderName}</p>}
+                        {!isMine && msg.senderName && <p className="text-[10px] font-semibold mb-0.5 text-[#FFD700]">{msg.senderName}</p>}
                         {isPhoto ? (
                           <a href={(msg as any).photoUrl} target="_blank" rel="noopener noreferrer">
                             <img src={(msg as any).photoUrl} alt="Photo" className="rounded-lg max-w-full max-h-32 cursor-pointer hover:opacity-80" />
