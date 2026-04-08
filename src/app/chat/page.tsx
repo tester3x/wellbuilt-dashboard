@@ -16,10 +16,13 @@ import {
   onSnapshot,
   addDoc,
   updateDoc,
+  getDocs,
   doc,
   serverTimestamp,
   writeBatch,
 } from 'firebase/firestore';
+import { getFirebaseDatabase } from '@/lib/firebase';
+import { ref, get } from 'firebase/database';
 import {
   type ChatThread,
   type ChatMessage,
@@ -52,6 +55,9 @@ export default function ChatPage() {
   const [openPanes, setOpenPanes] = useState<string[]>([]); // Up to 3 thread IDs
   const [paneMessages, setPaneMessages] = useState<Record<string, ChatMessage[]>>({});
   const [paneInputs, setPaneInputs] = useState<Record<string, string>>({});
+  const [showDriverPicker, setShowDriverPicker] = useState(false);
+  const [drivers, setDrivers] = useState<{ hash: string; name: string }[]>([]);
+  const [driverSearch, setDriverSearch] = useState('');
   const paneEndRefs = useRef<Record<string, HTMLDivElement | null>>({});
 
   // Subscribe to thread list
@@ -154,8 +160,68 @@ export default function ChatPage() {
     await batch.commit();
   }, [paneInputs, myParticipantId, user]);
 
+  // Load drivers for new message picker
+  const loadDrivers = useCallback(async () => {
+    try {
+      const rtdb = getFirebaseDatabase();
+      const snap = await get(ref(rtdb, 'drivers/approved'));
+      if (!snap.exists()) return;
+      const all = snap.val();
+      const list: { hash: string; name: string }[] = [];
+      for (const [hash, data] of Object.entries(all) as [string, any][]) {
+        if (!data.active && data.active !== undefined) continue;
+        const name = data.legalName || data.displayName || 'Driver';
+        if (companyId && data.companyId && data.companyId !== companyId) continue;
+        list.push({ hash, name });
+      }
+      list.sort((a, b) => a.name.localeCompare(b.name));
+      setDrivers(list);
+    } catch {}
+  }, [companyId]);
+
+  // Create direct thread with a driver
+  const startDirectWithDriver = useCallback(async (driverHash: string, driverName: string) => {
+    const db = getFirestoreDb();
+    if (!db) return;
+    const driverPid = `driver:${driverHash}`;
+    const pair = [myParticipantId, driverPid].sort().join('_');
+
+    // Check existing
+    const existing = await getDocs(query(
+      collection(db, 'chat_threads'),
+      where('type', '==', 'direct'),
+      where('directPair', '==', pair),
+    ));
+    if (!existing.empty) {
+      openThread(existing.docs[0].id);
+      setShowDriverPicker(false);
+      return;
+    }
+
+    // Create new
+    const senderName = user?.displayName || 'Dispatch';
+    const now = serverTimestamp();
+    const threadRef = await addDoc(collection(db, 'chat_threads'), {
+      type: 'direct',
+      companyId: companyId || '',
+      directPair: pair,
+      title: driverName,
+      participants: [myParticipantId, driverPid],
+      participantNames: { [myParticipantId]: senderName, [driverPid]: driverName },
+      status: 'active',
+      createdAt: now,
+      updatedAt: now,
+      lastRead: {},
+    });
+    openThread(threadRef.id);
+    setShowDriverPicker(false);
+  }, [myParticipantId, companyId, user, openThread]);
+
   // Filter threads
   const filteredThreads = filter === 'all' ? threads : threads.filter((t) => t.type === filter);
+  const filteredDrivers = driverSearch
+    ? drivers.filter(d => d.name.toLowerCase().includes(driverSearch.toLowerCase()))
+    : drivers;
 
   // Get display title for thread
   const getTitle = (thread: ChatThread) => {
@@ -193,9 +259,44 @@ export default function ChatPage() {
           ))}
         </div>
 
+        {/* New Message button */}
+        <div className="px-3 py-2 border-b border-gray-800">
+          <button
+            onClick={() => { setShowDriverPicker(!showDriverPicker); if (!showDriverPicker) loadDrivers(); }}
+            className="w-full py-2 rounded-lg bg-[#FFD700]/10 border border-[#FFD700]/30 text-[#FFD700] text-sm font-semibold hover:bg-[#FFD700]/20 transition-colors"
+          >
+            ✏️ New Message
+          </button>
+        </div>
+
+        {/* Driver picker */}
+        {showDriverPicker && (
+          <div className="border-b border-gray-800 bg-[#0d0d0d] max-h-48 overflow-y-auto">
+            <input
+              type="text"
+              value={driverSearch}
+              onChange={(e) => setDriverSearch(e.target.value)}
+              placeholder="Search drivers..."
+              className="w-full px-3 py-2 bg-transparent text-white text-sm placeholder-gray-500 border-b border-gray-800 focus:outline-none"
+            />
+            {filteredDrivers.map((d) => (
+              <button
+                key={d.hash}
+                onClick={() => startDirectWithDriver(d.hash, d.name)}
+                className="w-full text-left px-3 py-2 text-sm text-gray-300 hover:bg-[#1a1a1a] transition-colors"
+              >
+                {d.name}
+              </button>
+            ))}
+            {filteredDrivers.length === 0 && (
+              <p className="px-3 py-2 text-xs text-gray-600">No drivers found</p>
+            )}
+          </div>
+        )}
+
         {/* Thread list */}
         <div className="flex-1 overflow-y-auto">
-          {filteredThreads.length === 0 && (
+          {filteredThreads.length === 0 && !showDriverPicker && (
             <div className="text-center py-12 text-gray-600">
               <p className="text-sm">No active conversations</p>
             </div>
