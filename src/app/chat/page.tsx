@@ -271,7 +271,7 @@ export default function ChatPage() {
 
         {/* Driver picker */}
         {showDriverPicker && (
-          <div className="border-b border-gray-800 bg-[#0d0d0d] max-h-48 overflow-y-auto">
+          <div className="border-b border-gray-800 bg-[#0d0d0d] flex-1 overflow-y-auto">
             <input
               type="text"
               value={driverSearch}
