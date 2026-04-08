@@ -269,32 +269,32 @@ export default function ChatPage() {
           </button>
         </div>
 
-        {/* Driver picker */}
-        {showDriverPicker && (
-          <div className="border-b border-gray-800 bg-[#0d0d0d] flex-1 overflow-y-auto">
+        {/* Driver picker OR Thread list — not both competing for flex space */}
+        {showDriverPicker ? (
+          <div className="flex-1 overflow-y-auto bg-[#0d0d0d]">
             <input
               type="text"
               value={driverSearch}
               onChange={(e) => setDriverSearch(e.target.value)}
               placeholder="Search drivers..."
-              className="w-full px-3 py-2 bg-transparent text-white text-sm placeholder-gray-500 border-b border-gray-800 focus:outline-none"
+              className="w-full px-3 py-2 bg-transparent text-white text-sm placeholder-gray-500 border-b border-gray-800 focus:outline-none sticky top-0 bg-[#0d0d0d] z-10"
+              autoFocus
             />
             {filteredDrivers.map((d) => (
-              <button
+              <div
                 key={d.hash}
-                onClick={() => startDirectWithDriver(d.hash, d.name)}
-                className="w-full text-left px-3 py-2 text-sm text-gray-300 hover:bg-[#1a1a1a] transition-colors"
+                onClick={() => { console.log('Clicked:', d.name); startDirectWithDriver(d.hash, d.name); }}
+                className="w-full text-left px-3 py-3 text-sm text-gray-300 hover:bg-[#FFD700]/10 hover:text-white cursor-pointer transition-colors border-b border-gray-800/30"
+                role="button"
               >
                 {d.name}
-              </button>
+              </div>
             ))}
             {filteredDrivers.length === 0 && (
-              <p className="px-3 py-2 text-xs text-gray-600">No drivers found</p>
+              <p className="px-3 py-4 text-xs text-gray-600 text-center">No drivers found</p>
             )}
           </div>
-        )}
-
-        {/* Thread list */}
+        ) : (
         <div className="flex-1 overflow-y-auto">
           {filteredThreads.length === 0 && !showDriverPicker && (
             <div className="text-center py-12 text-gray-600">
@@ -334,6 +334,7 @@ export default function ChatPage() {
             );
           })}
         </div>
+        )}
       </div>
 
       {/* Right: Message Panes (up to 3 side by side) */}
