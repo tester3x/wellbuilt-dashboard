@@ -430,7 +430,17 @@ export function ChatSidebar({ visible, onClose, userId, companyId, onUnreadChang
                         {msg.senderName}
                       </p>
                     )}
-                    <p className="text-sm whitespace-pre-wrap break-words">{msg.text}</p>
+                    {(msg as any).photoUrl ? (
+                      <a href={(msg as any).photoUrl} target="_blank" rel="noopener noreferrer">
+                        <img
+                          src={(msg as any).photoUrl}
+                          alt="Photo"
+                          className="rounded-lg max-w-full max-h-48 cursor-pointer hover:opacity-80 transition-opacity"
+                        />
+                      </a>
+                    ) : (
+                      <p className="text-sm whitespace-pre-wrap break-words">{msg.text}</p>
+                    )}
                     <p className={`text-[10px] mt-1 text-right ${isMine ? 'text-black/50' : 'text-gray-500'}`}>
                       {formatChatTime(msg.timestamp)}
                     </p>
