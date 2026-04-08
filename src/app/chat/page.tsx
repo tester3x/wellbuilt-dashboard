@@ -4,7 +4,7 @@
 // Monitor Profiles: each monitor gets a saved config with locked driver positions.
 // Opened via window.open('/chat?profile=north-crew') from Dashboard.
 
-import { useEffect, useState, useRef, useCallback } from 'react';
+import { useEffect, useState, useRef, useCallback, useMemo } from 'react';
 import { useAuth } from '@/contexts/AuthContext';
 import { getFirestoreDb } from '@/lib/firebase';
 import {
