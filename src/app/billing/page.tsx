@@ -376,7 +376,7 @@ export default function BillingPage() {
     <div className="min-h-screen bg-gray-900">
       <AppHeader />
 
-      <main className="max-w-7xl mx-auto px-4 py-8">
+      <main className="max-w-[1600px] mx-auto px-4 py-8">
         {/* Title + Sub-tabs */}
         <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-4 mb-6">
           <div className="flex items-center gap-4">
@@ -489,14 +489,14 @@ export default function BillingPage() {
                       <thead className="bg-gray-700">
                         <tr>
                           <th className="px-4 py-2 text-left text-sm font-medium text-gray-300">Operator</th>
-                          <th className="px-4 py-2 text-right text-sm font-medium text-gray-300">Loads</th>
+                          <th className="px-4 py-2 text-center text-sm font-medium text-gray-300">Loads</th>
                           <th className="px-4 py-2 text-right text-sm font-medium text-gray-300">BBLs</th>
                           <th className="px-4 py-2 text-right text-sm font-medium text-gray-300">Hours</th>
                           <th className="px-4 py-2 text-right text-sm font-medium text-gray-300">Base Amount</th>
-                          <th className="px-4 py-2 text-right text-sm font-medium text-gray-300">Fuel Surcharge</th>
+                          <th className="px-4 py-2 text-right text-sm font-medium text-gray-300 whitespace-nowrap">Fuel Surcharge</th>
                           {hasDetention && <th className="px-4 py-2 text-right text-sm font-medium text-gray-300">Detention</th>}
                           <th className="px-4 py-2 text-right text-sm font-medium text-gray-300">Total</th>
-                          <th className="px-4 py-2 text-right text-sm font-medium text-gray-300">FSC Method</th>
+                          <th className="px-4 py-2 text-right text-sm font-medium text-gray-300 whitespace-nowrap">FSC Method</th>
                           <th className="px-4 py-2 text-center text-sm font-medium text-gray-300">Actions</th>
                         </tr>
                       </thead>
@@ -522,7 +522,7 @@ export default function BillingPage() {
                       <tfoot className="bg-gray-750 border-t border-gray-600">
                         <tr>
                           <td className="px-4 py-2 text-white font-semibold">Totals</td>
-                          <td className="px-4 py-2 text-right text-white font-mono">{summaries.reduce((s, o) => s + o.loads, 0)}</td>
+                          <td className="px-4 py-2 text-center text-white font-mono">{summaries.reduce((s, o) => s + o.loads, 0)}</td>
                           <td className="px-4 py-2 text-right text-white font-mono">{summaries.reduce((s, o) => s + o.totalBBLs, 0).toLocaleString()}</td>
                           <td className="px-4 py-2 text-right text-white font-mono">{summaries.reduce((s, o) => s + o.totalHours, 0).toFixed(1)}</td>
                           <td className="px-4 py-2 text-right text-white font-mono">{formatCurrency(summaries.reduce((s, o) => s + o.subtotal, 0))}</td>
@@ -610,12 +610,17 @@ export default function BillingPage() {
             {/* Current Price */}
             <div className="bg-gray-800 rounded-lg border border-gray-700 p-6">
               <h3 className="text-lg font-semibold text-white mb-4">Current Diesel Price — {regionLabel}</h3>
-              <div className="flex items-baseline gap-2 mb-4">
+              <div className="flex items-baseline gap-2 mb-1">
                 <span className="text-4xl font-bold text-green-400">
                   {currentDiesel ? `$${currentDiesel.toFixed(3)}` : '--'}
                 </span>
                 <span className="text-gray-400">/gallon</span>
               </div>
+              {dieselHistory.length > 0 && (
+                <p className="text-xs text-gray-500 mb-4">
+                  Last updated: {dieselHistory[0].date} — {dieselHistory[0].source}
+                </p>
+              )}
               <p className="text-gray-500 text-sm mb-4">
                 Used for DOE-based fuel surcharge calculations (hourly + per-mile). Update weekly from{' '}
                 <a href="https://www.eia.gov/petroleum/gasdiesel/" target="_blank" rel="noopener noreferrer" className="text-blue-400 hover:underline">
@@ -1091,8 +1096,8 @@ function OperatorRow({
   return (
     <>
       <tr className="hover:bg-gray-750 cursor-pointer" onClick={onToggle}>
-        <td className="px-4 py-3 text-white font-medium">{summary.operator}</td>
-        <td className="px-4 py-3 text-right text-white font-mono">{summary.loads}</td>
+        <td className="px-4 py-3 text-white font-medium whitespace-nowrap">{summary.operator}</td>
+        <td className="px-4 py-3 text-center text-white font-mono">{summary.loads}</td>
         <td className="px-4 py-3 text-right text-white font-mono">{summary.totalBBLs.toLocaleString()}</td>
         <td className="px-4 py-3 text-right text-white font-mono">{summary.totalHours.toFixed(1)}</td>
         <td className="px-4 py-3 text-right text-white font-mono">{formatCurrency(summary.subtotal)}</td>
