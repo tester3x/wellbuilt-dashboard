@@ -2480,9 +2480,9 @@ export const parseJsaPdf = httpsV2.onCall(
     const pdfBase64 = pdfBuffer.toString('base64');
 
     // Call Claude API
-    const apiKey = process.env.ANTHROPIC_API_KEY || (functionsV1 as any).config?.()?.anthropic?.api_key;
+    const apiKey = process.env.ANTHROPIC_API_KEY;
     if (!apiKey) {
-      throw new httpsV2.HttpsError('failed-precondition', 'Anthropic API key not configured. Set via: firebase functions:config:set anthropic.api_key="sk-ant-..."');
+      throw new httpsV2.HttpsError('failed-precondition', 'ANTHROPIC_API_KEY not set in functions/.env file');
     }
     const client = new Anthropic({ apiKey });
 
