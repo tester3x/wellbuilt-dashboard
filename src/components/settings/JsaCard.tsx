@@ -7,8 +7,7 @@ import {
   type JsaTemplateStep,
   type JsaPpeItem,
   type JsaPreparedItem,
-  uploadJsaPdf,
-  callParseJsaPdf,
+  uploadAndParseJsaPdf,
   saveJsaTemplate,
   loadJsaTemplate,
   activateJsaTemplate,
@@ -91,13 +90,10 @@ export function JsaCard({ company, onSave }: Props) {
     }
 
     setErrorMessage(null);
-    setUploadState('uploading');
+    setUploadState('parsing');
 
     try {
-      const { storagePath, storageUrl } = await uploadJsaPdf(company.id, file);
-      setUploadState('parsing');
-
-      const parsed = await callParseJsaPdf(storagePath, company.id);
+      const parsed = await uploadAndParseJsaPdf(company.id, file);
       populateEdit(parsed);
 
       // Save as draft immediately with source file info
@@ -106,7 +102,7 @@ export function JsaCard({ company, onSave }: Props) {
         steps: parsed.steps,
         ppeItems: parsed.ppeItems,
         preparedItems: parsed.preparedItems,
-        sourceFile: { storagePath, storageUrl, fileName: file.name },
+        sourceFile: { storagePath: parsed.storagePath, storageUrl: parsed.storageUrl, fileName: file.name },
         status: 'draft',
       }, 'admin');
 

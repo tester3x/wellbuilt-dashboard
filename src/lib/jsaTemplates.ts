@@ -45,52 +45,36 @@ export interface JsaTemplate {
   updatedBy: string;
 }
 
-// ── Storage ────────────────────────────────────────────────────────────────
-// Uses storage.googleapis.com REST API directly (firebasestorage.googleapis.com
-// has DNS resolution issues — same workaround as CompaniesTab logo upload).
-
-const STORAGE_BUCKET = 'wellbuilt-sync.firebasestorage.app';
-
-export async function uploadJsaPdf(
-  companyId: string,
-  file: File,
-): Promise<{ storagePath: string; storageUrl: string }> {
-  const storagePath = `jsa_templates/${companyId}/${file.name}`;
-  const uploadUrl = `https://storage.googleapis.com/upload/storage/v1/b/${encodeURIComponent(STORAGE_BUCKET)}/o?uploadType=media&name=${encodeURIComponent(storagePath)}`;
-
-  const res = await fetch(uploadUrl, {
-    method: 'POST',
-    headers: { 'Content-Type': file.type || 'application/pdf' },
-    body: file,
-  });
-
-  if (!res.ok) {
-    const errBody = await res.text();
-    throw new Error(`Upload failed (${res.status}): ${errBody.slice(0, 200)}`);
-  }
-
-  const storageUrl = `https://storage.googleapis.com/${STORAGE_BUCKET}/${storagePath}`;
-  return { storagePath, storageUrl };
-}
-
-// ── Cloud Function ─────────────────────────────────────────────────────────
+// ── Cloud Function (upload + parse in one call) ───────────────────────────
 
 export interface ParsedJsaResult {
   name: string;
   steps: JsaTemplateStep[];
   ppeItems: JsaPpeItem[];
   preparedItems: JsaPreparedItem[];
+  storagePath: string;
+  storageUrl: string;
 }
 
-export async function callParseJsaPdf(
-  storagePath: string,
+/**
+ * Convert a File to base64, send to Cloud Function which handles
+ * both Storage upload and Claude AI parsing in one call.
+ */
+export async function uploadAndParseJsaPdf(
   companyId: string,
+  file: File,
 ): Promise<ParsedJsaResult> {
+  // Convert file to base64
+  const buffer = await file.arrayBuffer();
+  const base64 = btoa(
+    new Uint8Array(buffer).reduce((data, byte) => data + String.fromCharCode(byte), '')
+  );
+
   const fn = httpsCallable<
-    { storagePath: string; companyId: string },
+    { pdfBase64: string; fileName: string; companyId: string },
     ParsedJsaResult
   >(getFirebaseFunctions(), 'parseJsaPdf');
-  const result = await fn({ storagePath, companyId });
+  const result = await fn({ pdfBase64: base64, fileName: file.name, companyId });
   return result.data;
 }
 

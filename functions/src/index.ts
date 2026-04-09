@@ -2461,23 +2461,26 @@ Rules:
 export const parseJsaPdf = httpsV2.onCall(
   { timeoutSeconds: 120, memory: '512MiB' },
   async (request) => {
-    const { storagePath, companyId } = request.data as { storagePath?: string; companyId?: string };
+    const { pdfBase64, fileName, companyId } = request.data as {
+      pdfBase64?: string; fileName?: string; companyId?: string;
+    };
 
-    if (!storagePath || !companyId) {
-      throw new httpsV2.HttpsError('invalid-argument', 'storagePath and companyId are required');
+    if (!pdfBase64 || !companyId) {
+      throw new httpsV2.HttpsError('invalid-argument', 'pdfBase64 and companyId are required');
     }
 
-    // Download PDF from Storage
-    let pdfBuffer: Buffer;
+    // Save PDF to Storage using admin SDK (no client-side auth needed)
+    const storagePath = `jsa_templates/${companyId}/${fileName || 'jsa.pdf'}`;
     try {
-      const [buffer] = await admin.storage().bucket().file(storagePath).download();
-      pdfBuffer = buffer;
+      const bucket = admin.storage().bucket();
+      const file = bucket.file(storagePath);
+      const buffer = Buffer.from(pdfBase64, 'base64');
+      await file.save(buffer, { contentType: 'application/pdf' });
+      console.log(`[parseJsaPdf] Saved PDF to ${storagePath} (${buffer.length} bytes)`);
     } catch (err: any) {
-      console.error('[parseJsaPdf] Storage download failed:', err.message);
-      throw new httpsV2.HttpsError('not-found', 'PDF file not found in storage');
+      console.error('[parseJsaPdf] Storage save failed:', err.message);
+      // Non-fatal — continue with parsing even if storage save fails
     }
-
-    const pdfBase64 = pdfBuffer.toString('base64');
 
     // Call Claude API
     const apiKey = process.env.ANTHROPIC_API_KEY;
@@ -2548,6 +2551,8 @@ export const parseJsaPdf = httpsV2.onCall(
       steps: parsed.steps,
       ppeItems: parsed.ppeItems,
       preparedItems: parsed.preparedItems,
+      storagePath,
+      storageUrl: `https://storage.googleapis.com/${admin.storage().bucket().name}/${storagePath}`,
     };
   },
 );
