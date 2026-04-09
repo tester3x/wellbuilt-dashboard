@@ -209,6 +209,11 @@ service cloud.firestore {
       allow read, write: if true;
     }
 
+    // JSA templates — company-specific JSA configurations (BYOJSA)
+    match /jsa_templates/{companyId} {
+      allow read, write: if true;
+    }
+
     // Everything else — deny (Cloud Functions use Admin SDK which bypasses rules)
     match /{document=**} {
       allow read, write: if false;

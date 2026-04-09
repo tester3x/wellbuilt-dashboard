@@ -1,7 +1,11 @@
 import * as functionsV1 from 'firebase-functions/v1';
 import * as functionsV2 from 'firebase-functions/v2/scheduler';
 import * as httpsV2 from 'firebase-functions/v2/https';
+import { defineSecret } from 'firebase-functions/params';
 import * as admin from 'firebase-admin';
+import Anthropic from '@anthropic-ai/sdk';
+
+const anthropicApiKey = defineSecret('ANTHROPIC_API_KEY');
 
 admin.initializeApp();
 const db = admin.database();
@@ -2418,3 +2422,131 @@ export const onProjectWrite = functionsV1.firestore
       }
     }
   });
+
+// ============================================================
+// BYOJSA: Parse a JSA PDF using Claude AI
+// Extracts steps, hazards, controls, PPE items into structured JSON
+// ============================================================
+
+const JSA_EXTRACTION_PROMPT = `You are extracting structured data from a Job Safety Analysis (JSA) document.
+
+Extract the following and return ONLY valid JSON (no markdown fences, no commentary):
+
+{
+  "name": "Template name (company name + JSA or the document title)",
+  "steps": [
+    {
+      "id": "kebab-case-id-from-title",
+      "title": "Step title exactly as written",
+      "items": [
+        { "hazard": "Hazard text exactly as written", "controls": "Control measures exactly as written" }
+      ]
+    }
+  ],
+  "ppeItems": [
+    { "id": "kebab-case-id", "label": "PPE item name" }
+  ],
+  "preparedItems": [
+    { "id": "kebab-case-id", "label": "Checklist item text" }
+  ]
+}
+
+Rules:
+- Extract ALL steps in document order. Each step may have multiple hazard/control pairs.
+- Group hazards under the same step when the document groups them that way.
+- Extract ALL PPE items mentioned anywhere in the document.
+- Extract any "prepared for work", "pre-job checklist", or similar readiness items as preparedItems.
+- If no preparedItems are found, use these defaults: [{"id":"trained","label":"I am properly trained for the job"},{"id":"tools-and-ppe","label":"I have the tools & PPE needed for work"},{"id":"sds","label":"SDS"}]
+- Generate kebab-case IDs from titles (e.g., "Driving on location" → "driving-on-location").
+- Preserve original wording exactly — do not rephrase or summarize.
+- Return ONLY the JSON object. No explanation, no markdown.`;
+
+export const parseJsaPdf = httpsV2.onCall(
+  { secrets: [anthropicApiKey], timeoutSeconds: 120, memory: '512MiB' },
+  async (request) => {
+    const { storagePath, companyId } = request.data as { storagePath?: string; companyId?: string };
+
+    if (!storagePath || !companyId) {
+      throw new httpsV2.HttpsError('invalid-argument', 'storagePath and companyId are required');
+    }
+
+    // Download PDF from Storage
+    let pdfBuffer: Buffer;
+    try {
+      const [buffer] = await admin.storage().bucket().file(storagePath).download();
+      pdfBuffer = buffer;
+    } catch (err: any) {
+      console.error('[parseJsaPdf] Storage download failed:', err.message);
+      throw new httpsV2.HttpsError('not-found', 'PDF file not found in storage');
+    }
+
+    const pdfBase64 = pdfBuffer.toString('base64');
+
+    // Call Claude API
+    const client = new Anthropic({ apiKey: anthropicApiKey.value() });
+
+    let responseText: string;
+    try {
+      const message = await client.messages.create({
+        model: 'claude-sonnet-4-6-20250514',
+        max_tokens: 4096,
+        messages: [{
+          role: 'user',
+          content: [
+            {
+              type: 'document',
+              source: { type: 'base64', media_type: 'application/pdf', data: pdfBase64 },
+            },
+            { type: 'text', text: JSA_EXTRACTION_PROMPT },
+          ],
+        }],
+      });
+
+      const textBlock = message.content.find((b: any) => b.type === 'text');
+      if (!textBlock || textBlock.type !== 'text') {
+        throw new Error('No text response from Claude');
+      }
+      responseText = textBlock.text;
+    } catch (err: any) {
+      console.error('[parseJsaPdf] Claude API error:', err.message);
+      throw new httpsV2.HttpsError('internal', 'AI analysis failed: ' + err.message);
+    }
+
+    // Parse JSON response (strip markdown fences if present)
+    let parsed: any;
+    try {
+      let jsonStr = responseText.trim();
+      if (jsonStr.startsWith('```')) {
+        jsonStr = jsonStr.replace(/^```(?:json)?\s*\n?/, '').replace(/\n?```\s*$/, '');
+      }
+      parsed = JSON.parse(jsonStr);
+    } catch (err: any) {
+      console.error('[parseJsaPdf] JSON parse failed. Raw response:', responseText.substring(0, 500));
+      throw new httpsV2.HttpsError('internal', 'Failed to parse AI response as JSON');
+    }
+
+    // Validate structure
+    if (!Array.isArray(parsed.steps) || parsed.steps.length === 0) {
+      throw new httpsV2.HttpsError('internal', 'AI extraction returned no steps');
+    }
+    if (!Array.isArray(parsed.ppeItems)) {
+      parsed.ppeItems = [];
+    }
+    if (!Array.isArray(parsed.preparedItems)) {
+      parsed.preparedItems = [
+        { id: 'trained', label: 'I am properly trained for the job' },
+        { id: 'tools-and-ppe', label: 'I have the tools & PPE needed for work' },
+        { id: 'sds', label: 'SDS' },
+      ];
+    }
+
+    console.log(`[parseJsaPdf] Extracted ${parsed.steps.length} steps, ${parsed.ppeItems.length} PPE items for company ${companyId}`);
+
+    return {
+      name: parsed.name || 'Custom JSA',
+      steps: parsed.steps,
+      ppeItems: parsed.ppeItems,
+      preparedItems: parsed.preparedItems,
+    };
+  },
+);
