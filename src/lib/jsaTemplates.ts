@@ -1,8 +1,7 @@
 // JSA Template types, Firestore CRUD, and Firebase Storage upload
 // for the BYOJSA feature in Settings.
-import { getFirestoreDb, getFirebaseStorage, getFirebaseFunctions } from './firebase';
-import { doc, getDoc, setDoc, Timestamp } from 'firebase/firestore';
-import { ref, uploadBytes, getDownloadURL } from 'firebase/storage';
+import { getFirestoreDb, getFirebaseFunctions } from './firebase';
+import { doc, getDoc, setDoc } from 'firebase/firestore';
 import { httpsCallable } from 'firebase/functions';
 
 // ── Types ──────────────────────────────────────────────────────────────────
@@ -47,15 +46,30 @@ export interface JsaTemplate {
 }
 
 // ── Storage ────────────────────────────────────────────────────────────────
+// Uses storage.googleapis.com REST API directly (firebasestorage.googleapis.com
+// has DNS resolution issues — same workaround as CompaniesTab logo upload).
+
+const STORAGE_BUCKET = 'wellbuilt-sync.firebasestorage.app';
 
 export async function uploadJsaPdf(
   companyId: string,
   file: File,
 ): Promise<{ storagePath: string; storageUrl: string }> {
   const storagePath = `jsa_templates/${companyId}/${file.name}`;
-  const storageRef = ref(getFirebaseStorage(), storagePath);
-  await uploadBytes(storageRef, file);
-  const storageUrl = await getDownloadURL(storageRef);
+  const uploadUrl = `https://storage.googleapis.com/upload/storage/v1/b/${encodeURIComponent(STORAGE_BUCKET)}/o?uploadType=media&name=${encodeURIComponent(storagePath)}`;
+
+  const res = await fetch(uploadUrl, {
+    method: 'POST',
+    headers: { 'Content-Type': file.type || 'application/pdf' },
+    body: file,
+  });
+
+  if (!res.ok) {
+    const errBody = await res.text();
+    throw new Error(`Upload failed (${res.status}): ${errBody.slice(0, 200)}`);
+  }
+
+  const storageUrl = `https://storage.googleapis.com/${STORAGE_BUCKET}/${storagePath}`;
   return { storagePath, storageUrl };
 }
 
