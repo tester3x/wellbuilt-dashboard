@@ -1,11 +1,8 @@
 import * as functionsV1 from 'firebase-functions/v1';
 import * as functionsV2 from 'firebase-functions/v2/scheduler';
 import * as httpsV2 from 'firebase-functions/v2/https';
-import { defineSecret } from 'firebase-functions/params';
 import * as admin from 'firebase-admin';
 import Anthropic from '@anthropic-ai/sdk';
-
-const anthropicApiKey = defineSecret('ANTHROPIC_API_KEY');
 
 admin.initializeApp();
 const db = admin.database();
@@ -2462,7 +2459,7 @@ Rules:
 - Return ONLY the JSON object. No explanation, no markdown.`;
 
 export const parseJsaPdf = httpsV2.onCall(
-  { secrets: [anthropicApiKey], timeoutSeconds: 120, memory: '512MiB' },
+  { timeoutSeconds: 120, memory: '512MiB' },
   async (request) => {
     const { storagePath, companyId } = request.data as { storagePath?: string; companyId?: string };
 
@@ -2483,7 +2480,11 @@ export const parseJsaPdf = httpsV2.onCall(
     const pdfBase64 = pdfBuffer.toString('base64');
 
     // Call Claude API
-    const client = new Anthropic({ apiKey: anthropicApiKey.value() });
+    const apiKey = process.env.ANTHROPIC_API_KEY || (functionsV1 as any).config?.()?.anthropic?.api_key;
+    if (!apiKey) {
+      throw new httpsV2.HttpsError('failed-precondition', 'Anthropic API key not configured. Set via: firebase functions:config:set anthropic.api_key="sk-ant-..."');
+    }
+    const client = new Anthropic({ apiKey });
 
     let responseText: string;
     try {
