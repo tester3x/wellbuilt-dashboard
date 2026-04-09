@@ -11,7 +11,7 @@ const firebaseConfig = {
   authDomain: "wellbuilt-sync.firebaseapp.com",
   databaseURL: "https://wellbuilt-sync-default-rtdb.firebaseio.com",
   projectId: "wellbuilt-sync",
-  storageBucket: "wellbuilt-sync.firebasestorage.app",
+  storageBucket: "wellbuilt-sync.appspot.com",
 };
 
 // Singleton instances
