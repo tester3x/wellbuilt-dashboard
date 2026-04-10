@@ -414,6 +414,10 @@ export interface CompanyConfig {
   // per_shift: JSA required once at shift start before first job
   // per_location: JSA required at each new well location (plus shift start)
   jsaMode?: 'off' | 'per_shift' | 'per_location';
+  // Level Reports — auto-send well levels to dispatch via in-app chat on each load
+  // Company-wide template ensures consistent format from all drivers
+  sendLevelToDispatch?: boolean;
+  levelReportTemplate?: string;  // Template with {well}, {top}, {bottom}, {time}, {bbls} placeholders
 }
 
 export interface CustomJobType {

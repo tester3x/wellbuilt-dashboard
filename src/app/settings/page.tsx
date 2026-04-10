@@ -25,6 +25,7 @@ import { SWDDirectoryCard } from '@/components/settings/SWDDirectoryCard';
 import { CustomJobTypesCard } from '@/components/settings/CustomJobTypesCard';
 import { PhotosCard } from '@/components/settings/PhotosCard';
 import { JsaCard } from '@/components/settings/JsaCard';
+import { LevelReportsCard } from '@/components/settings/LevelReportsCard';
 import { JobTypeRnDCard } from '@/components/settings/JobTypeRnDCard';
 
 export default function SettingsPage() {
@@ -179,6 +180,7 @@ export default function SettingsPage() {
             <CustomJobTypesCard company={company} onSave={handleRefresh} />
             <InvoiceConfigCard company={company} onSave={handleRefresh} />
             <OperationsCard company={company} onSave={handleRefresh} />
+            <LevelReportsCard company={company} onSave={handleRefresh} />
             <PhotosCard company={company} onSave={handleRefresh} />
             <JsaCard company={company} onSave={handleRefresh} />
             <OilCompaniesCard company={company} onSave={handleRefresh} />

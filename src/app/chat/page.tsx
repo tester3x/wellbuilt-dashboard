@@ -56,6 +56,7 @@ interface MonitorProfile {
   threadType?: FilterKey; // 'direct' | 'shift' | 'well' | 'project' | 'service_group' | 'all'
   slots: (SlotAssignment | null)[]; // positional
   createdBy: string;
+  locked?: boolean; // Locked profiles can't be displaced from the stack top
 }
 
 // --- Constants ---
@@ -104,13 +105,63 @@ export default function ChatPage() {
   const [managingThreadId, setManagingThreadId] = useState<string | null>(null);
   const paneEndRefs = useRef<Record<string, HTMLDivElement | null>>({});
 
-  // Profile state
+  // Profile state — stack-based (multiple profiles can be layered, top = visible)
   const [profiles, setProfiles] = useState<MonitorProfile[]>([]);
-  const [activeProfile, setActiveProfile] = useState<MonitorProfile | null>(null);
+  const [profileStack, setProfileStack] = useState<string[]>(() => {
+    try {
+      if (typeof window === 'undefined') return [];
+      const saved = localStorage.getItem('wb-chat-profile-stack');
+      if (saved) return JSON.parse(saved);
+      const legacy = localStorage.getItem('wb-chat-profile');
+      return legacy ? [legacy] : [];
+    } catch { return []; }
+  });
   const [setupMode, setSetupMode] = useState(false);
-  const [showProfileMenu, setShowProfileMenu] = useState(false); // unused, kept for compat
   const [newProfileName, setNewProfileName] = useState('');
   const [slotPickerIndex, setSlotPickerIndex] = useState<number | null>(null);
+  const [highlightedPane, setHighlightedPane] = useState<number | null>(null);
+  const [toastMsg, setToastMsg] = useState<string | null>(null);
+  const hasInitializedRef = useRef(false); // Guard for auto-open on initial load
+
+  // Derive active profile from top of stack
+  const activeProfileId = profileStack[profileStack.length - 1] || null;
+  const activeProfile = profiles.find(p => p.id === activeProfileId) || null;
+
+  // Persist stack to localStorage
+  useEffect(() => {
+    if (typeof window === 'undefined') return;
+    localStorage.setItem('wb-chat-profile-stack', JSON.stringify(profileStack));
+  }, [profileStack]);
+
+  // Toast auto-clear
+  useEffect(() => {
+    if (!toastMsg) return;
+    const t = setTimeout(() => setToastMsg(null), 3000);
+    return () => clearTimeout(t);
+  }, [toastMsg]);
+
+  // Highlight pane auto-clear
+  useEffect(() => {
+    if (highlightedPane == null) return;
+    const t = setTimeout(() => setHighlightedPane(null), 1500);
+    return () => clearTimeout(t);
+  }, [highlightedPane]);
+
+  // Bring a profile to the top of the stack
+  const bringProfileToTop = useCallback((profileId: string) => {
+    setProfileStack(prev => {
+      const currentTopId = prev[prev.length - 1];
+      if (currentTopId === profileId) return prev; // Already on top
+      // Check if current top is locked
+      const currentTop = profiles.find(p => p.id === currentTopId);
+      if (currentTop?.locked) {
+        setToastMsg(`"${currentTop.name}" is locked. Unlock to switch.`);
+        return prev;
+      }
+      const filtered = prev.filter(id => id !== profileId);
+      return [...filtered, profileId];
+    });
+  }, [profiles]);
 
   // Grid from profile or default
   const gridLayout = activeProfile
@@ -154,20 +205,33 @@ export default function ChatPage() {
     return () => unsub();
   }, []);
 
-  // Keep activeProfile in sync with live Firestore data
+  // Initialize stack from URL param or legacy localStorage on first profile load
   useEffect(() => {
     if (profiles.length === 0) return;
-    const profileId = activeProfile?.id || new URLSearchParams(window.location.search).get('profile') || localStorage.getItem('wb-chat-profile');
+    if (profileStack.length > 0) {
+      // Clean stack: remove IDs for deleted profiles
+      const validIds = new Set(profiles.map(p => p.id));
+      setProfileStack(prev => {
+        const cleaned = prev.filter(id => validIds.has(id));
+        return cleaned.length !== prev.length ? cleaned : prev;
+      });
+      return;
+    }
+    // Empty stack — check URL param or legacy key
+    const urlParam = typeof window !== 'undefined' ? new URLSearchParams(window.location.search).get('profile') : null;
+    const legacy = typeof window !== 'undefined' ? localStorage.getItem('wb-chat-profile') : null;
+    const profileId = urlParam || legacy;
     if (profileId) {
       const found = profiles.find((p) => p.id === profileId || p.name.toLowerCase().replace(/\s+/g, '-') === profileId);
       if (found) {
-        setActiveProfile(found);
-        localStorage.setItem('wb-chat-profile', found.id);
+        setProfileStack([found.id]);
       }
     }
   }, [profiles]);
 
-  // --- Subscribe to thread list ---
+  // --- Subscribe to thread list + auto-open incoming messages ---
+  const prevThreadMapRef = useRef<Map<string, number>>(new Map()); // threadId → last updatedAt ms
+
   useEffect(() => {
     const db = getFirestoreDb();
     if (!db) return;
@@ -180,6 +244,35 @@ export default function ChatPage() {
       const list: ChatThread[] = [];
       snap.forEach((d) => list.push({ id: d.id, ...d.data() } as ChatThread));
       setThreads(list);
+
+      // Auto-open: detect new messages from threads not in any profile's slots
+      if (hasInitializedRef.current) {
+        const prevMap = prevThreadMapRef.current;
+        for (const thread of list) {
+          if (thread.status === 'archived') continue;
+          if (!thread.lastMessage?.senderId || thread.lastMessage.senderId === myParticipantId) continue;
+          const ts = typeof thread.updatedAt === 'string'
+            ? new Date(thread.updatedAt).getTime()
+            : (thread.updatedAt as any)?.toMillis?.() || 0;
+          const prevTs = prevMap.get(thread.id) || 0;
+          if (ts > prevTs) {
+            // New message from someone else — auto-place if not already in a profile
+            // (threadToProfiles check happens via ref since we can't access useMemo here)
+            autoPlaceRef.current?.(thread);
+          }
+        }
+      }
+      hasInitializedRef.current = true;
+
+      // Update prev map
+      const newMap = new Map<string, number>();
+      for (const t of list) {
+        const ts = typeof t.updatedAt === 'string'
+          ? new Date(t.updatedAt).getTime()
+          : (t.updatedAt as any)?.toMillis?.() || 0;
+        newMap.set(t.id, ts);
+      }
+      prevThreadMapRef.current = newMap;
     });
     return () => unsub();
   }, [myParticipantId]);
@@ -210,13 +303,54 @@ export default function ChatPage() {
     return () => unsubs.forEach((u) => u());
   }, [activeThreadIds.join(','), myParticipantId]);
 
+  // Cross-profile thread index — maps threadId to profile IDs that contain it
+  const threadToProfiles = useMemo(() => {
+    const map = new Map<string, string[]>();
+    for (const profile of profiles) {
+      if (!profile.slots) continue;
+      for (const slot of profile.slots) {
+        if (!slot) continue;
+        const tid = slot.threadId || (slot.driverHash ? driverThreadMap[slot.driverHash] : null);
+        if (tid) {
+          const existing = map.get(tid) || [];
+          existing.push(profile.id);
+          map.set(tid, existing);
+        }
+      }
+    }
+    return map;
+  }, [profiles, driverThreadMap]);
+
+  // Auto-place callback ref — used by thread subscription to auto-open new messages
+  const autoPlaceRef = useRef<((thread: ChatThread) => void) | null>(null);
+  autoPlaceRef.current = (thread: ChatThread) => {
+    // Skip if thread is already in any profile
+    if (threadToProfiles.has(thread.id)) return;
+    // Only place in the top-of-stack profile's first empty slot
+    if (!activeProfile) return;
+    const currentSlots = activeProfile.slots || [];
+    const currentOpenPanes = currentSlots.slice(0, maxPanes).map((s) => {
+      if (!s) return null;
+      if (s.threadId) return s.threadId;
+      if (s.driverHash) return driverThreadMap[s.driverHash] || null;
+      return null;
+    });
+    const emptyIdx = currentOpenPanes.findIndex(p => !p);
+    if (emptyIdx >= 0) {
+      const newSlots = [...currentSlots];
+      newSlots[emptyIdx] = { threadId: thread.id, threadTitle: thread.title };
+      saveProfileSlots(newSlots);
+    }
+    // No empty slot = sidebar-only, gold glow handles visibility
+  };
+
   // --- Profile CRUD ---
   const createProfile = useCallback(async (name: string, layout: string) => {
     const db = getFirestoreDb();
     if (!db || !name.trim()) return;
     const layoutObj = GRID_LAYOUTS.find((l) => l.label === layout) || GRID_LAYOUTS[3];
     const slotCount = layoutObj.cols * layoutObj.rows;
-    const ref = await addDoc(collection(db, 'chat_monitors'), {
+    const docRef = await addDoc(collection(db, 'chat_monitors'), {
       name: name.trim(),
       companyId: companyId || '',
       gridLayout: layout,
@@ -224,10 +358,9 @@ export default function ChatPage() {
       slots: Array(slotCount).fill(null),
       createdBy: myParticipantId,
     });
-    setActiveProfile({ id: ref.id, name: name.trim(), companyId: companyId || '', gridLayout: layout, threadType: 'direct', slots: Array(slotCount).fill(null), createdBy: myParticipantId });
-    localStorage.setItem('wb-chat-profile', ref.id);
+    // Push new profile onto stack
+    setProfileStack(prev => [...prev.filter(id => id !== docRef.id), docRef.id]);
     setNewProfileName('');
-    // Stay open so user can pick grid size + assign drivers
     setSetupMode(true);
   }, [companyId, myParticipantId]);
 
@@ -236,7 +369,7 @@ export default function ChatPage() {
     const db = getFirestoreDb();
     if (!db) return;
     await updateDoc(doc(db, 'chat_monitors', activeProfile.id), { threadType: type });
-    setActiveProfile({ ...activeProfile, threadType: type });
+    // Firestore onSnapshot will update profiles → re-derives activeProfile
   }, [activeProfile]);
 
   const saveProfileSlots = useCallback(async (newSlots: (SlotAssignment | null)[]) => {
@@ -244,7 +377,6 @@ export default function ChatPage() {
     const db = getFirestoreDb();
     if (!db) return;
     await updateDoc(doc(db, 'chat_monitors', activeProfile.id), { slots: newSlots });
-    setActiveProfile({ ...activeProfile, slots: newSlots });
   }, [activeProfile]);
 
   const saveProfileLayout = useCallback(async (layout: string) => {
@@ -253,21 +385,23 @@ export default function ChatPage() {
     if (!db) return;
     const layoutObj = GRID_LAYOUTS.find((l) => l.label === layout) || GRID_LAYOUTS[3];
     const slotCount = layoutObj.cols * layoutObj.rows;
-    // Resize slots array — keep existing assignments, pad or trim
     const newSlots = Array(slotCount).fill(null).map((_, i) => activeProfile.slots[i] || null);
     await updateDoc(doc(db, 'chat_monitors', activeProfile.id), { gridLayout: layout, slots: newSlots });
-    setActiveProfile({ ...activeProfile, gridLayout: layout, slots: newSlots });
+  }, [activeProfile]);
+
+  const toggleProfileLock = useCallback(async () => {
+    if (!activeProfile) return;
+    const db = getFirestoreDb();
+    if (!db) return;
+    await updateDoc(doc(db, 'chat_monitors', activeProfile.id), { locked: !activeProfile.locked });
   }, [activeProfile]);
 
   const deleteProfile = useCallback(async (profileId: string) => {
     const db = getFirestoreDb();
     if (!db) return;
     await deleteDoc(doc(db, 'chat_monitors', profileId));
-    if (activeProfile?.id === profileId) {
-      setActiveProfile(null);
-      localStorage.removeItem('wb-chat-profile');
-    }
-  }, [activeProfile]);
+    setProfileStack(prev => prev.filter(id => id !== profileId));
+  }, []);
 
   // --- Assign driver or thread to slot ---
   const assignSlot = useCallback((index: number, assignment: SlotAssignment | null) => {
@@ -397,13 +531,27 @@ export default function ChatPage() {
     } catch {}
   }, [companyId]);
 
-  // --- Sidebar filtering ---
+  // --- Sidebar filtering — unanswered first, then by updatedAt ---
   const nonEmptyThreads = threads.filter((t) => t.lastMessage?.text);
-  const filteredThreads = filter === 'archived'
-    ? nonEmptyThreads.filter((t) => t.status === 'archived')
-    : filter === 'all'
-      ? nonEmptyThreads.filter((t) => t.status !== 'archived')
-      : nonEmptyThreads.filter((t) => t.type === filter && t.status !== 'archived');
+  const filteredThreads = useMemo(() => {
+    const base = filter === 'archived'
+      ? nonEmptyThreads.filter((t) => t.status === 'archived')
+      : filter === 'all'
+        ? nonEmptyThreads.filter((t) => t.status !== 'archived')
+        : nonEmptyThreads.filter((t) => t.type === filter && t.status !== 'archived');
+
+    // Sort: unanswered (unread + from someone else) first, then by updatedAt desc
+    return [...base].sort((a, b) => {
+      const aUnread = isThreadUnread(a, myParticipantId) && a.lastMessage?.senderId !== myParticipantId;
+      const bUnread = isThreadUnread(b, myParticipantId) && b.lastMessage?.senderId !== myParticipantId;
+      if (aUnread && !bUnread) return -1;
+      if (!aUnread && bUnread) return 1;
+      // Within same group, sort by updatedAt desc
+      const aTime = typeof a.updatedAt === 'string' ? new Date(a.updatedAt).getTime() : (a.updatedAt as any)?.toMillis?.() || 0;
+      const bTime = typeof b.updatedAt === 'string' ? new Date(b.updatedAt).getTime() : (b.updatedAt as any)?.toMillis?.() || 0;
+      return bTime - aTime;
+    });
+  }, [nonEmptyThreads, filter, myParticipantId]);
 
   // Unread counts by thread type — for chip glow indicators
   const unreadByType = useMemo(() => {
@@ -464,26 +612,32 @@ export default function ChatPage() {
               {profiles.length > 0 && (
                 <div className="relative">
                   <button
-                    onClick={() => setShowProfileMenu(!showProfileMenu)}
-                    className="text-xs text-gray-400 hover:text-white transition-colors"
+                    onClick={() => {
+                      // Cycle to next profile in stack, or show dropdown if only 1
+                      const menu = document.getElementById('profile-menu');
+                      if (menu) menu.classList.toggle('hidden');
+                    }}
+                    className="text-xs text-gray-400 hover:text-white transition-colors flex items-center gap-1"
                   >
+                    {activeProfile?.locked && <span title="Locked">🔒</span>}
                     {activeProfile?.name || 'Select Profile'} ▾
                   </button>
-                  {showProfileMenu && (
-                    <div className="absolute right-0 top-full mt-1 bg-[#111] border border-gray-700 rounded-lg overflow-hidden z-20 min-w-[150px] shadow-lg">
-                      {profiles.map((p) => (
-                        <button
-                          key={p.id}
-                          onClick={() => { setActiveProfile(p); localStorage.setItem('wb-chat-profile', p.id); setShowProfileMenu(false); }}
-                          className={`w-full text-left px-3 py-2 text-sm hover:bg-[#1a1a1a] transition-colors ${
-                            activeProfile?.id === p.id ? 'text-[#FFD700] font-bold' : 'text-gray-300'
-                          }`}
-                        >
-                          {p.name}
-                        </button>
-                      ))}
-                    </div>
-                  )}
+                  <div id="profile-menu" className="hidden absolute right-0 top-full mt-1 bg-[#111] border border-gray-700 rounded-lg overflow-hidden z-20 min-w-[150px] shadow-lg">
+                    {profiles.map((p) => (
+                      <button
+                        key={p.id}
+                        onClick={() => { bringProfileToTop(p.id); document.getElementById('profile-menu')?.classList.add('hidden'); }}
+                        className={`w-full text-left px-3 py-2 text-sm hover:bg-[#1a1a1a] transition-colors ${
+                          activeProfile?.id === p.id ? 'text-[#FFD700] font-bold' : 'text-gray-300'
+                        }`}
+                      >
+                        {p.locked ? '🔒 ' : ''}{p.name}
+                        {profileStack.includes(p.id) && p.id !== activeProfileId && (
+                          <span className="text-gray-600 text-[10px] ml-1">stacked</span>
+                        )}
+                      </button>
+                    ))}
+                  </div>
                 </div>
               )}
             </div>
@@ -503,7 +657,7 @@ export default function ChatPage() {
                   }`}>
                     <span
                       className={`text-sm flex-1 ${activeProfile?.id === p.id ? 'text-[#FFD700] font-bold' : 'text-gray-300'}`}
-                      onClick={() => { setActiveProfile(p); localStorage.setItem('wb-chat-profile', p.id); }}
+                      onClick={() => bringProfileToTop(p.id)}
                     >
                       {p.name} <span className="text-[10px] text-gray-600">{p.gridLayout}</span>
                     </span>
@@ -665,16 +819,35 @@ export default function ChatPage() {
                 <button
                   key={thread.id}
                   onClick={() => {
-                    // If in setup mode, don't open — setup handles slot assignment
                     if (setupMode) return;
-                    // Open thread in the first empty grid slot (or replace last if full)
+
+                    // 1. Already visible in current profile? Just highlight that pane.
+                    const existingIdx = openPanes.findIndex(p => p === thread.id);
+                    if (existingIdx >= 0) {
+                      setHighlightedPane(existingIdx);
+                      return;
+                    }
+
+                    // 2. Thread in another stacked profile? Bring that profile to top.
+                    const ownerProfiles = threadToProfiles.get(thread.id) || [];
+                    // Prefer profile already in stack (closest to top)
+                    const inStack = ownerProfiles
+                      .filter(pid => pid !== activeProfileId)
+                      .sort((a, b) => profileStack.indexOf(b) - profileStack.indexOf(a));
+                    if (inStack.length > 0) {
+                      bringProfileToTop(inStack[0]);
+                      return;
+                    }
+
+                    // 3. Thread not in any profile — add to first empty slot
                     if (activeProfile && slots.length > 0) {
-                      const emptyIdx = openPanes.findIndex((p) => !p);
-                      const targetIdx = emptyIdx >= 0 ? emptyIdx : slots.length - 1;
-                      const newSlots = [...slots];
-                      // Assign as thread slot (works for any thread type)
-                      newSlots[targetIdx] = { threadId: thread.id, threadTitle: getTitle(thread) };
-                      saveProfileSlots(newSlots);
+                      const emptyIdx = openPanes.findIndex(p => !p);
+                      if (emptyIdx >= 0) {
+                        const newSlots = [...slots];
+                        newSlots[emptyIdx] = { threadId: thread.id, threadTitle: getTitle(thread) };
+                        saveProfileSlots(newSlots);
+                      }
+                      // No empty slot = no displacement, just sidebar highlight
                     }
                   }}
                   className={`w-full text-left px-3 py-3 border-b border-gray-800/50 hover:bg-[#111] transition-colors ${
@@ -726,7 +899,66 @@ export default function ChatPage() {
         )}
       </div>
 
-      {/* Right: Chat Grid */}
+      {/* Right: Profile tab strip + Chat Grid */}
+      <div className="flex-1 flex flex-col overflow-hidden">
+        {/* Profile tab strip — shows stacked profiles, click to bring to top */}
+        {profileStack.length > 1 && (
+          <div className="flex items-center gap-0.5 bg-[#0d0d0d] border-b border-gray-800 px-1 py-0.5 shrink-0">
+            {profileStack.map((pid) => {
+              const p = profiles.find(pr => pr.id === pid);
+              if (!p) return null;
+              const isTop = pid === activeProfileId;
+              return (
+                <div key={pid} className={`flex items-center gap-1 px-2.5 py-1 rounded-t text-xs cursor-pointer transition-colors ${
+                  isTop ? 'bg-[#1a1a1a] text-[#FFD700] font-bold border-t border-x border-[#FFD700]/30' : 'text-gray-500 hover:text-gray-300 hover:bg-[#111]'
+                }`}>
+                  <span onClick={() => bringProfileToTop(pid)}>
+                    {p.locked ? '🔒 ' : ''}{p.name}
+                  </span>
+                  {isTop && (
+                    <button
+                      onClick={toggleProfileLock}
+                      className={`ml-1 text-[10px] transition-colors ${p.locked ? 'text-[#FFD700]' : 'text-gray-600 hover:text-gray-400'}`}
+                      title={p.locked ? 'Unlock profile' : 'Lock profile'}
+                    >
+                      {p.locked ? '🔒' : '🔓'}
+                    </button>
+                  )}
+                  {!isTop && (
+                    <button
+                      onClick={() => setProfileStack(prev => prev.filter(id => id !== pid))}
+                      className="text-gray-600 hover:text-red-400 text-[10px] ml-0.5"
+                      title="Remove from stack"
+                    >
+                      ✕
+                    </button>
+                  )}
+                </div>
+              );
+            })}
+          </div>
+        )}
+        {/* Single profile lock toggle when only 1 in stack */}
+        {profileStack.length === 1 && activeProfile && (
+          <div className="flex items-center justify-between bg-[#0d0d0d] border-b border-gray-800 px-3 py-1 shrink-0">
+            <span className="text-xs text-gray-500">{activeProfile.name}</span>
+            <button
+              onClick={toggleProfileLock}
+              className={`text-xs transition-colors ${activeProfile.locked ? 'text-[#FFD700]' : 'text-gray-600 hover:text-gray-400'}`}
+              title={activeProfile.locked ? 'Unlock profile' : 'Lock profile'}
+            >
+              {activeProfile.locked ? '🔒 Locked' : '🔓 Unlocked'}
+            </button>
+          </div>
+        )}
+
+      {/* Toast notification */}
+      {toastMsg && (
+        <div className="fixed top-4 right-4 z-50 bg-[#FFD700] text-black px-4 py-2 rounded-lg shadow-lg text-sm font-medium animate-pulse">
+          {toastMsg}
+        </div>
+      )}
+
       <div className="flex-1 overflow-hidden" style={{
         display: 'grid',
         gridTemplateColumns: `repeat(${gridCols}, 1fr)`,
@@ -949,10 +1181,12 @@ export default function ChatPage() {
 
           // Active chat pane
           return (
-            <div key={index} className="flex flex-col min-w-0 min-h-0 bg-[#0a0a0a]">
+            <div key={index} className={`flex flex-col min-w-0 min-h-0 bg-[#0a0a0a] transition-all ${
+              highlightedPane === index ? 'ring-2 ring-[#FFD700] ring-inset' : ''
+            }`}>
               {/* Header */}
               <div className={`flex items-center justify-between px-3 py-2 border-b flex-shrink-0 transition-colors ${
-                hasUnread ? 'bg-[#FFD700]/10 border-[#FFD700]/40' : 'bg-[#0d0d0d] border-gray-800'
+                hasUnread ? 'bg-[#FFD700]/10 border-[#FFD700]/40' : highlightedPane === index ? 'bg-[#FFD700]/20 border-[#FFD700]/60' : 'bg-[#0d0d0d] border-gray-800'
               }`}>
                 <div className="min-w-0 flex-1">
                   <div className="flex items-center gap-2">
@@ -1124,6 +1358,7 @@ export default function ChatPage() {
           );
         })}
       </div>
+      </div>{/* end flex-col wrapper for tab strip + grid */}
     </div>
   );
 }

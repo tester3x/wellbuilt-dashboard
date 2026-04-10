@@ -297,9 +297,9 @@ export function ChatSidebar({ visible, onClose, userId, companyId, onUnreadChang
           <h3 className="text-white text-sm font-semibold">Messages</h3>
         )}
         <button
-          onClick={() => window.open('/chat/', '_blank', 'width=1200,height=800')}
+          onClick={() => window.open('/chat/', '_blank')}
           className="text-gray-400 hover:text-[#FFD700] transition-colors flex-shrink-0 ml-2"
-          title="Pop out to new window"
+          title="Open chat in new tab"
         >
           <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
             <path strokeLinecap="round" strokeLinejoin="round" d="M10 6H6a2 2 0 00-2 2v10a2 2 0 002 2h10a2 2 0 002-2v-4M14 4h6m0 0v6m0-6L10 14" />
