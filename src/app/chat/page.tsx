@@ -122,10 +122,22 @@ export default function ChatPage() {
   const [highlightedPane, setHighlightedPane] = useState<number | null>(null);
   const [toastMsg, setToastMsg] = useState<string | null>(null);
   const hasInitializedRef = useRef(false); // Guard for auto-open on initial load
+  // Temp slots: threads placed via sidebar click but NOT yet locked to the profile.
+  // Map of slot index → SlotAssignment. Not saved to Firestore until user clicks lock.
+  const [tempSlots, setTempSlots] = useState<Record<number, SlotAssignment>>({});
 
   // Derive active profile from top of stack
   const activeProfileId = profileStack[profileStack.length - 1] || null;
   const activeProfile = profiles.find(p => p.id === activeProfileId) || null;
+
+  // Clear temp slots when switching profiles
+  const prevProfileIdRef = useRef(activeProfileId);
+  useEffect(() => {
+    if (activeProfileId !== prevProfileIdRef.current) {
+      setTempSlots({});
+      prevProfileIdRef.current = activeProfileId;
+    }
+  }, [activeProfileId]);
 
   // Persist stack to localStorage
   useEffect(() => {
@@ -184,11 +196,14 @@ export default function ChatPage() {
     if (driverPid) driverThreadMap[driverPid.replace('driver:', '')] = t.id;
   }
 
-  // Build openPanes from profile slots — supports both driver slots and thread slots
-  const openPanes = slots.slice(0, maxPanes).map((slot) => {
-    if (!slot) return null;
-    if (slot.threadId) return slot.threadId; // Group chat slot
-    if (slot.driverHash) return driverThreadMap[slot.driverHash] || null;
+  // Build openPanes from profile slots + temp overlays
+  const openPanes = slots.slice(0, maxPanes).map((slot, i) => {
+    // Temp slots overlay on top of profile slots (sidebar click without lock)
+    const temp = tempSlots[i];
+    const effective = temp || slot;
+    if (!effective) return null;
+    if (effective.threadId) return effective.threadId;
+    if (effective.driverHash) return driverThreadMap[effective.driverHash] || null;
     return null;
   });
 
@@ -324,22 +339,15 @@ export default function ChatPage() {
   // Auto-place callback ref — used by thread subscription to auto-open new messages
   const autoPlaceRef = useRef<((thread: ChatThread) => void) | null>(null);
   autoPlaceRef.current = (thread: ChatThread) => {
-    // Skip if thread is already in any profile
+    // Skip if thread is already in any profile or already temp-placed
     if (threadToProfiles.has(thread.id)) return;
-    // Only place in the top-of-stack profile's first empty slot
+    const alreadyTemp = Object.values(tempSlots).some(s => s.threadId === thread.id);
+    if (alreadyTemp) return;
+    // Only place in the top-of-stack profile's first empty slot (as temp)
     if (!activeProfile) return;
-    const currentSlots = activeProfile.slots || [];
-    const currentOpenPanes = currentSlots.slice(0, maxPanes).map((s) => {
-      if (!s) return null;
-      if (s.threadId) return s.threadId;
-      if (s.driverHash) return driverThreadMap[s.driverHash] || null;
-      return null;
-    });
-    const emptyIdx = currentOpenPanes.findIndex(p => !p);
+    const emptyIdx = openPanes.findIndex(p => !p);
     if (emptyIdx >= 0) {
-      const newSlots = [...currentSlots];
-      newSlots[emptyIdx] = { threadId: thread.id, threadTitle: thread.title };
-      saveProfileSlots(newSlots);
+      setTempSlots(prev => ({ ...prev, [emptyIdx]: { threadId: thread.id, threadTitle: thread.title } }));
     }
     // No empty slot = sidebar-only, gold glow handles visibility
   };
@@ -839,15 +847,12 @@ export default function ChatPage() {
                       return;
                     }
 
-                    // 3. Thread not in any profile — add to first empty slot
+                    // 3. Thread not in any profile — add as TEMP (not persisted until locked)
                     if (activeProfile && slots.length > 0) {
                       const emptyIdx = openPanes.findIndex(p => !p);
                       if (emptyIdx >= 0) {
-                        const newSlots = [...slots];
-                        newSlots[emptyIdx] = { threadId: thread.id, threadTitle: getTitle(thread) };
-                        saveProfileSlots(newSlots);
+                        setTempSlots(prev => ({ ...prev, [emptyIdx]: { threadId: thread.id, threadTitle: getTitle(thread) } }));
                       }
-                      // No empty slot = no displacement, just sidebar highlight
                     }
                   }}
                   className={`w-full text-left px-3 py-3 border-b border-gray-800/50 hover:bg-[#111] transition-colors ${
@@ -1028,7 +1033,7 @@ export default function ChatPage() {
                   <div className="absolute inset-0 bg-[#0a0a0a]/95 z-10 flex flex-col overflow-hidden rounded">
                     <div className="flex items-center justify-between px-3 py-2 border-b border-gray-800">
                       <p className="text-xs text-gray-400">Assign to Slot {index + 1}</p>
-                      <button onClick={() => setSlotPickerIndex(null)} className="text-gray-500 hover:text-white text-xs">✕</button>
+                      <button onClick={() => { setSlotPickerIndex(null); setGroupName(''); setGroupMembers([]); setGroupBroadcast(false); }} className="text-gray-400 hover:text-white text-sm px-1.5 py-0.5 rounded hover:bg-gray-700 transition-colors">✕ Close</button>
                     </div>
                     <div className="flex-1 overflow-y-auto">
                       {isDirectProfile ? (
@@ -1094,45 +1099,51 @@ export default function ChatPage() {
                                 </div>
                               ))}
                             </div>
-                            <button
-                              onClick={async () => {
-                                if (!groupName.trim() || groupMembers.length === 0) return;
-                                setGroupType(profileType as ThreadType);
-                                // Need to wait for state to update, so set it directly on the function
-                                const db = getFirestoreDb();
-                                if (!db) return;
-                                const senderName = user?.displayName || 'Dispatch';
-                                const participants = [myParticipantId, ...groupMembers.map((m) => `driver:${m.hash}`)];
-                                const participantNames: Record<string, string> = { [myParticipantId]: senderName };
-                                groupMembers.forEach((m) => { participantNames[`driver:${m.hash}`] = m.name; });
-                                const now = serverTimestamp();
-                                const systemText = `${senderName} created "${groupName.trim()}" with ${groupMembers.map((m) => m.name.split(' ')[0]).join(', ')}`;
-                                const threadRef = await addDoc(collection(db, 'chat_threads'), {
-                                  type: profileType,
-                                  companyId: companyId || '',
-                                  title: groupName.trim(),
-                                  participants,
-                                  participantNames,
-                                  broadcast: groupBroadcast,
-                                  status: 'active',
-                                  createdAt: now,
-                                  updatedAt: now,
-                                  lastRead: {},
-                                  lastMessage: { text: systemText, senderId: 'system', senderName: 'System', timestamp: now, type: 'system' },
-                                });
-                                await addDoc(collection(db, 'chat_threads', threadRef.id, 'messages'), {
-                                  text: systemText, senderId: 'system', senderName: 'System', timestamp: now, type: 'system',
-                                });
-                                // Assign to slot immediately
-                                assignSlot(index, { threadId: threadRef.id, threadTitle: groupName.trim() });
-                              }}
-                              disabled={!groupName.trim() || groupMembers.length === 0}
-                              className={`w-full py-1 rounded text-xs font-semibold ${
-                                groupName.trim() && groupMembers.length > 0 ? 'bg-[#FFD700] text-black' : 'bg-gray-800 text-gray-600'
-                              }`}
-                            >
-                              Create + Assign ({groupMembers.length})
-                            </button>
+                            <div className="flex gap-1">
+                              <button
+                                onClick={() => { setSlotPickerIndex(null); setGroupName(''); setGroupMembers([]); setGroupBroadcast(false); }}
+                                className="flex-1 py-1 rounded text-xs font-semibold bg-gray-700 text-gray-300 hover:bg-gray-600 transition-colors"
+                              >
+                                Cancel
+                              </button>
+                              <button
+                                onClick={async () => {
+                                  if (!groupName.trim() || groupMembers.length === 0) return;
+                                  setGroupType(profileType as ThreadType);
+                                  const db = getFirestoreDb();
+                                  if (!db) return;
+                                  const senderName = user?.displayName || 'Dispatch';
+                                  const participants = [myParticipantId, ...groupMembers.map((m) => `driver:${m.hash}`)];
+                                  const participantNames: Record<string, string> = { [myParticipantId]: senderName };
+                                  groupMembers.forEach((m) => { participantNames[`driver:${m.hash}`] = m.name; });
+                                  const now = serverTimestamp();
+                                  const systemText = `${senderName} created "${groupName.trim()}" with ${groupMembers.map((m) => m.name.split(' ')[0]).join(', ')}`;
+                                  const threadRef = await addDoc(collection(db, 'chat_threads'), {
+                                    type: profileType,
+                                    companyId: companyId || '',
+                                    title: groupName.trim(),
+                                    participants,
+                                    participantNames,
+                                    broadcast: groupBroadcast,
+                                    status: 'active',
+                                    createdAt: now,
+                                    updatedAt: now,
+                                    lastRead: {},
+                                    lastMessage: { text: systemText, senderId: 'system', senderName: 'System', timestamp: now, type: 'system' },
+                                  });
+                                  await addDoc(collection(db, 'chat_threads', threadRef.id, 'messages'), {
+                                    text: systemText, senderId: 'system', senderName: 'System', timestamp: now, type: 'system',
+                                  });
+                                  assignSlot(index, { threadId: threadRef.id, threadTitle: groupName.trim() });
+                                }}
+                                disabled={!groupName.trim() || groupMembers.length === 0}
+                                className={`flex-1 py-1 rounded text-xs font-semibold ${
+                                  groupName.trim() && groupMembers.length > 0 ? 'bg-[#FFD700] text-black' : 'bg-gray-800 text-gray-600'
+                                }`}
+                              >
+                                Create + Assign ({groupMembers.length})
+                              </button>
+                            </div>
                           </div>
                         </>
                       )}
@@ -1198,6 +1209,54 @@ export default function ChatPage() {
                   </div>
                 </div>
                 <div className="flex items-center gap-1 flex-shrink-0">
+                  {/* Slot lock: temp slots show open lock, click to persist to profile */}
+                  {(() => {
+                    const isTemp = !!tempSlots[index];
+                    const lockSlot = () => {
+                      // Persist temp slot to profile
+                      const assignment = tempSlots[index];
+                      if (!assignment) return;
+                      const newSlots = [...slots];
+                      while (newSlots.length <= index) newSlots.push(null);
+                      newSlots[index] = assignment;
+                      saveProfileSlots(newSlots);
+                      setTempSlots(prev => { const next = { ...prev }; delete next[index]; return next; });
+                    };
+                    const unlockSlot = () => {
+                      // Move persisted slot to temp (remove from Firestore)
+                      const currentSlot = slots[index];
+                      if (!currentSlot) return;
+                      setTempSlots(prev => ({ ...prev, [index]: currentSlot }));
+                      const newSlots = [...slots];
+                      newSlots[index] = null;
+                      saveProfileSlots(newSlots);
+                    };
+                    const removeTemp = () => {
+                      setTempSlots(prev => { const next = { ...prev }; delete next[index]; return next; });
+                    };
+                    return (
+                      <>
+                        <button
+                          onClick={isTemp ? lockSlot : unlockSlot}
+                          className={`text-xs px-1 py-0.5 rounded transition-colors ${
+                            isTemp ? 'text-gray-500 hover:text-[#FFD700]' : 'text-[#FFD700]/60 hover:text-[#FFD700]'
+                          }`}
+                          title={isTemp ? 'Lock to this profile slot' : 'Unlock (temporary)'}
+                        >
+                          {isTemp ? '🔓' : '🔒'}
+                        </button>
+                        {isTemp && (
+                          <button
+                            onClick={removeTemp}
+                            className="text-gray-600 hover:text-red-400 text-xs px-0.5 transition-colors"
+                            title="Close temporary chat"
+                          >
+                            ✕
+                          </button>
+                        )}
+                      </>
+                    );
+                  })()}
                   {thread && thread.type !== 'direct' && (
                     <button
                       onClick={() => { setManagingThreadId(managingThreadId === threadId ? null : threadId); loadDrivers(); }}
