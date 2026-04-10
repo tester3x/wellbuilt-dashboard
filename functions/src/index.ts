@@ -92,6 +92,15 @@ export const watchdogStrandedPackets = functionsV2.onSchedule('every 5 minutes',
   for (const packet of strandedPackets) {
     const { key, data } = packet;
 
+    // Skip edit and delete packets — they are handled by their own Cloud Functions
+    // and should never be retriggered by the watchdog (causes ghost duplicate entries)
+    if (data.requestType === 'edit' || data.requestType === 'delete') {
+      console.log(`[Watchdog] ${data.wellName}: skipping ${data.requestType} packet (${key}), removing`);
+      await db.ref(`packets/incoming/${key}`).remove();
+      alreadyProcessedCount++;
+      continue;
+    }
+
     // FIX: Check if this packet was already processed before re-triggering.
     // Race condition: if processIncomingPull was slow (cold start), the packet
     // may still be in incoming/ even though it was already processed + outgoing written.
@@ -1169,7 +1178,9 @@ export const processEditRequest = functionsV1.database
 
     // Apply date/time edit if present
     const newDateTimeUTC = data.dateTimeUTC || origPacket.dateTimeUTC;
-    const newDateTime = data.dateTime || origPacket.dateTime;
+    const rawDateTime = data.dateTime || origPacket.dateTime;
+    // Strip seconds from display time (e.g. "4/9/2026, 2:40:00 PM" → "4/9/2026, 2:40 PM")
+    const newDateTime = rawDateTime ? rawDateTime.replace(/:(\d{2})\s*(AM|PM)/i, ' $2') : '';
 
     // Apply wellDown edit — use edited value if present, otherwise keep original
     const newWellDown = data.wellDown !== undefined ? (data.wellDown === true || data.wellDown === 'true') : (origPacket.wellDown || false);
@@ -1468,6 +1479,194 @@ export const processEditRequest = functionsV1.database
       console.log(`Edit: Updated performance/ for ${wellName}: a=${actualInches} p=${predictedInches}`);
     } catch (perfError) {
       console.error(`Edit: Error updating performance/ for ${wellName}:`, perfError);
+    }
+
+    // ── Update wells/{wellName}/status (same structure as processIncomingPull) ──
+    if (isLatestPull && afr > 0) {
+      const editAfrMinutes = afr * 24 * 60;
+      const editWellStatus = {
+        wellName,
+        config: {
+          tanks,
+          bottomLevel: bottomInches / 12,
+          route: config.route || 'Unassigned',
+          pullBbls,
+        },
+        current: {
+          level: inchesToFeetInches(newTankAfterInches),
+          levelInches: newTankAfterInches,
+          asOf: new Date().toISOString(),
+        },
+        lastPull: {
+          dateTime: newDateTime || formatLocalDateTime(new Date(newDateTimeUTC)),
+          dateTimeUTC: newDateTimeUTC,
+          topLevel: inchesToFeetInches(newTankTopInches),
+          topLevelInches: newTankTopInches,
+          bottomLevel: inchesToFeetInches(newTankAfterInches),
+          bottomLevelInches: newTankAfterInches,
+          bblsTaken: newBblsTaken,
+          driverName: origPacket.driverName || '',
+          packetId: originalPacketId,
+        },
+        calculated: {
+          flowRate: daysToHMMSS(afr),
+          flowRateMinutes: Math.round(editAfrMinutes * 100) / 100,
+          bbls24hrs: Math.round((1 / afr) * tanks * 20) || 0,
+          nextPullTime: (() => { const pullHeightIn = (pullBbls / 20 / tanks) * 12; const targetLvl = bottomInches + pullHeightIn; const recovNeeded = Math.max(0, targetLvl - newTankAfterInches); if (recovNeeded <= 0) return formatLocalDateTime(new Date(newDateTimeUTC)); const estDays = (recovNeeded / 12) * afr; const estDate = new Date(new Date(newDateTimeUTC).getTime() + estDays * 24 * 60 * 60 * 1000); return formatLocalDateTime(estDate); })(),
+          nextPullTimeUTC: (() => { const pullHeightIn = (pullBbls / 20 / tanks) * 12; const targetLvl = bottomInches + pullHeightIn; const recovNeeded = Math.max(0, targetLvl - newTankAfterInches); if (recovNeeded <= 0) return newDateTimeUTC; const estDays = (recovNeeded / 12) * afr; return new Date(new Date(newDateTimeUTC).getTime() + estDays * 24 * 60 * 60 * 1000).toISOString(); })(),
+          timeTillPull: newWellDown ? 'Down' : (() => { const pullHeightIn = (pullBbls / 20 / tanks) * 12; const targetLvl = bottomInches + pullHeightIn; const recovNeeded = Math.max(0, targetLvl - newTankAfterInches); if (recovNeeded <= 0) return '0:00'; return daysToHMM((recovNeeded / 12) * afr); })(),
+        },
+        isDown: newWellDown,
+        updatedAt: new Date().toISOString(),
+      };
+      await db.ref(`wells/${wellName}/status`).set(editWellStatus);
+      console.log(`Edit: Updated wells/${wellName}/status (full recalc)`);
+    }
+
+    // ── Cascade to Firestore: ticket doc, dispatch doc, invoice doc ──
+    try {
+      const firestore = admin.firestore();
+
+      // Find ticket by packetId (submitTicket CF writes packetId on ticket docs)
+      let ticketSnap = await firestore.collection('tickets')
+        .where('packetId', '==', originalPacketId)
+        .limit(1)
+        .get();
+
+      // Fallback: find by wellName/location + date (for tickets created before packetId was stored)
+      if (ticketSnap.empty && wellName) {
+        const origDate = origPacket.dateTime || '';
+        // Normalize date to MM/DD/YYYY (WB T ticket format) from either "M/D/YYYY H:MM" or ISO
+        let datePart = origDate.split(' ')[0] || origDate.split('T')[0] || '';
+        if (datePart.includes('-')) {
+          // ISO format YYYY-MM-DD → MM/DD/YYYY
+          const [y, m, d] = datePart.split('-');
+          datePart = `${m}/${d}/${y}`;
+        } else if (datePart.includes('/')) {
+          // M/D/YYYY → MM/DD/YYYY (pad with zeros)
+          const parts = datePart.split('/');
+          datePart = `${parts[0].padStart(2, '0')}/${parts[1].padStart(2, '0')}/${parts[2]}`;
+        }
+        console.log(`Edit: Firestore fallback searching date=${datePart} wellName=${wellName}`);
+        if (datePart) {
+          // Try wellName field first, then location (WB T uses 'location' for well name)
+          for (const field of ['wellName', 'location']) {
+            const fallbackSnap = await firestore.collection('tickets')
+              .where(field, '==', wellName)
+              .where('date', '==', datePart)
+              .limit(5)
+              .get();
+            if (!fallbackSnap.empty) {
+              // If multiple tickets for same well+date, match by BBLs (original or current)
+              const origBbls = String(origPacket.bblsTaken);
+              const match = fallbackSnap.docs.find(d => d.data().bbls === origBbls)
+                || fallbackSnap.docs[0]; // Fallback to first if no BBL match
+              ticketSnap = { empty: false, docs: [match] } as any;
+              console.log(`Edit: Found ticket via fallback (${field}+date) for ${wellName}: ${match.id}`);
+              break;
+            }
+          }
+        }
+      }
+
+      if (!ticketSnap.empty) {
+        const ticketDoc = ticketSnap.docs[0];
+        const ticketData = ticketDoc.data();
+        await ticketDoc.ref.update({
+          bbls: String(newBblsTaken),
+          top: inchesToFeetInches(newTankTopInches),
+          bottom: inchesToFeetInches(newTankAfterInches),
+          editedAt: admin.firestore.Timestamp.now(),
+          editedBy: data.source || 'dashboard',
+          packetId: originalPacketId, // Backfill for future edits
+        });
+        console.log(`Edit: Updated Firestore ticket ${ticketDoc.id} bbls=${newBblsTaken}`);
+
+        // Cascade to dispatch doc if ticket has a dispatchId
+        const dispatchId = ticketData.dispatchId;
+        if (dispatchId) {
+          // Recalculate totalBBL from all tickets for this dispatch
+          const allTicketsSnap = await firestore.collection('tickets')
+            .where('dispatchId', '==', dispatchId)
+            .get();
+          let totalBBL = 0;
+          allTicketsSnap.forEach(t => {
+            totalBBL += (t.id === ticketDoc.id ? newBblsTaken : (parseFloat(t.data().bbls) || 0));
+          });
+          await firestore.collection('dispatches').doc(dispatchId).update({
+            totalBBL,
+          });
+          console.log(`Edit: Updated dispatch ${dispatchId} totalBBL=${totalBBL}`);
+        }
+
+        // Cascade to invoice doc if ticket has an invoiceDocId
+        const invoiceDocId = ticketData.invoiceDocId;
+        if (invoiceDocId) {
+          // Recalculate totalBBL from all tickets for this invoice
+          const invTicketsSnap = await firestore.collection('tickets')
+            .where('invoiceDocId', '==', invoiceDocId)
+            .get();
+          let invTotalBBL = 0;
+          invTicketsSnap.forEach(t => {
+            invTotalBBL += (t.id === ticketDoc.id ? newBblsTaken : (parseFloat(t.data().bbls) || 0));
+          });
+          await firestore.collection('invoices').doc(invoiceDocId).update({
+            totalBBL: invTotalBBL,
+          });
+          console.log(`Edit: Updated invoice ${invoiceDocId} totalBBL=${invTotalBBL}`);
+        }
+      } else {
+        console.log(`Edit: No Firestore ticket found for packetId ${originalPacketId} — trying direct invoice search`);
+      }
+
+      // Direct invoice search — if ticket path didn't find/update the invoice,
+      // search invoices directly by wellName + date. Payroll reads from invoices, not tickets.
+      // This catches s_t mode jobs where ticket→invoice link may be missing.
+      const origDate = origPacket.dateTime || '';
+      let invoiceDatePart = origDate.split(' ')[0] || origDate.split('T')[0] || '';
+      if (invoiceDatePart.includes('-')) {
+        const [y, m, d] = invoiceDatePart.split('-');
+        invoiceDatePart = `${m}/${d}/${y}`;
+      } else if (invoiceDatePart.includes('/')) {
+        const parts = invoiceDatePart.split('/');
+        invoiceDatePart = `${parts[0].padStart(2, '0')}/${parts[1].padStart(2, '0')}/${parts[2]}`;
+      }
+
+      if (invoiceDatePart) {
+        const invoiceSnap = await firestore.collection('invoices')
+          .where('wellName', '==', wellName)
+          .where('date', '==', invoiceDatePart)
+          .limit(5)
+          .get();
+
+        if (!invoiceSnap.empty) {
+          // Match by original BBLs or driver name
+          const origBblNum = origPacket.bblsTaken;
+          const driverName = origPacket.driverName || '';
+          const match = invoiceSnap.docs.find(d => {
+            const inv = d.data();
+            return inv.totalBBL === origBblNum || inv.totalBBL === newBblsTaken
+              || (driverName && (inv.driver || '').includes(driverName));
+          }) || invoiceSnap.docs[0];
+
+          const invData = match.data();
+          if (invData.totalBBL !== newBblsTaken) {
+            await match.ref.update({
+              totalBBL: newBblsTaken,
+              editedAt: admin.firestore.Timestamp.now(),
+              editedBy: data.source || 'dashboard',
+            });
+            console.log(`Edit: Direct invoice update ${match.id} totalBBL: ${invData.totalBBL}→${newBblsTaken}`);
+          } else {
+            console.log(`Edit: Invoice ${match.id} already has correct totalBBL=${newBblsTaken}`);
+          }
+        } else {
+          console.log(`Edit: No invoice found for ${wellName} on ${invoiceDatePart}`);
+        }
+      }
+    } catch (fsErr) {
+      // Non-blocking — RTDB is already updated, Firestore cascade is best-effort
+      console.error(`Edit: Firestore cascade error (non-blocking):`, fsErr);
     }
 
     // Delete the edit request
