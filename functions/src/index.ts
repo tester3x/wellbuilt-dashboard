@@ -1767,6 +1767,20 @@ const DOE_REGION_TO_EIA: Record<string, string> = {
   padd5_no_ca: 'R5XCA', california: 'SCA',
 };
 
+// State → PADD region fallback (mirrors client-side STATE_TO_PADD)
+const STATE_TO_PADD: Record<string, string> = {
+  CT: 'padd1a', ME: 'padd1a', MA: 'padd1a', NH: 'padd1a', RI: 'padd1a', VT: 'padd1a',
+  DE: 'padd1b', DC: 'padd1b', MD: 'padd1b', NJ: 'padd1b', NY: 'padd1b', PA: 'padd1b',
+  FL: 'padd1c', GA: 'padd1c', NC: 'padd1c', SC: 'padd1c', VA: 'padd1c', WV: 'padd1c',
+  IL: 'padd2', IN: 'padd2', IA: 'padd2', KS: 'padd2', KY: 'padd2', MI: 'padd2',
+  MN: 'padd2', MO: 'padd2', NE: 'padd2', ND: 'padd2', SD: 'padd2', OH: 'padd2',
+  OK: 'padd2', TN: 'padd2', WI: 'padd2',
+  AL: 'padd3', AR: 'padd3', LA: 'padd3', MS: 'padd3', NM: 'padd3', TX: 'padd3',
+  CO: 'padd4', ID: 'padd4', MT: 'padd4', UT: 'padd4', WY: 'padd4',
+  AK: 'padd5', AZ: 'padd5', HI: 'padd5', NV: 'padd5', OR: 'padd5', WA: 'padd5',
+  CA: 'california',
+};
+
 async function fetchDieselFromEIA(doeRegion: string): Promise<{ price: number; date: string } | null> {
   const duoarea = DOE_REGION_TO_EIA[doeRegion] || 'NUS';
   const url = `https://api.eia.gov/v2/petroleum/pri/gnd/data?api_key=${EIA_API_KEY}`
@@ -1805,8 +1819,9 @@ export const weeklyDieselPriceFetch = functionsV2.onSchedule(
 
     companiesSnap.forEach(doc => {
       const data = doc.data();
-      if (data.doeRegion) {
-        companies.push({ id: doc.id, doeRegion: data.doeRegion, name: data.name || doc.id });
+      const region = data.doeRegion || (data.state ? STATE_TO_PADD[data.state.toUpperCase()] : null);
+      if (region) {
+        companies.push({ id: doc.id, doeRegion: region, name: data.name || doc.id });
       }
     });
 
@@ -1890,9 +1905,8 @@ export const triggerDieselFetch = httpsV2.onRequest(
 
     for (const doc of companiesSnap.docs) {
       const data = doc.data();
-      if (!data.doeRegion) continue;
-
-      const region = data.doeRegion;
+      const region = data.doeRegion || (data.state ? STATE_TO_PADD[data.state.toUpperCase()] : null);
+      if (!region) continue;
 
       // Fetch once per region
       if (!regionCache.has(region)) {
@@ -2436,7 +2450,7 @@ Extract the following and return ONLY valid JSON (no markdown fences, no comment
       "id": "kebab-case-id-from-title",
       "title": "Step title exactly as written",
       "items": [
-        { "hazard": "Hazard text exactly as written", "controls": "Control measures exactly as written" }
+        { "hazard": "All hazards for this step combined into one string", "controls": "All controls for this step combined into one string" }
       ]
     }
   ],
@@ -2449,8 +2463,8 @@ Extract the following and return ONLY valid JSON (no markdown fences, no comment
 }
 
 Rules:
-- Extract ALL steps in document order. Each step may have multiple hazard/control pairs.
-- Group hazards under the same step when the document groups them that way.
+- Extract ALL steps in document order.
+- CRITICAL: Each step should have exactly ONE item in its "items" array. Combine ALL hazards for that step into a single "hazard" string, and ALL controls/recommended actions for that step into a single "controls" string. Use bullet points or newlines to separate multiple items within each string. Do NOT split hazards and controls into separate pairs — keep them together as one block per step, exactly as the original document groups them.
 - Extract ALL PPE items mentioned anywhere in the document.
 - Extract any "prepared for work", "pre-job checklist", or similar readiness items as preparedItems.
 - If no preparedItems are found, use these defaults: [{"id":"trained","label":"I am properly trained for the job"},{"id":"tools-and-ppe","label":"I have the tools & PPE needed for work"},{"id":"sds","label":"SDS"}]
@@ -2492,7 +2506,7 @@ export const parseJsaPdf = httpsV2.onCall(
     let responseText: string;
     try {
       const message = await client.messages.create({
-        model: 'claude-sonnet-4-6-20250514',
+        model: 'claude-sonnet-4-6',
         max_tokens: 4096,
         messages: [{
           role: 'user',

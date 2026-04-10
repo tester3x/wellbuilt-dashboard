@@ -92,6 +92,11 @@ interface DispatchJob {
   invoiceDocId?: string;  // Firestore invoice doc ID
   // Project link
   projectId?: string;  // Links this dispatch to a project
+  // Split ticket fields
+  splitGroupId?: string;  // Links split ticket jobs (A→B→C chain)
+  splitSequence?: number;  // 1=first job, 2=second, etc.
+  // Heavy water flag
+  isHeavyWater?: boolean;  // 10+ lb heavy water — separate billing rate
 }
 
 // ─── Project Types ────────────────────────────────────────────────────────
@@ -362,6 +367,8 @@ function DispatchPageInner() {
   const [swNotes, setSwNotes] = useState('');
   const [swDriverHashes, setSwDriverHashes] = useState<Set<string>>(new Set());
   const [swSubmitting, setSwSubmitting] = useState(false);
+  const [swSplitTicket, setSwSplitTicket] = useState(false);
+  const [swHeavyWater, setSwHeavyWater] = useState(false);
   const [swDriverETAs, setSwDriverETAs] = useState<Map<string, DriverEtaResult>>(new Map());
   const [swEtaLoading, setSwEtaLoading] = useState(false);
 
@@ -409,6 +416,19 @@ function DispatchPageInner() {
   // Add Pull modal state (shared component handles its own form state)
   const [showAddPullModal, setShowAddPullModal] = useState(false);
 
+  // Builder tab state (PW / SW / Projects) — persists across page visits
+  const [builderTab, setBuilderTab] = useState<'pw' | 'sw' | 'projects'>(() => {
+    if (typeof window !== 'undefined') {
+      const saved = localStorage.getItem('dispatch_builder_tab');
+      if (saved === 'pw' || saved === 'sw' || saved === 'projects') return saved;
+    }
+    return 'pw';
+  });
+  const handleBuilderTabChange = useCallback((tab: 'pw' | 'sw' | 'projects') => {
+    setBuilderTab(tab);
+    localStorage.setItem('dispatch_builder_tab', tab);
+  }, []);
+
   // Edit dispatch modal state (shared for PW + SW)
   const [editSwJob, setEditSwJob] = useState<DispatchJob | null>(null);
   const [editSwNotes, setEditSwNotes] = useState('');
@@ -455,7 +475,6 @@ function DispatchPageInner() {
   const [selectedProject, setSelectedProject] = useState<Project | null>(null);
   const [projectInvoices, setProjectInvoices] = useState<ProjectInvoice[]>([]);
   const [projectDispatches, setProjectDispatches] = useState<DispatchJob[]>([]);
-  const [showCreateProject, setShowCreateProject] = useState(false);
   const [newProjectName, setNewProjectName] = useState('');
   const [newProjectWells, setNewProjectWells] = useState<string[]>([]);
   const [newProjectOperator, setNewProjectOperator] = useState('');
@@ -956,8 +975,11 @@ function DispatchPageInner() {
       const matchedWell = wells.find(w => w.wellName === swWellName.trim() || w.ndicName === swWellName.trim());
       const swNdicName = matchedWell?.ndicName || swWellName.trim();
 
+      // Split ticket: generate shared splitGroupId for linked jobs
+      const splitGroupId = swSplitTicket ? `split_${Date.now()}_${Math.random().toString(36).slice(2, 8)}` : undefined;
+
       const promises = selectedDrivers.map(driver => {
-        const job: Omit<DispatchJob, 'id'> = {
+        const baseJob: Omit<DispatchJob, 'id'> = {
           driverHash: driver.key,
           driverName: driver.displayName,
           ...(driver.legalName ? { driverFirstName: getFirstName(driver) } : {}),
@@ -975,8 +997,27 @@ function DispatchPageInner() {
           assignedBy: user?.email || 'dashboard',
           ...(serviceGroupId ? { serviceGroupId } : {}),
           ...(assignedDrivers ? { assignedDrivers } : {}),
+          ...(swHeavyWater ? { isHeavyWater: true } : {}),
+          ...(splitGroupId ? { splitGroupId, splitSequence: 1 } : {}),
         };
-        return addDoc(collection(firestore, 'dispatches'), job);
+
+        const docs = [addDoc(collection(firestore, 'dispatches'), baseJob)];
+
+        // Split ticket: create second linked job (drop-off → service work at destination)
+        if (swSplitTicket && swDropoff.trim()) {
+          const job2: Omit<DispatchJob, 'id'> = {
+            ...baseJob,
+            wellName: swDropoff.trim(),
+            ndicWellName: swDropoff.trim(),
+            disposal: swDropoff.trim(),
+            notes: `Split ticket B — ${swNotes || swServiceType.trim()}`,
+            splitGroupId: splitGroupId!,
+            splitSequence: 2,
+          };
+          docs.push(addDoc(collection(firestore, 'dispatches'), job2));
+        }
+
+        return Promise.all(docs);
       });
 
       await Promise.all(promises);
@@ -993,6 +1034,8 @@ function DispatchPageInner() {
       setSwOnsiteBy('');
       setSwNotes('');
       setSwDriverHashes(new Set());
+      setSwSplitTicket(false);
+      setSwHeavyWater(false);
       setTimeout(() => setMessage(''), 4000);
     } catch (err: any) {
       setMessage(`Error: ${err.message}`);
@@ -1091,6 +1134,41 @@ function DispatchPageInner() {
         }
       }
 
+      // Auto-create project chat thread with all assigned drivers
+      if (newProjectDriverHashes.size > 0) {
+        try {
+          const allDriverHashes = Array.from(newProjectDriverHashes);
+          const myPid = user?.uid ? `user:${user.uid}` : '';
+          const participants = [myPid, ...allDriverHashes.map(h => `driver:${h}`)].filter(Boolean);
+          const participantNames: Record<string, string> = {};
+          if (myPid) participantNames[myPid] = user?.displayName || 'Dispatch';
+          allDriverHashes.forEach(h => {
+            const d = drivers.find(dr => dr.key === h);
+            if (d) participantNames[`driver:${h}`] = d.displayName;
+          });
+          const threadTitle = newProjectName.trim() || `Project - ${newProjectWells[0] || 'Unnamed'}`;
+          const sysText = `Project "${threadTitle}" created with ${allDriverHashes.length} driver${allDriverHashes.length > 1 ? 's' : ''}`;
+          const threadRef = await addDoc(collection(firestore, 'chat_threads'), {
+            type: 'project',
+            projectId: docRef.id,
+            companyId: user?.companyId || '',
+            title: threadTitle,
+            participants,
+            participantNames,
+            status: 'active',
+            createdAt: Timestamp.now(),
+            updatedAt: Timestamp.now(),
+            lastRead: {},
+            lastMessage: { text: sysText, senderId: 'system', senderName: 'System', timestamp: Timestamp.now(), type: 'system' },
+          });
+          await addDoc(collection(firestore, 'chat_threads', threadRef.id, 'messages'), {
+            text: sysText, senderId: 'system', senderName: 'System', timestamp: Timestamp.now(), type: 'system',
+          });
+        } catch (chatErr) {
+          console.warn('[Dispatch] Auto-create project chat failed (non-blocking):', chatErr);
+        }
+      }
+
       // Reset form
       setNewProjectName('');
       setNewProjectWells([]);
@@ -1102,7 +1180,6 @@ function DispatchPageInner() {
       setNewProjectDriverDisposals({});
       setNewProjectJobType('service');
       setNewProjectServiceType('');
-      setShowCreateProject(false);
       setProjectWellSearch('');
       setMessage('Project created');
       setTimeout(() => setMessage(''), 3000);
@@ -1757,15 +1834,6 @@ function DispatchPageInner() {
             </div>
 
             <span className="flex-1" />
-
-            {/* Action buttons */}
-            {/* Service Work button removed — form always visible */}
-            <button
-              onClick={() => setShowAddPullModal(true)}
-              className="px-3 py-1.5 text-xs font-medium rounded-lg transition-colors flex items-center gap-1.5 bg-gray-800 text-green-400 hover:bg-gray-700 border border-gray-700"
-            >
-              <span className="text-sm">+</span> Add Pull
-            </button>
           </div>
 
           {/* Status message */}
@@ -1784,34 +1852,398 @@ function DispatchPageInner() {
           {/* ═══════ LEFT HALF (50%): dispatch cards + well queue ═══════ */}
           <div className="w-[50%] flex-shrink-0 flex flex-col gap-3 min-h-0 overflow-hidden">
 
-            {/* PW + SW side by side — OR — Create Project form overlay */}
-            {showCreateProject ? (
-              <div className="bg-gray-800 border border-emerald-600/40 rounded-lg p-4 flex-shrink-0 flex flex-col h-[460px]">
-                <div className="flex items-center justify-between mb-2">
-                  <h3 className="text-emerald-400 text-xs font-medium uppercase tracking-wider">New Project Builder</h3>
-                  <button onClick={() => { setShowCreateProject(false); setProjectWellSearch(''); setNewProjectDriverShifts(new Map()); setNpbTab('details'); }}
-                    className="text-gray-400 hover:text-white text-xs">Cancel</button>
+            {/* ── Tabbed Dispatch Builder (PW / SW / Projects) ── */}
+            <div className={`bg-gray-800 border rounded-lg p-4 flex-shrink-0 flex flex-col h-[460px] ${
+              builderTab === 'pw' ? 'border-blue-600/40' : builderTab === 'sw' ? 'border-purple-600/40' : 'border-emerald-600/40'
+            }`}>
+              {/* Builder tab bar + Add Pull */}
+              <div className="flex items-center gap-1 mb-3 border-b border-gray-700 pb-2">
+                {([
+                  { key: 'pw' as const, label: 'PW', active: 'bg-blue-600/30 text-blue-400' },
+                  { key: 'sw' as const, label: 'SW', active: 'bg-purple-600/30 text-purple-400' },
+                  { key: 'projects' as const, label: 'Projects', active: 'bg-emerald-600/30 text-emerald-400' },
+                ] as const).map(tab => (
+                  <button key={tab.key} onClick={() => handleBuilderTabChange(tab.key)}
+                    className={`px-3 py-1 text-xs font-medium rounded transition-colors ${
+                      builderTab === tab.key
+                        ? tab.active
+                        : 'text-gray-400 hover:text-white hover:bg-gray-700'
+                    }`}>
+                    {tab.label}
+                  </button>
+                ))}
+                <span className="flex-1" />
+                {/* Add Pull — always visible */}
+                <button
+                  onClick={() => setShowAddPullModal(true)}
+                  className="px-2.5 py-1 text-xs font-medium rounded transition-colors flex items-center gap-1 bg-gray-700 text-green-400 hover:bg-gray-600 border border-gray-600"
+                >
+                  <span className="text-sm">+</span> Add Pull
+                </button>
+              </div>
+
+              {/* ── PW Tab ── */}
+              {builderTab === 'pw' && (
+                <div className="flex-1 flex flex-col min-h-0">
+                  <div className="text-blue-400 text-xs font-medium uppercase tracking-wider mb-3">Dispatch Production Water</div>
+                  {/* Top: Well input + static info box */}
+                  <div className="space-y-2 flex-shrink-0">
+                    {/* Well — greyed out in multi-well mode */}
+                    <div className="relative">
+                      <label className="block text-xs text-gray-400 mb-1">Well</label>
+                      {selectedWells.size > 0 ? (
+                        <div className="w-full px-3 py-1.5 bg-gray-900/50 border border-blue-500/50 rounded text-blue-300 text-sm cursor-not-allowed">
+                          {selectedWells.size} well{selectedWells.size !== 1 ? 's' : ''} checked
+                          {totalSelectedLoads !== selectedWells.size && <span className="text-blue-400 ml-1">({totalSelectedLoads} loads)</span>}
+                        </div>
+                      ) : (
+                        <>
+                          <input type="text"
+                            value={assignTarget ? (assignTarget.ndicName || assignTarget.wellName) : assignWellSearch}
+                            onChange={(e) => {
+                              if (assignTarget) { setAssignTarget(null); setAssignDriverHash(''); }
+                              setAssignWellSearch(e.target.value);
+                            }}
+                            placeholder="Search wells or click Assign below..."
+                            className={`w-full px-3 py-1.5 bg-gray-900 border rounded text-white text-sm focus:outline-none ${assignTarget ? 'border-blue-500 font-bold' : 'border-gray-700 focus:border-blue-500'}`}
+                          />
+                          {assignTarget && (
+                            <button onClick={() => { setAssignTarget(null); setAssignDriverHash(''); setAssignWellSearch(''); }}
+                              className="absolute right-2 top-7 text-gray-400 hover:text-white text-xs">✕</button>
+                          )}
+                          {!assignTarget && assignWellSearch.length >= 2 && (
+                            <div className="absolute z-10 w-full bg-gray-900 border border-gray-700 rounded mt-0.5 max-h-32 overflow-y-auto">
+                              {wells
+                                .filter(w => (w.ndicName || w.wellName).toLowerCase().includes(assignWellSearch.toLowerCase()))
+                                .slice(0, 8)
+                                .map(w => (
+                                  <button key={w.wellName} onClick={() => { setAssignTarget(w); setAssignWellSearch(''); }}
+                                    className="w-full text-left px-3 py-1.5 hover:bg-gray-700 text-white text-xs border-b border-gray-800 last:border-0">
+                                    {w.ndicName || w.wellName} <span className="text-gray-500">{w.route}</span>
+                                  </button>
+                                ))}
+                              {wells.filter(w => (w.ndicName || w.wellName).toLowerCase().includes(assignWellSearch.toLowerCase())).length === 0 && (
+                                <div className="px-3 py-1.5 text-gray-500 text-xs">No wells found</div>
+                              )}
+                            </div>
+                          )}
+                        </>
+                      )}
+                    </div>
+                    {/* Well info box — static height, content shows when well selected */}
+                    <div className="bg-gray-900 rounded px-2 py-1.5 min-h-[44px]">
+                      {assignTarget && selectedWells.size === 0 ? (
+                        <div className="grid grid-cols-3 gap-x-3 gap-y-1 text-xs">
+                          <span className="text-gray-400">Level: <span className="text-white font-mono">{assignTarget.currentLevel || '--'}</span></span>
+                          <span className="text-gray-400">Flow: <span className="text-white font-mono">{assignTarget.flowRate || '--'}</span></span>
+                          <span className="text-gray-400">TTP: <span className="text-white font-mono">{assignTarget.timeTillPull || '--'}</span></span>
+                          <span className="text-gray-400">Route: <span className="text-white">{assignTarget.route || '--'}</span></span>
+                          <span className="text-gray-400">BBL/day: <span className="text-white font-mono">{assignTarget.windowBblsDay || assignTarget.bbls24hrs || '--'}</span></span>
+                          <span className="text-gray-400">ETA Max: <span className="text-white font-mono">{assignTarget.etaToMax || '--'}</span></span>
+                        </div>
+                      ) : (
+                        <div className="text-gray-600 text-xs italic">Select a well to see info</div>
+                      )}
+                    </div>
+                  </div>
+                  {/* Spacer pushes driver+ to bottom */}
+                  <div className="flex-1" />
+                  {/* Bottom: Driver, Disposal, Loads+Notes, Dispatch */}
+                  <div className="space-y-2">
+                    {/* Driver */}
+                    <div>
+                      <label className="block text-xs text-gray-400 mb-1">Driver</label>
+                      <select value={assignDriverHash} onChange={(e) => setAssignDriverHash(e.target.value)}
+                        className="w-full px-3 py-1.5 bg-gray-900 border border-gray-700 rounded text-white text-sm focus:outline-none focus:border-blue-500">
+                        <option value="">Select driver...</option>
+                        {assignTarget?.route && drivers.filter(d => d.assignedRoutes?.includes(assignTarget.route!)).length > 0 && (
+                          <optgroup label={`Route: ${assignTarget.route}`}>
+                            {drivers.filter(d => d.assignedRoutes?.includes(assignTarget.route!)).map(d => (
+                              <option key={d.key} value={d.key}>{d.legalName || d.displayName}</option>
+                            ))}
+                          </optgroup>
+                        )}
+                        <optgroup label="All Drivers">
+                          {drivers.map(d => (<option key={d.key} value={d.key}>{d.legalName || d.displayName}</option>))}
+                        </optgroup>
+                      </select>
+                    </div>
+                    {/* Disposal */}
+                    <div className="relative">
+                      <label className="block text-xs text-gray-400 mb-1">Disposal</label>
+                      {assignDisposalWell ? (
+                        <div className="flex items-center gap-2 px-3 py-1.5 bg-gray-900 border border-cyan-700 rounded text-sm">
+                          <span className="text-cyan-400 flex-1 truncate">{assignDisposal}</span>
+                          <button onClick={() => { setAssignDisposal(''); setAssignDisposalWell(null); setDisposalSearch(''); }} className="text-gray-400 hover:text-white text-xs">✕</button>
+                        </div>
+                      ) : (
+                        <input type="text" value={disposalSearch}
+                          onChange={(e) => { setDisposalSearch(e.target.value); setDisposalResults(e.target.value.length >= 2 ? searchDisposals(e.target.value, allDisposals) : []); }}
+                          placeholder="Search SWD..." className="w-full px-3 py-1.5 bg-gray-900 border border-gray-700 rounded text-white text-sm placeholder-gray-500 focus:outline-none focus:border-blue-500" />
+                      )}
+                      {disposalResults.length > 0 && !assignDisposalWell && (
+                        <div className="absolute z-50 w-full mt-1 bg-gray-800 border border-gray-600 rounded max-h-36 overflow-y-auto shadow-lg">
+                          {disposalResults.map((d, i) => (
+                            <button key={d.api_no || i} onClick={() => { setAssignDisposal(d.well_name); setAssignDisposalWell(d); setDisposalSearch(''); setDisposalResults([]); }}
+                              className="w-full text-left px-3 py-1.5 hover:bg-gray-700 border-b border-gray-700/50 last:border-0 text-white text-sm">
+                              {d.well_name} <span className="text-gray-400 text-xs ml-1">{d.county || ''}</span>
+                            </button>
+                          ))}
+                        </div>
+                      )}
+                    </div>
+                    {/* Loads + Notes — loads greyed in multi-well mode */}
+                    <div className="flex gap-2">
+                      <div className="w-16">
+                        <label className="block text-xs text-gray-400 mb-1">Loads</label>
+                        {selectedWells.size > 0 ? (
+                          <div className="w-full px-2 py-1.5 bg-gray-900/50 border border-gray-600 rounded text-gray-500 text-sm text-center cursor-not-allowed">
+                            {totalSelectedLoads}
+                          </div>
+                        ) : (
+                          <input type="number" min={1} max={20} value={assignLoadCount}
+                            onChange={(e) => setAssignLoadCount(Math.max(1, parseInt(e.target.value) || 1))}
+                            className="w-full px-2 py-1.5 bg-gray-900 border border-gray-700 rounded text-white text-sm text-center focus:outline-none focus:border-blue-500" />
+                        )}
+                      </div>
+                      <div className="flex-1">
+                        <label className="block text-xs text-gray-400 mb-1">Notes</label>
+                        <input type="text" value={assignNotes} onChange={(e) => setAssignNotes(e.target.value)}
+                          placeholder="Special instructions..." className="w-full px-3 py-1.5 bg-gray-900 border border-gray-700 rounded text-white text-sm placeholder-gray-500 focus:outline-none focus:border-blue-500" />
+                      </div>
+                    </div>
+                    {/* Dispatch — routes to bulk or single based on mode */}
+                    {selectedWells.size > 0 ? (
+                      <button onClick={submitBulkDispatch} disabled={!assignDriverHash || assigning}
+                        className="w-full px-4 py-1.5 bg-blue-600 hover:bg-blue-500 disabled:bg-gray-600 disabled:cursor-not-allowed text-white text-xs font-medium rounded transition-colors">
+                        {assigning ? 'Sending...' : `Dispatch ${totalSelectedLoads} Load${totalSelectedLoads !== 1 ? 's' : ''}`}
+                      </button>
+                    ) : (
+                      <button onClick={submitPWDispatch} disabled={!assignTarget || !assignDriverHash || assigning}
+                        className="w-full px-4 py-1.5 bg-blue-600 hover:bg-blue-500 disabled:bg-gray-600 disabled:cursor-not-allowed text-white text-xs font-medium rounded transition-colors">
+                        {assigning ? 'Sending...' : assignLoadCount > 1 ? `Dispatch ${assignLoadCount} Loads` : 'Dispatch'}
+                      </button>
+                    )}
+                  </div>
                 </div>
-                {/* NPB Tab bar */}
-                <div className="flex items-center gap-1 mb-3 border-b border-gray-700 pb-2">
-                  {([
-                    { key: 'details' as const, label: 'Details', badge: newProjectName ? newProjectWells.length > 0 ? '✓' : '' : '' },
-                    { key: 'drivers' as const, label: 'Drivers', badge: newProjectDriverHashes.size > 0 ? `${newProjectDriverHashes.size}` : '' },
-                    { key: 'notes' as const, label: 'Notes', badge: newProjectNotes.trim() ? '✓' : '' },
-                  ]).map(tab => (
-                    <button key={tab.key} onClick={() => setNpbTab(tab.key)}
-                      className={`px-3 py-1 text-xs font-medium rounded transition-colors ${npbTab === tab.key ? 'bg-emerald-600/30 text-emerald-400' : 'text-gray-400 hover:text-white hover:bg-gray-700'}`}>
-                      {tab.label}
-                      {tab.badge && <span className="ml-1.5 px-1 py-0.5 bg-emerald-600/20 text-emerald-400 text-[9px] rounded font-bold">{tab.badge}</span>}
-                    </button>
-                  ))}
-                  <span className="flex-1" />
-                  <button onClick={createProject}
-                    disabled={!newProjectName.trim() || newProjectWells.length === 0 || creatingProject}
-                    className="px-4 py-1 bg-emerald-600 hover:bg-emerald-500 disabled:bg-gray-600 disabled:cursor-not-allowed text-white text-xs font-medium rounded transition-colors">
-                    {creatingProject ? 'Creating...' : 'Create Project'}
+              )}
+
+              {/* ── SW Tab ── */}
+              {builderTab === 'sw' && (
+                <div className="flex-1 flex flex-col min-h-0">
+                  <div className="text-purple-400 text-xs font-medium uppercase tracking-wider mb-2">Dispatch Service Work</div>
+                  <div className="flex flex-col gap-2 flex-1 min-h-0">
+                    {/* Top row: Well/Drop-off stacked left, Service Type + Onsite By stacked right */}
+                    <div className="flex gap-3 flex-shrink-0">
+                      {/* Left: Well + Drop-off stacked */}
+                      <div className="flex-1 space-y-2">
+                        <div className="relative">
+                          <label className="block text-xs text-gray-400 mb-1">Well / Location</label>
+                          <input
+                            type="text"
+                            value={swWellName}
+                            onChange={(e) => setSwWellName(e.target.value)}
+                            placeholder="Type to search..."
+                            className="w-full px-3 py-1.5 bg-gray-900 border border-gray-700 rounded text-white text-sm placeholder-gray-500 focus:outline-none focus:border-purple-500"
+                          />
+                          {(() => {
+                            const q = swWellName.trim().toLowerCase();
+                            if (q.length < 2) return null;
+                            const exactMatch = wells.some(w => (w.ndicName || w.wellName).toLowerCase() === q) ||
+                              allOperatorWells.some(w => w.well_name.toLowerCase() === q) ||
+                              allDisposals.some(d => d.well_name.toLowerCase() === q);
+                            if (exactMatch) return null;
+                            const seen = new Set<string>();
+                            const wellMatches = wells
+                              .filter(w => (w.ndicName || w.wellName).toLowerCase().includes(q))
+                              .map(w => { seen.add((w.ndicName || w.wellName).toLowerCase()); return { label: w.ndicName || w.wellName, sub: w.route || '', value: w.ndicName || w.wellName }; });
+                            const operatorMatches = allOperatorWells
+                              .filter(w => w.well_name.toLowerCase().includes(q) && !seen.has(w.well_name.toLowerCase()))
+                              .map(w => { seen.add(w.well_name.toLowerCase()); return { label: w.well_name, sub: w.operator || 'NDIC', value: w.well_name }; });
+                            const disposalMatches = allDisposals
+                              .filter(d => d.well_name.toLowerCase().includes(q) && !seen.has(d.well_name.toLowerCase()))
+                              .map(d => ({ label: d.well_name, sub: 'SWD', value: d.well_name }));
+                            const combined = [...wellMatches, ...operatorMatches, ...disposalMatches].slice(0, 15);
+                            if (combined.length === 0) return null;
+                            return (
+                              <div className="absolute z-50 w-full mt-1 bg-gray-800 border border-gray-600 rounded max-h-48 overflow-y-auto shadow-lg">
+                                {combined.map((item, i) => (
+                                  <button key={`${item.value}-${i}`} type="button" onClick={() => setSwWellName(item.value)}
+                                    className="w-full text-left px-3 py-1.5 hover:bg-gray-700 border-b border-gray-700/50 last:border-0 text-white text-sm">
+                                    {item.label}
+                                    {item.sub && <span className="text-gray-500 text-xs ml-2">{item.sub}</span>}
+                                  </button>
+                                ))}
+                              </div>
+                            );
+                          })()}
+                        </div>
+                        <div className="relative">
+                          <label className="block text-xs text-gray-400 mb-1">Drop-off (optional)</label>
+                          <input
+                            type="text"
+                            value={swDropoff}
+                            onChange={(e) => setSwDropoff(e.target.value)}
+                            placeholder="SWD or well..."
+                            className="w-full px-3 py-1.5 bg-gray-900 border border-gray-700 rounded text-white text-sm placeholder-gray-500 focus:outline-none focus:border-purple-500"
+                          />
+                          {(() => {
+                            const q = swDropoff.trim().toLowerCase();
+                            if (q.length < 2) return null;
+                            const exactMatch = wells.some(w => (w.ndicName || w.wellName).toLowerCase() === q) ||
+                              allOperatorWells.some(w => w.well_name.toLowerCase() === q) ||
+                              allDisposals.some(d => d.well_name.toLowerCase() === q);
+                            if (exactMatch) return null;
+                            const seen2 = new Set<string>();
+                            const wellMatches = wells
+                              .filter(w => (w.ndicName || w.wellName).toLowerCase().includes(q))
+                              .map(w => { seen2.add((w.ndicName || w.wellName).toLowerCase()); return { label: w.ndicName || w.wellName, sub: w.route || '', value: w.ndicName || w.wellName }; });
+                            const operatorMatches = allOperatorWells
+                              .filter(w => w.well_name.toLowerCase().includes(q) && !seen2.has(w.well_name.toLowerCase()))
+                              .map(w => { seen2.add(w.well_name.toLowerCase()); return { label: w.well_name, sub: w.operator || 'NDIC', value: w.well_name }; });
+                            const disposalMatches = allDisposals
+                              .filter(d => d.well_name.toLowerCase().includes(q) && !seen2.has(d.well_name.toLowerCase()))
+                              .map(d => ({ label: d.well_name, sub: 'SWD', value: d.well_name }));
+                            const combined = [...wellMatches, ...operatorMatches, ...disposalMatches].slice(0, 15);
+                            if (combined.length === 0) return null;
+                            return (
+                              <div className="absolute z-50 w-full mt-1 bg-gray-800 border border-gray-600 rounded max-h-48 overflow-y-auto shadow-lg">
+                                {combined.map((item, i) => (
+                                  <button key={`${item.value}-${i}`} type="button" onClick={() => setSwDropoff(item.value)}
+                                    className="w-full text-left px-3 py-1.5 hover:bg-gray-700 border-b border-gray-700/50 last:border-0 text-white text-sm">
+                                    {item.label}
+                                    {item.sub && <span className="text-gray-500 text-xs ml-2">{item.sub}</span>}
+                                  </button>
+                                ))}
+                              </div>
+                            );
+                          })()}
+                        </div>
+                      </div>{/* end left: Well + Drop-off */}
+                      {/* Right: Service Type + Onsite By stacked */}
+                      <div className="flex-1 space-y-2">
+                        <div>
+                          <label className="block text-xs text-gray-400 mb-1">Service Type</label>
+                          <select value={swServiceType} onChange={(e) => setSwServiceType(e.target.value)}
+                            className="w-full px-3 py-1.5 bg-gray-900 border border-gray-700 rounded text-white text-sm focus:outline-none focus:border-purple-500">
+                            <option value="">Select type...</option>
+                            {dynamicServiceTypes.map(st => (
+                              <option key={st} value={st}>{st}</option>
+                            ))}
+                          </select>
+                        </div>
+                        <div>
+                          <label className="block text-xs text-gray-400 mb-1">Be onsite by</label>
+                          <input
+                            type="datetime-local"
+                            value={swOnsiteBy}
+                            onChange={(e) => {
+                              const val = e.target.value;
+                              if (val && val.length > 16) return;
+                              setSwOnsiteBy(val);
+                            }}
+                            max="2099-12-31T23:59"
+                            className="w-full px-3 py-1.5 bg-gray-900 border border-gray-700 rounded text-white text-sm focus:outline-none focus:border-purple-500"
+                          />
+                        </div>
+                      </div>
+                    </div>{/* end top row */}
+                    {/* Options row: Split Ticket + Heavy Water */}
+                    <div className="flex items-center gap-4 flex-shrink-0">
+                      <label className="flex items-center gap-2 cursor-pointer group">
+                        <input type="checkbox" checked={swSplitTicket} onChange={(e) => setSwSplitTicket(e.target.checked)}
+                          className="w-3.5 h-3.5 rounded border-gray-600 bg-gray-800 text-purple-600 focus:ring-purple-500" />
+                        <span className={`text-xs ${swSplitTicket ? 'text-purple-400 font-medium' : 'text-gray-400 group-hover:text-gray-300'}`}>
+                          Split Ticket
+                        </span>
+                        {swSplitTicket && <span className="text-[9px] text-purple-500 bg-purple-900/30 px-1.5 py-0.5 rounded">2 linked jobs</span>}
+                      </label>
+                      <label className="flex items-center gap-2 cursor-pointer group">
+                        <input type="checkbox" checked={swHeavyWater} onChange={(e) => setSwHeavyWater(e.target.checked)}
+                          className="w-3.5 h-3.5 rounded border-gray-600 bg-gray-800 text-amber-600 focus:ring-amber-500" />
+                        <span className={`text-xs ${swHeavyWater ? 'text-amber-400 font-medium' : 'text-gray-400 group-hover:text-gray-300'}`}>
+                          Heavy Water (10+ lb)
+                        </span>
+                      </label>
+                    </div>
+                    {/* Bottom row: Driver list + Notes side by side, bottom-aligned */}
+                    <div className="flex gap-3 flex-1 min-h-0">
+                      {/* Driver picker */}
+                      <div className="flex-1 flex flex-col min-h-0">
+                        <label className="block text-xs text-gray-400 mb-1">
+                          Driver{swDriverHashes.size > 1 ? 's' : ''}
+                          {swDriverHashes.size > 0 && <span className="ml-1 px-1.5 py-0.5 bg-purple-600 text-white text-[10px] rounded-full">{swDriverHashes.size}</span>}
+                          {swEtaLoading && <span className="ml-1 text-gray-500 text-[10px]">calculating ETAs...</span>}
+                        </label>
+                        <div className="bg-gray-900 border border-gray-700 rounded flex-1 overflow-y-auto">
+                          {drivers.map(d => {
+                            const checked = swDriverHashes.has(d.key);
+                            const eta = swDriverETAs.get(d.key);
+                            const activeJob = dispatches.find(j => j.driverHash === d.key && ['accepted', 'in_progress', 'paused'].includes(j.status));
+                            const stageLabel = activeJob?.driverStage?.replace(/_/g, ' ') || (activeJob ? 'on job' : '');
+                            const etaColor = eta?.status === 'can_make_it' ? '#22c55e'
+                              : eta?.status === 'tight' ? '#eab308'
+                              : eta?.status === 'cant_make_it' ? '#ef4444'
+                              : '#666';
+                            return (
+                              <button key={d.key} type="button" onClick={() => { setSwDriverHashes(prev => { const next = new Set(prev); if (next.has(d.key)) next.delete(d.key); else next.add(d.key); return next; }); }}
+                                className={`w-full flex items-center gap-2 px-2 py-1 text-xs text-left border-b border-gray-800 last:border-0 transition-colors ${checked ? 'bg-purple-900/30 text-white' : 'text-gray-300 hover:bg-gray-800'}`}>
+                                <input type="checkbox" checked={checked} readOnly className="w-3 h-3 rounded border-gray-600 bg-gray-800 text-purple-600 pointer-events-none flex-shrink-0" />
+                                <span className="flex-1 min-w-0 truncate">{d.legalName || d.displayName}</span>
+                                {activeJob && (
+                                  <span className="flex-shrink-0 px-1.5 py-0.5 rounded text-[9px] font-bold bg-blue-900/50 text-blue-400 border border-blue-800">On Job</span>
+                                )}
+                                {eta && swOnsiteBy && (
+                                  <span className="flex-shrink-0 font-bold text-[10px]" style={{ color: etaColor }}>{eta.display}</span>
+                                )}
+                                {stageLabel && (
+                                  <span className="flex-shrink-0 text-[10px] text-gray-500">{stageLabel}</span>
+                                )}
+                              </button>
+                            );
+                          })}
+                        </div>
+                      </div>
+                      {/* Notes */}
+                      <div className="flex-1 flex flex-col min-h-0">
+                        <label className="block text-xs text-gray-400 mb-1">Notes</label>
+                        <textarea value={swNotes} onChange={(e) => setSwNotes(e.target.value)} placeholder="Special instructions, equipment needed, etc."
+                          className="w-full flex-1 px-3 py-1.5 bg-gray-900 border border-gray-700 rounded text-white text-sm placeholder-gray-500 focus:outline-none focus:border-purple-500 resize-none" />
+                      </div>
+                    </div>{/* end bottom row */}
+                  </div>{/* end SW body */}
+                  {/* Dispatch button */}
+                  <button onClick={submitServiceWork}
+                    disabled={!swWellName.trim() || !swServiceType || swDriverHashes.size === 0 || swSubmitting}
+                    className="w-full mt-2 px-4 py-1.5 bg-purple-600 hover:bg-purple-500 disabled:bg-gray-600 disabled:cursor-not-allowed text-white text-xs font-medium rounded transition-colors flex-shrink-0">
+                    {swSubmitting ? 'Sending...' : 'Dispatch'}
                   </button>
                 </div>
+              )}
+
+              {/* ── Projects Tab ── */}
+              {builderTab === 'projects' && (
+                <div className="flex-1 flex flex-col min-h-0 overflow-hidden">
+                  {/* NPB Sub-tabs + Create Project */}
+                  <div className="flex items-center gap-1 mb-3 border-b border-gray-700 pb-2">
+                    {([
+                      { key: 'details' as const, label: 'Details', badge: newProjectName ? newProjectWells.length > 0 ? '✓' : '' : '' },
+                      { key: 'drivers' as const, label: 'Drivers', badge: newProjectDriverHashes.size > 0 ? `${newProjectDriverHashes.size}` : '' },
+                      { key: 'notes' as const, label: 'Notes', badge: newProjectNotes.trim() ? '✓' : '' },
+                    ]).map(tab => (
+                      <button key={tab.key} onClick={() => setNpbTab(tab.key)}
+                        className={`px-3 py-1 text-xs font-medium rounded transition-colors ${npbTab === tab.key ? 'bg-emerald-600/30 text-emerald-400' : 'text-gray-400 hover:text-white hover:bg-gray-700'}`}>
+                        {tab.label}
+                        {tab.badge && <span className="ml-1.5 px-1 py-0.5 bg-emerald-600/20 text-emerald-400 text-[9px] rounded font-bold">{tab.badge}</span>}
+                      </button>
+                    ))}
+                    <span className="flex-1" />
+                    <button onClick={createProject}
+                      disabled={!newProjectName.trim() || newProjectWells.length === 0 || creatingProject}
+                      className="px-4 py-1 bg-emerald-600 hover:bg-emerald-500 disabled:bg-gray-600 disabled:cursor-not-allowed text-white text-xs font-medium rounded transition-colors">
+                      {creatingProject ? 'Creating...' : 'Create Project'}
+                    </button>
+                  </div>
                 {/* Details tab */}
                 {npbTab === 'details' && (
                   <div className="space-y-2 overflow-y-auto flex-1">
@@ -1999,332 +2431,9 @@ function DispatchPageInner() {
                       className="w-full flex-1 px-3 py-2 bg-gray-900 border border-gray-700 rounded text-white text-sm placeholder-gray-500 focus:outline-none focus:border-emerald-500 resize-none" />
                   </div>
                 )}
-              </div>
-            ) : (
-            <div className="flex gap-3 flex-shrink-0">
-
-          {/* ── PW Dispatch Card — single well (Assign) or multi-well (checkboxes) ── */}
-          <div className="flex-1 bg-gray-800 border border-blue-600/40 rounded-lg p-4 flex flex-col">
-            <div className="text-blue-400 text-xs font-medium uppercase tracking-wider mb-3">Dispatch Production Water</div>
-            {/* Top: Well input + static info box */}
-            <div className="space-y-2 flex-shrink-0">
-              {/* Well — greyed out in multi-well mode */}
-              <div className="relative">
-                <label className="block text-xs text-gray-400 mb-1">Well</label>
-                {selectedWells.size > 0 ? (
-                  <div className="w-full px-3 py-1.5 bg-gray-900/50 border border-blue-500/50 rounded text-blue-300 text-sm cursor-not-allowed">
-                    {selectedWells.size} well{selectedWells.size !== 1 ? 's' : ''} checked
-                    {totalSelectedLoads !== selectedWells.size && <span className="text-blue-400 ml-1">({totalSelectedLoads} loads)</span>}
-                  </div>
-                ) : (
-                  <>
-                    <input type="text"
-                      value={assignTarget ? (assignTarget.ndicName || assignTarget.wellName) : assignWellSearch}
-                      onChange={(e) => {
-                        if (assignTarget) { setAssignTarget(null); setAssignDriverHash(''); }
-                        setAssignWellSearch(e.target.value);
-                      }}
-                      placeholder="Search wells or click Assign below..."
-                      className={`w-full px-3 py-1.5 bg-gray-900 border rounded text-white text-sm focus:outline-none ${assignTarget ? 'border-blue-500 font-bold' : 'border-gray-700 focus:border-blue-500'}`}
-                    />
-                    {assignTarget && (
-                      <button onClick={() => { setAssignTarget(null); setAssignDriverHash(''); setAssignWellSearch(''); }}
-                        className="absolute right-2 top-7 text-gray-400 hover:text-white text-xs">✕</button>
-                    )}
-                    {!assignTarget && assignWellSearch.length >= 2 && (
-                      <div className="absolute z-10 w-full bg-gray-900 border border-gray-700 rounded mt-0.5 max-h-32 overflow-y-auto">
-                        {wells
-                          .filter(w => (w.ndicName || w.wellName).toLowerCase().includes(assignWellSearch.toLowerCase()))
-                          .slice(0, 8)
-                          .map(w => (
-                            <button key={w.wellName} onClick={() => { setAssignTarget(w); setAssignWellSearch(''); }}
-                              className="w-full text-left px-3 py-1.5 hover:bg-gray-700 text-white text-xs border-b border-gray-800 last:border-0">
-                              {w.ndicName || w.wellName} <span className="text-gray-500">{w.route}</span>
-                            </button>
-                          ))}
-                        {wells.filter(w => (w.ndicName || w.wellName).toLowerCase().includes(assignWellSearch.toLowerCase())).length === 0 && (
-                          <div className="px-3 py-1.5 text-gray-500 text-xs">No wells found</div>
-                        )}
-                      </div>
-                    )}
-                  </>
-                )}
-              </div>
-              {/* Well info box — static height, content shows when well selected */}
-              <div className="bg-gray-900 rounded px-2 py-1.5 min-h-[44px]">
-                {assignTarget && selectedWells.size === 0 ? (
-                  <div className="grid grid-cols-3 gap-x-3 gap-y-1 text-xs">
-                    <span className="text-gray-400">Level: <span className="text-white font-mono">{assignTarget.currentLevel || '--'}</span></span>
-                    <span className="text-gray-400">Flow: <span className="text-white font-mono">{assignTarget.flowRate || '--'}</span></span>
-                    <span className="text-gray-400">TTP: <span className="text-white font-mono">{assignTarget.timeTillPull || '--'}</span></span>
-                    <span className="text-gray-400">Route: <span className="text-white">{assignTarget.route || '--'}</span></span>
-                    <span className="text-gray-400">BBL/day: <span className="text-white font-mono">{assignTarget.windowBblsDay || assignTarget.bbls24hrs || '--'}</span></span>
-                    <span className="text-gray-400">ETA Max: <span className="text-white font-mono">{assignTarget.etaToMax || '--'}</span></span>
-                  </div>
-                ) : (
-                  <div className="text-gray-600 text-xs italic">Select a well to see info</div>
-                )}
-              </div>
-            </div>
-            {/* Spacer pushes driver+ to bottom */}
-            <div className="flex-1" />
-            {/* Bottom: Driver, Disposal, Loads+Notes, Dispatch */}
-            <div className="space-y-2">
-              {/* Driver */}
-              <div>
-                <label className="block text-xs text-gray-400 mb-1">Driver</label>
-                <select value={assignDriverHash} onChange={(e) => setAssignDriverHash(e.target.value)}
-                  className="w-full px-3 py-1.5 bg-gray-900 border border-gray-700 rounded text-white text-sm focus:outline-none focus:border-blue-500">
-                  <option value="">Select driver...</option>
-                  {assignTarget?.route && drivers.filter(d => d.assignedRoutes?.includes(assignTarget.route!)).length > 0 && (
-                    <optgroup label={`Route: ${assignTarget.route}`}>
-                      {drivers.filter(d => d.assignedRoutes?.includes(assignTarget.route!)).map(d => (
-                        <option key={d.key} value={d.key}>{d.legalName || d.displayName}</option>
-                      ))}
-                    </optgroup>
-                  )}
-                  <optgroup label="All Drivers">
-                    {drivers.map(d => (<option key={d.key} value={d.key}>{d.legalName || d.displayName}</option>))}
-                  </optgroup>
-                </select>
-              </div>
-              {/* Disposal */}
-              <div className="relative">
-                <label className="block text-xs text-gray-400 mb-1">Disposal</label>
-                {assignDisposalWell ? (
-                  <div className="flex items-center gap-2 px-3 py-1.5 bg-gray-900 border border-cyan-700 rounded text-sm">
-                    <span className="text-cyan-400 flex-1 truncate">{assignDisposal}</span>
-                    <button onClick={() => { setAssignDisposal(''); setAssignDisposalWell(null); setDisposalSearch(''); }} className="text-gray-400 hover:text-white text-xs">✕</button>
-                  </div>
-                ) : (
-                  <input type="text" value={disposalSearch}
-                    onChange={(e) => { setDisposalSearch(e.target.value); setDisposalResults(e.target.value.length >= 2 ? searchDisposals(e.target.value, allDisposals) : []); }}
-                    placeholder="Search SWD..." className="w-full px-3 py-1.5 bg-gray-900 border border-gray-700 rounded text-white text-sm placeholder-gray-500 focus:outline-none focus:border-blue-500" />
-                )}
-                {disposalResults.length > 0 && !assignDisposalWell && (
-                  <div className="absolute z-50 w-full mt-1 bg-gray-800 border border-gray-600 rounded max-h-36 overflow-y-auto shadow-lg">
-                    {disposalResults.map((d, i) => (
-                      <button key={d.api_no || i} onClick={() => { setAssignDisposal(d.well_name); setAssignDisposalWell(d); setDisposalSearch(''); setDisposalResults([]); }}
-                        className="w-full text-left px-3 py-1.5 hover:bg-gray-700 border-b border-gray-700/50 last:border-0 text-white text-sm">
-                        {d.well_name} <span className="text-gray-400 text-xs ml-1">{d.county || ''}</span>
-                      </button>
-                    ))}
-                  </div>
-                )}
-              </div>
-              {/* Loads + Notes — loads greyed in multi-well mode */}
-              <div className="flex gap-2">
-                <div className="w-16">
-                  <label className="block text-xs text-gray-400 mb-1">Loads</label>
-                  {selectedWells.size > 0 ? (
-                    <div className="w-full px-2 py-1.5 bg-gray-900/50 border border-gray-600 rounded text-gray-500 text-sm text-center cursor-not-allowed">
-                      {totalSelectedLoads}
-                    </div>
-                  ) : (
-                    <input type="number" min={1} max={20} value={assignLoadCount}
-                      onChange={(e) => setAssignLoadCount(Math.max(1, parseInt(e.target.value) || 1))}
-                      className="w-full px-2 py-1.5 bg-gray-900 border border-gray-700 rounded text-white text-sm text-center focus:outline-none focus:border-blue-500" />
-                  )}
                 </div>
-                <div className="flex-1">
-                  <label className="block text-xs text-gray-400 mb-1">Notes</label>
-                  <input type="text" value={assignNotes} onChange={(e) => setAssignNotes(e.target.value)}
-                    placeholder="Special instructions..." className="w-full px-3 py-1.5 bg-gray-900 border border-gray-700 rounded text-white text-sm placeholder-gray-500 focus:outline-none focus:border-blue-500" />
-                </div>
-              </div>
-              {/* Dispatch — routes to bulk or single based on mode */}
-              {selectedWells.size > 0 ? (
-                <button onClick={submitBulkDispatch} disabled={!assignDriverHash || assigning}
-                  className="w-full px-4 py-1.5 bg-blue-600 hover:bg-blue-500 disabled:bg-gray-600 disabled:cursor-not-allowed text-white text-xs font-medium rounded transition-colors">
-                  {assigning ? 'Sending...' : `Dispatch ${totalSelectedLoads} Load${totalSelectedLoads !== 1 ? 's' : ''}`}
-                </button>
-              ) : (
-                <button onClick={submitPWDispatch} disabled={!assignTarget || !assignDriverHash || assigning}
-                  className="w-full px-4 py-1.5 bg-blue-600 hover:bg-blue-500 disabled:bg-gray-600 disabled:cursor-not-allowed text-white text-xs font-medium rounded transition-colors">
-                  {assigning ? 'Sending...' : assignLoadCount > 1 ? `Dispatch ${assignLoadCount} Loads` : 'Dispatch'}
-                </button>
-              )}
-            </div>
-          </div>
-
-          {/* ── SW Dispatch Card ── */}
-          <div className="flex-1 bg-gray-800 border border-purple-600/40 rounded-lg p-4 flex flex-col">
-            <div className="text-purple-400 text-xs font-medium uppercase tracking-wider mb-2">Dispatch Service Work</div>
-            <div className="flex flex-col gap-2 flex-1 min-h-0">
-              {/* Top row: Well/Drop-off stacked left, Service Type + Onsite By stacked right */}
-              <div className="flex gap-3 flex-shrink-0">
-                {/* Left: Well + Drop-off stacked */}
-                <div className="flex-1 space-y-2">
-                  <div className="relative">
-                    <label className="block text-xs text-gray-400 mb-1">Well / Location</label>
-                    <input
-                      type="text"
-                      value={swWellName}
-                      onChange={(e) => setSwWellName(e.target.value)}
-                      placeholder="Type to search..."
-                      className="w-full px-3 py-1.5 bg-gray-900 border border-gray-700 rounded text-white text-sm placeholder-gray-500 focus:outline-none focus:border-purple-500"
-                    />
-                    {(() => {
-                      const q = swWellName.trim().toLowerCase();
-                      if (q.length < 2) return null;
-                      const exactMatch = wells.some(w => (w.ndicName || w.wellName).toLowerCase() === q) ||
-                        allOperatorWells.some(w => w.well_name.toLowerCase() === q) ||
-                        allDisposals.some(d => d.well_name.toLowerCase() === q);
-                      if (exactMatch) return null;
-                      // Search route wells + operator wells + disposals
-                      const seen = new Set<string>();
-                      const wellMatches = wells
-                        .filter(w => (w.ndicName || w.wellName).toLowerCase().includes(q))
-                        .map(w => { seen.add((w.ndicName || w.wellName).toLowerCase()); return { label: w.ndicName || w.wellName, sub: w.route || '', value: w.ndicName || w.wellName }; });
-                      const operatorMatches = allOperatorWells
-                        .filter(w => w.well_name.toLowerCase().includes(q) && !seen.has(w.well_name.toLowerCase()))
-                        .map(w => { seen.add(w.well_name.toLowerCase()); return { label: w.well_name, sub: w.operator || 'NDIC', value: w.well_name }; });
-                      const disposalMatches = allDisposals
-                        .filter(d => d.well_name.toLowerCase().includes(q) && !seen.has(d.well_name.toLowerCase()))
-                        .map(d => ({ label: d.well_name, sub: 'SWD', value: d.well_name }));
-                      const combined = [...wellMatches, ...operatorMatches, ...disposalMatches].slice(0, 15);
-                      if (combined.length === 0) return null;
-                      return (
-                        <div className="absolute z-50 w-full mt-1 bg-gray-800 border border-gray-600 rounded max-h-48 overflow-y-auto shadow-lg">
-                          {combined.map((item, i) => (
-                            <button key={`${item.value}-${i}`} type="button" onClick={() => setSwWellName(item.value)}
-                              className="w-full text-left px-3 py-1.5 hover:bg-gray-700 border-b border-gray-700/50 last:border-0 text-white text-sm">
-                              {item.label}
-                              {item.sub && <span className="text-gray-500 text-xs ml-2">{item.sub}</span>}
-                            </button>
-                          ))}
-                        </div>
-                      );
-                    })()}
-                  </div>
-                  <div className="relative">
-                    <label className="block text-xs text-gray-400 mb-1">Drop-off (optional)</label>
-                    <input
-                      type="text"
-                      value={swDropoff}
-                      onChange={(e) => setSwDropoff(e.target.value)}
-                      placeholder="SWD or well..."
-                      className="w-full px-3 py-1.5 bg-gray-900 border border-gray-700 rounded text-white text-sm placeholder-gray-500 focus:outline-none focus:border-purple-500"
-                    />
-                    {(() => {
-                      const q = swDropoff.trim().toLowerCase();
-                      if (q.length < 2) return null;
-                      const exactMatch = wells.some(w => (w.ndicName || w.wellName).toLowerCase() === q) ||
-                        allOperatorWells.some(w => w.well_name.toLowerCase() === q) ||
-                        allDisposals.some(d => d.well_name.toLowerCase() === q);
-                      if (exactMatch) return null;
-                      // Search route wells + operator wells + disposals
-                      const seen2 = new Set<string>();
-                      const wellMatches = wells
-                        .filter(w => (w.ndicName || w.wellName).toLowerCase().includes(q))
-                        .map(w => { seen2.add((w.ndicName || w.wellName).toLowerCase()); return { label: w.ndicName || w.wellName, sub: w.route || '', value: w.ndicName || w.wellName }; });
-                      const operatorMatches = allOperatorWells
-                        .filter(w => w.well_name.toLowerCase().includes(q) && !seen2.has(w.well_name.toLowerCase()))
-                        .map(w => { seen2.add(w.well_name.toLowerCase()); return { label: w.well_name, sub: w.operator || 'NDIC', value: w.well_name }; });
-                      const disposalMatches = allDisposals
-                        .filter(d => d.well_name.toLowerCase().includes(q) && !seen2.has(d.well_name.toLowerCase()))
-                        .map(d => ({ label: d.well_name, sub: 'SWD', value: d.well_name }));
-                      const combined = [...wellMatches, ...operatorMatches, ...disposalMatches].slice(0, 15);
-                      if (combined.length === 0) return null;
-                      return (
-                        <div className="absolute z-50 w-full mt-1 bg-gray-800 border border-gray-600 rounded max-h-48 overflow-y-auto shadow-lg">
-                          {combined.map((item, i) => (
-                            <button key={`${item.value}-${i}`} type="button" onClick={() => setSwDropoff(item.value)}
-                              className="w-full text-left px-3 py-1.5 hover:bg-gray-700 border-b border-gray-700/50 last:border-0 text-white text-sm">
-                              {item.label}
-                              {item.sub && <span className="text-gray-500 text-xs ml-2">{item.sub}</span>}
-                            </button>
-                          ))}
-                        </div>
-                      );
-                    })()}
-                  </div>
-                </div>{/* end left: Well + Drop-off */}
-                {/* Right: Service Type + Onsite By stacked */}
-                <div className="flex-1 space-y-2">
-                  <div>
-                    <label className="block text-xs text-gray-400 mb-1">Service Type</label>
-                    <select value={swServiceType} onChange={(e) => setSwServiceType(e.target.value)}
-                      className="w-full px-3 py-1.5 bg-gray-900 border border-gray-700 rounded text-white text-sm focus:outline-none focus:border-purple-500">
-                      <option value="">Select type...</option>
-                      {dynamicServiceTypes.map(st => (
-                        <option key={st} value={st}>{st}</option>
-                      ))}
-                    </select>
-                  </div>
-                  <div>
-                    <label className="block text-xs text-gray-400 mb-1">Be onsite by</label>
-                    <input
-                      type="datetime-local"
-                      value={swOnsiteBy}
-                      onChange={(e) => {
-                        const val = e.target.value;
-                        // Guard against malformed years (e.g., 202600 from extra keystrokes)
-                        if (val && val.length > 16) return;
-                        setSwOnsiteBy(val);
-                      }}
-                      max="2099-12-31T23:59"
-                      className="w-full px-3 py-1.5 bg-gray-900 border border-gray-700 rounded text-white text-sm focus:outline-none focus:border-purple-500"
-                    />
-                  </div>
-                </div>
-              </div>{/* end top row */}
-              {/* Bottom row: Driver list + Notes side by side, bottom-aligned */}
-              <div className="flex gap-3 flex-1 min-h-0">
-                {/* Driver picker */}
-                <div className="flex-1 flex flex-col min-h-0">
-                  <label className="block text-xs text-gray-400 mb-1">
-                    Driver{swDriverHashes.size > 1 ? 's' : ''}
-                    {swDriverHashes.size > 0 && <span className="ml-1 px-1.5 py-0.5 bg-purple-600 text-white text-[10px] rounded-full">{swDriverHashes.size}</span>}
-                    {swEtaLoading && <span className="ml-1 text-gray-500 text-[10px]">calculating ETAs...</span>}
-                  </label>
-                  <div className="bg-gray-900 border border-gray-700 rounded flex-1 overflow-y-auto">
-                    {drivers.map(d => {
-                      const checked = swDriverHashes.has(d.key);
-                      const eta = swDriverETAs.get(d.key);
-                      const activeJob = dispatches.find(j => j.driverHash === d.key && ['accepted', 'in_progress', 'paused'].includes(j.status));
-                      const stageLabel = activeJob?.driverStage?.replace(/_/g, ' ') || (activeJob ? 'on job' : '');
-                      const etaColor = eta?.status === 'can_make_it' ? '#22c55e'
-                        : eta?.status === 'tight' ? '#eab308'
-                        : eta?.status === 'cant_make_it' ? '#ef4444'
-                        : '#666';
-                      return (
-                        <button key={d.key} type="button" onClick={() => { setSwDriverHashes(prev => { const next = new Set(prev); if (next.has(d.key)) next.delete(d.key); else next.add(d.key); return next; }); }}
-                          className={`w-full flex items-center gap-2 px-2 py-1 text-xs text-left border-b border-gray-800 last:border-0 transition-colors ${checked ? 'bg-purple-900/30 text-white' : 'text-gray-300 hover:bg-gray-800'}`}>
-                          <input type="checkbox" checked={checked} readOnly className="w-3 h-3 rounded border-gray-600 bg-gray-800 text-purple-600 pointer-events-none flex-shrink-0" />
-                          <span className="flex-1 min-w-0 truncate">{d.legalName || d.displayName}</span>
-                          {activeJob && (
-                            <span className="flex-shrink-0 px-1.5 py-0.5 rounded text-[9px] font-bold bg-blue-900/50 text-blue-400 border border-blue-800">On Job</span>
-                          )}
-                          {eta && swOnsiteBy && (
-                            <span className="flex-shrink-0 font-bold text-[10px]" style={{ color: etaColor }}>{eta.display}</span>
-                          )}
-                          {stageLabel && (
-                            <span className="flex-shrink-0 text-[10px] text-gray-500">{stageLabel}</span>
-                          )}
-                        </button>
-                      );
-                    })}
-                  </div>
-                </div>
-                {/* Notes */}
-                <div className="flex-1 flex flex-col min-h-0">
-                  <label className="block text-xs text-gray-400 mb-1">Notes</label>
-                  <textarea value={swNotes} onChange={(e) => setSwNotes(e.target.value)} placeholder="Special instructions, equipment needed, etc."
-                    className="w-full flex-1 px-3 py-1.5 bg-gray-900 border border-gray-700 rounded text-white text-sm placeholder-gray-500 focus:outline-none focus:border-purple-500 resize-none" />
-                </div>
-              </div>{/* end bottom row */}
-            </div>{/* end SW body */}
-            {/* Dispatch button — full width of SW card */}
-            <button onClick={submitServiceWork}
-              disabled={!swWellName.trim() || !swServiceType || swDriverHashes.size === 0 || swSubmitting}
-              className="w-full mt-2 px-4 py-1.5 bg-purple-600 hover:bg-purple-500 disabled:bg-gray-600 disabled:cursor-not-allowed text-white text-xs font-medium rounded transition-colors flex-shrink-0">
-              {swSubmitting ? 'Sending...' : 'Dispatch'}
-            </button>
-          </div>{/* end SW card */}
-
-            </div>
-            )}{/* end PW+SW side by side / Create Project ternary */}
+              )}{/* end Projects tab */}
+            </div>{/* end Tabbed Builder panel */}
 
             {/* ═══════ Well Queue (fills remaining left half) ═══════ */}
             <div className="bg-gray-800 rounded-lg border border-gray-700 flex-1 flex flex-col overflow-hidden">
@@ -2511,14 +2620,6 @@ function DispatchPageInner() {
                         </span>
                       ) : null; })()}
                     </>
-                  )}
-                  {rightPanelTab === 'projects' && !selectedProject && (
-                    <button
-                      onClick={() => setShowCreateProject(true)}
-                      className="px-2.5 py-1 bg-emerald-600 hover:bg-emerald-500 text-white text-xs font-medium rounded transition-colors"
-                    >
-                      + New Project
-                    </button>
                   )}
                   {rightPanelTab === 'projects' && selectedProject && (
                     <button
@@ -3277,9 +3378,16 @@ function DispatchJobRow({ job, cancelDispatch, compact, onClickServiceWork, onRe
   const isClickable = !!onClickServiceWork;
   const ago = timeAgo(job.assignedAt);
 
+  // Split ticket visual — light tint so linked jobs stand out
+  const splitBg = job.splitGroupId
+    ? job.splitSequence === 1
+      ? 'bg-purple-900/40 border-l-3 border-l-purple-400'
+      : 'bg-purple-900/30 border-l-3 border-l-purple-400/60'
+    : 'bg-gray-900/50';
+
   return (
     <div
-      className={`${compact ? 'py-2 px-3' : 'py-3 px-4'} bg-gray-900/50 rounded-lg hover:bg-gray-900/80 transition-colors ${isClickable ? 'cursor-pointer' : ''}`}
+      className={`${compact ? 'py-2 px-3' : 'py-3 px-4'} ${splitBg} rounded-lg hover:bg-gray-900/80 transition-colors ${isClickable ? 'cursor-pointer' : ''}`}
       onClick={isClickable ? () => onClickServiceWork!(job) : undefined}
     >
       <div className="flex items-center gap-2">
@@ -3312,6 +3420,20 @@ function DispatchJobRow({ job, cancelDispatch, compact, onClickServiceWork, onRe
         {job.source === 'driver' && (
           <span className="px-1.5 py-0.5 bg-emerald-600/30 text-emerald-300 text-[10px] rounded font-medium flex-shrink-0">
             Driver Started
+          </span>
+        )}
+
+        {/* Split ticket badge */}
+        {job.splitGroupId && (
+          <span className="px-1.5 py-0.5 bg-purple-600/30 text-purple-300 text-[10px] rounded font-bold flex-shrink-0">
+            {job.splitSequence === 1 ? 'TICKET A' : job.splitSequence === 2 ? 'TICKET B' : `TICKET ${String.fromCharCode(64 + (job.splitSequence || 1))}`}
+          </span>
+        )}
+
+        {/* Heavy water badge */}
+        {(job as any).isHeavyWater && (
+          <span className="px-1.5 py-0.5 bg-amber-600/30 text-amber-300 text-[10px] rounded font-bold flex-shrink-0">
+            HEAVY
           </span>
         )}
 
@@ -3426,6 +3548,22 @@ function ActiveDispatchPanel({ dispatches, cancelDispatch, drivers, assignTransf
       const key = d.driverHash;
       if (!map.has(key)) map.set(key, []);
       map.get(key)!.push(d);
+    });
+    // Sort each driver's jobs: split tickets grouped (A before B), then by assignedAt
+    map.forEach((jobs, key) => {
+      jobs.sort((a, b) => {
+        // Split ticket jobs sort together by splitGroupId, then by sequence
+        if (a.splitGroupId && b.splitGroupId && a.splitGroupId === b.splitGroupId) {
+          return (a.splitSequence || 0) - (b.splitSequence || 0);
+        }
+        // Split ticket groups sort before non-split (so they stay visually grouped)
+        if (a.splitGroupId && !b.splitGroupId) return -1;
+        if (!a.splitGroupId && b.splitGroupId) return 1;
+        // Otherwise sort by assigned time (newest first)
+        const aTime = a.assignedAt?.toMillis?.() || 0;
+        const bTime = b.assignedAt?.toMillis?.() || 0;
+        return bTime - aTime;
+      });
     });
     return new Map(
       Array.from(map.entries()).sort(([, a], [, b]) => {
