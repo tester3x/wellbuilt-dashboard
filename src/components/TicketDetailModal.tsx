@@ -209,6 +209,30 @@ export function TicketDetailModal({ ticket, onClose, onNavigateTicket }: Props) 
                 </>
               )}
 
+              {/* ═══ PHOTOS ═══ */}
+              {invoice?.photos && invoice.photos.length > 0 && (
+                <>
+                  <Divider />
+                  <SectionTitle>PHOTOS ({invoice.photos.length})</SectionTitle>
+                  <div className="flex gap-2 overflow-x-auto pb-2">
+                    {invoice.photos.map((photo: any, i: number) => {
+                      const url = typeof photo === 'string' ? photo : photo?.uri;
+                      const loc = typeof photo === 'object' ? photo?.location : '';
+                      const photoType = typeof photo === 'object' ? photo?.type : '';
+                      if (!url) return null;
+                      return (
+                        <div key={i} className="flex-shrink-0 text-center">
+                          <a href={url} target="_blank" rel="noopener noreferrer">
+                            <img src={url} alt={`Photo ${i + 1}`} className="w-20 h-20 object-cover rounded border border-gray-300 hover:border-yellow-500 transition-colors cursor-pointer" />
+                          </a>
+                          {loc && <p className="text-[9px] text-gray-400 mt-0.5 max-w-[80px] truncate">{photoType === 'pickup' ? '📍' : '📦'} {loc}</p>}
+                        </div>
+                      );
+                    })}
+                  </div>
+                </>
+              )}
+
               {/* ═══ TOTALS ═══ */}
               <div className="border-t-2 border-yellow-500 mt-6 pt-3 space-y-1">
                 <TotalRow label="Total BBL" value={String(invoice?.totalBBL || ticket.qty || '--')} />

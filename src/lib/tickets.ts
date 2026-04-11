@@ -103,6 +103,7 @@ export interface InvoiceDetail {
   packageId: string;
   driverState: string;
   notes: string;
+  photos: Array<{ uri: string; location?: string; type?: string; takenAt?: string } | string>;
 }
 
 export async function fetchTickets(limitCount = 200): Promise<Ticket[]> {
@@ -279,5 +280,6 @@ function mapInvoiceDetail(snap: any): InvoiceDetail {
     packageId: d.packageId || '',
     driverState: d.driverState || '',
     notes: d.notes || '',
+    photos: d.photos || [],
   };
 }
