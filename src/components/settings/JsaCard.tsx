@@ -103,6 +103,14 @@ export function JsaCard({ company, onSave }: Props) {
     }
   };
 
+  // Format phone as (XXX) XXX-XXXX while typing
+  const formatPhone = (value: string): string => {
+    const digits = value.replace(/\D/g, '').slice(0, 10);
+    if (digits.length <= 3) return digits;
+    if (digits.length <= 6) return `(${digits.slice(0, 3)}) ${digits.slice(3)}`;
+    return `(${digits.slice(0, 3)}) ${digits.slice(3, 6)}-${digits.slice(6)}`;
+  };
+
   // Contact helpers
   const addContact = (type: 'emergency' | 'company') => {
     const setter = type === 'emergency' ? setEmergencyContacts : setCompanyContacts;
@@ -116,7 +124,8 @@ export function JsaCard({ company, onSave }: Props) {
   };
   const updateContact = (type: 'emergency' | 'company', idx: number, field: 'label' | 'phone', value: string) => {
     const setter = type === 'emergency' ? setEmergencyContacts : setCompanyContacts;
-    setter(prev => prev.map((c, i) => i === idx ? { ...c, [field]: value } : c));
+    const formatted = field === 'phone' ? formatPhone(value) : value;
+    setter(prev => prev.map((c, i) => i === idx ? { ...c, [field]: formatted } : c));
     setContactsDirty(true);
   };
   const saveContacts = async () => {
