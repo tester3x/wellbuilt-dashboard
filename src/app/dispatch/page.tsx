@@ -4440,6 +4440,12 @@ function CompletedJobsPanel({ jobs, drivers, allWells, allDisposals, highlightJo
                               <span className="text-xs text-gray-500">Truck #</span>
                               <span className="text-xs text-[#111]">{ticketDetailData.invoice.truckNumber || '--'}</span>
                             </div>
+                            {ticketDetailData.invoice.trailer && (
+                              <div className="flex items-center justify-between py-1 border-b border-gray-200">
+                                <span className="text-xs text-gray-500">Trailer #</span>
+                                <span className="text-xs text-[#111]">{ticketDetailData.invoice.trailer}</span>
+                              </div>
+                            )}
 
                             {/* Time */}
                             {(ticketDetailData.invoice.startTime || ticketDetailData.invoice.stopTime) && (
@@ -4479,10 +4485,26 @@ function CompletedJobsPanel({ jobs, drivers, allWells, allDisposals, highlightJo
                                   <div className="text-center py-1.5 border-r border-gray-300"><div className="text-[8px] text-gray-400 uppercase">TOP</div><div className="text-xs font-semibold text-[#111] font-mono">{t.top || '--'}</div></div>
                                   <div className="text-center py-1.5"><div className="text-[8px] text-gray-400 uppercase">BOTTOM</div><div className="text-xs font-semibold text-[#111] font-mono">{t.bottom || '--'}</div></div>
                                 </div>
-                                {(t.apiNo || t.legalDesc) && (
+                                {(t.apiNo || t.legalDesc || t.county || t.hauledToApiNo || t.hauledToLegalDesc) && (
                                   <div className="px-3 py-1.5 border-t border-gray-200">
-                                    {t.apiNo && <p className="text-[9px] text-gray-400">API# {t.apiNo}</p>}
-                                    {t.legalDesc && <p className="text-[9px] text-gray-400">{t.legalDesc}</p>}
+                                    {(t.apiNo || t.legalDesc || t.county) && (
+                                      <div className="mb-1">
+                                        <p className="text-[9px] font-semibold text-gray-500 mb-0.5">Pickup</p>
+                                        {t.apiNo && <p className="text-[9px] text-gray-400">API# {t.apiNo}</p>}
+                                        {t.county && <p className="text-[9px] text-gray-400">County: {t.county}</p>}
+                                        {t.legalDesc && <p className="text-[9px] text-gray-400">Legal: {t.legalDesc}</p>}
+                                        {t.gpsLat && <p className="text-[9px] text-gray-400">GPS: {Number(t.gpsLat).toFixed(7)}, {Number(t.gpsLng).toFixed(7)}</p>}
+                                      </div>
+                                    )}
+                                    {(t.hauledToApiNo || t.hauledToLegalDesc || t.hauledToCounty) && (
+                                      <div>
+                                        <p className="text-[9px] font-semibold text-gray-500 mb-0.5">Drop-off</p>
+                                        {t.hauledToApiNo && <p className="text-[9px] text-gray-400">API# {t.hauledToApiNo}</p>}
+                                        {t.hauledToCounty && <p className="text-[9px] text-gray-400">County: {t.hauledToCounty}</p>}
+                                        {t.hauledToLegalDesc && <p className="text-[9px] text-gray-400">Legal: {t.hauledToLegalDesc}</p>}
+                                        {t.hauledToGpsLat && <p className="text-[9px] text-gray-400">GPS: {Number(t.hauledToGpsLat).toFixed(7)}, {Number(t.hauledToGpsLng).toFixed(7)}</p>}
+                                      </div>
+                                    )}
                                   </div>
                                 )}
                               </div>
@@ -4498,7 +4520,7 @@ function CompletedJobsPanel({ jobs, drivers, allWells, allDisposals, highlightJo
                               <>
                                 <h5 className="text-[#111] font-extrabold text-[10px] tracking-[1.5px] uppercase pt-3 pb-1">JOB TIMELINE</h5>
                                 <div className="space-y-2 ml-1">
-                                  {[...ticketDetailData.invoice.timeline]
+                                  {(() => { let arriveIdx = 0; return [...ticketDetailData.invoice.timeline]
                                     .sort((a: any, b: any) => new Date(a.timestamp).getTime() - new Date(b.timestamp).getTime())
                                     .map((ev: any, i: number) => {
                                       const t = new Date(ev.timestamp);
@@ -4508,9 +4530,11 @@ function CompletedJobsPanel({ jobs, drivers, allWells, allDisposals, highlightJo
                                         : ev.type === 'close' ? 'bg-red-400'
                                         : ev.type === 'pause' ? 'bg-yellow-400'
                                         : 'bg-gray-400';
-                                      const label = ev.type === 'depart' || ev.type === 'depart_site' ? 'Departed'
-                                        : ev.type === 'arrive' ? 'Arrived'
-                                        : ev.type === 'close' ? 'Closed'
+                                      const label = ev.type === 'accept' ? 'Accepted'
+                                        : ev.type === 'depart_site' ? 'Loaded / Departure'
+                                        : ev.type === 'depart' ? 'Departed'
+                                        : ev.type === 'arrive' ? (arriveIdx++ % 2 === 0 ? 'Pickup Arrival' : 'Drop-off Arrival')
+                                        : ev.type === 'close' ? 'Job Closed'
                                         : ev.type === 'pause' ? 'Paused'
                                         : ev.type === 'resume' ? 'Resumed'
                                         : ev.type === 'reroute' ? 'Rerouted'
@@ -4525,7 +4549,7 @@ function CompletedJobsPanel({ jobs, drivers, allWells, allDisposals, highlightJo
                                           </div>
                                         </div>
                                       );
-                                    })}
+                                    }); })()}
                                 </div>
                               </>
                             )}
@@ -4542,11 +4566,20 @@ function CompletedJobsPanel({ jobs, drivers, allWells, allDisposals, highlightJo
                               <>
                                 <h5 className="text-[#111] font-extrabold text-[10px] tracking-[1.5px] uppercase pt-3 pb-1">PHOTOS ({ticketDetailData.invoice.photos.length})</h5>
                                 <div className="flex gap-2 overflow-x-auto pb-2">
-                                  {ticketDetailData.invoice.photos.map((url: string, i: number) => (
-                                    <a key={i} href={url} target="_blank" rel="noopener noreferrer" className="flex-shrink-0">
-                                      <img src={url} alt={`Photo ${i + 1}`} className="w-16 h-16 object-cover rounded border border-gray-300 hover:border-yellow-500 transition-colors cursor-pointer" />
-                                    </a>
-                                  ))}
+                                  {ticketDetailData.invoice.photos.map((photo: any, i: number) => {
+                                    const url = typeof photo === 'string' ? photo : photo?.uri;
+                                    const loc = typeof photo === 'object' ? photo?.location : '';
+                                    const photoType = typeof photo === 'object' ? photo?.type : '';
+                                    if (!url) return null;
+                                    return (
+                                      <div key={i} className="flex-shrink-0 text-center">
+                                        <a href={url} target="_blank" rel="noopener noreferrer">
+                                          <img src={url} alt={`Photo ${i + 1}`} className="w-16 h-16 object-cover rounded border border-gray-300 hover:border-yellow-500 transition-colors cursor-pointer" />
+                                        </a>
+                                        {loc && <p className="text-[8px] text-gray-400 mt-0.5 max-w-[64px] truncate">{photoType === 'pickup' ? '📍' : '📦'} {loc}</p>}
+                                      </div>
+                                    );
+                                  })}
                                 </div>
                               </>
                             )}
@@ -4557,6 +4590,12 @@ function CompletedJobsPanel({ jobs, drivers, allWells, allDisposals, highlightJo
                                 <span className="text-xs font-semibold text-[#111]">Total BBL</span>
                                 <span className="text-xs font-semibold text-[#111] font-mono">{ticketDetailData.invoice.totalBBL || '--'}</span>
                               </div>
+                              {ticketDetailData.invoice.totalHours > 0 && (
+                                <div className="flex items-center justify-between">
+                                  <span className="text-xs font-semibold text-[#111]">Total Hours</span>
+                                  <span className="text-xs font-semibold text-[#111] font-mono">{ticketDetailData.invoice.totalHours}</span>
+                                </div>
+                              )}
                               <div className="flex items-center justify-between">
                                 <span className="text-xs font-semibold text-[#111]">Tickets</span>
                                 <span className="text-xs font-semibold text-[#111] font-mono">{ticketDetailData.tickets.length}</span>
