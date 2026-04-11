@@ -414,6 +414,9 @@ export interface CompanyConfig {
   // per_shift: JSA required once at shift start before first job
   // per_location: JSA required at each new well location (plus shift start)
   jsaMode?: 'off' | 'per_shift' | 'per_location';
+  // JSA contacts — shown on JSA signoff screen. Company-managed via Dashboard Settings.
+  emergencyContacts?: { label: string; phone: string }[];
+  companyContacts?: { label: string; phone: string }[];
   // Level Reports — auto-send well levels to dispatch via in-app chat on each load
   // Company-wide template ensures consistent format from all drivers
   sendLevelToDispatch?: boolean;
