@@ -308,7 +308,10 @@ export default function ChatPage() {
         const msgs: ChatMessage[] = [];
         snap.forEach((d) => msgs.push({ id: d.id, ...d.data() } as ChatMessage));
         setPaneMessages((prev) => ({ ...prev, [threadId]: msgs }));
-        setTimeout(() => paneEndRefs.current[threadId]?.scrollIntoView({ behavior: 'smooth' }), 50);
+        // Scroll after DOM renders — 50ms is too fast when switching profiles
+        setTimeout(() => paneEndRefs.current[threadId]?.scrollIntoView({ behavior: 'smooth' }), 150);
+        // Second pass: catch late renders (images, system cards)
+        setTimeout(() => paneEndRefs.current[threadId]?.scrollIntoView({ behavior: 'auto' }), 500);
       });
       unsubs.push(unsub);
       updateDoc(doc(db, 'chat_threads', threadId), {
