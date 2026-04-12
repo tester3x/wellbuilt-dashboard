@@ -4408,7 +4408,7 @@ function CompletedJobsPanel({ jobs, drivers, allWells, allDisposals, highlightJo
                             {/* Invoice # / Date */}
                             <div className="flex items-center justify-between py-1 border-b border-gray-200">
                               <span className="text-xs text-gray-500">Invoice #</span>
-                              <span className="text-xs text-[#111] font-mono font-semibold">{job.invoiceNumber}</span>
+                              <span className="text-xs text-[#111] font-mono font-semibold">{job.invoiceNumber || job.ticketNumber || '—'}</span>
                             </div>
                             <div className="flex items-center justify-between py-1 border-b border-gray-200">
                               <span className="text-xs text-gray-500">Date</span>
