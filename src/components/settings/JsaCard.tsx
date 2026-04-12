@@ -22,7 +22,8 @@ interface Props {
 
 const JSA_MODES = [
   { value: 'off', label: 'Off', desc: 'JSA available in menu but not required' },
-  { value: 'per_shift', label: 'Per Shift', desc: 'Required once at the start of each shift' },
+  { value: 'per_shift', label: 'Per Shift', desc: 'Required once per shift — locations accumulate throughout the day' },
+  { value: 'per_load', label: 'Per Load', desc: 'Required before each job — separate JSA per load' },
   { value: 'per_location', label: 'Per Location', desc: 'Required at each new well location + shift start' },
 ] as const;
 
@@ -90,7 +91,7 @@ export function JsaCard({ company, onSave }: Props) {
   }, []);
 
   // JSA Mode handler
-  const setMode = async (mode: 'off' | 'per_shift' | 'per_location') => {
+  const setMode = async (mode: 'off' | 'per_shift' | 'per_load' | 'per_location') => {
     if (mode === currentMode) return;
     setSaving(true);
     try {
