@@ -1122,6 +1122,25 @@ export const processIncomingPull = functionsV1.database
 
     console.log(`Processed ${wellName}: ${packetId} -> ${responseId}`);
 
+    // Fire-and-forget: send level report to driver's chat threads
+    // Wrapped in try/catch — chat failures must NEVER break packet processing
+    try {
+      sendLevelToChat(data, packetId).catch(err =>
+        console.warn('[LevelChat] Background send failed:', err)
+      );
+    } catch (err) {
+      console.warn('[LevelChat] Failed to start send:', err);
+    }
+
+    // Fire-and-forget: track well location for per_location JSA mode
+    try {
+      trackJsaLocation(data).catch(err =>
+        console.warn('[JsaTrack] Background tracking failed:', err)
+      );
+    } catch (err) {
+      console.warn('[JsaTrack] Failed to start tracking:', err);
+    }
+
     return null;
   });
 
@@ -2263,6 +2282,124 @@ async function postSystemMessage(
   });
 }
 
+// ── sendLevelToChat: Fire-and-forget level report to driver's dispatch chat threads ──
+async function sendLevelToChat(data: PullPacket, packetId: string): Promise<void> {
+  try {
+    const driverHash = data.driverId;
+    if (!driverHash) {
+      console.log('[LevelChat] No driverId on packet, skipping');
+      return;
+    }
+
+    // Get driver info from RTDB
+    const driverSnap = await db.ref(`drivers/approved/${driverHash}`).once('value');
+    if (!driverSnap.exists()) {
+      console.log('[LevelChat] Driver not found in approved:', driverHash.slice(0, 8));
+      return;
+    }
+    const driverData = driverSnap.val();
+    const companyId = driverData.companyId;
+    if (!companyId) {
+      console.log('[LevelChat] No companyId on driver, skipping');
+      return;
+    }
+    const driverName = driverData.legalName || driverData.displayName || data.driverName || 'Driver';
+
+    // Check company config for sendLevelToDispatch toggle
+    const companyDoc = await firestoreDb.collection('companies').doc(companyId).get();
+    if (!companyDoc.exists) {
+      console.log('[LevelChat] Company doc not found:', companyId);
+      return;
+    }
+    const companyConfig = companyDoc.data() || {};
+    if (!companyConfig.sendLevelToDispatch) {
+      return; // Feature not enabled for this company
+    }
+
+    // Build message from template or default
+    const templateStr: string = companyConfig.levelReportTemplate ||
+      '📊 Level Report\nWell: {wellName}\nTop: {top} | Bottom: {bottom}\nBBLs: {bbls}\nTime: {time}';
+
+    // Format levels as feet'inches"
+    const topInches = (parseFloat(String(data.tankLevelFeet)) || 0) * 12;
+    const tanks = companyConfig.tanks || 1; // fallback; not critical for display
+    const bblsInInches = data.bblsTaken > 0 ? (data.bblsTaken / 20 / tanks) * 12 : 0;
+    const bottomInches = topInches - bblsInInches;
+    const topStr = inchesToFeetInches(topInches);
+    const bottomStr = inchesToFeetInches(Math.max(0, bottomInches));
+
+    // Format time from packet
+    const timeStr = data.dateTime || (data.dateTimeUTC ? formatLocalDateTime(new Date(data.dateTimeUTC)) : '');
+
+    let message = templateStr;
+    message = message.replace(/\{wellName\}/gi, data.wellName || '');
+    message = message.replace(/\{top\}/gi, topStr);
+    message = message.replace(/\{bottom\}/gi, bottomStr);
+    message = message.replace(/\{bbls\}/gi, String(data.bblsTaken || 0));
+    message = message.replace(/\{time\}/gi, timeStr);
+    message = message.replace(/\{driverName\}/gi, driverName);
+
+    // Find driver's direct chat threads with dispatch users
+    const driverPid = `driver:${driverHash}`;
+    const threadsSnap = await firestoreDb.collection('chat_threads')
+      .where('type', '==', 'direct')
+      .where('participants', 'array-contains', driverPid)
+      .get();
+
+    if (threadsSnap.empty) {
+      console.log('[LevelChat] No direct threads for driver:', driverHash.slice(0, 8));
+      return;
+    }
+
+    // Filter to threads where the other participant is a Dashboard user (user:*)
+    const dispatchThreads = threadsSnap.docs.filter(d => {
+      const participants: string[] = d.data().participants || [];
+      return participants.some(p => p.startsWith('user:') && p !== driverPid);
+    });
+
+    if (dispatchThreads.length === 0) {
+      console.log('[LevelChat] No dispatch threads for driver:', driverHash.slice(0, 8));
+      return;
+    }
+
+    // Send to each dispatch thread
+    const now = admin.firestore.Timestamp.now();
+    for (const threadDoc of dispatchThreads) {
+      try {
+        const batch = firestoreDb.batch();
+        const msgRef = firestoreDb.collection('chat_threads').doc(threadDoc.id).collection('messages').doc();
+        batch.set(msgRef, {
+          text: message,
+          senderId: driverPid,
+          senderName: driverName,
+          timestamp: now,
+          type: 'system',
+          systemType: 'level_report',
+          clientId: `level_${Date.now()}_${threadDoc.id.slice(0, 6)}`,
+        });
+        batch.update(firestoreDb.collection('chat_threads').doc(threadDoc.id), {
+          lastMessage: {
+            text: message.length > 100 ? message.substring(0, 100) + '...' : message,
+            senderId: driverPid,
+            senderName: 'Level Report',
+            timestamp: now,
+            type: 'system',
+          },
+          updatedAt: now,
+        });
+        await batch.commit();
+        console.log('[LevelChat] Level sent to thread:', threadDoc.id);
+      } catch (threadErr) {
+        console.warn('[LevelChat] Failed to send to thread', threadDoc.id, threadErr);
+      }
+    }
+
+    console.log(`[LevelChat] Sent level report for ${data.wellName} to ${dispatchThreads.length} thread(s)`);
+  } catch (err) {
+    console.error('[LevelChat] Error (non-blocking):', err);
+  }
+}
+
 // ── onShiftCreate: Create shift thread when driver starts shift ────────────
 export const onShiftCreate = functionsV1.firestore
   .document('driver_shifts/{shiftId}')
@@ -2769,3 +2906,45 @@ export const parseJsaPdf = httpsV2.onCall(
     };
   },
 );
+
+// ── trackJsaLocation: Add well to jsa_day_status for per_location JSA tracking ──
+// Called fire-and-forget from processIncomingPull.
+// Maintains a per-driver per-day doc with all locations visited.
+// WB T reads this doc to check if a new well needs a JSA.
+async function trackJsaLocation(data: PullPacket): Promise<void> {
+  try {
+    const driverHash = data.driverId;
+    const wellName = data.wellName;
+    if (!driverHash || !wellName) return;
+
+    // Get driver's companyId to check if JSA mode is enabled
+    const driverSnap = await admin.database().ref(`drivers/approved/${driverHash}`).once('value');
+    const driverData = driverSnap.val();
+    if (!driverData) return;
+    const companyId = driverData.companyId;
+    if (!companyId) return;
+
+    // Check company's jsaMode — only track if per_location or per_load
+    const companyDoc = await firestoreDb.collection('companies').doc(companyId).get();
+    const jsaMode = companyDoc.data()?.jsaMode || 'off';
+    if (jsaMode === 'off' || jsaMode === 'per_shift') return; // per_shift doesn't need location tracking
+
+    // Build doc ID: {driverHash}_{YYYY-MM-DD}
+    const today = new Date().toISOString().slice(0, 10);
+    const docId = `${driverHash}_${today}`;
+
+    // Add well to acknowledged locations (arrayUnion = no duplicates)
+    await firestoreDb.collection('jsa_day_status').doc(docId).set({
+      driverHash,
+      driverName: driverData.displayName || driverData.legalName || '',
+      companyId,
+      date: today,
+      updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+      locations: admin.firestore.FieldValue.arrayUnion(wellName.toUpperCase()),
+    }, { merge: true });
+
+    console.log(`[JsaTrack] Added ${wellName} to jsa_day_status/${docId}`);
+  } catch (err) {
+    console.warn('[JsaTrack] Failed:', err);
+  }
+}

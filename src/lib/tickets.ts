@@ -11,6 +11,7 @@ export interface Ticket {
   hauledTo: string;
   type: string;
   qty: string;
+  bbls: string;
   top: string;
   bottom: string;
   driver: string;
@@ -191,7 +192,8 @@ function mapTicketDoc(doc: any): Ticket {
     location: d.location || d.wellName || '',
     hauledTo: d.hauledTo || d.disposal || '',
     type: d.type || d.commodityType || '',
-    qty: d.qty || '',
+    qty: d.qty || d.bbls || '',
+    bbls: d.bbls || d.qty || '',
     top: d.top || '',
     bottom: d.bottom || '',
     driver: d.driver || '',

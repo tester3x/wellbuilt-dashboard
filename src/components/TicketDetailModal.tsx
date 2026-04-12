@@ -139,7 +139,7 @@ export function TicketDetailModal({ ticket, onClose, onNavigateTicket }: Props) 
                 ) : (
                   <div className="grid grid-cols-4 border-t border-gray-300">
                     <MeasureBox label="TYPE" value={ticket.type || 'Production Water'} />
-                    <MeasureBox label="QTY (BBL)" value={ticket.qty || '--'} />
+                    <MeasureBox label="QTY (BBL)" value={ticket.qty || ticket.bbls || '--'} />
                     <MeasureBox label="TOP" value={ticket.top || '--'} />
                     <MeasureBox label="BOTTOM" value={ticket.bottom || '--'} />
                   </div>
@@ -216,10 +216,16 @@ export function TicketDetailModal({ ticket, onClose, onNavigateTicket }: Props) 
                   <SectionTitle>PHOTOS ({invoice.photos.length})</SectionTitle>
                   <div className="flex gap-2 overflow-x-auto pb-2">
                     {invoice.photos.map((photo: any, i: number) => {
-                      const url = typeof photo === 'string' ? photo : photo?.uri;
+                      let url = typeof photo === 'string' ? photo : photo?.uri;
                       const loc = typeof photo === 'object' ? photo?.location : '';
                       const photoType = typeof photo === 'object' ? photo?.type : '';
                       if (!url) return null;
+                      // Rewrite firebasestorage.googleapis.com → storage.googleapis.com (DNS fix)
+                      if (url.includes('firebasestorage.googleapis.com')) {
+                        const m = url.match(/\/o\/(.+?)(\?|$)/);
+                        const bucketM = url.match(/\/b\/([^/]+)\//);
+                        if (m && bucketM) url = `https://storage.googleapis.com/${bucketM[1]}/${decodeURIComponent(m[1])}`;
+                      }
                       return (
                         <div key={i} className="flex-shrink-0 text-center">
                           <a href={url} target="_blank" rel="noopener noreferrer">

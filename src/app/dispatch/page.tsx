@@ -2060,8 +2060,8 @@ function DispatchPageInner() {
                             const operatorMatches = allOperatorWells
                               .filter(w => w.well_name.toLowerCase().includes(q) && !seen.has(w.well_name.toLowerCase()))
                               .map(w => { seen.add(w.well_name.toLowerCase()); return { label: w.well_name, sub: w.operator || 'NDIC', value: w.well_name }; });
-                            const disposalMatches = allDisposals
-                              .filter(d => d.well_name.toLowerCase().includes(q) && !seen.has(d.well_name.toLowerCase()))
+                            const disposalMatches = searchDisposals(q, allDisposals)
+                              .filter(d => !seen.has(d.well_name.toLowerCase()))
                               .map(d => ({ label: d.well_name, sub: 'SWD', value: d.well_name }));
                             const combined = [...wellMatches, ...operatorMatches, ...disposalMatches].slice(0, 15);
                             if (combined.length === 0) return null;
@@ -2101,8 +2101,8 @@ function DispatchPageInner() {
                             const operatorMatches = allOperatorWells
                               .filter(w => w.well_name.toLowerCase().includes(q) && !seen2.has(w.well_name.toLowerCase()))
                               .map(w => { seen2.add(w.well_name.toLowerCase()); return { label: w.well_name, sub: w.operator || 'NDIC', value: w.well_name }; });
-                            const disposalMatches = allDisposals
-                              .filter(d => d.well_name.toLowerCase().includes(q) && !seen2.has(d.well_name.toLowerCase()))
+                            const disposalMatches = searchDisposals(q, allDisposals)
+                              .filter(d => !seen2.has(d.well_name.toLowerCase()))
                               .map(d => ({ label: d.well_name, sub: 'SWD', value: d.well_name }));
                             const combined = [...wellMatches, ...operatorMatches, ...disposalMatches].slice(0, 15);
                             if (combined.length === 0) return null;
@@ -4398,7 +4398,7 @@ function CompletedJobsPanel({ jobs, drivers, allWells, allDisposals, highlightJo
                             {/* Header */}
                             <div className="flex items-start justify-between mb-3">
                               <h4 className="text-[#111] font-black text-lg tracking-tight">
-                                {ticketDetailData.tickets.length <= 1 ? 'WATER TICKET' : 'INVOICE'}
+                                INVOICE
                               </h4>
                               <span className="px-2 py-0.5 rounded-full text-[10px] font-semibold border border-gray-400 text-gray-600">
                                 {(ticketDetailData.invoice.status || 'closed').toUpperCase()}
@@ -4407,7 +4407,7 @@ function CompletedJobsPanel({ jobs, drivers, allWells, allDisposals, highlightJo
 
                             {/* Invoice # / Date */}
                             <div className="flex items-center justify-between py-1 border-b border-gray-200">
-                              <span className="text-xs text-gray-500">{ticketDetailData.tickets.length <= 1 ? 'Ticket #' : 'Invoice #'}</span>
+                              <span className="text-xs text-gray-500">Invoice #</span>
                               <span className="text-xs text-[#111] font-mono font-semibold">{job.invoiceNumber}</span>
                             </div>
                             <div className="flex items-center justify-between py-1 border-b border-gray-200">
@@ -4470,10 +4470,13 @@ function CompletedJobsPanel({ jobs, drivers, allWells, allDisposals, highlightJo
                             <h5 className="text-[#111] font-extrabold text-[10px] tracking-[1.5px] uppercase pt-3 pb-1">LINE ITEMS</h5>
                             {ticketDetailData.tickets.map((t: any, idx: number) => (
                               <div key={idx} className="border border-gray-300 rounded-lg overflow-hidden mb-2">
-                                <div className="flex items-center justify-between px-3 py-1.5 bg-gray-100 border-b border-gray-300">
-                                  <span className="text-[10px] font-bold tracking-wide text-red-500">WATER TICKET</span>
-                                  <span className="text-[#111] font-mono font-semibold text-xs">#{t.ticketNumber}</span>
-                                </div>
+                                {/* s_t: ticket # is the invoice #, no separate header needed. i_t: show WATER TICKET header per line item */}
+                                {ticketDetailData.tickets.length > 1 && (
+                                  <div className="flex items-center justify-between px-3 py-1.5 bg-gray-100 border-b border-gray-300">
+                                    <span className="text-[10px] font-bold tracking-wide text-red-500">WATER TICKET</span>
+                                    <span className="text-[#111] font-mono font-semibold text-xs">#{t.ticketNumber}</span>
+                                  </div>
+                                )}
                                 <div className="px-3 py-2 space-y-0.5">
                                   {t.location && <div className="flex justify-between"><span className="text-[10px] text-gray-500">Pickup</span><span className="text-[10px] text-[#111]">{t.location}</span></div>}
                                   {t.hauledTo && <div className="flex justify-between"><span className="text-[10px] text-gray-500">Drop-off</span><span className="text-[10px] text-[#111]">{t.hauledTo}</span></div>}
@@ -4481,7 +4484,7 @@ function CompletedJobsPanel({ jobs, drivers, allWells, allDisposals, highlightJo
                                 </div>
                                 <div className="grid grid-cols-4 border-t border-gray-300">
                                   <div className="text-center py-1.5 border-r border-gray-300"><div className="text-[8px] text-gray-400 uppercase">TYPE</div><div className="text-xs font-semibold text-[#111] font-mono">{t.type || 'PW'}</div></div>
-                                  <div className="text-center py-1.5 border-r border-gray-300"><div className="text-[8px] text-gray-400 uppercase">QTY (BBL)</div><div className="text-xs font-semibold text-[#111] font-mono">{t.qty || '--'}</div></div>
+                                  <div className="text-center py-1.5 border-r border-gray-300"><div className="text-[8px] text-gray-400 uppercase">QTY (BBL)</div><div className="text-xs font-semibold text-[#111] font-mono">{t.qty || t.bbls || '--'}</div></div>
                                   <div className="text-center py-1.5 border-r border-gray-300"><div className="text-[8px] text-gray-400 uppercase">TOP</div><div className="text-xs font-semibold text-[#111] font-mono">{t.top || '--'}</div></div>
                                   <div className="text-center py-1.5"><div className="text-[8px] text-gray-400 uppercase">BOTTOM</div><div className="text-xs font-semibold text-[#111] font-mono">{t.bottom || '--'}</div></div>
                                 </div>
@@ -4567,10 +4570,17 @@ function CompletedJobsPanel({ jobs, drivers, allWells, allDisposals, highlightJo
                                 <h5 className="text-[#111] font-extrabold text-[10px] tracking-[1.5px] uppercase pt-3 pb-1">PHOTOS ({ticketDetailData.invoice.photos.length})</h5>
                                 <div className="flex gap-2 overflow-x-auto pb-2">
                                   {ticketDetailData.invoice.photos.map((photo: any, i: number) => {
-                                    const url = typeof photo === 'string' ? photo : photo?.uri;
+                                    let url = typeof photo === 'string' ? photo : photo?.uri;
                                     const loc = typeof photo === 'object' ? photo?.location : '';
                                     const photoType = typeof photo === 'object' ? photo?.type : '';
                                     if (!url) return null;
+                                    // Rewrite firebasestorage.googleapis.com URLs — that domain has DNS issues.
+                                    // storage.googleapis.com/{bucket}/{path} is reliable.
+                                    if (url.includes('firebasestorage.googleapis.com')) {
+                                      const m = url.match(/\/o\/(.+?)(\?|$)/);
+                                      const bucketM = url.match(/\/b\/([^/]+)\//);
+                                      if (m && bucketM) url = `https://storage.googleapis.com/${bucketM[1]}/${decodeURIComponent(m[1])}`;
+                                    }
                                     return (
                                       <div key={i} className="flex-shrink-0 text-center">
                                         <a href={url} target="_blank" rel="noopener noreferrer">
