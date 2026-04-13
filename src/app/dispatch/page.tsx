@@ -26,6 +26,7 @@ interface ApprovedDriver {
   companyName?: string;
   assignedRoutes?: string[];
   phone?: string;        // From profile subpath (WB S settings)
+  onShift?: boolean;     // Live shift status from driver_shifts
 }
 
 interface DispatchJob {
@@ -773,6 +774,42 @@ function DispatchPageInner() {
 
       approved.sort((a, b) => a.displayName.localeCompare(b.displayName));
       setDrivers(approved);
+
+      // Fetch shift status for each driver (fire-and-forget — UI updates when ready)
+      (async () => {
+        try {
+          const firestore = getFirestoreDb();
+          const today = new Date().toISOString().slice(0, 10);
+          const statusMap = new Map<string, boolean>();
+
+          // Batch fetch shift docs for all drivers
+          await Promise.all(approved.map(async (d) => {
+            try {
+              const shiftDoc = await getDoc(doc(firestore, 'driver_shifts', `${d.key}_${today}`));
+              if (shiftDoc.exists()) {
+                const events = shiftDoc.data()?.events || [];
+                if (events.length > 0) {
+                  const lastEvent = events[events.length - 1];
+                  // On shift if last event is login or depart_return (not logout)
+                  statusMap.set(d.key, lastEvent.type !== 'logout');
+                }
+              }
+            } catch {}
+          }));
+
+          if (statusMap.size > 0) {
+            setDrivers(prev => prev.map(d => ({
+              ...d,
+              onShift: statusMap.get(d.key) ?? false,
+            })).sort((a, b) => {
+              // On-shift drivers first, then alphabetical
+              if (a.onShift && !b.onShift) return -1;
+              if (!a.onShift && b.onShift) return 1;
+              return (a.legalName || a.displayName).localeCompare(b.legalName || b.displayName);
+            }));
+          }
+        } catch {}
+      })();
     } catch (err) {
       console.error('Failed to load drivers:', err);
     } finally {
@@ -1959,12 +1996,12 @@ function DispatchPageInner() {
                         {assignTarget?.route && drivers.filter(d => d.assignedRoutes?.includes(assignTarget.route!)).length > 0 && (
                           <optgroup label={`Route: ${assignTarget.route}`}>
                             {drivers.filter(d => d.assignedRoutes?.includes(assignTarget.route!)).map(d => (
-                              <option key={d.key} value={d.key}>{d.legalName || d.displayName}</option>
+                              <option key={d.key} value={d.key}>{d.onShift ? '🟢 ' : '🔴 '}{d.legalName || d.displayName}</option>
                             ))}
                           </optgroup>
                         )}
                         <optgroup label="All Drivers">
-                          {drivers.map(d => (<option key={d.key} value={d.key}>{d.legalName || d.displayName}</option>))}
+                          {drivers.map(d => (<option key={d.key} value={d.key}>{d.onShift ? '🟢 ' : '🔴 '}{d.legalName || d.displayName}</option>))}
                         </optgroup>
                       </select>
                     </div>
@@ -2825,7 +2862,7 @@ function DispatchPageInner() {
               >
                 <option value="">Select driver...</option>
                 {drivers.map(d => (
-                  <option key={d.key} value={d.key}>{d.legalName || d.displayName}</option>
+                  <option key={d.key} value={d.key}>{d.onShift ? '🟢 ' : '🔴 '}{d.legalName || d.displayName}</option>
                 ))}
               </select>
             </div>
@@ -3010,7 +3047,7 @@ function DispatchPageInner() {
                           {drivers
                             .filter(d => d.key !== editSwJob.driverHash)
                             .map(d => (
-                              <option key={d.key} value={d.key}>{d.legalName || d.displayName}</option>
+                              <option key={d.key} value={d.key}>{d.onShift ? '🟢 ' : '🔴 '}{d.legalName || d.displayName}</option>
                             ))
                           }
                         </select>
@@ -4678,7 +4715,7 @@ function UnassignedTransferRow({ job, drivers, assignTransfer, cancelDispatch }:
         >
           <option value="">Select driver...</option>
           {drivers.map(d => (
-            <option key={d.key} value={d.key}>{d.legalName || d.displayName}</option>
+            <option key={d.key} value={d.key}>{d.onShift ? '🟢 ' : '🔴 '}{d.legalName || d.displayName}</option>
           ))}
         </select>
         <button
