@@ -4672,7 +4672,7 @@ function CompletedJobsPanel({ jobs, drivers, allWells, allDisposals, highlightJo
 // Row for unassigned transfer requests — pulsing orange, driver dropdown for dispatch to assign
 function UnassignedTransferRow({ job, drivers, assignTransfer, cancelDispatch }: {
   job: DispatchJob;
-  drivers: { key: string; displayName: string; legalName?: string }[];
+  drivers: { key: string; displayName: string; legalName?: string; onShift?: boolean }[];
   assignTransfer?: (jobId: string, driverHash: string, driverName: string) => void;
   cancelDispatch: (id: string) => void;
 }) {
