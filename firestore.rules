@@ -209,6 +209,22 @@ service cloud.firestore {
       allow read, write: if true;
     }
 
+    // JSA day status — universal location stamps + completion tracking
+    match /jsa_day_status/{docId} {
+      allow read, write: if true;
+    }
+
+    // JSA completions — legacy collection
+    match /jsa_completions/{docId} {
+      allow read, write: if true;
+    }
+
+    // Daps waitlist — landing page signups
+    match /daps_waitlist/{docId} {
+      allow read: if false;
+      allow create: if true;
+    }
+
     // JSA templates — company-specific JSA configurations (BYOJSA)
     match /jsa_templates/{companyId} {
       allow read, write: if true;
