@@ -132,10 +132,16 @@ export const watchdogStrandedPackets = functionsV2.onSchedule('every 5 minutes',
     await db.ref(`packets/incoming/${key}`).remove();
 
     // Generate new key with current timestamp
+    // Use YYYYMMDD_HHMMSS format (with underscore between date and time)
+    // to match normal packet key format. Without the underscore, these keys
+    // sort differently in Firebase (digits < underscore in ASCII) and pollute
+    // calculateAFR's flow rate window.
     const cleanName = data.wellName.replace(/\s/g, '');
-    const ts = new Date().toISOString().replace(/[-:T]/g, '').substr(0, 14);
+    const now2 = new Date();
+    const datePart = now2.toISOString().replace(/[-]/g, '').substr(0, 8);
+    const timePart = now2.toISOString().replace(/[-:T]/g, '').substr(8, 6);
     const rand = Math.random().toString(36).substr(2, 6);
-    const newKey = `${ts}_${cleanName}_${rand}`;
+    const newKey = `${datePart}_${timePart}_${cleanName}_${rand}`;
 
     // Write with new key to trigger onCreate
     data.packetId = newKey;
@@ -684,20 +690,36 @@ const EMA_ALPHA = 0.4;
 async function calculateAFR(wellName: string, newFlowRateDays: number): Promise<number> {
 
   // Get recent processed packets for this well
+  // NOTE: Don't use limitToLast() - Firebase sorts by key alphabetically,
+  // not by timestamp. Watchdog-retriggered packets have squished keys
+  // (YYYYMMDDHHMMSS) that sort after normal keys (YYYYMMDD_HHMMSS),
+  // poisoning the rate window. Fetch all and sort by timestamp instead.
   const snapshot = await db.ref('packets/processed')
     .orderByChild('wellName')
     .equalTo(wellName)
-    .limitToLast(15) // Get more to account for anomalies being filtered
     .once('value');
 
-  const allRates: number[] = [];
+  // Collect rates with timestamps, sort by actual time, take most recent 15
+  const rateEntries: { timestamp: number; rate: number }[] = [];
 
   snapshot.forEach((child) => {
     const data = child.val();
+    const key = child.key || '';
+    // Skip edit/delete/history packets
+    if (key.startsWith('edit_') || key.startsWith('delete_') || key.startsWith('history_')) return;
     if (data.flowRateDays && data.flowRateDays > 0) {
-      allRates.push(data.flowRateDays);
+      // Use gaugeTime or dateTime for chronological sort
+      const ts = data.gaugeTime ? new Date(data.gaugeTime).getTime()
+        : data.dateTime ? new Date(data.dateTime).getTime()
+        : 0;
+      rateEntries.push({ timestamp: ts, rate: data.flowRateDays });
     }
   });
+
+  // Sort by timestamp ascending (oldest first) and take the most recent 15
+  rateEntries.sort((a, b) => a.timestamp - b.timestamp);
+  const recent = rateEntries.slice(-15);
+  const allRates = recent.map(e => e.rate);
 
   // Add the new rate
   if (newFlowRateDays > 0) {
@@ -1122,23 +1144,15 @@ export const processIncomingPull = functionsV1.database
 
     console.log(`Processed ${wellName}: ${packetId} -> ${responseId}`);
 
-    // Fire-and-forget: send level report to driver's chat threads
-    // Wrapped in try/catch — chat failures must NEVER break packet processing
+    // Await chat + JSA tracking — 1st gen CFs can kill fire-and-forget promises after return.
+    // These are fast Firestore writes, adds ~1-2s to packet processing but guarantees delivery.
     try {
-      sendLevelToChat(data, packetId).catch(err =>
-        console.warn('[LevelChat] Background send failed:', err)
-      );
+      await Promise.all([
+        sendLevelToChat(data, packetId).catch(err => console.warn('[LevelChat] Send failed:', err)),
+        trackJsaLocation(data).catch(err => console.warn('[JsaTrack] Tracking failed:', err)),
+      ]);
     } catch (err) {
-      console.warn('[LevelChat] Failed to start send:', err);
-    }
-
-    // Fire-and-forget: track well location for per_location JSA mode
-    try {
-      trackJsaLocation(data).catch(err =>
-        console.warn('[JsaTrack] Background tracking failed:', err)
-      );
-    } catch (err) {
-      console.warn('[JsaTrack] Failed to start tracking:', err);
+      console.warn('[PostProcess] Parallel tasks failed:', err);
     }
 
     return null;
@@ -2328,15 +2342,21 @@ async function sendLevelToChat(data: PullPacket, packetId: string): Promise<void
     const topStr = inchesToFeetInches(topInches);
     const bottomStr = inchesToFeetInches(Math.max(0, bottomInches));
 
-    // Format time from packet
-    const timeStr = data.dateTime || (data.dateTimeUTC ? formatLocalDateTime(new Date(data.dateTimeUTC)) : '');
+    // Format date + time from packet
+    const fullTimeStr = data.dateTime || (data.dateTimeUTC ? formatLocalDateTime(new Date(data.dateTimeUTC)) : '');
+    // Split into date and time parts: "04/11/2026 9:12 PM" → date="04/11/2026", time="9:12 PM"
+    const timeParts = fullTimeStr.split(' ');
+    const dateStr = timeParts[0] || '';
+    const timeOnlyStr = timeParts.slice(1).join(' ') || fullTimeStr; // fallback to full string
 
     let message = templateStr;
     message = message.replace(/\{wellName\}/gi, data.wellName || '');
+    message = message.replace(/\{well\}/gi, data.wellName || ''); // alias for {wellName}
     message = message.replace(/\{top\}/gi, topStr);
     message = message.replace(/\{bottom\}/gi, bottomStr);
     message = message.replace(/\{bbls\}/gi, String(data.bblsTaken || 0));
-    message = message.replace(/\{time\}/gi, timeStr);
+    message = message.replace(/\{date\}/gi, dateStr);
+    message = message.replace(/\{time\}/gi, timeOnlyStr);
     message = message.replace(/\{driverName\}/gi, driverName);
 
     // Find driver's direct chat threads with dispatch users
@@ -2373,8 +2393,7 @@ async function sendLevelToChat(data: PullPacket, packetId: string): Promise<void
           senderId: driverPid,
           senderName: driverName,
           timestamp: now,
-          type: 'system',
-          systemType: 'level_report',
+          type: 'level_report',
           clientId: `level_${Date.now()}_${threadDoc.id.slice(0, 6)}`,
         });
         batch.update(firestoreDb.collection('chat_threads').doc(threadDoc.id), {

@@ -779,7 +779,9 @@ function DispatchPageInner() {
       (async () => {
         try {
           const firestore = getFirestoreDb();
-          const today = new Date().toISOString().slice(0, 10);
+          // Use local date (not UTC) to match WB S which writes shift docs with device local date
+          const now = new Date();
+          const today = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-${String(now.getDate()).padStart(2, '0')}`;
           const statusMap = new Map<string, boolean>();
 
           // Batch fetch shift docs for all drivers
