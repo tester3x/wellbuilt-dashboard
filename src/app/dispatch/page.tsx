@@ -1065,6 +1065,41 @@ function DispatchPageInner() {
       const compId = user?.companyId || selectedDrivers[0]?.companyId || 'unknown';
       trackJobTypeUsage(swServiceType.trim(), compId, jobTypeToPackageId[swServiceType.trim()] || 'custom');
 
+      // Auto-create group chat thread for multi-driver SW jobs
+      if (selectedDrivers.length > 1 && serviceGroupId) {
+        try {
+          const myPid = user?.uid ? `user:${user.uid}` : '';
+          const participants = [myPid, ...selectedDrivers.map(d => `driver:${d.key}`)].filter(Boolean);
+          const participantNames: Record<string, string> = {};
+          if (myPid) participantNames[myPid] = user?.displayName || 'Dispatch';
+          selectedDrivers.forEach(d => {
+            participantNames[`driver:${d.key}`] = d.legalName || d.displayName;
+          });
+          const threadTitle = `${swServiceType.trim()} — ${matchedWell?.wellName || swWellName.trim()}`;
+          const crewNames = selectedDrivers.map(d => (d.legalName || d.displayName).split(' ')[0]).join(', ');
+          const sysText = `Service work dispatched: ${swServiceType.trim()} at ${matchedWell?.wellName || swWellName.trim()}\nCrew: ${crewNames}${swNotes ? `\nNotes: ${swNotes}` : ''}${swDropoff.trim() ? `\nDrop-off: ${swDropoff.trim()}` : ''}`;
+          const threadRef = await addDoc(collection(firestore, 'chat_threads'), {
+            type: 'service_group',
+            serviceGroupId,
+            companyId: user?.companyId || '',
+            title: threadTitle,
+            participants,
+            participantNames,
+            status: 'active',
+            createdAt: Timestamp.now(),
+            updatedAt: Timestamp.now(),
+            lastRead: {},
+            lastMessage: { text: sysText, senderId: 'system', senderName: 'System', timestamp: Timestamp.now(), type: 'system' },
+          });
+          await addDoc(collection(firestore, 'chat_threads', threadRef.id, 'messages'), {
+            text: sysText, senderId: 'system', senderName: 'System', timestamp: Timestamp.now(), type: 'system',
+            systemType: 'job_assigned',
+          });
+        } catch (chatErr) {
+          console.warn('[Dispatch] Auto-create SW chat failed (non-blocking):', chatErr);
+        }
+      }
+
       const names = selectedDrivers.map(d => d.legalName || d.displayName).join(', ');
       setMessage(`Service work dispatched to ${names}`);
       setSwWellName('');
@@ -1186,7 +1221,8 @@ function DispatchPageInner() {
             if (d) participantNames[`driver:${h}`] = d.displayName;
           });
           const threadTitle = newProjectName.trim() || `Project - ${newProjectWells[0] || 'Unnamed'}`;
-          const sysText = `Project "${threadTitle}" created with ${allDriverHashes.length} driver${allDriverHashes.length > 1 ? 's' : ''}`;
+          const crewNames = allDriverHashes.map(h => { const d = drivers.find(dr => dr.key === h); return d ? (d.legalName || d.displayName).split(' ')[0] : h; }).join(', ');
+          const sysText = `Project "${threadTitle}" created\nCrew: ${crewNames}\nWells: ${newProjectWells.join(', ')}${newProjectNotes ? `\nNotes: ${newProjectNotes}` : ''}`;
           const threadRef = await addDoc(collection(firestore, 'chat_threads'), {
             type: 'project',
             projectId: docRef.id,
@@ -1286,6 +1322,40 @@ function DispatchPageInner() {
           });
         }
       }
+      // Auto-add driver to existing project chat thread
+      if (driver) {
+        try {
+          const firestore2 = getFirestoreDb();
+          const threadSnap = await getDocs(query(
+            collection(firestore2, 'chat_threads'),
+            where('projectId', '==', projectId),
+            where('type', '==', 'project'),
+          ));
+          if (!threadSnap.empty) {
+            const threadDoc = threadSnap.docs[0];
+            const threadData = threadDoc.data();
+            const driverPid = `driver:${driverHash}`;
+            if (!threadData.participants?.includes(driverPid)) {
+              const driverFirstName = driver.legalName ? driver.legalName.split(' ')[0] : driver.displayName;
+              await updateDoc(doc(firestore2, 'chat_threads', threadDoc.id), {
+                participants: [...(threadData.participants || []), driverPid],
+                [`participantNames.${driverPid}`]: driver.legalName || driver.displayName,
+                updatedAt: Timestamp.now(),
+              });
+              const joinText = `${driverFirstName} joined the project`;
+              await addDoc(collection(firestore2, 'chat_threads', threadDoc.id, 'messages'), {
+                text: joinText, senderId: 'system', senderName: 'System', timestamp: Timestamp.now(), type: 'system',
+                systemType: 'driver_joined',
+              });
+              await updateDoc(doc(firestore2, 'chat_threads', threadDoc.id), {
+                lastMessage: { text: joinText, senderId: 'system', senderName: 'System', timestamp: Timestamp.now(), type: 'system' },
+              });
+            }
+          }
+        } catch (chatErr) {
+          console.warn('[Dispatch] Auto-add driver to project chat failed (non-blocking):', chatErr);
+        }
+      }
     } catch (err: any) {
       setMessage(`Error: ${err.message}`);
       setTimeout(() => setMessage(''), 5000);
@@ -1351,6 +1421,53 @@ function DispatchPageInner() {
       await updateDoc(doc(firestore, 'projects', projectId), {
         [`driverSchedule.${today}`]: Array.from(todayDrivers),
       });
+
+      // Auto-add new shift drivers to existing project chat thread
+      if (created > 0) {
+        try {
+          const threadSnap = await getDocs(query(
+            collection(firestore, 'chat_threads'),
+            where('projectId', '==', projectId),
+            where('type', '==', 'project'),
+          ));
+          if (!threadSnap.empty) {
+            const threadDoc = threadSnap.docs[0];
+            const threadData = threadDoc.data();
+            const existingPids = new Set(threadData.participants || []);
+            const newPids: string[] = [];
+            const newNames: Record<string, string> = {};
+            const joinedNames: string[] = [];
+            for (const driverHash of driverHashes) {
+              const driverPid = `driver:${driverHash}`;
+              if (!existingPids.has(driverPid)) {
+                const driver = drivers.find(d => d.key === driverHash);
+                if (driver) {
+                  newPids.push(driverPid);
+                  newNames[`participantNames.${driverPid}`] = driver.legalName || driver.displayName;
+                  joinedNames.push((driver.legalName || driver.displayName).split(' ')[0]);
+                }
+              }
+            }
+            if (newPids.length > 0) {
+              await updateDoc(doc(firestore, 'chat_threads', threadDoc.id), {
+                participants: [...Array.from(existingPids), ...newPids],
+                ...newNames,
+                updatedAt: Timestamp.now(),
+              });
+              const joinText = `${joinedNames.join(', ')} joined the ${shift} shift`;
+              await addDoc(collection(firestore, 'chat_threads', threadDoc.id, 'messages'), {
+                text: joinText, senderId: 'system', senderName: 'System', timestamp: Timestamp.now(), type: 'system',
+                systemType: 'driver_joined',
+              });
+              await updateDoc(doc(firestore, 'chat_threads', threadDoc.id), {
+                lastMessage: { text: joinText, senderId: 'system', senderName: 'System', timestamp: Timestamp.now(), type: 'system' },
+              });
+            }
+          }
+        } catch (chatErr) {
+          console.warn('[Dispatch] Auto-add shift drivers to project chat failed (non-blocking):', chatErr);
+        }
+      }
 
       if (created > 0) {
         setMessage(`Created ${created} ${shift} shift dispatch${created !== 1 ? 'es' : ''}`);
