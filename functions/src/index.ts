@@ -644,41 +644,50 @@ function getFlowRateAnomalyLevel(flowRate: number, medianRate: number): number {
   return 0; // Normal
 }
 
-// Filter out anomalies from flow rates using PROGRESSIVE median-based detection
-// Each rate is checked against median of rates BEFORE it (chronologically)
-// Returns flow rates with 5x+ outliers removed (Tier 2 anomalies excluded)
+// Filter out anomalies (5x+ off median) from flow rates.
+// Uses two passes:
+//   1. Progressive median — catches outliers as they appear, lets the well's
+//      baseline drift over time (handles legitimate regime changes when paired
+//      with step detection downstream).
+//   2. Final pass with the OVERALL median of pass-1 results — catches early
+//      outliers that were grandfathered in before there was enough baseline
+//      data (matches the dashboard's anomaly badges so AFR and the UI agree).
+// Returns rates with Tier 2 anomalies removed.
 function filterAnomalies(flowRates: number[]): number[] {
   if (flowRates.length < 3) {
     return flowRates;
   }
 
-  // flowRates are in chronological order (oldest first from Firebase query)
-  // Build up known rates progressively and filter anomalies
+  // Pass 1: progressive
   const knownRates: number[] = [];
-  const filtered: number[] = [];
-
+  const passOne: number[] = [];
   for (const rate of flowRates) {
     if (knownRates.length >= 3) {
       const medianRate = median(knownRates);
       const level = getFlowRateAnomalyLevel(rate, medianRate);
-
       if (level < 2) {
-        // Not an anomaly - include in filtered and add to known
-        filtered.push(rate);
+        passOne.push(rate);
         knownRates.push(rate);
       }
-      // Level 2 anomalies are excluded from both filtered AND knownRates
+      // Level 2 anomalies excluded from both.
     } else {
-      // Not enough data yet to detect anomalies - include everything
-      filtered.push(rate);
+      // Not enough baseline yet — include for now; pass 2 will re-check.
+      passOne.push(rate);
       knownRates.push(rate);
     }
   }
 
+  // Pass 2: re-check every kept rate against the OVERALL median.
+  // This catches early packets that got grandfathered in during pass 1.
+  if (passOne.length < 5) {
+    return passOne; // Too few to safely re-filter
+  }
+  const overallMedian = median(passOne);
+  const filtered = passOne.filter(rate => getFlowRateAnomalyLevel(rate, overallMedian) < 2);
+
   if (filtered.length < 3) {
     return flowRates; // Fallback if too many filtered
   }
-
   return filtered;
 }
 
@@ -708,10 +717,14 @@ async function calculateAFR(wellName: string, newFlowRateDays: number): Promise<
     // Skip edit/delete/history packets
     if (key.startsWith('edit_') || key.startsWith('delete_') || key.startsWith('history_')) return;
     if (data.flowRateDays && data.flowRateDays > 0) {
-      // Use gaugeTime or dateTime for chronological sort
-      const ts = data.gaugeTime ? new Date(data.gaugeTime).getTime()
+      // Sort by timestamp. Prefer dateTimeUTC (always a valid ISO string) over
+      // dateTime (locale-formatted by the WB M client and sometimes malformed,
+      // e.g. "4/11/2026 3 PM" with no minutes — parses to NaN and corrupts sort).
+      let ts = data.dateTimeUTC ? new Date(data.dateTimeUTC).getTime()
+        : data.gaugeTime ? new Date(data.gaugeTime).getTime()
         : data.dateTime ? new Date(data.dateTime).getTime()
         : 0;
+      if (isNaN(ts)) ts = 0;
       rateEntries.push({ timestamp: ts, rate: data.flowRateDays });
     }
   });
