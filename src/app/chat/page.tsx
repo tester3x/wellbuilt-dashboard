@@ -829,7 +829,8 @@ export default function ChatPage() {
               return (
                 <button
                   key={thread.id}
-                  onClick={() => {
+                  onClick={(e) => {
+                    e.stopPropagation();
                     if (setupMode) return;
 
                     // 1. Already visible in current profile? Just highlight that pane.
@@ -839,23 +840,21 @@ export default function ChatPage() {
                       return;
                     }
 
-                    // 2. Thread in another stacked profile? Bring that profile to top.
-                    const ownerProfiles = threadToProfiles.get(thread.id) || [];
-                    // Prefer profile already in stack (closest to top)
-                    const inStack = ownerProfiles
-                      .filter(pid => pid !== activeProfileId)
-                      .sort((a, b) => profileStack.indexOf(b) - profileStack.indexOf(a));
-                    if (inStack.length > 0) {
+                    // 2. Thread in another stacked profile (not the current one)? Bring that profile to top.
+                    const ownerProfiles = (threadToProfiles.get(thread.id) || []).filter(pid => pid !== activeProfileId);
+                    if (ownerProfiles.length > 0) {
+                      const inStack = ownerProfiles.sort((a, b) => profileStack.indexOf(b) - profileStack.indexOf(a));
                       bringProfileToTop(inStack[0]);
                       return;
                     }
 
-                    // 3. Thread not in any profile — add as TEMP (not persisted until locked)
-                    if (activeProfile && slots.length > 0) {
-                      const emptyIdx = openPanes.findIndex(p => !p);
-                      if (emptyIdx >= 0) {
-                        setTempSlots(prev => ({ ...prev, [emptyIdx]: { threadId: thread.id, threadTitle: getTitle(thread) } }));
-                      }
+                    // 3. Open thread in an available grid slot
+                    const emptyIdx = openPanes.findIndex(p => !p);
+                    if (emptyIdx >= 0) {
+                      setTempSlots(prev => ({ ...prev, [emptyIdx]: { threadId: thread.id, threadTitle: getTitle(thread) } }));
+                    } else {
+                      const lastIdx = Math.max(openPanes.length - 1, 0);
+                      setTempSlots(prev => ({ ...prev, [lastIdx]: { threadId: thread.id, threadTitle: getTitle(thread) } }));
                     }
                   }}
                   className={`w-full text-left px-3 py-3 border-b border-gray-800/50 hover:bg-[#111] transition-colors ${
@@ -974,17 +973,17 @@ export default function ChatPage() {
         gap: '1px',
         background: '#1a1a1a',
       }}>
-        {!activeProfile && (
+        {!activeProfile && Object.keys(tempSlots).length === 0 && (
           <div className="flex items-center justify-center bg-[#0a0a0a]" style={{ gridColumn: `1 / -1`, gridRow: `1 / -1` }}>
             <div className="text-center">
               <p className="text-4xl mb-4">💬</p>
-              <p className="text-gray-500 text-lg">Create a monitor profile to get started</p>
-              <p className="text-gray-600 text-sm mt-2">Click the profile button in the sidebar</p>
+              <p className="text-gray-500 text-lg">Click a conversation to open it</p>
+              <p className="text-gray-600 text-sm mt-2">Or create a monitor profile for a persistent layout</p>
             </div>
           </div>
         )}
 
-        {activeProfile && slots.slice(0, maxPanes).map((slot, index) => {
+        {(activeProfile ? slots.slice(0, maxPanes) : Array(maxPanes).fill(null)).map((slot, index) => {
           const threadId = openPanes[index];
           const thread = threadId ? threads.find((t) => t.id === threadId) : null;
           const msgs = threadId ? (paneMessages[threadId] || []) : [];
@@ -1157,8 +1156,8 @@ export default function ChatPage() {
             );
           }
 
-          // Empty slot — no driver assigned
-          if (!slot) {
+          // Empty slot — no driver assigned AND no temp thread
+          if (!slot && !threadId) {
             return (
               <div key={index} className="bg-[#0a0a0a] flex items-center justify-center">
                 <p className="text-gray-800 text-xs">Open</p>
@@ -1166,7 +1165,7 @@ export default function ChatPage() {
             );
           }
 
-          // Assigned slot but no thread yet
+          // Assigned slot but no thread yet (profile has driver hash but no chat thread exists)
           if (!threadId) {
             const slotLabel = slot.driverName || slot.threadTitle || 'Unlinked';
             return (
@@ -1351,6 +1350,7 @@ export default function ChatPage() {
                 {msgs.map((msg) => {
                   const isMine = msg.senderId === myParticipantId;
                   const isSystem = msg.type === 'system';
+                  const isLevelReport = msg.type === 'level_report';
                   const isPhoto = msg.type === 'photo' && (msg as any).photoUrl;
                   if (isSystem) {
                     return (
@@ -1366,7 +1366,13 @@ export default function ChatPage() {
                       <div className={`max-w-[80%] rounded-xl px-3 py-1.5 ${
                         isMine ? 'bg-[#FFD700] text-black rounded-br-sm' : 'bg-[#1a1a1a] text-gray-200 rounded-bl-sm'
                       }`}>
-                        {!isMine && msg.senderName && <p className="text-[10px] font-semibold mb-0.5 text-[#FFD700]">{msg.senderName}</p>}
+                        {!isMine && !isLevelReport && msg.senderName && <p className="text-[10px] font-semibold mb-0.5 text-[#FFD700]">{msg.senderName}</p>}
+                        {isLevelReport && (
+                          <div className="flex items-center gap-1.5 mb-1">
+                            <span className="text-sm">💧</span>
+                            <span className="text-[10px] font-bold tracking-wider text-[#FFD700] uppercase">Level Report</span>
+                          </div>
+                        )}
                         {isPhoto ? (
                           <a href={(msg as any).photoUrl} target="_blank" rel="noopener noreferrer">
                             <img src={(msg as any).photoUrl} alt="Photo" className="rounded-lg max-w-full max-h-32 cursor-pointer hover:opacity-80" />

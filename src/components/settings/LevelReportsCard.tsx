@@ -1,10 +1,10 @@
 'use client';
 
-import { useState } from 'react';
+import { useState, useRef } from 'react';
 import { type CompanyConfig, updateCompanyFields } from '@/lib/companySettings';
 
 const DEFAULT_TEMPLATE = '{well}\n{top}\n{bottom}          {time}';
-const TEMPLATE_FIELDS = ['{well}', '{top}', '{bottom}', '{time}', '{bbls}'];
+const TEMPLATE_FIELDS = ['{well}', '{top}', '{bottom}', '{date}', '{time}', '{bbls}', '{driverName}'];
 
 interface Props {
   company: CompanyConfig;
@@ -46,17 +46,36 @@ export function LevelReportsCard({ company, onSave }: Props) {
     }
   };
 
+  const textareaRef = useRef<HTMLTextAreaElement>(null);
   const insertField = (field: string) => {
-    setTemplate(prev => prev + field);
+    const el = textareaRef.current;
+    if (el) {
+      const start = el.selectionStart;
+      const end = el.selectionEnd;
+      const before = template.slice(0, start);
+      const after = template.slice(end);
+      const newVal = before + field + after;
+      setTemplate(newVal);
+      // Restore cursor after the inserted field
+      requestAnimationFrame(() => {
+        el.focus();
+        el.selectionStart = el.selectionEnd = start + field.length;
+      });
+    } else {
+      setTemplate(prev => prev + field);
+    }
   };
 
   // Preview with sample data
   const previewText = template
     .replace(/\{well\}/g, 'GABRIEL 4-36-25H')
+    .replace(/\{wellName\}/g, 'GABRIEL 4-36-25H')
     .replace(/\{top\}/g, "12'11\"")
     .replace(/\{bottom\}/g, "6'11\"")
+    .replace(/\{date\}/g, '04/11/2026')
     .replace(/\{time\}/g, '9:56 AM')
-    .replace(/\{bbls\}/g, '120');
+    .replace(/\{bbls\}/g, '120')
+    .replace(/\{driverName\}/g, 'Mike Burger');
 
   return (
     <div className="bg-gray-800 rounded-lg overflow-hidden">
@@ -93,6 +112,7 @@ export function LevelReportsCard({ company, onSave }: Props) {
                 All drivers send levels in this format. Consistent for dispatch.
               </div>
               <textarea
+                ref={textareaRef}
                 value={template}
                 onChange={e => setTemplate(e.target.value)}
                 onBlur={saveTemplate}

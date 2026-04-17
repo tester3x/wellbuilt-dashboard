@@ -799,17 +799,16 @@ function DispatchPageInner() {
             } catch {}
           }));
 
-          if (statusMap.size > 0) {
-            setDrivers(prev => prev.map(d => ({
-              ...d,
-              onShift: statusMap.get(d.key) ?? false,
-            })).sort((a, b) => {
-              // On-shift drivers first, then alphabetical
-              if (a.onShift && !b.onShift) return -1;
-              if (!a.onShift && b.onShift) return 1;
-              return (a.legalName || a.displayName).localeCompare(b.legalName || b.displayName);
-            }));
-          }
+          // Always update shift status — even if no docs found (all drivers off shift)
+          setDrivers(prev => prev.map(d => ({
+            ...d,
+            onShift: statusMap.get(d.key) ?? false,
+          })).sort((a, b) => {
+            // On-shift drivers first, then alphabetical
+            if (a.onShift && !b.onShift) return -1;
+            if (!a.onShift && b.onShift) return 1;
+            return (a.legalName || a.displayName).localeCompare(b.legalName || b.displayName);
+          }));
         } catch {}
       })();
     } catch (err) {
@@ -4645,25 +4644,21 @@ function CompletedJobsPanel({ jobs, drivers, allWells, allDisposals, highlightJo
                                   <div className="text-center py-1.5"><div className="text-[8px] text-gray-400 uppercase">BOTTOM</div><div className="text-xs font-semibold text-[#111] font-mono">{t.bottom || '--'}</div></div>
                                 </div>
                                 {(t.apiNo || t.legalDesc || t.county || t.hauledToApiNo || t.hauledToLegalDesc) && (
-                                  <div className="px-3 py-1.5 border-t border-gray-200">
-                                    {(t.apiNo || t.legalDesc || t.county) && (
-                                      <div className="mb-1">
-                                        <p className="text-[9px] font-semibold text-gray-500 mb-0.5">Pickup</p>
-                                        {t.apiNo && <p className="text-[9px] text-gray-400">API# {t.apiNo}</p>}
-                                        {t.county && <p className="text-[9px] text-gray-400">County: {t.county}</p>}
-                                        {t.legalDesc && <p className="text-[9px] text-gray-400">Legal: {t.legalDesc}</p>}
-                                        {t.gpsLat && <p className="text-[9px] text-gray-400">GPS: {Number(t.gpsLat).toFixed(7)}, {Number(t.gpsLng).toFixed(7)}</p>}
-                                      </div>
-                                    )}
-                                    {(t.hauledToApiNo || t.hauledToLegalDesc || t.hauledToCounty) && (
-                                      <div>
-                                        <p className="text-[9px] font-semibold text-gray-500 mb-0.5">Drop-off</p>
-                                        {t.hauledToApiNo && <p className="text-[9px] text-gray-400">API# {t.hauledToApiNo}</p>}
-                                        {t.hauledToCounty && <p className="text-[9px] text-gray-400">County: {t.hauledToCounty}</p>}
-                                        {t.hauledToLegalDesc && <p className="text-[9px] text-gray-400">Legal: {t.hauledToLegalDesc}</p>}
-                                        {t.hauledToGpsLat && <p className="text-[9px] text-gray-400">GPS: {Number(t.hauledToGpsLat).toFixed(7)}, {Number(t.hauledToGpsLng).toFixed(7)}</p>}
-                                      </div>
-                                    )}
+                                  <div className="px-3 py-1.5 border-t border-gray-200 grid grid-cols-2 gap-4">
+                                    <div>
+                                      <p className="text-[9px] font-semibold text-gray-500 mb-0.5">Pickup</p>
+                                      {t.apiNo && <p className="text-[9px] text-gray-400">API# {t.apiNo}</p>}
+                                      {t.county && <p className="text-[9px] text-gray-400">County: {t.county}</p>}
+                                      {t.legalDesc && <p className="text-[9px] text-gray-400">Legal: {t.legalDesc}</p>}
+                                      {t.gpsLat && <p className="text-[9px] text-gray-400">GPS: {Number(t.gpsLat).toFixed(7)}, {Number(t.gpsLng).toFixed(7)}</p>}
+                                    </div>
+                                    <div>
+                                      <p className="text-[9px] font-semibold text-gray-500 mb-0.5">Drop-off</p>
+                                      {t.hauledToApiNo && <p className="text-[9px] text-gray-400">API# {t.hauledToApiNo}</p>}
+                                      {t.hauledToCounty && <p className="text-[9px] text-gray-400">County: {t.hauledToCounty}</p>}
+                                      {t.hauledToLegalDesc && <p className="text-[9px] text-gray-400">Legal: {t.hauledToLegalDesc}</p>}
+                                      {t.hauledToGpsLat && <p className="text-[9px] text-gray-400">GPS: {Number(t.hauledToGpsLat).toFixed(7)}, {Number(t.hauledToGpsLng).toFixed(7)}</p>}
+                                    </div>
                                   </div>
                                 )}
                               </div>

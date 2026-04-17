@@ -48,7 +48,7 @@ export interface ChatThread {
 
 // ── Message Types ───────────────────────────────────────────────────────────
 
-export type MessageType = 'text' | 'system' | 'photo';
+export type MessageType = 'text' | 'system' | 'photo' | 'level_report';
 
 export type SystemMessageType =
   | 'level_report'
