@@ -2447,6 +2447,14 @@ export const onShiftCreate = functionsV1.firestore
     const driverPid = `driver:${driverId}`;
     const { ids: dispatchIds, names: dispatchNames } = await getDispatchParticipants(companyId);
 
+    // Skip thread creation if this company has no dispatchers — otherwise
+    // we create a phantom thread with only the driver as a participant,
+    // which shows up as a useless self-chat in their drawer.
+    if (dispatchIds.length === 0) {
+      console.log(`[WBChat] Skipping shift thread for ${driverName} — company ${companyId} has no dispatchers configured`);
+      return;
+    }
+
     const participants = [driverPid, ...dispatchIds];
     const participantNames: Record<string, string> = { [driverPid]: driverName, ...dispatchNames };
 
