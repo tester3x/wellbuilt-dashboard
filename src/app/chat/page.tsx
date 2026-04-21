@@ -299,14 +299,21 @@ export default function ChatPage() {
     if (!db) return;
     const unsubs: (() => void)[] = [];
     for (const threadId of activeThreadIds) {
+      // Query the 100 NEWEST messages (orderBy desc + limit) then reverse so
+      // render order stays ascending (oldest at top, newest at bottom).
+      // Previous `orderBy('timestamp', 'asc') + limit(100)` returned the 100
+      // OLDEST messages — any thread with >100 messages stopped showing new
+      // incoming messages in the main pane while the sidebar (which reads
+      // `thread.lastMessage` off the parent doc) kept updating.
       const q = query(
         collection(db, 'chat_threads', threadId, 'messages'),
-        orderBy('timestamp', 'asc'),
+        orderBy('timestamp', 'desc'),
         limit(100),
       );
       const unsub = onSnapshot(q, (snap) => {
         const msgs: ChatMessage[] = [];
         snap.forEach((d) => msgs.push({ id: d.id, ...d.data() } as ChatMessage));
+        msgs.reverse();
         setPaneMessages((prev) => ({ ...prev, [threadId]: msgs }));
         // Scroll after DOM renders — 50ms is too fast when switching profiles
         setTimeout(() => paneEndRefs.current[threadId]?.scrollIntoView({ behavior: 'smooth' }), 150);
