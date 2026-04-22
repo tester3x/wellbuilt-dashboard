@@ -46,23 +46,45 @@ export function AppHeader() {
     <header className="bg-gray-800 border-b border-gray-700 sticky top-0 z-40">
       {/* Three-column grid: buttons | title+tabs | bell */}
       <div className="w-full grid grid-cols-[auto_1fr_auto] items-start">
-        {/* LEFT: Admin + Sign Out, pinned to left edge */}
+        {/* LEFT: Admin + Truth tools (admin/it) + Sign Out, pinned to left edge */}
         <div className="flex items-center gap-2 px-4 pt-3">
           {(user.role === 'admin' || user.role === 'it') && (
-            <Link
-              href={pendingDriverCount > 0 ? '/admin?tab=drivers' : '/admin'}
-              className="relative px-4 py-2 bg-blue-600 hover:bg-blue-700 text-white rounded-lg transition-colors text-sm"
-            >
-              Admin
-              {pendingDriverCount > 0 && !pathname.startsWith('/admin') && (
-                <span className="absolute -top-1.5 -right-1.5 flex h-5 w-5">
-                  <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-red-400 opacity-75"></span>
-                  <span className="relative inline-flex rounded-full h-5 w-5 bg-red-500 text-[10px] text-white items-center justify-center font-bold">
-                    {pendingDriverCount}
+            <>
+              <Link
+                href={pendingDriverCount > 0 ? '/admin?tab=drivers' : '/admin'}
+                className="relative px-4 py-2 bg-blue-600 hover:bg-blue-700 text-white rounded-lg transition-colors text-sm"
+              >
+                Admin
+                {pendingDriverCount > 0 && !pathname.startsWith('/admin') && (
+                  <span className="absolute -top-1.5 -right-1.5 flex h-5 w-5">
+                    <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-red-400 opacity-75"></span>
+                    <span className="relative inline-flex rounded-full h-5 w-5 bg-red-500 text-[10px] text-white items-center justify-center font-bold">
+                      {pendingDriverCount}
+                    </span>
                   </span>
-                </span>
-              )}
-            </Link>
+                )}
+              </Link>
+              <Link
+                href="/admin/truth-debug"
+                className={`px-3 py-2 rounded-lg transition-colors text-sm ${
+                  pathname.startsWith('/admin/truth-debug')
+                    ? 'bg-gray-600 text-white'
+                    : 'bg-gray-700 hover:bg-gray-600 text-gray-200'
+                }`}
+              >
+                Truth Debug
+              </Link>
+              <Link
+                href="/admin/truth-rag-exports"
+                className={`px-3 py-2 rounded-lg transition-colors text-sm ${
+                  pathname.startsWith('/admin/truth-rag-exports')
+                    ? 'bg-gray-600 text-white'
+                    : 'bg-gray-700 hover:bg-gray-600 text-gray-200'
+                }`}
+              >
+                Truth RAG
+              </Link>
+            </>
           )}
           <button
             onClick={signOut}

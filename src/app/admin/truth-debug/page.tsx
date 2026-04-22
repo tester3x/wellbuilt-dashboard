@@ -233,7 +233,12 @@ export default function TruthDebugPage() {
   const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
-    if (!loading && (!user || (user.role !== 'admin' && user.role !== 'it'))) {
+    if (loading) return;
+    if (!user) {
+      router.push('/login');
+      return;
+    }
+    if (user.role !== 'admin' && user.role !== 'it') {
       router.push('/');
     }
   }, [user, loading, router]);

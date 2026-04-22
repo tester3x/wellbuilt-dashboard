@@ -3,8 +3,10 @@
 import { createContext, useContext, useEffect, useState, ReactNode } from 'react';
 import { WellBuiltUser, subscribeToAuthState, signIn, signOut, hasRole, UserRole } from '@/lib/auth';
 
-// DEV MODE - set to false once Firebase Auth is enabled
-const DEV_MODE = true;
+// Firebase Auth is enabled. DEV_MODE exists only as an emergency escape hatch
+// for local work when real auth is unavailable; deployed builds must run with
+// DEV_MODE = false so sign-out and admin-gated callables behave correctly.
+const DEV_MODE = false;
 const DEV_USER: WellBuiltUser = {
   uid: 'dev',
   email: 'dev@wellbuilt.com',
