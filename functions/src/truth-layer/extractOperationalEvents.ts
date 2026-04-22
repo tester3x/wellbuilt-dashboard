@@ -275,9 +275,12 @@ export function extractOperationalEvents(
   }
 
   return events.sort((a, b) => {
-    const ta = a.occurredAt ?? '';
-    const tb = b.occurredAt ?? '';
+    // Coerce to string defensively. Upstream sources sometimes hand us a
+    // number (unix-ms) or Date for occurredAt even though the type says
+    // string, which would crash .localeCompare with a cryptic TypeError.
+    const ta = String(a.occurredAt ?? '');
+    const tb = String(b.occurredAt ?? '');
     if (ta !== tb) return ta.localeCompare(tb);
-    return a.eventKey.localeCompare(b.eventKey);
+    return String(a.eventKey ?? '').localeCompare(String(b.eventKey ?? ''));
   });
 }

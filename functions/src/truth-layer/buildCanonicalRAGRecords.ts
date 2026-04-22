@@ -305,8 +305,11 @@ export function buildCanonicalRAGRecords(
   }
 
   return records.sort((a, b) => {
-    const ta = a.metadata.timestamp ?? '';
-    const tb = b.metadata.timestamp ?? '';
+    // Coerce to string — upstream occurredAt can leak in as number/Date
+    // from real data (see extractOperationalEvents sort for the same
+    // defense). Preserves deterministic ordering without crashing.
+    const ta = String(a.metadata.timestamp ?? '');
+    const tb = String(b.metadata.timestamp ?? '');
     if (ta !== tb) return ta.localeCompare(tb);
     if (a.metadata.type !== b.metadata.type) {
       return a.metadata.type.localeCompare(b.metadata.type);
