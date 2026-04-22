@@ -2988,3 +2988,48 @@ async function trackJsaLocation(data: PullPacket): Promise<void> {
     console.warn('[JsaTrack] Failed:', err);
   }
 }
+
+// ============================================================
+// PHASE 6 — TRUTH LAYER SHADOW ENDPOINTS
+// Read-only, admin-gated wrappers around the truth/canonical stack.
+// These do NOT replace any existing endpoint. See src/truth/README.md.
+// ============================================================
+export {
+  getIntegratedTruthForDay,
+  getDashboardReadModelForDay,
+  getRAGIngestBundleForDay,
+  getShadowComparisonForDay,
+} from './truth/truthWrappers';
+export { exportTruthRagForDay } from './truth/truthRagExport';
+
+// ============================================================
+// PHASE 7 — FIRST CONTROLLED PRODUCTION READ CONSUMER
+// Per-driver day summary derived from the truth/canonical stack.
+// The legacy Driver Logs path remains the default; this callable backs a
+// Truth/Compare toggle on /admin/driverlogs.
+// ============================================================
+export { getTruthDriverDaySummary } from './truth/truthDaySummary';
+
+// ============================================================
+// PHASE 8 — OPERATIONALIZED DERIVED RAG EXPORT LANE
+// Admin-gated list/detail/rerun callables over truth_rag_exports. No new
+// scheduler is registered; see truth/truthRagScheduled.ts for the disabled
+// template used to promote to a live schedule in a later phase.
+// ============================================================
+export { listTruthRagExports, getTruthRagExportRun } from './truth/truthRagHistory';
+export { rerunTruthRagExportForDay } from './truth/truthRagRerun';
+
+// ============================================================
+// PHASE 10 — IDENTITY HEALTH + STABILIZATION VISIBILITY
+// Admin-gated read-only surface over canonical operator identity health.
+// Pure diagnostics — no fixes, no write behavior, no canonical enforcement.
+// ============================================================
+export { getIdentityHealthView } from './truth/truthIdentityHealth';
+
+// ============================================================
+// PHASE 11 — CANONICAL LOCATION TRUST ADOPTION
+// Admin-gated read-only location-health surface. Visibility only — no
+// severity scoring, no risk flags, no canonical enforcement. Custom /
+// fallback locations remain first-class operational reality.
+// ============================================================
+export { getLocationHealthView } from './truth/truthLocationHealth';

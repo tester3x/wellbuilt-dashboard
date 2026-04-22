@@ -1,9 +1,11 @@
 'use client';
 
 import { useEffect, useState, useMemo } from 'react';
+import Link from 'next/link';
+import { httpsCallable } from 'firebase/functions';
 import { useAuth } from '@/contexts/AuthContext';
 import { AppHeader } from '@/components/AppHeader';
-import { getFirebaseDatabase } from '@/lib/firebase';
+import { getFirebaseDatabase, getFirebaseFunctions } from '@/lib/firebase';
 import { ref, get } from 'firebase/database';
 import { loadAllCompanies, type CompanyConfig } from '@/lib/companySettings';
 import {
@@ -20,6 +22,11 @@ import {
   type UnifiedEvent,
   type LogInvoice,
 } from '@/lib/driverLogs';
+import {
+  compareLegacyVsTruth,
+  type LegacyVsTruthComparison,
+  type TruthDaySummaryResult,
+} from '@/lib/truthCompare';
 
 // ── Helpers ──────────────────────────────────────────────────────────────────
 
@@ -62,6 +69,17 @@ export default function DriverLogsPage() {
   const [selectedDate, setSelectedDate] = useState(() => getLocalDateString());
   const [driverFilter, setDriverFilter] = useState<string>('all');
   const [expandedDrivers, setExpandedDrivers] = useState<Set<string>>(new Set());
+
+  // Phase 7: truth-layer view mode. Default stays 'legacy' — the existing
+  // Driver Logs experience is unchanged unless an admin explicitly opts in.
+  // Toggle is only exposed when a single driver is filtered, keeping the
+  // production blast radius tiny.
+  const [viewMode, setViewMode] = useState<'legacy' | 'truth' | 'compare'>(
+    'legacy'
+  );
+  const [truthResult, setTruthResult] = useState<TruthDaySummaryResult | null>(null);
+  const [truthLoading, setTruthLoading] = useState(false);
+  const [truthError, setTruthError] = useState<string | null>(null);
 
   // Company picker (WB admin)
   const [allCompanies, setAllCompanies] = useState<CompanyConfig[]>([]);
@@ -202,6 +220,60 @@ export default function DriverLogsPage() {
     return driverLogs.filter((l) => l.driverHash === driverFilter);
   }, [driverLogs, driverFilter]);
 
+  // ── Phase 7: truth-layer fetch (single-driver only) ──────────────────────
+  // Only fires when an admin has selected a specific driver AND explicitly
+  // opted into Truth / Compare. Never runs by default. Reset when date,
+  // driver, company, or mode changes.
+  const isSingleDriver = driverFilter !== 'all';
+  const shouldFetchTruth =
+    isSingleDriver && (viewMode === 'truth' || viewMode === 'compare');
+
+  useEffect(() => {
+    if (!shouldFetchTruth) {
+      setTruthResult(null);
+      setTruthError(null);
+      return;
+    }
+    let cancelled = false;
+    setTruthLoading(true);
+    setTruthError(null);
+    setTruthResult(null);
+
+    (async () => {
+      try {
+        const functions = getFirebaseFunctions();
+        const fn = httpsCallable(functions, 'getTruthDriverDaySummary');
+        const payload: { date: string; driverHash: string; companyId?: string } = {
+          date: selectedDate,
+          driverHash: driverFilter,
+        };
+        if (effectiveCompanyId) payload.companyId = effectiveCompanyId;
+        const res = await fn(payload);
+        if (cancelled) return;
+        setTruthResult(res.data as TruthDaySummaryResult);
+      } catch (err) {
+        if (cancelled) return;
+        setTruthError(err instanceof Error ? err.message : String(err));
+      } finally {
+        if (!cancelled) setTruthLoading(false);
+      }
+    })();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [shouldFetchTruth, selectedDate, driverFilter, effectiveCompanyId]);
+
+  const selectedLegacyLog = useMemo(() => {
+    if (!isSingleDriver) return null;
+    return driverLogs.find((l) => l.driverHash === driverFilter) ?? null;
+  }, [isSingleDriver, driverLogs, driverFilter]);
+
+  const truthVsLegacy: LegacyVsTruthComparison | null = useMemo(() => {
+    if (viewMode !== 'compare' || !truthResult) return null;
+    return compareLegacyVsTruth(selectedLegacyLog, truthResult);
+  }, [viewMode, truthResult, selectedLegacyLog]);
+
   // ── Toggle expand ──────────────────────────────────────────────────────────
   const toggleExpand = (hash: string) => {
     setExpandedDrivers((prev) => {
@@ -338,6 +410,26 @@ export default function DriverLogsPage() {
           </div>
         )}
 
+        {/* ── Phase 7: truth-layer view toggle (single-driver only) ── */}
+        {isSingleDriver && (
+          <TruthViewToggle
+            viewMode={viewMode}
+            onChange={setViewMode}
+          />
+        )}
+
+        {/* ── Phase 7: truth-layer panel ─────────────────────── */}
+        {isSingleDriver && viewMode !== 'legacy' && (
+          <TruthDaySummaryPanel
+            viewMode={viewMode}
+            loading={truthLoading}
+            error={truthError}
+            result={truthResult}
+            comparison={truthVsLegacy}
+            legacyLog={selectedLegacyLog}
+          />
+        )}
+
         {/* ── Error ───────────────────────────────────────────── */}
         {error && (
           <div className="mb-4 p-3 rounded bg-red-900/50 text-red-200 text-sm">
@@ -358,7 +450,9 @@ export default function DriverLogsPage() {
         )}
 
         {/* ── Driver Cards ────────────────────────────────────── */}
-        {!dataLoading && visibleLogs.map((log) => (
+        {/* In 'truth' view the legacy cards are hidden (but remain reachable
+            by switching back to Legacy/Compare — nothing is removed). */}
+        {!dataLoading && viewMode !== 'truth' && visibleLogs.map((log) => (
           <DriverCard
             key={log.driverHash}
             log={log}
@@ -654,6 +748,487 @@ function InvoiceSummaryRow({ invoice }: { invoice: LogInvoice }) {
           {invoice.status}
         </span>
       </div>
+    </div>
+  );
+}
+
+// ── Phase 7: Truth view toggle ─────────────────────────────────────────────
+
+function TruthViewToggle({
+  viewMode,
+  onChange,
+}: {
+  viewMode: 'legacy' | 'truth' | 'compare';
+  onChange: (mode: 'legacy' | 'truth' | 'compare') => void;
+}) {
+  const btn = (mode: 'legacy' | 'truth' | 'compare', label: string) => (
+    <button
+      onClick={() => onChange(mode)}
+      className={`px-3 py-1.5 text-xs font-medium transition-colors ${
+        viewMode === mode
+          ? 'bg-blue-600 text-white'
+          : 'bg-gray-800 text-gray-400 hover:text-white'
+      }`}
+    >
+      {label}
+    </button>
+  );
+  return (
+    <div className="mb-4 flex items-center gap-3 bg-gray-900 border border-gray-800 rounded-lg px-3 py-2">
+      <span className="text-xs text-gray-500 uppercase tracking-wide">View</span>
+      <div className="inline-flex overflow-hidden rounded border border-gray-700">
+        {btn('legacy', 'Legacy')}
+        {btn('truth', 'Truth (shadow)')}
+        {btn('compare', 'Compare')}
+      </div>
+      <span className="text-xs text-gray-500 ml-auto">
+        Truth-layer callable · read-only · admin/it only ·{' '}
+        <Link
+          href="/admin/truth-debug/"
+          className="text-blue-400 hover:text-blue-300 underline"
+        >
+          /admin/truth-debug
+        </Link>
+      </span>
+    </div>
+  );
+}
+
+// ── Phase 7: Truth day summary panel ───────────────────────────────────────
+
+function TruthDaySummaryPanel({
+  viewMode,
+  loading,
+  error,
+  result,
+  comparison,
+  legacyLog,
+}: {
+  viewMode: 'legacy' | 'truth' | 'compare';
+  loading: boolean;
+  error: string | null;
+  result: TruthDaySummaryResult | null;
+  comparison: LegacyVsTruthComparison | null;
+  legacyLog: DriverDayLog | null;
+}) {
+  if (loading) {
+    return (
+      <div className="mb-4 p-4 rounded bg-gray-900 border border-gray-800 text-gray-400 text-sm">
+        Fetching truth summary…
+      </div>
+    );
+  }
+  if (error) {
+    return (
+      <div className="mb-4 p-4 rounded bg-red-900/40 border border-red-700 text-red-200 text-sm">
+        <div className="font-semibold mb-1">Truth callable failed</div>
+        <pre className="text-xs whitespace-pre-wrap">{error}</pre>
+        <div className="text-xs mt-2 text-red-300/80">
+          Sign in as admin/it (not DEV_MODE). The callable requires Firebase
+          Auth + RTDB users/{'{uid}'}.role to be admin or it.
+        </div>
+      </div>
+    );
+  }
+  if (!result) return null;
+
+  // Phase 9 — canonical identity flags surfaced in Compare mode.
+  const identityFlags: string[] = [];
+  const op = result.operator;
+  if (op.identityConfidence === 'weak') identityFlags.push('legacy-name-only identity');
+  if (op.linkedKeys.length > 1) identityFlags.push('multiple identities merged');
+  if (
+    op.rawOperatorKey &&
+    op.canonicalOperatorKey &&
+    op.rawOperatorKey !== op.canonicalOperatorKey
+  ) {
+    identityFlags.push('canonical differs from raw');
+  }
+
+  const parallelWarnings = result.warnings.filter(
+    (w) => w.kind === 'operator_parallel_identities'
+  );
+
+  // Phase 11 — canonical location identity flags (compare mode only).
+  // Custom/fallback is valid operational reality — flags are informational.
+  const locationIdentityFlags: string[] = [];
+  const locs = result.summary.locationsVisited;
+  if (
+    locs.some(
+      (l) =>
+        l.locationConfidence === 'weak' ||
+        l.locationSourceKinds?.hasFallbackOnly === true
+    )
+  ) {
+    locationIdentityFlags.push('custom/fallback location');
+  }
+  if (locs.some((l) => (l.aliases?.length ?? 0) > 1)) {
+    locationIdentityFlags.push('multiple aliases grouped');
+  }
+  if (
+    locs.some(
+      (l) =>
+        l.canonicalLocationKey &&
+        l.rawLocationKey &&
+        l.canonicalLocationKey !== l.rawLocationKey
+    )
+  ) {
+    locationIdentityFlags.push('canonical differs from raw');
+  }
+  if (
+    locs.some(
+      (l) =>
+        l.locationConfidence &&
+        l.locationConfidence !== 'strong' &&
+        l.locationSourceKinds?.hasFallbackOnly !== true
+    )
+  ) {
+    locationIdentityFlags.push('non-official location source');
+  }
+
+  return (
+    <div className="mb-4 space-y-3">
+      <div className="bg-gray-900 border border-gray-800 rounded-lg p-4">
+        <div className="flex items-start justify-between mb-3 gap-4">
+          <div className="flex-1 min-w-0">
+            <div className="text-xs text-gray-500 uppercase tracking-wide">
+              Truth Summary
+            </div>
+            <div className="flex items-baseline gap-2 flex-wrap">
+              <span className="text-sm text-white">
+                {op.displayName ?? '(no display name resolved)'}
+              </span>
+              {op.identityConfidence && (
+                <span
+                  className={`text-[10px] uppercase tracking-wide px-1.5 py-0.5 rounded ${
+                    op.identityConfidence === 'strong'
+                      ? 'bg-green-800/40 text-green-200'
+                      : 'bg-amber-800/40 text-amber-200'
+                  }`}
+                  title={`Identity signals: ${JSON.stringify(op.sourceIdentities ?? {})}`}
+                >
+                  {op.identityConfidence} identity
+                </span>
+              )}
+            </div>
+            <div className="text-xs text-gray-400 font-mono mt-1 break-all">
+              canonical: {op.canonicalOperatorKey ?? '—'}
+            </div>
+            {op.rawOperatorKey &&
+              op.rawOperatorKey !== op.canonicalOperatorKey && (
+                <div className="text-xs text-amber-300 font-mono mt-0.5 break-all">
+                  raw (differs): {op.rawOperatorKey}
+                </div>
+              )}
+            {op.linkedKeys.length > 1 && (
+              <div className="text-xs text-gray-500 font-mono mt-0.5">
+                linkedKeys ({op.linkedKeys.length}): {op.linkedKeys.join(', ')}
+              </div>
+            )}
+          </div>
+          <div className="text-xs text-gray-500 font-mono flex-shrink-0">
+            {result.generatedAt}
+          </div>
+        </div>
+
+        {parallelWarnings.length > 0 && (
+          <div className="mb-3 p-2 rounded bg-amber-900/40 border border-amber-700/60 text-amber-200 text-xs">
+            <div className="font-semibold mb-1">
+              operator_parallel_identities ({parallelWarnings.length})
+            </div>
+            <ul className="font-mono space-y-0.5">
+              {parallelWarnings.map((w, i) => (
+                <li key={i}>· {w.message}</li>
+              ))}
+            </ul>
+          </div>
+        )}
+
+        <div className="grid grid-cols-2 md:grid-cols-4 gap-3 text-sm">
+          <TruthStat label="sessions" value={result.summary.sessions.length} />
+          <TruthStat
+            label="active min"
+            value={result.summary.totalActiveMinutes}
+          />
+          <TruthStat
+            label="locations"
+            value={result.summary.locationsVisited.length}
+          />
+          <TruthStat
+            label="activities"
+            value={result.summary.activitiesPerformed.length}
+          />
+          <TruthStat
+            label="jsa completed"
+            value={result.summary.jsaCompleted ? 'yes' : 'no'}
+          />
+          <TruthStat
+            label="events"
+            value={Object.values(result.summary.eventCounts).reduce(
+              (s, n) => s + n,
+              0
+            )}
+          />
+          <TruthStat
+            label="warnings"
+            value={result.warnings.length}
+          />
+          <TruthStat
+            label="sourceErrors"
+            value={result.sourceErrors.length}
+          />
+        </div>
+
+        {result.summary.locationsVisited.length > 0 && (
+          <div className="mt-4 pt-3 border-t border-gray-800">
+            <div className="text-xs text-gray-500 uppercase mb-1">
+              Locations
+            </div>
+            <div className="text-xs font-mono text-gray-300 flex flex-wrap gap-2">
+              {result.summary.locationsVisited.map((l) => (
+                <span
+                  key={l.locationKey}
+                  className="bg-gray-800 px-2 py-0.5 rounded inline-flex items-center gap-1.5"
+                  title={
+                    l.canonicalLocationKey
+                      ? `canonical: ${l.canonicalLocationKey}`
+                      : undefined
+                  }
+                >
+                  <span>
+                    {l.locationDisplayName ?? l.preferredName} · {l.eventCount}
+                  </span>
+                  {l.locationConfidence && (
+                    <span
+                      className={`text-[10px] uppercase px-1 py-0 rounded ${
+                        l.locationConfidence === 'strong'
+                          ? 'bg-green-800/40 text-green-200'
+                          : l.locationConfidence === 'medium'
+                            ? 'bg-sky-800/40 text-sky-200'
+                            : 'bg-amber-800/40 text-amber-200'
+                      }`}
+                    >
+                      {l.locationConfidence}
+                    </span>
+                  )}
+                  {l.aliases && l.aliases.length > 1 && (
+                    <span className="text-[10px] text-gray-400">
+                      +{l.aliases.length - 1}
+                    </span>
+                  )}
+                </span>
+              ))}
+            </div>
+          </div>
+        )}
+
+        {result.summary.activitiesPerformed.length > 0 && (
+          <div className="mt-3 pt-3 border-t border-gray-800">
+            <div className="text-xs text-gray-500 uppercase mb-1">
+              Activities
+            </div>
+            <div className="text-xs font-mono text-gray-300 flex flex-wrap gap-2">
+              {result.summary.activitiesPerformed.map((a) => (
+                <span
+                  key={a.activityKey}
+                  className="bg-gray-800 px-2 py-0.5 rounded"
+                >
+                  {a.canonicalLabel} · {a.rawCount}
+                </span>
+              ))}
+            </div>
+          </div>
+        )}
+
+        {result.warnings.length > 0 && (
+          <div className="mt-3 pt-3 border-t border-gray-800">
+            <div className="text-xs text-gray-500 uppercase mb-1">
+              Warnings
+            </div>
+            <ul className="text-xs font-mono text-amber-300 space-y-0.5 max-h-40 overflow-auto">
+              {result.warnings.map((w, i) => (
+                <li key={i}>
+                  <span className="text-amber-500">[{w.kind}]</span> {w.message}
+                </li>
+              ))}
+            </ul>
+          </div>
+        )}
+      </div>
+
+      {viewMode === 'compare' && (
+        <div
+          className={`rounded-lg p-4 border ${
+            comparison?.mismatchFlags.length || identityFlags.length
+              ? 'bg-amber-950/30 border-amber-800/50'
+              : 'bg-gray-900 border-gray-800'
+          }`}
+        >
+          <div className="flex items-center gap-2 mb-2 flex-wrap">
+            <span className="text-xs text-gray-500 uppercase tracking-wide">
+              Legacy vs Truth
+            </span>
+            {!comparison?.legacyAvailable && (
+              <span className="text-xs text-gray-400">
+                legacy unavailable ({legacyLog ? 'empty' : 'no driver log'})
+              </span>
+            )}
+            {comparison?.mismatchFlags.length ? (
+              <span className="text-xs bg-amber-700/40 text-amber-200 px-2 py-0.5 rounded">
+                {comparison.mismatchFlags.length} mismatch
+                {comparison.mismatchFlags.length === 1 ? '' : 'es'}:{' '}
+                {comparison.mismatchFlags.join(', ')}
+              </span>
+            ) : comparison?.legacyAvailable ? (
+              <span className="text-xs bg-green-800/40 text-green-200 px-2 py-0.5 rounded">
+                no structural mismatches
+              </span>
+            ) : null}
+          </div>
+
+          {/* Phase 9 — canonical-operator identity flags (compare mode only). */}
+          {identityFlags.length > 0 && (
+            <div className="mb-2 flex items-center gap-2 flex-wrap">
+              <span className="text-[10px] uppercase tracking-wide text-gray-500">
+                identity
+              </span>
+              {identityFlags.map((f) => (
+                <span
+                  key={f}
+                  className="text-xs bg-amber-800/40 text-amber-200 px-2 py-0.5 rounded font-mono"
+                >
+                  {f}
+                </span>
+              ))}
+            </div>
+          )}
+
+          {comparison && comparison.notableDifferences.length > 0 && (
+            <ul className="text-xs font-mono text-gray-300 space-y-1">
+              {comparison.notableDifferences.map((d, i) => (
+                <li key={i}>- {d}</li>
+              ))}
+            </ul>
+          )}
+
+          {/* Phase 9 — collapsible Operator Identity Debug panel. */}
+          <details className="mt-3 bg-gray-900/60 rounded border border-gray-800">
+            <summary className="px-3 py-2 cursor-pointer text-xs text-gray-400 uppercase tracking-wide">
+              Operator Identity Debug
+            </summary>
+            <div className="px-3 pb-3 text-xs font-mono text-gray-300 space-y-1">
+              <div>canonicalOperatorKey: {op.canonicalOperatorKey ?? '—'}</div>
+              <div>rawOperatorKey: {op.rawOperatorKey ?? '—'}</div>
+              <div>displayName: {op.displayName ?? '—'}</div>
+              <div>identityConfidence: {op.identityConfidence ?? '—'}</div>
+              <div>
+                linkedKeys ({op.linkedKeys.length}):{' '}
+                {op.linkedKeys.length > 0 ? op.linkedKeys.join(', ') : '—'}
+              </div>
+              <div>
+                sourceIdentities:{' '}
+                {op.sourceIdentities
+                  ? JSON.stringify(op.sourceIdentities)
+                  : '—'}
+              </div>
+              {legacyLog && (
+                <div className="pt-1 border-t border-gray-800/60 mt-1">
+                  legacy.driverHash: {legacyLog.driverHash}
+                </div>
+              )}
+            </div>
+          </details>
+
+          {/* Phase 11 — location identity flags (compare mode only). */}
+          {locationIdentityFlags.length > 0 && (
+            <div className="mt-3 flex items-center gap-2 flex-wrap">
+              <span className="text-[10px] uppercase tracking-wide text-gray-500">
+                location identity
+              </span>
+              {locationIdentityFlags.map((f) => (
+                <span
+                  key={f}
+                  className="text-xs bg-amber-800/40 text-amber-200 px-2 py-0.5 rounded font-mono"
+                >
+                  {f}
+                </span>
+              ))}
+            </div>
+          )}
+
+          {/* Phase 11 — collapsible Location Identity Debug panel. */}
+          {locs.length > 0 && (
+            <details className="mt-3 bg-gray-900/60 rounded border border-gray-800">
+              <summary className="px-3 py-2 cursor-pointer text-xs text-gray-400 uppercase tracking-wide">
+                Location Identity Debug
+              </summary>
+              <div className="px-3 pb-3 text-xs font-mono text-gray-300 space-y-2">
+                {locs.map((l) => (
+                  <div
+                    key={l.locationKey}
+                    className="border-b border-gray-800/40 pb-2 last:border-b-0 last:pb-0"
+                  >
+                    <div className="flex items-baseline gap-2 flex-wrap">
+                      <span className="text-white">
+                        {l.locationDisplayName ?? l.preferredName}
+                      </span>
+                      {l.locationConfidence && (
+                        <span
+                          className={`text-[10px] uppercase px-1 py-0 rounded ${
+                            l.locationConfidence === 'strong'
+                              ? 'bg-green-800/40 text-green-200'
+                              : l.locationConfidence === 'medium'
+                                ? 'bg-sky-800/40 text-sky-200'
+                                : 'bg-amber-800/40 text-amber-200'
+                          }`}
+                        >
+                          {l.locationConfidence}
+                        </span>
+                      )}
+                      {l.kind && (
+                        <span className="text-[10px] text-gray-400">
+                          kind={l.kind}
+                        </span>
+                      )}
+                    </div>
+                    <div className="text-gray-400 text-[11px]">
+                      canonicalLocationKey: {l.canonicalLocationKey ?? '—'}
+                    </div>
+                    <div className="text-gray-400 text-[11px]">
+                      rawLocationKey: {l.rawLocationKey ?? l.locationKey}
+                    </div>
+                    {l.locationSourceKinds && (
+                      <div className="text-gray-400 text-[11px]">
+                        sourceKinds: {JSON.stringify(l.locationSourceKinds)}
+                      </div>
+                    )}
+                    {l.aliases && l.aliases.length > 0 && (
+                      <div className="text-gray-400 text-[11px]">
+                        aliases ({l.aliases.length}): {l.aliases.join(', ')}
+                      </div>
+                    )}
+                  </div>
+                ))}
+              </div>
+            </details>
+          )}
+        </div>
+      )}
+    </div>
+  );
+}
+
+function TruthStat({
+  label,
+  value,
+}: {
+  label: string;
+  value: number | string;
+}) {
+  return (
+    <div className="bg-gray-950/60 border border-gray-800 rounded px-3 py-2">
+      <div className="text-xs text-gray-500">{label}</div>
+      <div className="text-sm font-mono text-white mt-0.5">{value}</div>
     </div>
   );
 }
