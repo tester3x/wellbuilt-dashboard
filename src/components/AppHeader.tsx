@@ -66,7 +66,7 @@ export function AppHeader() {
                 )}
               </Link>
               <Link
-                href="/admin/truth-debug"
+                href="/admin/truth-debug/"
                 className={`px-3 py-2 rounded-lg transition-colors text-sm ${
                   pathname.startsWith('/admin/truth-debug')
                     ? 'bg-gray-600 text-white'
@@ -76,7 +76,7 @@ export function AppHeader() {
                 Truth Debug
               </Link>
               <Link
-                href="/admin/truth-rag-exports"
+                href="/admin/truth-rag-exports/"
                 className={`px-3 py-2 rounded-lg transition-colors text-sm ${
                   pathname.startsWith('/admin/truth-rag-exports')
                     ? 'bg-gray-600 text-white'
