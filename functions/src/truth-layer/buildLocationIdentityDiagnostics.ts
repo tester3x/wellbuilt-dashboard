@@ -7,6 +7,7 @@ import type {
 import {
   getLocationConfidence,
   getLocationSourceKinds,
+  type LocationIdentityConfidence,
   type LocationSourceKinds,
 } from './canonicalLocationIdentity';
 import {
@@ -16,6 +17,7 @@ import {
 import { deriveLocationConvergencePreview } from './deriveLocationConvergencePreview';
 import { deriveLocationReviewDisposition } from './deriveLocationReviewDisposition';
 import { deriveEffectiveLocationConvergence } from './deriveEffectiveLocationConvergence';
+import { isOfficialSwd } from './swdReference';
 
 // Phase 12 — local trust threshold. Kept inline (not exported) on purpose.
 // "Small" alias grouping = up to this many *other* display names sharing the
@@ -99,6 +101,14 @@ function deriveTrustLevel(
  * facts (confidence, trust, convergence disposition, reasons, preview
  * flags) remain visible — the admin can still see why the row would have
  * been rejected automatically.
+ *
+ * Phase 18 adds a signal-level upgrade from a static SWD reference
+ * (see swdReference.ts). When the canonical view has no NDIC/SWD/
+ * well_config backing but the preferredName matches the reference under
+ * Phase 18 normalization, we substitute `{ hasSwd: true }` + strong
+ * confidence for the base signals. All Phase 12-16 derivation then runs
+ * naturally against the upgraded input. Phase 17 manual approval still
+ * overrides everything (it runs at the very end).
  */
 export interface BuildLocationIdentityDiagnosticsOptions {
   /**
@@ -116,8 +126,33 @@ export function buildLocationIdentityDiagnostics(
   const out: LocationIdentityDiagnostic[] = [];
 
   for (const loc of canonical.canonicalLocations) {
-    const sourceKinds = getLocationSourceKinds(loc);
-    const confidence = getLocationConfidence(loc);
+    const baseSourceKinds = getLocationSourceKinds(loc);
+    const baseConfidence = getLocationConfidence(loc);
+
+    // Phase 18 — if the canonical view has no NDIC/SWD/well_config
+    // backing but the preferredName matches the static SWD reference
+    // (exact-match under stricter Phase 18 normalization), upgrade the
+    // source signals. Everything downstream — isOfficialBacked,
+    // hasOfficialBacking, isCustomOnly/isFallbackOnly, trust level,
+    // convergence disposition, review, effective convergence — naturally
+    // flows from the adjusted signals without any logic duplication.
+    //
+    // Intentionally gated on "no existing backing": if the location
+    // already resolved via NDIC or well_config upstream, don't clobber
+    // that richer signal with a plain hasSwd flag.
+    const matchedSwdReference =
+      !baseSourceKinds.hasNdic &&
+      !baseSourceKinds.hasSwd &&
+      !baseSourceKinds.hasWellConfig &&
+      isOfficialSwd(loc.preferredName);
+
+    const sourceKinds: LocationSourceKinds = matchedSwdReference
+      ? { hasSwd: true }
+      : baseSourceKinds;
+    const confidence: LocationIdentityConfidence = matchedSwdReference
+      ? 'strong'
+      : baseConfidence;
+
     const aliases = [...loc.aliases].sort((a, b) => a.localeCompare(b));
     const aliasCount = aliases.length;
     const isOfficialBacked = !!(sourceKinds.hasNdic || sourceKinds.hasSwd);
@@ -150,6 +185,7 @@ export function buildLocationIdentityDiagnostics(
 
     const reasons: string[] = [];
     if (isOfficialBacked) reasons.push('official-backed location');
+    if (matchedSwdReference) reasons.push('matched SWD reference');
     if (sourceKinds.hasWellConfig)
       reasons.push('configured location without official backing');
     if (isCustomOnly) reasons.push('custom/fallback-only location');
