@@ -36,6 +36,20 @@ export async function signIn(email: string, password: string): Promise<WellBuilt
   return await getUserWithRole(result.user);
 }
 
+// Register a new dashboard account with email/password. Creates only the
+// Firebase Auth user — no RTDB users/{uid} record is written, so the new
+// account resolves to role = 'viewer' via getUserWithRole's default. A
+// WellBuilt admin must manually promote role to 'admin' or 'it' in RTDB to
+// grant admin page access.
+export async function registerWithEmail(
+  email: string,
+  password: string
+): Promise<WellBuiltUser> {
+  const auth = getFirebaseAuth();
+  const result = await createUserWithEmailAndPassword(auth, email, password);
+  return await getUserWithRole(result.user);
+}
+
 // Sign out
 export async function signOut(): Promise<void> {
   const auth = getFirebaseAuth();
