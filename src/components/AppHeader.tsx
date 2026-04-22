@@ -2,7 +2,7 @@
 
 import { useEffect, useState } from 'react';
 import Link from 'next/link';
-import { usePathname } from 'next/navigation';
+import { usePathname, useRouter } from 'next/navigation';
 import { ref, onValue } from 'firebase/database';
 import { useAuth } from '@/contexts/AuthContext';
 import { TABS, getActiveTab } from '@/lib/tabs';
@@ -15,6 +15,7 @@ import { getFirebaseDatabase } from '@/lib/firebase';
 export function AppHeader() {
   const { user, signOut } = useAuth();
   const pathname = usePathname();
+  const router = useRouter();
   const activeTabId = getActiveTab(pathname);
   const [pendingDriverCount, setPendingDriverCount] = useState(0);
   const [chatOpen, setChatOpen] = useState(false);
@@ -87,7 +88,10 @@ export function AppHeader() {
             </>
           )}
           <button
-            onClick={signOut}
+            onClick={async () => {
+              await signOut();
+              router.push('/login');
+            }}
             className="px-4 py-2 bg-red-600 hover:bg-red-700 text-white rounded-lg transition-colors text-sm"
           >
             Sign Out
