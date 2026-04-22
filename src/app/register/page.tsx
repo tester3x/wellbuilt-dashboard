@@ -9,6 +9,8 @@ export default function RegisterPage() {
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
   const [confirm, setConfirm] = useState('');
+  const [showPassword, setShowPassword] = useState(false);
+  const [showConfirm, setShowConfirm] = useState(false);
   const [error, setError] = useState('');
   const [loading, setLoading] = useState(false);
   const router = useRouter();
@@ -35,6 +37,7 @@ export default function RegisterPage() {
     } catch (err) {
       console.error('Register error:', err);
       const code = (err as { code?: string })?.code;
+      const message = (err as { message?: string })?.message;
       if (code === 'auth/email-already-in-use') {
         setError(
           'An account with this email already exists. Use Sign In instead.'
@@ -43,8 +46,22 @@ export default function RegisterPage() {
         setError('That email address is invalid.');
       } else if (code === 'auth/weak-password') {
         setError('Password is too weak. Use at least 6 characters.');
+      } else if (code === 'auth/operation-not-allowed') {
+        // Most likely first-time cause: Email/Password sign-in method isn't
+        // enabled. Firebase Console → Authentication → Sign-in method.
+        setError(
+          'Email/Password sign-in is not enabled in Firebase. Enable it in Firebase Console → Authentication → Sign-in method.'
+        );
+      } else if (code === 'auth/network-request-failed') {
+        setError('Network error reaching Firebase. Check connection and retry.');
       } else {
-        setError('Failed to create account. Please try again.');
+        // Surface the raw code + message so we can see exactly what happened
+        // instead of hiding it behind a generic fallback.
+        setError(
+          code
+            ? `Failed to create account (${code}). ${message ?? ''}`.trim()
+            : `Failed to create account. ${message ?? 'Please try again.'}`.trim()
+        );
       }
     } finally {
       setLoading(false);
@@ -61,7 +78,7 @@ export default function RegisterPage() {
 
         <form onSubmit={handleSubmit} className="space-y-6">
           {error && (
-            <div className="bg-red-900/50 border border-red-500 text-red-200 px-4 py-3 rounded">
+            <div className="bg-red-900/50 border border-red-500 text-red-200 px-4 py-3 rounded text-sm">
               {error}
             </div>
           )}
@@ -92,17 +109,28 @@ export default function RegisterPage() {
             >
               Password
             </label>
-            <input
-              id="password"
-              type="password"
-              value={password}
-              onChange={(e) => setPassword(e.target.value)}
-              required
-              autoComplete="new-password"
-              minLength={6}
-              className="w-full px-4 py-3 bg-gray-700 border border-gray-600 rounded-lg text-white placeholder-gray-400 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent"
-              placeholder="••••••••"
-            />
+            <div className="relative">
+              <input
+                id="password"
+                type={showPassword ? 'text' : 'password'}
+                value={password}
+                onChange={(e) => setPassword(e.target.value)}
+                required
+                autoComplete="new-password"
+                minLength={6}
+                className="w-full px-4 py-3 pr-14 bg-gray-700 border border-gray-600 rounded-lg text-white placeholder-gray-400 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent"
+                placeholder="••••••••"
+              />
+              <button
+                type="button"
+                onClick={() => setShowPassword((v) => !v)}
+                aria-label={showPassword ? 'Hide password' : 'Show password'}
+                tabIndex={-1}
+                className="absolute inset-y-0 right-0 px-3 text-gray-400 hover:text-gray-200 text-xs uppercase tracking-wide"
+              >
+                {showPassword ? 'Hide' : 'Show'}
+              </button>
+            </div>
           </div>
 
           <div>
@@ -112,17 +140,37 @@ export default function RegisterPage() {
             >
               Confirm password
             </label>
-            <input
-              id="confirm"
-              type="password"
-              value={confirm}
-              onChange={(e) => setConfirm(e.target.value)}
-              required
-              autoComplete="new-password"
-              minLength={6}
-              className="w-full px-4 py-3 bg-gray-700 border border-gray-600 rounded-lg text-white placeholder-gray-400 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent"
-              placeholder="••••••••"
-            />
+            <div className="relative">
+              <input
+                id="confirm"
+                type={showConfirm ? 'text' : 'password'}
+                value={confirm}
+                onChange={(e) => setConfirm(e.target.value)}
+                required
+                autoComplete="new-password"
+                minLength={6}
+                className="w-full px-4 py-3 pr-14 bg-gray-700 border border-gray-600 rounded-lg text-white placeholder-gray-400 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent"
+                placeholder="••••••••"
+              />
+              <button
+                type="button"
+                onClick={() => setShowConfirm((v) => !v)}
+                aria-label={showConfirm ? 'Hide password' : 'Show password'}
+                tabIndex={-1}
+                className="absolute inset-y-0 right-0 px-3 text-gray-400 hover:text-gray-200 text-xs uppercase tracking-wide"
+              >
+                {showConfirm ? 'Hide' : 'Show'}
+              </button>
+            </div>
+            {confirm.length > 0 && password.length > 0 && (
+              <p
+                className={`mt-1 text-xs ${
+                  password === confirm ? 'text-green-400' : 'text-amber-400'
+                }`}
+              >
+                {password === confirm ? 'Passwords match' : 'Passwords do not match'}
+              </p>
+            )}
           </div>
 
           <button
