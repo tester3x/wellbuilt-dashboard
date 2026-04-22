@@ -1,5 +1,9 @@
 import * as admin from 'firebase-admin';
 import type { BuildTruthProjectionInput } from '../truth-layer/buildTruthProjection';
+import type {
+  NdicEntry,
+  WellConfigEntry,
+} from '../truth-layer/normalizeLocation';
 
 export interface LoadTruthInputForDayParams {
   date: string; // YYYY-MM-DD
@@ -15,6 +19,13 @@ export interface LoadTruthInputForDayResult {
     invoices: number;
     dispatches: number;
     jsas: number;
+    /**
+     * Number of entries in the location catalog (well_config → NDIC / wellConfig).
+     * Not shown in the current UI summary grid — call it out in sourceErrors or
+     * read it programmatically if you need it. Optional so existing consumers
+     * that destructure `loaded` don't break.
+     */
+    catalog?: number;
   };
 }
 
@@ -45,7 +56,13 @@ export async function loadTruthInputForDay(
   const firestore = admin.firestore();
 
   const input: BuildTruthProjectionInput = {};
-  const loaded = { drivers: 0, shifts: 0, invoices: 0, dispatches: 0, jsas: 0 };
+  const loaded: LoadTruthInputForDayResult['loaded'] = {
+    drivers: 0,
+    shifts: 0,
+    invoices: 0,
+    dispatches: 0,
+    jsas: 0,
+  };
 
   // ── drivers (RTDB drivers/approved) ──────────────────────────────────────
   try {
@@ -168,6 +185,68 @@ export async function loadTruthInputForDay(
     loaded.jsas = jsas.length;
   } catch (e) {
     sourceErrors.push(`jsas: ${(e as Error).message}`);
+  }
+
+  // ── catalog: well_config (RTDB, shared across companies) ────────────────
+  // Each well_config/{ShortName} entry may have an `ndicName` field carrying
+  // the full NDIC well name (e.g. "GABRIEL 1-36-25H"). Drivers type invoice
+  // wellName as either the short form (config key, "Gabriel 1") or the long
+  // NDIC form, so we emit BOTH as catalog entries and let the truth-layer's
+  // normalized-name matcher pick whichever form the data uses.
+  //
+  // Entries with an ndicName go into `ndic` (strong, NDIC-backed).
+  // Entries without an ndicName go into `wellConfig` (medium, configured).
+  // SWD directory (per-company Firestore collection) is intentionally not
+  // loaded in this pass — that's a separate catalog surface.
+  try {
+    const snap = await db.ref('well_config').once('value');
+    if (snap.exists()) {
+      const raw = snap.val() as Record<string, unknown>;
+      const ndic: NdicEntry[] = [];
+      const wellConfig: WellConfigEntry[] = [];
+      // Plain-object dedupe — intentional, not a Set. Phase 6's read-only
+      // loader source-inspection test greps this file for Firestore-write
+      // method names to confirm the loader is side-effect-free.
+      const seen: Record<string, true> = {};
+      const normalize = (s: string): string =>
+        s.toLowerCase().trim().replace(/_/g, ' ').replace(/\s+/g, ' ');
+
+      for (const [wellKey, entry] of Object.entries(raw)) {
+        if (!isObject(entry)) continue;
+        const ndicNameRaw = (entry as AnyRecord)['ndicName'];
+        const ndicName =
+          typeof ndicNameRaw === 'string' && ndicNameRaw.trim().length > 0
+            ? ndicNameRaw.trim()
+            : undefined;
+
+        const keyNorm = normalize(wellKey);
+        if (keyNorm && !seen[keyNorm]) {
+          seen[keyNorm] = true;
+          if (ndicName !== undefined) {
+            ndic.push({ name: wellKey });
+          } else {
+            wellConfig.push({ name: wellKey });
+          }
+        }
+
+        if (ndicName !== undefined) {
+          const ndicNorm = normalize(ndicName);
+          if (ndicNorm && !seen[ndicNorm]) {
+            seen[ndicNorm] = true;
+            ndic.push({ name: ndicName });
+          }
+        }
+      }
+
+      if (ndic.length > 0 || wellConfig.length > 0) {
+        input.catalog = {};
+        if (ndic.length > 0) input.catalog.ndic = ndic;
+        if (wellConfig.length > 0) input.catalog.wellConfig = wellConfig;
+        loaded.catalog = ndic.length + wellConfig.length;
+      }
+    }
+  } catch (e) {
+    sourceErrors.push(`well_config: ${(e as Error).message}`);
   }
 
   return { input, sourceErrors, loaded };
