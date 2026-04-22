@@ -165,7 +165,8 @@ type LocationReviewDispositionState = 'unreviewed' | 'approved' | 'rejected';
 type LocationEffectiveConvergenceState = {
   effectiveLocationKey: string;
   effectiveDisplayName: string;
-  appliedByRule: 'approved_review';
+  // Phase 16 derived = 'approved_review'; Phase 17 admin override = 'manual_approval'.
+  appliedByRule: 'approved_review' | 'manual_approval';
   sourceCanonicalLocationKey: string;
 };
 
@@ -191,6 +192,10 @@ type LocationIdentityDiagnosticState = {
   convergenceDisposition?: LocationConvergenceDispositionState;
   reviewDisposition?: LocationReviewDispositionState;
   effectiveConvergence?: LocationEffectiveConvergenceState;
+  // Phase 17 — persisted manual admin approval flags. Optional; only
+  // present when the deployed callable has Phase 17 loader wired in.
+  manuallyApproved?: boolean;
+  manualApprovalAt?: string;
 };
 
 type LocationReviewCountsState = {
@@ -511,6 +516,8 @@ export default function TruthDebugPage() {
             <LocationHealthSection
               health={result.locationHealth}
               error={result.locationHealthError}
+              companyId={result.companyId}
+              onApprovalDone={runShadow}
             />
           </>
         )}
@@ -760,10 +767,45 @@ function convergenceChip(
 function LocationHealthSection({
   health,
   error,
+  companyId,
+  onApprovalDone,
 }: {
   health: LocationHealthDashboardClientState | null;
   error: string | null;
+  companyId: string | null;
+  onApprovalDone: () => void;
 }) {
+  // Phase 17 — per-row in-flight tracker so each Approve button can disable
+  // itself without blocking the rest of the drilldown.
+  const [approvingKey, setApprovingKey] = useState<string | null>(null);
+  const [approvalError, setApprovalError] = useState<string | null>(null);
+
+  async function handleApprove(
+    diagnostic: LocationIdentityDiagnosticState
+  ): Promise<void> {
+    setApprovalError(null);
+    setApprovingKey(diagnostic.canonicalLocationKey);
+    try {
+      const functions = getFirebaseFunctions();
+      const approve = httpsCallable(functions, 'approveTruthLocation');
+      const payload: {
+        canonicalLocationKey: string;
+        approvedDisplayName: string;
+        companyId?: string;
+      } = {
+        canonicalLocationKey: diagnostic.canonicalLocationKey,
+        approvedDisplayName: diagnostic.preferredName,
+      };
+      if (companyId) payload.companyId = companyId;
+      await approve(payload);
+      // Rerun the full shadow read to pick up the new approval.
+      onApprovalDone();
+    } catch (err) {
+      setApprovalError(err instanceof Error ? err.message : String(err));
+    } finally {
+      setApprovingKey(null);
+    }
+  }
   return (
     <section className="bg-gray-800 rounded p-4">
       <h3 className="text-sm font-semibold text-white mb-3">
@@ -785,6 +827,13 @@ function LocationHealthSection({
           <div className="text-xs text-gray-400">
             generatedAt: {health.generatedAt}
           </div>
+
+          {approvalError && (
+            <div className="p-2 rounded bg-red-900/40 border border-red-700 text-red-200 text-xs">
+              <span className="font-semibold">Approval failed: </span>
+              {approvalError}
+            </div>
+          )}
 
           {/* Summary counts */}
           <div className="grid grid-cols-3 md:grid-cols-4 lg:grid-cols-7 gap-x-6 gap-y-2">
@@ -896,6 +945,9 @@ function LocationHealthSection({
                   const eff = d.effectiveConvergence;
                   const rawMatchesEffective =
                     !!eff && eff.effectiveDisplayName === d.preferredName;
+                  const isManuallyApproved = d.manuallyApproved === true;
+                  const isApproving =
+                    approvingKey === d.canonicalLocationKey;
                   return (
                     <div
                       key={d.canonicalLocationKey}
@@ -935,6 +987,32 @@ function LocationHealthSection({
                           >
                             {d.reviewDisposition}
                           </span>
+                        )}
+                        {isManuallyApproved && (
+                          <span
+                            className="uppercase px-1.5 py-0.5 rounded text-[10px] bg-blue-900/40 text-blue-200"
+                            title={
+                              d.manualApprovalAt
+                                ? `Manually approved at ${d.manualApprovalAt}`
+                                : 'Manually approved by admin'
+                            }
+                          >
+                            manual approval
+                          </span>
+                        )}
+                        {/* Phase 17 — single-click Approve. Hidden once the row
+                            is manually approved (no unapprove path yet). */}
+                        {!isManuallyApproved && (
+                          <button
+                            type="button"
+                            onClick={() => {
+                              void handleApprove(d);
+                            }}
+                            disabled={isApproving}
+                            className="ml-auto px-2 py-0.5 rounded text-[10px] bg-emerald-700 hover:bg-emerald-600 disabled:bg-emerald-900 disabled:cursor-not-allowed text-white transition-colors"
+                          >
+                            {isApproving ? 'Approving…' : 'Approve'}
+                          </button>
                         )}
                       </div>
                       <div className="text-gray-400 font-mono text-[11px] mt-0.5">

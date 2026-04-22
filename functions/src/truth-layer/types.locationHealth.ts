@@ -76,8 +76,35 @@ export type LocationReviewDisposition = 'unreviewed' | 'approved' | 'rejected';
 export interface LocationEffectiveConvergence {
   effectiveLocationKey: string;
   effectiveDisplayName: string;
-  appliedByRule: 'approved_review';
+  /**
+   * Which rule attached this block.
+   *   - 'approved_review'  : Phase 16 derived (clean candidate + approved)
+   *   - 'manual_approval'  : Phase 17 admin override (persisted approval)
+   */
+  appliedByRule: 'approved_review' | 'manual_approval';
   sourceCanonicalLocationKey: string;
+}
+
+/**
+ * Phase 17 — persisted human approval of a canonical location. Minimal,
+ * factual. Stored by the admin-gated `approveTruthLocation` callable in
+ * RTDB at `truth_overrides/location_approvals/{scope}/{safeKey}`.
+ *
+ * Reading paths fold this in AFTER the derived Phase 12-16 facts to
+ * override `reviewDisposition` and attach `effectiveConvergence`. The
+ * derived facts themselves (confidence, trust level, convergence
+ * disposition, reasons, preview flags) are preserved visible — the
+ * admin sees why the row WOULD have been rejected alongside the
+ * override.
+ */
+export interface LocationManualApproval {
+  canonicalLocationKey: string;
+  approvedDisplayName: string;
+  approvedByUid: string;
+  approvedByEmail?: string;
+  approvedAt: string; // ISO 8601
+  companyScope: string; // companyId or '_global'
+  active: boolean;
 }
 
 export interface LocationIdentityDiagnostic {
@@ -119,6 +146,12 @@ export interface LocationIdentityDiagnostic {
   // Phase 16 — derived effective identity for approved locations only.
   // Absent for everything else. Read-only hook; never rewrites source truth.
   effectiveConvergence?: LocationEffectiveConvergence;
+  // Phase 17 — persisted manual approval flags. Present only when a
+  // matching `LocationManualApproval` record was found for this canonical
+  // key. The underlying derived facts (confidence, convergence disposition,
+  // reasons, preview flags) remain visible on the same diagnostic.
+  manuallyApproved?: boolean;
+  manualApprovalAt?: string; // ISO 8601 — mirrors LocationManualApproval.approvedAt
 }
 
 export interface LocationHealthSummary {

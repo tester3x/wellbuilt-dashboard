@@ -1,6 +1,7 @@
 import type { CanonicalProjection } from './types.canonical';
 import type {
   LocationIdentityDiagnostic,
+  LocationManualApproval,
   LocationTrustLevel,
 } from './types.locationHealth';
 import {
@@ -88,9 +89,29 @@ function deriveTrustLevel(
  * Present only when reviewDisposition === 'approved'. NEVER rewrites
  * canonicalLocationKey / preferredName / aliases; those remain the
  * authoritative source of truth on the diagnostic.
+ *
+ * Phase 17 (manualApprovalsByKey) folds persisted admin approvals into
+ * the read pipeline. If a canonicalLocationKey has an `active` approval
+ * record, the derived review disposition is overridden to 'approved',
+ * reviewReasons becomes ['manually approved by admin'], and an
+ * effectiveConvergence block is attached with
+ * `appliedByRule: 'manual_approval'`. The underlying Phase 12-15 derived
+ * facts (confidence, trust, convergence disposition, reasons, preview
+ * flags) remain visible — the admin can still see why the row would have
+ * been rejected automatically.
  */
+export interface BuildLocationIdentityDiagnosticsOptions {
+  /**
+   * Phase 17 — map of canonicalLocationKey → active persisted admin
+   * approval. Built once by the caller (Cloud Function) from the
+   * RTDB approval store and reused here. Absent entries = no override.
+   */
+  manualApprovalsByKey?: Record<string, LocationManualApproval>;
+}
+
 export function buildLocationIdentityDiagnostics(
-  canonical: CanonicalProjection
+  canonical: CanonicalProjection,
+  options: BuildLocationIdentityDiagnosticsOptions = {}
 ): LocationIdentityDiagnostic[] {
   const out: LocationIdentityDiagnostic[] = [];
 
@@ -168,11 +189,7 @@ export function buildLocationIdentityDiagnostics(
 
     // Phase 15 — derived review disposition. Pure recomputation from the
     // Phase 11-14 facts above. Never persisted, never written anywhere.
-    const {
-      disposition: reviewDisposition,
-      reasons: reviewReasons,
-      isEligible: isReviewEligible,
-    } = deriveLocationReviewDisposition({
+    const derivedReview = deriveLocationReviewDisposition({
       convergenceDisposition,
       locationTrustLevel,
       isStableIdentity,
@@ -185,12 +202,39 @@ export function buildLocationIdentityDiagnostics(
     // Phase 16 — derived effective identity for approved diagnostics.
     // Absent for everything else. Read-only hook; never rewrites source
     // truth (canonicalLocationKey, preferredName, aliases all stay as-is).
-    const effectiveConvergence = deriveEffectiveLocationConvergence({
-      reviewDisposition,
+    const derivedEffective = deriveEffectiveLocationConvergence({
+      reviewDisposition: derivedReview.disposition,
       canonicalLocationKey: loc.canonicalLocationKey,
       preferredName: loc.preferredName,
       convergencePreview,
     });
+
+    // Phase 17 — fold in persisted manual approval (if any) for this
+    // canonical key. Overrides reviewDisposition + reviewReasons and
+    // attaches an effectiveConvergence block with rule 'manual_approval'.
+    // Derived Phase 12-16 facts on other fields are preserved.
+    const manualApproval =
+      options.manualApprovalsByKey?.[loc.canonicalLocationKey];
+    const isManual = manualApproval?.active === true;
+
+    const reviewDisposition = isManual
+      ? 'approved'
+      : derivedReview.disposition;
+    const reviewReasons = isManual
+      ? ['manually approved by admin']
+      : derivedReview.reasons;
+    const isReviewEligible = isManual ? true : derivedReview.isEligible;
+
+    const effectiveConvergence = isManual
+      ? {
+          effectiveLocationKey: loc.canonicalLocationKey,
+          effectiveDisplayName:
+            manualApproval?.approvedDisplayName?.trim() ||
+            loc.preferredName,
+          appliedByRule: 'manual_approval' as const,
+          sourceCanonicalLocationKey: loc.canonicalLocationKey,
+        }
+      : derivedEffective;
 
     const diag: LocationIdentityDiagnostic = {
       canonicalLocationKey: loc.canonicalLocationKey,
@@ -223,6 +267,12 @@ export function buildLocationIdentityDiagnostics(
     }
     if (effectiveConvergence !== undefined) {
       diag.effectiveConvergence = effectiveConvergence;
+    }
+    if (isManual) {
+      diag.manuallyApproved = true;
+      if (manualApproval?.approvedAt) {
+        diag.manualApprovalAt = manualApproval.approvedAt;
+      }
     }
     out.push(diag);
   }

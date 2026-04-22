@@ -3033,3 +3033,14 @@ export { getIdentityHealthView } from './truth/truthIdentityHealth';
 // fallback locations remain first-class operational reality.
 // ============================================================
 export { getLocationHealthView } from './truth/truthLocationHealth';
+
+// ============================================================
+// PHASE 17 — MANUAL LOCATION APPROVAL (FIRST WRITE-CAPABLE PATH)
+// Admin-gated single-action callable that persists an approval record
+// to RTDB (truth_overrides/location_approvals/{scope}/{safeKey}).
+// Subsequent getLocationHealthView reads fold this in, overriding the
+// derived review disposition and attaching an effectiveConvergence
+// block with rule 'manual_approval'. Source truth — canonicalLocations,
+// preferredName, aliases — is never modified. No unapprove path yet.
+// ============================================================
+export { approveTruthLocation } from './truth/truthLocationApproval';

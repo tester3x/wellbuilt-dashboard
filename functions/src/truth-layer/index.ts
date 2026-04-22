@@ -168,6 +168,7 @@ export type {
   LocationSourceKinds,
 } from './canonicalLocationIdentity';
 export { buildLocationIdentityDiagnostics } from './buildLocationIdentityDiagnostics';
+export type { BuildLocationIdentityDiagnosticsOptions } from './buildLocationIdentityDiagnostics';
 export { buildLocationHealthView } from './buildLocationHealthView';
 export type { BuildLocationHealthViewOptions } from './buildLocationHealthView';
 export { buildLocationHealthDashboardSummary } from './buildLocationHealthDashboardSummary';
@@ -189,6 +190,7 @@ export type {
   LocationReviewCounts,
   LocationEffectiveConvergence,
   LocationEffectiveConvergenceCounts,
+  LocationManualApproval,
 } from './types.locationHealth';
 export {
   deriveLocationConvergenceDisposition,

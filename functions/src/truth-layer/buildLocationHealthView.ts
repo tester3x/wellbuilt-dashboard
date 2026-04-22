@@ -3,6 +3,7 @@ import type {
   LocationHealthSummary,
   LocationHealthView,
   LocationIdentityDiagnostic,
+  LocationManualApproval,
 } from './types.locationHealth';
 import { buildLocationIdentityDiagnostics } from './buildLocationIdentityDiagnostics';
 
@@ -31,17 +32,25 @@ function summarize(
 
 export interface BuildLocationHealthViewOptions {
   generatedAt?: string;
+  /**
+   * Phase 17 — persisted admin approvals to fold into the derived review
+   * pipeline. Built once by the caller from the RTDB store; passed here
+   * as a map keyed by canonicalLocationKey for O(1) diagnostic lookup.
+   */
+  manualApprovalsByKey?: Record<string, LocationManualApproval>;
 }
 
 /**
  * Lightweight location-health composer (visibility only — no severity scoring).
- * Pure and deterministic given fixed generatedAt.
+ * Pure and deterministic given fixed generatedAt + approvals.
  */
 export function buildLocationHealthView(
   canonical: CanonicalProjection,
   options: BuildLocationHealthViewOptions = {}
 ): LocationHealthView {
-  const diagnostics = buildLocationIdentityDiagnostics(canonical);
+  const diagnostics = buildLocationIdentityDiagnostics(canonical, {
+    manualApprovalsByKey: options.manualApprovalsByKey,
+  });
   const summary = summarize(diagnostics);
   const generatedAt = options.generatedAt ?? new Date().toISOString();
   return { summary, diagnostics, generatedAt };

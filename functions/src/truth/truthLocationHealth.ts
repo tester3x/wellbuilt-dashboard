@@ -8,6 +8,7 @@ import {
 } from '../truth-layer';
 import { requireAdminRole } from './requireAdminRole';
 import { loadTruthInputForDay } from './loadTruthInputForDay';
+import { loadLocationApprovals } from './loadLocationApprovals';
 
 interface RawRequest {
   date?: string;
@@ -56,7 +57,18 @@ export const getLocationHealthView = httpsV2.onCall(
     const projection = buildTruthProjection(input);
     const canonical = buildCanonicalProjection(projection);
 
-    const view = buildLocationHealthView(canonical);
+    // Phase 17 — fold persisted admin location approvals into the view.
+    // Loader is best-effort; if it errors, the view still renders with the
+    // original derived-only classification. sourceError string is appended
+    // to the existing sourceErrors array so admins can see loader issues.
+    const approvalResult = await loadLocationApprovals(parsed.companyId);
+    if (approvalResult.sourceError) {
+      sourceErrors.push(approvalResult.sourceError);
+    }
+
+    const view = buildLocationHealthView(canonical, {
+      manualApprovalsByKey: approvalResult.approvalsByKey,
+    });
     const dashboard = buildLocationHealthDashboardSummary(view);
 
     const response: Record<string, unknown> = {
@@ -64,6 +76,7 @@ export const getLocationHealthView = httpsV2.onCall(
       generatedAt: view.generatedAt,
       loaded,
       sourceErrors,
+      approvalsApplied: approvalResult.count,
     };
     if (parsed.includeDiagnostics) {
       response.view = view;
