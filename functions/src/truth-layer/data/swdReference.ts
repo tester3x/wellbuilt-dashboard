@@ -27,4 +27,6 @@ export const SWD_REFERENCE: ReadonlyArray<SwdReferenceEntry> = [
   // Phase 19 additions — disposals observed as fallback-only in live data
   // after Phase 18 deploy.
   { name: 'MORK 24-8', type: 'disposal' },
+  // Phase 20 additions — NDIC SWD list entries observed on live tickets.
+  { name: 'WO WATFORD #1', type: 'swd' },
 ];

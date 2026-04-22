@@ -1026,22 +1026,18 @@ function LocationHealthSection({
                             manual approval
                           </span>
                         )}
-                        {/* Phase 17 — single-click Approve on non-manual rows.
-                            Phase 19 — swaps to Revoke once manually approved.
-                            The two buttons occupy the same right-edge slot so
-                            the row layout stays consistent. */}
-                        {!isManuallyApproved ? (
-                          <button
-                            type="button"
-                            onClick={() => {
-                              void handleApprove(d);
-                            }}
-                            disabled={isApproving}
-                            className="ml-auto px-2 py-0.5 rounded text-[10px] bg-emerald-700 hover:bg-emerald-600 disabled:bg-emerald-900 disabled:cursor-not-allowed text-white transition-colors"
-                          >
-                            {isApproving ? 'Approving…' : 'Approve'}
-                          </button>
-                        ) : (
+                        {/* Phase 17/19/20 — three-branch action slot:
+                              1. manuallyApproved  → Revoke (soft-delete)
+                              2. already auto-approved (no manual override)
+                                 → NO button (Phase 20: don't invite a
+                                 redundant manual override on a clean
+                                 auto-approved row)
+                              3. otherwise (unreviewed / rejected / older
+                                 payloads with no reviewDisposition) →
+                                 Approve (manual promotion / override)
+                            All three share the same right-edge slot so the
+                            row layout stays consistent. */}
+                        {isManuallyApproved ? (
                           <button
                             type="button"
                             onClick={() => {
@@ -1052,6 +1048,18 @@ function LocationHealthSection({
                             className="ml-auto px-2 py-0.5 rounded text-[10px] bg-red-800 hover:bg-red-700 disabled:bg-red-900 disabled:cursor-not-allowed text-white transition-colors"
                           >
                             {isRevoking ? 'Revoking…' : 'Revoke'}
+                          </button>
+                        ) : d.reviewDisposition === 'approved' ? null : (
+                          <button
+                            type="button"
+                            onClick={() => {
+                              void handleApprove(d);
+                            }}
+                            disabled={isApproving}
+                            title="Manually promote this location to approved (overrides derived classification)"
+                            className="ml-auto px-2 py-0.5 rounded text-[10px] bg-emerald-700 hover:bg-emerald-600 disabled:bg-emerald-900 disabled:cursor-not-allowed text-white transition-colors"
+                          >
+                            {isApproving ? 'Approving…' : 'Approve'}
                           </button>
                         )}
                       </div>
