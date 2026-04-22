@@ -160,6 +160,15 @@ export interface LocationIdentityDiagnostic {
   // reasons, preview flags) remain visible on the same diagnostic.
   manuallyApproved?: boolean;
   manualApprovalAt?: string; // ISO 8601 — mirrors LocationManualApproval.approvedAt
+  // Phase 21 — SWD reference promotion candidate flag. Display-only hint
+  // for the Truth Debug "Add to SWD Ref" button. Fires when:
+  //   isFallbackOnly === true
+  //   AND (kind === 'disposal' OR preferredName contains "swd"/"disposal")
+  //   AND NOT manually approved
+  //   AND NOT already matched by the SWD reference (static or runtime)
+  // Not a signal used by any classification logic — strictly a UI hint.
+  swdReferenceCandidate?: boolean;
+  swdReferenceCandidateReason?: string;
 }
 
 export interface LocationHealthSummary {

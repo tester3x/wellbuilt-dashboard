@@ -4,11 +4,13 @@ import {
   buildCanonicalProjection,
   buildLocationHealthDashboardSummary,
   buildLocationHealthView,
+  buildSwdReferenceSet,
   buildTruthProjection,
 } from '../truth-layer';
 import { requireAdminRole } from './requireAdminRole';
 import { loadTruthInputForDay } from './loadTruthInputForDay';
 import { loadLocationApprovals } from './loadLocationApprovals';
+import { loadSwdReferenceRuntime } from './loadSwdReferenceRuntime';
 
 interface RawRequest {
   date?: string;
@@ -58,16 +60,27 @@ export const getLocationHealthView = httpsV2.onCall(
     const canonical = buildCanonicalProjection(projection);
 
     // Phase 17 — fold persisted admin location approvals into the view.
-    // Loader is best-effort; if it errors, the view still renders with the
-    // original derived-only classification. sourceError string is appended
-    // to the existing sourceErrors array so admins can see loader issues.
-    const approvalResult = await loadLocationApprovals(parsed.companyId);
+    // Phase 21 — also load runtime SWD reference entries so the match
+    // set merges static seed + admin-added entries. Both loaders are
+    // best-effort; if either errors, the view still renders (degrades
+    // to derived-only classification / static-only SWD match).
+    // Run in parallel — they read different RTDB paths, no dependency.
+    const [approvalResult, swdRuntimeResult] = await Promise.all([
+      loadLocationApprovals(parsed.companyId),
+      loadSwdReferenceRuntime(),
+    ]);
     if (approvalResult.sourceError) {
       sourceErrors.push(approvalResult.sourceError);
     }
+    if (swdRuntimeResult.sourceError) {
+      sourceErrors.push(swdRuntimeResult.sourceError);
+    }
+
+    const swdReferenceSet = buildSwdReferenceSet(swdRuntimeResult.entries);
 
     const view = buildLocationHealthView(canonical, {
       manualApprovalsByKey: approvalResult.approvalsByKey,
+      swdReferenceSet,
     });
     const dashboard = buildLocationHealthDashboardSummary(view);
 
@@ -77,6 +90,8 @@ export const getLocationHealthView = httpsV2.onCall(
       loaded,
       sourceErrors,
       approvalsApplied: approvalResult.count,
+      swdReferenceRuntimeCount: swdRuntimeResult.count,
+      swdReferenceRuntimeInactiveCount: swdRuntimeResult.inactiveCount,
     };
     if (parsed.includeDiagnostics) {
       response.view = view;

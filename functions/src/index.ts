@@ -3053,3 +3053,13 @@ export {
   approveTruthLocation,
   revokeTruthLocationApproval,
 } from './truth/truthLocationApproval';
+
+// ============================================================
+// PHASE 21 — SWD REFERENCE RUNTIME CATALOG
+// Admin-gated callable that promotes an SWD/disposal name into a
+// writable RTDB catalog (truth_reference/swd_catalog/{safeKey}).
+// Subsequent getLocationHealthView reads merge this with the static
+// seed (shared/truth-layer/data/swdReference.ts) so admin additions
+// take effect immediately on the next shadow read — no redeploy.
+// ============================================================
+export { addTruthSwdReference } from './truth/truthSwdReference';

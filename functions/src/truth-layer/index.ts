@@ -171,7 +171,15 @@ export { buildLocationIdentityDiagnostics } from './buildLocationIdentityDiagnos
 export type { BuildLocationIdentityDiagnosticsOptions } from './buildLocationIdentityDiagnostics';
 // Phase 18 — official SWD reference + normalization helper.
 export { normalizeLocationNameForOfficialMatch } from './normalizeOfficialLocationName';
-export { isOfficialSwd, getSwdReferenceNames } from './swdReference';
+export {
+  isOfficialSwd,
+  getSwdReferenceNames,
+  buildSwdReferenceSet,
+} from './swdReference';
+export type {
+  SwdReferenceRuntimeEntry,
+  BuildSwdReferenceSetOptions,
+} from './swdReference';
 export { SWD_REFERENCE } from './data/swdReference';
 export type { SwdReferenceEntry } from './data/swdReference';
 export { buildLocationHealthView } from './buildLocationHealthView';

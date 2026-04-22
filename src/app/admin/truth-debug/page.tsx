@@ -196,6 +196,11 @@ type LocationIdentityDiagnosticState = {
   // present when the deployed callable has Phase 17 loader wired in.
   manuallyApproved?: boolean;
   manualApprovalAt?: string;
+  // Phase 21 — SWD reference promotion candidate flag. Display-only.
+  // Present only for fallback-only disposal-like rows that are NOT
+  // manually approved AND NOT already in the SWD reference.
+  swdReferenceCandidate?: boolean;
+  swdReferenceCandidateReason?: string;
 };
 
 type LocationReviewCountsState = {
@@ -775,12 +780,13 @@ function LocationHealthSection({
   companyId: string | null;
   onApprovalDone: () => void;
 }) {
-  // Phase 17/19 — per-row in-flight tracker shared between Approve and
-  // Revoke so each button can disable itself without blocking the rest
-  // of the drilldown. Error surface shared too — the same red banner at
-  // the top of §7 catches both approve and revoke failures.
+  // Phase 17/19/21 — per-row in-flight tracker shared between Approve,
+  // Revoke, and Add-to-SWD-Ref so each button can disable itself without
+  // blocking the rest of the drilldown. Error surface shared too — the
+  // same red banner at the top of §7 catches all three actions' failures.
   const [approvingKey, setApprovingKey] = useState<string | null>(null);
   const [revokingKey, setRevokingKey] = useState<string | null>(null);
+  const [addingSwdKey, setAddingSwdKey] = useState<string | null>(null);
   const [approvalError, setApprovalError] = useState<string | null>(null);
 
   async function handleApprove(
@@ -828,6 +834,26 @@ function LocationHealthSection({
       setApprovalError(err instanceof Error ? err.message : String(err));
     } finally {
       setRevokingKey(null);
+    }
+  }
+
+  async function handleAddToSwdRef(
+    diagnostic: LocationIdentityDiagnosticState
+  ): Promise<void> {
+    setApprovalError(null);
+    setAddingSwdKey(diagnostic.canonicalLocationKey);
+    try {
+      const functions = getFirebaseFunctions();
+      const add = httpsCallable(functions, 'addTruthSwdReference');
+      // Send the raw preferredName — the callable normalizes + stores
+      // both raw and normalized forms. Runtime SWD catalog is global
+      // (not company-scoped), so no companyId sent.
+      await add({ name: diagnostic.preferredName });
+      onApprovalDone();
+    } catch (err) {
+      setApprovalError(err instanceof Error ? err.message : String(err));
+    } finally {
+      setAddingSwdKey(null);
     }
   }
   return (
@@ -974,6 +1000,10 @@ function LocationHealthSection({
                     approvingKey === d.canonicalLocationKey;
                   const isRevoking =
                     revokingKey === d.canonicalLocationKey;
+                  const isAddingSwd =
+                    addingSwdKey === d.canonicalLocationKey;
+                  const isSwdRefCandidate =
+                    d.swdReferenceCandidate === true;
                   return (
                     <div
                       key={d.canonicalLocationKey}
@@ -1026,7 +1056,7 @@ function LocationHealthSection({
                             manual approval
                           </span>
                         )}
-                        {/* Phase 17/19/20 — three-branch action slot:
+                        {/* Phase 17/19/20/21 — three-branch action slot:
                               1. manuallyApproved  → Revoke (soft-delete)
                               2. already auto-approved (no manual override)
                                  → NO button (Phase 20: don't invite a
@@ -1035,33 +1065,59 @@ function LocationHealthSection({
                               3. otherwise (unreviewed / rejected / older
                                  payloads with no reviewDisposition) →
                                  Approve (manual promotion / override)
-                            All three share the same right-edge slot so the
-                            row layout stays consistent. */}
-                        {isManuallyApproved ? (
-                          <button
-                            type="button"
-                            onClick={() => {
-                              void handleRevoke(d);
-                            }}
-                            disabled={isRevoking}
-                            title="Revoke manual approval (soft-delete; auto-backing kicks in if applicable)"
-                            className="ml-auto px-2 py-0.5 rounded text-[10px] bg-red-800 hover:bg-red-700 disabled:bg-red-900 disabled:cursor-not-allowed text-white transition-colors"
-                          >
-                            {isRevoking ? 'Revoking…' : 'Revoke'}
-                          </button>
-                        ) : d.reviewDisposition === 'approved' ? null : (
-                          <button
-                            type="button"
-                            onClick={() => {
-                              void handleApprove(d);
-                            }}
-                            disabled={isApproving}
-                            title="Manually promote this location to approved (overrides derived classification)"
-                            className="ml-auto px-2 py-0.5 rounded text-[10px] bg-emerald-700 hover:bg-emerald-600 disabled:bg-emerald-900 disabled:cursor-not-allowed text-white transition-colors"
-                          >
-                            {isApproving ? 'Approving…' : 'Approve'}
-                          </button>
-                        )}
+                            Phase 21 adds an additional amber "Add to SWD
+                            Ref" button, positioned BEFORE Approve on rows
+                            flagged swdReferenceCandidate — it's the more
+                            reusable fix (next admin with the same name
+                            won't need to approve at all). The cluster
+                            shares a right-edge flex container so the
+                            layout stays consistent. */}
+                        <div className="ml-auto flex items-center gap-1">
+                          {isManuallyApproved ? (
+                            <button
+                              type="button"
+                              onClick={() => {
+                                void handleRevoke(d);
+                              }}
+                              disabled={isRevoking}
+                              title="Revoke manual approval (soft-delete; auto-backing kicks in if applicable)"
+                              className="px-2 py-0.5 rounded text-[10px] bg-red-800 hover:bg-red-700 disabled:bg-red-900 disabled:cursor-not-allowed text-white transition-colors"
+                            >
+                              {isRevoking ? 'Revoking…' : 'Revoke'}
+                            </button>
+                          ) : d.reviewDisposition === 'approved' ? null : (
+                            <>
+                              {isSwdRefCandidate && (
+                                <button
+                                  type="button"
+                                  onClick={() => {
+                                    void handleAddToSwdRef(d);
+                                  }}
+                                  disabled={isAddingSwd}
+                                  title={
+                                    d.swdReferenceCandidateReason
+                                      ? `Promote to SWD reference — ${d.swdReferenceCandidateReason}`
+                                      : 'Promote to SWD reference (runtime catalog)'
+                                  }
+                                  className="px-2 py-0.5 rounded text-[10px] bg-amber-700 hover:bg-amber-600 disabled:bg-amber-900 disabled:cursor-not-allowed text-white transition-colors"
+                                >
+                                  {isAddingSwd ? 'Adding…' : 'Add to SWD Ref'}
+                                </button>
+                              )}
+                              <button
+                                type="button"
+                                onClick={() => {
+                                  void handleApprove(d);
+                                }}
+                                disabled={isApproving}
+                                title="Manually promote this location to approved (overrides derived classification)"
+                                className="px-2 py-0.5 rounded text-[10px] bg-emerald-700 hover:bg-emerald-600 disabled:bg-emerald-900 disabled:cursor-not-allowed text-white transition-colors"
+                              >
+                                {isApproving ? 'Approving…' : 'Approve'}
+                              </button>
+                            </>
+                          )}
+                        </div>
                       </div>
                       <div className="text-gray-400 font-mono text-[11px] mt-0.5">
                         sourceKinds: {JSON.stringify(d.sourceKinds)}

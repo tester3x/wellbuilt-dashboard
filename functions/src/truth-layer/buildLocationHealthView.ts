@@ -38,11 +38,18 @@ export interface BuildLocationHealthViewOptions {
    * as a map keyed by canonicalLocationKey for O(1) diagnostic lookup.
    */
   manualApprovalsByKey?: Record<string, LocationManualApproval>;
+  /**
+   * Phase 21 — hybrid SWD reference match set. Built via
+   * `buildSwdReferenceSet(runtimeEntries)` in the caller; passed through
+   * to the diagnostics builder. When absent, the diagnostics builder
+   * falls back to the static-only index inside `isOfficialSwd`.
+   */
+  swdReferenceSet?: ReadonlySet<string>;
 }
 
 /**
  * Lightweight location-health composer (visibility only — no severity scoring).
- * Pure and deterministic given fixed generatedAt + approvals.
+ * Pure and deterministic given fixed generatedAt + approvals + swdReferenceSet.
  */
 export function buildLocationHealthView(
   canonical: CanonicalProjection,
@@ -50,6 +57,7 @@ export function buildLocationHealthView(
 ): LocationHealthView {
   const diagnostics = buildLocationIdentityDiagnostics(canonical, {
     manualApprovalsByKey: options.manualApprovalsByKey,
+    swdReferenceSet: options.swdReferenceSet,
   });
   const summary = summarize(diagnostics);
   const generatedAt = options.generatedAt ?? new Date().toISOString();

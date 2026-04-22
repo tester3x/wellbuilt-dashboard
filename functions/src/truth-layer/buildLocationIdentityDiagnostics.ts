@@ -109,6 +109,12 @@ function deriveTrustLevel(
  * confidence for the base signals. All Phase 12-16 derivation then runs
  * naturally against the upgraded input. Phase 17 manual approval still
  * overrides everything (it runs at the very end).
+ *
+ * Phase 21 extends the SWD reference to a hybrid static+runtime pool
+ * (see `options.swdReferenceSet`) and adds a display-only
+ * `swdReferenceCandidate` hint for fallback-only disposal-like rows
+ * that could be promoted into the SWD reference by an admin click.
+ * No classification logic keys off the candidate flag — it's UI only.
  */
 export interface BuildLocationIdentityDiagnosticsOptions {
   /**
@@ -117,6 +123,14 @@ export interface BuildLocationIdentityDiagnosticsOptions {
    * RTDB approval store and reused here. Absent entries = no override.
    */
   manualApprovalsByKey?: Record<string, LocationManualApproval>;
+  /**
+   * Phase 21 — optional pre-normalized SWD reference match set. Built
+   * by the caller via `buildSwdReferenceSet(runtimeEntries)` so both
+   * the static seed and any runtime-loaded entries participate. When
+   * absent, the diagnostics builder falls back to the static-only
+   * index inside `isOfficialSwd` — preserves pre-Phase-21 behavior.
+   */
+  swdReferenceSet?: ReadonlySet<string>;
 }
 
 export function buildLocationIdentityDiagnostics(
@@ -130,7 +144,7 @@ export function buildLocationIdentityDiagnostics(
     const baseConfidence = getLocationConfidence(loc);
 
     // Phase 18 — if the canonical view has no NDIC/SWD/well_config
-    // backing but the preferredName matches the static SWD reference
+    // backing but the preferredName matches the SWD reference
     // (exact-match under stricter Phase 18 normalization), upgrade the
     // source signals. Everything downstream — isOfficialBacked,
     // hasOfficialBacking, isCustomOnly/isFallbackOnly, trust level,
@@ -140,11 +154,16 @@ export function buildLocationIdentityDiagnostics(
     // Intentionally gated on "no existing backing": if the location
     // already resolved via NDIC or well_config upstream, don't clobber
     // that richer signal with a plain hasSwd flag.
+    //
+    // Phase 21 — the reference set is now hybrid. If the caller passed
+    // `options.swdReferenceSet` (built via `buildSwdReferenceSet()` from
+    // the static seed + runtime RTDB entries), we use that. Otherwise
+    // `isOfficialSwd` falls back to its static-only index.
     const matchedSwdReference =
       !baseSourceKinds.hasNdic &&
       !baseSourceKinds.hasSwd &&
       !baseSourceKinds.hasWellConfig &&
-      isOfficialSwd(loc.preferredName);
+      isOfficialSwd(loc.preferredName, options.swdReferenceSet);
 
     const sourceKinds: LocationSourceKinds = matchedSwdReference
       ? { hasSwd: true }
@@ -310,6 +329,33 @@ export function buildLocationIdentityDiagnostics(
         diag.manualApprovalAt = manualApproval.approvedAt;
       }
     }
+
+    // Phase 21 — SWD reference promotion candidate flag. Display-only
+    // hint for the Truth Debug "Add to SWD Ref" button. Derived from
+    // already-computed signals; does NOT feed into any classification
+    // logic. Strict gate:
+    //   - fallback-only (== isCustomOnly, since SWD match flipped this
+    //     to false already if applicable)
+    //   - kind === 'disposal' OR preferredName carries a standalone
+    //     "swd" or "disposal" word
+    //   - NOT manually approved
+    // The `\b(swd|disposal)\b` word-boundary guard avoids matching
+    // locations like "boardwalk" that happen to contain letter
+    // sequences. Keyword scan is intentional — no fuzzy logic beyond
+    // the explicit dictionary.
+    if (
+      isFallbackOnly &&
+      !isManual &&
+      (loc.kind === 'disposal' ||
+        /\b(swd|disposal)\b/i.test(loc.preferredName))
+    ) {
+      diag.swdReferenceCandidate = true;
+      diag.swdReferenceCandidateReason =
+        loc.kind === 'disposal'
+          ? 'disposal-kind fallback-only'
+          : 'name contains swd/disposal keyword';
+    }
+
     out.push(diag);
   }
 
