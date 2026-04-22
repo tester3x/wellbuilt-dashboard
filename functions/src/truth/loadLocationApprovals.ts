@@ -66,6 +66,18 @@ function readApprovalsUnder(
     if (typeof e.approvedByEmail === 'string' && e.approvedByEmail) {
       approval.approvedByEmail = e.approvedByEmail;
     }
+    // Phase 19 — optional revoke audit trail. Only present on records that
+    // have been revoked (active: false) — the approve callable writes a
+    // fresh record with active: true and no revoke fields.
+    if (typeof e.revokedAt === 'string' && e.revokedAt) {
+      approval.revokedAt = e.revokedAt;
+    }
+    if (typeof e.revokedByUid === 'string' && e.revokedByUid) {
+      approval.revokedByUid = e.revokedByUid;
+    }
+    if (typeof e.revokedByEmail === 'string' && e.revokedByEmail) {
+      approval.revokedByEmail = e.revokedByEmail;
+    }
     out[canonicalLocationKey] = approval;
   }
   return out;

@@ -775,9 +775,12 @@ function LocationHealthSection({
   companyId: string | null;
   onApprovalDone: () => void;
 }) {
-  // Phase 17 — per-row in-flight tracker so each Approve button can disable
-  // itself without blocking the rest of the drilldown.
+  // Phase 17/19 — per-row in-flight tracker shared between Approve and
+  // Revoke so each button can disable itself without blocking the rest
+  // of the drilldown. Error surface shared too — the same red banner at
+  // the top of §7 catches both approve and revoke failures.
   const [approvingKey, setApprovingKey] = useState<string | null>(null);
+  const [revokingKey, setRevokingKey] = useState<string | null>(null);
   const [approvalError, setApprovalError] = useState<string | null>(null);
 
   async function handleApprove(
@@ -804,6 +807,27 @@ function LocationHealthSection({
       setApprovalError(err instanceof Error ? err.message : String(err));
     } finally {
       setApprovingKey(null);
+    }
+  }
+
+  async function handleRevoke(
+    diagnostic: LocationIdentityDiagnosticState
+  ): Promise<void> {
+    setApprovalError(null);
+    setRevokingKey(diagnostic.canonicalLocationKey);
+    try {
+      const functions = getFirebaseFunctions();
+      const revoke = httpsCallable(functions, 'revokeTruthLocationApproval');
+      const payload: { canonicalLocationKey: string; companyId?: string } = {
+        canonicalLocationKey: diagnostic.canonicalLocationKey,
+      };
+      if (companyId) payload.companyId = companyId;
+      await revoke(payload);
+      onApprovalDone();
+    } catch (err) {
+      setApprovalError(err instanceof Error ? err.message : String(err));
+    } finally {
+      setRevokingKey(null);
     }
   }
   return (
@@ -948,6 +972,8 @@ function LocationHealthSection({
                   const isManuallyApproved = d.manuallyApproved === true;
                   const isApproving =
                     approvingKey === d.canonicalLocationKey;
+                  const isRevoking =
+                    revokingKey === d.canonicalLocationKey;
                   return (
                     <div
                       key={d.canonicalLocationKey}
@@ -1000,9 +1026,11 @@ function LocationHealthSection({
                             manual approval
                           </span>
                         )}
-                        {/* Phase 17 — single-click Approve. Hidden once the row
-                            is manually approved (no unapprove path yet). */}
-                        {!isManuallyApproved && (
+                        {/* Phase 17 — single-click Approve on non-manual rows.
+                            Phase 19 — swaps to Revoke once manually approved.
+                            The two buttons occupy the same right-edge slot so
+                            the row layout stays consistent. */}
+                        {!isManuallyApproved ? (
                           <button
                             type="button"
                             onClick={() => {
@@ -1012,6 +1040,18 @@ function LocationHealthSection({
                             className="ml-auto px-2 py-0.5 rounded text-[10px] bg-emerald-700 hover:bg-emerald-600 disabled:bg-emerald-900 disabled:cursor-not-allowed text-white transition-colors"
                           >
                             {isApproving ? 'Approving…' : 'Approve'}
+                          </button>
+                        ) : (
+                          <button
+                            type="button"
+                            onClick={() => {
+                              void handleRevoke(d);
+                            }}
+                            disabled={isRevoking}
+                            title="Revoke manual approval (soft-delete; auto-backing kicks in if applicable)"
+                            className="ml-auto px-2 py-0.5 rounded text-[10px] bg-red-800 hover:bg-red-700 disabled:bg-red-900 disabled:cursor-not-allowed text-white transition-colors"
+                          >
+                            {isRevoking ? 'Revoking…' : 'Revoke'}
                           </button>
                         )}
                       </div>

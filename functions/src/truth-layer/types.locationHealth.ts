@@ -105,6 +105,14 @@ export interface LocationManualApproval {
   approvedAt: string; // ISO 8601
   companyScope: string; // companyId or '_global'
   active: boolean;
+  // Phase 19 — optional revoke audit trail. Set by revokeTruthLocationApproval
+  // when `active` flips to false. Preserved through subsequent re-approves
+  // (the approve callable writes a fresh record via `.set()`, so these
+  // fields disappear when the admin re-approves — fresh approval, fresh
+  // timestamp). Soft-delete by design; source-of-truth audit stays in RTDB.
+  revokedAt?: string; // ISO 8601
+  revokedByUid?: string;
+  revokedByEmail?: string;
 }
 
 export interface LocationIdentityDiagnostic {

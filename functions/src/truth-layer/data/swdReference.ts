@@ -24,4 +24,7 @@ export const SWD_REFERENCE: ReadonlyArray<SwdReferenceEntry> = [
   { name: 'CURL 23-14', type: 'disposal' },
   { name: 'MAUSER FEDERAL 3-1 8-17H', type: 'disposal' },
   { name: 'MAUSER FEDERAL 9-18-17TFH', type: 'disposal' },
+  // Phase 19 additions — disposals observed as fallback-only in live data
+  // after Phase 18 deploy.
+  { name: 'MORK 24-8', type: 'disposal' },
 ];

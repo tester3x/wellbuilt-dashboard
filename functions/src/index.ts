@@ -3041,6 +3041,15 @@ export { getLocationHealthView } from './truth/truthLocationHealth';
 // Subsequent getLocationHealthView reads fold this in, overriding the
 // derived review disposition and attaching an effectiveConvergence
 // block with rule 'manual_approval'. Source truth — canonicalLocations,
-// preferredName, aliases — is never modified. No unapprove path yet.
+// preferredName, aliases — is never modified.
+//
+// PHASE 19 — adds the paired `revokeTruthLocationApproval` callable.
+// Soft-delete (active: false + revoke audit fields), idempotent, same
+// admin gate. Revoked records stop participating in read-path
+// overrides, letting Phase 18 SWD auto-backing take over where it
+// applies.
 // ============================================================
-export { approveTruthLocation } from './truth/truthLocationApproval';
+export {
+  approveTruthLocation,
+  revokeTruthLocationApproval,
+} from './truth/truthLocationApproval';

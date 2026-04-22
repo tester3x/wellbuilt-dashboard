@@ -109,13 +109,130 @@ export const approveTruthLocation = httpsV2.onCall(
       .ref(`truth_overrides/location_approvals/${scope}/${safeKey}`);
 
     // set() — idempotent overwrite. Re-approvals update approvedAt +
-    // approvedBy naturally.
+    // approvedBy naturally. Any previous revoke audit fields are cleared
+    // (intentional: re-approving is a fresh decision, not a resurrection).
     await ref.set(approval);
 
     return {
       ok: true,
       approval,
       path: `truth_overrides/location_approvals/${scope}/${safeKey}`,
+    };
+  }
+);
+
+// ─────────────────────────────────────────────────────────────────────────
+// Phase 19 — revoke path
+// ─────────────────────────────────────────────────────────────────────────
+
+interface RawRevokeRequest {
+  canonicalLocationKey?: string;
+  companyId?: string;
+}
+
+interface ParsedRevokeRequest {
+  canonicalLocationKey: string;
+  scope: string; // companyId or '_global'
+}
+
+function parseRevokeRequest(data: unknown): ParsedRevokeRequest {
+  const req = (data ?? {}) as RawRevokeRequest;
+  const canonicalLocationKey =
+    typeof req.canonicalLocationKey === 'string'
+      ? req.canonicalLocationKey.trim()
+      : '';
+  if (!canonicalLocationKey) {
+    throw new HttpsError(
+      'invalid-argument',
+      'Missing required `canonicalLocationKey`.'
+    );
+  }
+  if (canonicalLocationKey.includes('/')) {
+    throw new HttpsError(
+      'invalid-argument',
+      '`canonicalLocationKey` cannot contain `/`.'
+    );
+  }
+  const companyIdRaw =
+    typeof req.companyId === 'string' ? req.companyId.trim() : '';
+  const scope = companyIdRaw.length > 0 ? companyIdRaw : '_global';
+  return { canonicalLocationKey, scope };
+}
+
+/**
+ * Phase 19 — revoke a persisted admin location approval.
+ *
+ * Admin-gated (requireAdminRole -> admin | it). Soft-delete by design:
+ * the existing record at `truth_overrides/location_approvals/{scope}/
+ * {safeKey}` is mutated with `active: false` plus audit fields
+ * (revokedAt / revokedByUid / revokedByEmail), NOT removed. This
+ * preserves an auditable history of who approved what and when it
+ * was revoked.
+ *
+ * Idempotent:
+ *   - missing record   -> returns { ok: true, alreadyInactive: true,
+ *                                   note: 'no approval found' }
+ *   - already inactive -> returns { ok: true, alreadyInactive: true }
+ *                         (refreshes revokedAt/revokedBy for audit)
+ *   - active record    -> flips active to false, stamps revoke fields
+ *
+ * After revoke:
+ *   - getLocationHealthView reads see active: false → diagnostic builder
+ *     no longer overrides reviewDisposition
+ *   - if the location has official SWD backing (Phase 18) or catalog
+ *     backing (Phase 11), it still resolves automatically
+ *   - if nothing else backs it, it falls back to fallback-only (original
+ *     Phase 11 default)
+ *
+ * Source truth is never modified — canonicalLocations / preferredName /
+ * aliases stay exactly as they were before the original approval.
+ */
+export const revokeTruthLocationApproval = httpsV2.onCall(
+  { timeoutSeconds: 30, memory: '256MiB' },
+  async (request) => {
+    const identity = await requireAdminRole(request);
+    const { canonicalLocationKey, scope } = parseRevokeRequest(request.data);
+
+    const safeKey = canonicalKeyToRtdbSafe(canonicalLocationKey);
+    const path = `truth_overrides/location_approvals/${scope}/${safeKey}`;
+    const ref = admin.database().ref(path);
+
+    const snap = await ref.once('value');
+    if (!snap.exists()) {
+      // Nothing to revoke. Return success so the client can treat this
+      // as idempotent — e.g. if the user double-clicked or re-ran after
+      // an earlier cleanup.
+      return {
+        ok: true,
+        alreadyInactive: true,
+        path,
+        note: 'no approval found',
+      };
+    }
+
+    const revokedAt = new Date().toISOString();
+    const revokePatch: {
+      active: false;
+      revokedAt: string;
+      revokedByUid: string;
+      revokedByEmail?: string;
+    } = {
+      active: false,
+      revokedAt,
+      revokedByUid: identity.uid,
+    };
+    if (identity.email) revokePatch.revokedByEmail = identity.email;
+
+    // Partial update preserves original approvedBy / approvedAt /
+    // approvedDisplayName / canonicalLocationKey / companyScope.
+    await ref.update(revokePatch);
+
+    const afterSnap = await ref.once('value');
+    return {
+      ok: true,
+      alreadyInactive: snap.val()?.active === false,
+      approval: afterSnap.val(),
+      path,
     };
   }
 );
