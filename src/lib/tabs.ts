@@ -1,11 +1,18 @@
-import type { UserRole } from './auth';
+import type { Capability, UserRole } from './auth';
 
 export interface TabConfig {
   id: string;
   label: string;
   href: string;
   matchPrefixes: string[];
-  minRole?: UserRole;  // minimum role level to see this tab
+  /**
+   * Capability required to see this tab. When set, visible only if
+   * hasCapability(user, capability, companyConfig) === true. Unset = always.
+   * Prefer this over minRole in new code.
+   */
+  capability?: Capability;
+  /** Legacy role gate — kept for backwards-compat, ignored when `capability` is set. */
+  minRole?: UserRole;
 }
 
 export const TABS: TabConfig[] = [
@@ -14,48 +21,56 @@ export const TABS: TabConfig[] = [
     label: 'Home',
     href: '/',
     matchPrefixes: ['/'],
+    // Always visible (no capability gate)
   },
   {
     id: 'mobile',
     label: 'WB Mobile',
     href: '/mobile',
     matchPrefixes: ['/mobile', '/well', '/performance'],
+    capability: 'viewMobile',
   },
   {
     id: 'tickets',
     label: 'WB Tickets',
     href: '/tickets',
     matchPrefixes: ['/tickets'],
+    capability: 'viewTickets',
   },
   {
     id: 'dispatch',
     label: 'Dispatch',
     href: '/dispatch',
     matchPrefixes: ['/dispatch'],
+    capability: 'viewDispatch',
   },
   {
     id: 'billing',
     label: 'WB Billing',
     href: '/billing',
     matchPrefixes: ['/billing'],
+    capability: 'viewBilling',
   },
   {
     id: 'payroll',
     label: 'WB Payroll',
     href: '/payroll',
     matchPrefixes: ['/payroll'],
+    capability: 'viewPayroll',
   },
   {
     id: 'driverlogs',
     label: 'Driver Logs',
     href: '/driverlogs',
     matchPrefixes: ['/driverlogs'],
+    capability: 'viewDriverLogs',
   },
   {
     id: 'settings',
     label: 'Settings',
     href: '/settings',
     matchPrefixes: ['/settings'],
+    capability: 'viewSettings',
     minRole: 'admin',
   },
 ];

@@ -6,7 +6,7 @@ import { usePathname, useRouter } from 'next/navigation';
 import { ref, onValue } from 'firebase/database';
 import { useAuth } from '@/contexts/AuthContext';
 import { TABS, getActiveTab } from '@/lib/tabs';
-import { hasRole } from '@/lib/auth';
+import { getRoleLabel, hasCapability, hasRole } from '@/lib/auth';
 import { NotificationBell } from './NotificationBell';
 import { ChatIcon } from './chat/ChatIcon';
 import { ChatSidebar } from './chat/ChatSidebar';
@@ -26,7 +26,7 @@ export function AppHeader() {
   // Pulse stops ONLY when the actual pending drivers are approved/rejected.
   useEffect(() => {
     if (!user) return;
-    if (user.role !== 'admin' && user.role !== 'it' && user.role !== 'manager') return;
+    if (!hasCapability(user, 'manageDrivers')) return;
 
     const db = getFirebaseDatabase();
     const pendingRef = ref(db, 'drivers/pending');
@@ -49,22 +49,24 @@ export function AppHeader() {
       <div className="w-full grid grid-cols-[auto_1fr_auto] items-start">
         {/* LEFT: Admin + Truth tools (admin/it) + Sign Out, pinned to left edge */}
         <div className="flex items-center gap-2 px-4 pt-3">
-          {(user.role === 'admin' || user.role === 'it') && (
-            <>
-              <Link
-                href={pendingDriverCount > 0 ? '/admin?tab=drivers' : '/admin'}
-                className="relative px-4 py-2 bg-blue-600 hover:bg-blue-700 text-white rounded-lg transition-colors text-sm"
-              >
-                Admin
-                {pendingDriverCount > 0 && !pathname.startsWith('/admin') && (
-                  <span className="absolute -top-1.5 -right-1.5 flex h-5 w-5">
-                    <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-red-400 opacity-75"></span>
-                    <span className="relative inline-flex rounded-full h-5 w-5 bg-red-500 text-[10px] text-white items-center justify-center font-bold">
-                      {pendingDriverCount}
-                    </span>
+          {hasCapability(user, 'viewAdmin') && (
+            <Link
+              href={pendingDriverCount > 0 ? '/admin?tab=drivers' : '/admin'}
+              className="relative px-4 py-2 bg-blue-600 hover:bg-blue-700 text-white rounded-lg transition-colors text-sm"
+            >
+              Admin
+              {pendingDriverCount > 0 && !pathname.startsWith('/admin') && (
+                <span className="absolute -top-1.5 -right-1.5 flex h-5 w-5">
+                  <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-red-400 opacity-75"></span>
+                  <span className="relative inline-flex rounded-full h-5 w-5 bg-red-500 text-[10px] text-white items-center justify-center font-bold">
+                    {pendingDriverCount}
                   </span>
-                )}
-              </Link>
+                </span>
+              )}
+            </Link>
+          )}
+          {hasCapability(user, 'viewTruthDebug') && (
+            <>
               <Link
                 href="/admin/truth-debug/"
                 className={`px-3 py-2 rounded-lg transition-colors text-sm ${
@@ -103,11 +105,17 @@ export function AppHeader() {
           <div className="pt-2 pb-1 text-center">
             <h1 className="text-3xl font-bold text-white">WellBuilt Suite</h1>
             <p className="text-gray-400 text-sm">
-              {user.email} &bull; <span className="capitalize">{user.role}</span>
+              {user.email} &bull; <span>{getRoleLabel(user.role)}</span>
             </p>
           </div>
           <nav className="flex gap-0">
-            {TABS.filter(tab => !tab.minRole || hasRole(user, tab.minRole)).map((tab) => {
+            {TABS.filter(tab => {
+              // Capability-based gate wins when set. Falls back to legacy minRole
+              // only if capability is unset (e.g., Home tab with no gate at all).
+              if (tab.capability) return hasCapability(user, tab.capability);
+              if (tab.minRole) return hasRole(user, tab.minRole);
+              return true;
+            }).map((tab) => {
               const isActive = tab.id === activeTabId;
               return (
                 <Link

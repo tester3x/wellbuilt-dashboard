@@ -421,6 +421,16 @@ export interface CompanyConfig {
   // Company-wide template ensures consistent format from all drivers
   sendLevelToDispatch?: boolean;
   levelReportTemplate?: string;  // Template with {well}, {top}, {bottom}, {time}, {bbls} placeholders
+
+  // ── Roles & Permissions (per-company overrides) ──────────────────────────
+  // Both are optional; when unset, callers fall back to DEFAULT_ROLE_LABELS
+  // and DEFAULT_ROLE_CAPABILITIES from @/lib/auth.
+  // - roleLabels: rename roles for display ("Dispatcher" → "Coordinator")
+  // - roleCapabilities: override which capabilities each role has at this company
+  // Only users with the `manageRolesAndCapabilities` capability (default: role 'it')
+  // can edit these. Security rules should mirror that.
+  roleLabels?: Partial<Record<import('./auth').UserRole, string>>;
+  roleCapabilities?: Partial<Record<import('./auth').UserRole, import('./auth').Capability[]>>;
 }
 
 export interface CustomJobType {

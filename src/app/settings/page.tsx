@@ -3,7 +3,7 @@
 import { useEffect, useState } from 'react';
 import { useRouter } from 'next/navigation';
 import { useAuth } from '@/contexts/AuthContext';
-import { hasRole } from '@/lib/auth';
+import { hasCapability } from '@/lib/auth';
 import { AppHeader } from '@/components/AppHeader';
 import {
   type CompanyConfig,
@@ -27,6 +27,7 @@ import { PhotosCard } from '@/components/settings/PhotosCard';
 import { JsaCard } from '@/components/settings/JsaCard';
 import { LevelReportsCard } from '@/components/settings/LevelReportsCard';
 import { JobTypeRnDCard } from '@/components/settings/JobTypeRnDCard';
+import { RolesCard } from '@/components/settings/RolesCard';
 
 export default function SettingsPage() {
   const { user, loading: authLoading } = useAuth();
@@ -43,7 +44,7 @@ export default function SettingsPage() {
 
   // Auth guard — redirect if not authorized
   useEffect(() => {
-    if (!authLoading && user && !hasRole(user, 'admin')) {
+    if (!authLoading && user && !hasCapability(user, 'viewSettings')) {
       router.push('/');
     }
   }, [user, authLoading, router]);
@@ -127,7 +128,7 @@ export default function SettingsPage() {
     );
   }
 
-  if (!user || !hasRole(user, 'admin')) {
+  if (!user || !hasCapability(user, 'viewSettings')) {
     return null; // redirect will happen via useEffect
   }
 
@@ -191,6 +192,13 @@ export default function SettingsPage() {
             <PayrollTemplateCard company={company} onSave={handleRefresh} />
             <PayConfigCard company={company} onSave={handleRefresh} />
             <BrandingCard company={company} onSave={handleRefresh} />
+            {/* Roles & Permissions — anyone with viewSettings can see it, but only
+                users with manageRolesAndCapabilities can actually edit (default: 'it'). */}
+            <RolesCard
+              company={company}
+              onSave={handleRefresh}
+              canEdit={hasCapability(user, 'manageRolesAndCapabilities')}
+            />
             {/* WB Admin only — R&D pipeline for job type auto-promote/prune */}
             {isWbAdmin && <JobTypeRnDCard />}
           </div>
