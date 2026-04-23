@@ -85,8 +85,15 @@ const GRID_LAYOUTS = [
 ];
 
 export default function ChatPage() {
-  const { user } = useAuth();
-  const myParticipantId = user?.uid ? userParticipantId(user.uid) : 'user:dev';
+  const { user, loading: authLoading } = useAuth();
+  // Do NOT derive a 'user:dev' fallback participant id here. With Firestore
+  // IndexedDB persistence enabled, the thread subscription would fire three
+  // separate times during boot — last-session cache → 'user:dev' network result
+  // → real-uid network result — each calling setThreads and overwriting the
+  // previous render. That produced the "correct names flash → Dev Admin flash
+  // → TabletS10" sequence. Firestore thread data is the single source of truth;
+  // we only subscribe once authentication has resolved to a real uid.
+  const myParticipantId = user?.uid ? userParticipantId(user.uid) : '';
   const companyId = user?.companyId || '';
 
   // --- State ---
@@ -248,6 +255,10 @@ export default function ChatPage() {
   const prevThreadMapRef = useRef<Map<string, number>>(new Map()); // threadId → last updatedAt ms
 
   useEffect(() => {
+    // Do not subscribe until auth resolves to a real uid. Subscribing with a
+    // 'user:dev' fallback caused three successive snapshot overrides during boot
+    // (cache → dev query → real-uid query), each rewriting threads state.
+    if (authLoading || !myParticipantId) return;
     const db = getFirestoreDb();
     if (!db) return;
     const q = query(
@@ -290,7 +301,7 @@ export default function ChatPage() {
       prevThreadMapRef.current = newMap;
     });
     return () => unsub();
-  }, [myParticipantId]);
+  }, [myParticipantId, authLoading]);
 
   // --- Subscribe to messages for open panes ---
   const activeThreadIds = openPanes.filter(Boolean) as string[];

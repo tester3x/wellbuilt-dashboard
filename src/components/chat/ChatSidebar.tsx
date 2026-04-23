@@ -105,7 +105,10 @@ export function ChatSidebar({ visible, onClose, userId, companyId, onUnreadChang
 
   // ── Thread subscription ─────────────────────────────────────────────────
   useEffect(() => {
-    if (!visible || !userId) return;
+    // userId must be a real Firebase Auth uid. Empty string (pre-auth) or
+    // any 'dev' fallback would trigger a stale cached snapshot followed by
+    // re-subscription once auth resolves, flashing the thread list.
+    if (!visible || !userId || userId === 'dev') return;
 
     const firestore = getFirestoreDb();
     const constraints = [
