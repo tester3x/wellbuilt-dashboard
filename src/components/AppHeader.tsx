@@ -137,7 +137,7 @@ export function AppHeader() {
       <ChatSidebar
         visible={chatOpen}
         onClose={() => setChatOpen(false)}
-        userId={user?.uid || ''}
+        userId={user?.uid || 'dev'}
         companyId={user?.companyId || ''}
         onUnreadChange={setChatUnread}
       />
