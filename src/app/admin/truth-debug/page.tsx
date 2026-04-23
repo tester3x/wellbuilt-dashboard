@@ -67,6 +67,30 @@ type ResultState = {
   identityHealthError: string | null;
   locationHealth: LocationHealthDashboardClientState | null;
   locationHealthError: string | null;
+  // Phase 22 — runtime SWD catalog management panel data
+  swdCatalog: SwdCatalogState | null;
+  swdCatalogError: string | null;
+};
+
+// Phase 22 — runtime SWD catalog client shapes (mirror
+// functions/src/truth/truthSwdReference.ts `listTruthSwdReference`).
+// Static seed entries are NOT included here — runtime entries only.
+type SwdCatalogEntry = {
+  name: string;
+  normalizedName: string;
+  addedAt?: string;
+  addedByUid?: string;
+  addedByEmail?: string;
+  deactivatedAt?: string;
+  deactivatedByUid?: string;
+  deactivatedByEmail?: string;
+  active: boolean;
+};
+
+type SwdCatalogState = {
+  active: SwdCatalogEntry[];
+  inactive: SwdCatalogEntry[];
+  counts: { active: number; inactive: number; total: number };
 };
 
 // ── Phase 10 — Identity Health client-side shapes ─────────────────────────
@@ -268,10 +292,14 @@ export default function TruthDebugPage() {
       const getRag = httpsCallable(functions, 'getRAGIngestBundleForDay');
       const getHealth = httpsCallable(functions, 'getIdentityHealthView');
       const getLocationHealth = httpsCallable(functions, 'getLocationHealthView');
+      // Phase 22 — runtime SWD catalog list for the §8 management panel.
+      // Additive: if it fails, the rest of the page still renders.
+      const listSwd = httpsCallable(functions, 'listTruthSwdReference');
 
-      // Identity Health + Location Health are additive — if either fails, the
-      // rest of the page still renders. We capture each error separately.
-      const [mRes, sRes, rRes, hRes, lhRes] = await Promise.all([
+      // Identity Health + Location Health + SWD catalog list are additive —
+      // if any fails, the rest of the page still renders. Each error is
+      // captured separately.
+      const [mRes, sRes, rRes, hRes, lhRes, swdRes] = await Promise.all([
         getModel(payload),
         getShadow(payload),
         getRag(payload),
@@ -284,6 +312,9 @@ export default function TruthDebugPage() {
               err instanceof Error ? err.message : String(err),
           })
         ),
+        listSwd({}).catch((err) => ({
+          __swdListFailure: err instanceof Error ? err.message : String(err),
+        })),
       ]);
       const mData = mRes.data as {
         model: {
@@ -346,6 +377,32 @@ export default function TruthDebugPage() {
         };
       }
 
+      // Phase 22 — runtime SWD catalog list. Failure falls to an error
+      // banner in the §8 section; other sections still render.
+      let swdCatalog: SwdCatalogState | null = null;
+      let swdCatalogError: string | null = null;
+      if ('__swdListFailure' in swdRes) {
+        swdCatalogError = (swdRes as { __swdListFailure: string })
+          .__swdListFailure;
+      } else {
+        const swdData = (swdRes as { data: unknown }).data as {
+          active: SwdCatalogEntry[];
+          inactive: SwdCatalogEntry[];
+          counts: { active: number; inactive: number; total: number };
+          sourceError?: string;
+        };
+        swdCatalog = {
+          active: swdData.active ?? [],
+          inactive: swdData.inactive ?? [],
+          counts: swdData.counts ?? {
+            active: 0,
+            inactive: 0,
+            total: 0,
+          },
+        };
+        if (swdData.sourceError) swdCatalogError = swdData.sourceError;
+      }
+
       setResult({
         date,
         companyId: trimmed || null,
@@ -370,6 +427,8 @@ export default function TruthDebugPage() {
         identityHealthError,
         locationHealth,
         locationHealthError,
+        swdCatalog,
+        swdCatalogError,
       });
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err));
@@ -523,6 +582,12 @@ export default function TruthDebugPage() {
               error={result.locationHealthError}
               companyId={result.companyId}
               onApprovalDone={runShadow}
+            />
+
+            <SwdRuntimeCatalogSection
+              catalog={result.swdCatalog}
+              error={result.swdCatalogError}
+              onCatalogChange={runShadow}
             />
           </>
         )}
@@ -1174,6 +1239,184 @@ function LocationHealthSection({
               </div>
             </details>
           )}
+        </div>
+      )}
+    </section>
+  );
+}
+
+// ── Phase 22 — SWD Runtime Catalog management panel ─────────────────────────
+
+function SwdRuntimeCatalogSection({
+  catalog,
+  error,
+  onCatalogChange,
+}: {
+  catalog: SwdCatalogState | null;
+  error: string | null;
+  onCatalogChange: () => void;
+}) {
+  // Per-row in-flight tracker — each Deactivate button disables itself
+  // without blocking the rest of the list. Error banner shared with the
+  // callable failure so admins see both surfaces in one place.
+  const [deactivatingName, setDeactivatingName] = useState<string | null>(null);
+  const [deactivateError, setDeactivateError] = useState<string | null>(null);
+
+  async function handleDeactivate(entry: SwdCatalogEntry): Promise<void> {
+    setDeactivateError(null);
+    setDeactivatingName(entry.name);
+    try {
+      const functions = getFirebaseFunctions();
+      const deactivate = httpsCallable(
+        functions,
+        'deactivateTruthSwdReference'
+      );
+      await deactivate({ name: entry.name });
+      // Rerun the full shadow read to pick up the flip.
+      onCatalogChange();
+    } catch (err) {
+      setDeactivateError(err instanceof Error ? err.message : String(err));
+    } finally {
+      setDeactivatingName(null);
+    }
+  }
+
+  return (
+    <section className="bg-gray-800 rounded p-4">
+      <h3 className="text-sm font-semibold text-white mb-3">
+        8. SWD Runtime Catalog
+      </h3>
+
+      {error && (
+        <div className="p-3 rounded bg-red-900/40 border border-red-700 text-red-200 text-xs mb-3">
+          <div className="font-semibold mb-1">
+            Runtime SWD catalog callable failed
+          </div>
+          <pre className="whitespace-pre-wrap">{error}</pre>
+        </div>
+      )}
+
+      {deactivateError && (
+        <div className="p-2 rounded bg-red-900/40 border border-red-700 text-red-200 text-xs mb-3">
+          <span className="font-semibold">Deactivate failed: </span>
+          {deactivateError}
+        </div>
+      )}
+
+      {!catalog && !error && (
+        <div className="text-xs text-gray-400">
+          Run a shadow read to populate the runtime catalog.
+        </div>
+      )}
+
+      {catalog && (
+        <div className="space-y-3">
+          <div className="text-xs text-gray-400">
+            Runtime entries only (static seed in{' '}
+            <span className="font-mono text-gray-500">
+              shared/truth-layer/data/swdReference.ts
+            </span>{' '}
+            is code-deployed and not shown here).
+          </div>
+
+          {/* Summary counts */}
+          <div className="grid grid-cols-3 md:grid-cols-4 gap-x-6 gap-y-2">
+            <KV label="active" value={catalog.counts.active} />
+            <KV label="inactive" value={catalog.counts.inactive} />
+            <KV label="total" value={catalog.counts.total} />
+          </div>
+
+          {/* Active entries */}
+          <div>
+            <div className="text-xs text-gray-400 uppercase mb-1">
+              Active
+            </div>
+            {catalog.active.length === 0 ? (
+              <div className="text-xs text-gray-500">
+                (no active runtime entries — the static seed still applies)
+              </div>
+            ) : (
+              <ul className="space-y-1">
+                {catalog.active.map((e) => {
+                  const isDeactivating = deactivatingName === e.name;
+                  return (
+                    <li
+                      key={e.name}
+                      className="text-xs flex items-baseline gap-2 flex-wrap"
+                    >
+                      <span className="uppercase px-1.5 py-0.5 rounded text-[10px] bg-green-800/40 text-green-200">
+                        active
+                      </span>
+                      <span className="text-white">{e.name}</span>
+                      <span className="font-mono text-gray-400 text-[11px]">
+                        {e.normalizedName}
+                      </span>
+                      {e.addedAt && (
+                        <span className="text-[10px] text-gray-500">
+                          added {e.addedAt}
+                        </span>
+                      )}
+                      {e.addedByEmail && (
+                        <span className="text-[10px] text-gray-500">
+                          by {e.addedByEmail}
+                        </span>
+                      )}
+                      <button
+                        type="button"
+                        onClick={() => {
+                          void handleDeactivate(e);
+                        }}
+                        disabled={isDeactivating}
+                        title="Soft-deactivate this runtime SWD reference entry (audit trail preserved)"
+                        className="ml-auto px-2 py-0.5 rounded text-[10px] bg-red-800 hover:bg-red-700 disabled:bg-red-900 disabled:cursor-not-allowed text-white transition-colors"
+                      >
+                        {isDeactivating ? 'Deactivating…' : 'Deactivate'}
+                      </button>
+                    </li>
+                  );
+                })}
+              </ul>
+            )}
+          </div>
+
+          {/* Inactive entries */}
+          <div>
+            <div className="text-xs text-gray-400 uppercase mb-1">
+              Inactive
+            </div>
+            {catalog.inactive.length === 0 ? (
+              <div className="text-xs text-gray-500">(none)</div>
+            ) : (
+              <ul className="space-y-1">
+                {catalog.inactive.map((e) => (
+                  <li
+                    key={e.name}
+                    className="text-xs flex items-baseline gap-2 flex-wrap opacity-70"
+                  >
+                    <span className="uppercase px-1.5 py-0.5 rounded text-[10px] bg-gray-700 text-gray-300">
+                      inactive
+                    </span>
+                    <span className="text-gray-300 line-through">
+                      {e.name}
+                    </span>
+                    <span className="font-mono text-gray-500 text-[11px]">
+                      {e.normalizedName}
+                    </span>
+                    {e.deactivatedAt && (
+                      <span className="text-[10px] text-gray-500">
+                        deactivated {e.deactivatedAt}
+                      </span>
+                    )}
+                    {e.deactivatedByEmail && (
+                      <span className="text-[10px] text-gray-500">
+                        by {e.deactivatedByEmail}
+                      </span>
+                    )}
+                  </li>
+                ))}
+              </ul>
+            )}
+          </div>
         </div>
       )}
     </section>

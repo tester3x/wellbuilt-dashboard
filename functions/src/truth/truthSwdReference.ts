@@ -109,3 +109,222 @@ export const addTruthSwdReference = httpsV2.onCall(
     };
   }
 );
+
+// ─────────────────────────────────────────────────────────────────────────
+// Phase 22 — deactivate + list paths
+// ─────────────────────────────────────────────────────────────────────────
+
+interface RawDeactivateRequest {
+  name?: string;
+}
+
+interface ParsedDeactivateRequest {
+  rawName: string;
+  safeKey: string;
+}
+
+function parseDeactivateRequest(data: unknown): ParsedDeactivateRequest {
+  const req = (data ?? {}) as RawDeactivateRequest;
+  const rawName =
+    typeof req.name === 'string' ? req.name.trim() : '';
+  if (!rawName) {
+    throw new HttpsError('invalid-argument', 'Missing required `name`.');
+  }
+  const normalizedName = normalizeLocationNameForOfficialMatch(rawName);
+  if (!normalizedName) {
+    throw new HttpsError(
+      'invalid-argument',
+      '`name` normalizes to empty.'
+    );
+  }
+  return {
+    rawName,
+    safeKey: normalizedSwdNameToSafeKey(normalizedName),
+  };
+}
+
+/**
+ * Phase 22 — deactivate a single runtime SWD reference entry.
+ *
+ * Admin-gated. Soft-delete: reads the record at
+ *   truth_reference/swd_catalog/{safeKey}
+ * and partial-updates `active: false` + `deactivatedAt` + `deactivatedByUid`
+ * + `deactivatedByEmail?`. Original `name`, `normalizedName`, `addedAt`,
+ * `addedBy*`, `type` are preserved for audit.
+ *
+ * Idempotent:
+ *   - missing record   -> { ok: true, alreadyInactive: true,
+ *                           note: 'no entry found' }
+ *   - already inactive -> re-stamps the deactivate audit fields (refresh
+ *                         who-last-touched-it), returns `alreadyInactive: true`
+ *   - active record    -> flips active to false, stamps deactivate fields
+ *
+ * Next shadow read: `loadSwdReferenceRuntime` filters `active === false`,
+ * so the deactivated entry drops out of the SWD match set automatically.
+ * Static seed entries in shared/truth-layer/data/swdReference.ts are NOT
+ * affected — they're code-deployed, not in this RTDB catalog.
+ *
+ * Hard-delete is NOT supported. Every deactivation stays in RTDB with
+ * full audit trail so we can see who added → who deactivated → when.
+ */
+export const deactivateTruthSwdReference = httpsV2.onCall(
+  { timeoutSeconds: 30, memory: '256MiB' },
+  async (request) => {
+    const identity = await requireAdminRole(request);
+    const { safeKey } = parseDeactivateRequest(request.data);
+
+    const path = `truth_reference/swd_catalog/${safeKey}`;
+    const ref = admin.database().ref(path);
+
+    const snap = await ref.once('value');
+    if (!snap.exists()) {
+      return {
+        ok: true,
+        alreadyInactive: true,
+        path,
+        note: 'no entry found',
+      };
+    }
+
+    const deactivatedAt = new Date().toISOString();
+    const patch: {
+      active: false;
+      deactivatedAt: string;
+      deactivatedByUid: string;
+      deactivatedByEmail?: string;
+    } = {
+      active: false,
+      deactivatedAt,
+      deactivatedByUid: identity.uid,
+    };
+    if (identity.email) patch.deactivatedByEmail = identity.email;
+
+    await ref.update(patch);
+
+    const afterSnap = await ref.once('value');
+    return {
+      ok: true,
+      alreadyInactive: snap.val()?.active === false,
+      record: afterSnap.val(),
+      path,
+    };
+  }
+);
+
+/**
+ * Phase 22 — list all runtime SWD catalog entries (active + inactive).
+ *
+ * Admin-gated. Read-only. Returns entries split into `active` and
+ * `inactive` arrays, each sorted alphabetically by `name` via
+ * `localeCompare` for deterministic ordering across shadow reads.
+ *
+ * Static seed entries are NOT included — they're code-deployed and
+ * should not look mutable from the management UI (per spec §5). This
+ * keeps the Phase 22 surface focused on entries admins can actually
+ * deactivate.
+ *
+ * Shape-validates each RTDB record; ignores malformed entries silently.
+ * A missing catalog returns zero-length arrays. A read error returns
+ * empty arrays + `sourceError` so the UI can surface it.
+ */
+interface CatalogEntry {
+  name: string;
+  normalizedName: string;
+  addedAt?: string;
+  addedByUid?: string;
+  addedByEmail?: string;
+  deactivatedAt?: string;
+  deactivatedByUid?: string;
+  deactivatedByEmail?: string;
+  active: boolean;
+}
+
+function parseCatalogEntry(raw: unknown): CatalogEntry | null {
+  if (!raw || typeof raw !== 'object') return null;
+  const r = raw as Record<string, unknown>;
+  const name = r.name;
+  if (typeof name !== 'string' || name.trim().length === 0) return null;
+  const normalizedName =
+    typeof r.normalizedName === 'string' && r.normalizedName.trim().length > 0
+      ? r.normalizedName.trim()
+      : normalizeLocationNameForOfficialMatch(name);
+  const entry: CatalogEntry = {
+    name: name.trim(),
+    normalizedName,
+    // Treat missing/non-boolean `active` as true — matches loader semantics.
+    active: r.active !== false,
+  };
+  if (typeof r.addedAt === 'string') entry.addedAt = r.addedAt;
+  if (typeof r.addedByUid === 'string') entry.addedByUid = r.addedByUid;
+  if (typeof r.addedByEmail === 'string') entry.addedByEmail = r.addedByEmail;
+  if (typeof r.deactivatedAt === 'string') entry.deactivatedAt = r.deactivatedAt;
+  if (typeof r.deactivatedByUid === 'string') {
+    entry.deactivatedByUid = r.deactivatedByUid;
+  }
+  if (typeof r.deactivatedByEmail === 'string') {
+    entry.deactivatedByEmail = r.deactivatedByEmail;
+  }
+  return entry;
+}
+
+export const listTruthSwdReference = httpsV2.onCall(
+  { timeoutSeconds: 30, memory: '256MiB' },
+  async (request) => {
+    await requireAdminRole(request);
+
+    const path = 'truth_reference/swd_catalog';
+    try {
+      const snap = await admin.database().ref(path).once('value');
+      if (!snap.exists()) {
+        return {
+          ok: true,
+          active: [] as CatalogEntry[],
+          inactive: [] as CatalogEntry[],
+          counts: { active: 0, inactive: 0, total: 0 },
+          path,
+        };
+      }
+      const raw = snap.val();
+      if (!raw || typeof raw !== 'object') {
+        return {
+          ok: true,
+          active: [] as CatalogEntry[],
+          inactive: [] as CatalogEntry[],
+          counts: { active: 0, inactive: 0, total: 0 },
+          path,
+        };
+      }
+      const active: CatalogEntry[] = [];
+      const inactive: CatalogEntry[] = [];
+      for (const value of Object.values(raw as Record<string, unknown>)) {
+        const entry = parseCatalogEntry(value);
+        if (!entry) continue;
+        (entry.active ? active : inactive).push(entry);
+      }
+      const byName = (a: CatalogEntry, b: CatalogEntry) =>
+        a.name.localeCompare(b.name);
+      active.sort(byName);
+      inactive.sort(byName);
+      return {
+        ok: true,
+        active,
+        inactive,
+        counts: {
+          active: active.length,
+          inactive: inactive.length,
+          total: active.length + inactive.length,
+        },
+        path,
+      };
+    } catch (err) {
+      return {
+        ok: true,
+        active: [] as CatalogEntry[],
+        inactive: [] as CatalogEntry[],
+        counts: { active: 0, inactive: 0, total: 0 },
+        path,
+        sourceError: `swd_catalog: ${(err as Error).message}`,
+      };
+    }
+  }
+);

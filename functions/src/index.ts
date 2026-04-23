@@ -3055,11 +3055,23 @@ export {
 } from './truth/truthLocationApproval';
 
 // ============================================================
-// PHASE 21 — SWD REFERENCE RUNTIME CATALOG
-// Admin-gated callable that promotes an SWD/disposal name into a
-// writable RTDB catalog (truth_reference/swd_catalog/{safeKey}).
+// PHASE 21/22 — SWD REFERENCE RUNTIME CATALOG (MANAGEMENT SURFACE)
+// PHASE 21: `addTruthSwdReference` promotes an SWD/disposal name into
+// a writable RTDB catalog (truth_reference/swd_catalog/{safeKey}).
 // Subsequent getLocationHealthView reads merge this with the static
-// seed (shared/truth-layer/data/swdReference.ts) so admin additions
-// take effect immediately on the next shadow read — no redeploy.
+// seed (shared/truth-layer/data/swdReference.ts).
+//
+// PHASE 22: adds safe management paths.
+//   - `deactivateTruthSwdReference`: soft-delete (active: false +
+//     deactivate audit fields). Idempotent. Deactivated entries drop
+//     out of the match set on the next shadow read.
+//   - `listTruthSwdReference`: admin-gated read of active + inactive
+//     runtime entries for the Truth Debug §8 management panel.
+//     Runtime entries only — static seed is code-deployed.
+// No hard-delete path.
 // ============================================================
-export { addTruthSwdReference } from './truth/truthSwdReference';
+export {
+  addTruthSwdReference,
+  deactivateTruthSwdReference,
+  listTruthSwdReference,
+} from './truth/truthSwdReference';
