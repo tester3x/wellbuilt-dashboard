@@ -1356,7 +1356,22 @@ function ChatPageInner() {
                   <div className="flex items-center gap-2">
                     <span className="text-sm">{thread ? threadTypeIcon(thread.type) : ''}</span>
                     <p className={`text-sm font-bold truncate ${hasUnread ? 'text-[#FFD700]' : 'text-white'}`}>
-                      {thread ? getTitle(thread) : slot.driverName}
+                      {/* Title fallback chain:
+                          1. thread (via participants query) — preferred
+                          2. persisted slot's saved title (group or driver slot)
+                          3. overlaid temp slot's saved title
+                          4. 'Thread' sentinel so an orphan pane is never blank
+                         Threads where the admin isn't listed in participants
+                         won't appear in threads[] but CAN still be a pinned
+                         pane via the profile's chat_monitors slot — that's
+                         why slot.threadTitle matters. */}
+                      {thread
+                        ? getTitle(thread)
+                        : (slot?.threadTitle
+                          || slot?.driverName
+                          || tempSlots[index]?.threadTitle
+                          || tempSlots[index]?.driverName
+                          || 'Thread')}
                     </p>
                     {hasUnread && <span className="w-2 h-2 rounded-full bg-[#FFD700] animate-pulse flex-shrink-0" />}
                   </div>
