@@ -195,11 +195,13 @@ export default function ChatPage() {
   // Slots from profile (or empty)
   const slots: (SlotAssignment | null)[] = activeProfile?.slots || Array(maxPanes).fill(null);
 
-  // Map driver hashes to thread IDs — computed inline so it's always fresh
+  // Map driver hashes to thread IDs — computed inline so it's always fresh.
+  // Legacy / malformed threads may be missing `participants`; default to [] so
+  // .find() does not throw at render.
   const driverThreadMap: Record<string, string> = {};
   for (const t of threads) {
     if (t.type !== 'direct' || t.status === 'archived') continue;
-    const driverPid = t.participants.find((p) => p.startsWith('driver:'));
+    const driverPid = (t.participants || []).find((p) => p.startsWith('driver:'));
     if (driverPid) driverThreadMap[driverPid.replace('driver:', '')] = t.id;
   }
 
@@ -599,7 +601,7 @@ export default function ChatPage() {
   // clicking one without creates a new thread. No more hiding drivers after first message.
   const driversWithThreads = new Map<string, string>(
     threads.filter((t) => t.type === 'direct').flatMap((t) =>
-      t.participants.filter((p) => p.startsWith('driver:')).map((p) => [p.replace('driver:', ''), t.id] as [string, string])
+      (t.participants || []).filter((p) => p.startsWith('driver:')).map((p) => [p.replace('driver:', ''), t.id] as [string, string])
     )
   );
   const filteredDrivers = driverSearch
@@ -608,10 +610,10 @@ export default function ChatPage() {
 
   const getTitle = (thread: ChatThread) => {
     if (thread.type === 'direct') {
-      const otherId = thread.participants.find((p) => p !== myParticipantId);
+      const otherId = (thread.participants || []).find((p) => p !== myParticipantId);
       if (otherId && thread.participantNames?.[otherId]) return thread.participantNames[otherId];
     }
-    return thread.title;
+    return thread.title || 'Untitled';
   };
 
   // Drivers already assigned to a slot in this profile
@@ -1344,8 +1346,8 @@ export default function ChatPage() {
                             onClick={async () => {
                               const db = getFirestoreDb();
                               if (!db) return;
-                              const newParticipants = thread.participants.filter((p: string) => p !== pid);
-                              const newNames = { ...thread.participantNames };
+                              const newParticipants = (thread.participants || []).filter((p: string) => p !== pid);
+                              const newNames = { ...(thread.participantNames || {}) };
                               delete newNames[pid];
                               await updateDoc(doc(db, 'chat_threads', threadId), { participants: newParticipants, participantNames: newNames });
                             }}
@@ -1364,15 +1366,15 @@ export default function ChatPage() {
                       const db = getFirestoreDb();
                       if (!db) return;
                       const pid = `driver:${d.hash}`;
-                      if (thread.participants.includes(pid)) return;
+                      if ((thread.participants || []).includes(pid)) return;
                       await updateDoc(doc(db, 'chat_threads', threadId), {
-                        participants: [...thread.participants, pid],
+                        participants: [...(thread.participants || []), pid],
                         [`participantNames.${pid}`]: d.name,
                       });
                     }}
                   >
                     <option value="">+ Add driver...</option>
-                    {drivers.filter((d) => !thread.participants.includes(`driver:${d.hash}`)).map((d) => (
+                    {drivers.filter((d) => !(thread.participants || []).includes(`driver:${d.hash}`)).map((d) => (
                       <option key={d.hash} value={d.hash}>{d.name}</option>
                     ))}
                   </select>
