@@ -414,6 +414,15 @@ function ChatPageInner() {
   // --- Subscribe to messages for open panes ---
   const activeThreadIds = openPanes.filter(Boolean) as string[];
   useEffect(() => {
+    // Do not start message subscriptions OR write lastRead until auth has
+    // produced a real participant identity. The profile-slot system populates
+    // activeThreadIds from chat_monitors BEFORE auth resolves, so this effect
+    // fires with myParticipantId === ''. updateDoc below then synchronously
+    // throws `Invalid field path (lastRead.)` — the SDK validates the path
+    // before the promise is even returned, so `.catch(() => {})` does not
+    // swallow it. This was the exact cause of the ErrorBoundary trace from
+    // the Watford Crew profile crash.
+    if (authLoading || !myParticipantId) return;
     const db = getFirestoreDb();
     if (!db) return;
     const unsubs: (() => void)[] = [];
@@ -445,7 +454,7 @@ function ChatPageInner() {
       }).catch(() => {});
     }
     return () => unsubs.forEach((u) => u());
-  }, [activeThreadIds.join(','), myParticipantId]);
+  }, [activeThreadIds.join(','), myParticipantId, authLoading]);
 
   // Cross-profile thread index — maps threadId to profile IDs that contain it
   const threadToProfiles = useMemo(() => {
