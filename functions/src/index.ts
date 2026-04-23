@@ -3075,3 +3075,17 @@ export {
   deactivateTruthSwdReference,
   listTruthSwdReference,
 } from './truth/truthSwdReference';
+
+// ============================================================
+// PHASE 24 — PUBLIC DEMO CLASSIFIER (READ-ONLY, NO AUTH)
+// First public truth callable. Takes an array of location names and
+// runs them through the real SWD match path (static seed + runtime
+// RTDB catalog merged via buildSwdReferenceSet + isOfficialSwd). NDIC
+// classification stays a demo heuristic since real NDIC matching
+// needs company context. Backs the public /demo route so demo
+// classifications match the live system for the same names.
+//
+// Safety: input locked to { locations: string[] } with 10 × 200 char
+// caps, zero writes, no admin-callable references, no session state.
+// ============================================================
+export { demoClassifyLocations } from './truth/demoClassifyLocations';

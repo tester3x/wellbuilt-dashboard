@@ -2,13 +2,19 @@
 
 // Phase 23 — public /demo route. Zero auth, zero Firebase writes,
 // zero admin callables. All state is in-memory React state and
-// disappears on navigation. The Phase 23 spec §6 (safety) requires
-// this file to import NO Firebase SDK, NO useAuth, and NO admin
-// callable names — the only outside import is the pure local
-// classifier in @/lib/demoClassifyLocation.ts.
+// disappears on navigation.
+//
+// Phase 24 — adds a call to the public `demoClassifyLocations`
+// callable (read-only, no auth) so classifications come from the
+// real truth-layer SWD match set. On any callable failure we fall
+// back silently to the Phase 23 local classifier so /demo remains
+// usable even if the callable is down. Phase 23's zero-admin-
+// callable, zero-auth, zero-write invariants are unchanged.
 
 import { useMemo, useState } from 'react';
 import Link from 'next/link';
+import { httpsCallable } from 'firebase/functions';
+import { getFirebaseFunctions } from '@/lib/firebase';
 import {
   classifyDemoLocation,
   DEMO_LOCATION_SEEDS,
@@ -94,32 +100,91 @@ export default function DemoPage() {
         userDeclaredType: s.userDeclaredType,
       }))
     );
+    setResults(null);
+    setResultsSource(null);
   }
 
-  const results = useMemo(
-    () =>
-      locations
-        .filter((l) => l.name.trim().length > 0)
-        .map((l) => ({
-          ...l,
-          classification: classifyDemoLocation(l.name),
-        })),
+  const validLocations = useMemo(
+    () => locations.filter((l) => l.name.trim().length > 0),
     [locations]
   );
+  const canAdvanceSetup =
+    validLocations.length > 0 && companyName.trim().length > 0;
+
+  // Phase 24 — async classification state. Results are null until the
+  // user hits "See results", at which point we call the public
+  // `demoClassifyLocations` callable. On any failure we silently fall
+  // back to the Phase 23 local classifier and mark `resultsSource`
+  // accordingly so the UI can show a small "live engine" /
+  // "offline fallback" label.
+  const [results, setResults] = useState<ResultsViewEntry[] | null>(null);
+  const [resultsSource, setResultsSource] = useState<
+    'live' | 'fallback' | null
+  >(null);
+  const [classifying, setClassifying] = useState<boolean>(false);
+
+  async function handleSubmitSetup(): Promise<void> {
+    setClassifying(true);
+    try {
+      const functions = getFirebaseFunctions();
+      const callable = httpsCallable<
+        { locations: string[] },
+        {
+          results: Array<{
+            name: string;
+            resolvedType: DemoLocationType;
+            confidence: 'strong' | 'weak';
+            explanation: string;
+          }>;
+          engine?: string;
+        }
+      >(functions, 'demoClassifyLocations');
+      const names = validLocations.map((l) => l.name.trim());
+      const response = await callable({ locations: names });
+      const byName = new Map(
+        response.data.results.map((r) => [r.name, r])
+      );
+      const mapped: ResultsViewEntry[] = validLocations.map((l) => {
+        const r = byName.get(l.name.trim());
+        const classification: DemoClassification = r
+          ? {
+              type: r.resolvedType,
+              confidence: r.confidence,
+              explanation: r.explanation,
+            }
+          : classifyDemoLocation(l.name);
+        return { ...l, classification };
+      });
+      setResults(mapped);
+      setResultsSource('live');
+      setStep('results');
+    } catch {
+      // Silent fallback — local classifier still matches the demo seeds
+      // and NDIC heuristic. Users never see a crash for a demo flow.
+      const fallbackResults: ResultsViewEntry[] = validLocations.map((l) => ({
+        ...l,
+        classification: classifyDemoLocation(l.name),
+      }));
+      setResults(fallbackResults);
+      setResultsSource('fallback');
+      setStep('results');
+    } finally {
+      setClassifying(false);
+    }
+  }
 
   const grouped = useMemo(() => {
-    const wells: typeof results = [];
-    const disposals: typeof results = [];
-    const custom: typeof results = [];
-    for (const r of results) {
-      if (r.classification.type === 'well') wells.push(r);
-      else if (r.classification.type === 'disposal') disposals.push(r);
-      else custom.push(r);
+    const r = results ?? [];
+    const wells: ResultsViewEntry[] = [];
+    const disposals: ResultsViewEntry[] = [];
+    const custom: ResultsViewEntry[] = [];
+    for (const entry of r) {
+      if (entry.classification.type === 'well') wells.push(entry);
+      else if (entry.classification.type === 'disposal') disposals.push(entry);
+      else custom.push(entry);
     }
     return { wells, disposals, custom };
   }, [results]);
-
-  const canAdvanceSetup = results.length > 0 && companyName.trim().length > 0;
 
   return (
     <div className="min-h-screen bg-gray-900 text-white">
@@ -136,13 +201,14 @@ export default function DemoPage() {
             operationType={operationType}
             locations={locations}
             canAdvance={canAdvanceSetup}
+            classifying={classifying}
             onCompanyName={setCompanyName}
             onOperationType={setOperationType}
             onUpdateLocation={updateLocation}
             onRemoveLocation={removeLocation}
             onAddLocation={addLocation}
             onBack={() => setStep('landing')}
-            onSubmit={() => setStep('results')}
+            onSubmit={() => void handleSubmitSetup()}
           />
         )}
 
@@ -150,8 +216,9 @@ export default function DemoPage() {
           <ResultsView
             companyName={companyName}
             operationType={operationType}
-            results={results}
+            results={results ?? []}
             grouped={grouped}
+            resultsSource={resultsSource}
             onReset={resetDemo}
             onBack={() => setStep('setup')}
           />
@@ -240,6 +307,7 @@ function SetupView({
   operationType,
   locations,
   canAdvance,
+  classifying,
   onCompanyName,
   onOperationType,
   onUpdateLocation,
@@ -252,6 +320,7 @@ function SetupView({
   operationType: string;
   locations: DemoLocation[];
   canAdvance: boolean;
+  classifying: boolean;
   onCompanyName: (v: string) => void;
   onOperationType: (v: string) => void;
   onUpdateLocation: (id: string, patch: Partial<DemoLocation>) => void;
@@ -373,10 +442,10 @@ function SetupView({
         <button
           type="button"
           onClick={onSubmit}
-          disabled={!canAdvance}
+          disabled={!canAdvance || classifying}
           className="px-5 py-2 bg-blue-600 hover:bg-blue-500 disabled:bg-blue-900 disabled:cursor-not-allowed text-white rounded font-medium"
         >
-          See results →
+          {classifying ? 'Classifying…' : 'See results →'}
         </button>
       </div>
     </section>
@@ -394,6 +463,7 @@ function ResultsView({
   operationType,
   results,
   grouped,
+  resultsSource,
   onReset,
   onBack,
 }: {
@@ -405,14 +475,33 @@ function ResultsView({
     disposals: ResultsViewEntry[];
     custom: ResultsViewEntry[];
   };
+  resultsSource: 'live' | 'fallback' | null;
   onReset: () => void;
   onBack: () => void;
 }): React.ReactElement {
   return (
     <section className="space-y-6">
       <div className="bg-gray-800 rounded-lg p-6">
-        <div className="text-xs text-gray-400 uppercase tracking-wide mb-2">
-          Demo · Classification results
+        <div className="flex items-center justify-between mb-2">
+          <div className="text-xs text-gray-400 uppercase tracking-wide">
+            Demo · Classification results
+          </div>
+          {resultsSource === 'live' && (
+            <span
+              className="text-[10px] uppercase tracking-wide px-1.5 py-0.5 rounded bg-emerald-800/40 text-emerald-200"
+              title="Classified via the real WellBuilt truth-layer engine"
+            >
+              Live engine
+            </span>
+          )}
+          {resultsSource === 'fallback' && (
+            <span
+              className="text-[10px] uppercase tracking-wide px-1.5 py-0.5 rounded bg-amber-800/40 text-amber-200"
+              title="Live engine unreachable — using offline fallback classifier"
+            >
+              Offline fallback
+            </span>
+          )}
         </div>
         <h2 className="text-xl font-bold text-white">
           {companyName || 'Your operation'}
