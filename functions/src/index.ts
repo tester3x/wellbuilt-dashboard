@@ -2440,9 +2440,21 @@ export const onShiftCreate = functionsV1.firestore
     if (!shift) return;
 
     const driverId = shift.driverId || shift.driverHash || '';
-    const driverName = shift.driverName || shift.displayName || 'Driver';
     const companyId = shift.companyId || '';
     if (!driverId || !companyId) return;
+
+    // Resolve driver's real name from RTDB profile (legalName > displayName).
+    // Do NOT trust shift.displayName as the primary source — WB S has historically
+    // written the login identity (which can be a shared device name like "TabletS10")
+    // into that field. drivers/approved/{hash} is the canonical profile.
+    const driverProfileSnap = await db.ref(`drivers/approved/${driverId}`).once('value');
+    const driverProfile = driverProfileSnap.val();
+    const driverName =
+      driverProfile?.legalName ||
+      driverProfile?.displayName ||
+      shift.driverName ||
+      shift.displayName ||
+      'Driver';
 
     const driverPid = `driver:${driverId}`;
     const { ids: dispatchIds, names: dispatchNames } = await getDispatchParticipants(companyId);
@@ -2498,7 +2510,20 @@ export const onShiftUpdate = functionsV1.firestore
 
     if (!threadsSnap.empty) {
       const threadDoc = threadsSnap.docs[0];
-      const driverName = after.driverName || after.displayName || 'Driver';
+      const driverId = after.driverId || after.driverHash || '';
+      let driverName = 'Driver';
+      if (driverId) {
+        const driverProfileSnap = await db.ref(`drivers/approved/${driverId}`).once('value');
+        const driverProfile = driverProfileSnap.val();
+        driverName =
+          driverProfile?.legalName ||
+          driverProfile?.displayName ||
+          after.driverName ||
+          after.displayName ||
+          'Driver';
+      } else {
+        driverName = after.driverName || after.displayName || 'Driver';
+      }
       await postSystemMessage(threadDoc.id, `${driverName} ended their shift`, 'shift_ended', { driverName });
       await threadDoc.ref.update({ status: 'archived', updatedAt: admin.firestore.Timestamp.now() });
       console.log(`[WBChat] Shift thread archived: ${threadDoc.id}`);
@@ -3009,6 +3034,14 @@ export { exportTruthRagForDay } from './truth/truthRagExport';
 // Truth/Compare toggle on /admin/driverlogs.
 // ============================================================
 export { getTruthDriverDaySummary } from './truth/truthDaySummary';
+
+// ============================================================
+// PHASE 27 — OPERATOR WEEKLY SUMMARY
+// Read-only, admin-gated. 7-day summary for a single operator. Uses the
+// Phase 26 canonical operator identity so invoice-derived events unify
+// with hash-backed events.
+// ============================================================
+export { getTruthDriverWeekSummary } from './truth/truthWeekSummary';
 
 // ============================================================
 // PHASE 8 — OPERATIONALIZED DERIVED RAG EXPORT LANE
