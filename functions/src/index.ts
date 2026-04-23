@@ -2836,6 +2836,254 @@ export const onProjectWrite = functionsV1.firestore
   });
 
 // ============================================================
+// WB CHAT — createOrFindDispatchThread
+// Called by WB T (driver) when the driver initiates a direct chat with
+// dispatch. Replaces the old client-side path that hardcoded
+// `dispatchId = 'user:dev'` and left real admin UIDs out of the thread.
+//
+// Behavior:
+// 1. Validate the driver exists in drivers/approved/{hash}.
+// 2. Resolve the current set of dispatchers for the driver's company via
+//    getDispatchParticipants (role admin|manager|it, matching companyId
+//    or WB-admin if no companyId).
+// 3. Search for an existing direct thread for this driver that includes
+//    at least one current dispatcher. If found, fan-in any missing
+//    dispatchers so the thread stays current as the admin roster grows.
+// 4. Otherwise, create a fresh direct thread with driver + all dispatchers.
+//
+// Callable is public (no auth context required) because WB T drivers do
+// not have Firebase Auth sessions — they use name+passcode → SHA-256
+// hash. Security is delegated to the RTDB driver lookup: if the hash
+// doesn't match an approved driver, we reject. chat_threads already
+// allows unauthenticated writes per firestore.rules, so this is not a
+// new privilege escalation — it's the SAME write path the client did
+// before, just with the correct participants.
+// ============================================================
+export const createOrFindDispatchThread = httpsV2.onCall(
+  { timeoutSeconds: 30, memory: '256MiB' },
+  async (request) => {
+    const { companyId, driverHash, driverName } = (request.data || {}) as {
+      companyId?: string;
+      driverHash?: string;
+      driverName?: string;
+    };
+    if (!companyId || !driverHash || !driverName) {
+      throw new httpsV2.HttpsError(
+        'invalid-argument',
+        'companyId, driverHash, and driverName are required',
+      );
+    }
+
+    // 1. Verify driver exists
+    const driverSnap = await db.ref(`drivers/approved/${driverHash}`).once('value');
+    if (!driverSnap.exists()) {
+      throw new httpsV2.HttpsError('permission-denied', 'Driver hash not found in approved drivers');
+    }
+
+    const driverPid = `driver:${driverHash}`;
+
+    // 2. Get current dispatchers
+    const { ids: dispatchIds, names: dispatchNames } = await getDispatchParticipants(companyId);
+    if (dispatchIds.length === 0) {
+      throw new httpsV2.HttpsError(
+        'failed-precondition',
+        `Company ${companyId} has no dispatchers configured (no users with role admin/manager/it)`,
+      );
+    }
+
+    // 3. Look for an existing direct thread with this driver + at least
+    //    one current dispatcher. Fan-in any missing dispatchers.
+    const existingSnap = await firestoreDb.collection('chat_threads')
+      .where('type', '==', 'direct')
+      .where('companyId', '==', companyId)
+      .where('participants', 'array-contains', driverPid)
+      .limit(10)
+      .get();
+
+    for (const docSnap of existingSnap.docs) {
+      const data = docSnap.data();
+      const existingParticipants: string[] = Array.isArray(data.participants) ? data.participants : [];
+      const hasAnyDispatcher = existingParticipants.some(p => dispatchIds.includes(p));
+      if (!hasAnyDispatcher) continue; // legacy thread with stale dispatcher id — skip, don't reuse
+
+      // Fan-in missing dispatchers
+      const missing = dispatchIds.filter(id => !existingParticipants.includes(id));
+      if (missing.length > 0) {
+        const nameUpdates: Record<string, any> = {};
+        for (const id of missing) {
+          nameUpdates[`participantNames.${id}`] = dispatchNames[id];
+        }
+        await docSnap.ref.update({
+          participants: admin.firestore.FieldValue.arrayUnion(...missing),
+          ...nameUpdates,
+          updatedAt: admin.firestore.Timestamp.now(),
+        });
+        console.log(`[createOrFindDispatchThread] fanned in ${missing.length} dispatcher(s) to thread ${docSnap.id}`);
+      }
+      return {
+        threadId: docSnap.id,
+        participantCount: existingParticipants.length + missing.length,
+        reused: true,
+      };
+    }
+
+    // 4. Create new direct thread
+    const now = admin.firestore.Timestamp.now();
+    const threadRef = await firestoreDb.collection('chat_threads').add({
+      type: 'direct' as const,
+      companyId,
+      title: driverName, // title from admin's viewpoint = driver name; driver's viewpoint uses participantNames
+      participants: [driverPid, ...dispatchIds],
+      participantNames: { [driverPid]: driverName, ...dispatchNames },
+      status: 'active',
+      createdAt: now,
+      updatedAt: now,
+      lastRead: {},
+    });
+    console.log(
+      `[createOrFindDispatchThread] created new thread ${threadRef.id} for driver ${driverHash.slice(0, 8)} with ${dispatchIds.length} dispatcher(s)`,
+    );
+    return {
+      threadId: threadRef.id,
+      participantCount: 1 + dispatchIds.length,
+      reused: false,
+    };
+  },
+);
+
+// ============================================================
+// WB CHAT — onUserWrite
+// When a users/{uid} record is created / role changes / companyId changes
+// / deleted, rebalance that user's presence in company chat thread
+// `participants[]`. Keeps existing threads aligned with the current admin
+// roster as people are promoted, demoted, reassigned between companies,
+// or removed entirely.
+//
+// Admin-level roles (admin | manager | it) are participants in every
+// direct / shift / well / service_group / project thread for their
+// company (or every thread, if they have no companyId — WB admins span
+// all companies). Non-admin roles (driver | viewer) are NOT fanned into
+// these admin-visibility threads.
+//
+// Fire paths:
+//   newly admin+companyId     → fan IN  to all threads in that company
+//   newly WB admin (no cid)   → fan IN  to every thread
+//   admin → non-admin         → fan OUT of every thread
+//   companyId changed         → fan OUT of old company, IN to new
+//   user deleted              → fan OUT of every thread
+// ============================================================
+export const onUserWrite = functionsV1.database
+  .ref('users/{uid}')
+  .onWrite(async (change, context) => {
+    const uid = context.params.uid as string;
+    const pid = `user:${uid}`;
+    const before = change.before.exists() ? change.before.val() : null;
+    const after = change.after.exists() ? change.after.val() : null;
+
+    const isAdmin = (u: any) =>
+      !!u && typeof u.role === 'string' && ['admin', 'manager', 'it'].includes(u.role);
+
+    const beforeAdmin = isAdmin(before);
+    const afterAdmin = isAdmin(after);
+    const beforeCid = before?.companyId || ''; // '' = WB admin (spans all companies)
+    const afterCid = after?.companyId || '';
+    const displayName = after?.displayName || after?.email || before?.displayName || 'Admin';
+
+    // No meaningful change — nothing to do
+    if (beforeAdmin === afterAdmin && beforeCid === afterCid) {
+      return;
+    }
+
+    console.log('[onUserWrite]', {
+      uid: uid.slice(0, 8),
+      beforeAdmin, afterAdmin, beforeCid, afterCid,
+    });
+
+    // Helper: list thread IDs that this user SHOULD fan into/out of for
+    // a given companyId. '' (WB admin) means every thread in the DB.
+    async function threadsForScope(cid: string): Promise<{ id: string; participants: string[]; names: Record<string, any> }[]> {
+      const threadTypes = ['direct', 'shift', 'well', 'service_group', 'project'];
+      const list: { id: string; participants: string[]; names: Record<string, any> }[] = [];
+      for (const type of threadTypes) {
+        let q = firestoreDb.collection('chat_threads')
+          .where('type', '==', type) as FirebaseFirestore.Query;
+        if (cid) q = q.where('companyId', '==', cid);
+        const snap = await q.get();
+        snap.forEach(doc => {
+          const d = doc.data();
+          list.push({
+            id: doc.id,
+            participants: Array.isArray(d.participants) ? d.participants : [],
+            names: d.participantNames || {},
+          });
+        });
+      }
+      return list;
+    }
+
+    // Fan OUT (remove pid) of a set of threads
+    async function fanOut(threads: { id: string; participants: string[]; names: Record<string, any> }[]) {
+      let n = 0;
+      for (const t of threads) {
+        if (!t.participants.includes(pid)) continue;
+        await firestoreDb.collection('chat_threads').doc(t.id).update({
+          participants: admin.firestore.FieldValue.arrayRemove(pid),
+          [`participantNames.${pid}`]: admin.firestore.FieldValue.delete(),
+          updatedAt: admin.firestore.Timestamp.now(),
+        });
+        n++;
+      }
+      return n;
+    }
+
+    // Fan IN (add pid + name) to a set of threads
+    async function fanIn(threads: { id: string; participants: string[]; names: Record<string, any> }[]) {
+      let n = 0;
+      for (const t of threads) {
+        if (t.participants.includes(pid)) continue;
+        await firestoreDb.collection('chat_threads').doc(t.id).update({
+          participants: admin.firestore.FieldValue.arrayUnion(pid),
+          [`participantNames.${pid}`]: displayName,
+          updatedAt: admin.firestore.Timestamp.now(),
+        });
+        n++;
+      }
+      return n;
+    }
+
+    try {
+      // Case 1: demoted or deleted — fan out of everything they were in
+      if (beforeAdmin && !afterAdmin) {
+        // Old scope — empty cid means WB admin (every thread)
+        const oldThreads = await threadsForScope(beforeCid);
+        const out = await fanOut(oldThreads);
+        console.log(`[onUserWrite] ${pid} demoted/deleted — fanned out of ${out} thread(s)`);
+        return;
+      }
+
+      // Case 2: promoted (new admin) — fan in to current scope
+      if (!beforeAdmin && afterAdmin) {
+        const newThreads = await threadsForScope(afterCid);
+        const added = await fanIn(newThreads);
+        console.log(`[onUserWrite] ${pid} promoted — fanned into ${added} thread(s)`);
+        return;
+      }
+
+      // Case 3: stayed admin but moved companies — out of old, into new
+      if (beforeAdmin && afterAdmin && beforeCid !== afterCid) {
+        const oldThreads = await threadsForScope(beforeCid);
+        const newThreads = await threadsForScope(afterCid);
+        const removed = await fanOut(oldThreads);
+        const added = await fanIn(newThreads);
+        console.log(`[onUserWrite] ${pid} moved company ${beforeCid || 'WB'} → ${afterCid || 'WB'} — out:${removed} in:${added}`);
+        return;
+      }
+    } catch (err) {
+      console.error('[onUserWrite] failed (non-fatal):', err);
+    }
+  });
+
+// ============================================================
 // BYOJSA: Parse a JSA PDF using Claude AI
 // Extracts steps, hazards, controls, PPE items into structured JSON
 // ============================================================
