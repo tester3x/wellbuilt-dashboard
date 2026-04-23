@@ -21,6 +21,7 @@ import {
   type DemoClassification,
   type DemoLocationType,
 } from '@/lib/demoClassifyLocation';
+import { buildDemoBridgeQueryString } from '@/lib/demoBridge';
 
 type Step = 'landing' | 'setup' | 'results';
 
@@ -219,6 +220,10 @@ export default function DemoPage() {
             results={results ?? []}
             grouped={grouped}
             resultsSource={resultsSource}
+            registerHref={`/register/${buildDemoBridgeQueryString({
+              company: companyName,
+              locations: validLocations.map((l) => l.name),
+            })}`}
             onReset={resetDemo}
             onBack={() => setStep('setup')}
           />
@@ -464,6 +469,7 @@ function ResultsView({
   results,
   grouped,
   resultsSource,
+  registerHref,
   onReset,
   onBack,
 }: {
@@ -476,6 +482,7 @@ function ResultsView({
     custom: ResultsViewEntry[];
   };
   resultsSource: 'live' | 'fallback' | null;
+  registerHref: string;
   onReset: () => void;
   onBack: () => void;
 }): React.ReactElement {
@@ -583,7 +590,7 @@ function ResultsView({
             Reset demo
           </button>
           <Link
-            href="/register"
+            href={registerHref}
             className="px-4 py-2 text-sm bg-blue-600 hover:bg-blue-500 text-white rounded font-medium"
           >
             Create an account

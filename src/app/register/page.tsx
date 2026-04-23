@@ -1,19 +1,73 @@
 'use client';
 
-import { useState } from 'react';
+import { Suspense, useEffect, useMemo, useState } from 'react';
 import Link from 'next/link';
-import { useRouter } from 'next/navigation';
+import { useRouter, useSearchParams } from 'next/navigation';
 import { registerWithEmail } from '@/lib/auth';
+import {
+  decodeDemoBridgeQuery,
+  DEMO_BRIDGE_STORAGE_KEY,
+  type DemoBridgePayload,
+} from '@/lib/demoBridge';
 
 export default function RegisterPage() {
+  // Next.js 16 app-router requires Suspense around any client component
+  // that calls useSearchParams when using `output: 'export'`. Keep the
+  // inner form in a child so the outer page has a clean fallback.
+  return (
+    <Suspense fallback={<RegisterFallback />}>
+      <RegisterForm />
+    </Suspense>
+  );
+}
+
+function RegisterFallback(): React.ReactElement {
+  return (
+    <div className="min-h-screen flex items-center justify-center bg-gray-900">
+      <div className="text-gray-400 text-sm">Loading…</div>
+    </div>
+  );
+}
+
+function RegisterForm(): React.ReactElement {
+  const searchParams = useSearchParams();
+
+  // Phase 25 — read the demo bridge payload on mount. Null on any
+  // parse / shape error; the form renders identically to the pre-
+  // Phase-25 page in that case.
+  const demoPayload = useMemo<DemoBridgePayload | null>(
+    () => decodeDemoBridgeQuery(searchParams),
+    [searchParams]
+  );
+
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
   const [confirm, setConfirm] = useState('');
+  const [company, setCompany] = useState<string>(
+    () => demoPayload?.company ?? ''
+  );
   const [showPassword, setShowPassword] = useState(false);
   const [showConfirm, setShowConfirm] = useState(false);
   const [error, setError] = useState('');
   const [loading, setLoading] = useState(false);
   const router = useRouter();
+
+  // Mirror the demo payload into sessionStorage so a future post-
+  // registration onboarding flow can resume where the demo left off.
+  // Nothing is written to Firebase here — strictly client-side state.
+  useEffect(() => {
+    if (!demoPayload) return;
+    if (typeof window === 'undefined') return;
+    try {
+      window.sessionStorage.setItem(
+        DEMO_BRIDGE_STORAGE_KEY,
+        JSON.stringify(demoPayload)
+      );
+    } catch {
+      // Session storage may be unavailable (private mode, quota). The
+      // banner still shows, so the flow remains visually continuous.
+    }
+  }, [demoPayload]);
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -47,16 +101,12 @@ export default function RegisterPage() {
       } else if (code === 'auth/weak-password') {
         setError('Password is too weak. Use at least 6 characters.');
       } else if (code === 'auth/operation-not-allowed') {
-        // Most likely first-time cause: Email/Password sign-in method isn't
-        // enabled. Firebase Console → Authentication → Sign-in method.
         setError(
           'Email/Password sign-in is not enabled in Firebase. Enable it in Firebase Console → Authentication → Sign-in method.'
         );
       } else if (code === 'auth/network-request-failed') {
         setError('Network error reaching Firebase. Check connection and retry.');
       } else {
-        // Surface the raw code + message so we can see exactly what happened
-        // instead of hiding it behind a generic fallback.
         setError(
           code
             ? `Failed to create account (${code}). ${message ?? ''}`.trim()
@@ -69,19 +119,67 @@ export default function RegisterPage() {
   };
 
   return (
-    <div className="min-h-screen flex items-center justify-center bg-gray-900">
+    <div className="min-h-screen flex items-center justify-center bg-gray-900 py-10">
       <div className="bg-gray-800 p-8 rounded-lg shadow-xl w-full max-w-md">
-        <div className="text-center mb-8">
+        <div className="text-center mb-6">
           <h1 className="text-3xl font-bold text-white">WellBuilt</h1>
           <p className="text-gray-400 mt-2">Create Dashboard Account</p>
         </div>
 
-        <form onSubmit={handleSubmit} className="space-y-6">
+        {demoPayload && (
+          <div className="mb-6 bg-blue-900/30 border border-blue-700/60 rounded-lg p-4">
+            <div className="text-[11px] uppercase tracking-wide text-blue-300 mb-1">
+              Continuing from demo setup
+            </div>
+            <p className="text-sm text-gray-200">
+              We'll use your demo setup to get you started.
+            </p>
+            {demoPayload.locations.length > 0 && (
+              <div className="mt-3">
+                <div className="text-[11px] uppercase tracking-wide text-gray-400 mb-1">
+                  We detected your demo setup:
+                </div>
+                <ul className="list-disc list-inside text-xs text-gray-300 space-y-0.5">
+                  {demoPayload.locations.map((name) => (
+                    <li key={name}>{name}</li>
+                  ))}
+                </ul>
+                <p className="text-[11px] text-gray-500 mt-2">
+                  These will be saved to your account after you finish
+                  signing up — nothing has been written yet.
+                </p>
+              </div>
+            )}
+          </div>
+        )}
+
+        <form onSubmit={handleSubmit} className="space-y-5">
           {error && (
             <div className="bg-red-900/50 border border-red-500 text-red-200 px-4 py-3 rounded text-sm">
               {error}
             </div>
           )}
+
+          <div>
+            <label
+              htmlFor="company"
+              className="block text-sm font-medium text-gray-300 mb-2"
+            >
+              Company name{' '}
+              <span className="text-xs text-gray-500 font-normal">
+                (optional — you can set this after sign-up)
+              </span>
+            </label>
+            <input
+              id="company"
+              type="text"
+              value={company}
+              onChange={(e) => setCompany(e.target.value)}
+              autoComplete="organization"
+              className="w-full px-4 py-3 bg-gray-700 border border-gray-600 rounded-lg text-white placeholder-gray-400 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent"
+              placeholder="Acme Hauling Co."
+            />
+          </div>
 
           <div>
             <label
