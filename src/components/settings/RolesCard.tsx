@@ -73,7 +73,7 @@ const CAPABILITY_GROUPS: { title: string; caps: { cap: Capability; label: string
   },
 ];
 
-const ROLES_IN_DISPLAY_ORDER: UserRole[] = ['it', 'admin', 'manager', 'dispatch', 'payroll', 'viewer', 'driver'];
+const ROLES_IN_DISPLAY_ORDER: UserRole[] = ['it', 'admin', 'manager', 'dispatch', 'payroll', 'driver', 'viewer'];
 
 export function RolesCard({ company, onSave, canEdit }: Props) {
   const [saving, setSaving] = useState(false);
