@@ -617,6 +617,22 @@ export default function ChatPage() {
   // Drivers already assigned to a slot in this profile
   const assignedHashes = new Set(slots.filter(Boolean).map((s) => s!.driverHash));
 
+  // Top-level guard: do not render the chat shell until auth has produced a
+  // real Firebase uid. myParticipantId is '' pre-auth; downstream render paths
+  // (Firestore reads with empty array-contains, `lastRead.${myParticipantId}`
+  // writes, profile-slot driver assignment) can throw when the participant
+  // identity is empty. Earlier we only guarded the subscription effect; the
+  // crash came from render-time paths. Short-circuit here and let the hooks
+  // above keep their stable call order (all useState / useRef / useEffect /
+  // useCallback / useMemo are called before this return).
+  if (authLoading || !myParticipantId) {
+    return (
+      <div className="h-dvh bg-[#0a0a0a] text-white flex items-center justify-center">
+        <div className="text-gray-400">Loading chat...</div>
+      </div>
+    );
+  }
+
   // --- Render ---
   return (
     <div className="h-dvh bg-[#0a0a0a] text-white flex">
