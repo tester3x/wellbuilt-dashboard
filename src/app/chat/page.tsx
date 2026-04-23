@@ -4,7 +4,7 @@
 // Monitor Profiles: each monitor gets a saved config with locked driver positions.
 // Opened via window.open('/chat?profile=north-crew') from Dashboard.
 
-import { useEffect, useState, useRef, useCallback, useMemo } from 'react';
+import React, { useEffect, useState, useRef, useCallback, useMemo } from 'react';
 import { useAuth } from '@/contexts/AuthContext';
 import { getFirestoreDb } from '@/lib/firebase';
 import {
@@ -84,8 +84,105 @@ const GRID_LAYOUTS = [
   { label: '6x3', cols: 6, rows: 3 },
 ];
 
+// --- Thread normalizer ---------------------------------------------------
+// Every read from chat_threads goes through this so downstream code can
+// assume: participants is an array, participantNames is an object, lastRead
+// is an object, title is a non-empty string. Any malformed doc gets replaced
+// with safe defaults rather than poisoning render. Unknown fields on the
+// original doc (broadcast, projectId, wellName, etc.) pass through via spread.
+function normalizeThread(raw: any, id: string): ChatThread {
+  const safe: any = {
+    ...raw,
+    id,
+    type: raw?.type || 'direct',
+    title: typeof raw?.title === 'string' && raw.title ? raw.title : 'Untitled',
+    subtitle: typeof raw?.subtitle === 'string' ? raw.subtitle : '',
+    participants: Array.isArray(raw?.participants) ? raw.participants : [],
+    participantNames:
+      raw?.participantNames && typeof raw.participantNames === 'object' && !Array.isArray(raw.participantNames)
+        ? raw.participantNames
+        : {},
+    lastRead:
+      raw?.lastRead && typeof raw.lastRead === 'object' && !Array.isArray(raw.lastRead)
+        ? raw.lastRead
+        : {},
+    status: raw?.status || 'active',
+    companyId: raw?.companyId || '',
+  };
+  return safe as ChatThread;
+}
+
+// --- Error boundary -------------------------------------------------------
+// Surfaces runtime exceptions as readable UI instead of the default
+// "Application error: client-side exception" blank screen. Critical for
+// diagnosing chat crashes in prod — shows the error message + stack and
+// offers a Retry button.
+class ChatErrorBoundary extends React.Component<
+  { children: React.ReactNode },
+  { err: Error | null; info: React.ErrorInfo | null }
+> {
+  state: { err: Error | null; info: React.ErrorInfo | null } = { err: null, info: null };
+  static getDerivedStateFromError(err: Error) {
+    return { err, info: null };
+  }
+  componentDidCatch(err: Error, info: React.ErrorInfo) {
+    console.error('[ChatPage][ErrorBoundary] caught:', err, info);
+    this.setState({ err, info });
+  }
+  render() {
+    if (this.state.err) {
+      const stack = this.state.err.stack || '';
+      const componentStack = this.state.info?.componentStack || '';
+      return (
+        <div className="h-dvh bg-[#0a0a0a] text-white p-6 overflow-auto">
+          <h1 className="text-xl text-red-400 mb-2">Chat crashed (caught by boundary)</h1>
+          <p className="text-gray-400 text-sm mb-3">
+            First line of the exception is shown below. Full stack is in DevTools Console
+            under the tag <code className="text-[#FFD700]">[ChatPage][ErrorBoundary]</code>.
+          </p>
+          <pre className="text-xs bg-[#1a1a1a] border border-red-600 rounded p-3 whitespace-pre-wrap">
+            {String(this.state.err.message || this.state.err)}
+          </pre>
+          {stack && (
+            <pre className="text-[10px] bg-[#1a1a1a] border border-gray-600 rounded p-3 mt-2 whitespace-pre-wrap max-h-80 overflow-auto">
+              {stack}
+            </pre>
+          )}
+          {componentStack && (
+            <pre className="text-[10px] bg-[#1a1a1a] border border-gray-600 rounded p-3 mt-2 whitespace-pre-wrap max-h-80 overflow-auto">
+              {componentStack}
+            </pre>
+          )}
+          <button
+            onClick={() => this.setState({ err: null, info: null })}
+            className="mt-4 px-3 py-1 bg-[#FFD700] text-black rounded text-xs"
+          >
+            Retry
+          </button>
+        </div>
+      );
+    }
+    return this.props.children;
+  }
+}
+
 export default function ChatPage() {
+  return (
+    <ChatErrorBoundary>
+      <ChatPageInner />
+    </ChatErrorBoundary>
+  );
+}
+
+function ChatPageInner() {
   const { user, loading: authLoading } = useAuth();
+  // One-shot log when auth resolves — helps pin down whether a crash happens
+  // before or after authentication completes.
+  const authLoggedRef = useRef(false);
+  if (!authLoading && !authLoggedRef.current) {
+    authLoggedRef.current = true;
+    console.log('[ChatPage][auth-resolved]', { uid: user?.uid, companyId: user?.companyId, role: user?.role });
+  }
   // Do NOT derive a 'user:dev' fallback participant id here. With Firestore
   // IndexedDB persistence enabled, the thread subscription would fire three
   // separate times during boot — last-session cache → 'user:dev' network result
@@ -270,7 +367,16 @@ export default function ChatPage() {
     );
     const unsub = onSnapshot(q, (snap) => {
       const list: ChatThread[] = [];
-      snap.forEach((d) => list.push({ id: d.id, ...d.data() } as ChatThread));
+      let skipped = 0;
+      snap.forEach((d) => {
+        try {
+          list.push(normalizeThread(d.data(), d.id));
+        } catch (err) {
+          skipped++;
+          console.warn('[ChatPage][threads-snapshot] skipped malformed thread', d.id, err);
+        }
+      });
+      console.log('[ChatPage][threads-snapshot]', { count: list.length, skipped, participantId: myParticipantId });
       setThreads(list);
 
       // Auto-open: detect new messages from threads not in any profile's slots
