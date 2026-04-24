@@ -824,7 +824,7 @@ export function DriversTab({ scopeCompanyId, isWbAdmin = false }: DriversTabProp
       <div className="bg-gray-800 rounded-lg p-4">
         <div className="flex items-center justify-between mb-4">
           <h3 className="text-white font-medium">
-            {scopeCompanyId ? 'Your Drivers' : 'All Drivers'} ({companyDrivers.length})
+            {scopeCompanyId ? 'Your Employees' : 'All Employees'} ({companyDrivers.length})
             {isWbAdmin && approvedDrivers.some(d => d._legacy) && (
               <span className="text-orange-400 text-xs ml-2 font-normal">
                 ({approvedDrivers.filter(d => d._legacy).length} legacy)
@@ -862,7 +862,7 @@ export function DriversTab({ scopeCompanyId, isWbAdmin = false }: DriversTabProp
         ) : (
           <div className="space-y-2">
             {filteredDrivers.map(driver => (
-              <div key={driver.key} className="bg-gray-700 rounded overflow-hidden">
+              <div key={driver.key} className="bg-gray-700 rounded">
                 {/* Driver row */}
                 <div
                   className="flex items-center justify-between p-3 cursor-pointer hover:bg-gray-600"
@@ -879,11 +879,27 @@ export function DriversTab({ scopeCompanyId, isWbAdmin = false }: DriversTabProp
                     {isWbAdmin && driver._legacy && (
                       <span className="px-1.5 py-0.5 bg-orange-700 text-orange-200 text-xs rounded font-medium">Legacy</span>
                     )}
+                    {/* Dashboard role badge — always visible. "Driver" label
+                        (dim) when no dashboard account. Role label (bright) when
+                        linked. Respects per-company getRoleLabel so customer-
+                        renamed roles appear correctly. */}
+                    {driver.dashboardRole ? (
+                      <span className="px-1.5 py-0.5 bg-purple-600 text-white text-xs rounded font-medium">
+                        {getRoleLabel(driver.dashboardRole, userCompany)}
+                      </span>
+                    ) : (
+                      <span className="px-1.5 py-0.5 bg-gray-600 text-gray-300 text-xs rounded font-medium">
+                        {getRoleLabel('driver', userCompany)}
+                      </span>
+                    )}
+                    {/* Phone-app admin (isAdmin on the driver record) — separate
+                        concept from the dashboard role. Renamed to "App Admin" so
+                        it doesn't get confused with a dashboard Admin role. */}
                     {driver.isAdmin && (
-                      <span className="px-1.5 py-0.5 bg-purple-600 text-purple-200 text-xs rounded font-medium">Admin</span>
+                      <span className="px-1.5 py-0.5 bg-slate-600 text-slate-200 text-xs rounded font-medium" title="WB T / WB S phone-app admin — separate from dashboard role">App Admin</span>
                     )}
                     {driver.isViewer && !driver.isAdmin && (
-                      <span className="px-1.5 py-0.5 bg-blue-600 text-blue-200 text-xs rounded font-medium">Viewer</span>
+                      <span className="px-1.5 py-0.5 bg-blue-600 text-blue-200 text-xs rounded font-medium" title="WB T / WB S phone-app viewer">App Viewer</span>
                     )}
                     {isWbAdmin && driver.companyName && (
                       <span className="px-1.5 py-0.5 bg-teal-700 text-teal-200 text-xs rounded font-medium">{driver.companyName}</span>
@@ -950,7 +966,7 @@ export function DriversTab({ scopeCompanyId, isWbAdmin = false }: DriversTabProp
                           <span className="text-xs">▾</span>
                         </button>
                         {roleMenuForKey === driver.key && (
-                          <div className="absolute top-full left-0 mt-1 z-20 bg-gray-800 border border-gray-600 rounded shadow-xl min-w-[180px]">
+                          <div className="absolute top-full left-0 mt-1 z-30 bg-gray-800 border border-gray-600 rounded shadow-xl min-w-[200px] max-h-72 overflow-y-auto">
                             {(['driver', 'viewer', 'dispatch', 'payroll', 'manager', 'admin', 'it'] as UserRole[]).map(
                               (r) => {
                                 const isCurrent =
