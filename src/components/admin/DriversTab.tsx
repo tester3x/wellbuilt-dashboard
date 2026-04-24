@@ -52,8 +52,27 @@ interface PendingDriver {
   requestedAt?: string;    // ISO timestamp from registration
 }
 
+// ── Dashboard user (from RTDB users/{uid}) ─────────────────────────────────
+// Pure-dashboard accounts (no driver record) and drivers who've been promoted
+// via inviteEmployee both have an entry here. We show them as a separate
+// subsection inside each company group in the Employees tab.
+interface DashboardUser {
+  uid: string;
+  email: string;
+  displayName: string;
+  role: UserRole;
+  companyId?: string;      // '' / undefined = WB staff (spans all companies)
+  companyName?: string;
+  driverHash?: string;     // linked driver record, if promoted from a driver
+}
+
 export function DriversTab({ scopeCompanyId, isWbAdmin = false }: DriversTabProps) {
   const [approvedDrivers, setApprovedDrivers] = useState<ApprovedDriver[]>([]);
+  const [dashboardUsers, setDashboardUsers] = useState<DashboardUser[]>([]);
+  // Per-company collapse state for WB-admin grouped view. Key = companyId
+  // (empty string = WellBuilt Staff). Defaults vary: when there's only one
+  // company in the list we expand it; multi-company views start collapsed.
+  const [collapsedCompanies, setCollapsedCompanies] = useState<Record<string, boolean>>({});
   const [pendingDrivers, setPendingDrivers] = useState<PendingDriver[]>([]);
   const [loading, setLoading] = useState(true);
   const [message, setMessage] = useState('');
@@ -139,6 +158,8 @@ export function DriversTab({ scopeCompanyId, isWbAdmin = false }: DriversTabProp
               assignedRoutes: Array.isArray(val.assignedRoutes) ? val.assignedRoutes : [],
               assignedWells: Array.isArray(val.assignedWells) ? val.assignedWells : [],
               defaultPackageId: val.defaultPackageId || undefined,
+              dashboardUid: val.dashboardUid || undefined,
+              dashboardRole: val.dashboardRole || undefined,
             });
           } else {
             // Legacy structure: drivers/approved/{hash}/{deviceId}/ = { displayName, active, ... }
@@ -205,9 +226,33 @@ export function DriversTab({ scopeCompanyId, isWbAdmin = false }: DriversTabProp
       }
       pending.sort((a, b) => (b.timestamp || 0) - (a.timestamp || 0));
       setPendingDrivers(pending);
+
+      // Load dashboard users (users/{uid}). Purely-dashboard employees
+      // (not linked to a driver record) appear only here; drivers who have
+      // been promoted via inviteEmployee appear in BOTH lists and are linked
+      // via driverHash on the user side + dashboardUid on the driver side.
+      const usersSnap = await get(ref(db, 'users'));
+      const userList: DashboardUser[] = [];
+      if (usersSnap.exists()) {
+        const data = usersSnap.val();
+        Object.entries(data).forEach(([uid, val]: [string, any]) => {
+          if (!val?.role || val.role === 'driver') return; // skip plain drivers
+          userList.push({
+            uid,
+            email: val.email || '',
+            displayName: val.displayName || val.email || 'Unknown',
+            role: val.role as UserRole,
+            companyId: val.companyId || undefined,
+            companyName: val.companyName || undefined,
+            driverHash: val.driverHash || undefined,
+          });
+        });
+      }
+      userList.sort((a, b) => a.displayName.localeCompare(b.displayName));
+      setDashboardUsers(userList);
     } catch (err) {
-      console.error('Failed to load drivers:', err);
-      setMessage('Failed to load drivers');
+      console.error('Failed to load employees:', err);
+      setMessage('Failed to load employees');
     } finally {
       setLoading(false);
     }
@@ -732,8 +777,307 @@ export function DriversTab({ scopeCompanyId, isWbAdmin = false }: DriversTabProp
       )
     : companyDrivers;
 
+  // Dashboard users scoped the same way as drivers for search/company-filter
+  const companyDashboardUsers = scopeCompanyId
+    ? dashboardUsers.filter(u => u.companyId === scopeCompanyId)
+    : dashboardUsers;
+  const filteredDashboardUsers = search.trim()
+    ? companyDashboardUsers.filter(u =>
+        (u.displayName || '').toLowerCase().includes(search.toLowerCase()) ||
+        (u.email || '').toLowerCase().includes(search.toLowerCase()),
+      )
+    : companyDashboardUsers;
+
+  // ── WB-admin grouped view ────────────────────────────────────────────
+  // For a WB admin (no scopeCompanyId), group employees by companyId into
+  // collapsible sections. Company-scoped admins keep the flat list.
+  //
+  // Group key is the companyId string ('' = WellBuilt Staff — humans with
+  // no companyId, typically platform admins like testerxxx).
+  type EmployeeGroup = {
+    companyId: string;             // '' for WB Staff
+    companyName: string;
+    drivers: ApprovedDriver[];
+    users: DashboardUser[];
+  };
+  const groupedEmployees: EmployeeGroup[] = (() => {
+    if (scopeCompanyId) return []; // grouped view unused for company-scoped admins
+    const byCid = new Map<string, EmployeeGroup>();
+    const keyFor = (cid: string | undefined) => cid || '';
+    const nameFor = (cid: string | undefined, fallback: string | undefined): string => {
+      if (!cid) return 'WellBuilt Staff';
+      return fallback || cid;
+    };
+    for (const d of filteredDrivers) {
+      const k = keyFor(d.companyId);
+      if (!byCid.has(k)) {
+        byCid.set(k, {
+          companyId: k,
+          companyName: nameFor(d.companyId, d.companyName),
+          drivers: [],
+          users: [],
+        });
+      }
+      byCid.get(k)!.drivers.push(d);
+    }
+    for (const u of filteredDashboardUsers) {
+      const k = keyFor(u.companyId);
+      if (!byCid.has(k)) {
+        byCid.set(k, {
+          companyId: k,
+          companyName: nameFor(u.companyId, u.companyName),
+          drivers: [],
+          users: [],
+        });
+      }
+      byCid.get(k)!.users.push(u);
+    }
+    // Sort: WellBuilt Staff first (empty companyId), then companies alphabetically by name.
+    const groups = Array.from(byCid.values());
+    groups.sort((a, b) => {
+      if (a.companyId === '' && b.companyId !== '') return -1;
+      if (a.companyId !== '' && b.companyId === '') return 1;
+      return a.companyName.localeCompare(b.companyName);
+    });
+    return groups;
+  })();
+
+  // Default collapse state: single-company view auto-expands; multi-company
+  // starts collapsed so it doesn't scroll forever on first load.
+  const defaultCollapsed = groupedEmployees.length > 1;
+  const isGroupCollapsed = (cid: string) =>
+    collapsedCompanies[cid] !== undefined ? collapsedCompanies[cid] : defaultCollapsed;
+  const toggleGroup = (cid: string) =>
+    setCollapsedCompanies(prev => ({ ...prev, [cid]: !isGroupCollapsed(cid) }));
+
   // For pending drivers, company admins see all pending (they'll approve into their company)
   const visiblePending = pendingDrivers;
+
+  // ── Render helpers ────────────────────────────────────────────────────
+  // Extracted so the same driver row + dashboard user row JSX can be used
+  // by both the flat (company-scoped) list and the grouped (WB admin) list
+  // without duplicating ~270 lines of markup.
+  const renderDriverRow = (driver: ApprovedDriver) => (
+    <div key={driver.key} className="bg-gray-700 rounded">
+      {/* Driver row */}
+      <div
+        className="flex items-center justify-between p-3 cursor-pointer hover:bg-gray-600"
+        onClick={() => setExpandedDriver(expandedDriver === driver.key ? null : driver.key)}
+      >
+        <div className="flex items-center gap-3">
+          <span className={`w-2 h-2 rounded-full ${driver.active ? 'bg-green-400' : 'bg-gray-500'}`} />
+          <div className="flex flex-col">
+            <span className="text-white font-medium">{driver.displayName}</span>
+            {driver.legalName && driver.legalName !== driver.displayName && (
+              <span className="text-gray-400 text-xs">{driver.legalName}</span>
+            )}
+          </div>
+          {isWbAdmin && driver._legacy && (
+            <span className="px-1.5 py-0.5 bg-orange-700 text-orange-200 text-xs rounded font-medium">Legacy</span>
+          )}
+          {driver.dashboardRole ? (
+            <span className="px-1.5 py-0.5 bg-purple-600 text-white text-xs rounded font-medium">
+              {getRoleLabel(driver.dashboardRole, userCompany)}
+            </span>
+          ) : (
+            <span className="px-1.5 py-0.5 bg-gray-600 text-gray-300 text-xs rounded font-medium">
+              {getRoleLabel('driver', userCompany)}
+            </span>
+          )}
+          {driver.isAdmin && (
+            <span className="px-1.5 py-0.5 bg-slate-600 text-slate-200 text-xs rounded font-medium" title="WB T / WB S phone-app admin — separate from dashboard role">App Admin</span>
+          )}
+          {driver.isViewer && !driver.isAdmin && (
+            <span className="px-1.5 py-0.5 bg-blue-600 text-blue-200 text-xs rounded font-medium" title="WB T / WB S phone-app viewer">App Viewer</span>
+          )}
+          {isWbAdmin && driver.companyName && (
+            <span className="px-1.5 py-0.5 bg-teal-700 text-teal-200 text-xs rounded font-medium">{driver.companyName}</span>
+          )}
+          {isWbAdmin && !driver.companyId && (
+            <span className="px-1.5 py-0.5 bg-gray-600 text-gray-300 text-xs rounded font-medium">No Company</span>
+          )}
+          {(driver.assignedCustomers?.length || 0) > 0 && (
+            <span className="px-1.5 py-0.5 bg-yellow-600 text-yellow-200 text-xs rounded font-medium">
+              {driver.assignedCustomers!.length} customer{driver.assignedCustomers!.length > 1 ? 's' : ''}
+            </span>
+          )}
+          {(driver.assignedRoutes?.length || 0) > 0 && (
+            <span className="px-1.5 py-0.5 bg-blue-600 text-blue-200 text-xs rounded font-medium">
+              {driver.assignedRoutes!.length} route{driver.assignedRoutes!.length > 1 ? 's' : ''}
+            </span>
+          )}
+          {driver.defaultPackageId && (
+            <span className="px-1.5 py-0.5 bg-indigo-600 text-indigo-200 text-xs rounded font-medium">
+              {availablePackages.find(p => p.id === driver.defaultPackageId)?.name || driver.defaultPackageId}
+            </span>
+          )}
+        </div>
+        <span className="text-gray-400 text-sm">
+          {expandedDriver === driver.key ? '▲' : '▼'}
+        </span>
+      </div>
+
+      {expandedDriver === driver.key && (
+        <div className="border-t border-gray-600 p-3 space-y-3">
+          <div className="flex flex-wrap gap-2">
+            <button
+              onClick={() => toggleDriverActive(driver)}
+              className={`px-3 py-1 text-sm rounded ${driver.active ? 'bg-gray-600 hover:bg-gray-500 text-gray-300' : 'bg-green-600 hover:bg-green-500 text-white'}`}
+            >
+              {driver.active ? 'Deactivate' : 'Activate'}
+            </button>
+            <div className="relative">
+              <button
+                onClick={() => setRoleMenuForKey(roleMenuForKey === driver.key ? null : driver.key)}
+                className="px-3 py-1 text-sm rounded bg-purple-600 hover:bg-purple-500 text-white flex items-center gap-1"
+                title={driver.dashboardRole ? `Currently: ${getRoleLabel(driver.dashboardRole, userCompany)}` : 'Driver only (no dashboard access)'}
+              >
+                {driver.dashboardRole ? getRoleLabel(driver.dashboardRole, userCompany) : 'Driver'}
+                <span className="text-xs">▾</span>
+              </button>
+              {roleMenuForKey === driver.key && (
+                <div className="absolute top-full left-0 mt-1 z-30 bg-gray-800 border border-gray-600 rounded shadow-xl min-w-[200px] max-h-72 overflow-y-auto">
+                  {(['driver', 'viewer', 'dispatch', 'payroll', 'manager', 'admin', 'it'] as UserRole[]).map(r => {
+                    const isCurrent = (r === 'driver' && !driver.dashboardRole) || r === driver.dashboardRole;
+                    return (
+                      <button
+                        key={r}
+                        onClick={() => handleRolePick(driver, r)}
+                        className={`block w-full text-left px-3 py-1.5 text-sm hover:bg-purple-700/40 ${isCurrent ? 'bg-purple-700/50 text-white' : 'text-gray-200'}`}
+                      >
+                        <span className="font-medium">{getRoleLabel(r, userCompany)}</span>
+                        <span className="text-[10px] text-gray-500 ml-2 font-mono">{r}</span>
+                      </button>
+                    );
+                  })}
+                </div>
+              )}
+            </div>
+            {isWbAdmin && (
+              <button
+                onClick={() => toggleDriverAdmin(driver)}
+                className={`px-3 py-1 text-sm rounded ${driver.isAdmin ? 'bg-gray-600 hover:bg-gray-500 text-gray-300' : 'bg-slate-600 hover:bg-slate-500 text-gray-200'}`}
+                title="Toggles the driver-app (WB T / WB S) admin menu access — separate from dashboard role"
+              >
+                {driver.isAdmin ? 'App Admin \u2713' : 'App Admin'}
+              </button>
+            )}
+            <button
+              onClick={() => { setAssignTarget(driver); setShowAssignModal(true); }}
+              className="px-3 py-1 text-sm rounded bg-yellow-600 hover:bg-yellow-500 text-white"
+            >
+              + Assign Operator
+            </button>
+            <button
+              onClick={() => { setRouteTarget(driver); setSelectedRoutes(driver.assignedRoutes || []); setShowRoutesModal(true); }}
+              className="px-3 py-1 text-sm rounded bg-blue-600 hover:bg-blue-500 text-white"
+            >
+              {(driver.assignedRoutes?.length || 0) > 0 ? 'Edit Routes' : '+ Assign Routes'}
+            </button>
+            <button
+              onClick={() => { setPackageTarget(driver); setSelectedPackageId(driver.defaultPackageId || ''); setShowPackageModal(true); }}
+              className={`px-3 py-1 text-sm rounded ${driver.defaultPackageId ? 'bg-indigo-600 hover:bg-indigo-500 text-white' : 'bg-gray-600 hover:bg-gray-500 text-gray-300'}`}
+            >
+              {driver.defaultPackageId ? `Pkg: ${availablePackages.find(p => p.id === driver.defaultPackageId)?.name || driver.defaultPackageId}` : 'Default Package'}
+            </button>
+            {isWbAdmin && (
+              <button
+                onClick={() => { setCompanyTarget(driver); setAssignCompanyId(driver.companyId || ''); setAssignCompanyName(driver.companyName || ''); setShowCompanyModal(true); }}
+                className="px-3 py-1 text-sm rounded bg-teal-600 hover:bg-teal-500 text-white"
+              >
+                {driver.companyId ? 'Change Customer' : 'Assign Customer'}
+              </button>
+            )}
+            {isWbAdmin && driver._legacy && (
+              <button
+                onClick={() => migrateDriver(driver)}
+                className="px-3 py-1 text-sm rounded bg-orange-600 hover:bg-orange-500 text-white"
+                title="Convert from legacy device-based format to new flat format"
+              >
+                Migrate
+              </button>
+            )}
+            {isWbAdmin && (
+              <button
+                onClick={() => deleteDriver(driver)}
+                className="px-3 py-1 text-sm rounded bg-red-700 hover:bg-red-600 text-red-200 ml-auto"
+              >
+                Delete
+              </button>
+            )}
+          </div>
+
+          <div>
+            <h4 className="text-gray-400 text-xs font-medium uppercase tracking-wider mb-2">Assigned Operators</h4>
+            {(driver.assignedCustomers?.length || 0) === 0 ? (
+              <p className="text-gray-500 text-sm">No operators assigned</p>
+            ) : (
+              <div className="space-y-1">
+                {driver.assignedCustomers!.map(c => (
+                  <div key={c.companyId} className="flex items-center justify-between bg-gray-800 rounded p-2">
+                    <div>
+                      <span className="text-yellow-300 text-sm font-medium">{c.name}</span>
+                      <span className="text-gray-500 text-xs ml-2">({c.companyId})</span>
+                    </div>
+                    <button onClick={() => removeCustomer(driver, c.companyId)} className="text-red-400 hover:text-red-300 text-xs">Remove</button>
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
+
+          <div>
+            <h4 className="text-gray-400 text-xs font-medium uppercase tracking-wider mb-2">Assigned Routes</h4>
+            {(driver.assignedRoutes?.length || 0) === 0 ? (
+              <p className="text-gray-500 text-sm">No routes assigned (sees all wells)</p>
+            ) : (
+              <div className="flex flex-wrap gap-1">
+                {driver.assignedRoutes!.map(route => (
+                  <span key={route} className="px-2 py-1 bg-blue-900 text-blue-200 text-sm rounded">{route}</span>
+                ))}
+              </div>
+            )}
+          </div>
+
+          {isWbAdmin && (
+            <div className="text-gray-500 text-xs font-mono">
+              Hash: {driver.key.slice(0, 12)}...
+              {driver._legacy && (
+                <span className="text-orange-400 ml-2">(legacy format — device: {driver._legacyDeviceId?.slice(0, 8)}...)</span>
+              )}
+              {driver.companyId && (
+                <span className="text-teal-400 ml-2">Customer: {driver.companyId}</span>
+              )}
+            </div>
+          )}
+        </div>
+      )}
+    </div>
+  );
+
+  // Dashboard-user row — simpler than driver. Shows email + role badge.
+  // The role label badge uses the same purple styling as drivers with
+  // dashboard access, so both render consistently side-by-side.
+  const renderDashboardUserRow = (u: DashboardUser) => (
+    <div key={u.uid} className="bg-gray-700/70 rounded p-3 flex items-center justify-between">
+      <div className="flex items-center gap-3">
+        <span className="w-2 h-2 rounded-full bg-purple-400" />
+        <div className="flex flex-col">
+          <span className="text-white font-medium">{u.displayName}</span>
+          <span className="text-gray-400 text-xs">{u.email}</span>
+        </div>
+        <span className="px-1.5 py-0.5 bg-purple-600 text-white text-xs rounded font-medium">
+          {getRoleLabel(u.role, userCompany)}
+        </span>
+        {u.driverHash && (
+          <span className="px-1.5 py-0.5 bg-slate-700 text-slate-300 text-xs rounded font-medium" title="Also has a driver phone-app login linked to this dashboard user">
+            + driver login
+          </span>
+        )}
+      </div>
+      <span className="text-[10px] text-gray-500 font-mono">{u.uid.slice(0, 10)}…</span>
+    </div>
+  );
 
   if (loading) {
     return (
@@ -855,287 +1199,88 @@ export function DriversTab({ scopeCompanyId, isWbAdmin = false }: DriversTabProp
           </div>
         </div>
 
-        {filteredDrivers.length === 0 ? (
+        {filteredDrivers.length === 0 && filteredDashboardUsers.length === 0 ? (
           <div className="text-gray-500 text-center py-6">
-            {search ? 'No drivers match search' : 'No approved drivers yet'}
+            {search ? 'No employees match search' : 'No approved employees yet'}
+          </div>
+        ) : scopeCompanyId ? (
+          // Company-scoped admin view — flat list of drivers, then a small
+          // section for the company's dashboard-only users.
+          <div className="space-y-2">
+            {filteredDrivers.map(renderDriverRow)}
+            {filteredDashboardUsers.length > 0 && (
+              <div className="mt-4 pt-4 border-t border-gray-700">
+                <h4 className="text-gray-400 text-xs font-medium uppercase tracking-wider mb-2">
+                  Dashboard Users ({filteredDashboardUsers.length})
+                </h4>
+                <div className="space-y-2">
+                  {filteredDashboardUsers.map(renderDashboardUserRow)}
+                </div>
+              </div>
+            )}
           </div>
         ) : (
-          <div className="space-y-2">
-            {filteredDrivers.map(driver => (
-              <div key={driver.key} className="bg-gray-700 rounded">
-                {/* Driver row */}
-                <div
-                  className="flex items-center justify-between p-3 cursor-pointer hover:bg-gray-600"
-                  onClick={() => setExpandedDriver(expandedDriver === driver.key ? null : driver.key)}
-                >
-                  <div className="flex items-center gap-3">
-                    <span className={`w-2 h-2 rounded-full ${driver.active ? 'bg-green-400' : 'bg-gray-500'}`} />
-                    <div className="flex flex-col">
-                      <span className="text-white font-medium">{driver.displayName}</span>
-                      {driver.legalName && driver.legalName !== driver.displayName && (
-                        <span className="text-gray-400 text-xs">{driver.legalName}</span>
-                      )}
-                    </div>
-                    {isWbAdmin && driver._legacy && (
-                      <span className="px-1.5 py-0.5 bg-orange-700 text-orange-200 text-xs rounded font-medium">Legacy</span>
-                    )}
-                    {/* Dashboard role badge — always visible. "Driver" label
-                        (dim) when no dashboard account. Role label (bright) when
-                        linked. Respects per-company getRoleLabel so customer-
-                        renamed roles appear correctly. */}
-                    {driver.dashboardRole ? (
-                      <span className="px-1.5 py-0.5 bg-purple-600 text-white text-xs rounded font-medium">
-                        {getRoleLabel(driver.dashboardRole, userCompany)}
-                      </span>
-                    ) : (
-                      <span className="px-1.5 py-0.5 bg-gray-600 text-gray-300 text-xs rounded font-medium">
-                        {getRoleLabel('driver', userCompany)}
-                      </span>
-                    )}
-                    {/* Phone-app admin (isAdmin on the driver record) — separate
-                        concept from the dashboard role. Renamed to "App Admin" so
-                        it doesn't get confused with a dashboard Admin role. */}
-                    {driver.isAdmin && (
-                      <span className="px-1.5 py-0.5 bg-slate-600 text-slate-200 text-xs rounded font-medium" title="WB T / WB S phone-app admin — separate from dashboard role">App Admin</span>
-                    )}
-                    {driver.isViewer && !driver.isAdmin && (
-                      <span className="px-1.5 py-0.5 bg-blue-600 text-blue-200 text-xs rounded font-medium" title="WB T / WB S phone-app viewer">App Viewer</span>
-                    )}
-                    {isWbAdmin && driver.companyName && (
-                      <span className="px-1.5 py-0.5 bg-teal-700 text-teal-200 text-xs rounded font-medium">{driver.companyName}</span>
-                    )}
-                    {isWbAdmin && !driver.companyId && (
-                      <span className="px-1.5 py-0.5 bg-gray-600 text-gray-300 text-xs rounded font-medium">No Company</span>
-                    )}
-                    {(driver.assignedCustomers?.length || 0) > 0 && (
-                      <span className="px-1.5 py-0.5 bg-yellow-600 text-yellow-200 text-xs rounded font-medium">
-                        {driver.assignedCustomers!.length} customer{driver.assignedCustomers!.length > 1 ? 's' : ''}
-                      </span>
-                    )}
-                    {(driver.assignedRoutes?.length || 0) > 0 && (
-                      <span className="px-1.5 py-0.5 bg-blue-600 text-blue-200 text-xs rounded font-medium">
-                        {driver.assignedRoutes!.length} route{driver.assignedRoutes!.length > 1 ? 's' : ''}
-                      </span>
-                    )}
-                    {driver.defaultPackageId && (
-                      <span className="px-1.5 py-0.5 bg-indigo-600 text-indigo-200 text-xs rounded font-medium">
-                        {availablePackages.find(p => p.id === driver.defaultPackageId)?.name || driver.defaultPackageId}
-                      </span>
-                    )}
-                  </div>
-                  <span className="text-gray-400 text-sm">
-                    {expandedDriver === driver.key ? '▲' : '▼'}
-                  </span>
-                </div>
-
-                {/* Expanded details */}
-                {expandedDriver === driver.key && (
-                  <div className="border-t border-gray-600 p-3 space-y-3">
-                    {/* Controls */}
-                    <div className="flex flex-wrap gap-2">
-                      <button
-                        onClick={() => toggleDriverActive(driver)}
-                        className={`px-3 py-1 text-sm rounded ${
-                          driver.active
-                            ? 'bg-gray-600 hover:bg-gray-500 text-gray-300'
-                            : 'bg-green-600 hover:bg-green-500 text-white'
-                        }`}
-                      >
-                        {driver.active ? 'Deactivate' : 'Activate'}
-                      </button>
-                      {/* Role dropdown — replaces the old "Make Admin" button.
-                          Picking a dashboard role (anything other than Driver)
-                          opens the invite modal; picking Driver revokes any
-                          existing dashboard link. Labels respect per-company
-                          overrides via getRoleLabel. */}
-                      <div className="relative">
-                        <button
-                          onClick={() =>
-                            setRoleMenuForKey(roleMenuForKey === driver.key ? null : driver.key)
-                          }
-                          className="px-3 py-1 text-sm rounded bg-purple-600 hover:bg-purple-500 text-white flex items-center gap-1"
-                          title={
-                            driver.dashboardRole
-                              ? `Currently: ${getRoleLabel(driver.dashboardRole, userCompany)}`
-                              : 'Driver only (no dashboard access)'
-                          }
-                        >
-                          {driver.dashboardRole
-                            ? getRoleLabel(driver.dashboardRole, userCompany)
-                            : 'Driver'}
-                          <span className="text-xs">▾</span>
-                        </button>
-                        {roleMenuForKey === driver.key && (
-                          <div className="absolute top-full left-0 mt-1 z-30 bg-gray-800 border border-gray-600 rounded shadow-xl min-w-[200px] max-h-72 overflow-y-auto">
-                            {(['driver', 'viewer', 'dispatch', 'payroll', 'manager', 'admin', 'it'] as UserRole[]).map(
-                              (r) => {
-                                const isCurrent =
-                                  (r === 'driver' && !driver.dashboardRole) ||
-                                  r === driver.dashboardRole;
-                                return (
-                                  <button
-                                    key={r}
-                                    onClick={() => handleRolePick(driver, r)}
-                                    className={`block w-full text-left px-3 py-1.5 text-sm hover:bg-purple-700/40 ${
-                                      isCurrent ? 'bg-purple-700/50 text-white' : 'text-gray-200'
-                                    }`}
-                                  >
-                                    <span className="font-medium">
-                                      {getRoleLabel(r, userCompany)}
-                                    </span>
-                                    <span className="text-[10px] text-gray-500 ml-2 font-mono">{r}</span>
-                                  </button>
-                                );
-                              },
-                            )}
+          // WB-admin view — grouped by company with collapsible sections.
+          // Platform staff (users with no companyId) sort to the top under
+          // "WellBuilt Staff". Each section shows drivers first, then a
+          // smaller Dashboard Users subsection inside the same group.
+          <div className="space-y-3">
+            {groupedEmployees.length === 0 ? (
+              <div className="text-gray-500 text-center py-6">
+                No approved employees yet
+              </div>
+            ) : (
+              groupedEmployees.map(group => {
+                const total = group.drivers.length + group.users.length;
+                const collapsed = isGroupCollapsed(group.companyId);
+                return (
+                  <div key={group.companyId || 'wb-staff'} className="bg-gray-700/40 rounded-lg overflow-hidden">
+                    <button
+                      onClick={() => toggleGroup(group.companyId)}
+                      className="w-full flex items-center justify-between px-4 py-2.5 bg-gray-700/80 hover:bg-gray-600 transition-colors"
+                    >
+                      <div className="flex items-center gap-3">
+                        <span className={`text-gray-400 text-sm transition-transform ${collapsed ? '' : 'rotate-90'}`}>▸</span>
+                        <span className="text-white font-medium">{group.companyName}</span>
+                        {group.companyId === '' && (
+                          <span className="px-1.5 py-0.5 bg-indigo-700 text-indigo-200 text-[10px] rounded font-medium">Platform</span>
+                        )}
+                        <span className="text-gray-400 text-xs">
+                          {total} employee{total === 1 ? '' : 's'}
+                        </span>
+                      </div>
+                      <div className="flex items-center gap-3 text-xs">
+                        {group.drivers.length > 0 && (
+                          <span className="text-gray-400">{group.drivers.length} driver{group.drivers.length === 1 ? '' : 's'}</span>
+                        )}
+                        {group.users.length > 0 && (
+                          <span className="text-purple-300">{group.users.length} dashboard</span>
+                        )}
+                      </div>
+                    </button>
+                    {!collapsed && (
+                      <div className="p-3 space-y-2">
+                        {group.drivers.length > 0 && (
+                          <div className="space-y-2">
+                            {group.drivers.map(renderDriverRow)}
+                          </div>
+                        )}
+                        {group.users.length > 0 && (
+                          <div className={`${group.drivers.length > 0 ? 'pt-2 mt-2 border-t border-gray-600' : ''}`}>
+                            <h4 className="text-gray-400 text-[10px] font-medium uppercase tracking-wider mb-2">
+                              Dashboard Users
+                            </h4>
+                            <div className="space-y-2">
+                              {group.users.map(renderDashboardUserRow)}
+                            </div>
                           </div>
                         )}
                       </div>
-                      {isWbAdmin && (
-                        <button
-                          onClick={() => toggleDriverAdmin(driver)}
-                          className={`px-3 py-1 text-sm rounded ${
-                            driver.isAdmin
-                              ? 'bg-gray-600 hover:bg-gray-500 text-gray-300'
-                              : 'bg-slate-600 hover:bg-slate-500 text-gray-200'
-                          }`}
-                          title="Toggles the driver-app (WB T / WB S) admin menu access — separate from dashboard role"
-                        >
-                          {driver.isAdmin ? 'App Admin \u2713' : 'App Admin'}
-                        </button>
-                      )}
-                      <button
-                        onClick={() => {
-                          setAssignTarget(driver);
-                          setShowAssignModal(true);
-                        }}
-                        className="px-3 py-1 text-sm rounded bg-yellow-600 hover:bg-yellow-500 text-white"
-                      >
-                        + Assign Operator
-                      </button>
-                      <button
-                        onClick={() => {
-                          setRouteTarget(driver);
-                          setSelectedRoutes(driver.assignedRoutes || []);
-                          setShowRoutesModal(true);
-                        }}
-                        className="px-3 py-1 text-sm rounded bg-blue-600 hover:bg-blue-500 text-white"
-                      >
-                        {(driver.assignedRoutes?.length || 0) > 0 ? 'Edit Routes' : '+ Assign Routes'}
-                      </button>
-                      <button
-                        onClick={() => {
-                          setPackageTarget(driver);
-                          setSelectedPackageId(driver.defaultPackageId || '');
-                          setShowPackageModal(true);
-                        }}
-                        className={`px-3 py-1 text-sm rounded ${
-                          driver.defaultPackageId
-                            ? 'bg-indigo-600 hover:bg-indigo-500 text-white'
-                            : 'bg-gray-600 hover:bg-gray-500 text-gray-300'
-                        }`}
-                      >
-                        {driver.defaultPackageId
-                          ? `Pkg: ${availablePackages.find(p => p.id === driver.defaultPackageId)?.name || driver.defaultPackageId}`
-                          : 'Default Package'}
-                      </button>
-                      {isWbAdmin && (
-                        <button
-                          onClick={() => {
-                            setCompanyTarget(driver);
-                            setAssignCompanyId(driver.companyId || '');
-                            setAssignCompanyName(driver.companyName || '');
-                            setShowCompanyModal(true);
-                          }}
-                          className="px-3 py-1 text-sm rounded bg-teal-600 hover:bg-teal-500 text-white"
-                        >
-                          {driver.companyId ? 'Change Customer' : 'Assign Customer'}
-                        </button>
-                      )}
-                      {isWbAdmin && driver._legacy && (
-                        <button
-                          onClick={() => migrateDriver(driver)}
-                          className="px-3 py-1 text-sm rounded bg-orange-600 hover:bg-orange-500 text-white"
-                          title="Convert from legacy device-based format to new flat format"
-                        >
-                          Migrate
-                        </button>
-                      )}
-                      {isWbAdmin && (
-                        <button
-                          onClick={() => deleteDriver(driver)}
-                          className="px-3 py-1 text-sm rounded bg-red-700 hover:bg-red-600 text-red-200 ml-auto"
-                        >
-                          Delete
-                        </button>
-                      )}
-                    </div>
-
-                    {/* Assigned Operators */}
-                    <div>
-                      <h4 className="text-gray-400 text-xs font-medium uppercase tracking-wider mb-2">
-                        Assigned Operators
-                      </h4>
-                      {(driver.assignedCustomers?.length || 0) === 0 ? (
-                        <p className="text-gray-500 text-sm">No operators assigned</p>
-                      ) : (
-                        <div className="space-y-1">
-                          {driver.assignedCustomers!.map(c => (
-                            <div key={c.companyId} className="flex items-center justify-between bg-gray-800 rounded p-2">
-                              <div>
-                                <span className="text-yellow-300 text-sm font-medium">{c.name}</span>
-                                <span className="text-gray-500 text-xs ml-2">({c.companyId})</span>
-                              </div>
-                              <button
-                                onClick={() => removeCustomer(driver, c.companyId)}
-                                className="text-red-400 hover:text-red-300 text-xs"
-                              >
-                                Remove
-                              </button>
-                            </div>
-                          ))}
-                        </div>
-                      )}
-                    </div>
-
-                    {/* Assigned Routes */}
-                    <div>
-                      <h4 className="text-gray-400 text-xs font-medium uppercase tracking-wider mb-2">
-                        Assigned Routes
-                      </h4>
-                      {(driver.assignedRoutes?.length || 0) === 0 ? (
-                        <p className="text-gray-500 text-sm">No routes assigned (sees all wells)</p>
-                      ) : (
-                        <div className="flex flex-wrap gap-1">
-                          {driver.assignedRoutes!.map(route => (
-                            <span key={route} className="px-2 py-1 bg-blue-900 text-blue-200 text-sm rounded">
-                              {route}
-                            </span>
-                          ))}
-                        </div>
-                      )}
-                    </div>
-
-                    {/* Hash (for debugging) — WB admin only */}
-                    {isWbAdmin && (
-                      <div className="text-gray-500 text-xs font-mono">
-                        Hash: {driver.key.slice(0, 12)}...
-                        {driver._legacy && (
-                          <span className="text-orange-400 ml-2">
-                            (legacy format — device: {driver._legacyDeviceId?.slice(0, 8)}...)
-                          </span>
-                        )}
-                        {driver.companyId && (
-                          <span className="text-teal-400 ml-2">
-                            Customer: {driver.companyId}
-                          </span>
-                        )}
-                      </div>
                     )}
                   </div>
-                )}
-              </div>
-            ))}
+                );
+              })
+            )}
           </div>
         )}
       </div>
