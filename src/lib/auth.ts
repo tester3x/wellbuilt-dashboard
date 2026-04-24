@@ -6,7 +6,7 @@ import {
   onAuthStateChanged,
   User
 } from 'firebase/auth';
-import { ref, get, set } from 'firebase/database';
+import { ref, get, set, update } from 'firebase/database';
 import { getFirebaseAuth, getFirebaseDatabase } from './firebase';
 
 // ── Role primitives ─────────────────────────────────────────────────────────
@@ -212,6 +212,30 @@ async function getUserWithRole(user: User): Promise<WellBuiltUser> {
     companyId = userData.companyId || undefined;
     companyName = userData.companyName || undefined;
   }
+
+  // Backfill email + displayName onto the RTDB record if either is missing.
+  // Firebase Auth has the canonical email/displayName; the RTDB users/{uid}
+  // record was historically only storing { role }, so the Employees tab (and
+  // any other surface that reads users/{uid} standalone) had no way to show
+  // a friendly identity. Write the Auth-side values back so they're visible
+  // without re-auth. Fire-and-forget — never block login on this.
+  try {
+    const rtdbRaw = snapshot.exists() ? snapshot.val() : {};
+    const writeBack: Record<string, any> = {};
+    if (user.email && !rtdbRaw.email) writeBack.email = user.email;
+    if (user.displayName && !rtdbRaw.displayName) {
+      writeBack.displayName = user.displayName;
+    } else if (user.email && !rtdbRaw.displayName) {
+      // Use the email local-part as a readable fallback ("Unknown" becomes
+      // "mike" instead of a blank label) until an admin sets a proper name.
+      writeBack.displayName = user.email.split('@')[0];
+    }
+    if (Object.keys(writeBack).length > 0) {
+      update(userRef, writeBack).catch(err => {
+        console.warn('[auth] backfill users/{uid} failed (non-fatal):', err);
+      });
+    }
+  } catch { /* non-fatal */ }
 
   return {
     uid: user.uid,
