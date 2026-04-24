@@ -3038,6 +3038,164 @@ export const createOrFindDispatchThread = httpsV2.onCall(
 );
 
 // ============================================================
+// ADMIN — inviteEmployee
+// Create a Firebase Auth account + RTDB users/{uid} record for a new
+// dashboard user with the chosen role. If a driverHash is supplied, the
+// new user is linked to that driver record (driver's phone-app login
+// stays intact; they now ALSO have dashboard credentials at the picked
+// role). Returns a password-reset link the admin can send / click to
+// finish onboarding — no email infra required for v1.
+//
+// Authorization:
+//   - Requires the caller to be authenticated (context.auth).
+//   - Caller must have 'manageDrivers' capability at the target company,
+//     checked against companies/{companyId}.roleCapabilities with fallback
+//     to DEFAULT_ROLE_CAPABILITIES_SERVER.
+//   - If the caller has no companyId (WB admin), they can invite anyone.
+//
+// Edge cases:
+//   - Email already exists in Firebase Auth → we REUSE that user (update
+//     role/companyId) instead of failing. Admin gets a reset link so the
+//     existing user can claim / reset the dashboard password.
+//   - driverHash supplied but driver doesn't exist → reject.
+//   - Linking: drivers/approved/{hash}.dashboardUid = uid AND
+//     users/{uid}.driverHash = hash. Allows UI to show the link in both
+//     directions.
+// ============================================================
+export const inviteEmployee = httpsV2.onCall(
+  { timeoutSeconds: 30, memory: '256MiB' },
+  async (request) => {
+    const auth = request.auth;
+    if (!auth?.uid) {
+      throw new httpsV2.HttpsError('unauthenticated', 'Must be signed in');
+    }
+    const { email, displayName, role, companyId, driverHash } = (request.data || {}) as {
+      email?: string;
+      displayName?: string;
+      role?: string;
+      companyId?: string;       // target company for the new employee
+      driverHash?: string;      // optional — link to an existing driver
+    };
+    if (!email || !role) {
+      throw new httpsV2.HttpsError('invalid-argument', 'email and role are required');
+    }
+    const VALID_ROLES = ['driver', 'viewer', 'dispatch', 'payroll', 'manager', 'admin', 'it'];
+    if (!VALID_ROLES.includes(role)) {
+      throw new httpsV2.HttpsError('invalid-argument', `role must be one of: ${VALID_ROLES.join(', ')}`);
+    }
+    const normalizedEmail = email.trim().toLowerCase();
+
+    // Caller authorization — must have manageDrivers capability at the
+    // target company. WB admin (no companyId on their record) can invite
+    // to any company.
+    const callerSnap = await db.ref(`users/${auth.uid}`).once('value');
+    const callerData = callerSnap.val();
+    if (!callerData) {
+      throw new httpsV2.HttpsError('permission-denied', 'Caller is not a registered dashboard user');
+    }
+    const callerCid = callerData.companyId || '';
+    if (callerCid && companyId && callerCid !== companyId) {
+      throw new httpsV2.HttpsError('permission-denied', 'Cannot invite to a company you do not belong to');
+    }
+    // Load the target company's roleCapabilities override (if any) to
+    // evaluate the caller's manageDrivers capability.
+    let callerCaps: string[] = [];
+    if (callerCid) {
+      const cSnap = await firestoreDb.collection('companies').doc(callerCid).get();
+      const roleCaps = (cSnap.data()?.roleCapabilities || {}) as Record<string, string[]>;
+      callerCaps = resolveCapsForRole(callerData.role, roleCaps);
+    } else {
+      callerCaps = resolveCapsForRole(callerData.role, {});
+    }
+    if (!callerCaps.includes('manageDrivers')) {
+      throw new httpsV2.HttpsError('permission-denied', 'Caller lacks manageDrivers capability');
+    }
+
+    // If driverHash supplied, verify it exists
+    let driverData: any = null;
+    if (driverHash) {
+      const dSnap = await db.ref(`drivers/approved/${driverHash}`).once('value');
+      if (!dSnap.exists()) {
+        throw new httpsV2.HttpsError('not-found', `Driver hash ${driverHash.slice(0, 8)} not found in approved drivers`);
+      }
+      driverData = dSnap.val();
+    }
+
+    // Find or create the Firebase Auth user
+    const authAdmin = admin.auth();
+    let uid: string;
+    let existed = false;
+    try {
+      const existing = await authAdmin.getUserByEmail(normalizedEmail);
+      uid = existing.uid;
+      existed = true;
+      console.log(`[inviteEmployee] reusing existing auth user ${uid} for ${normalizedEmail}`);
+    } catch (err: any) {
+      if (err?.code !== 'auth/user-not-found') throw err;
+      const resolvedName =
+        displayName?.trim() ||
+        driverData?.legalName ||
+        driverData?.displayName ||
+        normalizedEmail.split('@')[0];
+      const created = await authAdmin.createUser({
+        email: normalizedEmail,
+        emailVerified: false,
+        displayName: resolvedName,
+        disabled: false,
+      });
+      uid = created.uid;
+      console.log(`[inviteEmployee] created new auth user ${uid} for ${normalizedEmail}`);
+    }
+
+    // Resolve display name for RTDB
+    const resolvedDisplayName =
+      displayName?.trim() ||
+      driverData?.legalName ||
+      driverData?.displayName ||
+      normalizedEmail.split('@')[0];
+
+    // Write the users/{uid} record. Merges with existing entry if any.
+    const userUpdate: Record<string, any> = {
+      email: normalizedEmail,
+      displayName: resolvedDisplayName,
+      role,
+    };
+    if (companyId) userUpdate.companyId = companyId;
+    if (driverHash) userUpdate.driverHash = driverHash;
+    await db.ref(`users/${uid}`).update(userUpdate);
+
+    // Link the driver record back to the new dashboard user so the UI can
+    // show the link in both directions.
+    if (driverHash) {
+      await db.ref(`drivers/approved/${driverHash}`).update({
+        dashboardUid: uid,
+        dashboardRole: role,
+      });
+    }
+
+    // Generate password-reset link. For a brand-new user this effectively
+    // becomes a "set initial password" link. Safe to use the generic
+    // generatePasswordResetLink for both new and existing users.
+    let resetLink: string | null = null;
+    try {
+      resetLink = await authAdmin.generatePasswordResetLink(normalizedEmail);
+    } catch (err: any) {
+      console.warn(`[inviteEmployee] failed to generate reset link for ${normalizedEmail}:`, err?.message);
+    }
+
+    return {
+      uid,
+      email: normalizedEmail,
+      role,
+      displayName: resolvedDisplayName,
+      existed,
+      resetLink,
+      driverHash: driverHash || null,
+    };
+  },
+);
+
+// ============================================================
 // WB CHAT — onUserWrite
 // When a users/{uid} record is created / role changes / companyId changes
 // / deleted, rebalance that user's presence in company chat thread

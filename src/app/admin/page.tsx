@@ -937,7 +937,7 @@ export default function AdminPage() {
           {activeTab === 'wells' ? 'Well Configuration' :
            activeTab === 'routes' ? 'Route Groups' :
            activeTab === 'gpsroutes' ? 'GPS Route Recording' :
-           activeTab === 'drivers' ? 'Driver Management' :
+           activeTab === 'drivers' ? 'Employee Management' :
            activeTab === 'equipment' ? 'Equipment Documents' :
            'Customer Management'}
         </h2>
@@ -967,7 +967,7 @@ export default function AdminPage() {
             onClick={() => setActiveTab('drivers')}
             className={`px-4 py-2 rounded ${activeTab === 'drivers' ? 'bg-blue-600 text-white' : 'bg-gray-700 text-gray-300'}`}
           >
-            Drivers
+            Employees
           </button>
           <button
             onClick={() => setActiveTab('companies')}

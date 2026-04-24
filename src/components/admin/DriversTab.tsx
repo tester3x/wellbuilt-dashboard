@@ -1,10 +1,14 @@
 'use client';
 
 import { useEffect, useState } from 'react';
-import { getFirebaseDatabase, getFirestoreDb } from '@/lib/firebase';
+import { httpsCallable } from 'firebase/functions';
+import { getFirebaseDatabase, getFirestoreDb, getFirebaseFunctions } from '@/lib/firebase';
 import { ref, get, set, remove, update } from 'firebase/database';
 import { collection, getDocs } from 'firebase/firestore';
 import { fetchRouteNames } from '@/lib/wells';
+import { type UserRole, DEFAULT_ROLE_LABELS } from '@/lib/auth';
+import { useAuth } from '@/contexts/AuthContext';
+import { getRoleLabel } from '@/lib/auth';
 
 interface AssignedCustomer {
   name: string;
@@ -25,6 +29,10 @@ interface ApprovedDriver {
   assignedRoutes?: string[];   // routes this driver can see
   assignedWells?: string[];    // one-off well assignments (dispatch overrides)
   defaultPackageId?: string;   // default job package for shift start
+  // Dashboard account link — set by inviteEmployee Cloud Function when a
+  // driver is promoted to a dashboard role.
+  dashboardUid?: string;
+  dashboardRole?: UserRole;
   _legacy?: boolean;     // true if stored in old {hash}/{deviceId}/ format
   _legacyDeviceId?: string; // the device sub-key for legacy records
 }
@@ -88,6 +96,22 @@ export function DriversTab({ scopeCompanyId, isWbAdmin = false }: DriversTabProp
   // Expanded driver (shows details + assigned customers)
   const [expandedDriver, setExpandedDriver] = useState<string | null>(null);
 
+  // ── Role dropdown + invite modal ───────────────────────────────────────
+  // Clicking the "Role" button toggles this state open for that driver.
+  const [roleMenuForKey, setRoleMenuForKey] = useState<string | null>(null);
+  // Invite flow for promoting a driver into a dashboard role.
+  const [inviteTarget, setInviteTarget] = useState<ApprovedDriver | null>(null);
+  const [inviteRole, setInviteRole] = useState<UserRole>('dispatch');
+  const [inviteEmail, setInviteEmail] = useState('');
+  const [inviteSending, setInviteSending] = useState(false);
+  const [inviteResult, setInviteResult] = useState<null | {
+    resetLink: string | null;
+    email: string;
+    role: UserRole;
+    existed: boolean;
+  }>(null);
+
+  const { userCompany } = useAuth();
   const db = getFirebaseDatabase();
 
   const loadDrivers = async () => {
@@ -552,7 +576,75 @@ export function DriversTab({ scopeCompanyId, isWbAdmin = false }: DriversTabProp
     }
   };
 
-  // ── Toggle admin role ──
+  // ── Role picker for the Employees flow ───────────────────────────────
+  // When the admin picks a role from the dropdown on a driver's card:
+  //   - 'driver': if they currently have a linked dashboard account, offer
+  //     to revoke it. Otherwise no-op.
+  //   - anything else: open the invite modal so we can prompt for email and
+  //     call inviteEmployee to create/update the dashboard account.
+  const handleRolePick = async (driver: ApprovedDriver, role: UserRole) => {
+    setRoleMenuForKey(null);
+    if (role === 'driver') {
+      if (driver.dashboardUid) {
+        const confirmed = confirm(
+          `Remove dashboard access for ${driver.legalName || driver.displayName}?\n\n` +
+            `Their driver phone-app login stays intact.`,
+        );
+        if (!confirmed) return;
+        try {
+          // Mark the users/{uid} record inactive by clearing role → driver.
+          // We keep the auth account so the admin can re-promote without
+          // a new invite link cycle.
+          await update(ref(db, `users/${driver.dashboardUid}`), { role: 'driver' });
+          await update(ref(db, `drivers/approved/${driver.key}`), {
+            dashboardUid: null,
+            dashboardRole: null,
+          });
+          setMessage(`Dashboard access removed for ${driver.legalName || driver.displayName}`);
+          await loadDrivers();
+        } catch (err) {
+          console.error('Failed to remove dashboard access:', err);
+          setMessage('Failed to remove dashboard access');
+        }
+      }
+      return;
+    }
+    // Non-driver role → open invite modal
+    setInviteTarget(driver);
+    setInviteRole(role);
+    setInviteEmail(''); // admin enters this
+    setInviteResult(null);
+  };
+
+  const handleInviteSubmit = async () => {
+    if (!inviteTarget || !inviteEmail.trim()) return;
+    setInviteSending(true);
+    try {
+      const fn = httpsCallable(getFirebaseFunctions(), 'inviteEmployee');
+      const resp: any = await fn({
+        email: inviteEmail.trim(),
+        displayName: inviteTarget.legalName || inviteTarget.displayName,
+        role: inviteRole,
+        companyId: inviteTarget.companyId || scopeCompanyId || undefined,
+        driverHash: inviteTarget.key,
+      });
+      const data = resp?.data || {};
+      setInviteResult({
+        resetLink: data.resetLink || null,
+        email: data.email || inviteEmail.trim(),
+        role: inviteRole,
+        existed: !!data.existed,
+      });
+      await loadDrivers(); // refresh so dashboardUid / dashboardRole appear
+    } catch (err: any) {
+      console.error('[DriversTab] inviteEmployee failed:', err);
+      alert(`Invite failed: ${err?.message || 'Unknown error'}`);
+    } finally {
+      setInviteSending(false);
+    }
+  };
+
+  // ── Toggle admin role (driver-app-side isAdmin flag — kept as-is) ───
   const toggleDriverAdmin = async (driver: ApprovedDriver) => {
     try {
       const newAdmin = !driver.isAdmin;
@@ -835,16 +927,65 @@ export function DriversTab({ scopeCompanyId, isWbAdmin = false }: DriversTabProp
                       >
                         {driver.active ? 'Deactivate' : 'Activate'}
                       </button>
+                      {/* Role dropdown — replaces the old "Make Admin" button.
+                          Picking a dashboard role (anything other than Driver)
+                          opens the invite modal; picking Driver revokes any
+                          existing dashboard link. Labels respect per-company
+                          overrides via getRoleLabel. */}
+                      <div className="relative">
+                        <button
+                          onClick={() =>
+                            setRoleMenuForKey(roleMenuForKey === driver.key ? null : driver.key)
+                          }
+                          className="px-3 py-1 text-sm rounded bg-purple-600 hover:bg-purple-500 text-white flex items-center gap-1"
+                          title={
+                            driver.dashboardRole
+                              ? `Currently: ${getRoleLabel(driver.dashboardRole, userCompany)}`
+                              : 'Driver only (no dashboard access)'
+                          }
+                        >
+                          {driver.dashboardRole
+                            ? getRoleLabel(driver.dashboardRole, userCompany)
+                            : 'Driver'}
+                          <span className="text-xs">▾</span>
+                        </button>
+                        {roleMenuForKey === driver.key && (
+                          <div className="absolute top-full left-0 mt-1 z-20 bg-gray-800 border border-gray-600 rounded shadow-xl min-w-[180px]">
+                            {(['driver', 'viewer', 'dispatch', 'payroll', 'manager', 'admin', 'it'] as UserRole[]).map(
+                              (r) => {
+                                const isCurrent =
+                                  (r === 'driver' && !driver.dashboardRole) ||
+                                  r === driver.dashboardRole;
+                                return (
+                                  <button
+                                    key={r}
+                                    onClick={() => handleRolePick(driver, r)}
+                                    className={`block w-full text-left px-3 py-1.5 text-sm hover:bg-purple-700/40 ${
+                                      isCurrent ? 'bg-purple-700/50 text-white' : 'text-gray-200'
+                                    }`}
+                                  >
+                                    <span className="font-medium">
+                                      {getRoleLabel(r, userCompany)}
+                                    </span>
+                                    <span className="text-[10px] text-gray-500 ml-2 font-mono">{r}</span>
+                                  </button>
+                                );
+                              },
+                            )}
+                          </div>
+                        )}
+                      </div>
                       {isWbAdmin && (
                         <button
                           onClick={() => toggleDriverAdmin(driver)}
                           className={`px-3 py-1 text-sm rounded ${
                             driver.isAdmin
                               ? 'bg-gray-600 hover:bg-gray-500 text-gray-300'
-                              : 'bg-purple-600 hover:bg-purple-500 text-white'
+                              : 'bg-slate-600 hover:bg-slate-500 text-gray-200'
                           }`}
+                          title="Toggles the driver-app (WB T / WB S) admin menu access — separate from dashboard role"
                         >
-                          {driver.isAdmin ? 'Remove Admin' : 'Make Admin'}
+                          {driver.isAdmin ? 'App Admin \u2713' : 'App Admin'}
                         </button>
                       )}
                       <button
@@ -1390,6 +1531,174 @@ export function DriversTab({ scopeCompanyId, isWbAdmin = false }: DriversTabProp
               >
                 Cancel
               </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* ── Invite Employee modal ─────────────────────────────────────────
+          Opens when a driver's Role dropdown picks a dashboard role. Admin
+          enters an email; inviteEmployee Cloud Function creates the
+          Firebase Auth account (or reuses an existing one) and returns a
+          password-reset link. We render the link for the admin to
+          copy/send — no email provider required for v1. */}
+      {inviteTarget && (
+        <div className="fixed inset-0 bg-black/70 z-50 flex items-center justify-center p-4">
+          <div className="bg-gray-800 rounded-lg max-w-md w-full max-h-[90vh] overflow-y-auto">
+            <div className="p-4 border-b border-gray-700 flex items-start justify-between">
+              <div>
+                <h3 className="text-lg font-bold text-white">
+                  Invite {inviteTarget.legalName || inviteTarget.displayName}
+                </h3>
+                <p className="text-sm text-gray-400 mt-1">
+                  Grant dashboard access as{' '}
+                  <span className="text-purple-300 font-medium">
+                    {getRoleLabel(inviteRole, userCompany)}
+                  </span>
+                </p>
+              </div>
+              <button
+                onClick={() => {
+                  setInviteTarget(null);
+                  setInviteResult(null);
+                  setInviteEmail('');
+                }}
+                className="text-gray-500 hover:text-white text-xl leading-none"
+              >
+                ✕
+              </button>
+            </div>
+
+            <div className="p-4 space-y-3">
+              {!inviteResult ? (
+                <>
+                  <div>
+                    <label className="block text-xs text-gray-400 mb-1 uppercase tracking-wider">
+                      Email address
+                    </label>
+                    <input
+                      type="email"
+                      value={inviteEmail}
+                      onChange={e => setInviteEmail(e.target.value)}
+                      placeholder="employee@example.com"
+                      className="w-full bg-gray-900 border border-gray-700 rounded px-3 py-2 text-sm text-white placeholder-gray-600 focus:outline-none focus:border-purple-500"
+                      autoFocus
+                    />
+                    <p className="text-[11px] text-gray-500 mt-1">
+                      We'll create a dashboard login and return a password-reset link you can send them.
+                    </p>
+                  </div>
+                  <div>
+                    <label className="block text-xs text-gray-400 mb-1 uppercase tracking-wider">
+                      Role
+                    </label>
+                    <select
+                      value={inviteRole}
+                      onChange={e => setInviteRole(e.target.value as UserRole)}
+                      className="w-full bg-gray-900 border border-gray-700 rounded px-3 py-2 text-sm text-white focus:outline-none focus:border-purple-500"
+                    >
+                      {(['viewer', 'dispatch', 'payroll', 'manager', 'admin', 'it'] as UserRole[]).map(r => (
+                        <option key={r} value={r}>
+                          {getRoleLabel(r, userCompany)} ({r})
+                        </option>
+                      ))}
+                    </select>
+                  </div>
+                  <div className="flex justify-end gap-2 pt-2">
+                    <button
+                      onClick={() => {
+                        setInviteTarget(null);
+                        setInviteEmail('');
+                      }}
+                      className="px-4 py-2 bg-gray-600 hover:bg-gray-500 text-white text-sm rounded"
+                    >
+                      Cancel
+                    </button>
+                    <button
+                      onClick={handleInviteSubmit}
+                      disabled={!inviteEmail.trim() || inviteSending}
+                      className={`px-4 py-2 text-sm rounded font-medium ${
+                        !inviteEmail.trim() || inviteSending
+                          ? 'bg-gray-700 text-gray-500 cursor-not-allowed'
+                          : 'bg-purple-600 hover:bg-purple-500 text-white'
+                      }`}
+                    >
+                      {inviteSending ? 'Sending…' : 'Send invite'}
+                    </button>
+                  </div>
+                </>
+              ) : (
+                <>
+                  <div className="bg-green-900/30 border border-green-700 rounded p-3">
+                    <p className="text-green-300 font-medium text-sm">
+                      {inviteResult.existed
+                        ? 'Existing Firebase account updated'
+                        : 'Dashboard account created'}
+                    </p>
+                    <p className="text-green-200 text-xs mt-1">
+                      {inviteResult.email} now has{' '}
+                      <span className="font-medium">
+                        {getRoleLabel(inviteResult.role, userCompany)}
+                      </span>{' '}
+                      access.
+                    </p>
+                  </div>
+                  {inviteResult.resetLink ? (
+                    <div>
+                      <label className="block text-xs text-gray-400 mb-1 uppercase tracking-wider">
+                        Password-reset / setup link
+                      </label>
+                      <textarea
+                        readOnly
+                        value={inviteResult.resetLink}
+                        onClick={e => (e.target as HTMLTextAreaElement).select()}
+                        className="w-full bg-gray-900 border border-gray-700 rounded px-3 py-2 text-[11px] font-mono text-green-300 break-all resize-none"
+                        rows={4}
+                      />
+                      <div className="flex gap-2 mt-2">
+                        <button
+                          onClick={() => {
+                            navigator.clipboard.writeText(inviteResult.resetLink!);
+                            setMessage('Invite link copied to clipboard');
+                          }}
+                          className="flex-1 px-3 py-1.5 bg-purple-600 hover:bg-purple-500 text-white text-xs rounded"
+                        >
+                          Copy link
+                        </button>
+                        <a
+                          href={`mailto:${inviteResult.email}?subject=${encodeURIComponent('Your WellBuilt dashboard invite')}&body=${encodeURIComponent(`Click this link to set your dashboard password:\n\n${inviteResult.resetLink}`)}`}
+                          className="flex-1 px-3 py-1.5 bg-blue-600 hover:bg-blue-500 text-white text-xs rounded text-center"
+                        >
+                          Open email
+                        </a>
+                      </div>
+                      <p className="text-[11px] text-gray-500 mt-2">
+                        Send this link to the employee. Firebase Auth's reset page
+                        lets them set (or reset) their password. Link expires per
+                        Firebase's default (about 1 hour).
+                      </p>
+                    </div>
+                  ) : (
+                    <p className="text-yellow-300 text-xs">
+                      The account was created, but we couldn't generate a
+                      reset link. The employee can use "Forgot password" on
+                      the sign-in page.
+                    </p>
+                  )}
+                  <div className="flex justify-end pt-2">
+                    <button
+                      onClick={() => {
+                        setInviteTarget(null);
+                        setInviteResult(null);
+                        setInviteEmail('');
+                      }}
+                      className="px-4 py-2 bg-gray-600 hover:bg-gray-500 text-white text-sm rounded"
+                    >
+                      Done
+                    </button>
+                  </div>
+                </>
+              )}
             </div>
           </div>
         </div>
