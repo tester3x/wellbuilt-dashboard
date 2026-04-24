@@ -2262,16 +2262,97 @@ export const cleanupExpiredPhotos = functionsV2.onSchedule('every day 03:00', as
 
 const firestoreDb = admin.firestore();
 
-/** Get dispatch/admin user participant IDs for a company */
-async function getDispatchParticipants(companyId: string): Promise<{ ids: string[]; names: Record<string, string> }> {
+// ── Server-side mirror of DEFAULT_ROLE_CAPABILITIES ────────────────────────
+// Kept in sync with @/lib/auth.ts in the dashboard. Change one, change both.
+// Functions can't import from src/ so this duplication is unavoidable.
+const DEFAULT_ROLE_CAPABILITIES_SERVER: Record<string, string[]> = {
+  it: [
+    'viewHome', 'viewMobile', 'viewTickets', 'viewDispatch', 'viewBilling',
+    'viewPayroll', 'viewDriverLogs', 'viewSettings', 'viewAdmin', 'viewChat',
+    'createDispatch', 'manageDrivers', 'manageCompany', 'editBilling',
+    'approvePayroll', 'manageWells', 'manageRoutes', 'manageEquipment',
+    'sendChat',
+    'manageRolesAndCapabilities', 'viewAllCompanies', 'viewTruthDebug',
+  ],
+  admin: [
+    'viewHome', 'viewMobile', 'viewTickets', 'viewDispatch', 'viewBilling',
+    'viewPayroll', 'viewDriverLogs', 'viewSettings', 'viewAdmin', 'viewChat',
+    'createDispatch', 'manageDrivers', 'manageCompany', 'editBilling',
+    'approvePayroll', 'manageWells', 'manageRoutes', 'manageEquipment',
+    'sendChat',
+  ],
+  manager: [
+    'viewHome', 'viewMobile', 'viewTickets', 'viewDispatch', 'viewPayroll',
+    'viewDriverLogs', 'viewChat',
+    'createDispatch', 'sendChat', 'manageDrivers',
+  ],
+  dispatch: [
+    'viewHome', 'viewMobile', 'viewTickets', 'viewDispatch', 'viewChat',
+    'createDispatch', 'sendChat',
+  ],
+  payroll: [
+    'viewHome', 'viewBilling', 'viewPayroll', 'viewChat',
+    'editBilling', 'approvePayroll', 'sendChat',
+  ],
+  viewer: [
+    'viewHome', 'viewMobile', 'viewTickets', 'viewDispatch', 'viewBilling',
+    'viewPayroll', 'viewDriverLogs',
+  ],
+  driver: [],
+};
+
+/** Resolve effective capability list for a role at a given company (handles override). */
+function resolveCapsForRole(
+  role: string | undefined,
+  companyRoleCaps: Record<string, string[] | undefined>,
+): string[] {
+  if (!role) return [];
+  const override = companyRoleCaps[role];
+  return override ?? DEFAULT_ROLE_CAPABILITIES_SERVER[role] ?? [];
+}
+
+/**
+ * Get participant IDs for dispatch-level users at a company.
+ *
+ * Legacy mode (no requireCapabilities):
+ *   returns every user with role in {admin, manager, it} — back-compat with
+ *   shift/dispatch/project triggers that haven't been migrated to capabilities.
+ *
+ * Capability mode (requireCapabilities = ['viewChat','sendChat'] etc):
+ *   returns every user whose role grants ALL required capabilities, respecting
+ *   per-company roleCapabilities overrides loaded from companies/{companyId}.
+ */
+async function getDispatchParticipants(
+  companyId: string,
+  requireCapabilities: string[] = [],
+): Promise<{ ids: string[]; names: Record<string, string> }> {
+  let companyRoleCaps: Record<string, string[] | undefined> = {};
+  if (companyId && requireCapabilities.length > 0) {
+    try {
+      const cSnap = await firestoreDb.collection('companies').doc(companyId).get();
+      companyRoleCaps = (cSnap.data()?.roleCapabilities || {}) as Record<string, string[]>;
+    } catch (err) {
+      console.warn('[getDispatchParticipants] failed to load company roleCapabilities override:', err);
+    }
+  }
+
   const usersSnap = await db.ref('users').once('value');
   const users = usersSnap.val() || {};
   const ids: string[] = [];
   const names: Record<string, string> = {};
   for (const [uid, userData] of Object.entries(users) as [string, any][]) {
-    if (!userData.role || !['admin', 'manager', 'it'].includes(userData.role)) continue;
-    // WB admin (no companyId) sees all, hauler admin sees their company only
+    if (!userData.role) continue;
+    // WB admin (no companyId) spans all companies; hauler users scoped to theirs
     if (userData.companyId && userData.companyId !== companyId) continue;
+
+    if (requireCapabilities.length > 0) {
+      const caps = resolveCapsForRole(userData.role, companyRoleCaps);
+      if (!requireCapabilities.every(c => caps.includes(c))) continue;
+    } else {
+      // Legacy admin-tier gate
+      if (!['admin', 'manager', 'it'].includes(userData.role)) continue;
+    }
+
     const pid = `user:${uid}`;
     ids.push(pid);
     names[pid] = userData.displayName || userData.email || 'Dispatch';
@@ -2882,12 +2963,17 @@ export const createOrFindDispatchThread = httpsV2.onCall(
 
     const driverPid = `driver:${driverHash}`;
 
-    // 2. Get current dispatchers
-    const { ids: dispatchIds, names: dispatchNames } = await getDispatchParticipants(companyId);
+    // 2. Get current dispatchers — any user whose role grants BOTH viewChat
+    //    and sendChat at this company (capability-based, per-company overrides
+    //    respected via companies/{companyId}.roleCapabilities).
+    const { ids: dispatchIds, names: dispatchNames } = await getDispatchParticipants(
+      companyId,
+      ['viewChat', 'sendChat'],
+    );
     if (dispatchIds.length === 0) {
       throw new httpsV2.HttpsError(
         'failed-precondition',
-        `Company ${companyId} has no dispatchers configured (no users with role admin/manager/it)`,
+        `Company ${companyId} has no dispatchers configured (no users with viewChat + sendChat capabilities)`,
       );
     }
 
@@ -2980,23 +3066,39 @@ export const onUserWrite = functionsV1.database
     const before = change.before.exists() ? change.before.val() : null;
     const after = change.after.exists() ? change.after.val() : null;
 
-    const isAdmin = (u: any) =>
-      !!u && typeof u.role === 'string' && ['admin', 'manager', 'it'].includes(u.role);
-
-    const beforeAdmin = isAdmin(before);
-    const afterAdmin = isAdmin(after);
     const beforeCid = before?.companyId || ''; // '' = WB admin (spans all companies)
     const afterCid = after?.companyId || '';
     const displayName = after?.displayName || after?.email || before?.displayName || 'Admin';
 
+    // Capability-based admission: a user is "in chat" iff their role grants
+    // BOTH viewChat and sendChat at their current company. This respects
+    // per-company roleCapabilities overrides — customers can opt a role
+    // (e.g., payroll) out of dispatch chatter without touching their role
+    // primitive. Falls back to DEFAULT_ROLE_CAPABILITIES_SERVER when unset.
+    async function inChatForScope(u: any, cid: string): Promise<boolean> {
+      if (!u?.role) return false;
+      let companyRoleCaps: Record<string, string[] | undefined> = {};
+      if (cid) {
+        try {
+          const cSnap = await firestoreDb.collection('companies').doc(cid).get();
+          companyRoleCaps = (cSnap.data()?.roleCapabilities || {}) as Record<string, string[]>;
+        } catch {}
+      }
+      const caps = resolveCapsForRole(u.role, companyRoleCaps);
+      return caps.includes('viewChat') && caps.includes('sendChat');
+    }
+
+    const beforeInChat = await inChatForScope(before, beforeCid);
+    const afterInChat = await inChatForScope(after, afterCid);
+
     // No meaningful change — nothing to do
-    if (beforeAdmin === afterAdmin && beforeCid === afterCid) {
+    if (beforeInChat === afterInChat && beforeCid === afterCid) {
       return;
     }
 
     console.log('[onUserWrite]', {
       uid: uid.slice(0, 8),
-      beforeAdmin, afterAdmin, beforeCid, afterCid,
+      beforeInChat, afterInChat, beforeCid, afterCid,
     });
 
     // Helper: list thread IDs that this user SHOULD fan into/out of for
@@ -3052,25 +3154,24 @@ export const onUserWrite = functionsV1.database
     }
 
     try {
-      // Case 1: demoted or deleted — fan out of everything they were in
-      if (beforeAdmin && !afterAdmin) {
-        // Old scope — empty cid means WB admin (every thread)
+      // Case 1: lost chat capability or deleted — fan out of everything
+      if (beforeInChat && !afterInChat) {
         const oldThreads = await threadsForScope(beforeCid);
         const out = await fanOut(oldThreads);
-        console.log(`[onUserWrite] ${pid} demoted/deleted — fanned out of ${out} thread(s)`);
+        console.log(`[onUserWrite] ${pid} lost chat access — fanned out of ${out} thread(s)`);
         return;
       }
 
-      // Case 2: promoted (new admin) — fan in to current scope
-      if (!beforeAdmin && afterAdmin) {
+      // Case 2: gained chat capability — fan in to current scope
+      if (!beforeInChat && afterInChat) {
         const newThreads = await threadsForScope(afterCid);
         const added = await fanIn(newThreads);
-        console.log(`[onUserWrite] ${pid} promoted — fanned into ${added} thread(s)`);
+        console.log(`[onUserWrite] ${pid} gained chat access — fanned into ${added} thread(s)`);
         return;
       }
 
-      // Case 3: stayed admin but moved companies — out of old, into new
-      if (beforeAdmin && afterAdmin && beforeCid !== afterCid) {
+      // Case 3: still in chat but moved companies — out of old, into new
+      if (beforeInChat && afterInChat && beforeCid !== afterCid) {
         const oldThreads = await threadsForScope(beforeCid);
         const newThreads = await threadsForScope(afterCid);
         const removed = await fanOut(oldThreads);

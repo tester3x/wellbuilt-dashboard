@@ -2,6 +2,7 @@
 
 import { createContext, useContext, useEffect, useState, ReactNode } from 'react';
 import { WellBuiltUser, subscribeToAuthState, signIn, signOut, hasRole, UserRole } from '@/lib/auth';
+import { loadCompanyById, type CompanyConfig } from '@/lib/companySettings';
 
 // Firebase Auth is enabled. DEV_MODE exists only as an emergency escape hatch
 // for local work when real auth is unavailable; deployed builds must run with
@@ -19,6 +20,12 @@ const DEV_USER: WellBuiltUser = {
 interface AuthContextType {
   user: WellBuiltUser | null;
   loading: boolean;
+  /**
+   * The user's company config, loaded once auth resolves and user.companyId is set.
+   * WB admins (no companyId) get null — their capability checks use defaults only.
+   * Consumers pass this to hasCapability(user, cap, userCompany) / getRoleLabel.
+   */
+  userCompany: CompanyConfig | null;
   signIn: (email: string, password: string) => Promise<void>;
   signOut: () => Promise<void>;
   hasRole: (role: UserRole) => boolean;
@@ -29,6 +36,7 @@ const AuthContext = createContext<AuthContextType | null>(null);
 export function AuthProvider({ children }: { children: ReactNode }) {
   const [user, setUser] = useState<WellBuiltUser | null>(DEV_MODE ? DEV_USER : null);
   const [loading, setLoading] = useState(!DEV_MODE);
+  const [userCompany, setUserCompany] = useState<CompanyConfig | null>(null);
 
   useEffect(() => {
     // Skip Firebase auth subscription in dev mode
@@ -43,6 +51,25 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 
     return unsubscribe;
   }, []);
+
+  // Whenever the user's companyId changes (login, role reassignment, logout),
+  // load that company's config. WB admins (no companyId) get null — their
+  // capability checks fall back to DEFAULT_ROLE_CAPABILITIES.
+  useEffect(() => {
+    const cid = user?.companyId;
+    if (!cid) {
+      setUserCompany(null);
+      return;
+    }
+    let cancelled = false;
+    loadCompanyById(cid)
+      .then(cfg => { if (!cancelled) setUserCompany(cfg); })
+      .catch(err => {
+        console.warn('[AuthContext] failed to load userCompany:', err);
+        if (!cancelled) setUserCompany(null);
+      });
+    return () => { cancelled = true; };
+  }, [user?.companyId]);
 
   const handleSignIn = async (email: string, password: string) => {
     if (DEV_MODE) {
@@ -71,6 +98,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       value={{
         user,
         loading,
+        userCompany,
         signIn: handleSignIn,
         signOut: handleSignOut,
         hasRole: checkRole,

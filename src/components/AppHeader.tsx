@@ -13,7 +13,7 @@ import { ChatSidebar } from './chat/ChatSidebar';
 import { getFirebaseDatabase } from '@/lib/firebase';
 
 export function AppHeader() {
-  const { user, signOut } = useAuth();
+  const { user, userCompany, signOut } = useAuth();
   const pathname = usePathname();
   const router = useRouter();
   const activeTabId = getActiveTab(pathname);
@@ -26,7 +26,7 @@ export function AppHeader() {
   // Pulse stops ONLY when the actual pending drivers are approved/rejected.
   useEffect(() => {
     if (!user) return;
-    if (!hasCapability(user, 'manageDrivers')) return;
+    if (!hasCapability(user, 'manageDrivers', userCompany)) return;
 
     const db = getFirebaseDatabase();
     const pendingRef = ref(db, 'drivers/pending');
@@ -39,7 +39,7 @@ export function AppHeader() {
       setPendingDriverCount(count);
     });
     return () => unsub();
-  }, [user]);
+  }, [user, userCompany]);
 
   if (!user) return null;
 
@@ -49,7 +49,7 @@ export function AppHeader() {
       <div className="w-full grid grid-cols-[auto_1fr_auto] items-start">
         {/* LEFT: Admin + Truth tools (admin/it) + Sign Out, pinned to left edge */}
         <div className="flex items-center gap-2 px-4 pt-3">
-          {hasCapability(user, 'viewAdmin') && (
+          {hasCapability(user, 'viewAdmin', userCompany) && (
             <Link
               href={pendingDriverCount > 0 ? '/admin?tab=drivers' : '/admin'}
               className="relative px-4 py-2 bg-blue-600 hover:bg-blue-700 text-white rounded-lg transition-colors text-sm"
@@ -65,7 +65,7 @@ export function AppHeader() {
               )}
             </Link>
           )}
-          {hasCapability(user, 'viewTruthDebug') && (
+          {hasCapability(user, 'viewTruthDebug', userCompany) && (
             <>
               <Link
                 href="/admin/truth-debug/"
@@ -105,14 +105,14 @@ export function AppHeader() {
           <div className="pt-2 pb-1 text-center">
             <h1 className="text-3xl font-bold text-white">WellBuilt Suite</h1>
             <p className="text-gray-400 text-sm">
-              {user.email} &bull; <span>{getRoleLabel(user.role)}</span>
+              {user.email} &bull; <span>{getRoleLabel(user.role, userCompany)}</span>
             </p>
           </div>
           <nav className="flex gap-0">
             {TABS.filter(tab => {
               // Capability-based gate wins when set. Falls back to legacy minRole
               // only if capability is unset (e.g., Home tab with no gate at all).
-              if (tab.capability) return hasCapability(user, tab.capability);
+              if (tab.capability) return hasCapability(user, tab.capability, userCompany);
               if (tab.minRole) return hasRole(user, tab.minRole);
               return true;
             }).map((tab) => {

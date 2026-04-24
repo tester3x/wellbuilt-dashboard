@@ -30,7 +30,7 @@ import { JobTypeRnDCard } from '@/components/settings/JobTypeRnDCard';
 import { RolesCard } from '@/components/settings/RolesCard';
 
 export default function SettingsPage() {
-  const { user, loading: authLoading } = useAuth();
+  const { user, loading: authLoading, userCompany } = useAuth();
   const router = useRouter();
 
   const [company, setCompany] = useState<CompanyConfig | null>(null);
@@ -44,7 +44,7 @@ export default function SettingsPage() {
 
   // Auth guard — redirect if not authorized
   useEffect(() => {
-    if (!authLoading && user && !hasCapability(user, 'viewSettings')) {
+    if (!authLoading && user && !hasCapability(user, 'viewSettings', userCompany)) {
       router.push('/');
     }
   }, [user, authLoading, router]);
@@ -128,7 +128,7 @@ export default function SettingsPage() {
     );
   }
 
-  if (!user || !hasCapability(user, 'viewSettings')) {
+  if (!user || !hasCapability(user, 'viewSettings', userCompany)) {
     return null; // redirect will happen via useEffect
   }
 
@@ -197,7 +197,7 @@ export default function SettingsPage() {
             <RolesCard
               company={company}
               onSave={handleRefresh}
-              canEdit={hasCapability(user, 'manageRolesAndCapabilities')}
+              canEdit={hasCapability(user, 'manageRolesAndCapabilities', userCompany)}
             />
             {/* WB Admin only — R&D pipeline for job type auto-promote/prune */}
             {isWbAdmin && <JobTypeRnDCard />}
