@@ -250,7 +250,10 @@ export const DEFAULT_TICKET_TEMPLATE: TicketTemplate = {
 };
 
 export const DEFAULT_GROUP_ORDER: string[] = [
-  'header', 'identity', 'pickup', 'dropoff', 'invoice',
+  // 'invoice' lives next to 'identity' by default — invoice number reads
+  // naturally below the ticket number / date / time-gauged block.
+  // Customers can still drag it elsewhere via the Edit Order button.
+  'header', 'identity', 'invoice', 'pickup', 'dropoff',
   'measurements', 'notes', 'time', 'timeline', 'driver', 'signatures',
 ];
 

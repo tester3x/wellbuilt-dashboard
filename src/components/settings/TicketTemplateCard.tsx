@@ -76,6 +76,10 @@ function buildPreviewHtml(T: TicketTemplate): string {
       if (T.pickupGps) h += `<div class="row"${ls}><span class="row-label">GPS</span><span class="row-value">48.1234, -103.5678</span></div>`;
       if (T.pickupLegalDesc) h += `<div class="row"${ls}><span class="row-label">Legal</span><span class="row-value">NWSW 16-152N-99W</span></div>`;
       if (T.pickupCounty) h += `<div class="row"${ls}><span class="row-label">County</span><span class="row-value">Williams</span></div>`;
+      // Pulled-volume row sits inside Pickup section (matches the receipt).
+      // Sample shows mirrored 130/130 for non-split; for s_t split chains
+      // ticket A would render 130/0 here.
+      if (T.quantity) h += '<div class="row"><span class="row-label">BBLs</span><span class="row-value">130</span></div>';
       if (T.tlLoadedDeparture) h += '<div class="row"><span class="row-label">Loaded / Departure</span><span class="row-value">1:21 PM</span></div>';
       return h;
     },
@@ -90,6 +94,8 @@ function buildPreviewHtml(T: TicketTemplate): string {
       if (T.dropoffGps) h += `<div class="row"${ls}><span class="row-label">GPS</span><span class="row-value">47.9501, -103.3366</span></div>`;
       if (T.dropoffCounty) h += `<div class="row"${ls}><span class="row-label">County</span><span class="row-value">McKenzie</span></div>`;
       if (T.dropoffLegalDesc) h += `<div class="row"${ls}><span class="row-label">Legal</span><span class="row-value">NENE 30-151N-99W</span></div>`;
+      // Delivered-volume row sits inside Drop-off section (matches receipt).
+      if (T.quantity) h += '<div class="row"><span class="row-label">BBLs</span><span class="row-value">130</span></div>';
       if (T.tlUnloadedStop) h += '<div class="row"><span class="row-label">Unloaded / Stop</span><span class="row-value">2:18 PM</span></div>';
       return h;
     },
@@ -99,13 +105,8 @@ function buildPreviewHtml(T: TicketTemplate): string {
     measurements: () => {
       let h = '<div class="section-divider"></div>';
       if (T.jobType) h += '<div class="row"><span class="row-label">Type</span><span class="row-value">PW</span></div>';
-      // Two BBL rows always — mirror values for normal jobs (sample shows
-      // 130/130), diverge for s_t split chains (A: 100/0, B: 0/100, etc.).
-      // Matches the receipt builder's render pattern in WB T.
-      if (T.quantity) {
-        h += '<div class="row"><span class="row-label">Pickup BBLs</span><span class="row-value">130</span></div>';
-        h += '<div class="row"><span class="row-label">Drop-off BBLs</span><span class="row-value">130</span></div>';
-      }
+      // BBLs row moved out of Measurements — pulled-volume now in Pickup,
+      // delivered-volume in Drop-off. T.quantity gates BOTH from there.
       if (T.tankTop) h += '<div class="row"><span class="row-label">Tank Top</span><span class="row-value">10\' 4"</span></div>';
       if (T.tankBottom) h += '<div class="row"><span class="row-label">Tank Bottom</span><span class="row-value">3\' 8"</span></div>';
       return h;
