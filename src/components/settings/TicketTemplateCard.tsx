@@ -99,7 +99,13 @@ function buildPreviewHtml(T: TicketTemplate): string {
     measurements: () => {
       let h = '<div class="section-divider"></div>';
       if (T.jobType) h += '<div class="row"><span class="row-label">Type</span><span class="row-value">PW</span></div>';
-      if (T.quantity) h += '<div class="row"><span class="row-label">BBLs</span><span class="row-value">130</span></div>';
+      // Two BBL rows always — mirror values for normal jobs (sample shows
+      // 130/130), diverge for s_t split chains (A: 100/0, B: 0/100, etc.).
+      // Matches the receipt builder's render pattern in WB T.
+      if (T.quantity) {
+        h += '<div class="row"><span class="row-label">Pickup BBLs</span><span class="row-value">130</span></div>';
+        h += '<div class="row"><span class="row-label">Drop-off BBLs</span><span class="row-value">130</span></div>';
+      }
       if (T.tankTop) h += '<div class="row"><span class="row-label">Tank Top</span><span class="row-value">10\' 4"</span></div>';
       if (T.tankBottom) h += '<div class="row"><span class="row-label">Tank Bottom</span><span class="row-value">3\' 8"</span></div>';
       return h;
