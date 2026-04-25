@@ -210,34 +210,68 @@ export function TicketDetailModal({ ticket, onClose, onNavigateTicket }: Props) 
               )}
 
               {/* ═══ PHOTOS ═══ */}
-              {invoice?.photos && invoice.photos.length > 0 && (
-                <>
-                  <Divider />
-                  <SectionTitle>PHOTOS ({invoice.photos.length})</SectionTitle>
-                  <div className="flex gap-2 overflow-x-auto pb-2">
-                    {invoice.photos.map((photo: any, i: number) => {
-                      let url = typeof photo === 'string' ? photo : photo?.uri;
-                      const loc = typeof photo === 'object' ? photo?.location : '';
-                      const photoType = typeof photo === 'object' ? photo?.type : '';
-                      if (!url) return null;
-                      // Rewrite firebasestorage.googleapis.com → storage.googleapis.com (DNS fix)
-                      if (url.includes('firebasestorage.googleapis.com')) {
-                        const m = url.match(/\/o\/(.+?)(\?|$)/);
-                        const bucketM = url.match(/\/b\/([^/]+)\//);
-                        if (m && bucketM) url = `https://storage.googleapis.com/${bucketM[1]}/${decodeURIComponent(m[1])}`;
-                      }
-                      return (
-                        <div key={i} className="flex-shrink-0 text-center">
-                          <a href={url} target="_blank" rel="noopener noreferrer">
-                            <img src={url} alt={`Photo ${i + 1}`} className="w-20 h-20 object-cover rounded border border-gray-300 hover:border-yellow-500 transition-colors cursor-pointer" />
-                          </a>
-                          {loc && <p className="text-[9px] text-gray-400 mt-0.5 max-w-[80px] truncate">{photoType === 'pickup' ? '📍' : '📦'} {loc}</p>}
-                        </div>
-                      );
-                    })}
-                  </div>
-                </>
-              )}
+              {invoice?.photos && invoice.photos.length > 0 && (() => {
+                // Split photos into image-style and JSA-style. JSA entries
+                // (type='jsa') aren't real images — they link to a PDF and
+                // need a different visual. They render after all photos so
+                // the strip reads as "photos, then today's JSA."
+                const imagePhotos: any[] = [];
+                const jsaPhotos: any[] = [];
+                for (const p of invoice.photos) {
+                  const t = typeof p === 'object' ? p?.type : '';
+                  if (t === 'jsa') jsaPhotos.push(p); else imagePhotos.push(p);
+                }
+                return (
+                  <>
+                    <Divider />
+                    <SectionTitle>PHOTOS ({imagePhotos.length}){jsaPhotos.length > 0 ? ' + JSA' : ''}</SectionTitle>
+                    <div className="flex gap-2 overflow-x-auto pb-2">
+                      {imagePhotos.map((photo: any, i: number) => {
+                        let url = typeof photo === 'string' ? photo : photo?.uri;
+                        const loc = typeof photo === 'object' ? photo?.location : '';
+                        const photoType = typeof photo === 'object' ? photo?.type : '';
+                        if (!url) return null;
+                        // Rewrite firebasestorage.googleapis.com → storage.googleapis.com (DNS fix)
+                        if (url.includes('firebasestorage.googleapis.com')) {
+                          const m = url.match(/\/o\/(.+?)(\?|$)/);
+                          const bucketM = url.match(/\/b\/([^/]+)\//);
+                          if (m && bucketM) url = `https://storage.googleapis.com/${bucketM[1]}/${decodeURIComponent(m[1])}`;
+                        }
+                        return (
+                          <div key={`img-${i}`} className="flex-shrink-0 text-center">
+                            <a href={url} target="_blank" rel="noopener noreferrer">
+                              <img src={url} alt={`Photo ${i + 1}`} className="w-20 h-20 object-cover rounded border border-gray-300 hover:border-yellow-500 transition-colors cursor-pointer" />
+                            </a>
+                            {loc && <p className="text-[9px] text-gray-400 mt-0.5 max-w-[80px] truncate">{photoType === 'pickup' ? '📍' : '📦'} {loc}</p>}
+                          </div>
+                        );
+                      })}
+                      {jsaPhotos.map((photo: any, i: number) => {
+                        let url = typeof photo === 'string' ? photo : photo?.uri;
+                        if (!url) return null;
+                        if (url.includes('firebasestorage.googleapis.com')) {
+                          const m = url.match(/\/o\/(.+?)(\?|$)/);
+                          const bucketM = url.match(/\/b\/([^/]+)\//);
+                          if (m && bucketM) url = `https://storage.googleapis.com/${bucketM[1]}/${decodeURIComponent(m[1])}`;
+                        }
+                        return (
+                          <div key={`jsa-${i}`} className="flex-shrink-0 text-center">
+                            <a href={url} target="_blank" rel="noopener noreferrer" title="Open Job Safety Analysis PDF">
+                              <div className="w-20 h-20 rounded border-2 border-yellow-500 bg-yellow-50 hover:bg-yellow-100 transition-colors cursor-pointer flex flex-col items-center justify-center">
+                                <svg className="w-8 h-8 text-yellow-700" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 12l2 2 4-4m5.618-4.016A11.955 11.955 0 0112 2.944a11.955 11.955 0 01-8.618 3.04A12.02 12.02 0 003 9c0 5.591 3.824 10.29 9 11.622 5.176-1.332 9-6.03 9-11.622 0-1.042-.133-2.052-.382-3.016z" />
+                                </svg>
+                                <span className="text-[10px] font-bold text-yellow-700 mt-1 tracking-wider">JSA</span>
+                              </div>
+                            </a>
+                            <p className="text-[9px] text-yellow-700 mt-0.5 font-semibold">Tap to open</p>
+                          </div>
+                        );
+                      })}
+                    </div>
+                  </>
+                );
+              })()}
 
               {/* ═══ TOTALS ═══ */}
               <div className="border-t-2 border-yellow-500 mt-6 pt-3 space-y-1">

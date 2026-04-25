@@ -4715,35 +4715,65 @@ function CompletedJobsPanel({ jobs, drivers, allWells, allDisposals, highlightJo
                               </>
                             )}
 
-                            {/* Photos */}
-                            {ticketDetailData.invoice.photos?.length > 0 && (
-                              <>
-                                <h5 className="text-[#111] font-extrabold text-[10px] tracking-[1.5px] uppercase pt-3 pb-1">PHOTOS ({ticketDetailData.invoice.photos.length})</h5>
-                                <div className="flex gap-2 overflow-x-auto pb-2">
-                                  {ticketDetailData.invoice.photos.map((photo: any, i: number) => {
-                                    let url = typeof photo === 'string' ? photo : photo?.uri;
-                                    const loc = typeof photo === 'object' ? photo?.location : '';
-                                    const photoType = typeof photo === 'object' ? photo?.type : '';
-                                    if (!url) return null;
-                                    // Rewrite firebasestorage.googleapis.com URLs — that domain has DNS issues.
-                                    // storage.googleapis.com/{bucket}/{path} is reliable.
-                                    if (url.includes('firebasestorage.googleapis.com')) {
-                                      const m = url.match(/\/o\/(.+?)(\?|$)/);
-                                      const bucketM = url.match(/\/b\/([^/]+)\//);
-                                      if (m && bucketM) url = `https://storage.googleapis.com/${bucketM[1]}/${decodeURIComponent(m[1])}`;
-                                    }
-                                    return (
-                                      <div key={i} className="flex-shrink-0 text-center">
-                                        <a href={url} target="_blank" rel="noopener noreferrer">
-                                          <img src={url} alt={`Photo ${i + 1}`} className="w-16 h-16 object-cover rounded border border-gray-300 hover:border-yellow-500 transition-colors cursor-pointer" />
-                                        </a>
-                                        {loc && <p className="text-[8px] text-gray-400 mt-0.5 max-w-[64px] truncate">{photoType === 'pickup' ? '📍' : '📦'} {loc}</p>}
-                                      </div>
-                                    );
-                                  })}
-                                </div>
-                              </>
-                            )}
+                            {/* Photos — type='jsa' renders as JSA tile after image photos */}
+                            {ticketDetailData.invoice.photos?.length > 0 && (() => {
+                              const imagePhotos: any[] = [];
+                              const jsaPhotos: any[] = [];
+                              for (const p of ticketDetailData.invoice.photos) {
+                                const t = typeof p === 'object' ? p?.type : '';
+                                if (t === 'jsa') jsaPhotos.push(p); else imagePhotos.push(p);
+                              }
+                              return (
+                                <>
+                                  <h5 className="text-[#111] font-extrabold text-[10px] tracking-[1.5px] uppercase pt-3 pb-1">PHOTOS ({imagePhotos.length}){jsaPhotos.length > 0 ? ' + JSA' : ''}</h5>
+                                  <div className="flex gap-2 overflow-x-auto pb-2">
+                                    {imagePhotos.map((photo: any, i: number) => {
+                                      let url = typeof photo === 'string' ? photo : photo?.uri;
+                                      const loc = typeof photo === 'object' ? photo?.location : '';
+                                      const photoType = typeof photo === 'object' ? photo?.type : '';
+                                      if (!url) return null;
+                                      // Rewrite firebasestorage.googleapis.com URLs — that domain has DNS issues.
+                                      // storage.googleapis.com/{bucket}/{path} is reliable.
+                                      if (url.includes('firebasestorage.googleapis.com')) {
+                                        const m = url.match(/\/o\/(.+?)(\?|$)/);
+                                        const bucketM = url.match(/\/b\/([^/]+)\//);
+                                        if (m && bucketM) url = `https://storage.googleapis.com/${bucketM[1]}/${decodeURIComponent(m[1])}`;
+                                      }
+                                      return (
+                                        <div key={`img-${i}`} className="flex-shrink-0 text-center">
+                                          <a href={url} target="_blank" rel="noopener noreferrer">
+                                            <img src={url} alt={`Photo ${i + 1}`} className="w-16 h-16 object-cover rounded border border-gray-300 hover:border-yellow-500 transition-colors cursor-pointer" />
+                                          </a>
+                                          {loc && <p className="text-[8px] text-gray-400 mt-0.5 max-w-[64px] truncate">{photoType === 'pickup' ? '📍' : '📦'} {loc}</p>}
+                                        </div>
+                                      );
+                                    })}
+                                    {jsaPhotos.map((photo: any, i: number) => {
+                                      let url = typeof photo === 'string' ? photo : photo?.uri;
+                                      if (!url) return null;
+                                      if (url.includes('firebasestorage.googleapis.com')) {
+                                        const m = url.match(/\/o\/(.+?)(\?|$)/);
+                                        const bucketM = url.match(/\/b\/([^/]+)\//);
+                                        if (m && bucketM) url = `https://storage.googleapis.com/${bucketM[1]}/${decodeURIComponent(m[1])}`;
+                                      }
+                                      return (
+                                        <div key={`jsa-${i}`} className="flex-shrink-0 text-center">
+                                          <a href={url} target="_blank" rel="noopener noreferrer" title="Open Job Safety Analysis PDF">
+                                            <div className="w-16 h-16 rounded border-2 border-yellow-500 bg-yellow-50 hover:bg-yellow-100 transition-colors cursor-pointer flex flex-col items-center justify-center">
+                                              <svg className="w-7 h-7 text-yellow-700" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 12l2 2 4-4m5.618-4.016A11.955 11.955 0 0112 2.944a11.955 11.955 0 01-8.618 3.04A12.02 12.02 0 003 9c0 5.591 3.824 10.29 9 11.622 5.176-1.332 9-6.03 9-11.622 0-1.042-.133-2.052-.382-3.016z" />
+                                              </svg>
+                                              <span className="text-[9px] font-bold text-yellow-700 mt-0.5 tracking-wider">JSA</span>
+                                            </div>
+                                          </a>
+                                          <p className="text-[8px] text-yellow-700 mt-0.5 font-semibold">Tap to open</p>
+                                        </div>
+                                      );
+                                    })}
+                                  </div>
+                                </>
+                              );
+                            })()}
 
                             {/* Totals */}
                             <div className="border-t-2 border-yellow-500 mt-4 pt-2">
