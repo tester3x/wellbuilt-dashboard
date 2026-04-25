@@ -1161,7 +1161,7 @@ export const processIncomingPull = functionsV1.database
     // These are fast Firestore writes, adds ~1-2s to packet processing but guarantees delivery.
     try {
       await Promise.all([
-        sendLevelToChat(data, packetId).catch(err => console.warn('[LevelChat] Send failed:', err)),
+        sendLevelToChat(data, packetId, { tankAfterInches, tanks }).catch(err => console.warn('[LevelChat] Send failed:', err)),
         trackJsaLocation(data).catch(err => console.warn('[JsaTrack] Tracking failed:', err)),
       ]);
     } catch (err) {
@@ -2325,6 +2325,7 @@ function resolveCapsForRole(
 async function getDispatchParticipants(
   companyId: string,
   requireCapabilities: string[] = [],
+  excludeDriverHash: string = '',
 ): Promise<{ ids: string[]; names: Record<string, string> }> {
   let companyRoleCaps: Record<string, string[] | undefined> = {};
   if (companyId && requireCapabilities.length > 0) {
@@ -2334,6 +2335,21 @@ async function getDispatchParticipants(
     } catch (err) {
       console.warn('[getDispatchParticipants] failed to load company roleCapabilities override:', err);
     }
+  }
+
+  // Resolve the driver's own dashboard uid (if linked) so we never add the
+  // driver themselves as a "dispatcher" — that produced self-chat shift
+  // threads for owner-operators like Mike at liquid-gold, where the only
+  // admin user IS the driver. Linkage can live on either side:
+  //   drivers/approved/{hash}.dashboardUid  (set by inviteEmployee CF)
+  //   users/{uid}.driverHash                (set by inviteEmployee CF)
+  // Check both; either one hit disqualifies that uid.
+  let excludeUid = '';
+  if (excludeDriverHash) {
+    try {
+      const drvSnap = await db.ref(`drivers/approved/${excludeDriverHash}/dashboardUid`).once('value');
+      if (drvSnap.exists()) excludeUid = String(drvSnap.val() || '');
+    } catch {}
   }
 
   const usersSnap = await db.ref('users').once('value');
@@ -2351,6 +2367,13 @@ async function getDispatchParticipants(
     } else {
       // Legacy admin-tier gate
       if (!['admin', 'manager', 'it'].includes(userData.role)) continue;
+    }
+
+    // Self-chat guard: skip any user who IS the driver we're building the
+    // thread for. Match by either back-link direction.
+    if (excludeDriverHash) {
+      if (uid === excludeUid) continue;
+      if (userData.driverHash && userData.driverHash === excludeDriverHash) continue;
     }
 
     const pid = `user:${uid}`;
@@ -2391,7 +2414,13 @@ async function postSystemMessage(
 }
 
 // ── sendLevelToChat: Fire-and-forget level report to driver's dispatch chat threads ──
-async function sendLevelToChat(data: PullPacket, packetId: string): Promise<void> {
+// `computed` lets the caller hand in the already-correct bottom (preferred source of truth).
+// If absent, falls back to reading well_config/{wellName}.tanks (same path the pull processor uses).
+async function sendLevelToChat(
+  data: PullPacket,
+  packetId: string,
+  computed?: { tankAfterInches: number; tanks: number },
+): Promise<void> {
   try {
     const driverHash = data.driverId;
     if (!driverHash) {
@@ -2430,11 +2459,47 @@ async function sendLevelToChat(data: PullPacket, packetId: string): Promise<void
 
     // Format levels as feet'inches"
     const topInches = (parseFloat(String(data.tankLevelFeet)) || 0) * 12;
-    const tanks = companyConfig.tanks || 1; // fallback; not critical for display
-    const bblsInInches = data.bblsTaken > 0 ? (data.bblsTaken / 20 / tanks) * 12 : 0;
-    const bottomInches = topInches - bblsInInches;
+    const wellName = data.wellName;
+    const cleanName = wellName ? wellName.replace(/\s/g, '') : '';
+    let tanks = 1;
+    let bottomInches: number;
+    let sourceUsed: string;
+
+    if (computed && Number.isFinite(computed.tankAfterInches)) {
+      // Caller already computed the correct bottom (uses well_config.tanks). Use it directly.
+      tanks = computed.tanks || 1;
+      bottomInches = computed.tankAfterInches;
+      sourceUsed = `caller.tankAfterInches(tanks=${tanks})`;
+    } else {
+      // Fallback: read well_config/{wellName}.tanks — same path the pull processor uses.
+      try {
+        let configSnap = wellName ? await db.ref(`well_config/${wellName}`).once('value') : null;
+        if (configSnap && !configSnap.exists() && cleanName) {
+          configSnap = await db.ref(`well_config/${cleanName}`).once('value');
+        }
+        const cfg = (configSnap && configSnap.val()) || {};
+        tanks = cfg.tanks || cfg.numTanks || 1;
+      } catch (e) {
+        console.warn('[LevelChat] well_config lookup failed, defaulting tanks=1:', e);
+      }
+      const bblsInInches = data.bblsTaken > 0 ? (data.bblsTaken / (20 * tanks)) * 12 : 0;
+      bottomInches = topInches - bblsInInches;
+      sourceUsed = `recompute(well_config.tanks=${tanks})`;
+    }
+
+    const bblPerFt = 20 * tanks;
     const topStr = inchesToFeetInches(topInches);
     const bottomStr = inchesToFeetInches(Math.max(0, bottomInches));
+
+    console.log('[LevelChat] level math:', {
+      wellName,
+      topLevel: topStr,
+      bottomLevel: bottomStr,
+      bbls: data.bblsTaken,
+      tankCount: tanks,
+      bblPerFt,
+      sourceUsed,
+    });
 
     // Format date + time from packet
     const fullTimeStr = data.dateTime || (data.dateTimeUTC ? formatLocalDateTime(new Date(data.dateTimeUTC)) : '');
@@ -2538,7 +2603,10 @@ export const onShiftCreate = functionsV1.firestore
       'Driver';
 
     const driverPid = `driver:${driverId}`;
-    const { ids: dispatchIds, names: dispatchNames } = await getDispatchParticipants(companyId);
+    // Pass driverId so owner-operators (same person as driver AND as admin)
+    // don't get put on both sides of their own shift thread. If the company's
+    // only "dispatcher" IS the driver, the next guard below skips the thread.
+    const { ids: dispatchIds, names: dispatchNames } = await getDispatchParticipants(companyId, [], driverId);
 
     // Skip thread creation if this company has no dispatchers — otherwise
     // we create a phantom thread with only the driver as a participant,
@@ -2965,10 +3033,13 @@ export const createOrFindDispatchThread = httpsV2.onCall(
 
     // 2. Get current dispatchers — any user whose role grants BOTH viewChat
     //    and sendChat at this company (capability-based, per-company overrides
-    //    respected via companies/{companyId}.roleCapabilities).
+    //    respected via companies/{companyId}.roleCapabilities). Exclude the
+    //    caller driver's own dashboard account so owner-operators don't open
+    //    a direct thread with themselves.
     const { ids: dispatchIds, names: dispatchNames } = await getDispatchParticipants(
       companyId,
       ['viewChat', 'sendChat'],
+      driverHash,
     );
     if (dispatchIds.length === 0) {
       throw new httpsV2.HttpsError(
@@ -3483,6 +3554,12 @@ export const parseJsaPdf = httpsV2.onCall(
 // Called fire-and-forget from processIncomingPull.
 // Maintains a per-driver per-day doc with all locations visited.
 // WB T reads this doc to check if a new well needs a JSA.
+//
+// Schema: writes `wells[]` (array of map objects) — the single source of
+// truth shared with the client-side stampers in WB T (FlowController) and
+// WB JSA (signoff). Previously this CF wrote `locations[]` (array of
+// uppercase strings), which was never read by anyone — the 4/17 unification
+// picked `wells[]` but this CF path was missed.
 async function trackJsaLocation(data: PullPacket): Promise<void> {
   try {
     const driverHash = data.driverId;
@@ -3504,18 +3581,45 @@ async function trackJsaLocation(data: PullPacket): Promise<void> {
     // Build doc ID: {driverHash}_{YYYY-MM-DD}
     const today = new Date().toISOString().slice(0, 10);
     const docId = `${driverHash}_${today}`;
+    const docRef = firestoreDb.collection('jsa_day_status').doc(docId);
 
-    // Add well to acknowledged locations (arrayUnion = no duplicates)
-    await firestoreDb.collection('jsa_day_status').doc(docId).set({
-      driverHash,
-      driverName: driverData.displayName || driverData.legalName || '',
-      companyId,
-      date: today,
-      updatedAt: admin.firestore.FieldValue.serverTimestamp(),
-      locations: admin.firestore.FieldValue.arrayUnion(wellName.toUpperCase()),
-    }, { merge: true });
+    // Dedup against existing wells[] by case-insensitive name. A pull event
+    // is a pickup by definition (driver stopped at the well with a tank).
+    const nowIso = new Date().toISOString();
+    const driverName = driverData.legalName || driverData.displayName || '';
 
-    console.log(`[JsaTrack] Added ${wellName} to jsa_day_status/${docId}`);
+    await firestoreDb.runTransaction(async (tx) => {
+      const snap = await tx.get(docRef);
+      const existing = snap.exists ? (snap.data() || {}) : {};
+      const existingWells: any[] = Array.isArray(existing.wells) ? existing.wells : [];
+      const normalized = wellName.trim().toUpperCase();
+      const seen = existingWells.some(
+        (w) => typeof w?.name === 'string' && w.name.trim().toUpperCase() === normalized
+      );
+      if (seen) return; // already stamped today — nothing to do
+
+      const newWell = {
+        name: wellName,
+        type: 'pickup',
+        jobType: data.jobType || 'pw',
+        stampedAt: nowIso,
+      };
+      const payload: any = {
+        driverHash,
+        driverName,
+        companyId,
+        date: today,
+        wells: [...existingWells, newWell],
+        updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+      };
+      // Only seed jsaCompleted:false on first create; never overwrite an
+      // existing true from a prior sign-off today.
+      if (!snap.exists) payload.jsaCompleted = false;
+
+      tx.set(docRef, payload, { merge: true });
+    });
+
+    console.log(`[JsaTrack] Added ${wellName} to jsa_day_status/${docId}.wells[]`);
   } catch (err) {
     console.warn('[JsaTrack] Failed:', err);
   }
