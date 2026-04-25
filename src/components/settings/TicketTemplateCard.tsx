@@ -290,7 +290,20 @@ export function TicketTemplateCard({ company, onSave }: Props) {
 
   const openEditor = (target: string) => {
     const existing = company.ticketTemplates?.[target];
-    setTemplate(existing ? { ...existing } : { ...DEFAULT_TICKET_TEMPLATE });
+    // Normalize legacy templates that were saved before the BBLs row split
+    // (pickupBblsRow / dropoffBblsRow). When undefined, resolve to the
+    // legacy `quantity` value — same fallback the renderer uses — so the
+    // checkbox state in Settings matches what the Live Preview renders.
+    // Without this, an old template shows the BBL rows in the preview but
+    // the checkboxes display as unchecked, which is a confusing mismatch.
+    const normalized: TicketTemplate = existing
+      ? {
+          ...existing,
+          pickupBblsRow: existing.pickupBblsRow ?? existing.quantity,
+          dropoffBblsRow: existing.dropoffBblsRow ?? existing.quantity,
+        }
+      : { ...DEFAULT_TICKET_TEMPLATE };
+    setTemplate(normalized);
     setFieldSizes(existing?.fieldSizes ? { ...DEFAULT_FIELD_SIZES, ...(existing.fieldSizes as Record<string, FieldSize>) } : { ...DEFAULT_FIELD_SIZES });
     setGroupOrder(existing?.groupOrder ? [...existing.groupOrder] : [...DEFAULT_GROUP_ORDER]);
     setReorderMode(false);
