@@ -137,9 +137,29 @@ export function TicketDetailModal({ ticket, onClose, onNavigateTicket }: Props) 
                     <MeasureBox label="NET / TONS" value={ticket.tons || ticket.netWeight || '--'} />
                   </div>
                 ) : (
-                  <div className="grid grid-cols-4 border-t border-gray-300">
+                  // 5-col layout: TYPE | PICKUP BBL | DROP-OFF BBL | TOP | BOTTOM.
+                  // Pickup/drop-off mirror for normal jobs; for split-ticket
+                  // chains they diverge (A: 100/0, B: 0/100, etc.).
+                  // Backwards compat: when only legacy `qty`/`bbls` exists,
+                  // both columns show that single value (mirror).
+                  <div className="grid grid-cols-5 border-t border-gray-300">
                     <MeasureBox label="TYPE" value={ticket.type || 'Production Water'} />
-                    <MeasureBox label="QTY (BBL)" value={ticket.qty || ticket.bbls || '--'} />
+                    <MeasureBox
+                      label="PICKUP BBL"
+                      value={
+                        ticket.pickupBbls != null
+                          ? String(ticket.pickupBbls)
+                          : (ticket.qty || ticket.bbls || '--')
+                      }
+                    />
+                    <MeasureBox
+                      label="DROP-OFF BBL"
+                      value={
+                        ticket.dropoffBbls != null
+                          ? String(ticket.dropoffBbls)
+                          : (ticket.qty || ticket.bbls || '--')
+                      }
+                    />
                     <MeasureBox label="TOP" value={ticket.top || '--'} />
                     <MeasureBox label="BOTTOM" value={ticket.bottom || '--'} />
                   </div>

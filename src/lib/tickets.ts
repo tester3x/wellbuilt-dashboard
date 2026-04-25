@@ -12,6 +12,15 @@ export interface Ticket {
   type: string;
   qty: string;
   bbls: string;
+  // Split-tickets bbls split. Mirror qty/bbls for normal tickets; for s_t
+  // chains (split-tickets feature) they diverge: ticket A → pickup=N,
+  // dropoff=0 (water stays in truck); ticket B/C → pickup=0, dropoff=N
+  // (delivered amount). When undefined (legacy tickets), renderers fall
+  // back to qty/bbls.
+  pickupBbls?: number;
+  dropoffBbls?: number;
+  splitChainId?: string;
+  splitChainSeq?: number;
   top: string;
   bottom: string;
   driver: string;

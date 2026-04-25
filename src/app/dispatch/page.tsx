@@ -4637,9 +4637,12 @@ function CompletedJobsPanel({ jobs, drivers, allWells, allDisposals, highlightJo
                                   {t.hauledTo && <div className="flex justify-between"><span className="text-[10px] text-gray-500">Drop-off</span><span className="text-[10px] text-[#111]">{t.hauledTo}</span></div>}
                                   {t.timeGauged && <div className="flex justify-between"><span className="text-[10px] text-gray-500">Time Gauged</span><span className="text-[10px] text-[#111]">{t.timeGauged}</span></div>}
                                 </div>
-                                <div className="grid grid-cols-4 border-t border-gray-300">
+                                {/* 5-col: TYPE | PICKUP BBL | DROP-OFF BBL | TOP | BOTTOM.
+                                    Mirrored values for normal jobs; diverge for split-ticket chains. */}
+                                <div className="grid grid-cols-5 border-t border-gray-300">
                                   <div className="text-center py-1.5 border-r border-gray-300"><div className="text-[8px] text-gray-400 uppercase">TYPE</div><div className="text-xs font-semibold text-[#111] font-mono">{t.type || 'PW'}</div></div>
-                                  <div className="text-center py-1.5 border-r border-gray-300"><div className="text-[8px] text-gray-400 uppercase">QTY (BBL)</div><div className="text-xs font-semibold text-[#111] font-mono">{t.qty || t.bbls || '--'}</div></div>
+                                  <div className="text-center py-1.5 border-r border-gray-300"><div className="text-[8px] text-gray-400 uppercase">PICKUP BBL</div><div className="text-xs font-semibold text-[#111] font-mono">{t.pickupBbls != null ? String(t.pickupBbls) : (t.qty || t.bbls || '--')}</div></div>
+                                  <div className="text-center py-1.5 border-r border-gray-300"><div className="text-[8px] text-gray-400 uppercase">DROP-OFF BBL</div><div className="text-xs font-semibold text-[#111] font-mono">{t.dropoffBbls != null ? String(t.dropoffBbls) : (t.qty || t.bbls || '--')}</div></div>
                                   <div className="text-center py-1.5 border-r border-gray-300"><div className="text-[8px] text-gray-400 uppercase">TOP</div><div className="text-xs font-semibold text-[#111] font-mono">{t.top || '--'}</div></div>
                                   <div className="text-center py-1.5"><div className="text-[8px] text-gray-400 uppercase">BOTTOM</div><div className="text-xs font-semibold text-[#111] font-mono">{t.bottom || '--'}</div></div>
                                 </div>
