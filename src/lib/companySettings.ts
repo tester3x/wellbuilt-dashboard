@@ -410,10 +410,21 @@ export interface CompanyConfig {
   minPhotoCount?: number;        // Minimum photos required (default 1 when required)
   photoRetentionDays?: number;   // Auto-delete photos after N days (default 30)
   // JSA (Job Safety Analysis) enforcement mode
-  // off (default): JSA available in overflow menu but not required
-  // per_shift: JSA required once at shift start before first job
-  // per_location: JSA required at each new well location (plus shift start)
-  jsaMode?: 'off' | 'per_shift' | 'per_location';
+  //   off (default): JSA available in overflow menu, no prompts
+  //   per_shift: 1 JSA per shift — locations auto-stamped, first job-close
+  //              prompts for Read/Ack, shift end blocked until acknowledged
+  //   per_job:   1 JSA per job — every job-close prompts for Read/Ack
+  // Legacy 'per_load' and 'per_location' values are still readable from
+  // existing docs and behave as 'per_job' at runtime (see jsaRules.ts
+  // canonicalizeJsaMode); Dashboard UI only writes the 3 new values.
+  jsaMode?: 'off' | 'per_shift' | 'per_job' | 'per_load' | 'per_location';
+  /**
+   * When true (default), the job-close JSA modal shows BOTH "Read JSA" and
+   * "Acknowledged" buttons. When false, only "Read JSA" is live and the
+   * Acknowledge shortcut is greyed out — driver must walk through the JSA
+   * app to satisfy the gate. Audited per-record via acknowledgedMethod.
+   */
+  jsaAllowAcknowledge?: boolean;
   // JSA contacts — shown on JSA signoff screen. Company-managed via Dashboard Settings.
   emergencyContacts?: { label: string; phone: string }[];
   companyContacts?: { label: string; phone: string }[];

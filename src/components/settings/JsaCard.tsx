@@ -22,16 +22,25 @@ interface Props {
 
 const JSA_MODES = [
   { value: 'off', label: 'Off', desc: 'JSA available in menu but not required' },
-  { value: 'per_shift', label: 'Per Shift', desc: 'Required once per shift — locations accumulate throughout the day' },
-  { value: 'per_load', label: 'Per Load', desc: 'Required before each job — separate JSA per load' },
-  { value: 'per_location', label: 'Per Location', desc: 'Required at each new well location + shift start' },
+  { value: 'per_shift', label: 'Per Shift', desc: '1 JSA per shift — driver acknowledges (or reads) at first job close. Wells auto-stamp throughout the day. Shift end blocked until acknowledged.' },
+  { value: 'per_job', label: 'Per Job', desc: '1 JSA per job — driver acknowledges (or reads) at every job close. Each ticket / invoice / split-haul leg gets its own JSA record.' },
 ] as const;
+
+/** Canonicalize legacy modes (per_load / per_location) → per_job for the radio UI. */
+function canonicalizeMode(mode: string | undefined): 'off' | 'per_shift' | 'per_job' {
+  if (mode === 'per_load' || mode === 'per_location') return 'per_job';
+  if (mode === 'per_shift' || mode === 'per_job') return mode;
+  return 'off';
+}
 
 type UploadState = 'idle' | 'uploading' | 'parsing' | 'error';
 
 export function JsaCard({ company, onSave }: Props) {
   const [saving, setSaving] = useState(false);
-  const currentMode = company.jsaMode || 'off';
+  const currentMode = canonicalizeMode(company.jsaMode);
+  // Default true — legacy companies that never had this field still get the
+  // shortcut. Companies who want full Read-only enforcement explicitly toggle off.
+  const allowAcknowledge = company.jsaAllowAcknowledge !== false;
 
   // Contact management state
   const [emergencyContacts, setEmergencyContacts] = useState<{ label: string; phone: string }[]>(
@@ -91,7 +100,7 @@ export function JsaCard({ company, onSave }: Props) {
   }, []);
 
   // JSA Mode handler
-  const setMode = async (mode: 'off' | 'per_shift' | 'per_load' | 'per_location') => {
+  const setMode = async (mode: 'off' | 'per_shift' | 'per_job') => {
     if (mode === currentMode) return;
     setSaving(true);
     try {
@@ -99,6 +108,20 @@ export function JsaCard({ company, onSave }: Props) {
       onSave();
     } catch (err) {
       console.error('Failed to save jsaMode:', err);
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  // Allow Acknowledge toggle — controls whether the per-job-close modal
+  // shows the Acknowledged shortcut button alongside Read JSA.
+  const setAllowAcknowledge = async (next: boolean) => {
+    setSaving(true);
+    try {
+      await updateCompanyFields(company.id, { jsaAllowAcknowledge: next });
+      onSave();
+    } catch (err) {
+      console.error('Failed to save jsaAllowAcknowledge:', err);
     } finally {
       setSaving(false);
     }
@@ -691,6 +714,28 @@ export function JsaCard({ company, onSave }: Props) {
             </div>
           </button>
         ))}
+
+        {/* Allow Acknowledge toggle — only meaningful when JSA is enforced */}
+        {currentMode !== 'off' && (
+          <div className="mt-3 pt-3 border-t border-gray-700/50">
+            <label className="flex items-start gap-3 cursor-pointer">
+              <input
+                type="checkbox"
+                checked={allowAcknowledge}
+                onChange={(e) => setAllowAcknowledge(e.target.checked)}
+                disabled={saving}
+                className="mt-0.5 w-4 h-4 accent-red-500"
+              />
+              <div className="flex-1">
+                <div className="text-sm text-white font-medium">Allow Acknowledge shortcut</div>
+                <div className="text-xs text-gray-500 mt-0.5">
+                  When ON, drivers can tap <span className="text-gray-300">Acknowledged</span> at job close instead of opening the JSA app. Each record is audited (<code className="text-[10px] bg-gray-700 px-1 rounded">acknowledgedMethod</code>: <span className="text-amber-400">acknowledged</span> vs <span className="text-emerald-400">read</span>).
+                  When OFF, only <span className="text-gray-300">Read JSA</span> is live — drivers must walk through the form every time.
+                </div>
+              </div>
+            </label>
+          </div>
+        )}
       </div>
 
       {/* Section B: JSA Contacts */}
