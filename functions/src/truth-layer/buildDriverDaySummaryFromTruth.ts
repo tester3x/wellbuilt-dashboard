@@ -42,20 +42,27 @@ export interface DriverDaySummary {
 
 export function buildDriverDaySummaryFromTruth(
   projection: TruthProjection,
-  operatorKey: string
+  operatorKey: string | readonly string[]
 ): DriverDaySummary {
-  const operatorExists = projection.operators.some(
-    (o) => o.operatorKey === operatorKey
-  );
+  // Accept a single raw operator key or an array of linked keys (from a
+  // canonical view's `linkedKeys`). Array form is how the legal-name bridge
+  // surfaces downstream: events extracted under a name-only raw key join the
+  // same day summary as events under the hash-backed raw key.
+  const keyList: string[] = Array.isArray(operatorKey)
+    ? Array.from(new Set(operatorKey as readonly string[]))
+    : [operatorKey as string];
+  const keySet = new Set(keyList);
+  const primaryKey = keyList[0] ?? '';
+  const operatorExists = projection.operators.some((o) => keySet.has(o.operatorKey));
 
   const locByKey = new Map(projection.locations.map((l) => [l.locationKey, l]));
   const actByKey = new Map(projection.activities.map((a) => [a.activityKey, a]));
 
-  const mySessions = projection.sessions.filter(
-    (s) => s.operatorKey === operatorKey
-  );
-  const myEvents = projection.events.filter((e) => e.operatorKey === operatorKey);
-  const myJsas = projection.jsaViews.filter((j) => j.operatorKey === operatorKey);
+  const matches = (k: string | undefined): boolean =>
+    typeof k === 'string' && keySet.has(k);
+  const mySessions = projection.sessions.filter((s) => matches(s.operatorKey));
+  const myEvents = projection.events.filter((e) => matches(e.operatorKey));
+  const myJsas = projection.jsaViews.filter((j) => matches(j.operatorKey));
 
   let totalActiveMs = 0;
   const sessions: DaySummarySession[] = mySessions.map((s) => {
@@ -157,7 +164,7 @@ export function buildDriverDaySummaryFromTruth(
   }
 
   return {
-    operatorKey,
+    operatorKey: primaryKey,
     found: operatorExists,
     sessions,
     totalActiveMs,

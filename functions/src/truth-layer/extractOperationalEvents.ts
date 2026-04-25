@@ -2,6 +2,7 @@ import type { OperationalEvent, SourceRef } from './types';
 import type { ShiftDocInput } from './buildSessionView';
 import type { BuildJSAViewInput } from './buildJSAView';
 import { normalizeLocationName } from './normalizeLocation';
+import { resolveOperatorRef } from './normalizeOperator';
 
 export interface InvoiceTimelineEvent {
   type?: string;
@@ -10,6 +11,16 @@ export interface InvoiceTimelineEvent {
   lng?: number;
   wellName?: string;
   hauledTo?: string;
+}
+
+export interface InvoiceTicket {
+  ticketNumber?: string | number;
+  wellName?: string;
+  hauledTo?: string;
+  bbl?: number;
+  totalBBL?: number;
+  commodityType?: string;
+  createdAt?: string;
 }
 
 export interface InvoiceInput {
@@ -21,6 +32,14 @@ export interface InvoiceInput {
   hauledTo?: string;
   commodityType?: string;
   timeline?: InvoiceTimelineEvent[];
+  /** Optional — surfaced by the week-summary builder. Truth-layer event
+   *  extraction does not use these fields. */
+  tickets?: InvoiceTicket[];
+  totalBBL?: number;
+  ticketNumber?: string | number;
+  invoiceNumber?: string | number;
+  status?: string;
+  createdAt?: string;
 }
 
 export interface DispatchInput {
@@ -116,7 +135,16 @@ export function extractOperationalEvents(
 
   for (const inv of input.invoices ?? []) {
     const driverRef = inv.driverHash ?? inv.driverId;
-    const operatorKey = opKey(driverRef);
+    // Phase 26 — if the invoice has no hash/id (common: invoices carry only
+    // the driver's name string), derive a name-only operator key from the
+    // invoice itself. Same normalization the raw projection uses, so the
+    // legal-name bridge in the canonical builder can merge these events
+    // into the hash-backed canonical operator.
+    let operatorKey = opKey(driverRef);
+    if (!operatorKey) {
+      const nameRef = resolveOperatorRef(inv);
+      if (nameRef) operatorKey = nameRef.operatorKey;
+    }
     const recordId = inv.id;
     const baseRef: SourceRef = {
       system: 'firestore',

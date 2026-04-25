@@ -4,6 +4,29 @@ export function normalizeName(name: string): string {
   return name.toLowerCase().trim().replace(/\s+/g, ' ');
 }
 
+/**
+ * Stricter person-name normalizer for canonical-identity merging. Lowercases,
+ * strips punctuation (keeps letters, digits, and whitespace), collapses runs
+ * of whitespace, and trims. Preserves word order and alphanumerics.
+ *
+ *   "Mike TabletS10 Burger"   → "mike tablets10 burger"
+ *   "MIKE  TABLETS10  BURGER" → "mike tablets10 burger"
+ *   "Mike-TabletS10 Burger"   → "mike tablets10 burger"
+ *
+ * Used by the canonical operator builder to bridge name-only refs (e.g. from
+ * invoices that carry `driver` but no `driverHash`) into their hash-backed
+ * canonical identity via an exact-match on `legalName`. Intentionally separate
+ * from `normalizeName` so the existing `op-name:{…}` keys do not shift.
+ */
+export function normalizePersonName(input: unknown): string {
+  if (typeof input !== 'string') return '';
+  return input
+    .toLowerCase()
+    .replace(/[^a-z0-9\s]/g, ' ')
+    .trim()
+    .replace(/\s+/g, ' ');
+}
+
 interface Extracted {
   hash?: string;
   driverId?: string;

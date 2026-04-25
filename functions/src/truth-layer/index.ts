@@ -1,6 +1,7 @@
 export * from './types';
 export {
   normalizeName,
+  normalizePersonName,
   resolveOperatorRef,
   mergeOperatorRefs,
 } from './normalizeOperator';
@@ -66,6 +67,19 @@ export type {
   DaySummaryActivity,
   DaySummaryJsa,
 } from './buildDriverDaySummaryFromTruth';
+export { buildDriverWeekSummary } from './buildDriverWeekSummary';
+export type {
+  DriverWeekSummary,
+  BuildDriverWeekSummaryInput,
+  WeekDayInput,
+  WeekSummaryOperator,
+  WeekSummaryTotals,
+  WeekSummaryPerDay,
+  WeekSummaryLocation,
+  WeekSummaryActivity,
+  WeekSummaryTicket,
+  WeekSummaryWarning,
+} from './buildDriverWeekSummary';
 export { buildRAGRecords } from './buildRAGRecords';
 export type { RAGRecord, RAGRecordMetadata } from './buildRAGRecords';
 export { resolveCanonicalOperatorKey } from './resolveCanonicalOperatorKey';

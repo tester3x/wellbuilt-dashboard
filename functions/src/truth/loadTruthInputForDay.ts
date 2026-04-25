@@ -129,15 +129,56 @@ export async function loadTruthInputForDay(
     const invoices: unknown[] = [];
     snap.forEach((doc) => {
       const data = doc.data();
-      invoices.push({
+      // Normalize createdAt to ISO so the week-summary / ticket surface
+      // doesn't hand back Firestore Timestamp objects (which stringify to
+      // `[object Object]` for naive consumers).
+      const createdAt = (() => {
+        const ca = data['createdAt'] as unknown;
+        if (!ca) return undefined;
+        if (typeof ca === 'string') return ca;
+        if (typeof (ca as { toDate?: () => Date }).toDate === 'function') {
+          return (ca as { toDate: () => Date }).toDate().toISOString();
+        }
+        return undefined;
+      })();
+      const tickets = Array.isArray(data['tickets'])
+        ? (data['tickets'] as unknown[]).filter(isObject).map((t) => {
+            const tt = t as AnyRecord;
+            const ticketCreated = (() => {
+              const ca = tt['createdAt'];
+              if (typeof ca === 'string') return ca;
+              if (ca && typeof (ca as { toDate?: () => Date }).toDate === 'function') {
+                return (ca as { toDate: () => Date }).toDate().toISOString();
+              }
+              return undefined;
+            })();
+            const out: AnyRecord = {};
+            if (tt['ticketNumber'] !== undefined) out['ticketNumber'] = tt['ticketNumber'];
+            if (typeof tt['wellName'] === 'string') out['wellName'] = tt['wellName'];
+            if (typeof tt['hauledTo'] === 'string') out['hauledTo'] = tt['hauledTo'];
+            if (typeof tt['bbl'] === 'number') out['bbl'] = tt['bbl'];
+            if (typeof tt['totalBBL'] === 'number') out['totalBBL'] = tt['totalBBL'];
+            if (typeof tt['commodityType'] === 'string') out['commodityType'] = tt['commodityType'];
+            if (ticketCreated) out['createdAt'] = ticketCreated;
+            return out;
+          })
+        : [];
+      const row: AnyRecord = {
         id: doc.id,
-        driver: data.driver,
-        driverHash: data.driverHash,
-        wellName: data.wellName,
-        hauledTo: data.hauledTo,
-        commodityType: data.commodityType,
+        driver: data['driver'],
+        driverHash: data['driverHash'],
+        wellName: data['wellName'],
+        hauledTo: data['hauledTo'],
+        commodityType: data['commodityType'],
         timeline: readTimelineFromInvoice(data),
-      });
+        tickets,
+      };
+      if (typeof data['totalBBL'] === 'number') row['totalBBL'] = data['totalBBL'];
+      if (data['ticketNumber'] !== undefined) row['ticketNumber'] = data['ticketNumber'];
+      if (data['invoiceNumber'] !== undefined) row['invoiceNumber'] = data['invoiceNumber'];
+      if (typeof data['status'] === 'string') row['status'] = data['status'];
+      if (createdAt) row['createdAt'] = createdAt;
+      invoices.push(row);
     });
     input.invoices = invoices as BuildTruthProjectionInput['invoices'];
     loaded.invoices = invoices.length;

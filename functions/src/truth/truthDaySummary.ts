@@ -283,7 +283,16 @@ export const getTruthDriverDaySummary = httpsV2.onCall(
         'Could not resolve an operator key from request.'
       );
     }
-    const daySummary = buildDriverDaySummaryFromTruth(projection, daySummaryKey);
+    // Phase 26 — pass the full set of linked raw keys (when available) so
+    // events extracted under name-only raw keys (e.g. invoices with no
+    // driverHash) attribute to the same canonical day summary as events
+    // under the hash-backed raw key. Falls back to the single resolved key
+    // if the operator has no linked-keys set.
+    const daySummaryKeys: string | readonly string[] =
+      operator.linkedKeys && operator.linkedKeys.length > 0
+        ? operator.linkedKeys
+        : daySummaryKey;
+    const daySummary = buildDriverDaySummaryFromTruth(projection, daySummaryKeys);
 
     const dateContext: Record<string, unknown> = { requestedDate: parsed.date };
     const windows = datesContextFromWindows(parsed.date, projection.reportingWindows);

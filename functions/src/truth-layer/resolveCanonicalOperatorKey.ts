@@ -1,6 +1,6 @@
 import type { OperatorRef, SourceRef } from './types';
 import type { OperatorCanonicalView } from './types.canonical';
-import { normalizeName } from './normalizeOperator';
+import { normalizeName, normalizePersonName } from './normalizeOperator';
 
 const CONF_RANK = { weak: 0, medium: 1, strong: 2 } as const;
 type Conf = 'strong' | 'medium' | 'weak';
@@ -61,6 +61,45 @@ export function resolveCanonicalOperatorKey(
         const first = byName.get(key);
         if (first !== undefined) uf.union(i, first);
         else byName.set(key, i);
+      }
+    }
+  }
+
+  // ── Legal-name bridge pass ──────────────────────────────────────────────
+  // Goal: merge name-only refs (typically from invoices carrying only a
+  // `driver` string, no `driverHash`) into their hash-backed canonical
+  // identity when the name-only ref's normalized displayName or legalName
+  // matches the hash-backed ref's normalized legalName exactly.
+  //
+  // Deterministic — no fuzzy match, no partial match, no "closest".
+  // Additive — only introduces new unions; never splits existing groups.
+  // One-directional — the bridge is driven by hash-backed legalName, so two
+  // name-only refs cannot merge through this pass (they already merge via
+  // the byName map above when they share a normalized display/legal name).
+  const hashBackedLegalNameIndex = new Map<string, number>();
+  for (let i = 0; i < n; i++) {
+    const r = refs[i];
+    if (!r.hash) continue;
+    const legalNorm = normalizePersonName(r.legalName);
+    if (!legalNorm) continue;
+    if (!hashBackedLegalNameIndex.has(legalNorm)) {
+      hashBackedLegalNameIndex.set(legalNorm, i);
+    }
+  }
+  if (hashBackedLegalNameIndex.size > 0) {
+    for (let i = 0; i < n; i++) {
+      const r = refs[i];
+      if (r.hash) continue; // only name-only refs cross the bridge
+      const candidates = [
+        normalizePersonName(r.displayName),
+        normalizePersonName(r.legalName),
+      ].filter((s) => s.length > 0);
+      for (const c of candidates) {
+        const target = hashBackedLegalNameIndex.get(c);
+        if (target !== undefined) {
+          uf.union(i, target);
+          break; // one merge is enough; other candidates would land in same group
+        }
       }
     }
   }
