@@ -76,10 +76,10 @@ function buildPreviewHtml(T: TicketTemplate): string {
       if (T.pickupGps) h += `<div class="row"${ls}><span class="row-label">GPS</span><span class="row-value">48.1234, -103.5678</span></div>`;
       if (T.pickupLegalDesc) h += `<div class="row"${ls}><span class="row-label">Legal</span><span class="row-value">NWSW 16-152N-99W</span></div>`;
       if (T.pickupCounty) h += `<div class="row"${ls}><span class="row-label">County</span><span class="row-value">Williams</span></div>`;
-      // Pulled-volume row sits inside Pickup section (matches the receipt).
-      // Sample shows mirrored 130/130 for non-split; for s_t split chains
-      // ticket A would render 130/0 here.
-      if (T.quantity) h += '<div class="row"><span class="row-label">BBLs</span><span class="row-value">130</span></div>';
+      // Pulled-volume row inside Pickup section. Independent toggle —
+      // falls back to T.quantity for legacy templates.
+      const showPickupBbls = T.pickupBblsRow ?? T.quantity;
+      if (showPickupBbls) h += '<div class="row"><span class="row-label">BBLs</span><span class="row-value">130</span></div>';
       if (T.tlLoadedDeparture) h += '<div class="row"><span class="row-label">Loaded / Departure</span><span class="row-value">1:21 PM</span></div>';
       return h;
     },
@@ -94,8 +94,9 @@ function buildPreviewHtml(T: TicketTemplate): string {
       if (T.dropoffGps) h += `<div class="row"${ls}><span class="row-label">GPS</span><span class="row-value">47.9501, -103.3366</span></div>`;
       if (T.dropoffCounty) h += `<div class="row"${ls}><span class="row-label">County</span><span class="row-value">McKenzie</span></div>`;
       if (T.dropoffLegalDesc) h += `<div class="row"${ls}><span class="row-label">Legal</span><span class="row-value">NENE 30-151N-99W</span></div>`;
-      // Delivered-volume row sits inside Drop-off section (matches receipt).
-      if (T.quantity) h += '<div class="row"><span class="row-label">BBLs</span><span class="row-value">130</span></div>';
+      // Delivered-volume row inside Drop-off section. Independent toggle.
+      const showDropoffBbls = T.dropoffBblsRow ?? T.quantity;
+      if (showDropoffBbls) h += '<div class="row"><span class="row-label">BBLs</span><span class="row-value">130</span></div>';
       if (T.tlUnloadedStop) h += '<div class="row"><span class="row-label">Unloaded / Stop</span><span class="row-value">2:18 PM</span></div>';
       return h;
     },
@@ -105,8 +106,10 @@ function buildPreviewHtml(T: TicketTemplate): string {
     measurements: () => {
       let h = '<div class="section-divider"></div>';
       if (T.jobType) h += '<div class="row"><span class="row-label">Type</span><span class="row-value">PW</span></div>';
-      // BBLs row moved out of Measurements — pulled-volume now in Pickup,
-      // delivered-volume in Drop-off. T.quantity gates BOTH from there.
+      // BBLs row also lives here when T.quantity is on. Customers who only
+      // want one BBLs row anywhere keep this enabled and disable the
+      // pickup/drop-off rows. Three independent toggles, any combination.
+      if (T.quantity) h += '<div class="row"><span class="row-label">BBLs</span><span class="row-value">130</span></div>';
       if (T.tankTop) h += '<div class="row"><span class="row-label">Tank Top</span><span class="row-value">10\' 4"</span></div>';
       if (T.tankBottom) h += '<div class="row"><span class="row-label">Tank Bottom</span><span class="row-value">3\' 8"</span></div>';
       return h;
@@ -335,6 +338,23 @@ export function TicketTemplateCard({ company, onSave }: Props) {
 
   const save = async () => {
     if (!editTarget) return;
+    // BBLs safeguard — at least one of the three BBLs rows should be on
+    // (Measurements / Pickup / Drop-off). Walk the same fallback chain
+    // the renderer uses so legacy templates with only `quantity` set
+    // count as "Pickup/Drop-off on" too. Driver still has time to fix
+    // it before saving.
+    const showPickupBbls = template.pickupBblsRow ?? template.quantity;
+    const showDropoffBbls = template.dropoffBblsRow ?? template.quantity;
+    const hasAnyBblsRow = template.quantity || showPickupBbls || showDropoffBbls;
+    if (!hasAnyBblsRow) {
+      const proceed = window.confirm(
+        'No BBLs row is enabled.\n\n' +
+        'The printed ticket will show no BBL quantity anywhere — Measurements, Pickup, and Drop-off all have it turned off. ' +
+        'Drivers will still gauge tanks, but the volume won\'t print on the receipt.\n\n' +
+        'Save anyway?',
+      );
+      if (!proceed) return;
+    }
     setSaving(true);
     try {
       const updated = { ...(company.ticketTemplates || {}) };

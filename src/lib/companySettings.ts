@@ -191,12 +191,19 @@ export interface TicketTemplate {
   pickupGps: boolean;
   pickupLegalDesc: boolean;
   pickupCounty: boolean;
+  // Pickup BBLs row — pulled-volume row that lives inside the Pickup
+  // section. Optional / new (Apr 2026); when undefined, falls back to
+  // the legacy `quantity` flag so existing templates keep their look.
+  pickupBblsRow?: boolean;
   // Drop-off Location
   dropoffLocation: boolean;
   dropoffApiNo: boolean;
   dropoffGps: boolean;
   dropoffCounty: boolean;
   dropoffLegalDesc: boolean;
+  // Drop-off BBLs row — delivered-volume row inside the Drop-off section.
+  // Same backward-compat: undefined falls back to `quantity`.
+  dropoffBblsRow?: boolean;
   // Invoice
   invoiceNumber: boolean;
   // Measurements
@@ -240,7 +247,7 @@ export const DEFAULT_TICKET_TEMPLATE: TicketTemplate = {
   dropoffLocation: true, dropoffApiNo: true, dropoffGps: true,
   dropoffCounty: true, dropoffLegalDesc: true,
   invoiceNumber: true,
-  jobType: true, quantity: true, tankTop: true, tankBottom: true,
+  jobType: true, quantity: true, pickupBblsRow: true, dropoffBblsRow: true, tankTop: true, tankBottom: true,
   notes: true,
   startTime: true, stopTime: true, hours: true,
   driverName: true, truckNumber: true, trailerNumber: true,
@@ -299,6 +306,7 @@ export const TEMPLATE_FIELD_GROUPS: TemplateFieldGroup[] = [
       { key: 'pickupGps', label: 'GPS Coordinates' },
       { key: 'pickupLegalDesc', label: 'Legal Description' },
       { key: 'pickupCounty', label: 'County' },
+      { key: 'pickupBblsRow', label: 'BBLs (pulled at pickup)' },
       { key: 'tlLoadedDeparture', label: 'Loaded / Departure Time' },
     ],
   },
@@ -311,6 +319,7 @@ export const TEMPLATE_FIELD_GROUPS: TemplateFieldGroup[] = [
       { key: 'dropoffGps', label: 'GPS Coordinates' },
       { key: 'dropoffCounty', label: 'County' },
       { key: 'dropoffLegalDesc', label: 'Legal Description' },
+      { key: 'dropoffBblsRow', label: 'BBLs (delivered at drop-off)' },
       { key: 'tlUnloadedStop', label: 'Unloaded / Stop Time' },
     ],
   },
@@ -324,7 +333,10 @@ export const TEMPLATE_FIELD_GROUPS: TemplateFieldGroup[] = [
     id: 'measurements', label: 'Measurements', color: 'orange',
     fields: [
       { key: 'jobType', label: 'Type' },
-      { key: 'quantity', label: 'Quantity (BBLs)', required: true },
+      // BBLs row was previously required; now optional since pickupBblsRow
+      // and dropoffBblsRow can satisfy "show BBLs somewhere on the ticket."
+      // Save Template button warns if ALL three BBLs toggles are off.
+      { key: 'quantity', label: 'Quantity (BBLs)' },
       { key: 'tankTop', label: 'Tank Top' },
       { key: 'tankBottom', label: 'Tank Bottom' },
     ],
