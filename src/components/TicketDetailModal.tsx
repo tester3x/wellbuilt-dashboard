@@ -238,8 +238,10 @@ export function TicketDetailModal({ ticket, onClose, onNavigateTicket }: Props) 
                           if (m && bucketM) url = `https://storage.googleapis.com/${bucketM[1]}/${decodeURIComponent(m[1])}`;
                         }
                         return (
-                          <div key={`img-${i}`} className="flex-shrink-0 text-center">
-                            <a href={url} target="_blank" rel="noopener noreferrer">
+                          // stopPropagation prevents click-through from bubbling up and
+                          // collapsing the card / dismissing the modal behind the new tab.
+                          <div key={`img-${i}`} className="flex-shrink-0 text-center" onClick={(e) => e.stopPropagation()}>
+                            <a href={url} target="_blank" rel="noopener noreferrer" onClick={(e) => e.stopPropagation()}>
                               <img src={url} alt={`Photo ${i + 1}`} className="w-20 h-20 object-cover rounded border border-gray-300 hover:border-yellow-500 transition-colors cursor-pointer" />
                             </a>
                             {loc && <p className="text-[9px] text-gray-400 mt-0.5 max-w-[80px] truncate">{photoType === 'pickup' ? '📍' : '📦'} {loc}</p>}
@@ -255,8 +257,8 @@ export function TicketDetailModal({ ticket, onClose, onNavigateTicket }: Props) 
                           if (m && bucketM) url = `https://storage.googleapis.com/${bucketM[1]}/${decodeURIComponent(m[1])}`;
                         }
                         return (
-                          <div key={`jsa-${i}`} className="flex-shrink-0 text-center">
-                            <a href={url} target="_blank" rel="noopener noreferrer" title="Open Job Safety Analysis PDF">
+                          <div key={`jsa-${i}`} className="flex-shrink-0 text-center" onClick={(e) => e.stopPropagation()}>
+                            <a href={url} target="_blank" rel="noopener noreferrer" title="Open Job Safety Analysis PDF" onClick={(e) => e.stopPropagation()}>
                               <div className="w-20 h-20 rounded border-2 border-yellow-500 bg-yellow-50 hover:bg-yellow-100 transition-colors cursor-pointer flex flex-col items-center justify-center">
                                 <svg className="w-8 h-8 text-yellow-700" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                                   <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 12l2 2 4-4m5.618-4.016A11.955 11.955 0 0112 2.944a11.955 11.955 0 01-8.618 3.04A12.02 12.02 0 003 9c0 5.591 3.824 10.29 9 11.622 5.176-1.332 9-6.03 9-11.622 0-1.042-.133-2.052-.382-3.016z" />
