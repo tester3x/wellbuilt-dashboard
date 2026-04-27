@@ -19,7 +19,7 @@
 //     clipboard for sharing with claude-home / debug threads.
 // ============================================================
 
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { useRouter } from 'next/navigation';
 import {
   collection,
@@ -135,6 +135,9 @@ export default function DiagnosticsPage() {
   const [subscribeError, setSubscribeError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const [expandedId, setExpandedId] = useState<string | null>(null);
+  const [checked, setChecked] = useState<Set<string>>(new Set());
+  const [copyStatus, setCopyStatus] = useState<string | null>(null);
+  const headerCheckboxRef = useRef<HTMLInputElement | null>(null);
 
   // Auth gate — same redirect pattern as truth-debug. Keeps the
   // page consistent with other admin tools and avoids flashing
@@ -252,6 +255,91 @@ export default function DiagnosticsPage() {
     }
   };
 
+  // ── Selection + bulk copy ────────────────────────────────────────────────
+  // Selection state is decoupled from current filter — selecting rows then
+  // changing filters preserves the selection so users can build a paste
+  // out of multiple slices. Copy operates on whatever's currently checked,
+  // regardless of whether those rows are still visible.
+  const toggleRow = (id: string) => {
+    setChecked((prev) => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
+      return next;
+    });
+  };
+
+  const selectAllVisible = () => {
+    setChecked((prev) => {
+      const next = new Set(prev);
+      for (const r of filtered) next.add(r.id);
+      return next;
+    });
+  };
+
+  const clearChecked = () => setChecked(new Set());
+
+  const visibleCheckedCount = useMemo(
+    () => filtered.reduce((n, r) => (checked.has(r.id) ? n + 1 : n), 0),
+    [filtered, checked],
+  );
+  const allVisibleChecked = filtered.length > 0 && visibleCheckedCount === filtered.length;
+  const someVisibleChecked = visibleCheckedCount > 0 && !allVisibleChecked;
+
+  // Header tri-state checkbox indeterminate flag — React doesn't expose
+  // `indeterminate` as a prop so we set it imperatively via ref.
+  useEffect(() => {
+    if (headerCheckboxRef.current) {
+      headerCheckboxRef.current.indeterminate = someVisibleChecked;
+    }
+  }, [someVisibleChecked]);
+
+  const formatRowForCopy = (r: DiagRow): string => {
+    const ts = formatTs(r.timestamp, r.clientTimestamp);
+    const driver = r.driverHash ? `${r.driverHash.slice(0, 12)}…` : '—';
+    const shift = r.shiftId || '—';
+    const operator = r.operatorSlug || r.operatorId || '—';
+    const source = r.source || '—';
+    const reason = r.reason || '—';
+    const countsStr = r.counts
+      ? Object.entries(r.counts)
+          .filter(
+            ([, v]) =>
+              typeof v === 'number' || typeof v === 'string' || typeof v === 'boolean',
+          )
+          .map(([k, v]) => `${k}=${String(v)}`)
+          .join(' ')
+      : '—';
+    const extraStr = r.extra ? JSON.stringify(r.extra) : '—';
+    return [
+      `${ts}  [${r.app}/${r.area}]  ${r.event}  result=${r.result}`,
+      `  driver=${driver}  shiftId=${shift}  operator=${operator}`,
+      `  source=${source}`,
+      `  reason=${reason}`,
+      `  counts: ${countsStr}`,
+      `  extra: ${extraStr}`,
+    ].join('\n');
+  };
+
+  const copyChecked = async () => {
+    // Use full `rows` (not just filtered) so a row checked under one filter
+    // is still copyable after the filter changes — as long as it's still
+    // in the snapshot. Rows pushed out by the 200-record limit can't be
+    // copied; keeping a separate cache for that edge case is out of scope.
+    const selected = rows.filter((r) => checked.has(r.id));
+    if (selected.length === 0) return;
+    const text = selected.map(formatRowForCopy).join('\n\n---\n\n');
+    try {
+      await navigator.clipboard.writeText(text);
+      setCopyStatus(`Copied ${selected.length} row${selected.length === 1 ? '' : 's'}`);
+      setTimeout(() => setCopyStatus(null), 2500);
+    } catch (err) {
+      console.warn('[diagnostics] bulk clipboard write failed:', err);
+      setCopyStatus('Copy failed — clipboard blocked');
+      setTimeout(() => setCopyStatus(null), 2500);
+    }
+  };
+
   if (loading || !user) {
     return (
       <div className="min-h-screen bg-gray-900 text-white">
@@ -346,10 +434,56 @@ export default function DiagnosticsPage() {
           )}
         </section>
 
+        <section className="flex flex-wrap items-center gap-2 text-xs">
+          <button
+            type="button"
+            onClick={selectAllVisible}
+            disabled={filtered.length === 0}
+            className="px-2 py-1 rounded border border-gray-600 text-gray-200 hover:bg-gray-700 disabled:opacity-40 disabled:cursor-not-allowed"
+          >
+            Select all visible ({filtered.length})
+          </button>
+          <button
+            type="button"
+            onClick={clearChecked}
+            disabled={checked.size === 0}
+            className="px-2 py-1 rounded border border-gray-600 text-gray-200 hover:bg-gray-700 disabled:opacity-40 disabled:cursor-not-allowed"
+          >
+            Clear checked ({checked.size})
+          </button>
+          <button
+            type="button"
+            onClick={copyChecked}
+            disabled={checked.size === 0}
+            className="px-2 py-1 rounded border border-blue-500 bg-blue-700 text-white hover:bg-blue-600 disabled:opacity-40 disabled:cursor-not-allowed"
+          >
+            Copy checked ({checked.size})
+          </button>
+          {checked.size > 0 && (
+            <span className="text-gray-300">
+              {checked.size} row{checked.size === 1 ? '' : 's'} selected
+            </span>
+          )}
+          {copyStatus && <span className="text-emerald-300">{copyStatus}</span>}
+        </section>
+
         <section className="bg-gray-800/60 border border-gray-700 rounded overflow-hidden">
           <table className="w-full text-sm">
             <thead className="bg-gray-800 text-gray-300 text-xs uppercase tracking-wide">
               <tr>
+                <th className="text-left px-3 py-2 w-8">
+                  <input
+                    ref={headerCheckboxRef}
+                    type="checkbox"
+                    checked={allVisibleChecked}
+                    onChange={(e) => {
+                      if (e.target.checked) selectAllVisible();
+                      else clearChecked();
+                    }}
+                    aria-label="Select all visible rows"
+                    className="cursor-pointer"
+                  />
+                </th>
                 <th className="text-left px-3 py-2">When</th>
                 <th className="text-left px-2 py-2">App</th>
                 <th className="text-left px-2 py-2">Area</th>
@@ -365,7 +499,7 @@ export default function DiagnosticsPage() {
             <tbody>
               {filtered.length === 0 && !busy && (
                 <tr>
-                  <td colSpan={10} className="px-3 py-6 text-center text-gray-400">
+                  <td colSpan={11} className="px-3 py-6 text-center text-gray-400">
                     No diagnostic events match the current filters.
                   </td>
                 </tr>
@@ -380,6 +514,18 @@ export default function DiagnosticsPage() {
                       className="border-t border-gray-700/60 hover:bg-gray-800/80 cursor-pointer"
                       onClick={() => setExpandedId(expanded ? null : row.id)}
                     >
+                      <td
+                        className="px-3 py-2 w-8"
+                        onClick={(e) => e.stopPropagation()}
+                      >
+                        <input
+                          type="checkbox"
+                          checked={checked.has(row.id)}
+                          onChange={() => toggleRow(row.id)}
+                          aria-label={`Select row ${row.event}`}
+                          className="cursor-pointer"
+                        />
+                      </td>
                       <td className="px-3 py-2 font-mono text-xs whitespace-nowrap">
                         {formatTs(row.timestamp, row.clientTimestamp)}
                       </td>
@@ -427,7 +573,7 @@ export default function DiagnosticsPage() {
                     </tr>
                     {expanded && (
                       <tr key={row.id + '-detail'} className="bg-gray-900/80">
-                        <td colSpan={10} className="px-4 py-3">
+                        <td colSpan={11} className="px-4 py-3">
                           <pre className="text-[11px] font-mono text-gray-200 overflow-x-auto whitespace-pre-wrap">
 {JSON.stringify(
   {
