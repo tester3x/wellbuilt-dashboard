@@ -3733,3 +3733,12 @@ export {
 // caps, zero writes, no admin-callable references, no session state.
 // ============================================================
 export { demoClassifyLocations } from './truth/demoClassifyLocations';
+
+// ============================================================
+// WB DIAGNOSTICS — phase 1 logging endpoint
+// Public HTTPS function consumed by WB T / WB JSA / WB S helpers
+// (and dashboard observability) to write to the wb_diagnostics
+// Firestore collection. See diagnostics.ts for sanitization,
+// validation, and rationale.
+// ============================================================
+export { writeDiagnosticLog } from './diagnostics';

@@ -1,0 +1,455 @@
+'use client';
+
+// ============================================================
+// WB Diagnostics viewer (Phase 1)
+//
+// Admin-only viewer for the `wb_diagnostics` Firestore collection.
+// Surface for app-side instrumentation written by WB T / WB JSA /
+// WB S helpers (and dashboard observability events) via the
+// writeDiagnosticLog Cloud Function.
+//
+// Capability: viewDiagnostics. Defaults to `it` only — mirrors the
+// Truth Debug page. Customers can override via roleCapabilities.
+//
+// Phase 1 surface:
+//   - Live Firestore subscription, limit 200 most recent rows.
+//   - Filters: app, area, driverHash, shiftId, event, date range.
+//   - Row click toggles expanded raw-JSON view.
+//   - Per-row "Copy JSON" button writes the full record to the
+//     clipboard for sharing with claude-home / debug threads.
+// ============================================================
+
+import { useEffect, useMemo, useState } from 'react';
+import { useRouter } from 'next/navigation';
+import {
+  collection,
+  limit as fsLimit,
+  onSnapshot,
+  orderBy,
+  query,
+  where,
+  type DocumentData,
+  type QueryConstraint,
+  type Timestamp,
+} from 'firebase/firestore';
+import { useAuth } from '@/contexts/AuthContext';
+import { AppHeader } from '@/components/AppHeader';
+import { SubHeader } from '@/components/SubHeader';
+import { getFirestoreDb } from '@/lib/firebase';
+import { hasCapability } from '@/lib/auth';
+
+type DiagApp = 'wbs' | 'wbt' | 'wbjsa' | 'dashboard' | 'functions';
+type DiagArea =
+  | 'jsa'
+  | 'logout'
+  | 'tickets'
+  | 'dispatch'
+  | 'split_load'
+  | 'shift'
+  | 'auth'
+  | 'general';
+type DiagResult = 'ok' | 'skipped' | 'error';
+
+interface DiagRow {
+  id: string;
+  timestamp: Timestamp | null;
+  clientTimestamp: string | null;
+  app: DiagApp;
+  area: DiagArea;
+  event: string;
+  driverHash: string | null;
+  shiftId: string | null;
+  operatorSlug: string | null;
+  operatorId: string | null;
+  source: string | null;
+  result: DiagResult;
+  reason: string | null;
+  counts: Record<string, unknown> | null;
+  extra: Record<string, unknown> | null;
+  appVersion: string | null;
+  platform: string | null;
+}
+
+const APP_OPTIONS: Array<{ value: '' | DiagApp; label: string }> = [
+  { value: '', label: 'All apps' },
+  { value: 'wbs', label: 'WB Suite (wbs)' },
+  { value: 'wbt', label: 'WB Tickets (wbt)' },
+  { value: 'wbjsa', label: 'WB JSA (wbjsa)' },
+  { value: 'dashboard', label: 'Dashboard' },
+  { value: 'functions', label: 'Functions' },
+];
+
+const AREA_OPTIONS: Array<{ value: '' | DiagArea; label: string }> = [
+  { value: '', label: 'All areas' },
+  { value: 'jsa', label: 'JSA' },
+  { value: 'logout', label: 'Logout' },
+  { value: 'tickets', label: 'Tickets' },
+  { value: 'dispatch', label: 'Dispatch' },
+  { value: 'split_load', label: 'Split load' },
+  { value: 'shift', label: 'Shift' },
+  { value: 'auth', label: 'Auth' },
+  { value: 'general', label: 'General' },
+];
+
+const RESULT_BADGE: Record<DiagResult, string> = {
+  ok: 'bg-emerald-700 text-emerald-100',
+  skipped: 'bg-amber-700 text-amber-100',
+  error: 'bg-rose-700 text-rose-100',
+};
+
+const APP_BADGE: Record<DiagApp, string> = {
+  wbs: 'bg-blue-800 text-blue-100',
+  wbt: 'bg-indigo-800 text-indigo-100',
+  wbjsa: 'bg-fuchsia-800 text-fuchsia-100',
+  dashboard: 'bg-slate-700 text-slate-100',
+  functions: 'bg-zinc-700 text-zinc-100',
+};
+
+function formatTs(ts: Timestamp | null, clientTs: string | null): string {
+  const d = ts ? ts.toDate() : clientTs ? new Date(clientTs) : null;
+  if (!d || Number.isNaN(d.getTime())) return '—';
+  const pad = (n: number) => String(n).padStart(2, '0');
+  return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())} ${pad(d.getHours())}:${pad(d.getMinutes())}:${pad(d.getSeconds())}`;
+}
+
+function compactCounts(counts: Record<string, unknown> | null): string {
+  if (!counts) return '';
+  const entries = Object.entries(counts).filter(
+    ([, v]) => typeof v === 'number' || typeof v === 'string' || typeof v === 'boolean',
+  );
+  if (entries.length === 0) return '';
+  return entries.map(([k, v]) => `${k}=${String(v)}`).join(' · ');
+}
+
+export default function DiagnosticsPage() {
+  const { user, loading, userCompany } = useAuth();
+  const router = useRouter();
+
+  const [filterApp, setFilterApp] = useState<'' | DiagApp>('');
+  const [filterArea, setFilterArea] = useState<'' | DiagArea>('');
+  const [filterDriver, setFilterDriver] = useState('');
+  const [filterShift, setFilterShift] = useState('');
+  const [filterEvent, setFilterEvent] = useState('');
+
+  const [rows, setRows] = useState<DiagRow[]>([]);
+  const [subscribeError, setSubscribeError] = useState<string | null>(null);
+  const [busy, setBusy] = useState(false);
+  const [expandedId, setExpandedId] = useState<string | null>(null);
+
+  // Auth gate — same redirect pattern as truth-debug. Keeps the
+  // page consistent with other admin tools and avoids flashing
+  // sensitive data before the role check resolves.
+  useEffect(() => {
+    if (loading) return;
+    if (!user) {
+      router.push('/login');
+      return;
+    }
+    if (!hasCapability(user, 'viewDiagnostics', userCompany)) {
+      router.push('/');
+    }
+  }, [user, loading, userCompany, router]);
+
+  // Resolve which Firestore filter to push server-side. Firestore
+  // composite indexes only cover (singleField, timestamp DESC), so
+  // we pick at most ONE indexed equality filter and apply the rest
+  // client-side. driverHash > shiftId > app > area > none.
+  const serverConstraints = useMemo<QueryConstraint[]>(() => {
+    const c: QueryConstraint[] = [];
+    if (filterDriver.trim()) {
+      c.push(where('driverHash', '==', filterDriver.trim()));
+    } else if (filterShift.trim()) {
+      c.push(where('shiftId', '==', filterShift.trim()));
+    } else if (filterApp) {
+      c.push(where('app', '==', filterApp));
+    } else if (filterArea) {
+      c.push(where('area', '==', filterArea));
+    }
+    c.push(orderBy('timestamp', 'desc'));
+    c.push(fsLimit(200));
+    return c;
+  }, [filterApp, filterArea, filterDriver, filterShift]);
+
+  useEffect(() => {
+    if (loading || !user) return;
+    if (!hasCapability(user, 'viewDiagnostics', userCompany)) return;
+
+    setBusy(true);
+    setSubscribeError(null);
+    const db = getFirestoreDb();
+    const q = query(collection(db, 'wb_diagnostics'), ...serverConstraints);
+    const unsub = onSnapshot(
+      q,
+      (snap) => {
+        const next: DiagRow[] = snap.docs.map((d) => {
+          const data = d.data() as DocumentData;
+          return {
+            id: d.id,
+            timestamp: (data.timestamp as Timestamp | undefined) ?? null,
+            clientTimestamp:
+              typeof data.clientTimestamp === 'string' ? data.clientTimestamp : null,
+            app: data.app as DiagApp,
+            area: data.area as DiagArea,
+            event: typeof data.event === 'string' ? data.event : '',
+            driverHash: typeof data.driverHash === 'string' ? data.driverHash : null,
+            shiftId: typeof data.shiftId === 'string' ? data.shiftId : null,
+            operatorSlug:
+              typeof data.operatorSlug === 'string' ? data.operatorSlug : null,
+            operatorId: typeof data.operatorId === 'string' ? data.operatorId : null,
+            source: typeof data.source === 'string' ? data.source : null,
+            result: (data.result as DiagResult) || 'ok',
+            reason: typeof data.reason === 'string' ? data.reason : null,
+            counts:
+              data.counts && typeof data.counts === 'object'
+                ? (data.counts as Record<string, unknown>)
+                : null,
+            extra:
+              data.extra && typeof data.extra === 'object'
+                ? (data.extra as Record<string, unknown>)
+                : null,
+            appVersion: typeof data.appVersion === 'string' ? data.appVersion : null,
+            platform: typeof data.platform === 'string' ? data.platform : null,
+          };
+        });
+        setRows(next);
+        setBusy(false);
+      },
+      (err) => {
+        console.warn('[diagnostics] subscription failed:', err);
+        setSubscribeError(err.message || 'Subscription failed');
+        setBusy(false);
+      },
+    );
+    return () => unsub();
+  }, [serverConstraints, user, loading, userCompany]);
+
+  // Client-side fan-out filter. Catches the dimensions we couldn't
+  // push into Firestore (because each composite index is
+  // singleField + timestamp). For event, we substring-match
+  // case-insensitively so "logout" matches "logout.cascade.sent" /
+  // "logout.signal.received".
+  const filtered = useMemo(() => {
+    const ev = filterEvent.trim().toLowerCase();
+    return rows.filter((r) => {
+      if (filterApp && r.app !== filterApp) return false;
+      if (filterArea && r.area !== filterArea) return false;
+      if (filterDriver.trim() && r.driverHash !== filterDriver.trim()) return false;
+      if (filterShift.trim() && r.shiftId !== filterShift.trim()) return false;
+      if (ev && !(r.event || '').toLowerCase().includes(ev)) return false;
+      return true;
+    });
+  }, [rows, filterApp, filterArea, filterDriver, filterShift, filterEvent]);
+
+  const copyRow = async (row: DiagRow) => {
+    try {
+      const payload = {
+        ...row,
+        timestamp: row.timestamp ? row.timestamp.toDate().toISOString() : null,
+      };
+      await navigator.clipboard.writeText(JSON.stringify(payload, null, 2));
+    } catch (err) {
+      console.warn('[diagnostics] clipboard write failed:', err);
+    }
+  };
+
+  if (loading || !user) {
+    return (
+      <div className="min-h-screen bg-gray-900 text-white">
+        <AppHeader />
+        <div className="max-w-7xl mx-auto px-4 py-6">Loading…</div>
+      </div>
+    );
+  }
+
+  if (!hasCapability(user, 'viewDiagnostics', userCompany)) {
+    return null;
+  }
+
+  return (
+    <div className="min-h-screen bg-gray-900 text-white">
+      <AppHeader />
+      <SubHeader
+        backHref="/"
+        title="WB Diagnostics"
+        subtitle="Live view of wb_diagnostics — Phase 1 instrumentation surface"
+      />
+
+      <main className="max-w-7xl mx-auto px-4 py-6 space-y-4">
+        <section className="bg-gray-800/60 border border-gray-700 rounded p-4 grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-5 gap-3">
+          <label className="flex flex-col text-xs text-gray-300">
+            App
+            <select
+              className="mt-1 bg-gray-900 border border-gray-700 rounded px-2 py-1 text-sm text-white"
+              value={filterApp}
+              onChange={(e) => setFilterApp(e.target.value as '' | DiagApp)}
+            >
+              {APP_OPTIONS.map((o) => (
+                <option key={o.value || 'all'} value={o.value}>
+                  {o.label}
+                </option>
+              ))}
+            </select>
+          </label>
+
+          <label className="flex flex-col text-xs text-gray-300">
+            Area
+            <select
+              className="mt-1 bg-gray-900 border border-gray-700 rounded px-2 py-1 text-sm text-white"
+              value={filterArea}
+              onChange={(e) => setFilterArea(e.target.value as '' | DiagArea)}
+            >
+              {AREA_OPTIONS.map((o) => (
+                <option key={o.value || 'all'} value={o.value}>
+                  {o.label}
+                </option>
+              ))}
+            </select>
+          </label>
+
+          <label className="flex flex-col text-xs text-gray-300">
+            driverHash
+            <input
+              className="mt-1 bg-gray-900 border border-gray-700 rounded px-2 py-1 text-sm text-white font-mono"
+              placeholder="exact match"
+              value={filterDriver}
+              onChange={(e) => setFilterDriver(e.target.value)}
+            />
+          </label>
+
+          <label className="flex flex-col text-xs text-gray-300">
+            shiftId
+            <input
+              className="mt-1 bg-gray-900 border border-gray-700 rounded px-2 py-1 text-sm text-white font-mono"
+              placeholder="exact match"
+              value={filterShift}
+              onChange={(e) => setFilterShift(e.target.value)}
+            />
+          </label>
+
+          <label className="flex flex-col text-xs text-gray-300">
+            event contains
+            <input
+              className="mt-1 bg-gray-900 border border-gray-700 rounded px-2 py-1 text-sm text-white"
+              placeholder="substring (client-side)"
+              value={filterEvent}
+              onChange={(e) => setFilterEvent(e.target.value)}
+            />
+          </label>
+        </section>
+
+        <section className="text-xs text-gray-400 flex items-center gap-3">
+          <span>
+            {busy ? 'Loading…' : `${filtered.length} of ${rows.length} most recent`}
+          </span>
+          {subscribeError && (
+            <span className="text-rose-300">Error: {subscribeError}</span>
+          )}
+        </section>
+
+        <section className="bg-gray-800/60 border border-gray-700 rounded overflow-hidden">
+          <table className="w-full text-sm">
+            <thead className="bg-gray-800 text-gray-300 text-xs uppercase tracking-wide">
+              <tr>
+                <th className="text-left px-3 py-2">When</th>
+                <th className="text-left px-2 py-2">App</th>
+                <th className="text-left px-2 py-2">Area</th>
+                <th className="text-left px-2 py-2">Event</th>
+                <th className="text-left px-2 py-2">Driver / Shift</th>
+                <th className="text-left px-2 py-2">Operator</th>
+                <th className="text-left px-2 py-2">Source</th>
+                <th className="text-left px-2 py-2">Result</th>
+                <th className="text-left px-2 py-2">Counts / Reason</th>
+                <th className="text-right px-3 py-2"></th>
+              </tr>
+            </thead>
+            <tbody>
+              {filtered.length === 0 && !busy && (
+                <tr>
+                  <td colSpan={10} className="px-3 py-6 text-center text-gray-400">
+                    No diagnostic events match the current filters.
+                  </td>
+                </tr>
+              )}
+              {filtered.map((row) => {
+                const expanded = expandedId === row.id;
+                const counts = compactCounts(row.counts);
+                return (
+                  <>
+                    <tr
+                      key={row.id}
+                      className="border-t border-gray-700/60 hover:bg-gray-800/80 cursor-pointer"
+                      onClick={() => setExpandedId(expanded ? null : row.id)}
+                    >
+                      <td className="px-3 py-2 font-mono text-xs whitespace-nowrap">
+                        {formatTs(row.timestamp, row.clientTimestamp)}
+                      </td>
+                      <td className="px-2 py-2">
+                        <span
+                          className={`px-2 py-0.5 rounded text-xs font-medium ${APP_BADGE[row.app] || 'bg-gray-700 text-gray-200'}`}
+                        >
+                          {row.app}
+                        </span>
+                      </td>
+                      <td className="px-2 py-2 text-xs text-gray-300">{row.area}</td>
+                      <td className="px-2 py-2 font-mono text-xs">{row.event}</td>
+                      <td className="px-2 py-2 font-mono text-[11px] text-gray-300">
+                        {row.driverHash ? `${row.driverHash.slice(0, 10)}…` : '—'}
+                        {row.shiftId ? <div className="text-gray-500">{row.shiftId}</div> : null}
+                      </td>
+                      <td className="px-2 py-2 font-mono text-[11px] text-gray-300">
+                        {row.operatorSlug || row.operatorId || '—'}
+                      </td>
+                      <td className="px-2 py-2 font-mono text-[11px] text-gray-400">
+                        {row.source || '—'}
+                      </td>
+                      <td className="px-2 py-2">
+                        <span
+                          className={`px-2 py-0.5 rounded text-xs font-medium ${RESULT_BADGE[row.result]}`}
+                        >
+                          {row.result}
+                        </span>
+                      </td>
+                      <td className="px-2 py-2 text-xs text-gray-300">
+                        {counts ? <div className="font-mono">{counts}</div> : null}
+                        {row.reason ? <div className="text-gray-400">{row.reason}</div> : null}
+                      </td>
+                      <td className="px-3 py-2 text-right">
+                        <button
+                          className="text-xs text-blue-300 hover:text-blue-100"
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            void copyRow(row);
+                          }}
+                        >
+                          Copy JSON
+                        </button>
+                      </td>
+                    </tr>
+                    {expanded && (
+                      <tr key={row.id + '-detail'} className="bg-gray-900/80">
+                        <td colSpan={10} className="px-4 py-3">
+                          <pre className="text-[11px] font-mono text-gray-200 overflow-x-auto whitespace-pre-wrap">
+{JSON.stringify(
+  {
+    ...row,
+    timestamp: row.timestamp
+      ? row.timestamp.toDate().toISOString()
+      : null,
+  },
+  null,
+  2,
+)}
+                          </pre>
+                        </td>
+                      </tr>
+                    )}
+                  </>
+                );
+              })}
+            </tbody>
+          </table>
+        </section>
+      </main>
+    </div>
+  );
+}

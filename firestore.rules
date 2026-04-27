@@ -233,6 +233,16 @@ service cloud.firestore {
       }
     }
 
+    // WB diagnostics — read-only for the dashboard admin viewer
+    // (capability-gated client-side; the read here is auth-gated to
+    // any signed-in dashboard user, which already excludes anonymous
+    // and app callers). Writes flow only through the Cloud Function
+    // `writeDiagnosticLog`, which uses Admin SDK and bypasses rules.
+    match /wb_diagnostics/{docId} {
+      allow read: if request.auth != null;
+      allow write: if false;
+    }
+
     // Everything else — deny (Cloud Functions use Admin SDK which bypasses rules)
     match /{document=**} {
       allow read, write: if false;

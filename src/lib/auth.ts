@@ -58,6 +58,7 @@ export type Capability =
   | 'manageRolesAndCapabilities'  // edit roleLabels / roleCapabilities per company
   | 'viewAllCompanies'            // WB-admin-only — cross-company visibility
   | 'viewTruthDebug'              // Phase 26/27 truth layer tools
+  | 'viewDiagnostics'             // wb_diagnostics admin viewer
   ;
 
 // Default capability sets per role. Customers can OVERRIDE per-company via
@@ -79,6 +80,7 @@ export const DEFAULT_ROLE_CAPABILITIES: Record<UserRole, Capability[]> = {
     'approvePayroll', 'manageWells', 'manageRoutes', 'manageEquipment',
     'sendChat',
     'manageRolesAndCapabilities', 'viewAllCompanies', 'viewTruthDebug',
+    'viewDiagnostics',
   ],
   admin: [
     'viewHome', 'viewMobile', 'viewTickets', 'viewDispatch', 'viewBilling',
