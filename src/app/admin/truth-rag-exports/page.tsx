@@ -8,6 +8,7 @@ import { useAuth } from '@/contexts/AuthContext';
 import { AppHeader } from '@/components/AppHeader';
 import { SubHeader } from '@/components/SubHeader';
 import { getFirebaseFunctions } from '@/lib/firebase';
+import { hasCapability } from '@/lib/auth';
 
 // ── Types mirrored from functions/src/truth/truthRagHistory.ts ─────────────
 
@@ -98,7 +99,7 @@ function statusClass(status: RunStatus): string {
 // ── Page ───────────────────────────────────────────────────────────────────
 
 export default function TruthRagExportsPage() {
-  const { user, loading } = useAuth();
+  const { user, loading, userCompany } = useAuth();
   const router = useRouter();
 
   const [date, setDate] = useState(todayIso());
@@ -123,10 +124,10 @@ export default function TruthRagExportsPage() {
       router.push('/login');
       return;
     }
-    if (user.role !== 'admin' && user.role !== 'it') {
+    if (!hasCapability(user, 'viewTruthDebug', userCompany)) {
       router.push('/');
     }
-  }, [user, loading, router]);
+  }, [user, loading, userCompany, router]);
 
   const loadHistory = useCallback(async () => {
     setHistoryLoading(true);

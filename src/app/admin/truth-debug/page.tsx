@@ -7,6 +7,7 @@ import { useAuth } from '@/contexts/AuthContext';
 import { AppHeader } from '@/components/AppHeader';
 import { SubHeader } from '@/components/SubHeader';
 import { getFirebaseFunctions } from '@/lib/firebase';
+import { hasCapability } from '@/lib/auth';
 
 type LoadedCounts = {
   drivers: number;
@@ -258,7 +259,7 @@ function todayIso(): string {
 }
 
 export default function TruthDebugPage() {
-  const { user, loading } = useAuth();
+  const { user, loading, userCompany } = useAuth();
   const router = useRouter();
   const [date, setDate] = useState(todayIso());
   const [companyId, setCompanyId] = useState('');
@@ -272,10 +273,10 @@ export default function TruthDebugPage() {
       router.push('/login');
       return;
     }
-    if (user.role !== 'admin' && user.role !== 'it') {
+    if (!hasCapability(user, 'viewTruthDebug', userCompany)) {
       router.push('/');
     }
-  }, [user, loading, router]);
+  }, [user, loading, userCompany, router]);
 
   async function runShadow() {
     setBusy(true);
