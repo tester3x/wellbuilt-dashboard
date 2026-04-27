@@ -136,8 +136,13 @@ export default function DiagnosticsPage() {
   const [busy, setBusy] = useState(false);
   const [expandedId, setExpandedId] = useState<string | null>(null);
   const [checked, setChecked] = useState<Set<string>>(new Set());
+  const [hiddenIds, setHiddenIds] = useState<Set<string>>(new Set());
   const [copyStatus, setCopyStatus] = useState<string | null>(null);
   const headerCheckboxRef = useRef<HTMLInputElement | null>(null);
+  // Anchor for shift-click range selection. Tracks the last single-row
+  // toggle / shift-range endpoint so the next shift+click can extend a
+  // range from there. Resets when "Clear from view" hides rows.
+  const lastClickedIdRef = useRef<string | null>(null);
 
   // Auth gate — same redirect pattern as truth-debug. Keeps the
   // page consistent with other admin tools and avoids flashing
@@ -226,14 +231,26 @@ export default function DiagnosticsPage() {
     return () => unsub();
   }, [serverConstraints, user, loading, userCompany]);
 
+  // Reset "hidden from view" state when filters change. Filter reset
+  // (or any filter change) is one of the two paths the user spec'd to
+  // bring cleared rows back into view. The other is full page refresh
+  // (component remount → state empty by default).
+  useEffect(() => {
+    setHiddenIds(new Set());
+    lastClickedIdRef.current = null;
+  }, [filterApp, filterArea, filterDriver, filterShift, filterEvent]);
+
   // Client-side fan-out filter. Catches the dimensions we couldn't
   // push into Firestore (because each composite index is
   // singleField + timestamp). For event, we substring-match
   // case-insensitively so "logout" matches "logout.cascade.sent" /
-  // "logout.signal.received".
+  // "logout.signal.received". Also drops rows the user explicitly
+  // hid via "Clear from view" — that hide is purely client-side and
+  // does NOT touch Firestore.
   const filtered = useMemo(() => {
     const ev = filterEvent.trim().toLowerCase();
     return rows.filter((r) => {
+      if (hiddenIds.has(r.id)) return false;
       if (filterApp && r.app !== filterApp) return false;
       if (filterArea && r.area !== filterArea) return false;
       if (filterDriver.trim() && r.driverHash !== filterDriver.trim()) return false;
@@ -241,7 +258,7 @@ export default function DiagnosticsPage() {
       if (ev && !(r.event || '').toLowerCase().includes(ev)) return false;
       return true;
     });
-  }, [rows, filterApp, filterArea, filterDriver, filterShift, filterEvent]);
+  }, [rows, filterApp, filterArea, filterDriver, filterShift, filterEvent, hiddenIds]);
 
   const copyRow = async (row: DiagRow) => {
     try {
@@ -277,7 +294,70 @@ export default function DiagnosticsPage() {
     });
   };
 
+  // Internal: header-checkbox uncheck-all-visible. Not exposed as a
+  // toolbar button — the toolbar's "Clear from view" handles the
+  // user-facing "remove these from my view" action.
   const clearChecked = () => setChecked(new Set());
+
+  // Hide checked rows from the current table view. Does NOT delete
+  // any Firestore document and does NOT modify any diagnostics data.
+  // Hidden rows return on filter reset (handled above) or full
+  // refresh. The user can also click "Restore hidden" below.
+  const clearCheckedFromView = () => {
+    if (checked.size === 0) return;
+    setHiddenIds((prev) => {
+      const next = new Set(prev);
+      for (const id of checked) next.add(id);
+      return next;
+    });
+    setChecked(new Set());
+    lastClickedIdRef.current = null;
+  };
+
+  const restoreHidden = () => {
+    setHiddenIds(new Set());
+  };
+
+  // Range-select on shift-click; plain click and ctrl/cmd-click both
+  // toggle a single row. The anchor is the most recently clicked row
+  // (single-toggle or shift-range endpoint). Mimics standard desktop
+  // file-manager / table semantics.
+  const handleCheckboxClick = (
+    e: React.MouseEvent<HTMLInputElement>,
+    rowId: string,
+    visibleIndex: number,
+  ) => {
+    e.stopPropagation();
+    if (
+      e.shiftKey &&
+      lastClickedIdRef.current &&
+      lastClickedIdRef.current !== rowId
+    ) {
+      e.preventDefault();
+      const lastIdx = filtered.findIndex((r) => r.id === lastClickedIdRef.current);
+      if (lastIdx >= 0) {
+        const [from, to] =
+          lastIdx <= visibleIndex ? [lastIdx, visibleIndex] : [visibleIndex, lastIdx];
+        // Range-fill state mirrors the anchor row's current checked
+        // state (OS file-manager behavior): if anchor is checked,
+        // checking the range; if anchor is unchecked, unchecking it.
+        const anchorChecked = checked.has(lastClickedIdRef.current);
+        setChecked((prev) => {
+          const next = new Set(prev);
+          for (let i = from; i <= to; i++) {
+            const id = filtered[i]?.id;
+            if (!id) continue;
+            if (anchorChecked) next.add(id);
+            else next.delete(id);
+          }
+          return next;
+        });
+      }
+    }
+    // For plain click and ctrl/cmd click, default toggle fires via
+    // onChange (no preventDefault). We only update the anchor here.
+    lastClickedIdRef.current = rowId;
+  };
 
   const visibleCheckedCount = useMemo(
     () => filtered.reduce((n, r) => (checked.has(r.id) ? n + 1 : n), 0),
@@ -445,26 +525,44 @@ export default function DiagnosticsPage() {
           </button>
           <button
             type="button"
-            onClick={clearChecked}
-            disabled={checked.size === 0}
-            className="px-2 py-1 rounded border border-gray-600 text-gray-200 hover:bg-gray-700 disabled:opacity-40 disabled:cursor-not-allowed"
-          >
-            Clear checked ({checked.size})
-          </button>
-          <button
-            type="button"
             onClick={copyChecked}
             disabled={checked.size === 0}
             className="px-2 py-1 rounded border border-blue-500 bg-blue-700 text-white hover:bg-blue-600 disabled:opacity-40 disabled:cursor-not-allowed"
           >
             Copy checked ({checked.size})
           </button>
+          <button
+            type="button"
+            onClick={clearCheckedFromView}
+            disabled={checked.size === 0}
+            title="Hide selected rows from the current view. Does NOT delete from Firestore. Returns on filter reset or refresh."
+            className="px-2 py-1 rounded border border-amber-500 text-amber-200 hover:bg-amber-700/30 disabled:opacity-40 disabled:cursor-not-allowed"
+          >
+            Clear from view ({checked.size})
+          </button>
+          {hiddenIds.size > 0 && (
+            <button
+              type="button"
+              onClick={restoreHidden}
+              className="px-2 py-1 rounded border border-gray-600 text-gray-200 hover:bg-gray-700"
+            >
+              Restore hidden ({hiddenIds.size})
+            </button>
+          )}
           {checked.size > 0 && (
             <span className="text-gray-300">
               {checked.size} row{checked.size === 1 ? '' : 's'} selected
             </span>
           )}
+          {hiddenIds.size > 0 && (
+            <span className="text-amber-300">
+              {hiddenIds.size} hidden from view
+            </span>
+          )}
           {copyStatus && <span className="text-emerald-300">{copyStatus}</span>}
+          <span className="text-gray-500 ml-2 hidden md:inline">
+            Tip: Shift-click a checkbox to select a range.
+          </span>
         </section>
 
         <section className="bg-gray-800/60 border border-gray-700 rounded overflow-hidden">
@@ -504,7 +602,7 @@ export default function DiagnosticsPage() {
                   </td>
                 </tr>
               )}
-              {filtered.map((row) => {
+              {filtered.map((row, visibleIndex) => {
                 const expanded = expandedId === row.id;
                 const counts = compactCounts(row.counts);
                 return (
@@ -522,6 +620,7 @@ export default function DiagnosticsPage() {
                           type="checkbox"
                           checked={checked.has(row.id)}
                           onChange={() => toggleRow(row.id)}
+                          onClick={(e) => handleCheckboxClick(e, row.id, visibleIndex)}
                           aria-label={`Select row ${row.event}`}
                           className="cursor-pointer"
                         />
