@@ -89,6 +89,18 @@ export function AppHeader() {
               </Link>
             </>
           )}
+          {hasCapability(user, 'viewDiagnostics', userCompany) && (
+            <Link
+              href="/admin/diagnostics/"
+              className={`px-3 py-2 rounded-lg transition-colors text-sm ${
+                pathname.startsWith('/admin/diagnostics')
+                  ? 'bg-gray-600 text-white'
+                  : 'bg-gray-700 hover:bg-gray-600 text-gray-200'
+              }`}
+            >
+              WB Diagnostics
+            </Link>
+          )}
           <button
             onClick={async () => {
               await signOut();
