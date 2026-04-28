@@ -1156,6 +1156,11 @@ function DispatchPageInner() {
         else nightHashes.push(hash);
       }
 
+      // Firestore rejects `undefined` field values — every optional field
+      // either uses `|| null` (string-typed optionals) or the spread-omit
+      // pattern (array-typed optionals + objects). Replaces the prior
+      // `|| undefined` form which threw "Unsupported field value: undefined"
+      // at addDoc when any optional input was empty.
       const projectData: Omit<Project, 'id'> = {
         name: newProjectName.trim(),
         wellNames: newProjectWells,
@@ -1164,16 +1169,16 @@ function DispatchPageInner() {
         createdBy: user?.email || '',
         createdAt: Timestamp.now(),
         startDate: today,
-        projectedEndDate: newProjectEndDate || undefined,
+        projectedEndDate: newProjectEndDate || null,
         status: 'active',
         jobType: newProjectJobType,
-        serviceType: newProjectServiceType || undefined,
-        notes: newProjectNotes.trim() || undefined,
+        serviceType: newProjectServiceType || null,
+        notes: newProjectNotes.trim() || null,
         driverSchedule: schedule,
-        dayDriverHashes: dayHashes.length > 0 ? dayHashes : undefined,
-        nightDriverHashes: nightHashes.length > 0 ? nightHashes : undefined,
+        ...(dayHashes.length > 0 ? { dayDriverHashes: dayHashes } : {}),
+        ...(nightHashes.length > 0 ? { nightDriverHashes: nightHashes } : {}),
         ...(Object.keys(newProjectDriverDisposals).length > 0 ? { driverDisposals: newProjectDriverDisposals } : {}),
-      };
+      } as Omit<Project, 'id'>;
       const docRef = await addDoc(collection(firestore, 'projects'), projectData);
 
       // Create dispatches for today's assigned drivers
@@ -1185,6 +1190,9 @@ function DispatchPageInner() {
             if (!driver) continue;
             const driverFirstName = driver.legalName ? driver.legalName.split(' ')[0] : driver.displayName;
             const driverDisposal = newProjectDriverDisposals[driverHash];
+            // Same `|| undefined` → `|| null` normalization as projectData
+            // above. Optional string fields: null. Optional structured
+            // groups: spread-omit. Firestore never sees `undefined`.
             await addDoc(collection(firestore, 'dispatches'), {
               driverHash,
               driverName: driver.displayName,
@@ -1194,13 +1202,13 @@ function DispatchPageInner() {
               operator: newProjectOperator.trim(),
               route: wellData?.route || '',
               jobType: newProjectJobType,
-              serviceType: newProjectServiceType || undefined,
+              serviceType: newProjectServiceType || null,
               status: 'pending',
               priority: 500,
               assignedAt: Timestamp.now(),
               assignedBy: user?.email || '',
               projectId: docRef.id,
-              notes: newProjectNotes.trim() || undefined,
+              notes: newProjectNotes.trim() || null,
               ...(driverDisposal ? { disposal: driverDisposal.name, disposalLat: driverDisposal.lat, disposalLng: driverDisposal.lng } : {}),
             });
           }
