@@ -231,12 +231,14 @@ export default function DiagnosticsPage() {
     return () => unsub();
   }, [serverConstraints, user, loading, userCompany]);
 
-  // Reset "hidden from view" state when filters change. Filter reset
-  // (or any filter change) is one of the two paths the user spec'd to
-  // bring cleared rows back into view. The other is full page refresh
-  // (component remount → state empty by default).
+  // Reset shift-click anchor when filters change — the previous anchor
+  // row may not be visible under the new filter, so clearing prevents
+  // weird shift-range behavior. hiddenIds is intentionally NOT reset
+  // here: hidden rows MUST stay hidden across filter changes and across
+  // live-query snapshots until the user explicitly clicks "Show cleared
+  // rows" (or the page is fully refreshed → component remount → empty
+  // default).
   useEffect(() => {
-    setHiddenIds(new Set());
     lastClickedIdRef.current = null;
   }, [filterApp, filterArea, filterDriver, filterShift, filterEvent]);
 
@@ -299,21 +301,32 @@ export default function DiagnosticsPage() {
   // user-facing "remove these from my view" action.
   const clearChecked = () => setChecked(new Set());
 
-  // Hide checked rows from the current table view. Does NOT delete
-  // any Firestore document and does NOT modify any diagnostics data.
-  // Hidden rows return on filter reset (handled above) or full
-  // refresh. The user can also click "Restore hidden" below.
+  // Hide checked rows from the current view. Does NOT delete any
+  // Firestore document and does NOT modify any diagnostics data.
+  // Hidden rows STAY hidden across filter changes AND live-query
+  // snapshot refreshes until the user clicks "Show cleared rows" or
+  // does a full page refresh. Operates on currently-visible-and-
+  // checked rows only — checked rows that are off-screen due to
+  // active filters are not hidden by this action; the entire checked
+  // set is then cleared so the user starts fresh.
   const clearCheckedFromView = () => {
     if (checked.size === 0) return;
-    setHiddenIds((prev) => {
-      const next = new Set(prev);
-      for (const id of checked) next.add(id);
-      return next;
-    });
+    const visibleCheckedIds = filtered
+      .filter((r) => checked.has(r.id))
+      .map((r) => r.id);
+    if (visibleCheckedIds.length > 0) {
+      setHiddenIds((prev) => {
+        const next = new Set(prev);
+        for (const id of visibleCheckedIds) next.add(id);
+        return next;
+      });
+    }
     setChecked(new Set());
     lastClickedIdRef.current = null;
   };
 
+  // Manual "show everything" — only path back to seeing cleared rows
+  // without a full page refresh.
   const restoreHidden = () => {
     setHiddenIds(new Set());
   };
@@ -402,11 +415,11 @@ export default function DiagnosticsPage() {
   };
 
   const copyChecked = async () => {
-    // Use full `rows` (not just filtered) so a row checked under one filter
-    // is still copyable after the filter changes — as long as it's still
-    // in the snapshot. Rows pushed out by the 200-record limit can't be
-    // copied; keeping a separate cache for that edge case is out of scope.
-    const selected = rows.filter((r) => checked.has(r.id));
+    // Visible-only per UX contract: copy only currently-visible checked
+    // rows. Off-screen-but-checked rows (filtered out OR hidden via
+    // "Clear from view") are not included — what the user sees is what
+    // gets copied.
+    const selected = filtered.filter((r) => checked.has(r.id));
     if (selected.length === 0) return;
     const text = selected.map(formatRowForCopy).join('\n\n---\n\n');
     try {
@@ -544,9 +557,10 @@ export default function DiagnosticsPage() {
             <button
               type="button"
               onClick={restoreHidden}
+              title="Bring back rows you cleared from view this session."
               className="px-2 py-1 rounded border border-gray-600 text-gray-200 hover:bg-gray-700"
             >
-              Restore hidden ({hiddenIds.size})
+              Show cleared rows ({hiddenIds.size})
             </button>
           )}
           {checked.size > 0 && (
