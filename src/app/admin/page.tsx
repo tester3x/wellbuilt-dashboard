@@ -64,6 +64,11 @@ export default function AdminPage() {
   // New route/well forms
   const [newRouteName, setNewRouteName] = useState('');
   const [newWellName, setNewWellName] = useState('');
+  // Search inputs are decoupled from the well name so users can name the well
+  // however they want for drivers (e.g. "Sparrow SOG") while finding the legal
+  // record by typing the canonical name (e.g. "Sparrow 1-10H") in the search box.
+  const [newWellSearchTerm, setNewWellSearchTerm] = useState('');
+  const [newWellSearchState, setNewWellSearchState] = useState<'all' | 'ND' | 'MT'>('all');
   const [newWellRoute, setNewWellRoute] = useState('');
   const [newWellBottom, setNewWellBottom] = useState('3');
   const [newWellTanks, setNewWellTanks] = useState('1');
@@ -357,33 +362,43 @@ export default function AdminPage() {
     });
   }, []);
 
-  // Auto-link: when well name changes and we have operator wells, search for a match
+  // Auto-link: when search term changes and we have operator wells, search for a match.
+  // The search input is decoupled from the well name so the user can search by legal
+  // name (e.g. "Sparrow 1-10H") without that becoming the saved/displayed well name.
+  // State filter scopes the search so generic names (e.g. "Sparrow") don't get
+  // trapped on the wrong state's match.
   useEffect(() => {
-    const name = newWellName.trim();
-    if (name.length < 2 || autoLinkWells.length === 0) {
+    const term = newWellSearchTerm.trim();
+    if (term.length < 2 || autoLinkWells.length === 0) {
       if (!ndicSelectedWell) setAutoLinkStatus('idle');
       return;
     }
-    // Don't override manual selection
     if (ndicSelectedWell) return;
 
     const timer = setTimeout(() => {
       setAutoLinkStatus('loading');
-      const matches = searchWellsByName(name, autoLinkWells, 10);
+      const pool = newWellSearchState === 'all'
+        ? autoLinkWells
+        : autoLinkWells.filter(w => w.state === newWellSearchState);
+      const matches = searchWellsByName(term, pool, 10);
+
+      const acceptMatch = (m: NdicWell) => {
+        setNdicSelectedWell(m);
+        setAutoLinkStatus('matched');
+        // Suggest a driver-friendly display name only if the user hasn't typed one yet.
+        // Functional setState reads the latest value without needing it in deps.
+        setNewWellName(prev => prev.trim() === '' ? extractDisplayName(m.well_name) : prev);
+      };
 
       if (matches.length === 1) {
-        // Single match — auto-link
-        setNdicSelectedWell(matches[0]);
-        setAutoLinkStatus('matched');
+        acceptMatch(matches[0]);
       } else if (matches.length > 1) {
-        // Multiple matches — check if first is exact-ish (name starts with typed name)
         const exactish = matches.find(m =>
-          m.well_name.toLowerCase().startsWith(name.toLowerCase() + ' ') ||
-          m.well_name.toLowerCase().startsWith(name.toLowerCase() + '-')
+          m.well_name.toLowerCase().startsWith(term.toLowerCase() + ' ') ||
+          m.well_name.toLowerCase().startsWith(term.toLowerCase() + '-')
         );
         if (exactish) {
-          setNdicSelectedWell(exactish);
-          setAutoLinkStatus('matched');
+          acceptMatch(exactish);
         } else {
           setAutoLinkStatus('no_match');
         }
@@ -393,7 +408,7 @@ export default function AdminPage() {
     }, 600);
 
     return () => clearTimeout(timer);
-  }, [newWellName, autoLinkWells, ndicSelectedWell]);
+  }, [newWellSearchTerm, newWellSearchState, autoLinkWells, ndicSelectedWell]);
 
   // When NDIC operator search changes, filter results
   useEffect(() => {
@@ -489,8 +504,10 @@ export default function AdminPage() {
     // Pre-fill well search with the name being edited/added
     if (target === 'edit' && selectedWell) {
       setNdicWellSearch(selectedWell);
-    } else if (target === 'add' && newWellName.trim()) {
-      setNdicWellSearch(newWellName.trim());
+    } else if (target === 'add' && (newWellSearchTerm.trim() || newWellName.trim())) {
+      // Prefer the search term (user typed a legal name to find the record).
+      // Fall back to the well name only if no search term was entered.
+      setNdicWellSearch(newWellSearchTerm.trim() || newWellName.trim());
     } else {
       setNdicWellSearch('');
     }
@@ -725,7 +742,9 @@ export default function AdminPage() {
     await set(ref(db, `well_config/${wellName}`), config);
     showMessage(`Well "${wellName}" created${ndicSelectedWell ? ` (linked: ${ndicSelectedWell.api_no})` : ''}`);
     setNewWellName('');
+    setNewWellSearchTerm('');
     setNdicSelectedWell(null);
+    setAutoLinkStatus('idle');
   };
 
   // Update well config (with optional rename)
@@ -1151,18 +1170,29 @@ export default function AdminPage() {
               <div className="bg-gray-800 rounded-lg p-4">
                 <h3 className="text-white font-medium mb-3">Add New Well</h3>
                 <div className="space-y-3">
+                  {/* State + Database search row — finds the legal NDIC/MBOGC record */}
                   <div className="flex gap-2">
+                    <select
+                      value={newWellSearchState}
+                      onChange={(e) => setNewWellSearchState(e.target.value as 'all' | 'ND' | 'MT')}
+                      className="px-2 py-2 bg-gray-700 text-white rounded text-sm"
+                      title="Limit search to one state — typing a generic name like 'Sparrow' otherwise matches across states"
+                    >
+                      <option value="all">All states</option>
+                      <option value="ND">North Dakota</option>
+                      <option value="MT">Montana</option>
+                    </select>
                     <input
                       type="text"
-                      value={newWellName}
-                      onChange={(e) => { filterForbiddenChars(e.target.value, setNewWellName); setNdicSelectedWell(null); setAutoLinkStatus('idle'); }}
-                      placeholder="Well name (e.g., Gabriel 1)"
+                      value={newWellSearchTerm}
+                      onChange={(e) => setNewWellSearchTerm(e.target.value)}
+                      placeholder="Search well database (e.g. Sparrow 1-10H)"
                       className="flex-1 px-3 py-2 bg-gray-700 text-white rounded"
                     />
                     <button
                       onClick={() => openNdicPicker('add')}
                       className="px-3 py-2 bg-teal-700 hover:bg-teal-600 text-white text-sm rounded whitespace-nowrap"
-                      title="Search well database to auto-fill name and link API number"
+                      title="Open the operator + well picker to find a legal record manually"
                     >
                       Link Well
                     </button>
@@ -1182,13 +1212,27 @@ export default function AdminPage() {
                       <div className="text-gray-300 mt-1">{ndicSelectedWell.well_name}</div>
                       <div className="text-gray-500">API: {ndicSelectedWell.api_no} {ndicSelectedWell.state && `(${ndicSelectedWell.state})`}</div>
                     </div>
-                  ) : autoLinkStatus === 'no_match' && newWellName.trim().length >= 2 ? (
+                  ) : autoLinkStatus === 'no_match' && newWellSearchTerm.trim().length >= 2 ? (
                     <div className="bg-red-900/30 border border-red-700/50 rounded p-2 text-xs text-red-300">
-                      No auto-match found — use <strong>Link Well</strong> to search manually
+                      No auto-match found{newWellSearchState !== 'all' ? ` in ${newWellSearchState === 'ND' ? 'North Dakota' : 'Montana'}` : ''} — use <strong>Link Well</strong> to search manually
                     </div>
                   ) : autoLinkStatus === 'loading' ? (
                     <div className="text-gray-500 text-xs">Searching...</div>
                   ) : null}
+                  {/* Driver-facing well name — what shows in the apps */}
+                  <div>
+                    <label className="text-gray-400 text-xs">Well Name (what drivers see in the app)</label>
+                    <input
+                      type="text"
+                      value={newWellName}
+                      onChange={(e) => filterForbiddenChars(e.target.value, setNewWellName)}
+                      placeholder="e.g. Sparrow SOG"
+                      className="w-full px-3 py-2 bg-gray-700 text-white rounded mt-1"
+                    />
+                    <p className="text-amber-400 text-xs mt-1">
+                      ⚠️ Well name is permanent — get it right the first time. To change it later you'd have to delete and recreate the well.
+                    </p>
+                  </div>
                   <select
                     value={newWellRoute}
                     onChange={(e) => setNewWellRoute(e.target.value)}
@@ -1368,15 +1412,13 @@ export default function AdminPage() {
                       <input
                         type="text"
                         value={editWellName}
-                        onChange={(e) => filterForbiddenChars(e.target.value, setEditWellName)}
-                        className="w-full px-3 py-2 bg-gray-700 text-white rounded"
-                        disabled={isRenaming}
+                        readOnly
+                        className="w-full px-3 py-2 bg-gray-900 text-gray-400 rounded cursor-not-allowed"
+                        title="Well name is permanent. To use a different name, delete and recreate the well."
                       />
-                      {editWellName !== selectedWell && (
-                        <p className="text-yellow-400 text-xs mt-1">
-                          ⚠️ Renaming will update all historical data
-                        </p>
-                      )}
+                      <p className="text-gray-500 text-xs mt-1">
+                        Well name is permanent. To use a different name, delete and recreate the well.
+                      </p>
                     </div>
                     {/* NDIC Linkage */}
                     <div className="bg-gray-900 rounded p-2">

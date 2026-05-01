@@ -829,19 +829,30 @@ export async function fetchWellHistoryUnified(wellName: string, limit: number = 
   // ANOMALY DETECTION: Calculate anomaly levels PROGRESSIVELY
   // Each row is compared against median of PREVIOUS rows only (not itself or future rows)
   // This matches VBA behavior - detect anomalies as they would appear when data was entered
+  //
+  // Mirrors filterAnomalies() in functions/src/index.ts — keep these in sync.
+  // Includes regime-shift escape: if the LAST N pulls were all flagged Tier-2 in
+  // the same direction, the baseline is stale; re-tag the run as a fresh sequence.
 
   // Pulls are sorted newest first, so we iterate from oldest to newest (reverse)
-  // Build up the "known" flow rates as we go
   const knownFlowRates: number[] = [];
+  // Track each rate's index in the pulls[] array + rejection direction so we can
+  // detect a tail rejection run after the loop. Direction: 0=accepted, +1=rejected
+  // higher than baseline, -1=rejected lower.
+  const ratesInOrder: { pullIndex: number; rate: number; direction: number }[] = [];
 
   for (let i = pulls.length - 1; i >= 0; i--) {
     const pull = pulls[i];
 
     if (pull.flowRateDays && pull.flowRateDays > 0 && pull.flowRateDays < 365) {
+      let direction = 0;
       // Check anomaly against median of PREVIOUS rows (knownFlowRates)
       if (knownFlowRates.length >= 3) {
         const medianRate = median(knownFlowRates);
         pull.anomalyLevel = getFlowRateAnomalyLevel(pull.flowRateDays, medianRate);
+        if (pull.anomalyLevel === 2) {
+          direction = pull.flowRateDays > medianRate ? 1 : -1;
+        }
       } else {
         pull.anomalyLevel = 0; // Not enough data to determine
       }
@@ -851,8 +862,52 @@ export async function fetchWellHistoryUnified(wellName: string, limit: number = 
       if (pull.anomalyLevel !== 2) {
         knownFlowRates.push(pull.flowRateDays);
       }
+      ratesInOrder.push({ pullIndex: i, rate: pull.flowRateDays, direction });
     } else {
       pull.anomalyLevel = 0; // No flow rate to evaluate
+    }
+  }
+
+  // Regime-shift escape: tail rejection run
+  const REGIME_SHIFT_THRESHOLD = 3;
+  let runDir = 0;
+  let runStart = -1;
+  for (let i = ratesInOrder.length - 1; i >= 0; i--) {
+    const d = ratesInOrder[i].direction;
+    if (d === 0) break;
+    if (runDir === 0) runDir = d;
+    if (d !== runDir) break;
+    runStart = i;
+  }
+  if (runStart >= 0 && (ratesInOrder.length - runStart) >= REGIME_SHIFT_THRESHOLD) {
+    // Reseed: re-tag the run rates as a fresh chronological sequence
+    const reseed: number[] = [];
+    for (let i = runStart; i < ratesInOrder.length; i++) {
+      const entry = ratesInOrder[i];
+      const pull = pulls[entry.pullIndex];
+      if (reseed.length >= 3) {
+        const medianRate = median(reseed);
+        pull.anomalyLevel = getFlowRateAnomalyLevel(entry.rate, medianRate);
+      } else {
+        pull.anomalyLevel = 0;
+      }
+      if (pull.anomalyLevel !== 2) {
+        reseed.push(entry.rate);
+      }
+    }
+    // Pass-2-style overall-median check on the reseeded run — catches outliers
+    // that were grandfathered in during the reseed (e.g. a single huge Apr-9
+    // post-lapse pull at the head of an otherwise consistent run).
+    if (reseed.length >= 5) {
+      const overallMedian = median(reseed);
+      for (let i = runStart; i < ratesInOrder.length; i++) {
+        const entry = ratesInOrder[i];
+        const pull = pulls[entry.pullIndex];
+        const newLevel = getFlowRateAnomalyLevel(entry.rate, overallMedian);
+        if (newLevel === 2 && pull.anomalyLevel !== 2) {
+          pull.anomalyLevel = 2;
+        }
+      }
     }
   }
 

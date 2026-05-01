@@ -67,7 +67,11 @@ export function AppHeader() {
           )}
           {hasCapability(user, 'viewTruthDebug', userCompany) && (
             <>
-              <Link
+              {/* Plain <a> (full document load) — bypasses App Router prefetch
+                  cache + stale chunk refs that caused intermittent click failures
+                  on these admin-only routes. Right-click open-in-new-tab already
+                  does this; the buttons should match. */}
+              <a
                 href="/admin/truth-debug/"
                 className={`px-3 py-2 rounded-lg transition-colors text-sm ${
                   pathname.startsWith('/admin/truth-debug')
@@ -76,8 +80,8 @@ export function AppHeader() {
                 }`}
               >
                 Truth Debug
-              </Link>
-              <Link
+              </a>
+              <a
                 href="/admin/truth-rag-exports/"
                 className={`px-3 py-2 rounded-lg transition-colors text-sm ${
                   pathname.startsWith('/admin/truth-rag-exports')
@@ -86,11 +90,11 @@ export function AppHeader() {
                 }`}
               >
                 Truth RAG
-              </Link>
+              </a>
             </>
           )}
           {hasCapability(user, 'viewDiagnostics', userCompany) && (
-            <Link
+            <a
               href="/admin/diagnostics/"
               className={`px-3 py-2 rounded-lg transition-colors text-sm ${
                 pathname.startsWith('/admin/diagnostics')
@@ -99,7 +103,7 @@ export function AppHeader() {
               }`}
             >
               WB Diagnostics
-            </Link>
+            </a>
           )}
           <button
             onClick={async () => {

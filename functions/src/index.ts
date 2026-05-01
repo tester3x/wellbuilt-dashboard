@@ -644,23 +644,32 @@ function getFlowRateAnomalyLevel(flowRate: number, medianRate: number): number {
   return 0; // Normal
 }
 
-// Filter out anomalies (5x+ off median) from flow rates.
-// Uses two passes:
+// Filter out anomalies (2x+ off median) from flow rates.
+// Uses two passes plus a regime-shift escape:
 //   1. Progressive median — catches outliers as they appear, lets the well's
 //      baseline drift over time (handles legitimate regime changes when paired
 //      with step detection downstream).
+//   1b. Regime-shift detection — if the LAST N pulls were all rejected as Tier-2
+//       anomalies in the SAME direction, the baseline itself is stale (e.g. a
+//       fresh-tank start followed by a long lapse, pump replacement, or workover).
+//       Reseed from the rejection run as the new baseline and recurse. Mirrors
+//       the step detector at lines ~755-778 but operates on rates that filtered
+//       OUT, which the step detector can't see.
 //   2. Final pass with the OVERALL median of pass-1 results — catches early
 //      outliers that were grandfathered in before there was enough baseline
 //      data (matches the dashboard's anomaly badges so AFR and the UI agree).
 // Returns rates with Tier 2 anomalies removed.
+const REGIME_SHIFT_THRESHOLD = 3;
 function filterAnomalies(flowRates: number[]): number[] {
   if (flowRates.length < 3) {
     return flowRates;
   }
 
-  // Pass 1: progressive
+  // Pass 1: progressive (also tracks rejection direction for regime-shift detection)
   const knownRates: number[] = [];
   const passOne: number[] = [];
+  // 0 = accepted, +1 = rejected as higher than baseline, -1 = rejected as lower
+  const directions: number[] = [];
   for (const rate of flowRates) {
     if (knownRates.length >= 3) {
       const medianRate = median(knownRates);
@@ -668,13 +677,33 @@ function filterAnomalies(flowRates: number[]): number[] {
       if (level < 2) {
         passOne.push(rate);
         knownRates.push(rate);
+        directions.push(0);
+      } else {
+        directions.push(rate > medianRate ? 1 : -1);
       }
-      // Level 2 anomalies excluded from both.
     } else {
       // Not enough baseline yet — include for now; pass 2 will re-check.
       passOne.push(rate);
       knownRates.push(rate);
+      directions.push(0);
     }
+  }
+
+  // Pass 1b: regime-shift escape. Scan tail for consecutive same-direction
+  // Tier-2 rejections. If we find a run of REGIME_SHIFT_THRESHOLD or more,
+  // the baseline is stale — reseed from the rejection run and recurse.
+  let runDir = 0;
+  let runStart = -1;
+  for (let i = directions.length - 1; i >= 0; i--) {
+    const d = directions[i];
+    if (d === 0) break;
+    if (runDir === 0) runDir = d;
+    if (d !== runDir) break;
+    runStart = i;
+  }
+  if (runStart >= 0 && (directions.length - runStart) >= REGIME_SHIFT_THRESHOLD) {
+    console.log(`[AFR] regime shift detected: ${directions.length - runStart} consecutive ${runDir > 0 ? 'slower' : 'faster'} rejections, reseeding from index ${runStart}`);
+    return filterAnomalies(flowRates.slice(runStart));
   }
 
   // Pass 2: re-check every kept rate against the OVERALL median.
