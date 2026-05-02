@@ -456,6 +456,60 @@ export default function DiagnosticsPage() {
       />
 
       <main className="max-w-7xl mx-auto px-4 py-6 space-y-4">
+        {/* ── Focus presets ─────────────────────────────────────────────────
+            One-click filters for common investigation scopes. Each preset
+            sets a coordinated combination of the standard filters below.
+            "Clear" resets every filter to default. */}
+        <section className="bg-indigo-900/30 border border-indigo-700/60 rounded p-3 flex flex-wrap items-center gap-2">
+          <span className="text-xs uppercase tracking-wide text-indigo-200 font-semibold mr-1">Focus</span>
+          <button
+            type="button"
+            onClick={() => {
+              setFilterApp('wbt');
+              setFilterArea('dispatch');
+              setFilterDriver('');
+              setFilterShift('');
+              // Substring match catches both `transfer.*` and
+              // `photo-transfer.*` (latter contains "transfer." in
+              // "photo-transfer."). Pulls the full transfer-flow
+              // instrumentation: accept tap, hydrate, navigate,
+              // arrive phase decision, dropoff photo path, etc.
+              setFilterEvent('transfer.');
+            }}
+            className={`px-3 py-1 rounded text-xs font-semibold border ${
+              filterApp === 'wbt' && filterArea === 'dispatch' && filterEvent === 'transfer.'
+                ? 'bg-indigo-600 border-indigo-400 text-white'
+                : 'bg-gray-800 border-indigo-700/60 text-indigo-200 hover:bg-indigo-800/40'
+            }`}
+            title="Filter to WB Tickets transfer-flow instrumentation: accept, hydrate, arrive phase decision, dropoff photo path"
+          >
+            Transfers
+          </button>
+          <button
+            type="button"
+            onClick={() => {
+              setFilterApp('');
+              setFilterArea('');
+              setFilterDriver('');
+              setFilterShift('');
+              setFilterEvent('');
+            }}
+            className="px-3 py-1 rounded text-xs font-semibold border border-gray-600 text-gray-300 hover:bg-gray-700"
+            title="Reset all filters to defaults"
+          >
+            Clear
+          </button>
+          <span className="text-xs text-gray-400 ml-2 hidden md:inline">
+            Transfer events:
+            <code className="text-indigo-300 ml-1">transfer.djd_item_render</code>{', '}
+            <code className="text-indigo-300">accept_tap</code>{', '}
+            <code className="text-indigo-300">hydrate_*</code>{', '}
+            <code className="text-indigo-300">navigate_*</code>{', '}
+            <code className="text-indigo-300">arrive_*</code>{', '}
+            <code className="text-indigo-300">photo-transfer.*</code>
+          </span>
+        </section>
+
         <section className="bg-gray-800/60 border border-gray-700 rounded p-4 grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-5 gap-3">
           <label className="flex flex-col text-xs text-gray-300">
             App
