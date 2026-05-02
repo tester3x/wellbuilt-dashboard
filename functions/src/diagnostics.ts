@@ -35,6 +35,7 @@ const ALLOWED_AREAS = new Set([
   'shift',
   'auth',
   'general',
+  'transfer',
 ]);
 const ALLOWED_RESULTS = new Set(['ok', 'skipped', 'error']);
 

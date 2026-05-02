@@ -47,7 +47,8 @@ type DiagArea =
   | 'split_load'
   | 'shift'
   | 'auth'
-  | 'general';
+  | 'general'
+  | 'transfer';
 type DiagResult = 'ok' | 'skipped' | 'error';
 
 interface DiagRow {
@@ -81,6 +82,7 @@ const APP_OPTIONS: Array<{ value: '' | DiagApp; label: string }> = [
 
 const AREA_OPTIONS: Array<{ value: '' | DiagArea; label: string }> = [
   { value: '', label: 'All areas' },
+  { value: 'transfer', label: 'Transfer' },
   { value: 'jsa', label: 'JSA' },
   { value: 'logout', label: 'Logout' },
   { value: 'tickets', label: 'Tickets' },
@@ -466,18 +468,13 @@ export default function DiagnosticsPage() {
             type="button"
             onClick={() => {
               setFilterApp('wbt');
-              setFilterArea('dispatch');
+              setFilterArea('transfer');
               setFilterDriver('');
               setFilterShift('');
-              // Substring match catches both `transfer.*` and
-              // `photo-transfer.*` (latter contains "transfer." in
-              // "photo-transfer."). Pulls the full transfer-flow
-              // instrumentation: accept tap, hydrate, navigate,
-              // arrive phase decision, dropoff photo path, etc.
-              setFilterEvent('transfer.');
+              setFilterEvent('');
             }}
             className={`px-3 py-1 rounded text-xs font-semibold border ${
-              filterApp === 'wbt' && filterArea === 'dispatch' && filterEvent === 'transfer.'
+              filterApp === 'wbt' && filterArea === 'transfer' && !filterEvent
                 ? 'bg-indigo-600 border-indigo-400 text-white'
                 : 'bg-gray-800 border-indigo-700/60 text-indigo-200 hover:bg-indigo-800/40'
             }`}
