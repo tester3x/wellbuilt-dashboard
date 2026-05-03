@@ -72,6 +72,11 @@ interface DispatchJob {
   sourceInvoiceNumber?: string;
   intendedDriverHash?: string;
   intendedDriverName?: string;
+  // Why the driver requested transfer — written by sender's TransferModal
+  // (one of the standardized reasons or trimmed Other text). Surfaced on
+  // pending-approval transfer cards so the dispatcher knows why the load
+  // is moving before they reassign.
+  transferReason?: string;
   // Driver stage — written by WB T at each state transition
   driverStage?: 'en_route_pickup' | 'on_site_pickup' | 'en_route_dropoff' | 'on_site_dropoff' | 'paused' | 'completed';
   driverDest?: string;  // Where driver is heading (well name or SWD name)
@@ -3576,6 +3581,16 @@ function DispatchJobRow({ job, cancelDispatch, compact, onClickServiceWork, onRe
         {job.type === 'transfer' && job.transferFromDriver && (
           <span className="px-1.5 py-0.5 bg-orange-600/30 text-orange-300 text-[10px] rounded font-medium flex-shrink-0">
             from {job.transferFromDriver}
+          </span>
+        )}
+
+        {/* Transfer reason — sender's stated reason for requesting transfer */}
+        {job.type === 'transfer' && job.transferReason && (
+          <span
+            className="px-1.5 py-0.5 bg-amber-700/30 text-amber-200 text-[10px] rounded font-medium flex-shrink-0 max-w-[220px] truncate"
+            title={job.transferReason}
+          >
+            Reason: {job.transferReason}
           </span>
         )}
 
