@@ -4859,6 +4859,12 @@ function UnassignedTransferRow({ job, drivers, assignTransfer, cancelDispatch }:
     if (driver) assignTransfer(job.id, driver.key, driver.displayName);
   };
 
+  const handleDeny = () => {
+    if (!job.id) return;
+    if (!confirm('Deny this transfer request? Driver will be returned to the source job.')) return;
+    cancelDispatch(job.id);
+  };
+
   return (
     <div className="px-3 py-2 bg-orange-950/40 border border-orange-600/40 rounded text-sm space-y-2">
       <div className="flex items-center gap-2">
@@ -4877,8 +4883,14 @@ function UnassignedTransferRow({ job, drivers, assignTransfer, cancelDispatch }:
           <span className="text-gray-500 text-xs">Invoice #{job.sourceInvoiceNumber}</span>
         )}
         <span className="flex-1" />
-        <button onClick={() => job.id && cancelDispatch(job.id)} className="text-red-400 hover:text-red-300 text-xs flex-shrink-0">&#10005;</button>
       </div>
+      {/* Transfer reason — driver's stated reason for requesting transfer.
+          Prominent line so the dispatcher knows context before assigning. */}
+      {job.transferReason && (
+        <div className="px-2 py-1 bg-amber-700/20 border border-amber-600/40 rounded text-xs text-amber-100">
+          <span className="font-semibold mr-1">Reason:</span>{job.transferReason}
+        </div>
+      )}
       <div className="flex items-center gap-2">
         <span className="text-orange-300 text-xs font-medium">{isPendingApproval ? 'Approve to:' : 'Assign to:'}</span>
         <select
@@ -4897,6 +4909,13 @@ function UnassignedTransferRow({ job, drivers, assignTransfer, cancelDispatch }:
           className="px-3 py-1 bg-orange-600 hover:bg-orange-500 disabled:bg-gray-700 disabled:text-gray-500 text-white text-xs font-medium rounded transition-colors"
         >
           {isPendingApproval ? 'Approve' : 'Assign'}
+        </button>
+        <button
+          onClick={handleDeny}
+          className="px-3 py-1 bg-gray-700 hover:bg-red-700 text-gray-200 hover:text-white text-xs font-medium rounded transition-colors"
+          title="Deny transfer request and return Driver A to the source job"
+        >
+          Deny
         </button>
       </div>
     </div>
