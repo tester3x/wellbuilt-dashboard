@@ -12,7 +12,8 @@
 // Truth Debug page. Customers can override via roleCapabilities.
 //
 // Phase 1 surface:
-//   - Live Firestore subscription, limit 200 most recent rows.
+//   - Live Firestore subscription, limit 1000 most recent rows
+//     (was 200 — early-shift events were silently truncated mid-day).
 //   - Filters: app, area, driverHash, shiftId, event, date range.
 //   - Row click toggles expanded raw-JSON view.
 //   - Per-row "Copy JSON" button writes the full record to the
@@ -123,6 +124,40 @@ function compactCounts(counts: Record<string, unknown> | null): string {
   return entries.map(([k, v]) => `${k}=${String(v)}`).join(' · ');
 }
 
+// Pick a non-empty string field from a loosely-typed extra/counts object.
+function pickString(obj: Record<string, unknown> | null, key: string): string | null {
+  if (!obj) return null;
+  const v = obj[key];
+  return typeof v === 'string' && v.trim() ? v.trim() : null;
+}
+
+// Best human-readable identity for a diag row. Backend writers don't always
+// stamp a top-level driverHash (esp. transfer events that talk about a
+// recipient or a sender hash prefix), so the column was rendering "—" even
+// when the row carried perfectly usable identity inside `extra`.
+//
+// Priority: readable name > short hash prefix > top-level driverHash slice.
+function resolveDriverDisplay(row: DiagRow): string {
+  const extra = row.extra;
+  const explicitName =
+    pickString(extra, 'driver') ||
+    pickString(extra, 'driverDisplayName') ||
+    pickString(extra, 'transferFromDriver') ||
+    pickString(extra, 'recipientName') ||
+    pickString(extra, 'transferToDriver');
+  if (explicitName) return explicitName;
+  const prefix =
+    pickString(extra, 'senderHashPrefix') ||
+    pickString(extra, 'driverHashPrefix') ||
+    pickString(extra, 'recipientHashPrefix') ||
+    pickString(extra, 'assignedDriverHashPrefix') ||
+    pickString(extra, 'currentDriverHashPrefix') ||
+    pickString(extra, 'invoiceDriverHashPrefix');
+  if (prefix) return `${prefix}…`;
+  if (row.driverHash) return `${row.driverHash.slice(0, 10)}…`;
+  return '—';
+}
+
 export default function DiagnosticsPage() {
   const { user, loading, userCompany } = useAuth();
   const router = useRouter();
@@ -176,7 +211,10 @@ export default function DiagnosticsPage() {
       c.push(where('area', '==', filterArea));
     }
     c.push(orderBy('timestamp', 'desc'));
-    c.push(fsLimit(200));
+    // 1000 covers a full day of WB T transfer instrumentation across both
+    // tablets at typical event density. Was 200 — morning events were
+    // silently truncated by mid-afternoon.
+    c.push(fsLimit(1000));
     return c;
   }, [filterApp, filterArea, filterDriver, filterShift]);
 
@@ -391,7 +429,7 @@ export default function DiagnosticsPage() {
 
   const formatRowForCopy = (r: DiagRow): string => {
     const ts = formatTs(r.timestamp, r.clientTimestamp);
-    const driver = r.driverHash ? `${r.driverHash.slice(0, 12)}…` : '—';
+    const driver = resolveDriverDisplay(r);
     const shift = r.shiftId || '—';
     const operator = r.operatorSlug || r.operatorId || '—';
     const source = r.source || '—';
@@ -703,7 +741,7 @@ export default function DiagnosticsPage() {
                       <td className="px-2 py-2 text-xs text-gray-300">{row.area}</td>
                       <td className="px-2 py-2 font-mono text-xs">{row.event}</td>
                       <td className="px-2 py-2 font-mono text-[11px] text-gray-300">
-                        {row.driverHash ? `${row.driverHash.slice(0, 10)}…` : '—'}
+                        {resolveDriverDisplay(row)}
                         {row.shiftId ? <div className="text-gray-500">{row.shiftId}</div> : null}
                       </td>
                       <td className="px-2 py-2 font-mono text-[11px] text-gray-300">
