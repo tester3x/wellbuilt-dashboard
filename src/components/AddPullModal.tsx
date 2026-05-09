@@ -179,6 +179,10 @@ export function AddPullModal({
         requestType: 'pull',
         timezone: Intl.DateTimeFormat().resolvedOptions().timeZone,
         wellDown: pullWellDown,
+        // 5/8/2026 — explicit authority signal so the CF respects this
+        // dashboard-asserted wellDown value. Routine WB T pulls omit this
+        // flag and the CF preserves existing isDown for them.
+        wellDownIsAuthoritative: true,
       };
 
       await set(ref(db, `packets/incoming/${packetId}`), packet);

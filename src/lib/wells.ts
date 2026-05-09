@@ -1175,6 +1175,9 @@ export async function editPull(
     timestamp: new Date().toISOString(),
     source: 'dashboard',
     wellDown: wellDown || false,
+    // 5/8/2026 — explicit authority signal: a dashboard edit IS an
+    // authoritative statement about wellDown. CF respects this.
+    wellDownIsAuthoritative: true,
   };
 
   if (newDateTimeUTC) {

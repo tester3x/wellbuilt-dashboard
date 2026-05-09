@@ -1280,8 +1280,25 @@ export const processEditRequest = functionsV1.database
     // Strip seconds from display time (e.g. "4/9/2026, 2:40:00 PM" → "4/9/2026, 2:40 PM")
     const newDateTime = rawDateTime ? rawDateTime.replace(/:(\d{2})\s*(AM|PM)/i, ' $2') : '';
 
-    // Apply wellDown edit — use edited value if present, otherwise keep original
+    // Apply wellDown edit — use edited value if present, otherwise keep original.
+    // newWellDown is the value stamped onto the historical packet record
+    // (packets/processed/{originalPacketId}.wellDown) — what THIS edit asserts.
     const newWellDown = data.wellDown !== undefined ? (data.wellDown === true || data.wellDown === 'true') : (origPacket.wellDown || false);
+
+    // ─── wellDown authoritative-write protection (5/8/2026) ─────────────
+    // Edit packet ≠ Reactivate. Same rule as processIncomingPull: only
+    // edits with wellDownIsAuthoritative=true are allowed to flip the
+    // current wells/{wellName}/status/isDown. Non-authoritative edits
+    // (e.g., WB T edit packets that hardcode wellDown=false) preserve the
+    // existing isDown value while still updating the historical packet
+    // record. nextEditIsDown is what gets written to the live status path
+    // and broadcast onto outgoing response packets / WellStatus.
+    const editIsAuthoritative =
+      (data as any).wellDownIsAuthoritative === true &&
+      data.wellDown !== undefined;
+    const editExistingIsDownSnap = await db.ref(`wells/${wellName}/status/isDown`).once('value');
+    const editExistingIsDown = editExistingIsDownSnap.val() === true;
+    const nextEditIsDown = editIsAuthoritative ? newWellDown : editExistingIsDown;
 
     // No top level = non-production-tank edit. Update basic fields only, skip tank math.
     if (newTankTopInches <= 0) {
@@ -1299,7 +1316,7 @@ export const processEditRequest = functionsV1.database
         noLevel: true,
         wellDown: newWellDown,
       });
-      await db.ref(`wells/${wellName}/status/isDown`).set(newWellDown);
+      await db.ref(`wells/${wellName}/status/isDown`).set(nextEditIsDown);
       await snapshot.ref.remove();
       return null;
     }
@@ -1383,8 +1400,8 @@ export const processEditRequest = functionsV1.database
 
     await db.ref(`packets/processed/${originalPacketId}`).update(updates);
 
-    // Update well down status if this is the latest packet
-    await db.ref(`wells/${wellName}/status/isDown`).set(newWellDown);
+    // Update well down status if this is the latest packet (authority-gated)
+    await db.ref(`wells/${wellName}/status/isDown`).set(nextEditIsDown);
 
     // CASCADE: Recalculate flowRateDays on the NEXT packet after the edited one.
     // That packet's recovery was based on our old tankAfterInches — now stale.
@@ -1490,12 +1507,12 @@ export const processEditRequest = functionsV1.database
             lastPullBbls: newBblsTaken.toString(),
             lastPullDateTime: newDateTime || formatLocalDateTime(new Date(newDateTimeUTC)),
             lastPullDateTimeUTC: newDateTimeUTC,
-            timeTillPull: newWellDown ? 'Down' : (estTimeToPull || 'Calculating...'),
+            timeTillPull: nextEditIsDown ? 'Down' : (estTimeToPull || 'Calculating...'),
             nextPullTime: estDateTimePull ? formatLocalDateTime(new Date(estDateTimePull)) : 'Unknown',
             nextPullTimeUTC: estDateTimePull,
             isEdit: true,
             originalPacketId,
-            wellDown: newWellDown,
+            wellDown: nextEditIsDown,
             lastPullDriverId: origPacket.driverId || null,
             lastPullDriverName: origPacket.driverName || null,
             lastPullPacketId: originalPacketId,
@@ -1517,10 +1534,10 @@ export const processEditRequest = functionsV1.database
           lastPullBbls: newBblsTaken.toString(),
           lastPullDateTime: newDateTime || formatLocalDateTime(new Date(newDateTimeUTC)),
           lastPullDateTimeUTC: newDateTimeUTC,
-          timeTillPull: newWellDown ? 'Down' : (estTimeToPull || 'Calculating...'),
+          timeTillPull: nextEditIsDown ? 'Down' : (estTimeToPull || 'Calculating...'),
           nextPullTime: estDateTimePull ? formatLocalDateTime(new Date(estDateTimePull)) : 'Unknown',
           nextPullTimeUTC: estDateTimePull,
-          wellDown: newWellDown,
+          wellDown: nextEditIsDown,
           status: 'success',
           timestamp: responseTimestamp.toISOString(),
           timestampUTC: responseTimestamp.toISOString(),
@@ -1612,9 +1629,9 @@ export const processEditRequest = functionsV1.database
           bbls24hrs: Math.round((1 / afr) * tanks * 20) || 0,
           nextPullTime: (() => { const pullHeightIn = (pullBbls / 20 / tanks) * 12; const targetLvl = bottomInches + pullHeightIn; const recovNeeded = Math.max(0, targetLvl - newTankAfterInches); if (recovNeeded <= 0) return formatLocalDateTime(new Date(newDateTimeUTC)); const estDays = (recovNeeded / 12) * afr; const estDate = new Date(new Date(newDateTimeUTC).getTime() + estDays * 24 * 60 * 60 * 1000); return formatLocalDateTime(estDate); })(),
           nextPullTimeUTC: (() => { const pullHeightIn = (pullBbls / 20 / tanks) * 12; const targetLvl = bottomInches + pullHeightIn; const recovNeeded = Math.max(0, targetLvl - newTankAfterInches); if (recovNeeded <= 0) return newDateTimeUTC; const estDays = (recovNeeded / 12) * afr; return new Date(new Date(newDateTimeUTC).getTime() + estDays * 24 * 60 * 60 * 1000).toISOString(); })(),
-          timeTillPull: newWellDown ? 'Down' : (() => { const pullHeightIn = (pullBbls / 20 / tanks) * 12; const targetLvl = bottomInches + pullHeightIn; const recovNeeded = Math.max(0, targetLvl - newTankAfterInches); if (recovNeeded <= 0) return '0:00'; return daysToHMM((recovNeeded / 12) * afr); })(),
+          timeTillPull: nextEditIsDown ? 'Down' : (() => { const pullHeightIn = (pullBbls / 20 / tanks) * 12; const targetLvl = bottomInches + pullHeightIn; const recovNeeded = Math.max(0, targetLvl - newTankAfterInches); if (recovNeeded <= 0) return '0:00'; return daysToHMM((recovNeeded / 12) * afr); })(),
         },
-        isDown: newWellDown,
+        isDown: nextEditIsDown,
         updatedAt: new Date().toISOString(),
       };
       await db.ref(`wells/${wellName}/status`).set(editWellStatus);
