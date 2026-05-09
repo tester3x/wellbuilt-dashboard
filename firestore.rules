@@ -252,14 +252,15 @@ service cloud.firestore {
     // (acceptTransferRequest, resolveTransferRequest) which use Admin SDK
     // and bypass these rules entirely.
     //
-    // Minimal rule for field-test ship: any authenticated client can
-    // read+write. Tighter rules (fromDriverHash matching, write-action
-    // gating) deferred until the CFs handle accept/decline exclusively
-    // (currently sender cancel still goes client-side, see Phase 1
-    // cancelTransferRequest). Matches the existing permissive pattern
-    // used by /invoices, /tickets, /dispatches.
+    // WB T drivers do NOT use Firebase Auth — they have their own
+    // SHA-256 driver-hash app-auth system (CLAUDE.md "Two auth systems"),
+    // so request.auth is always null from WB T clients. This rule
+    // matches the existing permissive pattern used by /invoices, /tickets,
+    // /dispatches (`if true`). Tighter rules require migrating WB T to
+    // Firebase Auth or custom tokens — a much larger change deferred to
+    // future hardening.
     match /transfer_requests/{requestId} {
-      allow read, write: if request.auth != null;
+      allow read, write: if true;
     }
 
     // Everything else — deny (Cloud Functions use Admin SDK which bypasses rules)
