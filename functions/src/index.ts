@@ -886,9 +886,32 @@ export const processIncomingPull = functionsV1.database
       }
     }
 
+    // ─── wellDown authoritative-write protection (5/8/2026) ─────────────
+    // Pull ≠ Reactivate. Routine WB T pulls hardcode wellDown=false in the
+    // packet (utils/firebase.ts:2529, 2584); without this guard, every
+    // WB T pull clobbered an admin-marked-down well back to active. Field-
+    // confirmed Gabriel 7 5/7/2026: well marked down at 14:06 UTC, flipped
+    // back to active by Mike's 15:54 pull packet at the CF processedAt.
+    //
+    // Only an explicit authoritative signal (wellDownIsAuthoritative=true
+    // accompanied by a boolean wellDown field) is allowed to flip isDown.
+    // Non-authoritative packets — including all WB T pulls and any legacy
+    // client that doesn't set the authority flag — preserve the existing
+    // isDown value. Mark-down + (future) clear-down both come from
+    // dashboard with the authority flag set; field clients are non-
+    // authoritative by default.
+    const incomingHasAuthoritativeWellDown =
+      (data as any).wellDownIsAuthoritative === true &&
+      typeof (data as any).wellDown === 'boolean';
+    const existingIsDownSnap = await db.ref(`wells/${wellName}/status/isDown`).once('value');
+    const existingIsDown = existingIsDownSnap.val() === true;
+    const nextIsDown = incomingHasAuthoritativeWellDown
+      ? ((data as any).wellDown === true)
+      : existingIsDown;
+
     // Immediately update down/up status so the app reflects the change
     // before the heavy AFR/bbls calculations finish
-    await db.ref(`wells/${wellName}/status/isDown`).set(data.wellDown || false);
+    await db.ref(`wells/${wellName}/status/isDown`).set(nextIsDown);
 
     // Calculate all fields
     const tankTopInches = (parseFloat(String(data.tankLevelFeet)) || 0) * 12;
@@ -1039,7 +1062,7 @@ export const processIncomingPull = functionsV1.database
       currentLevel: inchesToFeetInches(currentLevelInches),
       flowRate: afr > 0 ? daysToHMMSS(afr) : 'Unknown',
       bbls24hrs,
-      timeTillPull: data.wellDown ? 'Down' : (estTimeToPull || 'Calculating...'),
+      timeTillPull: nextIsDown ? 'Down' : (estTimeToPull || 'Calculating...'),
       nextPullTime: estDateTimePull ? formatLocalDateTime(new Date(estDateTimePull)) : 'Unknown',
       nextPullTimeUTC: estDateTimePull,
       lastPullDateTime: data.dateTime || formatLocalDateTime(new Date(data.dateTimeUTC)),
@@ -1050,7 +1073,7 @@ export const processIncomingPull = functionsV1.database
       lastPullDriverId: data.driverId || null,
       lastPullDriverName: data.driverName || null,
       lastPullPacketId: packetId,
-      wellDown: data.wellDown || false,
+      wellDown: nextIsDown,
       status: 'success',
       timestamp: timestamp.toISOString(),
       timestampUTC: timestamp.toISOString(),
@@ -1166,9 +1189,9 @@ export const processIncomingPull = functionsV1.database
         bbls24hrs: parseInt(bbls24hrs) || 0,
         nextPullTime: estDateTimePull ? formatLocalDateTime(new Date(estDateTimePull)) : 'Unknown',
         nextPullTimeUTC: estDateTimePull || '',
-        timeTillPull: data.wellDown ? 'Down' : (estTimeToPull || 'Calculating...'),
+        timeTillPull: nextIsDown ? 'Down' : (estTimeToPull || 'Calculating...'),
       },
-      isDown: data.wellDown || false,
+      isDown: nextIsDown,
       updatedAt: new Date().toISOString(),
     };
 
