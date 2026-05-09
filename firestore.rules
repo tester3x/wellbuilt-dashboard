@@ -243,6 +243,25 @@ service cloud.firestore {
       allow write: if false;
     }
 
+    // Transfer requests — NEW transfer model (5/9/2026).
+    //
+    // Sender creates the doc + reads (banner / cancel UI).
+    // Receiver reads (TransferOfferModal listener) + sender direct-cancels
+    // via cancelTransferRequest helper (write).
+    // Receiver Accept/Decline goes through Cloud Functions
+    // (acceptTransferRequest, resolveTransferRequest) which use Admin SDK
+    // and bypass these rules entirely.
+    //
+    // Minimal rule for field-test ship: any authenticated client can
+    // read+write. Tighter rules (fromDriverHash matching, write-action
+    // gating) deferred until the CFs handle accept/decline exclusively
+    // (currently sender cancel still goes client-side, see Phase 1
+    // cancelTransferRequest). Matches the existing permissive pattern
+    // used by /invoices, /tickets, /dispatches.
+    match /transfer_requests/{requestId} {
+      allow read, write: if request.auth != null;
+    }
+
     // Everything else — deny (Cloud Functions use Admin SDK which bypasses rules)
     match /{document=**} {
       allow read, write: if false;
