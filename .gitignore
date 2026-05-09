@@ -38,6 +38,16 @@ yarn-error.log*
 
 # typescript
 *.tsbuildinfo
+
+# One-off audit / inspection / recovery scripts created ad-hoc against the
+# Firebase Admin SDK. Convention: prefix with `_` to mark as non-deploy
+# (Cloud Functions deploy ignores them anyway because they don't `export`
+# Cloud Function handlers, but this keeps them out of git history). Delete
+# after use or leave on disk — either way, they don't ship.
+functions/_*.js
+functions/_*.mjs
+functions/_*.ts
+functions/serviceAccountKey.json
 next-env.d.ts
 
 # Firebase functions
