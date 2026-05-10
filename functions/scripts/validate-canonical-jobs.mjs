@@ -116,13 +116,51 @@ async function checkTransfer(reqDoc) {
   };
 }
 
+// Real pull-packet keys are stamped YYYYMMDD_HHMMSS_WellName_suffix
+// (e.g. 20260510_012451_Gabriel1_qfrcvk). Other entries can land in
+// packets/processed too — notably delete_* / edit_* / fault records — and
+// since 'd' (0x64) and 'e' (0x65) sort AFTER digits ('0'-'9' = 0x30-0x39),
+// a naive limitToLast on the raw ref is biased toward those non-pull keys.
+// We restrict the query to digit-prefixed keys server-side.
+const REAL_PACKET_KEY_RE = /^\d{8}_\d{6}_/;
+
+async function fetchRecentRealPackets(limit) {
+  // Strategy: fetch the full packets/processed listing, filter to real
+  // pull-packet keys, sort by key descending (chronological), take top N.
+  //
+  // Why not orderByKey().startAt('0').endAt(':').limitToLast(N)?
+  //   Empirically returns only 1 entry against this dataset — the RTDB
+  //   range+limitToLast combination behaves unreliably across SDK
+  //   versions and dataset shapes.
+  //
+  // Why not orderByChild('processedAt').limitToLast(N)?
+  //   delete_* and edit_* records also carry processedAt, and recent
+  //   delete/edit activity dominates the top-N window, masking real
+  //   pull packets.
+  //
+  // Cost: 3000–10000 entries scanned client-side. Trivial for an admin
+  // script and acceptable for the read-only validation use case.
+  const snap = await rtdb.ref('packets/processed').once('value');
+
+  const realEntries = [];
+  snap.forEach((c) => {
+    if (REAL_PACKET_KEY_RE.test(c.key)) {
+      realEntries.push([c.key, c.val()]);
+    }
+  });
+
+  // Most-recent-first by key (YYYYMMDD_HHMMSS prefix sorts chronologically).
+  realEntries.sort((a, b) => (b[0] < a[0] ? -1 : b[0] > a[0] ? 1 : 0));
+
+  return realEntries.slice(0, limit);
+}
+
 async function main() {
   const rows = [];
 
-  // Recent packets — sorted by RTDB key descending (key contains timestamp prefix)
-  const packetsSnap = await rtdb.ref('packets/processed').limitToLast(LIMIT).once('value');
-  const packetEntries = [];
-  packetsSnap.forEach((c) => packetEntries.push([c.key, c.val()]));
+  // Recent real pull packets — see fetchRecentRealPackets header for why
+  // limitToLast on the raw ref is biased toward delete_* keys.
+  const packetEntries = await fetchRecentRealPackets(LIMIT);
   for (const [pid, pkt] of packetEntries) {
     rows.push(await checkPacket(pid, pkt || {}));
   }
