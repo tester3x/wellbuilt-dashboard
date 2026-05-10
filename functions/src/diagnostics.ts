@@ -36,6 +36,7 @@ const ALLOWED_AREAS = new Set([
   'auth',
   'general',
   'transfer',
+  'canonical',
 ]);
 const ALLOWED_RESULTS = new Set(['ok', 'skipped', 'error']);
 

@@ -3,6 +3,8 @@ import * as functionsV2 from 'firebase-functions/v2/scheduler';
 import * as httpsV2 from 'firebase-functions/v2/https';
 import * as admin from 'firebase-admin';
 import Anthropic from '@anthropic-ai/sdk';
+import { upsertCanonicalJob } from './canonical-jobs/upsertCanonicalJob';
+import { logCanonicalDiag } from './canonical-jobs/diag';
 
 admin.initializeApp();
 const db = admin.database();
@@ -1203,6 +1205,92 @@ export const processIncomingPull = functionsV1.database
     // Write production log (AFR + window + overnight bbls/day for comparison)
     const afrBblsDay = afr > 0 ? Math.round((1 / afr) * bblPerFoot) : 0;
     await writeProductionLog(wellName, pullTimeMs, afrBblsDay, windowBblsDay, overnightBblsDay);
+
+    // ── canonical_jobs (Phase 1 additive linking — never blocks packet flow) ──
+    // Best-effort upsert of canonical_jobs/{packetId}. If this fails, packet
+    // processing still completes — canonical_jobs has no readers in Phase 1.
+    try {
+      let driverCompanyId: string | null = null;
+      if (data.driverId) {
+        try {
+          const driverSnap = await db
+            .ref(`drivers/approved/${data.driverId}/companyId`)
+            .once('value');
+          if (driverSnap.exists()) {
+            driverCompanyId = String(driverSnap.val());
+          }
+        } catch {
+          // best-effort only
+        }
+      }
+
+      const bblsNum =
+        typeof data.bblsTaken === 'number'
+          ? data.bblsTaken
+          : parseFloat(String(data.bblsTaken)) || null;
+      const tankLevelFeetNum = parseFloat(String(data.tankLevelFeet)) || null;
+      const tankAfterFeetNum = tankAfterInches > 0 ? tankAfterInches / 12 : null;
+
+      const result = await upsertCanonicalJob(
+        {
+          packetId,
+          companyId: driverCompanyId,
+          driverHash: data.driverId ?? null,
+          driverName: data.driverName ?? null,
+          wellName,
+          wellConfigKey: wellName,
+          bblsTaken: bblsNum,
+          tankLevelFeet: tankLevelFeetNum,
+          tankAfterFeet: tankAfterFeetNum,
+          dateTimeUTC: data.dateTimeUTC ?? null,
+          source: 'wbm',
+        },
+        {
+          type: 'packet_sent',
+          actorDriverHash: data.driverId ?? null,
+          actorSource: 'wbm',
+          extra: {
+            packetId,
+            wellName: wellName ?? null,
+            bbls: bblsNum,
+          },
+        },
+      );
+
+      if (result.missingCompanyId) {
+        await logCanonicalDiag({
+          level: 'warn',
+          source: 'cf',
+          event: 'canonical.job_missing_companyId',
+          payload: {
+            canonicalJobId: result.canonicalJobId,
+            packetId,
+            wellName: wellName ?? null,
+            callsite: 'processIncomingPull',
+          },
+        });
+      }
+    } catch (err) {
+      console.warn(
+        '[canonical_jobs] processIncomingPull upsert failed:',
+        (err as Error)?.message || err,
+      );
+      try {
+        await logCanonicalDiag({
+          level: 'error',
+          source: 'cf',
+          event: 'canonical.job_upsert_failed',
+          payload: {
+            packetId,
+            wellName: wellName ?? null,
+            message: String((err as Error)?.message || err).slice(0, 200),
+            callsite: 'processIncomingPull',
+          },
+        });
+      } catch {
+        // never throw from a logger
+      }
+    }
 
     // Delete from incoming/
     await snapshot.ref.remove();

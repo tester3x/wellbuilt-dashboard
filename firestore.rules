@@ -243,6 +243,18 @@ service cloud.firestore {
       allow write: if false;
     }
 
+    // canonical_jobs — Phase 1 additive linking layer (5/10/2026).
+    //
+    // Bridge record connecting packetId ↔ ticketDocId ↔ ticketNumber ↔
+    // invoiceDocId ↔ dispatchId ↔ transferRequestId ↔ company/driver/well.
+    // All writes flow through Cloud Functions (Admin SDK bypasses rules);
+    // clients have no business writing here. Reads gated to authenticated
+    // dashboard users only — same pattern as wb_diagnostics.
+    match /canonical_jobs/{docId} {
+      allow read: if request.auth != null;
+      allow write: if false;
+    }
+
     // Transfer requests — NEW transfer model (5/9/2026).
     //
     // Sender creates the doc + reads (banner / cancel UI).

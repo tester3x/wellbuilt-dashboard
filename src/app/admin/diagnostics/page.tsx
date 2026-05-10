@@ -49,7 +49,8 @@ type DiagArea =
   | 'shift'
   | 'auth'
   | 'general'
-  | 'transfer';
+  | 'transfer'
+  | 'canonical';
 type DiagResult = 'ok' | 'skipped' | 'error';
 
 interface DiagRow {
@@ -84,6 +85,7 @@ const APP_OPTIONS: Array<{ value: '' | DiagApp; label: string }> = [
 const AREA_OPTIONS: Array<{ value: '' | DiagArea; label: string }> = [
   { value: '', label: 'All areas' },
   { value: 'transfer', label: 'Transfer' },
+  { value: 'canonical', label: 'Canonical' },
   { value: 'jsa', label: 'JSA' },
   { value: 'logout', label: 'Logout' },
   { value: 'tickets', label: 'Tickets' },
