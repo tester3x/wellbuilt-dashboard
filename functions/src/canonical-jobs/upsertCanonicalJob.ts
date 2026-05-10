@@ -267,7 +267,7 @@ export async function upsertCanonicalJob(
     }
 
     patch.events = admin.firestore.FieldValue.arrayUnion(eventRecord);
-    tx.update(ref, patch);
+    tx.update(ref, patch as FirebaseFirestore.UpdateData<FirebaseFirestore.DocumentData>);
   });
 
   return { canonicalJobId: docId, created, missingCompanyId, isAutoId };
@@ -391,7 +391,7 @@ export async function upsertOnTransferAccept(
     ) {
       patch.companyId = context.companyId;
     }
-    tx.update(ref, patch);
+    tx.update(ref, patch as FirebaseFirestore.UpdateData<FirebaseFirestore.DocumentData>);
   });
 
   return { canonicalJobId: packetId, missingCompanyId, missingExisting };
