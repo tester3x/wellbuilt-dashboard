@@ -1206,12 +1206,32 @@ export const processIncomingPull = functionsV1.database
     const afrBblsDay = afr > 0 ? Math.round((1 / afr) * bblPerFoot) : 0;
     await writeProductionLog(wellName, pullTimeMs, afrBblsDay, windowBblsDay, overnightBblsDay);
 
-    // ── canonical_jobs (Phase 1 additive linking — never blocks packet flow) ──
-    // Best-effort upsert of canonical_jobs/{packetId}. If this fails, packet
-    // processing still completes — canonical_jobs has no readers in Phase 1.
+    // ── canonical_jobs + Phase 1.2 server-side back-patch ─────────────────
+    // Best-effort. Failure here never blocks packet processing — canonical_jobs
+    // has no readers in Phase 1, and the Firestore back-patches are advisory
+    // (client also writes invoice.packetId locally as belt-and-suspenders).
+    //
+    // Phase 1.2 adds: read context fields (invoiceDocId, dispatchId, companyId,
+    // invoicingMode, originAppContext) from the packet; pass into the canonical
+    // upsert; back-patch invoices/{invoiceDocId} + dispatches/{dispatchId}.
     try {
-      let driverCompanyId: string | null = null;
-      if (data.driverId) {
+      // Phase 1.2 — pull context fields stamped by WB T client
+      // (sendWbMobileTankPacket / submitTicket relay). All optional —
+      // WB M-originated packets won't have these.
+      const ctxInvoiceDocId =
+        typeof (data as any).invoiceDocId === 'string' ? (data as any).invoiceDocId : null;
+      const ctxDispatchId =
+        typeof (data as any).dispatchId === 'string' ? (data as any).dispatchId : null;
+      const ctxCompanyId =
+        typeof (data as any).companyId === 'string' ? (data as any).companyId : null;
+      const ctxInvoicingMode =
+        typeof (data as any).invoicingMode === 'string' ? (data as any).invoicingMode : null;
+      const ctxOriginAppContext =
+        (data as any).originAppContext === 'wbt' ? 'wbt' : 'wbm';
+
+      // Resolve companyId — prefer packet-supplied, fall back to driver lookup.
+      let driverCompanyId: string | null = ctxCompanyId;
+      if (!driverCompanyId && data.driverId) {
         try {
           const driverSnap = await db
             .ref(`drivers/approved/${data.driverId}/companyId`)
@@ -1234,6 +1254,9 @@ export const processIncomingPull = functionsV1.database
       const result = await upsertCanonicalJob(
         {
           packetId,
+          // Phase 1.2 — link invoice/dispatch at create time when context present
+          invoiceDocId: ctxInvoiceDocId,
+          dispatchId: ctxDispatchId,
           companyId: driverCompanyId,
           driverHash: data.driverId ?? null,
           driverName: data.driverName ?? null,
@@ -1243,16 +1266,21 @@ export const processIncomingPull = functionsV1.database
           tankLevelFeet: tankLevelFeetNum,
           tankAfterFeet: tankAfterFeetNum,
           dateTimeUTC: data.dateTimeUTC ?? null,
-          source: 'wbm',
+          // Source = origin app context (wbt vs wbm). Defaults wbm for legacy
+          // WB M-direct packets that don't carry the context fields.
+          source: ctxOriginAppContext,
         },
         {
           type: 'packet_sent',
           actorDriverHash: data.driverId ?? null,
-          actorSource: 'wbm',
+          actorSource: ctxOriginAppContext,
           extra: {
             packetId,
             wellName: wellName ?? null,
             bbls: bblsNum,
+            invoiceDocId: ctxInvoiceDocId,
+            dispatchId: ctxDispatchId,
+            invoicingMode: ctxInvoicingMode,
           },
         },
       );
@@ -1269,6 +1297,86 @@ export const processIncomingPull = functionsV1.database
             callsite: 'processIncomingPull',
           },
         });
+      }
+
+      // ── Phase 1.2 back-patch: invoices/{invoiceDocId} ─────────────────
+      if (ctxInvoiceDocId) {
+        try {
+          const fs = admin.firestore();
+          await fs.collection('invoices').doc(ctxInvoiceDocId).update({
+            packetId,
+            canonicalJobId: result.canonicalJobId,
+            packetProcessedAt: admin.firestore.FieldValue.serverTimestamp(),
+            packetDateTimeUTC: data.dateTimeUTC ?? null,
+            packetSnapshot: {
+              bblsTaken: bblsNum,
+              tankLevelFeet: tankLevelFeetNum,
+              wellName: wellName ?? null,
+            },
+          });
+          await logCanonicalDiag({
+            level: 'info',
+            source: 'cf',
+            event: 'canonical.invoice_patched',
+            payload: {
+              invoiceDocId: ctxInvoiceDocId,
+              packetId,
+              canonicalJobId: result.canonicalJobId,
+              callsite: 'processIncomingPull',
+            },
+          });
+        } catch (invErr) {
+          // Most common cause: invoice was deleted between depart and
+          // packet processing (driver cancelled the job). Non-fatal.
+          await logCanonicalDiag({
+            level: 'warn',
+            source: 'cf',
+            event: 'canonical.invoice_patch_skipped',
+            payload: {
+              invoiceDocId: ctxInvoiceDocId,
+              packetId,
+              message: String((invErr as Error)?.message || invErr).slice(0, 200),
+              callsite: 'processIncomingPull',
+            },
+          });
+        }
+      }
+
+      // ── Phase 1.2 back-patch: dispatches/{dispatchId} ─────────────────
+      if (ctxDispatchId) {
+        try {
+          const fs = admin.firestore();
+          await fs.collection('dispatches').doc(ctxDispatchId).update({
+            lastPullPacketId: packetId,
+            lastPullPacketAt: admin.firestore.FieldValue.serverTimestamp(),
+            canonicalJobId: result.canonicalJobId,
+            // Multi-load history — arrayUnion is idempotent on reprocess.
+            pullPacketIds: admin.firestore.FieldValue.arrayUnion(packetId),
+          });
+          await logCanonicalDiag({
+            level: 'info',
+            source: 'cf',
+            event: 'canonical.dispatch_patched',
+            payload: {
+              dispatchId: ctxDispatchId,
+              packetId,
+              canonicalJobId: result.canonicalJobId,
+              callsite: 'processIncomingPull',
+            },
+          });
+        } catch (dispErr) {
+          await logCanonicalDiag({
+            level: 'warn',
+            source: 'cf',
+            event: 'canonical.dispatch_patch_skipped',
+            payload: {
+              dispatchId: ctxDispatchId,
+              packetId,
+              message: String((dispErr as Error)?.message || dispErr).slice(0, 200),
+              callsite: 'processIncomingPull',
+            },
+          });
+        }
       }
     } catch (err) {
       console.warn(
