@@ -4007,3 +4007,21 @@ export { demoClassifyLocations } from './truth/demoClassifyLocations';
 // validation, and rationale.
 // ============================================================
 export { writeDiagnosticLog } from './diagnostics';
+
+// ============================================================
+// TRANSFER TICKET MATERIALIZATION — 2026-05-12
+// Server-side finalization for transferred-closed jobs. When a
+// receiver-side transferred invoice flips to status:'closed', this
+// trigger materializes a canonical tickets/{N} doc so dashboard /
+// billing / payroll see the row through the same path as normal
+// submitTicket-created docs. WB T receiver-close path uses
+// EDIT-packet (RTDB only) and does not call submitTicket — without
+// this materializer, transferred jobs are invisible to the WB
+// Tickets tab. Backfill callable handles already-closed invoices
+// that pre-date this trigger.
+// See transfer-ticket-materializer.ts.
+// ============================================================
+export {
+  materializeTransferredTicket,
+  backfillTransferredTickets,
+} from './transfer-ticket-materializer';
