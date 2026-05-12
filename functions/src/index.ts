@@ -4042,3 +4042,21 @@ export {
   materializerDriftHeartbeat,
   runMaterializerDriftScanOnDemand,
 } from './materializer-drift-heartbeat';
+
+// ============================================================
+// TRANSFER REQUEST TTL EXPIRY — 2026-05-12
+// Scheduled (every 15 min) cron that flips pending transfer_requests
+// to status='expired' when ttlExpiresAt has passed. Mirrors the
+// resolveTransferRequest callable shape but with terminalBy='system'
+// and terminalReason='ttl_expired'. Atomically releases the sender's
+// invoice activeTransferRequestId + lockedForTransfer when THIS request
+// was still the active lock. Appends a 'transfer_expired' event to
+// canonical_jobs (best-effort, non-blocking). TTL value comes from
+// the document's ttlExpiresAt (stamped at create time in WB T;
+// currently 4 hours per TRANSFER_REQUEST_TTL_HOURS).
+// See transfer-request-expiry.ts.
+// ============================================================
+export {
+  transferRequestExpiry,
+  runTransferRequestExpiryOnDemand,
+} from './transfer-request-expiry';
