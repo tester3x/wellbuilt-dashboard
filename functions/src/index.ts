@@ -4060,3 +4060,20 @@ export {
   transferRequestExpiry,
   runTransferRequestExpiryOnDemand,
 } from './transfer-request-expiry';
+
+// ============================================================
+// HANDOFF ORPHAN RECOVERY — 2026-05-12
+// Admin callable for invoices stuck in en_route_handoff or
+// on_site_handoff. Two actions: 'void' (mark cancelled) or
+// 'restore_to_sender' (roll ownership back to original sender).
+// Optional 'report' action returns a read-only snapshot. Auth
+// gated to manageDrivers capability. Companion listStuckHandoffs
+// callable returns candidates for a future dashboard "Stuck
+// Handoffs" panel (viewAdmin capability).
+// Replaces ad-hoc Firestore scripts like _migrate_stuck_*.js.
+// See handoff-recovery.ts.
+// ============================================================
+export {
+  recoverHandoffOrphan,
+  listStuckHandoffs,
+} from './handoff-recovery';
