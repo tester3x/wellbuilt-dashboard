@@ -240,7 +240,91 @@ export async function materializeTransferredTicketForInvoice(
   const ticketNumberStr = String(pendingTicketNumber);
   const materializedDocId = `transfer_${invoiceId}`;
 
-  // Idempotency: skip if already materialized
+  // ── Dedup gate 1: existing submitTicket-created doc ────────────────────
+  // 2026-05-12 — 18453 multi-hop transfer double-BBL bug.
+  //
+  // Scenario: TabletS10 → MikeS24 → TabletS10 (boomerang). When the
+  // original sender receives its OWN job back via transfer, the
+  // transferSourceDocId gate in TicketModule.tsx:838 sometimes fails to
+  // fire at receiver-close (stale AsyncStorage state from when the
+  // sender originally owned this invoice). submitTicket runs, creates
+  // tickets/{auto-id}, linkTicket adds 100 to invoice.totalBBL — which
+  // was already 100 from the receiver-hydrate — bumping it to 200.
+  // Then THIS trigger fires (because Firestore invoice still has
+  // transferSourceDocId + status=closed) and materializes a SECOND
+  // ticket doc with bbls=200 (sourced from the inflated invoice.totalBBL).
+  //
+  // Net: two tickets/* docs with same ticketNumber. Billing/payroll
+  // read the materialized one (bbls=200) → drivers paid 2× for one
+  // physical load. This violates the canonical rule that "transfers
+  // change custody, transfers must NOT add BBLs."
+  //
+  // Fix: if invoice.tickets[] already contains pendingTicketNumber,
+  // submitTicket already created a ticket for this invoice. Skip
+  // materialization. Back-patch canonical_jobs.ticketDocId to the
+  // existing doc (so downstream queries still resolve). Idempotent.
+  if (Array.isArray(data.tickets) && data.tickets.includes(ticketNumberStr)) {
+    let existingDocId: string | null = null;
+    if (Array.isArray(data.ticketSummaries)) {
+      // Prefer the non-materialized summary (real submitTicket doc).
+      const realSummary = data.ticketSummaries.find(
+        (ts: { ticketNumber?: string; docId?: string }) =>
+          String(ts?.ticketNumber) === ticketNumberStr &&
+          ts?.docId &&
+          !ts.docId.startsWith('transfer_'),
+      );
+      if (realSummary?.docId) existingDocId = realSummary.docId;
+      // Fallback: any summary matching ticketNumber
+      if (!existingDocId) {
+        const anySummary = data.ticketSummaries.find(
+          (ts: { ticketNumber?: string; docId?: string }) =>
+            String(ts?.ticketNumber) === ticketNumberStr && ts?.docId,
+        );
+        if (anySummary?.docId) existingDocId = anySummary.docId;
+      }
+    }
+    const packetIdForLink: string | null = (data.packetId as string | null)
+      || (data.canonicalJobId as string | null)
+      || null;
+    if (existingDocId && packetIdForLink) {
+      try {
+        const now = admin.firestore.Timestamp.now();
+        await db.collection('canonical_jobs').doc(packetIdForLink).update({
+          ticketDocId: existingDocId,
+          ticketNumber: ticketNumberStr,
+          updatedAt: now,
+          events: admin.firestore.FieldValue.arrayUnion({
+            type: 'transferred_ticket_dedup_linked',
+            at: now,
+            actorSource: 'cf',
+            actorDriverHash: (data.driverHash as string | null) || null,
+            ticketDocId: existingDocId,
+            ticketNumber: ticketNumberStr,
+            reason: 'existing submitTicket-created doc found; dedup gate prevented duplicate materialization',
+          }),
+        });
+      } catch (cjErr: unknown) {
+        console.warn(
+          '[materializeTransferredTicket] canonical_jobs dedup patch failed (non-fatal):',
+          cjErr instanceof Error ? cjErr.message : String(cjErr),
+        );
+      }
+    }
+    console.log(
+      `[materializeTransferredTicket] dedup gate hit for invoice=${invoiceId} ` +
+      `ticketNumber=${ticketNumberStr} — existing ticket=${existingDocId || '(unknown docId)'}`,
+    );
+    return {
+      materialized: false,
+      skipReason: 'existing_ticket_in_invoice_tickets_array',
+      docId: existingDocId || undefined,
+      ticketNumber: ticketNumberStr,
+    };
+  }
+
+  // ── Dedup gate 2: existing materialized doc ────────────────────────────
+  // Original idempotency check. Catches replay of the SAME materializer
+  // (e.g. trigger re-fires during the follow-up invoice.update arrayUnion).
   const existing = await db.collection('tickets').doc(materializedDocId).get();
   if (existing.exists) {
     return { materialized: false, skipReason: 'already_materialized', docId: materializedDocId, ticketNumber: ticketNumberStr };
