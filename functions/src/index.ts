@@ -4025,3 +4025,20 @@ export {
   materializeTransferredTicket,
   backfillTransferredTickets,
 } from './transfer-ticket-materializer';
+
+// ============================================================
+// MATERIALIZER DRIFT HEARTBEAT — 2026-05-12
+// Scheduled (daily 03:15 Central) scan that detects when the
+// materializeTransferredTicket trigger has silently failed to
+// produce a tickets/{N} doc / invoice.tickets[] entry /
+// canonical_jobs.ticketDocId link for a closed transferred invoice.
+// Report-only — emits wb_diagnostics rows + writes a per-day
+// report doc under materializer_drift_reports/{YYYY-MM-DD}. Heal
+// action requires explicit admin invocation of
+// backfillTransferredTickets with the reported invoiceIds.
+// See materializer-drift-heartbeat.ts.
+// ============================================================
+export {
+  materializerDriftHeartbeat,
+  runMaterializerDriftScanOnDemand,
+} from './materializer-drift-heartbeat';
