@@ -92,13 +92,23 @@ async function buildMaterializedTicket(
   const formSnapshot = (invoiceData.formSnapshot as Record<string, string> | null) || {};
   const preTransferState = (invoiceData.preTransferState as Record<string, unknown> | null) || {};
 
-  const wellName = (invoiceData.wellName as string | null)
-    || (canonical?.wellName as string | null)
+  // Well name resolution — prefer LONG form (NDIC well name) over SHORT form (WB M).
+  // The receiver's form-snapshot carries the long form (set by the form's NDIC
+  // autocomplete during the original receiver session). invoice.wellName is the
+  // short form WB M uses ("Gabriel 1"). Normal submitTicket-created tickets use
+  // long form for both wellName and location fields (see 18448 reference).
+  // Priority: formSnapshot.location > formSnapshot.wellName > invoiceData.wellLocation > invoiceData.wellName > canonical.wellName.
+  // For ticket doc fields: wellName + location both use the long form
+  // (matches normal submitTicket convention seen on 18448 reference doc).
+  const wellName = (formSnapshot.location as string | null)
     || (formSnapshot.wellName as string | null)
+    || (invoiceData.wellLocation as string | null)
+    || (invoiceData.wellName as string | null)
+    || (canonical?.wellName as string | null)
     || '';
   const hauledTo = (invoiceData.hauledTo as string | null)
-    || (canonical?.hauledTo as string | null)
     || (formSnapshot.hauledTo as string | null)
+    || (canonical?.hauledTo as string | null)
     || '';
 
   const driverName = (invoiceData.driver as string | null)
