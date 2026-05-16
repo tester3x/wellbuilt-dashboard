@@ -138,13 +138,49 @@ async function buildMaterializedTicket(
     // ─ Well / location ─
     wellName,
     location: wellName,
-    operator: invoiceData.operator || null,
+    // 2026-05-15 forensic parity — receiver-materialized tickets were missing
+    // operator/company/apiNo/legal/county/gps/notes/sourceName even though all of
+    // those fields exist on the source invoice's formSnapshot. Source priority
+    // per spec: invoice.formSnapshot → invoice top-level → null. Restores parity
+    // with the normal close-path ticket schema so the dashboard "Company" column
+    // and downstream renderers see transferred tickets identically.
+    operator: (formSnapshot.operator as string)
+      || (formSnapshot.operatorName as string)
+      || (formSnapshot.fieldOperator as string)
+      || invoiceData.operator
+      || null,
+    company: (formSnapshot.company as string)
+      || (formSnapshot.fieldOperator as string)
+      || (formSnapshot.operatorName as string)
+      || (invoiceData.company as string)
+      || invoiceData.operator
+      || null,
+    sourceName: (formSnapshot.sourceName as string)
+      || (formSnapshot.location as string)
+      || wellName
+      || null,
+    apiNo: (formSnapshot.apiNo as string) || (invoiceData.apiNo as string) || null,
+    legalDesc: (formSnapshot.legalDesc as string) || (invoiceData.legalDesc as string) || null,
+    county: (formSnapshot.county as string) || (invoiceData.county as string) || null,
+    gpsLat: (formSnapshot.gpsLat as string) || (invoiceData.gpsLat as string) || null,
+    gpsLng: (formSnapshot.gpsLng as string) || (invoiceData.gpsLng as string) || null,
 
     // ─ Disposal ─
     hauledTo,
     disposal: hauledTo,
     hauledToLat: invoiceData.hauledToLat ?? null,
     hauledToLng: invoiceData.hauledToLng ?? null,
+    hauledToApiNo: (formSnapshot.hauledToApiNo as string)
+      || (invoiceData.hauledToApiNo as string)
+      || null,
+    hauledToCounty: (formSnapshot.hauledToCounty as string)
+      || (invoiceData.hauledToCounty as string)
+      || null,
+    hauledToLegalDesc: (formSnapshot.hauledToLegalDesc as string)
+      || (invoiceData.hauledToLegalDesc as string)
+      || null,
+    // Notes — formSnapshot first, then invoice fallback, then empty.
+    notes: (formSnapshot.notes as string) || (invoiceData.notes as string) || '',
 
     // ─ Driver (receiver) ─
     driver: driverName,
