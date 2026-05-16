@@ -120,8 +120,33 @@ async function buildMaterializedTicket(
     || (transferReq?.toDriverHash as string | null)
     || null;
 
-  const bblsNum = (invoiceData.totalBBL as number | undefined)
-    ?? (canonical?.bblsTaken as number | undefined)
+  // 2026-05-15 forensic — receiver-close was emitting STALE bbls/qty.
+  // Gabriel 2 case (ticket 18465): sender edited 140 → 120 before tapping
+  // Transfer. formSnapshot.bbls = "120" and transfer_request.totalBBL = 120
+  // both captured the edited value, but invoice.totalBBL stayed at 140 (the
+  // accept-time snapshot). Materializer read invoice.totalBBL → emitted
+  // ticket.bbls = "140". top/bottom were correct because they already
+  // sourced from formSnapshot.
+  //
+  // Priority (formSnapshot is the only path the pre-transfer edit reliably
+  // writes to; transfer_request.totalBBL is the same value captured one hop
+  // downstream; invoice.totalBBL is the stale snapshot; canonical.bblsTaken
+  // is the WB M pull packet from depart-pickup):
+  //   1. invoice.formSnapshot.bbls  — edited final value
+  //   2. transfer_request.totalBBL  — same edited value captured at xfer create
+  //   3. invoice.totalBBL           — stale invoice-level snapshot
+  //   4. canonical.bblsTaken        — WB M pull packet
+  //   5. 0
+  const parseNumericBbls = (v: unknown): number | undefined => {
+    if (v == null) return undefined;
+    if (typeof v === 'number' && Number.isFinite(v)) return v;
+    const n = parseFloat(String(v).replace(/[^0-9.\-]/g, ''));
+    return Number.isFinite(n) ? n : undefined;
+  };
+  const bblsNum = parseNumericBbls(formSnapshot.bbls)
+    ?? parseNumericBbls(transferReq?.totalBBL)
+    ?? parseNumericBbls(invoiceData.totalBBL)
+    ?? parseNumericBbls(canonical?.bblsTaken)
     ?? 0;
 
   const doc: Record<string, unknown> = {
@@ -402,6 +427,10 @@ export async function materializeTransferredTicketForInvoice(
 
   // Update invoice with tickets[] + ticketSummaries[] so billing/payroll can anchor.
   // arrayUnion dedups by deep equality — safe to retry.
+  // 2026-05-15 — qty/location MUST match the ticket doc we just wrote (otherwise
+  // dashboard ticket.bbls and invoice.ticketSummaries.qty disagree). Read from
+  // the built doc instead of re-deriving from stale invoice.totalBBL / short-form
+  // wellName.
   try {
     await db.collection('invoices').doc(invoiceId).update({
       tickets: admin.firestore.FieldValue.arrayUnion(ticketNumberStr),
@@ -409,8 +438,8 @@ export async function materializeTransferredTicketForInvoice(
         ticketNumber: ticketNumberStr,
         docId: materializedDocId,
         complete: true,
-        location: data.wellName || '',
-        qty: String(data.totalBBL || 0),
+        location: (ticketDoc.location as string) || data.wellName || '',
+        qty: (ticketDoc.qty as string) || String(data.totalBBL || 0),
       }),
     });
   } catch (invErr: unknown) {
