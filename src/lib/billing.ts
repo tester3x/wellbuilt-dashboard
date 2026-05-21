@@ -302,8 +302,10 @@ export async function fetchBillingData(
 
   snapshot.docs.forEach(docSnap => {
     const d = docSnap.data();
+    // 5/20 (B2) — Also skip 'cancelled' and 'void' so terminalized
+    // cancel-orphans don't surface as $0/0-BBL billing rows.
     const status = d.status || 'open';
-    if (status === 'open') return;
+    if (status === 'open' || status === 'cancelled' || status === 'void') return;
 
     const operator = d.operator || '';
     if (!operator) return;

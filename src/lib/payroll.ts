@@ -297,8 +297,11 @@ export async function fetchPayrollInvoices(
     const d = docSnap.data();
 
     // Skip open/in-progress invoices — only count closed+
+    // 5/20 (B2) — Also skip 'cancelled' and 'void' so terminalized
+    // cancel-orphans (FlowController.cancelJob writes status='cancelled')
+    // don't surface as blank/moneyless payroll rows.
     const status = d.status || 'open';
-    if (status === 'open') return;
+    if (status === 'open' || status === 'cancelled' || status === 'void') return;
 
     const rawDriverName = d.driver || 'Unknown';
     // Group by legal name so all logins for the same person merge into one row
