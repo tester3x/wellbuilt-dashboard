@@ -101,6 +101,11 @@ interface DispatchJob {
   // Split ticket fields
   splitGroupId?: string;  // Links split ticket jobs (A→B→C chain)
   splitSequence?: number;  // 1=first job, 2=second, etc.
+  splitTotal?: number;     // Total legs in the chain — maintained by dashboard
+                           // creation + dashboard:addSplitLeg CF when a field-
+                           // added leg increments the chain.
+  bbls?: number;           // Per-leg planned BBLs (optional). Used as the
+                           // pre-fill for the driver's form on accept.
   // Heavy water flag
   isHeavyWater?: boolean;  // 10+ lb heavy water — separate billing rate
 }
@@ -375,6 +380,16 @@ function DispatchPageInner() {
   const [swSubmitting, setSwSubmitting] = useState(false);
   const [swSplitTicket, setSwSplitTicket] = useState(false);
   const [swHeavyWater, setSwHeavyWater] = useState(false);
+  // Pre-dispatch extra split legs (C/D/E…). Companion to swSplitTicket:
+  // when the dispatcher needs more than the implicit 2-leg chain, they
+  // click "+ Add Leg" and fill a compact inline editor. Each saved entry
+  // becomes one additional dispatch doc on submit, sharing the same
+  // splitGroupId with monotonic splitSequence (3, 4, 5…) and splitTotal
+  // updated everywhere atomically. NOT Multi-Haul. Cleared when
+  // swSplitTicket toggles off or after a successful submit.
+  type ExtraSplitLeg = { id: string; disposal: string; bbls: string; notes: string };
+  const [swExtraSplitLegs, setSwExtraSplitLegs] = useState<ExtraSplitLeg[]>([]);
+  const [swExtraLegDraft, setSwExtraLegDraft] = useState<{ disposal: string; bbls: string; notes: string } | null>(null);
   const [swDriverETAs, setSwDriverETAs] = useState<Map<string, DriverEtaResult>>(new Map());
   const [swEtaLoading, setSwEtaLoading] = useState(false);
 
@@ -1018,8 +1033,15 @@ function DispatchPageInner() {
       const matchedWell = wells.find(w => w.wellName === swWellName.trim() || w.ndicName === swWellName.trim());
       const swNdicName = matchedWell?.ndicName || swWellName.trim();
 
-      // Split ticket: generate shared splitGroupId for linked jobs
+      // Split ticket: generate shared splitGroupId for linked jobs.
+      // splitTotal = 1 (base) + 1 (leg B from swDropoff) + N (extras C/D/E…).
+      // All siblings carry the same splitTotal so the WB T client can show
+      // "Split N of M" badges + the addSplitLeg CF can extend the chain
+      // later without recomputing.
       const splitGroupId = swSplitTicket ? `split_${Date.now()}_${Math.random().toString(36).slice(2, 8)}` : undefined;
+      const splitTotal = swSplitTicket
+        ? 2 + swExtraSplitLegs.length
+        : undefined;
 
       const promises = selectedDrivers.map(driver => {
         const baseJob: Omit<DispatchJob, 'id'> = {
@@ -1041,7 +1063,7 @@ function DispatchPageInner() {
           ...(serviceGroupId ? { serviceGroupId } : {}),
           ...(assignedDrivers ? { assignedDrivers } : {}),
           ...(swHeavyWater ? { isHeavyWater: true } : {}),
-          ...(splitGroupId ? { splitGroupId, splitSequence: 1 } : {}),
+          ...(splitGroupId ? { splitGroupId, splitSequence: 1, ...(splitTotal != null ? { splitTotal } : {}) } : {}),
         };
 
         const docs = [addDoc(collection(firestore, 'dispatches'), baseJob)];
@@ -1056,8 +1078,35 @@ function DispatchPageInner() {
             notes: `Split ticket B — ${swNotes || swServiceType.trim()}`,
             splitGroupId: splitGroupId!,
             splitSequence: 2,
+            ...(splitTotal != null ? { splitTotal } : {}),
           };
           docs.push(addDoc(collection(firestore, 'dispatches'), job2));
+        }
+
+        // Extra split legs (C/D/E…) — same metadata namespace as leg B, no
+        // Multi-Haul. Each entry becomes a sibling dispatch doc with
+        // monotonic splitSequence and the shared splitTotal. Pre-filled bbls
+        // (optional) carries into the driver's TicketModule prefill on
+        // accept via origin.dispatchBbls (per FlowController 4/29 changelog).
+        if (swSplitTicket && swExtraSplitLegs.length > 0) {
+          swExtraSplitLegs.forEach((extra, idx) => {
+            const letter = String.fromCharCode(67 + idx); // C, D, E…
+            const bblsNum = extra.bbls ? parseFloat(extra.bbls) : NaN;
+            const extraJob: Omit<DispatchJob, 'id'> = {
+              ...baseJob,
+              wellName: extra.disposal,
+              ndicWellName: extra.disposal,
+              disposal: extra.disposal,
+              notes: extra.notes
+                ? `Split ticket ${letter} — ${extra.notes}`
+                : `Split ticket ${letter} — ${swServiceType.trim()}`,
+              splitGroupId: splitGroupId!,
+              splitSequence: 3 + idx,
+              ...(splitTotal != null ? { splitTotal } : {}),
+              ...(isFinite(bblsNum) && bblsNum > 0 ? { bbls: bblsNum } : {}),
+            };
+            docs.push(addDoc(collection(firestore, 'dispatches'), extraJob));
+          });
         }
 
         return Promise.all(docs);
@@ -1114,6 +1163,8 @@ function DispatchPageInner() {
       setSwDriverHashes(new Set());
       setSwSplitTicket(false);
       setSwHeavyWater(false);
+      setSwExtraSplitLegs([]);
+      setSwExtraLegDraft(null);
       setTimeout(() => setMessage(''), 4000);
     } catch (err: any) {
       setMessage(`Error: ${err.message}`);
@@ -2317,15 +2368,38 @@ function DispatchPageInner() {
                       </div>
                     </div>{/* end top row */}
                     {/* Options row: Split Ticket + Heavy Water */}
-                    <div className="flex items-center gap-4 flex-shrink-0">
+                    <div className="flex items-center gap-4 flex-shrink-0 flex-wrap">
                       <label className="flex items-center gap-2 cursor-pointer group">
-                        <input type="checkbox" checked={swSplitTicket} onChange={(e) => setSwSplitTicket(e.target.checked)}
+                        <input type="checkbox" checked={swSplitTicket} onChange={(e) => {
+                          const checked = e.target.checked;
+                          setSwSplitTicket(checked);
+                          if (!checked) {
+                            // Clear extras + close any open draft when Split Ticket is turned off.
+                            setSwExtraSplitLegs([]);
+                            setSwExtraLegDraft(null);
+                          }
+                        }}
                           className="w-3.5 h-3.5 rounded border-gray-600 bg-gray-800 text-purple-600 focus:ring-purple-500" />
                         <span className={`text-xs ${swSplitTicket ? 'text-purple-400 font-medium' : 'text-gray-400 group-hover:text-gray-300'}`}>
                           Split Ticket
                         </span>
-                        {swSplitTicket && <span className="text-[9px] text-purple-500 bg-purple-900/30 px-1.5 py-0.5 rounded">2 linked jobs</span>}
+                        {swSplitTicket && (
+                          <span className="text-[9px] text-purple-500 bg-purple-900/30 px-1.5 py-0.5 rounded">
+                            {2 + swExtraSplitLegs.length} linked jobs
+                          </span>
+                        )}
                       </label>
+                      {swSplitTicket && (
+                        <button
+                          type="button"
+                          onClick={() => setSwExtraLegDraft({ disposal: '', bbls: '', notes: '' })}
+                          disabled={swExtraLegDraft !== null}
+                          className="flex items-center gap-1 px-2 py-0.5 text-[10px] font-medium rounded bg-purple-900/40 hover:bg-purple-900/60 text-purple-200 disabled:opacity-50 disabled:cursor-not-allowed border border-purple-700/50"
+                          title="Add another split leg (C, D, E…)"
+                        >
+                          + Add Leg
+                        </button>
+                      )}
                       <label className="flex items-center gap-2 cursor-pointer group">
                         <input type="checkbox" checked={swHeavyWater} onChange={(e) => setSwHeavyWater(e.target.checked)}
                           className="w-3.5 h-3.5 rounded border-gray-600 bg-gray-800 text-amber-600 focus:ring-amber-500" />
@@ -2334,6 +2408,87 @@ function DispatchPageInner() {
                         </span>
                       </label>
                     </div>
+                    {/* Extra-split-legs chip list (only when Split Ticket on AND extras exist) */}
+                    {swSplitTicket && swExtraSplitLegs.length > 0 && (
+                      <div className="flex items-center gap-2 flex-wrap flex-shrink-0">
+                        {swExtraSplitLegs.map((leg, idx) => {
+                          const letter = String.fromCharCode(67 + idx); // C, D, E…
+                          return (
+                            <span
+                              key={leg.id}
+                              className="inline-flex items-center gap-1.5 px-2 py-0.5 text-[10px] rounded bg-purple-900/30 text-purple-200 border border-purple-700/50"
+                            >
+                              <span className="font-bold">{letter}:</span>
+                              <span className="truncate max-w-[140px]">{leg.disposal}</span>
+                              {leg.bbls && <span className="text-purple-400">({leg.bbls} bbl)</span>}
+                              <button
+                                type="button"
+                                onClick={() => setSwExtraSplitLegs(prev => prev.filter(l => l.id !== leg.id))}
+                                className="ml-0.5 text-purple-400 hover:text-purple-200 font-bold leading-none"
+                                title={`Remove leg ${letter}`}
+                              >
+                                ×
+                              </button>
+                            </span>
+                          );
+                        })}
+                      </div>
+                    )}
+                    {/* Compact inline editor for a new split leg */}
+                    {swSplitTicket && swExtraLegDraft && (
+                      <div className="flex items-center gap-2 flex-wrap flex-shrink-0 bg-gray-900 border border-purple-700/50 rounded px-2 py-1.5">
+                        <span className="text-[10px] font-bold text-purple-300">
+                          Leg {String.fromCharCode(67 + swExtraSplitLegs.length)}:
+                        </span>
+                        <input
+                          type="text"
+                          value={swExtraLegDraft.disposal}
+                          onChange={(e) => setSwExtraLegDraft(d => d ? { ...d, disposal: e.target.value } : d)}
+                          placeholder="Destination / SWD"
+                          autoFocus
+                          className="px-2 py-0.5 bg-gray-800 border border-gray-700 rounded text-white text-xs placeholder-gray-500 focus:outline-none focus:border-purple-500 w-44"
+                        />
+                        <input
+                          type="text"
+                          inputMode="decimal"
+                          value={swExtraLegDraft.bbls}
+                          onChange={(e) => setSwExtraLegDraft(d => d ? { ...d, bbls: e.target.value } : d)}
+                          placeholder="BBLs"
+                          className="px-2 py-0.5 bg-gray-800 border border-gray-700 rounded text-white text-xs placeholder-gray-500 focus:outline-none focus:border-purple-500 w-20"
+                        />
+                        <input
+                          type="text"
+                          value={swExtraLegDraft.notes}
+                          onChange={(e) => setSwExtraLegDraft(d => d ? { ...d, notes: e.target.value } : d)}
+                          placeholder="Notes (optional)"
+                          className="px-2 py-0.5 bg-gray-800 border border-gray-700 rounded text-white text-xs placeholder-gray-500 focus:outline-none focus:border-purple-500 w-44"
+                        />
+                        <button
+                          type="button"
+                          onClick={() => {
+                            const draft = swExtraLegDraft;
+                            if (!draft || !draft.disposal.trim()) return;
+                            const id = `${Date.now()}_${Math.random().toString(36).slice(2, 6)}`;
+                            setSwExtraSplitLegs(prev => [
+                              ...prev,
+                              { id, disposal: draft.disposal.trim(), bbls: draft.bbls.trim(), notes: draft.notes.trim() },
+                            ]);
+                            setSwExtraLegDraft(null);
+                          }}
+                          disabled={!swExtraLegDraft.disposal.trim()}
+                          className="px-2 py-0.5 text-[10px] font-medium rounded bg-purple-600 hover:bg-purple-500 disabled:bg-gray-600 disabled:cursor-not-allowed text-white"
+                        >
+                          Save
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => setSwExtraLegDraft(null)}
+                          className="px-2 py-0.5 text-[10px] rounded border border-gray-600 hover:border-gray-500 text-gray-300"
+                        >
+                          Cancel
+                        </button>
+                      </div>
+                    )}
                     {/* Bottom row: Driver list + Notes side by side, bottom-aligned */}
                     <div className="flex gap-3 flex-1 min-h-0">
                       {/* Driver picker */}
