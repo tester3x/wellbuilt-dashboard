@@ -4073,6 +4073,195 @@ export {
 // Replaces ad-hoc Firestore scripts like _migrate_stuck_*.js.
 // See handoff-recovery.ts.
 // ============================================================
+// ============================================================
+// addSplitLeg — Add a leg to an existing dispatch split chain.
+//
+// Used by:
+//   - Dashboard: pre-dispatch multi-leg creation (Split Ticket + "+")
+//   - WB T: field-time remainder / extra-destination case where the
+//     driver discovers the need for an additional split leg
+//     (e.g., partial delivery, remainder to SWD).
+//
+// The chain is identified by splitGroupId — every sibling dispatch
+// shares one. This callable enumerates siblings, computes next
+// sequence + total, writes the new leg with full lineage, and
+// updates splitTotal on every existing sibling dispatch AND any
+// associated invoice doc. Atomic via Firestore batch.
+//
+// The new leg is created in status='pending' — it does NOT auto-
+// accept. Driver intentionally opens it from DJD (per user
+// directive: field-created legs should not auto-open after save;
+// only dispatcher-prebuilt chains auto-continue on close).
+//
+// Inputs:
+//   parentDispatchId : any sibling dispatchId in the chain
+//   callerDriverHash : optional, attributes 'field' origination
+//   legSpec          : { disposal, disposalLat?, disposalLng?,
+//                        bbls?, jobType?, serviceType?, notes? }
+//
+// Output:
+//   { newDispatchId, splitGroupId, splitSequence, splitTotal }
+//
+// Errors:
+//   invalid-argument    — missing parentDispatchId or legSpec.disposal
+//   not-found           — parent dispatch missing
+//   failed-precondition — parent has no splitGroupId
+//   permission-denied   — callerDriverHash mismatch with parent
+//   internal            — sibling enumeration failed
+// ============================================================
+export const addSplitLeg = httpsV2.onCall(
+  { timeoutSeconds: 30, memory: '256MiB' },
+  async (request) => {
+    const data = (request.data || {}) as {
+      parentDispatchId?: string;
+      callerDriverHash?: string;
+      legSpec?: {
+        disposal?: string;
+        disposalLat?: number | null;
+        disposalLng?: number | null;
+        bbls?: number | null;
+        jobType?: string | null;
+        serviceType?: string | null;
+        notes?: string | null;
+      };
+    };
+
+    const parentDispatchId = data.parentDispatchId;
+    const legSpec = data.legSpec || {};
+    const callerDriverHash = data.callerDriverHash || null;
+
+    if (!parentDispatchId) {
+      throw new httpsV2.HttpsError('invalid-argument', 'parentDispatchId is required');
+    }
+    if (!legSpec.disposal || typeof legSpec.disposal !== 'string') {
+      throw new httpsV2.HttpsError('invalid-argument', 'legSpec.disposal is required');
+    }
+
+    const parentRef = firestoreDb.collection('dispatches').doc(parentDispatchId);
+    const parentSnap = await parentRef.get();
+    if (!parentSnap.exists) {
+      throw new httpsV2.HttpsError('not-found', `Parent dispatch ${parentDispatchId} not found`);
+    }
+    const parent = parentSnap.data() as Record<string, any>;
+    const splitGroupId = parent.splitGroupId;
+    if (!splitGroupId) {
+      throw new httpsV2.HttpsError(
+        'failed-precondition',
+        `Parent dispatch ${parentDispatchId} is not part of a split chain (no splitGroupId)`,
+      );
+    }
+    if (callerDriverHash && parent.driverHash && callerDriverHash !== parent.driverHash) {
+      throw new httpsV2.HttpsError(
+        'permission-denied',
+        'Caller driverHash does not match parent dispatch driver',
+      );
+    }
+
+    const siblingSnap = await firestoreDb
+      .collection('dispatches')
+      .where('splitGroupId', '==', splitGroupId)
+      .get();
+    if (siblingSnap.empty) {
+      throw new httpsV2.HttpsError(
+        'internal',
+        `Could not enumerate siblings for splitGroupId=${splitGroupId}`,
+      );
+    }
+
+    let maxSequence = 0;
+    let leg1DispatchId: string | null = null;
+    const siblingRefs: FirebaseFirestore.DocumentReference[] = [];
+    siblingSnap.forEach((docSnap) => {
+      const d = docSnap.data() as Record<string, any>;
+      const seq = typeof d.splitSequence === 'number' ? d.splitSequence : 0;
+      if (seq > maxSequence) maxSequence = seq;
+      if (seq === 1) leg1DispatchId = docSnap.id;
+      siblingRefs.push(docSnap.ref);
+    });
+    const nextSequence = maxSequence + 1;
+    const newTotal = siblingSnap.size + 1;
+    const rootParentId = leg1DispatchId || parentDispatchId;
+
+    const now = admin.firestore.Timestamp.now();
+    const newDispatchRef = firestoreDb.collection('dispatches').doc();
+    const newDispatch: Record<string, any> = {
+      driverHash: parent.driverHash,
+      driverName: parent.driverName,
+      driverFirstName: parent.driverFirstName || null,
+      wellName: parent.wellName,
+      ndicWellName: parent.ndicWellName || parent.wellName,
+      operator: parent.operator || null,
+      packageId: parent.packageId || null,
+      companyId: parent.companyId || null,
+      priority: parent.priority || 5,
+      onsiteBy: parent.onsiteBy || null,
+
+      disposal: legSpec.disposal,
+      ...(legSpec.disposalLat != null ? { disposalLat: legSpec.disposalLat } : {}),
+      ...(legSpec.disposalLng != null ? { disposalLng: legSpec.disposalLng } : {}),
+      ...(legSpec.bbls != null ? { bbls: legSpec.bbls } : {}),
+      jobType: legSpec.jobType || parent.jobType || null,
+      serviceType: legSpec.serviceType || parent.serviceType || null,
+      notes:
+        legSpec.notes ||
+        `Split ticket ${String.fromCharCode(65 + nextSequence - 1)} (field-added)`,
+
+      splitGroupId,
+      splitSequence: nextSequence,
+      splitTotal: newTotal,
+      parentDispatchId: rootParentId,
+      splitOriginatedAt: callerDriverHash ? 'field' : 'dashboard',
+      splitOriginatedBy:
+        callerDriverHash || (request.auth?.uid || 'addSplitLeg-cf'),
+
+      status: 'pending',
+      assignedAt: now,
+      assignedBy: callerDriverHash
+        ? `driver:${callerDriverHash}`
+        : (request.auth?.uid || 'addSplitLeg-cf'),
+      createdAt: now,
+      loadCount: 1,
+      loadsCompleted: 0,
+    };
+
+    const batch = firestoreDb.batch();
+    batch.set(newDispatchRef, newDispatch);
+
+    for (const ref of siblingRefs) {
+      batch.update(ref, {
+        splitTotal: newTotal,
+        updatedAt: now,
+      });
+    }
+
+    const invSnap = await firestoreDb
+      .collection('invoices')
+      .where('dispatchSplitGroupId', '==', splitGroupId)
+      .get();
+    invSnap.forEach((doc) => {
+      batch.update(doc.ref, {
+        dispatchSplitTotal: newTotal,
+        updatedAt: now,
+      });
+    });
+
+    await batch.commit();
+
+    console.log(
+      `[addSplitLeg] added leg seq=${nextSequence} total=${newTotal} ` +
+        `to splitGroupId=${splitGroupId} parent=${rootParentId} ` +
+        `originatedAt=${callerDriverHash ? 'field' : 'dashboard'}`,
+    );
+
+    return {
+      newDispatchId: newDispatchRef.id,
+      splitGroupId,
+      splitSequence: nextSequence,
+      splitTotal: newTotal,
+    };
+  },
+);
+
 export {
   recoverHandoffOrphan,
   listStuckHandoffs,
