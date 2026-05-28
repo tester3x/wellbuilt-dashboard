@@ -4234,6 +4234,61 @@ export const addSplitLeg = httpsV2.onCall(
       });
     }
 
+    // 2026-05-28 — Item 4 (BBL reconcile, CF side).
+    //
+    // When the caller specified a positive legSpec.bbls AND the parent
+    // dispatch carries a positive bbls field, atomically reduce the
+    // parent's bbls by the new leg's amount. Without this, a 150 BBL
+    // dispatch that gets a 40 BBL leftover added still shows 150 in
+    // dispatch state — printable BBLs on the parent's ticket become
+    // wrong + dispatcher sees inflated request volume.
+    //
+    // Multiple batch.update calls to the same ref merge — Firestore
+    // commits a single write per doc with all fields. So this layers
+    // cleanly on top of the splitTotal bump in the loop above.
+    //
+    // Audit fields:
+    //   originalBblsBeforeSplitAdjust — captured on FIRST adjust, the
+    //     true requested volume before any reductions. Lets billing /
+    //     payroll reconciliation reconstruct the original ask.
+    //   splitAdjustedByLegId / splitAdjustedAt / splitAdjustedAmount —
+    //     parallel arrays, one entry per adjust, in chronological order.
+    //
+    // Safe-defaults: do NOT adjust when legSpec.bbls is blank/missing
+    // (user spec) or when parent.bbls is already 0 / missing. Never
+    // produce a negative bbls value.
+    const parentBblsCurrent =
+      typeof parent.bbls === 'number' && isFinite(parent.bbls) ? parent.bbls : 0;
+    const reduceBy =
+      typeof legSpec.bbls === 'number' && isFinite(legSpec.bbls) && legSpec.bbls > 0
+        ? legSpec.bbls
+        : 0;
+    let parentBblsAfter: number | null = null;
+    if (reduceBy > 0 && parentBblsCurrent > 0) {
+      parentBblsAfter = Math.max(0, parentBblsCurrent - reduceBy);
+      const existingOriginal =
+        typeof parent.originalBblsBeforeSplitAdjust === 'number'
+          ? parent.originalBblsBeforeSplitAdjust
+          : parentBblsCurrent; // first adjust → capture the pre-adjust value
+      const existingAdjustedBy = Array.isArray(parent.splitAdjustedByLegId)
+        ? parent.splitAdjustedByLegId
+        : [];
+      const existingAdjustedAt = Array.isArray(parent.splitAdjustedAt)
+        ? parent.splitAdjustedAt
+        : [];
+      const existingAdjustedAmount = Array.isArray(parent.splitAdjustedAmount)
+        ? parent.splitAdjustedAmount
+        : [];
+      batch.update(parentRef, {
+        bbls: parentBblsAfter,
+        originalBblsBeforeSplitAdjust: existingOriginal,
+        splitAdjustedByLegId: [...existingAdjustedBy, newDispatchRef.id],
+        splitAdjustedAt: [...existingAdjustedAt, now],
+        splitAdjustedAmount: [...existingAdjustedAmount, reduceBy],
+        updatedAt: now,
+      });
+    }
+
     const invSnap = await firestoreDb
       .collection('invoices')
       .where('dispatchSplitGroupId', '==', splitGroupId)
@@ -4250,7 +4305,10 @@ export const addSplitLeg = httpsV2.onCall(
     console.log(
       `[addSplitLeg] added leg seq=${nextSequence} total=${newTotal} ` +
         `to splitGroupId=${splitGroupId} parent=${rootParentId} ` +
-        `originatedAt=${callerDriverHash ? 'field' : 'dashboard'}`,
+        `originatedAt=${callerDriverHash ? 'field' : 'dashboard'}` +
+        (parentBblsAfter != null
+          ? ` parentBbls ${parentBblsCurrent}→${parentBblsAfter} (-${reduceBy})`
+          : ''),
     );
 
     return {
@@ -4258,6 +4316,10 @@ export const addSplitLeg = httpsV2.onCall(
       splitGroupId,
       splitSequence: nextSequence,
       splitTotal: newTotal,
+      // 2026-05-28 — surfaced so WB T client can verify its local
+      // form/invoice BBL reconcile matches the CF-side reduction.
+      parentBblsBefore: parentBblsCurrent,
+      parentBblsAfter: parentBblsAfter ?? parentBblsCurrent,
     };
   },
 );
