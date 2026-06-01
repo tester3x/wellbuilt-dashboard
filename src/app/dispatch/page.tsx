@@ -1562,6 +1562,41 @@ function DispatchPageInner() {
       const firestore = getFirestoreDb();
       const driverFirstName = driver.legalName ? driver.legalName.split(' ')[0] : driver.displayName;
 
+      // ─── Split-ticket family: reassign the ENTIRE family in place ───
+      // A split family is ONE job with multiple legs — never independent cards.
+      // Reassigning any leg moves every leg to the new driver, preserving the
+      // split identity. We update in place (NOT clone-and-cancel) because the
+      // clone path below only copies an allow-list of fields and drops
+      // splitGroupId/splitSequence/splitTotal, which orphans the legs.
+      if (reassignJob.splitGroupId) {
+        const sibsSnap = await getDocs(query(
+          collection(firestore, 'dispatches'),
+          where('splitGroupId', '==', reassignJob.splitGroupId),
+        ));
+        const ownershipUpdate = {
+          driverHash: reassignDriverHash,
+          driverName: driver.displayName,
+          driverFirstName,
+          assignedAt: Timestamp.now(),
+          assignedBy: user?.email || 'dashboard',
+          status: 'pending',
+          // Reset accept/stage state so the whole family lands fresh on the new
+          // driver. Everything else (split metadata, well, disposal, notes,
+          // labels, service fields) is left untouched by construction.
+          acceptedAt: null,
+          driverStage: null,
+          stageUpdatedAt: null,
+        };
+        const sibs = sibsSnap.docs.filter(d => !['completed', 'cancelled'].includes(d.data().status));
+        await Promise.all(sibs.map(d => updateDoc(doc(firestore, 'dispatches', d.id), ownershipUpdate)));
+
+        setMessage(`Reassigned split family (${sibs.length} leg${sibs.length === 1 ? '' : 's'}) to ${driverFirstName}`);
+        setReassignJob(null);
+        setReassignDriverHash('');
+        setTimeout(() => setMessage(''), 4000);
+        return;
+      }
+
       // Create a new dispatch with the same job details but new driver
       const newJob: Record<string, any> = {
         driverHash: reassignDriverHash,
