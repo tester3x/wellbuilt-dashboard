@@ -2404,26 +2404,38 @@ function DispatchPageInner() {
                     </div>{/* end top row */}
                     {/* Options row: Split Ticket + Heavy Water */}
                     <div className="flex items-center gap-4 flex-shrink-0 flex-wrap">
-                      <label className="flex items-center gap-2 cursor-pointer group">
-                        <input type="checkbox" checked={swSplitTicket} onChange={(e) => {
-                          const checked = e.target.checked;
-                          setSwSplitTicket(checked);
-                          if (!checked) {
-                            // Clear extras + close any open draft when Split Ticket is turned off.
-                            setSwExtraSplitLegs([]);
-                            setSwExtraLegDraft(null);
-                          }
-                        }}
-                          className="w-3.5 h-3.5 rounded border-gray-600 bg-gray-800 text-purple-600 focus:ring-purple-500" />
-                        <span className={`text-xs ${swSplitTicket ? 'text-purple-400 font-medium' : 'text-gray-400 group-hover:text-gray-300'}`}>
-                          Split Ticket
-                        </span>
-                        {swSplitTicket && (
-                          <span className="text-[9px] text-purple-500 bg-purple-900/30 px-1.5 py-0.5 rounded">
-                            {2 + swExtraSplitLegs.length} linked jobs
-                          </span>
-                        )}
-                      </label>
+                      {(() => {
+                        // Split Ticket is gated behind the minimum dispatch scaffold —
+                        // the same required fields as the Dispatch button (Well +
+                        // Service Type + at least one driver). Enabling it before that
+                        // scaffold exists produced malformed split setups.
+                        const splitReady = swWellName.trim() !== '' && swServiceType !== '' && swDriverHashes.size > 0;
+                        return (
+                          <label
+                            className={`flex items-center gap-2 group ${splitReady ? 'cursor-pointer' : 'cursor-not-allowed opacity-50'}`}
+                            title={splitReady ? undefined : 'Set Well, Service Type, and a driver before enabling Split Ticket'}
+                          >
+                            <input type="checkbox" checked={swSplitTicket} disabled={!splitReady} onChange={(e) => {
+                              const checked = e.target.checked;
+                              setSwSplitTicket(checked);
+                              if (!checked) {
+                                // Clear extras + close any open draft when Split Ticket is turned off.
+                                setSwExtraSplitLegs([]);
+                                setSwExtraLegDraft(null);
+                              }
+                            }}
+                              className="w-3.5 h-3.5 rounded border-gray-600 bg-gray-800 text-purple-600 focus:ring-purple-500 disabled:cursor-not-allowed" />
+                            <span className={`text-xs ${swSplitTicket ? 'text-purple-400 font-medium' : 'text-gray-400 group-hover:text-gray-300'}`}>
+                              Split Ticket
+                            </span>
+                            {swSplitTicket && (
+                              <span className="text-[9px] text-purple-500 bg-purple-900/30 px-1.5 py-0.5 rounded">
+                                {2 + swExtraSplitLegs.length} linked jobs
+                              </span>
+                            )}
+                          </label>
+                        );
+                      })()}
                       {swSplitTicket && (
                         <button
                           type="button"
@@ -2443,9 +2455,25 @@ function DispatchPageInner() {
                         </span>
                       </label>
                     </div>
-                    {/* Extra-split-legs chip list (only when Split Ticket on AND extras exist) */}
-                    {swSplitTicket && swExtraSplitLegs.length > 0 && (
+                    {/* Split-legs chip list. Leg B is the Drop-off destination and
+                        is shown exactly like C/D/E so dispatch can see B already
+                        exists and doesn't mistakenly add a duplicate leg. */}
+                    {swSplitTicket && (swDropoff.trim() !== '' || swExtraSplitLegs.length > 0) && (
                       <div className="flex items-center gap-2 flex-wrap flex-shrink-0">
+                        {swDropoff.trim() !== '' && (
+                          <span className="inline-flex items-center gap-1.5 px-2 py-0.5 text-[10px] rounded bg-purple-900/30 text-purple-200 border border-purple-700/50">
+                            <span className="font-bold">B:</span>
+                            <span className="truncate max-w-[140px]">{swDropoff.trim()}</span>
+                            <button
+                              type="button"
+                              onClick={() => setSwDropoff('')}
+                              className="ml-0.5 text-purple-400 hover:text-purple-200 font-bold leading-none"
+                              title="Remove leg B (clears Drop-off)"
+                            >
+                              ×
+                            </button>
+                          </span>
+                        )}
                         {swExtraSplitLegs.map((leg, idx) => {
                           const letter = String.fromCharCode(67 + idx); // C, D, E…
                           return (
@@ -2475,21 +2503,57 @@ function DispatchPageInner() {
                         <span className="text-[10px] font-bold text-purple-300">
                           Leg {String.fromCharCode(67 + swExtraSplitLegs.length)}:
                         </span>
-                        <input
-                          type="text"
-                          value={swExtraLegDraft.disposal}
-                          onChange={(e) => setSwExtraLegDraft(d => d ? { ...d, disposal: e.target.value } : d)}
-                          placeholder="Destination / SWD"
-                          autoFocus
-                          className="px-2 py-0.5 bg-gray-800 border border-gray-700 rounded text-white text-xs placeholder-gray-500 focus:outline-none focus:border-purple-500 w-44"
-                        />
+                        <div className="relative">
+                          <input
+                            type="text"
+                            value={swExtraLegDraft.disposal}
+                            onChange={(e) => setSwExtraLegDraft(d => d ? { ...d, disposal: e.target.value } : d)}
+                            placeholder="Destination / SWD"
+                            autoFocus
+                            className="px-2 py-0.5 bg-gray-800 border border-gray-700 rounded text-white text-xs placeholder-gray-500 focus:outline-none focus:border-purple-500 w-44"
+                          />
+                          {(() => {
+                            // Same well/disposal search the Well + Drop-off fields use
+                            // (NDIC wells + operator wells + SWD directory). Cuts the
+                            // spelling drift that plain free-text caused on extra legs.
+                            const q = swExtraLegDraft.disposal.trim().toLowerCase();
+                            if (q.length < 2) return null;
+                            const exactMatch = wells.some(w => (w.ndicName || w.wellName).toLowerCase() === q) ||
+                              allOperatorWells.some(w => w.well_name.toLowerCase() === q) ||
+                              allDisposals.some(d => d.well_name.toLowerCase() === q);
+                            if (exactMatch) return null;
+                            const seenLeg = new Set<string>();
+                            const wellMatches = wells
+                              .filter(w => (w.ndicName || w.wellName).toLowerCase().includes(q))
+                              .map(w => { seenLeg.add((w.ndicName || w.wellName).toLowerCase()); return { label: w.ndicName || w.wellName, sub: w.route || '', value: w.ndicName || w.wellName }; });
+                            const operatorMatches = allOperatorWells
+                              .filter(w => w.well_name.toLowerCase().includes(q) && !seenLeg.has(w.well_name.toLowerCase()))
+                              .map(w => { seenLeg.add(w.well_name.toLowerCase()); return { label: w.well_name, sub: w.operator || 'NDIC', value: w.well_name }; });
+                            const disposalMatches = searchDisposals(q, allDisposals)
+                              .filter(d => !seenLeg.has(d.well_name.toLowerCase()))
+                              .map(d => ({ label: d.well_name, sub: 'SWD', value: d.well_name }));
+                            const combined = [...wellMatches, ...operatorMatches, ...disposalMatches].slice(0, 15);
+                            if (combined.length === 0) return null;
+                            return (
+                              <div className="absolute z-50 w-full mt-1 bg-gray-800 border border-gray-600 rounded max-h-48 overflow-y-auto shadow-lg">
+                                {combined.map((item, i) => (
+                                  <button key={`${item.value}-${i}`} type="button" onClick={() => setSwExtraLegDraft(d => d ? { ...d, disposal: item.value } : d)}
+                                    className="w-full text-left px-3 py-1.5 hover:bg-gray-700 border-b border-gray-700/50 last:border-0 text-white text-sm">
+                                    {item.label}
+                                    {item.sub && <span className="text-gray-500 text-xs ml-2">{item.sub}</span>}
+                                  </button>
+                                ))}
+                              </div>
+                            );
+                          })()}
+                        </div>
                         <input
                           type="text"
                           inputMode="decimal"
                           value={swExtraLegDraft.bbls}
                           onChange={(e) => setSwExtraLegDraft(d => d ? { ...d, bbls: e.target.value } : d)}
-                          placeholder="BBLs"
-                          className="px-2 py-0.5 bg-gray-800 border border-gray-700 rounded text-white text-xs placeholder-gray-500 focus:outline-none focus:border-purple-500 w-20"
+                          placeholder="BBLs (optional)"
+                          className="px-2 py-0.5 bg-gray-800 border border-gray-700 rounded text-white text-xs placeholder-gray-500 focus:outline-none focus:border-purple-500 w-32"
                         />
                         <input
                           type="text"
@@ -2513,7 +2577,7 @@ function DispatchPageInner() {
                           disabled={!swExtraLegDraft.disposal.trim()}
                           className="px-2 py-0.5 text-[10px] font-medium rounded bg-purple-600 hover:bg-purple-500 disabled:bg-gray-600 disabled:cursor-not-allowed text-white"
                         >
-                          Save
+                          Add
                         </button>
                         <button
                           type="button"
