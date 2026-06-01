@@ -2405,15 +2405,15 @@ function DispatchPageInner() {
                     {/* Options row: Split Ticket + Heavy Water */}
                     <div className="flex items-center gap-4 flex-shrink-0 flex-wrap">
                       {(() => {
-                        // Split Ticket is gated behind the minimum dispatch scaffold —
-                        // the same required fields as the Dispatch button (Well +
-                        // Service Type + at least one driver). Enabling it before that
-                        // scaffold exists produced malformed split setups.
-                        const splitReady = swWellName.trim() !== '' && swServiceType !== '' && swDriverHashes.size > 0;
+                        // Split Ticket unlocks once the split family's structural
+                        // fields exist — Well, Service Type, Drop-off (leg B), and
+                        // Be-onsite-by. Driver is intentionally NOT required so the
+                        // dispatcher can build the split structure before assigning.
+                        const splitReady = swWellName.trim() !== '' && swServiceType !== '' && swDropoff.trim() !== '' && swOnsiteBy !== '';
                         return (
                           <label
                             className={`flex items-center gap-2 group ${splitReady ? 'cursor-pointer' : 'cursor-not-allowed opacity-50'}`}
-                            title={splitReady ? undefined : 'Set Well, Service Type, and a driver before enabling Split Ticket'}
+                            title={splitReady ? undefined : 'Fill Well, Service Type, Drop-off, and Be-onsite-by before enabling Split Ticket'}
                           >
                             <input type="checkbox" checked={swSplitTicket} disabled={!splitReady} onChange={(e) => {
                               const checked = e.target.checked;
