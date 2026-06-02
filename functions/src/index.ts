@@ -4209,6 +4209,10 @@ export const addSplitLeg = httpsV2.onCall(
       splitGroupId,
       splitSequence: nextSequence,
       splitTotal: newTotal,
+      // Preserve the canonical family color so a field-added leg renders the
+      // same color as its siblings. Omitted for legacy parents without it
+      // (renderers fall back to deriving from splitGroupId).
+      ...(parent.splitFamilyColor ? { splitFamilyColor: parent.splitFamilyColor } : {}),
       parentDispatchId: rootParentId,
       splitOriginatedAt: callerDriverHash ? 'field' : 'dashboard',
       splitOriginatedBy:

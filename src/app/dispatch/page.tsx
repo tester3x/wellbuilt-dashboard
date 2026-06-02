@@ -14,6 +14,7 @@ import { loadDisposals, searchDisposals, type NdicWell, loadOperators, searchOpe
 import { calculateDriverETAs, applyDeadline, type DriverEtaResult } from '@/lib/driverEta';
 import { loadCompanyById } from '@/lib/companySettings';
 import { trackJobTypeUsage } from '@/lib/jobTypeUsage';
+import { getRouteColor } from '@/lib/routeColor';
 
 // ─── Types ───────────────────────────────────────────────────────────────────
 
@@ -104,6 +105,10 @@ interface DispatchJob {
   splitTotal?: number;     // Total legs in the chain — maintained by dashboard
                            // creation + dashboard:addSplitLeg CF when a field-
                            // added leg increments the chain.
+  splitFamilyColor?: string; // Canonical deterministic family color
+                           // (getRouteColor(splitGroupId)). Persisted on every
+                           // leg at creation + inherited by addSplitLeg so
+                           // mobile + dashboard render the same family color.
   bbls?: number;           // Per-leg planned BBLs (optional). Used as the
                            // pre-fill for the driver's form on accept.
   // Heavy water flag
@@ -1042,6 +1047,10 @@ function DispatchPageInner() {
       const splitTotal = swSplitTicket
         ? 2 + swExtraSplitLegs.length
         : undefined;
+      // Canonical family color — deterministic from splitGroupId, persisted on
+      // every leg so mobile DJD + dashboard render the same family color
+      // without each platform re-deriving it (their local hashes differ).
+      const splitFamilyColor = splitGroupId ? getRouteColor(splitGroupId) : undefined;
 
       const promises = selectedDrivers.map(driver => {
         const baseJob: Omit<DispatchJob, 'id'> = {
@@ -1063,7 +1072,7 @@ function DispatchPageInner() {
           ...(serviceGroupId ? { serviceGroupId } : {}),
           ...(assignedDrivers ? { assignedDrivers } : {}),
           ...(swHeavyWater ? { isHeavyWater: true } : {}),
-          ...(splitGroupId ? { splitGroupId, splitSequence: 1, ...(splitTotal != null ? { splitTotal } : {}) } : {}),
+          ...(splitGroupId ? { splitGroupId, splitSequence: 1, ...(splitFamilyColor ? { splitFamilyColor } : {}), ...(splitTotal != null ? { splitTotal } : {}) } : {}),
         };
 
         const docs = [addDoc(collection(firestore, 'dispatches'), baseJob)];
