@@ -3948,6 +3948,29 @@ function ActiveDispatchPanel({ dispatches, cancelDispatch, drivers, assignTransf
   const declinedJobs = dispatches.filter(d => d.status === 'declined' || d.status === 'cancelled');
   const nonDeclined = dispatches.filter(d => d.status !== 'declined' && d.status !== 'cancelled');
 
+  // Group declined/cancelled split families into ONE card each. A dispatched
+  // split is one operational assignment, so A/B/C must NOT render as three
+  // independent declined cards with separate Reassign/Dismiss. Build a
+  // legs-by-group map + a display list that keeps non-split singles and a
+  // single anchor (lowest-sequence) leg per splitGroupId. Family actions
+  // (Reassign already cascades; Dismiss dismisses all legs) live on the
+  // one family card; child legs are shown as read-only detail.
+  const declinedFamilyLegs = new Map<string, DispatchJob[]>();
+  for (const j of declinedJobs) {
+    if (!j.splitGroupId) continue;
+    if (!declinedFamilyLegs.has(j.splitGroupId)) declinedFamilyLegs.set(j.splitGroupId, []);
+    declinedFamilyLegs.get(j.splitGroupId)!.push(j);
+  }
+  declinedFamilyLegs.forEach(legs => legs.sort((a, b) => (a.splitSequence || 0) - (b.splitSequence || 0)));
+  const declinedDisplay: DispatchJob[] = [];
+  const seenDeclinedGroup = new Set<string>();
+  for (const j of declinedJobs) {
+    if (!j.splitGroupId) { declinedDisplay.push(j); continue; }
+    if (seenDeclinedGroup.has(j.splitGroupId)) continue;
+    seenDeclinedGroup.add(j.splitGroupId);
+    declinedDisplay.push(declinedFamilyLegs.get(j.splitGroupId)![0]); // anchor leg
+  }
+
   // Unassigned transfers need driver assignment
   const unassigned = nonDeclined.filter(d => d.type === 'transfer' && (!d.driverHash || d.status === 'pending_approval'));
   const assigned = nonDeclined.filter(d => !(d.type === 'transfer' && (!d.driverHash || d.status === 'pending_approval')));
@@ -4026,11 +4049,14 @@ function ActiveDispatchPanel({ dispatches, cancelDispatch, drivers, assignTransf
         <>
           <div className="flex items-center gap-2">
             <div className="h-px bg-red-600/30 flex-1" />
-            <span className="text-red-400 text-[10px] font-bold uppercase tracking-wider flex-shrink-0">Declined ({declinedJobs.length})</span>
+            <span className="text-red-400 text-[10px] font-bold uppercase tracking-wider flex-shrink-0">Declined ({declinedDisplay.length})</span>
             <div className="h-px bg-red-600/30 flex-1" />
           </div>
-          {declinedJobs.map(job => (
-            <div key={job.id} className="border border-red-600/30 rounded-lg overflow-hidden bg-red-950/20">
+          {declinedDisplay.map(job => {
+            const familyLegs = job.splitGroupId ? (declinedFamilyLegs.get(job.splitGroupId) || [job]) : [job];
+            const isFamily = !!job.splitGroupId && familyLegs.length > 1;
+            return (
+            <div key={job.splitGroupId || job.id} className="border border-red-600/30 rounded-lg overflow-hidden bg-red-950/20">
               <div className="px-4 py-3">
                 <div className="flex items-center gap-2">
                   <JobTypeBadge type={job.jobType} serviceType={job.serviceType} />
@@ -4042,6 +4068,9 @@ function ActiveDispatchPanel({ dispatches, cancelDispatch, drivers, assignTransf
                     ) : null;
                   })()}
                   <span className="px-2 py-0.5 bg-red-600/30 text-red-300 text-[10px] font-bold rounded">{job.status === 'cancelled' ? 'CANCELLED' : 'DECLINED'}</span>
+                  {isFamily && (
+                    <span className="px-2 py-0.5 bg-purple-600/30 text-purple-300 text-[10px] font-bold rounded">SPLIT FAMILY · {familyLegs.length} LEGS</span>
+                  )}
                   <span className="flex-1" />
                   <button
                     onClick={() => onReassignDeclined?.(job)}
@@ -4049,14 +4078,17 @@ function ActiveDispatchPanel({ dispatches, cancelDispatch, drivers, assignTransf
                   >Reassign</button>
                   <button
                     onClick={async () => {
-                      if (!job.id) return;
                       try {
                         const firestore = getFirestoreDb();
-                        await updateDoc(doc(firestore, 'dispatches', job.id), { status: 'dismissed', dismissedAt: Timestamp.now() });
+                        // Family-aware: dismiss every leg of the split family
+                        // (single card owns the family action). Non-split = just this job.
+                        const ids = familyLegs.map(l => l.id).filter((id): id is string => !!id);
+                        if (ids.length === 0) return;
+                        await Promise.all(ids.map(id => updateDoc(doc(firestore, 'dispatches', id), { status: 'dismissed', dismissedAt: Timestamp.now() })));
                       } catch (err) { console.error('Dismiss failed:', err); }
                     }}
                     className="px-3 py-1 bg-gray-700 hover:bg-gray-600 text-gray-300 text-xs font-medium rounded transition-colors"
-                    title="Accept decline and dismiss"
+                    title={isFamily ? 'Dismiss whole split family' : 'Accept decline and dismiss'}
                   >Dismiss</button>
                 </div>
                 {/* Decline details */}
@@ -4078,10 +4110,26 @@ function ActiveDispatchPanel({ dispatches, cancelDispatch, drivers, assignTransf
                   {job.disposal && (
                     <span className="text-cyan-400/70 text-xs">→ {job.disposal}</span>
                   )}
+                  {isFamily && (
+                    <div className="mt-1 space-y-0.5">
+                      {familyLegs.map(leg => {
+                        const seq = typeof leg.splitSequence === 'number' ? leg.splitSequence : null;
+                        const letter = seq != null && seq >= 1 && seq <= 26
+                          ? String.fromCharCode(64 + seq)
+                          : (seq != null ? String(seq) : '?');
+                        return (
+                          <div key={leg.id} className="text-gray-500 text-[11px]">
+                            <span className="text-purple-400/70 font-bold">{letter}</span> · {leg.ndicWellName || leg.wellName}{leg.disposal ? ` → ${leg.disposal}` : ''}
+                          </div>
+                        );
+                      })}
+                    </div>
+                  )}
                 </div>
               </div>
             </div>
-          ))}
+            );
+          })}
         </>
       )}
 
