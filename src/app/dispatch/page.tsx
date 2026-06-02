@@ -4224,16 +4224,57 @@ function ActiveDispatchPanel({ dispatches, cancelDispatch, drivers, assignTransf
 
             {isExpanded && (
               <div className="space-y-1 p-2 bg-gray-900/30">
-                {jobs.map(job => (
-                  <DispatchJobRow
-                    key={job.id}
-                    job={job}
-                    cancelDispatch={cancelDispatch}
-                    compact={jobs.length > 2}
-                    onClickServiceWork={onEditServiceWork}
-                    onReassign={onReassignDeclined}
-                  />
-                ))}
+                {(() => {
+                  // Wrap a multi-leg split family in ONE bordered sub-card
+                  // (border = persisted splitFamilyColor, fallback
+                  // getRouteColor(splitGroupId)) so A/B/C read as a single
+                  // assignment — mirrors the declined-list grouping + the
+                  // mobile DJD family card. Non-split jobs render as individual
+                  // rows. Jobs are pre-sorted so family legs are contiguous.
+                  // DispatchJobRow is unchanged — existing (legal) per-row
+                  // actions are preserved; no new destructive child actions.
+                  const rowFor = (job: DispatchJob) => (
+                    <DispatchJobRow
+                      key={job.id}
+                      job={job}
+                      cancelDispatch={cancelDispatch}
+                      compact={jobs.length > 2}
+                      onClickServiceWork={onEditServiceWork}
+                      onReassign={onReassignDeclined}
+                    />
+                  );
+                  const byGroup = new Map<string, DispatchJob[]>();
+                  jobs.forEach(j => {
+                    if (!j.splitGroupId) return;
+                    const arr = byGroup.get(j.splitGroupId) || [];
+                    arr.push(j);
+                    byGroup.set(j.splitGroupId, arr);
+                  });
+                  const seen = new Set<string>();
+                  const out: React.ReactNode[] = [];
+                  jobs.forEach(job => {
+                    const members = job.splitGroupId ? byGroup.get(job.splitGroupId) : undefined;
+                    if (members && members.length > 1) {
+                      if (seen.has(job.splitGroupId!)) return;
+                      seen.add(job.splitGroupId!);
+                      const famColor = members.find(m => m.splitFamilyColor)?.splitFamilyColor || getRouteColor(job.splitGroupId!);
+                      out.push(
+                        <div key={job.splitGroupId!} className="rounded-lg border overflow-hidden" style={{ borderColor: famColor }}>
+                          <div className="flex items-center gap-1.5 px-2 py-1 bg-gray-800/40">
+                            <span className="w-2 h-2 rounded-full flex-shrink-0" style={{ backgroundColor: famColor }} />
+                            <span className="text-[10px] font-bold uppercase tracking-wider" style={{ color: famColor }}>Split Family · {members.length} legs</span>
+                          </div>
+                          <div className="space-y-1 p-1.5">
+                            {members.map(rowFor)}
+                          </div>
+                        </div>
+                      );
+                    } else {
+                      out.push(rowFor(job));
+                    }
+                  });
+                  return out;
+                })()}
               </div>
             )}
           </div>
