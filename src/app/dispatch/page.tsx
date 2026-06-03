@@ -2649,12 +2649,17 @@ function DispatchPageInner() {
                       </div>
                     </div>{/* end bottom row */}
                   </div>{/* end SW body */}
-                  {/* Dispatch button */}
+                  {/* Dispatch button. Guarded against an open/unsaved Add Leg
+                      editor: dispatching while swExtraLegDraft is non-null would
+                      silently drop the half-entered leg. */}
                   <button onClick={submitServiceWork}
-                    disabled={!swWellName.trim() || !swServiceType || swDriverHashes.size === 0 || swSubmitting}
+                    disabled={!swWellName.trim() || !swServiceType || swDriverHashes.size === 0 || swSubmitting || swExtraLegDraft !== null}
                     className="w-full mt-2 px-4 py-1.5 bg-purple-600 hover:bg-purple-500 disabled:bg-gray-600 disabled:cursor-not-allowed text-white text-xs font-medium rounded transition-colors flex-shrink-0">
                     {swSubmitting ? 'Sending...' : 'Dispatch'}
                   </button>
+                  {swExtraLegDraft !== null && (
+                    <p className="mt-1 text-[10px] text-amber-400 text-center">Finish or cancel the added leg before dispatching.</p>
+                  )}
                 </div>
               )}
 
