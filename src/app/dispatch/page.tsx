@@ -174,7 +174,7 @@ interface PriorityInfo {
 function getPriority(well: WellResponse): PriorityInfo {
   const isDown = well.isDown || well.currentLevel === 'DOWN';
   if (isDown) {
-    return { level: 'unknown', label: 'DOWN', color: 'bg-gray-600', textColor: 'text-gray-300', sortOrder: 999, hoursUntilPull: null };
+    return { level: 'unknown', label: 'DOWN', color: 'bg-purple-700', textColor: 'text-purple-100', sortOrder: 999, hoursUntilPull: null };
   }
 
   // Try nextPullTimeUTC first (most accurate)
@@ -866,13 +866,12 @@ function DispatchPageInner() {
   // ─── PW Queue (sorted by priority) ──────────────────────────────────────────
 
   const pwQueue = useMemo(() => {
-    // Filter out DOWN wells and wells with no data
-    let filtered = wells.filter(w => {
-      const isDown = w.isDown || w.currentLevel === 'DOWN';
-      if (isDown) return false;
-      if (w.currentLevel === '--' && !w.nextPullTimeUTC) return false;
-      return true;
-    });
+    // Show EVERY route well — including DOWN wells and wells with no pull history.
+    // A well being DOWN, or never having had a processed pull (Thor 5 / Gabriel 5),
+    // does not mean dispatch can't pull it. Such wells stay visible + assignable and
+    // sort to the bottom via getPriority (DOWN sortOrder 999, no-data 5), rendered with
+    // a DOWN / -- badge. Route membership = a well_config entry, same as the route table.
+    let filtered = wells.slice();
 
     // Already-dispatched wells → list of assigned driver first names
     const dispatchedWellDrivers = new Map<string, string[]>();
@@ -2938,8 +2937,9 @@ function DispatchPageInner() {
                       {pwQueue.map(({ well, priority, dispatched, assignedDrivers: wellAssignedDrivers }) => {
                         const isSelected = selectedWells.has(well.wellName);
                         const loadCount = selectedWells.get(well.wellName) || 1;
+                        const wellDown = well.isDown || well.currentLevel === 'DOWN';
                         return (
-                          <tr key={well.responseId || well.wellName} className={`hover:bg-gray-750 transition-colors ${priority.level === 'overdue' ? 'bg-red-900/10' : ''} ${isSelected ? 'bg-blue-900/20' : ''}`}>
+                          <tr key={well.responseId || well.wellName} className={`hover:bg-gray-750 transition-colors ${wellDown ? 'bg-purple-900/15' : priority.level === 'overdue' ? 'bg-red-900/10' : ''} ${isSelected ? 'bg-blue-900/20' : ''}`}>
                             <td className="px-2 py-1.5">
                               <span className={`px-1.5 py-0.5 text-[10px] font-bold rounded ${priority.color} ${priority.textColor}`}>{priority.label}</span>
                             </td>
