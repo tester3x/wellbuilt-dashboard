@@ -16,6 +16,43 @@ import { loadCompanyById } from '@/lib/companySettings';
 import { trackJobTypeUsage } from '@/lib/jobTypeUsage';
 import { getRouteColor } from '@/lib/routeColor';
 
+// ─── Keyboard navigation for typeahead dropdowns ──────────────────────────────
+// One — and only one — active/highlighted row at a time: the row Enter selects.
+// DOM focus stays on the text input (callers make the option buttons
+// non-focusable via tabIndex={-1}), so the browser's native focus outline never
+// competes with the active-row highlight. While the list is open:
+//   • ArrowDown / ArrowUp move the active row (wrapping top↔bottom)
+//   • Tab / Shift+Tab cycle the active row INSTEAD of leaving the field
+//   • Enter selects the active row
+//   • Escape dismisses the list without selecting
+// `options` MUST be a memoized/stable array (useMemo or a state array) so the
+// reset-on-change effect fires only when the result set actually changes.
+// Default active row is the top row so Enter always has a visible target.
+function useTypeaheadNav<T>(options: T[], onSelect: (item: T) => void) {
+  const [activeIndex, setActiveIndex] = useState(0);
+  const [dismissed, setDismissed] = useState(false);
+  useEffect(() => { setActiveIndex(0); setDismissed(false); }, [options]);
+  const onKeyDown = (e: { key: string; shiftKey?: boolean; preventDefault: () => void }) => {
+    if (!options.length || dismissed) return;
+    const last = options.length - 1;
+    if (e.key === 'ArrowDown') { e.preventDefault(); setActiveIndex(i => (i >= last ? 0 : i + 1)); }
+    else if (e.key === 'ArrowUp') { e.preventDefault(); setActiveIndex(i => (i <= 0 ? last : i - 1)); }
+    else if (e.key === 'Tab') {
+      // Keep focus inside the open list — wrap instead of jumping to the next field.
+      e.preventDefault();
+      if (e.shiftKey) setActiveIndex(i => (i <= 0 ? last : i - 1));
+      else setActiveIndex(i => (i >= last ? 0 : i + 1));
+    }
+    else if (e.key === 'Enter') {
+      const item = options[Math.min(activeIndex, last)];
+      if (item) { e.preventDefault(); onSelect(item); }
+    }
+    else if (e.key === 'Escape') { e.preventDefault(); setDismissed(true); }
+  };
+  // `open` = there are results AND the user hasn't Escape-dismissed them.
+  return { activeIndex, setActiveIndex, onKeyDown, open: options.length > 0 && !dismissed, dismissed };
+}
+
 // ─── Types ───────────────────────────────────────────────────────────────────
 
 interface ApprovedDriver {
@@ -384,6 +421,67 @@ function DispatchPageInner() {
   const [swDriverHashes, setSwDriverHashes] = useState<Set<string>>(new Set());
   const [swSubmitting, setSwSubmitting] = useState(false);
   const [swSplitTicket, setSwSplitTicket] = useState(false);
+  // ── Keyboard-navigable typeahead options for the two primary lease pickers.
+  //    Memoized so useTypeaheadNav's reset effect has a stable reference. ──
+  const swWellOptions = useMemo(() => {
+    const q = swWellName.trim().toLowerCase();
+    if (q.length < 2) return [] as { label: string; sub: string; value: string }[];
+    const exactMatch = wells.some(w => (w.ndicName || w.wellName).toLowerCase() === q) ||
+      allOperatorWells.some(w => w.well_name.toLowerCase() === q) ||
+      allDisposals.some(d => d.well_name.toLowerCase() === q);
+    if (exactMatch) return [] as { label: string; sub: string; value: string }[];
+    const seen = new Set<string>();
+    const wellMatches = wells
+      .filter(w => (w.ndicName || w.wellName).toLowerCase().includes(q))
+      .map(w => { seen.add((w.ndicName || w.wellName).toLowerCase()); return { label: w.ndicName || w.wellName, sub: w.route || '', value: w.ndicName || w.wellName }; });
+    const operatorMatches = allOperatorWells
+      .filter(w => w.well_name.toLowerCase().includes(q) && !seen.has(w.well_name.toLowerCase()))
+      .map(w => { seen.add(w.well_name.toLowerCase()); return { label: w.well_name, sub: w.operator || 'NDIC', value: w.well_name }; });
+    const disposalMatches = searchDisposals(q, allDisposals)
+      .filter(d => !seen.has(d.well_name.toLowerCase()))
+      .map(d => ({ label: d.well_name, sub: 'SWD', value: d.well_name }));
+    return [...wellMatches, ...operatorMatches, ...disposalMatches].slice(0, 15);
+  }, [swWellName, wells, allOperatorWells, allDisposals]);
+  const swWellNav = useTypeaheadNav(swWellOptions, (item) => { setSwWellName(item.value); });
+
+  const pwWellOptions = useMemo(() => {
+    if (assignTarget || assignWellSearch.length < 2) return [] as WellResponse[];
+    const q = assignWellSearch.toLowerCase();
+    return wells.filter(w => (w.ndicName || w.wellName).toLowerCase().includes(q)).slice(0, 8);
+  }, [assignTarget, assignWellSearch, wells]);
+  const pwWellNav = useTypeaheadNav(pwWellOptions, (w) => { setAssignTarget(w); setAssignWellSearch(''); });
+
+  // Shared combined-search builder (NDIC wells + operator wells + SWD directory)
+  // — same matching the Well/Drop-off/leg fields all use.
+  const buildComboOptions = useCallback((raw: string) => {
+    const q = raw.trim().toLowerCase();
+    if (q.length < 2) return [] as { label: string; sub: string; value: string }[];
+    const exactMatch = wells.some(w => (w.ndicName || w.wellName).toLowerCase() === q) ||
+      allOperatorWells.some(w => w.well_name.toLowerCase() === q) ||
+      allDisposals.some(d => d.well_name.toLowerCase() === q);
+    if (exactMatch) return [] as { label: string; sub: string; value: string }[];
+    const seen = new Set<string>();
+    const wellMatches = wells
+      .filter(w => (w.ndicName || w.wellName).toLowerCase().includes(q))
+      .map(w => { seen.add((w.ndicName || w.wellName).toLowerCase()); return { label: w.ndicName || w.wellName, sub: w.route || '', value: w.ndicName || w.wellName }; });
+    const operatorMatches = allOperatorWells
+      .filter(w => w.well_name.toLowerCase().includes(q) && !seen.has(w.well_name.toLowerCase()))
+      .map(w => { seen.add(w.well_name.toLowerCase()); return { label: w.well_name, sub: w.operator || 'NDIC', value: w.well_name }; });
+    const disposalMatches = searchDisposals(q, allDisposals)
+      .filter(d => !seen.has(d.well_name.toLowerCase()))
+      .map(d => ({ label: d.well_name, sub: 'SWD', value: d.well_name }));
+    return [...wellMatches, ...operatorMatches, ...disposalMatches].slice(0, 15);
+  }, [wells, allOperatorWells, allDisposals]);
+
+  const swDropoffOptions = useMemo(() => buildComboOptions(swDropoff), [buildComboOptions, swDropoff]);
+  const swDropoffNav = useTypeaheadNav(swDropoffOptions, (item) => { setSwDropoff(item.value); });
+
+  // splitLeg typeahead is wired after swExtraLegDraft is declared (below).
+
+  // PW Disposal uses the disposalResults STATE array directly (stable ref).
+  const pwDisposalNav = useTypeaheadNav(disposalResults, (d) => {
+    setAssignDisposal(d.well_name); setAssignDisposalWell(d); setDisposalSearch(''); setDisposalResults([]);
+  });
   const [swHeavyWater, setSwHeavyWater] = useState(false);
   // Pre-dispatch extra split legs (C/D/E…). Companion to swSplitTicket:
   // when the dispatcher needs more than the implicit 2-leg chain, they
@@ -395,6 +493,10 @@ function DispatchPageInner() {
   type ExtraSplitLeg = { id: string; disposal: string; bbls: string; notes: string };
   const [swExtraSplitLegs, setSwExtraSplitLegs] = useState<ExtraSplitLeg[]>([]);
   const [swExtraLegDraft, setSwExtraLegDraft] = useState<{ disposal: string; bbls: string; notes: string } | null>(null);
+  // Keyboard-navigable typeahead for the split "Add Leg" destination (declared
+  // here because it depends on swExtraLegDraft above).
+  const splitLegOptions = useMemo(() => buildComboOptions(swExtraLegDraft?.disposal || ''), [buildComboOptions, swExtraLegDraft?.disposal]);
+  const splitLegNav = useTypeaheadNav(splitLegOptions, (item) => { setSwExtraLegDraft(d => d ? { ...d, disposal: item.value } : d); });
   const [swDriverETAs, setSwDriverETAs] = useState<Map<string, DriverEtaResult>>(new Map());
   const [swEtaLoading, setSwEtaLoading] = useState(false);
 
@@ -2120,19 +2222,21 @@ function DispatchPageInner() {
           {/* ═══════ LEFT HALF (50%): dispatch cards + well queue ═══════ */}
           <div className="w-[50%] flex-shrink-0 flex flex-col gap-3 min-h-0 overflow-hidden">
 
-            {/* ── Tabbed Dispatch Builder (PW / SW / Projects) ── */}
-            <div className={`bg-gray-800 border rounded-lg p-4 flex-shrink-0 flex flex-col h-[460px] ${
+            {/* ── WB Job Builder (PW / SW / Projects) ── */}
+            <div className={`bg-gray-800 border rounded-lg p-4 flex-shrink-0 flex flex-col h-[520px] ${
               builderTab === 'pw' ? 'border-blue-600/40' : builderTab === 'sw' ? 'border-purple-600/40' : 'border-emerald-600/40'
             }`}>
+              {/* Card title — deliberately distinct from the active builder tab below */}
+              <h2 className="text-base font-bold text-white tracking-tight mb-2.5">WB Job Builder</h2>
               {/* Builder tab bar + Add Pull */}
-              <div className="flex items-center gap-1 mb-3 border-b border-gray-700 pb-2">
+              <div className="flex items-center gap-1.5 mb-3 border-b border-gray-700 pb-2.5">
                 {([
                   { key: 'pw' as const, label: 'PW', active: 'bg-blue-600/30 text-blue-400' },
                   { key: 'sw' as const, label: 'SW', active: 'bg-purple-600/30 text-purple-400' },
                   { key: 'projects' as const, label: 'Projects', active: 'bg-emerald-600/30 text-emerald-400' },
                 ] as const).map(tab => (
                   <button key={tab.key} onClick={() => handleBuilderTabChange(tab.key)}
-                    className={`px-3 py-1 text-xs font-medium rounded transition-colors ${
+                    className={`px-3.5 py-1.5 text-sm font-medium rounded transition-colors ${
                       builderTab === tab.key
                         ? tab.active
                         : 'text-gray-400 hover:text-white hover:bg-gray-700'
@@ -2172,6 +2276,7 @@ function DispatchPageInner() {
                               if (assignTarget) { setAssignTarget(null); setAssignDriverHash(''); }
                               setAssignWellSearch(e.target.value);
                             }}
+                            onKeyDown={pwWellNav.onKeyDown}
                             placeholder="Search wells or click Assign below..."
                             className={`w-full px-3 py-1.5 bg-gray-900 border rounded text-white text-sm focus:outline-none ${assignTarget ? 'border-blue-500 font-bold' : 'border-gray-700 focus:border-blue-500'}`}
                           />
@@ -2179,18 +2284,21 @@ function DispatchPageInner() {
                             <button onClick={() => { setAssignTarget(null); setAssignDriverHash(''); setAssignWellSearch(''); }}
                               className="absolute right-2 top-7 text-gray-400 hover:text-white text-xs">✕</button>
                           )}
-                          {!assignTarget && assignWellSearch.length >= 2 && (
+                          {!assignTarget && assignWellSearch.length >= 2 && !pwWellNav.dismissed && (
                             <div className="absolute z-10 w-full bg-gray-900 border border-gray-700 rounded mt-0.5 max-h-32 overflow-y-auto">
-                              {wells
-                                .filter(w => (w.ndicName || w.wellName).toLowerCase().includes(assignWellSearch.toLowerCase()))
-                                .slice(0, 8)
-                                .map(w => (
-                                  <button key={w.wellName} onClick={() => { setAssignTarget(w); setAssignWellSearch(''); }}
-                                    className="w-full text-left px-3 py-1.5 hover:bg-gray-700 text-white text-xs border-b border-gray-800 last:border-0">
-                                    {w.ndicName || w.wellName} <span className="text-gray-500">{w.route}</span>
+                              {pwWellOptions.map((w, i) => {
+                                const focused = i === pwWellNav.activeIndex;
+                                return (
+                                  <button key={w.wellName} type="button" tabIndex={-1}
+                                    ref={focused ? (el) => el?.scrollIntoView({ block: 'nearest' }) : undefined}
+                                    onMouseDown={(e) => e.preventDefault()}
+                                    onClick={() => { setAssignTarget(w); setAssignWellSearch(''); }}
+                                    className={`w-full text-left px-3 py-1.5 text-xs border-b border-gray-800 last:border-0 outline-none ${focused ? 'bg-blue-600/40 text-white ring-1 ring-inset ring-blue-400' : 'text-white hover:bg-gray-700'}`}>
+                                    {w.ndicName || w.wellName} <span className={focused ? 'text-blue-200' : 'text-gray-500'}>{w.route}</span>
                                   </button>
-                                ))}
-                              {wells.filter(w => (w.ndicName || w.wellName).toLowerCase().includes(assignWellSearch.toLowerCase())).length === 0 && (
+                                );
+                              })}
+                              {pwWellOptions.length === 0 && (
                                 <div className="px-3 py-1.5 text-gray-500 text-xs">No wells found</div>
                               )}
                             </div>
@@ -2247,16 +2355,23 @@ function DispatchPageInner() {
                       ) : (
                         <input type="text" value={disposalSearch}
                           onChange={(e) => { setDisposalSearch(e.target.value); setDisposalResults(e.target.value.length >= 2 ? searchDisposals(e.target.value, allDisposals) : []); }}
+                          onKeyDown={pwDisposalNav.onKeyDown}
                           placeholder="Search SWD..." className="w-full px-3 py-1.5 bg-gray-900 border border-gray-700 rounded text-white text-sm placeholder-gray-500 focus:outline-none focus:border-blue-500" />
                       )}
-                      {disposalResults.length > 0 && !assignDisposalWell && (
+                      {pwDisposalNav.open && !assignDisposalWell && (
                         <div className="absolute z-50 w-full mt-1 bg-gray-800 border border-gray-600 rounded max-h-36 overflow-y-auto shadow-lg">
-                          {disposalResults.map((d, i) => (
-                            <button key={d.api_no || i} onClick={() => { setAssignDisposal(d.well_name); setAssignDisposalWell(d); setDisposalSearch(''); setDisposalResults([]); }}
-                              className="w-full text-left px-3 py-1.5 hover:bg-gray-700 border-b border-gray-700/50 last:border-0 text-white text-sm">
-                              {d.well_name} <span className="text-gray-400 text-xs ml-1">{d.county || ''}</span>
-                            </button>
-                          ))}
+                          {disposalResults.map((d, i) => {
+                            const focused = i === pwDisposalNav.activeIndex;
+                            return (
+                              <button key={d.api_no || i} type="button" tabIndex={-1}
+                                ref={focused ? (el) => el?.scrollIntoView({ block: 'nearest' }) : undefined}
+                                onMouseDown={(e) => e.preventDefault()}
+                                onClick={() => { setAssignDisposal(d.well_name); setAssignDisposalWell(d); setDisposalSearch(''); setDisposalResults([]); }}
+                                className={`w-full text-left px-3 py-1.5 border-b border-gray-700/50 last:border-0 text-sm outline-none ${focused ? 'bg-cyan-600/40 text-white ring-1 ring-inset ring-cyan-400' : 'text-white hover:bg-gray-700'}`}>
+                                {d.well_name} <span className={`text-xs ml-1 ${focused ? 'text-cyan-200' : 'text-gray-400'}`}>{d.county || ''}</span>
+                              </button>
+                            );
+                          })}
                         </div>
                       )}
                     </div>
@@ -2311,40 +2426,27 @@ function DispatchPageInner() {
                             type="text"
                             value={swWellName}
                             onChange={(e) => setSwWellName(e.target.value)}
+                            onKeyDown={swWellNav.onKeyDown}
                             placeholder="Type to search..."
                             className="w-full px-3 py-1.5 bg-gray-900 border border-gray-700 rounded text-white text-sm placeholder-gray-500 focus:outline-none focus:border-purple-500"
                           />
-                          {(() => {
-                            const q = swWellName.trim().toLowerCase();
-                            if (q.length < 2) return null;
-                            const exactMatch = wells.some(w => (w.ndicName || w.wellName).toLowerCase() === q) ||
-                              allOperatorWells.some(w => w.well_name.toLowerCase() === q) ||
-                              allDisposals.some(d => d.well_name.toLowerCase() === q);
-                            if (exactMatch) return null;
-                            const seen = new Set<string>();
-                            const wellMatches = wells
-                              .filter(w => (w.ndicName || w.wellName).toLowerCase().includes(q))
-                              .map(w => { seen.add((w.ndicName || w.wellName).toLowerCase()); return { label: w.ndicName || w.wellName, sub: w.route || '', value: w.ndicName || w.wellName }; });
-                            const operatorMatches = allOperatorWells
-                              .filter(w => w.well_name.toLowerCase().includes(q) && !seen.has(w.well_name.toLowerCase()))
-                              .map(w => { seen.add(w.well_name.toLowerCase()); return { label: w.well_name, sub: w.operator || 'NDIC', value: w.well_name }; });
-                            const disposalMatches = searchDisposals(q, allDisposals)
-                              .filter(d => !seen.has(d.well_name.toLowerCase()))
-                              .map(d => ({ label: d.well_name, sub: 'SWD', value: d.well_name }));
-                            const combined = [...wellMatches, ...operatorMatches, ...disposalMatches].slice(0, 15);
-                            if (combined.length === 0) return null;
-                            return (
-                              <div className="absolute z-50 w-full mt-1 bg-gray-800 border border-gray-600 rounded max-h-48 overflow-y-auto shadow-lg">
-                                {combined.map((item, i) => (
-                                  <button key={`${item.value}-${i}`} type="button" onClick={() => setSwWellName(item.value)}
-                                    className="w-full text-left px-3 py-1.5 hover:bg-gray-700 border-b border-gray-700/50 last:border-0 text-white text-sm">
+                          {swWellNav.open && (
+                            <div className="absolute z-50 w-full mt-1 bg-gray-800 border border-gray-600 rounded max-h-48 overflow-y-auto shadow-lg">
+                              {swWellOptions.map((item, i) => {
+                                const focused = i === swWellNav.activeIndex;
+                                return (
+                                  <button key={`${item.value}-${i}`} type="button" tabIndex={-1}
+                                    ref={focused ? (el) => el?.scrollIntoView({ block: 'nearest' }) : undefined}
+                                    onMouseDown={(e) => e.preventDefault()}
+                                    onClick={() => setSwWellName(item.value)}
+                                    className={`w-full text-left px-3 py-1.5 border-b border-gray-700/50 last:border-0 text-sm outline-none ${focused ? 'bg-purple-600/40 text-white ring-1 ring-inset ring-purple-400' : 'text-white hover:bg-gray-700'}`}>
                                     {item.label}
-                                    {item.sub && <span className="text-gray-500 text-xs ml-2">{item.sub}</span>}
+                                    {item.sub && <span className={`text-xs ml-2 ${focused ? 'text-purple-200' : 'text-gray-500'}`}>{item.sub}</span>}
                                   </button>
-                                ))}
-                              </div>
-                            );
-                          })()}
+                                );
+                              })}
+                            </div>
+                          )}
                         </div>
                         <div className="relative">
                           <label className="block text-xs text-gray-400 mb-1">Drop-off (optional)</label>
@@ -2352,40 +2454,27 @@ function DispatchPageInner() {
                             type="text"
                             value={swDropoff}
                             onChange={(e) => setSwDropoff(e.target.value)}
+                            onKeyDown={swDropoffNav.onKeyDown}
                             placeholder="SWD or well..."
                             className="w-full px-3 py-1.5 bg-gray-900 border border-gray-700 rounded text-white text-sm placeholder-gray-500 focus:outline-none focus:border-purple-500"
                           />
-                          {(() => {
-                            const q = swDropoff.trim().toLowerCase();
-                            if (q.length < 2) return null;
-                            const exactMatch = wells.some(w => (w.ndicName || w.wellName).toLowerCase() === q) ||
-                              allOperatorWells.some(w => w.well_name.toLowerCase() === q) ||
-                              allDisposals.some(d => d.well_name.toLowerCase() === q);
-                            if (exactMatch) return null;
-                            const seen2 = new Set<string>();
-                            const wellMatches = wells
-                              .filter(w => (w.ndicName || w.wellName).toLowerCase().includes(q))
-                              .map(w => { seen2.add((w.ndicName || w.wellName).toLowerCase()); return { label: w.ndicName || w.wellName, sub: w.route || '', value: w.ndicName || w.wellName }; });
-                            const operatorMatches = allOperatorWells
-                              .filter(w => w.well_name.toLowerCase().includes(q) && !seen2.has(w.well_name.toLowerCase()))
-                              .map(w => { seen2.add(w.well_name.toLowerCase()); return { label: w.well_name, sub: w.operator || 'NDIC', value: w.well_name }; });
-                            const disposalMatches = searchDisposals(q, allDisposals)
-                              .filter(d => !seen2.has(d.well_name.toLowerCase()))
-                              .map(d => ({ label: d.well_name, sub: 'SWD', value: d.well_name }));
-                            const combined = [...wellMatches, ...operatorMatches, ...disposalMatches].slice(0, 15);
-                            if (combined.length === 0) return null;
-                            return (
-                              <div className="absolute z-50 w-full mt-1 bg-gray-800 border border-gray-600 rounded max-h-48 overflow-y-auto shadow-lg">
-                                {combined.map((item, i) => (
-                                  <button key={`${item.value}-${i}`} type="button" onClick={() => setSwDropoff(item.value)}
-                                    className="w-full text-left px-3 py-1.5 hover:bg-gray-700 border-b border-gray-700/50 last:border-0 text-white text-sm">
+                          {swDropoffNav.open && (
+                            <div className="absolute z-50 w-full mt-1 bg-gray-800 border border-gray-600 rounded max-h-48 overflow-y-auto shadow-lg">
+                              {swDropoffOptions.map((item, i) => {
+                                const focused = i === swDropoffNav.activeIndex;
+                                return (
+                                  <button key={`${item.value}-${i}`} type="button" tabIndex={-1}
+                                    ref={focused ? (el) => el?.scrollIntoView({ block: 'nearest' }) : undefined}
+                                    onMouseDown={(e) => e.preventDefault()}
+                                    onClick={() => setSwDropoff(item.value)}
+                                    className={`w-full text-left px-3 py-1.5 border-b border-gray-700/50 last:border-0 text-sm outline-none ${focused ? 'bg-purple-600/40 text-white ring-1 ring-inset ring-purple-400' : 'text-white hover:bg-gray-700'}`}>
                                     {item.label}
-                                    {item.sub && <span className="text-gray-500 text-xs ml-2">{item.sub}</span>}
+                                    {item.sub && <span className={`text-xs ml-2 ${focused ? 'text-purple-200' : 'text-gray-500'}`}>{item.sub}</span>}
                                   </button>
-                                ))}
-                              </div>
-                            );
-                          })()}
+                                );
+                              })}
+                            </div>
+                          )}
                         </div>
                       </div>{/* end left: Well + Drop-off */}
                       {/* Right: Service Type + Onsite By stacked */}
@@ -2522,44 +2611,31 @@ function DispatchPageInner() {
                             type="text"
                             value={swExtraLegDraft.disposal}
                             onChange={(e) => setSwExtraLegDraft(d => d ? { ...d, disposal: e.target.value } : d)}
+                            onKeyDown={splitLegNav.onKeyDown}
                             placeholder="Destination / SWD"
                             autoFocus
                             className="px-2 py-0.5 bg-gray-800 border border-gray-700 rounded text-white text-xs placeholder-gray-500 focus:outline-none focus:border-purple-500 w-44"
                           />
-                          {(() => {
-                            // Same well/disposal search the Well + Drop-off fields use
-                            // (NDIC wells + operator wells + SWD directory). Cuts the
-                            // spelling drift that plain free-text caused on extra legs.
-                            const q = swExtraLegDraft.disposal.trim().toLowerCase();
-                            if (q.length < 2) return null;
-                            const exactMatch = wells.some(w => (w.ndicName || w.wellName).toLowerCase() === q) ||
-                              allOperatorWells.some(w => w.well_name.toLowerCase() === q) ||
-                              allDisposals.some(d => d.well_name.toLowerCase() === q);
-                            if (exactMatch) return null;
-                            const seenLeg = new Set<string>();
-                            const wellMatches = wells
-                              .filter(w => (w.ndicName || w.wellName).toLowerCase().includes(q))
-                              .map(w => { seenLeg.add((w.ndicName || w.wellName).toLowerCase()); return { label: w.ndicName || w.wellName, sub: w.route || '', value: w.ndicName || w.wellName }; });
-                            const operatorMatches = allOperatorWells
-                              .filter(w => w.well_name.toLowerCase().includes(q) && !seenLeg.has(w.well_name.toLowerCase()))
-                              .map(w => { seenLeg.add(w.well_name.toLowerCase()); return { label: w.well_name, sub: w.operator || 'NDIC', value: w.well_name }; });
-                            const disposalMatches = searchDisposals(q, allDisposals)
-                              .filter(d => !seenLeg.has(d.well_name.toLowerCase()))
-                              .map(d => ({ label: d.well_name, sub: 'SWD', value: d.well_name }));
-                            const combined = [...wellMatches, ...operatorMatches, ...disposalMatches].slice(0, 15);
-                            if (combined.length === 0) return null;
-                            return (
-                              <div className="absolute z-50 w-full mt-1 bg-gray-800 border border-gray-600 rounded max-h-48 overflow-y-auto shadow-lg">
-                                {combined.map((item, i) => (
-                                  <button key={`${item.value}-${i}`} type="button" onClick={() => setSwExtraLegDraft(d => d ? { ...d, disposal: item.value } : d)}
-                                    className="w-full text-left px-3 py-1.5 hover:bg-gray-700 border-b border-gray-700/50 last:border-0 text-white text-sm">
+                          {/* Same well/disposal search the Well + Drop-off fields use
+                              (NDIC wells + operator wells + SWD directory). Cuts the
+                              spelling drift that plain free-text caused on extra legs. */}
+                          {splitLegNav.open && (
+                            <div className="absolute z-50 w-full mt-1 bg-gray-800 border border-gray-600 rounded max-h-48 overflow-y-auto shadow-lg">
+                              {splitLegOptions.map((item, i) => {
+                                const focused = i === splitLegNav.activeIndex;
+                                return (
+                                  <button key={`${item.value}-${i}`} type="button" tabIndex={-1}
+                                    ref={focused ? (el) => el?.scrollIntoView({ block: 'nearest' }) : undefined}
+                                    onMouseDown={(e) => e.preventDefault()}
+                                    onClick={() => setSwExtraLegDraft(d => d ? { ...d, disposal: item.value } : d)}
+                                    className={`w-full text-left px-3 py-1.5 border-b border-gray-700/50 last:border-0 text-sm outline-none ${focused ? 'bg-purple-600/40 text-white ring-1 ring-inset ring-purple-400' : 'text-white hover:bg-gray-700'}`}>
                                     {item.label}
-                                    {item.sub && <span className="text-gray-500 text-xs ml-2">{item.sub}</span>}
+                                    {item.sub && <span className={`text-xs ml-2 ${focused ? 'text-purple-200' : 'text-gray-500'}`}>{item.sub}</span>}
                                   </button>
-                                ))}
-                              </div>
-                            );
-                          })()}
+                                );
+                              })}
+                            </div>
+                          )}
                         </div>
                         <input
                           type="text"
