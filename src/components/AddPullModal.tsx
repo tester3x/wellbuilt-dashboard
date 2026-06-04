@@ -5,7 +5,7 @@
 // Writes an incoming packet to RTDB packets/incoming — Cloud Function processes it.
 // Optionally creates Firestore invoice + ticket for billing/payroll.
 
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useRef } from 'react';
 import { ref, set } from 'firebase/database';
 import { collection, addDoc, updateDoc, Timestamp } from 'firebase/firestore';
 import { getFirebaseDatabase, getFirestoreDb, getNextInvoiceNumber, getNextTicketNumber } from '@/lib/firebase';
@@ -112,6 +112,21 @@ export function AddPullModal({
     const local = new Date(now.getTime() - now.getTimezoneOffset() * 60000);
     setPullDateTime(local.toISOString().slice(0, 16));
   }, []);
+
+  // Seed the Well DOWN checkbox from the selected well's canonical state
+  // (wells/{wellName}/status/isDown, surfaced as well.isDown). Opening Record Load
+  // for a currently-down well shows the box checked. Seeds ONCE per selected well —
+  // the ref guard prevents a live wells refresh from clobbering a manual toggle, and
+  // re-seeds when the dispatcher picks a different well.
+  const seededDownForRef = useRef<string | null>(null);
+  useEffect(() => {
+    if (!pullWell) { seededDownForRef.current = null; setPullWellDown(false); return; }
+    if (seededDownForRef.current === pullWell) return;
+    const sel = wells.find(w => w.wellName === pullWell);
+    if (!sel) return; // well not resolved yet (wells still loading) — wait for it
+    seededDownForRef.current = pullWell;
+    setPullWellDown(!!(sel.isDown || sel.currentLevel === 'DOWN'));
+  }, [pullWell, wells]);
 
   // BBL per foot — use stored bblPerFoot from well_config if available, else legacy formula
   function getWellBblPerFoot(): number {
