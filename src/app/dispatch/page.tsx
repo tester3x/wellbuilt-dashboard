@@ -1,6 +1,6 @@
 'use client';
 
-import { useEffect, useState, useMemo, useCallback, Suspense } from 'react';
+import { useEffect, useState, useMemo, useCallback, useRef, Suspense } from 'react';
 import { useRouter, useSearchParams } from 'next/navigation';
 import { useAuth } from '@/contexts/AuthContext';
 import { WellResponse, subscribeToWellStatusesUnified } from '@/lib/wells';
@@ -3809,16 +3809,21 @@ function JobTypeBadge({ type, serviceType }: { type: 'pw' | 'service'; serviceTy
 }
 
 // Single job row — shows all info a dispatcher needs
-function DispatchJobRow({ job, cancelDispatch, compact, onClickServiceWork, onReassign }: {
+function DispatchJobRow({ job, cancelDispatch, compact, onClickServiceWork, onReassign, onRemove }: {
   job: DispatchJob;
   cancelDispatch: (id: string) => void;
   compact?: boolean;
   onClickServiceWork?: (job: DispatchJob) => void;
   onReassign?: (job: DispatchJob) => void;
+  onRemove?: (job: DispatchJob) => void | Promise<void>;
 }) {
   const dropoff = job.hauledTo || job.disposal;
   const isClickable = !!onClickServiceWork;
   const ago = timeAgo(job.assignedAt);
+  // Async button safety for the remove (X) action: state disables the button +
+  // shows pending, ref blocks a double-tap that re-fires before the re-render.
+  const [removing, setRemoving] = useState(false);
+  const removingRef = useRef(false);
 
   // Split ticket visual — light tint so linked jobs stand out
   const splitBg = job.splitGroupId
@@ -3915,17 +3920,32 @@ function DispatchJobRow({ job, cancelDispatch, compact, onClickServiceWork, onRe
           >👯</button>
         )}
 
-        {/* Remove button — dispatcher dismissing, not driver canceling */}
+        {/* Remove button — dispatcher dismissing, not driver canceling. Routes
+            through onRemove (parent) which is split-family-aware: X on any leg
+            of a pre-start dispatched split cancels the WHOLE family. */}
         <button
+          disabled={removing}
           onClick={async (e) => {
             e.stopPropagation();
             if (!job.id) return;
-            const firestore = getFirestoreDb();
-            await updateDoc(doc(firestore, 'dispatches', job.id), { status: 'dismissed', dismissedAt: Timestamp.now() }).catch(() => {});
+            if (removingRef.current) return; // async button safety: ignore double-tap in flight
+            removingRef.current = true;
+            setRemoving(true);
+            try {
+              if (onRemove) {
+                await onRemove(job);
+              } else {
+                const firestore = getFirestoreDb();
+                await updateDoc(doc(firestore, 'dispatches', job.id), { status: 'dismissed', dismissedAt: Timestamp.now() }).catch(() => {});
+              }
+            } finally {
+              removingRef.current = false;
+              setRemoving(false);
+            }
           }}
-          className="text-red-400/60 hover:text-red-300 text-xs flex-shrink-0 transition-colors"
+          className={`text-red-400/60 hover:text-red-300 text-xs flex-shrink-0 transition-colors ${removing ? 'opacity-40 cursor-not-allowed' : ''}`}
           title="Remove dispatch"
-        >&#10005;</button>
+        >{removing ? '…' : '✕'}</button>
       </div>
 
       {/* Detail row — invoice #, drop-off, notes */}
@@ -3963,6 +3983,44 @@ function ActiveDispatchPanel({ dispatches, cancelDispatch, drivers, assignTransf
   onReassignDeclined?: (job: DispatchJob) => void;
 }) {
   const [expandedDrivers, setExpandedDrivers] = useState<Set<string>>(new Set());
+
+  // Split-family-aware remove (red X). A dispatched split (splitGroupId) is ONE
+  // operational assignment, so X on ANY leg cancels the WHOLE family — matching
+  // the app's whole-family cancel + the Declined-card Dismiss. Two guards:
+  //  (1) STARTED family: if any leg is accepted/in_progress/paused, the driver
+  //      has it open in the app, whose active invoice lives in device
+  //      AsyncStorage — the dashboard can't clear it, so dismissing the dispatch
+  //      docs would leave a half-dead leg on the phone (the reported A-stays-alive
+  //      bug). Block + direct the dispatcher to cancel from the app.
+  //  (2) Non-split job → unchanged single dismiss.
+  const removeDispatchFamilyAware = async (job: DispatchJob) => {
+    if (!job.id) return;
+    const firestore = getFirestoreDb();
+    const TERMINAL = new Set(['dismissed', 'cancelled', 'declined', 'completed']);
+    const STARTED = new Set(['accepted', 'in_progress', 'paused']);
+    const legs = job.splitGroupId
+      ? dispatches.filter(d => d.splitGroupId === job.splitGroupId)
+      : [job];
+    const isFamily = !!job.splitGroupId && legs.length > 1;
+    if (isFamily) {
+      const started = legs.find(l => STARTED.has(String(l.status)));
+      if (started) {
+        const letter = String.fromCharCode(64 + (started.splitSequence || 1));
+        alert(`This split family has a started leg (Ticket ${letter} — ${started.status}) open on the driver's device. Cancel it from the driver's app; the dashboard can't clear an in-progress leg.`);
+        return;
+      }
+      const targets = legs.filter(l => l.id && !TERMINAL.has(String(l.status)));
+      if (targets.length === 0) return;
+      if (!confirm(`Cancel the entire split family (${targets.length} leg${targets.length !== 1 ? 's' : ''})? All legs will be removed from dispatch and the driver app.`)) return;
+      await Promise.all(targets.map(l => updateDoc(doc(firestore, 'dispatches', l.id!), {
+        status: 'dismissed',
+        dismissedAt: Timestamp.now(),
+        splitFamilyDismissed: true,
+      }))).catch(err => console.error('[dispatch] split family dismiss failed:', err));
+    } else {
+      await updateDoc(doc(firestore, 'dispatches', job.id), { status: 'dismissed', dismissedAt: Timestamp.now() }).catch(() => {});
+    }
+  };
 
   // Separate declined/cancelled jobs from active (completed filtered out before passing to this component)
   const declinedJobs = dispatches.filter(d => d.status === 'declined' || d.status === 'cancelled');
@@ -4252,6 +4310,7 @@ function ActiveDispatchPanel({ dispatches, cancelDispatch, drivers, assignTransf
                       compact={jobs.length > 2}
                       onClickServiceWork={onEditServiceWork}
                       onReassign={onReassignDeclined}
+                      onRemove={removeDispatchFamilyAware}
                     />
                   );
                   const byGroup = new Map<string, DispatchJob[]>();
