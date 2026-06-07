@@ -4333,6 +4333,205 @@ export const addSplitLeg = httpsV2.onCall(
   },
 );
 
+// ── Split-family ordering helpers (CF-side) ────────────────────────────────
+// splitSequence is the single source of truth for family order. These CFs are
+// the ONLY authoritative mutators of order: transactional, contiguous rewrite,
+// single writer (callable from WB T + dashboard) so no dup-sequence races.
+const SPLIT_TERMINAL = new Set(['completed', 'cancelled', 'declined', 'dismissed']);
+const SPLIT_STARTED = new Set(['accepted', 'in_progress', 'paused']);
+const numSeq = (v: any): number => (typeof v === 'number' && isFinite(v) ? v : Number.POSITIVE_INFINITY);
+
+/**
+ * removeSplitLeg — remove ONE unstarted future leg (per-card X / planning
+ * cleanup). NOT a family cancel. Marks the leg cancelled, then resequences the
+ * remaining non-terminal siblings contiguously from 1. Guards:
+ *   - leg must belong to a split family
+ *   - leg must NOT be the anchor (lowest live sequence)  → family-cancel only
+ *   - leg must NOT be started (accepted/in_progress/paused) or terminal
+ * Returns the new ordered family. Transactional.
+ */
+export const removeSplitLeg = httpsV2.onCall(
+  { timeoutSeconds: 30, memory: '256MiB' },
+  async (request) => {
+    const data = (request.data || {}) as { legDispatchId?: string; callerDriverHash?: string };
+    const legDispatchId = data.legDispatchId;
+    const callerDriverHash = data.callerDriverHash || null;
+    if (!legDispatchId) {
+      throw new httpsV2.HttpsError('invalid-argument', 'legDispatchId is required');
+    }
+
+    const now = admin.firestore.Timestamp.now();
+    const result = await firestoreDb.runTransaction(async (tx) => {
+      const legRef = firestoreDb.collection('dispatches').doc(legDispatchId);
+      const legSnap = await tx.get(legRef);
+      if (!legSnap.exists) {
+        throw new httpsV2.HttpsError('not-found', `Dispatch ${legDispatchId} not found`);
+      }
+      const leg = legSnap.data() as Record<string, any>;
+      const splitGroupId = leg.splitGroupId;
+      if (!splitGroupId) {
+        throw new httpsV2.HttpsError('failed-precondition', 'Dispatch is not part of a split family');
+      }
+      if (callerDriverHash && leg.driverHash && callerDriverHash !== leg.driverHash) {
+        throw new httpsV2.HttpsError('permission-denied', 'Caller driverHash does not match the dispatch');
+      }
+
+      // All reads BEFORE writes (Firestore tx rule).
+      const famSnap = await tx.get(
+        firestoreDb.collection('dispatches').where('splitGroupId', '==', splitGroupId),
+      );
+      const all = famSnap.docs.map((d) => ({ id: d.id, ref: d.ref, data: d.data() as Record<string, any> }));
+      const live = all
+        .filter((l) => !SPLIT_TERMINAL.has(String(l.data.status)))
+        .sort((a, b) => numSeq(a.data.splitSequence) - numSeq(b.data.splitSequence));
+
+      const anchorId = live[0]?.id;
+      if (legDispatchId === anchorId) {
+        throw new httpsV2.HttpsError('failed-precondition', 'Cannot remove the anchor leg (A) — cancel the family instead.');
+      }
+      if (SPLIT_STARTED.has(String(leg.status))) {
+        throw new httpsV2.HttpsError('failed-precondition', `Cannot remove a started leg (status ${leg.status}).`);
+      }
+      if (SPLIT_TERMINAL.has(String(leg.status))) {
+        throw new httpsV2.HttpsError('failed-precondition', `Leg already ${leg.status}.`);
+      }
+
+      // Cancel target (audit-preserving, app convention = cancelled status).
+      tx.update(legRef, {
+        status: 'cancelled',
+        cancelledAt: now,
+        declinedAt: now,
+        cancelReason: 'Split leg removed (planning cleanup)',
+        splitLegRemoved: true,
+        updatedAt: now,
+      });
+
+      // Resequence the survivors contiguously 1..N.
+      const remaining = live.filter((l) => l.id !== legDispatchId);
+      const newTotal = remaining.length;
+      remaining.forEach((l, idx) => {
+        const newSeq = idx + 1;
+        const update: Record<string, any> = { splitTotal: newTotal, updatedAt: now };
+        if (numSeq(l.data.splitSequence) !== newSeq) update.splitSequence = newSeq;
+        tx.update(l.ref, update);
+      });
+
+      return {
+        splitGroupId,
+        removedId: legDispatchId,
+        newTotal,
+        order: remaining.map((l, idx) => ({ id: l.id, splitSequence: idx + 1 })),
+      };
+    });
+
+    // Mirror splitTotal onto any started leg's invoice (addSplitLeg pattern).
+    try {
+      const invSnap = await firestoreDb
+        .collection('invoices')
+        .where('dispatchSplitGroupId', '==', result.splitGroupId)
+        .get();
+      const batch = firestoreDb.batch();
+      invSnap.forEach((d) => batch.update(d.ref, { dispatchSplitTotal: result.newTotal, updatedAt: now }));
+      if (!invSnap.empty) await batch.commit();
+    } catch (e: any) {
+      console.warn('[removeSplitLeg] invoice total mirror failed:', e?.message);
+    }
+
+    console.log(`[removeSplitLeg] removed ${result.removedId} from ${result.splitGroupId}; new order ${result.order.map((o) => o.splitSequence).join(',')} total=${result.newTotal}`);
+    return result;
+  },
+);
+
+/**
+ * resequenceSplitFamily — reorder UNSTARTED future legs (Reorder Mode ↑↓).
+ * orderedLegIds = the full desired order of the family's NON-TERMINAL legs.
+ * Guards:
+ *   - orderedLegIds must be exactly the set of live (non-terminal) leg ids
+ *   - the anchor must stay first (A cannot move)
+ *   - every started/completed (locked) leg must keep its current index
+ *     (only unstarted legs may be permuted)
+ * Rewrites contiguous splitSequence. Transactional. Returns new order.
+ */
+export const resequenceSplitFamily = httpsV2.onCall(
+  { timeoutSeconds: 30, memory: '256MiB' },
+  async (request) => {
+    const data = (request.data || {}) as {
+      splitGroupId?: string;
+      orderedLegIds?: string[];
+      callerDriverHash?: string;
+    };
+    const { splitGroupId } = data;
+    const orderedLegIds = data.orderedLegIds;
+    const callerDriverHash = data.callerDriverHash || null;
+    if (!splitGroupId || !Array.isArray(orderedLegIds) || orderedLegIds.length === 0) {
+      throw new httpsV2.HttpsError('invalid-argument', 'splitGroupId and non-empty orderedLegIds are required');
+    }
+
+    const now = admin.firestore.Timestamp.now();
+    const result = await firestoreDb.runTransaction(async (tx) => {
+      const famSnap = await tx.get(
+        firestoreDb.collection('dispatches').where('splitGroupId', '==', splitGroupId),
+      );
+      if (famSnap.empty) {
+        throw new httpsV2.HttpsError('not-found', `No dispatches for splitGroupId=${splitGroupId}`);
+      }
+      const all = famSnap.docs.map((d) => ({ id: d.id, ref: d.ref, data: d.data() as Record<string, any> }));
+      if (callerDriverHash) {
+        const owner = all.find((l) => l.data.driverHash && l.data.driverHash !== callerDriverHash);
+        if (owner) {
+          throw new httpsV2.HttpsError('permission-denied', 'Caller driverHash does not match the family');
+        }
+      }
+      const live = all
+        .filter((l) => !SPLIT_TERMINAL.has(String(l.data.status)))
+        .sort((a, b) => numSeq(a.data.splitSequence) - numSeq(b.data.splitSequence));
+
+      // Set equality: orderedLegIds must be exactly the live leg ids.
+      const liveIds = new Set(live.map((l) => l.id));
+      if (orderedLegIds.length !== liveIds.size || !orderedLegIds.every((id) => liveIds.has(id))) {
+        throw new httpsV2.HttpsError('failed-precondition', 'orderedLegIds must be exactly the live (non-terminal) legs');
+      }
+
+      // A (anchor) must stay first.
+      if (orderedLegIds[0] !== live[0].id) {
+        throw new httpsV2.HttpsError('failed-precondition', 'Anchor leg (A) cannot move');
+      }
+
+      // Locked legs (anchor + started) must keep their current index.
+      const isLocked = (l: { id: string; data: Record<string, any> }) =>
+        l.id === live[0].id || SPLIT_STARTED.has(String(l.data.status));
+      for (let i = 0; i < live.length; i++) {
+        if (isLocked(live[i]) && orderedLegIds[i] !== live[i].id) {
+          throw new httpsV2.HttpsError(
+            'failed-precondition',
+            `A started/anchor leg cannot change position (index ${i}).`,
+          );
+        }
+      }
+
+      // Rewrite contiguous splitSequence per the new order.
+      const byId = new Map(live.map((l) => [l.id, l]));
+      const newTotal = orderedLegIds.length;
+      orderedLegIds.forEach((id, idx) => {
+        const l = byId.get(id)!;
+        const newSeq = idx + 1;
+        const update: Record<string, any> = { splitTotal: newTotal, updatedAt: now };
+        if (numSeq(l.data.splitSequence) !== newSeq) update.splitSequence = newSeq;
+        tx.update(l.ref, update);
+      });
+
+      return {
+        splitGroupId,
+        newTotal,
+        order: orderedLegIds.map((id, idx) => ({ id, splitSequence: idx + 1 })),
+      };
+    });
+
+    console.log(`[resequenceSplitFamily] ${result.splitGroupId} → ${result.order.map((o) => o.id.slice(0, 6) + ':' + o.splitSequence).join(', ')}`);
+    return result;
+  },
+);
+
 export {
   recoverHandoffOrphan,
   listStuckHandoffs,
