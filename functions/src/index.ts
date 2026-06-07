@@ -4353,9 +4353,10 @@ const numSeq = (v: any): number => (typeof v === 'number' && isFinite(v) ? v : N
 export const removeSplitLeg = httpsV2.onCall(
   { timeoutSeconds: 30, memory: '256MiB' },
   async (request) => {
-    const data = (request.data || {}) as { legDispatchId?: string; callerDriverHash?: string };
+    const data = (request.data || {}) as { legDispatchId?: string; callerDriverHash?: string; reason?: string };
     const legDispatchId = data.legDispatchId;
     const callerDriverHash = data.callerDriverHash || null;
+    const reason = typeof data.reason === 'string' ? data.reason.trim().slice(0, 200) : '';
     if (!legDispatchId) {
       throw new httpsV2.HttpsError('invalid-argument', 'legDispatchId is required');
     }
@@ -4397,12 +4398,18 @@ export const removeSplitLeg = httpsV2.onCall(
       }
 
       // Cancel target (audit-preserving, app convention = cancelled status).
+      // Optional driver reason is stored both on cancelReason (so existing
+      // dashboard cancelled/notes surfaces show it) and on dedicated
+      // splitRemove* audit fields.
       tx.update(legRef, {
         status: 'cancelled',
         cancelledAt: now,
         declinedAt: now,
-        cancelReason: 'Split leg removed (planning cleanup)',
+        cancelReason: reason || 'Split leg removed (planning cleanup)',
         splitLegRemoved: true,
+        splitRemoveReason: reason || null,
+        splitRemovedAt: now,
+        ...(callerDriverHash ? { splitRemovedBy: callerDriverHash } : {}),
         updatedAt: now,
       });
 
