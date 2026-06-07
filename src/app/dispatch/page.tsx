@@ -1202,16 +1202,16 @@ function DispatchPageInner() {
           swExtraSplitLegs.forEach((extra, idx) => {
             const letter = String.fromCharCode(67 + idx); // C, D, E…
             const bblsNum = extra.bbls ? parseFloat(extra.bbls) : NaN;
-            // Route inheritance: a leg after A picks up where the PREVIOUS leg
-            // dropped off. C's pickup = B's drop-off (swDropoff); D's pickup =
-            // C's drop-off; etc. Destination = this leg's own selected
-            // location. Previously pickup was wrongly set to the leg's own
-            // disposal (origin == destination → no forward route).
-            const prevDropoff = idx === 0 ? swDropoff.trim() : swExtraSplitLegs[idx - 1].disposal;
+            // SW split-button model (2026-06-06): each leg's chip/button IS that
+            // leg's stop. wellName == disposal == the chip label. No "previous
+            // drop-off becomes next pickup" chain inference — that was wrong and
+            // made every surface (mobile header chips, mobile DJD card, dashboard
+            // card) show the prior leg's stop. The chip the dispatcher typed is
+            // the leg's location, period.
             const extraJob: Omit<DispatchJob, 'id'> = {
               ...baseJob,
-              wellName: prevDropoff,
-              ndicWellName: prevDropoff,
+              wellName: extra.disposal,
+              ndicWellName: extra.disposal,
               disposal: extra.disposal,
               notes: extra.notes
                 ? `Split ticket ${letter} — ${extra.notes}`

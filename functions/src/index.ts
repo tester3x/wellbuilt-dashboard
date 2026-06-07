@@ -4188,8 +4188,13 @@ export const addSplitLeg = httpsV2.onCall(
       driverHash: parent.driverHash,
       driverName: parent.driverName,
       driverFirstName: parent.driverFirstName || null,
-      wellName: parent.wellName,
-      ndicWellName: parent.ndicWellName || parent.wellName,
+      // SW split-button model (2026-06-06): a split leg's chip/button IS its
+      // stop, so wellName == disposal == the chip label (legSpec.disposal).
+      // Previously this inherited the anchor leg's wellName (parent.wellName),
+      // which made the field-added leg render the original well instead of its
+      // own stop on every surface (mobile header chip, mobile/dashboard cards).
+      wellName: legSpec.disposal,
+      ndicWellName: legSpec.disposal,
       operator: parent.operator || null,
       packageId: parent.packageId || null,
       companyId: parent.companyId || null,
