@@ -2701,7 +2701,7 @@ function DispatchPageInner() {
                               <button key={d.key} type="button" onClick={() => { setSwDriverHashes(prev => { const next = new Set(prev); if (next.has(d.key)) next.delete(d.key); else next.add(d.key); return next; }); }}
                                 className={`w-full flex items-center gap-2 px-2 py-1 text-xs text-left border-b border-gray-800 last:border-0 transition-colors ${checked ? 'bg-purple-900/30 text-white' : 'text-gray-300 hover:bg-gray-800'}`}>
                                 <input type="checkbox" checked={checked} readOnly className="w-3 h-3 rounded border-gray-600 bg-gray-800 text-purple-600 pointer-events-none flex-shrink-0" />
-                                <span className="flex-1 min-w-0 truncate">{d.legalName || d.displayName}</span>
+                                <span className="flex-1 min-w-0 truncate">{d.onShift ? '🟢 ' : '🔴 '}{d.legalName || d.displayName}</span>
                                 {activeJob && (
                                   <span className="flex-shrink-0 px-1.5 py-0.5 rounded text-[9px] font-bold bg-blue-900/50 text-blue-400 border border-blue-800">On Job</span>
                                 )}
@@ -2868,7 +2868,7 @@ function DispatchPageInner() {
                                     }
                                   }}
                                   className="w-3 h-3 rounded border-gray-600 bg-gray-800 text-amber-500 focus:ring-amber-500 flex-shrink-0" />
-                                <span className={`text-xs truncate ${checked && shift === 'day' ? 'text-white' : 'text-gray-400'}`}>{d.legalName || d.displayName}</span>
+                                <span className={`text-xs truncate ${checked && shift === 'day' ? 'text-white' : 'text-gray-400'}`}>{d.onShift ? '🟢 ' : '🔴 '}{d.legalName || d.displayName}</span>
                               </label>
                             );
                           })}
@@ -2895,7 +2895,7 @@ function DispatchPageInner() {
                                     }
                                   }}
                                   className="w-3 h-3 rounded border-gray-600 bg-gray-800 text-blue-500 focus:ring-blue-500 flex-shrink-0" />
-                                <span className={`text-xs truncate ${checked && shift === 'night' ? 'text-white' : 'text-gray-400'}`}>{d.legalName || d.displayName}</span>
+                                <span className={`text-xs truncate ${checked && shift === 'night' ? 'text-white' : 'text-gray-400'}`}>{d.onShift ? '🟢 ' : '🔴 '}{d.legalName || d.displayName}</span>
                               </label>
                             );
                           })}
