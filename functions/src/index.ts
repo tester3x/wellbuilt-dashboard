@@ -4736,16 +4736,36 @@ export const validatePhotoCompliance = httpsV2.onCall(
 
     // 3. Build the prompt (shared across providers). Reference image (if
     //    available) anchors the visual; the description is the semantic spec.
+    //
+    //    TWO SEPARATE JUDGMENTS (do not conflate):
+    //    (A) ACCEPTANCE — is the required target AND its immediate surrounding
+    //        area DOCUMENTED well enough for a human to review? This is the only
+    //        thing that gates pass/retake.
+    //    (B) CONCERN — does the photo show anything dispatch/admin should review
+    //        (wetness, pooling, sheen, possible spill, active flow)? This is
+    //        metadata only; it NEVER fails the photo.
     const prompt =
-      `You are a strict field-photo compliance checker for an oilfield water-hauling app.\n` +
-      `The REQUIRED photo must show: "${description}".\n` +
+      `You are reviewing a field-documentation photo for an oilfield water-hauling app.\n` +
+      `The REQUIRED photo must DOCUMENT: "${description}".\n` +
       (refBase64
-        ? `The first image is the REFERENCE example of a correct photo. The second image is the CANDIDATE taken by the driver.\n`
-        : `The image is the CANDIDATE taken by the driver (no reference example available — judge against the description).\n`) +
-      `Decide how well the CANDIDATE satisfies the requirement (correct subject present and in the correct state/condition). ` +
-      `Ignore lighting, angle, and minor framing differences — judge the SUBJECT and its STATE, not photo quality.\n` +
-      `Respond ONLY with JSON: {"score": <integer 0-100>, "reason": "<one short sentence>"}. ` +
-      `score = confidence the candidate meets the requirement.`;
+        ? `The first image is a REFERENCE example of a correct photo. The second image is the CANDIDATE taken by the driver.\n`
+        : `The image is the CANDIDATE taken by the driver (no reference example — judge against the description).\n`) +
+      `\nMake TWO SEPARATE judgments:\n` +
+      `\n1) ACCEPTANCE (gates pass/retake). Ask ONLY: "Is the required target AND the immediate surrounding area documented clearly enough for a human to review?"\n` +
+      `   accepted = false ONLY for proof/framing problems: wrong subject; the target is not visible; a required connection/cap/hose/truck part is not visible; the immediate surrounding ground/area is not visible; too far away; too blurry/dark/blocked to review.\n` +
+      `   accepted = true otherwise — even if the scene looks messy, wet, or imperfect.\n` +
+      `   DO NOT set accepted=false because of: wet ground, puddles, mud, rainwater, standing water, pooling, possible spill, oil sheen, or overflow evidence. A photo that clearly documents a wet/spilled condition is GOOD evidence and must be ACCEPTED.\n` +
+      `   score (integer 0-100) = how clearly the target + immediate area are DOCUMENTED (framing, distance, focus, lighting, visibility). It is about REVIEWABILITY, not about condition. Blurry/far/blocked = low score.\n` +
+      `\n2) CONCERN (metadata only, never fails). Ask: "Is there anything dispatch/admin should review?"\n` +
+      `   concernLevel: "none" | "low" | "medium" | "high".\n` +
+      `   - none: clean, nothing notable.\n` +
+      `   - low: minor/ambiguous wetness or dampness that could easily be weather/washdown.\n` +
+      `   - medium: localized wetness/staining/trail near the connection or equipment that is not obviously weather.\n` +
+      `   - high: active fluid flowing/leaking, heavy fresh pooling around the connection, or obvious overflow/spill.\n` +
+      `   redFlag = true when concernLevel is medium or high (something a human should look at). Otherwise false.\n` +
+      `   concernReason = one short sentence describing the concern, or null when concernLevel is none.\n` +
+      `\nRespond ONLY with JSON, no prose:\n` +
+      `{"accepted": <true|false>, "score": <integer 0-100>, "reason": "<one short driver-actionable sentence>", "concernLevel": "none|low|medium|high", "concernReason": "<sentence or null>", "redFlag": <true|false>}`;
 
     const candidateMime = mimeType || 'image/jpeg';
     let modelText: string;
@@ -4796,9 +4816,16 @@ export const validatePhotoCompliance = httpsV2.onCall(
           await writeAudit({ provider, model: g.model, verdict: 'fail', failType: 'non_direct_photo', score: 0, reason, inputTokens: g.usageIn, outputTokens: g.usageOut, estimatedCostUsd: gCost });
           return {
             pass: false,
+            passed: false,
+            accepted: false,
             score: 0,
             threshold,
             reason,
+            concernLevel: 'none',
+            concernReason: null,
+            redFlag: false,
+            weatherContextUsed: false,
+            weatherSummary: null,
             failType: 'non_direct_photo',
             requirementId,
             provider,
@@ -4897,15 +4924,28 @@ export const validatePhotoCompliance = httpsV2.onCall(
       }
     }
 
-    // 4. Parse score/reason; compute pass server-side against the threshold.
+    // 4. Parse the two-part judgment. ACCEPTANCE gates pass/retake; CONCERN is
+    //    metadata only and never fails the photo.
+    let accepted = false;
     let score = 0;
     let reason = '';
+    let concernLevel: 'none' | 'low' | 'medium' | 'high' = 'none';
+    let concernReason: string | null = null;
+    let redFlag = false;
     try {
       let s = modelText.trim();
       if (s.startsWith('```')) s = s.replace(/^```(?:json)?\s*\n?/, '').replace(/\n?```\s*$/, '');
       const parsed = JSON.parse(s);
       score = Math.max(0, Math.min(100, Math.round(Number(parsed.score) || 0)));
       reason = String(parsed.reason || '').slice(0, 200);
+      accepted = parsed.accepted === true;
+      const lvl = String(parsed.concernLevel || 'none').toLowerCase();
+      concernLevel = (['none', 'low', 'medium', 'high'].includes(lvl) ? lvl : 'none') as 'none' | 'low' | 'medium' | 'high';
+      concernReason = parsed.concernReason && String(parsed.concernReason).toLowerCase() !== 'null'
+        ? String(parsed.concernReason).slice(0, 200) : null;
+      // redFlag follows the model, but force it on for medium/high so a concern
+      // is never silently dropped even if the model forgets the flag.
+      redFlag = parsed.redFlag === true || concernLevel === 'medium' || concernLevel === 'high';
     } catch (e: any) {
       console.error('[validatePhotoCompliance] JSON parse failed. Raw:', modelText.slice(0, 300));
       logMetrics({ verdict: 'error', errorCode: 'parse_error', errorReason: modelText.slice(0, 120), inputTokens: usageIn, outputTokens: usageOut });
@@ -4913,7 +4953,10 @@ export const validatePhotoCompliance = httpsV2.onCall(
       throw new httpsV2.HttpsError('internal', 'Could not parse validation result');
     }
 
-    const pass = score >= threshold;
+    // Pass = the photo documents the target+area (accepted) AND is clear enough
+    // to review (score meets the requirement's framing-confidence threshold).
+    // Condition (wet/spill) lives in concern*, never here.
+    const pass = accepted && score >= threshold;
     const rate = VISION_RATES[usedModel] || { in: 0, out: 0 };
     const estimatedCostUsd = Number((usageIn * rate.in + usageOut * rate.out).toFixed(6));
     logMetrics({
@@ -4925,15 +4968,24 @@ export const validatePhotoCompliance = httpsV2.onCall(
     await writeAudit({
       provider, model: usedModel,
       verdict: pass ? 'pass' : 'fail',
-      score, reason,
+      accepted, score, reason,
+      concernLevel, concernReason, redFlag,
+      weatherContextUsed: false, weatherSummary: null, // Phase 2 will populate
       estimatedCostUsd, inputTokens: usageIn, outputTokens: usageOut,
     });
 
     return {
-      pass,
+      pass,             // backward-compat alias of `passed`/`accepted`-gated result
+      passed: pass,
+      accepted,
       score,
       threshold,
       reason,
+      concernLevel,
+      concernReason,
+      redFlag,
+      weatherContextUsed: false,
+      weatherSummary: null,
       requirementId,
       provider,
       model: usedModel,
