@@ -580,6 +580,10 @@ function DispatchPageInner() {
   // the driver's device and owns its own state (convert in-app instead).
   const [editJobType, setEditJobType] = useState<'pw' | 'service'>('pw');
   const [editServiceType, setEditServiceType] = useState('');
+  // "Split Ticket" checkbox — on Save, turns a single (non-family) job into a
+  // split family using the job's CURRENT drop-off as Ticket B (pickup/well leg
+  // stays Ticket A). More legs are added afterward from the board "+ Add Leg".
+  const [editSplitTicket, setEditSplitTicket] = useState(false);
   // Add Split Leg (dashboard, existing split family only) — destination-only.
   const [addLegDest, setAddLegDest] = useState('');
   const [addLegSaving, setAddLegSaving] = useState(false);
@@ -1946,6 +1950,7 @@ function DispatchPageInner() {
     // Job-type conversion seed — target type defaults to the job's current type.
     setEditJobType(job.jobType === 'service' ? 'service' : 'pw');
     setEditServiceType(job.serviceType || '');
+    setEditSplitTicket(false);
     // PW-specific
     setEditPwDisposal(job.disposal || job.hauledTo || '');
     setEditPwDisposalResults([]);
@@ -1960,24 +1965,6 @@ function DispatchPageInner() {
     // Add-leg sub-form
     setAddLegDest('');
     setAddLegSaving(false);
-  }
-
-  // Append a leg to this dispatched split family (existing families only; the
-  // addSplitLeg CF rejects non-family parents). Destination only — BBLs set
-  // later via carry-forward. The live dispatches subscription refreshes order.
-  async function addSplitLegFromEdit() {
-    // No splitGroupId guard: a single job converts to a split (CF mints the
-    // family). Eligibility (last-planned leg) is enforced by the section gate.
-    if (!editSwJob?.id || !addLegDest.trim() || addLegSaving) return;
-    setAddLegSaving(true);
-    try {
-      await addSplitLegFromDashboard(editSwJob.id, addLegDest.trim());
-      setAddLegDest('');
-    } catch (err: any) {
-      alert(err?.message || 'Could not add split leg');
-    } finally {
-      setAddLegSaving(false);
-    }
   }
 
   // Open the family-level Add Leg modal from the board (any leg id resolves the
@@ -2134,6 +2121,19 @@ function DispatchPageInner() {
           });
         });
         await Promise.all(updateCrewPromises);
+      }
+
+      // 4. Split Ticket — turn this single job into a split family using the
+      //    CURRENT drop-off as Ticket B (pickup/well stays Ticket A). Runs last,
+      //    after the type conversion + disposal writes are committed, so the new
+      //    leg inherits the (possibly just-converted) type. More legs are added
+      //    from the board family card afterward. Non-family, non-terminal only.
+      const splitTerminal = ['completed', 'cancelled', 'declined', 'dismissed'].includes(String(editSwJob.status));
+      if (editSplitTicket && editSwJob.id && !editSwJob.splitGroupId && !splitTerminal) {
+        const dropoffB = (editJobType === 'service' ? editSwDisposal : editPwDisposal).trim();
+        if (dropoffB) {
+          await addSplitLegFromDashboard(editSwJob.id, dropoffB);
+        }
       }
 
       setMessage('Dispatch updated');
@@ -3900,54 +3900,35 @@ function DispatchPageInner() {
                   />
                 </div>
 
-                {/* Split This Job — single→split conversion ONLY. Adding legs to an
-                    EXISTING family moved to the board family-card "+ Add Leg" (no
-                    need to open a specific leg's editor). Destination uses the SAME
-                    customer-scoped Job-Builder lookup (buildComboOptions). */}
+                {/* Split Ticket — checkbox (matches the Job Builder). On Save,
+                    turns this single job into a split family: pickup/well stays
+                    Ticket A, the CURRENT drop-off becomes Ticket B. Add more legs
+                    afterward from the board family card "+ Add Leg". Only for a
+                    non-family, non-terminal job. */}
                 {(() => {
                   const TERM = ['completed', 'cancelled', 'declined', 'dismissed'];
                   if (editSwJob.splitGroupId) return null; // already a family → add legs from the board card
-                  if (TERM.includes(String(editSwJob.status))) return null; // terminal single → nothing
+                  if (TERM.includes(String(editSwJob.status))) return null; // terminal → nothing
                   return (
                     <div className="mb-5 p-3 rounded-lg border border-purple-600/30 bg-purple-950/20">
-                      <label className="block text-sm text-purple-300 font-medium mb-2">Split This Job</label>
-                      <div className="relative">
+                      <label className="flex items-start gap-2 cursor-pointer">
                         <input
-                          type="text"
-                          value={addLegDest}
-                          onChange={(e) => setAddLegDest(e.target.value)}
-                          onKeyDown={addLegNav.onKeyDown}
-                          placeholder="Second-leg destination (SWD or well)..."
-                          className="w-full px-3 py-2 bg-gray-900 border border-gray-700 rounded text-white text-sm placeholder-gray-500 focus:outline-none focus:border-purple-500"
+                          type="checkbox"
+                          checked={editSplitTicket}
+                          onChange={(e) => setEditSplitTicket(e.target.checked)}
+                          className="mt-0.5 w-4 h-4 accent-purple-500"
                         />
-                        {addLegNav.open && (
-                          <div className="absolute z-50 w-full mt-1 bg-gray-800 border border-gray-600 rounded max-h-48 overflow-y-auto shadow-lg">
-                            {addLegOptions.map((item, i) => {
-                              const focused = i === addLegNav.activeIndex;
-                              return (
-                                <button key={`${item.value}-${i}`} type="button" tabIndex={-1}
-                                  ref={focused ? (el) => el?.scrollIntoView({ block: 'nearest' }) : undefined}
-                                  onMouseDown={(e) => e.preventDefault()}
-                                  onClick={() => setAddLegDest(item.value)}
-                                  className={`w-full text-left px-3 py-1.5 border-b border-gray-700/50 last:border-0 text-sm outline-none ${focused ? 'bg-purple-600/40 text-white ring-1 ring-inset ring-purple-400' : 'text-white hover:bg-gray-700'}`}>
-                                  {item.label}
-                                  {item.sub && <span className={`text-xs ml-2 ${focused ? 'text-purple-200' : 'text-gray-500'}`}>{item.sub}</span>}
-                                </button>
-                              );
-                            })}
-                          </div>
-                        )}
-                      </div>
-                      <button
-                        onClick={addSplitLegFromEdit}
-                        disabled={!addLegDest.trim() || addLegSaving}
-                        className="mt-2 px-3 py-1.5 bg-purple-600 hover:bg-purple-500 disabled:bg-gray-600 disabled:cursor-not-allowed text-white text-xs font-medium rounded transition-colors"
-                      >
-                        {addLegSaving ? 'Splitting…' : '+ Split (adds Ticket B)'}
-                      </button>
-                      <p className="text-gray-500 text-xs mt-1.5">
-                        Converts this job into a split family — this becomes Ticket A, the new leg Ticket B. BBLs set later via carry-forward.
-                      </p>
+                        <span>
+                          <span className="block text-sm text-purple-300 font-medium">Split Ticket</span>
+                          <span className="block text-gray-400 text-xs mt-0.5">
+                            On save, the current drop-off becomes <b>Ticket B</b> (pickup/well stays Ticket A).
+                            Add more legs from the job card afterward. BBLs set later via carry-forward.
+                          </span>
+                        </span>
+                      </label>
+                      {editSplitTicket && !editSwDisposal.trim() && (
+                        <p className="text-amber-400/80 text-xs mt-2">Set a drop-off above first — it becomes Ticket B.</p>
+                      )}
                     </div>
                   );
                 })()}
