@@ -4175,7 +4175,7 @@ function DispatchJobRow({ job, cancelDispatch, compact, onClickServiceWork, onRe
               passes onRemove = single-leg cancel and gates `removable` to future
               unstarted legs (anchor/started legs hide it; the family-header X
               cancels the whole family). Non-split/single jobs keep the dismiss. */}
-          {removable !== false && (
+          {removable !== false ? (
           <button
             disabled={removing}
             onClick={async (e) => {
@@ -4199,6 +4199,10 @@ function DispatchJobRow({ job, cancelDispatch, compact, onClickServiceWork, onRe
             className={`inline-flex items-center justify-center w-6 h-6 rounded text-red-400/70 hover:text-red-200 hover:bg-red-500/15 text-sm transition-colors ${removing ? 'opacity-40 cursor-not-allowed' : ''}`}
             title="Remove dispatch"
           >{removing ? '…' : '✕'}</button>
+          ) : (
+            // Anchor/started leg: no per-row X, but reserve the slot so the badge
+            // + edit + reassign icons line up with the removable rows below.
+            <span className="inline-flex w-6 h-6 flex-shrink-0" aria-hidden />
           )}
         </div>
       </div>
