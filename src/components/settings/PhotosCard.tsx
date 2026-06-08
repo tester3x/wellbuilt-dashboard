@@ -2,6 +2,7 @@
 
 import { useState } from 'react';
 import { type CompanyConfig, updateCompanyFields } from '@/lib/companySettings';
+import { RequiredPhotoSpecs } from './RequiredPhotoSpecs';
 
 interface Props {
   company: CompanyConfig;
@@ -119,6 +120,9 @@ export function PhotosCard({ company, onSave }: Props) {
             <span className="text-gray-500 text-xs">days</span>
           </div>
         </div>
+
+        {/* Required Photo Specs — AI-checked per-customer required photos */}
+        <RequiredPhotoSpecs company={company} />
       </div>
     </div>
   );
