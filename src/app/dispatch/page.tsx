@@ -3740,12 +3740,13 @@ function DispatchPageInner() {
                 {/* Add Split Leg — existing split families only. Appends a leg
                     via the addSplitLeg CF (dashboard origin). Destination only;
                     BBLs decided later via carry-forward, like the in-app flow. */}
-                {editSwJob.splitGroupId && (() => {
-                  const liveLegs = dispatches.filter(d => d.splitGroupId === editSwJob.splitGroupId && !['cancelled', 'declined', 'dismissed', 'completed'].includes(String(d.status)));
-                  const nextLetter = String.fromCharCode(64 + Math.min(liveLegs.length + 1, 26));
+                {(editSwJob.splitGroupId || !['completed', 'cancelled', 'declined', 'dismissed'].includes(String(editSwJob.status))) && (() => {
+                  const isFam = !!editSwJob.splitGroupId;
+                  const liveLegs = isFam ? dispatches.filter(d => d.splitGroupId === editSwJob.splitGroupId && !['cancelled', 'declined', 'dismissed', 'completed'].includes(String(d.status))) : [];
+                  const nextLetter = isFam ? String.fromCharCode(64 + Math.min(liveLegs.length + 1, 26)) : 'B';
                   return (
                     <div className="mb-5 p-3 rounded-lg border border-purple-600/30 bg-purple-950/20">
-                      <label className="block text-sm text-purple-300 font-medium mb-2">Add Split Leg</label>
+                      <label className="block text-sm text-purple-300 font-medium mb-2">{isFam ? 'Add Split Leg' : 'Split This Job'}</label>
                       <div className="relative">
                         <input
                           type="text"
@@ -3753,7 +3754,7 @@ function DispatchPageInner() {
                           onChange={(e) => { const v = e.target.value; setAddLegDest(v); setAddLegResults(v.length >= 2 ? searchDisposals(v, allDisposals) : []); setAddLegShowDropdown(v.length >= 2); }}
                           onFocus={() => { if (addLegDest.length >= 2) setAddLegShowDropdown(true); }}
                           onBlur={() => setTimeout(() => setAddLegShowDropdown(false), 200)}
-                          placeholder="New leg destination / SWD..."
+                          placeholder={isFam ? 'New leg destination / SWD...' : 'Second-leg destination / SWD...'}
                           className="w-full px-3 py-2 bg-gray-900 border border-gray-700 rounded text-white text-sm placeholder-gray-500 focus:outline-none focus:border-purple-500"
                         />
                         {addLegShowDropdown && addLegResults.length > 0 && (
@@ -3771,9 +3772,13 @@ function DispatchPageInner() {
                         disabled={!addLegDest.trim() || addLegSaving}
                         className="mt-2 px-3 py-1.5 bg-purple-600 hover:bg-purple-500 disabled:bg-gray-600 disabled:cursor-not-allowed text-white text-xs font-medium rounded transition-colors"
                       >
-                        {addLegSaving ? 'Adding…' : `+ Add Leg (${nextLetter})`}
+                        {addLegSaving ? (isFam ? 'Adding…' : 'Splitting…') : (isFam ? `+ Add Leg (${nextLetter})` : '+ Split (adds Ticket B)')}
                       </button>
-                      <p className="text-gray-500 text-xs mt-1.5">Appends a new leg to this split family. BBLs set later via carry-forward.</p>
+                      <p className="text-gray-500 text-xs mt-1.5">
+                        {isFam
+                          ? 'Appends a new leg to this split family. BBLs set later via carry-forward.'
+                          : 'Converts this job into a split family — this becomes Ticket A, the new leg Ticket B. BBLs set later via carry-forward.'}
+                      </p>
                     </div>
                   );
                 })()}
