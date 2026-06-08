@@ -4632,7 +4632,7 @@ const VISION_RATES: Record<string, { in: number; out: number }> = {
 export const validatePhotoCompliance = httpsV2.onCall(
   { timeoutSeconds: 60, memory: '512MiB' },
   async (request) => {
-    const { customerId, requirementId, photoBase64, mimeType, ticketId, invoiceId, driverId, photoStoragePath } = (request.data || {}) as {
+    const { customerId, requirementId, photoBase64, mimeType, ticketId, invoiceId, driverId, photoStoragePath, companyId } = (request.data || {}) as {
       customerId?: string;
       requirementId?: string;
       photoBase64?: string;
@@ -4642,6 +4642,7 @@ export const validatePhotoCompliance = httpsV2.onCall(
       invoiceId?: string;
       driverId?: string;
       photoStoragePath?: string;
+      companyId?: string;
     };
 
     if (!customerId || !requirementId || !photoBase64) {
@@ -4678,6 +4679,7 @@ export const validatePhotoCompliance = httpsV2.onCall(
             ticketId: ticketId || null,
             invoiceId: invoiceId || null,
             driverId: driverId || null,
+            companyId: companyId || null,
             photoStoragePath: photoStoragePath || null,
             createdAt: admin.firestore.Timestamp.now(),
             ...fields,
