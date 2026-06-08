@@ -2023,10 +2023,13 @@ function DispatchPageInner() {
     try {
       const firestore = getFirestoreDb();
 
-      // 0. Job-type conversion (PW <-> SW) — pending jobs only. Convert in place
-      //    on the same dispatch doc (preserves identity/assignment). A started
-      //    job owns its own state on the driver's device; the UI blocks that.
-      if (editSwJob.id && String(editSwJob.status) === 'pending') {
+      // 0. Job-type conversion (PW <-> SW) — allowed at any NON-TERMINAL stage.
+      //    Convert in place on the same dispatch doc: only jobType/serviceType
+      //    change, so ticket #, driver, truck, photos, and timestamps are all
+      //    preserved (no recreate). Unlike single→split, this does not rebuild
+      //    the job, so mid-job conversion (loaded / en route) is supported.
+      const convTerminal = ['completed', 'cancelled', 'declined', 'dismissed'].includes(String(editSwJob.status));
+      if (editSwJob.id && !convTerminal) {
         const typeChanged = editJobType !== editSwJob.jobType;
         const stChanged = editJobType === 'service' && editServiceType.trim() !== (editSwJob.serviceType || '');
         if (typeChanged || stChanged) {
@@ -3544,13 +3547,18 @@ function DispatchPageInner() {
             </div>
 
             {/* ── Job Type conversion (PW <-> SW) ───────────────────────────
-                Convert in place — same dispatch doc, preserves identity. Only
-                for pending (not-yet-started) jobs; a started job is live on the
-                driver's device and must be converted in-app. */}
+                Convert in place — same dispatch doc/packet, preserves identity
+                (ticket #, driver, truck, photos, timestamps). UNLIKE the
+                structure-changing single→split conversion, PW↔SW does NOT
+                rebuild the job, so it is allowed at ANY non-terminal stage
+                (pending, at pickup, loaded/departed, en route, at disposal) —
+                e.g. redirect an active loaded PW load to a hot oiler as SW.
+                Blocked only when terminal (completed/cancelled/declined/
+                dismissed). */}
             {(() => {
               const TERM = ['completed', 'cancelled', 'declined', 'dismissed'];
               if (TERM.includes(String(editSwJob.status))) return null;
-              const canConvert = String(editSwJob.status) === 'pending';
+              const started = ['accepted', 'in_progress', 'paused'].includes(String(editSwJob.status));
               return (
                 <div className="mb-4 p-3 rounded-lg border border-gray-700 bg-gray-900/40">
                   <label className="block text-xs text-gray-400 mb-2">Job Type</label>
@@ -3559,13 +3567,12 @@ function DispatchPageInner() {
                       <button
                         key={t}
                         type="button"
-                        disabled={!canConvert}
                         onClick={() => setEditJobType(t)}
                         className={`flex-1 px-3 py-1.5 rounded text-sm font-medium transition-colors ${
                           editJobType === t
                             ? (t === 'service' ? 'bg-purple-600 text-white' : 'bg-blue-600 text-white')
                             : 'bg-gray-700 text-gray-300 hover:bg-gray-600'
-                        } ${!canConvert ? 'opacity-50 cursor-not-allowed' : ''}`}
+                        }`}
                       >
                         {t === 'pw' ? 'Production Water' : 'Service Work'}
                       </button>
@@ -3575,19 +3582,13 @@ function DispatchPageInner() {
                     <input
                       value={editServiceType}
                       onChange={(e) => setEditServiceType(e.target.value)}
-                      disabled={!canConvert && editJobType === editSwJob.jobType}
                       placeholder="Service type (e.g. Flowback, Rig Move)"
                       className="w-full mt-2 px-3 py-1.5 bg-gray-900 border border-gray-700 rounded text-white text-sm placeholder-gray-500"
                     />
                   )}
-                  {!canConvert && (
-                    <p className="text-amber-400/80 text-xs mt-2">
-                      Job already started — convert it from the driver's app. Dispatch can only change the type before it starts.
-                    </p>
-                  )}
-                  {canConvert && editJobType !== editSwJob.jobType && (
+                  {editJobType !== editSwJob.jobType && (
                     <p className="text-orange-300 text-xs mt-2">
-                      Converting {editSwJob.jobType === 'service' ? 'Service Work → Production Water' : 'Production Water → Service Work'} — saved on this dispatch. Fill the fields below for the new type, then Save Changes.
+                      Converting {editSwJob.jobType === 'service' ? 'Service Work → Production Water' : 'Production Water → Service Work'} in place — same load/ticket{started ? ', mid-job' : ''}. Fill the fields below for the new type, then Save Changes.
                     </p>
                   )}
                 </div>
