@@ -421,6 +421,9 @@ function DispatchPageInner() {
   const [swDriverHashes, setSwDriverHashes] = useState<Set<string>>(new Set());
   const [swSubmitting, setSwSubmitting] = useState(false);
   const [swSplitTicket, setSwSplitTicket] = useState(false);
+  // Transient notice shown when enabling Split Ticket auto-collapses a
+  // multi-driver selection down to one (split families = one truck load).
+  const [swSplitDriverWarning, setSwSplitDriverWarning] = useState(false);
   // ── Keyboard-navigable typeahead options for the two primary lease pickers.
   //    Memoized so useTypeaheadNav's reset effect has a stable reference. ──
   const swWellOptions = useMemo(() => {
@@ -2600,10 +2603,21 @@ function DispatchPageInner() {
                             <input type="checkbox" checked={swSplitTicket} disabled={!splitReady} onChange={(e) => {
                               const checked = e.target.checked;
                               setSwSplitTicket(checked);
-                              if (!checked) {
+                              if (checked) {
+                                // A split family is ONE physical truck load → exactly one
+                                // driver. Collapse any multi-driver selection to the first
+                                // pick and flag a warning when more than one was selected.
+                                setSwDriverHashes(prev => {
+                                  if (prev.size <= 1) return prev;
+                                  setSwSplitDriverWarning(true);
+                                  const first = prev.values().next().value as string;
+                                  return new Set([first]);
+                                });
+                              } else {
                                 // Clear extras + close any open draft when Split Ticket is turned off.
                                 setSwExtraSplitLegs([]);
                                 setSwExtraLegDraft(null);
+                                setSwSplitDriverWarning(false);
                               }
                             }}
                               className="w-3.5 h-3.5 rounded border-gray-600 bg-gray-800 text-purple-600 focus:ring-purple-500 disabled:cursor-not-allowed" />
@@ -2762,10 +2776,20 @@ function DispatchPageInner() {
                       {/* Driver picker */}
                       <div className="flex-1 flex flex-col min-h-0">
                         <label className="block text-xs text-gray-400 mb-1">
-                          Driver{swDriverHashes.size > 1 ? 's' : ''}
+                          Driver{!swSplitTicket && swDriverHashes.size > 1 ? 's' : ''}
                           {swDriverHashes.size > 0 && <span className="ml-1 px-1.5 py-0.5 bg-purple-600 text-white text-[10px] rounded-full">{swDriverHashes.size}</span>}
                           {swEtaLoading && <span className="ml-1 text-gray-500 text-[10px]">calculating ETAs...</span>}
                         </label>
+                        {swSplitTicket && (
+                          <p className="text-[10px] text-purple-300/80 mb-1 -mt-0.5 leading-tight">
+                            Split Tickets represent one truck load and are limited to one driver.
+                          </p>
+                        )}
+                        {swSplitDriverWarning && (
+                          <p className="text-[10px] text-amber-400 mb-1 leading-tight">
+                            Multiple drivers cleared — split tickets allow only one driver.
+                          </p>
+                        )}
                         <div className="bg-gray-900 border border-gray-700 rounded flex-1 overflow-y-auto">
                           {drivers.map(d => {
                             const checked = swDriverHashes.has(d.key);
@@ -2777,7 +2801,7 @@ function DispatchPageInner() {
                               : eta?.status === 'cant_make_it' ? '#ef4444'
                               : '#666';
                             return (
-                              <button key={d.key} type="button" onClick={() => { setSwDriverHashes(prev => { const next = new Set(prev); if (next.has(d.key)) next.delete(d.key); else next.add(d.key); return next; }); }}
+                              <button key={d.key} type="button" onClick={() => { setSwSplitDriverWarning(false); setSwDriverHashes(prev => { if (swSplitTicket) { return new Set([d.key]); } const next = new Set(prev); if (next.has(d.key)) next.delete(d.key); else next.add(d.key); return next; }); }}
                                 className={`w-full flex items-center gap-2 px-2 py-1 text-xs text-left border-b border-gray-800 last:border-0 transition-colors ${checked ? 'bg-purple-900/30 text-white' : 'text-gray-300 hover:bg-gray-800'}`}>
                                 <input type="checkbox" checked={checked} readOnly className="w-3 h-3 rounded border-gray-600 bg-gray-800 text-purple-600 pointer-events-none flex-shrink-0" />
                                 <span className="flex-1 min-w-0 truncate">{d.onShift ? '🟢 ' : '🔴 '}{d.legalName || d.displayName}</span>
