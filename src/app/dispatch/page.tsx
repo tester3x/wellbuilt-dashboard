@@ -7,7 +7,7 @@ import { WellResponse, subscribeToWellStatusesUnified } from '@/lib/wells';
 import { AppHeader } from '@/components/AppHeader';
 import { ref, get, set } from 'firebase/database';
 import { getFirebaseDatabase } from '@/lib/firebase';
-import { getFirestoreDb } from '@/lib/firebase';
+import { getFirestoreDb, addSplitLegFromDashboard } from '@/lib/firebase';
 import { AddPullModal } from '@/components/AddPullModal';
 import { collection, addDoc, getDocs, getDoc, setDoc, query, where, orderBy, Timestamp, doc, updateDoc, onSnapshot, deleteDoc } from 'firebase/firestore';
 import { loadDisposals, searchDisposals, type NdicWell, loadOperators, searchOperators, type NdicOperator, loadWellsForOperator } from '@/lib/firestoreWells';
@@ -574,6 +574,11 @@ function DispatchPageInner() {
   const [editSwDisposalResults, setEditSwDisposalResults] = useState<NdicWell[]>([]);
   const [editSwShowDisposalDropdown, setEditSwShowDisposalDropdown] = useState(false);
   const [editSwOnsiteBy, setEditSwOnsiteBy] = useState('');
+  // Add Split Leg (dashboard, existing split family only) — destination-only.
+  const [addLegDest, setAddLegDest] = useState('');
+  const [addLegResults, setAddLegResults] = useState<NdicWell[]>([]);
+  const [addLegShowDropdown, setAddLegShowDropdown] = useState(false);
+  const [addLegSaving, setAddLegSaving] = useState(false);
 
   // Reassign declined job state
   const [reassignJob, setReassignJob] = useState<DispatchJob | null>(null);
@@ -1938,6 +1943,29 @@ function DispatchPageInner() {
     setEditSwDisposalResults([]);
     setEditSwShowDisposalDropdown(false);
     setEditSwOnsiteBy(job.onsiteBy || '');
+    // Add-leg sub-form
+    setAddLegDest('');
+    setAddLegResults([]);
+    setAddLegShowDropdown(false);
+    setAddLegSaving(false);
+  }
+
+  // Append a leg to this dispatched split family (existing families only; the
+  // addSplitLeg CF rejects non-family parents). Destination only — BBLs set
+  // later via carry-forward. The live dispatches subscription refreshes order.
+  async function addSplitLegFromEdit() {
+    if (!editSwJob?.id || !editSwJob.splitGroupId || !addLegDest.trim() || addLegSaving) return;
+    setAddLegSaving(true);
+    try {
+      await addSplitLegFromDashboard(editSwJob.id, addLegDest.trim());
+      setAddLegDest('');
+      setAddLegResults([]);
+      setAddLegShowDropdown(false);
+    } catch (err: any) {
+      alert(err?.message || 'Could not add split leg');
+    } finally {
+      setAddLegSaving(false);
+    }
   }
 
   // Get all dispatches in the same service group
@@ -3708,6 +3736,47 @@ function DispatchPageInner() {
                     className="w-full px-3 py-2 bg-gray-900 border border-gray-700 rounded-lg text-white text-sm placeholder-gray-500 focus:outline-none focus:border-purple-500 resize-none"
                   />
                 </div>
+
+                {/* Add Split Leg — existing split families only. Appends a leg
+                    via the addSplitLeg CF (dashboard origin). Destination only;
+                    BBLs decided later via carry-forward, like the in-app flow. */}
+                {editSwJob.splitGroupId && (() => {
+                  const liveLegs = dispatches.filter(d => d.splitGroupId === editSwJob.splitGroupId && !['cancelled', 'declined', 'dismissed', 'completed'].includes(String(d.status)));
+                  const nextLetter = String.fromCharCode(64 + Math.min(liveLegs.length + 1, 26));
+                  return (
+                    <div className="mb-5 p-3 rounded-lg border border-purple-600/30 bg-purple-950/20">
+                      <label className="block text-sm text-purple-300 font-medium mb-2">Add Split Leg</label>
+                      <div className="relative">
+                        <input
+                          type="text"
+                          value={addLegDest}
+                          onChange={(e) => { const v = e.target.value; setAddLegDest(v); setAddLegResults(v.length >= 2 ? searchDisposals(v, allDisposals) : []); setAddLegShowDropdown(v.length >= 2); }}
+                          onFocus={() => { if (addLegDest.length >= 2) setAddLegShowDropdown(true); }}
+                          onBlur={() => setTimeout(() => setAddLegShowDropdown(false), 200)}
+                          placeholder="New leg destination / SWD..."
+                          className="w-full px-3 py-2 bg-gray-900 border border-gray-700 rounded text-white text-sm placeholder-gray-500 focus:outline-none focus:border-purple-500"
+                        />
+                        {addLegShowDropdown && addLegResults.length > 0 && (
+                          <div className="absolute z-50 top-full left-0 w-full mt-1 bg-gray-900 border border-gray-600 rounded-lg shadow-lg max-h-40 overflow-y-auto">
+                            {addLegResults.map((d, i) => (
+                              <button key={`${d.well_name}-${i}`} onMouseDown={(e) => e.preventDefault()} onClick={() => { setAddLegDest(d.well_name); setAddLegShowDropdown(false); }} className="w-full text-left px-3 py-2 text-sm text-white hover:bg-gray-700 transition-colors">
+                                <span>{d.well_name}</span>{d.operator && <span className="text-gray-500 ml-2 text-xs">{d.operator}</span>}
+                              </button>
+                            ))}
+                          </div>
+                        )}
+                      </div>
+                      <button
+                        onClick={addSplitLegFromEdit}
+                        disabled={!addLegDest.trim() || addLegSaving}
+                        className="mt-2 px-3 py-1.5 bg-purple-600 hover:bg-purple-500 disabled:bg-gray-600 disabled:cursor-not-allowed text-white text-xs font-medium rounded transition-colors"
+                      >
+                        {addLegSaving ? 'Adding…' : `+ Add Leg (${nextLetter})`}
+                      </button>
+                      <p className="text-gray-500 text-xs mt-1.5">Appends a new leg to this split family. BBLs set later via carry-forward.</p>
+                    </div>
+                  );
+                })()}
 
                 {/* Action Buttons */}
                 <div className="flex gap-3">

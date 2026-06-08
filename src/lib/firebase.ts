@@ -86,3 +86,20 @@ export async function getNextTicketNumber(): Promise<number> {
   const block = result.data;
   return block.start;
 }
+
+/**
+ * Append a leg to an EXISTING dispatched split family from the dashboard
+ * (dispatch-only customers can't add legs from the driver app). Calls the
+ * addSplitLeg CF with no callerDriverHash → recorded as splitOriginatedAt
+ * 'dashboard'. The CF resolves the family from the parent leg's splitGroupId,
+ * appends seq = max+1, and writes the new leg's wellName = disposal (SW
+ * split-button model). Destination only — BBLs are set later via carry-forward.
+ */
+export async function addSplitLegFromDashboard(
+  parentDispatchId: string,
+  disposal: string,
+): Promise<{ newDispatchId: string; splitSequence: number; splitTotal: number }> {
+  const fn = httpsCallable(getFirebaseFunctions(), 'addSplitLeg');
+  const result: any = await fn({ parentDispatchId, legSpec: { disposal } });
+  return result.data;
+}
