@@ -577,6 +577,9 @@ function DispatchPageInner() {
   // Add Split Leg (dashboard, existing split family only) — destination-only.
   const [addLegDest, setAddLegDest] = useState('');
   const [addLegSaving, setAddLegSaving] = useState(false);
+  // Family-level Add Leg modal (opened from the board family-wrapper header, NOT
+  // from a per-leg editor). Holds the parent leg id used to resolve the family.
+  const [addLegFamilyParentId, setAddLegFamilyParentId] = useState<string | null>(null);
   // Same customer-scoped list-of-lists the Job Builder drop-off uses (company
   // wells + operator wells + SWDs), NOT a broad disposal-only lookup.
   const addLegOptions = useMemo(() => buildComboOptions(addLegDest), [buildComboOptions, addLegDest]);
@@ -1968,6 +1971,28 @@ function DispatchPageInner() {
     }
   }
 
+  // Open the family-level Add Leg modal from the board (any leg id resolves the
+  // family server-side; the CF appends seq = max+1 regardless of which leg).
+  const openFamilyAddLeg = useCallback((parentLegId: string) => {
+    setAddLegDest('');
+    setAddLegFamilyParentId(parentLegId);
+  }, []);
+
+  // Append a leg to an existing split family from the board family modal.
+  async function submitFamilyAddLeg() {
+    if (!addLegFamilyParentId || !addLegDest.trim() || addLegSaving) return;
+    setAddLegSaving(true);
+    try {
+      await addSplitLegFromDashboard(addLegFamilyParentId, addLegDest.trim());
+      setAddLegDest('');
+      setAddLegFamilyParentId(null);
+    } catch (err: any) {
+      alert(err?.message || 'Could not add split leg');
+    } finally {
+      setAddLegSaving(false);
+    }
+  }
+
   // Get all dispatches in the same service group
   const editSwGroupJobs = useMemo(() => {
     if (!editSwJob) return [];
@@ -3210,6 +3235,7 @@ function DispatchPageInner() {
                     assignTransfer={assignTransfer}
                     onEditServiceWork={openEditSwModal}
                     onReassignDeclined={openReassignModal}
+                    onAddLegToFamily={openFamilyAddLeg}
                   />
                 )}
                 {rightPanelTab === 'completed' && (
@@ -3399,6 +3425,68 @@ function DispatchPageInner() {
       {/* ═══════════════════════════════════════════════════════════════════════════
           EDIT DISPATCH MODAL — unified for PW + SW, conditional rendering by jobType
           ═══════════════════════════════════════════════════════════════════════════ */}
+      {/* Family-level Add Leg modal — opened from the board family card "+ Add Leg".
+          Appends a leg to the existing split family (any leg id resolves it; the CF
+          appends seq = max+1). No need to open a specific leg's editor. */}
+      {addLegFamilyParentId && (() => {
+        const TERM = ['completed', 'cancelled', 'declined', 'dismissed'];
+        const parent = dispatches.find(d => d.id === addLegFamilyParentId);
+        const groupId = parent?.splitGroupId;
+        const liveLegs = groupId ? dispatches.filter(d => d.splitGroupId === groupId && !TERM.includes(String(d.status))) : [];
+        const maxSeq = liveLegs.reduce((m, l) => Math.max(m, l.splitSequence ?? 0), 0);
+        const nextLetter = String.fromCharCode(64 + Math.min(maxSeq + 1, 26));
+        return (
+          <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-[60]" onClick={() => { if (!addLegSaving) setAddLegFamilyParentId(null); }}>
+            <div className="bg-gray-800 rounded-lg p-6 max-w-sm w-full mx-4 border border-purple-600/40" onClick={(e) => e.stopPropagation()}>
+              <div className="flex items-center justify-between mb-3">
+                <h3 className="text-base font-semibold text-purple-200">Add Split Leg ({nextLetter})</h3>
+                <button onClick={() => { if (!addLegSaving) setAddLegFamilyParentId(null); }} className="text-gray-400 hover:text-white">&#10005;</button>
+              </div>
+              <div className="relative">
+                <input
+                  type="text"
+                  autoFocus
+                  value={addLegDest}
+                  onChange={(e) => setAddLegDest(e.target.value)}
+                  onKeyDown={addLegNav.onKeyDown}
+                  placeholder="New leg destination (SWD or well)..."
+                  className="w-full px-3 py-2 bg-gray-900 border border-gray-700 rounded text-white text-sm placeholder-gray-500 focus:outline-none focus:border-purple-500"
+                />
+                {addLegNav.open && (
+                  <div className="absolute z-50 w-full mt-1 bg-gray-800 border border-gray-600 rounded max-h-48 overflow-y-auto shadow-lg">
+                    {addLegOptions.map((item, i) => {
+                      const focused = i === addLegNav.activeIndex;
+                      return (
+                        <button key={`${item.value}-${i}`} type="button" tabIndex={-1}
+                          ref={focused ? (el) => el?.scrollIntoView({ block: 'nearest' }) : undefined}
+                          onMouseDown={(e) => e.preventDefault()}
+                          onClick={() => setAddLegDest(item.value)}
+                          className={`w-full text-left px-3 py-1.5 border-b border-gray-700/50 last:border-0 text-sm outline-none ${focused ? 'bg-purple-600/40 text-white ring-1 ring-inset ring-purple-400' : 'text-white hover:bg-gray-700'}`}>
+                          {item.label}
+                          {item.sub && <span className={`text-xs ml-2 ${focused ? 'text-purple-200' : 'text-gray-500'}`}>{item.sub}</span>}
+                        </button>
+                      );
+                    })}
+                  </div>
+                )}
+              </div>
+              <p className="text-gray-500 text-xs mt-2">Appends Ticket {nextLetter} to this split family. BBLs set later via carry-forward.</p>
+              <div className="flex gap-2 mt-4">
+                <button
+                  onClick={() => { if (!addLegSaving) setAddLegFamilyParentId(null); }}
+                  className="flex-1 px-3 py-2 bg-gray-700 hover:bg-gray-600 text-gray-200 text-sm rounded transition-colors"
+                >Cancel</button>
+                <button
+                  onClick={submitFamilyAddLeg}
+                  disabled={!addLegDest.trim() || addLegSaving}
+                  className="flex-1 px-3 py-2 bg-purple-600 hover:bg-purple-500 disabled:bg-gray-600 disabled:cursor-not-allowed text-white text-sm font-medium rounded transition-colors"
+                >{addLegSaving ? 'Adding…' : `+ Add Leg (${nextLetter})`}</button>
+              </div>
+            </div>
+          </div>
+        );
+      })()}
+
       {editSwJob && (
         <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50">
           <div className="bg-gray-800 rounded-lg p-6 max-w-lg w-full mx-4 border border-gray-700 max-h-[90vh] overflow-y-auto">
@@ -3737,44 +3825,24 @@ function DispatchPageInner() {
                   />
                 </div>
 
-                {/* Add Split Leg — appends a leg via the addSplitLeg CF (dashboard
-                    origin), or converts a single job into a split. Eligibility is
-                    canonical, NOT "is this a split": only the LAST planned leg
-                    (highest live splitSequence) may append; middle legs show a
-                    hint. Destination uses the SAME customer-scoped Job-Builder
-                    lookup (buildComboOptions). BBLs set later via carry-forward. */}
+                {/* Split This Job — single→split conversion ONLY. Adding legs to an
+                    EXISTING family moved to the board family-card "+ Add Leg" (no
+                    need to open a specific leg's editor). Destination uses the SAME
+                    customer-scoped Job-Builder lookup (buildComboOptions). */}
                 {(() => {
                   const TERM = ['completed', 'cancelled', 'declined', 'dismissed'];
-                  const isFam = !!editSwJob.splitGroupId;
-                  if (!isFam && TERM.includes(String(editSwJob.status))) return null; // terminal single → nothing
-                  const liveLegs = isFam ? dispatches.filter(d => d.splitGroupId === editSwJob.splitGroupId && !TERM.includes(String(d.status))) : [];
-                  const maxSeq = liveLegs.reduce((m, l) => Math.max(m, l.splitSequence ?? 0), 0);
-                  const isLast = !isFam || (editSwJob.splitSequence ?? 0) >= maxSeq;
-
-                  // Middle/earlier family leg → not eligible; point to the last leg.
-                  if (isFam && !isLast) {
-                    const lastLetter = String.fromCharCode(64 + Math.min(maxSeq, 26));
-                    return (
-                      <div className="mb-5 p-3 rounded-lg border border-gray-700/40 bg-gray-900/40">
-                        <label className="block text-sm text-gray-400 font-medium mb-1">Add Split Leg</label>
-                        <p className="text-gray-500 text-xs">New legs are appended from the last leg of the family. Open Ticket {lastLetter} to add the next one.</p>
-                      </div>
-                    );
-                  }
-
-                  // Next letter from the highest live seq (+1). Single job: it
-                  // becomes Ticket A, the new leg Ticket B.
-                  const nextLetter = isFam ? String.fromCharCode(64 + Math.min(maxSeq + 1, 26)) : 'B';
+                  if (editSwJob.splitGroupId) return null; // already a family → add legs from the board card
+                  if (TERM.includes(String(editSwJob.status))) return null; // terminal single → nothing
                   return (
                     <div className="mb-5 p-3 rounded-lg border border-purple-600/30 bg-purple-950/20">
-                      <label className="block text-sm text-purple-300 font-medium mb-2">{isFam ? 'Add Split Leg' : 'Split This Job'}</label>
+                      <label className="block text-sm text-purple-300 font-medium mb-2">Split This Job</label>
                       <div className="relative">
                         <input
                           type="text"
                           value={addLegDest}
                           onChange={(e) => setAddLegDest(e.target.value)}
                           onKeyDown={addLegNav.onKeyDown}
-                          placeholder={isFam ? 'New leg destination (SWD or well)...' : 'Second-leg destination (SWD or well)...'}
+                          placeholder="Second-leg destination (SWD or well)..."
                           className="w-full px-3 py-2 bg-gray-900 border border-gray-700 rounded text-white text-sm placeholder-gray-500 focus:outline-none focus:border-purple-500"
                         />
                         {addLegNav.open && (
@@ -3800,12 +3868,10 @@ function DispatchPageInner() {
                         disabled={!addLegDest.trim() || addLegSaving}
                         className="mt-2 px-3 py-1.5 bg-purple-600 hover:bg-purple-500 disabled:bg-gray-600 disabled:cursor-not-allowed text-white text-xs font-medium rounded transition-colors"
                       >
-                        {addLegSaving ? (isFam ? 'Adding…' : 'Splitting…') : (isFam ? `+ Add Leg (${nextLetter})` : '+ Split (adds Ticket B)')}
+                        {addLegSaving ? 'Splitting…' : '+ Split (adds Ticket B)'}
                       </button>
                       <p className="text-gray-500 text-xs mt-1.5">
-                        {isFam
-                          ? 'Appends a new leg to this split family. BBLs set later via carry-forward.'
-                          : 'Converts this job into a split family — this becomes Ticket A, the new leg Ticket B. BBLs set later via carry-forward.'}
+                        Converts this job into a split family — this becomes Ticket A, the new leg Ticket B. BBLs set later via carry-forward.
                       </p>
                     </div>
                   );
@@ -4159,13 +4225,14 @@ function DispatchJobRow({ job, cancelDispatch, compact, onClickServiceWork, onRe
 
 // Driver-centric active dispatch panel — groups ALL jobs by driver
 // Multi-driver SW jobs shown separately at bottom with all crew visible
-function ActiveDispatchPanel({ dispatches, cancelDispatch, drivers, assignTransfer, onEditServiceWork, onReassignDeclined }: {
+function ActiveDispatchPanel({ dispatches, cancelDispatch, drivers, assignTransfer, onEditServiceWork, onReassignDeclined, onAddLegToFamily }: {
   dispatches: DispatchJob[];
   cancelDispatch: (id: string) => void;
   drivers?: { key: string; displayName: string; legalName?: string; assignedRoutes?: string[] }[];
   assignTransfer?: (jobId: string, driverHash: string, driverName: string) => void;
   onEditServiceWork?: (job: DispatchJob) => void;
   onReassignDeclined?: (job: DispatchJob) => void;
+  onAddLegToFamily?: (parentLegId: string) => void;
 }) {
   const [expandedDrivers, setExpandedDrivers] = useState<Set<string>>(new Set());
 
@@ -4542,6 +4609,13 @@ function ActiveDispatchPanel({ dispatches, cancelDispatch, drivers, assignTransf
                             <span className="w-2 h-2 rounded-full flex-shrink-0" style={{ backgroundColor: famColor }} />
                             <span className="text-[10px] font-bold uppercase tracking-wider" style={{ color: famColor }}>Split Family · {members.length} legs</span>
                             <span className="flex-1" />
+                            {onAddLegToFamily && members[0].id && (
+                              <button
+                                onClick={() => onAddLegToFamily(members[0].id!)}
+                                className="text-purple-300/80 hover:text-purple-200 text-[10px] font-semibold flex-shrink-0 transition-colors"
+                                title="Add a leg to this split family"
+                              >+ Add Leg</button>
+                            )}
                             <button
                               onClick={() => removeDispatchFamilyAware(members[0])}
                               className="text-red-400/60 hover:text-red-300 text-xs flex-shrink-0 transition-colors"
