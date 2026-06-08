@@ -4621,6 +4621,14 @@ export const resequenceSplitFamily = httpsV2.onCall(
 const GEMINI_VISION_MODEL = 'gemini-2.0-flash';
 const CLAUDE_VISION_MODEL = 'claude-sonnet-4-6';
 
+// Per-token USD rates (input, output) for rough per-call cost estimation in the
+// metrics log. Update if model/pricing changes — these only affect the logged
+// estimatedCostUsd, never behavior.
+const VISION_RATES: Record<string, { in: number; out: number }> = {
+  'claude-sonnet-4-6': { in: 3 / 1e6, out: 15 / 1e6 },
+  'gemini-2.0-flash': { in: 0.10 / 1e6, out: 0.40 / 1e6 },
+};
+
 export const validatePhotoCompliance = httpsV2.onCall(
   { timeoutSeconds: 60, memory: '512MiB' },
   async (request) => {
@@ -4692,6 +4700,18 @@ export const validatePhotoCompliance = httpsV2.onCall(
     const candidateMime = mimeType || 'image/jpeg';
     let modelText: string;
     let usedModel: string;
+    let usageIn = 0, usageOut = 0, cacheReadTokens = 0;
+
+    // Structured per-call metrics line — one JSON object, greppable in Cloud
+    // Logging as [photo-compliance-metrics]. Covers cost (tokens) + outcome.
+    const logMetrics = (extra: Record<string, any>) => {
+      try {
+        console.log('[photo-compliance-metrics] ' + JSON.stringify({
+          provider, model: usedModel, customerId, requirementId,
+          hadReference: !!refBase64, ...extra,
+        }));
+      } catch {}
+    };
 
     if (provider === 'gemini') {
       // ── Gemini (REST, global fetch) ──────────────────────────────────────
@@ -4725,9 +4745,13 @@ export const validatePhotoCompliance = httpsV2.onCall(
         }
         const json: any = await resp.json();
         modelText = json?.candidates?.[0]?.content?.parts?.[0]?.text || '';
+        const um = json?.usageMetadata || {};
+        usageIn = Number(um.promptTokenCount) || 0;
+        usageOut = Number(um.candidatesTokenCount) || 0;
         if (!modelText) throw new Error('Gemini returned no text');
       } catch (err: any) {
         console.error('[validatePhotoCompliance] Gemini error:', err?.message);
+        logMetrics({ verdict: 'error', errorCode: err?.code || err?.status || 'gemini_error', errorReason: String(err?.message || '').slice(0, 200) });
         throw new httpsV2.HttpsError('internal', 'Photo validation failed: ' + err?.message);
       }
     } else {
@@ -4753,9 +4777,13 @@ export const validatePhotoCompliance = httpsV2.onCall(
         });
         const textBlock = message.content.find((b: any) => b.type === 'text');
         modelText = textBlock && textBlock.type === 'text' ? textBlock.text : '';
+        usageIn = Number(message.usage?.input_tokens) || 0;
+        usageOut = Number(message.usage?.output_tokens) || 0;
+        cacheReadTokens = Number((message.usage as any)?.cache_read_input_tokens) || 0;
         if (!modelText) throw new Error('Claude returned no text');
       } catch (err: any) {
         console.error('[validatePhotoCompliance] Claude error:', err?.message);
+        logMetrics({ verdict: 'error', errorCode: err?.status || err?.code || 'claude_error', errorReason: String(err?.message || '').slice(0, 200) });
         throw new httpsV2.HttpsError('internal', 'Photo validation failed: ' + err?.message);
       }
     }
@@ -4771,11 +4799,19 @@ export const validatePhotoCompliance = httpsV2.onCall(
       reason = String(parsed.reason || '').slice(0, 200);
     } catch (e: any) {
       console.error('[validatePhotoCompliance] JSON parse failed. Raw:', modelText.slice(0, 300));
+      logMetrics({ verdict: 'error', errorCode: 'parse_error', errorReason: modelText.slice(0, 120), inputTokens: usageIn, outputTokens: usageOut });
       throw new httpsV2.HttpsError('internal', 'Could not parse validation result');
     }
 
     const pass = score >= threshold;
-    console.log(`[validatePhotoCompliance] ${customerId}/${requirementId} provider=${provider} model=${usedModel} score=${score} threshold=${threshold} pass=${pass} hadRef=${!!refBase64}`);
+    const rate = VISION_RATES[usedModel] || { in: 0, out: 0 };
+    const estimatedCostUsd = Number((usageIn * rate.in + usageOut * rate.out).toFixed(6));
+    logMetrics({
+      verdict: pass ? 'pass' : 'fail',
+      score, threshold,
+      inputTokens: usageIn, outputTokens: usageOut, cacheReadTokens,
+      estimatedCostUsd,
+    });
 
     return {
       pass,
@@ -4785,6 +4821,9 @@ export const validatePhotoCompliance = httpsV2.onCall(
       requirementId,
       provider,
       model: usedModel,
+      inputTokens: usageIn,
+      outputTokens: usageOut,
+      estimatedCostUsd,
       hadReference: !!refBase64,
       validatedAt: new Date().toISOString(),
     };
