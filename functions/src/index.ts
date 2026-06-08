@@ -4632,11 +4632,16 @@ const VISION_RATES: Record<string, { in: number; out: number }> = {
 export const validatePhotoCompliance = httpsV2.onCall(
   { timeoutSeconds: 60, memory: '512MiB' },
   async (request) => {
-    const { customerId, requirementId, photoBase64, mimeType } = (request.data || {}) as {
+    const { customerId, requirementId, photoBase64, mimeType, ticketId, invoiceId, driverId, photoStoragePath } = (request.data || {}) as {
       customerId?: string;
       requirementId?: string;
       photoBase64?: string;
       mimeType?: string;
+      // Optional client context for the audit record (nullable).
+      ticketId?: string;
+      invoiceId?: string;
+      driverId?: string;
+      photoStoragePath?: string;
     };
 
     if (!customerId || !requirementId || !photoBase64) {
@@ -4645,6 +4650,42 @@ export const validatePhotoCompliance = httpsV2.onCall(
 
     // Provider selection — default Claude (working key, no billing blocker).
     const provider = (process.env.PHOTO_COMPLIANCE_PROVIDER || 'claude').toLowerCase();
+
+    // Audit context — captured as the requirement loads; written (non-blocking)
+    // to photo_requirements/{customerId}/validation_audits at the end / on error.
+    // Snapshots the EXACT criteria/threshold/version used, so later spec edits
+    // don't rewrite history. Never stores image bytes (metadata only).
+    let requirementLabel: string | null = null;
+    let requirementVersion: number | null = null;
+    let criteriaTextUsed: string | null = null;
+    let thresholdUsed: number | null = null;
+    let requiredCount: number | null = null;
+    let phaseUsed: string | null = null;
+    const writeAudit = async (fields: Record<string, any>) => {
+      try {
+        await firestoreDb
+          .collection('photo_requirements').doc(customerId)
+          .collection('validation_audits').add({
+            customerId,
+            requirementId,
+            requirementLabel,
+            requirementVersion,
+            criteriaTextUsed,
+            proofHintUsed: null,
+            thresholdUsed,
+            requiredCount,
+            phase: phaseUsed,
+            ticketId: ticketId || null,
+            invoiceId: invoiceId || null,
+            driverId: driverId || null,
+            photoStoragePath: photoStoragePath || null,
+            createdAt: admin.firestore.Timestamp.now(),
+            ...fields,
+          });
+      } catch (e: any) {
+        console.warn('[validatePhotoCompliance] audit write failed (non-blocking):', e?.message);
+      }
+    };
 
     // 1. Load the requirement spec (single source of truth).
     const specSnap = await firestoreDb.collection('photo_requirements').doc(customerId).get();
@@ -4660,6 +4701,13 @@ export const validatePhotoCompliance = httpsV2.onCall(
     }
     const description: string = requirement.description || requirement.label || 'the required photo';
     const threshold: number = typeof requirement.threshold === 'number' ? requirement.threshold : 80;
+    // Snapshot the exact criteria/settings used for the audit record.
+    requirementLabel = requirement.label || requirementId;
+    requirementVersion = typeof spec.version === 'number' ? spec.version : null;
+    criteriaTextUsed = description;
+    thresholdUsed = threshold;
+    requiredCount = typeof requirement.requiredCount === 'number' ? requirement.requiredCount : 1;
+    phaseUsed = requirement.phase || 'any';
 
     // 2. Resolve the reference (sample) image → base64. Prefer admin Storage
     //    download by path; fall back to fetching a sampleUrl.
@@ -4751,7 +4799,10 @@ export const validatePhotoCompliance = httpsV2.onCall(
         if (!modelText) throw new Error('Gemini returned no text');
       } catch (err: any) {
         console.error('[validatePhotoCompliance] Gemini error:', err?.message);
-        logMetrics({ verdict: 'error', errorCode: err?.code || err?.status || 'gemini_error', errorReason: String(err?.message || '').slice(0, 200) });
+        const errorReason = String(err?.message || '').slice(0, 200);
+        const errorCode = err?.code || err?.status || 'gemini_error';
+        logMetrics({ verdict: 'error', errorCode, errorReason });
+        await writeAudit({ provider, model: usedModel, verdict: 'error', errorCode, errorReason, inputTokens: usageIn, outputTokens: usageOut });
         throw new httpsV2.HttpsError('internal', 'Photo validation failed: ' + err?.message);
       }
     } else {
@@ -4783,7 +4834,10 @@ export const validatePhotoCompliance = httpsV2.onCall(
         if (!modelText) throw new Error('Claude returned no text');
       } catch (err: any) {
         console.error('[validatePhotoCompliance] Claude error:', err?.message);
-        logMetrics({ verdict: 'error', errorCode: err?.status || err?.code || 'claude_error', errorReason: String(err?.message || '').slice(0, 200) });
+        const errorReason = String(err?.message || '').slice(0, 200);
+        const errorCode = err?.status || err?.code || 'claude_error';
+        logMetrics({ verdict: 'error', errorCode, errorReason });
+        await writeAudit({ provider, model: usedModel, verdict: 'error', errorCode, errorReason, inputTokens: usageIn, outputTokens: usageOut });
         throw new httpsV2.HttpsError('internal', 'Photo validation failed: ' + err?.message);
       }
     }
@@ -4800,6 +4854,7 @@ export const validatePhotoCompliance = httpsV2.onCall(
     } catch (e: any) {
       console.error('[validatePhotoCompliance] JSON parse failed. Raw:', modelText.slice(0, 300));
       logMetrics({ verdict: 'error', errorCode: 'parse_error', errorReason: modelText.slice(0, 120), inputTokens: usageIn, outputTokens: usageOut });
+      await writeAudit({ provider, model: usedModel, verdict: 'error', errorCode: 'parse_error', errorReason: modelText.slice(0, 120), inputTokens: usageIn, outputTokens: usageOut });
       throw new httpsV2.HttpsError('internal', 'Could not parse validation result');
     }
 
@@ -4811,6 +4866,12 @@ export const validatePhotoCompliance = httpsV2.onCall(
       score, threshold,
       inputTokens: usageIn, outputTokens: usageOut, cacheReadTokens,
       estimatedCostUsd,
+    });
+    await writeAudit({
+      provider, model: usedModel,
+      verdict: pass ? 'pass' : 'fail',
+      score, reason,
+      estimatedCostUsd, inputTokens: usageIn, outputTokens: usageOut,
     });
 
     return {
