@@ -38,6 +38,7 @@ export function RequiredPhotoSpecs({ company }: Props) {
   const [saving, setSaving] = useState(false);
   const [uploadingId, setUploadingId] = useState<string | null>(null);
   const [suggestingId, setSuggestingId] = useState<string | null>(null);
+  const [hintById, setHintById] = useState<Record<string, string>>({}); // transient drafting hint, not saved
   const [dirty, setDirty] = useState(false);
   const [savedMsg, setSavedMsg] = useState('');
 
@@ -95,6 +96,7 @@ export function RequiredPhotoSpecs({ company }: Props) {
         sampleUrl: req.sampleUrl,
         label: req.label,
         phase: req.phase,
+        hint: hintById[req.id]?.trim() || undefined,
       });
       if (out?.criteria) patchReq(req.id, { description: out.criteria });
     } catch (e: any) {
@@ -226,17 +228,26 @@ export function RequiredPhotoSpecs({ company }: Props) {
                         className="w-full px-2 py-1 bg-gray-700 border border-gray-600 rounded text-white text-xs resize-none"
                       />
 
-                      {/* AI criteria drafting — only when a sample exists. Fills the
-                          field; admin reviews/edits before Save. */}
+                      {/* AI criteria drafting — only when a sample exists. The
+                          optional hint guides the draft; the label is the main
+                          intent. Fills the field; admin reviews/edits before Save. */}
                       {(r.sampleStoragePath || r.sampleUrl) && (
-                        <button
-                          onClick={() => onSuggest(r)}
-                          disabled={suggestingId === r.id}
-                          className={`text-xs font-medium ${suggestingId === r.id ? 'text-gray-500 cursor-wait' : 'text-purple-300 hover:text-purple-200'}`}
-                          title="Draft criteria from the sample photo (you can edit before saving)"
-                        >
-                          {suggestingId === r.id ? 'Drafting…' : '✨ Suggest Criteria'}
-                        </button>
+                        <div className="flex items-center gap-2">
+                          <input
+                            value={hintById[r.id] || ''}
+                            onChange={(e) => setHintById(h => ({ ...h, [r.id]: e.target.value }))}
+                            placeholder="What are you trying to prove? (optional)"
+                            className="flex-1 px-2 py-1 bg-gray-700 border border-gray-600 rounded text-white text-xs placeholder-gray-500"
+                          />
+                          <button
+                            onClick={() => onSuggest(r)}
+                            disabled={suggestingId === r.id}
+                            className={`text-xs font-medium flex-shrink-0 ${suggestingId === r.id ? 'text-gray-500 cursor-wait' : 'text-purple-300 hover:text-purple-200'}`}
+                            title="Draft criteria from the sample photo + hint (you can edit before saving)"
+                          >
+                            {suggestingId === r.id ? 'Drafting…' : '✨ Suggest Criteria'}
+                          </button>
+                        </div>
                       )}
 
                       <div className="flex items-center gap-3 flex-wrap">

@@ -4933,21 +4933,24 @@ export const suggestPhotoCriteria = httpsV2.onCall(
     }
 
     const ctx: string[] = [];
-    if (label) ctx.push(`The photo is labeled "${label}".`);
+    if (label) ctx.push(`The label (PRIMARY intent) is "${label}".`);
     if (phase && phase !== 'any') ctx.push(`It is taken at the ${phase} stage of the job.`);
-    if (hint) ctx.push(`Admin hint: ${hint}`);
+    if (hint) ctx.push(`What the admin is trying to prove (use this as the main intent): ${hint}`);
 
     const prompt =
-      `You are helping an oilfield water-hauling company write a CRITERIA description for a REQUIRED driver photo. ` +
-      `Analyze the attached SAMPLE photo and draft criteria describing what EVIDENCE must be REASONABLY VISIBLE for a driver's photo to be acceptable.\n` +
+      `You help an oilfield water-hauling company write SIMPLE criteria for a required driver photo. ` +
+      `The LABEL (and the admin's "trying to prove" hint, if given) is the real intent. The SAMPLE image is only an EXAMPLE of the subject — it is NOT a source of extra mandatory requirements.\n` +
       (ctx.length ? ctx.join(' ') + '\n' : '') +
-      `Rules for the criteria you write:\n` +
-      `- Describe the required EVIDENCE, not just what the photo looks like (e.g. "confirm no visible spill or leak", "hose connection must be clearly visible", "gauge reading must be legible", "lid must be closed").\n` +
-      `- Be field-friendly and forgiving. Use the phrase "reasonably visible".\n` +
-      `- Do NOT require a perfect match to the sample, exact angle, exact framing, or good lighting unless the evidence truly demands it.\n` +
-      `- Explicitly allow oilfield conditions (mud, snow, ice, darkness, rain, glare, dust, field clutter) as long as the required evidence is still reasonably visible.\n` +
-      `- Do not make drivers take beauty shots.\n` +
-      `Respond ONLY with JSON: {"criteria": "<2-3 sentence description>", "suggestedThreshold": <integer 60-90>, "notes": "<one short tip for the admin, optional>"}.`;
+      `Write criteria describing ONLY what must be REASONABLY VISIBLE to satisfy that intent. Hard rules:\n` +
+      `- Do NOT invent requirements that are not clearly necessary. Do NOT infer hidden intent from the sample.\n` +
+      `- Do NOT require object state (open/closed, full/empty, on/off), exact angle, framing, lighting, or extra details UNLESS the label or hint explicitly implies that purpose.\n` +
+      `- Do NOT add operational conditions (e.g. "no spill or leak", "lid closed", "gauge legible") unless the label or hint clearly implies that purpose.\n` +
+      `- Prefer the simplest visible-evidence criteria: the subject named by the label must be reasonably visible / identifiable.\n` +
+      `- Always allow field conditions (mud, snow, ice, darkness, rain, glare, dust, clutter) as long as the subject is still reasonably identifiable. No beauty shots.\n` +
+      `Examples:\n` +
+      `- Label "Rockstar Can" (sample: a can) → "Photo must show a Rockstar energy drink can that is reasonably visible and identifiable. Low light, glare, or background clutter are acceptable if the can can still be reasonably identified." (Do NOT require the can to be open or the top/pull-tab visible.)\n` +
+      `- Label "Getty Box After Load" (sample: closed box) → only then is lid/spill relevant: "Getty box after load completion with the lid closed. The Getty box and surrounding ground should be reasonably visible to confirm no visible spill or leak. Mud, snow, ice, darkness, or other field conditions are acceptable if the box and surrounding condition can still be reasonably seen."\n` +
+      `Respond ONLY with JSON: {"criteria": "<1-3 sentence description>", "suggestedThreshold": <integer 60-85>, "notes": "<one short optional tip for the admin>"}.`;
 
     let modelText: string;
     let usedModel: string;
