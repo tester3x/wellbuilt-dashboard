@@ -576,9 +576,11 @@ function DispatchPageInner() {
   const [editSwOnsiteBy, setEditSwOnsiteBy] = useState('');
   // Add Split Leg (dashboard, existing split family only) — destination-only.
   const [addLegDest, setAddLegDest] = useState('');
-  const [addLegResults, setAddLegResults] = useState<NdicWell[]>([]);
-  const [addLegShowDropdown, setAddLegShowDropdown] = useState(false);
   const [addLegSaving, setAddLegSaving] = useState(false);
+  // Same customer-scoped list-of-lists the Job Builder drop-off uses (company
+  // wells + operator wells + SWDs), NOT a broad disposal-only lookup.
+  const addLegOptions = useMemo(() => buildComboOptions(addLegDest), [buildComboOptions, addLegDest]);
+  const addLegNav = useTypeaheadNav(addLegOptions, (item) => { setAddLegDest(item.value); });
 
   // Reassign declined job state
   const [reassignJob, setReassignJob] = useState<DispatchJob | null>(null);
@@ -1945,8 +1947,6 @@ function DispatchPageInner() {
     setEditSwOnsiteBy(job.onsiteBy || '');
     // Add-leg sub-form
     setAddLegDest('');
-    setAddLegResults([]);
-    setAddLegShowDropdown(false);
     setAddLegSaving(false);
   }
 
@@ -1954,13 +1954,13 @@ function DispatchPageInner() {
   // addSplitLeg CF rejects non-family parents). Destination only — BBLs set
   // later via carry-forward. The live dispatches subscription refreshes order.
   async function addSplitLegFromEdit() {
-    if (!editSwJob?.id || !editSwJob.splitGroupId || !addLegDest.trim() || addLegSaving) return;
+    // No splitGroupId guard: a single job converts to a split (CF mints the
+    // family). Eligibility (last-planned leg) is enforced by the section gate.
+    if (!editSwJob?.id || !addLegDest.trim() || addLegSaving) return;
     setAddLegSaving(true);
     try {
       await addSplitLegFromDashboard(editSwJob.id, addLegDest.trim());
       setAddLegDest('');
-      setAddLegResults([]);
-      setAddLegShowDropdown(false);
     } catch (err: any) {
       alert(err?.message || 'Could not add split leg');
     } finally {
@@ -3737,13 +3737,34 @@ function DispatchPageInner() {
                   />
                 </div>
 
-                {/* Add Split Leg — existing split families only. Appends a leg
-                    via the addSplitLeg CF (dashboard origin). Destination only;
-                    BBLs decided later via carry-forward, like the in-app flow. */}
-                {(editSwJob.splitGroupId || !['completed', 'cancelled', 'declined', 'dismissed'].includes(String(editSwJob.status))) && (() => {
+                {/* Add Split Leg — appends a leg via the addSplitLeg CF (dashboard
+                    origin), or converts a single job into a split. Eligibility is
+                    canonical, NOT "is this a split": only the LAST planned leg
+                    (highest live splitSequence) may append; middle legs show a
+                    hint. Destination uses the SAME customer-scoped Job-Builder
+                    lookup (buildComboOptions). BBLs set later via carry-forward. */}
+                {(() => {
+                  const TERM = ['completed', 'cancelled', 'declined', 'dismissed'];
                   const isFam = !!editSwJob.splitGroupId;
-                  const liveLegs = isFam ? dispatches.filter(d => d.splitGroupId === editSwJob.splitGroupId && !['cancelled', 'declined', 'dismissed', 'completed'].includes(String(d.status))) : [];
-                  const nextLetter = isFam ? String.fromCharCode(64 + Math.min(liveLegs.length + 1, 26)) : 'B';
+                  if (!isFam && TERM.includes(String(editSwJob.status))) return null; // terminal single → nothing
+                  const liveLegs = isFam ? dispatches.filter(d => d.splitGroupId === editSwJob.splitGroupId && !TERM.includes(String(d.status))) : [];
+                  const maxSeq = liveLegs.reduce((m, l) => Math.max(m, l.splitSequence ?? 0), 0);
+                  const isLast = !isFam || (editSwJob.splitSequence ?? 0) >= maxSeq;
+
+                  // Middle/earlier family leg → not eligible; point to the last leg.
+                  if (isFam && !isLast) {
+                    const lastLetter = String.fromCharCode(64 + Math.min(maxSeq, 26));
+                    return (
+                      <div className="mb-5 p-3 rounded-lg border border-gray-700/40 bg-gray-900/40">
+                        <label className="block text-sm text-gray-400 font-medium mb-1">Add Split Leg</label>
+                        <p className="text-gray-500 text-xs">New legs are appended from the last leg of the family. Open Ticket {lastLetter} to add the next one.</p>
+                      </div>
+                    );
+                  }
+
+                  // Next letter from the highest live seq (+1). Single job: it
+                  // becomes Ticket A, the new leg Ticket B.
+                  const nextLetter = isFam ? String.fromCharCode(64 + Math.min(maxSeq + 1, 26)) : 'B';
                   return (
                     <div className="mb-5 p-3 rounded-lg border border-purple-600/30 bg-purple-950/20">
                       <label className="block text-sm text-purple-300 font-medium mb-2">{isFam ? 'Add Split Leg' : 'Split This Job'}</label>
@@ -3751,19 +3772,26 @@ function DispatchPageInner() {
                         <input
                           type="text"
                           value={addLegDest}
-                          onChange={(e) => { const v = e.target.value; setAddLegDest(v); setAddLegResults(v.length >= 2 ? searchDisposals(v, allDisposals) : []); setAddLegShowDropdown(v.length >= 2); }}
-                          onFocus={() => { if (addLegDest.length >= 2) setAddLegShowDropdown(true); }}
-                          onBlur={() => setTimeout(() => setAddLegShowDropdown(false), 200)}
-                          placeholder={isFam ? 'New leg destination / SWD...' : 'Second-leg destination / SWD...'}
+                          onChange={(e) => setAddLegDest(e.target.value)}
+                          onKeyDown={addLegNav.onKeyDown}
+                          placeholder={isFam ? 'New leg destination (SWD or well)...' : 'Second-leg destination (SWD or well)...'}
                           className="w-full px-3 py-2 bg-gray-900 border border-gray-700 rounded text-white text-sm placeholder-gray-500 focus:outline-none focus:border-purple-500"
                         />
-                        {addLegShowDropdown && addLegResults.length > 0 && (
-                          <div className="absolute z-50 top-full left-0 w-full mt-1 bg-gray-900 border border-gray-600 rounded-lg shadow-lg max-h-40 overflow-y-auto">
-                            {addLegResults.map((d, i) => (
-                              <button key={`${d.well_name}-${i}`} onMouseDown={(e) => e.preventDefault()} onClick={() => { setAddLegDest(d.well_name); setAddLegShowDropdown(false); }} className="w-full text-left px-3 py-2 text-sm text-white hover:bg-gray-700 transition-colors">
-                                <span>{d.well_name}</span>{d.operator && <span className="text-gray-500 ml-2 text-xs">{d.operator}</span>}
-                              </button>
-                            ))}
+                        {addLegNav.open && (
+                          <div className="absolute z-50 w-full mt-1 bg-gray-800 border border-gray-600 rounded max-h-48 overflow-y-auto shadow-lg">
+                            {addLegOptions.map((item, i) => {
+                              const focused = i === addLegNav.activeIndex;
+                              return (
+                                <button key={`${item.value}-${i}`} type="button" tabIndex={-1}
+                                  ref={focused ? (el) => el?.scrollIntoView({ block: 'nearest' }) : undefined}
+                                  onMouseDown={(e) => e.preventDefault()}
+                                  onClick={() => setAddLegDest(item.value)}
+                                  className={`w-full text-left px-3 py-1.5 border-b border-gray-700/50 last:border-0 text-sm outline-none ${focused ? 'bg-purple-600/40 text-white ring-1 ring-inset ring-purple-400' : 'text-white hover:bg-gray-700'}`}>
+                                  {item.label}
+                                  {item.sub && <span className={`text-xs ml-2 ${focused ? 'text-purple-200' : 'text-gray-500'}`}>{item.sub}</span>}
+                                </button>
+                              );
+                            })}
                           </div>
                         )}
                       </div>
