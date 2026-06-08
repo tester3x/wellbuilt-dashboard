@@ -4601,6 +4601,152 @@ export const resequenceSplitFamily = httpsV2.onCall(
   },
 );
 
+// ───────────────────────────────────────────────────────────────────────────
+// Photo compliance — match a driver's captured photo against a customer's
+// required-photo spec (sample image + description) using Gemini vision. Returns
+// { pass, score, reason }. The driver app is NEVER blocked on this: it validates
+// online and asks for a retake on fail; offline it queues the photo as
+// "pending" and calls this later. Requirement specs live in
+// photo_requirements/{customerId}.requirements[] (sampleStoragePath + threshold).
+//
+// Gemini is called via REST (Node 20 global fetch) so no new npm dependency.
+// Key: GEMINI_API_KEY in functions/.env (same pattern as ANTHROPIC_API_KEY).
+// ───────────────────────────────────────────────────────────────────────────
+const GEMINI_VISION_MODEL = 'gemini-2.0-flash';
+
+export const validatePhotoCompliance = httpsV2.onCall(
+  { timeoutSeconds: 60, memory: '512MiB' },
+  async (request) => {
+    const { customerId, requirementId, photoBase64, mimeType } = (request.data || {}) as {
+      customerId?: string;
+      requirementId?: string;
+      photoBase64?: string;
+      mimeType?: string;
+    };
+
+    if (!customerId || !requirementId || !photoBase64) {
+      throw new httpsV2.HttpsError('invalid-argument', 'customerId, requirementId and photoBase64 are required');
+    }
+
+    const apiKey = process.env.GEMINI_API_KEY;
+    if (!apiKey) {
+      throw new httpsV2.HttpsError('failed-precondition', 'GEMINI_API_KEY not set in functions/.env file');
+    }
+
+    // 1. Load the requirement spec (single source of truth).
+    const specSnap = await firestoreDb.collection('photo_requirements').doc(customerId).get();
+    if (!specSnap.exists) {
+      throw new httpsV2.HttpsError('not-found', `No photo_requirements for customerId=${customerId}`);
+    }
+    const spec = specSnap.data() as any;
+    const requirement = Array.isArray(spec.requirements)
+      ? spec.requirements.find((r: any) => r.id === requirementId)
+      : null;
+    if (!requirement) {
+      throw new httpsV2.HttpsError('not-found', `Requirement ${requirementId} not found for customer ${customerId}`);
+    }
+    const description: string = requirement.description || requirement.label || 'the required photo';
+    const threshold: number = typeof requirement.threshold === 'number' ? requirement.threshold : 80;
+
+    // 2. Resolve the reference (sample) image → base64. Prefer admin Storage
+    //    download by path; fall back to fetching a sampleUrl.
+    let refBase64: string | null = null;
+    let refMime = 'image/jpeg';
+    try {
+      if (requirement.sampleStoragePath) {
+        const file = admin.storage().bucket().file(requirement.sampleStoragePath);
+        const [buf] = await file.download();
+        refBase64 = buf.toString('base64');
+        const [meta] = await file.getMetadata().catch(() => [{ contentType: 'image/jpeg' }] as any);
+        if (meta?.contentType) refMime = meta.contentType;
+      } else if (requirement.sampleUrl) {
+        const resp = await fetch(requirement.sampleUrl);
+        if (resp.ok) {
+          const ab = await resp.arrayBuffer();
+          refBase64 = Buffer.from(ab).toString('base64');
+          refMime = resp.headers.get('content-type') || 'image/jpeg';
+        }
+      }
+    } catch (e: any) {
+      console.warn('[validatePhotoCompliance] reference image load failed:', e?.message);
+    }
+
+    // 3. Build the Gemini request. Reference image (if available) anchors the
+    //    visual; the description is the semantic spec. Force JSON output.
+    const prompt =
+      `You are a strict field-photo compliance checker for an oilfield water-hauling app.\n` +
+      `The REQUIRED photo must show: "${description}".\n` +
+      (refBase64
+        ? `The first image is the REFERENCE example of a correct photo. The second image is the CANDIDATE taken by the driver.\n`
+        : `The image is the CANDIDATE taken by the driver (no reference example available — judge against the description).\n`) +
+      `Decide how well the CANDIDATE satisfies the requirement (correct subject present and in the correct state/condition). ` +
+      `Ignore lighting, angle, and minor framing differences — judge the SUBJECT and its STATE, not photo quality.\n` +
+      `Respond ONLY with JSON: {"score": <integer 0-100>, "reason": "<one short sentence>"}. ` +
+      `score = confidence the candidate meets the requirement.`;
+
+    const parts: any[] = [{ text: prompt }];
+    if (refBase64) {
+      parts.push({ text: 'REFERENCE:' });
+      parts.push({ inline_data: { mime_type: refMime, data: refBase64 } });
+      parts.push({ text: 'CANDIDATE:' });
+    }
+    parts.push({ inline_data: { mime_type: mimeType || 'image/jpeg', data: photoBase64 } });
+
+    let modelText: string;
+    try {
+      const resp = await fetch(
+        `https://generativelanguage.googleapis.com/v1beta/models/${GEMINI_VISION_MODEL}:generateContent?key=${apiKey}`,
+        {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            contents: [{ parts }],
+            generationConfig: { temperature: 0, responseMimeType: 'application/json' },
+          }),
+        },
+      );
+      if (!resp.ok) {
+        const errBody = await resp.text().catch(() => '');
+        throw new Error(`Gemini HTTP ${resp.status}: ${errBody.slice(0, 300)}`);
+      }
+      const json: any = await resp.json();
+      modelText = json?.candidates?.[0]?.content?.parts?.[0]?.text || '';
+      if (!modelText) throw new Error('Gemini returned no text');
+    } catch (err: any) {
+      console.error('[validatePhotoCompliance] Gemini error:', err?.message);
+      throw new httpsV2.HttpsError('internal', 'Photo validation failed: ' + err?.message);
+    }
+
+    // 4. Parse score/reason; compute pass server-side against the threshold.
+    let score = 0;
+    let reason = '';
+    try {
+      let s = modelText.trim();
+      if (s.startsWith('```')) s = s.replace(/^```(?:json)?\s*\n?/, '').replace(/\n?```\s*$/, '');
+      const parsed = JSON.parse(s);
+      score = Math.max(0, Math.min(100, Math.round(Number(parsed.score) || 0)));
+      reason = String(parsed.reason || '').slice(0, 200);
+    } catch (e: any) {
+      console.error('[validatePhotoCompliance] JSON parse failed. Raw:', modelText.slice(0, 300));
+      throw new httpsV2.HttpsError('internal', 'Could not parse validation result');
+    }
+
+    const pass = score >= threshold;
+    console.log(`[validatePhotoCompliance] ${customerId}/${requirementId} score=${score} threshold=${threshold} pass=${pass} hadRef=${!!refBase64}`);
+
+    return {
+      pass,
+      score,
+      threshold,
+      reason,
+      requirementId,
+      model: GEMINI_VISION_MODEL,
+      hadReference: !!refBase64,
+      validatedAt: new Date().toISOString(),
+    };
+  },
+);
+
 export {
   recoverHandoffOrphan,
   listStuckHandoffs,
