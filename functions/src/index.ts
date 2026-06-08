@@ -4632,7 +4632,7 @@ const VISION_RATES: Record<string, { in: number; out: number }> = {
 export const validatePhotoCompliance = httpsV2.onCall(
   { timeoutSeconds: 60, memory: '512MiB' },
   async (request) => {
-    const { customerId, requirementId, photoBase64, mimeType, ticketId, invoiceId, driverId, photoStoragePath, companyId } = (request.data || {}) as {
+    const { customerId, requirementId, photoBase64, mimeType, ticketId, invoiceId, driverId, photoStoragePath, companyId, lat, lng, captureTime } = (request.data || {}) as {
       customerId?: string;
       requirementId?: string;
       photoBase64?: string;
@@ -4643,6 +4643,10 @@ export const validatePhotoCompliance = httpsV2.onCall(
       driverId?: string;
       photoStoragePath?: string;
       companyId?: string;
+      // Phase 2 weather context — photo location + capture time (nullable).
+      lat?: number;
+      lng?: number;
+      captureTime?: string;
     };
 
     if (!customerId || !requirementId || !photoBase64) {
@@ -4953,6 +4957,72 @@ export const validatePhotoCompliance = httpsV2.onCall(
       throw new httpsV2.HttpsError('internal', 'Could not parse validation result');
     }
 
+    // ── Phase 2: weather context ─────────────────────────────────────────────
+    // Reduce false red flags from rain. Only matters when there is a wetness
+    // concern to explain (low/medium). NEVER touches a high concern (active
+    // flow/overflow stays redFlag regardless of weather). Best-effort; any
+    // failure leaves the image-only verdict untouched.
+    let weatherContextUsed = false;
+    let weatherSummary: string | null = null;
+    const latNum = typeof lat === 'number' ? lat : parseFloat(String(lat));
+    const lngNum = typeof lng === 'number' ? lng : parseFloat(String(lng));
+    const haveLoc = Number.isFinite(latNum) && Number.isFinite(lngNum) && !(latNum === 0 && lngNum === 0);
+    if (haveLoc && (concernLevel === 'low' || concernLevel === 'medium')) {
+      // Prior-24h precipitation via Open-Meteo (free, no key), cached per
+      // ~1km cell + hour so a whole pad in one hour costs one API call.
+      const getPrior24hPrecipMm = async (latN: number, lngN: number, captureIso: string): Promise<number | null> => {
+        const cap = new Date(captureIso);
+        const t = isNaN(cap.getTime()) ? new Date() : cap;
+        const latR = Math.round(latN * 100) / 100;
+        const lngR = Math.round(lngN * 100) / 100;
+        const hourBucket = t.toISOString().slice(0, 13).replace(/[-:T]/g, ''); // YYYYMMDDHH
+        const cacheRef = firestoreDb.collection('weather_cache').doc(`${latR}_${lngR}_${hourBucket}`);
+        try {
+          const c = await cacheRef.get();
+          if (c.exists && typeof (c.data() as any)?.precip24hMm === 'number') return (c.data() as any).precip24hMm;
+        } catch { /* cache miss → fetch */ }
+        const url = `https://api.open-meteo.com/v1/forecast?latitude=${latR}&longitude=${lngR}&hourly=precipitation&past_days=2&forecast_days=1&timezone=GMT`;
+        const res = await fetch(url);
+        if (!res.ok) return null;
+        const j: any = await res.json();
+        const times: string[] = j?.hourly?.time || [];
+        const precs: number[] = j?.hourly?.precipitation || [];
+        const endMs = t.getTime();
+        const startMs = endMs - 24 * 3600 * 1000;
+        let sum = 0;
+        for (let i = 0; i < times.length; i++) {
+          const ms = new Date(times[i] + 'Z').getTime(); // GMT hourly stamps
+          if (ms >= startMs && ms <= endMs) sum += (precs[i] || 0);
+        }
+        const precip24hMm = Math.round(sum * 100) / 100;
+        try {
+          await cacheRef.set({ precip24hMm, lat: latR, lng: lngR, hourBucket, fetchedAt: admin.firestore.Timestamp.now() });
+        } catch { /* non-blocking */ }
+        return precip24hMm;
+      };
+      try {
+        const precipMm = await getPrior24hPrecipMm(latNum, lngNum, captureTime || new Date().toISOString());
+        if (precipMm != null) {
+          weatherContextUsed = true;
+          const inches = precipMm / 25.4;
+          const RAIN_MM = 2.5; // ~0.1" in prior 24h is enough to explain wet ground
+          if (precipMm >= RAIN_MM) {
+            // Rain likely explains the wetness → downgrade one concern level.
+            // Entry is guaranteed low|medium, so the result is none|low → not a
+            // red flag either way.
+            concernLevel = concernLevel === 'medium' ? 'low' : 'none';
+            redFlag = false;
+            if (concernLevel === 'none') concernReason = null;
+            weatherSummary = `Recent rainfall (${inches.toFixed(2)} in last 24h) likely explains wet ground.`;
+          } else {
+            weatherSummary = `No significant recent rainfall (${inches.toFixed(2)} in last 24h).`;
+          }
+        }
+      } catch (e: any) {
+        console.warn('[validatePhotoCompliance] weather lookup skipped:', e?.message);
+      }
+    }
+
     // Pass = the photo documents the target+area (accepted) AND is clear enough
     // to review (score meets the requirement's framing-confidence threshold).
     // Condition (wet/spill) lives in concern*, never here.
@@ -4970,7 +5040,7 @@ export const validatePhotoCompliance = httpsV2.onCall(
       verdict: pass ? 'pass' : 'fail',
       accepted, score, reason,
       concernLevel, concernReason, redFlag,
-      weatherContextUsed: false, weatherSummary: null, // Phase 2 will populate
+      weatherContextUsed, weatherSummary,
       estimatedCostUsd, inputTokens: usageIn, outputTokens: usageOut,
     });
 
@@ -4984,8 +5054,8 @@ export const validatePhotoCompliance = httpsV2.onCall(
       concernLevel,
       concernReason,
       redFlag,
-      weatherContextUsed: false,
-      weatherSummary: null,
+      weatherContextUsed,
+      weatherSummary,
       requirementId,
       provider,
       model: usedModel,
