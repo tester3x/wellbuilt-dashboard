@@ -4603,16 +4603,23 @@ export const resequenceSplitFamily = httpsV2.onCall(
 
 // ───────────────────────────────────────────────────────────────────────────
 // Photo compliance — match a driver's captured photo against a customer's
-// required-photo spec (sample image + description) using Gemini vision. Returns
+// required-photo spec (sample image + description) using a vision model. Returns
 // { pass, score, reason }. The driver app is NEVER blocked on this: it validates
 // online and asks for a retake on fail; offline it queues the photo as
 // "pending" and calls this later. Requirement specs live in
 // photo_requirements/{customerId}.requirements[] (sampleStoragePath + threshold).
 //
-// Gemini is called via REST (Node 20 global fetch) so no new npm dependency.
-// Key: GEMINI_API_KEY in functions/.env (same pattern as ANTHROPIC_API_KEY).
+// Provider is switchable via PHOTO_COMPLIANCE_PROVIDER in functions/.env:
+//   'claude' (default) — uses ANTHROPIC_API_KEY (already configured, no billing
+//                        blocker). Vision via @anthropic-ai/sdk.
+//   'gemini'           — uses GEMINI_API_KEY. Cheapest; re-enable once that
+//                        project's billing/credits are restored. REST via global
+//                        fetch (no extra dependency).
+// The Firestore data model + the { pass, score, reason } contract + the WB T app
+// are identical for either provider.
 // ───────────────────────────────────────────────────────────────────────────
 const GEMINI_VISION_MODEL = 'gemini-2.0-flash';
+const CLAUDE_VISION_MODEL = 'claude-sonnet-4-6';
 
 export const validatePhotoCompliance = httpsV2.onCall(
   { timeoutSeconds: 60, memory: '512MiB' },
@@ -4628,10 +4635,8 @@ export const validatePhotoCompliance = httpsV2.onCall(
       throw new httpsV2.HttpsError('invalid-argument', 'customerId, requirementId and photoBase64 are required');
     }
 
-    const apiKey = process.env.GEMINI_API_KEY;
-    if (!apiKey) {
-      throw new httpsV2.HttpsError('failed-precondition', 'GEMINI_API_KEY not set in functions/.env file');
-    }
+    // Provider selection — default Claude (working key, no billing blocker).
+    const provider = (process.env.PHOTO_COMPLIANCE_PROVIDER || 'claude').toLowerCase();
 
     // 1. Load the requirement spec (single source of truth).
     const specSnap = await firestoreDb.collection('photo_requirements').doc(customerId).get();
@@ -4671,8 +4676,8 @@ export const validatePhotoCompliance = httpsV2.onCall(
       console.warn('[validatePhotoCompliance] reference image load failed:', e?.message);
     }
 
-    // 3. Build the Gemini request. Reference image (if available) anchors the
-    //    visual; the description is the semantic spec. Force JSON output.
+    // 3. Build the prompt (shared across providers). Reference image (if
+    //    available) anchors the visual; the description is the semantic spec.
     const prompt =
       `You are a strict field-photo compliance checker for an oilfield water-hauling app.\n` +
       `The REQUIRED photo must show: "${description}".\n` +
@@ -4684,37 +4689,75 @@ export const validatePhotoCompliance = httpsV2.onCall(
       `Respond ONLY with JSON: {"score": <integer 0-100>, "reason": "<one short sentence>"}. ` +
       `score = confidence the candidate meets the requirement.`;
 
-    const parts: any[] = [{ text: prompt }];
-    if (refBase64) {
-      parts.push({ text: 'REFERENCE:' });
-      parts.push({ inline_data: { mime_type: refMime, data: refBase64 } });
-      parts.push({ text: 'CANDIDATE:' });
-    }
-    parts.push({ inline_data: { mime_type: mimeType || 'image/jpeg', data: photoBase64 } });
-
+    const candidateMime = mimeType || 'image/jpeg';
     let modelText: string;
-    try {
-      const resp = await fetch(
-        `https://generativelanguage.googleapis.com/v1beta/models/${GEMINI_VISION_MODEL}:generateContent?key=${apiKey}`,
-        {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-            contents: [{ parts }],
-            generationConfig: { temperature: 0, responseMimeType: 'application/json' },
-          }),
-        },
-      );
-      if (!resp.ok) {
-        const errBody = await resp.text().catch(() => '');
-        throw new Error(`Gemini HTTP ${resp.status}: ${errBody.slice(0, 300)}`);
+    let usedModel: string;
+
+    if (provider === 'gemini') {
+      // ── Gemini (REST, global fetch) ──────────────────────────────────────
+      const apiKey = process.env.GEMINI_API_KEY;
+      if (!apiKey) {
+        throw new httpsV2.HttpsError('failed-precondition', 'GEMINI_API_KEY not set in functions/.env file');
       }
-      const json: any = await resp.json();
-      modelText = json?.candidates?.[0]?.content?.parts?.[0]?.text || '';
-      if (!modelText) throw new Error('Gemini returned no text');
-    } catch (err: any) {
-      console.error('[validatePhotoCompliance] Gemini error:', err?.message);
-      throw new httpsV2.HttpsError('internal', 'Photo validation failed: ' + err?.message);
+      usedModel = GEMINI_VISION_MODEL;
+      const parts: any[] = [{ text: prompt }];
+      if (refBase64) {
+        parts.push({ text: 'REFERENCE:' });
+        parts.push({ inline_data: { mime_type: refMime, data: refBase64 } });
+        parts.push({ text: 'CANDIDATE:' });
+      }
+      parts.push({ inline_data: { mime_type: candidateMime, data: photoBase64 } });
+      try {
+        const resp = await fetch(
+          `https://generativelanguage.googleapis.com/v1beta/models/${GEMINI_VISION_MODEL}:generateContent?key=${apiKey}`,
+          {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              contents: [{ parts }],
+              generationConfig: { temperature: 0, responseMimeType: 'application/json' },
+            }),
+          },
+        );
+        if (!resp.ok) {
+          const errBody = await resp.text().catch(() => '');
+          throw new Error(`Gemini HTTP ${resp.status}: ${errBody.slice(0, 300)}`);
+        }
+        const json: any = await resp.json();
+        modelText = json?.candidates?.[0]?.content?.parts?.[0]?.text || '';
+        if (!modelText) throw new Error('Gemini returned no text');
+      } catch (err: any) {
+        console.error('[validatePhotoCompliance] Gemini error:', err?.message);
+        throw new httpsV2.HttpsError('internal', 'Photo validation failed: ' + err?.message);
+      }
+    } else {
+      // ── Claude vision (@anthropic-ai/sdk, existing ANTHROPIC_API_KEY) ─────
+      const apiKey = process.env.ANTHROPIC_API_KEY;
+      if (!apiKey) {
+        throw new httpsV2.HttpsError('failed-precondition', 'ANTHROPIC_API_KEY not set in functions/.env file');
+      }
+      usedModel = CLAUDE_VISION_MODEL;
+      const client = new Anthropic({ apiKey });
+      const content: any[] = [{ type: 'text', text: prompt }];
+      if (refBase64) {
+        content.push({ type: 'text', text: 'REFERENCE:' });
+        content.push({ type: 'image', source: { type: 'base64', media_type: refMime, data: refBase64 } });
+        content.push({ type: 'text', text: 'CANDIDATE:' });
+      }
+      content.push({ type: 'image', source: { type: 'base64', media_type: candidateMime, data: photoBase64 } });
+      try {
+        const message = await client.messages.create({
+          model: CLAUDE_VISION_MODEL,
+          max_tokens: 300,
+          messages: [{ role: 'user', content }],
+        });
+        const textBlock = message.content.find((b: any) => b.type === 'text');
+        modelText = textBlock && textBlock.type === 'text' ? textBlock.text : '';
+        if (!modelText) throw new Error('Claude returned no text');
+      } catch (err: any) {
+        console.error('[validatePhotoCompliance] Claude error:', err?.message);
+        throw new httpsV2.HttpsError('internal', 'Photo validation failed: ' + err?.message);
+      }
     }
 
     // 4. Parse score/reason; compute pass server-side against the threshold.
@@ -4732,7 +4775,7 @@ export const validatePhotoCompliance = httpsV2.onCall(
     }
 
     const pass = score >= threshold;
-    console.log(`[validatePhotoCompliance] ${customerId}/${requirementId} score=${score} threshold=${threshold} pass=${pass} hadRef=${!!refBase64}`);
+    console.log(`[validatePhotoCompliance] ${customerId}/${requirementId} provider=${provider} model=${usedModel} score=${score} threshold=${threshold} pass=${pass} hadRef=${!!refBase64}`);
 
     return {
       pass,
@@ -4740,7 +4783,8 @@ export const validatePhotoCompliance = httpsV2.onCall(
       threshold,
       reason,
       requirementId,
-      model: GEMINI_VISION_MODEL,
+      provider,
+      model: usedModel,
       hadReference: !!refBase64,
       validatedAt: new Date().toISOString(),
     };
