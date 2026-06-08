@@ -7,7 +7,7 @@ import { WellResponse, subscribeToWellStatusesUnified } from '@/lib/wells';
 import { AppHeader } from '@/components/AppHeader';
 import { ref, get, set } from 'firebase/database';
 import { getFirebaseDatabase } from '@/lib/firebase';
-import { getFirestoreDb, addSplitLegFromDashboard } from '@/lib/firebase';
+import { getFirestoreDb, addSplitLegFromDashboard, removeSplitLegFromDashboard } from '@/lib/firebase';
 import { AddPullModal } from '@/components/AddPullModal';
 import { collection, addDoc, getDocs, getDoc, setDoc, query, where, orderBy, Timestamp, doc, updateDoc, onSnapshot, deleteDoc } from 'firebase/firestore';
 import { loadDisposals, searchDisposals, type NdicWell, loadOperators, searchOperators, type NdicOperator, loadWellsForOperator } from '@/lib/firestoreWells';
@@ -3987,13 +3987,17 @@ function JobTypeBadge({ type, serviceType }: { type: 'pw' | 'service'; serviceTy
 }
 
 // Single job row — shows all info a dispatcher needs
-function DispatchJobRow({ job, cancelDispatch, compact, onClickServiceWork, onReassign, onRemove }: {
+function DispatchJobRow({ job, cancelDispatch, compact, onClickServiceWork, onReassign, onRemove, removable }: {
   job: DispatchJob;
   cancelDispatch: (id: string) => void;
   compact?: boolean;
   onClickServiceWork?: (job: DispatchJob) => void;
   onReassign?: (job: DispatchJob) => void;
   onRemove?: (job: DispatchJob) => void | Promise<void>;
+  // When false, the per-row X is hidden (e.g. a split anchor / started leg —
+  // those can't be individually removed; the family-header X handles them).
+  // Defaults to shown for backward compat (non-family + single jobs).
+  removable?: boolean;
 }) {
   const dropoff = job.hauledTo || job.disposal;
   const isClickable = !!onClickServiceWork;
@@ -4098,9 +4102,11 @@ function DispatchJobRow({ job, cancelDispatch, compact, onClickServiceWork, onRe
           >👯</button>
         )}
 
-        {/* Remove button — dispatcher dismissing, not driver canceling. Routes
-            through onRemove (parent) which is split-family-aware: X on any leg
-            of a pre-start dispatched split cancels the WHOLE family. */}
+        {/* Remove button — dispatcher action. For split-family legs the parent
+            passes onRemove = single-leg cancel and gates `removable` to future
+            unstarted legs (anchor/started legs hide it; the family-header X
+            cancels the whole family). Non-split/single jobs keep the dismiss. */}
+        {removable !== false && (
         <button
           disabled={removing}
           onClick={async (e) => {
@@ -4124,6 +4130,7 @@ function DispatchJobRow({ job, cancelDispatch, compact, onClickServiceWork, onRe
           className={`text-red-400/60 hover:text-red-300 text-xs flex-shrink-0 transition-colors ${removing ? 'opacity-40 cursor-not-allowed' : ''}`}
           title="Remove dispatch"
         >{removing ? '…' : '✕'}</button>
+        )}
       </div>
 
       {/* Detail row — invoice #, drop-off, notes */}
@@ -4171,6 +4178,22 @@ function ActiveDispatchPanel({ dispatches, cancelDispatch, drivers, assignTransf
   //      docs would leave a half-dead leg on the phone (the reported A-stays-alive
   //      bug). Block + direct the dispatcher to cancel from the app.
   //  (2) Non-split job → unchanged single dismiss.
+  // Per-card X on a FUTURE UNSTARTED split leg → cancel ONLY that leg via the
+  // removeSplitLeg CF (resequences survivors). Eligibility (not anchor/started)
+  // is gated in the row UI + re-checked by the CF. NOT a family cancel — that's
+  // the family-header X (removeDispatchFamilyAware).
+  const removeSingleSplitLeg = async (job: DispatchJob) => {
+    if (!job.id) return;
+    const seq = typeof job.splitSequence === 'number' ? job.splitSequence : null;
+    const letter = seq != null && seq >= 1 && seq <= 26 ? String.fromCharCode(64 + seq) : '';
+    if (!confirm(`Remove ${letter ? `Ticket ${letter} — ` : ''}${job.ndicWellName || job.wellName || 'this leg'}? Only this leg is removed; the rest of the split family stays.`)) return;
+    try {
+      await removeSplitLegFromDashboard(job.id);
+    } catch (e: any) {
+      alert(e?.message || 'Could not remove leg');
+    }
+  };
+
   const removeDispatchFamilyAware = async (job: DispatchJob) => {
     if (!job.id) return;
     const firestore = getFirestoreDb();
@@ -4506,14 +4529,38 @@ function ActiveDispatchPanel({ dispatches, cancelDispatch, drivers, assignTransf
                       if (seen.has(job.splitGroupId!)) return;
                       seen.add(job.splitGroupId!);
                       const famColor = members.find(m => m.splitFamilyColor)?.splitFamilyColor || getRouteColor(job.splitGroupId!);
+                      // Anchor seq = lowest live seq. Per-leg X is offered only on
+                      // future UNSTARTED non-anchor legs; the header X cancels the
+                      // whole family.
+                      const famTerm = new Set(['dismissed', 'cancelled', 'declined', 'completed']);
+                      const anchorSeq = members
+                        .filter(m => !famTerm.has(String(m.status)))
+                        .reduce((min, m) => Math.min(min, m.splitSequence ?? Infinity), Infinity);
                       out.push(
                         <div key={job.splitGroupId!} className="rounded-lg border overflow-hidden" style={{ borderColor: famColor }}>
                           <div className="flex items-center gap-1.5 px-2 py-1 bg-gray-800/40">
                             <span className="w-2 h-2 rounded-full flex-shrink-0" style={{ backgroundColor: famColor }} />
                             <span className="text-[10px] font-bold uppercase tracking-wider" style={{ color: famColor }}>Split Family · {members.length} legs</span>
+                            <span className="flex-1" />
+                            <button
+                              onClick={() => removeDispatchFamilyAware(members[0])}
+                              className="text-red-400/60 hover:text-red-300 text-xs flex-shrink-0 transition-colors"
+                              title="Cancel entire split family"
+                            >✕</button>
                           </div>
                           <div className="space-y-1 p-1.5">
-                            {members.map(rowFor)}
+                            {members.map(m => (
+                              <DispatchJobRow
+                                key={m.id}
+                                job={m}
+                                cancelDispatch={cancelDispatch}
+                                compact={jobs.length > 2}
+                                onClickServiceWork={onEditServiceWork}
+                                onReassign={onReassignDeclined}
+                                onRemove={removeSingleSplitLeg}
+                                removable={String(m.status) === 'pending' && (m.splitSequence ?? 0) > anchorSeq}
+                              />
+                            ))}
                           </div>
                         </div>
                       );

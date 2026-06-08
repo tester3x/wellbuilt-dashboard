@@ -103,3 +103,16 @@ export async function addSplitLegFromDashboard(
   const result: any = await fn({ parentDispatchId, legSpec: { disposal } });
   return result.data;
 }
+
+/**
+ * Remove ONE future-unstarted split leg from the dashboard (per-card X). Calls
+ * the removeSplitLeg CF, which cancels just that leg and resequences survivors.
+ * The CF re-checks guards (not the anchor, not started/terminal) server-side.
+ */
+export async function removeSplitLegFromDashboard(
+  legDispatchId: string,
+): Promise<{ removedId: string; newTotal: number; order: { id: string; splitSequence: number }[] }> {
+  const fn = httpsCallable(getFirebaseFunctions(), 'removeSplitLeg');
+  const result: any = await fn({ legDispatchId });
+  return result.data;
+}
