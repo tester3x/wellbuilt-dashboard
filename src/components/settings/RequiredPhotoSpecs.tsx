@@ -125,6 +125,25 @@ export function RequiredPhotoSpecs({ company }: Props) {
     }
   };
 
+  // Discard local edits → reload last saved server state.
+  const discard = () => { void load(); };
+
+  // Switching customer with unsaved edits would silently drop them (load()
+  // re-fetches). Confirm first.
+  const onOperatorChange = (next: string) => {
+    if (next === operator) return;
+    if (dirty && !window.confirm('Unsaved photo requirement changes will be lost. Discard changes?')) return;
+    setOperator(next);
+  };
+
+  // Warn on reload / tab close / external navigation while dirty.
+  useEffect(() => {
+    if (!dirty) return;
+    const handler = (e: BeforeUnloadEvent) => { e.preventDefault(); e.returnValue = ''; };
+    window.addEventListener('beforeunload', handler);
+    return () => window.removeEventListener('beforeunload', handler);
+  }, [dirty]);
+
   return (
     <div className="border-t border-gray-700 pt-3 mt-1">
       <div className="flex items-center justify-between mb-1">
@@ -145,7 +164,7 @@ export function RequiredPhotoSpecs({ company }: Props) {
             <span className="text-gray-400 text-xs w-20">Customer</span>
             <select
               value={operator}
-              onChange={(e) => setOperator(e.target.value)}
+              onChange={(e) => onOperatorChange(e.target.value)}
               className="flex-1 px-2 py-1 bg-gray-700 border border-gray-600 rounded text-white text-sm"
             >
               {operators.map(op => <option key={op} value={op}>{op}</option>)}
@@ -281,16 +300,29 @@ export function RequiredPhotoSpecs({ company }: Props) {
 
               <div className="flex items-center justify-between">
                 <button onClick={addReq} className="text-orange-400 hover:text-orange-300 text-xs font-medium">+ Add Required Photo</button>
-                <div className="flex items-center gap-2">
-                  {savedMsg && <span className="text-green-400 text-xs">{savedMsg}</span>}
-                  <button
-                    onClick={save}
-                    disabled={!dirty || saving}
-                    className={`px-3 py-1 rounded text-xs font-medium transition-colors ${dirty && !saving ? 'bg-orange-600 hover:bg-orange-500 text-white' : 'bg-gray-700 text-gray-500 cursor-not-allowed'}`}
-                  >
-                    {saving ? 'Saving…' : 'Save'}
-                  </button>
-                </div>
+                {!dirty && savedMsg && <span className="text-green-400 text-xs">{savedMsg}</span>}
+              </div>
+            </div>
+          )}
+
+          {/* Scoped sticky save bar — pinned to the viewport bottom only while the
+              Required Photo Specs section is on screen (position:sticky inside this
+              card), and only when there are unsaved edits. -mx-4 spans the card's
+              padding. */}
+          {dirty && (
+            <div className="sticky bottom-0 z-10 -mx-4 mt-3 px-4 py-2 bg-gray-800/95 backdrop-blur border-t border-orange-500/40 flex items-center justify-between">
+              <span className="text-orange-300 text-xs font-medium">Unsaved changes</span>
+              <div className="flex items-center gap-2">
+                <button
+                  onClick={discard}
+                  disabled={saving}
+                  className="px-3 py-1 rounded text-xs font-medium bg-gray-700 hover:bg-gray-600 text-gray-200 disabled:opacity-50"
+                >Discard</button>
+                <button
+                  onClick={save}
+                  disabled={saving}
+                  className="px-3 py-1 rounded text-xs font-medium bg-orange-600 hover:bg-orange-500 text-white disabled:opacity-50"
+                >{saving ? 'Saving…' : 'Save'}</button>
               </div>
             </div>
           )}
