@@ -4434,11 +4434,16 @@ export const removeSplitLeg = httpsV2.onCall(
         updatedAt: now,
       });
 
-      // Resequence the survivors contiguously 1..N.
+      // Resequence survivors, preserving the anchor's seq: renumber from the
+      // LOWEST live seq, NOT 1. Renumbering from 1 collided with terminal legs
+      // at lower seqs (dup splitSequence) and changed a started anchor's seq
+      // (whose on-device invoice copy then went stale → duplicate letters).
       const remaining = live.filter((l) => l.id !== legDispatchId);
       const newTotal = remaining.length;
+      const baseSeqsR = remaining.map((l) => numSeq(l.data.splitSequence)).filter((n) => isFinite(n));
+      const baseR = baseSeqsR.length ? Math.min(...baseSeqsR) : 1;
       remaining.forEach((l, idx) => {
-        const newSeq = idx + 1;
+        const newSeq = baseR + idx;
         const update: Record<string, any> = { splitTotal: newTotal, updatedAt: now };
         if (numSeq(l.data.splitSequence) !== newSeq) update.splitSequence = newSeq;
         tx.update(l.ref, update);
@@ -4448,21 +4453,29 @@ export const removeSplitLeg = httpsV2.onCall(
         splitGroupId,
         removedId: legDispatchId,
         newTotal,
-        order: remaining.map((l, idx) => ({ id: l.id, splitSequence: idx + 1 })),
+        order: remaining.map((l, idx) => ({ id: l.id, splitSequence: baseR + idx })),
       };
     });
 
-    // Mirror splitTotal onto any started leg's invoice (addSplitLeg pattern).
+    // Mirror splitTotal + new splitSequence onto each leg's invoice (started
+    // legs render from their invoice — keep its dispatchSplit* in sync so the
+    // letter/order never goes stale).
     try {
+      const seqById = new Map(result.order.map((o) => [o.id, o.splitSequence]));
       const invSnap = await firestoreDb
         .collection('invoices')
         .where('dispatchSplitGroupId', '==', result.splitGroupId)
         .get();
       const batch = firestoreDb.batch();
-      invSnap.forEach((d) => batch.update(d.ref, { dispatchSplitTotal: result.newTotal, updatedAt: now }));
+      invSnap.forEach((d) => {
+        const upd: Record<string, any> = { dispatchSplitTotal: result.newTotal, updatedAt: now };
+        const sid = (d.data() as any).dispatchId;
+        if (sid && seqById.has(sid)) upd.dispatchSplitSequence = seqById.get(sid);
+        batch.update(d.ref, upd);
+      });
       if (!invSnap.empty) await batch.commit();
     } catch (e: any) {
-      console.warn('[removeSplitLeg] invoice total mirror failed:', e?.message);
+      console.warn('[removeSplitLeg] invoice mirror failed:', e?.message);
     }
 
     console.log(`[removeSplitLeg] removed ${result.removedId} from ${result.splitGroupId}; new order ${result.order.map((o) => o.splitSequence).join(',')} total=${result.newTotal}`);
@@ -4537,12 +4550,19 @@ export const resequenceSplitFamily = httpsV2.onCall(
         }
       }
 
-      // Rewrite contiguous splitSequence per the new order.
+      // Rewrite splitSequence per the new order, starting at the LOWEST live
+      // seq (NOT 1). Renumbering from 1 collided with terminal legs at lower
+      // seqs (dup splitSequence) and moved a started anchor's seq (whose
+      // on-device invoice copy then went stale → duplicate letters). Anchor +
+      // locked legs keep their index (validated above), so this leaves their
+      // seq unchanged for a contiguous family.
       const byId = new Map(live.map((l) => [l.id, l]));
       const newTotal = orderedLegIds.length;
+      const baseSeqs = live.map((l) => numSeq(l.data.splitSequence)).filter((n) => isFinite(n));
+      const base = baseSeqs.length ? Math.min(...baseSeqs) : 1;
       orderedLegIds.forEach((id, idx) => {
         const l = byId.get(id)!;
-        const newSeq = idx + 1;
+        const newSeq = base + idx;
         const update: Record<string, any> = { splitTotal: newTotal, updatedAt: now };
         if (numSeq(l.data.splitSequence) !== newSeq) update.splitSequence = newSeq;
         tx.update(l.ref, update);
@@ -4551,9 +4571,30 @@ export const resequenceSplitFamily = httpsV2.onCall(
       return {
         splitGroupId,
         newTotal,
-        order: orderedLegIds.map((id, idx) => ({ id, splitSequence: idx + 1 })),
+        base,
+        order: orderedLegIds.map((id, idx) => ({ id, splitSequence: base + idx })),
       };
     });
+
+    // Mirror new splitSequence + total onto each leg's invoice (started legs
+    // render from their invoice — keep dispatchSplit* in sync).
+    try {
+      const seqById = new Map(result.order.map((o) => [o.id, o.splitSequence]));
+      const invSnap = await firestoreDb
+        .collection('invoices')
+        .where('dispatchSplitGroupId', '==', result.splitGroupId)
+        .get();
+      const batch = firestoreDb.batch();
+      invSnap.forEach((d) => {
+        const upd: Record<string, any> = { dispatchSplitTotal: result.newTotal, updatedAt: now };
+        const sid = (d.data() as any).dispatchId;
+        if (sid && seqById.has(sid)) upd.dispatchSplitSequence = seqById.get(sid);
+        batch.update(d.ref, upd);
+      });
+      if (!invSnap.empty) await batch.commit();
+    } catch (e: any) {
+      console.warn('[resequenceSplitFamily] invoice mirror failed:', e?.message);
+    }
 
     console.log(`[resequenceSplitFamily] ${result.splitGroupId} → ${result.order.map((o) => o.id.slice(0, 6) + ':' + o.splitSequence).join(', ')}`);
     return result;
