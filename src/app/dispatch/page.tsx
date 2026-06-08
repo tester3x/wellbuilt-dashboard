@@ -4149,54 +4149,58 @@ function DispatchJobRow({ job, cancelDispatch, compact, onClickServiceWork, onRe
 
         <span className="flex-1" />
 
-        {/* Stage badge */}
-        <StageBadge job={job} />
+        {/* Right-side controls — stage badge + action icons, uniformly sized
+            square hit-areas so they sit on one vertical centerline. */}
+        <div className="flex items-center gap-1 flex-shrink-0">
+          {/* Stage badge */}
+          <StageBadge job={job} />
 
-        {/* Edit icon */}
-        {isClickable && (
-          <span className="text-gray-500 hover:text-gray-300 text-xs flex-shrink-0" title="Edit dispatch">
-            &#9998;
-          </span>
-        )}
+          {/* Edit icon */}
+          {isClickable && (
+            <span className="inline-flex items-center justify-center w-6 h-6 rounded text-gray-500 hover:text-gray-300 hover:bg-gray-700/50 text-sm transition-colors" title="Edit dispatch">
+              &#9998;
+            </span>
+          )}
 
-        {/* Reassign button — for pending/accepted jobs */}
-        {onReassign && (job.status === 'pending' || job.status === 'accepted') && (
+          {/* Reassign button — for pending/accepted jobs */}
+          {onReassign && (job.status === 'pending' || job.status === 'accepted') && (
+            <button
+              onClick={(e) => { e.stopPropagation(); onReassign(job); }}
+              className="inline-flex items-center justify-center w-6 h-6 rounded text-blue-400/70 hover:text-blue-300 hover:bg-blue-500/15 text-sm transition-colors"
+              title="Reassign to another driver"
+            >👯</button>
+          )}
+
+          {/* Remove button — dispatcher action. For split-family legs the parent
+              passes onRemove = single-leg cancel and gates `removable` to future
+              unstarted legs (anchor/started legs hide it; the family-header X
+              cancels the whole family). Non-split/single jobs keep the dismiss. */}
+          {removable !== false && (
           <button
-            onClick={(e) => { e.stopPropagation(); onReassign(job); }}
-            className="text-blue-400/60 hover:text-blue-300 text-xs flex-shrink-0 transition-colors"
-            title="Reassign to another driver"
-          >👯</button>
-        )}
-
-        {/* Remove button — dispatcher action. For split-family legs the parent
-            passes onRemove = single-leg cancel and gates `removable` to future
-            unstarted legs (anchor/started legs hide it; the family-header X
-            cancels the whole family). Non-split/single jobs keep the dismiss. */}
-        {removable !== false && (
-        <button
-          disabled={removing}
-          onClick={async (e) => {
-            e.stopPropagation();
-            if (!job.id) return;
-            if (removingRef.current) return; // async button safety: ignore double-tap in flight
-            removingRef.current = true;
-            setRemoving(true);
-            try {
-              if (onRemove) {
-                await onRemove(job);
-              } else {
-                const firestore = getFirestoreDb();
-                await updateDoc(doc(firestore, 'dispatches', job.id), { status: 'dismissed', dismissedAt: Timestamp.now() }).catch(() => {});
+            disabled={removing}
+            onClick={async (e) => {
+              e.stopPropagation();
+              if (!job.id) return;
+              if (removingRef.current) return; // async button safety: ignore double-tap in flight
+              removingRef.current = true;
+              setRemoving(true);
+              try {
+                if (onRemove) {
+                  await onRemove(job);
+                } else {
+                  const firestore = getFirestoreDb();
+                  await updateDoc(doc(firestore, 'dispatches', job.id), { status: 'dismissed', dismissedAt: Timestamp.now() }).catch(() => {});
+                }
+              } finally {
+                removingRef.current = false;
+                setRemoving(false);
               }
-            } finally {
-              removingRef.current = false;
-              setRemoving(false);
-            }
-          }}
-          className={`text-red-400/60 hover:text-red-300 text-xs flex-shrink-0 transition-colors ${removing ? 'opacity-40 cursor-not-allowed' : ''}`}
-          title="Remove dispatch"
-        >{removing ? '…' : '✕'}</button>
-        )}
+            }}
+            className={`inline-flex items-center justify-center w-6 h-6 rounded text-red-400/70 hover:text-red-200 hover:bg-red-500/15 text-sm transition-colors ${removing ? 'opacity-40 cursor-not-allowed' : ''}`}
+            title="Remove dispatch"
+          >{removing ? '…' : '✕'}</button>
+          )}
+        </div>
       </div>
 
       {/* Detail row — invoice #, drop-off, notes */}
@@ -4560,7 +4564,7 @@ function ActiveDispatchPanel({ dispatches, cancelDispatch, drivers, assignTransf
             </button>
 
             {isExpanded && (
-              <div className="space-y-1 p-2 bg-gray-900/30">
+              <div className="space-y-2 p-2 bg-gray-900/30">
                 {(() => {
                   // Wrap a multi-leg split family in ONE bordered sub-card
                   // (border = persisted splitFamilyColor, fallback
@@ -4605,24 +4609,24 @@ function ActiveDispatchPanel({ dispatches, cancelDispatch, drivers, assignTransf
                         .reduce((min, m) => Math.min(min, m.splitSequence ?? Infinity), Infinity);
                       out.push(
                         <div key={job.splitGroupId!} className="rounded-lg border overflow-hidden" style={{ borderColor: famColor }}>
-                          <div className="flex items-center gap-1.5 px-2 py-1 bg-gray-800/40">
+                          <div className="flex items-center gap-2 px-2.5 py-1.5 bg-gray-800/40">
                             <span className="w-2 h-2 rounded-full flex-shrink-0" style={{ backgroundColor: famColor }} />
                             <span className="text-[10px] font-bold uppercase tracking-wider" style={{ color: famColor }}>Split Family · {members.length} legs</span>
                             <span className="flex-1" />
                             {onAddLegToFamily && members[0].id && (
                               <button
                                 onClick={() => onAddLegToFamily(members[0].id!)}
-                                className="text-purple-300/80 hover:text-purple-200 text-[10px] font-semibold flex-shrink-0 transition-colors"
+                                className="inline-flex items-center px-2 py-1 rounded text-[10px] font-semibold text-purple-200 bg-purple-600/20 hover:bg-purple-600/40 border border-purple-500/40 flex-shrink-0 transition-colors"
                                 title="Add a leg to this split family"
                               >+ Add Leg</button>
                             )}
                             <button
                               onClick={() => removeDispatchFamilyAware(members[0])}
-                              className="text-red-400/60 hover:text-red-300 text-xs flex-shrink-0 transition-colors"
+                              className="inline-flex items-center justify-center w-7 h-7 rounded text-red-400/70 hover:text-red-200 hover:bg-red-500/15 text-lg leading-none flex-shrink-0 transition-colors"
                               title="Cancel entire split family"
                             >✕</button>
                           </div>
-                          <div className="space-y-1 p-1.5">
+                          <div className="space-y-2 p-2">
                             {members.map(m => (
                               <DispatchJobRow
                                 key={m.id}
