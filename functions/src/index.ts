@@ -4143,13 +4143,6 @@ export const addSplitLeg = httpsV2.onCall(
       throw new httpsV2.HttpsError('not-found', `Parent dispatch ${parentDispatchId} not found`);
     }
     const parent = parentSnap.data() as Record<string, any>;
-    const splitGroupId = parent.splitGroupId;
-    if (!splitGroupId) {
-      throw new httpsV2.HttpsError(
-        'failed-precondition',
-        `Parent dispatch ${parentDispatchId} is not part of a split chain (no splitGroupId)`,
-      );
-    }
     if (callerDriverHash && parent.driverHash && callerDriverHash !== parent.driverHash) {
       throw new httpsV2.HttpsError(
         'permission-denied',
@@ -4157,29 +4150,51 @@ export const addSplitLeg = httpsV2.onCall(
       );
     }
 
-    const siblingSnap = await firestoreDb
-      .collection('dispatches')
-      .where('splitGroupId', '==', splitGroupId)
-      .get();
-    if (siblingSnap.empty) {
-      throw new httpsV2.HttpsError(
-        'internal',
-        `Could not enumerate siblings for splitGroupId=${splitGroupId}`,
-      );
+    // Single → Split (2026-06-07): if the parent isn't in a family yet, mint a
+    // new family and make the parent the anchor (seq 1). Only for non-terminal
+    // parents. Existing-family appends are unchanged (WB T's AddSplitLegModal
+    // always passes a family leg → unchanged path).
+    const ADDLEG_TERMINAL = new Set(['completed', 'cancelled', 'declined', 'dismissed']);
+    const isFirstSplit = !parent.splitGroupId;
+    if (isFirstSplit && ADDLEG_TERMINAL.has(String(parent.status))) {
+      throw new httpsV2.HttpsError('failed-precondition', `Cannot split a ${parent.status} job.`);
     }
+    const splitGroupId: string = parent.splitGroupId || `split_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
 
     let maxSequence = 0;
     let leg1DispatchId: string | null = null;
     const siblingRefs: FirebaseFirestore.DocumentReference[] = [];
-    siblingSnap.forEach((docSnap) => {
-      const d = docSnap.data() as Record<string, any>;
-      const seq = typeof d.splitSequence === 'number' ? d.splitSequence : 0;
-      if (seq > maxSequence) maxSequence = seq;
-      if (seq === 1) leg1DispatchId = docSnap.id;
-      siblingRefs.push(docSnap.ref);
-    });
+    let siblingCount = 0;
+    if (isFirstSplit) {
+      // Parent is the sole existing leg → it becomes the anchor (seq 1). The
+      // splitTotal loop covers it; an explicit stamp after batch.set sets its
+      // splitGroupId + splitSequence:1.
+      maxSequence = 1;
+      leg1DispatchId = parentDispatchId;
+      siblingRefs.push(parentRef);
+      siblingCount = 1;
+    } else {
+      const siblingSnap = await firestoreDb
+        .collection('dispatches')
+        .where('splitGroupId', '==', splitGroupId)
+        .get();
+      if (siblingSnap.empty) {
+        throw new httpsV2.HttpsError(
+          'internal',
+          `Could not enumerate siblings for splitGroupId=${splitGroupId}`,
+        );
+      }
+      siblingSnap.forEach((docSnap) => {
+        const d = docSnap.data() as Record<string, any>;
+        const seq = typeof d.splitSequence === 'number' ? d.splitSequence : 0;
+        if (seq > maxSequence) maxSequence = seq;
+        if (seq === 1) leg1DispatchId = docSnap.id;
+        siblingRefs.push(docSnap.ref);
+      });
+      siblingCount = siblingSnap.size;
+    }
     const nextSequence = maxSequence + 1;
-    const newTotal = siblingSnap.size + 1;
+    const newTotal = siblingCount + 1;
     const rootParentId = leg1DispatchId || parentDispatchId;
 
     const now = admin.firestore.Timestamp.now();
@@ -4241,6 +4256,12 @@ export const addSplitLeg = httpsV2.onCall(
         splitTotal: newTotal,
         updatedAt: now,
       });
+    }
+
+    // Single → Split: stamp the new family + anchor sequence on the parent
+    // (merges field-wise with the splitTotal update above).
+    if (isFirstSplit) {
+      batch.update(parentRef, { splitGroupId, splitSequence: 1, updatedAt: now });
     }
 
     // 2026-05-28 — Item 4 (BBL reconcile, CF side).
