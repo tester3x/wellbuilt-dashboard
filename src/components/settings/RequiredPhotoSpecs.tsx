@@ -224,8 +224,8 @@ export function RequiredPhotoSpecs({ company }: Props) {
                         value={r.description}
                         onChange={(e) => patchReq(r.id, { description: e.target.value })}
                         placeholder="Criteria — what must be visible (e.g. Hose visibly connected to the Getty box inlet)"
-                        rows={2}
-                        className="w-full px-2 py-1 bg-gray-700 border border-gray-600 rounded text-white text-xs resize-none"
+                        rows={6}
+                        className="w-full px-2 py-1.5 bg-gray-700 border border-gray-600 rounded text-white text-xs resize-y min-h-[7rem] leading-relaxed"
                       />
 
                       {/* AI criteria drafting — only when a sample exists. The
