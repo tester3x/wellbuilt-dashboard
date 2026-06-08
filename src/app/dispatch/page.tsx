@@ -574,6 +574,12 @@ function DispatchPageInner() {
   const [editSwDisposalResults, setEditSwDisposalResults] = useState<NdicWell[]>([]);
   const [editSwShowDisposalDropdown, setEditSwShowDisposalDropdown] = useState(false);
   const [editSwOnsiteBy, setEditSwOnsiteBy] = useState('');
+  // Job-type conversion (PW <-> SW). editJobType is the TARGET type the form
+  // reflects; the per-type field sections + save logic key off it. Conversion is
+  // allowed only for not-yet-started (pending) jobs — a started job is live on
+  // the driver's device and owns its own state (convert in-app instead).
+  const [editJobType, setEditJobType] = useState<'pw' | 'service'>('pw');
+  const [editServiceType, setEditServiceType] = useState('');
   // Add Split Leg (dashboard, existing split family only) — destination-only.
   const [addLegDest, setAddLegDest] = useState('');
   const [addLegSaving, setAddLegSaving] = useState(false);
@@ -1937,6 +1943,9 @@ function DispatchPageInner() {
     setEditSwNotes(job.notes || '');
     setEditSwWellName(job.ndicWellName || job.wellName || '');
     setEditSwAddDriverHashes(new Set());
+    // Job-type conversion seed — target type defaults to the job's current type.
+    setEditJobType(job.jobType === 'service' ? 'service' : 'pw');
+    setEditServiceType(job.serviceType || '');
     // PW-specific
     setEditPwDisposal(job.disposal || job.hauledTo || '');
     setEditPwDisposalResults([]);
@@ -2014,6 +2023,20 @@ function DispatchPageInner() {
     try {
       const firestore = getFirestoreDb();
 
+      // 0. Job-type conversion (PW <-> SW) — pending jobs only. Convert in place
+      //    on the same dispatch doc (preserves identity/assignment). A started
+      //    job owns its own state on the driver's device; the UI blocks that.
+      if (editSwJob.id && String(editSwJob.status) === 'pending') {
+        const typeChanged = editJobType !== editSwJob.jobType;
+        const stChanged = editJobType === 'service' && editServiceType.trim() !== (editSwJob.serviceType || '');
+        if (typeChanged || stChanged) {
+          const typeUpd: Record<string, any> = {};
+          if (typeChanged) typeUpd.jobType = editJobType;
+          typeUpd.serviceType = editJobType === 'service' ? (editServiceType.trim() || null) : null;
+          await updateDoc(doc(firestore, 'dispatches', editSwJob.id), typeUpd);
+        }
+      }
+
       // 1a. Update well name if changed (PW jobs — GPS resolved when driver accepts)
       const origWell = editSwJob.ndicWellName || editSwJob.wellName || '';
       if (editSwWellName.trim() && editSwWellName.trim() !== origWell && editSwJob.id) {
@@ -2024,7 +2047,7 @@ function DispatchPageInner() {
       }
 
       // 1b. Update disposal if changed (PW jobs)
-      if (editSwJob.jobType !== 'service' && editSwJob.id) {
+      if (editJobType !== 'service' && editSwJob.id) {
         const origDisposal = editSwJob.disposal || editSwJob.hauledTo || '';
         if (editPwDisposal.trim() !== origDisposal) {
           await updateDoc(doc(firestore, 'dispatches', editSwJob.id), { disposal: editPwDisposal.trim() });
@@ -2032,7 +2055,7 @@ function DispatchPageInner() {
       }
 
       // 1b2. Update disposal + onsiteBy if changed (SW jobs)
-      if (editSwJob.jobType === 'service' && editSwJob.id) {
+      if (editJobType === 'service' && editSwJob.id) {
         const swUpdates: Record<string, any> = {};
         if (editSwDisposal.trim() !== (editSwJob.disposal || editSwJob.disposalName || '')) {
           swUpdates.disposal = editSwDisposal.trim();
@@ -3520,8 +3543,59 @@ function DispatchPageInner() {
               </div>
             </div>
 
+            {/* ── Job Type conversion (PW <-> SW) ───────────────────────────
+                Convert in place — same dispatch doc, preserves identity. Only
+                for pending (not-yet-started) jobs; a started job is live on the
+                driver's device and must be converted in-app. */}
+            {(() => {
+              const TERM = ['completed', 'cancelled', 'declined', 'dismissed'];
+              if (TERM.includes(String(editSwJob.status))) return null;
+              const canConvert = String(editSwJob.status) === 'pending';
+              return (
+                <div className="mb-4 p-3 rounded-lg border border-gray-700 bg-gray-900/40">
+                  <label className="block text-xs text-gray-400 mb-2">Job Type</label>
+                  <div className="flex gap-2">
+                    {(['pw', 'service'] as const).map(t => (
+                      <button
+                        key={t}
+                        type="button"
+                        disabled={!canConvert}
+                        onClick={() => setEditJobType(t)}
+                        className={`flex-1 px-3 py-1.5 rounded text-sm font-medium transition-colors ${
+                          editJobType === t
+                            ? (t === 'service' ? 'bg-purple-600 text-white' : 'bg-blue-600 text-white')
+                            : 'bg-gray-700 text-gray-300 hover:bg-gray-600'
+                        } ${!canConvert ? 'opacity-50 cursor-not-allowed' : ''}`}
+                      >
+                        {t === 'pw' ? 'Production Water' : 'Service Work'}
+                      </button>
+                    ))}
+                  </div>
+                  {editJobType === 'service' && (
+                    <input
+                      value={editServiceType}
+                      onChange={(e) => setEditServiceType(e.target.value)}
+                      disabled={!canConvert && editJobType === editSwJob.jobType}
+                      placeholder="Service type (e.g. Flowback, Rig Move)"
+                      className="w-full mt-2 px-3 py-1.5 bg-gray-900 border border-gray-700 rounded text-white text-sm placeholder-gray-500"
+                    />
+                  )}
+                  {!canConvert && (
+                    <p className="text-amber-400/80 text-xs mt-2">
+                      Job already started — convert it from the driver's app. Dispatch can only change the type before it starts.
+                    </p>
+                  )}
+                  {canConvert && editJobType !== editSwJob.jobType && (
+                    <p className="text-orange-300 text-xs mt-2">
+                      Converting {editSwJob.jobType === 'service' ? 'Service Work → Production Water' : 'Production Water → Service Work'} — saved on this dispatch. Fill the fields below for the new type, then Save Changes.
+                    </p>
+                  )}
+                </div>
+              );
+            })()}
+
             {/* ── PW Layout ─────────────────────────────────────────────── */}
-            {editSwJob.jobType !== 'service' && (
+            {editJobType !== 'service' && (
               <>
                 {/* Pickup Well — editable with autocomplete */}
                 <div className="mb-4">
@@ -3690,7 +3764,7 @@ function DispatchPageInner() {
             )}
 
             {/* ── SW Layout ─────────────────────────────────────────────── */}
-            {editSwJob.jobType === 'service' && (
+            {editJobType === 'service' && (
               <>
                 {/* Current Crew List */}
                 <div className="mb-4">
