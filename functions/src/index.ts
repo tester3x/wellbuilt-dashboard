@@ -4761,6 +4761,59 @@ export const validatePhotoCompliance = httpsV2.onCall(
       } catch {}
     };
 
+    // ── Global non-direct-photo guard (anti-cheat / anti-embarrassment) ──────
+    // Before scoring criteria, reject OBVIOUS non-field proof: screenshot, photo
+    // of a phone/tablet/computer screen, gallery/app-viewer image, UI overlays
+    // from another device/app, a photo of a printed or on-screen displayed
+    // image, or an edited/collaged image. Conservative — only rejects when
+    // clearly non-direct (high confidence). Real field conditions (mud, dust,
+    // blur, low light, glare, rain/snow, dirty lens, vibration, awkward angle)
+    // are DIRECT and pass through to normal scoring. Fails OPEN on any guard
+    // error so a legit photo is never blocked. Not a dashboard setting; not
+    // per-requirement; runs for every validation.
+    {
+      const guardPrompt =
+        `You are checking whether a photo is a DIRECT camera photo taken in the field, or a NON-DIRECT image.\n` +
+        `NON-DIRECT means: a screenshot; a photo of a phone/tablet/computer screen; a gallery or in-app viewer image; ` +
+        `UI overlays/chrome from another device or app; a photo of a printed photo or an image displayed on a screen; or an edited/collaged image.\n` +
+        `ALLOW normal oilfield reality as DIRECT: mud, dust, blur, low light, glare, rain, snow, dirty lens, vibration, awkward angle, field clutter.\n` +
+        `Be conservative — only say it is non-direct when it is OBVIOUS.\n` +
+        `Respond ONLY with JSON: {"direct": <true|false>, "confidence": <integer 0-100>, "reason": "<short>"}.`;
+      try {
+        const g = await runVisionText(provider, guardPrompt, [{ base64: photoBase64, mime: candidateMime }]);
+        let gText = g.text.trim();
+        if (gText.startsWith('```')) gText = gText.replace(/^```(?:json)?\s*\n?/, '').replace(/\n?```\s*$/, '');
+        const gParsed = JSON.parse(gText);
+        const isDirect = gParsed.direct !== false;
+        const gConf = Math.max(0, Math.min(100, Math.round(Number(gParsed.confidence) || 0)));
+        if (!isDirect && gConf >= 80) {
+          const gRate = VISION_RATES[g.model] || { in: 0, out: 0 };
+          const gCost = Number((g.usageIn * gRate.in + g.usageOut * gRate.out).toFixed(6));
+          const reason = 'Photo appears to be a screenshot or image of another screen rather than a direct field photo. Please retake.';
+          logMetrics({ model: g.model, verdict: 'fail', failType: 'non_direct_photo', score: 0, inputTokens: g.usageIn, outputTokens: g.usageOut, estimatedCostUsd: gCost });
+          await writeAudit({ provider, model: g.model, verdict: 'fail', failType: 'non_direct_photo', score: 0, reason, inputTokens: g.usageIn, outputTokens: g.usageOut, estimatedCostUsd: gCost });
+          return {
+            pass: false,
+            score: 0,
+            threshold,
+            reason,
+            failType: 'non_direct_photo',
+            requirementId,
+            provider,
+            model: g.model,
+            inputTokens: g.usageIn,
+            outputTokens: g.usageOut,
+            estimatedCostUsd: gCost,
+            hadReference: !!refBase64,
+            validatedAt: new Date().toISOString(),
+          };
+        }
+      } catch (e: any) {
+        // Fail OPEN — never block a legit photo because the guard errored/unparsed.
+        console.warn('[validatePhotoCompliance] non-direct guard skipped:', e?.message);
+      }
+    }
+
     if (provider === 'gemini') {
       // ── Gemini (REST, global fetch) ──────────────────────────────────────
       const apiKey = process.env.GEMINI_API_KEY;
