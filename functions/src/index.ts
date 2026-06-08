@@ -4830,6 +4830,167 @@ export const validatePhotoCompliance = httpsV2.onCall(
   },
 );
 
+// ───────────────────────────────────────────────────────────────────────────
+// Photo compliance — AI criteria drafting helper (Phase C-lite).
+//
+// Given a customer's sample/reference photo, draft field-friendly CRITERIA text
+// for that required photo so admins don't have to write it from scratch. This is
+// a DRAFTING helper only — the dashboard fills the criteria field; the admin
+// reviews/edits/saves. It does NOT touch validatePhotoCompliance, WB T, or the
+// data model. Same provider switch (Claude default / Gemini via env).
+// ───────────────────────────────────────────────────────────────────────────
+
+/**
+ * Single-prompt vision call returning the model's raw text + token usage.
+ * Used only by suggestPhotoCriteria (validatePhotoCompliance is left untouched).
+ */
+async function runVisionText(
+  provider: string,
+  prompt: string,
+  images: { base64: string; mime: string }[],
+): Promise<{ text: string; model: string; usageIn: number; usageOut: number }> {
+  if (provider === 'gemini') {
+    const apiKey = process.env.GEMINI_API_KEY;
+    if (!apiKey) throw new httpsV2.HttpsError('failed-precondition', 'GEMINI_API_KEY not set in functions/.env file');
+    const parts: any[] = [{ text: prompt }];
+    for (const img of images) parts.push({ inline_data: { mime_type: img.mime, data: img.base64 } });
+    const resp = await fetch(
+      `https://generativelanguage.googleapis.com/v1beta/models/${GEMINI_VISION_MODEL}:generateContent?key=${apiKey}`,
+      {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ contents: [{ parts }], generationConfig: { temperature: 0.2, responseMimeType: 'application/json' } }),
+      },
+    );
+    if (!resp.ok) {
+      const errBody = await resp.text().catch(() => '');
+      throw new Error(`Gemini HTTP ${resp.status}: ${errBody.slice(0, 300)}`);
+    }
+    const json: any = await resp.json();
+    const text = json?.candidates?.[0]?.content?.parts?.[0]?.text || '';
+    const um = json?.usageMetadata || {};
+    return { text, model: GEMINI_VISION_MODEL, usageIn: Number(um.promptTokenCount) || 0, usageOut: Number(um.candidatesTokenCount) || 0 };
+  }
+  // Claude (default)
+  const apiKey = process.env.ANTHROPIC_API_KEY;
+  if (!apiKey) throw new httpsV2.HttpsError('failed-precondition', 'ANTHROPIC_API_KEY not set in functions/.env file');
+  const client = new Anthropic({ apiKey });
+  const content: any[] = [{ type: 'text', text: prompt }];
+  for (const img of images) content.push({ type: 'image', source: { type: 'base64', media_type: img.mime, data: img.base64 } });
+  const message = await client.messages.create({ model: CLAUDE_VISION_MODEL, max_tokens: 400, messages: [{ role: 'user', content }] });
+  const textBlock = message.content.find((b: any) => b.type === 'text');
+  const text = textBlock && textBlock.type === 'text' ? textBlock.text : '';
+  return { text, model: CLAUDE_VISION_MODEL, usageIn: Number(message.usage?.input_tokens) || 0, usageOut: Number(message.usage?.output_tokens) || 0 };
+}
+
+export const suggestPhotoCriteria = httpsV2.onCall(
+  { timeoutSeconds: 60, memory: '512MiB' },
+  async (request) => {
+    const { customerId, requirementId, sampleStoragePath, sampleUrl, label, phase, hint } = (request.data || {}) as {
+      customerId?: string;
+      requirementId?: string;
+      sampleStoragePath?: string;
+      sampleUrl?: string;
+      label?: string;
+      phase?: string;
+      hint?: string;
+    };
+
+    const provider = (process.env.PHOTO_COMPLIANCE_PROVIDER || 'claude').toLowerCase();
+
+    // Resolve the sample image → base64. Prefer an explicit storage path, then a
+    // URL, then look it up on the requirement doc.
+    let path = sampleStoragePath || '';
+    let url = sampleUrl || '';
+    if (!path && !url && customerId && requirementId) {
+      const snap = await firestoreDb.collection('photo_requirements').doc(customerId).get();
+      const req = snap.exists ? (snap.data() as any).requirements?.find((r: any) => r.id === requirementId) : null;
+      path = req?.sampleStoragePath || '';
+      url = req?.sampleUrl || '';
+    }
+
+    let imgBase64: string | null = null;
+    let imgMime = 'image/jpeg';
+    try {
+      if (path) {
+        const file = admin.storage().bucket().file(path);
+        const [buf] = await file.download();
+        imgBase64 = buf.toString('base64');
+        const [meta] = await file.getMetadata().catch(() => [{ contentType: 'image/jpeg' }] as any);
+        if (meta?.contentType) imgMime = meta.contentType;
+      } else if (url) {
+        const resp = await fetch(url);
+        if (resp.ok) {
+          imgBase64 = Buffer.from(await resp.arrayBuffer()).toString('base64');
+          imgMime = resp.headers.get('content-type') || 'image/jpeg';
+        }
+      }
+    } catch (e: any) {
+      console.warn('[suggestPhotoCriteria] sample load failed:', e?.message);
+    }
+    if (!imgBase64) {
+      throw new httpsV2.HttpsError('not-found', 'No sample image available to analyze. Upload a sample first.');
+    }
+
+    const ctx: string[] = [];
+    if (label) ctx.push(`The photo is labeled "${label}".`);
+    if (phase && phase !== 'any') ctx.push(`It is taken at the ${phase} stage of the job.`);
+    if (hint) ctx.push(`Admin hint: ${hint}`);
+
+    const prompt =
+      `You are helping an oilfield water-hauling company write a CRITERIA description for a REQUIRED driver photo. ` +
+      `Analyze the attached SAMPLE photo and draft criteria describing what EVIDENCE must be REASONABLY VISIBLE for a driver's photo to be acceptable.\n` +
+      (ctx.length ? ctx.join(' ') + '\n' : '') +
+      `Rules for the criteria you write:\n` +
+      `- Describe the required EVIDENCE, not just what the photo looks like (e.g. "confirm no visible spill or leak", "hose connection must be clearly visible", "gauge reading must be legible", "lid must be closed").\n` +
+      `- Be field-friendly and forgiving. Use the phrase "reasonably visible".\n` +
+      `- Do NOT require a perfect match to the sample, exact angle, exact framing, or good lighting unless the evidence truly demands it.\n` +
+      `- Explicitly allow oilfield conditions (mud, snow, ice, darkness, rain, glare, dust, field clutter) as long as the required evidence is still reasonably visible.\n` +
+      `- Do not make drivers take beauty shots.\n` +
+      `Respond ONLY with JSON: {"criteria": "<2-3 sentence description>", "suggestedThreshold": <integer 60-90>, "notes": "<one short tip for the admin, optional>"}.`;
+
+    let modelText: string;
+    let usedModel: string;
+    let usageIn = 0, usageOut = 0;
+    try {
+      const r = await runVisionText(provider, prompt, [{ base64: imgBase64, mime: imgMime }]);
+      modelText = r.text;
+      usedModel = r.model;
+      usageIn = r.usageIn;
+      usageOut = r.usageOut;
+      if (!modelText) throw new Error('Model returned no text');
+    } catch (err: any) {
+      console.error('[suggestPhotoCriteria] vision error:', err?.message);
+      throw new httpsV2.HttpsError('internal', 'Criteria suggestion failed: ' + err?.message);
+    }
+
+    let criteria = '';
+    let suggestedThreshold: number | undefined;
+    let notes: string | undefined;
+    try {
+      let s = modelText.trim();
+      if (s.startsWith('```')) s = s.replace(/^```(?:json)?\s*\n?/, '').replace(/\n?```\s*$/, '');
+      const parsed = JSON.parse(s);
+      criteria = String(parsed.criteria || '').slice(0, 600);
+      if (typeof parsed.suggestedThreshold === 'number') suggestedThreshold = Math.max(0, Math.min(100, Math.round(parsed.suggestedThreshold)));
+      if (parsed.notes) notes = String(parsed.notes).slice(0, 200);
+    } catch (e: any) {
+      // Model returned prose, not JSON — use it directly as the criteria draft.
+      criteria = modelText.trim().slice(0, 600);
+    }
+    if (!criteria) throw new httpsV2.HttpsError('internal', 'Could not draft criteria from the sample');
+
+    const rate = VISION_RATES[usedModel] || { in: 0, out: 0 };
+    const estimatedCostUsd = Number((usageIn * rate.in + usageOut * rate.out).toFixed(6));
+    console.log('[photo-compliance-metrics] ' + JSON.stringify({
+      fn: 'suggestPhotoCriteria', provider, model: usedModel, customerId, requirementId,
+      inputTokens: usageIn, outputTokens: usageOut, estimatedCostUsd,
+    }));
+
+    return { criteria, suggestedThreshold, notes, provider, model: usedModel, estimatedCostUsd };
+  },
+);
+
 export {
   recoverHandoffOrphan,
   listStuckHandoffs,

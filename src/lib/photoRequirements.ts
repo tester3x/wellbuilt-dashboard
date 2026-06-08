@@ -13,9 +13,10 @@
 // refreshes. The { id, label, description, threshold, sampleStoragePath,
 // sampleUrl } contract is preserved; requiredCount / phase / active are additive.
 // ───────────────────────────────────────────────────────────────────────────
-import { getFirebaseApp, getFirestoreDb } from './firebase';
+import { getFirebaseApp, getFirestoreDb, getFirebaseFunctions } from './firebase';
 import { doc, getDoc, setDoc, Timestamp } from 'firebase/firestore';
 import { getStorage, ref, uploadBytes, getDownloadURL } from 'firebase/storage';
+import { httpsCallable } from 'firebase/functions';
 
 const REAL_BUCKET = 'gs://wellbuilt-sync.firebasestorage.app';
 
@@ -91,6 +92,24 @@ export async function uploadRequirementSample(
   await uploadBytes(storageRef, file, { contentType: file.type || 'image/jpeg' });
   const sampleUrl = await getDownloadURL(storageRef);
   return { sampleStoragePath, sampleUrl };
+}
+
+/**
+ * AI drafting helper — analyze the requirement's sample photo and return a
+ * field-friendly criteria draft. Drafting only; the admin reviews/edits/saves.
+ */
+export async function suggestPhotoCriteria(params: {
+  customerId: string;
+  requirementId?: string;
+  sampleStoragePath?: string;
+  sampleUrl?: string;
+  label?: string;
+  phase?: string;
+  hint?: string;
+}): Promise<{ criteria: string; suggestedThreshold?: number; notes?: string }> {
+  const fn = httpsCallable(getFirebaseFunctions(), 'suggestPhotoCriteria');
+  const res: any = await fn(params);
+  return res.data;
 }
 
 /**

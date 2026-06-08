@@ -9,6 +9,7 @@ import {
   loadPhotoRequirementSpec,
   savePhotoRequirementSpec,
   uploadRequirementSample,
+  suggestPhotoCriteria,
 } from '@/lib/photoRequirements';
 
 interface Props {
@@ -36,6 +37,7 @@ export function RequiredPhotoSpecs({ company }: Props) {
   const [loading, setLoading] = useState(false);
   const [saving, setSaving] = useState(false);
   const [uploadingId, setUploadingId] = useState<string | null>(null);
+  const [suggestingId, setSuggestingId] = useState<string | null>(null);
   const [dirty, setDirty] = useState(false);
   const [savedMsg, setSavedMsg] = useState('');
 
@@ -79,6 +81,27 @@ export function RequiredPhotoSpecs({ company }: Props) {
       alert('Sample upload failed: ' + (e?.message || 'unknown error'));
     } finally {
       setUploadingId(null);
+    }
+  };
+
+  const onSuggest = async (req: PhotoRequirement) => {
+    if (!req.sampleStoragePath && !req.sampleUrl) return;
+    setSuggestingId(req.id);
+    try {
+      const out = await suggestPhotoCriteria({
+        customerId,
+        requirementId: req.id,
+        sampleStoragePath: req.sampleStoragePath,
+        sampleUrl: req.sampleUrl,
+        label: req.label,
+        phase: req.phase,
+      });
+      if (out?.criteria) patchReq(req.id, { description: out.criteria });
+    } catch (e: any) {
+      console.error('[RequiredPhotoSpecs] suggest criteria failed:', e);
+      alert('Suggest criteria failed: ' + (e?.message || 'unknown error'));
+    } finally {
+      setSuggestingId(null);
     }
   };
 
@@ -202,6 +225,19 @@ export function RequiredPhotoSpecs({ company }: Props) {
                         rows={2}
                         className="w-full px-2 py-1 bg-gray-700 border border-gray-600 rounded text-white text-xs resize-none"
                       />
+
+                      {/* AI criteria drafting — only when a sample exists. Fills the
+                          field; admin reviews/edits before Save. */}
+                      {(r.sampleStoragePath || r.sampleUrl) && (
+                        <button
+                          onClick={() => onSuggest(r)}
+                          disabled={suggestingId === r.id}
+                          className={`text-xs font-medium ${suggestingId === r.id ? 'text-gray-500 cursor-wait' : 'text-purple-300 hover:text-purple-200'}`}
+                          title="Draft criteria from the sample photo (you can edit before saving)"
+                        >
+                          {suggestingId === r.id ? 'Drafting…' : '✨ Suggest Criteria'}
+                        </button>
+                      )}
 
                       <div className="flex items-center gap-3 flex-wrap">
                         <label className="flex items-center gap-1 text-gray-400 text-xs">
