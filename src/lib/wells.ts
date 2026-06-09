@@ -835,6 +835,14 @@ export async function fetchWellHistoryUnified(wellName: string, limit: number = 
   // the same direction, the baseline is stale; re-tag the run as a fresh sequence.
 
   // Pulls are sorted newest first, so we iterate from oldest to newest (reverse)
+  // Trailing window for the anomaly baseline — mirror calculateAFR (CF), which
+  // classifies against only the most-recent 15 pulls (functions/src/index.ts:765
+  // `rateEntries.slice(-15)`). An unwindowed all-history median freezes as
+  // history grows and can't track a well's legitimate flow drift, perpetually
+  // flagging current-normal pulls "IT Review" (Atlas 1: recent ~166 vs
+  // all-history ~100 min/ft = 1.66x). Windowing lets the baseline follow the
+  // well, bringing Well History to parity with the predictor/AFR.
+  const AFR_BASELINE_WINDOW = 15;
   const knownFlowRates: number[] = [];
   // Track each rate's index in the pulls[] array + rejection direction so we can
   // detect a tail rejection run after the loop. Direction: 0=accepted, +1=rejected
@@ -848,7 +856,7 @@ export async function fetchWellHistoryUnified(wellName: string, limit: number = 
       let direction = 0;
       // Check anomaly against median of PREVIOUS rows (knownFlowRates)
       if (knownFlowRates.length >= 3) {
-        const medianRate = median(knownFlowRates);
+        const medianRate = median(knownFlowRates.slice(-AFR_BASELINE_WINDOW));
         pull.anomalyLevel = getFlowRateAnomalyLevel(pull.flowRateDays, medianRate);
         if (pull.anomalyLevel === 2) {
           direction = pull.flowRateDays > medianRate ? 1 : -1;
