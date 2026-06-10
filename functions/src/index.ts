@@ -4759,6 +4759,7 @@ export const validatePhotoCompliance = httpsV2.onCall(
       `   accepted = false ONLY for proof/framing problems: wrong subject; the target is not visible; a required connection/cap/hose/truck part is not visible; the immediate surrounding ground/area is not visible; too far away; too blurry/dark/blocked to review.\n` +
       `   accepted = true otherwise — even if the scene looks messy, wet, or imperfect.\n` +
       `   DO NOT set accepted=false because of: wet ground, puddles, mud, rainwater, standing water, pooling, possible spill, oil sheen, or overflow evidence. A photo that clearly documents a wet/spilled condition is GOOD evidence and must be ACCEPTED.\n` +
+      `   accepted=false is RARE. Use it ONLY for: the wrong subject, a photo of the floorboard/feet, the sky, an obviously accidental frame, or the required proof CONCLUSIVELY absent. Night, rain, steam, glare, snow, fog, dust, and dirty equipment are NOT failures — if the required thing is plausibly present but hard to confirm, set accepted=TRUE (it becomes a review), NOT a retake.\n` +
       `   score (integer 0-100) = how clearly the target + immediate area are DOCUMENTED (framing, distance, focus, lighting, visibility). It is about REVIEWABILITY, not about condition. Blurry/far/blocked = low score.\n` +
       `\n2) CONCERN (metadata only, never fails). Ask: "Is there anything dispatch/admin should review?"\n` +
       `   concernLevel: "none" | "low" | "medium" | "high".\n` +
@@ -4768,8 +4769,14 @@ export const validatePhotoCompliance = httpsV2.onCall(
       `   - high: active fluid flowing/leaking, heavy fresh pooling around the connection, or obvious overflow/spill.\n` +
       `   redFlag = true when concernLevel is medium or high (something a human should look at). Otherwise false.\n` +
       `   concernReason = one short sentence describing the concern, or null when concernLevel is none.\n` +
+      `\nREASON WORDING (critical — a truck driver reads this on location):\n` +
+      `   Write "reason" as <= 12 words, plain spoken English, prescriptive. State the MISSING proof and, when accepted=false, how to fix it. NAME the specific missing thing (hose connection, Getty lid, ground at the hookup, trailer, etc.).\n` +
+      `   - accepted=true AND concernLevel none/low: keep it minimal — "" or "Looks good."\n` +
+      `   - accepted=true but hard to confirm (glare/steam/night/angle): "Couldn't confirm <thing>."\n` +
+      `   - accepted=false: "<thing> not visible — move closer." (or the real fix: back up, wipe lens, get the connection in frame).\n` +
+      `   Do NOT describe the image or list what it contains. NO software words: appears, image, photo, depicts, frame, confidence, analysis, detected, "unable to determine", "the image shows". No essays, no second sentence of narration.\n` +
       `\nRespond ONLY with JSON, no prose:\n` +
-      `{"accepted": <true|false>, "score": <integer 0-100>, "reason": "<one short driver-actionable sentence>", "concernLevel": "none|low|medium|high", "concernReason": "<sentence or null>", "redFlag": <true|false>}`;
+      `{"accepted": <true|false>, "score": <integer 0-100>, "reason": "<<=12 words: missing proof + fix; no image description>", "concernLevel": "none|low|medium|high", "concernReason": "<sentence or null>", "redFlag": <true|false>}`;
 
     const candidateMime = mimeType || 'image/jpeg';
     let modelText: string;
@@ -4815,13 +4822,14 @@ export const validatePhotoCompliance = httpsV2.onCall(
         if (!isDirect && gConf >= 80) {
           const gRate = VISION_RATES[g.model] || { in: 0, out: 0 };
           const gCost = Number((g.usageIn * gRate.in + g.usageOut * gRate.out).toFixed(6));
-          const reason = 'Photo appears to be a screenshot or image of another screen rather than a direct field photo. Please retake.';
+          const reason = 'Screen photo not allowed — retake a real field photo.';
           logMetrics({ model: g.model, verdict: 'fail', failType: 'non_direct_photo', score: 0, inputTokens: g.usageIn, outputTokens: g.usageOut, estimatedCostUsd: gCost });
           await writeAudit({ provider, model: g.model, verdict: 'fail', failType: 'non_direct_photo', score: 0, reason, inputTokens: g.usageIn, outputTokens: g.usageOut, estimatedCostUsd: gCost });
           return {
             pass: false,
             passed: false,
             accepted: false,
+            outcome: 'retake' as const,
             score: 0,
             threshold,
             reason,
@@ -5027,6 +5035,10 @@ export const validatePhotoCompliance = httpsV2.onCall(
     // to review (score meets the requirement's framing-confidence threshold).
     // Condition (wet/spill) lives in concern*, never here.
     const pass = accepted && score >= threshold;
+    // 3-light verdict for the client (advisory mode). Decided here so client +
+    // dashboard agree. retake = proof/framing problem; review = accepted but a
+    // human should look (concern); verified = clean accepted photo.
+    const outcome: 'verified' | 'review' | 'retake' = !pass ? 'retake' : (redFlag ? 'review' : 'verified');
     const rate = VISION_RATES[usedModel] || { in: 0, out: 0 };
     const estimatedCostUsd = Number((usageIn * rate.in + usageOut * rate.out).toFixed(6));
     logMetrics({
@@ -5048,6 +5060,7 @@ export const validatePhotoCompliance = httpsV2.onCall(
       pass,             // backward-compat alias of `passed`/`accepted`-gated result
       passed: pass,
       accepted,
+      outcome,          // 'verified' | 'review' | 'retake' (advisory 3-light)
       score,
       threshold,
       reason,
