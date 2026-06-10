@@ -250,6 +250,16 @@ export function TicketDetailModal({ ticket, onClose, onNavigateTicket }: Props) 
                         let url = typeof photo === 'string' ? photo : photo?.uri;
                         const loc = typeof photo === 'object' ? photo?.location : '';
                         const photoType = typeof photo === 'object' ? photo?.type : '';
+                        // AI photo compliance (v1) — audit visibility: "why was this accepted?"
+                        const c = typeof photo === 'object' ? photo?.compliance : null;
+                        const reqId = typeof photo === 'object' ? photo?.requirementId : null;
+                        const cOverridden = c?.overrideUsed === true;
+                        const cPending = c?.status === 'pending';
+                        const cReview = c?.outcome === 'review' || (c?.status === 'pass' && c?.redFlag === true);
+                        const cBadgeText = cOverridden ? 'Override Used' : cPending ? 'Pending' : cReview ? 'Review' : 'Verified';
+                        const cBadgeCls = (cOverridden || cReview) ? 'bg-amber-900/40 text-amber-300 border border-amber-600'
+                          : cPending ? 'bg-gray-700 text-gray-300 border border-gray-600'
+                          : 'bg-green-900/40 text-green-300 border border-green-600';
                         if (!url) return null;
                         // Rewrite firebasestorage.googleapis.com → storage.googleapis.com (DNS fix)
                         if (url.includes('firebasestorage.googleapis.com')) {
@@ -265,6 +275,17 @@ export function TicketDetailModal({ ticket, onClose, onNavigateTicket }: Props) 
                               <img src={url} alt={`Photo ${i + 1}`} className="w-20 h-20 object-cover rounded border border-gray-300 hover:border-yellow-500 transition-colors cursor-pointer" />
                             </a>
                             {loc && <p className="text-[9px] text-gray-400 mt-0.5 max-w-[80px] truncate">{photoType === 'pickup' ? '📍' : '📦'} {loc}</p>}
+                            {reqId && c && (
+                              <div className="mt-0.5 w-20 mx-auto">
+                                <span className={`inline-block px-1 py-0.5 rounded text-[8px] font-bold ${cBadgeCls}`}>{cBadgeText}</span>
+                                {(cOverridden || cReview) && c?.reason && (
+                                  <p className="text-[8px] text-gray-300 mt-0.5 leading-tight text-left">{c.reason}</p>
+                                )}
+                                {cOverridden && c?.overrideAt && (
+                                  <p className="text-[8px] text-amber-500/80 mt-0.5 text-left">Kept {new Date(c.overrideAt).toLocaleString()}</p>
+                                )}
+                              </div>
+                            )}
                           </div>
                         );
                       })}
