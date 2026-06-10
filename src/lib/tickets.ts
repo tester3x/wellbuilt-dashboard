@@ -170,6 +170,32 @@ export async function fetchInvoiceForTicket(ticket: Ticket): Promise<InvoiceDeta
     } catch { /* fall through */ }
   }
 
+  // Fallback: query by ticketNumber. ticket_only invoices have an empty
+  // invoiceNumber and the tickets-collection doc often lacks invoiceDocId, so
+  // the two lookups above can't reach them — but the invoice still carries the
+  // ticketNumber (and a tickets[] array). Without this, photos + AI compliance
+  // never surface for ticket_only jobs (e.g. Liquid Gold / Slawson SW).
+  if (ticket.ticketNumber) {
+    try {
+      const q = query(
+        collection(db, 'invoices'),
+        where('ticketNumber', '==', ticket.ticketNumber),
+        limit(1)
+      );
+      const snap = await getDocs(q);
+      if (!snap.empty) return mapInvoiceDetail(snap.docs[0]);
+    } catch { /* fall through */ }
+    try {
+      const q = query(
+        collection(db, 'invoices'),
+        where('tickets', 'array-contains', ticket.ticketNumber),
+        limit(1)
+      );
+      const snap = await getDocs(q);
+      if (!snap.empty) return mapInvoiceDetail(snap.docs[0]);
+    } catch { /* fall through */ }
+  }
+
   return null;
 }
 
