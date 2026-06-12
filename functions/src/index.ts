@@ -2885,22 +2885,34 @@ export const onShiftCreate = functionsV1.firestore
     const participantNames: Record<string, string> = { [driverPid]: driverName, ...dispatchNames };
 
     const now = admin.firestore.Timestamp.now();
-    const threadRef = await firestoreDb.collection('chat_threads').add({
-      type: 'shift',
+    // Stable, deterministic shift thread per (driver, company): ONE thread the
+    // driver keeps across every shift, instead of a new thread per shift/day
+    // (which produced the "started their shift" duplicate pile-up). Find-or-create
+    // on the fixed id, then APPEND the shift-start system message into it.
+    const threadId = `shift_${driverId}_${companyId}`;
+    const threadRef = firestoreDb.collection('chat_threads').doc(threadId);
+    const existing = await threadRef.get();
+    const baseFields = {
+      type: 'shift' as const,
       companyId,
-      shiftId: context.params.shiftId,
+      driverHash: driverId,
       title: driverName,
       subtitle: 'Shift',
       participants,
       participantNames,
-      status: 'active',
-      createdAt: now,
+      status: 'active' as const,   // re-activate if a prior shift-end archived it
+      lastShiftId: context.params.shiftId,
       updatedAt: now,
-      lastRead: {},
-    });
+    };
+    if (existing.exists) {
+      // Merge — dispatchers/name may have changed; never clobber lastRead.
+      await threadRef.set(baseFields, { merge: true });
+    } else {
+      await threadRef.set({ ...baseFields, createdAt: now, lastRead: {} });
+    }
 
     await postSystemMessage(threadRef.id, `${driverName} started their shift`, 'shift_started', { driverName });
-    console.log(`[WBChat] Shift thread created: ${threadRef.id} for ${driverName}`);
+    console.log(`[WBChat] Shift-start posted to stable thread ${threadId} for ${driverName}`);
   });
 
 // ── onShiftUpdate: Archive shift thread when shift ends ────────────────────
@@ -2915,33 +2927,33 @@ export const onShiftUpdate = functionsV1.firestore
     const shiftEnded = (!before.logoutAt && after.logoutAt) || (!before.endedAt && after.endedAt);
     if (!shiftEnded) return;
 
-    // Find the shift thread and archive it
-    const threadsSnap = await firestoreDb.collection('chat_threads')
-      .where('type', '==', 'shift')
-      .where('shiftId', '==', context.params.shiftId)
-      .limit(1)
-      .get();
+    // Target the SAME stable thread onShiftCreate uses. Post the ended-shift
+    // system message; do NOT archive the canonical thread — it is reused next
+    // shift. Skip silently if it doesn't exist (no dispatchers / never created).
+    const driverId = after.driverId || after.driverHash || '';
+    const companyId = after.companyId || '';
+    if (!driverId || !companyId) return;
 
-    if (!threadsSnap.empty) {
-      const threadDoc = threadsSnap.docs[0];
-      const driverId = after.driverId || after.driverHash || '';
-      let driverName = 'Driver';
-      if (driverId) {
-        const driverProfileSnap = await db.ref(`drivers/approved/${driverId}`).once('value');
-        const driverProfile = driverProfileSnap.val();
-        driverName =
-          driverProfile?.legalName ||
-          driverProfile?.displayName ||
-          after.driverName ||
-          after.displayName ||
-          'Driver';
-      } else {
-        driverName = after.driverName || after.displayName || 'Driver';
-      }
-      await postSystemMessage(threadDoc.id, `${driverName} ended their shift`, 'shift_ended', { driverName });
-      await threadDoc.ref.update({ status: 'archived', updatedAt: admin.firestore.Timestamp.now() });
-      console.log(`[WBChat] Shift thread archived: ${threadDoc.id}`);
+    const threadId = `shift_${driverId}_${companyId}`;
+    const threadRef = firestoreDb.collection('chat_threads').doc(threadId);
+    const threadSnap = await threadRef.get();
+    if (!threadSnap.exists) {
+      console.log(`[WBChat] No stable shift thread ${threadId} to post shift-end into`);
+      return;
     }
+
+    const driverProfileSnap = await db.ref(`drivers/approved/${driverId}`).once('value');
+    const driverProfile = driverProfileSnap.val();
+    const driverName =
+      driverProfile?.legalName ||
+      driverProfile?.displayName ||
+      after.driverName ||
+      after.displayName ||
+      'Driver';
+
+    await postSystemMessage(threadRef.id, `${driverName} ended their shift`, 'shift_ended', { driverName });
+    await threadRef.update({ updatedAt: admin.firestore.Timestamp.now() });
+    console.log(`[WBChat] Shift-end posted to stable thread ${threadId} for ${driverName}`);
   });
 
 // ── onDispatchCreate: Post to shift thread + create well/group threads ─────
