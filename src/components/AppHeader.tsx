@@ -47,8 +47,11 @@ export function AppHeader() {
     <header className="bg-gray-800 border-b border-gray-700 sticky top-0 z-40">
       {/* Three-column grid: buttons | title+tabs | bell */}
       <div className="w-full grid grid-cols-[auto_1fr_auto] items-start">
-        {/* LEFT: Admin + Truth tools (admin/it) + Sign Out, pinned to left edge */}
-        <div className="flex items-center gap-2 px-4 pt-3">
+        {/* LEFT: Admin + Truth tools (admin/it) + Sign Out, pinned to left edge.
+            flex-wrap so on narrow/tablet-portrait widths these buttons reflow to
+            extra lines instead of overflowing off-screen (the grid `auto` track
+            then floors at one button wide, not the whole row). */}
+        <div className="flex flex-wrap items-center gap-2 px-4 pt-3">
           {hasCapability(user, 'viewAdmin', userCompany) && (
             <Link
               href={pendingDriverCount > 0 ? '/admin?tab=drivers' : '/admin'}
@@ -116,15 +119,17 @@ export function AppHeader() {
           </button>
         </div>
 
-        {/* CENTER: Title + user info + tabs */}
-        <div className="flex flex-col items-center">
+        {/* CENTER: Title + user info + tabs. min-w-0 lets the 1fr track shrink
+            below the tabs' natural width so the nav (flex-wrap below) can wrap
+            instead of pushing the right column off-screen. */}
+        <div className="flex flex-col items-center min-w-0">
           <div className="pt-2 pb-1 text-center">
             <h1 className="text-3xl font-bold text-white">WellBuilt Suite</h1>
             <p className="text-gray-400 text-sm">
               {user.email} &bull; <span>{getRoleLabel(user.role, userCompany)}</span>
             </p>
           </div>
-          <nav className="flex gap-0">
+          <nav className="flex flex-wrap justify-center gap-0">
             {TABS.filter(tab => {
               // Capability-based gate wins when set. Falls back to legacy minRole
               // only if capability is unset (e.g., Home tab with no gate at all).

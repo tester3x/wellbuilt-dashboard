@@ -673,6 +673,43 @@ function DispatchPageInner() {
     loadOperators().then(setAllOperators).catch(console.error);
   }, []);
 
+  // Live driver on-shift presence (green dot). loadDriversData() sets the initial
+  // onShift via a one-time getDoc; without this, a phone that logs in / starts a
+  // shift AFTER the page loaded only turns green on a manual reload. This watches
+  // today's driver_shifts docs and recomputes onShift on every change (login /
+  // depart_return / logout) using the SAME rule (on shift = last event != logout).
+  // Scoped to driver_shifts ONLY — it does not touch any dispatch/job-card
+  // listener, and it flips the dot in place (no re-sort, so the list doesn't jump
+  // under the user). Note: `today` is captured at mount; a dashboard left open
+  // past midnight keeps watching the prior day until reload (acceptable).
+  useEffect(() => {
+    const firestore = getFirestoreDb();
+    const now = new Date();
+    const today = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-${String(now.getDate()).padStart(2, '0')}`;
+    const q = query(collection(firestore, 'driver_shifts'), where('date', '==', today));
+    const unsub = onSnapshot(q, (snap) => {
+      const statusMap = new Map<string, boolean>();
+      snap.forEach((d) => {
+        const data = d.data() as { driverId?: string; driverHash?: string; events?: { type?: string }[] };
+        const driverHash = data.driverId || data.driverHash || '';
+        const events = Array.isArray(data.events) ? data.events : [];
+        if (driverHash && events.length > 0) {
+          statusMap.set(driverHash, events[events.length - 1]?.type !== 'logout');
+        }
+      });
+      setDrivers(prev => {
+        let changed = false;
+        const next = prev.map(d => {
+          const live = statusMap.get(d.key) ?? false;
+          if (d.onShift !== live) changed = true;
+          return d.onShift === live ? d : { ...d, onShift: live };
+        });
+        return changed ? next : prev;
+      });
+    }, () => {});
+    return () => unsub();
+  }, []);
+
   // Load dynamic service types from job packages
   // WB admin (no companyId): loads ALL packages so dispatch has full service type list
   // Hauler admin: loads only their company's active packages
