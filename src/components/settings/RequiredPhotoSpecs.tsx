@@ -5,6 +5,7 @@ import { type CompanyConfig } from '@/lib/companySettings';
 import {
   type PhotoRequirement,
   type PhotoPhase,
+  type PhotoAppliesTo,
   customerIdForOperator,
   loadPhotoRequirementSpec,
   savePhotoRequirementSpec,
@@ -21,7 +22,7 @@ function genId(): string {
 }
 
 function blankReq(): PhotoRequirement {
-  return { id: genId(), label: '', description: '', threshold: 80, requiredCount: 1, phase: 'any', active: true };
+  return { id: genId(), label: '', description: '', threshold: 80, requiredCount: 1, phase: 'any', appliesTo: 'any', active: true };
 }
 
 /**
@@ -290,6 +291,16 @@ export function RequiredPhotoSpecs({ company }: Props) {
                             <option value="any">Any</option>
                             <option value="pickup">Pickup</option>
                             <option value="dropoff">Drop-off</option>
+                          </select>
+                        </label>
+                        <label className="flex items-center gap-1 text-gray-400 text-xs">
+                          Job type
+                          <select value={r.appliesTo || 'any'}
+                            onChange={(e) => patchReq(r.id, { appliesTo: e.target.value as PhotoAppliesTo })}
+                            className="px-1 py-0.5 bg-gray-700 border border-gray-600 rounded text-white text-xs">
+                            <option value="any">All jobs</option>
+                            <option value="pw">PW only</option>
+                            <option value="sw">SW only</option>
                           </select>
                         </label>
                       </div>

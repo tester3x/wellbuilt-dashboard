@@ -21,6 +21,7 @@ import { httpsCallable } from 'firebase/functions';
 const REAL_BUCKET = 'gs://wellbuilt-sync.firebasestorage.app';
 
 export type PhotoPhase = 'any' | 'pickup' | 'dropoff';
+export type PhotoAppliesTo = 'any' | 'pw' | 'sw';
 
 export interface PhotoRequirement {
   id: string;
@@ -29,6 +30,7 @@ export interface PhotoRequirement {
   threshold: number;        // 0–100 accept score (default 80)
   requiredCount: number;    // how many passing photos needed (default 1)
   phase: PhotoPhase;        // when the button shows (default 'any')
+  appliesTo: PhotoAppliesTo; // which job type the slot shows on (default 'any')
   active: boolean;          // per-requirement on/off (default true)
   sampleStoragePath?: string;
   sampleUrl?: string;
@@ -55,6 +57,7 @@ function normalizeReq(r: any): PhotoRequirement {
     threshold: typeof r.threshold === 'number' ? r.threshold : 80,
     requiredCount: typeof r.requiredCount === 'number' && r.requiredCount >= 1 ? r.requiredCount : 1,
     phase: r.phase === 'pickup' || r.phase === 'dropoff' ? r.phase : 'any',
+    appliesTo: r.appliesTo === 'pw' || r.appliesTo === 'sw' ? r.appliesTo : 'any',
     active: r.active !== false,
     sampleStoragePath: r.sampleStoragePath || undefined,
     sampleUrl: r.sampleUrl || undefined,
