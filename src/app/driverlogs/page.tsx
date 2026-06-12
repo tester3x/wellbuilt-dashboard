@@ -479,26 +479,38 @@ function DriverCard({
   onToggle: () => void;
   dateLabel: string;
 }) {
-  // Status indicator
-  const isActive = log.shiftStart && !log.shiftEnd;
+  // Status indicator. An OPEN shift (login, no logout) is only "Active" while
+  // it's recent. Past the stale threshold it's almost certainly a missing
+  // logout, not a real running session — so we stop showing alarming green
+  // "Active 90h" and surface it as a stale "no logout recorded" state. The
+  // duration of an open shift is time-since-login, not a true session length.
+  const STALE_OPEN_HOURS = 18;
+  const isOpen = !!(log.shiftStart && !log.shiftEnd);
+  const openHours = isOpen ? (Date.now() - new Date(log.shiftStart as string).getTime()) / 3600000 : 0;
+  const isStaleOpen = isOpen && openHours >= STALE_OPEN_HOURS;
+  const isActive = isOpen && !isStaleOpen;
   const hasShift = log.hasShiftData;
   const hasJobs = log.totalLoads > 0;
 
-  const statusColor = isActive
-    ? 'bg-green-500'
-    : hasShift
-      ? 'bg-gray-500'
-      : hasJobs
-        ? 'bg-yellow-600'
-        : 'bg-red-500';
+  const statusColor = isStaleOpen
+    ? 'bg-amber-500'
+    : isActive
+      ? 'bg-green-500'
+      : hasShift
+        ? 'bg-gray-500'
+        : hasJobs
+          ? 'bg-yellow-600'
+          : 'bg-red-500';
 
-  const statusLabel = isActive
-    ? 'Active'
-    : hasShift
-      ? 'Shift Ended'
-      : hasJobs
-        ? 'Job Activity Only'
-        : 'No Activity';
+  const statusLabel = isStaleOpen
+    ? 'Open shift — no logout recorded'
+    : isActive
+      ? 'Active'
+      : hasShift
+        ? 'Shift Ended'
+        : hasJobs
+          ? 'Job Activity Only'
+          : 'No Activity';
 
   const shiftDuration = log.shiftStart && log.shiftEnd
     ? formatDuration(log.shiftStart, log.shiftEnd)
@@ -538,9 +550,16 @@ function DriverCard({
                 {log.inferredTimes && <span className="text-yellow-600 mr-1" title="Inferred from job activity (no WB S shift data)">~</span>}
                 {formatTime12h(log.shiftStart)}
                 {log.shiftEnd ? ` - ${formatTime12h(log.shiftEnd)}` : ' - ...'}
-                {shiftDuration && (
+                {isStaleOpen ? (
+                  <span
+                    className="text-amber-500 ml-1"
+                    title="Open since login with no logout event recorded. This is time-since-login, not a real continuous session — likely a missed logout that will be auto-closed on the next login for this identity."
+                  >
+                    no logout · {shiftDuration} open
+                  </span>
+                ) : shiftDuration ? (
                   <span className="text-gray-600 ml-1">({shiftDuration})</span>
-                )}
+                ) : null}
               </span>
             )}
 
