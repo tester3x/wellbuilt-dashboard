@@ -2846,7 +2846,7 @@ async function sendLevelToChat(
 // ── onShiftCreate: Create shift thread when driver starts shift ────────────
 export const onShiftCreate = functionsV1.firestore
   .document('driver_shifts/{shiftId}')
-  .onCreate(async (snap, context) => {
+  .onCreate(async (snap) => {
     const shift = snap.data();
     if (!shift) return;
 
@@ -2867,58 +2867,24 @@ export const onShiftCreate = functionsV1.firestore
       shift.displayName ||
       'Driver';
 
-    const driverPid = `driver:${driverId}`;
-    // Pass driverId so owner-operators (same person as driver AND as admin)
-    // don't get put on both sides of their own shift thread. If the company's
-    // only "dispatcher" IS the driver, the next guard below skips the thread.
-    const { ids: dispatchIds, names: dispatchNames } = await getDispatchParticipants(companyId, [], driverId);
-
-    // Skip thread creation if this company has no dispatchers — otherwise
-    // we create a phantom thread with only the driver as a participant,
-    // which shows up as a useless self-chat in their drawer.
-    if (dispatchIds.length === 0) {
-      console.log(`[WBChat] Skipping shift thread for ${driverName} — company ${companyId} has no dispatchers configured`);
+    // 6/12/2026 — shift start now posts into the driver↔dispatch DIRECT ("Dev
+    // Admin") thread, NOT a separate type:'shift' thread. The driver sees ONE
+    // stable thread that also carries level reports + admin messages. find-or-
+    // create also gives a driver who never had a direct thread (the "ZFold has
+    // no Dev Admin thread" case) one on shift start.
+    const result = await findOrCreateDispatchThread(companyId, driverId, driverName);
+    if ('error' in result) {
+      console.log(`[WBChat] Skipping shift-start notice for ${driverName} — ${result.error}`);
       return;
     }
-
-    const participants = [driverPid, ...dispatchIds];
-    const participantNames: Record<string, string> = { [driverPid]: driverName, ...dispatchNames };
-
-    const now = admin.firestore.Timestamp.now();
-    // Stable, deterministic shift thread per (driver, company): ONE thread the
-    // driver keeps across every shift, instead of a new thread per shift/day
-    // (which produced the "started their shift" duplicate pile-up). Find-or-create
-    // on the fixed id, then APPEND the shift-start system message into it.
-    const threadId = `shift_${driverId}_${companyId}`;
-    const threadRef = firestoreDb.collection('chat_threads').doc(threadId);
-    const existing = await threadRef.get();
-    const baseFields = {
-      type: 'shift' as const,
-      companyId,
-      driverHash: driverId,
-      title: driverName,
-      subtitle: 'Shift',
-      participants,
-      participantNames,
-      status: 'active' as const,   // re-activate if a prior shift-end archived it
-      lastShiftId: context.params.shiftId,
-      updatedAt: now,
-    };
-    if (existing.exists) {
-      // Merge — dispatchers/name may have changed; never clobber lastRead.
-      await threadRef.set(baseFields, { merge: true });
-    } else {
-      await threadRef.set({ ...baseFields, createdAt: now, lastRead: {} });
-    }
-
-    await postSystemMessage(threadRef.id, `${driverName} started their shift`, 'shift_started', { driverName });
-    console.log(`[WBChat] Shift-start posted to stable thread ${threadId} for ${driverName}`);
+    await postSystemMessage(result.threadId, `${driverName} came on shift`, 'shift_started', { driverName });
+    console.log(`[WBChat] Shift-start posted to Dev Admin thread ${result.threadId} for ${driverName}`);
   });
 
-// ── onShiftUpdate: Archive shift thread when shift ends ────────────────────
+// ── onShiftUpdate: post shift-end notice into the Dev Admin thread ─────────
 export const onShiftUpdate = functionsV1.firestore
   .document('driver_shifts/{shiftId}')
-  .onUpdate(async (change, context) => {
+  .onUpdate(async (change) => {
     const before = change.before.data();
     const after = change.after.data();
     if (!after) return;
@@ -2927,20 +2893,9 @@ export const onShiftUpdate = functionsV1.firestore
     const shiftEnded = (!before.logoutAt && after.logoutAt) || (!before.endedAt && after.endedAt);
     if (!shiftEnded) return;
 
-    // Target the SAME stable thread onShiftCreate uses. Post the ended-shift
-    // system message; do NOT archive the canonical thread — it is reused next
-    // shift. Skip silently if it doesn't exist (no dispatchers / never created).
     const driverId = after.driverId || after.driverHash || '';
     const companyId = after.companyId || '';
     if (!driverId || !companyId) return;
-
-    const threadId = `shift_${driverId}_${companyId}`;
-    const threadRef = firestoreDb.collection('chat_threads').doc(threadId);
-    const threadSnap = await threadRef.get();
-    if (!threadSnap.exists) {
-      console.log(`[WBChat] No stable shift thread ${threadId} to post shift-end into`);
-      return;
-    }
 
     const driverProfileSnap = await db.ref(`drivers/approved/${driverId}`).once('value');
     const driverProfile = driverProfileSnap.val();
@@ -2951,9 +2906,16 @@ export const onShiftUpdate = functionsV1.firestore
       after.displayName ||
       'Driver';
 
-    await postSystemMessage(threadRef.id, `${driverName} ended their shift`, 'shift_ended', { driverName });
-    await threadRef.update({ updatedAt: admin.firestore.Timestamp.now() });
-    console.log(`[WBChat] Shift-end posted to stable thread ${threadId} for ${driverName}`);
+    // Post the shift-end notice into the SAME driver↔dispatch DIRECT thread as
+    // shift start (6/12/2026 — no separate shift thread). find-or-create so it
+    // still works even if the start notice never ran.
+    const result = await findOrCreateDispatchThread(companyId, driverId, driverName);
+    if ('error' in result) {
+      console.log(`[WBChat] Skipping shift-end notice for ${driverName} — ${result.error}`);
+      return;
+    }
+    await postSystemMessage(result.threadId, `${driverName} went off shift`, 'shift_ended', { driverName });
+    console.log(`[WBChat] Shift-end posted to Dev Admin thread ${result.threadId} for ${driverName}`);
   });
 
 // ── onDispatchCreate: Post to shift thread + create well/group threads ─────
@@ -3285,6 +3247,75 @@ export const onProjectWrite = functionsV1.firestore
 // new privilege escalation — it's the SAME write path the client did
 // before, just with the correct participants.
 // ============================================================
+// Shared find-or-create for the driver↔dispatch DIRECT thread — the "Dev Admin"
+// thread the driver app's New-Message button uses and where level reports + admin
+// messages already live. Returns the threadId (reused or new), or a reason when it
+// can't (no driver / no dispatchers). Used by createOrFindDispatchThread (onCall)
+// AND the shift triggers (6/12/2026): shift start/end notices now post HERE instead
+// of a separate type:'shift' thread, so the driver sees ONE stable Dev Admin thread.
+// Side effect that fixes the "ZFold has no Dev Admin thread" case: a driver whose
+// direct thread never existed gets it created on shift start.
+async function findOrCreateDispatchThread(
+  companyId: string,
+  driverHash: string,
+  driverName: string,
+): Promise<{ threadId: string; reused: boolean } | { error: 'driver-not-found' | 'no-dispatchers' }> {
+  const driverSnap = await db.ref(`drivers/approved/${driverHash}`).once('value');
+  if (!driverSnap.exists()) return { error: 'driver-not-found' };
+
+  const driverPid = `driver:${driverHash}`;
+  // Dispatchers = users with BOTH viewChat + sendChat at this company; exclude the
+  // driver's own dashboard account so owner-operators don't open a thread with self.
+  const { ids: dispatchIds, names: dispatchNames } = await getDispatchParticipants(
+    companyId,
+    ['viewChat', 'sendChat'],
+    driverHash,
+  );
+  if (dispatchIds.length === 0) return { error: 'no-dispatchers' };
+
+  // Reuse an existing direct thread that has this driver + at least one current
+  // dispatcher; fan-in any missing dispatchers.
+  const existingSnap = await firestoreDb.collection('chat_threads')
+    .where('type', '==', 'direct')
+    .where('companyId', '==', companyId)
+    .where('participants', 'array-contains', driverPid)
+    .limit(10)
+    .get();
+
+  for (const docSnap of existingSnap.docs) {
+    const data = docSnap.data();
+    const existingParticipants: string[] = Array.isArray(data.participants) ? data.participants : [];
+    if (!existingParticipants.some(p => dispatchIds.includes(p))) continue; // stale legacy thread — skip
+    const missing = dispatchIds.filter(id => !existingParticipants.includes(id));
+    if (missing.length > 0) {
+      const nameUpdates: Record<string, any> = {};
+      for (const id of missing) nameUpdates[`participantNames.${id}`] = dispatchNames[id];
+      await docSnap.ref.update({
+        participants: admin.firestore.FieldValue.arrayUnion(...missing),
+        ...nameUpdates,
+        updatedAt: admin.firestore.Timestamp.now(),
+      });
+      console.log(`[findOrCreateDispatchThread] fanned in ${missing.length} dispatcher(s) to ${docSnap.id}`);
+    }
+    return { threadId: docSnap.id, reused: true };
+  }
+
+  const now = admin.firestore.Timestamp.now();
+  const threadRef = await firestoreDb.collection('chat_threads').add({
+    type: 'direct' as const,
+    companyId,
+    title: driverName, // admin's viewpoint = driver name; driver's viewpoint uses participantNames
+    participants: [driverPid, ...dispatchIds],
+    participantNames: { [driverPid]: driverName, ...dispatchNames },
+    status: 'active',
+    createdAt: now,
+    updatedAt: now,
+    lastRead: {},
+  });
+  console.log(`[findOrCreateDispatchThread] created ${threadRef.id} for driver ${driverHash.slice(0, 8)} (${dispatchIds.length} dispatcher(s))`);
+  return { threadId: threadRef.id, reused: false };
+}
+
 export const createOrFindDispatchThread = httpsV2.onCall(
   { timeoutSeconds: 30, memory: '256MiB' },
   async (request) => {
@@ -3300,88 +3331,17 @@ export const createOrFindDispatchThread = httpsV2.onCall(
       );
     }
 
-    // 1. Verify driver exists
-    const driverSnap = await db.ref(`drivers/approved/${driverHash}`).once('value');
-    if (!driverSnap.exists()) {
-      throw new httpsV2.HttpsError('permission-denied', 'Driver hash not found in approved drivers');
-    }
-
-    const driverPid = `driver:${driverHash}`;
-
-    // 2. Get current dispatchers — any user whose role grants BOTH viewChat
-    //    and sendChat at this company (capability-based, per-company overrides
-    //    respected via companies/{companyId}.roleCapabilities). Exclude the
-    //    caller driver's own dashboard account so owner-operators don't open
-    //    a direct thread with themselves.
-    const { ids: dispatchIds, names: dispatchNames } = await getDispatchParticipants(
-      companyId,
-      ['viewChat', 'sendChat'],
-      driverHash,
-    );
-    if (dispatchIds.length === 0) {
+    const result = await findOrCreateDispatchThread(companyId, driverHash, driverName);
+    if ('error' in result) {
+      if (result.error === 'driver-not-found') {
+        throw new httpsV2.HttpsError('permission-denied', 'Driver hash not found in approved drivers');
+      }
       throw new httpsV2.HttpsError(
         'failed-precondition',
         `Company ${companyId} has no dispatchers configured (no users with viewChat + sendChat capabilities)`,
       );
     }
-
-    // 3. Look for an existing direct thread with this driver + at least
-    //    one current dispatcher. Fan-in any missing dispatchers.
-    const existingSnap = await firestoreDb.collection('chat_threads')
-      .where('type', '==', 'direct')
-      .where('companyId', '==', companyId)
-      .where('participants', 'array-contains', driverPid)
-      .limit(10)
-      .get();
-
-    for (const docSnap of existingSnap.docs) {
-      const data = docSnap.data();
-      const existingParticipants: string[] = Array.isArray(data.participants) ? data.participants : [];
-      const hasAnyDispatcher = existingParticipants.some(p => dispatchIds.includes(p));
-      if (!hasAnyDispatcher) continue; // legacy thread with stale dispatcher id — skip, don't reuse
-
-      // Fan-in missing dispatchers
-      const missing = dispatchIds.filter(id => !existingParticipants.includes(id));
-      if (missing.length > 0) {
-        const nameUpdates: Record<string, any> = {};
-        for (const id of missing) {
-          nameUpdates[`participantNames.${id}`] = dispatchNames[id];
-        }
-        await docSnap.ref.update({
-          participants: admin.firestore.FieldValue.arrayUnion(...missing),
-          ...nameUpdates,
-          updatedAt: admin.firestore.Timestamp.now(),
-        });
-        console.log(`[createOrFindDispatchThread] fanned in ${missing.length} dispatcher(s) to thread ${docSnap.id}`);
-      }
-      return {
-        threadId: docSnap.id,
-        participantCount: existingParticipants.length + missing.length,
-        reused: true,
-      };
-    }
-
-    // 4. Create new direct thread
-    const now = admin.firestore.Timestamp.now();
-    const threadRef = await firestoreDb.collection('chat_threads').add({
-      type: 'direct' as const,
-      companyId,
-      title: driverName, // title from admin's viewpoint = driver name; driver's viewpoint uses participantNames
-      participants: [driverPid, ...dispatchIds],
-      participantNames: { [driverPid]: driverName, ...dispatchNames },
-      status: 'active',
-      createdAt: now,
-      updatedAt: now,
-      lastRead: {},
-    });
-    console.log(
-      `[createOrFindDispatchThread] created new thread ${threadRef.id} for driver ${driverHash.slice(0, 8)} with ${dispatchIds.length} dispatcher(s)`,
-    );
-    return {
-      threadId: threadRef.id,
-      participantCount: 1 + dispatchIds.length,
-      reused: false,
-    };
+    return { threadId: result.threadId, reused: result.reused };
   },
 );
 
