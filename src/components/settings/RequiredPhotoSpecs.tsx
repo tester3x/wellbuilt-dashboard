@@ -25,6 +25,23 @@ function blankReq(): PhotoRequirement {
   return { id: genId(), label: '', description: '', threshold: 80, requiredCount: 1, phase: 'any', appliesTo: 'any', active: true };
 }
 
+// Strictness slider labels (70–90, step 5). The AI acceptance gate (accepted=false)
+// already rejects wrong-subject / blurry photos; the threshold only sets how strict
+// we are on otherwise-valid photos. Audit data: no accepted photo scores <70, and 90
+// retakes ~80% of valid field photos — so the slider is capped at 70–90 to stop the
+// "higher = better" mistake.
+const STRICTNESS: Record<number, { label: string; color: string }> = {
+  70: { label: 'Lenient — trust AI subject detection', color: '#22c55e' },
+  75: { label: 'Field-friendly', color: '#22c55e' },
+  80: { label: 'Recommended default', color: '#60a5fa' },
+  85: { label: 'Strict', color: '#f59e0b' },
+  90: { label: 'Very strict — likely extra retakes', color: '#ef4444' },
+};
+function strictnessFor(threshold: number): { label: string; color: string } {
+  const snapped = Math.round(Math.max(70, Math.min(90, threshold)) / 5) * 5;
+  return STRICTNESS[snapped] || STRICTNESS[80];
+}
+
 /**
  * Per-customer (operator) required-photo specs. Writes photo_requirements/{cid}
  * — the same doc the validatePhotoCompliance CF + WB T read. Replaces the seed
@@ -272,12 +289,6 @@ export function RequiredPhotoSpecs({ company }: Props) {
 
                       <div className="flex items-center gap-3 flex-wrap">
                         <label className="flex items-center gap-1 text-gray-400 text-xs">
-                          Threshold
-                          <input type="number" min={0} max={100} value={r.threshold}
-                            onChange={(e) => patchReq(r.id, { threshold: Math.max(0, Math.min(100, parseInt(e.target.value, 10) || 0)) })}
-                            className="w-14 px-1 py-0.5 bg-gray-700 border border-gray-600 rounded text-white text-xs text-center" />
-                        </label>
-                        <label className="flex items-center gap-1 text-gray-400 text-xs">
                           Count
                           <input type="number" min={1} max={10} value={r.requiredCount}
                             onChange={(e) => patchReq(r.id, { requiredCount: Math.max(1, parseInt(e.target.value, 10) || 1) })}
@@ -304,6 +315,36 @@ export function RequiredPhotoSpecs({ company }: Props) {
                           </select>
                         </label>
                       </div>
+
+                      {/* Strictness — bounded 70–90 slider. The AI acceptance gate already
+                          rejects wrong-subject / blurry photos; the threshold only tunes how
+                          strict we are on otherwise-valid photos, so the range is capped to
+                          avoid punishing good field photos. Legacy out-of-range values show
+                          their real number and clamp the thumb, but are NOT rewritten until
+                          the admin moves the slider. */}
+                      {(() => {
+                        const s = strictnessFor(r.threshold);
+                        const outOfRange = r.threshold < 70 || r.threshold > 90;
+                        return (
+                          <div className="space-y-1">
+                            <div className="flex items-center gap-2">
+                              <span className="text-gray-400 text-xs w-16 flex-shrink-0">Strictness</span>
+                              <input
+                                type="range" min={70} max={90} step={5}
+                                value={Math.max(70, Math.min(90, r.threshold))}
+                                onChange={(e) => patchReq(r.id, { threshold: parseInt(e.target.value, 10) })}
+                                className="flex-1 accent-orange-500"
+                              />
+                              <span className="text-white text-xs font-semibold w-7 text-right flex-shrink-0">{r.threshold}</span>
+                            </div>
+                            <div className="ml-[4.5rem] text-xs font-medium" style={{ color: s.color }}>{s.label}</div>
+                            <div className="ml-[4.5rem] text-gray-500 text-[10px] leading-snug">
+                              Threshold only judges photo clarity on valid photos — wrong-subject or blurry photos are already rejected automatically.
+                              {outOfRange && <span className="text-amber-400"> Legacy value {r.threshold}; move the slider to bring it into 70–90.</span>}
+                            </div>
+                          </div>
+                        );
+                      })()}
                     </div>
                   </div>
                 </div>
