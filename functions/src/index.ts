@@ -245,6 +245,7 @@ const DEFAULTS = {
   bottomLevel: 3, // feet
   tanks: 1,
   pullBbls: 140,
+  loadLine: 0, // feet — universal anti-negative display floor; per-well override via well_config.loadLine (~1.33 for fast/pipeline wells)
 };
 
 interface PullPacket {
@@ -278,6 +279,8 @@ interface ProcessedPacket extends PullPacket {
   estDateTimePull: string; // ISO string
   processedAt: string;
   noLevel?: boolean; // True when driver didn't enter a top level (non-PW source)
+  rawCalculatedBottomInches?: number; // Pre-clamp bottom (may be negative) — diagnostics + AFR truth source
+  hitLoadLine?: boolean; // True when the load-line clamp fired (raw bottom was below load-line)
 }
 
 interface OutgoingResponse {
@@ -304,6 +307,8 @@ interface OutgoingResponse {
   lastPullDriverId?: string | null;
   lastPullDriverName?: string | null;
   lastPullPacketId?: string | null;
+  rawCalculatedBottomInches?: number; // Pre-clamp bottom (may be negative) — diagnostics
+  hitLoadLine?: boolean; // True when the load-line clamp fired
 }
 
 // NEW UNIFIED STRUCTURE - Single source of truth
@@ -325,8 +330,11 @@ interface WellStatus {
     dateTimeUTC: string;  // ISO timestamp
     topLevel: string;     // "6'8\"" format
     topLevelInches: number;
-    bottomLevel: string;  // "5'2\"" format
+    bottomLevel: string;  // "5'2\"" format (clamped display value)
     bottomLevelInches: number;
+    rawCalculatedBottom?: string;       // Pre-clamp bottom string (may be negative) — diagnostics
+    rawCalculatedBottomInches?: number; // Pre-clamp bottom inches — diagnostics
+    hitLoadLine?: boolean;              // True when the load-line clamp fired
     bblsTaken: number;
     driverName?: string;
     packetId: string;
@@ -849,6 +857,7 @@ export const processIncomingPull = functionsV1.database
     const bottomInches = (config.bottomLevel || config.allowedBottom || DEFAULTS.bottomLevel) * 12;
     const tanks = config.tanks || config.numTanks || DEFAULTS.tanks;
     const pullBbls = config.pullBbls || DEFAULTS.pullBbls;
+    const loadLineInches = (config.loadLine ?? DEFAULTS.loadLine) * 12; // load-line floor (feet→inches)
 
     // Get current outgoing response (previous row data)
     const outgoingSnap = await db.ref('packets/outgoing')
@@ -949,7 +958,18 @@ export const processIncomingPull = functionsV1.database
     }
 
     const bblsInInches = data.bblsTaken > 0 ? (data.bblsTaken / 20 / tanks) * 12 : 0;
-    const tankAfterInches = tankTopInches - bblsInInches;
+    // ── Load-line clamp (Commit A, 6/13/2026) ──────────────────────────────
+    // Fast/pipeline wells can be drawn down to the suction (load-line); when the
+    // driver's top/bbls pair is inconsistent the raw bottom math then dips below
+    // the load-line, even negative (e.g. GS5 showed -1'2"). Never let the
+    // DISPLAYED/STORED bottom fall below the configured load-line. bblsTaken is
+    // untouched (billed volume unaffected). rawTankAfterInches is preserved for
+    // diagnostics. loadLine default 0 = universal anti-negative floor; fast wells
+    // override via well_config.loadLine. The clamped value flows into
+    // packets/outgoing, wells/status, the next-pull prediction, and WB Chat.
+    const rawTankAfterInches = tankTopInches - bblsInInches;
+    const tankAfterInches = Math.max(rawTankAfterInches, loadLineInches);
+    const hitLoadLine = rawTankAfterInches < loadLineInches;
 
     // Time Dif
     let timeDifDays = 0;
@@ -1031,6 +1051,8 @@ export const processIncomingPull = functionsV1.database
       tankTopInches,
       tankAfterInches,
       tankAfterFeet: inchesToFeetInches(tankAfterInches),
+      rawCalculatedBottomInches: rawTankAfterInches,
+      hitLoadLine,
       timeDif,
       timeDifDays,
       recoveryInches,
@@ -1072,6 +1094,8 @@ export const processIncomingPull = functionsV1.database
       lastPullBbls: data.bblsTaken.toString(),
       lastPullTopLevel: inchesToFeetInches(tankTopInches),
       lastPullBottomLevel: inchesToFeetInches(tankAfterInches),
+      rawCalculatedBottomInches: rawTankAfterInches,
+      hitLoadLine,
       lastPullDriverId: data.driverId || null,
       lastPullDriverName: data.driverName || null,
       lastPullPacketId: packetId,
@@ -1181,6 +1205,9 @@ export const processIncomingPull = functionsV1.database
         topLevelInches: tankTopInches,
         bottomLevel: inchesToFeetInches(tankAfterInches),
         bottomLevelInches: tankAfterInches,
+        rawCalculatedBottom: inchesToFeetInches(rawTankAfterInches),
+        rawCalculatedBottomInches: rawTankAfterInches,
+        hitLoadLine,
         bblsTaken: data.bblsTaken,
         driverName: data.driverName,
         packetId,
@@ -1460,6 +1487,7 @@ export const processEditRequest = functionsV1.database
     const tanks = config.tanks || config.numTanks || DEFAULTS.tanks;
     const pullBbls = config.pullBbls || DEFAULTS.pullBbls;
     const bottomInches = (config.bottomLevel || config.allowedBottom || DEFAULTS.bottomLevel) * 12;
+    const loadLineInches = (config.loadLine ?? DEFAULTS.loadLine) * 12; // load-line floor (feet→inches)
 
     // Apply edits — accept from dashboard (tankTopInches) or WB M (tankLevelFeet)
     let newTankTopInches = origPacket.tankTopInches;
@@ -1519,7 +1547,11 @@ export const processEditRequest = functionsV1.database
 
     // Recalculate tankAfter
     const bblsInInches = newBblsTaken > 0 ? (newBblsTaken / 20 / tanks) * 12 : 0;
-    const newTankAfterInches = newTankTopInches - bblsInInches;
+    // ── Load-line clamp (Commit A) — mirror of processIncomingPull. The edit
+    // path is how GS5 acquired its -1'2" (edited pull), so it must clamp too. ──
+    const rawNewTankAfterInches = newTankTopInches - bblsInInches;
+    const newTankAfterInches = Math.max(rawNewTankAfterInches, loadLineInches);
+    const editHitLoadLine = rawNewTankAfterInches < loadLineInches;
 
     // Get the previous pull's data for timeDif/recovery/flowRate recalc
     const prevOutgoingSnap = await db.ref('packets/processed')
@@ -1582,6 +1614,8 @@ export const processEditRequest = functionsV1.database
       bblsTaken: newBblsTaken,
       tankAfterInches: newTankAfterInches,
       tankAfterFeet: inchesToFeetInches(newTankAfterInches),
+      rawCalculatedBottomInches: rawNewTankAfterInches,
+      hitLoadLine: editHitLoadLine,
       recoveryInches,
       flowRateDays,
       flowRate,
@@ -1815,6 +1849,9 @@ export const processEditRequest = functionsV1.database
           topLevelInches: newTankTopInches,
           bottomLevel: inchesToFeetInches(newTankAfterInches),
           bottomLevelInches: newTankAfterInches,
+          rawCalculatedBottom: inchesToFeetInches(rawNewTankAfterInches),
+          rawCalculatedBottomInches: rawNewTankAfterInches,
+          hitLoadLine: editHitLoadLine,
           bblsTaken: newBblsTaken,
           driverName: origPacket.driverName || '',
           packetId: originalPacketId,
