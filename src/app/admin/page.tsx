@@ -88,8 +88,10 @@ export default function AdminPage() {
   const [newWellEqualized, setNewWellEqualized] = useState(false);
   const [newWellRequireActualBottom, setNewWellRequireActualBottom] = useState(false);
   // Tank calculator (optional — for when there's no nameplate)
-  const [showTankCalc, setShowTankCalc] = useState(false);
+  // Shared Tank Capacity Calculator modal (used by both Add + Edit Well)
+  const [tankCalcTarget, setTankCalcTarget] = useState<'add' | 'edit' | null>(null);
   const [calcDiameter, setCalcDiameter] = useState('');
+  const [calcUsableHeight, setCalcUsableHeight] = useState('');
 
   // Edit well form
   const [editWellRoute, setEditWellRoute] = useState('');
@@ -105,8 +107,6 @@ export default function AdminPage() {
   const [editWellBblPerFootOverride, setEditWellBblPerFootOverride] = useState('');
   const [editWellEqualized, setEditWellEqualized] = useState(false);
   const [editWellRequireActualBottom, setEditWellRequireActualBottom] = useState(false);
-  const [showEditTankCalc, setShowEditTankCalc] = useState(false);
-  const [editCalcDiameter, setEditCalcDiameter] = useState('');
 
   // Read-only route info for Edit Well panel
   const [wellRouteInfo, setWellRouteInfo] = useState<{ labels: string[]; count: number } | null>(null);
@@ -1375,64 +1375,11 @@ export default function AdminPage() {
                   {/* Tank calculator — measure diameter when no nameplate */}
                   <button
                     type="button"
-                    onClick={() => setShowTankCalc(!showTankCalc)}
+                    onClick={() => { setCalcDiameter(''); setCalcUsableHeight(newWellTankHeight || ''); setTankCalcTarget('add'); }}
                     className="text-xs text-amber-500 hover:text-amber-400 mt-1"
                   >
-                    {showTankCalc ? '▾ Hide calculator' : '▸ No nameplate? Calculate from diameter'}
+                    ▸ No nameplate? Calculate from diameter
                   </button>
-                  {showTankCalc && (
-                    <div className="bg-gray-800 rounded p-3 mt-1 border border-gray-700">
-                      <div className="flex gap-3 items-end">
-                        <div className="flex-1">
-                          <label className="text-gray-400 text-xs">Diameter (ft, e.g. 13.5)</label>
-                          <input
-                            type="number"
-                            step="0.1"
-                            value={calcDiameter}
-                            onChange={(e) => {
-                              setCalcDiameter(e.target.value);
-                              const d = parseFloat(e.target.value);
-                              const h = parseFloat(newWellTankHeight) || 20;
-                              if (d > 0 && h > 0) {
-                                const r = d / 2;
-                                const cubicFt = Math.PI * r * r * h;
-                                const bbl = Math.round(cubicFt / 5.6146);
-                                setNewWellTankCapacity(String(bbl));
-                              }
-                            }}
-                            placeholder="e.g. 13.5"
-                            className="w-full px-3 py-2 bg-gray-700 text-white rounded text-sm"
-                          />
-                        </div>
-                        <div className="text-gray-400 text-xs pb-2">×</div>
-                        <div className="flex-1">
-                          <label className="text-gray-400 text-xs">Height (ft)</label>
-                          <input
-                            type="number"
-                            step="0.1"
-                            value={newWellTankHeight}
-                            onChange={(e) => {
-                              setNewWellTankHeight(e.target.value);
-                              const d = parseFloat(calcDiameter);
-                              const h = parseFloat(e.target.value) || 20;
-                              if (d > 0 && h > 0) {
-                                const r = d / 2;
-                                const cubicFt = Math.PI * r * r * h;
-                                const bbl = Math.round(cubicFt / 5.6146);
-                                setNewWellTankCapacity(String(bbl));
-                              }
-                            }}
-                            className="w-full px-3 py-2 bg-gray-700 text-white rounded text-sm"
-                          />
-                        </div>
-                        <div className="text-amber-400 text-sm font-bold pb-2">
-                          = {calcDiameter && parseFloat(calcDiameter) > 0
-                            ? `${Math.round(Math.PI * Math.pow(parseFloat(calcDiameter) / 2, 2) * (parseFloat(newWellTankHeight) || 20) / 5.6146)} BBL`
-                            : '—'}
-                        </div>
-                      </div>
-                    </div>
-                  )}
                   {/* Water properties */}
                   <div className="grid grid-cols-2 gap-3 mt-3">
                     <div>
@@ -1682,66 +1629,12 @@ export default function AdminPage() {
                     </div>
                     <button
                       type="button"
-                      onClick={() => setShowEditTankCalc(!showEditTankCalc)}
+                      onClick={() => { setCalcDiameter(''); setCalcUsableHeight(editWellTankHeight || ''); setTankCalcTarget('edit'); }}
                       className="text-xs text-amber-500 hover:text-amber-400 mt-1"
+                      disabled={isRenaming}
                     >
-                      {showEditTankCalc ? '▾ Hide calculator' : '▸ No nameplate? Calculate from diameter'}
+                      ▸ No nameplate? Calculate from diameter
                     </button>
-                    {showEditTankCalc && (
-                      <div className="bg-gray-800 rounded p-3 mt-1 border border-gray-700">
-                        <div className="flex gap-3 items-end">
-                          <div className="flex-1">
-                            <label className="text-gray-400 text-xs">Diameter (ft, e.g. 13.5)</label>
-                            <input
-                              type="number"
-                              step="0.1"
-                              value={editCalcDiameter}
-                              onChange={(e) => {
-                                setEditCalcDiameter(e.target.value);
-                                const d = parseFloat(e.target.value);
-                                const h = parseFloat(editWellTankHeight) || 20;
-                                if (d > 0 && h > 0) {
-                                  const r = d / 2;
-                                  const cubicFt = Math.PI * r * r * h;
-                                  const bbl = Math.round(cubicFt / 5.6146);
-                                  setEditWellTankCapacity(String(bbl));
-                                }
-                              }}
-                              placeholder="e.g. 13.5"
-                              className="w-full px-3 py-2 bg-gray-700 text-white rounded text-sm"
-                              disabled={isRenaming}
-                            />
-                          </div>
-                          <div className="text-gray-400 text-xs pb-2">×</div>
-                          <div className="flex-1">
-                            <label className="text-gray-400 text-xs">Height (ft)</label>
-                            <input
-                              type="number"
-                              step="0.1"
-                              value={editWellTankHeight}
-                              onChange={(e) => {
-                                setEditWellTankHeight(e.target.value);
-                                const d = parseFloat(editCalcDiameter);
-                                const h = parseFloat(e.target.value) || 20;
-                                if (d > 0 && h > 0) {
-                                  const r = d / 2;
-                                  const cubicFt = Math.PI * r * r * h;
-                                  const bbl = Math.round(cubicFt / 5.6146);
-                                  setEditWellTankCapacity(String(bbl));
-                                }
-                              }}
-                              className="w-full px-3 py-2 bg-gray-700 text-white rounded text-sm"
-                              disabled={isRenaming}
-                            />
-                          </div>
-                          <div className="text-amber-400 text-sm font-bold pb-2">
-                            = {editCalcDiameter && parseFloat(editCalcDiameter) > 0
-                              ? `${Math.round(Math.PI * Math.pow(parseFloat(editCalcDiameter) / 2, 2) * (parseFloat(editWellTankHeight) || 20) / 5.6146)} BBL`
-                              : '—'}
-                          </div>
-                        </div>
-                      </div>
-                    )}
                     {/* Water properties */}
                     <div className="grid grid-cols-2 gap-3 mt-3">
                       <div>
@@ -1817,6 +1710,77 @@ export default function AdminPage() {
             </div>
           </div>
         )}
+
+        {/* Tank Capacity Calculator Modal — shared by Add + Edit Well */}
+        {tankCalcTarget && (() => {
+          const d = parseFloat(calcDiameter);
+          const h = parseFloat(calcUsableHeight);
+          const valid = d > 0 && h > 0;
+          const capacityBbl = valid ? (Math.PI * (d / 2) * (d / 2) * h) / 5.6146 : 0;
+          const capacityRounded = Math.round(capacityBbl);
+          const bblPerFt = valid ? capacityBbl / h : 0; // height cancels → true per-foot rate, unaffected by capacity rounding
+          const bblPerIn = bblPerFt / 12;
+          const currentOverride = tankCalcTarget === 'add' ? newWellBblPerFootOverride : editWellBblPerFootOverride;
+          const hasOverride = currentOverride.trim() !== '' && !isNaN(parseFloat(currentOverride)) && parseFloat(currentOverride) > 0;
+          const applyToWell = () => {
+            if (!valid) return;
+            if (tankCalcTarget === 'add') {
+              setNewWellTankCapacity(String(capacityRounded));
+              setNewWellTankHeight(calcUsableHeight);
+              setNewWellBblPerFootOverride(''); // calculated rate drives derived bblPerFoot
+            } else {
+              setEditWellTankCapacity(String(capacityRounded));
+              setEditWellTankHeight(calcUsableHeight);
+              setEditWellBblPerFootOverride('');
+            }
+            setTankCalcTarget(null);
+          };
+          return (
+            <div className="fixed inset-0 bg-black bg-opacity-60 flex items-center justify-center z-50" onClick={() => setTankCalcTarget(null)}>
+              <div className="bg-gray-800 rounded-lg p-6 max-w-md w-full mx-4 border border-gray-700" onClick={(e) => e.stopPropagation()}>
+                <h3 className="text-xl font-semibold text-white mb-1">Tank Capacity Calculator</h3>
+                <p className="text-xs text-gray-400 mb-4">Calculated capacity assumes a perfect cylinder filled to this usable height.</p>
+                <div className="grid grid-cols-2 gap-3">
+                  <div>
+                    <label className="text-gray-400 text-sm">Diameter (ft)</label>
+                    <input
+                      type="number"
+                      step="0.1"
+                      value={calcDiameter}
+                      onChange={(e) => setCalcDiameter(e.target.value)}
+                      placeholder="e.g. 13.5"
+                      autoFocus
+                      className="w-full px-3 py-2 bg-gray-700 text-white rounded"
+                    />
+                  </div>
+                  <div>
+                    <label className="text-gray-400 text-sm">Usable liquid height (ft)</label>
+                    <input
+                      type="number"
+                      step="0.1"
+                      value={calcUsableHeight}
+                      onChange={(e) => setCalcUsableHeight(e.target.value)}
+                      placeholder="e.g. 22.4"
+                      className="w-full px-3 py-2 bg-gray-700 text-white rounded"
+                    />
+                  </div>
+                </div>
+                <div className="bg-gray-900 rounded p-3 mt-4 space-y-1">
+                  <div className="flex justify-between text-sm"><span className="text-gray-400">Calculated Capacity</span><span className="text-amber-400 font-bold">{valid ? `${capacityRounded} BBL` : '—'}</span></div>
+                  <div className="flex justify-between text-sm"><span className="text-gray-400">Calculated BBL/ft</span><span className="text-amber-400 font-bold">{valid ? bblPerFt.toFixed(2) : '—'}</span></div>
+                  <div className="flex justify-between text-sm"><span className="text-gray-400">Calculated BBL/in</span><span className="text-amber-400 font-bold">{valid ? bblPerIn.toFixed(2) : '—'}</span></div>
+                </div>
+                {hasOverride && (
+                  <p className="text-xs text-amber-500 mt-3">Apply will clear the manual BBL/ft override so the calculated rate takes effect.</p>
+                )}
+                <div className="flex gap-2 mt-5">
+                  <button onClick={() => setTankCalcTarget(null)} className="flex-1 px-4 py-2 bg-gray-600 hover:bg-gray-700 text-white rounded">Cancel</button>
+                  <button onClick={applyToWell} disabled={!valid} className="flex-1 px-4 py-2 bg-green-600 hover:bg-green-700 text-white rounded disabled:opacity-50 disabled:cursor-not-allowed">Apply to Well</button>
+                </div>
+              </div>
+            </div>
+          );
+        })()}
 
         {/* Delete Route Modal */}
         {showDeleteRouteModal && (
