@@ -31,7 +31,12 @@ interface WellConfig {
   // Tank dimensions — derive bblPerFoot from these
   tankCapacity?: number;  // BBL per tank (default 400)
   tankHeight?: number;    // feet per tank (default 20)
-  bblPerFoot?: number;    // calculated: (tankCapacity / tankHeight) * numTanks
+  bblPerFoot?: number;    // EFFECTIVE bbl/ft consumed by WB M/WB T math: bblPerFootOverride if set, else (tankCapacity / tankHeight) * activeTanks
+  // Flow-math config (2026-06-14) — supports different tank sizes + real flow-rate calc
+  activeTanks?: number;        // tanks actively flowing; defaults to physical `tanks`; drives the derived bblPerFoot
+  bblPerFootOverride?: number | null; // manual bbl/ft override; when present, bblPerFoot is saved equal to this (raw kept so admin knows it was manual); null clears a prior override
+  equalizedTanks?: boolean;    // tanks plumbed equalized (rise together) vs filled one-at-a-time
+  requireActualBottom?: boolean; // force driver to enter a measured bottom instead of the configured value (WB T wiring later)
   // App-compatible field names (duplicates for compatibility)
   allowedBottom?: number;
   numTanks?: number;
@@ -77,6 +82,11 @@ export default function AdminPage() {
   const [newWellTankHeight, setNewWellTankHeight] = useState('20');
   const [newWellWaterWeight, setNewWellWaterWeight] = useState('');
   const [newWellH2s, setNewWellH2s] = useState<'none' | 'low' | 'high' | 'unknown'>('unknown');
+  // Flow-math config (2026-06-14)
+  const [newWellActiveTanks, setNewWellActiveTanks] = useState('');          // blank = defaults to physical tanks
+  const [newWellBblPerFootOverride, setNewWellBblPerFootOverride] = useState(''); // blank = use derived
+  const [newWellEqualized, setNewWellEqualized] = useState(false);
+  const [newWellRequireActualBottom, setNewWellRequireActualBottom] = useState(false);
   // Tank calculator (optional — for when there's no nameplate)
   const [showTankCalc, setShowTankCalc] = useState(false);
   const [calcDiameter, setCalcDiameter] = useState('');
@@ -90,6 +100,11 @@ export default function AdminPage() {
   const [editWellTankHeight, setEditWellTankHeight] = useState('');
   const [editWellWaterWeight, setEditWellWaterWeight] = useState('');
   const [editWellH2s, setEditWellH2s] = useState<'none' | 'low' | 'high' | 'unknown'>('unknown');
+  // Flow-math config (2026-06-14)
+  const [editWellActiveTanks, setEditWellActiveTanks] = useState('');
+  const [editWellBblPerFootOverride, setEditWellBblPerFootOverride] = useState('');
+  const [editWellEqualized, setEditWellEqualized] = useState(false);
+  const [editWellRequireActualBottom, setEditWellRequireActualBottom] = useState(false);
   const [showEditTankCalc, setShowEditTankCalc] = useState(false);
   const [editCalcDiameter, setEditCalcDiameter] = useState('');
 
@@ -271,6 +286,11 @@ export default function AdminPage() {
       setEditWellTankHeight(String(config.tankHeight || 20));
       setEditWellWaterWeight(config.waterWeight ? String(config.waterWeight) : '');
       setEditWellH2s((config as any).h2sStatus || 'unknown');
+      // Flow-math config — activeTanks defaults to physical tanks when unset
+      setEditWellActiveTanks(config.activeTanks != null ? String(config.activeTanks) : '');
+      setEditWellBblPerFootOverride(config.bblPerFootOverride != null ? String(config.bblPerFootOverride) : '');
+      setEditWellEqualized(!!config.equalizedTanks);
+      setEditWellRequireActualBottom(!!config.requireActualBottom);
       // Load NDIC linkage if present
       setEditNdicName(config.ndicName || '');
       setEditNdicApiNo(config.ndicApiNo || '');
@@ -714,7 +734,12 @@ export default function AdminPage() {
     const tankCap = parseInt(newWellTankCapacity) || 400;
     const tankHt = parseInt(newWellTankHeight) || 20;
     const numTanks = parseInt(newWellTanks) || 1;
-    const bblPerFoot = (tankCap / tankHt) * numTanks;
+    // Active/flowing tanks default to physical tank count when blank.
+    const activeTanks = parseInt(newWellActiveTanks) || numTanks;
+    // Manual bbl/ft override wins; else derive from capacity/height × active tanks.
+    const overrideRaw = parseFloat(newWellBblPerFootOverride);
+    const hasOverride = newWellBblPerFootOverride.trim() !== '' && !isNaN(overrideRaw) && overrideRaw > 0;
+    const bblPerFoot = hasOverride ? overrideRaw : (tankCap / tankHt) * activeTanks;
 
     const parsedBottom = parseLevelToFeet(newWellBottom) || 3;
     const config: WellConfig = {
@@ -725,10 +750,15 @@ export default function AdminPage() {
       allowedBottom: parsedBottom,
       numTanks,
       pullBbls: parseInt(newWellPullBbls) || 140,
-      // Tank dimensions + derived bblPerFoot
+      // Tank dimensions + EFFECTIVE bblPerFoot (override if set, else derived)
       tankCapacity: tankCap,
       tankHeight: tankHt,
       bblPerFoot,
+      // Flow-math config
+      activeTanks,
+      bblPerFootOverride: hasOverride ? overrideRaw : null,
+      equalizedTanks: newWellEqualized,
+      requireActualBottom: newWellRequireActualBottom,
       // NDIC linkage (from NDIC picker, if used)
       ...(ndicSelectedWell ? {
         ndicName: ndicSelectedWell.well_name,
@@ -774,7 +804,12 @@ export default function AdminPage() {
     const editTankCap = parseInt(editWellTankCapacity) || 400;
     const editTankHt = parseInt(editWellTankHeight) || 20;
     const editNumTanks = parseInt(editWellTanks) || 1;
-    const editBblPerFoot = (editTankCap / editTankHt) * editNumTanks;
+    // Active/flowing tanks default to physical tank count when blank.
+    const editActiveTanks = parseInt(editWellActiveTanks) || editNumTanks;
+    // Manual bbl/ft override wins; else derive from capacity/height × active tanks.
+    const editOverrideRaw = parseFloat(editWellBblPerFootOverride);
+    const editHasOverride = editWellBblPerFootOverride.trim() !== '' && !isNaN(editOverrideRaw) && editOverrideRaw > 0;
+    const editBblPerFoot = editHasOverride ? editOverrideRaw : (editTankCap / editTankHt) * editActiveTanks;
 
     const editParsedBottom = parseLevelToFeet(editWellBottom) || 3;
     const config: WellConfig = {
@@ -785,10 +820,15 @@ export default function AdminPage() {
       allowedBottom: editParsedBottom,
       numTanks: editNumTanks,
       pullBbls: parseInt(editWellPullBbls) || 140,
-      // Tank dimensions + derived bblPerFoot
+      // Tank dimensions + EFFECTIVE bblPerFoot (override if set, else derived)
       tankCapacity: editTankCap,
       tankHeight: editTankHt,
       bblPerFoot: editBblPerFoot,
+      // Flow-math config — null override explicitly clears any prior manual value
+      activeTanks: editActiveTanks,
+      bblPerFootOverride: editHasOverride ? editOverrideRaw : null,
+      equalizedTanks: editWellEqualized,
+      requireActualBottom: editWellRequireActualBottom,
       // NDIC linkage
       ...(editNdicName ? { ndicName: editNdicName } : {}),
       ...(editNdicApiNo ? { ndicApiNo: editNdicApiNo } : {}),
@@ -1293,8 +1333,43 @@ export default function AdminPage() {
                       />
                     </div>
                   </div>
+                  {/* Flow-math: active/flowing tanks + manual bbl/ft override */}
+                  <div className="grid grid-cols-2 gap-3 mt-2">
+                    <div>
+                      <label className="text-gray-400 text-sm">Active / Flowing Tanks</label>
+                      <input
+                        type="number"
+                        value={newWellActiveTanks}
+                        onChange={(e) => setNewWellActiveTanks(e.target.value)}
+                        placeholder={`default ${parseInt(newWellTanks) || 1}`}
+                        className="w-full px-3 py-2 bg-gray-700 text-white rounded"
+                      />
+                      <div className="text-xs text-gray-500 mt-0.5">Blank = all {parseInt(newWellTanks) || 1} physical tank{(parseInt(newWellTanks) || 1) > 1 ? 's' : ''}</div>
+                    </div>
+                    <div>
+                      <label className="text-gray-400 text-sm">BBL/ft Override</label>
+                      <input
+                        type="number"
+                        step="0.1"
+                        value={newWellBblPerFootOverride}
+                        onChange={(e) => setNewWellBblPerFootOverride(e.target.value)}
+                        placeholder="auto (derived)"
+                        className="w-full px-3 py-2 bg-gray-700 text-white rounded"
+                      />
+                      <div className="text-xs text-gray-500 mt-0.5">Manual — replaces derived</div>
+                    </div>
+                  </div>
                   <div className="text-xs text-gray-500 mt-1">
-                    BBL/ft: {(((parseInt(newWellTankCapacity) || 400) / (parseInt(newWellTankHeight) || 20)) * (parseInt(newWellTanks) || 1)).toFixed(1)} per foot ({parseInt(newWellTanks) || 1} tank{(parseInt(newWellTanks) || 1) > 1 ? 's' : ''})
+                    {(() => {
+                      const cap = parseInt(newWellTankCapacity) || 400;
+                      const ht = parseInt(newWellTankHeight) || 20;
+                      const physical = parseInt(newWellTanks) || 1;
+                      const active = parseInt(newWellActiveTanks) || physical;
+                      const ovr = parseFloat(newWellBblPerFootOverride);
+                      const hasOvr = newWellBblPerFootOverride.trim() !== '' && !isNaN(ovr) && ovr > 0;
+                      const eff = hasOvr ? ovr : (cap / ht) * active;
+                      return `Effective BBL/ft: ${eff.toFixed(1)} per foot ${hasOvr ? '(manual override)' : `(${active} active tank${active > 1 ? 's' : ''})`}`;
+                    })()}
                   </div>
                   {/* Tank calculator — measure diameter when no nameplate */}
                   <button
@@ -1385,6 +1460,25 @@ export default function AdminPage() {
                   </div>
                   <div className="text-xs text-gray-600 mt-1">
                     Fresh water ≈ 8.34 lbs/gal · Produced water ≈ 8.5–10+ lbs/gal
+                  </div>
+                  {/* Flow-math behavior flags */}
+                  <div className="flex flex-col gap-2 mt-3">
+                    <label className="flex items-center gap-2 text-sm text-gray-300">
+                      <input
+                        type="checkbox"
+                        checked={newWellEqualized}
+                        onChange={(e) => setNewWellEqualized(e.target.checked)}
+                      />
+                      Equalized tank system (tanks rise together)
+                    </label>
+                    <label className="flex items-center gap-2 text-sm text-gray-300">
+                      <input
+                        type="checkbox"
+                        checked={newWellRequireActualBottom}
+                        onChange={(e) => setNewWellRequireActualBottom(e.target.checked)}
+                      />
+                      Require driver to enter actual bottom
+                    </label>
                   </div>
                   {(() => {
                     const isDuplicate = newWellName.trim().length > 0 && Object.keys(configs).some(k => k.toLowerCase() === newWellName.trim().toLowerCase());
@@ -1543,8 +1637,45 @@ export default function AdminPage() {
                         />
                       </div>
                     </div>
+                    {/* Flow-math: active/flowing tanks + manual bbl/ft override */}
+                    <div className="grid grid-cols-2 gap-3 mt-2">
+                      <div>
+                        <label className="text-gray-400 text-sm">Active / Flowing Tanks</label>
+                        <input
+                          type="number"
+                          value={editWellActiveTanks}
+                          onChange={(e) => setEditWellActiveTanks(e.target.value)}
+                          placeholder={`default ${parseInt(editWellTanks) || 1}`}
+                          className="w-full px-3 py-2 bg-gray-700 text-white rounded"
+                          disabled={isRenaming}
+                        />
+                        <div className="text-xs text-gray-500 mt-0.5">Blank = all {parseInt(editWellTanks) || 1} physical tank{(parseInt(editWellTanks) || 1) > 1 ? 's' : ''}</div>
+                      </div>
+                      <div>
+                        <label className="text-gray-400 text-sm">BBL/ft Override</label>
+                        <input
+                          type="number"
+                          step="0.1"
+                          value={editWellBblPerFootOverride}
+                          onChange={(e) => setEditWellBblPerFootOverride(e.target.value)}
+                          placeholder="auto (derived)"
+                          className="w-full px-3 py-2 bg-gray-700 text-white rounded"
+                          disabled={isRenaming}
+                        />
+                        <div className="text-xs text-gray-500 mt-0.5">Manual — replaces derived</div>
+                      </div>
+                    </div>
                     <div className="text-xs text-gray-500 mt-1">
-                      BBL/ft: {(((parseInt(editWellTankCapacity) || 400) / (parseInt(editWellTankHeight) || 20)) * (parseInt(editWellTanks) || 1)).toFixed(1)} per foot
+                      {(() => {
+                        const cap = parseInt(editWellTankCapacity) || 400;
+                        const ht = parseInt(editWellTankHeight) || 20;
+                        const physical = parseInt(editWellTanks) || 1;
+                        const active = parseInt(editWellActiveTanks) || physical;
+                        const ovr = parseFloat(editWellBblPerFootOverride);
+                        const hasOvr = editWellBblPerFootOverride.trim() !== '' && !isNaN(ovr) && ovr > 0;
+                        const eff = hasOvr ? ovr : (cap / ht) * active;
+                        return `Effective BBL/ft: ${eff.toFixed(1)} per foot ${hasOvr ? '(manual override)' : `(${active} active tank${active > 1 ? 's' : ''})`}`;
+                      })()}
                     </div>
                     <button
                       type="button"
@@ -1638,6 +1769,27 @@ export default function AdminPage() {
                     </div>
                     <div className="text-xs text-gray-600 mt-1">
                       Fresh water ≈ 8.34 lbs/gal · Produced water ≈ 8.5–10+ lbs/gal
+                    </div>
+                    {/* Flow-math behavior flags */}
+                    <div className="flex flex-col gap-2 mt-3">
+                      <label className="flex items-center gap-2 text-sm text-gray-300">
+                        <input
+                          type="checkbox"
+                          checked={editWellEqualized}
+                          onChange={(e) => setEditWellEqualized(e.target.checked)}
+                          disabled={isRenaming}
+                        />
+                        Equalized tank system (tanks rise together)
+                      </label>
+                      <label className="flex items-center gap-2 text-sm text-gray-300">
+                        <input
+                          type="checkbox"
+                          checked={editWellRequireActualBottom}
+                          onChange={(e) => setEditWellRequireActualBottom(e.target.checked)}
+                          disabled={isRenaming}
+                        />
+                        Require driver to enter actual bottom
+                      </label>
                     </div>
                     <div className="flex gap-2 mt-2">
                       <button
