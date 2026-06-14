@@ -732,7 +732,7 @@ export default function AdminPage() {
 
     const db = getFirebaseDatabase();
     const tankCap = parseInt(newWellTankCapacity) || 400;
-    const tankHt = parseInt(newWellTankHeight) || 20;
+    const tankHt = parseFloat(newWellTankHeight) || 20;
     const numTanks = parseInt(newWellTanks) || 1;
     // Active/flowing tanks default to physical tank count when blank.
     const activeTanks = parseInt(newWellActiveTanks) || numTanks;
@@ -802,7 +802,7 @@ export default function AdminPage() {
     }
 
     const editTankCap = parseInt(editWellTankCapacity) || 400;
-    const editTankHt = parseInt(editWellTankHeight) || 20;
+    const editTankHt = parseFloat(editWellTankHeight) || 20;
     const editNumTanks = parseInt(editWellTanks) || 1;
     // Active/flowing tanks default to physical tank count when blank.
     const editActiveTanks = parseInt(editWellActiveTanks) || editNumTanks;
@@ -1327,6 +1327,7 @@ export default function AdminPage() {
                       <label className="text-gray-400 text-sm">Tank Height (ft)</label>
                       <input
                         type="number"
+                        step="0.1"
                         value={newWellTankHeight}
                         onChange={(e) => setNewWellTankHeight(e.target.value)}
                         className="w-full px-3 py-2 bg-gray-700 text-white rounded"
@@ -1362,7 +1363,7 @@ export default function AdminPage() {
                   <div className="text-xs text-gray-500 mt-1">
                     {(() => {
                       const cap = parseInt(newWellTankCapacity) || 400;
-                      const ht = parseInt(newWellTankHeight) || 20;
+                      const ht = parseFloat(newWellTankHeight) || 20;
                       const physical = parseInt(newWellTanks) || 1;
                       const active = parseInt(newWellActiveTanks) || physical;
                       const ovr = parseFloat(newWellBblPerFootOverride);
@@ -1391,7 +1392,7 @@ export default function AdminPage() {
                             onChange={(e) => {
                               setCalcDiameter(e.target.value);
                               const d = parseFloat(e.target.value);
-                              const h = parseInt(newWellTankHeight) || 20;
+                              const h = parseFloat(newWellTankHeight) || 20;
                               if (d > 0 && h > 0) {
                                 const r = d / 2;
                                 const cubicFt = Math.PI * r * r * h;
@@ -1408,11 +1409,12 @@ export default function AdminPage() {
                           <label className="text-gray-400 text-xs">Height (ft)</label>
                           <input
                             type="number"
+                            step="0.1"
                             value={newWellTankHeight}
                             onChange={(e) => {
                               setNewWellTankHeight(e.target.value);
                               const d = parseFloat(calcDiameter);
-                              const h = parseInt(e.target.value) || 20;
+                              const h = parseFloat(e.target.value) || 20;
                               if (d > 0 && h > 0) {
                                 const r = d / 2;
                                 const cubicFt = Math.PI * r * r * h;
@@ -1425,7 +1427,7 @@ export default function AdminPage() {
                         </div>
                         <div className="text-amber-400 text-sm font-bold pb-2">
                           = {calcDiameter && parseFloat(calcDiameter) > 0
-                            ? `${Math.round(Math.PI * Math.pow(parseFloat(calcDiameter) / 2, 2) * (parseInt(newWellTankHeight) || 20) / 5.6146)} BBL`
+                            ? `${Math.round(Math.PI * Math.pow(parseFloat(calcDiameter) / 2, 2) * (parseFloat(newWellTankHeight) || 20) / 5.6146)} BBL`
                             : '—'}
                         </div>
                       </div>
@@ -1630,6 +1632,7 @@ export default function AdminPage() {
                         <label className="text-gray-400 text-sm">Tank Height (ft)</label>
                         <input
                           type="number"
+                          step="0.1"
                           value={editWellTankHeight}
                           onChange={(e) => setEditWellTankHeight(e.target.value)}
                           className="w-full px-3 py-2 bg-gray-700 text-white rounded"
@@ -1668,7 +1671,7 @@ export default function AdminPage() {
                     <div className="text-xs text-gray-500 mt-1">
                       {(() => {
                         const cap = parseInt(editWellTankCapacity) || 400;
-                        const ht = parseInt(editWellTankHeight) || 20;
+                        const ht = parseFloat(editWellTankHeight) || 20;
                         const physical = parseInt(editWellTanks) || 1;
                         const active = parseInt(editWellActiveTanks) || physical;
                         const ovr = parseFloat(editWellBblPerFootOverride);
@@ -1696,7 +1699,7 @@ export default function AdminPage() {
                               onChange={(e) => {
                                 setEditCalcDiameter(e.target.value);
                                 const d = parseFloat(e.target.value);
-                                const h = parseInt(editWellTankHeight) || 20;
+                                const h = parseFloat(editWellTankHeight) || 20;
                                 if (d > 0 && h > 0) {
                                   const r = d / 2;
                                   const cubicFt = Math.PI * r * r * h;
@@ -1714,11 +1717,12 @@ export default function AdminPage() {
                             <label className="text-gray-400 text-xs">Height (ft)</label>
                             <input
                               type="number"
+                              step="0.1"
                               value={editWellTankHeight}
                               onChange={(e) => {
                                 setEditWellTankHeight(e.target.value);
                                 const d = parseFloat(editCalcDiameter);
-                                const h = parseInt(e.target.value) || 20;
+                                const h = parseFloat(e.target.value) || 20;
                                 if (d > 0 && h > 0) {
                                   const r = d / 2;
                                   const cubicFt = Math.PI * r * r * h;
@@ -1732,7 +1736,7 @@ export default function AdminPage() {
                           </div>
                           <div className="text-amber-400 text-sm font-bold pb-2">
                             = {editCalcDiameter && parseFloat(editCalcDiameter) > 0
-                              ? `${Math.round(Math.PI * Math.pow(parseFloat(editCalcDiameter) / 2, 2) * (parseInt(editWellTankHeight) || 20) / 5.6146)} BBL`
+                              ? `${Math.round(Math.PI * Math.pow(parseFloat(editCalcDiameter) / 2, 2) * (parseFloat(editWellTankHeight) || 20) / 5.6146)} BBL`
                               : '—'}
                           </div>
                         </div>
