@@ -1018,13 +1018,16 @@ export async function fetchWellHistory(wellName: string, limit: number = 0): Pro
     const pull = pulls[i];
     const prevPull = pulls[i + 1]; // Older pull (index+1 because sorted descending)
 
-    // Tank After - ALWAYS recalculate with current tank count from config
-    const bblsToInches = (pull.bblsTaken / (20 * tanks)) * 12;
+    // Tank After - ALWAYS recalculate with current config. Effective bbl/ft =
+    // bblPerFootPerTank * tanks, where bblPerFootPerTank already prefers the
+    // stored well_config.bblPerFoot (override/derived) and falls back to 20.
+    // This self-heals old rows stored with the wrong 20×tanks rate.
+    const bblsToInches = (pull.bblsTaken / (bblPerFootPerTank * tanks)) * 12;
     pull.tankAfter = pull.tankTopLevel - bblsToInches;
 
     if (prevPull) {
-      // Ensure prev has tankAfter calculated
-      const prevBblsToInches = (prevPull.bblsTaken / (20 * tanks)) * 12;
+      // Ensure prev has tankAfter calculated (effective bbl/ft, not 20×tanks)
+      const prevBblsToInches = (prevPull.bblsTaken / (bblPerFootPerTank * tanks)) * 12;
       prevPull.tankAfter = prevPull.tankTopLevel - prevBblsToInches;
 
       // Time Dif

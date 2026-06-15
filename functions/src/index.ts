@@ -856,6 +856,11 @@ export const processIncomingPull = functionsV1.database
     const config = configSnap.val() || {};
     const bottomInches = (config.bottomLevel || config.allowedBottom || DEFAULTS.bottomLevel) * 12;
     const tanks = config.tanks || config.numTanks || DEFAULTS.tanks;
+    // Effective bbl/ft — prefer the Dashboard-saved well_config.bblPerFoot
+    // (override, or derived from capacity/height/activeTanks); fall back to the
+    // legacy 20×tanks only when absent. Same source of truth WB M getBblPerFoot
+    // uses, so the persisted/recomputed bottom matches the Record Load preview.
+    const bblPerFoot = Number(config.bblPerFoot) > 0 ? Number(config.bblPerFoot) : 20 * tanks;
     const pullBbls = config.pullBbls || DEFAULTS.pullBbls;
     const loadLineInches = (config.loadLine ?? DEFAULTS.loadLine) * 12; // load-line floor (feet→inches)
 
@@ -957,7 +962,7 @@ export const processIncomingPull = functionsV1.database
       return null;
     }
 
-    const bblsInInches = data.bblsTaken > 0 ? (data.bblsTaken / 20 / tanks) * 12 : 0;
+    const bblsInInches = data.bblsTaken > 0 ? (data.bblsTaken / bblPerFoot) * 12 : 0;
     // ── Load-line clamp (Commit A, 6/13/2026) ──────────────────────────────
     // Fast/pipeline wells can be drawn down to the suction (load-line); when the
     // driver's top/bbls pair is inconsistent the raw bottom math then dips below
@@ -1006,8 +1011,8 @@ export const processIncomingPull = functionsV1.database
     // Calculate AFR
     const afr = await calculateAFR(wellName, flowRateDays);
 
-    // Calculate window-averaged and overnight bbls/day
-    const bblPerFoot = tanks * 20;
+    // Calculate window-averaged and overnight bbls/day (uses the effective
+    // bblPerFoot computed above, not 20×tanks)
     const historicalPulls = await getHistoricalPulls(wellName, 500);
     const pullTimeMs = new Date(data.dateTimeUTC).getTime();
 
@@ -1026,7 +1031,7 @@ export const processIncomingPull = functionsV1.database
     console.log(`[BblsDay] ${wellName}: window=${windowBblsDay} overnight=${overnightBblsDay}`);
 
     // Recovery Needed
-    const pullHeightInches = (pullBbls / 20 / tanks) * 12;
+    const pullHeightInches = (pullBbls / bblPerFoot) * 12;
     const targetLevel = bottomInches + pullHeightInches;
     const recoveryNeeded = Math.max(0, targetLevel - tankAfterInches);
 
@@ -1075,7 +1080,7 @@ export const processIncomingPull = functionsV1.database
     // BBLs per 24 hours
     let bbls24hrs = '0';
     if (afr > 0) {
-      const bbls24 = (1 / afr) * 20 * tanks;
+      const bbls24 = (1 / afr) * bblPerFoot;
       bbls24hrs = Math.round(bbls24).toString();
     }
 
@@ -1436,7 +1441,7 @@ export const processIncomingPull = functionsV1.database
     // These are fast Firestore writes, adds ~1-2s to packet processing but guarantees delivery.
     try {
       await Promise.all([
-        sendLevelToChat(data, packetId, { tankAfterInches, tanks }).catch(err => console.warn('[LevelChat] Send failed:', err)),
+        sendLevelToChat(data, packetId, { tankAfterInches, tanks, bblPerFoot }).catch(err => console.warn('[LevelChat] Send failed:', err)),
         trackJsaLocation(data).catch(err => console.warn('[JsaTrack] Tracking failed:', err)),
       ]);
     } catch (err) {
@@ -1485,6 +1490,8 @@ export const processEditRequest = functionsV1.database
     }
     const config = configSnap.val() || {};
     const tanks = config.tanks || config.numTanks || DEFAULTS.tanks;
+    // Effective bbl/ft (override / derived); legacy 20×tanks fallback only.
+    const bblPerFoot = Number(config.bblPerFoot) > 0 ? Number(config.bblPerFoot) : 20 * tanks;
     const pullBbls = config.pullBbls || DEFAULTS.pullBbls;
     const bottomInches = (config.bottomLevel || config.allowedBottom || DEFAULTS.bottomLevel) * 12;
     const loadLineInches = (config.loadLine ?? DEFAULTS.loadLine) * 12; // load-line floor (feet→inches)
@@ -1546,7 +1553,7 @@ export const processEditRequest = functionsV1.database
     }
 
     // Recalculate tankAfter
-    const bblsInInches = newBblsTaken > 0 ? (newBblsTaken / 20 / tanks) * 12 : 0;
+    const bblsInInches = newBblsTaken > 0 ? (newBblsTaken / bblPerFoot) * 12 : 0;
     // ── Load-line clamp (Commit A) — mirror of processIncomingPull. The edit
     // path is how GS5 acquired its -1'2" (edited pull), so it must clamp too. ──
     const rawNewTankAfterInches = newTankTopInches - bblsInInches;
@@ -1672,7 +1679,7 @@ export const processEditRequest = functionsV1.database
     const afr = await calculateAFR(wellName, flowRateDays);
 
     // Recalculate window/overnight bbls/day (edit may have changed flow rates)
-    const editBblPerFoot = tanks * 20;
+    const editBblPerFoot = bblPerFoot;
     const editHistoricalPulls = await getHistoricalPulls(wellName, 500);
     const editPullTimeMs = new Date(origPacket.dateTimeUTC).getTime();
     const editWindowBblsDay = calculateWindowBblsPerDay(editHistoricalPulls, editBblPerFoot, editPullTimeMs);
@@ -1705,7 +1712,7 @@ export const processEditRequest = functionsV1.database
 
     if (isLatestPull && afr > 0) {
       // Recalculate outgoing response fields
-      const pullHeightInches = (pullBbls / 20 / tanks) * 12;
+      const pullHeightInches = (pullBbls / bblPerFoot) * 12;
       const targetLevel = bottomInches + pullHeightInches;
       const recoveryNeeded = Math.max(0, targetLevel - newTankAfterInches);
 
@@ -1722,7 +1729,7 @@ export const processEditRequest = functionsV1.database
         estDateTimePull = newDateTimeUTC;
       }
 
-      const bbls24 = (1 / afr) * 20 * tanks;
+      const bbls24 = (1 / afr) * bblPerFoot;
       const bbls24hrs = Math.round(bbls24).toString();
 
       if (hasOutgoing) {
@@ -1859,10 +1866,10 @@ export const processEditRequest = functionsV1.database
         calculated: {
           flowRate: daysToHMMSS(afr),
           flowRateMinutes: Math.round(editAfrMinutes * 100) / 100,
-          bbls24hrs: Math.round((1 / afr) * tanks * 20) || 0,
-          nextPullTime: (() => { const pullHeightIn = (pullBbls / 20 / tanks) * 12; const targetLvl = bottomInches + pullHeightIn; const recovNeeded = Math.max(0, targetLvl - newTankAfterInches); if (recovNeeded <= 0) return formatLocalDateTime(new Date(newDateTimeUTC)); const estDays = (recovNeeded / 12) * afr; const estDate = new Date(new Date(newDateTimeUTC).getTime() + estDays * 24 * 60 * 60 * 1000); return formatLocalDateTime(estDate); })(),
-          nextPullTimeUTC: (() => { const pullHeightIn = (pullBbls / 20 / tanks) * 12; const targetLvl = bottomInches + pullHeightIn; const recovNeeded = Math.max(0, targetLvl - newTankAfterInches); if (recovNeeded <= 0) return newDateTimeUTC; const estDays = (recovNeeded / 12) * afr; return new Date(new Date(newDateTimeUTC).getTime() + estDays * 24 * 60 * 60 * 1000).toISOString(); })(),
-          timeTillPull: nextEditIsDown ? 'Down' : (() => { const pullHeightIn = (pullBbls / 20 / tanks) * 12; const targetLvl = bottomInches + pullHeightIn; const recovNeeded = Math.max(0, targetLvl - newTankAfterInches); if (recovNeeded <= 0) return '0:00'; return daysToHMM((recovNeeded / 12) * afr); })(),
+          bbls24hrs: Math.round((1 / afr) * bblPerFoot) || 0,
+          nextPullTime: (() => { const pullHeightIn = (pullBbls / bblPerFoot) * 12; const targetLvl = bottomInches + pullHeightIn; const recovNeeded = Math.max(0, targetLvl - newTankAfterInches); if (recovNeeded <= 0) return formatLocalDateTime(new Date(newDateTimeUTC)); const estDays = (recovNeeded / 12) * afr; const estDate = new Date(new Date(newDateTimeUTC).getTime() + estDays * 24 * 60 * 60 * 1000); return formatLocalDateTime(estDate); })(),
+          nextPullTimeUTC: (() => { const pullHeightIn = (pullBbls / bblPerFoot) * 12; const targetLvl = bottomInches + pullHeightIn; const recovNeeded = Math.max(0, targetLvl - newTankAfterInches); if (recovNeeded <= 0) return newDateTimeUTC; const estDays = (recovNeeded / 12) * afr; return new Date(new Date(newDateTimeUTC).getTime() + estDays * 24 * 60 * 60 * 1000).toISOString(); })(),
+          timeTillPull: nextEditIsDown ? 'Down' : (() => { const pullHeightIn = (pullBbls / bblPerFoot) * 12; const targetLvl = bottomInches + pullHeightIn; const recovNeeded = Math.max(0, targetLvl - newTankAfterInches); if (recovNeeded <= 0) return '0:00'; return daysToHMM((recovNeeded / 12) * afr); })(),
         },
         isDown: nextEditIsDown,
         updatedAt: new Date().toISOString(),
@@ -2119,6 +2126,8 @@ export const processDeleteRequest = functionsV1.database
       }
       const config = configSnap.val() || {};
       const tanks = config.tanks || config.numTanks || DEFAULTS.tanks;
+      // Effective bbl/ft (override / derived); legacy 20×tanks fallback only.
+      const bblPerFoot = Number(config.bblPerFoot) > 0 ? Number(config.bblPerFoot) : 20 * tanks;
       const pullBbls = config.pullBbls || DEFAULTS.pullBbls;
       const bottomInches = (config.bottomLevel || config.allowedBottom || DEFAULTS.bottomLevel) * 12;
 
@@ -2162,15 +2171,15 @@ export const processDeleteRequest = functionsV1.database
           const afr = await calculateAFR(wellName, latestPacket.flowRateDays || 0);
           console.log(`Delete: AFR for ${wellName} = ${afr}`);
 
-          // Calculate windowBblsDay and overnightBblsDay from remaining historical pulls
-          const bblPerFoot = tanks * 20;
+          // Calculate windowBblsDay and overnightBblsDay from remaining historical
+          // pulls (uses the effective bblPerFoot computed above, not 20×tanks)
           const latestTimeMs = new Date(latestPacket.dateTimeUTC).getTime();
           const historicalPulls = await getHistoricalPulls(wellName, 500);
           const windowBblsDay = calculateWindowBblsPerDay(historicalPulls, bblPerFoot, latestTimeMs);
           const overnightBblsDay = calculateOvernightBblsPerDay(historicalPulls, bblPerFoot, latestTimeMs);
 
           const tankAfterInches = latestPacket.tankAfterInches || 0;
-          const pullHeightInches = (pullBbls / 20 / tanks) * 12;
+          const pullHeightInches = (pullBbls / bblPerFoot) * 12;
           const targetLevel = bottomInches + pullHeightInches;
           const recoveryNeeded = Math.max(0, targetLevel - tankAfterInches);
 
@@ -2187,7 +2196,7 @@ export const processDeleteRequest = functionsV1.database
             estDateTimePull = latestPacket.dateTimeUTC;
           }
 
-          const bbls24 = afr > 0 ? (1 / afr) * 20 * tanks : 0;
+          const bbls24 = afr > 0 ? (1 / afr) * bblPerFoot : 0;
           const bbls24hrs = Math.round(bbls24).toString();
 
           // Delete old outgoing responses for this well and write new one
@@ -2721,7 +2730,7 @@ async function postSystemMessage(
 async function sendLevelToChat(
   data: PullPacket,
   packetId: string,
-  computed?: { tankAfterInches: number; tanks: number },
+  computed?: { tankAfterInches: number; tanks: number; bblPerFoot?: number },
 ): Promise<void> {
   try {
     const driverHash = data.driverId;
@@ -2764,12 +2773,14 @@ async function sendLevelToChat(
     const wellName = data.wellName;
     const cleanName = wellName ? wellName.replace(/\s/g, '') : '';
     let tanks = 1;
+    let bblPerFootEff = 0; // effective bbl/ft (override / derived); resolved below
     let bottomInches: number;
     let sourceUsed: string;
 
     if (computed && Number.isFinite(computed.tankAfterInches)) {
-      // Caller already computed the correct bottom (uses well_config.tanks). Use it directly.
+      // Caller already computed the correct bottom (uses effective bblPerFoot). Use it directly.
       tanks = computed.tanks || 1;
+      bblPerFootEff = Number(computed.bblPerFoot) > 0 ? Number(computed.bblPerFoot) : 20 * tanks;
       bottomInches = computed.tankAfterInches;
       sourceUsed = `caller.tankAfterInches(tanks=${tanks})`;
     } else {
@@ -2781,15 +2792,17 @@ async function sendLevelToChat(
         }
         const cfg = (configSnap && configSnap.val()) || {};
         tanks = cfg.tanks || cfg.numTanks || 1;
+        bblPerFootEff = Number(cfg.bblPerFoot) > 0 ? Number(cfg.bblPerFoot) : 20 * tanks;
       } catch (e) {
         console.warn('[LevelChat] well_config lookup failed, defaulting tanks=1:', e);
       }
-      const bblsInInches = data.bblsTaken > 0 ? (data.bblsTaken / (20 * tanks)) * 12 : 0;
+      const rate = bblPerFootEff > 0 ? bblPerFootEff : 20 * tanks;
+      const bblsInInches = data.bblsTaken > 0 ? (data.bblsTaken / rate) * 12 : 0;
       bottomInches = topInches - bblsInInches;
       sourceUsed = `recompute(well_config.tanks=${tanks})`;
     }
 
-    const bblPerFt = 20 * tanks;
+    const bblPerFt = bblPerFootEff > 0 ? bblPerFootEff : 20 * tanks;
     const topStr = inchesToFeetInches(topInches);
     const bottomStr = inchesToFeetInches(Math.max(0, bottomInches));
 
