@@ -735,6 +735,11 @@ function filterAnomalies(flowRates: number[]): number[] {
 // Alpha = 0.4 gives ~60% weight to recent pulls while smoothing noise.
 const EMA_ALPHA = 0.4;
 
+// Pulls closer together than this measure drawdown cadence during active
+// hauling, not natural recovery — their rate is excluded from AFR input (the
+// row stays in history). 2 hours, expressed in days to match timeDifDays.
+const SHORT_INTERVAL_AFR_DAYS = 2 / 24;
+
 async function calculateAFR(wellName: string, newFlowRateDays: number): Promise<number> {
 
   // Get recent processed packets for this well
@@ -755,6 +760,13 @@ async function calculateAFR(wellName: string, newFlowRateDays: number): Promise<
     const key = child.key || '';
     // Skip edit/delete/history packets
     if (key.startsWith('edit_') || key.startsWith('delete_') || key.startsWith('history_')) return;
+    // Quarantine: rows explicitly excluded from the flow model (e.g. impossible
+    // bottoms from overstated bbls / bad top readings). Row stays in history.
+    if (data.excludeFromAFR === true) return;
+    // Short-interval guard: drop back-to-back pulls (< 2h apart) whose rate is
+    // drawdown cadence, not natural recovery. timeDifDays is the interval used
+    // to compute this row's flowRateDays.
+    if (typeof data.timeDifDays === 'number' && data.timeDifDays > 0 && data.timeDifDays < SHORT_INTERVAL_AFR_DAYS) return;
     if (data.flowRateDays && data.flowRateDays > 0) {
       // Sort by timestamp. Prefer dateTimeUTC (always a valid ISO string) over
       // dateTime (locale-formatted by the WB M client and sometimes malformed,
