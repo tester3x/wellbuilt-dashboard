@@ -4031,6 +4031,13 @@ export { demoClassifyLocations } from './truth/demoClassifyLocations';
 export { writeDiagnosticLog } from './diagnostics';
 
 // ============================================================
+// WELL CATALOG REFRESH — monthly NDIC refresh (scheduled) + admin callable.
+// Reuses the proven importer core from scripts/refresh-well-catalog.js.
+// ND/NDIC only; upsert-only/merge; admin email via `mail` collection.
+// ============================================================
+export { scheduledWellCatalogRefresh, triggerWellCatalogRefresh } from './wellCatalogRefresh';
+
+// ============================================================
 // TRANSFER TICKET MATERIALIZATION — 2026-05-12
 // Server-side finalization for transferred-closed jobs. When a
 // receiver-side transferred invoice flips to status:'closed', this
