@@ -4164,6 +4164,7 @@ export const addSplitLeg = httpsV2.onCall(
         jobType?: string | null;
         serviceType?: string | null;
         notes?: string | null;
+        destinationType?: string | null;  // WELL | SWD | LOCATION | CUSTOM (from picker)
       };
     };
 
@@ -4204,6 +4205,10 @@ export const addSplitLeg = httpsV2.onCall(
 
     let maxSequence = 0;
     let leg1DispatchId: string | null = null;
+    // Pickup origin for the new (disposal) leg = the chain's ANCHOR (seq 1)
+    // wellName — the original well the water came from. Used so a field-added
+    // SWD leg records its real source instead of the disposal it drops at.
+    let anchorWellName: string | null = null;
     const siblingRefs: FirebaseFirestore.DocumentReference[] = [];
     let siblingCount = 0;
     if (isFirstSplit) {
@@ -4212,6 +4217,7 @@ export const addSplitLeg = httpsV2.onCall(
       // splitGroupId + splitSequence:1.
       maxSequence = 1;
       leg1DispatchId = parentDispatchId;
+      anchorWellName = parent.wellName || null;
       siblingRefs.push(parentRef);
       siblingCount = 1;
     } else {
@@ -4229,11 +4235,14 @@ export const addSplitLeg = httpsV2.onCall(
         const d = docSnap.data() as Record<string, any>;
         const seq = typeof d.splitSequence === 'number' ? d.splitSequence : 0;
         if (seq > maxSequence) maxSequence = seq;
-        if (seq === 1) leg1DispatchId = docSnap.id;
+        if (seq === 1) { leg1DispatchId = docSnap.id; anchorWellName = d.wellName || null; }
         siblingRefs.push(docSnap.ref);
       });
       siblingCount = siblingSnap.size;
     }
+    // Fall back to the passed parent's wellName if no seq-1 sibling resolved.
+    if (!anchorWellName) anchorWellName = parent.wellName || null;
+    const destinationType = legSpec.destinationType || null;
     const nextSequence = maxSequence + 1;
     const newTotal = siblingCount + 1;
     const rootParentId = leg1DispatchId || parentDispatchId;
@@ -4260,6 +4269,13 @@ export const addSplitLeg = httpsV2.onCall(
       disposal: legSpec.disposal,
       ...(legSpec.disposalLat != null ? { disposalLat: legSpec.disposalLat } : {}),
       ...(legSpec.disposalLng != null ? { disposalLng: legSpec.disposalLng } : {}),
+      // Real pickup origin (anchor well) kept separate from wellName (which the
+      // SW split-button model points at the disposal for the chip label). The
+      // app uses pickupWellName for the leg's ticket origin + synthetic pickup
+      // event so a disposal leg records its true source, not the SWD.
+      ...(anchorWellName ? { pickupWellName: anchorWellName } : {}),
+      ...(destinationType ? { destinationType } : {}),
+      ...(destinationType === 'SWD' ? { legType: 'disposal' } : {}),
       ...(legSpec.bbls != null ? { bbls: legSpec.bbls } : {}),
       jobType: legSpec.jobType || parent.jobType || null,
       serviceType: legSpec.serviceType || parent.serviceType || null,
