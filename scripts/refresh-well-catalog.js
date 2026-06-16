@@ -28,16 +28,17 @@
  *     from any committed code, and requirement #10 says do not guess. MT is
  *     reported and skipped. Fill MBOGC_SOURCE below once the endpoint is
  *     confirmed, then enable `--state MT`.
- *   - disposals → NOT in this pass. The rule that classified a regulator well
- *     as a `disposals` doc vs a `wells`/`wells_inactive` doc in March is not
- *     documented anywhere; guessing it risks polluting the SWD picker. Skipped
- *     and reported.
+ *   - ND disposals → IMPLEMENTED. Proven mapping: same NDIC source, well_type
+ *     SWD/WI, status A, docId = api_no, identical doc shape. MT disposals are
+ *     still out of scope (MT source unconfirmed).
  *
- * CLASSIFICATION (status → target collection)
- *   status 'A'  → wells          (matches WB T's active-by-operator query)
- *   status 'IA' → wells_inactive (matches the routed-inactive fallback path)
- *   any other status (AB/PA/DRL/CONF/LOC/...) → skipped + counted (we do not
- *     introduce new status buckets the app doesn't already expect).
+ * CLASSIFICATION (well_type + status → target collection)
+ *   well_type SWD/WI + status 'A'  → disposals      (proven SWD mapping)
+ *   well_type OG     + status 'A'  → wells           (WB T active-by-operator)
+ *   well_type OG     + status 'IA' → wells_inactive  (routed-inactive fallback)
+ *   any other well_type (GASD/WS/GASC/AI/GASN/GI) → skipped + counted (not part
+ *     of the proven mapping — not guessed)
+ *   any other status (AB/PA/DRL/CONF/LOC/...) → skipped + counted
  *
  * USAGE  (run from the wellbuilt-dashboard/ directory)
  *   node scripts/refresh-well-catalog.js                       # dry-run, ND, full catalog
@@ -206,8 +207,7 @@ async function main() {
       process.exit(0);
     }
   }
-  console.log('\n[disposals] SKIPPED — March classification rule (well_type/status →');
-  console.log('            disposals) is undocumented; not guessing this pass.');
+  console.log('\n[disposals] ND disposals INCLUDED — well_type SWD/WI, status A → disposals.');
 
   const source = NDIC_SOURCE;
   const where = OPERATOR ? `operator='${esriEscape(OPERATOR)}'` : '1=1';
@@ -231,31 +231,51 @@ async function main() {
   console.log('\n[ND] Loading existing Firestore docs...');
   const existingWells = await loadExisting('wells');
   const existingInactive = await loadExisting('wells_inactive');
-  console.log(`     existing wells=${existingWells.size}  wells_inactive=${existingInactive.size}` +
+  const existingDisposals = await loadExisting('disposals');
+  console.log(`     existing wells=${existingWells.size}  wells_inactive=${existingInactive.size}  disposals=${existingDisposals.size}` +
     (OPERATOR ? ' (operator-scoped)' : ''));
 
   // 3) Classify + diff.
+  // Classification reproduces the original snapshot exactly and keeps the three
+  // collections disjoint by well_type:
+  //   well_type SWD/WI  → disposals (status A only; else skipped)
+  //   well_type OG      → wells (A) / wells_inactive (IA); other status skipped
+  //   any other type    → skipped + counted (GASD/WS/GASC/AI/GASN/GI — not part
+  //                       of the proven mapping; routing them is not guessed)
+  // NOTE: the prior status-only rule (any A → wells) wrote SWD/WI into `wells`.
+  // This restores the disjoint layout. Existing mis-filed docs are NOT removed
+  // here (no deletes) — that cleanup is a separate, approved step.
+  const DISPOSAL_TYPES = new Set(['SWD', 'WI']);
   const stats = {
     wells: { add: 0, update: 0, unchanged: 0 },
     wells_inactive: { add: 0, update: 0, unchanged: 0 },
+    disposals: { add: 0, update: 0, unchanged: 0 },
     skippedOtherStatus: 0,
+    skippedOtherType: 0,
     skippedNoApi: 0,
     errors: 0,
     byOtherStatus: {},
+    byOtherType: {},
   };
   const ops = []; // { coll, id, data }
   for (const a of rows) {
     try {
       const status = String(a.status || '').trim();
+      const wt = String(a.well_type || '').trim().toUpperCase();
       const apiNo = String(a.api_no || '').trim();
       if (!apiNo) { stats.skippedNoApi++; continue; }
 
       let coll, existingMap;
-      if (status === 'A') { coll = 'wells'; existingMap = existingWells; }
-      else if (status === 'IA') { coll = 'wells_inactive'; existingMap = existingInactive; }
-      else {
-        stats.skippedOtherStatus++;
-        stats.byOtherStatus[status || '(blank)'] = (stats.byOtherStatus[status || '(blank)'] || 0) + 1;
+      if (DISPOSAL_TYPES.has(wt)) {
+        if (status === 'A') { coll = 'disposals'; existingMap = existingDisposals; }
+        else { stats.skippedOtherStatus++; stats.byOtherStatus[status || '(blank)'] = (stats.byOtherStatus[status || '(blank)'] || 0) + 1; continue; }
+      } else if (wt === 'OG') {
+        if (status === 'A') { coll = 'wells'; existingMap = existingWells; }
+        else if (status === 'IA') { coll = 'wells_inactive'; existingMap = existingInactive; }
+        else { stats.skippedOtherStatus++; stats.byOtherStatus[status || '(blank)'] = (stats.byOtherStatus[status || '(blank)'] || 0) + 1; continue; }
+      } else {
+        stats.skippedOtherType++;
+        stats.byOtherType[wt || '(blank)'] = (stats.byOtherType[wt || '(blank)'] || 0) + 1;
         continue;
       }
 
@@ -285,6 +305,21 @@ async function main() {
     console.log(`      lat=${a.latitude} lng=${a.longitude}  → ${coll}  (${decision}; existing wells=${inWells} inactive=${inInact})`);
   }
 
+  // 4b) Disposal proof — prove NDIC returns WI/SWD and a known ND disposal upserts.
+  console.log('\n--- ND disposal (SWD/WI) proof ---');
+  const dzRows = rows.filter((r) => ['SWD', 'WI'].includes(String(r.well_type || '').trim().toUpperCase()) && String(r.status || '').trim() === 'A');
+  console.log(`  NDIC status=A SWD/WI rows in this pull: ${dzRows.length}`);
+  const dzTargets = ['33-007-00009-00-00']; // FRYBURG HEATH-MADISON UNIT O-809 (WI)
+  for (const api of dzTargets) {
+    const a = rows.find((r) => String(r.api_no || '').trim() === api);
+    if (!a) { console.log(`  ${api}: NOT in upstream pull`); continue; }
+    const inDz = existingDisposals.has(api);
+    console.log(`  ${api}  ${a.well_name}  status=${a.status}  type=${a.well_type}  → disposals  (${inDz ? 'update/unchanged' : 'ADD'}; existing disposal=${inDz})`);
+  }
+  for (const a of dzRows.slice(0, 2)) {
+    console.log(`  e.g. ${a.api_no}  ${a.well_name}  type=${a.well_type}`);
+  }
+
   // 5) Write (only with --write).
   if (WRITE && ops.length) {
     console.log(`\n[ND] WRITING ${ops.length} upserts (merge, batched ≤500)...`);
@@ -309,6 +344,8 @@ async function main() {
         wellsUpdated: stats.wells.update,
         inactiveAdded: stats.wells_inactive.add,
         inactiveUpdated: stats.wells_inactive.update,
+        disposalsAdded: stats.disposals.add,
+        disposalsUpdated: stats.disposals.update,
         operatorScope: OPERATOR || 'ALL',
       },
     }, { merge: true });
@@ -324,7 +361,9 @@ async function main() {
   console.log(`  upstream rows ............ ${rows.length}`);
   console.log(`  wells          add=${stats.wells.add}  update=${stats.wells.update}  unchanged=${stats.wells.unchanged}`);
   console.log(`  wells_inactive add=${stats.wells_inactive.add}  update=${stats.wells_inactive.update}  unchanged=${stats.wells_inactive.unchanged}`);
+  console.log(`  disposals      add=${stats.disposals.add}  update=${stats.disposals.update}  unchanged=${stats.disposals.unchanged}`);
   console.log(`  skipped (other status) ... ${stats.skippedOtherStatus}  ${JSON.stringify(stats.byOtherStatus)}`);
+  console.log(`  skipped (other type) ..... ${stats.skippedOtherType}  ${JSON.stringify(stats.byOtherType)}`);
   console.log(`  skipped (no api_no) ...... ${stats.skippedNoApi}`);
   console.log(`  errors ................... ${stats.errors}`);
   if (!WRITE) console.log('\n  Re-run with --write (and without --dry-run) to apply, after review.');

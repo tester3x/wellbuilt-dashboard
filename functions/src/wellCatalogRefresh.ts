@@ -11,12 +11,17 @@
  *   - Upsert-only, keyed by api_no docId, via set(..., { merge: true }).
  *   - NEVER deletes a collection, doc, or field. Strips null/NaN/'' from each
  *     candidate so a sparse source row can't overwrite a good existing value.
- *   - Touches ONLY: wells, wells_inactive, wellDataMeta, plus the notification
- *     collections `mail` (Trigger-Email extension) and `well_refresh_runs`
- *     (durable audit). Does NOT touch well_config (RTDB), customLocations,
- *     swd_directory, disposals, or any dispatch/job/ticket/invoice data.
- *   - ND / NDIC only. MT/MBOGC and disposals are intentionally out of scope
- *     until their endpoint/classification mapping is confirmed.
+ *   - Touches ONLY: wells, wells_inactive, disposals, wellDataMeta, plus the
+ *     notification collections `mail` (Trigger-Email extension) and
+ *     `well_refresh_runs` (durable audit). Does NOT touch well_config (RTDB),
+ *     customLocations, swd_directory, or any dispatch/job/ticket/invoice data.
+ *   - ND / NDIC only. MT/MBOGC are intentionally out of scope until their
+ *     endpoint/classification mapping is confirmed.
+ *   - Classification (disjoint by well_type): SWD/WI + status A → disposals;
+ *     OG + A → wells, OG + IA → wells_inactive; any other well_type or status
+ *     is skipped + counted (not guessed). ND disposals share the NDIC source and
+ *     the exact `wells` doc shape (well_type SWD/WI). Existing-blacklist/routing
+ *     fields on a disposal doc survive (merge writes only NDIC-derived fields).
  *
  * SCHEDULE: fires weekly Sunday 02:00 America/Chicago, but the handler no-ops
  * on any Sunday past the 7th — i.e. it runs once a month, on the FIRST Sunday.
@@ -162,8 +167,11 @@ export interface RefreshStats {
   upInactive: number;
   wells: { add: number; update: number; unchanged: number };
   wells_inactive: { add: number; update: number; unchanged: number };
+  disposals: { add: number; update: number; unchanged: number };
   skippedOtherStatus: number;
   byOtherStatus: Record<string, number>;
+  skippedOtherType: number;
+  byOtherType: Record<string, number>;
   skippedNoApi: number;
   errors: number;
   elapsedSec: number;
@@ -200,6 +208,7 @@ export async function runNdicRefresh(
   }
   const existingWells = await loadExisting('wells');
   const existingInactive = await loadExisting('wells_inactive');
+  const existingDisposals = await loadExisting('disposals');
 
   const stats: RefreshStats = {
     source: NDIC_SOURCE.label,
@@ -209,8 +218,11 @@ export async function runNdicRefresh(
     upInactive,
     wells: { add: 0, update: 0, unchanged: 0 },
     wells_inactive: { add: 0, update: 0, unchanged: 0 },
+    disposals: { add: 0, update: 0, unchanged: 0 },
     skippedOtherStatus: 0,
     byOtherStatus: {},
+    skippedOtherType: 0,
+    byOtherType: {},
     skippedNoApi: 0,
     errors: 0,
     elapsedSec: 0,
@@ -221,21 +233,39 @@ export async function runNdicRefresh(
     warnings: [],
   };
 
-  const ops: { coll: 'wells' | 'wells_inactive'; id: string; data: Record<string, any> }[] = [];
+  // Classification keeps the three collections disjoint by well_type and
+  // reproduces the original snapshot. SWD/WI (active) → disposals; OG → wells
+  // (A) / wells_inactive (IA); any other well_type or status is skipped +
+  // counted (not guessed). The earlier status-only rule wrote SWD/WI into
+  // `wells`; this restores the split. Existing mis-filed docs are not removed
+  // here (upsert-only, no deletes) — that cleanup is a separate approved step.
+  const DISPOSAL_TYPES = new Set(['SWD', 'WI']);
+  const ops: { coll: 'wells' | 'wells_inactive' | 'disposals'; id: string; data: Record<string, any> }[] = [];
   for (const a of rows) {
     try {
       const status = String(a.status || '').trim();
+      const wt = String(a.well_type || '').trim().toUpperCase();
       const apiNo = String(a.api_no || '').trim();
       if (!apiNo) { stats.skippedNoApi++; continue; }
-
-      let coll: 'wells' | 'wells_inactive';
-      let existingMap: Map<string, any>;
-      if (status === 'A') { coll = 'wells'; existingMap = existingWells; }
-      else if (status === 'IA') { coll = 'wells_inactive'; existingMap = existingInactive; }
-      else {
+      const skipStatus = () => {
         stats.skippedOtherStatus++;
         const k = status || '(blank)';
         stats.byOtherStatus[k] = (stats.byOtherStatus[k] || 0) + 1;
+      };
+
+      let coll: 'wells' | 'wells_inactive' | 'disposals';
+      let existingMap: Map<string, any>;
+      if (DISPOSAL_TYPES.has(wt)) {
+        if (status === 'A') { coll = 'disposals'; existingMap = existingDisposals; }
+        else { skipStatus(); continue; }
+      } else if (wt === 'OG') {
+        if (status === 'A') { coll = 'wells'; existingMap = existingWells; }
+        else if (status === 'IA') { coll = 'wells_inactive'; existingMap = existingInactive; }
+        else { skipStatus(); continue; }
+      } else {
+        stats.skippedOtherType++;
+        const k = wt || '(blank)';
+        stats.byOtherType[k] = (stats.byOtherType[k] || 0) + 1;
         continue;
       }
 
@@ -271,6 +301,8 @@ export async function runNdicRefresh(
         wellsUpdated: stats.wells.update,
         inactiveAdded: stats.wells_inactive.add,
         inactiveUpdated: stats.wells_inactive.update,
+        disposalsAdded: stats.disposals.add,
+        disposalsUpdated: stats.disposals.update,
         operatorScope: opts.operator || 'ALL',
       },
     }, { merge: true });
@@ -299,8 +331,8 @@ function fmtCounts(c: { add: number; update: number; unchanged: number }): strin
 export function buildSuccessEmail(stats: RefreshStats): { subject: string; text: string } {
   const warn = stats.warnings.length > 0;
   const subject = warn
-    ? `⚠️ WB Well Refresh completed WITH WARNINGS (+${stats.wells.add} wells)`
-    : `✅ WB Well Refresh OK — +${stats.wells.add} wells, +${stats.wells_inactive.add} inactive (NDIC)`;
+    ? `⚠️ WB Well Refresh completed WITH WARNINGS (+${stats.wells.add} wells, +${stats.disposals.add} disposals)`
+    : `✅ WB Well Refresh OK — +${stats.wells.add} wells, +${stats.disposals.add} disposals (NDIC)`;
   const lines = [
     `WellBuilt monthly well-catalog refresh — ${stats.write ? 'WRITE' : 'DRY-RUN'}`,
     ``,
@@ -312,9 +344,11 @@ export function buildSuccessEmail(stats: RefreshStats): { subject: string; text:
     `Upstream rows:     ${stats.upstreamRows} (active A=${stats.upActive}, inactive IA=${stats.upInactive})`,
     `wells:             ${fmtCounts(stats.wells)}`,
     `wells_inactive:    ${fmtCounts(stats.wells_inactive)}`,
+    `disposals:         ${fmtCounts(stats.disposals)}`,
     `wells count after: ${stats.wellsCountAfter ?? '(dry-run)'} (baseline ${stats.baselineWells})`,
     ``,
     `Skipped (other status): ${stats.skippedOtherStatus} ${JSON.stringify(stats.byOtherStatus)}`,
+    `Skipped (other type):   ${stats.skippedOtherType} ${JSON.stringify(stats.byOtherType)}`,
     `Skipped (no api_no):    ${stats.skippedNoApi}`,
     `Errors:                 ${stats.errors}`,
   ];
@@ -325,7 +359,7 @@ export function buildSuccessEmail(stats: RefreshStats): { subject: string; text:
   lines.push(
     ``,
     `Note: upsert-only / merge — no collection or doc was wiped.`,
-    `MT/MBOGC and disposals are out of scope for this refresh.`,
+    `Scope: ND wells + wells_inactive + disposals. MT/MBOGC out of scope.`,
   );
   return { subject, text: lines.join('\n') };
 }
