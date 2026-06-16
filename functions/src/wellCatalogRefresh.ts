@@ -29,14 +29,22 @@
  * installed the email sends; if not, the doc is a harmless record and the run
  * still persists a `well_refresh_runs` audit doc. Swap in SendGrid/Resend later
  * by changing only `sendAdminMail`.
+ *
+ * RECIPIENT SOURCE (resolved at send time, in priority order — see
+ * resolveAdminRecipients): (1) the existing RBAC admin list — RTDB `users`
+ * records with role admin/it and no companyId (WB staff), using their `email`;
+ * (2) the WELL_REFRESH_ADMIN_EMAIL env var, matching this repo's existing
+ * process.env config pattern (ANTHROPIC_API_KEY etc.); (3) an owner backstop so
+ * a notification is never silently dropped. No new config doc or settings UI.
  */
 
 import * as functionsV2 from 'firebase-functions/v2/scheduler';
 import * as httpsV2 from 'firebase-functions/v2/https';
 import * as admin from 'firebase-admin';
 
-// Adjust if the admin notification address changes, or set the env var.
-const ADMIN_EMAIL = process.env.WELL_REFRESH_ADMIN_EMAIL || 'testerg1xxx@gmail.com';
+// Ultimate fallback recipient, only used if no admin users resolve and no env
+// var is set — so a refresh notification is never silently dropped.
+const OWNER_BACKSTOP_EMAIL = 'testerg1xxx@gmail.com';
 const TZ = 'America/Chicago';
 
 const NDIC_SOURCE = {
@@ -340,13 +348,50 @@ export function buildFailureEmail(err: any, sourceLabel: string): { subject: str
   return { subject, text };
 }
 
+/**
+ * Resolve admin notification recipients in priority order:
+ *   1. RBAC admin list — RTDB `users` with role admin/it and no companyId
+ *      (WB staff), using each record's backfilled `email`.
+ *   2. WELL_REFRESH_ADMIN_EMAIL env var (matches the repo's process.env config
+ *      pattern) if no admin users resolved.
+ *   3. Owner backstop, so a notification is never silently dropped.
+ */
+async function resolveAdminRecipients(): Promise<string[]> {
+  const seen = new Set<string>();
+  const out: string[] = [];
+  const add = (e?: string) => {
+    const email = typeof e === 'string' ? e.trim() : '';
+    if (!email) return;
+    const key = email.toLowerCase();
+    if (seen.has(key)) return;
+    seen.add(key);
+    out.push(email);
+  };
+  try {
+    const snap = await admin.database().ref('users').once('value');
+    const users = snap.val() || {};
+    for (const uid of Object.keys(users)) {
+      const u = users[uid] || {};
+      const isWbStaff = !u.companyId;                       // WB admin, not a hauler
+      const elevated = u.role === 'admin' || u.role === 'it';
+      if (isWbStaff && elevated) add(u.email);
+    }
+  } catch (_e) {
+    // fall through to env / backstop
+  }
+  if (out.length === 0) add(process.env.WELL_REFRESH_ADMIN_EMAIL);
+  if (out.length === 0) add(OWNER_BACKSTOP_EMAIL);
+  return out;
+}
+
 /** Deliver via the Firebase "Trigger Email" extension schema. No-op-safe. */
 async function sendAdminMail(
   db: admin.firestore.Firestore,
   mail: { subject: string; text: string },
 ): Promise<void> {
+  const to = await resolveAdminRecipients();
   await db.collection('mail').add({
-    to: ADMIN_EMAIL,
+    to,
     message: { subject: mail.subject, text: mail.text, html: `<pre>${mail.text}</pre>` },
     _source: 'wellCatalogRefresh',
     createdAt: admin.firestore.FieldValue.serverTimestamp(),
