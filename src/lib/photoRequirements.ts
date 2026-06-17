@@ -22,6 +22,11 @@ const REAL_BUCKET = 'gs://wellbuilt-sync.firebasestorage.app';
 
 export type PhotoPhase = 'any' | 'pickup' | 'dropoff';
 export type PhotoAppliesTo = 'any' | 'pw' | 'sw';
+// Provenance of a requirement. 'wb-default' = seeded from DEFAULT_PHOTO_REQUIREMENTS
+// (eligible for Reset-to-default by matching id); 'customer' = customer-created.
+// Optional + additive: existing docs have no `source` and are treated as customer
+// config. The CF and WB T never read this field — it is dashboard metadata only.
+export type PhotoReqSource = 'wb-default' | 'customer';
 
 export interface PhotoRequirement {
   id: string;
@@ -34,6 +39,7 @@ export interface PhotoRequirement {
   active: boolean;          // per-requirement on/off (default true)
   sampleStoragePath?: string;
   sampleUrl?: string;
+  source?: PhotoReqSource;  // additive (Phase 1) — provenance for reset; optional
 }
 
 export interface PhotoRequirementSpec {
@@ -61,6 +67,9 @@ function normalizeReq(r: any): PhotoRequirement {
     active: r.active !== false,
     sampleStoragePath: r.sampleStoragePath || undefined,
     sampleUrl: r.sampleUrl || undefined,
+    // Pass through only when explicitly set, so existing (sourceless) docs stay
+    // sourceless until something deliberately stamps them.
+    ...(r.source === 'wb-default' || r.source === 'customer' ? { source: r.source } : {}),
   };
 }
 
