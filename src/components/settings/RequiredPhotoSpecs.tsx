@@ -12,6 +12,7 @@ import {
   uploadRequirementSample,
   suggestPhotoCriteria,
 } from '@/lib/photoRequirements';
+import { getDefaultPhotoRequirements } from '@/lib/defaultPhotoRequirements';
 
 interface Props {
   company: CompanyConfig;
@@ -59,16 +60,30 @@ export function RequiredPhotoSpecs({ company }: Props) {
   const [hintById, setHintById] = useState<Record<string, string>>({}); // transient drafting hint, not saved
   const [dirty, setDirty] = useState(false);
   const [savedMsg, setSavedMsg] = useState('');
+  // True when the editor is showing WB defaults for an operator that has NO
+  // saved doc yet. Nothing is written until the admin clicks Save.
+  const [seeded, setSeeded] = useState(false);
 
   const customerId = customerIdForOperator(operator);
 
   const load = useCallback(async () => {
-    if (!customerId) { setReqs([]); setEnabled(true); return; }
+    if (!customerId) { setReqs([]); setEnabled(true); setSeeded(false); return; }
     setLoading(true);
     try {
       const spec = await loadPhotoRequirementSpec(customerId);
-      setReqs(spec?.requirements || []);
-      setEnabled(spec?.enabled !== false);
+      if (spec) {
+        // Existing customer/operator — load their saved config untouched.
+        setReqs(spec.requirements || []);
+        setEnabled(spec.enabled !== false);
+        setSeeded(false);
+      } else {
+        // No doc yet → seed the editor from WB defaults so the admin never sees
+        // a blank list. This is in-memory only; the real photo_requirements doc
+        // is written only when the admin clicks Save.
+        setReqs(getDefaultPhotoRequirements());
+        setEnabled(true);
+        setSeeded(true);
+      }
       setDirty(false);
       setSavedMsg('');
     } catch (e) {
@@ -134,6 +149,7 @@ export function RequiredPhotoSpecs({ company }: Props) {
     try {
       const v = await savePhotoRequirementSpec(customerId, reqs, enabled);
       setDirty(false);
+      setSeeded(false);   // it's now a real saved doc, no longer just defaults
       setSavedMsg(`Saved (v${v}) — drivers refresh on next job load.`);
     } catch (e: any) {
       console.error('[RequiredPhotoSpecs] save failed:', e);
@@ -204,6 +220,13 @@ export function RequiredPhotoSpecs({ company }: Props) {
             <div className="text-gray-500 text-xs mt-3">Loading…</div>
           ) : (
             <div className="space-y-3 mt-3">
+              {seeded && (
+                <div className="text-xs rounded-md border border-blue-700/60 bg-blue-900/20 text-blue-200 px-3 py-2">
+                  Showing <span className="font-semibold">WB default</span> photo requirements for this operator
+                  (no saved config yet). Edit if you like, then <span className="font-semibold">Save</span> to apply
+                  them — nothing is saved until you do.
+                </div>
+              )}
               {reqs.length === 0 && (
                 <div className="text-gray-500 text-xs italic">No required photos yet. Add one below.</div>
               )}
