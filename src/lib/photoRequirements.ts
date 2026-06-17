@@ -65,12 +65,35 @@ function normalizeReq(r: any): PhotoRequirement {
     phase: r.phase === 'pickup' || r.phase === 'dropoff' ? r.phase : 'any',
     appliesTo: r.appliesTo === 'pw' || r.appliesTo === 'sw' ? r.appliesTo : 'any',
     active: r.active !== false,
-    sampleStoragePath: r.sampleStoragePath || undefined,
-    sampleUrl: r.sampleUrl || undefined,
+    // Optional fields are OMITTED when absent — never written as `undefined`,
+    // which Firestore setDoc rejects. (A requirement with no uploaded sample,
+    // e.g. a freshly-seeded customer, would otherwise serialize undefined here.)
+    ...(r.sampleStoragePath ? { sampleStoragePath: r.sampleStoragePath } : {}),
+    ...(r.sampleUrl ? { sampleUrl: r.sampleUrl } : {}),
     // Pass through only when explicitly set, so existing (sourceless) docs stay
     // sourceless until something deliberately stamps them.
     ...(r.source === 'wb-default' || r.source === 'customer' ? { source: r.source } : {}),
   };
+}
+
+/**
+ * Deep-strip `undefined` values from an object/array so a save payload can never
+ * carry an undefined field (which Firestore setDoc rejects). Defense-in-depth on
+ * top of normalizeReq — applied to the whole doc right before setDoc.
+ */
+function stripUndefinedDeep<T>(value: T): T {
+  if (Array.isArray(value)) {
+    return value.map((v) => stripUndefinedDeep(v)) as unknown as T;
+  }
+  if (value && typeof value === 'object' && !(value instanceof Timestamp)) {
+    const out: Record<string, any> = {};
+    for (const [k, v] of Object.entries(value as Record<string, any>)) {
+      if (v === undefined) continue;
+      out[k] = stripUndefinedDeep(v);
+    }
+    return out as T;
+  }
+  return value;
 }
 
 /** Load a customer's spec, or null if none exists yet. */
@@ -137,16 +160,15 @@ export async function savePhotoRequirementSpec(
   const cur = await getDoc(ref0);
   const curVersion = cur.exists() && typeof (cur.data() as any).version === 'number' ? (cur.data() as any).version : 0;
   const version = curVersion + 1;
-  await setDoc(
-    ref0,
-    {
-      customerId,
-      enabled,
-      version,
-      requirements: requirements.map(normalizeReq),
-      updatedAt: Timestamp.now(),
-    },
-    { merge: true },
-  );
+  // stripUndefinedDeep is belt-and-suspenders over normalizeReq: the payload is
+  // guaranteed to contain no `undefined` field value before it reaches setDoc.
+  const payload = stripUndefinedDeep({
+    customerId,
+    enabled,
+    version,
+    requirements: requirements.map(normalizeReq),
+    updatedAt: Timestamp.now(),
+  });
+  await setDoc(ref0, payload, { merge: true });
   return version;
 }
