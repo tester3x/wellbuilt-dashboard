@@ -12,7 +12,7 @@ import {
   uploadRequirementSample,
   suggestPhotoCriteria,
 } from '@/lib/photoRequirements';
-import { getDefaultPhotoRequirements } from '@/lib/defaultPhotoRequirements';
+import { getDefaultPhotoRequirements, defaultRequirementById } from '@/lib/defaultPhotoRequirements';
 
 interface Props {
   company: CompanyConfig;
@@ -103,6 +103,36 @@ export function RequiredPhotoSpecs({ company }: Props) {
 
   const addReq = () => { setReqs(rs => [...rs, blankReq()]); setDirty(true); setSavedMsg(''); };
   const removeReq = (id: string) => { setReqs(rs => rs.filter(r => r.id !== id)); setDirty(true); setSavedMsg(''); };
+
+  // Reset ONE requirement to its WB default. Only available when the id exists in
+  // DEFAULT_PHOTO_REQUIREMENTS. Replaces the requirement in place (position kept).
+  // Local editor state only — Save is still required to persist.
+  const resetReq = (id: string) => {
+    const def = defaultRequirementById(id);
+    if (!def) return;
+    if (!window.confirm('Reset this requirement to the WB default?')) return;
+    setReqs(rs => rs.map(r => (r.id === id ? { ...def } : r)));
+    setDirty(true);
+    setSavedMsg('');
+  };
+
+  // Reset ALL matching WB defaults. Matching default ids are replaced by the
+  // template (in place); customer-only requirements are KEPT; any default id not
+  // currently present is added back (appended). Local editor state only — Save
+  // is still required to persist.
+  const resetAll = () => {
+    if (!window.confirm(
+      'Reset all matching WB default requirements? This will replace current editor values for matching default ids. '
+      + 'Custom requirements are kept. Save is still required to persist.')) return;
+    const defaults = getDefaultPhotoRequirements();
+    const defaultIds = new Set(defaults.map(d => d.id));
+    const replaced = reqs.map(r => (defaultIds.has(r.id) ? (defaultRequirementById(r.id) as PhotoRequirement) : r));
+    const presentIds = new Set(reqs.map(r => r.id));
+    const missing = defaults.filter(d => !presentIds.has(d.id));
+    setReqs([...replaced, ...missing]);
+    setDirty(true);
+    setSavedMsg('');
+  };
 
   const onPickSample = async (req: PhotoRequirement, file: File | null) => {
     if (!file || !customerId) return;
@@ -273,6 +303,13 @@ export function RequiredPhotoSpecs({ company }: Props) {
                         >
                           <span className={`absolute top-0.5 left-0.5 w-4 h-4 rounded-full bg-white transition-transform ${r.active ? 'translate-x-4' : 'translate-x-0'}`} />
                         </button>
+                        {defaultRequirementById(r.id) && (
+                          <button
+                            onClick={() => resetReq(r.id)}
+                            className="text-blue-300/70 hover:text-blue-200 text-xs flex-shrink-0 px-1"
+                            title="Reset this requirement to the WB default"
+                          >↺ default</button>
+                        )}
                         <button
                           onClick={() => removeReq(r.id)}
                           className="text-red-400/70 hover:text-red-300 text-sm flex-shrink-0 px-1"
@@ -374,7 +411,10 @@ export function RequiredPhotoSpecs({ company }: Props) {
               ))}
 
               <div className="flex items-center justify-between">
-                <button onClick={addReq} className="text-orange-400 hover:text-orange-300 text-xs font-medium">+ Add Required Photo</button>
+                <div className="flex items-center gap-4">
+                  <button onClick={addReq} className="text-orange-400 hover:text-orange-300 text-xs font-medium">+ Add Required Photo</button>
+                  <button onClick={resetAll} className="text-blue-300 hover:text-blue-200 text-xs font-medium" title="Replace matching WB-default requirements; keep custom ones; re-add missing defaults">↺ Reset All to WB Defaults</button>
+                </div>
                 {!dirty && savedMsg && <span className="text-green-400 text-xs">{savedMsg}</span>}
               </div>
             </div>
