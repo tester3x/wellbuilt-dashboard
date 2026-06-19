@@ -5092,6 +5092,22 @@ export const validatePhotoCompliance = httpsV2.onCall(
     // to review (score meets the requirement's framing-confidence threshold).
     // Condition (wet/spill) lives in concern*, never here.
     const pass = accepted && score >= threshold;
+    // 6/20/2026 — driver-facing reason must never contradict the verdict. The
+    // model writes "reason" for its ACCEPTANCE judgment (e.g. "Looks good." when
+    // accepted/clean) but the photo can still FAIL on score < threshold
+    // (framing/clarity below the bar). Showing "Looks good." on a FAIL left
+    // drivers reshooting blind (field 6/18-6/19). When the fail is purely
+    // score-based (accepted=true but score<threshold) AND the model's reason is
+    // empty or non-actionable/positive, replace it with an actionable clarity
+    // message that names the target. accepted=false reasons (real missing proof)
+    // and already-actionable score-fail reasons (e.g. "Couldn't confirm hose
+    // fully seated…") are preserved untouched.
+    const NON_ACTIONABLE_REASON = /^\s*(looks good|good|ok|okay|fine|all good|clear|nice)\.?\s*$/i;
+    let driverReason = reason;
+    if (!pass && accepted && score < threshold && (!reason || NON_ACTIONABLE_REASON.test(reason))) {
+      const tgt = requirementLabel || 'the required detail';
+      driverReason = `Not clear enough — move closer and hold steady so ${tgt} is sharp, then retake.`;
+    }
     // 3-light verdict for the client (advisory mode). Decided here so client +
     // dashboard agree. retake = proof/framing problem; review = accepted but a
     // human should look (concern); verified = clean accepted photo.
@@ -5107,7 +5123,8 @@ export const validatePhotoCompliance = httpsV2.onCall(
     await writeAudit({
       provider, model: usedModel,
       verdict: pass ? 'pass' : 'fail',
-      accepted, score, reason,
+      accepted, score, reason,           // raw model reason (forensic)
+      driverReason,                      // reason actually shown to the driver
       concernLevel, concernReason, redFlag,
       weatherContextUsed, weatherSummary,
       estimatedCostUsd, inputTokens: usageIn, outputTokens: usageOut,
@@ -5120,7 +5137,7 @@ export const validatePhotoCompliance = httpsV2.onCall(
       outcome,          // 'verified' | 'review' | 'retake' (advisory 3-light)
       score,
       threshold,
-      reason,
+      reason: driverReason,   // driver-facing reason (never "Looks good." on a fail)
       concernLevel,
       concernReason,
       redFlag,
