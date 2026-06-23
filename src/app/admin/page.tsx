@@ -22,6 +22,7 @@ import { DriversTab } from '@/components/admin/DriversTab';
 import { CompaniesTab } from '@/components/admin/CompaniesTab';
 import GpsRoutesTab from '@/components/admin/GpsRoutesTab';
 import { EquipmentTab } from '@/components/admin/EquipmentTab';
+import { BulkWellImportModal } from '@/components/admin/BulkWellImportModal';
 
 interface WellConfig {
   route?: string;
@@ -136,6 +137,7 @@ export default function AdminPage() {
 
   const [message, setMessage] = useState('');
   const [activeTab, setActiveTab] = useState<'routes' | 'wells' | 'drivers' | 'companies' | 'gpsroutes' | 'equipment'>('wells');
+  const [showBulkImport, setShowBulkImport] = useState(false);
 
   // Read ?tab= from URL to deep-link into specific admin section (e.g. from pulsing Admin badge)
   useEffect(() => {
@@ -1007,7 +1009,7 @@ export default function AdminPage() {
             onClick={() => setActiveTab('wells')}
             className={`px-4 py-2 rounded ${activeTab === 'wells' ? 'bg-blue-600 text-white' : 'bg-gray-700 text-gray-300'}`}
           >
-            Wells
+            Maintained Wells
           </button>
           <button
             onClick={() => setActiveTab('routes')}
@@ -1161,7 +1163,7 @@ export default function AdminPage() {
             {/* Well List */}
             <div className="bg-gray-800 rounded-lg p-4 flex flex-col min-h-0 overflow-hidden">
               <div className="flex items-center justify-between mb-4 flex-shrink-0">
-                <h2 className="text-lg font-semibold text-white">Wells</h2>
+                <h2 className="text-lg font-semibold text-white">Maintained Wells</h2>
                 <input
                   type="text"
                   value={wellSearch}
@@ -1170,6 +1172,20 @@ export default function AdminPage() {
                   className="w-1/3 px-3 py-1 bg-gray-700 text-white rounded text-sm"
                 />
               </div>
+              {Object.keys(configs).length === 0 ? (
+                <div className="flex-1 min-h-0 flex flex-col items-center justify-center text-center px-6">
+                  <p className="text-gray-300 font-medium">No maintained wells configured.</p>
+                  <p className="text-gray-500 text-sm mt-2 mb-4">
+                    Import your well list to start monitoring, routing, and reporting.
+                  </p>
+                  <button
+                    onClick={() => setShowBulkImport(true)}
+                    className="px-4 py-2 bg-blue-600 hover:bg-blue-700 text-white rounded text-sm"
+                  >
+                    Bulk Import Wells
+                  </button>
+                </div>
+              ) : (
               <div className="space-y-2 overflow-y-auto flex-1 min-h-0">
                 {Object.keys(configs)
                   .filter(wellName => wellName.toLowerCase().includes(wellSearch.toLowerCase()))
@@ -1202,13 +1218,22 @@ export default function AdminPage() {
                   </div>
                 ))}
               </div>
+              )}
             </div>
 
             {/* Well Actions — scrollable right column */}
             <div className="space-y-4 overflow-y-auto min-h-0">
               {/* Add Well */}
               <div className="bg-gray-800 rounded-lg p-4">
-                <h3 className="text-white font-medium mb-3">Add New Well</h3>
+                <div className="flex items-center justify-between mb-3">
+                  <h3 className="text-white font-medium">Add Maintained Well</h3>
+                  <button
+                    onClick={() => setShowBulkImport(true)}
+                    className="px-3 py-1.5 bg-indigo-600 hover:bg-indigo-700 text-white rounded text-sm"
+                  >
+                    Bulk Import Wells
+                  </button>
+                </div>
                 <div className="space-y-3">
                   {/* State + Database search row — finds the legal NDIC/MBOGC record */}
                   <div className="flex gap-2">
@@ -2090,6 +2115,14 @@ export default function AdminPage() {
           />
         )}
       </main>
+
+      {/* Bulk Maintained Well Import (P1: preview only — no onImport, no writes) */}
+      <BulkWellImportModal
+        isOpen={showBulkImport}
+        onClose={() => setShowBulkImport(false)}
+        routes={routes}
+        existingWellNames={Object.keys(configs)}
+      />
     </div>
   );
 }

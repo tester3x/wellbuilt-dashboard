@@ -33,6 +33,18 @@ export interface NdicOperator {
   state?: string; // 'ND' | 'MT'
 }
 
+// ── Name normalization ──────────────────────────────────────────────────────
+
+/**
+ * Aggressively normalize a well name to a compact comparison key.
+ * Uppercases and strips everything except letters/digits, so
+ * "PIKE FEDERAL 1-3-2H", "Pike Federal 1 3 2H", and "PIKE-FEDERAL-1-3-2H"
+ * all collapse to "PIKEFEDERAL132H". Used by bulk import matching.
+ */
+export function normalizeWellName(name: string): string {
+  return (name || '').toUpperCase().replace(/[^A-Z0-9]/g, '');
+}
+
 // ── In-memory cache ─────────────────────────────────────────────────────────
 
 let operatorsCache: NdicOperator[] | null = null;
