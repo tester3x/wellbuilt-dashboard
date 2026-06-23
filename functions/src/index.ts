@@ -1890,146 +1890,213 @@ export const processEditRequest = functionsV1.database
       console.log(`Edit: Updated wells/${wellName}/status (full recalc)`);
     }
 
-    // ── Cascade to Firestore: ticket doc, dispatch doc, invoice doc ──
+    // ── Cascade to Firestore: DETERMINISTIC identity resolution ──
+    // P0 (2026-06-23): the prior back-patch matched a ticket by packetId and, on
+    // miss, by wellName+date+bbls. With two same-well/same-day tickets that bbls
+    // heuristic collided and (a) updated the WRONG ticket and (b) backfilled
+    // packetId onto it, poisoning all future edits (#19017 vs #19203 for
+    // 20260622_192528_Gab1_ivnuo2). The REAL anchor is invoice.packetId (+ the
+    // invoiceDocId carried on the processed packet). Resolve the target
+    // deterministically; NEVER write Firestore unless identity is proven; NEVER
+    // stamp packetId from a heuristic; NO docs[0] / bbls-only / totalBBL==newBbls
+    // / cancelled-by-amount matching.
+    const editDiag = async (event: string, result: string, reason: string, extra: Record<string, any> = {}) => {
+      console.log(`[${event}] ${result} — ${reason} ${JSON.stringify(extra)}`);
+      try {
+        await admin.firestore().collection('wb_diagnostics').add({
+          app: 'cf', area: 'edit', event, result, reason,
+          source: data.source || 'cf',
+          extra: { originalPacketId, wellName, newBblsTaken, ...extra },
+          timestamp: admin.firestore.FieldValue.serverTimestamp(),
+        });
+      } catch {}
+    };
+
     try {
       const firestore = admin.firestore();
+      const newTopFI = inchesToFeetInches(newTankTopInches);
+      const newBottomFI = inchesToFeetInches(newTankAfterInches);
+      const isCancelled = (inv: any) => inv?.status === 'cancelled' || inv?.status === 'canceled';
 
-      // Find ticket by packetId (submitTicket CF writes packetId on ticket docs)
-      let ticketSnap = await firestore.collection('tickets')
-        .where('packetId', '==', originalPacketId)
-        .limit(1)
-        .get();
+      await editDiag('edit.firestoreResolve.start', 'ok', 'resolving exact Firestore identity', {
+        invoiceDocIdOnPacket: origPacket.invoiceDocId || null,
+      });
 
-      // Fallback: find by wellName/location + date (for tickets created before packetId was stored)
-      if (ticketSnap.empty && wellName) {
-        const origDate = origPacket.dateTime || '';
-        // Normalize date to MM/DD/YYYY (WB T ticket format) from either "M/D/YYYY H:MM" or ISO
-        let datePart = origDate.split(' ')[0] || origDate.split('T')[0] || '';
-        if (datePart.includes('-')) {
-          // ISO format YYYY-MM-DD → MM/DD/YYYY
-          const [y, m, d] = datePart.split('-');
-          datePart = `${m}/${d}/${y}`;
-        } else if (datePart.includes('/')) {
-          // M/D/YYYY → MM/DD/YYYY (pad with zeros)
-          const parts = datePart.split('/');
-          datePart = `${parts[0].padStart(2, '0')}/${parts[1].padStart(2, '0')}/${parts[2]}`;
+      let invoiceRef: any = null;
+      let invoiceData: any = null;
+      let ticketRef: any = null;
+      let resolvedVia: string | null = null;
+
+      // Resolve the ticket doc WITHIN a known invoice via its ticketSummaries.
+      const resolveTicketFromInvoice = async (invRef: any, invData: any): Promise<any> => {
+        const summaries: any[] = Array.isArray(invData.ticketSummaries) ? invData.ticketSummaries : [];
+        let chosen: any = summaries.find(s => s && s.packetId && s.packetId === originalPacketId);
+        if (!chosen && summaries.length === 1) chosen = summaries[0];
+        if (!chosen && summaries.length === 0) {
+          const tickets: string[] = Array.isArray(invData.tickets) ? invData.tickets : [];
+          if (tickets.length === 1) chosen = { ticketNumber: tickets[0] };
         }
-        console.log(`Edit: Firestore fallback searching date=${datePart} wellName=${wellName}`);
-        if (datePart) {
-          // Try wellName field first, then location (WB T uses 'location' for well name)
-          for (const field of ['wellName', 'location']) {
-            const fallbackSnap = await firestore.collection('tickets')
-              .where(field, '==', wellName)
-              .where('date', '==', datePart)
-              .limit(5)
-              .get();
-            if (!fallbackSnap.empty) {
-              // If multiple tickets for same well+date, match by BBLs (original or current)
-              const origBbls = String(origPacket.bblsTaken);
-              const match = fallbackSnap.docs.find(d => d.data().bbls === origBbls)
-                || fallbackSnap.docs[0]; // Fallback to first if no BBL match
-              ticketSnap = { empty: false, docs: [match] } as any;
-              console.log(`Edit: Found ticket via fallback (${field}+date) for ${wellName}: ${match.id}`);
-              break;
+        if (!chosen) return null;
+        if (chosen.docId) return firestore.collection('tickets').doc(chosen.docId);
+        if (chosen.ticketNumber) {
+          const tq = await firestore.collection('tickets')
+            .where('ticketNumber', '==', String(chosen.ticketNumber))
+            .where('invoiceDocId', '==', invRef.id)
+            .limit(2).get();
+          if (tq.size === 1) return tq.docs[0].ref;
+        }
+        return null;
+      };
+
+      // A. By the invoiceDocId carried on the processed packet (strongest).
+      if (origPacket.invoiceDocId) {
+        const snap = await firestore.collection('invoices').doc(String(origPacket.invoiceDocId)).get();
+        if (snap.exists) {
+          const inv = snap.data() as any;
+          if (isCancelled(inv)) {
+            await editDiag('edit.firestoreResolve.byInvoiceDocId.success', 'skipped', 'invoice is cancelled', { invoiceDocId: snap.id });
+          } else if (inv.packetId && inv.packetId !== originalPacketId) {
+            await editDiag('edit.firestoreResolve.byInvoiceDocId.success', 'skipped', 'invoice.packetId mismatch', { invoiceDocId: snap.id, invoicePacketId: inv.packetId });
+          } else {
+            invoiceRef = snap.ref; invoiceData = inv; resolvedVia = 'invoiceDocId';
+            ticketRef = await resolveTicketFromInvoice(snap.ref, inv);
+            await editDiag('edit.firestoreResolve.byInvoiceDocId.success', 'ok', 'resolved invoice via packet.invoiceDocId', { invoiceDocId: snap.id, ticketResolved: !!ticketRef });
+          }
+        }
+      }
+
+      // B. By invoices where packetId == originalPacketId (non-cancelled, exactly one).
+      if (!invoiceRef) {
+        const invq = await firestore.collection('invoices').where('packetId', '==', originalPacketId).limit(5).get();
+        const live = invq.docs.filter(d => !isCancelled(d.data()));
+        if (live.length === 1) {
+          invoiceRef = live[0].ref; invoiceData = live[0].data(); resolvedVia = 'invoicePacketId';
+          ticketRef = await resolveTicketFromInvoice(invoiceRef, invoiceData);
+          await editDiag('edit.firestoreResolve.byInvoicePacketId.success', 'ok', 'resolved invoice by packetId', { invoiceDocId: invoiceRef.id, ticketResolved: !!ticketRef });
+        } else if (live.length > 1) {
+          await editDiag('edit.firestoreCascade.noExactIdentity.noWrite', 'skipped', 'multiple non-cancelled invoices match packetId', { count: live.length });
+        } else if (invq.size > 0) {
+          await editDiag('edit.firestoreCascade.noExactIdentity.noWrite', 'skipped', 'only cancelled invoices match packetId', { count: invq.size });
+        }
+      }
+
+      // C. By tickets where packetId == originalPacketId — LOW priority (may be
+      //    poisoned). Verify the matched ticket's invoice actually anchors this packet.
+      if (!invoiceRef && !ticketRef) {
+        const tq = await firestore.collection('tickets').where('packetId', '==', originalPacketId).limit(5).get();
+        if (tq.size === 1) {
+          const cand = tq.docs[0];
+          const candInvId = cand.data().invoiceDocId;
+          let verified = false;
+          if (candInvId) {
+            const invSnap = await firestore.collection('invoices').doc(String(candInvId)).get();
+            if (invSnap.exists) {
+              const inv = invSnap.data() as any;
+              const claimsPacket = inv.packetId === originalPacketId;
+              const listsTicket = !inv.packetId && Array.isArray(inv.tickets) && inv.tickets.includes(String(cand.data().ticketNumber));
+              if (!isCancelled(inv) && (claimsPacket || listsTicket)) {
+                invoiceRef = invSnap.ref; invoiceData = inv; ticketRef = cand.ref; verified = true; resolvedVia = 'ticketPacketId';
+              }
             }
           }
+          if (verified) {
+            await editDiag('edit.firestoreResolve.byTicketPacketId.success', 'ok', 'resolved + verified via ticket.packetId', { ticketId: cand.id, invoiceDocId: invoiceRef.id });
+          } else {
+            await editDiag('edit.firestoreCascade.suspiciousPoisonedTicket.noWrite', 'skipped', 'ticket.packetId match not verified against its invoice (possible poison)', { ticketId: cand.id, ticketInvoiceDocId: candInvId || null });
+          }
+        } else if (tq.size > 1) {
+          await editDiag('edit.firestoreCascade.suspiciousPoisonedTicket.noWrite', 'skipped', 'multiple tickets carry this packetId (poisoned)', { count: tq.size });
         }
       }
 
-      if (!ticketSnap.empty) {
-        const ticketDoc = ticketSnap.docs[0];
-        const ticketData = ticketDoc.data();
-        await ticketDoc.ref.update({
-          bbls: String(newBblsTaken),
-          top: inchesToFeetInches(newTankTopInches),
-          bottom: inchesToFeetInches(newTankAfterInches),
+      // D. Heuristic wellName+date — DIAGNOSTIC ONLY. Never write, never stamp packetId.
+      if (!invoiceRef && !ticketRef) {
+        let datePart = (origPacket.dateTime || '').split(' ')[0] || (origPacket.dateTime || '').split('T')[0] || '';
+        if (datePart.includes('-')) { const [y, m, d] = datePart.split('-'); datePart = `${m}/${d}/${y}`; }
+        else if (datePart.includes('/')) { const p = datePart.split('/'); datePart = `${p[0].padStart(2, '0')}/${p[1].padStart(2, '0')}/${p[2]}`; }
+        let candidateCount = 0;
+        if (datePart && wellName) {
+          const cands = await firestore.collection('tickets').where('wellName', '==', wellName).where('date', '==', datePart).limit(10).get();
+          candidateCount = cands.size;
+        }
+        await editDiag('edit.firestoreResolve.heuristicAmbiguous.noWrite', 'skipped', 'no deterministic identity; heuristic candidates left for MANUAL resolution (no Firestore write)', { datePart, candidateCount });
+      }
+
+      // ── Write ONLY when identity is exact ──
+      if (invoiceRef && invoiceData) {
+        // Ticket doc (if resolved). packetId backfill is safe — match was deterministic.
+        if (ticketRef) {
+          await ticketRef.update({
+            bbls: String(newBblsTaken),
+            top: newTopFI,
+            bottom: newBottomFI,
+            editedAt: admin.firestore.Timestamp.now(),
+            editedBy: data.source || 'dashboard',
+            updatedBy: data.source || 'dashboard',
+            updatedAt: admin.firestore.Timestamp.now(),
+            packetId: originalPacketId,
+          });
+        }
+
+        // Invoice doc: update the matching summary + recompute totalBBL from summaries
+        // + reconcile packetSnapshot. Preserve all other summary/invoice fields.
+        const summaries: any[] = Array.isArray(invoiceData.ticketSummaries)
+          ? invoiceData.ticketSummaries.map((s: any) => ({ ...s })) : [];
+        let matchedSummary: any = summaries.find(s =>
+          (s.packetId && s.packetId === originalPacketId) || (ticketRef && s.docId && s.docId === ticketRef.id));
+        if (!matchedSummary && summaries.length === 1) matchedSummary = summaries[0];
+        if (matchedSummary) {
+          matchedSummary.qty = String(newBblsTaken);
+          matchedSummary.bbls = String(newBblsTaken);
+          matchedSummary.top = newTopFI;
+          matchedSummary.bottom = newBottomFI;
+        }
+        let invTotal = 0;
+        if (summaries.length > 0) {
+          for (const s of summaries) invTotal += parseFloat(String(s.qty ?? s.bbls ?? '0')) || 0;
+        } else {
+          invTotal = newBblsTaken;
+        }
+        const existingSnap = invoiceData.packetSnapshot && typeof invoiceData.packetSnapshot === 'object' ? invoiceData.packetSnapshot : {};
+        const invUpdate: Record<string, any> = {
+          totalBBL: invTotal,
+          packetSnapshot: { ...existingSnap, bblsTaken: newBblsTaken, tankAfterFeet: newBottomFI },
           editedAt: admin.firestore.Timestamp.now(),
           editedBy: data.source || 'dashboard',
-          packetId: originalPacketId, // Backfill for future edits
+        };
+        if (summaries.length > 0) invUpdate.ticketSummaries = summaries;
+        await invoiceRef.update(invUpdate);
+
+        // Dispatch cascade (recompute from tickets) using the packet's own dispatchId.
+        const dispatchId = origPacket.dispatchId;
+        if (dispatchId && ticketRef) {
+          const allTicketsSnap = await firestore.collection('tickets').where('dispatchId', '==', dispatchId).get();
+          let dTotal = 0;
+          allTicketsSnap.forEach(t => { dTotal += (t.id === ticketRef.id ? newBblsTaken : (parseFloat(t.data().bbls) || 0)); });
+          await firestore.collection('dispatches').doc(dispatchId).update({ totalBBL: dTotal }).catch(() => {});
+        }
+
+        // canonical_jobs reconcile + edited event.
+        try {
+          await firestore.collection('canonical_jobs').doc(originalPacketId).update({
+            bblsTaken: newBblsTaken,
+            tankLevelFeet: newTankTopInches / 12,
+            tankAfterFeet: newTankAfterInches / 12,
+            updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+            events: admin.firestore.FieldValue.arrayUnion({
+              type: 'edited', actorSource: data.source || 'cf', timestamp: Date.now(),
+              extra: { bbls: newBblsTaken, via: resolvedVia },
+            }),
+          });
+        } catch (cjErr) {
+          console.log('Edit: canonical_jobs reconcile skipped:', (cjErr as any)?.message);
+        }
+
+        await editDiag('edit.firestoreCascade.success', 'ok', 'updated exact ticket/invoice/canonical', {
+          invoiceDocId: invoiceRef.id, ticketId: ticketRef?.id || null, resolvedVia, totalBBL: invTotal,
         });
-        console.log(`Edit: Updated Firestore ticket ${ticketDoc.id} bbls=${newBblsTaken}`);
-
-        // Cascade to dispatch doc if ticket has a dispatchId
-        const dispatchId = ticketData.dispatchId;
-        if (dispatchId) {
-          // Recalculate totalBBL from all tickets for this dispatch
-          const allTicketsSnap = await firestore.collection('tickets')
-            .where('dispatchId', '==', dispatchId)
-            .get();
-          let totalBBL = 0;
-          allTicketsSnap.forEach(t => {
-            totalBBL += (t.id === ticketDoc.id ? newBblsTaken : (parseFloat(t.data().bbls) || 0));
-          });
-          await firestore.collection('dispatches').doc(dispatchId).update({
-            totalBBL,
-          });
-          console.log(`Edit: Updated dispatch ${dispatchId} totalBBL=${totalBBL}`);
-        }
-
-        // Cascade to invoice doc if ticket has an invoiceDocId
-        const invoiceDocId = ticketData.invoiceDocId;
-        if (invoiceDocId) {
-          // Recalculate totalBBL from all tickets for this invoice
-          const invTicketsSnap = await firestore.collection('tickets')
-            .where('invoiceDocId', '==', invoiceDocId)
-            .get();
-          let invTotalBBL = 0;
-          invTicketsSnap.forEach(t => {
-            invTotalBBL += (t.id === ticketDoc.id ? newBblsTaken : (parseFloat(t.data().bbls) || 0));
-          });
-          await firestore.collection('invoices').doc(invoiceDocId).update({
-            totalBBL: invTotalBBL,
-          });
-          console.log(`Edit: Updated invoice ${invoiceDocId} totalBBL=${invTotalBBL}`);
-        }
       } else {
-        console.log(`Edit: No Firestore ticket found for packetId ${originalPacketId} — trying direct invoice search`);
-      }
-
-      // Direct invoice search — if ticket path didn't find/update the invoice,
-      // search invoices directly by wellName + date. Payroll reads from invoices, not tickets.
-      // This catches s_t mode jobs where ticket→invoice link may be missing.
-      const origDate = origPacket.dateTime || '';
-      let invoiceDatePart = origDate.split(' ')[0] || origDate.split('T')[0] || '';
-      if (invoiceDatePart.includes('-')) {
-        const [y, m, d] = invoiceDatePart.split('-');
-        invoiceDatePart = `${m}/${d}/${y}`;
-      } else if (invoiceDatePart.includes('/')) {
-        const parts = invoiceDatePart.split('/');
-        invoiceDatePart = `${parts[0].padStart(2, '0')}/${parts[1].padStart(2, '0')}/${parts[2]}`;
-      }
-
-      if (invoiceDatePart) {
-        const invoiceSnap = await firestore.collection('invoices')
-          .where('wellName', '==', wellName)
-          .where('date', '==', invoiceDatePart)
-          .limit(5)
-          .get();
-
-        if (!invoiceSnap.empty) {
-          // Match by original BBLs or driver name
-          const origBblNum = origPacket.bblsTaken;
-          const driverName = origPacket.driverName || '';
-          const match = invoiceSnap.docs.find(d => {
-            const inv = d.data();
-            return inv.totalBBL === origBblNum || inv.totalBBL === newBblsTaken
-              || (driverName && (inv.driver || '').includes(driverName));
-          }) || invoiceSnap.docs[0];
-
-          const invData = match.data();
-          if (invData.totalBBL !== newBblsTaken) {
-            await match.ref.update({
-              totalBBL: newBblsTaken,
-              editedAt: admin.firestore.Timestamp.now(),
-              editedBy: data.source || 'dashboard',
-            });
-            console.log(`Edit: Direct invoice update ${match.id} totalBBL: ${invData.totalBBL}→${newBblsTaken}`);
-          } else {
-            console.log(`Edit: Invoice ${match.id} already has correct totalBBL=${newBblsTaken}`);
-          }
-        } else {
-          console.log(`Edit: No invoice found for ${wellName} on ${invoiceDatePart}`);
-        }
+        await editDiag('edit.firestoreCascade.noExactIdentity.noWrite', 'skipped', 'no exact Firestore identity — RTDB updated, Firestore left untouched (manual resolution)', {});
       }
     } catch (fsErr) {
       // Non-blocking — RTDB is already updated, Firestore cascade is best-effort
