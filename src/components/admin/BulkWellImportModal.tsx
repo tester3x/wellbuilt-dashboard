@@ -1,8 +1,10 @@
 'use client';
 
 // Bulk Maintained Well Import modal. Single modal, in-place states
-// (input → preview). P1 is PREVIEW ONLY — no writes. The Import button is
-// inert unless an `onImport` handler is supplied (wired in P2).
+// (input → preview → done). Preview matches a pasted/CSV list against the
+// selected operators' NDIC catalogs and buckets each row. MATCHED rows are
+// checked by default; NEEDS_REVIEW rows can be opted in but are never imported
+// automatically. Writes are delegated to the `onImport` handler (P2).
 
 import { useEffect, useState } from 'react';
 import { loadOperators, loadWellsForOperator, type NdicOperator } from '@/lib/firestoreWells';
@@ -14,6 +16,15 @@ import {
   type ImportStatus,
 } from '@/lib/bulkWellImport';
 
+interface ImportSummary {
+  imported: number;
+  failed: number;
+  duplicate: number;
+  alreadyMaintained: number;
+  notFound: number;
+  reviewNotApproved: number;
+}
+
 interface BulkWellImportModalProps {
   isOpen: boolean;
   onClose: () => void;
@@ -21,8 +32,11 @@ interface BulkWellImportModalProps {
   routes: string[];
   /** Current maintained-well names, for ALREADY_MAINTAINED detection. */
   existingWellNames: string[];
-  /** P2: supplied to enable writes. Receives the rows approved for import. */
-  onImport?: (rows: ImportRow[]) => Promise<void>;
+  /** Writes the approved rows. Reports progress; resolves with write tallies. */
+  onImport?: (
+    rows: ImportRow[],
+    onProgress?: (current: number, total: number) => void,
+  ) => Promise<{ imported: number; failed: number }>;
 }
 
 const STATUS_META: Record<ImportStatus, { icon: string; cls: string; label: string }> = {
@@ -32,6 +46,8 @@ const STATUS_META: Record<ImportStatus, { icon: string; cls: string; label: stri
   DUPLICATE: { icon: '⚠', cls: 'text-yellow-400', label: 'duplicate' },
   ALREADY_MAINTAINED: { icon: '●', cls: 'text-gray-400', label: 'already maintained' },
 };
+
+const SELECTABLE: ImportStatus[] = ['MATCHED', 'NEEDS_REVIEW'];
 
 export function BulkWellImportModal({
   isOpen,
@@ -45,10 +61,13 @@ export function BulkWellImportModal({
   const [defaultRoute, setDefaultRoute] = useState('Unrouted');
   const [pasteText, setPasteText] = useState('');
 
-  const [step, setStep] = useState<'input' | 'preview'>('input');
+  const [step, setStep] = useState<'input' | 'preview' | 'done'>('input');
   const [rows, setRows] = useState<ImportRow[]>([]);
+  const [selected, setSelected] = useState<Set<number>>(new Set());
   const [parsing, setParsing] = useState(false);
   const [importing, setImporting] = useState(false);
+  const [progress, setProgress] = useState<{ current: number; total: number } | null>(null);
+  const [summary, setSummary] = useState<ImportSummary | null>(null);
   const [error, setError] = useState<string | null>(null);
 
   // Load operator list when the modal opens.
@@ -65,9 +84,12 @@ export function BulkWellImportModal({
     setPasteText('');
     setStep('input');
     setRows([]);
+    setSelected(new Set());
     setError(null);
     setParsing(false);
     setImporting(false);
+    setProgress(null);
+    setSummary(null);
   }, [isOpen]);
 
   if (!isOpen) return null;
@@ -104,6 +126,8 @@ export function BulkWellImportModal({
       }
       const matched = matchRows(parsed, candidates, existingWellNames, defaultRoute);
       setRows(matched);
+      // MATCHED rows checked by default; NEEDS_REVIEW left unchecked.
+      setSelected(new Set(matched.map((r, i) => (r.status === 'MATCHED' ? i : -1)).filter(i => i >= 0)));
       setStep('preview');
     } catch {
       setError('Failed to load operator wells. Try again.');
@@ -112,20 +136,50 @@ export function BulkWellImportModal({
     }
   };
 
+  const toggleRow = (i: number) => {
+    setSelected(prev => {
+      const next = new Set(prev);
+      if (next.has(i)) next.delete(i); else next.add(i);
+      return next;
+    });
+  };
+
   const counts = summarize(rows);
-  const importable = rows.filter(r => r.status === 'MATCHED');
+  const importable = rows.filter((_, i) => selected.has(i));
 
   const handleImport = async () => {
-    if (!onImport) return;
+    if (!onImport || importable.length === 0) return;
     setImporting(true);
     setError(null);
+    setProgress({ current: 0, total: importable.length });
+    const reviewSelected = importable.filter(r => r.status === 'NEEDS_REVIEW').length;
     try {
-      await onImport(importable);
-      onClose();
+      const result = await onImport(importable, (current, total) => setProgress({ current, total }));
+      setSummary({
+        imported: result.imported,
+        failed: result.failed,
+        duplicate: counts.DUPLICATE,
+        alreadyMaintained: counts.ALREADY_MAINTAINED,
+        notFound: counts.NOT_FOUND,
+        reviewNotApproved: counts.NEEDS_REVIEW - reviewSelected,
+      });
+      setStep('done');
     } catch {
-      setError('Import failed. No changes may have been saved.');
+      setError('Import failed. Some wells may not have been saved.');
+    } finally {
       setImporting(false);
+      setProgress(null);
     }
+  };
+
+  const skippedLines = (s: ImportSummary) => {
+    const lines: string[] = [];
+    if (s.duplicate) lines.push(`${s.duplicate} duplicate`);
+    if (s.alreadyMaintained) lines.push(`${s.alreadyMaintained} already maintained`);
+    if (s.notFound) lines.push(`${s.notFound} not found`);
+    if (s.reviewNotApproved) lines.push(`${s.reviewNotApproved} not reviewed/approved`);
+    if (s.failed) lines.push(`${s.failed} failed to write`);
+    return lines;
   };
 
   return (
@@ -222,8 +276,16 @@ export function BulkWellImportModal({
               <div className="border border-gray-700 rounded divide-y divide-gray-700 max-h-[45vh] overflow-y-auto">
                 {rows.map((r, i) => {
                   const meta = STATUS_META[r.status];
+                  const selectable = SELECTABLE.includes(r.status);
                   return (
                     <div key={`${r.name}-${i}`} className="flex items-start gap-3 px-3 py-2 text-sm">
+                      <input
+                        type="checkbox"
+                        checked={selected.has(i)}
+                        disabled={!selectable}
+                        onChange={() => toggleRow(i)}
+                        className="mt-1 disabled:opacity-30"
+                      />
                       <span className={`${meta.cls} font-bold w-4 text-center`}>{meta.icon}</span>
                       <div className="flex-1 min-w-0">
                         <div className="text-white truncate">{r.name}</div>
@@ -235,44 +297,71 @@ export function BulkWellImportModal({
                 })}
               </div>
 
+              {progress && (
+                <p className="text-gray-300 text-sm">Importing {progress.current} / {progress.total}…</p>
+              )}
               {error && <p className="text-red-400 text-sm">{error}</p>}
               {!onImport && (
-                <p className="text-amber-400 text-xs">Preview only — importing is enabled in the next build step.</p>
+                <p className="text-amber-400 text-xs">Preview only — importing is not enabled.</p>
               )}
+            </div>
+          )}
+
+          {step === 'done' && summary && (
+            <div className="space-y-3">
+              <p className="text-green-400 text-lg font-semibold">Imported {summary.imported} wells.</p>
+              {skippedLines(summary).length > 0 && (
+                <div className="text-sm text-gray-300">
+                  <div className="text-gray-400 mb-1">Skipped:</div>
+                  <ul className="list-disc list-inside text-gray-400 space-y-0.5">
+                    {skippedLines(summary).map(l => <li key={l}>{l}</li>)}
+                  </ul>
+                </div>
+              )}
+              <p className="text-gray-500 text-xs">The Maintained Wells list has been updated.</p>
             </div>
           )}
         </div>
 
         {/* Footer */}
         <div className="flex items-center justify-end gap-2 px-5 py-4 border-t border-gray-700">
-          <button onClick={onClose} className="px-4 py-2 bg-gray-700 hover:bg-gray-600 text-gray-200 rounded text-sm">
-            Cancel
-          </button>
-          {step === 'input' ? (
-            <button
-              onClick={handleParse}
-              disabled={parsing}
-              className="px-4 py-2 bg-blue-600 hover:bg-blue-700 text-white rounded text-sm disabled:opacity-50"
-            >
-              {parsing ? 'Parsing…' : 'Parse Wells'}
-            </button>
-          ) : (
+          {step === 'input' && (
+            <>
+              <button onClick={onClose} className="px-4 py-2 bg-gray-700 hover:bg-gray-600 text-gray-200 rounded text-sm">
+                Cancel
+              </button>
+              <button
+                onClick={handleParse}
+                disabled={parsing}
+                className="px-4 py-2 bg-blue-600 hover:bg-blue-700 text-white rounded text-sm disabled:opacity-50"
+              >
+                {parsing ? 'Parsing…' : 'Parse Wells'}
+              </button>
+            </>
+          )}
+          {step === 'preview' && (
             <>
               <button
                 onClick={() => { setStep('input'); setError(null); }}
-                className="px-4 py-2 bg-gray-700 hover:bg-gray-600 text-gray-200 rounded text-sm"
+                disabled={importing}
+                className="px-4 py-2 bg-gray-700 hover:bg-gray-600 text-gray-200 rounded text-sm disabled:opacity-50"
               >
                 Back
               </button>
               <button
                 onClick={handleImport}
                 disabled={!onImport || importing || importable.length === 0}
-                title={!onImport ? 'Importing is enabled in the next build step' : undefined}
+                title={!onImport ? 'Importing is not enabled' : undefined}
                 className="px-4 py-2 bg-green-600 hover:bg-green-700 text-white rounded text-sm disabled:opacity-50"
               >
                 {importing ? 'Importing…' : `Import ${importable.length} Wells`}
               </button>
             </>
+          )}
+          {step === 'done' && (
+            <button onClick={onClose} className="px-4 py-2 bg-blue-600 hover:bg-blue-700 text-white rounded text-sm">
+              Done
+            </button>
           )}
         </div>
       </div>

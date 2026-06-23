@@ -23,6 +23,8 @@ import { CompaniesTab } from '@/components/admin/CompaniesTab';
 import GpsRoutesTab from '@/components/admin/GpsRoutesTab';
 import { EquipmentTab } from '@/components/admin/EquipmentTab';
 import { BulkWellImportModal } from '@/components/admin/BulkWellImportModal';
+import type { ImportRow } from '@/lib/bulkWellImport';
+import { buildWellConfig } from '@/lib/wellConfigBuilder';
 
 interface WellConfig {
   route?: string;
@@ -733,43 +735,26 @@ export default function AdminPage() {
     }
 
     const db = getFirebaseDatabase();
-    const tankCap = parseInt(newWellTankCapacity) || 400;
-    const tankHt = parseFloat(newWellTankHeight) || 20;
-    const numTanks = parseInt(newWellTanks) || 1;
-    // Active/flowing tanks default to physical tank count when blank.
-    const activeTanks = parseInt(newWellActiveTanks) || numTanks;
-    // Manual bbl/ft override wins; else derive from capacity/height × active tanks.
     const overrideRaw = parseFloat(newWellBblPerFootOverride);
     const hasOverride = newWellBblPerFootOverride.trim() !== '' && !isNaN(overrideRaw) && overrideRaw > 0;
-    const bblPerFoot = hasOverride ? overrideRaw : (tankCap / tankHt) * activeTanks;
 
-    const parsedBottom = parseLevelToFeet(newWellBottom) || 3;
-    const config: WellConfig = {
-      route: newWellRoute || 'Unrouted',
-      bottomLevel: parsedBottom,
-      tanks: numTanks,
-      // Also write app-compatible field names
-      allowedBottom: parsedBottom,
-      numTanks,
-      pullBbls: parseInt(newWellPullBbls) || 140,
-      // Tank dimensions + EFFECTIVE bblPerFoot (override if set, else derived)
-      tankCapacity: tankCap,
-      tankHeight: tankHt,
-      bblPerFoot,
-      // Flow-math config
-      activeTanks,
+    // Shared builder — identical well_config shape as Bulk Import.
+    const config = buildWellConfig({
+      route: newWellRoute,
+      bottomFeet: parseLevelToFeet(newWellBottom),
+      tanks: parseInt(newWellTanks) || undefined,
+      activeTanks: parseInt(newWellActiveTanks) || undefined,
+      pullBbls: parseInt(newWellPullBbls) || undefined,
+      tankCapacity: parseInt(newWellTankCapacity) || undefined,
+      tankHeight: parseFloat(newWellTankHeight) || undefined,
       bblPerFootOverride: hasOverride ? overrideRaw : null,
       equalizedTanks: newWellEqualized,
       requireActualBottom: newWellRequireActualBottom,
-      // NDIC linkage (from NDIC picker, if used)
-      ...(ndicSelectedWell ? {
-        ndicName: ndicSelectedWell.well_name,
-        ndicApiNo: ndicSelectedWell.api_no,
-      } : {}),
-      // Water properties
-      ...(newWellWaterWeight ? { waterWeight: parseFloat(newWellWaterWeight) } : {}),
+      ndicName: ndicSelectedWell?.well_name,
+      ndicApiNo: ndicSelectedWell?.api_no,
+      waterWeight: newWellWaterWeight ? parseFloat(newWellWaterWeight) : undefined,
       h2sStatus: newWellH2s,
-    };
+    });
 
     await set(ref(db, `well_config/${wellName}`), config);
     showMessage(`Well "${wellName}" created${ndicSelectedWell ? ` (linked: ${ndicSelectedWell.api_no})` : ''}`);
@@ -777,6 +762,50 @@ export default function AdminPage() {
     setNewWellSearchTerm('');
     setNdicSelectedWell(null);
     setAutoLinkStatus('idle');
+  };
+
+  // Bulk import writes (P2). Receives only rows the modal approved for import.
+  // Writes the SAME well_config shape as manual add (via buildWellConfig) with
+  // the agreed safe defaults; route comes from the row (CSV value as-is, else
+  // the modal's default). RTDB key sanitized exactly like manual add. The live
+  // well_config subscription fills the list — no manual refetch.
+  const FORBIDDEN_PATH_CHARS = /[.#$[\]/]/g;
+  const handleBulkImportWells = async (
+    rows: ImportRow[],
+    onProgress?: (current: number, total: number) => void,
+  ): Promise<{ imported: number; failed: number }> => {
+    const db = getFirebaseDatabase();
+    const existing = new Set(Object.keys(configs).map(k => k.toLowerCase()));
+    let imported = 0;
+    let failed = 0;
+
+    for (let i = 0; i < rows.length; i++) {
+      onProgress?.(i + 1, rows.length);
+      const r = rows[i];
+      const name = r.name.replace(FORBIDDEN_PATH_CHARS, '').trim();
+      // Last-second guard against empty names / collisions created mid-import.
+      if (!name || existing.has(name.toLowerCase())) {
+        failed++;
+        continue;
+      }
+      const config = buildWellConfig({
+        route: r.route,
+        ndicName: r.match?.well_name,
+        ndicApiNo: r.match?.api_no,
+        waterWeight: 8.33,
+        h2sStatus: 'unknown',
+        // bottom 3 / tanks 1 / activeTanks 1 / pullBbls 140 / capacity 400 /
+        // height 20 / bblPerFoot 20 all applied as builder defaults.
+      });
+      try {
+        await set(ref(db, `well_config/${name}`), config);
+        existing.add(name.toLowerCase());
+        imported++;
+      } catch {
+        failed++;
+      }
+    }
+    return { imported, failed };
   };
 
   // Update well config (with optional rename)
@@ -2116,12 +2145,13 @@ export default function AdminPage() {
         )}
       </main>
 
-      {/* Bulk Maintained Well Import (P1: preview only — no onImport, no writes) */}
+      {/* Bulk Maintained Well Import (P2: writes via buildWellConfig) */}
       <BulkWellImportModal
         isOpen={showBulkImport}
         onClose={() => setShowBulkImport(false)}
         routes={routes}
         existingWellNames={Object.keys(configs)}
+        onImport={handleBulkImportWells}
       />
     </div>
   );
