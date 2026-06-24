@@ -6,19 +6,11 @@
 // Quick Links row at the bottom preserves direct navigation.
 
 import { useEffect, useState } from 'react';
-import Link from 'next/link';
 import { useAuth } from '@/contexts/AuthContext';
 import { loadAllCompanies, type CompanyConfig } from '@/lib/companySettings';
 import { fetchDashboardStats, type DashboardStats, type TopEntry, type RecentEntry } from '@/lib/dashboardStats';
 import { subscribeToWellStatusesUnified } from '@/lib/wells';
 import { StatCard } from './StatCard';
-
-const QUICK_LINKS = [
-  { href: '/mobile', label: 'WB Mobile' },
-  { href: '/tickets', label: 'WB Tickets' },
-  { href: '/billing', label: 'WB Billing' },
-  { href: '/payroll', label: 'WB Payroll' },
-];
 
 function num(n: number): string {
   return n.toLocaleString();
@@ -81,8 +73,10 @@ function RecentList({ entries }: { entries: RecentEntry[] }) {
 }
 
 export function DashboardV1() {
-  const { user } = useAuth();
+  const { user, userCompany } = useAuth();
   const isWbAdmin = user ? !user.companyId : false;
+  // Existing company branding accent; WB admins fall back to WellBuilt blue.
+  const accent = userCompany?.primaryColor || '#3b82f6';
 
   const [allCompanies, setAllCompanies] = useState<CompanyConfig[]>([]);
   const [selectedCompanyId, setSelectedCompanyId] = useState<string | null>(null);
@@ -129,10 +123,10 @@ export function DashboardV1() {
   }, [user]);
 
   return (
-    <main className="max-w-7xl mx-auto px-4 py-8">
+    <main className="max-w-7xl mx-auto px-4 py-6">
       {/* Header */}
       <div className="flex flex-wrap items-center justify-between gap-3 mb-1">
-        <h2 className="text-2xl font-bold text-white">Dashboard</h2>
+        <h2 className="text-2xl font-bold text-white border-l-4 pl-3" style={{ borderColor: accent }}>Dashboard</h2>
         {isWbAdmin && allCompanies.length > 0 && (
           <select
             value={selectedCompanyId || ''}
@@ -152,7 +146,7 @@ export function DashboardV1() {
       ) : !stats ? (
         <div className="text-gray-400 py-12 text-center">No data available.</div>
       ) : (
-        <div className="space-y-8">
+        <div className="space-y-6">
           {/* TODAY */}
           <section>
             <h3 className="text-gray-300 text-sm font-semibold uppercase tracking-wide mb-3">Today</h3>
@@ -202,21 +196,6 @@ export function DashboardV1() {
           </section>
         </div>
       )}
-
-      {/* Quick Links — navigation preserved */}
-      <div className="mt-10 pt-6 border-t border-gray-800">
-        <div className="flex flex-wrap gap-3">
-          {QUICK_LINKS.map(l => (
-            <Link
-              key={l.href}
-              href={l.href}
-              className="px-4 py-2 bg-gray-800 hover:bg-gray-700 border border-gray-700 rounded text-sm text-gray-200 transition-colors"
-            >
-              {l.label}
-            </Link>
-          ))}
-        </div>
-      </div>
     </main>
   );
 }

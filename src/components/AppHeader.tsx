@@ -17,6 +17,9 @@ export function AppHeader() {
   const pathname = usePathname();
   const router = useRouter();
   const activeTabId = getActiveTab(pathname);
+  // Existing company branding accent (Settings → Branding → primaryColor).
+  // WB admins (no company) fall back to the WellBuilt blue identity.
+  const accent = userCompany?.primaryColor || '#3b82f6';
   const [pendingDriverCount, setPendingDriverCount] = useState(0);
   const [chatOpen, setChatOpen] = useState(false);
   const [chatUnread, setChatUnread] = useState(0);
@@ -123,13 +126,22 @@ export function AppHeader() {
             below the tabs' natural width so the nav (flex-wrap below) can wrap
             instead of pushing the right column off-screen. */}
         <div className="flex flex-col items-center min-w-0">
-          <div className="pt-2 pb-1 text-center">
-            <h1 className="text-3xl font-bold text-white">WellBuilt Suite</h1>
-            <p className="text-gray-400 text-sm">
-              {user.email} &bull; <span>{getRoleLabel(user.role, userCompany)}</span>
+          <div className="pt-2 pb-1.5 text-center">
+            <h1 className="text-2xl font-bold text-white leading-tight">
+              WellBuilt <span className="text-gray-300 font-semibold">Suite</span>
+            </h1>
+            {/* Subtle company-accent bar under the brand (existing primaryColor). */}
+            <div className="mx-auto mt-1 h-0.5 w-10 rounded-full" style={{ backgroundColor: accent }} />
+            {userCompany?.name && (
+              <p className="mt-1.5 text-sm font-semibold text-white leading-tight">{userCompany.name}</p>
+            )}
+            <p className="text-gray-400 text-xs mt-0.5">
+              {user.email} <span className="text-gray-600">&bull;</span> {getRoleLabel(user.role, userCompany)}
             </p>
           </div>
-          <nav className="flex flex-wrap justify-center gap-0">
+          {/* Cabinet folder tabs — raised active folder, accent top edge, sits on
+              a shared baseline so sections read like an application, not a menu. */}
+          <nav className="flex flex-wrap items-end justify-center gap-1 border-b border-gray-700 px-2">
             {TABS.filter(tab => {
               // Capability-based gate wins when set. Falls back to legacy minRole
               // only if capability is unset (e.g., Home tab with no gate at all).
@@ -142,10 +154,12 @@ export function AppHeader() {
                 <Link
                   key={tab.id}
                   href={tab.href}
-                  className={`relative px-5 py-3 text-sm font-medium transition-colors border-b-2 ${
+                  aria-current={isActive ? 'page' : undefined}
+                  style={isActive ? { borderTopColor: accent } : undefined}
+                  className={`relative -mb-px rounded-t-lg border border-gray-700 px-5 text-sm font-medium transition-all outline-none focus-visible:ring-2 focus-visible:ring-white/40 ${
                     isActive
-                      ? 'border-blue-500 text-white'
-                      : 'border-transparent text-gray-400 hover:text-gray-200 hover:border-gray-600'
+                      ? 'bg-gray-900 text-white border-t-2 border-b-gray-900 pt-1.5 pb-2.5 -translate-y-px shadow-sm'
+                      : 'bg-gray-800/60 text-gray-400 border-b-transparent pt-1.5 pb-2 hover:bg-gray-700/70 hover:text-gray-200'
                   }`}
                 >
                   {tab.label}
