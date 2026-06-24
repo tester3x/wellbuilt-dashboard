@@ -1,6 +1,6 @@
 'use client';
 
-import { useEffect, useState } from 'react';
+import { useEffect, useState, useMemo } from 'react';
 import { useRouter } from 'next/navigation';
 import Link from 'next/link';
 import { useAuth } from '@/contexts/AuthContext';
@@ -26,6 +26,7 @@ import { EquipmentTab } from '@/components/admin/EquipmentTab';
 import { BulkWellImportModal } from '@/components/admin/BulkWellImportModal';
 import type { ImportRow } from '@/lib/bulkWellImport';
 import { buildWellConfig } from '@/lib/wellConfigBuilder';
+import { addMaintainedWell, removeMaintainedWell, subscribeMaintainedWellNames } from '@/lib/maintainedWells';
 
 interface WellConfig {
   route?: string;
@@ -63,12 +64,50 @@ interface RouteWells {
 
 export default function AdminPage() {
   const { user, loading } = useAuth();
+  // Model B tenant attribution: a company-scoped admin owns wells they create/
+  // import. (well_config stays shared/untouched; ownership lives in
+  // maintained_wells.) WB platform admin without a company picker = unclaimed.
+  const activeCompanyId = user?.companyId ?? null;
   const router = useRouter();
   const [configs, setConfigs] = useState<Record<string, WellConfig>>({});
   const [routes, setRoutes] = useState<string[]>([]);
   const [routeWells, setRouteWells] = useState<RouteWells>({});
   const [selectedRoute, setSelectedRoute] = useState<string>('');
   const [selectedWell, setSelectedWell] = useState<string>('');
+
+  // Model B read scoping: company-scoped admins see only their maintained wells.
+  // null = unscoped (WB platform admin). well_config stays shared; we filter the
+  // DISPLAY by tenant membership. Handlers/dup-checks stay global (well_config
+  // is name-keyed + shared, so name uniqueness is global).
+  const [maintainedNames, setMaintainedNames] = useState<Set<string> | null>(null);
+  useEffect(() => {
+    const cid = user?.companyId;
+    if (!cid) { setMaintainedNames(null); return; } // WB admin (no company) = unscoped
+    return subscribeMaintainedWellNames(cid, setMaintainedNames);
+  }, [user?.companyId]);
+
+  const visibleConfigs = useMemo(() => {
+    if (!user?.companyId) return configs;        // WB admin / no company = unscoped
+    if (!maintainedNames) return {};             // company user, membership still loading = show nothing (no cross-tenant flash)
+    const out: Record<string, WellConfig> = {};
+    for (const k of Object.keys(configs)) if (maintainedNames.has(k)) out[k] = configs[k];
+    return out;
+  }, [configs, maintainedNames, user?.companyId]);
+  const visibleRoutes = useMemo(() => {
+    if (!user?.companyId) return routes;
+    const set = new Set<string>(['Unrouted']);
+    Object.values(visibleConfigs).forEach(c => set.add(c.route || 'Unrouted'));
+    return Array.from(set).sort();
+  }, [routes, visibleConfigs, user?.companyId]);
+  const visibleRouteWells = useMemo(() => {
+    if (!user?.companyId) return routeWells;
+    const map: RouteWells = {};
+    Object.entries(visibleConfigs).forEach(([name, c]) => {
+      const r = c.route || 'Unrouted';
+      (map[r] = map[r] || []).push(name);
+    });
+    return map;
+  }, [routeWells, visibleConfigs, user?.companyId]);
 
   // New route/well forms
   const [newRouteName, setNewRouteName] = useState('');
@@ -752,6 +791,8 @@ export default function AdminPage() {
     });
 
     await set(ref(db, `well_config/${wellName}`), config);
+    // Tenant membership (Model B) — does not touch the shared well_config doc.
+    if (activeCompanyId) await addMaintainedWell(activeCompanyId, wellName);
     showMessage(`Well "${wellName}" created${ndicSelectedWell ? ` (linked: ${ndicSelectedWell.api_no})` : ''}`);
     setNewWellName('');
     setNewWellSearchTerm('');
@@ -796,6 +837,7 @@ export default function AdminPage() {
       });
       try {
         await set(ref(db, `well_config/${name}`), config);
+        if (activeCompanyId) await addMaintainedWell(activeCompanyId, name);
         existing.add(name.toLowerCase());
         imported++;
       } catch {
@@ -914,6 +956,12 @@ export default function AdminPage() {
         // 5. Delete old config entry
         await remove(ref(db, `well_config/${selectedWell}`));
 
+        // 6. Move tenant membership (Model B) old name -> new name
+        if (activeCompanyId) {
+          await removeMaintainedWell(activeCompanyId, selectedWell);
+          await addMaintainedWell(activeCompanyId, newName);
+        }
+
         showMessage(`Well renamed from "${selectedWell}" to "${newName}"`);
         setSelectedWell(newName);
       } catch (error) {
@@ -956,6 +1004,9 @@ export default function AdminPage() {
 
       // Delete well config
       await remove(ref(db, `well_config/${wellName}`));
+
+      // Drop tenant membership (Model B)
+      if (activeCompanyId) await removeMaintainedWell(activeCompanyId, wellName);
 
       // Delete all processed packets for this well
       const processedRef = ref(db, 'packets/processed');
@@ -1086,7 +1137,7 @@ export default function AdminPage() {
                 />
               </div>
               <div className="space-y-2 overflow-y-auto" style={{ maxHeight: 'calc(100vh - 220px)' }}>
-                {routes
+                {visibleRoutes
                   .filter(route => route.toLowerCase().includes(routeSearch.toLowerCase()))
                   .map(route => (
                   <div
@@ -1095,7 +1146,7 @@ export default function AdminPage() {
                     className={`p-3 rounded cursor-pointer ${selectedRoute === route ? 'bg-blue-600' : 'bg-gray-700 hover:bg-gray-600'}`}
                   >
                     <div className="text-white font-medium">{route}</div>
-                    <div className="text-gray-400 text-sm">{(routeWells[route] || []).length} wells</div>
+                    <div className="text-gray-400 text-sm">{(visibleRouteWells[route] || []).length} wells</div>
                   </div>
                 ))}
               </div>
@@ -1155,7 +1206,7 @@ export default function AdminPage() {
                   <div className="mb-3">
                     <div className="text-gray-400 text-sm mb-2">Wells in this route:</div>
                     <div className="text-white text-sm">
-                      {(routeWells[selectedRoute] || []).join(', ') || 'No wells'}
+                      {(visibleRouteWells[selectedRoute] || []).join(', ') || 'No wells'}
                     </div>
                   </div>
 
@@ -1198,7 +1249,7 @@ export default function AdminPage() {
                   className="w-1/3 px-3 py-1 bg-gray-700 text-white rounded text-sm"
                 />
               </div>
-              {Object.keys(configs).length === 0 ? (
+              {Object.keys(visibleConfigs).length === 0 ? (
                 <div className="flex-1 min-h-0 flex flex-col items-center justify-center text-center px-6">
                   <p className="text-gray-300 font-medium">No maintained wells configured.</p>
                   <p className="text-gray-500 text-sm mt-2 mb-4">
@@ -1213,7 +1264,7 @@ export default function AdminPage() {
                 </div>
               ) : (
               <div className="space-y-2 overflow-y-auto flex-1 min-h-0">
-                {Object.keys(configs)
+                {Object.keys(visibleConfigs)
                   .filter(wellName => wellName.toLowerCase().includes(wellSearch.toLowerCase()))
                   .sort()
                   .map(wellName => (
@@ -1330,7 +1381,7 @@ export default function AdminPage() {
                     className="w-full px-3 py-2 bg-gray-700 text-white rounded"
                   >
                     <option value="">Select Route</option>
-                    {routes.map(r => <option key={r} value={r}>{r}</option>)}
+                    {visibleRoutes.map(r => <option key={r} value={r}>{r}</option>)}
                   </select>
                   <div className="grid grid-cols-3 gap-2">
                     <div>
@@ -1577,7 +1628,7 @@ export default function AdminPage() {
                         className="w-full px-3 py-2 bg-gray-700 text-white rounded"
                         disabled={isRenaming}
                       >
-                        {routes.map(r => <option key={r} value={r}>{r}</option>)}
+                        {visibleRoutes.map(r => <option key={r} value={r}>{r}</option>)}
                       </select>
                     </div>
                     <div className="grid grid-cols-3 gap-2">
@@ -2114,7 +2165,7 @@ export default function AdminPage() {
 
         {/* GPS Routes Tab */}
         {activeTab === 'gpsroutes' && (
-          <GpsRoutesTab />
+          <GpsRoutesTab maintainedWellNames={user?.companyId ? (maintainedNames ?? new Set<string>()) : null} />
         )}
 
         {/* Drivers Tab */}
@@ -2146,7 +2197,7 @@ export default function AdminPage() {
       <BulkWellImportModal
         isOpen={showBulkImport}
         onClose={() => setShowBulkImport(false)}
-        routes={routes}
+        routes={visibleRoutes}
         existingWellNames={Object.keys(configs)}
         onImport={handleBulkImportWells}
       />

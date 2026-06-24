@@ -70,7 +70,10 @@ function parseBbl(raw: unknown): number {
  * Fetch all At-a-Glance stats for the given company.
  * @param companyId scope to one company; null/undefined = all companies (WB admin).
  */
-export async function fetchDashboardStats(companyId?: string | null): Promise<DashboardStats> {
+export async function fetchDashboardStats(
+  companyId?: string | null,
+  maintainedNames?: Set<string> | null,
+): Promise<DashboardStats> {
   const db = getFirestoreDb();
 
   const now = new Date();
@@ -190,7 +193,9 @@ export async function fetchDashboardStats(companyId?: string | null): Promise<Da
     if (snap.exists()) {
       const data = snap.val() as Record<string, { route?: string }>;
       const routeSet = new Set<string>();
-      for (const cfg of Object.values(data)) {
+      for (const [name, cfg] of Object.entries(data)) {
+        // Model B: scope counts to the company's maintained set (null = unscoped).
+        if (maintainedNames && !maintainedNames.has(name)) continue;
         maintainedWells += 1;
         const route = cfg?.route || 'Unrouted';
         if (route === 'Unrouted') unrouted += 1;

@@ -8,6 +8,7 @@
 import { useEffect, useState } from 'react';
 import { useAuth } from '@/contexts/AuthContext';
 import { isWbPlatformAdmin } from '@/lib/auth';
+import { subscribeMaintainedWellNames } from '@/lib/maintainedWells';
 import { loadAllCompanies, type CompanyConfig } from '@/lib/companySettings';
 import { fetchDashboardStats, type DashboardStats, type TopEntry, type RecentEntry } from '@/lib/dashboardStats';
 import { subscribeToWellStatusesUnified } from '@/lib/wells';
@@ -87,8 +88,17 @@ export function DashboardV1() {
   const [stats, setStats] = useState<DashboardStats | null>(null);
   const [loadingStats, setLoadingStats] = useState(true);
   const [downCount, setDownCount] = useState(0);
+  // Model B: maintained-well set for the active company. undefined = loading,
+  // Set = loaded (used to scope the well snapshot + needs-attention count).
+  const [maintainedNames, setMaintainedNames] = useState<Set<string> | undefined>(undefined);
 
   const effectiveCompanyId = user?.companyId || selectedCompanyId;
+
+  useEffect(() => {
+    if (!effectiveCompanyId) { setMaintainedNames(undefined); return; }
+    setMaintainedNames(undefined); // reset to loading on company switch
+    return subscribeMaintainedWellNames(effectiveCompanyId, setMaintainedNames);
+  }, [effectiveCompanyId]);
 
   // WB admin: load the company picker list.
   useEffect(() => {
@@ -110,23 +120,26 @@ export function DashboardV1() {
     if (unassigned) { setLoadingStats(false); return; }
     // WB admin with companies still loading — wait for a selection.
     if (isWbAdmin && allCompanies.length > 0 && !selectedCompanyId) return;
+    // Wait for the maintained-well set before counting (avoids a brief unscoped flash).
+    if (effectiveCompanyId && maintainedNames === undefined) return;
     let cancelled = false;
     setLoadingStats(true);
-    fetchDashboardStats(effectiveCompanyId)
+    fetchDashboardStats(effectiveCompanyId, maintainedNames ?? null)
       .then(s => { if (!cancelled) setStats(s); })
       .catch(() => { if (!cancelled) setStats(null); })
       .finally(() => { if (!cancelled) setLoadingStats(false); });
     return () => { cancelled = true; };
-  }, [user, isWbAdmin, unassigned, effectiveCompanyId, allCompanies.length, selectedCompanyId]);
+  }, [user, isWbAdmin, unassigned, effectiveCompanyId, allCompanies.length, selectedCompanyId, maintainedNames]);
 
-  // Wells needing attention (DOWN) — live.
+  // Wells needing attention (DOWN) — live, scoped to the maintained set.
   useEffect(() => {
     if (!user) return;
     const unsub = subscribeToWellStatusesUnified((wells) => {
-      setDownCount(wells.filter(w => w.isDown || w.currentLevel === 'DOWN').length);
+      const scoped = maintainedNames ? wells.filter(w => maintainedNames.has(w.wellName)) : wells;
+      setDownCount(scoped.filter(w => w.isDown || w.currentLevel === 'DOWN').length);
     });
     return unsub;
-  }, [user]);
+  }, [user, maintainedNames]);
 
   return (
     <main className="max-w-7xl mx-auto px-4 py-6">

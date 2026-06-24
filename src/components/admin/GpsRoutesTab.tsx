@@ -35,7 +35,7 @@ interface WellRouteStatus {
   groupMembers?: string[];
 }
 
-export default function GpsRoutesTab() {
+export default function GpsRoutesTab({ maintainedWellNames }: { maintainedWellNames?: Set<string> | null }) {
   const [wells, setWells] = useState<WellRouteStatus[]>([]);
   const [allConfigs, setAllConfigs] = useState<Record<string, any>>({});
   const [loading, setLoading] = useState(true);
@@ -363,15 +363,19 @@ export default function GpsRoutesTab() {
     ? availableWells.filter(name => name.toLowerCase().includes(addWellSearch.toLowerCase()))
     : availableWells;
 
-  const filtered = wells.filter(w => {
+  // Model B: company-scoped admins only see GPS data for their maintained wells.
+  // null = unscoped (WB platform admin). Underlying route_recordings untouched.
+  const scopedWells = maintainedWellNames ? wells.filter(w => maintainedWellNames.has(w.wellName)) : wells;
+
+  const filtered = scopedWells.filter(w => {
     if (filter === 'pending') return w.tripCount > 0 && w.approvedCount === 0;
     if (filter === 'approved') return w.approvedCount > 0;
     return true;
   });
 
-  const totalTrips = wells.reduce((sum, w) => sum + w.tripCount, 0);
-  const totalApproved = wells.reduce((sum, w) => sum + w.approvedCount, 0);
-  const pendingCount = wells.filter(w => w.tripCount > 0 && w.approvedCount === 0).length;
+  const totalTrips = scopedWells.reduce((sum, w) => sum + w.tripCount, 0);
+  const totalApproved = scopedWells.reduce((sum, w) => sum + w.approvedCount, 0);
+  const pendingCount = scopedWells.filter(w => w.tripCount > 0 && w.approvedCount === 0).length;
 
   if (loading) {
     return <div className="text-gray-400 p-4">Loading GPS route data...</div>;
@@ -420,7 +424,7 @@ export default function GpsRoutesTab() {
         </button>
 
         <div className="ml-auto text-xs text-gray-500">
-          {wells.length} wells &middot; {wells.filter(w => w.isRecording).length} recording &middot; {totalTrips} trips &middot; {totalApproved} approved routes
+          {scopedWells.length} wells &middot; {scopedWells.filter(w => w.isRecording).length} recording &middot; {totalTrips} trips &middot; {totalApproved} approved routes
         </div>
       </div>
 

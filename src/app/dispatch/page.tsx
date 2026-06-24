@@ -4,6 +4,7 @@ import { useEffect, useState, useMemo, useCallback, useRef, Suspense } from 'rea
 import { useRouter, useSearchParams } from 'next/navigation';
 import { useAuth } from '@/contexts/AuthContext';
 import { isWbPlatformAdmin } from '@/lib/auth';
+import { subscribeMaintainedWellNames } from '@/lib/maintainedWells';
 import { WellResponse, subscribeToWellStatusesUnified } from '@/lib/wells';
 import { AppHeader } from '@/components/AppHeader';
 import { ref, get, set } from 'firebase/database';
@@ -376,6 +377,14 @@ function DispatchPageInner() {
   // Company-less non-admin (unassigned viewer): pending activation — no data,
   // and the board (incl. all write actions) never renders.
   const unassigned = !!user && !isWbPlatformAdmin(user) && !user.companyId;
+  // Model B read scoping: company-scoped users see only their maintained wells.
+  // null = unscoped (WB platform admin).
+  const [maintainedNames, setMaintainedNames] = useState<Set<string> | null>(null);
+  useEffect(() => {
+    const cid = user?.companyId;
+    if (!cid) { setMaintainedNames(null); return; }
+    return subscribeMaintainedWellNames(cid, setMaintainedNames);
+  }, [user?.companyId]);
   const router = useRouter();
 
   // Data state
@@ -664,12 +673,20 @@ function DispatchPageInner() {
   useEffect(() => {
     if (unassigned) { setDataLoading(false); return; }
     const unsubscribe = subscribeToWellStatusesUnified((wellData, routeList) => {
-      setWells(wellData);
-      setRoutes(routeList.filter(r => r !== 'Unrouted'));
+      // Model B: scope to the company's maintained set at the source.
+      // Company user with membership not yet loaded → show nothing (no flash).
+      const scoped = !user?.companyId
+        ? wellData
+        : (maintainedNames ? wellData.filter(w => maintainedNames.has(w.wellName)) : []);
+      const routes = user?.companyId
+        ? Array.from(new Set(scoped.map(w => w.route || 'Unrouted'))).filter(r => r !== 'Unrouted')
+        : routeList.filter(r => r !== 'Unrouted');
+      setWells(scoped);
+      setRoutes(routes);
       setDataLoading(false);
     });
     return unsubscribe;
-  }, [unassigned]);
+  }, [unassigned, maintainedNames]);
 
   // Load drivers + disposals
   useEffect(() => {

@@ -4,6 +4,7 @@ import { useEffect, useMemo, useState } from 'react';
 import { useRouter } from 'next/navigation';
 import { useAuth } from '@/contexts/AuthContext';
 import { isWbPlatformAdmin } from '@/lib/auth';
+import { subscribeMaintainedWellNames } from '@/lib/maintainedWells';
 import { WellResponse, subscribeToWellStatusesUnified } from '@/lib/wells';
 import Link from 'next/link';
 import { AppHeader } from '@/components/AppHeader';
@@ -28,6 +29,14 @@ export default function MobilePage() {
   const router = useRouter();
   // Company-less non-admin (unassigned viewer): pending activation, no data.
   const unassigned = !!user && !isWbPlatformAdmin(user) && !user.companyId;
+  // Model B read scoping: company-scoped users see only their maintained wells.
+  // null = unscoped (WB platform admin).
+  const [maintainedNames, setMaintainedNames] = useState<Set<string> | null>(null);
+  useEffect(() => {
+    const cid = user?.companyId;
+    if (!cid) { setMaintainedNames(null); return; }
+    return subscribeMaintainedWellNames(cid, setMaintainedNames);
+  }, [user?.companyId]);
   const [wells, setWells] = useState<WellResponse[]>([]);
   const [routes, setRoutes] = useState<string[]>([]);
   const [expandedRoutes, setExpandedRoutes] = useState<Set<string>>(() => {
@@ -75,9 +84,18 @@ export default function MobilePage() {
   // Subscribe to well data from packets/outgoing
   useEffect(() => {
     if (unassigned) { setDataLoading(false); return; }
-    const unsubscribe = subscribeToWellStatusesUnified((wellData, routeList) => {
+    const unsubscribe = subscribeToWellStatusesUnified((wellData, routeListRaw) => {
+      // Model B: scope wells to the company's maintained set at the source so
+      // every downstream consumer (grouping, counts, search) inherits scoping.
+      // Company user with membership not yet loaded → show nothing (no flash).
+      const scoped = !user?.companyId
+        ? wellData
+        : (maintainedNames ? wellData.filter(w => maintainedNames.has(w.wellName)) : []);
+      const routeList = user?.companyId
+        ? Array.from(new Set(scoped.map(w => w.route || 'Unrouted')))
+        : routeListRaw;
       // Always update wells and routes - this is the data that changes
-      setWells(wellData);
+      setWells(scoped);
       // Always include "Unrouted" even if no wells have it yet
       const routesWithUnrouted = routeList.includes('Unrouted')
         ? routeList
@@ -121,7 +139,7 @@ export default function MobilePage() {
     });
 
     return unsubscribe;
-  }, [initialSetupDone, unassigned]);
+  }, [initialSetupDone, unassigned, maintainedNames]);
 
   // Load edge case tickets (submitted for wells not in well_config)
   useEffect(() => {
