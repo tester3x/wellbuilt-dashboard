@@ -141,6 +141,46 @@ export function CompaniesTab({ scopeCompanyId, isWbAdmin = false }: CompaniesTab
     })();
   }, [isWbAdmin, scopeCompanyId]);
 
+  // Activate a pending signup into a real customer company + owner account.
+  // V1: create companies/{slug} (active) + set the user's companyId/role/status.
+  // role 'it' is the "Owner" role label (see DEFAULT_ROLE_LABELS).
+  const [activatingUid, setActivatingUid] = useState<string | null>(null);
+  const activatePendingSignup = async (p: PendingSignup) => {
+    if (!isWbAdmin) return;
+    const name = (p.requestedCompanyName || p.email?.split('@')[0] || 'New Company').trim();
+    if (!window.confirm(`Create customer "${name}" and make ${p.email || p.uid} its owner?`)) return;
+    setActivatingUid(p.uid);
+    try {
+      // 1. Unique company slug
+      const base = name.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '').slice(0, 60) || 'company';
+      const existing = new Set(companies.map(c => c.id));
+      let slug = base;
+      let n = 2;
+      while (existing.has(slug)) slug = `${base}-${n++}`;
+
+      // 2. Create the company (active)
+      await setDoc(doc(firestore, 'companies', slug), { name, status: 'active' });
+
+      // 3. Activate the user as the company owner
+      await dbUpdate(dbRef(getFirebaseDatabase(), `users/${p.uid}`), {
+        companyId: slug,
+        companyName: name,
+        role: 'it',
+        status: 'active',
+        onboardingStatus: 'active',
+      });
+
+      setPendingSignups(prev => prev.filter(x => x.uid !== p.uid));
+      setMessage(`Created customer "${name}" and assigned ${p.email || p.uid} as owner.`);
+      await loadCompanies();
+    } catch (err) {
+      console.error('Failed to activate pending signup:', err);
+      setMessage('Failed to create customer. See console.');
+    } finally {
+      setActivatingUid(null);
+    }
+  };
+
   // Pre-load NDIC operators for the autocomplete
   useEffect(() => {
     loadOperators().then(ops => setAllOperators(ops)).catch(() => {});
@@ -626,6 +666,15 @@ export function CompaniesTab({ scopeCompanyId, isWbAdmin = false }: CompaniesTab
                   <div className="text-gray-500 text-xs mt-0.5">
                     Requested {p.requestedAt ? new Date(p.requestedAt).toLocaleString() : '—'}
                     <span className="mx-1">·</span>uid {p.uid}
+                  </div>
+                  <div className="mt-2">
+                    <button
+                      onClick={() => activatePendingSignup(p)}
+                      disabled={activatingUid === p.uid}
+                      className="px-3 py-1.5 bg-green-600 hover:bg-green-700 text-white rounded text-xs disabled:opacity-50"
+                    >
+                      {activatingUid === p.uid ? 'Creating…' : 'Create Customer'}
+                    </button>
                   </div>
                 </div>
               ))}
