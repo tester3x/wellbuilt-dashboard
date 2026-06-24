@@ -4,6 +4,8 @@ import { useEffect, useState, useMemo } from 'react';
 import { useRouter } from 'next/navigation';
 import Link from 'next/link';
 import { useAuth } from '@/contexts/AuthContext';
+import { isWbPlatformAdmin } from '@/lib/auth';
+import { loadAllCompanies, type CompanyConfig } from '@/lib/companySettings';
 import { AppHeader } from '@/components/AppHeader';
 import { SubHeader } from '@/components/SubHeader';
 import { getFirebaseDatabase, getFirestoreDb } from '@/lib/firebase';
@@ -64,10 +66,13 @@ interface RouteWells {
 
 export default function AdminPage() {
   const { user, loading } = useAuth();
-  // Model B tenant attribution: a company-scoped admin owns wells they create/
-  // import. (well_config stays shared/untouched; ownership lives in
-  // maintained_wells.) WB platform admin without a company picker = unclaimed.
-  const activeCompanyId = user?.companyId ?? null;
+  // Model B tenant scope. Customer admin: their own companyId. WB platform admin:
+  // a company they pick (selector in the header). Used for BOTH read scoping and
+  // write attribution. well_config stays shared/untouched.
+  const isPlatformAdmin = isWbPlatformAdmin(user);
+  const [allCompanies, setAllCompanies] = useState<CompanyConfig[]>([]);
+  const [selectedCompanyId, setSelectedCompanyId] = useState<string | null>(null);
+  const activeCompanyId = user?.companyId ?? (isPlatformAdmin ? selectedCompanyId : null);
   const router = useRouter();
   const [configs, setConfigs] = useState<Record<string, WellConfig>>({});
   const [routes, setRoutes] = useState<string[]>([]);
@@ -75,39 +80,46 @@ export default function AdminPage() {
   const [selectedRoute, setSelectedRoute] = useState<string>('');
   const [selectedWell, setSelectedWell] = useState<string>('');
 
-  // Model B read scoping: company-scoped admins see only their maintained wells.
-  // null = unscoped (WB platform admin). well_config stays shared; we filter the
-  // DISPLAY by tenant membership. Handlers/dup-checks stay global (well_config
-  // is name-keyed + shared, so name uniqueness is global).
+  // Model B read scoping: the Admin Panel always shows ONLY the active company's
+  // maintained wells (customer = own companyId; WB platform admin = selected
+  // company). well_config stays shared; we filter the DISPLAY by membership.
+  // Handlers/dup-checks stay global (well_config is name-keyed + shared).
   const [maintainedNames, setMaintainedNames] = useState<Set<string> | null>(null);
   useEffect(() => {
-    const cid = user?.companyId;
-    if (!cid) { setMaintainedNames(null); return; } // WB admin (no company) = unscoped
-    return subscribeMaintainedWellNames(cid, setMaintainedNames);
-  }, [user?.companyId]);
+    if (!activeCompanyId) { setMaintainedNames(null); return; }
+    return subscribeMaintainedWellNames(activeCompanyId, setMaintainedNames);
+  }, [activeCompanyId]);
+
+  // WB platform admin: load the company list for the selector + default-select.
+  useEffect(() => {
+    if (!isPlatformAdmin) return;
+    loadAllCompanies()
+      .then(list => {
+        setAllCompanies(list);
+        setSelectedCompanyId(prev => prev ?? (list.find(c => c.id === 'liquid-gold')?.id ?? list[0]?.id ?? null));
+      })
+      .catch(() => {});
+  }, [isPlatformAdmin]);
 
   const visibleConfigs = useMemo(() => {
-    if (!user?.companyId) return configs;        // WB admin / no company = unscoped
-    if (!maintainedNames) return {};             // company user, membership still loading = show nothing (no cross-tenant flash)
+    if (!maintainedNames) return {};   // no active company / membership loading = show nothing
     const out: Record<string, WellConfig> = {};
     for (const k of Object.keys(configs)) if (maintainedNames.has(k)) out[k] = configs[k];
     return out;
-  }, [configs, maintainedNames, user?.companyId]);
+  }, [configs, maintainedNames]);
   const visibleRoutes = useMemo(() => {
-    if (!user?.companyId) return routes;
     const set = new Set<string>(['Unrouted']);
     Object.values(visibleConfigs).forEach(c => set.add(c.route || 'Unrouted'));
     return Array.from(set).sort();
-  }, [routes, visibleConfigs, user?.companyId]);
+  }, [visibleConfigs]);
   const visibleRouteWells = useMemo(() => {
-    if (!user?.companyId) return routeWells;
     const map: RouteWells = {};
     Object.entries(visibleConfigs).forEach(([name, c]) => {
       const r = c.route || 'Unrouted';
       (map[r] = map[r] || []).push(name);
     });
     return map;
-  }, [routeWells, visibleConfigs, user?.companyId]);
+  }, [visibleConfigs]);
 
   // New route/well forms
   const [newRouteName, setNewRouteName] = useState('');
@@ -1079,6 +1091,24 @@ export default function AdminPage() {
            activeTab === 'equipment' ? 'Equipment Documents' :
            'Customer Management'}
         </h2>
+
+        {/* WB platform admin: company selector — scopes Maintained Wells /
+            Route Groups / GPS Routes to the chosen company. Customer admins use
+            their own companyId (no selector). */}
+        {isPlatformAdmin && ['wells', 'routes', 'gpsroutes'].includes(activeTab) && allCompanies.length > 0 && (
+          <div className="mb-4">
+            <label className="text-gray-400 text-xs block mb-1">Select Company</label>
+            <select
+              value={selectedCompanyId || ''}
+              onChange={e => setSelectedCompanyId(e.target.value)}
+              className="px-3 py-2 bg-gray-700 text-white rounded text-sm w-72"
+            >
+              {allCompanies.map(c => (
+                <option key={c.id} value={c.id}>{c.name || c.id}</option>
+              ))}
+            </select>
+          </div>
+        )}
 
         {/* Tabs */}
         <div className="flex gap-2 mb-6 flex-wrap">
@@ -2165,7 +2195,7 @@ export default function AdminPage() {
 
         {/* GPS Routes Tab */}
         {activeTab === 'gpsroutes' && (
-          <GpsRoutesTab maintainedWellNames={user?.companyId ? (maintainedNames ?? new Set<string>()) : null} />
+          <GpsRoutesTab maintainedWellNames={maintainedNames ?? new Set<string>()} />
         )}
 
         {/* Drivers Tab */}
