@@ -23,11 +23,21 @@ interface CompaniesTabProps {
   isWbAdmin?: boolean;      // true = WellBuilt IT/admin (can add/delete companies)
 }
 
+interface PendingSignup {
+  uid: string;
+  email?: string;
+  requestedCompanyName?: string;
+  requestedAt?: number;
+}
+
 export function CompaniesTab({ scopeCompanyId, isWbAdmin = false }: CompaniesTabProps) {
   const [companies, setCompanies] = useState<CompanyConfig[]>([]);
   const [loading, setLoading] = useState(true);
   const [message, setMessage] = useState('');
   const [search, setSearch] = useState('');
+
+  // Pending self-signups (read-only) — users awaiting company assignment.
+  const [pendingSignups, setPendingSignups] = useState<PendingSignup[]>([]);
 
   // Add / Edit company
   const [showForm, setShowForm] = useState(false);
@@ -103,6 +113,33 @@ export function CompaniesTab({ scopeCompanyId, isWbAdmin = false }: CompaniesTab
   };
 
   useEffect(() => { loadCompanies(); }, []);
+
+  // Load pending self-signups (WB platform admin, unscoped view only). Read-only.
+  useEffect(() => {
+    if (!isWbAdmin || scopeCompanyId) return;
+    (async () => {
+      try {
+        const snap = await dbGet(dbRef(getFirebaseDatabase(), 'users'));
+        if (!snap.exists()) { setPendingSignups([]); return; }
+        const data = snap.val() as Record<string, any>;
+        const pending: PendingSignup[] = [];
+        Object.entries(data).forEach(([uid, u]: [string, any]) => {
+          if (u?.status === 'pending' || u?.onboardingStatus === 'pending_company_assignment') {
+            pending.push({
+              uid,
+              email: u.email,
+              requestedCompanyName: u.requestedCompanyName,
+              requestedAt: typeof u.requestedAt === 'number' ? u.requestedAt : undefined,
+            });
+          }
+        });
+        pending.sort((a, b) => (b.requestedAt || 0) - (a.requestedAt || 0));
+        setPendingSignups(pending);
+      } catch (err) {
+        console.error('Failed to load pending signups:', err);
+      }
+    })();
+  }, [isWbAdmin, scopeCompanyId]);
 
   // Pre-load NDIC operators for the autocomplete
   useEffect(() => {
@@ -568,6 +605,33 @@ export function CompaniesTab({ scopeCompanyId, isWbAdmin = false }: CompaniesTab
     <div className="space-y-6">
       {message && (
         <div className="p-3 bg-blue-900 text-blue-200 rounded text-sm">{message}</div>
+      )}
+
+      {/* ── Pending Signups (read-only, WB admin) ── */}
+      {isWbAdmin && !scopeCompanyId && (
+        <div className="bg-gray-800 rounded-lg p-4">
+          <h3 className="text-white font-medium mb-1">Pending Signups ({pendingSignups.length})</h3>
+          <p className="text-gray-500 text-xs mb-3">Self-registered accounts awaiting company assignment.</p>
+          {pendingSignups.length === 0 ? (
+            <div className="text-gray-500 text-sm">No pending signups.</div>
+          ) : (
+            <div className="space-y-2">
+              {pendingSignups.map(p => (
+                <div key={p.uid} className="bg-gray-900/60 border border-gray-700 rounded p-3 text-sm">
+                  <div className="flex flex-wrap items-center justify-between gap-2">
+                    <span className="text-white font-medium">{p.requestedCompanyName || '(no company name)'}</span>
+                    <span className="text-amber-400 text-xs">pending</span>
+                  </div>
+                  <div className="text-gray-400 text-xs mt-1">{p.email || '(no email)'}</div>
+                  <div className="text-gray-500 text-xs mt-0.5">
+                    Requested {p.requestedAt ? new Date(p.requestedAt).toLocaleString() : '—'}
+                    <span className="mx-1">·</span>uid {p.uid}
+                  </div>
+                </div>
+              ))}
+            </div>
+          )}
+        </div>
       )}
 
       {/* ── Company List ── */}
