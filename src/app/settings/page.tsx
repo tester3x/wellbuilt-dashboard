@@ -3,7 +3,7 @@
 import { useEffect, useState } from 'react';
 import { useRouter } from 'next/navigation';
 import { useAuth } from '@/contexts/AuthContext';
-import { hasCapability } from '@/lib/auth';
+import { hasCapability, isWbPlatformAdmin } from '@/lib/auth';
 import { AppHeader } from '@/components/AppHeader';
 import {
   type CompanyConfig,
@@ -39,8 +39,9 @@ export default function SettingsPage() {
   const [dataLoading, setDataLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
 
-  // Determine if WB admin (no companyId = sees all companies)
-  const isWbAdmin = user ? !user.companyId : false;
+  // Platform admin (no companyId AND it/admin) = sees all companies + picker.
+  // A company-less non-admin (e.g. unassigned viewer) is NOT a platform admin.
+  const isWbAdmin = isWbPlatformAdmin(user);
 
   // Auth guard — redirect if not authorized
   useEffect(() => {
@@ -75,6 +76,9 @@ export default function SettingsPage() {
           } else {
             setError('Company not found');
           }
+        } else {
+          // Company-less non-admin — do not load any company.
+          setError('No company assigned. Contact your WellBuilt administrator.');
         }
       } catch (err) {
         console.error('Failed to load company:', err);

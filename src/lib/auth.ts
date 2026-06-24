@@ -129,6 +129,19 @@ export interface WellBuiltUser {
   companyName?: string;   // Display name for the company
 }
 
+/**
+ * True only for WellBuilt platform staff: a user with NO companyId AND an
+ * elevated role (it/admin). This is the company-picker / sees-everything gate.
+ *
+ * IMPORTANT: a company-less user is NOT automatically a platform admin. An
+ * unassigned viewer (no companyId, role 'viewer') must fall through to an
+ * empty state, never auto-scope to another company's data. Use this instead of
+ * the loose `!user.companyId` check everywhere that grants cross-company access.
+ */
+export function isWbPlatformAdmin(user: WellBuiltUser | null): boolean {
+  return !!user && !user.companyId && (user.role === 'it' || user.role === 'admin');
+}
+
 // ── Capability / label helpers ──────────────────────────────────────────────
 // Per-company override shape — kept separate so lib/auth.ts doesn't import
 // from companySettings.ts (avoids circular deps).

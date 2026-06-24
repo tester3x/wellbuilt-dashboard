@@ -30,6 +30,7 @@ import {
   formatPeriodRange,
 } from '@/lib/payroll';
 import { type CompanyConfig, loadAllCompanies, ALL_PAYROLL_COLUMNS, DEFAULT_PAYROLL_COLUMNS, type PayrollColumn } from '@/lib/companySettings';
+import { isWbPlatformAdmin } from '@/lib/auth';
 import { Timestamp } from 'firebase/firestore';
 import { ref, get } from 'firebase/database';
 import { getFirebaseDatabase } from '@/lib/firebase';
@@ -359,6 +360,8 @@ export default function PayrollPage() {
   // Fetch data when period changes
   useEffect(() => {
     if (!user || !selectedPeriod) return;
+    // Company-less non-admin: don't load any payroll (would aggregate all companies).
+    if (!isWbPlatformAdmin(user) && !user.companyId) { setTimesheets([]); return; }
     loadPayrollData();
   }, [user, selectedPeriodIdx]);
 
@@ -421,7 +424,10 @@ export default function PayrollPage() {
       companies.forEach(c => companyMap.set(c.id, c));
 
       // Load payroll template from company config
-      const targetCompany = user?.companyId ? companyMap.get(user.companyId) : companies[0];
+      // Only platform admins fall back to the first company (for template columns).
+      const targetCompany = user?.companyId
+        ? companyMap.get(user.companyId)
+        : (isWbPlatformAdmin(user) ? companies[0] : undefined);
       if (targetCompany?.payConfig?.payrollTemplate?.columns?.length) {
         setPayrollColumns(targetCompany.payConfig.payrollTemplate.columns);
       }
@@ -686,6 +692,9 @@ export default function PayrollPage() {
       <AppHeader />
 
       <main className="max-w-7xl mx-auto px-4 py-6">
+        {user && !isWbPlatformAdmin(user) && !user.companyId && (
+          <div className="text-gray-400 py-16 text-center">No company assigned. Contact your WellBuilt administrator.</div>
+        )}
         {/* ── Header Row ── */}
         <div className="flex flex-wrap items-center justify-between gap-4 mb-6">
           <div className="flex items-center gap-3">

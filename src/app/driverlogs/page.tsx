@@ -8,6 +8,7 @@ import { AppHeader } from '@/components/AppHeader';
 import { getFirebaseDatabase, getFirebaseFunctions } from '@/lib/firebase';
 import { ref, get } from 'firebase/database';
 import { loadAllCompanies, type CompanyConfig } from '@/lib/companySettings';
+import { isWbPlatformAdmin } from '@/lib/auth';
 import {
   fetchDriverShifts,
   fetchInvoicesForDate,
@@ -84,7 +85,9 @@ export default function DriverLogsPage() {
   // Company picker (WB admin)
   const [allCompanies, setAllCompanies] = useState<CompanyConfig[]>([]);
   const [selectedCompanyId, setSelectedCompanyId] = useState<string | null>(null);
-  const isWbAdmin = user ? !user.companyId : false;
+  const isWbAdmin = isWbPlatformAdmin(user);
+  // Company-less non-admin: must not see any company's drivers/logs.
+  const unassigned = !!user && !isWbAdmin && !user.companyId;
   const effectiveCompanyId = user?.companyId || selectedCompanyId;
 
   // ── Load companies (WB admin) ──────────────────────────────────────────────
@@ -165,14 +168,15 @@ export default function DriverLogsPage() {
 
   // ── Filtered drivers by company ────────────────────────────────────────────
   const filteredDrivers = useMemo(() => {
+    if (unassigned) return []; // company-less non-admin sees nothing
     if (!effectiveCompanyId) return drivers; // WB admin with no selection = all
     return drivers.filter((d) => d.companyId === effectiveCompanyId);
-  }, [drivers, effectiveCompanyId]);
+  }, [drivers, effectiveCompanyId, unassigned]);
 
   // ── Load logs when date/company/drivers change ─────────────────────────────
   useEffect(() => {
     // Wait for company selection for WB admin
-    if (!user || authLoading || filteredDrivers.length === 0) return;
+    if (!user || authLoading || unassigned || filteredDrivers.length === 0) return;
     if (isWbAdmin && !effectiveCompanyId) return;
 
     // Collapse all cards when switching dates/filters
@@ -311,6 +315,10 @@ export default function DriverLogsPage() {
       <AppHeader />
 
       <main className="max-w-6xl mx-auto px-4 py-6">
+        {unassigned ? (
+          <div className="text-gray-400 py-16 text-center">No company assigned. Contact your WellBuilt administrator.</div>
+        ) : (
+        <>
         {/* ── Header Row ──────────────────────────────────────── */}
         <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 mb-6">
           <h1 className="text-2xl font-bold">Driver Logs</h1>
@@ -461,6 +469,8 @@ export default function DriverLogsPage() {
             dateLabel={formatShortDate(selectedDate)}
           />
         ))}
+        </>
+        )}
       </main>
     </div>
   );

@@ -3,6 +3,7 @@
 import { useEffect, useState } from 'react';
 import { useRouter } from 'next/navigation';
 import { useAuth } from '@/contexts/AuthContext';
+import { isWbPlatformAdmin } from '@/lib/auth';
 import { AppHeader } from '@/components/AppHeader';
 import { loadAllCompanies, updateCompanyFields, type CompanyConfig, type DoeRegion, DOE_REGIONS, STATE_TO_PADD } from '@/lib/companySettings';
 import { ref, get } from 'firebase/database';
@@ -116,8 +117,9 @@ export default function BillingPage() {
       const map = new Map<string, CompanyConfig>();
       list.forEach(c => map.set(c.id, c));
       setCompanies(map);
-      // WB admin: auto-select first company if none chosen
-      if (!user.companyId && !selectedCompanyId && list.length > 0) {
+      // WB platform admin: auto-select first company if none chosen.
+      // Company-less non-admins must NOT auto-select any company.
+      if (isWbPlatformAdmin(user) && !selectedCompanyId && list.length > 0) {
         setSelectedCompanyId(list[0].id);
       }
     });
@@ -156,6 +158,13 @@ export default function BillingPage() {
     try {
       setDataLoading(true);
       setError(null);
+      // Company-less non-admin: never compute billing (undefined companyId = all companies).
+      if (user && !isWbPlatformAdmin(user) && !user.companyId) {
+        setSummaries([]);
+        setBillingRecords([]);
+        setDataLoading(false);
+        return;
+      }
       const companyId = effectiveCompanyId || undefined;
       // Build well→county map for frost rate lookup (same as payroll)
       const allOperators = new Set<string>();
@@ -414,8 +423,8 @@ export default function BillingPage() {
                 Export
               </button>
             </div>
-            {/* WB admin company picker */}
-            {!user.companyId && companies.size > 0 && (
+            {/* WB platform admin company picker */}
+            {isWbPlatformAdmin(user) && companies.size > 0 && (
               <select
                 value={selectedCompanyId || ''}
                 onChange={(e) => setSelectedCompanyId(e.target.value)}
@@ -427,6 +436,10 @@ export default function BillingPage() {
               </select>
             )}
           </div>
+
+          {user && !isWbPlatformAdmin(user) && !user.companyId && (
+            <div className="text-gray-400 py-16 text-center">No company assigned. Contact your WellBuilt administrator.</div>
+          )}
 
           {activeTab === 'receivables' && (
             <div className="flex items-center gap-4">

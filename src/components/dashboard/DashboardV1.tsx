@@ -7,6 +7,7 @@
 
 import { useEffect, useState } from 'react';
 import { useAuth } from '@/contexts/AuthContext';
+import { isWbPlatformAdmin } from '@/lib/auth';
 import { loadAllCompanies, type CompanyConfig } from '@/lib/companySettings';
 import { fetchDashboardStats, type DashboardStats, type TopEntry, type RecentEntry } from '@/lib/dashboardStats';
 import { subscribeToWellStatusesUnified } from '@/lib/wells';
@@ -74,7 +75,10 @@ function RecentList({ entries }: { entries: RecentEntry[] }) {
 
 export function DashboardV1() {
   const { user, userCompany } = useAuth();
-  const isWbAdmin = user ? !user.companyId : false;
+  const isWbAdmin = isWbPlatformAdmin(user);
+  // A logged-in user who is neither platform admin nor assigned to a company:
+  // must NOT auto-scope to any company — show an empty state instead.
+  const unassigned = !!user && !isWbAdmin && !user.companyId;
   // Existing company branding accent; WB admins fall back to WellBuilt blue.
   const accent = userCompany?.primaryColor || '#3b82f6';
 
@@ -102,6 +106,8 @@ export function DashboardV1() {
   // Fetch stats whenever the effective company changes.
   useEffect(() => {
     if (!user) return;
+    // Unassigned non-admin: never fetch (a null companyId would pull ALL companies).
+    if (unassigned) { setLoadingStats(false); return; }
     // WB admin with companies still loading — wait for a selection.
     if (isWbAdmin && allCompanies.length > 0 && !selectedCompanyId) return;
     let cancelled = false;
@@ -111,7 +117,7 @@ export function DashboardV1() {
       .catch(() => { if (!cancelled) setStats(null); })
       .finally(() => { if (!cancelled) setLoadingStats(false); });
     return () => { cancelled = true; };
-  }, [user, isWbAdmin, effectiveCompanyId, allCompanies.length, selectedCompanyId]);
+  }, [user, isWbAdmin, unassigned, effectiveCompanyId, allCompanies.length, selectedCompanyId]);
 
   // Wells needing attention (DOWN) — live.
   useEffect(() => {
@@ -141,7 +147,9 @@ export function DashboardV1() {
       </div>
       <p className="text-gray-400 text-sm mb-6">How are we doing right now?</p>
 
-      {loadingStats && !stats ? (
+      {unassigned ? (
+        <div className="text-gray-400 py-16 text-center">No company assigned. Contact your WellBuilt administrator.</div>
+      ) : loadingStats && !stats ? (
         <div className="text-gray-400 py-12 text-center">Loading dashboard…</div>
       ) : !stats ? (
         <div className="text-gray-400 py-12 text-center">No data available.</div>
