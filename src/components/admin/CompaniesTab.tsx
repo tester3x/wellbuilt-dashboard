@@ -143,7 +143,9 @@ export function CompaniesTab({ scopeCompanyId, isWbAdmin = false }: CompaniesTab
 
   // Activate a pending signup into a real customer company + owner account.
   // V1: create companies/{slug} (active) + set the user's companyId/role/status.
-  // role 'it' is the "Owner" role label (see DEFAULT_ROLE_LABELS).
+  // role 'admin' = full company self-service (dispatch/drivers/billing/payroll/
+  // wells/settings) WITHOUT WellBuilt-internal tools (Truth Debug, Diagnostics,
+  // viewAllCompanies, cross-tenant role management) that the 'it' role carries.
   const [activatingUid, setActivatingUid] = useState<string | null>(null);
   const activatePendingSignup = async (p: PendingSignup) => {
     if (!isWbAdmin) return;
@@ -165,7 +167,7 @@ export function CompaniesTab({ scopeCompanyId, isWbAdmin = false }: CompaniesTab
       await dbUpdate(dbRef(getFirebaseDatabase(), `users/${p.uid}`), {
         companyId: slug,
         companyName: name,
-        role: 'it',
+        role: 'admin',
         status: 'active',
         onboardingStatus: 'active',
       });
