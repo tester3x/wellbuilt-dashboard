@@ -84,7 +84,7 @@ function RegisterForm(): React.ReactElement {
 
     setLoading(true);
     try {
-      await registerWithEmail(email, password);
+      await registerWithEmail(email, password, company);
       // createUserWithEmailAndPassword auto-signs the user in; onAuthStateChanged
       // in AuthContext will populate user shortly after routing.
       router.push('/');
