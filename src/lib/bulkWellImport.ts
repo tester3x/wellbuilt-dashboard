@@ -4,7 +4,7 @@
 // candidate NDIC wells. The actual well_config write happens in P2 and lives
 // elsewhere; nothing here touches Firebase.
 
-import { type NdicWell, normalizeWellName, searchWellsByName } from './firestoreWells';
+import { type NdicWell, normalizeWellName, searchWellsByName, suggestDisplayName } from './firestoreWells';
 
 export type ImportStatus =
   | 'MATCHED'
@@ -21,6 +21,8 @@ export interface ParsedRow {
 
 export interface ImportRow extends ParsedRow {
   status: ImportStatus;
+  /** Driver-facing display name — auto-suggested, user-editable. Becomes the well_config key. */
+  displayName: string;
   route: string;            // resolved route to assign (CSV value as-is, else default)
   match: NdicWell | null;   // resolved NDIC well (MATCHED, or top candidate for NEEDS_REVIEW)
   candidates: NdicWell[];   // alternatives for NEEDS_REVIEW (used by P3 manual review)
@@ -103,6 +105,8 @@ export function matchRows(
     if (norm && !byNorm.has(norm)) byNorm.set(norm, w);
   }
 
+  // Existing maintained-well keys ARE display names — dedup/already-maintained
+  // must compare against the final display name, not the pasted name.
   const existingNorm = new Set(existingWellNames.map(normalizeWellName));
   const seen = new Set<string>();
 
@@ -110,41 +114,44 @@ export function matchRows(
     const route = (row.route && row.route.length > 0 ? row.route : defaultRoute);
     const norm = normalizeWellName(row.name);
 
-    const base: Omit<ImportRow, 'status' | 'reason'> = {
-      ...row,
-      route,
-      match: null,
-      candidates: [],
-    };
-
-    let result: ImportRow;
-
-    if (existingNorm.has(norm)) {
-      result = { ...base, status: 'ALREADY_MAINTAINED', reason: 'Already a maintained well' };
-    } else if (seen.has(norm)) {
-      result = { ...base, status: 'DUPLICATE', reason: 'Duplicate in pasted list' };
+    // 1. Resolve a catalog match (exact → normalized-exact → fuzzy).
+    let match: NdicWell | null = byName.get(row.name.toLowerCase()) || byNorm.get(norm) || null;
+    let foundCandidates: NdicWell[] = [];
+    let matchStatus: ImportStatus;
+    let matchReason: string;
+    if (match) {
+      matchStatus = 'MATCHED';
+      matchReason = match.well_name;
     } else {
-      const exact = byName.get(row.name.toLowerCase()) || byNorm.get(norm) || null;
-      if (exact) {
-        result = { ...base, match: exact, status: 'MATCHED', reason: `${exact.operator || ''} · ${exact.well_name}`.trim() };
+      const fuzzy = searchWellsByName(row.name, candidates, 5);
+      if (fuzzy.length > 0) {
+        match = fuzzy[0];
+        foundCandidates = fuzzy;
+        matchStatus = 'NEEDS_REVIEW';
+        matchReason = fuzzy.length === 1 ? `Closest: ${fuzzy[0].well_name}` : `${fuzzy.length} possible matches`;
       } else {
-        const fuzzy = searchWellsByName(row.name, candidates, 5);
-        if (fuzzy.length > 0) {
-          result = {
-            ...base,
-            match: fuzzy[0],
-            candidates: fuzzy,
-            status: 'NEEDS_REVIEW',
-            reason: fuzzy.length === 1 ? `Closest: ${fuzzy[0].well_name}` : `${fuzzy.length} possible matches`,
-          };
-        } else {
-          result = { ...base, status: 'NOT_FOUND', reason: 'No match in selected operator(s)' };
-        }
+        matchStatus = 'NOT_FOUND';
+        matchReason = 'No match in selected operator(s)';
       }
     }
 
-    seen.add(norm);
-    return result;
+    // 2. Suggest the driver display name from the matched legal name.
+    const displayName = match ? suggestDisplayName(match.well_name) : row.name;
+    const dnorm = normalizeWellName(displayName);
+
+    // 3. Dedup / already-maintained keyed on the FINAL display name.
+    let status: ImportStatus = matchStatus;
+    let reason = matchReason;
+    if (existingNorm.has(dnorm)) {
+      status = 'ALREADY_MAINTAINED';
+      reason = `"${displayName}" already maintained`;
+    } else if (seen.has(dnorm)) {
+      status = 'DUPLICATE';
+      reason = `Duplicate display name "${displayName}"`;
+    }
+    seen.add(dnorm);
+
+    return { ...row, displayName, route, match, candidates: foundCandidates, status, reason };
   });
 }
 

@@ -15,6 +15,7 @@ import {
   searchWellsByName,
   searchOperators,
   loadInactiveWellsForOperator,
+  suggestDisplayName,
   type NdicWell,
   type NdicOperator,
 } from '@/lib/firestoreWells';
@@ -490,15 +491,9 @@ export default function AdminPage() {
 
   // Extract short display name from NDIC well name
   // "GABRIEL 1-36-25H" → "Gabriel 1"
-  const extractDisplayName = (ndicName: string): string => {
-    const cleaned = ndicName.replace(/#/g, '').trim();
-    const match = cleaned.match(/^([A-Za-z\s]+?)\s*(\d+)\s*-/);
-    if (!match) return ndicName; // Return as-is if no NDIC pattern
-    const baseName = match[1].trim();
-    const number = match[2];
-    const titleCase = baseName.toLowerCase().replace(/\b\w/g, c => c.toUpperCase());
-    return `${titleCase} ${number}`;
-  };
+  // Shared suggester — same logic the bulk importer uses (drops lease
+  // designations like FEDERAL, keeps base name + first well number).
+  const extractDisplayName = (ndicName: string): string => suggestDisplayName(ndicName);
 
   // Handle NDIC well selection — fills in the appropriate form
   const handleNdicWellSelect = (well: NdicWell) => {
@@ -782,7 +777,9 @@ export default function AdminPage() {
     for (let i = 0; i < rows.length; i++) {
       onProgress?.(i + 1, rows.length);
       const r = rows[i];
-      const name = r.name.replace(FORBIDDEN_PATH_CHARS, '').trim();
+      // Write under the (possibly user-edited) driver display name — this key is
+      // effectively permanent once packets/pull history accrue.
+      const name = (r.displayName || r.name).replace(FORBIDDEN_PATH_CHARS, '').trim();
       // Last-second guard against empty names / collisions created mid-import.
       if (!name || existing.has(name.toLowerCase())) {
         failed++;

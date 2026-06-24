@@ -45,6 +45,29 @@ export function normalizeWellName(name: string): string {
   return (name || '').toUpperCase().replace(/[^A-Z0-9]/g, '');
 }
 
+// Lease designations dropped from a suggested driver-facing display name.
+const DESIGNATION_WORDS = new Set(['FEDERAL', 'STATE', 'FED', 'FEE', 'USA']);
+
+/**
+ * Suggest a short driver-facing display name from a legal/catalog well name.
+ * Keeps the lease/base name + the first well number, drops lease designations:
+ *   "GUNSLINGER FEDERAL 1-23-34TFH" -> "Gunslinger 1"
+ *   "PESEK FEDERAL 10-3H"           -> "Pesek 10"
+ *   "GABRIEL 1-36-25H"              -> "Gabriel 1"
+ *   "DWYER STEEN 14-23 4H"          -> "Dwyer Steen 14"
+ * Falls back to the cleaned input when no name+number pattern is found.
+ */
+export function suggestDisplayName(legalName: string): string {
+  const cleaned = (legalName || '').replace(/#/g, '').trim();
+  const m = cleaned.match(/^([A-Za-z\s]+?)\s+(\d+)/);
+  if (!m) return cleaned;
+  const allWords = m[1].trim().split(/\s+/);
+  const kept = allWords.filter(w => !DESIGNATION_WORDS.has(w.toUpperCase()));
+  const base = (kept.length ? kept : allWords).join(' ');
+  const titleCase = base.toLowerCase().replace(/\b\w/g, c => c.toUpperCase());
+  return `${titleCase} ${m[2]}`.trim();
+}
+
 // ── In-memory cache ─────────────────────────────────────────────────────────
 
 let operatorsCache: NdicOperator[] | null = null;

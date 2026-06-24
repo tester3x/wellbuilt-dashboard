@@ -144,6 +144,10 @@ export function BulkWellImportModal({
     });
   };
 
+  const updateRow = (i: number, patch: Partial<ImportRow>) => {
+    setRows(prev => prev.map((r, idx) => (idx === i ? { ...r, ...patch } : r)));
+  };
+
   const counts = summarize(rows);
   const importable = rows.filter((_, i) => selected.has(i));
 
@@ -272,26 +276,44 @@ export function BulkWellImportModal({
                 </span>
               </div>
 
-              {/* Grid */}
+              <p className="text-gray-500 text-xs">Edit the suggested display name or route on any row before importing. The display name becomes the well&apos;s permanent key.</p>
+
+              {/* Staging grid */}
               <div className="border border-gray-700 rounded divide-y divide-gray-700 max-h-[45vh] overflow-y-auto">
                 {rows.map((r, i) => {
                   const meta = STATUS_META[r.status];
                   const selectable = SELECTABLE.includes(r.status);
                   return (
-                    <div key={`${r.name}-${i}`} className="flex items-start gap-3 px-3 py-2 text-sm">
+                    <div key={`${r.name}-${i}`} className="flex items-start gap-2 px-3 py-2 text-sm" title={`Pasted: ${r.name}`}>
                       <input
                         type="checkbox"
                         checked={selected.has(i)}
                         disabled={!selectable}
                         onChange={() => toggleRow(i)}
-                        className="mt-1 disabled:opacity-30"
+                        className="mt-2 disabled:opacity-30"
                       />
-                      <span className={`${meta.cls} font-bold w-4 text-center`}>{meta.icon}</span>
+                      <span className={`${meta.cls} font-bold w-4 text-center mt-1.5`}>{meta.icon}</span>
                       <div className="flex-1 min-w-0">
-                        <div className="text-white truncate">{r.name}</div>
-                        <div className="text-gray-500 text-xs truncate">{r.reason}</div>
+                        {selectable ? (
+                          <input
+                            type="text"
+                            value={r.displayName}
+                            onChange={e => updateRow(i, { displayName: e.target.value })}
+                            className="w-full px-2 py-1 bg-gray-700 text-white rounded text-sm"
+                          />
+                        ) : (
+                          <div className="text-white truncate py-1">{r.displayName || r.name}</div>
+                        )}
+                        <div className="text-gray-500 text-xs truncate mt-0.5">{r.reason}</div>
                       </div>
-                      <span className="text-gray-400 text-xs whitespace-nowrap">{r.route}</span>
+                      <input
+                        type="text"
+                        value={r.route}
+                        disabled={!selectable}
+                        onChange={e => updateRow(i, { route: e.target.value })}
+                        title="Route group"
+                        className="w-28 px-2 py-1 bg-gray-700 text-white rounded text-xs disabled:opacity-40"
+                      />
                     </div>
                   );
                 })}
