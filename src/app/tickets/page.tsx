@@ -3,6 +3,7 @@
 import { Suspense, useEffect, useState } from 'react';
 import { useRouter, useSearchParams } from 'next/navigation';
 import { useAuth } from '@/contexts/AuthContext';
+import { isWbPlatformAdmin } from '@/lib/auth';
 import { AppHeader } from '@/components/AppHeader';
 import { Ticket, fetchTickets } from '@/lib/tickets';
 import { TicketDetailModal } from '@/components/TicketDetailModal';
@@ -24,6 +25,8 @@ function TicketsPageInner() {
   const [error, setError] = useState<string | null>(null);
   const [search, setSearch] = useState(searchParams.get('search') || '');
   const [selectedTicket, setSelectedTicket] = useState<Ticket | null>(null);
+  // Company-less non-admin (unassigned viewer): pending activation, no data.
+  const unassigned = !!user && !isWbPlatformAdmin(user) && !user.companyId;
 
   useEffect(() => {
     if (!loading && !user) {
@@ -32,9 +35,9 @@ function TicketsPageInner() {
   }, [user, loading, router]);
 
   useEffect(() => {
-    if (!user) return;
+    if (!user || unassigned) return;
     loadTickets();
-  }, [user]);
+  }, [user, unassigned]);
 
   const loadTickets = async () => {
     try {
@@ -83,6 +86,17 @@ function TicketsPageInner() {
   }
 
   if (!user) return null;
+
+  if (unassigned) {
+    return (
+      <div className="min-h-screen bg-gray-900">
+        <AppHeader />
+        <main className="max-w-7xl mx-auto px-4 py-16">
+          <div className="text-gray-400 text-center">Account pending activation. Contact your WellBuilt administrator.</div>
+        </main>
+      </div>
+    );
+  }
 
   return (
     <div className="min-h-screen bg-gray-900">

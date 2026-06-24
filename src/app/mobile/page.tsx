@@ -3,6 +3,7 @@
 import { useEffect, useMemo, useState } from 'react';
 import { useRouter } from 'next/navigation';
 import { useAuth } from '@/contexts/AuthContext';
+import { isWbPlatformAdmin } from '@/lib/auth';
 import { WellResponse, subscribeToWellStatusesUnified } from '@/lib/wells';
 import Link from 'next/link';
 import { AppHeader } from '@/components/AppHeader';
@@ -25,6 +26,8 @@ interface RouteSort {
 export default function MobilePage() {
   const { user, loading } = useAuth();
   const router = useRouter();
+  // Company-less non-admin (unassigned viewer): pending activation, no data.
+  const unassigned = !!user && !isWbPlatformAdmin(user) && !user.companyId;
   const [wells, setWells] = useState<WellResponse[]>([]);
   const [routes, setRoutes] = useState<string[]>([]);
   const [expandedRoutes, setExpandedRoutes] = useState<Set<string>>(() => {
@@ -71,6 +74,7 @@ export default function MobilePage() {
 
   // Subscribe to well data from packets/outgoing
   useEffect(() => {
+    if (unassigned) { setDataLoading(false); return; }
     const unsubscribe = subscribeToWellStatusesUnified((wellData, routeList) => {
       // Always update wells and routes - this is the data that changes
       setWells(wellData);
@@ -117,11 +121,11 @@ export default function MobilePage() {
     });
 
     return unsubscribe;
-  }, [initialSetupDone]);
+  }, [initialSetupDone, unassigned]);
 
   // Load edge case tickets (submitted for wells not in well_config)
   useEffect(() => {
-    if (wells.length === 0) return;
+    if (unassigned || wells.length === 0) return;
     // Normalize: lowercase, strip # and special chars, collapse spaces
     const normalize = (s: string) => s.toLowerCase().replace(/[#\-_.,()]/g, ' ').replace(/\s+/g, ' ').trim();
     const wellNamesNorm = wells.map(w => normalize(w.wellName));
@@ -267,6 +271,17 @@ export default function MobilePage() {
 
   if (!user) {
     return null;
+  }
+
+  if (unassigned) {
+    return (
+      <div className="min-h-screen bg-gray-900">
+        <AppHeader />
+        <main className="max-w-7xl mx-auto px-4 py-16">
+          <div className="text-gray-400 text-center">Account pending activation. Contact your WellBuilt administrator.</div>
+        </main>
+      </div>
+    );
   }
 
   return (

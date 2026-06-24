@@ -3,6 +3,7 @@
 import { useEffect, useState, useMemo, useCallback, useRef, Suspense } from 'react';
 import { useRouter, useSearchParams } from 'next/navigation';
 import { useAuth } from '@/contexts/AuthContext';
+import { isWbPlatformAdmin } from '@/lib/auth';
 import { WellResponse, subscribeToWellStatusesUnified } from '@/lib/wells';
 import { AppHeader } from '@/components/AppHeader';
 import { ref, get, set } from 'firebase/database';
@@ -372,6 +373,9 @@ function timeAgo(ts: any): string {
 
 function DispatchPageInner() {
   const { user, loading } = useAuth();
+  // Company-less non-admin (unassigned viewer): pending activation — no data,
+  // and the board (incl. all write actions) never renders.
+  const unassigned = !!user && !isWbPlatformAdmin(user) && !user.companyId;
   const router = useRouter();
 
   // Data state
@@ -658,20 +662,22 @@ function DispatchPageInner() {
 
   // Subscribe to well data
   useEffect(() => {
+    if (unassigned) { setDataLoading(false); return; }
     const unsubscribe = subscribeToWellStatusesUnified((wellData, routeList) => {
       setWells(wellData);
       setRoutes(routeList.filter(r => r !== 'Unrouted'));
       setDataLoading(false);
     });
     return unsubscribe;
-  }, []);
+  }, [unassigned]);
 
   // Load drivers + disposals
   useEffect(() => {
+    if (unassigned) return;
     loadDriversData();
     loadDisposals().then(setAllDisposals).catch(() => {});
     loadOperators().then(setAllOperators).catch(console.error);
-  }, []);
+  }, [unassigned]);
 
   // Live driver on-shift presence (green dot). loadDriversData() sets the initial
   // onShift via a one-time getDoc; without this, a phone that logs in / starts a
@@ -683,6 +689,7 @@ function DispatchPageInner() {
   // under the user). Note: `today` is captured at mount; a dashboard left open
   // past midnight keeps watching the prior day until reload (acceptable).
   useEffect(() => {
+    if (unassigned) return;
     const firestore = getFirestoreDb();
     const now = new Date();
     const today = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-${String(now.getDate()).padStart(2, '0')}`;
@@ -708,13 +715,13 @@ function DispatchPageInner() {
       });
     }, () => {});
     return () => unsub();
-  }, []);
+  }, [unassigned]);
 
   // Load dynamic service types from job packages
   // WB admin (no companyId): loads ALL packages so dispatch has full service type list
   // Hauler admin: loads only their company's active packages
   useEffect(() => {
-    if (!user) return;
+    if (!user || unassigned) return;
     const loadPackageJobTypes = async () => {
       try {
         // Use user's company, or for WB admin derive from first driver's company
@@ -796,10 +803,11 @@ function DispatchPageInner() {
       }
     };
     loadPackageJobTypes();
-  }, [user, drivers.length]);
+  }, [user, drivers.length, unassigned]);
 
   // Subscribe to active + completed dispatches in real-time
   useEffect(() => {
+    if (unassigned) return;
     const firestore = getFirestoreDb();
     const q = query(
       collection(firestore, 'dispatches'),
@@ -818,11 +826,11 @@ function DispatchPageInner() {
       loadDispatchesData();
     });
     return () => unsub();
-  }, []);
+  }, [unassigned]);
 
   // Subscribe to projects in real-time (scoped to company for hauler admins)
   useEffect(() => {
-    if (!user) return;
+    if (!user || unassigned) return;
     const firestore = getFirestoreDb();
     const constraints: any[] = [
       where('status', 'in', ['active', 'paused']),
@@ -849,7 +857,7 @@ function DispatchPageInner() {
       console.error('Projects listener error:', err);
     });
     return () => unsub();
-  }, [user]);
+  }, [user, unassigned]);
 
   // Load project dispatches + invoices when a project is selected
   useEffect(() => {
@@ -2282,6 +2290,17 @@ function DispatchPageInner() {
   }
 
   if (!user) return null;
+
+  if (unassigned) {
+    return (
+      <div className="h-screen bg-gray-900 flex flex-col overflow-hidden">
+        <AppHeader />
+        <main className="flex-1 flex items-center justify-center px-4">
+          <div className="text-gray-400 text-center">Account pending activation. Contact your WellBuilt administrator.</div>
+        </main>
+      </div>
+    );
+  }
 
   // ─── Render ────────────────────────────────────────────────────────────────
 
