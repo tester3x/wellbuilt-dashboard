@@ -2,7 +2,7 @@
 // Used by both CompaniesTab (admin) and Settings page (self-service)
 
 import { getFirestoreDb } from '@/lib/firebase';
-import { collection, getDocs, doc, getDoc, updateDoc } from 'firebase/firestore';
+import { collection, getDocs, doc, getDoc, updateDoc, onSnapshot } from 'firebase/firestore';
 
 // ── Types ──────────────────────────────────────────────────────────────────────
 
@@ -512,6 +512,23 @@ export async function loadCompanyById(companyId: string): Promise<CompanyConfig 
   const snap = await getDoc(doc(firestore, 'companies', companyId));
   if (!snap.exists()) return null;
   return { id: snap.id, ...snap.data() } as CompanyConfig;
+}
+
+/**
+ * Subscribe to a single company's settings in real-time. cb fires with the
+ * latest config (or null if the doc is missing) on every change. Returns the
+ * unsubscribe function — call it on company switch / unmount.
+ */
+export function subscribeToCompany(
+  companyId: string,
+  cb: (company: CompanyConfig | null) => void,
+): () => void {
+  const firestore = getFirestoreDb();
+  return onSnapshot(
+    doc(firestore, 'companies', companyId),
+    (snap) => cb(snap.exists() ? ({ id: snap.id, ...snap.data() } as CompanyConfig) : null),
+    (err) => { console.error('[companySettings] subscribeToCompany error:', err); },
+  );
 }
 
 export async function updateCompanyFields(

@@ -7,8 +7,8 @@ import { hasCapability, isWbPlatformAdmin } from '@/lib/auth';
 import { AppHeader } from '@/components/AppHeader';
 import {
   type CompanyConfig,
-  loadCompanyById,
   loadAllCompanies,
+  subscribeToCompany,
 } from '@/lib/companySettings';
 import { CompanyProfileCard } from '@/components/settings/CompanyProfileCard';
 import { InvoiceConfigCard } from '@/components/settings/InvoiceConfigCard';
@@ -50,74 +50,54 @@ export default function SettingsPage() {
     }
   }, [user, authLoading, router]);
 
-  // Load companies
+  // Resolve which company to show (sets selectedCompanyId only). The company
+  // data itself is loaded via the realtime subscription below.
   useEffect(() => {
     if (!user || authLoading) return;
-
-    const load = async () => {
-      setDataLoading(true);
-      setError(null);
-      try {
-        if (isWbAdmin) {
-          // WB admin: load all companies, show picker
-          const companies = await loadAllCompanies();
+    setError(null);
+    if (isWbAdmin) {
+      // WB admin: load the picker list, default-select the first company.
+      loadAllCompanies()
+        .then(companies => {
           setAllCompanies(companies);
-          // Default to first company if available
-          if (companies.length > 0 && !selectedCompanyId) {
-            setSelectedCompanyId(companies[0].id);
-            setCompany(companies[0]);
-          }
-        } else if (user.companyId) {
-          // Hauler admin: load their company
-          const comp = await loadCompanyById(user.companyId);
-          if (comp) {
-            setCompany(comp);
-            setSelectedCompanyId(comp.id);
-          } else {
-            setError('Company not found');
-          }
-        } else {
-          // Company-less non-admin — do not load any company.
-          setError('No company assigned. Contact your WellBuilt administrator.');
-        }
-      } catch (err) {
-        console.error('Failed to load company:', err);
-        setError('Failed to load company data');
-      } finally {
-        setDataLoading(false);
-      }
-    };
-
-    load();
-  }, [user, authLoading, isWbAdmin]);
-
-  // Handle company picker change
-  const handleCompanyChange = async (companyId: string) => {
-    setSelectedCompanyId(companyId);
-    setDataLoading(true);
-    try {
-      const comp = await loadCompanyById(companyId);
-      setCompany(comp);
-    } catch {
-      setError('Failed to load company');
-    } finally {
+          setSelectedCompanyId(prev => prev ?? (companies[0]?.id ?? null));
+          if (companies.length === 0) setDataLoading(false);
+        })
+        .catch(() => { setError('Failed to load companies'); setDataLoading(false); });
+    } else if (user.companyId) {
+      // Hauler admin: scope to their own company.
+      setSelectedCompanyId(user.companyId);
+    } else {
+      // Company-less non-admin — do not load any company.
+      setError('No company assigned. Contact your WellBuilt administrator.');
       setDataLoading(false);
     }
+  }, [user, authLoading, isWbAdmin]);
+
+  // Realtime subscription to the selected company's settings. Re-subscribes on
+  // company switch; unsubscribes on switch/unmount. This is what makes WB-admin
+  // and customer Settings views update each other live without a refresh.
+  useEffect(() => {
+    if (!selectedCompanyId) return;
+    setDataLoading(true);
+    const unsub = subscribeToCompany(selectedCompanyId, (comp) => {
+      setCompany(comp);
+      setError(comp ? null : 'Company not found');
+      setDataLoading(false);
+    });
+    return unsub;
+  }, [selectedCompanyId]);
+
+  // Handle company picker change — the subscription effect handles (re)loading.
+  const handleCompanyChange = (companyId: string) => {
+    setSelectedCompanyId(companyId);
   };
 
-  // Re-fetch current company after any card saves
+  // Card saves propagate to `company` automatically via the realtime
+  // subscription; only refresh the picker list (names may have changed).
   const handleRefresh = async () => {
-    if (!selectedCompanyId) return;
-    try {
-      const comp = await loadCompanyById(selectedCompanyId);
-      setCompany(comp);
-      // Also refresh the picker list if WB admin
-      if (isWbAdmin) {
-        const companies = await loadAllCompanies();
-        setAllCompanies(companies);
-      }
-    } catch {
-      console.error('Failed to refresh company');
+    if (isWbAdmin) {
+      try { setAllCompanies(await loadAllCompanies()); } catch { /* non-fatal */ }
     }
   };
 
