@@ -6,7 +6,7 @@ import {
   onAuthStateChanged,
   User
 } from 'firebase/auth';
-import { ref, get, set, update } from 'firebase/database';
+import { ref, get, set, update, serverTimestamp } from 'firebase/database';
 import { getFirebaseAuth, getFirebaseDatabase } from './firebase';
 
 // ── Role primitives ─────────────────────────────────────────────────────────
@@ -127,6 +127,9 @@ export interface WellBuiltUser {
   displayName?: string;
   companyId?: string;     // If set, scopes dashboard to this company only
   companyName?: string;   // Display name for the company
+  requestedCompanyName?: string;  // Pending signup: company name the user requested
+  onboardingStatus?: string;      // e.g. 'pending_company_assignment'
+  status?: string;                // e.g. 'pending'
 }
 
 /**
@@ -188,17 +191,34 @@ export async function signIn(email: string, password: string): Promise<WellBuilt
   return await getUserWithRole(result.user);
 }
 
-// Register a new dashboard account with email/password. Creates only the
-// Firebase Auth user — no RTDB users/{uid} record is written, so the new
-// account resolves to role = 'viewer' via getUserWithRole's default. A
-// WellBuilt admin must manually promote role to 'admin' or 'it' in RTDB to
-// grant admin page access.
+// Register a new dashboard account with email/password. Creates the Firebase
+// Auth user AND a pending RTDB users/{uid} record that preserves the requested
+// company name. The account starts unassigned (role 'viewer', companyId null,
+// status 'pending'); a WellBuilt admin reviews the pending request and assigns
+// a company + promotes the role later. No company is created here.
 export async function registerWithEmail(
   email: string,
-  password: string
+  password: string,
+  companyName?: string,
 ): Promise<WellBuiltUser> {
   const auth = getFirebaseAuth();
   const result = await createUserWithEmailAndPassword(auth, email, password);
+  // Capture the signup so the requested company name isn't lost.
+  try {
+    const db = getFirebaseDatabase();
+    await set(ref(db, `users/${result.user.uid}`), {
+      status: 'pending',
+      requestedCompanyName: companyName?.trim() || null,
+      requestedAt: serverTimestamp(),
+      role: 'viewer',
+      companyId: null,
+      onboardingStatus: 'pending_company_assignment',
+      email: result.user.email || email,
+      displayName: result.user.email || email,
+    });
+  } catch (err) {
+    console.warn('[auth] failed to write pending signup record (non-fatal):', err);
+  }
   return await getUserWithRole(result.user);
 }
 
@@ -219,6 +239,9 @@ async function getUserWithRole(user: User): Promise<WellBuiltUser> {
 
   let companyId: string | undefined;
   let companyName: string | undefined;
+  let requestedCompanyName: string | undefined;
+  let onboardingStatus: string | undefined;
+  let status: string | undefined;
 
   if (snapshot.exists()) {
     const userData = snapshot.val();
@@ -226,6 +249,9 @@ async function getUserWithRole(user: User): Promise<WellBuiltUser> {
     displayName = userData.displayName || displayName;
     companyId = userData.companyId || undefined;
     companyName = userData.companyName || undefined;
+    requestedCompanyName = userData.requestedCompanyName || undefined;
+    onboardingStatus = userData.onboardingStatus || undefined;
+    status = userData.status || undefined;
   }
 
   // Backfill email + displayName onto the RTDB record if either is missing.
@@ -259,6 +285,9 @@ async function getUserWithRole(user: User): Promise<WellBuiltUser> {
     displayName,
     companyId,
     companyName,
+    requestedCompanyName,
+    onboardingStatus,
+    status,
   };
 }
 

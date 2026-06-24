@@ -148,7 +148,17 @@ export function DashboardV1() {
       <p className="text-gray-400 text-sm mb-6">How are we doing right now?</p>
 
       {unassigned ? (
-        <div className="text-gray-400 py-16 text-center">No company assigned. Contact your WellBuilt administrator.</div>
+        <div className="py-16 text-center">
+          {user?.requestedCompanyName ? (
+            <>
+              <div className="text-gray-400 text-sm">Pending Company Request</div>
+              <div className="text-white text-lg font-semibold mt-1">{user.requestedCompanyName}</div>
+              <div className="text-gray-400 text-sm mt-3">Your account is awaiting approval.</div>
+            </>
+          ) : (
+            <div className="text-gray-400">No company assigned. Contact your WellBuilt administrator.</div>
+          )}
+        </div>
       ) : loadingStats && !stats ? (
         <div className="text-gray-400 py-12 text-center">Loading dashboard…</div>
       ) : !stats ? (
