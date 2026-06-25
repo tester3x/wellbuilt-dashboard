@@ -2119,7 +2119,7 @@ export function DriversTab({ scopeCompanyId, isWbAdmin = false }: DriversTabProp
                 onClick={() => { const d = explainTarget; setExplainTarget(null); openDeleteModal(d); }}
                 className="flex-1 px-4 py-2 bg-red-700 hover:bg-red-600 text-white rounded font-medium"
               >
-                I Understand
+                Continue
               </button>
             </div>
           </div>
