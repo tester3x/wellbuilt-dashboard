@@ -139,39 +139,6 @@ export function AppHeader() {
               {user.email} <span className="text-gray-600">&bull;</span> {getRoleLabel(user.role, userCompany)}
             </p>
           </div>
-          {/* Cabinet folder tabs — raised active folder, accent top edge, sits on
-              a shared baseline so sections read like an application, not a menu. */}
-          <nav className="flex items-end gap-1 border-b border-gray-700 px-2 max-w-full overflow-x-auto whitespace-nowrap xl:justify-center">
-            {TABS.filter(tab => {
-              // WB Mobile is the well-monitoring product. Hide it for a
-              // company-scoped user whose company isn't a monitoring company
-              // (e.g. a ticket_only / Dispatch-only tenant). Platform admins
-              // (no companyId / no userCompany) keep global access.
-              if (tab.id === 'mobile' && user?.companyId && userCompany?.wellMonitoring !== true) return false;
-              // Capability-based gate wins when set. Falls back to legacy minRole
-              // only if capability is unset (e.g., Home tab with no gate at all).
-              if (tab.capability) return hasCapability(user, tab.capability, userCompany);
-              if (tab.minRole) return hasRole(user, tab.minRole);
-              return true;
-            }).map((tab) => {
-              const isActive = tab.id === activeTabId;
-              return (
-                <Link
-                  key={tab.id}
-                  href={tab.href}
-                  aria-current={isActive ? 'page' : undefined}
-                  style={isActive ? { borderTopColor: accent } : undefined}
-                  className={`relative -mb-px flex-shrink-0 whitespace-nowrap rounded-t-lg border border-gray-700 px-5 text-sm font-medium transition-all outline-none focus-visible:ring-2 focus-visible:ring-white/40 ${
-                    isActive
-                      ? 'bg-gray-900 text-white border-t-2 border-b-gray-900 pt-1.5 pb-2.5 -translate-y-px shadow-sm'
-                      : 'bg-gray-800/60 text-gray-400 border-b-transparent pt-1.5 pb-2 hover:bg-gray-700/70 hover:text-gray-200'
-                  }`}
-                >
-                  {tab.label}
-                </Link>
-              );
-            })}
-          </nav>
         </div>
 
         {/* RIGHT: Chat + Bell, pinned to right edge */}
@@ -180,6 +147,40 @@ export function AppHeader() {
           <NotificationBell />
         </div>
       </div>
+
+      {/* Cabinet folder tabs — full-width row, centered as a group when they fit.
+          w-max + mx-auto on the inner strip means: center when narrower than the
+          95vw viewport; left-align + scroll-from-left only on genuine overflow.
+          overflow-y-hidden prevents a stray vertical scrollbar on desktop. */}
+      <nav className="w-[95vw] max-w-[95vw] mx-auto overflow-x-auto overflow-y-hidden">
+        <div className="flex w-max mx-auto items-end gap-1 whitespace-nowrap border-b border-gray-700 px-2">
+          {TABS.filter(tab => {
+            // WB Mobile is the well-monitoring product. Hide it for a company-scoped
+            // user whose company isn't a monitoring company. Platform admins keep it.
+            if (tab.id === 'mobile' && user?.companyId && userCompany?.wellMonitoring !== true) return false;
+            if (tab.capability) return hasCapability(user, tab.capability, userCompany);
+            if (tab.minRole) return hasRole(user, tab.minRole);
+            return true;
+          }).map((tab) => {
+            const isActive = tab.id === activeTabId;
+            return (
+              <Link
+                key={tab.id}
+                href={tab.href}
+                aria-current={isActive ? 'page' : undefined}
+                style={isActive ? { borderTopColor: accent } : undefined}
+                className={`relative -mb-px flex-shrink-0 whitespace-nowrap rounded-t-lg border border-gray-700 px-5 text-sm font-medium transition-all outline-none focus-visible:ring-2 focus-visible:ring-white/40 ${
+                  isActive
+                    ? 'bg-gray-900 text-white border-t-2 border-b-gray-900 pt-1.5 pb-2.5 -translate-y-px shadow-sm'
+                    : 'bg-gray-800/60 text-gray-400 border-b-transparent pt-1.5 pb-2 hover:bg-gray-700/70 hover:text-gray-200'
+                }`}
+              >
+                {tab.label}
+              </Link>
+            );
+          })}
+        </div>
+      </nav>
 
       {/* Chat Sidebar */}
       <ChatSidebar
