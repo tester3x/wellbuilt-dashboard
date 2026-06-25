@@ -2416,10 +2416,10 @@ function DispatchPageInner() {
   // ─── Render ────────────────────────────────────────────────────────────────
 
   return (
-    <div className="h-screen bg-gray-900 flex flex-col overflow-hidden">
+    <div className="min-h-screen bg-gray-900 flex flex-col xl:h-screen xl:overflow-hidden">
       <AppHeader />
 
-      <main className="flex-1 flex flex-col px-4 py-4 overflow-hidden">
+      <main className="flex-1 flex flex-col px-4 py-4 xl:overflow-hidden">
 
         {/* ═══════════════════════════════════════════════════════════════════════
             DISPATCH TOOLBAR — Always visible at top. Quick actions + inline forms.
@@ -2467,13 +2467,13 @@ function DispatchPageInner() {
         {/* ═══════════════════════════════════════════════════════════════════════
             MAIN WORKSPACE — 50/50. Left: PW+SW top, Well Queue below. Right: Active Jobs full height.
             ═══════════════════════════════════════════════════════════════════════ */}
-        <div className="flex-1 flex gap-3 min-h-0">
+        <div className="flex-1 flex flex-col xl:flex-row gap-3 min-h-0">
 
           {/* ═══════ LEFT HALF (50%): dispatch cards + well queue ═══════ */}
-          <div className="w-[50%] flex-shrink-0 flex flex-col gap-3 min-h-0 overflow-hidden">
+          <div className="w-full xl:w-[50%] flex-shrink-0 flex flex-col gap-3 min-h-0 xl:overflow-hidden">
 
             {/* ── WB Job Builder (PW / SW / Projects) ── */}
-            <div className={`bg-gray-800 border rounded-lg p-4 flex-shrink-0 flex flex-col h-[520px] ${
+            <div className={`bg-gray-800 border rounded-lg p-4 flex-shrink-0 flex flex-col min-h-[520px] xl:h-[520px] xl:min-h-0 ${
               builderTab === 'pw' ? 'border-blue-600/40' : builderTab === 'sw' ? 'border-purple-600/40' : 'border-emerald-600/40'
             }`}>
               {/* Card title — deliberately distinct from the active builder tab below */}
@@ -3230,7 +3230,7 @@ function DispatchPageInner() {
             </div>{/* end Tabbed Builder panel */}
 
             {/* ═══════ Well Queue (fills remaining left half) ═══════ */}
-            <div className="bg-gray-800 rounded-lg border border-gray-700 flex-1 flex flex-col overflow-hidden">
+            <div className="bg-gray-800 rounded-lg border border-gray-700 flex-1 flex flex-col min-h-[480px] xl:min-h-0 xl:overflow-hidden">
               {/* Panel header with filters */}
               <div className="flex items-center gap-3 px-4 py-2.5 border-b border-gray-700 flex-shrink-0">
                 <h3 className="text-sm font-semibold text-white flex-shrink-0">Well Queue</h3>
@@ -3347,8 +3347,8 @@ function DispatchPageInner() {
           </div>{/* end left half */}
 
           {/* ═══════ RIGHT HALF (50%): Active Jobs / Projects ═══════ */}
-          <div className="w-[50%] flex-shrink-0 flex flex-col min-h-0 overflow-hidden">
-            <div className="bg-gray-800 rounded-lg border border-gray-700 flex-1 flex flex-col overflow-hidden">
+          <div className="w-full xl:w-[50%] flex-shrink-0 flex flex-col min-h-0 xl:overflow-hidden">
+            <div className="bg-gray-800 rounded-lg border border-gray-700 flex-1 flex flex-col min-h-[480px] xl:min-h-0 xl:overflow-hidden">
               {/* Panel header with tabs */}
               <div className="flex items-center justify-between px-4 py-2.5 border-b border-gray-700 flex-shrink-0">
                 <div className="flex items-center gap-1">
