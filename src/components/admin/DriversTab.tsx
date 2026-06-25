@@ -2202,7 +2202,7 @@ export function DriversTab({ scopeCompanyId, isWbAdmin = false }: DriversTabProp
                 </label>
               )}
 
-              {!deleteProbing && !deleteProbe?.probeError && (!hasHistory || deleteOverride) && (
+              {!deleteProbing && !deleteProbe?.probeError && (
                 <div className="mb-4">
                   <label className="text-gray-400 text-xs uppercase tracking-wider block mb-1">
                     Reason for deletion <span className="text-red-400">*</span>
@@ -2220,7 +2220,7 @@ export function DriversTab({ scopeCompanyId, isWbAdmin = false }: DriversTabProp
                 </div>
               )}
 
-              {!deleteProbing && !deleteProbe?.probeError && (!hasHistory || deleteOverride) && (
+              {!deleteProbing && !deleteProbe?.probeError && (
                 <div className="mb-4">
                   <label className="text-gray-400 text-xs uppercase tracking-wider block mb-1">
                     Type <span className="text-white font-mono">{deleteTarget.displayName}</span> to confirm
