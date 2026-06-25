@@ -2467,10 +2467,10 @@ function DispatchPageInner() {
         {/* ═══════════════════════════════════════════════════════════════════════
             MAIN WORKSPACE — 50/50. Left: PW+SW top, Well Queue below. Right: Active Jobs full height.
             ═══════════════════════════════════════════════════════════════════════ */}
-        <div className="flex-1 flex flex-col xl:flex-row gap-3 min-h-0">
+        <div className="flex-1 flex flex-col min-[900px]:flex-row gap-3 min-h-0">
 
           {/* ═══════ LEFT HALF (50%): dispatch cards + well queue ═══════ */}
-          <div className="w-full xl:w-[50%] flex-shrink-0 flex flex-col gap-3 min-h-0 xl:overflow-hidden">
+          <div className="w-full min-[900px]:w-[50%] flex-shrink-0 flex flex-col gap-3 min-h-0 xl:overflow-hidden">
 
             {/* ── WB Job Builder (PW / SW / Projects) ── */}
             <div className={`bg-gray-800 border rounded-lg p-4 flex-shrink-0 flex flex-col min-h-[520px] xl:h-[520px] xl:min-h-0 ${
@@ -3347,7 +3347,7 @@ function DispatchPageInner() {
           </div>{/* end left half */}
 
           {/* ═══════ RIGHT HALF (50%): Active Jobs / Projects ═══════ */}
-          <div className="w-full xl:w-[50%] flex-shrink-0 flex flex-col min-h-0 xl:overflow-hidden">
+          <div className="w-full min-[900px]:w-[50%] flex-shrink-0 flex flex-col min-h-0 xl:overflow-hidden">
             <div className="bg-gray-800 rounded-lg border border-gray-700 flex-1 flex flex-col min-h-[480px] xl:min-h-0 xl:overflow-hidden">
               {/* Panel header with tabs */}
               <div className="flex items-center justify-between px-4 py-2.5 border-b border-gray-700 flex-shrink-0">
