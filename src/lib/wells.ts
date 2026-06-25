@@ -1,6 +1,7 @@
 // Well data utilities - fetches from Firebase
 import { ref, get, onValue, query, orderByChild, set } from 'firebase/database';
 import { getFirebaseDatabase } from './firebase';
+import { getMaintainedWellNames } from './maintainedWells';
 
 export interface WellResponse {
   wellName: string;
@@ -152,6 +153,25 @@ export async function fetchRouteNames(): Promise<string[]> {
     if (config.route) {
       routes.add(config.route);
     }
+  });
+
+  return Array.from(routes).sort();
+}
+
+// Tenant-scoped route names (Model B). Returns the distinct routes only for the
+// wells a company maintains (maintained_wells/{companyId} ∩ well_config). Returns
+// [] when the company maintains no wells. NEVER falls back to the global route
+// list — that cross-tenant bleed is exactly what this replaces.
+export async function fetchCompanyRouteNames(companyId: string): Promise<string[]> {
+  if (!companyId) return [];
+  const names = await getMaintainedWellNames(companyId);
+  if (names.size === 0) return [];
+
+  const configs = await fetchWellConfigs();
+  const routes = new Set<string>();
+  names.forEach((name) => {
+    const route = configs[name]?.route;
+    if (route) routes.add(route);
   });
 
   return Array.from(routes).sort();

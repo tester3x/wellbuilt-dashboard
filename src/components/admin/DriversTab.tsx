@@ -5,7 +5,7 @@ import { httpsCallable } from 'firebase/functions';
 import { getFirebaseDatabase, getFirestoreDb, getFirebaseFunctions } from '@/lib/firebase';
 import { ref, get, set, remove, update } from 'firebase/database';
 import { collection, getDocs } from 'firebase/firestore';
-import { fetchRouteNames } from '@/lib/wells';
+import { fetchCompanyRouteNames } from '@/lib/wells';
 import { type UserRole, DEFAULT_ROLE_LABELS } from '@/lib/auth';
 import { useAuth } from '@/contexts/AuthContext';
 import { getRoleLabel } from '@/lib/auth';
@@ -279,17 +279,23 @@ export function DriversTab({ scopeCompanyId, isWbAdmin = false }: DriversTabProp
     })();
   }, []);
 
-  // Load available routes from well_config
+  // Company-scoped routes for the approval modal (Model B — no global bleed).
+  // Reloads whenever the approval company changes and clears any prior route
+  // selection so routes never carry across tenants.
   useEffect(() => {
+    setApprovalRoutes([]);
+    let cancelled = false;
     (async () => {
       try {
-        const routes = await fetchRouteNames();
-        setAvailableRoutes(routes);
+        const routes = approvalCompanyId ? await fetchCompanyRouteNames(approvalCompanyId) : [];
+        if (!cancelled) setAvailableRoutes(routes);
       } catch (err) {
-        console.error('Failed to load routes:', err);
+        console.error('Failed to load company routes:', err);
+        if (!cancelled) setAvailableRoutes([]);
       }
     })();
-  }, []);
+    return () => { cancelled = true; };
+  }, [approvalCompanyId]);
 
   // Load available job packages
   useEffect(() => {
@@ -475,7 +481,9 @@ export function DriversTab({ scopeCompanyId, isWbAdmin = false }: DriversTabProp
       setMessage('Please assign at least one customer (operator)');
       return;
     }
-    if (approvalRoutes.length === 0) {
+    // Routes are required ONLY when the company actually has routes configured.
+    // Operator-only companies (no maintained wells/routes) approve with [].
+    if (availableRoutes.length > 0 && approvalRoutes.length === 0) {
       setMessage('Please assign at least one route');
       return;
     }
@@ -969,7 +977,17 @@ export function DriversTab({ scopeCompanyId, isWbAdmin = false }: DriversTabProp
               + Assign Operator
             </button>
             <button
-              onClick={() => { setRouteTarget(driver); setSelectedRoutes(driver.assignedRoutes || []); setShowRoutesModal(true); }}
+              onClick={async () => {
+                setRouteTarget(driver);
+                setSelectedRoutes(driver.assignedRoutes || []);
+                setShowRoutesModal(true);
+                try {
+                  setAvailableRoutes(driver.companyId ? await fetchCompanyRouteNames(driver.companyId) : []);
+                } catch (err) {
+                  console.error('Failed to load company routes:', err);
+                  setAvailableRoutes([]);
+                }
+              }}
               className="px-3 py-1 text-sm rounded bg-blue-600 hover:bg-blue-500 text-white"
             >
               {(driver.assignedRoutes?.length || 0) > 0 ? 'Edit Routes' : '+ Assign Routes'}
@@ -1424,7 +1442,8 @@ export function DriversTab({ scopeCompanyId, isWbAdmin = false }: DriversTabProp
         const selectedCompany = companiesList.find(c => c.id === approvalCompanyId);
         const operators = selectedCompany?.assignedOperators || [];
         const isCompanyScoped = !!scopeCompanyId;
-        const canApprove = approvalCompanyId && approvalCustomers.length > 0 && approvalRoutes.length > 0;
+        const routesRequired = availableRoutes.length > 0;
+        const canApprove = !!approvalCompanyId && approvalCustomers.length > 0 && (!routesRequired || approvalRoutes.length > 0);
 
         return (
           <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50">
@@ -1533,13 +1552,15 @@ export function DriversTab({ scopeCompanyId, isWbAdmin = false }: DriversTabProp
               {/* Section 3: Routes */}
               <div className="mb-4">
                 <label className="text-gray-400 text-xs font-medium uppercase tracking-wider block mb-2">
-                  Route <span className="text-red-400">*</span>
+                  Route {routesRequired
+                    ? <span className="text-red-400">*</span>
+                    : <span className="normal-case text-gray-500">(optional)</span>}
                   {approvalRoutes.length > 0 && (
                     <span className="text-blue-400 ml-2 normal-case">{approvalRoutes.length} selected</span>
                   )}
                 </label>
                 {availableRoutes.length === 0 ? (
-                  <p className="text-gray-500 text-sm">No routes found in well_config</p>
+                  <p className="text-gray-500 text-sm">No routes configured for this company.</p>
                 ) : (
                   <div className="space-y-1 max-h-40 overflow-y-auto bg-gray-900 rounded p-2">
                     {availableRoutes.map(route => (
@@ -1603,7 +1624,7 @@ export function DriversTab({ scopeCompanyId, isWbAdmin = false }: DriversTabProp
             </p>
 
             {availableRoutes.length === 0 ? (
-              <p className="text-yellow-400 text-sm">No routes found in well_config.</p>
+              <p className="text-yellow-400 text-sm">No routes configured for this company.</p>
             ) : (
               <div className="space-y-2 max-h-64 overflow-y-auto">
                 {availableRoutes.map(route => (
