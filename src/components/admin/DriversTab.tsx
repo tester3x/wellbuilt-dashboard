@@ -89,6 +89,8 @@ export function DriversTab({ scopeCompanyId, isWbAdmin = false }: DriversTabProp
   const [deleteConfirmName, setDeleteConfirmName] = useState('');
   const [deleteOverride, setDeleteOverride] = useState(false);
   const [deleting, setDeleting] = useState(false);
+  // Pre-delete explanation/acknowledgement modal (shown before the guarded modal).
+  const [explainTarget, setExplainTarget] = useState<ApprovedDriver | null>(null);
 
   // Assign customer modal
   const [showAssignModal, setShowAssignModal] = useState(false);
@@ -953,7 +955,19 @@ export function DriversTab({ scopeCompanyId, isWbAdmin = false }: DriversTabProp
   // Extracted so the same driver row + dashboard user row JSX can be used
   // by both the flat (company-scoped) list and the grouped (WB admin) list
   // without duplicating ~270 lines of markup.
-  const renderDriverRow = (driver: ApprovedDriver) => (
+  const renderDriverRow = (driver: ApprovedDriver) => {
+    // Lifecycle gating: deactivated/archived drivers are read-only except for
+    // their permitted lifecycle actions. Settings edits are hidden until the
+    // driver is active again.
+    const isArchived = driver.archived === true;
+    const isInactive = driver.active === false;
+    const isLifecycleLocked = isArchived || isInactive;
+    // Delete authority: WB platform admin may delete any driver (Platform Delete);
+    // a company-scoped admin may delete only drivers in their own company
+    // (Delete Employee). The list is already company-scoped, but we guard the
+    // companyId match explicitly so no admin can act outside their authority.
+    const canDelete = isWbAdmin || (!!scopeCompanyId && driver.companyId === scopeCompanyId);
+    return (
     <div key={driver.key} className={`rounded ${driver.archived ? 'bg-gray-800 opacity-60' : 'bg-gray-700'}`}>
       {/* Driver row */}
       <div
@@ -1019,12 +1033,15 @@ export function DriversTab({ scopeCompanyId, isWbAdmin = false }: DriversTabProp
       {expandedDriver === driver.key && (
         <div className="border-t border-gray-600 p-3 space-y-3">
           <div className="flex flex-wrap gap-2">
-            <button
-              onClick={() => toggleDriverActive(driver)}
-              className={`px-3 py-1 text-sm rounded ${driver.active ? 'bg-gray-600 hover:bg-gray-500 text-gray-300' : 'bg-green-600 hover:bg-green-500 text-white'}`}
-            >
-              {driver.active ? 'Deactivate' : 'Activate'}
-            </button>
+            {/* Activate/Deactivate — hidden when archived (must Unarchive first) */}
+            {!isArchived && (
+              <button
+                onClick={() => toggleDriverActive(driver)}
+                className={`px-3 py-1 text-sm rounded ${driver.active ? 'bg-gray-600 hover:bg-gray-500 text-gray-300' : 'bg-green-600 hover:bg-green-500 text-white'}`}
+              >
+                {driver.active ? 'Deactivate' : 'Activate'}
+              </button>
+            )}
             {driver.archived ? (
               <button
                 onClick={() => unarchiveDriver(driver)}
@@ -1042,6 +1059,7 @@ export function DriversTab({ scopeCompanyId, isWbAdmin = false }: DriversTabProp
                 Archive
               </button>
             )}
+            {!isLifecycleLocked && (
             <div className="relative">
               <button
                 onClick={() => setRoleMenuForKey(roleMenuForKey === driver.key ? null : driver.key)}
@@ -1069,7 +1087,8 @@ export function DriversTab({ scopeCompanyId, isWbAdmin = false }: DriversTabProp
                 </div>
               )}
             </div>
-            {isWbAdmin && (
+            )}
+            {isWbAdmin && !isLifecycleLocked && (
               <button
                 onClick={() => toggleDriverAdmin(driver)}
                 className={`px-3 py-1 text-sm rounded ${driver.isAdmin ? 'bg-gray-600 hover:bg-gray-500 text-gray-300' : 'bg-slate-600 hover:bg-slate-500 text-gray-200'}`}
@@ -1078,12 +1097,15 @@ export function DriversTab({ scopeCompanyId, isWbAdmin = false }: DriversTabProp
                 {driver.isAdmin ? 'App Admin \u2713' : 'App Admin'}
               </button>
             )}
+            {!isLifecycleLocked && (
             <button
               onClick={() => { setAssignTarget(driver); setShowAssignModal(true); }}
               className="px-3 py-1 text-sm rounded bg-yellow-600 hover:bg-yellow-500 text-white"
             >
               + Assign Operator
             </button>
+            )}
+            {!isLifecycleLocked && (
             <button
               onClick={async () => {
                 setRouteTarget(driver);
@@ -1100,13 +1122,16 @@ export function DriversTab({ scopeCompanyId, isWbAdmin = false }: DriversTabProp
             >
               {(driver.assignedRoutes?.length || 0) > 0 ? 'Edit Routes' : '+ Assign Routes'}
             </button>
+            )}
+            {!isLifecycleLocked && (
             <button
               onClick={() => { setPackageTarget(driver); setSelectedPackageId(driver.defaultPackageId || ''); setShowPackageModal(true); }}
               className={`px-3 py-1 text-sm rounded ${driver.defaultPackageId ? 'bg-indigo-600 hover:bg-indigo-500 text-white' : 'bg-gray-600 hover:bg-gray-500 text-gray-300'}`}
             >
               {driver.defaultPackageId ? `Pkg: ${availablePackages.find(p => p.id === driver.defaultPackageId)?.name || driver.defaultPackageId}` : 'Default Package'}
             </button>
-            {isWbAdmin && (
+            )}
+            {isWbAdmin && !isLifecycleLocked && (
               <button
                 onClick={() => { setCompanyTarget(driver); setAssignCompanyId(driver.companyId || ''); setAssignCompanyName(driver.companyName || ''); setShowCompanyModal(true); }}
                 className="px-3 py-1 text-sm rounded bg-teal-600 hover:bg-teal-500 text-white"
@@ -1114,7 +1139,7 @@ export function DriversTab({ scopeCompanyId, isWbAdmin = false }: DriversTabProp
                 {driver.companyId ? 'Change Customer' : 'Assign Customer'}
               </button>
             )}
-            {isWbAdmin && driver._legacy && (
+            {isWbAdmin && driver._legacy && !isLifecycleLocked && (
               <button
                 onClick={() => migrateDriver(driver)}
                 className="px-3 py-1 text-sm rounded bg-orange-600 hover:bg-orange-500 text-white"
@@ -1123,13 +1148,15 @@ export function DriversTab({ scopeCompanyId, isWbAdmin = false }: DriversTabProp
                 Migrate
               </button>
             )}
-            {isWbAdmin && (
+            {canDelete && (
               <button
-                onClick={() => openDeleteModal(driver)}
-                title="Platform cleanup only — not normal customer employee management. Use Archive to remove a customer's employee."
+                onClick={() => setExplainTarget(driver)}
+                title={isWbAdmin
+                  ? "Platform cleanup only — not normal customer employee management. Use Archive to remove a customer's employee."
+                  : "Delete this employee's login record. History is preserved."}
                 className="px-3 py-1 text-sm rounded bg-red-700 hover:bg-red-600 text-red-200 ml-auto"
               >
-                Platform Delete
+                {isWbAdmin ? 'Platform Delete' : 'Delete Employee'}
               </button>
             )}
           </div>
@@ -1146,7 +1173,9 @@ export function DriversTab({ scopeCompanyId, isWbAdmin = false }: DriversTabProp
                       <span className="text-yellow-300 text-sm font-medium">{c.name}</span>
                       <span className="text-gray-500 text-xs ml-2">({c.companyId})</span>
                     </div>
-                    <button onClick={() => removeCustomer(driver, c.companyId)} className="text-red-400 hover:text-red-300 text-xs">Remove</button>
+                    {!isLifecycleLocked && (
+                      <button onClick={() => removeCustomer(driver, c.companyId)} className="text-red-400 hover:text-red-300 text-xs">Remove</button>
+                    )}
                   </div>
                 ))}
               </div>
@@ -1180,7 +1209,8 @@ export function DriversTab({ scopeCompanyId, isWbAdmin = false }: DriversTabProp
         </div>
       )}
     </div>
-  );
+    );
+  };
 
   // Dashboard-user row — simpler than driver. Shows email + role badge.
   // The role label badge uses the same purple styling as drivers with
@@ -2004,6 +2034,61 @@ export function DriversTab({ scopeCompanyId, isWbAdmin = false }: DriversTabProp
         </div>
       )}
 
+      {/* ── Pre-Delete Explanation / Acknowledgement ── */}
+      {explainTarget && (
+        <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50">
+          <div className="bg-gray-800 rounded-lg p-6 max-w-lg w-full mx-4 max-h-[90vh] overflow-y-auto">
+            <h3 className="text-white font-medium text-lg mb-3">
+              {isWbAdmin ? 'Platform Delete' : 'Delete Employee'}
+            </h3>
+            <div className="text-gray-300 text-sm space-y-3 mb-5">
+              {isWbAdmin && (
+                <>
+                  <p>This action exists to protect the WellBuilt platform, remove abusive/test accounts, or perform administrative cleanup.</p>
+                  <p>It is <strong>not</strong> intended for normal employee management.</p>
+                  <div>
+                    <p>Customer employee management should normally use:</p>
+                    <ul className="list-disc list-inside text-gray-400 mt-1">
+                      <li>Deactivate</li>
+                      <li>Archive</li>
+                      <li>Customer Delete</li>
+                    </ul>
+                  </div>
+                </>
+              )}
+              <p>Deleting an employee removes their login record.</p>
+              <div>
+                <p>It does <strong>NOT</strong> delete:</p>
+                <ul className="list-disc list-inside text-gray-400 mt-1">
+                  <li>Tickets</li>
+                  <li>Invoices</li>
+                  <li>Payroll history</li>
+                  <li>JSA records</li>
+                  <li>Dispatches</li>
+                  <li>Audit history</li>
+                </ul>
+              </div>
+              <p>Historical records may remain and may become orphaned.</p>
+              <p className="text-amber-300">Proceed only if you understand these consequences.</p>
+            </div>
+            <div className="flex gap-2">
+              <button
+                onClick={() => setExplainTarget(null)}
+                className="flex-1 px-4 py-2 bg-gray-600 hover:bg-gray-500 text-white rounded"
+              >
+                Cancel
+              </button>
+              <button
+                onClick={() => { const d = explainTarget; setExplainTarget(null); openDeleteModal(d); }}
+                className="flex-1 px-4 py-2 bg-red-700 hover:bg-red-600 text-white rounded font-medium"
+              >
+                I Understand
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
       {/* ── Guarded Hard-Delete Modal ── */}
       {deleteTarget && (() => {
         const hasHistory = !!deleteProbe?.hasAny;
@@ -2022,12 +2107,16 @@ export function DriversTab({ scopeCompanyId, isWbAdmin = false }: DriversTabProp
         return (
           <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50">
             <div className="bg-gray-800 rounded-lg p-6 max-w-lg w-full mx-4">
-              <h3 className="text-white font-medium text-lg mb-1">Platform Delete — {deleteTarget.displayName}</h3>
-              <div className="bg-amber-900/30 border border-amber-700 rounded p-3 mb-3">
-                <p className="text-amber-200 text-sm font-medium">⚠️ Platform cleanup only.</p>
-                <p className="text-amber-200/90 text-sm">This is not normal customer employee management.</p>
-                <p className="text-amber-200/90 text-sm">To remove a customer&apos;s employee from daily use, use Archive.</p>
-              </div>
+              <h3 className="text-white font-medium text-lg mb-1">
+                {isWbAdmin ? 'Platform Delete' : 'Delete Employee'} — {deleteTarget.displayName}
+              </h3>
+              {isWbAdmin && (
+                <div className="bg-amber-900/30 border border-amber-700 rounded p-3 mb-3">
+                  <p className="text-amber-200 text-sm font-medium">⚠️ Platform cleanup only.</p>
+                  <p className="text-amber-200/90 text-sm">This is not normal customer employee management.</p>
+                  <p className="text-amber-200/90 text-sm">To remove a customer&apos;s employee from daily use, use Archive.</p>
+                </div>
+              )}
               <p className="text-gray-400 text-xs mb-3">
                 Company: {deleteTarget.companyName || deleteTarget.companyId || 'Unknown'}
               </p>
