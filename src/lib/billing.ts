@@ -287,6 +287,10 @@ export async function fetchBillingData(
     orderBy('createdAt', 'asc'),
   ];
 
+  // Tenant scope: a customer admin passes companyId → filter server-side rather
+  // than fetching all companies' invoices and filtering in the client.
+  if (companyId) constraints.unshift(where('companyId', '==', companyId));
+
   const q = query(collection(db, 'invoices'), ...constraints);
   const snapshot = await getDocs(q);
 
@@ -311,8 +315,9 @@ export async function fetchBillingData(
     if (!operator) return;
 
     const invoiceCompanyId = d.companyId || '';
-    // Company scoping
-    if (companyId && invoiceCompanyId && invoiceCompanyId !== companyId) return;
+    // Strict tenant scope: when scoped, exclude docs missing or mismatched on
+    // companyId (the old `&& invoiceCompanyId` let missing-companyId docs leak).
+    if (companyId && invoiceCompanyId !== companyId) return;
 
     const jobType = d.commodityType || d.jobType || '';
     const bbls = d.totalBBL || 0;

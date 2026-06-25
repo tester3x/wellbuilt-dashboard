@@ -1,5 +1,5 @@
 import { getFirestoreDb } from './firebase';
-import { collection, getDocs, getDoc, doc, query, orderBy, limit, where } from 'firebase/firestore';
+import { collection, getDocs, getDoc, doc, query, orderBy, limit, where, startAfter, Timestamp, type QueryConstraint, type QueryDocumentSnapshot, type DocumentData } from 'firebase/firestore';
 
 export interface Ticket {
   id: string;
@@ -116,33 +116,74 @@ export interface InvoiceDetail {
   photos: Array<{ uri: string; location?: string; type?: string; takenAt?: string } | string>;
 }
 
-export async function fetchTickets(limitCount = 200): Promise<Ticket[]> {
-  const db = getFirestoreDb();
+export interface FetchTicketsOptions {
+  /** Scope to this company. When set, query adds where('companyId','==',companyId). */
+  companyId?: string | null;
+  /** Platform-admin global view (no company filter). Ignored when companyId is set. */
+  isGlobal?: boolean;
+  /** Page size. Default 200 (a page/group size, NOT a total cap). */
+  limitCount?: number;
+  /** startAfter cursor for the next page (the lastDoc of the prior page). */
+  cursor?: QueryDocumentSnapshot<DocumentData> | null;
+  startDate?: Date | null;
+  endDate?: Date | null;
+}
 
-  // Try ordering by createdAt (newest first). Falls back to ticketNumber if createdAt missing.
-  let q;
-  try {
-    q = query(
-      collection(db, 'tickets'),
-      orderBy('createdAt', 'desc'),
-      limit(limitCount)
-    );
-    const snapshot = await getDocs(q);
-    if (snapshot.size > 0) {
-      return snapshot.docs.map(mapTicketDoc);
+export interface TicketsPage {
+  tickets: Ticket[];
+  firstDoc: QueryDocumentSnapshot<DocumentData> | null;
+  lastDoc: QueryDocumentSnapshot<DocumentData> | null;
+  /** True when another page exists after this one. */
+  hasMore: boolean;
+}
+
+/**
+ * Tenant-scoped, paginated ticket fetch.
+ * - Customer admin: pass companyId → query filters where('companyId','==',companyId).
+ * - Platform admin: pass isGlobal:true for an unscoped view, or a companyId to scope.
+ * - Neither companyId nor isGlobal → returns empty (never leaks global data).
+ * `limitCount` is the PAGE size; use `cursor` (prior page's lastDoc) for Next.
+ */
+export async function fetchTickets(opts: FetchTicketsOptions = {}): Promise<TicketsPage> {
+  const { companyId = null, isGlobal = false, limitCount = 200, cursor = null, startDate = null, endDate = null } = opts;
+  const db = getFirestoreDb();
+  const EMPTY: TicketsPage = { tickets: [], firstDoc: null, lastDoc: null, hasMore: false };
+
+  // A scoped fetch requires a company; only a platform admin may go global.
+  if (!companyId && !isGlobal) return EMPTY;
+
+  const build = (orderField: 'createdAt' | 'ticketNumber') => {
+    const c: QueryConstraint[] = [];
+    if (companyId) c.push(where('companyId', '==', companyId));
+    if (orderField === 'createdAt') {
+      if (startDate) c.push(where('createdAt', '>=', Timestamp.fromDate(startDate)));
+      if (endDate) c.push(where('createdAt', '<=', Timestamp.fromDate(endDate)));
     }
-  } catch {
-    // Index may not exist yet — fall back to ticketNumber ordering
+    c.push(orderBy(orderField, 'desc'));
+    if (cursor) c.push(startAfter(cursor));
+    c.push(limit(limitCount + 1)); // +1 sentinel to detect a following page
+    return query(collection(db, 'tickets'), ...c);
+  };
+
+  let snapshot;
+  try {
+    snapshot = await getDocs(build('createdAt'));
+  } catch (e) {
+    // Composite index (companyId + createdAt) missing or createdAt absent —
+    // degrade to ticketNumber ordering (drops date-range filtering).
+    console.warn('[tickets] createdAt query failed, falling back to ticketNumber:', e);
+    snapshot = await getDocs(build('ticketNumber'));
   }
 
-  // Fallback: order by ticketNumber (legacy)
-  q = query(
-    collection(db, 'tickets'),
-    orderBy('ticketNumber', 'desc'),
-    limit(limitCount)
-  );
-  const snapshot = await getDocs(q);
-  return snapshot.docs.map(mapTicketDoc);
+  const docs = snapshot.docs;
+  const hasMore = docs.length > limitCount;
+  const pageDocs = hasMore ? docs.slice(0, limitCount) : docs;
+  return {
+    tickets: pageDocs.map(mapTicketDoc),
+    firstDoc: pageDocs[0] ?? null,
+    lastDoc: pageDocs[pageDocs.length - 1] ?? null,
+    hasMore,
+  };
 }
 
 /** Fetch the parent invoice for a ticket (by invoiceDocId or invoiceNumber lookup) */

@@ -148,8 +148,8 @@ export default function MobilePage() {
     const normalize = (s: string) => s.toLowerCase().replace(/[#\-_.,()]/g, ' ').replace(/\s+/g, ' ').trim();
     const wellNamesNorm = wells.map(w => normalize(w.wellName));
 
-    fetchTickets(500).then(tickets => {
-      const unmatched = tickets.filter(t => {
+    fetchTickets({ companyId: user?.companyId ?? null, isGlobal: !user?.companyId, limitCount: 500 }).then(page => {
+      const unmatched = page.tickets.filter(t => {
         if (!t.location) return false;
         const locNorm = normalize(t.location);
         // Check if any configured well name matches (normalized)

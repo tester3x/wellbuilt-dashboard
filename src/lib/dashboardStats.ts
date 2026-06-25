@@ -81,11 +81,13 @@ export async function fetchDashboardStats(
   const todayStart = new Date(now.getFullYear(), now.getMonth(), now.getDate(), 0, 0, 0, 0);
 
   // ── Tickets for the current month (powers TODAY + MONTH + TOP + RECENT) ──
-  const ticketsQ = query(
-    collection(db, 'tickets'),
+  // Tenant scope: customer admin → filter server-side; platform admin → global.
+  const ticketConstraints = [
     where('createdAt', '>=', Timestamp.fromDate(monthStart)),
     orderBy('createdAt', 'desc'),
-  );
+  ];
+  if (companyId) ticketConstraints.unshift(where('companyId', '==', companyId));
+  const ticketsQ = query(collection(db, 'tickets'), ...ticketConstraints);
 
   let ticketDocs: Array<Record<string, unknown>> = [];
   try {
@@ -99,7 +101,8 @@ export async function fetchDashboardStats(
   // Company scope + drop voided tickets.
   const tickets = ticketDocs.filter(d => {
     if ((d.status as string) === 'void') return false;
-    if (companyId && d.companyId && d.companyId !== companyId) return false;
+    // Strict: when scoped, missing-companyId docs are excluded (was loose `&& d.companyId`).
+    if (companyId && d.companyId !== companyId) return false;
     return true;
   });
 
@@ -167,14 +170,14 @@ export async function fetchDashboardStats(
   // ── Open jobs from dispatches ──
   let openJobs = 0;
   try {
-    const dispQ = query(
-      collection(db, 'dispatches'),
-      where('status', 'in', OPEN_DISPATCH_STATUSES),
-    );
+    const dispConstraints = [where('status', 'in', OPEN_DISPATCH_STATUSES)];
+    if (companyId) dispConstraints.unshift(where('companyId', '==', companyId));
+    const dispQ = query(collection(db, 'dispatches'), ...dispConstraints);
     const dispSnap = await getDocs(dispQ);
     openJobs = dispSnap.docs.filter(ds => {
       const d = ds.data() as Record<string, unknown>;
-      if (companyId && d.companyId && d.companyId !== companyId) return false;
+      // Strict: when scoped, missing-companyId docs are excluded.
+      if (companyId && d.companyId !== companyId) return false;
       return true;
     }).length;
   } catch {

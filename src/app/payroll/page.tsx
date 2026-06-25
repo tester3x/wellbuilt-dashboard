@@ -375,7 +375,7 @@ export default function PayrollPage() {
 
   const loadDeductions = async () => {
     try {
-      const data = await fetchDeductions();
+      const data = await fetchDeductions(user?.companyId || undefined);
       setDeductions(data);
     } catch (err) {
       console.error('Failed to load deductions:', err);
@@ -384,7 +384,7 @@ export default function PayrollPage() {
 
   const loadAdditions = async () => {
     try {
-      const data = await fetchAdditions();
+      const data = await fetchAdditions(user?.companyId || undefined);
       setAdditions(data);
     } catch (err) {
       console.error('Failed to load additions:', err);
@@ -447,6 +447,8 @@ export default function PayrollPage() {
             const map: Record<string, string> = {};
             driversSnap.forEach(child => {
               const d = child.val();
+              // Tenant scope: a customer admin only maps their own drivers.
+              if (user?.companyId && d?.companyId !== user.companyId) return;
               const legal = d?.legalName || d?.profile?.legalName;
               if (d?.displayName && legal) map[d.displayName] = legal;
             });
@@ -456,7 +458,10 @@ export default function PayrollPage() {
         } catch {}
       }
 
-      const data = await fetchPayrollInvoices(selectedPeriod, companyMap, undefined, countyMap, currentLegalMap);
+      // Tenant scope: customer admin → own companyId; platform admin → global (undefined).
+      const scopeCompanyId = user?.companyId || undefined;
+      console.log('[tenant-scope]', JSON.stringify({ page: 'payroll', companyId: scopeCompanyId ?? null, isGlobal: !scopeCompanyId }));
+      const data = await fetchPayrollInvoices(selectedPeriod, companyMap, scopeCompanyId, countyMap, currentLegalMap);
       setTimesheets(data);
     } catch (err: any) {
       console.error('Failed to fetch payroll data:', err);

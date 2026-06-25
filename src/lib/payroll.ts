@@ -284,8 +284,9 @@ export async function fetchPayrollInvoices(
     orderBy('createdAt', 'asc'),
   ];
 
-  // Company scoping would add: where('companyId', '==', companyId)
-  // For now, fetch all (WB admin / dev mode)
+  // Tenant scope: a customer admin passes companyId → filter server-side so we
+  // never fetch other companies' invoices. Platform admin (no companyId) = global.
+  if (companyId) constraints.unshift(where('companyId', '==', companyId));
 
   const q = query(collection(db, 'invoices'), ...constraints);
   const snapshot = await getDocs(q);
@@ -307,6 +308,10 @@ export async function fetchPayrollInvoices(
     // Group by legal name so all logins for the same person merge into one row
     const driverName = legalNameMap?.[rawDriverName] || rawDriverName;
     const invoiceCompanyId = d.companyId || '';
+
+    // Strict tenant exclusion: when scoped, drop any doc whose companyId is
+    // missing or doesn't match (belt-and-suspenders behind the where clause).
+    if (companyId && invoiceCompanyId !== companyId) return;
     const operator = d.operator || '';
     const jobType = d.commodityType || d.jobType || '';
     const wellName = d.wellName || '';
@@ -501,6 +506,8 @@ export async function fetchDeductions(companyId?: string): Promise<Deduction[]> 
   snapshot.docs.forEach(docSnap => {
     const d = docSnap.data();
     if (d.active === false) return; // skip inactive
+    // Tenant scope: when scoped, exclude docs missing or mismatched on companyId.
+    if (companyId && (d.companyId || '') !== companyId) return;
     results.push({
       id: docSnap.id,
       driverName: d.driverName || '',
@@ -642,6 +649,8 @@ export async function fetchAdditions(companyId?: string): Promise<Addition[]> {
   snapshot.docs.forEach(docSnap => {
     const d = docSnap.data();
     if (d.active === false) return;
+    // Tenant scope: when scoped, exclude docs missing or mismatched on companyId.
+    if (companyId && (d.companyId || '') !== companyId) return;
     results.push({
       id: docSnap.id,
       driverName: d.driverName || '',

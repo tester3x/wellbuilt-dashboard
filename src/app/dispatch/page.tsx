@@ -826,15 +826,22 @@ function DispatchPageInner() {
   useEffect(() => {
     if (unassigned) return;
     const firestore = getFirestoreDb();
-    const q = query(
-      collection(firestore, 'dispatches'),
+    // Tenant scope: a customer admin (user.companyId) only sees their own
+    // dispatches; a platform admin (no companyId) sees all.
+    const cid = user?.companyId;
+    const constraints = [
       where('status', 'in', ['pending', 'pending_approval', 'accepted', 'in_progress', 'paused', 'declined', 'cancelled', 'completed']),
-      orderBy('assignedAt', 'desc')
-    );
+      orderBy('assignedAt', 'desc'),
+    ];
+    if (cid) constraints.unshift(where('companyId', '==', cid));
+    const q = query(collection(firestore, 'dispatches'), ...constraints);
     const unsub = onSnapshot(q, (snap) => {
       const jobs: DispatchJob[] = [];
       snap.forEach((d) => {
-        jobs.push({ id: d.id, ...d.data() } as DispatchJob);
+        const data = d.data();
+        // Strict: exclude missing/mismatched companyId for scoped customer admins.
+        if (cid && (data as Record<string, unknown>).companyId !== cid) return;
+        jobs.push({ id: d.id, ...data } as DispatchJob);
       });
       setDispatches(jobs);
     }, (err) => {
@@ -843,7 +850,7 @@ function DispatchPageInner() {
       loadDispatchesData();
     });
     return () => unsub();
-  }, [unassigned]);
+  }, [unassigned, user?.companyId]);
 
   // Subscribe to projects in real-time (scoped to company for hauler admins)
   useEffect(() => {
@@ -985,8 +992,12 @@ function DispatchPageInner() {
         });
       }
 
-      approved.sort((a, b) => a.displayName.localeCompare(b.displayName));
-      setDrivers(approved);
+      // Tenant scope: a customer admin only sees their own company's drivers in
+      // the assign UI / shift presence. Platform admin (no companyId) sees all.
+      const cid = user?.companyId;
+      const scopedDrivers = cid ? approved.filter(d => d.companyId === cid) : approved;
+      scopedDrivers.sort((a, b) => a.displayName.localeCompare(b.displayName));
+      setDrivers(scopedDrivers);
 
       // Fetch shift status for each driver (fire-and-forget — UI updates when ready)
       (async () => {
@@ -997,8 +1008,8 @@ function DispatchPageInner() {
           const today = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-${String(now.getDate()).padStart(2, '0')}`;
           const statusMap = new Map<string, boolean>();
 
-          // Batch fetch shift docs for all drivers
-          await Promise.all(approved.map(async (d) => {
+          // Batch fetch shift docs for the (scoped) driver set
+          await Promise.all(scopedDrivers.map(async (d) => {
             try {
               const shiftDoc = await getDoc(doc(firestore, 'driver_shifts', `${d.key}_${today}`));
               if (shiftDoc.exists()) {
@@ -1034,15 +1045,19 @@ function DispatchPageInner() {
   async function loadDispatchesData() {
     try {
       const firestore = getFirestoreDb();
-      const q = query(
-        collection(firestore, 'dispatches'),
+      const cid = user?.companyId;
+      const constraints = [
         where('status', 'in', ['pending', 'pending_approval', 'accepted', 'in_progress', 'paused', 'declined', 'cancelled']),
-        orderBy('assignedAt', 'desc')
-      );
+        orderBy('assignedAt', 'desc'),
+      ];
+      if (cid) constraints.unshift(where('companyId', '==', cid));
+      const q = query(collection(firestore, 'dispatches'), ...constraints);
       const snap = await getDocs(q);
       const jobs: DispatchJob[] = [];
       snap.forEach((d) => {
-        jobs.push({ id: d.id, ...d.data() } as DispatchJob);
+        const data = d.data();
+        if (cid && (data as Record<string, unknown>).companyId !== cid) return;
+        jobs.push({ id: d.id, ...data } as DispatchJob);
       });
       setDispatches(jobs);
     } catch (err) {

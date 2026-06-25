@@ -1,12 +1,16 @@
 'use client';
 
-import { Suspense, useEffect, useState } from 'react';
+import { Suspense, useEffect, useState, useMemo, useRef } from 'react';
 import { useRouter, useSearchParams } from 'next/navigation';
+import type { QueryDocumentSnapshot, DocumentData } from 'firebase/firestore';
 import { useAuth } from '@/contexts/AuthContext';
 import { isWbPlatformAdmin } from '@/lib/auth';
+import { resolveTenantScope, logTenantScope } from '@/lib/tenantScope';
 import { AppHeader } from '@/components/AppHeader';
 import { Ticket, fetchTickets } from '@/lib/tickets';
 import { TicketDetailModal } from '@/components/TicketDetailModal';
+
+const PAGE_SIZE_OPTIONS = [100, 200, 500, 1000];
 
 export default function TicketsPage() {
   return (
@@ -25,8 +29,17 @@ function TicketsPageInner() {
   const [error, setError] = useState<string | null>(null);
   const [search, setSearch] = useState(searchParams.get('search') || '');
   const [selectedTicket, setSelectedTicket] = useState<Ticket | null>(null);
+  // Pagination (server-side, cursor-based). pageSize is a per-page/group size,
+  // NOT a total cap — large operators can have 200+ tickets in a few days.
+  const [pageSize, setPageSize] = useState(200);
+  const [pageIndex, setPageIndex] = useState(0);
+  const [hasMore, setHasMore] = useState(false);
+  // cursorsRef[i] = the startAfter cursor that begins page i (cursorsRef[0] = null).
+  const cursorsRef = useRef<Record<number, QueryDocumentSnapshot<DocumentData> | null>>({ 0: null });
   // Company-less non-admin (unassigned viewer): pending activation, no data.
   const unassigned = !!user && !isWbPlatformAdmin(user) && !user.companyId;
+  // Customer admin → locked to own company; platform admin → global view.
+  const scope = useMemo(() => resolveTenantScope(user, null), [user]);
 
   useEffect(() => {
     if (!loading && !user) {
@@ -34,17 +47,30 @@ function TicketsPageInner() {
     }
   }, [user, loading, router]);
 
+  // (Re)load from page 0 whenever the user, scope, or page size changes.
   useEffect(() => {
     if (!user || unassigned) return;
-    loadTickets();
-  }, [user, unassigned]);
+    cursorsRef.current = { 0: null };
+    loadPage(0);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [user, unassigned, pageSize, scope.companyId, scope.isGlobal]);
 
-  const loadTickets = async () => {
+  const loadPage = async (index: number) => {
     try {
       setDataLoading(true);
       setError(null);
-      const data = await fetchTickets();
-      setTickets(data);
+      const cursor = cursorsRef.current[index] ?? null;
+      const page = await fetchTickets({
+        companyId: scope.companyId,
+        isGlobal: scope.isGlobal,
+        limitCount: pageSize,
+        cursor,
+      });
+      logTenantScope('tickets', scope, { page: index, pageSize, resultCount: page.tickets.length });
+      setTickets(page.tickets);
+      setHasMore(page.hasMore);
+      if (page.hasMore && page.lastDoc) cursorsRef.current[index + 1] = page.lastDoc;
+      setPageIndex(index);
     } catch (err: any) {
       console.error('Failed to fetch tickets:', err);
       setError(err?.message || 'Failed to load tickets');
@@ -120,8 +146,18 @@ function TicketsPageInner() {
               onChange={(e) => setSearch(e.target.value)}
               className="px-3 py-2 bg-gray-800 border border-gray-600 rounded-lg text-white placeholder-gray-500 text-sm focus:outline-none focus:border-blue-500 w-64"
             />
+            <select
+              value={pageSize}
+              onChange={(e) => setPageSize(Number(e.target.value))}
+              title="Tickets per page"
+              className="px-3 py-2 bg-gray-800 border border-gray-600 rounded-lg text-white text-sm focus:outline-none focus:border-blue-500"
+            >
+              {PAGE_SIZE_OPTIONS.map((n) => (
+                <option key={n} value={n}>{n} / page</option>
+              ))}
+            </select>
             <button
-              onClick={loadTickets}
+              onClick={() => loadPage(pageIndex)}
               disabled={dataLoading}
               className="px-4 py-2 bg-gray-700 hover:bg-gray-600 text-white rounded-lg transition-colors text-sm disabled:opacity-50"
             >
@@ -147,7 +183,7 @@ function TicketsPageInner() {
                     <th className="px-4 py-2 text-left text-sm font-medium text-gray-300 whitespace-nowrap min-w-[80px]">Ticket #</th>
                     <th className="px-4 py-2 text-left text-sm font-medium text-gray-300">Invoice #</th>
                     <th className="px-4 py-2 text-left text-sm font-medium text-gray-300">Date</th>
-                    <th className="px-4 py-2 text-left text-sm font-medium text-gray-300">Company</th>
+                    <th className="px-4 py-2 text-left text-sm font-medium text-gray-300">Operator</th>
                     <th className="px-4 py-2 text-left text-sm font-medium text-gray-300">Location</th>
                     <th className="px-4 py-2 text-left text-sm font-medium text-gray-300">Hauled To</th>
                     <th className="px-4 py-2 text-left text-sm font-medium text-gray-300">Type</th>
@@ -179,7 +215,7 @@ function TicketsPageInner() {
                         )}
                       </td>
                       <td className="px-4 py-3 text-white text-sm">{ticket.date}</td>
-                      <td className="px-4 py-3 text-white">{ticket.company}</td>
+                      <td className="px-4 py-3 text-white">{ticket.operator || ticket.company}</td>
                       <td className="px-4 py-3 text-white">{ticket.location}</td>
                       <td className="px-4 py-3 text-white">{ticket.hauledTo}</td>
                       <td className="px-4 py-3 text-gray-400 text-sm">{ticket.type}</td>
@@ -198,6 +234,31 @@ function TicketsPageInner() {
                   ))}
                 </tbody>
               </table>
+            </div>
+          </div>
+        )}
+
+        {!dataLoading && !error && (tickets.length > 0 || pageIndex > 0) && (
+          <div className="flex items-center justify-between mt-4">
+            <div className="text-gray-400 text-sm">
+              Page {pageIndex + 1} · showing {tickets.length}
+              {scope.isGlobal ? ' (all companies)' : ''}
+            </div>
+            <div className="flex items-center gap-2">
+              <button
+                onClick={() => pageIndex > 0 && loadPage(pageIndex - 1)}
+                disabled={pageIndex === 0 || dataLoading}
+                className="px-3 py-2 bg-gray-700 hover:bg-gray-600 text-white rounded-lg text-sm disabled:opacity-40 disabled:cursor-not-allowed"
+              >
+                ← Previous
+              </button>
+              <button
+                onClick={() => hasMore && loadPage(pageIndex + 1)}
+                disabled={!hasMore || dataLoading}
+                className="px-3 py-2 bg-gray-700 hover:bg-gray-600 text-white rounded-lg text-sm disabled:opacity-40 disabled:cursor-not-allowed"
+              >
+                Next →
+              </button>
             </div>
           </div>
         )}
