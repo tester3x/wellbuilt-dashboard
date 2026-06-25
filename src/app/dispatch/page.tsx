@@ -31,6 +31,23 @@ import { getRouteColor } from '@/lib/routeColor';
 // `options` MUST be a memoized/stable array (useMemo or a state array) so the
 // reset-on-change effect fires only when the result set actually changes.
 // Default active row is the top row so Enter always has a visible target.
+// Location-type badge shown in dispatch search results (matches WB T result
+// typing as closely as practical: well vs SWD vs custom place vs route-backed).
+// TODO(PLACE): the PLACE badge is wired but not yet emitted — Dashboard Dispatch
+// does not currently load the `customLocations` collection (a WB T source).
+// Load it (scoped by company) and merge into the combo searches to surface PLACE.
+type LocType = 'WELL' | 'SWD' | 'PLACE' | 'ROUTE';
+interface ComboItem { type: LocType; label: string; sub: string; value: string }
+function LocBadge({ type }: { type: LocType }) {
+  const c: Record<LocType, string> = {
+    WELL: 'bg-blue-700 text-blue-200',
+    SWD: 'bg-teal-700 text-teal-200',
+    PLACE: 'bg-purple-700 text-purple-200',
+    ROUTE: 'bg-green-700 text-green-200',
+  };
+  return <span className={`px-1.5 py-0.5 rounded text-[9px] font-bold flex-shrink-0 ${c[type]}`}>{type}</span>;
+}
+
 function useTypeaheadNav<T>(options: T[], onSelect: (item: T) => void) {
   const [activeIndex, setActiveIndex] = useState(0);
   const [dismissed, setDismissed] = useState(false);
@@ -72,6 +89,7 @@ interface ApprovedDriver {
 
 interface DispatchJob {
   id?: string;
+  companyId?: string;  // Tenant stamp — the company that owns this dispatch
   driverHash: string;
   driverName: string;
   driverFirstName?: string;  // First name from legalName (privacy — don't expose logins)
@@ -440,53 +458,84 @@ function DispatchPageInner() {
   const [swSplitDriverWarning, setSwSplitDriverWarning] = useState(false);
   // ── Keyboard-navigable typeahead options for the two primary lease pickers.
   //    Memoized so useTypeaheadNav's reset effect has a stable reference. ──
-  const swWellOptions = useMemo(() => {
+  const swWellOptions = useMemo<ComboItem[]>(() => {
     const q = swWellName.trim().toLowerCase();
-    if (q.length < 2) return [] as { label: string; sub: string; value: string }[];
+    if (q.length < 2) return [];
     const exactMatch = wells.some(w => (w.ndicName || w.wellName).toLowerCase() === q) ||
       allOperatorWells.some(w => w.well_name.toLowerCase() === q) ||
       allDisposals.some(d => d.well_name.toLowerCase() === q);
-    if (exactMatch) return [] as { label: string; sub: string; value: string }[];
+    if (exactMatch) return [];
     const seen = new Set<string>();
     const wellMatches = wells
       .filter(w => (w.ndicName || w.wellName).toLowerCase().includes(q))
-      .map(w => { seen.add((w.ndicName || w.wellName).toLowerCase()); return { label: w.ndicName || w.wellName, sub: w.route || '', value: w.ndicName || w.wellName }; });
+      .map((w): ComboItem => { const n = w.ndicName || w.wellName; seen.add(n.toLowerCase()); return { type: (!!w.route && w.route !== 'Unrouted') ? 'ROUTE' : 'WELL', label: n, sub: w.route || '', value: n }; });
     const operatorMatches = allOperatorWells
       .filter(w => w.well_name.toLowerCase().includes(q) && !seen.has(w.well_name.toLowerCase()))
-      .map(w => { seen.add(w.well_name.toLowerCase()); return { label: w.well_name, sub: w.operator || 'NDIC', value: w.well_name }; });
+      .map((w): ComboItem => { seen.add(w.well_name.toLowerCase()); return { type: 'WELL', label: w.well_name, sub: w.operator || 'NDIC', value: w.well_name }; });
     const disposalMatches = searchDisposals(q, allDisposals)
       .filter(d => !seen.has(d.well_name.toLowerCase()))
-      .map(d => ({ label: d.well_name, sub: 'SWD', value: d.well_name }));
+      .map((d): ComboItem => ({ type: 'SWD', label: d.well_name, sub: 'SWD', value: d.well_name }));
     return [...wellMatches, ...operatorMatches, ...disposalMatches].slice(0, 15);
   }, [swWellName, wells, allOperatorWells, allDisposals]);
   const swWellNav = useTypeaheadNav(swWellOptions, (item) => { setSwWellName(item.value); });
 
-  const pwWellOptions = useMemo(() => {
-    if (assignTarget || assignWellSearch.length < 2) return [] as WellResponse[];
+  // PW pickup search: company-scoped well_config/route wells PLUS the company's
+  // assigned-operator NDIC wells. Route membership / well_config is NOT required.
+  // Tenant scope: `wells` is maintained-scoped; `allOperatorWells` is loaded from
+  // companyConfig.assignedOperators — so only EOG (etc.) wells appear, never LG's.
+  const ndicToTarget = useCallback((w: NdicWell): WellResponse => ({
+    wellName: w.well_name,
+    ndicName: w.well_name,
+    currentLevel: '--',
+    etaToMax: '',
+    flowRate: '',
+    timestamp: '',
+    route: '',
+  } as WellResponse), []);
+  const pwWellOptions = useMemo<{ type: LocType; label: string; sub: string; target: WellResponse }[]>(() => {
+    if (assignTarget || assignWellSearch.length < 2) return [];
     const q = assignWellSearch.toLowerCase();
-    return wells.filter(w => (w.ndicName || w.wellName).toLowerCase().includes(q)).slice(0, 8);
-  }, [assignTarget, assignWellSearch, wells]);
-  const pwWellNav = useTypeaheadNav(pwWellOptions, (w) => { setAssignTarget(w); setAssignWellSearch(''); });
+    const seen = new Set<string>();
+    const items: { type: LocType; label: string; sub: string; target: WellResponse }[] = [];
+    // 1. Maintained well_config / route-backed wells.
+    for (const w of wells) {
+      const name = w.ndicName || w.wellName;
+      const key = name.toLowerCase();
+      if (!key.includes(q) || seen.has(key)) continue;
+      seen.add(key);
+      const routed = !!w.route && w.route !== 'Unrouted';
+      items.push({ type: routed ? 'ROUTE' : 'WELL', label: name, sub: w.route || '', target: w });
+    }
+    // 2. Assigned-operator NDIC wells (no route / well_config required).
+    for (const w of allOperatorWells) {
+      const key = w.well_name.toLowerCase();
+      if (!key.includes(q) || seen.has(key)) continue;
+      seen.add(key);
+      items.push({ type: 'WELL', label: w.well_name, sub: w.operator || 'NDIC', target: ndicToTarget(w) });
+    }
+    return items.slice(0, 10);
+  }, [assignTarget, assignWellSearch, wells, allOperatorWells, ndicToTarget]);
+  const pwWellNav = useTypeaheadNav(pwWellOptions, (it) => { setAssignTarget(it.target); setAssignWellSearch(''); });
 
   // Shared combined-search builder (NDIC wells + operator wells + SWD directory)
   // — same matching the Well/Drop-off/leg fields all use.
-  const buildComboOptions = useCallback((raw: string) => {
+  const buildComboOptions = useCallback((raw: string): ComboItem[] => {
     const q = raw.trim().toLowerCase();
-    if (q.length < 2) return [] as { label: string; sub: string; value: string }[];
+    if (q.length < 2) return [];
     const exactMatch = wells.some(w => (w.ndicName || w.wellName).toLowerCase() === q) ||
       allOperatorWells.some(w => w.well_name.toLowerCase() === q) ||
       allDisposals.some(d => d.well_name.toLowerCase() === q);
-    if (exactMatch) return [] as { label: string; sub: string; value: string }[];
+    if (exactMatch) return [];
     const seen = new Set<string>();
     const wellMatches = wells
       .filter(w => (w.ndicName || w.wellName).toLowerCase().includes(q))
-      .map(w => { seen.add((w.ndicName || w.wellName).toLowerCase()); return { label: w.ndicName || w.wellName, sub: w.route || '', value: w.ndicName || w.wellName }; });
+      .map((w): ComboItem => { const n = w.ndicName || w.wellName; seen.add(n.toLowerCase()); return { type: (!!w.route && w.route !== 'Unrouted') ? 'ROUTE' : 'WELL', label: n, sub: w.route || '', value: n }; });
     const operatorMatches = allOperatorWells
       .filter(w => w.well_name.toLowerCase().includes(q) && !seen.has(w.well_name.toLowerCase()))
-      .map(w => { seen.add(w.well_name.toLowerCase()); return { label: w.well_name, sub: w.operator || 'NDIC', value: w.well_name }; });
+      .map((w): ComboItem => { seen.add(w.well_name.toLowerCase()); return { type: 'WELL', label: w.well_name, sub: w.operator || 'NDIC', value: w.well_name }; });
     const disposalMatches = searchDisposals(q, allDisposals)
       .filter(d => !seen.has(d.well_name.toLowerCase()))
-      .map(d => ({ label: d.well_name, sub: 'SWD', value: d.well_name }));
+      .map((d): ComboItem => ({ type: 'SWD', label: d.well_name, sub: 'SWD', value: d.well_name }));
     return [...wellMatches, ...operatorMatches, ...disposalMatches].slice(0, 15);
   }, [wells, allOperatorWells, allDisposals]);
 
@@ -1174,6 +1223,9 @@ function DispatchPageInner() {
         jobType: 'pw',
         packageId: 'water-hauling',
         status: 'pending',
+        // Tenant stamp: the dispatch belongs to the assigned driver's company
+        // (customer admin = own companyId; WB admin = the driver's company).
+        companyId: user?.companyId || driver.companyId || '',
         notes: assignNotes || '',
         priority: priority.sortOrder,
         assignedAt: Timestamp.now(),
@@ -2457,15 +2509,17 @@ function DispatchPageInner() {
                           )}
                           {!assignTarget && assignWellSearch.length >= 2 && !pwWellNav.dismissed && (
                             <div className="absolute z-10 w-full bg-gray-900 border border-gray-700 rounded mt-0.5 max-h-32 overflow-y-auto">
-                              {pwWellOptions.map((w, i) => {
+                              {pwWellOptions.map((it, i) => {
                                 const focused = i === pwWellNav.activeIndex;
                                 return (
-                                  <button key={w.wellName} type="button" tabIndex={-1}
+                                  <button key={it.label} type="button" tabIndex={-1}
                                     ref={focused ? (el) => el?.scrollIntoView({ block: 'nearest' }) : undefined}
                                     onMouseDown={(e) => e.preventDefault()}
-                                    onClick={() => { setAssignTarget(w); setAssignWellSearch(''); }}
-                                    className={`w-full text-left px-3 py-1.5 text-xs border-b border-gray-800 last:border-0 outline-none ${focused ? 'bg-blue-600/40 text-white ring-1 ring-inset ring-blue-400' : 'text-white hover:bg-gray-700'}`}>
-                                    {w.ndicName || w.wellName} <span className={focused ? 'text-blue-200' : 'text-gray-500'}>{w.route}</span>
+                                    onClick={() => { setAssignTarget(it.target); setAssignWellSearch(''); }}
+                                    className={`w-full text-left px-3 py-1.5 text-xs border-b border-gray-800 last:border-0 outline-none flex items-center gap-2 ${focused ? 'bg-blue-600/40 text-white ring-1 ring-inset ring-blue-400' : 'text-white hover:bg-gray-700'}`}>
+                                    <LocBadge type={it.type} />
+                                    <span className="flex-1 truncate">{it.label}</span>
+                                    {it.sub && <span className={`text-[10px] ${focused ? 'text-blue-200' : 'text-gray-500'}`}>{it.sub}</span>}
                                   </button>
                                 );
                               })}
@@ -2611,7 +2665,7 @@ function DispatchPageInner() {
                                     onMouseDown={(e) => e.preventDefault()}
                                     onClick={() => setSwWellName(item.value)}
                                     className={`w-full text-left px-3 py-1.5 border-b border-gray-700/50 last:border-0 text-sm outline-none ${focused ? 'bg-purple-600/40 text-white ring-1 ring-inset ring-purple-400' : 'text-white hover:bg-gray-700'}`}>
-                                    {item.label}
+                                    <LocBadge type={item.type} /> {item.label}
                                     {item.sub && <span className={`text-xs ml-2 ${focused ? 'text-purple-200' : 'text-gray-500'}`}>{item.sub}</span>}
                                   </button>
                                 );
@@ -2639,7 +2693,7 @@ function DispatchPageInner() {
                                     onMouseDown={(e) => e.preventDefault()}
                                     onClick={() => setSwDropoff(item.value)}
                                     className={`w-full text-left px-3 py-1.5 border-b border-gray-700/50 last:border-0 text-sm outline-none ${focused ? 'bg-purple-600/40 text-white ring-1 ring-inset ring-purple-400' : 'text-white hover:bg-gray-700'}`}>
-                                    {item.label}
+                                    <LocBadge type={item.type} /> {item.label}
                                     {item.sub && <span className={`text-xs ml-2 ${focused ? 'text-purple-200' : 'text-gray-500'}`}>{item.sub}</span>}
                                   </button>
                                 );
@@ -2811,7 +2865,7 @@ function DispatchPageInner() {
                                     onMouseDown={(e) => e.preventDefault()}
                                     onClick={() => setSwExtraLegDraft(d => d ? { ...d, disposal: item.value } : d)}
                                     className={`w-full text-left px-3 py-1.5 border-b border-gray-700/50 last:border-0 text-sm outline-none ${focused ? 'bg-purple-600/40 text-white ring-1 ring-inset ring-purple-400' : 'text-white hover:bg-gray-700'}`}>
-                                    {item.label}
+                                    <LocBadge type={item.type} /> {item.label}
                                     {item.sub && <span className={`text-xs ml-2 ${focused ? 'text-purple-200' : 'text-gray-500'}`}>{item.sub}</span>}
                                   </button>
                                 );
@@ -3601,7 +3655,7 @@ function DispatchPageInner() {
                           onMouseDown={(e) => e.preventDefault()}
                           onClick={() => setAddLegDest(item.value)}
                           className={`w-full text-left px-3 py-1.5 border-b border-gray-700/50 last:border-0 text-sm outline-none ${focused ? 'bg-purple-600/40 text-white ring-1 ring-inset ring-purple-400' : 'text-white hover:bg-gray-700'}`}>
-                          {item.label}
+                          <LocBadge type={item.type} /> {item.label}
                           {item.sub && <span className={`text-xs ml-2 ${focused ? 'text-purple-200' : 'text-gray-500'}`}>{item.sub}</span>}
                         </button>
                       );
