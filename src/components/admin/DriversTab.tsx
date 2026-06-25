@@ -6,6 +6,7 @@ import { getFirebaseDatabase, getFirestoreDb, getFirebaseFunctions } from '@/lib
 import { ref, get, set, remove, update } from 'firebase/database';
 import { collection, getDocs } from 'firebase/firestore';
 import { fetchCompanyRouteNames } from '@/lib/wells';
+import { probeDriverHistory, type DriverHistorySummary } from '@/lib/driverHistory';
 import { type UserRole, DEFAULT_ROLE_LABELS } from '@/lib/auth';
 import { useAuth } from '@/contexts/AuthContext';
 import { getRoleLabel } from '@/lib/auth';
@@ -23,6 +24,7 @@ interface ApprovedDriver {
   isAdmin?: boolean;
   isViewer?: boolean;
   active?: boolean;
+  archived?: boolean;    // hidden from the normal employee list (login also disabled)
   companyId?: string;    // which trucking company this driver belongs to
   companyName?: string;  // display name of the company
   assignedCustomers?: AssignedCustomer[];
@@ -77,6 +79,16 @@ export function DriversTab({ scopeCompanyId, isWbAdmin = false }: DriversTabProp
   const [loading, setLoading] = useState(true);
   const [message, setMessage] = useState('');
   const [search, setSearch] = useState('');
+  // Lifecycle: archived drivers are hidden unless this toggle is on.
+  const [showArchived, setShowArchived] = useState(false);
+
+  // Guarded hard-delete modal
+  const [deleteTarget, setDeleteTarget] = useState<ApprovedDriver | null>(null);
+  const [deleteProbe, setDeleteProbe] = useState<DriverHistorySummary | null>(null);
+  const [deleteProbing, setDeleteProbing] = useState(false);
+  const [deleteConfirmName, setDeleteConfirmName] = useState('');
+  const [deleteOverride, setDeleteOverride] = useState(false);
+  const [deleting, setDeleting] = useState(false);
 
   // Assign customer modal
   const [showAssignModal, setShowAssignModal] = useState(false);
@@ -152,6 +164,7 @@ export function DriversTab({ scopeCompanyId, isWbAdmin = false }: DriversTabProp
               isAdmin: val.isAdmin || false,
               isViewer: val.isViewer || false,
               active: val.active !== false,
+              archived: val.archived === true,
               companyId: val.companyId || undefined,
               companyName: val.companyName || undefined,
               assignedCustomers: Array.isArray(val.assignedCustomers) ? val.assignedCustomers : [],
@@ -168,6 +181,7 @@ export function DriversTab({ scopeCompanyId, isWbAdmin = false }: DriversTabProp
             let foundAdmin = false;
             let foundViewer = false;
             let foundActive = true;
+            let foundArchived = false;
             for (const subKey of Object.keys(val)) {
               const entry = val[subKey];
               if (entry && typeof entry === 'object' && entry.displayName) {
@@ -175,6 +189,7 @@ export function DriversTab({ scopeCompanyId, isWbAdmin = false }: DriversTabProp
                 foundAdmin = entry.isAdmin === true;
                 foundViewer = entry.isViewer === true;
                 foundActive = entry.active !== false;
+                foundArchived = entry.archived === true;
                 break;
               }
             }
@@ -193,6 +208,7 @@ export function DriversTab({ scopeCompanyId, isWbAdmin = false }: DriversTabProp
               isAdmin: foundAdmin,
               isViewer: foundViewer,
               active: foundActive,
+              archived: foundArchived,
               assignedCustomers: Array.isArray(val.assignedCustomers) ? val.assignedCustomers : [],
               assignedRoutes: Array.isArray(val.assignedRoutes) ? val.assignedRoutes : [],
               assignedWells: Array.isArray(val.assignedWells) ? val.assignedWells : [],
@@ -761,16 +777,86 @@ export function DriversTab({ scopeCompanyId, isWbAdmin = false }: DriversTabProp
     }
   };
 
-  // ── Delete a driver permanently ──
-  const deleteDriver = async (driver: ApprovedDriver) => {
-    if (!confirm(`Permanently delete ${driver.displayName}? This cannot be undone.`)) return;
+  // ── Archive / Unarchive (lifecycle) ──────────────────────────────────
+  // Archive hides the driver from the normal list AND disables login
+  // (active:false). It NEVER touches tickets/invoices/JSA/shifts/payroll.
+  const driverPath = (driver: ApprovedDriver) =>
+    driver._legacy && driver._legacyDeviceId
+      ? `drivers/approved/${driver.key}/${driver._legacyDeviceId}`
+      : `drivers/approved/${driver.key}`;
+
+  const archiveDriver = async (driver: ApprovedDriver) => {
     try {
-      await remove(ref(db, `drivers/approved/${driver.key}`));
-      setMessage(`Deleted: ${driver.displayName}`);
+      await update(ref(db, driverPath(driver)), { archived: true, active: false });
+      setMessage(`Archived ${driver.displayName} — login disabled, hidden from list. History preserved.`);
+      await loadDrivers();
+    } catch (err) {
+      console.error('Failed to archive driver:', err);
+      setMessage('Failed to archive driver');
+    }
+  };
+
+  // Unarchive restores visibility ONLY. It does not reactivate login — the
+  // admin must explicitly Activate to restore access.
+  const unarchiveDriver = async (driver: ApprovedDriver) => {
+    try {
+      await update(ref(db, driverPath(driver)), { archived: false });
+      setMessage(`Unarchived ${driver.displayName} — still inactive. Use Activate to restore login.`);
+      await loadDrivers();
+    } catch (err) {
+      console.error('Failed to unarchive driver:', err);
+      setMessage('Failed to unarchive driver');
+    }
+  };
+
+  // ── Guarded hard delete ──────────────────────────────────────────────
+  // Opens a modal that probes for linked history. Delete is blocked when any
+  // history/dashboard link exists unless the admin uses the explicit test-data
+  // override. Deletes ONLY the drivers/approved record — never history.
+  const openDeleteModal = async (driver: ApprovedDriver) => {
+    setDeleteTarget(driver);
+    setDeleteProbe(null);
+    setDeleteConfirmName('');
+    setDeleteOverride(false);
+    setDeleteProbing(true);
+    try {
+      setDeleteProbe(await probeDriverHistory(driver.key, driver.dashboardUid));
+    } catch (err) {
+      console.error('History probe failed:', err);
+      // Fail safe: unknown history → treat as present so we never delete blind.
+      setDeleteProbe({
+        hasAny: true, tickets: false, invoices: false, canonicalJobs: false,
+        jsa: false, dispatches: false, shifts: false, dashboardLink: false, probeError: true,
+      });
+    } finally {
+      setDeleteProbing(false);
+    }
+  };
+
+  const closeDeleteModal = () => {
+    setDeleteTarget(null);
+    setDeleteProbe(null);
+    setDeleteConfirmName('');
+    setDeleteOverride(false);
+    setDeleting(false);
+  };
+
+  const confirmHardDelete = async () => {
+    if (!deleteTarget || !deleteProbe) return;
+    const hasHistory = deleteProbe.hasAny;
+    // History present requires the explicit override; name must always match.
+    if (hasHistory && !deleteOverride) return;
+    if (deleteConfirmName.trim() !== deleteTarget.displayName) return;
+    setDeleting(true);
+    try {
+      await remove(ref(db, `drivers/approved/${deleteTarget.key}`));
+      setMessage(`Hard-deleted driver record: ${deleteTarget.displayName}. Any history was left untouched.`);
+      closeDeleteModal();
       await loadDrivers();
     } catch (err) {
       console.error('Failed to delete driver:', err);
       setMessage('Failed to delete driver');
+      setDeleting(false);
     }
   };
 
@@ -779,11 +865,13 @@ export function DriversTab({ scopeCompanyId, isWbAdmin = false }: DriversTabProp
     ? approvedDrivers.filter(d => d.companyId === scopeCompanyId)
     : approvedDrivers;
 
-  const filteredDrivers = search.trim()
+  const archivedCount = companyDrivers.filter(d => d.archived).length;
+  const filteredDrivers = (search.trim()
     ? companyDrivers.filter(d =>
         d.displayName.toLowerCase().includes(search.toLowerCase())
       )
-    : companyDrivers;
+    : companyDrivers
+  ).filter(d => showArchived || !d.archived);
 
   // Dashboard users scoped the same way as drivers for search/company-filter
   const companyDashboardUsers = scopeCompanyId
@@ -866,7 +954,7 @@ export function DriversTab({ scopeCompanyId, isWbAdmin = false }: DriversTabProp
   // by both the flat (company-scoped) list and the grouped (WB admin) list
   // without duplicating ~270 lines of markup.
   const renderDriverRow = (driver: ApprovedDriver) => (
-    <div key={driver.key} className="bg-gray-700 rounded">
+    <div key={driver.key} className={`rounded ${driver.archived ? 'bg-gray-800 opacity-60' : 'bg-gray-700'}`}>
       {/* Driver row */}
       <div
         className="flex items-center justify-between p-3 cursor-pointer hover:bg-gray-600"
@@ -880,6 +968,9 @@ export function DriversTab({ scopeCompanyId, isWbAdmin = false }: DriversTabProp
               <span className="text-gray-400 text-xs">{driver.legalName}</span>
             )}
           </div>
+          {driver.archived && (
+            <span className="px-1.5 py-0.5 bg-amber-800 text-amber-200 text-xs rounded font-medium">Archived</span>
+          )}
           {isWbAdmin && driver._legacy && (
             <span className="px-1.5 py-0.5 bg-orange-700 text-orange-200 text-xs rounded font-medium">Legacy</span>
           )}
@@ -934,6 +1025,23 @@ export function DriversTab({ scopeCompanyId, isWbAdmin = false }: DriversTabProp
             >
               {driver.active ? 'Deactivate' : 'Activate'}
             </button>
+            {driver.archived ? (
+              <button
+                onClick={() => unarchiveDriver(driver)}
+                className="px-3 py-1 text-sm rounded bg-amber-600 hover:bg-amber-500 text-white"
+                title="Restore to the normal list. Does NOT reactivate login — use Activate for that."
+              >
+                Unarchive
+              </button>
+            ) : (
+              <button
+                onClick={() => archiveDriver(driver)}
+                className="px-3 py-1 text-sm rounded bg-gray-600 hover:bg-gray-500 text-gray-300"
+                title="Disable login and hide from the normal list. History is preserved."
+              >
+                Archive
+              </button>
+            )}
             <div className="relative">
               <button
                 onClick={() => setRoleMenuForKey(roleMenuForKey === driver.key ? null : driver.key)}
@@ -1017,7 +1125,7 @@ export function DriversTab({ scopeCompanyId, isWbAdmin = false }: DriversTabProp
             )}
             {isWbAdmin && (
               <button
-                onClick={() => deleteDriver(driver)}
+                onClick={() => openDeleteModal(driver)}
                 className="px-3 py-1 text-sm rounded bg-red-700 hover:bg-red-600 text-red-200 ml-auto"
               >
                 Delete
@@ -1199,6 +1307,15 @@ export function DriversTab({ scopeCompanyId, isWbAdmin = false }: DriversTabProp
             )}
           </h3>
           <div className="flex gap-2">
+            {archivedCount > 0 && (
+              <button
+                onClick={() => setShowArchived(s => !s)}
+                className={`px-3 py-1.5 text-sm rounded ${showArchived ? 'bg-amber-600 hover:bg-amber-500 text-white' : 'bg-gray-700 hover:bg-gray-600 text-gray-300'}`}
+                title="Archived drivers are hidden from the normal list"
+              >
+                {showArchived ? 'Hide Archived' : `Show Archived (${archivedCount})`}
+              </button>
+            )}
             {isWbAdmin && approvedDrivers.some(d => d._legacy) && (
               <button
                 onClick={migrateAllLegacy}
@@ -1885,6 +2002,104 @@ export function DriversTab({ scopeCompanyId, isWbAdmin = false }: DriversTabProp
           </div>
         </div>
       )}
+
+      {/* ── Guarded Hard-Delete Modal ── */}
+      {deleteTarget && (() => {
+        const hasHistory = !!deleteProbe?.hasAny;
+        const nameOk = deleteConfirmName.trim() === deleteTarget.displayName;
+        const canDelete = !!deleteProbe && !deleteProbing && nameOk && (!hasHistory || deleteOverride);
+        const found: string[] = [];
+        if (deleteProbe) {
+          if (deleteProbe.tickets) found.push('tickets');
+          if (deleteProbe.invoices) found.push('invoices');
+          if (deleteProbe.jsa) found.push('JSA');
+          if (deleteProbe.shifts) found.push('shifts');
+          if (deleteProbe.dispatches) found.push('dispatches');
+          if (deleteProbe.canonicalJobs) found.push('canonical jobs');
+          if (deleteProbe.dashboardLink) found.push('dashboard account');
+        }
+        return (
+          <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50">
+            <div className="bg-gray-800 rounded-lg p-6 max-w-lg w-full mx-4">
+              <h3 className="text-white font-medium text-lg mb-1">Delete {deleteTarget.displayName}?</h3>
+              <p className="text-gray-400 text-sm mb-4">
+                Hard delete removes only the driver login record. Tickets, invoices, JSA, shifts,
+                dispatches, and payroll are never touched.
+              </p>
+
+              {deleteProbing ? (
+                <p className="text-gray-300 text-sm py-4">Checking for linked history…</p>
+              ) : deleteProbe?.probeError ? (
+                <div className="bg-red-900/40 border border-red-700 rounded p-3 mb-4">
+                  <p className="text-red-300 text-sm">
+                    Couldn&apos;t verify history (probe error). For safety this driver is treated as
+                    having history — use Archive instead, or retry.
+                  </p>
+                </div>
+              ) : hasHistory ? (
+                <div className="bg-red-900/30 border border-red-700 rounded p-3 mb-4">
+                  <p className="text-red-300 text-sm font-medium mb-1">This driver has linked history:</p>
+                  <p className="text-red-200 text-sm">{found.join(', ')}</p>
+                  <p className="text-gray-400 text-xs mt-2">
+                    Recommended: <span className="text-amber-300">Archive</span> instead — it disables
+                    login and hides the driver while preserving every record.
+                  </p>
+                </div>
+              ) : (
+                <div className="bg-green-900/20 border border-green-800 rounded p-3 mb-4">
+                  <p className="text-green-300 text-sm">No linked history found — safe to delete this test/clean driver.</p>
+                </div>
+              )}
+
+              {!deleteProbing && hasHistory && !deleteProbe?.probeError && (
+                <label className="flex items-start gap-2 mb-3 cursor-pointer">
+                  <input
+                    type="checkbox"
+                    checked={deleteOverride}
+                    onChange={e => setDeleteOverride(e.target.checked)}
+                    className="w-4 h-4 mt-0.5"
+                  />
+                  <span className="text-red-300 text-sm">
+                    ⚠️ Override: permanently delete this driver record <strong>even though it has history</strong>.
+                    Only do this for explicit test-data cleanup. The history documents are orphaned, not deleted.
+                  </span>
+                </label>
+              )}
+
+              {!deleteProbing && !deleteProbe?.probeError && (!hasHistory || deleteOverride) && (
+                <div className="mb-4">
+                  <label className="text-gray-400 text-xs uppercase tracking-wider block mb-1">
+                    Type <span className="text-white font-mono">{deleteTarget.displayName}</span> to confirm
+                  </label>
+                  <input
+                    type="text"
+                    value={deleteConfirmName}
+                    onChange={e => setDeleteConfirmName(e.target.value)}
+                    placeholder={deleteTarget.displayName}
+                    className="w-full px-3 py-2 bg-gray-700 text-white rounded text-sm"
+                  />
+                </div>
+              )}
+
+              <div className="flex gap-2">
+                <button
+                  onClick={confirmHardDelete}
+                  disabled={!canDelete || deleting}
+                  className="flex-1 px-4 py-2 bg-red-700 hover:bg-red-600 text-white rounded font-medium disabled:opacity-30 disabled:cursor-not-allowed"
+                >
+                  {deleting ? 'Deleting…' : 'Hard Delete'}
+                </button>
+                <button
+                  onClick={closeDeleteModal}
+                  className="px-4 py-2 bg-gray-600 hover:bg-gray-500 text-white rounded"
+                >
+                  Cancel
+                </button>
+              </div>
+            </div>
+          </div>
+        );
+      })()}
     </div>
   );
 }
