@@ -764,13 +764,17 @@ function DispatchPageInner() {
     return unsubscribe;
   }, [unassigned, maintainedNames]);
 
-  // Load drivers + disposals
+  // Load drivers + disposals.
+  // Gate on `user` being resolved AND key on user?.uid — otherwise this runs on
+  // mount before auth loads, so loadDriversData reads user?.companyId === undefined
+  // and falls back to ALL drivers (cross-tenant leak). Keying on uid re-runs it
+  // once the user (and thus companyId) is known, re-scoping `drivers` correctly.
   useEffect(() => {
-    if (unassigned) return;
+    if (!user || unassigned) return;
     loadDriversData();
     loadDisposals().then(setAllDisposals).catch(() => {});
     loadOperators().then(setAllOperators).catch(console.error);
-  }, [unassigned]);
+  }, [unassigned, user?.uid]);
 
   // Live driver on-shift presence (green dot). loadDriversData() sets the initial
   // onShift via a one-time getDoc; without this, a phone that logs in / starts a

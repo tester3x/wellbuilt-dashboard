@@ -141,7 +141,7 @@ export function AppHeader() {
           </div>
           {/* Cabinet folder tabs — raised active folder, accent top edge, sits on
               a shared baseline so sections read like an application, not a menu. */}
-          <nav className="flex flex-wrap items-end justify-center gap-1 border-b border-gray-700 px-2">
+          <nav className="flex items-end gap-1 border-b border-gray-700 px-2 max-w-full overflow-x-auto whitespace-nowrap xl:justify-center">
             {TABS.filter(tab => {
               // WB Mobile is the well-monitoring product. Hide it for a
               // company-scoped user whose company isn't a monitoring company
@@ -161,7 +161,7 @@ export function AppHeader() {
                   href={tab.href}
                   aria-current={isActive ? 'page' : undefined}
                   style={isActive ? { borderTopColor: accent } : undefined}
-                  className={`relative -mb-px rounded-t-lg border border-gray-700 px-5 text-sm font-medium transition-all outline-none focus-visible:ring-2 focus-visible:ring-white/40 ${
+                  className={`relative -mb-px flex-shrink-0 whitespace-nowrap rounded-t-lg border border-gray-700 px-5 text-sm font-medium transition-all outline-none focus-visible:ring-2 focus-visible:ring-white/40 ${
                     isActive
                       ? 'bg-gray-900 text-white border-t-2 border-b-gray-900 pt-1.5 pb-2.5 -translate-y-px shadow-sm'
                       : 'bg-gray-800/60 text-gray-400 border-b-transparent pt-1.5 pb-2 hover:bg-gray-700/70 hover:text-gray-200'
