@@ -704,6 +704,33 @@ function DispatchPageInner() {
   const [npbTab, setNpbTab] = useState<'details' | 'drivers' | 'notes'>('details');
   const [creatingProject, setCreatingProject] = useState(false);
   const [projectWellSearch, setProjectWellSearch] = useState('');
+  // Project Wells search: same sources as the PW pickup search — maintained
+  // well_config/route wells PLUS the company's assigned-operator NDIC wells.
+  // Route membership / well_config is NOT required. Tenant-scoped (`wells` is
+  // maintained-scoped; `allOperatorWells` comes from companyConfig.assignedOperators).
+  // TODO(PLACE): custom places aren't loaded in Dashboard (no customLocations
+  // source) — PLACE badge support is wired but unsourced here too.
+  const projectWellOptions = useMemo<ComboItem[]>(() => {
+    const q = projectWellSearch.trim().toLowerCase();
+    if (q.length < 2) return [];
+    const seen = new Set<string>(newProjectWells.map(n => n.toLowerCase()));
+    const items: ComboItem[] = [];
+    for (const w of wells) {
+      const name = w.ndicName || w.wellName;
+      const key = name.toLowerCase();
+      if (!key.includes(q) || seen.has(key)) continue;
+      seen.add(key);
+      const routed = !!w.route && w.route !== 'Unrouted';
+      items.push({ type: routed ? 'ROUTE' : 'WELL', label: name, sub: w.route || '', value: name });
+    }
+    for (const w of allOperatorWells) {
+      const key = w.well_name.toLowerCase();
+      if (!key.includes(q) || seen.has(key)) continue;
+      seen.add(key);
+      items.push({ type: 'WELL', label: w.well_name, sub: w.operator || 'NDIC', value: w.well_name });
+    }
+    return items.slice(0, 10);
+  }, [projectWellSearch, wells, allOperatorWells, newProjectWells]);
 
   // Dynamic service types from job packages (falls back to hardcoded)
   const FALLBACK_SERVICE_TYPES = ['Hot Shot', 'Equipment Delivery', 'Tank Cleanout', 'Flowback', 'Frac Water', 'Rig Move', 'Other'];
@@ -2592,8 +2619,10 @@ function DispatchPageInner() {
                                 ref={focused ? (el) => el?.scrollIntoView({ block: 'nearest' }) : undefined}
                                 onMouseDown={(e) => e.preventDefault()}
                                 onClick={() => { setAssignDisposal(d.well_name); setAssignDisposalWell(d); setDisposalSearch(''); setDisposalResults([]); }}
-                                className={`w-full text-left px-3 py-1.5 border-b border-gray-700/50 last:border-0 text-sm outline-none ${focused ? 'bg-cyan-600/40 text-white ring-1 ring-inset ring-cyan-400' : 'text-white hover:bg-gray-700'}`}>
-                                {d.well_name} <span className={`text-xs ml-1 ${focused ? 'text-cyan-200' : 'text-gray-400'}`}>{d.county || ''}</span>
+                                className={`w-full text-left px-3 py-1.5 border-b border-gray-700/50 last:border-0 text-sm outline-none flex items-center gap-2 ${focused ? 'bg-cyan-600/40 text-white ring-1 ring-inset ring-cyan-400' : 'text-white hover:bg-gray-700'}`}>
+                                <LocBadge type="SWD" />
+                                <span className="flex-1 truncate">{d.well_name}</span>
+                                <span className={`text-xs ${focused ? 'text-cyan-200' : 'text-gray-400'}`}>{d.county || ''}</span>
                               </button>
                             );
                           })}
@@ -3050,15 +3079,17 @@ function DispatchPageInner() {
                       )}
                       {projectWellSearch.length >= 2 && (
                         <div className="bg-gray-900 border border-gray-700 rounded max-h-24 overflow-y-auto mt-1">
-                          {wells
-                            .filter(w => w.wellName.toLowerCase().includes(projectWellSearch.toLowerCase()) && !newProjectWells.includes(w.wellName))
-                            .slice(0, 10)
-                            .map(w => (
-                              <button key={w.wellName} onClick={() => { setNewProjectWells(prev => [...prev, w.wellName]); setProjectWellSearch(''); }}
-                                className="w-full text-left px-3 py-1.5 hover:bg-gray-700 text-white text-xs border-b border-gray-800 last:border-0">
-                                {w.ndicName || w.wellName} <span className="text-gray-500">{w.route}</span>
-                              </button>
-                            ))}
+                          {projectWellOptions.map((it) => (
+                            <button key={it.value} onClick={() => { setNewProjectWells(prev => [...prev, it.value]); setProjectWellSearch(''); }}
+                              className="w-full text-left px-3 py-1.5 hover:bg-gray-700 text-white text-xs border-b border-gray-800 last:border-0 flex items-center gap-2">
+                              <LocBadge type={it.type} />
+                              <span className="flex-1 truncate">{it.label}</span>
+                              {it.sub && <span className="text-gray-500">{it.sub}</span>}
+                            </button>
+                          ))}
+                          {projectWellOptions.length === 0 && (
+                            <div className="px-3 py-1.5 text-gray-500 text-xs">No wells found</div>
+                          )}
                         </div>
                       )}
                     </div>
