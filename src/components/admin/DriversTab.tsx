@@ -1126,9 +1126,10 @@ export function DriversTab({ scopeCompanyId, isWbAdmin = false }: DriversTabProp
             {isWbAdmin && (
               <button
                 onClick={() => openDeleteModal(driver)}
+                title="Platform cleanup only — not normal customer employee management. Use Archive to remove a customer's employee."
                 className="px-3 py-1 text-sm rounded bg-red-700 hover:bg-red-600 text-red-200 ml-auto"
               >
-                Delete
+                Platform Delete
               </button>
             )}
           </div>
@@ -2021,7 +2022,15 @@ export function DriversTab({ scopeCompanyId, isWbAdmin = false }: DriversTabProp
         return (
           <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50">
             <div className="bg-gray-800 rounded-lg p-6 max-w-lg w-full mx-4">
-              <h3 className="text-white font-medium text-lg mb-1">Delete {deleteTarget.displayName}?</h3>
+              <h3 className="text-white font-medium text-lg mb-1">Platform Delete — {deleteTarget.displayName}</h3>
+              <div className="bg-amber-900/30 border border-amber-700 rounded p-3 mb-3">
+                <p className="text-amber-200 text-sm font-medium">⚠️ Platform cleanup only.</p>
+                <p className="text-amber-200/90 text-sm">This is not normal customer employee management.</p>
+                <p className="text-amber-200/90 text-sm">To remove a customer&apos;s employee from daily use, use Archive.</p>
+              </div>
+              <p className="text-gray-400 text-xs mb-3">
+                Company: {deleteTarget.companyName || deleteTarget.companyId || 'Unknown'}
+              </p>
               <p className="text-gray-400 text-sm mb-4">
                 Hard delete removes only the driver login record. Tickets, invoices, JSA, shifts,
                 dispatches, and payroll are never touched.
