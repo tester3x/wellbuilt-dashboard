@@ -3,7 +3,7 @@
 import { useEffect, useState } from 'react';
 import { httpsCallable } from 'firebase/functions';
 import { getFirebaseDatabase, getFirestoreDb, getFirebaseFunctions } from '@/lib/firebase';
-import { ref, get, set, remove, update } from 'firebase/database';
+import { ref, get, set, remove, update, push, serverTimestamp } from 'firebase/database';
 import { collection, getDocs } from 'firebase/firestore';
 import { fetchCompanyRouteNames } from '@/lib/wells';
 import { probeDriverHistory, type DriverHistorySummary } from '@/lib/driverHistory';
@@ -87,6 +87,7 @@ export function DriversTab({ scopeCompanyId, isWbAdmin = false }: DriversTabProp
   const [deleteProbe, setDeleteProbe] = useState<DriverHistorySummary | null>(null);
   const [deleteProbing, setDeleteProbing] = useState(false);
   const [deleteConfirmName, setDeleteConfirmName] = useState('');
+  const [deleteReason, setDeleteReason] = useState('');
   const [deleteOverride, setDeleteOverride] = useState(false);
   const [deleting, setDeleting] = useState(false);
   // Pre-delete explanation/acknowledgement modal (shown before the guarded modal).
@@ -144,7 +145,7 @@ export function DriversTab({ scopeCompanyId, isWbAdmin = false }: DriversTabProp
     existed: boolean;
   }>(null);
 
-  const { userCompany } = useAuth();
+  const { userCompany, user } = useAuth();
   const db = getFirebaseDatabase();
 
   const loadDrivers = async () => {
@@ -819,6 +820,7 @@ export function DriversTab({ scopeCompanyId, isWbAdmin = false }: DriversTabProp
     setDeleteTarget(driver);
     setDeleteProbe(null);
     setDeleteConfirmName('');
+    setDeleteReason('');
     setDeleteOverride(false);
     setDeleteProbing(true);
     try {
@@ -839,6 +841,7 @@ export function DriversTab({ scopeCompanyId, isWbAdmin = false }: DriversTabProp
     setDeleteTarget(null);
     setDeleteProbe(null);
     setDeleteConfirmName('');
+    setDeleteReason('');
     setDeleteOverride(false);
     setDeleting(false);
   };
@@ -846,18 +849,52 @@ export function DriversTab({ scopeCompanyId, isWbAdmin = false }: DriversTabProp
   const confirmHardDelete = async () => {
     if (!deleteTarget || !deleteProbe) return;
     const hasHistory = deleteProbe.hasAny;
-    // History present requires the explicit override; name must always match.
+    // History present requires the explicit override; name must always match;
+    // a written reason (>= 5 chars) is mandatory for the audit record.
     if (hasHistory && !deleteOverride) return;
     if (deleteConfirmName.trim() !== deleteTarget.displayName) return;
+    if (deleteReason.trim().length < 5) return;
     setDeleting(true);
     try {
+      // Audit FIRST — never delete a driver without a recorded reason. If the
+      // audit write fails, the catch aborts and nothing is removed.
+      // Stored in RTDB (open .read/.write) because the new collection has no
+      // Firestore rule and Firestore denies unmatched collections by default.
+      await push(ref(db, 'driver_delete_audit'), {
+        driverHash: deleteTarget.key,
+        driverName: deleteTarget.displayName,
+        legalName: deleteTarget.legalName || null,
+        companyId: deleteTarget.companyId || null,
+        companyName: deleteTarget.companyName || null,
+        deleteType: isWbAdmin ? 'platform' : 'customer',
+        reason: deleteReason.trim(),
+        deletedByUid: user?.uid || null,
+        deletedByEmail: user?.email || null,
+        deletedByName: user?.displayName || null,
+        deletedAt: serverTimestamp(),
+        historyProbe: {
+          hasAny: deleteProbe.hasAny,
+          tickets: deleteProbe.tickets,
+          invoices: deleteProbe.invoices,
+          canonicalJobs: deleteProbe.canonicalJobs,
+          jsa: deleteProbe.jsa,
+          dispatches: deleteProbe.dispatches,
+          shifts: deleteProbe.shifts,
+          dashboardLink: deleteProbe.dashboardLink,
+          probeError: deleteProbe.probeError,
+        },
+        overrideUsed: hasHistory ? deleteOverride : false,
+        typedNameConfirmed: true,
+        explanationAcknowledged: true,
+      });
+
       await remove(ref(db, `drivers/approved/${deleteTarget.key}`));
-      setMessage(`Hard-deleted driver record: ${deleteTarget.displayName}. Any history was left untouched.`);
+      setMessage(`Hard-deleted driver record: ${deleteTarget.displayName}. Reason logged; history untouched.`);
       closeDeleteModal();
       await loadDrivers();
     } catch (err) {
       console.error('Failed to delete driver:', err);
-      setMessage('Failed to delete driver');
+      setMessage('Delete aborted — could not write the audit record or remove the login record. Nothing deleted.');
       setDeleting(false);
     }
   };
@@ -2093,7 +2130,8 @@ export function DriversTab({ scopeCompanyId, isWbAdmin = false }: DriversTabProp
       {deleteTarget && (() => {
         const hasHistory = !!deleteProbe?.hasAny;
         const nameOk = deleteConfirmName.trim() === deleteTarget.displayName;
-        const canDelete = !!deleteProbe && !deleteProbing && nameOk && (!hasHistory || deleteOverride);
+        const reasonOk = deleteReason.trim().length >= 5;
+        const canDelete = !!deleteProbe && !deleteProbing && nameOk && reasonOk && (!hasHistory || deleteOverride);
         const found: string[] = [];
         if (deleteProbe) {
           if (deleteProbe.tickets) found.push('tickets');
@@ -2162,6 +2200,24 @@ export function DriversTab({ scopeCompanyId, isWbAdmin = false }: DriversTabProp
                     Only do this for explicit test-data cleanup. The history documents are orphaned, not deleted.
                   </span>
                 </label>
+              )}
+
+              {!deleteProbing && !deleteProbe?.probeError && (!hasHistory || deleteOverride) && (
+                <div className="mb-4">
+                  <label className="text-gray-400 text-xs uppercase tracking-wider block mb-1">
+                    Reason for deletion <span className="text-red-400">*</span>
+                  </label>
+                  <textarea
+                    value={deleteReason}
+                    onChange={e => setDeleteReason(e.target.value)}
+                    rows={2}
+                    placeholder="e.g. Employee terminated by customer · Duplicate test driver · Security concern · Customer requested cleanup · Platform abuse investigation"
+                    className="w-full px-3 py-2 bg-gray-700 text-white rounded text-sm placeholder-gray-500"
+                  />
+                  {deleteReason.trim().length > 0 && deleteReason.trim().length < 5 && (
+                    <p className="text-amber-400 text-xs mt-1">Reason must be at least 5 characters.</p>
+                  )}
+                </div>
               )}
 
               {!deleteProbing && !deleteProbe?.probeError && (!hasHistory || deleteOverride) && (
