@@ -2187,7 +2187,7 @@ export function DriversTab({ scopeCompanyId, isWbAdmin = false }: DriversTabProp
                 </div>
               )}
 
-              {!deleteProbing && hasHistory && !deleteProbe?.probeError && (
+              {!deleteProbing && hasHistory && (
                 <label className="flex items-start gap-2 mb-3 cursor-pointer">
                   <input
                     type="checkbox"
@@ -2202,38 +2202,35 @@ export function DriversTab({ scopeCompanyId, isWbAdmin = false }: DriversTabProp
                 </label>
               )}
 
-              {!deleteProbing && !deleteProbe?.probeError && (
-                <div className="mb-4">
-                  <label className="text-gray-400 text-xs uppercase tracking-wider block mb-1">
-                    Reason for deletion <span className="text-red-400">*</span>
-                  </label>
-                  <textarea
-                    value={deleteReason}
-                    onChange={e => setDeleteReason(e.target.value)}
-                    rows={2}
-                    placeholder="e.g. Employee terminated by customer · Duplicate test driver · Security concern · Customer requested cleanup · Platform abuse investigation"
-                    className="w-full px-3 py-2 bg-gray-700 text-white rounded text-sm placeholder-gray-500"
-                  />
-                  {deleteReason.trim().length > 0 && deleteReason.trim().length < 5 && (
-                    <p className="text-amber-400 text-xs mt-1">Reason must be at least 5 characters.</p>
-                  )}
-                </div>
-              )}
+              <div className="mb-4">
+                <label className="text-gray-400 text-xs uppercase tracking-wider block mb-1">
+                  Reason for deletion <span className="text-red-400">*</span>
+                </label>
+                <textarea
+                  value={deleteReason}
+                  onChange={e => setDeleteReason(e.target.value)}
+                  rows={2}
+                  placeholder="e.g. Employee terminated by customer · Duplicate test driver · Security concern · Customer requested cleanup · Platform abuse investigation"
+                  className="w-full px-3 py-2 bg-gray-700 text-white rounded text-sm placeholder-gray-500"
+                />
+                {deleteReason.trim().length > 0 && deleteReason.trim().length < 5 && (
+                  <p className="text-amber-400 text-xs mt-1">Reason must be at least 5 characters.</p>
+                )}
+              </div>
 
-              {!deleteProbing && !deleteProbe?.probeError && (
-                <div className="mb-4">
-                  <label className="text-gray-400 text-xs uppercase tracking-wider block mb-1">
-                    Type <span className="text-white font-mono">{deleteTarget.displayName}</span> to confirm
-                  </label>
-                  <input
-                    type="text"
-                    value={deleteConfirmName}
-                    onChange={e => setDeleteConfirmName(e.target.value)}
-                    placeholder={deleteTarget.displayName}
-                    className="w-full px-3 py-2 bg-gray-700 text-white rounded text-sm"
-                  />
-                </div>
-              )}
+              <div className="mb-4">
+                <label className="text-gray-400 text-xs uppercase tracking-wider block mb-1">
+                  Type <span className="text-white font-mono">{deleteTarget.displayName}</span> to confirm{' '}
+                  <span className="text-red-400">*</span>
+                </label>
+                <input
+                  type="text"
+                  value={deleteConfirmName}
+                  onChange={e => setDeleteConfirmName(e.target.value)}
+                  placeholder={deleteTarget.displayName}
+                  className="w-full px-3 py-2 bg-gray-700 text-white rounded text-sm"
+                />
+              </div>
 
               <div className="flex gap-2">
                 <button
