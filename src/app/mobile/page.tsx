@@ -25,10 +25,16 @@ interface RouteSort {
 }
 
 export default function MobilePage() {
-  const { user, loading } = useAuth();
+  const { user, loading, userCompany } = useAuth();
   const router = useRouter();
   // Company-less non-admin (unassigned viewer): pending activation, no data.
   const unassigned = !!user && !isWbPlatformAdmin(user) && !user.companyId;
+  // WB Mobile is the well-monitoring product (tank levels, maintained routes).
+  // A company-scoped user whose company is NOT a monitoring company (e.g. a
+  // ticket_only / Dispatch-only tenant) has nothing here — show an empty-state
+  // and skip the edge-case computation. Platform admins (no companyId) keep the
+  // global view regardless.
+  const wbMobileOff = !!user?.companyId && userCompany?.wellMonitoring !== true;
   // Model B read scoping: company-scoped users see only their maintained wells.
   // null = unscoped (WB platform admin).
   const [maintainedNames, setMaintainedNames] = useState<Set<string> | null>(null);
@@ -143,6 +149,10 @@ export default function MobilePage() {
 
   // Load edge case tickets (submitted for wells not in well_config)
   useEffect(() => {
+    // Never compute edge cases for a non-monitoring company — every ticket would
+    // false-flag as "unconfigured" since its wells live in operator/NDIC data,
+    // not well_config.
+    if (wbMobileOff) { setEdgeCaseTickets([]); return; }
     if (unassigned || wells.length === 0) return;
     // Normalize: lowercase, strip # and special chars, collapse spaces
     const normalize = (s: string) => s.toLowerCase().replace(/[#\-_.,()]/g, ' ').replace(/\s+/g, ' ').trim();
@@ -162,7 +172,7 @@ export default function MobilePage() {
     }).catch(err => {
       console.warn('Edge case tickets load failed:', err);
     });
-  }, [wells]);
+  }, [wells, wbMobileOff]);
 
   // Toggle route expansion and save to localStorage
   const toggleRoute = (route: string) => {
@@ -297,6 +307,31 @@ export default function MobilePage() {
         <AppHeader />
         <main className="max-w-7xl mx-auto px-4 py-16">
           <div className="text-gray-400 text-center">Account pending activation. Contact your WellBuilt administrator.</div>
+        </main>
+      </div>
+    );
+  }
+
+  // Non-monitoring (ticket_only / Dispatch-only) tenant reaching /mobile directly:
+  // explain why WB Mobile is empty instead of showing "0 wells / Unrouted".
+  if (wbMobileOff) {
+    return (
+      <div className="min-h-screen bg-gray-900">
+        <AppHeader />
+        <main className="max-w-2xl mx-auto px-4 py-16">
+          <div className="bg-gray-800 border border-gray-700 rounded-lg p-8 text-center">
+            <h2 className="text-white text-lg font-semibold mb-2">WB Mobile</h2>
+            <p className="text-gray-400 text-sm leading-relaxed">
+              WB Mobile is for well monitoring, tank levels, and maintained routes.
+              This company is using Dispatch &amp; Tickets only. Manage loads from Dispatch.
+            </p>
+            <button
+              onClick={() => router.push('/dispatch')}
+              className="mt-5 px-4 py-2 bg-blue-600 hover:bg-blue-500 text-white text-sm rounded-lg"
+            >
+              Go to Dispatch
+            </button>
+          </div>
         </main>
       </div>
     );

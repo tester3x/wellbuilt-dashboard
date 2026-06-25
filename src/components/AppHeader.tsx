@@ -143,6 +143,11 @@ export function AppHeader() {
               a shared baseline so sections read like an application, not a menu. */}
           <nav className="flex flex-wrap items-end justify-center gap-1 border-b border-gray-700 px-2">
             {TABS.filter(tab => {
+              // WB Mobile is the well-monitoring product. Hide it for a
+              // company-scoped user whose company isn't a monitoring company
+              // (e.g. a ticket_only / Dispatch-only tenant). Platform admins
+              // (no companyId / no userCompany) keep global access.
+              if (tab.id === 'mobile' && user?.companyId && userCompany?.wellMonitoring !== true) return false;
               // Capability-based gate wins when set. Falls back to legacy minRole
               // only if capability is unset (e.g., Home tab with no gate at all).
               if (tab.capability) return hasCapability(user, tab.capability, userCompany);
