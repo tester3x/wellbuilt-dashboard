@@ -20,7 +20,10 @@ import { httpsCallable } from 'firebase/functions';
 
 const REAL_BUCKET = 'gs://wellbuilt-sync.firebasestorage.app';
 
-export type PhotoPhase = 'any' | 'pickup' | 'dropoff';
+// pickup = before Depart · dropoff = before Close · both = one at pickup AND one
+// at drop-off. (Legacy 'any' specs normalize to 'pickup' on load — see
+// normalizeReq. No "anywhere before close" option.)
+export type PhotoPhase = 'pickup' | 'dropoff' | 'both';
 export type PhotoAppliesTo = 'any' | 'pw' | 'sw';
 // Provenance of a requirement. 'wb-default' = seeded from DEFAULT_PHOTO_REQUIREMENTS
 // (eligible for Reset-to-default by matching id); 'customer' = customer-created.
@@ -34,7 +37,7 @@ export interface PhotoRequirement {
   description: string;      // criteria text the vision model checks against
   threshold: number;        // 0–100 accept score (default 80)
   requiredCount: number;    // how many passing photos needed (default 1)
-  phase: PhotoPhase;        // when the button shows (default 'any')
+  phase: PhotoPhase;        // when the button shows (default 'pickup')
   appliesTo: PhotoAppliesTo; // which job type the slot shows on (default 'any')
   active: boolean;          // per-requirement on/off (default true)
   sampleStoragePath?: string;
@@ -62,7 +65,8 @@ function normalizeReq(r: any): PhotoRequirement {
     description: String(r.description || r.label || ''),
     threshold: typeof r.threshold === 'number' ? r.threshold : 80,
     requiredCount: typeof r.requiredCount === 'number' && r.requiredCount >= 1 ? r.requiredCount : 1,
-    phase: r.phase === 'pickup' || r.phase === 'dropoff' ? r.phase : 'any',
+    // Legacy 'any' (and any unknown/missing value) migrates to 'pickup'.
+    phase: r.phase === 'dropoff' || r.phase === 'both' ? r.phase : 'pickup',
     appliesTo: r.appliesTo === 'pw' || r.appliesTo === 'sw' ? r.appliesTo : 'any',
     active: r.active !== false,
     // Optional fields are OMITTED when absent — never written as `undefined`,

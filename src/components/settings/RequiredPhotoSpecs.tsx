@@ -23,7 +23,7 @@ function genId(): string {
 }
 
 function blankReq(): PhotoRequirement {
-  return { id: genId(), label: '', description: '', threshold: 80, requiredCount: 1, phase: 'any', appliesTo: 'any', active: true };
+  return { id: genId(), label: '', description: '', threshold: 80, requiredCount: 1, phase: 'pickup', appliesTo: 'any', active: true };
 }
 
 // Strictness slider labels (70–90, step 5). The AI acceptance gate (accepted=false)
@@ -366,9 +366,9 @@ export function RequiredPhotoSpecs({ company }: Props) {
                           <select value={r.phase}
                             onChange={(e) => patchReq(r.id, { phase: e.target.value as PhotoPhase })}
                             className="px-1 py-0.5 bg-gray-700 border border-gray-600 rounded text-white text-xs">
-                            <option value="any">Any</option>
-                            <option value="pickup">Pickup</option>
-                            <option value="dropoff">Drop-off</option>
+                            <option value="pickup">Pickup (before Depart)</option>
+                            <option value="dropoff">Drop-off (before Close)</option>
+                            <option value="both">Both (pickup AND drop-off)</option>
                           </select>
                         </label>
                         <label className="flex items-center gap-1 text-gray-400 text-xs">
