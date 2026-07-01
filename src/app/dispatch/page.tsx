@@ -100,7 +100,7 @@ interface DispatchJob {
   jobType: 'pw' | 'service';
   serviceType?: string;
   packageId?: string;  // Job package ID (e.g. 'water-hauling', 'aggregate')
-  status: 'pending' | 'pending_approval' | 'accepted' | 'in_progress' | 'paused' | 'completed' | 'cancelled' | 'declined';
+  status: 'pending' | 'pending_approval' | 'accepted' | 'in_progress' | 'paused' | 'completed' | 'cancelled' | 'declined' | 'dismissed';
   notes?: string;
   priority: number;
   assignedAt: any;  // Firestore Timestamp
@@ -171,6 +171,19 @@ interface DispatchJob {
                            // pre-fill for the driver's form on accept.
   // Heavy water flag
   isHeavyWater?: boolean;  // 10+ lb heavy water — separate billing rate
+  // Removal / audit fields
+  dismissedAt?: any;
+  splitFamilyDismissed?: boolean;
+  reassignedTo?: string;
+  cancelReason?: string;
+  splitLegRemoved?: boolean;
+  splitRemovedBy?: string;
+  splitRemovedAt?: any;
+  splitRemoveReason?: string;
+  dismissedBy?: string;
+  dismissReason?: string;
+  cancelledBy?: string;
+  cancelledAt?: any;
 }
 
 // ─── Project Types ────────────────────────────────────────────────────────
@@ -386,6 +399,57 @@ function timeAgo(ts: any): string {
   } catch {
     return '';
   }
+}
+
+function toDispatchDate(ts: any): Date | null {
+  if (!ts) return null;
+  if (ts.toDate) return ts.toDate();
+  if (ts.seconds) return new Date(ts.seconds * 1000);
+  if (typeof ts === 'string') return new Date(ts);
+  return null;
+}
+
+function isRemovedJob(d: DispatchJob): boolean {
+  return d.status === 'dismissed' ||
+    (d.status === 'cancelled' && !d.splitLegRemoved);
+}
+
+function removalLabel(d: DispatchJob): string {
+  if (d.status === 'dismissed') return 'Dismissed';
+  if (d.reassignedTo) return 'Reassigned';
+  if (d.splitLegRemoved) return 'Leg removed';
+  return 'Cancelled';
+}
+
+function removalTimestampMs(d: DispatchJob): number {
+  const ts = d.dismissedAt ?? d.cancelledAt ?? d.splitRemovedAt ?? d.declinedAt ?? d.assignedAt;
+  if (!ts) return 0;
+  if (ts.toMillis) return ts.toMillis();
+  return toDispatchDate(ts)?.getTime() ?? 0;
+}
+
+function formatRemovalDate(d: DispatchJob): string {
+  const ts = d.dismissedAt ?? d.cancelledAt ?? d.splitRemovedAt;
+  const date = toDispatchDate(ts);
+  if (!date || isNaN(date.getTime())) return '—';
+  return date.toLocaleString([], { month: 'short', day: 'numeric', year: 'numeric', hour: 'numeric', minute: '2-digit' });
+}
+
+function getRemovalRemovedBy(d: DispatchJob, drivers?: { key: string; displayName: string; legalName?: string }[]): string {
+  if (d.splitRemovedBy) {
+    const dr = drivers?.find(x => x.key === d.splitRemovedBy);
+    return dr?.legalName || dr?.displayName || d.splitRemovedBy;
+  }
+  if (d.dismissedBy) return d.dismissedBy;
+  if (d.cancelledBy) return d.cancelledBy;
+  return 'Not recorded';
+}
+
+function getRemovalReason(d: DispatchJob): string {
+  if (d.reassignedTo) return `Reassigned to ${d.reassignedTo}`;
+  const reason = d.dismissReason ?? d.cancelReason ?? d.splitRemoveReason;
+  if (reason) return reason;
+  return 'Not recorded';
 }
 
 // ─── Main Component ──────────────────────────────────────────────────────────
@@ -669,7 +733,7 @@ function DispatchPageInner() {
 
   // Right panel tab
   const searchParams = useSearchParams();
-  const [rightPanelTab, setRightPanelTab] = useState<'jobs' | 'completed' | 'projects'>('jobs');
+  const [rightPanelTab, setRightPanelTab] = useState<'jobs' | 'completed' | 'projects' | 'removed'>('jobs');
   const [highlightJobId, setHighlightJobId] = useState<string | null>(null);
 
   // Handle URL params from notification deep links (e.g., ?tab=completed&highlight=abc123)
@@ -681,6 +745,8 @@ function DispatchPageInner() {
       if (highlight) setHighlightJobId(highlight);
     } else if (tab === 'projects') {
       setRightPanelTab('projects');
+    } else if (tab === 'removed') {
+      setRightPanelTab('removed');
     }
   }, [searchParams]);
 
@@ -910,7 +976,7 @@ function DispatchPageInner() {
     // dispatches; a platform admin (no companyId) sees all.
     const cid = user?.companyId;
     const constraints = [
-      where('status', 'in', ['pending', 'pending_approval', 'accepted', 'in_progress', 'paused', 'declined', 'cancelled', 'completed']),
+      where('status', 'in', ['pending', 'pending_approval', 'accepted', 'in_progress', 'paused', 'declined', 'cancelled', 'completed', 'dismissed']),
       orderBy('assignedAt', 'desc'),
     ];
     if (cid) constraints.unshift(where('companyId', '==', cid));
@@ -1127,7 +1193,7 @@ function DispatchPageInner() {
       const firestore = getFirestoreDb();
       const cid = user?.companyId;
       const constraints = [
-        where('status', 'in', ['pending', 'pending_approval', 'accepted', 'in_progress', 'paused', 'declined', 'cancelled']),
+        where('status', 'in', ['pending', 'pending_approval', 'accepted', 'in_progress', 'paused', 'declined', 'cancelled', 'completed', 'dismissed']),
         orderBy('assignedAt', 'desc'),
       ];
       if (cid) constraints.unshift(where('companyId', '==', cid));
@@ -2394,6 +2460,12 @@ function DispatchPageInner() {
     return driverSet.size;
   }, [dispatches]);
 
+  const removedJobs = useMemo(() =>
+    dispatches
+      .filter(isRemovedJob)
+      .sort((a, b) => removalTimestampMs(b) - removalTimestampMs(a)),
+  [dispatches]);
+
   // ─── Render Guards ─────────────────────────────────────────────────────────
 
   if (loading) {
@@ -3366,7 +3438,7 @@ function DispatchPageInner() {
                   >
                     Active Jobs
                     {(() => {
-                      const activeCount = dispatches.filter(d => !['completed', 'dismissed'].includes(d.status)).reduce((sum, d) => sum + ((d as any).loadCount || 1), 0);
+                      const activeCount = dispatches.filter(d => d.status !== 'completed' && !isRemovedJob(d)).reduce((sum, d) => sum + ((d as any).loadCount || 1), 0);
                       return activeCount > 0 ? (
                         <span className={`ml-1 px-1.5 py-0.5 text-[10px] rounded font-bold ${
                           rightPanelTab === 'jobs' ? 'bg-blue-500/40 text-blue-100' : 'bg-blue-600/20 text-blue-400'
@@ -3402,6 +3474,21 @@ function DispatchPageInner() {
                       <span className={`px-1.5 py-0.5 text-[10px] rounded font-bold ${
                         rightPanelTab === 'projects' ? 'bg-emerald-500/40 text-emerald-100' : 'bg-emerald-600/20 text-emerald-400'
                       }`}>{projects.length}</span>
+                    )}
+                  </button>
+                  <button
+                    onClick={() => { setRightPanelTab('removed'); setSelectedProject(null); }}
+                    className={`px-3 py-1 rounded text-sm font-medium transition-colors flex items-center gap-1.5 ${
+                      rightPanelTab === 'removed'
+                        ? 'bg-amber-600 text-white'
+                        : 'text-gray-400 hover:text-white hover:bg-gray-700'
+                    }`}
+                  >
+                    Removed
+                    {removedJobs.length > 0 && (
+                      <span className={`px-1.5 py-0.5 text-[10px] rounded font-bold ${
+                        rightPanelTab === 'removed' ? 'bg-amber-500/40 text-amber-100' : 'bg-amber-600/20 text-amber-400'
+                      }`}>{removedJobs.length}</span>
                     )}
                   </button>
                 </div>
@@ -3457,7 +3544,7 @@ function DispatchPageInner() {
               <div className="flex-1 overflow-y-auto p-3">
                 {rightPanelTab === 'jobs' && (
                   <ActiveDispatchPanel
-                    dispatches={dispatches.filter(d => d.status !== 'completed')}
+                    dispatches={dispatches.filter(d => d.status !== 'completed' && !isRemovedJob(d))}
                     cancelDispatch={cancelDispatch}
                     drivers={drivers}
                     assignTransfer={assignTransfer}
@@ -3474,6 +3561,12 @@ function DispatchPageInner() {
                     allDisposals={allDisposals}
                     highlightJobId={highlightJobId}
                     onHighlightClear={() => setHighlightJobId(null)}
+                  />
+                )}
+                {rightPanelTab === 'removed' && (
+                  <RemovedJobsPanel
+                    jobs={removedJobs}
+                    drivers={drivers}
                   />
                 )}
                 {rightPanelTab === 'projects' && !selectedProject && (
@@ -4556,9 +4649,9 @@ function ActiveDispatchPanel({ dispatches, cancelDispatch, drivers, assignTransf
     }
   };
 
-  // Separate declined/cancelled jobs from active (completed filtered out before passing to this component)
-  const declinedJobs = dispatches.filter(d => d.status === 'declined' || d.status === 'cancelled');
-  const nonDeclined = dispatches.filter(d => d.status !== 'declined' && d.status !== 'cancelled');
+  // Separate declined jobs from active (cancelled/reassigned/dismissed live in Removed tab)
+  const declinedJobs = dispatches.filter(d => d.status === 'declined');
+  const nonDeclined = dispatches.filter(d => d.status !== 'declined');
 
   // Group declined/cancelled split families into ONE card each. A dispatched
   // split is one operational assignment, so A/B/C must NOT render as three
@@ -5764,6 +5857,248 @@ function CompletedJobsPanel({ jobs, drivers, allWells, allDisposals, highlightJo
                   )}
                 </div>
               ) : null}
+            </div>
+          );
+        })
+      )}
+    </div>
+  );
+}
+
+// ─── Removed Jobs Panel (dismissed / cancelled / reassigned) ─────────────────
+
+function removalStatusStyle(label: string): string {
+  switch (label) {
+    case 'Dismissed': return 'bg-gray-600/30 text-gray-300';
+    case 'Reassigned': return 'bg-blue-600/30 text-blue-300';
+    case 'Cancelled': return 'bg-red-600/30 text-red-300';
+    default: return 'bg-purple-600/30 text-purple-300';
+  }
+}
+
+function RemovedJobsPanel({ jobs, drivers }: {
+  jobs: DispatchJob[];
+  drivers?: { key: string; displayName: string; legalName?: string }[];
+}) {
+  const [expandedJobId, setExpandedJobId] = useState<string | null>(null);
+  const [ticketDetailJobId, setTicketDetailJobId] = useState<string | null>(null);
+  const [ticketDetailData, setTicketDetailData] = useState<any>(null);
+  const [ticketDetailLoading, setTicketDetailLoading] = useState(false);
+
+  function getDriverFullName(hash: string) {
+    const d = drivers?.find(dr => dr.key === hash);
+    return d?.legalName || d?.displayName || hash?.slice(0, 8) || 'Unknown';
+  }
+
+  async function loadTicketDetail(identifier: string, jobId: string, invoiceDocId?: string) {
+    if (ticketDetailJobId === jobId) { setTicketDetailJobId(null); setTicketDetailData(null); return; }
+    setTicketDetailJobId(jobId);
+    setTicketDetailLoading(true);
+    try {
+      const { collection, query, where, getDocs, doc, getDoc } = await import('firebase/firestore');
+      const { getFirestoreDb } = await import('@/lib/firebase');
+      const db = getFirestoreDb();
+
+      let inv: any = null;
+      if (invoiceDocId) {
+        const docSnap = await getDoc(doc(db, 'invoices', invoiceDocId));
+        if (docSnap.exists()) inv = docSnap.data();
+      }
+      if (!inv && identifier) {
+        const q = query(collection(db, 'invoices'), where('invoiceNumber', '==', identifier));
+        const snap = await getDocs(q);
+        if (!snap.empty) inv = snap.docs[0].data();
+      }
+
+      if (inv) {
+        const ticketNumbers = inv.tickets || [];
+        const tickets: any[] = [];
+        if (ticketNumbers.length > 0) {
+          const tq = query(collection(db, 'tickets'), where('ticketNumber', 'in', ticketNumbers.slice(0, 10)));
+          const tsnap = await getDocs(tq);
+          tsnap.forEach(d => tickets.push(d.data()));
+        }
+        setTicketDetailData({ invoice: inv, tickets });
+      } else {
+        setTicketDetailData(null);
+      }
+    } catch (err) {
+      console.error('[RemovedJobs] Failed to fetch ticket detail:', err);
+      setTicketDetailData(null);
+    } finally {
+      setTicketDetailLoading(false);
+    }
+  }
+
+  return (
+    <div className="space-y-2">
+      <div className="text-gray-500 text-xs">
+        {jobs.length} removed job{jobs.length !== 1 ? 's' : ''}
+        <span className="text-gray-600 ml-1">— dismissed, cancelled, or reassigned off the board</span>
+      </div>
+
+      {jobs.length === 0 ? (
+        <div className="text-center text-gray-600 py-6 text-sm">No removed jobs</div>
+      ) : (
+        jobs.map(job => {
+          const label = removalLabel(job);
+          const driverName = job.driverFirstName || getDriverFullName(job.driverHash);
+          const disposal = job.disposal || job.disposalName || job.hauledTo || '—';
+          const bbl = job.totalBBL || job.bbls;
+          const isExpanded = expandedJobId === job.id;
+          const ticketId = job.invoiceNumber || job.ticketNumber || '';
+
+          return (
+            <div
+              key={job.id}
+              className={`border rounded-lg transition-colors cursor-pointer ${
+                isExpanded
+                  ? 'border-amber-600/50 bg-gray-800/80'
+                  : 'border-gray-700/50 bg-gray-800/50 hover:border-gray-600/50'
+              }`}
+              onClick={() => setExpandedJobId(isExpanded ? null : (job.id || null))}
+            >
+              <div className="px-4 py-3">
+                <div className="flex items-center gap-2">
+                  <div className="w-6 h-6 rounded-full bg-amber-600/30 flex items-center justify-center flex-shrink-0">
+                    <span className="text-amber-300 text-xs">−</span>
+                  </div>
+                  <JobTypeBadge type={job.jobType} serviceType={job.serviceType} />
+                  <span className="text-white font-medium text-sm truncate">{job.ndicWellName || job.wellName}</span>
+                  {disposal !== '—' && (
+                    <span className="text-cyan-400/60 text-xs truncate">→ {disposal}</span>
+                  )}
+                  <span className="flex-1" />
+                  <span className={`px-2 py-0.5 text-[10px] font-bold rounded flex-shrink-0 ${removalStatusStyle(label)}`}>{label.toUpperCase()}</span>
+                  <span className={`text-gray-600 text-xs transition-transform ${isExpanded ? 'rotate-180' : ''}`}>▾</span>
+                </div>
+                <div className="flex items-center gap-3 mt-1.5 ml-8 text-xs text-gray-500 flex-wrap">
+                  <span>{driverName}</span>
+                  {bbl != null && bbl > 0 && <span className="text-blue-400">{bbl} BBL</span>}
+                  {ticketId && <span className="text-cyan-400/50">#{ticketId}</span>}
+                  <span className="text-gray-600">{formatRemovalDate(job)}</span>
+                </div>
+              </div>
+
+              {isExpanded && (
+                <div className="border-t border-amber-600/20 px-4 py-3 space-y-3" onClick={e => e.stopPropagation()}>
+                  <div className="grid grid-cols-2 sm:grid-cols-3 gap-x-4 gap-y-2 text-xs">
+                    <div>
+                      <span className="text-gray-500">Ticket #</span>
+                      <div className="text-cyan-300">{ticketId || '—'}</div>
+                    </div>
+                    <div>
+                      <span className="text-gray-500">Well</span>
+                      <div className="text-gray-200">{job.ndicWellName || job.wellName || '—'}</div>
+                    </div>
+                    <div>
+                      <span className="text-gray-500">Disposal</span>
+                      <div className="text-gray-200 truncate" title={disposal}>{disposal}</div>
+                    </div>
+                    <div>
+                      <span className="text-gray-500">Driver</span>
+                      <div className="text-gray-200">{driverName}</div>
+                    </div>
+                    <div>
+                      <span className="text-gray-500">BBL</span>
+                      <div className="text-gray-200">{bbl != null && bbl > 0 ? bbl : '—'}</div>
+                    </div>
+                    <div>
+                      <span className="text-gray-500">Status</span>
+                      <div className="text-gray-200">{label}</div>
+                    </div>
+                    <div>
+                      <span className="text-gray-500">Removed at</span>
+                      <div className="text-gray-200">{formatRemovalDate(job)}</div>
+                    </div>
+                    <div>
+                      <span className="text-gray-500">Removed by</span>
+                      <div className="text-gray-200">{getRemovalRemovedBy(job, drivers)}</div>
+                    </div>
+                    <div className="sm:col-span-2">
+                      <span className="text-gray-500">Reason</span>
+                      <div className="text-gray-200">{getRemovalReason(job)}</div>
+                    </div>
+                  </div>
+
+                  {(getRemovalRemovedBy(job, drivers) === 'Not recorded' || getRemovalReason(job) === 'Not recorded') && (
+                    <div className="text-[10px] text-gray-600 italic">
+                      Audit fields (removed by / reason) not recorded for older removals.
+                    </div>
+                  )}
+
+                  <div className="border-t border-gray-700/30 pt-2 flex items-center gap-2">
+                    {(ticketId || job.invoiceDocId) && (
+                      <button
+                        onClick={(e) => { e.stopPropagation(); loadTicketDetail(ticketId, job.id!, job.invoiceDocId); }}
+                        className={`px-3 py-1 text-xs rounded transition-colors ${ticketDetailJobId === job.id ? 'bg-cyan-600 text-white' : 'bg-gray-700 hover:bg-gray-600 text-cyan-400'}`}
+                      >
+                        {ticketDetailJobId === job.id ? 'Hide Details' : 'View Details'}
+                      </button>
+                    )}
+                  </div>
+
+                  {ticketDetailJobId === job.id && (
+                    <div className="mt-2">
+                      {ticketDetailLoading ? (
+                        <div className="bg-[#FAFAF8] rounded-lg p-6 text-center text-gray-400 text-sm animate-pulse">Loading...</div>
+                      ) : ticketDetailData?.invoice ? (
+                        <div className="bg-[#FAFAF8] rounded-lg shadow border-l-4 border-amber-500">
+                          <div className="p-4 space-y-0">
+                            <div className="flex items-start justify-between mb-3">
+                              <h4 className="text-[#111] font-black text-lg tracking-tight">INVOICE</h4>
+                              <span className="px-2 py-0.5 rounded-full text-[10px] font-semibold border border-gray-400 text-gray-600">
+                                {(ticketDetailData.invoice.status || 'closed').toUpperCase()}
+                              </span>
+                            </div>
+                            <div className="flex items-center justify-between py-1 border-b border-gray-200">
+                              <span className="text-xs text-gray-500">Invoice #</span>
+                              <span className="text-xs text-[#111] font-mono font-semibold">{ticketId || '—'}</span>
+                            </div>
+                            <div className="flex items-center justify-between py-1 border-b border-gray-200">
+                              <span className="text-xs text-gray-500">Well</span>
+                              <span className="text-xs text-[#111] text-right">{ticketDetailData.invoice.wellName || job.ndicWellName || job.wellName || '—'}</span>
+                            </div>
+                            <div className="flex items-center justify-between py-1 border-b border-gray-200">
+                              <span className="text-xs text-gray-500">Drop-off</span>
+                              <span className="text-xs text-[#111] text-right">{ticketDetailData.invoice.hauledTo || disposal}</span>
+                            </div>
+                            <div className="flex items-center justify-between py-1 border-b border-gray-200">
+                              <span className="text-xs text-gray-500">Driver</span>
+                              <span className="text-xs text-[#111]">{ticketDetailData.invoice.driver || driverName}</span>
+                            </div>
+                            {ticketDetailData.tickets?.length > 0 && (
+                              <>
+                                <h5 className="text-[#111] font-extrabold text-[10px] tracking-[1.5px] uppercase pt-3 pb-1">LINE ITEMS</h5>
+                                {ticketDetailData.tickets.map((t: any, idx: number) => (
+                                  <div key={idx} className="border border-gray-300 rounded-lg overflow-hidden mb-2 px-3 py-2 text-[10px] text-[#111]">
+                                    {t.location && <div>Pickup: {t.location}</div>}
+                                    {t.hauledTo && <div>Drop-off: {t.hauledTo}</div>}
+                                    {(t.qty || t.bbls) && <div>BBL: {t.qty || t.bbls}</div>}
+                                  </div>
+                                ))}
+                              </>
+                            )}
+                            {ticketDetailData.invoice.photos?.length > 0 && (
+                              <CompliancePhotoStrip photos={ticketDetailData.invoice.photos} size="sm" />
+                            )}
+                            <div className="border-t-2 border-amber-500 mt-4 pt-2">
+                              <div className="flex items-center justify-between">
+                                <span className="text-xs font-semibold text-[#111]">Total BBL</span>
+                                <span className="text-xs font-semibold text-[#111] font-mono">{ticketDetailData.invoice.totalBBL || bbl || '—'}</span>
+                              </div>
+                            </div>
+                          </div>
+                        </div>
+                      ) : (
+                        <div className="bg-[#FAFAF8] rounded-lg p-4 text-center text-gray-400 text-xs">
+                          {ticketId ? `No invoice found for #${ticketId}` : 'No ticket or invoice linked to this dispatch'}
+                        </div>
+                      )}
+                    </div>
+                  )}
+                </div>
+              )}
             </div>
           );
         })
