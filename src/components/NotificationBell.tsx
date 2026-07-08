@@ -346,6 +346,8 @@ export function NotificationBell() {
     saveDismissedIds(dismissedRef.current);
     saveReadIds(readIdsRef.current);
     setNotifications([]);
+    setIsOpen(false);
+    setShowSettings(false);
   }, [notifications]);
 
   const togglePref = useCallback((cat: NotificationCategory) => {
