@@ -27,3 +27,19 @@ export function canViewGlobalWellPool(user: ScopedUser | null | undefined): bool
   if (!user) return false;
   return !user.companyId || user.companyId === LEGACY_WELL_POOL_COMPANY_ID;
 }
+
+/** Doc-level tenant match for containment filters (dispatches, drivers,
+ *  notifications, payroll rows…).
+ *  - unscoped WB admin (no userCompanyId) → sees everything
+ *  - scoped user → docs stamped with their companyId
+ *  - liquid-gold additionally owns LEGACY docs written before companyId
+ *    stamping existed (docCompanyId absent) — the single-tenant era data.
+ *  Any other company never matches unstamped docs. */
+export function docBelongsToTenant(
+  docCompanyId: string | null | undefined,
+  userCompanyId: string | undefined,
+): boolean {
+  if (!userCompanyId) return true;
+  if (docCompanyId === userCompanyId) return true;
+  return userCompanyId === LEGACY_WELL_POOL_COMPANY_ID && !docCompanyId;
+}

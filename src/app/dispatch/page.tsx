@@ -4,6 +4,7 @@ import { useEffect, useState, useMemo, useCallback, Suspense } from 'react';
 import { useRouter, useSearchParams } from 'next/navigation';
 import { useAuth } from '@/contexts/AuthContext';
 import { WellResponse, subscribeToWellStatusesUnified } from '@/lib/wells';
+import { canViewGlobalWellPool, docBelongsToTenant } from '@/lib/tenantScope';
 import { AppHeader } from '@/components/AppHeader';
 import { ref, get, set } from 'firebase/database';
 import { getFirebaseDatabase } from '@/lib/firebase';
@@ -31,6 +32,9 @@ interface ApprovedDriver {
 
 interface DispatchJob {
   id?: string;
+  // Tenant stamp (7/9): present on WB-T-era dispatch docs; legacy docs may
+  // lack it (treated as liquid-gold's by docBelongsToTenant).
+  companyId?: string;
   driverHash: string;
   driverName: string;
   driverFirstName?: string;  // First name from legalName (privacy — don't expose logins)
@@ -525,15 +529,24 @@ function DispatchPageInner() {
     }
   }, [user, loading, router]);
 
-  // Subscribe to well data
+  // Subscribe to well data — tenant containment (7/9): the RTDB well queue is
+  // the global (Liquid Gold) pool with no tenancy dimension. Scoped
+  // non-liquid-gold companies get an empty queue (see lib/tenantScope.ts).
   useEffect(() => {
+    if (!user) return;
+    if (!canViewGlobalWellPool(user)) {
+      setWells([]);
+      setRoutes([]);
+      setDataLoading(false);
+      return;
+    }
     const unsubscribe = subscribeToWellStatusesUnified((wellData, routeList) => {
       setWells(wellData);
       setRoutes(routeList.filter(r => r !== 'Unrouted'));
       setDataLoading(false);
     });
     return unsubscribe;
-  }, []);
+  }, [user]);
 
   // Load drivers + disposals
   useEffect(() => {
@@ -630,8 +643,13 @@ function DispatchPageInner() {
     loadPackageJobTypes();
   }, [user, drivers.length]);
 
-  // Subscribe to active + completed dispatches in real-time
+  // Subscribe to active + completed dispatches in real-time.
+  // Tenant containment (7/9): scoped users see only their company's
+  // dispatches — CLIENT-SIDE filter (no composite index needed for the
+  // status-in + companyId + orderBy combination). liquid-gold also owns
+  // legacy docs written before companyId stamping (docBelongsToTenant).
   useEffect(() => {
+    if (!user) return;
     const firestore = getFirestoreDb();
     const q = query(
       collection(firestore, 'dispatches'),
@@ -643,14 +661,14 @@ function DispatchPageInner() {
       snap.forEach((d) => {
         jobs.push({ id: d.id, ...d.data() } as DispatchJob);
       });
-      setDispatches(jobs);
+      setDispatches(jobs.filter(j => docBelongsToTenant(j.companyId, user.companyId)));
     }, (err) => {
       console.error('Dispatch listener error:', err);
       // Fallback to one-time fetch
       loadDispatchesData();
     });
     return () => unsub();
-  }, []);
+  }, [user]);
 
   // Subscribe to projects in real-time (scoped to company for hauler admins)
   useEffect(() => {
@@ -792,8 +810,11 @@ function DispatchPageInner() {
         });
       }
 
-      approved.sort((a, b) => a.displayName.localeCompare(b.displayName));
-      setDrivers(approved);
+      // Tenant containment (7/9): scoped users see only their own company's
+      // drivers (liquid-gold also owns legacy unstamped records).
+      const scoped = approved.filter(d => docBelongsToTenant(d.companyId, user?.companyId));
+      scoped.sort((a, b) => a.displayName.localeCompare(b.displayName));
+      setDrivers(scoped);
 
       // Fetch shift status for each driver (fire-and-forget — UI updates when ready)
       (async () => {
@@ -805,7 +826,7 @@ function DispatchPageInner() {
           const statusMap = new Map<string, boolean>();
 
           // Batch fetch shift docs for all drivers
-          await Promise.all(approved.map(async (d) => {
+          await Promise.all(scoped.map(async (d) => {
             try {
               const shiftDoc = await getDoc(doc(firestore, 'driver_shifts', `${d.key}_${today}`));
               if (shiftDoc.exists()) {
@@ -851,7 +872,8 @@ function DispatchPageInner() {
       snap.forEach((d) => {
         jobs.push({ id: d.id, ...d.data() } as DispatchJob);
       });
-      setDispatches(jobs);
+      // Tenant containment (7/9) — same filter as the live subscription.
+      setDispatches(jobs.filter(j => docBelongsToTenant(j.companyId, user?.companyId)));
     } catch (err) {
       console.error('Failed to load dispatches:', err);
       // Collection might not exist yet — that's fine
