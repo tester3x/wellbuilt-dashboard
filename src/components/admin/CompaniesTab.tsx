@@ -673,7 +673,7 @@ export function CompaniesTab({ scopeCompanyId, isWbAdmin = false }: CompaniesTab
                       disabled={activatingUid === p.uid}
                       className="px-3 py-1.5 bg-green-600 hover:bg-green-700 text-white rounded text-xs disabled:opacity-50"
                     >
-                      {activatingUid === p.uid ? 'Creating…' : 'Create Customer'}
+                      {activatingUid === p.uid ? 'Creating…' : 'Create Company'}
                     </button>
                   </div>
                 </div>
@@ -687,7 +687,7 @@ export function CompaniesTab({ scopeCompanyId, isWbAdmin = false }: CompaniesTab
       <div className="bg-gray-800 rounded-lg p-4">
         <div className="flex items-center justify-between mb-4">
           <h3 className="text-white font-medium">
-            {scopeCompanyId ? 'Your Company' : `Customers (${scopedCompanies.length})`}
+            {scopeCompanyId ? 'Your Company' : `Companies (${scopedCompanies.length})`}
           </h3>
           <div className="flex gap-2">
             {!scopeCompanyId && (
@@ -704,7 +704,7 @@ export function CompaniesTab({ scopeCompanyId, isWbAdmin = false }: CompaniesTab
                 onClick={openAddForm}
                 className="px-3 py-1.5 bg-green-600 hover:bg-green-500 text-white text-sm rounded"
               >
-                + Add Customer
+                + Add Company
               </button>
             )}
           </div>
@@ -877,17 +877,17 @@ export function CompaniesTab({ scopeCompanyId, isWbAdmin = false }: CompaniesTab
                       )}
                     </div>
 
-                    {/* ── Oil Companies (Assigned Operators) ── */}
+                    {/* ── Operators (assigned oil companies) ── */}
                     <div className="border-t border-gray-600 pt-3">
                       <div className="flex items-center justify-between mb-2">
                         <h4 className="text-yellow-400 text-sm font-medium">
-                          Oil Companies ({company.assignedOperators?.length || 0})
+                          Operators ({company.assignedOperators?.length || 0})
                         </h4>
                         <button
                           onClick={(e) => { e.stopPropagation(); openOperatorModal(company.id); }}
                           className="px-2 py-1 text-xs rounded bg-yellow-600 hover:bg-yellow-500 text-white"
                         >
-                          + Add Oil Company
+                          + Add Operator
                         </button>
                       </div>
                       {(company.assignedOperators?.length || 0) === 0 ? (
@@ -1046,7 +1046,7 @@ export function CompaniesTab({ scopeCompanyId, isWbAdmin = false }: CompaniesTab
       {showOperatorModal && (
         <div className="fixed inset-0 bg-black bg-opacity-60 flex items-center justify-center z-50">
           <div className="bg-gray-800 rounded-lg p-6 max-w-md w-full mx-4">
-            <h3 className="text-white font-medium mb-1">Add Oil Company</h3>
+            <h3 className="text-white font-medium mb-1">Add Operator</h3>
             <p className="text-gray-400 text-xs mb-4">
               Search operators and click to add.
             </p>
@@ -1100,12 +1100,17 @@ export function CompaniesTab({ scopeCompanyId, isWbAdmin = false }: CompaniesTab
         <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50">
           <div className="bg-gray-800 rounded-lg p-6 max-w-lg w-full mx-4 max-h-[85vh] overflow-y-auto">
             <h3 className="text-white font-medium mb-4">
-              {editingCompany ? `Edit: ${editingCompany.name || editingCompany.id}` : 'Add New Customer'}
+              {editingCompany ? `Edit: ${editingCompany.name || editingCompany.id}` : 'Add New Company'}
             </h3>
 
             <div className="space-y-3">
               {!editingCompany && (
                 <div>
+                  {/* BACKLOG (7/9 PO note — do not redesign in this patch):
+                      auto-generate companyId from Company Name (slugify +
+                      collision check against existing ids, as the pending-
+                      signup activation already does), keep manual ID as an
+                      advanced override only. */}
                   <label className="text-gray-400 text-sm block mb-1">
                     Company ID (lowercase, no spaces — used as Firestore doc ID)
                   </label>
@@ -1113,7 +1118,7 @@ export function CompaniesTab({ scopeCompanyId, isWbAdmin = false }: CompaniesTab
                     type="text"
                     value={formId}
                     onChange={e => setFormId(e.target.value.toLowerCase().replace(/\s+/g, '-'))}
-                    placeholder="e.g., hess, slawson"
+                    placeholder="e.g., liquid-gold, home-hauler"
                     className="w-full px-3 py-2 bg-gray-700 text-white rounded text-sm"
                     autoFocus
                   />
@@ -1125,7 +1130,7 @@ export function CompaniesTab({ scopeCompanyId, isWbAdmin = false }: CompaniesTab
                   type="text"
                   value={formName}
                   onChange={e => setFormName(e.target.value)}
-                  placeholder="e.g., HESS CORPORATION"
+                  placeholder="e.g., LIQUID GOLD TRUCKING LLC"
                   className="w-full px-3 py-2 bg-gray-700 text-white rounded text-sm"
                   autoFocus={!!editingCompany}
                 />

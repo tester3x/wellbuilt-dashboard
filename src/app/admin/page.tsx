@@ -992,7 +992,7 @@ export default function AdminPage() {
             onClick={() => setActiveTab('companies')}
             className={`px-4 py-2 rounded ${activeTab === 'companies' ? 'bg-blue-600 text-white' : 'bg-gray-700 text-gray-300'}`}
           >
-            Customers
+            Companies
           </button>
           <button
             onClick={() => setActiveTab('equipment')}
