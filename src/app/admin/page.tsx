@@ -20,6 +20,7 @@ import {
 } from '@/lib/firestoreWells';
 import { DriversTab } from '@/components/admin/DriversTab';
 import { CompaniesTab } from '@/components/admin/CompaniesTab';
+import { canViewGlobalWellPool } from '@/lib/tenantScope';
 import GpsRoutesTab from '@/components/admin/GpsRoutesTab';
 import { EquipmentTab } from '@/components/admin/EquipmentTab';
 
@@ -131,6 +132,23 @@ export default function AdminPage() {
       setActiveTab(tab as any);
     }
   }, []);
+
+  // ── Tenant containment (7/9): global well-config gate ────────────────────
+  // The Wells / Route Groups / GPS Routes tabs edit the GLOBAL RTDB well pool
+  // (well_config etc.), which has no tenancy dimension — it is Liquid Gold's
+  // operational data. A scoped company owner/admin (e.g. Home Hauling) is a
+  // TENANT admin only: those tabs are hidden and their content replaced with
+  // a setup notice. Unscoped WB platform admins and liquid-gold keep full
+  // access. Same rule as the well surfaces (lib/tenantScope.ts).
+  const canManageGlobalWellConfig = canViewGlobalWellPool(user);
+  useEffect(() => {
+    // Default tab is 'wells' and ?tab= can deep-link into a gated tab —
+    // route scoped users to their Companies tab instead.
+    if (user && !canManageGlobalWellConfig &&
+        (activeTab === 'wells' || activeTab === 'routes' || activeTab === 'gpsroutes')) {
+      setActiveTab('companies');
+    }
+  }, [user, canManageGlobalWellConfig, activeTab]);
 
   // Search filters
   const [wellSearch, setWellSearch] = useState('');
@@ -958,30 +976,35 @@ export default function AdminPage() {
            activeTab === 'gpsroutes' ? 'GPS Route Recording' :
            activeTab === 'drivers' ? 'Employee Management' :
            activeTab === 'equipment' ? 'Equipment Documents' :
-           'Customer Management'}
+           'Company Management'}
         </h2>
 
-        {/* Tabs */}
+        {/* Tabs — global well-config tabs render only for users who may
+            manage the global pool (tenant containment, see gate above). */}
         <div className="flex gap-2 mb-6 flex-wrap">
-          <button
-            onClick={() => setActiveTab('wells')}
-            className={`px-4 py-2 rounded ${activeTab === 'wells' ? 'bg-blue-600 text-white' : 'bg-gray-700 text-gray-300'}`}
-          >
-            Wells
-          </button>
-          <button
-            onClick={() => setActiveTab('routes')}
-            className={`px-4 py-2 rounded ${activeTab === 'routes' ? 'bg-blue-600 text-white' : 'bg-gray-700 text-gray-300'}`}
-          >
-            Route Groups
-          </button>
-          <button
-            onClick={() => setActiveTab('gpsroutes')}
-            className={`px-4 py-2 rounded ${activeTab === 'gpsroutes' ? 'bg-cyan-600 text-white' : 'bg-gray-700 text-gray-300'}`}
-          >
-            GPS Routes
-          </button>
-          <div className="w-px bg-gray-600 mx-1 self-stretch" />
+          {canManageGlobalWellConfig && (
+            <>
+              <button
+                onClick={() => setActiveTab('wells')}
+                className={`px-4 py-2 rounded ${activeTab === 'wells' ? 'bg-blue-600 text-white' : 'bg-gray-700 text-gray-300'}`}
+              >
+                Wells
+              </button>
+              <button
+                onClick={() => setActiveTab('routes')}
+                className={`px-4 py-2 rounded ${activeTab === 'routes' ? 'bg-blue-600 text-white' : 'bg-gray-700 text-gray-300'}`}
+              >
+                Route Groups
+              </button>
+              <button
+                onClick={() => setActiveTab('gpsroutes')}
+                className={`px-4 py-2 rounded ${activeTab === 'gpsroutes' ? 'bg-cyan-600 text-white' : 'bg-gray-700 text-gray-300'}`}
+              >
+                GPS Routes
+              </button>
+              <div className="w-px bg-gray-600 mx-1 self-stretch" />
+            </>
+          )}
           <button
             onClick={() => setActiveTab('drivers')}
             className={`px-4 py-2 rounded ${activeTab === 'drivers' ? 'bg-blue-600 text-white' : 'bg-gray-700 text-gray-300'}`}
@@ -1002,8 +1025,18 @@ export default function AdminPage() {
           </button>
         </div>
 
+        {/* Gated well-config fallback (tenant containment) — normally
+            unreachable thanks to the redirect effect; covers direct ?tab=
+            deep links in the same render before the effect fires. */}
+        {!canManageGlobalWellConfig && (activeTab === 'wells' || activeTab === 'routes' || activeTab === 'gpsroutes') && (
+          <div className="bg-gray-800 border border-gray-700 rounded-lg py-16 px-6 text-center">
+            <div className="text-white text-lg font-semibold mb-2">Well configuration is not available for this company yet</div>
+            <p className="text-gray-400 text-sm max-w-md mx-auto">Contact WellBuilt to set up tenant-specific routes.</p>
+          </div>
+        )}
+
         {/* Routes Tab */}
-        {activeTab === 'routes' && (
+        {activeTab === 'routes' && canManageGlobalWellConfig && (
           <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
             {/* Route List */}
             <div className="bg-gray-800 rounded-lg p-4">
@@ -1116,7 +1149,7 @@ export default function AdminPage() {
         )}
 
         {/* Wells Tab */}
-        {activeTab === 'wells' && (
+        {activeTab === 'wells' && canManageGlobalWellConfig && (
           <div className="flex-1 grid grid-cols-1 lg:grid-cols-2 gap-6 min-h-0">
             {/* Well List */}
             <div className="bg-gray-800 rounded-lg p-4 flex flex-col min-h-0 overflow-hidden">
@@ -1942,7 +1975,7 @@ export default function AdminPage() {
         )}
 
         {/* GPS Routes Tab */}
-        {activeTab === 'gpsroutes' && (
+        {activeTab === 'gpsroutes' && canManageGlobalWellConfig && (
           <GpsRoutesTab />
         )}
 
