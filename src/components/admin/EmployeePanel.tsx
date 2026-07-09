@@ -49,6 +49,13 @@ export function EmployeePanel<D, U>({
   // Group by company. Legacy dashboard users may lack companyId but carry a
   // companyName — group them by name so e.g. Liquid Gold's pre-companyId
   // admins land under Liquid Gold instead of "WellBuilt (platform)" (P5).
+  //
+  // DEV NOTE (7/9 review): legacy LG users may lack companyId; this fallback
+  // grouping is DISPLAY-ONLY, not security truth. Edit rights (canEditRow
+  // below) key strictly on row.companyId — a name-grouped legacy row is NOT
+  // editable by a tenant admin until its users/{uid}.companyId is backfilled,
+  // and platform admins (no companyId) can never be edited by tenant admins
+  // regardless of which group they render in.
   const groups = useMemo(() => {
     const map = new Map<string, { label: string; rows: EmployeeRow<any, any>[] }>();
     for (const row of employees) {
@@ -60,6 +67,10 @@ export function EmployeePanel<D, U>({
     return [...map.entries()].sort((a, b) => a[1].label.localeCompare(b[1].label));
   }, [employees]);
 
+  // Tenant-vs-platform edit rule (7/9 review item 3): WB platform admins may
+  // edit anyone; a tenant admin may edit ONLY rows whose companyId equals
+  // their scope. companyId — never the display grouping — is the authority,
+  // so platform admins and legacy no-companyId rows are read-only to tenants.
   const canEditRow = (row: EmployeeRow<any, any>) =>
     isWbAdmin || (!!scopeCompanyId && row.companyId === scopeCompanyId);
 
