@@ -3,6 +3,8 @@
 import { Suspense, useEffect, useState } from 'react';
 import { useRouter, useSearchParams } from 'next/navigation';
 import { useAuth } from '@/contexts/AuthContext';
+import { canViewGlobalWellPool } from '@/lib/tenantScope';
+import { WellPoolEmptyState } from '@/components/WellPoolEmptyState';
 import {
   WellPerformanceStats,
   buildPerformanceSummary,
@@ -110,6 +112,20 @@ function RoutePerformancePage() {
   }
 
   if (!user) return null;
+
+  // Tenant containment (7/9): scoped non-Liquid-Gold companies must not see
+  // the global well pool (it is Liquid Gold's operational data — see
+  // lib/tenantScope.ts). Unscoped WB admins and liquid-gold keep the view.
+  if (!canViewGlobalWellPool(user)) {
+    return (
+      <div className="min-h-screen bg-gray-900">
+        <AppHeader />
+        <main className="max-w-7xl mx-auto px-4 py-8">
+          <WellPoolEmptyState />
+        </main>
+      </div>
+    );
+  }
 
   return (
     <div className="min-h-screen bg-gray-900">

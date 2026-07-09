@@ -5,6 +5,7 @@ import { useRouter } from 'next/navigation';
 import { useAuth } from '@/contexts/AuthContext';
 import { AppHeader } from '@/components/AppHeader';
 import { subscribeToWellStatusesUnified, WellResponse } from '@/lib/wells';
+import { canViewGlobalWellPool } from '@/lib/tenantScope';
 import { fetchTickets } from '@/lib/tickets';
 import { fetchInvoices, DashboardInvoice, getStatusColor } from '@/lib/invoices';
 import Link from 'next/link';
@@ -31,19 +32,29 @@ export default function HomePage() {
   useEffect(() => {
     if (!user) return;
 
-    // Subscribe to well data for counts
-    const unsubWells = subscribeToWellStatusesUnified((wells) => {
-      setWellCount(wells.length);
-      setDownCount(wells.filter(w => w.isDown || w.currentLevel === 'DOWN').length);
+    // Tenant containment (7/9): the global well pool is Liquid Gold's data —
+    // other scoped companies get zero counts, no subscription. See
+    // lib/tenantScope.ts.
+    let unsubWells: (() => void) | undefined;
+    if (canViewGlobalWellPool(user)) {
+      unsubWells = subscribeToWellStatusesUnified((wells) => {
+        setWellCount(wells.length);
+        setDownCount(wells.filter(w => w.isDown || w.currentLevel === 'DOWN').length);
+        setStatsLoading(false);
+      });
+    } else {
+      setWellCount(0);
+      setDownCount(0);
       setStatsLoading(false);
-    });
+    }
 
-    // Fetch ticket and invoice counts
-    fetchTickets(1000).then(tickets => {
+    // Fetch ticket and invoice counts — scoped users count only their own
+    // company's docs (docs carry companyId; filtered in the fetch helpers).
+    fetchTickets(1000, user.companyId).then(tickets => {
       setTicketCount(tickets.length);
     }).catch(() => {});
 
-    fetchInvoices(1000).then(invoices => {
+    fetchInvoices(1000, user.companyId).then(invoices => {
       setInvoiceCount(invoices.length);
       setOpenInvoices(invoices.filter(i => i.status === 'open').length);
     }).catch(() => {});
