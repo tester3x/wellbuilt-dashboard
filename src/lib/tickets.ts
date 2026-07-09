@@ -116,8 +116,14 @@ export interface InvoiceDetail {
   photos: Array<{ uri: string; location?: string; type?: string; takenAt?: string } | string>;
 }
 
-export async function fetchTickets(limitCount = 200): Promise<Ticket[]> {
+// companyId (7/9 tenant containment): when set, only that company's tickets
+// are returned. CLIENT-SIDE filter after the fetch — deliberately not a
+// Firestore where() so no composite index (companyId+createdAt) is needed for
+// this containment patch. Unscoped WB admin passes undefined → global.
+export async function fetchTickets(limitCount = 200, companyId?: string): Promise<Ticket[]> {
   const db = getFirestoreDb();
+  const scope = (rows: Ticket[]) =>
+    companyId ? rows.filter(t => t.companyId === companyId) : rows;
 
   // Try ordering by createdAt (newest first). Falls back to ticketNumber if createdAt missing.
   let q;
@@ -129,7 +135,7 @@ export async function fetchTickets(limitCount = 200): Promise<Ticket[]> {
     );
     const snapshot = await getDocs(q);
     if (snapshot.size > 0) {
-      return snapshot.docs.map(mapTicketDoc);
+      return scope(snapshot.docs.map(mapTicketDoc));
     }
   } catch {
     // Index may not exist yet — fall back to ticketNumber ordering
@@ -142,7 +148,7 @@ export async function fetchTickets(limitCount = 200): Promise<Ticket[]> {
     limit(limitCount)
   );
   const snapshot = await getDocs(q);
-  return snapshot.docs.map(mapTicketDoc);
+  return scope(snapshot.docs.map(mapTicketDoc));
 }
 
 /** Fetch the parent invoice for a ticket (by invoiceDocId or invoiceNumber lookup) */

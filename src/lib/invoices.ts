@@ -29,7 +29,10 @@ export interface DashboardInvoice {
   createdAt: any;
 }
 
-export async function fetchInvoices(limitCount = 200): Promise<DashboardInvoice[]> {
+// companyId (7/9 tenant containment): when set, only that company's invoices
+// are returned — client-side filter (no composite index needed). Unscoped WB
+// admin passes undefined → global. Mirrors fetchTickets.
+export async function fetchInvoices(limitCount = 200, companyId?: string): Promise<DashboardInvoice[]> {
   const db = getFirestoreDb();
   const q = query(
     collection(db, 'invoices'),
@@ -38,7 +41,7 @@ export async function fetchInvoices(limitCount = 200): Promise<DashboardInvoice[
   );
 
   const snapshot = await getDocs(q);
-  return snapshot.docs.map(doc => {
+  const rows = snapshot.docs.map(doc => {
     const d = doc.data();
     return {
       id: doc.id,
@@ -66,6 +69,7 @@ export async function fetchInvoices(limitCount = 200): Promise<DashboardInvoice[
       createdAt: d.createdAt || null,
     };
   });
+  return companyId ? rows.filter(r => r.companyId === companyId) : rows;
 }
 
 export function getStatusColor(status: InvoiceStatus): string {

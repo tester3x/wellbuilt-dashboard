@@ -40,7 +40,9 @@ function TicketsPageInner() {
     try {
       setDataLoading(true);
       setError(null);
-      const data = await fetchTickets();
+      // Tenant containment (7/9): scoped users see only their company's
+      // tickets (docs carry companyId; filtered in fetchTickets).
+      const data = await fetchTickets(200, user?.companyId);
       setTickets(data);
     } catch (err: any) {
       console.error('Failed to fetch tickets:', err);
