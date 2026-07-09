@@ -21,6 +21,7 @@ import {
 import { DriversTab } from '@/components/admin/DriversTab';
 import { CompaniesTab } from '@/components/admin/CompaniesTab';
 import { canViewGlobalWellPool } from '@/lib/tenantScope';
+import { isPlatformAdmin } from '@/lib/auth';
 import GpsRoutesTab from '@/components/admin/GpsRoutesTab';
 import { EquipmentTab } from '@/components/admin/EquipmentTab';
 
@@ -1983,7 +1984,7 @@ export default function AdminPage() {
         {activeTab === 'drivers' && (
           <DriversTab
             scopeCompanyId={user?.companyId}
-            isWbAdmin={!user?.companyId && (user?.role === 'it' || user?.role === 'admin')}
+            isWbAdmin={isPlatformAdmin(user)}
           />
         )}
 
@@ -1991,7 +1992,7 @@ export default function AdminPage() {
         {activeTab === 'companies' && (
           <CompaniesTab
             scopeCompanyId={user?.companyId}
-            isWbAdmin={!user?.companyId && (user?.role === 'it' || user?.role === 'admin')}
+            isWbAdmin={isPlatformAdmin(user)}
           />
         )}
 
@@ -1999,7 +2000,7 @@ export default function AdminPage() {
         {activeTab === 'equipment' && (
           <EquipmentTab
             scopeCompanyId={user?.companyId}
-            isWbAdmin={!user?.companyId && (user?.role === 'it' || user?.role === 'admin')}
+            isWbAdmin={isPlatformAdmin(user)}
           />
         )}
       </main>

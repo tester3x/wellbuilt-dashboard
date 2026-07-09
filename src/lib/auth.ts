@@ -124,12 +124,41 @@ export interface WellBuiltUser {
   uid: string;
   email: string;
   role: UserRole;
+  // Multi-role (7/9 employee refactor, dev): OPTIONAL roles array. When
+  // present, effective capabilities are the UNION across all roles and
+  // `role` is dual-written as the PRIMARY role (highest ROLE_LEVELS) so
+  // security rules / Cloud Functions / mobile apps that read the single
+  // string keep working unchanged. Absent → behaves exactly as before.
+  roles?: UserRole[];
   displayName?: string;
   companyId?: string;     // If set, scopes dashboard to this company only
   companyName?: string;   // Display name for the company
   requestedCompanyName?: string;  // Pending signup: company name the user requested
   onboardingStatus?: string;      // e.g. 'pending_company_assignment'
   status?: string;                // e.g. 'pending'
+}
+
+/** Effective roles for a user: roles[] when present + non-empty, else [role]. */
+export function getUserRoles(user: WellBuiltUser | null): UserRole[] {
+  if (!user) return [];
+  if (Array.isArray(user.roles) && user.roles.length > 0) {
+    return user.roles.filter((r): r is UserRole => r in ROLE_LEVELS);
+  }
+  return [user.role];
+}
+
+/** Primary role for legacy single-string consumers: highest ROLE_LEVELS entry. */
+export function getPrimaryRole(roles: UserRole[]): UserRole {
+  if (roles.length === 0) return 'viewer';
+  return roles.reduce((best, r) => (ROLE_LEVELS[r] > ROLE_LEVELS[best] ? r : best), roles[0]);
+}
+
+/** WB PLATFORM admin: unscoped (no companyId) + admin/it role. This is the
+ *  load-bearing platform-vs-tenant distinction (named per 7/9 audit so
+ *  multi-role logic can never accidentally widen it). */
+export function isPlatformAdmin(user: WellBuiltUser | null): boolean {
+  if (!user || user.companyId) return false;
+  return getUserRoles(user).some(r => r === 'it' || r === 'admin');
 }
 
 // ── Capability / label helpers ──────────────────────────────────────────────
@@ -154,9 +183,15 @@ export function hasCapability(
   companyConfig?: RoleConfig | null,
 ): boolean {
   if (!user) return false;
-  const override = companyConfig?.roleCapabilities?.[user.role];
-  const caps = override ?? DEFAULT_ROLE_CAPABILITIES[user.role] ?? [];
-  return caps.includes(capability);
+  // Multi-role (7/9): UNION of capabilities across the user's roles. Per
+  // role, a per-company override wins over the default (same rule as
+  // before); the union happens across the resolved per-role lists. With no
+  // roles[] this is exactly the previous single-role behavior.
+  return getUserRoles(user).some((role) => {
+    const override = companyConfig?.roleCapabilities?.[role];
+    const caps = override ?? DEFAULT_ROLE_CAPABILITIES[role] ?? [];
+    return caps.includes(capability);
+  });
 }
 
 /**
@@ -222,6 +257,7 @@ async function getUserWithRole(user: User): Promise<WellBuiltUser> {
   const snapshot = await get(userRef);
 
   let role: UserRole = 'viewer'; // Default role
+  let roles: UserRole[] | undefined; // Multi-role (7/9) — optional array
   let displayName = user.email || '';
 
   let companyId: string | undefined;
@@ -233,6 +269,7 @@ async function getUserWithRole(user: User): Promise<WellBuiltUser> {
   if (snapshot.exists()) {
     const userData = snapshot.val();
     role = userData.role || 'viewer';
+    roles = Array.isArray(userData.roles) && userData.roles.length > 0 ? userData.roles : undefined;
     displayName = userData.displayName || displayName;
     companyId = userData.companyId || undefined;
     companyName = userData.companyName || undefined;
@@ -269,6 +306,7 @@ async function getUserWithRole(user: User): Promise<WellBuiltUser> {
     uid: user.uid,
     email: user.email || '',
     role,
+    roles,
     displayName,
     companyId,
     companyName,
