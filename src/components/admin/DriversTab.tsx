@@ -1,12 +1,13 @@
 'use client';
 
-import { useEffect, useState } from 'react';
+import { useEffect, useState, useMemo } from 'react';
 import { httpsCallable } from 'firebase/functions';
 import { getFirebaseDatabase, getFirestoreDb, getFirebaseFunctions } from '@/lib/firebase';
 import { ref, get, set, remove, update } from 'firebase/database';
 import { collection, getDocs } from 'firebase/firestore';
 import { fetchRouteNames } from '@/lib/wells';
 import { type UserRole, DEFAULT_ROLE_LABELS } from '@/lib/auth';
+import { mergeEmployees, EmployeeRow } from '@/lib/employees';
 import { useAuth } from '@/contexts/AuthContext';
 import { getRoleLabel } from '@/lib/auth';
 
@@ -61,6 +62,7 @@ interface DashboardUser {
   email: string;
   displayName: string;
   role: UserRole;
+  roles?: UserRole[];      // multi-role (7/9); role stays the primary
   companyId?: string;      // '' / undefined = WB staff (spans all companies)
   companyName?: string;
   driverHash?: string;     // linked driver record, if promoted from a driver
@@ -132,6 +134,14 @@ export function DriversTab({ scopeCompanyId, isWbAdmin = false }: DriversTabProp
 
   const { userCompany } = useAuth();
   const db = getFirebaseDatabase();
+
+  // ── Unified employee rows (7/9 refactor) — one row per PERSON, merging
+  // drivers/approved + users/{uid} via the dashboardUid/driverHash link.
+  // Pure derivation; the underlying stores and modals are unchanged.
+  const employees: EmployeeRow<ApprovedDriver, DashboardUser>[] = useMemo(
+    () => mergeEmployees(approvedDrivers, dashboardUsers),
+    [approvedDrivers, dashboardUsers],
+  );
 
   const loadDrivers = async () => {
     setLoading(true);
@@ -242,6 +252,7 @@ export function DriversTab({ scopeCompanyId, isWbAdmin = false }: DriversTabProp
             email: val.email || '',
             displayName: val.displayName || val.email || 'Unknown',
             role: val.role as UserRole,
+            roles: Array.isArray(val.roles) && val.roles.length > 0 ? (val.roles as UserRole[]) : undefined,
             companyId: val.companyId || undefined,
             companyName: val.companyName || undefined,
             driverHash: val.driverHash || undefined,
