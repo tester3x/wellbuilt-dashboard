@@ -1,4 +1,5 @@
 import { getFirestoreDb } from './firebase';
+import { docBelongsToTenant } from './tenantScope';
 import { collection, getDocs, query, where, orderBy, Timestamp, doc, setDoc, updateDoc, deleteDoc } from 'firebase/firestore';
 import { type CompanyConfig, type PayConfig, type FrostSeason, type FrostZone, JOB_TYPE_ALIASES } from './companySettings';
 
@@ -303,6 +304,10 @@ export async function fetchPayrollInvoices(
     const status = d.status || 'open';
     if (status === 'open' || status === 'cancelled' || status === 'void') return;
 
+    // Tenant containment (7/9): scoped callers receive only their own
+    // company's invoices (liquid-gold also owns legacy unstamped docs).
+    if (!docBelongsToTenant(d.companyId, companyId)) return;
+
     const rawDriverName = d.driver || 'Unknown';
     // Group by legal name so all logins for the same person merge into one row
     const driverName = legalNameMap?.[rawDriverName] || rawDriverName;
@@ -501,6 +506,7 @@ export async function fetchDeductions(companyId?: string): Promise<Deduction[]> 
   snapshot.docs.forEach(docSnap => {
     const d = docSnap.data();
     if (d.active === false) return; // skip inactive
+    if (!docBelongsToTenant(d.companyId, companyId)) return; // tenant containment (7/9)
     results.push({
       id: docSnap.id,
       driverName: d.driverName || '',
@@ -642,6 +648,7 @@ export async function fetchAdditions(companyId?: string): Promise<Addition[]> {
   snapshot.docs.forEach(docSnap => {
     const d = docSnap.data();
     if (d.active === false) return;
+    if (!docBelongsToTenant(d.companyId, companyId)) return; // tenant containment (7/9)
     results.push({
       id: docSnap.id,
       driverName: d.driverName || '',

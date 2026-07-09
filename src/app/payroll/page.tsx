@@ -3,6 +3,7 @@
 import { useEffect, useState, useMemo } from 'react';
 import { useRouter } from 'next/navigation';
 import { useAuth } from '@/contexts/AuthContext';
+import { docBelongsToTenant } from '@/lib/tenantScope';
 import { AppHeader } from '@/components/AppHeader';
 import {
   PayPeriod,
@@ -372,7 +373,7 @@ export default function PayrollPage() {
 
   const loadDeductions = async () => {
     try {
-      const data = await fetchDeductions();
+      const data = await fetchDeductions(user?.companyId); // tenant containment (7/9)
       setDeductions(data);
     } catch (err) {
       console.error('Failed to load deductions:', err);
@@ -381,7 +382,7 @@ export default function PayrollPage() {
 
   const loadAdditions = async () => {
     try {
-      const data = await fetchAdditions();
+      const data = await fetchAdditions(user?.companyId); // tenant containment (7/9)
       setAdditions(data);
     } catch (err) {
       console.error('Failed to load additions:', err);
@@ -397,6 +398,7 @@ export default function PayrollPage() {
       const legalMap: Record<string, string> = {};
       snapshot.forEach(child => {
         const data = child.val();
+        if (!docBelongsToTenant(data?.companyId, user?.companyId)) return; // tenant containment (7/9)
         if (data?.displayName) {
           names.push(data.displayName);
           const legal = data.legalName || data.profile?.legalName;
@@ -441,6 +443,7 @@ export default function PayrollPage() {
             const map: Record<string, string> = {};
             driversSnap.forEach(child => {
               const d = child.val();
+              if (!docBelongsToTenant(d?.companyId, user?.companyId)) return; // tenant containment (7/9)
               const legal = d?.legalName || d?.profile?.legalName;
               if (d?.displayName && legal) map[d.displayName] = legal;
             });
@@ -450,7 +453,7 @@ export default function PayrollPage() {
         } catch {}
       }
 
-      const data = await fetchPayrollInvoices(selectedPeriod, companyMap, undefined, countyMap, currentLegalMap);
+      const data = await fetchPayrollInvoices(selectedPeriod, companyMap, user?.companyId, countyMap, currentLegalMap); // tenant containment (7/9)
       setTimesheets(data);
     } catch (err: any) {
       console.error('Failed to fetch payroll data:', err);
