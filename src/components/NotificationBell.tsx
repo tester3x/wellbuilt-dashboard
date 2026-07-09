@@ -4,6 +4,7 @@ import { useEffect, useRef, useState, useCallback } from 'react';
 import { usePathname } from 'next/navigation';
 import { ref, onValue } from 'firebase/database';
 import { collection, query, where, onSnapshot, Timestamp } from 'firebase/firestore';
+import { docBelongsToTenant } from '@/lib/tenantScope';
 import { getFirebaseDatabase, getFirestoreDb } from '@/lib/firebase';
 import { useAuth } from '@/contexts/AuthContext';
 import {
@@ -111,6 +112,8 @@ export function NotificationBell() {
         Object.entries(data).forEach(([key, val]: [string, any]) => {
           // Skip already-processed
           if (val.status === 'approved' || val.status === 'rejected') return;
+          // Tenant containment (7/9): scoped users only see their own company's registrations.
+          if (!docBelongsToTenant(val.companyId, user.companyId)) return;
           // Skip dismissed
           if (dismissedRef.current.has(`pending_${key}`)) return;
 
@@ -172,6 +175,8 @@ export function NotificationBell() {
         const data = doc.data();
         const id = `dispatch_${doc.id}`;
         if (dismissedRef.current.has(id)) return;
+        // Tenant containment (7/9): scoped users only see their own company's dispatch events.
+        if (!docBelongsToTenant(data.companyId, user.companyId)) return;
 
         const ts = data.completedAt?.toMillis?.() || Date.now();
         items.push({
@@ -231,6 +236,8 @@ export function NotificationBell() {
         const data = doc.data();
         const id = `decline_${doc.id}`;
         if (dismissedRef.current.has(id)) return;
+        // Tenant containment (7/9): scoped users only see their own company's dispatch events.
+        if (!docBelongsToTenant(data.companyId, user.companyId)) return;
 
         const ts = data.declinedAt?.toMillis?.() || Date.now();
         const reason = data.declineReason ? ` — ${data.declineReason}` : '';
@@ -287,6 +294,8 @@ export function NotificationBell() {
         const data = doc.data();
         const id = `transfer_${doc.id}`;
         if (dismissedRef.current.has(id)) return;
+        // Tenant containment (7/9): scoped users only see their own company's dispatch events.
+        if (!docBelongsToTenant(data.companyId, user.companyId)) return;
 
         const ts = data.transferredAt?.toMillis?.() || data.assignedAt?.toMillis?.() || Date.now();
         items.push({
