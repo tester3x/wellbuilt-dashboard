@@ -192,7 +192,7 @@ export default function DiagnosticsPage() {
       router.push('/login');
       return;
     }
-    if (!hasCapability(user, 'viewDiagnostics', userCompany)) {
+    if (user.companyId || !hasCapability(user, 'viewDiagnostics', userCompany)) { // tenant containment (7/9): platform-admin-only tool
       router.push('/');
     }
   }, [user, loading, userCompany, router]);
@@ -484,7 +484,7 @@ export default function DiagnosticsPage() {
     );
   }
 
-  if (!hasCapability(user, 'viewDiagnostics', userCompany)) {
+  if (user.companyId || !hasCapability(user, 'viewDiagnostics', userCompany)) { // tenant containment (7/9): platform-admin-only tool
     return null;
   }
 

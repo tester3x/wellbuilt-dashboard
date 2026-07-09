@@ -273,7 +273,7 @@ export default function TruthDebugPage() {
       router.push('/login');
       return;
     }
-    if (!hasCapability(user, 'viewTruthDebug', userCompany)) {
+    if (user.companyId || !hasCapability(user, 'viewTruthDebug', userCompany)) { // tenant containment (7/9): platform-admin-only tool
       router.push('/');
     }
   }, [user, loading, userCompany, router]);

@@ -65,7 +65,7 @@ export function AppHeader() {
               )}
             </Link>
           )}
-          {hasCapability(user, 'viewTruthDebug', userCompany) && (
+          {!user?.companyId && hasCapability(user, 'viewTruthDebug', userCompany) && (
             <>
               {/* Plain <a> (full document load) — bypasses App Router prefetch
                   cache + stale chunk refs that caused intermittent click failures
@@ -93,7 +93,7 @@ export function AppHeader() {
               </a>
             </>
           )}
-          {hasCapability(user, 'viewDiagnostics', userCompany) && (
+          {!user?.companyId && hasCapability(user, 'viewDiagnostics', userCompany) && (
             <a
               href="/admin/diagnostics/"
               className={`px-3 py-2 rounded-lg transition-colors text-sm ${
