@@ -66,6 +66,22 @@ export default function HomePage() {
       <AppHeader />
 
       <main className="max-w-7xl mx-auto px-4 py-8">
+        {/* Pending-signup banner (re-home of the DashboardV1 banner lost when
+            main deleted that component — fbf3096's third piece). Reads only
+            the restored WellBuiltUser fields; no new data model. Shown until
+            a WB admin activates the request from Admin → Companies. */}
+        {(user.onboardingStatus === 'pending_company_assignment' || user.status === 'pending') && (
+          <div className="mb-6 bg-amber-900/30 border border-amber-700/60 rounded-lg p-4">
+            <div className="text-[11px] uppercase tracking-wide text-amber-300 mb-1">
+              Company request pending
+            </div>
+            <p className="text-sm text-gray-200">
+              {user.requestedCompanyName
+                ? <>Your request for <span className="font-semibold text-white">{user.requestedCompanyName}</span> is awaiting WellBuilt approval.</>
+                : 'Your account is awaiting WellBuilt approval.'}
+            </p>
+          </div>
+        )}
         <h2 className="text-xl font-semibold text-white mb-6">Dashboard Overview</h2>
 
         <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-4 gap-6 items-stretch">
