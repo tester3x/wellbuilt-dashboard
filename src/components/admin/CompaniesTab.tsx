@@ -718,44 +718,55 @@ export function CompaniesTab({ scopeCompanyId, isWbAdmin = false }: CompaniesTab
           <div className="space-y-2">
             {filteredCompanies.map(company => (
               <div key={company.id} className="bg-gray-700 rounded overflow-hidden">
-                {/* Company row */}
+                {/* Company row — layout mirrors EmployeePanel rows (7/9 P1
+                    cleanup): identity truncates on the left; badges live in a
+                    fixed right-aligned column (shrink-0, so name length never
+                    moves them) ordered identity → enabled modules →
+                    industry/status; Delete/Expand sit in a dedicated far-right
+                    action column. Presentation only — no behavior change. */}
                 <div
-                  className="flex items-center justify-between p-3 cursor-pointer hover:bg-gray-600"
+                  className="flex items-center px-3 py-2 cursor-pointer hover:bg-gray-600"
                   onClick={() => setExpandedCompany(expandedCompany === company.id ? null : company.id)}
                 >
-                  <div className="flex items-center gap-3">
-                    <span className="text-white font-medium">{company.name || company.id}</span>
-                    <span className="text-gray-500 text-xs font-mono">{company.id}</span>
+                  <div className="flex items-center gap-3 min-w-0 flex-1">
+                    <span className="text-white text-sm font-medium truncate">{company.name || company.id}</span>
+                    <span className="text-gray-500 text-xs font-mono truncate">{company.id}</span>
+                  </div>
+                  <div className="flex items-center gap-2 shrink-0">
+                    {/* 1 — company identity */}
                     {company.invoicePrefix && (
-                      <span className="px-1.5 py-0.5 bg-blue-700 text-blue-200 text-xs rounded">
+                      <span className="text-[10px] px-1.5 py-0.5 bg-blue-700 text-blue-200 rounded">
                         {company.invoicePrefix}
                       </span>
                     )}
+                    {/* 2 — enabled modules */}
                     {company.invoiceBook && (
-                      <span className="px-1.5 py-0.5 bg-teal-700 text-teal-200 text-xs rounded">
+                      <span className="text-[10px] px-1.5 py-0.5 bg-teal-700 text-teal-200 rounded">
                         Invoice Book
                       </span>
                     )}
-                    <span className={`px-1.5 py-0.5 text-xs rounded ${TIER_COLORS[company.tier || 'god']}`}>
-                      {TIER_LABELS[company.tier || 'god']}
-                    </span>
-                    {(company.tier === 'free') && (
-                      <span className="px-1.5 py-0.5 bg-orange-800 text-orange-200 text-xs rounded">
-                        5 Well Cap
-                      </span>
-                    )}
                     {company.wellMonitoring && (
-                      <span className="px-1.5 py-0.5 bg-purple-700 text-purple-200 text-xs rounded">
+                      <span className="text-[10px] px-1.5 py-0.5 bg-purple-700 text-purple-200 rounded">
                         Monitoring
                       </span>
                     )}
+                    {/* 3 — industry / status */}
+                    <span className={`text-[10px] px-1.5 py-0.5 rounded ${TIER_COLORS[company.tier || 'god']}`}>
+                      {TIER_LABELS[company.tier || 'god']}
+                    </span>
+                    {(company.tier === 'free') && (
+                      <span className="text-[10px] px-1.5 py-0.5 bg-orange-800 text-orange-200 rounded">
+                        5 Well Cap
+                      </span>
+                    )}
                     {(company.assignedOperators?.length || 0) > 0 && (
-                      <span className="px-1.5 py-0.5 bg-yellow-700 text-yellow-200 text-xs rounded">
-                        {company.assignedOperators!.length} oil {company.assignedOperators!.length === 1 ? 'co' : 'cos'}
+                      <span className="text-[10px] px-1.5 py-0.5 bg-yellow-700 text-yellow-200 rounded">
+                        {company.assignedOperators!.length} operator{company.assignedOperators!.length === 1 ? '' : 's'}
                       </span>
                     )}
                   </div>
-                  <div className="flex items-center gap-3">
+                  {/* Action column — fixed far right */}
+                  <div className="flex items-center gap-3 shrink-0 ml-4">
                     {isWbAdmin && (
                       <button
                         onClick={(e) => { e.stopPropagation(); deleteCompany(company); }}
