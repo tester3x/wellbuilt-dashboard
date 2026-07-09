@@ -6,8 +6,9 @@ import { getFirebaseDatabase, getFirestoreDb, getFirebaseFunctions } from '@/lib
 import { ref, get, set, remove, update } from 'firebase/database';
 import { collection, getDocs } from 'firebase/firestore';
 import { fetchRouteNames } from '@/lib/wells';
-import { type UserRole, DEFAULT_ROLE_LABELS } from '@/lib/auth';
+import { type UserRole, DEFAULT_ROLE_LABELS, getPrimaryRole } from '@/lib/auth';
 import { mergeEmployees, EmployeeRow } from '@/lib/employees';
+import { EmployeePanel } from './EmployeePanel';
 import { useAuth } from '@/contexts/AuthContext';
 import { getRoleLabel } from '@/lib/auth';
 
@@ -142,6 +143,11 @@ export function DriversTab({ scopeCompanyId, isWbAdmin = false }: DriversTabProp
     () => mergeEmployees(approvedDrivers, dashboardUsers),
     [approvedDrivers, dashboardUsers],
   );
+  // Dev refactor (7/9): the unified panel is primary; the pre-refactor
+  // Approved Drivers / dashboard-user lists stay behind this toggle until
+  // the panel is field-approved. Nothing was deleted.
+  const [showLegacyView, setShowLegacyView] = useState(false);
+
 
   const loadDrivers = async () => {
     setLoading(true);
@@ -607,6 +613,25 @@ export function DriversTab({ scopeCompanyId, isWbAdmin = false }: DriversTabProp
     } catch (err) {
       console.error('Failed to migrate drivers:', err);
       setMessage('Failed to migrate drivers');
+    }
+  };
+
+  // ── Save multi-role set for a dashboard account (7/9 P4) ─────────────
+  // Writes BOTH users/{uid}.roles[] and the legacy single-string primary
+  // role (highest ROLE_LEVELS) so security rules / CFs / mobile apps keep
+  // working unchanged. Link fields (driverHash / dashboardUid) untouched.
+  const saveEmployeeRoles = async (uid: string, roles: UserRole[]) => {
+    try {
+      const cleaned = roles.length > 0 ? roles : (['viewer'] as UserRole[]);
+      await update(ref(db, `users/${uid}`), {
+        roles: cleaned,
+        role: getPrimaryRole(cleaned),
+      });
+      setMessage('Roles updated');
+      await loadDrivers();
+    } catch (err) {
+      console.error('Failed to save roles:', err);
+      setMessage('Failed to save roles');
     }
   };
 
@@ -1175,6 +1200,40 @@ export function DriversTab({ scopeCompanyId, isWbAdmin = false }: DriversTabProp
         </div>
       )}
 
+      {/* ── Unified Employee panel (7/9 refactor) ── */}
+      <EmployeePanel
+        employees={scopeCompanyId ? employees.filter(e => e.companyId === scopeCompanyId) : employees}
+        isWbAdmin={isWbAdmin}
+        scopeCompanyId={scopeCompanyId}
+        onToggleMobile={(row) => { if (row.driver) toggleDriverActive(row.driver); }}
+        onInvite={(row) => {
+          if (!row.driver) return;
+          setInviteTarget(row.driver);
+          setInviteRole('dispatch');
+          setInviteEmail('');
+          setInviteResult(null);
+        }}
+        onSaveRoles={saveEmployeeRoles}
+        onAssignRoutes={(row) => {
+          if (!row.driver) return;
+          setRouteTarget(row.driver); setSelectedRoutes(row.driver.assignedRoutes || []); setShowRoutesModal(true);
+        }}
+        onAssignCompany={(row) => {
+          if (!row.driver) return;
+          setCompanyTarget(row.driver); setAssignCompanyId(row.driver.companyId || ''); setAssignCompanyName(row.driver.companyName || ''); setShowCompanyModal(true);
+        }}
+      />
+
+      <div className="flex justify-end">
+        <button
+          onClick={() => setShowLegacyView(v => !v)}
+          className="text-xs text-gray-500 hover:text-gray-300 underline"
+        >
+          {showLegacyView ? 'Hide legacy view' : 'Show legacy view'}
+        </button>
+      </div>
+
+      {showLegacyView && (<>
       {/* ── Approved Drivers ── */}
       <div className="bg-gray-800 rounded-lg p-4">
         <div className="flex items-center justify-between mb-4">
@@ -1295,6 +1354,8 @@ export function DriversTab({ scopeCompanyId, isWbAdmin = false }: DriversTabProp
           </div>
         )}
       </div>
+
+      </>)}
 
       {/* ── Assign Company Modal (WB admin only) ── */}
       {showCompanyModal && companyTarget && (
