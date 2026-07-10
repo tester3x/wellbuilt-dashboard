@@ -9,13 +9,26 @@ export const ASSIGNMENT_ROLES = ['primary_operator', 'relief_operator'] as const
 
 export type AssignmentRole = (typeof ASSIGNMENT_ROLES)[number];
 
+export const ASSIGNMENT_REASONS = [
+  'normal',
+  'temporary',
+  'loaner',
+  'shop',
+  'training',
+  'road_test',
+  'other',
+] as const;
+
+export type AssignmentReason = (typeof ASSIGNMENT_REASONS)[number];
+
 export interface Assignment {
   assignmentId: string;
   companyId: string;
   equipmentId: string;
   driverHash: string;
   assignedBy: ActorRef;
-  role: AssignmentRole;
+  assignmentRole: AssignmentRole;
+  assignmentReason?: AssignmentReason | null;
   active: boolean;
   startedAt: string;
   endedAt?: string | null;
@@ -51,7 +64,6 @@ export type AssignmentDomainEvent =
       newDriverHash: string;
     };
 
-/** Statuses that block new assignment unless explicitly overridden. */
 export const ASSIGNMENT_RESTRICTED_EQUIPMENT_STATUSES = ['in_shop', 'out_of_service'] as const;
 
 export function assignmentsCollection(companyId: string): string {

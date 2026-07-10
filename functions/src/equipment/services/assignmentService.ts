@@ -192,7 +192,8 @@ async function startAssignment(ctx: ServiceContext): Promise<ServiceResult> {
   if (!equipmentId) throw new httpsV2.HttpsError('invalid-argument', 'equipmentId is required');
   if (!driverHash) throw new httpsV2.HttpsError('invalid-argument', 'driverHash is required');
 
-  const role = parseAssignmentRole(ctx.payload.role) || 'primary_operator';
+  const assignmentRole = parseAssignmentRole(ctx.payload.assignmentRole) || 'primary_operator';
+  const assignmentReason = parseAssignmentReason(ctx.payload.assignmentReason);
   const assignmentId = ctx.payload.assignmentId
     ? String(ctx.payload.assignmentId)
     : reserveAssignmentId(ctx.companyId);
@@ -237,7 +238,8 @@ async function startAssignment(ctx: ServiceContext): Promise<ServiceResult> {
       equipmentId,
       driverHash,
       assignedBy: ctx.actorRef,
-      role,
+      assignmentRole,
+      assignmentReason,
       active: true,
       startedAt: typeof ctx.payload.startedAt === 'string' ? ctx.payload.startedAt : now,
       notes: optionalString(ctx.payload.notes),
@@ -321,7 +323,8 @@ async function transferAssignment(ctx: ServiceContext): Promise<ServiceResult> {
   if (!equipmentId) throw new httpsV2.HttpsError('invalid-argument', 'equipmentId is required');
   if (!driverHash) throw new httpsV2.HttpsError('invalid-argument', 'driverHash is required');
 
-  const role = parseAssignmentRole(ctx.payload.role) || 'primary_operator';
+  const assignmentRole = parseAssignmentRole(ctx.payload.assignmentRole) || 'primary_operator';
+  const assignmentReason = parseAssignmentReason(ctx.payload.assignmentReason);
   const newAssignmentId = ctx.payload.newAssignmentId
     ? String(ctx.payload.newAssignmentId)
     : reserveAssignmentId(ctx.companyId);
@@ -389,7 +392,8 @@ async function transferAssignment(ctx: ServiceContext): Promise<ServiceResult> {
       equipmentId,
       driverHash,
       assignedBy: ctx.actorRef,
-      role,
+      assignmentRole,
+      assignmentReason,
       active: true,
       startedAt: now,
       notes: optionalString(ctx.payload.notes),
@@ -585,8 +589,17 @@ function normalizeDriverHash(value: string): string {
 }
 
 function parseAssignmentRole(value: unknown): AssignmentRole | undefined {
-  const role = String(value || '');
-  return (ASSIGNMENT_ROLES as readonly string[]).includes(role) ? (role as AssignmentRole) : undefined;
+  const assignmentRole = String(value || '');
+  return (ASSIGNMENT_ROLES as readonly string[]).includes(assignmentRole)
+    ? (assignmentRole as AssignmentRole)
+    : undefined;
+}
+
+function parseAssignmentReason(value: unknown): Assignment['assignmentReason'] {
+  if (value === undefined || value === null || value === '') return undefined;
+  const reason = String(value);
+  const allowed = ['normal', 'temporary', 'loaner', 'shop', 'training', 'road_test', 'other'];
+  return allowed.includes(reason) ? (reason as Assignment['assignmentReason']) : undefined;
 }
 
 function optionalString(val: unknown): string | undefined {

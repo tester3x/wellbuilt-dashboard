@@ -6,14 +6,20 @@
  * Future custodians may include shop, yard, or non-driver roles — first implementation
  * is driver-scoped only.
  *
+ * Custodian identity uses driverHash today. The service layer is designed so
+ * driverHash can later resolve through membershipId without changing surrounding
+ * architecture: Equipment → Assignment → (future Membership → Person).
+ *
  * Answers one question: "Who currently has custody of this equipment?"
- * Not dispatch history, trip history, maintenance state, workflow state, or documents.
+ * Not dispatch, maintenance, workflow, trip history, repair history, or inspection history.
  */
 
 import type { ActorRef } from './metadata';
 
-// ── Custody role (intentionally small) ──────────────────────────────────────
-// Equipment type (truck, trailer, pump, etc.) is on the Equipment record — not here.
+// ── Assignment role (distinct from Employee/platform roles) ──────────────────
+// Employee roles: dispatcher, driver, mechanic, administrator, etc.
+// Assignment roles: primary_operator, relief_operator, etc.
+// Equipment type (truck, trailer, pump) lives on Equipment — not here.
 
 export const ASSIGNMENT_ROLES = ['primary_operator', 'relief_operator'] as const;
 
@@ -24,6 +30,19 @@ export const ASSIGNMENT_ROLE_LABELS: Record<AssignmentRole, string> = {
   relief_operator: 'Relief Operator',
 };
 
+/** Reserved — no business logic in Phase 1C. Avoids future schema revision. */
+export const ASSIGNMENT_REASONS = [
+  'normal',
+  'temporary',
+  'loaner',
+  'shop',
+  'training',
+  'road_test',
+  'other',
+] as const;
+
+export type AssignmentReason = (typeof ASSIGNMENT_REASONS)[number];
+
 // ── Canonical assignment record ─────────────────────────────────────────────
 // assignmentId is permanent identity. Relationships use equipmentId + driverHash.
 //
@@ -31,43 +50,27 @@ export const ASSIGNMENT_ROLE_LABELS: Record<AssignmentRole, string> = {
 // Enforced server-side in a Firestore transaction — never rely on pre-query + separate write.
 //
 // Transfer semantics: end current active record + create new record atomically.
-// Do not mutate an existing assignment into a new driver's custody.
 // Assignment records ARE the history — no separate history collection.
 
 export interface Assignment {
-  /** Firestore document ID — permanent identity. */
   assignmentId: string;
   companyId: string;
-
-  /** FK → companies/{companyId}/equipment/{equipmentId} */
   equipmentId: string;
-
-  /** Canonical driver identity — driverHash from RTDB drivers/approved. */
   driverHash: string;
-
-  /** Who created or last transferred this custody record. */
   assignedBy: ActorRef;
-
-  role: AssignmentRole;
-
-  /** true = current custody; false = ended historical record. */
+  assignmentRole: AssignmentRole;
+  /** Reserved — optional until business rules are defined. */
+  assignmentReason?: AssignmentReason | null;
   active: boolean;
-
-  /** ISO timestamp when custody began. */
   startedAt: string;
-
-  /** ISO timestamp when custody ended; null/omitted while active. */
   endedAt?: string | null;
-
   notes?: string;
-
   createdAt: string;
   createdBy: ActorRef;
   updatedAt: string;
   updatedBy: ActorRef;
 }
 
-/** Input for starting custody — assignmentId may be client-supplied for idempotency. */
 export type AssignmentCreateInput = Omit<
   Assignment,
   'assignmentId' | 'active' | 'endedAt' | 'createdAt' | 'createdBy' | 'updatedAt' | 'updatedBy'
@@ -77,29 +80,18 @@ export type AssignmentCreateInput = Omit<
   endedAt?: string | null;
 };
 
-/** End custody — sets active=false and stamps endedAt. */
 export interface AssignmentEndInput {
   endedAt?: string;
   notes?: string;
 }
 
-/** Atomic transfer — ends current active assignment and creates a successor. */
 export interface AssignmentTransferInput {
   equipmentId: string;
   driverHash: string;
-  role?: AssignmentRole;
+  assignmentRole?: AssignmentRole;
+  assignmentReason?: AssignmentReason | null;
   notes?: string;
-  /** Client-supplied ID for the successor record (idempotent retries). */
   newAssignmentId?: string;
-  /** Override for in_shop / out_of_service equipment — requires authorized actor + reason. */
   overrideRestrictedStatus?: boolean;
   overrideReason?: string;
 }
-
-/**
- * Equipment validation when starting or transferring custody:
- * - Equipment document must exist under companyId
- * - Equipment.active must be true
- * - Status ready | needs_service | scheduled → allowed by default
- * - Status in_shop | out_of_service → rejected unless overrideRestrictedStatus + overrideReason
- */

@@ -13,3 +13,4 @@ export * from './registry';
 export * from './assignmentTypes';
 export * from './assignmentIds';
 export * from './assignmentCompatibility';
+export * from './profileTypes';
