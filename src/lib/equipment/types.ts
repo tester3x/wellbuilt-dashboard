@@ -43,6 +43,8 @@ export interface EquipmentType {
   dvirTemplateId?: string;
   active: boolean;
   sortOrder?: number;
+  /** platform = WellBuilt default; company = tenant-defined override/extension. */
+  source?: 'platform' | 'company';
   createdAt: string;
   createdBy: ActorRef;
   updatedAt: string;
@@ -77,6 +79,12 @@ export interface Equipment {
   make?: string;
   model?: string;
   year?: string;
+
+  /**
+   * Reserved — overall equipment health (0–100). null = not yet computed.
+   * Future: derived from DVIR, defects, maintenance, inspections, doc expirations.
+   */
+  healthScore?: number | null;
 
   createdAt: string;
   createdBy: ActorRef;

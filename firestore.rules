@@ -61,9 +61,21 @@ service cloud.firestore {
         allow read, write: if true;
       }
 
-      // Equipment specs — tare weight, capacity, make/model
+      // Equipment specs — tare weight, capacity, make/model (legacy transitional)
       match /equipment_specs/{specId} {
         allow read, write: if true;
+      }
+
+      // Canonical equipment registry — read open, write via eQuipmentEquipment
+      match /equipment/{equipmentId} {
+        allow read: if true;
+        allow write: if false;
+      }
+
+      // Equipment type registry — read open, write via eQuipmentEquipment
+      match /equipment_types/{typeId} {
+        allow read: if true;
+        allow write: if false;
       }
     }
 

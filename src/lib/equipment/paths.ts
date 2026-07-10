@@ -11,6 +11,11 @@ export function equipmentDocPath(companyId: string, equipmentId: string): string
   return `${equipmentCollectionPath(companyId)}/${equipmentId}`;
 }
 
+/** Future: type-specific specs child document (weight, capacity, VIN, axles, etc.). */
+export function equipmentSpecificationsDocPath(companyId: string, equipmentId: string): string {
+  return `${equipmentDocPath(companyId, equipmentId)}/specifications/current`;
+}
+
 /** companies/{companyId}/equipment_types/{typeId} */
 export function equipmentTypesCollectionPath(companyId: string): string {
   return `companies/${companyId}/equipment_types`;

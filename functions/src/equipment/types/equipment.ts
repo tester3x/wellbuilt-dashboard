@@ -1,6 +1,5 @@
 /**
  * Server-side equipment types — kept aligned with Dashboard/src/lib/equipment/types.ts
- * Phase 1B canonical model. Do not diverge without updating both locations.
  */
 
 import * as admin from 'firebase-admin';
@@ -25,6 +24,7 @@ export interface EquipmentType {
   dvirTemplateId?: string;
   active: boolean;
   sortOrder?: number;
+  source?: 'platform' | 'company';
   createdAt: string;
   createdBy: ActorRef;
   updatedAt: string;
@@ -42,6 +42,7 @@ export interface Equipment {
   make?: string;
   model?: string;
   year?: string;
+  healthScore?: number | null;
   createdAt: string;
   createdBy: ActorRef;
   updatedAt: string;
@@ -56,7 +57,6 @@ export function equipmentTypesCollection(companyId: string): string {
   return `companies/${companyId}/equipment_types`;
 }
 
-/** Reserve permanent equipmentId via Firestore auto-ID (call once at create). */
 export function reserveEquipmentId(companyId: string): string {
   return admin.firestore().collection(equipmentCollection(companyId)).doc().id;
 }

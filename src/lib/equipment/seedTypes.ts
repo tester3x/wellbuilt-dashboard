@@ -1,30 +1,33 @@
 import type { ActorRef } from './metadata';
+import { PLATFORM_EQUIPMENT_TYPES } from './platformTypes';
 import type { EquipmentType } from './types';
 
-/** Phase 1B seed types — truck and trailer only. Schema supports more later. */
+/** @deprecated Use PLATFORM_EQUIPMENT_TYPES — kept for compatibility imports. */
 export const SEED_EQUIPMENT_TYPE_IDS = ['truck', 'trailer'] as const;
-
 export type SeedEquipmentTypeId = (typeof SEED_EQUIPMENT_TYPE_IDS)[number];
-
-export const SEED_EQUIPMENT_TYPE_LABELS: Record<SeedEquipmentTypeId, string> = {
-  truck: 'Truck',
-  trailer: 'Trailer',
-};
 
 const SYSTEM_ACTOR: ActorRef = { type: 'system', reason: 'seed-equipment-types' };
 
-/** Build seed EquipmentType records for a company (idempotent by typeId). */
-export function buildSeedEquipmentTypes(companyId: string): EquipmentType[] {
+/** Build platform-default EquipmentType records for a company. */
+export function buildPlatformEquipmentTypes(companyId: string): EquipmentType[] {
   const now = new Date().toISOString();
-  return SEED_EQUIPMENT_TYPE_IDS.map((typeId, index) => ({
-    typeId,
+  return PLATFORM_EQUIPMENT_TYPES.map((def) => ({
+    typeId: def.typeId,
     companyId,
-    label: SEED_EQUIPMENT_TYPE_LABELS[typeId],
+    label: def.label,
     active: true,
-    sortOrder: index,
+    sortOrder: def.sortOrder,
+    source: 'platform' as const,
     createdAt: now,
     createdBy: SYSTEM_ACTOR,
     updatedAt: now,
     updatedBy: SYSTEM_ACTOR,
   }));
+}
+
+/** @deprecated Use buildPlatformEquipmentTypes */
+export function buildSeedEquipmentTypes(companyId: string): EquipmentType[] {
+  return buildPlatformEquipmentTypes(companyId).filter(
+    (t) => t.typeId === 'truck' || t.typeId === 'trailer',
+  );
 }

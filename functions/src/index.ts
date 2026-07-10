@@ -4267,4 +4267,4 @@ export {
   listStuckHandoffs,
 } from './handoff-recovery';
 
-export { eQuipmentDocuments } from './equipment';
+export { eQuipmentDocuments, eQuipmentEquipment } from './equipment';
