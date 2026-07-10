@@ -118,6 +118,7 @@ async function callerHasCapability(
       'viewPayroll', 'viewDriverLogs', 'viewSettings', 'viewAdmin', 'viewChat',
       'createDispatch', 'manageDrivers', 'manageCompany', 'editBilling',
       'approvePayroll', 'manageWells', 'manageRoutes', 'manageEquipment',
+      'manageEquipmentAssignments',
       'sendChat', 'manageRolesAndCapabilities', 'viewAllCompanies', 'viewTruthDebug',
     ],
     admin: [
@@ -125,16 +126,17 @@ async function callerHasCapability(
       'viewPayroll', 'viewDriverLogs', 'viewSettings', 'viewAdmin', 'viewChat',
       'createDispatch', 'manageDrivers', 'manageCompany', 'editBilling',
       'approvePayroll', 'manageWells', 'manageRoutes', 'manageEquipment',
+      'manageEquipmentAssignments',
       'sendChat',
     ],
     manager: [
       'viewHome', 'viewMobile', 'viewTickets', 'viewDispatch', 'viewPayroll',
       'viewDriverLogs', 'viewChat',
-      'createDispatch', 'sendChat', 'manageDrivers',
+      'createDispatch', 'sendChat', 'manageDrivers', 'manageEquipmentAssignments',
     ],
     dispatch: [
       'viewHome', 'viewMobile', 'viewTickets', 'viewDispatch', 'viewChat',
-      'createDispatch', 'sendChat',
+      'createDispatch', 'sendChat', 'manageEquipmentAssignments',
     ],
     payroll: [
       'viewHome', 'viewBilling', 'viewPayroll', 'viewChat',

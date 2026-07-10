@@ -2537,6 +2537,7 @@ const DEFAULT_ROLE_CAPABILITIES_SERVER: Record<string, string[]> = {
     'viewPayroll', 'viewDriverLogs', 'viewSettings', 'viewAdmin', 'viewChat',
     'createDispatch', 'manageDrivers', 'manageCompany', 'editBilling',
     'approvePayroll', 'manageWells', 'manageRoutes', 'manageEquipment',
+    'manageEquipmentAssignments',
     'sendChat',
     'manageRolesAndCapabilities', 'viewAllCompanies', 'viewTruthDebug',
   ],
@@ -2545,16 +2546,17 @@ const DEFAULT_ROLE_CAPABILITIES_SERVER: Record<string, string[]> = {
     'viewPayroll', 'viewDriverLogs', 'viewSettings', 'viewAdmin', 'viewChat',
     'createDispatch', 'manageDrivers', 'manageCompany', 'editBilling',
     'approvePayroll', 'manageWells', 'manageRoutes', 'manageEquipment',
+    'manageEquipmentAssignments',
     'sendChat',
   ],
   manager: [
     'viewHome', 'viewMobile', 'viewTickets', 'viewDispatch', 'viewPayroll',
     'viewDriverLogs', 'viewChat',
-    'createDispatch', 'sendChat', 'manageDrivers',
+    'createDispatch', 'sendChat', 'manageDrivers', 'manageEquipmentAssignments',
   ],
   dispatch: [
     'viewHome', 'viewMobile', 'viewTickets', 'viewDispatch', 'viewChat',
-    'createDispatch', 'sendChat',
+    'createDispatch', 'sendChat', 'manageEquipmentAssignments',
   ],
   payroll: [
     'viewHome', 'viewBilling', 'viewPayroll', 'viewChat',
@@ -4268,4 +4270,4 @@ export {
   listStuckHandoffs,
 } from './handoff-recovery';
 
-export { eQuipmentDocuments, eQuipmentEquipment } from './equipment';
+export { eQuipmentDocuments, eQuipmentEquipment, eQuipmentAssignments } from './equipment';

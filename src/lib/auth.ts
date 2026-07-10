@@ -53,6 +53,7 @@ export type Capability =
   | 'manageWells'            // add / edit / remove wells
   | 'manageRoutes'           // add / approve / edit GPS routes
   | 'manageEquipment'        // equipment docs, truck/trailer admin
+  | 'manageEquipmentAssignments' // equipment custody assignments
   | 'sendChat'
   // Meta (system owner only)
   | 'manageRolesAndCapabilities'  // edit roleLabels / roleCapabilities per company
@@ -78,6 +79,7 @@ export const DEFAULT_ROLE_CAPABILITIES: Record<UserRole, Capability[]> = {
     'viewPayroll', 'viewDriverLogs', 'viewSettings', 'viewAdmin', 'viewChat',
     'createDispatch', 'manageDrivers', 'manageCompany', 'editBilling',
     'approvePayroll', 'manageWells', 'manageRoutes', 'manageEquipment',
+    'manageEquipmentAssignments',
     'sendChat',
     'manageRolesAndCapabilities', 'viewAllCompanies', 'viewTruthDebug',
     'viewDiagnostics',
@@ -87,16 +89,17 @@ export const DEFAULT_ROLE_CAPABILITIES: Record<UserRole, Capability[]> = {
     'viewPayroll', 'viewDriverLogs', 'viewSettings', 'viewAdmin', 'viewChat',
     'createDispatch', 'manageDrivers', 'manageCompany', 'editBilling',
     'approvePayroll', 'manageWells', 'manageRoutes', 'manageEquipment',
+    'manageEquipmentAssignments',
     'sendChat',
   ],
   manager: [
     'viewHome', 'viewMobile', 'viewTickets', 'viewDispatch', 'viewPayroll',
     'viewDriverLogs', 'viewChat',
-    'createDispatch', 'sendChat', 'manageDrivers',
+    'createDispatch', 'sendChat', 'manageDrivers', 'manageEquipmentAssignments',
   ],
   dispatch: [
     'viewHome', 'viewMobile', 'viewTickets', 'viewDispatch', 'viewChat',
-    'createDispatch', 'sendChat',
+    'createDispatch', 'sendChat', 'manageEquipmentAssignments',
   ],
   payroll: [
     'viewHome', 'viewBilling', 'viewPayroll', 'viewChat',

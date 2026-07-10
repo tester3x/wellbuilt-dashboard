@@ -1,4 +1,5 @@
 import * as httpsV2 from 'firebase-functions/v2/https';
+import { handleAssignmentRequest, AssignmentRequest } from './services/assignmentService';
 import { handleDocumentRequest, DocumentRequest } from './services/documentService';
 import { handleEquipmentRequest, EquipmentRequest } from './services/equipmentService';
 
@@ -25,5 +26,20 @@ export const eQuipmentEquipment = httpsV2.onCall(
   async (request) => {
     const data = (request.data || {}) as EquipmentRequest;
     return handleEquipmentRequest(data, { authUid: request.auth?.uid });
+  },
+);
+
+/**
+ * WB eQuipment — Assignment custody callable.
+ * assignment.start | assignment.end | assignment.transfer |
+ * assignment.getActiveForEquipment | assignment.listActiveForDriver |
+ * assignment.listForCompany | assignment.listHistoryForEquipment |
+ * assignment.listHistoryForDriver
+ */
+export const eQuipmentAssignments = httpsV2.onCall(
+  { timeoutSeconds: 60, memory: '256MiB' },
+  async (request) => {
+    const data = (request.data || {}) as AssignmentRequest;
+    return handleAssignmentRequest(data, { authUid: request.auth?.uid });
   },
 );

@@ -13,6 +13,7 @@ import {
   equipmentTypesCollection,
   reserveEquipmentId,
 } from '../types/equipment';
+import { hasActiveAssignmentForEquipment } from './assignmentService';
 
 const firestore = admin.firestore();
 
@@ -253,6 +254,17 @@ async function updateEquipment(ctx: ServiceContext): Promise<{ equipment: Equipm
   const existing = snap.data() as Equipment;
   if (existing.companyId !== ctx.companyId) {
     throw new httpsV2.HttpsError('permission-denied', 'Equipment does not belong to this company');
+  }
+
+  const willDeactivate = ctx.payload.active === false && existing.active === true;
+  if (willDeactivate) {
+    const hasAssignment = await hasActiveAssignmentForEquipment(ctx.companyId, equipmentId);
+    if (hasAssignment) {
+      throw new httpsV2.HttpsError(
+        'failed-precondition',
+        'Cannot deactivate equipment with an active assignment. End the assignment first or use equipment.deactivate.',
+      );
+    }
   }
 
   const unitNumber = ctx.payload.unitNumber !== undefined

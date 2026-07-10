@@ -77,6 +77,11 @@ service cloud.firestore {
         allow read: if true;
         allow write: if false;
       }
+
+      // Assignment custody — all access via eQuipmentAssignments callable
+      match /assignments/{assignmentId} {
+        allow read, write: if false;
+      }
     }
 
     // Invoices — clients can read, create, update, delete (cancel/recycle flow)

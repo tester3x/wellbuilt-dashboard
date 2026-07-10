@@ -56,6 +56,7 @@ const CAPABILITY_GROUPS: { title: string; caps: { cap: Capability; label: string
       { cap: 'manageWells', label: 'Add / edit / remove wells' },
       { cap: 'manageRoutes', label: 'Approve / edit GPS routes' },
       { cap: 'manageEquipment', label: 'Equipment documents, truck/trailer admin' },
+      { cap: 'manageEquipmentAssignments', label: 'Equipment custody assignments' },
       { cap: 'sendChat', label: 'Send chat messages' },
     ],
   },
