@@ -308,8 +308,6 @@ async function getEquipment(ctx: ServiceContext): Promise<{ equipment: Equipment
 }
 
 async function listEquipment(ctx: ServiceContext): Promise<{ equipment: Equipment[]; types: EquipmentType[] }> {
-  await seedPlatformTypes(ctx).catch(() => {});
-
   let query: FirebaseFirestore.Query = firestore.collection(equipmentCollection(ctx.companyId));
 
   const equipmentTypeId = ctx.payload.equipmentTypeId
