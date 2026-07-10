@@ -1,11 +1,10 @@
-// Vehicle document types, Firestore CRUD, and Firebase Storage upload
+// Vehicle document types, Firestore read, and eQuipmentDocuments write path
 // for the Equipment tab in Admin.
-import { getFirestoreDb, getFirebaseStorage } from './firebase';
+import { getFirestoreDb, getFirebaseFunctions } from './firebase';
 import {
-  collection, query, where, getDocs, addDoc, deleteDoc, doc,
-  Timestamp, orderBy, getDoc, setDoc,
+  collection, query, where, getDocs, doc, orderBy, setDoc,
 } from 'firebase/firestore';
-import { ref, uploadBytes, getDownloadURL, deleteObject } from 'firebase/storage';
+import { httpsCallable } from 'firebase/functions';
 
 // ── Types ──────────────────────────────────────────────────────────────────
 
@@ -56,10 +55,6 @@ export const VEHICLE_DOC_TYPE_ICONS: Record<VehicleDocType, string> = {
 
 // ── Helpers ────────────────────────────────────────────────────────────────
 
-function storagePath(companyId: string, equipmentType: string, equipmentNumber: string, docId: string): string {
-  return `vehicle_documents/${companyId}/${equipmentType}_${equipmentNumber}/${docId}.jpg`;
-}
-
 function parseTimestamp(val: any): string {
   if (!val) return '';
   if (val.toDate) return val.toDate().toISOString();
@@ -100,7 +95,26 @@ export async function fetchVehicleDocuments(companyId: string): Promise<VehicleD
   });
 }
 
-/** Upload image to Storage, create Firestore doc. */
+async function fileToBase64(file: File): Promise<string> {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => {
+      const result = reader.result as string;
+      const base64 = result.includes(',') ? result.split(',')[1] : result;
+      resolve(base64);
+    };
+    reader.onerror = () => reject(new Error('Failed to read file'));
+    reader.readAsDataURL(file);
+  });
+}
+
+async function callEquipmentDocuments(action: string, payload: Record<string, unknown>) {
+  const fn = httpsCallable(getFirebaseFunctions(), 'eQuipmentDocuments');
+  const result = await fn({ action, payload });
+  return result.data as Record<string, unknown>;
+}
+
+/** Upload equipment document via eQuipmentDocuments (protected write path). */
 export async function uploadVehicleDocument(
   companyId: string,
   equipmentType: 'truck' | 'trailer',
@@ -117,72 +131,38 @@ export async function uploadVehicleDocument(
     uploadedBy: string;
   },
 ): Promise<VehicleDocument> {
-  const db = getFirestoreDb();
-  const storage = getFirebaseStorage();
-
-  // Generate a doc ID first so we can use it in the storage path
-  const tempRef = doc(collection(db, 'vehicle_documents'));
-  const docId = tempRef.id;
-
-  // Upload to Storage
-  const path = storagePath(companyId, equipmentType, equipmentNumber, docId);
-  const storageRef = ref(storage, path);
-  await uploadBytes(storageRef, file, { contentType: file.type || 'image/jpeg' });
-  const storageUrl = await getDownloadURL(storageRef);
-
-  // Create Firestore doc
-  const now = Timestamp.now();
-  const docData = {
+  const imageBase64 = await fileToBase64(file);
+  const res = await callEquipmentDocuments('equipment.uploadDocument', {
     companyId,
     equipmentType,
-    equipmentNumber: equipmentNumber.trim().toUpperCase(),
-    type: metadata.type,
-    label: metadata.label || VEHICLE_DOC_TYPE_LABELS[metadata.type],
-    storageUrl,
-    storagePath: path,
-    expirationDate: metadata.expirationDate || null,
-    issuedDate: metadata.issuedDate || null,
-    documentNumber: metadata.documentNumber || null,
-    state: metadata.state || null,
-    notes: metadata.notes || null,
-    uploadedBy: metadata.uploadedBy,
-    createdAt: now,
-    updatedAt: now,
-  };
+    equipmentNumber,
+    imageBase64,
+    contentType: file.type || 'image/jpeg',
+    metadata: {
+      type: metadata.type,
+      label: metadata.label || VEHICLE_DOC_TYPE_LABELS[metadata.type],
+      expirationDate: metadata.expirationDate,
+      issuedDate: metadata.issuedDate,
+      documentNumber: metadata.documentNumber,
+      state: metadata.state,
+      notes: metadata.notes,
+      uploadedBy: metadata.uploadedBy,
+    },
+  });
 
-  // Use the pre-generated doc ref
-  const { setDoc } = await import('firebase/firestore');
-  await setDoc(tempRef, docData);
-
-  return {
-    id: docId,
-    ...docData,
-    expirationDate: docData.expirationDate || undefined,
-    issuedDate: docData.issuedDate || undefined,
-    documentNumber: docData.documentNumber || undefined,
-    state: docData.state || undefined,
-    notes: docData.notes || undefined,
-    createdAt: now.toDate().toISOString(),
-    updatedAt: now.toDate().toISOString(),
-  };
+  const document = res.document as VehicleDocument;
+  if (!document?.id) {
+    throw new Error('Upload succeeded but no document returned');
+  }
+  return document;
 }
 
-/** Delete vehicle document from Firestore + Storage. */
-export async function deleteVehicleDocument(docId: string, docStoragePath?: string): Promise<void> {
-  const db = getFirestoreDb();
-  const storage = getFirebaseStorage();
-
-  // Delete Firestore doc
-  await deleteDoc(doc(db, 'vehicle_documents', docId));
-
-  // Delete Storage file (best effort)
-  if (docStoragePath) {
-    try {
-      await deleteObject(ref(storage, docStoragePath));
-    } catch (err) {
-      console.warn('[vehicleDocuments] Failed to delete storage file:', err);
-    }
-  }
+/** Remove equipment document via eQuipmentDocuments (protected write path). */
+export async function deleteVehicleDocument(
+  docId: string,
+  companyId: string,
+): Promise<void> {
+  await callEquipmentDocuments('equipment.removeDocument', { companyId, docId });
 }
 
 // ── Expiration helpers ─────────────────────────────────────────────────────

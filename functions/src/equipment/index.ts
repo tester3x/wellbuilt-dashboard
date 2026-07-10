@@ -3,12 +3,13 @@ import { handleDocumentRequest, DocumentRequest } from './services/documentServi
 
 /**
  * WB eQuipment — Document Service callable.
- * Driver mobile actions: driver.list | driver.uploadImage | driver.upsert | driver.delete
+ * Driver: driver.list | driver.uploadImage | driver.upsert | driver.delete
+ * Dashboard: equipment.uploadDocument | equipment.removeDocument
  */
 export const eQuipmentDocuments = httpsV2.onCall(
   { timeoutSeconds: 60, memory: '256MiB' },
   async (request) => {
     const data = (request.data || {}) as DocumentRequest;
-    return handleDocumentRequest(data);
+    return handleDocumentRequest(data, { authUid: request.auth?.uid });
   },
 );

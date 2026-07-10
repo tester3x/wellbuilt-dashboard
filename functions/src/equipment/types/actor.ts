@@ -15,3 +15,11 @@ export interface DriverProfile {
   companyId?: string;
   companyName?: string;
 }
+
+export interface DashboardProfile {
+  uid: string;
+  displayName: string;
+  companyId?: string;
+  roles: string[];
+  isPlatformAdmin: boolean;
+}

@@ -255,7 +255,7 @@ export function EquipmentTab({ scopeCompanyId, isWbAdmin }: Props) {
   const handleDelete = async (doc: VehicleDocument) => {
     if (!confirm(`Delete "${doc.label}" from ${doc.equipmentType} ${doc.equipmentNumber}?`)) return;
     try {
-      await deleteVehicleDocument(doc.id, (doc as any).storagePath);
+      await deleteVehicleDocument(doc.id, effectiveCompanyId);
       setMessage('Document deleted');
       await loadDocs();
     } catch (err) {

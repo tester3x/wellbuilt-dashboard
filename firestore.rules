@@ -162,9 +162,10 @@ service cloud.firestore {
       allow read, write: if false;
     }
 
-    // Vehicle documents — admin uploads, drivers read
+    // Vehicle documents — transitional equipment docs; read open, write via eQuipmentDocuments
     match /vehicle_documents/{docId} {
-      allow read, write: if true;
+      allow read: if true;
+      allow write: if false;
     }
 
     // Job packages — config-driven job types (water hauling, aggregate, etc.)
