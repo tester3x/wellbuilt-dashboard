@@ -7,6 +7,7 @@ import { upsertCanonicalJob } from './canonical-jobs/upsertCanonicalJob';
 import { logCanonicalDiag } from './canonical-jobs/diag';
 
 admin.initializeApp();
+admin.firestore().settings({ ignoreUndefinedProperties: true });
 const db = admin.database();
 
 // Format a Date to "MM/DD/YYYY H:MM AM/PM" (no comma — matches WB M/WB T format)
