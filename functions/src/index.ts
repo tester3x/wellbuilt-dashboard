@@ -4270,4 +4270,4 @@ export {
   listStuckHandoffs,
 } from './handoff-recovery';
 
-export { eQuipmentDocuments, eQuipmentEquipment, eQuipmentAssignments } from './equipment';
+export { eQuipmentDocuments, eQuipmentEquipment, eQuipmentAssignments, eQuipmentDVIR } from './equipment';

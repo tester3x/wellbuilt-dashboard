@@ -1,6 +1,7 @@
 import * as httpsV2 from 'firebase-functions/v2/https';
 import { handleAssignmentRequest, AssignmentRequest } from './services/assignmentService';
 import { handleDocumentRequest, DocumentRequest } from './services/documentService';
+import { handleDvirRequest, DvirRequest } from './services/dvirService';
 import { handleEquipmentRequest, EquipmentRequest } from './services/equipmentService';
 
 /**
@@ -41,5 +42,17 @@ export const eQuipmentAssignments = httpsV2.onCall(
   async (request) => {
     const data = (request.data || {}) as AssignmentRequest;
     return handleAssignmentRequest(data, { authUid: request.auth?.uid });
+  },
+);
+
+/**
+ * WB eQuipment — DVIR callable.
+ * dvir.submitPreTrip
+ */
+export const eQuipmentDVIR = httpsV2.onCall(
+  { timeoutSeconds: 60, memory: '256MiB' },
+  async (request) => {
+    const data = (request.data || {}) as DvirRequest;
+    return handleDvirRequest(data, { authUid: request.auth?.uid });
   },
 );

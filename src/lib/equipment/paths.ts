@@ -64,3 +64,14 @@ export function assignmentsCollectionPath(companyId: string): string {
 export function assignmentDocPath(companyId: string, assignmentId: string): string {
   return `${assignmentsCollectionPath(companyId)}/${assignmentId}`;
 }
+
+// ── DVIR inspections ────────────────────────────────────────────────────────
+
+/** companies/{companyId}/dvir_inspections/{inspectionId} */
+export function dvirInspectionsCollectionPath(companyId: string): string {
+  return `companies/${companyId}/dvir_inspections`;
+}
+
+export function dvirInspectionDocPath(companyId: string, inspectionId: string): string {
+  return `${dvirInspectionsCollectionPath(companyId)}/${inspectionId}`;
+}

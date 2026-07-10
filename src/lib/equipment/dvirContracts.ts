@@ -36,6 +36,33 @@ export interface StartInspectionIntent {
  * DVIR record — inspection session owned by DVIR domain.
  * Linked to equipment via equipmentId; optional assignmentId for custody context.
  */
+export type InspectionItemResult = 'pass' | 'needs_attention';
+
+export const PRE_TRIP_CATEGORY_IDS = [
+  'lights',
+  'brakes',
+  'tires',
+  'emergency_equipment',
+  'fluid_leaks',
+  'tank',
+  'hoses',
+  'pto',
+  'miscellaneous',
+] as const;
+
+export type PreTripCategoryId = (typeof PRE_TRIP_CATEGORY_IDS)[number];
+
+export interface InspectionCategoryResult {
+  categoryId: PreTripCategoryId;
+  categoryLabel: string;
+  result: InspectionItemResult;
+  /** Reserved — not implemented in slice 1 */
+  defectId?: string | null;
+  photoEvidenceIds?: string[];
+  comments?: string;
+  severity?: string;
+}
+
 export interface DvirInspectionContract {
   dvirId: string;
   companyId: string;
@@ -44,7 +71,13 @@ export interface DvirInspectionContract {
   driverHash: string;
   inspectionType: 'pre_trip' | 'post_trip' | 'periodic';
   status: 'draft' | 'submitted' | 'reviewed';
-  result?: 'pass' | 'fail' | 'conditional';
+  /** Slice 1: pass | needs_attention. Reserved: fail, conditional */
+  result?: 'pass' | 'needs_attention' | 'fail' | 'conditional';
+  overallResult?: InspectionItemResult;
+  categories?: InspectionCategoryResult[];
+  driverSignature?: string;
+  equipmentLabel?: string;
+  assignmentSource?: 'canonical' | 'legacy';
   startedAt: string;
   submittedAt?: string;
   /** Observation lines — DVIR-owned; not defect records until promoted. */

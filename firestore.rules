@@ -82,6 +82,11 @@ service cloud.firestore {
       match /assignments/{assignmentId} {
         allow read, write: if false;
       }
+
+      // DVIR inspections — all access via eQuipmentDVIR callable
+      match /dvir_inspections/{inspectionId} {
+        allow read, write: if false;
+      }
     }
 
     // Invoices — clients can read, create, update, delete (cancel/recycle flow)
