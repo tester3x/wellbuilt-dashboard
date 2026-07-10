@@ -2,7 +2,7 @@ import * as httpsV2 from 'firebase-functions/v2/https';
 import * as admin from 'firebase-admin';
 import { requireDriver } from '../auth/requireDriver';
 import { dashboardActorRef, requireDashboardEquipmentManager } from '../auth/requireDashboard';
-import { driverDocumentImagePath, vehicleDocumentImagePath } from '../storage/paths';
+import { driverDocumentCapturePath, driverDocumentImagePath, vehicleDocumentImagePath } from '../storage/paths';
 import { ActorRef, DriverActor, DriverProfile, DashboardProfile } from '../types/actor';
 import { buildMetadata, RecordMetadata } from '../types/metadata';
 
@@ -54,6 +54,13 @@ interface ServiceContext {
   authUid?: string;
 }
 
+interface StoredCaptureRecord {
+  captureId: string;
+  kind: string;
+  cloudUri?: string;
+  storagePath?: string;
+}
+
 interface DriverDocumentRecord {
   id: string;
   driverHash: string;
@@ -62,6 +69,10 @@ interface DriverDocumentRecord {
   label: string;
   cloudUri?: string;
   storagePath?: string;
+  captures?: StoredCaptureRecord[];
+  documentStatus?: string;
+  typeClaim?: string;
+  supersedesDocumentId?: string | null;
   expirationDate?: string;
   issuedDate?: string;
   documentNumber?: string;
@@ -209,6 +220,7 @@ async function listDriverDocuments(ctx: ServiceContext): Promise<{ documents: Dr
 async function uploadDriverImage(ctx: ServiceContext): Promise<{ cloudUri: string; storagePath: string }> {
   const docId = String(ctx.payload.docId || '');
   const imageBase64 = String(ctx.payload.imageBase64 || '');
+  const captureKind = ctx.payload.captureKind ? String(ctx.payload.captureKind) : '';
   if (!docId) throw new httpsV2.HttpsError('invalid-argument', 'docId is required');
   if (!imageBase64) throw new httpsV2.HttpsError('invalid-argument', 'imageBase64 is required');
 
@@ -217,7 +229,9 @@ async function uploadDriverImage(ctx: ServiceContext): Promise<{ cloudUri: strin
     throw new httpsV2.HttpsError('invalid-argument', 'Image exceeds 8MB limit');
   }
 
-  const path = driverDocumentImagePath(ctx.driver!.driverHash, docId);
+  const path = captureKind
+    ? driverDocumentCapturePath(ctx.driver!.driverHash, docId, captureKind)
+    : driverDocumentImagePath(ctx.driver!.driverHash, docId);
   const cloudUri = await saveImageWithDownloadUrl(path, buffer, 'image/jpeg');
   return { cloudUri, storagePath: path };
 }
@@ -251,10 +265,26 @@ async function upsertDriverDocument(ctx: ServiceContext): Promise<{ document: Dr
 
   const now = new Date().toISOString();
   const meta = buildMetadata(ctx.actorRef, existingData as Partial<RecordMetadata> | undefined);
-  const cloudUri = doc.cloudUri ? String(doc.cloudUri) : existingData?.cloudUri;
+  const incomingCaptures = Array.isArray(doc.captures)
+    ? (doc.captures as StoredCaptureRecord[])
+    : undefined;
+  const captures = incomingCaptures?.length
+    ? incomingCaptures.map((c) => ({
+      captureId: String(c.captureId || `${id}_${c.kind || 'attachment'}`),
+      kind: String(c.kind || 'attachment'),
+      cloudUri: c.cloudUri ? String(c.cloudUri) : undefined,
+      storagePath: c.storagePath ? String(c.storagePath) : undefined,
+    }))
+    : existingData?.captures;
+
+  const primaryCapture = captures?.find((c) => c.kind === 'front') || captures?.[0];
+  const cloudUri = doc.cloudUri
+    ? String(doc.cloudUri)
+    : (primaryCapture?.cloudUri || existingData?.cloudUri);
   const storagePath = doc.storagePath
     ? String(doc.storagePath)
-    : (cloudUri ? driverDocumentImagePath(ctx.driver!.driverHash, id) : existingData?.storagePath);
+    : (primaryCapture?.storagePath || existingData?.storagePath
+      || (cloudUri && !captures?.length ? driverDocumentImagePath(ctx.driver!.driverHash, id) : undefined));
 
   const record: DriverDocumentRecord = {
     id,
@@ -264,6 +294,12 @@ async function upsertDriverDocument(ctx: ServiceContext): Promise<{ document: Dr
     label,
     cloudUri: cloudUri || undefined,
     storagePath: storagePath || undefined,
+    captures: captures?.length ? captures : undefined,
+    documentStatus: optionalString(doc.documentStatus) ?? existingData?.documentStatus ?? 'captured',
+    typeClaim: optionalString(doc.typeClaim) ?? existingData?.typeClaim ?? 'claimed',
+    supersedesDocumentId: doc.supersedesDocumentId === null
+      ? null
+      : (optionalString(doc.supersedesDocumentId) ?? existingData?.supersedesDocumentId),
     expirationDate: optionalString(doc.expirationDate) ?? existingData?.expirationDate,
     issuedDate: optionalString(doc.issuedDate) ?? existingData?.issuedDate,
     documentNumber: optionalString(doc.documentNumber) ?? existingData?.documentNumber,
@@ -295,8 +331,18 @@ async function deleteDriverDocument(ctx: ServiceContext): Promise<{ deleted: boo
   }
 
   await ref.delete();
-  const path = data.storagePath || driverDocumentImagePath(ctx.driver!.driverHash, docId);
-  await storage.bucket().file(path).delete().catch(() => {});
+  const paths = new Set<string>();
+  if (data.storagePath) paths.add(data.storagePath);
+  if (data.captures?.length) {
+    for (const capture of data.captures) {
+      if (capture.storagePath) paths.add(capture.storagePath);
+    }
+  } else {
+    paths.add(driverDocumentImagePath(ctx.driver!.driverHash, docId));
+  }
+  for (const path of paths) {
+    await storage.bucket().file(path).delete().catch(() => {});
+  }
   return { deleted: true };
 }
 
