@@ -9,7 +9,7 @@ export { LEGACY_MOBILE_STORE_KEYS };
 export type CustodyMigrationStage = 'M0_legacy' | 'M1_hybrid' | 'M2_canonical';
 
 export interface LegacyCustodyContext {
-  driverId?: string;
+  driverHash?: string;
   truckNumber?: string;
   trailerNumber?: string;
   truckEquipmentId?: string;

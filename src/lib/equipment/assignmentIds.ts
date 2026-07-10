@@ -2,7 +2,7 @@
  * assignmentId generation strategy for WB eQuipment Assignments.
  *
  * Rule: assignmentId is assigned once at create time and never changes.
- * It is NOT derived from equipmentId, driverId, or legacy truck/trailer numbers.
+ * It is NOT derived from equipmentId, driverHash, or legacy truck/trailer numbers.
  */
 
 import { doc, collection } from 'firebase/firestore';
@@ -21,7 +21,7 @@ export function describeAssignmentIdStrategy(): string {
   return [
     'assignmentId = Firestore auto-generated document ID at create time',
     'Stored as both the document ID and the assignmentId field for query convenience',
-    'Never computed from equipmentId, driverId, or legacy unit numbers',
+    'Never computed from equipmentId, driverHash, or legacy unit numbers',
     'Ending custody sets active=false and endedAt — assignmentId unchanged',
   ].join('; ');
 }

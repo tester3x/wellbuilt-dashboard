@@ -5,7 +5,7 @@
 import * as admin from 'firebase-admin';
 import { ActorRef } from './actor';
 
-export const ASSIGNMENT_ROLES = ['operator', 'relief'] as const;
+export const ASSIGNMENT_ROLES = ['primary_operator', 'relief_operator'] as const;
 
 export type AssignmentRole = (typeof ASSIGNMENT_ROLES)[number];
 
@@ -13,8 +13,7 @@ export interface Assignment {
   assignmentId: string;
   companyId: string;
   equipmentId: string;
-  /** Canonical driver identity — stores driverHash. */
-  driverId: string;
+  driverHash: string;
   assignedBy: ActorRef;
   role: AssignmentRole;
   active: boolean;
@@ -26,6 +25,34 @@ export interface Assignment {
   updatedAt: string;
   updatedBy: ActorRef;
 }
+
+export type AssignmentDomainEvent =
+  | {
+      type: 'EquipmentAssigned';
+      companyId: string;
+      assignmentId: string;
+      equipmentId: string;
+      driverHash: string;
+    }
+  | {
+      type: 'EquipmentAssignmentEnded';
+      companyId: string;
+      assignmentId: string;
+      equipmentId: string;
+      driverHash: string;
+    }
+  | {
+      type: 'EquipmentTransferred';
+      companyId: string;
+      equipmentId: string;
+      previousAssignmentId: string;
+      newAssignmentId: string;
+      previousDriverHash: string;
+      newDriverHash: string;
+    };
+
+/** Statuses that block new assignment unless explicitly overridden. */
+export const ASSIGNMENT_RESTRICTED_EQUIPMENT_STATUSES = ['in_shop', 'out_of_service'] as const;
 
 export function assignmentsCollection(companyId: string): string {
   return `companies/${companyId}/assignments`;

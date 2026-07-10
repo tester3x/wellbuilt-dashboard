@@ -1,11 +1,15 @@
 /**
  * Assignment compatibility — bridge legacy mobile custody (SecureStore unit numbers)
- * to canonical Assignment records keyed by equipmentId + driverId.
+ * to canonical Assignment records keyed by equipmentId + driverHash.
  *
- * During migration (M0–M2):
- * - eWallet stores wbew_truckNumber / wbew_trailerNumber locally (implicit custody)
- * - No Assignment documents exist yet
- * - vehicle_documents still query by equipmentType + unitNumber strings
+ * resolveLegacyCustody() is compatibility context only — it must NOT pretend an
+ * Assignment record exists when it does not. Mobile UI should distinguish:
+ *   - Canonical assignment (M2)
+ *   - Legacy inferred assignment (M0/M1)
+ *
+ * During M1, downstream domains (DVIR, Defect) may reference:
+ *   equipmentId, driverHash, assignmentId: null, assignmentSource: 'legacy'
+ * until canonical assignments are established. Do not write DVIR against a fake assignmentId.
  *
  * Do NOT use legacy unit numbers as permanent foreign keys in new Assignment writes.
  */
@@ -20,12 +24,15 @@ import {
 
 export { LEGACY_MOBILE_STORE_KEYS };
 
+/** How custody was resolved for display or downstream context. */
+export type AssignmentSource = 'canonical' | 'legacy';
+
 /** Migration stage for custody resolution. */
 export type CustodyMigrationStage = 'M0_legacy' | 'M1_hybrid' | 'M2_canonical';
 
 export interface LegacyCustodyContext extends LegacyAssignmentContext {
   /** Authenticated driver identity (driverHash). */
-  driverId?: string;
+  driverHash?: string;
 }
 
 export interface ResolvedCustodySlot {
@@ -33,18 +40,17 @@ export interface ResolvedCustodySlot {
   unitNumber: string;
   legacyKey: string;
   equipmentId?: string;
+  /** null during M0/M1 — no canonical Assignment doc yet. */
+  assignmentId?: string | null;
+  assignmentSource: AssignmentSource;
 }
 
 export interface LegacyCustodySnapshot {
-  driverId?: string;
+  driverHash?: string;
   stage: CustodyMigrationStage;
   slots: ResolvedCustodySlot[];
 }
 
-/**
- * Infer migration stage from available identity fields.
- * M0 = unit numbers only; M1 = partial equipmentId; M2 = equipmentId on all slots.
- */
 export function inferCustodyMigrationStage(ctx: LegacyCustodyContext): CustodyMigrationStage {
   const hasTruckId = hasCanonicalEquipmentId(ctx.truckEquipmentId);
   const hasTrailerId = hasCanonicalEquipmentId(ctx.trailerEquipmentId);
@@ -61,8 +67,8 @@ export function inferCustodyMigrationStage(ctx: LegacyCustodyContext): CustodyMi
 }
 
 /**
- * Build a custody snapshot from legacy mobile context.
- * Used until eQuipmentAssignments callable is wired (no Firestore reads).
+ * Build a custody snapshot from legacy mobile context (no Firestore reads).
+ * Does not create or imply Assignment records.
  */
 export function resolveLegacyCustody(ctx: LegacyCustodyContext): LegacyCustodySnapshot {
   const lookup = resolveLegacyAssignment(ctx);
@@ -75,6 +81,8 @@ export function resolveLegacyCustody(ctx: LegacyCustodyContext): LegacyCustodySn
       unitNumber: lookup.truck.unitNumber,
       legacyKey: lookup.truck.legacyKey,
       equipmentId: hasCanonicalEquipmentId(ctx.truckEquipmentId) ? ctx.truckEquipmentId : undefined,
+      assignmentId: null,
+      assignmentSource: 'legacy',
     });
   }
   if (lookup.trailer) {
@@ -83,27 +91,25 @@ export function resolveLegacyCustody(ctx: LegacyCustodyContext): LegacyCustodySn
       unitNumber: lookup.trailer.unitNumber,
       legacyKey: lookup.trailer.legacyKey,
       equipmentId: hasCanonicalEquipmentId(ctx.trailerEquipmentId) ? ctx.trailerEquipmentId : undefined,
+      assignmentId: null,
+      assignmentSource: 'legacy',
     });
   }
 
   return {
-    driverId: ctx.driverId?.trim().toLowerCase() || undefined,
+    driverHash: ctx.driverHash?.trim().toLowerCase() || undefined,
     stage,
     slots,
   };
 }
 
-/**
- * Whether a slot is ready for canonical Assignment writes (requires equipmentId + driverId).
- */
 export function canWriteCanonicalAssignment(
   slot: ResolvedCustodySlot,
-  driverId?: string,
+  driverHash?: string,
 ): slot is ResolvedCustodySlot & { equipmentId: string } {
-  return hasCanonicalEquipmentId(slot.equipmentId) && Boolean(driverId?.trim());
+  return hasCanonicalEquipmentId(slot.equipmentId) && Boolean(driverHash?.trim());
 }
 
-/** Map legacy lookup entry to a custody slot descriptor. */
 export function legacyLookupToCustodySlots(lookup: LegacyAssignmentLookup): ResolvedCustodySlot[] {
   const slots: ResolvedCustodySlot[] = [];
   if (lookup.truck) {
@@ -111,6 +117,8 @@ export function legacyLookupToCustodySlots(lookup: LegacyAssignmentLookup): Reso
       equipmentTypeId: 'truck',
       unitNumber: lookup.truck.unitNumber,
       legacyKey: lookup.truck.legacyKey,
+      assignmentId: null,
+      assignmentSource: 'legacy',
     });
   }
   if (lookup.trailer) {
@@ -118,6 +126,8 @@ export function legacyLookupToCustodySlots(lookup: LegacyAssignmentLookup): Reso
       equipmentTypeId: 'trailer',
       unitNumber: lookup.trailer.unitNumber,
       legacyKey: lookup.trailer.legacyKey,
+      assignmentId: null,
+      assignmentSource: 'legacy',
     });
   }
   return slots;
@@ -125,7 +135,8 @@ export function legacyLookupToCustodySlots(lookup: LegacyAssignmentLookup): Reso
 
 export const CUSTODY_COMPATIBILITY_NOTES = [
   'M0: Mobile SecureStore unit numbers imply custody — no Assignment collection docs',
-  'M1: equipmentId cached in SecureStore (wbew_truckEquipmentId / wbew_trailerEquipmentId) alongside unit numbers',
-  'M2: Assignment records are source of truth; mobile reads via eQuipmentAssignments callable',
+  'M1: equipmentId cached in SecureStore alongside unit numbers; assignmentId remains null',
+  'M2: Assignment records are source of truth; mobile reads active assignments via eQuipmentAssignments',
   'Legacy unit numbers remain display-only; equipmentId is the FK for all new writes',
+  'DVIR/Defect during M1: equipmentId + driverHash + assignmentId:null + assignmentSource:legacy',
 ] as const;
