@@ -15,6 +15,17 @@ export const EQUIPMENT_STATUSES = [
 
 export type EquipmentStatus = (typeof EQUIPMENT_STATUSES)[number];
 
+export const EQUIPMENT_OPERATIONAL_STATUSES = [
+  'active',
+  'shop',
+  'out_of_service',
+  'retired',
+  'loaned',
+  'unknown',
+] as const;
+
+export type EquipmentOperationalStatus = (typeof EQUIPMENT_OPERATIONAL_STATUSES)[number];
+
 export interface EquipmentType {
   typeId: string;
   companyId: string;
@@ -42,7 +53,10 @@ export interface Equipment {
   make?: string;
   model?: string;
   year?: string;
+  equipmentStatus?: EquipmentOperationalStatus | null;
   healthScore?: number | null;
+  vin?: string;
+  licensePlate?: string;
   createdAt: string;
   createdBy: ActorRef;
   updatedAt: string;

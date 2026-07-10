@@ -9,6 +9,11 @@ import { ActorRef, DriverActor, DriverProfile, DashboardProfile } from '../types
 import { buildMetadata } from '../types/metadata';
 import { Equipment, equipmentCollection } from '../types/equipment';
 import {
+  buildEquipmentIdentitySlice,
+  loadEquipmentForIdentity,
+  type EquipmentIdentitySlice,
+} from './equipmentIdentity';
+import {
   ASSIGNMENT_RESTRICTED_EQUIPMENT_STATUSES,
   ASSIGNMENT_ROLES,
   Assignment,
@@ -28,7 +33,8 @@ export type AssignmentAction =
   | 'assignment.listActiveForDriver'
   | 'assignment.listForCompany'
   | 'assignment.listHistoryForEquipment'
-  | 'assignment.listHistoryForDriver';
+  | 'assignment.listHistoryForDriver'
+  | 'assignment.getMyEquipmentProfile';
 
 export interface AssignmentRequest {
   actor?: DriverActor;
@@ -61,6 +67,7 @@ interface ServiceResult {
 
 const DRIVER_READ_ACTIONS = new Set<AssignmentAction>([
   'assignment.listActiveForDriver',
+  'assignment.getMyEquipmentProfile',
 ]);
 
 // ── Service pipeline ───────────────────────────────────────────────────────
@@ -91,6 +98,7 @@ function validate(req: AssignmentRequest, options: AssignmentRequestOptions): Se
     'assignment.listForCompany',
     'assignment.listHistoryForEquipment',
     'assignment.listHistoryForDriver',
+    'assignment.getMyEquipmentProfile',
   ];
   if (!allowed.includes(action)) {
     throw new httpsV2.HttpsError('invalid-argument', `Unknown action: ${action}`);
@@ -167,6 +175,8 @@ async function execute(ctx: ServiceContext): Promise<ServiceResult> {
       return listHistoryForEquipment(ctx);
     case 'assignment.listHistoryForDriver':
       return listHistoryForDriver(ctx);
+    case 'assignment.getMyEquipmentProfile':
+      return getMyEquipmentProfile(ctx);
     default:
       throw new httpsV2.HttpsError('invalid-argument', `Unhandled action: ${ctx.action}`);
   }
@@ -479,7 +489,75 @@ async function listActiveForDriver(ctx: ServiceContext): Promise<ServiceResult> 
     .map((d) => d.data() as Assignment)
     .sort((a, b) => b.startedAt.localeCompare(a.startedAt));
 
-  return { data: { assignments }, events: [] };
+  const items = await enrichAssignmentsWithIdentity(ctx.companyId, assignments);
+
+  return { data: { assignments, items }, events: [] };
+}
+
+async function getMyEquipmentProfile(ctx: ServiceContext): Promise<ServiceResult> {
+  const equipmentId = String(ctx.payload.equipmentId || '');
+  if (!equipmentId) throw new httpsV2.HttpsError('invalid-argument', 'equipmentId is required');
+  if (ctx.mode !== 'driver' || !ctx.driver) {
+    throw new httpsV2.HttpsError('permission-denied', 'Driver actor required');
+  }
+
+  const activeSnap = await firestore
+    .collection(assignmentsCollection(ctx.companyId))
+    .where('equipmentId', '==', equipmentId)
+    .where('driverHash', '==', ctx.driver.driverHash)
+    .where('active', '==', true)
+    .limit(1)
+    .get();
+
+  if (activeSnap.empty) {
+    throw new httpsV2.HttpsError('permission-denied', 'No active assignment for this equipment');
+  }
+
+  const assignment = activeSnap.docs[0].data() as Assignment;
+  const equipment = await loadEquipmentForIdentity(ctx.companyId, equipmentId);
+  if (!equipment) {
+    throw new httpsV2.HttpsError('not-found', 'Equipment not found');
+  }
+
+  const identity = await buildEquipmentIdentitySlice(ctx.companyId, equipment);
+
+  return {
+    data: {
+      assignment,
+      identity,
+      assignmentSource: 'canonical' as const,
+      displayLabel: identity.displayName || `${identity.equipmentTypeLabel || identity.equipmentTypeId} ${identity.unitNumber}`,
+    },
+    events: [],
+  };
+}
+
+async function enrichAssignmentsWithIdentity(
+  companyId: string,
+  assignments: Assignment[],
+): Promise<Array<{ assignment: Assignment; identity: EquipmentIdentitySlice | null; displayLabel: string }>> {
+  const items: Array<{ assignment: Assignment; identity: EquipmentIdentitySlice | null; displayLabel: string }> = [];
+
+  for (const assignment of assignments) {
+    const equipment = await loadEquipmentForIdentity(companyId, assignment.equipmentId);
+    if (!equipment) {
+      items.push({
+        assignment,
+        identity: null,
+        displayLabel: assignment.equipmentId,
+      });
+      continue;
+    }
+    const identity = await buildEquipmentIdentitySlice(companyId, equipment);
+    items.push({
+      assignment,
+      identity,
+      displayLabel: identity.displayName
+        || `${identity.equipmentTypeLabel || identity.equipmentTypeId} ${identity.unitNumber}`,
+    });
+  }
+
+  return items;
 }
 
 async function listForCompany(ctx: ServiceContext): Promise<ServiceResult> {

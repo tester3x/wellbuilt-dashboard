@@ -16,6 +16,7 @@
 import type { Assignment } from './assignmentTypes';
 import type { AssignmentSource } from './assignmentCompatibility';
 import type { Equipment, EquipmentStatus } from './types';
+import type { EquipmentOperationalStatus } from './equipmentStatusTypes';
 
 /** Profile sections — each backed by its own domain, linked via equipmentId. */
 export type EquipmentProfileSection =
@@ -53,16 +54,35 @@ export const EQUIPMENT_PROFILE_SECTION_LABELS: Record<EquipmentProfileSection, s
   health: 'Health',
 };
 
+/** Lifecycle state for profile section presentation. */
+export type ProfileSectionLifecycle = 'available' | 'not_yet_enabled';
+
+export const PROFILE_SECTION_LIFECYCLE: Record<EquipmentProfileSection, ProfileSectionLifecycle> = {
+  identity: 'available',
+  assignment: 'available',
+  documents: 'not_yet_enabled',
+  compliance: 'not_yet_enabled',
+  status: 'not_yet_enabled',
+  dvir: 'not_yet_enabled',
+  defects: 'not_yet_enabled',
+  maintenance: 'not_yet_enabled',
+  health: 'not_yet_enabled',
+};
+
 /** Identity slice — canonical Equipment registry fields. */
 export interface EquipmentProfileIdentity {
   equipmentId: string;
   companyId: string;
+  companyName?: string;
   equipmentTypeId: string;
+  equipmentTypeLabel?: string;
   unitNumber: string;
   displayName?: string;
   make?: string;
   model?: string;
   year?: string;
+  vin?: string;
+  licensePlate?: string;
 }
 
 /** Assignment slice — current operational custody only. */
@@ -89,6 +109,8 @@ export interface EquipmentProfileCompliance {
 export interface EquipmentProfileStatus {
   status: EquipmentStatus;
   active: boolean;
+  /** Reserved operational availability — not populated until projection exists. */
+  equipmentStatus?: EquipmentOperationalStatus | null;
 }
 
 export interface EquipmentProfileDvir {
@@ -163,6 +185,8 @@ export function buildEquipmentProfileShell(
       make: equipment.make,
       model: equipment.model,
       year: equipment.year,
+      vin: equipment.vin,
+      licensePlate: equipment.licensePlate,
     },
     assignment: assignmentSlice,
     documents: { available: false },

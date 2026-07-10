@@ -34,7 +34,7 @@ export const eQuipmentEquipment = httpsV2.onCall(
  * assignment.start | assignment.end | assignment.transfer |
  * assignment.getActiveForEquipment | assignment.listActiveForDriver |
  * assignment.listForCompany | assignment.listHistoryForEquipment |
- * assignment.listHistoryForDriver
+ * assignment.listHistoryForDriver | assignment.getMyEquipmentProfile
  */
 export const eQuipmentAssignments = httpsV2.onCall(
   { timeoutSeconds: 60, memory: '256MiB' },

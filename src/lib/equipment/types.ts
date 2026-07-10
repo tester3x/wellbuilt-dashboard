@@ -5,6 +5,7 @@
  */
 
 import type { ActorRef } from './metadata';
+import type { EquipmentOperationalStatus } from './equipmentStatusTypes';
 
 // ── Operational status (intentionally small) ────────────────────────────────
 // Workflow detail belongs in Defects / Maintenance — not Equipment itself.
@@ -81,10 +82,20 @@ export interface Equipment {
   year?: string;
 
   /**
+   * Reserved — operational availability projection (active, shop, loaned, etc.).
+   * NOT driven by DVIR directly. Future: projected from domain events. null = not set.
+   */
+  equipmentStatus?: EquipmentOperationalStatus | null;
+
+  /**
    * Reserved — overall equipment health (0–100). null = not yet computed.
    * Future: derived from DVIR, defects, maintenance, inspections, doc expirations.
    */
   healthScore?: number | null;
+
+  /** Optional identity fields — shown on profile when present and permitted. */
+  vin?: string;
+  licensePlate?: string;
 
   createdAt: string;
   createdBy: ActorRef;

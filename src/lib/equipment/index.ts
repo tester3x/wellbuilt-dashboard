@@ -14,3 +14,5 @@ export * from './assignmentTypes';
 export * from './assignmentIds';
 export * from './assignmentCompatibility';
 export * from './profileTypes';
+export * from './equipmentStatusTypes';
+export * from './dvirContracts';
