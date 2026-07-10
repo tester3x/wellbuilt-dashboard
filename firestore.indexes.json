@@ -150,6 +150,31 @@
       ]
     },
     {
+      "collectionGroup": "driver_documents",
+      "queryScope": "COLLECTION",
+      "fields": [
+        { "fieldPath": "driverHash", "order": "ASCENDING" },
+        { "fieldPath": "updatedAt", "order": "DESCENDING" }
+      ]
+    },
+    {
+      "collectionGroup": "equipment",
+      "queryScope": "COLLECTION",
+      "fields": [
+        { "fieldPath": "equipmentTypeId", "order": "ASCENDING" },
+        { "fieldPath": "unitNumber", "order": "ASCENDING" },
+        { "fieldPath": "active", "order": "ASCENDING" }
+      ]
+    },
+    {
+      "collectionGroup": "equipment",
+      "queryScope": "COLLECTION",
+      "fields": [
+        { "fieldPath": "equipmentTypeId", "order": "ASCENDING" },
+        { "fieldPath": "active", "order": "ASCENDING" }
+      ]
+    },
+    {
       "collectionGroup": "projects",
       "queryScope": "COLLECTION",
       "fields": [
