@@ -6,7 +6,7 @@ import { usePathname, useRouter } from 'next/navigation';
 import { ref, onValue } from 'firebase/database';
 import { useAuth } from '@/contexts/AuthContext';
 import { TABS, getActiveTab } from '@/lib/tabs';
-import { getRoleLabel, hasCapability, hasRole } from '@/lib/auth';
+import { getRoleLabel, hasCapability, hasEQuipmentAccess, hasRole } from '@/lib/auth';
 import { NotificationBell } from './NotificationBell';
 import { ChatIcon } from './chat/ChatIcon';
 import { ChatSidebar } from './chat/ChatSidebar';
@@ -126,6 +126,7 @@ export function AppHeader() {
           </div>
           <nav className="flex gap-0">
             {TABS.filter(tab => {
+              if (tab.id === 'equipment') return hasEQuipmentAccess(user, userCompany);
               // Capability-based gate wins when set. Falls back to legacy minRole
               // only if capability is unset (e.g., Home tab with no gate at all).
               if (tab.capability) return hasCapability(user, tab.capability, userCompany);

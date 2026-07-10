@@ -66,6 +66,13 @@ export const TABS: TabConfig[] = [
     capability: 'viewDriverLogs',
   },
   {
+    id: 'equipment',
+    label: 'eQuipment',
+    href: '/equipment',
+    matchPrefixes: ['/equipment'],
+    capability: 'viewEQuipment',
+  },
+  {
     id: 'settings',
     label: 'Settings',
     href: '/settings',

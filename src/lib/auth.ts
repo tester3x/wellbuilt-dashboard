@@ -52,8 +52,13 @@ export type Capability =
   | 'approvePayroll'
   | 'manageWells'            // add / edit / remove wells
   | 'manageRoutes'           // add / approve / edit GPS routes
-  | 'manageEquipment'        // equipment docs, truck/trailer admin
+  | 'viewEQuipment'          // WB eQuipment tab (read surfaces)
+  | 'manageEquipment'        // equipment registry admin
   | 'manageEquipmentAssignments' // equipment custody assignments
+  | 'viewDVIR'               // read submitted inspections
+  | 'manageDVIR'             // future DVIR management
+  | 'viewEquipmentDocuments' // read driver documents
+  | 'manageEquipmentDocuments' // future document approval/admin
   | 'sendChat'
   // Meta (system owner only)
   | 'manageRolesAndCapabilities'  // edit roleLabels / roleCapabilities per company
@@ -78,8 +83,9 @@ export const DEFAULT_ROLE_CAPABILITIES: Record<UserRole, Capability[]> = {
     'viewHome', 'viewMobile', 'viewTickets', 'viewDispatch', 'viewBilling',
     'viewPayroll', 'viewDriverLogs', 'viewSettings', 'viewAdmin', 'viewChat',
     'createDispatch', 'manageDrivers', 'manageCompany', 'editBilling',
-    'approvePayroll', 'manageWells', 'manageRoutes', 'manageEquipment',
-    'manageEquipmentAssignments',
+    'approvePayroll', 'manageWells', 'manageRoutes',
+    'viewEQuipment', 'manageEquipment', 'manageEquipmentAssignments',
+    'viewDVIR', 'manageDVIR', 'viewEquipmentDocuments', 'manageEquipmentDocuments',
     'sendChat',
     'manageRolesAndCapabilities', 'viewAllCompanies', 'viewTruthDebug',
     'viewDiagnostics',
@@ -88,18 +94,21 @@ export const DEFAULT_ROLE_CAPABILITIES: Record<UserRole, Capability[]> = {
     'viewHome', 'viewMobile', 'viewTickets', 'viewDispatch', 'viewBilling',
     'viewPayroll', 'viewDriverLogs', 'viewSettings', 'viewAdmin', 'viewChat',
     'createDispatch', 'manageDrivers', 'manageCompany', 'editBilling',
-    'approvePayroll', 'manageWells', 'manageRoutes', 'manageEquipment',
-    'manageEquipmentAssignments',
+    'approvePayroll', 'manageWells', 'manageRoutes',
+    'viewEQuipment', 'manageEquipment', 'manageEquipmentAssignments',
+    'viewDVIR', 'manageDVIR', 'viewEquipmentDocuments', 'manageEquipmentDocuments',
     'sendChat',
   ],
   manager: [
     'viewHome', 'viewMobile', 'viewTickets', 'viewDispatch', 'viewPayroll',
     'viewDriverLogs', 'viewChat',
     'createDispatch', 'sendChat', 'manageDrivers', 'manageEquipmentAssignments',
+    'viewEQuipment', 'viewDVIR', 'viewEquipmentDocuments',
   ],
   dispatch: [
     'viewHome', 'viewMobile', 'viewTickets', 'viewDispatch', 'viewChat',
     'createDispatch', 'sendChat', 'manageEquipmentAssignments',
+    'viewEQuipment', 'viewDVIR', 'viewEquipmentDocuments',
   ],
   payroll: [
     'viewHome', 'viewBilling', 'viewPayroll', 'viewChat',
@@ -108,6 +117,7 @@ export const DEFAULT_ROLE_CAPABILITIES: Record<UserRole, Capability[]> = {
   viewer: [
     'viewHome', 'viewMobile', 'viewTickets', 'viewDispatch', 'viewBilling',
     'viewPayroll', 'viewDriverLogs',
+    'viewEQuipment', 'viewDVIR', 'viewEquipmentDocuments',
   ],
   driver: [],
 };
@@ -180,6 +190,23 @@ export interface RoleConfig {
  * Null user → always false. Caller-friendly: pass `null` without having to
  * guard yourself.
  */
+export const EQUIPMENT_ACCESS_CAPABILITIES: Capability[] = [
+  'viewEQuipment',
+  'manageEquipment',
+  'manageEquipmentAssignments',
+  'viewDVIR',
+  'manageDVIR',
+  'viewEquipmentDocuments',
+  'manageEquipmentDocuments',
+];
+
+export function hasEQuipmentAccess(
+  user: WellBuiltUser | null,
+  companyConfig?: RoleConfig | null,
+): boolean {
+  return EQUIPMENT_ACCESS_CAPABILITIES.some((cap) => hasCapability(user, cap, companyConfig));
+}
+
 export function hasCapability(
   user: WellBuiltUser | null,
   capability: Capability,

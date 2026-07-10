@@ -16,3 +16,7 @@ export * from './assignmentCompatibility';
 export * from './profileTypes';
 export * from './equipmentStatusTypes';
 export * from './dvirContracts';
+export * from './assignments';
+export * from './dvir';
+export * from './driverDocuments';
+export * from './driverNames';
