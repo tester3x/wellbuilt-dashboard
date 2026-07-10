@@ -157,6 +157,11 @@ service cloud.firestore {
       allow read, write: if true;
     }
 
+    // Driver documents — person-owned compliance (eQuipment Cloud Functions only)
+    match /driver_documents/{docId} {
+      allow read, write: if false;
+    }
+
     // Vehicle documents — admin uploads, drivers read
     match /vehicle_documents/{docId} {
       allow read, write: if true;

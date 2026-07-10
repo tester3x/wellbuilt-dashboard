@@ -4266,3 +4266,5 @@ export {
   recoverHandoffOrphan,
   listStuckHandoffs,
 } from './handoff-recovery';
+
+export { eQuipmentDocuments } from './equipment';
