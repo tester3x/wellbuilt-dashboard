@@ -52,3 +52,15 @@ export const LEGACY_VEHICLE_DOCUMENTS_COLLECTION = 'vehicle_documents';
 export function legacyEquipmentSpecsCollectionPath(companyId: string): string {
   return `companies/${companyId}/equipment_specs`;
 }
+
+// ── Assignments (custody) ───────────────────────────────────────────────────
+// Answers: who currently has custody of this equipment?
+
+/** companies/{companyId}/assignments/{assignmentId} */
+export function assignmentsCollectionPath(companyId: string): string {
+  return `companies/${companyId}/assignments`;
+}
+
+export function assignmentDocPath(companyId: string, assignmentId: string): string {
+  return `${assignmentsCollectionPath(companyId)}/${assignmentId}`;
+}

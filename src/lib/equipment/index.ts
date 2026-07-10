@@ -1,5 +1,5 @@
 /**
- * WB eQuipment — canonical equipment model (Phase 1B).
+ * WB eQuipment — canonical equipment and assignment models.
  */
 
 export * from './types';
@@ -10,3 +10,6 @@ export * from './platformTypes';
 export * from './seedTypes';
 export * from './compatibility';
 export * from './registry';
+export * from './assignmentTypes';
+export * from './assignmentIds';
+export * from './assignmentCompatibility';
