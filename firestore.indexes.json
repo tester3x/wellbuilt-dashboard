@@ -158,6 +158,14 @@
       ]
     },
     {
+      "collectionGroup": "driver_documents",
+      "queryScope": "COLLECTION",
+      "fields": [
+        { "fieldPath": "companyId", "order": "ASCENDING" },
+        { "fieldPath": "updatedAt", "order": "DESCENDING" }
+      ]
+    },
+    {
       "collectionGroup": "equipment",
       "queryScope": "COLLECTION",
       "fields": [

@@ -1,10 +1,8 @@
 import * as httpsV2 from 'firebase-functions/v2/https';
 import * as admin from 'firebase-admin';
 import { requireDriver } from '../auth/requireDriver';
-import {
-  dashboardActorRef,
-  requireDashboardAssignmentManager,
-} from '../auth/requireDashboardAssignments';
+import { dashboardActorRef, requireDashboardAssignmentRead } from '../auth/requireDashboardEQuipment';
+import { requireDashboardAssignmentManager } from '../auth/requireDashboardAssignments';
 import { ActorRef, DriverActor, DriverProfile, DashboardProfile } from '../types/actor';
 import { buildMetadata } from '../types/metadata';
 import { Equipment, equipmentCollection } from '../types/equipment';
@@ -68,6 +66,13 @@ interface ServiceResult {
 const DRIVER_READ_ACTIONS = new Set<AssignmentAction>([
   'assignment.listActiveForDriver',
   'assignment.getMyEquipmentProfile',
+]);
+
+const DASHBOARD_READ_ACTIONS = new Set<AssignmentAction>([
+  'assignment.listForCompany',
+  'assignment.getActiveForEquipment',
+  'assignment.listHistoryForEquipment',
+  'assignment.listHistoryForDriver',
 ]);
 
 // ── Service pipeline ───────────────────────────────────────────────────────
@@ -153,7 +158,9 @@ async function authorize(ctx: ServiceContext): Promise<void> {
     return;
   }
 
-  ctx.dashboard = await requireDashboardAssignmentManager(ctx.authUid, ctx.companyId);
+  ctx.dashboard = DASHBOARD_READ_ACTIONS.has(ctx.action)
+    ? await requireDashboardAssignmentRead(ctx.authUid, ctx.companyId)
+    : await requireDashboardAssignmentManager(ctx.authUid, ctx.companyId);
   ctx.actorRef = dashboardActorRef(ctx.dashboard);
 }
 

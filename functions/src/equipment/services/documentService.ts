@@ -2,6 +2,10 @@ import * as httpsV2 from 'firebase-functions/v2/https';
 import * as admin from 'firebase-admin';
 import { requireDriver } from '../auth/requireDriver';
 import { dashboardActorRef, requireDashboardEquipmentManager } from '../auth/requireDashboard';
+import {
+  dashboardActorRef as eQuipmentDashboardActorRef,
+  requireDashboardDocumentRead,
+} from '../auth/requireDashboardEQuipment';
 import { driverDocumentCapturePath, driverDocumentImagePath, vehicleDocumentImagePath } from '../storage/paths';
 import { ActorRef, DriverActor, DriverProfile, DashboardProfile } from '../types/actor';
 import { buildMetadata, RecordMetadata } from '../types/metadata';
@@ -28,6 +32,8 @@ export type DocumentAction =
   | 'driver.delete'
   | 'driver.list'
   | 'driver.uploadImage'
+  | 'dashboard.listDocuments'
+  | 'dashboard.getDocument'
   | 'equipment.uploadDocument'
   | 'equipment.removeDocument';
 
@@ -128,6 +134,7 @@ function validate(req: DocumentRequest, options: DocumentRequestOptions): Servic
   const action = req.action as DocumentAction;
   const allowed: DocumentAction[] = [
     'driver.upsert', 'driver.delete', 'driver.list', 'driver.uploadImage',
+    'dashboard.listDocuments', 'dashboard.getDocument',
     'equipment.uploadDocument', 'equipment.removeDocument',
   ];
   if (!allowed.includes(action)) {
@@ -135,7 +142,18 @@ function validate(req: DocumentRequest, options: DocumentRequestOptions): Servic
   }
 
   const isDriverAction = action.startsWith('driver.');
+  const isDashboardDocAction = action.startsWith('dashboard.');
   const isEquipmentAction = action.startsWith('equipment.');
+
+  if (isDashboardDocAction) {
+    return {
+      mode: 'dashboard',
+      action,
+      actorRef: { type: 'dashboard', uid: options.authUid || '' },
+      payload: req.payload || {},
+      authUid: options.authUid,
+    };
+  }
 
   if (isDriverAction) {
     if (!req.actor || req.actor.type !== 'driver') {
@@ -175,6 +193,11 @@ async function authorize(ctx: ServiceContext): Promise<void> {
   }
 
   const companyId = String(ctx.payload.companyId || '');
+  if (ctx.action === 'dashboard.listDocuments' || ctx.action === 'dashboard.getDocument') {
+    ctx.dashboard = await requireDashboardDocumentRead(ctx.authUid, companyId);
+    ctx.actorRef = eQuipmentDashboardActorRef(ctx.dashboard);
+    return;
+  }
   ctx.dashboard = await requireDashboardEquipmentManager(ctx.authUid, companyId);
   ctx.actorRef = dashboardActorRef(ctx.dashboard);
 }
@@ -189,6 +212,10 @@ async function execute(ctx: ServiceContext): Promise<unknown> {
       return upsertDriverDocument(ctx);
     case 'driver.delete':
       return deleteDriverDocument(ctx);
+    case 'dashboard.listDocuments':
+      return listCompanyDriverDocuments(ctx);
+    case 'dashboard.getDocument':
+      return getCompanyDriverDocument(ctx);
     case 'equipment.uploadDocument':
       return uploadEquipmentDocument(ctx);
     case 'equipment.removeDocument':
@@ -215,6 +242,33 @@ async function listDriverDocuments(ctx: ServiceContext): Promise<{ documents: Dr
     .orderBy('updatedAt', 'desc')
     .get();
   return { documents: snap.docs.map(d => d.data() as DriverDocumentRecord) };
+}
+
+async function listCompanyDriverDocuments(ctx: ServiceContext): Promise<{ documents: DriverDocumentRecord[] }> {
+  const companyId = String(ctx.payload.companyId || '');
+  const limit = Math.min(Number(ctx.payload.limit) || 200, 300);
+  const snap = await firestore.collection(DRIVER_COLLECTION)
+    .where('companyId', '==', companyId)
+    .orderBy('updatedAt', 'desc')
+    .limit(limit)
+    .get();
+  return { documents: snap.docs.map((d) => d.data() as DriverDocumentRecord) };
+}
+
+async function getCompanyDriverDocument(ctx: ServiceContext): Promise<{ document: DriverDocumentRecord }> {
+  const docId = String(ctx.payload.documentId || ctx.payload.docId || '');
+  if (!docId) throw new httpsV2.HttpsError('invalid-argument', 'documentId is required');
+
+  const snap = await firestore.collection(DRIVER_COLLECTION).doc(docId).get();
+  if (!snap.exists) throw new httpsV2.HttpsError('not-found', 'Document not found');
+
+  const document = snap.data() as DriverDocumentRecord;
+  const companyId = String(ctx.payload.companyId || '');
+  if (document.companyId && document.companyId !== companyId) {
+    throw new httpsV2.HttpsError('permission-denied', 'Document does not belong to this company');
+  }
+
+  return { document };
 }
 
 async function uploadDriverImage(ctx: ServiceContext): Promise<{ cloudUri: string; storagePath: string }> {

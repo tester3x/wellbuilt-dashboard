@@ -1,7 +1,11 @@
 import * as httpsV2 from 'firebase-functions/v2/https';
 import * as admin from 'firebase-admin';
 import { requireDriver } from '../auth/requireDriver';
-import { ActorRef, DriverActor, DriverProfile } from '../types/actor';
+import {
+  dashboardActorRef,
+  requireDashboardDvirRead,
+} from '../auth/requireDashboardEQuipment';
+import { ActorRef, DriverActor, DriverProfile, DashboardProfile } from '../types/actor';
 import { buildMetadata } from '../types/metadata';
 import { Assignment, assignmentsCollection } from '../types/assignment';
 import {
@@ -17,7 +21,10 @@ import {
 
 const firestore = admin.firestore();
 
-export type DvirAction = 'dvir.submitPreTrip';
+export type DvirAction =
+  | 'dvir.submitPreTrip'
+  | 'dvir.listForCompany'
+  | 'dvir.getInspection';
 
 export interface DvirRequest {
   actor?: DriverActor;
@@ -29,18 +36,25 @@ export interface DvirRequestOptions {
   authUid?: string;
 }
 
+type ServiceMode = 'driver' | 'dashboard';
+
 interface ServiceContext {
+  mode: ServiceMode;
   action: DvirAction;
   companyId: string;
-  actor: DriverActor;
-  driver: DriverProfile;
+  actor?: DriverActor;
+  driver?: DriverProfile;
+  dashboard?: DashboardProfile;
   actorRef: ActorRef;
   payload: Record<string, unknown>;
+  authUid?: string;
 }
 
 interface ServiceResult {
   data: unknown;
 }
+
+const DASHBOARD_READ_ACTIONS = new Set<DvirAction>(['dvir.listForCompany', 'dvir.getInspection']);
 
 // ── Service pipeline ───────────────────────────────────────────────────────
 
@@ -53,23 +67,39 @@ export async function handleDvirRequest(
   return result.data;
 }
 
-async function validate(req: DvirRequest, _options: DvirRequestOptions): Promise<ServiceContext> {
+async function validate(req: DvirRequest, options: DvirRequestOptions): Promise<ServiceContext> {
   if (!req?.action || !req.action.startsWith('dvir.')) {
     throw new httpsV2.HttpsError('invalid-argument', 'Unsupported DVIR action');
   }
 
   const action = req.action as DvirAction;
-  if (action !== 'dvir.submitPreTrip') {
+  const allowed: DvirAction[] = [
+    'dvir.submitPreTrip',
+    'dvir.listForCompany',
+    'dvir.getInspection',
+  ];
+  if (!allowed.includes(action)) {
     throw new httpsV2.HttpsError('invalid-argument', `Unknown action: ${action}`);
-  }
-
-  if (!req.actor || req.actor.type !== 'driver') {
-    throw new httpsV2.HttpsError('invalid-argument', 'driver actor is required');
   }
 
   const companyId = String(req.payload?.companyId || '');
   if (!companyId) {
     throw new httpsV2.HttpsError('invalid-argument', 'companyId is required');
+  }
+
+  if (DASHBOARD_READ_ACTIONS.has(action)) {
+    return {
+      mode: 'dashboard',
+      action,
+      companyId,
+      actorRef: { type: 'dashboard', uid: options.authUid || '' },
+      payload: req.payload || {},
+      authUid: options.authUid,
+    };
+  }
+
+  if (!req.actor || req.actor.type !== 'driver') {
+    throw new httpsV2.HttpsError('invalid-argument', 'driver actor is required');
   }
 
   const driver = await requireDriver(req.actor);
@@ -85,6 +115,7 @@ async function validate(req: DvirRequest, _options: DvirRequestOptions): Promise
   }
 
   return {
+    mode: 'driver',
     action,
     companyId,
     actor: req.actor,
@@ -94,13 +125,66 @@ async function validate(req: DvirRequest, _options: DvirRequestOptions): Promise
   };
 }
 
+async function authorize(ctx: ServiceContext): Promise<void> {
+  if (ctx.mode === 'driver') return;
+
+  ctx.dashboard = await requireDashboardDvirRead(ctx.authUid, ctx.companyId);
+  ctx.actorRef = dashboardActorRef(ctx.dashboard);
+}
+
 async function execute(ctx: ServiceContext): Promise<ServiceResult> {
+  if (ctx.mode === 'dashboard') {
+    await authorize(ctx);
+  }
+
   switch (ctx.action) {
     case 'dvir.submitPreTrip':
       return submitPreTrip(ctx);
+    case 'dvir.listForCompany':
+      return listForCompany(ctx);
+    case 'dvir.getInspection':
+      return getInspection(ctx);
     default:
       throw new httpsV2.HttpsError('invalid-argument', `Unhandled action: ${ctx.action}`);
   }
+}
+
+async function listForCompany(ctx: ServiceContext): Promise<ServiceResult> {
+  const limit = Math.min(Number(ctx.payload.limit) || 100, 200);
+  const snap = await firestore
+    .collection(dvirInspectionsCollection(ctx.companyId))
+    .orderBy('submittedAt', 'desc')
+    .limit(limit)
+    .get();
+
+  const inspections = snap.docs.map((d) => d.data() as PreTripInspectionRecord);
+  const needsAttentionCount = inspections.filter((i) => i.overallResult === 'needs_attention').length;
+
+  return {
+    data: {
+      inspections,
+      total: inspections.length,
+      needsAttentionCount,
+    },
+  };
+}
+
+async function getInspection(ctx: ServiceContext): Promise<ServiceResult> {
+  const inspectionId = String(ctx.payload.inspectionId || '');
+  if (!inspectionId) {
+    throw new httpsV2.HttpsError('invalid-argument', 'inspectionId is required');
+  }
+
+  const snap = await firestore
+    .collection(dvirInspectionsCollection(ctx.companyId))
+    .doc(inspectionId)
+    .get();
+
+  if (!snap.exists) {
+    throw new httpsV2.HttpsError('not-found', 'Inspection not found');
+  }
+
+  return { data: { inspection: snap.data() as PreTripInspectionRecord } };
 }
 
 async function submitPreTrip(ctx: ServiceContext): Promise<ServiceResult> {
@@ -136,8 +220,8 @@ async function submitPreTrip(ctx: ServiceContext): Promise<ServiceResult> {
     equipmentId,
     assignmentId,
     assignmentSource,
-    driverHash: ctx.driver.driverHash,
-    driverDisplayName: optionalString(ctx.payload.driverDisplayName) || ctx.driver.displayName,
+    driverHash: ctx.driver!.driverHash,
+    driverDisplayName: optionalString(ctx.payload.driverDisplayName) || ctx.driver!.displayName,
     equipmentLabel: optionalString(ctx.payload.equipmentLabel),
     assignmentRole: optionalString(ctx.payload.assignmentRole) ?? undefined,
     inspectionType: 'pre_trip',
@@ -218,7 +302,7 @@ async function assertDriverCustody(
     const assignment = snap.data() as Assignment;
     if (
       !assignment.active
-      || assignment.driverHash !== ctx.driver.driverHash
+      || assignment.driverHash !== ctx.driver!.driverHash
       || assignment.equipmentId !== equipmentId
     ) {
       throw new httpsV2.HttpsError('permission-denied', 'No active assignment for this equipment');
@@ -229,7 +313,7 @@ async function assertDriverCustody(
   const activeSnap = await firestore
     .collection(assignmentsCollection(ctx.companyId))
     .where('equipmentId', '==', equipmentId)
-    .where('driverHash', '==', ctx.driver.driverHash)
+    .where('driverHash', '==', ctx.driver!.driverHash)
     .where('active', '==', true)
     .limit(1)
     .get();

@@ -63,6 +63,28 @@ export interface InspectionCategoryResult {
   severity?: string;
 }
 
+/** Persisted pre-trip inspection — companies/{companyId}/dvir_inspections/{inspectionId} */
+export interface PreTripInspectionRecord {
+  inspectionId: string;
+  companyId: string;
+  equipmentId: string;
+  assignmentId?: string | null;
+  assignmentSource?: 'canonical' | 'legacy';
+  driverHash: string;
+  driverDisplayName?: string;
+  equipmentLabel?: string;
+  assignmentRole?: string;
+  inspectionType: 'pre_trip' | 'post_trip' | 'periodic';
+  status: 'submitted' | 'draft' | 'reviewed';
+  overallResult: InspectionItemResult;
+  categories: InspectionCategoryResult[];
+  driverSignature?: string;
+  startedAt: string;
+  submittedAt?: string;
+  createdAt?: string;
+  updatedAt?: string;
+}
+
 export interface DvirInspectionContract {
   dvirId: string;
   companyId: string;

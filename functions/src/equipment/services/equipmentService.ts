@@ -1,6 +1,10 @@
 import * as httpsV2 from 'firebase-functions/v2/https';
 import * as admin from 'firebase-admin';
-import { dashboardActorRef, requireDashboardEquipmentManager } from '../auth/requireDashboard';
+import {
+  dashboardActorRef,
+  requireDashboardEquipmentRead,
+  requireDashboardEquipmentWrite,
+} from '../auth/requireDashboardEQuipment';
 import { legacyEquipmentKey } from '../compatibility';
 import { ActorRef, DashboardProfile } from '../types/actor';
 import { buildMetadata } from '../types/metadata';
@@ -98,8 +102,16 @@ function validate(req: EquipmentRequest): ServiceContext {
   };
 }
 
+const READ_ACTIONS = new Set<EquipmentAction>([
+  'registry.getEquipment',
+  'registry.listEquipment',
+  'registry.resolveByUnit',
+]);
+
 async function authorize(ctx: ServiceContext, options: EquipmentRequestOptions): Promise<void> {
-  ctx.dashboard = await requireDashboardEquipmentManager(options.authUid, ctx.companyId);
+  ctx.dashboard = READ_ACTIONS.has(ctx.action)
+    ? await requireDashboardEquipmentRead(options.authUid, ctx.companyId)
+    : await requireDashboardEquipmentWrite(options.authUid, ctx.companyId);
   ctx.actorRef = dashboardActorRef(ctx.dashboard);
 }
 
