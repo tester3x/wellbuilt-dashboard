@@ -303,6 +303,32 @@ service cloud.firestore {
       allow read, write: if true;
     }
 
+    // Required-photo compliance specs — photo_requirements/{customerId}
+    // (customerId = operator slug via customerIdForOperator; no companyId on the doc).
+    //
+    // Canonical history (b8d843f / clean-rebuild) used `allow read, write: if true`
+    // because WB-T has no Firebase Auth (driver-hash app auth only) and loads
+    // specs via client getDoc. That open-write surface is unsafe for deploy.
+    //
+    // Authorization model (tightest that preserves runtime without schema/claims):
+    //   READ  — open. WB-T drivers are unauthenticated to Firebase; they must
+    //           read the operator slug they are currently hauling for. Specs are
+    //           not secret credentials. Company-scoped read is impossible here:
+    //           membership lives in RTDB users/{uid}, not auth custom claims,
+    //           and the doc has no companyId field. (Same public-catalog pattern
+    //           as /operators, /wells, /companies read.)
+    //   WRITE — signed-in Firebase Auth only (Dashboard Settings client setDoc).
+    //           Unauthenticated clients cannot create/update/delete. Cross-company
+    //           write isolation is enforced in the Dashboard UI (viewSettings +
+    //           company scope / assignedOperators picker), not in rules — no
+    //           custom claims and no companyId on the resource to match against.
+    //   CFs   — validatePhotoCompliance + suggestPhotoCriteria use Admin SDK
+    //           and bypass these rules entirely.
+    match /photo_requirements/{customerId} {
+      allow read: if true;
+      allow create, update, delete: if request.auth != null;
+    }
+
     // Everything else — deny (Cloud Functions use Admin SDK which bypasses rules)
     match /{document=**} {
       allow read, write: if false;
