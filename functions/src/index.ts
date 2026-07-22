@@ -5,6 +5,7 @@ import * as admin from 'firebase-admin';
 import Anthropic from '@anthropic-ai/sdk';
 import { upsertCanonicalJob } from './canonical-jobs/upsertCanonicalJob';
 import { logCanonicalDiag } from './canonical-jobs/diag';
+import { evaluateIncomingPull, orphanEditVerdict, quarantineIncomingPacket } from './packetGuards';
 
 admin.initializeApp();
 const db = admin.database();
@@ -894,24 +895,33 @@ export const processIncomingPull = functionsV1.database
       prevResponse = prev;
     });
 
-    // FIX: Stale/duplicate detection — prevents watchdog re-triggers from
-    // overwriting edits. If the outgoing already has data for this pull
-    // (same or newer timestamp), skip processing.
-    if (prevResponse) {
-      const incomingTimeMs = new Date(data.dateTimeUTC).getTime();
-      const outgoingTimeMs = new Date(prevResponse.lastPullDateTimeUTC).getTime();
-
-      if (!isNaN(incomingTimeMs) && !isNaN(outgoingTimeMs) && incomingTimeMs <= outgoingTimeMs) {
-        // This pull is the same age or older than what's in the outgoing.
-        // Could be: watchdog re-trigger, duplicate upload, or a pull that was
-        // already processed and the outgoing was subsequently edited.
-        console.log(`[STALE] ${wellName}: incoming (${data.dateTimeUTC}) not newer than outgoing (${prevResponse.lastPullDateTimeUTC}), skipping`);
-        if (prevResponse.isEdit) {
-          console.log(`[STALE] ${wellName}: outgoing has isEdit=true — this re-trigger would have overwritten the edit!`);
-        }
-        await snapshot.ref.remove();
-        return null;
+    // ─── GS3 7/21/2026 guards: future-time + lossless quarantine ────────
+    // A pull entered as 11:07 PM instead of 11:07 AM became this well's
+    // outgoing watermark; five legitimate packets then compared "stale"
+    // against the poisoned value and were irrecoverably deleted here.
+    // Replaces the old [STALE] `snapshot.ref.remove()`: every rejection —
+    // future incoming time, future-poisoned watermark, or genuine staleness
+    // — now lands in packets/rejected via ONE atomic update, BEFORE any
+    // well state (isDown, outgoing, processed, performance, production,
+    // wellStatus, enrichment) is touched. A failed quarantine write leaves
+    // the incoming packet intact for retry. See packetGuards.ts.
+    const guardVerdict = evaluateIncomingPull({
+      incomingDateTimeUTC: data.dateTimeUTC,
+      watermarkDateTimeUTC: prevResponse ? prevResponse.lastPullDateTimeUTC : undefined,
+      nowMs: Date.now(),
+    });
+    if (guardVerdict.action === 'quarantine') {
+      console.log(`[QUARANTINE] ${wellName}: ${guardVerdict.reason} — ${guardVerdict.readableReason}`);
+      if (guardVerdict.reason === 'STALE_PULL_TIME' && prevResponse.isEdit) {
+        console.log(`[QUARANTINE] ${wellName}: outgoing has isEdit=true — processing would have overwritten the edit`);
       }
+      await quarantineIncomingPacket(db.ref(), {
+        packetId,
+        packet: data,
+        verdict: guardVerdict,
+        nowMs: Date.now(),
+      });
+      return null;
     }
 
     // ─── wellDown authoritative-write protection (5/8/2026) ─────────────
@@ -1478,8 +1488,14 @@ export const processEditRequest = functionsV1.database
     const wellName = data.wellName;
 
     if (!originalPacketId) {
+      // GS3 follow-up: never silently destroy an edit — quarantine it.
       console.error(`Edit failed: no originalPacketId or packetId on edit packet`);
-      await snapshot.ref.remove();
+      await quarantineIncomingPacket(db.ref(), {
+        packetId: context.params.packetId,
+        packet: data,
+        verdict: orphanEditVerdict(null),
+        nowMs: Date.now(),
+      });
       return null;
     }
 
@@ -1488,8 +1504,16 @@ export const processEditRequest = functionsV1.database
     // Read the original processed packet
     const origSnap = await db.ref(`packets/processed/${originalPacketId}`).once('value');
     if (!origSnap.exists()) {
+      // GS3 7/22/2026: five driver edits targeting stale-deleted originals
+      // were silently removed here. Quarantine instead — the edit's values
+      // are the driver's ground truth and may be the only surviving copy.
       console.error(`Edit failed: packet ${originalPacketId} not found in processed/`);
-      await snapshot.ref.remove();
+      await quarantineIncomingPacket(db.ref(), {
+        packetId: context.params.packetId,
+        packet: data,
+        verdict: orphanEditVerdict(originalPacketId),
+        nowMs: Date.now(),
+      });
       return null;
     }
     const origPacket = origSnap.val();

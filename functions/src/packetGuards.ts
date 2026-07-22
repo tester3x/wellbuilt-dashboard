@@ -1,0 +1,206 @@
+// packetGuards.ts — future-time validation + lossless quarantine for
+// incoming packets.
+//
+// GS3 incident (7/21–22/2026): a pull was accidentally entered as 11:07 PM
+// while it was still earlier that evening. The future timestamp became
+// outgoing.lastPullDateTimeUTC, and when five legitimate packets arrived
+// they compared "not newer" than the poisoned watermark and were deleted by
+// `snapshot.ref.remove()` — no processed row, no response, no rejection
+// record, no user-visible error. Recovery required manual backfill.
+//
+// Two rules fall out of that incident:
+//  1. Never trust a timestamp from the future — neither an incoming pull's
+//     nor the stored watermark's. Clock skew gets a 5-minute allowance.
+//  2. Never destroy a packet. Every rejection is quarantined to
+//     packets/rejected/<packetId> with the complete original payload and a
+//     machine-stable reason, in ONE atomic multi-location update that also
+//     removes packets/incoming/<packetId>. If that update fails, the
+//     incoming packet stays put so the rejection can retry.
+//
+// This module is pure/injected (no admin SDK import) so it unit-tests
+// without an emulator: index.ts supplies the clock and the root ref.
+
+export const FUTURE_TOLERANCE_MS = 5 * 60 * 1000;
+
+export type RejectionReason =
+  | 'FUTURE_PULL_TIME'
+  | 'FUTURE_WELL_WATERMARK'
+  | 'STALE_PULL_TIME'
+  | 'ORIGINAL_PACKET_NOT_FOUND';
+
+export interface GuardVerdict {
+  action: 'process' | 'quarantine';
+  reason?: RejectionReason;
+  readableReason?: string;
+  /** The watermark the packet was compared against, when one was involved. */
+  comparedWatermarkUTC?: string | null;
+}
+
+const PROCESS: GuardVerdict = { action: 'process' };
+
+/**
+ * Validation ladder for an incoming pull, in this exact order:
+ *   1. parse the incoming timestamp;
+ *   2. reject an incoming FUTURE time (> now + 5 min);
+ *   3. parse the existing watermark;
+ *   4. reject against a FUTURE-poisoned watermark (> now + 5 min) — a
+ *      corrupted watermark must never be used to call real packets stale;
+ *   5. normal stale comparison, only when BOTH timestamps are valid;
+ *   6. otherwise process.
+ *
+ * Malformed timestamps: there is deliberately NO new behavior here — the
+ * pre-existing code skipped the stale guard when either side failed to
+ * parse, and this module preserves that exactly (see the pinning tests).
+ * Adding a MALFORMED_* quarantine class is a reported follow-up, not part
+ * of this change.
+ */
+export function evaluateIncomingPull(args: {
+  incomingDateTimeUTC: unknown;
+  /** prevResponse?.lastPullDateTimeUTC — pass undefined when the well has no outgoing response. */
+  watermarkDateTimeUTC: unknown;
+  nowMs: number;
+}): GuardVerdict {
+  const { incomingDateTimeUTC, watermarkDateTimeUTC, nowMs } = args;
+
+  // 1–2: incoming timestamp.
+  const incomingMs =
+    typeof incomingDateTimeUTC === 'string' ? new Date(incomingDateTimeUTC).getTime() : NaN;
+  if (!isNaN(incomingMs) && incomingMs - nowMs > FUTURE_TOLERANCE_MS) {
+    return {
+      action: 'quarantine',
+      reason: 'FUTURE_PULL_TIME',
+      readableReason:
+        `Incoming pull time ${String(incomingDateTimeUTC)} is ` +
+        `${Math.round((incomingMs - nowMs) / 60000)} min ahead of server time ` +
+        `${new Date(nowMs).toISOString()} — a completed pull cannot be in the future ` +
+        `(likely an AM/PM or date entry mistake).`,
+      comparedWatermarkUTC: null,
+    };
+  }
+
+  // 3–4: existing watermark.
+  const watermarkMs =
+    typeof watermarkDateTimeUTC === 'string' ? new Date(watermarkDateTimeUTC).getTime() : NaN;
+  if (!isNaN(watermarkMs) && watermarkMs - nowMs > FUTURE_TOLERANCE_MS) {
+    return {
+      action: 'quarantine',
+      reason: 'FUTURE_WELL_WATERMARK',
+      readableReason:
+        `The well's outgoing watermark ${String(watermarkDateTimeUTC)} is in the future ` +
+        `relative to server time ${new Date(nowMs).toISOString()} — the watermark is ` +
+        `corrupted (GS3-style AM/PM poisoning), so this packet is held for review ` +
+        `instead of being judged against it.`,
+      comparedWatermarkUTC: String(watermarkDateTimeUTC),
+    };
+  }
+
+  // 5: stale comparison, only with two valid timestamps.
+  if (!isNaN(incomingMs) && !isNaN(watermarkMs) && incomingMs <= watermarkMs) {
+    return {
+      action: 'quarantine',
+      reason: 'STALE_PULL_TIME',
+      readableReason:
+        `Incoming pull time ${String(incomingDateTimeUTC)} is not newer than the ` +
+        `well's outgoing watermark ${String(watermarkDateTimeUTC)} — duplicate upload, ` +
+        `watchdog re-trigger, or an already-edited pull. Held in packets/rejected ` +
+        `instead of being deleted.`,
+      comparedWatermarkUTC: String(watermarkDateTimeUTC),
+    };
+  }
+
+  // 6: all guards passed (or a timestamp was unparseable — legacy behavior).
+  return PROCESS;
+}
+
+/** Verdict for an edit whose original packet cannot be found in processed/. */
+export function orphanEditVerdict(originalPacketId: unknown): GuardVerdict {
+  return {
+    action: 'quarantine',
+    reason: 'ORIGINAL_PACKET_NOT_FOUND',
+    readableReason: originalPacketId
+      ? `Edit targets original packet ${String(originalPacketId)}, which does not exist ` +
+        `in packets/processed — the original may itself have been rejected or never uploaded.`
+      : 'Edit packet carries no originalPacketId/packetId to identify the pull it edits.',
+    comparedWatermarkUTC: null,
+  };
+}
+
+/** The exact shape written to packets/rejected/<packetId>. */
+export interface RejectedPacketRecord {
+  packetId: string;
+  /** Complete, unmodified original payload. */
+  packet: unknown;
+  reason: RejectionReason;
+  readableReason: string;
+  rejectedAt: string;
+  incomingDateTimeUTC: string | null;
+  comparedWatermarkUTC: string | null;
+  serverNowUTC: string;
+  wellName: string | null;
+  requestType: string | null;
+}
+
+/**
+ * One atomic RTDB multi-location update: create the rejection record AND
+ * remove the incoming packet together. Applied via rootRef.update(), both
+ * writes commit or neither does — a failed quarantine can never lose the
+ * incoming packet. The update touches ONLY these two paths; rejected
+ * packets must never advance processed/outgoing/performance/production/
+ * wellStatus/enrichment state.
+ */
+export function buildQuarantineUpdate(args: {
+  packetId: string;
+  packet: unknown;
+  verdict: GuardVerdict;
+  nowMs: number;
+}): Record<string, unknown> {
+  const { packetId, packet, verdict, nowMs } = args;
+  const p = (packet ?? {}) as Record<string, unknown>;
+  const nowIso = new Date(nowMs).toISOString();
+  const record: RejectedPacketRecord = {
+    packetId,
+    packet,
+    reason: verdict.reason as RejectionReason,
+    readableReason: verdict.readableReason ?? '',
+    rejectedAt: nowIso,
+    incomingDateTimeUTC: typeof p.dateTimeUTC === 'string' ? p.dateTimeUTC : null,
+    comparedWatermarkUTC: verdict.comparedWatermarkUTC ?? null,
+    serverNowUTC: nowIso,
+    wellName: typeof p.wellName === 'string' ? p.wellName : null,
+    requestType: typeof p.requestType === 'string' ? p.requestType : null,
+  };
+  return {
+    [`packets/rejected/${packetId}`]: record,
+    [`packets/incoming/${packetId}`]: null,
+  };
+}
+
+/** Minimal root-ref surface, injectable for tests. */
+export interface RootRefLike {
+  update(values: Record<string, unknown>): Promise<unknown>;
+}
+
+/**
+ * Execute the quarantine. Returns true when the atomic update committed.
+ * On failure it logs and returns false WITHOUT any fallback deletion —
+ * the incoming packet remains intact for retry.
+ */
+export async function quarantineIncomingPacket(
+  rootRef: RootRefLike,
+  args: { packetId: string; packet: unknown; verdict: GuardVerdict; nowMs: number },
+): Promise<boolean> {
+  const update = buildQuarantineUpdate(args);
+  try {
+    await rootRef.update(update);
+    console.log(
+      `[QUARANTINE] ${args.verdict.reason}: ${args.packetId} → packets/rejected/${args.packetId}`,
+    );
+    return true;
+  } catch (err) {
+    console.error(
+      `[QUARANTINE] write FAILED for ${args.packetId} — packets/incoming left intact for retry`,
+      err,
+    );
+    return false;
+  }
+}
