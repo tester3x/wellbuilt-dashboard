@@ -55,6 +55,54 @@ describe('processIncomingPull wiring', () => {
   });
 });
 
+describe('watchdogStrandedPackets wiring', () => {
+  const wdStart = src.indexOf('export const watchdogStrandedPackets');
+  const wdEnd = src.indexOf('export const healthCheck');
+  const watchdog = src.slice(wdStart, wdEnd);
+
+  test('watchdog section exists', () => {
+    expect(wdStart).toBeGreaterThan(-1);
+    expect(wdEnd).toBeGreaterThan(wdStart);
+  });
+
+  test('duplicate-grouped and stranded edit/delete packets are quarantined, not removed', () => {
+    const quarantineCalls = watchdog.split('quarantineIncomingPacket(').length - 1;
+    expect(quarantineCalls).toBeGreaterThanOrEqual(2); // duplicates + edit/delete skip
+    expect(watchdog).toContain('strandedPacketVerdict(');
+    expect(watchdog).not.toContain('Deleting'); // old "Deleting N duplicate packets" log gone
+  });
+
+  test('retrigger re-key is one atomic update (no delete-then-set crash window)', () => {
+    expect(watchdog).toContain('[`packets/incoming/${key}`]: null');
+    expect(watchdog).toContain('[`packets/incoming/${newKey}`]: data');
+    // Both paths live in the SAME update call.
+    const updIdx = watchdog.indexOf('await db.ref().update({');
+    expect(updIdx).toBeGreaterThan(-1);
+    const updBlock = watchdog.slice(updIdx, updIdx + 220);
+    expect(updBlock).toContain('${key}`]: null');
+    expect(updBlock).toContain('${newKey}`]: data');
+  });
+
+  test('only already-processed cleanup may still remove incoming directly (content preserved in processed/)', () => {
+    // Every remaining direct remove must sit inside an "already processed"
+    // branch, i.e. after an exists() check against packets/processed.
+    const removeCall = '.remove()';
+    let at = watchdog.indexOf(removeCall);
+    let count = 0;
+    while (at !== -1) {
+      count++;
+      const before = watchdog.slice(Math.max(0, at - 700), at);
+      expect(before).toMatch(/processedSnap\.exists\(\)|origProcessedSnap\.exists\(\)/);
+      at = watchdog.indexOf(removeCall, at + 1);
+    }
+    expect(count).toBe(2); // already-processed cleanup + unreachable legacy edit branch
+  });
+
+  test('watchdog never touches packets/rejected — quarantined evidence cannot be deleted by it', () => {
+    expect(watchdog).not.toContain('packets/rejected');
+  });
+});
+
 describe('processEditRequest wiring', () => {
   test('both orphan paths quarantine instead of deleting', () => {
     const missingIdIdx = editHandler.indexOf('no originalPacketId or packetId');

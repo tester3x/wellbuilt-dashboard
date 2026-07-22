@@ -7,6 +7,7 @@ import {
   evaluateIncomingPull,
   orphanEditVerdict,
   quarantineIncomingPacket,
+  strandedPacketVerdict,
 } from '../packetGuards';
 
 // ── Incident constants ────────────────────────────────────────────────────
@@ -19,6 +20,7 @@ describe('evaluateIncomingPull — validation ladder', () => {
   test('1. past valid pull processes normally', () => {
     const v = evaluateIncomingPull({
       incomingDateTimeUTC: '2026-07-21T17:06:00.000Z',
+      hasOutgoingResponse: true,
       watermarkDateTimeUTC: VALID_WATERMARK,
       nowMs: ms('2026-07-21T17:30:00.000Z'),
     });
@@ -29,6 +31,7 @@ describe('evaluateIncomingPull — validation ladder', () => {
     const nowMs = ms('2026-07-21T17:30:00.000Z');
     const v = evaluateIncomingPull({
       incomingDateTimeUTC: new Date(nowMs + FUTURE_TOLERANCE_MS).toISOString(),
+      hasOutgoingResponse: true,
       watermarkDateTimeUTC: VALID_WATERMARK,
       nowMs,
     });
@@ -39,6 +42,7 @@ describe('evaluateIncomingPull — validation ladder', () => {
     const nowMs = ms('2026-07-21T17:30:00.000Z');
     const v = evaluateIncomingPull({
       incomingDateTimeUTC: new Date(nowMs + FUTURE_TOLERANCE_MS + 1).toISOString(),
+      hasOutgoingResponse: true,
       watermarkDateTimeUTC: VALID_WATERMARK,
       nowMs,
     });
@@ -51,6 +55,7 @@ describe('evaluateIncomingPull — validation ladder', () => {
     // (2026-07-22T04:07:00Z) but server time is 9:41 PM CDT.
     const v = evaluateIncomingPull({
       incomingDateTimeUTC: POISONED_WATERMARK,
+      hasOutgoingResponse: true,
       watermarkDateTimeUTC: VALID_WATERMARK,
       nowMs: ms('2026-07-22T02:41:35.000Z'),
     });
@@ -69,6 +74,7 @@ describe('evaluateIncomingPull — validation ladder', () => {
     // judged it stale and deleted it; the watermark must not be trusted.
     const v = evaluateIncomingPull({
       incomingDateTimeUTC: '2026-07-22T03:00:00.000Z',
+      hasOutgoingResponse: true,
       watermarkDateTimeUTC: POISONED_WATERMARK,
       nowMs: ms('2026-07-22T03:30:00.000Z'),
     });
@@ -80,6 +86,7 @@ describe('evaluateIncomingPull — validation ladder', () => {
   test('6. a genuinely stale pull is quarantined as STALE_PULL_TIME', () => {
     const v = evaluateIncomingPull({
       incomingDateTimeUTC: VALID_WATERMARK, // duplicate of the processed pull
+      hasOutgoingResponse: true,
       watermarkDateTimeUTC: VALID_WATERMARK,
       nowMs: ms('2026-07-21T17:30:00.000Z'),
     });
@@ -91,6 +98,7 @@ describe('evaluateIncomingPull — validation ladder', () => {
     const nowMs = ms('2026-07-22T15:00:00.000Z');
     const v = evaluateIncomingPull({
       incomingDateTimeUTC: new Date(nowMs - 2 * 60 * 1000).toISOString(),
+      hasOutgoingResponse: true,
       watermarkDateTimeUTC: new Date(nowMs - 3 * 60 * 60 * 1000).toISOString(),
       nowMs,
     });
@@ -100,23 +108,56 @@ describe('evaluateIncomingPull — validation ladder', () => {
   test('a well with no outgoing response processes normally', () => {
     const v = evaluateIncomingPull({
       incomingDateTimeUTC: '2026-07-21T17:06:00.000Z',
+      hasOutgoingResponse: false,
       watermarkDateTimeUTC: undefined,
       nowMs: ms('2026-07-21T17:30:00.000Z'),
     });
     expect(v.action).toBe('process');
   });
 
-  test('legacy pin: malformed timestamps skip the guards (documented follow-up: MALFORMED_* quarantine)', () => {
+  test('a malformed incoming timestamp is quarantined as MALFORMED_PULL_TIME, raw value preserved', () => {
     const nowMs = ms('2026-07-21T17:30:00.000Z');
-    // Pre-existing behavior: an unparseable incoming or watermark timestamp
-    // skipped the stale guard and processed. This change deliberately does
-    // NOT alter that path; these pins make the gap visible.
-    expect(
-      evaluateIncomingPull({ incomingDateTimeUTC: 'garbage', watermarkDateTimeUTC: VALID_WATERMARK, nowMs }).action,
-    ).toBe('process');
-    expect(
-      evaluateIncomingPull({ incomingDateTimeUTC: '2026-07-21T17:06:00.000Z', watermarkDateTimeUTC: 'garbage', nowMs }).action,
-    ).toBe('process');
+    for (const bad of ['garbage', undefined, null, 12345]) {
+      const v = evaluateIncomingPull({
+        incomingDateTimeUTC: bad,
+        hasOutgoingResponse: true,
+        watermarkDateTimeUTC: VALID_WATERMARK,
+        nowMs,
+      });
+      expect(v.action).toBe('quarantine');
+      expect(v.reason).toBe('MALFORMED_PULL_TIME');
+      expect(v.readableReason).toContain(String(JSON.stringify(bad)));
+    }
+    // The complete packet — raw timestamp included — survives in the record.
+    const v = evaluateIncomingPull({ incomingDateTimeUTC: 'garbage', hasOutgoingResponse: true, watermarkDateTimeUTC: VALID_WATERMARK, nowMs });
+    const packet = { packetId: 'm1', dateTimeUTC: 'garbage', wellName: 'Gunslinger 3', bblsTaken: 170 };
+    const update = buildQuarantineUpdate({ packetId: 'm1', packet, verdict: v, nowMs });
+    const record = update['packets/rejected/m1'] as any;
+    expect(record.packet).toEqual(packet);
+    expect((record.packet as any).dateTimeUTC).toBe('garbage');
+  });
+
+  test('a malformed stored watermark quarantines the incoming packet as MALFORMED_WELL_WATERMARK', () => {
+    const nowMs = ms('2026-07-21T17:30:00.000Z');
+    for (const bad of ['garbage', undefined, null]) {
+      const v = evaluateIncomingPull({
+        incomingDateTimeUTC: '2026-07-21T17:06:00.000Z',
+        hasOutgoingResponse: true, // outgoing EXISTS but its watermark is unreadable
+        watermarkDateTimeUTC: bad,
+        nowMs,
+      });
+      expect(v.action).toBe('quarantine');
+      expect(v.reason).toBe('MALFORMED_WELL_WATERMARK');
+      expect(v.readableReason).toContain(String(JSON.stringify(bad)));
+    }
+    // The malformed watermark VALUE is carried on the verdict when present.
+    const v = evaluateIncomingPull({
+      incomingDateTimeUTC: '2026-07-21T17:06:00.000Z',
+      hasOutgoingResponse: true,
+      watermarkDateTimeUTC: 'not-a-date',
+      nowMs,
+    });
+    expect(v.comparedWatermarkUTC).toBe('not-a-date');
   });
 });
 
@@ -136,6 +177,7 @@ describe('orphan edits', () => {
 describe('quarantine record + atomicity', () => {
   const verdict = evaluateIncomingPull({
     incomingDateTimeUTC: VALID_WATERMARK,
+    hasOutgoingResponse: true,
     watermarkDateTimeUTC: VALID_WATERMARK,
     nowMs: ms('2026-07-21T17:30:00.000Z'),
   });
@@ -231,6 +273,7 @@ describe('GS3 five-replay regression — nothing disappears against the poisoned
     for (const r of replays) {
       const verdict = evaluateIncomingPull({
         incomingDateTimeUTC: r.pullUTC,
+        hasOutgoingResponse: true,
         watermarkDateTimeUTC: POISONED_WATERMARK,
         nowMs: ms(r.clock),
       });
@@ -251,6 +294,79 @@ describe('GS3 five-replay regression — nothing disappears against the poisoned
       expect(rec.packet.dateTimeUTC).toBe(r.pullUTC);
       expect(rec.packet.bblsTaken).toBe(170);
       expect(rec.comparedWatermarkUTC).toBe(POISONED_WATERMARK);
+    }
+  });
+});
+
+describe('watchdog stranded-packet quarantine', () => {
+  const strandedEdit = {
+    packetId: 'edit_20260721_122813_Gunslinger3',
+    requestType: 'edit',
+    wellName: 'Gunslinger 3',
+    dateTimeUTC: '2026-07-21T16:07:00.000Z',
+    bblsTaken: 165,
+  };
+
+  test('a stranded incoming packet is atomically quarantined with age and watchdog context', async () => {
+    const verdict = strandedPacketVerdict({
+      ageMs: 11 * 60 * 1000,
+      context: 'stranded edit packet - handled by its own function and never watchdog-retriggered; its handler did not consume it',
+    });
+    expect(verdict.action).toBe('quarantine');
+    expect(verdict.reason).toBe('STRANDED_INCOMING_PACKET');
+    expect(verdict.readableReason).toContain('11 min old');
+    expect(verdict.readableReason).toContain('Watchdog:');
+    expect(verdict.readableReason).toContain('stranded edit packet');
+
+    const calls: Record<string, unknown>[] = [];
+    const rootRef: RootRefLike = { update: async (v) => { calls.push(v); } };
+    const ok = await quarantineIncomingPacket(rootRef, {
+      packetId: strandedEdit.packetId, packet: strandedEdit, verdict, nowMs: 1753142400000,
+    });
+    expect(ok).toBe(true);
+    expect(calls).toHaveLength(1); // one atomic rejected+incoming update
+    expect(Object.keys(calls[0]).sort()).toEqual([
+      `packets/incoming/${strandedEdit.packetId}`,
+      `packets/rejected/${strandedEdit.packetId}`,
+    ]);
+    const rec = calls[0][`packets/rejected/${strandedEdit.packetId}`] as any;
+    expect(rec.packet).toEqual(strandedEdit); // complete payload preserved
+    expect(rec.reason).toBe('STRANDED_INCOMING_PACKET');
+  });
+
+  test('unknown packet age is stated, not invented', () => {
+    const verdict = strandedPacketVerdict({ ageMs: null, context: 'duplicate-grouped incoming packet' });
+    expect(verdict.readableReason).toContain('unknown age');
+  });
+
+  test('a failed watchdog quarantine leaves the incoming packet intact', async () => {
+    const update = jest.fn().mockRejectedValue(new Error('rtdb write denied'));
+    const consoleError = jest.spyOn(console, 'error').mockImplementation(() => undefined);
+    const ok = await quarantineIncomingPacket({ update }, {
+      packetId: strandedEdit.packetId,
+      packet: strandedEdit,
+      verdict: strandedPacketVerdict({ ageMs: 600000, context: 'stranded edit packet' }),
+      nowMs: 1753142400000,
+    });
+    consoleError.mockRestore();
+    expect(ok).toBe(false);
+    expect(update).toHaveBeenCalledTimes(1); // the atomic attempt and nothing else
+  });
+
+  test('quarantine never touches packets/rejected except to CREATE the record (no deletions of evidence)', () => {
+    const update = buildQuarantineUpdate({
+      packetId: strandedEdit.packetId,
+      packet: strandedEdit,
+      verdict: strandedPacketVerdict({ ageMs: 600000, context: 'stranded edit packet' }),
+      nowMs: 1753142400000,
+    });
+    // The ONLY null (deletion) in the update is the incoming path; the
+    // rejected path is a creation. Nothing else is addressed at all.
+    const entries = Object.entries(update);
+    expect(entries).toHaveLength(2);
+    for (const [path, value] of entries) {
+      if (path.startsWith('packets/rejected/')) expect(value).not.toBeNull();
+      else expect([path, value]).toEqual([`packets/incoming/${strandedEdit.packetId}`, null]);
     }
   });
 });

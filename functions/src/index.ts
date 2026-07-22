@@ -5,7 +5,7 @@ import * as admin from 'firebase-admin';
 import Anthropic from '@anthropic-ai/sdk';
 import { upsertCanonicalJob } from './canonical-jobs/upsertCanonicalJob';
 import { logCanonicalDiag } from './canonical-jobs/diag';
-import { evaluateIncomingPull, orphanEditVerdict, quarantineIncomingPacket } from './packetGuards';
+import { evaluateIncomingPull, orphanEditVerdict, quarantineIncomingPacket, strandedPacketVerdict } from './packetGuards';
 
 admin.initializeApp();
 const db = admin.database();
@@ -44,6 +44,7 @@ export const watchdogStrandedPackets = functionsV2.onSchedule('every 5 minutes',
 
   // Group by unique timestamp+well to detect duplicates
   const uniquePackets: Record<string, { key: string; data: any; arrivedAt: number }> = {};
+  const arrivedAtByKey: Record<string, number> = {};
 
   for (const key of keys) {
     const data = packets[key];
@@ -55,6 +56,7 @@ export const watchdogStrandedPackets = functionsV2.onSchedule('every 5 minutes',
     if (match) {
       arrivedAt = new Date(`${match[1]}-${match[2]}-${match[3]}T${match[4]}:${match[5]}:${match[6]}Z`).getTime();
     }
+    arrivedAtByKey[key] = arrivedAt;
 
     // Keep only first occurrence of each unique packet
     if (!uniquePackets[groupKey] || arrivedAt < uniquePackets[groupKey].arrivedAt) {
@@ -62,16 +64,27 @@ export const watchdogStrandedPackets = functionsV2.onSchedule('every 5 minutes',
     }
   }
 
-  // Delete all duplicates and re-trigger unique ones that are old enough
+  // Quarantine duplicates and re-trigger unique ones that are old enough
   const allKeys = new Set(keys);
   const keepKeys = new Set(Object.values(uniquePackets).map(p => p.key));
   const duplicateKeys = [...allKeys].filter(k => !keepKeys.has(k));
 
-  // Delete duplicates
+  // GS3 follow-up: "duplicates" are grouped only by dateTimeUTC+well and can
+  // be DISTINCT legitimate submissions (the real 8:32 PM twins differed in
+  // BBLs but shared the group key). Never delete them — quarantine
+  // losslessly; a failed quarantine leaves the packet in incoming.
   if (duplicateKeys.length > 0) {
-    console.log(`[Watchdog] Deleting ${duplicateKeys.length} duplicate packets`);
+    console.log(`[Watchdog] Quarantining ${duplicateKeys.length} duplicate-grouped packets`);
     for (const key of duplicateKeys) {
-      await db.ref(`packets/incoming/${key}`).remove();
+      await quarantineIncomingPacket(db.ref(), {
+        packetId: key,
+        packet: packets[key],
+        verdict: strandedPacketVerdict({
+          ageMs: now - arrivedAtByKey[key],
+          context: `duplicate-grouped incoming packet (same dateTimeUTC+well as retained key); may be a distinct legitimate submission`,
+        }),
+        nowMs: now,
+      });
     }
   }
 
@@ -96,10 +109,20 @@ export const watchdogStrandedPackets = functionsV2.onSchedule('every 5 minutes',
     const { key, data } = packet;
 
     // Skip edit and delete packets — they are handled by their own Cloud Functions
-    // and should never be retriggered by the watchdog (causes ghost duplicate entries)
+    // and should never be retriggered by the watchdog (causes ghost duplicate entries).
+    // GS3 7/22/2026: this exact remove() destroyed a stranded driver edit —
+    // quarantine instead so the evidence survives for review.
     if (data.requestType === 'edit' || data.requestType === 'delete') {
-      console.log(`[Watchdog] ${data.wellName}: skipping ${data.requestType} packet (${key}), removing`);
-      await db.ref(`packets/incoming/${key}`).remove();
+      console.log(`[Watchdog] ${data.wellName}: skipping ${data.requestType} packet (${key}), quarantining`);
+      await quarantineIncomingPacket(db.ref(), {
+        packetId: key,
+        packet: data,
+        verdict: strandedPacketVerdict({
+          ageMs: now - packet.arrivedAt,
+          context: `stranded ${data.requestType} packet — handled by its own function and never watchdog-retriggered; its handler did not consume it`,
+        }),
+        nowMs: now,
+      });
       alreadyProcessedCount++;
       continue;
     }
@@ -131,9 +154,6 @@ export const watchdogStrandedPackets = functionsV2.onSchedule('every 5 minutes',
       }
     }
 
-    // Delete old entry
-    await db.ref(`packets/incoming/${key}`).remove();
-
     // Generate new key with current timestamp
     // Use YYYYMMDD_HHMMSS format (with underscore between date and time)
     // to match normal packet key format. Without the underscore, these keys
@@ -146,14 +166,20 @@ export const watchdogStrandedPackets = functionsV2.onSchedule('every 5 minutes',
     const rand = Math.random().toString(36).substr(2, 6);
     const newKey = `${datePart}_${timePart}_${cleanName}_${rand}`;
 
-    // Write with new key to trigger onCreate
+    // Re-key to trigger onCreate
     data.packetId = newKey;
     data.requestType = data.requestType || 'pull';
     data._retriggeredBy = 'watchdog';
     data._retriggeredAt = new Date().toISOString();
     data._originalKey = key; // Track original key for debugging
 
-    await db.ref(`packets/incoming/${newKey}`).set(data);
+    // GS3 follow-up: remove-old + write-new as ONE atomic multi-location
+    // update — the old delete-then-set left a crash window where the packet
+    // vanished entirely. Both writes commit or neither does.
+    await db.ref().update({
+      [`packets/incoming/${key}`]: null,
+      [`packets/incoming/${newKey}`]: data,
+    });
     console.log(`[Watchdog] Retriggered: ${data.wellName} (${key} -> ${newKey})`);
     retriggeredCount++;
 
@@ -907,6 +933,7 @@ export const processIncomingPull = functionsV1.database
     // the incoming packet intact for retry. See packetGuards.ts.
     const guardVerdict = evaluateIncomingPull({
       incomingDateTimeUTC: data.dateTimeUTC,
+      hasOutgoingResponse: prevResponse !== null,
       watermarkDateTimeUTC: prevResponse ? prevResponse.lastPullDateTimeUTC : undefined,
       nowMs: Date.now(),
     });

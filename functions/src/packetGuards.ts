@@ -26,7 +26,10 @@ export type RejectionReason =
   | 'FUTURE_PULL_TIME'
   | 'FUTURE_WELL_WATERMARK'
   | 'STALE_PULL_TIME'
-  | 'ORIGINAL_PACKET_NOT_FOUND';
+  | 'ORIGINAL_PACKET_NOT_FOUND'
+  | 'MALFORMED_PULL_TIME'
+  | 'MALFORMED_WELL_WATERMARK'
+  | 'STRANDED_INCOMING_PACKET';
 
 export interface GuardVerdict {
   action: 'process' | 'quarantine';
@@ -48,24 +51,40 @@ const PROCESS: GuardVerdict = { action: 'process' };
  *   5. normal stale comparison, only when BOTH timestamps are valid;
  *   6. otherwise process.
  *
- * Malformed timestamps: there is deliberately NO new behavior here — the
- * pre-existing code skipped the stale guard when either side failed to
- * parse, and this module preserves that exactly (see the pinning tests).
- * Adding a MALFORMED_* quarantine class is a reported follow-up, not part
- * of this change.
+ * Malformed timestamps are quarantined, never silently coerced or run
+ * through comparisons: an unparseable incoming time is MALFORMED_PULL_TIME
+ * and an unparseable stored watermark (when an outgoing response exists) is
+ * MALFORMED_WELL_WATERMARK — corrupted state must be reviewed, not trusted.
  */
 export function evaluateIncomingPull(args: {
   incomingDateTimeUTC: unknown;
-  /** prevResponse?.lastPullDateTimeUTC — pass undefined when the well has no outgoing response. */
+  /** True when the well HAS an outgoing response — distinguishes "no
+   *  watermark yet" (fine) from "watermark exists but is unreadable"
+   *  (quarantine). */
+  hasOutgoingResponse: boolean;
+  /** prevResponse?.lastPullDateTimeUTC — only meaningful when hasOutgoingResponse. */
   watermarkDateTimeUTC: unknown;
   nowMs: number;
 }): GuardVerdict {
-  const { incomingDateTimeUTC, watermarkDateTimeUTC, nowMs } = args;
+  const { incomingDateTimeUTC, hasOutgoingResponse, watermarkDateTimeUTC, nowMs } = args;
 
-  // 1–2: incoming timestamp.
+  // 1: incoming timestamp must parse.
   const incomingMs =
     typeof incomingDateTimeUTC === 'string' ? new Date(incomingDateTimeUTC).getTime() : NaN;
-  if (!isNaN(incomingMs) && incomingMs - nowMs > FUTURE_TOLERANCE_MS) {
+  if (isNaN(incomingMs)) {
+    return {
+      action: 'quarantine',
+      reason: 'MALFORMED_PULL_TIME',
+      readableReason:
+        `Incoming pull timestamp ${JSON.stringify(incomingDateTimeUTC)} is unreadable — ` +
+        `the packet cannot be safely processed or compared, so it is held for review ` +
+        `with its raw value intact.`,
+      comparedWatermarkUTC: null,
+    };
+  }
+
+  // 2: incoming future time.
+  if (incomingMs - nowMs > FUTURE_TOLERANCE_MS) {
     return {
       action: 'quarantine',
       reason: 'FUTURE_PULL_TIME',
@@ -78,9 +97,25 @@ export function evaluateIncomingPull(args: {
     };
   }
 
-  // 3–4: existing watermark.
+  // 3: the stored watermark must parse — when one is supposed to exist.
   const watermarkMs =
     typeof watermarkDateTimeUTC === 'string' ? new Date(watermarkDateTimeUTC).getTime() : NaN;
+  if (hasOutgoingResponse && isNaN(watermarkMs)) {
+    return {
+      action: 'quarantine',
+      reason: 'MALFORMED_WELL_WATERMARK',
+      readableReason:
+        `The well's outgoing watermark ${JSON.stringify(watermarkDateTimeUTC)} is unreadable — ` +
+        `stale comparison is impossible against corrupted state, so this packet is held ` +
+        `for review instead of being processed or judged against it.`,
+      comparedWatermarkUTC:
+        watermarkDateTimeUTC === undefined || watermarkDateTimeUTC === null
+          ? null
+          : String(watermarkDateTimeUTC),
+    };
+  }
+
+  // 4: future-poisoned watermark.
   if (!isNaN(watermarkMs) && watermarkMs - nowMs > FUTURE_TOLERANCE_MS) {
     return {
       action: 'quarantine',
@@ -108,8 +143,31 @@ export function evaluateIncomingPull(args: {
     };
   }
 
-  // 6: all guards passed (or a timestamp was unparseable — legacy behavior).
+  // 6: all guards passed.
   return PROCESS;
+}
+
+/**
+ * Verdict for a watchdog-detected packet that must leave packets/incoming
+ * without having been processed: stranded (no function consumed it),
+ * duplicate-grouped, or an edit/delete type the watchdog must not
+ * re-trigger. GS3 7/22/2026: the watchdog's `remove()` here destroyed a
+ * driver edit; everything now goes through the same lossless quarantine.
+ */
+export function strandedPacketVerdict(args: {
+  /** Packet age when the watchdog examined it; null when unknown. */
+  ageMs: number | null;
+  /** Which watchdog rule fired (duplicate group, stranded edit/delete, …). */
+  context: string;
+}): GuardVerdict {
+  const ageText =
+    args.ageMs === null ? 'unknown age' : `${Math.round(args.ageMs / 60000)} min old`;
+  return {
+    action: 'quarantine',
+    reason: 'STRANDED_INCOMING_PACKET',
+    readableReason: `Watchdog: ${args.context} (${ageText}). Held in packets/rejected for review.`,
+    comparedWatermarkUTC: null,
+  };
 }
 
 /** Verdict for an edit whose original packet cannot be found in processed/. */
