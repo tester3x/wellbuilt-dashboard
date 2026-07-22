@@ -29,7 +29,8 @@ export type RejectionReason =
   | 'ORIGINAL_PACKET_NOT_FOUND'
   | 'MALFORMED_PULL_TIME'
   | 'MALFORMED_WELL_WATERMARK'
-  | 'STRANDED_INCOMING_PACKET';
+  | 'STRANDED_INCOMING_PACKET'
+  | 'PACKET_ID_COLLISION';
 
 export interface GuardVerdict {
   action: 'process' | 'quarantine';
@@ -168,6 +169,109 @@ export function strandedPacketVerdict(args: {
     readableReason: `Watchdog: ${args.context} (${ageText}). Held in packets/rejected for review.`,
     comparedWatermarkUTC: null,
   };
+}
+
+// ── Exact-ID idempotency (same-ID retry support) ─────────────────────────
+// WB-M retries/recovers with STABLE packet ids. A replay of an id that is
+// already in packets/processed is NOT stale data — it is an idempotent
+// retry of a successful operation (e.g. the client lost the response).
+// Equivalence is decided on the MATERIAL fields only; retry bookkeeping
+// (_retriggeredBy, predictedLevelInches, timestamps of the attempt, …)
+// never makes two copies of the same pull "different".
+
+/** Top level in whole inches, from either representation. */
+function topInchesOf(p: Record<string, unknown>): number | null {
+  const ti = Number(p.tankTopInches);
+  if (Number.isFinite(ti)) return Math.round(ti);
+  const feet = Number(p.tankLevelFeet);
+  if (Number.isFinite(feet)) return Math.round(feet * 12);
+  return null;
+}
+
+const norm = (v: unknown): unknown => (v === undefined || v === null ? null : v);
+
+export interface EquivalenceVerdict {
+  equivalent: boolean;
+  /** Human-readable field-level comparison context for collisions. */
+  differences: string[];
+}
+
+/**
+ * Material-field equivalence between an incoming packet and the processed
+ * record under the same id: well, driver, dateTimeUTC, top level, BBLs,
+ * and request type. Anything else is bookkeeping and ignored.
+ */
+export function comparePullEquivalence(
+  incoming: Record<string, unknown>,
+  processed: Record<string, unknown>,
+): EquivalenceVerdict {
+  const differences: string[] = [];
+  const check = (label: string, a: unknown, b: unknown) => {
+    if (a !== b) differences.push(`${label}: incoming=${JSON.stringify(a)} processed=${JSON.stringify(b)}`);
+  };
+  check('wellName', norm(incoming.wellName), norm(processed.wellName));
+  check('driverId', norm(incoming.driverId), norm(processed.driverId));
+  check('dateTimeUTC', norm(incoming.dateTimeUTC), norm(processed.dateTimeUTC));
+  check('topLevelInches', topInchesOf(incoming), topInchesOf(processed));
+  check('bblsTaken', Number(incoming.bblsTaken), Number(processed.bblsTaken));
+  check('requestType', (incoming.requestType as string) || 'pull', (processed.requestType as string) || 'pull');
+  return { equivalent: differences.length === 0, differences };
+}
+
+/** Verdict for a same-ID payload that is MATERIALLY different from the
+ *  processed record — a genuine identity collision. The incoming payload
+ *  is preserved in the quarantine record; processed data is never
+ *  overwritten. */
+export function packetIdCollisionVerdict(differences: string[]): GuardVerdict {
+  return {
+    action: 'quarantine',
+    reason: 'PACKET_ID_COLLISION',
+    readableReason:
+      `A packet with this id already exists in packets/processed but the incoming payload ` +
+      `materially conflicts with it — held for review, processed data untouched. ` +
+      `Differences: ${differences.join('; ')}`,
+    comparedWatermarkUTC: null,
+  };
+}
+
+/**
+ * Can the server PROVE this exact edit was already applied? True only when
+ * the processed original carries an edit marker (editedAt) AND its values
+ * already equal every value this edit requests. Returns null when the
+ * schema cannot prove it either way (caller proceeds normally).
+ */
+export function editAlreadyApplied(
+  edit: Record<string, unknown>,
+  processedOriginal: Record<string, unknown>,
+): boolean | null {
+  if (!processedOriginal.editedAt && !processedOriginal.wasEdited) return false;
+  const editTop = topInchesOf(edit);
+  const origTop = topInchesOf(processedOriginal);
+  const editBbls = Number(edit.bblsTaken);
+  const origBbls = Number(processedOriginal.bblsTaken);
+  if (editTop === null || origTop === null || !Number.isFinite(editBbls) || !Number.isFinite(origBbls)) {
+    return null; // cannot prove — schema lacks comparable values
+  }
+  if (editTop !== origTop || editBbls !== origBbls) return false;
+  if (typeof edit.wellDown === 'boolean' && processedOriginal.wellDown !== undefined && edit.wellDown !== Boolean(processedOriginal.wellDown)) {
+    return false;
+  }
+  const editUtc = typeof edit.dateTimeUTC === 'string' && edit.dateTimeUTC ? edit.dateTimeUTC : null;
+  if (editUtc && norm(processedOriginal.dateTimeUTC) !== editUtc) return false;
+  return true;
+}
+
+/** Remove ONLY the duplicate incoming copy — one atomic single-path
+ *  update, no fallback: a failed removal leaves incoming intact (the
+ *  watchdog re-triggers and the idempotency check catches it again). */
+export async function removeIncomingPacket(rootRef: RootRefLike, packetId: string): Promise<boolean> {
+  try {
+    await rootRef.update({ [`packets/incoming/${packetId}`]: null });
+    return true;
+  } catch (err) {
+    console.error(`[IDEMPOTENT_REPLAY] incoming cleanup FAILED for ${packetId} — left intact for retry`, err);
+    return false;
+  }
 }
 
 /** Verdict for an edit whose original packet cannot be found in processed/. */

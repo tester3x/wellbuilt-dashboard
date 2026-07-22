@@ -5,7 +5,16 @@ import * as admin from 'firebase-admin';
 import Anthropic from '@anthropic-ai/sdk';
 import { upsertCanonicalJob } from './canonical-jobs/upsertCanonicalJob';
 import { logCanonicalDiag } from './canonical-jobs/diag';
-import { evaluateIncomingPull, orphanEditVerdict, quarantineIncomingPacket, strandedPacketVerdict } from './packetGuards';
+import {
+  comparePullEquivalence,
+  editAlreadyApplied,
+  evaluateIncomingPull,
+  orphanEditVerdict,
+  packetIdCollisionVerdict,
+  quarantineIncomingPacket,
+  removeIncomingPacket,
+  strandedPacketVerdict,
+} from './packetGuards';
 
 admin.initializeApp();
 const db = admin.database();
@@ -921,6 +930,36 @@ export const processIncomingPull = functionsV1.database
       prevResponse = prev;
     });
 
+    // ─── Exact-ID idempotency — BEFORE every future/stale guard ─────────
+    // WB-M retries with STABLE ids: a replay of an id already in
+    // packets/processed is an idempotent retry of a successful operation,
+    // not stale data. Never re-process/enrich, never quarantine it.
+    const alreadyProcessedSnap = await db.ref(`packets/processed/${packetId}`).once('value');
+    if (alreadyProcessedSnap.exists()) {
+      const alreadyProcessed = alreadyProcessedSnap.val();
+      const equivalence = comparePullEquivalence(data as any, alreadyProcessed);
+      if (equivalence.equivalent) {
+        console.log(`[IDEMPOTENT_REPLAY_ALREADY_PROCESSED] ${wellName}: ${packetId} — duplicate incoming removed; processed record stands`);
+        // The positive outcome WB-M reconciles against IS the existing
+        // packets/processed/<id> record (its reconciler reads that path
+        // directly). Deliberately NOT rewriting packets/outgoing here:
+        // outgoing carries the well's LATEST pull, and recreating a
+        // response for an older replayed id would regress
+        // lastPullDateTimeUTC and re-arm the stale guard against newer
+        // pulls — the exact GS3 failure shape.
+        await removeIncomingPacket(db.ref(), packetId);
+        return null;
+      }
+      console.log(`[QUARANTINE] ${wellName}: PACKET_ID_COLLISION — ${equivalence.differences.join('; ')}`);
+      await quarantineIncomingPacket(db.ref(), {
+        packetId,
+        packet: data,
+        verdict: packetIdCollisionVerdict(equivalence.differences),
+        nowMs: Date.now(),
+      });
+      return null;
+    }
+
     // ─── GS3 7/21/2026 guards: future-time + lossless quarantine ────────
     // A pull entered as 11:07 PM instead of 11:07 AM became this well's
     // outgoing watermark; five legitimate packets then compared "stale"
@@ -1544,6 +1583,19 @@ export const processEditRequest = functionsV1.database
       return null;
     }
     const origPacket = origSnap.val();
+
+    // Exact duplicate edit replay: PROVABLY already applied only when the
+    // original carries an edit marker AND its values already equal this
+    // edit's requested values — then re-applying would only re-run
+    // enrichment for nothing. Provable → remove the duplicate incoming
+    // copy atomically and stop. Unprovable (null) → proceed normally;
+    // the schema keeps no per-edit operation log to check against.
+    const editDup = editAlreadyApplied(data, origPacket);
+    if (editDup === true) {
+      console.log(`[IDEMPOTENT_REPLAY_ALREADY_PROCESSED] ${wellName}: edit ${context.params.packetId} already applied to ${originalPacketId} — duplicate incoming removed`);
+      await removeIncomingPacket(db.ref(), context.params.packetId);
+      return null;
+    }
 
     // Get well config
     const cleanName = wellName.replace(/\s/g, '');
