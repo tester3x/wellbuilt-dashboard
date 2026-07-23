@@ -7,22 +7,22 @@
  *   wellbuilt-dashboard: src/lib/routeColor.ts
  * Golden-fixture tests in each repo pin the exact same outputs.
  *
- * Rules:
- *  - Identity is the STABLE route id when one exists; otherwise the
- *    normalized route name (trim, collapse internal whitespace,
- *    lowercase). Never array position, sort order, or device state — the
- *    same route keeps its color across restarts, reordering, unrelated
- *    route changes, and devices.
- *  - An EXPLICIT valid configured color (#rgb/#rrggbb) always wins; there
- *    is no such storage today (the orphaned per-well `well_config.color`
- *    strings are stale caches of a retired algorithm and are ignored),
- *    but the override is honored if one is ever configured.
- *  - Missing/blank names and 'Unrouted' resolve to neutral gray.
- *  - The 24-color palette is hand-tuned for readable contrast on the
- *    dark UI. HASH_SALT is part of the algorithm: 'wb2' was chosen so
- *    every current production route lands on a distinct palette entry.
- *    Changing the salt or palette recolors every route — never do it
- *    in one repo without the other.
+ * THE RULE (strict): a route's color is GENERATED from its normalized
+ * route NAME — trim, collapse internal whitespace, lowercase — and from
+ * nothing else. Colors are never admin-assigned, stored, index-assigned,
+ * or overridden by any other identity. The same normalized name always
+ * produces the same color on every device, driver assignment, sort
+ * order, filter, and dashboard. Renaming a route may change its color —
+ * that is expected. Blank names and 'Unrouted' are neutral gray.
+ *
+ * The orphaned per-well `well_config.color` strings in Firebase are
+ * stale caches of a retired algorithm; they are ignored and untouched.
+ *
+ * The 24-color palette is hand-tuned for readable contrast on the dark
+ * UI. HASH_SALT is part of the algorithm: 'wb2' was chosen so every
+ * current production route lands on a distinct palette entry. Changing
+ * the salt or palette recolors every route — never do it in one repo
+ * without the other.
  */
 
 export const UNROUTED_COLOR = '#888888';
@@ -75,38 +75,13 @@ function fnv1a(str: string): number {
   return h;
 }
 
-/** #rgb or #rrggbb (case-insensitive). Anything else is invalid. */
-export function isValidHexColor(v: unknown): v is string {
-  return typeof v === 'string' && /^#(?:[0-9a-f]{3}|[0-9a-f]{6})$/i.test(v.trim());
-}
-
-export interface RouteColorInput {
-  name?: unknown;
-  /** Stable route id — takes precedence over the name when present, so a
-   *  rename keeps its color once ids exist. No ids exist today. */
-  routeId?: unknown;
-  /** Explicitly configured color — always wins when valid. */
-  explicitColor?: unknown;
-}
-
 /**
- * The one canonical resolver. Accepts a bare name for convenience.
- * Deterministic, set-independent, identical across WB-M and Dashboard.
+ * The one canonical resolver: normalized route NAME in, color out.
+ * No overrides of any kind. Deterministic, set-independent, identical
+ * across WB-M and Dashboard.
  */
-export function canonicalRouteColor(route: RouteColorInput | string | null | undefined): string {
-  const input: RouteColorInput =
-    typeof route === 'string' || route === null || route === undefined ? { name: route } : route;
-
-  if (isValidHexColor(input.explicitColor)) {
-    return String(input.explicitColor).trim().toLowerCase();
-  }
-
-  const id = typeof input.routeId === 'string' ? input.routeId.trim() : '';
-  if (id) {
-    return ROUTE_PALETTE[fnv1a(`${HASH_SALT}id:${id}`) % ROUTE_PALETTE.length];
-  }
-
-  const key = normalizeRouteKey(input.name);
+export function canonicalRouteColor(routeName: unknown): string {
+  const key = normalizeRouteKey(routeName);
   if (!key || key === 'unrouted') return UNROUTED_COLOR;
   return ROUTE_PALETTE[fnv1a(HASH_SALT + key) % ROUTE_PALETTE.length];
 }

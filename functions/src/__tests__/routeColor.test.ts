@@ -11,7 +11,6 @@ import {
   UNROUTED_COLOR,
   canonicalRouteColor,
   getRouteColor,
-  isValidHexColor,
   normalizeRouteKey,
 } from '../../../src/lib/routeColor';
 
@@ -52,26 +51,31 @@ describe('golden fixtures — exact canonical colors', () => {
     expect(getRouteColor('Unrouted')).toBe(UNROUTED_COLOR);
     expect(canonicalRouteColor(null)).toBe(UNROUTED_COLOR);
     expect(canonicalRouteColor(undefined)).toBe(UNROUTED_COLOR);
-    expect(canonicalRouteColor({ name: 42 })).toBe(getRouteColor('42'));
+    expect(canonicalRouteColor(42)).toBe(getRouteColor('42')); // coerced, deterministic
   });
 
-  test('a VALID explicit configured color always wins', () => {
-    expect(canonicalRouteColor({ name: 'Gabriels', explicitColor: '#A1B2C3' })).toBe('#a1b2c3');
-    expect(canonicalRouteColor({ name: 'Gabriels', explicitColor: '#fff' })).toBe('#fff');
+  test("Mike's rule: the NAME generates the color — nothing can override it", () => {
+    // The resolver accepts no explicit color, no route id, no options of
+    // any kind — the parameters do not exist.
+    const src = fs.readFileSync(path.join(__dirname, '../../../src/lib/routeColor.ts'), 'utf8');
+    expect(src).not.toContain('explicitColor');
+    expect(src).not.toContain('routeId');
+    expect(src).not.toContain('isValidHexColor');
+    // A smuggled override object cannot change the name-generated color:
+    // it is coerced to a junk name and hashed like any other name — the
+    // supplied hex is NEVER returned.
+    const smuggled = canonicalRouteColor({ name: 'Gabriels', explicitColor: '#fff' } as unknown as string);
+    expect(smuggled).not.toBe('#fff');
+    expect(smuggled).not.toBe('#ffffff');
+    // Legacy well_config.color-shaped strings are just names, never colors.
+    expect(getRouteColor('rgb(150, 210, 152)')).not.toBe('rgb(150, 210, 152)');
+    expect(ROUTE_PALETTE).toContain(getRouteColor('rgb(150, 210, 152)'));
   });
 
-  test('an INVALID explicit color falls back to the canonical hash', () => {
-    for (const bad of ['red', '#12345', 'rgb(1,2,3)', '', null, 7]) {
-      expect(canonicalRouteColor({ name: 'Gabriels', explicitColor: bad })).toBe(GOLDEN['Gabriels']);
-    }
-    expect(isValidHexColor('#d06060')).toBe(true);
-    expect(isValidHexColor('rgb(150, 210, 152)')).toBe(false); // legacy well_config.color shape — never trusted
-  });
-
-  test('a stable route ID takes precedence over the name (rename-safe once IDs exist)', () => {
-    expect(canonicalRouteColor({ name: 'Gabriels', routeId: 'route-42' })).toBe('#a040d0');
-    expect(canonicalRouteColor({ name: 'Renamed Gabriels', routeId: 'route-42' })).toBe('#a040d0');
-    expect(canonicalRouteColor({ name: 'Gabriels', routeId: 'route-42', explicitColor: '#abc' })).toBe('#abc');
+  test('a rename may change the color — expected and deterministic', () => {
+    expect(getRouteColor('Gabriels')).toBe(GOLDEN['Gabriels']);
+    expect(getRouteColor('Gabriels North')).not.toBe(GOLDEN['Gabriels']);
+    expect(getRouteColor('Gabriels North')).toBe(getRouteColor('  gabriels   NORTH '));
   });
 });
 
