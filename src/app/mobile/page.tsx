@@ -1,6 +1,6 @@
 'use client';
 
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useState } from 'react';
 import { useRouter } from 'next/navigation';
 import { useAuth } from '@/contexts/AuthContext';
 import { isWbPlatformAdmin } from '@/lib/auth';
@@ -10,7 +10,7 @@ import Link from 'next/link';
 import { AppHeader } from '@/components/AppHeader';
 import { AddPullModal, type ApprovedDriver } from '@/components/AddPullModal';
 import { fetchTickets, type Ticket } from '@/lib/tickets';
-import { assignRouteColors, getRouteColor } from '@/lib/routeColor';
+import { getRouteColor } from '@/lib/routeColor';
 import { ref, get } from 'firebase/database';
 import { getFirebaseDatabase } from '@/lib/firebase';
 import { loadDisposals, type NdicWell } from '@/lib/firestoreWells';
@@ -259,8 +259,11 @@ export default function MobilePage() {
   const wellSearchTerm = wellSearch.trim().toLowerCase();
   const filteredRoutes = routes;
 
-  // Compute unique colors for all routes (collision-free)
-  const routeColorMap = useMemo(() => assignRouteColors(routes), [routes]);
+  // Canonical route colors — resolved from stable route identity, fully
+  // independent of this (correctly filtered/scoped) route list. A driver
+  // assigned one route, another with eight, and customer admin here all
+  // get the exact same color per route. (The old set-based probing
+  // shifted colors whenever unrelated routes came or went.)
 
   // Group wells by route with sorting + pullBbls override
   const getWellsForRoute = (route: string, paginate = true): WellResponse[] => {
@@ -474,7 +477,7 @@ export default function MobilePage() {
                   pullBbls={routePullBbls[route] || 140}
                   defaultPullBbls={wells.find(w => w.route === route)?.pullBbls || 140}
                   onPullBblsChange={(val) => setRoutePullBbls(prev => ({ ...prev, [route]: val }))}
-                  routeColor={routeColorMap.get(route) || '#888888'}
+                  routeColor={getRouteColor(route)}
                 />
                 {route === 'Unrouted' && !unroutedShowAll && totalUnroutedWells > UNROUTED_PAGE_SIZE && expandedRoutes.has(route) && (
                   <button
@@ -502,7 +505,7 @@ export default function MobilePage() {
                   pullBbls={routePullBbls[route] || 140}
                   defaultPullBbls={wells.find(w => w.route === route)?.pullBbls || 140}
                   onPullBblsChange={(val) => setRoutePullBbls(prev => ({ ...prev, [route]: val }))}
-                  routeColor={routeColorMap.get(route) || '#888888'}
+                  routeColor={getRouteColor(route)}
                 />
                 {route === 'Unrouted' && !unroutedShowAll && totalUnroutedWells > UNROUTED_PAGE_SIZE && expandedRoutes.has(route) && (
                   <button
