@@ -1,6 +1,7 @@
 import { getFirestoreDb } from './firebase';
 import { collection, getDocs, query, where, orderBy, Timestamp, doc, setDoc, updateDoc, deleteDoc } from 'firebase/firestore';
 import { type CompanyConfig, type PayConfig, type FrostSeason, type FrostZone, JOB_TYPE_ALIASES } from './companySettings';
+import { isPayrollBillingEligible, invoiceServiceDate, type ServiceDateSource } from './payrollBillingContract';
 
 // ─── Types ───────────────────────────────────────────────────────────────────
 
@@ -129,6 +130,9 @@ export async function buildWellCountyMap(operators: string[]): Promise<Map<strin
 export interface DriverTimesheetRow {
   id: string;
   date: string;
+  /** Where the date came from — 'created_at_fallback' marks legacy/undated
+      docs whose civil day was recovered from createdAt (diagnosable). */
+  dateSource?: ServiceDateSource;
   invoiceNumber: string;
   operator: string;
   wellName: string;
@@ -297,21 +301,19 @@ export async function fetchPayrollInvoices(
   snapshot.docs.forEach(docSnap => {
     const d = docSnap.data();
 
-    // Skip open/in-progress invoices — only count closed+
-    // 5/20 (B2) — Also skip 'cancelled' and 'void' so terminalized
-    // cancel-orphans (FlowController.cancelJob writes status='cancelled')
-    // don't surface as blank/moneyless payroll rows.
-    const status = d.status || 'open';
-    if (status === 'open' || status === 'cancelled' || status === 'void') return;
+    // Canonical inclusion decision — SHARED with Billing
+    // (payrollBillingContract): open/cancelled/void never qualify; a scoped
+    // tenant sees exactly its own companyId (belt-and-suspenders behind the
+    // where clause). Missing dates or operators never exclude a completed job.
+    if (!isPayrollBillingEligible(d, { companyId })) return;
 
     const rawDriverName = d.driver || 'Unknown';
     // Group by legal name so all logins for the same person merge into one row
     const driverName = legalNameMap?.[rawDriverName] || rawDriverName;
     const invoiceCompanyId = d.companyId || '';
-
-    // Strict tenant exclusion: when scoped, drop any doc whose companyId is
-    // missing or doesn't match (belt-and-suspenders behind the where clause).
-    if (companyId && invoiceCompanyId !== companyId) return;
+    // Canonical service date — invoice date first; marked business-timezone
+    // createdAt fallback for legacy/undated (offline-replay-created) docs.
+    const svcDate = invoiceServiceDate(d);
     const operator = d.operator || '';
     const jobType = d.commodityType || d.jobType || '';
     const wellName = d.wellName || '';
@@ -333,8 +335,8 @@ export async function fetchPayrollInvoices(
     // BBLs: try totalBBL first, then fall back to ticket-level fields (s_t mode may not write totalBBL)
     const bbls = d.totalBBL || parseFloat(d.bbls || '0') || parseFloat(d.qty || '0') || 0;
     if (rateEntry) {
-      const invoiceDate = d.date || '';
-      rate = getEffectiveRate(rateEntry, invoiceDate, county, company?.payConfig?.frostZones, company?.payConfig?.frostSeason, bbls);
+      // Rate-effective date parity with Billing: the shared canonical ymd.
+      rate = getEffectiveRate(rateEntry, svcDate.ymd, county, company?.payConfig?.frostZones, company?.payConfig?.frostSeason, bbls);
       const hours = d.totalHours || 0;
       amountBilled = rateEntry.method === 'per_bbl' ? bbls * rate : hours * rate;
       amountBilled = Math.round(amountBilled * 100) / 100;
@@ -359,7 +361,8 @@ export async function fetchPayrollInvoices(
 
     const row: DriverTimesheetRow = {
       id: docSnap.id,
-      date: d.date || '',
+      date: svcDate.display,
+      dateSource: svcDate.source,
       invoiceNumber: d.invoiceNumber || (d.tickets?.length ? d.tickets[0] : ''),
       operator,
       wellName: d.wellName || '',

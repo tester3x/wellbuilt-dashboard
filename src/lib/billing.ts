@@ -2,6 +2,13 @@ import { getFirestoreDb } from './firebase';
 import { collection, getDocs, query, where, orderBy, Timestamp, doc, setDoc, updateDoc, getDoc, deleteDoc } from 'firebase/firestore';
 import { type CompanyConfig, type OperatorBillingConfig } from './companySettings';
 import { lookupRate, getEffectiveRate, formatCurrency, type PayPeriod, type CompanyRateSheets } from './payroll';
+import {
+  isPayrollBillingEligible,
+  invoiceServiceDate,
+  normalizeToYMD,
+  MISSING_OPERATOR_LABEL,
+  type ServiceDateSource,
+} from './payrollBillingContract';
 
 // Re-export for convenience
 export { formatCurrency, type PayPeriod };
@@ -13,6 +20,9 @@ export interface BillingLineItem {
   invoiceId: string;
   invoiceNumber: string;
   date: string;
+  /** 'created_at_fallback' marks legacy/undated docs whose civil day was
+      recovered from createdAt in the business timezone (diagnosable). */
+  dateSource?: ServiceDateSource;
   wellName: string;
   hauledTo: string;
   driver: string;
@@ -216,18 +226,8 @@ export function getFuelSurchargeLabel(config: OperatorBillingConfig | undefined)
 }
 
 // ─── Historical Diesel Price Lookup ──────────────────────────────────────────
-
-/** Normalize date string to YYYY-MM-DD for consistent comparison.
- * Invoice dates are stored as MM/DD/YYYY, diesel prices as YYYY-MM-DD. */
-function normalizeToYMD(dateStr: string): string {
-  if (!dateStr) return '';
-  // Already YYYY-MM-DD?
-  if (/^\d{4}-\d{2}-\d{2}/.test(dateStr)) return dateStr.slice(0, 10);
-  // MM/DD/YYYY → YYYY-MM-DD
-  const match = dateStr.match(/^(\d{1,2})\/(\d{1,2})\/(\d{4})$/);
-  if (match) return `${match[3]}-${match[1].padStart(2, '0')}-${match[2].padStart(2, '0')}`;
-  return dateStr;
-}
+// normalizeToYMD now comes from payrollBillingContract (one shared
+// normalizer — rate-effective dates cannot drift between Payroll and Billing).
 
 /** Sorted array of {date, price} for a company, loaded once per billing query */
 interface DieselPriceTimeline {
@@ -306,18 +306,19 @@ export async function fetchBillingData(
 
   snapshot.docs.forEach(docSnap => {
     const d = docSnap.data();
-    // 5/20 (B2) — Also skip 'cancelled' and 'void' so terminalized
-    // cancel-orphans don't surface as $0/0-BBL billing rows.
-    const status = d.status || 'open';
-    if (status === 'open' || status === 'cancelled' || status === 'void') return;
+    // Canonical inclusion decision — SHARED with Payroll
+    // (payrollBillingContract): PayrollEligible(J) == BillingEligible(J).
+    // open/cancelled/void never qualify; scoped tenants see exactly their own
+    // companyId. Missing dates or operators never exclude a completed job.
+    if (!isPayrollBillingEligible(d, { companyId })) return;
 
-    const operator = d.operator || '';
-    if (!operator) return;
+    // A completed job with no operator is an ACTIONABLE DATA PROBLEM, not
+    // invisible revenue: group it under the sentinel so Billing can never
+    // silently lose a job Payroll pays for. Rates won't resolve for the
+    // sentinel — the row surfaces at $0 for a human to repair the operator.
+    const operator = d.operator || MISSING_OPERATOR_LABEL;
 
     const invoiceCompanyId = d.companyId || '';
-    // Strict tenant scope: when scoped, exclude docs missing or mismatched on
-    // companyId (the old `&& invoiceCompanyId` let missing-companyId docs leak).
-    if (companyId && invoiceCompanyId !== companyId) return;
 
     const jobType = d.commodityType || d.jobType || '';
     const bbls = d.totalBBL || 0;
@@ -330,8 +331,12 @@ export async function fetchBillingData(
     const rateSheets = company?.rateSheets || {};
     const billingConfig = company?.billingConfig?.[operator];
     // Per-invoice diesel price: uses the price in effect on the invoice date,
-    // so Monday loads get last week's FSC and Tuesday-Sunday get this week's
-    const invoiceDate = normalizeToYMD(d.date || d.createdAt?.toDate?.()?.toISOString?.()?.split('T')?.[0] || '');
+    // so Monday loads get last week's FSC and Tuesday-Sunday get this week's.
+    // Canonical service date shared with Payroll — invoice date first, marked
+    // BUSINESS-timezone createdAt fallback (the old UTC-day fallback billed
+    // evening closes on the next calendar day).
+    const svcDate = invoiceServiceDate(d);
+    const invoiceDate = svcDate.ymd;
     const timeline = invoiceCompanyId ? dieselTimelines.get(invoiceCompanyId) : undefined;
     const currentDiesel = (timeline && invoiceDate ? getDieselPriceForDate(timeline, invoiceDate) : undefined) ?? company?.currentDieselPrice;
 
@@ -370,7 +375,8 @@ export async function fetchBillingData(
     const item: BillingLineItem = {
       invoiceId: docSnap.id,
       invoiceNumber: d.invoiceNumber || (d.tickets?.length ? d.tickets[0] : ''),
-      date: d.date || '',
+      date: svcDate.display,
+      dateSource: svcDate.source,
       wellName: d.wellName || '',
       hauledTo: d.hauledTo || '',
       driver: d.driver || '',
