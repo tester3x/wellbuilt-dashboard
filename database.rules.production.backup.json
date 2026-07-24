@@ -1,0 +1,11 @@
+{
+  "rules": {
+    ".read": true,
+    ".write": true,
+    "packets": {
+      "processed": {
+        ".indexOn": ["driverId", "driverName", "wellName"]
+      }
+    }
+  }
+}

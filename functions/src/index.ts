@@ -4271,3 +4271,10 @@ export {
 } from './handoff-recovery';
 
 export { eQuipmentDocuments, eQuipmentEquipment, eQuipmentAssignments, eQuipmentDVIR } from './equipment';
+
+export {
+  checkDriverRegistrationStatus,
+  enableRouteRecording,
+  listDashboardUsers,
+  fieldDriverAdmin,
+} from './rtdbSecurity/callables';

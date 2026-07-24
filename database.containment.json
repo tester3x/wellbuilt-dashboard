@@ -1,0 +1,145 @@
+{
+  "rules": {
+    ".read": false,
+    ".write": false,
+
+    "users": {
+      ".read": "auth != null && root.child('users').child(auth.uid).child('role').val().matches(/^(admin|it|manager)$/)",
+      "$uid": {
+        ".read": "auth != null && (auth.uid == $uid || root.child('users').child(auth.uid).child('role').val().matches(/^(admin|it|manager)$/))",
+        ".write": "auth != null && (auth.uid == $uid || root.child('users').child(auth.uid).child('role').val().matches(/^(admin|it)$/))"
+      }
+    },
+
+    "drivers": {
+      "approved": {
+        ".read": true,
+        "$hash": {
+          ".write": true
+        }
+      },
+      "pending": {
+        ".read": "auth != null && root.child('users').child(auth.uid).child('role').val().matches(/^(admin|it|manager)$/)",
+        ".indexOn": ["passcodeHash"],
+        "$key": {
+          ".write": "!data.exists() || (auth != null && root.child('users').child(auth.uid).child('role').val().matches(/^(admin|it|manager)$/))",
+          ".validate": "!data.exists() ? (newData.hasChildren(['displayName', 'passcodeHash', 'requestedAt']) && newData.child('displayName').isString() && newData.child('displayName').val().length > 0 && newData.child('displayName').val().length <= 80 && newData.child('passcodeHash').isString() && newData.child('passcodeHash').val().matches(/^[a-f0-9]{64}$/) && newData.child('requestedAt').isString() && newData.child('requestedAt').val().length <= 40 && !newData.hasChild('isAdmin') && !newData.hasChild('isViewer') && !newData.hasChild('role') && !newData.hasChild('dashboardUid') && !newData.hasChild('active') && !newData.hasChild('approvedAt')) : (!newData.hasChild('status') || newData.child('status').val().matches(/^(approved|rejected)$/))"
+        }
+      }
+    },
+
+    "packets": {
+      "incoming": {
+        ".read": false,
+        "$packetId": {
+          ".write": "!data.exists()",
+          ".validate": "newData.hasChildren(['requestType', 'wellName']) && newData.child('requestType').isString() && newData.child('requestType').val().matches(/^(pull|edit|delete)$/) && newData.child('wellName').isString() && newData.child('wellName').val().length > 0 && newData.child('wellName').val().length <= 120"
+        }
+      },
+      "outgoing": {
+        ".read": true,
+        ".write": false,
+        ".indexOn": ["wellName"]
+      },
+      "processed": {
+        ".read": true,
+        ".write": false,
+        ".indexOn": ["driverId", "driverName", "wellName"]
+      },
+      "incoming_version": {
+        ".read": true,
+        ".write": "newData.isNumber() || (newData.isString() && newData.val().matches(/^\\d+$/))"
+      }
+    },
+
+    "well_config": {
+      ".read": true,
+      "$well": {
+        ".write": "auth != null && root.child('users').child(auth.uid).child('role').val().matches(/^(admin|it|manager)$/)"
+      }
+    },
+
+    "performance": {
+      ".read": true,
+      ".write": false
+    },
+
+    "production": {
+      ".read": false,
+      ".write": false
+    },
+
+    "devices": {
+      "company": {
+        "$deviceId": {
+          ".read": true,
+          ".write": "(!data.exists() && newData.hasChildren(['registeredAt', 'nickname'])) || (data.exists() && newData.hasChildren(['lastDriver', 'lastLoginAt']))",
+          "loginHistory": {
+            "$entryId": {
+              ".write": "!data.exists()",
+              ".validate": "newData.hasChildren(['driver', 'at']) && newData.child('driver').isString() && newData.child('driver').val().length <= 80 && newData.child('at').isString()"
+            }
+          }
+        }
+      }
+    },
+
+    "status": {
+      "excel_heartbeat": {
+        ".read": true,
+        ".write": "newData.hasChildren(['timestamp']) && newData.child('timestamp').isString()"
+      }
+    },
+
+    "logs": {
+      "debug": {
+        "$driver": {
+          "$date": {
+            ".read": false,
+            "$pushId": {
+              ".write": "!data.exists()",
+              ".validate": "newData.hasChildren(['flushedAt', 'count', 'entries']) && newData.child('count').isNumber() && newData.child('count').val() <= 250"
+            }
+          }
+        }
+      },
+      "system": {
+        ".read": false,
+        "$pushId": {
+          ".write": "!data.exists()",
+          ".validate": "newData.hasChildren(['timestamp', 'level', 'event']) && newData.child('level').isString() && newData.child('level').val().matches(/^(info|warn|error)$/) && newData.child('event').isString() && newData.child('event').val().length <= 120"
+        }
+      }
+    },
+
+    "notifications": {
+      "standalone_registrations": {
+        ".read": false,
+        "$pushId": {
+          ".write": "!data.exists()",
+          ".validate": "newData.hasChildren(['displayName', 'hash', 'source', 'registeredAt']) && newData.child('displayName').isString() && newData.child('hash').isString() && newData.child('hash').val().matches(/^[a-f0-9]{64}$/)"
+        }
+      }
+    },
+
+    "truth_overrides": {
+      ".read": false,
+      ".write": false
+    },
+
+    "truth_reference": {
+      ".read": false,
+      ".write": false
+    },
+
+    "system_health": {
+      ".read": false,
+      ".write": false
+    },
+
+    "wells": {
+      ".read": false,
+      ".write": false
+    }
+  }
+}

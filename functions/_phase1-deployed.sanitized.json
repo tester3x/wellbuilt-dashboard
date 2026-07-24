@@ -1,0 +1,1957 @@
+{
+  "status": "success",
+  "result": [
+    {
+      "platform": "gcfv2",
+      "id": "addSplitLeg",
+      "project": "wellbuilt-sync",
+      "region": "us-central1",
+      "callableTrigger": {},
+      "entryPoint": "addSplitLeg",
+      "runtime": "nodejs20",
+      "source": {
+        "storageSource": {
+          "bucket": "gcf-v2-sources-559487114498-us-central1",
+          "object": "addSplitLeg/function-source.zip",
+          "generation": "1781584956000868"
+        }
+      },
+      "ingressSettings": "ALLOW_ALL",
+      "environmentVariables": "[REDACTED: env config removed for checkpoint]",
+      "timeoutSeconds": 30,
+      "uri": "https://us-central1-wellbuilt-sync.cloudfunctions.net/addSplitLeg",
+      "serviceAccount": "559487114498-compute@developer.gserviceaccount.com",
+      "availableMemoryMb": 256,
+      "cpu": 1,
+      "maxInstances": 20,
+      "concurrency": 80,
+      "labels": {
+        "deployment-callable": "true",
+        "firebase-functions-codebase": "dashboard",
+        "firebase-functions-hash": "d74a4a4f7e190bc3f2cb70be2745735f32a1eab5",
+        "deployment-tool": "cli-firebase"
+      },
+      "runServiceId": "addsplitleg",
+      "codebase": "dashboard",
+      "hash": "d74a4a4f7e190bc3f2cb70be2745735f32a1eab5",
+      "state": "ACTIVE"
+    },
+    {
+      "platform": "gcfv2",
+      "id": "addTruthSwdReference",
+      "project": "wellbuilt-sync",
+      "region": "us-central1",
+      "callableTrigger": {},
+      "entryPoint": "addTruthSwdReference",
+      "runtime": "nodejs20",
+      "source": {
+        "storageSource": {
+          "bucket": "gcf-v2-sources-559487114498-us-central1",
+          "object": "addTruthSwdReference/function-source.zip",
+          "generation": "1781485828331761"
+        }
+      },
+      "ingressSettings": "ALLOW_ALL",
+      "environmentVariables": "[REDACTED: env config removed for checkpoint]",
+      "timeoutSeconds": 30,
+      "uri": "https://us-central1-wellbuilt-sync.cloudfunctions.net/addTruthSwdReference",
+      "serviceAccount": "559487114498-compute@developer.gserviceaccount.com",
+      "availableMemoryMb": 256,
+      "cpu": 1,
+      "maxInstances": 20,
+      "concurrency": 80,
+      "labels": {
+        "deployment-tool": "cli-firebase",
+        "deployment-callable": "true",
+        "firebase-functions-codebase": "dashboard",
+        "firebase-functions-hash": "6a0a9030301560c9606b6d179de828ea9b0db835"
+      },
+      "runServiceId": "addtruthswdreference",
+      "codebase": "dashboard",
+      "hash": "6a0a9030301560c9606b6d179de828ea9b0db835",
+      "state": "ACTIVE"
+    },
+    {
+      "platform": "gcfv2",
+      "id": "approveTruthLocation",
+      "project": "wellbuilt-sync",
+      "region": "us-central1",
+      "callableTrigger": {},
+      "entryPoint": "approveTruthLocation",
+      "runtime": "nodejs20",
+      "source": {
+        "storageSource": {
+          "bucket": "gcf-v2-sources-559487114498-us-central1",
+          "object": "approveTruthLocation/function-source.zip",
+          "generation": "1781485828426345"
+        }
+      },
+      "ingressSettings": "ALLOW_ALL",
+      "environmentVariables": "[REDACTED: env config removed for checkpoint]",
+      "timeoutSeconds": 30,
+      "uri": "https://us-central1-wellbuilt-sync.cloudfunctions.net/approveTruthLocation",
+      "serviceAccount": "559487114498-compute@developer.gserviceaccount.com",
+      "availableMemoryMb": 256,
+      "cpu": 1,
+      "maxInstances": 20,
+      "concurrency": 80,
+      "labels": {
+        "firebase-functions-hash": "6a0a9030301560c9606b6d179de828ea9b0db835",
+        "deployment-tool": "cli-firebase",
+        "deployment-callable": "true",
+        "firebase-functions-codebase": "dashboard"
+      },
+      "runServiceId": "approvetruthlocation",
+      "codebase": "dashboard",
+      "hash": "6a0a9030301560c9606b6d179de828ea9b0db835",
+      "state": "ACTIVE"
+    },
+    {
+      "platform": "gcfv2",
+      "id": "cleanupExpiredPhotos",
+      "project": "wellbuilt-sync",
+      "region": "us-central1",
+      "scheduleTrigger": {},
+      "entryPoint": "cleanupExpiredPhotos",
+      "runtime": "nodejs20",
+      "source": {
+        "storageSource": {
+          "bucket": "gcf-v2-sources-559487114498-us-central1",
+          "object": "cleanupExpiredPhotos/function-source.zip",
+          "generation": "1781485828390974"
+        }
+      },
+      "ingressSettings": "ALLOW_ALL",
+      "environmentVariables": "[REDACTED: env config removed for checkpoint]",
+      "timeoutSeconds": 60,
+      "uri": "https://us-central1-wellbuilt-sync.cloudfunctions.net/cleanupExpiredPhotos",
+      "serviceAccount": "559487114498-compute@developer.gserviceaccount.com",
+      "availableMemoryMb": 256,
+      "cpu": 1,
+      "maxInstances": 20,
+      "concurrency": 80,
+      "labels": {
+        "firebase-functions-hash": "6a0a9030301560c9606b6d179de828ea9b0db835",
+        "deployment-tool": "cli-firebase",
+        "deployment-scheduled": "true",
+        "firebase-functions-codebase": "dashboard"
+      },
+      "runServiceId": "cleanupexpiredphotos",
+      "codebase": "dashboard",
+      "hash": "6a0a9030301560c9606b6d179de828ea9b0db835",
+      "state": "ACTIVE"
+    },
+    {
+      "platform": "gcfv2",
+      "id": "createOrFindDispatchThread",
+      "project": "wellbuilt-sync",
+      "region": "us-central1",
+      "callableTrigger": {},
+      "entryPoint": "createOrFindDispatchThread",
+      "runtime": "nodejs20",
+      "source": {
+        "storageSource": {
+          "bucket": "gcf-v2-sources-559487114498-us-central1",
+          "object": "createOrFindDispatchThread/function-source.zip",
+          "generation": "1781485828361930"
+        }
+      },
+      "ingressSettings": "ALLOW_ALL",
+      "environmentVariables": "[REDACTED: env config removed for checkpoint]",
+      "timeoutSeconds": 30,
+      "uri": "https://us-central1-wellbuilt-sync.cloudfunctions.net/createOrFindDispatchThread",
+      "serviceAccount": "559487114498-compute@developer.gserviceaccount.com",
+      "availableMemoryMb": 256,
+      "cpu": 1,
+      "maxInstances": 20,
+      "concurrency": 80,
+      "labels": {
+        "deployment-tool": "cli-firebase",
+        "deployment-callable": "true",
+        "firebase-functions-codebase": "dashboard",
+        "firebase-functions-hash": "6a0a9030301560c9606b6d179de828ea9b0db835"
+      },
+      "runServiceId": "createorfinddispatchthread",
+      "codebase": "dashboard",
+      "hash": "6a0a9030301560c9606b6d179de828ea9b0db835",
+      "state": "ACTIVE"
+    },
+    {
+      "platform": "gcfv2",
+      "id": "deactivateTruthSwdReference",
+      "project": "wellbuilt-sync",
+      "region": "us-central1",
+      "callableTrigger": {},
+      "entryPoint": "deactivateTruthSwdReference",
+      "runtime": "nodejs20",
+      "source": {
+        "storageSource": {
+          "bucket": "gcf-v2-sources-559487114498-us-central1",
+          "object": "deactivateTruthSwdReference/function-source.zip",
+          "generation": "1781485828357198"
+        }
+      },
+      "ingressSettings": "ALLOW_ALL",
+      "environmentVariables": "[REDACTED: env config removed for checkpoint]",
+      "timeoutSeconds": 30,
+      "uri": "https://us-central1-wellbuilt-sync.cloudfunctions.net/deactivateTruthSwdReference",
+      "serviceAccount": "559487114498-compute@developer.gserviceaccount.com",
+      "availableMemoryMb": 256,
+      "cpu": 1,
+      "maxInstances": 20,
+      "concurrency": 80,
+      "labels": {
+        "firebase-functions-codebase": "dashboard",
+        "firebase-functions-hash": "6a0a9030301560c9606b6d179de828ea9b0db835",
+        "deployment-tool": "cli-firebase",
+        "deployment-callable": "true"
+      },
+      "runServiceId": "deactivatetruthswdreference",
+      "codebase": "dashboard",
+      "hash": "6a0a9030301560c9606b6d179de828ea9b0db835",
+      "state": "ACTIVE"
+    },
+    {
+      "platform": "gcfv2",
+      "id": "demoClassifyLocations",
+      "project": "wellbuilt-sync",
+      "region": "us-central1",
+      "callableTrigger": {},
+      "entryPoint": "demoClassifyLocations",
+      "runtime": "nodejs20",
+      "source": {
+        "storageSource": {
+          "bucket": "gcf-v2-sources-559487114498-us-central1",
+          "object": "demoClassifyLocations/function-source.zip",
+          "generation": "1781485828325660"
+        }
+      },
+      "ingressSettings": "ALLOW_ALL",
+      "environmentVariables": "[REDACTED: env config removed for checkpoint]",
+      "timeoutSeconds": 30,
+      "uri": "https://us-central1-wellbuilt-sync.cloudfunctions.net/demoClassifyLocations",
+      "serviceAccount": "559487114498-compute@developer.gserviceaccount.com",
+      "availableMemoryMb": 256,
+      "cpu": 1,
+      "maxInstances": 20,
+      "concurrency": 80,
+      "labels": {
+        "deployment-tool": "cli-firebase",
+        "deployment-callable": "true",
+        "firebase-functions-codebase": "dashboard",
+        "firebase-functions-hash": "6a0a9030301560c9606b6d179de828ea9b0db835"
+      },
+      "runServiceId": "democlassifylocations",
+      "codebase": "dashboard",
+      "hash": "6a0a9030301560c9606b6d179de828ea9b0db835",
+      "state": "ACTIVE"
+    },
+    {
+      "platform": "gcfv2",
+      "id": "exportTruthRagForDay",
+      "project": "wellbuilt-sync",
+      "region": "us-central1",
+      "callableTrigger": {},
+      "entryPoint": "exportTruthRagForDay",
+      "runtime": "nodejs20",
+      "source": {
+        "storageSource": {
+          "bucket": "gcf-v2-sources-559487114498-us-central1",
+          "object": "exportTruthRagForDay/function-source.zip",
+          "generation": "1781485886434411"
+        }
+      },
+      "ingressSettings": "ALLOW_ALL",
+      "environmentVariables": "[REDACTED: env config removed for checkpoint]",
+      "timeoutSeconds": 300,
+      "uri": "https://us-central1-wellbuilt-sync.cloudfunctions.net/exportTruthRagForDay",
+      "serviceAccount": "559487114498-compute@developer.gserviceaccount.com",
+      "availableMemoryMb": 1024,
+      "cpu": 1,
+      "maxInstances": 20,
+      "concurrency": 80,
+      "labels": {
+        "firebase-functions-hash": "6a0a9030301560c9606b6d179de828ea9b0db835",
+        "deployment-tool": "cli-firebase",
+        "deployment-callable": "true",
+        "firebase-functions-codebase": "dashboard"
+      },
+      "runServiceId": "exporttruthragforday",
+      "codebase": "dashboard",
+      "hash": "6a0a9030301560c9606b6d179de828ea9b0db835",
+      "state": "ACTIVE"
+    },
+    {
+      "platform": "gcfv2",
+      "id": "getDashboardReadModelForDay",
+      "project": "wellbuilt-sync",
+      "region": "us-central1",
+      "callableTrigger": {},
+      "entryPoint": "getDashboardReadModelForDay",
+      "runtime": "nodejs20",
+      "source": {
+        "storageSource": {
+          "bucket": "gcf-v2-sources-559487114498-us-central1",
+          "object": "getDashboardReadModelForDay/function-source.zip",
+          "generation": "1781485828335636"
+        }
+      },
+      "ingressSettings": "ALLOW_ALL",
+      "environmentVariables": "[REDACTED: env config removed for checkpoint]",
+      "timeoutSeconds": 120,
+      "uri": "https://us-central1-wellbuilt-sync.cloudfunctions.net/getDashboardReadModelForDay",
+      "serviceAccount": "559487114498-compute@developer.gserviceaccount.com",
+      "availableMemoryMb": 512,
+      "cpu": 1,
+      "maxInstances": 20,
+      "concurrency": 80,
+      "labels": {
+        "deployment-tool": "cli-firebase",
+        "deployment-callable": "true",
+        "firebase-functions-codebase": "dashboard",
+        "firebase-functions-hash": "6a0a9030301560c9606b6d179de828ea9b0db835"
+      },
+      "runServiceId": "getdashboardreadmodelforday",
+      "codebase": "dashboard",
+      "hash": "6a0a9030301560c9606b6d179de828ea9b0db835",
+      "state": "ACTIVE"
+    },
+    {
+      "platform": "gcfv2",
+      "id": "getIdentityHealthView",
+      "project": "wellbuilt-sync",
+      "region": "us-central1",
+      "callableTrigger": {},
+      "entryPoint": "getIdentityHealthView",
+      "runtime": "nodejs20",
+      "source": {
+        "storageSource": {
+          "bucket": "gcf-v2-sources-559487114498-us-central1",
+          "object": "getIdentityHealthView/function-source.zip",
+          "generation": "1781485886392958"
+        }
+      },
+      "ingressSettings": "ALLOW_ALL",
+      "environmentVariables": "[REDACTED: env config removed for checkpoint]",
+      "timeoutSeconds": 120,
+      "uri": "https://us-central1-wellbuilt-sync.cloudfunctions.net/getIdentityHealthView",
+      "serviceAccount": "559487114498-compute@developer.gserviceaccount.com",
+      "availableMemoryMb": 512,
+      "cpu": 1,
+      "maxInstances": 20,
+      "concurrency": 80,
+      "labels": {
+        "deployment-tool": "cli-firebase",
+        "deployment-callable": "true",
+        "firebase-functions-codebase": "dashboard",
+        "firebase-functions-hash": "6a0a9030301560c9606b6d179de828ea9b0db835"
+      },
+      "runServiceId": "getidentityhealthview",
+      "codebase": "dashboard",
+      "hash": "6a0a9030301560c9606b6d179de828ea9b0db835",
+      "state": "ACTIVE"
+    },
+    {
+      "platform": "gcfv2",
+      "id": "getIntegratedTruthForDay",
+      "project": "wellbuilt-sync",
+      "region": "us-central1",
+      "callableTrigger": {},
+      "entryPoint": "getIntegratedTruthForDay",
+      "runtime": "nodejs20",
+      "source": {
+        "storageSource": {
+          "bucket": "gcf-v2-sources-559487114498-us-central1",
+          "object": "getIntegratedTruthForDay/function-source.zip",
+          "generation": "1781485828460181"
+        }
+      },
+      "ingressSettings": "ALLOW_ALL",
+      "environmentVariables": "[REDACTED: env config removed for checkpoint]",
+      "timeoutSeconds": 120,
+      "uri": "https://us-central1-wellbuilt-sync.cloudfunctions.net/getIntegratedTruthForDay",
+      "serviceAccount": "559487114498-compute@developer.gserviceaccount.com",
+      "availableMemoryMb": 512,
+      "cpu": 1,
+      "maxInstances": 20,
+      "concurrency": 80,
+      "labels": {
+        "firebase-functions-codebase": "dashboard",
+        "firebase-functions-hash": "6a0a9030301560c9606b6d179de828ea9b0db835",
+        "deployment-tool": "cli-firebase",
+        "deployment-callable": "true"
+      },
+      "runServiceId": "getintegratedtruthforday",
+      "codebase": "dashboard",
+      "hash": "6a0a9030301560c9606b6d179de828ea9b0db835",
+      "state": "ACTIVE"
+    },
+    {
+      "platform": "gcfv2",
+      "id": "getLocationHealthView",
+      "project": "wellbuilt-sync",
+      "region": "us-central1",
+      "callableTrigger": {},
+      "entryPoint": "getLocationHealthView",
+      "runtime": "nodejs20",
+      "source": {
+        "storageSource": {
+          "bucket": "gcf-v2-sources-559487114498-us-central1",
+          "object": "getLocationHealthView/function-source.zip",
+          "generation": "1781485886372864"
+        }
+      },
+      "ingressSettings": "ALLOW_ALL",
+      "environmentVariables": "[REDACTED: env config removed for checkpoint]",
+      "timeoutSeconds": 120,
+      "uri": "https://us-central1-wellbuilt-sync.cloudfunctions.net/getLocationHealthView",
+      "serviceAccount": "559487114498-compute@developer.gserviceaccount.com",
+      "availableMemoryMb": 512,
+      "cpu": 1,
+      "maxInstances": 20,
+      "concurrency": 80,
+      "labels": {
+        "firebase-functions-codebase": "dashboard",
+        "firebase-functions-hash": "6a0a9030301560c9606b6d179de828ea9b0db835",
+        "deployment-tool": "cli-firebase",
+        "deployment-callable": "true"
+      },
+      "runServiceId": "getlocationhealthview",
+      "codebase": "dashboard",
+      "hash": "6a0a9030301560c9606b6d179de828ea9b0db835",
+      "state": "ACTIVE"
+    },
+    {
+      "platform": "gcfv2",
+      "id": "getRAGIngestBundleForDay",
+      "project": "wellbuilt-sync",
+      "region": "us-central1",
+      "callableTrigger": {},
+      "entryPoint": "getRAGIngestBundleForDay",
+      "runtime": "nodejs20",
+      "source": {
+        "storageSource": {
+          "bucket": "gcf-v2-sources-559487114498-us-central1",
+          "object": "getRAGIngestBundleForDay/function-source.zip",
+          "generation": "1781485828423989"
+        }
+      },
+      "ingressSettings": "ALLOW_ALL",
+      "environmentVariables": "[REDACTED: env config removed for checkpoint]",
+      "timeoutSeconds": 120,
+      "uri": "https://us-central1-wellbuilt-sync.cloudfunctions.net/getRAGIngestBundleForDay",
+      "serviceAccount": "559487114498-compute@developer.gserviceaccount.com",
+      "availableMemoryMb": 512,
+      "cpu": 1,
+      "maxInstances": 20,
+      "concurrency": 80,
+      "labels": {
+        "firebase-functions-codebase": "dashboard",
+        "firebase-functions-hash": "6a0a9030301560c9606b6d179de828ea9b0db835",
+        "deployment-tool": "cli-firebase",
+        "deployment-callable": "true"
+      },
+      "runServiceId": "getragingestbundleforday",
+      "codebase": "dashboard",
+      "hash": "6a0a9030301560c9606b6d179de828ea9b0db835",
+      "state": "ACTIVE"
+    },
+    {
+      "platform": "gcfv2",
+      "id": "getShadowComparisonForDay",
+      "project": "wellbuilt-sync",
+      "region": "us-central1",
+      "callableTrigger": {},
+      "entryPoint": "getShadowComparisonForDay",
+      "runtime": "nodejs20",
+      "source": {
+        "storageSource": {
+          "bucket": "gcf-v2-sources-559487114498-us-central1",
+          "object": "getShadowComparisonForDay/function-source.zip",
+          "generation": "1781485886296995"
+        }
+      },
+      "ingressSettings": "ALLOW_ALL",
+      "environmentVariables": "[REDACTED: env config removed for checkpoint]",
+      "timeoutSeconds": 120,
+      "uri": "https://us-central1-wellbuilt-sync.cloudfunctions.net/getShadowComparisonForDay",
+      "serviceAccount": "559487114498-compute@developer.gserviceaccount.com",
+      "availableMemoryMb": 512,
+      "cpu": 1,
+      "maxInstances": 20,
+      "concurrency": 80,
+      "labels": {
+        "deployment-tool": "cli-firebase",
+        "deployment-callable": "true",
+        "firebase-functions-codebase": "dashboard",
+        "firebase-functions-hash": "6a0a9030301560c9606b6d179de828ea9b0db835"
+      },
+      "runServiceId": "getshadowcomparisonforday",
+      "codebase": "dashboard",
+      "hash": "6a0a9030301560c9606b6d179de828ea9b0db835",
+      "state": "ACTIVE"
+    },
+    {
+      "platform": "gcfv2",
+      "id": "getTruthDriverDaySummary",
+      "project": "wellbuilt-sync",
+      "region": "us-central1",
+      "callableTrigger": {},
+      "entryPoint": "getTruthDriverDaySummary",
+      "runtime": "nodejs20",
+      "source": {
+        "storageSource": {
+          "bucket": "gcf-v2-sources-559487114498-us-central1",
+          "object": "getTruthDriverDaySummary/function-source.zip",
+          "generation": "1781485886443737"
+        }
+      },
+      "ingressSettings": "ALLOW_ALL",
+      "environmentVariables": "[REDACTED: env config removed for checkpoint]",
+      "timeoutSeconds": 120,
+      "uri": "https://us-central1-wellbuilt-sync.cloudfunctions.net/getTruthDriverDaySummary",
+      "serviceAccount": "559487114498-compute@developer.gserviceaccount.com",
+      "availableMemoryMb": 512,
+      "cpu": 1,
+      "maxInstances": 20,
+      "concurrency": 80,
+      "labels": {
+        "deployment-callable": "true",
+        "firebase-functions-codebase": "dashboard",
+        "firebase-functions-hash": "6a0a9030301560c9606b6d179de828ea9b0db835",
+        "deployment-tool": "cli-firebase"
+      },
+      "runServiceId": "gettruthdriverdaysummary",
+      "codebase": "dashboard",
+      "hash": "6a0a9030301560c9606b6d179de828ea9b0db835",
+      "state": "ACTIVE"
+    },
+    {
+      "platform": "gcfv2",
+      "id": "getTruthDriverWeekSummary",
+      "project": "wellbuilt-sync",
+      "region": "us-central1",
+      "callableTrigger": {},
+      "entryPoint": "getTruthDriverWeekSummary",
+      "runtime": "nodejs20",
+      "source": {
+        "storageSource": {
+          "bucket": "gcf-v2-sources-559487114498-us-central1",
+          "object": "getTruthDriverWeekSummary/function-source.zip",
+          "generation": "1781485886505569"
+        }
+      },
+      "ingressSettings": "ALLOW_ALL",
+      "environmentVariables": "[REDACTED: env config removed for checkpoint]",
+      "timeoutSeconds": 240,
+      "uri": "https://us-central1-wellbuilt-sync.cloudfunctions.net/getTruthDriverWeekSummary",
+      "serviceAccount": "559487114498-compute@developer.gserviceaccount.com",
+      "availableMemoryMb": 1024,
+      "cpu": 1,
+      "maxInstances": 20,
+      "concurrency": 80,
+      "labels": {
+        "deployment-tool": "cli-firebase",
+        "deployment-callable": "true",
+        "firebase-functions-codebase": "dashboard",
+        "firebase-functions-hash": "6a0a9030301560c9606b6d179de828ea9b0db835"
+      },
+      "runServiceId": "gettruthdriverweeksummary",
+      "codebase": "dashboard",
+      "hash": "6a0a9030301560c9606b6d179de828ea9b0db835",
+      "state": "ACTIVE"
+    },
+    {
+      "platform": "gcfv2",
+      "id": "getTruthRagExportRun",
+      "project": "wellbuilt-sync",
+      "region": "us-central1",
+      "callableTrigger": {},
+      "entryPoint": "getTruthRagExportRun",
+      "runtime": "nodejs20",
+      "source": {
+        "storageSource": {
+          "bucket": "gcf-v2-sources-559487114498-us-central1",
+          "object": "getTruthRagExportRun/function-source.zip",
+          "generation": "1781485828447789"
+        }
+      },
+      "ingressSettings": "ALLOW_ALL",
+      "environmentVariables": "[REDACTED: env config removed for checkpoint]",
+      "timeoutSeconds": 60,
+      "uri": "https://us-central1-wellbuilt-sync.cloudfunctions.net/getTruthRagExportRun",
+      "serviceAccount": "559487114498-compute@developer.gserviceaccount.com",
+      "availableMemoryMb": 256,
+      "cpu": 1,
+      "maxInstances": 20,
+      "concurrency": 80,
+      "labels": {
+        "deployment-callable": "true",
+        "firebase-functions-codebase": "dashboard",
+        "firebase-functions-hash": "6a0a9030301560c9606b6d179de828ea9b0db835",
+        "deployment-tool": "cli-firebase"
+      },
+      "runServiceId": "gettruthragexportrun",
+      "codebase": "dashboard",
+      "hash": "6a0a9030301560c9606b6d179de828ea9b0db835",
+      "state": "ACTIVE"
+    },
+    {
+      "platform": "gcfv2",
+      "id": "healthCheck",
+      "project": "wellbuilt-sync",
+      "region": "us-central1",
+      "scheduleTrigger": {},
+      "entryPoint": "healthCheck",
+      "runtime": "nodejs20",
+      "source": {
+        "storageSource": {
+          "bucket": "gcf-v2-sources-559487114498-us-central1",
+          "object": "healthCheck/function-source.zip",
+          "generation": "1781485828364468"
+        }
+      },
+      "ingressSettings": "ALLOW_ALL",
+      "environmentVariables": "[REDACTED: env config removed for checkpoint]",
+      "timeoutSeconds": 60,
+      "uri": "https://us-central1-wellbuilt-sync.cloudfunctions.net/healthCheck",
+      "serviceAccount": "559487114498-compute@developer.gserviceaccount.com",
+      "availableMemoryMb": 256,
+      "cpu": 1,
+      "maxInstances": 20,
+      "concurrency": 80,
+      "labels": {
+        "firebase-functions-hash": "6a0a9030301560c9606b6d179de828ea9b0db835",
+        "deployment-tool": "cli-firebase",
+        "deployment-scheduled": "true",
+        "firebase-functions-codebase": "dashboard"
+      },
+      "runServiceId": "healthcheck",
+      "codebase": "dashboard",
+      "hash": "6a0a9030301560c9606b6d179de828ea9b0db835",
+      "state": "ACTIVE"
+    },
+    {
+      "platform": "gcfv2",
+      "id": "inviteEmployee",
+      "project": "wellbuilt-sync",
+      "region": "us-central1",
+      "callableTrigger": {},
+      "entryPoint": "inviteEmployee",
+      "runtime": "nodejs20",
+      "source": {
+        "storageSource": {
+          "bucket": "gcf-v2-sources-559487114498-us-central1",
+          "object": "inviteEmployee/function-source.zip",
+          "generation": "1781485828395205"
+        }
+      },
+      "ingressSettings": "ALLOW_ALL",
+      "environmentVariables": "[REDACTED: env config removed for checkpoint]",
+      "timeoutSeconds": 30,
+      "uri": "https://us-central1-wellbuilt-sync.cloudfunctions.net/inviteEmployee",
+      "serviceAccount": "559487114498-compute@developer.gserviceaccount.com",
+      "availableMemoryMb": 256,
+      "cpu": 1,
+      "maxInstances": 20,
+      "concurrency": 80,
+      "labels": {
+        "deployment-callable": "true",
+        "firebase-functions-codebase": "dashboard",
+        "firebase-functions-hash": "6a0a9030301560c9606b6d179de828ea9b0db835",
+        "deployment-tool": "cli-firebase"
+      },
+      "runServiceId": "inviteemployee",
+      "codebase": "dashboard",
+      "hash": "6a0a9030301560c9606b6d179de828ea9b0db835",
+      "state": "ACTIVE"
+    },
+    {
+      "platform": "gcfv2",
+      "id": "listStuckHandoffs",
+      "project": "wellbuilt-sync",
+      "region": "us-central1",
+      "callableTrigger": {},
+      "entryPoint": "listStuckHandoffs",
+      "runtime": "nodejs20",
+      "source": {
+        "storageSource": {
+          "bucket": "gcf-v2-sources-559487114498-us-central1",
+          "object": "listStuckHandoffs/function-source.zip",
+          "generation": "1781485828243633"
+        }
+      },
+      "ingressSettings": "ALLOW_ALL",
+      "environmentVariables": "[REDACTED: env config removed for checkpoint]",
+      "timeoutSeconds": 30,
+      "uri": "https://us-central1-wellbuilt-sync.cloudfunctions.net/listStuckHandoffs",
+      "serviceAccount": "559487114498-compute@developer.gserviceaccount.com",
+      "availableMemoryMb": 256,
+      "cpu": 1,
+      "maxInstances": 20,
+      "concurrency": 80,
+      "labels": {
+        "firebase-functions-codebase": "dashboard",
+        "firebase-functions-hash": "6a0a9030301560c9606b6d179de828ea9b0db835",
+        "deployment-tool": "cli-firebase",
+        "deployment-callable": "true"
+      },
+      "runServiceId": "liststuckhandoffs",
+      "codebase": "dashboard",
+      "hash": "6a0a9030301560c9606b6d179de828ea9b0db835",
+      "state": "ACTIVE"
+    },
+    {
+      "platform": "gcfv2",
+      "id": "listTruthRagExports",
+      "project": "wellbuilt-sync",
+      "region": "us-central1",
+      "callableTrigger": {},
+      "entryPoint": "listTruthRagExports",
+      "runtime": "nodejs20",
+      "source": {
+        "storageSource": {
+          "bucket": "gcf-v2-sources-559487114498-us-central1",
+          "object": "listTruthRagExports/function-source.zip",
+          "generation": "1781485828323445"
+        }
+      },
+      "ingressSettings": "ALLOW_ALL",
+      "environmentVariables": "[REDACTED: env config removed for checkpoint]",
+      "timeoutSeconds": 60,
+      "uri": "https://us-central1-wellbuilt-sync.cloudfunctions.net/listTruthRagExports",
+      "serviceAccount": "559487114498-compute@developer.gserviceaccount.com",
+      "availableMemoryMb": 256,
+      "cpu": 1,
+      "maxInstances": 20,
+      "concurrency": 80,
+      "labels": {
+        "deployment-callable": "true",
+        "firebase-functions-codebase": "dashboard",
+        "firebase-functions-hash": "6a0a9030301560c9606b6d179de828ea9b0db835",
+        "deployment-tool": "cli-firebase"
+      },
+      "runServiceId": "listtruthragexports",
+      "codebase": "dashboard",
+      "hash": "6a0a9030301560c9606b6d179de828ea9b0db835",
+      "state": "ACTIVE"
+    },
+    {
+      "platform": "gcfv2",
+      "id": "listTruthSwdReference",
+      "project": "wellbuilt-sync",
+      "region": "us-central1",
+      "callableTrigger": {},
+      "entryPoint": "listTruthSwdReference",
+      "runtime": "nodejs20",
+      "source": {
+        "storageSource": {
+          "bucket": "gcf-v2-sources-559487114498-us-central1",
+          "object": "listTruthSwdReference/function-source.zip",
+          "generation": "1781485828421087"
+        }
+      },
+      "ingressSettings": "ALLOW_ALL",
+      "environmentVariables": "[REDACTED: env config removed for checkpoint]",
+      "timeoutSeconds": 30,
+      "uri": "https://us-central1-wellbuilt-sync.cloudfunctions.net/listTruthSwdReference",
+      "serviceAccount": "559487114498-compute@developer.gserviceaccount.com",
+      "availableMemoryMb": 256,
+      "cpu": 1,
+      "maxInstances": 20,
+      "concurrency": 80,
+      "labels": {
+        "firebase-functions-codebase": "dashboard",
+        "firebase-functions-hash": "6a0a9030301560c9606b6d179de828ea9b0db835",
+        "deployment-tool": "cli-firebase",
+        "deployment-callable": "true"
+      },
+      "runServiceId": "listtruthswdreference",
+      "codebase": "dashboard",
+      "hash": "6a0a9030301560c9606b6d179de828ea9b0db835",
+      "state": "ACTIVE"
+    },
+    {
+      "platform": "gcfv2",
+      "id": "materializerDriftHeartbeat",
+      "project": "wellbuilt-sync",
+      "region": "us-central1",
+      "scheduleTrigger": {},
+      "entryPoint": "materializerDriftHeartbeat",
+      "runtime": "nodejs20",
+      "source": {
+        "storageSource": {
+          "bucket": "gcf-v2-sources-559487114498-us-central1",
+          "object": "materializerDriftHeartbeat/function-source.zip",
+          "generation": "1781485828264442"
+        }
+      },
+      "ingressSettings": "ALLOW_ALL",
+      "environmentVariables": "[REDACTED: env config removed for checkpoint]",
+      "timeoutSeconds": 540,
+      "uri": "https://us-central1-wellbuilt-sync.cloudfunctions.net/materializerDriftHeartbeat",
+      "serviceAccount": "559487114498-compute@developer.gserviceaccount.com",
+      "availableMemoryMb": 256,
+      "cpu": 1,
+      "maxInstances": 20,
+      "concurrency": 80,
+      "labels": {
+        "firebase-functions-hash": "6a0a9030301560c9606b6d179de828ea9b0db835",
+        "deployment-tool": "cli-firebase",
+        "deployment-scheduled": "true",
+        "firebase-functions-codebase": "dashboard"
+      },
+      "runServiceId": "materializerdriftheartbeat",
+      "codebase": "dashboard",
+      "hash": "6a0a9030301560c9606b6d179de828ea9b0db835",
+      "state": "ACTIVE"
+    },
+    {
+      "platform": "gcfv2",
+      "id": "parseJsaPdf",
+      "project": "wellbuilt-sync",
+      "region": "us-central1",
+      "callableTrigger": {},
+      "entryPoint": "parseJsaPdf",
+      "runtime": "nodejs20",
+      "source": {
+        "storageSource": {
+          "bucket": "gcf-v2-sources-559487114498-us-central1",
+          "object": "parseJsaPdf/function-source.zip",
+          "generation": "1781485828358530"
+        }
+      },
+      "ingressSettings": "ALLOW_ALL",
+      "environmentVariables": "[REDACTED: env config removed for checkpoint]",
+      "timeoutSeconds": 120,
+      "uri": "https://us-central1-wellbuilt-sync.cloudfunctions.net/parseJsaPdf",
+      "serviceAccount": "559487114498-compute@developer.gserviceaccount.com",
+      "availableMemoryMb": 512,
+      "cpu": 1,
+      "maxInstances": 20,
+      "concurrency": 80,
+      "labels": {
+        "deployment-tool": "cli-firebase",
+        "deployment-callable": "true",
+        "firebase-functions-codebase": "dashboard",
+        "firebase-functions-hash": "6a0a9030301560c9606b6d179de828ea9b0db835"
+      },
+      "runServiceId": "parsejsapdf",
+      "codebase": "dashboard",
+      "hash": "6a0a9030301560c9606b6d179de828ea9b0db835",
+      "state": "ACTIVE"
+    },
+    {
+      "platform": "gcfv2",
+      "id": "recoverHandoffOrphan",
+      "project": "wellbuilt-sync",
+      "region": "us-central1",
+      "callableTrigger": {},
+      "entryPoint": "recoverHandoffOrphan",
+      "runtime": "nodejs20",
+      "source": {
+        "storageSource": {
+          "bucket": "gcf-v2-sources-559487114498-us-central1",
+          "object": "recoverHandoffOrphan/function-source.zip",
+          "generation": "1781485828291495"
+        }
+      },
+      "ingressSettings": "ALLOW_ALL",
+      "environmentVariables": "[REDACTED: env config removed for checkpoint]",
+      "timeoutSeconds": 60,
+      "uri": "https://us-central1-wellbuilt-sync.cloudfunctions.net/recoverHandoffOrphan",
+      "serviceAccount": "559487114498-compute@developer.gserviceaccount.com",
+      "availableMemoryMb": 256,
+      "cpu": 1,
+      "maxInstances": 20,
+      "concurrency": 80,
+      "labels": {
+        "firebase-functions-codebase": "dashboard",
+        "firebase-functions-hash": "6a0a9030301560c9606b6d179de828ea9b0db835",
+        "deployment-tool": "cli-firebase",
+        "deployment-callable": "true"
+      },
+      "runServiceId": "recoverhandofforphan",
+      "codebase": "dashboard",
+      "hash": "6a0a9030301560c9606b6d179de828ea9b0db835",
+      "state": "ACTIVE"
+    },
+    {
+      "platform": "gcfv2",
+      "id": "removeSplitLeg",
+      "project": "wellbuilt-sync",
+      "region": "us-central1",
+      "callableTrigger": {},
+      "entryPoint": "removeSplitLeg",
+      "runtime": "nodejs20",
+      "source": {
+        "storageSource": {
+          "bucket": "gcf-v2-sources-559487114498-us-central1",
+          "object": "removeSplitLeg/function-source.zip",
+          "generation": "1781485828364478"
+        }
+      },
+      "ingressSettings": "ALLOW_ALL",
+      "environmentVariables": "[REDACTED: env config removed for checkpoint]",
+      "timeoutSeconds": 30,
+      "uri": "https://us-central1-wellbuilt-sync.cloudfunctions.net/removeSplitLeg",
+      "serviceAccount": "559487114498-compute@developer.gserviceaccount.com",
+      "availableMemoryMb": 256,
+      "cpu": 1,
+      "maxInstances": 20,
+      "concurrency": 80,
+      "labels": {
+        "firebase-functions-hash": "6a0a9030301560c9606b6d179de828ea9b0db835",
+        "deployment-tool": "cli-firebase",
+        "deployment-callable": "true",
+        "firebase-functions-codebase": "dashboard"
+      },
+      "runServiceId": "removesplitleg",
+      "codebase": "dashboard",
+      "hash": "6a0a9030301560c9606b6d179de828ea9b0db835",
+      "state": "ACTIVE"
+    },
+    {
+      "platform": "gcfv2",
+      "id": "rerunTruthRagExportForDay",
+      "project": "wellbuilt-sync",
+      "region": "us-central1",
+      "callableTrigger": {},
+      "entryPoint": "rerunTruthRagExportForDay",
+      "runtime": "nodejs20",
+      "source": {
+        "storageSource": {
+          "bucket": "gcf-v2-sources-559487114498-us-central1",
+          "object": "rerunTruthRagExportForDay/function-source.zip",
+          "generation": "1781485886586156"
+        }
+      },
+      "ingressSettings": "ALLOW_ALL",
+      "environmentVariables": "[REDACTED: env config removed for checkpoint]",
+      "timeoutSeconds": 300,
+      "uri": "https://us-central1-wellbuilt-sync.cloudfunctions.net/rerunTruthRagExportForDay",
+      "serviceAccount": "559487114498-compute@developer.gserviceaccount.com",
+      "availableMemoryMb": 1024,
+      "cpu": 1,
+      "maxInstances": 20,
+      "concurrency": 80,
+      "labels": {
+        "deployment-tool": "cli-firebase",
+        "deployment-callable": "true",
+        "firebase-functions-codebase": "dashboard",
+        "firebase-functions-hash": "6a0a9030301560c9606b6d179de828ea9b0db835"
+      },
+      "runServiceId": "reruntruthragexportforday",
+      "codebase": "dashboard",
+      "hash": "6a0a9030301560c9606b6d179de828ea9b0db835",
+      "state": "ACTIVE"
+    },
+    {
+      "platform": "gcfv2",
+      "id": "resequenceSplitFamily",
+      "project": "wellbuilt-sync",
+      "region": "us-central1",
+      "callableTrigger": {},
+      "entryPoint": "resequenceSplitFamily",
+      "runtime": "nodejs20",
+      "source": {
+        "storageSource": {
+          "bucket": "gcf-v2-sources-559487114498-us-central1",
+          "object": "resequenceSplitFamily/function-source.zip",
+          "generation": "1781485828417701"
+        }
+      },
+      "ingressSettings": "ALLOW_ALL",
+      "environmentVariables": "[REDACTED: env config removed for checkpoint]",
+      "timeoutSeconds": 30,
+      "uri": "https://us-central1-wellbuilt-sync.cloudfunctions.net/resequenceSplitFamily",
+      "serviceAccount": "559487114498-compute@developer.gserviceaccount.com",
+      "availableMemoryMb": 256,
+      "cpu": 1,
+      "maxInstances": 20,
+      "concurrency": 80,
+      "labels": {
+        "deployment-tool": "cli-firebase",
+        "deployment-callable": "true",
+        "firebase-functions-codebase": "dashboard",
+        "firebase-functions-hash": "6a0a9030301560c9606b6d179de828ea9b0db835"
+      },
+      "runServiceId": "resequencesplitfamily",
+      "codebase": "dashboard",
+      "hash": "6a0a9030301560c9606b6d179de828ea9b0db835",
+      "state": "ACTIVE"
+    },
+    {
+      "platform": "gcfv2",
+      "id": "revokeTruthLocationApproval",
+      "project": "wellbuilt-sync",
+      "region": "us-central1",
+      "callableTrigger": {},
+      "entryPoint": "revokeTruthLocationApproval",
+      "runtime": "nodejs20",
+      "source": {
+        "storageSource": {
+          "bucket": "gcf-v2-sources-559487114498-us-central1",
+          "object": "revokeTruthLocationApproval/function-source.zip",
+          "generation": "1781485828400332"
+        }
+      },
+      "ingressSettings": "ALLOW_ALL",
+      "environmentVariables": "[REDACTED: env config removed for checkpoint]",
+      "timeoutSeconds": 30,
+      "uri": "https://us-central1-wellbuilt-sync.cloudfunctions.net/revokeTruthLocationApproval",
+      "serviceAccount": "559487114498-compute@developer.gserviceaccount.com",
+      "availableMemoryMb": 256,
+      "cpu": 1,
+      "maxInstances": 20,
+      "concurrency": 80,
+      "labels": {
+        "firebase-functions-hash": "6a0a9030301560c9606b6d179de828ea9b0db835",
+        "deployment-tool": "cli-firebase",
+        "deployment-callable": "true",
+        "firebase-functions-codebase": "dashboard"
+      },
+      "runServiceId": "revoketruthlocationapproval",
+      "codebase": "dashboard",
+      "hash": "6a0a9030301560c9606b6d179de828ea9b0db835",
+      "state": "ACTIVE"
+    },
+    {
+      "platform": "gcfv2",
+      "id": "scheduledWellCatalogRefresh",
+      "project": "wellbuilt-sync",
+      "region": "us-central1",
+      "scheduleTrigger": {},
+      "entryPoint": "scheduledWellCatalogRefresh",
+      "runtime": "nodejs20",
+      "source": {
+        "storageSource": {
+          "bucket": "gcf-v2-sources-559487114498-us-central1",
+          "object": "scheduledWellCatalogRefresh/function-source.zip",
+          "generation": "1781576399473247"
+        }
+      },
+      "ingressSettings": "ALLOW_ALL",
+      "environmentVariables": "[REDACTED: env config removed for checkpoint]",
+      "timeoutSeconds": 540,
+      "uri": "https://us-central1-wellbuilt-sync.cloudfunctions.net/scheduledWellCatalogRefresh",
+      "serviceAccount": "559487114498-compute@developer.gserviceaccount.com",
+      "availableMemoryMb": 1024,
+      "cpu": 1,
+      "maxInstances": 20,
+      "concurrency": 80,
+      "labels": {
+        "deployment-tool": "cli-firebase",
+        "deployment-scheduled": "true",
+        "firebase-functions-codebase": "dashboard",
+        "firebase-functions-hash": "4829783b1fd75a7a42dccaaf18ab3ec2aeb876a9"
+      },
+      "runServiceId": "scheduledwellcatalogrefresh",
+      "codebase": "dashboard",
+      "hash": "4829783b1fd75a7a42dccaaf18ab3ec2aeb876a9",
+      "state": "ACTIVE"
+    },
+    {
+      "platform": "gcfv2",
+      "id": "ssrwellbuiltsync",
+      "project": "wellbuilt-sync",
+      "region": "us-central1",
+      "httpsTrigger": {},
+      "entryPoint": "ssrwellbuiltsync",
+      "runtime": "nodejs22",
+      "source": {
+        "storageSource": {
+          "bucket": "gcf-v2-sources-559487114498-us-central1",
+          "object": "ssrwellbuiltsync/function-source.zip",
+          "generation": "1774144949509676"
+        }
+      },
+      "ingressSettings": "ALLOW_ALL",
+      "environmentVariables": "[REDACTED: env config removed for checkpoint]",
+      "timeoutSeconds": 60,
+      "uri": "https://us-central1-wellbuilt-sync.cloudfunctions.net/ssrwellbuiltsync",
+      "serviceAccount": "559487114498-compute@developer.gserviceaccount.com",
+      "availableMemoryMb": 256,
+      "cpu": 1,
+      "maxInstances": 20,
+      "concurrency": 80,
+      "labels": {
+        "firebase-functions-hash": "4e2244a98a711cb0cbfa036a5222186af6ff5677",
+        "deployment-tool": "cli-firebase",
+        "firebase-functions-codebase": "firebase-frameworks-wellbuilt-sync"
+      },
+      "runServiceId": "ssrwellbuiltsync",
+      "codebase": "firebase-frameworks-wellbuilt-sync",
+      "hash": "4e2244a98a711cb0cbfa036a5222186af6ff5677",
+      "state": "ACTIVE"
+    },
+    {
+      "platform": "gcfv2",
+      "id": "suggestPhotoCriteria",
+      "project": "wellbuilt-sync",
+      "region": "us-central1",
+      "callableTrigger": {},
+      "entryPoint": "suggestPhotoCriteria",
+      "runtime": "nodejs20",
+      "source": {
+        "storageSource": {
+          "bucket": "gcf-v2-sources-559487114498-us-central1",
+          "object": "suggestPhotoCriteria/function-source.zip",
+          "generation": "1781485886419332"
+        }
+      },
+      "ingressSettings": "ALLOW_ALL",
+      "environmentVariables": "[REDACTED: env config removed for checkpoint]",
+      "timeoutSeconds": 60,
+      "uri": "https://us-central1-wellbuilt-sync.cloudfunctions.net/suggestPhotoCriteria",
+      "serviceAccount": "559487114498-compute@developer.gserviceaccount.com",
+      "availableMemoryMb": 512,
+      "cpu": 1,
+      "maxInstances": 20,
+      "concurrency": 80,
+      "labels": {
+        "deployment-tool": "cli-firebase",
+        "deployment-callable": "true",
+        "firebase-functions-codebase": "dashboard",
+        "firebase-functions-hash": "6a0a9030301560c9606b6d179de828ea9b0db835"
+      },
+      "runServiceId": "suggestphotocriteria",
+      "codebase": "dashboard",
+      "hash": "6a0a9030301560c9606b6d179de828ea9b0db835",
+      "state": "ACTIVE"
+    },
+    {
+      "platform": "gcfv2",
+      "id": "transferRequestExpiry",
+      "project": "wellbuilt-sync",
+      "region": "us-central1",
+      "scheduleTrigger": {},
+      "entryPoint": "transferRequestExpiry",
+      "runtime": "nodejs20",
+      "source": {
+        "storageSource": {
+          "bucket": "gcf-v2-sources-559487114498-us-central1",
+          "object": "transferRequestExpiry/function-source.zip",
+          "generation": "1781485828312195"
+        }
+      },
+      "ingressSettings": "ALLOW_ALL",
+      "environmentVariables": "[REDACTED: env config removed for checkpoint]",
+      "timeoutSeconds": 300,
+      "uri": "https://us-central1-wellbuilt-sync.cloudfunctions.net/transferRequestExpiry",
+      "serviceAccount": "559487114498-compute@developer.gserviceaccount.com",
+      "availableMemoryMb": 256,
+      "cpu": 1,
+      "maxInstances": 20,
+      "concurrency": 80,
+      "labels": {
+        "deployment-tool": "cli-firebase",
+        "deployment-scheduled": "true",
+        "firebase-functions-codebase": "dashboard",
+        "firebase-functions-hash": "6a0a9030301560c9606b6d179de828ea9b0db835"
+      },
+      "runServiceId": "transferrequestexpiry",
+      "codebase": "dashboard",
+      "hash": "6a0a9030301560c9606b6d179de828ea9b0db835",
+      "state": "ACTIVE"
+    },
+    {
+      "platform": "gcfv2",
+      "id": "triggerDieselFetch",
+      "project": "wellbuilt-sync",
+      "region": "us-central1",
+      "httpsTrigger": {},
+      "entryPoint": "triggerDieselFetch",
+      "runtime": "nodejs20",
+      "source": {
+        "storageSource": {
+          "bucket": "gcf-v2-sources-559487114498-us-central1",
+          "object": "triggerDieselFetch/function-source.zip",
+          "generation": "1781485828415085"
+        }
+      },
+      "ingressSettings": "ALLOW_ALL",
+      "environmentVariables": "[REDACTED: env config removed for checkpoint]",
+      "timeoutSeconds": 60,
+      "uri": "https://us-central1-wellbuilt-sync.cloudfunctions.net/triggerDieselFetch",
+      "serviceAccount": "559487114498-compute@developer.gserviceaccount.com",
+      "availableMemoryMb": 256,
+      "cpu": 1,
+      "maxInstances": 20,
+      "concurrency": 80,
+      "labels": {
+        "deployment-tool": "cli-firebase",
+        "firebase-functions-codebase": "dashboard",
+        "firebase-functions-hash": "6a0a9030301560c9606b6d179de828ea9b0db835"
+      },
+      "runServiceId": "triggerdieselfetch",
+      "codebase": "dashboard",
+      "hash": "6a0a9030301560c9606b6d179de828ea9b0db835",
+      "state": "ACTIVE"
+    },
+    {
+      "platform": "gcfv2",
+      "id": "triggerWellCatalogRefresh",
+      "project": "wellbuilt-sync",
+      "region": "us-central1",
+      "callableTrigger": {},
+      "entryPoint": "triggerWellCatalogRefresh",
+      "runtime": "nodejs20",
+      "source": {
+        "storageSource": {
+          "bucket": "gcf-v2-sources-559487114498-us-central1",
+          "object": "triggerWellCatalogRefresh/function-source.zip",
+          "generation": "1781576399464773"
+        }
+      },
+      "ingressSettings": "ALLOW_ALL",
+      "environmentVariables": "[REDACTED: env config removed for checkpoint]",
+      "timeoutSeconds": 540,
+      "uri": "https://us-central1-wellbuilt-sync.cloudfunctions.net/triggerWellCatalogRefresh",
+      "serviceAccount": "559487114498-compute@developer.gserviceaccount.com",
+      "availableMemoryMb": 1024,
+      "cpu": 1,
+      "maxInstances": 20,
+      "concurrency": 80,
+      "labels": {
+        "firebase-functions-codebase": "dashboard",
+        "firebase-functions-hash": "4829783b1fd75a7a42dccaaf18ab3ec2aeb876a9",
+        "deployment-tool": "cli-firebase",
+        "deployment-callable": "true"
+      },
+      "runServiceId": "triggerwellcatalogrefresh",
+      "codebase": "dashboard",
+      "hash": "4829783b1fd75a7a42dccaaf18ab3ec2aeb876a9",
+      "state": "ACTIVE"
+    },
+    {
+      "platform": "gcfv2",
+      "id": "validatePhotoCompliance",
+      "project": "wellbuilt-sync",
+      "region": "us-central1",
+      "callableTrigger": {},
+      "entryPoint": "validatePhotoCompliance",
+      "runtime": "nodejs20",
+      "source": {
+        "storageSource": {
+          "bucket": "gcf-v2-sources-559487114498-us-central1",
+          "object": "validatePhotoCompliance/function-source.zip",
+          "generation": "1781485886516650"
+        }
+      },
+      "ingressSettings": "ALLOW_ALL",
+      "environmentVariables": "[REDACTED: env config removed for checkpoint]",
+      "timeoutSeconds": 60,
+      "uri": "https://us-central1-wellbuilt-sync.cloudfunctions.net/validatePhotoCompliance",
+      "serviceAccount": "559487114498-compute@developer.gserviceaccount.com",
+      "availableMemoryMb": 512,
+      "cpu": 1,
+      "maxInstances": 20,
+      "concurrency": 80,
+      "labels": {
+        "firebase-functions-hash": "6a0a9030301560c9606b6d179de828ea9b0db835",
+        "deployment-tool": "cli-firebase",
+        "deployment-callable": "true",
+        "firebase-functions-codebase": "dashboard"
+      },
+      "runServiceId": "validatephotocompliance",
+      "codebase": "dashboard",
+      "hash": "6a0a9030301560c9606b6d179de828ea9b0db835",
+      "state": "ACTIVE"
+    },
+    {
+      "platform": "gcfv2",
+      "id": "watchdogStrandedPackets",
+      "project": "wellbuilt-sync",
+      "region": "us-central1",
+      "scheduleTrigger": {},
+      "entryPoint": "watchdogStrandedPackets",
+      "runtime": "nodejs20",
+      "source": {
+        "storageSource": {
+          "bucket": "gcf-v2-sources-559487114498-us-central1",
+          "object": "watchdogStrandedPackets/function-source.zip",
+          "generation": "1781485828304377"
+        }
+      },
+      "ingressSettings": "ALLOW_ALL",
+      "environmentVariables": "[REDACTED: env config removed for checkpoint]",
+      "timeoutSeconds": 60,
+      "uri": "https://us-central1-wellbuilt-sync.cloudfunctions.net/watchdogStrandedPackets",
+      "serviceAccount": "559487114498-compute@developer.gserviceaccount.com",
+      "availableMemoryMb": 256,
+      "cpu": 1,
+      "maxInstances": 20,
+      "concurrency": 80,
+      "labels": {
+        "firebase-functions-hash": "6a0a9030301560c9606b6d179de828ea9b0db835",
+        "deployment-tool": "cli-firebase",
+        "deployment-scheduled": "true",
+        "firebase-functions-codebase": "dashboard"
+      },
+      "runServiceId": "watchdogstrandedpackets",
+      "codebase": "dashboard",
+      "hash": "6a0a9030301560c9606b6d179de828ea9b0db835",
+      "state": "ACTIVE"
+    },
+    {
+      "platform": "gcfv2",
+      "id": "weeklyDieselPriceFetch",
+      "project": "wellbuilt-sync",
+      "region": "us-central1",
+      "scheduleTrigger": {},
+      "entryPoint": "weeklyDieselPriceFetch",
+      "runtime": "nodejs20",
+      "source": {
+        "storageSource": {
+          "bucket": "gcf-v2-sources-559487114498-us-central1",
+          "object": "weeklyDieselPriceFetch/function-source.zip",
+          "generation": "1781485828423477"
+        }
+      },
+      "ingressSettings": "ALLOW_ALL",
+      "environmentVariables": "[REDACTED: env config removed for checkpoint]",
+      "timeoutSeconds": 60,
+      "uri": "https://us-central1-wellbuilt-sync.cloudfunctions.net/weeklyDieselPriceFetch",
+      "serviceAccount": "559487114498-compute@developer.gserviceaccount.com",
+      "availableMemoryMb": 256,
+      "cpu": 1,
+      "maxInstances": 20,
+      "concurrency": 80,
+      "labels": {
+        "firebase-functions-hash": "6a0a9030301560c9606b6d179de828ea9b0db835",
+        "deployment-tool": "cli-firebase",
+        "deployment-scheduled": "true",
+        "firebase-functions-codebase": "dashboard"
+      },
+      "runServiceId": "weeklydieselpricefetch",
+      "codebase": "dashboard",
+      "hash": "6a0a9030301560c9606b6d179de828ea9b0db835",
+      "state": "ACTIVE"
+    },
+    {
+      "platform": "gcfv2",
+      "id": "writeDiagnosticLog",
+      "project": "wellbuilt-sync",
+      "region": "us-central1",
+      "httpsTrigger": {},
+      "entryPoint": "writeDiagnosticLog",
+      "runtime": "nodejs20",
+      "source": {
+        "storageSource": {
+          "bucket": "gcf-v2-sources-559487114498-us-central1",
+          "object": "writeDiagnosticLog/function-source.zip",
+          "generation": "1781485828330211"
+        }
+      },
+      "ingressSettings": "ALLOW_ALL",
+      "environmentVariables": "[REDACTED: env config removed for checkpoint]",
+      "timeoutSeconds": 60,
+      "uri": "https://us-central1-wellbuilt-sync.cloudfunctions.net/writeDiagnosticLog",
+      "serviceAccount": "559487114498-compute@developer.gserviceaccount.com",
+      "availableMemoryMb": 256,
+      "cpu": 1,
+      "maxInstances": 20,
+      "concurrency": 80,
+      "labels": {
+        "firebase-functions-codebase": "dashboard",
+        "firebase-functions-hash": "6a0a9030301560c9606b6d179de828ea9b0db835",
+        "deployment-tool": "cli-firebase"
+      },
+      "runServiceId": "writediagnosticlog",
+      "codebase": "dashboard",
+      "hash": "6a0a9030301560c9606b6d179de828ea9b0db835",
+      "state": "ACTIVE"
+    },
+    {
+      "platform": "gcfv1",
+      "id": "acceptTransferRequest",
+      "project": "wellbuilt-sync",
+      "region": "us-central1",
+      "callableTrigger": {},
+      "entryPoint": "acceptTransferRequest",
+      "runtime": "nodejs22",
+      "uri": "https://us-central1-wellbuilt-sync.cloudfunctions.net/acceptTransferRequest",
+      "securityLevel": "SECURE_ALWAYS",
+      "ingressSettings": "ALLOW_ALL",
+      "labels": {
+        "firebase-functions-codebase": "waterticket",
+        "firebase-functions-hash": "99fec4a6ba04e85de70ae914a6b12e156bc16235",
+        "deployment-tool": "cli-firebase",
+        "deployment-callable": "true"
+      },
+      "environmentVariables": "[REDACTED: env config removed for checkpoint]",
+      "sourceUploadUrl": "https://storage.googleapis.com/uploads-668692813966.us-central1.cloudfunctions.appspot.com/ddbc38ab-6997-4468-a88e-157c5161dbf7.zip",
+      "serviceAccount": "wellbuilt-sync@appspot.gserviceaccount.com",
+      "availableMemoryMb": 256,
+      "timeoutSeconds": 60,
+      "codebase": "waterticket",
+      "hash": "99fec4a6ba04e85de70ae914a6b12e156bc16235",
+      "state": "ACTIVE"
+    },
+    {
+      "platform": "gcfv1",
+      "id": "assignInvoiceBlock",
+      "project": "wellbuilt-sync",
+      "region": "us-central1",
+      "callableTrigger": {},
+      "entryPoint": "assignInvoiceBlock",
+      "runtime": "nodejs22",
+      "uri": "https://us-central1-wellbuilt-sync.cloudfunctions.net/assignInvoiceBlock",
+      "securityLevel": "SECURE_ALWAYS",
+      "ingressSettings": "ALLOW_ALL",
+      "labels": {
+        "deployment-tool": "cli-firebase",
+        "deployment-callable": "true",
+        "firebase-functions-codebase": "waterticket",
+        "firebase-functions-hash": "99fec4a6ba04e85de70ae914a6b12e156bc16235"
+      },
+      "environmentVariables": "[REDACTED: env config removed for checkpoint]",
+      "sourceUploadUrl": "https://storage.googleapis.com/uploads-668692813966.us-central1.cloudfunctions.appspot.com/ddbc38ab-6997-4468-a88e-157c5161dbf7.zip",
+      "serviceAccount": "wellbuilt-sync@appspot.gserviceaccount.com",
+      "availableMemoryMb": 256,
+      "timeoutSeconds": 60,
+      "codebase": "waterticket",
+      "hash": "99fec4a6ba04e85de70ae914a6b12e156bc16235",
+      "state": "ACTIVE"
+    },
+    {
+      "platform": "gcfv1",
+      "id": "assignTicketBlock",
+      "project": "wellbuilt-sync",
+      "region": "us-central1",
+      "callableTrigger": {},
+      "entryPoint": "assignTicketBlock",
+      "runtime": "nodejs22",
+      "uri": "https://us-central1-wellbuilt-sync.cloudfunctions.net/assignTicketBlock",
+      "securityLevel": "SECURE_ALWAYS",
+      "ingressSettings": "ALLOW_ALL",
+      "labels": {
+        "firebase-functions-hash": "99fec4a6ba04e85de70ae914a6b12e156bc16235",
+        "deployment-tool": "cli-firebase",
+        "deployment-callable": "true",
+        "firebase-functions-codebase": "waterticket"
+      },
+      "environmentVariables": "[REDACTED: env config removed for checkpoint]",
+      "sourceUploadUrl": "https://storage.googleapis.com/uploads-668692813966.us-central1.cloudfunctions.appspot.com/ddbc38ab-6997-4468-a88e-157c5161dbf7.zip",
+      "serviceAccount": "wellbuilt-sync@appspot.gserviceaccount.com",
+      "availableMemoryMb": 256,
+      "timeoutSeconds": 60,
+      "codebase": "waterticket",
+      "hash": "99fec4a6ba04e85de70ae914a6b12e156bc16235",
+      "state": "ACTIVE"
+    },
+    {
+      "platform": "gcfv1",
+      "id": "backfillTransferredTickets",
+      "project": "wellbuilt-sync",
+      "region": "us-central1",
+      "callableTrigger": {},
+      "entryPoint": "backfillTransferredTickets",
+      "runtime": "nodejs20",
+      "uri": "https://us-central1-wellbuilt-sync.cloudfunctions.net/backfillTransferredTickets",
+      "securityLevel": "SECURE_ALWAYS",
+      "ingressSettings": "ALLOW_ALL",
+      "labels": {
+        "deployment-tool": "cli-firebase",
+        "deployment-callable": "true",
+        "firebase-functions-codebase": "dashboard",
+        "firebase-functions-hash": "b1ceb799d0c9b3a94a4cd71237de0f247f0b76f7"
+      },
+      "environmentVariables": "[REDACTED: env config removed for checkpoint]",
+      "sourceUploadUrl": "https://storage.googleapis.com/uploads-668692813966.us-central1.cloudfunctions.appspot.com/5e5b5e35-4ad5-488f-8837-0ef72032f676.zip",
+      "serviceAccount": "wellbuilt-sync@appspot.gserviceaccount.com",
+      "availableMemoryMb": 256,
+      "timeoutSeconds": 60,
+      "codebase": "dashboard",
+      "hash": "b1ceb799d0c9b3a94a4cd71237de0f247f0b76f7",
+      "state": "ACTIVE"
+    },
+    {
+      "platform": "gcfv1",
+      "id": "getWellData",
+      "project": "wellbuilt-sync",
+      "region": "us-central1",
+      "callableTrigger": {},
+      "entryPoint": "getWellData",
+      "runtime": "nodejs22",
+      "uri": "https://us-central1-wellbuilt-sync.cloudfunctions.net/getWellData",
+      "securityLevel": "SECURE_ALWAYS",
+      "ingressSettings": "ALLOW_ALL",
+      "labels": {
+        "deployment-tool": "cli-firebase",
+        "deployment-callable": "true",
+        "firebase-functions-codebase": "waterticket",
+        "firebase-functions-hash": "99fec4a6ba04e85de70ae914a6b12e156bc16235"
+      },
+      "environmentVariables": "[REDACTED: env config removed for checkpoint]",
+      "sourceUploadUrl": "https://storage.googleapis.com/uploads-668692813966.us-central1.cloudfunctions.appspot.com/ddbc38ab-6997-4468-a88e-157c5161dbf7.zip",
+      "serviceAccount": "wellbuilt-sync@appspot.gserviceaccount.com",
+      "availableMemoryMb": 256,
+      "timeoutSeconds": 60,
+      "codebase": "waterticket",
+      "hash": "99fec4a6ba04e85de70ae914a6b12e156bc16235",
+      "state": "ACTIVE"
+    },
+    {
+      "platform": "gcfv1",
+      "id": "materializeTransferredTicket",
+      "project": "wellbuilt-sync",
+      "region": "us-central1",
+      "eventTrigger": {
+        "eventType": "providers/cloud.firestore/eventTypes/document.update",
+        "eventFilters": {
+          "resource": "projects/wellbuilt-sync/databases/(default)/documents/invoices/{invoiceId}"
+        },
+        "retry": false
+      },
+      "entryPoint": "materializeTransferredTicket",
+      "runtime": "nodejs20",
+      "maxInstances": 3000,
+      "ingressSettings": "ALLOW_ALL",
+      "labels": {
+        "deployment-tool": "cli-firebase",
+        "firebase-functions-codebase": "dashboard",
+        "firebase-functions-hash": "b1ceb799d0c9b3a94a4cd71237de0f247f0b76f7"
+      },
+      "environmentVariables": "[REDACTED: env config removed for checkpoint]",
+      "sourceUploadUrl": "https://storage.googleapis.com/uploads-668692813966.us-central1.cloudfunctions.appspot.com/5e5b5e35-4ad5-488f-8837-0ef72032f676.zip",
+      "serviceAccount": "wellbuilt-sync@appspot.gserviceaccount.com",
+      "availableMemoryMb": 256,
+      "timeoutSeconds": 60,
+      "codebase": "dashboard",
+      "hash": "b1ceb799d0c9b3a94a4cd71237de0f247f0b76f7",
+      "state": "ACTIVE"
+    },
+    {
+      "platform": "gcfv1",
+      "id": "onDispatchCreate",
+      "project": "wellbuilt-sync",
+      "region": "us-central1",
+      "eventTrigger": {
+        "eventType": "providers/cloud.firestore/eventTypes/document.create",
+        "eventFilters": {
+          "resource": "projects/wellbuilt-sync/databases/(default)/documents/dispatches/{jobId}"
+        },
+        "retry": false
+      },
+      "entryPoint": "onDispatchCreate",
+      "runtime": "nodejs20",
+      "maxInstances": 3000,
+      "ingressSettings": "ALLOW_ALL",
+      "labels": {
+        "deployment-tool": "cli-firebase",
+        "firebase-functions-codebase": "dashboard",
+        "firebase-functions-hash": "b1ceb799d0c9b3a94a4cd71237de0f247f0b76f7"
+      },
+      "environmentVariables": "[REDACTED: env config removed for checkpoint]",
+      "sourceUploadUrl": "https://storage.googleapis.com/uploads-668692813966.us-central1.cloudfunctions.appspot.com/5e5b5e35-4ad5-488f-8837-0ef72032f676.zip",
+      "serviceAccount": "wellbuilt-sync@appspot.gserviceaccount.com",
+      "availableMemoryMb": 256,
+      "timeoutSeconds": 60,
+      "codebase": "dashboard",
+      "hash": "b1ceb799d0c9b3a94a4cd71237de0f247f0b76f7",
+      "state": "ACTIVE"
+    },
+    {
+      "platform": "gcfv1",
+      "id": "onDispatchUpdate",
+      "project": "wellbuilt-sync",
+      "region": "us-central1",
+      "eventTrigger": {
+        "eventType": "providers/cloud.firestore/eventTypes/document.update",
+        "eventFilters": {
+          "resource": "projects/wellbuilt-sync/databases/(default)/documents/dispatches/{jobId}"
+        },
+        "retry": false
+      },
+      "entryPoint": "onDispatchUpdate",
+      "runtime": "nodejs20",
+      "maxInstances": 3000,
+      "ingressSettings": "ALLOW_ALL",
+      "labels": {
+        "deployment-tool": "cli-firebase",
+        "firebase-functions-codebase": "dashboard",
+        "firebase-functions-hash": "b1ceb799d0c9b3a94a4cd71237de0f247f0b76f7"
+      },
+      "environmentVariables": "[REDACTED: env config removed for checkpoint]",
+      "sourceUploadUrl": "https://storage.googleapis.com/uploads-668692813966.us-central1.cloudfunctions.appspot.com/5e5b5e35-4ad5-488f-8837-0ef72032f676.zip",
+      "serviceAccount": "wellbuilt-sync@appspot.gserviceaccount.com",
+      "availableMemoryMb": 256,
+      "timeoutSeconds": 60,
+      "codebase": "dashboard",
+      "hash": "b1ceb799d0c9b3a94a4cd71237de0f247f0b76f7",
+      "state": "ACTIVE"
+    },
+    {
+      "platform": "gcfv1",
+      "id": "onProjectWrite",
+      "project": "wellbuilt-sync",
+      "region": "us-central1",
+      "eventTrigger": {
+        "eventType": "providers/cloud.firestore/eventTypes/document.write",
+        "eventFilters": {
+          "resource": "projects/wellbuilt-sync/databases/(default)/documents/projects/{projectId}"
+        },
+        "retry": false
+      },
+      "entryPoint": "onProjectWrite",
+      "runtime": "nodejs20",
+      "maxInstances": 3000,
+      "ingressSettings": "ALLOW_ALL",
+      "labels": {
+        "deployment-tool": "cli-firebase",
+        "firebase-functions-codebase": "dashboard",
+        "firebase-functions-hash": "b1ceb799d0c9b3a94a4cd71237de0f247f0b76f7"
+      },
+      "environmentVariables": "[REDACTED: env config removed for checkpoint]",
+      "sourceUploadUrl": "https://storage.googleapis.com/uploads-668692813966.us-central1.cloudfunctions.appspot.com/5e5b5e35-4ad5-488f-8837-0ef72032f676.zip",
+      "serviceAccount": "wellbuilt-sync@appspot.gserviceaccount.com",
+      "availableMemoryMb": 256,
+      "timeoutSeconds": 60,
+      "codebase": "dashboard",
+      "hash": "b1ceb799d0c9b3a94a4cd71237de0f247f0b76f7",
+      "state": "ACTIVE"
+    },
+    {
+      "platform": "gcfv1",
+      "id": "onShiftCreate",
+      "project": "wellbuilt-sync",
+      "region": "us-central1",
+      "eventTrigger": {
+        "eventType": "providers/cloud.firestore/eventTypes/document.create",
+        "eventFilters": {
+          "resource": "projects/wellbuilt-sync/databases/(default)/documents/driver_shifts/{shiftId}"
+        },
+        "retry": false
+      },
+      "entryPoint": "onShiftCreate",
+      "runtime": "nodejs20",
+      "maxInstances": 3000,
+      "ingressSettings": "ALLOW_ALL",
+      "labels": {
+        "deployment-tool": "cli-firebase",
+        "firebase-functions-codebase": "dashboard",
+        "firebase-functions-hash": "b1ceb799d0c9b3a94a4cd71237de0f247f0b76f7"
+      },
+      "environmentVariables": "[REDACTED: env config removed for checkpoint]",
+      "sourceUploadUrl": "https://storage.googleapis.com/uploads-668692813966.us-central1.cloudfunctions.appspot.com/5e5b5e35-4ad5-488f-8837-0ef72032f676.zip",
+      "serviceAccount": "wellbuilt-sync@appspot.gserviceaccount.com",
+      "availableMemoryMb": 256,
+      "timeoutSeconds": 60,
+      "codebase": "dashboard",
+      "hash": "b1ceb799d0c9b3a94a4cd71237de0f247f0b76f7",
+      "state": "ACTIVE"
+    },
+    {
+      "platform": "gcfv1",
+      "id": "onShiftUpdate",
+      "project": "wellbuilt-sync",
+      "region": "us-central1",
+      "eventTrigger": {
+        "eventType": "providers/cloud.firestore/eventTypes/document.update",
+        "eventFilters": {
+          "resource": "projects/wellbuilt-sync/databases/(default)/documents/driver_shifts/{shiftId}"
+        },
+        "retry": false
+      },
+      "entryPoint": "onShiftUpdate",
+      "runtime": "nodejs20",
+      "maxInstances": 3000,
+      "ingressSettings": "ALLOW_ALL",
+      "labels": {
+        "firebase-functions-hash": "b1ceb799d0c9b3a94a4cd71237de0f247f0b76f7",
+        "deployment-tool": "cli-firebase",
+        "firebase-functions-codebase": "dashboard"
+      },
+      "environmentVariables": "[REDACTED: env config removed for checkpoint]",
+      "sourceUploadUrl": "https://storage.googleapis.com/uploads-668692813966.us-central1.cloudfunctions.appspot.com/5e5b5e35-4ad5-488f-8837-0ef72032f676.zip",
+      "serviceAccount": "wellbuilt-sync@appspot.gserviceaccount.com",
+      "availableMemoryMb": 256,
+      "timeoutSeconds": 60,
+      "codebase": "dashboard",
+      "hash": "b1ceb799d0c9b3a94a4cd71237de0f247f0b76f7",
+      "state": "ACTIVE"
+    },
+    {
+      "platform": "gcfv1",
+      "id": "onTransferRequestCreated",
+      "project": "wellbuilt-sync",
+      "region": "us-central1",
+      "eventTrigger": {
+        "eventType": "providers/cloud.firestore/eventTypes/document.create",
+        "eventFilters": {
+          "resource": "projects/wellbuilt-sync/databases/(default)/documents/transfer_requests/{requestId}"
+        },
+        "retry": false
+      },
+      "entryPoint": "onTransferRequestCreated",
+      "runtime": "nodejs22",
+      "maxInstances": 3000,
+      "ingressSettings": "ALLOW_ALL",
+      "labels": {
+        "deployment-tool": "cli-firebase",
+        "firebase-functions-codebase": "waterticket",
+        "firebase-functions-hash": "99fec4a6ba04e85de70ae914a6b12e156bc16235"
+      },
+      "environmentVariables": "[REDACTED: env config removed for checkpoint]",
+      "sourceUploadUrl": "https://storage.googleapis.com/uploads-668692813966.us-central1.cloudfunctions.appspot.com/ddbc38ab-6997-4468-a88e-157c5161dbf7.zip",
+      "serviceAccount": "wellbuilt-sync@appspot.gserviceaccount.com",
+      "availableMemoryMb": 256,
+      "timeoutSeconds": 60,
+      "codebase": "waterticket",
+      "hash": "99fec4a6ba04e85de70ae914a6b12e156bc16235",
+      "state": "ACTIVE"
+    },
+    {
+      "platform": "gcfv1",
+      "id": "onUserWrite",
+      "project": "wellbuilt-sync",
+      "region": "us-central1",
+      "eventTrigger": {
+        "eventType": "providers/google.firebase.database/eventTypes/ref.write",
+        "eventFilters": {
+          "resource": "projects/_/instances/wellbuilt-sync-default-rtdb/refs/users/{uid}"
+        },
+        "retry": false
+      },
+      "entryPoint": "onUserWrite",
+      "runtime": "nodejs20",
+      "maxInstances": 3000,
+      "ingressSettings": "ALLOW_ALL",
+      "labels": {
+        "deployment-tool": "cli-firebase",
+        "firebase-functions-codebase": "dashboard",
+        "firebase-functions-hash": "b1ceb799d0c9b3a94a4cd71237de0f247f0b76f7"
+      },
+      "environmentVariables": "[REDACTED: env config removed for checkpoint]",
+      "sourceUploadUrl": "https://storage.googleapis.com/uploads-668692813966.us-central1.cloudfunctions.appspot.com/5e5b5e35-4ad5-488f-8837-0ef72032f676.zip",
+      "serviceAccount": "wellbuilt-sync@appspot.gserviceaccount.com",
+      "availableMemoryMb": 256,
+      "timeoutSeconds": 60,
+      "codebase": "dashboard",
+      "hash": "b1ceb799d0c9b3a94a4cd71237de0f247f0b76f7",
+      "state": "ACTIVE"
+    },
+    {
+      "platform": "gcfv1",
+      "id": "processDeleteRequest",
+      "project": "wellbuilt-sync",
+      "region": "us-central1",
+      "eventTrigger": {
+        "eventType": "providers/google.firebase.database/eventTypes/ref.create",
+        "eventFilters": {
+          "resource": "projects/_/instances/wellbuilt-sync-default-rtdb/refs/packets/incoming/{packetId}"
+        },
+        "retry": false
+      },
+      "entryPoint": "processDeleteRequest",
+      "runtime": "nodejs20",
+      "maxInstances": 3000,
+      "ingressSettings": "ALLOW_ALL",
+      "labels": {
+        "deployment-tool": "cli-firebase",
+        "firebase-functions-codebase": "dashboard",
+        "firebase-functions-hash": "2c7968291b69ce4866eb025938b5828dd5110848"
+      },
+      "environmentVariables": "[REDACTED: env config removed for checkpoint]",
+      "sourceUploadUrl": "https://storage.googleapis.com/uploads-668692813966.us-central1.cloudfunctions.appspot.com/ae7b1b4b-bc83-44d0-9aa2-6dfae51b9a42.zip",
+      "serviceAccount": "wellbuilt-sync@appspot.gserviceaccount.com",
+      "availableMemoryMb": 256,
+      "timeoutSeconds": 60,
+      "codebase": "dashboard",
+      "hash": "2c7968291b69ce4866eb025938b5828dd5110848",
+      "state": "ACTIVE"
+    },
+    {
+      "platform": "gcfv1",
+      "id": "processEditRequest",
+      "project": "wellbuilt-sync",
+      "region": "us-central1",
+      "eventTrigger": {
+        "eventType": "providers/google.firebase.database/eventTypes/ref.create",
+        "eventFilters": {
+          "resource": "projects/_/instances/wellbuilt-sync-default-rtdb/refs/packets/incoming/{packetId}"
+        },
+        "retry": false
+      },
+      "entryPoint": "processEditRequest",
+      "runtime": "nodejs20",
+      "maxInstances": 3000,
+      "ingressSettings": "ALLOW_ALL",
+      "labels": {
+        "deployment-tool": "cli-firebase",
+        "firebase-functions-codebase": "dashboard",
+        "firebase-functions-hash": "a352b4dbc3188f134702f531912dee5b97e12b06"
+      },
+      "environmentVariables": "[REDACTED: env config removed for checkpoint]",
+      "sourceUploadUrl": "https://storage.googleapis.com/uploads-668692813966.us-central1.cloudfunctions.appspot.com/a8f5f818-0b54-415e-b64f-290e60d6370b.zip",
+      "serviceAccount": "wellbuilt-sync@appspot.gserviceaccount.com",
+      "availableMemoryMb": 256,
+      "timeoutSeconds": 60,
+      "codebase": "dashboard",
+      "hash": "a352b4dbc3188f134702f531912dee5b97e12b06",
+      "state": "ACTIVE"
+    },
+    {
+      "platform": "gcfv1",
+      "id": "processIncomingPull",
+      "project": "wellbuilt-sync",
+      "region": "us-central1",
+      "eventTrigger": {
+        "eventType": "providers/google.firebase.database/eventTypes/ref.create",
+        "eventFilters": {
+          "resource": "projects/_/instances/wellbuilt-sync-default-rtdb/refs/packets/incoming/{packetId}"
+        },
+        "retry": false
+      },
+      "entryPoint": "processIncomingPull",
+      "runtime": "nodejs20",
+      "maxInstances": 3000,
+      "ingressSettings": "ALLOW_ALL",
+      "labels": {
+        "deployment-tool": "cli-firebase",
+        "firebase-functions-codebase": "dashboard",
+        "firebase-functions-hash": "2c7968291b69ce4866eb025938b5828dd5110848"
+      },
+      "environmentVariables": "[REDACTED: env config removed for checkpoint]",
+      "sourceUploadUrl": "https://storage.googleapis.com/uploads-668692813966.us-central1.cloudfunctions.appspot.com/ae7b1b4b-bc83-44d0-9aa2-6dfae51b9a42.zip",
+      "serviceAccount": "wellbuilt-sync@appspot.gserviceaccount.com",
+      "availableMemoryMb": 256,
+      "timeoutSeconds": 60,
+      "codebase": "dashboard",
+      "hash": "2c7968291b69ce4866eb025938b5828dd5110848",
+      "state": "ACTIVE"
+    },
+    {
+      "platform": "gcfv1",
+      "id": "resolveTransferRequest",
+      "project": "wellbuilt-sync",
+      "region": "us-central1",
+      "callableTrigger": {},
+      "entryPoint": "resolveTransferRequest",
+      "runtime": "nodejs22",
+      "uri": "https://us-central1-wellbuilt-sync.cloudfunctions.net/resolveTransferRequest",
+      "securityLevel": "SECURE_ALWAYS",
+      "ingressSettings": "ALLOW_ALL",
+      "labels": {
+        "deployment-tool": "cli-firebase",
+        "deployment-callable": "true",
+        "firebase-functions-codebase": "waterticket",
+        "firebase-functions-hash": "99fec4a6ba04e85de70ae914a6b12e156bc16235"
+      },
+      "environmentVariables": "[REDACTED: env config removed for checkpoint]",
+      "sourceUploadUrl": "https://storage.googleapis.com/uploads-668692813966.us-central1.cloudfunctions.appspot.com/ddbc38ab-6997-4468-a88e-157c5161dbf7.zip",
+      "serviceAccount": "wellbuilt-sync@appspot.gserviceaccount.com",
+      "availableMemoryMb": 256,
+      "timeoutSeconds": 60,
+      "codebase": "waterticket",
+      "hash": "99fec4a6ba04e85de70ae914a6b12e156bc16235",
+      "state": "ACTIVE"
+    },
+    {
+      "platform": "gcfv1",
+      "id": "runMaterializerDriftScanOnDemand",
+      "project": "wellbuilt-sync",
+      "region": "us-central1",
+      "callableTrigger": {},
+      "entryPoint": "runMaterializerDriftScanOnDemand",
+      "runtime": "nodejs20",
+      "uri": "https://us-central1-wellbuilt-sync.cloudfunctions.net/runMaterializerDriftScanOnDemand",
+      "securityLevel": "SECURE_ALWAYS",
+      "ingressSettings": "ALLOW_ALL",
+      "labels": {
+        "deployment-tool": "cli-firebase",
+        "deployment-callable": "true",
+        "firebase-functions-codebase": "dashboard",
+        "firebase-functions-hash": "b1ceb799d0c9b3a94a4cd71237de0f247f0b76f7"
+      },
+      "environmentVariables": "[REDACTED: env config removed for checkpoint]",
+      "sourceUploadUrl": "https://storage.googleapis.com/uploads-668692813966.us-central1.cloudfunctions.appspot.com/5e5b5e35-4ad5-488f-8837-0ef72032f676.zip",
+      "serviceAccount": "wellbuilt-sync@appspot.gserviceaccount.com",
+      "availableMemoryMb": 256,
+      "timeoutSeconds": 60,
+      "codebase": "dashboard",
+      "hash": "b1ceb799d0c9b3a94a4cd71237de0f247f0b76f7",
+      "state": "ACTIVE"
+    },
+    {
+      "platform": "gcfv1",
+      "id": "runTransferRequestExpiryOnDemand",
+      "project": "wellbuilt-sync",
+      "region": "us-central1",
+      "callableTrigger": {},
+      "entryPoint": "runTransferRequestExpiryOnDemand",
+      "runtime": "nodejs20",
+      "uri": "https://us-central1-wellbuilt-sync.cloudfunctions.net/runTransferRequestExpiryOnDemand",
+      "securityLevel": "SECURE_ALWAYS",
+      "ingressSettings": "ALLOW_ALL",
+      "labels": {
+        "deployment-tool": "cli-firebase",
+        "deployment-callable": "true",
+        "firebase-functions-codebase": "dashboard",
+        "firebase-functions-hash": "b1ceb799d0c9b3a94a4cd71237de0f247f0b76f7"
+      },
+      "environmentVariables": "[REDACTED: env config removed for checkpoint]",
+      "sourceUploadUrl": "https://storage.googleapis.com/uploads-668692813966.us-central1.cloudfunctions.appspot.com/5e5b5e35-4ad5-488f-8837-0ef72032f676.zip",
+      "serviceAccount": "wellbuilt-sync@appspot.gserviceaccount.com",
+      "availableMemoryMb": 256,
+      "timeoutSeconds": 60,
+      "codebase": "dashboard",
+      "hash": "b1ceb799d0c9b3a94a4cd71237de0f247f0b76f7",
+      "state": "ACTIVE"
+    },
+    {
+      "platform": "gcfv1",
+      "id": "submitTicket",
+      "project": "wellbuilt-sync",
+      "region": "us-central1",
+      "callableTrigger": {},
+      "entryPoint": "submitTicket",
+      "runtime": "nodejs22",
+      "uri": "https://us-central1-wellbuilt-sync.cloudfunctions.net/submitTicket",
+      "securityLevel": "SECURE_ALWAYS",
+      "ingressSettings": "ALLOW_ALL",
+      "labels": {
+        "deployment-tool": "cli-firebase",
+        "deployment-callable": "true",
+        "firebase-functions-codebase": "waterticket",
+        "firebase-functions-hash": "f95ced77cb4ebd2f4a7db05990338e0447efb90d"
+      },
+      "environmentVariables": "[REDACTED: env config removed for checkpoint]",
+      "sourceUploadUrl": "https://storage.googleapis.com/uploads-668692813966.us-central1.cloudfunctions.appspot.com/090d014a-f446-4faa-a656-6a9b37cc0ba9.zip",
+      "serviceAccount": "wellbuilt-sync@appspot.gserviceaccount.com",
+      "availableMemoryMb": 256,
+      "timeoutSeconds": 60,
+      "codebase": "waterticket",
+      "hash": "f95ced77cb4ebd2f4a7db05990338e0447efb90d",
+      "state": "ACTIVE"
+    },
+    {
+      "platform": "gcfv1",
+      "id": "updateTicket",
+      "project": "wellbuilt-sync",
+      "region": "us-central1",
+      "callableTrigger": {},
+      "entryPoint": "updateTicket",
+      "runtime": "nodejs22",
+      "uri": "https://us-central1-wellbuilt-sync.cloudfunctions.net/updateTicket",
+      "securityLevel": "SECURE_ALWAYS",
+      "ingressSettings": "ALLOW_ALL",
+      "labels": {
+        "firebase-functions-hash": "94a7efcb0c845fd9e62f3ff76f05e7e831a037eb",
+        "deployment-tool": "cli-firebase",
+        "deployment-callable": "true",
+        "firebase-functions-codebase": "waterticket"
+      },
+      "environmentVariables": "[REDACTED: env config removed for checkpoint]",
+      "sourceUploadUrl": "https://storage.googleapis.com/uploads-668692813966.us-central1.cloudfunctions.appspot.com/76c46034-ec5b-49f1-b6aa-5ce9872d41cc.zip",
+      "serviceAccount": "wellbuilt-sync@appspot.gserviceaccount.com",
+      "availableMemoryMb": 256,
+      "timeoutSeconds": 60,
+      "codebase": "waterticket",
+      "hash": "94a7efcb0c845fd9e62f3ff76f05e7e831a037eb",
+      "state": "ACTIVE"
+    }
+  ]
+}

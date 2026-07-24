@@ -243,29 +243,19 @@ export function DriversTab({ scopeCompanyId, isWbAdmin = false }: DriversTabProp
       pending.sort((a, b) => (b.timestamp || 0) - (a.timestamp || 0));
       setPendingDrivers(pending);
 
-      // Load dashboard users (users/{uid}). Purely-dashboard employees
-      // (not linked to a driver record) appear only here; drivers who have
-      // been promoted via inviteEmployee appear in BOTH lists and are linked
-      // via driverHash on the user side + dashboardUid on the driver side.
-      const usersSnap = await get(ref(db, 'users'));
-      const userList: DashboardUser[] = [];
-      if (usersSnap.exists()) {
-        const data = usersSnap.val();
-        Object.entries(data).forEach(([uid, val]: [string, any]) => {
-          if (!val?.role || val.role === 'driver') return; // skip plain drivers
-          userList.push({
-            uid,
-            email: val.email || '',
-            displayName: val.displayName || val.email || 'Unknown',
-            role: val.role as UserRole,
-            roles: Array.isArray(val.roles) && val.roles.length > 0 ? (val.roles as UserRole[]) : undefined,
-            companyId: val.companyId || undefined,
-            companyName: val.companyName || undefined,
-            driverHash: val.driverHash || undefined,
-          });
-        });
-      }
-      userList.sort((a, b) => a.displayName.localeCompare(b.displayName));
+      // RTDB containment — privileged users list via callable (not full users/ tree).
+      const listUsersFn = httpsCallable(getFirebaseFunctions(), 'listDashboardUsers');
+      const usersResult: any = await listUsersFn();
+      const userList: DashboardUser[] = (usersResult.data?.users || []).map((val: any) => ({
+        uid: val.uid,
+        email: val.email || '',
+        displayName: val.displayName || val.email || 'Unknown',
+        role: val.role as UserRole,
+        roles: Array.isArray(val.roles) && val.roles.length > 0 ? (val.roles as UserRole[]) : undefined,
+        companyId: val.companyId || undefined,
+        companyName: val.companyName || undefined,
+        driverHash: val.driverHash || undefined,
+      }));
       setDashboardUsers(userList);
     } catch (err) {
       console.error('Failed to load employees:', err);
