@@ -9,7 +9,9 @@ import {
   ambiguousEditVerdict,
   comparePullEquivalence,
   editAlreadyApplied,
+  editMaterialChange,
   evaluateIncomingPull,
+  isStaleRevision,
   orphanEditVerdict,
   packetIdCollisionVerdict,
   quarantineIncomingPacket,
@@ -1663,6 +1665,41 @@ export const processEditRequest = functionsV1.database
       return null;
     }
 
+    // ── 7/25 revision ordering (optional metadata, backward compatible) ──
+    // An edit carrying revisionAt older than the pull's lastRevisionAt is a
+    // late straggler: acknowledge (consume) and drop — never revert newer
+    // business state. Clients without revisionAt keep last-write-wins.
+    if (isStaleRevision(data, origPacket)) {
+      console.log(
+        `[EDIT_STALE_REVISION] ${wellName}: edit ${context.params.packetId} ` +
+          `(revisionAt ${data.revisionAt}) older than applied ${origPacket.lastRevisionAt} — acknowledged, not applied`,
+      );
+      await removeIncomingPacket(db.ref(), context.params.packetId);
+      return null;
+    }
+
+    // ── 7/25 normalized no-op: identical milestone revisions ─────────────
+    // WB-T sends the complete canonical state on every Depart / Close /
+    // Split / History save. When no MATERIAL field differs (top, BBLs,
+    // well identity, operational instant, asserted wellDown), the revision
+    // acknowledges successfully by consuming the incoming packet — the
+    // pull is not rewritten, tank-after / flow / AFR are not recomputed,
+    // and the original operational timestamps are untouched. Transport and
+    // audit fields can never create a false material change
+    // (editMaterialChange inspects material fields only).
+    const material = editMaterialChange(data, origPacket);
+    if (!material.changed) {
+      console.log(
+        `[EDIT_NOOP_IDENTICAL] ${wellName}: edit ${context.params.packetId} matches ` +
+          `processed ${originalPacketId} on all material fields — acknowledged without reapply`,
+      );
+      await removeIncomingPacket(db.ref(), context.params.packetId);
+      return null;
+    }
+    console.log(
+      `[EDIT_MATERIAL_CHANGE] ${wellName}: ${originalPacketId} fields changed: ${material.fields.join(', ')}`,
+    );
+
     // Get well config
     const cleanName = wellName.replace(/\s/g, '');
     let configSnap = await db.ref(`well_config/${wellName}`).once('value');
@@ -1728,6 +1765,7 @@ export const processEditRequest = functionsV1.database
         noLevel: true,
         wellDown: newWellDown,
         ...fallbackAuditFields,
+        ...(typeof data.revisionAt === 'string' && data.revisionAt ? { lastRevisionAt: data.revisionAt } : {}),
       });
       await db.ref(`wells/${wellName}/status/isDown`).set(nextEditIsDown);
       await snapshot.ref.remove();
@@ -1816,6 +1854,7 @@ export const processEditRequest = functionsV1.database
       editedBy: data.source || 'dashboard',
       wellDown: newWellDown,
       ...fallbackAuditFields,
+      ...(typeof data.revisionAt === 'string' && data.revisionAt ? { lastRevisionAt: data.revisionAt } : {}),
     };
 
     await db.ref(`packets/processed/${originalPacketId}`).update(updates);

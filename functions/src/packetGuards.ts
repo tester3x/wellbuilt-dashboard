@@ -332,6 +332,97 @@ export async function resolveEditTarget(
   return { kind: 'fallback', packetId: candidates[0].key, packet: candidates[0].val };
 }
 
+// ─── 7/25 — normalized revision comparison + ordering safety ────────────────
+//
+// WB-T now synchronizes unconditionally (Depart / Close / Split / History
+// save all send the complete canonical pull state). Identical revisions must
+// acknowledge successfully WITHOUT rewriting the pull or recomputing
+// tank-after / flow / AFR, and an older revision arriving late must never
+// revert newer business state.
+//
+// MATERIAL fields (business truth):
+//   - top level     — tankTopInches (inches) or tankLevelFeet×12, rounded to
+//                     whole inches (formatting-only differences equal out)
+//   - bblsTaken     — Number()-normalized ('165' == 165)
+//   - wellName      — trimmed exact identity (well/tank identity)
+//   - dateTimeUTC   — the operational gauge instant; an edit carrying a
+//                     DIFFERENT instant is a deliberate date correction.
+//                     WB-T milestones carry the ORIGINAL instant → equal.
+//   - wellDown      — only when the edit explicitly asserts it
+// EXCLUDED (transport/audit — can never create a false material change):
+//   processedAt, editedAt/editedBy, receivedAt/server times, retry counts,
+//   queuedOffline, jobOrigin, splitRevisionNonce, revisionAt, source,
+//   canonical link context (invoiceDocId/dispatchId/companyId), and every
+//   derived analytic (tankAfter*, flowRate*, recovery*, timeDif*).
+
+export interface EditMaterialVerdict {
+  changed: boolean;
+  /** Material fields that differ (diagnostic). */
+  fields: string[];
+}
+
+const numOf = (v: unknown): number | null => {
+  if (v === undefined || v === null || v === '') return null;
+  const n = Number(v);
+  return Number.isFinite(n) ? n : null;
+};
+const strOf = (v: unknown): string | null => {
+  if (v === undefined || v === null) return null;
+  const s = String(v).trim();
+  return s === '' ? null : s;
+};
+
+/**
+ * Normalized material comparison between an incoming edit and the stored
+ * processed pull. Fields the edit does not carry are "no assertion" and
+ * never count as changes (partial edits stay supported).
+ */
+export function editMaterialChange(
+  edit: Record<string, unknown>,
+  processed: Record<string, unknown>,
+): EditMaterialVerdict {
+  const fields: string[] = [];
+
+  const editTop = topInchesOf(edit);
+  if (editTop !== null && editTop !== topInchesOf(processed)) fields.push('topInches');
+
+  const editBbls = numOf(edit.bblsTaken);
+  if (editBbls !== null && editBbls !== numOf(processed.bblsTaken)) fields.push('bblsTaken');
+
+  const editWell = strOf(edit.wellName);
+  if (editWell !== null && editWell !== strOf(processed.wellName)) fields.push('wellName');
+
+  const editUtc = strOf(edit.dateTimeUTC);
+  if (editUtc !== null && editUtc !== strOf(processed.dateTimeUTC)) fields.push('dateTimeUTC');
+
+  if (edit.wellDown !== undefined) {
+    const assertDown = edit.wellDown === true || edit.wellDown === 'true';
+    if (assertDown !== Boolean(processed.wellDown)) fields.push('wellDown');
+  }
+
+  return { changed: fields.length > 0, fields };
+}
+
+/**
+ * Optional revision ordering: when the incoming edit carries `revisionAt`
+ * (ISO) AND the processed pull already recorded a newer `lastRevisionAt`,
+ * the incoming edit is a stale straggler — acknowledge and drop, never
+ * revert. Clients without revisionAt (all current callers) return false and
+ * keep today's last-write-wins protocol — fully backward compatible.
+ */
+export function isStaleRevision(
+  edit: Record<string, unknown>,
+  processed: Record<string, unknown>,
+): boolean {
+  const incoming = strOf(edit.revisionAt);
+  const applied = strOf(processed.lastRevisionAt);
+  if (!incoming || !applied) return false;
+  const a = Date.parse(incoming);
+  const b = Date.parse(applied);
+  if (!Number.isFinite(a) || !Number.isFinite(b)) return false;
+  return a < b;
+}
+
 /** Verdict for an edit whose invoiceDocId fallback matched MULTIPLE processed
  *  pulls — quarantine explicitly; guessing could edit another job's pull. */
 export function ambiguousEditVerdict(
