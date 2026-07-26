@@ -121,6 +121,9 @@ describe('processEditRequest wiring', () => {
 
   test('orphan quarantines use ORIGINAL_PACKET_NOT_FOUND via orphanEditVerdict', () => {
     expect(editHandler).toContain('orphanEditVerdict(null)');
-    expect(editHandler).toContain('orphanEditVerdict(originalPacketId)');
+    // 7/25 invoice-identity fallback: the orphan verdict now records the
+    // REQUESTED id (the client's claim); the resolved canonical id is
+    // assigned to `originalPacketId` only after resolution succeeds.
+    expect(editHandler).toContain('orphanEditVerdict(requestedPacketId)');
   });
 });

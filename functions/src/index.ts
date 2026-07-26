@@ -6,6 +6,7 @@ import Anthropic from '@anthropic-ai/sdk';
 import { upsertCanonicalJob } from './canonical-jobs/upsertCanonicalJob';
 import { logCanonicalDiag } from './canonical-jobs/diag';
 import {
+  ambiguousEditVerdict,
   comparePullEquivalence,
   editAlreadyApplied,
   evaluateIncomingPull,
@@ -13,6 +14,7 @@ import {
   packetIdCollisionVerdict,
   quarantineIncomingPacket,
   removeIncomingPacket,
+  resolveEditTarget,
   strandedPacketVerdict,
 } from './packetGuards';
 
@@ -1550,10 +1552,10 @@ export const processEditRequest = functionsV1.database
     }
 
     // WB M sends the original packet ID as "packetId", dashboard sends as "originalPacketId"
-    const originalPacketId = data.originalPacketId || data.packetId;
+    const requestedPacketId = data.originalPacketId || data.packetId;
     const wellName = data.wellName;
 
-    if (!originalPacketId) {
+    if (!requestedPacketId) {
       // GS3 follow-up: never silently destroy an edit — quarantine it.
       console.error(`Edit failed: no originalPacketId or packetId on edit packet`);
       await quarantineIncomingPacket(db.ref(), {
@@ -1565,24 +1567,88 @@ export const processEditRequest = functionsV1.database
       return null;
     }
 
-    console.log(`Processing edit for ${wellName}: ${originalPacketId}`);
+    console.log(`Processing edit for ${wellName}: ${requestedPacketId}`);
 
-    // Read the original processed packet
-    const origSnap = await db.ref(`packets/processed/${originalPacketId}`).once('value');
-    if (!origSnap.exists()) {
+    // ── 7/25 exact invoice-identity resolution (ticket 19852) ─────────────
+    // The requested id may be a client-persisted stale-rejected twin while
+    // the REAL processed pull carries the same immutable invoiceDocId.
+    // Resolution: exact id → use it (unchanged); missing + exactly one
+    // invoiceDocId candidate → use the processed pull (ITS id stays
+    // canonical everywhere below — the phantom is never stamped); zero →
+    // the existing orphan quarantine; multiple → explicit ambiguity
+    // quarantine. Never resolved by timestamp/well/driver/quantity.
+    const resolution = await resolveEditTarget(
+      {
+        readProcessed: async (pid) => {
+          const s = await db.ref(`packets/processed/${pid}`).once('value');
+          return s.exists() ? (s.val() as Record<string, unknown>) : null;
+        },
+        queryProcessedByInvoiceDocId: async (inv) => {
+          const s = await db
+            .ref('packets/processed')
+            .orderByChild('invoiceDocId')
+            .equalTo(inv)
+            .once('value');
+          const rows: Array<{ key: string; val: Record<string, unknown> }> = [];
+          s.forEach((child) => {
+            rows.push({ key: String(child.key), val: child.val() as Record<string, unknown> });
+          });
+          return rows;
+        },
+      },
+      requestedPacketId,
+      (data as { invoiceDocId?: unknown }).invoiceDocId,
+    );
+
+    if (resolution.kind === 'not_found') {
       // GS3 7/22/2026: five driver edits targeting stale-deleted originals
       // were silently removed here. Quarantine instead — the edit's values
       // are the driver's ground truth and may be the only surviving copy.
-      console.error(`Edit failed: packet ${originalPacketId} not found in processed/`);
+      console.error(`Edit failed: packet ${requestedPacketId} not found in processed/`);
       await quarantineIncomingPacket(db.ref(), {
         packetId: context.params.packetId,
         packet: data,
-        verdict: orphanEditVerdict(originalPacketId),
+        verdict: orphanEditVerdict(requestedPacketId),
         nowMs: Date.now(),
       });
       return null;
     }
-    const origPacket = origSnap.val();
+    if (resolution.kind === 'ambiguous') {
+      console.error(
+        `Edit failed: ${requestedPacketId} missing and invoiceDocId matches ${resolution.candidateIds.length} pulls — ambiguous`,
+      );
+      await quarantineIncomingPacket(db.ref(), {
+        packetId: context.params.packetId,
+        packet: data,
+        verdict: ambiguousEditVerdict(
+          requestedPacketId,
+          (data as { invoiceDocId?: unknown }).invoiceDocId,
+          resolution.candidateIds,
+        ),
+        nowMs: Date.now(),
+      });
+      return null;
+    }
+
+    // From here on, `originalPacketId` is the CANONICAL processed pull id —
+    // every downstream write, back-patch, and linkage stamp uses it. On a
+    // fallback the requested phantom id appears only in audit fields.
+    const originalPacketId = resolution.packetId;
+    const editResolvedViaFallback = resolution.kind === 'fallback';
+    if (editResolvedViaFallback) {
+      console.log(
+        `[EDIT_FALLBACK_RESOLVED] ${wellName}: requested ${requestedPacketId} missing — ` +
+          `resolved by exact invoiceDocId to processed ${originalPacketId}`,
+      );
+    }
+    const origPacket = resolution.packet as Record<string, any>;
+    // Audit indication persisted with the edit application (both update paths).
+    const fallbackAuditFields = editResolvedViaFallback
+      ? {
+          editResolvedVia: 'invoiceDocId_fallback',
+          editRequestedPacketId: requestedPacketId,
+        }
+      : {};
 
     // Exact duplicate edit replay: PROVABLY already applied only when the
     // original carries an edit marker AND its values already equal this
@@ -1661,6 +1727,7 @@ export const processEditRequest = functionsV1.database
         editedBy: data.source || 'dashboard',
         noLevel: true,
         wellDown: newWellDown,
+        ...fallbackAuditFields,
       });
       await db.ref(`wells/${wellName}/status/isDown`).set(nextEditIsDown);
       await snapshot.ref.remove();
@@ -1748,6 +1815,7 @@ export const processEditRequest = functionsV1.database
       editedAt: new Date().toISOString(),
       editedBy: data.source || 'dashboard',
       wellDown: newWellDown,
+      ...fallbackAuditFields,
     };
 
     await db.ref(`packets/processed/${originalPacketId}`).update(updates);

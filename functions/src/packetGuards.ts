@@ -27,6 +27,7 @@ export type RejectionReason =
   | 'FUTURE_WELL_WATERMARK'
   | 'STALE_PULL_TIME'
   | 'ORIGINAL_PACKET_NOT_FOUND'
+  | 'AMBIGUOUS_EDIT_TARGET'
   | 'MALFORMED_PULL_TIME'
   | 'MALFORMED_WELL_WATERMARK'
   | 'STRANDED_INCOMING_PACKET'
@@ -272,6 +273,82 @@ export async function removeIncomingPacket(rootRef: RootRefLike, packetId: strin
     console.error(`[IDEMPOTENT_REPLAY] incoming cleanup FAILED for ${packetId} — left intact for retry`, err);
     return false;
   }
+}
+
+// ─── 7/25 — exact invoice-identity edit resolution ──────────────────────────
+//
+// Field failure (ticket 19852): the client's Depart minted twin packet ids;
+// the processed pull was `…_7guae0` while the invoice persisted the
+// stale-rejected `…_q1jwti`. The close EDIT (140→165) targeted the phantom
+// and was quarantined ORIGINAL_PACKET_NOT_FOUND even though BOTH records
+// carry the same immutable invoiceDocId. Resolution order:
+//   1. originalPacketId in processed/ → exact (unchanged behavior).
+//   2. Missing + valid invoiceDocId → bounded indexed lookup by EXACT
+//      invoiceDocId. Exactly one candidate → use it (its id stays
+//      canonical; the phantom is never stamped anywhere). Zero → the
+//      existing orphan quarantine. Multiple → AMBIGUOUS_EDIT_TARGET
+//      quarantine — never guess.
+// Never resolved by timestamp, well name, driver, quantity, nearest-time,
+// or first-result.
+
+/** Injectable read surface for edit-target resolution (jest-testable). */
+export interface EditResolutionDb {
+  /** processed/{packetId} value or null. */
+  readProcessed(packetId: string): Promise<Record<string, unknown> | null>;
+  /** Bounded indexed query: processed records whose invoiceDocId equals the
+      given value exactly (requires the packets/processed invoiceDocId
+      .indexOn — see database.rules.json). */
+  queryProcessedByInvoiceDocId(
+    invoiceDocId: string,
+  ): Promise<Array<{ key: string; val: Record<string, unknown> }>>;
+}
+
+export type EditTargetResolution =
+  | { kind: 'exact'; packetId: string; packet: Record<string, unknown> }
+  | { kind: 'fallback'; packetId: string; packet: Record<string, unknown> }
+  | { kind: 'not_found' }
+  | { kind: 'ambiguous'; candidateIds: string[] };
+
+export async function resolveEditTarget(
+  dbi: EditResolutionDb,
+  originalPacketId: string,
+  invoiceDocId: unknown,
+): Promise<EditTargetResolution> {
+  const exact = await dbi.readProcessed(originalPacketId);
+  if (exact) return { kind: 'exact', packetId: originalPacketId, packet: exact };
+
+  const inv = typeof invoiceDocId === 'string' ? invoiceDocId.trim() : '';
+  if (!inv) return { kind: 'not_found' };
+
+  const rows = await dbi.queryProcessedByInvoiceDocId(inv);
+  // Defensive: processed/ holds pulls; never let a non-pull artifact match.
+  const candidates = rows.filter(
+    (r) => ((r.val as { requestType?: unknown }).requestType ?? 'pull') === 'pull',
+  );
+  if (candidates.length === 0) return { kind: 'not_found' };
+  if (candidates.length > 1) {
+    return { kind: 'ambiguous', candidateIds: candidates.map((c) => c.key).sort() };
+  }
+  return { kind: 'fallback', packetId: candidates[0].key, packet: candidates[0].val };
+}
+
+/** Verdict for an edit whose invoiceDocId fallback matched MULTIPLE processed
+ *  pulls — quarantine explicitly; guessing could edit another job's pull. */
+export function ambiguousEditVerdict(
+  originalPacketId: unknown,
+  invoiceDocId: unknown,
+  candidateIds: string[],
+): GuardVerdict {
+  return {
+    action: 'quarantine',
+    reason: 'AMBIGUOUS_EDIT_TARGET',
+    readableReason:
+      `Edit targets missing packet ${String(originalPacketId)}; invoiceDocId ` +
+      `${String(invoiceDocId)} matches ${candidateIds.length} processed pulls ` +
+      `(${candidateIds.join(', ')}) — refusing to guess. Held in packets/rejected ` +
+      `for manual resolution.`,
+    comparedWatermarkUTC: null,
+  };
 }
 
 /** Verdict for an edit whose original packet cannot be found in processed/. */
