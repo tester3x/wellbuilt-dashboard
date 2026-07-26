@@ -9,6 +9,12 @@ import { loadAllCompanies, type CompanyConfig } from '@/lib/companySettings';
 import { AppHeader } from '@/components/AppHeader';
 import { SubHeader } from '@/components/SubHeader';
 import { getFirebaseDatabase, getFirestoreDb } from '@/lib/firebase';
+import {
+  WELL_EDITOR_DEFAULTS,
+  buildEditorSavePayload,
+  effectiveBblPerFoot,
+  normalizeWellEditorFields,
+} from '@/lib/wellEditorFields';
 import { ref, get, set, remove, onValue, query, orderByChild, equalTo, update } from 'firebase/database';
 import { doc, getDoc } from 'firebase/firestore';
 import {
@@ -160,6 +166,12 @@ export default function AdminPage() {
   // Flow-math config (2026-06-14)
   const [editWellActiveTanks, setEditWellActiveTanks] = useState('');
   const [editWellBblPerFootOverride, setEditWellBblPerFootOverride] = useState('');
+  // 7/26 default-truth: which engineering fields the SELECTED record actually
+  // persists (any alias). false ⇒ the form shows an unsaved default and the
+  // UI must say so instead of presenting it as stored.
+  const [editFieldPresence, setEditFieldPresence] = useState({
+    bottom: true, pullBbls: true, tankCapacity: true, tankHeight: true, bblPerFoot: true,
+  });
   const [editWellEqualized, setEditWellEqualized] = useState(false);
   const [editWellRequireActualBottom, setEditWellRequireActualBottom] = useState(false);
 
@@ -335,11 +347,24 @@ export default function AdminPage() {
       const config = configs[selectedWell];
       setEditWellName(selectedWell); // Set the editable name
       setEditWellRoute(config.route || 'Unrouted');
-      setEditWellBottom(String(config.bottomLevel || 3));
-      setEditWellTanks(String(config.tanks || config.numTanks || 1));
-      setEditWellPullBbls(String(config.pullBbls || 140));
-      setEditWellTankCapacity(String(config.tankCapacity || 400));
-      setEditWellTankHeight(String(config.tankHeight || 20));
+      // 7/26 default-truth: seed from the presence-aware normalizer so a
+      // legacy record's REAL values (e.g. Gab 1's allowedBottom=1.33, hidden
+      // behind `bottomLevel || 3`) load into the form, and so missing
+      // engineering fields are KNOWN to be defaults (editFieldPresence) and
+      // rendered as "Default — not saved" instead of looking persisted.
+      const norm = normalizeWellEditorFields(config as unknown as Record<string, unknown>);
+      setEditWellBottom(String(norm.bottomFeet.value ?? WELL_EDITOR_DEFAULTS.bottomFeet));
+      setEditWellTanks(String(norm.tanks.value ?? WELL_EDITOR_DEFAULTS.tanks));
+      setEditWellPullBbls(String(norm.pullBbls.value ?? WELL_EDITOR_DEFAULTS.pullBbls));
+      setEditWellTankCapacity(String(norm.tankCapacity.value ?? WELL_EDITOR_DEFAULTS.tankCapacity));
+      setEditWellTankHeight(String(norm.tankHeight.value ?? WELL_EDITOR_DEFAULTS.tankHeight));
+      setEditFieldPresence({
+        bottom: norm.bottomFeet.present,
+        pullBbls: norm.pullBbls.present,
+        tankCapacity: norm.tankCapacity.present,
+        tankHeight: norm.tankHeight.present,
+        bblPerFoot: norm.bblPerFoot.present,
+      });
       setEditWellWaterWeight(config.waterWeight ? String(config.waterWeight) : '');
       setEditWellH2s((config as any).h2sStatus || 'unknown');
       // Flow-math config — activeTanks defaults to physical tanks when unset
@@ -886,38 +911,34 @@ export default function AdminPage() {
     const editTankCap = parseInt(editWellTankCapacity) || 400;
     const editTankHt = parseFloat(editWellTankHeight) || 20;
     const editNumTanks = parseInt(editWellTanks) || 1;
-    // Active/flowing tanks default to physical tank count when blank.
-    const editActiveTanks = parseInt(editWellActiveTanks) || editNumTanks;
-    // Manual bbl/ft override wins; else derive from capacity/height × active tanks.
+    // Manual bbl/ft override wins; else the tested builder derives from
+    // capacity/height × active tanks (active defaults to physical when blank).
     const editOverrideRaw = parseFloat(editWellBblPerFootOverride);
     const editHasOverride = editWellBblPerFootOverride.trim() !== '' && !isNaN(editOverrideRaw) && editOverrideRaw > 0;
-    const editBblPerFoot = editHasOverride ? editOverrideRaw : (editTankCap / editTankHt) * editActiveTanks;
 
     const editParsedBottom = parseLevelToFeet(editWellBottom) || 3;
-    const config: WellConfig = {
-      route: editWellRoute || 'Unrouted',
-      bottomLevel: editParsedBottom,
+    // 7/26 default-truth: the payload comes from the ONE tested builder.
+    // Pressing Save is explicit acceptance of the DISPLAYED inputs (the form
+    // is seeded from the persisted aliases, so Gab 1's real 1.33 bottom is
+    // what gets re-written, never a hidden default). The payload carries only
+    // editor-owned fields — update() merge preserves loadLine, routeGroupWell,
+    // routeColor, avgFlowRate*, routeRecording and every CF-written field.
+    const config = buildEditorSavePayload({
+      route: editWellRoute,
+      bottomFeet: editParsedBottom,
       tanks: editNumTanks,
-      // Also write app-compatible field names
-      allowedBottom: editParsedBottom,
-      numTanks: editNumTanks,
+      activeTanks: parseInt(editWellActiveTanks) > 0 ? parseInt(editWellActiveTanks) : null,
       pullBbls: parseInt(editWellPullBbls) || 140,
-      // Tank dimensions + EFFECTIVE bblPerFoot (override if set, else derived)
       tankCapacity: editTankCap,
       tankHeight: editTankHt,
-      bblPerFoot: editBblPerFoot,
-      // Flow-math config — null override explicitly clears any prior manual value
-      activeTanks: editActiveTanks,
       bblPerFootOverride: editHasOverride ? editOverrideRaw : null,
       equalizedTanks: editWellEqualized,
       requireActualBottom: editWellRequireActualBottom,
-      // NDIC linkage
-      ...(editNdicName ? { ndicName: editNdicName } : {}),
-      ...(editNdicApiNo ? { ndicApiNo: editNdicApiNo } : {}),
-      // Water properties
-      ...(editWellWaterWeight ? { waterWeight: parseFloat(editWellWaterWeight) } : {}),
       h2sStatus: editWellH2s,
-    };
+      ndicName: editNdicName || undefined,
+      ndicApiNo: editNdicApiNo || undefined,
+      waterWeight: editWellWaterWeight ? parseFloat(editWellWaterWeight) : undefined,
+    }) as unknown as WellConfig;
 
     if (isNameChanged) {
       // Rename the well - update all references
@@ -1310,15 +1331,35 @@ export default function AdminPage() {
                       )}
                     </div>
                     <div className="text-gray-400 text-sm">Route: {configs[wellName].route || 'Unrouted'}</div>
-                    <div className="flex gap-3 text-xs text-gray-500 mt-0.5">
-                      <span>Tanks: {configs[wellName].tanks || configs[wellName].numTanks || 1}</span>
-                      <span>Bottom: {configs[wellName].bottomLevel || 3}&apos;</span>
-                      <span>Pull: {configs[wellName].pullBbls || 140} BBL</span>
-                      <span>{configs[wellName].bblPerFoot ? `${configs[wellName].bblPerFoot} BBL/ft` : `${(configs[wellName].tanks || configs[wellName].numTanks || 1) * 20} BBL/ft`}</span>
-                      {configs[wellName].avgFlowRate && (
-                        <span>AFR: {configs[wellName].avgFlowRate}</span>
-                      )}
-                    </div>
+                    {/* 7/26 default-truth: fallback values must never look
+                        persisted. Bottom honors the allowedBottom alias
+                        (Gab 1's real 1.33 was hidden by `bottomLevel || 3`);
+                        a rate derived from unsaved defaults is a marked
+                        preview, never presented as a stored BBL/ft. */}
+                    {(() => {
+                      const n = normalizeWellEditorFields(configs[wellName] as unknown as Record<string, unknown>);
+                      const eff = effectiveBblPerFoot(n);
+                      const rateText = `${Number(eff.rate.toFixed(2))} BBL/ft`;
+                      return (
+                        <div className="flex gap-3 text-xs text-gray-500 mt-0.5 flex-wrap">
+                          <span>Tanks: {n.tanks.value ?? WELL_EDITOR_DEFAULTS.tanks}</span>
+                          <span>
+                            Bottom: {feetToDisplay(n.bottomFeet.value ?? WELL_EDITOR_DEFAULTS.bottomFeet)}
+                            {n.bottomFeet.present ? '' : ' (default)'}
+                          </span>
+                          <span>
+                            Pull: {n.pullBbls.value ?? WELL_EDITOR_DEFAULTS.pullBbls} BBL
+                            {n.pullBbls.present ? '' : ' (default)'}
+                          </span>
+                          <span className={eff.source === 'derived-defaults' ? 'text-amber-600' : ''}>
+                            {eff.source === 'derived-defaults' ? `~${rateText.replace(' BBL/ft', '')} BBL/ft (preview)` : rateText}
+                          </span>
+                          {configs[wellName].avgFlowRate && (
+                            <span>AFR: {configs[wellName].avgFlowRate}</span>
+                          )}
+                        </div>
+                      );
+                    })()}
                     {configs[wellName].ndicApiNo && (
                       <div className="text-teal-400 text-xs">API: {configs[wellName].ndicApiNo}</div>
                     )}
@@ -1673,6 +1714,9 @@ export default function AdminPage() {
                           disabled={isRenaming}
                         />
                         <div className="text-xs text-gray-500 mt-0.5">= {feetToDisplay(parseLevelToFeet(editWellBottom))}</div>
+                        {!editFieldPresence.bottom && (
+                          <div className="text-xs text-amber-500 mt-0.5">Default — not saved</div>
+                        )}
                       </div>
                       <div>
                         <label className="text-gray-400 text-sm">Tanks</label>
@@ -1693,6 +1737,9 @@ export default function AdminPage() {
                           className="w-full px-3 py-2 bg-gray-700 text-white rounded"
                           disabled={isRenaming}
                         />
+                        {!editFieldPresence.pullBbls && (
+                          <div className="text-xs text-amber-500 mt-0.5">Default — not saved</div>
+                        )}
                       </div>
                     </div>
                     {/* Tank dimensions */}
@@ -1706,6 +1753,9 @@ export default function AdminPage() {
                           className="w-full px-3 py-2 bg-gray-700 text-white rounded"
                           disabled={isRenaming}
                         />
+                        {!editFieldPresence.tankCapacity && (
+                          <div className="text-xs text-amber-500 mt-0.5">Default — not saved</div>
+                        )}
                       </div>
                       <div>
                         <label className="text-gray-400 text-sm">Tank Height (ft)</label>
@@ -1717,6 +1767,9 @@ export default function AdminPage() {
                           className="w-full px-3 py-2 bg-gray-700 text-white rounded"
                           disabled={isRenaming}
                         />
+                        {!editFieldPresence.tankHeight && (
+                          <div className="text-xs text-amber-500 mt-0.5">Default — not saved</div>
+                        )}
                       </div>
                     </div>
                     {/* Flow-math: active/flowing tanks + manual bbl/ft override */}
@@ -1747,8 +1800,12 @@ export default function AdminPage() {
                         <div className="text-xs text-gray-500 mt-0.5">Manual — replaces derived</div>
                       </div>
                     </div>
-                    <div className="text-xs text-gray-500 mt-1">
+                    <div className="text-xs mt-1">
                       {(() => {
+                        // 7/26 default-truth: the rate line must say WHERE the
+                        // number comes from — persisted truth, saved-tank
+                        // derivation, manual override, or a preview built from
+                        // unsaved defaults. A preview must never read as stored.
                         const cap = parseInt(editWellTankCapacity) || 400;
                         const ht = parseFloat(editWellTankHeight) || 20;
                         const physical = parseInt(editWellTanks) || 1;
@@ -1756,7 +1813,18 @@ export default function AdminPage() {
                         const ovr = parseFloat(editWellBblPerFootOverride);
                         const hasOvr = editWellBblPerFootOverride.trim() !== '' && !isNaN(ovr) && ovr > 0;
                         const eff = hasOvr ? ovr : (cap / ht) * active;
-                        return `Effective BBL/ft: ${eff.toFixed(1)} per foot ${hasOvr ? '(manual override)' : `(${active} active tank${active > 1 ? 's' : ''})`}`;
+                        const tanksLabel = `(${active} active tank${active > 1 ? 's' : ''})`;
+                        if (hasOvr) {
+                          return <span className="text-amber-400">{`Manual override: ${eff.toFixed(1)} BBL/ft`}</span>;
+                        }
+                        const enginePersisted = editFieldPresence.tankCapacity && editFieldPresence.tankHeight;
+                        if (editFieldPresence.bblPerFoot && enginePersisted) {
+                          return <span className="text-green-500">{`Saved: ${eff.toFixed(1)} BBL/ft ${tanksLabel}`}</span>;
+                        }
+                        if (enginePersisted) {
+                          return <span className="text-gray-400">{`Preview from saved tanks: ${eff.toFixed(1)} BBL/ft ${tanksLabel} — press Save Changes to store the rate`}</span>;
+                        }
+                        return <span className="text-amber-500">{`Preview — derived from unsaved defaults: ${eff.toFixed(1)} BBL/ft ${tanksLabel}. Default — not saved until you press Save Changes.`}</span>;
                       })()}
                     </div>
                     <button
