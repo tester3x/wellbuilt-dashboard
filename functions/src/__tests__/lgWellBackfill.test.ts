@@ -75,6 +75,27 @@ describe('computeBackfill', () => {
   });
 });
 
+describe('admin incomplete-config wiring (source-slice)', () => {
+  const fs = require('fs');
+  const path = require('path');
+  const page = fs.readFileSync(path.join(__dirname, '../../../src/app/admin/page.tsx'), 'utf8');
+  test('an incomplete-config count is shown to admins', () => {
+    expect(page).toContain('isEngineeringConfigured(');
+    expect(page).toContain('need');
+    expect(page).toContain('tank config');
+  });
+  test('a "show only wells needing config" filter exists', () => {
+    expect(page).toContain('showOnlyIncomplete');
+  });
+  test('Save/Create still persist via the tested payload builders (no silent backfill)', () => {
+    // Edit Save uses buildEditorSavePayload; Add uses buildWellConfig — both
+    // persist engineering explicitly. Neither auto-fills a well behind the
+    // admin's back.
+    expect(page).toContain('buildEditorSavePayload(');
+    expect(page).not.toContain('autoBackfill');
+  });
+});
+
 describe('planBackfill — whole set', () => {
   const configs: Record<string, any> = {
     'Gabriel 2': previewGabriel2,

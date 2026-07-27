@@ -15,6 +15,7 @@ import {
   effectiveBblPerFoot,
   normalizeWellEditorFields,
 } from '@/lib/wellEditorFields';
+import { isEngineeringConfigured } from '@/lib/lgWellBackfillCore';
 import { ref, get, set, remove, onValue, query, orderByChild, equalTo, update } from 'firebase/database';
 import { doc, getDoc } from 'firebase/firestore';
 import {
@@ -217,6 +218,9 @@ export default function AdminPage() {
 
   // Search filters
   const [wellSearch, setWellSearch] = useState('');
+  // 7/26 — admin visibility for legacy/preview wells that have no persisted
+  // engineering (so a default rate can never quietly masquerade as saved).
+  const [showOnlyIncomplete, setShowOnlyIncomplete] = useState(false);
   const [routeSearch, setRouteSearch] = useState('');
 
   // Firebase path key restrictions - these characters break database paths
@@ -1290,7 +1294,7 @@ export default function AdminPage() {
           <div className="flex-1 grid grid-cols-1 lg:grid-cols-2 gap-6 min-h-0">
             {/* Well List */}
             <div className="bg-gray-800 rounded-lg p-4 flex flex-col min-h-0 overflow-hidden">
-              <div className="flex items-center justify-between mb-4 flex-shrink-0">
+              <div className="flex items-center justify-between mb-2 flex-shrink-0">
                 <h2 className="text-lg font-semibold text-white">Maintained Wells</h2>
                 <input
                   type="text"
@@ -1300,6 +1304,36 @@ export default function AdminPage() {
                   className="w-1/3 px-3 py-1 bg-gray-700 text-white rounded text-sm"
                 />
               </div>
+              {/* 7/26 — incomplete-configuration count + filter. A well is
+                  "needs config" when it has no persisted BBL/ft, override, or
+                  capacity+height (its Dashboard rate is a preview default, not
+                  saved). Never auto-backfilled — the admin decides. */}
+              {(() => {
+                const incomplete = Object.keys(visibleConfigs).filter(
+                  (wn) => !isEngineeringConfigured(visibleConfigs[wn] as unknown as Record<string, unknown>),
+                );
+                return (
+                  <div className="flex items-center gap-3 mb-3 flex-shrink-0">
+                    <span
+                      className={`text-xs px-2 py-0.5 rounded-full ${incomplete.length > 0 ? 'bg-amber-900/50 text-amber-300 border border-amber-800' : 'bg-green-900/40 text-green-300 border border-green-800'}`}
+                    >
+                      {incomplete.length > 0
+                        ? `${incomplete.length} need${incomplete.length === 1 ? 's' : ''} tank config`
+                        : 'All wells configured'}
+                    </span>
+                    {incomplete.length > 0 && (
+                      <label className="flex items-center gap-1.5 text-xs text-gray-400 cursor-pointer select-none">
+                        <input
+                          type="checkbox"
+                          checked={showOnlyIncomplete}
+                          onChange={(e) => setShowOnlyIncomplete(e.target.checked)}
+                        />
+                        Show only wells needing config
+                      </label>
+                    )}
+                  </div>
+                );
+              })()}
               {Object.keys(visibleConfigs).length === 0 ? (
                 <div className="flex-1 min-h-0 flex flex-col items-center justify-center text-center px-6">
                   <p className="text-gray-300 font-medium">No maintained wells configured.</p>
@@ -1317,6 +1351,7 @@ export default function AdminPage() {
               <div className="space-y-2 overflow-y-auto flex-1 min-h-0">
                 {Object.keys(visibleConfigs)
                   .filter(wellName => wellName.toLowerCase().includes(wellSearch.toLowerCase()))
+                  .filter(wellName => !showOnlyIncomplete || !isEngineeringConfigured(visibleConfigs[wellName] as unknown as Record<string, unknown>))
                   .sort()
                   .map(wellName => (
                   <div
