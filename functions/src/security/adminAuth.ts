@@ -35,34 +35,72 @@ export interface DashboardCaller {
   isPlatformAdmin: boolean;
 }
 
-/** Require signed-in dashboard user with manageDrivers. */
+/**
+ * Require signed-in dashboard user with manageDrivers.
+ * Sources (in order):
+ * 1. RTDB users/{uid} role + company roleCapabilities (production path)
+ * 2. Auth custom claims { role/roles, manageDrivers: true } — used by
+ *    emulator tests and optional future claim backfill; never sufficient
+ *    alone without manageDrivers claim or admin/it role in claims.
+ */
 export async function requireManageDrivers(
   authUid: string | undefined,
+  authToken?: Record<string, unknown> | null,
 ): Promise<DashboardCaller> {
   if (!authUid) {
     throw new httpsV2.HttpsError('unauthenticated', 'Must be signed in');
   }
-  const snap = await admin.database().ref(`users/${authUid}`).once('value');
-  if (!snap.exists()) {
-    throw new httpsV2.HttpsError('permission-denied', 'Caller is not a registered dashboard user');
-  }
-  const userData = snap.val() as Record<string, unknown>;
-  const roles = resolveRoles(userData);
-  const companyId = typeof userData.companyId === 'string' ? userData.companyId : undefined;
 
-  let overrides: Record<string, string[]> = {};
-  if (companyId) {
-    try {
-      const cSnap = await admin.firestore().collection('companies').doc(companyId).get();
-      overrides = (cSnap.data()?.roleCapabilities || {}) as Record<string, string[]>;
-    } catch {
-      /* best-effort */
+  // Prefer RTDB profile (source of truth for Dashboard)
+  const snap = await admin.database().ref(`users/${authUid}`).once('value');
+  if (snap.exists()) {
+    const userData = snap.val() as Record<string, unknown>;
+    const roles = resolveRoles(userData);
+    const companyId = typeof userData.companyId === 'string' ? userData.companyId : undefined;
+
+    let overrides: Record<string, string[]> = {};
+    if (companyId) {
+      try {
+        const cSnap = await admin.firestore().collection('companies').doc(companyId).get();
+        overrides = (cSnap.data()?.roleCapabilities || {}) as Record<string, string[]>;
+      } catch {
+        /* best-effort */
+      }
+    }
+    const caps = resolveCaps(roles, overrides);
+    if (!caps.includes('manageDrivers')) {
+      throw new httpsV2.HttpsError('permission-denied', 'Caller lacks manageDrivers capability');
+    }
+    const isPlatformAdmin = !companyId && roles.some((r) => r === 'admin' || r === 'it');
+    return { uid: authUid, roles, companyId, caps, isPlatformAdmin };
+  }
+
+  // Fallback: Auth custom claims (emulator + optional claim-based admin)
+  if (authToken && typeof authToken === 'object') {
+    const claimRoles: string[] = [];
+    if (typeof authToken.role === 'string') claimRoles.push(authToken.role);
+    if (Array.isArray(authToken.roles)) {
+      for (const r of authToken.roles) {
+        if (typeof r === 'string') claimRoles.push(r);
+      }
+    }
+    const claimCaps = resolveCaps(claimRoles, {});
+    const explicit =
+      authToken.manageDrivers === true ||
+      authToken.manageDrivers === 'true' ||
+      claimCaps.includes('manageDrivers');
+    if (explicit) {
+      const companyId =
+        typeof authToken.companyId === 'string' ? authToken.companyId : undefined;
+      return {
+        uid: authUid,
+        roles: claimRoles.length ? claimRoles : ['admin'],
+        companyId,
+        caps: explicit ? [...claimCaps, 'manageDrivers'] : claimCaps,
+        isPlatformAdmin: !companyId && claimRoles.some((r) => r === 'admin' || r === 'it'),
+      };
     }
   }
-  const caps = resolveCaps(roles, overrides);
-  if (!caps.includes('manageDrivers')) {
-    throw new httpsV2.HttpsError('permission-denied', 'Caller lacks manageDrivers capability');
-  }
-  const isPlatformAdmin = !companyId && roles.some((r) => r === 'admin' || r === 'it');
-  return { uid: authUid, roles, companyId, caps, isPlatformAdmin };
+
+  throw new httpsV2.HttpsError('permission-denied', 'Caller is not a registered dashboard user');
 }

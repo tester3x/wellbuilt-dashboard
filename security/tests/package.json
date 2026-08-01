@@ -1,0 +1,15 @@
+{
+  "name": "wellbuilt-security-tests",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "test:unit": "node ../../functions/lib/security/passcode.unit.test.js",
+    "test:rules": "node rules-adversarial.test.mjs",
+    "test:callables": "node callables-emulator.test.mjs"
+  },
+  "dependencies": {
+    "@firebase/rules-unit-testing": "^4.0.1",
+    "firebase": "^11.6.0",
+    "firebase-admin": "^13.6.0"
+  }
+}

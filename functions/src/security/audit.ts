@@ -1,4 +1,5 @@
 import * as admin from 'firebase-admin';
+import { FieldValue } from 'firebase-admin/firestore';
 
 export async function writeSecurityAudit(entry: {
   action: string;
@@ -13,7 +14,7 @@ export async function writeSecurityAudit(entry: {
   try {
     await admin.firestore().collection('security_audit').add({
       ...entry,
-      ts: admin.firestore.FieldValue.serverTimestamp(),
+      ts: FieldValue.serverTimestamp(),
     });
   } catch (err) {
     console.warn('[security_audit] write failed (non-fatal):', (err as Error)?.message);

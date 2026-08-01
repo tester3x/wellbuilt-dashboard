@@ -4,6 +4,8 @@
  */
 import * as httpsV2 from 'firebase-functions/v2/https';
 import * as admin from 'firebase-admin';
+import { FieldValue } from 'firebase-admin/firestore';
+import { ServerValue } from 'firebase-admin/database';
 import { randomUUID } from 'crypto';
 import {
   hashPasscodeScrypt,
@@ -12,6 +14,7 @@ import {
   validateRegistrationFields,
   ScryptRecord,
   legacySha256NamePasscode,
+  PASSCODE_MIN_LEN,
 } from './passcode';
 import { checkRateLimit, hashIp } from './rateLimit';
 import { writeSecurityAudit } from './audit';
@@ -99,7 +102,7 @@ export const requestDriverRegistration = httpsV2.onCall(
 
     const pendingId = randomUUID();
     const passcodeRecord = await hashPasscodeScrypt(fields.passcode);
-    const now = admin.firestore.FieldValue.serverTimestamp();
+    const now = FieldValue.serverTimestamp();
 
     await fs().collection('pending_credentials').doc(pendingId).set({
       passcode: passcodeRecord,
@@ -114,7 +117,7 @@ export const requestDriverRegistration = httpsV2.onCall(
       source,
       status: 'pending',
       schemaVersion: 1,
-      requestedAt: admin.database.ServerValue.TIMESTAMP,
+      requestedAt: ServerValue.TIMESTAMP,
       appId: meta.appId,
     });
 
@@ -213,12 +216,6 @@ export const authenticateDriver = httpsV2.onCall(
     if (cred.active === false) {
       throw new httpsV2.HttpsError('permission-denied', 'This account has been deactivated');
     }
-    if (cred.mustResetPasscode === true) {
-      throw new httpsV2.HttpsError(
-        'failed-precondition',
-        'Passcode reset required. Contact your admin or re-register.',
-      );
-    }
 
     const ok = await verifyPasscodeScrypt(passcode, cred.passcode as ScryptRecord);
     if (!ok) {
@@ -238,6 +235,8 @@ export const authenticateDriver = httpsV2.onCall(
       throw new httpsV2.HttpsError('permission-denied', 'This account has been deactivated');
     }
 
+    const mustChangePasscode = cred.mustResetPasscode === true;
+
     // Ensure Auth user exists for custom token
     const authUid = `driver_${driverId.replace(/-/g, '').slice(0, 28)}`;
     try {
@@ -256,12 +255,13 @@ export const authenticateDriver = httpsV2.onCall(
       driverId,
       companyId: profile.companyId || null,
       roles,
+      mustChangePasscode,
     };
     await admin.auth().setCustomUserClaims(authUid, claims);
     const token = await admin.auth().createCustomToken(authUid, claims);
 
     await writeSecurityAudit({
-      action: 'authenticateDriver_ok',
+      action: mustChangePasscode ? 'authenticateDriver_must_change' : 'authenticateDriver_ok',
       actorUid: authUid,
       driverId,
       ipHash: meta.ipHash,
@@ -281,7 +281,75 @@ export const authenticateDriver = httpsV2.onCall(
       assignedRoutes: profile.assignedRoutes || null,
       defaultPackageId: profile.defaultPackageId || null,
       roles,
+      mustChangePasscode,
     };
+  },
+);
+
+/**
+ * Driver replaces their own passcode (required after temporary admin assignment).
+ * Requires Firebase Auth custom token from authenticateDriver. Never logs passcodes.
+ */
+export const driverChangeOwnPasscode = httpsV2.onCall(
+  { timeoutSeconds: 30, memory: '256MiB', enforceAppCheck: false },
+  async (request) => {
+    assertAppCheck(request);
+    if (!request.auth?.uid || request.auth.token?.kind !== 'driver') {
+      throw new httpsV2.HttpsError('unauthenticated', 'Driver sign-in required');
+    }
+    const driverId = String(request.auth.token.driverId || '');
+    if (!driverId) {
+      throw new httpsV2.HttpsError('permission-denied', 'Missing driverId claim');
+    }
+    const currentPasscode = String((request.data as any)?.currentPasscode || '');
+    const newPasscode = String((request.data as any)?.newPasscode || '');
+    try {
+      validateRegistrationFields({
+        displayName: 'validname',
+        passcode: newPasscode,
+      });
+    } catch (e) {
+      mapValidationError((e as Error).message);
+    }
+    if (newPasscode.length < PASSCODE_MIN_LEN) {
+      throw new httpsV2.HttpsError('invalid-argument', 'New passcode too short');
+    }
+    if (currentPasscode === newPasscode) {
+      throw new httpsV2.HttpsError('invalid-argument', 'New passcode must differ from current');
+    }
+
+    const credRef = fs().collection('driver_credentials').doc(driverId);
+    const credSnap = await credRef.get();
+    if (!credSnap.exists) {
+      throw new httpsV2.HttpsError('not-found', 'Credentials not found');
+    }
+    const cred = credSnap.data()!;
+    const ok = await verifyPasscodeScrypt(currentPasscode, cred.passcode as ScryptRecord);
+    if (!ok) {
+      throw new httpsV2.HttpsError('permission-denied', 'Current passcode is incorrect');
+    }
+    const passcodeRecord = await hashPasscodeScrypt(newPasscode);
+    await credRef.update({
+      passcode: passcodeRecord,
+      mustResetPasscode: false,
+      updatedAt: FieldValue.serverTimestamp(),
+      passcodeChangedAt: FieldValue.serverTimestamp(),
+    });
+    // Clear mustChangePasscode claim on next token; update claims now
+    const authUid = request.auth.uid;
+    const existing = (await admin.auth().getUser(authUid)).customClaims || {};
+    await admin.auth().setCustomUserClaims(authUid, {
+      ...existing,
+      mustChangePasscode: false,
+    });
+
+    await writeSecurityAudit({
+      action: 'driverChangeOwnPasscode',
+      actorUid: authUid,
+      driverId,
+      // never include passcode material
+    });
+    return { ok: true, mustChangePasscode: false };
   },
 );
 
@@ -290,7 +358,10 @@ export const authenticateDriver = httpsV2.onCall(
 export const adminListPendingRegistrations = httpsV2.onCall(
   { timeoutSeconds: 30, memory: '256MiB' },
   async (request) => {
-    const caller = await requireManageDrivers(request.auth?.uid);
+    const caller = await requireManageDrivers(
+      request.auth?.uid,
+      request.auth?.token as Record<string, unknown> | undefined,
+    );
     const snap = await rtdb().ref('drivers/pending_secure').once('value');
     const out: any[] = [];
     if (snap.exists()) {
@@ -339,7 +410,10 @@ export const adminListPendingRegistrations = httpsV2.onCall(
 export const adminApproveDriverRegistration = httpsV2.onCall(
   { timeoutSeconds: 30, memory: '256MiB' },
   async (request) => {
-    const caller = await requireManageDrivers(request.auth?.uid);
+    const caller = await requireManageDrivers(
+      request.auth?.uid,
+      request.auth?.token as Record<string, unknown> | undefined,
+    );
     const data = (request.data || {}) as {
       pendingId?: string;
       companyId?: string;
@@ -399,8 +473,8 @@ export const adminApproveDriverRegistration = httpsV2.onCall(
         passcode,
         active: true,
         mustResetPasscode: false,
-        createdAt: admin.firestore.FieldValue.serverTimestamp(),
-        updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+        createdAt: FieldValue.serverTimestamp(),
+        updatedAt: FieldValue.serverTimestamp(),
         pendingId,
       });
       tx.delete(fs().collection('pending_credentials').doc(pendingId));
@@ -430,7 +504,7 @@ export const adminApproveDriverRegistration = httpsV2.onCall(
     await pendingRef.update({
       status: 'approved',
       driverId,
-      approvedAt: admin.database.ServerValue.TIMESTAMP,
+      approvedAt: ServerValue.TIMESTAMP,
       approvedBy: caller.uid,
     });
 
@@ -468,7 +542,10 @@ export const adminApproveDriverRegistration = httpsV2.onCall(
 export const adminRejectDriverRegistration = httpsV2.onCall(
   { timeoutSeconds: 20, memory: '256MiB' },
   async (request) => {
-    const caller = await requireManageDrivers(request.auth?.uid);
+    const caller = await requireManageDrivers(
+      request.auth?.uid,
+      request.auth?.token as Record<string, unknown> | undefined,
+    );
     const pendingId = String((request.data as any)?.pendingId || '').trim();
     const legacyKey = String((request.data as any)?.legacyKey || '').trim();
 
@@ -478,7 +555,7 @@ export const adminRejectDriverRegistration = httpsV2.onCall(
       if (snap.exists()) {
         await ref.update({
           status: 'rejected',
-          rejectedAt: admin.database.ServerValue.TIMESTAMP,
+          rejectedAt: ServerValue.TIMESTAMP,
           rejectedBy: caller.uid,
         });
         // Keep pending_credentials tombstone? delete credential material only
@@ -510,19 +587,40 @@ export const adminRejectDriverRegistration = httpsV2.onCall(
  * Create secure credentials for a legacy approved profile shell,
  * or force-reset passcode. Does not accept legacy SHA-256 for login.
  */
+/**
+ * Assign or reset a driver's secure passcode.
+ *
+ * IMPORTANT:
+ * - `passcode` is a NEW user-chosen or temporary value — NEVER derived from legacyHash.
+ * - legacyHash is only used to COPY profile metadata (name, company, routes).
+ * - Admin-assigned credentials default to temporary=true → mustResetPasscode so the
+ *   driver must call driverChangeOwnPasscode at first secure sign-in.
+ * - Passcodes are never written to security_audit.
+ */
 export const adminSetDriverPasscode = httpsV2.onCall(
   { timeoutSeconds: 30, memory: '256MiB' },
   async (request) => {
-    const caller = await requireManageDrivers(request.auth?.uid);
+    const caller = await requireManageDrivers(
+      request.auth?.uid,
+      request.auth?.token as Record<string, unknown> | undefined,
+    );
     const data = (request.data || {}) as {
       driverId?: string;
       displayName?: string;
       passcode?: string;
-      /** When migrating: create profile from legacy approved hash metadata */
+      /** Profile metadata source only — never used as credential material */
       legacyHash?: string;
       companyId?: string;
       companyName?: string;
       legalName?: string;
+      /**
+       * When true (default), driver must change passcode after first secure login.
+       * Set false only when the driver themselves chose the passcode via admin UI
+       * in their presence (still prefer user-controlled change flow).
+       */
+      temporary?: boolean;
+      /** When true with legacyHash, leave legacy drivers/approved active (dual-run). */
+      keepLegacyActive?: boolean;
     };
 
     let fields: ReturnType<typeof validateRegistrationFields>;
@@ -537,12 +635,21 @@ export const adminSetDriverPasscode = httpsV2.onCall(
       mapValidationError((e as Error).message);
     }
 
+    // Reject obviously short PIN-only reuse (still allow 6+ digit if user wants)
+    if (/^\d{1,5}$/.test(fields.passcode)) {
+      throw new httpsV2.HttpsError(
+        'invalid-argument',
+        'Passcode must be at least 6 characters; short numeric PINs are not allowed',
+      );
+    }
+
+    const temporary = data.temporary !== false; // default true
     const nameNorm = normalizeDisplayName(fields.displayName);
     const passcodeRecord = await hashPasscodeScrypt(fields.passcode);
     let driverId = (data.driverId || '').trim();
 
     if (!driverId && data.legacyHash) {
-      // Migrate shell from legacy approved node
+      // Migrate PROFILE shell only — never use legacy SHA-256 as the new credential
       const legacy = await rtdb().ref(`drivers/approved/${data.legacyHash}`).once('value');
       if (!legacy.exists()) {
         throw new httpsV2.HttpsError('not-found', 'Legacy driver not found');
@@ -566,12 +673,19 @@ export const adminSetDriverPasscode = httpsV2.onCall(
         schemaVersion: 1,
         mustUseSecureAuth: true,
       });
-      // Deactivate legacy login path immediately for this hash
-      await rtdb().ref(`drivers/approved/${data.legacyHash}`).update({
-        active: false,
-        migratedToDriverId: driverId,
-        legacyLoginDisabled: true,
-      });
+      // Dual-run default: keep legacy active so old APKs still work until cutover
+      if (data.keepLegacyActive === false) {
+        await rtdb().ref(`drivers/approved/${data.legacyHash}`).update({
+          active: false,
+          migratedToDriverId: driverId,
+          legacyLoginDisabled: true,
+        });
+      } else {
+        await rtdb().ref(`drivers/approved/${data.legacyHash}`).update({
+          migratedToDriverId: driverId,
+          secureProfileLinked: true,
+        });
+      }
     }
 
     if (!driverId) {
@@ -599,10 +713,11 @@ export const adminSetDriverPasscode = httpsV2.onCall(
         displayName: fields.displayName,
         passcode: passcodeRecord,
         active: true,
-        mustResetPasscode: false,
-        updatedAt: admin.firestore.FieldValue.serverTimestamp(),
-        createdAt: admin.firestore.FieldValue.serverTimestamp(),
+        mustResetPasscode: temporary,
+        updatedAt: FieldValue.serverTimestamp(),
+        createdAt: FieldValue.serverTimestamp(),
         setBy: caller.uid,
+        temporaryAssigned: temporary,
       },
       { merge: true },
     );
@@ -620,10 +735,57 @@ export const adminSetDriverPasscode = httpsV2.onCall(
       driverId,
       detail: {
         legacyHashPrefix: data.legacyHash ? String(data.legacyHash).slice(0, 8) : null,
+        temporary,
+        // never log passcode
       },
     });
 
-    return { driverId, displayName: fields.displayName };
+    return {
+      driverId,
+      displayName: fields.displayName,
+      mustChangePasscode: temporary,
+    };
+  },
+);
+
+/**
+ * Admin-only cleanup for disposable test identities (secure plane only).
+ * Does not touch legacy drivers/approved production rows unless linked.
+ */
+export const adminDeleteSecureDriver = httpsV2.onCall(
+  { timeoutSeconds: 30, memory: '256MiB' },
+  async (request) => {
+    const caller = await requireManageDrivers(
+      request.auth?.uid,
+      request.auth?.token as Record<string, unknown> | undefined,
+    );
+    const driverId = String((request.data as any)?.driverId || '').trim();
+    const confirm = String((request.data as any)?.confirm || '');
+    if (!driverId || confirm !== 'DELETE_SECURE_DRIVER') {
+      throw new httpsV2.HttpsError(
+        'invalid-argument',
+        'driverId and confirm=DELETE_SECURE_DRIVER required',
+      );
+    }
+    const cred = await fs().collection('driver_credentials').doc(driverId).get();
+    const nameNorm = cred.exists ? (cred.data()?.displayNameNorm as string) : null;
+    if (nameNorm) {
+      await fs().collection('driver_name_index').doc(nameNorm).delete().catch(() => undefined);
+    }
+    await fs().collection('driver_credentials').doc(driverId).delete().catch(() => undefined);
+    await rtdb().ref(`drivers/profiles/${driverId}`).remove().catch(() => undefined);
+    const authUid = `driver_${driverId.replace(/-/g, '').slice(0, 28)}`;
+    try {
+      await admin.auth().deleteUser(authUid);
+    } catch {
+      /* may not exist */
+    }
+    await writeSecurityAudit({
+      action: 'adminDeleteSecureDriver',
+      actorUid: caller.uid,
+      driverId,
+    });
+    return { ok: true };
   },
 );
 
@@ -669,8 +831,8 @@ export const registerStandaloneDriver = httpsV2.onCall(
       passcode: passcodeRecord,
       active: true,
       mustResetPasscode: false,
-      createdAt: admin.firestore.FieldValue.serverTimestamp(),
-      updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+      createdAt: FieldValue.serverTimestamp(),
+      updatedAt: FieldValue.serverTimestamp(),
       tier: 'free',
       source: 'standalone',
     });
