@@ -237,17 +237,11 @@ export const authenticateDriver = httpsV2.onCall(
 
     const mustChangePasscode = cred.mustResetPasscode === true;
 
-    // Ensure Auth user exists for custom token
-    const authUid = `driver_${driverId.replace(/-/g, '').slice(0, 28)}`;
-    try {
-      await admin.auth().getUser(authUid);
-    } catch {
-      await admin.auth().createUser({
-        uid: authUid,
-        displayName: profile.displayName || displayName,
-        disabled: false,
-      });
-    }
+    const { ensureDriverAuthUser, mintDriverSessionTokens } = await import('./tokenMint');
+    const authUid = await ensureDriverAuthUser(
+      driverId,
+      profile.displayName || displayName,
+    );
 
     const roles = Array.isArray(profile.roles) ? profile.roles : ['driver'];
     const claims = {
@@ -257,8 +251,7 @@ export const authenticateDriver = httpsV2.onCall(
       roles,
       mustChangePasscode,
     };
-    await admin.auth().setCustomUserClaims(authUid, claims);
-    const token = await admin.auth().createCustomToken(authUid, claims);
+    const minted = await mintDriverSessionTokens(authUid, claims);
 
     await writeSecurityAudit({
       action: mustChangePasscode ? 'authenticateDriver_must_change' : 'authenticateDriver_ok',
@@ -267,10 +260,14 @@ export const authenticateDriver = httpsV2.onCall(
       ipHash: meta.ipHash,
       appCheckPresent: meta.appCheckPresent,
       appId: meta.appId,
+      detail: { mintMethod: minted.mintMethod },
     });
 
     return {
-      customToken: token,
+      customToken: minted.customToken || null,
+      idToken: minted.idToken || null,
+      refreshToken: minted.refreshToken || null,
+      mintMethod: minted.mintMethod,
       driverId,
       displayName: profile.displayName || displayName,
       legalName: profile.legalName || null,
@@ -774,7 +771,8 @@ export const adminDeleteSecureDriver = httpsV2.onCall(
     }
     await fs().collection('driver_credentials').doc(driverId).delete().catch(() => undefined);
     await rtdb().ref(`drivers/profiles/${driverId}`).remove().catch(() => undefined);
-    const authUid = `driver_${driverId.replace(/-/g, '').slice(0, 28)}`;
+    const { driverAuthUid } = await import('./tokenMint');
+    const authUid = driverAuthUid(driverId);
     try {
       await admin.auth().deleteUser(authUid);
     } catch {
@@ -859,19 +857,17 @@ export const registerStandaloneDriver = httpsV2.onCall(
       appId: meta.appId,
     });
 
-    // Issue token immediately
-    const authUid = `driver_${driverId.replace(/-/g, '').slice(0, 28)}`;
-    try {
-      await admin.auth().getUser(authUid);
-    } catch {
-      await admin.auth().createUser({ uid: authUid, displayName: fields.displayName });
-    }
+    // Issue token immediately (custom token or password-exchange fallback)
+    const { ensureDriverAuthUser, mintDriverSessionTokens } = await import('./tokenMint');
+    const authUid = await ensureDriverAuthUser(driverId, fields.displayName);
     const claims = { kind: 'driver', driverId, companyId: null, roles: ['driver'] };
-    await admin.auth().setCustomUserClaims(authUid, claims);
-    const token = await admin.auth().createCustomToken(authUid, claims);
+    const minted = await mintDriverSessionTokens(authUid, claims);
 
     return {
-      customToken: token,
+      customToken: minted.customToken || null,
+      idToken: minted.idToken || null,
+      refreshToken: minted.refreshToken || null,
+      mintMethod: minted.mintMethod,
       driverId,
       displayName: fields.displayName,
     };
