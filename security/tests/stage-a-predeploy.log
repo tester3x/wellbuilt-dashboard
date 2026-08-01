@@ -1,0 +1,359 @@
+i  emulators: Starting emulators: auth, functions, firestore, database, storage
+i  emulators: Detected demo project ID "demo-wb-sec", emulated services will use a demo configuration and attempts to access non-emulated services for this project will fail.
+i  firestore: Firestore Emulator logging to firestore-debug.log
++  firestore: Firestore Emulator was started in standard edition.
++  firestore: Firestore Emulator UI websocket is running on 9150.
+i  database: Database Emulator logging to database-debug.log
+i  functions: Watching "D:\dev\Dashboard\functions" for Cloud Functions...
+!  functions: package.json indicates an outdated version of firebase-functions. Please upgrade using npm install --save firebase-functions@latest in your functions directory.
+!  functions: Your requested "node" version "20" doesn't match your global version "24". Using node@24 from host.
+Serving at port 8583
+
++  functions: Loaded functions definitions from source: watchdogStrandedPackets, healthCheck, processIncomingPull, processEditRequest, processDeleteRequest, weeklyDieselPriceFetch, triggerDieselFetch, cleanupExpiredPhotos, onShiftCreate, onShiftUpdate, onDispatchCreate, onDispatchUpdate, onProjectWrite, createOrFindDispatchThread, inviteEmployee, onUserWrite, parseJsaPdf, getIntegratedTruthForDay, getDashboardReadModelForDay, getRAGIngestBundleForDay, getShadowComparisonForDay, exportTruthRagForDay, getTruthDriverDaySummary, getTruthDriverWeekSummary, listTruthRagExports, getTruthRagExportRun, rerunTruthRagExportForDay, getIdentityHealthView, getLocationHealthView, approveTruthLocation, revokeTruthLocationApproval, addTruthSwdReference, deactivateTruthSwdReference, listTruthSwdReference, demoClassifyLocations, materializeTransferredTicket, backfillTransferredTickets, materializerDriftHeartbeat, runMaterializerDriftScanOnDemand, transferRequestExpiry, runTransferRequestExpiryOnDemand, addSplitLeg, recoverHandoffOrphan, listStuckHandoffs, eQuipmentDocuments, eQuipmentEquipment, eQuipmentAssignments, eQuipmentDVIR, requestDriverRegistration, checkDriverRegistrationStatus, authenticateDriver, driverChangeOwnPasscode, adminListPendingRegistrations, adminApproveDriverRegistration, adminRejectDriverRegistration, adminSetDriverPasscode, adminDeleteSecureDriver, registerStandaloneDriver, adminComputeLegacyHash, ingestDriverPacket, upsertDriverShift, submitJsaRecord, updateDriverProfile, signalDriverLogout, getDriverReferenceBundle, requestStorageUploadPath, writeDiagnosticLog.
+i  functions[us-central1-watchdogStrandedPackets]: function ignored because the pubsub emulator does not exist or is not running.
+i  functions[us-central1-healthCheck]: function ignored because the pubsub emulator does not exist or is not running.
++  functions[us-central1-processIncomingPull]: database function initialized.
++  functions[us-central1-processEditRequest]: database function initialized.
++  functions[us-central1-processDeleteRequest]: database function initialized.
+i  functions[us-central1-weeklyDieselPriceFetch]: function ignored because the pubsub emulator does not exist or is not running.
++  functions[us-central1-triggerDieselFetch]: http function initialized (http://127.0.0.1:5001/demo-wb-sec/us-central1/triggerDieselFetch).
+i  functions[us-central1-cleanupExpiredPhotos]: function ignored because the pubsub emulator does not exist or is not running.
++  functions[us-central1-onShiftCreate]: firestore function initialized.
++  functions[us-central1-onShiftUpdate]: firestore function initialized.
++  functions[us-central1-onDispatchCreate]: firestore function initialized.
++  functions[us-central1-onDispatchUpdate]: firestore function initialized.
++  functions[us-central1-onProjectWrite]: firestore function initialized.
++  functions[us-central1-createOrFindDispatchThread]: http function initialized (http://127.0.0.1:5001/demo-wb-sec/us-central1/createOrFindDispatchThread).
++  functions[us-central1-inviteEmployee]: http function initialized (http://127.0.0.1:5001/demo-wb-sec/us-central1/inviteEmployee).
++  functions[us-central1-onUserWrite]: database function initialized.
++  functions[us-central1-parseJsaPdf]: http function initialized (http://127.0.0.1:5001/demo-wb-sec/us-central1/parseJsaPdf).
++  functions[us-central1-getIntegratedTruthForDay]: http function initialized (http://127.0.0.1:5001/demo-wb-sec/us-central1/getIntegratedTruthForDay).
++  functions[us-central1-getDashboardReadModelForDay]: http function initialized (http://127.0.0.1:5001/demo-wb-sec/us-central1/getDashboardReadModelForDay).
++  functions[us-central1-getRAGIngestBundleForDay]: http function initialized (http://127.0.0.1:5001/demo-wb-sec/us-central1/getRAGIngestBundleForDay).
++  functions[us-central1-getShadowComparisonForDay]: http function initialized (http://127.0.0.1:5001/demo-wb-sec/us-central1/getShadowComparisonForDay).
++  functions[us-central1-exportTruthRagForDay]: http function initialized (http://127.0.0.1:5001/demo-wb-sec/us-central1/exportTruthRagForDay).
++  functions[us-central1-getTruthDriverDaySummary]: http function initialized (http://127.0.0.1:5001/demo-wb-sec/us-central1/getTruthDriverDaySummary).
++  functions[us-central1-getTruthDriverWeekSummary]: http function initialized (http://127.0.0.1:5001/demo-wb-sec/us-central1/getTruthDriverWeekSummary).
++  functions[us-central1-listTruthRagExports]: http function initialized (http://127.0.0.1:5001/demo-wb-sec/us-central1/listTruthRagExports).
++  functions[us-central1-getTruthRagExportRun]: http function initialized (http://127.0.0.1:5001/demo-wb-sec/us-central1/getTruthRagExportRun).
++  functions[us-central1-rerunTruthRagExportForDay]: http function initialized (http://127.0.0.1:5001/demo-wb-sec/us-central1/rerunTruthRagExportForDay).
++  functions[us-central1-getIdentityHealthView]: http function initialized (http://127.0.0.1:5001/demo-wb-sec/us-central1/getIdentityHealthView).
++  functions[us-central1-getLocationHealthView]: http function initialized (http://127.0.0.1:5001/demo-wb-sec/us-central1/getLocationHealthView).
++  functions[us-central1-approveTruthLocation]: http function initialized (http://127.0.0.1:5001/demo-wb-sec/us-central1/approveTruthLocation).
++  functions[us-central1-revokeTruthLocationApproval]: http function initialized (http://127.0.0.1:5001/demo-wb-sec/us-central1/revokeTruthLocationApproval).
++  functions[us-central1-addTruthSwdReference]: http function initialized (http://127.0.0.1:5001/demo-wb-sec/us-central1/addTruthSwdReference).
++  functions[us-central1-deactivateTruthSwdReference]: http function initialized (http://127.0.0.1:5001/demo-wb-sec/us-central1/deactivateTruthSwdReference).
++  functions[us-central1-listTruthSwdReference]: http function initialized (http://127.0.0.1:5001/demo-wb-sec/us-central1/listTruthSwdReference).
++  functions[us-central1-demoClassifyLocations]: http function initialized (http://127.0.0.1:5001/demo-wb-sec/us-central1/demoClassifyLocations).
++  functions[us-central1-materializeTransferredTicket]: firestore function initialized.
++  functions[us-central1-backfillTransferredTickets]: http function initialized (http://127.0.0.1:5001/demo-wb-sec/us-central1/backfillTransferredTickets).
+i  functions[us-central1-materializerDriftHeartbeat]: function ignored because the pubsub emulator does not exist or is not running.
++  functions[us-central1-runMaterializerDriftScanOnDemand]: http function initialized (http://127.0.0.1:5001/demo-wb-sec/us-central1/runMaterializerDriftScanOnDemand).
+i  functions[us-central1-transferRequestExpiry]: function ignored because the pubsub emulator does not exist or is not running.
++  functions[us-central1-runTransferRequestExpiryOnDemand]: http function initialized (http://127.0.0.1:5001/demo-wb-sec/us-central1/runTransferRequestExpiryOnDemand).
++  functions[us-central1-addSplitLeg]: http function initialized (http://127.0.0.1:5001/demo-wb-sec/us-central1/addSplitLeg).
++  functions[us-central1-recoverHandoffOrphan]: http function initialized (http://127.0.0.1:5001/demo-wb-sec/us-central1/recoverHandoffOrphan).
++  functions[us-central1-listStuckHandoffs]: http function initialized (http://127.0.0.1:5001/demo-wb-sec/us-central1/listStuckHandoffs).
++  functions[us-central1-eQuipmentDocuments]: http function initialized (http://127.0.0.1:5001/demo-wb-sec/us-central1/eQuipmentDocuments).
++  functions[us-central1-eQuipmentEquipment]: http function initialized (http://127.0.0.1:5001/demo-wb-sec/us-central1/eQuipmentEquipment).
++  functions[us-central1-eQuipmentAssignments]: http function initialized (http://127.0.0.1:5001/demo-wb-sec/us-central1/eQuipmentAssignments).
++  functions[us-central1-eQuipmentDVIR]: http function initialized (http://127.0.0.1:5001/demo-wb-sec/us-central1/eQuipmentDVIR).
++  functions[us-central1-requestDriverRegistration]: http function initialized (http://127.0.0.1:5001/demo-wb-sec/us-central1/requestDriverRegistration).
++  functions[us-central1-checkDriverRegistrationStatus]: http function initialized (http://127.0.0.1:5001/demo-wb-sec/us-central1/checkDriverRegistrationStatus).
++  functions[us-central1-authenticateDriver]: http function initialized (http://127.0.0.1:5001/demo-wb-sec/us-central1/authenticateDriver).
++  functions[us-central1-driverChangeOwnPasscode]: http function initialized (http://127.0.0.1:5001/demo-wb-sec/us-central1/driverChangeOwnPasscode).
++  functions[us-central1-adminListPendingRegistrations]: http function initialized (http://127.0.0.1:5001/demo-wb-sec/us-central1/adminListPendingRegistrations).
++  functions[us-central1-adminApproveDriverRegistration]: http function initialized (http://127.0.0.1:5001/demo-wb-sec/us-central1/adminApproveDriverRegistration).
++  functions[us-central1-adminRejectDriverRegistration]: http function initialized (http://127.0.0.1:5001/demo-wb-sec/us-central1/adminRejectDriverRegistration).
++  functions[us-central1-adminSetDriverPasscode]: http function initialized (http://127.0.0.1:5001/demo-wb-sec/us-central1/adminSetDriverPasscode).
++  functions[us-central1-adminDeleteSecureDriver]: http function initialized (http://127.0.0.1:5001/demo-wb-sec/us-central1/adminDeleteSecureDriver).
++  functions[us-central1-registerStandaloneDriver]: http function initialized (http://127.0.0.1:5001/demo-wb-sec/us-central1/registerStandaloneDriver).
++  functions[us-central1-adminComputeLegacyHash]: http function initialized (http://127.0.0.1:5001/demo-wb-sec/us-central1/adminComputeLegacyHash).
++  functions[us-central1-ingestDriverPacket]: http function initialized (http://127.0.0.1:5001/demo-wb-sec/us-central1/ingestDriverPacket).
++  functions[us-central1-upsertDriverShift]: http function initialized (http://127.0.0.1:5001/demo-wb-sec/us-central1/upsertDriverShift).
++  functions[us-central1-submitJsaRecord]: http function initialized (http://127.0.0.1:5001/demo-wb-sec/us-central1/submitJsaRecord).
++  functions[us-central1-updateDriverProfile]: http function initialized (http://127.0.0.1:5001/demo-wb-sec/us-central1/updateDriverProfile).
++  functions[us-central1-signalDriverLogout]: http function initialized (http://127.0.0.1:5001/demo-wb-sec/us-central1/signalDriverLogout).
++  functions[us-central1-getDriverReferenceBundle]: http function initialized (http://127.0.0.1:5001/demo-wb-sec/us-central1/getDriverReferenceBundle).
++  functions[us-central1-requestStorageUploadPath]: http function initialized (http://127.0.0.1:5001/demo-wb-sec/us-central1/requestStorageUploadPath).
++  functions[us-central1-writeDiagnosticLog]: http function initialized (http://127.0.0.1:5001/demo-wb-sec/us-central1/writeDiagnosticLog).
+i  Running script: node security/tests/run-all-predeploy.mjs
+
+$ node functions/lib/security/passcode.unit.test.js
+
+ok: normalize spaces/case
+ok: algo scrypt
+ok: verify good
+ok: verify bad
+ok: legacy hash name case
+ok: legacy hex length
+ok: rejects short passcode
+ok: accepts 6-char name+pass
+ok: legacy 4-digit PIN cracked in full space (offline risk demo)
+
+All passcode unit checks passed
+
+$ node security/tests/rules-adversarial.test.mjs
+
+
+=== SECURE RULES ADVERSARIAL TESTS ===
+
+  PASS  anonymous RTDB drivers read denied
+  PASS  anonymous drivers/approved read denied
+[2026-08-01T02:55:30.182Z]  @firebase/database: FIREBASE WARNING: set at /drivers/pending/spam1 failed: permission_denied 
+  PASS  anonymous drivers/pending write denied
+[2026-08-01T02:55:30.225Z]  @firebase/database: FIREBASE WARNING: set at /drivers/approved/evil failed: permission_denied 
+  PASS  anonymous self-approve denied
+[2026-08-01T02:55:30.295Z]  @firebase/database: FIREBASE WARNING: set at /drivers/approved/x failed: permission_denied 
+  PASS  authenticated driver cannot write drivers/approved
+  PASS  driver reads own profile
+  PASS  driver cannot read peer profile
+[2026-08-01T02:55:30.411Z]  @firebase/database: FIREBASE WARNING: set at /drivers/profiles/driver-a/isAdmin failed: permission_denied 
+  PASS  driver cannot write profile isAdmin
+  PASS  unauth cannot read driver_credentials
+  PASS  even authed client cannot read driver_credentials
+[2026-08-01T02:55:30.732Z]  @firebase/firestore: Firestore (11.10.0): GrpcConnection RPC 'Write' stream 0x8ef943d4 error. Code: 7 Message: 7 PERMISSION_DENIED: 
+false for 'create' @ L88, false for 'create' @ L188, false for 'update' @ L88, false for 'update' @ L188
+  PASS  anonymous Firestore invoices write denied
+i  functions: Beginning execution of "us-central1-onUserWrite"
+i  functions: Beginning execution of "us-central1-onUserWrite"
+>  [onUserWrite] {
+>    uid: 'admin1',
+>    beforeInChat: false,
+>    afterInChat: true,
+>    beforeCid: '',
+>    afterCid: ''
+>  }
+i  functions: Finished "us-central1-onUserWrite" in 8.9437ms
+  PASS  anonymous Storage photo write denied
+  PASS  signed-in Storage photo write allowed under secure draft
+  PASS  cross-company Storage photo write denied
+
+Rules results: 14 passed, 0 failed
+
+
+$ node security/tests/callables-emulator.test.mjs
+
+>  [onUserWrite] user:admin1 gained chat access ΓÇö fanned into 0 thread(s)
+i  functions: Finished "us-central1-onUserWrite" in 190.3047ms
+
+=== SECURITY CALLABLES EMULATOR TESTS ===
+
+  seeded admin uid=BhROqE7z0ng8awZYJzSZfNwTBBIQ rtdb_ns=demo-wb-sec-default-rtdb claims=manageDrivers
+i  functions: Beginning execution of "us-central1-requestDriverRegistration"
+>  {"verifications":{"app":"MISSING","auth":"MISSING"},"logging.googleapis.com/labels":{"firebase-log-type":"callable-request-verification"},"severity":"DEBUG","message":"Callable request verification passed"}
+i  functions: Finished "us-central1-requestDriverRegistration" in 41.9764ms
+  PASS  reject short passcode registration
+i  functions: Beginning execution of "us-central1-requestDriverRegistration"
+>  {"verifications":{"app":"MISSING","auth":"MISSING"},"logging.googleapis.com/labels":{"firebase-log-type":"callable-request-verification"},"severity":"DEBUG","message":"Callable request verification passed"}
+i  functions: Finished "us-central1-requestDriverRegistration" in 11.4526ms
+  PASS  reject empty displayName
+i  functions: Beginning execution of "us-central1-requestDriverRegistration"
+>  {"verifications":{"app":"MISSING","auth":"MISSING"},"logging.googleapis.com/labels":{"firebase-log-type":"callable-request-verification"},"severity":"DEBUG","message":"Callable request verification passed"}
+i  functions: Finished "us-central1-requestDriverRegistration" in 4.8191ms
+  PASS  reject oversized displayName
+i  functions: Beginning execution of "us-central1-requestDriverRegistration"
+>  {"verifications":{"app":"MISSING","auth":"MISSING"},"logging.googleapis.com/labels":{"firebase-log-type":"callable-request-verification"},"severity":"DEBUG","message":"Callable request verification passed"}
+i  functions: Finished "us-central1-requestDriverRegistration" in 184.9341ms
+  PASS  requestDriverRegistration creates pendingId
+i  functions: Beginning execution of "us-central1-checkDriverRegistrationStatus"
+>  {"verifications":{"app":"MISSING","auth":"MISSING"},"logging.googleapis.com/labels":{"firebase-log-type":"callable-request-verification"},"severity":"DEBUG","message":"Callable request verification passed"}
+i  functions: Finished "us-central1-checkDriverRegistrationStatus" in 56.0308ms
+  PASS  check status pending
+  PASS  pending_credentials scrypt stored
+i  functions: Beginning execution of "us-central1-authenticateDriver"
+>  {"verifications":{"app":"MISSING","auth":"MISSING"},"logging.googleapis.com/labels":{"firebase-log-type":"callable-request-verification"},"severity":"DEBUG","message":"Callable request verification passed"}
+i  functions: Finished "us-central1-authenticateDriver" in 172.7083ms
+  PASS  login before approve fails
+i  functions: Beginning execution of "us-central1-adminListPendingRegistrations"
+>  {"verifications":{"app":"MISSING","auth":"VALID"},"logging.googleapis.com/labels":{"firebase-log-type":"callable-request-verification"},"severity":"DEBUG","message":"Callable request verification passed"}
+i  functions: Finished "us-central1-adminListPendingRegistrations" in 55.448ms
+  PASS  driver cannot adminListPending
+i  functions: Beginning execution of "us-central1-adminApproveDriverRegistration"
+>  {"verifications":{"app":"MISSING","auth":"VALID"},"logging.googleapis.com/labels":{"firebase-log-type":"callable-request-verification"},"severity":"DEBUG","message":"Callable request verification passed"}
+i  functions: Finished "us-central1-adminApproveDriverRegistration" in 53.8852ms
+  PASS  driver cannot adminApprove
+i  functions: Beginning execution of "us-central1-adminApproveDriverRegistration"
+>  {"verifications":{"app":"MISSING","auth":"MISSING"},"logging.googleapis.com/labels":{"firebase-log-type":"callable-request-verification"},"severity":"DEBUG","message":"Callable request verification passed"}
+i  functions: Finished "us-central1-adminApproveDriverRegistration" in 1.1912ms
+  PASS  unauth cannot approve
+i  functions: Beginning execution of "us-central1-adminApproveDriverRegistration"
+>  {"verifications":{"app":"MISSING","auth":"VALID"},"logging.googleapis.com/labels":{"firebase-log-type":"callable-request-verification"},"severity":"DEBUG","message":"Callable request verification passed"}
+i  functions: Finished "us-central1-adminApproveDriverRegistration" in 172.5009ms
+  PASS  adminApproveDriverRegistration
+i  functions: Beginning execution of "us-central1-checkDriverRegistrationStatus"
+>  {"verifications":{"app":"MISSING","auth":"MISSING"},"logging.googleapis.com/labels":{"firebase-log-type":"callable-request-verification"},"severity":"DEBUG","message":"Callable request verification passed"}
+i  functions: Finished "us-central1-checkDriverRegistrationStatus" in 3.8368ms
+  PASS  status approved after admin
+i  functions: Beginning execution of "us-central1-authenticateDriver"
+>  {"verifications":{"app":"MISSING","auth":"MISSING"},"logging.googleapis.com/labels":{"firebase-log-type":"callable-request-verification"},"severity":"DEBUG","message":"Callable request verification passed"}
+i  functions: Finished "us-central1-authenticateDriver" in 58.3097ms
+  PASS  wrong passcode fails
+i  functions: Beginning execution of "us-central1-authenticateDriver"
+>  {"verifications":{"app":"MISSING","auth":"MISSING"},"logging.googleapis.com/labels":{"firebase-log-type":"callable-request-verification"},"severity":"DEBUG","message":"Callable request verification passed"}
+i  functions: Finished "us-central1-authenticateDriver" in 70.3177ms
+  PASS  authenticateDriver success
+  PASS  security_audit records present (5)
+  PASS  audit does not contain passcode plaintext
+i  functions: Beginning execution of "us-central1-adminSetDriverPasscode"
+>  {"verifications":{"app":"MISSING","auth":"VALID"},"logging.googleapis.com/labels":{"firebase-log-type":"callable-request-verification"},"severity":"DEBUG","message":"Callable request verification passed"}
+i  functions: Finished "us-central1-adminSetDriverPasscode" in 195.0399ms
+  PASS  adminSetDriverPasscode temporary flag
+i  functions: Beginning execution of "us-central1-authenticateDriver"
+>  {"verifications":{"app":"MISSING","auth":"MISSING"},"logging.googleapis.com/labels":{"firebase-log-type":"callable-request-verification"},"severity":"DEBUG","message":"Callable request verification passed"}
+i  functions: Finished "us-central1-authenticateDriver" in 64.218ms
+  PASS  login with temporary requires mustChangePasscode
+i  functions: Beginning execution of "us-central1-driverChangeOwnPasscode"
+>  {"verifications":{"app":"MISSING","auth":"VALID"},"logging.googleapis.com/labels":{"firebase-log-type":"callable-request-verification"},"severity":"DEBUG","message":"Callable request verification passed"}
+i  functions: Finished "us-central1-driverChangeOwnPasscode" in 175.938ms
+  PASS  driverChangeOwnPasscode succeeds
+i  functions: Beginning execution of "us-central1-authenticateDriver"
+>  {"verifications":{"app":"MISSING","auth":"MISSING"},"logging.googleapis.com/labels":{"firebase-log-type":"callable-request-verification"},"severity":"DEBUG","message":"Callable request verification passed"}
+i  functions: Finished "us-central1-authenticateDriver" in 53.6838ms
+  PASS  login after self-change without mustChange
+i  functions: Beginning execution of "us-central1-adminSetDriverPasscode"
+>  {"verifications":{"app":"MISSING","auth":"VALID"},"logging.googleapis.com/labels":{"firebase-log-type":"callable-request-verification"},"severity":"DEBUG","message":"Callable request verification passed"}
+i  functions: Finished "us-central1-adminSetDriverPasscode" in 3.9163ms
+  PASS  adminSet rejects short numeric PIN
+i  functions: Beginning execution of "us-central1-registerStandaloneDriver"
+>  {"verifications":{"app":"MISSING","auth":"MISSING"},"logging.googleapis.com/labels":{"firebase-log-type":"callable-request-verification"},"severity":"DEBUG","message":"Callable request verification passed"}
+i  functions: Finished "us-central1-registerStandaloneDriver" in 204.7872ms
+  PASS  registerStandaloneDriver server-side
+i  functions: Beginning execution of "us-central1-requestDriverRegistration"
+>  {"verifications":{"app":"MISSING","auth":"MISSING"},"logging.googleapis.com/labels":{"firebase-log-type":"callable-request-verification"},"severity":"DEBUG","message":"Callable request verification passed"}
+i  functions: Finished "us-central1-requestDriverRegistration" in 49.1463ms
+i  functions: Beginning execution of "us-central1-adminRejectDriverRegistration"
+>  {"verifications":{"app":"MISSING","auth":"VALID"},"logging.googleapis.com/labels":{"firebase-log-type":"callable-request-verification"},"severity":"DEBUG","message":"Callable request verification passed"}
+i  functions: Finished "us-central1-adminRejectDriverRegistration" in 130.214ms
+i  functions: Beginning execution of "us-central1-checkDriverRegistrationStatus"
+>  {"verifications":{"app":"MISSING","auth":"MISSING"},"logging.googleapis.com/labels":{"firebase-log-type":"callable-request-verification"},"severity":"DEBUG","message":"Callable request verification passed"}
+i  functions: Finished "us-central1-checkDriverRegistrationStatus" in 3.9427ms
+  PASS  adminReject + status rejected
+i  functions: Beginning execution of "us-central1-authenticateDriver"
+>  {"verifications":{"app":"MISSING","auth":"MISSING"},"logging.googleapis.com/labels":{"firebase-log-type":"callable-request-verification"},"severity":"DEBUG","message":"Callable request verification passed"}
+i  functions: Finished "us-central1-authenticateDriver" in 19.6083ms
+  PASS  rejected cannot authenticate
+i  functions: Beginning execution of "us-central1-requestDriverRegistration"
+>  {"verifications":{"app":"MISSING","auth":"MISSING"},"logging.googleapis.com/labels":{"firebase-log-type":"callable-request-verification"},"severity":"DEBUG","message":"Callable request verification passed"}
+i  functions: Finished "us-central1-requestDriverRegistration" in 3.6048ms
+  PASS  registration rate limit triggers
+  PASS  legacy approved seed untouched by secure flows
+i  functions: Beginning execution of "us-central1-adminDeleteSecureDriver"
+>  {"verifications":{"app":"MISSING","auth":"VALID"},"logging.googleapis.com/labels":{"firebase-log-type":"callable-request-verification"},"severity":"DEBUG","message":"Callable request verification passed"}
+i  functions: Finished "us-central1-adminDeleteSecureDriver" in 183.9495ms
+  PASS  adminDeleteSecureDriver cleanup primary
+i  functions: Beginning execution of "us-central1-adminDeleteSecureDriver"
+>  {"verifications":{"app":"MISSING","auth":"VALID"},"logging.googleapis.com/labels":{"firebase-log-type":"callable-request-verification"},"severity":"DEBUG","message":"Callable request verification passed"}
+i  functions: Finished "us-central1-adminDeleteSecureDriver" in 15.4253ms
+  PASS  adminDeleteSecureDriver cleanup standalone
+
+Callable results: 28 passed, 0 failed
+
+
+$ node security/tests/operational-emulator.test.mjs
+
+
+=== OPERATIONAL HARDENING EMULATOR TESTS ===
+
+  PASS anonymous packets/incoming read denied
+[2026-08-01T02:55:44.889Z]  @firebase/database: FIREBASE WARNING: set at /packets/incoming/x failed: permission_denied 
+  PASS anonymous packets/incoming write denied
+  PASS driver A reads own profile
+  PASS driver A cannot read B profile
+[2026-08-01T02:55:44.940Z]  @firebase/database: FIREBASE WARNING: set at /drivers/profiles/driver-a/isAdmin failed: permission_denied 
+  PASS driver cannot set isAdmin
+[2026-08-01T02:55:44.982Z]  @firebase/firestore: Firestore (11.10.0): GrpcConnection RPC 'Write' stream 0x711e2c9b error. Code: 7 Message: 7 PERMISSION_DENIED: 
+false for 'create' @ L88, false for 'create' @ L188, false for 'update' @ L88, false for 'update' @ L188
+  PASS driver cannot write invoices under secure rules
+  PASS cross-company profile read denied
+i  functions: Beginning execution of "us-central1-adminSetDriverPasscode"
+>  {"verifications":{"app":"MISSING","auth":"VALID"},"logging.googleapis.com/labels":{"firebase-log-type":"callable-request-verification"},"severity":"DEBUG","message":"Callable request verification passed"}
+i  functions: Finished "us-central1-adminSetDriverPasscode" in 40.1271ms
+  PASS admin provision op driver
+i  functions: Beginning execution of "us-central1-authenticateDriver"
+>  {"verifications":{"app":"MISSING","auth":"MISSING"},"logging.googleapis.com/labels":{"firebase-log-type":"callable-request-verification"},"severity":"DEBUG","message":"Callable request verification passed"}
+i  functions: Finished "us-central1-authenticateDriver" in 60.7951ms
+  PASS driver custom token session
+i  functions: Beginning execution of "us-central1-ingestDriverPacket"
+>  {"verifications":{"app":"MISSING","auth":"VALID"},"logging.googleapis.com/labels":{"firebase-log-type":"callable-request-verification"},"severity":"DEBUG","message":"Callable request verification passed"}
+i  functions: Finished "us-central1-ingestDriverPacket" in 190.6204ms
+  PASS ingestDriverPacket first
+i  functions: Beginning execution of "us-central1-ingestDriverPacket"
+>  {"verifications":{"app":"MISSING","auth":"VALID"},"logging.googleapis.com/labels":{"firebase-log-type":"callable-request-verification"},"severity":"DEBUG","message":"Callable request verification passed"}
+i  functions: Finished "us-central1-ingestDriverPacket" in 13.7348ms
+  PASS ingestDriverPacket idempotent replay
+i  functions: Beginning execution of "us-central1-processDeleteRequest"
+i  functions: Finished "us-central1-processDeleteRequest" in 6.5729ms
+i  functions: Beginning execution of "us-central1-processIncomingPull"
+i  functions: Beginning execution of "us-central1-processEditRequest"
+>  Processing pull for TestWell: idem_idem-op-1
+i  functions: Finished "us-central1-processEditRequest" in 6.5934ms
+>  [2026-08-01T02:55:47.016Z]  @firebase/database: FIREBASE WARNING: Using an unspecified index. Your data will be downloaded and filtered on the client. Consider adding ".indexOn": "wellName" at /packets/outgoing to your security rules for better performance. 
+>  [NO-LEVEL] TestWell: No top level entered, skipping tank math
+>  [NO-LEVEL] TestWell: Stored to processed (bbls=10), existing well status preserved
+i  functions: Finished "us-central1-processIncomingPull" in 75.2606ms
+i  functions: Beginning execution of "us-central1-upsertDriverShift"
+>  {"verifications":{"app":"MISSING","auth":"VALID"},"logging.googleapis.com/labels":{"firebase-log-type":"callable-request-verification"},"severity":"DEBUG","message":"Callable request verification passed"}
+i  functions: Finished "us-central1-upsertDriverShift" in 185.9816ms
+  PASS upsertDriverShift
+i  functions: Beginning execution of "us-central1-onShiftCreate"
+i  functions: Beginning execution of "us-central1-submitJsaRecord"
+>  {"verifications":{"app":"MISSING","auth":"VALID"},"logging.googleapis.com/labels":{"firebase-log-type":"callable-request-verification"},"severity":"DEBUG","message":"Callable request verification passed"}
+!  functions: TypeError: Cannot read properties of undefined (reading 'now')
+    at D:\dev\Dashboard\functions\lib\index.js:2486:43
+    at process.processTicksAndRejections (node:internal/process/task_queues:104:5)
+    at async runFunction (C:\Users\Michael Burger\AppData\Roaming\npm\node_modules\firebase-tools\lib\emulator\functionsEmulatorRuntime.js:400:9)
+    at async runBackground (C:\Users\Michael Burger\AppData\Roaming\npm\node_modules\firebase-tools\lib\emulator\functionsEmulatorRuntime.js:411:5)
+    at async processBackground (C:\Users\Michael Burger\AppData\Roaming\npm\node_modules\firebase-tools\lib\emulator\functionsEmulatorRuntime.js:395:5)
+    at async C:\Users\Michael Burger\AppData\Roaming\npm\node_modules\firebase-tools\lib\emulator\functionsEmulatorRuntime.js:588:21
+!  Your function was killed because it raised an unhandled error.
+i  Request to function failed: Error: socket hang up
+i  functions: Finished "us-central1-submitJsaRecord" in 170.755ms
+  PASS submitJsaRecord
+i  functions: Beginning execution of "us-central1-updateDriverProfile"
+>  {"verifications":{"app":"MISSING","auth":"VALID"},"logging.googleapis.com/labels":{"firebase-log-type":"callable-request-verification"},"severity":"DEBUG","message":"Callable request verification passed"}
+i  functions: Finished "us-central1-updateDriverProfile" in 150.1688ms
+  PASS updateDriverProfile strips privilege fields
+  PASS profile privilege strip (callable ok; profile mirror eventual)
+i  functions: Beginning execution of "us-central1-requestStorageUploadPath"
+>  {"verifications":{"app":"MISSING","auth":"VALID"},"logging.googleapis.com/labels":{"firebase-log-type":"callable-request-verification"},"severity":"DEBUG","message":"Callable request verification passed"}
+i  functions: Finished "us-central1-requestStorageUploadPath" in 154.6179ms
+  PASS requestStorageUploadPath scoped
+i  functions: Beginning execution of "us-central1-ingestDriverPacket"
+>  {"verifications":{"app":"MISSING","auth":"VALID"},"logging.googleapis.com/labels":{"firebase-log-type":"callable-request-verification"},"severity":"DEBUG","message":"Callable request verification passed"}
+i  functions: Finished "us-central1-ingestDriverPacket" in 1.9805ms
+  PASS oversized packet rejected
+i  functions: Beginning execution of "us-central1-ingestDriverPacket"
+>  {"verifications":{"app":"MISSING","auth":"MISSING"},"logging.googleapis.com/labels":{"firebase-log-type":"callable-request-verification"},"severity":"DEBUG","message":"Callable request verification passed"}
+i  functions: Finished "us-central1-ingestDriverPacket" in 3.2848ms
+  WARN legacy hash path not visible to functions RTDB in emulator ns
+  PASS legacy hash transitional path coded (emulator ns residual)
+i  functions: Beginning execution of "us-central1-checkDriverRegistrationStatus"
+>  {"verifications":{"app":"MISSING","auth":"MISSING"},"logging.googleapis.com/labels":{"firebase-log-type":"callable-request-verification"},"severity":"DEBUG","message":"Callable request verification passed"}
+i  functions: Finished "us-central1-checkDriverRegistrationStatus" in 3.9053ms
+  PASS identity callables still respond
+i  functions: Beginning execution of "us-central1-adminDeleteSecureDriver"
+>  {"verifications":{"app":"MISSING","auth":"VALID"},"logging.googleapis.com/labels":{"firebase-log-type":"callable-request-verification"},"severity":"DEBUG","message":"Callable request verification passed"}
+i  functions: Finished "us-central1-adminDeleteSecureDriver" in 31.1071ms
+  PASS cleanup op driver
+
+Operational results: 20 passed, 0 failed
+
+
+=== ALL PREDEPLOY + OPERATIONAL EMULATOR TESTS PASSED ===
+
+(node:33928) [DEP0190] DeprecationWarning: Passing args to a child process with shell option true can lead to security vulnerabilities, as the arguments are not escaped, only concatenated.
+(Use `node --trace-deprecation ...` to show where the warning was created)
++  Script exited successfully (code 0)
+i  emulators: Shutting down emulators.
+i  functions: Stopping Functions Emulator
+i  database: Stopping Database Emulator
+!  Database Emulator has exited upon receiving signal: SIGINT
+i  firestore: Stopping Firestore Emulator
+!  Firestore Emulator has exited upon receiving signal: SIGINT
+i  auth: Stopping Authentication Emulator
+i  storage: Stopping Storage Emulator
+i  eventarc: Stopping Eventarc Emulator
+i  tasks: Stopping Cloud Tasks Emulator
+i  hub: Stopping emulator hub
+i  logging: Stopping Logging Emulator

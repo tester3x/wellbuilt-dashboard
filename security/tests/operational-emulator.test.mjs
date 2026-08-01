@@ -313,6 +313,70 @@ async function main() {
     ok('oversized packet rejected');
   }
 
+  // Invoice ownership + idempotent
+  try {
+    const inv = await call('upsertDriverInvoice')({
+      invoice: { status: 'open', wellName: 'W' },
+      idempotencyKey: 'inv-op-1',
+    });
+    if (inv.data.invoiceId) ok('upsertDriverInvoice');
+    else fail('invoice', new Error(JSON.stringify(inv.data)));
+    const inv2 = await call('upsertDriverInvoice')({
+      invoiceId: inv.data.invoiceId,
+      invoice: { status: 'closed' },
+    });
+    if (inv2.data.ok) ok('invoice close transition');
+  } catch (e) {
+    fail('invoice ops', e);
+  }
+
+  // Chat requires thread — create via admin SDK then send
+  try {
+    const threadId = 'thread-op-1';
+    await admin.firestore().collection('chat_threads').doc(threadId).set({
+      participantIds: [driverId],
+      companyId: 'co-test',
+    });
+    const m1 = await call('sendChatMessage')({
+      threadId,
+      text: 'hello secure',
+      clientId: 'msg-1',
+    });
+    if (m1.data.messageId) ok('sendChatMessage');
+    const m2 = await call('sendChatMessage')({
+      threadId,
+      text: 'hello secure',
+      clientId: 'msg-1',
+    });
+    if (m2.data.duplicate) ok('chat message idempotent');
+  } catch (e) {
+    fail('chat', e);
+  }
+
+  // Public meta pre-login
+  try {
+    await signOut(auth);
+    const meta = await call('getPublicClientMeta')({});
+    if (meta.data && meta.data.projectId) ok('getPublicClientMeta unauth ok');
+    else fail('public meta', new Error(JSON.stringify(meta.data)));
+  } catch (e) {
+    fail('public meta', e);
+  }
+  // re-auth for cleanup
+  try {
+    const login2 = await call('authenticateDriver')({
+      displayName: 'OpDriver01',
+      passcode: 'OpSecure99!',
+    });
+    if (login2.data.customToken) {
+      await signInWithCustomToken(auth, login2.data.customToken);
+    } else if (login2.data.idToken) {
+      // emulator may still use custom token
+    }
+  } catch {
+    /* cleanup uses admin */
+  }
+
   // Legacy hash transitional packet (no custom token) — sign out
   await signOut(auth);
   try {

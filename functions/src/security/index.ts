@@ -20,4 +20,8 @@ export {
   signalDriverLogout,
   getDriverReferenceBundle,
   requestStorageUploadPath,
+  upsertDriverInvoice,
+  upsertDriverDispatch,
+  sendChatMessage,
+  getPublicClientMeta,
 } from './operational';
