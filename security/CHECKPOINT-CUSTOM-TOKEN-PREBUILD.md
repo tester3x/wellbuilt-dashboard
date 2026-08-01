@@ -139,7 +139,16 @@ While production rules remain open (dual-run):
 
 ## 13. Exact security branch HEADs
 
-Recorded at push time (see final report section after commits).
+| Repo | Branch | HEAD |
+|------|--------|------|
+| dashboard | `security/database-containment` | `427690d` |
+| WB-T | `security/database-containment` | `e7b69a5` |
+| eWallet | `security/database-containment` | `ac02474` |
+| Suite | `security/database-containment` | `9e38943` |
+| WB-M | `security/database-containment` | `d9bedb5` |
+| JSA | `security/database-containment` | `233ae4e` |
+
+All pushed to origin.
 
 ## 14. One coordinated client-build cycle sufficient?
 
