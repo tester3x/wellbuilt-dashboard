@@ -170,22 +170,34 @@ async function main() {
       displayName: driverName,
       passcode: driverPass,
     });
-    if (login.idToken) {
-      driverTok = login.idToken;
-      ok(`authenticateDriver mintMethod=${login.mintMethod || 'idToken'}`);
-    } else if (login.customToken) {
-      const url = `https://identitytoolkit.googleapis.com/v1/accounts:signInWithCustomToken?key=${API_KEY}`;
-      const resp = await fetch(url, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ token: login.customToken, returnSecureToken: true }),
-      });
-      const body = await resp.json();
-      if (!resp.ok) throw new Error(body?.error?.message || 'custom token exchange failed');
-      driverTok = body.idToken;
-      ok('authenticateDriver + custom token exchange');
+    if (login.mintMethod === 'password_exchange') {
+      throw new Error('password_exchange still invoked — custom token expected');
+    }
+    if (!login.customToken) {
+      throw new Error(`expected customToken, got mintMethod=${login.mintMethod}`);
+    }
+    const url = `https://identitytoolkit.googleapis.com/v1/accounts:signInWithCustomToken?key=${API_KEY}`;
+    const resp = await fetch(url, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ token: login.customToken, returnSecureToken: true }),
+    });
+    const body = await resp.json();
+    if (!resp.ok) throw new Error(body?.error?.message || 'custom token exchange failed');
+    driverTok = body.idToken;
+    // Decode JWT payload (no verify) for claim checks
+    const payload = JSON.parse(
+      Buffer.from(body.idToken.split('.')[1], 'base64url').toString('utf8'),
+    );
+    if (payload.user_id || payload.sub) {
+      ok(`authenticateDriver custom_token; uid=${(payload.user_id || payload.sub).slice(0, 12)}…`);
     } else {
-      throw new Error('no idToken or customToken in authenticateDriver response');
+      ok('authenticateDriver custom_token exchange ok');
+    }
+    if (payload.exp && payload.exp * 1000 > Date.now()) {
+      ok('id token has future exp');
+    } else {
+      fail('id token exp', new Error(String(payload.exp)));
     }
   } catch (e) {
     fail('authenticateDriver', e);

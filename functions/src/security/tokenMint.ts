@@ -1,8 +1,11 @@
 /**
  * Mint Firebase Auth session tokens for a driver.
- * Prefers createCustomToken; falls back to email/password exchange when the
- * runtime service account lacks iam.serviceAccounts.signBlob (common on GCF
- * default compute SA until Token Creator is granted).
+ *
+ * Primary: createCustomToken (requires runtime SA has
+ * roles/iam.serviceAccountTokenCreator on itself for signBlob).
+ *
+ * Password-exchange fallback is DISABLED by default after IAM fix.
+ * Set ALLOW_PASSWORD_EXCHANGE_FALLBACK=true only for emergency rollback.
  */
 import * as crypto from 'crypto';
 import * as admin from 'firebase-admin';
@@ -10,12 +13,16 @@ import * as admin from 'firebase-admin';
 const WEB_API_KEY =
   process.env.FIREBASE_WEB_API_KEY || 'AIzaSyAGWXa-doFGzo7T5SxHVD_v5-SHXIc8wAI';
 
+/** Emergency only — default false/off. */
+export function isPasswordExchangeFallbackAllowed(): boolean {
+  return process.env.ALLOW_PASSWORD_EXCHANGE_FALLBACK === 'true';
+}
+
 export function driverAuthUid(driverId: string): string {
   return `driver_${driverId.replace(/-/g, '').slice(0, 28)}`;
 }
 
 export function driverAuthEmail(driverId: string): string {
-  // Synthetic mailbox — not for human mail; used only for Auth password exchange fallback
   const id = driverId.replace(/-/g, '').toLowerCase();
   return `drv_${id.slice(0, 28)}@drivers.wellbuilt-sync.local`;
 }
@@ -39,7 +46,7 @@ export async function ensureDriverAuthUser(
     try {
       await admin.auth().updateUser(authUid, { email, displayName, emailVerified: true });
     } catch {
-      /* email may already be taken — ignore */
+      /* ignore email conflicts */
     }
   } catch {
     await admin.auth().createUser({
@@ -53,6 +60,19 @@ export async function ensureDriverAuthUser(
   return authUid;
 }
 
+/**
+ * Invalidate residual password material on synthetic driver Auth users
+ * (random unusable password). Does not delete the Auth identity.
+ */
+export async function invalidateSyntheticPassword(authUid: string): Promise<void> {
+  const junk = crypto.randomBytes(32).toString('base64url') + 'Xx9!';
+  try {
+    await admin.auth().updateUser(authUid, { password: junk });
+  } catch {
+    /* user may not exist */
+  }
+}
+
 export async function mintDriverSessionTokens(
   authUid: string,
   claims: Record<string, unknown>,
@@ -64,14 +84,18 @@ export async function mintDriverSessionTokens(
     return { customToken, authUid, mintMethod: 'custom_token' };
   } catch (err: any) {
     const msg = String(err?.message || err || '');
-    if (!/signBlob|insufficient-permission|create-custom-tokens/i.test(msg)) {
+    const isSignBlob =
+      /signBlob|insufficient-permission|create-custom-tokens/i.test(msg);
+    if (!isSignBlob || !isPasswordExchangeFallbackAllowed()) {
+      // Surface clearly — do not silently mint passwords when fallback is off
       throw err;
     }
     console.warn(
-      '[tokenMint] createCustomToken unavailable (signBlob); using password-exchange fallback',
+      '[tokenMint] ALLOW_PASSWORD_EXCHANGE_FALLBACK=true: using password-exchange (audit mintMethod)',
     );
   }
 
+  // --- Emergency fallback only (disabled by default) ---
   const email = (await admin.auth().getUser(authUid)).email || undefined;
   if (!email) {
     throw new Error('password-exchange requires auth user email');
@@ -94,13 +118,8 @@ export async function mintDriverSessionTokens(
     throw new Error(body?.error?.message || `password-exchange failed (${resp.status})`);
   }
 
-  try {
-    await admin.auth().updateUser(authUid, {
-      password: crypto.randomBytes(32).toString('base64url') + 'Zz9!',
-    });
-  } catch {
-    /* non-fatal */
-  }
+  // Invalidate temp password immediately
+  await invalidateSyntheticPassword(authUid);
 
   return {
     idToken: body.idToken,

@@ -415,6 +415,23 @@ export function DriversTab({ scopeCompanyId, isWbAdmin = false }: DriversTabProp
   // ── Approve a pending driver ──
   const approveDriver = async (driver: PendingDriver) => {
     try {
+      // Prefer secure callable when dual-run securePendingId is present
+      const secureId = (driver as PendingDriver & { securePendingId?: string }).securePendingId;
+      if (secureId) {
+        try {
+          const { adminApproveSecure } = await import('@/lib/secureDriverAdmin');
+          await adminApproveSecure({
+            pendingId: secureId,
+            companyId: scopeCompanyId || undefined,
+            companyName: driver.companyName,
+          });
+          setMessage(`Approved (secure): ${driver.displayName}`);
+          await loadDrivers();
+          return;
+        } catch (secErr) {
+          console.warn('Secure approve failed, falling back to legacy RTDB:', secErr);
+        }
+      }
       // Move from pending to approved
       // If a company admin is approving, auto-assign to their company
       // Also carry forward the companyName the driver entered during registration
@@ -500,6 +517,39 @@ export function DriversTab({ scopeCompanyId, isWbAdmin = false }: DriversTabProp
     }
 
     try {
+      // Prefer secure callable when dual-run securePendingId is present
+      const secureId = (approvalTarget as PendingDriver & { securePendingId?: string }).securePendingId;
+      if (secureId) {
+        try {
+          const { adminApproveSecure } = await import('@/lib/secureDriverAdmin');
+          await adminApproveSecure({
+            pendingId: secureId,
+            companyId: approvalCompanyId,
+            companyName: approvalCompanyName,
+            assignedCustomers: approvalCustomers.map((name) => ({
+              name,
+              companyId: approvalCompanyId,
+            })),
+            assignedRoutes: approvalRoutes,
+            roles: approvalRoles,
+          });
+          setMessage(
+            `Approved (secure): ${approvalTarget.displayName} with ${approvalCustomers.length} customer(s) and ${approvalRoutes.length} route(s)`,
+          );
+          setShowApprovalModal(false);
+          setApprovalTarget(null);
+          setApprovalCompanyId('');
+          setApprovalCompanyName('');
+          setApprovalCustomers([]);
+          setApprovalRoutes([]);
+          setApprovalRoles(['driver']);
+          await loadDrivers();
+          return;
+        } catch (secErr) {
+          console.warn('Secure approve-with-assignments failed, falling back to legacy RTDB:', secErr);
+        }
+      }
+
       const approvedData: Record<string, any> = {
         displayName: approvalTarget.displayName,
         legalName: approvalTarget.legalName || approvalTarget.displayName,

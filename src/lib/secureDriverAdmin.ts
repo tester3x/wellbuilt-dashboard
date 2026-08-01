@@ -44,8 +44,27 @@ export async function adminSetPasscode(params: {
   companyId?: string;
   companyName?: string;
   legalName?: string;
+  /** Default true on server — force first-login change */
+  temporary?: boolean;
+  keepLegacyActive?: boolean;
 }) {
   const fn = httpsCallable(getFirebaseFunctions(), 'adminSetDriverPasscode');
   const res = await fn(params);
-  return res.data as { driverId: string; displayName: string };
+  return res.data as {
+    driverId: string;
+    displayName: string;
+    mustChangePasscode?: boolean;
+  };
+}
+
+export async function adminDeleteSecureDriver(params: {
+  driverId: string;
+  confirm?: string;
+}) {
+  const fn = httpsCallable(getFirebaseFunctions(), 'adminDeleteSecureDriver');
+  const res = await fn({
+    driverId: params.driverId,
+    confirm: params.confirm || 'DELETE_SECURE_DRIVER',
+  });
+  return res.data;
 }
