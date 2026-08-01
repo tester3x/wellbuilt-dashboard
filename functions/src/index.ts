@@ -4285,4 +4285,12 @@ export {
   adminDeleteSecureDriver,
   registerStandaloneDriver,
   adminComputeLegacyHash,
+  // Operational path hardening (not deployed this pass — review checkpoint)
+  ingestDriverPacket,
+  upsertDriverShift,
+  submitJsaRecord,
+  updateDriverProfile,
+  signalDriverLogout,
+  getDriverReferenceBundle,
+  requestStorageUploadPath,
 } from './security';

@@ -1,70 +1,36 @@
 rules_version = '2';
 service cloud.firestore {
   match /databases/{database}/documents {
-    function signedIn() {
-      return request.auth != null;
+    function signedIn() { return request.auth != null; }
+    function isDriver() { return signedIn() && request.auth.token.kind == 'driver'; }
+    function driverId() { return request.auth.token.driverId; }
+    function companyId() { return request.auth.token.companyId; }
+    function isDashboard() { return signedIn() && request.auth.token.kind != 'driver'; }
+    function dashboardRole() {
+      return isDashboard()
+        ? get(/databases/$(database)/documents/users/$(request.auth.uid)).data.role
+        : null;
     }
-    function isDriver() {
-      return signedIn() && request.auth.token.kind == 'driver';
-    }
-    function driverId() {
-      return request.auth.token.driverId;
-    }
-    function isDashboard() {
-      return signedIn() && request.auth.token.kind != 'driver';
-    }
+    // Note: dashboard role via RTDB not available in FS rules; use custom claims when set.
+    // For draft: isDashboard() means non-driver Auth (email users).
 
-    // Credential material — never client-accessible
-    match /driver_credentials/{id} {
-      allow read, write: if false;
-    }
-    match /pending_credentials/{id} {
-      allow read, write: if false;
-    }
-    match /driver_name_index/{id} {
-      allow read, write: if false;
-    }
-    match /security_audit/{id} {
-      allow read, write: if false;
-    }
+    match /driver_credentials/{id} { allow read, write: if false; }
+    match /pending_credentials/{id} { allow read, write: if false; }
+    match /driver_name_index/{id} { allow read, write: if false; }
+    match /security_audit/{id} { allow read, write: if false; }
 
-    // Reference data — authenticated read; write Admin SDK only
-    match /operators/{docId} {
-      allow read: if signedIn();
-      allow write: if false;
-    }
-    match /wells/{docId} {
-      allow read: if signedIn();
-      allow write: if false;
-    }
-    match /wells_inactive/{docId} {
-      allow read: if signedIn();
-      allow write: if false;
-    }
-    match /disposals/{docId} {
-      allow read: if signedIn();
-      allow write: if false;
-    }
-    match /customers/{docId} {
-      allow read: if signedIn();
-      allow write: if false;
-    }
-    match /operatorAliases/{docId} {
-      allow read: if signedIn();
-      allow write: if false;
-    }
-    match /job_packages/{packageId} {
-      allow read: if signedIn();
-      allow write: if false;
-    }
-    match /app_registry/{appId} {
-      allow read: if signedIn();
-      allow write: if false;
-    }
-    match /overweight_fines/{stateId} {
-      allow read: if signedIn();
-      allow write: if false;
-    }
+    // Reference catalogs — authenticated read only
+    match /operators/{docId} { allow read: if signedIn(); allow write: if false; }
+    match /wells/{docId} { allow read: if signedIn(); allow write: if false; }
+    match /wells_inactive/{docId} { allow read: if signedIn(); allow write: if false; }
+    match /disposals/{docId} { allow read: if signedIn(); allow write: if false; }
+    match /customers/{docId} { allow read: if signedIn(); allow write: if false; }
+    match /operatorAliases/{docId} { allow read: if signedIn(); allow write: if false; }
+    match /job_packages/{id} { allow read: if signedIn(); allow write: if false; }
+    match /app_registry/{id} { allow read: if signedIn(); allow write: if false; }
+    match /overweight_fines/{id} { allow read: if signedIn(); allow write: if false; }
+    match /invoiceBlocks/{id} { allow read: if signedIn(); allow write: if false; }
+    match /ticketBlocks/{id} { allow read: if signedIn(); allow write: if false; }
 
     match /companies/{docId} {
       allow read: if signedIn();
@@ -75,26 +41,50 @@ service cloud.firestore {
       }
     }
 
-    // Driver-owned shifts
+    // Driver-owned shifts — client write denied (callable only)
     match /driver_shifts/{shiftId} {
-      allow read: if isDriver() && shiftId.matches('^' + driverId() + '_.*')
-        || isDashboard();
-      allow write: if false;
-    }
-
-    match /jsa_day_status/{docId} {
-      allow read: if signedIn();
+      allow read: if isDriver() && (
+        shiftId.matches('^' + driverId() + '_.*')
+        || resource.data.driverId == driverId()
+      ) || isDashboard();
       allow write: if false;
     }
 
     match /jsas/{jsaId} {
+      allow read: if signedIn() && (
+        isDashboard()
+        || (isDriver() && resource.data.driverId == driverId())
+      );
+      allow write: if false;
+    }
+    match /jsa_day_status/{docId} {
       allow read: if signedIn();
       allow write: if false;
     }
-
-    // Operational docs — write via Cloud Functions only under secure model
-    match /invoices/{docId} {
+    match /jsa_completions/{docId} {
       allow read: if signedIn();
+      allow write: if false;
+    }
+    match /jsa_templates/{companyId} {
+      allow read: if signedIn();
+      allow write: if false;
+      match /templates/{templateId} {
+        allow read: if signedIn();
+        allow write: if false;
+      }
+    }
+
+    // Operational docs — CF-only writes under secure model
+    match /invoices/{docId} {
+      allow read: if signedIn() && (
+        isDashboard()
+        || (isDriver() && (
+          !('companyId' in resource.data)
+          || resource.data.companyId == companyId()
+          || resource.data.driverId == driverId()
+          || resource.data.driverHash == driverId()
+        ))
+      );
       allow write: if false;
     }
     match /tickets/{docId} {
@@ -105,7 +95,15 @@ service cloud.firestore {
       allow read: if signedIn();
       allow write: if false;
     }
-    match /transfer_requests/{requestId} {
+    match /transfer_requests/{id} {
+      allow read: if signedIn();
+      allow write: if false;
+    }
+    match /transfers/{id} {
+      allow read: if signedIn();
+      allow write: if false;
+    }
+    match /projects/{id} {
       allow read: if signedIn();
       allow write: if false;
     }
@@ -117,26 +115,37 @@ service cloud.firestore {
         allow write: if false;
       }
     }
-
-    match /invoiceBlocks/{docId} {
-      allow read: if signedIn();
-      allow write: if false;
-    }
-    match /ticketBlocks/{docId} {
-      allow read: if signedIn();
+    match /chat_monitors/{id} {
+      allow read: if isDashboard();
       allow write: if false;
     }
 
-    match /customLocations/{docId} {
+    match /route_recordings/{slug} {
+      allow read: if signedIn();
+      allow write: if false;
+      match /trips/{tripId} {
+        allow read: if signedIn();
+        allow write: if false;
+      }
+    }
+    match /route_overrides/{slug} {
+      allow read: if signedIn();
+      allow write: if false;
+    }
+    match /locationCorrections/{id} {
+      allow read: if signedIn();
+      allow write: if false;
+    }
+    match /customLocations/{id} {
       allow read: if signedIn();
       allow create: if signedIn();
       allow update, delete: if false;
     }
-    match /unmatchedLocations/{docId} {
+    match /unmatchedLocations/{id} {
       allow create: if signedIn();
       allow read, update, delete: if false;
     }
-    match /unmatchedCompanies/{docId} {
+    match /unmatchedCompanies/{id} {
       allow create: if signedIn();
       allow read, update, delete: if false;
     }
@@ -145,17 +154,32 @@ service cloud.firestore {
       allow read: if signedIn();
       allow write: if isDashboard();
     }
+    match /vehicle_documents/{id} {
+      allow read: if signedIn();
+      allow write: if false;
+    }
+    match /driver_documents/{id} {
+      allow read, write: if false;
+    }
 
-    match /wb_diagnostics/{docId} {
+    match /deductions/{id} { allow read: if isDashboard(); allow write: if false; }
+    match /additions/{id} { allow read: if isDashboard(); allow write: if false; }
+    match /billing_invoices/{id} { allow read: if isDashboard(); allow write: if false; }
+    match /billing_counters/{id} { allow read: if isDashboard(); allow write: if false; }
+    match /billing_invoice_counters/{id} { allow read: if isDashboard(); allow write: if false; }
+    match /billing_exports/{id} { allow read: if isDashboard(); allow write: if false; }
+    match /diesel_prices/{id} { allow read: if signedIn(); allow write: if false; }
+    match /job_type_usage/{id} { allow read: if signedIn(); allow write: if false; }
+
+    match /wb_diagnostics/{id} {
       allow read: if isDashboard();
       allow write: if false;
     }
-    match /canonical_jobs/{docId} {
+    match /canonical_jobs/{id} {
       allow read: if isDashboard();
       allow write: if false;
     }
-
-    match /daps_waitlist/{docId} {
+    match /daps_waitlist/{id} {
       allow read: if false;
       allow create: if true;
     }

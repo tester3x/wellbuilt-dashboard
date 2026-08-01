@@ -1,37 +1,54 @@
 rules_version = '2';
 service firebase.storage {
   match /b/{bucket}/o {
-    function signedIn() {
-      return request.auth != null;
+    function signedIn() { return request.auth != null; }
+    function isDriver() { return signedIn() && request.auth.token.kind == 'driver'; }
+    function driverId() { return request.auth.token.driverId; }
+    function companyId() { return request.auth.token.companyId; }
+    function isImage() {
+      return request.resource.contentType.matches('image/.*');
     }
-    function isDriver() {
-      return signedIn() && request.auth.token.kind == 'driver';
+    function isPdf() {
+      return request.resource.contentType == 'application/pdf';
+    }
+    function underSize(n) {
+      return request.resource.size < n;
     }
 
-    // Job photos: authenticated only; path company scoping refined when claims reliable
-    match /photos/{companyId}/{allPaths=**} {
+    // Ticket photos: auth required; company path must match claim when present
+    match /photos/{cid}/{invoiceId}/{fileName} {
       allow read: if signedIn();
       allow write: if signedIn()
-        && request.resource.size < 15 * 1024 * 1024
-        && request.resource.contentType.matches('image/.*');
+        && underSize(12 * 1024 * 1024)
+        && isImage()
+        && (
+          !isDriver()
+          || !('companyId' in request.auth.token)
+          || request.auth.token.companyId == cid
+        );
     }
 
     match /chat_photos/{threadId}/{fileName} {
       allow read: if signedIn();
-      allow write: if signedIn()
-        && request.resource.size < 10 * 1024 * 1024;
+      allow write: if signedIn() && underSize(10 * 1024 * 1024) && isImage();
     }
 
-    match /jsa/{companyId}/{allPaths=**} {
+    match /jsa/{cid}/{allPaths=**} {
       allow read: if signedIn();
       allow write: if signedIn()
-        && request.resource.size < 20 * 1024 * 1024;
+        && underSize(20 * 1024 * 1024)
+        && (isPdf() || isImage())
+        && (!isDriver() || companyId() == null || companyId() == cid);
     }
 
     match /ewallet/{driverKey}/{allPaths=**} {
-      allow read: if signedIn();
+      allow read: if signedIn() && (
+        !isDriver() || driverId() == driverKey
+      );
       allow write: if isDriver()
-        && request.auth.token.driverId == driverKey;
+        && driverId() == driverKey
+        && underSize(12 * 1024 * 1024)
+        && isImage();
     }
 
     match /vehicle_documents/{allPaths=**} {
@@ -41,7 +58,12 @@ service firebase.storage {
 
     match /photo_requirements/{allPaths=**} {
       allow read: if signedIn();
-      allow write: if signedIn();
+      allow write: if signedIn() && !isDriver();
+    }
+
+    match /jsa_templates/{allPaths=**} {
+      allow read: if signedIn();
+      allow write: if false;
     }
 
     match /{allPaths=**} {

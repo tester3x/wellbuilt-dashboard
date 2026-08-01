@@ -11,3 +11,13 @@ export {
   registerStandaloneDriver,
   adminComputeLegacyHash,
 } from './driverAuthCallables';
+
+export {
+  ingestDriverPacket,
+  upsertDriverShift,
+  submitJsaRecord,
+  updateDriverProfile,
+  signalDriverLogout,
+  getDriverReferenceBundle,
+  requestStorageUploadPath,
+} from './operational';

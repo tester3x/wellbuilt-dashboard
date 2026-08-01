@@ -32,4 +32,7 @@ run('node', ['security/tests/rules-adversarial.test.mjs']);
 // Callables
 run('node', ['security/tests/callables-emulator.test.mjs']);
 
-console.log('\n=== ALL PREDEPLOY EMULATOR TESTS PASSED ===\n');
+// Operational path hardening
+run('node', ['security/tests/operational-emulator.test.mjs']);
+
+console.log('\n=== ALL PREDEPLOY + OPERATIONAL EMULATOR TESTS PASSED ===\n');

@@ -222,18 +222,40 @@ async function main() {
     }
   }
 
-  // 11 Storage signed-in can write photos path (transitional)
+  // 11 Storage signed-in can write photos path when company claim matches
   {
-    const user = testEnv.authenticatedContext('u1', { kind: 'driver', driverId: 'driver-a' });
+    const user = testEnv.authenticatedContext('u1', {
+      kind: 'driver',
+      driverId: 'driver-a',
+      companyId: 'co',
+    });
     try {
       await assertSucceeds(
-        uploadString(sref(user.storage(), 'photos/co/x.jpg'), 'fake', 'raw', {
+        uploadString(sref(user.storage(), 'photos/co/inv1/x.jpg'), 'fake', 'raw', {
           contentType: 'image/jpeg',
         }),
       );
       ok('signed-in Storage photo write allowed under secure draft');
     } catch (e) {
       fail('signed-in Storage photo write allowed under secure draft', e);
+    }
+  }
+  // 12 Cross-company photo path denied
+  {
+    const user = testEnv.authenticatedContext('u2', {
+      kind: 'driver',
+      driverId: 'driver-a',
+      companyId: 'co-a',
+    });
+    try {
+      await assertFails(
+        uploadString(sref(user.storage(), 'photos/co-b/inv1/x.jpg'), 'fake', 'raw', {
+          contentType: 'image/jpeg',
+        }),
+      );
+      ok('cross-company Storage photo write denied');
+    } catch (e) {
+      fail('cross-company Storage photo write denied', e);
     }
   }
 

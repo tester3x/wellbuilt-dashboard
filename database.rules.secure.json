@@ -11,7 +11,7 @@
     "drivers": {
       "profiles": {
         "$driverId": {
-          ".read": "auth != null && (auth.token.driverId == $driverId || root.child('users').child(auth.uid).child('role').val() == 'admin' || root.child('users').child(auth.uid).child('role').val() == 'it' || root.child('users').child(auth.uid).child('role').val() == 'manager')",
+          ".read": "auth != null && (auth.token.driverId == $driverId || root.child('users').child(auth.uid).child('role').val() == 'admin' || root.child('users').child(auth.uid).child('role').val() == 'it' || root.child('users').child(auth.uid).child('role').val() == 'manager' || root.child('users').child(auth.uid).child('role').val() == 'dispatch')",
           ".write": false
         }
       },
@@ -26,7 +26,7 @@
         ".write": false
       },
       "approved": {
-        ".read": "auth != null && (root.child('users').child(auth.uid).child('role').val() == 'admin' || root.child('users').child(auth.uid).child('role').val() == 'it' || root.child('users').child(auth.uid).child('role').val() == 'manager')",
+        ".read": "auth != null && (root.child('users').child(auth.uid).child('role').val() == 'admin' || root.child('users').child(auth.uid).child('role').val() == 'it' || root.child('users').child(auth.uid).child('role').val() == 'manager' || root.child('users').child(auth.uid).child('role').val() == 'dispatch')",
         ".write": false
       }
     },
@@ -39,17 +39,21 @@
     },
 
     "packets": {
-      "processed": {
-        ".indexOn": ["driverId", "driverName", "wellName"],
-        ".read": "auth != null && (root.child('users').child(auth.uid).child('role').val() == 'admin' || root.child('users').child(auth.uid).child('role').val() == 'it' || root.child('users').child(auth.uid).child('role').val() == 'manager' || root.child('users').child(auth.uid).child('role').val() == 'dispatch')",
-        ".write": false
-      },
       "incoming": {
         ".read": false,
         ".write": false
       },
       "outgoing": {
         ".read": "auth != null",
+        ".write": false
+      },
+      "incoming_version": {
+        ".read": "auth != null",
+        ".write": false
+      },
+      "processed": {
+        ".indexOn": ["driverId", "driverName", "wellName"],
+        ".read": "auth != null && (auth.token.kind == 'driver' || root.child('users').child(auth.uid).exists())",
         ".write": false
       },
       "rejected": {
@@ -62,24 +66,32 @@
       ".read": "auth != null",
       ".write": false
     },
-
+    "wells": {
+      ".read": "auth != null",
+      ".write": false
+    },
     "production": {
       ".read": "auth != null && (root.child('users').child(auth.uid).child('role').val() == 'admin' || root.child('users').child(auth.uid).child('role').val() == 'it' || root.child('users').child(auth.uid).child('role').val() == 'manager')",
       ".write": false
     },
-
     "performance": {
       ".read": "auth != null && (root.child('users').child(auth.uid).child('role').val() == 'admin' || root.child('users').child(auth.uid).child('role').val() == 'it' || root.child('users').child(auth.uid).child('role').val() == 'manager')",
       ".write": false
     },
-
     "status": {
       ".read": "auth != null",
       ".write": false
     },
-
+    "driver_pulls": {
+      ".read": "auth != null",
+      ".write": false
+    },
     "logs": {
       ".read": "auth != null && (root.child('users').child(auth.uid).child('role').val() == 'admin' || root.child('users').child(auth.uid).child('role').val() == 'it')",
+      ".write": false
+    },
+    "devices": {
+      ".read": "auth != null",
       ".write": false
     }
   }
