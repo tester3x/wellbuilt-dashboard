@@ -4271,3 +4271,16 @@ export {
 } from './handoff-recovery';
 
 export { eQuipmentDocuments, eQuipmentEquipment, eQuipmentAssignments, eQuipmentDVIR } from './equipment';
+
+// Security containment — driver identity (dual-run; rules enforcement is separate stage)
+export {
+  requestDriverRegistration,
+  checkDriverRegistrationStatus,
+  authenticateDriver,
+  adminListPendingRegistrations,
+  adminApproveDriverRegistration,
+  adminRejectDriverRegistration,
+  adminSetDriverPasscode,
+  registerStandaloneDriver,
+  adminComputeLegacyHash,
+} from './security';

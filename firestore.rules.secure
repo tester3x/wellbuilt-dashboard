@@ -1,0 +1,167 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    function signedIn() {
+      return request.auth != null;
+    }
+    function isDriver() {
+      return signedIn() && request.auth.token.kind == 'driver';
+    }
+    function driverId() {
+      return request.auth.token.driverId;
+    }
+    function isDashboard() {
+      return signedIn() && request.auth.token.kind != 'driver';
+    }
+
+    // Credential material — never client-accessible
+    match /driver_credentials/{id} {
+      allow read, write: if false;
+    }
+    match /pending_credentials/{id} {
+      allow read, write: if false;
+    }
+    match /driver_name_index/{id} {
+      allow read, write: if false;
+    }
+    match /security_audit/{id} {
+      allow read, write: if false;
+    }
+
+    // Reference data — authenticated read; write Admin SDK only
+    match /operators/{docId} {
+      allow read: if signedIn();
+      allow write: if false;
+    }
+    match /wells/{docId} {
+      allow read: if signedIn();
+      allow write: if false;
+    }
+    match /wells_inactive/{docId} {
+      allow read: if signedIn();
+      allow write: if false;
+    }
+    match /disposals/{docId} {
+      allow read: if signedIn();
+      allow write: if false;
+    }
+    match /customers/{docId} {
+      allow read: if signedIn();
+      allow write: if false;
+    }
+    match /operatorAliases/{docId} {
+      allow read: if signedIn();
+      allow write: if false;
+    }
+    match /job_packages/{packageId} {
+      allow read: if signedIn();
+      allow write: if false;
+    }
+    match /app_registry/{appId} {
+      allow read: if signedIn();
+      allow write: if false;
+    }
+    match /overweight_fines/{stateId} {
+      allow read: if signedIn();
+      allow write: if false;
+    }
+
+    match /companies/{docId} {
+      allow read: if signedIn();
+      allow write: if false;
+      match /{sub=**} {
+        allow read: if signedIn();
+        allow write: if false;
+      }
+    }
+
+    // Driver-owned shifts
+    match /driver_shifts/{shiftId} {
+      allow read: if isDriver() && shiftId.matches('^' + driverId() + '_.*')
+        || isDashboard();
+      allow write: if false;
+    }
+
+    match /jsa_day_status/{docId} {
+      allow read: if signedIn();
+      allow write: if false;
+    }
+
+    match /jsas/{jsaId} {
+      allow read: if signedIn();
+      allow write: if false;
+    }
+
+    // Operational docs — write via Cloud Functions only under secure model
+    match /invoices/{docId} {
+      allow read: if signedIn();
+      allow write: if false;
+    }
+    match /tickets/{docId} {
+      allow read: if signedIn();
+      allow write: if false;
+    }
+    match /dispatches/{jobId} {
+      allow read: if signedIn();
+      allow write: if false;
+    }
+    match /transfer_requests/{requestId} {
+      allow read: if signedIn();
+      allow write: if false;
+    }
+    match /chat_threads/{threadId} {
+      allow read: if signedIn();
+      allow write: if false;
+      match /messages/{messageId} {
+        allow read: if signedIn();
+        allow write: if false;
+      }
+    }
+
+    match /invoiceBlocks/{docId} {
+      allow read: if signedIn();
+      allow write: if false;
+    }
+    match /ticketBlocks/{docId} {
+      allow read: if signedIn();
+      allow write: if false;
+    }
+
+    match /customLocations/{docId} {
+      allow read: if signedIn();
+      allow create: if signedIn();
+      allow update, delete: if false;
+    }
+    match /unmatchedLocations/{docId} {
+      allow create: if signedIn();
+      allow read, update, delete: if false;
+    }
+    match /unmatchedCompanies/{docId} {
+      allow create: if signedIn();
+      allow read, update, delete: if false;
+    }
+
+    match /photo_requirements/{customerId} {
+      allow read: if signedIn();
+      allow write: if isDashboard();
+    }
+
+    match /wb_diagnostics/{docId} {
+      allow read: if isDashboard();
+      allow write: if false;
+    }
+    match /canonical_jobs/{docId} {
+      allow read: if isDashboard();
+      allow write: if false;
+    }
+
+    match /daps_waitlist/{docId} {
+      allow read: if false;
+      allow create: if true;
+    }
+
+    match /{document=**} {
+      allow read, write: if false;
+    }
+  }
+}

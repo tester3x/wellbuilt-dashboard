@@ -237,6 +237,8 @@ export function DriversTab({ scopeCompanyId, isWbAdmin = false }: DriversTabProp
             timestamp: val.timestamp || (val.requestedAt ? new Date(val.requestedAt).getTime() : undefined),
             companyName: val.companyName || undefined,
             requestedAt: val.requestedAt || undefined,
+            // secure dual-run field (may be absent on legacy spam records)
+            ...(val.securePendingId ? { securePendingId: val.securePendingId } as any : {}),
           });
         });
       }
@@ -555,11 +557,23 @@ export function DriversTab({ scopeCompanyId, isWbAdmin = false }: DriversTabProp
   };
 
   // ── Reject a pending driver ──
+  // Prefer secure callable (audit + credential cleanup). Always preserve the
+  // RTDB pending document (status=rejected only — never delete evidence).
   const rejectDriver = async (driver: PendingDriver) => {
     try {
-      await update(ref(db, `drivers/pending/${driver.key}`), {
-        status: 'rejected',
-      });
+      try {
+        const { adminRejectSecure } = await import('@/lib/secureDriverAdmin');
+        const anyDriver = driver as PendingDriver & { securePendingId?: string };
+        await adminRejectSecure({
+          legacyKey: driver.key,
+          pendingId: anyDriver.securePendingId || undefined,
+        });
+      } catch (callableErr) {
+        console.warn('Secure reject callable unavailable, RTDB status only:', callableErr);
+        await update(ref(db, `drivers/pending/${driver.key}`), {
+          status: 'rejected',
+        });
+      }
       setMessage(`Rejected: ${driver.displayName}`);
       await loadDrivers();
     } catch (err) {

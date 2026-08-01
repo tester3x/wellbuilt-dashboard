@@ -1,0 +1,86 @@
+{
+  "rules": {
+    ".read": false,
+    ".write": false,
+
+    "security": {
+      ".read": false,
+      ".write": false
+    },
+
+    "drivers": {
+      "profiles": {
+        "$driverId": {
+          ".read": "auth != null && (auth.token.driverId == $driverId || root.child('users').child(auth.uid).child('role').val() == 'admin' || root.child('users').child(auth.uid).child('role').val() == 'it' || root.child('users').child(auth.uid).child('role').val() == 'manager')",
+          ".write": false
+        }
+      },
+      "pending_secure": {
+        "$pendingId": {
+          ".read": "auth != null && (root.child('users').child(auth.uid).child('role').val() == 'admin' || root.child('users').child(auth.uid).child('role').val() == 'it' || root.child('users').child(auth.uid).child('role').val() == 'manager')",
+          ".write": false
+        }
+      },
+      "pending": {
+        ".read": "auth != null && (root.child('users').child(auth.uid).child('role').val() == 'admin' || root.child('users').child(auth.uid).child('role').val() == 'it' || root.child('users').child(auth.uid).child('role').val() == 'manager')",
+        ".write": false
+      },
+      "approved": {
+        ".read": "auth != null && (root.child('users').child(auth.uid).child('role').val() == 'admin' || root.child('users').child(auth.uid).child('role').val() == 'it' || root.child('users').child(auth.uid).child('role').val() == 'manager')",
+        ".write": false
+      }
+    },
+
+    "users": {
+      "$uid": {
+        ".read": "auth != null && (auth.uid == $uid || root.child('users').child(auth.uid).child('role').val() == 'admin' || root.child('users').child(auth.uid).child('role').val() == 'it')",
+        ".write": false
+      }
+    },
+
+    "packets": {
+      "processed": {
+        ".indexOn": ["driverId", "driverName", "wellName"],
+        ".read": "auth != null && (root.child('users').child(auth.uid).child('role').val() == 'admin' || root.child('users').child(auth.uid).child('role').val() == 'it' || root.child('users').child(auth.uid).child('role').val() == 'manager' || root.child('users').child(auth.uid).child('role').val() == 'dispatch')",
+        ".write": false
+      },
+      "incoming": {
+        ".read": false,
+        ".write": false
+      },
+      "outgoing": {
+        ".read": "auth != null",
+        ".write": false
+      },
+      "rejected": {
+        ".read": "auth != null && (root.child('users').child(auth.uid).child('role').val() == 'admin' || root.child('users').child(auth.uid).child('role').val() == 'it')",
+        ".write": false
+      }
+    },
+
+    "well_config": {
+      ".read": "auth != null",
+      ".write": false
+    },
+
+    "production": {
+      ".read": "auth != null && (root.child('users').child(auth.uid).child('role').val() == 'admin' || root.child('users').child(auth.uid).child('role').val() == 'it' || root.child('users').child(auth.uid).child('role').val() == 'manager')",
+      ".write": false
+    },
+
+    "performance": {
+      ".read": "auth != null && (root.child('users').child(auth.uid).child('role').val() == 'admin' || root.child('users').child(auth.uid).child('role').val() == 'it' || root.child('users').child(auth.uid).child('role').val() == 'manager')",
+      ".write": false
+    },
+
+    "status": {
+      ".read": "auth != null",
+      ".write": false
+    },
+
+    "logs": {
+      ".read": "auth != null && (root.child('users').child(auth.uid).child('role').val() == 'admin' || root.child('users').child(auth.uid).child('role').val() == 'it')",
+      ".write": false
+    }
+  }
+}

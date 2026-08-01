@@ -1,0 +1,51 @@
+rules_version = '2';
+service firebase.storage {
+  match /b/{bucket}/o {
+    function signedIn() {
+      return request.auth != null;
+    }
+    function isDriver() {
+      return signedIn() && request.auth.token.kind == 'driver';
+    }
+
+    // Job photos: authenticated only; path company scoping refined when claims reliable
+    match /photos/{companyId}/{allPaths=**} {
+      allow read: if signedIn();
+      allow write: if signedIn()
+        && request.resource.size < 15 * 1024 * 1024
+        && request.resource.contentType.matches('image/.*');
+    }
+
+    match /chat_photos/{threadId}/{fileName} {
+      allow read: if signedIn();
+      allow write: if signedIn()
+        && request.resource.size < 10 * 1024 * 1024;
+    }
+
+    match /jsa/{companyId}/{allPaths=**} {
+      allow read: if signedIn();
+      allow write: if signedIn()
+        && request.resource.size < 20 * 1024 * 1024;
+    }
+
+    match /ewallet/{driverKey}/{allPaths=**} {
+      allow read: if signedIn();
+      allow write: if isDriver()
+        && request.auth.token.driverId == driverKey;
+    }
+
+    match /vehicle_documents/{allPaths=**} {
+      allow read: if signedIn();
+      allow write: if false;
+    }
+
+    match /photo_requirements/{allPaths=**} {
+      allow read: if signedIn();
+      allow write: if signedIn();
+    }
+
+    match /{allPaths=**} {
+      allow read, write: if false;
+    }
+  }
+}
