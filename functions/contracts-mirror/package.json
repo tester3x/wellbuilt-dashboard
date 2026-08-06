@@ -1,0 +1,50 @@
+{
+  "name": "@tester3x/wellbuilt-contracts",
+  "version": "0.1.0",
+  "description": "Pure, environment-neutral WellBuilt Suite contracts: plan entitlements, company work-period configuration, and the canonical work-period resolver.",
+  "license": "UNLICENSED",
+  "private": false,
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/tester3x/wellbuilt-contracts.git"
+  },
+  "homepage": "https://github.com/tester3x/wellbuilt-contracts#readme",
+  "bugs": {
+    "url": "https://github.com/tester3x/wellbuilt-contracts/issues"
+  },
+  "type": "module",
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "default": "./dist/index.js"
+    },
+    "./conformance": {
+      "types": "./dist/conformance.d.ts",
+      "default": "./dist/conformance.js"
+    }
+  },
+  "files": [
+    "dist",
+    "README.md",
+    "NOTICE"
+  ],
+  "sideEffects": false,
+  "engines": {
+    "node": ">=18"
+  },
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "test": "npm run build && node tools/test-contracts.mjs",
+    "prepack": "npm run build"
+  },
+  "dependencies": {},
+  "peerDependencies": {},
+  "devDependencies": {
+    "typescript": "~5.9.2"
+  },
+  "publishConfig": {
+    "registry": "https://npm.pkg.github.com"
+  }
+}

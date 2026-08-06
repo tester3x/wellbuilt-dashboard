@@ -1,0 +1,33 @@
+{
+  "generatedBy": "functions/tools/mirror-contracts.mjs",
+  "purpose": "GENERATED DEPLOYMENT MATERIAL — not a canonical source",
+  "name": "@tester3x/wellbuilt-contracts",
+  "version": "0.1.0",
+  "sourceSha256": "45cc9b965258204255ecfba05d12719da5bb6f4fa71c9508a7c66ba8da158e73",
+  "sourceIntegrity": "sha512-ejMmcqgw1mbGKwKFQ7O6Lub7OyT3QABJCIwXv4+7/9x4vwwuYES1a6RmjY3BIWtXdbazY9cRSHKEwic0zz17/Q==",
+  "files": {
+    "NOTICE": "91943045527aa71655a15726b536b3612b2a21b669799bc6be31d086888effa5",
+    "README.md": "9c4598bf2d3c30238a3c4cb580aec3d370e0dd51d92ca64e06bfc4f07673038b",
+    "dist/conformance.d.ts": "3dece93cffffcc0c694e24178a95423d66cabc6e8d554d553b8ac3ff36bb3366",
+    "dist/conformance.d.ts.map": "eb2b2c0eabc50cd16ad5e6640296e114b415ad3526044900d751fffb50c68e28",
+    "dist/conformance.js": "a9501e5725504d4423844d740e973cc6a68fa33215167d1526561e65e7bde28f",
+    "dist/conformance.js.map": "71a4ded7da88644a34bd02503afa7d9b2e55f36756c9fde473e07c989a72db3c",
+    "dist/handshake.d.ts": "d7428b5ee459bd0de4738e170f6fa882d55bf54d5aaecf816c560a2d7f081995",
+    "dist/handshake.d.ts.map": "32149b6aa3175c3aa1a77d25524ea8c9538e9d617501c369f47ccb68bb972e1b",
+    "dist/handshake.js": "742cc9e08073a2f31b15539588cb43d6610a8f933df9e33e00df4cb3c4f72c9c",
+    "dist/handshake.js.map": "13975e2d04681ee801759904665de11c1f4558e5163615f7db5540eb61984618",
+    "dist/index.d.ts": "0f8b24392fff41f6fff502bd3f40749f7efe612689fd86d6fa94e3359ef80b28",
+    "dist/index.d.ts.map": "861340007fc9e7d936cfb5cae6560d5751cc174f5efaabcc631d81c6f880b469",
+    "dist/index.js": "a7c2d5eaaf66c048d341cc4e79d48e8cccc70be415dd63a427821821a57bab54",
+    "dist/index.js.map": "0d77b0aed967cedcffe32aa1baf3106b3aad5936fe3eefbb3c974550eb1e19f5",
+    "dist/resolver.d.ts": "06da75dc335ba6a6fb69b132e35fbeba860a4ab6e539b4a54ee594a31902f972",
+    "dist/resolver.d.ts.map": "d3b8c9ad80ae03eb68d66d2cb919a947ed7b8365332de62c5ed277e0b76208ba",
+    "dist/resolver.js": "3330d23cd2538f494cba8e6fb90fdfeeb5b70033ba45cc0e70b7019c5f445cfe",
+    "dist/resolver.js.map": "4e789626812f26b009a1289523ff574a085da5f3bc56343608a7f53180bd37fc",
+    "dist/types.d.ts": "f7ad26fcb9cdd9c86c8fb78042d61f7af1a9932c0cc5b971fcedd33fefa8fb69",
+    "dist/types.d.ts.map": "d60ab05d6626d715a0c56e0857212b2c4f8302e737b958358db8f525742c688c",
+    "dist/types.js": "63ac20a8757a6977cdfca6895f1e5f55feb8e83248c9a37adb507b57ba026107",
+    "dist/types.js.map": "c415372866b1cf447a9a453525ee0d51a2c02437812929ba90146c33aee827ef",
+    "package.json": "a54c37d328eeb531652c0e912e18c3055ac15c7c25bf216d31dfc448d6ddb6c1"
+  }
+}
