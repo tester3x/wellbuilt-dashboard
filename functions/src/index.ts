@@ -4298,3 +4298,15 @@ export {
   sendChatMessage,
   getPublicClientMeta,
 } from './security';
+
+// ── vc51.9A6-B: protected platform-admin callables ─────────────────────────
+// Dual-gated (verified wellbuiltAdmin claim + enabled platform_admins
+// record) via functions/src/admin/authority.ts. See admin/callables.ts.
+export {
+  adminCreatePlan, adminUpdatePlan, adminDeprecatePlan,
+  adminAssignCompanyPlan, adminAddEntitlementOverride, adminRemoveEntitlementOverride,
+  adminSetCompanyWorkPeriodConfiguration, adminSetCompanyContractEnforcement,
+  adminUpdateCompanySafe, adminArchiveCompany,
+  adminListPlans, adminGetPlan, adminGetCompanyContractConfiguration,
+  adminPreviewCompanyEffectiveCapabilities, adminListAdminAudit,
+} from './admin/callables';
