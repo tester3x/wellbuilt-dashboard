@@ -18,7 +18,7 @@
  * deliberately omits the contracts-package `contractVersion` /
  * `configurationVersion` fields so the same version can never drift in
  * two places — `toContractsWorkPeriodConfiguration` materializes the
- * full @wellbuilt/contracts shape by injecting the root versions.
+ * full @tester3x/wellbuilt-contracts shape by injecting the root versions.
  *
  * The legacy company `tier` field is untouched and non-authoritative.
  */
@@ -30,7 +30,7 @@ import {
   type PlanCapability,
   type WorkPeriodMode,
   isValidTimezone,
-} from '@wellbuilt/contracts';
+} from '@tester3x/wellbuilt-contracts';
 
 export const WELLBUILT_CONTRACT_KEY = 'wellbuiltContract' as const;
 

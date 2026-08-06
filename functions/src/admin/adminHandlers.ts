@@ -5,7 +5,7 @@
  *   1. routes through requireAdmin (authorizeAdminCall over an EXACT
  *      platform_admins/{uid} read — claim AND enabled record);
  *   2. validates its payload strictly (exact keys, bounded values,
- *      @wellbuilt/contracts schemas — never redefined);
+ *      @tester3x/wellbuilt-contracts schemas — never redefined);
  *   3. mutates inside ONE transaction that also writes the bounded
  *      platform_admin_audit record (no mutation without audit);
  *   4. derives actor/timestamps from the verified token and server
@@ -38,7 +38,7 @@ import {
   type WellbuiltContract,
 } from './companyContract';
 import { computeEffectiveCapabilities, type CapabilityResult } from './effectiveCapabilities';
-import { CONTRACT_VERSION, type PlanCapability, type PlanDefinition } from '@wellbuilt/contracts';
+import { CONTRACT_VERSION, type PlanCapability, type PlanDefinition } from '@tester3x/wellbuilt-contracts';
 
 export const PLANS_COLLECTION = 'plans';
 export const COMPANIES_COLLECTION = 'companies';

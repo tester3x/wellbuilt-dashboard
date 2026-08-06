@@ -10,7 +10,7 @@ import {
   toContractsWorkPeriodConfiguration, PLAN_CAPABILITIES,
 } from '../functions/lib/admin/companyContract.js';
 import { computeEffectiveCapabilities } from '../functions/lib/admin/effectiveCapabilities.js';
-import { requiresWorkPeriod, resolveWorkPeriod, CONTRACT_VERSION } from '@wellbuilt/contracts';
+import { requiresWorkPeriod, resolveWorkPeriod, CONTRACT_VERSION } from '@tester3x/wellbuilt-contracts';
 
 let pass = 0, fail = 0;
 const check = (name, ok, detail = '') => {

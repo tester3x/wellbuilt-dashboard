@@ -6,14 +6,14 @@
  * plain data. Components stay thin renderers over these results.
  *
  * Only type-level imports from the service core (erased at runtime) and
- * the canonical @wellbuilt/contracts resolver for the derived-schedule
+ * the canonical @tester3x/wellbuilt-contracts resolver for the derived-schedule
  * example — the resolver IS the shared computation, not a competing
  * one. Effective capabilities always come from the
  * adminPreviewCompanyEffectiveCapabilities callable, never computed
  * here.
  */
 
-import { resolveWorkPeriod, type WorkPeriodResolution } from '@wellbuilt/contracts';
+import { resolveWorkPeriod, type WorkPeriodResolution } from '@tester3x/wellbuilt-contracts';
 import type {
   AdminServiceErrorKind,
   CapabilityResult,

@@ -10,7 +10,7 @@
  * ONE active schema shape exists:
  *
  *   companies/{companyId}.wellbuiltContract = {
- *     contractVersion,          // @wellbuilt/contracts handshake
+ *     contractVersion,          // @tester3x/wellbuilt-contracts handshake
  *     configurationVersion,     // bumped by every protected mutation
  *     planId,                   // assigned plans/{planId}
  *     entitlementOverrides,     // audited, time-bounded grants

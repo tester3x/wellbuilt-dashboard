@@ -6,7 +6,7 @@
  *   - the validated company wellbuiltContract (companyContract.ts);
  *   - the exact assigned plans/{planId} PlanDefinition;
  *   - active/unexpired entitlement overrides;
- *   - @wellbuilt/contracts (assertContractCompatible + types).
+ *   - @tester3x/wellbuilt-contracts (assertContractCompatible + types).
  *
  * No database I/O — callers fetch, this computes. Typed failures, never
  * throws for policy conditions.
@@ -44,7 +44,7 @@ import {
   type EffectiveCompanyCapabilities,
   type PlanCapability,
   type PlanDefinition,
-} from '@wellbuilt/contracts';
+} from '@tester3x/wellbuilt-contracts';
 import {
   isWorkPeriodConfigurationComplete,
   type WellbuiltContract,

@@ -17,7 +17,7 @@
  */
 
 import { ADMIN_POLICY_VERSION } from './authority';
-import { CONTRACT_VERSION } from '@wellbuilt/contracts';
+import { CONTRACT_VERSION } from '@tester3x/wellbuilt-contracts';
 
 export const ADMIN_AUDIT_COLLECTION = 'platform_admin_audit';
 export const AUDIT_REASON_MAX = 300;

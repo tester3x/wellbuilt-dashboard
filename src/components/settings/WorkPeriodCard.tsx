@@ -9,7 +9,7 @@
  * exists. No firebase/firestore import; nothing here writes directly.
  *
  * The derived-schedule example comes from the canonical
- * @wellbuilt/contracts resolver (via adminUiLogic), so the preview can
+ * @tester3x/wellbuilt-contracts resolver (via adminUiLogic), so the preview can
  * never disagree with what the apps will compute — including DST edges.
  */
 

@@ -1,5 +1,5 @@
 /**
- * @wellbuilt/contracts conformance — run in THIS consumer against its
+ * @tester3x/wellbuilt-contracts conformance — run in THIS consumer against its
  * installed copy. Identical fixtures run in every app, so a period-logic
  * drift between WB-S, WB-T, WB-JSA and the Dashboard fails a test here
  * instead of stranding a driver (the 8/6 stale-shift failure was exactly
@@ -7,8 +7,8 @@
  *
  * Run: node tools/test-contractsConformance.mjs
  */
-import { resolveWorkPeriod, isOperationallyOpen, mayBindRequestEvidence, assertContractCompatible, CONTRACT_VERSION } from '@wellbuilt/contracts';
-import { CONFORMANCE_CASES } from '@wellbuilt/contracts/conformance';
+import { resolveWorkPeriod, isOperationallyOpen, mayBindRequestEvidence, assertContractCompatible, CONTRACT_VERSION } from '@tester3x/wellbuilt-contracts';
+import { CONFORMANCE_CASES } from '@tester3x/wellbuilt-contracts/conformance';
 
 let pass = 0; const fail = [];
 const check = (n, c) => { if (c) pass++; else fail.push(n); };

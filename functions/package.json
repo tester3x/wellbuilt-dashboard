@@ -19,7 +19,7 @@
   "description": "Firebase Cloud Functions for WellBuilt Dashboard",
   "dependencies": {
     "@anthropic-ai/sdk": "^0.52.0",
-    "@wellbuilt/contracts": "file:vendor/wellbuilt-contracts-0.1.0.tgz",
+    "@tester3x/wellbuilt-contracts": "0.1.0",
     "firebase-admin": "^13.6.0",
     "firebase-functions": "^7.0.5"
   },
