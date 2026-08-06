@@ -247,6 +247,53 @@ service cloud.firestore {
       allow read, write: if true;
     }
 
+    // JSA read receipts (8/6, contract v1) — fresh per-job read proof.
+    // WB-T mints a 256-bit request id; WB-JSA writes the receipt ONLY
+    // after the core jsas submission persists; WB-T verifies against its
+    // LOCAL request. Create-only + schema-validated + immutable: no
+    // update may mutate identity, no client delete, replays bounce off
+    // the immutability.
+    //
+    // HONEST IDENTITY LIMITATION: the suite's apps write via API-key REST
+    // with NO Firebase Auth, so company/driver identity CANNOT be
+    // cryptographically bound here (same as every collection above). The
+    // practical protection is the unguessable 43-char request id, which
+    // only the launching device's WB-T + WB-JSA share. Tightening beyond
+    // this requires the suite-wide auth/App Check rollout — a separate
+    // security decision; DO NOT deploy this file without that review.
+    match /jsa_read_receipts/{requestId} {
+      allow create: if requestId.matches('^[A-Za-z0-9_-]{43}$')
+        && request.resource.data.keys().hasOnly([
+          'receiptVersion', 'requestId', 'jobDocId', 'haulGroupId',
+          'companyId', 'driverHash', 'shiftId', 'operator',
+          'jsaRecordId', 'completedAt', 'completionType'
+        ])
+        && request.resource.data.receiptVersion == 1
+        && request.resource.data.requestId == requestId
+        && request.resource.data.jobDocId is string
+        && request.resource.data.jobDocId.size() > 0
+        && request.resource.data.jobDocId.size() <= 120
+        && (!('haulGroupId' in request.resource.data)
+          || (request.resource.data.haulGroupId is string
+            && request.resource.data.haulGroupId.size() <= 120))
+        && request.resource.data.companyId is string
+        && request.resource.data.driverHash is string
+        && request.resource.data.driverHash.size() >= 8
+        && request.resource.data.shiftId is string
+        && request.resource.data.shiftId.size() > 0
+        && request.resource.data.operator is string
+        && request.resource.data.jsaRecordId is string
+        && request.resource.data.jsaRecordId.size() > 0
+        && request.resource.data.completedAt is string
+        && request.resource.data.completedAt.size() >= 20
+        && request.resource.data.completionType == 'full_flow';
+      // Reads cannot be scoped without an auth model — the unguessable
+      // doc id is the practical read scope (documented limitation).
+      allow read: if true;
+      allow update: if false;
+      allow delete: if false;
+    }
+
     // Daps waitlist — landing page signups
     match /daps_waitlist/{docId} {
       allow read: if false;
