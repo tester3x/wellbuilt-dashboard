@@ -11,12 +11,21 @@
  * No database I/O — callers fetch, this computes. Typed failures, never
  * throws for policy conditions.
  *
- * Mixed-workflow pin (Liquid Gold): computing capabilities NEVER turns
- * suite login into a shift requirement. `app_use` resolves
- * NO_PERIOD_REQUIRED through requiresWorkPeriod regardless of mode;
- * only shift-scoped operational actions (wbt_job_start / jsa_request /
- * equipment_dvir) bind to a verified period. suiteLoginRequired is not
- * contract-controlled in v1 and is always false here.
+ * Mixed-workflow pin (Liquid Gold, corrected vc51.9A6-C): TWO
+ * INDEPENDENT questions that must never be conflated —
+ *
+ *   suiteLoginRequired            "must the user AUTHENTICATE to use
+ *                                  the WellBuilt suite/app at all?"
+ *   requiresWorkPeriod(caps, a)   "does THIS operational action need a
+ *                                  verified shift/day?"
+ *
+ * In contract v1 ordinary suite authentication is ALWAYS required
+ * (true — matching the package's LIQUID_GOLD_CAPS fixture): WB-M-only
+ * testers sign in like everyone else. That login NEVER implies Start
+ * Shift — `app_use` resolves NO_PERIOD_REQUIRED regardless of mode,
+ * and only shift-scoped actions (wbt_job_start / jsa_request /
+ * equipment_dvir) bind to a verified period. Conversely,
+ * NO_PERIOD_REQUIRED never means login is unnecessary.
  *
  * Override semantics: expired overrides (expiresAt <= now) are ignored;
  * active overrides apply IN ARRAY ORDER, so on conflict the LAST active
@@ -117,8 +126,10 @@ export function computeEffectiveCapabilities(input: {
   const capabilities: EffectiveCompanyCapabilities = {
     contractVersion: CONTRACT_VERSION,
     companyId,
-    // Not contract-controlled in v1; login NEVER implies a shift.
-    suiteLoginRequired: false,
+    // Ordinary suite authentication is always required in contract v1;
+    // it is INDEPENDENT of any work period — login never implies a
+    // shift, and no-period actions still require login.
+    suiteLoginRequired: true,
     workPeriodMode: cfg.mode,
     explicitShiftRequiredBeforeJobs:
       cfg.mode === 'explicit_shift' && caps.has('explicitShiftLifecycle'),

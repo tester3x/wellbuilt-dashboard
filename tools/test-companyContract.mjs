@@ -122,8 +122,9 @@ const compute = (contractExtra = {}, planExtra = {}, nowMs = NOW) =>
   const r = compute({ contractEnforced: true });
   check('active explicit contract: explicitShiftRequiredBeforeJobs true',
     r.ok === true && r.capabilities.explicitShiftRequiredBeforeJobs === true
-    && r.capabilities.jsaEnabled === true && r.capabilities.dvirEnabled === true
-    && r.capabilities.suiteLoginRequired === false);
+    && r.capabilities.jsaEnabled === true && r.capabilities.dvirEnabled === true);
+  check('suite login required — independent capability, never discarded (vc51.9A6-C)',
+    r.ok === true && r.capabilities.suiteLoginRequired === true);
 }
 {
   const r = compute({
@@ -181,6 +182,27 @@ const compute = (contractExtra = {}, planExtra = {}, nowMs = NOW) =>
 }
 
 // ── Liquid Gold mixed workflow (the pinned behavior) ──────────────────────
+// vc51.9A6-C required model — five distinctions, red-first:
+//   suiteLoginRequired answers "must the user AUTHENTICATE to use the
+//   suite"; requiresWorkPeriod answers "does THIS ACTION need a verified
+//   period". Login true never implies Start Shift; NO_PERIOD_REQUIRED
+//   never means login is unnecessary.
+{
+  const caps = compute({ contractEnforced: true }).capabilities;
+  check('1. unauthenticated WB-M use is blocked by ordinary suite auth (suiteLoginRequired true)',
+    caps.suiteLoginRequired === true);
+  check('2. authenticated app_use allowed with NO_PERIOD_REQUIRED even though login is required',
+    caps.suiteLoginRequired === true && requiresWorkPeriod(caps, 'app_use') === false);
+  check('3. WB-T job start requires the verified explicit shift',
+    requiresWorkPeriod(caps, 'wbt_job_start') === true);
+  check('4. WB-JSA request requires the invoking period',
+    requiresWorkPeriod(caps, 'jsa_request') === true);
+  check('5. eQuipment DVIR requires the invoking shift',
+    requiresWorkPeriod(caps, 'equipment_dvir') === true);
+  check('login capability matches the package Liquid Gold fixture',
+    caps.suiteLoginRequired === true && caps.workPeriodMode === 'explicit_shift'
+    && caps.explicitShiftRequiredBeforeJobs === true);
+}
 {
   const caps = compute({ contractEnforced: true }).capabilities;
   check('app_use never requires a period (WB-M testers)',

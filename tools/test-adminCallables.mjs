@@ -394,7 +394,7 @@ check('no company hard-delete handler exists',
   check('preview computes for configured company',
     prev.state === 'inert' && prev.result.ok === true
     && prev.result.capabilities.jsaEnabled === true
-    && prev.result.capabilities.suiteLoginRequired === false);
+    && prev.result.capabilities.suiteLoginRequired === true);
   const prevBroken = await H.previewCompanyEffectiveCapabilitiesHandler(deps, ADMIN_AUTH, { companyId: 'broken-co' });
   check('preview surfaces incompatible contract distinctly', prevBroken.state === 'invalid');
 }
