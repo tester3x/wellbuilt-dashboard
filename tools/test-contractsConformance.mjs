@@ -8,7 +8,7 @@
  * Run: node tools/test-contractsConformance.mjs
  */
 import { resolveWorkPeriod, isOperationallyOpen, mayBindRequestEvidence, assertContractCompatible, CONTRACT_VERSION } from '@wellbuilt/contracts';
-import { CONFORMANCE_CASES } from '@wellbuilt/contracts/fixtures';
+import { CONFORMANCE_CASES } from '@wellbuilt/contracts/conformance';
 
 let pass = 0; const fail = [];
 const check = (n, c) => { if (c) pass++; else fail.push(n); };
