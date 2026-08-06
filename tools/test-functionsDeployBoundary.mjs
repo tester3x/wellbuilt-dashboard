@@ -87,10 +87,16 @@ check('Dashboard root .npmrc still serves the registry consumer',
   }
   // No token/credential strings anywhere in the mirror.
   if (existsSync(MIRROR)) {
-    const grep = execFileSync('git', ['-C', root, 'grep', '-l', '-iE',
-      'ghp_|gho_|_authToken|private[_ ]key|BEGIN [A-Z ]*PRIVATE', '--', 'functions/contracts-mirror'],
-      { encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] }).trim();
-    check('no token or credential string in the mirror', grep === '', grep);
+    // The published README's `_authToken=${NODE_AUTH_TOKEN}` placeholder
+    // is inert documentation inside byte-exact published content; only
+    // LITERAL credential values are forbidden.
+    let grep = '';
+    try {
+      grep = execFileSync('git', ['-C', root, 'grep', '-l', '-iE',
+        'ghp_[A-Za-z0-9]|gho_[A-Za-z0-9]|_authToken=[^$]|private[_ ]key|BEGIN [A-Z ]*PRIVATE', '--', 'functions/contracts-mirror'],
+        { encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] }).trim();
+    } catch { /* git grep exits 1 when nothing matches — the clean case */ }
+    check('no literal token or credential value in the mirror', grep === '', grep);
   }
 }
 
