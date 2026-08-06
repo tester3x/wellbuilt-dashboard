@@ -2,7 +2,10 @@
 
 import { useEffect, useState, useRef } from 'react';
 import { getFirestoreDb, getFirebaseDatabase } from '@/lib/firebase';
-import { collection, getDocs, doc, setDoc, deleteDoc, updateDoc } from 'firebase/firestore';
+import { collection, getDocs, getDoc, doc, setDoc, deleteDoc, updateDoc } from 'firebase/firestore';
+import { createAdminContractService, AdminServiceError } from '@/lib/adminContractService';
+import { companyMutationRoute, errorGuidance } from '@/lib/adminUiLogic';
+import { CompanyContractPanel } from './CompanyContractPanel';
 import { ref as dbRef, get as dbGet, update as dbUpdate } from 'firebase/database';
 import { loadOperators, searchOperators, NdicOperator } from '@/lib/firestoreWells';
 import {
@@ -17,6 +20,8 @@ import {
   JOB_TYPES,
   BILLING_METHODS,
 } from '@/lib/companySettings';
+
+const adminService = createAdminContractService();
 
 interface CompaniesTabProps {
   scopeCompanyId?: string;  // if set, only show this company
@@ -250,9 +255,25 @@ export function CompaniesTab({ scopeCompanyId, isWbAdmin = false }: CompaniesTab
 
     try {
       if (editingCompany) {
-        await updateDoc(doc(firestore, 'companies', id), data);
+        if (isWbAdmin) {
+          // vc51.9A7: platform-admin edits go through the audited
+          // field-merge callable — protected contract data is
+          // untouchable there by construction.
+          await adminService.updateCompanySafe({ companyId: id, fields: data });
+        } else {
+          // Established company-scoped field-merge (rules-allowed).
+          await updateDoc(doc(firestore, 'companies', id), data);
+        }
         setMessage(`Updated: ${formName.trim()}`);
       } else {
+        // vc51.9A7: creation may never become a whole-document
+        // replacement of an existing company (the old maskless setDoc
+        // hazard) — refuse when the id already exists.
+        const existing = await getDoc(doc(firestore, 'companies', id));
+        if (existing.exists()) {
+          setMessage(`A company with id "${id}" already exists — open it and use Edit instead. Nothing was overwritten.`);
+          return;
+        }
         await setDoc(doc(firestore, 'companies', id), data);
         setMessage(`Created: ${formName.trim()}`);
       }
@@ -265,15 +286,38 @@ export function CompaniesTab({ scopeCompanyId, isWbAdmin = false }: CompaniesTab
     }
   };
 
+  // vc51.9A7: removal routes by contract state. Configured companies can
+  // ONLY be archived (protected callable — contract preserved, exact-id
+  // confirmation, audited reason). Legacy unconfigured companies keep the
+  // pre-existing client delete, clearly labeled with its orphaned-
+  // subcollection consequence — it is not a bypass: the server denies
+  // client deletes the moment a company carries wellbuiltContract.
   const deleteCompany = async (company: CompanyConfig) => {
-    if (!confirm(`Delete ${company.name || company.id}? This will remove the company configuration.`)) return;
+    let route;
     try {
-      await deleteDoc(doc(firestore, 'companies', company.id));
-      setMessage(`Deleted: ${company.name || company.id}`);
+      const cfg = await adminService.getCompanyContractConfiguration({ companyId: company.id });
+      route = companyMutationRoute(cfg.state);
+    } catch (err) {
+      setMessage(errorGuidance(err instanceof AdminServiceError ? err : { kind: 'unknown' }).message);
+      return;
+    }
+    try {
+      if (route.delete === 'archive-callable') {
+        const typed = window.prompt(`${route.deleteWarning}\n\nType the company id "${company.id}" to archive:`);
+        if (typed !== company.id) { setMessage('Archive not confirmed.'); return; }
+        const reason = window.prompt('Archive reason (required, audited):')?.trim();
+        if (!reason) { setMessage('An archive reason is required.'); return; }
+        await adminService.archiveCompany({ companyId: company.id, confirmCompanyId: company.id, reason });
+        setMessage(`Archived: ${company.name || company.id} (contract and data preserved)`);
+      } else {
+        if (!confirm(`LEGACY DELETE — ${company.name || company.id}\n\n${route.deleteWarning}\n\nDelete anyway?`)) return;
+        await deleteDoc(doc(firestore, 'companies', company.id));
+        setMessage(`Deleted legacy company: ${company.name || company.id} (subcollections orphaned — see warning)`);
+      }
       await loadCompanies();
     } catch (err) {
-      console.error('Failed to delete company:', err);
-      setMessage('Failed to delete company');
+      console.error('Failed to remove company:', err);
+      setMessage(errorGuidance(err instanceof AdminServiceError ? err : { kind: 'unknown' }).message);
     }
   };
 
@@ -842,6 +886,9 @@ export function CompaniesTab({ scopeCompanyId, isWbAdmin = false }: CompaniesTab
                       <p className="text-gray-400 text-xs mb-2">
                         {TIER_DESCRIPTIONS[company.tier || 'god']}
                       </p>
+                      <p className="text-amber-300/80 text-[10px] mb-2">
+                        Legacy tier — display only, NOT authoritative. The WellBuilt Contract below governs entitlements once assigned.
+                      </p>
                       {isWbAdmin && (
                         <div className="flex gap-1.5">
                           {TIER_ORDER.map(tier => (
@@ -887,6 +934,9 @@ export function CompaniesTab({ scopeCompanyId, isWbAdmin = false }: CompaniesTab
                         </div>
                       )}
                     </div>
+
+                    {/* ── WellBuilt Contract (vc51.9A7 — callable-only) ── */}
+                    {isWbAdmin && <CompanyContractPanel companyId={company.id} />}
 
                     {/* ── Operators (assigned oil companies) ── */}
                     <div className="border-t border-gray-600 pt-3">
