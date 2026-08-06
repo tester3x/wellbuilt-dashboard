@@ -59,7 +59,7 @@ export const JSA_JOB_POLICIES: ReadonlyArray<{
   {
     value: 'acknowledge',
     label: 'Acknowledge each job',
-    desc: 'Driver reviews what the job adds to today’s JSA and confirms it with Start Job. Completing the full JSA also satisfies this requirement.',
+    desc: 'The first applicable job in each shift or configured work period requires the driver to read and complete the full JSA. Each additional applicable job in that same period can be acknowledged with Start Job.',
   },
   {
     value: 'read',

@@ -50,9 +50,10 @@ expect(isLegacyJsaMode('per_load') && isLegacyJsaMode('per_location')
 // ── Approved customer-facing copy (no over-claims) ──────────────────────────
 {
   const byValue = Object.fromEntries(JSA_JOB_POLICIES.map((p) => [p.value, p]));
-  expect(byValue.acknowledge.desc.includes('confirms it with Start Job')
-    && byValue.acknowledge.desc.includes('Completing the full JSA also satisfies'),
-    'acknowledge copy approved');
+  // vc51.9B corrected first-job semantics — the EXACT approved copy.
+  expect(byValue.acknowledge.desc ===
+    'The first applicable job in each shift or configured work period requires the driver to read and complete the full JSA. Each additional applicable job in that same period can be acknowledged with Start Job.',
+    'acknowledge copy pinned exactly (first-job read, later-job acknowledge)');
   expect(byValue.read.desc.includes('No acknowledgement shortcut'),
     'read copy approved');
   expect(byValue.read_and_acknowledge.desc.includes('then reviews what that specific job adds'),
