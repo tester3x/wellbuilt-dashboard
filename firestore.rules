@@ -46,10 +46,78 @@ service cloud.firestore {
       allow read, update, delete: if false;
     }
 
-    // Company config — dashboard manages
+    // ── vc51.9A6-A: protected contract/admin data ─────────────────────
+    // Protected contract root keys on companies/{companyId}. Pinned 1:1
+    // against firestore-rules-tests/protected-company-keys.mjs by
+    // test-rulesSourcePins.mjs — change both together or the pin fails.
+    function protectedCompanyKeys() {
+      return ['contractVersion', 'planId', 'entitlement',
+              'entitlementOverrides', 'workPeriodMode',
+              'workPeriodConfiguration', 'effectiveCapabilities',
+              'configurationVersion', 'contractEnforced'];
+    }
+
+    // Platform admin records — server-owned. ALL direct client access
+    // denied; the admin callables read/write via Admin SDK, which these
+    // rules never constrain.
+    match /platform_admins/{uid} {
+      allow read, write: if false;
+    }
+
+    // Plan catalog — no installed app reads plans directly (2026-08-06
+    // census), so direct client access is denied pending the Part B
+    // callables.
+    match /plans/{planId} {
+      allow read, write: if false;
+    }
+
+    // Platform-admin audit trail (canonical name pinned for Part B) —
+    // callable/Admin SDK only.
+    match /platform_admin_audit/{docId} {
+      allow read, write: if false;
+    }
+
+    // Company config — dashboard manages.
+    //
+    // vc51.9A6-A: the blanket `allow write: if true` is GONE. The
+    // 2026-08-06 writer census (firestore-rules-tests/CENSUS-vc51.9A6A.md)
+    // proved every legitimate company writer is the Firebase-Auth
+    // signed-in Dashboard browser; the suite apps only READ. Writes now
+    // require auth AND may never introduce, alter, null, or erase a
+    // protected contract key — those keys become Admin-SDK-callable-only
+    // in Part B (Admin SDK bypasses these rules).
+    //
+    // READ stays open (get AND list): WB-T (getAllCompanies list +
+    // config getDoc/onSnapshot), WB-JSA, WB-S, WB-M read company config
+    // unauthenticated. Honest exposure: company docs (incl. payConfig /
+    // rateSheets) remain world-readable with the public API key until
+    // the suite-wide auth/App Check rollout — a separate decision.
     match /companies/{docId} {
       allow read: if true;
-      allow write: if true;
+
+      // Create: legacy Dashboard flows (CompaniesTab saveCompany /
+      // activatePendingSignup) — authenticated, protected keys cannot
+      // be supplied at birth in any form (any value, incl. null).
+      allow create: if request.auth != null
+        && !request.resource.data.keys().hasAny(protectedCompanyKeys());
+
+      // Update covers updateDoc field-merges AND whole-document
+      // replacement (setDoc without merge on an existing doc). The
+      // MapDiff guard denies the ENTIRE write when any protected key is
+      // added, modified, nulled, or removed — a replacement can never
+      // silently erase contract state, and protected changes cannot be
+      // smuggled beside permitted ones. Established unrelated
+      // field-merge updates pass untouched, configured or not.
+      allow update: if request.auth != null
+        && !request.resource.data.diff(resource.data)
+              .affectedKeys().hasAny(protectedCompanyKeys());
+
+      // Delete: legacy Dashboard deleteCompany flow preserved for
+      // UNCONFIGURED docs only. A company carrying protected contract
+      // state cannot be client-deleted — that flow must migrate to an
+      // admin callable (Part B migration item).
+      allow delete: if request.auth != null
+        && !resource.data.keys().hasAny(protectedCompanyKeys());
 
       // SWD Directory — company-scoped disposal site aliases/customs
       match /swd_directory/{entryId} {
