@@ -440,6 +440,18 @@ export interface CompanyConfig {
    * app to satisfy the gate. Audited per-record via acknowledgedMethod.
    */
   jsaAllowAcknowledge?: boolean;
+  /**
+   * Per-job requirement (vc51.4) — how each per_job JSA requirement is
+   * satisfied: 'acknowledge' (job-review Start Job confirmation; a full
+   * read also satisfies), 'read' (full WB-JSA flow, no shortcut), or
+   * 'read_and_acknowledge' (read first, then the job confirmation).
+   * Absent/malformed values fall back to jsaAllowAcknowledge
+   * (!== false → acknowledge, === false → read) so existing companies
+   * keep their effective behavior until this is explicitly saved. An
+   * explicit value always wins in the apps; jsaAllowAcknowledge then
+   * only governs the per-shift close shortcut.
+   */
+  jsaJobPolicy?: 'acknowledge' | 'read' | 'read_and_acknowledge';
   // JSA contacts — shown on JSA signoff screen. Company-managed via Dashboard Settings.
   emergencyContacts?: { label: string; phone: string }[];
   companyContacts?: { label: string; phone: string }[];
