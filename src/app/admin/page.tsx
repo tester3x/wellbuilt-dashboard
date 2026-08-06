@@ -24,6 +24,14 @@ import { canViewGlobalWellPool } from '@/lib/tenantScope';
 import { isPlatformAdmin } from '@/lib/auth';
 import GpsRoutesTab from '@/components/admin/GpsRoutesTab';
 import { EquipmentTab } from '@/components/admin/EquipmentTab';
+import dynamic from 'next/dynamic';
+import { useVerifiedAdmin } from '@/lib/useVerifiedAdmin';
+import { VerifiedAdminGate } from '@/components/admin/VerifiedAdminGate';
+
+// vc51.9A7 — protected contract surfaces, lazy-loaded and visible only
+// after the verified wellbuiltAdmin claim (server stays authoritative).
+const PlansTab = dynamic(() => import('@/components/admin/PlansTab').then((m) => m.PlansTab), { ssr: false });
+const AdminAuditTab = dynamic(() => import('@/components/admin/AdminAuditTab').then((m) => m.AdminAuditTab), { ssr: false });
 
 interface WellConfig {
   route?: string;
@@ -122,17 +130,30 @@ export default function AdminPage() {
   const [editNdicApiNo, setEditNdicApiNo] = useState('');
 
   const [message, setMessage] = useState('');
-  const [activeTab, setActiveTab] = useState<'routes' | 'wells' | 'drivers' | 'companies' | 'gpsroutes' | 'equipment'>('wells');
+  const [activeTab, setActiveTab] = useState<'routes' | 'wells' | 'drivers' | 'companies' | 'gpsroutes' | 'equipment' | 'plans' | 'adminaudit'>('wells');
+
+  // vc51.9A7 — verified-admin session (display gate; server re-decides
+  // authority on every protected call).
+  const { session: adminSession, refreshAccess } = useVerifiedAdmin();
 
   // Read ?tab= from URL to deep-link into specific admin section (e.g. from pulsing Admin badge)
   useEffect(() => {
     const params = new URLSearchParams(window.location.search);
     const tab = params.get('tab');
-    const validTabs = ['routes', 'wells', 'drivers', 'companies', 'gpsroutes', 'equipment'];
+    const validTabs = ['routes', 'wells', 'drivers', 'companies', 'gpsroutes', 'equipment', 'plans', 'adminaudit'];
     if (tab && validTabs.includes(tab)) {
       setActiveTab(tab as any);
     }
   }, []);
+
+  // Direct-route manipulation into the protected tabs is bounced until
+  // the claim verifies — and the server denies regardless of display.
+  useEffect(() => {
+    if ((activeTab === 'plans' || activeTab === 'adminaudit') &&
+        adminSession.status !== 'verified' && adminSession.status !== 'verifying') {
+      setActiveTab('companies');
+    }
+  }, [activeTab, adminSession.status]);
 
   // ── Tenant containment (7/9): global well-config gate ────────────────────
   // The Wells / Route Groups / GPS Routes tabs edit the GLOBAL RTDB well pool
@@ -977,6 +998,8 @@ export default function AdminPage() {
            activeTab === 'gpsroutes' ? 'GPS Route Recording' :
            activeTab === 'drivers' ? 'Employee Management' :
            activeTab === 'equipment' ? 'Equipment Documents' :
+           activeTab === 'plans' ? 'Plan Catalog' :
+           activeTab === 'adminaudit' ? 'Platform Admin Audit' :
            'Company Management'}
         </h2>
 
@@ -1024,6 +1047,26 @@ export default function AdminPage() {
           >
             Equipment
           </button>
+          {/* vc51.9A7 — protected surfaces appear ONLY for the verified
+              claim (viewAdmin/profile roles never unlock them); the
+              server re-authorizes every call regardless. */}
+          {adminSession.status === 'verified' && (
+            <>
+              <div className="w-px bg-gray-600 mx-1 self-stretch" />
+              <button
+                onClick={() => setActiveTab('plans')}
+                className={`px-4 py-2 rounded ${activeTab === 'plans' ? 'bg-purple-600 text-white' : 'bg-gray-700 text-gray-300'}`}
+              >
+                Plans
+              </button>
+              <button
+                onClick={() => setActiveTab('adminaudit')}
+                className={`px-4 py-2 rounded ${activeTab === 'adminaudit' ? 'bg-purple-600 text-white' : 'bg-gray-700 text-gray-300'}`}
+              >
+                Admin Audit
+              </button>
+            </>
+          )}
         </div>
 
         {/* Gated well-config fallback (tenant containment) — normally
@@ -2002,6 +2045,19 @@ export default function AdminPage() {
             scopeCompanyId={user?.companyId}
             isWbAdmin={isPlatformAdmin(user)}
           />
+        )}
+
+        {/* vc51.9A7 — protected contract surfaces (claim-gated display;
+            callable-authorized server-side) */}
+        {activeTab === 'plans' && (
+          <VerifiedAdminGate session={adminSession} onRefresh={refreshAccess}>
+            <PlansTab />
+          </VerifiedAdminGate>
+        )}
+        {activeTab === 'adminaudit' && (
+          <VerifiedAdminGate session={adminSession} onRefresh={refreshAccess}>
+            <AdminAuditTab />
+          </VerifiedAdminGate>
         )}
       </main>
     </div>
