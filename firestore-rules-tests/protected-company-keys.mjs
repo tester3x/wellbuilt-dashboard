@@ -1,38 +1,39 @@
 /**
- * CANONICAL protected root-key set for companies/{companyId} (vc51.9A6-A).
+ * CANONICAL protected root-key set for companies/{companyId}
+ * (vc51.9A6-B — Mike-approved nested mapping).
  *
- * SINGLE SOURCE OF TRUTH — the rules file must contain exactly this list
- * (test-rulesSourcePins.mjs asserts literal equality against
- * firestore.rules), and every emulator matrix case derives from it. Do
- * not copy these names anywhere else.
+ * SINGLE SOURCE OF TRUTH — test-rulesSourcePins.mjs asserts literal
+ * equality against firestore.rules AND against the Functions-side list
+ * in functions/src/admin/adminHandlers.ts, and every emulator matrix
+ * case derives from it. Do not copy these names anywhere else.
  *
- * Derived from @wellbuilt/contracts v1 (wellbuilt-contracts/src/types.ts)
- * and the proposed Firestore mapping for the contract layer:
+ * ONE active schema shape exists:
  *
- *   companies/{companyId}.entitlement              ← CompanyEntitlement
- *     { contractVersion, companyId, planId, overrides[], effectiveFrom }
- *   companies/{companyId}.workPeriodConfiguration  ← CompanyWorkPeriodConfiguration
- *     { contractVersion, configurationVersion, mode, timezone,
- *       startLocalTime, durationMinutes }
- *   companies/{companyId}.effectiveCapabilities    ← EffectiveCompanyCapabilities
- *     (computed materialization — never customer-writable)
+ *   companies/{companyId}.wellbuiltContract = {
+ *     contractVersion,          // @wellbuilt/contracts handshake
+ *     configurationVersion,     // bumped by every protected mutation
+ *     planId,                   // assigned plans/{planId}
+ *     entitlementOverrides,     // audited, time-bounded grants
+ *     workPeriodConfiguration,  // { mode, timezone?, startLocalTime?,
+ *                               //   durationMinutes? } — versions live
+ *                               //   at the contract root only
+ *     contractEnforced,         // boolean activation flag
+ *   }
  *
- * The flattened variants (planId, workPeriodMode, configurationVersion,
- * contractVersion, entitlementOverrides, contractEnforced) are protected
- * DEFENSIVELY: whichever shape Part B finally writes via Admin SDK
- * callables, no ordinary client may pre-seed, alter, null, or erase any
- * spelling of the contract state. Protecting the superset costs nothing —
- * the 2026-08-06 writer census proved no legacy writer touches any of
- * these keys.
+ * EffectiveCompanyCapabilities is NEVER persisted — computed by
+ * functions/src/admin/effectiveCapabilities.ts from the exact company
+ * contract + exact plans/{planId} + active overrides.
  *
- * Admin-side collections pinned alongside (deny-all to direct clients):
- *   platform_admins/{uid}         — server-owned admin records
- *   plans/{planId}                — plan catalog (callable-mediated later)
- *   platform_admin_audit/{id}     — proposed audit collection name for
- *                                   Part B admin callables (Admin SDK only)
+ * The RESERVED keys below are the Part A flattened proposal, kept
+ * permanently denied so a second active schema shape can never appear:
+ * they are OBSOLETE AND UNUSABLE, rules-denied for clients and
+ * callable-rejected server-side. No live data migration is assumed —
+ * no live document carries any of these keys (Part A census).
  */
 
-export const PROTECTED_COMPANY_KEYS = Object.freeze([
+export const CANONICAL_PROTECTED_ROOT = 'wellbuiltContract';
+
+export const RESERVED_COMPANY_KEYS = Object.freeze([
   'contractVersion',
   'planId',
   'entitlement',
@@ -42,6 +43,12 @@ export const PROTECTED_COMPANY_KEYS = Object.freeze([
   'effectiveCapabilities',
   'configurationVersion',
   'contractEnforced',
+]);
+
+/** Canonical root FIRST, then the reserved/deprecated names. */
+export const PROTECTED_COMPANY_KEYS = Object.freeze([
+  CANONICAL_PROTECTED_ROOT,
+  ...RESERVED_COMPANY_KEYS,
 ]);
 
 export const PLATFORM_ADMINS_COLLECTION = 'platform_admins';

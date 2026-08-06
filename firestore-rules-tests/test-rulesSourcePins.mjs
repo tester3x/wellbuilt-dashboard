@@ -16,7 +16,9 @@
 import { readFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { PROTECTED_COMPANY_KEYS } from './protected-company-keys.mjs';
+import {
+  CANONICAL_PROTECTED_ROOT, PROTECTED_COMPANY_KEYS, RESERVED_COMPANY_KEYS,
+} from './protected-company-keys.mjs';
 
 const root = join(dirname(fileURLToPath(import.meta.url)), '..');
 const firebaseJson = JSON.parse(readFileSync(join(root, 'firebase.json'), 'utf8'));
@@ -115,14 +117,47 @@ check('rules protected-key list matches canonical module exactly',
   rulesKeys.every((k, idx) => k === PROTECTED_COMPANY_KEYS[idx]),
   `rules=[${rulesKeys.join(',')}] canonical=[${PROTECTED_COMPANY_KEYS.join(',')}]`);
 
-// 6. Admin-side collections are deny-all, with no allow-true anywhere in
-//    their blocks (list denial follows from read:false).
-for (const col of ['platform_admins', 'plans', 'platform_admin_audit']) {
+// 5b. Canonical vs reserved is structurally distinguished: the single
+//     active root leads the list; the Part A flattened proposal remains
+//     reserved/denied so no second active schema shape can appear.
+check('canonical root is wellbuiltContract and leads the rules list',
+  CANONICAL_PROTECTED_ROOT === 'wellbuiltContract' && rulesKeys[0] === CANONICAL_PROTECTED_ROOT);
+check('all nine reserved Part A keys remain denied',
+  RESERVED_COMPANY_KEYS.length === 9 &&
+  RESERVED_COMPANY_KEYS.every((k) => rulesKeys.includes(k)));
+check('rules comment marks the reserved keys as reserved/deprecated',
+  /reserved\/deprecated/.test(fnMatch ? rules.slice(rules.indexOf('function protectedCompanyKeys'), rules.indexOf('function protectedCompanyKeys') + 800) : ''));
+
+// 5c. The Functions-side lists cannot drift from this module.
+const handlersSrc = readFileSync(join(root, 'functions/src/admin/adminHandlers.ts'), 'utf8');
+const fnReserved = handlersSrc.match(/RESERVED_COMPANY_KEYS[\s\S]*?Object\.freeze\(\[([\s\S]*?)\]\)/);
+const fnReservedKeys = fnReserved ? [...fnReserved[1].matchAll(/'([^']+)'/g)].map((m) => m[1]) : [];
+check('functions RESERVED_COMPANY_KEYS matches canonical reserved list',
+  fnReservedKeys.length === RESERVED_COMPANY_KEYS.length &&
+  fnReservedKeys.every((k, i) => k === RESERVED_COMPANY_KEYS[i]),
+  `functions=[${fnReservedKeys.join(',')}]`);
+const contractSrc = readFileSync(join(root, 'functions/src/admin/companyContract.ts'), 'utf8');
+check('functions WELLBUILT_CONTRACT_KEY matches canonical root',
+  new RegExp(`WELLBUILT_CONTRACT_KEY = '${CANONICAL_PROTECTED_ROOT}'`).test(contractSrc));
+
+// 6. platform_admins + audit are deny-all; plans allows EXACT GET only
+//    (vc51.9A6-B mobile read path) with list and writes denied.
+for (const col of ['platform_admins', 'platform_admin_audit']) {
   const block = matchBlock(rules, `match /${col}/`);
   check(`${col} block exists`, !!block);
   const body = block ? stripComments(block) : '';
   check(`${col} denies all client access`,
     /allow\s+read\s*,\s*write\s*:\s*if\s+false/.test(body) && !/if\s+true/.test(body));
+}
+{
+  const block = matchBlock(rules, 'match /plans/');
+  check('plans block exists', !!block);
+  const body = block ? stripComments(block) : '';
+  check('plans allows exact get only',
+    /allow\s+get\s*:\s*if\s+true/.test(body) &&
+    /allow\s+list\s*:\s*if\s+false/.test(body) &&
+    /allow\s+write\s*:\s*if\s+false/.test(body) &&
+    !/allow\s+(read|create|update|delete)\s*:/.test(body));
 }
 
 // 7. Exactly one catch-all, and it is deny-only — no overlapping

@@ -103,12 +103,18 @@ const legacyFields = {
   payConfig: m({ basis: s('percent'), payrollTemplate: m({ columns: s('v1') }) }),
   rateSheets: m({ default: m({ hourly: i(120) }) }),
 };
+// vc51.9A6-B canonical nested schema — the ONE active shape.
+const wellbuiltContract = () => m({
+  contractVersion: i(1),
+  configurationVersion: i(1),
+  planId: s('plan-field'),
+  entitlementOverrides: { arrayValue: { values: [] } },
+  workPeriodConfiguration: m({ mode: s('explicit_shift') }),
+  contractEnforced: b(false),
+});
 const configuredFields = {
   name: s('Configured Co'),
-  contractVersion: i(1),
-  planId: s('plan-field'),
-  entitlement: m({ contractVersion: i(1), companyId: s('configured-co'), planId: s('plan-field') }),
-  workPeriodConfiguration: m({ contractVersion: i(1), configurationVersion: i(1), mode: s('explicit_shift') }),
+  wellbuiltContract: wellbuiltContract(),
 };
 check('ADMIN fixture: legacy-co created (owner bypasses rules)',
   await patchDoc(OWNER, 'companies/legacy-co', legacyFields), 200);
@@ -120,6 +126,8 @@ check('ADMIN fixture: configured-co created WITH protected fields',
   await patchDoc(OWNER, 'companies/configured-co', configuredFields), 200);
 check('ADMIN fixture: replace-co created WITH protected fields',
   await patchDoc(OWNER, 'companies/replace-co', { ...configuredFields, name: s('Replace Co') }), 200);
+check('ADMIN fixture: flat-reserved-co created (reserved Part A key present)',
+  await patchDoc(OWNER, 'companies/flat-reserved-co', { name: s('Flat Reserved'), planId: s('plan-field') }), 200);
 check('ADMIN fixture: platform_admins/fake-admin-1 (enabled) created',
   await patchDoc(OWNER, 'platform_admins/fake-admin-1', { enabled: b(true), policyVersion: i(1) }), 200);
 check('ADMIN fixture: plans/plan-field created',
@@ -157,9 +165,30 @@ check('plans update USER denied',
 check('plans delete CLAIM denied', await delDoc(CLAIM, 'plans/plan-field'), 403);
 check('plans list UNAUTH denied', await listCol(UNAUTH, 'plans'), 403);
 check('plans list CLAIM denied', await listCol(CLAIM, 'plans'), 403);
-check('plans query CLAIM denied', await runQuery(CLAIM, 'plans'), 403);
-check('plans get UNAUTH denied', await getDoc(UNAUTH, 'plans/plan-field'), 403);
-check('plans get CLAIM denied', await getDoc(CLAIM, 'plans/plan-field'), 403);
+check('plans unfiltered query denied', await runQuery(CLAIM, 'plans'), 403);
+{
+  // Every query SHAPE is a list operation — filtered and limited forms
+  // must be denied exactly like the plain list (vc51.9A6-B pin).
+  const q = async (body) => (await fetch(`${BASE.replace(/\/documents$/, '/documents')}:runQuery`, {
+    method: 'POST', headers: hdrs(UNAUTH), body: JSON.stringify(body),
+  })).status;
+  check('plans query filtered by status denied', await q({
+    structuredQuery: {
+      from: [{ collectionId: 'plans' }],
+      where: { fieldFilter: { field: { fieldPath: 'status' }, op: 'EQUAL', value: { stringValue: 'active' } } },
+    },
+  }), 403);
+  check('plans limit-1 query denied', await q({
+    structuredQuery: { from: [{ collectionId: 'plans' }], limit: 1 },
+  }), 403);
+}
+// vc51.9A6-B mobile read path: EXACT plan get is open (plan docs carry
+// product capability configuration, not secrets).
+check('plans exact get UNAUTH allowed (mobile read path)',
+  await getDoc(UNAUTH, 'plans/plan-field'), 200);
+check('plans exact get CLAIM allowed', await getDoc(CLAIM, 'plans/plan-field'), 200);
+check('plans unknown id → ordinary 404 (no discovery signal)',
+  await getDoc(UNAUTH, 'plans/plan-nonexistent'), 404);
 
 // admin audit — direct read/write denied for every identity.
 check('audit get CLAIM denied', await getDoc(CLAIM, 'platform_admin_audit/audit-1'), 403);
@@ -179,7 +208,22 @@ check('company update UNAUTH (unrelated field) denied',
   await patchDoc(UNAUTH, 'companies/legacy-co', { name: s('Renamed') }, ['name']), 403);
 check('company delete UNAUTH denied', await delDoc(UNAUTH, 'companies/deletable-co'), 403);
 
-// companies — protected-field creates.
+// companies — the CANONICAL nested object (vc51.9A6-B).
+check('create containing wellbuiltContract denied (USER)',
+  await patchDoc(USER, 'companies/new-co-w', { name: s('W'), wellbuiltContract: wellbuiltContract() }), 403);
+check('add wellbuiltContract to legacy doc denied (USER)',
+  await patchDoc(USER, 'companies/legacy-co', { wellbuiltContract: wellbuiltContract() }, ['wellbuiltContract']), 403);
+check('modify wellbuiltContract denied (USER)',
+  await patchDoc(USER, 'companies/configured-co',
+    { wellbuiltContract: m({ contractEnforced: b(true) }) }, ['wellbuiltContract']), 403);
+check('remove wellbuiltContract denied (USER — masked path absent from body)',
+  await patchDoc(USER, 'companies/configured-co', {}, ['wellbuiltContract']), 403);
+check('set wellbuiltContract null denied (USER)',
+  await patchDoc(USER, 'companies/configured-co', { wellbuiltContract: nul() }, ['wellbuiltContract']), 403);
+check('add wellbuiltContract denied even for CLAIM bearer',
+  await patchDoc(CLAIM, 'companies/legacy-co', { wellbuiltContract: wellbuiltContract() }, ['wellbuiltContract']), 403);
+
+// companies — reserved Part A flat keys stay permanently denied.
 check('company create containing planId denied (USER)',
   await patchDoc(USER, 'companies/new-co-a', { name: s('A'), planId: s('plan-field') }), 403);
 check('company create containing entitlement map denied (USER)',
@@ -201,8 +245,8 @@ check('modify protected field denied (USER)',
 check('modify nested protected map denied (USER)',
   await patchDoc(USER, 'companies/configured-co',
     { workPeriodConfiguration: m({ mode: s('company_defined_period') }) }, ['workPeriodConfiguration']), 403);
-check('remove protected field denied (USER — masked path absent from body)',
-  await patchDoc(USER, 'companies/configured-co', {}, ['planId']), 403);
+check('remove reserved flat key denied (USER — masked path absent from body)',
+  await patchDoc(USER, 'companies/flat-reserved-co', {}, ['planId']), 403);
 check('set protected field null denied (USER)',
   await patchDoc(USER, 'companies/configured-co', { planId: nul() }, ['planId']), 403);
 check('mixed permitted+protected update denied entirely (USER)',

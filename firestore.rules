@@ -46,12 +46,20 @@ service cloud.firestore {
       allow read, update, delete: if false;
     }
 
-    // ── vc51.9A6-A: protected contract/admin data ─────────────────────
-    // Protected contract root keys on companies/{companyId}. Pinned 1:1
-    // against firestore-rules-tests/protected-company-keys.mjs by
-    // test-rulesSourcePins.mjs — change both together or the pin fails.
+    // ── vc51.9A6: protected contract/admin data ───────────────────────
+    // Pinned 1:1 against firestore-rules-tests/protected-company-keys.mjs
+    // AND functions/src/admin/adminHandlers.ts by test-rulesSourcePins.mjs
+    // — change all together or the pin fails.
+    //
+    // CANONICAL active schema (vc51.9A6-B, Mike-approved): the single
+    // nested root `wellbuiltContract`, written only by the Admin SDK
+    // callables. Every OTHER name below is the RESERVED Part A flattened
+    // proposal — obsolete and unusable, denied permanently so a second
+    // active schema shape can never appear.
     function protectedCompanyKeys() {
-      return ['contractVersion', 'planId', 'entitlement',
+      return ['wellbuiltContract',
+              // reserved/deprecated (never valid as an active schema):
+              'contractVersion', 'planId', 'entitlement',
               'entitlementOverrides', 'workPeriodMode',
               'workPeriodConfiguration', 'effectiveCapabilities',
               'configurationVersion', 'contractEnforced'];
@@ -64,11 +72,18 @@ service cloud.firestore {
       allow read, write: if false;
     }
 
-    // Plan catalog — no installed app reads plans directly (2026-08-06
-    // census), so direct client access is denied pending the Part B
-    // callables.
+    // Plan catalog — vc51.9A6-B mobile read path: apps read the exact
+    // company document, then the exact assigned plans/{planId}, and
+    // compute effective capabilities locally. Plan documents carry
+    // product capability configuration, not secrets. Exact GET only:
+    // list and every query shape stay denied (Firestore evaluates all
+    // queries as list), an unknown id is an ordinary not-found, and no
+    // client mutation path exists — plans are written solely by the
+    // Admin SDK callables, which bypass these rules.
     match /plans/{planId} {
-      allow read, write: if false;
+      allow get: if true;
+      allow list: if false;
+      allow write: if false;
     }
 
     // Platform-admin audit trail (canonical name pinned for Part B) —
