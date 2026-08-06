@@ -344,9 +344,13 @@ service cloud.firestore {
     // only the launching device's WB-T + WB-JSA share. Tightening beyond
     // this requires the suite-wide auth/App Check rollout — a separate
     // security decision; DO NOT deploy this file without that review.
-    match /jsa_read_receipts/{requestId} {
-      allow create: if requestId.matches('^[A-Za-z0-9_-]{43}$')
-        && request.resource.data.keys().hasOnly([
+    // vc51.9B: INDEPENDENT strict per-version validation. v1 remains
+    // temporarily creatable for the already-installed WB-T transition
+    // window; v2 adds the canonical period proof. Each version's key set
+    // is exact (hasOnly), so v1 fields cannot mix into v2 nor v2 fields
+    // smuggle into v1, and no third shape exists.
+    function validJsaReceiptV1(requestId) {
+      return request.resource.data.keys().hasOnly([
           'receiptVersion', 'requestId', 'jobDocId', 'haulGroupId',
           'companyId', 'driverHash', 'shiftId', 'operator',
           'jsaRecordId', 'completedAt', 'completionType'
@@ -370,6 +374,48 @@ service cloud.firestore {
         && request.resource.data.completedAt is string
         && request.resource.data.completedAt.size() >= 20
         && request.resource.data.completionType == 'signed_submission';
+    }
+    // v2 (vc51.9B): the v1 identity claims minus shiftId, plus the
+    // canonical period proof — request period, independently resolved
+    // submission period, REQUIRED equality between them, and the mode
+    // needed to interpret the binding. Same honesty scope: the receipt
+    // claims the signed submission, nothing more. Company/driver/job
+    // MATCHING against the minting request stays a client-layer check
+    // (rules have no request context) — same capability model as v1.
+    function validJsaReceiptV2(requestId) {
+      return request.resource.data.keys().hasOnly([
+          'receiptVersion', 'requestId', 'jobDocId', 'haulGroupId',
+          'companyId', 'driverHash', 'operator',
+          'requestPeriodId', 'submissionPeriodId', 'workPeriodMode',
+          'jsaRecordId', 'completedAt', 'completionType'
+        ])
+        && request.resource.data.receiptVersion == 2
+        && request.resource.data.requestId == requestId
+        && request.resource.data.jobDocId is string
+        && request.resource.data.jobDocId.size() > 0
+        && request.resource.data.jobDocId.size() <= 120
+        && (!('haulGroupId' in request.resource.data)
+          || (request.resource.data.haulGroupId is string
+            && request.resource.data.haulGroupId.size() <= 120))
+        && request.resource.data.companyId is string
+        && request.resource.data.driverHash is string
+        && request.resource.data.driverHash.size() >= 8
+        && request.resource.data.operator is string
+        && request.resource.data.requestPeriodId is string
+        && request.resource.data.requestPeriodId.size() > 0
+        && request.resource.data.requestPeriodId.size() <= 120
+        && request.resource.data.submissionPeriodId == request.resource.data.requestPeriodId
+        && request.resource.data.workPeriodMode in ['explicit_shift', 'company_defined_period']
+        && request.resource.data.jsaRecordId is string
+        && request.resource.data.jsaRecordId.size() > 0
+        && request.resource.data.completedAt is string
+        && request.resource.data.completedAt.size() >= 20
+        && request.resource.data.completionType == 'signed_submission';
+    }
+
+    match /jsa_read_receipts/{requestId} {
+      allow create: if requestId.matches('^[A-Za-z0-9_-]{43}$')
+        && (validJsaReceiptV1(requestId) || validJsaReceiptV2(requestId));
       // EXACT-GET ONLY (vc51.4): retrieval requires possessing the
       // 256-bit request id — the capability. Collection enumeration and
       // every query shape are denied (`list: false` covers plain lists

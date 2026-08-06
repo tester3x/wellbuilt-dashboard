@@ -146,5 +146,87 @@ check('exact get with possessed id still succeeds',
 check('exact get of unknown id → 404 (no discovery signal)',
   (await fetch(`${BASE}/jsa_read_receipts/${'Z'.repeat(20) + 'z'.repeat(20) + '-_z'}`)).status, 404);
 
+// ── vc51.9B receipt contract v2 ─────────────────────────────────────────────
+const V2A = 'V'.repeat(20) + 'a'.repeat(20) + '-_1';
+const v2Fields = (requestId = V2A, over = {}) => ({
+  receiptVersion: { integerValue: '2' },
+  requestId: s(requestId),
+  jobDocId: s('job_88'),
+  companyId: s('liquid-gold'),
+  driverHash: s('da561bc4'),
+  operator: s('SLAWSON'),
+  requestPeriodId: s('2026-08-06_060000'),
+  submissionPeriodId: s('2026-08-06_060000'),
+  workPeriodMode: s('explicit_shift'),
+  jsaRecordId: s('1754470001000'),
+  completedAt: s('2026-08-06T09:30:00.000Z'),
+  completionType: s('signed_submission'),
+  ...over,
+});
+check('v2 valid create with matching request/submission period succeeds',
+  await patchDoc(V2A, v2Fields()), 200);
+check('v2 exact get with possessed id succeeds',
+  (await fetch(`${BASE}/jsa_read_receipts/${V2A}`)).status, 200);
+check('v2 replay denied (immutable)', await patchDoc(V2A, v2Fields()), 403);
+check('v2 update denied',
+  await patchDoc(V2A, v2Fields(V2A, { jobDocId: s('job_tampered') })), 403);
+check('v2 delete denied',
+  (await fetch(`${BASE}/jsa_read_receipts/${V2A}`, { method: 'DELETE' })).status, 403);
+{
+  const id = 'V'.repeat(20) + 'b'.repeat(20) + '-_2';
+  const f = v2Fields(id); delete f.submissionPeriodId;
+  check('v2 missing submission period denied', await patchDoc(id, f), 403);
+}
+{
+  const id = 'V'.repeat(20) + 'c'.repeat(20) + '-_3';
+  const f = v2Fields(id); delete f.requestPeriodId; delete f.submissionPeriodId;
+  check('v2 missing both periods denied', await patchDoc(id, f), 403);
+}
+{
+  const id = 'V'.repeat(20) + 'd'.repeat(20) + '-_4';
+  check('v2 MISMATCHED request/submission periods denied',
+    await patchDoc(id, v2Fields(id, { submissionPeriodId: s('2026-08-05_060000') })), 403);
+}
+{
+  const id = 'V'.repeat(20) + 'e'.repeat(20) + '-_5';
+  check('unsupported receipt version 3 denied',
+    await patchDoc(id, v2Fields(id, { receiptVersion: { integerValue: '3' } })), 403);
+}
+{
+  const id = 'V'.repeat(20) + 'f'.repeat(20) + '-_6';
+  check('v1 field (shiftId) mixed into v2 denied',
+    await patchDoc(id, v2Fields(id, { shiftId: s('2026-08-06_060000') })), 403);
+}
+{
+  const id = 'V'.repeat(20) + 'g'.repeat(20) + '-_7';
+  const f = goodFields(id); f.requestPeriodId = s('2026-08-06_060000');
+  check('v2 field (requestPeriodId) smuggled into v1 denied', await patchDoc(id, f), 403);
+}
+{
+  const id = 'V'.repeat(20) + 'h'.repeat(20) + '-_8';
+  check('v2 malformed (empty) period id denied',
+    await patchDoc(id, v2Fields(id, { requestPeriodId: s(''), submissionPeriodId: s('') })), 403);
+}
+{
+  const id = 'V'.repeat(20) + 'i'.repeat(20) + '-_9';
+  check('v2 invalid work-period mode denied',
+    await patchDoc(id, v2Fields(id, { workPeriodMode: s('lunar_cycle') })), 403);
+}
+{
+  const id = 'V'.repeat(20) + 'j'.repeat(20) + '-_a';
+  check('v2 extra field denied',
+    await patchDoc(id, v2Fields(id, { surprise: s('nope') })), 403);
+}
+{
+  const id = 'V'.repeat(20) + 'k'.repeat(20) + '-_b';
+  check('v2 non-signed completion denied',
+    await patchDoc(id, v2Fields(id, { completionType: s('acknowledged') })), 403);
+}
+check('v2 does not open list/query (collection list still denied)',
+  (await fetch(`${BASE}/jsa_read_receipts`)).status, 403);
+check('v1 create STILL valid after v2 (transition window)',
+  await patchDoc('W'.repeat(20) + 'w'.repeat(20) + '-_w',
+    goodFields('W'.repeat(20) + 'w'.repeat(20) + '-_w')), 200);
+
 console.log(`\n${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);
