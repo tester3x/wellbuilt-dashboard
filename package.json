@@ -9,6 +9,7 @@
     "lint": "eslint"
   },
   "dependencies": {
+    "@wellbuilt/contracts": "file:../wellbuilt-contracts/wellbuilt-contracts-0.1.0.tgz",
     "firebase": "^12.8.0",
     "jspdf": "^4.2.0",
     "jspdf-autotable": "^5.0.7",
