@@ -286,7 +286,7 @@ service cloud.firestore {
         && request.resource.data.jsaRecordId.size() > 0
         && request.resource.data.completedAt is string
         && request.resource.data.completedAt.size() >= 20
-        && request.resource.data.completionType == 'full_flow';
+        && request.resource.data.completionType == 'signed_submission';
       // EXACT-GET ONLY (vc51.4): retrieval requires possessing the
       // 256-bit request id — the capability. Collection enumeration and
       // every query shape are denied (`list: false` covers plain lists

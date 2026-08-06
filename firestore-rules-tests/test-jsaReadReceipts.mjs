@@ -37,7 +37,7 @@ const goodFields = (requestId = RID) => ({
   operator: s('SLAWSON'),
   jsaRecordId: s('1754470000000'),
   completedAt: s('2026-08-06T09:12:00.000Z'),
-  completionType: s('full_flow'),
+  completionType: s('signed_submission'),
 });
 
 async function patchDoc(docId, fields) {
@@ -85,7 +85,7 @@ check('bad id syntax denied', await patchDoc('short-id', { ...goodFields('short-
 {
   const id = 'E'.repeat(20) + 'f'.repeat(20) + '-_g';
   const f = goodFields(id); f.completionType = s('shift');
-  check('non-full_flow completion denied', await patchDoc(id, f), 403);
+  check('non-signed_submission completion denied', await patchDoc(id, f), 403);
 }
 {
   const id = 'F'.repeat(20) + 'g'.repeat(20) + '-_h';
