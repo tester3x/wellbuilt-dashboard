@@ -1,0 +1,190 @@
+/**
+ * vc51.9A9B — Functions deployment boundary: credential-free proof.
+ *
+ * RED-FIRST: against the pre-correction boundary this suite FAILS —
+ * the Functions lockfile resolved @tester3x/wellbuilt-contracts from
+ * npm.pkg.github.com and functions/.npmrc referenced ${NODE_AUTH_TOKEN},
+ * so Google's builder (no GitHub token, no user .npmrc) could not
+ * install. The correction makes functions/ self-contained via the
+ * generated immutable contracts mirror.
+ *
+ * The scratch proof copies ONLY the functions deployment inputs to a
+ * clean directory and runs `npm ci` with a FRESH empty npm cache and
+ * every token variable absent — an authenticated cache can never fake
+ * this pass.
+ *
+ * Run: node tools/test-functionsDeployBoundary.mjs   (slow: real npm ci)
+ */
+import { execFileSync } from 'node:child_process';
+import { cpSync, existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { createHash } from 'node:crypto';
+import { dirname, join } from 'node:path';
+import { fileURLToPath } from 'node:url';
+import { tmpdir } from 'node:os';
+
+const root = join(dirname(fileURLToPath(import.meta.url)), '..');
+const FN = join(root, 'functions');
+const MIRROR = join(FN, 'contracts-mirror');
+const EXPECTED_SHA256 = '45cc9b965258204255ecfba05d12719da5bb6f4fa71c9508a7c66ba8da158e73';
+const EXPECTED_INTEGRITY = 'sha512-ejMmcqgw1mbGKwKFQ7O6Lub7OyT3QABJCIwXv4+7/9x4vwwuYES1a6RmjY3BIWtXdbazY9cRSHKEwic0zz17/Q==';
+
+let pass = 0, fail = 0;
+const check = (name, ok, detail = '') => {
+  if (ok) pass++; else fail++;
+  console.log(`${ok ? 'PASS' : 'FAIL'} ${name}${ok || !detail ? '' : ` — ${detail}`}`);
+};
+const sha256 = (p) => createHash('sha256').update(readFileSync(p)).digest('hex');
+
+// ── 1. The functions dependency tree must not reference the private registry.
+{
+  const lock = readFileSync(join(FN, 'package-lock.json'), 'utf8');
+  check('functions lockfile has zero npm.pkg.github.com references',
+    !lock.includes('npm.pkg.github.com'));
+  const pkg = JSON.parse(readFileSync(join(FN, 'package.json'), 'utf8'));
+  const dep = pkg.dependencies?.['@tester3x/wellbuilt-contracts'];
+  check('functions depends on the local deployment mirror',
+    dep === 'file:contracts-mirror', `dep=${dep}`);
+}
+
+// ── 2. The functions build boundary must not need ${NODE_AUTH_TOKEN}.
+check('functions/.npmrc absent (no env token needed inside the boundary)',
+  !existsSync(join(FN, '.npmrc')));
+check('Dashboard root .npmrc still serves the registry consumer',
+  readFileSync(join(root, '.npmrc'), 'utf8').includes('${NODE_AUTH_TOKEN}'));
+{
+  const rootLock = readFileSync(join(root, 'package-lock.json'), 'utf8');
+  check('Dashboard CLIENT still resolves the registry package normally',
+    rootLock.includes('npm.pkg.github.com/download/@tester3x/wellbuilt-contracts/0.1.0'));
+}
+
+// ── 3. Mirror integrity: generated from the immutable published bytes.
+{
+  check('mirror exists inside the functions deployment boundary', existsSync(MIRROR));
+  const manifestPath = join(MIRROR, 'MIRROR-MANIFEST.json');
+  check('mirror manifest present', existsSync(manifestPath));
+  if (existsSync(manifestPath)) {
+    const manifest = JSON.parse(readFileSync(manifestPath, 'utf8'));
+    check('manifest pins the published source sha256', manifest.sourceSha256 === EXPECTED_SHA256);
+    check('manifest pins the published npm integrity', manifest.sourceIntegrity === EXPECTED_INTEGRITY);
+    check('manifest pins name and version',
+      manifest.name === '@tester3x/wellbuilt-contracts' && manifest.version === '0.1.0');
+    const drift = Object.entries(manifest.files).filter(([f, h]) => {
+      const p = join(MIRROR, f);
+      return !existsSync(p) || sha256(p) !== h;
+    });
+    check('every mirror file matches its manifest hash (no drift, no tamper)',
+      drift.length === 0, drift.map(([f]) => f).join(','));
+    const pkg = JSON.parse(readFileSync(join(MIRROR, 'package.json'), 'utf8'));
+    check('mirror package identity/license/repository retained',
+      pkg.name === '@tester3x/wellbuilt-contracts' && pkg.version === '0.1.0'
+      && pkg.license === 'UNLICENSED' && pkg.repository?.url?.includes('tester3x/wellbuilt-contracts'));
+    const everything = execFileSync('git', ['-C', root, 'ls-files', 'functions/contracts-mirror'], { encoding: 'utf8' })
+      .trim().split('\n');
+    const allowed = ['MIRROR-MANIFEST.json', 'MIRROR-README.md', 'NOTICE', 'README.md', 'package.json'];
+    const stray = everything.map((f) => f.replace('functions/contracts-mirror/', ''))
+      .filter((f) => !allowed.includes(f) && !/^dist\/[\w.]+\.(js|d\.ts|js\.map|d\.ts\.map)$/.test(f));
+    check('mirror contains ONLY the allowlisted deployment files', stray.length === 0, stray.join(','));
+  }
+  // No token/credential strings anywhere in the mirror.
+  if (existsSync(MIRROR)) {
+    const grep = execFileSync('git', ['-C', root, 'grep', '-l', '-iE',
+      'ghp_|gho_|_authToken|private[_ ]key|BEGIN [A-Z ]*PRIVATE', '--', 'functions/contracts-mirror'],
+      { encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] }).trim();
+    check('no token or credential string in the mirror', grep === '', grep);
+  }
+}
+
+// ── 4. Verifier tool guards: tamper / wrong version / missing file fail.
+{
+  const tool = join(FN, 'tools', 'mirror-contracts.mjs');
+  check('mirror verifier tool exists', existsSync(tool));
+  if (existsSync(tool)) {
+    const run = (dir) => {
+      try {
+        execFileSync(process.execPath, [tool, '--verify', '--mirror', dir], { stdio: 'pipe' });
+        return true;
+      } catch { return false; }
+    };
+    check('verifier passes on the committed mirror', run(MIRROR));
+    const tmp = join(tmpdir(), `mirror-guard-${process.pid}`);
+    rmSync(tmp, { recursive: true, force: true });
+    cpSync(MIRROR, tmp, { recursive: true });
+    writeFileSync(join(tmp, 'dist', 'index.js'), '// tampered\n', { flag: 'a' });
+    check('tampered bytes fail verification', !run(tmp));
+    rmSync(tmp, { recursive: true, force: true });
+    cpSync(MIRROR, tmp, { recursive: true });
+    const m = JSON.parse(readFileSync(join(tmp, 'MIRROR-MANIFEST.json'), 'utf8'));
+    m.version = '0.2.0';
+    writeFileSync(join(tmp, 'MIRROR-MANIFEST.json'), JSON.stringify(m));
+    check('wrong package version fails verification', !run(tmp));
+    rmSync(tmp, { recursive: true, force: true });
+    cpSync(MIRROR, tmp, { recursive: true });
+    rmSync(join(tmp, 'dist', 'resolver.js'));
+    check('missing deployment material fails verification', !run(tmp));
+    rmSync(tmp, { recursive: true, force: true });
+  }
+}
+
+// ── 5. THE PROOF: clean scratch install with no tokens, fresh cache.
+{
+  const scratch = process.env.FN_BOUNDARY_SCRATCH
+    ?? join(tmpdir(), `fn-boundary-${Date.now()}`);
+  rmSync(scratch, { recursive: true, force: true });
+  mkdirSync(join(scratch, 'cache'), { recursive: true });
+  for (const item of ['package.json', 'package-lock.json', 'tsconfig.json', 'src', 'contracts-mirror']) {
+    const from = join(FN, item);
+    if (existsSync(from)) cpSync(from, join(scratch, item), { recursive: true });
+  }
+  // Empty userconfig so no ambient .npmrc can leak credentials into the proof.
+  writeFileSync(join(scratch, 'empty-npmrc'), '');
+  const env = { ...process.env };
+  for (const k of ['NODE_AUTH_TOKEN', 'GH_TOKEN', 'GITHUB_TOKEN', 'NPM_TOKEN', 'NPM_AUTH_TOKEN']) delete env[k];
+  env.npm_config_cache = join(scratch, 'cache');
+  env.npm_config_userconfig = join(scratch, 'empty-npmrc');
+  let installed = false, detail = '';
+  try {
+    execFileSync('npm', ['ci', '--no-audit', '--no-fund'], { cwd: scratch, env, stdio: 'pipe', shell: true, timeout: 540_000 });
+    installed = true;
+  } catch (e) {
+    detail = String(e.stderr ?? e.message).slice(-300);
+  }
+  check('clean token-free scratch npm ci succeeds (fresh cache — Google-builder equivalent)', installed, detail);
+  if (installed) {
+    const resolvedPkg = join(scratch, 'node_modules', '@tester3x', 'wellbuilt-contracts');
+    check('scratch resolves the contracts package locally', existsSync(join(resolvedPkg, 'dist', 'index.js')));
+    const manifest = JSON.parse(readFileSync(join(MIRROR, 'MIRROR-MANIFEST.json'), 'utf8'));
+    const distDrift = Object.keys(manifest.files).filter((f) => f.startsWith('dist/'))
+      .filter((f) => sha256(join(resolvedPkg, f)) !== manifest.files[f]);
+    check('scratch-resolved bytes ARE the immutable 0.1.0 bytes', distDrift.length === 0, distDrift.join(','));
+    let built = false;
+    try {
+      execFileSync('npx', ['tsc'], { cwd: scratch, env, stdio: 'pipe', shell: true, timeout: 300_000 });
+      built = true;
+    } catch (e) { detail = String(e.stdout ?? e.message).slice(-300); }
+    check('functions build+typecheck succeeds in the token-free scratch', built, detail);
+    // Behavior identity through the scratch-resolved copy.
+    const probe = `
+      const m = require('@tester3x/wellbuilt-contracts');
+      const c = require('@tester3x/wellbuilt-contracts/conformance');
+      let n = 0;
+      for (const t of [...c.CONFORMANCE_CASES, ...c.MIXED_WORKFLOW_CASES]) {
+        const r = m.resolveWorkPeriod(t.input);
+        if (r.outcome !== t.expect.outcome) throw new Error(t.name);
+        n++;
+      }
+      try { m.assertContractCompatible(99, 'probe'); throw new Error('accepted'); }
+      catch (e) { if (!String(e.message).includes('cannot consume')) throw e; }
+      console.log('conformance', n);
+    `;
+    let conf = '';
+    try {
+      conf = execFileSync(process.execPath, ['-e', probe], { cwd: scratch, env, encoding: 'utf8' }).trim();
+    } catch (e) { conf = String(e.message); }
+    check('conformance behavior identical + unknown versions fail closed (scratch copy)',
+      conf === 'conformance 24', conf);
+  }
+  rmSync(scratch, { recursive: true, force: true });
+}
+
+console.log(`\n${pass} passed, ${fail} failed`);
+process.exit(fail ? 1 : 0);
