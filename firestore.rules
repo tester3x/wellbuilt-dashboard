@@ -287,9 +287,19 @@ service cloud.firestore {
         && request.resource.data.completedAt is string
         && request.resource.data.completedAt.size() >= 20
         && request.resource.data.completionType == 'full_flow';
-      // Reads cannot be scoped without an auth model — the unguessable
-      // doc id is the practical read scope (documented limitation).
-      allow read: if true;
+      // EXACT-GET ONLY (vc51.4): retrieval requires possessing the
+      // 256-bit request id — the capability. Collection enumeration and
+      // every query shape are denied (`list: false` covers plain lists
+      // AND filtered/limited queries — Firestore evaluates them all as
+      // list operations), so receipt ids cannot be discovered through
+      // reads. WB-T performs only the exact-document GET
+      // (…/jsa_read_receipts/{requestId}); it never queries. Honest
+      // limitation stands: with no Firebase Auth, anyone POSSESSING a
+      // valid id may get that one receipt — the nonce defeats accidental
+      // inheritance and remote guessing, not a malicious authorized
+      // device. Interim pre-customer boundary.
+      allow get: if true;
+      allow list: if false;
       allow update: if false;
       allow delete: if false;
     }

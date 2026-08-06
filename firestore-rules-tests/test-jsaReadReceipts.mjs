@@ -106,6 +106,45 @@ check('bad id syntax denied', await patchDoc('short-id', { ...goodFields('short-
   const f = goodFields(id); f.companyId = s('other-co'); f.driverHash = s('ffffffff');
   check('LIMITATION: foreign company/driver create allowed (no auth model)', await patchDoc(id, f), 200);
 }
+// Bad timestamp type (integer where string required).
+{
+  const id = 'I'.repeat(20) + 'j'.repeat(20) + '-_k';
+  const f = goodFields(id); f.completedAt = { integerValue: '1754470000000' };
+  check('non-string completedAt denied', await patchDoc(id, f), 403);
+}
+
+// ── vc51.4: enumeration is impossible through reads ─────────────────────────
+// `list: false` denies the plain collection list AND every query shape —
+// receipt ids cannot be discovered; only exact possession retrieves.
+async function runQuery(body) {
+  const r = await fetch(`http://${host}/v1/projects/${PID}/databases/(default)/documents:runQuery`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(body),
+  });
+  return r.status;
+}
+const fieldEq = (path, value) => ({
+  fieldFilter: { field: { fieldPath: path }, op: 'EQUAL', value: { stringValue: value } },
+});
+check('collection list denied',
+  (await fetch(`${BASE}/jsa_read_receipts`)).status, 403);
+check('unfiltered query denied',
+  await runQuery({ structuredQuery: { from: [{ collectionId: 'jsa_read_receipts' }] } }), 403);
+check('query filtered by company denied',
+  await runQuery({ structuredQuery: { from: [{ collectionId: 'jsa_read_receipts' }], where: fieldEq('companyId', 'liquid-gold') } }), 403);
+check('query filtered by driver denied',
+  await runQuery({ structuredQuery: { from: [{ collectionId: 'jsa_read_receipts' }], where: fieldEq('driverHash', 'da561bc4') } }), 403);
+check('query filtered by job denied',
+  await runQuery({ structuredQuery: { from: [{ collectionId: 'jsa_read_receipts' }], where: fieldEq('jobDocId', 'INV_123') } }), 403);
+check('limit-1 query denied',
+  await runQuery({ structuredQuery: { from: [{ collectionId: 'jsa_read_receipts' }], limit: 1 } }), 403);
+// Exact get with the known id still works (capability model).
+check('exact get with possessed id still succeeds',
+  (await fetch(`${BASE}/jsa_read_receipts/${RID}`)).status, 200);
+// A GET for a malformed/unknown id yields nothing useful.
+check('exact get of unknown id → 404 (no discovery signal)',
+  (await fetch(`${BASE}/jsa_read_receipts/${'Z'.repeat(20) + 'z'.repeat(20) + '-_z'}`)).status, 404);
 
 console.log(`\n${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);
