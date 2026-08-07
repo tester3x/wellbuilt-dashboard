@@ -472,3 +472,114 @@ export const SSO_CODE_TTL_MS_PROVISIONAL = 120_000;
  * server would still have honoured, hiding real timing data.
  */
 export const SSO_ATTEMPT_TTL_MS_PROVISIONAL = 180_000;
+
+// ── deep-link URLs ────────────────────────────────────────────────────────
+// Built and parsed HERE so both apps share one implementation. The scheme
+// and host are protocol constants: a message never names a destination,
+// so there is no redirect to inject.
+
+function enc(v: string): string {
+  return encodeURIComponent(v);
+}
+
+/** `wellbuilt-suite://sso-authorize?...` — non-secret protocol inputs only. */
+export function buildSsoAuthorizationUrl(request: SsoAuthorizationRequest): string {
+  const q = [
+    `v=${enc(String(request.protocolVersion))}`,
+    `aud=${enc(request.audience)}`,
+    `cc=${enc(request.codeChallenge)}`,
+    `ccm=${enc(request.codeChallengeMethod)}`,
+    `state=${enc(request.state)}`,
+  ].join('&');
+  return `${SSO_AUTHORIZE_SCHEME}://${SSO_AUTHORIZE_HOST}?${q}`;
+}
+
+/** `wellbuilt-tickets://sso-callback?...` */
+export function buildSsoCallbackUrl(callback: SsoCallback): string {
+  const parts = [`v=${enc(String(callback.protocolVersion))}`, `status=${enc(callback.status)}`];
+  if (callback.status === 'success') {
+    parts.push(`code=${enc(callback.code)}`, `state=${enc(callback.state)}`);
+  } else {
+    parts.push(`err=${enc(callback.errorCode)}`);
+    if (callback.state) parts.push(`state=${enc(callback.state)}`);
+  }
+  return `${SSO_CALLBACK_SCHEME}://${SSO_CALLBACK_HOST}?${parts.join('&')}`;
+}
+
+/**
+ * Split a deep link into scheme, host, and query pairs.
+ *
+ * Hand-rolled rather than using URL: React Native's URL polyfill does not
+ * treat custom schemes consistently, and this must behave identically on
+ * both platforms and in node tests. Rejects anything with a path segment,
+ * userinfo, or port — none are legal here, and accepting them would widen
+ * what "the fixed route" means.
+ */
+function splitDeepLink(
+  url: unknown,
+  scheme: string,
+  host: string,
+): Record<string, string> | null {
+  if (typeof url !== 'string' || url.length > 2048) return null;
+  const prefix = `${scheme}://`;
+  if (!url.startsWith(prefix)) return null;
+  const rest = url.slice(prefix.length);
+  const qAt = rest.indexOf('?');
+  const hostPart = qAt < 0 ? rest : rest.slice(0, qAt);
+  // Exact host, nothing else. No path, no port, no credentials.
+  if (hostPart !== host) return null;
+  if (qAt < 0) return {};
+  const query = rest.slice(qAt + 1);
+  if (query.includes('#')) return null;
+  const out: Record<string, string> = {};
+  for (const pair of query.split('&')) {
+    if (!pair) continue;
+    const eq = pair.indexOf('=');
+    if (eq < 0) return null;
+    const k = pair.slice(0, eq);
+    let v: string;
+    try {
+      v = decodeURIComponent(pair.slice(eq + 1));
+    } catch {
+      return null; // malformed percent-encoding
+    }
+    // Duplicate keys are a smuggling vector: one parser may take the
+    // first and another the last. Refuse instead of choosing.
+    if (Object.prototype.hasOwnProperty.call(out, k)) return null;
+    out[k] = v;
+  }
+  return out;
+}
+
+/** Strictly parse the fixed WB-S authorization route. */
+export function parseSsoAuthorizationUrl(url: unknown): SsoValidation<SsoAuthorizationRequest> {
+  const q = splitDeepLink(url, SSO_AUTHORIZE_SCHEME, SSO_AUTHORIZE_HOST);
+  if (!q) return { ok: false, errorCode: 'malformed_request', field: '<url>' };
+  const version = Number(q.v);
+  return validateSsoAuthorizationRequest({
+    protocolVersion: Number.isFinite(version) ? version : q.v,
+    audience: q.aud,
+    codeChallenge: q.cc,
+    codeChallengeMethod: q.ccm,
+    state: q.state,
+  });
+}
+
+/** Strictly parse the fixed WB-T callback route. */
+export function parseSsoCallbackUrl(url: unknown): SsoValidation<SsoCallback> {
+  const q = splitDeepLink(url, SSO_CALLBACK_SCHEME, SSO_CALLBACK_HOST);
+  if (!q) return { ok: false, errorCode: 'malformed_request', field: '<url>' };
+  const version = Number(q.v);
+  const base: Record<string, unknown> = {
+    protocolVersion: Number.isFinite(version) ? version : q.v,
+    status: q.status,
+  };
+  if (q.status === 'success') {
+    base.code = q.code;
+    base.state = q.state;
+  } else {
+    base.errorCode = q.err;
+    if (q.state !== undefined) base.state = q.state;
+  }
+  return validateSsoCallback(base);
+}
