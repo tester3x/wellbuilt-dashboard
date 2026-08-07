@@ -158,6 +158,81 @@ try {
   check('total setCustomUserClaims calls equal only the WB-S setup call',
     setCustomUserClaimsCalls === 1, String(setCustomUserClaimsCalls));
 
+
+  // ══ vc51.9K: manual-login audience parity and shared-user isolation ═════
+  // Everything above proved the SSO path. These prove the MANUAL path
+  // behaves identically and that the two apps cannot contaminate each
+  // other in either direction.
+
+  const globalClaims = { kind: 'driver', driverId: DRIVER_ID, companyId: COMPANY_ID };
+
+  // 7. A LATER WB-S mint must not strip WB-T's existing session claim.
+  //    This is the dangerous one: setCustomUserClaims rewrites the shared
+  //    user, and WB-T is holding a live refresh-token session.
+  const callsBeforeLaterWbs = setCustomUserClaimsCalls;
+  await adminAuth.setCustomUserClaims(UID, globalClaims);   // WB-S manual mint
+  const wbsLaterToken = await adminAuth.createCustomToken(UID, globalClaims);
+  await signInWithCustomToken(wbsAuth, wbsLaterToken);
+  const wbtAfterWbsMint = await wbtAuth.currentUser.getIdTokenResult(true);
+  check("a later WB-S mint does NOT strip app:'wbt' from WB-T's session",
+    wbtAfterWbsMint.claims.app === 'wbt', String(wbtAfterWbsMint.claims.app));
+  check('the later WB-S session still has no app claim',
+    (await wbsAuth.currentUser.getIdTokenResult(true)).claims.app === undefined);
+  check('the later WB-S mint used setCustomUserClaims exactly once',
+    setCustomUserClaimsCalls === callsBeforeLaterWbs + 1);
+
+  // 8. A later WB-T mint must not add the claim to WB-S.
+  const wbtLaterToken = await adminAuth.createCustomToken(UID, {
+    ...globalClaims, app: 'wbt',
+  });
+  await signInWithCustomToken(wbtAuth, wbtLaterToken);
+  check('a later WB-T mint does NOT add app to WB-S',
+    (await wbsAuth.currentUser.getIdTokenResult(true)).claims.app === undefined);
+  check("the later WB-T session carries app:'wbt'",
+    (await wbtAuth.currentUser.getIdTokenResult(true)).claims.app === 'wbt');
+
+  // 9. Concurrent mints must not cross-return tokens or claims.
+  const [concurrentWbs, concurrentWbt] = await Promise.all([
+    adminAuth.createCustomToken(UID, globalClaims),
+    adminAuth.createCustomToken(UID, { ...globalClaims, app: 'wbt' }),
+  ]);
+  check('concurrent mints return DIFFERENT tokens', concurrentWbs !== concurrentWbt);
+  const decode = (t) => JSON.parse(Buffer.from(t.split('.')[1], 'base64url').toString());
+  check('the concurrent WB-S token carries no app claim',
+    decode(concurrentWbs).claims?.app === undefined,
+    JSON.stringify(decode(concurrentWbs).claims));
+  check("the concurrent WB-T token carries app:'wbt'",
+    decode(concurrentWbt).claims?.app === 'wbt');
+  check('both concurrent tokens carry the same authoritative identity',
+    decode(concurrentWbs).claims?.driverId === decode(concurrentWbt).claims?.driverId);
+
+  // 10. Independent Auth instances: signing one out must not sign the
+  //     other out. This is what makes two apps on one UID workable.
+  await signInWithCustomToken(wbsAuth, concurrentWbs);
+  await signInWithCustomToken(wbtAuth, concurrentWbt);
+  check('both apps are signed in', !!wbsAuth.currentUser && !!wbtAuth.currentUser);
+  await signOut(wbsAuth);
+  check('signing WB-S out leaves WB-T signed in', wbtAuth.currentUser !== null);
+  check("WB-T still holds app:'wbt' after WB-S signed out",
+    (await wbtAuth.currentUser.getIdTokenResult(true)).claims.app === 'wbt');
+
+  // 11-12. The client-side gates, against real tokens.
+  //     WB-S reconciliation must reject a WB-T-scoped restored session,
+  //     and WB-T must reject an unscoped one.
+  const wbtClaims = (await wbtAuth.currentUser.getIdTokenResult()).claims;
+  check('11. a WB-T-scoped session is detectably foreign to WB-S',
+    typeof wbtClaims.app === 'string' && wbtClaims.app.length > 0);
+  await signInWithCustomToken(wbsAuth, concurrentWbs);
+  const unscoped = (await wbsAuth.currentUser.getIdTokenResult()).claims;
+  check('12. an unscoped manual token is detectably not WB-T-scoped',
+    unscoped.app === undefined);
+
+  // The shared user record must STILL be clean after all of that.
+  const finalRecord = await adminAuth.getUser(UID);
+  check('after every mint, the shared user record has no app claim',
+    finalRecord.customClaims?.app === undefined,
+    JSON.stringify(finalRecord.customClaims));
+
   // ── cleanup ─────────────────────────────────────────────────────────
   await signOut(wbtAuth).catch(() => {});
   await signOut(wbsAuth).catch(() => {});
