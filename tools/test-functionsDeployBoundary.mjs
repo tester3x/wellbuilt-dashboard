@@ -197,5 +197,109 @@ check('Dashboard root .npmrc still serves the registry consumer',
   rmSync(scratch, { recursive: true, force: true });
 }
 
+// ── 6. vc51.9I-SEC: credential-bearing deployment inventories cannot ship.
+// `firebase functions:list --json` / `gcloud functions list` embed each
+// function's environmentVariables verbatim. One such dump sat untracked
+// inside functions/ carrying live provider API keys, deployable because
+// firebase.json declared no ignore list. Prove all three layers, not just
+// .gitignore — git cannot stop an upload, and .gitignore is not consulted
+// by the Firebase packager at all.
+{
+  const INVENTORY_NAMES = [
+    '_phase1-deployed.json', '_phase2-deployed.json',
+    'prod-deployed.json', 'deployment-inventory.json', 'functions-list.json',
+  ];
+  const REQUIRED_IN_UPLOAD = [
+    'package.json', 'package-lock.json', 'tsconfig.json',
+    'src/index.ts', 'contracts-mirror/package.json',
+    'contracts-mirror/dist/index.js', 'contracts-mirror/dist/dvir/protocol.js',
+    'contracts-mirror/MIRROR-MANIFEST.json',
+  ];
+
+  // (a) The real file is gone.
+  check('the exposed deployment inventory is absent from the working tree',
+    !existsSync(join(FN, '_phase1-deployed.json')));
+
+  // (b) No inventory is tracked anywhere in the repo.
+  const trackedInv = execFileSync('git', ['-C', root, 'ls-files'], { encoding: 'utf8' })
+    .trim().split('\n')
+    .filter((f) => /(^|\/)(_.*|.*-deployed|.*deployment-inventory.*|functions-list.*)\.json$/.test(f));
+  check('no credential-bearing deployment inventory is tracked', trackedInv.length === 0, trackedInv.join(','));
+
+  // (c) Git layer — synthetic artifacts are ignored.
+  const gitIgnored = INVENTORY_NAMES.filter((n) => {
+    const p = join(FN, n);
+    writeFileSync(p, '{"synthetic":"not-a-real-inventory"}');
+    let ok = false;
+    try { execFileSync('git', ['-C', root, 'check-ignore', '-q', p], { stdio: 'pipe' }); ok = true; } catch { ok = false; }
+    rmSync(p, { force: true });
+    return ok;
+  });
+  check('git ignores every deployment-inventory shape',
+    gitIgnored.length === INVENTORY_NAMES.length,
+    `${gitIgnored.length}/${INVENTORY_NAMES.length}`);
+
+  // (d) Firebase packager layer. firebase.json ignore entries are resolved
+  // RELATIVE TO functions.source, so they are bare ("_*.json"), not
+  // "functions/_*.json". Setting `ignore` also REPLACES the CLI defaults,
+  // so the defaults must be restated or node_modules would start uploading.
+  const fb = JSON.parse(readFileSync(join(root, 'firebase.json'), 'utf8'));
+  const ignore = fb.functions?.ignore ?? [];
+  check('firebase.json declares a functions ignore list', ignore.length > 0);
+  check('firebase ignore patterns are source-relative (not prefixed with "functions/")',
+    ignore.every((p) => !p.startsWith('functions/')), ignore.filter((p) => p.startsWith('functions/')).join(','));
+  for (const d of ['node_modules', '.git', 'firebase-debug.log']) {
+    check(`firebase ignore restates CLI default "${d}" (ignore replaces defaults)`, ignore.includes(d));
+  }
+  const globToRe = (g) => new RegExp('^' + g.replace(/[.+^${}()|[\]\\]/g, '\\$&')
+    .replace(/\*/g, '[^/]*').replace(/\?/g, '.') + '$');
+  const fbExcluded = (rel) => ignore.some((g) => globToRe(g).test(rel) || rel.split('/')[0] === g);
+  check('firebase ignore excludes every deployment-inventory shape',
+    INVENTORY_NAMES.every(fbExcluded),
+    INVENTORY_NAMES.filter((n) => !fbExcluded(n)).join(','));
+  check('firebase ignore excludes credential-bearing config (.npmrc/.env/serviceAccountKey)',
+    ['.npmrc', '.env', 'serviceAccountKey.json'].every(fbExcluded));
+  check('firebase ignore keeps every required deployment input',
+    REQUIRED_IN_UPLOAD.every((f) => !fbExcluded(f)),
+    REQUIRED_IN_UPLOAD.filter(fbExcluded).join(','));
+  // lib/ is gitignored but IS the compiled entry point — it must upload.
+  check('firebase ignore does not exclude the compiled entry point (lib/)', !fbExcluded('lib/index.js'));
+
+  // (e) gcloud layer — an independent packaging path.
+  const gcPath = join(FN, '.gcloudignore');
+  check('functions/.gcloudignore exists (gcloud packages independently)', existsSync(gcPath));
+  if (existsSync(gcPath)) {
+    const gc = readFileSync(gcPath, 'utf8');
+    const lines = gc.split('\n').map((l) => l.trim()).filter((l) => l && !l.startsWith('#'));
+    const gcExcluded = (rel) => lines.some((g) => globToRe(g).test(rel) || rel.split('/')[0] === g);
+    check('.gcloudignore excludes every deployment-inventory shape',
+      INVENTORY_NAMES.every(gcExcluded),
+      INVENTORY_NAMES.filter((n) => !gcExcluded(n)).join(','));
+    check('.gcloudignore excludes credential-bearing config',
+      ['.npmrc', '.env', 'serviceAccountKey.json'].every(gcExcluded));
+    check('.gcloudignore keeps every required deployment input',
+      REQUIRED_IN_UPLOAD.every((f) => !gcExcluded(f)),
+      REQUIRED_IN_UPLOAD.filter(gcExcluded).join(','));
+    check('.gcloudignore does not exclude lib/ or the contracts mirror',
+      !gcExcluded('lib/index.js') && !gcExcluded('contracts-mirror/dist/index.js'));
+    // `#!include:.gitignore` would pull in .gitignore and drop lib/. It is a
+    // directive only at the start of a line, so match that shape rather than
+    // any mention — the file explains in prose why it avoids the directive.
+    check('.gcloudignore does not delegate to .gitignore',
+      !gc.split('\n').some((l) => l.trim().startsWith('#!include')));
+  }
+
+  // (f) Simulated source archive: nothing credential-bearing survives.
+  const archive = execFileSync('git', ['-C', root, 'ls-files', 'functions'], { encoding: 'utf8' })
+    .trim().split('\n')
+    .filter((f) => { const rel = f.replace(/^functions\//, ''); return !fbExcluded(rel); });
+  check('simulated deployment source set contains no inventory/credential file',
+    !archive.some((f) => /(-deployed|deployment-inventory|functions-list)\.json$|(^|\/)_[^/]*\.json$|(^|\/)\.npmrc$|(^|\/)\.env/.test(f)));
+  check('simulated deployment source set still contains the contracts mirror',
+    archive.some((f) => f.startsWith('functions/contracts-mirror/dist/')));
+  check('simulated deployment source set still contains Functions source',
+    archive.some((f) => f === 'functions/src/index.ts'));
+}
+
 console.log(`\n${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);

@@ -1,0 +1,45 @@
+# vc51.9I-SEC — gcloud packaging exclusions for the Functions boundary.
+#
+# The Firebase CLI packages this directory using firebase.json's
+# functions.ignore. `gcloud functions deploy` does NOT read that, and
+# when no .gcloudignore exists it synthesises one from .gitignore — which
+# would be wrong here in both directions: it would upload nothing that
+# .gitignore covers (including lib/, the compiled output this deployment
+# actually needs) while still being the wrong place to express secrets
+# policy. So this file is explicit, and deliberately does NOT use
+# `#!include:.gitignore`.
+#
+# Keep in sync with firebase.json → functions.ignore.
+
+.gcloudignore
+.git
+.gitignore
+
+# Dependencies are installed by the builder, not uploaded.
+node_modules
+
+# Local deployment inventories. `firebase functions:list --json` /
+# `gcloud functions list` embed each function's environmentVariables
+# verbatim, so these files carry live provider credentials. One such
+# dump (_phase1-deployed.json) is exactly why this file exists.
+_*.json
+*-deployed.json
+*deployment-inventory*.json
+functions-list*.json
+
+# Credential-bearing configuration must never enter the upload.
+.npmrc
+.env
+.env.*
+serviceAccountKey.json
+
+# Local logs.
+firebase-debug.log
+firebase-debug.*.log
+*.local
+
+# NOTE: lib/ is intentionally NOT ignored. It is gitignored but it is the
+# compiled entry point (package.json main = lib/index.js) and must ship.
+# NOTE: contracts-mirror/ is intentionally NOT ignored. It is the
+# credential-free A9B deployment mirror of the immutable contracts
+# package and must ship for a token-free `npm ci`.

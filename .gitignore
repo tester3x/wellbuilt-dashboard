@@ -47,6 +47,19 @@ yarn-error.log*
 functions/_*.js
 functions/_*.mjs
 functions/_*.ts
+# vc51.9I-SEC: `functions/_phase1-deployed.json` was a local
+# `firebase functions:list --json` dump. It carried the deployed
+# environmentVariables verbatim, which meant live provider API keys sat
+# untracked-but-committable inside the Functions deployment boundary. The
+# `functions/_*` convention already marked these local scratch artifacts,
+# but .json was missing from the family — close it, and name the
+# deployment-inventory shapes explicitly so a different filename cannot
+# reopen the hole.
+functions/_*.json
+functions/*-deployed.json
+functions/*deployment-inventory*.json
+functions/functions-list*.json
+_phase1-deployed.json
 functions/serviceAccountKey.json
 next-env.d.ts
 
