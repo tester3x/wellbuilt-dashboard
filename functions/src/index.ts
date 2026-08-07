@@ -2,9 +2,10 @@ import * as functionsV1 from 'firebase-functions/v1';
 import * as functionsV2 from 'firebase-functions/v2/scheduler';
 import * as httpsV2 from 'firebase-functions/v2/https';
 import * as admin from 'firebase-admin';
-import Anthropic from '@anthropic-ai/sdk';
 import { upsertCanonicalJob } from './canonical-jobs/upsertCanonicalJob';
 import { logCanonicalDiag } from './canonical-jobs/diag';
+import { ANTHROPIC_API_KEY, logRedacted, toSafeProviderError } from './secrets';
+import { createAnthropicClient } from './ai/anthropicClient';
 
 admin.initializeApp();
 admin.firestore().settings({ ignoreUndefinedProperties: true });
@@ -3720,7 +3721,11 @@ Rules:
 - Return ONLY the JSON object. No explanation, no markdown.`;
 
 export const parseJsaPdf = httpsV2.onCall(
-  { timeoutSeconds: 120, memory: '512MiB' },
+  // LEAST PRIVILEGE: this is the only Function that consumes an AI
+  // provider credential, so it is the only one that binds a secret. The
+  // previous deployment set ANTHROPIC_API_KEY and GEMINI_API_KEY as
+  // plaintext env vars on 51 Functions; 50 of them never read either.
+  { timeoutSeconds: 120, memory: '512MiB', secrets: [ANTHROPIC_API_KEY] },
   async (request) => {
     const { pdfBase64, fileName, companyId } = request.data as {
       pdfBase64?: string; fileName?: string; companyId?: string;
@@ -3743,12 +3748,10 @@ export const parseJsaPdf = httpsV2.onCall(
       // Non-fatal — continue with parsing even if storage save fails
     }
 
-    // Call Claude API
-    const apiKey = process.env.ANTHROPIC_API_KEY;
-    if (!apiKey) {
-      throw new httpsV2.HttpsError('failed-precondition', 'ANTHROPIC_API_KEY not set in functions/.env file');
-    }
-    const client = new Anthropic({ apiKey });
+    // Call Claude API. The key comes from Secret Manager and is read here,
+    // at invocation — never at module load, and with no process.env
+    // fallback (see functions/src/secrets.ts).
+    const client = createAnthropicClient();
 
     let responseText: string;
     try {
@@ -3767,14 +3770,20 @@ export const parseJsaPdf = httpsV2.onCall(
         }],
       });
 
-      const textBlock = message.content.find((b: any) => b.type === 'text');
-      if (!textBlock || textBlock.type !== 'text') {
+      const textBlock = message.content.find((b) => b.type === 'text');
+      // Check the field actually consumed, not just the discriminator —
+      // a 'text' block with no text would otherwise pass and assign
+      // undefined downstream.
+      if (!textBlock || typeof textBlock.text !== 'string') {
         throw new Error('No text response from Claude');
       }
       responseText = textBlock.text;
     } catch (err: any) {
-      console.error('[parseJsaPdf] Claude API error:', err.message);
-      throw new httpsV2.HttpsError('internal', 'AI analysis failed: ' + err.message);
+      // Do NOT forward the provider message to the client — an upstream
+      // 401/403 body can echo request context. Full detail goes to the
+      // server log with credential-shaped material redacted.
+      logRedacted('parseJsaPdf', err);
+      throw toSafeProviderError('AI analysis', err);
     }
 
     // Parse JSON response (strip markdown fences if present)
