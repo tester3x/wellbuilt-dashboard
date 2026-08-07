@@ -4324,3 +4324,4 @@ export {
 // historical implementation. They were absent from this branch, so a
 // whole-codebase deploy would have pruned them.
 export { validatePhotoCompliance, suggestPhotoCriteria } from './photoCompliance';
+export { scheduledWellCatalogRefresh, triggerWellCatalogRefresh } from './wellCatalogRefresh';
