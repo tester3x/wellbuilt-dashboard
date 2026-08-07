@@ -113,9 +113,12 @@ export interface PullPacket {
   currentLevelEst?: number; // inches - Current level estimate
   // Anomaly detection (based on VBA two-tier system)
   anomalyLevel?: number;    // 0 = normal, 1 = IT Review (2.5x), 2 = Anomaly (5x, excluded from AFR)
-  // Edit tracking
+  // Edit tracking (canonical + legacy)
   editedAt?: string;        // ISO string - when the edit was made
-  editedBy?: string;        // who made the edit (e.g. 'dashboard')
+  editedBy?: string;        // source/provenance (wbm | dashboard | legacy | unknown)
+  editCount?: number;       // successfully applied post-submission edits
+  originalSubmittedAt?: string;
+  isEdit?: boolean;         // legacy dual-row marker
   // No-level flag (non-production-tank pull — fresh water, service work, etc.)
   noLevel?: boolean;
   jobType?: string;          // Commodity type from WB T (e.g. "Production Water")
@@ -779,6 +782,9 @@ export async function fetchWellHistoryUnified(wellName: string, limit: number = 
         flowRateDays: data.flowRateDays,
         editedAt: data.editedAt,
         editedBy: data.editedBy,
+        editCount: typeof data.editCount === 'number' ? data.editCount : undefined,
+        originalSubmittedAt: data.originalSubmittedAt,
+        isEdit: data.isEdit === true,
         noLevel: data.noLevel || false,
         jobType: data.jobType,
         wellDown: data.wellDown || false,
@@ -1187,6 +1193,46 @@ export async function editPull(
 
   const editRef = ref(db, `packets/incoming/${editPacketId}`);
   await set(editRef, editPacket);
+}
+
+/** Immutable correction trail for a processed packet (packets/editHistory/{id}). */
+export async function fetchEditHistory(
+  packetId: string,
+): Promise<
+  Array<{
+    eventId: string;
+    sequence: number;
+    editedAt: string;
+    source: string;
+    fields: Array<{ field: string; previous: unknown; next: unknown }>;
+    resolutionPath?: string;
+  }>
+> {
+  if (!packetId) return [];
+  const db = getFirebaseDatabase();
+  const snap = await get(ref(db, `packets/editHistory/${packetId}`));
+  if (!snap.exists()) return [];
+  const rows: Array<{
+    eventId: string;
+    sequence: number;
+    editedAt: string;
+    source: string;
+    fields: Array<{ field: string; previous: unknown; next: unknown }>;
+    resolutionPath?: string;
+  }> = [];
+  snap.forEach((child) => {
+    const v = child.val() || {};
+    rows.push({
+      eventId: child.key || v.eventId || '',
+      sequence: typeof v.sequence === 'number' ? v.sequence : 0,
+      editedAt: v.editedAt || '',
+      source: v.source || 'unknown',
+      fields: Array.isArray(v.fields) ? v.fields : [],
+      resolutionPath: v.resolutionPath,
+    });
+  });
+  rows.sort((a, b) => a.sequence - b.sequence || a.editedAt.localeCompare(b.editedAt));
+  return rows;
 }
 
 // Format inches to feet'inches" display

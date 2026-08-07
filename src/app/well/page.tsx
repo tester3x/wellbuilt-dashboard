@@ -11,10 +11,17 @@ import {
   WellResponse,
   WellNavItem,
   fetchWellHistoryUnified,
+  fetchEditHistory,
   deletePull,
   editPull,
   subscribeToWellNavList,
 } from '@/lib/wells';
+import {
+  packetShowsEditBadge,
+  formatEditSourceLabel,
+  formatFieldLabel,
+  formatChangeValue,
+} from '@/lib/editMarkers';
 import { getDatabase, ref, onValue, get } from 'firebase/database';
 import { getFirebaseApp } from '@/lib/firebase';
 import Link from 'next/link';
@@ -94,6 +101,37 @@ function WellDetailPage() {
   const [editDateTime, setEditDateTime] = useState('');
   const [editWellDown, setEditWellDown] = useState(false);
   const [editSubmitting, setEditSubmitting] = useState(false);
+
+  // Correction trail (badge expand) — packets/editHistory/{packetId}
+  const [trailOpenId, setTrailOpenId] = useState<string | null>(null);
+  const [trailLoading, setTrailLoading] = useState(false);
+  const [trailEvents, setTrailEvents] = useState<
+    Array<{
+      eventId: string;
+      sequence: number;
+      editedAt: string;
+      source: string;
+      fields: Array<{ field: string; previous: unknown; next: unknown }>;
+    }>
+  >([]);
+
+  const toggleEditTrail = async (packetId: string) => {
+    if (trailOpenId === packetId) {
+      setTrailOpenId(null);
+      setTrailEvents([]);
+      return;
+    }
+    setTrailOpenId(packetId);
+    setTrailLoading(true);
+    try {
+      const events = await fetchEditHistory(packetId);
+      setTrailEvents(events);
+    } catch {
+      setTrailEvents([]);
+    } finally {
+      setTrailLoading(false);
+    }
+  };
 
   // Delete confirmation state
   const [deletingPull, setDeletingPull] = useState<PullPacket | null>(null);
@@ -692,10 +730,45 @@ function WellDetailPage() {
                             {pull.jobType || 'No Level'}
                           </span>
                         )}
-                        {pull.editedAt && (
-                          <span className="ml-2 px-1.5 py-0.5 bg-orange-600/70 text-orange-100 text-xs rounded" title={`Edited ${pull.editedAt} by ${pull.editedBy || 'unknown'}`}>
-                            Edited
-                          </span>
+                        {packetShowsEditBadge(pull) && (
+                          <button
+                            type="button"
+                            className="ml-2 px-1.5 py-0.5 bg-orange-600/70 text-orange-100 text-xs rounded hover:bg-orange-500/80"
+                            title={`Edited ${pull.editedAt || ''} by ${formatEditSourceLabel(pull.editedBy)} — click for correction trail`}
+                            onClick={() => pull.packetId && toggleEditTrail(pull.packetId)}
+                          >
+                            Edited{typeof pull.editCount === 'number' && pull.editCount > 1 ? ` ×${pull.editCount}` : ''}
+                          </button>
+                        )}
+                        {trailOpenId === pull.packetId && (
+                          <div className="mt-2 ml-0 text-xs text-left bg-gray-900/80 border border-orange-700/40 rounded p-2 max-w-md">
+                            <div className="text-orange-200 font-medium mb-1">Correction history</div>
+                            {trailLoading && <div className="text-gray-400">Loading…</div>}
+                            {!trailLoading && trailEvents.length === 0 && (
+                              <div className="text-gray-400">
+                                {pull.editedAt
+                                  ? `Recorded edit at ${pull.editedAt} (${formatEditSourceLabel(pull.editedBy)}). Detailed field trail available for edits after the audit system was enabled.`
+                                  : 'No correction events on file.'}
+                              </div>
+                            )}
+                            {!trailLoading &&
+                              trailEvents.map((ev) => (
+                                <div key={ev.eventId} className="mb-2 last:mb-0 border-t border-gray-700/60 pt-1">
+                                  <div className="text-gray-300">
+                                    #{ev.sequence} · {ev.editedAt ? new Date(ev.editedAt).toLocaleString() : '—'} ·{' '}
+                                    {formatEditSourceLabel(ev.source)}
+                                  </div>
+                                  {(ev.fields || []).map((f, i) => (
+                                    <div key={i} className="text-gray-400 pl-2">
+                                      {formatFieldLabel(f.field)}:{' '}
+                                      <span className="text-red-300/90">{formatChangeValue(f.previous as any)}</span>
+                                      {' → '}
+                                      <span className="text-green-300/90">{formatChangeValue(f.next as any)}</span>
+                                    </div>
+                                  ))}
+                                </div>
+                              ))}
+                          </div>
                         )}
                       </td>
                       {/* Calculated - Historical data (all blank for noLevel) */}
