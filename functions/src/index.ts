@@ -4308,6 +4308,11 @@ export {
   getPublicClientMeta,
 } from './security';
 
+// ── vc51.9J: WB-S -> WB-T SSO authorization-code bridge ────────────────────
+// Issuance requires callable Auth; exchange deliberately does not, because
+// it runs before WB-T has any session. See sso/ssoCallables.ts.
+export { ssoIssueAuthorizationCode, ssoExchangeAuthorizationCode } from './sso/ssoCallables';
+
 // ── vc51.9A6-B: protected platform-admin callables ─────────────────────────
 // Dual-gated (verified wellbuiltAdmin claim + enabled platform_admins
 // record) via functions/src/admin/authority.ts. See admin/callables.ts.

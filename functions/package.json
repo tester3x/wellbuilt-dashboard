@@ -9,7 +9,7 @@
     "start": "npm run shell",
     "deploy": "firebase deploy --only functions",
     "logs": "firebase functions:log",
-    "test:sso": "npm run build && node tools/mirror-sso-protocol.mjs --verify && node tools/test-ssoBridge.mjs"
+    "test:sso": "npm run build && node tools/mirror-sso-protocol.mjs --verify && node tools/test-ssoBridge.mjs && node tools/test-ssoCallables.mjs"
   },
   "engines": {
     "node": "20"
