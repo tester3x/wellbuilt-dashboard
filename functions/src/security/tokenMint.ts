@@ -27,6 +27,39 @@ export function driverAuthEmail(driverId: string): string {
   return `drv_${id.slice(0, 28)}@drivers.wellbuilt-sync.local`;
 }
 
+/**
+ * Claims persisted on the SHARED Firebase user via setCustomUserClaims.
+ *
+ * WB-S, WB-T, WB-M, WB-JSA and eQuipment are one project with one Auth
+ * UID per driver, so everything here applies to EVERY app's session at
+ * once. Only authoritative identity belongs in this object.
+ *
+ * driverChangeOwnPasscode spreads the existing global claims when it
+ * clears mustChangePasscode, so anything written here also propagates
+ * forward indefinitely — another reason it must stay identity-only.
+ */
+export interface GlobalDriverClaims {
+  kind: 'driver';
+  driverId: string;
+  companyId: string | null;
+  roles: string[];
+  mustChangePasscode?: boolean;
+}
+
+/**
+ * Claims carried by ONE custom token via createCustomToken's developer
+ * claims. Per-session: they ride in the token, expire with it, and never
+ * touch the shared user record.
+ *
+ * Deliberately a DIFFERENT type from GlobalDriverClaims so the two cannot
+ * be passed to the wrong sink by accident — that mistake would write a
+ * per-app marker onto every app's session.
+ */
+export interface SessionDriverClaims {
+  /** Session audience, e.g. 'wbt'. Absent for unscoped sessions. */
+  app?: string;
+}
+
 export interface MintedDriverTokens {
   customToken?: string;
   idToken?: string;
@@ -73,14 +106,30 @@ export async function invalidateSyntheticPassword(authUid: string): Promise<void
   }
 }
 
+/**
+ * Mint a driver session.
+ *
+ * `global` is persisted on the shared user. `session` is added to THIS
+ * token only. The two sinks are kept visibly apart: setCustomUserClaims
+ * receives global alone, createCustomToken receives the merge.
+ *
+ * An empty `session` produces exactly the previous behavior, so every
+ * caller that does not pass one is unaffected.
+ */
 export async function mintDriverSessionTokens(
   authUid: string,
-  claims: Record<string, unknown>,
+  global: GlobalDriverClaims,
+  session: SessionDriverClaims = {},
 ): Promise<MintedDriverTokens> {
-  await admin.auth().setCustomUserClaims(authUid, claims);
+  // GLOBAL SINK — shared by every app. Session claims must never reach it.
+  await admin.auth().setCustomUserClaims(authUid, { ...global });
 
   try {
-    const customToken = await admin.auth().createCustomToken(authUid, claims);
+    // PER-SESSION SINK — this token only.
+    const customToken = await admin.auth().createCustomToken(authUid, {
+      ...global,
+      ...session,
+    });
     return { customToken, authUid, mintMethod: 'custom_token' };
   } catch (err: any) {
     const msg = String(err?.message || err || '');

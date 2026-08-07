@@ -19,6 +19,12 @@ import {
 import { checkRateLimit, hashIp } from './rateLimit';
 import { writeSecurityAudit } from './audit';
 import { requireManageDrivers } from './adminAuth';
+import {
+  readSessionAudience,
+  containsClientClaimMaterial,
+  sessionClaimsForAudience,
+} from './sessionAudience.generated';
+import type { GlobalDriverClaims, SessionDriverClaims } from './tokenMint';
 
 const rtdb = () => admin.database();
 const fs = () => admin.firestore();
@@ -178,6 +184,19 @@ export const checkDriverRegistrationStatus = httpsV2.onCall(
 export const authenticateDriver = httpsV2.onCall(
   { timeoutSeconds: 30, memory: '256MiB', enforceAppCheck: false },
   async (request) => {
+    // vc51.9K: optional session audience. Read BEFORE any credential
+    // work so a hostile request fails without touching the passcode path.
+    if (containsClientClaimMaterial(request.data)) {
+      throw new httpsV2.HttpsError(
+        'invalid-argument',
+        'Request may not contain claim material',
+      );
+    }
+    const audience = readSessionAudience(request.data);
+    if (audience.kind === 'rejected') {
+      throw new httpsV2.HttpsError('invalid-argument', 'Unsupported session audience');
+    }
+
     assertAppCheck(request);
     const meta = clientMeta(request);
     const displayName = String((request.data as any)?.displayName || '').trim();
@@ -243,15 +262,22 @@ export const authenticateDriver = httpsV2.onCall(
       profile.displayName || displayName,
     );
 
-    const roles = Array.isArray(profile.roles) ? profile.roles : ['driver'];
-    const claims = {
+    const roles: string[] = Array.isArray(profile.roles) ? profile.roles : ['driver'];
+
+    // GLOBAL: authoritative identity, shared by every app on this UID.
+    const globalClaims: GlobalDriverClaims = {
       kind: 'driver',
       driverId,
       companyId: profile.companyId || null,
       roles,
       mustChangePasscode,
     };
-    const minted = await mintDriverSessionTokens(authUid, claims);
+
+    // PER-SESSION: the requested audience, this token only. Absent
+    // audience yields {} and therefore exactly the previous behavior.
+    const sessionClaims: SessionDriverClaims = sessionClaimsForAudience(audience);
+
+    const minted = await mintDriverSessionTokens(authUid, globalClaims, sessionClaims);
 
     await writeSecurityAudit({
       action: mustChangePasscode ? 'authenticateDriver_must_change' : 'authenticateDriver_ok',
@@ -860,7 +886,10 @@ export const registerStandaloneDriver = httpsV2.onCall(
     // Issue token immediately (custom token or password-exchange fallback)
     const { ensureDriverAuthUser, mintDriverSessionTokens } = await import('./tokenMint');
     const authUid = await ensureDriverAuthUser(driverId, fields.displayName);
-    const claims = { kind: 'driver', driverId, companyId: null, roles: ['driver'] };
+    const claims: GlobalDriverClaims = {
+      kind: 'driver', driverId, companyId: null, roles: ['driver'],
+    };
+    // No audience on the registration path — it has no requesting app yet.
     const minted = await mintDriverSessionTokens(authUid, claims);
 
     return {
