@@ -4,7 +4,7 @@
     ".write": true,
     "packets": {
       "processed": {
-        ".indexOn": ["driverId", "driverName", "wellName"]
+        ".indexOn": ["driverId", "driverName", "wellName", "invoiceDocId"]
       }
     }
   }

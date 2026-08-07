@@ -6,6 +6,21 @@ import { upsertCanonicalJob } from './canonical-jobs/upsertCanonicalJob';
 import { logCanonicalDiag } from './canonical-jobs/diag';
 import { ANTHROPIC_API_KEY, logRedacted, toSafeProviderError } from './secrets';
 import { createAnthropicClient } from './ai/anthropicClient';
+import {
+  ambiguousEditVerdict,
+  comparePullEquivalence,
+  editAlreadyApplied,
+  editMaterialChange,
+  evaluateIncomingPull,
+  isStaleRevision,
+  orphanEditVerdict,
+  packetIdCollisionVerdict,
+  quarantineIncomingPacket,
+  removeIncomingPacket,
+  resolveEditTarget,
+  strandedPacketVerdict,
+} from './packetGuards';
+
 
 admin.initializeApp();
 admin.firestore().settings({ ignoreUndefinedProperties: true });
@@ -45,6 +60,7 @@ export const watchdogStrandedPackets = functionsV2.onSchedule('every 5 minutes',
 
   // Group by unique timestamp+well to detect duplicates
   const uniquePackets: Record<string, { key: string; data: any; arrivedAt: number }> = {};
+  const arrivedAtByKey: Record<string, number> = {};
 
   for (const key of keys) {
     const data = packets[key];
@@ -56,6 +72,7 @@ export const watchdogStrandedPackets = functionsV2.onSchedule('every 5 minutes',
     if (match) {
       arrivedAt = new Date(`${match[1]}-${match[2]}-${match[3]}T${match[4]}:${match[5]}:${match[6]}Z`).getTime();
     }
+    arrivedAtByKey[key] = arrivedAt;
 
     // Keep only first occurrence of each unique packet
     if (!uniquePackets[groupKey] || arrivedAt < uniquePackets[groupKey].arrivedAt) {
@@ -63,16 +80,27 @@ export const watchdogStrandedPackets = functionsV2.onSchedule('every 5 minutes',
     }
   }
 
-  // Delete all duplicates and re-trigger unique ones that are old enough
+  // Quarantine duplicates and re-trigger unique ones that are old enough
   const allKeys = new Set(keys);
   const keepKeys = new Set(Object.values(uniquePackets).map(p => p.key));
   const duplicateKeys = [...allKeys].filter(k => !keepKeys.has(k));
 
-  // Delete duplicates
+  // GS3 follow-up: "duplicates" are grouped only by dateTimeUTC+well and can
+  // be DISTINCT legitimate submissions (the real 8:32 PM twins differed in
+  // BBLs but shared the group key). Never delete them — quarantine
+  // losslessly; a failed quarantine leaves the packet in incoming.
   if (duplicateKeys.length > 0) {
-    console.log(`[Watchdog] Deleting ${duplicateKeys.length} duplicate packets`);
+    console.log(`[Watchdog] Quarantining ${duplicateKeys.length} duplicate-grouped packets`);
     for (const key of duplicateKeys) {
-      await db.ref(`packets/incoming/${key}`).remove();
+      await quarantineIncomingPacket(db.ref(), {
+        packetId: key,
+        packet: packets[key],
+        verdict: strandedPacketVerdict({
+          ageMs: now - arrivedAtByKey[key],
+          context: `duplicate-grouped incoming packet (same dateTimeUTC+well as retained key); may be a distinct legitimate submission`,
+        }),
+        nowMs: now,
+      });
     }
   }
 
@@ -97,10 +125,20 @@ export const watchdogStrandedPackets = functionsV2.onSchedule('every 5 minutes',
     const { key, data } = packet;
 
     // Skip edit and delete packets — they are handled by their own Cloud Functions
-    // and should never be retriggered by the watchdog (causes ghost duplicate entries)
+    // and should never be retriggered by the watchdog (causes ghost duplicate entries).
+    // GS3 7/22/2026: this exact remove() destroyed a stranded driver edit —
+    // quarantine instead so the evidence survives for review.
     if (data.requestType === 'edit' || data.requestType === 'delete') {
-      console.log(`[Watchdog] ${data.wellName}: skipping ${data.requestType} packet (${key}), removing`);
-      await db.ref(`packets/incoming/${key}`).remove();
+      console.log(`[Watchdog] ${data.wellName}: skipping ${data.requestType} packet (${key}), quarantining`);
+      await quarantineIncomingPacket(db.ref(), {
+        packetId: key,
+        packet: data,
+        verdict: strandedPacketVerdict({
+          ageMs: now - packet.arrivedAt,
+          context: `stranded ${data.requestType} packet — handled by its own function and never watchdog-retriggered; its handler did not consume it`,
+        }),
+        nowMs: now,
+      });
       alreadyProcessedCount++;
       continue;
     }
@@ -132,9 +170,6 @@ export const watchdogStrandedPackets = functionsV2.onSchedule('every 5 minutes',
       }
     }
 
-    // Delete old entry
-    await db.ref(`packets/incoming/${key}`).remove();
-
     // Generate new key with current timestamp
     // Use YYYYMMDD_HHMMSS format (with underscore between date and time)
     // to match normal packet key format. Without the underscore, these keys
@@ -147,14 +182,20 @@ export const watchdogStrandedPackets = functionsV2.onSchedule('every 5 minutes',
     const rand = Math.random().toString(36).substr(2, 6);
     const newKey = `${datePart}_${timePart}_${cleanName}_${rand}`;
 
-    // Write with new key to trigger onCreate
+    // Re-key to trigger onCreate
     data.packetId = newKey;
     data.requestType = data.requestType || 'pull';
     data._retriggeredBy = 'watchdog';
     data._retriggeredAt = new Date().toISOString();
     data._originalKey = key; // Track original key for debugging
 
-    await db.ref(`packets/incoming/${newKey}`).set(data);
+    // GS3 follow-up: remove-old + write-new as ONE atomic multi-location
+    // update — the old delete-then-set left a crash window where the packet
+    // vanished entirely. Both writes commit or neither does.
+    await db.ref().update({
+      [`packets/incoming/${key}`]: null,
+      [`packets/incoming/${newKey}`]: data,
+    });
     console.log(`[Watchdog] Retriggered: ${data.wellName} (${key} -> ${newKey})`);
     retriggeredCount++;
 
@@ -247,6 +288,7 @@ const DEFAULTS = {
   bottomLevel: 3, // feet
   tanks: 1,
   pullBbls: 140,
+  loadLine: 0, // feet — universal anti-negative display floor; per-well override via well_config.loadLine
 };
 
 interface PullPacket {
@@ -870,24 +912,64 @@ export const processIncomingPull = functionsV1.database
       prevResponse = prev;
     });
 
-    // FIX: Stale/duplicate detection — prevents watchdog re-triggers from
-    // overwriting edits. If the outgoing already has data for this pull
-    // (same or newer timestamp), skip processing.
-    if (prevResponse) {
-      const incomingTimeMs = new Date(data.dateTimeUTC).getTime();
-      const outgoingTimeMs = new Date(prevResponse.lastPullDateTimeUTC).getTime();
-
-      if (!isNaN(incomingTimeMs) && !isNaN(outgoingTimeMs) && incomingTimeMs <= outgoingTimeMs) {
-        // This pull is the same age or older than what's in the outgoing.
-        // Could be: watchdog re-trigger, duplicate upload, or a pull that was
-        // already processed and the outgoing was subsequently edited.
-        console.log(`[STALE] ${wellName}: incoming (${data.dateTimeUTC}) not newer than outgoing (${prevResponse.lastPullDateTimeUTC}), skipping`);
-        if (prevResponse.isEdit) {
-          console.log(`[STALE] ${wellName}: outgoing has isEdit=true — this re-trigger would have overwritten the edit!`);
-        }
-        await snapshot.ref.remove();
+        // ─── Exact-ID idempotency — BEFORE every future/stale guard ─────────
+    // WB-M retries with STABLE ids: a replay of an id already in
+    // packets/processed is an idempotent retry of a successful operation,
+    // not stale data. Never re-process/enrich, never quarantine it.
+    const alreadyProcessedSnap = await db.ref(`packets/processed/${packetId}`).once('value');
+    if (alreadyProcessedSnap.exists()) {
+      const alreadyProcessed = alreadyProcessedSnap.val();
+      const equivalence = comparePullEquivalence(data as any, alreadyProcessed);
+      if (equivalence.equivalent) {
+        console.log(`[IDEMPOTENT_REPLAY_ALREADY_PROCESSED] ${wellName}: ${packetId} — duplicate incoming removed; processed record stands`);
+        // The positive outcome WB-M reconciles against IS the existing
+        // packets/processed/<id> record (its reconciler reads that path
+        // directly). Deliberately NOT rewriting packets/outgoing here:
+        // outgoing carries the well's LATEST pull, and recreating a
+        // response for an older replayed id would regress
+        // lastPullDateTimeUTC and re-arm the stale guard against newer
+        // pulls — the exact GS3 failure shape.
+        await removeIncomingPacket(db.ref(), packetId);
         return null;
       }
+      console.log(`[QUARANTINE] ${wellName}: PACKET_ID_COLLISION — ${equivalence.differences.join('; ')}`);
+      await quarantineIncomingPacket(db.ref(), {
+        packetId,
+        packet: data,
+        verdict: packetIdCollisionVerdict(equivalence.differences),
+        nowMs: Date.now(),
+      });
+      return null;
+    }
+
+    // ─── GS3 7/21/2026 guards: future-time + lossless quarantine ────────
+    // A pull entered as 11:07 PM instead of 11:07 AM became this well's
+    // outgoing watermark; five legitimate packets then compared "stale"
+    // against the poisoned value and were irrecoverably deleted here.
+    // Replaces the old [STALE] `snapshot.ref.remove()`: every rejection —
+    // future incoming time, future-poisoned watermark, or genuine staleness
+    // — now lands in packets/rejected via ONE atomic update, BEFORE any
+    // well state (isDown, outgoing, processed, performance, production,
+    // wellStatus, enrichment) is touched. A failed quarantine write leaves
+    // the incoming packet intact for retry. See packetGuards.ts.
+    const guardVerdict = evaluateIncomingPull({
+      incomingDateTimeUTC: data.dateTimeUTC,
+      hasOutgoingResponse: prevResponse !== null,
+      watermarkDateTimeUTC: prevResponse ? prevResponse.lastPullDateTimeUTC : undefined,
+      nowMs: Date.now(),
+    });
+    if (guardVerdict.action === 'quarantine') {
+      console.log(`[QUARANTINE] ${wellName}: ${guardVerdict.reason} — ${guardVerdict.readableReason}`);
+      if (guardVerdict.reason === 'STALE_PULL_TIME' && prevResponse.isEdit) {
+        console.log(`[QUARANTINE] ${wellName}: outgoing has isEdit=true — processing would have overwritten the edit`);
+      }
+      await quarantineIncomingPacket(db.ref(), {
+        packetId,
+        packet: data,
+        verdict: guardVerdict,
+        nowMs: Date.now(),
+      });
+      return null;
     }
 
     // ─── wellDown authoritative-write protection (5/8/2026) ─────────────
@@ -1432,25 +1514,151 @@ export const processEditRequest = functionsV1.database
     }
 
     // WB M sends the original packet ID as "packetId", dashboard sends as "originalPacketId"
-    const originalPacketId = data.originalPacketId || data.packetId;
+    const requestedPacketId = data.originalPacketId || data.packetId;
     const wellName = data.wellName;
 
-    if (!originalPacketId) {
+    if (!requestedPacketId) {
+      // GS3 follow-up: never silently destroy an edit — quarantine it.
       console.error(`Edit failed: no originalPacketId or packetId on edit packet`);
-      await snapshot.ref.remove();
+      await quarantineIncomingPacket(db.ref(), {
+        packetId: context.params.packetId,
+        packet: data,
+        verdict: orphanEditVerdict(null),
+        nowMs: Date.now(),
+      });
       return null;
     }
 
-    console.log(`Processing edit for ${wellName}: ${originalPacketId}`);
+    console.log(`Processing edit for ${wellName}: ${requestedPacketId}`);
 
-    // Read the original processed packet
-    const origSnap = await db.ref(`packets/processed/${originalPacketId}`).once('value');
-    if (!origSnap.exists()) {
-      console.error(`Edit failed: packet ${originalPacketId} not found in processed/`);
-      await snapshot.ref.remove();
+    // ── 7/25 exact invoice-identity resolution (ticket 19852) ─────────────
+    // The requested id may be a client-persisted stale-rejected twin while
+    // the REAL processed pull carries the same immutable invoiceDocId.
+    // Resolution: exact id → use it (unchanged); missing + exactly one
+    // invoiceDocId candidate → use the processed pull (ITS id stays
+    // canonical everywhere below — the phantom is never stamped); zero →
+    // the existing orphan quarantine; multiple → explicit ambiguity
+    // quarantine. Never resolved by timestamp/well/driver/quantity.
+    const resolution = await resolveEditTarget(
+      {
+        readProcessed: async (pid) => {
+          const s = await db.ref(`packets/processed/${pid}`).once('value');
+          return s.exists() ? (s.val() as Record<string, unknown>) : null;
+        },
+        queryProcessedByInvoiceDocId: async (inv) => {
+          const s = await db
+            .ref('packets/processed')
+            .orderByChild('invoiceDocId')
+            .equalTo(inv)
+            .once('value');
+          const rows: Array<{ key: string; val: Record<string, unknown> }> = [];
+          s.forEach((child) => {
+            rows.push({ key: String(child.key), val: child.val() as Record<string, unknown> });
+          });
+          return rows;
+        },
+      },
+      requestedPacketId,
+      (data as { invoiceDocId?: unknown }).invoiceDocId,
+    );
+
+    if (resolution.kind === 'not_found') {
+      // GS3 7/22/2026: five driver edits targeting stale-deleted originals
+      // were silently removed here. Quarantine instead — the edit's values
+      // are the driver's ground truth and may be the only surviving copy.
+      console.error(`Edit failed: packet ${requestedPacketId} not found in processed/`);
+      await quarantineIncomingPacket(db.ref(), {
+        packetId: context.params.packetId,
+        packet: data,
+        verdict: orphanEditVerdict(requestedPacketId),
+        nowMs: Date.now(),
+      });
       return null;
     }
-    const origPacket = origSnap.val();
+    if (resolution.kind === 'ambiguous') {
+      console.error(
+        `Edit failed: ${requestedPacketId} missing and invoiceDocId matches ${resolution.candidateIds.length} pulls — ambiguous`,
+      );
+      await quarantineIncomingPacket(db.ref(), {
+        packetId: context.params.packetId,
+        packet: data,
+        verdict: ambiguousEditVerdict(
+          requestedPacketId,
+          (data as { invoiceDocId?: unknown }).invoiceDocId,
+          resolution.candidateIds,
+        ),
+        nowMs: Date.now(),
+      });
+      return null;
+    }
+
+    // From here on, `originalPacketId` is the CANONICAL processed pull id —
+    // every downstream write, back-patch, and linkage stamp uses it. On a
+    // fallback the requested phantom id appears only in audit fields.
+    const originalPacketId = resolution.packetId;
+    const editResolvedViaFallback = resolution.kind === 'fallback';
+    if (editResolvedViaFallback) {
+      console.log(
+        `[EDIT_FALLBACK_RESOLVED] ${wellName}: requested ${requestedPacketId} missing — ` +
+          `resolved by exact invoiceDocId to processed ${originalPacketId}`,
+      );
+    }
+    const origPacket = resolution.packet as Record<string, any>;
+    // Audit indication persisted with the edit application (both update paths).
+    const fallbackAuditFields = editResolvedViaFallback
+      ? {
+          editResolvedVia: 'invoiceDocId_fallback',
+          editRequestedPacketId: requestedPacketId,
+        }
+      : {};
+
+    // Exact duplicate edit replay: PROVABLY already applied only when the
+    // original carries an edit marker AND its values already equal this
+    // edit's requested values — then re-applying would only re-run
+    // enrichment for nothing. Provable → remove the duplicate incoming
+    // copy atomically and stop. Unprovable (null) → proceed normally;
+    // the schema keeps no per-edit operation log to check against.
+    const editDup = editAlreadyApplied(data, origPacket);
+    if (editDup === true) {
+      console.log(`[IDEMPOTENT_REPLAY_ALREADY_PROCESSED] ${wellName}: edit ${context.params.packetId} already applied to ${originalPacketId} — duplicate incoming removed`);
+      await removeIncomingPacket(db.ref(), context.params.packetId);
+      return null;
+    }
+
+    // ── 7/25 revision ordering (optional metadata, backward compatible) ──
+    // An edit carrying revisionAt older than the pull's lastRevisionAt is a
+    // late straggler: acknowledge (consume) and drop — never revert newer
+    // business state. Clients without revisionAt keep last-write-wins.
+    if (isStaleRevision(data, origPacket)) {
+      console.log(
+        `[EDIT_STALE_REVISION] ${wellName}: edit ${context.params.packetId} ` +
+          `(revisionAt ${data.revisionAt}) older than applied ${origPacket.lastRevisionAt} — acknowledged, not applied`,
+      );
+      await removeIncomingPacket(db.ref(), context.params.packetId);
+      return null;
+    }
+
+    // ── 7/25 normalized no-op: identical milestone revisions ─────────────
+    // WB-T sends the complete canonical state on every Depart / Close /
+    // Split / History save. When no MATERIAL field differs (top, BBLs,
+    // well identity, operational instant, asserted wellDown), the revision
+    // acknowledges successfully by consuming the incoming packet — the
+    // pull is not rewritten, tank-after / flow / AFR are not recomputed,
+    // and the original operational timestamps are untouched. Transport and
+    // audit fields can never create a false material change
+    // (editMaterialChange inspects material fields only).
+    const material = editMaterialChange(data, origPacket);
+    if (!material.changed) {
+      console.log(
+        `[EDIT_NOOP_IDENTICAL] ${wellName}: edit ${context.params.packetId} matches ` +
+          `processed ${originalPacketId} on all material fields — acknowledged without reapply`,
+      );
+      await removeIncomingPacket(db.ref(), context.params.packetId);
+      return null;
+    }
+    console.log(
+      `[EDIT_MATERIAL_CHANGE] ${wellName}: ${originalPacketId} fields changed: ${material.fields.join(', ')}`,
+    );
 
     // Get well config
     const cleanName = wellName.replace(/\s/g, '');
@@ -1460,8 +1668,11 @@ export const processEditRequest = functionsV1.database
     }
     const config = configSnap.val() || {};
     const tanks = config.tanks || config.numTanks || DEFAULTS.tanks;
+    // Effective bbl/ft (override / derived); legacy 20×tanks fallback only.
+    const bblPerFoot = Number(config.bblPerFoot) > 0 ? Number(config.bblPerFoot) : 20 * tanks;
     const pullBbls = config.pullBbls || DEFAULTS.pullBbls;
     const bottomInches = (config.bottomLevel || config.allowedBottom || DEFAULTS.bottomLevel) * 12;
+    const loadLineInches = (config.loadLine ?? DEFAULTS.loadLine) * 12; // load-line floor (feet→inches)
 
     // Apply edits — accept from dashboard (tankTopInches) or WB M (tankLevelFeet)
     let newTankTopInches = origPacket.tankTopInches;
@@ -1513,6 +1724,8 @@ export const processEditRequest = functionsV1.database
         editedBy: data.source || 'dashboard',
         noLevel: true,
         wellDown: newWellDown,
+        ...fallbackAuditFields,
+        ...(typeof data.revisionAt === 'string' && data.revisionAt ? { lastRevisionAt: data.revisionAt } : {}),
       });
       await db.ref(`wells/${wellName}/status/isDown`).set(nextEditIsDown);
       await snapshot.ref.remove();
@@ -1520,8 +1733,12 @@ export const processEditRequest = functionsV1.database
     }
 
     // Recalculate tankAfter
-    const bblsInInches = newBblsTaken > 0 ? (newBblsTaken / 20 / tanks) * 12 : 0;
-    const newTankAfterInches = newTankTopInches - bblsInInches;
+    const bblsInInches = newBblsTaken > 0 ? (newBblsTaken / bblPerFoot) * 12 : 0;
+    // ── Load-line clamp (Commit A) — mirror of processIncomingPull. The edit
+    // path is how GS5 acquired its -1'2" (edited pull), so it must clamp too. ──
+    const rawNewTankAfterInches = newTankTopInches - bblsInInches;
+    const newTankAfterInches = Math.max(rawNewTankAfterInches, loadLineInches);
+    const editHitLoadLine = rawNewTankAfterInches < loadLineInches;
 
     // Get the previous pull's data for timeDif/recovery/flowRate recalc
     const prevOutgoingSnap = await db.ref('packets/processed')
@@ -1584,6 +1801,8 @@ export const processEditRequest = functionsV1.database
       bblsTaken: newBblsTaken,
       tankAfterInches: newTankAfterInches,
       tankAfterFeet: inchesToFeetInches(newTankAfterInches),
+      rawCalculatedBottomInches: rawNewTankAfterInches,
+      hitLoadLine: editHitLoadLine,
       recoveryInches,
       flowRateDays,
       flowRate,
@@ -1594,6 +1813,8 @@ export const processEditRequest = functionsV1.database
       editedAt: new Date().toISOString(),
       editedBy: data.source || 'dashboard',
       wellDown: newWellDown,
+      ...fallbackAuditFields,
+      ...(typeof data.revisionAt === 'string' && data.revisionAt ? { lastRevisionAt: data.revisionAt } : {}),
     };
 
     await db.ref(`packets/processed/${originalPacketId}`).update(updates);
@@ -1640,7 +1861,7 @@ export const processEditRequest = functionsV1.database
     const afr = await calculateAFR(wellName, flowRateDays);
 
     // Recalculate window/overnight bbls/day (edit may have changed flow rates)
-    const editBblPerFoot = tanks * 20;
+    const editBblPerFoot = bblPerFoot;
     const editHistoricalPulls = await getHistoricalPulls(wellName, 500);
     const editPullTimeMs = new Date(origPacket.dateTimeUTC).getTime();
     const editWindowBblsDay = calculateWindowBblsPerDay(editHistoricalPulls, editBblPerFoot, editPullTimeMs);
@@ -1673,7 +1894,7 @@ export const processEditRequest = functionsV1.database
 
     if (isLatestPull && afr > 0) {
       // Recalculate outgoing response fields
-      const pullHeightInches = (pullBbls / 20 / tanks) * 12;
+      const pullHeightInches = (pullBbls / bblPerFoot) * 12;
       const targetLevel = bottomInches + pullHeightInches;
       const recoveryNeeded = Math.max(0, targetLevel - newTankAfterInches);
 
@@ -1690,7 +1911,7 @@ export const processEditRequest = functionsV1.database
         estDateTimePull = newDateTimeUTC;
       }
 
-      const bbls24 = (1 / afr) * 20 * tanks;
+      const bbls24 = (1 / afr) * bblPerFoot;
       const bbls24hrs = Math.round(bbls24).toString();
 
       if (hasOutgoing) {
@@ -1817,6 +2038,9 @@ export const processEditRequest = functionsV1.database
           topLevelInches: newTankTopInches,
           bottomLevel: inchesToFeetInches(newTankAfterInches),
           bottomLevelInches: newTankAfterInches,
+          rawCalculatedBottom: inchesToFeetInches(rawNewTankAfterInches),
+          rawCalculatedBottomInches: rawNewTankAfterInches,
+          hitLoadLine: editHitLoadLine,
           bblsTaken: newBblsTaken,
           driverName: origPacket.driverName || '',
           packetId: originalPacketId,
@@ -1824,10 +2048,10 @@ export const processEditRequest = functionsV1.database
         calculated: {
           flowRate: daysToHMMSS(afr),
           flowRateMinutes: Math.round(editAfrMinutes * 100) / 100,
-          bbls24hrs: Math.round((1 / afr) * tanks * 20) || 0,
-          nextPullTime: (() => { const pullHeightIn = (pullBbls / 20 / tanks) * 12; const targetLvl = bottomInches + pullHeightIn; const recovNeeded = Math.max(0, targetLvl - newTankAfterInches); if (recovNeeded <= 0) return formatLocalDateTime(new Date(newDateTimeUTC)); const estDays = (recovNeeded / 12) * afr; const estDate = new Date(new Date(newDateTimeUTC).getTime() + estDays * 24 * 60 * 60 * 1000); return formatLocalDateTime(estDate); })(),
-          nextPullTimeUTC: (() => { const pullHeightIn = (pullBbls / 20 / tanks) * 12; const targetLvl = bottomInches + pullHeightIn; const recovNeeded = Math.max(0, targetLvl - newTankAfterInches); if (recovNeeded <= 0) return newDateTimeUTC; const estDays = (recovNeeded / 12) * afr; return new Date(new Date(newDateTimeUTC).getTime() + estDays * 24 * 60 * 60 * 1000).toISOString(); })(),
-          timeTillPull: nextEditIsDown ? 'Down' : (() => { const pullHeightIn = (pullBbls / 20 / tanks) * 12; const targetLvl = bottomInches + pullHeightIn; const recovNeeded = Math.max(0, targetLvl - newTankAfterInches); if (recovNeeded <= 0) return '0:00'; return daysToHMM((recovNeeded / 12) * afr); })(),
+          bbls24hrs: Math.round((1 / afr) * bblPerFoot) || 0,
+          nextPullTime: (() => { const pullHeightIn = (pullBbls / bblPerFoot) * 12; const targetLvl = bottomInches + pullHeightIn; const recovNeeded = Math.max(0, targetLvl - newTankAfterInches); if (recovNeeded <= 0) return formatLocalDateTime(new Date(newDateTimeUTC)); const estDays = (recovNeeded / 12) * afr; const estDate = new Date(new Date(newDateTimeUTC).getTime() + estDays * 24 * 60 * 60 * 1000); return formatLocalDateTime(estDate); })(),
+          nextPullTimeUTC: (() => { const pullHeightIn = (pullBbls / bblPerFoot) * 12; const targetLvl = bottomInches + pullHeightIn; const recovNeeded = Math.max(0, targetLvl - newTankAfterInches); if (recovNeeded <= 0) return newDateTimeUTC; const estDays = (recovNeeded / 12) * afr; return new Date(new Date(newDateTimeUTC).getTime() + estDays * 24 * 60 * 60 * 1000).toISOString(); })(),
+          timeTillPull: nextEditIsDown ? 'Down' : (() => { const pullHeightIn = (pullBbls / bblPerFoot) * 12; const targetLvl = bottomInches + pullHeightIn; const recovNeeded = Math.max(0, targetLvl - newTankAfterInches); if (recovNeeded <= 0) return '0:00'; return daysToHMM((recovNeeded / 12) * afr); })(),
         },
         isDown: nextEditIsDown,
         updatedAt: new Date().toISOString(),
@@ -1836,146 +2060,213 @@ export const processEditRequest = functionsV1.database
       console.log(`Edit: Updated wells/${wellName}/status (full recalc)`);
     }
 
-    // ── Cascade to Firestore: ticket doc, dispatch doc, invoice doc ──
+    // ── Cascade to Firestore: DETERMINISTIC identity resolution ──
+    // P0 (2026-06-23): the prior back-patch matched a ticket by packetId and, on
+    // miss, by wellName+date+bbls. With two same-well/same-day tickets that bbls
+    // heuristic collided and (a) updated the WRONG ticket and (b) backfilled
+    // packetId onto it, poisoning all future edits (#19017 vs #19203 for
+    // 20260622_192528_Gab1_ivnuo2). The REAL anchor is invoice.packetId (+ the
+    // invoiceDocId carried on the processed packet). Resolve the target
+    // deterministically; NEVER write Firestore unless identity is proven; NEVER
+    // stamp packetId from a heuristic; NO docs[0] / bbls-only / totalBBL==newBbls
+    // / cancelled-by-amount matching.
+    const editDiag = async (event: string, result: string, reason: string, extra: Record<string, any> = {}) => {
+      console.log(`[${event}] ${result} — ${reason} ${JSON.stringify(extra)}`);
+      try {
+        await admin.firestore().collection('wb_diagnostics').add({
+          app: 'cf', area: 'edit', event, result, reason,
+          source: data.source || 'cf',
+          extra: { originalPacketId, wellName, newBblsTaken, ...extra },
+          timestamp: admin.firestore.FieldValue.serverTimestamp(),
+        });
+      } catch {}
+    };
+
     try {
       const firestore = admin.firestore();
+      const newTopFI = inchesToFeetInches(newTankTopInches);
+      const newBottomFI = inchesToFeetInches(newTankAfterInches);
+      const isCancelled = (inv: any) => inv?.status === 'cancelled' || inv?.status === 'canceled';
 
-      // Find ticket by packetId (submitTicket CF writes packetId on ticket docs)
-      let ticketSnap = await firestore.collection('tickets')
-        .where('packetId', '==', originalPacketId)
-        .limit(1)
-        .get();
+      await editDiag('edit.firestoreResolve.start', 'ok', 'resolving exact Firestore identity', {
+        invoiceDocIdOnPacket: origPacket.invoiceDocId || null,
+      });
 
-      // Fallback: find by wellName/location + date (for tickets created before packetId was stored)
-      if (ticketSnap.empty && wellName) {
-        const origDate = origPacket.dateTime || '';
-        // Normalize date to MM/DD/YYYY (WB T ticket format) from either "M/D/YYYY H:MM" or ISO
-        let datePart = origDate.split(' ')[0] || origDate.split('T')[0] || '';
-        if (datePart.includes('-')) {
-          // ISO format YYYY-MM-DD → MM/DD/YYYY
-          const [y, m, d] = datePart.split('-');
-          datePart = `${m}/${d}/${y}`;
-        } else if (datePart.includes('/')) {
-          // M/D/YYYY → MM/DD/YYYY (pad with zeros)
-          const parts = datePart.split('/');
-          datePart = `${parts[0].padStart(2, '0')}/${parts[1].padStart(2, '0')}/${parts[2]}`;
+      let invoiceRef: any = null;
+      let invoiceData: any = null;
+      let ticketRef: any = null;
+      let resolvedVia: string | null = null;
+
+      // Resolve the ticket doc WITHIN a known invoice via its ticketSummaries.
+      const resolveTicketFromInvoice = async (invRef: any, invData: any): Promise<any> => {
+        const summaries: any[] = Array.isArray(invData.ticketSummaries) ? invData.ticketSummaries : [];
+        let chosen: any = summaries.find(s => s && s.packetId && s.packetId === originalPacketId);
+        if (!chosen && summaries.length === 1) chosen = summaries[0];
+        if (!chosen && summaries.length === 0) {
+          const tickets: string[] = Array.isArray(invData.tickets) ? invData.tickets : [];
+          if (tickets.length === 1) chosen = { ticketNumber: tickets[0] };
         }
-        console.log(`Edit: Firestore fallback searching date=${datePart} wellName=${wellName}`);
-        if (datePart) {
-          // Try wellName field first, then location (WB T uses 'location' for well name)
-          for (const field of ['wellName', 'location']) {
-            const fallbackSnap = await firestore.collection('tickets')
-              .where(field, '==', wellName)
-              .where('date', '==', datePart)
-              .limit(5)
-              .get();
-            if (!fallbackSnap.empty) {
-              // If multiple tickets for same well+date, match by BBLs (original or current)
-              const origBbls = String(origPacket.bblsTaken);
-              const match = fallbackSnap.docs.find(d => d.data().bbls === origBbls)
-                || fallbackSnap.docs[0]; // Fallback to first if no BBL match
-              ticketSnap = { empty: false, docs: [match] } as any;
-              console.log(`Edit: Found ticket via fallback (${field}+date) for ${wellName}: ${match.id}`);
-              break;
+        if (!chosen) return null;
+        if (chosen.docId) return firestore.collection('tickets').doc(chosen.docId);
+        if (chosen.ticketNumber) {
+          const tq = await firestore.collection('tickets')
+            .where('ticketNumber', '==', String(chosen.ticketNumber))
+            .where('invoiceDocId', '==', invRef.id)
+            .limit(2).get();
+          if (tq.size === 1) return tq.docs[0].ref;
+        }
+        return null;
+      };
+
+      // A. By the invoiceDocId carried on the processed packet (strongest).
+      if (origPacket.invoiceDocId) {
+        const snap = await firestore.collection('invoices').doc(String(origPacket.invoiceDocId)).get();
+        if (snap.exists) {
+          const inv = snap.data() as any;
+          if (isCancelled(inv)) {
+            await editDiag('edit.firestoreResolve.byInvoiceDocId.success', 'skipped', 'invoice is cancelled', { invoiceDocId: snap.id });
+          } else if (inv.packetId && inv.packetId !== originalPacketId) {
+            await editDiag('edit.firestoreResolve.byInvoiceDocId.success', 'skipped', 'invoice.packetId mismatch', { invoiceDocId: snap.id, invoicePacketId: inv.packetId });
+          } else {
+            invoiceRef = snap.ref; invoiceData = inv; resolvedVia = 'invoiceDocId';
+            ticketRef = await resolveTicketFromInvoice(snap.ref, inv);
+            await editDiag('edit.firestoreResolve.byInvoiceDocId.success', 'ok', 'resolved invoice via packet.invoiceDocId', { invoiceDocId: snap.id, ticketResolved: !!ticketRef });
+          }
+        }
+      }
+
+      // B. By invoices where packetId == originalPacketId (non-cancelled, exactly one).
+      if (!invoiceRef) {
+        const invq = await firestore.collection('invoices').where('packetId', '==', originalPacketId).limit(5).get();
+        const live = invq.docs.filter(d => !isCancelled(d.data()));
+        if (live.length === 1) {
+          invoiceRef = live[0].ref; invoiceData = live[0].data(); resolvedVia = 'invoicePacketId';
+          ticketRef = await resolveTicketFromInvoice(invoiceRef, invoiceData);
+          await editDiag('edit.firestoreResolve.byInvoicePacketId.success', 'ok', 'resolved invoice by packetId', { invoiceDocId: invoiceRef.id, ticketResolved: !!ticketRef });
+        } else if (live.length > 1) {
+          await editDiag('edit.firestoreCascade.noExactIdentity.noWrite', 'skipped', 'multiple non-cancelled invoices match packetId', { count: live.length });
+        } else if (invq.size > 0) {
+          await editDiag('edit.firestoreCascade.noExactIdentity.noWrite', 'skipped', 'only cancelled invoices match packetId', { count: invq.size });
+        }
+      }
+
+      // C. By tickets where packetId == originalPacketId — LOW priority (may be
+      //    poisoned). Verify the matched ticket's invoice actually anchors this packet.
+      if (!invoiceRef && !ticketRef) {
+        const tq = await firestore.collection('tickets').where('packetId', '==', originalPacketId).limit(5).get();
+        if (tq.size === 1) {
+          const cand = tq.docs[0];
+          const candInvId = cand.data().invoiceDocId;
+          let verified = false;
+          if (candInvId) {
+            const invSnap = await firestore.collection('invoices').doc(String(candInvId)).get();
+            if (invSnap.exists) {
+              const inv = invSnap.data() as any;
+              const claimsPacket = inv.packetId === originalPacketId;
+              const listsTicket = !inv.packetId && Array.isArray(inv.tickets) && inv.tickets.includes(String(cand.data().ticketNumber));
+              if (!isCancelled(inv) && (claimsPacket || listsTicket)) {
+                invoiceRef = invSnap.ref; invoiceData = inv; ticketRef = cand.ref; verified = true; resolvedVia = 'ticketPacketId';
+              }
             }
           }
+          if (verified) {
+            await editDiag('edit.firestoreResolve.byTicketPacketId.success', 'ok', 'resolved + verified via ticket.packetId', { ticketId: cand.id, invoiceDocId: invoiceRef.id });
+          } else {
+            await editDiag('edit.firestoreCascade.suspiciousPoisonedTicket.noWrite', 'skipped', 'ticket.packetId match not verified against its invoice (possible poison)', { ticketId: cand.id, ticketInvoiceDocId: candInvId || null });
+          }
+        } else if (tq.size > 1) {
+          await editDiag('edit.firestoreCascade.suspiciousPoisonedTicket.noWrite', 'skipped', 'multiple tickets carry this packetId (poisoned)', { count: tq.size });
         }
       }
 
-      if (!ticketSnap.empty) {
-        const ticketDoc = ticketSnap.docs[0];
-        const ticketData = ticketDoc.data();
-        await ticketDoc.ref.update({
-          bbls: String(newBblsTaken),
-          top: inchesToFeetInches(newTankTopInches),
-          bottom: inchesToFeetInches(newTankAfterInches),
+      // D. Heuristic wellName+date — DIAGNOSTIC ONLY. Never write, never stamp packetId.
+      if (!invoiceRef && !ticketRef) {
+        let datePart = (origPacket.dateTime || '').split(' ')[0] || (origPacket.dateTime || '').split('T')[0] || '';
+        if (datePart.includes('-')) { const [y, m, d] = datePart.split('-'); datePart = `${m}/${d}/${y}`; }
+        else if (datePart.includes('/')) { const p = datePart.split('/'); datePart = `${p[0].padStart(2, '0')}/${p[1].padStart(2, '0')}/${p[2]}`; }
+        let candidateCount = 0;
+        if (datePart && wellName) {
+          const cands = await firestore.collection('tickets').where('wellName', '==', wellName).where('date', '==', datePart).limit(10).get();
+          candidateCount = cands.size;
+        }
+        await editDiag('edit.firestoreResolve.heuristicAmbiguous.noWrite', 'skipped', 'no deterministic identity; heuristic candidates left for MANUAL resolution (no Firestore write)', { datePart, candidateCount });
+      }
+
+      // ── Write ONLY when identity is exact ──
+      if (invoiceRef && invoiceData) {
+        // Ticket doc (if resolved). packetId backfill is safe — match was deterministic.
+        if (ticketRef) {
+          await ticketRef.update({
+            bbls: String(newBblsTaken),
+            top: newTopFI,
+            bottom: newBottomFI,
+            editedAt: admin.firestore.Timestamp.now(),
+            editedBy: data.source || 'dashboard',
+            updatedBy: data.source || 'dashboard',
+            updatedAt: admin.firestore.Timestamp.now(),
+            packetId: originalPacketId,
+          });
+        }
+
+        // Invoice doc: update the matching summary + recompute totalBBL from summaries
+        // + reconcile packetSnapshot. Preserve all other summary/invoice fields.
+        const summaries: any[] = Array.isArray(invoiceData.ticketSummaries)
+          ? invoiceData.ticketSummaries.map((s: any) => ({ ...s })) : [];
+        let matchedSummary: any = summaries.find(s =>
+          (s.packetId && s.packetId === originalPacketId) || (ticketRef && s.docId && s.docId === ticketRef.id));
+        if (!matchedSummary && summaries.length === 1) matchedSummary = summaries[0];
+        if (matchedSummary) {
+          matchedSummary.qty = String(newBblsTaken);
+          matchedSummary.bbls = String(newBblsTaken);
+          matchedSummary.top = newTopFI;
+          matchedSummary.bottom = newBottomFI;
+        }
+        let invTotal = 0;
+        if (summaries.length > 0) {
+          for (const s of summaries) invTotal += parseFloat(String(s.qty ?? s.bbls ?? '0')) || 0;
+        } else {
+          invTotal = newBblsTaken;
+        }
+        const existingSnap = invoiceData.packetSnapshot && typeof invoiceData.packetSnapshot === 'object' ? invoiceData.packetSnapshot : {};
+        const invUpdate: Record<string, any> = {
+          totalBBL: invTotal,
+          packetSnapshot: { ...existingSnap, bblsTaken: newBblsTaken, tankAfterFeet: newBottomFI },
           editedAt: admin.firestore.Timestamp.now(),
           editedBy: data.source || 'dashboard',
-          packetId: originalPacketId, // Backfill for future edits
+        };
+        if (summaries.length > 0) invUpdate.ticketSummaries = summaries;
+        await invoiceRef.update(invUpdate);
+
+        // Dispatch cascade (recompute from tickets) using the packet's own dispatchId.
+        const dispatchId = origPacket.dispatchId;
+        if (dispatchId && ticketRef) {
+          const allTicketsSnap = await firestore.collection('tickets').where('dispatchId', '==', dispatchId).get();
+          let dTotal = 0;
+          allTicketsSnap.forEach(t => { dTotal += (t.id === ticketRef.id ? newBblsTaken : (parseFloat(t.data().bbls) || 0)); });
+          await firestore.collection('dispatches').doc(dispatchId).update({ totalBBL: dTotal }).catch(() => {});
+        }
+
+        // canonical_jobs reconcile + edited event.
+        try {
+          await firestore.collection('canonical_jobs').doc(originalPacketId).update({
+            bblsTaken: newBblsTaken,
+            tankLevelFeet: newTankTopInches / 12,
+            tankAfterFeet: newTankAfterInches / 12,
+            updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+            events: admin.firestore.FieldValue.arrayUnion({
+              type: 'edited', actorSource: data.source || 'cf', timestamp: Date.now(),
+              extra: { bbls: newBblsTaken, via: resolvedVia },
+            }),
+          });
+        } catch (cjErr) {
+          console.log('Edit: canonical_jobs reconcile skipped:', (cjErr as any)?.message);
+        }
+
+        await editDiag('edit.firestoreCascade.success', 'ok', 'updated exact ticket/invoice/canonical', {
+          invoiceDocId: invoiceRef.id, ticketId: ticketRef?.id || null, resolvedVia, totalBBL: invTotal,
         });
-        console.log(`Edit: Updated Firestore ticket ${ticketDoc.id} bbls=${newBblsTaken}`);
-
-        // Cascade to dispatch doc if ticket has a dispatchId
-        const dispatchId = ticketData.dispatchId;
-        if (dispatchId) {
-          // Recalculate totalBBL from all tickets for this dispatch
-          const allTicketsSnap = await firestore.collection('tickets')
-            .where('dispatchId', '==', dispatchId)
-            .get();
-          let totalBBL = 0;
-          allTicketsSnap.forEach(t => {
-            totalBBL += (t.id === ticketDoc.id ? newBblsTaken : (parseFloat(t.data().bbls) || 0));
-          });
-          await firestore.collection('dispatches').doc(dispatchId).update({
-            totalBBL,
-          });
-          console.log(`Edit: Updated dispatch ${dispatchId} totalBBL=${totalBBL}`);
-        }
-
-        // Cascade to invoice doc if ticket has an invoiceDocId
-        const invoiceDocId = ticketData.invoiceDocId;
-        if (invoiceDocId) {
-          // Recalculate totalBBL from all tickets for this invoice
-          const invTicketsSnap = await firestore.collection('tickets')
-            .where('invoiceDocId', '==', invoiceDocId)
-            .get();
-          let invTotalBBL = 0;
-          invTicketsSnap.forEach(t => {
-            invTotalBBL += (t.id === ticketDoc.id ? newBblsTaken : (parseFloat(t.data().bbls) || 0));
-          });
-          await firestore.collection('invoices').doc(invoiceDocId).update({
-            totalBBL: invTotalBBL,
-          });
-          console.log(`Edit: Updated invoice ${invoiceDocId} totalBBL=${invTotalBBL}`);
-        }
       } else {
-        console.log(`Edit: No Firestore ticket found for packetId ${originalPacketId} — trying direct invoice search`);
-      }
-
-      // Direct invoice search — if ticket path didn't find/update the invoice,
-      // search invoices directly by wellName + date. Payroll reads from invoices, not tickets.
-      // This catches s_t mode jobs where ticket→invoice link may be missing.
-      const origDate = origPacket.dateTime || '';
-      let invoiceDatePart = origDate.split(' ')[0] || origDate.split('T')[0] || '';
-      if (invoiceDatePart.includes('-')) {
-        const [y, m, d] = invoiceDatePart.split('-');
-        invoiceDatePart = `${m}/${d}/${y}`;
-      } else if (invoiceDatePart.includes('/')) {
-        const parts = invoiceDatePart.split('/');
-        invoiceDatePart = `${parts[0].padStart(2, '0')}/${parts[1].padStart(2, '0')}/${parts[2]}`;
-      }
-
-      if (invoiceDatePart) {
-        const invoiceSnap = await firestore.collection('invoices')
-          .where('wellName', '==', wellName)
-          .where('date', '==', invoiceDatePart)
-          .limit(5)
-          .get();
-
-        if (!invoiceSnap.empty) {
-          // Match by original BBLs or driver name
-          const origBblNum = origPacket.bblsTaken;
-          const driverName = origPacket.driverName || '';
-          const match = invoiceSnap.docs.find(d => {
-            const inv = d.data();
-            return inv.totalBBL === origBblNum || inv.totalBBL === newBblsTaken
-              || (driverName && (inv.driver || '').includes(driverName));
-          }) || invoiceSnap.docs[0];
-
-          const invData = match.data();
-          if (invData.totalBBL !== newBblsTaken) {
-            await match.ref.update({
-              totalBBL: newBblsTaken,
-              editedAt: admin.firestore.Timestamp.now(),
-              editedBy: data.source || 'dashboard',
-            });
-            console.log(`Edit: Direct invoice update ${match.id} totalBBL: ${invData.totalBBL}→${newBblsTaken}`);
-          } else {
-            console.log(`Edit: Invoice ${match.id} already has correct totalBBL=${newBblsTaken}`);
-          }
-        } else {
-          console.log(`Edit: No invoice found for ${wellName} on ${invoiceDatePart}`);
-        }
+        await editDiag('edit.firestoreCascade.noExactIdentity.noWrite', 'skipped', 'no exact Firestore identity — RTDB updated, Firestore left untouched (manual resolution)', {});
       }
     } catch (fsErr) {
       // Non-blocking — RTDB is already updated, Firestore cascade is best-effort
@@ -2000,6 +2291,7 @@ export const processEditRequest = functionsV1.database
   });
 
 // Handle delete requests — removes from processed and recalculates outgoing from remaining data
+
 export const processDeleteRequest = functionsV1.database
   .ref('packets/incoming/{packetId}')
   .onCreate(async (snapshot, context) => {
