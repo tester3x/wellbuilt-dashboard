@@ -20,6 +20,18 @@ import {
   resolveEditTarget,
   strandedPacketVerdict,
 } from './packetGuards';
+import {
+  buildAppliedEditEvent,
+  buildFieldDiff,
+  editHistoryWritePaths,
+  editSummaryFields,
+  nextEditCount,
+  normalizeEditSource,
+  normalizeOriginAppContext,
+  resolveEditAuditContext,
+  resolveEditEventId,
+  resolveOriginalSubmissionAt,
+} from './editHistory';
 
 
 admin.initializeApp();
@@ -1126,8 +1138,21 @@ export const processIncomingPull = functionsV1.database
       processedAt: new Date().toISOString(),
     };
 
-    // Write to processed/
-    await db.ref(`packets/processed/${packetId}`).set(processedPacket);
+    // Write to processed/ — strip client trail-only helpers from the stored pull
+    const {
+      pendingEditEvents: _pendingEditEvents,
+      originalSubmittedValues: _originalSubmittedValues,
+      hasQueuedCorrection: _hasQueuedCorrection,
+      ...processedClean
+    } = processedPacket as any;
+    // Keep originalSubmittedAt when a queued correction froze it.
+    if ((data as any).originalSubmittedAt) {
+      (processedClean as any).originalSubmittedAt = (data as any).originalSubmittedAt;
+    }
+    await db.ref(`packets/processed/${packetId}`).set(processedClean);
+
+    // Materialize queued post-Send correction trail (product: Send is the edit boundary).
+    await materializeQueuedEditTrail(packetId, data as any);
 
     // Calculate current level (for outgoing response)
     // At time of pull, current level = tank after
@@ -1503,6 +1528,67 @@ export const processIncomingPull = functionsV1.database
     return null;
   });
 
+/**
+ * When a pull was corrected after Send while still queued, WB-M stamps
+ * pendingEditEvents on the payload. On first process, materialize those as
+ * canonical editHistory events + editedAt/editCount so the row never looks
+ * never-edited. Idempotent per eventId.
+ */
+async function materializeQueuedEditTrail(
+  packetId: string,
+  data: Record<string, any>,
+): Promise<void> {
+  const pending = data.pendingEditEvents;
+  if (!Array.isArray(pending) || pending.length === 0) return;
+
+  const nowIso = new Date().toISOString();
+  const originalSubmissionAt =
+    (typeof data.originalSubmittedAt === 'string' && data.originalSubmittedAt) ||
+    (typeof data.dateTimeUTC === 'string' && data.dateTimeUTC) ||
+    nowIso;
+
+  const multi: Record<string, unknown> = {};
+  let seq = 0;
+  for (const raw of pending) {
+    if (!raw || typeof raw !== 'object') continue;
+    const eventId = resolveEditEventId({
+      incomingPacketId: `queued_${packetId}`,
+      clientEventId: raw.eventId,
+    });
+    const existing = await db.ref(`packets/editHistory/${packetId}/${eventId}`).once('value');
+    if (existing.exists()) continue;
+    seq += 1;
+    const event = buildAppliedEditEvent({
+      eventId,
+      packetId,
+      sequence: seq,
+      editedAt: typeof raw.capturedAt === 'string' ? raw.capturedAt : nowIso,
+      source: normalizeEditSource(raw.source || 'wbm'),
+      originAppContext: normalizeOriginAppContext(
+        data.originAppContext || raw.originAppContext || 'wbm',
+      ),
+      actorDriverId: data.driverId ?? null,
+      actorDriverName: data.driverName ?? null,
+      fields: Array.isArray(raw.fields) ? raw.fields : [],
+      originalSubmissionAt,
+      resolutionPath: 'queued_pull_merge',
+      editRequestId: eventId,
+    });
+    multi[`packets/editHistory/${packetId}/${eventId}`] = event;
+  }
+  const eventCount = seq;
+  if (eventCount === 0) return;
+
+  multi[`packets/processed/${packetId}/editedAt`] = nowIso;
+  multi[`packets/processed/${packetId}/editedBy`] = normalizeEditSource(
+    pending[pending.length - 1]?.source || 'wbm',
+  );
+  multi[`packets/processed/${packetId}/editCount`] = eventCount;
+  multi[`packets/processed/${packetId}/originalSubmittedAt`] = originalSubmissionAt;
+  await db.ref().update(multi);
+  console.log(`[QUEUED_EDIT_TRAIL] ${packetId}: materialized ${eventCount} event(s)`);
+}
+
 // Handle edit requests — updates processed packet and recalculates dependent fields
 export const processEditRequest = functionsV1.database
   .ref('packets/incoming/{packetId}')
@@ -1660,6 +1746,39 @@ export const processEditRequest = functionsV1.database
       `[EDIT_MATERIAL_CHANGE] ${wellName}: ${originalPacketId} fields changed: ${material.fields.join(', ')}`,
     );
 
+    // ── Canonical edit event id + idempotency (retry / watchdog) ──────────
+    const editEventId = resolveEditEventId({
+      incomingPacketId: context.params.packetId,
+      clientEventId: (data as { editEventId?: unknown }).editEventId,
+    });
+    const existingEventSnap = await db
+      .ref(`packets/editHistory/${originalPacketId}/${editEventId}`)
+      .once('value');
+    if (existingEventSnap.exists()) {
+      console.log(
+        `[EDIT_EVENT_IDEMPOTENT] ${wellName}: event ${editEventId} already on ${originalPacketId} — consume incoming only`,
+      );
+      await removeIncomingPacket(db.ref(), context.params.packetId);
+      return null;
+    }
+
+    // Product: WB-M / Dashboard pull corrections are never age-gated.
+    // originalSubmittedAt is audit-only (does not create a deadline).
+    const nowMs = Date.now();
+    const auditCtx = resolveEditAuditContext(origPacket as Record<string, unknown>);
+    const editSource = normalizeEditSource((data as { source?: unknown }).source);
+    const originalSubmissionAt =
+      auditCtx.originalSubmissionAt ||
+      resolveOriginalSubmissionAt(origPacket as Record<string, unknown>);
+    // Origin of the pull (wbt/wbm) — separate from correction source.
+    const originAppContext =
+      normalizeOriginAppContext(origPacket.originAppContext) !== 'unknown'
+        ? normalizeOriginAppContext(origPacket.originAppContext)
+        : normalizeOriginAppContext((data as { originAppContext?: unknown }).originAppContext);
+    const freezeOriginal = !origPacket.originalSubmittedAt;
+    const sequence = nextEditCount(origPacket as Record<string, unknown>);
+    const editedAtIso = new Date(nowMs).toISOString();
+
     // Get well config
     const cleanName = wellName.replace(/\s/g, '');
     let configSnap = await db.ref(`well_config/${wellName}`).once('value');
@@ -1709,26 +1828,65 @@ export const processEditRequest = functionsV1.database
     const editExistingIsDown = editExistingIsDownSnap.val() === true;
     const nextEditIsDown = editIsAuthoritative ? newWellDown : editExistingIsDown;
 
+    // Field-level paper trail from server-side previous values (never trust client "before").
+    const fieldDiff = buildFieldDiff(origPacket as Record<string, unknown>, {
+      tankTopInches: newTankTopInches,
+      tankLevelFeet: newTankTopInches / 12,
+      bblsTaken: newBblsTaken,
+      dateTimeUTC: data.dateTimeUTC ? newDateTimeUTC : undefined,
+      dateTime: data.dateTime ? newDateTime : undefined,
+      wellDown: data.wellDown !== undefined ? newWellDown : undefined,
+    });
+    const editEvent = buildAppliedEditEvent({
+      eventId: editEventId,
+      packetId: originalPacketId,
+      sequence,
+      editedAt: editedAtIso,
+      source: editSource,
+      originAppContext,
+      actorDriverId: (data as any).driverId ?? origPacket.driverId ?? null,
+      actorDriverName: (data as any).driverName ?? null,
+      clientAppVersion: (data as any).clientAppVersion ?? null,
+      fields: fieldDiff,
+      originalSubmissionAt,
+      resolutionPath: editResolvedViaFallback ? 'invoiceDocId_fallback' : 'direct',
+      editRequestId: context.params.packetId,
+    });
+    const trailSummary = editSummaryFields({
+      editedAt: editedAtIso,
+      source: editSource,
+      editCount: sequence,
+      originalSubmissionAt,
+      freezeOriginal,
+    });
+    const historyPaths = editHistoryWritePaths(originalPacketId, editEvent);
+
     // No top level = non-production-tank edit. Update basic fields only, skip tank math.
     if (newTankTopInches <= 0) {
       console.log(`[NO-LEVEL EDIT] ${wellName}: No top level, skipping tank math`);
-      await db.ref(`packets/processed/${originalPacketId}`).update({
-        tankTopInches: 0,
-        tankLevelFeet: 0,
-        bblsTaken: newBblsTaken,
-        tankAfterInches: 0,
-        tankAfterFeet: '',
-        dateTimeUTC: newDateTimeUTC,
-        dateTime: newDateTime,
-        editedAt: new Date().toISOString(),
-        editedBy: data.source || 'dashboard',
-        noLevel: true,
-        wellDown: newWellDown,
-        ...fallbackAuditFields,
-        ...(typeof data.revisionAt === 'string' && data.revisionAt ? { lastRevisionAt: data.revisionAt } : {}),
+      await db.ref().update({
+        ...Object.fromEntries(
+          Object.entries({
+            tankTopInches: 0,
+            tankLevelFeet: 0,
+            bblsTaken: newBblsTaken,
+            tankAfterInches: 0,
+            tankAfterFeet: '',
+            dateTimeUTC: newDateTimeUTC,
+            dateTime: newDateTime,
+            noLevel: true,
+            wellDown: newWellDown,
+            ...fallbackAuditFields,
+            ...trailSummary,
+            ...(typeof data.revisionAt === 'string' && data.revisionAt
+              ? { lastRevisionAt: data.revisionAt }
+              : {}),
+          }).map(([k, v]) => [`packets/processed/${originalPacketId}/${k}`, v]),
+        ),
+        ...historyPaths,
+        [`packets/incoming/${context.params.packetId}`]: null,
       });
       await db.ref(`wells/${wellName}/status/isDown`).set(nextEditIsDown);
-      await snapshot.ref.remove();
       return null;
     }
 
@@ -1794,7 +1952,7 @@ export const processEditRequest = functionsV1.database
       }
     }
 
-    // Update the processed packet with new values
+    // Update the processed packet with new values + canonical trail summary
     const updates: { [key: string]: any } = {
       tankTopInches: newTankTopInches,
       tankLevelFeet: newTankTopInches / 12,
@@ -1810,14 +1968,20 @@ export const processEditRequest = functionsV1.database
       timeDifDays,
       dateTimeUTC: newDateTimeUTC,
       dateTime: newDateTime,
-      editedAt: new Date().toISOString(),
-      editedBy: data.source || 'dashboard',
       wellDown: newWellDown,
       ...fallbackAuditFields,
+      ...trailSummary,
       ...(typeof data.revisionAt === 'string' && data.revisionAt ? { lastRevisionAt: data.revisionAt } : {}),
     };
 
-    await db.ref(`packets/processed/${originalPacketId}`).update(updates);
+    // Atomic multi-path: processed summary + immutable history event + consume incoming
+    await db.ref().update({
+      ...Object.fromEntries(
+        Object.entries(updates).map(([k, v]) => [`packets/processed/${originalPacketId}/${k}`, v]),
+      ),
+      ...historyPaths,
+      [`packets/incoming/${context.params.packetId}`]: null,
+    });
 
     // Update well down status if this is the latest packet (authority-gated)
     await db.ref(`wells/${wellName}/status/isDown`).set(nextEditIsDown);
