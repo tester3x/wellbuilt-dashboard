@@ -1,0 +1,6 @@
+# The Functions contracts mirror is byte-exact deployment material
+# extracted from the immutable published artifact, and MIRROR-MANIFEST.json
+# records a SHA-256 per file. Under core.autocrlf a fresh clone would
+# check these out as CRLF, every hash would mismatch, and the verifier —
+# which fails closed — would block deployment. Never transform them.
+functions/contracts-mirror/** -text

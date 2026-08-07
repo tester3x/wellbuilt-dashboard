@@ -66,7 +66,6 @@ export function zonedWallTimeToUtcMs(timezone, localDate, localTime) {
     const off2 = zoneOffsetMinutes(timezone, pass1);
     return naive - off2 * 60000;
 }
-const TIME_RE = /^([01]\d|2[0-3]):([0-5]\d)$/;
 function invalid(input, reason) {
     return {
         outcome: 'INVALID_CONFIGURATION',
@@ -175,7 +174,7 @@ export function resolveWorkPeriod(input) {
     // ── company_defined_period ───────────────────────────────────────────────
     if (!isValidTimezone(cfg?.timezone))
         return invalid(input, 'invalid_or_missing_timezone');
-    if (!cfg?.startLocalTime || !TIME_RE.test(cfg.startLocalTime)) {
+    if (!cfg?.startLocalTime || !/^([01]\d|2[0-3]):([0-5]\d)$/.test(cfg.startLocalTime)) {
         return invalid(input, 'invalid_or_missing_start_local_time');
     }
     const duration = cfg.durationMinutes;

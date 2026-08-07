@@ -25,8 +25,8 @@ import { tmpdir } from 'node:os';
 const root = join(dirname(fileURLToPath(import.meta.url)), '..');
 const FN = join(root, 'functions');
 const MIRROR = join(FN, 'contracts-mirror');
-const EXPECTED_SHA256 = '45cc9b965258204255ecfba05d12719da5bb6f4fa71c9508a7c66ba8da158e73';
-const EXPECTED_INTEGRITY = 'sha512-ejMmcqgw1mbGKwKFQ7O6Lub7OyT3QABJCIwXv4+7/9x4vwwuYES1a6RmjY3BIWtXdbazY9cRSHKEwic0zz17/Q==';
+const EXPECTED_SHA256 = 'aa99296cdd71d94322a1e36862177de427a32301d034aacbdc1b03010e8c171f';
+const EXPECTED_INTEGRITY = 'sha512-uf6QuaWGloxvsnphgOM8SVINNLkv6scBLvdfRf9LCz+iBSwMxw3A2/4CQSyQMI5cfK6YhaZr9HCNYE8StjJtoQ==';
 
 let pass = 0, fail = 0;
 const check = (name, ok, detail = '') => {
@@ -67,7 +67,7 @@ check('Dashboard root .npmrc still serves the registry consumer',
     check('manifest pins the published source sha256', manifest.sourceSha256 === EXPECTED_SHA256);
     check('manifest pins the published npm integrity', manifest.sourceIntegrity === EXPECTED_INTEGRITY);
     check('manifest pins name and version',
-      manifest.name === '@tester3x/wellbuilt-contracts' && manifest.version === '0.1.0');
+      manifest.name === '@tester3x/wellbuilt-contracts' && manifest.version === '0.2.0');
     const drift = Object.entries(manifest.files).filter(([f, h]) => {
       const p = join(MIRROR, f);
       return !existsSync(p) || sha256(p) !== h;
@@ -76,13 +76,16 @@ check('Dashboard root .npmrc still serves the registry consumer',
       drift.length === 0, drift.map(([f]) => f).join(','));
     const pkg = JSON.parse(readFileSync(join(MIRROR, 'package.json'), 'utf8'));
     check('mirror package identity/license/repository retained',
-      pkg.name === '@tester3x/wellbuilt-contracts' && pkg.version === '0.1.0'
+      pkg.name === '@tester3x/wellbuilt-contracts' && pkg.version === '0.2.0'
       && pkg.license === 'UNLICENSED' && pkg.repository?.url?.includes('tester3x/wellbuilt-contracts'));
     const everything = execFileSync('git', ['-C', root, 'ls-files', 'functions/contracts-mirror'], { encoding: 'utf8' })
       .trim().split('\n');
     const allowed = ['MIRROR-MANIFEST.json', 'MIRROR-README.md', 'NOTICE', 'README.md', 'package.json'];
     const stray = everything.map((f) => f.replace('functions/contracts-mirror/', ''))
-      .filter((f) => !allowed.includes(f) && !/^dist\/[\w.]+\.(js|d\.ts|js\.map|d\.ts\.map)$/.test(f));
+      // Mirrors the generator's ALLOWED_RE: 0.2.0 nests the DVIR
+      // protocol under dist/dvir/, so one subdirectory level is allowed.
+      .filter((f) => !allowed.includes(f)
+        && !/^dist\/(?:[\w-]+\/)?[\w.-]+\.(js|d\.ts|js\.map|d\.ts\.map)$/.test(f));
     check('mirror contains ONLY the allowlisted deployment files', stray.length === 0, stray.join(','));
   }
   // No token/credential strings anywhere in the mirror.
@@ -120,7 +123,9 @@ check('Dashboard root .npmrc still serves the registry consumer',
     rmSync(tmp, { recursive: true, force: true });
     cpSync(MIRROR, tmp, { recursive: true });
     const m = JSON.parse(readFileSync(join(tmp, 'MIRROR-MANIFEST.json'), 'utf8'));
-    m.version = '0.2.0';
+    // Must be a version the mirror will never legitimately hold — 0.2.0
+    // is now the expected version, so it would no longer be "wrong".
+    m.version = '9.9.9';
     writeFileSync(join(tmp, 'MIRROR-MANIFEST.json'), JSON.stringify(m));
     check('wrong package version fails verification', !run(tmp));
     rmSync(tmp, { recursive: true, force: true });
@@ -161,7 +166,7 @@ check('Dashboard root .npmrc still serves the registry consumer',
     const manifest = JSON.parse(readFileSync(join(MIRROR, 'MIRROR-MANIFEST.json'), 'utf8'));
     const distDrift = Object.keys(manifest.files).filter((f) => f.startsWith('dist/'))
       .filter((f) => sha256(join(resolvedPkg, f)) !== manifest.files[f]);
-    check('scratch-resolved bytes ARE the immutable 0.1.0 bytes', distDrift.length === 0, distDrift.join(','));
+    check('scratch-resolved bytes ARE the immutable 0.2.0 bytes', distDrift.length === 0, distDrift.join(','));
     let built = false;
     try {
       execFileSync('npx', ['tsc'], { cwd: scratch, env, stdio: 'pipe', shell: true, timeout: 300_000 });

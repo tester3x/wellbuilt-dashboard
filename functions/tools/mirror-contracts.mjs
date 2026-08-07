@@ -8,7 +8,7 @@
  *
  * The mirror (functions/contracts-mirror) is GENERATED DEPLOYMENT
  * MATERIAL derived byte-for-byte from the immutable published
- * @tester3x/wellbuilt-contracts@0.1.0 artifact. It exists ONLY so
+ * @tester3x/wellbuilt-contracts@0.2.0 artifact. It exists ONLY so
  * Google's Functions builder can `npm ci` without GitHub Packages
  * authentication. It is NOT a canonical source and must never be
  * edited by hand — regeneration verifies the source tarball's SHA-256
@@ -30,15 +30,19 @@ import { tmpdir } from 'node:os';
 
 export const EXPECTED = Object.freeze({
   name: '@tester3x/wellbuilt-contracts',
-  version: '0.1.0',
-  sourceSha256: '45cc9b965258204255ecfba05d12719da5bb6f4fa71c9508a7c66ba8da158e73',
-  sourceIntegrity: 'sha512-ejMmcqgw1mbGKwKFQ7O6Lub7OyT3QABJCIwXv4+7/9x4vwwuYES1a6RmjY3BIWtXdbazY9cRSHKEwic0zz17/Q==',
+  version: '0.2.0',
+  sourceSha256: 'aa99296cdd71d94322a1e36862177de427a32301d034aacbdc1b03010e8c171f',
+  sourceIntegrity: 'sha512-uf6QuaWGloxvsnphgOM8SVINNLkv6scBLvdfRf9LCz+iBSwMxw3A2/4CQSyQMI5cfK6YhaZr9HCNYE8StjJtoQ==',
 });
 
 const FN_DIR = join(dirname(fileURLToPath(import.meta.url)), '..');
 const DEFAULT_MIRROR = join(FN_DIR, 'contracts-mirror');
 const GENERATED_FILES = ['MIRROR-MANIFEST.json', 'MIRROR-README.md'];
-const ALLOWED_RE = /^(package\.json|README\.md|NOTICE|dist\/[\w.]+\.(js|d\.ts|js\.map|d\.ts\.map))$/;
+// 0.2.0 nests the DVIR protocol under dist/dvir/, so one subdirectory
+// level is permitted. Still bounded: only dist/**, only these four
+// extensions, only [\w.-] segments — no traversal, no absolute paths,
+// no arbitrary depth, nothing outside the allowlist.
+const ALLOWED_RE = /^(package\.json|README\.md|NOTICE|dist\/(?:[\w-]+\/)?[\w.-]+\.(js|d\.ts|js\.map|d\.ts\.map))$/;
 
 const sha256 = (buf) => createHash('sha256').update(buf).digest('hex');
 const fileSha256 = (p) => sha256(readFileSync(p));
@@ -56,9 +60,9 @@ function walk(dir, base = dir) {
 
 function verifyTarball(tarballPath) {
   const bytes = readFileSync(tarballPath);
-  if (sha256(bytes) !== EXPECTED.sourceSha256) fail('tarball SHA-256 does not match the published 0.1.0 artifact');
+  if (sha256(bytes) !== EXPECTED.sourceSha256) fail(`tarball SHA-256 does not match the published ${EXPECTED.version} artifact`);
   const integrity = 'sha512-' + createHash('sha512').update(bytes).digest('base64');
-  if (integrity !== EXPECTED.sourceIntegrity) fail('tarball npm integrity does not match the published 0.1.0 artifact');
+  if (integrity !== EXPECTED.sourceIntegrity) fail(`tarball npm integrity does not match the published ${EXPECTED.version} artifact`);
   return bytes;
 }
 
@@ -86,7 +90,10 @@ function regenerate(tarballPath, mirrorDir) {
   const manifestFiles = {};
   for (const f of files) {
     const bytes = readFileSync(join(pkgRoot, f));
-    writeFileSync(join(mirrorDir, f), bytes);
+    const dest = join(mirrorDir, f);
+    // 0.2.0 has nested dist/dvir/ — create each file's parent.
+    mkdirSync(dirname(dest), { recursive: true });
+    writeFileSync(dest, bytes);
     manifestFiles[f] = sha256(bytes);
   }
   writeFileSync(join(mirrorDir, 'MIRROR-MANIFEST.json'), JSON.stringify({
@@ -151,7 +158,7 @@ const opt = (name) => { const i = args.indexOf(`--${name}`); return i >= 0 ? arg
 const mirrorDir = opt('mirror') ?? DEFAULT_MIRROR;
 if (args.includes('--regenerate')) {
   const tarball = opt('tarball');
-  if (!tarball) fail('--regenerate requires --tarball <path to the published 0.1.0 tgz>');
+  if (!tarball) fail(`--regenerate requires --tarball <path to the published ${EXPECTED.version} tgz>`);
   regenerate(tarball, mirrorDir);
   verify(mirrorDir);
 } else if (args.includes('--verify')) {
