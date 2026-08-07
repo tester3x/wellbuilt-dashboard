@@ -9,10 +9,22 @@
 import Anthropic from '@anthropic-ai/sdk';
 import { ANTHROPIC_API_KEY, readSecret } from '../secrets';
 
-/** The narrow slice of the Anthropic SDK this codebase actually uses. */
+/**
+ * The narrow slice of the Anthropic SDK this codebase actually uses.
+ *
+ * `usage` is consumed by the photo-compliance cost metrics, and `text`
+ * is optional because a content block is only guaranteed to carry text
+ * when its `type` is `'text'` — callers must check the field they read,
+ * not just the discriminator.
+ */
+export interface AnthropicMessage {
+  content: Array<{ type: string; text?: string }>;
+  usage?: { input_tokens?: number; output_tokens?: number };
+}
+
 export interface AnthropicLike {
   messages: {
-    create(body: unknown): Promise<{ content: Array<{ type: string; text?: string }> }>;
+    create(body: unknown): Promise<AnthropicMessage>;
   };
 }
 

@@ -4319,3 +4319,8 @@ export {
   adminListPlans, adminGetPlan, adminGetCompanyContractConfiguration,
   adminPreviewCompanyEffectiveCapabilities, adminListAdminAudit,
 } from './admin/callables';
+
+// vc51.9I-RECOVERY4 — live Functions restored from the qualified
+// historical implementation. They were absent from this branch, so a
+// whole-codebase deploy would have pruned them.
+export { validatePhotoCompliance, suggestPhotoCriteria } from './photoCompliance';

@@ -31,16 +31,21 @@ export const ANTHROPIC_API_KEY = defineSecret('ANTHROPIC_API_KEY');
 /**
  * Gemini / Google AI Studio API key.
  *
- * DELIBERATELY NOT DEFINED. The vc51.9I-SEC census found this key bound
- * to 51 deployed Functions and read by NONE of them — no source file
- * references `GEMINI_API_KEY`, and no Google AI client is a dependency.
- * Defining a secret nobody consumes would recreate the same
- * bind-everything mistake in a new mechanism.
+ * Consumed by the two photo-compliance Functions only. Both switch
+ * provider at runtime via `PHOTO_COMPLIANCE_PROVIDER`, so either can
+ * genuinely reach either provider and both bind both secrets — that is
+ * least privilege at the Function boundary, not laziness.
  *
- * If a Gemini consumer is genuinely introduced later, define it here and
- * bind it to that Function alone. Until then the correct least-privilege
- * binding is: none.
+ * History worth keeping: the vc51.9I-SEC census concluded this key had
+ * zero consumers and deliberately left it undefined. That was true of
+ * the source tree at the time, but WRONG about the deployed code — the
+ * photo-compliance Functions were live and absent from local source.
+ * They are restored here, so the consumer is real.
+ *
+ * Nothing else may bind this. `parseJsaPdf` stays Anthropic-only, and
+ * the well-catalog and split-family Functions bind neither.
  */
+export const GEMINI_API_KEY = defineSecret('GEMINI_API_KEY');
 
 /** Thrown shape for a missing/blank secret — never includes the value. */
 export class MissingSecretError extends Error {
