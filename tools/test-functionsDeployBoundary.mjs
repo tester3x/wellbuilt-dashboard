@@ -54,7 +54,7 @@ check('Dashboard root .npmrc still serves the registry consumer',
 {
   const rootLock = readFileSync(join(root, 'package-lock.json'), 'utf8');
   check('Dashboard CLIENT still resolves the registry package normally',
-    rootLock.includes('npm.pkg.github.com/download/@tester3x/wellbuilt-contracts/0.1.0'));
+    rootLock.includes('npm.pkg.github.com/download/@tester3x/wellbuilt-contracts/0.2.0'));
 }
 
 // ── 3. Mirror integrity: generated from the immutable published bytes.

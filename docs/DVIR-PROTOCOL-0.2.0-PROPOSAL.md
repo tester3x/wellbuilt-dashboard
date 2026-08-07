@@ -1,9 +1,31 @@
 # Proposed `@tester3x/wellbuilt-contracts@0.2.0` — DVIR request/completion protocol
 
-**Status: PROPOSAL ONLY.** vc51.9D stopped at the Part 3 schema-adequacy
-gate. Nothing here is implemented, and the immutable published `0.1.0`
-is untouched. This document is the change set a future authorized
-packet would apply to the *contracts repository* (not to Dashboard).
+**Status: PUBLISHED AND ADOPTED (vc51.9F / vc51.9G).** This began as a
+proposal written when vc51.9D stopped at the Part 3 schema-adequacy
+gate. `0.2.0` has since been authored, audited, published immutably, and
+pinned by this repository.
+
+- Published `@tester3x/wellbuilt-contracts@0.2.0`, tag `v0.2.0` at
+  contracts commit `2a913de`
+- SHA-256 `aa99296cdd71d94322a1e36862177de427a32301d034aacbdc1b03010e8c171f`
+- Integrity `sha512-uf6QuaWGloxvsnphgOM8SVINNLkv6scBLvdfRf9LCz+iBSwMxw3A2/4CQSyQMI5cfK6YhaZr9HCNYE8StjJtoQ==`
+- 39 files, 45,589 bytes, zero runtime/peer dependencies, private,
+  UNLICENSED
+- `0.1.0` remains published, immutable, and byte-unchanged
+
+The Part 3 gate is therefore **closed** — see
+`tools/test-dvirProtocolSchemaGap.mjs`, which now proves each required
+agreement resolves to a real `0.2.0` export.
+
+**Still not implemented:** the server-side DVIR request/completion
+protocol. Adopting the package is not implementing the protocol;
+vc51.9D remains future work, and the undeployed phase-1a
+`functions/src/equipment/*` protocol must be retired or adapted before
+any deployment — it must never ship with client-supplied `driverHash`
+authority.
+
+The sections below are retained as the authored design record. Where
+they describe what a future packet "would" do, that work is now done.
 
 ## Why the gate failed
 
