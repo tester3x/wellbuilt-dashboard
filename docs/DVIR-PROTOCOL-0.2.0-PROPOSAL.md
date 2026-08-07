@@ -166,3 +166,114 @@ the mapping exists once, not in three repositories.
   `preTripNotCaptured` legacy path; decide whether the protocol accepts
   it and how the completion record labels it.
 - **Request expiry window** and whether WB-S may cancel an open request.
+
+---
+
+# RECONCILIATION — the 0.2.0 release candidate now exists (vc51.9E)
+
+The proposal above was written before the eQuipment domain census. The
+authored candidate differs where the real domain demanded it. **This
+section supersedes the sketch above where they disagree.**
+
+## Final exported API (additive; 71 runtime exports total)
+
+`DVIR_PROTOCOL_VERSION`, `SUPPORTED_DVIR_PROTOCOL_VERSIONS`,
+`assertDvirProtocolCompatible`, `isDvirProtocolDowngrade`,
+`DVIR_PHASES`/`isDvirPhase`, `recordKindForPhase`/`phaseForRecordKind`,
+`DVIR_REQUEST_STATUSES`/`isDvirRequestStatus`,
+`isLegalDvirRequestTransition`, `isDvirRequestConsumable`,
+`DVIR_ITEM_RESULTS`/`isDvirItemResult`/`DVIR_ITEM_RESULT_MEANING`,
+`DVIR_ISSUE_SEVERITIES`, `DVIR_ASSET_ROLES`, `DVIR_ATTESTATION_KINDS`,
+`DVIR_COMPLETION_OUTCOMES`, `DVIR_LEGACY_CATEGORY_IDS`, `DVIR_BOUNDS`,
+`normalizeDvirExplanation`, `validateDvirNormalizedEvidence`,
+`computeLegacyCategoryProjection`, `canonicalDvirEvidenceString`,
+`validateDvirCompletionSubmission`, `toDvirCompletionView`,
+`viewMatchesRecord`, `isEquivalentDvirCompletion`,
+`satisfiesEnforcedDvirPhase`, `validateDvirMissingEvidenceSubmission`,
+`missingEvidenceSatisfiesEnforcedPhase`,
+`isDvirMissingEvidenceSubmission`, plus every `DVIR_*_KEYS` key set and
+the shared guards (`isBoundedId`, `isIsoTimestamp`,
+`containsBinaryPayload`, id regexes).
+
+Naming changed from the sketch: `DvirCompletionRecord.acceptedAtServer`
+(was `acceptedAtIso`) and `observedCompletedAtClient` (was
+`observedCompletedAtIso`) — the suffixes now make client-vs-server
+provenance unmistakable at every call site.
+
+## State machine
+
+Request: `open → {completed | cancelled | expired}`; every terminal
+state is final (`isLegalDvirRequestTransition`), and only an `open`,
+unexpired request is consumable. Completion: validate submission
+against the server's request **and** an independently re-resolved
+binding → write the immutable record → derive the view. An identical
+re-submission is the same completion (`isEquivalentDvirCompletion`); a
+conflicting one is a genuine conflict.
+
+## Evidence vs receipt separation
+
+Full `DvirNormalizedEvidence` (items, issues, explanations,
+attestation) is server-persisted and administratively retrievable.
+`DvirCompletionView` — what WB-S exact-gets — carries only protocol
+version, ids, company, driver, binding, phase, inspection record id,
+outcome, evidence digest, and `acceptedAtServer`.
+`DVIR_VIEW_FORBIDDEN_KEYS` names what may never appear there or in a
+deep link; a test asserts the typed name and explanation text are
+absent from the serialized view.
+
+## `preTripNotCaptured`
+
+A separate type with an outcome (`recorded_missing_evidence`)
+deliberately outside `DvirCompletionOutcome`. It has no completionId,
+no evidenceDigest, and no accepted outcome, so no receipt or view can
+be derived; `missingEvidenceSatisfiesEnforcedPhase` returns the literal
+type `false`. Payloads carrying completion material are rejected with a
+distinct `completion_fields_present` reason.
+
+## Retention — still unresolved
+
+No automatic deletion, no hardcoded duration, records immutable. Who
+may delete and after how long remains a policy decision requiring
+separate review before any production retention behavior ships.
+
+## Expected integration (future authorized packets)
+
+- **Functions** — `validateDvirCompletionSubmission` becomes THE gate;
+  identity from `requireSecureDriver` (verified claims), period from the
+  canonical resolver, `acceptedAtServer` from the server clock only.
+- **Firestore rules** — mirror `DVIR_*_KEYS` with a source pin exactly
+  as `protected-company-keys.mjs` pins the company roots; server-only
+  writes, no enumeration, exact-get for the owning driver/company.
+- **eQuipment** — adopt `authenticateDriver` (the established flow WB-S
+  already uses), construct submissions from the shared types, and
+  implement the now-required explanation on `needs_attention`.
+- **WB-S** — exact-get the view and verify it via `viewMatchesRecord` +
+  `satisfiesEnforcedDvirPhase`; never enumerate, never trust link fields.
+- **A9B mirror** — must be regenerated from the eventual published
+  0.2.0 artifact; its expected sha256/integrity constants change to the
+  values in `RELEASE-0.2.0-CANDIDATE.md`.
+
+## Disposition of the pre-existing phase-1a equipment protocol
+
+`functions/src/equipment/{types/dvir.ts, services/dvirService.ts}` and
+the client mirror `src/lib/equipment/dvirContracts.ts` predate this
+work and are **undeployed** (60 live functions; none equipment/DVIR),
+so no live record can exist through that path and there is no data
+migration.
+
+They must not become a second protocol. Required before any deploy:
+
+1. **Retire or adapt** `dvir.submitPreTrip`. It has no period binding,
+   is pre-trip only server-side, and has no request/completion state
+   machine, protocol version, or idempotency.
+2. **Never ship its trust model** — `requireDriver` validates a
+   *client-supplied* `driverHash`; the canonical protocol requires
+   server-derived identity from verified claims.
+3. **Reconcile the existing client/server drift** — the client mirror
+   permits `pre_trip | post_trip | periodic` and
+   `submitted | draft | reviewed` while the server accepts only
+   `pre_trip`/`submitted`.
+4. **Keep the category axis as a projection.** The item model is
+   canonical; `computeLegacyCategoryProjection` reproduces the nine
+   phase-1a categories from `legacyCategoryId`, so the existing
+   category-shaped consumers can be adapted rather than duplicated.
