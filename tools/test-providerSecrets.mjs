@@ -28,15 +28,25 @@ const clientSrc = readFileSync(join(FN, 'src', 'ai', 'anthropicClient.ts'), 'utf
 const indexSrc = readFileSync(join(FN, 'src', 'index.ts'), 'utf8');
 
 // ── 1. Secret definition and least privilege ────────────────────────────
-check('ANTHROPIC_API_KEY is defined via defineSecret',
-  /defineSecret\(\s*'ANTHROPIC_API_KEY'\s*\)/.test(secretsSrc));
+// vc51.9L-C1: a module-scope defineSecret is a codebase-GLOBAL Firebase
+// parameter, and the CLI resolves EVERY declared parameter during source
+// analysis, before applying an --only filter. With one secret holding no
+// version and the other absent, that made the whole codebase undeployable
+// — including three Auth Functions that touch neither provider. Bindings
+// are string names now, validated per-Function at deploy time.
+check('ANTHROPIC_API_KEY is a string NAME, not a global param',
+  /export const ANTHROPIC_API_KEY = 'ANTHROPIC_API_KEY' as const;/.test(secretsSrc));
+check('no global defineSecret parameter exists anywhere in src',
+  !/defineSecret/.test(secretsSrc.replace(/\/\*[\s\S]*?\*\//g, '')));
+check("no module imports firebase-functions/params",
+  !/from 'firebase-functions\/params'/.test(secretsSrc));
 // This originally asserted GEMINI_API_KEY was deliberately undefined,
 // which was true of the source tree but WRONG about the deployed code:
 // the photo-compliance Functions were live and absent locally. They are
 // restored, so the consumer is real and the secret must exist — but it
 // must still reach ONLY those two Functions.
 check('GEMINI_API_KEY is defined (photo-compliance consumes it)',
-  /defineSecret\(\s*'GEMINI_API_KEY'\s*\)/.test(secretsSrc));
+  /export const GEMINI_API_KEY = 'GEMINI_API_KEY' as const;/.test(secretsSrc));
 
 // Only parseJsaPdf may declare a secrets binding.
 const bindings = [...indexSrc.matchAll(/export const (\w+)\s*=\s*(?:httpsV2|functionsV1|functionsV2)[\s\S]{0,400}?secrets:\s*\[([^\]]*)\]/g)]
@@ -55,7 +65,17 @@ check('no process.env read of a provider key remains in index.ts',
 // Strip comments first — both files explain in prose WHY there is no
 // process.env fallback, and that prose must not read as a violation.
 const stripComments = (s) => s.replace(/\/\*[\s\S]*?\*\//g, '').replace(/^\s*\/\/.*$/gm, '');
-check('secrets.ts has no process.env fallback in code', !/process\.env/.test(stripComments(secretsSrc)));
+// process.env IS the supported access path for a string-named binding:
+// Secret Manager injects the value into the bound Function's runtime and
+// nowhere else. What must not exist is a FALLBACK — a default, an ||/??
+// alternative, or a literal — so an unset secret still fails closed.
+check('readSecret reads the runtime injection by name',
+  /const raw = process\.env\[name\];/.test(stripComments(secretsSrc)));
+check('readSecret has no default, fallback, or literal',
+  !/process\.env\[[^\]]*\]\s*(\|\||\?\?)/.test(stripComments(secretsSrc))
+  && !/process\.env\.[A-Z_]+\s*(\|\||\?\?)/.test(stripComments(secretsSrc)));
+check('an unset or blank secret still throws MissingSecretError',
+  /if \(typeof raw !== 'string' \|\| raw\.trim\(\) === ''\) \{\s*throw new MissingSecretError\(name\);/.test(stripComments(secretsSrc)));
 check('anthropicClient.ts has no process.env fallback in code', !/process\.env/.test(stripComments(clientSrc)));
 check('no .env file is referenced as a credential source',
   !/ANTHROPIC_API_KEY not set in functions\/\.env/.test(indexSrc));
@@ -76,7 +96,12 @@ const probe = `
   const out = {};
 
   // missing / blank secrets fail closed
-  const mk = (name, v) => ({ name, value: () => { if (v === null) throw new Error('unset'); return v; } });
+  // Drive the REAL access path: set/clear the runtime env the way Secret
+  // Manager injects it, rather than faking a param object.
+  const mk = (name, v) => {
+    if (v === null) delete process.env[name]; else process.env[name] = v;
+    return name;
+  };
   const caught = (f) => { try { f(); return null; } catch (e) { return e; } };
   out.unsetFailsClosed  = caught(() => readSecret(mk('ANTHROPIC_API_KEY', null))) instanceof MissingSecretError;
   out.blankFailsClosed  = caught(() => readSecret(mk('ANTHROPIC_API_KEY', '   '))) instanceof MissingSecretError;
@@ -121,6 +146,88 @@ try {
 } catch (e) {
   check('behavior probe ran', false, String(e.message).slice(0, 200));
 }
+// ── vc51.9L-C1: Auth/SSO must be free of AI secrets entirely ────────────
+{
+  const authSrc = readFileSync(join(FN, 'src', 'security', 'driverAuthCallables.ts'), 'utf8');
+  const ssoSrc = readFileSync(join(FN, 'src', 'sso', 'ssoCallables.ts'), 'utf8');
+  for (const [label, src] of [['authenticateDriver', authSrc], ['SSO callables', ssoSrc]]) {
+    check(`${label} references neither AI secret`,
+      !/ANTHROPIC_API_KEY|GEMINI_API_KEY/.test(src));
+    check(`${label} declares no secrets binding at all`, !/secrets:\s*\[/.test(src));
+  }
+}
+
+// ── each AI consumer binds exactly its justified secrets ────────────────
+{
+  const idx = readFileSync(join(FN, 'src', 'index.ts'), 'utf8');
+  const photo = readFileSync(join(FN, 'src', 'photoCompliance.ts'), 'utf8');
+
+  // parseJsaPdf is Anthropic-only and must not gain Gemini access.
+  // Comments in the options block mention the other key historically, so
+  // strip them before asserting on the actual binding.
+  const jsaWindow = idx.slice(idx.indexOf('export const parseJsaPdf'),
+    idx.indexOf('export const parseJsaPdf') + 600);
+  const jsaOpts = jsaWindow.replace(/\/\/.*$/gm, '').replace(/\/\*[\s\S]*?\*\//g, '');
+  check('parseJsaPdf binds ANTHROPIC_API_KEY only',
+    /secrets: \[ANTHROPIC_API_KEY\]/.test(jsaOpts) && !/GEMINI_API_KEY/.test(jsaOpts));
+
+  // Both photo Functions switch provider at runtime, so both binds are
+  // justified — that is least privilege at the Function boundary.
+  const photoBinds = photo.match(/secrets: \[[^\]]*\]/g) || [];
+  check('both photo Functions bind both secrets (runtime provider switch)',
+    photoBinds.length === 2
+    && photoBinds.every((b) => b.includes('ANTHROPIC_API_KEY') && b.includes('GEMINI_API_KEY')));
+  check('exactly three secret bindings exist in the whole codebase', (() => {
+    const all = [idx, photo].join('\n').match(/secrets: \[/g) || [];
+    return all.length === 3;
+  })());
+}
+
+// ── no AI secret bound to unrelated Functions ───────────────────────────
+{
+  const { readdirSync, statSync } = await import('node:fs');
+  const offenders = [];
+  const walk = (dir) => {
+    for (const e of readdirSync(dir, { withFileTypes: true })) {
+      const fp = join(dir, e.name);
+      if (e.isDirectory()) { walk(fp); continue; }
+      if (!e.name.endsWith('.ts')) continue;
+      if (fp.includes('secrets.ts') || fp.includes('anthropicClient') ) continue;
+      const body = readFileSync(fp, 'utf8');
+      if (!/secrets:\s*\[/.test(body)) continue;
+      if (!/photoCompliance|index\.ts/.test(fp)) offenders.push(fp.replace(FN, ''));
+    }
+  };
+  walk(join(FN, 'src'));
+  void statSync;
+  check('no unrelated module declares a secrets binding', offenders.length === 0, offenders.join(', '));
+}
+
+// ── AI behavior preserved ───────────────────────────────────────────────
+{
+  const photo = readFileSync(join(FN, 'src', 'photoCompliance.ts'), 'utf8');
+  const idxSrcForMapper = readFileSync(join(FN, 'src', 'index.ts'), 'utf8');
+  check('Gemini key travels in the x-goog-api-key HEADER',
+    (photo.match(/'x-goog-api-key': apiKey/g) || []).length === 2);
+  check('Gemini key never appears in a query string',
+    !/[?&]key=\$\{?apiKey/.test(photo));
+  check('runtime provider switching is unchanged',
+    /PHOTO_COMPLIANCE_PROVIDER/.test(photo));
+  check('provider failures are logged redacted (server side)',
+    (photo.match(/logRedacted\(/g) || []).length >= 2);
+  // KNOWN PRE-EXISTING, deliberately unchanged here: the photo Functions
+  // still forward `err.message` to the client as
+  // "Photo validation failed: ..." rather than going through
+  // toSafeProviderError, which is the leak shape secrets.ts was written to
+  // remove. Fixing it changes an AI request/response contract and is
+  // explicitly out of scope for this correction. Pinned so it is visible
+  // and cannot be mistaken for already-fixed.
+  check('KNOWN GAP: photo Functions still forward err.message to the client',
+    /'Photo validation failed: ' \+ err\?\.message/.test(photo));
+  check('the safe mapper exists and is used by the JSA path',
+    /toSafeProviderError\(/.test(idxSrcForMapper));
+}
+
 const expect = {
   unsetFailsClosed: 'unset secret fails closed',
   blankFailsClosed: 'blank secret fails closed',

@@ -50,8 +50,12 @@ const stripComments = (s) => s.replace(/\/\*[\s\S]*?\*\//g, '').replace(/^\s*\/\
 const code = stripComments(src);
 check('no process.env read of a provider credential',
   !/process\.env\.(ANTHROPIC|GEMINI)_API_KEY/.test(code));
-check('GEMINI_API_KEY is now defined as a secret (it has a real consumer)',
-  /defineSecret\(\s*'GEMINI_API_KEY'\s*\)/.test(secretsSrc));
+// vc51.9L-C1: still one explicit declaration per provider, but as a
+// string NAME rather than a global defineSecret parameter — a global
+// param is resolved codebase-wide before any --only filter, which made
+// unrelated Auth-only deploys fail on this very secret.
+check('GEMINI_API_KEY is declared as a secret name (it has a real consumer)',
+  /export const GEMINI_API_KEY = 'GEMINI_API_KEY' as const;/.test(secretsSrc));
 check('provider keys are read through readSecret (fails closed)',
   (code.match(/readSecret\(GEMINI_API_KEY\)/g) || []).length === 2);
 check('Anthropic client comes from the injected factory',

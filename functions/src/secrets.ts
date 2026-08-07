@@ -9,15 +9,20 @@
  * manifest, or console listing can reproduce them.
  *
  * Rules this module exists to enforce:
- *   - one explicit definition per provider
- *   - `.value()` is read ONLY during invocation, never at module load
- *     (a module-load read runs during deployment analysis and would fail
- *     the build for every function that does not bind the secret)
+ *   - one explicit NAME per provider, never a global `defineSecret`
+ *     parameter. vc51.9L found why: a module-scope `defineSecret` is a
+ *     codebase-GLOBAL Firebase parameter, and the CLI resolves every
+ *     declared parameter while analysing the source, BEFORE it applies an
+ *     `--only` filter. With ANTHROPIC_API_KEY holding no version and
+ *     GEMINI_API_KEY absent, that made the entire codebase undeployable —
+ *     including three Auth Functions that touch neither provider.
+ *     String-named bindings are validated per-Function at deploy time
+ *     instead, so an unrelated selective deploy is unaffected.
+ *   - the value is read ONLY during invocation, never at module load
  *   - only the Functions that genuinely consume a provider declare it
- *   - no `process.env` plaintext fallback — missing fails closed
+ *   - no fallback of any kind — an unset secret fails closed
  *   - the value never reaches a log, an error, or a client response
  */
-import { defineSecret } from 'firebase-functions/params';
 import * as httpsV2 from 'firebase-functions/v2/https';
 
 /**
@@ -26,7 +31,7 @@ import * as httpsV2 from 'firebase-functions/v2/https';
  * Consumed by exactly one Function: `parseJsaPdf`. Bind it there and
  * nowhere else — see docs/SECRET-ROTATION-RUNBOOK.md.
  */
-export const ANTHROPIC_API_KEY = defineSecret('ANTHROPIC_API_KEY');
+export const ANTHROPIC_API_KEY = 'ANTHROPIC_API_KEY' as const;
 
 /**
  * Gemini / Google AI Studio API key.
@@ -45,7 +50,7 @@ export const ANTHROPIC_API_KEY = defineSecret('ANTHROPIC_API_KEY');
  * Nothing else may bind this. `parseJsaPdf` stays Anthropic-only, and
  * the well-catalog and split-family Functions bind neither.
  */
-export const GEMINI_API_KEY = defineSecret('GEMINI_API_KEY');
+export const GEMINI_API_KEY = 'GEMINI_API_KEY' as const;
 
 /** Thrown shape for a missing/blank secret — never includes the value. */
 export class MissingSecretError extends Error {
@@ -58,22 +63,22 @@ export class MissingSecretError extends Error {
 /**
  * Read a bound secret at invocation time, failing closed.
  *
- * Deliberately no `process.env` fallback: a fallback is what lets a
- * plaintext value silently keep working after migration, which is the
- * condition this packet removes. A blank/absent secret is an operational
- * misconfiguration, so it surfaces as `failed-precondition` with a
- * redacted message — the caller learns which secret is unset, never any
- * part of its value.
+ * Secret Manager injects a bound secret into the runtime environment of
+ * the Function that declared it, and only that Function. Reading it here,
+ * during invocation, is the supported access path for a string-named
+ * binding — it is NOT a plaintext fallback, and there is no fallback: an
+ * absent or blank value is an operational misconfiguration and surfaces
+ * as `failed-precondition` with a redacted message. The caller learns
+ * which secret is unset, never any part of its value.
+ *
+ * A Function that did not bind the secret sees nothing here and fails
+ * closed, which is exactly the least-privilege boundary the previous
+ * `defineSecret` object provided — without making the parameter global.
  */
-export function readSecret(param: { name: string; value: () => string }): string {
-  let raw: string;
-  try {
-    raw = param.value();
-  } catch {
-    throw new MissingSecretError(param.name);
-  }
+export function readSecret(name: string): string {
+  const raw = process.env[name];
   if (typeof raw !== 'string' || raw.trim() === '') {
-    throw new MissingSecretError(param.name);
+    throw new MissingSecretError(name);
   }
   return raw;
 }
