@@ -14,6 +14,7 @@
 import * as httpsV2 from 'firebase-functions/v2/https';
 import * as admin from 'firebase-admin';
 import { createHash, randomBytes } from 'crypto';
+import { Timestamp } from 'firebase-admin/firestore';
 import { checkRateLimit, hashIp } from '../security/rateLimit';
 import { handleSsoIssueCode } from './ssoIssueHandler';
 import { handleSsoExchange } from './ssoExchangeHandler';
@@ -44,6 +45,8 @@ export function buildSsoDeps(): SsoDeps {
     randomBytes: (count) => new Uint8Array(randomBytes(count)),
     sha256Hex: (input) => createHash('sha256').update(input, 'utf8').digest('hex'),
     base64Url: (bytes) => Buffer.from(bytes).toString('base64url'),
+    // Server-owned. The client supplies neither expiry field.
+    expiresAtTimestamp: (ms) => Timestamp.fromMillis(ms),
 
     /**
      * Authoritative driver liveness and company.

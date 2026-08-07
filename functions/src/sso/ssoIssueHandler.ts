@@ -108,6 +108,10 @@ export async function handleSsoIssueCode(
       protocolVersion: SSO_PROTOCOL_VERSION,
       issuedAtMs,
       expiresAtMs,
+      // Firestore-native mirror for the TTL policy. Protocol validation
+      // still uses expiresAtMs — a Timestamp comparison in the consume
+      // transaction would depend on a policy that is not yet configured.
+      expiresAt: deps.expiresAtTimestamp(expiresAtMs),
       consumed: false,
     });
   });

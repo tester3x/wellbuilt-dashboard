@@ -30,6 +30,8 @@ export interface SsoCodeRecord {
   protocolVersion: number;
   issuedAtMs: number;
   expiresAtMs: number;
+  /** Firestore Timestamp mirror of expiresAtMs, for the TTL policy. */
+  expiresAt?: unknown;
   consumed: boolean;
   consumedAtMs?: number;
 }
@@ -49,6 +51,12 @@ export interface SsoDeps {
   randomBytes(count: number): Uint8Array;
   /** Hex SHA-256 of a UTF-8 string. */
   sha256Hex(input: string): string;
+  /**
+   * Firestore-native Timestamp for a millisecond instant, for the TTL
+   * policy to read. SERVER-owned: the client supplies neither this nor
+   * expiresAtMs, and both are computed from the server clock.
+   */
+  expiresAtTimestamp(ms: number): unknown;
   /** base64url of raw bytes, unpadded. */
   base64Url(bytes: Uint8Array): string;
   /** The authoritative driver record, or null when absent. */

@@ -50,6 +50,9 @@ function makeWorld(opts = {}) {
     },
     sha256Hex,
     base64Url: b64url,
+    // Stand-in for Firestore Timestamp: an object the client could not
+    // have supplied, so the test can prove server ownership.
+    expiresAtTimestamp: (ms) => ({ __timestamp: true, ms }),
     getDriver: async (id) => drivers.get(id) ?? null,
     runTransaction: async (fn) => {
       // Optimistic-concurrency emulation: snapshot versions read during
@@ -206,6 +209,10 @@ const rejects = async (fn) => {
   check('record binds server-issued times and starts unconsumed',
     typeof doc.data.issuedAtMs === 'number' && doc.data.expiresAtMs > doc.data.issuedAtMs
     && doc.data.consumed === false);
+  check('record carries a Firestore-native expiry field for the TTL policy',
+    doc.data.expiresAt && doc.data.expiresAt.__timestamp === true);
+  check('the TTL field mirrors the numeric expiry exactly',
+    doc.data.expiresAt.ms === doc.data.expiresAtMs);
   check('record has a SHORT ttl', doc.data.expiresAtMs - doc.data.issuedAtMs <= 300_000);
   check('record stores no token/passcode material',
     !/idToken|refreshToken|customToken|passcode|hash"/i.test(stored.replace(/codeHash/g, '')));
