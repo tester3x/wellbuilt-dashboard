@@ -30,13 +30,18 @@ const indexSrc = readFileSync(join(FN, 'src', 'index.ts'), 'utf8');
 // ── 1. Secret definition and least privilege ────────────────────────────
 check('ANTHROPIC_API_KEY is defined via defineSecret',
   /defineSecret\(\s*'ANTHROPIC_API_KEY'\s*\)/.test(secretsSrc));
-check('GEMINI_API_KEY is deliberately NOT defined (zero consumers)',
-  !/defineSecret\(\s*'GEMINI_API_KEY'\s*\)/.test(secretsSrc));
+// This originally asserted GEMINI_API_KEY was deliberately undefined,
+// which was true of the source tree but WRONG about the deployed code:
+// the photo-compliance Functions were live and absent locally. They are
+// restored, so the consumer is real and the secret must exist — but it
+// must still reach ONLY those two Functions.
+check('GEMINI_API_KEY is defined (photo-compliance consumes it)',
+  /defineSecret\(\s*'GEMINI_API_KEY'\s*\)/.test(secretsSrc));
 
 // Only parseJsaPdf may declare a secrets binding.
 const bindings = [...indexSrc.matchAll(/export const (\w+)\s*=\s*(?:httpsV2|functionsV1|functionsV2)[\s\S]{0,400}?secrets:\s*\[([^\]]*)\]/g)]
   .map((m) => ({ fn: m[1], secrets: m[2].trim() }));
-check('exactly one Function declares a secret binding', bindings.length === 1,
+check('exactly one Function in index.ts declares a secret binding', bindings.length === 1,
   bindings.map((b) => b.fn).join(','));
 check('the bound Function is parseJsaPdf', bindings[0]?.fn === 'parseJsaPdf', bindings[0]?.fn);
 check('parseJsaPdf binds ANTHROPIC_API_KEY only',
