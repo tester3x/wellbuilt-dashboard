@@ -26,6 +26,7 @@ import GpsRoutesTab from '@/components/admin/GpsRoutesTab';
 import { EquipmentTab } from '@/components/admin/EquipmentTab';
 import dynamic from 'next/dynamic';
 import { useVerifiedAdmin } from '@/lib/useVerifiedAdmin';
+import { FirstAdminBootstrapCard } from '@/components/admin/FirstAdminBootstrapCard';
 import { VerifiedAdminGate } from '@/components/admin/VerifiedAdminGate';
 
 // vc51.9A7 — protected contract surfaces, lazy-loaded and visible only
@@ -1002,6 +1003,15 @@ export default function AdminPage() {
            activeTab === 'adminaudit' ? 'Platform Admin Audit' :
            'Company Management'}
         </h2>
+
+        {/* vc51.9Z — one-time platform-admin activation. Visible only to an
+            authenticated session that carries no wellbuiltAdmin claim; the
+            server refuses anyone not on the deployment allowlist, so this
+            card being rendered grants nothing. Remove with the endpoint
+            once bootstrap has completed. */}
+        {adminSession.status === 'ordinary' && (
+          <FirstAdminBootstrapCard onGranted={refreshAccess} />
+        )}
 
         {/* Tabs — global well-config tabs render only for users who may
             manage the global pool (tenant containment, see gate above). */}
