@@ -4781,6 +4781,12 @@ export {
   adminPreviewCompanyEffectiveCapabilities, adminListAdminAudit,
 } from './admin/callables';
 
+// ── vc51.9Z: ONE-TIME first-platform-admin bootstrap ──────────────────────
+// Self-only, deployment-allowlisted, refuses permanently once completed.
+// DELETE this export and redeploy immediately after the first successful
+// use — the completion marker and the deletion are both required.
+export { bootstrapFirstPlatformAdmin } from './admin/bootstrapCallable';
+
 // vc51.9I-RECOVERY4 — live Functions restored from the qualified
 // historical implementation. They were absent from this branch, so a
 // whole-codebase deploy would have pruned them.
