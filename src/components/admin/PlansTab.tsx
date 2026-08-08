@@ -64,7 +64,11 @@ export function PlansTab() {
       setCursor(page.nextCursor);
       setLoadPhase('ready');
     } catch (err) {
-      surface(err);
+      // NOT surface(): it calls load() whenever the guidance action is
+      // 'reload', and this IS load()'s catch. not_found and conflict both
+      // carry that action, so routing a read failure through it re-enters
+      // load from load with nothing to bound it. Recovery is Retry.
+      setNotice(errorGuidance(err instanceof AdminServiceError ? err : { kind: 'unknown' }).message);
       setLoadPhase('error');
     } finally {
       setLoading(false);

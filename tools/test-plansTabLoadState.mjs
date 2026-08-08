@@ -64,6 +64,24 @@ check('4. the failure is recoverable without a page reload',
 check('5. the failure text does not assert anything about what exists',
   !/No plans exist[\s\S]{0,80}loadPhase === 'error'/.test(code));
 
+// ── 9. the load path must not re-enter itself ────────────────────────────
+// surface() calls load(true) whenever the guidance action is 'reload'.
+// After a mutation that is correct. Called from load()'s own catch it is
+// unbounded: not_found and conflict both carry that action.
+{
+  const s = code.indexOf('const load = useCallback');
+  const e = code.indexOf('}, [cursor]);', s);
+  const body = code.slice(s, e === -1 ? s + 1200 : e);
+  check('9. the load path does not route failures through surface()',
+    !/surface\(/.test(body),
+    'surface() re-enters load() from load()\'s own catch');
+  check('9. the load failure is still reported',
+    /setNotice\(|reportOnly\(/.test(body) && /setLoadPhase\('error'\)/.test(body));
+}
+check('9. surface keeps its auto-reload for MUTATIONS',
+  /action === 'reload'/.test(code) && /void load\(true\)/.test(code),
+  'the mutation path legitimately refreshes a stale list');
+
 // ── the mutation paths keep their truthful notices ───────────────────────
 check('6. create/update still report success by planId',
   /Created plan \$\{formPlanId\}|Updated plan \$\{editing\.planId\}/.test(code));
