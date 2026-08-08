@@ -41,6 +41,17 @@ const TONE_CLASS: Record<string, string> = {
 };
 
 export function CompanyContractPanel({ companyId }: { companyId: string }) {
+  /**
+   * Load phase, tracked separately from the data.
+   *
+   * This panel used `state === null` as its spinner condition, and `state`
+   * is only assigned when the read succeeds — so a rejected
+   * getCompanyContractConfiguration left the operator on
+   * "Loading contract state…" forever, with the error invisible because
+   * the early return fired before the notice could render.
+   */
+  const [loadPhase, setLoadPhase] = useState<'loading' | 'ready' | 'error'>('loading');
+  const [loadError, setLoadError] = useState<string>('');
   const [state, setState] = useState<CompanyContractStateLabel | null>(null);
   const [contract, setContract] = useState<WellbuiltContract | null>(null);
   const [invalidReason, setInvalidReason] = useState<string | undefined>();
@@ -62,18 +73,40 @@ export function CompanyContractPanel({ companyId }: { companyId: string }) {
   };
 
   const reload = useCallback(async () => {
+    setLoadPhase('loading');
+    setLoadError('');
     try {
       const cfg = await service.getCompanyContractConfiguration({ companyId });
       setState(cfg.state);
       setContract(cfg.contract ?? null);
       setInvalidReason(cfg.invalidReason);
       if (cfg.state === 'inert' || cfg.state === 'active') {
-        const p = await service.previewCompanyEffectiveCapabilities({ companyId });
-        setPreview(p.result ?? null);
+        // A capability-preview failure must not blank the contract state we
+        // already read successfully.
+        try {
+          const p = await service.previewCompanyEffectiveCapabilities({ companyId });
+          setPreview(p.result ?? null);
+        } catch (previewErr) {
+          setPreview(null);
+          surface(previewErr);
+        }
       } else {
         setPreview(null);
       }
+      setLoadPhase('ready');
     } catch (err) {
+      const code = (err as { code?: string })?.code || '';
+      const msg = (err as { message?: string })?.message || '';
+      setLoadError(
+        /unauthenticated|permission-denied/.test(code)
+          ? 'Not authorized to read this company’s contract configuration.'
+          : /not-found/.test(code) || /company_not_found/.test(msg)
+            ? 'This company has no contract record yet.'
+            : /internal|unavailable|deadline/.test(code)
+              ? 'The contract service is unavailable. Try again.'
+              : 'Could not load contract state.',
+      );
+      setLoadPhase('error');
       surface(err);
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -100,7 +133,22 @@ export function CompanyContractPanel({ companyId }: { companyId: string }) {
     }
   };
 
-  if (state === null) return <p className="text-gray-400 text-sm">Loading contract state…</p>;
+  if (loadPhase === 'error') {
+    return (
+      <div className="text-sm">
+        <p className="text-red-400 mb-2">{loadError || 'Could not load contract state.'}</p>
+        <button
+          onClick={() => { void reload(); }}
+          className="px-3 py-1 rounded bg-gray-600 hover:bg-gray-500 text-white"
+        >
+          Retry
+        </button>
+      </div>
+    );
+  }
+  if (loadPhase === 'loading' || state === null) {
+    return <p className="text-gray-400 text-sm">Loading contract state…</p>;
+  }
   const view = contractStateView(state, invalidReason);
   const selectedPlan = plans.find((p) => p.planId === assignPlanId);
   const readiness = enforcementReadiness({ state, contract, preview });
