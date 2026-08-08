@@ -73,6 +73,18 @@ export function CompanyContractPanel({ companyId }: { companyId: string }) {
     if (g.action === 'reload') void reload();
   };
 
+  /**
+   * Report without acting. surface() re-enters reload() whenever the
+   * guidance action is 'reload' — correct after a mutation left the view
+   * stale, but fatal inside reload() itself, which is where every failure
+   * below is caught. not_found and conflict both carry that action, and
+   * adminGetCompanyContractConfiguration answers not-found/company_not_found
+   * for any company without a contract document, so routing a LOAD failure
+   * through surface() calls reload from reload with nothing to bound it.
+   * Recovery here is the operator's Retry button.
+   */
+  const reportOnly = (err: unknown) => setNotice(contractLoadFailure(err).message);
+
   const reload = useCallback(async () => {
     setLoadPhase('loading');
     setLoadError('');
@@ -89,7 +101,7 @@ export function CompanyContractPanel({ companyId }: { companyId: string }) {
           setPreview(p.result ?? null);
         } catch (previewErr) {
           setPreview(null);
-          surface(previewErr);
+          reportOnly(previewErr);
         }
       } else {
         setPreview(null);
@@ -101,7 +113,7 @@ export function CompanyContractPanel({ companyId }: { companyId: string }) {
       // nothing and reported every cause as the same generic sentence.
       setLoadError(contractLoadFailure(err).message);
       setLoadPhase('error');
-      surface(err);
+      setNotice(null);
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [companyId]);
