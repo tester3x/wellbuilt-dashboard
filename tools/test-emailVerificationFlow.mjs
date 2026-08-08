@@ -150,9 +150,20 @@ if (r) {
     /!\s*emailVerified|emailVerified === false/.test(card));
 
   // 3. no arbitrary input
-  check('3. the card has no email or uid input field',
-    !/<input/.test(card) || !/type="email"/.test(card),
-    'there must be nothing to type an address into');
+  // The card now carries ONE email input, for the vc51.9Z-3
+  // verify-before-update change. That is not a way to aim a verification
+  // mail at a third party: the send path takes no address at all, and the
+  // change path only ever commits after the NEW mailbox proves itself.
+  check('3. the verification send still accepts no address from the UI',
+    /sendVerificationToCurrentUser\(\)/.test(card)
+    && !/sendVerificationToCurrentUser\([^)]/.test(card),
+    'the send must remain argument-free');
+  check('3. the card has no uid input of any kind',
+    !/name="uid"|id="uid"|placeholder="[^"]*uid/i.test(card));
+  check('3. the only address input belongs to verify-before-update',
+    (card.match(/type="email"/g) || []).length === 1
+    && /startEmailChange\(newEmail\)/.test(card),
+    'and it targets auth.currentUser, never a supplied uid');
 
   // 10/11. activation stays explicit
   check('10. activation is offered once the address is verified',

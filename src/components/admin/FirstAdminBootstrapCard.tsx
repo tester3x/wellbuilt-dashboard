@@ -24,6 +24,7 @@
 
 import { useCallback, useEffect, useState } from 'react';
 import { runFirstAdminBootstrap } from '@/lib/firstAdminBootstrap';
+import { startEmailChange } from '@/lib/emailChange';
 import {
   RESEND_COOLDOWN_MS,
   canSendVerification,
@@ -48,6 +49,11 @@ export function FirstAdminBootstrapCard({ onGranted }: { onGranted: () => Promis
   const [nowMs, setNowMs] = useState(() => Date.now());
   const [verifyNote, setVerifyNote] = useState<string | null>(null);
 
+  const [emailChangeOpen, setEmailChangeOpen] = useState(false);
+  const [newEmail, setNewEmail] = useState('');
+  const [changing, setChanging] = useState(false);
+  const [changeNote, setChangeNote] = useState<string | null>(null);
+
   /** Drop every transient value — used on unmount and on sign-out. */
   const clearTransient = useCallback(() => {
     setSending(false);
@@ -55,6 +61,10 @@ export function FirstAdminBootstrapCard({ onGranted }: { onGranted: () => Promis
     setLastSentAt(null);
     setVerifyNote(null);
     setNote(null);
+    setEmailChangeOpen(false);
+    setNewEmail('');
+    setChanging(false);
+    setChangeNote(null);
   }, []);
 
   useEffect(() => {
@@ -108,6 +118,23 @@ export function FirstAdminBootstrapCard({ onGranted }: { onGranted: () => Promis
       if (!s.emailVerified) setVerifyNote(verificationCopy.stillUnverified);
     } finally {
       setChecking(false);
+    }
+  };
+
+  const changeEmail = async () => {
+    if (changing) return;
+    setChanging(true);
+    setChangeNote(null);
+    try {
+      const r = await startEmailChange(newEmail);
+      if (r.ok) {
+        setChangeNote('Confirmation sent. Open the link in that mailbox, then return here and refresh your status.');
+        setNewEmail('');
+      } else {
+        setChangeNote(r.message);
+      }
+    } finally {
+      setChanging(false);
     }
   };
 
@@ -169,6 +196,55 @@ export function FirstAdminBootstrapCard({ onGranted }: { onGranted: () => Promis
           <p className="mt-3 text-xs text-gray-400">
             Verifying your email does not activate anything by itself.
           </p>
+
+          {/* Not receiving the mail is a delivery problem, not a reason to
+              lower the bar. The link goes to the NEW address and the change
+              commits only once that link is followed, so the mailbox is
+              still proven — and the account keeps the same identity. */}
+          <div className="mt-3 border-t border-gray-700 pt-3">
+            {!emailChangeOpen ? (
+              <button
+                onClick={() => setEmailChangeOpen(true)}
+                className="text-xs text-blue-300 hover:text-blue-200 underline"
+              >
+                Not receiving it? Use a different email address
+              </button>
+            ) : (
+              <div>
+                <p className="text-gray-300 text-sm">
+                  We will send the confirmation link to the new address. The change takes
+                  effect only after you open that link, so the new mailbox is proven the
+                  same way. Your sign-in, access and history stay exactly as they are.
+                </p>
+                <div className="mt-2 flex flex-wrap gap-2 items-center">
+                  <label htmlFor="newOwnerEmail" className="sr-only">New email address</label>
+                  <input
+                    id="newOwnerEmail"
+                    type="email"
+                    autoComplete="email"
+                    value={newEmail}
+                    onChange={(e) => setNewEmail(e.target.value)}
+                    placeholder="you@example.com"
+                    className="px-2 py-1.5 rounded bg-gray-900 border border-gray-600 text-white text-sm min-w-0 flex-1"
+                  />
+                  <button
+                    onClick={() => { void changeEmail(); }}
+                    disabled={changing || !newEmail.trim()}
+                    className="px-3 py-1.5 rounded bg-blue-600 hover:bg-blue-500 disabled:opacity-50 text-white text-sm"
+                  >
+                    {changing ? 'Sending…' : 'Send confirmation'}
+                  </button>
+                  <button
+                    onClick={() => { setEmailChangeOpen(false); setNewEmail(''); setChangeNote(null); }}
+                    className="px-3 py-1.5 rounded bg-gray-600 hover:bg-gray-500 text-white text-sm"
+                  >
+                    Cancel
+                  </button>
+                </div>
+                {changeNote && <p className="mt-2 text-sm text-gray-200 break-words">{changeNote}</p>}
+              </div>
+            )}
+          </div>
         </div>
       )}
 
