@@ -14,6 +14,8 @@
  */
 
 import { useCallback, useEffect, useState } from 'react';
+import { VerifiedAdminGate } from './VerifiedAdminGate';
+import { useVerifiedAdmin } from '@/lib/useVerifiedAdmin';
 import { contractLoadFailure } from '@/lib/adminLoadFailure';
 import {
   createAdminContractService,
@@ -42,6 +44,7 @@ const TONE_CLASS: Record<string, string> = {
 };
 
 export function CompanyContractPanel({ companyId }: { companyId: string }) {
+  const { session, refreshAccess } = useVerifiedAdmin();
   /**
    * Load phase, tracked separately from the data.
    *
@@ -119,10 +122,14 @@ export function CompanyContractPanel({ companyId }: { companyId: string }) {
   }, [companyId]);
 
   useEffect(() => {
+    // Both callables are dual-gated server-side. Reading them without a
+    // verified session produces a guaranteed permission-denied per company
+    // row, so wait for the claim rather than spend the call.
+    if (session.status !== 'verified') return;
     void reload();
     service.listPlans({ limit: 50 }).then((r) => setPlans(r.plans)).catch(surface);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [companyId]);
+  }, [companyId, session.status]);
 
   const run = async (label: string, fn: () => Promise<unknown>) => {
     if (busy) return;
@@ -139,6 +146,25 @@ export function CompanyContractPanel({ companyId }: { companyId: string }) {
     }
   };
 
+  /**
+   * The server's gate, mirrored.
+   *
+   * CompaniesTab offers this panel on isPlatformAdmin(user) — a Firestore
+   * PROFILE role. authorizeAdminCall requires something else entirely: the
+   * wellbuiltAdmin custom claim AND an enabled platform_admins/{uid}
+   * record. A company role, "Owner" included, implies neither, so the tool
+   * was being offered to sessions that could never use it and the denial
+   * arrived as an unexplained failed read. The profile-role gate is
+   * unchanged and still decides who is offered this area; this is the
+   * second gate, shown honestly, with the refresh action attached.
+   */
+  if (session.status !== 'verified') {
+    return (
+      <VerifiedAdminGate session={session} onRefresh={refreshAccess}>
+        {null}
+      </VerifiedAdminGate>
+    );
+  }
   if (loadPhase === 'error') {
     return (
       <div className="text-sm">
