@@ -27,6 +27,18 @@ const service = createAdminContractService();
 export function PlansTab() {
   const [plans, setPlans] = useState<PlanDefinition[]>([]);
   const [cursor, setCursor] = useState<string | null>(null);
+  /**
+   * Load phase, tracked separately from the list.
+   *
+   * The empty state used to key on `plans.length === 0`, and `plans` is
+   * only replaced on success — so a failed read told the administrator
+   * "No plans exist yet. Create the first plan." That is not merely
+   * under-reporting: it is an instruction, issued at the exact moment the
+   * client does not know what exists. Following it against a non-empty
+   * catalog means a refused create, or a genuine duplicate under a
+   * different planId.
+   */
+  const [loadPhase, setLoadPhase] = useState<'loading' | 'ready' | 'error'>('loading');
   const [loading, setLoading] = useState(true);
   const [notice, setNotice] = useState<string | null>(null);
   const [showForm, setShowForm] = useState(false);
@@ -45,12 +57,15 @@ export function PlansTab() {
 
   const load = useCallback(async (reset: boolean) => {
     setLoading(true);
+    setLoadPhase('loading');
     try {
       const page = await service.listPlans({ limit: 25, ...(reset || !cursor ? {} : { cursor }) });
       setPlans((prev) => (reset ? page.plans : [...prev, ...page.plans]));
       setCursor(page.nextCursor);
+      setLoadPhase('ready');
     } catch (err) {
       surface(err);
+      setLoadPhase('error');
     } finally {
       setLoading(false);
     }
@@ -119,7 +134,20 @@ export function PlansTab() {
 
       {loading && plans.length === 0 ? (
         <p className="text-gray-400 text-sm">Loading plans…</p>
-      ) : plans.length === 0 ? (
+      ) : loadPhase === 'error' && plans.length === 0 ? (
+        <div className="text-sm">
+          <p className="text-red-400 mb-2">
+            The plan catalog could not be read, so none are listed. Do not create a plan
+            from this state — what already exists is unknown.
+          </p>
+          <button
+            onClick={() => { void load(true); }}
+            className="px-3 py-1 rounded bg-gray-600 hover:bg-gray-500 text-white"
+          >
+            Retry
+          </button>
+        </div>
+      ) : loadPhase === 'ready' && plans.length === 0 ? (
         <p className="text-gray-400 text-sm">No plans exist yet. Create the first plan to begin assigning companies.</p>
       ) : (
         <ul className="space-y-2">
