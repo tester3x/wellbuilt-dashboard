@@ -119,6 +119,63 @@ export function decideNameIndexClaim(
   }
 }
 
+/**
+ * May a failed invocation clean up after itself?
+ *
+ * Compensation runs AFTER the claim transaction committed, so by the time
+ * it executes another legitimate invocation may already have superseded
+ * this one: an admin reset, an approval, or the driver changing their own
+ * passcode. Deleting unconditionally would destroy that newer credential.
+ *
+ * Ownership is proven by `opId` — a random, non-secret marker written with
+ * the credential in the same transaction. Any later legitimate write
+ * replaces or clears it, so a stale compensation can no longer match.
+ * It is never consulted when authenticating.
+ */
+export interface CompensationInput {
+  credentialExists: boolean;
+  /** `opId` currently on the credential document, whatever shape. */
+  credentialOpId: unknown;
+  /** The opId this invocation wrote. */
+  myOpId: string;
+  indexExists: boolean;
+  /** `driverId` currently on the index document, whatever shape. */
+  indexDriverId: unknown;
+  myDriverId: string;
+}
+
+export interface CompensationDecision {
+  deleteCredential: boolean;
+  releaseIndex: boolean;
+  /** Something newer holds this state; cleanup is deliberately incomplete. */
+  superseded: boolean;
+}
+
+export function decideCompensation(input: CompensationInput): CompensationDecision {
+  const credentialIsOurs =
+    input.credentialExists
+    && typeof input.credentialOpId === 'string'
+    && input.credentialOpId === input.myOpId;
+
+  const indexIsOurs =
+    input.indexExists
+    && typeof input.indexDriverId === 'string'
+    && input.indexDriverId === input.myDriverId;
+
+  // A credential that exists but is NOT ours means a newer operation owns
+  // this driverId — its login depends on the index, so leave both alone.
+  const credentialSuperseded = input.credentialExists && !credentialIsOurs;
+  const indexSuperseded = input.indexExists && !indexIsOurs;
+
+  return {
+    deleteCredential: credentialIsOurs,
+    // Release only when nothing newer depends on it: either the credential
+    // is ours, or it is already gone.
+    releaseIndex: indexIsOurs && !credentialSuperseded,
+    superseded: credentialSuperseded || indexSuperseded,
+  };
+}
+
 /** Message shown to an admin when the claim is refused. Never leaks the holder. */
 export function claimRefusalMessage(
   reason: 'name_taken' | 'indeterminate' | 'malformed_owner',

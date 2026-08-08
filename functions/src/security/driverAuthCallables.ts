@@ -21,6 +21,7 @@ import { writeSecurityAudit } from './audit';
 import { requireManageDrivers } from './adminAuth';
 import {
   claimRefusalMessage,
+  decideCompensation,
   decideNameIndexClaim,
   readIncumbentCredential,
   readIndexOwner,
@@ -364,6 +365,11 @@ export const driverChangeOwnPasscode = httpsV2.onCall(
       mustResetPasscode: false,
       updatedAt: FieldValue.serverTimestamp(),
       passcodeChangedAt: FieldValue.serverTimestamp(),
+      // Invalidate any pending cleanup ownership. This is a partial update,
+      // so without clearing it an admin create/reset whose RTDB write later
+      // failed would still match its own opId and delete the passcode the
+      // driver just set.
+      opId: FieldValue.delete(),
     });
     // Clear mustChangePasscode claim on next token; update claims now
     const authUid = request.auth.uid;
@@ -674,6 +680,20 @@ export const adminSetDriverPasscode = httpsV2.onCall(
     }
 
     const temporary = data.temporary !== false; // default true
+    /**
+     * Cleanup-ownership marker for THIS invocation.
+     *
+     * Random, non-secret, and never consulted when authenticating — its
+     * only job is to let compensation prove the credential it is about to
+     * delete is still the one this invocation wrote. Any later legitimate
+     * write (admin reset, approval, or the driver changing their own
+     * passcode) replaces or clears it, so a stale compensation no longer
+     * matches and leaves the newer credential alone.
+     *
+     * Generated once here, outside the transaction, so Firestore retries
+     * reuse it exactly as the candidate driverId does.
+     */
+    const opId = randomUUID();
     const nameNorm = normalizeDisplayName(fields.displayName);
     const passcodeRecord = await hashPasscodeScrypt(fields.passcode);
     let driverId = (data.driverId || '').trim();
@@ -812,6 +832,8 @@ export const adminSetDriverPasscode = httpsV2.onCall(
           createdAt: FieldValue.serverTimestamp(),
           setBy: caller.uid,
           temporaryAssigned: temporary,
+          // Cleanup ownership only — see opId above. Not an authenticator.
+          opId,
         },
         { merge: true },
       );
@@ -839,11 +861,30 @@ export const adminSetDriverPasscode = httpsV2.onCall(
       });
     } catch (profileErr) {
       let compensated = true;
+      let superseded = false;
       try {
-        await fs().collection('driver_credentials').doc(driverId).delete();
+        // ONE transaction reads both documents and decides, so a
+        // concurrent invocation cannot slip between the checks. An
+        // unconditional delete here would destroy a newer credential
+        // written by a legitimate reset that landed while our RTDB write
+        // was failing.
+        const credRef = fs().collection('driver_credentials').doc(driverId);
         await fs().runTransaction(async (tx) => {
-          const held = await tx.get(idxRef);
-          if (held.exists && held.data()?.driverId === driverId) tx.delete(idxRef);
+          const [credSnap, idxSnap] = await Promise.all([
+            tx.get(credRef),
+            tx.get(idxRef),
+          ]);
+          const decision = decideCompensation({
+            credentialExists: credSnap.exists,
+            credentialOpId: credSnap.data()?.opId,
+            myOpId: opId,
+            indexExists: idxSnap.exists,
+            indexDriverId: idxSnap.data()?.driverId,
+            myDriverId: driverId,
+          });
+          superseded = decision.superseded;
+          if (decision.deleteCredential) tx.delete(credRef);
+          if (decision.releaseIndex) tx.delete(idxRef);
         });
       } catch {
         compensated = false;
@@ -852,14 +893,16 @@ export const adminSetDriverPasscode = httpsV2.onCall(
         action: 'adminSetDriverPasscode_fail',
         actorUid: caller.uid,
         driverId,
-        detail: { reason: 'profile_write_failed', compensated },
+        detail: { reason: 'profile_write_failed', compensated, superseded },
       });
       throw new httpsV2.HttpsError(
         'internal',
-        compensated
-          ? 'Could not create the driver profile; no identity was created'
-          : // Say so plainly rather than report a clean failure we did not achieve.
-            'Driver profile write failed AND cleanup failed; identity may be partially created',
+        !compensated
+          ? // Say so plainly rather than report a clean failure we did not achieve.
+            'Driver profile write failed AND cleanup failed; identity may be partially created'
+          : superseded
+            ? 'Could not create the driver profile; another change to this driver landed first and was left intact'
+            : 'Could not create the driver profile; no identity was created',
       );
     }
 
