@@ -26,6 +26,7 @@ import {
 import {
   ENFORCEMENT_WARNING,
   PLAN_CAPABILITY_OPTIONS,
+  contractLoadFailure,
   contractStateView,
   describeEffectivePreview,
   enforcementReadiness,
@@ -95,17 +96,10 @@ export function CompanyContractPanel({ companyId }: { companyId: string }) {
       }
       setLoadPhase('ready');
     } catch (err) {
-      const code = (err as { code?: string })?.code || '';
-      const msg = (err as { message?: string })?.message || '';
-      setLoadError(
-        /unauthenticated|permission-denied/.test(code)
-          ? 'Not authorized to read this company’s contract configuration.'
-          : /not-found/.test(code) || /company_not_found/.test(msg)
-            ? 'This company has no contract record yet.'
-            : /internal|unavailable|deadline/.test(code)
-              ? 'The contract service is unavailable. Try again.'
-              : 'Could not load contract state.',
-      );
+      // The service always rejects with an AdminServiceError (kind +
+      // adminCode) — it has no `code` property, so inspecting one matched
+      // nothing and reported every cause as the same generic sentence.
+      setLoadError(contractLoadFailure(err).message);
       setLoadPhase('error');
       surface(err);
     }
