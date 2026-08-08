@@ -20,6 +20,13 @@ import { checkRateLimit, hashIp } from './rateLimit';
 import { writeSecurityAudit } from './audit';
 import { requireManageDrivers } from './adminAuth';
 import {
+  claimRefusalMessage,
+  decideNameIndexClaim,
+  readIncumbentCredential,
+  readIndexOwner,
+  type IncumbentCredentialState,
+} from './nameIndexClaim';
+import {
   readSessionAudience,
   containsClientClaimMaterial,
   sessionClaimsForAudience,
@@ -671,6 +678,20 @@ export const adminSetDriverPasscode = httpsV2.onCall(
     const passcodeRecord = await hashPasscodeScrypt(fields.passcode);
     let driverId = (data.driverId || '').trim();
 
+    /**
+     * RTDB writes deferred until the Firestore ownership claim commits.
+     *
+     * Firestore transactions cannot span the Realtime Database, so true
+     * single-transaction atomicity across both is impossible. Writing the
+     * profile FIRST (as this did) meant a refused name claim left an
+     * orphaned profile — and, on the migration path, mutated the legacy
+     * record — for an identity that was never created. Building the
+     * payloads here and applying them only after the claim commits makes a
+     * refusal leave nothing behind.
+     */
+    let pendingProfile: Record<string, unknown> | null = null;
+    let pendingLegacyLink: Record<string, unknown> | null = null;
+
     if (!driverId && data.legacyHash) {
       // Migrate PROFILE shell only — never use legacy SHA-256 as the new credential
       const legacy = await rtdb().ref(`drivers/approved/${data.legacyHash}`).once('value');
@@ -679,7 +700,8 @@ export const adminSetDriverPasscode = httpsV2.onCall(
       }
       const L = legacy.val();
       driverId = randomUUID();
-      await rtdb().ref(`drivers/profiles/${driverId}`).set({
+      // DEFERRED: written only after the ownership claim commits.
+      pendingProfile = {
         displayName: fields.displayName || L.displayName,
         legalName: fields.legalName || L.legalName || L.displayName,
         name: fields.displayName || L.displayName,
@@ -695,26 +717,28 @@ export const adminSetDriverPasscode = httpsV2.onCall(
         migratedFromLegacyHashPrefix: String(data.legacyHash).slice(0, 8),
         schemaVersion: 1,
         mustUseSecureAuth: true,
-      });
-      // Dual-run default: keep legacy active so old APKs still work until cutover
-      if (data.keepLegacyActive === false) {
-        await rtdb().ref(`drivers/approved/${data.legacyHash}`).update({
-          active: false,
-          migratedToDriverId: driverId,
-          legacyLoginDisabled: true,
-        });
-      } else {
-        await rtdb().ref(`drivers/approved/${data.legacyHash}`).update({
-          migratedToDriverId: driverId,
-          secureProfileLinked: true,
-        });
-      }
+      };
+      // Dual-run default: keep legacy active so old APKs still work until
+      // cutover. DEFERRED with the profile — a refused claim must not
+      // rewrite the legacy record for an identity that never existed.
+      pendingLegacyLink =
+        data.keepLegacyActive === false
+          ? {
+              active: false,
+              migratedToDriverId: driverId,
+              legacyLoginDisabled: true,
+            }
+          : {
+              migratedToDriverId: driverId,
+              secureProfileLinked: true,
+            };
     }
 
     if (!driverId) {
       // Brand-new admin-provisioned driver
       driverId = randomUUID();
-      await rtdb().ref(`drivers/profiles/${driverId}`).set({
+      // DEFERRED: written only after the ownership claim commits.
+      pendingProfile = {
         displayName: fields.displayName,
         legalName: fields.legalName || fields.displayName,
         name: fields.displayName,
@@ -727,30 +751,117 @@ export const adminSetDriverPasscode = httpsV2.onCall(
         approvedAt: Date.now(),
         approvedBy: caller.uid,
         schemaVersion: 1,
-      });
+      };
     }
 
-    await fs().collection('driver_credentials').doc(driverId).set(
-      {
-        displayNameNorm: nameNorm,
-        displayName: fields.displayName,
-        passcode: passcodeRecord,
-        active: true,
-        mustResetPasscode: temporary,
-        updatedAt: FieldValue.serverTimestamp(),
-        createdAt: FieldValue.serverTimestamp(),
-        setBy: caller.uid,
-        temporaryAssigned: temporary,
-      },
-      { merge: true },
-    );
-    await fs().collection('driver_name_index').doc(nameNorm).set({ driverId });
+    // Claim the name index BEFORE writing the credential, and only if this
+    // driver may hold it. The previous unconditional `set` let an authorized
+    // reset for one name silently repoint another ACTIVE secure driver's
+    // index, sending that driver's next authenticateDriver to a different
+    // credential record. Same rule adminApproveDriverRegistration already
+    // enforces; the transaction makes check-and-claim atomic so two
+    // concurrent admins cannot both win.
+    const idxRef = fs().collection('driver_name_index').doc(nameNorm);
+    await fs().runTransaction(async (tx) => {
+      const existing = await tx.get(idxRef);
+      const existingDriverId = readIndexOwner(existing.exists, existing.data());
 
-    // Update profile display if needed
-    await rtdb().ref(`drivers/profiles/${driverId}`).update({
-      displayName: fields.displayName,
-      legalName: fields.legalName || fields.displayName,
+      let incumbentCredential: IncumbentCredentialState = 'absent';
+      if (
+        existingDriverId
+        && existingDriverId !== 'malformed'
+        && existingDriverId !== driverId
+      ) {
+        try {
+          const otherCred = await tx.get(
+            fs().collection('driver_credentials').doc(existingDriverId),
+          );
+          incumbentCredential = readIncumbentCredential(
+            otherCred.exists,
+            otherCred.data(),
+          );
+        } catch {
+          // Status unknown — refuse rather than guess about someone
+          // else's login name.
+          incumbentCredential = 'unreadable';
+        }
+      }
+
+      const decision = decideNameIndexClaim({
+        existingDriverId,
+        targetDriverId: driverId,
+        incumbentCredential,
+      });
+      if (!decision.allow) {
+        throw new httpsV2.HttpsError(
+          decision.reason === 'name_taken' ? 'already-exists' : 'aborted',
+          claimRefusalMessage(decision.reason),
+        );
+      }
+
+      tx.set(idxRef, { driverId });
+      tx.set(
+        fs().collection('driver_credentials').doc(driverId),
+        {
+          displayNameNorm: nameNorm,
+          displayName: fields.displayName,
+          passcode: passcodeRecord,
+          active: true,
+          mustResetPasscode: temporary,
+          updatedAt: FieldValue.serverTimestamp(),
+          createdAt: FieldValue.serverTimestamp(),
+          setBy: caller.uid,
+          temporaryAssigned: temporary,
+        },
+        { merge: true },
+      );
     });
+
+    // Ownership is now ours and the credential is committed. Apply the
+    // deferred RTDB writes.
+    //
+    // If any of them fails we COMPENSATE: the Firestore credential and our
+    // index claim are removed so the caller is left with no partial
+    // identity, matching the all-or-nothing guarantee the transaction gives
+    // within Firestore. The index is released only if it is still ours, so
+    // a concurrent legitimate owner is never disturbed.
+    try {
+      if (pendingProfile) {
+        await rtdb().ref(`drivers/profiles/${driverId}`).set(pendingProfile);
+      }
+      if (pendingLegacyLink && data.legacyHash) {
+        await rtdb().ref(`drivers/approved/${data.legacyHash}`).update(pendingLegacyLink);
+      }
+      // Keep display fields current for pre-existing profiles (reset path).
+      await rtdb().ref(`drivers/profiles/${driverId}`).update({
+        displayName: fields.displayName,
+        legalName: fields.legalName || fields.displayName,
+      });
+    } catch (profileErr) {
+      let compensated = true;
+      try {
+        await fs().collection('driver_credentials').doc(driverId).delete();
+        await fs().runTransaction(async (tx) => {
+          const held = await tx.get(idxRef);
+          if (held.exists && held.data()?.driverId === driverId) tx.delete(idxRef);
+        });
+      } catch {
+        compensated = false;
+      }
+      await writeSecurityAudit({
+        action: 'adminSetDriverPasscode_fail',
+        actorUid: caller.uid,
+        driverId,
+        detail: { reason: 'profile_write_failed', compensated },
+      });
+      throw new httpsV2.HttpsError(
+        'internal',
+        compensated
+          ? 'Could not create the driver profile; no identity was created'
+          : // Say so plainly rather than report a clean failure we did not achieve.
+            'Driver profile write failed AND cleanup failed; identity may be partially created',
+      );
+    }
 
     await writeSecurityAudit({
       action: 'adminSetDriverPasscode',
