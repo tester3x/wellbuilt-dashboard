@@ -86,7 +86,7 @@ const probePath = join(ROOT, 'tools', '.noReloadLoop.probe.mts');
 let r = null;
 try {
   writeFileSync(probePath, `
-    import { contractLoadFailure } from '../src/lib/adminUiLogic';
+    import { contractLoadFailure } from '../src/lib/adminLoadFailure';
     import { AdminServiceError } from '../src/lib/adminContractServiceCore';
 
     // The guidance that drives surface()'s auto-reload. If these actions

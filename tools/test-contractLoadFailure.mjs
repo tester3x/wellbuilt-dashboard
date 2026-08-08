@@ -46,7 +46,7 @@ const probePath = join(ROOT, 'tools', '.contractLoadFailure.probe.mts');
 let r = null;
 try {
   writeFileSync(probePath, `
-    import { contractLoadFailure } from '../src/lib/adminUiLogic';
+    import { contractLoadFailure } from '../src/lib/adminLoadFailure';
     import { AdminServiceError } from '../src/lib/adminContractServiceCore';
 
     const cases: Record<string, unknown> = {

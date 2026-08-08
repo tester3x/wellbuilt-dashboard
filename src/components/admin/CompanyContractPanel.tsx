@@ -14,6 +14,7 @@
  */
 
 import { useCallback, useEffect, useState } from 'react';
+import { contractLoadFailure } from '@/lib/adminLoadFailure';
 import {
   createAdminContractService,
   AdminServiceError,
@@ -26,7 +27,6 @@ import {
 import {
   ENFORCEMENT_WARNING,
   PLAN_CAPABILITY_OPTIONS,
-  contractLoadFailure,
   contractStateView,
   describeEffectivePreview,
   enforcementReadiness,

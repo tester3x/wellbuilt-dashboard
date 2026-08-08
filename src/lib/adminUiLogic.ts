@@ -14,7 +14,6 @@
  */
 
 import { resolveWorkPeriod, type WorkPeriodResolution } from '@tester3x/wellbuilt-contracts';
-import { normalizeAdminError } from './adminContractServiceCore';
 import type {
   AdminServiceErrorKind,
   CapabilityResult,
@@ -166,21 +165,6 @@ export function errorGuidance(err: { kind: AdminServiceErrorKind; adminCode?: st
     case 'unknown':
       return { message: `Unexpected failure${err.adminCode ? ` (ref: ${err.adminCode})` : ''}. Report this reference — no data was changed unless stated.`, action: 'diagnostic', retryable: false };
   }
-}
-
-/**
- * THE mapper for a failed protected READ.
- *
- * Every rejection from the typed service arrives as an AdminServiceError
- * (kind + adminCode) — never as an object with a `code` property. A caller
- * that inspects `err.code` therefore matches nothing and reports the same
- * useless sentence for a missing claim, a disabled admin record, an ended
- * session and an absent company alike. Normalizing first means a raw
- * firebase/functions rejection maps identically to an already-normalized
- * one, so no caller has to know which layer threw.
- */
-export function contractLoadFailure(err: unknown): ErrorGuidance {
-  return errorGuidance(normalizeAdminError(err));
 }
 
 function describeValidation(adminCode: string | null | undefined): string {
