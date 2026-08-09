@@ -4762,6 +4762,8 @@ export {
   upsertDriverDispatch,
   sendChatMessage,
   getPublicClientMeta,
+  // Secure cold-start session verification (side-effect free)
+  verifyDriverSession,
 } from './security';
 
 // ── vc51.9J: WB-S -> WB-T SSO authorization-code bridge ────────────────────

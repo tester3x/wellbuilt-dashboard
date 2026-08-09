@@ -25,3 +25,6 @@ export {
   sendChatMessage,
   getPublicClientMeta,
 } from './operational';
+
+/** Authenticated cold-start secure session verification (side-effect free). */
+export { verifyDriverSession } from './verifyDriverSession';
