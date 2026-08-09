@@ -89,7 +89,14 @@ const CAPS_OK = {
   check('preview: JSA binds to invoking job period', text.includes('invoking WB-T job'));
   check('preview: DVIR binds to invoking shift', text.includes('invoking WB-S shift'));
   check('preview: JSA/DVIR enabled lines', text.includes('JSA: Enabled') && text.includes('DVIR: Enabled'));
-  check('preview: mode + timezone shown', text.includes('Explicit shift') && text.includes('America/Chicago'));
+  // vc51.9AD: this previously asserted `America/Chicago` appears in an
+  // EXPLICIT-shift preview — it was pinning the false-timezone defect in
+  // place. Explicit shift stores no timezone and derives no schedule, so
+  // the truthful preview names the mode and claims no timezone at all.
+  check('preview: mode shown and no timezone invented',
+    text.includes('Explicit shift')
+    && !text.includes('America/Chicago')
+    && text.includes('No fixed timezone or derived schedule'));
   check('preview: expired override annotated', text.includes('no longer applied'));
   check('preview: deprecated plan warning', text.includes('DEPRECATED'));
   check('preview: contract/configuration versions', text.includes('contract v1, configuration v3'));

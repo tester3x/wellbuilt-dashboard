@@ -295,13 +295,25 @@ export function describeEffectivePreview(res: {
   );
   const cfg = res.contract?.workPeriodConfiguration;
   if (cfg) {
-    lines.push({
-      label: 'Timezone / schedule',
-      value: explicit
-        ? `${cfg.timezone ?? 'America/Chicago'} — no derived schedule in explicit mode.`
-        : `${cfg.timezone ?? '(timezone missing)'} — starts ${cfg.startLocalTime ?? '?'} local, ${cfg.durationMinutes ?? '?'} minutes.`,
-      tone: 'neutral',
-    });
+    // Explicit shift stores no timezone and derives no schedule, so a
+    // "Timezone / schedule" row promising a value is untruthful — the old
+    // fallback named America/Chicago and then said nothing derived from
+    // it. The label is mode-aware so the row never advertises a field the
+    // contract does not carry. A stray legacy timezone on an explicit
+    // contract is deliberately not surfaced: it is not operative
+    // configuration. The wording is about the CONTRACT applying no fixed
+    // timezone — not about the device lacking one.
+    lines.push(explicit
+      ? {
+          label: 'Work-period behavior',
+          value: 'No fixed timezone or derived schedule. Drivers explicitly start and close each work period.',
+          tone: 'neutral',
+        }
+      : {
+          label: 'Timezone / schedule',
+          value: `${cfg.timezone ?? '(timezone missing)'} — starts ${cfg.startLocalTime ?? '?'} local, ${cfg.durationMinutes ?? '?'} minutes.`,
+          tone: 'neutral',
+        });
   }
   const overrides = res.contract?.entitlementOverrides ?? [];
   for (const o of overrides) {
