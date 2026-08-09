@@ -72,8 +72,18 @@ export function isSsoProtocolVersion(v: unknown): v is SsoProtocolVersion {
 
 /** The only audience this protocol version issues codes for. */
 export const SSO_AUDIENCE_WBT = 'wellbuilt-tickets' as const;
-export type SsoAudience = typeof SSO_AUDIENCE_WBT;
-export const SSO_AUDIENCES: readonly SsoAudience[] = Object.freeze([SSO_AUDIENCE_WBT]);
+/**
+ * vc51.9AE — WB eQuipment. Added because eQuipment's DVIR handoff
+ * previously carried a passcode-derived hash in its launch URI and treated
+ * possession of it as identity. It joins the same authorization-code
+ * exchange rather than getting a parallel protocol.
+ */
+export const SSO_AUDIENCE_EQUIPMENT = 'wellbuilt-equipment' as const;
+export type SsoAudience = typeof SSO_AUDIENCE_WBT | typeof SSO_AUDIENCE_EQUIPMENT;
+export const SSO_AUDIENCES: readonly SsoAudience[] = Object.freeze([
+  SSO_AUDIENCE_WBT,
+  SSO_AUDIENCE_EQUIPMENT,
+]);
 
 export function isSsoAudience(v: unknown): v is SsoAudience {
   return typeof v === 'string' && (SSO_AUDIENCES as readonly string[]).includes(v);
@@ -89,6 +99,17 @@ export function isSsoAudience(v: unknown): v is SsoAudience {
  */
 export const SSO_SESSION_APP_CLAIM = 'app' as const;
 export const SSO_SESSION_APP_WBT = 'wbt' as const;
+export const SSO_SESSION_APP_EQUIPMENT = 'equipment' as const;
+
+/**
+ * Audience → per-session app claim. A map rather than a conditional so a
+ * new audience cannot be added without deciding what it is called in the
+ * minted token.
+ */
+export const SSO_SESSION_APP_BY_AUDIENCE: Readonly<Record<SsoAudience, string>> = Object.freeze({
+  [SSO_AUDIENCE_WBT]: SSO_SESSION_APP_WBT,
+  [SSO_AUDIENCE_EQUIPMENT]: SSO_SESSION_APP_EQUIPMENT,
+});
 
 // ── PKCE ──────────────────────────────────────────────────────────────────
 
@@ -163,6 +184,78 @@ export const SSO_AUTHORIZE_HOST = 'sso-authorize' as const;
 export const SSO_CALLBACK_SCHEME = 'wellbuilt-tickets' as const;
 export const SSO_CALLBACK_HOST = 'sso-callback' as const;
 
+/** vc51.9AE — eQuipment's fixed callback identity. Same host, own scheme. */
+export const SSO_CALLBACK_SCHEME_EQUIPMENT = 'wbequipment' as const;
+
+/**
+ * Audience → fixed callback route. Still constants, never a client-supplied
+ * redirect URI: the destination is chosen by the audience the code was
+ * issued for, so a code cannot be steered to a different application.
+ */
+export const SSO_CALLBACK_BY_AUDIENCE: Readonly<
+  Record<SsoAudience, { scheme: string; host: string }>
+> = Object.freeze({
+  [SSO_AUDIENCE_WBT]: Object.freeze({ scheme: SSO_CALLBACK_SCHEME, host: SSO_CALLBACK_HOST }),
+  [SSO_AUDIENCE_EQUIPMENT]: Object.freeze({
+    scheme: SSO_CALLBACK_SCHEME_EQUIPMENT,
+    host: SSO_CALLBACK_HOST,
+  }),
+});
+
+// ── DVIR shift binding (equipment audience only) ──────────────────────────
+
+/**
+ * DVIR phase, kept textually identical to the 0.2.0 DVIR_PHASES enum.
+ *
+ * Deliberately NOT re-exported and NOT imported from ../dvir: this module
+ * documents itself as having no runtime imports, and duplicating the export
+ * would put two names for one enum on the public surface — the exact drift
+ * this package exists to prevent. tools/test-sso-protocol.mjs asserts the
+ * two agree, so a change to either is caught rather than silently tolerated.
+ */
+export type SsoDvirPhase = 'pre_trip' | 'post_trip';
+const SSO_DVIR_PHASES_INTERNAL: readonly SsoDvirPhase[] = Object.freeze(['pre_trip', 'post_trip']);
+
+function isPhase(v: unknown): v is SsoDvirPhase {
+  return typeof v === 'string' && (SSO_DVIR_PHASES_INTERNAL as readonly string[]).includes(v);
+}
+
+/**
+ * Shift-scoped binding carried on an equipment authorization.
+ *
+ * eQuipment's DVIR records are shift-scoped, so the bridge must name the
+ * exact period rather than letting the app infer one from a launch URI it
+ * cannot authenticate. The SERVER validates this against the authenticated
+ * driver's authoritative shift before binding it into the code, and returns
+ * it on exchange — so the app binds its DVIR to a server-verified period,
+ * never to a value it was handed in a deep link.
+ *
+ * `shiftId` is opaque here: WB-S owns its format and this protocol only
+ * requires that it be a bounded non-empty string.
+ */
+export interface SsoShiftBinding {
+  shiftId: string;
+  phase: SsoDvirPhase;
+}
+
+export const SSO_SHIFT_ID_MAX = 128;
+
+export function isSsoShiftBinding(v: unknown): v is SsoShiftBinding {
+  const o = v as Record<string, unknown> | null;
+  if (typeof o !== 'object' || o === null || Array.isArray(o)) return false;
+  const keys = Object.keys(o);
+  if (keys.length !== 2 || !keys.includes('shiftId') || !keys.includes('phase')) return false;
+  return typeof o.shiftId === 'string'
+    && o.shiftId.length > 0
+    && o.shiftId.length <= SSO_SHIFT_ID_MAX
+    && isPhase(o.phase);
+}
+
+/** Shift binding is mandatory for equipment and forbidden for every other audience. */
+export function audienceRequiresShiftBinding(audience: SsoAudience): boolean {
+  return audience === SSO_AUDIENCE_EQUIPMENT;
+}
+
 // ── error codes ───────────────────────────────────────────────────────────
 // Deliberately coarse. A caller must not be able to tell "no such code"
 // from "wrong verifier" from "already consumed".
@@ -204,6 +297,13 @@ export interface SsoIssueCodeRequest {
   audience: SsoAudience;
   codeChallenge: string;
   codeChallengeMethod: SsoChallengeMethod;
+  /**
+   * Required for the equipment audience, rejected for any other. Supplied
+   * by the AUTHORIZING app (WB-S), which owns the shift lifecycle and holds
+   * the authenticated session — never echoed back from the launch URI by
+   * the target. The server revalidates it before binding.
+   */
+  shiftBinding?: SsoShiftBinding;
 }
 
 /** Server → WB-S. */
@@ -246,6 +346,12 @@ export interface SsoExchangeResponse {
   uid: string;
   driverId: string;
   companyId: string;
+  /**
+   * Present only for the equipment audience: the SERVER-STORED binding, so
+   * the app scopes its DVIR to a verified period rather than to anything it
+   * received in a deep link.
+   */
+  shiftBinding?: SsoShiftBinding;
 }
 
 // ── validation ────────────────────────────────────────────────────────────
@@ -311,13 +417,26 @@ export function validateSsoIssueCodeRequest(input: unknown): SsoValidation<SsoIs
   if (!isSsoChallenge(o.codeChallenge)) {
     return { ok: false, errorCode: 'malformed_request', field: 'codeChallenge' };
   }
+  // vc51.9AE — shift binding is exactly-required for equipment and exactly
+  // -forbidden elsewhere. Both directions are enforced so WB-T cannot start
+  // smuggling a binding, and an equipment request cannot omit one and be
+  // silently bound to nothing.
+  const audience = o.audience as SsoAudience;
+  const needsBinding = audienceRequiresShiftBinding(audience);
+  if (needsBinding && !isSsoShiftBinding(o.shiftBinding)) {
+    return { ok: false, errorCode: 'malformed_request', field: 'shiftBinding' };
+  }
+  if (!needsBinding && o.shiftBinding !== undefined) {
+    return { ok: false, errorCode: 'malformed_request', field: 'shiftBinding' };
+  }
   return {
     ok: true,
     value: {
       protocolVersion: SSO_PROTOCOL_VERSION,
-      audience: o.audience as SsoAudience,
+      audience,
       codeChallenge: o.codeChallenge,
       codeChallengeMethod: SSO_CHALLENGE_METHOD,
+      ...(needsBinding ? { shiftBinding: o.shiftBinding as SsoShiftBinding } : {}),
     },
   };
 }

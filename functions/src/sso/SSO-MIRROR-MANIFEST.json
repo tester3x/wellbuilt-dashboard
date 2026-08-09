@@ -1,7 +1,7 @@
 {
   "canonicalVersion": "0.3.0-dev.0",
   "canonicalPath": "wellbuilt-contracts/src/sso/protocol.ts",
-  "bodySha256": "990257e1034dd0245a28ede5b7e5d6b35b8d0e6fea3561ef7d51e17da4b2fa8d",
+  "bodySha256": "6ba972d3db71b85c9ce91f29e390e41d270c7c9c95aef5c94729e48a255c8c8e",
   "published": false,
   "note": "Unpublished. Replace with a package import once contracts publishes the SSO protocol."
 }
