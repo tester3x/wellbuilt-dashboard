@@ -16,6 +16,7 @@ import * as admin from 'firebase-admin';
 import { createHash, randomBytes } from 'crypto';
 import { Timestamp } from 'firebase-admin/firestore';
 import { checkRateLimit, hashIp } from '../security/rateLimit';
+import { getAuthoritativeDriverForSso } from '../security/canonicalDriverAuthority';
 import { handleSsoIssueCode } from './ssoIssueHandler';
 import { handleSsoExchange } from './ssoExchangeHandler';
 import {
@@ -36,7 +37,6 @@ export const SSO_CALLABLE_OPTIONS = {
 } as const;
 
 const fs = () => admin.firestore();
-const rtdb = () => admin.database();
 
 /** Production SsoDeps over the real Admin SDK. */
 export function buildSsoDeps(): SsoDeps {
@@ -105,26 +105,13 @@ export function buildSsoDeps(): SsoDeps {
     /**
      * Authoritative driver liveness and company.
      *
-     * `driver_credentials/{driverId}.active !== false` is the same
-     * liveness test requestDriverRegistration already uses; the company
-     * comes from the RTDB profile, which is what authenticateDriver mints
-     * claims from. Reading both means a driver disabled OR moved since
-     * sign-in fails this check.
+     * Shared with verifyDriverSession via canonicalDriverAuthority:
+     * credentials exist + active, profile exists + active, nonempty
+     * companyId from profile. A driver disabled OR moved since sign-in
+     * fails this check. No passcode/hash/name path.
      */
     async getDriver(driverId): Promise<AuthoritativeDriver | null> {
-      const [credSnap, profileSnap] = await Promise.all([
-        db.collection('driver_credentials').doc(driverId).get(),
-        rtdb().ref(`drivers/profiles/${driverId}`).once('value'),
-      ]);
-      if (!credSnap.exists) return null;
-      const profile = (profileSnap.val() || {}) as { companyId?: string };
-      return {
-        driverId,
-        companyId: typeof profile.companyId === 'string' && profile.companyId
-          ? profile.companyId
-          : null,
-        active: credSnap.data()?.active !== false,
-      };
+      return getAuthoritativeDriverForSso(driverId);
     },
 
     runTransaction(fn) {

@@ -104,12 +104,18 @@ check('deps use the real Firestore transaction', /db\.runTransaction\(/.test(cal
 check('transaction adapter maps create/update onto real doc refs',
   /update\(path, fields\) \{ tx\.update\(db\.doc\(path\), fields\); \}/.test(call)
   && /create\(path, data\) \{ tx\.create\(db\.doc\(path\), data\); \}/.test(call));
+// Authoritative driver liveness lives in the shared neutral module
+// (canonicalDriverAuthority) so SSO and verifyDriverSession cannot drift.
+const authz = strip(read('src/security/canonicalDriverAuthority.ts'));
 check('authoritative driver read hits driver_credentials',
-  /collection\('driver_credentials'\)\.doc\(driverId\)/.test(call));
+  /collection\('driver_credentials'\)\.doc\(driverId\)/.test(authz)
+  && /getAuthoritativeDriverForSso/.test(call));
 check('authoritative company read hits the RTDB profile',
-  /ref\(`drivers\/profiles\/\$\{driverId\}`\)/.test(call));
+  /drivers\/profiles\/\$\{driverId\}/.test(authz)
+  && /getAuthoritativeDriverForSso/.test(call));
 check('liveness uses the established active !== false test',
-  /active: credSnap\.data\(\)\?\.active !== false/.test(call));
+  /active !== false/.test(authz)
+  && /credentialsActive && profileActive/.test(authz));
 check('randomness is node crypto, not Math.random',
   /randomBytes\(count\)/.test(call) && !/Math\.random/.test(call));
 check('hashing is SHA-256 via node crypto',
@@ -128,7 +134,7 @@ check('the deps contract forbids it in writing',
 check('mintCustomToken receives developer claims only',
   /mintCustomToken\(uid: string, developerClaims: Record<string, unknown>\)/.test(depsSrc));
 check('the exchange mints with kind/driverId/companyId plus the app marker',
-  /mintCustomToken\(record\.uid, \{[\s\S]{0,200}kind: 'driver'[\s\S]{0,200}SSO_SESSION_APP_CLAIM\]: SSO_SESSION_APP_WBT/.test(exchangeSrc));
+  /mintCustomToken\(record\.uid, \{[\s\S]{0,200}kind: 'driver'[\s\S]{0,200}SSO_SESSION_APP_CLAIM\]: SSO_SESSION_APP_BY_AUDIENCE/.test(exchangeSrc));
 check('the minted uid is the RECORD uid, never client-supplied',
   /mintCustomToken\(record\.uid/.test(exchangeSrc));
 check('issuance never mints a token at all', !/mintCustomToken/.test(issueSrc));
