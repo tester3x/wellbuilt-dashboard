@@ -25,6 +25,7 @@ import {
 import {
   EXPLICIT_MODE_ACTIONS,
   LOGIN_VS_SHIFT_COPY,
+  buildWorkPeriodDraft,
   derivedScheduleExample,
   errorGuidance,
   isOvernight,
@@ -69,9 +70,10 @@ export function WorkPeriodCard({ company, onSave }: Props) {
 
   const wpc = contract?.workPeriodConfiguration ?? null;
   const mode = wpc?.mode ?? null;
-  const draft: StoredWorkPeriodConfiguration = editMode === 'explicit_shift'
-    ? { mode: 'explicit_shift', timezone: tz }
-    : { mode: 'company_defined_period', timezone: tz, startLocalTime: start, durationMinutes: Number(duration) };
+  // timezone/startLocalTime/durationMinutes are derived-mode fields. The
+  // explicit branch of the builder reads none of them, so switching modes
+  // cannot leak stale values into the payload.
+  const draft: StoredWorkPeriodConfiguration = buildWorkPeriodDraft({ editMode, tz, start, duration });
   const example = editMode === 'company_defined_period'
     ? derivedScheduleExample(draft, Date.now())
     : null;
@@ -141,14 +143,19 @@ export function WorkPeriodCard({ company, onSave }: Props) {
                 Company-defined period
               </label>
             </div>
+            {editMode === 'explicit_shift' && (
+              <p className="text-gray-400 text-xs">
+                Drivers explicitly start and close each work period. No fixed schedule or duration is applied.
+              </p>
+            )}
             <div className="flex flex-wrap gap-2">
-              <div>
-                <label htmlFor={`wp-tz-${company.id}`} className="block text-gray-400 text-[10px]">IANA timezone</label>
-                <input id={`wp-tz-${company.id}`} value={tz} onChange={(e) => setTz(e.target.value)}
-                  className="bg-gray-900 border border-gray-600 rounded px-2 py-1 text-white text-xs w-44" />
-              </div>
               {editMode === 'company_defined_period' && (
                 <>
+                  <div>
+                    <label htmlFor={`wp-tz-${company.id}`} className="block text-gray-400 text-[10px]">IANA timezone</label>
+                    <input id={`wp-tz-${company.id}`} value={tz} onChange={(e) => setTz(e.target.value)}
+                      className="bg-gray-900 border border-gray-600 rounded px-2 py-1 text-white text-xs w-44" />
+                  </div>
                   <div>
                     <label htmlFor={`wp-start-${company.id}`} className="block text-gray-400 text-[10px]">Local start (HH:MM)</label>
                     <input id={`wp-start-${company.id}`} value={start} onChange={(e) => setStart(e.target.value)}

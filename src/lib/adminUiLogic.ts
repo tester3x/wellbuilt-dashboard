@@ -321,6 +321,41 @@ export function describeEffectivePreview(res: {
   return lines;
 }
 
+/**
+ * Build the work-period payload the Dashboard submits.
+ *
+ * timezone / startLocalTime / durationMinutes are DERIVED-MODE fields in
+ * the canonical package. Explicit shift is complete without any of them,
+ * and its customerEditableFields is [] — nothing reads a timezone stored
+ * there. The card previously built this inline as
+ * `{ mode: 'explicit_shift', timezone: tz }`, so an explicit-shift save
+ * always carried a timezone, defaulted to America/Chicago. The server
+ * ACCEPTS that and stores it, so it was never a failed write — just
+ * silently the wrong contract.
+ *
+ * Extracted from the component so the emitted payload can be asserted
+ * directly instead of inferred from JSX, and so a mode switch cannot leak
+ * stale derived state: the explicit branch reads none of those inputs.
+ *
+ * `durationMinutes` is deliberately left as Number(...) — a non-numeric
+ * entry yields NaN for the existing validator to reject, rather than
+ * being coerced into a plausible-looking value.
+ */
+export function buildWorkPeriodDraft(input: {
+  editMode: StoredWorkPeriodConfiguration['mode'];
+  tz: string;
+  start: string;
+  duration: string;
+}): StoredWorkPeriodConfiguration {
+  if (input.editMode === 'explicit_shift') return { mode: 'explicit_shift' };
+  return {
+    mode: 'company_defined_period',
+    timezone: input.tz,
+    startLocalTime: input.start,
+    durationMinutes: Number(input.duration),
+  };
+}
+
 /** Explicit-mode affected-actions copy for WorkPeriodCard. */
 export const EXPLICIT_MODE_ACTIONS: ReadonlyArray<{ action: string; requirement: string }> = Object.freeze([
   { action: 'WB-M app use', requirement: 'No work period required — ordinary sign-in only.' },
