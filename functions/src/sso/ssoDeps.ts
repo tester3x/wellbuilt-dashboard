@@ -11,6 +11,10 @@
  * time, and that two concurrent exchanges cannot both succeed.
  */
 
+import type { PlanDefinition } from '@tester3x/wellbuilt-contracts';
+import type { WellbuiltContract } from '../admin/companyContract.js';
+import type { ShiftDayDoc } from './equipmentAuthorization.js';
+
 /** The authoritative driver record, as the server sees it. */
 export interface AuthoritativeDriver {
   driverId: string;
@@ -34,6 +38,11 @@ export interface SsoCodeRecord {
   expiresAt?: unknown;
   consumed: boolean;
   consumedAtMs?: number;
+  /**
+   * Equipment audience only: the SERVER-VALIDATED shift binding, stored at
+   * issuance. Exchange echoes this and never anything the redeemer sends.
+   */
+  shiftBinding?: { shiftId: string; phase: 'pre_trip' | 'post_trip' };
 }
 
 export interface SsoTransaction {
@@ -61,6 +70,26 @@ export interface SsoDeps {
   base64Url(bytes: Uint8Array): string;
   /** The authoritative driver record, or null when absent. */
   getDriver(driverId: string): Promise<AuthoritativeDriver | null>;
+  /**
+   * One authoritative driver_shifts/{driverId}_{localDate} document.
+   *
+   * MUST distinguish the three outcomes the security decision depends on:
+   * readable-and-present, definitively absent, and unreadable. Collapsing
+   * an unreadable read into "absent" turns an outage into a silent "no such
+   * shift"; collapsing it into "open" would be far worse.
+   */
+  getShiftDay(driverId: string, localDate: string): Promise<ShiftDayDoc>;
+  /**
+   * The company's parsed contract, with its canonical state label, so the
+   * handler never re-implements parsing and never mistakes a malformed
+   * contract for an absent one.
+   */
+  getCompanyContract(companyId: string): Promise<{
+    state: 'legacy' | 'inert' | 'active' | 'invalid';
+    contract: WellbuiltContract | null;
+  }>;
+  /** The plan document named by a contract, or null when absent. */
+  getPlan(planId: string): Promise<PlanDefinition | null>;
   runTransaction<T>(fn: (tx: SsoTransaction) => Promise<T>): Promise<T>;
   /**
    * Mint a custom token for `uid` with `developerClaims`.

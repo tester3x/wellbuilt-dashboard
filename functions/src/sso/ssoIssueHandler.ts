@@ -8,7 +8,9 @@
  * its own driverId could mint a bridge into someone else's account.
  */
 import {
-  SSO_AUDIENCE_WBT,
+  SSO_AUDIENCE_EQUIPMENT,
+  isSsoAudience,
+  type SsoShiftBinding,
   SSO_CODE_BYTES,
   SSO_CODE_TTL_MS_PROVISIONAL,
   SSO_PROTOCOL_VERSION,
@@ -21,6 +23,7 @@ import {
   type SsoAuthContext,
   type SsoDeps,
 } from './ssoDeps.js';
+import { decideEquipmentAuthorization, shiftOriginDay } from './equipmentAuthorization.js';
 
 /** Fields a client may never dictate. Presence is a protocol violation. */
 const CLIENT_FORBIDDEN_IDENTITY_FIELDS = ['uid', 'driverId', 'companyId', 'driverHash', 'passcode'];
@@ -56,7 +59,10 @@ export async function handleSsoIssueCode(
     throw new SsoError('invalid-argument', parsed.errorCode, `invalid ${parsed.field}`);
   }
   const req = parsed.value;
-  if (req.audience !== SSO_AUDIENCE_WBT) {
+  // Both canonical audiences are issuable. The protocol validator has
+  // already enforced that shiftBinding is present for equipment and absent
+  // for WB-T, so a WB-T request reaching here is byte-identical to before.
+  if (!isSsoAudience(req.audience)) {
     throw new SsoError('invalid-argument', 'unsupported_audience', 'audience not allowlisted');
   }
 
@@ -88,11 +94,63 @@ export async function handleSsoIssueCode(
     throw new SsoError('permission-denied', 'not_authorized', 'company drifted from claims');
   }
 
+  // One server clock reading drives both the authorization decision and
+  // the code lifetime, so a slow authorization cannot shorten the TTL.
+  const issuedAtMsPre = deps.nowMs();
+
+  // 5b. EQUIPMENT ONLY — the governed DVIR handoff must be authorized
+  //     against authoritative state, not against the client's word. The
+  //     shift binding WB-S supplied is treated as a REQUEST, and is
+  //     replaced below by the normalized binding the server validated.
+  //     A well-formed shift id proves nothing on its own.
+  let storedBinding: SsoShiftBinding | undefined;
+  if (req.audience === SSO_AUDIENCE_EQUIPMENT) {
+    const requested = req.shiftBinding;
+    if (!requested) {
+      // Unreachable via the validator; kept so the invariant is enforced
+      // here too rather than assumed from a caller two modules away.
+      throw new SsoError('invalid-argument', 'malformed_request', 'shiftBinding required');
+    }
+    const originDay = shiftOriginDay(requested.shiftId);
+    if (!originDay) {
+      throw new SsoError('invalid-argument', 'malformed_request', 'shift id has no origin day');
+    }
+    const [contractState, originDayDoc] = await Promise.all([
+      deps.getCompanyContract(driver.companyId),
+      deps.getShiftDay(driver.driverId, originDay),
+    ]);
+    const plan = contractState.contract
+      ? await deps.getPlan(contractState.contract.planId)
+      : null;
+
+    const decision = decideEquipmentAuthorization({
+      driverId: driver.driverId,
+      companyId: driver.companyId,
+      binding: requested,
+      contract: contractState.contract,
+      contractState: contractState.state,
+      plan,
+      originDayDoc,
+      nowMs: issuedAtMsPre,
+    });
+    if (!decision.ok) {
+      // Coarse to the client, precise to the operator: a caller must not be
+      // able to probe which shifts exist by reading back distinct reasons.
+      deps.log('sso.code.refused', {
+        audience: req.audience,
+        reason: decision.reason,
+        detail: decision.detail,
+      });
+      throw new SsoError('permission-denied', 'not_authorized', decision.reason);
+    }
+    storedBinding = decision.binding;
+  }
+
   // 6. Server-generated code and timestamps. The client contributes
   //    nothing to either.
   const raw = deps.base64Url(deps.randomBytes(SSO_CODE_BYTES));
   const codeHash = deps.sha256Hex(raw);
-  const issuedAtMs = deps.nowMs();
+  const issuedAtMs = issuedAtMsPre;
   const expiresAtMs = issuedAtMs + SSO_CODE_TTL_MS_PROVISIONAL;
 
   // 7. Store only the HASH. A database reader — backup, export, or a
@@ -113,6 +171,7 @@ export async function handleSsoIssueCode(
       // transaction would depend on a policy that is not yet configured.
       expiresAt: deps.expiresAtTimestamp(expiresAtMs),
       consumed: false,
+      ...(storedBinding ? { shiftBinding: storedBinding } : {}),
     });
   });
 

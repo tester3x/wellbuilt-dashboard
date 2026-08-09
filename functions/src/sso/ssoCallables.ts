@@ -24,6 +24,7 @@ import {
   type SsoDeps,
   type SsoTransaction,
 } from './ssoDeps';
+import { parseCompanyContract, WELLBUILT_CONTRACT_KEY } from '../admin/companyContract';
 
 /** Same rollout posture as the other callables in this project. */
 export const SSO_CALLABLE_OPTIONS = {
@@ -47,6 +48,59 @@ export function buildSsoDeps(): SsoDeps {
     base64Url: (bytes) => Buffer.from(bytes).toString('base64url'),
     // Server-owned. The client supplies neither expiry field.
     expiresAtTimestamp: (ms) => Timestamp.fromMillis(ms),
+
+    /**
+     * One authoritative driver_shifts/{driverId}_{date} document.
+     *
+     * The three outcomes stay distinct on purpose. A THROWN read reports
+     * unreadable rather than absent: collapsing an outage into "no such
+     * shift" would make a transient failure look like a closed shift, and
+     * the resolver must stay free to answer UNVERIFIED instead of being
+     * handed a false negative it cannot detect.
+     */
+    async getShiftDay(driverId, localDate) {
+      const docId = driverId + "_" + localDate;
+      try {
+        const snap = await db.collection("driver_shifts").doc(docId).get();
+        if (!snap.exists) return { readable: true, present: false };
+        const raw = (snap.data() ?? {}).currentShiftId;
+        return {
+          readable: true,
+          present: true,
+          ...(typeof raw === "string" ? { currentShiftId: raw } : {}),
+        };
+      } catch {
+        return { readable: false, present: false };
+      }
+    },
+
+    /**
+     * The company contract, parsed by the canonical parser so the SSO path
+     * never re-implements contract parsing and never mistakes a malformed
+     * contract for an absent one.
+     */
+    async getCompanyContract(companyId) {
+      const snap = await db.collection("companies").doc(companyId).get();
+      if (!snap.exists) return { state: "legacy", contract: null };
+      const parsed = parseCompanyContract((snap.data() ?? {})[WELLBUILT_CONTRACT_KEY]);
+      if (parsed.state === "legacy") return { state: "legacy", contract: null };
+      if (parsed.state === "invalid") return { state: "invalid", contract: null };
+      return { state: parsed.state, contract: parsed.contract };
+    },
+
+    /** The plan named by a contract, or null when absent. */
+    async getPlan(planId) {
+      const snap = await db.collection("plans").doc(planId).get();
+      if (!snap.exists) return null;
+      const d = snap.data() ?? {};
+      return {
+        contractVersion: d.contractVersion,
+        planId: d.planId ?? planId,
+        displayName: d.displayName ?? "",
+        capabilities: d.capabilities ?? [],
+        status: d.status ?? "active",
+      };
+    },
 
     /**
      * Authoritative driver liveness and company.

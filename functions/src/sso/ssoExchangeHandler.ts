@@ -13,10 +13,12 @@
  * sequential replay must not succeed at all.
  */
 import {
-  SSO_AUDIENCE_WBT,
+  SSO_AUDIENCE_EQUIPMENT,
+  SSO_SESSION_APP_BY_AUDIENCE,
+  isSsoAudience,
+  isSsoShiftBinding,
   SSO_PROTOCOL_VERSION,
   SSO_SESSION_APP_CLAIM,
-  SSO_SESSION_APP_WBT,
   validateSsoExchangeRequest,
   type SsoExchangeResponse,
 } from './protocol.generated.js';
@@ -55,6 +57,10 @@ function readRecord(data: Record<string, unknown> | undefined): SsoCodeRecord | 
   return {
     codeHash, uid, driverId, companyId, audience, codeChallenge,
     protocolVersion, issuedAtMs, expiresAtMs, consumed,
+    // Carried through ONLY when it still validates. A stored value that no
+    // longer parses is dropped rather than trusted, so a corrupted or
+    // hand-edited record cannot inject a binding into the response.
+    ...(isSsoShiftBinding(data.shiftBinding) ? { shiftBinding: data.shiftBinding } : {}),
   };
 }
 
@@ -70,7 +76,7 @@ export async function handleSsoExchange(
     throw new SsoError('invalid-argument', parsed.errorCode, `invalid ${parsed.field}`);
   }
   const req = parsed.value;
-  if (req.audience !== SSO_AUDIENCE_WBT) {
+  if (!isSsoAudience(req.audience)) {
     throw new SsoError('invalid-argument', 'unsupported_audience', 'audience not allowlisted');
   }
 
@@ -146,7 +152,9 @@ export async function handleSsoExchange(
     kind: 'driver',
     driverId: driver.driverId,
     companyId: driver.companyId,
-    [SSO_SESSION_APP_CLAIM]: SSO_SESSION_APP_WBT,
+    // Per-audience app marker, from the canonical map rather than a
+    // conditional, so a new audience cannot mint a token without a name.
+    [SSO_SESSION_APP_CLAIM]: SSO_SESSION_APP_BY_AUDIENCE[record.audience as never],
   });
 
   deps.log('sso.exchange.succeeded', {
@@ -162,6 +170,12 @@ export async function handleSsoExchange(
     uid: record.uid,
     driverId: driver.driverId,
     companyId: driver.companyId,
+    // From the STORED record the server validated at issuance — never from
+    // this request, which carries no binding at all. eQuipment scopes its
+    // DVIR to this and to nothing it received in a deep link.
+    ...(record.audience === SSO_AUDIENCE_EQUIPMENT && isSsoShiftBinding(record.shiftBinding)
+      ? { shiftBinding: record.shiftBinding }
+      : {}),
   };
 }
 
