@@ -356,6 +356,46 @@ export function buildWorkPeriodDraft(input: {
   };
 }
 
+/**
+ * What the Work Period status line may truthfully say about the STORED
+ * configuration.
+ *
+ * The card previously rendered `wpc?.timezone ?? 'America/Chicago'`
+ * unconditionally, which presented a timezone as configuration for the
+ * locked explicit-shift contract — where none is stored, none is read by
+ * any consumer, and none is settable (customerEditableFields is []). The
+ * same fallback also misreported an unconfigured company and a derived
+ * company whose timezone is genuinely missing.
+ *
+ * `timezone: null` means "render no timezone segment at all" — deliberately
+ * not an empty string, so a caller cannot render an empty label by
+ * accident. A stray timezone on an explicit-shift contract (possible on
+ * records written before the payload fix) is dropped here rather than
+ * shown, because it is not lifecycle configuration.
+ */
+export function workPeriodStatusView(
+  wpc: StoredWorkPeriodConfiguration | null | undefined,
+): { modeLabel: string; timezone: string | null; lifecycle: string | null } {
+  switch (wpc?.mode) {
+    case 'explicit_shift':
+      return {
+        modeLabel: 'Explicit shift (WB-S Start Shift)',
+        timezone: null,
+        lifecycle: 'Drivers explicitly start and close each work period.',
+      };
+    case 'company_defined_period':
+      return {
+        modeLabel: 'Company-defined period',
+        // Truthful about incomplete legacy data instead of substituting a
+        // plausible default; `complete` already flags it separately.
+        timezone: wpc.timezone ?? 'not set',
+        lifecycle: null,
+      };
+    default:
+      return { modeLabel: 'not configured', timezone: null, lifecycle: null };
+  }
+}
+
 /** Explicit-mode affected-actions copy for WorkPeriodCard. */
 export const EXPLICIT_MODE_ACTIONS: ReadonlyArray<{ action: string; requirement: string }> = Object.freeze([
   { action: 'WB-M app use', requirement: 'No work period required — ordinary sign-in only.' },

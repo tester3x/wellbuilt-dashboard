@@ -26,6 +26,7 @@ import {
   EXPLICIT_MODE_ACTIONS,
   LOGIN_VS_SHIFT_COPY,
   buildWorkPeriodDraft,
+  workPeriodStatusView,
   derivedScheduleExample,
   errorGuidance,
   isOvernight,
@@ -69,6 +70,7 @@ export function WorkPeriodCard({ company, onSave }: Props) {
   useEffect(() => { void reload(); }, [reload]);
 
   const wpc = contract?.workPeriodConfiguration ?? null;
+  const status = workPeriodStatusView(wpc);
   const mode = wpc?.mode ?? null;
   // timezone/startLocalTime/durationMinutes are derived-mode fields. The
   // explicit branch of the builder reads none of them, so switching modes
@@ -113,10 +115,13 @@ export function WorkPeriodCard({ company, onSave }: Props) {
       {canEdit && (state === 'inert' || state === 'active') && (
         <div className="space-y-3">
           <div className="text-sm text-gray-300">
-            Mode: <span className="text-white">{mode === 'company_defined_period' ? 'Company-defined period' : mode === 'explicit_shift' ? 'Explicit shift (WB-S Start Shift)' : 'not configured'}</span>
-            {' · '}Timezone: <span className="text-white">{wpc?.timezone ?? 'America/Chicago'}</span>
+            Mode: <span className="text-white">{status.modeLabel}</span>
+            {status.timezone && (
+              <>{' · '}Timezone: <span className="text-white">{status.timezone}</span></>
+            )}
             {' · '}Configuration: <span className={complete ? 'text-green-300' : 'text-amber-300'}>{complete ? 'complete' : 'incomplete'}</span>
           </div>
+          {status.lifecycle && <p className="text-gray-400 text-xs">{status.lifecycle}</p>}
 
           {mode === 'explicit_shift' && (
             <div className="text-xs text-gray-400 space-y-1">
