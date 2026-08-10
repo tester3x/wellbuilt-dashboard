@@ -15,6 +15,9 @@ export {
 export {
   ingestDriverPacket,
   upsertDriverShift,
+  resolveActiveDriverShift,
+  claimDriverShift,
+  closeDriverShift,
   submitJsaRecord,
   updateDriverProfile,
   signalDriverLogout,

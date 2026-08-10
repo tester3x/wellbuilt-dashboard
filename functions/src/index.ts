@@ -4753,6 +4753,9 @@ export {
   // Operational path hardening
   ingestDriverPacket,
   upsertDriverShift,
+  resolveActiveDriverShift,
+  claimDriverShift,
+  closeDriverShift,
   submitJsaRecord,
   updateDriverProfile,
   signalDriverLogout,
