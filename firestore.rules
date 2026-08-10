@@ -72,6 +72,22 @@ service cloud.firestore {
       allow read, write: if false;
     }
 
+    // Per-driver active-shift authority — server-owned, exactly like
+    // platform_admins. The catch-all at the bottom of this file already
+    // denies it; this rule is stated explicitly so an audit reading the
+    // shift path sees the denial where it looks for it, and so a later
+    // broadening of some driver_* rule cannot silently expose it.
+    //
+    // A CLIENT MUST NEVER READ THIS. The record is what decides whether a
+    // shift is open; a client that could read it would learn the answer
+    // without the server's decision, and a client that could write it
+    // could mint or end a shift directly — which is the entire race this
+    // collection exists to remove. All access is via the resolve/claim/
+    // close callables, which use the Admin SDK and bypass these rules.
+    match /driver_shift_authority/{driverId} {
+      allow read, write: if false;
+    }
+
     // Plan catalog — vc51.9A6-B mobile read path: apps read the exact
     // company document, then the exact assigned plans/{planId}, and
     // compute effective capabilities locally. Plan documents carry

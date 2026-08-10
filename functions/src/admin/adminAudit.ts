@@ -25,7 +25,7 @@ export const AUDIT_CHANGED_FIELDS_MAX = 30;
 
 export interface AdminAuditInput {
   operation: string;
-  targetType: 'plan' | 'company';
+  targetType: 'plan' | 'company' | 'driver_shift';
   targetId: string;
   actorUid: string;
   actorEmail: string | null;

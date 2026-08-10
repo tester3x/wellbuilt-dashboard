@@ -34,6 +34,10 @@ import {
   updateCompanySafeHandler,
   updatePlanHandler,
 } from './adminHandlers';
+import {
+  retroCloseDryRunHandler,
+  retroCloseExecuteHandler,
+} from '../security/operational/shiftAuthorityMigrationHandler';
 
 export const ADMIN_CALLABLE_OPTIONS = {
   // Part 15: flip to true when App Check enforcement is approved live.
@@ -120,3 +124,8 @@ export const adminGetPlan = wrap(getPlanHandler);
 export const adminGetCompanyContractConfiguration = wrap(getCompanyContractConfigurationHandler);
 export const adminPreviewCompanyEffectiveCapabilities = wrap(previewCompanyEffectiveCapabilitiesHandler);
 export const adminListAdminAudit = wrap(listAdminAuditHandler);
+
+// Targeted historical correction — dry-run and execute are SEPARATE endpoints
+// so a payload typo can never reach the writing path.
+export const adminRetroCloseDriverShiftDryRun = wrap(retroCloseDryRunHandler);
+export const adminRetroCloseDriverShift = wrap(retroCloseExecuteHandler);

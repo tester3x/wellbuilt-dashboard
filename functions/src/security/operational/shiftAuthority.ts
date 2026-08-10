@@ -56,7 +56,23 @@ export interface ShiftAuthorityRecord {
   initialized: boolean;
   openPeriodId: string | null;
   originLocalDate: string | null;
-  /** Set on close so a repeated close is idempotent rather than a mismatch. */
+  /**
+   * Set on close so a repeated close is idempotent rather than a mismatch.
+   *
+   * SINGLE SLOT — a stated limitation, not an oversight. It holds exactly the
+   * MOST RECENTLY closed period. Closing period B overwrites A, after which a
+   * delayed retry of A's close no longer matches and is refused with
+   * `no_open_period` rather than answering `already_closed`.
+   *
+   * That is the safe direction to fail: the retry is refused, no shift is
+   * ended, and the caller sees an explicit precondition failure instead of a
+   * false success. It does mean idempotency is guaranteed only until the NEXT
+   * close, so this record is not a close history and must never be read as
+   * one — `driver_shifts` events remain the durable history.
+   *
+   * Widening this to a bounded ring of recent periods is possible, but it is
+   * not implemented and no caller may assume it.
+   */
   lastClosedPeriodId?: string | null;
   /** Monotonic; lets a caller detect it acted on a stale view. */
   version: number;

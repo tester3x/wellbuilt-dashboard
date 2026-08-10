@@ -4784,6 +4784,9 @@ export {
   adminUpdateCompanySafe, adminArchiveCompany,
   adminListPlans, adminGetPlan, adminGetCompanyContractConfiguration,
   adminPreviewCompanyEffectiveCapabilities, adminListAdminAudit,
+  // Targeted historical correction of a stale origin-day shift marker.
+  // Separate dry-run and execute endpoints; neither is reachable by drivers.
+  adminRetroCloseDriverShiftDryRun, adminRetroCloseDriverShift,
 } from './admin/callables';
 
 

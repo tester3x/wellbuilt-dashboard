@@ -27,7 +27,11 @@
 import * as httpsV2 from 'firebase-functions/v2/https';
 import * as admin from 'firebase-admin';
 import { FieldValue } from 'firebase-admin/firestore';
-import { requireSecureDriver } from '../requireDriverAuth';
+import {
+  loadCanonicalDriverAuthority,
+  productionCanonicalDriverReaders,
+  type CanonicalDriverRecordReaders,
+} from '../canonicalDriverAuthority';
 import {
   buildLifecycleEvent,
   decideClaim,
@@ -73,12 +77,29 @@ function requireExactKeys(data: unknown, allowed: string[]): Record<string, unkn
  * another tenant — cross-driver access is structurally impossible rather than
  * checked.
  */
-async function subject(request: httpsV2.CallableRequest<unknown>) {
-  const driver = await requireSecureDriver(request, { allowLegacyHash: false });
-  if (!driver.companyId) {
-    throw new httpsV2.HttpsError('permission-denied', 'company_binding_required');
+export async function resolveSubject(
+  request: httpsV2.CallableRequest<unknown>,
+  readers: CanonicalDriverRecordReaders = productionCanonicalDriverReaders(),
+): Promise<{ driverId: string; companyId: string }> {
+  const auth = request.auth;
+  if (!auth?.uid || auth.token?.kind !== 'driver' || typeof auth.token?.driverId !== 'string') {
+    throw new httpsV2.HttpsError('unauthenticated', 'driver_session_required');
   }
-  return { driverId: driver.driverId, companyId: driver.companyId };
+  // The CLAIM asserts which driver is calling; it is not evidence of that
+  // driver's liveness or company. Both come from authoritative records.
+  const authority = await loadCanonicalDriverAuthority(auth.token.driverId, readers);
+  if (!authority) {
+    throw new httpsV2.HttpsError('permission-denied', 'driver_not_authoritative');
+  }
+  if (!authority.active) {
+    throw new httpsV2.HttpsError('permission-denied', 'driver_inactive');
+  }
+  // A stale companyId in a long-lived token is RECONCILED, not trusted: the
+  // profile's company wins. A driver moved between companies therefore acts
+  // under the new one, and the authority record written under the old company
+  // no longer matches — decideResolve returns driver_mismatch and every
+  // mutation fails closed rather than crossing a tenant boundary.
+  return { driverId: authority.driverId, companyId: authority.companyId };
 }
 
 function readRecord(data: Record<string, unknown> | undefined): ShiftAuthorityRecord | null {
@@ -107,7 +128,7 @@ export const resolveActiveDriverShift = httpsV2.onCall(
   SHIFT_AUTHORITY_OPTIONS,
   async (request) => {
     requireExactKeys(request.data ?? {}, RESOLVE_KEYS);
-    const who = await subject(request);
+    const who = await resolveSubject(request);
     const snap = await db().doc(shiftAuthorityPath(who.driverId)).get();
     const result = decideResolve(snap.exists ? readRecord(snap.data()) : null, who);
     // Side-effect free by construction: resolve NEVER writes, so a login or a
@@ -122,7 +143,7 @@ export const claimDriverShift = httpsV2.onCall(
   SHIFT_AUTHORITY_OPTIONS,
   async (request) => {
     const d = requireExactKeys(request.data ?? {}, CLAIM_KEYS);
-    const who = await subject(request);
+    const who = await resolveSubject(request);
     const periodId = d.periodId;
     const originLocalDate = d.originLocalDate;
     if (!isPeriodId(periodId) || !isLocalDate(originLocalDate)) {
@@ -188,7 +209,7 @@ export const closeDriverShift = httpsV2.onCall(
   SHIFT_AUTHORITY_OPTIONS,
   async (request) => {
     const d = requireExactKeys(request.data ?? {}, CLOSE_KEYS);
-    const who = await subject(request);
+    const who = await resolveSubject(request);
     if (!isPeriodId(d.periodId)) {
       throw new httpsV2.HttpsError('invalid-argument', 'malformed_period');
     }

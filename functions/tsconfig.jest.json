@@ -1,0 +1,13 @@
+{
+  "extends": "./tsconfig.json",
+  "compilerOptions": {
+    // The published contracts mirror is pure ESM and lives outside
+    // node_modules, so ts-jest must be allowed to compile its .js down to
+    // CommonJS. Tests then load the REAL contract constants; a stub would let
+    // the mirror drift out from under them.
+    "allowJs": true,
+    "noUnusedLocals": false
+  },
+  "include": ["src"],
+  "exclude": []
+}

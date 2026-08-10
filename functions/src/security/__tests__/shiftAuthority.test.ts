@@ -147,6 +147,22 @@ describe('close', () => {
     expect(decideClose(null, PERIOD, WHO).action).toBe('refuse');
   });
 
+  test('lastClosedPeriodId is a SINGLE SLOT — idempotency lasts only until the next close', () => {
+    // Documented limitation, pinned so it cannot change silently.
+    const first = recordAfterClose(initializedOpen(), PERIOD);
+    expect(decideClose(first, PERIOD, WHO).action).toBe('already_closed');
+
+    const later = '2026-08-09_070000';
+    const reopened = { ...first, openPeriodId: later, originLocalDate: '2026-08-09' };
+    const second = recordAfterClose(reopened, later);
+    expect(second.lastClosedPeriodId).toBe(later);
+
+    // A delayed retry of the FIRST close no longer matches. It is refused —
+    // the safe direction. It must never report a false success, and above all
+    // it must not close `later`.
+    expect(decideClose(second, PERIOD, WHO)).toEqual({ action: 'refuse', reason: 'no_open_period' });
+  });
+
   test('11. a cross-driver close is refused', () => {
     const rec = { ...initializedOpen(), driverId: 'someone-else' };
     expect(decideClose(rec, PERIOD, WHO)).toEqual({ action: 'refuse', reason: 'driver_mismatch' });
