@@ -273,9 +273,35 @@ service cloud.firestore {
       allow read, write: if true;
     }
 
-    // Driver shift tracking — DOT compliance
+    // Driver shift tracking — DOT compliance.
+    //
+    // ── STAGED WRITE LOCKDOWN — DO NOT DEPLOY YET ────────────────────────
+    // Writes are DENIED to every direct client. Shift state is now owned by
+    // the server: claimDriverShift / closeDriverShift / recordDepartReturn
+    // author login, logout, depart_return, currentShiftId and odometerMiles
+    // through the Admin SDK, which these rules never constrain.
+    //
+    // Leaving writes open would defeat the authority record entirely — a
+    // client that can set `currentShiftId` directly can mint or end a shift
+    // without the server transaction, which is the exact race the record
+    // exists to remove.
+    //
+    // DEPLOYING THIS BEFORE WB-S IS INTEGRATED WILL BREAK SHIFT TRACKING IN
+    // THE FIELD. WB-S vc22 writes these documents by unauthenticated REST
+    // (shiftTracking.ts). Every gate below must hold first:
+    //   1. the integrated WB-S build is installed on the active test fleet;
+    //   2. every legitimate WB-S write goes through the callables;
+    //   3. older builds are deliberately retired, or accepted as broken;
+    //   4. rollback keeps the denial — reverting to `write: if true` would
+    //      silently reopen the race, so a rollback must go forward, not back.
+    //
+    // READS STAY OPEN in this tranche. WB-JSA (shiftStaleness,
+    // requestPeriodBinding), eQuipment, WB-T, WB-S day summaries and every
+    // AppSwitcher read these documents unauthenticated today. Closing reads
+    // is a separate cross-app migration and is deliberately NOT mixed in.
     match /driver_shifts/{shiftId} {
-      allow read, write: if true;
+      allow read: if true;
+      allow write: if false;
     }
 
     // Driver documents — person-owned compliance (eQuipment Cloud Functions only)
