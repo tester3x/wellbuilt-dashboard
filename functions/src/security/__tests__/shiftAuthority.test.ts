@@ -9,7 +9,11 @@
  * Firestore's optimistic-concurrency abort. A mock that simply buffers writes
  * would let both claims "succeed" and would prove nothing.
  */
+import { readFileSync } from 'node:fs';
+import { join } from 'node:path';
 import {
+  buildLifecycleEvent,
+  eventDayPath,
   decideClaim,
   decideClose,
   decideResolve,
@@ -26,6 +30,8 @@ const COMPANY = 'liquid-gold';
 const WHO = { driverId: DRIVER, companyId: COMPANY };
 const PERIOD = '2026-08-08_211725';
 const DAY = '2026-08-08';
+/** Mirrors CLOSE_KEYS in the adapter — asserted, not assumed. */
+const CLOSE_INPUT_KEYS = ['periodId'];
 
 const initializedNone = (): ShiftAuthorityRecord => ({
   driverId: DRIVER, companyId: COMPANY, initialized: true,
@@ -241,5 +247,64 @@ describe('paths and helpers', () => {
   test('origin day is derived from the period id', () => {
     expect(originDayOf(PERIOD)).toBe(DAY);
     expect(originDayOf('garbage')).toBeNull();
+  });
+});
+
+// ── atomic lifecycle events (Blocker 1 correction) ────────────────────────
+describe('atomic start/close events', () => {
+  test('1/3. a lifecycle event is period-attributed and server-stamped', () => {
+    const e = buildLifecycleEvent('logout', PERIOD, '2026-08-09T01:37:44.667Z');
+    expect(e).toEqual({
+      type: 'logout', shiftId: PERIOD,
+      timestamp: '2026-08-09T01:37:44.667Z', source: 'server',
+    });
+    // shiftId is what makes "one close for THIS period" provable. The existing
+    // WB-S elements carry none, which is why the live 2026-08-08 document
+    // cannot be shown to have been closed at all.
+    expect(e.shiftId).toBe(PERIOD);
+  });
+
+  test('7. a cross-midnight close targets a different day than the origin', () => {
+    // Mike's live case: origin 2026-08-08, close occurring on 2026-08-09.
+    const origin = shiftDayPath(DRIVER, DAY);
+    const closeDay = eventDayPath(DRIVER, '2026-08-09');
+    expect(origin).not.toBe(closeDay);
+    expect(origin).toBe(`driver_shifts/${DRIVER}_2026-08-08`);
+    expect(closeDay).toBe(`driver_shifts/${DRIVER}_2026-08-09`);
+  });
+
+  test('5/6. no event is built for a refused or already-closed decision', () => {
+    // The adapter only builds an event on action==='close'/'claim'. A repeat
+    // returns already_closed and a stale request refuses, so neither appends.
+    const closed = recordAfterClose(initializedOpen(), PERIOD);
+    expect(decideClose(closed, PERIOD, WHO).action).toBe('already_closed');
+    const newer = { ...initializedOpen(), openPeriodId: '2026-08-09_070000', originLocalDate: '2026-08-09' };
+    expect(decideClose(newer, PERIOD, WHO).action).toBe('refuse');
+  });
+
+  test('8. the day write is a merge that names only its own fields', () => {
+    // Guards against a regression to a whole-document set: unrelated fields
+    // (odometerMiles, displayName) and pre-existing events must survive.
+    const src = readFileSync(
+      join(__dirname, '..', 'operational', 'shiftAuthorityCallables.ts'), 'utf8');
+    expect(src).not.toMatch(/tx\.set\([^)]*\)\s*;\s*$/m);      // no set without options
+    expect((src.match(/\{ merge: true \}/g) || []).length).toBeGreaterThanOrEqual(4);
+    expect(src).toMatch(/FieldValue\.arrayUnion\(/);            // append, never replace
+    expect(src).not.toMatch(/events:\s*\[/);                    // never a literal array
+  });
+
+  test('4. a refusal path performs no write at all', () => {
+    const src = readFileSync(
+      join(__dirname, '..', 'operational', 'shiftAuthorityCallables.ts'), 'utf8');
+    // Both transactions return before any tx.set when the decision refuses.
+    expect(src).toMatch(/if \(decision\.action === 'refuse'\) return decision;/);
+    expect(src).toMatch(/if \(decision\.action !== 'close'\) return decision;/);
+  });
+
+  test('the close day comes from the server clock, never the client', () => {
+    const src = readFileSync(
+      join(__dirname, '..', 'operational', 'shiftAuthorityCallables.ts'), 'utf8');
+    expect(src).toMatch(/const closeLocalDate = serverIsoNow\.slice\(0, 10\)/);
+    expect(CLOSE_INPUT_KEYS).toEqual(['periodId']);   // no date input exists
   });
 });

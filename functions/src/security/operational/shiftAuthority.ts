@@ -252,6 +252,47 @@ export function shiftAuthorityPath(driverId: string): string {
   return `${SHIFT_AUTHORITY_COLLECTION}/${driverId}`;
 }
 
+/**
+ * The authoritative lifecycle event appended by claim/close.
+ *
+ * PERIOD ATTRIBUTION IS NEW AND NECESSARY. The existing event elements carry
+ * type/timestamp/lat/lng/source/displayName/driverHash and NO shift id, so an
+ * event cannot be attributed to a period from the event alone. Without
+ * `shiftId` the invariant "exactly one authoritative close for period X" is
+ * unprovable. The field is purely additive: every existing reader keys off
+ * `type`, so nothing breaks by its presence.
+ *
+ * `timestamp` is an ISO string from the SERVER clock, not a sentinel:
+ * Firestore rejects serverTimestamp() inside array elements, and the
+ * established event protocol is already an ISO string.
+ */
+export interface ShiftLifecycleEvent {
+  type: "login" | "logout";
+  timestamp: string;
+  shiftId: string;
+  source: string;
+}
+
+export function buildLifecycleEvent(
+  type: "login" | "logout",
+  shiftId: string,
+  serverIsoNow: string,
+): ShiftLifecycleEvent {
+  return { type, timestamp: serverIsoNow, shiftId, source: "server" };
+}
+
+/**
+ * The day document an EVENT belongs to.
+ *
+ * WB-S appends to the document for the local date the event occurs on, not
+ * the shift origin day (shiftTracking.ts: `const date = dateString(now)`), so
+ * a cross-midnight close lands on a different document from the origin-day
+ * pointer. Both are named explicitly here so one transaction can write the
+ * pointer, the origin-day marker, and the close-day event together.
+ */
+export function eventDayPath(driverId: string, eventLocalDate: string): string {
+  return shiftDayPath(driverId, eventLocalDate);
+}
 /** The day document whose `currentShiftId` every consumer already reads. */
 export function shiftDayPath(driverId: string, localDate: string): string {
   return `driver_shifts/${driverId}_${localDate}`;

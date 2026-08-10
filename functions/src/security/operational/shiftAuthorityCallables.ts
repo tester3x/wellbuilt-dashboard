@@ -6,20 +6,34 @@
  * happens inside the transaction that writes — so the read that authorizes and
  * the write that acts cannot be separated by another device's commit.
  *
- * Each callable writes BOTH the authority pointer and the day document's
- * `currentShiftId` in one transaction. `currentShiftId` is what every existing
- * consumer already reads (the canonical resolver, WB-S restoration, the DVIR
- * gate), so the pointer can never disagree with it. WB-S continues to append
- * its own `events[]`; that schema is untouched here.
+ * ONE TRANSACTION CARRIES THE WHOLE INVARIANT: the authority pointer, the day
+ * document's `currentShiftId`, and the authoritative login/logout EVENT. An
+ * earlier revision left the event to WB-S, which splits the invariant — server
+ * clears the pointer, client dies before appending the logout, and the system
+ * then permits a new shift while the history has no authoritative close. Since
+ * sign-in/out timestamps are the product's authority, pointer-null alone is not
+ * a close.
+ *
+ * The close event is written to the day it OCCURS on, matching WB-S
+ * (shiftTracking.ts `const date = dateString(now)`); for a cross-midnight shift
+ * that is a different document from the origin-day marker, so the transaction
+ * spans up to three documents. Firestore transactions are multi-document, so
+ * this is genuine atomicity, not a claimed equivalence.
+ *
+ * Events gain `shiftId`. The existing elements carry no period attribution at
+ * all, so "exactly one authoritative close for period X" was unprovable. The
+ * field is additive — every current reader keys off `type`.
  */
 import * as httpsV2 from 'firebase-functions/v2/https';
 import * as admin from 'firebase-admin';
 import { FieldValue } from 'firebase-admin/firestore';
 import { requireSecureDriver } from '../requireDriverAuth';
 import {
+  buildLifecycleEvent,
   decideClaim,
   decideClose,
   decideResolve,
+  eventDayPath,
   isLocalDate,
   isPeriodId,
   recordAfterClaim,
@@ -116,6 +130,8 @@ export const claimDriverShift = httpsV2.onCall(
     }
 
     const authorityRef = db().doc(shiftAuthorityPath(who.driverId));
+    // One server clock reading drives the whole transaction.
+    const serverIsoNow = new Date().toISOString();
 
     const outcome = await db().runTransaction(async (tx) => {
       const snap = await tx.get(authorityRef);
@@ -132,11 +148,18 @@ export const claimDriverShift = httpsV2.onCall(
         ...recordAfterClaim(record as ShiftAuthorityRecord, decision.periodId, decision.originLocalDate),
         updatedAt: FieldValue.serverTimestamp(),
       }, { merge: true });
+      // Pointer, day marker AND the authoritative start event commit together.
+      // The event is period-attributed, so "exactly one start for this period"
+      // is provable rather than inferred from array position.
       tx.set(db().doc(shiftDayPath(who.driverId, decision.originLocalDate)), {
         currentShiftId: decision.periodId,
         driverId: who.driverId,
         companyId: who.companyId,
+        date: decision.originLocalDate,
         updatedAt: FieldValue.serverTimestamp(),
+        events: FieldValue.arrayUnion(
+          buildLifecycleEvent('login', decision.periodId, serverIsoNow),
+        ),
       }, { merge: true });
       return decision;
     });
@@ -170,6 +193,11 @@ export const closeDriverShift = httpsV2.onCall(
       throw new httpsV2.HttpsError('invalid-argument', 'malformed_period');
     }
     const requestedPeriodId = d.periodId as string;
+    // One server clock reading; the close DAY is derived from it, never from
+    // the client, so a device with a wrong clock cannot file a close on the
+    // wrong day document.
+    const serverIsoNow = new Date().toISOString();
+    const closeLocalDate = serverIsoNow.slice(0, 10);
     const authorityRef = db().doc(shiftAuthorityPath(who.driverId));
 
     const outcome = await db().runTransaction(async (tx) => {
@@ -187,6 +215,21 @@ export const closeDriverShift = httpsV2.onCall(
       tx.set(db().doc(shiftDayPath(who.driverId, decision.originLocalDate)), {
         currentShiftId: '',
         updatedAt: FieldValue.serverTimestamp(),
+      }, { merge: true });
+      // The close event belongs to the day it OCCURS on, matching WB-S
+      // (shiftTracking.ts: `const date = dateString(now)`). For a cross-midnight
+      // shift that is a DIFFERENT document from the origin-day marker above —
+      // which is exactly why both must commit in one transaction. Mike's
+      // 2026-08-08 shift is the live proof of the split: its origin day still
+      // names it open while a later day carries an unrelated logout.
+      tx.set(db().doc(eventDayPath(who.driverId, closeLocalDate)), {
+        driverId: who.driverId,
+        companyId: who.companyId,
+        date: closeLocalDate,
+        updatedAt: FieldValue.serverTimestamp(),
+        events: FieldValue.arrayUnion(
+          buildLifecycleEvent('logout', decision.periodId, serverIsoNow),
+        ),
       }, { merge: true });
       return decision;
     });
