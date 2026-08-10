@@ -4756,6 +4756,7 @@ export {
   resolveActiveDriverShift,
   claimDriverShift,
   closeDriverShift,
+  recordDepartReturn,
   submitJsaRecord,
   updateDriverProfile,
   signalDriverLogout,

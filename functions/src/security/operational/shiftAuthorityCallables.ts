@@ -14,11 +14,14 @@
  * sign-in/out timestamps are the product's authority, pointer-null alone is not
  * a close.
  *
- * The close event is written to the day it OCCURS on, matching WB-S
- * (shiftTracking.ts `const date = dateString(now)`); for a cross-midnight shift
- * that is a different document from the origin-day marker, so the transaction
- * spans up to three documents. Firestore transactions are multi-document, so
- * this is genuine atomicity, not a claimed equivalence.
+ * EVERY server-authored event goes to the PERIOD'S ORIGIN DAY. An earlier
+ * revision filed the close on the day it occurred, computed as
+ * `serverIsoNow.slice(0,10)` — a UTC date. An evening close in America/Chicago
+ * (20:37 local = 01:37 UTC next day) was therefore filed a day late, which is
+ * the same cross-midnight inconsistency this module exists to remove. No
+ * company timezone exists to compute a real local date with, so the fix is to
+ * stop deriving a date at all: the origin day is decided once at claim and
+ * read back from the authority record. See eventDayFor().
  *
  * Events gain `shiftId`. The existing elements carry no period attribution at
  * all, so "exactly one authoritative close for period X" was unprovable. The
@@ -36,10 +39,12 @@ import {
   buildLifecycleEvent,
   decideClaim,
   decideClose,
+  decideOperationalEvent,
   decideResolve,
-  eventDayPath,
   isLocalDate,
   isPeriodId,
+  isPlausibleLocalDate,
+  isValidOdometerMiles,
   recordAfterClaim,
   recordAfterClose,
   shiftAuthorityPath,
@@ -56,7 +61,12 @@ export const SHIFT_AUTHORITY_OPTIONS = {
 /** Exact accepted keys per callable. Anything else is a protocol violation. */
 const RESOLVE_KEYS: string[] = [];
 const CLAIM_KEYS = ['periodId', 'originLocalDate'];
-const CLOSE_KEYS = ['periodId'];
+/** `odometerMiles` is OPTIONAL: total miles for the shift, captured in the
+ *  arrival modal that already drives the close. Folding it in keeps the
+ *  odometer and the authoritative logout atomic — they describe the same
+ *  moment, and two separate unauthenticated writes is what we are replacing. */
+const CLOSE_KEYS = ['periodId', 'odometerMiles'];
+const DEPART_RETURN_KEYS = ['periodId'];
 
 function requireExactKeys(data: unknown, allowed: string[]): Record<string, unknown> {
   if (typeof data !== 'object' || data === null || Array.isArray(data)) {
@@ -153,6 +163,13 @@ export const claimDriverShift = httpsV2.onCall(
     const authorityRef = db().doc(shiftAuthorityPath(who.driverId));
     // One server clock reading drives the whole transaction.
     const serverIsoNow = new Date().toISOString();
+    // The device owns the local calendar, but not without a bound. This is
+    // the ONE place a client date enters the system; once accepted it is
+    // frozen in the authority record and reused for every event of the
+    // period, so a bad value here would misfile the whole shift.
+    if (!isPlausibleLocalDate(originLocalDate, serverIsoNow)) {
+      throw new httpsV2.HttpsError('invalid-argument', 'implausible_origin_local_date');
+    }
 
     const outcome = await db().runTransaction(async (tx) => {
       const snap = await tx.get(authorityRef);
@@ -214,11 +231,16 @@ export const closeDriverShift = httpsV2.onCall(
       throw new httpsV2.HttpsError('invalid-argument', 'malformed_period');
     }
     const requestedPeriodId = d.periodId as string;
-    // One server clock reading; the close DAY is derived from it, never from
-    // the client, so a device with a wrong clock cannot file a close on the
-    // wrong day document.
+    if (d.odometerMiles !== undefined && !isValidOdometerMiles(d.odometerMiles)) {
+      throw new httpsV2.HttpsError('invalid-argument', 'invalid_odometer_miles');
+    }
+    const odometerMiles = d.odometerMiles as number | undefined;
+    // One server clock reading. NOTE: the close DAY is no longer derived from
+    // it. `serverIsoNow.slice(0,10)` is a UTC date, and an evening close in
+    // America/Chicago falls on the NEXT UTC day — a 20:37 close became 01:37
+    // tomorrow and was filed a day late. The event now goes to the period's
+    // stored origin day, which needs no timezone at all.
     const serverIsoNow = new Date().toISOString();
-    const closeLocalDate = serverIsoNow.slice(0, 10);
     const authorityRef = db().doc(shiftAuthorityPath(who.driverId));
 
     const outcome = await db().runTransaction(async (tx) => {
@@ -231,26 +253,24 @@ export const closeDriverShift = httpsV2.onCall(
         ...recordAfterClose(record as ShiftAuthorityRecord, decision.periodId),
         updatedAt: FieldValue.serverTimestamp(),
       }, { merge: true });
-      // '' is WB-S's established "explicitly closed" marker — distinct from an
-      // absent field, which means never opened. Preserved deliberately.
+      // ONE document now carries the whole close: the marker, the
+      // authoritative logout, and the shift's odometer. '' is WB-S's
+      // established "explicitly closed" marker — distinct from an absent
+      // field, which means never opened. Preserved deliberately.
+      //
+      // The event goes to the PERIOD'S ORIGIN DAY, not the day the close
+      // happens to fall on, because the origin day is already known from the
+      // authority record and requires no timezone to compute. See
+      // eventDayFor() for why occurrence-day placement is unfixable here.
       tx.set(db().doc(shiftDayPath(who.driverId, decision.originLocalDate)), {
         currentShiftId: '',
-        updatedAt: FieldValue.serverTimestamp(),
-      }, { merge: true });
-      // The close event belongs to the day it OCCURS on, matching WB-S
-      // (shiftTracking.ts: `const date = dateString(now)`). For a cross-midnight
-      // shift that is a DIFFERENT document from the origin-day marker above —
-      // which is exactly why both must commit in one transaction. Mike's
-      // 2026-08-08 shift is the live proof of the split: its origin day still
-      // names it open while a later day carries an unrelated logout.
-      tx.set(db().doc(eventDayPath(who.driverId, closeLocalDate)), {
-        driverId: who.driverId,
-        companyId: who.companyId,
-        date: closeLocalDate,
         updatedAt: FieldValue.serverTimestamp(),
         events: FieldValue.arrayUnion(
           buildLifecycleEvent('logout', decision.periodId, serverIsoNow),
         ),
+        // Total miles for THIS shift, so it belongs on the period's document
+        // alongside the close it was captured with.
+        ...(odometerMiles !== undefined ? { odometerMiles } : {}),
       }, { merge: true });
       return decision;
     });
@@ -266,6 +286,91 @@ export const closeDriverShift = httpsV2.onCall(
       state: 'none' as const,
       closedPeriodId: outcome.periodId,
       alreadyClosed: outcome.action === 'already_closed',
+    };
+  },
+);
+
+// ── operational events ────────────────────────────────────────────────────
+
+/**
+ * recordDepartReturn — the driver has started the drive back to the yard.
+ *
+ * NARROW BY CONSTRUCTION. The event type is fixed by the endpoint, not taken
+ * from the caller, so this is not a "write any event" door. It appends
+ * exactly one `depart_return` and touches nothing else: it cannot open a
+ * period (an absent or closed pointer refuses), cannot close one (the pointer
+ * is never written), and cannot reach another driver or company (the subject
+ * comes from canonical authority, and there is no id input).
+ *
+ * ORDERING IS PRESERVED, NOT ENFORCED. depart_return must precede Post-Trip
+ * and close in the product flow; the server does not police that order, it
+ * only guarantees the event is attributed to the open period. Close remains
+ * a separate authenticated call the client makes after Post-Trip.
+ */
+export const recordDepartReturn = httpsV2.onCall(
+  SHIFT_AUTHORITY_OPTIONS,
+  async (request) => {
+    const d = requireExactKeys(request.data ?? {}, DEPART_RETURN_KEYS);
+    const who = await resolveSubject(request);
+    if (!isPeriodId(d.periodId)) {
+      throw new httpsV2.HttpsError('invalid-argument', 'malformed_period');
+    }
+    const requestedPeriodId = d.periodId as string;
+    const serverIsoNow = new Date().toISOString();
+    const authorityRef = db().doc(shiftAuthorityPath(who.driverId));
+
+    const outcome = await db().runTransaction(async (tx) => {
+      const snap = await tx.get(authorityRef);
+      const record = snap.exists ? readRecord(snap.data()) : null;
+
+      // Resolve first WITHOUT the day document: until the period is known
+      // there is no origin day to read, and reading the wrong one would be
+      // its own defect.
+      const probe = decideResolve(record, who);
+      if (probe.state !== 'open' || probe.periodId !== requestedPeriodId) {
+        return decideOperationalEvent(record, requestedPeriodId, who, false);
+      }
+
+      // Idempotency needs the CURRENT events: a bare append would duplicate
+      // on a repeated tap, because each attempt carries a fresh timestamp and
+      // arrayUnion only dedupes byte-identical elements.
+      const dayRef = db().doc(shiftDayPath(who.driverId, probe.originLocalDate));
+      const daySnap = await tx.get(dayRef);
+      const events = daySnap.exists && Array.isArray(daySnap.data()?.events)
+        ? (daySnap.data()!.events as unknown[])
+        : [];
+      const alreadyPresent = events.some((e) => {
+        if (!e || typeof e !== 'object') return false;
+        const ev = e as { type?: unknown; shiftId?: unknown };
+        return ev.type === 'depart_return' && ev.shiftId === requestedPeriodId;
+      });
+
+      const decision = decideOperationalEvent(record, requestedPeriodId, who, alreadyPresent);
+      if (decision.action !== 'append') return decision;
+
+      // Same canonical placement as login/logout: the period's origin day.
+      tx.set(dayRef, {
+        driverId: who.driverId,
+        companyId: who.companyId,
+        date: decision.originLocalDate,
+        updatedAt: FieldValue.serverTimestamp(),
+        events: FieldValue.arrayUnion(
+          buildLifecycleEvent('depart_return', decision.periodId, serverIsoNow),
+        ),
+      }, { merge: true });
+      return decision;
+    });
+
+    if (outcome.action === 'refuse') {
+      throw new httpsV2.HttpsError(
+        outcome.reason === 'invalid_period_id' ? 'invalid-argument' : 'failed-precondition',
+        outcome.reason,
+      );
+    }
+    return {
+      protocolVersion: 1 as const,
+      periodId: outcome.periodId,
+      recorded: outcome.action === 'append',
     };
   },
 );

@@ -13,7 +13,7 @@ import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import {
   buildLifecycleEvent,
-  eventDayPath,
+  eventDayFor,
   decideClaim,
   decideClose,
   decideResolve,
@@ -31,7 +31,7 @@ const WHO = { driverId: DRIVER, companyId: COMPANY };
 const PERIOD = '2026-08-08_211725';
 const DAY = '2026-08-08';
 /** Mirrors CLOSE_KEYS in the adapter — asserted, not assumed. */
-const CLOSE_INPUT_KEYS = ['periodId'];
+const CLOSE_INPUT_KEYS = ['periodId', 'odometerMiles'];
 
 const initializedNone = (): ShiftAuthorityRecord => ({
   driverId: DRIVER, companyId: COMPANY, initialized: true,
@@ -280,13 +280,20 @@ describe('atomic start/close events', () => {
     expect(e.shiftId).toBe(PERIOD);
   });
 
-  test('7. a cross-midnight close targets a different day than the origin', () => {
-    // Mike's live case: origin 2026-08-08, close occurring on 2026-08-09.
-    const origin = shiftDayPath(DRIVER, DAY);
-    const closeDay = eventDayPath(DRIVER, '2026-08-09');
-    expect(origin).not.toBe(closeDay);
-    expect(origin).toBe(`driver_shifts/${DRIVER}_2026-08-08`);
-    expect(closeDay).toBe(`driver_shifts/${DRIVER}_2026-08-09`);
+  test('7. a cross-midnight close targets the ORIGIN day, not the close day', () => {
+    // CORRECTED. This test previously asserted the opposite — that the close
+    // event lands on a different document from the origin marker. That was
+    // the defect: the "close day" was computed as a UTC date, so Mike's 20:37
+    // America/Chicago close resolved to 2026-08-10 and was filed a day late.
+    // Placement now comes from the period's stored origin day, which needs no
+    // timezone, so the whole lifecycle shares one document.
+    const open = initializedOpen();
+    const d = decideClose(open, PERIOD, WHO);
+    expect(d.action).toBe('close');
+    if (d.action !== 'close') return;
+    expect(shiftDayPath(DRIVER, eventDayFor(d))).toBe(`driver_shifts/${DRIVER}_${DAY}`);
+    // And no UTC instant can move it.
+    expect(eventDayFor(d)).not.toBe('2026-08-10');
   });
 
   test('5/6. no event is built for a refused or already-closed decision', () => {
@@ -317,10 +324,18 @@ describe('atomic start/close events', () => {
     expect(src).toMatch(/if \(decision\.action !== 'close'\) return decision;/);
   });
 
-  test('the close day comes from the server clock, never the client', () => {
+  test('the close day is NOT derived from any clock — client or server', () => {
+    // CORRECTED. This previously required `serverIsoNow.slice(0, 10)`, i.e.
+    // it pinned the defect: that expression is a UTC date, and an evening
+    // America/Chicago close falls on the next UTC day. The correction removes
+    // date derivation entirely — placement reads the period's stored origin
+    // day, so there is no clock-to-date step left to get wrong.
     const src = readFileSync(
       join(__dirname, '..', 'operational', 'shiftAuthorityCallables.ts'), 'utf8');
-    expect(src).toMatch(/const closeLocalDate = serverIsoNow\.slice\(0, 10\)/);
-    expect(CLOSE_INPUT_KEYS).toEqual(['periodId']);   // no date input exists
+    expect(src).not.toMatch(/serverIsoNow\.slice\(0, 10\)/);
+    expect(src).toMatch(/shiftDayPath\(who\.driverId, decision\.originLocalDate\)/);
+    // Still no date input on close — the client cannot choose a document.
+    expect(CLOSE_INPUT_KEYS).toEqual(['periodId', 'odometerMiles']);
+    expect(CLOSE_INPUT_KEYS).not.toContain('closeLocalDate');
   });
 });

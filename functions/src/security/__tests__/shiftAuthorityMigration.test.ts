@@ -530,7 +530,10 @@ describe('driver callables expose no driver/company selector', () => {
     // The exact accepted key lists, asserted against source rather than assumed.
     expect(src).toMatch(/const RESOLVE_KEYS: string\[\] = \[\];/);
     expect(src).toMatch(/const CLAIM_KEYS = \['periodId', 'originLocalDate'\];/);
-    expect(src).toMatch(/const CLOSE_KEYS = \['periodId'\];/);
+    // odometerMiles rides on close (period-scoped, captured at close time);
+    // it is a bounded value, not a driver/company selector.
+    expect(src).toMatch(/const CLOSE_KEYS = \['periodId', 'odometerMiles'\];/);
+    expect(src).toMatch(/const DEPART_RETURN_KEYS = \['periodId'\];/);
   });
 });
 

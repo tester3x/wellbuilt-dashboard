@@ -5,6 +5,7 @@ export {
   resolveActiveDriverShift,
   claimDriverShift,
   closeDriverShift,
+  recordDepartReturn,
 } from './shiftAuthorityCallables';
 export { submitJsaRecord } from './jsaWrite';
 export { updateDriverProfile, signalDriverLogout } from './profileWrite';

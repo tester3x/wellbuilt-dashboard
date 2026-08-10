@@ -6,9 +6,61 @@ guarantees. This file states those guarantees.
 
 ## Document identity
 
-`driver_shifts/{driverId}_{YYYY-MM-DD}`, one per driver per **local calendar
-day**. Note: per DAY, not per shift. A shift that crosses midnight touches two
-documents.
+`driver_shifts/{driverId}_{YYYY-MM-DD}`.
+
+**Historically** this was one document per driver per local calendar day, and
+a cross-midnight shift touched two of them.
+
+**For server-authored events it is now one document per PERIOD**, named by the
+period's origin day. All of a period's lifecycle — `login`, `depart_return`,
+`logout` — plus `currentShiftId` and `odometerMiles` land on that one
+document, however long the shift runs.
+
+### Why: there is no timezone to file by
+
+Filing an event on "the day it happened" needs the driver's local calendar
+date at that instant. The server does not have it:
+
+* `explicit_shift` stores **no** timezone. That is deliberate — it has no
+  schedule, so it needs none, and `isWorkPeriodConfigurationComplete` returns
+  complete without one. Liquid Gold's live configuration is exactly
+  `{mode: 'explicit_shift'}`.
+* The contracts package ships `localDateInZone`, but nothing authoritative to
+  feed it.
+* Company address is not a substitute. Liquid Gold is `state: 'ND'`, and
+  **North Dakota spans Central and Mountain time** — the inference is wrong on
+  its face. A driver working temporarily in another zone breaks any
+  company-level zone anyway.
+* `companies/{id}.midnightCutoff` exists but is an unused boolean, not a
+  timezone.
+
+An earlier revision used `serverIsoNow.slice(0, 10)` — the **UTC** date. Mike's
+20:37 America/Chicago close is 01:37 the next UTC day, so evening closes were
+filed a day late, recreating the very cross-midnight inconsistency the
+authority record exists to remove.
+
+**The origin day needs no timezone.** It is decided once, at claim, from the
+device's own local calendar; validated for internal consistency
+(`originDayOf(periodId) === originLocalDate`) and physical plausibility
+(`isPlausibleLocalDate`, ±1 day from the server's UTC date, which covers every
+real offset from UTC-12 to UTC+14); then frozen in the authority record. Every
+later event reads that stored value. There is no clock-to-date step left to
+get wrong.
+
+### Consequence for readers, stated plainly
+
+A cross-midnight period's events appear under its **origin** day, not the day
+you might be looking at. `driver_shifts/{driver}_2026-08-09` will contain no
+lifecycle events for a shift that began on 2026-08-08.
+
+* **WB-JSA is already aligned** — `shiftStaleness.ts` and
+  `requestPeriodBinding.ts` read the origin-day document and key on
+  `currentShiftId`.
+* **`daySummary` adjacency still works** — the paired events
+  (`depart_return → logout`) stay adjacent in the same array, so its
+  positional pairing is unaffected. What changes is *which day* shows them.
+* A day-scoped view of a cross-midnight shift must fetch by the period's
+  origin day (or by `shiftId`), not by today's date.
 
 ## Two generations
 

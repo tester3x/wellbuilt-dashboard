@@ -42,6 +42,31 @@ export function originDayOf(periodId: string): string | null {
 }
 
 /**
+ * Is a client-proposed local date physically possible right now?
+ *
+ * The device owns the local calendar — no company timezone exists for
+ * explicit_shift (see SHIFT-EVENT-SEMANTICS.md), so the claim's
+ * `originLocalDate` is the ONLY local-calendar input the system ever gets.
+ * That makes it worth bounding: real UTC offsets span UTC-12..UTC+14, so a
+ * genuine local date can differ from the server's UTC date by at most one
+ * day in either direction.
+ *
+ * This does NOT detect a device that is a few hours off — nothing can, from a
+ * date alone. It rejects the failures that matter: a wildly wrong clock, a
+ * typo'd year, and a replayed claim for an old day. Anything it accepts is
+ * then frozen in the authority record and reused for the whole period, so the
+ * date is decided ONCE rather than re-derived per event.
+ */
+export function isPlausibleLocalDate(localDate: string, serverIsoNow: string): boolean {
+  if (!isLocalDate(localDate)) return false;
+  const claimed = Date.parse(`${localDate}T00:00:00Z`);
+  const serverDay = Date.parse(`${serverIsoNow.slice(0, 10)}T00:00:00Z`);
+  if (!Number.isFinite(claimed) || !Number.isFinite(serverDay)) return false;
+  const dayMs = 86400000;
+  return Math.abs(claimed - serverDay) <= dayMs;
+}
+
+/**
  * The stored authority record. Server-owned: Firestore rules must deny all
  * client access, exactly as they already do for platform_admins.
  */
@@ -282,32 +307,136 @@ export function shiftAuthorityPath(driverId: string): string {
  * Firestore rejects serverTimestamp() inside array elements, and the
  * established event protocol is already an ISO string.
  */
+export type ServerEventType = "login" | "logout" | "depart_return";
+
+/**
+ * The ONLY event types a server callable may author. An operational callable
+ * takes no type from the caller — it is fixed per endpoint — so this list is
+ * the whole authorable surface. There is deliberately no "write any event"
+ * path.
+ */
+export const SERVER_AUTHORABLE_EVENT_TYPES: readonly ServerEventType[] =
+  Object.freeze(["login", "logout", "depart_return"]);
+
 export interface ShiftLifecycleEvent {
-  type: "login" | "logout";
+  type: ServerEventType;
   timestamp: string;
   shiftId: string;
   source: string;
 }
 
 export function buildLifecycleEvent(
-  type: "login" | "logout",
+  type: ServerEventType,
   shiftId: string,
   serverIsoNow: string,
 ): ShiftLifecycleEvent {
   return { type, timestamp: serverIsoNow, shiftId, source: "server" };
 }
 
+export type OperationalDecision =
+  | { action: "append"; periodId: string; originLocalDate: string }
+  /** This period already has this event. A repeated tap must not duplicate. */
+  | { action: "already_recorded"; periodId: string }
+  | { action: "refuse"; reason: OperationalRefusal };
+
+export type OperationalRefusal =
+  | ResolveUnverifiableReason
+  | "invalid_period_id"
+  | "no_open_period"
+  | "period_mismatch";
+
 /**
- * The day document an EVENT belongs to.
+ * Decide an operational (non-lifecycle) event append.
  *
- * WB-S appends to the document for the local date the event occurs on, not
- * the shift origin day (shiftTracking.ts: `const date = dateString(now)`), so
- * a cross-midnight close lands on a different document from the origin-day
- * pointer. Both are named explicitly here so one transaction can write the
- * pointer, the origin-day marker, and the close-day event together.
+ * The rule that makes this safe: an operational event may ONLY be written
+ * against the period the authority record currently reports OPEN, and the
+ * caller must name that exact period. It therefore cannot open a shift
+ * (`none` refuses), cannot close one (it never touches the pointer), and
+ * cannot reach a period that is not this driver's current one.
+ *
+ * `alreadyPresent` is computed by the adapter from the day document: an event
+ * of this type already carrying this `shiftId`. That is what makes a repeated
+ * tap or an offline retry a no-op — array append alone would duplicate,
+ * because each attempt carries a fresh server timestamp.
  */
-export function eventDayPath(driverId: string, eventLocalDate: string): string {
-  return shiftDayPath(driverId, eventLocalDate);
+export function decideOperationalEvent(
+  record: ShiftAuthorityRecord | null,
+  requestedPeriodId: string,
+  expect: { driverId: string; companyId: string },
+  alreadyPresent: boolean,
+): OperationalDecision {
+  if (!isPeriodId(requestedPeriodId)) {
+    return { action: "refuse", reason: "invalid_period_id" };
+  }
+  const resolved = decideResolve(record, expect);
+  if (resolved.state === "unverifiable") {
+    return { action: "refuse", reason: resolved.reason };
+  }
+  // No open period: an operational event must never bring one into being.
+  if (resolved.state === "none") {
+    return { action: "refuse", reason: "no_open_period" };
+  }
+  if (resolved.periodId !== requestedPeriodId) {
+    return { action: "refuse", reason: "period_mismatch" };
+  }
+  if (alreadyPresent) {
+    return { action: "already_recorded", periodId: resolved.periodId };
+  }
+  return {
+    action: "append",
+    periodId: resolved.periodId,
+    originLocalDate: resolved.originLocalDate,
+  };
+}
+
+/** Odometer is TOTAL MILES FOR THE SHIFT (end − start), not a reading. */
+export const ODOMETER_MAX_MILES = 5000;
+
+/**
+ * Bound the odometer value.
+ *
+ * WB-S computes `end − start` in the arrival modal and sends the difference,
+ * so a legitimate value is a single shift's driving. The ceiling rejects an
+ * absolute odometer reading pasted in by mistake (six figures), which would
+ * otherwise silently become the day's `driveMiles` in every summary.
+ */
+export function isValidOdometerMiles(v: unknown): v is number {
+  return typeof v === "number" && Number.isInteger(v)
+    && v >= 0 && v <= ODOMETER_MAX_MILES;
+}
+
+/**
+ * THE canonical placement for every server-authored shift event: the
+ * PERIOD'S ORIGIN DAY.
+ *
+ * WHY NOT THE DAY THE EVENT OCCURS ON. Filing by occurrence requires knowing
+ * the driver's local calendar date at that moment, and the server does not
+ * know it. An earlier revision used `serverIsoNow.slice(0, 10)`, which is the
+ * UTC date — for a 20:37 close in America/Chicago that is 01:37 the NEXT UTC
+ * day, so an evening close was filed a day late. No company timezone exists
+ * to fix it with: explicit_shift stores none by design, Liquid Gold's
+ * configuration is `{mode:'explicit_shift'}` with no `timezone`, and inferring
+ * one from `state: 'ND'` would be wrong on its face — North Dakota spans both
+ * Central and Mountain time. A driver working temporarily in another zone
+ * breaks a company-level zone anyway.
+ *
+ * ORIGIN DAY NEEDS NO TIMEZONE. It is decided ONCE, at claim, from the
+ * device's own local calendar, validated for internal consistency
+ * (`originDayOf(periodId) === originLocalDate`) and for physical plausibility
+ * (`isPlausibleLocalDate`), then frozen in the authority record. Every later
+ * event reads that stored value instead of re-deriving a date from a clock,
+ * so an off-by-one-day defect has nowhere to enter.
+ *
+ * CONSEQUENCE, STATED PLAINLY. A cross-midnight period's whole lifecycle —
+ * login, depart_return, logout — lands on ONE document, the origin day. The
+ * close-day document gets nothing. That matches how WB-JSA already reads
+ * shift state (`shiftStaleness.ts` reads the origin-day document and keys on
+ * `currentShiftId`) and it keeps `daySummary`'s adjacency pairing intact,
+ * since the paired events stay together. It does change which calendar day a
+ * cross-midnight shift's events appear under — see SHIFT-EVENT-SEMANTICS.md.
+ */
+export function eventDayFor(record: { originLocalDate: string }): string {
+  return record.originLocalDate;
 }
 /** The day document whose `currentShiftId` every consumer already reads. */
 export function shiftDayPath(driverId: string, localDate: string): string {
