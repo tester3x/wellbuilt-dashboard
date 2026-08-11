@@ -12,9 +12,11 @@ import { createHash, randomBytes as nodeRandomBytes } from 'node:crypto';
 import { handleSsoIssueCode } from '../lib/sso/ssoIssueHandler.js';
 import { handleSsoExchange } from '../lib/sso/ssoExchangeHandler.js';
 import {
-  SSO_AUDIENCE_WBT, SSO_PROTOCOL_VERSION, SSO_CODE_TTL_MS_PROVISIONAL,
+  SSO_AUDIENCE_WBT, SSO_AUDIENCE_EQUIPMENT,
+  SSO_PROTOCOL_VERSION, SSO_CODE_TTL_MS_PROVISIONAL,
   SSO_SESSION_APP_CLAIM, SSO_SESSION_APP_WBT,
 } from '../lib/sso/protocol.generated.js';
+import { ssoCodePath } from '../lib/sso/ssoDeps.js';
 
 let pass = 0, fail = 0;
 const check = (name, ok, detail = '') => {
@@ -34,7 +36,10 @@ function makeWorld(opts = {}) {
   let now = opts.startMs ?? 1_700_000_000_000;
   let counter = 0;
   const drivers = new Map(
-    opts.drivers ?? [['driver-1', { driverId: 'driver-1', companyId: 'co-1', active: true }]],
+    opts.drivers ?? [[
+      'driver-1',
+      { driverId: 'driver-1', companyId: 'co-1', active: true, displayName: 'Mike S' },
+    ]],
   );
   /** Set to delay the read inside a transaction, to interleave two. */
   let readBarrier = null;
@@ -244,11 +249,111 @@ const rejects = async (fn) => {
   check('the code is consumed exactly once', doc.data.consumed === true);
   check('consumption is timestamped by the server', typeof doc.data.consumedAtMs === 'number');
 
+  check('the tickets exchange returns the authoritative display name',
+    res.displayName === 'Mike S');
+  check('the name is NOT put in the minted claims (it is not authority)',
+    !('displayName' in w.minted[0].claims));
+  check('no other profile field rides along', (() => {
+    const allowed = ['protocolVersion', 'customToken', 'uid', 'driverId', 'companyId', 'displayName'];
+    return Object.keys(res).every((k) => allowed.includes(k));
+  })());
+
   // Sequential replay.
   const err = await rejects(() => handleSsoExchange(w.deps, exchangeReq(code)));
   check('sequential replay rejected', err?.code === 'permission-denied');
   check('replay returns the GENERIC error', err?.publicCode === 'invalid_grant');
   check('only one token was ever minted', w.minted.length === 1);
+}
+
+// ══ authoritative display name ═══════════════════════════════════════════
+// WB-T persists a local identity and needs a name. It must come from the
+// server's own record, must be omitted rather than invented when unusable,
+// and must never reach an audience with no use for it.
+{
+  const w = makeWorld();
+  const { code } = await handleSsoIssueCode(w.deps, AUTH_OK, issueReq());
+  const res = await handleSsoExchange(w.deps, exchangeReq(code));
+  check('the name comes from the SERVER record, not the request',
+    res.displayName === 'Mike S'
+    // The request carries no name at all and cannot: nothing in exchangeReq
+    // names the driver, and issuance rejects client identity fields.
+    && !('displayName' in exchangeReq(code)));
+}
+{
+  const w = makeWorld();
+  const { code } = await handleSsoIssueCode(w.deps, AUTH_OK, issueReq());
+  const res = await handleSsoExchange(w.deps, exchangeReq(code, { displayName: 'Attacker' }));
+  check('a client-supplied name in the request is ignored entirely',
+    res.displayName === 'Mike S');
+}
+for (const [label, value] of [
+  ['absent', undefined],
+  ['null', null],
+  ['blank', ''],
+  ['whitespace only', '  '],
+  ['a control character', `Mike${String.fromCharCode(0)}`],
+  ['over the length bound', 'x'.repeat(121)],
+]) {
+  const w = makeWorld({
+    drivers: [['driver-1', { driverId: 'driver-1', companyId: 'co-1', active: true, displayName: value }]],
+  });
+  const { code } = await handleSsoIssueCode(w.deps, AUTH_OK, issueReq());
+  const res = await handleSsoExchange(w.deps, exchangeReq(code));
+  check(`an unusable name (${label}) is OMITTED, never invented`,
+    !('displayName' in res));
+  // The grant is already valid and already consumed. A profile-data gap must
+  // never be reported to the driver as a refusal.
+  check(`an unusable name (${label}) still yields a usable session`,
+    typeof res.customToken === 'string' && res.customToken.length > 0
+    && res.driverId === 'driver-1' && res.companyId === 'co-1');
+}
+{
+  const w = makeWorld({
+    drivers: [['driver-1', { driverId: 'driver-1', companyId: 'co-1', active: true, displayName: '  Mike   S ' }]],
+  });
+  const { code } = await handleSsoIssueCode(w.deps, AUTH_OK, issueReq());
+  const res = await handleSsoExchange(w.deps, exchangeReq(code));
+  check('the returned name is normalized before it leaves the server',
+    res.displayName === 'Mike S');
+}
+{
+  // EQUIPMENT RESPONSE SHAPE IS UNCHANGED. The code record is seeded
+  // directly rather than issued, because equipment issuance needs contract
+  // and shift-day authority that is out of scope here — the exchange path
+  // is what this asserts.
+  const w = makeWorld();
+  const raw = 'e'.repeat(43);
+  w.docs.set(ssoCodePath(sha256Hex(raw)), {
+    version: 0,
+    data: {
+      codeHash: sha256Hex(raw),
+      uid: AUTH_OK.uid,
+      driverId: 'driver-1',
+      companyId: 'co-1',
+      audience: SSO_AUDIENCE_EQUIPMENT,
+      codeChallenge: challengeFor(VERIFIER),
+      protocolVersion: SSO_PROTOCOL_VERSION,
+      issuedAtMs: w.deps.nowMs(),
+      expiresAtMs: w.deps.nowMs() + SSO_CODE_TTL_MS_PROVISIONAL,
+      consumed: false,
+      shiftBinding: { shiftId: '2026-08-08_211725', phase: 'pre_trip' },
+    },
+  });
+  const res = await handleSsoExchange(w.deps, {
+    protocolVersion: SSO_PROTOCOL_VERSION,
+    audience: SSO_AUDIENCE_EQUIPMENT,
+    code: raw,
+    codeVerifier: VERIFIER,
+  });
+  check('the equipment exchange still succeeds', typeof res.customToken === 'string');
+  check('equipment is NOT told the display name — no use, no exposure',
+    !('displayName' in res));
+  check('equipment still receives its server-stored shift binding',
+    res.shiftBinding?.shiftId === '2026-08-08_211725');
+  check('the equipment response shape is byte-for-byte what it always was', (() => {
+    const before = ['protocolVersion', 'customToken', 'uid', 'driverId', 'companyId', 'shiftBinding'];
+    return Object.keys(res).sort().join(',') === before.sort().join(',');
+  })());
 }
 {
   const w = makeWorld();

@@ -21,6 +21,14 @@ export interface AuthoritativeDriver {
   companyId: string | null;
   /** Disabled/deleted/suspended drivers must never complete a bridge. */
   active: boolean;
+  /**
+   * The driver's authoritative display name, already normalized, or null
+   * when the profile has none usable.
+   *
+   * Nullable so a profile-data gap can never look like a liveness failure.
+   * Only the tickets audience is ever told this; see handleSsoExchange.
+   */
+  displayName: string | null;
 }
 
 /** The stored authorization-code record. Never contains the raw code. */

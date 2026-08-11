@@ -5,16 +5,30 @@
  *   - SSO issuance/exchange (via SsoDeps.getDriver adapter)
  *   - verifyDriverSession cold-start revalidation
  *
- * Does NOT touch passcode, hash, display-name membership, shift state,
- * tokens, or claims. Pure read of credentials + profile records.
+ * Does NOT touch passcode, hash, display-name MEMBERSHIP (i.e. it never
+ * resolves an identity from a name), shift state, tokens, or claims. Pure
+ * read of credentials + profile records.
+ *
+ * It does surface the profile's own displayName, because that record is the
+ * authoritative source of it and the SSO exchange has to return it to WB-T.
+ * That is a read of an attribute belonging to an ALREADY-resolved driver,
+ * never an input to resolving one — the direction that matters.
  */
 import * as admin from 'firebase-admin';
+import { normalizeSsoDisplayName } from '../sso/protocol.generated.js';
 
 /** Authoritative secure-driver status as the server sees it. */
 export type CanonicalDriverAuthority = {
   driverId: string;
   /** Nonempty company id from the profile when authority is present. */
   companyId: string;
+  /**
+   * The profile's own display name, or null when it is absent or unusable.
+   *
+   * Nullable rather than required: a missing name must not make a live driver
+   * look dead. Liveness is decided by `active` alone, exactly as before.
+   */
+  displayName: string | null;
   credentialsActive: boolean;
   profileActive: boolean;
   /**
@@ -31,6 +45,7 @@ export type CanonicalDriverRecordReaders = {
     exists: boolean;
     active: boolean;
     companyId: string | null;
+    displayName?: string | null;
   }>;
 };
 
@@ -61,6 +76,9 @@ export async function loadCanonicalDriverAuthority(
   return {
     driverId,
     companyId: profile.companyId,
+    // Normalized through the canonical protocol helper so the server can
+    // never hold a name in a shape it would refuse to send.
+    displayName: normalizeSsoDisplayName(profile.displayName),
     credentialsActive,
     profileActive,
     active: credentialsActive && profileActive,
@@ -85,6 +103,7 @@ export function productionCanonicalDriverReaders(): CanonicalDriverRecordReaders
       const val = (snap.val() || {}) as {
         active?: boolean;
         companyId?: unknown;
+        displayName?: unknown;
       };
       const companyId =
         typeof val.companyId === 'string' && val.companyId.trim().length > 0
@@ -94,6 +113,10 @@ export function productionCanonicalDriverReaders(): CanonicalDriverRecordReaders
         exists: true,
         active: val.active !== false,
         companyId,
+        // Raw here; loadCanonicalDriverAuthority normalizes. Only the
+        // profile's own displayName is read — no other profile field, and
+        // never the legacy approved namespace.
+        displayName: typeof val.displayName === 'string' ? val.displayName : null,
       };
     },
   };
@@ -108,12 +131,18 @@ export function productionCanonicalDriverReaders(): CanonicalDriverRecordReaders
 export async function getAuthoritativeDriverForSso(
   driverId: string,
   readers: CanonicalDriverRecordReaders = productionCanonicalDriverReaders(),
-): Promise<{ driverId: string; companyId: string | null; active: boolean } | null> {
+): Promise<{
+  driverId: string;
+  companyId: string | null;
+  active: boolean;
+  displayName: string | null;
+} | null> {
   const auth = await loadCanonicalDriverAuthority(driverId, readers);
   if (!auth) return null;
   return {
     driverId: auth.driverId,
     companyId: auth.companyId,
     active: auth.active,
+    displayName: auth.displayName,
   };
 }

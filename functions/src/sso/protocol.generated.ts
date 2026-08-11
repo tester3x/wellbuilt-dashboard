@@ -256,6 +256,46 @@ export function audienceRequiresShiftBinding(audience: SsoAudience): boolean {
   return audience === SSO_AUDIENCE_EQUIPMENT;
 }
 
+/** Upper bound on an authoritative display name carried in a response. */
+export const SSO_DISPLAY_NAME_MAX = 120;
+
+/**
+ * The tickets app persists a local identity and therefore needs a name;
+ * no other audience does. Keeping this a predicate rather than an inline
+ * comparison means the server and the client cannot disagree about which
+ * audiences carry the field.
+ */
+export function audienceCarriesDisplayName(audience: SsoAudience): boolean {
+  return audience === SSO_AUDIENCE_WBT;
+}
+
+/**
+ * Normalize an authoritative display name, or null when it is unusable.
+ *
+ * Shared by the server (before sending) and the client (before persisting)
+ * so a name can never be stored in a shape the server would not have sent.
+ *
+ * Rejects control characters outright — a name reaches a receipt, a print
+ * sheet and a log line, and a newline, tab, or escape sequence in any of
+ * those is a defect waiting to happen. Tab counts as a control character and
+ * is refused rather than quietly collapsed, so the only whitespace that can
+ * survive is the space character. Spaces are trimmed and internal runs
+ * collapsed, so " Mike  S " and "Mike S" cannot become two different stored
+ * identities for one driver.
+ *
+ * Deliberately NOT a sanitizer that "fixes" bad input: anything outside the
+ * accepted shape returns null and the caller omits the field.
+ */
+export function normalizeSsoDisplayName(v: unknown): string | null {
+  if (typeof v !== 'string') return null;
+  // Control characters, including DEL. Written as escapes, never literal
+  // bytes, so the rule survives copy, diff and the verbatim source mirror.
+  if (/[\u0000-\u001F\u007F]/.test(v)) return null;
+  const collapsed = v.replace(/\s+/g, ' ').trim();
+  if (collapsed.length === 0 || collapsed.length > SSO_DISPLAY_NAME_MAX) return null;
+  return collapsed;
+}
+
 // ── error codes ───────────────────────────────────────────────────────────
 // Deliberately coarse. A caller must not be able to tell "no such code"
 // from "wrong verifier" from "already consumed".
@@ -352,6 +392,32 @@ export interface SsoExchangeResponse {
    * received in a deep link.
    */
   shiftBinding?: SsoShiftBinding;
+  /**
+   * Present only for the tickets audience: the driver's authoritative display
+   * name, resolved SERVER-SIDE from the same canonical profile the exchange
+   * already revalidates against.
+   *
+   * WHY IT IS HERE AT ALL. WB-T decides its logged-in state from a locally
+   * persisted identity, and that identity needs a name as well as an id. The
+   * name is not in the token claims, so without this field WB-T had to go
+   * find one itself — and it looked in the legacy hash-keyed namespace, which
+   * holds nothing for a canonical driver id. A cryptographically verified
+   * driver was therefore left unable to persist a session.
+   *
+   * OPTIONAL ON PURPOSE, in both directions:
+   *  - A client talking to a server that predates this field must still work.
+   *    It sees the field absent and reports a bounded persistence-unavailable
+   *    outcome rather than failing the grant.
+   *  - A server that cannot resolve a non-empty name OMITS the field rather
+   *    than failing the exchange or inventing a placeholder. The grant is
+   *    already valid and already consumed; a profile-data gap must not be
+   *    reported to the driver as a refusal.
+   *
+   * Audience-scoped like `shiftBinding` above, so no other audience's
+   * response shape changes and no profile data is exposed to an app with no
+   * use for it. Always passes `normalizeSsoDisplayName` before being sent.
+   */
+  displayName?: string;
 }
 
 // ── validation ────────────────────────────────────────────────────────────

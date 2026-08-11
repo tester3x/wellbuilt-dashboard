@@ -15,11 +15,14 @@
 import {
   SSO_AUDIENCE_EQUIPMENT,
   SSO_SESSION_APP_BY_AUDIENCE,
+  audienceCarriesDisplayName,
   isSsoAudience,
   isSsoShiftBinding,
+  normalizeSsoDisplayName,
   SSO_PROTOCOL_VERSION,
   SSO_SESSION_APP_CLAIM,
   validateSsoExchangeRequest,
+  type SsoAudience,
   type SsoExchangeResponse,
 } from './protocol.generated.js';
 import {
@@ -164,6 +167,27 @@ export async function handleSsoExchange(
     elapsedMs: deps.nowMs() - record.issuedAtMs,
   });
 
+  // 5. The authoritative display name, for the audience that needs one.
+  //
+  //    WB-T decides its logged-in state from a locally persisted identity,
+  //    and that identity needs a name. It is NOT in the claims, so without
+  //    this the app had to find one itself and looked in the legacy
+  //    hash-keyed namespace, which holds nothing for a canonical driver id.
+  //
+  //    It comes from `driver` — the record revalidated three steps above —
+  //    so it is the same authority that decided this bridge may complete.
+  //    Nothing in the request contributes to it; the request carries no name
+  //    and could not, since identity fields are refused at issuance.
+  //
+  //    NOT FATAL WHEN ABSENT. The code is already consumed and the grant is
+  //    already valid. Failing here would tell a driver their sign-in was
+  //    refused because of a gap in their profile record, and would burn the
+  //    code doing it. The field is omitted instead and the client reports a
+  //    bounded persistence-unavailable outcome.
+  const displayName = audienceCarriesDisplayName(record.audience as SsoAudience)
+    ? normalizeSsoDisplayName(driver.displayName)
+    : null;
+
   return {
     protocolVersion: SSO_PROTOCOL_VERSION,
     customToken,
@@ -176,6 +200,7 @@ export async function handleSsoExchange(
     ...(record.audience === SSO_AUDIENCE_EQUIPMENT && isSsoShiftBinding(record.shiftBinding)
       ? { shiftBinding: record.shiftBinding }
       : {}),
+    ...(displayName ? { displayName } : {}),
   };
 }
 
