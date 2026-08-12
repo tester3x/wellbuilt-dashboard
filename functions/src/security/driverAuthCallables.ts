@@ -469,6 +469,43 @@ export const adminApproveDriverRegistration = httpsV2.onCall(
       throw new httpsV2.HttpsError('not-found', 'Pending registration not found');
     }
     const pending = pendingSnap.val();
+
+    /**
+     * Read the durable attempt record BEFORE any pending-state guard.
+     *
+     * Finalization touches three stores in sequence, so a crash can land
+     * with the attempt already complete but the RTDB row still `pending`
+     * and the pending credential already gone. Checking credentials first
+     * (as this did) answered "ask the driver to re-register" for an
+     * identity that HAD been provisioned — the non-recoverable case. The
+     * journal is the only record that survives every one of those crash
+     * points, so it is consulted first and heals whatever is missing.
+     */
+    const { firestoreProvisioningJournal } = await import('./operational/provisioningJournalStore');
+    const { resolveProvisioningUuid, attemptKeyId } = await import('./operational/provisioningJournal');
+    const journal = firestoreProvisioningJournal(fs());
+    const attemptKey = { kind: 'pending' as const, pendingId };
+    const priorAttempt = await journal.read(attemptKeyId(attemptKey));
+    if (priorAttempt?.completed) {
+      // Same logical success, plus the writes the crash cut short.
+      await fs().collection('pending_credentials').doc(pendingId).delete();
+      if (pending.status !== 'approved') {
+        await pendingRef.update({
+          status: 'approved',
+          driverId: priorAttempt.driverId,
+          approvedAt: ServerValue.TIMESTAMP,
+          approvedBy: caller.uid,
+        });
+      }
+      return {
+        driverId: priorAttempt.driverId,
+        displayName: pending.displayName,
+        companyId: priorAttempt.companyId,
+        companyName: pending.companyName || null,
+        alreadyProvisioned: true as const,
+      };
+    }
+
     if (pending.status && pending.status !== 'pending') {
       throw new httpsV2.HttpsError('failed-precondition', `Already ${pending.status}`);
     }
@@ -487,9 +524,33 @@ export const adminApproveDriverRegistration = httpsV2.onCall(
       throw new httpsV2.HttpsError('failed-precondition', 'Pending credentials missing — ask driver to re-register via secure app');
     }
     const pendingCred = credPending.data()!;
-    const driverId = randomUUID();
     const nameNorm = pendingCred.displayNameNorm as string;
     const passcode = pendingCred.passcode as ScryptRecord;
+
+    /**
+     * ONE canonical UUID per pending registration, chosen durably.
+     *
+     * This used to be `randomUUID()` per invocation, which meant a retry
+     * after a failed authority write minted a SECOND identity — and because
+     * the pending credential was consumed in the identity transaction
+     * below, the attempt could not be retried at all. The journal makes the
+     * choice survive a crash: the first attempt records it, every retry
+     * reads it back, and concurrent retries converge on one entry.
+     */
+    let authorityOutcomeLabel = 'not_attempted';
+    const resolved = await resolveProvisioningUuid(journal, attemptKey, {
+      nameNorm,
+      companyId,
+    });
+    if (resolved.decision.action === 'refuse') {
+      throw new httpsV2.HttpsError('failed-precondition', `provisioning_refused:${resolved.decision.reason}`);
+    }
+    if (resolved.decision.action === 'already_completed') {
+      // Idempotent: this registration was already provisioned. Return the
+      // same logical success rather than demanding re-registration.
+      return { driverId: resolved.decision.driverId, status: 'approved' as const, alreadyProvisioned: true };
+    }
+    const driverId = resolved.driverId!;
 
     // Name index claim
     const idxRef = fs().collection('driver_name_index').doc(nameNorm);
@@ -513,7 +574,11 @@ export const adminApproveDriverRegistration = httpsV2.onCall(
         updatedAt: FieldValue.serverTimestamp(),
         pendingId,
       });
-      tx.delete(fs().collection('pending_credentials').doc(pendingId));
+      // NOT deleted here. Consuming the pending credential before the
+      // canonical profile and required authority exist made a failure
+      // unrecoverable: the identity was written, the pending state was
+      // gone, and a retry could only answer "ask the driver to
+      // re-register". It is finalized after provisioning succeeds.
     });
 
     const roles = Array.isArray(data.roles) && data.roles.length ? data.roles : ['driver'];
@@ -558,7 +623,35 @@ export const adminApproveDriverRegistration = httpsV2.onCall(
           'shift_authority_ensure_refused',
         );
       }
+      // A company-bound approval that SKIPPED authority is a failure, not a
+      // success: skip means no company was seen, which contradicts the
+      // binding and would leave the driver unable to claim a shift.
+      const { decideProvisioningOutcome, authorityAuditLabel } =
+        await import('./operational/provisioningJournal');
+      const outcome = decideProvisioningOutcome({
+        identityWritten: true,
+        profileWritten: true,
+        authorityAction: ensure.decision.action,
+        companyId,
+      });
+      if (!outcome.ok) {
+        throw new httpsV2.HttpsError('failed-precondition', `provisioning_incomplete:${outcome.reason}`);
+      }
+      authorityOutcomeLabel = authorityAuditLabel(outcome);
     }
+
+    /**
+     * FINALIZE — only now that identity, profile and the required authority
+     * all exist. Consuming the pending credential is what makes the attempt
+     * unrepeatable, so it must be the last step, not the first.
+     *
+     * The journal is marked FIRST and the credential consumed second: a
+     * crash between them leaves an inert leftover that the next call
+     * deletes, whereas the reverse order would leave a completed identity
+     * with no evidence and no pending credential — unrecoverable again.
+     */
+    await journal.markCompleted(resolved.attemptId);
+    await fs().collection('pending_credentials').doc(pendingId).delete();
 
     await pendingRef.update({
       status: 'approved',
@@ -591,7 +684,7 @@ export const adminApproveDriverRegistration = httpsV2.onCall(
       actorUid: caller.uid,
       driverId,
       pendingId,
-      detail: { companyId, shiftAuthorityEnsured: true },
+      detail: { companyId, shiftAuthority: authorityOutcomeLabel },
     });
 
     return { driverId, displayName: pending.displayName, companyId, companyName };
@@ -722,6 +815,48 @@ export const adminSetDriverPasscode = httpsV2.onCall(
     let driverId = (data.driverId || '').trim();
 
     /**
+     * Durable UUID selection for THIS provisioning attempt.
+     *
+     * Both branches below used to call randomUUID() directly, so a retry
+     * that omitted driverId minted a SECOND canonical identity after a
+     * partial success. The journal keys the attempt by its stable target —
+     * the legacy row being migrated, or the normalized name being created —
+     * and returns the same UUID on every retry. A name whose index is owned
+     * by an ACTIVE unrelated credential is refused, never adopted.
+     */
+    const { firestoreProvisioningJournal } = await import('./operational/provisioningJournalStore');
+    const { resolveProvisioningUuid } = await import('./operational/provisioningJournal');
+    const provJournal = firestoreProvisioningJournal(fs());
+    const idxNow = await fs().collection('driver_name_index').doc(nameNorm).get();
+    const idxOwner = (idxNow.exists ? idxNow.data()?.driverId : null) as string | null;
+    let idxOwnerActive = false;
+    if (idxOwner) {
+      const c = await fs().collection('driver_credentials').doc(idxOwner).get();
+      idxOwnerActive = c.exists && c.data()?.active !== false;
+    }
+    let provAttemptId: string | null = null;
+    let setPasscodeAuthorityLabel = 'not_attempted';
+    const claimProvisioningUuid = async (key: Parameters<typeof resolveProvisioningUuid>[1]) => {
+      const r = await resolveProvisioningUuid(provJournal, key, {
+        requestedDriverId: driverId || null,
+        nameNorm,
+        companyId: (typeof data.companyId === 'string' && data.companyId.trim())
+          ? data.companyId.trim().toLowerCase() : null,
+        indexOwnerDriverId: idxOwner,
+        indexOwnerActive: idxOwnerActive,
+        isReset: !!driverId,
+      });
+      if (r.decision.action === 'refuse') {
+        throw new httpsV2.HttpsError(
+          'failed-precondition',
+          `provisioning_refused:${r.decision.reason}`,
+        );
+      }
+      provAttemptId = r.attemptId;
+      return r.driverId!;
+    };
+
+    /**
      * RTDB writes deferred until the Firestore ownership claim commits.
      *
      * Firestore transactions cannot span the Realtime Database, so true
@@ -742,7 +877,9 @@ export const adminSetDriverPasscode = httpsV2.onCall(
         throw new httpsV2.HttpsError('not-found', 'Legacy driver not found');
       }
       const L = legacy.val();
-      driverId = randomUUID();
+      // Keyed by the legacy row, so a retry migrating the SAME legacy
+      // driver reuses its canonical UUID — never the approved hash.
+      driverId = await claimProvisioningUuid({ kind: 'legacy', legacyHash: String(data.legacyHash) });
       // DEFERRED: written only after the ownership claim commits.
       pendingProfile = {
         displayName: fields.displayName || L.displayName,
@@ -778,8 +915,9 @@ export const adminSetDriverPasscode = httpsV2.onCall(
     }
 
     if (!driverId) {
-      // Brand-new admin-provisioned driver
-      driverId = randomUUID();
+      // Brand-new admin-provisioned driver. Keyed by normalized name; an
+      // active unrelated owner of that name is refused, not adopted.
+      driverId = await claimProvisioningUuid({ kind: 'name', nameNorm });
       // DEFERRED: written only after the ownership claim commits.
       pendingProfile = {
         displayName: fields.displayName,
@@ -966,6 +1104,21 @@ export const adminSetDriverPasscode = httpsV2.onCall(
           'shift_authority_ensure_refused',
         );
       }
+      // Company-bound and authority skipped is a FAILURE, not a success.
+      const { decideProvisioningOutcome, authorityAuditLabel } =
+        await import('./operational/provisioningJournal');
+      const outcome = decideProvisioningOutcome({
+        identityWritten: true,
+        profileWritten: true,
+        authorityAction: ensure.decision.action,
+        companyId: authorityCompanyId,
+      });
+      if (!outcome.ok) {
+        throw new httpsV2.HttpsError('failed-precondition', `provisioning_incomplete:${outcome.reason}`);
+      }
+      setPasscodeAuthorityLabel = authorityAuditLabel(outcome);
+      // Finalize the attempt only now that the required state exists.
+      if (provAttemptId) await provJournal.markCompleted(provAttemptId);
     }
 
     await writeSecurityAudit({
@@ -975,7 +1128,7 @@ export const adminSetDriverPasscode = httpsV2.onCall(
       detail: {
         legacyHashPrefix: data.legacyHash ? String(data.legacyHash).slice(0, 8) : null,
         temporary,
-        shiftAuthorityEnsure: authorityCompanyId ? 'attempted' : 'skipped_no_company',
+        shiftAuthority: setPasscodeAuthorityLabel,
         // never log passcode
       },
     });
