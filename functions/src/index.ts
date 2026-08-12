@@ -4782,6 +4782,7 @@ export {
   adminCreatePlan, adminUpdatePlan, adminDeprecatePlan,
   adminAssignCompanyPlan, adminAddEntitlementOverride, adminRemoveEntitlementOverride,
   adminSetCompanyWorkPeriodConfiguration, adminSetCompanyContractEnforcement,
+  adminSetCompanyAppConfiguration,
   adminUpdateCompanySafe, adminArchiveCompany,
   adminListPlans, adminGetPlan, adminGetCompanyContractConfiguration,
   adminPreviewCompanyEffectiveCapabilities, adminListAdminAudit,

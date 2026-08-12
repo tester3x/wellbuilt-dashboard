@@ -228,5 +228,78 @@ const compute = (contractExtra = {}, planExtra = {}, nowMs = NOW) =>
     active.outcome === 'ACTIVE_EXPLICIT_SHIFT' && active.periodId === 'shift-808');
 }
 
+// ── vc51.9M: per-company operational app configuration (parser) ───────────
+// Storage only. Nothing here composes plan entitlement with configuration
+// — these pin what the CONTRACT can hold and how a malformed value is
+// classified.
+{
+  const T = 'wellbuilt-tickets', M = 'wellbuilt-mobile', S = 'wellbuilt-suite';
+  const parsedOf = (appConfiguration) =>
+    parseCompanyContract(baseContract({ appConfiguration }));
+
+  // Absence is unchanged behaviour, and stays genuinely absent.
+  const noField = parseCompanyContract(baseContract());
+  check('a contract WITHOUT appConfiguration is still valid',
+    noField.state === 'inert');
+  check('absence stays absent — no key holding undefined',
+    !('appConfiguration' in noField.contract));
+  check('absence leaves every other normalized field identical', (() => {
+    const before = JSON.stringify(noField.contract);
+    return before === JSON.stringify(parseCompanyContract(baseContract()).contract);
+  })());
+
+  // Configured, with no company-specific restrictions.
+  const empty = parsedOf({});
+  check('an explicit {} parses and is preserved as configured-with-nothing',
+    empty.state === 'inert' && 'appConfiguration' in empty.contract
+    && Object.keys(empty.contract.appConfiguration).length === 0);
+
+  const disabled = parsedOf({ [M]: { enabled: false } });
+  check('a disabled app parses',
+    disabled.state === 'inert' && disabled.contract.appConfiguration[M].enabled === false);
+  const gated = parsedOf({ [T]: { requiresActiveShift: true } });
+  check('an added shift requirement parses',
+    gated.state === 'inert' && gated.contract.appConfiguration[T].requiresActiveShift === true);
+  const multi = parsedOf({ [T]: { requiresActiveShift: true }, [M]: { enabled: false } });
+  check('multiple valid entries parse',
+    multi.state === 'inert' && Object.keys(multi.contract.appConfiguration).length === 2);
+
+  // CANONICAL normalization — the stored form says only what was decided.
+  const norm = parsedOf({ [T]: { enabled: true, requiresActiveShift: false } });
+  check('enabled:true and requiresActiveShift:false normalize away',
+    norm.state === 'inert' && Object.keys(norm.contract.appConfiguration[T]).length === 0);
+
+  // Every malformed shape makes the CONTRACT invalid — never dropped,
+  // never repaired, never mistaken for a contract without the field.
+  for (const [label, bad] of [
+    ['null', null], ['an array', []], ['a string', 'x'], ['a number', 1],
+    ['an unknown app', { 'wellbuilt-payroll': {} }],
+    ['the wbt alias', { wbt: {} }],
+    ['the water-ticket alias', { 'water-ticket': {} }],
+    ['the wbew alias', { wbew: {} }],
+    ['a non-object entry', { [T]: 3 }],
+    ['an unknown entry key', { [T]: { enabled: true, tier: 'god' } }],
+    ['a non-boolean enabled', { [T]: { enabled: 'no' } }],
+    ['disabled + shift requirement', { [T]: { enabled: false, requiresActiveShift: true } }],
+    ['a Suite entry', { [S]: { enabled: false } }],
+  ]) {
+    const p = parsedOf(bad);
+    check(`malformed appConfiguration (${label}) makes the contract INVALID`,
+      p.state === 'invalid' && p.reason.startsWith('invalid_app_configuration:'));
+    check(`  ${label} is not silently dropped or read as legacy`,
+      p.state !== 'legacy' && p.contract === undefined);
+  }
+
+  // The surrounding contract rules are untouched.
+  check('an unknown TOP-LEVEL contract key is still rejected',
+    parseCompanyContract(baseContract({ somethingElse: 1 })).state === 'invalid');
+  check('contractVersion is still pinned at 1',
+    parseCompanyContract(baseContract({ contractVersion: 2 })).state === 'invalid');
+  check('an active contract with valid configuration stays active',
+    parseCompanyContract(baseContract({
+      contractEnforced: true, appConfiguration: { [T]: { requiresActiveShift: true } },
+    })).state === 'active');
+}
+
 console.log(`\n${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);

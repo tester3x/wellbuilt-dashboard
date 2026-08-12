@@ -424,7 +424,21 @@ check('no company hard-delete handler exists',
 {
   const handlersSrc = readFileSync(join(root, 'functions/src/admin/adminHandlers.ts'), 'utf8');
   const exported = [...handlersSrc.matchAll(/export async function (\w+Handler)\(/g)].map((m) => m[1]);
-  check('15 protected handlers exported', exported.length === 15, `found ${exported.length}`);
+  // Named inventory, not a count: a bare number cannot say whether a
+  // change added an intended handler or lost one.
+  const EXPECTED_HANDLERS = [
+    'createPlanHandler', 'updatePlanHandler', 'deprecatePlanHandler',
+    'assignCompanyPlanHandler', 'addEntitlementOverrideHandler',
+    'removeEntitlementOverrideHandler', 'setCompanyWorkPeriodConfigurationHandler',
+    'setCompanyAppConfigurationHandler', 'setCompanyContractEnforcementHandler',
+    'updateCompanySafeHandler', 'archiveCompanyHandler', 'listPlansHandler',
+    'getPlanHandler', 'getCompanyContractConfigurationHandler',
+    'previewCompanyEffectiveCapabilitiesHandler', 'listAdminAuditHandler',
+  ].sort();
+  check('the protected handler set is exactly the expected inventory',
+    JSON.stringify([...exported].sort()) === JSON.stringify(EXPECTED_HANDLERS),
+    `missing: ${EXPECTED_HANDLERS.filter((h) => !exported.includes(h)).join(',') || 'none'} | `
+    + `unexpected: ${exported.filter((h) => !EXPECTED_HANDLERS.includes(h)).join(',') || 'none'}`);
   const bodies = handlersSrc.split(/export async function /).slice(1)
     .filter((b) => b.slice(0, b.indexOf('(')).endsWith('Handler'));
   const unguarded = bodies.filter((b) => !b.includes('requireAdmin(deps, auth)')).map((b) => b.slice(0, b.indexOf('(')));
@@ -664,6 +678,128 @@ check('no company hard-delete handler exists',
       /validatePlanAppEntitlements\(/.test(src));
     check('handlers do NOT reimplement app keys, aliases, or entitlement rules',
       !/wellbuilt-tickets|water-ticket|WELLBUILT_APP_KEYS|requiresActiveShift|isCoreApp/.test(src));
+  }
+}
+
+// ── vc51.9M: company app-configuration writes ─────────────────────────────
+// Storage only. These pin that what an admin can WRITE is exactly what the
+// contract parser reads back, that omission is expressed by not calling
+// this handler at all, and that nothing invalid reaches a document.
+{
+  const T = 'wellbuilt-tickets', M = 'wellbuilt-mobile', S = 'wellbuilt-suite';
+  const CONFIGURED = {
+    ...behaviorSeed,
+    'companies/appcfg-co': {
+      name: 'AppCfg Co',
+      wellbuiltContract: {
+        contractVersion: 1, configurationVersion: 4, planId: 'plan-field',
+        entitlementOverrides: [], workPeriodConfiguration: { mode: 'explicit_shift' },
+        contractEnforced: false,
+        appConfiguration: { [T]: { requiresActiveShift: true } },
+      },
+    },
+  };
+  const contractOf = (deps, id = 'configured-co') =>
+    deps.store.get(`companies/${id}`).wellbuiltContract;
+
+  {
+    const deps = makeDeps(behaviorSeed);
+    const before = contractOf(deps);
+    const r = await H.setCompanyAppConfigurationHandler(deps, ADMIN_AUTH, {
+      companyId: 'configured-co', appConfiguration: { [T]: { requiresActiveShift: true } },
+    });
+    const after = contractOf(deps);
+    check('write: a valid map is stored',
+      after.appConfiguration[T].requiresActiveShift === true);
+    check('write: configurationVersion increments EXACTLY once',
+      after.configurationVersion === before.configurationVersion + 1
+      && r.configurationVersion === after.configurationVersion);
+    check('write: plan, enforcement, overrides and work period are byte-identical',
+      after.planId === before.planId
+      && after.contractEnforced === before.contractEnforced
+      && JSON.stringify(after.entitlementOverrides) === JSON.stringify(before.entitlementOverrides)
+      && JSON.stringify(after.workPeriodConfiguration) === JSON.stringify(before.workPeriodConfiguration));
+    check('write: audited with the field NAME only, no values',
+      deps.audits().some((a) => a.operation === 'company.setAppConfiguration'
+        && (a.changedFields ?? []).includes('wellbuiltContract.appConfiguration')
+        && !JSON.stringify(a).includes('requiresActiveShift')));
+  }
+  {
+    const deps = makeDeps(CONFIGURED);
+    await H.setCompanyAppConfigurationHandler(deps, ADMIN_AUTH, {
+      companyId: 'appcfg-co', appConfiguration: {},
+    });
+    const after = contractOf(deps, 'appcfg-co');
+    check('write: {} REPLACES an existing configuration',
+      'appConfiguration' in after && Object.keys(after.appConfiguration).length === 0);
+  }
+  {
+    const deps = makeDeps(CONFIGURED);
+    await H.setCompanyAppConfigurationHandler(deps, ADMIN_AUTH, {
+      companyId: 'appcfg-co', appConfiguration: { [M]: { enabled: false } },
+    });
+    const after = contractOf(deps, 'appcfg-co');
+    check('write: a new map replaces the previous one entirely',
+      after.appConfiguration[M].enabled === false && !(T in after.appConfiguration));
+  }
+  {
+    const deps = makeDeps(CONFIGURED);
+    await H.setCompanyAppConfigurationHandler(deps, ADMIN_AUTH, {
+      companyId: 'appcfg-co', appConfiguration: { [T]: { enabled: true, requiresActiveShift: false } },
+    });
+    check('write: stores the CANONICAL normalized form',
+      Object.keys(contractOf(deps, 'appcfg-co').appConfiguration[T]).length === 0);
+  }
+  {
+    // Omission is expressed by not calling this handler — every OTHER
+    // contract mutation must leave a stored configuration untouched.
+    const deps = makeDeps(CONFIGURED);
+    const before = JSON.stringify(contractOf(deps, 'appcfg-co').appConfiguration);
+    await H.setCompanyContractEnforcementHandler(deps, ADMIN_AUTH, { companyId: 'appcfg-co', enforced: false });
+    check('write: an unrelated contract mutation preserves stored configuration',
+      JSON.stringify(contractOf(deps, 'appcfg-co').appConfiguration) === before);
+    const legacy = makeDeps(behaviorSeed);
+    await H.setCompanyContractEnforcementHandler(legacy, ADMIN_AUTH, { companyId: 'configured-co', enforced: false });
+    check('write: an unrelated mutation preserves genuine ABSENCE',
+      !('appConfiguration' in contractOf(legacy)));
+  }
+
+  const BAD_CFG = [
+    ['null', null], ['an array', []], ['a string', 'x'], ['a number', 1],
+    ['an unknown app', { 'wellbuilt-payroll': {} }],
+    ['the wbt alias', { wbt: {} }],
+    ['the water-ticket alias', { 'water-ticket': {} }],
+    ['a non-object entry', { [T]: 3 }],
+    ['an unknown entry key', { [T]: { enabled: true, tier: 'god' } }],
+    ['disabled + shift requirement', { [T]: { enabled: false, requiresActiveShift: true } }],
+    ['a Suite entry', { [S]: { enabled: false } }],
+  ];
+  for (const [label, cfg] of BAD_CFG) {
+    const deps = makeDeps(CONFIGURED);
+    const before = JSON.stringify(deps.store.get('companies/appcfg-co'));
+    await denied(`write: ${label} rejected`,
+      H.setCompanyAppConfigurationHandler(deps, ADMIN_AUTH, { companyId: 'appcfg-co', appConfiguration: cfg }),
+      'invalid-argument');
+    check(`write: ${label} left contract AND audit state untouched`,
+      JSON.stringify(deps.store.get('companies/appcfg-co')) === before
+      && deps.audits().length === 0);
+  }
+  {
+    const deps = makeDeps(CONFIGURED);
+    await denied('write: a client-supplied configurationVersion is refused',
+      H.setCompanyAppConfigurationHandler(deps, ADMIN_AUTH, {
+        companyId: 'appcfg-co', appConfiguration: {}, configurationVersion: 99,
+      }), 'invalid-argument', 'unknown_fields:configurationVersion');
+    check('write: the refused version attempt changed nothing', deps.audits().length === 0);
+    await denied('write: a legacy company must have a plan assigned first',
+      H.setCompanyAppConfigurationHandler(deps, ADMIN_AUTH, { companyId: 'legacy-co', appConfiguration: {} }),
+      'failed-precondition', 'assign_plan_first');
+    await denied('write: a missing company is not-found',
+      H.setCompanyAppConfigurationHandler(deps, ADMIN_AUTH, { companyId: 'nope-co', appConfiguration: {} }),
+      'not-found', 'company_not_found');
+    await denied('write: an unauthenticated caller is refused',
+      H.setCompanyAppConfigurationHandler(deps, null, { companyId: 'appcfg-co', appConfiguration: {} }),
+      'unauthenticated');
   }
 }
 
