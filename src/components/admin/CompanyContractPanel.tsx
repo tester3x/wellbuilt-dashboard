@@ -469,9 +469,16 @@ export function CompanyContractPanel({ companyId }: { companyId: string }) {
                         />
                         require active shift for this company
                       </label>
+                      {/* Ordinary authoring shows nothing here: a shift
+                          requirement is a per-company decision and the plan
+                          no longer authors one. This renders ONLY for a
+                          LEGACY plan flag written before that decision — it
+                          is still enforced (the effective gate is the OR),
+                          so hiding it would show an unchecked box for an app
+                          that is in fact gated. */}
                       {row.planMandatesShift && (
-                        <span className="text-amber-300" title="Set by the plan for every assigned company — a company cannot relax it">
-                          also required by plan (inherited)
+                        <span className="text-amber-300" title="Legacy plan-level gate, still enforced. Set the company requirement, then clear the plan flag in the Plan Catalog.">
+                          legacy plan gate active
                         </span>
                       )}
                     </>

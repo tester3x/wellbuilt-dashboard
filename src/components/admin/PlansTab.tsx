@@ -29,7 +29,6 @@ import {
   draftFromStoredApps,
   entitlementPayload,
   setAppIncluded,
-  setAppRequiresShift,
   validateDraft,
   type PlanEntitlementDraft,
 } from '@/lib/planEntitlement';
@@ -319,21 +318,21 @@ export function PlansTab() {
                       />
                       {row.productName}
                     </label>
-                    <label className={`flex items-center gap-1 text-xs ${row.included ? 'text-gray-300' : 'text-gray-600'}`}>
-                      <input
-                        type="checkbox"
-                        checked={row.requiresActiveShift}
-                        // Only an INCLUDED app can be shift-scoped: a shift
-                        // condition on something unreachable is contradictory
-                        // and the contract refuses it.
-                        disabled={!row.included}
-                        onChange={(e) => setEntitlements((d) => setAppRequiresShift(d, row.app, e.target.checked))}
-                      />
-                      {/* GLOBAL by nature: this binds every company assigned
-                          this plan. A per-company requirement is set on the
-                          company's own contract panel instead. */}
-                      Plan mandates active shift for every company
-                    </label>
+                    {/* NO plan-level shift control. A shift requirement is a
+                        per-COMPANY operational decision and is authored on
+                        the company's contract panel; a plan only says which
+                        apps were purchased. A LEGACY flag written before
+                        that decision is shown read-only so it is visible and
+                        can be migrated deliberately — it is never silently
+                        erased by editing something else. */}
+                    {row.included && row.requiresActiveShift && (
+                      <span
+                        className="text-xs text-amber-300"
+                        title="Legacy plan-level gate. Shift requirements are now set per company; migrate this by setting the company requirement first, then excluding and re-including this app to clear the plan flag."
+                      >
+                        legacy: plan mandates active shift for every company
+                      </span>
+                    )}
                   </div>
                 ))}
                 <p className="text-gray-500 text-[11px] pt-1">

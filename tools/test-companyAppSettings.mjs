@@ -310,8 +310,12 @@ check('a valid draft validates locally', validateCompanyDraft(
     !/restore absence|clear app settings|reset to unconfigured/i.test(panel));
   check('the panel shows Suite as core and non-configurable',
     /Always included — core/.test(panel));
-  check('the panel reports an inherited plan gate ALONGSIDE the company control',
-    /also required by plan \(inherited\)/.test(panel));
+  // Ordinary authoring shows no plan indicator at all — the plan does not
+  // author shift gates any more. A LEGACY stored flag is still surfaced,
+  // because it is still enforced and an unchecked box would otherwise
+  // misrepresent a gated app.
+  check('the panel surfaces a LEGACY plan gate, not an authoring indicator',
+    /legacy plan gate active/.test(panel) && !/also required by plan/.test(panel));
   check('the company checkbox is NOT hidden when the plan mandates a shift', (() => {
     // The control and the indicator must both be reachable: the indicator
     // may only be a conditional SIBLING, never the checkbox's alternative.
@@ -325,9 +329,13 @@ check('a valid draft validates locally', validateCompanyDraft(
     && !/checked=\{row\.companyRequiresShift \|\| row\.planMandatesShift\}/.test(panelCode));
 
   const plans = readFileSync(join(root, 'src/components/admin/PlansTab.tsx'), 'utf8');
-  check('the PLAN editor wording is unmistakably global',
-    /Plan mandates active shift for every company/.test(plans)
-    && !/>\s*requires active shift\s*</.test(plans));
+  // The plan editor no longer AUTHORS a shift gate at all — it says only
+  // which apps were purchased. A legacy stored flag renders read-only.
+  check('the PLAN editor authors app inclusion only, never a shift gate',
+    !/setAppRequiresShift/.test(plans)
+    && !/type="checkbox"[\s\S]{0,200}requiresActiveShift/.test(plans));
+  check('the PLAN editor surfaces a legacy flag read-only',
+    /legacy: plan mandates active shift for every company/.test(plans));
   check('the COMPANY wording is unmistakably per-company',
     /require active shift for this company/.test(panel));
 }

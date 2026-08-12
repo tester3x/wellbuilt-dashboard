@@ -18,7 +18,6 @@ import {
   draftFromStoredApps,
   beginConfiguring,
   setAppIncluded,
-  setAppRequiresShift,
   entitlementPayload,
   validateDraft,
   canSaveEntitlements,
@@ -128,28 +127,54 @@ check('included / no shift submits { included: true } only', (() => {
   const e = entitlementPayload(d).apps[WELLBUILT_APP_TICKETS];
   return e.included === true && !('requiresActiveShift' in e);
 })());
-check('included / requires shift submits the shift flag', (() => {
+// NO plan-level shift authoring exists. A shift requirement is a
+// per-COMPANY decision; the plan only says which apps were purchased.
+check('the plan editor exposes NO shift-authoring API', (() => {
+  const src = readFileSync(join(root, 'src/lib/planEntitlement.ts'), 'utf8');
+  return !/export function setAppRequiresShift/.test(src);
+})());
+check('a freshly authored plan can never emit requiresActiveShift', (() => {
   let d = beginConfiguring(draftFromStoredApps(undefined));
-  d = setAppIncluded(d, WELLBUILT_APP_TICKETS, true);
-  d = setAppRequiresShift(d, WELLBUILT_APP_TICKETS, true);
+  for (const app of DESTINATION_APPS) d = setAppIncluded(d, app, true);
+  const apps = entitlementPayload(d).apps;
+  return DESTINATION_APPS.every((a) => apps[a].included === true
+    && !('requiresActiveShift' in apps[a]));
+})());
+// LEGACY flags are preserved, never silently relaxed by an unrelated edit.
+check('a legacy plan-level flag survives an unrelated plan edit', (() => {
+  const stored = {
+    [WELLBUILT_APP_TICKETS]: { included: true, requiresActiveShift: true },
+    [WELLBUILT_APP_MOBILE]: { included: true },
+  };
+  // Open the plan, change something else entirely, save.
+  let d = draftFromStoredApps(stored);
+  d = setAppIncluded(d, WELLBUILT_APP_MOBILE, false);
+  const apps = entitlementPayload(d).apps;
+  return apps[WELLBUILT_APP_TICKETS].requiresActiveShift === true
+    && apps[WELLBUILT_APP_MOBILE].included === false;
+})());
+check('a legacy flag round-trips unchanged when nothing is touched', (() => {
+  const stored = { [WELLBUILT_APP_TICKETS]: { included: true, requiresActiveShift: true } };
+  const apps = entitlementPayload(draftFromStoredApps(stored)).apps;
+  return apps[WELLBUILT_APP_TICKETS].requiresActiveShift === true;
+})());
+check('deliberately EXCLUDING an app clears its legacy flag (not silent)', (() => {
+  const stored = { [WELLBUILT_APP_TICKETS]: { included: true, requiresActiveShift: true } };
+  let d = draftFromStoredApps(stored);
+  d = setAppIncluded(d, WELLBUILT_APP_TICKETS, false);
   const e = entitlementPayload(d).apps[WELLBUILT_APP_TICKETS];
-  return e.included === true && e.requiresActiveShift === true;
+  return e.included === false && !('requiresActiveShift' in e);
 })());
 check('an EXCLUDED app can never carry a shift requirement', (() => {
-  let d = beginConfiguring(draftFromStoredApps(undefined));
-  // Try the hostile order: include, shift-gate, then exclude.
-  d = setAppIncluded(d, WELLBUILT_APP_TICKETS, true);
-  d = setAppRequiresShift(d, WELLBUILT_APP_TICKETS, true);
+  // Even starting from a legacy gated entry, excluding clears the flag —
+  // the contract rejects a shift condition on an unreachable app.
+  const stored = { [WELLBUILT_APP_TICKETS]: { included: true, requiresActiveShift: true } };
+  let d = draftFromStoredApps(stored);
   d = setAppIncluded(d, WELLBUILT_APP_TICKETS, false);
   const row = d.rows.find((r) => r.app === WELLBUILT_APP_TICKETS);
   const e = entitlementPayload(d).apps[WELLBUILT_APP_TICKETS];
   return row.requiresActiveShift === false && e.included === false
     && !('requiresActiveShift' in e);
-})());
-check('shift-gating an excluded app is a no-op, not a stored contradiction', (() => {
-  let d = beginConfiguring(draftFromStoredApps(undefined));
-  d = setAppRequiresShift(d, WELLBUILT_APP_TICKETS, true);
-  return d.rows.find((r) => r.app === WELLBUILT_APP_TICKETS).requiresActiveShift === false;
 })());
 check('an existing configured plan round-trips through the editor unchanged', (() => {
   const stored = {
@@ -165,10 +190,7 @@ check('an existing configured plan round-trips through the editor unchanged', ((
 })());
 check('every payload the editor can build passes canonical validation', (() => {
   let d = beginConfiguring(draftFromStoredApps(undefined));
-  for (const app of DESTINATION_APPS) {
-    d = setAppIncluded(d, app, true);
-    d = setAppRequiresShift(d, app, true);
-  }
+  for (const app of DESTINATION_APPS) d = setAppIncluded(d, app, true);
   const all = validatePlanAppEntitlements(entitlementPayload(d).apps);
   for (const app of DESTINATION_APPS) d = setAppIncluded(d, app, false);
   const none = validatePlanAppEntitlements(entitlementPayload(d).apps);
@@ -252,6 +274,11 @@ check('update on an already-configured plan resubmits its map', (() => {
     /\.\.\.appsPayload/.test(tab) && !/apps:\s*entitlements/.test(tab));
   check('PlansTab disables save on invalid entitlement data',
     /disabled=\{busy \|\| !canSaveEntitlements\(entitlements\)\}/.test(tab));
+  check('PlansTab has NO plan-level shift control',
+    !/Plan mandates active shift for every company<\/label>/.test(tab)
+    && !/setAppRequiresShift/.test(tab));
+  check('PlansTab shows a legacy plan flag READ-ONLY so it can be migrated',
+    /legacy: plan mandates active shift for every company/.test(tab));
   check('PlansTab gates materialization behind an explicit action',
     /Configure app access/.test(tab) && /beginConfiguring/.test(tab));
   check('PlansTab offers no misleading "clear back to legacy" action',

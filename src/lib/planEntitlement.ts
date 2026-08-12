@@ -181,18 +181,20 @@ export function setAppIncluded(
   };
 }
 
-/** Shift-scope an INCLUDED app. Ignored for an excluded one. */
-export function setAppRequiresShift(
-  draft: PlanEntitlementDraft,
-  app: WellbuiltAppKey,
-  requiresActiveShift: boolean,
-): PlanEntitlementDraft {
-  if (draft.state !== 'configured') return draft;
-  return {
-    ...draft,
-    rows: draft.rows.map((r) => (r.app !== app || !r.included ? r : { ...r, requiresActiveShift })),
-  };
-}
+/**
+ * NO plan-level shift authoring exists any more.
+ *
+ * A shift requirement is a per-COMPANY operational decision, so a plan
+ * mandating one for every assigned company is not a shape this product
+ * creates. The setter is gone rather than merely hidden, so no UI or
+ * future caller can mint a new plan-level gate.
+ *
+ * LEGACY FLAGS ARE PRESERVED, NOT ERASED. A plan written before this
+ * decision may still carry `requiresActiveShift: true`; that value is read
+ * into the row and written back out unchanged, so editing an unrelated
+ * field cannot silently relax a gate that is still enforced. Removing such
+ * a flag is a deliberate migration, not a side effect of an edit.
+ */
 
 /** Invalid stored data must be deliberately repaired before any save. */
 export function canSaveEntitlements(draft: PlanEntitlementDraft): boolean {
