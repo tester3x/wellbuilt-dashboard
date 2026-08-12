@@ -63,6 +63,13 @@ console.log(JSON.stringify({
 
   reqKeys: Object.keys(legacyReq).sort().join(','),
 
+  legacyDisplayName: legacyReq.displayName,
+  legacyCompanyId: legacyReq.companyId,
+  legacyCompanyName: legacyReq.companyName,
+  // A row with no company must not invent one.
+  unboundHasCompanyId: 'companyId' in buildSetPasscodeRequest(
+    { key: 'k9', displayName: 'Nobody' }, 'CorrectHorse7'),
+
   submitOk: canSubmit({ passcode: 'CorrectHorse7', confirm: 'CorrectHorse7', submitting: false }),
   submitMismatch: canSubmit({ passcode: 'CorrectHorse7', confirm: 'Correct', submitting: false }),
   submitWhileBusy: canSubmit({ passcode: 'CorrectHorse7', confirm: 'CorrectHorse7', submitting: true }),
@@ -105,6 +112,21 @@ check('the RTDB key appears nowhere in the request',
   r.legacyKeyAnywhere === false);
 check('a reset sends the canonical id, unchanged',
   r.secureDriverId === '7f3a-uuid-9c21' && r.secureHasLegacyHash === false);
+
+// ── the request targets the intended employee, with their company ───────
+// The callable binds the new profile to whatever company it is given, and
+// the server's authority step REFUSES to complete a company-bound attempt
+// whose shift authority was skipped. So an omitted binding is not a cosmetic
+// loss: it silently produces a standalone driver who can never claim a
+// shift for the company the admin was looking at when they clicked.
+check('the request names the selected employee, not a default or index lookup',
+  r.legacyDisplayName === 'MikeS24', String(r.legacyDisplayName));
+check('the selected row\'s company binding is CARRIED, not dropped',
+  r.legacyCompanyId === 'co1' && r.legacyCompanyName === 'LG',
+  `companyId=${r.legacyCompanyId} companyName=${r.legacyCompanyName}`);
+check('a row with no company does not acquire one',
+  r.unboundHasCompanyId === false,
+  'an invented binding would bind a driver to a company nobody selected');
 
 // ── 4. temporary is explicitly false ─────────────────────────────────────
 check('4. temporary is present and explicitly false',
@@ -152,6 +174,43 @@ check('create copy states new identity, orphaned history, and no deletion',
   const admin = readFileSync(join(ROOT, 'src/lib/secureDriverAdmin.ts'), 'utf8');
   check('the callable wrapper still targets adminSetDriverPasscode',
     /adminSetDriverPasscode/.test(admin));
+}
+
+// ── the submit path cannot reach any other account operation ─────────────
+// Adjacent controls on the same row invite a dashboard account, flip the
+// legacy mobile flag, approve a registration, or write RTDB directly. None
+// of them may be reachable from creating a secure login: an admin setting a
+// passcode must not also, say, email an invitation. Comments are stripped
+// first so this matches CODE, never prose describing what is avoided.
+{
+  const tab = readFileSync(join(ROOT, 'src/components/admin/DriversTab.tsx'), 'utf8');
+  const start = tab.indexOf('const handleCreateSecureLogin');
+  const end = tab.indexOf('}, [secureTarget,', start);
+  check('the create-secure-login handler was located for inspection',
+    start > 0 && end > start, `start=${start} end=${end}`);
+
+  const body = tab.slice(start, end)
+    .replace(/\/\*[\s\S]*?\*\//g, '')
+    .replace(/(^|[^:])\/\/.*$/gm, '$1');
+
+  const FORBIDDEN = [
+    ['inviteEmployee', /\binviteEmployee\b/],
+    ['onInvite', /\bonInvite\b/],
+    ['toggleDriverActive', /\btoggleDriverActive\b/],
+    ['adminApproveSecure', /\badminApproveSecure\b/],
+    ['adminRejectSecure', /\badminRejectSecure\b/],
+    ['adminDeleteSecureDriver', /\badminDeleteSecureDriver\b/],
+    ['handleRolePick', /\bhandleRolePick\b/],
+    ['a direct RTDB write', /\b(?:set|update|remove)\(\s*ref\(/],
+    ['a raw httpsCallable', /\bhttpsCallable\(/],
+  ];
+  for (const [label, re] of FORBIDDEN) {
+    check(`the submit path cannot invoke ${label}`, !re.test(body));
+  }
+  check('the submit path calls adminSetPasscode and builds via the tested layer',
+    /adminSetPasscode\(/.test(body) && /buildSetPasscodeRequest\(/.test(body));
+  check('the submit path sends exactly the built request, unmodified',
+    /adminSetPasscode\(req\)/.test(body), 'a spread or extra field would bypass the builder');
 }
 
 console.log(`\n${pass} passed, ${fail} failed`);
