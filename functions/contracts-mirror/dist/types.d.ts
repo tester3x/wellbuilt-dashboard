@@ -16,6 +16,7 @@
  * Tier labels ('free' | 'field' | 'god') are presentation only and MUST
  * NOT be used as application logic.
  */
+import type { PlanAppEntitlements } from './plan/appEntitlement.js';
 /** Bumped when a breaking contract change ships. Consumers handshake. */
 export declare const CONTRACT_VERSION: 1;
 export type ContractVersion = typeof CONTRACT_VERSION;
@@ -27,6 +28,16 @@ export interface PlanDefinition {
     displayName: string;
     capabilities: PlanCapability[];
     status: 'active' | 'deprecated';
+    /**
+     * Per-app commercial entitlement (vc51.9L, additive and optional).
+     *
+     * ABSENT means the plan predates this field: every app resolves
+     * LEGACY_UNCONFIGURED and behavior is unchanged. PRESENT is
+     * authoritative, so `{}` means the plan includes no apps and is never
+     * read as "unmigrated". Entitlement is never inferred from
+     * `capabilities` or from a tier label. See ./plan/appEntitlement.ts.
+     */
+    apps?: PlanAppEntitlements;
 }
 /** An audited, time-bounded grant beyond the assigned plan. */
 export interface EntitlementOverride {

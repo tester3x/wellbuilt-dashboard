@@ -30,18 +30,19 @@ import { tmpdir } from 'node:os';
 
 export const EXPECTED = Object.freeze({
   name: '@tester3x/wellbuilt-contracts',
-  version: '0.2.0',
-  sourceSha256: 'aa99296cdd71d94322a1e36862177de427a32301d034aacbdc1b03010e8c171f',
-  sourceIntegrity: 'sha512-uf6QuaWGloxvsnphgOM8SVINNLkv6scBLvdfRf9LCz+iBSwMxw3A2/4CQSyQMI5cfK6YhaZr9HCNYE8StjJtoQ==',
+  version: '0.3.0',
+  sourceSha256: 'c337f6080a7b8695d5c3f84820e85a99a0c2b0714eb12837d5b6e73f7aa0b8cd',
+  sourceIntegrity: 'sha512-Nd84+d1dyQBXPTtpERACvg4LVxQfhJ9w1I/rLXjd30gB0hsKrJI+W9Vfmiv3p84H1VPgpQwgKUCK15rdAYk7Dg==',
 });
 
 const FN_DIR = join(dirname(fileURLToPath(import.meta.url)), '..');
 const DEFAULT_MIRROR = join(FN_DIR, 'contracts-mirror');
 const GENERATED_FILES = ['MIRROR-MANIFEST.json', 'MIRROR-README.md'];
-// 0.2.0 nests the DVIR protocol under dist/dvir/, so one subdirectory
-// level is permitted. Still bounded: only dist/**, only these four
-// extensions, only [\w.-] segments — no traversal, no absolute paths,
-// no arbitrary depth, nothing outside the allowlist.
+// 0.2.0 nested the DVIR protocol under dist/dvir/; 0.3.0 adds dist/plan/
+// (app entitlement), dist/sso/, and dist/auth/. All are one level deep,
+// so this pattern is unchanged. Still bounded: only dist/**, only these
+// four extensions, only [\w.-] segments — no traversal, no absolute
+// paths, no arbitrary depth, nothing outside the allowlist.
 const ALLOWED_RE = /^(package\.json|README\.md|NOTICE|dist\/(?:[\w-]+\/)?[\w.-]+\.(js|d\.ts|js\.map|d\.ts\.map))$/;
 
 const sha256 = (buf) => createHash('sha256').update(buf).digest('hex');
