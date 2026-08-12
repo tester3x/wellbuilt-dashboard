@@ -15,7 +15,7 @@
  * never an input to resolving one — the direction that matters.
  */
 import * as admin from 'firebase-admin';
-import { normalizeSsoDisplayName } from '../sso/protocol.generated.js';
+import { normalizeSsoDisplayName } from '@tester3x/wellbuilt-contracts';
 
 /** Authoritative secure-driver status as the server sees it. */
 export type CanonicalDriverAuthority = {

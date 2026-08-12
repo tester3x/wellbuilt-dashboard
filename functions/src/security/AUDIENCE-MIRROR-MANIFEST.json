@@ -1,7 +1,0 @@
-{
-  "canonicalVersion": "0.3.0-dev.0",
-  "canonicalPath": "wellbuilt-contracts/src/auth/sessionAudience.ts",
-  "bodySha256": "58ce7a33616790695900bffa9e4dea00e1c182094830d47cec5a56e791fab91d",
-  "published": false,
-  "note": "Unpublished. Replace with a package import once contracts publishes the session audience contract."
-}

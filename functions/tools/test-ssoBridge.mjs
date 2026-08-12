@@ -15,7 +15,7 @@ import {
   SSO_AUDIENCE_WBT, SSO_AUDIENCE_EQUIPMENT,
   SSO_PROTOCOL_VERSION, SSO_CODE_TTL_MS_PROVISIONAL,
   SSO_SESSION_APP_CLAIM, SSO_SESSION_APP_WBT,
-} from '../lib/sso/protocol.generated.js';
+} from '@tester3x/wellbuilt-contracts';
 import { ssoCodePath } from '../lib/sso/ssoDeps.js';
 
 let pass = 0, fail = 0;

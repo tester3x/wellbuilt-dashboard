@@ -16,7 +16,7 @@ import {
   SSO_PROTOCOL_VERSION,
   validateSsoIssueCodeRequest,
   type SsoIssueCodeResponse,
-} from './protocol.generated.js';
+} from '@tester3x/wellbuilt-contracts';
 import {
   SsoError,
   ssoCodePath,

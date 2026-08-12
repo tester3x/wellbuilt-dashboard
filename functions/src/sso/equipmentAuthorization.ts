@@ -34,7 +34,7 @@ import {
   toContractsWorkPeriodConfiguration,
   type WellbuiltContract,
 } from '../admin/companyContract.js';
-import type { SsoShiftBinding } from './protocol.generated.js';
+import type { SsoShiftBinding } from '@tester3x/wellbuilt-contracts';
 
 /** One `driver_shifts/{driverId}_{date}` document, as the server read it. */
 export interface ShiftDayDoc {

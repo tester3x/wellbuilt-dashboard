@@ -24,7 +24,7 @@ import {
   validateSsoExchangeRequest,
   type SsoAudience,
   type SsoExchangeResponse,
-} from './protocol.generated.js';
+} from '@tester3x/wellbuilt-contracts';
 import {
   SsoError,
   ssoCodePath,

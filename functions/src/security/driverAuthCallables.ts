@@ -31,7 +31,7 @@ import {
   readSessionAudience,
   containsClientClaimMaterial,
   sessionClaimsForAudience,
-} from './sessionAudience.generated';
+} from '@tester3x/wellbuilt-contracts';
 import type { GlobalDriverClaims, SessionDriverClaims } from './tokenMint';
 
 const rtdb = () => admin.database();

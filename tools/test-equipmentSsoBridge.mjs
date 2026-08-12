@@ -16,14 +16,21 @@ import { createHash, randomBytes as nodeRandomBytes } from 'node:crypto';
 import { pathToFileURL } from 'node:url';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { createRequire } from 'node:module';
 
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), '..');
 const lib = (p) => pathToFileURL(join(ROOT, 'functions/lib', p)).href;
+// Resolve the contract from FUNCTIONS' dependency tree, not the repo
+// root's: the handlers under test are built against the Functions
+// contracts mirror, and the root install carries its own pin. Resolving
+// from the wrong tree would silently test a different contract version.
+const fromFunctions = createRequire(join(ROOT, 'functions', 'package.json'));
 
 const { handleSsoIssueCode } = await import(lib('sso/ssoIssueHandler.js'));
 const { handleSsoExchange } = await import(lib('sso/ssoExchangeHandler.js'));
 const { ssoCodePath } = await import(lib('sso/ssoDeps.js'));
-const P = await import(lib('sso/protocol.generated.js'));
+const P = await import(
+  pathToFileURL(fromFunctions.resolve('@tester3x/wellbuilt-contracts')).href);
 
 let pass = 0, fail = 0;
 const check = (name, ok, detail = '') => {

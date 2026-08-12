@@ -12,7 +12,7 @@ module.exports = {
   transform: {
     '^.+\\.[tj]sx?$': ['ts-jest', { tsconfig: 'tsconfig.jest.json' }],
   },
-  // Source in src/sso uses NodeNext-style specifiers ('./protocol.generated.js')
+  // Source uses NodeNext-style specifiers ('../admin/companyContract.js')
   // because that is what the Functions build emits. Jest resolves from the
   // TypeScript sources, where no such .js file exists, so the extension is
   // stripped for RELATIVE paths only. Every source file under src is .ts, so
