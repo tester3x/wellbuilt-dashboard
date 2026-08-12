@@ -21,7 +21,7 @@
  */
 
 import {
-  decideAppAccess,
+  decideAppAccessWithConfiguration,
   isCoreApp,
   type PlanDefinition,
   type WellbuiltAppKey,
@@ -110,28 +110,51 @@ export function decideAppEntitlementAuthorization(input: {
     return { ok: false, refusal: 'plan_not_object', detail: 'plan is not an object' };
   }
 
-  // THE canonical decision. Absent `apps` resolves LEGACY_UNCONFIGURED and
-  // stays permissive; `{}` and explicit exclusions deny; malformed stored
-  // data denies as INVALID_ENTITLEMENT_DATA. Aliases and unknown keys are
-  // refused by the same validator the admin write path uses, so nothing is
-  // silently normalized on read.
+  // THE canonical decision — plan COMPOSED WITH the company's own app
+  // configuration, exactly as the admin write path authored them:
+  //
+  //   PLAN  decides what the company BOUGHT. An explicit exclusion or
+  //         malformed entitlement data denies, and no company setting can
+  //         widen it. Absent `apps` resolves LEGACY_UNCONFIGURED and stays
+  //         permissive (the explicitly accepted temporary behavior). A
+  //         legacy plan-level requiresActiveShift, where stored, is still
+  //         honored fail-closed — compatibility, not product ownership.
+  //   COMPANY CONFIGURATION decides how an INCLUDED app operates for THIS
+  //         company: it may disable the app or require an active shift. It
+  //         can only NARROW — the helper checks exclusion before ever
+  //         consulting it, and shift requirements OR together, so a company
+  //         setting can neither enable an excluded app nor relax a plan
+  //         gate. Absent configuration adds nothing; a deliberate `{}`
+  //         states "no company-specific restriction"; malformed stored
+  //         configuration denies (and the contract loader independently
+  //         classifies such a contract invalid before this seam is reached).
+  //
+  // Aliases and unknown keys are refused by the same validators the admin
+  // write path uses, so nothing is silently normalized on read.
   const hasActiveShift = input.shift !== null && input.shift.state === 'open';
-  const access = decideAppAccess(input.plan, app, { hasActiveShift });
+  const access = decideAppAccessWithConfiguration(
+    input.plan,
+    input.contract.appConfiguration,
+    app,
+    { hasActiveShift },
+  );
 
   if (access.access === 'allowed') {
     return { ok: true, outcome: access.outcome, detail: access.reason };
   }
   if (access.access === 'shift_required') {
-    // Distinguished from commercial exclusion INTERNALLY. The public
-    // envelope stays coarse so a caller cannot probe a company's plan.
+    // Plan-level (legacy) OR company-level gate — the composition does not
+    // say which, and the public envelope stays coarse either way so a
+    // caller cannot probe a company's plan or settings.
     return {
       ok: false,
       refusal: 'active_shift_required',
       detail: input.shift === null ? 'shift_not_read' : `shift_${input.shift.state}`,
     };
   }
-  // Commercial exclusion, or entitlement data that could not be trusted.
-  // Both are 'denied' to the client; the outcome separates them for an
-  // operator without telling the caller which.
-  return { ok: false, refusal: 'app_not_entitled', detail: access.outcome };
+  // Commercial exclusion, untrusted entitlement data, a company-disabled
+  // app, or malformed company configuration. All are 'denied' to the
+  // client; outcome:reason separates them for an operator without telling
+  // the caller which.
+  return { ok: false, refusal: 'app_not_entitled', detail: `${access.outcome}:${access.reason}` };
 }

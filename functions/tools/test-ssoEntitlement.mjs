@@ -407,6 +407,128 @@ for (const [label, authority] of [
     !r.ok && r.publicCode === 'not_authorized' && w.docs.size === 0);
 }
 
+// ── company app configuration composed into issuance ─────────────────────
+// PLAN decides what was bought; COMPANY CONFIGURATION decides how an
+// included app operates for that company (disable / require a shift). The
+// configuration can only NARROW: it can never enable a plan-excluded app
+// and never relax a plan-level gate.
+const cfgContract = (appConfiguration) => ({ planId: 'plan-1', contractEnforced: true, appConfiguration });
+const INCLUDED_PLAN = planWith({ [WELLBUILT_APP_TICKETS]: { included: true } });
+{
+  // THE Liquid Gold shape: plan includes Tickets with NO plan-level shift
+  // flag; the company's own configuration requires an active shift.
+  const cfg = { [WELLBUILT_APP_TICKETS]: { requiresActiveShift: true } };
+  const off = await issue(makeWorld({
+    contractState: 'active', contract: cfgContract(cfg), plan: INCLUDED_PLAN, authority: null,
+  }));
+  check('company shift requirement DENIES off-shift even when the plan flag is off',
+    !off.ok && off.internal === 'active_shift_required');
+  const offW = makeWorld({
+    contractState: 'active', contract: cfgContract(cfg), plan: INCLUDED_PLAN, authority: null,
+  });
+  await issue(offW);
+  check('  the company-gate denial mints no authorization-code artifact', mintedNothing(offW));
+  const on = await issue(makeWorld({
+    contractState: 'active', contract: cfgContract(cfg), plan: INCLUDED_PLAN, authority: OPEN_AUTHORITY,
+  }));
+  check('company shift requirement ALLOWS with an authoritative open shift', on.ok && !!on.res.code);
+}
+{
+  // Company-disabled app: included by the plan, off for this company.
+  const cfg = { [WELLBUILT_APP_TICKETS]: { enabled: false } };
+  const w = makeWorld({ contractState: 'active', contract: cfgContract(cfg), plan: INCLUDED_PLAN });
+  const r = await issue(w);
+  check('an included app DISABLED by company configuration is denied',
+    !r.ok && r.internal === 'app_not_entitled' && mintedNothing(w));
+  const refusal = w.logs.find((l) => l.event === 'sso.code.refused');
+  check('  the disabled-by-company detail is bounded and nonsecret',
+    !!refusal && /disabled_by_company_configuration/.test(refusal.fields.detail)
+    && !/driver-1|co-1|plan-1/i.test(JSON.stringify(refusal)));
+}
+{
+  // Absence composes as absence; a deliberate {} states no restriction.
+  const absent = await issue(makeWorld({
+    contractState: 'active', contract: CONTRACT, plan: INCLUDED_PLAN, authority: null,
+  }));
+  check('configuration ABSENT preserves plan-only behavior', absent.ok && !!absent.res.code);
+  const empty = await issue(makeWorld({
+    contractState: 'active', contract: cfgContract({}), plan: INCLUDED_PLAN, authority: null,
+  }));
+  check('a deliberate {} configuration adds no restriction', empty.ok && !!empty.res.code);
+  const legacyPlan = await issue(makeWorld({
+    contractState: 'active', contract: cfgContract({}), plan: planWith(undefined), authority: null,
+  }));
+  check('LEGACY_UNCONFIGURED plans keep the accepted permissive behavior under {}',
+    legacyPlan.ok && !!legacyPlan.res.code);
+}
+{
+  // Malformed configuration fails closed at the decision seam (the
+  // contract loader independently classifies such contracts invalid).
+  for (const [label, cfg] of [
+    ['an array', []], ['a string', 'all'],
+    ['an alias key', { wbt: { enabled: false } }],
+    ['an unknown key', { 'wellbuilt-payroll': { enabled: false } }],
+    ['a malformed entry', { [WELLBUILT_APP_TICKETS]: { enabled: 'no' } }],
+    ['an unknown field', { [WELLBUILT_APP_TICKETS]: { disabled: true } }],
+  ]) {
+    const d = decideAppEntitlementAuthorization({
+      app: WELLBUILT_APP_TICKETS, contractState: 'active',
+      contract: cfgContract(cfg), plan: INCLUDED_PLAN, shift: null,
+    });
+    check(`malformed company configuration (${label}) denies`,
+      d.ok === false && d.refusal === 'app_not_entitled');
+  }
+}
+{
+  // Narrowing only: configuration can never widen.
+  const excludedPlan = planWith({ [WELLBUILT_APP_TICKETS]: { included: false } });
+  const enableAttempt = { [WELLBUILT_APP_TICKETS]: { enabled: true } };
+  const r = await issue(makeWorld({
+    contractState: 'active', contract: cfgContract(enableAttempt), plan: excludedPlan,
+  }));
+  check('configuration cannot enable a plan-EXCLUDED app',
+    !r.ok && r.internal === 'app_not_entitled');
+
+  // Legacy plan-level gate: still honored fail-closed, and a company
+  // configuration cannot relax it (requiresActiveShift:false normalizes
+  // to "adds nothing", and gates OR together).
+  const relaxAttempt = { [WELLBUILT_APP_TICKETS]: { requiresActiveShift: false } };
+  const rr = await issue(makeWorld({
+    contractState: 'active', contract: cfgContract(relaxAttempt), plan: SHIFT_PLAN, authority: null,
+  }));
+  check('configuration cannot relax a legacy plan-level shift gate',
+    !rr.ok && rr.internal === 'active_shift_required');
+  const rrOpen = await issue(makeWorld({
+    contractState: 'active', contract: cfgContract(relaxAttempt), plan: SHIFT_PLAN, authority: OPEN_AUTHORITY,
+  }));
+  check('  the legacy plan gate still allows with an authoritative open shift',
+    rrOpen.ok && !!rrOpen.res.code);
+}
+{
+  // Both gates at once behave as one gate: either source requires a shift.
+  const cfg = { [WELLBUILT_APP_TICKETS]: { requiresActiveShift: true } };
+  const r = await issue(makeWorld({
+    contractState: 'active', contract: cfgContract(cfg), plan: SHIFT_PLAN, authority: null,
+  }));
+  check('plan gate OR company gate: both present still denies off-shift',
+    !r.ok && r.internal === 'active_shift_required');
+}
+{
+  // Suite stays core under hostile company configuration.
+  for (const [label, cfg] of [
+    ['disabling Suite', { [WELLBUILT_APP_SUITE]: { enabled: false } }],
+    ['shift-gating Suite', { [WELLBUILT_APP_SUITE]: { requiresActiveShift: true } }],
+    ['malformed config', 'nonsense'],
+  ]) {
+    const d = decideAppEntitlementAuthorization({
+      app: WELLBUILT_APP_SUITE, contractState: 'active',
+      contract: cfgContract(cfg), plan: planWith({}), shift: null,
+    });
+    check(`Suite stays core under company configuration ${label}`,
+      d.ok === true && d.detail === 'core_app_always_included');
+  }
+}
+
 // ── canonical mapping, no second naming table ─────────────────────────────
 {
   check('the audience maps to a canonical app key through the contract',
