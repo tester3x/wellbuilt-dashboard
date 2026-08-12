@@ -59,6 +59,19 @@ function makeWorld(opts = {}) {
     // have supplied, so the test can prove server ownership.
     expiresAtTimestamp: (ms) => ({ __timestamp: true, ms }),
     getDriver: async (id) => drivers.get(id) ?? null,
+    // Commercial-entitlement inputs. The default is an ENTITLED company:
+    // a real contract naming a real plan that simply predates the `apps`
+    // field, which resolves LEGACY_UNCONFIGURED and issues exactly as
+    // before. That keeps this matrix about the bridge itself. Entitlement
+    // refusals — including the no-contract case, which now denies — are
+    // exercised in test-ssoEntitlement.mjs.
+    getCompanyContract: async (companyId) =>
+      opts.contracts?.get(companyId)
+      ?? { state: 'active', contract: { planId: 'plan-1', contractEnforced: true } },
+    getPlan: async (planId) => opts.plans?.get(planId) ?? {
+      contractVersion: 1, planId, displayName: 'P', capabilities: [], status: 'active',
+    },
+    getShiftAuthority: async (driverId) => opts.shiftAuthority?.get(driverId) ?? null,
     runTransaction: async (fn) => {
       // Optimistic-concurrency emulation: snapshot versions read during
       // the attempt, then commit only if nothing changed underneath.

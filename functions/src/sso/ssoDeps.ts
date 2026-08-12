@@ -14,6 +14,7 @@
 import type { PlanDefinition } from '@tester3x/wellbuilt-contracts';
 import type { WellbuiltContract } from '../admin/companyContract.js';
 import type { ShiftDayDoc } from './equipmentAuthorization.js';
+import type { ShiftAuthorityRecord } from '../security/operational/shiftAuthority.js';
 
 /** The authoritative driver record, as the server sees it. */
 export interface AuthoritativeDriver {
@@ -87,6 +88,17 @@ export interface SsoDeps {
    * shift"; collapsing it into "open" would be far worse.
    */
   getShiftDay(driverId: string, localDate: string): Promise<ShiftDayDoc>;
+  /**
+   * The driver's authoritative shift-authority record, or null when absent.
+   *
+   * This is the DATE-FREE authority: it stores the open period and its
+   * origin day, so "is a shift open right now?" needs no company timezone
+   * — which matters because explicit_shift configurations store none, and
+   * a UTC date would misfile an evening shift in America/Chicago. A null
+   * return means the document is absent or unreadable; decideResolve turns
+   * that into `unverifiable`, never into a false `none`.
+   */
+  getShiftAuthority(driverId: string): Promise<ShiftAuthorityRecord | null>;
   /**
    * The company's parsed contract, with its canonical state label, so the
    * handler never re-implements parsing and never mistakes a malformed

@@ -26,6 +26,11 @@ import {
   type SsoTransaction,
 } from './ssoDeps';
 import { parseCompanyContract, WELLBUILT_CONTRACT_KEY } from '../admin/companyContract';
+import {
+  shiftAuthorityPath,
+  type ShiftAuthorityRecord,
+} from '../security/operational/shiftAuthority';
+import type { PlanDefinition } from '@tester3x/wellbuilt-contracts';
 
 /** Same rollout posture as the other callables in this project. */
 export const SSO_CALLABLE_OPTIONS = {
@@ -75,6 +80,40 @@ export function buildSsoDeps(): SsoDeps {
     },
 
     /**
+     * The driver's shift-authority record.
+     *
+     * A thrown read returns null, exactly like an absent document, because
+     * decideResolve maps both to `unverifiable` — never to `none`. That is
+     * the safe direction: an outage must not read as "this driver has no
+     * open shift" and quietly satisfy nothing, and it must certainly never
+     * read as open.
+     */
+    async getShiftAuthority(driverId): Promise<ShiftAuthorityRecord | null> {
+      try {
+        const snap = await db.doc(shiftAuthorityPath(driverId)).get();
+        if (!snap.exists) return null;
+        const d = snap.data() ?? {};
+        if (typeof d.driverId !== 'string' || typeof d.companyId !== 'string'
+            || typeof d.initialized !== 'boolean' || typeof d.version !== 'number') {
+          // A half-written record is not evidence. Returning null makes
+          // decideResolve answer `authority_absent` rather than letting a
+          // partially-typed object reach the period consistency checks.
+          return null;
+        }
+        return {
+          driverId: d.driverId,
+          companyId: d.companyId,
+          initialized: d.initialized,
+          openPeriodId: typeof d.openPeriodId === 'string' ? d.openPeriodId : null,
+          originLocalDate: typeof d.originLocalDate === 'string' ? d.originLocalDate : null,
+          version: d.version,
+        };
+      } catch {
+        return null;
+      }
+    },
+
+    /**
      * The company contract, parsed by the canonical parser so the SSO path
      * never re-implements contract parsing and never mistakes a malformed
      * contract for an absent one.
@@ -93,13 +132,23 @@ export function buildSsoDeps(): SsoDeps {
       const snap = await db.collection("plans").doc(planId).get();
       if (!snap.exists) return null;
       const d = snap.data() ?? {};
-      return {
+      const plan: PlanDefinition = {
         contractVersion: d.contractVersion,
         planId: d.planId ?? planId,
         displayName: d.displayName ?? "",
         capabilities: d.capabilities ?? [],
         status: d.status ?? "active",
       };
+      // Carry `apps` ONLY when the document actually has the key, so a
+      // legacy plan keeps a genuinely ABSENT field rather than one holding
+      // undefined. Passed through RAW: the canonical resolver is the
+      // read-side authority and must be what classifies malformed stored
+      // data as INVALID_ENTITLEMENT_DATA — re-validating here would either
+      // mask that or invent a second opinion.
+      if (Object.prototype.hasOwnProperty.call(d, "apps")) {
+        plan.apps = d.apps as PlanDefinition["apps"];
+      }
+      return plan;
     },
 
     /**

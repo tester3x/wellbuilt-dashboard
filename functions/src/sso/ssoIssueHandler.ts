@@ -10,6 +10,7 @@
 import {
   SSO_AUDIENCE_EQUIPMENT,
   isSsoAudience,
+  resolveWellbuiltAppKey,
   type SsoShiftBinding,
   SSO_CODE_BYTES,
   SSO_CODE_TTL_MS_PROVISIONAL,
@@ -24,6 +25,8 @@ import {
   type SsoDeps,
 } from './ssoDeps.js';
 import { decideEquipmentAuthorization, shiftOriginDay } from './equipmentAuthorization.js';
+import { decideAppEntitlementAuthorization } from './appEntitlementAuthorization.js';
+import { decideResolve } from '../security/operational/shiftAuthority.js';
 
 /** Fields a client may never dictate. Presence is a protocol violation. */
 const CLIENT_FORBIDDEN_IDENTITY_FIELDS = ['uid', 'driverId', 'companyId', 'driverHash', 'passcode'];
@@ -144,6 +147,59 @@ export async function handleSsoIssueCode(
       throw new SsoError('permission-denied', 'not_authorized', decision.reason);
     }
     storedBinding = decision.binding;
+  }
+
+  // 5c. COMMERCIAL ENTITLEMENT. Does the SELECTED company's plan include
+  //     this destination app, and if so does reaching it require an
+  //     authoritative open shift? Decided here — BEFORE any code is minted
+  //     or any issuance state is touched — so a denial leaves the system
+  //     byte-identical to never having been asked.
+  //
+  //     Every input is a server record. The audience is mapped to its
+  //     canonical app key by the contract itself, so no second naming
+  //     table exists and an alias or unknown identity can never resolve.
+  {
+    const app = resolveWellbuiltAppKey(req.audience);
+    const contractState = await deps.getCompanyContract(driver.companyId);
+    const plan = contractState.contract
+      ? await deps.getPlan(contractState.contract.planId)
+      : null;
+    const authzInput = {
+      app,
+      contractState: contractState.state,
+      contract: contractState.contract,
+      plan,
+    };
+    // Two-phase: the authority read happens ONLY when the canonical
+    // decision says a shift is required, so the plan — not this handler —
+    // decides whether the extra read is owed.
+    let decision = decideAppEntitlementAuthorization({ ...authzInput, shift: null });
+    if (!decision.ok && decision.refusal === 'active_shift_required') {
+      // The authoritative, date-free shift record. It is bound to BOTH the
+      // driver and the selected company, so a shift belonging to another
+      // membership cannot satisfy this gate, and a closed, superseded,
+      // half-written or absent record resolves to something other than
+      // 'open' rather than being guessed at. Nothing here reads a
+      // timestamp, a cached client value, or a request field.
+      const record = await deps.getShiftAuthority(driver.driverId);
+      const shift = decideResolve(record, {
+        driverId: driver.driverId,
+        companyId: driver.companyId,
+      });
+      decision = decideAppEntitlementAuthorization({ ...authzInput, shift });
+    }
+    if (!decision.ok) {
+      // Coarse to the client, precise to the operator — the same shape the
+      // equipment refusal uses. `refusal` separates commercial exclusion
+      // from an unmet shift gate for whoever reads the logs; the client is
+      // told only 'not_authorized', so it cannot probe a company's plan.
+      deps.log('sso.code.refused', {
+        audience: req.audience,
+        reason: decision.refusal,
+        detail: decision.detail,
+      });
+      throw new SsoError('permission-denied', 'not_authorized', decision.refusal);
+    }
   }
 
   // 6. Server-generated code and timestamps. The client contributes
