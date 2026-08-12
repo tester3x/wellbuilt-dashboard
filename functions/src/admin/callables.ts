@@ -30,6 +30,7 @@ import {
   previewCompanyEffectiveCapabilitiesHandler,
   removeEntitlementOverrideHandler,
   setCompanyContractEnforcementHandler,
+  setCompanyAppConfigurationHandler,
   setCompanyWorkPeriodConfigurationHandler,
   updateCompanySafeHandler,
   updatePlanHandler,
@@ -113,6 +114,7 @@ export const adminAddEntitlementOverride = wrap(addEntitlementOverrideHandler);
 export const adminRemoveEntitlementOverride = wrap(removeEntitlementOverrideHandler);
 export const adminSetCompanyWorkPeriodConfiguration = wrap(setCompanyWorkPeriodConfigurationHandler);
 export const adminSetCompanyContractEnforcement = wrap(setCompanyContractEnforcementHandler);
+export const adminSetCompanyAppConfiguration = wrap(setCompanyAppConfigurationHandler);
 
 // Part 7 — safe replacement / archive
 export const adminUpdateCompanySafe = wrap(updateCompanySafeHandler);

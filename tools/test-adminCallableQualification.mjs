@@ -57,14 +57,15 @@ const bodies = new Map(starts.map(([n, i], k) =>
 const MUTATIONS = [
   'createPlan', 'updatePlan', 'deprecatePlan', 'assignCompanyPlan',
   'addEntitlementOverride', 'removeEntitlementOverride',
-  'setCompanyWorkPeriodConfiguration', 'setCompanyContractEnforcement',
+  'setCompanyWorkPeriodConfiguration', 'setCompanyAppConfiguration',
+  'setCompanyContractEnforcement',
   'updateCompanySafe', 'archiveCompany',
 ];
 const READS = ['listPlans', 'getPlan', 'getCompanyContractConfiguration',
   'previewCompanyEffectiveCapabilities', 'listAdminAudit'];
 const ALL = [...MUTATIONS, ...READS];
 
-check('all fifteen handlers were located', bodies.size === 15, `found ${bodies.size}`);
+check('every declared handler was located', bodies.size === ALL.length, `found ${bodies.size} of ${ALL.length}`);
 
 // ── 1. the dual gate, on every single one ────────────────────────────────
 for (const n of ALL) {

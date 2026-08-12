@@ -40,6 +40,7 @@ import {
 import { computeEffectiveCapabilities, type CapabilityResult } from './effectiveCapabilities';
 import {
   CONTRACT_VERSION,
+  validateCompanyAppConfigurations,
   validatePlanAppEntitlements,
   type PlanAppEntitlements,
   type PlanCapability,
@@ -457,6 +458,64 @@ async function assertEnforceable(tx: AdminTransaction, deps: AdminDeps, companyI
   if (!result.ok) {
     throw new AdminCallError('failed-precondition', `not_enforceable:${result.code}`);
   }
+}
+
+/**
+ * Set one company's per-app OPERATIONAL configuration.
+ *
+ * A sibling of setCompanyWorkPeriodConfiguration rather than a field on
+ * it: that handler describes how the work DAY is bounded, and folding
+ * per-app rules into it would conflate exactly the two concerns this
+ * separation exists to split. It writes the same contract document, in
+ * the same transaction shape, with the same single configurationVersion
+ * bump — so there is one company-contract authority, not two.
+ *
+ * Storage only. Nothing here composes plan entitlement with configuration
+ * or changes an access decision; that remains the resolver's job.
+ */
+export async function setCompanyAppConfigurationHandler(deps: AdminDeps, auth: VerifiedCallerAuth | null, data: unknown): Promise<{ companyId: string; configurationVersion: number }> {
+  const actor = await requireAdmin(deps, auth);
+  const d = requireExactKeys(data, ['companyId', 'appConfiguration']);
+  const companyId = requireCompanyId(d.companyId);
+  // The CANONICAL validator decides, and its normalized value is what gets
+  // stored — so no alias, unknown app, Suite entry, disabled-and-gated
+  // contradiction, or malformed entry can reach a write, and persistence
+  // can never disagree with what the resolver reads back. Validated BEFORE
+  // the transaction opens, so an invalid map never touches a write path.
+  const parsed = validateCompanyAppConfigurations(d.appConfiguration);
+  if (!parsed.ok) {
+    throw new AdminCallError(
+      'invalid-argument',
+      `invalid_app_configuration:${parsed.rejection}${parsed.key ? `:${parsed.key}` : ''}`,
+    );
+  }
+  if (!parsed.present) {
+    // `undefined` is the only absent form, and requireExactKeys already
+    // demands the key. Omission is expressed by not calling this handler.
+    throw new AdminCallError('invalid-argument', 'invalid_app_configuration:absent');
+  }
+  const appConfiguration = parsed.value;
+  return deps.runTransaction(async (tx) => {
+    const { contract } = await readContract(tx, companyId);
+    if (!contract) throw new AdminCallError('failed-precondition', 'assign_plan_first');
+    const next: WellbuiltContract = {
+      ...contract,
+      configurationVersion: contract.configurationVersion + 1,
+      appConfiguration,
+    };
+    // Same enforceability re-proof the work-period path performs: an
+    // ACTIVE contract may never be reconfigured into an unusable state.
+    if (contract.contractEnforced) {
+      await assertEnforceable(tx, deps, companyId, next);
+    }
+    writeContract(tx, companyId, next);
+    audit(tx, deps, {
+      operation: 'company.setAppConfiguration', targetType: 'company', targetId: companyId,
+      actorUid: actor.actorUid, actorEmail: actor.actorEmail,
+      changedFields: ['wellbuiltContract.appConfiguration'],
+    });
+    return { companyId, configurationVersion: next.configurationVersion };
+  });
 }
 
 export async function setCompanyContractEnforcementHandler(deps: AdminDeps, auth: VerifiedCallerAuth | null, data: unknown): Promise<{ companyId: string; contractEnforced: boolean; configurationVersion: number }> {

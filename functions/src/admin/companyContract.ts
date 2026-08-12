@@ -25,6 +25,8 @@
 
 import {
   CONTRACT_VERSION,
+  validateCompanyAppConfigurations,
+  type CompanyAppConfigurations,
   type CompanyWorkPeriodConfiguration,
   type EntitlementOverride,
   type PlanCapability,
@@ -61,6 +63,16 @@ export interface WellbuiltContract {
   entitlementOverrides: EntitlementOverride[];
   workPeriodConfiguration?: StoredWorkPeriodConfiguration;
   contractEnforced: boolean;
+  /**
+   * Per-app OPERATIONAL configuration (vc51.9M, optional).
+   *
+   * The plan says what this company bought; this says how it runs it.
+   * Narrowing only — it may disable an included app or ADD a shift
+   * requirement, never enable an excluded one or remove a plan-level
+   * gate. Absent means this company adds nothing, which is exactly the
+   * behaviour every contract had before the field existed.
+   */
+  appConfiguration?: CompanyAppConfigurations;
 }
 
 export type CompanyContractState =
@@ -83,7 +95,13 @@ export const OVERRIDE_REASON_MAX = 300;
 export const MAX_OVERRIDES = 20;
 
 const CONTRACT_KEYS = ['contractVersion', 'configurationVersion', 'planId',
-  'entitlementOverrides', 'workPeriodConfiguration', 'contractEnforced'];
+  'entitlementOverrides', 'workPeriodConfiguration', 'contractEnforced',
+  // vc51.9M — per-app OPERATIONAL configuration. Optional: a contract
+  // without it is unchanged in every respect. Nested inside the contract
+  // root, so it inherits that root's client-write protection and needs no
+  // rules change; and because it lives here, one transactional write and
+  // one configurationVersion bump cover it like every other contract field.
+  'appConfiguration'];
 const OVERRIDE_KEYS = ['capability', 'granted', 'reason', 'grantedBy', 'grantedAt', 'expiresAt'];
 const WPC_KEYS = ['mode', 'timezone', 'startLocalTime', 'durationMinutes'];
 
@@ -188,6 +206,23 @@ export function parseCompanyContract(raw: unknown): CompanyContractState {
   }
   if (typeof raw.contractEnforced !== 'boolean') return invalid('contract_enforced_not_boolean');
 
+  // Validated by the CANONICAL validator, never by a local reading of the
+  // shape. Malformed stored configuration makes the whole contract
+  // invalid — the same fail-closed classification a malformed work-period
+  // configuration already gets — rather than being dropped or repaired on
+  // read, which would hide corruption behind a plausible-looking contract.
+  let appConfiguration: CompanyAppConfigurations | undefined;
+  if (raw.appConfiguration !== undefined) {
+    const parsed = validateCompanyAppConfigurations(raw.appConfiguration);
+    if (!parsed.ok) {
+      return invalid(`invalid_app_configuration:${parsed.rejection}${parsed.key ? `:${parsed.key}` : ''}`);
+    }
+    // `present` is guaranteed here: only `undefined` returns absent, and
+    // that case is excluded above. Stored in CANONICAL normalized form, so
+    // persistence can never disagree with what the resolver reads back.
+    if (parsed.present) appConfiguration = parsed.value;
+  }
+
   const contract: WellbuiltContract = {
     contractVersion: CONTRACT_VERSION,
     configurationVersion: raw.configurationVersion,
@@ -195,6 +230,9 @@ export function parseCompanyContract(raw: unknown): CompanyContractState {
     entitlementOverrides: overrides,
     ...(workPeriodConfiguration ? { workPeriodConfiguration } : {}),
     contractEnforced: raw.contractEnforced,
+    // Only when the stored document actually had the key, so genuine
+    // absence stays absence rather than becoming a key holding undefined.
+    ...(appConfiguration !== undefined ? { appConfiguration } : {}),
   };
   return contract.contractEnforced
     ? { state: 'active', contract }
