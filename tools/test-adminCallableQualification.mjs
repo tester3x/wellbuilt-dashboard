@@ -139,9 +139,56 @@ for (const n of READS) {
 }
 
 // ── 6. one adapter, one error contract ───────────────────────────────────
-check('6. every callable goes through the single wrap() adapter',
-  (C.match(/= wrap\(/g) || []).length === 15,
-  `${(C.match(/= wrap\(/g) || []).length} wrapped`);
+// The callable surface is asserted as a NAMED INVENTORY, not a count. A
+// bare number cannot say whether a change added an intended callable or
+// lost one, which is exactly how this check went stale when the
+// retro-close pair landed. Both retro-close handlers live in the shift
+// migration module rather than adminHandlers.ts, so they are declared
+// separately and qualified against their own source below.
+const RETRO_CLOSE = [
+  ['adminRetroCloseDriverShiftDryRun', 'retroCloseDryRunHandler'],
+  ['adminRetroCloseDriverShift', 'retroCloseExecuteHandler'],
+];
+const EXPECTED_CALLABLES = [
+  ...ALL.map((n) => [`admin${n[0].toUpperCase()}${n.slice(1)}`, `${n}Handler`]),
+  ...RETRO_CLOSE,
+];
+{
+  const wrapped = [...C.matchAll(/export const (admin\w+) = wrap\((\w+)\)/g)]
+    .map((m) => [m[1], m[2]]);
+  const key = (p) => p.join('->');
+  const got = wrapped.map(key).sort();
+  const want = EXPECTED_CALLABLES.map(key).sort();
+  check('6. every callable goes through the single wrap() adapter',
+    (C.match(/= wrap\(/g) || []).length === wrapped.length,
+    `${(C.match(/= wrap\(/g) || []).length} wrap() calls vs ${wrapped.length} parsed`);
+  check('6. the callable surface is exactly the expected inventory',
+    JSON.stringify(got) === JSON.stringify(want),
+    `missing: ${want.filter((w) => !got.includes(w)).join(',') || 'none'} | ` +
+    `unexpected: ${got.filter((g) => !want.includes(g)).join(',') || 'none'}`);
+  check('6. no callable name or handler is wrapped twice',
+    new Set(wrapped.map((p) => p[0])).size === wrapped.length
+    && new Set(wrapped.map((p) => p[1])).size === wrapped.length);
+}
+// The two retro-close callables carry the SAME dual gate as the fifteen
+// in adminHandlers.ts. Their handlers delegate to one shared
+// implementation, so the gate is asserted where it actually lives — this
+// is the coverage the stale count never had.
+{
+  const M = readFileSync(
+    join(ROOT, 'functions/src/security/operational/shiftAuthorityMigrationHandler.ts'), 'utf8');
+  const shared = M.slice(M.indexOf('export async function retroCloseDriverShiftHandler'));
+  check('6. retro-close delegates to one shared implementation',
+    RETRO_CLOSE.every(([, h]) =>
+      new RegExp(`export const ${h}[\\s\\S]{0,200}?retroCloseDriverShiftHandler\\(`).test(M)));
+  check('6. retro-close requires platform admin', /requireAdmin\(deps, auth\)/.test(shared));
+  check('6. retro-close refuses a non-object payload before doing anything',
+    /payload_not_object/.test(shared));
+  check('6. retro-close raises the same AdminCallError contract',
+    /new AdminCallError\(/.test(shared));
+  check('6. retro-close mutation is transactional',
+    /runTransaction\(/.test(M));
+}
 check('6. only one onCall exists, so options cannot drift per callable',
   (C.match(/httpsV2\.onCall/g) || []).length === 1);
 check('6. a machine-readable adminCode travels in details',

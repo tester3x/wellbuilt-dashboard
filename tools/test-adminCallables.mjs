@@ -433,8 +433,27 @@ check('no company hard-delete handler exists',
 
   const callablesSrc = readFileSync(join(root, 'functions/src/admin/callables.ts'), 'utf8');
   const wrapped = [...callablesSrc.matchAll(/export const (admin\w+) = wrap\((\w+Handler)\)/g)];
-  check('every handler wrapped exactly once as a callable',
-    wrapped.length === 15 && new Set(wrapped.map((m) => m[2])).size === 15);
+  // Asserted as a named inventory rather than a count. The fifteen
+  // handlers in adminHandlers.ts are derived from that file, so they
+  // cannot drift; the two retro-close callables are declared explicitly
+  // because their handlers live in the shift migration module and are
+  // therefore invisible to the sweep above.
+  const RETRO_CLOSE_HANDLERS = ['retroCloseDryRunHandler', 'retroCloseExecuteHandler'];
+  const expectedHandlers = [...exported, ...RETRO_CLOSE_HANDLERS].sort();
+  const wrappedHandlers = wrapped.map((m) => m[2]).sort();
+  check('every handler is wrapped exactly once as a callable',
+    JSON.stringify(wrappedHandlers) === JSON.stringify(expectedHandlers)
+    && new Set(wrappedHandlers).size === wrappedHandlers.length,
+    `wrapped ${wrappedHandlers.length}: ${wrappedHandlers.join(',')}`);
+  check('every wrapped callable is named admin<Handler>',
+    wrapped.every((m) => m[1].startsWith('admin')));
+  // The retro-close handlers escape the adminHandlers.ts requireAdmin
+  // sweep, so their gate is asserted against the file it actually lives in.
+  const migrationSrc = readFileSync(
+    join(root, 'functions/src/security/operational/shiftAuthorityMigrationHandler.ts'), 'utf8');
+  check('retro-close callables are gated by the same requireAdmin',
+    /requireAdmin\(deps, auth\)/.test(migrationSrc)
+    && RETRO_CLOSE_HANDLERS.every((h) => migrationSrc.includes(`export const ${h}`)));
   check('callables centralize App Check preparation (enforceAppCheck flag present, off)',
     /enforceAppCheck:\s*false/.test(callablesSrc));
 
