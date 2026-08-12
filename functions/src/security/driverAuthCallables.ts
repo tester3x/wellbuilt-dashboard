@@ -537,6 +537,29 @@ export const adminApproveDriverRegistration = httpsV2.onCall(
     if (data.assignedRoutes?.length) profile.assignedRoutes = data.assignedRoutes;
 
     await rtdb().ref(`drivers/profiles/${driverId}`).set(profile);
+
+    // Company-bound drivers need an initialized empty shift pointer so resolve
+    // can return `none` and claim can run under explicit_shift. Canonical UUID
+    // only — never the legacy approved hash. Fail closed if ensure refuses.
+    {
+      const {
+        ensureInitializedEmptyShiftAuthority,
+        assertEnsureAuthorityOk,
+      } = await import('./operational/ensureEmptyShiftAuthority');
+      const ensure = await ensureInitializedEmptyShiftAuthority(fs(), {
+        driverId,
+        companyId,
+      });
+      try {
+        assertEnsureAuthorityOk(ensure);
+      } catch {
+        throw new httpsV2.HttpsError(
+          'failed-precondition',
+          'shift_authority_ensure_refused',
+        );
+      }
+    }
+
     await pendingRef.update({
       status: 'approved',
       driverId,
@@ -568,7 +591,7 @@ export const adminApproveDriverRegistration = httpsV2.onCall(
       actorUid: caller.uid,
       driverId,
       pendingId,
-      detail: { companyId },
+      detail: { companyId, shiftAuthorityEnsured: true },
     });
 
     return { driverId, displayName: pending.displayName, companyId, companyName };
@@ -906,6 +929,45 @@ export const adminSetDriverPasscode = httpsV2.onCall(
       );
     }
 
+    // Resolve company for authority ensure: never invent; prefer request /
+    // pending create payload, else profile. Skip when unbound (standalone).
+    let authorityCompanyId: string | null =
+      (typeof data.companyId === 'string' && data.companyId.trim())
+        ? data.companyId.trim().toLowerCase()
+        : null;
+    if (!authorityCompanyId && pendingProfile && typeof pendingProfile.companyId === 'string') {
+      authorityCompanyId = String(pendingProfile.companyId).trim().toLowerCase() || null;
+    }
+    if (!authorityCompanyId) {
+      try {
+        const profSnap = await rtdb().ref(`drivers/profiles/${driverId}/companyId`).once('value');
+        const cid = profSnap.val();
+        if (typeof cid === 'string' && cid.trim()) {
+          authorityCompanyId = cid.trim().toLowerCase();
+        }
+      } catch {
+        /* leave null — ensure will skip */
+      }
+    }
+    {
+      const {
+        ensureInitializedEmptyShiftAuthority,
+        assertEnsureAuthorityOk,
+      } = await import('./operational/ensureEmptyShiftAuthority');
+      const ensure = await ensureInitializedEmptyShiftAuthority(fs(), {
+        driverId,
+        companyId: authorityCompanyId,
+      });
+      try {
+        assertEnsureAuthorityOk(ensure);
+      } catch {
+        throw new httpsV2.HttpsError(
+          'failed-precondition',
+          'shift_authority_ensure_refused',
+        );
+      }
+    }
+
     await writeSecurityAudit({
       action: 'adminSetDriverPasscode',
       actorUid: caller.uid,
@@ -913,6 +975,7 @@ export const adminSetDriverPasscode = httpsV2.onCall(
       detail: {
         legacyHashPrefix: data.legacyHash ? String(data.legacyHash).slice(0, 8) : null,
         temporary,
+        shiftAuthorityEnsure: authorityCompanyId ? 'attempted' : 'skipped_no_company',
         // never log passcode
       },
     });

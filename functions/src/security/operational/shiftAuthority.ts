@@ -294,6 +294,129 @@ export function shiftAuthorityPath(driverId: string): string {
 }
 
 /**
+ * Onboarding: ensure a driver bound to a company has an initialized empty
+ * pointer so resolve → `none` and claim can run when policy is explicit_shift.
+ *
+ * ABSENCE of companyId is a skip (not invent binding). ABSENCE of a record
+ * with a company is create. Open pointers and healthy empty pointers are
+ * preserved. Mismatched driver/company or malformed shapes refuse.
+ *
+ * NEVER keys by a legacy passcode hash — callers must pass the canonical UUID.
+ */
+export type EnsureEmptyAuthorityDecision =
+  | { action: 'skip'; reason: 'missing_driver_id' | 'missing_company_id' }
+  | { action: 'create'; record: ShiftAuthorityRecord }
+  | {
+      action: 'noop';
+      reason: 'already_healthy_empty' | 'open_preserved' | 'empty_with_history_preserved';
+    }
+  | {
+      action: 'initialize_uninitialized';
+      record: ShiftAuthorityRecord;
+    }
+  | {
+      action: 'refuse';
+      reason: 'driver_mismatch' | 'company_mismatch' | 'malformed_record';
+    };
+
+export function isCanonicalDriverIdShape(driverId: string): boolean {
+  // UUID (with or without hyphens) or other non-hash identity. Reject 64-char
+  // hex (legacy approved passcode hash) so hash keys can never be authority
+  // document ids through this helper.
+  if (!driverId || typeof driverId !== 'string') return false;
+  const t = driverId.trim();
+  if (t.length < 8 || t.length > 128) return false;
+  if (/^[a-f0-9]{64}$/i.test(t)) return false;
+  return true;
+}
+
+/**
+ * Pure decision for onboarding authority ensure. No I/O.
+ */
+export function decideEnsureEmptyAuthority(input: {
+  driverId: string;
+  companyId: string | null | undefined;
+  existing: ShiftAuthorityRecord | null | undefined;
+}): EnsureEmptyAuthorityDecision {
+  const driverId = typeof input.driverId === 'string' ? input.driverId.trim() : '';
+  const companyId =
+    typeof input.companyId === 'string' ? input.companyId.trim() : '';
+
+  if (!driverId || !isCanonicalDriverIdShape(driverId)) {
+    return { action: 'skip', reason: 'missing_driver_id' };
+  }
+  if (!companyId) {
+    return { action: 'skip', reason: 'missing_company_id' };
+  }
+
+  const existing = input.existing ?? null;
+  if (!existing) {
+    return {
+      action: 'create',
+      record: {
+        driverId,
+        companyId,
+        initialized: true,
+        openPeriodId: null,
+        originLocalDate: null,
+        version: 1,
+      },
+    };
+  }
+
+  // Structural mismatches — never overwrite foreign or corrupt pointers.
+  if (typeof existing.driverId !== 'string' || typeof existing.companyId !== 'string'
+      || typeof existing.initialized !== 'boolean' || typeof existing.version !== 'number') {
+    return { action: 'refuse', reason: 'malformed_record' };
+  }
+  if (existing.driverId !== driverId) {
+    return { action: 'refuse', reason: 'driver_mismatch' };
+  }
+  if (existing.companyId !== companyId) {
+    return { action: 'refuse', reason: 'company_mismatch' };
+  }
+
+  const resolved = decideResolve(existing, { driverId, companyId });
+  if (resolved.state === 'open') {
+    return { action: 'noop', reason: 'open_preserved' };
+  }
+  if (resolved.state === 'none') {
+    // Healthy empty (with or without lastClosedPeriodId).
+    return {
+      action: 'noop',
+      reason: existing.lastClosedPeriodId
+        ? 'empty_with_history_preserved'
+        : 'already_healthy_empty',
+    };
+  }
+
+  // unverifiable with matching ids: allow completing initialization when the
+  // pointer is empty (uninitialized flag only). Refuse half-open shapes.
+  const hasPeriod = existing.openPeriodId != null && existing.openPeriodId !== undefined;
+  const hasDate = existing.originLocalDate != null && existing.originLocalDate !== undefined;
+  if (hasPeriod || hasDate) {
+    return { action: 'refuse', reason: 'malformed_record' };
+  }
+  if (existing.initialized !== true) {
+    return {
+      action: 'initialize_uninitialized',
+      record: {
+        ...existing,
+        driverId,
+        companyId,
+        initialized: true,
+        openPeriodId: null,
+        originLocalDate: null,
+        // preserve lastClosedPeriodId and version; bump version on write path
+        version: existing.version,
+      },
+    };
+  }
+  // initialized true but still unverifiable for another reason — refuse
+  return { action: 'refuse', reason: 'malformed_record' };
+}
+
+/**
  * The authoritative lifecycle event appended by claim/close.
  *
  * PERIOD ATTRIBUTION IS NEW AND NECESSARY. The existing event elements carry
