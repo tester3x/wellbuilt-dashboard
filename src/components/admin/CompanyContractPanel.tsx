@@ -18,6 +18,19 @@ import { VerifiedAdminGate } from './VerifiedAdminGate';
 import { useVerifiedAdmin } from '@/lib/useVerifiedAdmin';
 import { contractLoadFailure } from '@/lib/adminLoadFailure';
 import {
+  CORE_APPS,
+  beginConfiguringCompany,
+  canSaveCompanyAppSettings,
+  companyAppConfigurationPayload,
+  describeCompanyAppSettings,
+  draftFromContract,
+  setCompanyAppEnabled,
+  setCompanyAppRequiresShift,
+  validateCompanyDraft,
+  type CompanyAppSettingsDraft,
+} from '@/lib/companyAppSettings';
+import { WELLBUILT_APP_PRODUCT_NAMES } from '@/lib/planEntitlement';
+import {
   createAdminContractService,
   AdminServiceError,
   type CapabilityResult,
@@ -64,6 +77,15 @@ export function CompanyContractPanel({ companyId }: { companyId: string }) {
   const [notice, setNotice] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const [assignPlanId, setAssignPlanId] = useState('');
+  /**
+   * The company app-settings draft.
+   *
+   * Rebuilt from the AUTHORITATIVE contract on every load, so viewing a
+   * company — or a failed write that leaves stored state untouched — can
+   * never leave a stale or half-made map on screen.
+   */
+  const [appDraft, setAppDraft] = useState<CompanyAppSettingsDraft>(
+    () => draftFromContract(null, undefined));
   const [ovCapability, setOvCapability] = useState<PlanCapability>('jsa');
   const [ovGranted, setOvGranted] = useState(true);
   const [ovReason, setOvReason] = useState('');
@@ -131,6 +153,20 @@ export function CompanyContractPanel({ companyId }: { companyId: string }) {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [companyId, session.status]);
 
+  /**
+   * Rebuild the draft from AUTHORITATIVE state whenever it changes.
+   *
+   * That covers first load, switching company, and the reload `run()`
+   * performs after a successful write — so what is on screen is always
+   * what the server last confirmed, never an optimistic guess. A FAILED
+   * write does not reload, so the stored state stays displayed and the
+   * operator keeps their edits alongside the error.
+   */
+  useEffect(() => {
+    const plan = plans.find((p) => p.planId === contract?.planId) ?? null;
+    setAppDraft(draftFromContract(plan, contract?.appConfiguration));
+  }, [contract, plans]);
+
   const run = async (label: string, fn: () => Promise<unknown>) => {
     if (busy) return;
     setBusy(true);
@@ -183,6 +219,10 @@ export function CompanyContractPanel({ companyId }: { companyId: string }) {
   }
   const view = contractStateView(state, invalidReason);
   const selectedPlan = plans.find((p) => p.planId === assignPlanId);
+  // The plan this company is ACTUALLY on — the ceiling its app settings sit
+  // under. Distinct from `selectedPlan`, which is whatever the assign
+  // dropdown is currently showing.
+  const assignedPlan = plans.find((p) => p.planId === contract?.planId) ?? null;
   const readiness = enforcementReadiness({ state, contract, preview });
   const lines = describeEffectivePreview({ state, result: preview ?? undefined, invalidReason, contract }, nowMs);
 
@@ -346,6 +386,136 @@ export function CompanyContractPanel({ companyId }: { companyId: string }) {
                 Disable enforcement (rollback)
               </button>
             )}
+          </div>
+
+          {/* ── App operation (per company) ───────────────────────────── */}
+          <div className="border-t border-gray-700 pt-3 mt-3">
+            <h5 className="text-white text-xs font-medium">App operation for this company</h5>
+            <p className="text-gray-500 text-[11px] mb-2">
+              The plan decides which apps this company purchased. This decides how those
+              purchased apps operate here. A company may switch an included app off or
+              require an active shift for it; it can never add an app the plan does not
+              include, and it cannot relax a restriction the plan mandates.
+            </p>
+
+            <p className="text-[11px] text-gray-400 mb-2">
+              <span className="text-gray-200">{WELLBUILT_APP_PRODUCT_NAMES[CORE_APPS[0]]}</span>
+              {' '}— Always included — core. Not configurable.
+            </p>
+
+            {(() => {
+              const display = describeCompanyAppSettings(contract?.appConfiguration);
+              const tone = display.tone === 'danger'
+                ? 'bg-red-900/40 text-red-200 border-red-700'
+                : display.tone === 'info'
+                  ? 'bg-blue-900/40 text-blue-200 border-blue-700'
+                  : 'bg-gray-600/40 text-gray-300 border-gray-500';
+              return (
+                <p className={`text-[11px] mb-2 inline-block px-1.5 py-0.5 rounded border ${tone}`}>
+                  {display.label}
+                  {display.kind === 'invalid' && <span className="ml-1 opacity-80">({display.reason})</span>}
+                </p>
+              );
+            })()}
+
+            {appDraft.state === 'invalid' && (
+              <p role="alert" className="text-red-300 text-xs bg-red-900/30 border border-red-700 rounded p-2 mb-2">
+                This company&rsquo;s stored app settings are invalid ({appDraft.invalidReason}).
+                Nothing will be saved until you deliberately reconfigure them.
+              </p>
+            )}
+
+            <ul className="space-y-1 mb-2">
+              {appDraft.rows.map((row) => (
+                <li key={row.app} className="flex flex-wrap items-center gap-3 text-xs">
+                  <span className="text-gray-200 min-w-[11rem]">{WELLBUILT_APP_PRODUCT_NAMES[row.app]}</span>
+                  {row.plan.kind !== 'included' ? (
+                    <span className="text-gray-500">
+                      {row.plan.kind === 'excluded' ? 'Not included in plan'
+                        : row.plan.kind === 'legacy' ? 'Plan does not configure app access (legacy)'
+                        : `Invalid plan entitlement (${row.plan.reason})`}
+                    </span>
+                  ) : appDraft.state !== 'configured' ? (
+                    <span className="text-gray-400">
+                      Included by plan
+                      {row.planMandatesShift && ' · plan mandates active shift'}
+                    </span>
+                  ) : (
+                    <>
+                      <label className="flex items-center gap-1 text-gray-300">
+                        <input
+                          type="checkbox"
+                          checked={row.enabled}
+                          disabled={busy}
+                          onChange={(e) => setAppDraft((d) => setCompanyAppEnabled(d, row.app, e.target.checked))}
+                        />
+                        enabled for this company
+                      </label>
+                      {row.planMandatesShift ? (
+                        // Inherited from the plan and NOT removable here: a
+                        // company may add a restriction, never relax one.
+                        <span className="text-amber-300" title="Set by the plan for every assigned company">
+                          active shift required by plan (inherited)
+                        </span>
+                      ) : (
+                        <label className={`flex items-center gap-1 ${row.enabled ? 'text-gray-300' : 'text-gray-600'}`}>
+                          <input
+                            type="checkbox"
+                            checked={row.companyRequiresShift}
+                            disabled={!row.enabled || busy}
+                            onChange={(e) => setAppDraft((d) => setCompanyAppRequiresShift(d, row.app, e.target.checked))}
+                          />
+                          require active shift for this company
+                        </label>
+                      )}
+                    </>
+                  )}
+                </li>
+              ))}
+            </ul>
+
+            {appDraft.state !== 'configured' ? (
+              <button
+                type="button"
+                disabled={busy}
+                onClick={() => setAppDraft((d) => beginConfiguringCompany(d))}
+                className="px-2 py-1 rounded bg-blue-700 hover:bg-blue-600 text-white text-xs disabled:opacity-50">
+                Configure company app settings
+              </button>
+            ) : (
+              <div className="flex gap-2">
+                <button
+                  type="button"
+                  disabled={busy || !canSaveCompanyAppSettings(appDraft)}
+                  onClick={() => {
+                    const check = validateCompanyDraft(appDraft);
+                    if (!check.ok) { setNotice(`App settings cannot be saved: ${check.reason}.`); return; }
+                    const appConfiguration = companyAppConfigurationPayload(appDraft);
+                    // null means "nothing to write" — the section was never
+                    // deliberately configured, so no callable is invoked.
+                    if (appConfiguration === null) return;
+                    void run('Company app settings saved.', () =>
+                      service.setCompanyAppConfiguration({ companyId, appConfiguration }));
+                  }}
+                  className="px-2 py-1 rounded bg-green-700 hover:bg-green-600 text-white text-xs disabled:opacity-50">
+                  Save app settings
+                </button>
+                <button
+                  type="button"
+                  disabled={busy}
+                  // Cancel returns to the AUTHORITATIVE stored state — it
+                  // never writes, and never leaves a half-made map behind.
+                  onClick={() => setAppDraft(draftFromContract(assignedPlan, contract?.appConfiguration))}
+                  className="px-2 py-1 rounded bg-gray-700 hover:bg-gray-600 text-gray-200 text-xs disabled:opacity-50">
+                  Cancel
+                </button>
+              </div>
+            )}
+            <p className="text-gray-500 text-[11px] mt-1">
+              Saving with nothing restricted is a deliberate &ldquo;no company-specific
+              restrictions&rdquo; setting. There is no way to return to the
+              never-configured state from here.
+            </p>
           </div>
         </>
       )}

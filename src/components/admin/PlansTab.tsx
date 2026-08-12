@@ -329,7 +329,10 @@ export function PlansTab() {
                         disabled={!row.included}
                         onChange={(e) => setEntitlements((d) => setAppRequiresShift(d, row.app, e.target.checked))}
                       />
-                      requires active shift
+                      {/* GLOBAL by nature: this binds every company assigned
+                          this plan. A per-company requirement is set on the
+                          company's own contract panel instead. */}
+                      Plan mandates active shift for every company
                     </label>
                   </div>
                 ))}

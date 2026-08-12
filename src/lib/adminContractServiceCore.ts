@@ -78,6 +78,15 @@ export interface WellbuiltContract {
   entitlementOverrides: EntitlementOverride[];
   workPeriodConfiguration?: StoredWorkPeriodConfiguration;
   contractEnforced: boolean;
+  /**
+   * Per-app OPERATIONAL configuration, as STORED.
+   *
+   * `unknown` for the same reason plan `apps` is: this is a value read
+   * back from a document, not a promise about its shape. Only the
+   * canonical validator may decide whether it is absent, an authoritative
+   * empty map, configured, or unusable — see lib/companyAppSettings.ts.
+   */
+  appConfiguration?: unknown;
 }
 
 export type CompanyContractStateLabel = 'legacy' | 'inert' | 'active' | 'invalid';
@@ -188,6 +197,9 @@ export interface AdminContractService {
   addEntitlementOverride(input: { companyId: string; capability: PlanCapability; granted: boolean; reason: string; expiresAt?: string | null }): Promise<{ companyId: string; capability: PlanCapability; configurationVersion: number }>;
   removeEntitlementOverride(input: { companyId: string; capability: PlanCapability; reason: string }): Promise<{ companyId: string; capability: PlanCapability; removed: number; configurationVersion: number }>;
   setCompanyWorkPeriodConfiguration(input: { companyId: string; configuration: StoredWorkPeriodConfiguration }): Promise<{ companyId: string; configurationVersion: number }>;
+  // configurationVersion is SERVER-OWNED: it is never sent, and the
+  // callable rejects it as an unknown field if it ever were.
+  setCompanyAppConfiguration(input: { companyId: string; appConfiguration: unknown }): Promise<{ companyId: string; configurationVersion: number }>;
   setCompanyContractEnforcement(input: { companyId: string; enforced: boolean }): Promise<{ companyId: string; contractEnforced: boolean; configurationVersion: number }>;
   updateCompanySafe(input: { companyId: string; fields: Record<string, unknown> }): Promise<{ companyId: string; changedFields: string[] }>;
   archiveCompany(input: { companyId: string; confirmCompanyId: string; reason: string }): Promise<{ companyId: string; status: 'archived' }>;
@@ -206,6 +218,7 @@ const CALLABLE_NAMES = {
   addEntitlementOverride: 'adminAddEntitlementOverride',
   removeEntitlementOverride: 'adminRemoveEntitlementOverride',
   setCompanyWorkPeriodConfiguration: 'adminSetCompanyWorkPeriodConfiguration',
+  setCompanyAppConfiguration: 'adminSetCompanyAppConfiguration',
   setCompanyContractEnforcement: 'adminSetCompanyContractEnforcement',
   updateCompanySafe: 'adminUpdateCompanySafe',
   archiveCompany: 'adminArchiveCompany',
@@ -233,6 +246,7 @@ export function createAdminContractServiceCore(call: CallFn): AdminContractServi
     addEntitlementOverride: (i) => invoke(CALLABLE_NAMES.addEntitlementOverride, i),
     removeEntitlementOverride: (i) => invoke(CALLABLE_NAMES.removeEntitlementOverride, i),
     setCompanyWorkPeriodConfiguration: (i) => invoke(CALLABLE_NAMES.setCompanyWorkPeriodConfiguration, i),
+    setCompanyAppConfiguration: (i) => invoke(CALLABLE_NAMES.setCompanyAppConfiguration, i),
     setCompanyContractEnforcement: (i) => invoke(CALLABLE_NAMES.setCompanyContractEnforcement, i),
     updateCompanySafe: (i) => invoke(CALLABLE_NAMES.updateCompanySafe, i),
     archiveCompany: (i) => invoke(CALLABLE_NAMES.archiveCompany, i),

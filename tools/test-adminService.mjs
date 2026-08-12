@@ -41,6 +41,7 @@ const check = (name, ok, detail = '') => {
   await svc.addEntitlementOverride({ companyId: 'c', capability: 'dvir', granted: true, reason: 'r' });
   await svc.removeEntitlementOverride({ companyId: 'c', capability: 'dvir', reason: 'r' });
   await svc.setCompanyWorkPeriodConfiguration({ companyId: 'c', configuration: { mode: 'explicit_shift' } });
+  await svc.setCompanyAppConfiguration({ companyId: 'c', appConfiguration: {} });
   await svc.setCompanyContractEnforcement({ companyId: 'c', enforced: true });
   await svc.updateCompanySafe({ companyId: 'c', fields: { name: 'N' } });
   await svc.archiveCompany({ companyId: 'c', confirmCompanyId: 'c', reason: 'r' });
@@ -51,12 +52,13 @@ const check = (name, ok, detail = '') => {
   await svc.listAdminAudit({ limit: 5 });
 
   const expectedNames = Object.values(ADMIN_CALLABLE_NAMES);
-  check('15 methods → 15 distinct callables in order',
-    calls.length === 15 && calls.every(([n], i) => n === expectedNames[i]),
+  check('every service method maps to its callable, in order',
+    calls.length === expectedNames.length && calls.every(([n], i) => n === expectedNames[i]),
     calls.map(([n]) => n).join(','));
   check('payload passthrough is verbatim',
     JSON.stringify(calls[0][1]) === JSON.stringify({ planId: 'p', displayName: 'P', capabilities: ['jsa'] }));
-  check('optional list payload defaults to {}', JSON.stringify(calls[10][1]) === '{}');
+  const listPlansAt = calls.findIndex(([n]) => n === 'adminListPlans');
+  check('optional list payload defaults to {}', JSON.stringify(calls[listPlansAt][1]) === '{}');
 }
 
 // ── response typing (data returned as-is) ─────────────────────────────────
