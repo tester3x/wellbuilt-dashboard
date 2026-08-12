@@ -43,6 +43,16 @@ export interface PlanDefinition {
   displayName: string;
   capabilities: PlanCapability[];
   status: 'active' | 'deprecated';
+  /**
+   * Per-app commercial entitlement, as STORED.
+   *
+   * Deliberately `unknown`: this is a value read back from a document, not
+   * a promise about its shape, and a legacy plan omits it entirely. Only
+   * the canonical validator may decide whether it is absent, an
+   * authoritative empty map, a configured map, or unusable — see
+   * lib/planEntitlement.ts. Nothing may read it as a typed map directly.
+   */
+  apps?: unknown;
 }
 
 export interface StoredWorkPeriodConfiguration {
@@ -162,8 +172,17 @@ export function normalizeAdminError(err: unknown): AdminServiceError {
 export type CallFn = (name: string, data: unknown) => Promise<unknown>;
 
 export interface AdminContractService {
-  createPlan(input: { planId: string; displayName: string; capabilities: PlanCapability[] }): Promise<{ planId: string; status: 'active' }>;
-  updatePlan(input: { planId: string; displayName?: string; capabilities?: PlanCapability[] }): Promise<{ planId: string; changedFields: string[] }>;
+  // `apps` is OPTIONAL on both, and omission is meaningful: on create it
+  // stores a genuinely absent field, on update it leaves the stored value
+  // untouched. A deliberate `{}` is a real value and is sent.
+  //
+  // Typed `unknown`, like the response side, because this module is a
+  // TRANSPORT and stays import-free by design (pinned by
+  // tools/test-adminService.mjs). The canonical map type and its
+  // validation live in lib/planEntitlement.ts, which legitimately imports
+  // contracts; the backend remains the authoritative write boundary.
+  createPlan(input: { planId: string; displayName: string; capabilities: PlanCapability[]; apps?: unknown }): Promise<{ planId: string; status: 'active' }>;
+  updatePlan(input: { planId: string; displayName?: string; capabilities?: PlanCapability[]; apps?: unknown }): Promise<{ planId: string; changedFields: string[] }>;
   deprecatePlan(input: { planId: string }): Promise<{ planId: string; status: 'deprecated' }>;
   assignCompanyPlan(input: { companyId: string; planId: string; allowDeprecatedPlanForMigration?: boolean }): Promise<{ companyId: string; planId: string; configurationVersion: number }>;
   addEntitlementOverride(input: { companyId: string; capability: PlanCapability; granted: boolean; reason: string; expiresAt?: string | null }): Promise<{ companyId: string; capability: PlanCapability; configurationVersion: number }>;

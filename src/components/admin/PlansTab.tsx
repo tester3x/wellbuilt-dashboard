@@ -21,6 +21,19 @@ import {
   validatePlanForm,
   type PlanFormErrors,
 } from '@/lib/adminUiLogic';
+import {
+  WELLBUILT_APP_PRODUCT_NAMES,
+  beginConfiguring,
+  canSaveEntitlements,
+  describePlanEntitlement,
+  draftFromStoredApps,
+  entitlementPayload,
+  setAppIncluded,
+  setAppRequiresShift,
+  validateDraft,
+  type PlanEntitlementDraft,
+} from '@/lib/planEntitlement';
+import { WELLBUILT_APP_SUITE } from '@tester3x/wellbuilt-contracts';
 
 const service = createAdminContractService();
 
@@ -47,6 +60,7 @@ export function PlansTab() {
   const [formName, setFormName] = useState('');
   const [formCaps, setFormCaps] = useState<PlanCapability[]>([]);
   const [formErrors, setFormErrors] = useState<PlanFormErrors>({});
+  const [entitlements, setEntitlements] = useState<PlanEntitlementDraft>(() => draftFromStoredApps(undefined));
   const [busy, setBusy] = useState(false);
 
   const surface = (err: unknown) => {
@@ -79,24 +93,40 @@ export function PlansTab() {
   useEffect(() => { void load(true); /* eslint-disable-next-line react-hooks/exhaustive-deps */ }, []);
 
   const openCreate = () => {
-    setEditing(null); setFormPlanId(''); setFormName(''); setFormCaps([]); setFormErrors({}); setShowForm(true);
+    setEditing(null); setFormPlanId(''); setFormName(''); setFormCaps([]); setFormErrors({});
+    // A new plan starts LEGACY, not empty: creating one is not by itself a
+    // statement that the company gets no apps.
+    setEntitlements(draftFromStoredApps(undefined));
+    setShowForm(true);
   };
   const openEdit = (p: PlanDefinition) => {
-    setEditing(p); setFormPlanId(p.planId); setFormName(p.displayName); setFormCaps([...p.capabilities]); setFormErrors({}); setShowForm(true);
+    setEditing(p); setFormPlanId(p.planId); setFormName(p.displayName); setFormCaps([...p.capabilities]); setFormErrors({});
+    // Opening reflects what is STORED. Absence stays absence — nothing is
+    // materialized until "Configure app access" is pressed.
+    setEntitlements(draftFromStoredApps(p.apps));
+    setShowForm(true);
   };
 
   const submit = async () => {
     const check = validatePlanForm({ planId: formPlanId, displayName: formName, capabilities: formCaps, isEdit: !!editing });
     setFormErrors(check.errors);
     if (!check.ok || busy) return;
+    const entitlementCheck = validateDraft(entitlements);
+    if (!entitlementCheck.ok) {
+      setNotice(`App access cannot be saved: ${entitlementCheck.reason}. Use “Configure app access” to set it deliberately.`);
+      return;
+    }
+    // Spreads NOTHING while the section is untouched, so `apps` is omitted
+    // from the payload entirely and stored absence survives.
+    const appsPayload = entitlementPayload(entitlements);
     setBusy(true);
     try {
       if (editing) {
         // planId is the immutable identifier — only mutable fields travel.
-        await service.updatePlan({ planId: editing.planId, displayName: formName.trim(), capabilities: formCaps });
+        await service.updatePlan({ planId: editing.planId, displayName: formName.trim(), capabilities: formCaps, ...appsPayload });
         setNotice(`Updated plan ${editing.planId}.`);
       } else {
-        await service.createPlan({ planId: formPlanId, displayName: formName.trim(), capabilities: formCaps });
+        await service.createPlan({ planId: formPlanId, displayName: formName.trim(), capabilities: formCaps, ...appsPayload });
         setNotice(`Created plan ${formPlanId}.`);
       }
       setShowForm(false);
@@ -169,6 +199,21 @@ export function PlansTab() {
                 <p className="text-gray-300 text-xs mt-1">
                   {p.capabilities.length ? p.capabilities.join(', ') : 'no capabilities'}
                 </p>
+                {(() => {
+                  // Every plan states its entitlement position explicitly.
+                  // Invalid data is never rendered as legacy or as empty.
+                  const d = describePlanEntitlement(p.apps);
+                  const tone = d.tone === 'danger' ? 'bg-red-900/50 text-red-200 border-red-700'
+                    : d.tone === 'warn' ? 'bg-amber-900/40 text-amber-200 border-amber-700'
+                    : d.tone === 'info' ? 'bg-blue-900/40 text-blue-200 border-blue-700'
+                    : 'bg-gray-600/40 text-gray-300 border-gray-500';
+                  return (
+                    <p className={`text-[11px] mt-1 inline-block px-1.5 py-0.5 rounded border ${tone}`}>
+                      {d.label}
+                      {d.kind === 'invalid' && <span className="ml-1 opacity-80">({d.reason})</span>}
+                    </p>
+                  );
+                })()}
               </div>
               <div className="flex gap-2 shrink-0">
                 <button onClick={() => openEdit(p)} className="px-2 py-1 text-xs rounded bg-blue-600 hover:bg-blue-500 text-white">Edit</button>
@@ -225,8 +270,78 @@ export function PlansTab() {
             ))}
             {formErrors.capabilities && <p className="text-red-400 text-xs mt-1">{formErrors.capabilities}</p>}
           </fieldset>
+
+          <fieldset className="border-t border-gray-700 pt-3">
+            <legend className="text-gray-300 text-xs mb-1">App access (commercial entitlement)</legend>
+            <p className="text-gray-500 text-[11px] mb-2">
+              What the company BOUGHT. Separate from customer configuration and from
+              per-shift readiness such as DVIR or JSA.
+            </p>
+
+            <p className="text-[11px] text-gray-400 mb-2">
+              <span className="text-gray-200">{WELLBUILT_APP_PRODUCT_NAMES[WELLBUILT_APP_SUITE]}</span>
+              {' '}— always included. Suite is where a denial is explained and a shift is
+              started, so it is core and cannot be sold, withheld, or shift-gated.
+            </p>
+
+            {entitlements.state === 'invalid' && (
+              <p role="alert" className="text-red-300 text-xs bg-red-900/30 border border-red-700 rounded p-2 mb-2">
+                This plan&rsquo;s stored app entitlements are invalid ({entitlements.invalidReason}).
+                Nothing will be saved until you deliberately reconfigure them below.
+              </p>
+            )}
+
+            {entitlements.state !== 'configured' ? (
+              <div className="text-xs text-gray-300 space-y-2">
+                {entitlements.state === 'legacy' && (
+                  <p>
+                    Legacy — app access is not configured. Destination apps are
+                    temporarily permitted. Saving other changes leaves this untouched.
+                  </p>
+                )}
+                <button
+                  type="button"
+                  onClick={() => setEntitlements((d) => beginConfiguring(d))}
+                  className="px-2 py-1 rounded bg-blue-700 hover:bg-blue-600 text-white"
+                >
+                  Configure app access
+                </button>
+              </div>
+            ) : (
+              <div className="space-y-1">
+                {entitlements.rows.map((row) => (
+                  <div key={row.app} className="flex flex-wrap items-center gap-3 text-sm text-gray-200 py-0.5">
+                    <label className="flex items-center gap-2">
+                      <input
+                        type="checkbox"
+                        checked={row.included}
+                        onChange={(e) => setEntitlements((d) => setAppIncluded(d, row.app, e.target.checked))}
+                      />
+                      {row.productName}
+                    </label>
+                    <label className={`flex items-center gap-1 text-xs ${row.included ? 'text-gray-300' : 'text-gray-600'}`}>
+                      <input
+                        type="checkbox"
+                        checked={row.requiresActiveShift}
+                        // Only an INCLUDED app can be shift-scoped: a shift
+                        // condition on something unreachable is contradictory
+                        // and the contract refuses it.
+                        disabled={!row.included}
+                        onChange={(e) => setEntitlements((d) => setAppRequiresShift(d, row.app, e.target.checked))}
+                      />
+                      requires active shift
+                    </label>
+                  </div>
+                ))}
+                <p className="text-gray-500 text-[11px] pt-1">
+                  Saving stores this exactly. Including nothing is a deliberate
+                  statement that the company gets no destination apps.
+                </p>
+              </div>
+            )}
+          </fieldset>
           <div className="flex gap-2">
-            <button onClick={() => void submit()} disabled={busy}
+            <button onClick={() => void submit()} disabled={busy || !canSaveEntitlements(entitlements)}
               className="px-3 py-1.5 rounded bg-green-700 hover:bg-green-600 text-white text-sm disabled:opacity-50">
               {busy ? 'Saving…' : editing ? 'Save changes' : 'Create plan'}
             </button>
