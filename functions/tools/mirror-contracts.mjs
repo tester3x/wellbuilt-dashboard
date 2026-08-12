@@ -30,9 +30,9 @@ import { tmpdir } from 'node:os';
 
 export const EXPECTED = Object.freeze({
   name: '@tester3x/wellbuilt-contracts',
-  version: '0.3.0',
-  sourceSha256: 'c337f6080a7b8695d5c3f84820e85a99a0c2b0714eb12837d5b6e73f7aa0b8cd',
-  sourceIntegrity: 'sha512-Nd84+d1dyQBXPTtpERACvg4LVxQfhJ9w1I/rLXjd30gB0hsKrJI+W9Vfmiv3p84H1VPgpQwgKUCK15rdAYk7Dg==',
+  version: '0.4.0',
+  sourceSha256: 'aa1213e2edf7912dbc7cb37beefc2657ef154f825889c00e58242c3b18bd226c',
+  sourceIntegrity: 'sha512-efN89AKlAHq1Kw8X6rC8TNxNKVlE9tSkTzfIc/v1fHYbDw/yZLAW94OvYY5ohSCN6R3HGqBIjdbjUzsAxIxdrg==',
 });
 
 const FN_DIR = join(dirname(fileURLToPath(import.meta.url)), '..');

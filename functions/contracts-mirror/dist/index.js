@@ -39,4 +39,11 @@ export { SESSION_AUDIENCE_WBT, SESSION_AUDIENCES, SESSION_APP_CLAIM, isSessionAu
 // require an active shift". Nothing above is changed; `PlanDefinition.apps`
 // is optional and absent means today's behavior.
 export { WELLBUILT_APP_TICKETS, WELLBUILT_APP_EQUIPMENT, WELLBUILT_APP_JSA, WELLBUILT_APP_MOBILE, WELLBUILT_APP_SUITE, WELLBUILT_APP_DASHBOARD, WELLBUILT_APP_KEYS, isWellbuiltAppKey, WELLBUILT_CORE_APPS, isCoreApp, WELLBUILT_APP_KEY_ALIASES, resolveWellbuiltAppKey, APP_ENTITLEMENT_KEYS, APP_CONFIGURATION_CONFLICT, resolveAppEntitlement, isAppEntitled, appRequiresActiveShift, decideAppAccess, reconcileAppConfiguration, validatePlanAppEntitlements, } from './plan/appEntitlement.js';
+// ── Per-company operational app configuration (0.4.0-dev, additive) ───────
+// The plan says what a company bought; this says how that company runs it.
+// Narrowing only: it may disable an included app or ADD a shift
+// requirement, never enable an excluded one or remove a plan-level gate.
+// Every 0.3.0 export above is unchanged — `decideAppAccess` still answers
+// from the plan alone and configuration awareness is opt-in.
+export { COMPANY_APP_CONFIGURATION_KEYS, validateCompanyAppConfigurations, configurationRequiresActiveShift, configurationDisablesApp, decideAppAccessWithConfiguration, } from './plan/companyAppConfiguration.js';
 //# sourceMappingURL=index.js.map

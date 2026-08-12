@@ -37,4 +37,6 @@ export { SESSION_AUDIENCE_WBT, SESSION_AUDIENCES, SESSION_APP_CLAIM, isSessionAu
 export type { SessionAudience, SessionAudienceOutcome } from './auth/sessionAudience.js';
 export { WELLBUILT_APP_TICKETS, WELLBUILT_APP_EQUIPMENT, WELLBUILT_APP_JSA, WELLBUILT_APP_MOBILE, WELLBUILT_APP_SUITE, WELLBUILT_APP_DASHBOARD, WELLBUILT_APP_KEYS, isWellbuiltAppKey, WELLBUILT_CORE_APPS, isCoreApp, WELLBUILT_APP_KEY_ALIASES, resolveWellbuiltAppKey, APP_ENTITLEMENT_KEYS, APP_CONFIGURATION_CONFLICT, resolveAppEntitlement, isAppEntitled, appRequiresActiveShift, decideAppAccess, reconcileAppConfiguration, validatePlanAppEntitlements, } from './plan/appEntitlement.js';
 export type { WellbuiltAppKey, WellbuiltCoreAppKey, AppEntitlement, PlanAppEntitlements, AppEntitlementOutcome, AppEntitlementResolution, AppEntitlementPlanView, AppAccessDecision, AppEntitlementRejection, PlanAppEntitlementsValidation, } from './plan/appEntitlement.js';
+export { COMPANY_APP_CONFIGURATION_KEYS, validateCompanyAppConfigurations, configurationRequiresActiveShift, configurationDisablesApp, decideAppAccessWithConfiguration, } from './plan/companyAppConfiguration.js';
+export type { CompanyAppConfiguration, CompanyAppConfigurations, CompanyAppConfigurationRejection, CompanyAppConfigurationsValidation, } from './plan/companyAppConfiguration.js';
 //# sourceMappingURL=index.d.ts.map
