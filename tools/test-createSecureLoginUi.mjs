@@ -28,8 +28,13 @@ const tab = readFileSync(join(ROOT, 'src/components/admin/DriversTab.tsx'), 'utf
 const code = tab.replace(/\/\*[\s\S]*?\*\//g, '').replace(/^\s*\/\/.*$/gm, '');
 
 // ── 1/2. the right action, and only the right action ─────────────────────
+// Both views now ask ONE resolver, which itself delegates to the tested
+// decision layer (credentialActionFor) — assert the delegation, then the
+// legacy-view gate on the resolver's 'create' state.
+check('1. the shared resolver delegates to the decision layer',
+  /secureLoginStateFor = useCallback[\s\S]{0,400}credentialActionFor\(driver\) === 'reset_passcode'/.test(code));
 check('1. an eligible legacy row shows "Create secure login"',
-  /credentialActionFor\(driver\) === 'create_secure_login'[\s\S]{0,400}Create secure login/.test(code));
+  /secureLoginStateFor\(driver\) === 'create'[\s\S]{0,500}Create secure login/.test(code));
 check('2. no "Reset passcode" action is rendered in this tranche',
   !/Reset passcode/i.test(code));
 
@@ -46,8 +51,13 @@ check('the request is built by the tested decision layer',
   check('handler slice is bounded', e > s, `end marker at ${e}`);
   check('3/4. the component never supplies driverId or legacyHash',
     !/driverId\s*:/.test(handler) && !/legacyHash/.test(handler));
+  // The row key IS used locally (session secured-set) — what matters is
+  // that the payload is exactly the builder's output, never augmented.
   check('17. no history or profile identifiers are added to the request',
-    !/assignedRoutes|assignedCustomers|passcodeHash|\.key\b/.test(handler));
+    !/assignedRoutes|assignedCustomers|passcodeHash/.test(handler)
+    && /const req = buildSetPasscodeRequest\(secureTarget, securePass\);/.test(handler)
+    && /await adminSetPasscode\(req\);/.test(handler)
+    && !/req\.\w+\s*=|Object\.assign\(req|\.\.\.req/.test(handler));
 }
 check('5. temporary:false comes from the decision layer, not the UI',
   !/temporary\s*:/.test(code),
@@ -92,7 +102,8 @@ check('14. already-exists renders the approved conflict copy',
 
 // ── 15. authorization ────────────────────────────────────────────────────
 check('15. the action is gated by the existing isWbAdmin boundary',
-  /\{isWbAdmin && credentialActionFor\(driver\)/.test(code));
+  /if \(!isWbAdmin\) return 'none';/.test(code),
+  'the shared resolver must refuse non-WB-admin callers');
 check('15. server denial is surfaced, not bypassed',
   /permission-denied\|unauthenticated/.test(code));
 check('no client-side substitute for server authorization is introduced',

@@ -34,11 +34,20 @@ interface EmployeePanelProps<D, U> {
   /** Optional existing driver actions (routes / company / package modals). */
   onAssignRoutes?: (row: EmployeeRow<any, any>) => void;
   onAssignCompany?: (row: EmployeeRow<any, any>) => void;
+  /**
+   * Secure WellBuilt login (canonical identity + passcode) — resolved by the
+   * parent's shared state resolver so this panel and the legacy list can
+   * never drift. 'none' hides the block entirely.
+   */
+  secureLoginStateFor?: (row: EmployeeRow<any, any>) => 'create' | 'secured' | 'none';
+  /** Open the parent's shared Create-secure-login modal for this row. */
+  onCreateSecureLogin?: (row: EmployeeRow<any, any>) => void;
 }
 
 export function EmployeePanel<D, U>({
   employees, isWbAdmin, scopeCompanyId,
   onToggleMobile, onInvite, onSaveRoles, onAssignRoutes, onAssignCompany,
+  secureLoginStateFor, onCreateSecureLogin,
 }: EmployeePanelProps<D, U>) {
   const [expandedId, setExpandedId] = useState<string | null>(null);
   const [collapsed, setCollapsed] = useState<Record<string, boolean>>({});
@@ -168,7 +177,9 @@ export function EmployeePanel<D, U>({
                           disabled={!row.driver || !editable}
                           onChange={() => onToggleMobile(row)}
                         />
-                        WB-T Mobile Login
+                        <span title="Legacy approved-hash mobile login — enable/disable only. Not the secure WellBuilt login.">
+                          WB-T Mobile Login
+                        </span>
                         {!row.driver && <span className="text-[10px] text-gray-500">(no driver record — registers via WB-T app)</span>}
                       </label>
                       <label className="flex items-center gap-2 text-gray-200">
@@ -183,6 +194,31 @@ export function EmployeePanel<D, U>({
                           </button>
                         )}
                       </label>
+                      {/* Secure WellBuilt login — canonical identity + passcode.
+                          Deliberately its own block: it is NOT the legacy WB-T
+                          mobile toggle and NOT dashboard web access, and its
+                          button routes only to the parent's governed modal. */}
+                      {secureLoginStateFor && row.driver && secureLoginStateFor(row) !== 'none' && (
+                        <div className="flex items-center gap-2 text-gray-200">
+                          <span className="text-gray-400">Secure WellBuilt login:</span>
+                          {secureLoginStateFor(row) === 'secured' ? (
+                            <span
+                              className="text-emerald-400"
+                              title="This employee already has a canonical secure WellBuilt login."
+                            >
+                              Active
+                            </span>
+                          ) : (
+                            <button
+                              onClick={() => onCreateSecureLogin?.(row)}
+                              className="px-2 py-0.5 bg-emerald-700 hover:bg-emerald-600 text-white text-xs rounded"
+                              title="Creates a new secure WellBuilt identity with its own passcode. Separate from the legacy WB-T Mobile Login toggle and from Dashboard access — this changes neither."
+                            >
+                              Create secure login
+                            </button>
+                          )}
+                        </div>
+                      )}
                     </div>
 
                     {/* Role checkboxes (dashboard accounts only) */}

@@ -43,9 +43,20 @@ interface ApprovedDriver {
   // driver is promoted to a dashboard role.
   dashboardUid?: string;
   dashboardRole?: UserRole;
+  /**
+   * Canonical secure driver id, when the row is known to be linked to one
+   * (migration stamps migratedToDriverId on the legacy row). Display/gating
+   * only — the decision layer (hasCanonicalDriverId) still rejects any id
+   * equal to the RTDB key, so a legacy `driverId: hash` echo can never read
+   * as secured.
+   */
+  driverId?: string;
   _legacy?: boolean;     // true if stored in old {hash}/{deviceId}/ format
   _legacyDeviceId?: string; // the device sub-key for legacy records
 }
+
+/** Secure-credential presentation state shared by BOTH employee views. */
+type SecureLoginState = 'create' | 'secured' | 'none';
 
 interface DriversTabProps {
   scopeCompanyId?: string;  // if set, only show drivers for this company
@@ -104,6 +115,11 @@ export function DriversTab({ scopeCompanyId, isWbAdmin = false }: DriversTabProp
   const [secureBusy, setSecureBusy] = useState(false);
   const [secureError, setSecureError] = useState('');
   const [secureDone, setSecureDone] = useState('');
+  // Rows provisioned during THIS session. The create path deliberately stamps
+  // nothing on the legacy row (no credential-derived linkage), so until a
+  // reload surfaces server-side state this set is the only signal that a row
+  // is already secured — it keeps the create action from being re-offered.
+  const [securedKeys, setSecuredKeys] = useState<Set<string>>(new Set());
 
   /** Drop every secret the modal holds. Used on cancel, success, and unmount. */
   const clearSecureSecrets = useCallback(() => {
@@ -139,12 +155,12 @@ export function DriversTab({ scopeCompanyId, isWbAdmin = false }: DriversTabProp
       // temporary:false. The callable owns name-conflict enforcement, so no
       // client-side index read happens here.
       const req = buildSetPasscodeRequest(secureTarget, securePass);
-      const res = await adminSetPasscode(req);
+      // The response carries the new canonical UUID; it is deliberately NOT
+      // rendered — success copy stays masked (display name only).
+      await adminSetPasscode(req);
       clearSecureSecrets();
-      setSecureDone(
-        `Secure login created for ${secureTarget.displayName}.`
-        + (res?.driverId ? ` New driver ID: ${res.driverId}` : ''),
-      );
+      setSecuredKeys(prev => new Set(prev).add(secureTarget.key));
+      setSecureDone(`Secure login created for ${secureTarget.displayName}.`);
     } catch (err) {
       // Sanitized: render only our own copy, never the raw error, so a
       // server message can never echo submitted input back into the DOM.
@@ -160,6 +176,21 @@ export function DriversTab({ scopeCompanyId, isWbAdmin = false }: DriversTabProp
       setSecureBusy(false);
     }
   }, [secureTarget, secureBusy, securePass, secureConfirm, clearSecureSecrets]);
+
+  // ── One secure-credential state for BOTH employee views ────────────────
+  // The primary EmployeePanel and the legacy list must not drift: each asks
+  // this resolver, which delegates to the tested decision layer.
+  //   'secured' — the row carries a canonical (non-key) driverId, or was
+  //               provisioned in this session;
+  //   'create'  — active legacy-only row, eligible for a new secure login;
+  //   'none'    — not eligible (inactive row, or caller is not WB admin).
+  const secureLoginStateFor = useCallback((driver: ApprovedDriver): SecureLoginState => {
+    if (!isWbAdmin) return 'none';
+    if (securedKeys.has(driver.key) || credentialActionFor(driver) === 'reset_passcode') {
+      return 'secured';
+    }
+    return driver.active !== false ? 'create' : 'none';
+  }, [isWbAdmin, securedKeys]);
   const [newCustomerName, setNewCustomerName] = useState('');
   const [newCustomerCompanyId, setNewCustomerCompanyId] = useState('');
 
@@ -252,6 +283,13 @@ export function DriversTab({ scopeCompanyId, isWbAdmin = false }: DriversTabProp
               defaultPackageId: val.defaultPackageId || undefined,
               dashboardUid: val.dashboardUid || undefined,
               dashboardRole: val.dashboardRole || undefined,
+              // Canonical linkage when the server stamped one (migration
+              // path). The decision layer ignores a hash echoed as its own
+              // driverId, so mapping this is safe for gating.
+              driverId:
+                (typeof val.driverId === 'string' && val.driverId)
+                || (typeof val.migratedToDriverId === 'string' && val.migratedToDriverId)
+                || undefined,
             });
           } else {
             // Legacy structure: drivers/approved/{hash}/{deviceId}/ = { displayName, active, ... }
@@ -288,6 +326,7 @@ export function DriversTab({ scopeCompanyId, isWbAdmin = false }: DriversTabProp
               assignedCustomers: Array.isArray(val.assignedCustomers) ? val.assignedCustomers : [],
               assignedRoutes: Array.isArray(val.assignedRoutes) ? val.assignedRoutes : [],
               assignedWells: Array.isArray(val.assignedWells) ? val.assignedWells : [],
+              driverId: typeof val.migratedToDriverId === 'string' ? val.migratedToDriverId : undefined,
               _legacy: true,
               _legacyDeviceId: legacyDeviceId,
             });
@@ -1138,7 +1177,7 @@ export function DriversTab({ scopeCompanyId, isWbAdmin = false }: DriversTabProp
                 {driver.isAdmin ? 'App Admin \u2713' : 'App Admin'}
               </button>
             )}
-              {isWbAdmin && credentialActionFor(driver) === 'create_secure_login' && (
+              {secureLoginStateFor(driver) === 'create' && (
                 <button
                   onClick={() => { setSecureTarget(driver); }}
                   className="px-3 py-1 text-sm rounded bg-emerald-700 hover:bg-emerald-600 text-white"
@@ -1146,6 +1185,14 @@ export function DriversTab({ scopeCompanyId, isWbAdmin = false }: DriversTabProp
                 >
                   Create secure login
                 </button>
+              )}
+              {secureLoginStateFor(driver) === 'secured' && (
+                <span
+                  className="px-3 py-1 text-sm rounded bg-emerald-900/60 text-emerald-300"
+                  title="This driver already has a canonical secure WellBuilt login. No create action is offered."
+                >
+                  Secure login active
+                </span>
               )}
             <button
               onClick={() => { setAssignTarget(driver); setShowAssignModal(true); }}
@@ -1355,6 +1402,14 @@ export function DriversTab({ scopeCompanyId, isWbAdmin = false }: DriversTabProp
         isWbAdmin={isWbAdmin}
         scopeCompanyId={scopeCompanyId}
         onToggleMobile={(row) => { if (row.driver) toggleDriverActive(row.driver); }}
+        secureLoginStateFor={(row) => (row.driver ? secureLoginStateFor(row.driver) : 'none')}
+        onCreateSecureLogin={(row) => {
+          // Guarded: the shared modal opens ONLY for a row the resolver
+          // deems eligible — a secured or inactive row cannot re-enter.
+          if (row.driver && secureLoginStateFor(row.driver) === 'create') {
+            setSecureTarget(row.driver);
+          }
+        }}
         onInvite={(row) => {
           if (!row.driver) return;
           setInviteTarget(row.driver);
