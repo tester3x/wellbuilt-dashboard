@@ -12,6 +12,13 @@ export {
   adminComputeLegacyHash,
 } from './driverAuthCallables';
 
+/**
+ * Governed initial company binding for a canonical secure driver — created
+ * server-side so profile binding and shift authority can never disagree.
+ * NOT deployed yet; selector: --only functions:adminBindDriverCompany
+ */
+export { adminBindDriverCompany } from './companyBindingCallable';
+
 export {
   ingestDriverPacket,
   upsertDriverShift,

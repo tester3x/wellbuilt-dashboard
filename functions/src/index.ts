@@ -4750,6 +4750,9 @@ export {
   adminDeleteSecureDriver,
   registerStandaloneDriver,
   adminComputeLegacyHash,
+  // Governed initial company binding (canonical drivers). NOT deployed yet;
+  // selector when approved: --only functions:adminBindDriverCompany
+  adminBindDriverCompany,
   // Operational path hardening
   ingestDriverPacket,
   upsertDriverShift,
