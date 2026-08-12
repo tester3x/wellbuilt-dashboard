@@ -38,7 +38,13 @@ import {
   type WellbuiltContract,
 } from './companyContract';
 import { computeEffectiveCapabilities, type CapabilityResult } from './effectiveCapabilities';
-import { CONTRACT_VERSION, type PlanCapability, type PlanDefinition } from '@tester3x/wellbuilt-contracts';
+import {
+  CONTRACT_VERSION,
+  validatePlanAppEntitlements,
+  type PlanAppEntitlements,
+  type PlanCapability,
+  type PlanDefinition,
+} from '@tester3x/wellbuilt-contracts';
 
 export const PLANS_COLLECTION = 'plans';
 export const COMPANIES_COLLECTION = 'companies';
@@ -119,13 +125,54 @@ function requireBoundedReason(v: unknown, max: number): string {
 
 function parsePlanDoc(planId: string, data: Record<string, unknown> | undefined): PlanDefinition {
   const d = data ?? {};
-  return {
+  const plan: PlanDefinition = {
     contractVersion: d.contractVersion as never,
     planId: (d.planId as string) ?? planId,
     displayName: (d.displayName as string) ?? '',
     capabilities: (d.capabilities as PlanCapability[]) ?? [],
     status: (d.status as 'active' | 'deprecated') ?? 'active',
   };
+  // Carry `apps` through ONLY when the stored document actually has the
+  // key, so a legacy plan keeps a genuinely ABSENT field rather than one
+  // holding undefined. Deliberately passed through RAW and unvalidated:
+  // the canonical resolver is the read-side authority, and it must be the
+  // thing that classifies a malformed stored value as
+  // INVALID_ENTITLEMENT_DATA. Re-validating here would either mask that
+  // or force this layer to invent a second opinion.
+  if (Object.prototype.hasOwnProperty.call(d, 'apps')) {
+    plan.apps = d.apps as PlanDefinition['apps'];
+  }
+  return plan;
+}
+
+/**
+ * Validate an administrative `apps` payload with the CANONICAL validator.
+ *
+ * No key list, alias table, or entitlement rule is reproduced here — the
+ * contract owns all of it, so an alias like `wbt` or `water-ticket`, an
+ * unknown app, a shift-gated exclusion, and any attempt to sell or
+ * withhold core Suite access are all refused by the same code every
+ * reader uses. The validated (canonical, normalized) value is what gets
+ * stored, so persistence can never disagree with resolution.
+ *
+ * `undefined` means the caller omitted the field and is returned as-is.
+ * `null` is NOT absence: it is a value someone sent, it describes no
+ * entitlement, and it is rejected rather than quietly meaning "legacy".
+ */
+function requireAppEntitlements(v: unknown): PlanAppEntitlements | undefined {
+  if (v === undefined) return undefined;
+  const result = validatePlanAppEntitlements(v);
+  if (!result.ok) {
+    throw new AdminCallError(
+      'invalid-argument',
+      `invalid_app_entitlements:${result.rejection}${result.key ? `:${result.key}` : ''}`,
+    );
+  }
+  if (!result.present) {
+    // Unreachable: `undefined` returned above is the only absent form.
+    throw new AdminCallError('invalid-argument', 'invalid_app_entitlements:absent');
+  }
+  return result.value;
 }
 
 function requireCapabilities(v: unknown): PlanCapability[] {
@@ -182,21 +229,29 @@ function writeContract(tx: AdminTransaction, companyId: string, contract: Wellbu
 
 export async function createPlanHandler(deps: AdminDeps, auth: VerifiedCallerAuth | null, data: unknown): Promise<{ planId: string; status: 'active' }> {
   const actor = await requireAdmin(deps, auth);
-  const d = requireExactKeys(data, ['planId', 'displayName', 'capabilities']);
+  const d = requireExactKeys(data, ['planId', 'displayName', 'capabilities'], ['apps']);
   const planId = requirePlanId(d.planId);
   const displayName = requireDisplayName(d.displayName);
   const capabilities = requireCapabilities(d.capabilities);
+  // Validated BEFORE the transaction opens: an invalid entitlement map
+  // must never reach a write path at all.
+  const apps = requireAppEntitlements(d.apps);
   await deps.runTransaction(async (tx) => {
     const existing = await tx.get(`${PLANS_COLLECTION}/${planId}`);
     if (existing.exists) throw new AdminCallError('already-exists', 'plan_already_exists');
     const plan: PlanDefinition = {
       contractVersion: CONTRACT_VERSION, planId, displayName, capabilities, status: 'active',
     };
+    // Assigned only when supplied, so an omitted field is stored as a
+    // genuinely absent key — the one shape the resolver reads as
+    // LEGACY_UNCONFIGURED. An explicit `{}` is a real value and IS stored,
+    // because it authoritatively excludes every destination app.
+    if (apps !== undefined) plan.apps = apps;
     tx.create(`${PLANS_COLLECTION}/${planId}`, plan as unknown as Record<string, unknown>);
     audit(tx, deps, {
       operation: 'plan.create', targetType: 'plan', targetId: planId,
       actorUid: actor.actorUid, actorEmail: actor.actorEmail,
-      changedFields: ['displayName', 'capabilities', 'status'],
+      changedFields: ['displayName', 'capabilities', 'status', ...(apps !== undefined ? ['apps'] : [])],
     });
   });
   return { planId, status: 'active' };
@@ -204,11 +259,18 @@ export async function createPlanHandler(deps: AdminDeps, auth: VerifiedCallerAut
 
 export async function updatePlanHandler(deps: AdminDeps, auth: VerifiedCallerAuth | null, data: unknown): Promise<{ planId: string; changedFields: string[] }> {
   const actor = await requireAdmin(deps, auth);
-  const d = requireExactKeys(data, ['planId'], ['displayName', 'capabilities']);
+  const d = requireExactKeys(data, ['planId'], ['displayName', 'capabilities', 'apps']);
   const planId = requirePlanId(d.planId); // identifier — immutable by construction
   const fields: Record<string, unknown> = {};
   if (d.displayName !== undefined) fields.displayName = requireDisplayName(d.displayName);
   if (d.capabilities !== undefined) fields.capabilities = requireCapabilities(d.capabilities);
+  // Omitted `apps` never enters `fields`, and the write is a field-merge,
+  // so a stored map — or a legacy plan's absence — is left exactly as it
+  // was. There is deliberately NO way to clear the field back to absence:
+  // this layer's transaction abstraction exposes only get/update/create,
+  // with no field-delete, and inventing one would be a new administrative
+  // capability rather than a write-support change.
+  if (d.apps !== undefined) fields.apps = requireAppEntitlements(d.apps);
   if (!Object.keys(fields).length) throw new AdminCallError('invalid-argument', 'no_updatable_fields');
   await deps.runTransaction(async (tx) => {
     const existing = await tx.get(`${PLANS_COLLECTION}/${planId}`);
