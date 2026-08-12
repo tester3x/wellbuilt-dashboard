@@ -13,8 +13,10 @@ import { useAuth } from '@/contexts/AuthContext';
 import {
   buildSetPasscodeRequest,
   canSubmit,
+  companyActionRouteFor,
   confirmationCopyFor,
   credentialActionFor,
+  hasCanonicalDriverId,
   localPolicyError,
   PASSCODE_GUIDANCE,
 } from '@/lib/secureLoginProvisioning';
@@ -199,6 +201,8 @@ export function DriversTab({ scopeCompanyId, isWbAdmin = false }: DriversTabProp
   const [companyTarget, setCompanyTarget] = useState<ApprovedDriver | null>(null);
   const [assignCompanyId, setAssignCompanyId] = useState('');
   const [assignCompanyName, setAssignCompanyName] = useState('');
+  const [companyBusy, setCompanyBusy] = useState(false);
+  const [companyError, setCompanyError] = useState('');
   const [companiesList, setCompaniesList] = useState<{ id: string; name: string; assignedOperators: string[] }[]>([]);
 
   // Assign routes modal
@@ -484,8 +488,84 @@ export function DriversTab({ scopeCompanyId, isWbAdmin = false }: DriversTabProp
   };
 
   // ── Assign driver to a company (WB admin only) ──
+  //
+  // TWO ROUTES, decided by the tested companyActionRouteFor:
+  //   canonical row  → governed adminBindDriverCompany callable (initial
+  //                    binding only; transfer/unbind refused with copy);
+  //   legacy-only row → the pre-existing RTDB staging write, which is
+  //                    metadata for the future secure creation — it never
+  //                    binds a canonical profile.
   const assignDriverCompany = async () => {
-    if (!companyTarget) return;
+    if (!companyTarget || companyBusy) return; // double-submit guard
+    const route = companyActionRouteFor(companyTarget, assignCompanyId);
+
+    if (route === 'blocked_unbind') {
+      setCompanyError(
+        'A secure driver cannot be removed from its company here. Unbinding is a separate governed operation.',
+      );
+      return;
+    }
+    if (route === 'blocked_transfer') {
+      setCompanyError(
+        `${companyTarget.displayName} is already bound to ${companyTarget.companyName || 'a company'}. `
+        + 'Moving a secure driver between companies is a separate transfer workflow — initial binding cannot rebind.',
+      );
+      return;
+    }
+
+    if (route === 'governed_bind') {
+      setCompanyBusy(true);
+      setCompanyError('');
+      try {
+        const { adminBindCompany } = await import('@/lib/secureDriverAdmin');
+        // Exact payload: canonical driverId + companyId. Nothing else — the
+        // server owns name/company resolution and the authority ensure.
+        const res = await adminBindCompany({
+          driverId: (companyTarget.driverId || '').trim(),
+          companyId: assignCompanyId.trim().toLowerCase(),
+        });
+        // Display mirror ONLY: the governed bind wrote the canonical
+        // profile + authority; the legacy approved row is what this list
+        // renders, so reflect the result there. Never authority.
+        try {
+          await update(ref(db, `drivers/approved/${companyTarget.key}`), {
+            companyId: res.companyId,
+            companyName: res.companyName || null,
+          });
+        } catch { /* display mirror is best-effort */ }
+        setMessage(
+          `${companyTarget.displayName} bound to ${res.companyName || res.companyId}`
+          + (res.alreadyBound ? ' (was already bound — no change)' : ''),
+        );
+        setShowCompanyModal(false);
+        setCompanyTarget(null);
+        setAssignCompanyId('');
+        setAssignCompanyName('');
+        await loadDrivers();
+      } catch (err) {
+        // Sanitized: our own copy only — the modal stays open so the admin
+        // can retry the SAME logical binding (the server journal converges).
+        const code = (err as { code?: string; message?: string })?.code || '';
+        const detail = (err as { message?: string })?.message || '';
+        setCompanyError(
+          /failed-precondition/.test(code)
+            ? (/already_bound_elsewhere/.test(detail)
+              ? 'This driver is already bound to a different company. Transfers are a separate workflow.'
+              : /open_shift/.test(detail)
+                ? 'This driver has an open shift. Close it before changing the company binding.'
+                : 'The binding was refused by a server precondition. Nothing was changed — you can retry.'
+              )
+            : /permission-denied|unauthenticated/.test(code)
+              ? 'You are not authorized to bind drivers to this company.'
+              : 'Could not complete the binding. Nothing partial was kept — you can retry.',
+        );
+      } finally {
+        setCompanyBusy(false);
+      }
+      return;
+    }
+
+    // legacy_staging — pre-existing behavior, now labeled for what it is.
     try {
       const updates: Record<string, any> = {
         companyId: assignCompanyId.trim().toLowerCase() || null,
@@ -513,7 +593,7 @@ export function DriversTab({ scopeCompanyId, isWbAdmin = false }: DriversTabProp
       }
       setMessage(
         assignCompanyId.trim()
-          ? `${companyTarget.displayName} assigned to ${assignCompanyName.trim() || assignCompanyId.trim()}`
+          ? `${companyTarget.displayName} staged for ${assignCompanyName.trim() || assignCompanyId.trim()} (applies when the secure login is created)`
           : `${companyTarget.displayName} removed from company`
       );
       setShowCompanyModal(false);
@@ -1214,7 +1294,7 @@ export function DriversTab({ scopeCompanyId, isWbAdmin = false }: DriversTabProp
             </button>
             {isWbAdmin && (
               <button
-                onClick={() => { setCompanyTarget(driver); setAssignCompanyId(driver.companyId || ''); setAssignCompanyName(driver.companyName || ''); setShowCompanyModal(true); }}
+                onClick={() => { setCompanyTarget(driver); setAssignCompanyId(driver.companyId || ''); setAssignCompanyName(driver.companyName || ''); setCompanyError(''); setShowCompanyModal(true); }}
                 className="px-3 py-1 text-sm rounded bg-teal-600 hover:bg-teal-500 text-white"
               >
                 {driver.companyId ? 'Change Customer' : 'Assign Customer'}
@@ -1424,7 +1504,7 @@ export function DriversTab({ scopeCompanyId, isWbAdmin = false }: DriversTabProp
         }}
         onAssignCompany={(row) => {
           if (!row.driver) return;
-          setCompanyTarget(row.driver); setAssignCompanyId(row.driver.companyId || ''); setAssignCompanyName(row.driver.companyName || ''); setShowCompanyModal(true);
+          setCompanyTarget(row.driver); setAssignCompanyId(row.driver.companyId || ''); setAssignCompanyName(row.driver.companyName || ''); setCompanyError(''); setShowCompanyModal(true);
         }}
       />
 
@@ -1566,9 +1646,31 @@ export function DriversTab({ scopeCompanyId, isWbAdmin = false }: DriversTabProp
         <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50">
           <div className="bg-gray-800 rounded-lg p-6 max-w-md w-full mx-4">
             <h3 className="text-white font-medium mb-1">Assign to Customer</h3>
-            <p className="text-gray-400 text-sm mb-4">
+            <p className="text-gray-400 text-sm mb-2">
               Assign <span className="text-white">{companyTarget.displayName}</span> to a customer
             </p>
+
+            {/* Route-accurate framing: canonical rows bind server-side with
+                shift authority; legacy rows only stage metadata. */}
+            {hasCanonicalDriverId(companyTarget) ? (
+              companyTarget.companyId ? (
+                <p className="text-xs text-gray-400 mb-3">
+                  Current company: <span className="text-teal-300">{companyTarget.companyName || companyTarget.companyId}</span>.
+                  {' '}This is initial binding only — moving a secure driver to a different
+                  company is a separate transfer workflow.
+                </p>
+              ) : (
+                <p className="text-xs text-gray-400 mb-3">
+                  Secure driver — binding runs on the server and initializes
+                  shift authority for the selected company.
+                </p>
+              )
+            ) : (
+              <p className="text-xs text-gray-500 mb-3">
+                Legacy row — this selection is staging metadata. It is applied
+                to the secure identity when the secure login is created.
+              </p>
+            )}
 
             <div className="space-y-3">
               <div>
@@ -1580,7 +1682,9 @@ export function DriversTab({ scopeCompanyId, isWbAdmin = false }: DriversTabProp
                     setAssignCompanyId(id);
                     const match = companiesList.find(c => c.id === id);
                     setAssignCompanyName(match?.name || '');
+                    setCompanyError('');
                   }}
+                  disabled={companyBusy}
                   className="w-full px-3 py-2 bg-gray-700 text-white rounded text-sm"
                   autoFocus
                 >
@@ -1592,12 +1696,17 @@ export function DriversTab({ scopeCompanyId, isWbAdmin = false }: DriversTabProp
               </div>
             </div>
 
+            {companyError && (
+              <p className="text-[11px] text-red-400 mt-2 break-words">{companyError}</p>
+            )}
+
             <div className="flex gap-2 mt-4">
               <button
                 onClick={assignDriverCompany}
-                className="flex-1 px-4 py-2 bg-teal-600 hover:bg-teal-500 text-white rounded"
+                disabled={companyBusy}
+                className="flex-1 px-4 py-2 bg-teal-600 hover:bg-teal-500 text-white rounded disabled:opacity-50"
               >
-                {assignCompanyId.trim() ? 'Assign' : 'Remove from Customer'}
+                {companyBusy ? 'Assigning…' : assignCompanyId.trim() ? 'Assign' : 'Remove from Customer'}
               </button>
               <button
                 onClick={() => {
@@ -1605,8 +1714,10 @@ export function DriversTab({ scopeCompanyId, isWbAdmin = false }: DriversTabProp
                   setCompanyTarget(null);
                   setAssignCompanyId('');
                   setAssignCompanyName('');
+                  setCompanyError('');
                 }}
-                className="px-4 py-2 bg-gray-600 hover:bg-gray-500 text-white rounded"
+                disabled={companyBusy}
+                className="px-4 py-2 bg-gray-600 hover:bg-gray-500 text-white rounded disabled:opacity-50"
               >
                 Cancel
               </button>

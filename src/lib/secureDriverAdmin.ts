@@ -57,6 +57,27 @@ export async function adminSetPasscode(params: {
   };
 }
 
+/**
+ * Governed INITIAL company binding for a canonical secure driver. The
+ * server validates preconditions, ensures the shift authority under the
+ * same canonical UUID, and reports success only when profile and authority
+ * agree. Exact-key payload: anything beyond driverId/companyId is refused.
+ */
+export async function adminBindCompany(params: {
+  driverId: string;
+  companyId: string;
+}) {
+  const fn = httpsCallable(getFirebaseFunctions(), 'adminBindDriverCompany');
+  const res = await fn(params);
+  return res.data as {
+    ok: true;
+    companyId: string;
+    companyName: string | null;
+    alreadyBound: boolean;
+    authority: 'created' | 'initialized' | 'preserved';
+  };
+}
+
 export async function adminDeleteSecureDriver(params: {
   driverId: string;
   confirm?: string;

@@ -123,6 +123,45 @@ export function buildSetPasscodeRequest(
   return base;
 }
 
+// ── Company action routing (Phase C) ─────────────────────────────────────
+//
+// The Company modal serves two very different kinds of row:
+//
+//   LEGACY-ONLY row — its key is the passcode hash and no canonical profile
+//     exists. Company selection there is STAGING METADATA: it rides along
+//     into buildSetPasscodeRequest when the secure login is later created.
+//     The pre-existing client RTDB write to drivers/approved is acceptable
+//     for that, because nothing reads it as canonical authority.
+//
+//   CANONICAL row — a secure profile and (if bound) a shift authority exist
+//     under the canonical UUID. Binding one client-side can produce a
+//     profile company with NO authority, which is the exact defect the
+//     governed adminBindDriverCompany callable closes. So canonical rows
+//     route to the callable — and ONLY for initial binding: transfer and
+//     unbind are refused with explicit copy, never silently patched.
+
+export type CompanyActionRoute =
+  /** Canonical row, initial (or idempotent same-target) bind → callable. */
+  | 'governed_bind'
+  /** Canonical row already bound to a DIFFERENT company — not supported here. */
+  | 'blocked_transfer'
+  /** Canonical row, removal requested — no governed unbind exists yet. */
+  | 'blocked_unbind'
+  /** Legacy-only row — staging metadata for the future secure creation. */
+  | 'legacy_staging';
+
+export function companyActionRouteFor(
+  row: DriverRowLike & { companyId?: string },
+  targetCompanyId: string,
+): CompanyActionRoute {
+  if (!hasCanonicalDriverId(row)) return 'legacy_staging';
+  const target = targetCompanyId.trim().toLowerCase();
+  if (!target) return 'blocked_unbind';
+  const bound = (row.companyId || '').trim();
+  if (bound && bound !== target) return 'blocked_transfer';
+  return 'governed_bind';
+}
+
 /** Copy shown before a destructive-by-omission operation. */
 export function confirmationCopyFor(action: CredentialAction): string[] {
   if (action === 'create_secure_login') {
