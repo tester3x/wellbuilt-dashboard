@@ -451,22 +451,28 @@ export function CompanyContractPanel({ companyId }: { companyId: string }) {
                         />
                         enabled for this company
                       </label>
-                      {row.planMandatesShift ? (
-                        // Inherited from the plan and NOT removable here: a
-                        // company may add a restriction, never relax one.
-                        <span className="text-amber-300" title="Set by the plan for every assigned company">
-                          active shift required by plan (inherited)
+                      {/* ALWAYS rendered. An earlier revision replaced this
+                          control with the inherited indicator whenever the
+                          plan mandated a shift, which made the two gates
+                          mutually exclusive on screen even though they
+                          compose with OR. That forced a migration to remove
+                          the plan gate BEFORE the company gate could be set —
+                          the exact window where neither gate applies. The
+                          checkbox reflects the COMPANY flag only; the plan is
+                          reported beside it. */}
+                      <label className={`flex items-center gap-1 ${row.enabled ? 'text-gray-300' : 'text-gray-600'}`}>
+                        <input
+                          type="checkbox"
+                          checked={row.companyRequiresShift}
+                          disabled={!row.enabled || busy}
+                          onChange={(e) => setAppDraft((d) => setCompanyAppRequiresShift(d, row.app, e.target.checked))}
+                        />
+                        require active shift for this company
+                      </label>
+                      {row.planMandatesShift && (
+                        <span className="text-amber-300" title="Set by the plan for every assigned company — a company cannot relax it">
+                          also required by plan (inherited)
                         </span>
-                      ) : (
-                        <label className={`flex items-center gap-1 ${row.enabled ? 'text-gray-300' : 'text-gray-600'}`}>
-                          <input
-                            type="checkbox"
-                            checked={row.companyRequiresShift}
-                            disabled={!row.enabled || busy}
-                            onChange={(e) => setAppDraft((d) => setCompanyAppRequiresShift(d, row.app, e.target.checked))}
-                          />
-                          require active shift for this company
-                        </label>
                       )}
                     </>
                   )}

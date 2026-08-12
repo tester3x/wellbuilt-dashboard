@@ -110,17 +110,68 @@ check('toggling an EXCLUDED app is a no-op — configuration cannot widen', (() 
   const payload = companyAppConfigurationPayload(d);
   return !(T in payload);
 })());
-check('a plan-mandated gate is shown inherited and is NOT removable', (() => {
-  let d = beginConfiguringCompany(draftFromContract(GATED, undefined));
-  const row = d.rows.find((r) => r.app === T);
-  // The company cannot express "not required" — there is no such value.
-  d = setCompanyAppRequiresShift(d, T, false);
-  const payload = companyAppConfigurationPayload(d);
-  const composed = decideAppAccessWithConfiguration(GATED, payload, T, { hasActiveShift: false });
-  return row.planMandatesShift === true
-    && !('requiresActiveShift' in (payload[T] ?? {}))
-    && composed.access === 'shift_required';
-})());
+// ── plan gate and company gate are INDEPENDENTLY representable ────────────
+// An earlier revision hid the company control whenever the plan mandated a
+// shift, which forced a migration to drop the plan gate before the company
+// gate could be set — a window with neither. Both must be expressible at
+// once, even though enforcement is their OR.
+{
+  const rowOf = (d) => d.rows.find((r) => r.app === T);
+
+  // plan true + company ABSENT → unchecked box, inherited indicator shown.
+  const a = beginConfiguringCompany(draftFromContract(GATED, undefined));
+  check('plan true + company absent: company box UNCHECKED, plan indicator shown',
+    rowOf(a).companyRequiresShift === false && rowOf(a).planMandatesShift === true
+    && rowOf(a).configurable === true);
+
+  // plan true + company TRUE → checked box AND inherited indicator.
+  const b = draftFromContract(GATED, { [T]: { requiresActiveShift: true } });
+  check('plan true + company true: company box CHECKED, plan indicator still shown',
+    rowOf(b).companyRequiresShift === true && rowOf(b).planMandatesShift === true);
+
+  // Checking the company box while the plan gate is on emits an explicit
+  // company flag — this is what makes the SAFE migration order possible.
+  let c = beginConfiguringCompany(draftFromContract(GATED, undefined));
+  c = setCompanyAppRequiresShift(c, T, true);
+  const cPayload = companyAppConfigurationPayload(c);
+  check('checking the company box while the plan gate is ON emits the company flag',
+    cPayload[T].requiresActiveShift === true);
+  check('  and the safe migration order now has no ungated window', (() => {
+    // company gate written FIRST, plan gate dropped SECOND: every state gates.
+    const planDropped = plan({ [T]: { included: true }, [M]: { included: true } });
+    return [
+      [GATED, undefined], [GATED, cPayload], [planDropped, cPayload],
+    ].every(([p, cfg]) =>
+      decideAppAccessWithConfiguration(p, cfg, T, { hasActiveShift: false }).access === 'shift_required');
+  })());
+
+  // Unchecking removes ONLY the company restriction; the plan still gates.
+  let e = draftFromContract(GATED, { [T]: { requiresActiveShift: true } });
+  e = setCompanyAppRequiresShift(e, T, false);
+  const ePayload = companyAppConfigurationPayload(e);
+  check('unchecking removes only the COMPANY restriction',
+    !('requiresActiveShift' in (ePayload[T] ?? {})));
+  check('  plan enforcement remains effective after unchecking',
+    decideAppAccessWithConfiguration(GATED, ePayload, T, { hasActiveShift: false }).access === 'shift_required');
+
+  // plan false + company true → checked box, NO inherited indicator.
+  let f = beginConfiguringCompany(draftFromContract(INCLUDED, undefined));
+  f = setCompanyAppRequiresShift(f, T, true);
+  check('plan false + company true: box CHECKED, no plan indicator',
+    rowOf(f).companyRequiresShift === true && rowOf(f).planMandatesShift === false);
+  check('  and only the company gate enforces it',
+    decideAppAccessWithConfiguration(INCLUDED, companyAppConfigurationPayload(f), T, { hasActiveShift: false }).access === 'shift_required'
+    && decideAppAccessWithConfiguration(INCLUDED, undefined, T, { hasActiveShift: false }).access === 'allowed');
+
+  // A company-DISABLED app can never also carry a shift requirement.
+  let g = beginConfiguringCompany(draftFromContract(GATED, undefined));
+  g = setCompanyAppRequiresShift(g, T, true);
+  g = setCompanyAppEnabled(g, T, false);
+  check('a company-disabled app cannot also require a shift',
+    rowOf(g).companyRequiresShift === false
+    && companyAppConfigurationPayload(g)[T].enabled === false
+    && !('requiresActiveShift' in companyAppConfigurationPayload(g)[T]));
+}
 
 // ── absence semantics ─────────────────────────────────────────────────────
 check('a company with no configuration opens as absent',
@@ -259,8 +310,19 @@ check('a valid draft validates locally', validateCompanyDraft(
     !/restore absence|clear app settings|reset to unconfigured/i.test(panel));
   check('the panel shows Suite as core and non-configurable',
     /Always included — core/.test(panel));
-  check('the panel shows an inherited plan gate as non-removable',
-    /required by plan \(inherited\)/.test(panel));
+  check('the panel reports an inherited plan gate ALONGSIDE the company control',
+    /also required by plan \(inherited\)/.test(panel));
+  check('the company checkbox is NOT hidden when the plan mandates a shift', (() => {
+    // The control and the indicator must both be reachable: the indicator
+    // may only be a conditional SIBLING, never the checkbox's alternative.
+    const hasCheckbox = /checked=\{row\.companyRequiresShift\}/.test(panelCode);
+    const indicatorIsSibling = /\{row\.planMandatesShift && \(/.test(panelCode);
+    const oldTernary = /row\.planMandatesShift \?/.test(panelCode);
+    return hasCheckbox && indicatorIsSibling && !oldTernary;
+  })());
+  check('the company checkbox binds ONLY to the company flag',
+    /checked=\{row\.companyRequiresShift\}/.test(panelCode)
+    && !/checked=\{row\.companyRequiresShift \|\| row\.planMandatesShift\}/.test(panelCode));
 
   const plans = readFileSync(join(root, 'src/components/admin/PlansTab.tsx'), 'utf8');
   check('the PLAN editor wording is unmistakably global',
