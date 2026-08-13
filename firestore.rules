@@ -455,6 +455,13 @@ service cloud.firestore {
         && request.resource.data.completionType == 'signed_submission';
     }
 
+    // Governed JSA request/receipt — Admin SDK only. Clients must not
+    // create, mutate, list, or get these records. Legacy jsa_read_receipts
+    // below stay untouched.
+    match /jsa_governed_requests/{requestId} {
+      allow read, write: if false;
+    }
+
     match /jsa_read_receipts/{requestId} {
       allow create: if requestId.matches('^[A-Za-z0-9_-]{43}$')
         && (validJsaReceiptV1(requestId) || validJsaReceiptV2(requestId));
