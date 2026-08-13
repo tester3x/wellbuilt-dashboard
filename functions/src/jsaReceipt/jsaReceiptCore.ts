@@ -203,6 +203,26 @@ export function parseCompleteInput(data: unknown): Decision<{ requestId: string;
   return { ok: true, value: { requestId: o.requestId, action: o.action } };
 }
 
+/**
+ * jsaGetReadRequest input — identical shape to consume ({requestId} and
+ * nothing else) but parsed under its own name so the two operations'
+ * surfaces can tighten independently and tests pin each exactly.
+ */
+export function parseGetContextInput(data: unknown): Decision<{ requestId: string }> {
+  const o = data as Record<string, unknown> | null;
+  if (!o || typeof o !== 'object' || Array.isArray(o)) {
+    return { ok: false, refusal: 'malformed', detail: 'root' };
+  }
+  if (Object.keys(o).some((k) => FORBIDDEN_CLIENT_KEYS.includes(k))) {
+    return { ok: false, refusal: 'client_identity', detail: 'forbidden_field' };
+  }
+  if (!Object.keys(o).every((k) => k === 'requestId')) {
+    return { ok: false, refusal: 'malformed', detail: 'unknown_key' };
+  }
+  if (!isRequestId(o.requestId)) return { ok: false, refusal: 'malformed', detail: 'requestId' };
+  return { ok: true, value: { requestId: o.requestId } };
+}
+
 export function parseConsumeInput(data: unknown): Decision<{ requestId: string }> {
   const o = data as Record<string, unknown> | null;
   if (!o || typeof o !== 'object' || Array.isArray(o)) {
@@ -392,6 +412,88 @@ export function decideComplete(input: {
     completedAtMs: input.nowMs,
   };
   return { ok: true, value: { record, write: 'complete' } };
+}
+
+/**
+ * The MINIMUM authoritative workflow context WB-JSA needs before showing
+ * any Read/Acknowledge UI. Deliberately CARRIES NO BINDING DATA: no
+ * driverId, companyId, periodId, originLocalDate, names, credentials, or
+ * tokens — the caller's session already proved who it is, and the shift
+ * facts live in its own SsoJsaBinding from the exchange. What the client
+ * may NOT invent — the registered intent — is exactly what this returns.
+ */
+export interface RequestContextView {
+  requestId: string;
+  state: 'pending' | 'completed';
+  /** THE workflow selector. Launch hints are never authority; this is. */
+  intent: JsaPolicyIntent;
+  jobRef: string;
+  groupRef: string | null;
+  /** Pending only — UI countdown information, never authority. */
+  expiresAtMs?: number;
+  /** Completed only — supports safe idempotent resume after a crash. */
+  action?: JsaCompletionAction;
+}
+
+/**
+ * Side-effect-free context read for the JSA audience. Never writes;
+ * repeatable across process death/background/resume by construction.
+ *
+ * `binding` is the CURRENT canonically-authored authority binding — the
+ * caller re-runs decideJsaAccess before asking — and it must agree
+ * exactly with the binding frozen at registration: any drift (opened or
+ * closed shift, different period — the June-cache-vs-August case — or a
+ * tightened OR loosened policy flag) refuses rather than letting a
+ * request registered under one authority context be worked under
+ * another. Fail closed; the driver relaunches from WB-T.
+ */
+export function decideGetContext(input: {
+  existing: JsaGovernedRecord | null;
+  requestId: string;
+  principal: AuthPrincipal;
+  binding: JsaAuthorityBinding;
+  nowMs: number;
+}): Decision<RequestContextView> {
+  if (!input.existing) return { ok: false, refusal: 'not_found', detail: 'missing' };
+  if (input.existing.requestId !== input.requestId) {
+    return { ok: false, refusal: 'not_found', detail: 'id' };
+  }
+  if (input.existing.driverId !== input.principal.driverId
+    || input.existing.companyId !== input.principal.companyId) {
+    return { ok: false, refusal: 'binding_mismatch', detail: 'actor' };
+  }
+  if (!bindingsEqual(input.existing.binding, input.binding)) {
+    return { ok: false, refusal: 'binding_mismatch', detail: 'shift' };
+  }
+  const state = liveState(input.existing, input.nowMs);
+  if (state === 'expired') return { ok: false, refusal: 'expired', detail: 'ttl' };
+  if (state === 'completed') {
+    if (!input.existing.action) {
+      return { ok: false, refusal: 'not_found', detail: 'state' };
+    }
+    return {
+      ok: true,
+      value: {
+        requestId: input.existing.requestId,
+        state: 'completed',
+        intent: input.existing.intent,
+        jobRef: input.existing.jobRef,
+        groupRef: input.existing.groupRef,
+        action: input.existing.action,
+      },
+    };
+  }
+  return {
+    ok: true,
+    value: {
+      requestId: input.existing.requestId,
+      state: 'pending',
+      intent: input.existing.intent,
+      jobRef: input.existing.jobRef,
+      groupRef: input.existing.groupRef,
+      expiresAtMs: input.existing.expiresAtMs,
+    },
+  };
 }
 
 export interface ConsumeView {

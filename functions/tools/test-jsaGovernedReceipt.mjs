@@ -430,5 +430,153 @@ for (const [label, world, expectOk] of MATRIX) {
   check('a foreign binding cannot consume', foreign === 'binding_mismatch');
 }
 
+
+// ═════════ jsaGetReadRequest — authoritative workflow context ═════════
+{
+  const { handleGetContext } = await import('../src/jsaReceipt/jsaReceiptHandlers.js');
+  const OPEN_WORLD = () => ({
+    contractState: 'active', contract: CONTRACT_OK({ [APP_JSA_KEY]: { requiresActiveShift: true } }),
+    plan: PLAN(INCLUDED), shift: OPEN_SHIFT, docs: new Map(),
+  });
+  const FREE_WORLD = () => ({
+    contractState: 'active', contract: CONTRACT_OK(), plan: PLAN(INCLUDED),
+    shift: NO_SHIFT, docs: new Map(),
+  });
+
+  // Each of the three intents comes back verbatim as the workflow selector.
+  for (const intent of ['read', 'acknowledge', 'read_and_acknowledge']) {
+    const w = OPEN_WORLD();
+    const reg = await tryRegister(w, intent);
+    const ctx = await handleGetContext(receiptDeps(w), JSA_AUTH, { requestId: reg.rid });
+    check(`get(${intent}): registered intent is the selector`, ctx.intent === intent && ctx.state === 'pending');
+    check(`get(${intent}): bounded jobRef/groupRef returned`, ctx.jobRef === 'job1' && ctx.groupRef === null);
+    check(`get(${intent}): pending carries expiry info only`,
+      typeof ctx.expiresAtMs === 'number' && ctx.action === undefined);
+  }
+
+  // Sensitive-output containment: exact key set, no binding data, no ids in logs.
+  {
+    const w = OPEN_WORLD();
+    const logs = [];
+    const deps = { ...receiptDeps(w), log: (e, x) => logs.push({ e, x }) };
+    const reg = await tryRegister(w, 'read');
+    const ctx = await handleGetContext(deps, JSA_AUTH, { requestId: reg.rid });
+    const keys = Object.keys(ctx).sort();
+    check('get: exact response keys (pending)',
+      JSON.stringify(keys) === JSON.stringify(['expiresAtMs', 'groupRef', 'intent', 'jobRef', 'requestId', 'state']), keys.join(','));
+    const s = JSON.stringify(ctx);
+    check('get: no driverId/companyId/periodId/date/credential in response',
+      !/drv1|co1|2026-08-12|driverId|companyId|periodId|originLocalDate|passcode|token/i.test(s.replace(ctx.requestId, '')));
+    check('get: logs carry no ids', !JSON.stringify(logs).includes(reg.rid) && !/drv1|co1/.test(JSON.stringify(logs)));
+  }
+
+  // Side-effect free + repeatable (process death / repeated reads).
+  {
+    const w = FREE_WORLD();
+    const reg = await tryRegister(w, 'read');
+    const before = JSON.stringify([...w.docs.entries()]);
+    const a = await handleGetContext(receiptDeps(w), JSA_AUTH, { requestId: reg.rid });
+    const b = await handleGetContext(receiptDeps(w), JSA_AUTH, { requestId: reg.rid });
+    const c = await handleGetContext(receiptDeps(w), JSA_AUTH, { requestId: reg.rid });
+    check('get: repeated reads are byte-identical', JSON.stringify(a) === JSON.stringify(b) && JSON.stringify(b) === JSON.stringify(c));
+    check('get: ZERO state mutation across three reads', JSON.stringify([...w.docs.entries()]) === before);
+  }
+
+  // Completed request reads back safely for resume/recovery.
+  {
+    const w = FREE_WORLD();
+    const reg = await tryRegister(w, 'read');
+    await handleComplete(receiptDeps(w), JSA_AUTH, { requestId: reg.rid, action: 'read_completed' });
+    const ctx = await handleGetContext(receiptDeps(w), JSA_AUTH, { requestId: reg.rid });
+    check('get: completed request is readable (resume-safe)',
+      ctx.state === 'completed' && ctx.action === 'read_completed' && ctx.intent === 'read');
+    check('get: completed response has exact keys',
+      JSON.stringify(Object.keys(ctx).sort()) === JSON.stringify(['action', 'groupRef', 'intent', 'jobRef', 'requestId', 'state']));
+    const again = await handleGetContext(receiptDeps(w), JSA_AUTH, { requestId: reg.rid });
+    check('get: completed retrieval is idempotent', JSON.stringify(again) === JSON.stringify(ctx));
+  }
+
+  const refusalOf = async (world, auth, body) => {
+    try { await handleGetContext(receiptDeps(world), auth, body); return null; }
+    catch (e) { return e instanceof JsaReceiptError ? e.refusal : String(e); }
+  };
+
+  // Missing / expired.
+  {
+    const w = FREE_WORLD();
+    check('get: missing request is not_found',
+      await refusalOf(w, JSA_AUTH, { requestId: 'M'.repeat(43) }) === 'not_found');
+    const reg = await tryRegister(w, 'read');
+    const doc = [...w.docs.entries()][0];
+    w.docs.set(doc[0], { ...doc[1], expiresAtMs: NOW - 1 });
+    check('get: expired request refuses', await refusalOf(w, JSA_AUTH, { requestId: reg.rid }) === 'expired');
+  }
+
+  // Foreign driver / company.
+  {
+    const w = FREE_WORLD();
+    const reg = await tryRegister(w, 'read');
+    const foreignDriver = { uid: 'u9', claims: { kind: 'driver', driverId: 'other', companyId: 'co1', app: 'jsa' } };
+    check('get: foreign driver refused',
+      await refusalOf(w, foreignDriver, { requestId: reg.rid }) === 'binding_mismatch');
+    const foreignCompany = { uid: 'u9', claims: { kind: 'driver', driverId: 'drv1', companyId: 'co9', app: 'jsa' } };
+    const r = await refusalOf(w, foreignCompany, { requestId: reg.rid });
+    check('get: foreign company refused', r === 'binding_mismatch' || r === 'jsa_disabled', String(r));
+  }
+
+  // Wrong shift / no-shift mismatch — June cache vs August authority.
+  {
+    const w = OPEN_WORLD();
+    const reg = await tryRegister(w, 'read'); // frozen under the AUGUST open period
+    const june = { ...w, shift: { state: 'open', periodId: '2026-06-24_124631', originLocalDate: '2026-06-24' } };
+    check('get: June authority against an August registration refuses',
+      await refusalOf(june, JSA_AUTH, { requestId: reg.rid }) === 'binding_mismatch');
+    const closed = { ...w, shift: NO_SHIFT };
+    const rc = await refusalOf(closed, JSA_AUTH, { requestId: reg.rid });
+    check('get: shift closed since registration refuses (fail closed)',
+      rc === 'active_shift_required' || rc === 'binding_mismatch', String(rc));
+  }
+  {
+    const w = FREE_WORLD();
+    const reg = await tryRegister(w, 'read'); // frozen with shiftState none
+    const opened = { ...w, shift: OPEN_SHIFT };
+    check('get: shift OPENED since a none registration refuses (no silent rebind)',
+      await refusalOf(opened, JSA_AUTH, { requestId: reg.rid }) === 'binding_mismatch');
+  }
+
+  // Mid-flow tightening and loosening.
+  {
+    const w = FREE_WORLD();
+    const reg = await tryRegister(w, 'read');
+    const tightened = { ...w, contract: CONTRACT_OK({ [APP_JSA_KEY]: { requiresActiveShift: true } }) };
+    const rt = await refusalOf(tightened, JSA_AUTH, { requestId: reg.rid });
+    check('get: tightened policy refuses before any UI',
+      rt === 'active_shift_required' || rt === 'binding_mismatch', String(rt));
+  }
+  {
+    const w = OPEN_WORLD();
+    const reg = await tryRegister(w, 'read');
+    const loosened = { ...w, contract: CONTRACT_OK() }; // gate removed
+    check('get: loosened policy also refuses (binding drift, never downgrade)',
+      await refusalOf(loosened, JSA_AUTH, { requestId: reg.rid }) === 'binding_mismatch');
+  }
+
+  // Launch metadata disagreeing with the server request: get takes NO
+  // job/group/intent inputs at all — the server record is the only truth.
+  {
+    check('get: input surface is requestId only (launch hints cannot enter)',
+      (await refusalOf(FREE_WORLD(), JSA_AUTH, { requestId: 'R'.repeat(43), jobRef: 'spoof' })) === 'malformed');
+    check('get: identity smuggling refused',
+      (await refusalOf(FREE_WORLD(), JSA_AUTH, { requestId: 'R'.repeat(43), driverId: 'x' })) === 'client_identity');
+  }
+
+  // Wrong audience: WB-T cannot use the JSA context read.
+  {
+    const w = FREE_WORLD();
+    const reg = await tryRegister(w, 'read');
+    check('get: WBT audience refused', await refusalOf(w, WBT_AUTH, { requestId: reg.rid }) === 'wrong_audience');
+  }
+}
+
 console.log(`\n${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);
