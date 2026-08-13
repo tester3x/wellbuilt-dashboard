@@ -9,7 +9,11 @@
  */
 import {
   SSO_AUDIENCE_EQUIPMENT,
+  WELLBUILT_APP_JSA,
+  appRequiresActiveShift,
+  configurationRequiresActiveShift,
   isSsoAudience,
+  resolveAppEntitlement,
   resolveWellbuiltAppKey,
   type SsoShiftBinding,
   SSO_CODE_BYTES,
@@ -26,6 +30,7 @@ import {
 } from './ssoDeps.js';
 import { decideEquipmentAuthorization, shiftOriginDay } from './equipmentAuthorization.js';
 import { decideAppEntitlementAuthorization } from './appEntitlementAuthorization.js';
+import { decideJsaBinding, type JsaBindingShape } from './jsaAuthorization.js';
 import { decideResolve } from '../security/operational/shiftAuthority.js';
 
 /** Fields a client may never dictate. Presence is a protocol violation. */
@@ -158,6 +163,7 @@ export async function handleSsoIssueCode(
   //     Every input is a server record. The audience is mapped to its
   //     canonical app key by the contract itself, so no second naming
   //     table exists and an alias or unknown identity can never resolve.
+  let storedJsaBinding: JsaBindingShape | undefined;
   {
     const app = resolveWellbuiltAppKey(req.audience);
     const contractState = await deps.getCompanyContract(driver.companyId);
@@ -173,8 +179,10 @@ export async function handleSsoIssueCode(
     // Two-phase: the authority read happens ONLY when the canonical
     // decision says a shift is required, so the plan — not this handler —
     // decides whether the extra read is owed.
-    let decision = decideAppEntitlementAuthorization({ ...authzInput, shift: null });
-    if (!decision.ok && decision.refusal === 'active_shift_required') {
+    let shift = null as ReturnType<typeof decideResolve> | null;
+    let decision = decideAppEntitlementAuthorization({ ...authzInput, shift });
+    const isJsa = app === WELLBUILT_APP_JSA;
+    if (isJsa || (!decision.ok && decision.refusal === 'active_shift_required')) {
       // The authoritative, date-free shift record. It is bound to BOTH the
       // driver and the selected company, so a shift belonging to another
       // membership cannot satisfy this gate, and a closed, superseded,
@@ -182,7 +190,7 @@ export async function handleSsoIssueCode(
       // 'open' rather than being guessed at. Nothing here reads a
       // timestamp, a cached client value, or a request field.
       const record = await deps.getShiftAuthority(driver.driverId);
-      const shift = decideResolve(record, {
+      shift = decideResolve(record, {
         driverId: driver.driverId,
         companyId: driver.companyId,
       });
@@ -199,6 +207,30 @@ export async function handleSsoIssueCode(
         detail: decision.detail,
       });
       throw new SsoError('permission-denied', 'not_authorized', decision.refusal);
+    }
+
+    if (isJsa) {
+      if (!shift || !contractState.contract || !plan) {
+        throw new SsoError('permission-denied', 'not_authorized', 'jsa_authority_missing');
+      }
+      const requiresActiveShift =
+        appRequiresActiveShift(resolveAppEntitlement(plan, WELLBUILT_APP_JSA))
+        || configurationRequiresActiveShift(
+          contractState.contract.appConfiguration,
+          WELLBUILT_APP_JSA,
+        );
+      const jsaEnabled = Array.isArray((plan as { capabilities?: unknown[] }).capabilities)
+        && ((plan as { capabilities?: unknown[] }).capabilities as unknown[]).includes('jsa');
+      const jsaDecision = decideJsaBinding({ shift, requiresActiveShift, jsaEnabled });
+      if (!jsaDecision.ok) {
+        deps.log('sso.code.refused', {
+          audience: req.audience,
+          reason: jsaDecision.refusal,
+          detail: jsaDecision.detail,
+        });
+        throw new SsoError('permission-denied', 'not_authorized', jsaDecision.refusal);
+      }
+      storedJsaBinding = jsaDecision.binding;
     }
   }
 
@@ -228,6 +260,7 @@ export async function handleSsoIssueCode(
       expiresAt: deps.expiresAtTimestamp(expiresAtMs),
       consumed: false,
       ...(storedBinding ? { shiftBinding: storedBinding } : {}),
+      ...(storedJsaBinding ? { jsaBinding: storedJsaBinding } : {}),
     });
   });
 
