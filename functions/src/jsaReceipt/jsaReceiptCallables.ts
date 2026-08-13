@@ -7,6 +7,7 @@ import { randomBytes } from 'crypto';
 import { checkRateLimit } from '../security/rateLimit';
 import { decideResolve } from '../security/operational/shiftAuthority.js';
 import { shiftAuthorityPath, type ShiftAuthorityRecord } from '../security/operational/shiftAuthority.js';
+import { buildSsoDeps } from '../sso/ssoCallables.js';
 import {
   JsaReceiptError,
   handleComplete,
@@ -15,7 +16,6 @@ import {
   type ReceiptDeps,
   type ReceiptTxn,
 } from './jsaReceiptHandlers.js';
-import type { JsaCompanyPolicy } from './jsaReceiptCore.js';
 
 const OPTIONS = {
   timeoutSeconds: 30,
@@ -39,35 +39,32 @@ function authOf(request: httpsV2.CallableRequest) {
 
 export function buildReceiptDeps(): ReceiptDeps {
   const db = admin.firestore();
+  // CANONICAL POLICY READERS — the very same functions SSO issuance uses,
+  // taken from its production deps builder rather than re-implemented, so
+  // registration and issuance literally share one contract parser and one
+  // plan reader and cannot drift.
+  const sso = buildSsoDeps();
   return {
     nowMs: () => Date.now(),
     randomBytes: (n) => new Uint8Array(randomBytes(n)),
     base64Url: (b) => Buffer.from(b).toString('base64url'),
-    async getJsaPolicy(companyId): Promise<JsaCompanyPolicy> {
-      // Authoritative-enough company flags without inventing plan math.
-      // requiresActiveShift defaults true unless the company document
-      // explicitly stores a free/owner-operator posture. jsaEnabled is
-      // true unless jsaMode === 'off'.
+    getCompanyContract: (companyId) => sso.getCompanyContract(companyId),
+    getPlan: (planId) => sso.getPlan(planId),
+    async getJsaStylePolicy(companyId) {
+      // Completion-STYLE only (never entitlement): which completion
+      // interactions the company's JSA workflow offers. Fail closed to
+      // the strictest style — read required, no bare acknowledgment.
       try {
         const snap = await db.collection('companies').doc(companyId).get();
         const d = snap.data() || {};
-        const mode = typeof d.jsaMode === 'string' ? d.jsaMode : 'per_job';
         const jobPolicy = typeof d.jsaJobPolicy === 'string' ? d.jsaJobPolicy : 'read_and_acknowledge';
         const allowAck = d.jsaAllowAcknowledge === true || jobPolicy === 'acknowledge' || jobPolicy === 'read_and_acknowledge';
-        const freePlan = d.planId === 'free' || d.tier === 'free' || d.ownerOperator === true;
         return {
-          jsaEnabled: mode !== 'off',
-          requiresActiveShift: !freePlan,
           allowRead: jobPolicy !== 'acknowledge',
           allowAcknowledge: allowAck,
         };
       } catch {
-        return {
-          jsaEnabled: true,
-          requiresActiveShift: true,
-          allowRead: true,
-          allowAcknowledge: false,
-        };
+        return { allowRead: true, allowAcknowledge: false };
       }
     },
     async resolveShift(driverId, companyId) {

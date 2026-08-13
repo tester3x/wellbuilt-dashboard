@@ -10,10 +10,7 @@
 import {
   SSO_AUDIENCE_EQUIPMENT,
   WELLBUILT_APP_JSA,
-  appRequiresActiveShift,
-  configurationRequiresActiveShift,
   isSsoAudience,
-  resolveAppEntitlement,
   resolveWellbuiltAppKey,
   type SsoShiftBinding,
   SSO_CODE_BYTES,
@@ -29,7 +26,7 @@ import {
   type SsoDeps,
 } from './ssoDeps.js';
 import { decideEquipmentAuthorization, shiftOriginDay } from './equipmentAuthorization.js';
-import { decideJsaBinding, type JsaBindingShape } from './jsaAuthorization.js';
+import { decideJsaAccess, type JsaBindingShape } from './jsaAuthorization.js';
 import { decideResolve } from '../security/operational/shiftAuthority.js';
 
 /** Fields a client may never dictate. Presence is a protocol violation. */
@@ -178,32 +175,26 @@ export async function handleSsoIssueCode(
       // Proven equal to driver.companyId at step 5.
       companyId: claimCompanyId,
     });
-    if (!contractState.contract || !plan) {
+    // ONE canonical decision (decideJsaAccess), shared byte-for-byte with
+    // the governed request registration/completion handlers so issuance
+    // and registration cannot drift: entitlement + configuration
+    // composition, effective policy flags, and the authority binding this
+    // code will carry.
+    const access = decideJsaAccess({
+      contractState: contractState.state,
+      contract: contractState.contract,
+      plan,
+      shift,
+    });
+    if (!access.ok) {
       deps.log('sso.code.refused', {
         audience: req.audience,
-        reason: 'contract_missing',
-        detail: contractState.state,
+        reason: access.refusal,
+        detail: access.detail,
       });
-      throw new SsoError('permission-denied', 'not_authorized', 'contract_missing');
+      throw new SsoError('permission-denied', 'not_authorized', access.refusal);
     }
-    const requiresActiveShift =
-      appRequiresActiveShift(resolveAppEntitlement(plan, WELLBUILT_APP_JSA))
-      || configurationRequiresActiveShift(
-        contractState.contract.appConfiguration,
-        WELLBUILT_APP_JSA,
-      );
-    const jsaEnabled = Array.isArray((plan as { capabilities?: unknown[] }).capabilities)
-      && ((plan as { capabilities?: unknown[] }).capabilities as unknown[]).includes('jsa');
-    const jsaDecision = decideJsaBinding({ shift, requiresActiveShift, jsaEnabled });
-    if (!jsaDecision.ok) {
-      deps.log('sso.code.refused', {
-        audience: req.audience,
-        reason: jsaDecision.refusal,
-        detail: jsaDecision.detail,
-      });
-      throw new SsoError('permission-denied', 'not_authorized', jsaDecision.refusal);
-    }
-    storedJsaBinding = jsaDecision.binding;
+    storedJsaBinding = access.binding;
   }
 
   // 6. Server-generated code and timestamps. The client contributes

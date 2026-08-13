@@ -1,8 +1,19 @@
 /**
  * Register / complete / consume handlers. Identity from Auth + authority
  * records. Storage via injected transaction.
+ *
+ * POLICY HAS ONE SOURCE. Registration and completion decide JSA access
+ * through decideJsaAccess — the SAME canonical function the SSO issuance
+ * handler uses — over the SAME authoritative inputs (contract state,
+ * commercial plan inclusion, company app configuration, shift
+ * authority). The older company-doc-only policy interpretation is gone
+ * from the entitlement dimensions; the company doc contributes ONLY the
+ * completion-style policy (allowRead/allowAcknowledge), which is
+ * operational UI policy, not entitlement.
  */
-import { decideJsaBinding, type JsaBindingShape } from '../sso/jsaAuthorization.js';
+import type { PlanDefinition } from '@tester3x/wellbuilt-contracts';
+import { decideJsaAccess } from '../sso/jsaAuthorization.js';
+import type { WellbuiltContract, CompanyContractState } from '../admin/companyContract.js';
 import type { ResolveResult } from '../security/operational/shiftAuthority.js';
 import {
   decideComplete,
@@ -26,14 +37,21 @@ import {
   type ReceiptRefusal,
 } from './jsaReceiptCore.js';
 
+export type JsaReceiptHttp =
+  | 'unauthenticated' | 'permission-denied' | 'invalid-argument'
+  | 'failed-precondition' | 'already-exists';
+
+// Erasable-syntax only (no constructor parameter properties) so the
+// harness can execute this module under node --experimental-strip-types.
 export class JsaReceiptError extends Error {
-  constructor(
-    public readonly http: 'unauthenticated' | 'permission-denied' | 'invalid-argument' | 'failed-precondition' | 'already-exists',
-    public readonly refusal: ReceiptRefusal,
-    detail: string,
-  ) {
+  readonly http: JsaReceiptHttp;
+  readonly refusal: ReceiptRefusal;
+
+  constructor(http: JsaReceiptHttp, refusal: ReceiptRefusal, detail: string) {
     super(detail);
     this.name = 'JsaReceiptError';
+    this.http = http;
+    this.refusal = refusal;
   }
 }
 
@@ -47,7 +65,23 @@ export interface ReceiptDeps {
   nowMs(): number;
   randomBytes(n: number): Uint8Array;
   base64Url(bytes: Uint8Array): string;
-  getJsaPolicy(companyId: string): Promise<JsaCompanyPolicy>;
+  /** SAME reader the SSO issuance deps use — canonical contract parsing. */
+  getCompanyContract(companyId: string): Promise<{
+    state: CompanyContractState['state'];
+    contract: WellbuiltContract | null;
+  }>;
+  /** SAME reader the SSO issuance deps use. */
+  getPlan(planId: string): Promise<PlanDefinition | null>;
+  /**
+   * Completion-STYLE policy only (which completion interactions the
+   * company's JSA workflow offers). Deliberately NOT entitlement: it can
+   * narrow the intent surface but can never enable JSA, waive a shift
+   * gate, or otherwise widen what decideJsaAccess decided.
+   */
+  getJsaStylePolicy(companyId: string): Promise<{
+    allowRead: boolean;
+    allowAcknowledge: boolean;
+  }>;
   resolveShift(driverId: string, companyId: string): Promise<ResolveResult>;
   runTransaction<T>(fn: (txn: ReceiptTxn) => Promise<T>): Promise<T>;
   log(event: string, extra: Record<string, string>): void;
@@ -92,21 +126,38 @@ async function authorBinding(
   deps: ReceiptDeps,
   p: AuthPrincipal,
 ): Promise<{ binding: JsaAuthorityBinding; policy: JsaCompanyPolicy }> {
-  const policy = await deps.getJsaPolicy(p.companyId);
+  // THE canonical decision — identical inputs and identical function to
+  // SSO issuance, so registration and issuance agree byte-for-byte.
+  const contractState = await deps.getCompanyContract(p.companyId);
+  const plan = contractState.contract
+    ? await deps.getPlan(contractState.contract.planId)
+    : null;
   const shift = await deps.resolveShift(p.driverId, p.companyId);
-  const decided = decideJsaBinding({
+  const access = decideJsaAccess({
+    contractState: contractState.state,
+    contract: contractState.contract,
+    plan,
     shift,
-    requiresActiveShift: policy.requiresActiveShift,
-    jsaEnabled: policy.jsaEnabled,
   });
-  if (!decided.ok) {
-    throw new JsaReceiptError(
-      'permission-denied',
-      decided.refusal === 'active_shift_required' ? 'active_shift_required' : 'authority_unverifiable',
-      decided.detail,
-    );
+  if (!access.ok) {
+    // Bounded mapping; the precise canonical reason stays in `detail` for
+    // the operator log, the client sees the coarse refusal class.
+    const refusal =
+      access.refusal === 'active_shift_required' ? 'active_shift_required'
+        : access.refusal === 'authority_unverifiable' ? 'authority_unverifiable'
+          : 'jsa_disabled';
+    throw new JsaReceiptError('permission-denied', refusal, access.detail);
   }
-  return { binding: decided.binding as JsaBindingShape, policy };
+  const style = await deps.getJsaStylePolicy(p.companyId);
+  return {
+    binding: access.binding,
+    policy: {
+      jsaEnabled: access.jsaEnabled,
+      requiresActiveShift: access.requiresActiveShift,
+      allowRead: style.allowRead,
+      allowAcknowledge: style.allowAcknowledge,
+    },
+  };
 }
 
 export async function handleRegister(
