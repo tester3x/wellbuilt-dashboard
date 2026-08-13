@@ -10,10 +10,7 @@
 import {
   SSO_AUDIENCE_EQUIPMENT,
   WELLBUILT_APP_JSA,
-  appRequiresActiveShift,
-  configurationRequiresActiveShift,
   isSsoAudience,
-  resolveAppEntitlement,
   resolveWellbuiltAppKey,
   type SsoShiftBinding,
   SSO_CODE_BYTES,
@@ -30,8 +27,8 @@ import {
 } from './ssoDeps.js';
 import { decideEquipmentAuthorization, shiftOriginDay } from './equipmentAuthorization.js';
 import { decideAppEntitlementAuthorization } from './appEntitlementAuthorization.js';
-import { decideJsaBinding, type JsaBindingShape } from './jsaAuthorization.js';
-import { decideResolve } from '../security/operational/shiftAuthority.js';
+import { decideJsaAccess, type JsaBindingShape } from './jsaAuthorization.js';
+import { decideResolve, type ResolveResult } from '../security/operational/shiftAuthority.js';
 
 /** Fields a client may never dictate. Presence is a protocol violation. */
 const CLIENT_FORBIDDEN_IDENTITY_FIELDS = ['uid', 'driverId', 'companyId', 'driverHash', 'passcode'];
@@ -197,53 +194,52 @@ export async function handleSsoIssueCode(
         companyId: claimCompanyId,
       });
     };
-    // Two-phase for every other audience: the authority read happens ONLY
-    // when the canonical decision says a shift is required, so the plan —
-    // not this handler — decides whether the extra read is owed.
-    let shift = isJsaAudience ? await readShift() : null;
-    let decision = decideAppEntitlementAuthorization({ ...authzInput, shift });
-    if (!decision.ok && decision.refusal === 'active_shift_required' && shift === null) {
-      shift = await readShift();
-      decision = decideAppEntitlementAuthorization({ ...authzInput, shift });
-    }
-    if (!decision.ok) {
-      // Coarse to the client, precise to the operator — the same shape the
-      // equipment refusal uses. `refusal` separates commercial exclusion
-      // from an unmet shift gate for whoever reads the logs; the client is
-      // told only 'not_authorized', so it cannot probe a company's plan.
-      deps.log('sso.code.refused', {
-        audience: req.audience,
-        reason: decision.refusal,
-        detail: decision.detail,
+    if (isJsaAudience) {
+      // 5c+5d for JSA — ONE canonical decision (decideJsaAccess), shared
+      // byte-for-byte with the governed request registration/completion
+      // handlers so issuance and registration cannot drift: entitlement +
+      // configuration composition, effective policy flags, and the
+      // authority binding this code will carry, all decided BEFORE
+      // anything is minted.
+      const shift = await readShift();
+      const access = decideJsaAccess({
+        contractState: contractState.state,
+        contract: contractState.contract,
+        plan,
+        shift,
       });
-      throw new SsoError('permission-denied', 'not_authorized', decision.refusal);
-    }
-
-    // 5d. JSA ONLY — author the authority binding this code will carry.
-    //     Decided AFTER access is granted and BEFORE anything is minted,
-    //     from the same server records the entitlement decision used. The
-    //     policy flags are re-derived from the canonical helpers so the
-    //     binding states what the effective plan + configuration actually
-    //     require, independent of which gate happened to fire.
-    if (isJsaAudience && contractState.contract && plan && shift) {
-      const requiresActiveShift =
-        appRequiresActiveShift(resolveAppEntitlement(plan, WELLBUILT_APP_JSA))
-        || configurationRequiresActiveShift(
-          contractState.contract.appConfiguration,
-          WELLBUILT_APP_JSA,
-        );
-      const jsaEnabled = Array.isArray((plan as { capabilities?: unknown[] }).capabilities)
-        && ((plan as { capabilities?: unknown[] }).capabilities as unknown[]).includes('jsa');
-      const jsaDecision = decideJsaBinding({ shift, requiresActiveShift, jsaEnabled });
-      if (!jsaDecision.ok) {
+      if (!access.ok) {
         deps.log('sso.code.refused', {
           audience: req.audience,
-          reason: jsaDecision.refusal,
-          detail: jsaDecision.detail,
+          reason: access.refusal,
+          detail: access.detail,
         });
-        throw new SsoError('permission-denied', 'not_authorized', jsaDecision.refusal);
+        throw new SsoError('permission-denied', 'not_authorized', access.refusal);
       }
-      storedJsaBinding = jsaDecision.binding;
+      storedJsaBinding = access.binding;
+    } else {
+      // Two-phase for every other audience: the authority read happens
+      // ONLY when the canonical decision says a shift is required, so the
+      // plan — not this handler — decides whether the extra read is owed.
+      let shift: ResolveResult | null = null;
+      let decision = decideAppEntitlementAuthorization({ ...authzInput, shift });
+      if (!decision.ok && decision.refusal === 'active_shift_required') {
+        shift = await readShift();
+        decision = decideAppEntitlementAuthorization({ ...authzInput, shift });
+      }
+      if (!decision.ok) {
+        // Coarse to the client, precise to the operator — the same shape
+        // the equipment refusal uses. `refusal` separates commercial
+        // exclusion from an unmet shift gate for whoever reads the logs;
+        // the client is told only 'not_authorized', so it cannot probe a
+        // company's plan.
+        deps.log('sso.code.refused', {
+          audience: req.audience,
+          reason: decision.refusal,
+          detail: decision.detail,
+        });
+        throw new SsoError('permission-denied', 'not_authorized', decision.refusal);
+      }
     }
   }
 

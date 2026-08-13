@@ -28,6 +28,18 @@
  * the pinned 0.4.0 mirror; the conformance harness ties the two together
  * at the 0.5.0 publish step.
  */
+import {
+  WELLBUILT_APP_JSA,
+  appRequiresActiveShift,
+  configurationRequiresActiveShift,
+  resolveAppEntitlement,
+  type PlanDefinition,
+} from '@tester3x/wellbuilt-contracts';
+import {
+  decideAppEntitlementAuthorization,
+  type AppAuthzRefusal,
+} from './appEntitlementAuthorization.js';
+import type { WellbuiltContract } from '../admin/companyContract.js';
 import type { ResolveResult } from '../security/operational/shiftAuthority.js';
 
 /** Structural mirror of contracts SsoJsaBinding (0.5.0-dev). */
@@ -102,6 +114,67 @@ export function decideJsaBinding(input: {
     refusal: 'authority_unverifiable',
     detail: `authority_${shift.reason}`,
   };
+}
+
+// ── THE canonical JSA access decision ────────────────────────────────────
+//
+// ONE function decides whether JSA may proceed for a driver right now and
+// what binding that session carries — used by BOTH the SSO issuance
+// handler and the governed request-registration/completion handlers, so
+// the two surfaces CANNOT drift for identical inputs:
+//
+//   1. commercial entitlement + company configuration + Suite-core rules,
+//      via the same decideAppEntitlementAuthorization seam issuance
+//      always used (contract state, plan inclusion, company disable,
+//      shift gating, legacy-compatible configurations, fail-closed
+//      malformed data);
+//   2. effective policy flags re-derived from the canonical contracts
+//      helpers (plan-level legacy flag OR company configuration; plan
+//      'jsa' capability);
+//   3. the authority binding via decideJsaBinding (open binds the exact
+//      period; none only when no gate requires a shift; unverifiable
+//      always refused).
+
+export type JsaAccessRefusal = AppAuthzRefusal | JsaBindingRefusal;
+
+export type JsaAccessDecision =
+  | {
+      ok: true;
+      binding: JsaBindingShape;
+      requiresActiveShift: boolean;
+      jsaEnabled: boolean;
+    }
+  | { ok: false; refusal: JsaAccessRefusal; detail: string };
+
+export function decideJsaAccess(input: {
+  contractState: 'legacy' | 'inert' | 'active' | 'invalid';
+  contract: WellbuiltContract | null;
+  plan: PlanDefinition | null;
+  /** ALWAYS the authoritative resolver verdict — never null for JSA. */
+  shift: ResolveResult;
+}): JsaAccessDecision {
+  const entitled = decideAppEntitlementAuthorization({
+    app: WELLBUILT_APP_JSA,
+    contractState: input.contractState,
+    contract: input.contract,
+    plan: input.plan,
+    shift: input.shift,
+  });
+  if (!entitled.ok) {
+    return { ok: false, refusal: entitled.refusal, detail: entitled.detail };
+  }
+  // Entitlement passed, so contract and plan are present objects here —
+  // decideAppEntitlementAuthorization refuses every absent/invalid shape.
+  const contract = input.contract as WellbuiltContract;
+  const plan = input.plan as PlanDefinition;
+  const requiresActiveShift =
+    appRequiresActiveShift(resolveAppEntitlement(plan, WELLBUILT_APP_JSA))
+    || configurationRequiresActiveShift(contract.appConfiguration, WELLBUILT_APP_JSA);
+  const jsaEnabled = Array.isArray((plan as { capabilities?: unknown[] }).capabilities)
+    && ((plan as { capabilities?: unknown[] }).capabilities as unknown[]).includes('jsa');
+  const bound = decideJsaBinding({ shift: input.shift, requiresActiveShift, jsaEnabled });
+  if (!bound.ok) return bound;
+  return { ok: true, binding: bound.binding, requiresActiveShift, jsaEnabled };
 }
 
 /**
