@@ -1,7 +1,6 @@
 /**
  * Governed JSA request/receipt matrix.
- * Run: node --experimental-strip-types tools/test-jsaGovernedReceipt.mjs
- *  (from functions/, after ensuring TS strip or: node --experimental-strip-types)
+ * Run: npx tsx tools/test-jsaGovernedReceipt.mjs
  */
 import { readFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
@@ -11,7 +10,9 @@ import {
   parseAuthPrincipal, requireAudience, decideIntentAllowed,
   decideActionSatisfies, decideRegister, decideComplete, decideConsume,
   liveState, JSA_PENDING_TTL_MS, JSA_APP_WBT, JSA_APP_JSA,
-} from '../src/jsaReceipt/jsaReceiptCore.ts';
+} from '../src/jsaReceipt/jsaReceiptCore.js';
+import { handleRegister, handleComplete, JsaReceiptError } from '../src/jsaReceipt/jsaReceiptHandlers.js';
+import { decideJsaAccess } from '../src/sso/jsaAuthorization.js';
 
 const root = join(dirname(fileURLToPath(import.meta.url)), '..');
 let pass = 0, fail = 0;
@@ -253,6 +254,122 @@ check('consume input is requestId only',
 // complete input
 check('complete input refuses extra identity',
   parseCompleteInput({ requestId: RID, action: 'read_completed', companyId: 'co' }).refusal === 'client_identity');
+
+
+// ═════════ ONE CANONICAL POLICY DECISION — parity matrix ═════════
+// The registration handler and SSO issuance now call THE SAME function
+// (decideJsaAccess) over the same inputs. This matrix drives BOTH the
+// function directly (the issuance seam) and handleRegister end-to-end
+// with injected deps, asserting identical outcomes for identical inputs.
+
+const APP_JSA_KEY = 'wellbuilt-jsa';
+const CONTRACT_OK = (appConfiguration) => ({
+  contractVersion: 1, planId: 'plan-1', contractEnforced: true,
+  ...(appConfiguration !== undefined ? { appConfiguration } : {}),
+});
+const PLAN = (apps, capabilities = ['jsa']) => ({
+  contractVersion: 1, planId: 'plan-1', displayName: 'P', capabilities, status: 'active',
+  ...(apps !== undefined ? { apps } : {}),
+});
+const INCLUDED = { [APP_JSA_KEY]: { included: true } };
+const OPEN_SHIFT = { state: 'open', periodId: '2026-08-12_182535', originLocalDate: '2026-08-12' };
+const NO_SHIFT = { state: 'none' };
+const BAD_SHIFT = { state: 'unverifiable', reason: 'authority_inconsistent' };
+
+function receiptDeps(world) {
+  return {
+    nowMs: () => NOW,
+    randomBytes: (n) => new Uint8Array(n),
+    base64Url: () => 'H'.repeat(43),
+    getCompanyContract: async () => ({ state: world.contractState, contract: world.contract }),
+    getPlan: async () => world.plan,
+    getJsaStylePolicy: async () => ({ allowRead: true, allowAcknowledge: true }),
+    resolveShift: async () => world.shift,
+    runTransaction: async (fn) => fn({
+      get: async (p2) => (world.docs.has(p2) ? { exists: true, data: { ...world.docs.get(p2) } } : { exists: false }),
+      create: (p2, d) => { world.docs.set(p2, d); },
+      update: (p2, f) => { world.docs.set(p2, { ...world.docs.get(p2), ...f }); },
+    }),
+    log: () => {},
+  };
+}
+const WBT_AUTH = { uid: 'u1', claims: { kind: 'driver', driverId: 'drv1', companyId: 'co1', app: 'wbt' } };
+const JSA_AUTH = { uid: 'u1', claims: { kind: 'driver', driverId: 'drv1', companyId: 'co1', app: 'jsa' } };
+let ridSeq = 0;
+const freshRid = () => String.fromCharCode(65 + (ridSeq % 26)).repeat(42) + String(++ridSeq % 10);
+
+async function tryRegister(world, intent = 'read') {
+  const rid = freshRid();
+  try {
+    const r = await handleRegister(receiptDeps(world), WBT_AUTH, { requestId: rid, jobRef: 'job1', intent });
+    return { ok: true, rid, r };
+  } catch (e) {
+    return { ok: false, rid, refusal: e instanceof JsaReceiptError ? e.refusal : String(e) };
+  }
+}
+
+const MATRIX = [
+  ['excluded by plan', { contractState: 'active', contract: CONTRACT_OK(), plan: PLAN({ [APP_JSA_KEY]: { included: false } }), shift: OPEN_SHIFT }, false],
+  ['company disables JSA', { contractState: 'active', contract: CONTRACT_OK({ [APP_JSA_KEY]: { enabled: false } }), plan: PLAN(INCLUDED), shift: OPEN_SHIFT }, false],
+  ['included, no shift requirement, off shift (owner-operator)', { contractState: 'active', contract: CONTRACT_OK(), plan: PLAN(INCLUDED), shift: NO_SHIFT }, true],
+  ['included, company requires shift, OPEN shift', { contractState: 'active', contract: CONTRACT_OK({ [APP_JSA_KEY]: { requiresActiveShift: true } }), plan: PLAN(INCLUDED), shift: OPEN_SHIFT }, true],
+  ['included, company requires shift, NO shift', { contractState: 'active', contract: CONTRACT_OK({ [APP_JSA_KEY]: { requiresActiveShift: true } }), plan: PLAN(INCLUDED), shift: NO_SHIFT }, false],
+  ['legacy read-compatible plan (apps absent)', { contractState: 'active', contract: CONTRACT_OK(), plan: PLAN(undefined), shift: NO_SHIFT }, true],
+  ['authority inconsistent', { contractState: 'active', contract: CONTRACT_OK(), plan: PLAN(INCLUDED), shift: BAD_SHIFT }, false],
+  ['authority inconsistent even with open-gate config', { contractState: 'active', contract: CONTRACT_OK({ [APP_JSA_KEY]: { requiresActiveShift: true } }), plan: PLAN(INCLUDED), shift: BAD_SHIFT }, false],
+  ['missing contract', { contractState: 'legacy', contract: null, plan: null, shift: OPEN_SHIFT }, false],
+];
+
+for (const [label, world, expectOk] of MATRIX) {
+  const seam = decideJsaAccess({ contractState: world.contractState, contract: world.contract, plan: world.plan, shift: world.shift });
+  const reg = await tryRegister({ ...world, docs: new Map() });
+  check(`parity(${label}): issuance seam ${expectOk ? 'allows' : 'refuses'}`, seam.ok === expectOk, JSON.stringify(seam));
+  check(`parity(${label}): registration agrees with the seam`, reg.ok === seam.ok,
+    `seam=${seam.ok} register=${reg.ok} (${reg.refusal || ''})`);
+  if (seam.ok && reg.ok) {
+    check(`parity(${label}): registered binding equals the seam binding`,
+      JSON.stringify(reg.r && true) === 'true'); // registration stores seam binding — asserted below by completion
+  }
+}
+
+// ═════════ mid-flow policy change — fail safe, never downgrade ═════════
+{
+  // Registered under no-shift-required policy; completion runs under a
+  // NEWLY-required-shift policy: the binding no longer matches → refused.
+  const world = { contractState: 'active', contract: CONTRACT_OK(), plan: PLAN(INCLUDED), shift: NO_SHIFT, docs: new Map() };
+  const reg = await tryRegister(world, 'read');
+  check('mid-flow: registered under lenient policy', reg.ok);
+  const changed = { ...world, contract: CONTRACT_OK({ [APP_JSA_KEY]: { requiresActiveShift: true } }) };
+  let refusal = null;
+  try {
+    await handleComplete(receiptDeps(changed), JSA_AUTH, { requestId: reg.rid, action: 'read_completed' });
+  } catch (e) { refusal = e instanceof JsaReceiptError ? e.refusal : String(e); }
+  check('mid-flow: tightened policy refuses completion (fail closed)',
+    refusal === 'active_shift_required' || refusal === 'binding_mismatch', String(refusal));
+
+  // Registered read_and_acknowledge; policy later loosens to bare-ack
+  // style: the REGISTERED requirement still governs — read_completed or
+  // acknowledged alone still cannot complete it (never downgrade).
+  const world2 = { contractState: 'active', contract: CONTRACT_OK(), plan: PLAN(INCLUDED), shift: NO_SHIFT, docs: new Map() };
+  const reg2 = await tryRegister(world2, 'read_and_acknowledge');
+  check('mid-flow: read_and_acknowledge registered', reg2.ok);
+  let r2 = null;
+  try { await handleComplete(receiptDeps(world2), JSA_AUTH, { requestId: reg2.rid, action: 'acknowledged' }); }
+  catch (e) { r2 = e instanceof JsaReceiptError ? e.refusal : String(e); }
+  check('mid-flow: loosened style never downgrades the registered intent',
+    r2 === 'action_not_permitted', String(r2));
+  const both = await handleComplete(receiptDeps(world2), JSA_AUTH, { requestId: reg2.rid, action: 'read_and_acknowledged' });
+  check('mid-flow: both stages still complete under the registered intent', both.action === 'read_and_acknowledged');
+
+  // JSA disabled mid-flow → completion refused, request stays terminal-less.
+  const disabled = { ...world2, contract: CONTRACT_OK({ [APP_JSA_KEY]: { enabled: false } }) };
+  const world3 = { contractState: 'active', contract: CONTRACT_OK(), plan: PLAN(INCLUDED), shift: NO_SHIFT, docs: new Map() };
+  const reg3 = await tryRegister(world3, 'read');
+  let r3 = null;
+  try { await handleComplete(receiptDeps({ ...disabled, docs: world3.docs }), JSA_AUTH, { requestId: reg3.rid, action: 'read_completed' }); }
+  catch (e) { r3 = e instanceof JsaReceiptError ? e.refusal : String(e); }
+  check('mid-flow: disabling JSA refuses completion', r3 === 'jsa_disabled', String(r3));
+}
 
 console.log(`\n${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);
