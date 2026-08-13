@@ -52,6 +52,19 @@ export interface SsoCodeRecord {
    * issuance. Exchange echoes this and never anything the redeemer sends.
    */
   shiftBinding?: { shiftId: string; phase: 'pre_trip' | 'post_trip' };
+  /**
+   * JSA audience only: the SERVER-AUTHORED authority binding decided at
+   * issuance (see sso/jsaAuthorization.ts). Exchange echoes the stored,
+   * revalidated value and never anything the redeemer sends. Inert until
+   * the contracts 0.5.0 audience allowlist admits 'wellbuilt-jsa'.
+   */
+  jsaBinding?: {
+    shiftState: 'open' | 'none';
+    periodId?: string;
+    originLocalDate?: string;
+    requiresActiveShift: boolean;
+    jsaEnabled: boolean;
+  };
 }
 
 export interface SsoTransaction {

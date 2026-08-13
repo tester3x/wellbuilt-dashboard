@@ -9,7 +9,11 @@
  */
 import {
   SSO_AUDIENCE_EQUIPMENT,
+  WELLBUILT_APP_JSA,
+  appRequiresActiveShift,
+  configurationRequiresActiveShift,
   isSsoAudience,
+  resolveAppEntitlement,
   resolveWellbuiltAppKey,
   type SsoShiftBinding,
   SSO_CODE_BYTES,
@@ -26,6 +30,7 @@ import {
 } from './ssoDeps.js';
 import { decideEquipmentAuthorization, shiftOriginDay } from './equipmentAuthorization.js';
 import { decideAppEntitlementAuthorization } from './appEntitlementAuthorization.js';
+import { decideJsaBinding, type JsaBindingShape } from './jsaAuthorization.js';
 import { decideResolve } from '../security/operational/shiftAuthority.js';
 
 /** Fields a client may never dictate. Presence is a protocol violation. */
@@ -158,8 +163,15 @@ export async function handleSsoIssueCode(
   //     Every input is a server record. The audience is mapped to its
   //     canonical app key by the contract itself, so no second naming
   //     table exists and an alias or unknown identity can never resolve.
+  let storedJsaBinding: JsaBindingShape | undefined;
   {
     const app = resolveWellbuiltAppKey(req.audience);
+    // JSA sessions BIND shift facts (see 5d), and facts require evidence —
+    // so for that audience the authority is read up front rather than only
+    // when the entitlement gate demands it. Inert until the contracts
+    // audience allowlist admits 'wellbuilt-jsa'; today the audience cannot
+    // reach this point (step 3 refuses it).
+    const isJsaAudience = app === WELLBUILT_APP_JSA;
     const contractState = await deps.getCompanyContract(driver.companyId);
     const plan = contractState.contract
       ? await deps.getPlan(contractState.contract.planId)
@@ -170,11 +182,7 @@ export async function handleSsoIssueCode(
       contract: contractState.contract,
       plan,
     };
-    // Two-phase: the authority read happens ONLY when the canonical
-    // decision says a shift is required, so the plan — not this handler —
-    // decides whether the extra read is owed.
-    let decision = decideAppEntitlementAuthorization({ ...authzInput, shift: null });
-    if (!decision.ok && decision.refusal === 'active_shift_required') {
+    const readShift = async () => {
       // The authoritative, date-free shift record. It is bound to BOTH the
       // driver and the selected company, so a shift belonging to another
       // membership cannot satisfy this gate, and a closed, superseded,
@@ -182,10 +190,20 @@ export async function handleSsoIssueCode(
       // 'open' rather than being guessed at. Nothing here reads a
       // timestamp, a cached client value, or a request field.
       const record = await deps.getShiftAuthority(driver.driverId);
-      const shift = decideResolve(record, {
+      return decideResolve(record, {
         driverId: driver.driverId,
-        companyId: driver.companyId,
+        // Proven equal to driver.companyId at step 5; the claim keeps the
+        // string type inside this closure.
+        companyId: claimCompanyId,
       });
+    };
+    // Two-phase for every other audience: the authority read happens ONLY
+    // when the canonical decision says a shift is required, so the plan —
+    // not this handler — decides whether the extra read is owed.
+    let shift = isJsaAudience ? await readShift() : null;
+    let decision = decideAppEntitlementAuthorization({ ...authzInput, shift });
+    if (!decision.ok && decision.refusal === 'active_shift_required' && shift === null) {
+      shift = await readShift();
       decision = decideAppEntitlementAuthorization({ ...authzInput, shift });
     }
     if (!decision.ok) {
@@ -199,6 +217,33 @@ export async function handleSsoIssueCode(
         detail: decision.detail,
       });
       throw new SsoError('permission-denied', 'not_authorized', decision.refusal);
+    }
+
+    // 5d. JSA ONLY — author the authority binding this code will carry.
+    //     Decided AFTER access is granted and BEFORE anything is minted,
+    //     from the same server records the entitlement decision used. The
+    //     policy flags are re-derived from the canonical helpers so the
+    //     binding states what the effective plan + configuration actually
+    //     require, independent of which gate happened to fire.
+    if (isJsaAudience && contractState.contract && plan && shift) {
+      const requiresActiveShift =
+        appRequiresActiveShift(resolveAppEntitlement(plan, WELLBUILT_APP_JSA))
+        || configurationRequiresActiveShift(
+          contractState.contract.appConfiguration,
+          WELLBUILT_APP_JSA,
+        );
+      const jsaEnabled = Array.isArray((plan as { capabilities?: unknown[] }).capabilities)
+        && ((plan as { capabilities?: unknown[] }).capabilities as unknown[]).includes('jsa');
+      const jsaDecision = decideJsaBinding({ shift, requiresActiveShift, jsaEnabled });
+      if (!jsaDecision.ok) {
+        deps.log('sso.code.refused', {
+          audience: req.audience,
+          reason: jsaDecision.refusal,
+          detail: jsaDecision.detail,
+        });
+        throw new SsoError('permission-denied', 'not_authorized', jsaDecision.refusal);
+      }
+      storedJsaBinding = jsaDecision.binding;
     }
   }
 
@@ -228,6 +273,7 @@ export async function handleSsoIssueCode(
       expiresAt: deps.expiresAtTimestamp(expiresAtMs),
       consumed: false,
       ...(storedBinding ? { shiftBinding: storedBinding } : {}),
+      ...(storedJsaBinding ? { jsaBinding: storedJsaBinding } : {}),
     });
   });
 
