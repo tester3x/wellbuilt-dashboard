@@ -23,7 +23,6 @@ import {
   type Decision,
   type JsaAuthorityBinding,
   type JsaCompanyPolicy,
-  type JsaGovernedRecord,
   type ReceiptRefusal,
 } from './jsaReceiptCore.js';
 
@@ -54,7 +53,7 @@ export interface ReceiptDeps {
   log(event: string, extra: Record<string, string>): void;
 }
 
-function throwDecision(d: Decision<unknown>): never {
+function throwDecision(d: Decision<unknown> & { ok: false }): never {
   const map: Record<ReceiptRefusal, JsaReceiptError['http']> = {
     unauthenticated: 'unauthenticated',
     wrong_audience: 'permission-denied',
