@@ -12,6 +12,7 @@ import {
   JsaReceiptError,
   handleComplete,
   handleConsume,
+  handleGetContext,
   handleRegister,
   type ReceiptDeps,
   type ReceiptTxn,
@@ -123,6 +124,21 @@ export const jsaRegisterReadRequest = httpsV2.onCall(OPTIONS, async (request) =>
   if (!request.auth?.uid) throw new httpsV2.HttpsError('unauthenticated', 'not_authorized');
   await limited(request.auth.uid, 'jsa_register');
   try { return await handleRegister(buildReceiptDeps(), authOf(request), request.data); }
+  catch (err) { throw toHttps(err); }
+});
+
+export const jsaGetReadRequest = httpsV2.onCall(OPTIONS, async (request) => {
+  if (!request.auth?.uid) throw new httpsV2.HttpsError('unauthenticated', 'not_authorized');
+  // Higher window than the mutating callables: a crash/resume loop may
+  // legitimately re-read several times, and the operation writes nothing.
+  const allowed = await checkRateLimit({
+    bucket: 'jsa_get',
+    key: request.auth.uid,
+    limit: 60,
+    windowMs: 10 * 60 * 1000,
+  });
+  if (!allowed) throw new httpsV2.HttpsError('resource-exhausted', 'unavailable');
+  try { return await handleGetContext(buildReceiptDeps(), authOf(request), request.data); }
   catch (err) { throw toHttps(err); }
 });
 

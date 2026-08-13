@@ -4779,6 +4779,7 @@ export {
 export { ssoIssueAuthorizationCode, ssoExchangeAuthorizationCode } from './sso/ssoCallables';
 export {
   jsaRegisterReadRequest,
+  jsaGetReadRequest,
   jsaCompleteReadRequest,
   jsaConsumeReadResult,
 } from './jsaReceipt/jsaReceiptCallables';
