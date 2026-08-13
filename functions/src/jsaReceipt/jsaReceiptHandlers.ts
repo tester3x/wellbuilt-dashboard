@@ -106,7 +106,6 @@ function throwDecision(d: Decision<unknown> & { ok: false }): never {
     job_mismatch: 'failed-precondition',
     action_not_permitted: 'failed-precondition',
     conflict: 'failed-precondition',
-    already_consumed: 'failed-precondition',
   };
   throw new JsaReceiptError(map[d.refusal], d.refusal, d.detail);
 }

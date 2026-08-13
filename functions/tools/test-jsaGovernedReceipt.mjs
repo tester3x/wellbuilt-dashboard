@@ -371,5 +371,64 @@ for (const [label, world, expectOk] of MATRIX) {
   check('mid-flow: disabling JSA refuses completion', r3 === 'jsa_disabled', String(r3));
 }
 
+// ═════════ CRASH-SAFE CONSUMPTION — decision core + handler ═════════
+// wbtConsumedAtMs is AUDIT information, not a one-shot lock: every
+// repeated consume by the same authorized WB-T binding returns the same
+// immutable terminal view. The four WB-T crash boundaries all converge
+// on exactly-once local progression because the view never changes.
+{
+  const { handleConsume } = await import('../src/jsaReceipt/jsaReceiptHandlers.js');
+  const world = {
+    contractState: 'active', contract: CONTRACT_OK(), plan: PLAN(INCLUDED),
+    shift: NO_SHIFT, docs: new Map(),
+  };
+  const reg = await tryRegister(world, 'read');
+  await handleComplete(receiptDeps(world), JSA_AUTH, { requestId: reg.rid, action: 'read_completed' });
+
+  const consumeOnce = () => handleConsume(receiptDeps(world), WBT_AUTH, { requestId: reg.rid });
+
+  // Boundary 1 — died BEFORE consume: first consume marks and returns.
+  const v1 = await consumeOnce();
+  check('crash B1: first consume returns the terminal view', v1.state === 'completed' && v1.action === 'read_completed' && v1.alreadyConsumed === false);
+  const markedAt = [...world.docs.values()][0].wbtConsumedAtMs;
+  check('crash B1: consume marked the audit timestamp once', typeof markedAt === 'number');
+
+  // Boundary 2/3 — died DURING consume / after server mark, before local
+  // persistence: the retry gets the SAME immutable view, flagged.
+  const v2 = await consumeOnce();
+  check('crash B2/B3: repeat consume returns the SAME immutable view',
+    v2.state === v1.state && v2.action === v1.action && v2.jobRef === v1.jobRef
+    && v2.requestId === v1.requestId && v2.shiftState === v1.shiftState);
+  check('crash B2/B3: repeat is flagged, never refused', v2.alreadyConsumed === true);
+  check('crash B2/B3: the audit timestamp is not rewritten',
+    [...world.docs.values()][0].wbtConsumedAtMs === markedAt);
+
+  // Boundary 4 — died after local persistence, before navigation: a third
+  // consume still answers identically; the view is COMPLETE every time.
+  const v3 = await consumeOnce();
+  check('crash B4: third consume is byte-stable',
+    JSON.stringify({ ...v3, alreadyConsumed: undefined }) === JSON.stringify({ ...v1, alreadyConsumed: undefined }));
+
+  // No refusal class exists for repeated consumption at all.
+  const core = readFileSync(join(root, 'src', 'jsaReceipt', 'jsaReceiptCore.ts'), 'utf8');
+  check('no already_consumed refusal exists anywhere in the core',
+    !/'already_consumed'/.test(core.replace(/\/\/[^\n]*/g, '')));
+
+  // Spoofed return URI without backend completion stays fail-closed:
+  // a pending request consumed is refused (proven above) and an
+  // UNREGISTERED id is refused too.
+  let spoof = null;
+  try { await handleConsume(receiptDeps(world), WBT_AUTH, { requestId: 'Z'.repeat(43) }); }
+  catch (e) { spoof = e instanceof JsaReceiptError ? e.refusal : String(e); }
+  check('spoofed return URI (unregistered id) is fail-closed', spoof === 'not_found');
+
+  // A foreign WB-T binding can never consume someone else's result.
+  let foreign = null;
+  try {
+    await handleConsume(receiptDeps(world), { uid: 'u2', claims: { kind: 'driver', driverId: 'other', companyId: 'co1', app: 'wbt' } }, { requestId: reg.rid });
+  } catch (e) { foreign = e instanceof JsaReceiptError ? e.refusal : String(e); }
+  check('a foreign binding cannot consume', foreign === 'binding_mismatch');
+}
+
 console.log(`\n${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);
