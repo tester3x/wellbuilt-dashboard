@@ -16,7 +16,22 @@ export const JSA_APP_WBT = 'wbt';
 export const JSA_APP_JSA = 'jsa';
 
 export type JsaPolicyIntent = 'read' | 'acknowledge' | 'read_and_acknowledge';
-export type JsaCompletionAction = 'read' | 'acknowledged';
+/**
+ * TERMINAL EVIDENCE, not UI events. Each names exactly which stages
+ * actually occurred:
+ *
+ *   read_completed        — the full first read occurred; no acknowledgment.
+ *   acknowledged          — an acknowledgment occurred; no full read.
+ *   read_and_acknowledged — BOTH stages occurred (in one interaction or
+ *                           two — the client submits this single terminal
+ *                           action only once both are true).
+ *
+ * Satisfaction is MONOTONE and never downgrades (see
+ * decideActionSatisfies): stronger evidence satisfies a weaker registered
+ * intent, but `read_and_acknowledge` is satisfied ONLY by
+ * `read_and_acknowledged` — neither stage alone completes it.
+ */
+export type JsaCompletionAction = 'read_completed' | 'acknowledged' | 'read_and_acknowledged';
 export type JsaRequestState = 'pending' | 'completed' | 'expired';
 export type JsaShiftState = 'open' | 'none';
 
@@ -103,7 +118,7 @@ export function isPolicyIntent(v: unknown): v is JsaPolicyIntent {
 }
 
 export function isCompletionAction(v: unknown): v is JsaCompletionAction {
-  return v === 'read' || v === 'acknowledged';
+  return v === 'read_completed' || v === 'acknowledged' || v === 'read_and_acknowledged';
 }
 
 export function recordPath(requestId: string): string {
@@ -221,18 +236,42 @@ export function decideIntentAllowed(
   return { ok: true, value: true };
 }
 
+/**
+ * THE terminal-action table. Monotone — stronger evidence satisfies a
+ * weaker registered intent; nothing ever satisfies a stronger one:
+ *
+ *   registered intent      | satisfying terminal actions
+ *   -----------------------+--------------------------------------------
+ *   read                   | read_completed, read_and_acknowledged
+ *   acknowledge            | acknowledged,   read_and_acknowledged
+ *   read_and_acknowledge   | read_and_acknowledged ONLY
+ *
+ * `read_and_acknowledge` is the first-shift full-read requirement:
+ * neither `read_completed` nor `acknowledged` alone may complete it. A
+ * JSA UI that performs both stages in one final interaction submits the
+ * single terminal action `read_and_acknowledged`; a UI that runs them as
+ * two steps submits it once, after the second stage.
+ */
 export function decideActionSatisfies(
   registered: JsaPolicyIntent,
   action: JsaCompletionAction,
 ): Decision<true> {
+  if (action === 'read_and_acknowledged') {
+    // Both stages occurred — satisfies every intent.
+    return { ok: true, value: true };
+  }
+  if (registered === 'read_and_acknowledge') {
+    // Neither stage alone may satisfy the combined requirement.
+    return { ok: false, refusal: 'action_not_permitted', detail: 'both_stages_required' };
+  }
   if (registered === 'acknowledge') {
     if (action !== 'acknowledged') {
       return { ok: false, refusal: 'action_not_permitted', detail: 'ack_only' };
     }
     return { ok: true, value: true };
   }
-  // read and read_and_acknowledge require a full read — ack is a downgrade.
-  if (action !== 'read') {
+  // registered === 'read': a full read is required — ack is a downgrade.
+  if (action !== 'read_completed') {
     return { ok: false, refusal: 'action_not_permitted', detail: 'read_required' };
   }
   return { ok: true, value: true };
@@ -330,6 +369,11 @@ export function decideComplete(input: {
   if (!actionOk.ok) return actionOk;
 
   if (state === 'completed') {
+    // TERMINAL IMMUTABILITY. A completed record is evidence; only the
+    // byte-identical retry (crash/duplicate delivery) is reusable. A
+    // DIFFERENT action — even a monotonically stronger one — conflicts:
+    // upgrading terminal evidence in place would rewrite what was
+    // attested. The stronger interaction belongs to a fresh request.
     if (input.existing.action === input.action) {
       return { ok: true, value: { record: input.existing, write: 'reuse' } };
     }

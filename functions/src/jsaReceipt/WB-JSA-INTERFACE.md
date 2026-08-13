@@ -15,19 +15,44 @@ audience (`request.auth.token.app === 'jsa'`), kind `driver`.
 ```
 {
   requestId: string,   // 43-char base64url, same id WB-T registered
-  action: 'read' | 'acknowledged'
+  action: 'read_completed' | 'acknowledged' | 'read_and_acknowledged'
 }
 ```
 
 Forbidden: driverId, companyId, shiftId, periodId, hash, name, tokens,
 jobRef, groupRef, legalName, signature. Extra keys are rejected.
 
-`action`:
+## Terminal-action table (authoritative)
 
-- `'read'` — first full read (required when the registered intent is
-  `read` or `read_and_acknowledge`)
-- `'acknowledged'` — later acknowledgment only when the registered intent
-  is `acknowledge`
+`action` is TERMINAL EVIDENCE of what actually occurred — not a UI event:
+
+| registered intent      | satisfying action(s)                     |
+|------------------------|------------------------------------------|
+| `read`                 | `read_completed`, `read_and_acknowledged` |
+| `acknowledge`          | `acknowledged`, `read_and_acknowledged`   |
+| `read_and_acknowledge` | `read_and_acknowledged` ONLY              |
+
+Monotone, never downgrading: stronger evidence satisfies a weaker
+registered intent; neither `read_completed` nor `acknowledged` alone may
+ever satisfy `read_and_acknowledge`.
+
+## WB-JSA call point — exact
+
+Call `jsaCompleteReadRequest` exactly ONCE per request, at the moment the
+LAST required stage finishes:
+
+- intent `read` — after the driver finishes the full first read:
+  `{ requestId, action: 'read_completed' }`.
+- intent `acknowledge` — after the driver's acknowledgment tap:
+  `{ requestId, action: 'acknowledged' }`.
+- intent `read_and_acknowledge` — after BOTH stages are true. If the UI
+  runs read then a separate acknowledge step, call only after the second
+  stage. If one final interaction covers both (e.g. an "I have read and
+  acknowledge" confirmation at the end of the full read), that single
+  interaction submits `{ requestId, action: 'read_and_acknowledged' }`.
+  NEVER submit `read_completed` first "to save progress" — a partial
+  stage is client UI state, not terminal evidence, and the server will
+  refuse it (`failed-precondition`, `action_not_permitted`).
 
 ## Success
 
@@ -35,8 +60,10 @@ jobRef, groupRef, legalName, signature. Extra keys are rejected.
 { requestId, action, reused: boolean }
 ```
 
-`reused: true` means an identical terminal completion already existed
-(idempotent retry / process death).
+`reused: true` means the byte-identical terminal completion already
+existed (idempotent retry / process death). A retry with a DIFFERENT
+action is refused (`conflict`) — terminal evidence is immutable; a
+stronger interaction belongs to a fresh request.
 
 ## Failures (coarse)
 
