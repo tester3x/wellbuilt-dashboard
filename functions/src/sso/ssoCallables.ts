@@ -26,6 +26,10 @@ import {
   type SsoTransaction,
 } from './ssoDeps';
 import { parseCompanyContract, WELLBUILT_CONTRACT_KEY } from '../admin/companyContract';
+import {
+  shiftAuthorityPath,
+  type ShiftAuthorityRecord,
+} from '../security/operational/shiftAuthority';
 
 /** Same rollout posture as the other callables in this project. */
 export const SSO_CALLABLE_OPTIONS = {
@@ -99,7 +103,39 @@ export function buildSsoDeps(): SsoDeps {
         displayName: d.displayName ?? "",
         capabilities: d.capabilities ?? [],
         status: d.status ?? "active",
+        // Optional per-app entitlement map — consumed only by the JSA
+        // audience on this lineage; absent stays absent.
+        ...(d.apps !== undefined ? { apps: d.apps } : {}),
       };
+    },
+
+    /**
+     * The driver's server-owned shift-authority record (jsa audience
+     * only on this lineage). Null on absent, unreadable, OR structurally
+     * half-written — the safe direction: an outage must never read as
+     * "no open shift" and certainly never as open. decideResolve turns
+     * null into `unverifiable`.
+     */
+    async getShiftAuthority(driverId): Promise<ShiftAuthorityRecord | null> {
+      try {
+        const snap = await db.doc(shiftAuthorityPath(driverId)).get();
+        if (!snap.exists) return null;
+        const d = snap.data() ?? {};
+        if (typeof d.driverId !== 'string' || typeof d.companyId !== 'string'
+            || typeof d.initialized !== 'boolean' || typeof d.version !== 'number') {
+          return null;
+        }
+        return {
+          driverId: d.driverId,
+          companyId: d.companyId,
+          initialized: d.initialized,
+          openPeriodId: typeof d.openPeriodId === 'string' ? d.openPeriodId : null,
+          originLocalDate: typeof d.originLocalDate === 'string' ? d.originLocalDate : null,
+          version: d.version,
+        };
+      } catch {
+        return null;
+      }
     },
 
     /**

@@ -9,7 +9,12 @@
  */
 import {
   SSO_AUDIENCE_EQUIPMENT,
+  WELLBUILT_APP_JSA,
+  appRequiresActiveShift,
+  configurationRequiresActiveShift,
   isSsoAudience,
+  resolveAppEntitlement,
+  resolveWellbuiltAppKey,
   type SsoShiftBinding,
   SSO_CODE_BYTES,
   SSO_CODE_TTL_MS_PROVISIONAL,
@@ -24,6 +29,8 @@ import {
   type SsoDeps,
 } from './ssoDeps.js';
 import { decideEquipmentAuthorization, shiftOriginDay } from './equipmentAuthorization.js';
+import { decideJsaBinding, type JsaBindingShape } from './jsaAuthorization.js';
+import { decideResolve } from '../security/operational/shiftAuthority.js';
 
 /** Fields a client may never dictate. Presence is a protocol violation. */
 const CLIENT_FORBIDDEN_IDENTITY_FIELDS = ['uid', 'driverId', 'companyId', 'driverHash', 'passcode'];
@@ -146,6 +153,59 @@ export async function handleSsoIssueCode(
     storedBinding = decision.binding;
   }
 
+  // 5c-jsa. JSA ONLY — author the authority binding this code will carry.
+  //     ENFORCEMENT-FREE LINEAGE: tickets and equipment issuance run NO
+  //     commercial-entitlement decision here (Phase-D separation) — their
+  //     behavior is byte-identical to deployed production. Only the jsa
+  //     audience consults the entitlement/configuration library, because a
+  //     JSA session binds shift facts and policy flags, and facts require
+  //     evidence. Decided BEFORE anything is minted; a refusal leaves the
+  //     system byte-identical to never having been asked.
+  let storedJsaBinding: JsaBindingShape | undefined;
+  if (resolveWellbuiltAppKey(req.audience) === WELLBUILT_APP_JSA) {
+    const contractState = await deps.getCompanyContract(driver.companyId);
+    const plan = contractState.contract
+      ? await deps.getPlan(contractState.contract.planId)
+      : null;
+    // The authoritative, date-free shift record. Bound to BOTH the driver
+    // and the selected company; a closed, superseded, half-written or
+    // absent record resolves to something other than 'open' rather than
+    // being guessed at. Nothing here reads a timestamp, a cached client
+    // value, or a request field.
+    const record = await deps.getShiftAuthority(driver.driverId);
+    const shift = decideResolve(record, {
+      driverId: driver.driverId,
+      // Proven equal to driver.companyId at step 5.
+      companyId: claimCompanyId,
+    });
+    if (!contractState.contract || !plan) {
+      deps.log('sso.code.refused', {
+        audience: req.audience,
+        reason: 'contract_missing',
+        detail: contractState.state,
+      });
+      throw new SsoError('permission-denied', 'not_authorized', 'contract_missing');
+    }
+    const requiresActiveShift =
+      appRequiresActiveShift(resolveAppEntitlement(plan, WELLBUILT_APP_JSA))
+      || configurationRequiresActiveShift(
+        contractState.contract.appConfiguration,
+        WELLBUILT_APP_JSA,
+      );
+    const jsaEnabled = Array.isArray((plan as { capabilities?: unknown[] }).capabilities)
+      && ((plan as { capabilities?: unknown[] }).capabilities as unknown[]).includes('jsa');
+    const jsaDecision = decideJsaBinding({ shift, requiresActiveShift, jsaEnabled });
+    if (!jsaDecision.ok) {
+      deps.log('sso.code.refused', {
+        audience: req.audience,
+        reason: jsaDecision.refusal,
+        detail: jsaDecision.detail,
+      });
+      throw new SsoError('permission-denied', 'not_authorized', jsaDecision.refusal);
+    }
+    storedJsaBinding = jsaDecision.binding;
+  }
+
   // 6. Server-generated code and timestamps. The client contributes
   //    nothing to either.
   const raw = deps.base64Url(deps.randomBytes(SSO_CODE_BYTES));
@@ -172,6 +232,7 @@ export async function handleSsoIssueCode(
       expiresAt: deps.expiresAtTimestamp(expiresAtMs),
       consumed: false,
       ...(storedBinding ? { shiftBinding: storedBinding } : {}),
+      ...(storedJsaBinding ? { jsaBinding: storedJsaBinding } : {}),
     });
   });
 

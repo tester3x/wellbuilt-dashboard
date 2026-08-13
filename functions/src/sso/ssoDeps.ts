@@ -14,6 +14,7 @@
 import type { PlanDefinition } from '@tester3x/wellbuilt-contracts';
 import type { WellbuiltContract } from '../admin/companyContract.js';
 import type { ShiftDayDoc } from './equipmentAuthorization.js';
+import type { ShiftAuthorityRecord } from '../security/operational/shiftAuthority.js';
 
 /** The authoritative driver record, as the server sees it. */
 export interface AuthoritativeDriver {
@@ -51,6 +52,19 @@ export interface SsoCodeRecord {
    * issuance. Exchange echoes this and never anything the redeemer sends.
    */
   shiftBinding?: { shiftId: string; phase: 'pre_trip' | 'post_trip' };
+  /**
+   * JSA audience only: the SERVER-AUTHORED authority binding decided at
+   * issuance (see sso/jsaAuthorization.ts). Exchange echoes the stored,
+   * revalidated value and never anything the redeemer sends. Inert until
+   * the contracts 0.5.0 audience allowlist admits 'wellbuilt-jsa'.
+   */
+  jsaBinding?: {
+    shiftState: 'open' | 'none';
+    periodId?: string;
+    originLocalDate?: string;
+    requiresActiveShift: boolean;
+    jsaEnabled: boolean;
+  };
 }
 
 export interface SsoTransaction {
@@ -98,6 +112,18 @@ export interface SsoDeps {
   }>;
   /** The plan document named by a contract, or null when absent. */
   getPlan(planId: string): Promise<PlanDefinition | null>;
+  /**
+   * The driver's server-owned shift-authority record (jsa audience only
+   * on this lineage).
+   *
+   * This is the DATE-FREE authority: it stores the open period and its
+   * origin day, so "is a shift open right now?" needs no company timezone
+   * — which matters because explicit_shift configurations store none, and
+   * a UTC date would misfile an evening shift in America/Chicago. A null
+   * return means the document is absent or unreadable; decideResolve turns
+   * that into `unverifiable`, never into a false `none`.
+   */
+  getShiftAuthority(driverId: string): Promise<ShiftAuthorityRecord | null>;
   runTransaction<T>(fn: (tx: SsoTransaction) => Promise<T>): Promise<T>;
   /**
    * Mint a custom token for `uid` with `developerClaims`.

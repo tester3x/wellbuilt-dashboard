@@ -15,16 +15,19 @@
 import {
   SSO_AUDIENCE_EQUIPMENT,
   SSO_SESSION_APP_BY_AUDIENCE,
+  WELLBUILT_APP_JSA,
   audienceCarriesDisplayName,
   isSsoAudience,
   isSsoShiftBinding,
   normalizeSsoDisplayName,
+  resolveWellbuiltAppKey,
   SSO_PROTOCOL_VERSION,
   SSO_SESSION_APP_CLAIM,
   validateSsoExchangeRequest,
   type SsoAudience,
   type SsoExchangeResponse,
 } from '@tester3x/wellbuilt-contracts';
+import { readStoredJsaBinding, type JsaBindingShape } from './jsaAuthorization.js';
 import {
   SsoError,
   ssoCodePath,
@@ -64,13 +67,23 @@ function readRecord(data: Record<string, unknown> | undefined): SsoCodeRecord | 
     // longer parses is dropped rather than trusted, so a corrupted or
     // hand-edited record cannot inject a binding into the response.
     ...(isSsoShiftBinding(data.shiftBinding) ? { shiftBinding: data.shiftBinding } : {}),
+    ...(() => {
+      const jsa = readStoredJsaBinding(data.jsaBinding);
+      return jsa ? { jsaBinding: jsa } : {};
+    })(),
   };
 }
 
+/**
+ * Response type note: `jsaBinding` is the audience-scoped field contracts
+ * 0.5.0 adds to SsoExchangeResponse. The local intersection keeps this
+ * handler typechecking against the pinned 0.4.0 mirror; at the 0.5.0
+ * mirror bump the intersection becomes redundant and is removed.
+ */
 export async function handleSsoExchange(
   deps: SsoDeps,
   data: unknown,
-): Promise<SsoExchangeResponse> {
+): Promise<SsoExchangeResponse & { jsaBinding?: JsaBindingShape }> {
   // 1. Shape first — reject malformed encodings before any database work,
   //    so a garbage-flooding caller never reaches storage.
   const parsed = validateSsoExchangeRequest(data);
@@ -184,7 +197,12 @@ export async function handleSsoExchange(
   //    refused because of a gap in their profile record, and would burn the
   //    code doing it. The field is omitted instead and the client reports a
   //    bounded persistence-unavailable outcome.
-  const displayName = audienceCarriesDisplayName(record.audience as SsoAudience)
+  //    The jsa clause below is belt-and-braces for the 0.4.0 window: the
+  //    package predicate gains the jsa audience at 0.5.0, and the app-key
+  //    resolution keeps the two agreeing either way without a second
+  //    naming table.
+  const isJsaAudience = resolveWellbuiltAppKey(record.audience) === WELLBUILT_APP_JSA;
+  const displayName = audienceCarriesDisplayName(record.audience as SsoAudience) || isJsaAudience
     ? normalizeSsoDisplayName(driver.displayName)
     : null;
 
@@ -200,6 +218,10 @@ export async function handleSsoExchange(
     ...(record.audience === SSO_AUDIENCE_EQUIPMENT && isSsoShiftBinding(record.shiftBinding)
       ? { shiftBinding: record.shiftBinding }
       : {}),
+    // Same rule for WB-JSA: the SERVER-AUTHORED authority binding stored at
+    // issuance, revalidated on read. WB-JSA scopes its records to this and
+    // to nothing it received in a launch URI or holds in a local cache.
+    ...(isJsaAudience && record.jsaBinding ? { jsaBinding: record.jsaBinding } : {}),
     ...(displayName ? { displayName } : {}),
   };
 }
