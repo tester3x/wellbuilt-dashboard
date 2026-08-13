@@ -4792,6 +4792,11 @@ export {
 // Issuance requires callable Auth; exchange deliberately does not, because
 // it runs before WB-T has any session. See sso/ssoCallables.ts.
 export { ssoIssueAuthorizationCode, ssoExchangeAuthorizationCode } from './sso/ssoCallables';
+export {
+  jsaRegisterReadRequest,
+  jsaCompleteReadRequest,
+  jsaConsumeReadResult,
+} from './jsaReceipt/jsaReceiptCallables';
 
 // ── vc51.9A6-B: protected platform-admin callables ─────────────────────────
 // Dual-gated (verified wellbuiltAdmin claim + enabled platform_admins
