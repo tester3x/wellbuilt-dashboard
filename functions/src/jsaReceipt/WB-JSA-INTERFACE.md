@@ -1,7 +1,74 @@
-# WB-JSA complete callable (held)
+# WB-JSA governed callables (held)
 
-Grok's held client must invoke this **after** the required read or
-acknowledgment is actually finished. The return URI is not proof.
+The return URI is not proof, launch hints are not authority, and cached
+or historical state is never a workflow selector.
+
+## The required client sequence
+
+1. Authenticate (SSO exchange for the `wellbuilt-jsa` audience, or the
+   persisted secure session).
+2. Call `jsaGetReadRequest({ requestId })` with the requestId from the
+   parsed governed launch. Select the Read/Acknowledge workflow SOLELY
+   from the returned registered `intent` — never from launch hints,
+   cached state, history, or the device date.
+3. Perform every stage the intent requires.
+4. Submit exactly ONE satisfying terminal action through
+   `jsaCompleteReadRequest` (table below).
+5. Return to WB-T (`jsa-return` link) only after a successful or
+   idempotently `reused:true` completion.
+6. On refusal at any step (policy tightening, expiry, mismatch,
+   unavailability): stay fail-closed, show accurate "return to WB Tickets
+   and relaunch" guidance, and submit nothing.
+
+## jsaGetReadRequest — authoritative workflow context
+
+Authenticated callable; session must be `kind:'driver'`, `app:'jsa'`.
+Request body, exact keys: `{ requestId: string }` (43-char base64url).
+
+Repeatable and SIDE-EFFECT FREE — safe across process death, background,
+and resume; call it as many times as recovery needs. The server re-runs
+the canonical JSA access decision (contract, plan, company
+configuration, shift authority) before answering, and requires the
+CURRENT authority context to agree exactly with the one frozen at
+registration.
+
+Success:
+
+```
+{
+  requestId: string,
+  state: 'pending' | 'completed',
+  intent: 'read' | 'acknowledge' | 'read_and_acknowledge',
+  jobRef: string,
+  groupRef: string | null,
+  expiresAtMs?: number,   // pending only — UI countdown, never authority
+  action?: <terminal action>  // completed only — supports safe resume
+}
+```
+
+NOTHING ELSE is returned: no driverId, companyId, periodId,
+originLocalDate, names, credentials, tokens, or PKCE material. A
+COMPLETED request reads back safely (state + its terminal action) so a
+relaunched client can show "already completed" and return, instead of
+re-running stages or guessing.
+
+Refusals (coarse code → meaning):
+
+- `unauthenticated` — no session.
+- `permission-denied` → `wrong_audience` / `not_a_driver` (session),
+  `binding_mismatch` (foreign driver/company, or the current authority
+  context no longer matches registration — shift opened/closed/changed
+  period, policy flag drifted in EITHER direction),
+  `active_shift_required` / `jsa_disabled` / `authority_unverifiable`
+  (the canonical access decision refuses under CURRENT policy).
+- `invalid-argument` — malformed / identity-bearing body.
+- `failed-precondition` → `not_found` (unregistered), `expired`.
+
+If launch metadata disagrees with the server request (different job than
+the hint suggested), the SERVER's `jobRef`/`groupRef` are the truth —
+render from the response, never from the URI.
+
+## jsaCompleteReadRequest — terminal completion
 
 ## Callable
 

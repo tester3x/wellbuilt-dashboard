@@ -18,11 +18,13 @@ import type { ResolveResult } from '../security/operational/shiftAuthority.js';
 import {
   decideComplete,
   decideConsume,
+  decideGetContext,
   decideRegister,
   fromStored,
   parseAuthPrincipal,
   parseCompleteInput,
   parseConsumeInput,
+  parseGetContextInput,
   parseRegisterInput,
   recordPath,
   requireAudience,
@@ -224,6 +226,41 @@ export async function handleComplete(
     }
     deps.log('jsa.receipt.complete', { write: out.write, action: body.action });
     return { requestId: out.record.requestId, action: body.action, reused: out.write === 'reuse' };
+  });
+}
+
+/**
+ * jsaGetReadRequest — the authoritative workflow-context read for the
+ * JSA audience. Repeatable and SIDE-EFFECT FREE: nothing is written,
+ * marked, or consumed, so process death / background / resume can call
+ * it any number of times. The canonical current access decision runs
+ * first (same decideJsaAccess as issuance/registration/completion), so a
+ * policy tightened, a shift drifted, or JSA disabled since registration
+ * refuses here — BEFORE any Read/Acknowledge UI is shown.
+ */
+export async function handleGetContext(
+  deps: ReceiptDeps,
+  auth: { uid?: string | null; claims?: Record<string, unknown> | null },
+  data: unknown,
+): Promise<import('./jsaReceiptCore.js').RequestContextView> {
+  const p = principal(auth, JSA_APP_JSA);
+  const body = unwrap(parseGetContextInput(data));
+  const { binding } = await authorBinding(deps, p);
+  const path = recordPath(body.requestId);
+  return deps.runTransaction(async (txn) => {
+    const snap = await txn.get(path);
+    const existing = snap.exists ? fromStored(snap.data) : null;
+    const decided = decideGetContext({
+      existing,
+      requestId: body.requestId,
+      principal: p,
+      binding,
+      nowMs: deps.nowMs(),
+    });
+    const out = unwrap(decided);
+    // Bounded, id-free — the request id never reaches a log line.
+    deps.log('jsa.receipt.get', { state: out.state, intent: out.intent });
+    return out;
   });
 }
 
