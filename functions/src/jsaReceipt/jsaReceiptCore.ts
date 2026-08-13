@@ -92,8 +92,13 @@ export type ReceiptRefusal =
   | 'binding_mismatch'
   | 'job_mismatch'
   | 'action_not_permitted'
-  | 'conflict'
-  | 'already_consumed';
+  | 'conflict';
+// NOTE deliberately absent: an 'already_consumed' refusal. Repeated
+// consumption by the same authorized WB-T binding is NOT an error —
+// decideConsume returns the SAME immutable terminal view every time,
+// with alreadyConsumed flagged. wbtConsumedAtMs is audit information,
+// never a one-shot delivery lock; making it one would strand a client
+// that died between the server mark and its local persistence.
 
 export type Decision<T> =
   | { ok: true; value: T }
