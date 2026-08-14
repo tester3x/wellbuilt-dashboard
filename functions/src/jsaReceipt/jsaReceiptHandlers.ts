@@ -19,6 +19,9 @@ import {
   decideComplete,
   decideConsume,
   decideGetContext,
+  decideInvoiceJobFields,
+  applyJobDisplayFields,
+  jobDisplayRequired,
   decideRegister,
   fromStored,
   parseAuthPrincipal,
@@ -85,6 +88,11 @@ export interface ReceiptDeps {
     allowAcknowledge: boolean;
   }>;
   resolveShift(driverId: string, companyId: string): Promise<ResolveResult>;
+  /**
+   * Admin invoice lookup. Called only AFTER request authorization
+   * accepted a pending read-stage get. Never before.
+   */
+  readInvoice(jobRef: string): Promise<{ exists: boolean; data?: Record<string, unknown> }>;
   runTransaction<T>(fn: (txn: ReceiptTxn) => Promise<T>): Promise<T>;
   log(event: string, extra: Record<string, string>): void;
 }
@@ -247,7 +255,7 @@ export async function handleGetContext(
   const body = unwrap(parseGetContextInput(data));
   const { binding } = await authorBinding(deps, p);
   const path = recordPath(body.requestId);
-  return deps.runTransaction(async (txn) => {
+  const out = await deps.runTransaction(async (txn) => {
     const snap = await txn.get(path);
     const existing = snap.exists ? fromStored(snap.data) : null;
     const decided = decideGetContext({
@@ -257,11 +265,25 @@ export async function handleGetContext(
       binding,
       nowMs: deps.nowMs(),
     });
-    const out = unwrap(decided);
-    // Bounded, id-free — the request id never reaches a log line.
+    return unwrap(decided);
+  });
+  if (!jobDisplayRequired(out)) {
     deps.log('jsa.receipt.get', { state: out.state, intent: out.intent });
     return out;
+  }
+  const invoice = await deps.readInvoice(out.jobRef);
+  const fields = decideInvoiceJobFields({
+    expectedCompanyId: p.companyId,
+    expectedDriverId: p.driverId,
+    invoice: {
+      exists: invoice.exists,
+      ...(invoice.data || {}),
+    },
   });
+  const resolved = unwrap(fields);
+  const view = applyJobDisplayFields(out, resolved);
+  deps.log('jsa.receipt.get', { state: view.state, intent: view.intent });
+  return view;
 }
 
 export async function handleConsume(

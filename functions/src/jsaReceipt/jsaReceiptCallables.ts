@@ -68,6 +68,10 @@ export function buildReceiptDeps(): ReceiptDeps {
         return { allowRead: true, allowAcknowledge: false };
       }
     },
+    async readInvoice(jobRef) {
+      const snap = await db.collection('invoices').doc(jobRef).get();
+      return { exists: snap.exists, data: snap.data() as Record<string, unknown> | undefined };
+    },
     async resolveShift(driverId, companyId) {
       try {
         const snap = await db.doc(shiftAuthorityPath(driverId)).get();
