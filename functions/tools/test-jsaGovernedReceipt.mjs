@@ -9,6 +9,7 @@ import {
   parseRegisterInput, parseCompleteInput, parseConsumeInput,
   parseAuthPrincipal, requireAudience, decideIntentAllowed,
   decideActionSatisfies, decideRegister, decideComplete, decideConsume,
+  decideInvoiceJobFields, jobDisplayRequired, applyJobDisplayFields,
   liveState, JSA_PENDING_TTL_MS, JSA_APP_WBT, JSA_APP_JSA,
 } from '../src/jsaReceipt/jsaReceiptCore.js';
 import { handleRegister, handleComplete, JsaReceiptError } from '../src/jsaReceipt/jsaReceiptHandlers.js';
@@ -276,7 +277,20 @@ const OPEN_SHIFT = { state: 'open', periodId: '2026-08-12_182535', originLocalDa
 const NO_SHIFT = { state: 'none' };
 const BAD_SHIFT = { state: 'unverifiable', reason: 'authority_inconsistent' };
 
+function seedInvoice(world, jobRef = 'job1', extra = {}) {
+  if (!world.invoices) world.invoices = new Map();
+  if (!world.invoiceReads) world.invoiceReads = [];
+  world.invoices.set(jobRef, {
+    companyId: 'co1',
+    driverId: 'drv1',
+    wellName: 'Gab 1',
+    ...extra,
+  });
+}
+
 function receiptDeps(world) {
+  if (!world.invoices) world.invoices = new Map();
+  if (!world.invoiceReads) world.invoiceReads = [];
   return {
     nowMs: () => NOW,
     randomBytes: (n) => new Uint8Array(n),
@@ -285,6 +299,11 @@ function receiptDeps(world) {
     getPlan: async () => world.plan,
     getJsaStylePolicy: async () => ({ allowRead: true, allowAcknowledge: true }),
     resolveShift: async () => world.shift,
+    readInvoice: async (jobRef) => {
+      world.invoiceReads.push(jobRef);
+      if (!world.invoices.has(jobRef)) return { exists: false };
+      return { exists: true, data: { ...world.invoices.get(jobRef) } };
+    },
     runTransaction: async (fn) => fn({
       get: async (p2) => (world.docs.has(p2) ? { exists: true, data: { ...world.docs.get(p2) } } : { exists: false }),
       create: (p2, d) => { world.docs.set(p2, d); },
@@ -434,14 +453,22 @@ for (const [label, world, expectOk] of MATRIX) {
 // ═════════ jsaGetReadRequest — authoritative workflow context ═════════
 {
   const { handleGetContext } = await import('../src/jsaReceipt/jsaReceiptHandlers.js');
-  const OPEN_WORLD = () => ({
-    contractState: 'active', contract: CONTRACT_OK({ [APP_JSA_KEY]: { requiresActiveShift: true } }),
-    plan: PLAN(INCLUDED), shift: OPEN_SHIFT, docs: new Map(),
-  });
-  const FREE_WORLD = () => ({
-    contractState: 'active', contract: CONTRACT_OK(), plan: PLAN(INCLUDED),
-    shift: NO_SHIFT, docs: new Map(),
-  });
+  const OPEN_WORLD = () => {
+    const w = {
+      contractState: 'active', contract: CONTRACT_OK({ [APP_JSA_KEY]: { requiresActiveShift: true } }),
+      plan: PLAN(INCLUDED), shift: OPEN_SHIFT, docs: new Map(), invoices: new Map(), invoiceReads: [],
+    };
+    seedInvoice(w);
+    return w;
+  };
+  const FREE_WORLD = () => {
+    const w = {
+      contractState: 'active', contract: CONTRACT_OK(), plan: PLAN(INCLUDED),
+      shift: NO_SHIFT, docs: new Map(), invoices: new Map(), invoiceReads: [],
+    };
+    seedInvoice(w);
+    return w;
+  };
 
   // Each of the three intents comes back verbatim as the workflow selector.
   for (const intent of ['read', 'acknowledge', 'read_and_acknowledge']) {
@@ -452,6 +479,13 @@ for (const [label, world, expectOk] of MATRIX) {
     check(`get(${intent}): bounded jobRef/groupRef returned`, ctx.jobRef === 'job1' && ctx.groupRef === null);
     check(`get(${intent}): pending carries expiry info only`,
       typeof ctx.expiresAtMs === 'number' && ctx.action === undefined);
+    if (intent === 'acknowledge') {
+      check('get(acknowledge): no read-stage invoice fields',
+        ctx.wellName === undefined && ctx.jobType === undefined);
+    } else {
+      check(`get(${intent}): Gab 1 resolved from matching invoice`,
+        ctx.wellName === 'Gab 1' && ctx.jobType === undefined);
+    }
   }
 
   // Sensitive-output containment: exact key set, no binding data, no ids in logs.
@@ -462,8 +496,8 @@ for (const [label, world, expectOk] of MATRIX) {
     const reg = await tryRegister(w, 'read');
     const ctx = await handleGetContext(deps, JSA_AUTH, { requestId: reg.rid });
     const keys = Object.keys(ctx).sort();
-    check('get: exact response keys (pending)',
-      JSON.stringify(keys) === JSON.stringify(['expiresAtMs', 'groupRef', 'intent', 'jobRef', 'requestId', 'state']), keys.join(','));
+    check('get: exact response keys (pending read)',
+      JSON.stringify(keys) === JSON.stringify(['expiresAtMs', 'groupRef', 'intent', 'jobRef', 'requestId', 'state', 'wellName']), keys.join(','));
     const s = JSON.stringify(ctx);
     check('get: no driverId/companyId/periodId/date/credential in response',
       !/drv1|co1|2026-08-12|driverId|companyId|periodId|originLocalDate|passcode|token/i.test(s.replace(ctx.requestId, '')));
@@ -575,6 +609,138 @@ for (const [label, world, expectOk] of MATRIX) {
     const w = FREE_WORLD();
     const reg = await tryRegister(w, 'read');
     check('get: WBT audience refused', await refusalOf(w, WBT_AUTH, { requestId: reg.rid }) === 'wrong_audience');
+    check('get: unauthorized caller never reads the invoice',
+      w.invoiceReads.length === 0);
+  }
+
+  // ── invoice job-field resolution (authorized pending read only) ──
+  {
+    const matching = decideInvoiceJobFields({
+      expectedCompanyId: 'co1', expectedDriverId: 'drv1',
+      invoice: { exists: true, companyId: 'co1', driverId: 'drv1', wellName: 'Gab 1', commodityType: 'pw' },
+    });
+    check('invoice: matching Gab 1 + commodityType',
+      matching.ok && matching.value.wellName === 'Gab 1' && matching.value.jobType === 'pw');
+    check('invoice: missing document is not_found',
+      decideInvoiceJobFields({
+        expectedCompanyId: 'co1', expectedDriverId: 'drv1', invoice: { exists: false },
+      }).refusal === 'not_found');
+    check('invoice: empty well is not_found',
+      decideInvoiceJobFields({
+        expectedCompanyId: 'co1', expectedDriverId: 'drv1',
+        invoice: { exists: true, companyId: 'co1', driverId: 'drv1', wellName: '   ' },
+      }).refusal === 'not_found');
+    const foreignCo = decideInvoiceJobFields({
+      expectedCompanyId: 'co1', expectedDriverId: 'drv1',
+      invoice: { exists: true, companyId: 'other-co', driverId: 'drv1', wellName: 'Gab 1' },
+    });
+    const missing = decideInvoiceJobFields({
+      expectedCompanyId: 'co1', expectedDriverId: 'drv1', invoice: { exists: false },
+    });
+    check('invoice: foreign company uses the same coarse refusal as missing (no existence leak)',
+      foreignCo.refusal === 'not_found' && foreignCo.refusal === missing.refusal);
+    check('invoice: foreign driver is not_found',
+      decideInvoiceJobFields({
+        expectedCompanyId: 'co1', expectedDriverId: 'drv1',
+        invoice: { exists: true, companyId: 'co1', driverId: 'other-drv', wellName: 'Gab 1' },
+      }).refusal === 'not_found');
+    check('read-stage pending requires job display; acknowledge/completed do not',
+      jobDisplayRequired({ intent: 'read', state: 'pending' }) === true
+      && jobDisplayRequired({ intent: 'read_and_acknowledge', state: 'pending' }) === true
+      && jobDisplayRequired({ intent: 'acknowledge', state: 'pending' }) === false
+      && jobDisplayRequired({ intent: 'read', state: 'completed' }) === false);
+    const attached = applyJobDisplayFields(
+      { requestId: RID, state: 'pending', intent: 'read', jobRef: 'job1', groupRef: null },
+      { wellName: 'Gab 1', jobType: 'pw' },
+    );
+    check('applyJobDisplayFields adds only wellName/jobType',
+      attached.wellName === 'Gab 1' && attached.jobType === 'pw'
+      && !('driverId' in attached) && !('companyId' in attached));
+  }
+
+  {
+    const w = OPEN_WORLD();
+    seedInvoice(w, 'job1', { commodityType: 'produced_water' });
+    const reg = await tryRegister(w, 'read');
+    const ctx = await handleGetContext(receiptDeps(w), JSA_AUTH, { requestId: reg.rid });
+    check('get: optional commodityType becomes bounded jobType',
+      ctx.wellName === 'Gab 1' && ctx.jobType === 'produced_water');
+    check('get: approved fields only (no ticket/notes/pusher/customer)',
+      !('ticketNumber' in ctx) && !('notes' in ctx) && !('pusher' in ctx) && !('customer' in ctx)
+      && !('driverId' in ctx) && !('companyId' in ctx));
+  }
+
+  {
+    const w = OPEN_WORLD();
+    w.invoices.delete('job1');
+    const reg = await tryRegister(w, 'read');
+    check('get: missing invoice fail-closed',
+      await refusalOf(w, JSA_AUTH, { requestId: reg.rid }) === 'not_found');
+    check('get: missing invoice was read only after request authorization',
+      w.invoiceReads.length === 1 && w.invoiceReads[0] === 'job1');
+  }
+
+  {
+    const w = OPEN_WORLD();
+    seedInvoice(w, 'job1', { wellName: '' });
+    const reg = await tryRegister(w, 'read');
+    check('get: empty well fail-closed',
+      await refusalOf(w, JSA_AUTH, { requestId: reg.rid }) === 'not_found');
+  }
+
+  {
+    const w = OPEN_WORLD();
+    seedInvoice(w, 'job1', { companyId: 'foreign-co' });
+    const before = [...w.invoiceReads];
+    const reg = await tryRegister(w, 'read');
+    const r = await refusalOf(w, JSA_AUTH, { requestId: reg.rid });
+    check('get: foreign-company invoice fail-closed without a distinct leak class',
+      r === 'not_found');
+    void before;
+  }
+
+  {
+    const w = OPEN_WORLD();
+    seedInvoice(w, 'job1', { driverId: 'foreign-drv', driverHash: 'foreign-hash' });
+    const reg = await tryRegister(w, 'read');
+    check('get: foreign-driver invoice fail-closed',
+      await refusalOf(w, JSA_AUTH, { requestId: reg.rid }) === 'not_found');
+  }
+
+  {
+    const w = FREE_WORLD();
+    const reg = await tryRegister(w, 'read');
+    await handleComplete(receiptDeps(w), JSA_AUTH, { requestId: reg.rid, action: 'read_completed' });
+    w.invoiceReads = [];
+    const ctx = await handleGetContext(receiptDeps(w), JSA_AUTH, { requestId: reg.rid });
+    check('get: completed request does not return invoice fields',
+      ctx.state === 'completed' && ctx.wellName === undefined && ctx.jobType === undefined);
+    check('get: completed request does not read the invoice',
+      w.invoiceReads.length === 0);
+  }
+
+  {
+    const w = OPEN_WORLD();
+    const reg = await tryRegister(w, 'read');
+    const doc = [...w.docs.entries()][0];
+    w.docs.set(doc[0], { ...doc[1], expiresAtMs: NOW - 1 });
+    w.invoiceReads = [];
+    check('get: expired request refuses before invoice read',
+      await refusalOf(w, JSA_AUTH, { requestId: reg.rid }) === 'expired');
+    check('get: expired request does not read the invoice',
+      w.invoiceReads.length === 0);
+  }
+
+  {
+    const w = OPEN_WORLD();
+    seedInvoice(w, 'job1', { commodityType: 'pw' });
+    const reg = await tryRegister(w, 'acknowledge');
+    w.invoiceReads = [];
+    const ctx = await handleGetContext(receiptDeps(w), JSA_AUTH, { requestId: reg.rid });
+    check('get: acknowledge-only does not gain read-stage job data',
+      ctx.intent === 'acknowledge' && ctx.wellName === undefined && ctx.jobType === undefined);
+    check('get: acknowledge-only does not read the invoice',
+      w.invoiceReads.length === 0);
   }
 }
 

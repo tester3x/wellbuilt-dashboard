@@ -43,14 +43,28 @@ Success:
   groupRef: string | null,
   expiresAtMs?: number,   // pending only — UI countdown, never authority
   action?: <terminal action>  // completed only — supports safe resume
+  wellName?: string,      // pending read-stage only — invoices/{jobRef}.wellName
+  jobType?: string        // pending read-stage only — invoices/{jobRef}.commodityType
 }
 ```
 
+`wellName` / `jobType` are server-resolved invoice display fields. They
+are attached ONLY after authentication, request-state, expiry, audience,
+driver, company, and shift binding have already accepted, and ONLY for a
+pending `read` or `read_and_acknowledge` request. The server Admin-reads
+`invoices/{jobRef}` and requires the invoice's company and driver
+identifiers to match the authenticated principal. Missing invoice, empty
+well, or a foreign/unverifiable binding refuse `not_found` — the same
+coarse class — so a foreign document's existence is not leaked.
+
+Acknowledge-only and completed views do not carry invoice display
+fields. Launch `wellName` / `jobType` hints are never authority.
+
 NOTHING ELSE is returned: no driverId, companyId, periodId,
-originLocalDate, names, credentials, tokens, or PKCE material. A
-COMPLETED request reads back safely (state + its terminal action) so a
-relaunched client can show "already completed" and return, instead of
-re-running stages or guessing.
+originLocalDate, customer, pricing, ticket, notes, pusher, credentials,
+tokens, or PKCE material. A COMPLETED request reads back safely (state +
+its terminal action) so a relaunched client can show "already completed"
+and return, instead of re-running stages or guessing.
 
 Refusals (coarse code → meaning):
 

@@ -14,6 +14,8 @@ export const JSA_REF_RE = /^[A-Za-z0-9._-]{1,128}$/;
 export const JSA_PENDING_TTL_MS = 2 * 60 * 60 * 1000;
 export const JSA_APP_WBT = 'wbt';
 export const JSA_APP_JSA = 'jsa';
+export const JSA_WELL_NAME_MAX = 120;
+export const JSA_JOB_TYPE_MAX = 64;
 
 export type JsaPolicyIntent = 'read' | 'acknowledge' | 'read_and_acknowledge';
 /**
@@ -433,6 +435,13 @@ export interface RequestContextView {
   expiresAtMs?: number;
   /** Completed only — supports safe idempotent resume after a crash. */
   action?: JsaCompletionAction;
+  /**
+   * Pending read-stage only — server-resolved invoice well. Never a
+   * launch hint. Absent on acknowledge-only and completed views.
+   */
+  wellName?: string;
+  /** Pending read-stage only — invoice commodityType when present. */
+  jobType?: string;
 }
 
 /**
@@ -493,6 +502,96 @@ export function decideGetContext(input: {
       groupRef: input.existing.groupRef,
       expiresAtMs: input.existing.expiresAtMs,
     },
+  };
+}
+
+/** Read-stage intents need an invoice well before Job Details may render. */
+export function jobDisplayRequired(view: Pick<RequestContextView, 'intent' | 'state'>): boolean {
+  return view.state === 'pending'
+    && (view.intent === 'read' || view.intent === 'read_and_acknowledge');
+}
+
+export interface InvoiceJobSnapshot {
+  exists: boolean;
+  companyId?: unknown;
+  company?: unknown;
+  driverId?: unknown;
+  assignedDriverId?: unknown;
+  driverHash?: unknown;
+  wellName?: unknown;
+  commodityType?: unknown;
+}
+
+export interface InvoiceJobFields {
+  wellName: string;
+  jobType?: string;
+}
+
+function boundedDisplay(v: unknown, max: number): string | null {
+  if (typeof v !== 'string') return null;
+  const t = v.trim();
+  if (!t || t.length > max) return null;
+  return t;
+}
+
+function invoiceCompanyOf(inv: InvoiceJobSnapshot): string | null {
+  if (typeof inv.companyId === 'string' && inv.companyId.trim()) return inv.companyId.trim();
+  if (typeof inv.company === 'string' && inv.company.trim()) return inv.company.trim();
+  return null;
+}
+
+function invoiceDriverMatches(inv: InvoiceJobSnapshot, expectedDriverId: string): boolean {
+  const ids = [inv.driverId, inv.assignedDriverId, inv.driverHash];
+  return ids.some((id) => typeof id === 'string' && id === expectedDriverId);
+}
+
+function invoiceHasDriverIdentifier(inv: InvoiceJobSnapshot): boolean {
+  return [inv.driverId, inv.assignedDriverId, inv.driverHash]
+    .some((id) => typeof id === 'string' && id.length > 0);
+}
+
+/**
+ * Bind a request-authorized jobRef to invoice display fields.
+ * Missing, empty, foreign, or unverifiable invoices all refuse
+ * `not_found` so a foreign document's existence is not leaked.
+ */
+export function decideInvoiceJobFields(input: {
+  expectedCompanyId: string;
+  expectedDriverId: string;
+  invoice: InvoiceJobSnapshot;
+}): Decision<InvoiceJobFields> {
+  const hidden: Decision<InvoiceJobFields> = { ok: false, refusal: 'not_found', detail: 'job' };
+  if (!input.invoice.exists) return hidden;
+  const company = invoiceCompanyOf(input.invoice);
+  if (!company || company !== input.expectedCompanyId) return hidden;
+  if (!invoiceHasDriverIdentifier(input.invoice)) return hidden;
+  if (!invoiceDriverMatches(input.invoice, input.expectedDriverId)) return hidden;
+  const wellName = boundedDisplay(input.invoice.wellName, JSA_WELL_NAME_MAX);
+  if (!wellName) return hidden;
+  const jobType = input.invoice.commodityType === undefined || input.invoice.commodityType === null
+    || input.invoice.commodityType === ''
+    ? undefined
+    : boundedDisplay(input.invoice.commodityType, JSA_JOB_TYPE_MAX);
+  if (input.invoice.commodityType !== undefined
+    && input.invoice.commodityType !== null
+    && input.invoice.commodityType !== ''
+    && !jobType) {
+    return hidden;
+  }
+  return {
+    ok: true,
+    value: jobType ? { wellName, jobType } : { wellName },
+  };
+}
+
+export function applyJobDisplayFields(
+  view: RequestContextView,
+  fields: InvoiceJobFields,
+): RequestContextView {
+  return {
+    ...view,
+    wellName: fields.wellName,
+    ...(fields.jobType ? { jobType: fields.jobType } : {}),
   };
 }
 
