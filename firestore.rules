@@ -462,6 +462,14 @@ service cloud.firestore {
       allow read, write: if false;
     }
 
+    // Governed JSA immutable artifacts — Admin SDK only. Clients must
+    // not create, mutate, list, or get these records. Not a widening:
+    // the catch-all already denies; this states the deny where audits
+    // look for the collection.
+    match /jsa_governed_artifacts/{requestId} {
+      allow read, write: if false;
+    }
+
     match /jsa_read_receipts/{requestId} {
       allow create: if requestId.matches('^[A-Za-z0-9_-]{43}$')
         && (validJsaReceiptV1(requestId) || validJsaReceiptV2(requestId));

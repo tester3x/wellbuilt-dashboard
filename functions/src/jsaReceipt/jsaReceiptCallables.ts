@@ -3,7 +3,7 @@
  */
 import * as httpsV2 from 'firebase-functions/v2/https';
 import * as admin from 'firebase-admin';
-import { randomBytes } from 'crypto';
+import { createHash, randomBytes } from 'crypto';
 import { checkRateLimit } from '../security/rateLimit';
 import { decideResolve } from '../security/operational/shiftAuthority.js';
 import { shiftAuthorityPath, type ShiftAuthorityRecord } from '../security/operational/shiftAuthority.js';
@@ -13,8 +13,9 @@ import {
   handleComplete,
   handleConsume,
   handleGetContext,
+  handlePersist,
   handleRegister,
-  type ReceiptDeps,
+  type ArtifactDeps,
   type ReceiptTxn,
 } from './jsaReceiptHandlers.js';
 
@@ -38,7 +39,7 @@ function authOf(request: httpsV2.CallableRequest) {
   };
 }
 
-export function buildReceiptDeps(): ReceiptDeps {
+export function buildReceiptDeps(): ArtifactDeps {
   const db = admin.firestore();
   // CANONICAL POLICY READERS — the very same functions SSO issuance uses,
   // taken from its production deps builder rather than re-implemented, so
@@ -111,6 +112,28 @@ export function buildReceiptDeps(): ReceiptDeps {
       // Bounded reason codes only — never identifiers.
       console.log(JSON.stringify({ tag: event, ...extra }));
     },
+    sha256Hex(bytes) {
+      return createHash('sha256').update(Buffer.from(bytes)).digest('hex');
+    },
+    async writeImmutableObject(path, bytes, contentType) {
+      const file = admin.storage().bucket().file(path);
+      try {
+        await file.save(Buffer.from(bytes), {
+          resumable: false,
+          public: false,
+          metadata: {
+            contentType,
+            cacheControl: 'private,max-age=31536000,immutable',
+          },
+          preconditionOpts: { ifGenerationMatch: 0 },
+        });
+        return { written: true };
+      } catch (err) {
+        const code = (err as { code?: number | string }).code;
+        if (code === 412 || code === '412') return { written: false };
+        throw err;
+      }
+    },
   };
 }
 
@@ -157,5 +180,12 @@ export const jsaConsumeReadResult = httpsV2.onCall(OPTIONS, async (request) => {
   if (!request.auth?.uid) throw new httpsV2.HttpsError('unauthenticated', 'not_authorized');
   await limited(request.auth.uid, 'jsa_consume');
   try { return await handleConsume(buildReceiptDeps(), authOf(request), request.data); }
+  catch (err) { throw toHttps(err); }
+});
+
+export const jsaPersistGovernedArtifact = httpsV2.onCall(OPTIONS, async (request) => {
+  if (!request.auth?.uid) throw new httpsV2.HttpsError('unauthenticated', 'not_authorized');
+  await limited(request.auth.uid, 'jsa_persist_artifact');
+  try { return await handlePersist(buildReceiptDeps(), authOf(request), request.data); }
   catch (err) { throw toHttps(err); }
 });

@@ -164,3 +164,57 @@ Do not invent a client Firestore write. Do not treat
 `jsaConsumeReadResult` `{ requestId }`
 Returns the terminal view or fails closed. Second consume sets
 `alreadyConsumed: true` so the job action advances once.
+
+## jsaPersistGovernedArtifact — immutable completed snapshot
+
+Authenticated callable; session must be `kind:'driver'`, `app:'jsa'`.
+Request body, exact keys:
+
+```
+{
+  requestId: string,   // 43-char base64url
+  snapshot: {          // bounded driver-authored content ONLY
+    prepared?, locationAcks?, locations?,
+    stepsAcknowledged?, stepAcks?,
+    ppeSelected?, ppeOtherItems?,
+    notes?, pusher?, otherInfo?,
+    printedName,                 // required
+    signature: { mimeType?: 'image/png', data: string },
+    truckNumber?,                // display only
+    formDate?                    // YYYY-MM-DD display only
+  }
+}
+```
+
+Forbidden at every layer: uid, driverId, companyId, jobRef, groupRef,
+periodId, shiftId, originLocalDate, shiftState, wellName, jobType,
+intent, action, completedAtMs, names/tokens/hashes. Extra keys are
+rejected. Display fields never become identity or job/shift authority.
+
+The server:
+
+1. Loads `jsa_governed_requests/{requestId}` and requires terminal
+   completion plus request-bound driver/company matching the caller.
+2. Derives company, driver, job, group, period, shift, intent, action,
+   and completedAtMs only from that record.
+3. Admin-reads `invoices/{jobRef}` and re-verifies company/driver/job
+   before write. `wellName` / optional `jobType` are invoice-derived.
+4. Decodes a PNG signature, enforces a 128 KiB decoded limit, computes
+   SHA-256, and writes a create-only Storage object at
+   `jsa_governed_artifacts/{requestId}/signature/v1-{sha256}.png`.
+5. Creates exactly one Admin-owned document
+   `jsa_governed_artifacts/{requestId}`. Never writes `jsas`.
+
+Success:
+
+```
+{
+  requestId, reused, schemaVersion,
+  snapshotHash, artifactWrittenAtMs,
+  signature: { mimeType, byteSize, sha256, storagePath }
+}
+```
+
+`reused: true` is the byte-identical retry. A retry with a different
+authored snapshot or signature is `conflict`. Concurrent first writes
+serialize to one document. There is no update path.

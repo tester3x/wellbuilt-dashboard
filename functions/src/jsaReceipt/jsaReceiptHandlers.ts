@@ -41,6 +41,20 @@ import {
   type JsaCompanyPolicy,
   type ReceiptRefusal,
 } from './jsaReceiptCore.js';
+import {
+  artifactPath,
+  canonicalizeAuthoredSnapshot,
+  decideInvoiceArtifactBinding,
+  decidePersist,
+  decodeSignaturePng,
+  fromStoredArtifact,
+  parseAuthoredSnapshot,
+  parsePersistInput,
+  persistView,
+  signatureStoragePath,
+  toStoredArtifact,
+  type PersistView,
+} from './jsaArtifactCore.js';
 
 export type JsaReceiptHttp =
   | 'unauthenticated' | 'permission-denied' | 'invalid-argument'
@@ -95,6 +109,16 @@ export interface ReceiptDeps {
   readInvoice(jobRef: string): Promise<{ exists: boolean; data?: Record<string, unknown> }>;
   runTransaction<T>(fn: (txn: ReceiptTxn) => Promise<T>): Promise<T>;
   log(event: string, extra: Record<string, string>): void;
+}
+
+/** Persist-only I/O. Existing register/complete/consume deps stay unchanged. */
+export interface ArtifactDeps extends ReceiptDeps {
+  sha256Hex(bytes: Uint8Array): string;
+  writeImmutableObject(
+    path: string,
+    bytes: Uint8Array,
+    contentType: string,
+  ): Promise<{ written: boolean }>;
 }
 
 function throwDecision(d: Decision<unknown> & { ok: false }): never {
@@ -309,5 +333,122 @@ export async function handleConsume(
     }
     deps.log('jsa.receipt.consume', { write: out.write });
     return out.view;
+  });
+}
+
+/**
+ * jsaPersistGovernedArtifact — first immutable write of a completed
+ * request's bounded authored snapshot. Identity/job/shift/well come
+ * from the server-held request + its request-bound invoice. The
+ * current shift is not re-authored: a completed record is already
+ * terminal evidence.
+ */
+export async function handlePersist(
+  deps: ArtifactDeps,
+  auth: { uid?: string | null; claims?: Record<string, unknown> | null },
+  data: unknown,
+): Promise<PersistView> {
+  const p = principal(auth, JSA_APP_JSA);
+  const body = unwrap(parsePersistInput(data));
+  const authored = unwrap(parseAuthoredSnapshot(body.snapshot));
+  const decoded = unwrap(decodeSignaturePng(
+    (body.snapshot as { signature?: unknown }).signature,
+  ));
+  const signatureSha256 = deps.sha256Hex(decoded.bytes);
+  const signature = {
+    mimeType: decoded.mimeType,
+    byteSize: decoded.bytes.length,
+    sha256: signatureSha256,
+    storagePath: signatureStoragePath(body.requestId, signatureSha256),
+  };
+  const snapshotHash = deps.sha256Hex(Buffer.from(
+    canonicalizeAuthoredSnapshot(authored, signature),
+    'utf8',
+  ));
+
+  const reqPath = recordPath(body.requestId);
+  const artPath = artifactPath(body.requestId);
+
+  const loaded = await deps.runTransaction(async (txn) => {
+    const reqSnap = await txn.get(reqPath);
+    const artSnap = await txn.get(artPath);
+    return {
+      request: reqSnap.exists ? fromStored(reqSnap.data) : null,
+      artifact: artSnap.exists ? fromStoredArtifact(artSnap.data) : null,
+    };
+  });
+
+  if (loaded.artifact) {
+    const decided = decidePersist({
+      existingRequest: loaded.request,
+      existingArtifact: loaded.artifact,
+      requestId: body.requestId,
+      principal: p,
+      snapshotHash,
+      signatureSha256,
+      nowMs: deps.nowMs(),
+      uid: p.uid,
+      wellName: loaded.artifact.wellName,
+      jobType: loaded.artifact.jobType,
+      authored,
+      signature,
+    });
+    const out = unwrap(decided);
+    deps.log('jsa.receipt.persist', { write: out.write });
+    return persistView(out.artifact, out.write === 'reuse');
+  }
+
+  const gate = decidePersist({
+    existingRequest: loaded.request,
+    existingArtifact: null,
+    requestId: body.requestId,
+    principal: p,
+    snapshotHash,
+    signatureSha256,
+    nowMs: deps.nowMs(),
+    uid: p.uid,
+    wellName: 'pending-invoice',
+    authored,
+    signature,
+  });
+  unwrap(gate);
+
+  const request = loaded.request!;
+  const invoice = await deps.readInvoice(request.jobRef);
+  const fields = unwrap(decideInvoiceArtifactBinding({
+    requestJobRef: request.jobRef,
+    loadedJobRef: request.jobRef,
+    requestCompanyId: request.companyId,
+    requestDriverId: request.driverId,
+    invoice: { exists: invoice.exists, ...(invoice.data || {}) },
+  }));
+
+  await deps.writeImmutableObject(signature.storagePath, decoded.bytes, signature.mimeType);
+
+  return deps.runTransaction(async (txn) => {
+    const reqSnap = await txn.get(reqPath);
+    const existingRequest = reqSnap.exists ? fromStored(reqSnap.data) : null;
+    const artSnap = await txn.get(artPath);
+    const existingArtifact = artSnap.exists ? fromStoredArtifact(artSnap.data) : null;
+    const decided = decidePersist({
+      existingRequest,
+      existingArtifact,
+      requestId: body.requestId,
+      principal: p,
+      snapshotHash,
+      signatureSha256,
+      nowMs: deps.nowMs(),
+      uid: p.uid,
+      wellName: fields.wellName,
+      jobType: fields.jobType,
+      authored,
+      signature,
+    });
+    const out = unwrap(decided);
+    if (out.write === 'create') {
+      txn.create(artPath, toStoredArtifact(out.artifact));
+    }
+    deps.log('jsa.receipt.persist', { write: out.write });
+    return persistView(out.artifact, out.write === 'reuse');
   });
 }
