@@ -422,8 +422,7 @@ for (const [label, value] of [
   }
 }
 {
-  // 0.4.1 still fail-closes wellbuilt-jsa at isSsoAudience, so the handler
-  // cannot redeem that audience. The emission helper is the seeded path.
+  // Audience-gated emission helper: JSA only, never tickets/equipment.
   check('legalNameForSsoExchange emits only for the jsa audience',
     legalNameForSsoExchange('wellbuilt-jsa', 'Michael S Burger') === 'Michael S Burger');
   check('legalNameForSsoExchange omits for tickets',

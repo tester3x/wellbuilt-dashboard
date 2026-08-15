@@ -53,7 +53,7 @@ const STALE_AUTHORITY = {
   openPeriodId: '2026-06-14_080000', originLocalDate: '2026-08-12', version: 2,
 };
 
-function makeWorld({ plan = null, contract = null, contractState = 'legacy', authority = null } = {}) {
+function makeWorld({ plan = null, contract = null, contractState = 'legacy', authority = null, legalName = 'Michael S Burger' } = {}) {
   const docs = new Map();
   const logs = [];
   let counter = 0;
@@ -66,7 +66,7 @@ function makeWorld({ plan = null, contract = null, contractState = 'legacy', aut
     getDriver: async (id) => (id === DRIVER
       ? {
           driverId: DRIVER, companyId: COMPANY, active: true,
-          displayName: 'Mikezfold', legalName: 'Michael S Burger',
+          displayName: 'Mikezfold', legalName,
         } : null),
     getCompanyContract: async () => ({ state: contractState, contract }),
     getPlan: async () => plan,
@@ -111,7 +111,8 @@ const planWith = (apps, capabilities = ['jsa']) => ({
 const JSA_INCLUDED = { [JSA_AUDIENCE]: { included: true } };
 
 const audienceLive = isSsoAudience(JSA_AUDIENCE);
-console.log(`mirror audience support: ${audienceLive ? '0.5.0+ (activation matrix)' : '0.4.1 (fail-closed matrix)'}`);
+console.log(`mirror audience support: ${audienceLive ? '0.5.1 (activation matrix)' : 'pre-0.5.1 (fail-closed matrix)'}`);
+check('isSsoAudience admits wellbuilt-jsa on the 0.5.1 mirror', audienceLive === true);
 
 if (!audienceLive) {
   // ── 0.4.1: the held wiring must be perfectly inert ─────────────────────
@@ -168,6 +169,34 @@ if (!audienceLive) {
     check('  the stored code record does not carry legalName',
       !('legalName' in stored));
     check('  the session claim names jsa', /"app":"jsa"/.test(ex.customToken));
+    check('  the grant is consumed exactly once', [...w.docs.values()][0].consumed === true);
+    check('  success logs do not carry legalName',
+      !w.logs.some((l) => Object.prototype.hasOwnProperty.call(l.fields || {}, 'legalName')));
+    let replay;
+    try { replay = { ok: true, res: await handleSsoExchange(w.deps, {
+      protocolVersion: SSO_PROTOCOL_VERSION, audience: JSA_AUDIENCE,
+      code: r.res.code, codeVerifier: VERIFIER,
+    }) }; } catch (e) { replay = { ok: false, publicCode: e.publicCode }; }
+    check('  sequential replay is fail-closed and emits no second legalName',
+      !replay.ok && replay.publicCode === 'invalid_grant');
+  }
+  {
+    const w = makeWorld({
+      contractState: 'active', contract: CONTRACT(), plan: planWith(JSA_INCLUDED),
+      authority: OPEN_AUTHORITY, legalName: null,
+    });
+    const r = await issue(w);
+    const ex = await handleSsoExchange(w.deps, {
+      protocolVersion: SSO_PROTOCOL_VERSION, audience: JSA_AUDIENCE,
+      code: r.res.code, codeVerifier: VERIFIER,
+    });
+    check('missing legalName is omitted while the JSA grant still succeeds',
+      typeof ex.customToken === 'string'
+      && !('legalName' in ex)
+      && ex.displayName === 'Mikezfold'
+      && JSON.stringify(ex.jsaBinding) === JSON.stringify([...w.docs.values()][0].jsaBinding));
+    check('displayName is never substituted for a missing legalName',
+      ex.displayName === 'Mikezfold' && ex.legalName !== ex.displayName);
   }
   {
     // Owner-operator: included, no gate anywhere, no open shift.
