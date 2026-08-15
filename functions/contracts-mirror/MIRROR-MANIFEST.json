@@ -2,9 +2,9 @@
   "generatedBy": "functions/tools/mirror-contracts.mjs",
   "purpose": "GENERATED DEPLOYMENT MATERIAL — not a canonical source",
   "name": "@tester3x/wellbuilt-contracts",
-  "version": "0.5.2",
-  "sourceSha256": "f0890143ac49f311683c8abfea87d2ac7b81910af4b80114b20d04c8e900cfc1",
-  "sourceIntegrity": "sha512-7rUNrZTW53+v+R/wK/QuwV7UI4ueAWV7qDlgY6AGqANrl2+R0tAAfqBjPkXM0qTwAyjPWman1UGNjpcOzj+oqg==",
+  "version": "0.6.0",
+  "sourceSha256": "29602b003c70d829d5e3da113f8b0211e236b925dfba4402a4abb0b3ea6424e8",
+  "sourceIntegrity": "sha512-2WznYbfmqUAC58kzom4BgqmCZytBgXvfFdpHQGr2S773SfvUReWigg9jS4IxIcQv7InA+KYWxycqAmPthaJw+g==",
   "files": {
     "NOTICE": "91943045527aa71655a15726b536b3612b2a21b669799bc6be31d086888effa5",
     "README.md": "9c4598bf2d3c30238a3c4cb580aec3d370e0dd51d92ca64e06bfc4f07673038b",
@@ -36,10 +36,10 @@
     "dist/handshake.d.ts.map": "32149b6aa3175c3aa1a77d25524ea8c9538e9d617501c369f47ccb68bb972e1b",
     "dist/handshake.js": "742cc9e08073a2f31b15539588cb43d6610a8f933df9e33e00df4cb3c4f72c9c",
     "dist/handshake.js.map": "13975e2d04681ee801759904665de11c1f4558e5163615f7db5540eb61984618",
-    "dist/index.d.ts": "1e61d2102a6e76160ae3dfdb3aa4bdb8b6eb60fe23e377aac7827a56a4cbbb1f",
-    "dist/index.d.ts.map": "b10cf7767282fa62252b07a5bb25f9b47003a530058f2e5ee45197460f50d201",
-    "dist/index.js": "1ee195ad6862bbe9e889762eed82f4191e45f292dd4e0ebf3a9897f33e7bd5e8",
-    "dist/index.js.map": "abdf51c55ce2d07a5422de9053e45fbcf50d4410bb7558b6dda60a7a986e9b2b",
+    "dist/index.d.ts": "27e7a45f88ce4ccfad5c761946bd2ffa04403da665919d1615de3691a786d02d",
+    "dist/index.d.ts.map": "99cf519526571ef2570aa7bbe35c182bf6671baf4123d6a4615df2599bc6de8c",
+    "dist/index.js": "6d15fae213154a3784c192fd3dea50fc0beb9d801a4dbfbdd3322165e1905c5f",
+    "dist/index.js.map": "8164ef1f7c9ed4657cfb7e1e22177dd6cc2be5c9208e0ab500d5baf602ac0ab8",
     "dist/plan/appEntitlement.d.ts": "191d6b0608356d53017fafdeb450ef2acbe0b7011f838b88ca81e5bef3703498",
     "dist/plan/appEntitlement.d.ts.map": "8fe248fe20940cac40ebddbe750f37624aafc6e8433923065bfa83d6b1598f74",
     "dist/plan/appEntitlement.js": "e5bb35bfde90c85fa903c75ef67a46bd8c36caf83657f99bfc96aeca75a9ba89",
@@ -56,6 +56,10 @@
     "dist/sso/jsaCurrentShiftReadEvidence.d.ts.map": "25de75bf78aebab4ddd0581f1e34458dd42c39eb0735d7e01c9143e5b16a9a43",
     "dist/sso/jsaCurrentShiftReadEvidence.js": "36bd4672f33c986f50fcf7dfd580f54dbf9113af4952f7faa96a537cd80a4c70",
     "dist/sso/jsaCurrentShiftReadEvidence.js.map": "08920ad84d9d1128dc921f66c849ea4fe973b1996214ea9f4d72d170c9b07eb7",
+    "dist/sso/jsaJobAcknowledgment.d.ts": "36ca537a45174aee35c66e849e967361697d808af23cac394a8d8b538cff7fd9",
+    "dist/sso/jsaJobAcknowledgment.d.ts.map": "4194f141844c15733d0e59cb13b3a44db9f31cc8782154e997867ba53b83c7c7",
+    "dist/sso/jsaJobAcknowledgment.js": "952b08efc22915c0e4a0c85bac16ab622c1da7f4a4edb5700f1220632a96dcae",
+    "dist/sso/jsaJobAcknowledgment.js.map": "e08ddd254ed162667a01a85f5963d48c9e1e27850b1ababa1ced134ee573eaec",
     "dist/sso/jsaLaunch.d.ts": "2029b813be7e7b83b02f45b02612000a3f51eb571b64ef1428dd61ceabd01b67",
     "dist/sso/jsaLaunch.d.ts.map": "5846e2680e64e42188e5a02032a11f516bc949647bb88461ec532ed9fedd07db",
     "dist/sso/jsaLaunch.js": "568aa343727c212e01b19b50f05379e372885143bbc48094d3c7b63d021ca590",
@@ -68,6 +72,6 @@
     "dist/types.d.ts.map": "bcfef37a079c90a7b62d8f3f5126962c54bdd1bec24bd1edfdfcd655e26a91d6",
     "dist/types.js": "63ac20a8757a6977cdfca6895f1e5f55feb8e83248c9a37adb507b57ba026107",
     "dist/types.js.map": "6d3fcbfa87dcd689296b3fdd7b6aa8dca43a543794cf453e2fd61142fc984498",
-    "package.json": "7e3f9a789c5cc0b5918cca7d7e1418595ebaba05e797f397c1b49c7adbcda467"
+    "package.json": "6c754564d29088d171a33665f7b83e582b1f63a11ecb6faa959aa737ac02dead"
   }
 }
