@@ -1,9 +1,9 @@
 # GENERATED deployment mirror — do not edit
 
 Byte-for-byte extraction of the immutable published
-`@tester3x/wellbuilt-contracts@0.4.1` artifact
-(SHA-256 `66825f47b1824259d2bf933eb052011ec3cd39c0d7f1cff120c7dab592d4d7b5`,
-integrity `sha512-c3NEGfKRdIjcC9sgqSFaTLsWskhb+911NkWgbEjWe0yJ9F+ZYXva1BFumNau+IBar2tkKlP9bZK4pa2IpINDCA==`).
+`@tester3x/wellbuilt-contracts@0.5.1` artifact
+(SHA-256 `3b3c1ed851cc89cc64e80d6cafa1ad711b2c15cc433f1e7eeb02e738ea71d18b`,
+integrity `sha512-NdI5aCq7st14sbF2BXv1iSaJmsttt8DZrtDbkEGMMbu65oZE2sFcgfdQ0bWXwPPYUqZqYUeHW667GABIYQIBGA==`).
 
 Exists ONLY so Google's Functions builder can `npm ci` this
 dependency without GitHub Packages authentication. The published
