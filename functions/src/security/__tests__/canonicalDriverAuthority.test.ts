@@ -4,6 +4,8 @@
 import {
   loadCanonicalDriverAuthority,
   getAuthoritativeDriverForSso,
+  resolveCanonicalLegalName,
+  CANONICAL_LEGAL_NAME_MAX,
   type CanonicalDriverRecordReaders,
 } from '../canonicalDriverAuthority';
 
@@ -14,6 +16,7 @@ function readers(partial: {
   profActive?: boolean;
   companyId?: string | null;
   displayName?: unknown;
+  legalName?: unknown;
 }): CanonicalDriverRecordReaders {
   return {
     getCredentials: async () => ({
@@ -29,6 +32,10 @@ function readers(partial: {
         partial.displayName === undefined
           ? 'Mike S'
           : (partial.displayName as string | null),
+      legalName:
+        partial.legalName === undefined
+          ? null
+          : (partial.legalName as string | null),
     }),
   };
 }
@@ -40,6 +47,7 @@ describe('loadCanonicalDriverAuthority', () => {
       driverId: 'd1',
       companyId: 'liquid-gold',
       displayName: 'Mike S',
+      legalName: null,
       credentialsActive: true,
       profileActive: true,
       active: true,
@@ -94,6 +102,7 @@ describe('getAuthoritativeDriverForSso adapter', () => {
       companyId: 'liquid-gold',
       active: true,
       displayName: 'Mike S',
+      legalName: null,
     });
   });
 
@@ -148,5 +157,95 @@ describe('authoritative display name', () => {
     // name is the direction this module must never take.
     const a = await loadCanonicalDriverAuthority('d-other', readers({}));
     expect(a?.driverId).toBe('d-other');
+  });
+});
+
+describe('resolveCanonicalLegalName', () => {
+  test('accepts a distinct trimmed legal name', () => {
+    expect(resolveCanonicalLegalName('  Michael S Burger  ', 'Mike S')).toBe(
+      'Michael S Burger',
+    );
+  });
+
+  test('rejects a value identical to displayName, case-insensitively', () => {
+    expect(resolveCanonicalLegalName('Mike S', 'Mike S')).toBeNull();
+    expect(resolveCanonicalLegalName('mike s', 'Mike S')).toBeNull();
+    expect(resolveCanonicalLegalName('  MIKE   S  ', 'Mike S')).toBeNull();
+  });
+
+  test.each([
+    ['absent', null],
+    ['blank', ''],
+    ['whitespace only', '   '],
+    ['not a string', 42],
+    ['carrying a control character', `Michael${String.fromCharCode(0)}`],
+    ['carrying a newline', 'Michael\nBurger'],
+    ['over the 64-char bound', 'x'.repeat(CANONICAL_LEGAL_NAME_MAX + 1)],
+  ])('an unusable legalName (%s) is null, never a placeholder', (_label, value) => {
+    expect(resolveCanonicalLegalName(value, 'Mike S')).toBeNull();
+  });
+
+  test('never copies displayName when legalName is missing', () => {
+    expect(resolveCanonicalLegalName(null, 'Mike S')).toBeNull();
+    expect(resolveCanonicalLegalName(undefined, 'Mike S')).toBeNull();
+  });
+
+  test('a missing displayName does not invent or reject a valid legalName', () => {
+    expect(resolveCanonicalLegalName('Michael S Burger', null)).toBe(
+      'Michael S Burger',
+    );
+  });
+});
+
+describe('authoritative legal name', () => {
+  test('a distinct top-level legalName is resolved onto authority', async () => {
+    const a = await loadCanonicalDriverAuthority(
+      'd1',
+      readers({ legalName: '  Michael S Burger  ' }),
+    );
+    expect(a?.legalName).toBe('Michael S Burger');
+    expect(a?.displayName).toBe('Mike S');
+  });
+
+  test('a displayName-identical legalName is omitted, never copied', async () => {
+    const a = await loadCanonicalDriverAuthority(
+      'd1',
+      readers({ legalName: 'Mike S' }),
+    );
+    expect(a?.legalName).toBeNull();
+    expect(a?.displayName).toBe('Mike S');
+  });
+
+  test('a missing legalName never affects liveness', async () => {
+    const a = await loadCanonicalDriverAuthority(
+      'd1',
+      readers({ legalName: null }),
+    );
+    expect(a).not.toBeNull();
+    expect(a?.active).toBe(true);
+    expect(a?.legalName).toBeNull();
+  });
+
+  test('a present legalName never rescues a dead driver', async () => {
+    const a = await loadCanonicalDriverAuthority(
+      'd1',
+      readers({ legalName: 'Michael S Burger', credActive: false }),
+    );
+    expect(a?.active).toBe(false);
+    expect(a?.legalName).toBe('Michael S Burger');
+  });
+
+  test('the SSO adapter carries the resolved legalName', async () => {
+    const d = await getAuthoritativeDriverForSso(
+      'd1',
+      readers({ legalName: 'Michael S Burger' }),
+    );
+    expect(d).toEqual({
+      driverId: 'd1',
+      companyId: 'liquid-gold',
+      active: true,
+      displayName: 'Mike S',
+      legalName: 'Michael S Burger',
+    });
   });
 });

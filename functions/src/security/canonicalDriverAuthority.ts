@@ -11,11 +11,37 @@
  *
  * It does surface the profile's own displayName, because that record is the
  * authoritative source of it and the SSO exchange has to return it to WB-T.
- * That is a read of an attribute belonging to an ALREADY-resolved driver,
+ * It also surfaces top-level profile.legalName for the JSA audience only.
+ * Both are reads of attributes belonging to an ALREADY-resolved driver,
  * never an input to resolving one — the direction that matters.
  */
 import * as admin from 'firebase-admin';
 import { normalizeSsoDisplayName } from '@tester3x/wellbuilt-contracts';
+
+/** Matches registration NAME_MAX_LEN. Stricter than SSO_DISPLAY_NAME_MAX. */
+export const CANONICAL_LEGAL_NAME_MAX = 64;
+
+/**
+ * Canonical acknowledgment identity from top-level `profile.legalName`.
+ *
+ * Accepts only a string that trims to a nonempty value of at most 64
+ * characters and is not the same (case-insensitive, after normalization)
+ * as the already-resolved displayName. Fail any check → null. Never
+ * substitutes displayName. Nested `profile.profile.legalName` is not read
+ * here; the caller must pass the top-level field only.
+ */
+export function resolveCanonicalLegalName(
+  raw: unknown,
+  displayName: string | null,
+): string | null {
+  const candidate = normalizeSsoDisplayName(raw);
+  if (!candidate) return null;
+  if (candidate.length > CANONICAL_LEGAL_NAME_MAX) return null;
+  if (displayName && candidate.toLowerCase() === displayName.toLowerCase()) {
+    return null;
+  }
+  return candidate;
+}
 
 /** Authoritative secure-driver status as the server sees it. */
 export type CanonicalDriverAuthority = {
@@ -29,6 +55,11 @@ export type CanonicalDriverAuthority = {
    * look dead. Liveness is decided by `active` alone, exactly as before.
    */
   displayName: string | null;
+  /**
+   * Top-level profile.legalName after resolveCanonicalLegalName, or null
+   * when absent or unusable. Missing legalName never affects liveness.
+   */
+  legalName: string | null;
   credentialsActive: boolean;
   profileActive: boolean;
   /**
@@ -46,6 +77,7 @@ export type CanonicalDriverRecordReaders = {
     active: boolean;
     companyId: string | null;
     displayName?: string | null;
+    legalName?: string | null;
   }>;
 };
 
@@ -73,12 +105,16 @@ export async function loadCanonicalDriverAuthority(
 
   const credentialsActive = cred.active;
   const profileActive = profile.active;
+  // Normalized through the canonical protocol helper so the server can
+  // never hold a name in a shape it would refuse to send.
+  const displayName = normalizeSsoDisplayName(profile.displayName);
   return {
     driverId,
     companyId: profile.companyId,
-    // Normalized through the canonical protocol helper so the server can
-    // never hold a name in a shape it would refuse to send.
-    displayName: normalizeSsoDisplayName(profile.displayName),
+    displayName,
+    // Top-level only. Distinct from displayName or omitted. Never a
+    // displayName fallback — a missing/identical/unusable value is null.
+    legalName: resolveCanonicalLegalName(profile.legalName, displayName),
     credentialsActive,
     profileActive,
     active: credentialsActive && profileActive,
@@ -104,6 +140,7 @@ export function productionCanonicalDriverReaders(): CanonicalDriverRecordReaders
         active?: boolean;
         companyId?: unknown;
         displayName?: unknown;
+        legalName?: unknown;
       };
       const companyId =
         typeof val.companyId === 'string' && val.companyId.trim().length > 0
@@ -114,9 +151,11 @@ export function productionCanonicalDriverReaders(): CanonicalDriverRecordReaders
         active: val.active !== false,
         companyId,
         // Raw here; loadCanonicalDriverAuthority normalizes. Only the
-        // profile's own displayName is read — no other profile field, and
-        // never the legacy approved namespace.
+        // profile's own top-level displayName and legalName are read —
+        // never nested profile.legalName, and never the legacy approved
+        // namespace.
         displayName: typeof val.displayName === 'string' ? val.displayName : null,
+        legalName: typeof val.legalName === 'string' ? val.legalName : null,
       };
     },
   };
@@ -136,6 +175,7 @@ export async function getAuthoritativeDriverForSso(
   companyId: string | null;
   active: boolean;
   displayName: string | null;
+  legalName: string | null;
 } | null> {
   const auth = await loadCanonicalDriverAuthority(driverId, readers);
   if (!auth) return null;
@@ -144,5 +184,6 @@ export async function getAuthoritativeDriverForSso(
     companyId: auth.companyId,
     active: auth.active,
     displayName: auth.displayName,
+    legalName: auth.legalName,
   };
 }

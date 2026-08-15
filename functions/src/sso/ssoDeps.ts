@@ -30,6 +30,15 @@ export interface AuthoritativeDriver {
    * Only the tickets audience is ever told this; see handleSsoExchange.
    */
   displayName: string | null;
+  /**
+   * Canonical acknowledgment identity from top-level profile.legalName,
+   * already resolved, or null when absent or unusable.
+   *
+   * Nullable so a profile-data gap can never look like a liveness failure
+   * or change grant consumption. Only the JSA audience is ever told this;
+   * see handleSsoExchange. Never a displayName fallback.
+   */
+  legalName: string | null;
 }
 
 /** The stored authorization-code record. Never contains the raw code. */

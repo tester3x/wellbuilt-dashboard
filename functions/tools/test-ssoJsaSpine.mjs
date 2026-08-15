@@ -2,7 +2,7 @@
  * JSA spine — issuance/exchange wiring for the WB-JSA audience.
  *
  * DUAL-MODE by design. The wiring is forward-compatible: against the
- * pinned 0.4.0 contracts mirror the 'wellbuilt-jsa' audience MUST fail
+ * pinned 0.4.1 contracts mirror the 'wellbuilt-jsa' audience MUST fail
  * closed at the allowlist (nothing minted, nothing exchanged, no jsa
  * branch reachable); once the mirror carries the 0.5.0 audience, the full
  * activation matrix below runs. Both modes are real tests — the first
@@ -64,7 +64,10 @@ function makeWorld({ plan = null, contract = null, contractState = 'legacy', aut
     base64Url: (b) => Buffer.from(b).toString('base64url'),
     expiresAtTimestamp: (ms) => ({ __timestamp: true, ms }),
     getDriver: async (id) => (id === DRIVER
-      ? { driverId: DRIVER, companyId: COMPANY, active: true, displayName: 'Mikezfold' } : null),
+      ? {
+          driverId: DRIVER, companyId: COMPANY, active: true,
+          displayName: 'Mikezfold', legalName: 'Michael S Burger',
+        } : null),
     getCompanyContract: async () => ({ state: contractState, contract }),
     getPlan: async () => plan,
     getShiftAuthority: async () => authority,
@@ -108,10 +111,10 @@ const planWith = (apps, capabilities = ['jsa']) => ({
 const JSA_INCLUDED = { [JSA_AUDIENCE]: { included: true } };
 
 const audienceLive = isSsoAudience(JSA_AUDIENCE);
-console.log(`mirror audience support: ${audienceLive ? '0.5.0+ (activation matrix)' : '0.4.0 (fail-closed matrix)'}`);
+console.log(`mirror audience support: ${audienceLive ? '0.5.0+ (activation matrix)' : '0.4.1 (fail-closed matrix)'}`);
 
 if (!audienceLive) {
-  // ── 0.4.0: the held wiring must be perfectly inert ─────────────────────
+  // ── 0.4.1: the held wiring must be perfectly inert ─────────────────────
   const w = makeWorld({
     contractState: 'active', contract: CONTRACT(), plan: planWith(JSA_INCLUDED),
     authority: OPEN_AUTHORITY,
@@ -131,6 +134,10 @@ if (!audienceLive) {
   }) }; } catch (e) { ex = { ok: false, publicCode: e.publicCode }; }
   check('jsa exchange fails closed at the audience allowlist',
     !ex.ok && ex.publicCode === 'unsupported_audience');
+  check('  fail-closed exchange does not emit legalName',
+    !ex.ok && !('legalName' in (ex.res || {})));
+  check('  fail-closed logs do not carry legalName',
+    !wx.logs.some((l) => Object.prototype.hasOwnProperty.call(l.fields || {}, 'legalName')));
 } else {
   // ── 0.5.0+: full activation matrix ─────────────────────────────────────
   {
@@ -154,6 +161,12 @@ if (!audienceLive) {
     check('  exchange returns the stored binding byte-for-byte',
       JSON.stringify(ex.jsaBinding) === JSON.stringify(stored.jsaBinding));
     check('  exchange returns the authoritative display name', ex.displayName === 'Mikezfold');
+    check('  exchange returns the canonical legalName for jsa only',
+      ex.legalName === 'Michael S Burger');
+    check('  legalName is not copied into the minted claims',
+      !/"legalName"/.test(ex.customToken));
+    check('  the stored code record does not carry legalName',
+      !('legalName' in stored));
     check('  the session claim names jsa', /"app":"jsa"/.test(ex.customToken));
   }
   {

@@ -205,6 +205,11 @@ export async function handleSsoExchange(
   const displayName = audienceCarriesDisplayName(record.audience as SsoAudience) || isJsaAudience
     ? normalizeSsoDisplayName(driver.displayName)
     : null;
+  // JSA-only. Already resolved on the revalidated driver. Omitted when
+  // missing — the grant is already consumed and a profile-data gap must
+  // not be reported as a refusal. Never displayName, never a request
+  // field, never a claim, never a log field, never a code-record field.
+  const legalName = legalNameForSsoExchange(record.audience, driver.legalName);
 
   return {
     protocolVersion: SSO_PROTOCOL_VERSION,
@@ -223,7 +228,25 @@ export async function handleSsoExchange(
     // to nothing it received in a launch URI or holds in a local cache.
     ...(isJsaAudience && record.jsaBinding ? { jsaBinding: record.jsaBinding } : {}),
     ...(displayName ? { displayName } : {}),
+    ...(legalName ? { legalName } : {}),
   };
+}
+
+/**
+ * JSA-audience-only emission of the already-resolved canonical legalName.
+ *
+ * Returns undefined for every other audience and when the resolver omitted.
+ * Never substitutes displayName. Extracted so the 0.4.1 fail-closed
+ * allowlist can still pin the emission rule before wellbuilt-jsa is
+ * admitted by isSsoAudience.
+ */
+export function legalNameForSsoExchange(
+  audience: string,
+  legalName: string | null | undefined,
+): string | undefined {
+  if (resolveWellbuiltAppKey(audience) !== WELLBUILT_APP_JSA) return undefined;
+  if (typeof legalName !== 'string' || legalName.length === 0) return undefined;
+  return legalName;
 }
 
 /** SHA-256 of a UTF-8 string as raw bytes, via the injected hex digest. */

@@ -10,7 +10,7 @@
  */
 import { createHash, randomBytes as nodeRandomBytes } from 'node:crypto';
 import { handleSsoIssueCode } from '../lib/sso/ssoIssueHandler.js';
-import { handleSsoExchange } from '../lib/sso/ssoExchangeHandler.js';
+import { handleSsoExchange, legalNameForSsoExchange } from '../lib/sso/ssoExchangeHandler.js';
 import {
   SSO_AUDIENCE_WBT, SSO_AUDIENCE_EQUIPMENT,
   SSO_PROTOCOL_VERSION, SSO_CODE_TTL_MS_PROVISIONAL,
@@ -367,6 +367,73 @@ for (const [label, value] of [
     const before = ['protocolVersion', 'customToken', 'uid', 'driverId', 'companyId', 'shiftBinding'];
     return Object.keys(res).sort().join(',') === before.sort().join(',');
   })());
+  check('equipment is NOT told legalName — no use, no exposure',
+    !('legalName' in res));
+}
+{
+  // Tickets and equipment stay byte-equivalent even when the revalidated
+  // driver record carries a canonical legalName. Emission is JSA-only.
+  const named = {
+    driverId: 'driver-1', companyId: 'co-1', active: true,
+    displayName: 'Mike S', legalName: 'Michael S Burger',
+  };
+  {
+    const w = makeWorld({ drivers: [['driver-1', named]] });
+    const { code } = await handleSsoIssueCode(w.deps, AUTH_OK, issueReq());
+    const res = await handleSsoExchange(w.deps, exchangeReq(code));
+    check('tickets omit legalName even when the driver record has one',
+      !('legalName' in res) && res.displayName === 'Mike S');
+    check('legalName is NOT put in the minted tickets claims',
+      !('legalName' in w.minted[0].claims));
+    const allowed = ['protocolVersion', 'customToken', 'uid', 'driverId', 'companyId', 'displayName'];
+    check('tickets allowed keys still exclude legalName',
+      Object.keys(res).every((k) => allowed.includes(k)));
+  }
+  {
+    const w = makeWorld({ drivers: [['driver-1', named]] });
+    const raw = 'f'.repeat(43);
+    w.docs.set(ssoCodePath(sha256Hex(raw)), {
+      version: 0,
+      data: {
+        codeHash: sha256Hex(raw),
+        uid: AUTH_OK.uid,
+        driverId: 'driver-1',
+        companyId: 'co-1',
+        audience: SSO_AUDIENCE_EQUIPMENT,
+        codeChallenge: challengeFor(VERIFIER),
+        protocolVersion: SSO_PROTOCOL_VERSION,
+        issuedAtMs: w.deps.nowMs(),
+        expiresAtMs: w.deps.nowMs() + SSO_CODE_TTL_MS_PROVISIONAL,
+        consumed: false,
+        shiftBinding: { shiftId: '2026-08-08_211725', phase: 'pre_trip' },
+      },
+    });
+    const res = await handleSsoExchange(w.deps, {
+      protocolVersion: SSO_PROTOCOL_VERSION,
+      audience: SSO_AUDIENCE_EQUIPMENT,
+      code: raw,
+      codeVerifier: VERIFIER,
+    });
+    check('equipment omits legalName even when the driver record has one',
+      !('legalName' in res));
+    const before = ['protocolVersion', 'customToken', 'uid', 'driverId', 'companyId', 'shiftBinding'];
+    check('equipment key list is unchanged when legalName is present on the driver',
+      Object.keys(res).sort().join(',') === before.sort().join(','));
+  }
+}
+{
+  // 0.4.1 still fail-closes wellbuilt-jsa at isSsoAudience, so the handler
+  // cannot redeem that audience. The emission helper is the seeded path.
+  check('legalNameForSsoExchange emits only for the jsa audience',
+    legalNameForSsoExchange('wellbuilt-jsa', 'Michael S Burger') === 'Michael S Burger');
+  check('legalNameForSsoExchange omits for tickets',
+    legalNameForSsoExchange('wellbuilt-tickets', 'Michael S Burger') === undefined);
+  check('legalNameForSsoExchange omits for equipment',
+    legalNameForSsoExchange('wellbuilt-equipment', 'Michael S Burger') === undefined);
+  check('legalNameForSsoExchange omits when the resolver returned null',
+    legalNameForSsoExchange('wellbuilt-jsa', null) === undefined);
+  check('legalNameForSsoExchange never invents a name',
+    legalNameForSsoExchange('wellbuilt-jsa', '') === undefined);
 }
 {
   const w = makeWorld();
