@@ -26,10 +26,14 @@ import {
   decidePersist,
   requiredRequestBindings,
   canonicalizeAuthoredSnapshot,
-  signatureStoragePath,
   artifactPath,
+  encodeCanonicalBase64,
+  storedArtifactByteLength,
+  fromStoredArtifact,
   JSA_SIGNATURE_MAX_BYTES,
   JSA_ARTIFACT_COLLECTION,
+  JSA_ARTIFACT_MAX_STORED_BYTES,
+  JSA_FIRESTORE_DOC_LIMIT_BYTES,
 } from '../src/jsaReceipt/jsaArtifactCore.js';
 
 const root = join(dirname(fileURLToPath(import.meta.url)), '..');
@@ -78,9 +82,9 @@ function receiptWorld() {
     docs: new Map(),
     invoices: new Map(),
     invoiceReads: [],
-    objects: new Map(),
-    storageWrites: [],
     jsas: new Map(),
+    logs: [],
+    txnWrites: 0,
   };
   seedInvoice(w);
   return w;
@@ -89,9 +93,9 @@ function receiptWorld() {
 function artifactDeps(world) {
   if (!world.invoices) world.invoices = new Map();
   if (!world.invoiceReads) world.invoiceReads = [];
-  if (!world.objects) world.objects = new Map();
-  if (!world.storageWrites) world.storageWrites = [];
   if (!world.jsas) world.jsas = new Map();
+  if (!world.logs) world.logs = [];
+  if (world.txnWrites == null) world.txnWrites = 0;
   return {
     nowMs: () => NOW + (world.nowOff || 0),
     randomBytes: (n) => new Uint8Array(n),
@@ -137,6 +141,7 @@ function artifactDeps(world) {
               throw e;
             }
           }
+          world.txnWrites += creates.length + updates.length;
           for (const [p, d] of creates) world.docs.set(p, d);
           for (const [p, d] of updates) world.docs.set(p, d);
           return result;
@@ -146,14 +151,19 @@ function artifactDeps(world) {
         }
       }
     },
-    log: () => {},
+    log: (e, x) => { world.logs.push({ e, x }); },
     sha256Hex: (bytes) => createHash('sha256').update(Buffer.from(bytes)).digest('hex'),
-    writeImmutableObject: async (path, bytes, contentType) => {
-      world.storageWrites.push(path);
-      if (world.objects.has(path)) return { written: false };
-      world.objects.set(path, { bytes: Buffer.from(bytes), contentType });
-      return { written: true };
-    },
+  };
+}
+
+function inlineSignature(dataBase64 = PNG_B64) {
+  const bytes = Buffer.from(dataBase64, 'base64');
+  return {
+    mimeType: 'image/png',
+    encoding: 'base64',
+    byteSize: bytes.length,
+    sha256: createHash('sha256').update(bytes).digest('hex'),
+    dataBase64: bytes.toString('base64'),
   };
 }
 
@@ -375,28 +385,45 @@ async function refusalOf(world, auth, body) {
     && stored.authored.formDate === '2026-08-12'
     && stored.signature.sha256 === sha
     && stored.signature.mimeType === 'image/png'
+    && stored.signature.encoding === 'base64'
     && stored.signature.byteSize === decoded.value.bytes.length
-    && stored.signature.storagePath === signatureStoragePath(rid, sha)
-    && world.objects.has(stored.signature.storagePath)
+    && stored.signature.dataBase64 === encodeCanonicalBase64(decoded.value.bytes)
+    && Buffer.from(stored.signature.dataBase64, 'base64').equals(Buffer.from(decoded.value.bytes))
+    && stored.signature.storagePath === undefined
+    && !('storagePath' in stored.signature)
     && world.jsas.size === jsasBefore);
+  check('14b callable response does not contain dataBase64',
+    !('dataBase64' in out.signature)
+    && !JSON.stringify(out).includes(PNG_B64)
+    && !JSON.stringify(out).includes(stored.signature.dataBase64));
+  check('14c logs do not contain signature bytes',
+    !JSON.stringify(world.logs).includes(PNG_B64)
+    && !JSON.stringify(world.logs).includes(stored.signature.dataBase64)
+    && !JSON.stringify(world.logs).includes('dataBase64'));
+  check('14d aggregate artifact size is explicitly bounded below Firestore 1MiB',
+    JSA_ARTIFACT_MAX_STORED_BYTES < JSA_FIRESTORE_DOC_LIMIT_BYTES
+    && storedArtifactByteLength(fromStoredArtifact(stored)) < JSA_ARTIFACT_MAX_STORED_BYTES
+    && storedArtifactByteLength(fromStoredArtifact(stored)) < JSA_FIRESTORE_DOC_LIMIT_BYTES);
 }
 
 // ── 15. Exact retry idempotent ──────────────────────────────────────
 {
   const { world, rid } = await completedWorld();
   const first = await handlePersist(artifactDeps(world), JSA_AUTH, validBody(rid));
-  const writes = world.storageWrites.length;
+  const writesAfterCreate = world.txnWrites;
   const storedAt = world.docs.get(artifactPath(rid)).artifactWrittenAtMs;
+  const sigBytes = world.docs.get(artifactPath(rid)).signature.dataBase64;
   const second = await handlePersist(artifactDeps(world), JSA_AUTH, validBody(rid));
-  check('15 exact retry is idempotent',
+  check('15 exact retry is idempotent and performs no write',
     first.reused === false
     && second.reused === true
     && second.snapshotHash === first.snapshotHash
     && second.signature.sha256 === first.signature.sha256
     && second.artifactWrittenAtMs === storedAt
     && world.docs.get(artifactPath(rid)).artifactWrittenAtMs === storedAt
+    && world.docs.get(artifactPath(rid)).signature.dataBase64 === sigBytes
     && [...world.docs.keys()].filter((k) => k.startsWith(`${JSA_ARTIFACT_COLLECTION}/`)).length === 1
-    && world.storageWrites.length === writes);
+    && world.txnWrites === writesAfterCreate);
 }
 
 // ── 16. Changed retry conflict ──────────────────────────────────────
@@ -408,6 +435,17 @@ async function refusalOf(world, auth, body) {
     await refusalOf(world, JSA_AUTH, changed) === 'conflict');
   check('16b artifact notes unchanged after conflict',
     world.docs.get(artifactPath(rid)).authored.notes === 'clear');
+  const otherPng = Buffer.concat([
+    Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]),
+    Buffer.from('changed-sig'),
+  ]).toString('base64');
+  check('16c changed signature is immutable conflict',
+    await refusalOf(world, JSA_AUTH, validBody(rid, {
+      signature: { mimeType: 'image/png', data: otherPng },
+    })) === 'conflict');
+  check('16d original inline PNG unchanged after signature conflict',
+    world.docs.get(artifactPath(rid)).signature.dataBase64 === PNG_B64
+    || world.docs.get(artifactPath(rid)).signature.dataBase64 === encodeCanonicalBase64(Buffer.from(PNG_B64, 'base64')));
 }
 
 // ── 17. Concurrent persistence ──────────────────────────────────────
@@ -420,13 +458,12 @@ async function refusalOf(world, auth, body) {
     handlePersist(deps, JSA_AUTH, body),
   ]);
   const artifacts = [...world.docs.keys()].filter((k) => k.startsWith(`${JSA_ARTIFACT_COLLECTION}/`));
-  const sigs = [...world.objects.keys()];
   check('17 concurrent persistence resolves to one immutable artifact',
     artifacts.length === 1
     && a.requestId === b.requestId
     && a.snapshotHash === b.snapshotHash
-    && (a.reused || b.reused || true)
-    && sigs.length === 1);
+    && world.docs.get(artifacts[0]).signature.dataBase64
+    && !('storagePath' in world.docs.get(artifacts[0]).signature));
   const otherPng = Buffer.concat([
     Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]),
     Buffer.from('second'),
@@ -435,21 +472,20 @@ async function refusalOf(world, auth, body) {
   const rid2 = freshRid();
   await handleRegister(artifactDeps(w2), WBT_AUTH, { requestId: rid2, jobRef: 'job1', intent: 'read' });
   await handleComplete(artifactDeps(w2), JSA_AUTH, { requestId: rid2, action: 'read_completed' });
+  const sigA = inlineSignature(PNG_B64);
+  const sigB = inlineSignature(otherPng);
   const firstRec = decidePersist({
     existingRequest: fromStored([...w2.docs.values()][0]),
     existingArtifact: null,
     requestId: rid2,
     principal: { uid: 'u1', app: 'jsa', driverId: 'drv1', companyId: 'co1', kind: 'driver' },
     snapshotHash: 'a'.repeat(64),
-    signatureSha256: 'b'.repeat(64),
+    signatureSha256: sigA.sha256,
     nowMs: NOW,
     uid: 'u1',
     wellName: 'Gab 1',
     authored: validSnapshot(),
-    signature: {
-      mimeType: 'image/png', byteSize: 10, sha256: 'b'.repeat(64),
-      storagePath: signatureStoragePath(rid2, 'b'.repeat(64)),
-    },
+    signature: sigA,
   });
   const secondRec = decidePersist({
     existingRequest: fromStored([...w2.docs.values()][0]),
@@ -457,19 +493,15 @@ async function refusalOf(world, auth, body) {
     requestId: rid2,
     principal: { uid: 'u1', app: 'jsa', driverId: 'drv1', companyId: 'co1', kind: 'driver' },
     snapshotHash: 'c'.repeat(64),
-    signatureSha256: 'd'.repeat(64),
+    signatureSha256: sigB.sha256,
     nowMs: NOW + 1,
     uid: 'u1',
     wellName: 'Gab 1',
     authored: validSnapshot({ notes: 'race' }),
-    signature: {
-      mimeType: 'image/png', byteSize: 11, sha256: 'd'.repeat(64),
-      storagePath: signatureStoragePath(rid2, 'd'.repeat(64)),
-    },
+    signature: sigB,
   });
   check('17b concurrent different snapshots: first create, second conflict',
     firstRec.ok && firstRec.value.write === 'create' && secondRec.refusal === 'conflict');
-  void otherPng;
 }
 
 // ── 18. No legacy jsas write ────────────────────────────────────────
@@ -548,6 +580,28 @@ async function refusalOf(world, auth, body) {
     && !/PATCH/.test(artifact));
   check('pin: snapshot hash is of canonical authored content + signature meta',
     canonicalizeAuthoredSnapshot(validSnapshot(), { mimeType: 'image/png', byteSize: 1, sha256: 'a'.repeat(64) }).includes('"printedName":"Mike Burger"'));
+  const callableSrc = readFileSync(join(root, 'src/jsaReceipt/jsaReceiptCallables.ts'), 'utf8');
+  const iface = readFileSync(join(root, 'src/jsaReceipt/WB-JSA-INTERFACE.md'), 'utf8');
+  const storageRules = readFileSync(join(root, '..', 'storage.rules'), 'utf8');
+  check('pin: no admin.storage() in the governed artifact path',
+    !/admin\.storage\s*\(/.test(artifact)
+    && !/admin\.storage\s*\(/.test(handlers)
+    && !/admin\.storage\s*\(/.test(callableSrc));
+  check('pin: writeImmutableObject dependency is gone',
+    !/writeImmutableObject/.test(artifact)
+    && !/writeImmutableObject/.test(handlers)
+    && !/writeImmutableObject/.test(callableSrc));
+  check('pin: no storagePath / signatureStoragePath in artifact schema',
+    !/storagePath:/.test(artifact)
+    && !/signatureStoragePath/.test(artifact)
+    && !/signatureStoragePath/.test(handlers)
+    && !/v1-\{sha256\}/.test(iface)
+    && !/signature: \{ mimeType, byteSize, sha256, storagePath \}/.test(iface));
+  check('pin: open storage.rules left untouched (pre-existing debt)',
+    /match \/\{\s*allPaths=\*\*\s*\}/.test(storageRules)
+    && /allow read, write: if true/.test(storageRules));
+  check('pin: interface records Storage as unsafe pre-existing debt',
+    /pre-existing security debt/i.test(iface) && /does \*\*not\*\* depend on Storage/.test(iface));
 }
 
 console.log(`\n${pass} passed, ${fail} failed`);

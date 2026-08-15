@@ -200,21 +200,42 @@ The server:
 3. Admin-reads `invoices/{jobRef}` and re-verifies company/driver/job
    before write. `wellName` / optional `jobType` are invoice-derived.
 4. Decodes a PNG signature, enforces a 128 KiB decoded limit, computes
-   SHA-256, and writes a create-only Storage object at
-   `jsa_governed_artifacts/{requestId}/signature/v1-{sha256}.png`.
+   SHA-256, and canonicalizes the bytes to strict standard base64.
 5. Creates exactly one Admin-owned document
-   `jsa_governed_artifacts/{requestId}`. Never writes `jsas`.
+   `jsa_governed_artifacts/{requestId}` in a single Firestore
+   transaction. The validated PNG lives **inside** that document:
 
-Success:
+   ```
+   signature: {
+     mimeType: 'image/png',
+     encoding: 'base64',
+     byteSize, sha256, dataBase64
+   }
+   ```
+
+   There is no `storagePath`. The callable does not call
+   `admin.storage()`. Never writes `jsas`.
+
+Success (no signature bytes):
 
 ```
 {
   requestId, reused, schemaVersion,
   snapshotHash, artifactWrittenAtMs,
-  signature: { mimeType, byteSize, sha256, storagePath }
+  signature: { mimeType, encoding, byteSize, sha256 }
 }
 ```
 
-`reused: true` is the byte-identical retry. A retry with a different
-authored snapshot or signature is `conflict`. Concurrent first writes
-serialize to one document. There is no update path.
+`reused: true` is the byte-identical retry (no write). A retry with a
+different authored snapshot or signature is `conflict`. Concurrent first
+writes serialize to one document. There is no update path. Aggregate
+stored size is bounded below Firestore's 1 MiB document limit.
+
+### Storage policy — pre-existing security debt
+
+`storage.rules` is globally client-writable
+(`match /{allPaths=**} { allow read, write: if true; }`). Rule matches
+are additive, so a narrower deny would not override that allow.
+Governed artifact schema v1 therefore does **not** depend on Storage.
+A later move to protected immutable Storage is allowed only after those
+rules are deliberately tightened without breaking existing uploads.

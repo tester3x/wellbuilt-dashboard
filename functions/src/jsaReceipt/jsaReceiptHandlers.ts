@@ -47,11 +47,11 @@ import {
   decideInvoiceArtifactBinding,
   decidePersist,
   decodeSignaturePng,
+  encodeCanonicalBase64,
   fromStoredArtifact,
   parseAuthoredSnapshot,
   parsePersistInput,
   persistView,
-  signatureStoragePath,
   toStoredArtifact,
   type PersistView,
 } from './jsaArtifactCore.js';
@@ -114,11 +114,6 @@ export interface ReceiptDeps {
 /** Persist-only I/O. Existing register/complete/consume deps stay unchanged. */
 export interface ArtifactDeps extends ReceiptDeps {
   sha256Hex(bytes: Uint8Array): string;
-  writeImmutableObject(
-    path: string,
-    bytes: Uint8Array,
-    contentType: string,
-  ): Promise<{ written: boolean }>;
 }
 
 function throwDecision(d: Decision<unknown> & { ok: false }): never {
@@ -341,7 +336,9 @@ export async function handleConsume(
  * request's bounded authored snapshot. Identity/job/shift/well come
  * from the server-held request + its request-bound invoice. The
  * current shift is not re-authored: a completed record is already
- * terminal evidence.
+ * terminal evidence. Signature PNG bytes are stored inside the
+ * Admin-only Firestore document — never in Storage — so the open
+ * storage.rules surface cannot mutate them.
  */
 export async function handlePersist(
   deps: ArtifactDeps,
@@ -357,9 +354,10 @@ export async function handlePersist(
   const signatureSha256 = deps.sha256Hex(decoded.bytes);
   const signature = {
     mimeType: decoded.mimeType,
+    encoding: 'base64' as const,
     byteSize: decoded.bytes.length,
     sha256: signatureSha256,
-    storagePath: signatureStoragePath(body.requestId, signatureSha256),
+    dataBase64: encodeCanonicalBase64(decoded.bytes),
   };
   const snapshotHash = deps.sha256Hex(Buffer.from(
     canonicalizeAuthoredSnapshot(authored, signature),
@@ -422,8 +420,6 @@ export async function handlePersist(
     requestDriverId: request.driverId,
     invoice: { exists: invoice.exists, ...(invoice.data || {}) },
   }));
-
-  await deps.writeImmutableObject(signature.storagePath, decoded.bytes, signature.mimeType);
 
   return deps.runTransaction(async (txn) => {
     const reqSnap = await txn.get(reqPath);

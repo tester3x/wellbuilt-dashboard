@@ -27,6 +27,11 @@ export const JSA_ARTIFACT_SCHEMA_VERSION = 1;
 export const JSA_SIGNATURE_MAX_BYTES = 128 * 1024;
 export const JSA_SNAPSHOT_MAX_JSON_CHARS = 180_000;
 export const JSA_SIGNATURE_MIME = 'image/png';
+export const JSA_SIGNATURE_ENCODING = 'base64';
+/** Firestore hard limit. The artifact bound below must stay under this. */
+export const JSA_FIRESTORE_DOC_LIMIT_BYTES = 1_048_576;
+/** Explicit v1 ceiling — signature + snapshot + bindings, with headroom. */
+export const JSA_ARTIFACT_MAX_STORED_BYTES = 800_000;
 
 const PNG_MAGIC = [0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a];
 
@@ -80,9 +85,18 @@ const LIMITS = {
 
 export interface JsaSignatureMeta {
   mimeType: typeof JSA_SIGNATURE_MIME;
+  encoding: typeof JSA_SIGNATURE_ENCODING;
   byteSize: number;
   sha256: string;
-  storagePath: string;
+  dataBase64: string;
+}
+
+/** Callable/log surface — never includes the PNG bytes. */
+export interface JsaSignatureView {
+  mimeType: typeof JSA_SIGNATURE_MIME;
+  encoding: typeof JSA_SIGNATURE_ENCODING;
+  byteSize: number;
+  sha256: string;
 }
 
 export interface JsaAuthoredSnapshot {
@@ -129,7 +143,7 @@ export interface PersistView {
   schemaVersion: typeof JSA_ARTIFACT_SCHEMA_VERSION;
   snapshotHash: string;
   artifactWrittenAtMs: number;
-  signature: JsaSignatureMeta;
+  signature: JsaSignatureView;
 }
 
 export interface DecodedSignature {
@@ -141,8 +155,12 @@ export function artifactPath(requestId: string): string {
   return `${JSA_ARTIFACT_COLLECTION}/${requestId}`;
 }
 
-export function signatureStoragePath(requestId: string, sha256: string): string {
-  return `${JSA_ARTIFACT_COLLECTION}/${requestId}/signature/v1-${sha256}.png`;
+export function encodeCanonicalBase64(bytes: Uint8Array): string {
+  return Buffer.from(bytes).toString('base64');
+}
+
+export function storedArtifactByteLength(artifact: JsaGovernedArtifact): number {
+  return Buffer.byteLength(JSON.stringify(toStoredArtifact(artifact)), 'utf8');
 }
 
 function fail(refusal: ReceiptRefusal, detail: string): Decision<never> {
@@ -493,8 +511,18 @@ export function decidePersist(input: {
     return fail('malformed', 'hash');
   }
   if (input.signature.sha256 !== input.signatureSha256) return fail('malformed', 'signature_hash');
-  if (input.signature.storagePath !== signatureStoragePath(input.requestId, input.signatureSha256)) {
+  if (input.signature.encoding !== JSA_SIGNATURE_ENCODING) return fail('malformed', 'signature_encoding');
+  if (input.signature.mimeType !== JSA_SIGNATURE_MIME) return fail('malformed', 'signature_type');
+  if (typeof input.signature.dataBase64 !== 'string' || !input.signature.dataBase64) {
+    return fail('malformed', 'signature_data');
+  }
+  if ((input.signature as { storagePath?: unknown }).storagePath !== undefined) {
     return fail('malformed', 'storage_path');
+  }
+  const decodedStored = Buffer.from(input.signature.dataBase64, 'base64');
+  if (decodedStored.length !== input.signature.byteSize) return fail('malformed', 'signature_bytes');
+  if (encodeCanonicalBase64(decodedStored) !== input.signature.dataBase64) {
+    return fail('malformed', 'signature_canonical');
   }
 
   if (input.existingArtifact) {
@@ -528,6 +556,9 @@ export function decidePersist(input: {
     signature: input.signature,
     authored: input.authored,
   };
+  if (storedArtifactByteLength(artifact) > JSA_ARTIFACT_MAX_STORED_BYTES) {
+    return fail('malformed', 'artifact_size');
+  }
   return { ok: true, value: { artifact, write: 'create' } };
 }
 
@@ -538,7 +569,12 @@ export function persistView(artifact: JsaGovernedArtifact, reused: boolean): Per
     schemaVersion: artifact.schemaVersion,
     snapshotHash: artifact.snapshotHash,
     artifactWrittenAtMs: artifact.artifactWrittenAtMs,
-    signature: artifact.signature,
+    signature: {
+      mimeType: artifact.signature.mimeType,
+      encoding: artifact.signature.encoding,
+      byteSize: artifact.signature.byteSize,
+      sha256: artifact.signature.sha256,
+    },
   };
 }
 
@@ -578,10 +614,12 @@ export function fromStoredArtifact(v: unknown): JsaGovernedArtifact | null {
   if (typeof o.completedAtMs !== 'number' || typeof o.artifactWrittenAtMs !== 'number') return null;
   if (o.schemaVersion !== JSA_ARTIFACT_SCHEMA_VERSION) return null;
   if (typeof o.snapshotHash !== 'string' || !SHA256_HEX_RE.test(o.snapshotHash)) return null;
-  const sig = o.signature as JsaSignatureMeta | undefined;
+  const sig = o.signature as (JsaSignatureMeta & { storagePath?: unknown }) | undefined;
   if (!sig || sig.mimeType !== JSA_SIGNATURE_MIME || typeof sig.byteSize !== 'number') return null;
+  if (sig.encoding !== JSA_SIGNATURE_ENCODING) return null;
   if (typeof sig.sha256 !== 'string' || !SHA256_HEX_RE.test(sig.sha256)) return null;
-  if (typeof sig.storagePath !== 'string' || !sig.storagePath) return null;
+  if (typeof sig.dataBase64 !== 'string' || !sig.dataBase64) return null;
+  if (sig.storagePath !== undefined) return null;
   const authored = o.authored as JsaAuthoredSnapshot | undefined;
   if (!authored || typeof authored !== 'object') return null;
   return {
@@ -604,9 +642,10 @@ export function fromStoredArtifact(v: unknown): JsaGovernedArtifact | null {
     snapshotHash: o.snapshotHash,
     signature: {
       mimeType: JSA_SIGNATURE_MIME,
+      encoding: JSA_SIGNATURE_ENCODING,
       byteSize: sig.byteSize,
       sha256: sig.sha256,
-      storagePath: sig.storagePath,
+      dataBase64: sig.dataBase64,
     },
     authored: {
       prepared: isPlainObject(authored.prepared) ? authored.prepared as Record<string, boolean> : {},

@@ -109,30 +109,11 @@ export function buildReceiptDeps(): ArtifactDeps {
       });
     },
     log(event, extra) {
-      // Bounded reason codes only — never identifiers.
+      // Bounded reason codes only — never identifiers or signature bytes.
       console.log(JSON.stringify({ tag: event, ...extra }));
     },
     sha256Hex(bytes) {
       return createHash('sha256').update(Buffer.from(bytes)).digest('hex');
-    },
-    async writeImmutableObject(path, bytes, contentType) {
-      const file = admin.storage().bucket().file(path);
-      try {
-        await file.save(Buffer.from(bytes), {
-          resumable: false,
-          public: false,
-          metadata: {
-            contentType,
-            cacheControl: 'private,max-age=31536000,immutable',
-          },
-          preconditionOpts: { ifGenerationMatch: 0 },
-        });
-        return { written: true };
-      } catch (err) {
-        const code = (err as { code?: number | string }).code;
-        if (code === 412 || code === '412') return { written: false };
-        throw err;
-      }
     },
   };
 }
