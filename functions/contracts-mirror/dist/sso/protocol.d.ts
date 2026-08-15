@@ -262,6 +262,24 @@ export interface SsoExchangeResponse {
      * use for it. Always passes `normalizeSsoDisplayName` before being sent.
      */
     displayName?: string;
+    /**
+     * Present only for the `wellbuilt-jsa` audience: the driver's canonical
+     * server-resolved acknowledgment identity (`drivers/profiles/{driverId}`
+     * top-level `legalName`), never `displayName` and never a client-supplied
+     * substitute.
+     *
+     * OPTIONAL ON PURPOSE, in both directions:
+     *  - A pre-0.4.1 client or a server that cannot resolve a distinct legal
+     *    name OMITS the field. The grant is already valid and already consumed;
+     *    a profile-data gap must not be reported as a refusal.
+     *  - The field is never required for tickets, eQuipment, or any other
+     *    audience. Those responses stay byte-equivalent: `legalName` is absent.
+     *
+     * Sensitive presentation data. Must not be logged, included in error text,
+     * or copied into token claims or the one-time authorization-code record.
+     * The JSA client fail-closes Submit when the field is missing.
+     */
+    legalName?: string;
 }
 export type SsoValidation<T> = {
     ok: true;

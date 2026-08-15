@@ -1,6 +1,6 @@
 {
   "name": "@tester3x/wellbuilt-contracts",
-  "version": "0.4.0",
+  "version": "0.4.1",
   "description": "Pure, environment-neutral WellBuilt Suite contracts: plan entitlements, company work-period configuration, and the canonical work-period resolver.",
   "license": "UNLICENSED",
   "private": false,
