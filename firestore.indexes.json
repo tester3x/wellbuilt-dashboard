@@ -1,6 +1,15 @@
 {
   "indexes": [
     {
+      "collectionGroup": "jsa_governed_requests",
+      "queryScope": "COLLECTION",
+      "fields": [
+        { "fieldPath": "companyId", "order": "ASCENDING" },
+        { "fieldPath": "driverId", "order": "ASCENDING" },
+        { "fieldPath": "binding.periodId", "order": "ASCENDING" }
+      ]
+    },
+    {
       "collectionGroup": "transfer_requests",
       "queryScope": "COLLECTION",
       "fields": [

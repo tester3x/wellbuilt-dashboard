@@ -18,6 +18,8 @@ import {
   type ArtifactDeps,
   type ReceiptTxn,
 } from './jsaReceiptHandlers.js';
+import { handleResolveCurrentShiftReadEvidence } from './jsaCurrentShiftReadEvidence.js';
+import { fromStored } from './jsaReceiptCore.js';
 
 const OPTIONS = {
   timeoutSeconds: 30,
@@ -118,6 +120,35 @@ export function buildReceiptDeps(): ArtifactDeps {
   };
 }
 
+function currentShiftReadEvidenceDeps() {
+  const db = admin.firestore();
+  const base = buildReceiptDeps();
+  return {
+    resolveShift: (driverId: string, companyId: string) => base.resolveShift(driverId, companyId),
+    async listGovernedByPeriod(companyId: string, driverId: string, periodId: string) {
+      const snap = await db.collection('jsa_governed_requests')
+        .where('companyId', '==', companyId)
+        .where('driverId', '==', driverId)
+        .where('binding.periodId', '==', periodId)
+        .get();
+      const out = [];
+      for (const doc of snap.docs) {
+        const rec = fromStored(doc.data());
+        if (!rec) continue;
+        out.push({
+          companyId: rec.companyId,
+          driverId: rec.driverId,
+          state: rec.state,
+          action: rec.action,
+          bindingPeriodId: rec.binding.periodId ?? null,
+        });
+      }
+      return out;
+    },
+    log: base.log,
+  };
+}
+
 async function limited(uid: string, bucket: string): Promise<void> {
   const allowed = await checkRateLimit({
     bucket,
@@ -169,4 +200,16 @@ export const jsaPersistGovernedArtifact = httpsV2.onCall(OPTIONS, async (request
   await limited(request.auth.uid, 'jsa_persist_artifact');
   try { return await handlePersist(buildReceiptDeps(), authOf(request), request.data); }
   catch (err) { throw toHttps(err); }
+});
+
+export const jsaResolveCurrentShiftReadEvidence = httpsV2.onCall(OPTIONS, async (request) => {
+  if (!request.auth?.uid) throw new httpsV2.HttpsError('unauthenticated', 'not_authorized');
+  await limited(request.auth.uid, 'jsa_shift_read_evidence');
+  try {
+    return await handleResolveCurrentShiftReadEvidence(
+      currentShiftReadEvidenceDeps(),
+      authOf(request),
+      request.data,
+    );
+  } catch (err) { throw toHttps(err); }
 });

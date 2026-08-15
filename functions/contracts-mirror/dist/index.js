@@ -39,6 +39,10 @@ SSO_AUDIENCE_JSA, SSO_SESSION_APP_JSA, SSO_CALLBACK_SCHEME_JSA, SSO_JSA_PERIOD_I
 // jsaapp://start launch. No identity, credential, code, or PKCE material
 // may ever ride these routes.
 export { JSA_LAUNCH_VERSION, JSA_LAUNCH_SCHEME, JSA_LAUNCH_HOST, JSA_RETURN_SCHEME, JSA_RETURN_HOST, JSA_HINT_MAX, JSA_REF_MAX, isJsaRequestId, JSA_RETURN_STATUSES, isJsaReturnStatus, JSA_FORBIDDEN_LAUNCH_KEYS, validateJsaLaunchRequest, validateJsaReturnMessage, buildJsaLaunchUrl, parseJsaLaunchUrl, buildJsaReturnUrl, parseJsaReturnUrl, } from './sso/jsaLaunch.js';
+// ── Current-shift governed read-bootstrap evidence (0.5.2, additive) ─────
+// Empty request. Server derives identity and the open period. Response
+// never carries requestId, jobRef, action, name, or signature.
+export { JSA_CURRENT_SHIFT_READ_EVIDENCE_PROTOCOL_VERSION, SUPPORTED_JSA_CURRENT_SHIFT_READ_EVIDENCE_PROTOCOL_VERSIONS, isJsaCurrentShiftReadEvidenceProtocolVersion, JSA_READ_EVIDENCE_ACTIONS, isJsaReadEvidenceAction, terminalActionIncludesRead, JSA_CURRENT_SHIFT_READ_EVIDENCE_STATES, isJsaCurrentShiftReadEvidenceState, JSA_CURRENT_SHIFT_READ_EVIDENCE_REQUEST_KEYS, JSA_CURRENT_SHIFT_READ_EVIDENCE_FORBIDDEN_REQUEST_KEYS, JSA_CURRENT_SHIFT_READ_EVIDENCE_RESPONSE_BOOTSTRAPPED_KEYS, JSA_CURRENT_SHIFT_READ_EVIDENCE_RESPONSE_NONE_KEYS, JSA_CURRENT_SHIFT_READ_EVIDENCE_RESPONSE_NO_SHIFT_KEYS, JSA_CURRENT_SHIFT_READ_EVIDENCE_RESPONSE_FORBIDDEN_KEYS, validateJsaCurrentShiftReadEvidenceRequest, validateJsaCurrentShiftReadEvidenceResponse, decideCurrentShiftReadEvidence, } from './sso/jsaCurrentShiftReadEvidence.js';
 // ── Optional session audience for driver auth (0.3.0-dev, additive) ───────
 export { SESSION_AUDIENCE_WBT, SESSION_AUDIENCES, SESSION_APP_CLAIM, isSessionAudience, readSessionAudience, CLIENT_FORBIDDEN_CLAIM_KEYS, containsClientClaimMaterial, sessionClaimsForAudience, } from './auth/sessionAudience.js';
 // ── Per-app commercial entitlement (0.3.0-dev, additive) ─────────────────
