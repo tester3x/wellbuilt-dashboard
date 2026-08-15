@@ -19,6 +19,7 @@ import {
   type ReceiptTxn,
 } from './jsaReceiptHandlers.js';
 import { handleResolveCurrentShiftReadEvidence } from './jsaCurrentShiftReadEvidence.js';
+import { handleAcknowledgeJob } from './jsaJobAcknowledgment.js';
 import { fromStored } from './jsaReceiptCore.js';
 
 const OPTIONS = {
@@ -211,5 +212,101 @@ export const jsaResolveCurrentShiftReadEvidence = httpsV2.onCall(OPTIONS, async 
       authOf(request),
       request.data,
     );
+  } catch (err) { throw toHttps(err); }
+});
+
+function jobAckDeps() {
+  const db = admin.firestore();
+  const base = currentShiftReadEvidenceDeps();
+  return {
+    nowMs: () => Date.now(),
+    sha256Hex(input: string) {
+      return createHash('sha256').update(input, 'utf8').digest('hex');
+    },
+    resolveShift: base.resolveShift,
+    async readAuthority(driverId: string): Promise<ShiftAuthorityRecord | null> {
+      const snap = await db.doc(shiftAuthorityPath(driverId)).get();
+      if (!snap.exists) return null;
+      const d = snap.data() ?? {};
+      if (typeof d.driverId !== 'string' || typeof d.companyId !== 'string'
+        || typeof d.initialized !== 'boolean' || typeof d.version !== 'number') {
+        return null;
+      }
+      return {
+        driverId: d.driverId,
+        companyId: d.companyId,
+        initialized: d.initialized,
+        openPeriodId: typeof d.openPeriodId === 'string' ? d.openPeriodId : null,
+        originLocalDate: typeof d.originLocalDate === 'string' ? d.originLocalDate : null,
+        version: d.version,
+        lastClosedPeriodId: typeof d.lastClosedPeriodId === 'string' ? d.lastClosedPeriodId : null,
+      };
+    },
+    async readShiftDay(driverId: string, localDate: string) {
+      const snap = await db.doc(`driver_shifts/${driverId}_${localDate}`).get();
+      if (!snap.exists) return null;
+      const d = snap.data() ?? {};
+      const raw = Array.isArray(d.events) ? d.events : [];
+      const events = [];
+      for (const ev of raw) {
+        if (!ev || typeof ev !== 'object') continue;
+        const e = ev as Record<string, unknown>;
+        if (typeof e.type !== 'string' || typeof e.shiftId !== 'string'
+          || typeof e.timestamp !== 'string' || typeof e.source !== 'string') {
+          continue;
+        }
+        events.push({
+          type: e.type,
+          shiftId: e.shiftId,
+          timestamp: e.timestamp,
+          source: e.source,
+        });
+      }
+      return {
+        date: typeof d.date === 'string' ? d.date : localDate,
+        currentShiftId: typeof d.currentShiftId === 'string' ? d.currentShiftId : null,
+        events,
+      };
+    },
+    async readInvoice(jobRef: string) {
+      const snap = await db.collection('invoices').doc(jobRef).get();
+      return {
+        exists: snap.exists,
+        createTimeMs: snap.createTime ? snap.createTime.toMillis() : null,
+        data: snap.exists ? (snap.data() as Record<string, unknown>) : null,
+      };
+    },
+    async readDispatch(dispatchId: string) {
+      const snap = await db.collection('dispatches').doc(dispatchId).get();
+      return {
+        exists: snap.exists,
+        data: snap.exists ? (snap.data() as Record<string, unknown>) : null,
+      };
+    },
+    listGovernedByPeriod: base.listGovernedByPeriod,
+    async runTransaction<T>(fn: (txn: {
+      get(path: string): Promise<{ exists: boolean; data?: Record<string, unknown> }>;
+      create(path: string, data: Record<string, unknown>): void;
+    }) => Promise<T>): Promise<T> {
+      return db.runTransaction(async (t) => {
+        const txn = {
+          async get(path: string) {
+            const s = await t.get(db.doc(path));
+            return { exists: s.exists, data: s.data() as Record<string, unknown> | undefined };
+          },
+          create(path: string, data: Record<string, unknown>) { t.create(db.doc(path), data); },
+        };
+        return fn(txn);
+      });
+    },
+    log: base.log,
+  };
+}
+
+export const jsaAcknowledgeJob = httpsV2.onCall(OPTIONS, async (request) => {
+  if (!request.auth?.uid) throw new httpsV2.HttpsError('unauthenticated', 'not_authorized');
+  await limited(request.auth.uid, 'jsa_job_ack');
+  try {
+    return await handleAcknowledgeJob(jobAckDeps(), authOf(request), request.data);
   } catch (err) { throw toHttps(err); }
 });
