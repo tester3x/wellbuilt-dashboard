@@ -470,6 +470,12 @@ service cloud.firestore {
       allow read, write: if false;
     }
 
+    // Governed per-job acknowledgments — Admin SDK only. Isolated deny;
+    // does not widen any other match.
+    match /jsa_job_acknowledgments/{id} {
+      allow read, write: if false;
+    }
+
     match /jsa_read_receipts/{requestId} {
       allow create: if requestId.matches('^[A-Za-z0-9_-]{43}$')
         && (validJsaReceiptV1(requestId) || validJsaReceiptV2(requestId));
