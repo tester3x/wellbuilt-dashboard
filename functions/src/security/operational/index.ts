@@ -1,4 +1,5 @@
-export { ingestDriverPacket } from './packetIngest';
+export { ingestDriverPacket, submitFieldCommand } from './packetIngest';
+export { getFieldCommandStatus } from './fieldCommands';
 export { upsertDriverShift } from './shiftWrite';
 // vc51.9AG — server-owned explicit-shift authority (resolve/claim/close).
 export {
@@ -9,8 +10,8 @@ export {
 } from './shiftAuthorityCallables';
 export { submitJsaRecord } from './jsaWrite';
 export { updateDriverProfile, signalDriverLogout } from './profileWrite';
-export { getDriverReferenceBundle } from './referenceData';
-export { requestStorageUploadPath } from './storageTokens';
+export { getDriverReferenceBundle, getDriverWellConfig } from './referenceData';
+export { requestStorageUploadPath, finalizeStorageUpload, issueStorageReadUrl } from './storageTokens';
 export {
   upsertDriverInvoice,
   upsertDriverDispatch,

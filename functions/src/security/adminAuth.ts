@@ -1,31 +1,9 @@
 import * as httpsV2 from 'firebase-functions/v2/https';
 import * as admin from 'firebase-admin';
-
-const DEFAULT_ROLE_CAPABILITIES: Record<string, string[]> = {
-  it: ['manageDrivers', 'viewAllCompanies', 'manageEquipment'],
-  admin: ['manageDrivers', 'manageEquipment'],
-  manager: ['manageDrivers'],
-  dispatch: [],
-  payroll: [],
-  viewer: [],
-  driver: [],
-};
-
-function resolveRoles(userData: Record<string, unknown>): string[] {
-  if (Array.isArray(userData.roles) && userData.roles.length > 0) {
-    return userData.roles.filter((r): r is string => typeof r === 'string');
-  }
-  return typeof userData.role === 'string' ? [userData.role] : [];
-}
-
-function resolveCaps(roles: string[], overrides: Record<string, string[]>): string[] {
-  const caps = new Set<string>();
-  for (const role of roles) {
-    const list = overrides[role] ?? DEFAULT_ROLE_CAPABILITIES[role] ?? [];
-    list.forEach((c) => caps.add(c));
-  }
-  return [...caps];
-}
+import {
+  staffHasCapability,
+  type AdminAuthority,
+} from './canonicalAdminAuthority';
 
 export interface DashboardCaller {
   uid: string;
@@ -36,71 +14,91 @@ export interface DashboardCaller {
 }
 
 /**
- * Require signed-in dashboard user with manageDrivers.
- * Sources (in order):
- * 1. RTDB users/{uid} role + company roleCapabilities (production path)
- * 2. Auth custom claims { role/roles, manageDrivers: true } — used by
- *    emulator tests and optional future claim backfill; never sufficient
- *    alone without manageDrivers claim or admin/it role in claims.
+ * Canonical-only manageDrivers gate.
+ *
+ * Platform admin: wellbuiltAdmin claim AND enabled platform_admins/{uid}.
+ * Company staff: enabled staff/{uid} with exact companyId.
+ * RTDB users/{uid} is NOT staff authority.
  */
 export async function requireManageDrivers(
   authUid: string | undefined,
   authToken?: Record<string, unknown> | null,
 ): Promise<DashboardCaller> {
+  const authority = await requireAdminAuthority(authUid, authToken);
+  if (!staffHasCapability(authority, 'manageDrivers')) {
+    throw new httpsV2.HttpsError('permission-denied', 'missing_manageDrivers');
+  }
+  return {
+    uid: authority.uid,
+    roles: authority.role ? [authority.role] : [],
+    companyId: authority.companyId || undefined,
+    caps: authority.caps,
+    isPlatformAdmin: authority.class === 'platform',
+  };
+}
+
+export async function resolveCanonicalAuthority(
+  authUid: string,
+  authToken?: Record<string, unknown> | null,
+): Promise<AdminAuthority> {
+  const [platSnap, staffSnap] = await Promise.all([
+    admin.firestore().collection('platform_admins').doc(authUid).get(),
+    admin.firestore().collection('staff').doc(authUid).get(),
+  ]);
+  const staff = staffSnap.exists
+    ? (staffSnap.data() as { enabled?: unknown; companyId?: unknown; role?: unknown; capabilities?: unknown })
+    : null;
+  const companyId = typeof staff?.companyId === 'string' ? staff.companyId.trim() : '';
+  let companyExists: boolean | undefined;
+  let roleCapabilities: unknown;
+  let policyReadError: string | null = null;
+  if (companyId) {
+    try {
+      const companySnap = await admin.firestore().collection('companies').doc(companyId).get();
+      companyExists = companySnap.exists;
+      if (companySnap.exists) {
+        roleCapabilities = companySnap.get('roleCapabilities');
+      }
+    } catch (err) {
+      policyReadError = `policy_read_failed:${(err as Error)?.name || 'error'}`;
+    }
+  }
+  const { decideCanonicalAuthorityFromReads } = await import('./canonicalAdminAuthority');
+  return decideCanonicalAuthorityFromReads({
+    authUid,
+    authToken,
+    platformAdmin: platSnap.exists
+      ? (platSnap.data() as { enabled?: unknown; policyVersion?: unknown })
+      : null,
+    staff,
+    companyExists,
+    roleCapabilities,
+    policyReadError,
+  });
+}
+
+export async function requireAdminAuthority(
+  authUid: string | undefined,
+  authToken?: Record<string, unknown> | null,
+): Promise<Extract<AdminAuthority, { ok: true }>> {
   if (!authUid) {
     throw new httpsV2.HttpsError('unauthenticated', 'Must be signed in');
   }
-
-  // Prefer RTDB profile (source of truth for Dashboard)
-  const snap = await admin.database().ref(`users/${authUid}`).once('value');
-  if (snap.exists()) {
-    const userData = snap.val() as Record<string, unknown>;
-    const roles = resolveRoles(userData);
-    const companyId = typeof userData.companyId === 'string' ? userData.companyId : undefined;
-
-    let overrides: Record<string, string[]> = {};
-    if (companyId) {
-      try {
-        const cSnap = await admin.firestore().collection('companies').doc(companyId).get();
-        overrides = (cSnap.data()?.roleCapabilities || {}) as Record<string, string[]>;
-      } catch {
-        /* best-effort */
-      }
-    }
-    const caps = resolveCaps(roles, overrides);
-    if (!caps.includes('manageDrivers')) {
-      throw new httpsV2.HttpsError('permission-denied', 'Caller lacks manageDrivers capability');
-    }
-    const isPlatformAdmin = !companyId && roles.some((r) => r === 'admin' || r === 'it');
-    return { uid: authUid, roles, companyId, caps, isPlatformAdmin };
+  const authority = await resolveCanonicalAuthority(authUid, authToken);
+  if (!authority.ok) {
+    const code = authority.reason.startsWith('policy_') ? 'failed-precondition' : 'permission-denied';
+    throw new httpsV2.HttpsError(code, authority.reason);
   }
+  return authority;
+}
 
-  // Fallback: Auth custom claims (emulator + optional claim-based admin)
-  if (authToken && typeof authToken === 'object') {
-    const claimRoles: string[] = [];
-    if (typeof authToken.role === 'string') claimRoles.push(authToken.role);
-    if (Array.isArray(authToken.roles)) {
-      for (const r of authToken.roles) {
-        if (typeof r === 'string') claimRoles.push(r);
-      }
-    }
-    const claimCaps = resolveCaps(claimRoles, {});
-    const explicit =
-      authToken.manageDrivers === true ||
-      authToken.manageDrivers === 'true' ||
-      claimCaps.includes('manageDrivers');
-    if (explicit) {
-      const companyId =
-        typeof authToken.companyId === 'string' ? authToken.companyId : undefined;
-      return {
-        uid: authUid,
-        roles: claimRoles.length ? claimRoles : ['admin'],
-        companyId,
-        caps: explicit ? [...claimCaps, 'manageDrivers'] : claimCaps,
-        isPlatformAdmin: !companyId && claimRoles.some((r) => r === 'admin' || r === 'it'),
-      };
-    }
+export async function requirePlatformAdmin(
+  authUid: string | undefined,
+  authToken?: Record<string, unknown> | null,
+): Promise<Extract<AdminAuthority, { ok: true }>> {
+  const authority = await requireAdminAuthority(authUid, authToken);
+  if (authority.class !== 'platform') {
+    throw new httpsV2.HttpsError('permission-denied', 'platform_admin_required');
   }
-
-  throw new httpsV2.HttpsError('permission-denied', 'Caller is not a registered dashboard user');
+  return authority;
 }

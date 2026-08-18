@@ -21,6 +21,7 @@ export { adminBindDriverCompany } from './companyBindingCallable';
 
 export {
   ingestDriverPacket,
+  submitFieldCommand,
   upsertDriverShift,
   resolveActiveDriverShift,
   claimDriverShift,
@@ -30,7 +31,11 @@ export {
   updateDriverProfile,
   signalDriverLogout,
   getDriverReferenceBundle,
+  getDriverWellConfig,
+  getFieldCommandStatus,
   requestStorageUploadPath,
+  finalizeStorageUpload,
+  issueStorageReadUrl,
   upsertDriverInvoice,
   upsertDriverDispatch,
   sendChatMessage,
@@ -39,3 +44,5 @@ export {
 
 /** Authenticated cold-start secure session verification (side-effect free). */
 export { verifyDriverSession } from './verifyDriverSession';
+/** Authenticated post-SSO / post-login profile bootstrap. */
+export { bootstrapDriverSession } from './sessionBootstrap';

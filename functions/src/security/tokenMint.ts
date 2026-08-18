@@ -9,6 +9,7 @@
  */
 import * as crypto from 'crypto';
 import * as admin from 'firebase-admin';
+import { canonicalDriverAuthUid } from './canonicalDriverUid';
 
 const WEB_API_KEY =
   process.env.FIREBASE_WEB_API_KEY || 'AIzaSyAGWXa-doFGzo7T5SxHVD_v5-SHXIc8wAI';
@@ -19,7 +20,7 @@ export function isPasswordExchangeFallbackAllowed(): boolean {
 }
 
 export function driverAuthUid(driverId: string): string {
-  return `driver_${driverId.replace(/-/g, '').slice(0, 28)}`;
+  return canonicalDriverAuthUid(driverId);
 }
 
 export function driverAuthEmail(driverId: string): string {
