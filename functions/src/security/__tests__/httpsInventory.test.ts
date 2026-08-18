@@ -24,6 +24,13 @@ describe('HTTPS inventory vs exported functions', () => {
     expect(staleStatic).toEqual([]);
   });
 
+  it('describes addSplitLeg as driver/staff-createDispatch/platform dual', () => {
+    const row = inventoryByName('addSplitLeg');
+    expect(row?.auth).toBe('callable_auth_required');
+    expect(row?.tenant).toBe('driver_or_staff_createDispatch_or_platform_dual');
+    expect(row?.status).toBe('secured');
+  });
+
   it('describes issueStorageReadUrl caller classes explicitly', () => {
     const row = inventoryByName('issueStorageReadUrl');
     expect(row?.auth).toBe('callable_auth_required');
@@ -43,7 +50,6 @@ describe('HTTPS inventory vs exported functions', () => {
   it('fails closed on previously public mutation surfaces', () => {
     for (const name of [
       'backfillTransferredTickets',
-      'addSplitLeg',
       'createOrFindDispatchThread',
       'triggerDieselFetch',
       'writeDiagnosticLog',

@@ -18,3 +18,4 @@ export {
   sendChatMessage,
 } from './invoiceOps';
 export { getPublicClientMeta } from './publicMeta';
+export { addSplitLeg } from './addSplitLeg';

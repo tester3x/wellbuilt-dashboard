@@ -14,7 +14,8 @@ export type TenantGate =
   | 'platform_dual'
   | 'public_protocol'
   | 'fail_closed'
-  | 'driver_or_staff_viewTickets_or_platform_dual';
+  | 'driver_or_staff_viewTickets_or_platform_dual'
+  | 'driver_or_staff_createDispatch_or_platform_dual';
 export type InventorySurface = 'firebase_function' | 'non_function';
 
 export interface HttpsInventoryEntry {
@@ -37,7 +38,7 @@ function e(
 }
 
 export const HTTPS_INVENTORY: HttpsInventoryEntry[] = [
-  e('addSplitLeg', 'httpsV2.onCall', 'callable_auth_required', 'fail_closed', 'fail_closed_blocker'),
+  e('addSplitLeg', 'httpsV2.onCall', 'callable_auth_required', 'driver_or_staff_createDispatch_or_platform_dual', 'secured'),
   e('addTruthSwdReference', 'httpsV2.onCall', 'callable_auth_required', 'staff_company', 'secured'),
   e('adminAddEntitlementOverride', 'httpsV2.onCall', 'platform_dual', 'platform_dual', 'secured'),
   e('adminApproveDriverRegistration', 'httpsV2.onCall', 'manageDrivers_staff_or_platform', 'staff_company', 'secured'),
