@@ -47,12 +47,18 @@ describe('HTTPS inventory vs exported functions', () => {
     expect(inventoryByName('demoClassifyLocations')?.tenant).toBe('public_protocol');
   });
 
+  it('describes writeDiagnosticLog as verified-bearer driver_company secured', () => {
+    const row = inventoryByName('writeDiagnosticLog');
+    expect(row?.auth).toBe('http_bearer_required');
+    expect(row?.tenant).toBe('driver_company');
+    expect(row?.status).toBe('secured');
+  });
+
   it('fails closed on previously public mutation surfaces', () => {
     for (const name of [
       'backfillTransferredTickets',
       'createOrFindDispatchThread',
       'triggerDieselFetch',
-      'writeDiagnosticLog',
     ]) {
       expect(inventoryByName(name)?.status).toBe('fail_closed_blocker');
     }

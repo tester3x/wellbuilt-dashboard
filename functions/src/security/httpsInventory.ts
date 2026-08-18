@@ -146,7 +146,7 @@ export const HTTPS_INVENTORY: HttpsInventoryEntry[] = [
   e('verifyDriverSession', 'httpsV2.onCall', 'callable_auth_required', 'driver_company', 'secured'),
   e('watchdogStrandedPackets', 'functionsV2.onSchedule', 'trigger', 'none', 'trigger'),
   e('weeklyDieselPriceFetch', 'functionsV2.onSchedule', 'trigger', 'none', 'trigger'),
-  e('writeDiagnosticLog', 'httpsV2.onRequest', 'http_bearer_required', 'fail_closed', 'fail_closed_blocker'),
+  e('writeDiagnosticLog', 'httpsV2.onRequest', 'http_bearer_required', 'driver_company', 'secured'),
 ];
 
 export function inventoryByName(name: string) {
