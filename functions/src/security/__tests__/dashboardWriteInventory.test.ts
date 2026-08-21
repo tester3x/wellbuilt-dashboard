@@ -65,6 +65,11 @@ describe('complete Dashboard write inventory vs live deny', () => {
     expect(src('src/lib/secureDriverAdmin.ts')).toContain('adminCleanupTestIdentity');
     expect(src('functions/src/security/index.ts')).toContain('adminRejectPendingRegistration');
     expect(src('functions/src/security/index.ts')).toContain('adminCleanupTestIdentity');
+    const cleanup = src('functions/src/security/adminIdentityCleanupCallable.ts');
+    expect(cleanup).not.toMatch(/deleteUser\([^)]+\)\.catch\(\(\) => undefined\)/);
+    expect(cleanup).not.toMatch(/pending_credentials[\s\S]{0,80}\.delete\(\)\.catch\(\(\) => undefined\)/);
+    expect(cleanup).toContain('partial_cleanup_failed');
+    expect(src('functions/src/security/operational/identityCleanup.ts')).toContain('operational_scan_failed');
   });
 
   it('jsonSafe no longer silently drops arbitrary toMillis objects', () => {
