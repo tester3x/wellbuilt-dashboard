@@ -1,6 +1,7 @@
 import { existsSync, readFileSync } from 'fs';
 import { join } from 'path';
 import {
+  EXTERNAL_NON_DASHBOARD_CLIENT_CALLABLES,
   REQUIRED_CLIENT_ROOT_IDS,
   resolveRequiredClientRoots,
   scanClientCallableUsage,
@@ -34,20 +35,7 @@ describe('authoritative deployed export graph', () => {
   });
 
   it('does not include undeployed client-local names', () => {
-    for (const name of [
-      'acceptTransferRequest',
-      'assignInvoiceBlock',
-      'assignTicketBlock',
-      'enableRouteRecording',
-      'removeSplitLeg',
-      'resequenceSplitFamily',
-      'resolveTransferRequest',
-      'submitTicket',
-      'updateTicket',
-      'jsaGetReadRequest',
-      'jsaCompleteReadRequest',
-      'jsaPersistGovernedArtifact',
-    ]) {
+    for (const name of EXTERNAL_NON_DASHBOARD_CLIENT_CALLABLES) {
       expect(deployed).not.toContain(name);
     }
   });
@@ -64,6 +52,16 @@ describe('authoritative deployed export graph', () => {
     });
   });
 
+  it('resolves this workspace including wellbuilt-ticket as wb-t', () => {
+    const roots = resolveRequiredClientRoots(__dirname);
+    const byId = Object.fromEntries(roots.map((r) => [r.id, r.path]));
+    expect(byId['dashboard-src']).toMatch(/Dashboard[\\/]src$/);
+    expect(byId['wb-t']).toMatch(/(WB-T|wellbuilt-ticket)$/);
+    expect(byId['wb-m']).toMatch(/WB-M[\\/]src$/);
+    expect(existsSync(byId['wb-t'])).toBe(true);
+    expect(existsSync(byId['wb-m'])).toBe(true);
+  });
+
   it('fails if a reachable client calls a non-exported name', () => {
     const roots = resolveRequiredClientRoots(__dirname);
     const result = scanClientRoots(roots);
@@ -74,7 +72,10 @@ describe('authoritative deployed export graph', () => {
     }
     const libFiles = result.fileCountByRoot['dashboard-src-lib'];
     expect(libFiles).toBeGreaterThan(0);
-    const missing = result.used.filter((n) => !deployed.includes(n)).sort();
+    const external = new Set<string>(EXTERNAL_NON_DASHBOARD_CLIENT_CALLABLES);
+    const missing = result.used
+      .filter((n) => !deployed.includes(n) && !external.has(n))
+      .sort();
     expect(missing).toEqual([]);
   });
 

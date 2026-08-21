@@ -266,6 +266,34 @@ export const REQUIRED_CLIENT_ROOT_IDS = [
   'jsa',
 ] as const;
 
+/**
+ * Callables owned by WB-T / TicketTime functions, not Dashboard index.ts.
+ * Dashboard must not export these. Clients may still call them until that
+ * codebase is retired. They are not "missing Dashboard exports."
+ */
+export const EXTERNAL_NON_DASHBOARD_CLIENT_CALLABLES = [
+  'acceptTransferRequest',
+  'assignInvoiceBlock',
+  'assignTicketBlock',
+  'enableRouteRecording',
+  'removeSplitLeg',
+  'resequenceSplitFamily',
+  'resolveTransferRequest',
+  'submitTicket',
+  'updateTicket',
+  'jsaGetReadRequest',
+  'jsaCompleteReadRequest',
+  'jsaPersistGovernedArtifact',
+] as const;
+
+function firstExisting(dir: string, candidates: string[]): string | null {
+  for (const rel of candidates) {
+    const p = join(dir, rel);
+    if (existsSync(p)) return p;
+  }
+  return null;
+}
+
 export function resolveRequiredClientRoots(fromDir: string): ClientRootSpec[] {
   let dir = fromDir;
   for (let i = 0; i < 14; i++) {
@@ -281,15 +309,22 @@ export function resolveRequiredClientRoots(fromDir: string): ClientRootSpec[] {
         { id: 'jsa', path: join(dir, 'files', 'JSA') },
       ];
     }
-    if (existsSync(workspaceDash) && existsSync(join(dir, 'WB-T'))) {
-      return [
-        { id: 'dashboard-src', path: workspaceDash },
-        { id: 'dashboard-src-lib', path: join(dir, 'Dashboard', 'src', 'lib') },
-        { id: 'wb-t', path: join(dir, 'WB-T') },
-        { id: 'wb-m', path: join(dir, 'WB-M', 'src') },
-        { id: 'suite', path: join(dir, 'Suite', 'src') },
-        { id: 'jsa', path: join(dir, 'JSA') },
-      ];
+    if (existsSync(workspaceDash)) {
+      // Canonical checkout names plus this machine's wellbuilt-ticket folder.
+      const wbT = firstExisting(dir, ['WB-T', 'wellbuilt-ticket']);
+      const wbM = firstExisting(dir, [join('WB-M', 'src'), join('wellbuilt-mobile', 'src')]);
+      const suite = firstExisting(dir, [join('Suite', 'src')]);
+      const jsa = firstExisting(dir, ['JSA']);
+      if (wbT && wbM && suite && jsa) {
+        return [
+          { id: 'dashboard-src', path: workspaceDash },
+          { id: 'dashboard-src-lib', path: join(dir, 'Dashboard', 'src', 'lib') },
+          { id: 'wb-t', path: wbT },
+          { id: 'wb-m', path: wbM },
+          { id: 'suite', path: suite },
+          { id: 'jsa', path: jsa },
+        ];
+      }
     }
     dir = join(dir, '..');
   }
