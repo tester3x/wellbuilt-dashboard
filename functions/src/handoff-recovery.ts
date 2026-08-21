@@ -636,6 +636,12 @@ export const recoverHandoffOrphan = httpsV2.onCall(
     const cleanReason = (reason || '').trim().slice(0, 500);
 
     // Capability check
+    const { requireAdminAuthority } = await import('./security/adminAuth');
+    const { authorizeTargetCompany } = await import('./security/canonicalAdminAuthority');
+    const authority = await requireAdminAuthority(
+      auth.uid,
+      request.auth?.token as Record<string, unknown> | undefined,
+    );
     const cap = await callerHasCapability(auth.uid, REQUIRED_CAPABILITY);
     if (!cap.ok) {
       throw new httpsV2.HttpsError(
@@ -651,6 +657,14 @@ export const recoverHandoffOrphan = httpsV2.onCall(
       throw new httpsV2.HttpsError('not-found', `invoice ${invoiceDocId} not found`);
     }
     const data = invSnap.data() as admin.firestore.DocumentData;
+    const invCompany = typeof data.companyId === 'string' ? data.companyId : null;
+    const own = authorizeTargetCompany({
+      authority,
+      targetCompanyId: invCompany,
+    });
+    if (!own.ok) {
+      throw new httpsV2.HttpsError('permission-denied', own.reason);
+    }
     const snapshot = buildSnapshot(invoiceDocId, data);
 
     if (action === 'report') {
@@ -753,6 +767,11 @@ export const listStuckHandoffs = httpsV2.onCall(
     if (!auth?.uid) {
       throw new httpsV2.HttpsError('unauthenticated', 'Must be signed in');
     }
+    const { requireAdminAuthority } = await import('./security/adminAuth');
+    const authority = await requireAdminAuthority(
+      auth.uid,
+      request.auth?.token as Record<string, unknown> | undefined,
+    );
     const cap = await callerHasCapability(auth.uid, 'viewAdmin');
     if (!cap.ok) {
       throw new httpsV2.HttpsError('permission-denied', `caller missing viewAdmin`);
@@ -778,6 +797,9 @@ export const listStuckHandoffs = httpsV2.onCall(
     const candidates: InvoiceSnapshot[] = [];
     for (const doc of snap.docs) {
       const data = doc.data();
+      if (authority.class === 'company_staff') {
+        if (data.companyId !== authority.companyId) continue;
+      }
       const driverState = (data.driverState as string) || '';
       if (!HANDOFF_DRIVER_STATES.has(driverState)) continue;
       candidates.push(buildSnapshot(doc.id, data));

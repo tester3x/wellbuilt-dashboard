@@ -516,7 +516,9 @@ export const materializeTransferredTicket = functionsV1.firestore
  * Output:
  *   { processed: number, materialized: string[], skipped: Array<{id, reason}>, errors: Array<{id, error}> }
  */
-export const backfillTransferredTickets = functionsV1.https.onCall(async (data, _context) => {
+export const backfillTransferredTickets = functionsV1.https.onCall(async (data, context) => {
+  const { requirePlatformAdmin } = await import('./security/adminAuth');
+  await requirePlatformAdmin(context.auth?.uid, context.auth?.token as Record<string, unknown> | undefined);
   const db = fs();
   const inputIds: string[] | null = Array.isArray(data?.invoiceIds) ? data.invoiceIds : null;
   const dryRun: boolean = !!data?.dryRun;

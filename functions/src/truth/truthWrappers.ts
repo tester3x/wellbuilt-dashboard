@@ -6,7 +6,7 @@ import {
   buildRAGIngestBundle,
   buildShadowComparisonBundle,
 } from '../truth-layer';
-import { requireAdminRole } from './requireAdminRole';
+import { requireAdminRole, scopedCompanyId } from './requireAdminRole';
 import { loadTruthInputForDay } from './loadTruthInputForDay';
 
 interface DayRequest {
@@ -39,7 +39,7 @@ export const getIntegratedTruthForDay = httpsV2.onCall(
   async (request) => {
     const identity = await requireAdminRole(request);
     const parsed = parseRequest(request.data);
-    const companyScope = parsed.companyId ?? identity.companyId;
+    const companyScope = scopedCompanyId(identity, parsed.companyId);
     const loadParams: { date: string; companyId?: string } = { date: parsed.date };
     if (companyScope) loadParams.companyId = companyScope;
     const { input, sourceErrors, loaded } = await loadTruthInputForDay(loadParams);
@@ -56,7 +56,7 @@ export const getDashboardReadModelForDay = httpsV2.onCall(
   async (request) => {
     const identity = await requireAdminRole(request);
     const parsed = parseRequest(request.data);
-    const companyScope = parsed.companyId ?? identity.companyId;
+    const companyScope = scopedCompanyId(identity, parsed.companyId);
     const loadParams: { date: string; companyId?: string } = { date: parsed.date };
     if (companyScope) loadParams.companyId = companyScope;
     const { input, sourceErrors, loaded } = await loadTruthInputForDay(loadParams);
@@ -75,7 +75,7 @@ export const getRAGIngestBundleForDay = httpsV2.onCall(
   async (request) => {
     const identity = await requireAdminRole(request);
     const parsed = parseRequest(request.data);
-    const companyScope = parsed.companyId ?? identity.companyId;
+    const companyScope = scopedCompanyId(identity, parsed.companyId);
     const loadParams: { date: string; companyId?: string } = { date: parsed.date };
     if (companyScope) loadParams.companyId = companyScope;
     const { input, sourceErrors, loaded } = await loadTruthInputForDay(loadParams);
@@ -93,7 +93,7 @@ export const getShadowComparisonForDay = httpsV2.onCall(
   async (request) => {
     const identity = await requireAdminRole(request);
     const parsed = parseRequest(request.data);
-    const companyScope = parsed.companyId ?? identity.companyId;
+    const companyScope = scopedCompanyId(identity, parsed.companyId);
     const loadParams: { date: string; companyId?: string } = { date: parsed.date };
     if (companyScope) loadParams.companyId = companyScope;
     const { input, sourceErrors, loaded } = await loadTruthInputForDay(loadParams);

@@ -36,6 +36,9 @@ export type CanonicalDriverAuthority = {
    * Matches the dual-check authenticateDriver already performs at login.
    */
   active: boolean;
+  roles?: string[];
+  isAdmin?: boolean;
+  isViewer?: boolean;
 };
 
 /** Injectable record readers so unit tests never touch Admin SDK. */
@@ -46,6 +49,9 @@ export type CanonicalDriverRecordReaders = {
     active: boolean;
     companyId: string | null;
     displayName?: string | null;
+    roles?: string[];
+    isAdmin?: boolean;
+    isViewer?: boolean;
   }>;
 };
 
@@ -82,6 +88,9 @@ export async function loadCanonicalDriverAuthority(
     credentialsActive,
     profileActive,
     active: credentialsActive && profileActive,
+    roles: profile.roles,
+    isAdmin: profile.isAdmin,
+    isViewer: profile.isViewer,
   };
 }
 
@@ -104,6 +113,9 @@ export function productionCanonicalDriverReaders(): CanonicalDriverRecordReaders
         active?: boolean;
         companyId?: unknown;
         displayName?: unknown;
+        roles?: unknown;
+        isAdmin?: unknown;
+        isViewer?: unknown;
       };
       const companyId =
         typeof val.companyId === 'string' && val.companyId.trim().length > 0
@@ -117,6 +129,9 @@ export function productionCanonicalDriverReaders(): CanonicalDriverRecordReaders
         // profile's own displayName is read — no other profile field, and
         // never the legacy approved namespace.
         displayName: typeof val.displayName === 'string' ? val.displayName : null,
+        roles: Array.isArray(val.roles) ? (val.roles as string[]) : undefined,
+        isAdmin: val.isAdmin === true,
+        isViewer: val.isViewer === true,
       };
     },
   };
@@ -136,6 +151,9 @@ export async function getAuthoritativeDriverForSso(
   companyId: string | null;
   active: boolean;
   displayName: string | null;
+  roles?: string[];
+  isAdmin?: boolean;
+  isViewer?: boolean;
 } | null> {
   const auth = await loadCanonicalDriverAuthority(driverId, readers);
   if (!auth) return null;
@@ -144,5 +162,8 @@ export async function getAuthoritativeDriverForSso(
     companyId: auth.companyId,
     active: auth.active,
     displayName: auth.displayName,
+    roles: auth.roles,
+    isAdmin: auth.isAdmin,
+    isViewer: auth.isViewer,
   };
 }

@@ -26,10 +26,10 @@ export const updateDriverProfile = httpsV2.onCall(
     if (!data.profile || typeof data.profile !== 'object') {
       throw new httpsV2.HttpsError('invalid-argument', 'profile required');
     }
-    const driver = await requireSecureDriver(request, {
-      allowLegacyHash: true,
-      legacyDriverHash: data.driverHash,
-    });
+    if (data.driverHash) {
+      throw new httpsV2.HttpsError('permission-denied', 'legacy_hash_rejected');
+    }
+    const driver = await requireSecureDriver(request);
 
     const cleaned: Record<string, unknown> = {};
     for (const [k, v] of Object.entries(data.profile)) {
@@ -42,16 +42,6 @@ export const updateDriverProfile = httpsV2.onCall(
 
     // Secure profile path
     await admin.database().ref(`drivers/profiles/${driver.driverId}/profile`).update(cleaned);
-
-    // Dual-run: mirror to legacy approved if still active and hash provided
-    if (data.driverHash) {
-      const hash = data.driverHash.trim().toLowerCase();
-      await admin
-        .database()
-        .ref(`drivers/approved/${hash}/profile`)
-        .update(cleaned)
-        .catch(() => undefined);
-    }
 
     await writeSecurityAudit({
       action: 'updateDriverProfile',
@@ -68,19 +58,12 @@ export const signalDriverLogout = httpsV2.onCall(
   { timeoutSeconds: 15, memory: '256MiB', enforceAppCheck: false },
   async (request) => {
     const data = (request.data || {}) as { driverHash?: string; logoutAt?: number };
-    const driver = await requireSecureDriver(request, {
-      allowLegacyHash: true,
-      legacyDriverHash: data.driverHash,
-    });
+    if (data.driverHash) {
+      throw new httpsV2.HttpsError('permission-denied', 'legacy_hash_rejected');
+    }
+    const driver = await requireSecureDriver(request);
     const logoutAt = typeof data.logoutAt === 'number' ? data.logoutAt : Date.now();
     await admin.database().ref(`drivers/profiles/${driver.driverId}`).update({ logoutAt });
-    if (data.driverHash) {
-      await admin
-        .database()
-        .ref(`drivers/approved/${data.driverHash.trim().toLowerCase()}`)
-        .update({ logoutAt })
-        .catch(() => undefined);
-    }
     return { ok: true, logoutAt };
   },
 );

@@ -66,6 +66,12 @@ export const validatePhotoCompliance = httpsV2.onCall(
   // Runtime provider switch means either provider is reachable.
   { timeoutSeconds: 60, memory: '512MiB', secrets: [ANTHROPIC_API_KEY, GEMINI_API_KEY] },
   async (request) => {
+    if (!request.auth?.uid) {
+      throw new httpsV2.HttpsError(
+        'unauthenticated',
+        'auth_required_16g_photo_compliance_migration_blocker',
+      );
+    }
     const { customerId, requirementId, photoBase64, mimeType, ticketId, invoiceId, driverId, photoStoragePath, companyId, lat, lng, captureTime } = (request.data || {}) as {
       customerId?: string;
       requirementId?: string;
@@ -579,6 +585,12 @@ export const suggestPhotoCriteria = httpsV2.onCall(
   // Same runtime provider switch (shared runVisionText helper).
   { timeoutSeconds: 60, memory: '512MiB', secrets: [ANTHROPIC_API_KEY, GEMINI_API_KEY] },
   async (request) => {
+    if (!request.auth?.uid) {
+      throw new httpsV2.HttpsError(
+        'unauthenticated',
+        'auth_required_16g_photo_criteria_migration_blocker',
+      );
+    }
     const { customerId, requirementId, sampleStoragePath, sampleUrl, label, phase, hint } = (request.data || {}) as {
       customerId?: string;
       requirementId?: string;
@@ -593,13 +605,17 @@ export const suggestPhotoCriteria = httpsV2.onCall(
 
     // Resolve the sample image → base64. Prefer an explicit storage path, then a
     // URL, then look it up on the requirement doc.
+    if (sampleUrl) {
+      throw new httpsV2.HttpsError(
+        'invalid-argument',
+        'sampleUrl_refused_ssrf_use_sampleStoragePath',
+      );
+    }
     let path = sampleStoragePath || '';
-    let url = sampleUrl || '';
-    if (!path && !url && customerId && requirementId) {
+    if (!path && customerId && requirementId) {
       const snap = await firestoreDb.collection('photo_requirements').doc(customerId).get();
       const req = snap.exists ? (snap.data() as any).requirements?.find((r: any) => r.id === requirementId) : null;
       path = req?.sampleStoragePath || '';
-      url = req?.sampleUrl || '';
     }
 
     let imgBase64: string | null = null;
@@ -611,12 +627,6 @@ export const suggestPhotoCriteria = httpsV2.onCall(
         imgBase64 = buf.toString('base64');
         const [meta] = await file.getMetadata().catch(() => [{ contentType: 'image/jpeg' }] as any);
         if (meta?.contentType) imgMime = meta.contentType;
-      } else if (url) {
-        const resp = await fetch(url);
-        if (resp.ok) {
-          imgBase64 = Buffer.from(await resp.arrayBuffer()).toString('base64');
-          imgMime = resp.headers.get('content-type') || 'image/jpeg';
-        }
       }
     } catch (e: any) {
       console.warn('[suggestPhotoCriteria] sample load failed:', e?.message);

@@ -1,5 +1,6 @@
 import { HttpsError, CallableRequest } from 'firebase-functions/v2/https';
-import * as admin from 'firebase-admin';
+import { requireAdminAuthority } from '../security/adminAuth';
+import { staffHasCapability } from '../security/canonicalAdminAuthority';
 
 export type AdminRole = 'admin' | 'it';
 
@@ -8,19 +9,12 @@ export interface AdminIdentity {
   role: AdminRole;
   email?: string;
   companyId?: string;
+  isPlatformAdmin: boolean;
 }
 
 /**
- * Server-side role check for truth-debug / RAG-export endpoints.
- *
- * Reads RTDB `users/{uid}/role` — the same path the dashboard frontend uses.
- * Throws an HttpsError the callable SDK surfaces to the caller on failure.
- * Does NOT invent a new auth system. Does NOT bypass anything.
- *
- * Behaviour:
- * - no auth context (unauthenticated call) -> unauthenticated
- * - authenticated but users/{uid} missing -> permission-denied
- * - role is not 'admin' or 'it' -> permission-denied
+ * Canonical admin gate for truth endpoints.
+ * Company staff cannot supply another companyId.
  */
 export async function requireAdminRole(
   request: CallableRequest<unknown>
@@ -29,22 +23,31 @@ export async function requireAdminRole(
   if (!auth || !auth.uid) {
     throw new HttpsError('unauthenticated', 'Sign in required.');
   }
-  const uid = auth.uid;
-  const snap = await admin.database().ref(`users/${uid}`).once('value');
-  if (!snap.exists()) {
-    throw new HttpsError('permission-denied', 'User record not found.');
+  const authority = await requireAdminAuthority(
+    auth.uid,
+    auth.token as Record<string, unknown> | undefined,
+  );
+  if (!staffHasCapability(authority, 'viewTruthDebug')) {
+    throw new HttpsError('permission-denied', 'missing_viewTruthDebug');
   }
-  const data = snap.val() as {
-    role?: string;
-    email?: string;
-    companyId?: string;
+  return {
+    uid: authority.uid,
+    role: authority.class === 'platform' ? 'admin' : 'it',
+    isPlatformAdmin: authority.class === 'platform',
+    companyId: authority.companyId || undefined,
   };
-  const role = data.role;
-  if (role !== 'admin' && role !== 'it') {
-    throw new HttpsError('permission-denied', 'Admin role required.');
+}
+
+export function scopedCompanyId(
+  identity: AdminIdentity,
+  requested?: string,
+): string | undefined {
+  if (identity.isPlatformAdmin) return requested || identity.companyId;
+  if (requested && identity.companyId && requested !== identity.companyId) {
+    throw new HttpsError('permission-denied', 'cross_tenant');
   }
-  const out: AdminIdentity = { uid, role };
-  if (typeof data.email === 'string') out.email = data.email;
-  if (typeof data.companyId === 'string') out.companyId = data.companyId;
-  return out;
+  if (!identity.companyId) {
+    throw new HttpsError('permission-denied', 'unscoped_target');
+  }
+  return identity.companyId;
 }

@@ -1,12 +1,12 @@
 /**
- * Secure JSA record + day-status writes (Admin SDK).
- * Replaces open Firestore client writes to jsas / jsa_day_status.
+ * Secure JSA record + day-status writes. Existing rows require owner+company.
  */
 import * as httpsV2 from 'firebase-functions/v2/https';
 import * as admin from 'firebase-admin';
 import { FieldValue } from 'firebase-admin/firestore';
-import { requireSecureDriver } from '../requireDriverAuth';
+import { requireSecureDriver, isManagerCapability } from '../requireDriverAuth';
 import { writeSecurityAudit } from '../audit';
+import { decideResourceOwnership } from './resourceOwnership';
 
 const MAX_JSA_JSON = 500_000;
 
@@ -21,6 +21,9 @@ export const submitJsaRecord = httpsV2.onCall(
       driverHash?: string;
       idempotencyKey?: string;
     };
+    if (data.driverHash != null) {
+      throw new httpsV2.HttpsError('permission-denied', 'legacy_hash_rejected');
+    }
     if (!data.jsa || typeof data.jsa !== 'object') {
       throw new httpsV2.HttpsError('invalid-argument', 'jsa required');
     }
@@ -28,23 +31,22 @@ export const submitJsaRecord = httpsV2.onCall(
       throw new httpsV2.HttpsError('invalid-argument', 'jsa payload too large');
     }
 
-    const driver = await requireSecureDriver(request, {
-      allowLegacyHash: true,
-      legacyDriverHash: data.driverHash,
-    });
+    const driver = await requireSecureDriver(request);
+    const manager = isManagerCapability(driver);
 
     const jsa = { ...data.jsa };
     jsa.driverId = driver.driverId;
+    jsa.companyId = driver.companyId;
     if (driver.displayName) jsa.driverName = driver.displayName;
-    if (driver.companyId) jsa.companyId = driver.companyId;
     jsa.updatedAt = FieldValue.serverTimestamp();
     jsa.authSource = driver.authSource;
-    delete (jsa as any).isAdmin;
-    delete (jsa as any).roles;
+    delete (jsa as { isAdmin?: unknown }).isAdmin;
+    delete (jsa as { roles?: unknown }).roles;
+    delete (jsa as { driverHash?: unknown }).driverHash;
 
     let jsaId = (data.jsaId || '').trim();
     if (!jsaId && data.idempotencyKey) {
-      jsaId = `idem_${String(data.idempotencyKey).replace(/[\/]/g, '_').slice(0, 80)}`;
+      jsaId = `idem_${String(data.idempotencyKey).replace(/\//g, '_').slice(0, 80)}`;
     }
     const col = admin.firestore().collection('jsas');
     if (jsaId) {
@@ -52,9 +54,16 @@ export const submitJsaRecord = httpsV2.onCall(
       const ex = await ref.get();
       if (ex.exists) {
         const prev = ex.data() || {};
-        if (prev.driverId && prev.driverId !== driver.driverId && prev.driverId !== data.driverHash) {
-          throw new httpsV2.HttpsError('permission-denied', 'JSA owned by another driver');
-        }
+        const own = decideResourceOwnership({
+          callerDriverId: driver.driverId,
+          callerCompanyId: driver.companyId,
+          resourceDriverId: prev.driverId,
+          resourceCompanyId: prev.companyId,
+          isManager: manager,
+        });
+        if (!own.ok) throw new httpsV2.HttpsError('permission-denied', own.reason);
+        jsa.driverId = prev.driverId;
+        jsa.companyId = prev.companyId;
         await ref.set(jsa, { merge: true });
       } else {
         jsa.createdAt = FieldValue.serverTimestamp();
@@ -66,16 +75,28 @@ export const submitJsaRecord = httpsV2.onCall(
       jsaId = created.id;
     }
 
-    // Optional day status mirror
     if (data.dayStatus && typeof data.dayStatus === 'object') {
       const ds = { ...data.dayStatus };
       ds.driverId = driver.driverId;
-      if (driver.companyId) ds.companyId = driver.companyId;
+      ds.companyId = driver.companyId;
       ds.updatedAt = FieldValue.serverTimestamp();
       const dsId =
         (data.dayStatusId || '').trim() ||
         `${driver.driverId}_${String(ds.shiftId || ds.date || 'day')}`;
-      await admin.firestore().collection('jsa_day_status').doc(dsId).set(ds, { merge: true });
+      const dsRef = admin.firestore().collection('jsa_day_status').doc(dsId);
+      const dsEx = await dsRef.get();
+      if (dsEx.exists) {
+        const prev = dsEx.data() || {};
+        const own = decideResourceOwnership({
+          callerDriverId: driver.driverId,
+          callerCompanyId: driver.companyId,
+          resourceDriverId: prev.driverId,
+          resourceCompanyId: prev.companyId,
+          isManager: manager,
+        });
+        if (!own.ok) throw new httpsV2.HttpsError('permission-denied', own.reason);
+      }
+      await dsRef.set(ds, { merge: true });
     }
 
     await writeSecurityAudit({

@@ -492,13 +492,8 @@ export const triggerWellCatalogRefresh = httpsV2.onCall(
   async (request) => {
     const uid = request.auth?.uid;
     if (!uid) throw new httpsV2.HttpsError('unauthenticated', 'Sign in required.');
-    // WB-staff-only gate: role admin/it AND no companyId. Matches
-    // resolveAdminRecipients — a hauler/customer admin (has companyId) must NOT
-    // be able to run a refresh against the shared global catalog.
-    const userSnap = await admin.database().ref(`users/${uid}`).once('value');
-    const u = userSnap.val() || {};
-    const allowed = !u.companyId && (u.role === 'admin' || u.role === 'it');
-    if (!allowed) throw new httpsV2.HttpsError('permission-denied', 'WB admin only.');
+    const { requirePlatformAdmin } = await import('./security/adminAuth');
+    await requirePlatformAdmin(uid, request.auth?.token as Record<string, unknown> | undefined);
 
     const dryRun = request.data?.dryRun !== false; // default true
     const sendEmail = request.data?.sendEmail !== false; // default true

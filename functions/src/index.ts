@@ -2863,6 +2863,11 @@ export const weeklyDieselPriceFetch = functionsV2.onSchedule(
 export const triggerDieselFetch = httpsV2.onRequest(
   { cors: true },
   async (req, res) => {
+    const authz = String(req.headers.authorization || req.headers.Authorization || '');
+    if (!authz.toLowerCase().startsWith('bearer ') || authz.slice(7).trim().length < 16) {
+      res.status(401).json({ error: 'auth_required_16g' });
+      return;
+    }
     console.log('[DieselFetch] Manual trigger...');
     const firestore = admin.firestore();
 
@@ -3736,6 +3741,15 @@ export const onProjectWrite = functionsV1.firestore
 export const createOrFindDispatchThread = httpsV2.onCall(
   { timeoutSeconds: 30, memory: '256MiB' },
   async (request) => {
+    if (!request.auth?.uid) {
+      throw new httpsV2.HttpsError('unauthenticated', 'auth_required_16g');
+    }
+    if ((request.data as { driverHash?: unknown } | undefined)?.driverHash != null) {
+      throw new httpsV2.HttpsError(
+        'failed-precondition',
+        'legacy_hash_rejected_wbt_chat_migration_blocker',
+      );
+    }
     const { companyId, driverHash, driverName } = (request.data || {}) as {
       companyId?: string;
       driverHash?: string;
@@ -3865,12 +3879,18 @@ export const inviteEmployee = httpsV2.onCall(
     if (!auth?.uid) {
       throw new httpsV2.HttpsError('unauthenticated', 'Must be signed in');
     }
-    const { email, displayName, role, companyId, driverHash } = (request.data || {}) as {
+    const { requireAdminAuthority } = await import('./security/adminAuth');
+    const authority = await requireAdminAuthority(
+      auth.uid,
+      auth.token as Record<string, unknown> | undefined,
+    );
+    const { email, displayName, role, companyId, driverHash, explicitRebind } = (request.data || {}) as {
       email?: string;
       displayName?: string;
       role?: string;
       companyId?: string;       // target company for the new employee
       driverHash?: string;      // optional — link to an existing driver
+      explicitRebind?: boolean; // platform-only rebind; ordinary invite is not a rebind
     };
     if (!email || !role) {
       throw new httpsV2.HttpsError('invalid-argument', 'email and role are required');
@@ -3880,116 +3900,128 @@ export const inviteEmployee = httpsV2.onCall(
       throw new httpsV2.HttpsError('invalid-argument', `role must be one of: ${VALID_ROLES.join(', ')}`);
     }
     const normalizedEmail = email.trim().toLowerCase();
-
-    // Caller authorization — must have manageDrivers capability at the
-    // target company. WB admin (no companyId on their record) can invite
-    // to any company.
-    const callerSnap = await db.ref(`users/${auth.uid}`).once('value');
-    const callerData = callerSnap.val();
-    if (!callerData) {
-      throw new httpsV2.HttpsError('permission-denied', 'Caller is not a registered dashboard user');
-    }
-    const callerCid = callerData.companyId || '';
-    if (callerCid && companyId && callerCid !== companyId) {
-      throw new httpsV2.HttpsError('permission-denied', 'Cannot invite to a company you do not belong to');
-    }
-    // Load the target company's roleCapabilities override (if any) to
-    // evaluate the caller's manageDrivers capability.
-    let callerCaps: string[] = [];
-    if (callerCid) {
-      const cSnap = await firestoreDb.collection('companies').doc(callerCid).get();
-      const roleCaps = (cSnap.data()?.roleCapabilities || {}) as Record<string, string[]>;
-      callerCaps = resolveCapsForRole(callerData.role, roleCaps);
-    } else {
-      callerCaps = resolveCapsForRole(callerData.role, {});
-    }
-    if (!callerCaps.includes('manageDrivers')) {
-      throw new httpsV2.HttpsError('permission-denied', 'Caller lacks manageDrivers capability');
-    }
-
-    // If driverHash supplied, verify it exists
-    let driverData: any = null;
-    if (driverHash) {
-      const dSnap = await db.ref(`drivers/approved/${driverHash}`).once('value');
-      if (!dSnap.exists()) {
-        throw new httpsV2.HttpsError('not-found', `Driver hash ${driverHash.slice(0, 8)} not found in approved drivers`);
-      }
-      driverData = dSnap.val();
-    }
-
-    // Find or create the Firebase Auth user
-    const authAdmin = admin.auth();
-    let uid: string;
-    let existed = false;
-    try {
-      const existing = await authAdmin.getUserByEmail(normalizedEmail);
-      uid = existing.uid;
-      existed = true;
-      console.log(`[inviteEmployee] reusing existing auth user ${uid} for ${normalizedEmail}`);
-    } catch (err: any) {
-      if (err?.code !== 'auth/user-not-found') throw err;
-      const resolvedName =
-        displayName?.trim() ||
-        driverData?.legalName ||
-        driverData?.displayName ||
-        normalizedEmail.split('@')[0];
-      const created = await authAdmin.createUser({
-        email: normalizedEmail,
-        emailVerified: false,
-        displayName: resolvedName,
-        disabled: false,
-      });
-      uid = created.uid;
-      console.log(`[inviteEmployee] created new auth user ${uid} for ${normalizedEmail}`);
-    }
-
-    // Resolve display name for RTDB
-    const resolvedDisplayName =
-      displayName?.trim() ||
-      driverData?.legalName ||
-      driverData?.displayName ||
-      normalizedEmail.split('@')[0];
-
-    // Write the users/{uid} record. Merges with existing entry if any.
-    const userUpdate: Record<string, any> = {
-      email: normalizedEmail,
-      displayName: resolvedDisplayName,
-      role,
+    const { runInviteEmployeeSaga } = await import('./security/inviteEmployeeSaga');
+    const { randomUUID } = await import('crypto');
+    const stores = {
+      nowMs: () => Date.now(),
+      newUid: () => randomUUID(),
+      newOwnerToken: () => randomUUID(),
+      async readJournal(id: string) {
+        const snap = await firestoreDb.collection('invite_employee_journal').doc(id).get();
+        return snap.exists ? (snap.data() as any) : null;
+      },
+      async writeJournal(entry: any) {
+        await firestoreDb.collection('invite_employee_journal').doc(entry.attemptId).set(entry, { merge: true });
+        return entry;
+      },
+      async claimJournal(entry: any, ownerToken: string, nowMs: number) {
+        const ref = firestoreDb.collection('invite_employee_journal').doc(entry.attemptId);
+        return firestoreDb.runTransaction(async (tx) => {
+          const snap = await tx.get(ref);
+          const cur = snap.exists ? snap.data() as any : null;
+          if (cur?.leaseUntil && cur.leaseUntil > nowMs && cur.ownerToken && cur.ownerToken !== ownerToken) {
+            return { ok: false as const, reason: 'invite_lease_collision' };
+          }
+          const next = { ...entry, ownerToken, leaseUntil: nowMs + 90_000 };
+          tx.set(ref, next, { merge: true });
+          return { ok: true as const, entry: next };
+        });
+      },
+      async getUserByEmail(em: string) {
+        try {
+          const u = await admin.auth().getUserByEmail(em);
+          return { uid: u.uid, email: u.email || em, claims: (u.customClaims || {}) as Record<string, unknown> };
+        } catch (err: any) {
+          if (err?.code === 'auth/user-not-found') return null;
+          throw err;
+        }
+      },
+      async createUser(inp: { uid: string; email: string; displayName: string }) {
+        const created = await admin.auth().createUser({
+          uid: inp.uid,
+          email: inp.email,
+          emailVerified: false,
+          displayName: inp.displayName,
+          disabled: false,
+        });
+        return { uid: created.uid };
+      },
+      async getUser(uid: string) {
+        const u = await admin.auth().getUser(uid);
+        return { uid: u.uid, email: u.email, claims: (u.customClaims || {}) as Record<string, unknown> };
+      },
+      async setClaims(uid: string, claims: Record<string, unknown>) {
+        await admin.auth().setCustomUserClaims(uid, claims);
+      },
+      async getRtdb(uid: string) {
+        const snap = await db.ref(`users/${uid}`).once('value');
+        return snap.exists() ? snap.val() : null;
+      },
+      async setRtdb(uid: string, data: Record<string, unknown>) {
+        await db.ref(`users/${uid}`).update(data);
+      },
+      async getStaff(uid: string) {
+        const snap = await firestoreDb.collection('staff').doc(uid).get();
+        return snap.exists ? snap.data() || null : null;
+      },
+      async setStaff(uid: string, data: Record<string, unknown>) {
+        await firestoreDb.collection('staff').doc(uid).set(data, { merge: true });
+      },
+      async getPlatformAdmin(uid: string) {
+        const snap = await firestoreDb.collection('platform_admins').doc(uid).get();
+        return snap.exists ? (snap.data() as { enabled?: boolean }) : null;
+      },
+      async getDriver(hash: string) {
+        const snap = await db.ref(`drivers/approved/${hash}`).once('value');
+        return snap.exists() ? snap.val() : null;
+      },
+      async setDriver(hash: string, data: Record<string, unknown>) {
+        await db.ref(`drivers/approved/${hash}`).update(data);
+      },
+      async findDriverByDashboardUid(uid: string) {
+        const snap = await db.ref('drivers/approved').orderByChild('dashboardUid').equalTo(uid).once('value');
+        if (!snap.exists()) return null;
+        let found: { hash: string; data: Record<string, unknown> } | null = null;
+        snap.forEach((child) => {
+          found = { hash: child.key as string, data: child.val() || {} };
+          return true;
+        });
+        return found;
+      },
     };
-    if (companyId) userUpdate.companyId = companyId;
-    if (driverHash) userUpdate.driverHash = driverHash;
-    await db.ref(`users/${uid}`).update(userUpdate);
-
-    // Link the driver record back to the new dashboard user so the UI can
-    // show the link in both directions.
-    if (driverHash) {
-      await db.ref(`drivers/approved/${driverHash}`).update({
-        dashboardUid: uid,
-        dashboardRole: role,
-      });
+    const result = await runInviteEmployeeSaga(stores, {
+      authority,
+      email: normalizedEmail,
+      role,
+      companyId: companyId ? String(companyId).trim() : null,
+      displayName: displayName || null,
+      driverHash: driverHash || null,
+      explicitRebind: explicitRebind === true,
+      invitedBy: auth.uid,
+    });
+    if (!result.ok) {
+      const code = result.reason === 'invite_lease_collision' ? 'aborted' : 'permission-denied';
+      throw new httpsV2.HttpsError(code as any, result.reason);
     }
-
-    // Generate password-reset link. For a brand-new user this effectively
-    // becomes a "set initial password" link. Safe to use the generic
-    // generatePasswordResetLink for both new and existing users.
     let resetLink: string | null = null;
     try {
-      resetLink = await authAdmin.generatePasswordResetLink(normalizedEmail);
+      resetLink = await admin.auth().generatePasswordResetLink(normalizedEmail);
     } catch (err: any) {
-      console.warn(`[inviteEmployee] failed to generate reset link for ${normalizedEmail}:`, err?.message);
+      console.warn(`[inviteEmployee] failed to generate reset link:`, err?.message);
     }
-
     return {
-      uid,
+      uid: result.uid,
       email: normalizedEmail,
-      role,
-      displayName: resolvedDisplayName,
-      existed,
+      role: result.role,
+      existed: result.existed,
       resetLink,
       driverHash: driverHash || null,
+      claimsStamped: true,
     };
   },
 );
+
+
 
 // ============================================================
 // WB CHAT — onUserWrite
@@ -4183,6 +4215,12 @@ export const parseJsaPdf = httpsV2.onCall(
   // plaintext env vars on 51 Functions; 50 of them never read either.
   { timeoutSeconds: 120, memory: '512MiB', secrets: [ANTHROPIC_API_KEY] },
   async (request) => {
+    if (!request.auth?.uid) {
+      throw new httpsV2.HttpsError(
+        'unauthenticated',
+        'auth_required_16g_jsa_client_migration_blocker',
+      );
+    }
     const { pdfBase64, fileName, companyId } = request.data as {
       pdfBase64?: string; fileName?: string; companyId?: string;
     };
@@ -4579,6 +4617,7 @@ export {
 // ============================================================
 export { addSplitLeg } from './security/operational/addSplitLeg';
 
+
 export {
   recoverHandoffOrphan,
   listStuckHandoffs,
@@ -4604,6 +4643,7 @@ export {
   adminBindDriverCompany,
   // Operational path hardening
   ingestDriverPacket,
+  submitFieldCommand,
   upsertDriverShift,
   resolveActiveDriverShift,
   claimDriverShift,
@@ -4613,13 +4653,18 @@ export {
   updateDriverProfile,
   signalDriverLogout,
   getDriverReferenceBundle,
+  getDriverWellConfig,
+  getFieldCommandStatus,
   requestStorageUploadPath,
+  finalizeStorageUpload,
+  issueStorageReadUrl,
   upsertDriverInvoice,
   upsertDriverDispatch,
   sendChatMessage,
   getPublicClientMeta,
   // Secure cold-start session verification (side-effect free)
   verifyDriverSession,
+  bootstrapDriverSession,
 } from './security';
 
 // ── vc51.9J: WB-S -> WB-T SSO authorization-code bridge ────────────────────
@@ -4650,3 +4695,5 @@ export {
 // whole-codebase deploy would have pruned them.
 export { validatePhotoCompliance, suggestPhotoCriteria } from './photoCompliance';
 export { scheduledWellCatalogRefresh, triggerWellCatalogRefresh } from './wellCatalogRefresh';
+export { adminSyncStaffClaims } from './security/claimsSyncCallable';
+export { upsertPhotoRequirementSpec } from './security/photoRequirementWrite';

@@ -281,6 +281,8 @@ export const runTransferRequestExpiryOnDemand = functionsV1.https.onCall(
     if (!context.auth) {
       throw new functionsV1.https.HttpsError('unauthenticated', 'Sign-in required');
     }
+    const { requirePlatformAdmin } = await import('./security/adminAuth');
+    await requirePlatformAdmin(context.auth.uid, context.auth.token as Record<string, unknown> | undefined);
     const maxToExpire =
       typeof data?.maxToExpire === 'number' ? data.maxToExpire : MAX_EXPIRE_PER_RUN;
     return await runTransferRequestExpiry(maxToExpire);

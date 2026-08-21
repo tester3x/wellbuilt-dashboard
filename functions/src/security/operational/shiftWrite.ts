@@ -35,10 +35,10 @@ export const upsertDriverShift = httpsV2.onCall(
       throw new httpsV2.HttpsError('invalid-argument', 'shift required');
     }
 
-    const driver = await requireSecureDriver(request, {
-      allowLegacyHash: true,
-      legacyDriverHash: data.driverHash,
-    });
+    if (data.driverHash != null) {
+      throw new httpsV2.HttpsError('permission-denied', 'legacy_hash_rejected');
+    }
+    const driver = await requireSecureDriver(request);
 
     const cleaned: Record<string, unknown> = {};
     for (const [k, v] of Object.entries(data.shift)) {
@@ -58,17 +58,17 @@ export const upsertDriverShift = httpsV2.onCall(
     }
     // Ownership: doc id must start with driverId or equal
     if (!docId.startsWith(driver.driverId) && !docId.includes(driver.driverId)) {
-      // For legacy hash ids during dual-run, allow if authSource legacy
-      if (driver.authSource !== 'legacy_hash') {
-        throw new httpsV2.HttpsError('permission-denied', 'Shift id must be owned by driver');
-      }
+      throw new httpsV2.HttpsError('permission-denied', 'Shift id must be owned by driver');
     }
 
     const ref = admin.firestore().collection('driver_shifts').doc(docId);
     const existing = await ref.get();
     if (existing.exists) {
       const prev = existing.data() || {};
-      if (prev.driverId && prev.driverId !== driver.driverId && prev.driverId !== data.driverHash) {
+      if (!prev.companyId || prev.companyId !== driver.companyId) {
+        throw new httpsV2.HttpsError('permission-denied', 'unscoped_resource');
+      }
+      if (!prev.driverId || prev.driverId !== driver.driverId) {
         throw new httpsV2.HttpsError('permission-denied', 'Cannot overwrite another driver shift');
       }
       // Terminal state guard

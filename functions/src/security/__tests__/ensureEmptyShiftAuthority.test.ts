@@ -164,13 +164,14 @@ describe('provisioning source pins', () => {
     expect(ensureSrc).not.toMatch(/legacyHash|passcodeHash/);
   });
 
-  test('standalone registration still has null company (no false authority)', () => {
+  test('standalone registration is retired and never self-approves', () => {
+    expect(callables).toContain('registerStandaloneDriver_retired_use_requestDriverRegistration');
     const stand = callables.slice(
       callables.indexOf('export const registerStandaloneDriver'),
+      callables.indexOf('export const adminComputeLegacyHash'),
     );
-    expect(stand).toContain("companyId: null");
-    // Standalone must not hard-require ensure failure
-    expect(stand.includes('ensureInitializedEmptyShiftAuthority')).toBe(false);
+    expect(stand).not.toContain('ensureDriverAuthUser');
+    expect(stand).not.toMatch(/driver_credentials'\)\.doc\(driverId\)\.set/);
   });
 });
 
@@ -182,7 +183,7 @@ describe('authenticateDriver / authority key alignment', () => {
       src.indexOf('export const driverChangeOwnPasscode'),
     );
     expect(auth).toContain("collection('driver_name_index')");
-    expect(auth).toContain('const driverId = idx.data()?.driverId');
+    expect(auth).toMatch(/idx\.data\(\)\?\.driverId/);
     expect(auth).toContain('mintDriverSessionTokens');
     // Must not look up drivers/approved for identity
     expect(auth).not.toContain("drivers/approved");

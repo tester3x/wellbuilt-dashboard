@@ -1,16 +1,16 @@
 /**
- * Secure invoice/ticket/dispatch mutations for field apps.
- * Prefer these over open Firestore client writes after enforcement.
- * Does not change vc33 close semantics — validates ownership + state machine.
+ * Secure invoice/dispatch/chat mutations. Identity comes only from Auth.
+ * Existing unscoped or ownerless documents are rejected, never adopted.
  */
 import * as httpsV2 from 'firebase-functions/v2/https';
 import * as admin from 'firebase-admin';
 import { FieldValue } from 'firebase-admin/firestore';
-import { requireSecureDriver, assertSameCompany } from '../requireDriverAuth';
+import { requireSecureDriver, isManagerCapability } from '../requireDriverAuth';
 import { writeSecurityAudit } from '../audit';
+import { checkRateLimit } from '../rateLimit';
+import { decideResourceOwnership, decideThreadMembership } from './resourceOwnership';
 
 const MAX_JSON = 400_000;
-
 const TERMINAL_STATUSES = new Set([
   'closed',
   'complete',
@@ -25,6 +25,7 @@ function stripPrivilege(obj: Record<string, unknown>) {
   delete obj.roles;
   delete obj.role;
   delete obj.manageDrivers;
+  delete obj.driverHash;
 }
 
 export const upsertDriverInvoice = httpsV2.onCall(
@@ -37,27 +38,39 @@ export const upsertDriverInvoice = httpsV2.onCall(
       driverHash?: string;
       idempotencyKey?: string;
     };
+    if (data.driverHash != null) {
+      throw new httpsV2.HttpsError('permission-denied', 'legacy_hash_rejected');
+    }
     if (!data.invoice || typeof data.invoice !== 'object') {
       throw new httpsV2.HttpsError('invalid-argument', 'invoice required');
+    }
+    if (Object.prototype.hasOwnProperty.call(data.invoice, 'photos')) {
+      throw new httpsV2.HttpsError('permission-denied', 'photos_not_client_writable');
     }
     if (JSON.stringify(data.invoice).length > MAX_JSON) {
       throw new httpsV2.HttpsError('invalid-argument', 'invoice too large');
     }
 
-    const driver = await requireSecureDriver(request, {
-      allowLegacyHash: true,
-      legacyDriverHash: data.driverHash,
+    const driver = await requireSecureDriver(request);
+    const allowedRate = await checkRateLimit({
+      bucket: 'invoice',
+      key: driver.driverId,
+      limit: 40,
+      windowMs: 10 * 60 * 1000,
     });
-
-    const inv = { ...data.invoice };
+    if (!allowedRate) throw new httpsV2.HttpsError('resource-exhausted', 'rate_limited');
+    const manager = isManagerCapability(driver);
+    const allowed = [
+      'status', 'wellName', 'tankLevelFeet', 'bblsTaken', 'dateTimeUTC', 'dateTime',
+      'ticketIds', 'notes', 'jobType', 'jobOrigin', 'invoicingMode', 'timezone',
+    ];
+    const inv: Record<string, unknown> = {};
+    for (const k of allowed) {
+      if (data.invoice[k] !== undefined) inv[k] = data.invoice[k];
+    }
     stripPrivilege(inv);
     inv.driverId = driver.driverId;
-    if (driver.companyId) {
-      inv.companyId = driver.companyId;
-      assertSameCompany(driver.companyId, inv.companyId as string);
-    }
-    // Keep legacy hash stamp for dual-run report joins
-    if (data.driverHash) inv.driverHash = data.driverHash;
+    inv.companyId = driver.companyId;
     inv.updatedAt = FieldValue.serverTimestamp();
     inv.authSource = driver.authSource;
 
@@ -72,21 +85,21 @@ export const upsertDriverInvoice = httpsV2.onCall(
       const ex = await ref.get();
       if (ex.exists) {
         const prev = ex.data() || {};
-        const owner =
-          prev.driverId === driver.driverId ||
-          prev.driverHash === data.driverHash ||
-          prev.driverHash === driver.driverId;
-        if (!owner && prev.driverId) {
-          throw new httpsV2.HttpsError('permission-denied', 'Invoice owned by another driver');
-        }
-        if (driver.companyId && prev.companyId && prev.companyId !== driver.companyId) {
-          throw new httpsV2.HttpsError('permission-denied', 'Cross-company invoice');
-        }
+        const own = decideResourceOwnership({
+          callerDriverId: driver.driverId,
+          callerCompanyId: driver.companyId,
+          resourceDriverId: prev.driverId,
+          resourceCompanyId: prev.companyId,
+          isManager: manager,
+        });
+        if (!own.ok) throw new httpsV2.HttpsError('permission-denied', own.reason);
         const prevStatus = String(prev.status || '').toLowerCase();
         const nextStatus = String(inv.status || prevStatus).toLowerCase();
         if (TERMINAL_STATUSES.has(prevStatus) && !TERMINAL_STATUSES.has(nextStatus)) {
           throw new httpsV2.HttpsError('failed-precondition', 'Cannot reopen terminal invoice');
         }
+        inv.driverId = prev.driverId;
+        inv.companyId = prev.companyId;
         await ref.set(inv, { merge: data.merge !== false });
       } else {
         inv.createdAt = FieldValue.serverTimestamp();
@@ -116,18 +129,21 @@ export const upsertDriverDispatch = httpsV2.onCall(
       dispatch?: Record<string, unknown>;
       driverHash?: string;
     };
+    if (data.driverHash != null) {
+      throw new httpsV2.HttpsError('permission-denied', 'legacy_hash_rejected');
+    }
     if (!data.dispatch || typeof data.dispatch !== 'object') {
       throw new httpsV2.HttpsError('invalid-argument', 'dispatch required');
     }
-    const driver = await requireSecureDriver(request, {
-      allowLegacyHash: true,
-      legacyDriverHash: data.driverHash,
-    });
-    const d = { ...data.dispatch };
-    stripPrivilege(d);
-    d.driverId = driver.driverId;
-    if (data.driverHash) d.driverHash = data.driverHash;
-    if (driver.companyId) d.companyId = driver.companyId;
+    const driver = await requireSecureDriver(request);
+    const manager = isManagerCapability(driver);
+    const allowed = ['status', 'wellName', 'notes', 'assignedDriverId', 'tankLevelFeet', 'bblsTaken'];
+    const d: Record<string, unknown> = {};
+    for (const k of allowed) {
+      if (data.dispatch[k] !== undefined) d[k] = data.dispatch[k];
+    }
+    if (!manager) d.driverId = driver.driverId;
+    d.companyId = driver.companyId;
     d.updatedAt = FieldValue.serverTimestamp();
 
     const dispatchId = (data.dispatchId || '').trim();
@@ -138,14 +154,17 @@ export const upsertDriverDispatch = httpsV2.onCall(
     const ex = await ref.get();
     if (ex.exists) {
       const prev = ex.data() || {};
-      const assigned =
-        prev.driverId === driver.driverId ||
-        prev.driverHash === data.driverHash ||
-        prev.assignedDriverId === driver.driverId ||
-        prev.assignedDriverHash === data.driverHash;
-      // Allow create-path assignment updates only if already assigned to self or unassigned
-      if (prev.driverId && !assigned && prev.driverHash && prev.driverHash !== data.driverHash) {
-        throw new httpsV2.HttpsError('permission-denied', 'Dispatch assigned to another driver');
+      const own = decideResourceOwnership({
+        callerDriverId: driver.driverId,
+        callerCompanyId: driver.companyId,
+        resourceDriverId: prev.driverId || prev.assignedDriverId,
+        resourceCompanyId: prev.companyId,
+        isManager: manager,
+      });
+      if (!own.ok) throw new httpsV2.HttpsError('permission-denied', own.reason);
+      d.companyId = prev.companyId;
+      if (manager) {
+        d.driverId = prev.driverId || prev.assignedDriverId || d.driverId;
       }
     }
     await ref.set(d, { merge: true });
@@ -170,6 +189,9 @@ export const sendChatMessage = httpsV2.onCall(
       driverHash?: string;
       companyId?: string;
     };
+    if (data.driverHash != null) {
+      throw new httpsV2.HttpsError('permission-denied', 'legacy_hash_rejected');
+    }
     const threadId = (data.threadId || '').trim();
     const text = (data.text || '').trim();
     if (!threadId || !text) {
@@ -178,10 +200,8 @@ export const sendChatMessage = httpsV2.onCall(
     if (text.length > 4000) {
       throw new httpsV2.HttpsError('invalid-argument', 'message too long');
     }
-    const driver = await requireSecureDriver(request, {
-      allowLegacyHash: true,
-      legacyDriverHash: data.driverHash,
-    });
+    const driver = await requireSecureDriver(request);
+    const manager = isManagerCapability(driver);
 
     const threadRef = admin.firestore().collection('chat_threads').doc(threadId);
     const thread = await threadRef.get();
@@ -189,18 +209,19 @@ export const sendChatMessage = httpsV2.onCall(
       throw new httpsV2.HttpsError('not-found', 'thread not found');
     }
     const t = thread.data() || {};
-    const participants: string[] = Array.isArray(t.participantIds)
+    const participants: unknown = Array.isArray(t.participantIds)
       ? t.participantIds
       : Array.isArray(t.participants)
         ? t.participants
         : [];
-    const member =
-      participants.includes(driver.driverId) ||
-      participants.includes(data.driverHash || '') ||
-      t.companyId === driver.companyId;
-    if (!member && t.companyId && driver.companyId && t.companyId !== driver.companyId) {
-      throw new httpsV2.HttpsError('permission-denied', 'Not a thread member / wrong company');
-    }
+    const member = decideThreadMembership({
+      callerDriverId: driver.driverId,
+      callerCompanyId: driver.companyId,
+      threadCompanyId: t.companyId,
+      participantIds: participants,
+      isManager: manager,
+    });
+    if (!member.ok) throw new httpsV2.HttpsError('permission-denied', member.reason);
 
     const msgId = data.clientId
       ? `c_${String(data.clientId).replace(/\//g, '_').slice(0, 64)}`
@@ -208,7 +229,8 @@ export const sendChatMessage = httpsV2.onCall(
     const msg = {
       text,
       senderId: driver.driverId,
-      senderName: data.senderName || driver.displayName || 'Driver',
+      senderName: driver.displayName || 'Driver',
+      companyId: driver.companyId,
       createdAt: FieldValue.serverTimestamp(),
       clientId: data.clientId || null,
       authSource: driver.authSource,
@@ -220,17 +242,18 @@ export const sendChatMessage = httpsV2.onCall(
         return { ok: true, messageId: msgId, duplicate: true };
       }
       await mref.set(msg);
+    } else {
+      const created = await threadRef.collection('messages').add(msg);
       await threadRef.set(
         { lastMessageAt: FieldValue.serverTimestamp(), lastMessageText: text },
         { merge: true },
       );
-      return { ok: true, messageId: msgId, duplicate: false };
+      return { ok: true, messageId: created.id, duplicate: false };
     }
-    const created = await threadRef.collection('messages').add(msg);
     await threadRef.set(
       { lastMessageAt: FieldValue.serverTimestamp(), lastMessageText: text },
       { merge: true },
     );
-    return { ok: true, messageId: created.id, duplicate: false };
+    return { ok: true, messageId: msgId, duplicate: false };
   },
 );

@@ -1,12 +1,13 @@
+/**
+ * Production rate limiter. Counter mutation is a single RTDB transaction
+ * using nextRateWindow so concurrent callers cannot both increment past N.
+ */
 import * as admin from 'firebase-admin';
 import * as crypto from 'crypto';
+import { nextRateWindow, type RateWindow } from './rateLimitTxn';
 
 const db = () => admin.database();
 
-/**
- * Simple fixed-window rate limit stored in RTDB (Admin SDK only).
- * Returns true if allowed; false if limited.
- */
 export async function checkRateLimit(opts: {
   bucket: string;
   key: string;
@@ -16,17 +17,29 @@ export async function checkRateLimit(opts: {
   const path = `security/rate_limit/${opts.bucket}/${sanitizeKey(opts.key)}`;
   const ref = db().ref(path);
   const now = Date.now();
-  const snap = await ref.once('value');
-  const cur = snap.val() as { windowStart?: number; count?: number } | null;
-  if (!cur || !cur.windowStart || now - cur.windowStart > opts.windowMs) {
-    await ref.set({ windowStart: now, count: 1 });
-    return true;
+  const result = await ref.transaction((cur: RateWindow | null) => {
+    return nextRateWindow(cur, now, opts.windowMs, opts.limit).next;
+  });
+  if (!result.committed) return false;
+  const next = result.snapshot.val() as RateWindow | null;
+  if (!next) return false;
+  return next.count <= opts.limit;
+}
+
+export async function checkRateLimitDecision(opts: {
+  bucket: string;
+  key: string;
+  limit: number;
+  windowMs: number;
+  nowMs?: number;
+  runTransaction?: (fn: (cur: RateWindow | null) => RateWindow) => Promise<RateWindow>;
+}): Promise<boolean> {
+  const now = opts.nowMs ?? Date.now();
+  if (opts.runTransaction) {
+    const next = await opts.runTransaction((cur) => nextRateWindow(cur, now, opts.windowMs, opts.limit).next);
+    return next.count <= opts.limit;
   }
-  if ((cur.count || 0) >= opts.limit) {
-    return false;
-  }
-  await ref.update({ count: (cur.count || 0) + 1 });
-  return true;
+  return checkRateLimit(opts);
 }
 
 function sanitizeKey(k: string): string {
@@ -35,6 +48,7 @@ function sanitizeKey(k: string): string {
 
 export function hashIp(ip: string | undefined): string {
   if (!ip) return 'unknown';
-  // Privacy-conscious: short sha256 prefix, not raw IP in audit-friendly form
   return crypto.createHash('sha256').update(ip).digest('hex').slice(0, 16);
 }
+
+export { nextRateWindow } from './rateLimitTxn';

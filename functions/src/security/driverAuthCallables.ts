@@ -18,7 +18,12 @@ import {
 } from './passcode';
 import { checkRateLimit, hashIp } from './rateLimit';
 import { writeSecurityAudit } from './audit';
-import { requireManageDrivers } from './adminAuth';
+import { requireManageDrivers, resolveCanonicalAuthority } from './adminAuth';
+import {
+  authorizeTargetCompany,
+  filterPendingForCaller,
+  mayActOnUnscopedPending,
+} from './canonicalAdminAuthority';
 import {
   claimRefusalMessage,
   decideCompensation,
@@ -33,6 +38,12 @@ import {
   sessionClaimsForAudience,
 } from '@tester3x/wellbuilt-contracts';
 import type { GlobalDriverClaims, SessionDriverClaims } from './tokenMint';
+import {
+  decideAuthenticationPath,
+  applyOneTimeLegacyMigration,
+  isClass2MigrateName,
+  type MigrationStores,
+} from './legacyLoginMigration';
 
 const rtdb = () => admin.database();
 const fs = () => admin.firestore();
@@ -225,18 +236,78 @@ export const authenticateDriver = httpsV2.onCall(
     }
 
     const idx = await fs().collection('driver_name_index').doc(nameNorm).get();
-    if (!idx.exists) {
+    let driverId = idx.exists ? (idx.data()?.driverId as string) : '';
+    let credSnap = driverId
+      ? await fs().collection('driver_credentials').doc(driverId).get()
+      : null;
+    const modernActive = credSnap?.exists ? credSnap.data()?.active !== false : null;
+    const path = decideAuthenticationPath({
+      nameNorm,
+      modernIndexExists: idx.exists,
+      modernCredentialActive: modernActive,
+    });
+    if (path.action === 'refuse') {
       await writeSecurityAudit({
         action: 'authenticateDriver_fail',
         ipHash: meta.ipHash,
         appCheckPresent: meta.appCheckPresent,
-        detail: { reason: 'unknown_name' },
+        detail: { reason: path.reason },
+      });
+      if (path.reason === 'modern_inactive') {
+        throw new httpsV2.HttpsError('permission-denied', 'This account has been deactivated');
+      }
+      throw new httpsV2.HttpsError('permission-denied', 'Invalid name or passcode');
+    }
+    if (path.action === 'modern_only' && !idx.exists) {
+      await writeSecurityAudit({
+        action: 'authenticateDriver_fail',
+        ipHash: meta.ipHash,
+        appCheckPresent: meta.appCheckPresent,
+        detail: { reason: 'class1_missing_modern' },
       });
       throw new httpsV2.HttpsError('permission-denied', 'Invalid name or passcode');
     }
-    const driverId = idx.data()?.driverId as string;
-    const credSnap = await fs().collection('driver_credentials').doc(driverId).get();
-    if (!credSnap.exists) {
+    if (path.action === 'migrate' || (path.action === 'modern_only' && isClass2MigrateName(nameNorm))) {
+      // Server-only conversion. Not deployed to production in this phase.
+      // Emulator tests exercise applyOneTimeLegacyMigration directly.
+      //
+      // ROLLOUT: ALLOW_LEGACY_LOGIN_MIGRATION must be authorized and
+      // available BEFORE Class-2 testers receive a secure-only client.
+      // An incomplete journal (index written, profile/Auth missing) is
+      // resumed here instead of being treated as modern_exists.
+      if (process.env.ALLOW_LEGACY_LOGIN_MIGRATION === 'true') {
+        const migrated = await applyOneTimeLegacyMigration(productionMigrationStores(), {
+          displayName,
+          passcode,
+        });
+        if (migrated.ok) {
+          driverId = migrated.driverId;
+          credSnap = await fs().collection('driver_credentials').doc(driverId).get();
+        } else if (migrated.reason === 'modern_exists' && path.action === 'modern_only') {
+          // Completed modern identity — fall through to scrypt verify.
+        } else if (path.action === 'migrate' || migrated.reason === 'preservation_failed') {
+          await writeSecurityAudit({
+            action: 'authenticateDriver_fail',
+            ipHash: meta.ipHash,
+            appCheckPresent: meta.appCheckPresent,
+            detail: { reason: migrated.reason },
+          });
+          throw new httpsV2.HttpsError('permission-denied', 'Invalid name or passcode');
+        }
+      } else if (path.action === 'migrate') {
+        await writeSecurityAudit({
+          action: 'authenticateDriver_fail',
+          ipHash: meta.ipHash,
+          appCheckPresent: meta.appCheckPresent,
+          detail: { reason: 'migration_not_enabled' },
+        });
+        throw new httpsV2.HttpsError('permission-denied', 'Invalid name or passcode');
+      }
+    }
+    if (!driverId) {
+      throw new httpsV2.HttpsError('permission-denied', 'Invalid name or passcode');
+    }
+    if (!credSnap || !credSnap.exists) {
       throw new httpsV2.HttpsError('permission-denied', 'Invalid name or passcode');
     }
     const cred = credSnap.data()!;
@@ -398,6 +469,15 @@ export const adminListPendingRegistrations = httpsV2.onCall(
       request.auth?.uid,
       request.auth?.token as Record<string, unknown> | undefined,
     );
+    const authority = await resolveCanonicalAuthority(
+      caller.uid,
+      request.auth?.token as Record<string, unknown> | undefined,
+    );
+    const staffAuthority = authority.ok
+      ? authority
+      : caller.companyId
+        ? { ok: true as const, class: 'company_staff' as const, uid: caller.uid, companyId: caller.companyId, role: caller.roles[0] || 'staff', caps: caller.caps }
+        : { ok: false as const, reason: 'no_authority' };
     const snap = await rtdb().ref('drivers/pending_secure').once('value');
     const out: any[] = [];
     if (snap.exists()) {
@@ -405,11 +485,14 @@ export const adminListPendingRegistrations = httpsV2.onCall(
       for (const [pendingId, raw] of Object.entries(val)) {
         const p = raw as any;
         if (p.status === 'approved' || p.status === 'rejected') continue;
+        const rowCompany =
+          typeof p.companyId === 'string' && p.companyId.trim() ? p.companyId.trim() : null;
         out.push({
           pendingId,
           displayName: p.displayName,
           legalName: p.legalName,
           companyName: p.companyName,
+          companyId: rowCompany,
           source: p.source,
           requestedAt: p.requestedAt,
           status: p.status || 'pending',
@@ -423,11 +506,14 @@ export const adminListPendingRegistrations = httpsV2.onCall(
       for (const [key, raw] of Object.entries(legacy.val())) {
         const p = raw as any;
         if (p.status === 'approved' || p.status === 'rejected') continue;
+        const rowCompany =
+          typeof p.companyId === 'string' && p.companyId.trim() ? p.companyId.trim() : null;
         legacyPending.push({
           key,
           displayName: p.displayName,
           legalName: p.legalName,
           companyName: p.companyName,
+          companyId: rowCompany,
           source: p.source,
           requestedAt: p.requestedAt,
           securePendingId: p.securePendingId || null,
@@ -435,11 +521,19 @@ export const adminListPendingRegistrations = httpsV2.onCall(
         });
       }
     }
+    const scopedPending = filterPendingForCaller(out, staffAuthority).filter((row) => {
+      if (row.companyId) return true;
+      return mayActOnUnscopedPending(staffAuthority);
+    });
+    const scopedLegacy = filterPendingForCaller(legacyPending, staffAuthority).filter((row) => {
+      if (row.companyId) return true;
+      return mayActOnUnscopedPending(staffAuthority);
+    });
     await writeSecurityAudit({
       action: 'adminListPending',
       actorUid: caller.uid,
     });
-    return { pending: out, legacyPending };
+    return { pending: scopedPending, legacyPending: scopedLegacy };
   },
 );
 
@@ -469,6 +563,30 @@ export const adminApproveDriverRegistration = httpsV2.onCall(
       throw new httpsV2.HttpsError('not-found', 'Pending registration not found');
     }
     const pending = pendingSnap.val();
+    const authority = await resolveCanonicalAuthority(
+      caller.uid,
+      request.auth?.token as Record<string, unknown> | undefined,
+    );
+    const staffAuthority = authority.ok
+      ? authority
+      : caller.companyId
+        ? { ok: true as const, class: 'company_staff' as const, uid: caller.uid, companyId: caller.companyId, role: caller.roles[0] || 'staff', caps: caller.caps }
+        : { ok: false as const, reason: 'no_authority' };
+    const pendingCompany =
+      typeof pending.companyId === 'string' && pending.companyId.trim()
+        ? pending.companyId.trim().toLowerCase()
+        : null;
+    if (!pendingCompany && !mayActOnUnscopedPending(staffAuthority)) {
+      throw new httpsV2.HttpsError('permission-denied', 'unscoped_target');
+    }
+    const targetChk = authorizeTargetCompany({
+      authority: staffAuthority,
+      targetCompanyId: pendingCompany || caller.companyId || null,
+      userSuppliedCompanyId: typeof data.companyId === 'string' ? data.companyId.trim().toLowerCase() : null,
+    });
+    if (!targetChk.ok) {
+      throw new httpsV2.HttpsError('permission-denied', targetChk.reason);
+    }
 
     /**
      * Read the durable attempt record BEFORE any pending-state guard.
@@ -700,11 +818,33 @@ export const adminRejectDriverRegistration = httpsV2.onCall(
     );
     const pendingId = String((request.data as any)?.pendingId || '').trim();
     const legacyKey = String((request.data as any)?.legacyKey || '').trim();
+    const authority = await resolveCanonicalAuthority(
+      caller.uid,
+      request.auth?.token as Record<string, unknown> | undefined,
+    );
+    const staffAuthority = authority.ok
+      ? authority
+      : caller.companyId
+        ? { ok: true as const, class: 'company_staff' as const, uid: caller.uid, companyId: caller.companyId, role: caller.roles[0] || 'staff', caps: caller.caps }
+        : { ok: false as const, reason: 'no_authority' };
 
     if (pendingId) {
       const ref = rtdb().ref(`drivers/pending_secure/${pendingId}`);
       const snap = await ref.once('value');
       if (snap.exists()) {
+        const pending = snap.val() || {};
+        const pendingCompany =
+          typeof pending.companyId === 'string' && pending.companyId.trim()
+            ? pending.companyId.trim()
+            : null;
+        if (!pendingCompany && !mayActOnUnscopedPending(staffAuthority)) {
+          throw new httpsV2.HttpsError('permission-denied', 'unscoped_target');
+        }
+        const chk = authorizeTargetCompany({
+          authority: staffAuthority,
+          targetCompanyId: pendingCompany || caller.companyId || null,
+        });
+        if (!chk.ok) throw new httpsV2.HttpsError('permission-denied', chk.reason);
         await ref.update({
           status: 'rejected',
           rejectedAt: ServerValue.TIMESTAMP,
@@ -716,6 +856,20 @@ export const adminRejectDriverRegistration = httpsV2.onCall(
     }
 
     if (legacyKey) {
+      const legacySnap = await rtdb().ref(`drivers/pending/${legacyKey}`).once('value');
+      const legacy = legacySnap.exists() ? legacySnap.val() || {} : {};
+      const legacyCompany =
+        typeof legacy.companyId === 'string' && legacy.companyId.trim()
+          ? legacy.companyId.trim()
+          : null;
+      if (!legacyCompany && !mayActOnUnscopedPending(staffAuthority)) {
+        throw new httpsV2.HttpsError('permission-denied', 'unscoped_target');
+      }
+      const chk = authorizeTargetCompany({
+        authority: staffAuthority,
+        targetCompanyId: legacyCompany || caller.companyId || null,
+      });
+      if (!chk.ok) throw new httpsV2.HttpsError('permission-denied', chk.reason);
       // Preserve document; mark rejected only — never delete (forensic)
       await rtdb().ref(`drivers/pending/${legacyKey}`).update({
         status: 'rejected',
@@ -756,6 +910,15 @@ export const adminSetDriverPasscode = httpsV2.onCall(
       request.auth?.uid,
       request.auth?.token as Record<string, unknown> | undefined,
     );
+    const authority = await resolveCanonicalAuthority(
+      caller.uid,
+      request.auth?.token as Record<string, unknown> | undefined,
+    );
+    const staffAuthority = authority.ok
+      ? authority
+      : caller.companyId
+        ? { ok: true as const, class: 'company_staff' as const, uid: caller.uid, companyId: caller.companyId, role: caller.roles[0] || 'staff', caps: caller.caps }
+        : { ok: false as const, reason: 'no_authority' };
     const data = (request.data || {}) as {
       driverId?: string;
       displayName?: string;
@@ -813,6 +976,29 @@ export const adminSetDriverPasscode = httpsV2.onCall(
     const nameNorm = normalizeDisplayName(fields.displayName);
     const passcodeRecord = await hashPasscodeScrypt(fields.passcode);
     let driverId = (data.driverId || '').trim();
+    {
+      let targetCompany: string | null =
+        typeof data.companyId === 'string' && data.companyId.trim()
+          ? data.companyId.trim().toLowerCase()
+          : caller.companyId || null;
+      if (driverId) {
+        const prof = await rtdb().ref(`drivers/profiles/${driverId}/companyId`).once('value');
+        if (typeof prof.val() === 'string' && prof.val()) targetCompany = String(prof.val());
+      } else if (data.legacyHash) {
+        const legacy = await rtdb().ref(`drivers/approved/${data.legacyHash}/companyId`).once('value');
+        if (typeof legacy.val() === 'string' && legacy.val()) targetCompany = String(legacy.val());
+      }
+      if (!targetCompany && !mayActOnUnscopedPending(staffAuthority)) {
+        throw new httpsV2.HttpsError('permission-denied', 'unscoped_target');
+      }
+      const own = authorizeTargetCompany({
+        authority: staffAuthority,
+        targetCompanyId: targetCompany,
+        userSuppliedCompanyId:
+          typeof data.companyId === 'string' ? data.companyId.trim().toLowerCase() : null,
+      });
+      if (!own.ok) throw new httpsV2.HttpsError('permission-denied', own.reason);
+    }
 
     /**
      * Durable UUID selection for THIS provisioning attempt.
@@ -1154,6 +1340,29 @@ export const adminDeleteSecureDriver = httpsV2.onCall(
     );
     const driverId = String((request.data as any)?.driverId || '').trim();
     const confirm = String((request.data as any)?.confirm || '');
+    {
+      const authority = await resolveCanonicalAuthority(
+        caller.uid,
+        request.auth?.token as Record<string, unknown> | undefined,
+      );
+      const staffAuthority = authority.ok
+        ? authority
+        : caller.companyId
+          ? { ok: true as const, class: 'company_staff' as const, uid: caller.uid, companyId: caller.companyId, role: caller.roles[0] || 'staff', caps: caller.caps }
+          : { ok: false as const, reason: 'no_authority' };
+      const prof = driverId
+        ? await rtdb().ref(`drivers/profiles/${driverId}/companyId`).once('value')
+        : null;
+      const targetCompany = typeof prof?.val() === 'string' && prof.val() ? String(prof.val()) : null;
+      if (!targetCompany && !mayActOnUnscopedPending(staffAuthority)) {
+        throw new httpsV2.HttpsError('permission-denied', 'unscoped_target');
+      }
+      const own = authorizeTargetCompany({
+        authority: staffAuthority,
+        targetCompanyId: targetCompany || caller.companyId || null,
+      });
+      if (!own.ok) throw new httpsV2.HttpsError('permission-denied', own.reason);
+    }
     if (!driverId || confirm !== 'DELETE_SECURE_DRIVER') {
       throw new httpsV2.HttpsError(
         'invalid-argument',
@@ -1184,92 +1393,30 @@ export const adminDeleteSecureDriver = httpsV2.onCall(
 );
 
 /**
- * Server-side free-tier registration (replaces JSA client self-approve).
- * Creates approved free profile + credentials. Still rate-limited.
+ * Retired. Public self-approval must never create an active credential,
+ * name index, profile, or Auth user. Use requestDriverRegistration
+ * (pending-only) instead. Fail-closed even if App Check is off.
  */
+export function decideStandaloneRegistration(): {
+  ok: false;
+  code: 'failed-precondition';
+  message: 'registerStandaloneDriver_retired_use_requestDriverRegistration';
+} {
+  return {
+    ok: false,
+    code: 'failed-precondition',
+    message: 'registerStandaloneDriver_retired_use_requestDriverRegistration',
+  };
+}
+
 export const registerStandaloneDriver = httpsV2.onCall(
-  { timeoutSeconds: 30, memory: '256MiB', enforceAppCheck: false },
+  { timeoutSeconds: 15, memory: '256MiB', enforceAppCheck: false },
   async (request) => {
-    assertAppCheck(request);
-    const meta = clientMeta(request);
-    const allowed = await checkRateLimit({
-      bucket: 'standalone',
-      key: meta.ipHash,
-      limit: 3,
-      windowMs: 60 * 60 * 1000,
-    });
-    if (!allowed) {
-      throw new httpsV2.HttpsError('resource-exhausted', 'Too many attempts');
+    if ((request.data as { driverHash?: unknown } | undefined)?.driverHash != null) {
+      throw new httpsV2.HttpsError('permission-denied', 'legacy_hash_rejected');
     }
-
-    let fields: ReturnType<typeof validateRegistrationFields>;
-    try {
-      fields = validateRegistrationFields(request.data || {});
-    } catch (e) {
-      mapValidationError((e as Error).message);
-    }
-
-    const nameNorm = normalizeDisplayName(fields.displayName);
-    const idx = await fs().collection('driver_name_index').doc(nameNorm).get();
-    if (idx.exists) {
-      throw new httpsV2.HttpsError('already-exists', 'Name already registered');
-    }
-
-    const driverId = randomUUID();
-    const passcodeRecord = await hashPasscodeScrypt(fields.passcode);
-
-    await fs().collection('driver_name_index').doc(nameNorm).set({ driverId });
-    await fs().collection('driver_credentials').doc(driverId).set({
-      displayNameNorm: nameNorm,
-      displayName: fields.displayName,
-      passcode: passcodeRecord,
-      active: true,
-      mustResetPasscode: false,
-      createdAt: FieldValue.serverTimestamp(),
-      updatedAt: FieldValue.serverTimestamp(),
-      tier: 'free',
-      source: 'standalone',
-    });
-
-    await rtdb().ref(`drivers/profiles/${driverId}`).set({
-      displayName: fields.displayName,
-      legalName: fields.legalName || fields.displayName,
-      name: fields.displayName,
-      active: true,
-      tier: 'free',
-      source: 'standalone',
-      approvedAt: Date.now(),
-      roles: ['driver'],
-      isAdmin: false,
-      isViewer: false,
-      schemaVersion: 1,
-    });
-
-    await writeSecurityAudit({
-      action: 'registerStandaloneDriver',
-      driverId,
-      ipHash: meta.ipHash,
-      appCheckPresent: meta.appCheckPresent,
-      appId: meta.appId,
-    });
-
-    // Issue token immediately (custom token or password-exchange fallback)
-    const { ensureDriverAuthUser, mintDriverSessionTokens } = await import('./tokenMint');
-    const authUid = await ensureDriverAuthUser(driverId, fields.displayName);
-    const claims: GlobalDriverClaims = {
-      kind: 'driver', driverId, companyId: null, roles: ['driver'],
-    };
-    // No audience on the registration path — it has no requesting app yet.
-    const minted = await mintDriverSessionTokens(authUid, claims);
-
-    return {
-      customToken: minted.customToken || null,
-      idToken: minted.idToken || null,
-      refreshToken: minted.refreshToken || null,
-      mintMethod: minted.mintMethod,
-      driverId,
-      displayName: fields.displayName,
-    };
+    const decided = decideStandaloneRegistration();
+    throw new httpsV2.HttpsError(decided.code, decided.message);
   },
 );
 
@@ -1277,7 +1424,10 @@ export const registerStandaloneDriver = httpsV2.onCall(
 export const adminComputeLegacyHash = httpsV2.onCall(
   { timeoutSeconds: 10, memory: '256MiB' },
   async (request) => {
-    await requireManageDrivers(request.auth?.uid);
+    await requireManageDrivers(
+      request.auth?.uid,
+      request.auth?.token as Record<string, unknown> | undefined,
+    );
     const displayName = String((request.data as any)?.displayName || '');
     const passcode = String((request.data as any)?.passcode || '');
     if (!displayName || !passcode) {
@@ -1286,3 +1436,88 @@ export const adminComputeLegacyHash = httpsV2.onCall(
     return { legacySha256: legacySha256NamePasscode(displayName, passcode) };
   },
 );
+
+/** Admin-SDK stores for the one-time migrator. Not invoked in production this phase. */
+export function productionMigrationStores(): MigrationStores {
+  const firestore = fs();
+  const db = rtdb();
+  return {
+    getNameIndex: async (nameNorm) => {
+      const snap = await firestore.collection('driver_name_index').doc(nameNorm).get();
+      return { exists: snap.exists, driverId: snap.data()?.driverId };
+    },
+    getCredential: async (driverId) => {
+      const snap = await firestore.collection('driver_credentials').doc(driverId).get();
+      return { exists: snap.exists, data: snap.data() as Record<string, unknown> | undefined };
+    },
+    getJournal: async (legacyHash) => {
+      const snap = await firestore.collection('legacy_migration_journal').doc(legacyHash).get();
+      return {
+        exists: snap.exists,
+        driverId: snap.data()?.driverId as string | undefined,
+        status: snap.data()?.status as string | undefined,
+        nameNorm: snap.data()?.nameNorm as string | undefined,
+      };
+    },
+    getLegacyApproved: async (legacyHash) => {
+      const snap = await db.ref(`drivers/approved/${legacyHash}`).once('value');
+      return snap.exists() ? (snap.val() as Record<string, unknown>) : null;
+    },
+    claimJournal: async (legacyHash, nameNorm, driverId) => {
+      const journalRef = firestore.collection('legacy_migration_journal').doc(legacyHash);
+      const indexRef = firestore.collection('driver_name_index').doc(nameNorm);
+      return firestore.runTransaction(async (tx) => {
+        const [jSnap, iSnap] = await Promise.all([tx.get(journalRef), tx.get(indexRef)]);
+        if (jSnap.exists) {
+          const existing = jSnap.data()?.driverId as string | undefined;
+          return { driverId: existing || driverId, created: false };
+        }
+        if (iSnap.exists) {
+          const owner = iSnap.data()?.driverId as string | undefined;
+          return { driverId: owner || driverId, created: false, nameTaken: true };
+        }
+        tx.create(journalRef, {
+          driverId,
+          nameNorm,
+          status: 'claimed',
+          createdAt: Date.now(),
+        });
+        tx.create(indexRef, {
+          driverId,
+          reserved: true,
+          status: 'claimed',
+        });
+        return { driverId, created: true };
+      });
+    },
+    writeJournal: async (legacyHash, data) => {
+      await firestore.collection('legacy_migration_journal').doc(legacyHash).set(data, { merge: true });
+    },
+    writeCredential: async (driverId, data) => {
+      await firestore.collection('driver_credentials').doc(driverId).set(data, { merge: true });
+    },
+    writeIndex: async (nameNorm, driverId) => {
+      await firestore.collection('driver_name_index').doc(nameNorm).set({ driverId });
+    },
+    writeProfile: async (driverId, profile) => {
+      await db.ref(`drivers/profiles/${driverId}`).set(profile);
+    },
+    disableLegacyLogin: async (legacyHash, driverId, nowMs) => {
+      await db.ref(`drivers/approved/${legacyHash}`).update({
+        active: false,
+        legacyLoginDisabledAt: nowMs,
+        migratedToDriverId: driverId,
+        migratedAt: nowMs,
+      });
+    },
+    ensureAuthUser: async (driverId, displayName) => {
+      const { ensureDriverAuthUser } = await import('./tokenMint');
+      return ensureDriverAuthUser(driverId, displayName);
+    },
+    setGlobalClaims: async (driverId, claims) => {
+      const { driverAuthUid } = await import('./tokenMint');
+      await admin.auth().setCustomUserClaims(driverAuthUid(driverId), claims);
+    },
+    nowMs: () => Date.now(),
+  };
+}

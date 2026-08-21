@@ -372,6 +372,8 @@ export const runMaterializerDriftScanOnDemand = functionsV1.https.onCall(
     if (!context.auth) {
       throw new functionsV1.https.HttpsError('unauthenticated', 'Sign-in required');
     }
+    const { requirePlatformAdmin } = await import('./security/adminAuth');
+    await requirePlatformAdmin(context.auth.uid, context.auth.token as Record<string, unknown> | undefined);
     const windowHours = typeof data?.windowHours === 'number' ? data.windowHours : SCAN_WINDOW_HOURS;
     const maxScan = typeof data?.maxScan === 'number' ? data.maxScan : MAX_SCAN;
     const persist = !!data?.persist;

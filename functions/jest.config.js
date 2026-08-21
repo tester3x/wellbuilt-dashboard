@@ -4,6 +4,7 @@ module.exports = {
   testEnvironment: 'node',
   roots: ['<rootDir>/src'],
   testMatch: ['**/__tests__/**/*.test.ts'],
+  testPathIgnorePatterns: ['\\\\node_modules\\\\', 'emulator\\.e2e\\.test\\.ts'],
   // The contracts mirror is published as pure ESM ("type": "module") and is
   // resolved outside node_modules, so nothing transforms it by default and any
   // suite that transitively imports it dies on `export`. Transforming it to
@@ -19,5 +20,6 @@ module.exports = {
   // this cannot shadow a real .js module; package specifiers are untouched.
   moduleNameMapper: {
     '^(\\.{1,2}/.*)\\.js$': '$1',
+    '^(\\.{1,2}/.*)\\.ts$': '$1',
   },
 };
