@@ -78,6 +78,7 @@ export const HTTPS_INVENTORY: HttpsInventoryEntry[] = [
   e('createOrFindDispatchThread', 'httpsV2.onCall', 'callable_auth_required', 'fail_closed', 'fail_closed_blocker'),
   e('deactivateTruthSwdReference', 'httpsV2.onCall', 'callable_auth_required', 'staff_company', 'secured'),
   e('demoClassifyLocations', 'httpsV2.onCall', 'public_protocol', 'public_protocol', 'protocol_exception'),
+  e('dismissDispatch', 'httpsV2.onCall', 'callable_auth_required', 'staff_company', 'secured'),
   e('driverChangeOwnPasscode', 'httpsV2.onCall', 'callable_auth_required', 'driver_company', 'secured'),
   e('eQuipmentAssignments', 'httpsV2.onCall', 'callable_auth_required', 'staff_company', 'secured'),
   e('eQuipmentDVIR', 'httpsV2.onCall', 'callable_auth_required', 'staff_company', 'secured'),

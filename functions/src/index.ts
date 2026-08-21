@@ -4642,6 +4642,7 @@ export {
   // selector when approved: --only functions:adminBindDriverCompany
   adminBindDriverCompany,
   adminAssignDriverAssignment,
+  dismissDispatch,
   // Operational path hardening
   ingestDriverPacket,
   submitFieldCommand,

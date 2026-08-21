@@ -15,6 +15,7 @@ import { loadDisposals, searchDisposals, type NdicWell, loadOperators, searchOpe
 import { calculateDriverETAs, applyDeadline, type DriverEtaResult } from '@/lib/driverEta';
 import { loadCompanyById } from '@/lib/companySettings';
 import { trackJobTypeUsage } from '@/lib/jobTypeUsage';
+import { dismissDispatch } from '@/lib/dismissDispatch';
 
 // ─── Types ───────────────────────────────────────────────────────────────────
 
@@ -45,7 +46,7 @@ interface DispatchJob {
   jobType: 'pw' | 'service';
   serviceType?: string;
   packageId?: string;  // Job package ID (e.g. 'water-hauling', 'aggregate')
-  status: 'pending' | 'pending_approval' | 'accepted' | 'in_progress' | 'paused' | 'completed' | 'cancelled' | 'declined';
+  status: 'pending' | 'pending_approval' | 'accepted' | 'in_progress' | 'paused' | 'completed' | 'cancelled' | 'declined' | 'dismissed';
   notes?: string;
   priority: number;
   assignedAt: any;  // Firestore Timestamp
@@ -55,6 +56,8 @@ interface DispatchJob {
   declinedAt?: any;
   declineReason?: string;
   declinedBy?: string;
+  dismissedAt?: any;
+  dismissedBy?: string;
   estimatedPullTime?: string;
   currentLevel?: string;
   flowRate?: string;
@@ -480,7 +483,7 @@ function DispatchPageInner() {
 
   // Right panel tab
   const searchParams = useSearchParams();
-  const [rightPanelTab, setRightPanelTab] = useState<'jobs' | 'completed' | 'projects'>('jobs');
+  const [rightPanelTab, setRightPanelTab] = useState<'jobs' | 'completed' | 'removed' | 'projects'>('jobs');
   const [highlightJobId, setHighlightJobId] = useState<string | null>(null);
 
   // Handle URL params from notification deep links (e.g., ?tab=completed&highlight=abc123)
@@ -490,6 +493,8 @@ function DispatchPageInner() {
     if (tab === 'completed') {
       setRightPanelTab('completed');
       if (highlight) setHighlightJobId(highlight);
+    } else if (tab === 'removed') {
+      setRightPanelTab('removed');
     } else if (tab === 'projects') {
       setRightPanelTab('projects');
     }
@@ -653,7 +658,7 @@ function DispatchPageInner() {
     const firestore = getFirestoreDb();
     const q = query(
       collection(firestore, 'dispatches'),
-      where('status', 'in', ['pending', 'pending_approval', 'accepted', 'in_progress', 'paused', 'declined', 'cancelled', 'completed']),
+      where('status', 'in', ['pending', 'pending_approval', 'accepted', 'in_progress', 'paused', 'declined', 'cancelled', 'completed', 'dismissed']),
       orderBy('assignedAt', 'desc')
     );
     const unsub = onSnapshot(q, (snap) => {
@@ -864,7 +869,7 @@ function DispatchPageInner() {
       const firestore = getFirestoreDb();
       const q = query(
         collection(firestore, 'dispatches'),
-        where('status', 'in', ['pending', 'pending_approval', 'accepted', 'in_progress', 'paused', 'declined', 'cancelled']),
+        where('status', 'in', ['pending', 'pending_approval', 'accepted', 'in_progress', 'paused', 'declined', 'cancelled', 'dismissed']),
         orderBy('assignedAt', 'desc')
       );
       const snap = await getDocs(q);
@@ -1197,6 +1202,16 @@ function DispatchPageInner() {
   }
 
   // ─── Cancel Dispatch ───────────────────────────────────────────────────────
+
+  async function dismissDeclinedDispatch(jobId: string) {
+    try {
+      await dismissDispatch(jobId);
+    } catch (err: unknown) {
+      const msg = err instanceof Error ? err.message : 'Dismiss failed';
+      setMessage(`Dismiss failed: ${msg.replace(/^FirebaseError:\s*/i, '')}`);
+      setTimeout(() => setMessage(''), 5000);
+    }
+  }
 
   async function cancelDispatch(jobId: string) {
     try {
@@ -2921,6 +2936,21 @@ function DispatchPageInner() {
                     })()}
                   </button>
                   <button
+                    onClick={() => setRightPanelTab('removed')}
+                    className={`px-3 py-1 rounded text-sm font-medium transition-colors flex items-center gap-1.5 ${
+                      rightPanelTab === 'removed'
+                        ? 'bg-gray-500 text-white'
+                        : 'text-gray-400 hover:text-white hover:bg-gray-700'
+                    }`}
+                  >
+                    Removed
+                    {dispatches.filter(d => d.status === 'dismissed').length > 0 && (
+                      <span className={`px-1.5 py-0.5 text-[10px] rounded font-bold ${
+                        rightPanelTab === 'removed' ? 'bg-gray-400/40 text-gray-100' : 'bg-gray-600/20 text-gray-400'
+                      }`}>{dispatches.filter(d => d.status === 'dismissed').length}</span>
+                    )}
+                  </button>
+                  <button
                     onClick={() => setRightPanelTab('completed')}
                     className={`px-3 py-1 rounded text-sm font-medium transition-colors flex items-center gap-1.5 ${
                       rightPanelTab === 'completed'
@@ -3003,13 +3033,17 @@ function DispatchPageInner() {
               <div className="flex-1 overflow-y-auto p-3">
                 {rightPanelTab === 'jobs' && (
                   <ActiveDispatchPanel
-                    dispatches={dispatches.filter(d => d.status !== 'completed')}
+                    dispatches={dispatches.filter(d => d.status !== 'completed' && d.status !== 'dismissed')}
                     cancelDispatch={cancelDispatch}
                     drivers={drivers}
                     assignTransfer={assignTransfer}
                     onEditServiceWork={openEditSwModal}
                     onReassignDeclined={openReassignModal}
+                    onDismissDeclined={dismissDeclinedDispatch}
                   />
+                )}
+                {rightPanelTab === 'removed' && (
+                  <RemovedJobsPanel jobs={dispatches.filter(d => d.status === 'dismissed')} />
                 )}
                 {rightPanelTab === 'completed' && (
                   <CompletedJobsPanel
@@ -3857,13 +3891,14 @@ function DispatchJobRow({ job, cancelDispatch, compact, onClickServiceWork, onRe
 
 // Driver-centric active dispatch panel — groups ALL jobs by driver
 // Multi-driver SW jobs shown separately at bottom with all crew visible
-function ActiveDispatchPanel({ dispatches, cancelDispatch, drivers, assignTransfer, onEditServiceWork, onReassignDeclined }: {
+function ActiveDispatchPanel({ dispatches, cancelDispatch, drivers, assignTransfer, onEditServiceWork, onReassignDeclined, onDismissDeclined }: {
   dispatches: DispatchJob[];
   cancelDispatch: (id: string) => void;
   drivers?: { key: string; displayName: string; legalName?: string; assignedRoutes?: string[] }[];
   assignTransfer?: (jobId: string, driverHash: string, driverName: string) => void;
   onEditServiceWork?: (job: DispatchJob) => void;
   onReassignDeclined?: (job: DispatchJob) => void;
+  onDismissDeclined?: (jobId: string) => void;
 }) {
   const [expandedDrivers, setExpandedDrivers] = useState<Set<string>>(new Set());
 
@@ -3971,13 +4006,7 @@ function ActiveDispatchPanel({ dispatches, cancelDispatch, drivers, assignTransf
                     className="px-3 py-1 bg-blue-600 hover:bg-blue-500 text-white text-xs font-medium rounded transition-colors"
                   >Reassign</button>
                   <button
-                    onClick={async () => {
-                      if (!job.id) return;
-                      try {
-                        const firestore = getFirestoreDb();
-                        await updateDoc(doc(firestore, 'dispatches', job.id), { status: 'dismissed', dismissedAt: Timestamp.now() });
-                      } catch (err) { console.error('Dismiss failed:', err); }
-                    }}
+                    onClick={() => job.id && onDismissDeclined?.(job.id)}
                     className="px-3 py-1 bg-gray-700 hover:bg-gray-600 text-gray-300 text-xs font-medium rounded transition-colors"
                     title="Accept decline and dismiss"
                   >Dismiss</button>
@@ -4181,6 +4210,36 @@ function ActiveDispatchPanel({ dispatches, cancelDispatch, drivers, assignTransf
         </>
       )}
 
+    </div>
+  );
+}
+
+function RemovedJobsPanel({ jobs }: { jobs: DispatchJob[] }) {
+  if (jobs.length === 0) {
+    return <div className="text-center text-gray-500 py-8">No dismissed jobs</div>;
+  }
+  const sorted = [...jobs].sort((a, b) => {
+    const at = a.dismissedAt?.toMillis?.() || a.declinedAt?.toMillis?.() || 0;
+    const bt = b.dismissedAt?.toMillis?.() || b.declinedAt?.toMillis?.() || 0;
+    return bt - at;
+  });
+  return (
+    <div className="space-y-2">
+      {sorted.map((job) => (
+        <div key={job.id} className="border border-gray-700 rounded-lg px-4 py-3 bg-gray-900/40">
+          <div className="flex items-center gap-2">
+            <span className="text-white text-sm font-medium truncate">{job.ndicWellName || job.wellName}</span>
+            <span className="px-2 py-0.5 bg-gray-600/40 text-gray-300 text-[10px] font-bold rounded">DISMISSED</span>
+            <span className="flex-1" />
+            <span className="text-gray-500 text-xs">{job.driverFirstName || job.driverName}</span>
+          </div>
+          <div className="mt-1 ml-0 text-xs text-gray-500 space-x-2">
+            {job.declineReason && <span className="italic">&ldquo;{job.declineReason}&rdquo;</span>}
+            {job.declinedBy && <span>declined by {job.declinedBy}</span>}
+            {job.dismissedAt && <span>{timeAgo(job.dismissedAt)}</span>}
+          </div>
+        </div>
+      ))}
     </div>
   );
 }
