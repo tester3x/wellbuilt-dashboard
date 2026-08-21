@@ -6,12 +6,25 @@ import { useState } from 'react';
  * Canonical keyboard typeahead nav restored from
  * d7730af6f732ad0af4cc2e5c0fc699bde9c6052b
  * (tester3x/wellbuilt-dashboard).
+ *
+ * Callers MUST pass a referentially stable options array (useState or
+ * useMemo). Reset compares item identity, not array identity, so a freshly
+ * allocated filter result with the same members cannot loop setState.
  */
+export function optionsShallowEqual<T>(a: readonly T[], b: readonly T[]): boolean {
+  if (a === b) return true;
+  if (a.length !== b.length) return false;
+  for (let i = 0; i < a.length; i++) {
+    if (a[i] !== b[i]) return false;
+  }
+  return true;
+}
+
 export function useTypeaheadNav<T>(options: T[], onSelect: (item: T) => void) {
   const [activeIndex, setActiveIndex] = useState(0);
   const [dismissed, setDismissed] = useState(false);
   const [prevOptions, setPrevOptions] = useState(options);
-  if (options !== prevOptions) {
+  if (!optionsShallowEqual(options, prevOptions)) {
     setPrevOptions(options);
     setActiveIndex(0);
     setDismissed(false);

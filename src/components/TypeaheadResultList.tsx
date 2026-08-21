@@ -6,15 +6,13 @@ import { typeaheadRowClass } from '@/lib/useTypeaheadNav';
  * Shared typeahead row renderer restored from canonical
  * d7730af6f732ad0af4cc2e5c0fc699bde9c6052b (tester3x/wellbuilt-dashboard).
  *
- * Distinct states: keyboard-highlighted, mouse-hovered (idle+hover),
- * committed/current selection, dark-mode fill, focus-visible on the
- * controlling input (rows are tabIndex=-1 so Tab stays on the input).
+ * d7730af6 semantics: keyboard-focused row uses the accent fill; mouse hover
+ * stays gray (`hover:bg-gray-700`) and MUST NOT steal the keyboard index.
  */
 export function TypeaheadResultList<T>(props: {
   items: T[];
   activeIndex: number;
   onSelect: (item: T) => void;
-  setActiveIndex: (i: number) => void;
   accent?: 'cyan' | 'blue' | 'purple';
   committedValue?: string;
   getKey: (item: T, i: number) => string;
@@ -46,7 +44,6 @@ export function TypeaheadResultList<T>(props: {
             aria-selected={focused}
             onMouseDown={(e) => e.preventDefault()}
             onClick={() => props.onSelect(item)}
-            onMouseEnter={() => props.setActiveIndex(i)}
             ref={focused ? (el) => el?.scrollIntoView({ block: 'nearest' }) : undefined}
             className={`${props.itemClassName || 'w-full text-left px-3 py-1.5 border-b border-gray-700/50 last:border-0 text-sm outline-none'} ${typeaheadRowClass(kind, accent)} ${kind === 'idle' ? 'hover:bg-gray-700' : ''}`}
           >

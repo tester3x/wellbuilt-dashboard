@@ -333,6 +333,8 @@ function timeAgo(ts: any): string {
   }
 }
 
+const EMPTY_NDIC_WELLS: NdicWell[] = [];
+
 type LocationOpt = { label: string; sub: string; value: string };
 
 function combinedLocationOptions(
@@ -2321,7 +2323,6 @@ function DispatchPageInner() {
                         <TypeaheadResultList
                           items={disposalResults}
                           activeIndex={pwDisposalNav.activeIndex}
-                          setActiveIndex={pwDisposalNav.setActiveIndex}
                           onSelect={(d) => { setAssignDisposal(d.well_name); setAssignDisposalWell(d); setDisposalSearch(''); setDisposalResults([]); }}
                           accent="cyan"
                           committedValue={assignDisposal}
@@ -2390,7 +2391,6 @@ function DispatchPageInner() {
                           <TypeaheadResultList
                             items={swWellOptions}
                             activeIndex={swWellNav.activeIndex}
-                            setActiveIndex={swWellNav.setActiveIndex}
                             onSelect={(item) => setSwWellName(item.value)}
                             accent="purple"
                             committedValue={swWellName}
@@ -2414,7 +2414,6 @@ function DispatchPageInner() {
                           <TypeaheadResultList
                             items={swDropoffOptions}
                             activeIndex={swDropoffNav.activeIndex}
-                            setActiveIndex={swDropoffNav.setActiveIndex}
                             onSelect={(item) => setSwDropoff(item.value)}
                             accent="purple"
                             committedValue={swDropoff}
@@ -3351,7 +3350,6 @@ function DispatchPageInner() {
                     <TypeaheadResultList
                       items={editPwDisposalResults}
                       activeIndex={editPwDisposalNav.activeIndex}
-                      setActiveIndex={editPwDisposalNav.setActiveIndex}
                       onSelect={(d) => { setEditPwDisposal(d.well_name); setEditPwShowDisposalDropdown(false); }}
                       accent="cyan"
                       committedValue={editPwDisposal}
@@ -3568,7 +3566,6 @@ function DispatchPageInner() {
                     <TypeaheadResultList
                       items={editSwDisposalResults}
                       activeIndex={editSwDisposalNav.activeIndex}
-                      setActiveIndex={editSwDisposalNav.setActiveIndex}
                       onSelect={(d) => { setEditSwDisposal(d.well_name); setEditSwShowDisposalDropdown(false); }}
                       accent="purple"
                       committedValue={editSwDisposal}
@@ -4726,7 +4723,6 @@ function CompletedJobsPanel({ jobs, drivers, allWells, allDisposals, highlightJo
                         <TypeaheadResultList
                           items={disposalResults}
                           activeIndex={completedDisposalNav.activeIndex}
-                          setActiveIndex={completedDisposalNav.setActiveIndex}
                           onSelect={(d) => { setEditForm(f => ({ ...f, disposal: d.well_name })); setShowDisposalDropdown(false); }}
                           accent="cyan"
                           committedValue={editForm.disposal}
@@ -5265,8 +5261,11 @@ function DriverDisposalRow({ hash, name, disposal, borderColor, allDisposals, on
 }) {
   const [editing, setEditing] = useState(false);
   const [search, setSearch] = useState('');
-  const results = search.length >= 2 ? searchDisposals(search, allDisposals) : [];
-  const disposalNav = useTypeaheadNav(results, (d) => {
+  const visibleDisposalResults = useMemo(
+    () => (search.length >= 2 ? searchDisposals(search, allDisposals, 8) : EMPTY_NDIC_WELLS),
+    [search, allDisposals],
+  );
+  const disposalNav = useTypeaheadNav(visibleDisposalResults, (d) => {
     onSetDisposal({ name: d.well_name, lat: d.latitude || undefined, lng: d.longitude || undefined });
     setEditing(false);
     setSearch('');
@@ -5311,11 +5310,10 @@ function DriverDisposalRow({ hash, name, disposal, borderColor, allDisposals, on
               className="text-gray-400 text-[10px] px-1"
             >Done</button>
           </div>
-          {results.length > 0 && (
+          {visibleDisposalResults.length > 0 && (
             <TypeaheadResultList
-              items={results.slice(0, 8)}
+              items={visibleDisposalResults}
               activeIndex={disposalNav.activeIndex}
-              setActiveIndex={disposalNav.setActiveIndex}
               onSelect={(d) => {
                 onSetDisposal({ name: d.well_name, lat: d.latitude || undefined, lng: d.longitude || undefined });
                 setEditing(false);
