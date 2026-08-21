@@ -39,6 +39,7 @@ export default function GpsRoutesTab() {
   const [wells, setWells] = useState<WellRouteStatus[]>([]);
   const [allConfigs, setAllConfigs] = useState<Record<string, any>>({});
   const [loading, setLoading] = useState(true);
+  const [catalogError, setCatalogError] = useState<string | null>(null);
   const [expandedWell, setExpandedWell] = useState<string | null>(null);
   const [filter, setFilter] = useState<'all' | 'pending' | 'approved'>('all');
 
@@ -52,14 +53,27 @@ export default function GpsRoutesTab() {
   const [padSearchingWell, setPadSearchingWell] = useState<string | null>(null);
   const [padMessage, setPadMessage] = useState<{ well: string; text: string } | null>(null);
 
-  // Load wells from RTDB, then fetch trip/override counts from Firestore
+  // Load wells via Admin catalog (parent RTDB well_config is default-deny).
   useEffect(() => {
-    const db = getFirebaseDatabase();
-    const wellConfigRef = ref(db, 'well_config');
-
-    const unsub = onValue(wellConfigRef, async (snapshot) => {
-      const data = snapshot.val();
-      if (!data) {
+    let cancelled = false;
+    (async () => {
+      let data: Record<string, any> | null = null;
+      try {
+        const { adminGetDashboardCatalog, catalogErrorCode } = await import('@/lib/adminDashboardCatalog');
+        const catalog = await adminGetDashboardCatalog();
+        data = (catalog.wellConfig || {}) as Record<string, any>;
+        if (cancelled) return;
+        setCatalogError(null);
+      } catch (err) {
+        if (cancelled) return;
+        const { catalogErrorCode } = await import('@/lib/adminDashboardCatalog');
+        setCatalogError(catalogErrorCode(err));
+        setWells([]);
+        setAllConfigs({});
+        setLoading(false);
+        return;
+      }
+      if (!data || Object.keys(data).length === 0) {
         setWells([]);
         setAllConfigs({});
         setLoading(false);
@@ -185,9 +199,9 @@ export default function GpsRoutesTab() {
       }));
 
       setWells([...updated]);
-    });
-
-    return () => unsub();
+      setLoading(false);
+    })();
+    return () => { cancelled = true; };
   }, []);
 
   // Auto-detect nearby wells and group them when adding a well to recording.
@@ -375,6 +389,13 @@ export default function GpsRoutesTab() {
 
   if (loading) {
     return <div className="text-gray-400 p-4">Loading GPS route data...</div>;
+  }
+  if (catalogError) {
+    return (
+      <div className="p-4 bg-red-900/40 text-red-200 rounded">
+        Failed to load GPS route wells [{catalogError}]. This is a read failure, not an empty catalog.
+      </div>
+    );
   }
 
   return (

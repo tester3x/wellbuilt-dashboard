@@ -66,6 +66,7 @@ export default function AdminPage() {
   const { user, loading } = useAuth();
   const router = useRouter();
   const [configs, setConfigs] = useState<Record<string, WellConfig>>({});
+  const [catalogError, setCatalogError] = useState<string | null>(null);
   const [routes, setRoutes] = useState<string[]>([]);
   const [routeWells, setRouteWells] = useState<RouteWells>({});
   const [selectedRoute, setSelectedRoute] = useState<string>('');
@@ -262,40 +263,38 @@ export default function AdminPage() {
     }
   }, [user, loading, router]);
 
-  // Load configs
+  // Load configs via Admin catalog (parent RTDB well_config is default-deny).
   useEffect(() => {
-    const db = getFirebaseDatabase();
-    const configRef = ref(db, 'well_config');
-
-    const unsubscribe = onValue(configRef, (snapshot) => {
-      if (snapshot.exists()) {
-        const data = snapshot.val() as Record<string, WellConfig>;
+    let cancelled = false;
+    (async () => {
+      try {
+        const { adminGetDashboardCatalog, catalogErrorCode } = await import('@/lib/adminDashboardCatalog');
+        const catalog = await adminGetDashboardCatalog();
+        if (cancelled) return;
+        const data = (catalog.wellConfig || {}) as Record<string, WellConfig>;
+        setCatalogError(null);
         setConfigs(data);
-
-        // Extract routes and organize wells by route
         const routeSet = new Set<string>(['Unrouted']);
         const wellsByRoute: RouteWells = { 'Unrouted': [] };
-
         Object.entries(data).forEach(([wellName, config]) => {
           const route = config.route || 'Unrouted';
           routeSet.add(route);
-          if (!wellsByRoute[route]) {
-            wellsByRoute[route] = [];
-          }
+          if (!wellsByRoute[route]) wellsByRoute[route] = [];
           wellsByRoute[route].push(wellName);
         });
-
-        // Sort wells alphabetically within each route
-        Object.keys(wellsByRoute).forEach(route => {
-          wellsByRoute[route].sort();
-        });
-
+        Object.keys(wellsByRoute).forEach(route => wellsByRoute[route].sort());
         setRoutes(Array.from(routeSet).sort());
         setRouteWells(wellsByRoute);
+      } catch (err) {
+        if (cancelled) return;
+        const { catalogErrorCode } = await import('@/lib/adminDashboardCatalog');
+        setCatalogError(catalogErrorCode(err));
+        setConfigs({});
+        setRoutes([]);
+        setRouteWells({});
       }
-    });
-
-    return () => unsubscribe();
+    })();
+    return () => { cancelled = true; };
   }, []);
 
   // Load selected well config into edit form
@@ -989,6 +988,11 @@ export default function AdminPage() {
       <main className="p-6 flex-1 flex flex-col min-h-0 overflow-auto">
         {message && (
           <div className="mb-4 p-3 bg-blue-900 text-blue-200 rounded">{message}</div>
+        )}
+        {catalogError && (
+          <div className="mb-4 p-3 bg-red-900 text-red-200 rounded">
+            Failed to load well catalog [{catalogError}]. This is a read failure, not an empty catalog.
+          </div>
         )}
 
         {/* Section Title */}

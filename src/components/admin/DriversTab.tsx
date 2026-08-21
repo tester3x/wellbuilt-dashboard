@@ -263,11 +263,20 @@ export function DriversTab({ scopeCompanyId, isWbAdmin = false }: DriversTabProp
   const loadDrivers = async () => {
     setLoading(true);
     try {
+      const { adminGetDashboardCatalog, catalogErrorCode } = await import('@/lib/adminDashboardCatalog');
+      let catalog;
+      try {
+        catalog = await adminGetDashboardCatalog();
+      } catch (catalogErr) {
+        setApprovedDrivers([]);
+        setDashboardUsers([]);
+        setMessage(`Failed to load employees [${catalogErrorCode(catalogErr)}]`);
+        throw catalogErr;
+      }
       // Load approved drivers
-      const approvedSnap = await get(ref(db, 'drivers/approved'));
       const approved: ApprovedDriver[] = [];
-      if (approvedSnap.exists()) {
-        const data = approvedSnap.val();
+      {
+        const data = (catalog.approved || {}) as Record<string, any>;
         Object.entries(data).forEach(([hash, val]: [string, any]) => {
           // New flat structure: drivers/approved/{hash}/ = { displayName, active, ... }
           if (val.displayName || val.name) {
@@ -368,10 +377,9 @@ export function DriversTab({ scopeCompanyId, isWbAdmin = false }: DriversTabProp
       // (not linked to a driver record) appear only here; drivers who have
       // been promoted via inviteEmployee appear in BOTH lists and are linked
       // via driverHash on the user side + dashboardUid on the driver side.
-      const usersSnap = await get(ref(db, 'users'));
       const userList: DashboardUser[] = [];
-      if (usersSnap.exists()) {
-        const data = usersSnap.val();
+      {
+        const data = (catalog.users || {}) as Record<string, any>;
         Object.entries(data).forEach(([uid, val]: [string, any]) => {
           if (!val?.role || val.role === 'driver') return; // skip plain drivers
           userList.push({

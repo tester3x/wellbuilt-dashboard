@@ -4753,6 +4753,7 @@ export {
   // Governed initial company binding (canonical drivers). NOT deployed yet;
   // selector when approved: --only functions:adminBindDriverCompany
   adminBindDriverCompany,
+  adminGetDashboardCatalog,
   // Operational path hardening
   ingestDriverPacket,
   upsertDriverShift,
