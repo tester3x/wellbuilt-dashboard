@@ -762,6 +762,12 @@ export const adminSetDriverPasscode = httpsV2.onCall(
       passcode?: string;
       /** Profile metadata source only — never used as credential material */
       legacyHash?: string;
+      /**
+       * Exact drivers/approved/{key} for create-from-legacy. Not a display
+       * name and not used as the new canonical id. Required on create so a
+       * new UUID cannot be minted unlinked beside an existing approved row.
+       */
+      approvedKey?: string;
       companyId?: string;
       companyName?: string;
       legalName?: string;
@@ -870,6 +876,61 @@ export const adminSetDriverPasscode = httpsV2.onCall(
     let pendingProfile: Record<string, unknown> | null = null;
     let pendingLegacyLink: Record<string, unknown> | null = null;
 
+    const { decideCreateSecureLoginLink, evaluateApprovedRowForCreate } = await import('./operational/legacySecureLink');
+    const linkDecision = decideCreateSecureLoginLink({
+      driverId,
+      approvedKey: data.approvedKey,
+      legacyHash: data.legacyHash,
+    });
+    if (linkDecision.action === 'refuse') {
+      throw new httpsV2.HttpsError(
+        linkDecision.reason === 'approved_key_malformed' ? 'invalid-argument' : 'failed-precondition',
+        linkDecision.reason,
+      );
+    }
+    const approvedKey = linkDecision.action === 'create_from_approved' ? linkDecision.approvedKey : '';
+
+    if (linkDecision.action === 'create_from_approved') {
+      const linked = await rtdb().ref(`drivers/approved/${approvedKey}`).once('value');
+      const L = linked.exists() ? (linked.val() as Record<string, unknown>) : null;
+      const rowCheck = evaluateApprovedRowForCreate({
+        requestDisplayName: fields.displayName,
+        row: L,
+      });
+      if (!L) {
+        throw new httpsV2.HttpsError('not-found', 'approved_row_missing');
+      }
+      if (!rowCheck.ok) {
+        throw new httpsV2.HttpsError(
+          rowCheck.reason === 'approved_row_missing' ? 'not-found' : 'failed-precondition',
+          rowCheck.reason,
+        );
+      }
+      driverId = await claimProvisioningUuid({ kind: 'legacy', legacyHash: approvedKey });
+      pendingProfile = {
+        displayName: fields.displayName,
+        legalName: fields.legalName || L.legalName || fields.displayName,
+        name: fields.displayName,
+        active: L.active !== false,
+        isAdmin: L.isAdmin === true,
+        isViewer: L.isViewer === true,
+        companyId: data.companyId || L.companyId || null,
+        companyName: data.companyName || L.companyName || null,
+        assignedCustomers: L.assignedCustomers || null,
+        assignedRoutes: L.assignedRoutes || null,
+        assignedWells: L.assignedWells || null,
+        roles: L.roles || ['driver'],
+        approvedAt: L.approvedAt || Date.now(),
+        approvedBy: caller.uid,
+        schemaVersion: 1,
+        mustUseSecureAuth: true,
+      };
+      pendingLegacyLink = {
+        migratedToDriverId: driverId,
+        secureProfileLinked: true,
+      };
+    }
+
     if (!driverId && data.legacyHash) {
       // Migrate PROFILE shell only — never use legacy SHA-256 as the new credential
       const legacy = await rtdb().ref(`drivers/approved/${data.legacyHash}`).once('value');
@@ -892,6 +953,7 @@ export const adminSetDriverPasscode = httpsV2.onCall(
         companyName: data.companyName || L.companyName || null,
         assignedCustomers: L.assignedCustomers || null,
         assignedRoutes: L.assignedRoutes || null,
+        assignedWells: L.assignedWells || null,
         roles: L.roles || ['driver'],
         approvedAt: L.approvedAt || Date.now(),
         migratedFromLegacyHashPrefix: String(data.legacyHash).slice(0, 8),
@@ -1014,6 +1076,9 @@ export const adminSetDriverPasscode = httpsV2.onCall(
       }
       if (pendingLegacyLink && data.legacyHash) {
         await rtdb().ref(`drivers/approved/${data.legacyHash}`).update(pendingLegacyLink);
+      }
+      if (pendingLegacyLink && approvedKey && !data.legacyHash) {
+        await rtdb().ref(`drivers/approved/${approvedKey}`).update(pendingLegacyLink);
       }
       // Keep display fields current for pre-existing profiles (reset path).
       await rtdb().ref(`drivers/profiles/${driverId}`).update({

@@ -38,8 +38,8 @@ interface ApprovedDriver {
   companyId?: string;    // which trucking company this driver belongs to
   companyName?: string;  // display name of the company
   assignedCustomers?: AssignedCustomer[];
-  assignedRoutes?: string[];   // routes this driver can see
-  assignedWells?: string[];    // one-off well assignments (dispatch overrides)
+  assignedRoutes?: string[];   // WB-M well-scope routes (not WB-T job assignment)
+  assignedWells?: string[];    // WB-M direct well permits (not WB-T job assignment)
   defaultPackageId?: string;   // default job package for shift start
   // Dashboard account link — set by inviteEmployee Cloud Function when a
   // driver is promoted to a dashboard role.
@@ -480,17 +480,27 @@ export function DriversTab({ scopeCompanyId, isWbAdmin = false }: DriversTabProp
   // ── Assign routes to driver ──
   const assignDriverRoutes = async () => {
     if (!routeTarget) return;
+    if (!hasCanonicalDriverId(routeTarget)) {
+      setMessage('Canonical driverId required. Legacy-only rows cannot receive WB-M route writes.');
+      return;
+    }
     try {
-      await update(ref(db, `drivers/approved/${routeTarget.key}`), {
-        assignedRoutes: selectedRoutes.length > 0 ? selectedRoutes : null,
-      });
-      setMessage(`Assigned ${selectedRoutes.length} route(s) to ${routeTarget.displayName}`);
+      const { staffWriteDriverAssignment } = await import('@/lib/secureDriverAdmin');
+      const preview = await staffWriteDriverAssignment({
+        driverId: (routeTarget.driverId || '').trim(),
+        assignedRoutes: selectedRoutes,
+        mode: 'apply',
+      }) as { driverId?: string; before?: { assignedRoutes?: unknown }; after?: { assignedRoutes?: unknown }; mirrorLegacyKey?: string | null };
+      setMessage(
+        `Assigned ${selectedRoutes.length} route(s) to canonical ${preview.driverId || routeTarget.driverId}`
+        + (preview.mirrorLegacyKey ? ` (mirrored to linked legacy row)` : ''),
+      );
       setShowRoutesModal(false);
       setRouteTarget(null);
       await loadDrivers();
     } catch (err) {
-      console.error('Failed to assign routes:', err);
-      setMessage('Failed to assign routes');
+      const msg = err instanceof Error ? err.message : 'assign_failed';
+      setMessage(`Route assignment failed: ${msg.replace(/^FirebaseError:\s*/i, '')}`);
     }
   };
 
@@ -2083,9 +2093,9 @@ export function DriversTab({ scopeCompanyId, isWbAdmin = false }: DriversTabProp
       {showRoutesModal && routeTarget && (
         <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50">
           <div className="bg-gray-800 rounded-lg p-6 max-w-md w-full mx-4">
-            <h3 className="text-white font-medium mb-1">Assign Routes</h3>
+            <h3 className="text-white font-medium mb-1">Assign WB-M Routes</h3>
             <p className="text-gray-400 text-sm mb-4">
-              Select routes for <span className="text-white">{routeTarget.displayName}</span>
+              Well-scope routes for <span className="text-white">{routeTarget.displayName}</span> (not WB-T job assignment).
             </p>
 
             {availableRoutes.length === 0 ? (
@@ -2117,9 +2127,11 @@ export function DriversTab({ scopeCompanyId, isWbAdmin = false }: DriversTabProp
                 onClick={assignDriverRoutes}
                 className="flex-1 px-4 py-2 bg-blue-600 hover:bg-blue-500 text-white rounded"
               >
-                {selectedRoutes.length > 0
-                  ? `Assign ${selectedRoutes.length} Route${selectedRoutes.length > 1 ? 's' : ''}`
-                  : 'Remove All Routes'}
+                {hasCanonicalDriverId(routeTarget)
+                  ? (selectedRoutes.length > 0
+                    ? `Assign ${selectedRoutes.length} Route${selectedRoutes.length > 1 ? 's' : ''}`
+                    : 'Clear canonical routes')
+                  : 'Canonical driverId required'}
               </button>
               <button
                 onClick={() => {

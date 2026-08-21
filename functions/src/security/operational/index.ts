@@ -10,6 +10,8 @@ export {
 export { submitJsaRecord } from './jsaWrite';
 export { updateDriverProfile, signalDriverLogout } from './profileWrite';
 export { getDriverReferenceBundle } from './referenceData';
+export { getDriverWellConfig } from './getDriverWellConfig';
+export { evaluateWbmWellScope, projectWbmWells } from './wbmWellScope';
 export { requestStorageUploadPath } from './storageTokens';
 export {
   upsertDriverInvoice,

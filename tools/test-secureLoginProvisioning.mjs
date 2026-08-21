@@ -54,6 +54,7 @@ console.log(JSON.stringify({
 
   legacyHasDriverId: 'driverId' in legacyReq,
   legacyHasLegacyHash: 'legacyHash' in legacyReq,
+  legacyApprovedKey: legacyReq.approvedKey,
   legacyKeyAnywhere: JSON.stringify(legacyReq).includes(LEGACY.key),
   legacyTemporary: legacyReq.temporary,
   legacyTemporaryExplicit: 'temporary' in legacyReq,
@@ -108,8 +109,11 @@ check('2. no existing hash is supplied as driverId',
 check('3. the create request carries no legacyHash branch selector',
   r.legacyHasLegacyHash === false,
   'legacyHash writes migratedFromLegacyHashPrefix into the new profile');
-check('the RTDB key appears nowhere in the request',
-  r.legacyKeyAnywhere === false);
+check('create sends the exact approved row key, never as driverId',
+  r.legacyApprovedKey === 'da561bc4deadbeef' && r.legacyHasDriverId === false,
+  `approvedKey=${r.legacyApprovedKey}`);
+check('the RTDB key appears only as approvedKey',
+  r.legacyKeyAnywhere === true && r.legacyApprovedKey === 'da561bc4deadbeef');
 check('a reset sends the canonical id, unchanged',
   r.secureDriverId === '7f3a-uuid-9c21' && r.secureHasLegacyHash === false);
 
@@ -140,7 +144,7 @@ check('4. temporary is present and explicitly false',
 {
   const ALLOWED = new Set([
     'displayName', 'passcode', 'temporary', 'driverId',
-    'legalName', 'companyId', 'companyName',
+    'legalName', 'companyId', 'companyName', 'approvedKey',
   ]);
   const unexpected = String(r.reqKeys || '').split(',').filter((k) => k && !ALLOWED.has(k));
   check('6/10. no field outside the credential + identity set is sent',

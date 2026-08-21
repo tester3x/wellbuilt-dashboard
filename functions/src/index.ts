@@ -4759,6 +4759,7 @@ export {
   adminGetWellPerformance,
   dismissDispatch,
   staffWriteDispatch,
+  staffWriteDriverAssignment,
   // Operational path hardening
   ingestDriverPacket,
   upsertDriverShift,
@@ -4770,6 +4771,7 @@ export {
   updateDriverProfile,
   signalDriverLogout,
   getDriverReferenceBundle,
+  getDriverWellConfig,
   requestStorageUploadPath,
   upsertDriverInvoice,
   upsertDriverDispatch,

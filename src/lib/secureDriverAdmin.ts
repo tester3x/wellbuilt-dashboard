@@ -36,11 +36,25 @@ export async function adminRejectSecure(params: {
   return res.data;
 }
 
+export async function staffWriteDriverAssignment(params: {
+  driverId: string;
+  assignedRoutes: string[];
+  assignedWells?: string[];
+  mode?: 'dry-run' | 'apply';
+  expectedAssignedRoutes?: unknown;
+  mirrorLegacy?: boolean;
+}) {
+  const fn = httpsCallable(getFirebaseFunctions(), 'staffWriteDriverAssignment');
+  const res = await fn({ mode: 'apply', ...params });
+  return res.data;
+}
+
 export async function adminSetPasscode(params: {
   displayName: string;
   passcode: string;
   driverId?: string;
   legacyHash?: string;
+  approvedKey?: string;
   companyId?: string;
   companyName?: string;
   legalName?: string;

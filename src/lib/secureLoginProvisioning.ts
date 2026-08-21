@@ -17,12 +17,11 @@
  * identity, and minting a fresh id for an already-secure driver would
  * orphan live records.
  *
- * The request builder deliberately supplies NEITHER `driverId` NOR
- * `legacyHash` when creating. `legacyHash` selects a migration branch that
- * writes `migratedFromLegacyHashPrefix` — eight characters of the legacy
- * passcode hash — into the new profile, beside the display name. That is
- * the same credential-derived material removed from the logs, made
- * durable, so it is never used here.
+ * The request builder supplies NEITHER `driverId` NOR `legacyHash` when
+ * creating. It DOES send `approvedKey` equal to the exact RTDB row the
+ * admin clicked so the server can copy WB-M routes and stamp
+ * `migratedToDriverId` on that row. `legacyHash` is still forbidden: that
+ * branch writes `migratedFromLegacyHashPrefix` into the new profile.
  */
 
 /** Minimum shape this module needs from a driver row. */
@@ -89,6 +88,8 @@ export interface SetPasscodeRequest {
   legalName?: string;
   companyId?: string;
   companyName?: string;
+  /** Exact drivers/approved key of the row being converted. Never a name. */
+  approvedKey?: string;
 }
 
 /**
@@ -116,10 +117,10 @@ export function buildSetPasscodeRequest(
   if (credentialActionFor(row) === 'reset_passcode') {
     // Canonical id only — never the RTDB key.
     base.driverId = (row.driverId || '').trim();
+  } else {
+    // Create: bind the exact approved row the admin clicked — not a name search.
+    base.approvedKey = row.key;
   }
-  // Creating: no driverId and no legacyHash, so the callable takes its
-  // brand-new-driver branch — a random UUID and a profile carrying no
-  // credential-derived field.
   return base;
 }
 

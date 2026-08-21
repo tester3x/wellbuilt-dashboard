@@ -26,6 +26,7 @@ export {
 } from './adminDashboardCatalog';
 export { dismissDispatch } from './dismissDispatchCallable';
 export { staffWriteDispatch } from './staffWriteDispatchCallable';
+export { staffWriteDriverAssignment } from './staffWriteDriverAssignmentCallable';
 
 export {
   ingestDriverPacket,
@@ -38,6 +39,7 @@ export {
   updateDriverProfile,
   signalDriverLogout,
   getDriverReferenceBundle,
+  getDriverWellConfig,
   requestStorageUploadPath,
   upsertDriverInvoice,
   upsertDriverDispatch,

@@ -138,7 +138,7 @@ check('the success panel shows no password',
       const row = { key: 'da561bc4hash', displayName: 'MikeS24', companyId: 'co1', companyName: 'LG' };
       const r = buildSetPasscodeRequest(row, 'CorrectHorse7');
       console.log(JSON.stringify({ keys: Object.keys(r).sort(), temporary: r.temporary,
-        leaksKey: JSON.stringify(r).includes(row.key) }));
+        approvedKey: r.approvedKey, leaksKey: JSON.stringify(r).includes(row.key) }));
     `, 'utf8');
     const r = JSON.parse(execFileSync('npx', ['tsx', probePath], {
       cwd: ROOT, encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'], shell: true,
@@ -147,7 +147,8 @@ check('the success panel shows no password',
     check('3/4. the built request has no driverId/legacyHash',
       !r.keys.includes('driverId') && !r.keys.includes('legacyHash'), r.keys.join(','));
     check('6. a canonical companyId is preserved', r.keys.includes('companyId'));
-    check('the legacy hash key never leaves the client', r.leaksKey === false);
+    check('create sends approvedKey equal to the exact row key',
+      r.approvedKey === 'da561bc4hash' && r.leaksKey === true);
   } catch (e) {
     check('request-shape probe ran', false, String(e.message).slice(0, 160));
   } finally {
