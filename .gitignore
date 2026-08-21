@@ -76,5 +76,6 @@ security/tests/node_modules/
 security/tests/package-lock.json
 security/tests/last-predeploy.log
 rtdb-rules-tests/
+_live_*.json
 firestore-debug.log
 database-debug.log

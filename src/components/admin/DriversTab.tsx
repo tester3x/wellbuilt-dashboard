@@ -349,11 +349,10 @@ export function DriversTab({ scopeCompanyId, isWbAdmin = false }: DriversTabProp
       approved.sort((a, b) => a.displayName.localeCompare(b.displayName));
       setApprovedDrivers(approved);
 
-      // Load pending drivers
-      const pendingSnap = await get(ref(db, 'drivers/pending'));
+      // Load pending drivers from the same Admin catalog (parent RTDB is denied)
       const pending: PendingDriver[] = [];
-      if (pendingSnap.exists()) {
-        const data = pendingSnap.val();
+      {
+        const data = (catalog.pending || {}) as Record<string, any>;
         Object.entries(data).forEach(([key, val]: [string, any]) => {
           // Skip already-processed pending records (status: approved/rejected)
           if (val.status === 'approved' || val.status === 'rejected') return;

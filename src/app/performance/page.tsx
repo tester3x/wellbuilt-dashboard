@@ -23,6 +23,7 @@ export default function PerformancePage() {
   const [totalWells, setTotalWells] = useState(0);
   const [totalPulls, setTotalPulls] = useState(0);
   const [dataLoading, setDataLoading] = useState(true);
+  const [loadError, setLoadError] = useState<string | null>(null);
 
   useEffect(() => {
     if (!loading && !user) {
@@ -35,13 +36,15 @@ export default function PerformancePage() {
 
     const loadData = async () => {
       try {
+        setLoadError(null);
         const summary = await buildPerformanceSummary();
         setRoutes(summary.routes);
         setOverallAvg(summary.overallAvg);
         setTotalWells(summary.totalWells);
         setTotalPulls(summary.totalPulls);
       } catch (err) {
-        console.error('Error fetching performance data:', err);
+        const { classifiedReadFailure } = await import('@/lib/adminDashboardCatalog');
+        setLoadError(classifiedReadFailure('performance', err));
       } finally {
         setDataLoading(false);
       }
@@ -80,6 +83,9 @@ export default function PerformancePage() {
       <SubHeader backHref="/mobile" title="Performance" subtitle="Prediction accuracy across all wells" />
 
       <main className="max-w-7xl mx-auto px-4 py-8">
+        {loadError && (
+          <div className="mb-4 p-3 bg-red-900/50 text-red-200 rounded-lg">{loadError}</div>
+        )}
         {/* Overall Summary */}
         <div className="bg-gray-800 rounded-lg border border-gray-700 p-6 mb-8">
           <h2 className="text-lg font-semibold text-white mb-4">Overall Performance</h2>

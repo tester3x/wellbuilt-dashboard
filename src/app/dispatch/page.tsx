@@ -15,6 +15,7 @@ import { calculateDriverETAs, applyDeadline, type DriverEtaResult } from '@/lib/
 import { loadCompanyById } from '@/lib/companySettings';
 import { trackJobTypeUsage } from '@/lib/jobTypeUsage';
 import { dismissDispatch } from '@/lib/dismissDispatch';
+import { staffCancelDispatch, staffCreateDispatch, staffUpdateDispatch } from '@/lib/staffWriteDispatch';
 
 // ─── Types ───────────────────────────────────────────────────────────────────
 
@@ -1031,7 +1032,7 @@ function DispatchPageInner() {
         } : {}),
       };
 
-      await addDoc(collection(firestore, 'dispatches'), job);
+      await staffCreateDispatch(job);
 
       // Track PW usage for R&D pipeline (non-blocking)
       const compId = user?.companyId || driver.companyId || 'unknown';
@@ -1112,7 +1113,7 @@ function DispatchPageInner() {
           ...(splitGroupId ? { splitGroupId, splitSequence: 1, ...(splitTotal != null ? { splitTotal } : {}) } : {}),
         };
 
-        const docs = [addDoc(collection(firestore, 'dispatches'), baseJob)];
+        const docs = [staffCreateDispatch(baseJob)];
 
         // Split ticket: create second linked job (drop-off → service work at destination)
         if (swSplitTicket && swDropoff.trim()) {
@@ -1126,7 +1127,7 @@ function DispatchPageInner() {
             splitSequence: 2,
             ...(splitTotal != null ? { splitTotal } : {}),
           };
-          docs.push(addDoc(collection(firestore, 'dispatches'), job2));
+          docs.push(staffCreateDispatch(job2));
         }
 
         // Extra split legs (C/D/E…) — same metadata namespace as leg B, no
@@ -1151,7 +1152,7 @@ function DispatchPageInner() {
               ...(splitTotal != null ? { splitTotal } : {}),
               ...(isFinite(bblsNum) && bblsNum > 0 ? { bbls: bblsNum } : {}),
             };
-            docs.push(addDoc(collection(firestore, 'dispatches'), extraJob));
+            docs.push(staffCreateDispatch(extraJob));
           });
         }
 
@@ -1234,14 +1235,10 @@ function DispatchPageInner() {
 
   async function cancelDispatch(jobId: string) {
     try {
-      const firestore = getFirestoreDb();
-      await updateDoc(doc(firestore, 'dispatches', jobId), {
-        status: 'cancelled',
-        cancelledAt: Timestamp.now(),
-      });
-      // No toast — dismissed inline, no need to shift layout
-    } catch (err: any) {
-      setMessage(`Error: ${err.message}`);
+      await staffCancelDispatch(jobId);
+    } catch (err: unknown) {
+      const msg = err instanceof Error ? err.message : 'Cancel failed';
+      setMessage(`Failed to cancel dispatch [${msg.replace(/^FirebaseError:\s*/i, '')}]`);
       setTimeout(() => setMessage(''), 5000);
     }
   }
@@ -1305,7 +1302,7 @@ function DispatchPageInner() {
             // Same `|| undefined` → `|| null` normalization as projectData
             // above. Optional string fields: null. Optional structured
             // groups: spread-omit. Firestore never sees `undefined`.
-            await addDoc(collection(firestore, 'dispatches'), {
+            await staffCreateDispatch({
               driverHash,
               driverName: driver.displayName,
               driverFirstName,
@@ -1422,7 +1419,7 @@ function DispatchPageInner() {
         for (const wellName of project.wellNames) {
           const wellData = wells.find(w => w.wellName === wellName);
           const driverDisposal = project.driverDisposals?.[driverHash];
-          await addDoc(collection(firestore, 'dispatches'), {
+          await staffCreateDispatch({
             driverHash,
             driverName: driver.displayName,
             driverFirstName,
@@ -1511,7 +1508,7 @@ function DispatchPageInner() {
           if (!driver) continue;
           const driverFirstName = driver.legalName ? driver.legalName.split(' ')[0] : driver.displayName;
           const driverDisposal = project.driverDisposals?.[driverHash];
-          await addDoc(collection(firestore, 'dispatches'), {
+          await staffCreateDispatch({
             driverHash,
             driverName: driver.displayName,
             driverFirstName,
@@ -1656,20 +1653,19 @@ function DispatchPageInner() {
       if (reassignJob.assignedDrivers) newJob.assignedDrivers = reassignJob.assignedDrivers;
       if (reassignJob.disposalLegalDesc) newJob.disposalLegalDesc = reassignJob.disposalLegalDesc;
 
-      await addDoc(collection(firestore, 'dispatches'), newJob);
+      await staffCreateDispatch(newJob);
 
       // Update the original job
       if (reassignJob.id) {
         if (loadsKept > 0) {
           // Partial reassign — reduce load count on original, keep it active
-          await updateDoc(doc(firestore, 'dispatches', reassignJob.id), {
+          await staffUpdateDispatch(reassignJob.id, {
             loadCount: (reassignJob.loadsCompleted || 0) + loadsKept,
           });
         } else {
           // Full reassign — cancel the original
-          await updateDoc(doc(firestore, 'dispatches', reassignJob.id), {
-            status: 'cancelled',
-            cancelledAt: Timestamp.now(),
+          await staffCancelDispatch(reassignJob.id);
+          await staffUpdateDispatch(reassignJob.id, {
             reassignedTo: driver.displayName,
           });
         }
@@ -1693,7 +1689,7 @@ function DispatchPageInner() {
       const firestore = getFirestoreDb();
       const driver = drivers.find(d => d.key === driverHash);
       const driverFirstName = driver?.legalName ? driver.legalName.split(' ')[0] : driverName;
-      await updateDoc(doc(firestore, 'dispatches', jobId), {
+      await staffUpdateDispatch(jobId, {
         driverHash,
         driverName,
         driverFirstName,
@@ -1800,7 +1796,7 @@ function DispatchPageInner() {
             ...(assignDisposalWell?.county ? { disposalCounty: assignDisposalWell.county } : {}),
           } : {}),
         };
-        promises.push(addDoc(collection(firestore, 'dispatches'), job));
+        promises.push(staffCreateDispatch(job));
       });
 
       await Promise.all(promises);
@@ -1869,7 +1865,7 @@ function DispatchPageInner() {
       // 1a. Update well name if changed (PW jobs — GPS resolved when driver accepts)
       const origWell = editSwJob.ndicWellName || editSwJob.wellName || '';
       if (editSwWellName.trim() && editSwWellName.trim() !== origWell && editSwJob.id) {
-        await updateDoc(doc(firestore, 'dispatches', editSwJob.id), {
+        await staffUpdateDispatch(editSwJob.id, {
           wellName: editSwWellName.trim(),
           ndicWellName: editSwWellName.trim(),
         });
@@ -1879,7 +1875,7 @@ function DispatchPageInner() {
       if (editSwJob.jobType !== 'service' && editSwJob.id) {
         const origDisposal = editSwJob.disposal || editSwJob.hauledTo || '';
         if (editPwDisposal.trim() !== origDisposal) {
-          await updateDoc(doc(firestore, 'dispatches', editSwJob.id), { disposal: editPwDisposal.trim() });
+          await staffUpdateDispatch(editSwJob.id, { disposal: editPwDisposal.trim() });
         }
       }
 
@@ -1896,7 +1892,7 @@ function DispatchPageInner() {
           // Update all jobs in the service group
           const groupUpdatePromises = editSwGroupJobs.map(j => {
             if (!j.id) return Promise.resolve();
-            return updateDoc(doc(firestore, 'dispatches', j.id), swUpdates);
+            return staffUpdateDispatch(j.id, swUpdates);
           });
           await Promise.all(groupUpdatePromises);
         }
@@ -1906,7 +1902,7 @@ function DispatchPageInner() {
       if (editSwNotes !== (editSwJob.notes || '')) {
         const updatePromises = editSwGroupJobs.map(j => {
           if (!j.id) return Promise.resolve();
-          return updateDoc(doc(firestore, 'dispatches', j.id), { notes: editSwNotes });
+          return staffUpdateDispatch(j.id, { notes: editSwNotes });
         });
         await Promise.all(updatePromises);
       }
@@ -1922,7 +1918,7 @@ function DispatchPageInner() {
           serviceGroupId = `sg_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
           // Tag the original job with this group ID
           if (editSwJob.id) {
-            await updateDoc(doc(firestore, 'dispatches', editSwJob.id), { serviceGroupId });
+            await staffUpdateDispatch(editSwJob.id, { serviceGroupId });
           }
         }
 
@@ -1947,14 +1943,14 @@ function DispatchPageInner() {
             serviceGroupId,
             assignedDrivers: allDrivers,
           };
-          return addDoc(collection(firestore, 'dispatches'), job);
+          return staffCreateDispatch(job);
         });
         await Promise.all(addPromises);
 
         // Update assignedDrivers on all existing group jobs
         const updateCrewPromises = editSwGroupJobs.map(j => {
           if (!j.id) return Promise.resolve();
-          return updateDoc(doc(firestore, 'dispatches', j.id), {
+          return staffUpdateDispatch(j.id, {
             assignedDrivers: allDrivers,
             ...(serviceGroupId && !j.serviceGroupId ? { serviceGroupId } : {}),
           });
@@ -1975,15 +1971,11 @@ function DispatchPageInner() {
 
   async function cancelSwDriverAssignment(jobId: string) {
     try {
-      const firestore = getFirestoreDb();
-      await updateDoc(doc(firestore, 'dispatches', jobId), {
-        status: 'cancelled',
-        cancelledAt: Timestamp.now(),
-      });
+      await staffCancelDispatch(jobId);
       setMessage('Driver assignment cancelled');
       setTimeout(() => setMessage(''), 3000);
     } catch (err: any) {
-      setMessage(`Error: ${err.message}`);
+      setMessage(`Failed to cancel assignment: ${err.message}`);
       setTimeout(() => setMessage(''), 5000);
     }
   }
@@ -2029,9 +2021,9 @@ function DispatchPageInner() {
       if (editSwJob.disposalLegalDesc) newJob.disposalLegalDesc = editSwJob.disposalLegalDesc;
       if (loadsToGive > 1) newJob.loadCount = loadsToGive;
 
-      await addDoc(collection(firestore, 'dispatches'), newJob);
+      await staffCreateDispatch(newJob);
 
-      await updateDoc(doc(firestore, 'dispatches', editSwJob.id), {
+      await staffUpdateDispatch(editSwJob.id, {
         loadCount: (editSwJob.loadsCompleted || 0) + loadsKept,
       });
 
@@ -3754,12 +3746,13 @@ function JobTypeBadge({ type, serviceType }: { type: 'pw' | 'service'; serviceTy
 }
 
 // Single job row — shows all info a dispatcher needs
-function DispatchJobRow({ job, cancelDispatch, compact, onClickServiceWork, onReassign }: {
+function DispatchJobRow({ job, cancelDispatch, compact, onClickServiceWork, onReassign, onDismiss }: {
   job: DispatchJob;
   cancelDispatch: (id: string) => void;
   compact?: boolean;
   onClickServiceWork?: (job: DispatchJob) => void;
   onReassign?: (job: DispatchJob) => void;
+  onDismiss?: (jobId: string) => void;
 }) {
   const dropoff = job.hauledTo || job.disposal;
   const isClickable = !!onClickServiceWork;
@@ -3862,11 +3855,14 @@ function DispatchJobRow({ job, cancelDispatch, compact, onClickServiceWork, onRe
 
         {/* Remove button — dispatcher dismissing, not driver canceling */}
         <button
-          onClick={async (e) => {
+          onClick={(e) => {
             e.stopPropagation();
             if (!job.id) return;
-            const firestore = getFirestoreDb();
-            await updateDoc(doc(firestore, 'dispatches', job.id), { status: 'dismissed', dismissedAt: Timestamp.now() }).catch(() => {});
+            if (!onDismiss) {
+              window.alert('Dismiss is not wired. This is a control failure, not an empty action.');
+              return;
+            }
+            onDismiss(job.id);
           }}
           className="text-red-400/60 hover:text-red-300 text-xs flex-shrink-0 transition-colors"
           title="Remove dispatch"
@@ -4135,6 +4131,7 @@ function ActiveDispatchPanel({ dispatches, cancelDispatch, drivers, assignTransf
                     compact={jobs.length > 2}
                     onClickServiceWork={onEditServiceWork}
                     onReassign={onReassignDeclined}
+                    onDismiss={onDismissDeclined}
                   />
                 ))}
               </div>
@@ -4327,19 +4324,18 @@ function CompletedJobsPanel({ jobs, drivers, allWells, allDisposals, highlightJo
   async function saveEdit(jobId: string) {
     setSaving(true);
     try {
-      const firestore = getFirestoreDb();
-      const ref = doc(firestore, 'dispatches', jobId);
-      const updates: Record<string, any> = {};
+      const updates: Record<string, unknown> = {};
       if (editForm.wellName) { updates.ndicWellName = editForm.wellName; updates.wellName = editForm.wellName; }
       if (editForm.disposal !== undefined) { updates.hauledTo = editForm.disposal; updates.disposal = editForm.disposal; }
       if (editForm.totalBBL !== undefined) updates.totalBBL = parseFloat(editForm.totalBBL) || 0;
       if (editForm.notes !== undefined) updates.notes = editForm.notes;
       if (editForm.operator !== undefined) updates.operator = editForm.operator;
       if (editForm.invoiceNumber !== undefined) updates.invoiceNumber = editForm.invoiceNumber;
-      await updateDoc(ref, updates);
+      await staffUpdateDispatch(jobId, updates);
       setEditingJobId(null);
-    } catch (err) {
+    } catch (err: unknown) {
       console.error('Failed to save completed job edit:', err);
+      window.alert(`Failed to save dispatch edit. This is a write failure, not a no-op.`);
     } finally {
       setSaving(false);
     }

@@ -24,8 +24,7 @@ import {
   serverTimestamp,
   writeBatch,
 } from 'firebase/firestore';
-import { getFirebaseDatabase } from '@/lib/firebase';
-import { ref, get } from 'firebase/database';
+
 import {
   type ChatThread,
   type ChatMessage,
@@ -660,11 +659,10 @@ function ChatPageInner() {
 
   // --- Load drivers ---
   const loadDrivers = useCallback(async () => {
+    const { adminGetDashboardCatalog, classifiedReadFailure } = await import('@/lib/adminDashboardCatalog');
     try {
-      const rtdb = getFirebaseDatabase();
-      const snap = await get(ref(rtdb, 'drivers/approved'));
-      if (!snap.exists()) return;
-      const all = snap.val();
+      const catalog = await adminGetDashboardCatalog();
+      const all = catalog.approved || {};
       const list: { hash: string; name: string; companyId?: string }[] = [];
       for (const [hash, data] of Object.entries(all) as [string, any][]) {
         if (!data.active && data.active !== undefined) continue;
@@ -674,7 +672,9 @@ function ChatPageInner() {
       }
       list.sort((a, b) => a.name.localeCompare(b.name));
       setDrivers(list);
-    } catch {}
+    } catch (err) {
+      console.error(classifiedReadFailure('chat drivers', err));
+    }
   }, [companyId]);
 
   // --- Sidebar filtering — unanswered first, then by updatedAt ---

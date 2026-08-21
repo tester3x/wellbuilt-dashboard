@@ -5,16 +5,50 @@ export type DashboardCatalog = {
   ok: true;
   scope?: 'platform' | 'company';
   companyId?: string | null;
+  canViewWellPool?: boolean;
   approved: Record<string, unknown>;
   users: Record<string, unknown>;
+  pending?: Record<string, unknown>;
   wellConfig: Record<string, unknown>;
-  counts: { approved: number; users: number; wellConfig: number };
+  wellStatus?: Record<string, unknown>;
+  counts: {
+    approved: number;
+    users: number;
+    wellConfig: number;
+    pending?: number;
+    wellStatus?: number;
+  };
+};
+
+export type WellPool = {
+  ok: true;
+  canViewWellPool: boolean;
+  wellConfig: Record<string, unknown>;
+  wellStatus: Record<string, unknown>;
 };
 
 export async function adminGetDashboardCatalog(): Promise<DashboardCatalog> {
   const fn = httpsCallable(getFirebaseFunctions(), 'adminGetDashboardCatalog');
   const res = await fn({});
   return res.data as DashboardCatalog;
+}
+
+export async function adminGetWellPool(): Promise<WellPool> {
+  const fn = httpsCallable(getFirebaseFunctions(), 'adminGetWellPool');
+  const res = await fn({});
+  return res.data as WellPool;
+}
+
+export async function adminGetWellHistory(wellName: string): Promise<{ pulls: Record<string, unknown>[] }> {
+  const fn = httpsCallable(getFirebaseFunctions(), 'adminGetWellHistory');
+  const res = await fn({ wellName });
+  return res.data as { pulls: Record<string, unknown>[] };
+}
+
+export async function adminGetWellPerformance(): Promise<{ rows: Record<string, { d: string; a: number; p: number }[]> }> {
+  const fn = httpsCallable(getFirebaseFunctions(), 'adminGetWellPerformance');
+  const res = await fn({});
+  return res.data as { rows: Record<string, { d: string; a: number; p: number }[]> };
 }
 
 export function catalogErrorCode(err: unknown): string {

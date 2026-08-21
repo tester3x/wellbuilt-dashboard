@@ -37,6 +37,16 @@ export function AppHeader() {
         if (entry.status !== 'approved' && entry.status !== 'rejected') count++;
       });
       setPendingDriverCount(count);
+    }, () => {
+      import('@/lib/adminDashboardCatalog').then(({ adminGetDashboardCatalog }) =>
+        adminGetDashboardCatalog().then((catalog) => {
+          let count = 0;
+          Object.values(catalog.pending || {}).forEach((entry: any) => {
+            if (entry.status !== 'approved' && entry.status !== 'rejected') count++;
+          });
+          setPendingDriverCount(count);
+        })
+      ).catch(() => setPendingDriverCount(0));
     });
     return () => unsub();
   }, [user, userCompany]);

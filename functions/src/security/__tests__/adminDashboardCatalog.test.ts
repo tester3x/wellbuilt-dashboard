@@ -24,6 +24,8 @@ describe('adminGetDashboardCatalog recovery surface', () => {
     expect(callable).toMatch(/const projected = projectDashboardCatalog/);
     expect(callable).toMatch(/caller,/);
     expect(callable).toMatch(/\.\.\.projected/);
+    expect(callable).toMatch(/drivers\/pending/);
+    expect(callable).toMatch(/packets\/outgoing/);
   });
 
   it('Employees / Wells / GPS Routes distinguish load failure from empty', () => {

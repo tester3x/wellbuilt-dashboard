@@ -232,6 +232,13 @@ function WellDetailPage() {
           }
         });
       }
+    }, () => {
+      import('@/lib/adminDashboardCatalog').then(({ adminGetWellPool }) =>
+        adminGetWellPool().then((pool) => {
+          const st = pool.wellStatus?.[wellName];
+          if (st && typeof st === 'object') setWellStatus(st as WellResponse);
+        })
+      ).catch(() => {});
     });
 
     return () => unsubscribe();
@@ -248,6 +255,13 @@ function WellDetailPage() {
         const config = snapshot.val();
         setWellTanks(config.tanks || config.numTanks || 1);
       }
+    }, () => {
+      import('@/lib/adminDashboardCatalog').then(({ adminGetWellPool }) =>
+        adminGetWellPool().then((pool) => {
+          const config = pool.wellConfig?.[wellName] as { tanks?: number; numTanks?: number } | undefined;
+          if (config) setWellTanks(config.tanks || config.numTanks || 1);
+        })
+      ).catch(() => {});
     });
     return () => unsubscribe();
   }, [wellName]);
@@ -504,11 +518,11 @@ function WellDetailPage() {
                 setShowAddPull(true);
                 if (addPullDrivers.length === 0) {
                   try {
-                    const db = getFirebaseDatabase();
-                    const snap = await get(ref(db, 'drivers/approved'));
-                    if (snap.exists()) {
+                    const { adminGetDashboardCatalog } = await import('@/lib/adminDashboardCatalog');
+                    const catalog = await adminGetDashboardCatalog();
+                    {
                       const approved: ApprovedDriver[] = [];
-                      Object.entries(snap.val()).forEach(([hash, val]: [string, any]) => {
+                      Object.entries((catalog.approved || {}) as Record<string, any>).forEach(([hash, val]: [string, any]) => {
                         if (val.displayName && val.active !== false) {
                           approved.push({ key: hash, displayName: val.displayName, legalName: val.legalName || '', companyId: val.companyId, companyName: val.companyName });
                         } else {
@@ -524,7 +538,9 @@ function WellDetailPage() {
                       approved.sort((a, b) => a.displayName.localeCompare(b.displayName));
                       setAddPullDrivers(approved);
                     }
-                  } catch {}
+                  } catch (err) {
+                    console.error((await import('@/lib/adminDashboardCatalog')).classifiedReadFailure('well drivers', err));
+                  }
                 }
                 if (addPullDisposals.length === 0) {
                   loadDisposals().then(setAddPullDisposals).catch(() => {});

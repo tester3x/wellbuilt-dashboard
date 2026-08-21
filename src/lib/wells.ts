@@ -1,6 +1,7 @@
 // Well data utilities - fetches from Firebase
 import { ref, get, onValue, query, orderByChild, set } from 'firebase/database';
 import { getFirebaseDatabase } from './firebase';
+import { adminGetWellHistory, adminGetWellPerformance, adminGetWellPool } from './adminDashboardCatalog';
 
 export interface WellResponse {
   wellName: string;
@@ -70,8 +71,45 @@ export function wellResponsesFromCatalog(wellConfig: Record<string, unknown>): W
       tanks,
       pullBbls: typeof config.pullBbls === 'number' ? config.pullBbls : 140,
       ndicName: typeof config.ndicName === 'string' ? config.ndicName : '',
+      isDown: config.isDown === true,
     };
   });
+}
+
+export function mergeWellPool(
+  wellConfig: Record<string, unknown>,
+  wellStatus: Record<string, unknown> = {},
+): WellResponse[] {
+  return wellResponsesFromCatalog(wellConfig).map((well) => {
+    const st = (wellStatus[well.wellName] && typeof wellStatus[well.wellName] === 'object')
+      ? wellStatus[well.wellName] as Record<string, unknown>
+      : {};
+    return {
+      ...well,
+      currentLevel: typeof st.currentLevel === 'string' ? st.currentLevel : well.currentLevel,
+      flowRate: typeof st.flowRate === 'string' ? st.flowRate : well.flowRate,
+      timestamp: typeof st.timestamp === 'string' ? st.timestamp : well.timestamp,
+      timeTillPull: typeof st.timeTillPull === 'string' ? st.timeTillPull : well.timeTillPull,
+      nextPullTime: typeof st.nextPullTime === 'string' ? st.nextPullTime : well.nextPullTime,
+      nextPullTimeUTC: typeof st.nextPullTimeUTC === 'string' ? st.nextPullTimeUTC : well.nextPullTimeUTC,
+      lastPullDateTimeUTC: typeof st.lastPullDateTimeUTC === 'string' ? st.lastPullDateTimeUTC : well.lastPullDateTimeUTC,
+      lastPullBbls: st.lastPullBbls != null ? String(st.lastPullBbls) : well.lastPullBbls,
+      isDown: st.wellDown === true || st.isDown === true || well.isDown,
+      status: typeof st.status === 'string' ? st.status : well.status,
+    };
+  });
+}
+
+async function wellPoolResponses(): Promise<{ wells: WellResponse[]; routes: string[] }> {
+  const pool = await adminGetWellPool();
+  const wells = mergeWellPool(pool.wellConfig || {}, pool.wellStatus || {});
+  const routes = Array.from(new Set(wells.map((w) => w.route).filter((r): r is string => !!r)))
+    .sort((a, b) => {
+      if (a === 'Unrouted') return 1;
+      if (b === 'Unrouted') return -1;
+      return a.localeCompare(b);
+    });
+  return { wells: wells.sort((a, b) => a.wellName.localeCompare(b.wellName)), routes };
 }
 
 // NEW UNIFIED STRUCTURE - matches Cloud Function output
@@ -154,17 +192,22 @@ export interface PerformanceRow {
 
 // Fetch well configs (route assignments, etc)
 export async function fetchWellConfigs(): Promise<Record<string, WellConfig>> {
-  const db = getFirebaseDatabase();
-  const configRef = ref(db, 'well_config');
-  const snapshot = await get(configRef);
+  try {
+    const db = getFirebaseDatabase();
+    const configRef = ref(db, 'well_config');
+    const snapshot = await get(configRef);
 
-  if (!snapshot.exists()) return {};
+    if (!snapshot.exists()) return {};
 
-  const configs: Record<string, WellConfig> = {};
-  snapshot.forEach((child) => {
-    configs[child.key!] = child.val();
-  });
-  return configs;
+    const configs: Record<string, WellConfig> = {};
+    snapshot.forEach((child) => {
+      configs[child.key!] = child.val();
+    });
+    return configs;
+  } catch {
+    const pool = await adminGetWellPool();
+    return pool.wellConfig as Record<string, WellConfig>;
+  }
 }
 
 // Get unique route names from configs
@@ -193,6 +236,18 @@ export function subscribeToWellNavList(
   const db = getFirebaseDatabase();
   const configRef = ref(db, 'well_config');
 
+  const apply = (wells: WellNavItem[]) => {
+    wells.sort((a, b) => {
+      if (a.route !== b.route) {
+        if (a.route === 'Unrouted') return 1;
+        if (b.route === 'Unrouted') return -1;
+        return a.route.localeCompare(b.route);
+      }
+      return a.wellName.localeCompare(b.wellName);
+    });
+    callback(wells);
+  };
+
   const unsubscribe = onValue(configRef, (snapshot) => {
     const wells: WellNavItem[] = [];
     if (snapshot.exists()) {
@@ -204,16 +259,16 @@ export function subscribeToWellNavList(
         });
       });
     }
-    // Sort by route order (alphabetical, Unrouted last), then by well name within each route
-    wells.sort((a, b) => {
-      if (a.route !== b.route) {
-        if (a.route === 'Unrouted') return 1;
-        if (b.route === 'Unrouted') return -1;
-        return a.route.localeCompare(b.route);
-      }
-      return a.wellName.localeCompare(b.wellName);
-    });
-    callback(wells);
+    apply(wells);
+  }, () => {
+    adminGetWellPool().then((pool) => {
+      apply(Object.entries(pool.wellConfig || {}).map(([wellName, raw]) => ({
+        wellName,
+        route: (raw && typeof raw === 'object' && typeof (raw as { route?: string }).route === 'string')
+          ? (raw as { route: string }).route
+          : 'Unrouted',
+      })));
+    }).catch(() => apply([]));
   });
 
   return unsubscribe;
@@ -221,25 +276,29 @@ export function subscribeToWellNavList(
 
 // Fetch all current well statuses (from outgoing/)
 export async function fetchAllWellStatuses(): Promise<WellResponse[]> {
-  const db = getFirebaseDatabase();
-  const outgoingRef = ref(db, 'packets/outgoing');
-  const snapshot = await get(outgoingRef);
+  try {
+    const db = getFirebaseDatabase();
+    const outgoingRef = ref(db, 'packets/outgoing');
+    const snapshot = await get(outgoingRef);
 
-  if (!snapshot.exists()) return [];
+    if (!snapshot.exists()) return [];
 
-  const responses: WellResponse[] = [];
-  snapshot.forEach((child) => {
-    const data = child.val();
-    if (data.wellName) {
-      responses.push({
-        ...data,
-        responseId: child.key,
-      });
-    }
-  });
+    const responses: WellResponse[] = [];
+    snapshot.forEach((child) => {
+      const data = child.val();
+      if (data.wellName) {
+        responses.push({
+          ...data,
+          responseId: child.key,
+        });
+      }
+    });
 
-  // Sort by well name
-  return responses.sort((a, b) => a.wellName.localeCompare(b.wellName));
+    return responses.sort((a, b) => a.wellName.localeCompare(b.wellName));
+  } catch {
+    const { wells } = await wellPoolResponses();
+    return wells;
+  }
 }
 
 // Helper: Parse "X'Y\"" to inches
@@ -326,6 +385,9 @@ export function subscribeToWellStatusesUnified(
   const reportError = (err: Error) => {
     failed = true;
     onError?.(err);
+    wellPoolResponses()
+      .then(({ wells, routes }) => callback(wells, routes))
+      .catch(() => callback([], []));
   };
 
   const mergeAndCallback = (force = false) => {
@@ -778,8 +840,15 @@ export async function fetchWellHistoryUnified(wellName: string, limit: number = 
 
   // Single source of truth: packets/processed
   // The wells/{wellName}/history path was a one-time migration and is stale — skip it
-  const processedRef = ref(db, 'packets/processed');
-  const processedSnapshot = await get(processedRef);
+  let processedSnapshot;
+  try {
+    const processedRef = ref(db, 'packets/processed');
+    processedSnapshot = await get(processedRef);
+  } catch {
+    const remote = await adminGetWellHistory(wellName);
+    const pulls = (remote.pulls || []).map((data) => historyPullFromRecord(data, wellName));
+    return limit > 0 ? pulls.slice(0, limit) : pulls;
+  }
 
   if (!processedSnapshot.exists()) {
     console.log('[fetchWellHistoryUnified] No processed packets found');
@@ -1430,10 +1499,41 @@ export function calcWellStats(
 }
 
 // Fetch all performance data in one shot (entire performance/ node)
+function historyPullFromRecord(data: Record<string, unknown>, wellName: string): PullPacket {
+  const tankTopInches = (data.tankTopInches as number) || ((data.tankLevelFeet as number) || 0) * 12;
+  return {
+    packetId: String(data.packetId || ''),
+    wellName: String(data.wellName || wellName),
+    tankTopLevel: tankTopInches,
+    bblsTaken: typeof data.bblsTaken === 'number' ? data.bblsTaken : parseFloat(String(data.bblsTaken || '0')) || 0,
+    timestamp: String(data.dateTimeUTC || data.dateTime || ''),
+    driverName: data.driverName as string | undefined,
+    tankAfter: data.tankAfterInches as number | undefined,
+    timeDif: data.timeDif as string | undefined,
+    recoveryInches: data.recoveryInches as number | undefined,
+    flowRate: data.flowRate as string | undefined,
+    flowRateDays: data.flowRateDays as number | undefined,
+    editedAt: data.editedAt as string | undefined,
+    editedBy: data.editedBy as string | undefined,
+    editCount: typeof data.editCount === 'number' ? data.editCount : undefined,
+    originalSubmittedAt: data.originalSubmittedAt as string | undefined,
+    isEdit: data.isEdit === true,
+    noLevel: data.noLevel === true,
+    jobType: data.jobType as string | undefined,
+    wellDown: data.wellDown === true,
+  };
+}
+
 export async function fetchAllPerformanceData(): Promise<Record<string, PerformanceRow[]>> {
   const db = getFirebaseDatabase();
-  const perfRef = ref(db, 'performance');
-  const snapshot = await get(perfRef);
+  let snapshot;
+  try {
+    const perfRef = ref(db, 'performance');
+    snapshot = await get(perfRef);
+  } catch {
+    const remote = await adminGetWellPerformance();
+    return remote.rows || {};
+  }
 
   if (!snapshot.exists()) return {};
 

@@ -321,11 +321,11 @@ export default function MobilePage() {
                 // Lazy-load drivers + disposals for Create Ticket feature
                 if (addPullDrivers.length === 0) {
                   try {
-                    const db = getFirebaseDatabase();
-                    const snap = await get(ref(db, 'drivers/approved'));
-                    if (snap.exists()) {
+                    const { adminGetDashboardCatalog, classifiedReadFailure } = await import('@/lib/adminDashboardCatalog');
+                    const catalog = await adminGetDashboardCatalog();
+                    {
                       const approved: ApprovedDriver[] = [];
-                      Object.entries(snap.val()).forEach(([hash, val]: [string, any]) => {
+                      Object.entries((catalog.approved || {}) as Record<string, any>).forEach(([hash, val]: [string, any]) => {
                         if (val.displayName && val.active !== false) {
                           approved.push({ key: hash, displayName: val.displayName, legalName: val.legalName || '', companyId: val.companyId, companyName: val.companyName });
                         } else {
@@ -341,7 +341,9 @@ export default function MobilePage() {
                       approved.sort((a, b) => a.displayName.localeCompare(b.displayName));
                       setAddPullDrivers(approved);
                     }
-                  } catch {}
+                  } catch (err) {
+                    console.error((await import('@/lib/adminDashboardCatalog')).classifiedReadFailure('mobile drivers', err));
+                  }
                 }
                 if (addPullDisposals.length === 0) {
                   loadDisposals().then(setAddPullDisposals).catch(() => {});

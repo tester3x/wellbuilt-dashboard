@@ -4754,7 +4754,11 @@ export {
   // selector when approved: --only functions:adminBindDriverCompany
   adminBindDriverCompany,
   adminGetDashboardCatalog,
+  adminGetWellPool,
+  adminGetWellHistory,
+  adminGetWellPerformance,
   dismissDispatch,
+  staffWriteDispatch,
   // Operational path hardening
   ingestDriverPacket,
   upsertDriverShift,

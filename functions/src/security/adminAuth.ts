@@ -35,15 +35,7 @@ export interface DashboardCaller {
   isPlatformAdmin: boolean;
 }
 
-/**
- * Require signed-in dashboard user with manageDrivers.
- * Sources (in order):
- * 1. RTDB users/{uid} role + company roleCapabilities (production path)
- * 2. Auth custom claims { role/roles, manageDrivers: true } — used by
- *    emulator tests and optional future claim backfill; never sufficient
- *    alone without manageDrivers claim or admin/it role in claims.
- */
-export async function requireManageDrivers(
+async function loadDashboardCaller(
   authUid: string | undefined,
   authToken?: Record<string, unknown> | null,
 ): Promise<DashboardCaller> {
@@ -68,9 +60,6 @@ export async function requireManageDrivers(
       }
     }
     const caps = resolveCaps(roles, overrides);
-    if (!caps.includes('manageDrivers')) {
-      throw new httpsV2.HttpsError('permission-denied', 'Caller lacks manageDrivers capability');
-    }
     const isPlatformAdmin = !companyId && roles.some((r) => r === 'admin' || r === 'it');
     return { uid: authUid, roles, companyId, caps, isPlatformAdmin };
   }
@@ -85,22 +74,48 @@ export async function requireManageDrivers(
       }
     }
     const claimCaps = resolveCaps(claimRoles, {});
-    const explicit =
-      authToken.manageDrivers === true ||
-      authToken.manageDrivers === 'true' ||
-      claimCaps.includes('manageDrivers');
-    if (explicit) {
-      const companyId =
-        typeof authToken.companyId === 'string' ? authToken.companyId : undefined;
-      return {
-        uid: authUid,
-        roles: claimRoles.length ? claimRoles : ['admin'],
-        companyId,
-        caps: explicit ? [...claimCaps, 'manageDrivers'] : claimCaps,
-        isPlatformAdmin: !companyId && claimRoles.some((r) => r === 'admin' || r === 'it'),
-      };
-    }
+    const companyId =
+      typeof authToken.companyId === 'string' ? authToken.companyId : undefined;
+    const isPlatformAdmin = !companyId && claimRoles.some((r) => r === 'admin' || r === 'it');
+    return {
+      uid: authUid,
+      roles: claimRoles.length ? claimRoles : ['viewer'],
+      companyId,
+      caps: claimCaps,
+      isPlatformAdmin,
+    };
   }
 
   throw new httpsV2.HttpsError('permission-denied', 'Caller is not a registered dashboard user');
+}
+
+/**
+ * Any registered Dashboard user (RTDB users/{uid} or claims). Used for the
+ * global well-pool read path — not employee PII.
+ */
+export async function requireRegisteredDashboardUser(
+  authUid: string | undefined,
+  authToken?: Record<string, unknown> | null,
+): Promise<DashboardCaller> {
+  return loadDashboardCaller(authUid, authToken);
+}
+
+/**
+ * Require signed-in dashboard user with manageDrivers.
+ * Sources (in order):
+ * 1. RTDB users/{uid} role + company roleCapabilities (production path)
+ * 2. Auth custom claims { role/roles, manageDrivers: true } — used by
+ *    emulator tests and optional future claim backfill; never sufficient
+ *    alone without manageDrivers claim or admin/it role in claims.
+ */
+export async function requireManageDrivers(
+  authUid: string | undefined,
+  authToken?: Record<string, unknown> | null,
+): Promise<DashboardCaller> {
+  const caller = await loadDashboardCaller(authUid, authToken);
+  if (caller.caps.includes('manageDrivers')) return caller;
+  if (authToken && (authToken.manageDrivers === true || authToken.manageDrivers === 'true')) {
+    return { ...caller, caps: [...caller.caps, 'manageDrivers'] };
+  }
+  throw new httpsV2.HttpsError('permission-denied', 'Caller lacks manageDrivers capability');
 }

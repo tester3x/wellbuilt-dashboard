@@ -18,8 +18,14 @@ export {
  * NOT deployed yet; selector: --only functions:adminBindDriverCompany
  */
 export { adminBindDriverCompany } from './companyBindingCallable';
-export { adminGetDashboardCatalog } from './adminDashboardCatalog';
+export {
+  adminGetDashboardCatalog,
+  adminGetWellPool,
+  adminGetWellHistory,
+  adminGetWellPerformance,
+} from './adminDashboardCatalog';
 export { dismissDispatch } from './dismissDispatchCallable';
+export { staffWriteDispatch } from './staffWriteDispatchCallable';
 
 export {
   ingestDriverPacket,

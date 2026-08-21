@@ -2,8 +2,17 @@
  * Allowlisted, caller-scoped projection of the Dashboard admin catalog.
  * Admin SDK parent reads stay intact; this layer never returns raw trees,
  * passcodes, hashes, tokens, or records outside the caller's company.
+ *
+ * well_config is Liquid Gold's global operational pool (most records have
+ * no companyId). It is NOT tenant-filtered like employees/users. The
+ * existing canViewGlobalWellPool policy applies:
+ *   platform / unscoped → full pool
+ *   liquid-gold         → full pool, including unscoped records
+ *   any other company   → no wellConfig / wellStatus
  */
 import type { DashboardCaller } from './adminAuth';
+
+export const LEGACY_WELL_POOL_COMPANY_ID = 'liquid-gold';
 
 export const APPROVED_ALLOWLIST = [
   'displayName',
@@ -43,26 +52,98 @@ export const USER_ALLOWLIST = [
   'driverHash',
 ] as const;
 
+export const PENDING_ALLOWLIST = [
+  'displayName',
+  'legalName',
+  'companyId',
+  'companyName',
+  'requestedAt',
+  'timestamp',
+  'status',
+  'securePendingId',
+] as const;
+
+/**
+ * Production well_config field contract (2026-08-21 inventory of 82 wells).
+ * Operational display/edit fields must not be silently dropped.
+ */
 export const WELL_CONFIG_ALLOWLIST = [
   'route',
+  'routeColor',
   'maxLevel',
   'bottomLevel',
   'tanks',
   'numTanks',
+  'activeTanks',
+  'equalizedTanks',
   'pullBbls',
   'tankCapacity',
   'tankHeight',
   'bblPerFoot',
   'allowedBottom',
+  'requireActualBottom',
   'ndicName',
   'ndicApiNo',
   'avgFlowRate',
   'avgFlowRateMinutes',
   'waterWeight',
   'h2sStatus',
+  'isDown',
+  'loadLine',
   'routeRecording',
   'routeGroupWell',
   'companyId',
+] as const;
+
+/** Bounded live-status fields from packets/outgoing. Never a raw packet tree. */
+export const WELL_STATUS_ALLOWLIST = [
+  'wellName',
+  'currentLevel',
+  'status',
+  'timestamp',
+  'timestampUTC',
+  'flowRate',
+  'timeTillPull',
+  'nextPullTime',
+  'nextPullTimeUTC',
+  'wellDown',
+  'isDown',
+  'lastPullDateTime',
+  'lastPullDateTimeUTC',
+  'lastPullBbls',
+  'lastPullBottomLevel',
+  'lastPullTopLevel',
+  'lastPullDriverName',
+  'bbls24hrs',
+  'windowBblsDay',
+  'overnightBblsDay',
+  'tanks',
+  'pullBbls',
+  'route',
+] as const;
+
+export const WELL_HISTORY_ALLOWLIST = [
+  'wellName',
+  'driverName',
+  'dateTime',
+  'dateTimeUTC',
+  'bblsTaken',
+  'tankLevelFeet',
+  'tankTopInches',
+  'tankAfterInches',
+  'timeDif',
+  'recoveryInches',
+  'flowRate',
+  'flowRateDays',
+  'editedAt',
+  'editedBy',
+  'editCount',
+  'originalSubmittedAt',
+  'isEdit',
+  'noLevel',
+  'jobType',
+  'wellDown',
+  'packetId',
 ] as const;
 
 const SENSITIVE_KEYS = new Set([
@@ -95,10 +176,19 @@ export type CatalogScope = 'platform' | 'company';
 export type ProjectedDashboardCatalog = {
   scope: CatalogScope;
   companyId: string | null;
+  canViewWellPool: boolean;
   approved: Record<string, Record<string, unknown>>;
   users: Record<string, Record<string, unknown>>;
+  pending: Record<string, Record<string, unknown>>;
   wellConfig: Record<string, Record<string, unknown>>;
-  counts: { approved: number; users: number; wellConfig: number };
+  wellStatus: Record<string, Record<string, unknown>>;
+  counts: {
+    approved: number;
+    users: number;
+    pending: number;
+    wellConfig: number;
+    wellStatus: number;
+  };
 };
 
 function asRecord(v: unknown): Record<string, unknown> {
@@ -112,7 +202,15 @@ export function isSensitiveCatalogKey(key: string): boolean {
   return /passcode|password|(^|_)token|session|secret|privatekey|credential/.test(k);
 }
 
-function pickAllowlisted(
+export function callerCanViewGlobalWellPool(
+  caller: Pick<DashboardCaller, 'companyId' | 'isPlatformAdmin'>,
+): boolean {
+  const cid = typeof caller.companyId === 'string' ? caller.companyId.trim() : '';
+  if (caller.isPlatformAdmin) return true;
+  return !cid || cid === LEGACY_WELL_POOL_COMPANY_ID;
+}
+
+export function pickAllowlisted(
   record: Record<string, unknown>,
   allow: readonly string[],
 ): Record<string, unknown> {
@@ -185,10 +283,34 @@ function projectMap(
   return out;
 }
 
+function newerStatus(a: Record<string, unknown>, b: Record<string, unknown>): boolean {
+  const at = Date.parse(String(a.timestampUTC || a.timestamp || '')) || 0;
+  const bt = Date.parse(String(b.timestampUTC || b.timestamp || '')) || 0;
+  return at >= bt;
+}
+
+export function projectWellStatus(outgoing: unknown): Record<string, Record<string, unknown>> {
+  const source = asRecord(outgoing);
+  const out: Record<string, Record<string, unknown>> = {};
+  for (const [key, val] of Object.entries(source)) {
+    if (!key.startsWith('response_') || key.includes('delete')) continue;
+    const rec = asRecord(val);
+    const wellName = typeof rec.wellName === 'string' ? rec.wellName.trim() : '';
+    if (!wellName) continue;
+    const picked = pickAllowlisted(rec, WELL_STATUS_ALLOWLIST);
+    picked.responseId = key;
+    const prev = out[wellName];
+    if (!prev || newerStatus(picked, prev)) out[wellName] = picked;
+  }
+  return out;
+}
+
 export function projectDashboardCatalog(input: {
   approved: unknown;
   users: unknown;
   wellConfig: unknown;
+  pending?: unknown;
+  outgoing?: unknown;
   caller: Pick<DashboardCaller, 'companyId' | 'isPlatformAdmin'>;
 }): ProjectedDashboardCatalog {
   const scope: CatalogScope = input.caller.isPlatformAdmin ? 'platform' : 'company';
@@ -196,6 +318,7 @@ export function projectDashboardCatalog(input: {
     ? null
     : (typeof input.caller.companyId === 'string' ? input.caller.companyId.trim() : '');
   const filterCompany = scope === 'company' ? (companyId || '__none__') : null;
+  const canViewWellPool = callerCanViewGlobalWellPool(input.caller);
 
   const approved = projectMap(input.approved, flattenApprovedEntry, filterCompany);
   const users = projectMap(
@@ -203,22 +326,36 @@ export function projectDashboardCatalog(input: {
     (val) => pickAllowlisted(asRecord(val), USER_ALLOWLIST),
     filterCompany,
   );
-  const wellConfig = projectMap(
-    input.wellConfig,
-    (val) => pickAllowlisted(asRecord(val), WELL_CONFIG_ALLOWLIST),
+  const pending = projectMap(
+    input.pending,
+    (val) => pickAllowlisted(asRecord(val), PENDING_ALLOWLIST),
     filterCompany,
   );
+
+  const wellConfig = canViewWellPool
+    ? projectMap(
+        input.wellConfig,
+        (val) => pickAllowlisted(asRecord(val), WELL_CONFIG_ALLOWLIST),
+        null,
+      )
+    : {};
+  const wellStatus = canViewWellPool ? projectWellStatus(input.outgoing) : {};
 
   return {
     scope,
     companyId: scope === 'company' ? (companyId || null) : null,
+    canViewWellPool,
     approved,
     users,
+    pending,
     wellConfig,
+    wellStatus,
     counts: {
       approved: Object.keys(approved).length,
       users: Object.keys(users).length,
+      pending: Object.keys(pending).length,
       wellConfig: Object.keys(wellConfig).length,
+      wellStatus: Object.keys(wellStatus).length,
     },
   };
 }

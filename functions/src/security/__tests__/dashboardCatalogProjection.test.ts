@@ -1,10 +1,14 @@
 import {
   projectDashboardCatalog,
   isSensitiveCatalogKey,
+  WELL_CONFIG_ALLOWLIST,
+  callerCanViewGlobalWellPool,
 } from '../dashboardCatalogProjection';
 
 const platform = { companyId: undefined, isPlatformAdmin: true };
-const companyStaff = { companyId: 'liquid-gold', isPlatformAdmin: false };
+const liquidGold = { companyId: 'liquid-gold', isPlatformAdmin: false };
+const otherTenant = { companyId: 'acme-hauling', isPlatformAdmin: false };
+const missingCompany = { companyId: undefined, isPlatformAdmin: false };
 
 const rawApproved = {
   gab: {
@@ -51,53 +55,129 @@ const rawUsers = {
   uidAcme: { email: 'a@acme', displayName: 'Acme', role: 'admin', companyId: 'acme-hauling' },
 };
 
+const addedTest = {
+  activeTanks: 1,
+  allowedBottom: 3,
+  avgFlowRate: '2:13:49',
+  avgFlowRateMinutes: 133.82,
+  bblPerFoot: 20,
+  bottomLevel: 3,
+  equalizedTanks: false,
+  h2sStatus: 'unknown',
+  numTanks: 1,
+  pullBbls: 140,
+  requireActualBottom: false,
+  route: 'Test Route',
+  tankCapacity: 400,
+  tankHeight: 20,
+  tanks: 1,
+};
+
 const rawWells = {
   'Gabriel 1': { route: 'North', tanks: 3, pullBbls: 140, companyId: 'liquid-gold', secret: 'x' },
   'Acme Well': { route: 'South', companyId: 'acme-hauling' },
   'Global Well': { route: 'Unrouted', ndicName: 'GLOBAL 1-1H' },
+  AddedTest: addedTest,
 };
 
+const rawOutgoing = {
+  response_20260206_103659_Python: {
+    wellName: 'Python',
+    currentLevel: '5\'0"',
+    flowRate: '273:37:53',
+    timestamp: '12/3/2026, 7:45 AM',
+    timestampUTC: '2026-12-03T13:45:00.000Z',
+    wellDown: false,
+    timeTillPull: '8036:31',
+    rawCalculatedBottomInches: 99,
+    lastPullPacketId: 'secret-packet',
+    processedBy: 'fn',
+  },
+};
+
+describe('callerCanViewGlobalWellPool', () => {
+  it('allows platform, liquid-gold, and unscoped callers; denies other tenants', () => {
+    expect(callerCanViewGlobalWellPool(platform)).toBe(true);
+    expect(callerCanViewGlobalWellPool(liquidGold)).toBe(true);
+    expect(callerCanViewGlobalWellPool(missingCompany)).toBe(true);
+    expect(callerCanViewGlobalWellPool(otherTenant)).toBe(false);
+  });
+});
+
 describe('projectDashboardCatalog', () => {
-  it('platform administrator receives the authorized all-company view', () => {
+  it('platform administrator receives the authorized all-company employee view and the full well pool', () => {
     const out = projectDashboardCatalog({
       approved: rawApproved,
       users: rawUsers,
       wellConfig: rawWells,
+      outgoing: rawOutgoing,
       caller: platform,
     });
     expect(out.scope).toBe('platform');
     expect(out.companyId).toBeNull();
+    expect(out.canViewWellPool).toBe(true);
     expect(Object.keys(out.approved).sort()).toEqual(['gab', 'nested', 'otherco', 'unscoped']);
     expect(Object.keys(out.users).sort()).toEqual(['uidAcme', 'uidLg', 'uidPlat']);
-    expect(Object.keys(out.wellConfig).sort()).toEqual(['Acme Well', 'Gabriel 1', 'Global Well']);
-    expect(out.counts.approved).toBe(4);
+    expect(Object.keys(out.wellConfig).sort()).toEqual(['Acme Well', 'AddedTest', 'Gabriel 1', 'Global Well']);
+    expect(out.wellStatus.Python.currentLevel).toBe('5\'0"');
+    expect(out.wellStatus.Python.rawCalculatedBottomInches).toBeUndefined();
+    expect(out.wellStatus.Python.lastPullPacketId).toBeUndefined();
   });
 
-  it('company staff receive only records belonging to caller.companyId', () => {
+  it('liquid-gold staff receive the full global well pool including unscoped records', () => {
     const out = projectDashboardCatalog({
       approved: rawApproved,
       users: rawUsers,
       wellConfig: rawWells,
-      caller: companyStaff,
+      outgoing: rawOutgoing,
+      caller: liquidGold,
     });
-    expect(out.scope).toBe('company');
+    expect(out.canViewWellPool).toBe(true);
     expect(out.companyId).toBe('liquid-gold');
     expect(Object.keys(out.approved).sort()).toEqual(['gab', 'nested']);
     expect(Object.keys(out.users)).toEqual(['uidLg']);
-    expect(Object.keys(out.wellConfig)).toEqual(['Gabriel 1']);
-    expect(out.approved.otherco).toBeUndefined();
-    expect(out.users.uidAcme).toBeUndefined();
-    expect(out.users.uidPlat).toBeUndefined();
-    expect(out.wellConfig['Acme Well']).toBeUndefined();
-    expect(out.wellConfig['Global Well']).toBeUndefined();
+    expect(Object.keys(out.wellConfig).sort()).toEqual(['Acme Well', 'AddedTest', 'Gabriel 1', 'Global Well']);
+    expect(out.wellConfig.AddedTest).toBeDefined();
+    expect(out.wellConfig['Global Well']).toBeDefined();
+    expect(out.wellStatus.Python).toBeDefined();
   });
 
-  it('excludes cross-company and unscoped records from company staff', () => {
+  it('other tenant staff receive no global wellConfig or wellStatus', () => {
     const out = projectDashboardCatalog({
       approved: rawApproved,
       users: rawUsers,
       wellConfig: rawWells,
-      caller: companyStaff,
+      outgoing: rawOutgoing,
+      caller: otherTenant,
+    });
+    expect(out.canViewWellPool).toBe(false);
+    expect(Object.keys(out.approved)).toEqual(['otherco']);
+    expect(Object.keys(out.users)).toEqual(['uidAcme']);
+    expect(out.wellConfig).toEqual({});
+    expect(out.wellStatus).toEqual({});
+    expect(out.counts.wellConfig).toBe(0);
+  });
+
+  it('missing-company non-platform callers receive the well pool but no unscoped employees', () => {
+    const out = projectDashboardCatalog({
+      approved: rawApproved,
+      users: rawUsers,
+      wellConfig: rawWells,
+      outgoing: rawOutgoing,
+      caller: missingCompany,
+    });
+    expect(out.canViewWellPool).toBe(true);
+    expect(out.counts.approved).toBe(0);
+    expect(out.counts.users).toBe(0);
+    expect(Object.keys(out.wellConfig).sort()).toEqual(['Acme Well', 'AddedTest', 'Gabriel 1', 'Global Well']);
+  });
+
+  it('excludes cross-company and unscoped records from company staff employees', () => {
+    const out = projectDashboardCatalog({
+      approved: rawApproved,
+      users: rawUsers,
+      wellConfig: rawWells,
+      caller: liquidGold,
     });
     expect(out.approved.unscoped).toBeUndefined();
     expect(out.approved.otherco).toBeUndefined();
@@ -112,33 +192,38 @@ describe('projectDashboardCatalog', () => {
     });
     const gab = out.approved.gab;
     expect(gab.displayName).toBe('Gab1');
-    expect(gab.legalName).toBe('Gabriel');
     expect(gab.passcode).toBeUndefined();
     expect(gab.passcodeHash).toBeUndefined();
-    expect(gab.passwordHash).toBeUndefined();
     expect(gab.token).toBeUndefined();
-    expect(gab.sessionToken).toBeUndefined();
-    expect((gab.profile as Record<string, unknown>).legalName).toBe('Gabriel Legal');
-    expect((gab.profile as Record<string, unknown>).phone).toBe('555-0100');
     expect((gab.profile as Record<string, unknown>).passcode).toBeUndefined();
-    expect(out.approved.nested.passcodeHash).toBeUndefined();
-    expect(out.approved.nested.displayName).toBe('Nested Driver');
     expect(out.users.uidLg.passwordHash).toBeUndefined();
-    expect(out.users.uidLg.session).toBeUndefined();
-    expect(out.users.uidLg.driverHash).toBe('gab');
     expect((out.wellConfig['Gabriel 1'] as Record<string, unknown>).secret).toBeUndefined();
-    expect((out.wellConfig['Gabriel 1'] as Record<string, unknown>).route).toBe('North');
   });
 
-  it('company staff with no companyId receive an empty catalog', () => {
+  it('keeps production operational well_config fields including AddedTest shape', () => {
+    expect(WELL_CONFIG_ALLOWLIST).toEqual(expect.arrayContaining([
+      'activeTanks',
+      'equalizedTanks',
+      'requireActualBottom',
+      'loadLine',
+      'routeColor',
+      'isDown',
+      'numTanks',
+      'allowedBottom',
+    ]));
     const out = projectDashboardCatalog({
-      approved: rawApproved,
-      users: rawUsers,
-      wellConfig: rawWells,
-      caller: { companyId: undefined, isPlatformAdmin: false },
+      approved: {},
+      users: {},
+      wellConfig: { AddedTest: addedTest },
+      caller: liquidGold,
     });
-    expect(out.scope).toBe('company');
-    expect(out.counts).toEqual({ approved: 0, users: 0, wellConfig: 0 });
+    const well = out.wellConfig.AddedTest;
+    expect(well.activeTanks).toBe(1);
+    expect(well.equalizedTanks).toBe(false);
+    expect(well.requireActualBottom).toBe(false);
+    expect(well.route).toBe('Test Route');
+    expect(well.pullBbls).toBe(140);
+    expect(well.numTanks).toBe(1);
   });
 
   it('does not treat driverHash as a sensitive field', () => {

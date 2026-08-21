@@ -98,40 +98,32 @@ export function NotificationBell() {
     return () => document.removeEventListener('mousedown', handleClick);
   }, [isOpen]);
 
-  // ── Pending driver registration listener (RTDB) ──
+  // ── Pending driver registration listener (RTDB, catalog fallback) ──
   useEffect(() => {
     if (!user || !prefs.includes('driver_registration')) return;
 
     const db = getFirebaseDatabase();
     const pendingRef = ref(db, 'drivers/pending');
 
-    const unsubscribe = onValue(pendingRef, (snapshot) => {
+    const applyPending = (data: Record<string, any>) => {
       const items: NotificationItem[] = [];
-      if (snapshot.exists()) {
-        const data = snapshot.val();
-        Object.entries(data).forEach(([key, val]: [string, any]) => {
-          // Skip already-processed
-          if (val.status === 'approved' || val.status === 'rejected') return;
-          // Tenant containment (7/9): scoped users only see their own company's registrations.
-          if (!docBelongsToTenant(val.companyId, user.companyId)) return;
-          // Skip dismissed
-          if (dismissedRef.current.has(`pending_${key}`)) return;
-
-          const ts = val.timestamp || (val.requestedAt ? new Date(val.requestedAt).getTime() : Date.now());
-          items.push({
-            id: `pending_${key}`,
-            category: 'driver_registration',
-            title: 'New Driver Registration',
-            message: `${val.displayName || 'Unknown'}${val.companyName ? ` (${val.companyName})` : ''} is waiting for approval`,
-            timestamp: ts,
-            read: false, // read state computed at render time from readIdsRef
-            actionLabel: 'Review',
-            actionHref: '/admin',
-          });
+      Object.entries(data).forEach(([key, val]: [string, any]) => {
+        if (val.status === 'approved' || val.status === 'rejected') return;
+        if (!docBelongsToTenant(val.companyId, user.companyId)) return;
+        if (dismissedRef.current.has(`pending_${key}`)) return;
+        const ts = val.timestamp || (val.requestedAt ? new Date(val.requestedAt).getTime() : Date.now());
+        items.push({
+          id: `pending_${key}`,
+          category: 'driver_registration',
+          title: 'New Driver Registration',
+          message: `${val.displayName || 'Unknown'}${val.companyName ? ` (${val.companyName})` : ''} is waiting for approval`,
+          timestamp: ts,
+          read: false,
+          actionLabel: 'Review',
+          actionHref: '/admin',
         });
-      }
+      });
 
-      // Detect truly new notifications (not from initial load)
       if (pendingInitialLoadDone.current) {
         const newItems = items.filter(n => !knownIdsRef.current.has(n.id));
         if (newItems.length > 0 && soundEnabled) {
@@ -139,18 +131,24 @@ export function NotificationBell() {
         }
       }
 
-      // Update known IDs
       items.forEach(n => knownIdsRef.current.add(n.id));
       pendingInitialLoadDone.current = true;
 
       setNotifications(prev => {
         const nonPending = prev.filter(n => n.category !== 'driver_registration');
         const merged = [...nonPending, ...items];
-        // Deduplicate by ID
         const seen = new Set<string>();
         return merged.filter(n => { if (seen.has(n.id)) return false; seen.add(n.id); return true; })
           .sort((a, b) => b.timestamp - a.timestamp);
       });
+    };
+
+    const unsubscribe = onValue(pendingRef, (snapshot) => {
+      applyPending(snapshot.exists() ? snapshot.val() : {});
+    }, () => {
+      import('@/lib/adminDashboardCatalog').then(({ adminGetDashboardCatalog }) =>
+        adminGetDashboardCatalog().then((catalog) => applyPending((catalog.pending || {}) as Record<string, any>))
+      ).catch(() => applyPending({}));
     });
 
     return () => unsubscribe();
