@@ -4754,6 +4754,7 @@ export {
   // selector when approved: --only functions:adminBindDriverCompany
   adminBindDriverCompany,
   adminGetDashboardCatalog,
+  dismissDispatch,
   // Operational path hardening
   ingestDriverPacket,
   upsertDriverShift,

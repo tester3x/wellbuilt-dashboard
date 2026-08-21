@@ -19,6 +19,7 @@ export {
  */
 export { adminBindDriverCompany } from './companyBindingCallable';
 export { adminGetDashboardCatalog } from './adminDashboardCatalog';
+export { dismissDispatch } from './dismissDispatchCallable';
 
 export {
   ingestDriverPacket,

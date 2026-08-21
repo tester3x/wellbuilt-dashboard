@@ -15,6 +15,7 @@ import { loadDisposals, searchDisposals, type NdicWell, loadOperators, searchOpe
 import { calculateDriverETAs, applyDeadline, type DriverEtaResult } from '@/lib/driverEta';
 import { loadCompanyById } from '@/lib/companySettings';
 import { trackJobTypeUsage } from '@/lib/jobTypeUsage';
+import { dismissDispatch } from '@/lib/dismissDispatch';
 
 // ─── Types ───────────────────────────────────────────────────────────────────
 
@@ -653,7 +654,7 @@ function DispatchPageInner() {
     const firestore = getFirestoreDb();
     const q = query(
       collection(firestore, 'dispatches'),
-      where('status', 'in', ['pending', 'pending_approval', 'accepted', 'in_progress', 'paused', 'declined', 'cancelled', 'completed']),
+      where('status', 'in', ['pending', 'pending_approval', 'accepted', 'in_progress', 'paused', 'declined', 'cancelled', 'completed', 'dismissed']),
       orderBy('assignedAt', 'desc')
     );
     const unsub = onSnapshot(q, (snap) => {
@@ -1197,6 +1198,16 @@ function DispatchPageInner() {
   }
 
   // ─── Cancel Dispatch ───────────────────────────────────────────────────────
+
+  async function dismissDeclinedDispatch(jobId: string) {
+    try {
+      await dismissDispatch(jobId);
+    } catch (err: unknown) {
+      const msg = err instanceof Error ? err.message : 'Dismiss failed';
+      setMessage(`Dismiss failed: ${msg.replace(/^FirebaseError:\s*/i, '')}`);
+      setTimeout(() => setMessage(''), 5000);
+    }
+  }
 
   async function cancelDispatch(jobId: string) {
     try {
@@ -3003,7 +3014,7 @@ function DispatchPageInner() {
               <div className="flex-1 overflow-y-auto p-3">
                 {rightPanelTab === 'jobs' && (
                   <ActiveDispatchPanel
-                    dispatches={dispatches.filter(d => d.status !== 'completed')}
+                    dispatches={dispatches.filter(d => d.status !== 'completed' && d.status !== 'dismissed')}
                     cancelDispatch={cancelDispatch}
                     drivers={drivers}
                     assignTransfer={assignTransfer}
@@ -3971,13 +3982,7 @@ function ActiveDispatchPanel({ dispatches, cancelDispatch, drivers, assignTransf
                     className="px-3 py-1 bg-blue-600 hover:bg-blue-500 text-white text-xs font-medium rounded transition-colors"
                   >Reassign</button>
                   <button
-                    onClick={async () => {
-                      if (!job.id) return;
-                      try {
-                        const firestore = getFirestoreDb();
-                        await updateDoc(doc(firestore, 'dispatches', job.id), { status: 'dismissed', dismissedAt: Timestamp.now() });
-                      } catch (err) { console.error('Dismiss failed:', err); }
-                    }}
+                    onClick={() => job.id && dismissDeclinedDispatch(job.id)}
                     className="px-3 py-1 bg-gray-700 hover:bg-gray-600 text-gray-300 text-xs font-medium rounded transition-colors"
                     title="Accept decline and dismiss"
                   >Dismiss</button>
