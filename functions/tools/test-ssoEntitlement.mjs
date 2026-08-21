@@ -31,7 +31,7 @@ const COMPANY = 'co-1';
 const NOW = 1_700_000_000_000;
 const CHALLENGE = createHash('sha256').update('v'.repeat(64), 'utf8').digest('base64url');
 const AUTH = {
-  uid: 'uid-1',
+  uid: 'driver_driver1',
   claims: { kind: 'driver', driverId: DRIVER, companyId: COMPANY },
 };
 const REQUEST = {

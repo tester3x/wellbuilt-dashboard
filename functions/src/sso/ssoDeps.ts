@@ -30,6 +30,10 @@ export interface AuthoritativeDriver {
    * Only the tickets audience is ever told this; see handleSsoExchange.
    */
   displayName: string | null;
+  /** Optional profile capabilities. Present for WBM session mint only. */
+  roles?: string[];
+  isAdmin?: boolean;
+  isViewer?: boolean;
 }
 
 /** The stored authorization-code record. Never contains the raw code. */

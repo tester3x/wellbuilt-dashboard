@@ -134,7 +134,9 @@ check('the deps contract forbids it in writing',
 check('mintCustomToken receives developer claims only',
   /mintCustomToken\(uid: string, developerClaims: Record<string, unknown>\)/.test(depsSrc));
 check('the exchange mints with kind/driverId/companyId plus the app marker',
-  /mintCustomToken\(record\.uid, \{[\s\S]{0,200}kind: 'driver'[\s\S]{0,200}SSO_SESSION_APP_CLAIM\]: SSO_SESSION_APP_BY_AUDIENCE/.test(exchangeSrc));
+  /mintCustomToken\(record\.uid, \{[\s\S]{0,240}kind: 'driver'[\s\S]{0,240}SSO_SESSION_APP_CLAIM\]: sessionAppForAudience/.test(exchangeSrc)
+  && /driverId: driver\.driverId/.test(exchangeSrc)
+  && /companyId: driver\.companyId/.test(exchangeSrc));
 check('the minted uid is the RECORD uid, never client-supplied',
   /mintCustomToken\(record\.uid/.test(exchangeSrc));
 check('issuance never mints a token at all', !/mintCustomToken/.test(issueSrc));

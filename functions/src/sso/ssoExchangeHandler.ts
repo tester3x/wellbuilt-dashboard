@@ -14,17 +14,16 @@
  */
 import {
   SSO_AUDIENCE_EQUIPMENT,
-  SSO_SESSION_APP_BY_AUDIENCE,
   audienceCarriesDisplayName,
-  isSsoAudience,
   isSsoShiftBinding,
   normalizeSsoDisplayName,
   SSO_PROTOCOL_VERSION,
   SSO_SESSION_APP_CLAIM,
-  validateSsoExchangeRequest,
   type SsoAudience,
   type SsoExchangeResponse,
 } from '@tester3x/wellbuilt-contracts';
+import { isIssuableAudience, isWbmAudience, sessionAppForAudience, validateSsoExchangeRequestAllowingWbm } from './ssoWbmAdapter';
+import { canonicalDriverAuthUid } from '../security/canonicalDriverUid';
 import {
   SsoError,
   ssoCodePath,
@@ -73,13 +72,13 @@ export async function handleSsoExchange(
 ): Promise<SsoExchangeResponse> {
   // 1. Shape first — reject malformed encodings before any database work,
   //    so a garbage-flooding caller never reaches storage.
-  const parsed = validateSsoExchangeRequest(data);
+  const parsed = validateSsoExchangeRequestAllowingWbm(data);
   if (!parsed.ok) {
     deps.log('sso.exchange.rejected', { reason: 'malformed', field: parsed.field });
     throw new SsoError('invalid-argument', parsed.errorCode, `invalid ${parsed.field}`);
   }
   const req = parsed.value;
-  if (!isSsoAudience(req.audience)) {
+  if (!isIssuableAudience(req.audience)) {
     throw new SsoError('invalid-argument', 'unsupported_audience', 'audience not allowlisted');
   }
 
@@ -147,6 +146,13 @@ export async function handleSsoExchange(
     });
     throw new SsoError('permission-denied', GENERIC, 'identity revalidation failed');
   }
+  if (record.uid !== canonicalDriverAuthUid(record.driverId)) {
+    deps.log('sso.exchange.rejected', {
+      reason: 'uid_binding_mismatch',
+      codeHashPrefix: codeHash.slice(0, 8),
+    });
+    throw new SsoError('permission-denied', GENERIC, 'uid_binding_mismatch');
+  }
 
   // 4. Mint. Developer claims only — setCustomUserClaims would write to
   //    the shared Auth user and corrupt WB-S's own session, because both
@@ -157,7 +163,16 @@ export async function handleSsoExchange(
     companyId: driver.companyId,
     // Per-audience app marker, from the canonical map rather than a
     // conditional, so a new audience cannot mint a token without a name.
-    [SSO_SESSION_APP_CLAIM]: SSO_SESSION_APP_BY_AUDIENCE[record.audience as never],
+    [SSO_SESSION_APP_CLAIM]: sessionAppForAudience(record.audience),
+    // WBM only: authoritative roles/capabilities on THIS token. Other
+    // audiences keep their established claim set unchanged.
+    ...(isWbmAudience(record.audience)
+      ? {
+          roles: Array.isArray(driver.roles) && driver.roles.length ? driver.roles : ['driver'],
+          isAdmin: driver.isAdmin === true,
+          isViewer: driver.isViewer === true,
+        }
+      : {}),
   });
 
   deps.log('sso.exchange.succeeded', {
@@ -184,7 +199,10 @@ export async function handleSsoExchange(
   //    refused because of a gap in their profile record, and would burn the
   //    code doing it. The field is omitted instead and the client reports a
   //    bounded persistence-unavailable outcome.
-  const displayName = audienceCarriesDisplayName(record.audience as SsoAudience)
+  const displayName = (
+    audienceCarriesDisplayName(record.audience as SsoAudience)
+    || isWbmAudience(record.audience)
+  )
     ? normalizeSsoDisplayName(driver.displayName)
     : null;
 

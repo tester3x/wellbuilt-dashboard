@@ -9,15 +9,14 @@
  */
 import {
   SSO_AUDIENCE_EQUIPMENT,
-  isSsoAudience,
   resolveWellbuiltAppKey,
   type SsoShiftBinding,
   SSO_CODE_BYTES,
   SSO_CODE_TTL_MS_PROVISIONAL,
   SSO_PROTOCOL_VERSION,
-  validateSsoIssueCodeRequest,
   type SsoIssueCodeResponse,
 } from '@tester3x/wellbuilt-contracts';
+import { isIssuableAudience, isWbmAudience, validateSsoIssueCodeRequestAllowingWbm } from './ssoWbmAdapter';
 import {
   SsoError,
   ssoCodePath,
@@ -27,6 +26,7 @@ import {
 import { decideEquipmentAuthorization, shiftOriginDay } from './equipmentAuthorization.js';
 import { decideAppEntitlementAuthorization } from './appEntitlementAuthorization.js';
 import { decideResolve } from '../security/operational/shiftAuthority.js';
+import { canonicalDriverAuthUid } from '../security/canonicalDriverUid';
 
 /** Fields a client may never dictate. Presence is a protocol violation. */
 const CLIENT_FORBIDDEN_IDENTITY_FIELDS = ['uid', 'driverId', 'companyId', 'driverHash', 'passcode'];
@@ -57,7 +57,7 @@ export async function handleSsoIssueCode(
   }
 
   // 3. Protocol/audience/method/challenge validation, all fail-closed.
-  const parsed = validateSsoIssueCodeRequest(data);
+  const parsed = validateSsoIssueCodeRequestAllowingWbm(data);
   if (!parsed.ok) {
     throw new SsoError('invalid-argument', parsed.errorCode, `invalid ${parsed.field}`);
   }
@@ -65,7 +65,8 @@ export async function handleSsoIssueCode(
   // Both canonical audiences are issuable. The protocol validator has
   // already enforced that shiftBinding is present for equipment and absent
   // for WB-T, so a WB-T request reaching here is byte-identical to before.
-  if (!isSsoAudience(req.audience)) {
+  // wellbuilt-mobile is accepted only through the additive adapter.
+  if (!isIssuableAudience(req.audience)) {
     throw new SsoError('invalid-argument', 'unsupported_audience', 'audience not allowlisted');
   }
 
@@ -81,6 +82,10 @@ export async function handleSsoIssueCode(
   }
   if (typeof claimCompanyId !== 'string' || claimCompanyId.length === 0) {
     throw new SsoError('permission-denied', 'not_authorized', 'claims.companyId missing');
+  }
+  const expectedUid = canonicalDriverAuthUid(claimDriverId);
+  if (auth.uid !== expectedUid) {
+    throw new SsoError('permission-denied', 'not_authorized', 'uid_binding_mismatch');
   }
 
   // 5. Claims are a snapshot from token-mint time. Re-check them against
@@ -159,7 +164,9 @@ export async function handleSsoIssueCode(
   //     canonical app key by the contract itself, so no second naming
   //     table exists and an alias or unknown identity can never resolve.
   {
-    const app = resolveWellbuiltAppKey(req.audience);
+    const app = isWbmAudience(req.audience)
+      ? 'wellbuilt-mobile'
+      : resolveWellbuiltAppKey(req.audience);
     const contractState = await deps.getCompanyContract(driver.companyId);
     const plan = contractState.contract
       ? await deps.getPlan(contractState.contract.planId)

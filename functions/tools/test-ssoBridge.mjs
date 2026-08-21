@@ -125,7 +125,7 @@ function makeWorld(opts = {}) {
 }
 
 const AUTH_OK = {
-  uid: 'driver_abc',
+  uid: 'driver_driver1',
   claims: { kind: 'driver', driverId: 'driver-1', companyId: 'co-1' },
 };
 const VERIFIER = 'v'.repeat(43);
