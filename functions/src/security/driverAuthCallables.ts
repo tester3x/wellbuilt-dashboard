@@ -18,6 +18,7 @@ import {
 } from './passcode';
 import { checkRateLimit, hashIp } from './rateLimit';
 import { writeSecurityAudit } from './audit';
+import { assignmentFieldForClient } from './operational/canonicalAssignment';
 import { requireManageDrivers, resolveCanonicalAuthority } from './adminAuth';
 import {
   authorizeTargetCompany,
@@ -380,7 +381,8 @@ export const authenticateDriver = httpsV2.onCall(
       companyName: profile.companyName || null,
       isAdmin: profile.isAdmin === true,
       isViewer: profile.isViewer === true,
-      assignedRoutes: profile.assignedRoutes || null,
+      assignedRoutes: assignmentFieldForClient(profile.assignedRoutes),
+      assignedWells: assignmentFieldForClient(profile.assignedWells),
       defaultPackageId: profile.defaultPackageId || null,
       roles,
       mustChangePasscode,

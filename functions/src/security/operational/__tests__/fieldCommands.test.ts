@@ -274,6 +274,17 @@ describe('field command authorization', () => {
     ).toBe(true);
   });
 
+  it('refuses missing canonical assignment instead of granting all company wells', () => {
+    expect(
+      decideWellAssignment({
+        driverCompanyId: 'liquid-gold',
+        wellCompanyId: 'liquid-gold',
+        wellName: 'Gab 1',
+        wellRoute: 'lg-north',
+      }),
+    ).toMatchObject({ ok: false, reason: 'assignment_unavailable' });
+  });
+
   it('authorizes Class-2 metadata shapes via assignedWells or well route', () => {
     const class2 = [
       { name: 'iPhone16', assignedRoutes: ['lg-north', 'lg-mid', 'lg-south'], assignedWells: undefined },

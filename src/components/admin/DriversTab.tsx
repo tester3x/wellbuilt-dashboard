@@ -478,16 +478,29 @@ export function DriversTab({ scopeCompanyId, isWbAdmin = false }: DriversTabProp
   const assignDriverRoutes = async () => {
     if (!routeTarget) return;
     try {
-      await update(ref(db, `drivers/approved/${routeTarget.key}`), {
-        assignedRoutes: selectedRoutes.length > 0 ? selectedRoutes : null,
-      });
-      setMessage(`Assigned ${selectedRoutes.length} route(s) to ${routeTarget.displayName}`);
+      const { adminAssignDriverAssignment } = await import('@/lib/secureDriverAdmin');
+      const payload: {
+        driverId?: string;
+        legacyKey?: string;
+        assignedRoutes: string[];
+      } = {
+        assignedRoutes: selectedRoutes,
+      };
+      if (hasCanonicalDriverId(routeTarget)) payload.driverId = routeTarget.driverId;
+      if (routeTarget.key) payload.legacyKey = routeTarget.key;
+      await adminAssignDriverAssignment(payload);
+      setMessage(
+        selectedRoutes.length > 0
+          ? `Assigned ${selectedRoutes.length} route(s) to ${routeTarget.displayName}`
+          : `Cleared routes for ${routeTarget.displayName} (no well access until assigned)`,
+      );
       setShowRoutesModal(false);
       setRouteTarget(null);
       await loadDrivers();
     } catch (err) {
       console.error('Failed to assign routes:', err);
-      setMessage('Failed to assign routes');
+      const msg = err instanceof Error ? err.message : 'Failed to assign routes';
+      setMessage(msg.replace(/^FirebaseError:\s*/i, '') || 'Failed to assign routes');
     }
   };
 
@@ -1233,7 +1246,7 @@ export function DriversTab({ scopeCompanyId, isWbAdmin = false }: DriversTabProp
           <div>
             <h4 className="text-gray-400 text-xs font-medium uppercase tracking-wider mb-2">Assigned Routes</h4>
             {(driver.assignedRoutes?.length || 0) === 0 ? (
-              <p className="text-gray-500 text-sm">No routes assigned (sees all wells)</p>
+              <p className="text-gray-500 text-sm">No routes assigned (no well access until assigned)</p>
             ) : (
               <div className="flex flex-wrap gap-1">
                 {driver.assignedRoutes!.map(route => (

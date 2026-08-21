@@ -63,6 +63,29 @@ export async function adminSetPasscode(params: {
  * same canonical UUID, and reports success only when profile and authority
  * agree. Exact-key payload: anything beyond driverId/companyId is refused.
  */
+export async function adminAssignDriverAssignment(params: {
+  driverId?: string;
+  legacyKey?: string;
+  assignedRoutes: string[];
+  assignedWells?: string[];
+}) {
+  const fn = httpsCallable(getFirebaseFunctions(), 'adminAssignDriverAssignment');
+  const payload: Record<string, unknown> = {
+    assignedRoutes: params.assignedRoutes,
+  };
+  if (params.driverId) payload.driverId = params.driverId;
+  if (params.legacyKey) payload.legacyKey = params.legacyKey;
+  if (params.assignedWells !== undefined) payload.assignedWells = params.assignedWells;
+  const res = await fn(payload);
+  return res.data as {
+    ok: true;
+    driverId: string;
+    dualWrite: boolean;
+    assignedRoutes: string[];
+    assignedWells?: string[];
+  };
+}
+
 export async function adminBindCompany(params: {
   driverId: string;
   companyId: string;

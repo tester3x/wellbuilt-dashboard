@@ -28,7 +28,26 @@ describe('bootstrapDriverSession', () => {
       expect(r.value.isAdmin).toBe(true);
       expect(r.value.roles).toEqual(['admin']);
       expect(r.value.assignedRoutes).toEqual(['a', 'b', 'c']);
+      expect(r.value.assignedWells).toBeNull();
       expect(r.value.companyId).toBe('liquid-gold');
+    }
+  });
+
+  it('missing assignment fields return null, not empty arrays', async () => {
+    const r = await evaluateBootstrapDriverSession({
+      uid,
+      claims: { kind: 'driver', driverId, companyId: 'liquid-gold', roles: ['driver'] },
+      data: {},
+      loadProfile: async () => ({
+        displayName: 'Mikezfold',
+        companyId: 'liquid-gold',
+        active: true,
+      }),
+    });
+    expect(r.ok).toBe(true);
+    if (r.ok) {
+      expect(r.value.assignedRoutes).toBeNull();
+      expect(r.value.assignedWells).toBeNull();
     }
   });
 

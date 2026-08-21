@@ -123,6 +123,7 @@ export type FieldCommandRefuse =
   | 'bad_range'
   | 'cross_company'
   | 'well_not_assigned'
+  | 'assignment_unavailable'
   | 'well_unscoped'
   | 'resource_mismatch'
   | 'not_owner'

@@ -5,6 +5,13 @@
 import * as httpsV2 from 'firebase-functions/v2/https';
 import * as admin from 'firebase-admin';
 import { requireSecureDriver } from '../requireDriverAuth';
+import {
+  selectAssignedWellConfig,
+  type WellConfigRow,
+} from './canonicalAssignment';
+
+export { selectAssignedWellConfig };
+export type { WellConfigRow };
 
 export const getDriverReferenceBundle = httpsV2.onCall(
   { timeoutSeconds: 30, memory: '256MiB', enforceAppCheck: false },
@@ -50,36 +57,6 @@ export const getDriverReferenceBundle = httpsV2.onCall(
   },
 );
 
-export type WellConfigRow = Record<string, unknown> & { wellName?: string; companyId?: string; route?: string };
-
-/** Company + assignment scoped well config. Unscoped wells are omitted. */
-export function selectAssignedWellConfig(input: {
-  catalog: Record<string, WellConfigRow | null | undefined>;
-  companyId: string;
-  assignedRoutes?: unknown;
-  assignedWells?: unknown;
-}): Record<string, WellConfigRow> {
-  const companyId = (input.companyId || '').trim();
-  if (!companyId) return {};
-  const wells = Array.isArray(input.assignedWells)
-    ? input.assignedWells.map((w) => String(w).toLowerCase())
-    : [];
-  const routes = Array.isArray(input.assignedRoutes)
-    ? input.assignedRoutes.map((r) => String(r).toLowerCase())
-    : [];
-  const out: Record<string, WellConfigRow> = {};
-  for (const [wellName, raw] of Object.entries(input.catalog || {})) {
-    if (!raw || typeof raw !== 'object') continue;
-    const rowCompany = typeof raw.companyId === 'string' ? raw.companyId.trim() : '';
-    if (!rowCompany || rowCompany !== companyId) continue;
-    if (wells.length && !wells.includes(wellName.toLowerCase())) continue;
-    const route = typeof raw.route === 'string' ? raw.route.toLowerCase() : '';
-    if (routes.length && (!route || !routes.includes(route))) continue;
-    out[wellName] = { ...raw, wellName, companyId };
-  }
-  return out;
-}
-
 export const getDriverWellConfig = httpsV2.onCall(
   { timeoutSeconds: 30, memory: '256MiB', enforceAppCheck: false },
   async (request) => {
@@ -93,12 +70,18 @@ export const getDriverWellConfig = httpsV2.onCall(
     }
     const snap = await admin.database().ref('well_config').once('value');
     const catalog = (snap.val() || {}) as Record<string, WellConfigRow>;
-    const wells = selectAssignedWellConfig({
+    const selected = selectAssignedWellConfig({
       catalog,
       companyId: driver.companyId,
       assignedRoutes: driver.assignedRoutes,
       assignedWells: driver.assignedWells,
     });
-    return { ok: true, companyId: driver.companyId, wells };
+    return {
+      ok: true,
+      companyId: driver.companyId,
+      wells: selected.wells,
+      assignmentStatus: selected.status,
+      assignmentReason: selected.reason,
+    };
   },
 );

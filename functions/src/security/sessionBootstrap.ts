@@ -8,6 +8,7 @@
 import * as httpsV2 from 'firebase-functions/v2/https';
 import * as admin from 'firebase-admin';
 import { driverAuthUid } from './tokenMint';
+import { assignmentFieldForClient } from './operational/canonicalAssignment';
 
 export const BOOTSTRAP_DRIVER_SESSION_OPTIONS = {
   timeoutSeconds: 15,
@@ -26,6 +27,7 @@ export type DriverSessionProfile = {
   roles: string[];
   tier: string | null;
   assignedRoutes: unknown;
+  assignedWells: unknown;
   assignedCustomers: unknown;
   dashboardUid: string | null;
   dashboardRole: string | null;
@@ -77,7 +79,8 @@ export async function evaluateBootstrapDriverSession(input: {
       isViewer: profile.isViewer === true,
       roles,
       tier: typeof profile.tier === 'string' ? profile.tier : null,
-      assignedRoutes: profile.assignedRoutes ?? null,
+      assignedRoutes: assignmentFieldForClient(profile.assignedRoutes),
+      assignedWells: assignmentFieldForClient(profile.assignedWells),
       assignedCustomers: profile.assignedCustomers ?? null,
       dashboardUid: typeof profile.dashboardUid === 'string' ? profile.dashboardUid : null,
       dashboardRole: typeof profile.dashboardRole === 'string' ? profile.dashboardRole : null,

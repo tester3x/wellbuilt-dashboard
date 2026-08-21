@@ -44,6 +44,7 @@ export const HTTPS_INVENTORY: HttpsInventoryEntry[] = [
   e('adminApproveDriverRegistration', 'httpsV2.onCall', 'manageDrivers_staff_or_platform', 'staff_company', 'secured'),
   e('adminArchiveCompany', 'httpsV2.onCall', 'platform_dual', 'platform_dual', 'secured'),
   e('adminAssignCompanyPlan', 'httpsV2.onCall', 'platform_dual', 'platform_dual', 'secured'),
+  e('adminAssignDriverAssignment', 'httpsV2.onCall', 'manageDrivers_staff_or_platform', 'staff_company', 'secured'),
   e('adminBindDriverCompany', 'httpsV2.onCall', 'manageDrivers_staff_or_platform', 'staff_company', 'secured'),
   e('adminComputeLegacyHash', 'httpsV2.onCall', 'manageDrivers_staff_or_platform', 'staff_company', 'secured'),
   e('adminCreatePlan', 'httpsV2.onCall', 'platform_dual', 'platform_dual', 'secured'),

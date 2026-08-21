@@ -12,6 +12,7 @@ import {
   type HistoricalPull,
 } from './tankDomain';
 import { contentDigest, decideAtomicMarkerWrite, generationNumber } from './fieldCommandLease';
+import { selectAssignedWellConfig } from './canonicalAssignment';
 
 export type FieldCommandType = 'pull' | 'edit' | 'delete';
 
@@ -118,21 +119,27 @@ export function decideWellAssignment(input: {
   assignedWells?: unknown;
   wellName: string;
   wellRoute?: string | null;
-}): { ok: true } | { ok: false; reason: 'well_unscoped' | 'cross_company' | 'well_not_assigned'; detail: string } {
+}): { ok: true } | { ok: false; reason: 'well_unscoped' | 'cross_company' | 'well_not_assigned' | 'assignment_unavailable'; detail: string } {
   if (!input.wellCompanyId) return { ok: false, reason: 'well_unscoped', detail: 'well_company' };
   if (!input.driverCompanyId || input.wellCompanyId !== input.driverCompanyId) {
     return { ok: false, reason: 'cross_company', detail: 'well' };
   }
-  const wells = Array.isArray(input.assignedWells) ? input.assignedWells.map((w) => String(w).toLowerCase()) : [];
-  if (wells.length && !wells.includes(input.wellName.toLowerCase())) {
-    return { ok: false, reason: 'well_not_assigned', detail: 'well' };
+  const selected = selectAssignedWellConfig({
+    catalog: {
+      [input.wellName]: {
+        companyId: input.wellCompanyId,
+        route: input.wellRoute || '',
+      },
+    },
+    companyId: input.driverCompanyId,
+    assignedRoutes: input.assignedRoutes,
+    assignedWells: input.assignedWells,
+  });
+  if (selected.status === 'assignment_unavailable') {
+    return { ok: false, reason: 'assignment_unavailable', detail: 'assignment' };
   }
-  const routes = Array.isArray(input.assignedRoutes) ? input.assignedRoutes.map((r) => String(r).toLowerCase()) : [];
-  if (routes.length) {
-    const route = (input.wellRoute || '').toLowerCase();
-    if (!route || !routes.includes(route)) {
-      return { ok: false, reason: 'well_not_assigned', detail: 'route' };
-    }
+  if (selected.status === 'ineligible' || !selected.wells[input.wellName]) {
+    return { ok: false, reason: 'well_not_assigned', detail: selected.reason };
   }
   return { ok: true };
 }
