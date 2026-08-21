@@ -4935,13 +4935,8 @@ function CompletedJobsPanel({ jobs, drivers, allWells, allDisposals, highlightJo
                                       const loc = typeof photo === 'object' ? photo?.location : '';
                                       const photoType = typeof photo === 'object' ? photo?.type : '';
                                       if (!url) return null;
-                                      // Rewrite firebasestorage.googleapis.com URLs — that domain has DNS issues.
-                                      // storage.googleapis.com/{bucket}/{path} is reliable.
-                                      if (url.includes('firebasestorage.googleapis.com')) {
-                                        const m = url.match(/\/o\/(.+?)(\?|$)/);
-                                        const bucketM = url.match(/\/b\/([^/]+)\//);
-                                        if (m && bucketM) url = `https://storage.googleapis.com/${bucketM[1]}/${decodeURIComponent(m[1])}`;
-                                      }
+                                      // Do not rewrite Firebase URLs: stripping the query
+                                      // discards tokens/signatures required to display the object.
                                       return (
                                         // The completed-job card collapses on outer-row click; stopPropagation
                                         // on the photo anchor prevents click-through from bubbling up and
@@ -4957,11 +4952,7 @@ function CompletedJobsPanel({ jobs, drivers, allWells, allDisposals, highlightJo
                                     {jsaPhotos.map((photo: any, i: number) => {
                                       let url = typeof photo === 'string' ? photo : photo?.uri;
                                       if (!url) return null;
-                                      if (url.includes('firebasestorage.googleapis.com')) {
-                                        const m = url.match(/\/o\/(.+?)(\?|$)/);
-                                        const bucketM = url.match(/\/b\/([^/]+)\//);
-                                        if (m && bucketM) url = `https://storage.googleapis.com/${bucketM[1]}/${decodeURIComponent(m[1])}`;
-                                      }
+                                      // Keep any signed/token query string intact.
                                       return (
                                         <div key={`jsa-${i}`} className="flex-shrink-0 text-center" onClick={(e) => e.stopPropagation()}>
                                           <a href={url} target="_blank" rel="noopener noreferrer" title="Open Job Safety Analysis PDF" onClick={(e) => e.stopPropagation()}>

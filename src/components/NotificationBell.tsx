@@ -2,10 +2,9 @@
 
 import { useEffect, useRef, useState, useCallback } from 'react';
 import { usePathname } from 'next/navigation';
-import { ref, onValue } from 'firebase/database';
 import { collection, query, where, onSnapshot, Timestamp } from 'firebase/firestore';
 import { docBelongsToTenant } from '@/lib/tenantScope';
-import { getFirebaseDatabase, getFirestoreDb } from '@/lib/firebase';
+import { getFirestoreDb } from '@/lib/firebase';
 import { useAuth } from '@/contexts/AuthContext';
 import {
   NotificationItem,
@@ -102,19 +101,17 @@ export function NotificationBell() {
   useEffect(() => {
     if (!user || !prefs.includes('driver_registration')) return;
 
-    const db = getFirebaseDatabase();
-    const pendingRef = ref(db, 'drivers/pending');
-
-    const unsubscribe = onValue(pendingRef, (snapshot) => {
+    let cancelled = false;
+    const loadPending = async () => {
       const items: NotificationItem[] = [];
-      if (snapshot.exists()) {
-        const data = snapshot.val();
-        Object.entries(data).forEach(([key, val]: [string, any]) => {
-          // Skip already-processed
+      try {
+        const { adminListPending } = await import('@/lib/secureDriverAdmin');
+        const data = await adminListPending();
+        const rows = [...(data.pending || []), ...(data.legacyPending || [])];
+        rows.forEach((val: any) => {
+          const key = String(val.pendingId || val.key || '');
           if (val.status === 'approved' || val.status === 'rejected') return;
-          // Tenant containment (7/9): scoped users only see their own company's registrations.
           if (!docBelongsToTenant(val.companyId, user.companyId)) return;
-          // Skip dismissed
           if (dismissedRef.current.has(`pending_${key}`)) return;
 
           const ts = val.timestamp || (val.requestedAt ? new Date(val.requestedAt).getTime() : Date.now());
@@ -129,9 +126,12 @@ export function NotificationBell() {
             actionHref: '/admin',
           });
         });
+      } catch (err) {
+        console.warn('[NotificationBell] pending list callable failed', err);
+        return;
       }
+      if (cancelled) return;
 
-      // Detect truly new notifications (not from initial load)
       if (pendingInitialLoadDone.current) {
         const newItems = items.filter(n => !knownIdsRef.current.has(n.id));
         if (newItems.length > 0 && soundEnabled) {
@@ -139,21 +139,23 @@ export function NotificationBell() {
         }
       }
 
-      // Update known IDs
       items.forEach(n => knownIdsRef.current.add(n.id));
       pendingInitialLoadDone.current = true;
 
       setNotifications(prev => {
         const nonPending = prev.filter(n => n.category !== 'driver_registration');
         const merged = [...nonPending, ...items];
-        // Deduplicate by ID
         const seen = new Set<string>();
         return merged.filter(n => { if (seen.has(n.id)) return false; seen.add(n.id); return true; })
           .sort((a, b) => b.timestamp - a.timestamp);
       });
-    });
-
-    return () => unsubscribe();
+    };
+    void loadPending();
+    const timer = setInterval(() => { void loadPending(); }, 60_000);
+    return () => {
+      cancelled = true;
+      clearInterval(timer);
+    };
   }, [user, prefs, soundEnabled]);
 
   // ── Dispatch completion listener (Firestore) ──

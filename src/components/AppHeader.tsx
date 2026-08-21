@@ -3,14 +3,13 @@
 import { useEffect, useState } from 'react';
 import Link from 'next/link';
 import { usePathname, useRouter } from 'next/navigation';
-import { ref, onValue } from 'firebase/database';
 import { useAuth } from '@/contexts/AuthContext';
 import { TABS, getActiveTab } from '@/lib/tabs';
 import { getRoleLabel, hasCapability, hasEQuipmentAccess, hasRole } from '@/lib/auth';
 import { NotificationBell } from './NotificationBell';
 import { ChatIcon } from './chat/ChatIcon';
 import { ChatSidebar } from './chat/ChatSidebar';
-import { getFirebaseDatabase } from '@/lib/firebase';
+import { adminListPending } from '@/lib/secureDriverAdmin';
 
 export function AppHeader() {
   const { user, userCompany, signOut } = useAuth();
@@ -21,24 +20,30 @@ export function AppHeader() {
   const [chatOpen, setChatOpen] = useState(false);
   const [chatUnread, setChatUnread] = useState(0);
 
-  // Real-time listener: pending driver count → drives Admin button pulse
-  // This is independent of the notification bell. Bell = awareness, pulse = persistent reminder.
+  // Governed pending count — same callable source as NotificationBell.
   // Pulse stops ONLY when the actual pending drivers are approved/rejected.
   useEffect(() => {
     if (!user) return;
     if (!hasCapability(user, 'manageDrivers', userCompany)) return;
 
-    const db = getFirebaseDatabase();
-    const pendingRef = ref(db, 'drivers/pending');
-    const unsub = onValue(pendingRef, (snap) => {
-      if (!snap.exists()) { setPendingDriverCount(0); return; }
-      let count = 0;
-      Object.values(snap.val()).forEach((entry: any) => {
-        if (entry.status !== 'approved' && entry.status !== 'rejected') count++;
-      });
-      setPendingDriverCount(count);
-    });
-    return () => unsub();
+    let cancelled = false;
+    const load = async () => {
+      try {
+        const data = await adminListPending();
+        if (cancelled) return;
+        const pending = Array.isArray(data.pending) ? data.pending.length : 0;
+        const legacy = Array.isArray(data.legacyPending) ? data.legacyPending.length : 0;
+        setPendingDriverCount(pending + legacy);
+      } catch {
+        if (!cancelled) setPendingDriverCount(0);
+      }
+    };
+    void load();
+    const timer = setInterval(() => { void load(); }, 30_000);
+    return () => {
+      cancelled = true;
+      clearInterval(timer);
+    };
   }, [user, userCompany]);
 
   if (!user) return null;

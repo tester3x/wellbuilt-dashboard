@@ -3,6 +3,7 @@
 import { useEffect, useState } from 'react';
 import { useRouter } from 'next/navigation';
 import { Ticket, InvoiceDetail, TimelineEvent, fetchInvoiceForTicket, fetchSiblingTickets } from '@/lib/tickets';
+import { InvoicePhotoThumb } from '@/components/InvoicePhotoThumb';
 
 interface Props {
   ticket: Ticket;
@@ -247,23 +248,16 @@ export function TicketDetailModal({ ticket, onClose, onNavigateTicket }: Props) 
                     <SectionTitle>PHOTOS ({imagePhotos.length}){jsaPhotos.length > 0 ? ' + JSA' : ''}</SectionTitle>
                     <div className="flex gap-2 overflow-x-auto pb-2">
                       {imagePhotos.map((photo: any, i: number) => {
-                        let url = typeof photo === 'string' ? photo : photo?.uri;
                         const loc = typeof photo === 'object' ? photo?.location : '';
                         const photoType = typeof photo === 'object' ? photo?.type : '';
-                        if (!url) return null;
-                        // Rewrite firebasestorage.googleapis.com → storage.googleapis.com (DNS fix)
-                        if (url.includes('firebasestorage.googleapis.com')) {
-                          const m = url.match(/\/o\/(.+?)(\?|$)/);
-                          const bucketM = url.match(/\/b\/([^/]+)\//);
-                          if (m && bucketM) url = `https://storage.googleapis.com/${bucketM[1]}/${decodeURIComponent(m[1])}`;
-                        }
                         return (
-                          // stopPropagation prevents click-through from bubbling up and
-                          // collapsing the card / dismissing the modal behind the new tab.
                           <div key={`img-${i}`} className="flex-shrink-0 text-center" onClick={(e) => e.stopPropagation()}>
-                            <a href={url} target="_blank" rel="noopener noreferrer" onClick={(e) => e.stopPropagation()}>
-                              <img src={url} alt={`Photo ${i + 1}`} className="w-20 h-20 object-cover rounded border border-gray-300 hover:border-yellow-500 transition-colors cursor-pointer" />
-                            </a>
+                            <InvoicePhotoThumb
+                              invoiceId={invoice.id || ''}
+                              photo={typeof photo === 'string' ? { uri: photo } : photo}
+                              alt={`Photo ${i + 1}`}
+                              className="w-20 h-20 object-cover rounded border border-gray-300 hover:border-yellow-500 transition-colors cursor-pointer"
+                            />
                             {loc && <p className="text-[9px] text-gray-400 mt-0.5 max-w-[80px] truncate">{photoType === 'pickup' ? '📍' : '📦'} {loc}</p>}
                           </div>
                         );
@@ -271,11 +265,7 @@ export function TicketDetailModal({ ticket, onClose, onNavigateTicket }: Props) 
                       {jsaPhotos.map((photo: any, i: number) => {
                         let url = typeof photo === 'string' ? photo : photo?.uri;
                         if (!url) return null;
-                        if (url.includes('firebasestorage.googleapis.com')) {
-                          const m = url.match(/\/o\/(.+?)(\?|$)/);
-                          const bucketM = url.match(/\/b\/([^/]+)\//);
-                          if (m && bucketM) url = `https://storage.googleapis.com/${bucketM[1]}/${decodeURIComponent(m[1])}`;
-                        }
+                        // Keep any signed/token query string intact.
                         return (
                           <div key={`jsa-${i}`} className="flex-shrink-0 text-center" onClick={(e) => e.stopPropagation()}>
                             <a href={url} target="_blank" rel="noopener noreferrer" title="Open Job Safety Analysis PDF" onClick={(e) => e.stopPropagation()}>

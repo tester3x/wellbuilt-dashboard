@@ -340,11 +340,15 @@ export function DriversTab({ scopeCompanyId, isWbAdmin = false }: DriversTabProp
       approved.sort((a, b) => a.displayName.localeCompare(b.displayName));
       setApprovedDrivers(approved);
 
-      // Load pending drivers
-      const pendingSnap = await get(ref(db, 'drivers/pending'));
+      // Load pending drivers through the admin callable — no RTDB parent read.
+      const { adminListPending } = await import('@/lib/secureDriverAdmin');
+      const listed = await adminListPending();
       const pending: PendingDriver[] = [];
-      if (pendingSnap.exists()) {
-        const data = pendingSnap.val();
+      {
+        const data: Record<string, any> = {};
+        for (const row of [...(listed.pending || []), ...(listed.legacyPending || [])]) {
+          data[String(row.pendingId || row.key || '')] = row;
+        }
         Object.entries(data).forEach(([key, val]: [string, any]) => {
           // Skip already-processed pending records (status: approved/rejected)
           if (val.status === 'approved' || val.status === 'rejected') return;
@@ -610,10 +614,12 @@ export function DriversTab({ scopeCompanyId, isWbAdmin = false }: DriversTabProp
   // ── Approve a pending driver ──
   const approveDriver = async (driver: PendingDriver) => {
     try {
-      // Prefer secure callable when dual-run securePendingId is present
-      const secureId = (driver as PendingDriver & { securePendingId?: string }).securePendingId;
-      if (secureId) {
-        try {
+      const secureId = (driver as PendingDriver & { securePendingId?: string }).securePendingId || driver.key;
+      if (!secureId) {
+        setMessage('This pending row has no secure pending id — cannot approve via client write');
+        return;
+      }
+      {
           const { adminApproveSecure } = await import('@/lib/secureDriverAdmin');
           await adminApproveSecure({
             pendingId: secureId,
@@ -623,72 +629,7 @@ export function DriversTab({ scopeCompanyId, isWbAdmin = false }: DriversTabProp
           setMessage(`Approved (secure): ${driver.displayName}`);
           await loadDrivers();
           return;
-        } catch (secErr) {
-          console.warn('Secure approve failed, falling back to legacy RTDB:', secErr);
-        }
       }
-      // Move from pending to approved
-      // If a company admin is approving, auto-assign to their company
-      // Also carry forward the companyName the driver entered during registration
-      const approvedData: Record<string, any> = {
-        displayName: driver.displayName,
-        legalName: driver.legalName || driver.displayName,
-        name: driver.displayName,
-        active: true,
-        isAdmin: false,
-        isViewer: false,
-        approvedAt: Date.now(),
-        roles: ['driver'],
-      };
-      if (scopeCompanyId) {
-        // Company admin approving — assign to their company
-        approvedData.companyId = scopeCompanyId;
-        // Look up company tier
-        try {
-          const firestore = getFirestoreDb();
-          const { getDoc, doc: firestoreDoc } = await import('firebase/firestore');
-          const companySnap = await getDoc(firestoreDoc(firestore, 'companies', scopeCompanyId));
-          if (companySnap.exists()) {
-            const companyData = companySnap.data();
-            if (companyData.tier) approvedData.tier = companyData.tier;
-            if (companyData.name) approvedData.companyName = companyData.name;
-          }
-        } catch (tierErr) {
-          console.warn('Company tier lookup failed (non-blocking):', tierErr);
-        }
-      } else if (driver.companyName) {
-        // WB admin approving — try to auto-match company name to Firestore companies
-        try {
-          const firestore = getFirestoreDb();
-          const companiesSnap = await getDocs(collection(firestore, 'companies'));
-          const driverCoLower = driver.companyName.toLowerCase().trim();
-          companiesSnap.forEach((d) => {
-            const data = d.data();
-            const coNameLower = (data.name || '').toLowerCase().trim();
-            // Match: exact, contains, or contained-in
-            if (coNameLower === driverCoLower ||
-                coNameLower.includes(driverCoLower) ||
-                driverCoLower.includes(coNameLower)) {
-              approvedData.companyId = d.id;
-              approvedData.companyName = data.name;
-              if (data.tier) approvedData.tier = data.tier;
-            }
-          });
-        } catch (matchErr) {
-          console.warn('Company auto-match failed (non-blocking):', matchErr);
-        }
-      }
-      if (driver.companyName) {
-        // Always carry forward the registration company name as a reference
-        approvedData.registrationCompany = driver.companyName;
-      }
-      await set(ref(db, `drivers/approved/${driver.passcodeHash}`), approvedData);
-      // Mark pending as approved (don't delete yet — the client app polls this)
-      await update(ref(db, `drivers/pending/${driver.key}`), {
-        status: 'approved',
-      });
-      setMessage(`Approved: ${driver.displayName}`);
-      await loadDrivers();
     } catch (err) {
       console.error('Failed to approve driver:', err);
       setMessage('Failed to approve driver');
@@ -741,60 +682,13 @@ export function DriversTab({ scopeCompanyId, isWbAdmin = false }: DriversTabProp
           await loadDrivers();
           return;
         } catch (secErr) {
-          console.warn('Secure approve-with-assignments failed, falling back to legacy RTDB:', secErr);
+          console.error('Secure approve-with-assignments failed (no RTDB fallback):', secErr);
+          setMessage('Secure approve failed');
+          return;
         }
       }
-
-      const approvedData: Record<string, any> = {
-        displayName: approvalTarget.displayName,
-        legalName: approvalTarget.legalName || approvalTarget.displayName,
-        name: approvalTarget.displayName,
-        active: true,
-        isAdmin: approvalRoles.includes('admin'),
-        isViewer: approvalRoles.includes('viewer'),
-        approvedAt: Date.now(),
-        companyId: approvalCompanyId,
-        companyName: approvalCompanyName,
-        assignedCustomers: approvalCustomers.map(name => ({
-          name,
-          companyId: approvalCompanyId,
-        })),
-        assignedRoutes: approvalRoutes,
-        roles: approvalRoles,
-      };
-
-      // Sync tier from company doc
-      try {
-        const firestore = getFirestoreDb();
-        const { getDoc, doc: firestoreDoc } = await import('firebase/firestore');
-        const companySnap = await getDoc(firestoreDoc(firestore, 'companies', approvalCompanyId));
-        if (companySnap.exists()) {
-          const tier = companySnap.data().tier;
-          if (tier) approvedData.tier = tier;
-        }
-      } catch { /* tier sync is non-blocking */ }
-
-      if (approvalTarget.companyName) {
-        approvedData.registrationCompany = approvalTarget.companyName;
-      }
-
-      // Single write — complete record at once
-      await set(ref(db, `drivers/approved/${approvalTarget.passcodeHash}`), approvedData);
-
-      // Mark pending as approved
-      await update(ref(db, `drivers/pending/${approvalTarget.key}`), {
-        status: 'approved',
-      });
-
-      setMessage(`Approved: ${approvalTarget.displayName} with ${approvalCustomers.length} customer(s) and ${approvalRoutes.length} route(s)`);
-      setShowApprovalModal(false);
-      setApprovalTarget(null);
-      setApprovalCompanyId('');
-      setApprovalCompanyName('');
-      setApprovalCustomers([]);
-      setApprovalRoutes([]);
-      setApprovalRoles(['driver']);
-      await loadDrivers();
+      setMessage('Secure pending id required — client writes to approved/pending are disabled');
+      return;
     } catch (err) {
       console.error('Failed to approve driver:', err);
       setMessage('Failed to approve driver');
@@ -814,10 +708,8 @@ export function DriversTab({ scopeCompanyId, isWbAdmin = false }: DriversTabProp
           pendingId: anyDriver.securePendingId || undefined,
         });
       } catch (callableErr) {
-        console.warn('Secure reject callable unavailable, RTDB status only:', callableErr);
-        await update(ref(db, `drivers/pending/${driver.key}`), {
-          status: 'rejected',
-        });
+        console.error('Secure reject callable failed (no RTDB fallback):', callableErr);
+        throw callableErr;
       }
       setMessage(`Rejected: ${driver.displayName}`);
       await loadDrivers();

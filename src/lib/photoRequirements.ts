@@ -13,9 +13,8 @@
 // refreshes. The { id, label, description, threshold, sampleStoragePath,
 // sampleUrl } contract is preserved; requiredCount / phase / active are additive.
 // ───────────────────────────────────────────────────────────────────────────
-import { getFirebaseApp, getFirestoreDb, getFirebaseFunctions } from './firebase';
-import { doc, getDoc, setDoc, Timestamp } from 'firebase/firestore';
-import { getStorage, ref, uploadBytes, getDownloadURL } from 'firebase/storage';
+import { getFirestoreDb, getFirebaseFunctions } from './firebase';
+import { doc, getDoc, Timestamp } from 'firebase/firestore';
 import { httpsCallable } from 'firebase/functions';
 
 const REAL_BUCKET = 'gs://wellbuilt-sync.firebasestorage.app';
@@ -120,17 +119,13 @@ export async function loadPhotoRequirementSpec(customerId: string): Promise<Phot
  * display). Path matches the seed script: photo_requirements/{cid}/{reqId}.{ext}.
  */
 export async function uploadRequirementSample(
-  customerId: string,
-  requirementId: string,
-  file: File,
+  _customerId: string,
+  _requirementId: string,
+  _file: File,
 ): Promise<{ sampleStoragePath: string; sampleUrl: string }> {
-  const storage = getStorage(getFirebaseApp(), REAL_BUCKET);
-  const ext = (file.type || '').toLowerCase().includes('png') ? 'png' : 'jpg';
-  const sampleStoragePath = `photo_requirements/${customerId}/${requirementId}.${ext}`;
-  const storageRef = ref(storage, sampleStoragePath);
-  await uploadBytes(storageRef, file, { contentType: file.type || 'image/jpeg' });
-  const sampleUrl = await getDownloadURL(storageRef);
-  return { sampleStoragePath, sampleUrl };
+  // Direct Storage writes are denied. Sample objects must be issued through
+  // a tenant-bound grant; no such staff callable is exported yet.
+  throw new Error('UPDATE_REQUIRED: photo requirement sample upload is not available in this version');
 }
 
 /**
@@ -160,19 +155,13 @@ export async function savePhotoRequirementSpec(
   requirements: PhotoRequirement[],
   enabled: boolean,
 ): Promise<number> {
-  const ref0 = doc(getFirestoreDb(), 'photo_requirements', customerId);
-  const cur = await getDoc(ref0);
-  const curVersion = cur.exists() && typeof (cur.data() as any).version === 'number' ? (cur.data() as any).version : 0;
-  const version = curVersion + 1;
-  // stripUndefinedDeep is belt-and-suspenders over normalizeReq: the payload is
-  // guaranteed to contain no `undefined` field value before it reaches setDoc.
-  const payload = stripUndefinedDeep({
+  const current = await loadPhotoRequirementSpec(customerId);
+  const fn = httpsCallable(getFirebaseFunctions(), 'upsertPhotoRequirementSpec');
+  const res: any = await fn({
     customerId,
-    enabled,
-    version,
     requirements: requirements.map(normalizeReq),
-    updatedAt: Timestamp.now(),
+    enabled,
+    expectedVersion: current?.version ?? 0,
   });
-  await setDoc(ref0, payload, { merge: true });
-  return version;
+  return typeof res?.data?.version === 'number' ? res.data.version : 0;
 }
