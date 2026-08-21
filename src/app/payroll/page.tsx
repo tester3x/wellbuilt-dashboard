@@ -32,8 +32,7 @@ import {
 } from '@/lib/payroll';
 import { type CompanyConfig, loadAllCompanies, ALL_PAYROLL_COLUMNS, DEFAULT_PAYROLL_COLUMNS, type PayrollColumn } from '@/lib/companySettings';
 import { Timestamp } from 'firebase/firestore';
-import { ref, get } from 'firebase/database';
-import { getFirebaseDatabase } from '@/lib/firebase';
+import { adminGetDashboardCatalog, classifiedReadFailure } from '@/lib/adminDashboardCatalog';
 
 // ─── Export Helpers ──────────────────────────────────────────────────────────
 
@@ -391,13 +390,10 @@ export default function PayrollPage() {
 
   const loadDriverNames = async () => {
     try {
-      const db = getFirebaseDatabase();
-      const snapshot = await get(ref(db, 'drivers/approved'));
-      if (!snapshot.exists()) return;
+      const catalog = await adminGetDashboardCatalog();
       const names: string[] = [];
       const legalMap: Record<string, string> = {};
-      snapshot.forEach(child => {
-        const data = child.val();
+      Object.values((catalog.approved || {}) as Record<string, any>).forEach((data) => {
         if (!docBelongsToTenant(data?.companyId, user?.companyId)) return; // tenant containment (7/9)
         if (data?.displayName) {
           names.push(data.displayName);
@@ -409,6 +405,7 @@ export default function PayrollPage() {
       setLegalNameMap(legalMap);
     } catch (err) {
       console.error('Failed to load driver names:', err);
+      setError(classifiedReadFailure('driver names', err));
     }
   };
 
@@ -438,26 +435,25 @@ export default function PayrollPage() {
       let currentLegalMap = legalNameMap;
       if (Object.keys(currentLegalMap).length === 0) {
         try {
-          const driversSnap = await get(ref(getFirebaseDatabase(), 'drivers/approved'));
-          if (driversSnap.exists()) {
-            const map: Record<string, string> = {};
-            driversSnap.forEach(child => {
-              const d = child.val();
-              if (!docBelongsToTenant(d?.companyId, user?.companyId)) return; // tenant containment (7/9)
-              const legal = d?.legalName || d?.profile?.legalName;
-              if (d?.displayName && legal) map[d.displayName] = legal;
-            });
-            currentLegalMap = map;
-            setLegalNameMap(map);
-          }
-        } catch {}
+          const catalog = await adminGetDashboardCatalog();
+          const map: Record<string, string> = {};
+          Object.values((catalog.approved || {}) as Record<string, any>).forEach((d) => {
+            if (!docBelongsToTenant(d?.companyId, user?.companyId)) return; // tenant containment (7/9)
+            const legal = d?.legalName || d?.profile?.legalName;
+            if (d?.displayName && legal) map[d.displayName] = legal;
+          });
+          currentLegalMap = map;
+          setLegalNameMap(map);
+        } catch (err) {
+          setError(classifiedReadFailure('driver names', err));
+        }
       }
 
       const data = await fetchPayrollInvoices(selectedPeriod, companyMap, user?.companyId, countyMap, currentLegalMap); // tenant containment (7/9)
       setTimesheets(data);
     } catch (err: any) {
       console.error('Failed to fetch payroll data:', err);
-      setError(err?.message || 'Failed to load payroll data');
+      setError(classifiedReadFailure('payroll invoices', err));
     } finally {
       setDataLoading(false);
     }

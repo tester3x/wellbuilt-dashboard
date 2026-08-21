@@ -42,4 +42,63 @@ describe('evaluateDismissDispatch', () => {
       isPlatformAdmin: false,
     })).toEqual({ ok: false, reason: 'family_in_progress' });
   });
+
+  it('blocks accepted, in_progress, and paused family members', () => {
+    for (const status of ['accepted', 'in_progress', 'paused'] as const) {
+      expect(evaluateDismissDispatch({
+        job: { ...job, id: 'A', status: 'declined', splitGroupId: 's1' },
+        siblings: [{ id: 'B', status, companyId: 'liquid-gold', splitGroupId: 's1' }],
+        callerCompanyId: 'liquid-gold',
+        isPlatformAdmin: false,
+      })).toEqual({ ok: false, reason: 'family_in_progress' });
+    }
+  });
+
+  it('rejects a different-company sibling even for a platform administrator', () => {
+    const decided = evaluateDismissDispatch({
+      job: { ...job, id: 'A', status: 'declined', splitGroupId: 's1' },
+      siblings: [{ id: 'B', status: 'pending', companyId: 'acme-hauling', splitGroupId: 's1' }],
+      callerCompanyId: undefined,
+      isPlatformAdmin: true,
+    });
+    expect(decided).toEqual({ ok: false, reason: 'sibling_cross_company' });
+  });
+
+  it('rejects a sibling with a missing companyId', () => {
+    expect(evaluateDismissDispatch({
+      job: { ...job, id: 'A', status: 'cancelled', splitGroupId: 's1' },
+      siblings: [{ id: 'B', status: 'pending', splitGroupId: 's1' }],
+      callerCompanyId: 'liquid-gold',
+      isPlatformAdmin: false,
+    })).toEqual({ ok: false, reason: 'sibling_unscoped' });
+  });
+
+  it('dismisses same-company pending siblings and preserves decline fields', () => {
+    const decided = evaluateDismissDispatch({
+      job: { ...job, id: 'A', status: 'declined', splitGroupId: 's1' },
+      siblings: [{ id: 'B', status: 'pending', companyId: 'liquid-gold', splitGroupId: 's1' }],
+      callerCompanyId: 'liquid-gold',
+      isPlatformAdmin: false,
+    });
+    expect(decided).toEqual({
+      ok: true,
+      idempotent: false,
+      dispatchIds: ['A', 'B'],
+      preserveDecline: true,
+    });
+  });
+});
+
+describe('dismissDispatch callable source', () => {
+  const { readFileSync } = require('fs') as typeof import('fs');
+  const { join } = require('path') as typeof import('path');
+  const callable = readFileSync(join(__dirname, '../../dismissDispatchCallable.ts'), 'utf8');
+
+  it('does not wipe decline fields on dismiss', () => {
+    expect(callable).toMatch(/status:\s*'dismissed'/);
+    expect(callable).toMatch(/dismissedAt:\s*FieldValue\.serverTimestamp\(\)/);
+    expect(callable).not.toMatch(/declineReason:\s*(FieldValue\.delete|null|''|"")/);
+    expect(callable).not.toMatch(/declinedAt:\s*(FieldValue\.delete|null)/);
+    expect(callable).not.toMatch(/declinedBy:\s*(FieldValue\.delete|null|''|"")/);
+  });
 });

@@ -3,6 +3,8 @@ import { getFirebaseFunctions } from './firebase';
 
 export type DashboardCatalog = {
   ok: true;
+  scope?: 'platform' | 'company';
+  companyId?: string | null;
   approved: Record<string, unknown>;
   users: Record<string, unknown>;
   wellConfig: Record<string, unknown>;
@@ -25,4 +27,8 @@ export function catalogErrorCode(err: unknown): string {
   if (/failed-precondition|index/i.test(raw)) return 'failed-precondition';
   if (/deadline|unavailable|network/i.test(raw)) return 'unavailable';
   return raw.replace(/^functions\//, '').slice(0, 64);
+}
+
+export function classifiedReadFailure(surface: string, err: unknown): string {
+  return `Failed to load ${surface} [${catalogErrorCode(err)}]. This is a read failure, not an empty list.`;
 }

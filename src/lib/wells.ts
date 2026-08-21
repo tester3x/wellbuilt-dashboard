@@ -53,6 +53,27 @@ export interface WellConfig {
   bblPerFoot?: number;    // (tankCapacity / tankHeight) * numTanks
 }
 
+/** Snapshot well list from the admin catalog when RTDB parent reads are denied. */
+export function wellResponsesFromCatalog(wellConfig: Record<string, unknown>): WellResponse[] {
+  return Object.entries(wellConfig).map(([wellName, raw]) => {
+    const config = (raw && typeof raw === 'object' ? raw : {}) as Record<string, unknown>;
+    const tanks = typeof config.tanks === 'number'
+      ? config.tanks
+      : typeof config.numTanks === 'number' ? config.numTanks : 1;
+    return {
+      wellName,
+      currentLevel: '--',
+      etaToMax: '',
+      flowRate: typeof config.avgFlowRate === 'string' ? config.avgFlowRate : 'Unknown',
+      timestamp: '',
+      route: typeof config.route === 'string' ? config.route : 'Unrouted',
+      tanks,
+      pullBbls: typeof config.pullBbls === 'number' ? config.pullBbls : 140,
+      ndicName: typeof config.ndicName === 'string' ? config.ndicName : '',
+    };
+  });
+}
+
 // NEW UNIFIED STRUCTURE - matches Cloud Function output
 export interface WellStatus {
   wellName: string;
@@ -277,7 +298,10 @@ function calcTimeTillPull(currentInches: number, targetInches: number, flowRateM
 
 // Subscribe to well statuses using packets/outgoing (the response packets) + well_config
 // packets/outgoing is THE source of current well status — written by Cloud Functions on every pull
-export function subscribeToWellStatusesUnified(callback: (wells: WellResponse[], routes: string[]) => void): () => void {
+export function subscribeToWellStatusesUnified(
+  callback: (wells: WellResponse[], routes: string[]) => void,
+  onError?: (err: unknown) => void,
+): () => void {
   const db = getFirebaseDatabase();
   const configRef = ref(db, 'well_config');
   const outgoingRef = ref(db, 'packets/outgoing');
@@ -286,16 +310,23 @@ export function subscribeToWellStatusesUnified(callback: (wells: WellResponse[],
   let outgoingData: Record<string, WellResponse> = {};
   let gotConfigs = false;
   let gotOutgoing = false;
+  let failed = false;
 
   let debounceTimer: ReturnType<typeof setTimeout> | null = null;
   const DEBOUNCE_MS = 300;
 
   const timeout = setTimeout(() => {
+    if (failed) return;
     if (!gotConfigs || !gotOutgoing) {
       console.warn('[wells.ts] Subscription timeout - showing partial data');
       mergeAndCallback(true);
     }
   }, 5000);
+
+  const reportError = (err: Error) => {
+    failed = true;
+    onError?.(err);
+  };
 
   const mergeAndCallback = (force = false) => {
     if (!force && (!gotConfigs || !gotOutgoing)) return;
@@ -415,7 +446,7 @@ export function subscribeToWellStatusesUnified(callback: (wells: WellResponse[],
       configData = configs;
     }
     debouncedMergeAndCallback();
-  });
+  }, reportError);
 
   const unsubOutgoing = onValue(outgoingRef, (snapshot) => {
     gotOutgoing = true;
@@ -434,7 +465,7 @@ export function subscribeToWellStatusesUnified(callback: (wells: WellResponse[],
       outgoingData = responses;
     }
     debouncedMergeAndCallback();
-  });
+  }, reportError);
 
   // Refresh every 30 seconds to update estimated levels (even if Firebase data hasn't changed)
   const refreshInterval = setInterval(() => {

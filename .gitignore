@@ -75,5 +75,6 @@ serviceAccountKey.json
 security/tests/node_modules/
 security/tests/package-lock.json
 security/tests/last-predeploy.log
+rtdb-rules-tests/
 firestore-debug.log
 database-debug.log

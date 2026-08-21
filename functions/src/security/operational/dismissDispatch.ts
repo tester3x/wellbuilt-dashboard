@@ -46,6 +46,11 @@ export function evaluateDismissDispatch(input: {
   const family = splitGroupId
     ? [job, ...input.siblings.filter((s) => s.id && s.id !== job.id)]
     : [job];
+  for (const sibling of family) {
+    const siblingCompany = typeof sibling.companyId === 'string' ? sibling.companyId.trim() : '';
+    if (!siblingCompany) return { ok: false, reason: 'sibling_unscoped' };
+    if (siblingCompany !== companyId) return { ok: false, reason: 'sibling_cross_company' };
+  }
   if (family.some((s) => (STARTED_STATUSES as readonly string[]).includes(statusOf(s)))) {
     return { ok: false, reason: 'family_in_progress' };
   }

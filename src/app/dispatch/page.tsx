@@ -3,11 +3,10 @@
 import { useEffect, useState, useMemo, useCallback, Suspense } from 'react';
 import { useRouter, useSearchParams } from 'next/navigation';
 import { useAuth } from '@/contexts/AuthContext';
-import { WellResponse, subscribeToWellStatusesUnified } from '@/lib/wells';
+import { WellResponse, subscribeToWellStatusesUnified, wellResponsesFromCatalog } from '@/lib/wells';
+import { adminGetDashboardCatalog, classifiedReadFailure } from '@/lib/adminDashboardCatalog';
 import { canViewGlobalWellPool, docBelongsToTenant } from '@/lib/tenantScope';
 import { AppHeader } from '@/components/AppHeader';
-import { ref, get, set } from 'firebase/database';
-import { getFirebaseDatabase } from '@/lib/firebase';
 import { getFirestoreDb } from '@/lib/firebase';
 import { AddPullModal } from '@/components/AddPullModal';
 import { collection, addDoc, getDocs, getDoc, setDoc, query, where, orderBy, Timestamp, doc, updateDoc, onSnapshot, deleteDoc } from 'firebase/firestore';
@@ -46,7 +45,7 @@ interface DispatchJob {
   jobType: 'pw' | 'service';
   serviceType?: string;
   packageId?: string;  // Job package ID (e.g. 'water-hauling', 'aggregate')
-  status: 'pending' | 'pending_approval' | 'accepted' | 'in_progress' | 'paused' | 'completed' | 'cancelled' | 'declined';
+  status: 'pending' | 'pending_approval' | 'accepted' | 'in_progress' | 'paused' | 'completed' | 'cancelled' | 'declined' | 'dismissed';
   notes?: string;
   priority: number;
   assignedAt: any;  // Firestore Timestamp
@@ -343,6 +342,7 @@ function DispatchPageInner() {
   const [dispatches, setDispatches] = useState<DispatchJob[]>([]);
   const [dataLoading, setDataLoading] = useState(true);
   const [driversLoading, setDriversLoading] = useState(true);
+  const [readErrors, setReadErrors] = useState<{ drivers?: string; wells?: string; dispatches?: string }>({});
 
   // UI state
   const [search, setSearch] = useState('');
@@ -541,12 +541,34 @@ function DispatchPageInner() {
       setDataLoading(false);
       return;
     }
+    let cancelled = false;
     const unsubscribe = subscribeToWellStatusesUnified((wellData, routeList) => {
+      if (cancelled) return;
       setWells(wellData);
       setRoutes(routeList.filter(r => r !== 'Unrouted'));
+      setReadErrors(prev => ({ ...prev, wells: undefined }));
       setDataLoading(false);
+    }, async (err) => {
+      try {
+        const catalog = await adminGetDashboardCatalog();
+        if (cancelled) return;
+        const snapshot = wellResponsesFromCatalog((catalog.wellConfig || {}) as Record<string, unknown>);
+        setWells(snapshot);
+        setRoutes([...new Set(snapshot.map(w => w.route).filter((r): r is string => !!r && r !== 'Unrouted'))]);
+        setReadErrors(prev => ({ ...prev, wells: classifiedReadFailure('well queue live status', err) }));
+      } catch (catalogErr) {
+        if (cancelled) return;
+        setWells([]);
+        setRoutes([]);
+        setReadErrors(prev => ({ ...prev, wells: classifiedReadFailure('well queue', catalogErr) }));
+      } finally {
+        if (!cancelled) setDataLoading(false);
+      }
     });
-    return unsubscribe;
+    return () => {
+      cancelled = true;
+      unsubscribe();
+    };
   }, [user]);
 
   // Load drivers + disposals
@@ -663,9 +685,10 @@ function DispatchPageInner() {
         jobs.push({ id: d.id, ...d.data() } as DispatchJob);
       });
       setDispatches(jobs.filter(j => docBelongsToTenant(j.companyId, user.companyId)));
+      setReadErrors(prev => ({ ...prev, dispatches: undefined }));
     }, (err) => {
       console.error('Dispatch listener error:', err);
-      // Fallback to one-time fetch
+      setReadErrors(prev => ({ ...prev, dispatches: classifiedReadFailure('dispatch jobs', err) }));
       loadDispatchesData();
     });
     return () => unsub();
@@ -767,13 +790,11 @@ function DispatchPageInner() {
   async function loadDriversData() {
     setDriversLoading(true);
     try {
-      const db = getFirebaseDatabase();
-      const approvedSnap = await get(ref(db, 'drivers/approved'));
+      const catalog = await adminGetDashboardCatalog();
       const approved: ApprovedDriver[] = [];
+      const data = (catalog.approved || {}) as Record<string, any>;
 
-      if (approvedSnap.exists()) {
-        const data = approvedSnap.val();
-        Object.entries(data).forEach(([hash, val]: [string, any]) => {
+      Object.entries(data).forEach(([hash, val]: [string, any]) => {
           // Handle both flat and legacy nested formats
           if (val.displayName) {
             // Flat format
@@ -809,13 +830,13 @@ function DispatchPageInner() {
             }
           }
         });
-      }
 
       // Tenant containment (7/9): scoped users see only their own company's
       // drivers (liquid-gold also owns legacy unstamped records).
       const scoped = approved.filter(d => docBelongsToTenant(d.companyId, user?.companyId));
       scoped.sort((a, b) => a.displayName.localeCompare(b.displayName));
       setDrivers(scoped);
+      setReadErrors(prev => ({ ...prev, drivers: undefined }));
 
       // Fetch shift status for each driver (fire-and-forget — UI updates when ready)
       (async () => {
@@ -855,6 +876,8 @@ function DispatchPageInner() {
       })();
     } catch (err) {
       console.error('Failed to load drivers:', err);
+      setDrivers([]);
+      setReadErrors(prev => ({ ...prev, drivers: classifiedReadFailure('drivers', err) }));
     } finally {
       setDriversLoading(false);
     }
@@ -877,7 +900,7 @@ function DispatchPageInner() {
       setDispatches(jobs.filter(j => docBelongsToTenant(j.companyId, user?.companyId)));
     } catch (err) {
       console.error('Failed to load dispatches:', err);
-      // Collection might not exist yet — that's fine
+      setReadErrors(prev => ({ ...prev, dispatches: classifiedReadFailure('dispatch jobs', err) }));
     }
   }
 
@@ -2090,8 +2113,15 @@ function DispatchPageInner() {
 
           {/* Status message */}
           {message && (
-            <div className={`p-2.5 rounded text-sm mb-3 ${message.startsWith('Error') ? 'bg-red-900/50 text-red-200' : 'bg-blue-900/60 text-blue-200'}`}>
+            <div className={`p-2.5 rounded text-sm mb-3 ${message.startsWith('Error') || message.startsWith('Dismiss failed') ? 'bg-red-900/50 text-red-200' : 'bg-blue-900/60 text-blue-200'}`}>
               {message}
+            </div>
+          )}
+          {(readErrors.dispatches || readErrors.drivers || readErrors.wells) && (
+            <div className="p-2.5 rounded text-sm mb-3 bg-red-900/50 text-red-200 space-y-1">
+              {readErrors.dispatches && <div>{readErrors.dispatches}</div>}
+              {readErrors.drivers && <div>{readErrors.drivers}</div>}
+              {readErrors.wells && <div>{readErrors.wells}</div>}
             </div>
           )}
         </div>
@@ -3020,6 +3050,7 @@ function DispatchPageInner() {
                     assignTransfer={assignTransfer}
                     onEditServiceWork={openEditSwModal}
                     onReassignDeclined={openReassignModal}
+                    onDismissDeclined={dismissDeclinedDispatch}
                   />
                 )}
                 {rightPanelTab === 'completed' && (
@@ -3868,13 +3899,14 @@ function DispatchJobRow({ job, cancelDispatch, compact, onClickServiceWork, onRe
 
 // Driver-centric active dispatch panel — groups ALL jobs by driver
 // Multi-driver SW jobs shown separately at bottom with all crew visible
-function ActiveDispatchPanel({ dispatches, cancelDispatch, drivers, assignTransfer, onEditServiceWork, onReassignDeclined }: {
+function ActiveDispatchPanel({ dispatches, cancelDispatch, drivers, assignTransfer, onEditServiceWork, onReassignDeclined, onDismissDeclined }: {
   dispatches: DispatchJob[];
   cancelDispatch: (id: string) => void;
   drivers?: { key: string; displayName: string; legalName?: string; assignedRoutes?: string[] }[];
   assignTransfer?: (jobId: string, driverHash: string, driverName: string) => void;
   onEditServiceWork?: (job: DispatchJob) => void;
   onReassignDeclined?: (job: DispatchJob) => void;
+  onDismissDeclined?: (jobId: string) => void;
 }) {
   const [expandedDrivers, setExpandedDrivers] = useState<Set<string>>(new Set());
 
@@ -3982,7 +4014,7 @@ function ActiveDispatchPanel({ dispatches, cancelDispatch, drivers, assignTransf
                     className="px-3 py-1 bg-blue-600 hover:bg-blue-500 text-white text-xs font-medium rounded transition-colors"
                   >Reassign</button>
                   <button
-                    onClick={() => job.id && dismissDeclinedDispatch(job.id)}
+                    onClick={() => job.id && onDismissDeclined?.(job.id)}
                     className="px-3 py-1 bg-gray-700 hover:bg-gray-600 text-gray-300 text-xs font-medium rounded transition-colors"
                     title="Accept decline and dismiss"
                   >Dismiss</button>

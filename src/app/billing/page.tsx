@@ -5,8 +5,7 @@ import { useRouter } from 'next/navigation';
 import { useAuth } from '@/contexts/AuthContext';
 import { AppHeader } from '@/components/AppHeader';
 import { loadAllCompanies, updateCompanyFields, type CompanyConfig, type DoeRegion, DOE_REGIONS, STATE_TO_PADD } from '@/lib/companySettings';
-import { ref, get } from 'firebase/database';
-import { getFirebaseDatabase } from '@/lib/firebase';
+import { adminGetDashboardCatalog, classifiedReadFailure } from '@/lib/adminDashboardCatalog';
 import { Timestamp } from 'firebase/firestore';
 import {
   type InvoiceGrouping,
@@ -120,6 +119,9 @@ export default function BillingPage() {
       if (!user.companyId && !selectedCompanyId && list.length > 0) {
         setSelectedCompanyId(list[0].id);
       }
+    }).catch((err) => {
+      setError(classifiedReadFailure('companies', err));
+      setDataLoading(false);
     });
   }, [user]);
 
@@ -128,12 +130,9 @@ export default function BillingPage() {
     if (!user) return;
     (async () => {
       try {
-        const db = getFirebaseDatabase();
-        const snapshot = await get(ref(db, 'drivers/approved'));
-        if (!snapshot.exists()) return;
+        const catalog = await adminGetDashboardCatalog();
         const legalMap: Record<string, string> = {};
-        snapshot.forEach(child => {
-          const data = child.val();
+        Object.values((catalog.approved || {}) as Record<string, any>).forEach((data) => {
           if (data?.displayName) {
             const legal = data.legalName || data.profile?.legalName;
             if (legal) legalMap[data.displayName] = legal;
@@ -142,6 +141,7 @@ export default function BillingPage() {
         setLegalNameMap(legalMap);
       } catch (err) {
         console.error('Failed to load driver names:', err);
+        setError(classifiedReadFailure('driver names', err));
       }
     })();
   }, [user]);
@@ -170,7 +170,7 @@ export default function BillingPage() {
       setBillingRecords(records);
     } catch (err: any) {
       console.error('Failed to load billing data:', err);
-      setError(err?.message || 'Failed to load billing data');
+      setError(classifiedReadFailure('billing invoices', err));
     } finally {
       setDataLoading(false);
     }

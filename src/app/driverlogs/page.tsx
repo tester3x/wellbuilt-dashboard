@@ -5,8 +5,8 @@ import Link from 'next/link';
 import { httpsCallable } from 'firebase/functions';
 import { useAuth } from '@/contexts/AuthContext';
 import { AppHeader } from '@/components/AppHeader';
-import { getFirebaseDatabase, getFirebaseFunctions } from '@/lib/firebase';
-import { ref, get } from 'firebase/database';
+import { getFirebaseFunctions } from '@/lib/firebase';
+import { adminGetDashboardCatalog, classifiedReadFailure } from '@/lib/adminDashboardCatalog';
 import { loadAllCompanies, type CompanyConfig } from '@/lib/companySettings';
 import {
   fetchDriverShifts,
@@ -63,6 +63,7 @@ export default function DriverLogsPage() {
   const [drivers, setDrivers] = useState<ApprovedDriver[]>([]);
   const [driverLogs, setDriverLogs] = useState<DriverDayLog[]>([]);
   const [dataLoading, setDataLoading] = useState(false);
+  const [driversLoading, setDriversLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
 
   // Filters
@@ -103,60 +104,62 @@ export default function DriverLogsPage() {
     if (!user || authLoading) return;
 
     const loadDrivers = async () => {
+      setDriversLoading(true);
       try {
-        const db = getFirebaseDatabase();
-        const approvedSnap = await get(ref(db, 'drivers/approved'));
+        const catalog = await adminGetDashboardCatalog();
         const approved: ApprovedDriver[] = [];
+        const data = (catalog.approved || {}) as Record<string, any>;
 
-        if (approvedSnap.exists()) {
-          const data = approvedSnap.val();
-          Object.entries(data).forEach(([hash, val]: [string, any]) => {
-            if (val.displayName) {
-              // Flat format
-              if (val.active !== false) {
-                // Collect all known names for this driver (top-level, profile, legalName)
-                const names = new Set<string>();
-                names.add(val.displayName);
-                if (val.legalName) names.add(val.legalName.trim());
-                if (val.profile?.displayName) names.add(val.profile.displayName.trim());
-                if (val.profile?.legalName) names.add(val.profile.legalName.trim());
+        Object.entries(data).forEach(([hash, val]: [string, any]) => {
+          if (val.displayName) {
+            // Flat format
+            if (val.active !== false) {
+              // Collect all known names for this driver (top-level, profile, legalName)
+              const names = new Set<string>();
+              names.add(val.displayName);
+              if (val.legalName) names.add(val.legalName.trim());
+              if (val.profile?.displayName) names.add(val.profile.displayName.trim());
+              if (val.profile?.legalName) names.add(val.profile.legalName.trim());
 
-                // Prefer profile displayName or legalName for display
-                const bestName = val.profile?.displayName?.trim()
-                  || val.legalName?.trim()
-                  || val.displayName;
+              // Prefer profile displayName or legalName for display
+              const bestName = val.profile?.displayName?.trim()
+                || val.legalName?.trim()
+                || val.displayName;
 
+              approved.push({
+                key: hash,
+                displayName: bestName,
+                companyId: val.companyId || val.profile?.companyId,
+                companyName: val.companyName || val.profile?.companyName,
+                allNames: [...names],
+              });
+            }
+          } else {
+            // Legacy nested format
+            const deviceKeys = Object.keys(val);
+            if (deviceKeys.length > 0) {
+              const first = val[deviceKeys[0]];
+              if (first.active !== false && first.displayName) {
                 approved.push({
                   key: hash,
-                  displayName: bestName,
-                  companyId: val.companyId || val.profile?.companyId,
-                  companyName: val.companyName || val.profile?.companyName,
-                  allNames: [...names],
+                  displayName: first.displayName,
+                  companyId: first.companyId,
+                  companyName: first.companyName,
+                  allNames: [first.displayName],
                 });
               }
-            } else {
-              // Legacy nested format
-              const deviceKeys = Object.keys(val);
-              if (deviceKeys.length > 0) {
-                const first = val[deviceKeys[0]];
-                if (first.active !== false && first.displayName) {
-                  approved.push({
-                    key: hash,
-                    displayName: first.displayName,
-                    companyId: first.companyId,
-                    companyName: first.companyName,
-                    allNames: [first.displayName],
-                  });
-                }
-              }
             }
-          });
-        }
+          }
+        });
 
         approved.sort((a, b) => a.displayName.localeCompare(b.displayName));
         setDrivers(approved);
       } catch (err) {
         console.error('Failed to load drivers:', err);
+        setDrivers([]);
+        setError(classifiedReadFailure('driver catalog', err));
+      } finally {
+        setDriversLoading(false);
       }
     };
 
@@ -172,7 +175,12 @@ export default function DriverLogsPage() {
   // ── Load logs when date/company/drivers change ─────────────────────────────
   useEffect(() => {
     // Wait for company selection for WB admin
-    if (!user || authLoading || filteredDrivers.length === 0) return;
+    if (!user || authLoading || driversLoading) return;
+    if (filteredDrivers.length === 0) {
+      setDriverLogs([]);
+      setDataLoading(false);
+      return;
+    }
     if (isWbAdmin && !effectiveCompanyId) return;
 
     // Collapse all cards when switching dates/filters
@@ -195,7 +203,7 @@ export default function DriverLogsPage() {
               setError('Invoice index is building — showing shift data only. Refresh in a minute.');
             } else {
               console.error('Failed to load invoices:', err);
-              setError('Failed to load invoice data.');
+              setError(classifiedReadFailure('invoices', err));
             }
             return [] as Awaited<ReturnType<typeof fetchInvoicesForDate>>;
           });
@@ -205,14 +213,14 @@ export default function DriverLogsPage() {
         setDriverLogs(logs);
       } catch (err: any) {
         console.error('Failed to load driver logs:', err);
-        setError(err?.message || 'Failed to load logs');
+        setError(classifiedReadFailure('driver logs', err));
       } finally {
         setDataLoading(false);
       }
     };
 
     loadLogs();
-  }, [user, authLoading, filteredDrivers, selectedDate, effectiveCompanyId]);
+  }, [user, authLoading, driversLoading, filteredDrivers, selectedDate, effectiveCompanyId]);
 
   // ── Filtered logs by driver ────────────────────────────────────────────────
   const visibleLogs = useMemo(() => {
@@ -438,14 +446,16 @@ export default function DriverLogsPage() {
         )}
 
         {/* ── Loading ─────────────────────────────────────────── */}
-        {dataLoading && (
+        {(dataLoading || driversLoading) && (
           <div className="text-center text-gray-400 py-12">Loading driver logs...</div>
         )}
 
         {/* ── No Data ─────────────────────────────────────────── */}
-        {!dataLoading && visibleLogs.length === 0 && (
+        {!dataLoading && !driversLoading && !error && visibleLogs.length === 0 && (
           <div className="text-center text-gray-500 py-12">
-            No driver activity for {selectedDate}
+            {filteredDrivers.length === 0
+              ? 'No drivers in catalog for this company.'
+              : `No driver activity for ${selectedDate}`}
           </div>
         )}
 
