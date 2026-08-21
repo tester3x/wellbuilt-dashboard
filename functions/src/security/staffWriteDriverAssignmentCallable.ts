@@ -25,6 +25,7 @@ const ALLOWED = new Set([
   'assignedWells',
   'mode',
   'expectedAssignmentDigest',
+  'expectedProposedDigest',
 ]);
 
 export const staffWriteDriverAssignment = httpsV2.onCall(
@@ -94,6 +95,7 @@ export const staffWriteDriverAssignment = httpsV2.onCall(
       assignedWells: wellsParsed.values,
     };
     const currentDigest = assignmentDigest(before.assignedRoutes, before.assignedWells);
+    const proposedDigest = assignmentDigest(after.assignedRoutes, after.assignedWells);
     const preview = {
       ok: true as const,
       mode,
@@ -102,6 +104,7 @@ export const staffWriteDriverAssignment = httpsV2.onCall(
       before,
       after,
       currentDigest,
+      proposedDigest,
       changedFields: [
         ...(JSON.stringify(before.assignedRoutes) === JSON.stringify(after.assignedRoutes) ? [] : ['assignedRoutes']),
         ...(JSON.stringify(before.assignedWells) === JSON.stringify(after.assignedWells) ? [] : ['assignedWells']),
@@ -109,18 +112,27 @@ export const staffWriteDriverAssignment = httpsV2.onCall(
     };
     if (mode !== 'apply') return preview;
 
-    const expectedDigest = typeof raw.expectedAssignmentDigest === 'string'
+    const expectedBefore = typeof raw.expectedAssignmentDigest === 'string'
       ? raw.expectedAssignmentDigest
       : '';
-    if (!expectedDigest) {
+    const expectedProposed = typeof raw.expectedProposedDigest === 'string'
+      ? raw.expectedProposedDigest
+      : '';
+    if (!expectedBefore) {
       throw new httpsV2.HttpsError('failed-precondition', 'expected_digest_required');
+    }
+    if (!expectedProposed) {
+      throw new httpsV2.HttpsError('failed-precondition', 'expected_proposed_digest_required');
     }
 
     const tx = await rtdb.ref(`drivers/profiles/${driverId}`).transaction((current) => {
       const rec = current && typeof current === 'object' ? current as Record<string, unknown> : null;
       const gate = evaluateAssignmentTransaction({
         profile: rec,
-        expectedDigest,
+        expectedBeforeDigest: expectedBefore,
+        expectedProposedDigest: expectedProposed,
+        proposedRoutes: after.assignedRoutes,
+        proposedWells: after.assignedWells,
         callerCompanyId: caller.companyId,
         isPlatformAdmin: caller.isPlatformAdmin,
       });

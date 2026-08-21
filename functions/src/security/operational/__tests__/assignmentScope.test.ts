@@ -50,17 +50,33 @@ describe('catalog validation', () => {
 describe('transactional stale preview', () => {
   it('rejects a digest that does not match canonical before-state', () => {
     const digest = assignmentDigest(['Gabriels'], []);
+    const proposed = assignmentDigest(['Watford'], []);
     expect(evaluateAssignmentTransaction({
       profile: DRIVER_ID_PROFILE,
-      expectedDigest: digest,
+      expectedBeforeDigest: digest,
+      expectedProposedDigest: proposed,
+      proposedRoutes: ['Watford'],
+      proposedWells: [],
       callerCompanyId: 'liquid-gold',
       isPlatformAdmin: false,
     }).ok).toBe(true);
     expect(evaluateAssignmentTransaction({
       profile: DRIVER_ID_PROFILE,
-      expectedDigest: assignmentDigest(null, null),
+      expectedBeforeDigest: assignmentDigest(null, null),
+      expectedProposedDigest: proposed,
+      proposedRoutes: ['Watford'],
+      proposedWells: [],
       callerCompanyId: 'liquid-gold',
       isPlatformAdmin: false,
     })).toEqual({ ok: false, reason: 'stale_preview' });
+    expect(evaluateAssignmentTransaction({
+      profile: DRIVER_ID_PROFILE,
+      expectedBeforeDigest: digest,
+      expectedProposedDigest: assignmentDigest(['Gabriels'], []),
+      proposedRoutes: ['Watford'],
+      proposedWells: [],
+      callerCompanyId: 'liquid-gold',
+      isPlatformAdmin: false,
+    })).toEqual({ ok: false, reason: 'proposed_digest_mismatch' });
   });
 });

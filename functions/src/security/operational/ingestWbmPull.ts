@@ -1,6 +1,6 @@
 /**
- * Dedicated canonical WB-M pull ingest. Does not alter ingestDriverPacket
- * (WB-T still uses that shared callable).
+ * Dedicated canonical WB-M pull ingest. Does not alter ingestDriverPacket.
+ * Allowlisted packet only. RTDB transaction for idempotency.
  */
 import * as httpsV2 from 'firebase-functions/v2/https';
 import * as admin from 'firebase-admin';
@@ -11,7 +11,11 @@ import {
 } from '../canonicalDriverAuthority';
 import { writeSecurityAudit } from '../audit';
 import { checkRateLimit, hashIp } from '../rateLimit';
-import { evaluateWbmPull, wbmPullIdempotencyKey } from './wbmPullAuthorize';
+import {
+  decideWbmPullTransaction,
+  evaluateWbmPull,
+  wbmPullStorageKey,
+} from './wbmPullAuthorize';
 
 export const ingestWbmPull = httpsV2.onCall(
   { timeoutSeconds: 30, memory: '256MiB', enforceAppCheck: false },
@@ -46,11 +50,15 @@ export const ingestWbmPull = httpsV2.onCall(
       wellConfig,
     });
     if (!decided.ok) {
+      const arg = new Set([
+        'packet_required', 'packet_too_large', 'unsupported_request_type', 'unexpected_field',
+        'unexpected_object', 'missing_wellName', 'invalid_wellName', 'missing_dateTimeUTC',
+        'invalid_dateTimeUTC', 'invalid_dateTime', 'invalid_timezone', 'invalid_tankLevelFeet',
+        'invalid_bblsTaken', 'invalid_wellDown', 'invalid_wellDownIsAuthoritative',
+        'invalid_predictedLevelInches', 'invalid_packetId', 'missing_idempotency_key',
+      ]);
       throw new httpsV2.HttpsError(
-        decided.reason.startsWith('missing_') || decided.reason === 'packet_required'
-          || decided.reason === 'packet_too_large' || decided.reason === 'unsupported_request_type'
-          ? 'invalid-argument'
-          : 'failed-precondition',
+        arg.has(decided.reason) ? 'invalid-argument' : 'failed-precondition',
         decided.reason,
       );
     }
@@ -68,26 +76,50 @@ export const ingestWbmPull = httpsV2.onCall(
       throw new httpsV2.HttpsError('resource-exhausted', 'Packet rate limit');
     }
 
-    const packet = { ...(data.packet as Record<string, unknown>) };
-    packet.driverId = driver.driverId;
-    if (driver.displayName) packet.driverName = driver.displayName;
-    packet.companyId = authority.companyId;
-    packet.ingestedAt = Date.now();
-    packet.ingestedBy = driver.uid;
-    packet.authSource = driver.authSource;
-    packet.requestType = 'pull';
-    delete (packet as { isAdmin?: unknown }).isAdmin;
-    delete (packet as { roles?: unknown }).roles;
-    delete (packet as { tier?: unknown }).tier;
+    const stamped: Record<string, unknown> = {
+      ...decided.payload,
+      driverId: driver.driverId,
+      driverName: driver.displayName || null,
+      companyId: authority.companyId,
+      ingestedAt: Date.now(),
+      ingestedBy: driver.uid,
+      authSource: driver.authSource,
+      payloadDigest: decided.payloadDigest,
+    };
 
-    const key = wbmPullIdempotencyKey(driver.driverId, decided.idempotencyKey);
+    const key = wbmPullStorageKey(driver.driverId, decided.idempotencyKey);
     const ref = admin.database().ref(`packets/incoming/${key}`);
-    const existing = await ref.once('value');
-    if (existing.exists()) {
-      const prev = existing.val() as Record<string, unknown>;
-      if (prev.driverId && prev.driverId !== driver.driverId) {
-        throw new httpsV2.HttpsError('failed-precondition', 'idempotency_cross_driver');
+    const box: { outcome: 'write' | 'duplicate' | 'abort'; abortReason: string } = {
+      outcome: 'write',
+      abortReason: 'ingest_conflict',
+    };
+    const tx = await ref.transaction((current) => {
+      const existing = current && typeof current === 'object'
+        ? current as Record<string, unknown>
+        : null;
+      const gate = decideWbmPullTransaction({
+        existing,
+        driverId: driver.driverId,
+        payloadDigest: decided.payloadDigest,
+      });
+      if (gate.action === 'write') {
+        box.outcome = 'write';
+        return stamped;
       }
+      if (gate.action === 'duplicate') {
+        box.outcome = 'duplicate';
+        return current;
+      }
+      box.outcome = 'abort';
+      box.abortReason = gate.reason;
+      return;
+    });
+
+    if (!tx.committed || box.outcome === 'abort') {
+      throw new httpsV2.HttpsError('failed-precondition', box.abortReason);
+    }
+
+    if (box.outcome === 'duplicate') {
       await writeSecurityAudit({
         action: 'ingestWbmPull_idempotent',
         actorUid: driver.uid,
@@ -97,7 +129,6 @@ export const ingestWbmPull = httpsV2.onCall(
       return { ok: true, key, duplicate: true };
     }
 
-    await ref.set(packet);
     await writeSecurityAudit({
       action: 'ingestWbmPull',
       actorUid: driver.uid,

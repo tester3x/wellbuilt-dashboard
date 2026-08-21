@@ -21,6 +21,10 @@ import {
   PASSCODE_GUIDANCE,
 } from '@/lib/secureLoginProvisioning';
 import { getRoleLabel } from '@/lib/auth';
+import {
+  applyEnabled,
+  type BoundAssignmentPreview,
+} from '@/lib/wbmAssignmentPreview';
 
 interface AssignedCustomer {
   name: string;
@@ -224,11 +228,7 @@ export function DriversTab({ scopeCompanyId, isWbAdmin = false }: DriversTabProp
   const [selectedRoutes, setSelectedRoutes] = useState<string[]>([]);
   const [selectedWells, setSelectedWells] = useState<string[]>([]);
   const [availableRoutes, setAvailableRoutes] = useState<string[]>([]);
-  const [assignmentPreview, setAssignmentPreview] = useState<{
-    currentDigest: string;
-    before: { assignedRoutes: unknown; assignedWells: unknown };
-    after: { assignedRoutes: string[]; assignedWells: string[] };
-  } | null>(null);
+  const [assignmentPreview, setAssignmentPreview] = useState<BoundAssignmentPreview | null>(null);
   const [canonicalDrivers, setCanonicalDrivers] = useState<CanonicalWbmDriver[]>([]);
 
   // Combined approval modal (forces company + customers + route on approve)
@@ -528,13 +528,19 @@ export function DriversTab({ scopeCompanyId, isWbAdmin = false }: DriversTabProp
         assignedRoutes: selectedRoutes,
         assignedWells: selectedWells,
         mode,
-        expectedAssignmentDigest: mode === 'apply' ? assignmentPreview?.currentDigest : undefined,
+        expectedAssignmentDigest: mode === 'apply' ? assignmentPreview?.beforeDigest : undefined,
+        expectedProposedDigest: mode === 'apply' ? assignmentPreview?.proposedDigest : undefined,
       });
       if (mode === 'dry-run') {
         setAssignmentPreview({
-          currentDigest: result.currentDigest,
+          driverId: result.driverId,
+          companyId: result.companyId,
+          beforeDigest: result.currentDigest,
+          proposedDigest: result.proposedDigest,
+          beforeRevision: result.before.assignmentRevision ?? null,
+          assignedRoutes: result.after.assignedRoutes,
+          assignedWells: result.after.assignedWells,
           before: { assignedRoutes: result.before.assignedRoutes, assignedWells: result.before.assignedWells },
-          after: result.after,
         });
         setMessage(`Preview ready for canonical ${result.driverId}. No write performed.`);
         return;
@@ -2197,9 +2203,10 @@ export function DriversTab({ scopeCompanyId, isWbAdmin = false }: DriversTabProp
         <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50">
           <div className="bg-gray-800 rounded-lg p-6 max-w-md w-full mx-4">
             <h3 className="text-white font-medium mb-1">Assign WB-M Routes</h3>
-            <p className="text-gray-400 text-sm mb-4">
-              Well-scope routes for <span className="text-white">{routeTarget.displayName}</span> (not WB-T job assignment).
+            <p className="text-gray-400 text-sm mb-1">
+              Well-scope routes for <span className="text-white">{routeTarget.displayName}</span>
             </p>
+            <p className="text-gray-500 text-xs font-mono mb-4">{routeTarget.driverId}</p>
 
             {availableRoutes.length === 0 ? (
               <p className="text-yellow-400 text-sm">No routes found in well_config.</p>
@@ -2211,6 +2218,7 @@ export function DriversTab({ scopeCompanyId, isWbAdmin = false }: DriversTabProp
                       type="checkbox"
                       checked={selectedRoutes.includes(route)}
                       onChange={(e) => {
+                        setAssignmentPreview(null);
                         if (e.target.checked) {
                           setSelectedRoutes([...selectedRoutes, route]);
                         } else {
@@ -2227,7 +2235,15 @@ export function DriversTab({ scopeCompanyId, isWbAdmin = false }: DriversTabProp
 
             {assignmentPreview && (
               <pre className="mt-3 text-xs text-gray-300 bg-gray-900 rounded p-2 overflow-auto max-h-32">
-                {JSON.stringify({ before: assignmentPreview.before, after: assignmentPreview.after }, null, 2)}
+                {JSON.stringify({
+                  driverId: assignmentPreview.driverId,
+                  companyId: assignmentPreview.companyId,
+                  before: assignmentPreview.before,
+                  after: {
+                    assignedRoutes: assignmentPreview.assignedRoutes,
+                    assignedWells: assignmentPreview.assignedWells,
+                  },
+                }, null, 2)}
               </pre>
             )}
             <div className="flex gap-2 mt-4">
@@ -2239,7 +2255,7 @@ export function DriversTab({ scopeCompanyId, isWbAdmin = false }: DriversTabProp
               </button>
               <button
                 onClick={() => assignDriverRoutes('apply')}
-                disabled={!assignmentPreview}
+                disabled={!applyEnabled(assignmentPreview, selectedRoutes, selectedWells)}
                 className="flex-1 px-4 py-2 bg-blue-600 hover:bg-blue-500 text-white rounded disabled:opacity-30"
               >
                 Apply canonical

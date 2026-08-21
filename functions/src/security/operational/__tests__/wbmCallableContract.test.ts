@@ -17,6 +17,7 @@ describe('WB-M callable export / contract matrix', () => {
 
   it('exports getDriverWellConfig, ingestDriverPacket, and staffWriteDriverAssignment', () => {
     expect(index).toMatch(/getDriverWellConfig,/);
+    expect(index).toMatch(/bootstrapWbmSession,/);
     expect(index).toMatch(/ingestDriverPacket,/);
     expect(index).toMatch(/ingestWbmPull,/);
     expect(index).toMatch(/staffWriteDriverAssignment,/);
@@ -29,6 +30,7 @@ describe('WB-M callable export / contract matrix', () => {
     expect(index).not.toMatch(/submitFieldCommand/);
     expect(index).not.toMatch(/getFieldCommandStatus/);
     expect(index).not.toMatch(/bootstrapDriverSession/);
+    expect(index).not.toMatch(/staffProvisionCanonicalWbmDriver/);
     expect(securityIndex).not.toMatch(/submitFieldCommand/);
     expect(securityIndex).not.toMatch(/getFieldCommandStatus/);
     expect(securityIndex).not.toMatch(/bootstrapDriverSession/);
@@ -45,9 +47,9 @@ describe('WB-M callable export / contract matrix', () => {
   it('getDriverWellConfig uses claims + canonical authority, never drivers/approved', () => {
     expect(wellCfg).toMatch(/requireSecureDriver\(request, \{ allowLegacyHash: false \}\)/);
     expect(wellCfg).toMatch(/loadCanonicalDriverAuthority/);
-    expect(wellCfg).toMatch(/evaluateWbmWellScope/);
+    expect(wellCfg).toMatch(/buildWbmBootstrapSnapshot/);
     expect(wellCfg).not.toMatch(/drivers\/approved/);
-    expect(wellCfg).toMatch(/HttpsError\('failed-precondition', scope\.reason/);
+    expect(wellCfg).toMatch(/HttpsError\('failed-precondition', snap\.eligibilityReason/);
   });
 
   it('Dashboard route editing cannot write a legacy row while leaving canonical stale', () => {
@@ -58,6 +60,8 @@ describe('WB-M callable export / contract matrix', () => {
     expect(body).toMatch(/staffWriteDriverAssignment/);
     expect(body).toMatch(/dry-run/);
     expect(body).toMatch(/expectedAssignmentDigest/);
+    expect(body).toMatch(/expectedProposedDigest/);
+    expect(driversTab).toMatch(/applyEnabled\(/);
     expect(body).not.toMatch(/mirrorLegacy/);
     expect(body).not.toMatch(/update\(ref\(/);
     expect(body).not.toMatch(/drivers\/approved\/\$\{/);

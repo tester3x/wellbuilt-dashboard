@@ -27,7 +27,6 @@ export {
 export { dismissDispatch } from './dismissDispatchCallable';
 export { staffWriteDispatch } from './staffWriteDispatchCallable';
 export { staffWriteDriverAssignment } from './staffWriteDriverAssignmentCallable';
-export { staffProvisionCanonicalWbmDriver } from './staffProvisionCanonicalWbmDriverCallable';
 
 export {
   ingestDriverPacket,
@@ -42,6 +41,7 @@ export {
   signalDriverLogout,
   getDriverReferenceBundle,
   getDriverWellConfig,
+  bootstrapWbmSession,
   requestStorageUploadPath,
   upsertDriverInvoice,
   upsertDriverDispatch,

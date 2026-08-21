@@ -1,19 +1,69 @@
 /**
- * Canonical WB-M pull authorization. Catalog filtering is not enough —
- * ingest must refuse out-of-scope and cross-company wells.
+ * Canonical WB-M pull authorization and strict packet projection.
+ * Catalog filtering is not authorization.
  */
+import { createHash } from 'crypto';
 import {
   evaluateWbmWellScope,
   wellBelongsToDriverCompany,
   wellMatchesWbmScope,
 } from './wbmWellScope';
 
-const PULL_REQUIRED_STRINGS = ['wellName', 'dateTimeUTC'] as const;
-const MAX_PACKET_BYTES = 200_000;
+export const MAX_PACKET_BYTES = 200_000;
+export const PULL_ALLOWLIST = [
+  'requestType',
+  'wellName',
+  'dateTimeUTC',
+  'dateTime',
+  'timezone',
+  'tankLevelFeet',
+  'bblsTaken',
+  'wellDown',
+  'wellDownIsAuthoritative',
+  'predictedLevelInches',
+  'packetId',
+  'idempotencyKey',
+] as const;
 
-export type WbmPullDecision =
-  | { ok: true; wellName: string; idempotencyKey: string }
-  | { ok: false; reason: string };
+const ALLOWED = new Set<string>(PULL_ALLOWLIST);
+
+export type WbmPullOk = {
+  ok: true;
+  wellName: string;
+  idempotencyKey: string;
+  payload: Record<string, unknown>;
+  payloadDigest: string;
+};
+
+export type WbmPullDecision = WbmPullOk | { ok: false; reason: string };
+
+function utf8Bytes(s: string): number {
+  return Buffer.byteLength(s, 'utf8');
+}
+
+function boundedString(v: unknown, field: string, min: number, max: number):
+  { ok: true; value: string } | { ok: false; reason: string } {
+  if (typeof v !== 'string') return { ok: false, reason: `missing_${field}` };
+  const value = v.trim();
+  if (value.length < min || value.length > max) return { ok: false, reason: `invalid_${field}` };
+  return { ok: true, value };
+}
+
+export function sha256Hex(s: string): string {
+  return createHash('sha256').update(s, 'utf8').digest('hex');
+}
+
+export function canonicalPayloadDigest(payload: Record<string, unknown>): string {
+  const keys = Object.keys(payload).sort();
+  return sha256Hex(JSON.stringify(keys.map((k) => [k, payload[k]])));
+}
+
+/** Full driverId + digest of the client key. Not a 12-char prefix. */
+export function wbmPullStorageKey(driverId: string, clientIdempotencyKey: string): string {
+  const id = driverId.replace(/[.#$\[\]/]/g, '_');
+  const digest = sha256Hex(clientIdempotencyKey).slice(0, 40);
+  return `wbm_${id}_${digest}`;
+}
 
 export function evaluateWbmPull(input: {
   packet: unknown;
@@ -26,31 +76,67 @@ export function evaluateWbmPull(input: {
     return { ok: false, reason: 'packet_required' };
   }
   const packet = input.packet as Record<string, unknown>;
-  const raw = JSON.stringify(packet);
-  if (raw.length > MAX_PACKET_BYTES) return { ok: false, reason: 'packet_too_large' };
+  if (utf8Bytes(JSON.stringify(packet)) > MAX_PACKET_BYTES) {
+    return { ok: false, reason: 'packet_too_large' };
+  }
 
-  const requestType = typeof packet.requestType === 'string' ? packet.requestType : '';
-  if (requestType !== 'pull') return { ok: false, reason: 'unsupported_request_type' };
+  for (const key of Object.keys(packet)) {
+    if (!ALLOWED.has(key)) return { ok: false, reason: 'unexpected_field' };
+    const v = packet[key];
+    if (v !== null && typeof v === 'object') return { ok: false, reason: 'unexpected_object' };
+  }
 
-  for (const field of PULL_REQUIRED_STRINGS) {
-    if (typeof packet[field] !== 'string' || !(packet[field] as string).trim()) {
-      return { ok: false, reason: `missing_${field}` };
+  if (packet.requestType !== 'pull') return { ok: false, reason: 'unsupported_request_type' };
+
+  const wellName = boundedString(packet.wellName, 'wellName', 1, 120);
+  if (!wellName.ok) return wellName;
+  const dateTimeUTC = boundedString(packet.dateTimeUTC, 'dateTimeUTC', 10, 40);
+  if (!dateTimeUTC.ok) return dateTimeUTC;
+  const parsed = Date.parse(dateTimeUTC.value);
+  if (!Number.isFinite(parsed)) return { ok: false, reason: 'invalid_dateTimeUTC' };
+  const year = new Date(parsed).getUTCFullYear();
+  if (year < 2020 || year > 2036) return { ok: false, reason: 'invalid_dateTimeUTC' };
+
+  if (packet.dateTime !== undefined) {
+    const d = boundedString(packet.dateTime, 'dateTime', 1, 64);
+    if (!d.ok) return d;
+  }
+  if (packet.timezone !== undefined) {
+    const tz = boundedString(packet.timezone, 'timezone', 1, 64);
+    if (!tz.ok) return tz;
+  }
+
+  if (typeof packet.tankLevelFeet !== 'number' || !Number.isFinite(packet.tankLevelFeet)
+    || packet.tankLevelFeet < 0 || packet.tankLevelFeet > 40) {
+    return { ok: false, reason: 'invalid_tankLevelFeet' };
+  }
+  if (typeof packet.bblsTaken !== 'number' || !Number.isFinite(packet.bblsTaken)
+    || packet.bblsTaken < 0 || packet.bblsTaken > 20_000) {
+    return { ok: false, reason: 'invalid_bblsTaken' };
+  }
+  if (packet.wellDown !== undefined && typeof packet.wellDown !== 'boolean') {
+    return { ok: false, reason: 'invalid_wellDown' };
+  }
+  if (packet.wellDownIsAuthoritative !== undefined && typeof packet.wellDownIsAuthoritative !== 'boolean') {
+    return { ok: false, reason: 'invalid_wellDownIsAuthoritative' };
+  }
+  if (packet.predictedLevelInches !== undefined) {
+    if (typeof packet.predictedLevelInches !== 'number' || !Number.isFinite(packet.predictedLevelInches)
+      || packet.predictedLevelInches < 0 || packet.predictedLevelInches > 480) {
+      return { ok: false, reason: 'invalid_predictedLevelInches' };
     }
   }
-  if (typeof packet.tankLevelFeet !== 'number' || !Number.isFinite(packet.tankLevelFeet)) {
-    return { ok: false, reason: 'missing_tankLevelFeet' };
+  if (packet.packetId !== undefined) {
+    const p = boundedString(packet.packetId, 'packetId', 8, 128);
+    if (!p.ok) return p;
   }
-  if (typeof packet.bblsTaken !== 'number' || !Number.isFinite(packet.bblsTaken)) {
-    return { ok: false, reason: 'missing_bblsTaken' };
-  }
-  const idempotencyKey = typeof packet.idempotencyKey === 'string' ? packet.idempotencyKey.trim() : '';
-  if (idempotencyKey.length < 8) return { ok: false, reason: 'missing_idempotency_key' };
+  const idem = boundedString(packet.idempotencyKey, 'idempotencyKey', 8, 128);
+  if (!idem.ok) return { ok: false, reason: 'missing_idempotency_key' };
 
-  const wellName = (packet.wellName as string).trim();
   const scope = evaluateWbmWellScope(input.assignedRoutes, input.assignedWells);
   if (!scope.ok) return { ok: false, reason: scope.reason };
 
-  const wellRaw = input.wellConfig[wellName];
+  const wellRaw = input.wellConfig[wellName.value];
   if (wellRaw === undefined) return { ok: false, reason: 'well_not_found' };
   const well = wellRaw && typeof wellRaw === 'object' && !Array.isArray(wellRaw)
     ? wellRaw as Record<string, unknown>
@@ -58,14 +144,54 @@ export function evaluateWbmPull(input: {
   if (!wellBelongsToDriverCompany(well, input.companyId)) {
     return { ok: false, reason: 'cross_company_well' };
   }
-  if (!wellMatchesWbmScope(wellName, well, scope)) {
+  if (!wellMatchesWbmScope(wellName.value, well, scope)) {
     return { ok: false, reason: 'well_out_of_scope' };
   }
-  return { ok: true, wellName, idempotencyKey };
+
+  const payload: Record<string, unknown> = {
+    requestType: 'pull',
+    wellName: wellName.value,
+    dateTimeUTC: dateTimeUTC.value,
+    tankLevelFeet: packet.tankLevelFeet,
+    bblsTaken: packet.bblsTaken,
+    idempotencyKey: idem.value,
+  };
+  if (typeof packet.dateTime === 'string') payload.dateTime = packet.dateTime.trim();
+  if (typeof packet.timezone === 'string') payload.timezone = packet.timezone.trim();
+  if (typeof packet.wellDown === 'boolean') payload.wellDown = packet.wellDown;
+  if (typeof packet.wellDownIsAuthoritative === 'boolean') {
+    payload.wellDownIsAuthoritative = packet.wellDownIsAuthoritative;
+  }
+  if (typeof packet.predictedLevelInches === 'number') {
+    payload.predictedLevelInches = packet.predictedLevelInches;
+  }
+  if (typeof packet.packetId === 'string') payload.packetId = packet.packetId.trim();
+
+  return {
+    ok: true,
+    wellName: wellName.value,
+    idempotencyKey: idem.value,
+    payload,
+    payloadDigest: canonicalPayloadDigest(payload),
+  };
 }
 
-/** Driver-scoped so Driver B cannot collide with Driver A's idempotency key. */
-export function wbmPullIdempotencyKey(driverId: string, idempotencyKey: string): string {
-  const safe = idempotencyKey.replace(/[.#$\[\]/]/g, '_').slice(0, 80);
-  return `wbm_${driverId.slice(0, 12)}_${safe}`;
+export type WbmPullTxDecision =
+  | { action: 'write' }
+  | { action: 'duplicate' }
+  | { action: 'abort'; reason: 'idempotency_cross_driver' | 'idempotency_payload_conflict' };
+
+export function decideWbmPullTransaction(input: {
+  existing: Record<string, unknown> | null;
+  driverId: string;
+  payloadDigest: string;
+}): WbmPullTxDecision {
+  if (!input.existing) return { action: 'write' };
+  if (input.existing.driverId !== input.driverId) {
+    return { action: 'abort', reason: 'idempotency_cross_driver' };
+  }
+  if (input.existing.payloadDigest === input.payloadDigest) {
+    return { action: 'duplicate' };
+  }
+  return { action: 'abort', reason: 'idempotency_payload_conflict' };
 }

@@ -4760,7 +4760,6 @@ export {
   dismissDispatch,
   staffWriteDispatch,
   staffWriteDriverAssignment,
-  staffProvisionCanonicalWbmDriver,
   // Operational path hardening
   ingestDriverPacket,
   ingestWbmPull,
@@ -4774,6 +4773,7 @@ export {
   signalDriverLogout,
   getDriverReferenceBundle,
   getDriverWellConfig,
+  bootstrapWbmSession,
   requestStorageUploadPath,
   upsertDriverInvoice,
   upsertDriverDispatch,

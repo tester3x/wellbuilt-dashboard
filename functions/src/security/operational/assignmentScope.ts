@@ -80,7 +80,10 @@ export type AssignmentApplyDecision =
 
 export function evaluateAssignmentTransaction(input: {
   profile: Record<string, unknown> | null;
-  expectedDigest: string;
+  expectedBeforeDigest: string;
+  expectedProposedDigest: string;
+  proposedRoutes: string[];
+  proposedWells: string[];
   callerCompanyId?: string;
   isPlatformAdmin: boolean;
 }): AssignmentApplyDecision {
@@ -94,7 +97,9 @@ export function evaluateAssignmentTransaction(input: {
     }
   }
   const current = assignmentDigest(input.profile.assignedRoutes, input.profile.assignedWells);
-  if (current !== input.expectedDigest) return { ok: false, reason: 'stale_preview' };
+  if (current !== input.expectedBeforeDigest) return { ok: false, reason: 'stale_preview' };
+  const proposed = assignmentDigest(input.proposedRoutes, input.proposedWells);
+  if (proposed !== input.expectedProposedDigest) return { ok: false, reason: 'proposed_digest_mismatch' };
   const rev = Number(input.profile.assignmentRevision);
   const nextRevision = Number.isFinite(rev) && rev >= 0 ? Math.floor(rev) + 1 : 1;
   return { ok: true, nextRevision };

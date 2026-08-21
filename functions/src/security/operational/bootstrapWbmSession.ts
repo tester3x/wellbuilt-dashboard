@@ -1,6 +1,5 @@
 /**
- * Authenticated WB-M well catalog. Claims + canonical authority only.
- * Returns allowlisted wells inside the driver's Dashboard Routes scope.
+ * Authenticated canonical WB-M bootstrap. Claims + canonical profile only.
  */
 import * as httpsV2 from 'firebase-functions/v2/https';
 import * as admin from 'firebase-admin';
@@ -11,7 +10,7 @@ import {
 } from '../canonicalDriverAuthority';
 import { buildWbmBootstrapSnapshot } from './wbmBootstrap';
 
-export const getDriverWellConfig = httpsV2.onCall(
+export const bootstrapWbmSession = httpsV2.onCall(
   { timeoutSeconds: 30, memory: '256MiB', enforceAppCheck: false },
   async (request) => {
     const driver = await requireSecureDriver(request, { allowLegacyHash: false });
@@ -33,17 +32,12 @@ export const getDriverWellConfig = httpsV2.onCall(
     const profile = (profSnap.val() || {}) as Record<string, unknown>;
     const wellSnap = await admin.database().ref('well_config').once('value');
     const wellConfig = wellSnap.exists() ? (wellSnap.val() as Record<string, unknown>) : {};
-    const snap = buildWbmBootstrapSnapshot({
+
+    return buildWbmBootstrapSnapshot({
       driverId: driver.driverId,
       companyId: authority.companyId,
       profile,
       wellConfig,
     });
-    if (snap.eligibilityStatus !== 'eligible') {
-      throw new httpsV2.HttpsError('failed-precondition', snap.eligibilityReason, {
-        reason: snap.eligibilityReason,
-      });
-    }
-    return snap;
   },
 );

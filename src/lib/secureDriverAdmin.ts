@@ -42,6 +42,7 @@ export async function staffWriteDriverAssignment(params: {
   assignedWells: string[];
   mode: 'dry-run' | 'apply';
   expectedAssignmentDigest?: string;
+  expectedProposedDigest?: string;
 }) {
   const fn = httpsCallable(getFirebaseFunctions(), 'staffWriteDriverAssignment');
   const res = await fn(params);
@@ -53,6 +54,7 @@ export async function staffWriteDriverAssignment(params: {
     before: { assignedRoutes: unknown; assignedWells: unknown; assignmentRevision?: unknown };
     after: { assignedRoutes: string[]; assignedWells: string[] };
     currentDigest: string;
+    proposedDigest: string;
     changedFields: string[];
     assignmentRevision?: unknown;
   };
