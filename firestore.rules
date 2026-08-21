@@ -1,396 +1,278 @@
 rules_version = '2';
 service cloud.firestore {
   match /databases/{database}/documents {
-    // Well data collections — read-only from clients
-    match /operators/{docId} {
-      allow read: if true;
-      allow write: if false;
+    function signedIn() { return request.auth != null; }
+    function isDriver() { return signedIn() && request.auth.token.kind == 'driver'; }
+    function driverId() { return request.auth.token.driverId; }
+    function companyId() { return request.auth.token.companyId; }
+    // Platform admin: wellbuiltAdmin claim AND enabled platform_admins/{uid}.
+    // Company staff: enabled Firestore staff/{uid} (role + optional companyId).
+    // token.role is not used. RTDB users/{uid}/role is not readable here.
+    function isPlatformAdmin() {
+      return signedIn()
+        && request.auth.token.wellbuiltAdmin == true
+        && exists(/databases/$(database)/documents/platform_admins/$(request.auth.uid))
+        && get(/databases/$(database)/documents/platform_admins/$(request.auth.uid)).data.enabled == true;
     }
-    match /wells/{docId} {
-      allow read: if true;
-      allow write: if false;
+    function staffDoc() {
+      return get(/databases/$(database)/documents/staff/$(request.auth.uid)).data;
     }
-    match /wells_inactive/{docId} {
-      allow read: if true;
-      allow write: if false;
+    function isCompanyStaff() {
+      return signedIn()
+        && exists(/databases/$(database)/documents/staff/$(request.auth.uid))
+        && staffDoc().enabled == true
+        && staffDoc().role in ['admin', 'it', 'manager', 'dispatch'];
     }
-    match /disposals/{docId} {
-      allow read: if true;
-      allow write: if false;
+    function staffSameCompany(data) {
+      return isCompanyStaff()
+        && staffDoc().companyId is string
+        && staffDoc().companyId.size() > 0
+        && 'companyId' in data
+        && staffDoc().companyId == data.companyId;
     }
-    match /customers/{docId} {
-      allow read: if true;
-      allow write: if false;
+    function isDashboard() { return isPlatformAdmin() || isCompanyStaff(); }
+    function isDashboardScoped(data) {
+      return isPlatformAdmin() || staffSameCompany(data);
+    }
+    function isDashboardCompanyDoc(docId) {
+      return isPlatformAdmin()
+        || (isCompanyStaff() && staffDoc().companyId is string && staffDoc().companyId == docId);
+    }
+    function immutableDriverCompany() {
+      return request.resource.data.driverId == resource.data.driverId
+        && request.resource.data.companyId == resource.data.companyId;
+    }
+    function sameCompany(data) {
+      return companyId() != null
+        && 'companyId' in data
+        && data.companyId == companyId();
+    }
+    function ownsDriver(data) {
+      return isDriver()
+        && 'driverId' in data
+        && data.driverId == driverId()
+        && sameCompany(data);
+    }
+    function tenantRead(data) {
+      return isPlatformAdmin()
+        || (isCompanyStaff() && staffSameCompany(data))
+        || ownsDriver(data);
+    }
+    function threadMember(threadId) {
+      return isDriver()
+        && exists(/databases/$(database)/documents/chat_threads/$(threadId))
+        && get(/databases/$(database)/documents/chat_threads/$(threadId)).data.companyId == companyId()
+        && driverId() in get(/databases/$(database)/documents/chat_threads/$(threadId)).data.participantIds;
     }
 
-    // Operator aliases — read-only from clients (admin writes via Admin SDK)
-    match /operatorAliases/{docId} {
-      allow read: if true;
-      allow write: if false;
-    }
-
-    // Custom locations — driver-typed names saved on submit, readable for autocomplete
-    match /customLocations/{docId} {
-      allow read: if true;
-      allow create, update: if true;
-      allow delete: if false;
-    }
-
-    // Unmatched entries — clients can create, nobody can read (admin reads via Admin SDK)
-    match /unmatchedLocations/{docId} {
-      allow create: if true;
-      allow read, update, delete: if false;
-    }
-    match /unmatchedCompanies/{docId} {
-      allow create: if true;
-      allow read, update, delete: if false;
-    }
-
-    // ── vc51.9A6: protected contract/admin data ───────────────────────
-    // Pinned 1:1 against firestore-rules-tests/protected-company-keys.mjs
-    // AND functions/src/admin/adminHandlers.ts by test-rulesSourcePins.mjs
-    // — change all together or the pin fails.
-    //
-    // CANONICAL active schema (vc51.9A6-B, Mike-approved): the single
-    // nested root `wellbuiltContract`, written only by the Admin SDK
-    // callables. Every OTHER name below is the RESERVED Part A flattened
-    // proposal — obsolete and unusable, denied permanently so a second
-    // active schema shape can never appear.
-    function protectedCompanyKeys() {
-      return ['wellbuiltContract',
-              // reserved/deprecated (never valid as an active schema):
-              'contractVersion', 'planId', 'entitlement',
-              'entitlementOverrides', 'workPeriodMode',
-              'workPeriodConfiguration', 'effectiveCapabilities',
-              'configurationVersion', 'contractEnforced'];
-    }
-
-    // Platform admin records — server-owned. ALL direct client access
-    // denied; the admin callables read/write via Admin SDK, which these
-    // rules never constrain.
     match /platform_admins/{uid} {
-      allow read, write: if false;
+      allow read: if signedIn() && request.auth.uid == uid;
+      allow write: if false;
+    }
+    match /staff/{uid} {
+      allow read: if signedIn() && request.auth.uid == uid;
+      allow write: if false;
+    }
+    match /storage_grants/{id} { allow read, write: if false; }
+
+    match /driver_credentials/{id} { allow read, write: if false; }
+    match /pending_credentials/{id} { allow read, write: if false; }
+    match /driver_name_index/{id} { allow read, write: if false; }
+    match /security_audit/{id} { allow read, write: if false; }
+
+    // Reference catalogs — authenticated read only
+    match /operators/{docId} { allow read: if isPlatformAdmin() || (isCompanyStaff() && staffSameCompany(resource.data)) || (isDriver() && sameCompany(resource.data)); allow write: if false; }
+    match /wells/{docId} { allow read: if isPlatformAdmin() || (isCompanyStaff() && staffSameCompany(resource.data)) || (isDriver() && sameCompany(resource.data)); allow write: if false; }
+    match /wells_inactive/{docId} { allow read: if isDashboardScoped(resource.data); allow write: if false; }
+    match /disposals/{docId} { allow read: if isPlatformAdmin() || (isCompanyStaff() && staffSameCompany(resource.data)) || (isDriver() && sameCompany(resource.data)); allow write: if false; }
+    match /customers/{docId} { allow read: if isPlatformAdmin() || (isCompanyStaff() && staffSameCompany(resource.data)) || (isDriver() && sameCompany(resource.data)); allow write: if false; }
+    match /operatorAliases/{docId} { allow read: if isDashboardScoped(resource.data) || isPlatformAdmin(); allow write: if false; }
+    match /job_packages/{id} { allow read: if isDashboard() || isDriver(); allow write: if false; }
+    match /app_registry/{id} { allow read: if isDashboard() || isDriver(); allow write: if false; }
+    match /overweight_fines/{id} { allow read: if isDashboardScoped(resource.data); allow write: if false; }
+    match /invoiceBlocks/{id} { allow read: if isDashboardScoped(resource.data); allow write: if false; }
+    match /ticketBlocks/{id} { allow read: if isDashboardScoped(resource.data); allow write: if false; }
+
+    match /companies/{docId} {
+      allow read: if isDashboardCompanyDoc(docId) || (isDriver() && docId == companyId());
+      allow write: if false;
+      match /{sub=**} {
+        allow read: if isDashboardCompanyDoc(docId) || (isDriver() && docId == companyId());
+        allow write: if false;
+      }
     }
 
-    // Per-driver active-shift authority — server-owned, exactly like
-    // platform_admins. The catch-all at the bottom of this file already
-    // denies it; this rule is stated explicitly so an audit reading the
-    // shift path sees the denial where it looks for it, and so a later
-    // broadening of some driver_* rule cannot silently expose it.
-    //
-    // A CLIENT MUST NEVER READ THIS. The record is what decides whether a
-    // shift is open; a client that could read it would learn the answer
-    // without the server's decision, and a client that could write it
-    // could mint or end a shift directly — which is the entire race this
-    // collection exists to remove. All access is via the resolve/claim/
-    // close callables, which use the Admin SDK and bypass these rules.
+    // Driver-owned shifts — client write denied (callable only)
     match /driver_shift_authority/{driverId} {
       allow read, write: if false;
     }
-
-    // Plan catalog — vc51.9A6-B mobile read path: apps read the exact
-    // company document, then the exact assigned plans/{planId}, and
-    // compute effective capabilities locally. Plan documents carry
-    // product capability configuration, not secrets. Exact GET only:
-    // list and every query shape stay denied (Firestore evaluates all
-    // queries as list), an unknown id is an ordinary not-found, and no
-    // client mutation path exists — plans are written solely by the
-    // Admin SDK callables, which bypass these rules.
-    match /plans/{planId} {
-      allow get: if true;
-      allow list: if false;
-      allow write: if false;
-    }
-
-    // Platform-admin audit trail (canonical name pinned for Part B) —
-    // callable/Admin SDK only.
-    match /platform_admin_audit/{docId} {
-      allow read, write: if false;
-    }
-
-    // Company config — dashboard manages.
-    //
-    // vc51.9A6-A: the blanket `allow write: if true` is GONE. The
-    // 2026-08-06 writer census (firestore-rules-tests/CENSUS-vc51.9A6A.md)
-    // proved every legitimate company writer is the Firebase-Auth
-    // signed-in Dashboard browser; the suite apps only READ. Writes now
-    // require auth AND may never introduce, alter, null, or erase a
-    // protected contract key — those keys become Admin-SDK-callable-only
-    // in Part B (Admin SDK bypasses these rules).
-    //
-    // READ stays open (get AND list): WB-T (getAllCompanies list +
-    // config getDoc/onSnapshot), WB-JSA, WB-S, WB-M read company config
-    // unauthenticated. Honest exposure: company docs (incl. payConfig /
-    // rateSheets) remain world-readable with the public API key until
-    // the suite-wide auth/App Check rollout — a separate decision.
-    match /companies/{docId} {
-      allow read: if true;
-
-      // Create: legacy Dashboard flows (CompaniesTab saveCompany /
-      // activatePendingSignup) — authenticated, protected keys cannot
-      // be supplied at birth in any form (any value, incl. null).
-      allow create: if request.auth != null
-        && !request.resource.data.keys().hasAny(protectedCompanyKeys());
-
-      // Update covers updateDoc field-merges AND whole-document
-      // replacement (setDoc without merge on an existing doc). The
-      // MapDiff guard denies the ENTIRE write when any protected key is
-      // added, modified, nulled, or removed — a replacement can never
-      // silently erase contract state, and protected changes cannot be
-      // smuggled beside permitted ones. Established unrelated
-      // field-merge updates pass untouched, configured or not.
-      allow update: if request.auth != null
-        && !request.resource.data.diff(resource.data)
-              .affectedKeys().hasAny(protectedCompanyKeys());
-
-      // Delete: legacy Dashboard deleteCompany flow preserved for
-      // UNCONFIGURED docs only. A company carrying protected contract
-      // state cannot be client-deleted — that flow must migrate to an
-      // admin callable (Part B migration item).
-      allow delete: if request.auth != null
-        && !resource.data.keys().hasAny(protectedCompanyKeys());
-
-      // SWD Directory — company-scoped disposal site aliases/customs
-      match /swd_directory/{entryId} {
-        allow read, write: if true;
-      }
-
-      // Counters — invoice/ticket number auto-increment from Dashboard Add Pull
-      match /counters/{counterId} {
-        allow read, write: if true;
-      }
-
-      // Equipment specs — tare weight, capacity, make/model (legacy transitional)
-      match /equipment_specs/{specId} {
-        allow read, write: if true;
-      }
-
-      // Canonical equipment registry — read open, write via eQuipmentEquipment
-      match /equipment/{equipmentId} {
-        allow read: if true;
-        allow write: if false;
-      }
-
-      // Equipment type registry — read open, write via eQuipmentEquipment
-      match /equipment_types/{typeId} {
-        allow read: if true;
-        allow write: if false;
-      }
-
-      // Assignment custody — all access via eQuipmentAssignments callable
-      match /assignments/{assignmentId} {
-        allow read, write: if false;
-      }
-
-      // DVIR inspections — all access via eQuipmentDVIR callable
-      match /dvir_inspections/{inspectionId} {
-        allow read, write: if false;
-      }
-    }
-
-    // Invoices — clients can read, create, update, delete (cancel/recycle flow)
-    match /invoices/{docId} {
-      allow read, write: if true;
-    }
-
-    // Invoice blocks — read-only (assigned via Cloud Functions with Admin SDK)
-    match /invoiceBlocks/{docId} {
-      allow read: if true;
-      allow write: if false;
-    }
-
-    // Tickets — clients can read and write (submit, edit, void/cancel flow)
-    match /tickets/{docId} {
-      allow read, write: if true;
-    }
-
-    // Ticket blocks — read-only (assigned via Cloud Functions with Admin SDK)
-    match /ticketBlocks/{docId} {
-      allow read: if true;
-      allow write: if false;
-    }
-
-    // Route recordings — GPS breadcrumb trips recorded by drivers
-    match /route_recordings/{slug} {
-      allow read, write: if true;
-      match /trips/{tripId} {
-        allow read, write: if true;
-      }
-    }
-
-    // Route overrides — golden routes selected by admin
-    match /route_overrides/{slug} {
-      allow read, write: if true;
-    }
-
-    // Location corrections from drivers
-    match /locationCorrections/{correctionId} {
-      allow read, write: if true;
-    }
-
-    // Dispatches — dashboard creates, WB T app reads/updates
-    match /dispatches/{jobId} {
-      allow read, write: if true;
-    }
-
-    // Load transfers — driver-to-driver handoff
-    match /transfers/{transferId} {
-      allow read, write: if true;
-    }
-
-    // Payroll deductions — dashboard manages
-    match /deductions/{deductionId} {
-      allow read, write: if true;
-    }
-
-    // Payroll additions (bonuses/reimbursements) — dashboard manages
-    match /additions/{additionId} {
-      allow read, write: if true;
-    }
-
-    // Billing records — dashboard manages
-    match /billing_invoices/{billingId} {
-      allow read, write: if true;
-    }
-
-    // Billing number counters — dashboard auto-increment
-    match /billing_counters/{companyId} {
-      allow read, write: if true;
-    }
-
-    // Diesel price history — dashboard manages
-    match /diesel_prices/{priceId} {
-      allow read, write: if true;
-    }
-
-    // Billing export invoice counters — dashboard auto-increment
-    match /billing_invoice_counters/{companyId} {
-      allow read, write: if true;
-    }
-
-    // Billing export audit trail — dashboard manages
-    match /billing_exports/{exportId} {
-      allow read, write: if true;
-    }
-
-    // Driver shift tracking — DOT compliance.
-    //
-    // ── STAGED WRITE LOCKDOWN — DO NOT DEPLOY YET ────────────────────────
-    // Writes are DENIED to every direct client. Shift state is now owned by
-    // the server: claimDriverShift / closeDriverShift / recordDepartReturn
-    // author login, logout, depart_return, currentShiftId and odometerMiles
-    // through the Admin SDK, which these rules never constrain.
-    //
-    // Leaving writes open would defeat the authority record entirely — a
-    // client that can set `currentShiftId` directly can mint or end a shift
-    // without the server transaction, which is the exact race the record
-    // exists to remove.
-    //
-    // DEPLOYING THIS BEFORE WB-S IS INTEGRATED WILL BREAK SHIFT TRACKING IN
-    // THE FIELD. WB-S vc22 writes these documents by unauthenticated REST
-    // (shiftTracking.ts). Every gate below must hold first:
-    //   1. the integrated WB-S build is installed on the active test fleet;
-    //   2. every legitimate WB-S write goes through the callables;
-    //   3. older builds are deliberately retired, or accepted as broken;
-    //   4. rollback keeps the denial — reverting to `write: if true` would
-    //      silently reopen the race, so a rollback must go forward, not back.
-    //
-    // READS STAY OPEN in this tranche. WB-JSA (shiftStaleness,
-    // requestPeriodBinding), eQuipment, WB-T, WB-S day summaries and every
-    // AppSwitcher read these documents unauthenticated today. Closing reads
-    // is a separate cross-app migration and is deliberately NOT mixed in.
     match /driver_shifts/{shiftId} {
-      allow read: if true;
+      allow read: if isDriver() && (
+        shiftId.matches('^' + driverId() + '_.*')
+        || resource.data.driverId == driverId()
+      ) || isDashboardScoped(resource.data);
       allow write: if false;
     }
 
-    // Driver documents — person-owned compliance (eQuipment Cloud Functions only)
-    match /driver_documents/{docId} {
-      allow read, write: if false;
+    match /jsas/{jsaId} {
+      allow read: if isPlatformAdmin()
+        || (isCompanyStaff() && staffSameCompany(resource.data))
+        || (isDriver() && resource != null
+          && resource.data.driverId == driverId()
+          && resource.data.companyId == companyId());
+      allow create: if isDriver()
+        && request.resource.data.driverId == driverId()
+        && request.resource.data.companyId == companyId();
+      allow update: if isDriver()
+        && resource.data.driverId == driverId()
+        && resource.data.companyId == companyId()
+        && request.resource.data.driverId == driverId()
+        && request.resource.data.companyId == companyId();
+      allow delete: if isDriver()
+        && resource.data.driverId == driverId()
+        && resource.data.companyId == companyId();
     }
-
-    // Vehicle documents — transitional equipment docs; read open, write via eQuipmentDocuments
-    match /vehicle_documents/{docId} {
-      allow read: if true;
+    match /jsa_day_status/{docId} {
+      allow read: if isPlatformAdmin()
+        || (isCompanyStaff() && staffSameCompany(resource.data))
+        || (isDriver() && resource != null && resource.data.companyId == companyId()
+          && resource.data.driverId == driverId());
+      allow create: if isDriver()
+        && request.resource.data.driverId == driverId()
+        && request.resource.data.companyId == companyId();
+      allow update: if isDriver()
+        && resource.data.driverId == driverId()
+        && resource.data.companyId == companyId()
+        && request.resource.data.driverId == driverId()
+        && request.resource.data.companyId == companyId();
+      allow delete: if false;
+    }
+    match /jsa_completions/{docId} {
+      allow read: if isDashboardScoped(resource.data) || ownsDriver(resource.data);
       allow write: if false;
     }
-
-    // Job packages — config-driven job types (water hauling, aggregate, etc.)
-    match /job_packages/{packageId} {
-      allow read: if true;
+    match /jsa_templates/{cid} {
+      allow read: if isDashboardCompanyDoc(cid) || (isDriver() && cid == companyId());
       allow write: if false;
-    }
-
-    // App registry — WB ecosystem app switcher (read-only, WB admin writes via Admin SDK)
-    match /app_registry/{appId} {
-      allow read: if true;
-      allow write: if false;
-    }
-
-    // Overweight fine schedules — per-state (read-only, WB admin writes via Admin SDK)
-    match /overweight_fines/{stateId} {
-      allow read: if true;
-      allow write: if false;
-    }
-
-    // Job type usage tracking — R&D pipeline for custom job type promotion/pruning
-    match /job_type_usage/{typeId} {
-      allow read, write: if true;
-    }
-
-    // Projects — long-running multi-day job containers
-    match /projects/{projectId} {
-      allow read, write: if true;
-    }
-
-    // Chat threads — real-time messaging between drivers and dispatch
-    match /chat_threads/{threadId} {
-      allow read, write: if true;
-      match /messages/{messageId} {
-        allow read, create: if true;
-        allow update, delete: if false; // Messages are immutable
+      match /templates/{templateId} {
+        allow read: if isDashboardCompanyDoc(cid) || (isDriver() && cid == companyId());
+        allow write: if false;
       }
     }
 
-    // Chat monitor profiles — dispatch grid configurations
-    match /chat_monitors/{monitorId} {
-      allow read, write: if true;
+    // Operational docs — CF-only writes under secure model
+    // CF-only writes. Driver reads are owner-scoped. Staff reads are company-scoped.
+    match /invoices/{docId} {
+      allow read: if isPlatformAdmin()
+        || (isCompanyStaff() && staffSameCompany(resource.data))
+        || ownsDriver(resource.data);
+      allow create, update, delete: if false;
+    }
+    match /tickets/{docId} {
+      allow read: if isPlatformAdmin()
+        || (isCompanyStaff() && staffSameCompany(resource.data))
+        || ownsDriver(resource.data);
+      allow create, update, delete: if false;
+    }
+    match /dispatches/{jobId} {
+      allow read: if isPlatformAdmin()
+        || (isCompanyStaff() && staffSameCompany(resource.data))
+        || ownsDriver(resource.data);
+      allow create, update, delete: if false;
+    }
+    match /transfer_requests/{id} {
+      allow read: if tenantRead(resource.data);
+      allow write: if false;
+    }
+    match /transfers/{id} {
+      allow read: if tenantRead(resource.data);
+      allow write: if false;
+    }
+    match /projects/{id} {
+      allow read: if isDashboardScoped(resource.data);
+      allow write: if false;
+    }
+    match /chat_threads/{threadId} {
+      allow read: if isPlatformAdmin()
+        || (isCompanyStaff() && staffSameCompany(resource.data))
+        || threadMember(threadId);
+      allow write: if false;
+      match /messages/{messageId} {
+        allow read: if isPlatformAdmin()
+          || (isCompanyStaff() && staffSameCompany(get(/databases/$(database)/documents/chat_threads/$(threadId)).data))
+          || (isCompanyStaff() && staffSameCompany(resource.data))
+          || threadMember(threadId);
+        allow write: if false;
+      }
+    }
+    match /chat_monitors/{id} {
+      allow read: if isDashboardScoped(resource.data);
+      allow write: if false;
     }
 
-    // JSA records — Job Safety Analysis forms
-    match /jsas/{jsaId} {
-      allow read, write: if true;
+    match /route_recordings/{slug} {
+      allow read: if isDashboardScoped(resource.data) || (isDriver() && sameCompany(resource.data));
+      allow write: if false;
+      match /trips/{tripId} {
+        allow read: if isDashboardScoped(get(/databases/$(database)/documents/route_recordings/$(slug)).data)
+          || isDashboardScoped(resource.data)
+          || (isDriver() && sameCompany(resource.data));
+        allow write: if false;
+      }
+    }
+    match /route_overrides/{slug} {
+      allow read: if isDashboardScoped(resource.data);
+      allow write: if false;
+    }
+    match /locationCorrections/{id} {
+      allow read: if isDashboardScoped(resource.data);
+      allow write: if false;
+    }
+    match /customLocations/{id} {
+      allow read: if isDashboardScoped(resource.data) || (isDriver() && resource.data.companyId == companyId());
+      allow create, update, delete: if false;
+    }
+    match /unmatchedLocations/{id} {
+      allow read, write: if false;
+    }
+    match /unmatchedCompanies/{id} {
+      allow read, write: if false;
     }
 
-    // JSA day status — universal location stamps + completion tracking
-    match /jsa_day_status/{docId} {
-      allow read, write: if true;
+    match /photo_requirements/{customerId} {
+      // customerId is an operator slug, not companyId.
+      allow read: if isPlatformAdmin() || (isCompanyStaff() && staffSameCompany(resource.data));
+      allow write: if isPlatformAdmin();
+    }
+    match /vehicle_documents/{id} {
+      allow read: if isDashboardScoped(resource.data);
+      allow write: if false;
+    }
+    match /driver_documents/{id} {
+      allow read, write: if false;
     }
 
-    // JSA completions — legacy collection
-    match /jsa_completions/{docId} {
-      allow read, write: if true;
+    match /deductions/{id} { allow read: if isDashboardScoped(resource.data); allow write: if false; }
+    match /additions/{id} { allow read: if isDashboardScoped(resource.data); allow write: if false; }
+    match /billing_invoices/{id} { allow read: if isDashboardScoped(resource.data); allow write: if false; }
+    match /billing_counters/{id} { allow read: if isPlatformAdmin(); allow write: if false; }
+    match /billing_invoice_counters/{id} { allow read: if isPlatformAdmin(); allow write: if false; }
+    match /billing_exports/{id} { allow read: if isDashboardScoped(resource.data); allow write: if false; }
+    match /diesel_prices/{id} { allow read: if isDashboardScoped(resource.data); allow write: if false; }
+    match /job_type_usage/{id} { allow read: if isDashboardScoped(resource.data); allow write: if false; }
+
+    match /wb_diagnostics/{id} {
+      allow read: if isPlatformAdmin();
+      allow write: if false;
+    }
+    match /canonical_jobs/{id} {
+      allow read: if isDashboardScoped(resource.data);
+      allow write: if false;
+    }
+    match /daps_waitlist/{id} {
+      allow read, write: if false;
     }
 
-    // JSA read receipts (8/6, contract v1) — fresh per-job read proof.
-    // WB-T mints a 256-bit request id; WB-JSA writes the receipt ONLY
-    // after the core jsas submission persists; WB-T verifies against its
-    // LOCAL request. Create-only + schema-validated + immutable: no
-    // update may mutate identity, no client delete, replays bounce off
-    // the immutability.
-    //
-    // HONEST IDENTITY LIMITATION: the suite's apps write via API-key REST
-    // with NO Firebase Auth, so company/driver identity CANNOT be
-    // cryptographically bound here (same as every collection above). The
-    // practical protection is the unguessable 43-char request id, which
-    // only the launching device's WB-T + WB-JSA share. Tightening beyond
-    // this requires the suite-wide auth/App Check rollout — a separate
-    // security decision; DO NOT deploy this file without that review.
-    // vc51.9B: INDEPENDENT strict per-version validation. v1 remains
-    // temporarily creatable for the already-installed WB-T transition
-    // window; v2 adds the canonical period proof. Each version's key set
-    // is exact (hasOnly), so v1 fields cannot mix into v2 nor v2 fields
-    // smuggle into v1, and no third shape exists.
     function validJsaReceiptV1(requestId) {
       return request.resource.data.keys().hasOnly([
           'receiptVersion', 'requestId', 'jobDocId', 'haulGroupId',
@@ -415,15 +297,14 @@ service cloud.firestore {
         && request.resource.data.jsaRecordId.size() > 0
         && request.resource.data.completedAt is string
         && request.resource.data.completedAt.size() >= 20
-        && request.resource.data.completionType == 'signed_submission';
+        && request.resource.data.completedAt.size() <= 40
+        && request.resource.data.completionType == 'signed_submission'
+        && request.resource.data.companyId.size() <= 80
+        && request.resource.data.operator.size() <= 120
+        && request.resource.data.shiftId.size() <= 80
+        && request.resource.data.jsaRecordId.size() <= 120
+        && request.resource.data.driverHash.size() <= 128;
     }
-    // v2 (vc51.9B): the v1 identity claims minus shiftId, plus the
-    // canonical period proof — request period, independently resolved
-    // submission period, REQUIRED equality between them, and the mode
-    // needed to interpret the binding. Same honesty scope: the receipt
-    // claims the signed submission, nothing more. Company/driver/job
-    // MATCHING against the minting request stays a client-layer check
-    // (rules have no request context) — same capability model as v1.
     function validJsaReceiptV2(requestId) {
       return request.resource.data.keys().hasOnly([
           'receiptVersion', 'requestId', 'jobDocId', 'haulGroupId',
@@ -452,112 +333,39 @@ service cloud.firestore {
         && request.resource.data.jsaRecordId.size() > 0
         && request.resource.data.completedAt is string
         && request.resource.data.completedAt.size() >= 20
-        && request.resource.data.completionType == 'signed_submission';
+        && request.resource.data.completionType == 'signed_submission'
+        && request.resource.data.completedAt.size() <= 40
+        && request.resource.data.companyId.size() <= 80
+        && request.resource.data.operator.size() <= 120
+        && request.resource.data.jsaRecordId.size() <= 120
+        && request.resource.data.driverHash.size() <= 128;
     }
 
+    // TEMPORARY compatibility exception — unauthenticated create + exact GET.
+    // Not the final secure architecture. Documented in AUTH-CLAIM-SHAPES.md.
     match /jsa_read_receipts/{requestId} {
       allow create: if requestId.matches('^[A-Za-z0-9_-]{43}$')
         && (validJsaReceiptV1(requestId) || validJsaReceiptV2(requestId));
-      // EXACT-GET ONLY (vc51.4): retrieval requires possessing the
-      // 256-bit request id — the capability. Collection enumeration and
-      // every query shape are denied (`list: false` covers plain lists
-      // AND filtered/limited queries — Firestore evaluates them all as
-      // list operations), so receipt ids cannot be discovered through
-      // reads. WB-T performs only the exact-document GET
-      // (…/jsa_read_receipts/{requestId}); it never queries. Honest
-      // limitation stands: with no Firebase Auth, anyone POSSESSING a
-      // valid id may get that one receipt — the nonce defeats accidental
-      // inheritance and remote guessing, not a malicious authorized
-      // device. Interim pre-customer boundary.
       allow get: if true;
       allow list: if false;
       allow update: if false;
       allow delete: if false;
     }
 
-    // Daps waitlist — landing page signups
     match /daps_waitlist/{docId} {
       allow read: if false;
-      allow create: if true;
+      allow create: if request.resource.data.keys().hasOnly(['email', 'createdAt', 'source'])
+        && request.resource.data.email is string
+        && request.resource.data.email.size() > 3
+        && request.resource.data.email.size() < 120
+        && request.resource.data.createdAt is string
+        && request.resource.data.createdAt.size() >= 20
+        && request.resource.data.createdAt.size() <= 40
+        && request.resource.data.source is string
+        && request.resource.data.source in ['daps', 'website', 'app'];
+      allow update, delete: if false;
     }
 
-    // JSA templates — company-specific JSA configurations (BYOJSA)
-    match /jsa_templates/{companyId} {
-      allow read, write: if true;
-      match /templates/{templateId} {
-        allow read, write: if true;
-      }
-    }
-
-    // WB diagnostics — read-only for the dashboard admin viewer
-    // (capability-gated client-side; the read here is auth-gated to
-    // any signed-in dashboard user, which already excludes anonymous
-    // and app callers). Writes flow only through the Cloud Function
-    // `writeDiagnosticLog`, which uses Admin SDK and bypasses rules.
-    match /wb_diagnostics/{docId} {
-      allow read: if request.auth != null;
-      allow write: if false;
-    }
-
-    // canonical_jobs — Phase 1 additive linking layer (5/10/2026).
-    //
-    // Bridge record connecting packetId ↔ ticketDocId ↔ ticketNumber ↔
-    // invoiceDocId ↔ dispatchId ↔ transferRequestId ↔ company/driver/well.
-    // All writes flow through Cloud Functions (Admin SDK bypasses rules);
-    // clients have no business writing here. Reads gated to authenticated
-    // dashboard users only — same pattern as wb_diagnostics.
-    match /canonical_jobs/{docId} {
-      allow read: if request.auth != null;
-      allow write: if false;
-    }
-
-    // Transfer requests — NEW transfer model (5/9/2026).
-    //
-    // Sender creates the doc + reads (banner / cancel UI).
-    // Receiver reads (TransferOfferModal listener) + sender direct-cancels
-    // via cancelTransferRequest helper (write).
-    // Receiver Accept/Decline goes through Cloud Functions
-    // (acceptTransferRequest, resolveTransferRequest) which use Admin SDK
-    // and bypass these rules entirely.
-    //
-    // WB T drivers do NOT use Firebase Auth — they have their own
-    // SHA-256 driver-hash app-auth system (CLAUDE.md "Two auth systems"),
-    // so request.auth is always null from WB T clients. This rule
-    // matches the existing permissive pattern used by /invoices, /tickets,
-    // /dispatches (`if true`). Tighter rules require migrating WB T to
-    // Firebase Auth or custom tokens — a much larger change deferred to
-    // future hardening.
-    match /transfer_requests/{requestId} {
-      allow read, write: if true;
-    }
-
-    // Required-photo compliance specs — photo_requirements/{customerId}
-    // (customerId = operator slug via customerIdForOperator; no companyId on the doc).
-    //
-    // Canonical history (b8d843f / clean-rebuild) used `allow read, write: if true`
-    // because WB-T has no Firebase Auth (driver-hash app auth only) and loads
-    // specs via client getDoc. That open-write surface is unsafe for deploy.
-    //
-    // Authorization model (tightest that preserves runtime without schema/claims):
-    //   READ  — open. WB-T drivers are unauthenticated to Firebase; they must
-    //           read the operator slug they are currently hauling for. Specs are
-    //           not secret credentials. Company-scoped read is impossible here:
-    //           membership lives in RTDB users/{uid}, not auth custom claims,
-    //           and the doc has no companyId field. (Same public-catalog pattern
-    //           as /operators, /wells, /companies read.)
-    //   WRITE — signed-in Firebase Auth only (Dashboard Settings client setDoc).
-    //           Unauthenticated clients cannot create/update/delete. Cross-company
-    //           write isolation is enforced in the Dashboard UI (viewSettings +
-    //           company scope / assignedOperators picker), not in rules — no
-    //           custom claims and no companyId on the resource to match against.
-    //   CFs   — validatePhotoCompliance + suggestPhotoCriteria use Admin SDK
-    //           and bypass these rules entirely.
-    match /photo_requirements/{customerId} {
-      allow read: if true;
-      allow create, update, delete: if request.auth != null;
-    }
-
-    // Everything else — deny (Cloud Functions use Admin SDK which bypasses rules)
     match /{document=**} {
       allow read, write: if false;
     }
