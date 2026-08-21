@@ -1,6 +1,6 @@
 'use client';
 
-import { useCallback, useEffect, useState, useMemo } from 'react';
+import { useCallback, useEffect, useState, useMemo, useRef } from 'react';
 import { httpsCallable } from 'firebase/functions';
 import { getFirebaseDatabase, getFirestoreDb, getFirebaseFunctions } from '@/lib/firebase';
 import { ref, get, set, remove, update } from 'firebase/database';
@@ -23,6 +23,8 @@ import {
 import { getRoleLabel } from '@/lib/auth';
 import {
   applyEnabled,
+  bumpPreviewGeneration,
+  shouldInstallPreview,
   type BoundAssignmentPreview,
 } from '@/lib/wbmAssignmentPreview';
 
@@ -229,6 +231,14 @@ export function DriversTab({ scopeCompanyId, isWbAdmin = false }: DriversTabProp
   const [selectedWells, setSelectedWells] = useState<string[]>([]);
   const [availableRoutes, setAvailableRoutes] = useState<string[]>([]);
   const [assignmentPreview, setAssignmentPreview] = useState<BoundAssignmentPreview | null>(null);
+  const [assignmentRequestGeneration, setAssignmentRequestGeneration] = useState(0);
+  const assignmentGenRef = useRef(0);
+  const bumpAssignmentGeneration = () => {
+    const next = bumpPreviewGeneration(assignmentGenRef.current);
+    assignmentGenRef.current = next;
+    setAssignmentRequestGeneration(next);
+    setAssignmentPreview(null);
+  };
   const [canonicalDrivers, setCanonicalDrivers] = useState<CanonicalWbmDriver[]>([]);
 
   // Combined approval modal (forces company + customers + route on approve)
@@ -523,24 +533,35 @@ export function DriversTab({ scopeCompanyId, isWbAdmin = false }: DriversTabProp
     if (!routeTarget) return;
     try {
       const { staffWriteDriverAssignment } = await import('@/lib/secureDriverAdmin');
+      const capturedGeneration = assignmentGenRef.current;
+      const capturedDriverId = routeTarget.driverId;
       const result = await staffWriteDriverAssignment({
         driverId: routeTarget.driverId,
         assignedRoutes: selectedRoutes,
         assignedWells: selectedWells,
         mode,
-        expectedAssignmentDigest: mode === 'apply' ? assignmentPreview?.beforeDigest : undefined,
-        expectedProposedDigest: mode === 'apply' ? assignmentPreview?.proposedDigest : undefined,
+        expectedPreviewContextDigest: mode === 'apply' ? assignmentPreview?.previewContextDigest : undefined,
       });
       if (mode === 'dry-run') {
+        if (!shouldInstallPreview({
+          capturedGeneration,
+          currentGeneration: assignmentGenRef.current,
+          capturedDriverId,
+          currentDriverId: routeTarget?.driverId ?? null,
+        })) {
+          return;
+        }
         setAssignmentPreview({
           driverId: result.driverId,
           companyId: result.companyId,
           beforeDigest: result.currentDigest,
           proposedDigest: result.proposedDigest,
+          previewContextDigest: result.previewContextDigest,
           beforeRevision: result.before.assignmentRevision ?? null,
           assignedRoutes: result.after.assignedRoutes,
           assignedWells: result.after.assignedWells,
           before: { assignedRoutes: result.before.assignedRoutes, assignedWells: result.before.assignedWells },
+          generation: capturedGeneration,
         });
         setMessage(`Preview ready for canonical ${result.driverId}. No write performed.`);
         return;
@@ -1577,10 +1598,10 @@ export function DriversTab({ scopeCompanyId, isWbAdmin = false }: DriversTabProp
                   </div>
                   <button
                     onClick={() => {
+                      bumpAssignmentGeneration();
                       setRouteTarget(d);
                       setSelectedRoutes(d.assignedRoutes || []);
                       setSelectedWells(d.assignedWells || []);
-                      setAssignmentPreview(null);
                       setShowRoutesModal(true);
                     }}
                     className="px-3 py-1 text-sm rounded bg-blue-600 hover:bg-blue-500 text-white"
@@ -1622,10 +1643,10 @@ export function DriversTab({ scopeCompanyId, isWbAdmin = false }: DriversTabProp
             setMessage('LEGACY — NOT WB-M AUTHORITY. Assign routes on the canonical profile.');
             return;
           }
+          bumpAssignmentGeneration();
           setRouteTarget(canonical);
           setSelectedRoutes(canonical.assignedRoutes || []);
           setSelectedWells(canonical.assignedWells || []);
-          setAssignmentPreview(null);
           setShowRoutesModal(true);
         }}
         onAssignCompany={(row) => {
@@ -2255,18 +2276,18 @@ export function DriversTab({ scopeCompanyId, isWbAdmin = false }: DriversTabProp
               </button>
               <button
                 onClick={() => assignDriverRoutes('apply')}
-                disabled={!applyEnabled(assignmentPreview, selectedRoutes, selectedWells)}
+                disabled={!applyEnabled(assignmentPreview, selectedRoutes, selectedWells, routeTarget, assignmentRequestGeneration)}
                 className="flex-1 px-4 py-2 bg-blue-600 hover:bg-blue-500 text-white rounded disabled:opacity-30"
               >
                 Apply canonical
               </button>
               <button
                 onClick={() => {
+                  bumpAssignmentGeneration();
                   setShowRoutesModal(false);
                   setRouteTarget(null);
                   setSelectedRoutes([]);
                   setSelectedWells([]);
-                  setAssignmentPreview(null);
                 }}
                 className="px-4 py-2 bg-gray-600 hover:bg-gray-500 text-white rounded"
               >

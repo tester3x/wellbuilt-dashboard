@@ -59,8 +59,8 @@ describe('WB-M callable export / contract matrix', () => {
     expect(driversTab).toMatch(/LEGACY — NOT WB-M AUTHORITY/);
     expect(body).toMatch(/staffWriteDriverAssignment/);
     expect(body).toMatch(/dry-run/);
-    expect(body).toMatch(/expectedAssignmentDigest/);
-    expect(body).toMatch(/expectedProposedDigest/);
+    expect(body).toMatch(/expectedPreviewContextDigest/);
+    expect(driversTab).toMatch(/shouldInstallPreview/);
     expect(driversTab).toMatch(/applyEnabled\(/);
     expect(body).not.toMatch(/mirrorLegacy/);
     expect(body).not.toMatch(/update\(ref\(/);

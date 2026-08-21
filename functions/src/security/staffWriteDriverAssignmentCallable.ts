@@ -15,6 +15,8 @@ import {
   evaluateAssignmentTransaction,
   knownRouteNames,
   parseScopeList,
+  previewContextDigest,
+  revisionNumber,
   validateAssignedRoutesAgainstCatalog,
   validateAssignedWellsAgainstCatalog,
 } from './operational/assignmentScope';
@@ -26,6 +28,7 @@ const ALLOWED = new Set([
   'mode',
   'expectedAssignmentDigest',
   'expectedProposedDigest',
+  'expectedPreviewContextDigest',
 ]);
 
 export const staffWriteDriverAssignment = httpsV2.onCall(
@@ -96,6 +99,15 @@ export const staffWriteDriverAssignment = httpsV2.onCall(
     };
     const currentDigest = assignmentDigest(before.assignedRoutes, before.assignedWells);
     const proposedDigest = assignmentDigest(after.assignedRoutes, after.assignedWells);
+    const contextDigest = previewContextDigest({
+      driverId,
+      companyId: decided.companyId,
+      assignmentRevision: revisionNumber(before.assignmentRevision),
+      currentRoutes: before.assignedRoutes,
+      currentWells: before.assignedWells,
+      proposedRoutes: after.assignedRoutes,
+      proposedWells: after.assignedWells,
+    });
     const preview = {
       ok: true as const,
       mode,
@@ -105,6 +117,7 @@ export const staffWriteDriverAssignment = httpsV2.onCall(
       after,
       currentDigest,
       proposedDigest,
+      previewContextDigest: contextDigest,
       changedFields: [
         ...(JSON.stringify(before.assignedRoutes) === JSON.stringify(after.assignedRoutes) ? [] : ['assignedRoutes']),
         ...(JSON.stringify(before.assignedWells) === JSON.stringify(after.assignedWells) ? [] : ['assignedWells']),
@@ -112,25 +125,19 @@ export const staffWriteDriverAssignment = httpsV2.onCall(
     };
     if (mode !== 'apply') return preview;
 
-    const expectedBefore = typeof raw.expectedAssignmentDigest === 'string'
-      ? raw.expectedAssignmentDigest
+    const expectedContext = typeof raw.expectedPreviewContextDigest === 'string'
+      ? raw.expectedPreviewContextDigest
       : '';
-    const expectedProposed = typeof raw.expectedProposedDigest === 'string'
-      ? raw.expectedProposedDigest
-      : '';
-    if (!expectedBefore) {
-      throw new httpsV2.HttpsError('failed-precondition', 'expected_digest_required');
-    }
-    if (!expectedProposed) {
-      throw new httpsV2.HttpsError('failed-precondition', 'expected_proposed_digest_required');
+    if (!expectedContext) {
+      throw new httpsV2.HttpsError('failed-precondition', 'expected_preview_context_required');
     }
 
     const tx = await rtdb.ref(`drivers/profiles/${driverId}`).transaction((current) => {
       const rec = current && typeof current === 'object' ? current as Record<string, unknown> : null;
       const gate = evaluateAssignmentTransaction({
+        driverId,
         profile: rec,
-        expectedBeforeDigest: expectedBefore,
-        expectedProposedDigest: expectedProposed,
+        expectedPreviewContextDigest: expectedContext,
         proposedRoutes: after.assignedRoutes,
         proposedWells: after.assignedWells,
         callerCompanyId: caller.companyId,

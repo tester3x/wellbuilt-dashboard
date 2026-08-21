@@ -13,6 +13,29 @@ export function assignmentDigest(routes: unknown, wells: unknown): string {
   });
 }
 
+export function previewContextDigest(input: {
+  driverId: string;
+  companyId: string;
+  assignmentRevision: number;
+  currentRoutes: unknown;
+  currentWells: unknown;
+  proposedRoutes: string[];
+  proposedWells: string[];
+}): string {
+  return JSON.stringify({
+    driverId: input.driverId,
+    companyId: input.companyId,
+    assignmentRevision: input.assignmentRevision,
+    current: assignmentDigest(input.currentRoutes, input.currentWells),
+    proposed: assignmentDigest(input.proposedRoutes, input.proposedWells),
+  });
+}
+
+export function revisionNumber(raw: unknown): number {
+  const n = Number(raw);
+  return Number.isFinite(n) && n >= 0 ? Math.floor(n) : 0;
+}
+
 export function parseScopeList(
   raw: unknown,
   field: 'assignedRoutes' | 'assignedWells',
@@ -79,9 +102,9 @@ export type AssignmentApplyDecision =
   | { ok: false; reason: string };
 
 export function evaluateAssignmentTransaction(input: {
+  driverId: string;
   profile: Record<string, unknown> | null;
-  expectedBeforeDigest: string;
-  expectedProposedDigest: string;
+  expectedPreviewContextDigest: string;
   proposedRoutes: string[];
   proposedWells: string[];
   callerCompanyId?: string;
@@ -96,11 +119,18 @@ export function evaluateAssignmentTransaction(input: {
       return { ok: false, reason: 'tenant_mismatch' };
     }
   }
-  const current = assignmentDigest(input.profile.assignedRoutes, input.profile.assignedWells);
-  if (current !== input.expectedBeforeDigest) return { ok: false, reason: 'stale_preview' };
-  const proposed = assignmentDigest(input.proposedRoutes, input.proposedWells);
-  if (proposed !== input.expectedProposedDigest) return { ok: false, reason: 'proposed_digest_mismatch' };
-  const rev = Number(input.profile.assignmentRevision);
-  const nextRevision = Number.isFinite(rev) && rev >= 0 ? Math.floor(rev) + 1 : 1;
-  return { ok: true, nextRevision };
+  const live = previewContextDigest({
+    driverId: input.driverId,
+    companyId,
+    assignmentRevision: revisionNumber(input.profile.assignmentRevision),
+    currentRoutes: input.profile.assignedRoutes,
+    currentWells: input.profile.assignedWells,
+    proposedRoutes: input.proposedRoutes,
+    proposedWells: input.proposedWells,
+  });
+  if (live !== input.expectedPreviewContextDigest) {
+    return { ok: false, reason: 'stale_preview_context' };
+  }
+  const rev = revisionNumber(input.profile.assignmentRevision);
+  return { ok: true, nextRevision: rev + 1 };
 }

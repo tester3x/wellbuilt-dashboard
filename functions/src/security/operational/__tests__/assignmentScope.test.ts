@@ -3,6 +3,7 @@ import {
   evaluateAssignmentTransaction,
   knownRouteNames,
   parseScopeList,
+  previewContextDigest,
   validateAssignedRoutesAgainstCatalog,
   validateAssignedWellsAgainstCatalog,
 } from '../assignmentScope';
@@ -47,36 +48,90 @@ describe('catalog validation', () => {
   });
 });
 
-describe('transactional stale preview', () => {
-  it('rejects a digest that does not match canonical before-state', () => {
-    const digest = assignmentDigest(['Gabriels'], []);
-    const proposed = assignmentDigest(['Watford'], []);
+describe('preview-context digest binds driver, company, revision, and scopes', () => {
+  const driverId = '2cad521c-13ac-4b6c-b1ab-07843c6bf06f';
+  const otherId = '99ff4b35-51ab-4d45-8d54-18b3b8515c9b';
+  const proposed = ['Watford'];
+  const ctx = () => previewContextDigest({
+    driverId,
+    companyId: 'liquid-gold',
+    assignmentRevision: 0,
+    currentRoutes: ['Gabriels'],
+    currentWells: [],
+    proposedRoutes: proposed,
+    proposedWells: [],
+  });
+
+  it('accepts a matching context and rejects driver/company/revision/proposed mismatches', () => {
     expect(evaluateAssignmentTransaction({
+      driverId,
       profile: DRIVER_ID_PROFILE,
-      expectedBeforeDigest: digest,
-      expectedProposedDigest: proposed,
-      proposedRoutes: ['Watford'],
+      expectedPreviewContextDigest: ctx(),
+      proposedRoutes: proposed,
       proposedWells: [],
       callerCompanyId: 'liquid-gold',
       isPlatformAdmin: false,
     }).ok).toBe(true);
+
     expect(evaluateAssignmentTransaction({
+      driverId: otherId,
       profile: DRIVER_ID_PROFILE,
-      expectedBeforeDigest: assignmentDigest(null, null),
-      expectedProposedDigest: proposed,
-      proposedRoutes: ['Watford'],
+      expectedPreviewContextDigest: ctx(),
+      proposedRoutes: proposed,
       proposedWells: [],
       callerCompanyId: 'liquid-gold',
       isPlatformAdmin: false,
-    })).toEqual({ ok: false, reason: 'stale_preview' });
+    })).toEqual({ ok: false, reason: 'stale_preview_context' });
+
     expect(evaluateAssignmentTransaction({
-      profile: DRIVER_ID_PROFILE,
-      expectedBeforeDigest: digest,
-      expectedProposedDigest: assignmentDigest(['Gabriels'], []),
-      proposedRoutes: ['Watford'],
+      driverId,
+      profile: { ...DRIVER_ID_PROFILE, companyId: 'other-co' },
+      expectedPreviewContextDigest: ctx(),
+      proposedRoutes: proposed,
+      proposedWells: [],
+      callerCompanyId: 'other-co',
+      isPlatformAdmin: false,
+    })).toEqual({ ok: false, reason: 'stale_preview_context' });
+
+    expect(evaluateAssignmentTransaction({
+      driverId,
+      profile: { ...DRIVER_ID_PROFILE, assignmentRevision: 4, assignedRoutes: ['Gabriels'] },
+      expectedPreviewContextDigest: ctx(),
+      proposedRoutes: proposed,
       proposedWells: [],
       callerCompanyId: 'liquid-gold',
       isPlatformAdmin: false,
-    })).toEqual({ ok: false, reason: 'proposed_digest_mismatch' });
+    })).toEqual({ ok: false, reason: 'stale_preview_context' });
+
+    expect(evaluateAssignmentTransaction({
+      driverId,
+      profile: DRIVER_ID_PROFILE,
+      expectedPreviewContextDigest: ctx(),
+      proposedRoutes: ['Gabriels'],
+      proposedWells: [],
+      callerCompanyId: 'liquid-gold',
+      isPlatformAdmin: false,
+    })).toEqual({ ok: false, reason: 'stale_preview_context' });
+  });
+
+  it('rejects inactive and tenant-mismatched profiles before digest compare', () => {
+    expect(evaluateAssignmentTransaction({
+      driverId,
+      profile: { ...DRIVER_ID_PROFILE, active: false },
+      expectedPreviewContextDigest: ctx(),
+      proposedRoutes: proposed,
+      proposedWells: [],
+      callerCompanyId: 'liquid-gold',
+      isPlatformAdmin: false,
+    })).toEqual({ ok: false, reason: 'profile_inactive' });
+    expect(evaluateAssignmentTransaction({
+      driverId,
+      profile: DRIVER_ID_PROFILE,
+      expectedPreviewContextDigest: ctx(),
+      proposedRoutes: proposed,
+      proposedWells: [],
+      callerCompanyId: 'other-co',
+      isPlatformAdmin: false,
+    })).toEqual({ ok: false, reason: 'tenant_mismatch' });
   });
 });

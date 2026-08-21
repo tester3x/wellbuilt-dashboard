@@ -20,7 +20,20 @@ export type WbmBootstrapSnapshot = {
   eligibilityReason: string;
   wells: Record<string, Record<string, unknown>>;
   wellCount: number;
+  /** Canonical Suite logout signal, milliseconds since epoch, or null. */
+  logoutAt: number | null;
 };
+
+export function normalizeLogoutAt(raw: unknown): number | null {
+  if (typeof raw === 'number' && Number.isFinite(raw) && raw > 0) return raw;
+  if (typeof raw === 'string' && raw.trim()) {
+    const parsed = Date.parse(raw);
+    if (Number.isFinite(parsed) && parsed > 0) return parsed;
+    const asNum = Number(raw);
+    if (Number.isFinite(asNum) && asNum > 0) return asNum;
+  }
+  return null;
+}
 
 export function revisionOf(profile: Record<string, unknown>): number {
   const n = Number(profile.assignmentRevision);
@@ -79,5 +92,6 @@ export function buildWbmBootstrapSnapshot(input: {
     eligibilityReason,
     wells,
     wellCount: Object.keys(wells).length,
+    logoutAt: normalizeLogoutAt(input.profile.logoutAt),
   };
 }
