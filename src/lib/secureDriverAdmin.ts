@@ -39,14 +39,23 @@ export async function adminRejectSecure(params: {
 export async function staffWriteDriverAssignment(params: {
   driverId: string;
   assignedRoutes: string[];
-  assignedWells?: string[];
-  mode?: 'dry-run' | 'apply';
-  expectedAssignedRoutes?: unknown;
-  mirrorLegacy?: boolean;
+  assignedWells: string[];
+  mode: 'dry-run' | 'apply';
+  expectedAssignmentDigest?: string;
 }) {
   const fn = httpsCallable(getFirebaseFunctions(), 'staffWriteDriverAssignment');
-  const res = await fn({ mode: 'apply', ...params });
-  return res.data;
+  const res = await fn(params);
+  return res.data as {
+    ok: true;
+    mode: 'dry-run' | 'apply';
+    driverId: string;
+    companyId: string;
+    before: { assignedRoutes: unknown; assignedWells: unknown; assignmentRevision?: unknown };
+    after: { assignedRoutes: string[]; assignedWells: string[] };
+    currentDigest: string;
+    changedFields: string[];
+    assignmentRevision?: unknown;
+  };
 }
 
 export async function adminSetPasscode(params: {

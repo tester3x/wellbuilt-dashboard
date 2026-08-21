@@ -42,6 +42,26 @@ export const PROFILE_ALLOWLIST = [
   'companyName',
 ] as const;
 
+/** Canonical drivers/profiles fields for WB-M administration. */
+export const CANONICAL_PROFILE_ALLOWLIST = [
+  'displayName',
+  'legalName',
+  'name',
+  'phone',
+  'companyId',
+  'companyName',
+  'active',
+  'roles',
+  'isAdmin',
+  'isViewer',
+  'assignedRoutes',
+  'assignedWells',
+  'assignmentRevision',
+  'assignmentUpdatedAt',
+  'mustUseSecureAuth',
+  'schemaVersion',
+] as const;
+
 export const USER_ALLOWLIST = [
   'email',
   'displayName',
@@ -178,12 +198,14 @@ export type ProjectedDashboardCatalog = {
   companyId: string | null;
   canViewWellPool: boolean;
   approved: Record<string, Record<string, unknown>>;
+  profiles: Record<string, Record<string, unknown>>;
   users: Record<string, Record<string, unknown>>;
   pending: Record<string, Record<string, unknown>>;
   wellConfig: Record<string, Record<string, unknown>>;
   wellStatus: Record<string, Record<string, unknown>>;
   counts: {
     approved: number;
+    profiles: number;
     users: number;
     pending: number;
     wellConfig: number;
@@ -307,6 +329,7 @@ export function projectWellStatus(outgoing: unknown): Record<string, Record<stri
 
 export function projectDashboardCatalog(input: {
   approved: unknown;
+  profiles?: unknown;
   users: unknown;
   wellConfig: unknown;
   pending?: unknown;
@@ -321,6 +344,11 @@ export function projectDashboardCatalog(input: {
   const canViewWellPool = callerCanViewGlobalWellPool(input.caller);
 
   const approved = projectMap(input.approved, flattenApprovedEntry, filterCompany);
+  const profiles = projectMap(
+    input.profiles,
+    (val) => pickAllowlisted(asRecord(val), CANONICAL_PROFILE_ALLOWLIST),
+    filterCompany,
+  );
   const users = projectMap(
     input.users,
     (val) => pickAllowlisted(asRecord(val), USER_ALLOWLIST),
@@ -346,12 +374,14 @@ export function projectDashboardCatalog(input: {
     companyId: scope === 'company' ? (companyId || null) : null,
     canViewWellPool,
     approved,
+    profiles,
     users,
     pending,
     wellConfig,
     wellStatus,
     counts: {
       approved: Object.keys(approved).length,
+      profiles: Object.keys(profiles).length,
       users: Object.keys(users).length,
       pending: Object.keys(pending).length,
       wellConfig: Object.keys(wellConfig).length,

@@ -7,12 +7,14 @@ export type DashboardCatalog = {
   companyId?: string | null;
   canViewWellPool?: boolean;
   approved: Record<string, unknown>;
+  profiles?: Record<string, unknown>;
   users: Record<string, unknown>;
   pending?: Record<string, unknown>;
   wellConfig: Record<string, unknown>;
   wellStatus?: Record<string, unknown>;
   counts: {
     approved: number;
+    profiles?: number;
     users: number;
     wellConfig: number;
     pending?: number;

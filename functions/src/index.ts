@@ -4760,8 +4760,10 @@ export {
   dismissDispatch,
   staffWriteDispatch,
   staffWriteDriverAssignment,
+  staffProvisionCanonicalWbmDriver,
   // Operational path hardening
   ingestDriverPacket,
+  ingestWbmPull,
   upsertDriverShift,
   resolveActiveDriverShift,
   claimDriverShift,

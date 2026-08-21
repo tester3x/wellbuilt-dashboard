@@ -27,9 +27,11 @@ export {
 export { dismissDispatch } from './dismissDispatchCallable';
 export { staffWriteDispatch } from './staffWriteDispatchCallable';
 export { staffWriteDriverAssignment } from './staffWriteDriverAssignmentCallable';
+export { staffProvisionCanonicalWbmDriver } from './staffProvisionCanonicalWbmDriverCallable';
 
 export {
   ingestDriverPacket,
+  ingestWbmPull,
   upsertDriverShift,
   resolveActiveDriverShift,
   claimDriverShift,

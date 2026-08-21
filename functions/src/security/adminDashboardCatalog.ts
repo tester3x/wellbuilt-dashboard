@@ -25,8 +25,9 @@ export const adminGetDashboardCatalog = httpsV2.onCall(
     );
 
     const rtdb = admin.database();
-    const [approvedSnap, usersSnap, wellSnap, pendingSnap, outgoingSnap] = await Promise.all([
+    const [approvedSnap, profilesSnap, usersSnap, wellSnap, pendingSnap, outgoingSnap] = await Promise.all([
       rtdb.ref('drivers/approved').once('value'),
+      rtdb.ref('drivers/profiles').once('value'),
       rtdb.ref('users').once('value'),
       rtdb.ref('well_config').once('value'),
       rtdb.ref('drivers/pending').once('value'),
@@ -35,6 +36,7 @@ export const adminGetDashboardCatalog = httpsV2.onCall(
 
     const projected = projectDashboardCatalog({
       approved: approvedSnap.exists() ? approvedSnap.val() : {},
+      profiles: profilesSnap.exists() ? profilesSnap.val() : {},
       users: usersSnap.exists() ? usersSnap.val() : {},
       wellConfig: wellSnap.exists() ? wellSnap.val() : {},
       pending: pendingSnap.exists() ? pendingSnap.val() : {},

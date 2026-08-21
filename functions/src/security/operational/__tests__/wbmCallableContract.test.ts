@@ -18,6 +18,7 @@ describe('WB-M callable export / contract matrix', () => {
   it('exports getDriverWellConfig, ingestDriverPacket, and staffWriteDriverAssignment', () => {
     expect(index).toMatch(/getDriverWellConfig,/);
     expect(index).toMatch(/ingestDriverPacket,/);
+    expect(index).toMatch(/ingestWbmPull,/);
     expect(index).toMatch(/staffWriteDriverAssignment,/);
     expect(securityIndex).toMatch(/getDriverWellConfig/);
     expect(securityIndex).toMatch(/ingestDriverPacket/);
@@ -52,8 +53,12 @@ describe('WB-M callable export / contract matrix', () => {
   it('Dashboard route editing cannot write a legacy row while leaving canonical stale', () => {
     const start = driversTab.indexOf('const assignDriverRoutes');
     const body = driversTab.slice(start, start + 1800);
-    expect(body).toMatch(/hasCanonicalDriverId\(routeTarget\)/);
+    expect(driversTab).toMatch(/interface CanonicalWbmDriver/);
+    expect(driversTab).toMatch(/LEGACY — NOT WB-M AUTHORITY/);
     expect(body).toMatch(/staffWriteDriverAssignment/);
+    expect(body).toMatch(/dry-run/);
+    expect(body).toMatch(/expectedAssignmentDigest/);
+    expect(body).not.toMatch(/mirrorLegacy/);
     expect(body).not.toMatch(/update\(ref\(/);
     expect(body).not.toMatch(/drivers\/approved\/\$\{/);
   });

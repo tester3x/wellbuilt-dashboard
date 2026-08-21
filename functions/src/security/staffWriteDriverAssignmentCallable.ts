@@ -1,5 +1,6 @@
 /**
- * Governed canonical WB-M route writes. Exact driverId. Not deployed this pass.
+ * Governed canonical WB-M route/well writes. Exact driverId.
+ * Dry-run unless mode is explicitly 'apply'. No legacy mirror.
  */
 import * as httpsV2 from 'firebase-functions/v2/https';
 import * as admin from 'firebase-admin';
@@ -9,14 +10,21 @@ import {
   assertCanonicalDriverId,
   evaluateStaffWriteDriverAssignment,
 } from './operational/staffWriteDriverAssignment';
+import {
+  assignmentDigest,
+  evaluateAssignmentTransaction,
+  knownRouteNames,
+  parseScopeList,
+  validateAssignedRoutesAgainstCatalog,
+  validateAssignedWellsAgainstCatalog,
+} from './operational/assignmentScope';
 
 const ALLOWED = new Set([
   'driverId',
   'assignedRoutes',
   'assignedWells',
   'mode',
-  'expectedAssignedRoutes',
-  'mirrorLegacy',
+  'expectedAssignmentDigest',
 ]);
 
 export const staffWriteDriverAssignment = httpsV2.onCall(
@@ -37,54 +45,55 @@ export const staffWriteDriverAssignment = httpsV2.onCall(
     } catch {
       throw new httpsV2.HttpsError('invalid-argument', 'driver_id_malformed');
     }
-    const mode = raw.mode === 'apply' ? 'apply' : 'dry-run';
-    const mirrorLegacy = raw.mirrorLegacy === true;
 
-    const routes = Array.isArray(raw.assignedRoutes)
-      ? (raw.assignedRoutes as unknown[]).filter((v): v is string => typeof v === 'string')
-      : [];
-    const wells = Array.isArray(raw.assignedWells)
-      ? (raw.assignedWells as unknown[]).filter((v): v is string => typeof v === 'string')
-      : undefined;
+    if (raw.mode !== undefined && raw.mode !== 'dry-run' && raw.mode !== 'apply') {
+      throw new httpsV2.HttpsError('invalid-argument', 'invalid_mode');
+    }
+    const mode = raw.mode === 'apply' ? 'apply' : 'dry-run';
+
+    const routesParsed = parseScopeList(raw.assignedRoutes, 'assignedRoutes');
+    if (!routesParsed.ok) throw new httpsV2.HttpsError('invalid-argument', routesParsed.reason);
+    const wellsParsed = parseScopeList(raw.assignedWells, 'assignedWells');
+    if (!wellsParsed.ok) throw new httpsV2.HttpsError('invalid-argument', wellsParsed.reason);
 
     const rtdb = admin.database();
     const profSnap = await rtdb.ref(`drivers/profiles/${driverId}`).once('value');
     const profile = profSnap.exists() ? (profSnap.val() as Record<string, unknown>) : null;
-
-    const approvedSnap = await rtdb.ref('drivers/approved').once('value');
-    const approvedRows: Array<{ key: string; migratedToDriverId?: unknown; displayName?: unknown }> = [];
-    const approvedTree = (approvedSnap.val() || {}) as Record<string, Record<string, unknown>>;
-    for (const [key, row] of Object.entries(approvedTree)) {
-      if (row && typeof row === 'object') {
-        approvedRows.push({
-          key,
-          migratedToDriverId: row.migratedToDriverId,
-          displayName: row.displayName,
-        });
-      }
-    }
 
     const decided = evaluateStaffWriteDriverAssignment({
       driverId,
       profile,
       callerCompanyId: caller.companyId,
       isPlatformAdmin: caller.isPlatformAdmin,
-      mirrorLegacy,
-      approvedRows,
-      expectedAssignedRoutes: raw.expectedAssignedRoutes,
     });
     if (!decided.ok) {
       throw new httpsV2.HttpsError('failed-precondition', decided.reason);
     }
 
+    const wellSnap = await rtdb.ref('well_config').once('value');
+    const wellConfig = wellSnap.exists() ? (wellSnap.val() as Record<string, unknown>) : {};
+    const routesOk = validateAssignedRoutesAgainstCatalog(
+      routesParsed.values,
+      knownRouteNames(wellConfig),
+    );
+    if (!routesOk.ok) throw new httpsV2.HttpsError('failed-precondition', routesOk.reason);
+    const wellsOk = validateAssignedWellsAgainstCatalog(
+      wellsParsed.values,
+      wellConfig,
+      decided.companyId,
+    );
+    if (!wellsOk.ok) throw new httpsV2.HttpsError('failed-precondition', wellsOk.reason);
+
     const before = {
       assignedRoutes: profile?.assignedRoutes ?? null,
       assignedWells: profile?.assignedWells ?? null,
+      assignmentRevision: profile?.assignmentRevision ?? null,
     };
     const after = {
-      assignedRoutes: routes,
-      assignedWells: wells === undefined ? (profile?.assignedWells ?? null) : wells,
+      assignedRoutes: routesParsed.values,
+      assignedWells: wellsParsed.values,
     };
+    const currentDigest = assignmentDigest(before.assignedRoutes, before.assignedWells);
     const preview = {
       ok: true as const,
       mode,
@@ -92,20 +101,43 @@ export const staffWriteDriverAssignment = httpsV2.onCall(
       companyId: decided.companyId,
       before,
       after,
-      mirrorLegacyKey: decided.mirrorLegacyKey,
+      currentDigest,
+      changedFields: [
+        ...(JSON.stringify(before.assignedRoutes) === JSON.stringify(after.assignedRoutes) ? [] : ['assignedRoutes']),
+        ...(JSON.stringify(before.assignedWells) === JSON.stringify(after.assignedWells) ? [] : ['assignedWells']),
+      ],
     };
     if (mode !== 'apply') return preview;
 
-    const updates: Record<string, unknown> = {
-      [`drivers/profiles/${driverId}/assignedRoutes`]: after.assignedRoutes,
-      [`drivers/profiles/${driverId}/assignedWells`]: after.assignedWells,
-      [`drivers/profiles/${driverId}/assignmentUpdatedAt`]: Date.now(),
-      [`drivers/profiles/${driverId}/assignmentUpdatedBy`]: caller.uid,
-    };
-    if (decided.mirrorLegacyKey) {
-      updates[`drivers/approved/${decided.mirrorLegacyKey}/assignedRoutes`] = after.assignedRoutes;
+    const expectedDigest = typeof raw.expectedAssignmentDigest === 'string'
+      ? raw.expectedAssignmentDigest
+      : '';
+    if (!expectedDigest) {
+      throw new httpsV2.HttpsError('failed-precondition', 'expected_digest_required');
     }
-    await rtdb.ref().update(updates);
+
+    const tx = await rtdb.ref(`drivers/profiles/${driverId}`).transaction((current) => {
+      const rec = current && typeof current === 'object' ? current as Record<string, unknown> : null;
+      const gate = evaluateAssignmentTransaction({
+        profile: rec,
+        expectedDigest,
+        callerCompanyId: caller.companyId,
+        isPlatformAdmin: caller.isPlatformAdmin,
+      });
+      if (!gate.ok || !rec) return;
+      return {
+        ...rec,
+        assignedRoutes: after.assignedRoutes,
+        assignedWells: after.assignedWells,
+        assignmentRevision: gate.nextRevision,
+        assignmentUpdatedAt: Date.now(),
+        assignmentUpdatedBy: caller.uid,
+      };
+    });
+    if (!tx.committed || !tx.snapshot.exists()) {
+      throw new httpsV2.HttpsError('failed-precondition', 'stale_preview');
+    }
+    const written = tx.snapshot.val() as Record<string, unknown>;
     await writeSecurityAudit({
       action: 'staffWriteDriverAssignment',
       actorUid: caller.uid,
@@ -114,9 +146,12 @@ export const staffWriteDriverAssignment = httpsV2.onCall(
         companyId: decided.companyId,
         before,
         after,
-        mirrorLegacyKey: decided.mirrorLegacyKey,
+        assignmentRevision: written.assignmentRevision ?? null,
       },
     });
-    return preview;
+    return {
+      ...preview,
+      assignmentRevision: written.assignmentRevision ?? null,
+    };
   },
 );

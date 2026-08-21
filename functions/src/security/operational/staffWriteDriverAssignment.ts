@@ -1,12 +1,11 @@
 /**
- * Canonical WB-M route authority writes. Exact driverId only.
- * No display-name matching. Legacy mirror only when migratedToDriverId
- * on an approved row equals this driverId.
+ * Canonical WB-M route/well writes. Exact driverId only.
+ * No display-name matching. No legacy mirroring.
  */
 export const CANONICAL_DRIVER_ID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
 export type AssignmentDecision =
-  | { ok: true; driverId: string; companyId: string; mirrorLegacyKey: string | null }
+  | { ok: true; driverId: string; companyId: string }
   | { ok: false; reason: string };
 
 export function assertCanonicalDriverId(raw: unknown): string {
@@ -21,9 +20,6 @@ export function evaluateStaffWriteDriverAssignment(input: {
   profile: Record<string, unknown> | null;
   callerCompanyId?: string;
   isPlatformAdmin: boolean;
-  mirrorLegacy: boolean;
-  approvedRows: Array<{ key: string; migratedToDriverId?: unknown; displayName?: unknown }>;
-  expectedAssignedRoutes?: unknown;
 }): AssignmentDecision {
   if (!input.profile) return { ok: false, reason: 'profile_missing' };
   if (input.profile.active === false) return { ok: false, reason: 'profile_inactive' };
@@ -34,21 +30,5 @@ export function evaluateStaffWriteDriverAssignment(input: {
       return { ok: false, reason: 'tenant_mismatch' };
     }
   }
-  if (input.expectedAssignedRoutes !== undefined) {
-    const current = JSON.stringify(input.profile.assignedRoutes ?? null);
-    const expected = JSON.stringify(input.expectedAssignedRoutes ?? null);
-    if (current !== expected) return { ok: false, reason: 'concurrency_conflict' };
-  }
-
-  const linked = input.approvedRows.filter((row) => row.migratedToDriverId === input.driverId);
-  if (linked.length > 1) return { ok: false, reason: 'ambiguous_legacy_link' };
-  if (input.mirrorLegacy && linked.length !== 1) {
-    return { ok: false, reason: 'legacy_link_unproven' };
-  }
-  return {
-    ok: true,
-    driverId: input.driverId,
-    companyId,
-    mirrorLegacyKey: input.mirrorLegacy && linked.length === 1 ? linked[0].key : null,
-  };
+  return { ok: true, driverId: input.driverId, companyId };
 }

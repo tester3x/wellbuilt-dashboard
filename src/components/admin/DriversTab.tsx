@@ -55,6 +55,19 @@ interface ApprovedDriver {
   driverId?: string;
   _legacy?: boolean;     // true if stored in old {hash}/{deviceId}/ format
   _legacyDeviceId?: string; // the device sub-key for legacy records
+  _legacyNotWbmAuthority?: boolean;
+}
+
+interface CanonicalWbmDriver {
+  driverId: string;
+  displayName: string;
+  legalName?: string;
+  active: boolean;
+  companyId?: string;
+  companyName?: string;
+  assignedRoutes: string[] | null;
+  assignedWells: string[] | null;
+  assignmentRevision: number | null;
 }
 
 /** Secure-credential presentation state shared by BOTH employee views. */
@@ -207,9 +220,16 @@ export function DriversTab({ scopeCompanyId, isWbAdmin = false }: DriversTabProp
 
   // Assign routes modal
   const [showRoutesModal, setShowRoutesModal] = useState(false);
-  const [routeTarget, setRouteTarget] = useState<ApprovedDriver | null>(null);
+  const [routeTarget, setRouteTarget] = useState<CanonicalWbmDriver | null>(null);
   const [selectedRoutes, setSelectedRoutes] = useState<string[]>([]);
+  const [selectedWells, setSelectedWells] = useState<string[]>([]);
   const [availableRoutes, setAvailableRoutes] = useState<string[]>([]);
+  const [assignmentPreview, setAssignmentPreview] = useState<{
+    currentDigest: string;
+    before: { assignedRoutes: unknown; assignedWells: unknown };
+    after: { assignedRoutes: string[]; assignedWells: string[] };
+  } | null>(null);
+  const [canonicalDrivers, setCanonicalDrivers] = useState<CanonicalWbmDriver[]>([]);
 
   // Combined approval modal (forces company + customers + route on approve)
   const [showApprovalModal, setShowApprovalModal] = useState(false);
@@ -273,7 +293,27 @@ export function DriversTab({ scopeCompanyId, isWbAdmin = false }: DriversTabProp
         setMessage(`Failed to load employees [${catalogErrorCode(catalogErr)}]`);
         throw catalogErr;
       }
-      // Load approved drivers
+      const canonical: CanonicalWbmDriver[] = [];
+      {
+        const data = (catalog.profiles || {}) as Record<string, any>;
+        Object.entries(data).forEach(([id, val]) => {
+          if (!val || typeof val !== 'object') return;
+          canonical.push({
+            driverId: id,
+            displayName: val.displayName || val.name || 'Unknown',
+            legalName: typeof val.legalName === 'string' ? val.legalName : undefined,
+            active: val.active !== false,
+            companyId: typeof val.companyId === 'string' ? val.companyId : undefined,
+            companyName: typeof val.companyName === 'string' ? val.companyName : undefined,
+            assignedRoutes: Array.isArray(val.assignedRoutes) ? val.assignedRoutes : null,
+            assignedWells: Array.isArray(val.assignedWells) ? val.assignedWells : null,
+            assignmentRevision: typeof val.assignmentRevision === 'number' ? val.assignmentRevision : null,
+          });
+        });
+        canonical.sort((a, b) => a.displayName.localeCompare(b.displayName));
+        setCanonicalDrivers(canonical);
+      }
+      // Load approved drivers — evidence only, never WB-M assignment targets
       const approved: ApprovedDriver[] = [];
       {
         const data = (catalog.approved || {}) as Record<string, any>;
@@ -303,6 +343,7 @@ export function DriversTab({ scopeCompanyId, isWbAdmin = false }: DriversTabProp
                 (typeof val.driverId === 'string' && val.driverId)
                 || (typeof val.migratedToDriverId === 'string' && val.migratedToDriverId)
                 || undefined,
+              _legacyNotWbmAuthority: true,
             });
           } else {
             // Legacy structure: drivers/approved/{hash}/{deviceId}/ = { displayName, active, ... }
@@ -477,26 +518,31 @@ export function DriversTab({ scopeCompanyId, isWbAdmin = false }: DriversTabProp
     }
   };
 
-  // ── Assign routes to driver ──
-  const assignDriverRoutes = async () => {
+  // ── Assign routes to canonical WB-M driver (preview then apply) ──
+  const assignDriverRoutes = async (mode: 'dry-run' | 'apply') => {
     if (!routeTarget) return;
-    if (!hasCanonicalDriverId(routeTarget)) {
-      setMessage('Canonical driverId required. Legacy-only rows cannot receive WB-M route writes.');
-      return;
-    }
     try {
       const { staffWriteDriverAssignment } = await import('@/lib/secureDriverAdmin');
-      const preview = await staffWriteDriverAssignment({
-        driverId: (routeTarget.driverId || '').trim(),
+      const result = await staffWriteDriverAssignment({
+        driverId: routeTarget.driverId,
         assignedRoutes: selectedRoutes,
-        mode: 'apply',
-      }) as { driverId?: string; before?: { assignedRoutes?: unknown }; after?: { assignedRoutes?: unknown }; mirrorLegacyKey?: string | null };
-      setMessage(
-        `Assigned ${selectedRoutes.length} route(s) to canonical ${preview.driverId || routeTarget.driverId}`
-        + (preview.mirrorLegacyKey ? ` (mirrored to linked legacy row)` : ''),
-      );
+        assignedWells: selectedWells,
+        mode,
+        expectedAssignmentDigest: mode === 'apply' ? assignmentPreview?.currentDigest : undefined,
+      });
+      if (mode === 'dry-run') {
+        setAssignmentPreview({
+          currentDigest: result.currentDigest,
+          before: { assignedRoutes: result.before.assignedRoutes, assignedWells: result.before.assignedWells },
+          after: result.after,
+        });
+        setMessage(`Preview ready for canonical ${result.driverId}. No write performed.`);
+        return;
+      }
+      setMessage(`Applied WB-M scope for canonical ${result.driverId} (revision ${String(result.assignmentRevision ?? '')})`);
       setShowRoutesModal(false);
       setRouteTarget(null);
+      setAssignmentPreview(null);
       await loadDrivers();
     } catch (err) {
       const msg = err instanceof Error ? err.message : 'assign_failed';
@@ -1187,6 +1233,9 @@ export function DriversTab({ scopeCompanyId, isWbAdmin = false }: DriversTabProp
           {isWbAdmin && driver._legacy && (
             <span className="px-1.5 py-0.5 bg-orange-700 text-orange-200 text-xs rounded font-medium">Legacy</span>
           )}
+          <span className="px-1.5 py-0.5 bg-red-900/70 text-red-200 text-xs rounded font-medium" title="Legacy approved row is not WB-M route authority">
+            LEGACY — NOT WB-M AUTHORITY
+          </span>
           {driver.dashboardRole ? (
             <span className="px-1.5 py-0.5 bg-purple-600 text-white text-xs rounded font-medium">
               {getRoleLabel(driver.dashboardRole, userCompany)}
@@ -1298,10 +1347,12 @@ export function DriversTab({ scopeCompanyId, isWbAdmin = false }: DriversTabProp
               + Assign Operator
             </button>
             <button
-              onClick={() => { setRouteTarget(driver); setSelectedRoutes(driver.assignedRoutes || []); setShowRoutesModal(true); }}
-              className="px-3 py-1 text-sm rounded bg-blue-600 hover:bg-blue-500 text-white"
+              onClick={() => {
+                setMessage('Legacy rows are not WB-M authority. Assign routes on the canonical profile.');
+              }}
+              className="px-3 py-1 text-sm rounded bg-gray-700 text-gray-400 cursor-not-allowed"
             >
-              {(driver.assignedRoutes?.length || 0) > 0 ? 'Edit Routes' : '+ Assign Routes'}
+              Routes (legacy — not WB-M)
             </button>
             <button
               onClick={() => { setPackageTarget(driver); setSelectedPackageId(driver.defaultPackageId || ''); setShowPackageModal(true); }}
@@ -1493,6 +1544,49 @@ export function DriversTab({ scopeCompanyId, isWbAdmin = false }: DriversTabProp
         </div>
       )}
 
+      {/* ── Canonical WB-M authority ── */}
+      <div className="mb-6 border border-blue-800/60 rounded-lg p-4 bg-gray-900/40">
+        <h3 className="text-white font-medium mb-1">WB-M canonical drivers</h3>
+        <p className="text-gray-400 text-xs mb-3">
+          Sole WB-M route/well authority. Legacy approved rows below are evidence only.
+        </p>
+        {canonicalDrivers.length === 0 ? (
+          <p className="text-gray-500 text-sm">No canonical profiles in catalog.</p>
+        ) : (
+          <div className="space-y-2">
+            {canonicalDrivers
+              .filter(d => !scopeCompanyId || d.companyId === scopeCompanyId)
+              .filter(d => !search.trim() || d.displayName.toLowerCase().includes(search.toLowerCase()))
+              .map((d) => (
+                <div key={d.driverId} className="flex flex-wrap items-center justify-between gap-2 bg-gray-800 rounded p-3">
+                  <div>
+                    <div className="text-white font-medium">{d.displayName}</div>
+                    <div className="text-gray-400 text-xs font-mono">{d.driverId}</div>
+                    <div className="text-gray-400 text-xs">
+                      {d.active ? 'active' : 'inactive'} · {d.companyId || 'unscoped'} ·
+                      {d.assignedRoutes == null && d.assignedWells == null
+                        ? ' scope_not_configured'
+                        : ` routes ${d.assignedRoutes?.length ?? 0} / wells ${d.assignedWells?.length ?? 0}`}
+                    </div>
+                  </div>
+                  <button
+                    onClick={() => {
+                      setRouteTarget(d);
+                      setSelectedRoutes(d.assignedRoutes || []);
+                      setSelectedWells(d.assignedWells || []);
+                      setAssignmentPreview(null);
+                      setShowRoutesModal(true);
+                    }}
+                    className="px-3 py-1 text-sm rounded bg-blue-600 hover:bg-blue-500 text-white"
+                  >
+                    Preview WB-M routes
+                  </button>
+                </div>
+              ))}
+          </div>
+        )}
+      </div>
+
       {/* ── Unified Employee panel (7/9 refactor) ── */}
       <EmployeePanel
         employees={scopeCompanyId ? employees.filter(e => e.companyId === scopeCompanyId) : employees}
@@ -1516,8 +1610,17 @@ export function DriversTab({ scopeCompanyId, isWbAdmin = false }: DriversTabProp
         }}
         onSaveRoles={saveEmployeeRoles}
         onAssignRoutes={(row) => {
-          if (!row.driver) return;
-          setRouteTarget(row.driver); setSelectedRoutes(row.driver.assignedRoutes || []); setShowRoutesModal(true);
+          const id = row.driver?.driverId?.trim();
+          const canonical = id ? canonicalDrivers.find(c => c.driverId === id) : undefined;
+          if (!canonical) {
+            setMessage('LEGACY — NOT WB-M AUTHORITY. Assign routes on the canonical profile.');
+            return;
+          }
+          setRouteTarget(canonical);
+          setSelectedRoutes(canonical.assignedRoutes || []);
+          setSelectedWells(canonical.assignedWells || []);
+          setAssignmentPreview(null);
+          setShowRoutesModal(true);
         }}
         onAssignCompany={(row) => {
           if (!row.driver) return;
@@ -2122,22 +2225,32 @@ export function DriversTab({ scopeCompanyId, isWbAdmin = false }: DriversTabProp
               </div>
             )}
 
+            {assignmentPreview && (
+              <pre className="mt-3 text-xs text-gray-300 bg-gray-900 rounded p-2 overflow-auto max-h-32">
+                {JSON.stringify({ before: assignmentPreview.before, after: assignmentPreview.after }, null, 2)}
+              </pre>
+            )}
             <div className="flex gap-2 mt-4">
               <button
-                onClick={assignDriverRoutes}
-                className="flex-1 px-4 py-2 bg-blue-600 hover:bg-blue-500 text-white rounded"
+                onClick={() => assignDriverRoutes('dry-run')}
+                className="flex-1 px-4 py-2 bg-slate-600 hover:bg-slate-500 text-white rounded"
               >
-                {hasCanonicalDriverId(routeTarget)
-                  ? (selectedRoutes.length > 0
-                    ? `Assign ${selectedRoutes.length} Route${selectedRoutes.length > 1 ? 's' : ''}`
-                    : 'Clear canonical routes')
-                  : 'Canonical driverId required'}
+                Preview
+              </button>
+              <button
+                onClick={() => assignDriverRoutes('apply')}
+                disabled={!assignmentPreview}
+                className="flex-1 px-4 py-2 bg-blue-600 hover:bg-blue-500 text-white rounded disabled:opacity-30"
+              >
+                Apply canonical
               </button>
               <button
                 onClick={() => {
                   setShowRoutesModal(false);
                   setRouteTarget(null);
                   setSelectedRoutes([]);
+                  setSelectedWells([]);
+                  setAssignmentPreview(null);
                 }}
                 className="px-4 py-2 bg-gray-600 hover:bg-gray-500 text-white rounded"
               >
