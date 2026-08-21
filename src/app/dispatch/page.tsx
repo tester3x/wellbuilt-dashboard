@@ -3,8 +3,9 @@
 import { useEffect, useState, useMemo, useCallback, Suspense } from 'react';
 import { useRouter, useSearchParams } from 'next/navigation';
 import { useAuth } from '@/contexts/AuthContext';
-import { WellResponse, subscribeToWellStatusesUnified, wellResponsesFromCatalog } from '@/lib/wells';
-import { adminGetDashboardCatalog, classifiedReadFailure } from '@/lib/adminDashboardCatalog';
+import { WellResponse, subscribeToWellStatusesUnified, mergeWellPool } from '@/lib/wells';
+import { adminGetDashboardCatalog, adminGetWellPool, classifiedReadFailure } from '@/lib/adminDashboardCatalog';
+import { TypeaheadResultList } from '@/components/TypeaheadResultList';
 import { canViewGlobalWellPool, docBelongsToTenant } from '@/lib/tenantScope';
 import { AppHeader } from '@/components/AppHeader';
 import { getFirestoreDb } from '@/lib/firebase';
@@ -16,6 +17,8 @@ import { loadCompanyById } from '@/lib/companySettings';
 import { trackJobTypeUsage } from '@/lib/jobTypeUsage';
 import { dismissDispatch } from '@/lib/dismissDispatch';
 import { staffCancelDispatch, staffCreateDispatch, staffUpdateDispatch } from '@/lib/staffWriteDispatch';
+import { dispatchCardConfirmCopy, resolveDispatchCardAction } from '@/lib/dispatchCardAction';
+import { useTypeaheadNav } from '@/lib/useTypeaheadNav';
 
 // ─── Types ───────────────────────────────────────────────────────────────────
 
@@ -330,6 +333,39 @@ function timeAgo(ts: any): string {
   }
 }
 
+type LocationOpt = { label: string; sub: string; value: string };
+
+function combinedLocationOptions(
+  q: string,
+  wells: WellResponse[],
+  operatorWells: NdicWell[],
+  disposals: NdicWell[],
+): LocationOpt[] {
+  const query = q.trim().toLowerCase();
+  if (query.length < 2) return [];
+  const exactMatch = wells.some(w => (w.ndicName || w.wellName).toLowerCase() === query)
+    || operatorWells.some(w => w.well_name.toLowerCase() === query)
+    || disposals.some(d => d.well_name.toLowerCase() === query);
+  if (exactMatch) return [];
+  const seen = new Set<string>();
+  const wellMatches = wells
+    .filter(w => (w.ndicName || w.wellName).toLowerCase().includes(query))
+    .map(w => {
+      seen.add((w.ndicName || w.wellName).toLowerCase());
+      return { label: w.ndicName || w.wellName, sub: w.route || '', value: w.ndicName || w.wellName };
+    });
+  const operatorMatches = operatorWells
+    .filter(w => w.well_name.toLowerCase().includes(query) && !seen.has(w.well_name.toLowerCase()))
+    .map(w => {
+      seen.add(w.well_name.toLowerCase());
+      return { label: w.well_name, sub: w.operator || 'NDIC', value: w.well_name };
+    });
+  const disposalMatches = searchDisposals(query, disposals)
+    .filter(d => !seen.has(d.well_name.toLowerCase()))
+    .map(d => ({ label: d.well_name, sub: 'SWD', value: d.well_name }));
+  return [...wellMatches, ...operatorMatches, ...disposalMatches].slice(0, 15);
+}
+
 // ─── Main Component ──────────────────────────────────────────────────────────
 
 function DispatchPageInner() {
@@ -524,6 +560,31 @@ function DispatchPageInner() {
   // Map job type label → packageId (for stamping dispatch docs)
   const [jobTypeToPackageId, setJobTypeToPackageId] = useState<Record<string, string>>({});
 
+  const pwDisposalNav = useTypeaheadNav(disposalResults, (d) => {
+    setAssignDisposal(d.well_name);
+    setAssignDisposalWell(d);
+    setDisposalSearch('');
+    setDisposalResults([]);
+  });
+  const swDropoffOptions = useMemo(
+    () => combinedLocationOptions(swDropoff, wells, allOperatorWells, allDisposals),
+    [swDropoff, wells, allOperatorWells, allDisposals],
+  );
+  const swDropoffNav = useTypeaheadNav(swDropoffOptions, (item) => { setSwDropoff(item.value); });
+  const swWellOptions = useMemo(
+    () => combinedLocationOptions(swWellName, wells, allOperatorWells, allDisposals),
+    [swWellName, wells, allOperatorWells, allDisposals],
+  );
+  const swWellNav = useTypeaheadNav(swWellOptions, (item) => { setSwWellName(item.value); });
+  const editPwDisposalNav = useTypeaheadNav(editPwDisposalResults, (d) => {
+    setEditPwDisposal(d.well_name);
+    setEditPwShowDisposalDropdown(false);
+  });
+  const editSwDisposalNav = useTypeaheadNav(editSwDisposalResults, (d) => {
+    setEditSwDisposal(d.well_name);
+    setEditSwShowDisposalDropdown(false);
+  });
+
   // Auth redirect
   useEffect(() => {
     if (!loading && !user) {
@@ -551,9 +612,9 @@ function DispatchPageInner() {
       setDataLoading(false);
     }, async (err) => {
       try {
-        const catalog = await adminGetDashboardCatalog();
+        const pool = await adminGetWellPool();
         if (cancelled) return;
-        const snapshot = wellResponsesFromCatalog((catalog.wellConfig || {}) as Record<string, unknown>);
+        const snapshot = mergeWellPool(pool.wellConfig || {}, pool.wellStatus || {});
         setWells(snapshot);
         setRoutes([...new Set(snapshot.map(w => w.route).filter((r): r is string => !!r && r !== 'Unrouted'))]);
         setReadErrors(prev => ({ ...prev, wells: classifiedReadFailure('well queue live status', err) }));
@@ -1238,7 +1299,7 @@ function DispatchPageInner() {
       await staffCancelDispatch(jobId);
     } catch (err: unknown) {
       const msg = err instanceof Error ? err.message : 'Cancel failed';
-      setMessage(`Failed to cancel dispatch [${msg.replace(/^FirebaseError:\s*/i, '')}]`);
+      setMessage(`Cancel failed: ${msg.replace(/^FirebaseError:\s*/i, '')}`);
       setTimeout(() => setMessage(''), 5000);
     }
   }
@@ -2105,7 +2166,7 @@ function DispatchPageInner() {
 
           {/* Status message */}
           {message && (
-            <div className={`p-2.5 rounded text-sm mb-3 ${message.startsWith('Error') || message.startsWith('Dismiss failed') ? 'bg-red-900/50 text-red-200' : 'bg-blue-900/60 text-blue-200'}`}>
+            <div className={`p-2.5 rounded text-sm mb-3 ${message.startsWith('Error') || message.startsWith('Dismiss failed') || message.startsWith('Cancel failed') || message.startsWith('Control error') ? 'bg-red-900/50 text-red-200' : 'bg-blue-900/60 text-blue-200'}`}>
               {message}
             </div>
           )}
@@ -2253,17 +2314,22 @@ function DispatchPageInner() {
                       ) : (
                         <input type="text" value={disposalSearch}
                           onChange={(e) => { setDisposalSearch(e.target.value); setDisposalResults(e.target.value.length >= 2 ? searchDisposals(e.target.value, allDisposals) : []); }}
-                          placeholder="Search SWD..." className="w-full px-3 py-1.5 bg-gray-900 border border-gray-700 rounded text-white text-sm placeholder-gray-500 focus:outline-none focus:border-blue-500" />
+                          onKeyDown={pwDisposalNav.onKeyDown}
+                          placeholder="Search SWD..." className="w-full px-3 py-1.5 bg-gray-900 border border-gray-700 rounded text-white text-sm placeholder-gray-500 focus:outline-none focus:border-blue-500 focus-visible:ring-2 focus-visible:ring-cyan-400" />
                       )}
                       {disposalResults.length > 0 && !assignDisposalWell && (
-                        <div className="absolute z-50 w-full mt-1 bg-gray-800 border border-gray-600 rounded max-h-36 overflow-y-auto shadow-lg">
-                          {disposalResults.map((d, i) => (
-                            <button key={d.api_no || i} onClick={() => { setAssignDisposal(d.well_name); setAssignDisposalWell(d); setDisposalSearch(''); setDisposalResults([]); }}
-                              className="w-full text-left px-3 py-1.5 hover:bg-gray-700 border-b border-gray-700/50 last:border-0 text-white text-sm">
-                              {d.well_name} <span className="text-gray-400 text-xs ml-1">{d.county || ''}</span>
-                            </button>
-                          ))}
-                        </div>
+                        <TypeaheadResultList
+                          items={disposalResults}
+                          activeIndex={pwDisposalNav.activeIndex}
+                          setActiveIndex={pwDisposalNav.setActiveIndex}
+                          onSelect={(d) => { setAssignDisposal(d.well_name); setAssignDisposalWell(d); setDisposalSearch(''); setDisposalResults([]); }}
+                          accent="cyan"
+                          committedValue={assignDisposal}
+                          getKey={(d, i) => d.api_no || String(i)}
+                          getLabel={(d) => d.well_name}
+                          getSub={(d) => d.county || ''}
+                          open={pwDisposalNav.open}
+                        />
                       )}
                     </div>
                     {/* Loads + Notes — loads greyed in multi-well mode */}
@@ -2317,40 +2383,23 @@ function DispatchPageInner() {
                             type="text"
                             value={swWellName}
                             onChange={(e) => setSwWellName(e.target.value)}
+                            onKeyDown={swWellNav.onKeyDown}
                             placeholder="Type to search..."
-                            className="w-full px-3 py-1.5 bg-gray-900 border border-gray-700 rounded text-white text-sm placeholder-gray-500 focus:outline-none focus:border-purple-500"
+                            className="w-full px-3 py-1.5 bg-gray-900 border border-gray-700 rounded text-white text-sm placeholder-gray-500 focus:outline-none focus:border-purple-500 focus-visible:ring-2 focus-visible:ring-purple-400"
                           />
-                          {(() => {
-                            const q = swWellName.trim().toLowerCase();
-                            if (q.length < 2) return null;
-                            const exactMatch = wells.some(w => (w.ndicName || w.wellName).toLowerCase() === q) ||
-                              allOperatorWells.some(w => w.well_name.toLowerCase() === q) ||
-                              allDisposals.some(d => d.well_name.toLowerCase() === q);
-                            if (exactMatch) return null;
-                            const seen = new Set<string>();
-                            const wellMatches = wells
-                              .filter(w => (w.ndicName || w.wellName).toLowerCase().includes(q))
-                              .map(w => { seen.add((w.ndicName || w.wellName).toLowerCase()); return { label: w.ndicName || w.wellName, sub: w.route || '', value: w.ndicName || w.wellName }; });
-                            const operatorMatches = allOperatorWells
-                              .filter(w => w.well_name.toLowerCase().includes(q) && !seen.has(w.well_name.toLowerCase()))
-                              .map(w => { seen.add(w.well_name.toLowerCase()); return { label: w.well_name, sub: w.operator || 'NDIC', value: w.well_name }; });
-                            const disposalMatches = searchDisposals(q, allDisposals)
-                              .filter(d => !seen.has(d.well_name.toLowerCase()))
-                              .map(d => ({ label: d.well_name, sub: 'SWD', value: d.well_name }));
-                            const combined = [...wellMatches, ...operatorMatches, ...disposalMatches].slice(0, 15);
-                            if (combined.length === 0) return null;
-                            return (
-                              <div className="absolute z-50 w-full mt-1 bg-gray-800 border border-gray-600 rounded max-h-48 overflow-y-auto shadow-lg">
-                                {combined.map((item, i) => (
-                                  <button key={`${item.value}-${i}`} type="button" onClick={() => setSwWellName(item.value)}
-                                    className="w-full text-left px-3 py-1.5 hover:bg-gray-700 border-b border-gray-700/50 last:border-0 text-white text-sm">
-                                    {item.label}
-                                    {item.sub && <span className="text-gray-500 text-xs ml-2">{item.sub}</span>}
-                                  </button>
-                                ))}
-                              </div>
-                            );
-                          })()}
+                          <TypeaheadResultList
+                            items={swWellOptions}
+                            activeIndex={swWellNav.activeIndex}
+                            setActiveIndex={swWellNav.setActiveIndex}
+                            onSelect={(item) => setSwWellName(item.value)}
+                            accent="purple"
+                            committedValue={swWellName}
+                            getKey={(item, i) => `${item.value}-${i}`}
+                            getLabel={(item) => item.label}
+                            getSub={(item) => item.sub}
+                            open={swWellNav.open}
+                            className="absolute z-50 w-full mt-1 bg-gray-800 border border-gray-600 rounded max-h-48 overflow-y-auto shadow-lg"
+                          />
                         </div>
                         <div className="relative">
                           <label className="block text-xs text-gray-400 mb-1">Drop-off (optional)</label>
@@ -2358,40 +2407,23 @@ function DispatchPageInner() {
                             type="text"
                             value={swDropoff}
                             onChange={(e) => setSwDropoff(e.target.value)}
+                            onKeyDown={swDropoffNav.onKeyDown}
                             placeholder="SWD or well..."
-                            className="w-full px-3 py-1.5 bg-gray-900 border border-gray-700 rounded text-white text-sm placeholder-gray-500 focus:outline-none focus:border-purple-500"
+                            className="w-full px-3 py-1.5 bg-gray-900 border border-gray-700 rounded text-white text-sm placeholder-gray-500 focus:outline-none focus:border-purple-500 focus-visible:ring-2 focus-visible:ring-purple-400"
                           />
-                          {(() => {
-                            const q = swDropoff.trim().toLowerCase();
-                            if (q.length < 2) return null;
-                            const exactMatch = wells.some(w => (w.ndicName || w.wellName).toLowerCase() === q) ||
-                              allOperatorWells.some(w => w.well_name.toLowerCase() === q) ||
-                              allDisposals.some(d => d.well_name.toLowerCase() === q);
-                            if (exactMatch) return null;
-                            const seen2 = new Set<string>();
-                            const wellMatches = wells
-                              .filter(w => (w.ndicName || w.wellName).toLowerCase().includes(q))
-                              .map(w => { seen2.add((w.ndicName || w.wellName).toLowerCase()); return { label: w.ndicName || w.wellName, sub: w.route || '', value: w.ndicName || w.wellName }; });
-                            const operatorMatches = allOperatorWells
-                              .filter(w => w.well_name.toLowerCase().includes(q) && !seen2.has(w.well_name.toLowerCase()))
-                              .map(w => { seen2.add(w.well_name.toLowerCase()); return { label: w.well_name, sub: w.operator || 'NDIC', value: w.well_name }; });
-                            const disposalMatches = searchDisposals(q, allDisposals)
-                              .filter(d => !seen2.has(d.well_name.toLowerCase()))
-                              .map(d => ({ label: d.well_name, sub: 'SWD', value: d.well_name }));
-                            const combined = [...wellMatches, ...operatorMatches, ...disposalMatches].slice(0, 15);
-                            if (combined.length === 0) return null;
-                            return (
-                              <div className="absolute z-50 w-full mt-1 bg-gray-800 border border-gray-600 rounded max-h-48 overflow-y-auto shadow-lg">
-                                {combined.map((item, i) => (
-                                  <button key={`${item.value}-${i}`} type="button" onClick={() => setSwDropoff(item.value)}
-                                    className="w-full text-left px-3 py-1.5 hover:bg-gray-700 border-b border-gray-700/50 last:border-0 text-white text-sm">
-                                    {item.label}
-                                    {item.sub && <span className="text-gray-500 text-xs ml-2">{item.sub}</span>}
-                                  </button>
-                                ))}
-                              </div>
-                            );
-                          })()}
+                          <TypeaheadResultList
+                            items={swDropoffOptions}
+                            activeIndex={swDropoffNav.activeIndex}
+                            setActiveIndex={swDropoffNav.setActiveIndex}
+                            onSelect={(item) => setSwDropoff(item.value)}
+                            accent="purple"
+                            committedValue={swDropoff}
+                            getKey={(item, i) => `${item.value}-${i}`}
+                            getLabel={(item) => item.label}
+                            getSub={(item) => item.sub}
+                            open={swDropoffNav.open}
+                            className="absolute z-50 w-full mt-1 bg-gray-800 border border-gray-600 rounded max-h-48 overflow-y-auto shadow-lg"
+                          />
                         </div>
                       </div>{/* end left: Well + Drop-off */}
                       {/* Right: Service Type + Onsite By stacked */}
@@ -2945,6 +2977,7 @@ function DispatchPageInner() {
                   >
                     Active Jobs
                     {(() => {
+                      // Policy: cancelled/declined stay in Active Jobs until dismissed.
                       const activeCount = dispatches.filter(d => !['completed', 'dismissed'].includes(d.status)).reduce((sum, d) => sum + ((d as any).loadCount || 1), 0);
                       return activeCount > 0 ? (
                         <span className={`ml-1 px-1.5 py-0.5 text-[10px] rounded font-bold ${
@@ -3310,23 +3343,24 @@ function DispatchPageInner() {
                     }}
                     onFocus={() => { if (editPwDisposal.length >= 2) setEditPwShowDisposalDropdown(true); }}
                     onBlur={() => setTimeout(() => setEditPwShowDisposalDropdown(false), 200)}
+                    onKeyDown={editPwDisposalNav.onKeyDown}
                     placeholder="Search SWDs..."
-                    className="w-full px-3 py-2 bg-gray-900 border border-gray-700 rounded text-white text-sm placeholder-gray-500 focus:outline-none focus:border-blue-500"
+                    className="w-full px-3 py-2 bg-gray-900 border border-gray-700 rounded text-white text-sm placeholder-gray-500 focus:outline-none focus:border-blue-500 focus-visible:ring-2 focus-visible:ring-cyan-400"
                   />
                   {editPwShowDisposalDropdown && editPwDisposalResults.length > 0 && (
-                    <div className="absolute z-50 top-full left-0 w-full mt-1 bg-gray-900 border border-gray-600 rounded-lg shadow-lg max-h-40 overflow-y-auto">
-                      {editPwDisposalResults.map((d, i) => (
-                        <button
-                          key={`${d.well_name}-${i}`}
-                          onMouseDown={(e) => e.preventDefault()}
-                          onClick={() => { setEditPwDisposal(d.well_name); setEditPwShowDisposalDropdown(false); }}
-                          className="w-full text-left px-3 py-2 text-sm text-white hover:bg-gray-700 transition-colors"
-                        >
-                          <span>{d.well_name}</span>
-                          {d.operator && <span className="text-gray-500 ml-2 text-xs">{d.operator}</span>}
-                        </button>
-                      ))}
-                    </div>
+                    <TypeaheadResultList
+                      items={editPwDisposalResults}
+                      activeIndex={editPwDisposalNav.activeIndex}
+                      setActiveIndex={editPwDisposalNav.setActiveIndex}
+                      onSelect={(d) => { setEditPwDisposal(d.well_name); setEditPwShowDisposalDropdown(false); }}
+                      accent="cyan"
+                      committedValue={editPwDisposal}
+                      getKey={(d, i) => `${d.well_name}-${i}`}
+                      getLabel={(d) => d.well_name}
+                      getSub={(d) => d.operator || ''}
+                      className="absolute z-50 top-full left-0 w-full mt-1 bg-gray-900 border border-gray-600 rounded-lg shadow-lg max-h-40 overflow-y-auto"
+                      itemClassName="w-full text-left px-3 py-2 text-sm outline-none"
+                    />
                   )}
                 </div>
 
@@ -3526,23 +3560,24 @@ function DispatchPageInner() {
                     }}
                     onFocus={() => { if (editSwDisposal.length >= 2) setEditSwShowDisposalDropdown(true); }}
                     onBlur={() => setTimeout(() => setEditSwShowDisposalDropdown(false), 200)}
+                    onKeyDown={editSwDisposalNav.onKeyDown}
                     placeholder="Search SWDs..."
-                    className="w-full px-3 py-2 bg-gray-900 border border-gray-700 rounded text-white text-sm placeholder-gray-500 focus:outline-none focus:border-purple-500"
+                    className="w-full px-3 py-2 bg-gray-900 border border-gray-700 rounded text-white text-sm placeholder-gray-500 focus:outline-none focus:border-purple-500 focus-visible:ring-2 focus-visible:ring-purple-400"
                   />
                   {editSwShowDisposalDropdown && editSwDisposalResults.length > 0 && (
-                    <div className="absolute z-50 top-full left-0 w-full mt-1 bg-gray-900 border border-gray-600 rounded-lg shadow-lg max-h-40 overflow-y-auto">
-                      {editSwDisposalResults.map((d, i) => (
-                        <button
-                          key={`${d.well_name}-${i}`}
-                          onMouseDown={(e) => e.preventDefault()}
-                          onClick={() => { setEditSwDisposal(d.well_name); setEditSwShowDisposalDropdown(false); }}
-                          className="w-full text-left px-3 py-2 text-sm text-white hover:bg-gray-700 transition-colors"
-                        >
-                          <span>{d.well_name}</span>
-                          {d.operator && <span className="text-gray-500 ml-2 text-xs">{d.operator}</span>}
-                        </button>
-                      ))}
-                    </div>
+                    <TypeaheadResultList
+                      items={editSwDisposalResults}
+                      activeIndex={editSwDisposalNav.activeIndex}
+                      setActiveIndex={editSwDisposalNav.setActiveIndex}
+                      onSelect={(d) => { setEditSwDisposal(d.well_name); setEditSwShowDisposalDropdown(false); }}
+                      accent="purple"
+                      committedValue={editSwDisposal}
+                      getKey={(d, i) => `${d.well_name}-${i}`}
+                      getLabel={(d) => d.well_name}
+                      getSub={(d) => d.operator || ''}
+                      className="absolute z-50 top-full left-0 w-full mt-1 bg-gray-900 border border-gray-600 rounded-lg shadow-lg max-h-40 overflow-y-auto"
+                      itemClassName="w-full text-left px-3 py-2 text-sm outline-none"
+                    />
                   )}
                 </div>
 
@@ -3853,20 +3888,42 @@ function DispatchJobRow({ job, cancelDispatch, compact, onClickServiceWork, onRe
           >👯</button>
         )}
 
-        {/* Remove button — dispatcher dismissing, not driver canceling */}
-        <button
-          onClick={(e) => {
-            e.stopPropagation();
-            if (!job.id) return;
-            if (!onDismiss) {
-              window.alert('Dismiss is not wired. This is a control failure, not an empty action.');
-              return;
-            }
-            onDismiss(job.id);
-          }}
-          className="text-red-400/60 hover:text-red-300 text-xs flex-shrink-0 transition-colors"
-          title="Remove dispatch"
-        >&#10005;</button>
+        {(() => {
+          const cardAction = resolveDispatchCardAction(job.status);
+          if (cardAction.kind === 'none') return null;
+          return (
+            <button
+              type="button"
+              aria-label={cardAction.kind === 'error' ? cardAction.label : cardAction.label}
+              title={cardAction.kind === 'error' ? cardAction.label : cardAction.label}
+              onClick={(e) => {
+                e.stopPropagation();
+                if (!job.id) return;
+                if (cardAction.kind === 'error') {
+                  window.alert(`Control error [${cardAction.reason}]. No action taken.`);
+                  return;
+                }
+                const well = job.ndicWellName || job.wellName || job.id;
+                const driver = job.driverFirstName || job.driverName || 'Unknown';
+                if (!window.confirm(dispatchCardConfirmCopy({
+                  well, driver, status: job.status, action: cardAction,
+                }))) return;
+                if (cardAction.kind === 'cancel') {
+                  cancelDispatch(job.id);
+                  return;
+                }
+                if (cardAction.kind === 'dismiss') {
+                  if (!onDismiss) {
+                    window.alert('Dismiss is not wired. This is a control failure, not an empty action.');
+                    return;
+                  }
+                  onDismiss(job.id);
+                }
+              }}
+              className="text-red-400/60 hover:text-red-300 text-xs flex-shrink-0 transition-colors"
+            >&#10005;</button>
+          );
+        })()}
       </div>
 
       {/* Detail row — invoice #, drop-off, notes */}
@@ -3893,6 +3950,76 @@ function DispatchJobRow({ job, cancelDispatch, compact, onClickServiceWork, onRe
   );
 }
 
+function AttentionJobCard({ job, onReassign, onDismiss }: {
+  job: DispatchJob;
+  onReassign?: (job: DispatchJob) => void;
+  onDismiss?: (jobId: string) => void;
+}) {
+  const cardAction = resolveDispatchCardAction(job.status);
+  const badge = job.status === 'cancelled' ? 'CANCELLED' : job.status === 'declined' ? 'DECLINED' : (job.status || '').toUpperCase();
+  return (
+    <div className="border border-red-600/30 rounded-lg overflow-hidden bg-red-950/20">
+      <div className="px-4 py-3">
+        <div className="flex items-center gap-2">
+          <JobTypeBadge type={job.jobType} serviceType={job.serviceType} />
+          <span className="text-white font-medium text-sm truncate">{job.ndicWellName || job.wellName}</span>
+          {(() => {
+            const remaining = (job.loadCount || 1) - (job.loadsCompleted || 0);
+            return remaining > 1 ? (
+              <span className="px-1.5 py-0.5 bg-yellow-600/30 text-yellow-300 text-[10px] rounded font-bold flex-shrink-0">x{remaining}</span>
+            ) : null;
+          })()}
+          <span className="px-2 py-0.5 bg-red-600/30 text-red-300 text-[10px] font-bold rounded">{badge}</span>
+          <span className="flex-1" />
+          <button
+            type="button"
+            onClick={() => onReassign?.(job)}
+            className="px-3 py-1 bg-blue-600 hover:bg-blue-500 text-white text-xs font-medium rounded transition-colors"
+          >Reassign</button>
+          <button
+            type="button"
+            title={cardAction.kind === 'dismiss' ? cardAction.label : 'Dismiss dispatch'}
+            aria-label={cardAction.kind === 'dismiss' ? cardAction.label : 'Dismiss dispatch'}
+            onClick={() => {
+              if (!job.id) return;
+              if (cardAction.kind !== 'dismiss') {
+                window.alert(`Control error [${cardAction.kind === 'error' ? cardAction.reason : cardAction.kind}]. No action taken.`);
+                return;
+              }
+              const well = job.ndicWellName || job.wellName || job.id;
+              const driver = job.driverFirstName || job.driverName || 'Unknown';
+              if (!window.confirm(dispatchCardConfirmCopy({
+                well, driver, status: job.status, action: cardAction,
+              }))) return;
+              onDismiss?.(job.id);
+            }}
+            className="px-3 py-1 bg-gray-700 hover:bg-gray-600 text-gray-300 text-xs font-medium rounded transition-colors"
+          >Dismiss</button>
+        </div>
+        <div className="mt-2 ml-[42px] space-y-1">
+          <div className="flex items-center gap-2 text-xs">
+            <span className="text-red-400/80 font-medium">
+              {job.declinedBy || job.driverFirstName || job.driverName}
+            </span>
+            {job.declinedAt && (
+              <span className="text-gray-600">{timeAgo(job.declinedAt)}</span>
+            )}
+          </div>
+          {job.declineReason && (
+            <div className="text-gray-400 text-xs italic">&ldquo;{job.declineReason}&rdquo;</div>
+          )}
+          {(job.invoiceNumber || job.ticketNumber) && (
+            <span className="text-gray-400 text-xs"><span className="text-gray-600">#</span>{job.invoiceNumber || job.ticketNumber}</span>
+          )}
+          {job.disposal && (
+            <span className="text-cyan-400/70 text-xs">→ {job.disposal}</span>
+          )}
+        </div>
+      </div>
+    </div>
+  );
+}
+
 // Driver-centric active dispatch panel — groups ALL jobs by driver
 // Multi-driver SW jobs shown separately at bottom with all crew visible
 function ActiveDispatchPanel({ dispatches, cancelDispatch, drivers, assignTransfer, onEditServiceWork, onReassignDeclined, onDismissDeclined }: {
@@ -3907,7 +4034,8 @@ function ActiveDispatchPanel({ dispatches, cancelDispatch, drivers, assignTransf
   const [expandedDrivers, setExpandedDrivers] = useState<Set<string>>(new Set());
 
   // Separate declined/cancelled jobs from active (completed filtered out before passing to this component)
-  const declinedJobs = dispatches.filter(d => d.status === 'declined' || d.status === 'cancelled');
+  const declinedJobs = dispatches.filter(d => d.status === 'declined');
+  const cancelledJobs = dispatches.filter(d => d.status === 'cancelled');
   const nonDeclined = dispatches.filter(d => d.status !== 'declined' && d.status !== 'cancelled');
 
   // Unassigned transfers need driver assignment
@@ -3983,60 +4111,42 @@ function ActiveDispatchPanel({ dispatches, cancelDispatch, drivers, assignTransf
 
   return (
     <div className="space-y-3">
-      {/* Declined jobs — need dispatcher attention */}
+      {/* Attention jobs — cancelled and declined are separate groups */}
+      {cancelledJobs.length > 0 && (
+        <>
+          <div className="flex items-center gap-2">
+            <div className="h-px bg-red-600/30 flex-1" />
+            <span className="text-red-400 text-[10px] font-bold uppercase tracking-wider flex-shrink-0">
+              Cancelled ({cancelledJobs.length})
+            </span>
+            <div className="h-px bg-red-600/30 flex-1" />
+          </div>
+          {cancelledJobs.map(job => (
+            <AttentionJobCard
+              key={job.id}
+              job={job}
+              onReassign={onReassignDeclined}
+              onDismiss={onDismissDeclined}
+            />
+          ))}
+        </>
+      )}
       {declinedJobs.length > 0 && (
         <>
           <div className="flex items-center gap-2">
             <div className="h-px bg-red-600/30 flex-1" />
-            <span className="text-red-400 text-[10px] font-bold uppercase tracking-wider flex-shrink-0">Declined ({declinedJobs.length})</span>
+            <span className="text-red-400 text-[10px] font-bold uppercase tracking-wider flex-shrink-0">
+              Declined ({declinedJobs.length})
+            </span>
             <div className="h-px bg-red-600/30 flex-1" />
           </div>
           {declinedJobs.map(job => (
-            <div key={job.id} className="border border-red-600/30 rounded-lg overflow-hidden bg-red-950/20">
-              <div className="px-4 py-3">
-                <div className="flex items-center gap-2">
-                  <JobTypeBadge type={job.jobType} serviceType={job.serviceType} />
-                  <span className="text-white font-medium text-sm truncate">{job.ndicWellName || job.wellName}</span>
-                  {(() => {
-                    const remaining = (job.loadCount || 1) - (job.loadsCompleted || 0);
-                    return remaining > 1 ? (
-                      <span className="px-1.5 py-0.5 bg-yellow-600/30 text-yellow-300 text-[10px] rounded font-bold flex-shrink-0">x{remaining}</span>
-                    ) : null;
-                  })()}
-                  <span className="px-2 py-0.5 bg-red-600/30 text-red-300 text-[10px] font-bold rounded">{job.status === 'cancelled' ? 'CANCELLED' : 'DECLINED'}</span>
-                  <span className="flex-1" />
-                  <button
-                    onClick={() => onReassignDeclined?.(job)}
-                    className="px-3 py-1 bg-blue-600 hover:bg-blue-500 text-white text-xs font-medium rounded transition-colors"
-                  >Reassign</button>
-                  <button
-                    onClick={() => job.id && onDismissDeclined?.(job.id)}
-                    className="px-3 py-1 bg-gray-700 hover:bg-gray-600 text-gray-300 text-xs font-medium rounded transition-colors"
-                    title="Accept decline and dismiss"
-                  >Dismiss</button>
-                </div>
-                {/* Decline details */}
-                <div className="mt-2 ml-[42px] space-y-1">
-                  <div className="flex items-center gap-2 text-xs">
-                    <span className="text-red-400/80 font-medium">
-                      {job.declinedBy || job.driverFirstName || job.driverName}
-                    </span>
-                    {job.declinedAt && (
-                      <span className="text-gray-600">{timeAgo(job.declinedAt)}</span>
-                    )}
-                  </div>
-                  {job.declineReason && (
-                    <div className="text-gray-400 text-xs italic">&ldquo;{job.declineReason}&rdquo;</div>
-                  )}
-                  {(job.invoiceNumber || job.ticketNumber) && (
-                    <span className="text-gray-400 text-xs"><span className="text-gray-600">#</span>{job.invoiceNumber || job.ticketNumber}</span>
-                  )}
-                  {job.disposal && (
-                    <span className="text-cyan-400/70 text-xs">→ {job.disposal}</span>
-                  )}
-                </div>
-              </div>
-            </div>
+            <AttentionJobCard
+              key={job.id}
+              job={job}
+              onReassign={onReassignDeclined}
+              onDismiss={onDismissDeclined}
+            />
           ))}
         </>
       )}
@@ -4243,6 +4353,10 @@ function CompletedJobsPanel({ jobs, drivers, allWells, allDisposals, highlightJo
   const [showWellDropdown, setShowWellDropdown] = useState(false);
   const [showDisposalDropdown, setShowDisposalDropdown] = useState(false);
   const [ticketDetailJobId, setTicketDetailJobId] = useState<string | null>(null);
+  const completedDisposalNav = useTypeaheadNav(disposalResults, (d) => {
+    setEditForm(f => ({ ...f, disposal: d.well_name }));
+    setShowDisposalDropdown(false);
+  });
 
   // Auto-expand highlighted job from notification deep link
   useEffect(() => {
@@ -4606,16 +4720,22 @@ function CompletedJobsPanel({ jobs, drivers, allWells, allDisposals, highlightJo
                       }}
                         onFocus={() => { if (disposalResults.length > 0) setShowDisposalDropdown(true); }}
                         onBlur={() => setTimeout(() => setShowDisposalDropdown(false), 150)}
-                        className="w-full bg-gray-900 border border-gray-600 text-white text-xs rounded px-2 py-1.5 mt-0.5" />
+                        onKeyDown={completedDisposalNav.onKeyDown}
+                        className="w-full bg-gray-900 border border-gray-600 text-white text-xs rounded px-2 py-1.5 mt-0.5 focus-visible:ring-2 focus-visible:ring-cyan-400" />
                       {showDisposalDropdown && disposalResults.length > 0 && (
-                        <div className="absolute z-50 left-0 right-0 mt-0.5 bg-gray-800 border border-gray-600 rounded shadow-lg max-h-36 overflow-y-auto">
-                          {disposalResults.map((d, i) => (
-                            <button key={i} type="button"
-                              onMouseDown={() => { setEditForm(f => ({ ...f, disposal: d.well_name })); setShowDisposalDropdown(false); }}
-                              className="w-full text-left px-2 py-1 text-xs text-gray-200 hover:bg-gray-700 truncate"
-                            >{d.well_name} <span className="text-gray-500">{d.operator}</span></button>
-                          ))}
-                        </div>
+                        <TypeaheadResultList
+                          items={disposalResults}
+                          activeIndex={completedDisposalNav.activeIndex}
+                          setActiveIndex={completedDisposalNav.setActiveIndex}
+                          onSelect={(d) => { setEditForm(f => ({ ...f, disposal: d.well_name })); setShowDisposalDropdown(false); }}
+                          accent="cyan"
+                          committedValue={editForm.disposal}
+                          getKey={(d, i) => `${d.well_name}-${i}`}
+                          getLabel={(d) => d.well_name}
+                          getSub={(d) => d.operator || ''}
+                          className="absolute z-50 left-0 right-0 mt-0.5 bg-gray-800 border border-gray-600 rounded shadow-lg max-h-36 overflow-y-auto"
+                          itemClassName="w-full text-left px-2 py-1 text-xs outline-none truncate"
+                        />
                       )}
                     </div>
                     <label className="block">
@@ -5146,6 +5266,11 @@ function DriverDisposalRow({ hash, name, disposal, borderColor, allDisposals, on
   const [editing, setEditing] = useState(false);
   const [search, setSearch] = useState('');
   const results = search.length >= 2 ? searchDisposals(search, allDisposals) : [];
+  const disposalNav = useTypeaheadNav(results, (d) => {
+    onSetDisposal({ name: d.well_name, lat: d.latitude || undefined, lng: d.longitude || undefined });
+    setEditing(false);
+    setSearch('');
+  });
 
   return (
     <div className={`bg-gray-900 border ${borderColor} rounded px-3 py-1.5`}>
@@ -5170,9 +5295,10 @@ function DriverDisposalRow({ hash, name, disposal, borderColor, allDisposals, on
               type="text"
               value={search}
               onChange={(e) => setSearch(e.target.value)}
+              onKeyDown={disposalNav.onKeyDown}
               placeholder="Search SWD..."
               autoFocus
-              className="flex-1 px-2 py-1 bg-gray-800 border border-gray-600 rounded text-white text-[11px] focus:outline-none focus:border-cyan-500"
+              className="flex-1 px-2 py-1 bg-gray-800 border border-gray-600 rounded text-white text-[11px] focus:outline-none focus:border-cyan-500 focus-visible:ring-2 focus-visible:ring-cyan-400"
             />
             {disposal && (
               <button
@@ -5186,22 +5312,23 @@ function DriverDisposalRow({ hash, name, disposal, borderColor, allDisposals, on
             >Done</button>
           </div>
           {results.length > 0 && (
-            <div className="absolute z-50 left-0 right-0 top-full mt-1 bg-gray-800 border border-gray-600 rounded max-h-32 overflow-y-auto shadow-lg">
-              {results.slice(0, 8).map((d, i) => (
-                <button
-                  key={i}
-                  onClick={() => {
-                    onSetDisposal({ name: d.well_name, lat: d.latitude || undefined, lng: d.longitude || undefined });
-                    setEditing(false);
-                    setSearch('');
-                  }}
-                  className="block w-full text-left px-2 py-1.5 hover:bg-gray-700 text-[11px]"
-                >
-                  <div className="text-white">{d.well_name}</div>
-                  {d.operator && <div className="text-gray-400 text-[10px]">{d.operator}</div>}
-                </button>
-              ))}
-            </div>
+            <TypeaheadResultList
+              items={results.slice(0, 8)}
+              activeIndex={disposalNav.activeIndex}
+              setActiveIndex={disposalNav.setActiveIndex}
+              onSelect={(d) => {
+                onSetDisposal({ name: d.well_name, lat: d.latitude || undefined, lng: d.longitude || undefined });
+                setEditing(false);
+                setSearch('');
+              }}
+              accent="cyan"
+              committedValue={disposal?.name}
+              getKey={(d, i) => `${d.well_name}-${i}`}
+              getLabel={(d) => d.well_name}
+              getSub={(d) => d.operator || ''}
+              className="absolute z-50 left-0 right-0 top-full mt-1 bg-gray-800 border border-gray-600 rounded max-h-32 overflow-y-auto shadow-lg"
+              itemClassName="block w-full text-left px-2 py-1.5 text-[11px] outline-none"
+            />
           )}
         </div>
       )}

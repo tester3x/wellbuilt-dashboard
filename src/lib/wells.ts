@@ -2,6 +2,12 @@
 import { ref, get, onValue, query, orderByChild, set } from 'firebase/database';
 import { getFirebaseDatabase } from './firebase';
 import { adminGetWellHistory, adminGetWellPerformance, adminGetWellPool } from './adminDashboardCatalog';
+import {
+  calcTankAtInches,
+  calcTimeTillPull,
+  estimateInchesFromPostPull,
+  inchesToFeetInches,
+} from './wellLevelEstimate';
 
 export interface WellResponse {
   wellName: string;
@@ -79,24 +85,64 @@ export function wellResponsesFromCatalog(wellConfig: Record<string, unknown>): W
 export function mergeWellPool(
   wellConfig: Record<string, unknown>,
   wellStatus: Record<string, unknown> = {},
+  nowMs: number = Date.now(),
 ): WellResponse[] {
-  return wellResponsesFromCatalog(wellConfig).map((well) => {
-    const st = (wellStatus[well.wellName] && typeof wellStatus[well.wellName] === 'object')
-      ? wellStatus[well.wellName] as Record<string, unknown>
+  return Object.entries(wellConfig).map(([wellName, raw]) => {
+    const well = wellResponsesFromCatalog({ [wellName]: raw })[0];
+    const config = (raw && typeof raw === 'object' ? raw : {}) as Record<string, unknown>;
+    const st = (wellStatus[wellName] && typeof wellStatus[wellName] === 'object')
+      ? wellStatus[wellName] as Record<string, unknown>
       : {};
-    return {
+    const tanks = typeof config.tanks === 'number'
+      ? config.tanks
+      : typeof config.numTanks === 'number' ? config.numTanks : (well.tanks || 1);
+    const pullBbls = typeof config.pullBbls === 'number' ? config.pullBbls : (well.pullBbls || 140);
+    const bottomLevelFeet = typeof config.bottomLevel === 'number'
+      ? config.bottomLevel
+      : typeof config.allowedBottom === 'number' ? config.allowedBottom : 3;
+    const bblPerFoot = typeof config.bblPerFoot === 'number' ? config.bblPerFoot : 20 * tanks;
+    const bblPerFootPerTank = tanks > 0 ? bblPerFoot / tanks : 20;
+    const afrDisplay = typeof config.avgFlowRate === 'string' ? config.avgFlowRate : undefined;
+    const merged: WellResponse = {
       ...well,
+      tanks,
+      pullBbls,
+      bottomLevel: bottomLevelFeet,
+      bblPerFoot,
       currentLevel: typeof st.currentLevel === 'string' ? st.currentLevel : well.currentLevel,
-      flowRate: typeof st.flowRate === 'string' ? st.flowRate : well.flowRate,
+      flowRate: afrDisplay || (typeof st.flowRate === 'string' ? st.flowRate : well.flowRate),
       timestamp: typeof st.timestamp === 'string' ? st.timestamp : well.timestamp,
       timeTillPull: typeof st.timeTillPull === 'string' ? st.timeTillPull : well.timeTillPull,
       nextPullTime: typeof st.nextPullTime === 'string' ? st.nextPullTime : well.nextPullTime,
       nextPullTimeUTC: typeof st.nextPullTimeUTC === 'string' ? st.nextPullTimeUTC : well.nextPullTimeUTC,
       lastPullDateTimeUTC: typeof st.lastPullDateTimeUTC === 'string' ? st.lastPullDateTimeUTC : well.lastPullDateTimeUTC,
       lastPullBbls: st.lastPullBbls != null ? String(st.lastPullBbls) : well.lastPullBbls,
+      lastPullBottomLevel: typeof st.lastPullBottomLevel === 'string' ? st.lastPullBottomLevel : well.lastPullBottomLevel,
+      lastPullTopLevel: typeof st.lastPullTopLevel === 'string' ? st.lastPullTopLevel : well.lastPullTopLevel,
       isDown: st.wellDown === true || st.isDown === true || well.isDown,
       status: typeof st.status === 'string' ? st.status : well.status,
     };
+    const afr = typeof config.avgFlowRateMinutes === 'number' ? config.avgFlowRateMinutes : 0;
+    const post = typeof st.lastPullBottomLevel === 'string' ? st.lastPullBottomLevel : '';
+    const utc = typeof st.lastPullDateTimeUTC === 'string' ? st.lastPullDateTimeUTC : merged.lastPullDateTimeUTC || '';
+    // Catalog/outgoing.currentLevel is the frozen post-pull bottom. Re-apply AFR
+    // rise so Mobile/Dispatch do not display lastPullBottom as "current".
+    if (!merged.isDown && post && utc && afr > 0) {
+      const est = estimateInchesFromPostPull({
+        postPullLevel: post,
+        lastPullUtc: utc,
+        avgFlowRateMinutes: afr,
+        nowMs,
+      });
+      if (est != null) {
+        merged.currentLevel = inchesToFeetInches(est);
+        merged.currentLevelInches = est;
+        const target = calcTankAtInches(tanks, pullBbls, bottomLevelFeet * 12, bblPerFootPerTank);
+        merged.timeTillPull = calcTimeTillPull(est, target, afr);
+        merged.etaToMax = merged.timeTillPull;
+      }
+    }
+    return merged;
   });
 }
 
@@ -339,20 +385,6 @@ function inchesToDisplay(totalInches: number): string {
   const feet = Math.floor(totalInches / 12);
   const inches = Math.floor(totalInches % 12);
   return `${feet}'${inches}"`;
-}
-
-// Helper: Calculate time till pull from current inches to target inches at given flow rate
-function calcTimeTillPull(currentInches: number, targetInches: number, flowRateMinutes: number): string {
-  if (flowRateMinutes <= 0) return 'Unknown';
-  const inchesNeeded = targetInches - currentInches;
-  if (inchesNeeded <= 0) return 'Ready';
-  const minutesPerInch = flowRateMinutes / 12;
-  const totalMinutes = inchesNeeded * minutesPerInch;
-  const days = Math.floor(totalMinutes / 1440);
-  const hours = Math.floor((totalMinutes % 1440) / 60);
-  const mins = Math.floor(totalMinutes % 60);
-  if (days > 0) return `${days}d ${hours}h ${mins}m`;
-  return `${hours}h ${mins}m`;
 }
 
 // Subscribe to well statuses using packets/outgoing (the response packets) + well_config
