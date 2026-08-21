@@ -28,6 +28,10 @@ export { dismissDispatch } from './dismissDispatchCallable';
 export { staffWriteDispatch } from './staffWriteDispatchCallable';
 export { staffWriteProject } from './staffWriteProjectCallable';
 export { adminWriteWellConfig } from './adminWriteWellConfigCallable';
+export {
+  adminRejectPendingRegistration,
+  adminCleanupTestIdentity,
+} from './adminIdentityCleanupCallable';
 
 export {
   ingestDriverPacket,

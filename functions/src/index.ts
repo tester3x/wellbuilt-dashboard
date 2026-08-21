@@ -4761,6 +4761,8 @@ export {
   staffWriteDispatch,
   staffWriteProject,
   adminWriteWellConfig,
+  adminRejectPendingRegistration,
+  adminCleanupTestIdentity,
   // Operational path hardening
   ingestDriverPacket,
   upsertDriverShift,

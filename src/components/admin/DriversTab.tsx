@@ -1476,6 +1476,40 @@ export function DriversTab({ scopeCompanyId, isWbAdmin = false }: DriversTabProp
                   >
                     Reject
                   </button>
+                  {isWbAdmin && (
+                    <button
+                      type="button"
+                      title="Platform remove — exact key, confirm required"
+                      onClick={async () => {
+                        const wellKnown = driver.key;
+                        const copy = `Remove pending registration?\n\nKey: ${wellKnown}\nDisplay: ${driver.displayName}\nSource: ${(driver as PendingDriver & { source?: string }).source || 'unknown'}\n\nThis removes only this pending record. Type the exact key in the next prompt to apply. Cancel/blank stays dry-run.`;
+                        if (!window.confirm(copy)) return;
+                        const typed = window.prompt('Type the exact pending key to APPLY. Leave blank for dry-run only.');
+                        try {
+                          const { adminRejectPendingRegistration } = await import('@/lib/secureDriverAdmin');
+                          const mode = typed && typed.trim() === wellKnown ? 'apply' : 'dry-run';
+                          if (typed && typed.trim() && typed.trim() !== wellKnown) {
+                            window.alert('Control error [confirm_mismatch]. No action taken.');
+                            return;
+                          }
+                          const preview = await adminRejectPendingRegistration({
+                            pendingKey: wellKnown,
+                            mode,
+                            confirmKey: mode === 'apply' ? wellKnown : undefined,
+                            reason: 'unauthorized_registration',
+                          });
+                          setMessage(mode === 'apply' ? `Platform reject applied for ${driver.displayName}` : `Dry-run: ${JSON.stringify(preview)}`);
+                          if (mode === 'apply') await loadDrivers();
+                        } catch (err) {
+                          const msg = err instanceof Error ? err.message : 'reject_failed';
+                          setMessage(`Reject failed: ${msg.replace(/^FirebaseError:\s*/i, '')}`);
+                        }
+                      }}
+                      className="px-3 py-1 bg-gray-600 hover:bg-gray-500 text-gray-100 text-sm rounded"
+                    >
+                      Platform remove
+                    </button>
+                  )}
                 </div>
               </div>
             ))}

@@ -36,6 +36,30 @@ export async function adminRejectSecure(params: {
   return res.data;
 }
 
+/** Platform-admin exact-key pending removal. Default mode is dry-run. */
+export async function adminRejectPendingRegistration(params: {
+  pendingKey: string;
+  mode?: 'dry-run' | 'apply';
+  confirmKey?: string;
+  reason?: string;
+}) {
+  const fn = httpsCallable(getFirebaseFunctions(), 'adminRejectPendingRegistration');
+  const res = await fn({ mode: 'dry-run', ...params });
+  return res.data;
+}
+
+/** Platform-admin one-UID test.local cleanup. Default mode is dry-run. */
+export async function adminCleanupTestIdentity(params: {
+  uid: string;
+  mode?: 'dry-run' | 'apply';
+  confirmKey?: string;
+  reason?: string;
+}) {
+  const fn = httpsCallable(getFirebaseFunctions(), 'adminCleanupTestIdentity');
+  const res = await fn({ mode: 'dry-run', ...params });
+  return res.data;
+}
+
 export async function adminSetPasscode(params: {
   displayName: string;
   passcode: string;

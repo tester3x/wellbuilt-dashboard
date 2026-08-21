@@ -54,6 +54,19 @@ describe('complete Dashboard write inventory vs live deny', () => {
     expect(payroll).toMatch(/deductions/);
   });
 
+  it('documents remaining denied RTDB/Firestore writes still needing Phase 2 callables', () => {
+    expect(chat).toMatch(/chat_threads/);
+    expect(chat).toMatch(/chat_monitors/);
+    expect(billing).toMatch(/billing_invoices/);
+    expect(payroll).toMatch(/deductions/);
+    expect(src('src/components/AddPullModal.tsx')).toMatch(/addDoc\(collection\(firestore, 'invoices'/);
+    expect(src('src/components/admin/GpsRoutesTab.tsx')).toMatch(/well_config\/\$\{/);
+    expect(src('src/lib/secureDriverAdmin.ts')).toContain('adminRejectPendingRegistration');
+    expect(src('src/lib/secureDriverAdmin.ts')).toContain('adminCleanupTestIdentity');
+    expect(src('functions/src/security/index.ts')).toContain('adminRejectPendingRegistration');
+    expect(src('functions/src/security/index.ts')).toContain('adminCleanupTestIdentity');
+  });
+
   it('jsonSafe no longer silently drops arbitrary toMillis objects', () => {
     const helper = src('src/lib/staffWriteDispatch.ts');
     expect(helper).toContain('decline_fields_immutable');

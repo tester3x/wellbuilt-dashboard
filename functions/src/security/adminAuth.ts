@@ -119,3 +119,14 @@ export async function requireManageDrivers(
   }
   throw new httpsV2.HttpsError('permission-denied', 'Caller lacks manageDrivers capability');
 }
+
+export async function requirePlatformAdmin(
+  authUid: string | undefined,
+  authToken?: Record<string, unknown> | null,
+): Promise<DashboardCaller> {
+  const caller = await loadDashboardCaller(authUid, authToken);
+  if (!caller.isPlatformAdmin) {
+    throw new httpsV2.HttpsError('permission-denied', 'not_platform_admin');
+  }
+  return caller;
+}
