@@ -4759,6 +4759,8 @@ export {
   adminGetWellPerformance,
   dismissDispatch,
   staffWriteDispatch,
+  staffWriteProject,
+  adminWriteWellConfig,
   // Operational path hardening
   ingestDriverPacket,
   upsertDriverShift,

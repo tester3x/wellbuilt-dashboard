@@ -16,6 +16,7 @@ import { loadCompanyById } from '@/lib/companySettings';
 import { trackJobTypeUsage } from '@/lib/jobTypeUsage';
 import { dismissDispatch } from '@/lib/dismissDispatch';
 import { staffCancelDispatch, staffCreateDispatch, staffUpdateDispatch } from '@/lib/staffWriteDispatch';
+import { staffCreateProject, staffUpdateProject } from '@/lib/staffWriteProject';
 
 // ─── Types ───────────────────────────────────────────────────────────────────
 
@@ -1288,7 +1289,8 @@ function DispatchPageInner() {
         ...(nightHashes.length > 0 ? { nightDriverHashes: nightHashes } : {}),
         ...(Object.keys(newProjectDriverDisposals).length > 0 ? { driverDisposals: newProjectDriverDisposals } : {}),
       } as Omit<Project, 'id'>;
-      const docRef = await addDoc(collection(firestore, 'projects'), projectData);
+      const createdProject = await staffCreateProject(projectData as Record<string, unknown>);
+      const projectIdCreated = createdProject.projectId;
 
       // Create dispatches for today's assigned drivers
       if (newProjectDriverHashes.size > 0) {
@@ -1316,7 +1318,7 @@ function DispatchPageInner() {
               priority: 500,
               assignedAt: Timestamp.now(),
               assignedBy: user?.email || '',
-              projectId: docRef.id,
+              projectId: projectIdCreated,
               notes: newProjectNotes.trim() || null,
               ...(driverDisposal ? { disposal: driverDisposal.name, disposalLat: driverDisposal.lat, disposalLng: driverDisposal.lng } : {}),
             });
@@ -1341,7 +1343,7 @@ function DispatchPageInner() {
           const sysText = `Project "${threadTitle}" created\nCrew: ${crewNames}\nWells: ${newProjectWells.join(', ')}${newProjectNotes ? `\nNotes: ${newProjectNotes}` : ''}`;
           const threadRef = await addDoc(collection(firestore, 'chat_threads'), {
             type: 'project',
-            projectId: docRef.id,
+            projectId: projectIdCreated,
             companyId: user?.companyId || '',
             title: threadTitle,
             participants,
@@ -1387,7 +1389,7 @@ function DispatchPageInner() {
       const firestore = getFirestoreDb();
       const updates: Record<string, any> = { status };
       if (status === 'completed') updates.actualEndDate = new Date().toISOString().slice(0, 10);
-      await updateDoc(doc(firestore, 'projects', projectId), updates);
+      await staffUpdateProject(projectId, updates);
       if (status === 'completed') {
         setSelectedProject(null);
       }
@@ -1408,8 +1410,8 @@ function DispatchPageInner() {
       const currentSchedule = project.driverSchedule || {};
       const todayDrivers = currentSchedule[today] || [];
       if (todayDrivers.includes(driverHash)) return;
-      await updateDoc(doc(firestore, 'projects', projectId), {
-        [`driverSchedule.${today}`]: [...todayDrivers, driverHash],
+      await staffUpdateProject(projectId, {
+        driverSchedule: { ...currentSchedule, [today]: [...todayDrivers, driverHash] },
       });
 
       // Create dispatches for this driver for project wells
@@ -1534,8 +1536,8 @@ function DispatchPageInner() {
       const currentSchedule = project.driverSchedule || {};
       const todayDrivers = new Set(currentSchedule[today] || []);
       driverHashes.forEach(h => todayDrivers.add(h));
-      await updateDoc(doc(firestore, 'projects', projectId), {
-        [`driverSchedule.${today}`]: Array.from(todayDrivers),
+      await staffUpdateProject(projectId, {
+        driverSchedule: { ...currentSchedule, [today]: Array.from(todayDrivers) },
       });
 
       // Auto-add new shift drivers to existing project chat thread
@@ -3075,10 +3077,11 @@ function DispatchPageInner() {
                     onAddDriver={(hash) => addDriverToProjectToday(selectedProject.id!, hash)}
                     onUpdateProject={async (id, data) => {
                       try {
-                        const firestore = getFirestoreDb();
-                        await updateDoc(doc(firestore, 'projects', id), data as any);
+                        await staffUpdateProject(id, data as Record<string, unknown>);
                       } catch (err) {
                         console.error('Failed to update project:', err);
+                        setMessage('Failed to update project. This is a write failure, not a no-op.');
+                        setTimeout(() => setMessage(''), 5000);
                       }
                     }}
                     onBatchDispatch={(shift) => batchDispatchShift(selectedProject.id!, shift)}

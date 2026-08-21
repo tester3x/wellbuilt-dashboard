@@ -21,6 +21,7 @@ import {
 import { DriversTab } from '@/components/admin/DriversTab';
 import { CompaniesTab } from '@/components/admin/CompaniesTab';
 import { canViewGlobalWellPool } from '@/lib/tenantScope';
+import { adminWriteWellConfig } from '@/lib/adminWriteWellConfig';
 import { isPlatformAdmin } from '@/lib/auth';
 import GpsRoutesTab from '@/components/admin/GpsRoutesTab';
 import { EquipmentTab } from '@/components/admin/EquipmentTab';
@@ -749,7 +750,6 @@ export default function AdminPage() {
       return;
     }
 
-    const db = getFirebaseDatabase();
     const tankCap = parseInt(newWellTankCapacity) || 400;
     const tankHt = parseInt(newWellTankHeight) || 20;
     const numTanks = parseInt(newWellTanks) || 1;
@@ -778,8 +778,14 @@ export default function AdminPage() {
       h2sStatus: newWellH2s,
     };
 
-    await set(ref(db, `well_config/${wellName}`), config);
-    showMessage(`Well "${wellName}" created${ndicSelectedWell ? ` (linked: ${ndicSelectedWell.api_no})` : ''}`);
+    try {
+      await adminWriteWellConfig({ op: 'add', wellName, record: config as Record<string, unknown> });
+      showMessage(`Well "${wellName}" created${ndicSelectedWell ? ` (linked: ${ndicSelectedWell.api_no})` : ''}`);
+    } catch (err: unknown) {
+      const msg = err instanceof Error ? err.message : 'write failed';
+      showMessage(`Failed to create well [${msg}]. This is a write failure, not a no-op.`);
+      return;
+    }
     setNewWellName('');
     setNewWellSearchTerm('');
     setNdicSelectedWell(null);

@@ -45,8 +45,10 @@ describe('complete Dashboard write inventory vs live deny', () => {
     expect(wells).toMatch(/packets\/incoming\/\$\{/);
   });
 
-  it('documents remaining denied Firestore client writes outside dispatches', () => {
-    expect(dispatchPage).toMatch(/addDoc\(collection\(firestore, 'projects'/);
+  it('project writes go through staffWriteProject; other Firestore writes remain client-denied', () => {
+    expect(dispatchPage).toContain('staffCreateProject');
+    expect(dispatchPage).toContain('staffUpdateProject');
+    expect(dispatchPage).not.toMatch(/addDoc\(collection\(firestore, 'projects'/);
     expect(chat).toMatch(/chat_threads/);
     expect(billing).toMatch(/billing_invoices/);
     expect(payroll).toMatch(/deductions/);

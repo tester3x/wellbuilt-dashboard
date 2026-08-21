@@ -26,6 +26,8 @@ export {
 } from './adminDashboardCatalog';
 export { dismissDispatch } from './dismissDispatchCallable';
 export { staffWriteDispatch } from './staffWriteDispatchCallable';
+export { staffWriteProject } from './staffWriteProjectCallable';
+export { adminWriteWellConfig } from './adminWriteWellConfigCallable';
 
 export {
   ingestDriverPacket,
