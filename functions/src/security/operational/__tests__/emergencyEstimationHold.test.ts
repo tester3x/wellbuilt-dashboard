@@ -1,26 +1,36 @@
 /**
- * Emergency estimation hold — decisions, digest, concurrency.
+ * Emergency estimation hold — full-pool selection, CAS, and safety.
  *
- * The mistake that would matter is a live well left suppressed after a driver
- * pulled it. Most of this file exists to prove that cannot happen, including
- * when the pull lands in the middle of Apply.
+ * The mistake that would matter is a live well left suppressed, or a well
+ * proposed on evidence that is not its own. Most of this file exists to prove
+ * neither happens.
  */
 import { createHash } from 'node:crypto';
 import {
   buildHoldPlan,
   computePreviewDigest,
+  computePullIntervalStats,
   decideEstimationHold,
+  holdCompareAndSet,
+  holdCompensate,
+  holdFingerprint,
   holdSuppressesEstimation,
-  holdTransactionUpdate,
-  parseHoldTargets,
+  parseBottomInches,
+  MIN_PULLS_FOR_AVERAGE,
   type EstimationHoldRecord,
   type HoldObservation,
 } from '../emergencyEstimationHold';
 
 const sha256 = (s: string) => createHash('sha256').update(s).digest('hex');
+const H = 3_600_000;
 const PULL = '2026-08-20T17:42:02.991Z';
+const PULL_MS = Date.parse(PULL);
 const NEWER = '2026-08-23T06:00:00.000Z';
 const UID = 'admin-uid-1';
+
+/** Pulls every 24h ending at PULL — a 24h average. */
+const cadence24h = (n = 5) =>
+  Array.from({ length: n }, (_, i) => PULL_MS - (n - 1 - i) * 24 * H);
 
 function observation(over: Partial<HoldObservation> = {}): HoldObservation {
   return {
@@ -28,213 +38,322 @@ function observation(over: Partial<HoldObservation> = {}): HoldObservation {
       responseId: 'response_20260820_174213_Gabriel1',
       lastPullDateTimeUTC: PULL,
       lastPullBottomLevel: "2'7\"",
-      currentLevel: "2'7\"",
+      currentLevel: "9'9\"",
       wellDown: false,
     },
     statusIsDown: false,
     hold: null,
+    acceptedPullMs: cadence24h(),
     config: { companyId: 'liquid-gold', avgFlowRate: '6:00:33', avgFlowRateMinutes: 360.56 },
     ...over,
   };
 }
-const target = { wellName: 'Gabriel 1', expectedLastPullUTC: PULL };
+const decide = (asOfMs: number, over: Partial<HoldObservation> = {}) =>
+  decideEstimationHold({ wellName: 'Gabriel 1', asOfMs, observed: observation(over) });
 
-// ── the identity binding ────────────────────────────────────────────────────
+// ── 1. historical-average selection ─────────────────────────────────────────
 
-describe('holdSuppressesEstimation', () => {
-  it('suppresses while the hold matches the current pull', () => {
-    expect(holdSuppressesEstimation({ active: true, heldAtPullUTC: PULL }, PULL)).toBe(true);
+describe('computePullIntervalStats', () => {
+  it('averages the real gaps between consecutive pulls', () => {
+    const B = Date.parse('2026-08-01T00:00:00Z');
+    const s = computePullIntervalStats([B, B + 10 * H, B + 30 * H]); // gaps 10h, 20h
+    expect(s.pullCount).toBe(3);
+    expect(s.intervalCount).toBe(2);
+    expect(s.averageIntervalMs).toBe(15 * H);
+    expect(s.latestPullMs).toBe(B + 30 * H);
   });
 
-  it('STOPS suppressing the moment a newer pull lands — no write required', () => {
-    // This is the whole safety property: a concurrent pull cannot be hidden.
-    expect(holdSuppressesEstimation({ active: true, heldAtPullUTC: PULL }, NEWER)).toBe(false);
+  it('sorts unordered input before differencing', () => {
+    const B = Date.parse('2026-08-01T00:00:00Z');
+    expect(computePullIntervalStats([B + 30 * H, B, B + 10 * H]).averageIntervalMs).toBe(15 * H);
   });
 
-  it('ignores an inactive, malformed, or unbound hold', () => {
-    expect(holdSuppressesEstimation({ active: false, heldAtPullUTC: PULL }, PULL)).toBe(false);
-    expect(holdSuppressesEstimation({ active: true }, PULL)).toBe(false);
-    expect(holdSuppressesEstimation(null, PULL)).toBe(false);
-    expect(holdSuppressesEstimation({ active: true, heldAtPullUTC: PULL }, null)).toBe(false);
+  it('drops duplicates so a repeat cannot deflate the average', () => {
+    const B = Date.parse('2026-08-01T00:00:00Z');
+    const s = computePullIntervalStats([B, B + 10 * H, B + 10 * H, B + 20 * H]);
+    expect(s.pullCount).toBe(3);
+    expect(s.averageIntervalMs).toBe(10 * H);
+  });
+
+  it('ignores non-finite and non-positive timestamps', () => {
+    const B = Date.parse('2026-08-01T00:00:00Z');
+    const s = computePullIntervalStats([NaN, -1, 0, B + 10 * H, B + 20 * H]);
+    expect(s.pullCount).toBe(2);
+    expect(s.averageIntervalMs).toBe(10 * H);
+  });
+
+  it('reports no average from a single pull', () => {
+    const s = computePullIntervalStats([Date.parse('2026-08-01T00:00:00Z')]);
+    expect(s.intervalCount).toBe(0);
+    expect(s.averageIntervalMs).toBeNull();
   });
 });
 
-// ── decisions ───────────────────────────────────────────────────────────────
-
-describe('decideEstimationHold', () => {
-  it('holds a well whose stated evidence still holds, writing one path', () => {
-    const d = decideEstimationHold(target, observation());
+describe('full-pool selection by the well\'s own cadence', () => {
+  it('proposes when elapsed exceeds this well\'s average interval', () => {
+    const d = decide(PULL_MS + 30 * H); // 24h average, 30h elapsed
     expect(d.action).toBe('apply_hold');
+    expect(d.history.averageIntervalHours).toBe(24);
+    expect(d.history.elapsedHours).toBe(30);
+    expect(d.history.overdueRatio).toBeCloseTo(1.25, 3);
     expect(d.willWrite).toEqual(['wells/Gabriel 1/estimationHold']);
   });
 
-  it('never writes pull data, flow rate, isDown or an outgoing row', () => {
-    const d = decideEstimationHold(target, observation());
-    for (const p of d.willWrite) {
-      expect(p).not.toMatch(/lastPull|avgFlowRate|isDown|wellDown|packets\/|editHistory|currentLevel/i);
-      expect(p).toMatch(/^wells\/[^/]+\/estimationHold$/);
-    }
-  });
-
-  it('REFUSES when a newer pull arrived after the preview', () => {
-    const d = decideEstimationHold(target, observation({
-      outgoing: { ...observation().outgoing!, lastPullDateTimeUTC: NEWER },
-    }));
-    expect(d.action).toBe('refuse_evidence_mismatch');
+  it('does not propose while still within the average', () => {
+    const d = decide(PULL_MS + 20 * H);
+    expect(d.action).toBe('skip_within_average');
     expect(d.willWrite).toEqual([]);
   });
 
-  it('leaves a physically down well alone — the two states stay separate', () => {
+  it('treats exactly-at-average as not yet overdue', () => {
+    expect(decide(PULL_MS + 24 * H).action).toBe('skip_within_average');
+  });
+
+  it('proposes a slow well on its OWN long cadence, not a global rule', () => {
+    // Pulled every 21 days. At 30 days elapsed it is overdue for itself, even
+    // though a 24h-cadence well would have been overdue weeks earlier.
+    const monthly = Array.from({ length: 4 }, (_, i) => PULL_MS - (3 - i) * 21 * 24 * H);
+    expect(decide(PULL_MS + 20 * 24 * H, { acceptedPullMs: monthly }).action).toBe('skip_within_average');
+    expect(decide(PULL_MS + 30 * 24 * H, { acceptedPullMs: monthly }).action).toBe('apply_hold');
+  });
+
+  it('needs no avgFlowRateMinutes at all', () => {
+    const d = decide(PULL_MS + 30 * H, { config: { companyId: 'liquid-gold' } });
+    expect(d.action).toBe('apply_hold');
+    expect(d.observed.avgFlowRateMinutes).toBeNull();
+  });
+
+  it('does not blanket-exclude a long-dormant well — it is judged on its cadence', () => {
+    const d = decide(PULL_MS + 400 * 24 * H);
+    expect(d.action).toBe('apply_hold');
+    expect(d.history.overdueRatio).toBeGreaterThan(100);
+  });
+});
+
+// ── 2. insufficient history ─────────────────────────────────────────────────
+
+describe('insufficient history', () => {
+  it('reports, rather than proposes, when there are too few pulls', () => {
+    for (const pulls of [[], [PULL_MS], [PULL_MS - 24 * H, PULL_MS]]) {
+      const d = decide(PULL_MS + 999 * H, { acceptedPullMs: pulls });
+      expect(d.action).toBe('insufficient_history');
+      expect(d.willWrite).toEqual([]);
+      expect(d.history.pullCount).toBe(pulls.length);
+    }
+  });
+
+  it(`accepts exactly ${MIN_PULLS_FOR_AVERAGE} pulls as enough`, () => {
+    const d = decide(PULL_MS + 30 * H, { acceptedPullMs: cadence24h(MIN_PULLS_FOR_AVERAGE) });
+    expect(d.action).toBe('apply_hold');
+  });
+
+  it('exposes the evidence count even when it refuses', () => {
+    const d = decide(PULL_MS + 999 * H, { acceptedPullMs: [PULL_MS] });
+    expect(d.history.pullCount).toBe(1);
+    expect(d.history.intervalCount).toBe(0);
+    expect(d.history.averageIntervalMs).toBeNull();
+  });
+});
+
+// ── 3. physical down ────────────────────────────────────────────────────────
+
+describe('physically down wells', () => {
+  it('is evaluated and reported, but never held', () => {
     for (const over of [
       { statusIsDown: true },
       { outgoing: { ...observation().outgoing!, wellDown: true } },
     ]) {
-      const d = decideEstimationHold(target, observation(over as Partial<HoldObservation>));
+      const d = decide(PULL_MS + 999 * H, over as Partial<HoldObservation>);
       expect(d.action).toBe('skip_physically_down');
       expect(d.willWrite).toEqual([]);
       expect(d.observed.wellDown).toBe(true);
+      // Reported, not dropped: the arithmetic is still there to read.
+      expect(d.history.pullCount).toBeGreaterThan(0);
+      expect(d.history.averageIntervalMs).not.toBeNull();
+    }
+  });
+});
+
+// ── 4. valid freeze point ───────────────────────────────────────────────────
+
+describe('bottom level', () => {
+  it('parses feet/inches, and 0 means unusable', () => {
+    expect(parseBottomInches("2'7\"")).toBe(31);
+    expect(parseBottomInches('')).toBe(0);
+    expect(parseBottomInches(undefined)).toBe(0);
+    expect(parseBottomInches('n/a')).toBe(0);
+    expect(parseBottomInches(31 as unknown)).toBe(0);
+  });
+
+  it('REFUSES a hold when the bottom level is missing or unparsable', () => {
+    for (const bad of [undefined, '', 'n/a', 'DOWN']) {
+      const d = decide(PULL_MS + 30 * H, {
+        outgoing: { ...observation().outgoing!, lastPullBottomLevel: bad as string },
+      });
+      expect(d.action).toBe('refuse_missing_bottom');
+      expect(d.willWrite).toEqual([]);
     }
   });
 
-  it('skips a well already held for this exact pull', () => {
-    const d = decideEstimationHold(target, observation({
-      hold: { active: true, heldAtPullUTC: PULL },
-    }));
-    expect(d.action).toBe('skip_already_held');
+  it('never falls back to the running estimate as a freeze point', () => {
+    const d = decide(PULL_MS + 30 * H, {
+      outgoing: { ...observation().outgoing!, lastPullBottomLevel: undefined, currentLevel: "9'9\"" },
+    });
+    expect(d.action).toBe('refuse_missing_bottom');
+    expect(d.observed.lastPullBottomInches).toBeNull();
   });
 
-  it('treats a hold bound to an older pull as absent, and re-holds', () => {
-    const d = decideEstimationHold(target, observation({
-      hold: { active: true, heldAtPullUTC: '2026-08-01T00:00:00.000Z' },
-    }));
-    expect(d.observed.holdActive).toBe(false);
-    expect(d.action).toBe('apply_hold');
-  });
-
-  it('refuses a well with no status row', () => {
-    expect(decideEstimationHold(target, observation({ outgoing: null })).action)
-      .toBe('refuse_missing_status');
-  });
-
-  it('echoes flow rate and pull boundary for the reviewer, unmodified', () => {
-    const d = decideEstimationHold(target, observation());
-    expect(d.observed.avgFlowRate).toBe('6:00:33');
-    expect(d.observed.avgFlowRateMinutes).toBe(360.56);
-    expect(d.observed.lastPullDateTimeUTC).toBe(PULL);
-    expect(d.observed.lastPullBottomLevel).toBe("2'7\"");
+  it('carries the exact bottom into the decision', () => {
+    expect(decide(PULL_MS + 30 * H).observed.lastPullBottomInches).toBe(31);
   });
 });
 
-// ── identity-bound digest ───────────────────────────────────────────────────
+// ── 5. digest ───────────────────────────────────────────────────────────────
 
 describe('preview digest', () => {
-  const decisionsFor = (o: HoldObservation) => [decideEstimationHold(target, o)];
+  const dig = (asOf: number, over: Partial<HoldObservation> = {}) =>
+    computePreviewDigest(UID, asOf, [decide(asOf, over)], sha256);
 
-  it('is stable for identical state and caller', () => {
-    expect(computePreviewDigest(UID, decisionsFor(observation()), sha256))
-      .toBe(computePreviewDigest(UID, decisionsFor(observation()), sha256));
+  it('is stable for identical state, caller and asOf', () => {
+    expect(dig(PULL_MS + 30 * H)).toBe(dig(PULL_MS + 30 * H));
   });
 
-  it('changes when a new pull lands', () => {
-    const a = computePreviewDigest(UID, decisionsFor(observation()), sha256);
-    const b = computePreviewDigest(UID, decisionsFor(observation({
+  it('changes with asOf', () => {
+    expect(dig(PULL_MS + 30 * H)).not.toBe(dig(PULL_MS + 31 * H));
+  });
+
+  it('changes when a newer pull lands', () => {
+    expect(dig(PULL_MS + 30 * H)).not.toBe(dig(PULL_MS + 30 * H, {
       outgoing: { ...observation().outgoing!, lastPullDateTimeUTC: NEWER },
-    })), sha256);
-    expect(a).not.toBe(b);
+    }));
   });
 
-  it('changes when the response id changes', () => {
-    const a = computePreviewDigest(UID, decisionsFor(observation()), sha256);
-    const b = computePreviewDigest(UID, decisionsFor(observation({
-      outgoing: { ...observation().outgoing!, responseId: 'response_other' },
-    })), sha256);
-    expect(a).not.toBe(b);
+  it('changes when history evidence changes', () => {
+    expect(dig(PULL_MS + 30 * H)).not.toBe(dig(PULL_MS + 30 * H, { acceptedPullMs: cadence24h(6) }));
+  });
+
+  it('changes when the bottom level changes', () => {
+    expect(dig(PULL_MS + 30 * H)).not.toBe(dig(PULL_MS + 30 * H, {
+      outgoing: { ...observation().outgoing!, lastPullBottomLevel: "3'0\"" },
+    }));
+  });
+
+  it('changes when an existing hold appears', () => {
+    expect(dig(PULL_MS + 30 * H)).not.toBe(dig(PULL_MS + 30 * H, {
+      hold: { active: true, heldAtPullUTC: '2026-01-01T00:00:00.000Z' },
+    }));
   });
 
   it('changes when the well becomes physically down', () => {
-    const a = computePreviewDigest(UID, decisionsFor(observation()), sha256);
-    const b = computePreviewDigest(UID, decisionsFor(observation({ statusIsDown: true })), sha256);
-    expect(a).not.toBe(b);
+    expect(dig(PULL_MS + 30 * H)).not.toBe(dig(PULL_MS + 30 * H, { statusIsDown: true }));
   });
 
-  it('is bound to the caller — one reviewer approval is not another', () => {
-    expect(computePreviewDigest(UID, decisionsFor(observation()), sha256))
-      .not.toBe(computePreviewDigest('other-admin', decisionsFor(observation()), sha256));
-  });
-
-  it('is order-independent across wells', () => {
-    const d1 = decideEstimationHold({ wellName: 'A', expectedLastPullUTC: PULL }, observation());
-    const d2 = decideEstimationHold({ wellName: 'B', expectedLastPullUTC: PULL }, observation());
-    expect(computePreviewDigest(UID, [d1, d2], sha256))
-      .toBe(computePreviewDigest(UID, [d2, d1], sha256));
+  it('is bound to the caller', () => {
+    const asOf = PULL_MS + 30 * H;
+    expect(computePreviewDigest(UID, asOf, [decide(asOf)], sha256))
+      .not.toBe(computePreviewDigest('other', asOf, [decide(asOf)], sha256));
   });
 });
 
-// ── concurrency ─────────────────────────────────────────────────────────────
+// ── 6. compare-and-set ──────────────────────────────────────────────────────
 
-describe('hold transaction', () => {
-  const rec = (pull: string): EstimationHoldRecord => ({ active: true, heldAtPullUTC: pull });
+describe('holdCompareAndSet', () => {
+  const next: EstimationHoldRecord = { active: true, heldAtPullUTC: PULL, applyOpId: 'op-new' };
 
-  it('writes when no hold exists', () => {
-    expect(holdTransactionUpdate(null, rec(PULL))).toEqual(rec(PULL));
+  it('writes when the live state is exactly what Preview saw', () => {
+    expect(holdCompareAndSet(null, holdFingerprint(null), next)).toEqual(next);
   });
 
-  it('ABORTS when another writer already held this exact pull', () => {
-    expect(holdTransactionUpdate({ active: true, heldAtPullUTC: PULL }, rec(PULL))).toBeUndefined();
+  it('ABORTS when a different hold appeared since Preview', () => {
+    const observedNone = holdFingerprint(null);
+    const live = { active: true, heldAtPullUTC: PULL, applyOpId: 'op-other', heldAtMs: 5 };
+    expect(holdCompareAndSet(live, observedNone, next)).toBeUndefined();
   });
 
-  it('replaces a hold bound to a different pull', () => {
-    expect(holdTransactionUpdate({ active: true, heldAtPullUTC: '2026-08-01T00:00:00.000Z' }, rec(PULL)))
-      .toEqual(rec(PULL));
+  it('ABORTS rather than overwrite a NEWER hold for a different pull', () => {
+    // The exact defect Codex found: an older Apply must not erase a newer hold.
+    const observedOld = holdFingerprint({ active: true, heldAtPullUTC: PULL, heldAtMs: 1 });
+    const live = { active: true, heldAtPullUTC: NEWER, heldAtMs: 2, applyOpId: 'op-newer' };
+    expect(holdCompareAndSet(live, observedOld, next)).toBeUndefined();
   });
 
-  it('a pull landing between Preview, Apply-read and Apply-write cannot hide the well', () => {
-    // Preview saw PULL.
-    const previewed = decideEstimationHold(target, observation());
-    const digestAtPreview = computePreviewDigest(UID, [previewed], sha256);
+  it('ABORTS on any drift, even a re-taken hold for the same pull', () => {
+    const observed = holdFingerprint({ active: true, heldAtPullUTC: PULL, heldAtMs: 1 });
+    const live = { active: true, heldAtPullUTC: PULL, heldAtMs: 999 };
+    expect(holdCompareAndSet(live, observed, next)).toBeUndefined();
+  });
 
-    // A real pull lands. Apply re-reads and now sees NEWER.
-    const atApply = observation({
-      outgoing: { ...observation().outgoing!, lastPullDateTimeUTC: NEWER, responseId: 'response_new' },
-    });
-    const reDecided = decideEstimationHold(target, atApply);
-    const digestAtApply = computePreviewDigest(UID, [reDecided], sha256);
+  it('replaces a hold that is still byte-identical to what Preview saw', () => {
+    const live = { active: true, heldAtPullUTC: PULL, heldAtMs: 7, applyOpId: 'op-a' };
+    expect(holdCompareAndSet(live, holdFingerprint(live), next)).toEqual(next);
+  });
+});
 
-    // Gate 1: the digest no longer matches, so the batch is refused outright.
-    expect(digestAtApply).not.toBe(digestAtPreview);
-    // Gate 2: even if it were applied, the decision itself refuses.
-    expect(reDecided.action).toBe('refuse_evidence_mismatch');
-    // Gate 3: and even a hold written against the OLD pull is inert, because
-    // the binding no longer matches the well's current pull.
+describe('holdCompensate — ownership', () => {
+  it('removes only a hold this operation wrote', () => {
+    expect(holdCompensate({ active: true, heldAtPullUTC: PULL, applyOpId: 'op-1' }, 'op-1')).toBeNull();
+  });
+  it('refuses to remove another operation\'s hold', () => {
+    expect(holdCompensate({ active: true, heldAtPullUTC: PULL, applyOpId: 'op-2' }, 'op-1')).toBeUndefined();
+  });
+  it('refuses when there is nothing there', () => {
+    expect(holdCompensate(null, 'op-1')).toBeUndefined();
+  });
+});
+
+// ── 7. concurrency: a pull between Preview, Apply-read and Apply-write ──────
+
+describe('concurrent pull during apply', () => {
+  it('cannot hide a well — blocked at digest, decision, and binding', () => {
+    const asOf = PULL_MS + 30 * H;
+    const previewDigest = computePreviewDigest(UID, asOf, [decide(asOf)], sha256);
+
+    // A real pull lands. Apply re-reads and recomputes at the same asOf.
+    const after = {
+      outgoing: {
+        responseId: 'response_new', lastPullDateTimeUTC: NEWER,
+        lastPullBottomLevel: "2'0\"", currentLevel: "2'0\"", wellDown: false,
+      },
+      acceptedPullMs: [...cadence24h(), Date.parse(NEWER)],
+    } as Partial<HoldObservation>;
+    const reDecided = decide(asOf, after);
+
+    // Gate 1 — digest no longer reproduces, so the whole batch is refused.
+    expect(computePreviewDigest(UID, asOf, [reDecided], sha256)).not.toBe(previewDigest);
+    // Gate 2 — the recomputed decision is no longer overdue against the new pull.
+    expect(reDecided.action).toBe('skip_within_average');
+    // Gate 3 — even a hold written against the OLD pull is inert.
+    expect(holdSuppressesEstimation({ active: true, heldAtPullUTC: PULL }, NEWER)).toBe(false);
+  });
+
+  it('a hold taken then superseded by a pull stops suppressing with no write', () => {
+    expect(holdSuppressesEstimation({ active: true, heldAtPullUTC: PULL }, PULL)).toBe(true);
     expect(holdSuppressesEstimation({ active: true, heldAtPullUTC: PULL }, NEWER)).toBe(false);
   });
 });
 
-// ── plan + input validation ─────────────────────────────────────────────────
+// ── 8. plan ─────────────────────────────────────────────────────────────────
 
-describe('plan and input', () => {
-  it('counts outcomes and reports only real writes', () => {
-    const plan = buildHoldPlan([
-      decideEstimationHold(target, observation()),
-      decideEstimationHold(target, observation({ statusIsDown: true })),
-      decideEstimationHold(target, observation({ outgoing: null })),
-    ], true, UID, sha256);
+describe('plan', () => {
+  it('counts every outcome across the pool and proposes only real writes', () => {
+    const asOf = PULL_MS + 30 * H;
+    const decisions = [
+      decide(asOf),
+      decide(asOf, { statusIsDown: true }),
+      decide(asOf, { acceptedPullMs: [PULL_MS] }),
+      decide(asOf + -10 * H),
+      decide(asOf, { outgoing: null }),
+      decide(asOf, { outgoing: { ...observation().outgoing!, lastPullBottomLevel: 'n/a' } }),
+    ];
+    const plan = buildHoldPlan({ decisions, dryRun: true, callerUid: UID, asOfMs: asOf, digest: sha256 });
     expect(plan.counts.apply_hold).toBe(1);
     expect(plan.counts.skip_physically_down).toBe(1);
+    expect(plan.counts.insufficient_history).toBe(1);
+    expect(plan.counts.skip_within_average).toBe(1);
     expect(plan.counts.refuse_missing_status).toBe(1);
+    expect(plan.counts.refuse_missing_bottom).toBe(1);
     expect(plan.willWriteCount).toBe(1);
+    expect(plan.asOfMs).toBe(asOf);
     expect(plan.previewDigest).toHaveLength(64);
-  });
-
-  it('rejects path-escaping names and malformed batches', () => {
-    for (const bad of ['a/b', 'a.b', 'a#b', 'a$b', 'a[b', 'a]b']) {
-      expect(() => parseHoldTargets([{ wellName: bad, expectedLastPullUTC: PULL }])).toThrow('invalid_wellName');
-    }
-    expect(() => parseHoldTargets([])).toThrow('targets_required');
-    expect(() => parseHoldTargets([
-      { wellName: 'A', expectedLastPullUTC: PULL }, { wellName: 'A', expectedLastPullUTC: PULL },
-    ])).toThrow('duplicate_well');
-    expect(() => parseHoldTargets([{ wellName: 'A', expectedLastPullUTC: 'soon' }]))
-      .toThrow('invalid_expectedLastPullUTC');
   });
 });
