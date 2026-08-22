@@ -876,7 +876,7 @@ export const adminSetDriverPasscode = httpsV2.onCall(
     let pendingProfile: Record<string, unknown> | null = null;
     let pendingLegacyLink: Record<string, unknown> | null = null;
 
-    const { decideCreateSecureLoginLink, evaluateApprovedRowForCreate } = await import('./operational/legacySecureLink');
+    const { decideCreateSecureLoginLink } = await import('./operational/legacySecureLink');
     const linkDecision = decideCreateSecureLoginLink({
       driverId,
       approvedKey: data.approvedKey,
@@ -891,43 +891,56 @@ export const adminSetDriverPasscode = httpsV2.onCall(
     const approvedKey = linkDecision.action === 'create_from_approved' ? linkDecision.approvedKey : '';
 
     if (linkDecision.action === 'create_from_approved') {
-      const linked = await rtdb().ref(`drivers/approved/${approvedKey}`).once('value');
-      const L = linked.exists() ? (linked.val() as Record<string, unknown>) : null;
-      const rowCheck = evaluateApprovedRowForCreate({
-        requestDisplayName: fields.displayName,
-        row: L,
-      });
-      if (!L) {
-        throw new httpsV2.HttpsError('not-found', 'approved_row_missing');
-      }
-      if (!rowCheck.ok) {
+      const { runApprovedRowConversion } = await import('./operational/approvedRowConversion');
+      const { productionConversionStore } = await import('./operational/approvedRowConversionStore');
+      const converted = await runApprovedRowConversion(
+        productionConversionStore(fs(), rtdb()),
+        {
+          approvedKey,
+          displayName: fields.displayName,
+          legalName: fields.legalName,
+          companyId: data.companyId,
+          companyName: data.companyName,
+          passcodeRecord,
+          temporary,
+          callerUid: caller.uid,
+          opId,
+        },
+      );
+      if (converted.status === 'refused') {
         throw new httpsV2.HttpsError(
-          rowCheck.reason === 'approved_row_missing' ? 'not-found' : 'failed-precondition',
-          rowCheck.reason,
+          converted.reason === 'approved_row_missing' ? 'not-found'
+            : converted.reason === 'approved_key_malformed' ? 'invalid-argument'
+            : 'failed-precondition',
+          converted.reason,
         );
       }
-      driverId = await claimProvisioningUuid({ kind: 'legacy', legacyHash: approvedKey });
-      pendingProfile = {
+      if (converted.status === 'rolled_back' || !converted.driverId) {
+        await writeSecurityAudit({
+          action: 'approvedRowConversion_fail',
+          actorUid: caller.uid,
+          driverId: converted.driverId,
+          detail: { reason: 'approved_conversion_rolled_back' },
+        });
+        throw new httpsV2.HttpsError(
+          'internal',
+          'Could not create the driver profile; no identity was created',
+        );
+      }
+      await writeSecurityAudit({
+        action: 'approvedRowConversion',
+        actorUid: caller.uid,
+        driverId: converted.driverId,
+        detail: {
+          approvedKeyPrefix: approvedKey.slice(0, 8),
+          temporary,
+          shiftAuthority: converted.status === 'resumable' ? 'resumable_linked' : 'converted',
+        },
+      });
+      return {
+        driverId: converted.driverId,
         displayName: fields.displayName,
-        legalName: fields.legalName || L.legalName || fields.displayName,
-        name: fields.displayName,
-        active: L.active !== false,
-        isAdmin: L.isAdmin === true,
-        isViewer: L.isViewer === true,
-        companyId: data.companyId || L.companyId || null,
-        companyName: data.companyName || L.companyName || null,
-        assignedCustomers: L.assignedCustomers || null,
-        assignedRoutes: L.assignedRoutes || null,
-        assignedWells: L.assignedWells || null,
-        roles: L.roles || ['driver'],
-        approvedAt: L.approvedAt || Date.now(),
-        approvedBy: caller.uid,
-        schemaVersion: 1,
-        mustUseSecureAuth: true,
-      };
-      pendingLegacyLink = {
-        migratedToDriverId: driverId,
-        secureProfileLinked: true,
+        mustChangePasscode: temporary,
       };
     }
 
