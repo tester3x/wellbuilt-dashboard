@@ -4764,6 +4764,9 @@ export {
   // Operational path hardening
   ingestDriverPacket,
   ingestWbmPull,
+  // Emergency well mark-down (Preview / Apply). Preview writes nothing.
+  adminEmergencyMarkWellsDownPreview,
+  adminEmergencyMarkWellsDown,
   upsertDriverShift,
   resolveActiveDriverShift,
   claimDriverShift,

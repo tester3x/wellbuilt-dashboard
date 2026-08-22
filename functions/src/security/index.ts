@@ -32,6 +32,8 @@ export { staffConvertApprovedDriverSecureLogin } from './staffConvertApprovedDri
 export {
   ingestDriverPacket,
   ingestWbmPull,
+  adminEmergencyMarkWellsDownPreview,
+  adminEmergencyMarkWellsDown,
   upsertDriverShift,
   resolveActiveDriverShift,
   claimDriverShift,
