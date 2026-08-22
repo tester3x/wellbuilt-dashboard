@@ -20,6 +20,7 @@ import {
   resolveEditTarget,
   strandedPacketVerdict,
 } from './packetGuards';
+import { canonicalWellKey } from './security/operational/emergencyEstimationHold';
 import {
   buildAppliedEditEvent,
   buildFieldDiff,
@@ -1207,6 +1208,23 @@ export const processIncomingPull = functionsV1.database
     // Write new response
     const responseId = `response_${timestamp.toISOString().replace(/[-:]/g, '').replace('T', '_').split('.')[0]}_${cleanName}`;
     await db.ref(`packets/outgoing/${responseId}`).set(outgoingResponse);
+
+    // ─── emergency estimation hold release ──────────────────────────────
+    // Deliberately HERE, after processed/status/outgoing have all committed
+    // for a real production pull with a usable tank level. Releasing earlier
+    // meant a no-level service packet — which returns before any of this —
+    // or a failure partway through could clear a hold while the old pull was
+    // still the latest, un-freezing a well nobody had actually pulled.
+    //
+    // Pointedly does NOT touch isDown. A hold and a physical mark-down are
+    // different statements; clearing one must never clear the other, or a
+    // routine pull would reactivate a well someone deliberately marked down —
+    // the same regression the wellDown authority guard above exists to stop.
+    //
+    // Consumers are already safe without this: a hold names the pull it was
+    // taken against and is ignored once that is no longer the latest. Removing
+    // the record keeps the data honest rather than merely inert.
+    await db.ref(`emergencyHolds/${canonicalWellKey(wellName)}`).remove();
 
     // Write performance data for Performance screen
     // Format: performance/{wellKey}/rows/{timestamp} = { d, a, p }
@@ -4768,6 +4786,8 @@ export {
   // Operational path hardening
   ingestDriverPacket,
   ingestWbmPull,
+  adminPreviewEstimationHold,
+  adminApplyEstimationHold,
   upsertDriverShift,
   resolveActiveDriverShift,
   claimDriverShift,

@@ -5,7 +5,8 @@ import { useRouter } from 'next/navigation';
 import { useAuth } from '@/contexts/AuthContext';
 import { canViewGlobalWellPool } from '@/lib/tenantScope';
 import { WellPoolEmptyState } from '@/components/WellPoolEmptyState';
-import { WellResponse, subscribeToWellStatusesUnified } from '@/lib/wells';
+import { WellResponse, subscribeToWellStatusesUnified, type WellPoolHealth } from '@/lib/wells';
+import { StaleDataBanner } from '@/components/StaleDataBanner';
 import Link from 'next/link';
 import { AppHeader } from '@/components/AppHeader';
 import { AddPullModal, type ApprovedDriver } from '@/components/AddPullModal';
@@ -39,6 +40,7 @@ export default function MobilePage() {
     return new Set();
   });
   const [dataLoading, setDataLoading] = useState(true);
+  const [poolHealth, setPoolHealth] = useState<WellPoolHealth | null>(null);
   const [viewMode, setViewMode] = useState<ViewMode>('table');
   const [wellSearch, setWellSearch] = useState('');
 
@@ -73,9 +75,13 @@ export default function MobilePage() {
 
   // Subscribe to well data from packets/outgoing
   useEffect(() => {
-    const unsubscribe = subscribeToWellStatusesUnified((wellData, routeList) => {
+    const unsubscribe = subscribeToWellStatusesUnified((wellData, routeList, health) => {
       // Always update wells and routes - this is the data that changes
       setWells(wellData);
+      // Freshness of the authoritative snapshot. Levels keep being estimated
+      // locally while degraded, so the screen must say the data is no longer
+      // being confirmed rather than present a stale forecast as live.
+      setPoolHealth(health);
       // Always include "Unrouted" even if no wells have it yet
       const routesWithUnrouted = routeList.includes('Unrouted')
         ? routeList
@@ -406,6 +412,8 @@ export default function MobilePage() {
             </div>
           </div>
         </div>
+
+        <StaleDataBanner health={poolHealth} />
 
         {dataLoading ? (
           <div className="text-gray-400">Loading well data...</div>

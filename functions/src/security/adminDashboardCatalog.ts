@@ -8,6 +8,7 @@
  */
 import * as httpsV2 from 'firebase-functions/v2/https';
 import * as admin from 'firebase-admin';
+import { canonicalWellKey } from './operational/emergencyEstimationHold';
 import { requireManageDrivers, requireRegisteredDashboardUser } from './adminAuth';
 import {
   callerCanViewGlobalWellPool,
@@ -76,9 +77,10 @@ export const adminGetWellPool = httpsV2.onCall(
       };
     }
     const rtdb = admin.database();
-    const [wellSnap, outgoingSnap] = await Promise.all([
+    const [wellSnap, outgoingSnap, wellsSnap] = await Promise.all([
       rtdb.ref('well_config').once('value'),
       rtdb.ref('packets/outgoing').once('value'),
+      rtdb.ref('emergencyHolds').once('value'),
     ]);
     const full = projectDashboardCatalog({
       approved: {},
@@ -91,7 +93,14 @@ export const adminGetWellPool = httpsV2.onCall(
       ok: true as const,
       canViewWellPool: true,
       wellConfig: full.wellConfig,
-      wellStatus: full.wellStatus,
+      // Merge the emergency estimation hold onto each projected status row, so
+      // the client can freeze a well without being handed the whole wells node.
+      // The hold carries the pull it was taken against; the client honours it
+      // only while that is still the row's latest pull.
+      wellStatus: attachEstimationHolds(
+        full.wellStatus,
+        wellsSnap.exists() ? (wellsSnap.val() as Record<string, unknown>) : {},
+      ),
       counts: { wellConfig: full.counts.wellConfig, wellStatus: full.counts.wellStatus },
     };
   },
@@ -99,6 +108,33 @@ export const adminGetWellPool = httpsV2.onCall(
 
 function asRecord(v: unknown): Record<string, unknown> {
   return v && typeof v === 'object' && !Array.isArray(v) ? (v as Record<string, unknown>) : {};
+}
+
+/**
+ * Copy the emergency hold onto the matching projected status row.
+ *
+ * Joined on the canonical well key, not the raw name, so a legacy "Gabriel1"
+ * status row still finds the hold taken against "Gabriel 1".
+ *
+ * Only the two fields a consumer needs in order to decide whether to freeze —
+ * who took the hold and why is audit material, not display material, and stays
+ * in the database.
+ */
+export function attachEstimationHolds(
+  wellStatus: Record<string, Record<string, unknown>>,
+  holdRoot: Record<string, unknown>,
+): Record<string, Record<string, unknown>> {
+  const byKey = new Map<string, Record<string, unknown>>();
+  for (const [key, val] of Object.entries(holdRoot)) byKey.set(canonicalWellKey(key), asRecord(val));
+
+  const out: Record<string, Record<string, unknown>> = {};
+  for (const [wellName, row] of Object.entries(wellStatus)) {
+    const hold = byKey.get(canonicalWellKey(wellName)) ?? {};
+    out[wellName] = hold.active === true && typeof hold.heldAtPullUTC === 'string'
+      ? { ...row, estimationHoldActive: true, estimationHeldAtPullUTC: hold.heldAtPullUTC }
+      : row;
+  }
+  return out;
 }
 
 export const adminGetWellHistory = httpsV2.onCall(
