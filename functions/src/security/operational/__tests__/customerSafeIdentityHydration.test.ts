@@ -7,9 +7,12 @@ import { readFileSync } from 'fs';
 import { join } from 'path';
 import { TEST_PASSCODE_RECORD } from '../approvedRowConversion';
 import {
+  classifyApprovedRowForRetirement,
   decideBindIdentity,
   decideBindingTerminalProof,
   decideRetireLegacyLogin,
+  evaluateApprovedRetirementStamp,
+  evaluateRetirementApplyGate,
   evaluateRetirementPreview,
   legacyLoginIsRetired,
   retirementTerminalAllowsApprovedStamp,
@@ -376,6 +379,7 @@ describe('separate legacy retirement', () => {
         hydrationAt: 2,
         hydrationDriverId: r.driverId,
       },
+      approvedRow: store.approved.get(ALPHA_KEY),
     }).action).toBe('retire');
     expect(recordMatchesTrustedHistory(
       ALPHA_KEY,
@@ -588,6 +592,26 @@ describe('source contracts', () => {
     expect(src).toMatch(/BINDING_BY_APPROVED/);
     expect(src).toMatch(/status === 'legacy_login_retired'/);
   });
+
+  it('staffRetire requires the approved row, stamps through an aborting transaction, and rereads', () => {
+    const retire = readFileSync(join(__dirname, '../../staffRetireLegacyDriverLogin.ts'), 'utf8');
+    const stamp = readFileSync(join(__dirname, '../retirementApplyTransaction.ts'), 'utf8');
+    expect(retire).toMatch(/approvedRow/);
+    expect(retire).toMatch(/evaluateRetirementApplyGate/);
+    expect(retire).toMatch(/commitApprovedRetirementStamp/);
+    expect(retire).toMatch(/legacyLoginRetired !== true/);
+    expect(retire).not.toMatch(/\.update\(/);
+    expect(retire.indexOf('retirementTerminalAllowsApprovedStamp')).toBeLessThan(
+      retire.indexOf('commitApprovedRetirementStamp'),
+    );
+    expect(retire.indexOf('commitApprovedRetirementStamp')).toBeLessThan(
+      retire.indexOf('legacyLoginRetired !== true'),
+    );
+    expect(stamp).toMatch(/evaluateApprovedRetirementStamp/);
+    expect(stamp).toMatch(/approvedRef\.on\('value', listener/);
+    expect(stamp).toMatch(/approvedRef\.off\('value', listener\)/);
+    expect(stamp).not.toMatch(/\.update\(/);
+  });
 });
 
 describe('customer upgrade never adopts a name-index incumbent', () => {
@@ -733,6 +757,7 @@ describe('retirement proofs gate repair in both partial directions', () => {
       byDriver: surviving,
       byApproved: null,
       proof: proven,
+      approvedRow: alphaRow(),
     });
     expect(d.action).toBe('repair');
     if (d.action === 'repair') {
@@ -748,6 +773,7 @@ describe('retirement proofs gate repair in both partial directions', () => {
       byApproved: surviving,
       byApprovedOwnedByDriver: [surviving],
       proof: proven,
+      approvedRow: alphaRow(),
     });
     expect(d.action).toBe('repair');
     if (d.action === 'repair') {
@@ -777,7 +803,7 @@ describe('retirement proofs gate repair in both partial directions', () => {
       byDriver: surviving,
       byApproved: surviving,
       proof: proven,
-      approvedLegacyLoginRetired: false,
+      approvedRow: alphaRow(),
     });
     expect(preview.ok).toBe(true);
     if (!preview.ok) return;
@@ -786,7 +812,7 @@ describe('retirement proofs gate repair in both partial directions', () => {
       byDriver: { ...surviving, opId: 'op-hijack' },
       byApproved: { ...surviving, opId: 'op-hijack' },
       proof: proven,
-      approvedLegacyLoginRetired: false,
+      approvedRow: alphaRow(),
     });
     expect(concurrent.ok).toBe(true);
     if (!concurrent.ok) return;
@@ -820,6 +846,113 @@ describe('retirement proofs gate repair in both partial directions', () => {
       byApproved: null,
     });
     expect(incomplete.ok).toBe(false);
+  });
+});
+
+describe('approved-row retirement existence guard', () => {
+  const driverId = 'bbbbbbbb-cccc-4ddd-8eee-000000000001';
+  const surviving = {
+    driverId,
+    approvedKey: ALPHA_KEY,
+    status: 'active' as const,
+    opId: 'op-orig',
+  };
+  const proven = {
+    secureLoginAt: 1,
+    secureLoginDriverId: driverId,
+    secureLoginUid: 'uid-1',
+    hydrationAt: 2,
+    hydrationDriverId: driverId,
+  };
+  const previewArgs = {
+    requestedDriverId: driverId,
+    byDriver: surviving,
+    byApproved: surviving,
+    proof: proven,
+  };
+
+  it('row missing at Preview is approved_row_missing, not an unretired digest', () => {
+    const missing = evaluateRetirementPreview({ ...previewArgs, approvedRow: null });
+    expect(missing).toEqual({ ok: false, reason: 'approved_row_missing' });
+    const present = evaluateRetirementPreview({ ...previewArgs, approvedRow: alphaRow() });
+    expect(present.ok).toBe(true);
+    expect(classifyApprovedRowForRetirement(null).fingerprint).toBe('missing');
+    expect(classifyApprovedRowForRetirement(alphaRow()).fingerprint).not.toBe('missing');
+  });
+
+  it('row deleted between Preview and Apply is stale_preview', () => {
+    const preview = evaluateRetirementPreview({ ...previewArgs, approvedRow: alphaRow() });
+    expect(preview.ok).toBe(true);
+    if (!preview.ok) return;
+    const afterDelete = evaluateRetirementPreview({ ...previewArgs, approvedRow: null });
+    expect(afterDelete).toEqual({ ok: false, reason: 'approved_row_missing' });
+    const gate = evaluateRetirementApplyGate({
+      preview: afterDelete,
+      expectedPreviewDigest: preview.digest,
+    });
+    expect(gate).toEqual({ ok: false, reason: 'stale_preview' });
+  });
+
+  it('malformed approved row is refused at Preview', () => {
+    expect(evaluateRetirementPreview({ ...previewArgs, approvedRow: [] }))
+      .toEqual({ ok: false, reason: 'approved_row_malformed' });
+    expect(evaluateRetirementPreview({ ...previewArgs, approvedRow: { active: true } }))
+      .toEqual({ ok: false, reason: 'approved_row_malformed' });
+    expect(evaluateRetirementPreview({ ...previewArgs, approvedRow: 'not-a-row' }))
+      .toEqual({ ok: false, reason: 'approved_row_malformed' });
+    const malformedApply = evaluateRetirementApplyGate({
+      preview: { ok: false, reason: 'approved_row_malformed' },
+      expectedPreviewDigest: 'prior-digest',
+    });
+    expect(malformedApply).toEqual({ ok: false, reason: 'stale_preview' });
+  });
+
+  it('replacement of the approved row changes the digest', () => {
+    const original = evaluateRetirementPreview({ ...previewArgs, approvedRow: alphaRow() });
+    const replaced = evaluateRetirementPreview({
+      ...previewArgs,
+      approvedRow: { ...alphaRow(), displayName: 'ReplacedName' },
+    });
+    expect(original.ok).toBe(true);
+    expect(replaced.ok).toBe(true);
+    if (!original.ok || !replaced.ok) return;
+    expect(replaced.digest).not.toBe(original.digest);
+    expect(evaluateRetirementApplyGate({
+      preview: replaced,
+      expectedPreviewDigest: original.digest,
+    })).toEqual({ ok: false, reason: 'stale_preview' });
+  });
+
+  it('evaluateApprovedRetirementStamp never produces a ghost from missing or malformed', () => {
+    expect(evaluateApprovedRetirementStamp(null)).toEqual({
+      ok: false, reason: 'approved_row_missing',
+    });
+    expect(evaluateApprovedRetirementStamp(undefined)).toEqual({
+      ok: false, reason: 'approved_row_missing',
+    });
+    expect(evaluateApprovedRetirementStamp([])).toEqual({
+      ok: false, reason: 'approved_row_malformed',
+    });
+    expect(evaluateApprovedRetirementStamp({ active: true })).toEqual({
+      ok: false, reason: 'approved_row_malformed',
+    });
+  });
+
+  it('normal existing-row retirement succeeds and preserves the row', () => {
+    const preview = evaluateRetirementPreview({ ...previewArgs, approvedRow: alphaRow() });
+    expect(preview.ok).toBe(true);
+    if (!preview.ok) return;
+    expect(preview.decision.action).toBe('retire');
+    const stamp = evaluateApprovedRetirementStamp(alphaRow());
+    expect(stamp.ok).toBe(true);
+    if (!stamp.ok) return;
+    expect(stamp.next.legacyLoginRetired).toBe(true);
+    expect(stamp.next.displayName).toBe(ALPHA_NAME);
+    expect(stamp.next.companyId).toBe('fixture-co');
+    expect(evaluateRetirementApplyGate({
+      preview,
+      expectedPreviewDigest: preview.digest,
+    })).toEqual(preview);
   });
 });
 

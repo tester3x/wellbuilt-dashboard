@@ -251,12 +251,61 @@ export function resolveSurvivingRetirementPair(input: {
  * Legacy login retirement. Both field proofs are required for retire AND
  * repair. A partial binding never bypasses secure-login or hydration proof.
  */
+export type ApprovedRowRetirementClass =
+  | { present: true; retired: boolean; fingerprint: string }
+  | { present: false; reason: 'approved_row_missing' | 'approved_row_malformed'; fingerprint: string };
+
+/**
+ * Preview requires a real approved-row object. Missing and malformed are
+ * distinct from an unretired present row so deletion cannot share a digest.
+ */
+export function classifyApprovedRowForRetirement(raw: unknown): ApprovedRowRetirementClass {
+  if (raw === null || raw === undefined) {
+    return { present: false, reason: 'approved_row_missing', fingerprint: 'missing' };
+  }
+  if (typeof raw !== 'object' || Array.isArray(raw)) {
+    return { present: false, reason: 'approved_row_malformed', fingerprint: 'malformed' };
+  }
+  const row = raw as Record<string, unknown>;
+  const displayName = typeof row.displayName === 'string' ? row.displayName.trim() : '';
+  if (!displayName) {
+    return { present: false, reason: 'approved_row_malformed', fingerprint: 'malformed' };
+  }
+  const fingerprint = createHash('sha256').update(JSON.stringify({
+    exists: true,
+    displayName,
+    active: row.active ?? null,
+    legacyLoginRetired: row.legacyLoginRetired === true,
+  })).digest('hex');
+  return {
+    present: true,
+    retired: row.legacyLoginRetired === true,
+    fingerprint,
+  };
+}
+
+/**
+ * Stamp merge. Returning undefined aborts an RTDB transaction without
+ * creating a ghost row. Never produce a new object from null/malformed.
+ */
+export function evaluateApprovedRetirementStamp(current: unknown):
+  | { ok: true; next: Record<string, unknown> }
+  | { ok: false; reason: 'approved_row_missing' | 'approved_row_malformed' } {
+  const classified = classifyApprovedRowForRetirement(current);
+  if (!classified.present) return { ok: false, reason: classified.reason };
+  return {
+    ok: true,
+    next: { ...(current as Record<string, unknown>), legacyLoginRetired: true },
+  };
+}
+
 export function decideRetireLegacyLogin(input: {
   requestedDriverId: string;
   byDriver: IdentityBinding | null;
   byApproved: IdentityBinding | null;
   byApprovedOwnedByDriver?: IdentityBinding[];
   proof: IdentityProofRecord;
+  approvedRow?: unknown;
   approvedLegacyLoginRetired?: boolean;
 }): RetireDecision {
   const pair = resolveSurvivingRetirementPair({
@@ -274,17 +323,21 @@ export function decideRetireLegacyLogin(input: {
     return { action: 'refuse', reason: 'hydration_unproven' };
   }
 
+  const row = classifyApprovedRowForRetirement(input.approvedRow);
+  if (!row.present) return { action: 'refuse', reason: row.reason };
+  const approvedRetired = row.retired || input.approvedLegacyLoginRetired === true;
+
   if (
     pair.complete
     && pair.surviving.status === 'legacy_login_retired'
-    && input.approvedLegacyLoginRetired === true
+    && approvedRetired
   ) {
     return { action: 'already_retired', surviving: pair.surviving, complete: true };
   }
   if (!pair.complete) {
     return { action: 'repair', surviving: pair.surviving, complete: false };
   }
-  if (pair.surviving.status === 'legacy_login_retired' && input.approvedLegacyLoginRetired !== true) {
+  if (pair.surviving.status === 'legacy_login_retired' && !approvedRetired) {
     return { action: 'repair', surviving: pair.surviving, complete: true };
   }
   return { action: 'retire', surviving: pair.surviving, complete: true };
@@ -299,6 +352,7 @@ export function retirePreviewDigest(input: {
   secureLoginProven: boolean;
   hydrationProven: boolean;
   approvedLegacyLoginRetired: boolean;
+  approvedRowFingerprint: string;
 }): string {
   return createHash('sha256').update(JSON.stringify({
     driverId: input.driverId,
@@ -309,6 +363,7 @@ export function retirePreviewDigest(input: {
     secureLoginProven: input.secureLoginProven,
     hydrationProven: input.hydrationProven,
     approvedLegacyLoginRetired: input.approvedLegacyLoginRetired,
+    approvedRowFingerprint: input.approvedRowFingerprint,
   })).digest('hex');
 }
 
@@ -318,9 +373,11 @@ export function evaluateRetirementPreview(input: {
   byApproved: IdentityBinding | null;
   byApprovedOwnedByDriver?: IdentityBinding[];
   proof: IdentityProofRecord;
+  approvedRow?: unknown;
   approvedLegacyLoginRetired?: boolean;
 }): { ok: true; decision: Exclude<RetireDecision, { action: 'refuse' }>; digest: string }
   | { ok: false; reason: string } {
+  const row = classifyApprovedRowForRetirement(input.approvedRow);
   const decision = decideRetireLegacyLogin(input);
   if (decision.action === 'refuse') return { ok: false, reason: decision.reason };
   const digest = retirePreviewDigest({
@@ -331,9 +388,38 @@ export function evaluateRetirementPreview(input: {
     complete: decision.complete,
     secureLoginProven: true,
     hydrationProven: true,
-    approvedLegacyLoginRetired: input.approvedLegacyLoginRetired === true,
+    approvedLegacyLoginRetired: row.present && row.retired,
+    approvedRowFingerprint: row.fingerprint,
   });
   return { ok: true, decision, digest };
+}
+
+/**
+ * Apply maps a deleted or replaced approved row onto stale_preview when the
+ * caller presents a digest from a prior successful Preview. Dry-run missing
+ * or malformed rows stay approved_row_missing / approved_row_malformed.
+ */
+export function evaluateRetirementApplyGate(input: {
+  preview: { ok: true; decision: Exclude<RetireDecision, { action: 'refuse' }>; digest: string }
+    | { ok: false; reason: string };
+  expectedPreviewDigest: string;
+}): { ok: true; decision: Exclude<RetireDecision, { action: 'refuse' }>; digest: string }
+  | { ok: false; reason: string } {
+  const expected = input.expectedPreviewDigest;
+  if (!input.preview.ok) {
+    if (
+      expected
+      && (input.preview.reason === 'approved_row_missing'
+        || input.preview.reason === 'approved_row_malformed')
+    ) {
+      return { ok: false, reason: 'stale_preview' };
+    }
+    return { ok: false, reason: input.preview.reason };
+  }
+  if (!expected || expected !== input.preview.digest) {
+    return { ok: false, reason: 'stale_preview' };
+  }
+  return input.preview;
 }
 
 export function retirementTerminalAllowsApprovedStamp(input: {

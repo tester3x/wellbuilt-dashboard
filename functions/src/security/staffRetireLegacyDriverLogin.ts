@@ -1,10 +1,10 @@
 /**
  * Separate audited retirement of the legacy approved-row login.
  *
- * Preview/Apply digest is bound to driverId, approvedKey, surviving
- * status/opId, both proof conditions, and approved-row retirement state.
- * Partial bindings are repaired only after both proofs. The approved row
- * is stamped only after a terminal reread of both binding sides.
+ * Preview requires a valid approved-row object and binds its fingerprint
+ * into the digest. Apply stamps only through a primed aborting transaction
+ * after terminal binding proof, then rereads legacyLoginRetired === true.
+ * update() is never used: it would create a ghost row from a missing path.
  */
 import * as httpsV2 from 'firebase-functions/v2/https';
 import * as admin from 'firebase-admin';
@@ -16,6 +16,7 @@ import {
   BINDING_ROOT,
   DRIVER_UUID_RE,
   IDENTITY_PROOF,
+  evaluateRetirementApplyGate,
   evaluateRetirementPreview,
   parseBinding,
   parseIdentityProof,
@@ -23,6 +24,7 @@ import {
   type IdentityBinding,
 } from './operational/identityBinding';
 import { commitIdentityBindingWrite } from './operational/bindingApplyTransaction';
+import { commitApprovedRetirementStamp } from './operational/retirementApplyTransaction';
 
 const ALLOWED = new Set(['driverId', 'mode', 'expectedPreviewDigest']);
 
@@ -83,7 +85,7 @@ export const staffRetireLegacyDriverLogin = httpsV2.onCall(
       || loaded.byApprovedOwnedByDriver[0]?.approvedKey
       || '';
     const approvedRow = approvedKey
-      ? ((await rtdb.ref(`drivers/approved/${approvedKey}`).once('value')).val() as Record<string, unknown> | null)
+      ? (await rtdb.ref(`drivers/approved/${approvedKey}`).once('value')).val()
       : null;
 
     const preview = evaluateRetirementPreview({
@@ -92,20 +94,19 @@ export const staffRetireLegacyDriverLogin = httpsV2.onCall(
       byApproved: loaded.byApproved,
       byApprovedOwnedByDriver: loaded.byApprovedOwnedByDriver,
       proof,
-      approvedLegacyLoginRetired: approvedRow?.legacyLoginRetired === true,
+      approvedRow,
     });
 
-    if (!preview.ok) {
-      await writeSecurityAudit({
-        action: 'staffRetireLegacyDriverLogin_fail',
-        actorUid: caller.uid,
-        driverId,
-        detail: { reason: preview.reason },
-      });
-      throw new httpsV2.HttpsError('failed-precondition', preview.reason);
-    }
-
     if (mode === 'dry-run') {
+      if (!preview.ok) {
+        await writeSecurityAudit({
+          action: 'staffRetireLegacyDriverLogin_fail',
+          actorUid: caller.uid,
+          driverId,
+          detail: { reason: preview.reason },
+        });
+        throw new httpsV2.HttpsError('failed-precondition', preview.reason);
+      }
       return {
         ok: true,
         mode: 'dry-run' as const,
@@ -116,15 +117,25 @@ export const staffRetireLegacyDriverLogin = httpsV2.onCall(
     }
 
     const expected = typeof raw.expectedPreviewDigest === 'string' ? raw.expectedPreviewDigest : '';
-    if (!expected || expected !== preview.digest) {
-      throw new httpsV2.HttpsError('failed-precondition', 'stale_preview');
+    const gate = evaluateRetirementApplyGate({
+      preview,
+      expectedPreviewDigest: expected,
+    });
+    if (!gate.ok) {
+      await writeSecurityAudit({
+        action: 'staffRetireLegacyDriverLogin_fail',
+        actorUid: caller.uid,
+        driverId,
+        detail: { reason: gate.reason },
+      });
+      throw new httpsV2.HttpsError('failed-precondition', gate.reason);
     }
 
-    if (preview.decision.action === 'already_retired') {
+    if (gate.decision.action === 'already_retired') {
       return { ok: true, driverId, status: 'legacy_login_retired' as const, already: true };
     }
 
-    const surviving = preview.decision.surviving;
+    const surviving = gate.decision.surviving;
     const bindWrite = await commitIdentityBindingWrite({
       bindingsRef: rtdb.ref(BINDING_ROOT) as never,
       driverId: surviving.driverId,
@@ -153,15 +164,24 @@ export const staffRetireLegacyDriverLogin = httpsV2.onCall(
       throw new httpsV2.HttpsError('failed-precondition', stamp.reason);
     }
 
-    await rtdb.ref(`drivers/approved/${surviving.approvedKey}`).update({
-      legacyLoginRetired: true,
+    const stamped = await commitApprovedRetirementStamp({
+      approvedRef: rtdb.ref(`drivers/approved/${surviving.approvedKey}`) as never,
     });
+    if (!stamped.ok) {
+      throw new httpsV2.HttpsError('failed-precondition', stamped.reason);
+    }
+
+    const proved = (await rtdb.ref(`drivers/approved/${surviving.approvedKey}`).once('value')).val() as
+      Record<string, unknown> | null;
+    if (!proved || proved.legacyLoginRetired !== true) {
+      throw new httpsV2.HttpsError('failed-precondition', 'legacy_login_not_retired');
+    }
 
     await writeSecurityAudit({
       action: 'staffRetireLegacyDriverLogin',
       actorUid: caller.uid,
       driverId,
-      detail: { status: 'legacy_login_retired', repaired: preview.decision.action === 'repair' },
+      detail: { status: 'legacy_login_retired', repaired: gate.decision.action === 'repair' },
     });
     return {
       ok: true,

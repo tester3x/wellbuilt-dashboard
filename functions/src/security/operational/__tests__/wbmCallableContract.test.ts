@@ -120,12 +120,15 @@ describe('WB-M callable export / contract matrix', () => {
     expect(upgrade).toMatch(/currentPasscode/);
     expect(upgrade).toMatch(/newPasscode/);
     expect(retire).toMatch(/evaluateRetirementPreview/);
+    expect(retire).toMatch(/evaluateRetirementApplyGate/);
     expect(retire).toMatch(/retirementTerminalAllowsApprovedStamp/);
+    expect(retire).toMatch(/commitApprovedRetirementStamp/);
     expect(retire).toMatch(/byApprovedOwnedByDriver/);
-    expect(retire).toMatch(/legacyLoginRetired: true/);
+    expect(retire).toMatch(/legacyLoginRetired !== true/);
     expect(retire.indexOf('retirementTerminalAllowsApprovedStamp')).toBeLessThan(
-      retire.indexOf('legacyLoginRetired: true'),
+      retire.indexOf('commitApprovedRetirementStamp'),
     );
+    expect(retire).not.toMatch(/\.update\(/);
     expect(retire).not.toMatch(/raw\.approvedKey/);
     expect(convert).toMatch(/superseded_by_customer_owned_upgrade/);
     expect(convert).not.toMatch(/runApprovedRowConversion/);
