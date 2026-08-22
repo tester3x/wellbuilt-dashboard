@@ -40,10 +40,21 @@ export function evaluateApprovedRowForCreate(input: {
   requestDisplayName: string;
   row: Record<string, unknown> | null;
 }): { ok: true } | { ok: false; reason: string } {
-  if (!input.row) return { ok: false, reason: 'approved_row_missing' };
-  const rowName = typeof input.row.displayName === 'string' ? input.row.displayName : '';
+  if (!input.row || typeof input.row !== 'object') {
+    return { ok: false, reason: 'approved_row_missing' };
+  }
+  const rowName = input.row.displayName;
+  if (typeof rowName !== 'string' || rowName.trim() === '') {
+    return { ok: false, reason: 'approved_row_malformed' };
+  }
   if (rowName !== input.requestDisplayName) {
     return { ok: false, reason: 'approved_row_name_mismatch' };
+  }
+  if (input.row.active === false) {
+    return { ok: false, reason: 'approved_row_inactive' };
+  }
+  if (input.row.active !== true) {
+    return { ok: false, reason: 'approved_row_malformed' };
   }
   if (typeof input.row.migratedToDriverId === 'string' && input.row.migratedToDriverId.trim()) {
     return { ok: false, reason: 'approved_row_already_linked' };

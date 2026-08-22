@@ -119,3 +119,17 @@ export async function requireManageDrivers(
   }
   throw new httpsV2.HttpsError('permission-denied', 'Caller lacks manageDrivers capability');
 }
+
+/**
+ * Emergency identity conversion. manageDrivers is not enough: a
+ * company-scoped manager can hold that cap. Platform administration is
+ * the RTDB/claims flag `isPlatformAdmin === true` (unscoped admin/it).
+ */
+export async function requirePlatformAdmin(
+  authUid: string | undefined,
+  authToken?: Record<string, unknown> | null,
+): Promise<DashboardCaller> {
+  const caller = await requireManageDrivers(authUid, authToken);
+  if (caller.isPlatformAdmin === true) return caller;
+  throw new httpsV2.HttpsError('permission-denied', 'Caller is not a platform administrator');
+}

@@ -63,6 +63,8 @@ export type ConversionRefusal =
   | 'approved_row_missing'
   | 'approved_row_name_mismatch'
   | 'approved_row_already_linked'
+  | 'approved_row_inactive'
+  | 'approved_row_malformed'
   | 'provisioning_refused';
 
 export interface PasscodeRecord {
@@ -147,47 +149,86 @@ export function emptyWrites(): ConversionWriteLog {
 }
 
 /** Missing assignedWells → explicit null on the canonical profile. */
+export function copyExactField(row: Record<string, unknown>, key: string): unknown {
+  if (!Object.prototype.hasOwnProperty.call(row, key)) return null;
+  if (row[key] === undefined) return null;
+  return row[key];
+}
+
 export function copyAssignedWells(row: Record<string, unknown>): unknown {
-  if (!Object.prototype.hasOwnProperty.call(row, 'assignedWells')) return null;
-  if (row.assignedWells === undefined) return null;
-  return row.assignedWells;
+  return copyExactField(row, 'assignedWells');
 }
 
 export function copyAssignedRoutes(row: Record<string, unknown>): unknown {
-  if (!Object.prototype.hasOwnProperty.call(row, 'assignedRoutes')) return null;
-  if (row.assignedRoutes === undefined) return null;
-  return row.assignedRoutes;
+  return copyExactField(row, 'assignedRoutes');
 }
 
+export const PROFILE_PROOF_KEYS = [
+  'displayName',
+  'name',
+  'legalName',
+  'active',
+  'isAdmin',
+  'isViewer',
+  'companyId',
+  'companyName',
+  'assignedCustomers',
+  'assignedRoutes',
+  'assignedWells',
+  'roles',
+  'approvedAt',
+  'schemaVersion',
+  'mustUseSecureAuth',
+] as const;
+
+export function sameJson(a: unknown, b: unknown): boolean {
+  return JSON.stringify(a ?? null) === JSON.stringify(b ?? null);
+}
+
+/**
+ * Canonical profile is owned by the approved row. Client metadata is never
+ * applied: legalName, company, routes, wells, roles, flags, and approvedAt
+ * come from the exact RTDB row.
+ */
 export function buildCanonicalProfile(input: {
   row: Record<string, unknown>;
   displayName: string;
-  legalName?: string;
-  companyId?: string;
-  companyName?: string;
   callerUid: string;
   opId: string;
 }): Record<string, unknown> {
   const L = input.row;
   return {
     displayName: input.displayName,
-    legalName: input.legalName || L.legalName || input.displayName,
-    name: input.displayName,
-    active: L.active !== false,
-    isAdmin: L.isAdmin === true,
-    isViewer: L.isViewer === true,
-    companyId: input.companyId || L.companyId || null,
-    companyName: input.companyName || L.companyName || null,
-    assignedCustomers: L.assignedCustomers || null,
+    name: copyExactField(L, 'name'),
+    legalName: copyExactField(L, 'legalName'),
+    active: copyExactField(L, 'active'),
+    isAdmin: copyExactField(L, 'isAdmin'),
+    isViewer: copyExactField(L, 'isViewer'),
+    companyId: copyExactField(L, 'companyId'),
+    companyName: copyExactField(L, 'companyName'),
+    assignedCustomers: copyExactField(L, 'assignedCustomers'),
     assignedRoutes: copyAssignedRoutes(L),
     assignedWells: copyAssignedWells(L),
-    roles: L.roles || ['driver'],
-    approvedAt: L.approvedAt || Date.now(),
+    roles: copyExactField(L, 'roles'),
+    approvedAt: copyExactField(L, 'approvedAt'),
     approvedBy: input.callerUid,
     schemaVersion: 1,
     mustUseSecureAuth: true,
     provisioningOpId: input.opId,
   };
+}
+
+/** Shape-only. Never compares or returns the hash material. */
+export function isServerScryptRecord(raw: unknown): boolean {
+  if (!raw || typeof raw !== 'object') return false;
+  const rec = raw as Record<string, unknown>;
+  return rec.algo === 'scrypt'
+    && typeof rec.saltB64 === 'string' && rec.saltB64.length > 0
+    && typeof rec.hashB64 === 'string' && rec.hashB64.length > 0
+    && Number.isInteger(rec.N)
+    && Number.isInteger(rec.r)
+    && Number.isInteger(rec.p)
+    && Number.isInteger(rec.keyLen);
 }
 
 function normCompany(v: unknown): string | null {
@@ -204,14 +245,9 @@ export function decideProfileWrite(input: {
   if (!existing || typeof existing !== 'object') return 'write';
   const existingOp = existing.provisioningOpId;
   const nextOp = input.incoming.provisioningOpId;
-  if (existingOp === nextOp) return 'already_exact';
-  const sameName = existing.displayName === input.incoming.displayName;
-  const sameCompany = normCompany(existing.companyId) === normCompany(input.incoming.companyId);
-  const sameRoutes = JSON.stringify(existing.assignedRoutes ?? null)
-    === JSON.stringify(input.incoming.assignedRoutes ?? null);
-  const sameWells = JSON.stringify(existing.assignedWells ?? null)
-    === JSON.stringify(input.incoming.assignedWells ?? null);
-  if (sameName && sameCompany && sameRoutes && sameWells) return 'already_exact';
+  const identityMatch = PROFILE_PROOF_KEYS.every((key) => sameJson(existing[key], input.incoming[key]));
+  if (existingOp === nextOp && identityMatch) return 'already_exact';
+  if (identityMatch) return 'already_exact';
   return 'foreign';
 }
 
@@ -239,6 +275,7 @@ export interface ConversionInspect {
   credentialOpId: string | null;
   credentialDisplayNameNorm: string | null;
   credentialActive: boolean | null;
+  credentialScryptValid: boolean;
   indexDriverId: string | null;
   profile: Record<string, unknown> | null;
   profileOpId: string | null;
@@ -249,44 +286,50 @@ export interface ConversionInspect {
   legacyLinkOpId: string | null;
   approvedDisplayName: string | null;
   approvedSecureProfileLinked: boolean | null;
+  journalCompleted: boolean | null;
+}
+
+export function decideProfileFieldProof(
+  profile: Record<string, unknown> | null,
+  expected: Record<string, unknown>,
+): { ok: true } | { ok: false; reason: string } {
+  if (!profile) return { ok: false, reason: 'profile_missing' };
+  for (const key of PROFILE_PROOF_KEYS) {
+    if (!sameJson(profile[key], expected[key])) {
+      return { ok: false, reason: `profile_${key}_mismatch` };
+    }
+  }
+  return { ok: true };
 }
 
 export function decidePrerequisiteProof(input: {
   driverId: string;
   nameNorm: string;
-  displayName: string;
   companyId: string | null;
-  expectedRoutes: unknown;
-  expectedWells: unknown;
+  expectedProfile: Record<string, unknown>;
   live: ConversionInspect;
 }): { ok: true } | { ok: false; reason: string } {
-  const { live, driverId, nameNorm, displayName, companyId } = input;
+  const { live, driverId, nameNorm, companyId } = input;
   if (live.indexDriverId !== driverId) {
     return { ok: false, reason: 'index_mismatch' };
   }
   if (!live.credentialOpId) {
     return { ok: false, reason: 'credential_missing' };
   }
-  if (live.credentialDisplayNameNorm && live.credentialDisplayNameNorm !== nameNorm) {
+  if (live.credentialDisplayNameNorm !== nameNorm) {
     return { ok: false, reason: 'credential_name_mismatch' };
   }
-  if (live.credentialActive === false) {
-    return { ok: false, reason: 'credential_inactive' };
+  if (live.credentialActive !== true) {
+    return {
+      ok: false,
+      reason: live.credentialActive === false ? 'credential_inactive' : 'credential_malformed',
+    };
   }
-  const profile = live.profile;
-  if (!profile) return { ok: false, reason: 'profile_missing' };
-  if (profile.displayName !== displayName) {
-    return { ok: false, reason: 'profile_name_mismatch' };
+  if (live.credentialScryptValid !== true) {
+    return { ok: false, reason: 'credential_scrypt_invalid' };
   }
-  if (normCompany(profile.companyId) !== normCompany(companyId)) {
-    return { ok: false, reason: 'profile_company_mismatch' };
-  }
-  if (JSON.stringify(profile.assignedRoutes ?? null) !== JSON.stringify(input.expectedRoutes ?? null)) {
-    return { ok: false, reason: 'profile_routes_mismatch' };
-  }
-  if (JSON.stringify(profile.assignedWells ?? null) !== JSON.stringify(input.expectedWells ?? null)) {
-    return { ok: false, reason: 'profile_wells_mismatch' };
-  }
+  const fields = decideProfileFieldProof(live.profile, input.expectedProfile);
+  if (!fields.ok) return fields;
   if (companyId) {
     const auth = live.authority;
     if (!auth) return { ok: false, reason: 'authority_missing' };
@@ -307,8 +350,7 @@ export function decideTerminalProof(input: {
   nameNorm: string;
   displayName: string;
   companyId: string | null;
-  expectedRoutes: unknown;
-  expectedWells: unknown;
+  expectedProfile: Record<string, unknown>;
   live: ConversionInspect;
 }): { ok: true } | { ok: false; reason: string } {
   const pre = decidePrerequisiteProof(input);
@@ -319,8 +361,11 @@ export function decideTerminalProof(input: {
   if (input.live.approvedSecureProfileLinked !== true) {
     return { ok: false, reason: 'legacy_link_unmarked' };
   }
-  if (input.live.approvedDisplayName && input.live.approvedDisplayName !== input.displayName) {
+  if (input.live.approvedDisplayName !== input.displayName) {
     return { ok: false, reason: 'legacy_name_mismatch' };
+  }
+  if (input.live.journalCompleted !== true) {
+    return { ok: false, reason: 'journal_incomplete' };
   }
   return { ok: true };
 }
@@ -443,9 +488,9 @@ export async function runApprovedRowConversion(
 
   const nameNorm = normalizeDisplayName(input.displayName);
   const companyId =
-    (typeof input.companyId === 'string' && input.companyId.trim()
-      ? input.companyId.trim().toLowerCase()
-      : typeof row.companyId === 'string' ? String(row.companyId).trim().toLowerCase() : null) || null;
+    (typeof row.companyId === 'string' && row.companyId.trim()
+      ? row.companyId.trim().toLowerCase()
+      : null);
 
   // Read the journal WITHOUT claiming so an already-linked foreign row
   // refuses with zero writes. Resume only when the durable UUID matches.
@@ -484,9 +529,6 @@ export async function runApprovedRowConversion(
   const expectedProfile = buildCanonicalProfile({
     row,
     displayName: input.displayName,
-    legalName: input.legalName,
-    companyId: input.companyId,
-    companyName: input.companyName,
     callerUid: input.callerUid,
     opId: input.opId,
   });
@@ -495,8 +537,7 @@ export async function runApprovedRowConversion(
     nameNorm,
     displayName: input.displayName,
     companyId,
-    expectedRoutes: copiedRoutes,
-    expectedWells: copiedWells,
+    expectedProfile,
     live,
   });
 
@@ -892,10 +933,12 @@ export function createMemoryConversionStore(): ConversionStore & {
       const prof = profiles.get(driverId) ?? null;
       const auth = authority.get(driverId) ?? null;
       const row = approved.get(approvedKey) ?? null;
+      const journal = journalMap.get(`legacy:${approvedKey}`);
       return {
         credentialOpId: typeof cred?.opId === 'string' ? cred.opId : null,
         credentialDisplayNameNorm: typeof cred?.displayNameNorm === 'string' ? cred.displayNameNorm : null,
         credentialActive: typeof cred?.active === 'boolean' ? cred.active : null,
+        credentialScryptValid: isServerScryptRecord(cred?.passcode),
         indexDriverId: idx?.driverId ?? null,
         profile: prof,
         profileOpId: typeof prof?.provisioningOpId === 'string' ? String(prof.provisioningOpId) : null,
@@ -906,6 +949,7 @@ export function createMemoryConversionStore(): ConversionStore & {
         legacyLinkOpId: typeof row?.linkOpId === 'string' ? String(row.linkOpId) : null,
         approvedDisplayName: typeof row?.displayName === 'string' ? String(row.displayName) : null,
         approvedSecureProfileLinked: row?.secureProfileLinked === true,
+        journalCompleted: journal ? journal.completed === true : null,
       };
     },
   };

@@ -9,9 +9,12 @@ import {
   clientOutcomeFor,
   createMemoryConversionStore,
   decideAuthorityDelete,
+  decideProfileFieldProof,
+  decidePrerequisiteProof,
   decideProfileWrite,
   runApprovedRowConversion,
   type ConversionInput,
+  type ConversionInspect,
 } from '../approvedRowConversion';
 import { decideCreateSecureLoginLink } from '../legacySecureLink';
 
@@ -19,6 +22,8 @@ const MARCIAL_KEY = '7413cd7d106a0f49c2a670064bc049e3260a522a09a6a5a7fad0c53522e
 const LUIZ_KEY = 'cf04d010ffd151b878e4377ca9c51cd90eeaae1660e19387fa51942b56c15780';
 const MARCIAL_ROUTES = ['Dunn County', 'Watford', 'Gunslingers'];
 const LUIZ_ROUTES = ['Montana', 'River Bottoms', 'Stock Yards', 'Watford', 'Dunn County', 'Gabriels'];
+
+const SLAWSON = [{ companyId: 'liquid-gold', name: 'SLAWSON EXPLORATION COMPANY, INC.' }];
 
 function marcialRow(): Record<string, unknown> {
   return {
@@ -28,7 +33,11 @@ function marcialRow(): Record<string, unknown> {
     name: 'Marcial Lebaron',
     companyId: 'liquid-gold',
     companyName: 'Liquid Gold Trucking LLC',
+    assignedCustomers: SLAWSON,
     assignedRoutes: [...MARCIAL_ROUTES],
+    isAdmin: false,
+    isViewer: false,
+    approvedAt: 1772370850548,
     // assignedWells intentionally missing
   };
 }
@@ -41,7 +50,11 @@ function luizRow(): Record<string, unknown> {
     name: 'Wisho-135',
     companyId: 'liquid-gold',
     companyName: 'Liquid Gold Trucking LLC',
+    assignedCustomers: SLAWSON,
     assignedRoutes: [...LUIZ_ROUTES],
+    isAdmin: false,
+    isViewer: false,
+    approvedAt: 1772371310138,
   };
 }
 
@@ -107,6 +120,22 @@ describe('approved-row conversion refusals write nothing', () => {
     expect(store.credentials.size).toBe(0);
   });
 
+  it('inactive approved row is classified and writes nothing', async () => {
+    const store = createMemoryConversionStore();
+    store.approved.set(MARCIAL_KEY, { ...marcialRow(), active: false });
+    const r = await runApprovedRowConversion(store, baseInput());
+    expect(r.reason).toBe('approved_row_inactive');
+    expect(store.credentials.size).toBe(0);
+  });
+
+  it('malformed approved row is classified and writes nothing', async () => {
+    const store = createMemoryConversionStore();
+    store.approved.set(MARCIAL_KEY, { ...marcialRow(), active: 'yes' });
+    const r = await runApprovedRowConversion(store, baseInput());
+    expect(r.reason).toBe('approved_row_malformed');
+    expect(store.profiles.size).toBe(0);
+  });
+
   it('18. keyless 31072-shaped request fails and writes nothing', async () => {
     const store = createMemoryConversionStore();
     seedBoth(store);
@@ -125,6 +154,23 @@ describe('approved-row conversion refusals write nothing', () => {
 });
 
 describe('approved-row conversion copies exact scope and isolates identities', () => {
+  it('client-supplied company/legalName cannot override the approved row', async () => {
+    const store = createMemoryConversionStore();
+    seedBoth(store);
+    const r = await runApprovedRowConversion(store, baseInput({
+      companyId: 'acme-eog-test',
+      companyName: 'Nope',
+      legalName: 'Someone Else',
+    }));
+    expect(r.status).toBe('ok');
+    const profile = store.profiles.get(r.driverId!)!;
+    expect(profile.companyId).toBe('liquid-gold');
+    expect(profile.companyName).toBe('Liquid Gold Trucking LLC');
+    expect(profile.legalName).toBe('Marcial Lebaron');
+    expect(profile.isAdmin).toBe(false);
+    expect(profile.assignedCustomers).toEqual(SLAWSON);
+  });
+
   it('5. Marcial-shaped fixture copies exactly Dunn County, Watford, Gunslingers', async () => {
     const store = createMemoryConversionStore();
     seedBoth(store);
@@ -393,16 +439,105 @@ describe('client success is only proven terminal state', () => {
 });
 
 describe('dedicated callable wiring: 31072 keyless refuse is before any conversion write', () => {
-  it('staffConvertApprovedDriverSecureLogin refuses extra fields and does not treat unproven as success', () => {
+  it('staffConvertApprovedDriverSecureLogin is platform-admin only and never audits the approved key', () => {
     const src = readFileSync(join(__dirname, '../../staffConvertApprovedDriverSecureLogin.ts'), 'utf8');
+    expect(src).toContain('requirePlatformAdmin');
+    expect(src).not.toContain('requireManageDrivers(');
     expect(src).toContain('runApprovedRowConversion');
     expect(src).toContain('clientOutcomeFor');
     expect(src).toContain('legacy_link_required');
     expect(src).toContain('driverId_reset_forbidden');
     expect(src).toContain('legacyHash_forbidden');
     expect(src).toContain('terminalProven');
+    expect(src).not.toMatch(/approvedKeyPrefix/);
+    expect(src).not.toMatch(/approvedKey\.slice/);
     expect(src).not.toMatch(/console\.(log|info|debug|warn|error).*passcode/i);
     expect(src).not.toMatch(/legacyHash: data/);
+    expect(src).not.toMatch(/legalName: fields/);
+    expect(src).not.toMatch(/companyId: typeof raw/);
     expect(JSON.stringify(TEST_PASSCODE_RECORD)).not.toMatch(/Wisho|Marcial|liquid-gold/i);
+  });
+});
+
+describe('terminal proof rejects inactive/malformed credentials and mismatched profile fields', () => {
+  const expected = {
+    displayName: 'Marcial Lebaron',
+    name: 'Marcial Lebaron',
+    legalName: 'Marcial Lebaron',
+    active: true,
+    isAdmin: false,
+    isViewer: false,
+    companyId: 'liquid-gold',
+    companyName: 'Liquid Gold Trucking LLC',
+    assignedCustomers: SLAWSON,
+    assignedRoutes: MARCIAL_ROUTES,
+    assignedWells: null,
+    roles: null,
+    approvedAt: 1772370850548,
+    schemaVersion: 1,
+    mustUseSecureAuth: true,
+  };
+
+  const liveOk = (): ConversionInspect => ({
+    credentialOpId: 'op-1',
+    credentialDisplayNameNorm: 'marcial lebaron',
+    credentialActive: true,
+    credentialScryptValid: true,
+    indexDriverId: 'uuid-1',
+    profile: { ...expected },
+    profileOpId: 'op-1',
+    authority: {
+      driverId: 'uuid-1',
+      companyId: 'liquid-gold',
+      initialized: true,
+      openPeriodId: null,
+    },
+    authorityOpId: 'op-1',
+    authorityOpenPeriodId: null,
+    legacyLinkedDriverId: 'uuid-1',
+    legacyLinkOpId: 'op-1',
+    approvedDisplayName: 'Marcial Lebaron',
+    approvedSecureProfileLinked: true,
+    journalCompleted: true,
+  });
+
+  it('rejects credential active that is not exactly true', () => {
+    const live = liveOk();
+    live.credentialActive = false;
+    expect(decidePrerequisiteProof({
+      driverId: 'uuid-1',
+      nameNorm: 'marcial lebaron',
+      companyId: 'liquid-gold',
+      expectedProfile: expected,
+      live,
+    })).toEqual({ ok: false, reason: 'credential_inactive' });
+    live.credentialActive = null;
+    expect(decidePrerequisiteProof({
+      driverId: 'uuid-1',
+      nameNorm: 'marcial lebaron',
+      companyId: 'liquid-gold',
+      expectedProfile: expected,
+      live,
+    })).toEqual({ ok: false, reason: 'credential_malformed' });
+  });
+
+  it('rejects a malformed scrypt record without comparing the hash', () => {
+    const live = liveOk();
+    live.credentialScryptValid = false;
+    expect(decidePrerequisiteProof({
+      driverId: 'uuid-1',
+      nameNorm: 'marcial lebaron',
+      companyId: 'liquid-gold',
+      expectedProfile: expected,
+      live,
+    })).toEqual({ ok: false, reason: 'credential_scrypt_invalid' });
+  });
+
+  it('rejects every mismatched canonical profile field', () => {
+    for (const key of Object.keys(expected) as (keyof typeof expected)[]) {
+      const profile = { ...expected, [key]: key === 'active' ? false : 'NOPE' };
+      expect(decideProfileFieldProof(profile, expected))
+        .toEqual({ ok: false, reason: `profile_${key}_mismatch` });
+    }
   });
 });

@@ -92,18 +92,13 @@ export async function staffConvertApprovedDriverSecureLogin(params: {
   displayName: string;
   passcode: string;
   approvedKey?: string;
-  companyId?: string;
-  companyName?: string;
-  legalName?: string;
   temporary?: boolean;
-  driverId?: string;
-  legacyHash?: string;
 }) {
-  if (params.driverId) {
-    throw new Error('driverId_reset_forbidden');
-  }
-  if (params.legacyHash) {
-    throw new Error('legacyHash_forbidden');
+  const allowed = new Set(['displayName', 'passcode', 'approvedKey', 'temporary']);
+  for (const key of Object.keys(params)) {
+    if (!allowed.has(key)) {
+      throw new Error(`Unexpected field: ${key}`);
+    }
   }
   const fn = httpsCallable(
     getFirebaseFunctions(),
@@ -113,9 +108,6 @@ export async function staffConvertApprovedDriverSecureLogin(params: {
     displayName: params.displayName,
     passcode: params.passcode,
     approvedKey: params.approvedKey,
-    companyId: params.companyId,
-    companyName: params.companyName,
-    legalName: params.legalName,
     temporary: params.temporary,
   });
   return res.data as {

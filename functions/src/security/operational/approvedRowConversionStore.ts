@@ -15,7 +15,7 @@ import {
   readIndexOwner,
   type IncumbentCredentialState,
 } from '../nameIndexClaim';
-import { firestoreProvisioningJournal } from './provisioningJournalStore';
+import { firestoreProvisioningJournal, PROVISIONING_JOURNAL_COLLECTION } from './provisioningJournalStore';
 import {
   decideEnsureEmptyAuthority,
   shiftAuthorityPath,
@@ -23,6 +23,7 @@ import {
 import {
   decideAuthorityDelete,
   decideProfileWrite,
+  isServerScryptRecord,
   type ConversionStore,
 } from './approvedRowConversion';
 
@@ -301,12 +302,13 @@ export function productionConversionStore(
       });
     },
     async inspect(driverId, nameNorm, approvedKey) {
-      const [cred, idx, prof, auth, approved] = await Promise.all([
+      const [cred, idx, prof, auth, approved, journal] = await Promise.all([
         db.collection('driver_credentials').doc(driverId).get(),
         db.collection('driver_name_index').doc(nameNorm).get(),
         rtdb.ref(`drivers/profiles/${driverId}`).once('value'),
         db.doc(shiftAuthorityPath(driverId)).get(),
         rtdb.ref(`drivers/approved/${approvedKey}`).once('value'),
+        db.collection(PROVISIONING_JOURNAL_COLLECTION).doc(`legacy:${approvedKey}`).get(),
       ]);
       const profile = prof.exists() ? (prof.val() as Record<string, unknown>) : null;
       const row = approved.exists() ? (approved.val() as Record<string, unknown>) : null;
@@ -317,6 +319,7 @@ export function productionConversionStore(
         credentialDisplayNameNorm: typeof credData?.displayNameNorm === 'string'
           ? String(credData.displayNameNorm) : null,
         credentialActive: typeof credData?.active === 'boolean' ? credData.active : null,
+        credentialScryptValid: isServerScryptRecord(credData?.passcode),
         indexDriverId: typeof idx.data()?.driverId === 'string' ? String(idx.data()?.driverId) : null,
         profile,
         profileOpId: typeof profile?.provisioningOpId === 'string' ? String(profile.provisioningOpId) : null,
@@ -330,6 +333,7 @@ export function productionConversionStore(
         legacyLinkOpId: typeof row?.linkOpId === 'string' ? String(row.linkOpId) : null,
         approvedDisplayName: typeof row?.displayName === 'string' ? String(row.displayName) : null,
         approvedSecureProfileLinked: row?.secureProfileLinked === true,
+        journalCompleted: journal.exists ? journal.data()?.completed === true : null,
       };
     },
   };

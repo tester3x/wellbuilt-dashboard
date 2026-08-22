@@ -40,7 +40,7 @@ check('2. no "Reset passcode" action is rendered in this tranche',
 
 // ── 3/4/5/17. request boundary ───────────────────────────────────────────
 check('the request is built by the tested decision layer',
-  /buildSetPasscodeRequest\(secureTarget, securePass\)/.test(code));
+  /buildConvertApprovedDriverRequest\(secureTarget, securePass\)/.test(code));
 {
   // Nothing may hand a driverId/legacyHash to the callable from this file.
   // Bound the slice by the handler's own dependency array — comments are
@@ -55,7 +55,7 @@ check('the request is built by the tested decision layer',
   // that the payload is exactly the builder's output, never augmented.
   check('17. no history or profile identifiers are added to the request',
     !/assignedRoutes|assignedCustomers|passcodeHash/.test(handler)
-    && /const req = buildSetPasscodeRequest\(secureTarget, securePass\);/.test(handler)
+    && /const req = buildConvertApprovedDriverRequest\(secureTarget, securePass\);/.test(handler)
     && /staffConvertApprovedDriverSecureLogin\(req\)/.test(handler)
     && !/adminSetPasscode\(req\)/.test(handler)
     && !/req\.\w+\s*=|Object\.assign\(req|\.\.\.req/.test(handler));
@@ -135,11 +135,12 @@ check('the success panel shows no password',
   const probePath = join(ROOT, 'tools', '.createSecureLoginUi.probe.mts');
   try {
     writeFileSync(probePath, `
-      import { buildSetPasscodeRequest } from '../src/lib/secureLoginProvisioning';
+      import { buildConvertApprovedDriverRequest } from '../src/lib/secureLoginProvisioning';
       const row = { key: 'da561bc4hash', displayName: 'MikeS24', companyId: 'co1', companyName: 'LG' };
-      const r = buildSetPasscodeRequest(row, 'CorrectHorse7');
+      const r = buildConvertApprovedDriverRequest(row, 'CorrectHorse7');
       console.log(JSON.stringify({ keys: Object.keys(r).sort(), temporary: r.temporary,
-        approvedKey: r.approvedKey, leaksKey: JSON.stringify(r).includes(row.key) }));
+        approvedKey: r.approvedKey, leaksKey: JSON.stringify(r).includes(row.key),
+        hasCompany: 'companyId' in r || 'companyName' in r || 'legalName' in r }));
     `, 'utf8');
     const r = JSON.parse(execFileSync('npx', ['tsx', probePath], {
       cwd: ROOT, encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'], shell: true,
@@ -147,9 +148,10 @@ check('the success panel shows no password',
     check('5. the built request carries temporary:false', r.temporary === false);
     check('3/4. the built request has no driverId/legacyHash',
       !r.keys.includes('driverId') && !r.keys.includes('legacyHash'), r.keys.join(','));
-    check('6. a canonical companyId is preserved', r.keys.includes('companyId'));
     check('create sends approvedKey equal to the exact row key',
       r.approvedKey === 'da561bc4hash' && r.leaksKey === true);
+    check('create request does not send row metadata',
+      r.hasCompany === false && r.keys.join(',') === 'approvedKey,displayName,passcode,temporary');
   } catch (e) {
     check('request-shape probe ran', false, String(e.message).slice(0, 160));
   } finally {

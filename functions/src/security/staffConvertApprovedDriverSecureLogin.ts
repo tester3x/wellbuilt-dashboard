@@ -1,16 +1,17 @@
 /**
  * Dedicated recovery callable: convert ONE exact drivers/approved row
- * into a canonical secure login. Not a passcode reset. Not a legacyHash
- * mint. Not adminSetDriverPasscode.
+ * into a canonical secure login. Platform-admin only. Not a passcode
+ * reset, not a legacyHash mint, not adminSetDriverPasscode.
  *
- * Success is returned only after a live re-read proves credential, name
- * index, canonical profile, initialized empty authority, and exact
- * approved-row linkage. Passcodes are never logged or returned.
+ * Request is only approvedKey, displayName, passcode, temporary.
+ * Profile metadata is copied from the approved row. Success is returned
+ * only after a live re-read proves the terminal identity. Passcodes and
+ * approved-key fragments are never logged or returned.
  */
 import * as httpsV2 from 'firebase-functions/v2/https';
 import * as admin from 'firebase-admin';
 import { randomUUID } from 'crypto';
-import { requireManageDrivers } from './adminAuth';
+import { requirePlatformAdmin } from './adminAuth';
 import { writeSecurityAudit } from './audit';
 import {
   hashPasscodeScrypt,
@@ -26,10 +27,22 @@ const ALLOWED = new Set([
   'approvedKey',
   'displayName',
   'passcode',
+  'temporary',
+]);
+
+const FORBIDDEN = new Set([
   'legalName',
   'companyId',
   'companyName',
-  'temporary',
+  'driverId',
+  'legacyHash',
+  'assignedRoutes',
+  'assignedWells',
+  'assignedCustomers',
+  'roles',
+  'isAdmin',
+  'isViewer',
+  'active',
 ]);
 
 function mapValidationError(code: string): never {
@@ -37,8 +50,6 @@ function mapValidationError(code: string): never {
     invalid_display_name: 'Display name is required (2–64 characters)',
     invalid_display_name_chars: 'Display name contains invalid characters',
     invalid_passcode_length: 'Passcode must be 6–128 characters',
-    invalid_legal_name: 'Legal name is too long',
-    invalid_company_name: 'Company name is too long',
   };
   throw new httpsV2.HttpsError('invalid-argument', map[code] || code);
 }
@@ -46,18 +57,20 @@ function mapValidationError(code: string): never {
 export const staffConvertApprovedDriverSecureLogin = httpsV2.onCall(
   { timeoutSeconds: 30, memory: '256MiB', enforceAppCheck: false },
   async (request) => {
-    const caller = await requireManageDrivers(
+    const caller = await requirePlatformAdmin(
       request.auth?.uid,
       request.auth?.token as Record<string, unknown> | undefined,
     );
     const raw = (request.data || {}) as Record<string, unknown>;
-    if (Object.prototype.hasOwnProperty.call(raw, 'driverId')) {
-      throw new httpsV2.HttpsError('invalid-argument', 'driverId_reset_forbidden');
-    }
-    if (Object.prototype.hasOwnProperty.call(raw, 'legacyHash')) {
-      throw new httpsV2.HttpsError('invalid-argument', 'legacyHash_forbidden');
-    }
     for (const key of Object.keys(raw)) {
+      if (FORBIDDEN.has(key)) {
+        throw new httpsV2.HttpsError(
+          'invalid-argument',
+          key === 'driverId' ? 'driverId_reset_forbidden'
+            : key === 'legacyHash' ? 'legacyHash_forbidden'
+            : `Unexpected field: ${key}`,
+        );
+      }
       if (!ALLOWED.has(key)) {
         throw new httpsV2.HttpsError('invalid-argument', `Unexpected field: ${key}`);
       }
@@ -68,8 +81,6 @@ export const staffConvertApprovedDriverSecureLogin = httpsV2.onCall(
       fields = validateRegistrationFields({
         displayName: typeof raw.displayName === 'string' ? raw.displayName : undefined,
         passcode: typeof raw.passcode === 'string' ? raw.passcode : undefined,
-        legalName: typeof raw.legalName === 'string' ? raw.legalName : undefined,
-        companyName: typeof raw.companyName === 'string' ? raw.companyName : undefined,
       });
     } catch (e) {
       mapValidationError((e as Error).message);
@@ -96,9 +107,6 @@ export const staffConvertApprovedDriverSecureLogin = httpsV2.onCall(
       {
         approvedKey,
         displayName: fields.displayName,
-        legalName: fields.legalName,
-        companyId: typeof raw.companyId === 'string' ? raw.companyId : undefined,
-        companyName: fields.companyName,
         passcodeRecord,
         temporary,
         callerUid: caller.uid,
@@ -114,11 +122,9 @@ export const staffConvertApprovedDriverSecureLogin = httpsV2.onCall(
       actorUid: caller.uid,
       driverId: converted.driverId,
       detail: {
-        approvedKeyPrefix: approvedKey.slice(0, 8),
         status: converted.status,
         reason: converted.reason,
         terminalProven: converted.terminalProven,
-        // never log passcode
       },
     });
 

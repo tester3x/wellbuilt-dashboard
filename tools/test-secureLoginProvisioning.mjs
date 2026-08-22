@@ -34,6 +34,7 @@ const check = (name, ok, detail = '') => {
 
 const probe = `
 import {
+  buildConvertApprovedDriverRequest,
   buildSetPasscodeRequest, canSubmit, confirmationCopyFor,
   credentialActionFor, hasCanonicalDriverId, localPolicyError,
 } from '../src/lib/secureLoginProvisioning';
@@ -44,6 +45,7 @@ const SECURE = { key: 'da561bc4deadbeef', driverId: '7f3a-uuid-9c21', displayNam
 const HASH_AS_ID = { key: 'da561bc4deadbeef', driverId: 'da561bc4deadbeef', displayName: 'MikeS24' };
 
 const legacyReq = buildSetPasscodeRequest(LEGACY, 'CorrectHorse7');
+const convertReq = buildConvertApprovedDriverRequest(LEGACY, 'CorrectHorse7');
 const secureReq = buildSetPasscodeRequest(SECURE, 'CorrectHorse7');
 
 console.log(JSON.stringify({
@@ -62,9 +64,13 @@ console.log(JSON.stringify({
   secureDriverId: secureReq.driverId,
   secureHasLegacyHash: 'legacyHash' in secureReq,
 
-  reqKeys: Object.keys(legacyReq).sort().join(','),
+  reqKeys: Object.keys(convertReq).sort().join(','),
+  convertApprovedKey: convertReq.approvedKey,
+  convertHasCompanyId: 'companyId' in convertReq,
+  convertHasLegalName: 'legalName' in convertReq,
+  convertHasCompanyName: 'companyName' in convertReq,
 
-  legacyDisplayName: legacyReq.displayName,
+  legacyDisplayName: convertReq.displayName,
   legacyCompanyId: legacyReq.companyId,
   legacyCompanyName: legacyReq.companyName,
   // A row with no company must not invent one.
@@ -110,10 +116,10 @@ check('3. the create request carries no legacyHash branch selector',
   r.legacyHasLegacyHash === false,
   'legacyHash writes migratedFromLegacyHashPrefix into the new profile');
 check('create sends the exact approved row key, never as driverId',
-  r.legacyApprovedKey === 'da561bc4deadbeef' && r.legacyHasDriverId === false,
-  `approvedKey=${r.legacyApprovedKey}`);
+  r.convertApprovedKey === 'da561bc4deadbeef' && r.legacyHasDriverId === false,
+  `approvedKey=${r.convertApprovedKey}`);
 check('the RTDB key appears only as approvedKey',
-  r.legacyKeyAnywhere === true && r.legacyApprovedKey === 'da561bc4deadbeef');
+  r.convertApprovedKey === 'da561bc4deadbeef');
 check('a reset sends the canonical id, unchanged',
   r.secureDriverId === '7f3a-uuid-9c21' && r.secureHasLegacyHash === false);
 
@@ -125,9 +131,8 @@ check('a reset sends the canonical id, unchanged',
 // shift for the company the admin was looking at when they clicked.
 check('the request names the selected employee, not a default or index lookup',
   r.legacyDisplayName === 'MikeS24', String(r.legacyDisplayName));
-check('the selected row\'s company binding is CARRIED, not dropped',
-  r.legacyCompanyId === 'co1' && r.legacyCompanyName === 'LG',
-  `companyId=${r.legacyCompanyId} companyName=${r.legacyCompanyName}`);
+check('the convert request does not send company or legalName (row-owned on the server)',
+  r.convertHasCompanyId === false && r.convertHasLegalName === false && r.convertHasCompanyName === false);
 check('a row with no company does not acquire one',
   r.unboundHasCompanyId === false,
   'an invented binding would bind a driver to a company nobody selected');
@@ -143,8 +148,7 @@ check('4. temporary is present and explicitly false',
 // would fail on a row with no legalName, which is normal.
 {
   const ALLOWED = new Set([
-    'displayName', 'passcode', 'temporary', 'driverId',
-    'legalName', 'companyId', 'companyName', 'approvedKey',
+    'displayName', 'passcode', 'temporary', 'approvedKey',
   ]);
   const unexpected = String(r.reqKeys || '').split(',').filter((k) => k && !ALLOWED.has(k));
   check('6/10. no field outside the credential + identity set is sent',
@@ -214,7 +218,7 @@ check('create copy states new identity, orphaned history, and no deletion',
     check(`the submit path cannot invoke ${label}`, !re.test(body));
   }
   check('the submit path calls staffConvertApprovedDriverSecureLogin and builds via the tested layer',
-    /staffConvertApprovedDriverSecureLogin\(/.test(body) && /buildSetPasscodeRequest\(/.test(body)
+    /staffConvertApprovedDriverSecureLogin\(/.test(body) && /buildConvertApprovedDriverRequest\(/.test(body)
     && !/adminSetPasscode\(/.test(body));
   check('the submit path sends exactly the built request, unmodified',
     /staffConvertApprovedDriverSecureLogin\(req\)/.test(body), 'a spread or extra field would bypass the builder');

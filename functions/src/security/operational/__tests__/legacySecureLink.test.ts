@@ -48,15 +48,26 @@ describe('create-secure-login cannot mint an unlinked duplicate', () => {
       requestDisplayName: 'Mikezfold',
       row: {
         displayName: 'Mikezfold',
+        active: true,
         migratedToDriverId: '2cad521c-13ac-4b6c-b1ab-07843c6bf06f',
       },
     })).toEqual({ ok: false, reason: 'approved_row_already_linked' });
+
+    expect(evaluateApprovedRowForCreate({
+      requestDisplayName: 'Mikezfold',
+      row: { displayName: 'Mikezfold', active: false },
+    })).toEqual({ ok: false, reason: 'approved_row_inactive' });
+
+    expect(evaluateApprovedRowForCreate({
+      requestDisplayName: 'Mikezfold',
+      row: { displayName: 'Mikezfold', active: 'yes' },
+    })).toEqual({ ok: false, reason: 'approved_row_malformed' });
   });
 
   it('does not treat two similarly named rows as the same identity', () => {
     const zfold = evaluateApprovedRowForCreate({
       requestDisplayName: 'Mikezfold',
-      row: { displayName: 'Mikezfold' },
+      row: { displayName: 'Mikezfold', active: true },
     });
     const s24 = evaluateApprovedRowForCreate({
       requestDisplayName: 'Mikezfold',

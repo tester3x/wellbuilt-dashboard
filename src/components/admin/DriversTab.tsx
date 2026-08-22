@@ -11,7 +11,7 @@ import { mergeEmployees, EmployeeRow } from '@/lib/employees';
 import { EmployeePanel } from './EmployeePanel';
 import { useAuth } from '@/contexts/AuthContext';
 import {
-  buildSetPasscodeRequest,
+  buildConvertApprovedDriverRequest,
   canSubmit,
   companyActionRouteFor,
   confirmationCopyFor,
@@ -172,9 +172,9 @@ export function DriversTab({ scopeCompanyId, isWbAdmin = false }: DriversTabProp
     setSecureError('');
     try {
       const { staffConvertApprovedDriverSecureLogin } = await import('@/lib/secureDriverAdmin');
-      // Built by the tested decision layer: no driverId, no legacyHash,
-      // temporary:false. Dedicated conversion callable — not adminSetDriverPasscode.
-      const req = buildSetPasscodeRequest(secureTarget, securePass);
+      // Four-field emergency request only. Server copies profile metadata
+      // from the exact approved row. Not adminSetDriverPasscode.
+      const req = buildConvertApprovedDriverRequest(secureTarget, securePass);
       // The response carries the new canonical UUID; it is deliberately NOT
       // rendered — success copy stays masked (display name only).
       await staffConvertApprovedDriverSecureLogin(req);

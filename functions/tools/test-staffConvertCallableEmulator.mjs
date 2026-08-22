@@ -35,8 +35,11 @@ const LUIZ_KEY = 'cf04d010ffd151b878e4377ca9c51cd90eeaae1660e19387fa51942b56c157
 const MARCIAL_ROUTES = ['Dunn County', 'Watford', 'Gunslingers'];
 const LUIZ_ROUTES = ['Montana', 'River Bottoms', 'Stock Yards', 'Watford', 'Dunn County', 'Gabriels'];
 const ADMIN_UID = 'emu-convert-admin';
+const COMPANY_ADMIN_UID = 'emu-convert-company-admin';
+const VIEWER_UID = 'emu-convert-viewer';
 const DRIVER_UID = 'emu-convert-driver';
 const LOCAL_PASS = 'EmuConvert9x';
+const SLAWSON = [{ companyId: 'liquid-gold', name: 'SLAWSON EXPLORATION COMPANY, INC.' }];
 
 let pass = 0;
 let fail = 0;
@@ -137,7 +140,11 @@ function marcialRow() {
     name: 'Marcial Lebaron',
     companyId: 'liquid-gold',
     companyName: 'Liquid Gold Trucking LLC',
+    assignedCustomers: SLAWSON,
     assignedRoutes: [...MARCIAL_ROUTES],
+    isAdmin: false,
+    isViewer: false,
+    approvedAt: 1772370850548,
   };
 }
 
@@ -149,7 +156,31 @@ function luizRow() {
     name: 'Wisho-135',
     companyId: 'liquid-gold',
     companyName: 'Liquid Gold Trucking LLC',
+    assignedCustomers: SLAWSON,
     assignedRoutes: [...LUIZ_ROUTES],
+    isAdmin: false,
+    isViewer: false,
+    approvedAt: 1772371310138,
+  };
+}
+
+function sanitizeProfile(pv) {
+  return {
+    displayName: pv.displayName,
+    name: pv.name,
+    legalName: pv.legalName,
+    active: pv.active,
+    isAdmin: pv.isAdmin,
+    isViewer: pv.isViewer,
+    companyId: pv.companyId,
+    companyName: pv.companyName,
+    assignedCustomers: pv.assignedCustomers ?? null,
+    assignedRoutes: pv.assignedRoutes,
+    assignedWells: pv.assignedWells === undefined ? 'absent' : pv.assignedWells,
+    roles: pv.roles ?? null,
+    approvedAt: pv.approvedAt,
+    schemaVersion: pv.schemaVersion,
+    mustUseSecureAuth: pv.mustUseSecureAuth,
   };
 }
 
@@ -171,9 +202,6 @@ function payloadFor(row, key) {
   return {
     approvedKey: key,
     displayName: row.displayName,
-    legalName: row.legalName,
-    companyId: row.companyId,
-    companyName: row.companyName,
     passcode: LOCAL_PASS,
     temporary: false,
   };
@@ -196,18 +224,28 @@ const store = productionConversionStore(fs, rtdb);
 try {
   await waitForFunctions();
 
-  try { await auth.deleteUser(ADMIN_UID); } catch { /* first run */ }
-  try { await auth.deleteUser(DRIVER_UID); } catch { /* first run */ }
+  for (const uid of [ADMIN_UID, COMPANY_ADMIN_UID, VIEWER_UID, DRIVER_UID]) {
+    try { await auth.deleteUser(uid); } catch { /* first run */ }
+  }
   await auth.createUser({ uid: ADMIN_UID, disabled: false, displayName: 'Emu Admin' });
+  await auth.createUser({ uid: COMPANY_ADMIN_UID, disabled: false, displayName: 'Emu Co Admin' });
+  await auth.createUser({ uid: VIEWER_UID, disabled: false, displayName: 'Emu Viewer' });
   await auth.createUser({ uid: DRIVER_UID, disabled: false, displayName: 'Emu Driver' });
-  await rtdb.ref(`users/${ADMIN_UID}`).set({ role: 'admin' });
   for (const ns of [PROJECT, `${PROJECT}-default-rtdb`]) {
     await rtdbRest(ns, `users/${ADMIN_UID}`, 'PUT', { role: 'admin' });
+    await rtdbRest(ns, `users/${COMPANY_ADMIN_UID}`, 'PUT', { role: 'admin', companyId: 'liquid-gold' });
+    await rtdbRest(ns, `users/${VIEWER_UID}`, 'PUT', { role: 'viewer' });
   }
   await seedApprovedBothNamespaces(marcialRow(), luizRow());
 
   const adminToken = await signInWithCustomToken(
     await auth.createCustomToken(ADMIN_UID, { role: 'admin' }),
+  );
+  const companyAdminToken = await signInWithCustomToken(
+    await auth.createCustomToken(COMPANY_ADMIN_UID, { role: 'admin', companyId: 'liquid-gold' }),
+  );
+  const viewerToken = await signInWithCustomToken(
+    await auth.createCustomToken(VIEWER_UID, { role: 'viewer' }),
   );
   const driverToken = await signInWithCustomToken(
     await auth.createCustomToken(DRIVER_UID, { kind: 'driver', driverId: 'emu-driver', companyId: 'liquid-gold' }),
@@ -219,13 +257,55 @@ try {
 
   const driverCall = await invokeCallable(CALLABLE, payloadFor(marcialRow(), MARCIAL_KEY), driverToken);
   const driverErr = callableError(driverCall);
-  check('2. driver caller fails', Boolean(driverErr), driverErr ? `${driverErr.status}` : '');
+  check('driver token is denied', Boolean(driverErr), driverErr ? `${driverErr.status}` : '');
+
+  const beforeCo = await rtdb.ref(`drivers/approved/${MARCIAL_KEY}`).once('value');
+  const coCall = await invokeCallable(CALLABLE, payloadFor(marcialRow(), MARCIAL_KEY), companyAdminToken);
+  const coErr = callableError(coCall);
+  const afterCo = await rtdb.ref(`drivers/approved/${MARCIAL_KEY}`).once('value');
+  check(
+    'company-scoped manageDrivers is denied with zero writes',
+    Boolean(coErr) && /PERMISSION_DENIED/i.test(String(coErr.status))
+      && !afterCo.val()?.migratedToDriverId
+      && !beforeCo.val()?.migratedToDriverId,
+    coErr ? `${coErr.status}: ${coErr.message}` : 'no error',
+  );
+
+  const viewerCall = await invokeCallable(CALLABLE, payloadFor(marcialRow(), MARCIAL_KEY), viewerToken);
+  const viewerErr = callableError(viewerCall);
+  check('ordinary Dashboard user is denied', Boolean(viewerErr), viewerErr ? `${viewerErr.status}` : '');
+
+  const metaCall = await invokeCallable(CALLABLE, {
+    ...payloadFor(marcialRow(), MARCIAL_KEY),
+    companyId: 'acme-eog-test',
+    companyName: 'Nope',
+    legalName: 'Someone Else',
+  }, adminToken);
+  const metaErr = callableError(metaCall);
+  const afterMeta = await rtdb.ref(`drivers/approved/${MARCIAL_KEY}`).once('value');
+  check(
+    'client-supplied companyId/companyName/legalName is rejected with zero writes',
+    Boolean(metaErr) && /Unexpected field/.test(metaErr.message || '')
+      && !afterMeta.val()?.migratedToDriverId,
+    metaErr ? metaErr.message : 'no error',
+  );
+
+  for (const field of ['assignedRoutes', 'assignedWells', 'roles', 'isAdmin', 'isViewer', 'active']) {
+    const extra = { ...payloadFor(marcialRow(), MARCIAL_KEY), [field]: field === 'active' ? false : ['Nope'] };
+    const inv = await invokeCallable(CALLABLE, extra, adminToken);
+    const err = callableError(inv);
+    check(
+      `request field ${field} is rejected`,
+      Boolean(err) && /Unexpected field/.test(err.message || ''),
+      err ? err.message : 'no error',
+    );
+  }
 
   const beforeKeyless = await rtdb.ref(`drivers/approved/${MARCIAL_KEY}`).once('value');
   const keyless = await invokeCallable(CALLABLE, {
     displayName: 'Marcial Lebaron',
     passcode: LOCAL_PASS,
-    companyId: 'liquid-gold',
+    temporary: false,
   }, adminToken);
   const keylessErr = callableError(keyless);
   const afterKeyless = await rtdb.ref(`drivers/approved/${MARCIAL_KEY}`).once('value');
@@ -241,7 +321,7 @@ try {
   const marcialErr = callableError(marcial);
   const marcialRes = callableResult(marcial);
   check(
-    '1/4/6. authenticated manageDrivers converts Marcial after live reread',
+    '1/4/6. platform admin converts Marcial after live reread',
     Boolean(marcialRes?.driverId) && !marcialErr && marcialRes.displayName === 'Marcial Lebaron',
     marcialErr ? `${marcialErr.status}: ${marcialErr.message}` : `id=${String(marcialRes?.driverId || '').slice(0, 8)}`,
   );
@@ -258,10 +338,23 @@ try {
     const rv = row.val() || {};
     check('7. Marcial credential and name index are correct',
       cred.exists && cred.data()?.active === true && idx.data()?.driverId === id);
+    const sanitized = sanitizeProfile(pv);
+    console.log(`PROFILE Marcial ${JSON.stringify(sanitized)}`);
     check('8. Marcial canonical profile and approved-row link are correct',
       JSON.stringify(pv.assignedRoutes) === JSON.stringify(MARCIAL_ROUTES)
       && (pv.assignedWells === null || pv.assignedWells === undefined)
       && pv.displayName === 'Marcial Lebaron'
+      && pv.name === 'Marcial Lebaron'
+      && pv.legalName === 'Marcial Lebaron'
+      && pv.active === true
+      && pv.isAdmin === false
+      && pv.isViewer === false
+      && pv.companyId === 'liquid-gold'
+      && pv.companyName === 'Liquid Gold Trucking LLC'
+      && JSON.stringify(pv.assignedCustomers) === JSON.stringify(SLAWSON)
+      && pv.approvedAt === 1772370850548
+      && pv.schemaVersion === 1
+      && pv.mustUseSecureAuth === true
       && rv.migratedToDriverId === id
       && rv.secureProfileLinked === true,
       `wells=${pv.assignedWells === undefined ? 'absent' : JSON.stringify(pv.assignedWells)} link=${rv.migratedToDriverId ? 'yes' : 'no'}`);
@@ -285,9 +378,15 @@ try {
     const idx = await fs.collection('driver_name_index').doc('wisho-135').get();
     const prof = await rtdb.ref(`drivers/profiles/${id}`).once('value');
     const row = await rtdb.ref(`drivers/approved/${LUIZ_KEY}`).once('value');
+    const lp = prof.val() || {};
+    console.log(`PROFILE Luiz ${JSON.stringify(sanitizeProfile(lp))}`);
     check('5/16. Luiz index, six routes, and link are independent',
       idx.data()?.driverId === id
-      && JSON.stringify(prof.val()?.assignedRoutes) === JSON.stringify(LUIZ_ROUTES)
+      && JSON.stringify(lp.assignedRoutes) === JSON.stringify(LUIZ_ROUTES)
+      && lp.legalName === 'Luiz Lebaron'
+      && lp.displayName === 'Wisho-135'
+      && lp.isAdmin === false
+      && lp.approvedAt === 1772371310138
       && row.val()?.migratedToDriverId === id
       && marcialRes?.driverId !== id);
   }
@@ -436,6 +535,63 @@ try {
     mIdx.data()?.driverId === marcialRes?.driverId
       && lIdx.data()?.driverId === luizRes?.driverId
       && marcialRes?.driverId !== luizRes?.driverId,
+  );
+
+  const inactiveKey = 'cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc';
+  for (const ns of [PROJECT, `${PROJECT}-default-rtdb`]) {
+    await rtdbRest(ns, `drivers/approved/${inactiveKey}`, 'PUT', {
+      ...marcialRow(),
+      displayName: 'Emu Inactive',
+      name: 'Emu Inactive',
+      legalName: 'Emu Inactive',
+      active: false,
+    });
+  }
+  const inactiveCall = await invokeCallable(CALLABLE, {
+    approvedKey: inactiveKey,
+    displayName: 'Emu Inactive',
+    passcode: LOCAL_PASS,
+    temporary: false,
+  }, adminToken);
+  const inactiveErr = callableError(inactiveCall);
+  check(
+    'inactive approved row is classified',
+    Boolean(inactiveErr) && /approved_row_inactive/.test(inactiveErr.message || ''),
+    inactiveErr ? inactiveErr.message : 'no error',
+  );
+
+  const malformedKey = 'dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd';
+  for (const ns of [PROJECT, `${PROJECT}-default-rtdb`]) {
+    await rtdbRest(ns, `drivers/approved/${malformedKey}`, 'PUT', {
+      ...marcialRow(),
+      displayName: 'Emu Malformed',
+      name: 'Emu Malformed',
+      legalName: 'Emu Malformed',
+      active: 'yes',
+    });
+  }
+  const malformedCall = await invokeCallable(CALLABLE, {
+    approvedKey: malformedKey,
+    displayName: 'Emu Malformed',
+    passcode: LOCAL_PASS,
+    temporary: false,
+  }, adminToken);
+  const malformedErr = callableError(malformedCall);
+  check(
+    'malformed approved row is classified',
+    Boolean(malformedErr) && /approved_row_malformed/.test(malformedErr.message || ''),
+    malformedErr ? malformedErr.message : 'no error',
+  );
+
+  const audits = await fs.collection('security_audit').get();
+  const auditText = JSON.stringify(audits.docs.map((d) => d.data()));
+  const prefixes = [MARCIAL_KEY, LUIZ_KEY, extraKey, resumeKey, inactiveKey, malformedKey]
+    .flatMap((k) => [k, k.slice(0, 8)]);
+  const auditHasKey = prefixes.some((p) => auditText.includes(p));
+  check(
+    'no audit record contains the approved key or any prefix',
+    auditHasKey === false,
+    `docs=${audits.size}`,
   );
 
   const leaked = JSON.stringify({ pass, fail, failures }).includes(LOCAL_PASS);

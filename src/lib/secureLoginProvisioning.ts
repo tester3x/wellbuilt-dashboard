@@ -101,6 +101,27 @@ export interface SetPasscodeRequest {
  * mandatory change screen — so an omitted flag would strand the account
  * with a `mustResetPasscode` nothing can clear.
  */
+/**
+ * Emergency convert-from-approved request. Profile metadata is owned by
+ * the approved row on the server — the client must not send it.
+ */
+export function buildConvertApprovedDriverRequest(
+  row: DriverRowLike,
+  passcode: string,
+): {
+  displayName: string;
+  passcode: string;
+  temporary: false;
+  approvedKey: string;
+} {
+  return {
+    displayName: row.displayName,
+    passcode,
+    temporary: false,
+    approvedKey: row.key,
+  };
+}
+
 export function buildSetPasscodeRequest(
   row: DriverRowLike,
   passcode: string,
