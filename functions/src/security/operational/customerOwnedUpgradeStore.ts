@@ -16,11 +16,13 @@ import { decideAuthorityDelete, isServerScryptRecord } from './approvedRowConver
 import {
   BINDING_BY_APPROVED,
   BINDING_BY_DRIVER,
-  decideBindIdentity,
+  BINDING_ROOT,
   parseBinding,
   type IdentityBinding,
 } from './identityBinding';
 import { profileContainsForbiddenLegacyKey } from './canonicalProfileHydration';
+import { commitIdentityBindingWrite } from './bindingApplyTransaction';
+import { commitCanonicalHydrationWrite } from './hydrationApplyTransaction';
 import type { UpgradeStore } from './customerOwnedUpgrade';
 
 export function productionUpgradeStore(db: Firestore, rtdb: Database): UpgradeStore {
@@ -43,30 +45,32 @@ export function productionUpgradeStore(db: Firestore, rtdb: Database): UpgradeSt
       return parseBinding(snap.val());
     },
     async writeBinding(binding: IdentityBinding) {
-      const existingByDriver = parseBinding(
-        (await rtdb.ref(BINDING_BY_DRIVER(binding.driverId)).once('value')).val(),
-      );
-      const existingByApproved = parseBinding(
-        (await rtdb.ref(BINDING_BY_APPROVED(binding.approvedKey)).once('value')).val(),
-      );
-      const decision = decideBindIdentity({
-        driverId: binding.driverId,
-        approvedKey: binding.approvedKey,
-        existingByDriver,
-        existingByApproved,
-      });
-      if (decision.action === 'refuse') return 'foreign';
-      if (decision.action === 'already_exact') return 'already_exact';
-      const payload = {
+      const result = await commitIdentityBindingWrite({
+        bindingsRef: rtdb.ref(BINDING_ROOT) as never,
         driverId: binding.driverId,
         approvedKey: binding.approvedKey,
         status: binding.status,
         opId: binding.opId,
-        updatedAt: Date.now(),
-      };
-      await rtdb.ref(BINDING_BY_DRIVER(binding.driverId)).set(payload);
-      await rtdb.ref(BINDING_BY_APPROVED(binding.approvedKey)).set(payload);
-      return 'written';
+      });
+      if (!result.ok) return 'foreign';
+      return result.action;
+    },
+    async commitProfileHydration(input) {
+      const result = await commitCanonicalHydrationWrite({
+        profileRef: rtdb.ref(`drivers/profiles/${input.driverId}`) as never,
+        driverId: input.driverId,
+        approvedKey: input.approvedKey,
+        expectedDigest: input.expectedDigest,
+        legacyRow: input.legacyRow,
+        copy: input.copy,
+        preview: input.preview,
+        opId: input.opId,
+      });
+      if (!result.ok) {
+        if (result.reason === 'stale_preview') return 'stale_preview';
+        return 'foreign';
+      }
+      return result.action === 'already_exact' ? 'already_exact' : 'written';
     },
     async removeBindingIfOwned(input) {
       const snap = await rtdb.ref(BINDING_BY_DRIVER(input.driverId)).once('value');
@@ -189,13 +193,22 @@ export function productionUpgradeStore(db: Firestore, rtdb: Database): UpgradeSt
       ]);
       const journal = await firestoreProvisioningJournal(db).read(`legacy:${approvedKey}`);
       const credData = cred.data();
+      const bindingByDriver = parseBinding(byDriver.val());
+      const bindingByApproved = parseBinding(byApproved.val());
+      const termOk = bindingByDriver && bindingByApproved
+        && bindingByDriver.driverId === bindingByApproved.driverId
+        && bindingByDriver.approvedKey === bindingByApproved.approvedKey
+        && bindingByDriver.status === bindingByApproved.status
+        && bindingByDriver.opId === bindingByApproved.opId;
       return {
         credentialOpId: typeof credData?.opId === 'string' ? credData.opId : null,
         credentialActive: typeof credData?.active === 'boolean' ? credData.active : cred.exists ? true : null,
         credentialScryptValid: isServerScryptRecord(credData?.passcode),
         indexDriverId: idx.data()?.driverId ?? null,
         profile: prof.exists() ? (prof.val() as Record<string, unknown>) : null,
-        binding: parseBinding(byDriver.val()) || parseBinding(byApproved.val()),
+        bindingByDriver,
+        bindingByApproved,
+        binding: termOk ? bindingByDriver : null,
         journalCompleted: journal ? journal.completed === true : null,
       };
     },

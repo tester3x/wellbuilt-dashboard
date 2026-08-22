@@ -23,6 +23,15 @@ import { productionUpgradeStore } from './operational/customerOwnedUpgradeStore'
 const GENERIC_AUTH = 'Invalid name or passcode';
 const GENERIC_FAIL = 'Could not complete upgrade';
 
+const ENFORCE_APPCHECK = process.env.SECURITY_ENFORCE_APPCHECK === 'true';
+
+function assertAppCheck(request: httpsV2.CallableRequest): void {
+  if (!ENFORCE_APPCHECK) return;
+  if (!request.app) {
+    throw new httpsV2.HttpsError('failed-precondition', 'App Check required');
+  }
+}
+
 function clientMeta(request: httpsV2.CallableRequest) {
   const ip =
     (request.rawRequest?.headers?.['x-forwarded-for'] as string)?.split(',')[0]?.trim()
@@ -34,6 +43,7 @@ function clientMeta(request: httpsV2.CallableRequest) {
 export const upgradeOwnLegacyDriverLogin = httpsV2.onCall(
   { timeoutSeconds: 30, memory: '256MiB', enforceAppCheck: false },
   async (request) => {
+    assertAppCheck(request);
     const raw = (request.data || {}) as Record<string, unknown>;
     for (const key of Object.keys(raw)) {
       if (!['displayName', 'currentPasscode', 'newPasscode'].includes(key)) {
@@ -77,7 +87,7 @@ export const upgradeOwnLegacyDriverLogin = httpsV2.onCall(
       throw new httpsV2.HttpsError('permission-denied', GENERIC_AUTH);
     }
     const row = rowSnap.val() as Record<string, unknown>;
-    if (row.active !== true) {
+    if (row.active !== true || row.legacyLoginRetired === true) {
       throw new httpsV2.HttpsError('permission-denied', GENERIC_AUTH);
     }
 

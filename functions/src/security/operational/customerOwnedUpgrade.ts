@@ -32,6 +32,7 @@ import { decideEnsureEmptyAuthority } from './shiftAuthority';
 import { normalizeDisplayName } from '../passcode';
 import {
   decideBindIdentity,
+  decideBindingTerminalProof,
   parseBinding,
   type IdentityBinding,
 } from './identityBinding';
@@ -40,7 +41,9 @@ import {
   previewCanonicalHydration,
   profileContainsForbiddenLegacyKey,
   type HydrationPreview,
+  type OperationalField,
 } from './canonicalProfileHydration';
+import { evaluateHydrationTransaction } from './hydrationApplyTransaction';
 import {
   decideAuthorityDelete,
   isServerScryptRecord,
@@ -52,6 +55,7 @@ export type UpgradeFailAfter =
   | 'profile'
   | 'authority'
   | 'binding'
+  | 'after_binding_byDriver'
   | 'journal_complete'
   | 'inspect';
 
@@ -73,6 +77,7 @@ export interface UpgradeInput {
   existingDriverId?: string | null;
   /** Staff hydration does not create or replace credentials. */
   skipCredentialWrite?: boolean;
+  expectedPreviewDigest?: string;
 }
 
 export interface UpgradeResult {
@@ -109,6 +114,8 @@ export interface UpgradeInspect {
   indexDriverId: string | null;
   profile: Record<string, unknown> | null;
   binding: IdentityBinding | null;
+  bindingByDriver: IdentityBinding | null;
+  bindingByApproved: IdentityBinding | null;
   journalCompleted: boolean | null;
 }
 
@@ -118,7 +125,16 @@ export interface UpgradeStore {
   readProfile(driverId: string): Promise<Record<string, unknown> | null>;
   readBindingByDriver(driverId: string): Promise<IdentityBinding | null>;
   readBindingByApproved(approvedKey: string): Promise<IdentityBinding | null>;
-  writeBinding(binding: IdentityBinding): Promise<'written' | 'already_exact' | 'foreign'>;
+  writeBinding(binding: IdentityBinding, opts?: { failAfter?: 'byDriver' }): Promise<'written' | 'repaired' | 'already_exact' | 'foreign'>;
+  commitProfileHydration(input: {
+    driverId: string;
+    approvedKey: string;
+    expectedDigest: string;
+    legacyRow: Record<string, unknown>;
+    copy: Partial<Record<OperationalField, unknown>>;
+    preview: Pick<HydrationPreview, 'copy' | 'preserved' | 'conflicts'>;
+    opId: string;
+  }): Promise<'written' | 'already_exact' | 'stale_preview' | 'foreign'>;
   removeBindingIfOwned(input: {
     driverId: string;
     approvedKey: string;
@@ -137,7 +153,7 @@ export interface UpgradeStore {
     nameNorm: string;
     opId: string;
   }): Promise<{ deletedCredential: boolean; releasedIndex: boolean; superseded: boolean }>;
-  writeProfile(driverId: string, profile: Record<string, unknown>): Promise<'written' | 'already_exact' | 'foreign'>;
+  writeProfile(driverId: string, profile: Record<string, unknown>): Promise<'written' | 'already_exact' | 'foreign' | 'stale_preview'>;
   removeProfileIfOwned(driverId: string, opId: string): Promise<'removed' | 'left_intact' | 'missing'>;
   ensureAuthority(input: {
     driverId: string;
@@ -204,13 +220,13 @@ export function decideTerminalUpgradeProof(input: {
   if (profileContainsForbiddenLegacyKey(input.live.profile)) {
     return { ok: false, reason: 'profile_leaks_legacy_key' };
   }
-  if (!input.live.binding) return { ok: false, reason: 'binding_missing' };
-  if (input.live.binding.driverId !== input.driverId) {
-    return { ok: false, reason: 'binding_driver_mismatch' };
-  }
-  if (input.live.binding.approvedKey !== input.approvedKey) {
-    return { ok: false, reason: 'binding_key_mismatch' };
-  }
+  const bound = decideBindingTerminalProof({
+    driverId: input.driverId,
+    approvedKey: input.approvedKey,
+    byDriver: input.live.bindingByDriver,
+    byApproved: input.live.bindingByApproved,
+  });
+  if (!bound.ok) return bound;
   if (input.live.journalCompleted !== true) {
     return { ok: false, reason: 'journal_incomplete' };
   }
@@ -285,6 +301,7 @@ export async function runCustomerOwnedUpgrade(
   const bindDecision = decideBindIdentity({
     driverId,
     approvedKey,
+    opId: input.opId,
     existingByDriver,
     existingByApproved,
   });
@@ -293,7 +310,17 @@ export async function runCustomerOwnedUpgrade(
   }
 
   const existingProfile = await store.readProfile(driverId);
-  const preview = previewCanonicalHydration(existingProfile, row);
+  const preview = previewCanonicalHydration(existingProfile, row, { driverId, approvedKey });
+  if (input.expectedPreviewDigest && input.expectedPreviewDigest !== preview.digest) {
+    return {
+      status: 'refused',
+      reason: 'stale_preview',
+      driverId,
+      writes,
+      preview,
+      terminalProven: false,
+    };
+  }
   const nextProfile = applyHydrationCopy(existingProfile, preview);
   nextProfile.provisioningOpId = existingProfile?.provisioningOpId || input.opId;
   if (typeof input.displayName === 'string' && !nextProfile.displayName) {
@@ -362,8 +389,13 @@ export async function runCustomerOwnedUpgrade(
   let wroteIdentity = liveStart.credentialOpId != null && liveStart.indexDriverId === driverId;
   let wroteProfile = !!liveStart.profile;
   let wroteAuthority = false;
-  let wroteBinding = liveStart.binding?.driverId === driverId
-    && liveStart.binding?.approvedKey === approvedKey;
+  const startBound = decideBindingTerminalProof({
+    driverId,
+    approvedKey,
+    byDriver: liveStart.bindingByDriver,
+    byApproved: liveStart.bindingByApproved,
+  });
+  let wroteBinding = startBound.ok;
 
   try {
     if (!skipCredentialWrite && !wroteIdentity) {
@@ -382,7 +414,27 @@ export async function runCustomerOwnedUpgrade(
     }
     if (input.failAfter === 'identity') throw new Error('injected: after identity');
 
-    const wr = await store.writeProfile(driverId, nextProfile);
+    const wr = input.expectedPreviewDigest
+      ? await store.commitProfileHydration({
+          driverId,
+          approvedKey,
+          expectedDigest: input.expectedPreviewDigest,
+          legacyRow: row,
+          copy: preview.copy,
+          preview,
+          opId: input.opId,
+        })
+      : await store.writeProfile(driverId, nextProfile);
+    if (wr === 'stale_preview') {
+      return {
+        status: 'refused',
+        reason: 'stale_preview',
+        driverId,
+        writes,
+        preview,
+        terminalProven: false,
+      };
+    }
     if (wr === 'foreign') throw new Error('profile_foreign');
     writes.profile = wr === 'written';
     wroteProfile = wr === 'written' || wr === 'already_exact' || wroteProfile;
@@ -404,10 +456,10 @@ export async function runCustomerOwnedUpgrade(
         approvedKey,
         status: 'active',
         opId: input.opId,
-      });
+      }, input.failAfter === 'after_binding_byDriver' ? { failAfter: 'byDriver' } : undefined);
       if (stamped === 'foreign') throw new Error('binding_foreign');
       wroteBinding = true;
-      writes.binding = stamped === 'written';
+      writes.binding = stamped === 'written' || stamped === 'repaired';
     }
     if (input.failAfter === 'binding') throw new Error('injected: after binding');
 
@@ -459,7 +511,11 @@ export async function runCustomerOwnedUpgrade(
         terminalProven: false,
       };
     }
-    if (liveAfter.binding?.driverId === driverId) {
+    if (
+      liveAfter.binding?.driverId === driverId
+      || liveAfter.bindingByDriver?.driverId === driverId
+      || liveAfter.bindingByApproved?.approvedKey === approvedKey
+    ) {
       return {
         status: 'bound_resumable',
         reason: (err as Error).message || 'upgrade_incomplete_bound',
@@ -565,17 +621,53 @@ export function createMemoryUpgradeStore(): UpgradeStore & {
     async readBindingByApproved(approvedKey: string) {
       return bindingsByApproved.get(approvedKey) ?? null;
     },
-    async writeBinding(binding: IdentityBinding): Promise<'written' | 'already_exact' | 'foreign'> {
+    async writeBinding(
+      binding: IdentityBinding,
+      opts?: { failAfter?: 'byDriver' },
+    ): Promise<'written' | 'repaired' | 'already_exact' | 'foreign'> {
       const decision = decideBindIdentity({
         driverId: binding.driverId,
         approvedKey: binding.approvedKey,
+        status: binding.status,
+        opId: binding.opId,
         existingByDriver: bindingsByDriver.get(binding.driverId) ?? null,
         existingByApproved: bindingsByApproved.get(binding.approvedKey) ?? null,
       });
       if (decision.action === 'refuse') return 'foreign';
       if (decision.action === 'already_exact') return 'already_exact';
-      bindingsByDriver.set(binding.driverId, { ...binding });
-      bindingsByApproved.set(binding.approvedKey, { ...binding });
+      const payload = decision.payload;
+      bindingsByDriver.set(payload.driverId, { ...payload });
+      if (opts?.failAfter === 'byDriver') {
+        throw new Error('injected: partial binding');
+      }
+      bindingsByApproved.set(payload.approvedKey, { ...payload });
+      return decision.action === 'repair' ? 'repaired' : 'written';
+    },
+    async commitProfileHydration(input: {
+      driverId: string;
+      approvedKey: string;
+      expectedDigest: string;
+      legacyRow: Record<string, unknown>;
+      copy: Partial<Record<OperationalField, unknown>>;
+      preview: Pick<HydrationPreview, 'copy' | 'preserved' | 'conflicts'>;
+      opId: string;
+    }): Promise<'written' | 'already_exact' | 'stale_preview' | 'foreign'> {
+      const current = profiles.get(input.driverId) ?? null;
+      const gate = evaluateHydrationTransaction({
+        current,
+        driverId: input.driverId,
+        approvedKey: input.approvedKey,
+        expectedDigest: input.expectedDigest,
+        legacyRow: input.legacyRow,
+        copy: input.copy,
+        preview: input.preview,
+        opId: input.opId,
+      });
+      if (!gate.ok) {
+        if (gate.reason === 'stale_preview') return 'stale_preview';
+        return 'foreign';
+      }
+      profiles.set(input.driverId, gate.next);
       return 'written';
     },
     async removeBindingIfOwned(input: { driverId: string; approvedKey: string; opId: string }) {
@@ -641,7 +733,7 @@ export function createMemoryUpgradeStore(): UpgradeStore & {
         superseded: d.superseded,
       };
     },
-    async writeProfile(driverId: string, profile: Record<string, unknown>): Promise<'written' | 'already_exact' | 'foreign'> {
+    async writeProfile(driverId: string, profile: Record<string, unknown>): Promise<'written' | 'already_exact' | 'foreign' | 'stale_preview'> {
       if (profileContainsForbiddenLegacyKey(profile)) {
         throw new Error('profile_leaks_legacy_key');
       }
@@ -692,17 +784,24 @@ export function createMemoryUpgradeStore(): UpgradeStore & {
       const cred = credentials.get(driverId);
       const idx = index.get(nameNorm);
       const prof = profiles.get(driverId) ?? null;
-      const binding = bindingsByDriver.get(driverId)
-        ?? bindingsByApproved.get(approvedKey)
-        ?? null;
+      const bindingByDriver = bindingsByDriver.get(driverId) ?? null;
+      const bindingByApproved = bindingsByApproved.get(approvedKey) ?? null;
+      const term = decideBindingTerminalProof({
+        driverId,
+        approvedKey,
+        byDriver: bindingByDriver,
+        byApproved: bindingByApproved,
+      });
       const journal = journalMap.get(`legacy:${approvedKey}`);
       return {
+        bindingByDriver,
+        bindingByApproved,
+        binding: term.ok ? term.binding : null,
         credentialOpId: typeof cred?.opId === 'string' ? cred.opId : null,
         credentialActive: typeof cred?.active === 'boolean' ? cred.active : null,
         credentialScryptValid: isServerScryptRecord(cred?.passcode),
         indexDriverId: idx?.driverId ?? null,
         profile: prof,
-        binding: parseBinding(binding),
         journalCompleted: journal ? journal.completed === true : null,
       };
     },

@@ -45,7 +45,7 @@ export const staffHydrateCanonicalIdentity = httpsV2.onCall(
     if (!row) throw new httpsV2.HttpsError('not-found', 'approved_row_missing');
     const profile = await store.readProfile(driverId);
     if (!profile) throw new httpsV2.HttpsError('not-found', 'profile_missing');
-    const preview = previewCanonicalHydration(profile, row);
+    const preview = previewCanonicalHydration(profile, row, { driverId, approvedKey });
 
     if (mode === 'dry-run') {
       await writeSecurityAudit({
@@ -81,6 +81,7 @@ export const staffHydrateCanonicalIdentity = httpsV2.onCall(
       opId: randomUUID(),
       existingDriverId: driverId,
       skipCredentialWrite: true,
+      expectedPreviewDigest: expected,
     });
 
     await writeSecurityAudit({

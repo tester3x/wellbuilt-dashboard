@@ -8,14 +8,19 @@ import { join } from 'path';
 import { TEST_PASSCODE_RECORD } from '../approvedRowConversion';
 import {
   decideBindIdentity,
+  decideBindingTerminalProof,
   decideRetireLegacyLogin,
+  legacyLoginIsRetired,
 } from '../identityBinding';
 import {
   applyHydrationCopy,
   previewCanonicalHydration,
   profileContainsForbiddenLegacyKey,
   projectDriverHydration,
+  hydrationContextDigest,
 } from '../canonicalProfileHydration';
+import { evaluateBindingTreeWrite } from '../bindingApplyTransaction';
+import { evaluateHydrationTransaction } from '../hydrationApplyTransaction';
 import {
   decideTrustedHistoryKeys,
   recordMatchesTrustedHistory,
@@ -91,6 +96,7 @@ describe('one-to-one uniqueness', () => {
     const d = decideBindIdentity({
       driverId: 'bbbbbbbb-cccc-4ddd-8eee-000000000001',
       approvedKey: ALPHA_KEY,
+      opId: 'op-new',
       existingByDriver: null,
       existingByApproved: {
         driverId: 'bbbbbbbb-cccc-4ddd-8eee-000000000002',
@@ -106,6 +112,7 @@ describe('one-to-one uniqueness', () => {
     const d = decideBindIdentity({
       driverId: 'bbbbbbbb-cccc-4ddd-8eee-000000000001',
       approvedKey: BRAVO_KEY,
+      opId: 'op-new',
       existingByDriver: {
         driverId: 'bbbbbbbb-cccc-4ddd-8eee-000000000001',
         approvedKey: ALPHA_KEY,
@@ -206,7 +213,10 @@ describe('field preservation and canonical conflicts', () => {
       assignmentRevision: 1,
       companyId: 'fixture-co',
     };
-    const preview = previewCanonicalHydration(canonical, alphaRow());
+    const preview = previewCanonicalHydration(canonical, alphaRow(), {
+      driverId: 'bbbbbbbb-cccc-4ddd-8eee-000000000001',
+      approvedKey: ALPHA_KEY,
+    });
     expect(preview.conflicts.some((c) => c.field === 'assignedRoutes' && c.keep === 'canonical')).toBe(true);
     expect(preview.copy.assignedRoutes).toBeUndefined();
     expect(preview.copy.signature).toBe('data:image/png;base64,AAAASYN');
@@ -318,21 +328,30 @@ describe('failed migration rollback', () => {
 });
 
 describe('separate legacy retirement', () => {
+  const complete = {
+    driverId: 'bbbbbbbb-cccc-4ddd-8eee-000000000001',
+    approvedKey: ALPHA_KEY,
+    status: 'active' as const,
+    opId: 'op-1',
+  };
+  const proven = {
+    secureLoginAt: 1,
+    secureLoginDriverId: complete.driverId,
+    secureLoginUid: 'uid-1',
+    hydrationAt: 2,
+    hydrationDriverId: complete.driverId,
+  };
+
   it('refuses retirement until secure login and hydration are proven', () => {
     expect(decideRetireLegacyLogin({
-      binding: null,
-      secureLoginProven: true,
-      hydrationProven: true,
+      byDriver: null,
+      byApproved: null,
+      proof: proven,
     }).action).toBe('refuse');
     expect(decideRetireLegacyLogin({
-      binding: {
-        driverId: 'bbbbbbbb-cccc-4ddd-8eee-000000000001',
-        approvedKey: ALPHA_KEY,
-        status: 'active',
-        opId: 'op-1',
-      },
-      secureLoginProven: false,
-      hydrationProven: true,
+      byDriver: complete,
+      byApproved: complete,
+      proof: { ...proven, secureLoginAt: null, secureLoginDriverId: null },
     })).toEqual({ action: 'refuse', reason: 'secure_login_unproven' });
   });
 
@@ -343,9 +362,15 @@ describe('separate legacy retirement', () => {
     expect(r.status).toBe('ok');
     const binding = store.bindingsByDriver.get(r.driverId!)!;
     expect(decideRetireLegacyLogin({
-      binding,
-      secureLoginProven: true,
-      hydrationProven: true,
+      byDriver: binding,
+      byApproved: binding,
+      proof: {
+        secureLoginAt: 1,
+        secureLoginDriverId: r.driverId,
+        secureLoginUid: 'uid',
+        hydrationAt: 2,
+        hydrationDriverId: r.driverId,
+      },
     }).action).toBe('retire');
     expect(recordMatchesTrustedHistory(
       ALPHA_KEY,
@@ -364,3 +389,184 @@ describe('callable supersession source', () => {
     expect(upgrade).not.toContain('runApprovedRowConversion');
   });
 });
+
+describe('atomic bidirectional binding', () => {
+  const driverA = 'bbbbbbbb-cccc-4ddd-8eee-000000000001';
+  const driverB = 'bbbbbbbb-cccc-4ddd-8eee-000000000002';
+
+  it('one-sided state is incomplete, not already_exact', () => {
+    const d = decideBindIdentity({
+      driverId: driverA,
+      approvedKey: ALPHA_KEY,
+      opId: 'op-1',
+      existingByDriver: { driverId: driverA, approvedKey: ALPHA_KEY, status: 'active', opId: 'op-1' },
+      existingByApproved: null,
+    });
+    expect(d.action).toBe('repair');
+    expect(decideBindingTerminalProof({
+      driverId: driverA,
+      approvedKey: ALPHA_KEY,
+      byDriver: { driverId: driverA, approvedKey: ALPHA_KEY, status: 'active', opId: 'op-1' },
+      byApproved: null,
+    }).ok).toBe(false);
+  });
+
+  it('terminal proof requires both records to agree on UUID, key, status, and opId', () => {
+    const a = { driverId: driverA, approvedKey: ALPHA_KEY, status: 'active' as const, opId: 'op-1' };
+    expect(decideBindingTerminalProof({
+      driverId: driverA, approvedKey: ALPHA_KEY, byDriver: a, byApproved: a,
+    }).ok).toBe(true);
+    expect(decideBindingTerminalProof({
+      driverId: driverA,
+      approvedKey: ALPHA_KEY,
+      byDriver: a,
+      byApproved: { ...a, opId: 'op-other' },
+    }).ok).toBe(false);
+  });
+
+  it('repairs a partial write on retry', async () => {
+    const store = createMemoryUpgradeStore();
+    store.approved.set(ALPHA_KEY, alphaRow());
+    const partial = await runCustomerOwnedUpgrade(store, baseInput({
+      failAfter: 'after_binding_byDriver',
+      opId: 'op-partial',
+    }));
+    expect(partial.status).toBe('bound_resumable');
+    expect(store.bindingsByDriver.size).toBe(1);
+    expect(store.bindingsByApproved.size).toBe(0);
+    const resume = await runCustomerOwnedUpgrade(store, baseInput({ opId: 'op-resume' }));
+    expect(resume.status).toBe('ok');
+    expect(store.bindingsByDriver.size).toBe(1);
+    expect(store.bindingsByApproved.size).toBe(1);
+    expect(store.bindingsByDriver.get(resume.driverId!)!.approvedKey).toBe(ALPHA_KEY);
+    expect(store.bindingsByApproved.get(ALPHA_KEY)!.driverId).toBe(resume.driverId);
+  });
+
+  it('competing operations cannot cross-bind', () => {
+    const tree = {
+      byDriver: { [driverA]: { driverId: driverA, approvedKey: ALPHA_KEY, status: 'active', opId: 'op-a' } },
+      byApproved: { [ALPHA_KEY]: { driverId: driverA, approvedKey: ALPHA_KEY, status: 'active', opId: 'op-a' } },
+    };
+    const second = evaluateBindingTreeWrite({
+      tree,
+      driverId: driverB,
+      approvedKey: ALPHA_KEY,
+      status: 'active',
+      opId: 'op-b',
+    });
+    expect(second.decision.action).toBe('refuse');
+    if (second.decision.action === 'refuse') {
+      expect(second.decision.reason).toBe('approved_key_already_bound');
+    }
+    expect(second.nextTree).toBeUndefined();
+  });
+});
+
+describe('authorization array presence', () => {
+  it('explicit [] is authoritative and is not replaced from legacy', () => {
+    const canonical = {
+      displayName: ALPHA_NAME,
+      assignedRoutes: [] as string[],
+      assignedWells: [] as string[],
+      assignedCustomers: [] as unknown[],
+      roles: [] as string[],
+    };
+    const preview = previewCanonicalHydration(canonical, alphaRow(), {
+      driverId: 'bbbbbbbb-cccc-4ddd-8eee-000000000001',
+      approvedKey: ALPHA_KEY,
+    });
+    expect(preview.copy.assignedRoutes).toBeUndefined();
+    expect(preview.copy.assignedWells).toBeUndefined();
+    expect(preview.copy.assignedCustomers).toBeUndefined();
+    expect(preview.copy.roles).toBeUndefined();
+    expect(preview.conflicts.some((c) => c.field === 'assignedRoutes' && c.keep === 'canonical')).toBe(true);
+    const applied = applyHydrationCopy(canonical, preview);
+    expect(applied.assignedRoutes).toEqual([]);
+  });
+});
+
+describe('hydration concurrency', () => {
+  it('a concurrent assignment change produces stale_preview and no write', () => {
+    const driverId = 'bbbbbbbb-cccc-4ddd-8eee-000000000001';
+    const currentAtPreview = { displayName: ALPHA_NAME, assignedRoutes: ['North Route'], assignmentRevision: 1 };
+    const preview = previewCanonicalHydration(currentAtPreview, alphaRow(), { driverId, approvedKey: ALPHA_KEY });
+    const afterAssignment = { ...currentAtPreview, assignedRoutes: ['West Route'], assignmentRevision: 2 };
+    const gate = evaluateHydrationTransaction({
+      current: afterAssignment,
+      driverId,
+      approvedKey: ALPHA_KEY,
+      expectedDigest: preview.digest,
+      legacyRow: alphaRow(),
+      copy: preview.copy,
+      preview,
+      opId: 'op-1',
+    });
+    expect(gate.ok).toBe(false);
+    if (!gate.ok) expect(gate.reason).toBe('stale_preview');
+  });
+
+  it('digest is bound to driverId, approvedKey, canonical, legacy, and copy', () => {
+    const driverId = 'bbbbbbbb-cccc-4ddd-8eee-000000000001';
+    const canonical = { displayName: ALPHA_NAME };
+    const a = hydrationContextDigest({
+      driverId, approvedKey: ALPHA_KEY, canonical, legacyRow: alphaRow(), copy: { signature: 'x' },
+    });
+    const b = hydrationContextDigest({
+      driverId, approvedKey: BRAVO_KEY, canonical, legacyRow: alphaRow(), copy: { signature: 'x' },
+    });
+    expect(a).not.toBe(b);
+  });
+});
+
+describe('legacy login retirement enforcement', () => {
+  it('retired binding or approved flag blocks the legacy path', () => {
+    expect(legacyLoginIsRetired({
+      approvedKey: ALPHA_KEY,
+      approvedRow: { legacyLoginRetired: true },
+      byApproved: null,
+    })).toBe(true);
+    expect(legacyLoginIsRetired({
+      approvedKey: ALPHA_KEY,
+      approvedRow: { active: true },
+      byApproved: { driverId: 'bbbbbbbb-cccc-4ddd-8eee-000000000001', approvedKey: ALPHA_KEY, status: 'legacy_login_retired', opId: 'op-1' },
+    })).toBe(true);
+    expect(legacyLoginIsRetired({
+      approvedKey: ALPHA_KEY,
+      approvedRow: { active: true },
+      byApproved: { driverId: 'bbbbbbbb-cccc-4ddd-8eee-000000000001', approvedKey: ALPHA_KEY, status: 'active', opId: 'op-1' },
+    })).toBe(false);
+  });
+});
+
+describe('history alias model is session-fenced client filter, not extra reads', () => {
+  it('server-issued aliases never include a foreign key and reject client supply', () => {
+    const driverId = 'bbbbbbbb-cccc-4ddd-8eee-000000000001';
+    const ok = decideTrustedHistoryKeys({
+      authenticatedDriverId: driverId,
+      binding: { driverId, approvedKey: ALPHA_KEY, status: 'active', opId: 'op-1' },
+    });
+    expect(ok).toEqual({ action: 'ok', keys: [driverId, ALPHA_KEY] });
+    expect(decideTrustedHistoryKeys({
+      authenticatedDriverId: driverId,
+      binding: { driverId, approvedKey: ALPHA_KEY, status: 'active', opId: 'op-1' },
+      requestData: { approvedKey: BRAVO_KEY },
+    }).action).toBe('refuse');
+  });
+});
+
+describe('source contracts', () => {
+  it('upgradeOwnLegacyDriverLogin uses the authenticateDriver App Check policy', () => {
+    const upgrade = readFileSync(join(__dirname, '../../upgradeOwnLegacyDriverLogin.ts'), 'utf8');
+    const auth = readFileSync(join(__dirname, '../../driverAuthCallables.ts'), 'utf8');
+    expect(upgrade).toMatch(/SECURITY_ENFORCE_APPCHECK/);
+    expect(upgrade).toMatch(/assertAppCheck/);
+    expect(auth).toMatch(/SECURITY_ENFORCE_APPCHECK/);
+  });
+
+  it('DriversTab no longer full-set migrates approved rows', () => {
+    const tab = readFileSync(join(__dirname, '../../../../../src/components/admin/DriversTab.tsx'), 'utf8');
+    expect(tab).not.toMatch(/set\(ref\(db, `drivers\/approved\/\$\{driver\.key\}`\)/);
+    expect(tab).toMatch(/Legacy row rewrite is disabled/);
+  });
+});
+

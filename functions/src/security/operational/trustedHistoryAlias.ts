@@ -5,6 +5,13 @@
  * stay in place, keyed by UUID and/or the server-controlled bound approved
  * key. Clients may not supply an arbitrary legacy key when requesting
  * history — any client-supplied alias is alias_spoof.
+ *
+ * History listing remains a client filter over already-readable
+ * company-scoped invoice/packet docs. The alias set is issued only to the
+ * authenticated canonical UUID (getOwnDriverHydration / bootstrapWbmSession)
+ * and is fenced to that UUID in client caches. It is not extra RTDB/Firestore
+ * read authority for drivers/approved/{hash}. Identity-switch tests prove
+ * driver A's aliases cannot be applied to driver B.
  */
 import {
   parseBinding,

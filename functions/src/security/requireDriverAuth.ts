@@ -59,6 +59,15 @@ export async function requireSecureDriver(
     if (data.active === false) {
       throw new httpsV2.HttpsError('permission-denied', 'Driver deactivated');
     }
+    if (data.legacyLoginRetired === true) {
+      throw new httpsV2.HttpsError('permission-denied', 'Driver not found');
+    }
+    const retiredBind = await admin.database()
+      .ref(`drivers/identityBindings/byApproved/${hash}`)
+      .once('value');
+    if (retiredBind.exists() && retiredBind.val()?.status === 'legacy_login_retired') {
+      throw new httpsV2.HttpsError('permission-denied', 'Driver not found');
+    }
     // Prefer secure profile if migrated
     const migratedId = data.migratedToDriverId as string | undefined;
     return {

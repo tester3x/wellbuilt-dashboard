@@ -852,52 +852,12 @@ export function DriversTab({ scopeCompanyId, isWbAdmin = false }: DriversTabProp
     }
   };
 
-  // ── Migrate legacy driver to new flat format ──
-  const migrateDriver = async (driver: ApprovedDriver) => {
-    if (!driver._legacy) return;
-    try {
-      // Write new flat structure (preserves the hash key)
-      await set(ref(db, `drivers/approved/${driver.key}`), {
-        displayName: driver.displayName,
-        name: driver.displayName,
-        active: driver.active !== false,
-        isAdmin: driver.isAdmin || false,
-        isViewer: driver.isViewer || false,
-        migratedAt: Date.now(),
-        ...(driver.companyId ? { companyId: driver.companyId, companyName: driver.companyName } : {}),
-        ...(driver.assignedCustomers?.length ? { assignedCustomers: driver.assignedCustomers } : {}),
-      });
-      setMessage(`Migrated: ${driver.displayName} to new format`);
-      await loadDrivers();
-    } catch (err) {
-      console.error('Failed to migrate driver:', err);
-      setMessage('Failed to migrate driver');
-    }
+  const migrateDriver = async (_driver: ApprovedDriver) => {
+    setMessage('Legacy row rewrite is disabled. Customers upgrade from their own device.');
   };
 
-  // ── Migrate all legacy drivers at once ──
   const migrateAllLegacy = async () => {
-    const legacyDrivers = approvedDrivers.filter(d => d._legacy);
-    if (legacyDrivers.length === 0) return;
-    try {
-      for (const driver of legacyDrivers) {
-        await set(ref(db, `drivers/approved/${driver.key}`), {
-          displayName: driver.displayName,
-          name: driver.displayName,
-          active: driver.active !== false,
-          isAdmin: driver.isAdmin || false,
-          isViewer: driver.isViewer || false,
-          migratedAt: Date.now(),
-          ...(driver.companyId ? { companyId: driver.companyId, companyName: driver.companyName } : {}),
-          ...(driver.assignedCustomers?.length ? { assignedCustomers: driver.assignedCustomers } : {}),
-        });
-      }
-      setMessage(`Migrated ${legacyDrivers.length} drivers to new format`);
-      await loadDrivers();
-    } catch (err) {
-      console.error('Failed to migrate drivers:', err);
-      setMessage('Failed to migrate drivers');
-    }
+    setMessage('Legacy row rewrite is disabled. Customers upgrade from their own device.');
   };
 
   // ── Save multi-role set for a dashboard account (7/9 P4) ─────────────
@@ -1330,12 +1290,8 @@ export function DriversTab({ scopeCompanyId, isWbAdmin = false }: DriversTabProp
                 {driver.companyId ? 'Change Customer' : 'Assign Customer'}
               </button>
             )}
-            {isWbAdmin && driver._legacy && (
-              <button
-                onClick={() => migrateDriver(driver)}
-                className="px-3 py-1 text-sm rounded bg-orange-600 hover:bg-orange-500 text-white"
-                title="Convert from legacy device-based format to new flat format"
-              >
+            {false && isWbAdmin && driver._legacy && (
+              <button type="button" disabled title="Legacy row rewrite is disabled">
                 Migrate
               </button>
             )}
@@ -1617,11 +1573,8 @@ export function DriversTab({ scopeCompanyId, isWbAdmin = false }: DriversTabProp
             )}
           </h3>
           <div className="flex gap-2">
-            {isWbAdmin && approvedDrivers.some(d => d._legacy) && (
-              <button
-                onClick={migrateAllLegacy}
-                className="px-3 py-1.5 bg-orange-600 hover:bg-orange-500 text-white text-sm rounded"
-              >
+            {false && isWbAdmin && approvedDrivers.some(d => d._legacy) && (
+              <button type="button" disabled onClick={migrateAllLegacy}>
                 Migrate All Legacy
               </button>
             )}

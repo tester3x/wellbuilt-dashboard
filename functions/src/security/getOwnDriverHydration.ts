@@ -9,7 +9,7 @@
 import * as httpsV2 from 'firebase-functions/v2/https';
 import * as admin from 'firebase-admin';
 import { requireSecureDriver } from './requireDriverAuth';
-import { BINDING_BY_DRIVER, parseBinding } from './operational/identityBinding';
+import { BINDING_BY_DRIVER, IDENTITY_PROOF, parseBinding } from './operational/identityBinding';
 import { decideTrustedHistoryKeys } from './operational/trustedHistoryAlias';
 import { projectDriverHydration } from './operational/canonicalProfileHydration';
 
@@ -42,6 +42,11 @@ export const getOwnDriverHydration = httpsV2.onCall(
     if (keys.action !== 'ok') {
       throw new httpsV2.HttpsError('invalid-argument', 'alias_spoof');
     }
+
+    await rtdb.ref(IDENTITY_PROOF(driver.driverId)).update({
+      hydrationAt: Date.now(),
+      hydrationDriverId: driver.driverId,
+    });
 
     return projectDriverHydration({
       driverId: driver.driverId,

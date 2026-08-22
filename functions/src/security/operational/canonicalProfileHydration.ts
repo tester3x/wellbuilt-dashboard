@@ -32,6 +32,27 @@ export const OPERATIONAL_FIELDS = [
 
 export type OperationalField = (typeof OPERATIONAL_FIELDS)[number];
 
+/** Authorization arrays: an explicit [] is authoritative and must not be replaced. */
+export const AUTHORIZATION_ARRAY_FIELDS = [
+  'assignedRoutes',
+  'assignedWells',
+  'assignedCustomers',
+  'roles',
+] as const;
+
+export type AuthorizationArrayField = (typeof AUTHORIZATION_ARRAY_FIELDS)[number];
+
+export function isAuthorizationArrayField(field: string): field is AuthorizationArrayField {
+  return (AUTHORIZATION_ARRAY_FIELDS as readonly string[]).includes(field);
+}
+
+/** Key is present on the object and not null/undefined. [] counts as present. */
+export function fieldIsPresent(obj: Record<string, unknown> | null | undefined, key: string): boolean {
+  if (!obj || typeof obj !== 'object') return false;
+  if (!Object.prototype.hasOwnProperty.call(obj, key)) return false;
+  return obj[key] !== undefined && obj[key] !== null;
+}
+
 export interface FieldConflict {
   field: OperationalField;
   canonical: unknown;
@@ -50,12 +71,30 @@ export function sameJson(a: unknown, b: unknown): boolean {
   return JSON.stringify(a ?? null) === JSON.stringify(b ?? null);
 }
 
-/** Empty for copy purposes. Booleans and numbers are never empty. */
+/**
+ * Empty for copy purposes. Booleans and numbers are never empty.
+ * Authorization arrays are NOT absent when they are an explicit [].
+ */
 export function isAbsent(v: unknown): boolean {
   if (v === null || v === undefined) return true;
   if (v === '') return true;
   if (Array.isArray(v) && v.length === 0) return true;
   return false;
+}
+
+function canonicalValueForCopy(
+  profile: Record<string, unknown>,
+  nested: Record<string, unknown>,
+  field: OperationalField,
+): { present: boolean; value: unknown } {
+  if (isAuthorizationArrayField(field)) {
+    if (fieldIsPresent(profile, field)) return { present: true, value: profile[field] };
+    if (fieldIsPresent(nested, field)) return { present: true, value: nested[field] };
+    return { present: false, value: undefined };
+  }
+  if (!isAbsent(profile[field])) return { present: true, value: profile[field] };
+  if (!isAbsent(nested[field])) return { present: true, value: nested[field] };
+  return { present: false, value: undefined };
 }
 
 function nestedProfile(row: Record<string, unknown>): Record<string, unknown> {
@@ -77,11 +116,8 @@ export function extractLegacyOperationalFields(
   const nested = nestedProfile(row);
   const out: Partial<Record<OperationalField, unknown>> = {};
   for (const field of OPERATIONAL_FIELDS) {
-    if (!isAbsent(row[field])) {
-      out[field] = row[field];
-    } else if (!isAbsent(nested[field])) {
-      out[field] = nested[field];
-    }
+    const got = canonicalValueForCopy(row, nested, field);
+    if (got.present) out[field] = got.value;
   }
   return out;
 }
@@ -92,33 +128,59 @@ export function extractCanonicalOperationalFields(
   const nested = nestedProfile(profile);
   const out: Partial<Record<OperationalField, unknown>> = {};
   for (const field of OPERATIONAL_FIELDS) {
-    if (!isAbsent(profile[field])) {
-      out[field] = profile[field];
-    } else if (!isAbsent(nested[field])) {
-      out[field] = nested[field];
-    }
+    const got = canonicalValueForCopy(profile, nested, field);
+    if (got.present) out[field] = got.value;
   }
   return out;
+}
+
+export function hydrationContextDigest(input: {
+  driverId: string;
+  approvedKey: string;
+  canonical: Record<string, unknown> | null | undefined;
+  legacyRow: Record<string, unknown>;
+  copy: Partial<Record<OperationalField, unknown>>;
+}): string {
+  const canonical = input.canonical && typeof input.canonical === 'object' ? input.canonical : {};
+  return createHash('sha256').update(JSON.stringify({
+    driverId: input.driverId,
+    approvedKey: input.approvedKey,
+    canonical: {
+      ...extractCanonicalOperationalFields(canonical),
+      assignmentRevision: canonical.assignmentRevision ?? null,
+      assignmentUpdatedAt: canonical.assignmentUpdatedAt ?? null,
+    },
+    legacy: extractLegacyOperationalFields(input.legacyRow),
+    copy: input.copy,
+  })).digest('hex');
 }
 
 export function previewCanonicalHydration(
   canonical: Record<string, unknown> | null | undefined,
   legacyRow: Record<string, unknown>,
+  ctx: { driverId: string; approvedKey: string },
 ): HydrationPreview {
-  const current = extractCanonicalOperationalFields(canonical && typeof canonical === 'object' ? canonical : {});
+  const currentObj = canonical && typeof canonical === 'object' ? canonical : {};
+  const current = extractCanonicalOperationalFields(currentObj);
   const legacy = extractLegacyOperationalFields(legacyRow);
   const copy: Partial<Record<OperationalField, unknown>> = {};
   const preserved: OperationalField[] = [];
   const conflicts: FieldConflict[] = [];
+  const currentNested = nestedProfile(currentObj);
 
   for (const field of OPERATIONAL_FIELDS) {
+    const canonPresent = isAuthorizationArrayField(field)
+      ? fieldIsPresent(currentObj, field) || fieldIsPresent(currentNested, field)
+      : Object.prototype.hasOwnProperty.call(current, field);
     const c = current[field];
     const l = legacy[field];
-    if (isAbsent(l)) {
-      if (!isAbsent(c)) preserved.push(field);
+    const legacyPresent = Object.prototype.hasOwnProperty.call(legacy, field);
+
+    if (!legacyPresent) {
+      if (canonPresent) preserved.push(field);
       continue;
     }
-    if (isAbsent(c)) {
+    if (!canonPresent) {
       copy[field] = l;
       continue;
     }
@@ -130,9 +192,13 @@ export function previewCanonicalHydration(
     preserved.push(field);
   }
 
-  const digest = createHash('sha256')
-    .update(JSON.stringify({ copy, conflicts, preserved }))
-    .digest('hex');
+  const digest = hydrationContextDigest({
+    driverId: ctx.driverId,
+    approvedKey: ctx.approvedKey,
+    canonical: currentObj,
+    legacyRow,
+    copy,
+  });
 
   return { copy, preserved, conflicts, digest };
 }

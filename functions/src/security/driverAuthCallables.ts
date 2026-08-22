@@ -287,6 +287,12 @@ export const authenticateDriver = httpsV2.onCall(
 
     const minted = await mintDriverSessionTokens(authUid, globalClaims, sessionClaims);
 
+    await rtdb().ref(`drivers/identityProofs/${driverId}`).update({
+      secureLoginAt: Date.now(),
+      secureLoginDriverId: driverId,
+      secureLoginUid: authUid,
+    });
+
     await writeSecurityAudit({
       action: mustChangePasscode ? 'authenticateDriver_must_change' : 'authenticateDriver_ok',
       actorUid: authUid,
