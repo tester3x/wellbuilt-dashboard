@@ -171,14 +171,13 @@ export function DriversTab({ scopeCompanyId, isWbAdmin = false }: DriversTabProp
     setSecureBusy(true);
     setSecureError('');
     try {
-      const { adminSetPasscode } = await import('@/lib/secureDriverAdmin');
+      const { staffConvertApprovedDriverSecureLogin } = await import('@/lib/secureDriverAdmin');
       // Built by the tested decision layer: no driverId, no legacyHash,
-      // temporary:false. The callable owns name-conflict enforcement, so no
-      // client-side index read happens here.
+      // temporary:false. Dedicated conversion callable — not adminSetDriverPasscode.
       const req = buildSetPasscodeRequest(secureTarget, securePass);
       // The response carries the new canonical UUID; it is deliberately NOT
       // rendered — success copy stays masked (display name only).
-      await adminSetPasscode(req);
+      await staffConvertApprovedDriverSecureLogin(req);
       clearSecureSecrets();
       setSecuredKeys(prev => new Set(prev).add(secureTarget.key));
       setSecureDone(`Secure login created for ${secureTarget.displayName}.`);

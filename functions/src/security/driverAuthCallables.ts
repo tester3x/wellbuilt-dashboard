@@ -907,36 +907,28 @@ export const adminSetDriverPasscode = httpsV2.onCall(
           opId,
         },
       );
-      if (converted.status === 'refused') {
-        throw new httpsV2.HttpsError(
-          converted.reason === 'approved_row_missing' ? 'not-found'
-            : converted.reason === 'approved_key_malformed' ? 'invalid-argument'
-            : 'failed-precondition',
-          converted.reason,
-        );
-      }
-      if (converted.status === 'rolled_back' || !converted.driverId) {
-        await writeSecurityAudit({
-          action: 'approvedRowConversion_fail',
-          actorUid: caller.uid,
-          driverId: converted.driverId,
-          detail: { reason: 'approved_conversion_rolled_back' },
-        });
-        throw new httpsV2.HttpsError(
-          'internal',
-          'Could not create the driver profile; no identity was created',
-        );
-      }
+      const { clientOutcomeFor } = await import('./operational/approvedRowConversion');
+      const outcome = clientOutcomeFor(converted);
       await writeSecurityAudit({
-        action: 'approvedRowConversion',
+        action: outcome.success ? 'approvedRowConversion' : 'approvedRowConversion_fail',
         actorUid: caller.uid,
         driverId: converted.driverId,
         detail: {
           approvedKeyPrefix: approvedKey.slice(0, 8),
           temporary,
-          shiftAuthority: converted.status === 'resumable' ? 'resumable_linked' : 'converted',
+          status: converted.status,
+          reason: converted.reason,
+          terminalProven: converted.terminalProven,
         },
       });
+      if (!outcome.success) {
+        throw new httpsV2.HttpsError(
+          outcome.code === 'ok' ? 'internal' : outcome.code,
+          outcome.reason === 'approved_conversion_rolled_back'
+            ? 'Could not create the driver profile; no identity was created'
+            : outcome.reason,
+        );
+      }
       return {
         driverId: converted.driverId,
         displayName: fields.displayName,

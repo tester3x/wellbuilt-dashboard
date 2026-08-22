@@ -46,13 +46,15 @@ export type ConversionFailAfter =
   | 'authority'
   | 'during_legacy_link'
   | 'legacy_link'
-  | 'journal_complete';
+  | 'journal_complete'
+  | 'inspect';
 
 export type ConversionStatus =
   | 'ok'
   | 'refused'
   | 'rolled_back'
-  | 'resumable';
+  | 'linked_resumable'
+  | 'unproven';
 
 export type ConversionRefusal =
   | 'legacy_link_required'
@@ -95,6 +97,33 @@ export interface ConversionResult {
   writes: ConversionWriteLog;
   copiedRoutes: unknown;
   copiedWells: unknown;
+  terminalProven: boolean;
+}
+
+export function clientOutcomeFor(result: ConversionResult): {
+  success: boolean;
+  code: 'ok' | 'failed-precondition' | 'not-found' | 'invalid-argument' | 'internal';
+  reason: string;
+} {
+  if (result.status === 'ok' && result.terminalProven) {
+    return { success: true, code: 'ok', reason: result.reason };
+  }
+  if (result.status === 'refused') {
+    if (result.reason === 'approved_row_missing') {
+      return { success: false, code: 'not-found', reason: result.reason };
+    }
+    if (result.reason === 'approved_key_malformed') {
+      return { success: false, code: 'invalid-argument', reason: result.reason };
+    }
+    return { success: false, code: 'failed-precondition', reason: result.reason };
+  }
+  if (result.status === 'rolled_back') {
+    return { success: false, code: 'internal', reason: 'approved_conversion_rolled_back' };
+  }
+  if (result.status === 'linked_resumable') {
+    return { success: false, code: 'failed-precondition', reason: 'linked_resumable' };
+  }
+  return { success: false, code: 'failed-precondition', reason: result.reason || 'compensation_unproven' };
 }
 
 export interface ConversionWriteLog {
@@ -161,6 +190,141 @@ export function buildCanonicalProfile(input: {
   };
 }
 
+function normCompany(v: unknown): string | null {
+  if (typeof v !== 'string') return null;
+  const t = v.trim().toLowerCase();
+  return t || null;
+}
+
+export function decideProfileWrite(input: {
+  existing: Record<string, unknown> | null | undefined;
+  incoming: Record<string, unknown>;
+}): 'write' | 'already_exact' | 'foreign' {
+  const existing = input.existing;
+  if (!existing || typeof existing !== 'object') return 'write';
+  const existingOp = existing.provisioningOpId;
+  const nextOp = input.incoming.provisioningOpId;
+  if (existingOp === nextOp) return 'already_exact';
+  const sameName = existing.displayName === input.incoming.displayName;
+  const sameCompany = normCompany(existing.companyId) === normCompany(input.incoming.companyId);
+  const sameRoutes = JSON.stringify(existing.assignedRoutes ?? null)
+    === JSON.stringify(input.incoming.assignedRoutes ?? null);
+  const sameWells = JSON.stringify(existing.assignedWells ?? null)
+    === JSON.stringify(input.incoming.assignedWells ?? null);
+  if (sameName && sameCompany && sameRoutes && sameWells) return 'already_exact';
+  return 'foreign';
+}
+
+export function decideAuthorityDelete(input: {
+  existing: Record<string, unknown> | null | undefined;
+  myOpId: string;
+  myDriverId: string;
+  expectedCompanyId?: string | null;
+}): 'removed' | 'left_intact' | 'missing' {
+  const existing = input.existing;
+  if (!existing || typeof existing !== 'object') return 'missing';
+  if (existing.provisioningOpId !== input.myOpId) return 'left_intact';
+  if (existing.driverId !== input.myDriverId) return 'left_intact';
+  if (input.expectedCompanyId && existing.companyId !== input.expectedCompanyId) {
+    return 'left_intact';
+  }
+  if (existing.openPeriodId != null && existing.openPeriodId !== undefined) {
+    return 'left_intact';
+  }
+  if (existing.initialized !== true) return 'left_intact';
+  return 'removed';
+}
+
+export interface ConversionInspect {
+  credentialOpId: string | null;
+  credentialDisplayNameNorm: string | null;
+  credentialActive: boolean | null;
+  indexDriverId: string | null;
+  profile: Record<string, unknown> | null;
+  profileOpId: string | null;
+  authority: Record<string, unknown> | null;
+  authorityOpId: string | null;
+  authorityOpenPeriodId: string | null;
+  legacyLinkedDriverId: string | null;
+  legacyLinkOpId: string | null;
+  approvedDisplayName: string | null;
+  approvedSecureProfileLinked: boolean | null;
+}
+
+export function decidePrerequisiteProof(input: {
+  driverId: string;
+  nameNorm: string;
+  displayName: string;
+  companyId: string | null;
+  expectedRoutes: unknown;
+  expectedWells: unknown;
+  live: ConversionInspect;
+}): { ok: true } | { ok: false; reason: string } {
+  const { live, driverId, nameNorm, displayName, companyId } = input;
+  if (live.indexDriverId !== driverId) {
+    return { ok: false, reason: 'index_mismatch' };
+  }
+  if (!live.credentialOpId) {
+    return { ok: false, reason: 'credential_missing' };
+  }
+  if (live.credentialDisplayNameNorm && live.credentialDisplayNameNorm !== nameNorm) {
+    return { ok: false, reason: 'credential_name_mismatch' };
+  }
+  if (live.credentialActive === false) {
+    return { ok: false, reason: 'credential_inactive' };
+  }
+  const profile = live.profile;
+  if (!profile) return { ok: false, reason: 'profile_missing' };
+  if (profile.displayName !== displayName) {
+    return { ok: false, reason: 'profile_name_mismatch' };
+  }
+  if (normCompany(profile.companyId) !== normCompany(companyId)) {
+    return { ok: false, reason: 'profile_company_mismatch' };
+  }
+  if (JSON.stringify(profile.assignedRoutes ?? null) !== JSON.stringify(input.expectedRoutes ?? null)) {
+    return { ok: false, reason: 'profile_routes_mismatch' };
+  }
+  if (JSON.stringify(profile.assignedWells ?? null) !== JSON.stringify(input.expectedWells ?? null)) {
+    return { ok: false, reason: 'profile_wells_mismatch' };
+  }
+  if (companyId) {
+    const auth = live.authority;
+    if (!auth) return { ok: false, reason: 'authority_missing' };
+    if (auth.driverId !== driverId) return { ok: false, reason: 'authority_driver_mismatch' };
+    if (normCompany(auth.companyId) !== normCompany(companyId)) {
+      return { ok: false, reason: 'authority_company_mismatch' };
+    }
+    if (auth.initialized !== true) return { ok: false, reason: 'authority_uninitialized' };
+    if (auth.openPeriodId != null && auth.openPeriodId !== undefined) {
+      return { ok: false, reason: 'authority_open' };
+    }
+  }
+  return { ok: true };
+}
+
+export function decideTerminalProof(input: {
+  driverId: string;
+  nameNorm: string;
+  displayName: string;
+  companyId: string | null;
+  expectedRoutes: unknown;
+  expectedWells: unknown;
+  live: ConversionInspect;
+}): { ok: true } | { ok: false; reason: string } {
+  const pre = decidePrerequisiteProof(input);
+  if (!pre.ok) return pre;
+  if (input.live.legacyLinkedDriverId !== input.driverId) {
+    return { ok: false, reason: 'legacy_link_missing' };
+  }
+  if (input.live.approvedSecureProfileLinked !== true) {
+    return { ok: false, reason: 'legacy_link_unmarked' };
+  }
+  if (input.live.approvedDisplayName && input.live.approvedDisplayName !== input.displayName) {
+    return { ok: false, reason: 'legacy_name_mismatch' };
+  }
+  return { ok: true };
+}
+
 export interface ConversionStore {
   journal: ProvisioningJournalDeps;
   readApproved(key: string): Promise<Record<string, unknown> | null>;
@@ -188,22 +352,15 @@ export interface ConversionStore {
     nameNorm: string;
     opId: string;
   }): Promise<{ deletedCredential: boolean; releasedIndex: boolean; superseded: boolean }>;
-  writeProfile(driverId: string, profile: Record<string, unknown>): Promise<void>;
+  writeProfile(driverId: string, profile: Record<string, unknown>): Promise<'written' | 'already_exact' | 'foreign'>;
   removeProfileIfOwned(driverId: string, opId: string): Promise<'removed' | 'left_intact' | 'missing'>;
   ensureAuthority(input: {
     driverId: string;
     companyId: string | null;
     opId: string;
   }): Promise<{ action: string; wrote: boolean }>;
-  removeAuthorityIfOwned(driverId: string, opId: string): Promise<'removed' | 'left_intact' | 'missing'>;
-  inspect(driverId: string, nameNorm: string, approvedKey: string): Promise<{
-    credentialOpId: string | null;
-    indexDriverId: string | null;
-    profileOpId: string | null;
-    authorityOpId: string | null;
-    legacyLinkedDriverId: string | null;
-    legacyLinkOpId: string | null;
-  }>;
+  removeAuthorityIfOwned(driverId: string, opId: string, expectedCompanyId?: string | null): Promise<'removed' | 'left_intact' | 'missing'>;
+  inspect(driverId: string, nameNorm: string, approvedKey: string): Promise<ConversionInspect>;
 }
 
 function refuse(reason: ConversionRefusal, writes: ConversionWriteLog): ConversionResult {
@@ -214,7 +371,20 @@ function refuse(reason: ConversionRefusal, writes: ConversionWriteLog): Conversi
     writes,
     copiedRoutes: null,
     copiedWells: null,
+    terminalProven: false,
   };
+}
+
+function result(
+  status: ConversionStatus,
+  reason: string,
+  driverId: string | null,
+  writes: ConversionWriteLog,
+  copiedRoutes: unknown,
+  copiedWells: unknown,
+  terminalProven: boolean,
+): ConversionResult {
+  return { status, reason, driverId, writes, copiedRoutes, copiedWells, terminalProven };
 }
 
 async function compensatePreLink(
@@ -226,10 +396,11 @@ async function compensatePreLink(
     approvedKey: string;
     wroteProfile: boolean;
     wroteAuthority: boolean;
+    expectedCompanyId?: string | null;
   },
 ): Promise<void> {
   if (input.wroteAuthority) {
-    await store.removeAuthorityIfOwned(input.driverId, input.opId);
+    await store.removeAuthorityIfOwned(input.driverId, input.opId, input.expectedCompanyId);
   }
   if (input.wroteProfile) {
     await store.removeProfileIfOwned(input.driverId, input.opId);
@@ -310,25 +481,71 @@ export async function runApprovedRowConversion(
   const copiedRoutes = copyAssignedRoutes(row);
   const copiedWells = copyAssignedWells(row);
 
+  const expectedProfile = buildCanonicalProfile({
+    row,
+    displayName: input.displayName,
+    legalName: input.legalName,
+    companyId: input.companyId,
+    companyName: input.companyName,
+    callerUid: input.callerUid,
+    opId: input.opId,
+  });
+  const proofInput = (live: ConversionInspect) => ({
+    driverId,
+    nameNorm,
+    displayName: input.displayName,
+    companyId,
+    expectedRoutes: copiedRoutes,
+    expectedWells: copiedWells,
+    live,
+  });
+
+  const inspectLive = async (honorInspectFail: boolean): Promise<ConversionInspect | null> => {
+    if (honorInspectFail && input.failAfter === 'inspect') return null;
+    try {
+      return await store.inspect(driverId, nameNorm, approvedKey);
+    } catch {
+      return null;
+    }
+  };
+
   if (resolved.decision.action === 'already_completed') {
-    writes.journalCompleted = true;
-    return {
-      status: 'ok',
-      reason: 'already_completed',
+    const liveDone = await inspectLive(true);
+    if (!liveDone) {
+      return result('unproven', 'compensation_unproven', driverId, writes, copiedRoutes, copiedWells, false);
+    }
+    const terminal = decideTerminalProof(proofInput(liveDone));
+    if (terminal.ok) {
+      writes.journalCompleted = true;
+      return result('ok', 'already_completed', driverId, writes, copiedRoutes, copiedWells, true);
+    }
+    return result(
+      liveDone.legacyLinkedDriverId === driverId ? 'linked_resumable' : 'unproven',
+      terminal.reason,
       driverId,
       writes,
       copiedRoutes,
       copiedWells,
-    };
+      false,
+    );
   }
 
-  const live = await store.inspect(driverId, nameNorm, approvedKey);
+  const liveStart = await inspectLive(false);
+  if (!liveStart) {
+    return result('unproven', 'compensation_unproven', driverId, writes, copiedRoutes, copiedWells, false);
+  }
+  const live = liveStart;
 
-  // Resume skips artifacts that already exist for this journal UUID so a
-  // retry never overwrites a newer concurrent credential/profile/link.
   let wroteIdentity = live.credentialOpId != null && live.indexDriverId === driverId;
-  let wroteProfile = live.profileOpId != null;
-  let wroteAuthority = live.authorityOpId != null;
+  const existingProfileDecision = decideProfileWrite({
+    existing: live.profile,
+    incoming: expectedProfile,
+  });
+  if (existingProfileDecision === 'foreign') {
+    return result('refused', 'profile_foreign', driverId, writes, copiedRoutes, copiedWells, false);
+  }
+  let wroteProfile = existingProfileDecision === 'already_exact';
+  let wroteAuthority = live.authorityOpId != null || (live.authority?.initialized === true);
   let wroteLink = live.legacyLinkedDriverId === driverId;
 
   try {
@@ -349,18 +566,10 @@ export async function runApprovedRowConversion(
     if (input.failAfter === 'identity') throw new Error('injected: after identity');
 
     if (!wroteProfile) {
-      const profile = buildCanonicalProfile({
-        row,
-        displayName: input.displayName,
-        legalName: input.legalName,
-        companyId: input.companyId,
-        companyName: input.companyName,
-        callerUid: input.callerUid,
-        opId: input.opId,
-      });
-      await store.writeProfile(driverId, profile);
-      wroteProfile = true;
-      writes.profile = true;
+      const wr = await store.writeProfile(driverId, expectedProfile);
+      if (wr === 'foreign') throw new Error('profile_foreign');
+      wroteProfile = wr === 'written' || wr === 'already_exact';
+      writes.profile = wr === 'written';
     }
     if (input.failAfter === 'profile') throw new Error('injected: after profile');
 
@@ -386,8 +595,15 @@ export async function runApprovedRowConversion(
     }
     if (input.failAfter === 'authority') throw new Error('injected: after authority');
 
+    const preLive = await inspectLive(true);
+    if (!preLive) {
+      throw new Error('inspect_failed_before_link');
+    }
+    const prereq = decidePrerequisiteProof(proofInput(preLive));
+    if (!prereq.ok) throw new Error(`prereq:${prereq.reason}`);
+
     // Link LAST — never stamp the approved row until identity, profile,
-    // and authority are established.
+    // and authority are established and re-read.
     if (input.failAfter === 'during_legacy_link') {
       throw new Error('injected: during legacy_link');
     }
@@ -411,35 +627,47 @@ export async function runApprovedRowConversion(
     await store.journal.markCompleted(attemptId);
     writes.journalCompleted = true;
 
-    return {
-      status: 'ok',
-      reason: 'converted',
-      driverId,
-      writes,
-      copiedRoutes,
-      copiedWells,
-    };
-  } catch (err) {
-    let liveAfter: Awaited<ReturnType<ConversionStore['inspect']>> | null = null;
-    try {
-      liveAfter = await store.inspect(driverId, nameNorm, approvedKey);
-    } catch {
-      liveAfter = null;
+    const termLive = await inspectLive(true);
+    if (!termLive) {
+      return result('unproven', 'compensation_unproven', driverId, writes, copiedRoutes, copiedWells, false);
     }
-    const linkProven = wroteLink || liveAfter?.legacyLinkedDriverId === driverId;
-    if (linkProven || liveAfter === null) {
-      // Link is committed, or we cannot prove a safe rollback. Keep the
-      // journal UUID so the same approvedKey resumes rather than minting.
-      return {
-        status: 'resumable',
-        reason: liveAfter === null && !wroteLink
-          ? 'compensation_unproven'
-          : ((err as Error).message || 'conversion_incomplete_linked'),
+    const terminal = decideTerminalProof(proofInput(termLive));
+    if (!terminal.ok) {
+      return result(
+        termLive.legacyLinkedDriverId === driverId ? 'linked_resumable' : 'unproven',
+        terminal.reason,
         driverId,
         writes,
         copiedRoutes,
         copiedWells,
-      };
+        false,
+      );
+    }
+    return result('ok', 'converted', driverId, writes, copiedRoutes, copiedWells, true);
+  } catch (err) {
+    const liveAfter = await inspectLive(true);
+    if (!liveAfter) {
+      return result(
+        'unproven',
+        'compensation_unproven',
+        driverId,
+        writes,
+        copiedRoutes,
+        copiedWells,
+        false,
+      );
+    }
+    const terminal = decideTerminalProof(proofInput(liveAfter));
+    if (terminal.ok || liveAfter.legacyLinkedDriverId === driverId) {
+      return result(
+        'linked_resumable',
+        terminal.ok ? ((err as Error).message || 'conversion_incomplete_linked') : terminal.reason,
+        driverId,
+        writes,
+        copiedRoutes,
+        copiedWells,
+        false,
+      );
     }
     await compensatePreLink(store, {
       driverId,
@@ -448,15 +676,17 @@ export async function runApprovedRowConversion(
       approvedKey,
       wroteProfile,
       wroteAuthority,
+      expectedCompanyId: companyId,
     });
-    return {
-      status: 'rolled_back',
-      reason: (err as Error).message || 'conversion_failed',
+    return result(
+      'rolled_back',
+      (err as Error).message || 'conversion_failed',
       driverId,
       writes,
       copiedRoutes,
       copiedWells,
-    };
+      false,
+    );
   }
 }
 
@@ -618,15 +848,12 @@ export function createMemoryConversionStore(): ConversionStore & {
       };
     },
     async writeProfile(driverId: string, profile: Record<string, unknown>) {
-      const existing = profiles.get(driverId);
-      if (
-        existing
-        && typeof existing.provisioningOpId === 'string'
-        && existing.provisioningOpId !== profile.provisioningOpId
-      ) {
-        return;
-      }
+      const existing = profiles.get(driverId) ?? null;
+      const decision = decideProfileWrite({ existing, incoming: profile });
+      if (decision === 'foreign') return 'foreign';
+      if (decision === 'already_exact') return 'already_exact';
       profiles.set(driverId, { ...profile });
+      return 'written';
     },
     async removeProfileIfOwned(driverId: string, opId: string) {
       const p = profiles.get(driverId);
@@ -648,26 +875,37 @@ export function createMemoryConversionStore(): ConversionStore & {
       }
       return { action: d.action, wrote: false };
     },
-    async removeAuthorityIfOwned(driverId: string, opId: string) {
+    async removeAuthorityIfOwned(driverId: string, opId: string, expectedCompanyId?: string | null) {
       const a = authority.get(driverId);
-      if (!a) return 'missing';
-      if (a.provisioningOpId !== opId) return 'left_intact';
-      authority.delete(driverId);
-      return 'removed';
+      const d = decideAuthorityDelete({
+        existing: a ?? null,
+        myOpId: opId,
+        myDriverId: driverId,
+        expectedCompanyId,
+      });
+      if (d === 'removed') authority.delete(driverId);
+      return d;
     },
     async inspect(driverId: string, nameNorm: string, approvedKey: string) {
       const cred = credentials.get(driverId);
       const idx = index.get(nameNorm);
-      const prof = profiles.get(driverId);
-      const auth = authority.get(driverId);
-      const row = approved.get(approvedKey);
+      const prof = profiles.get(driverId) ?? null;
+      const auth = authority.get(driverId) ?? null;
+      const row = approved.get(approvedKey) ?? null;
       return {
         credentialOpId: typeof cred?.opId === 'string' ? cred.opId : null,
+        credentialDisplayNameNorm: typeof cred?.displayNameNorm === 'string' ? cred.displayNameNorm : null,
+        credentialActive: typeof cred?.active === 'boolean' ? cred.active : null,
         indexDriverId: idx?.driverId ?? null,
+        profile: prof,
         profileOpId: typeof prof?.provisioningOpId === 'string' ? String(prof.provisioningOpId) : null,
+        authority: auth,
         authorityOpId: typeof auth?.provisioningOpId === 'string' ? String(auth.provisioningOpId) : null,
+        authorityOpenPeriodId: typeof auth?.openPeriodId === 'string' ? String(auth.openPeriodId) : null,
         legacyLinkedDriverId: typeof row?.migratedToDriverId === 'string' ? String(row.migratedToDriverId) : null,
         legacyLinkOpId: typeof row?.linkOpId === 'string' ? String(row.linkOpId) : null,
+        approvedDisplayName: typeof row?.displayName === 'string' ? String(row.displayName) : null,
+        approvedSecureProfileLinked: row?.secureProfileLinked === true,
       };
     },
   };

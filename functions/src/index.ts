@@ -4760,6 +4760,7 @@ export {
   dismissDispatch,
   staffWriteDispatch,
   staffWriteDriverAssignment,
+  staffConvertApprovedDriverSecureLogin,
   // Operational path hardening
   ingestDriverPacket,
   ingestWbmPull,

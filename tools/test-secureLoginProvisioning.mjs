@@ -176,7 +176,9 @@ check('create copy states new identity, orphaned history, and no deletion',
   check('9. legacy hash computation is never invoked',
     !/adminComputeLegacyHash/.test(src));
   const admin = readFileSync(join(ROOT, 'src/lib/secureDriverAdmin.ts'), 'utf8');
-  check('the callable wrapper still targets adminSetDriverPasscode',
+  check('create conversion wrapper targets staffConvertApprovedDriverSecureLogin',
+    /staffConvertApprovedDriverSecureLogin/.test(admin));
+  check('reset wrapper remains on adminSetDriverPasscode and is not the create path',
     /adminSetDriverPasscode/.test(admin));
 }
 
@@ -211,10 +213,11 @@ check('create copy states new identity, orphaned history, and no deletion',
   for (const [label, re] of FORBIDDEN) {
     check(`the submit path cannot invoke ${label}`, !re.test(body));
   }
-  check('the submit path calls adminSetPasscode and builds via the tested layer',
-    /adminSetPasscode\(/.test(body) && /buildSetPasscodeRequest\(/.test(body));
+  check('the submit path calls staffConvertApprovedDriverSecureLogin and builds via the tested layer',
+    /staffConvertApprovedDriverSecureLogin\(/.test(body) && /buildSetPasscodeRequest\(/.test(body)
+    && !/adminSetPasscode\(/.test(body));
   check('the submit path sends exactly the built request, unmodified',
-    /adminSetPasscode\(req\)/.test(body), 'a spread or extra field would bypass the builder');
+    /staffConvertApprovedDriverSecureLogin\(req\)/.test(body), 'a spread or extra field would bypass the builder');
 }
 
 console.log(`\n${pass} passed, ${fail} failed`);

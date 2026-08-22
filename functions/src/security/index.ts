@@ -27,6 +27,7 @@ export {
 export { dismissDispatch } from './dismissDispatchCallable';
 export { staffWriteDispatch } from './staffWriteDispatchCallable';
 export { staffWriteDriverAssignment } from './staffWriteDriverAssignmentCallable';
+export { staffConvertApprovedDriverSecureLogin } from './staffConvertApprovedDriverSecureLogin';
 
 export {
   ingestDriverPacket,

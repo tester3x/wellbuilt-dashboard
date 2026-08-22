@@ -1,6 +1,10 @@
 /**
  * Production I/O adapter for approved-row conversion.
  * Ownership checks prevent stale compensation from deleting newer artifacts.
+ *
+ * Authority create/tag and delete run inside a single Firestore transaction.
+ * Profile writes report written / already_exact / foreign so a foreign
+ * document cannot be silently treated as ours.
  */
 import { FieldValue, type Firestore } from 'firebase-admin/firestore';
 import type { Database } from 'firebase-admin/database';
@@ -12,9 +16,15 @@ import {
   type IncumbentCredentialState,
 } from '../nameIndexClaim';
 import { firestoreProvisioningJournal } from './provisioningJournalStore';
-import { ensureInitializedEmptyShiftAuthority } from './ensureEmptyShiftAuthority';
-import { shiftAuthorityPath } from './shiftAuthority';
-import type { ConversionStore } from './approvedRowConversion';
+import {
+  decideEnsureEmptyAuthority,
+  shiftAuthorityPath,
+} from './shiftAuthority';
+import {
+  decideAuthorityDelete,
+  decideProfileWrite,
+  type ConversionStore,
+} from './approvedRowConversion';
 
 export function productionConversionStore(
   db: Firestore,
@@ -157,20 +167,25 @@ export function productionConversionStore(
     },
     async writeProfile(driverId, profile) {
       const ref = rtdb.ref(`drivers/profiles/${driverId}`);
-      await ref.transaction((current) => {
-        if (current && typeof current === 'object') {
-          const existingOp = (current as Record<string, unknown>).provisioningOpId;
-          const nextOp = profile.provisioningOpId;
-          if (
-            typeof existingOp === 'string'
-            && typeof nextOp === 'string'
-            && existingOp !== nextOp
-          ) {
-            return current;
-          }
+      let outcome: 'written' | 'already_exact' | 'foreign' = 'written';
+      const tx = await ref.transaction((current) => {
+        const existing = current && typeof current === 'object'
+          ? current as Record<string, unknown>
+          : null;
+        const decision = decideProfileWrite({ existing, incoming: profile });
+        if (decision === 'foreign') {
+          outcome = 'foreign';
+          return current;
         }
+        if (decision === 'already_exact') {
+          outcome = 'already_exact';
+          return current;
+        }
+        outcome = 'written';
         return profile;
       });
+      if (!tx.committed) return 'foreign';
+      return outcome;
     },
     async removeProfileIfOwned(driverId, opId) {
       const ref = rtdb.ref(`drivers/profiles/${driverId}`);
@@ -191,36 +206,99 @@ export function productionConversionStore(
       return result;
     },
     async ensureAuthority(input) {
-      const ensure = await ensureInitializedEmptyShiftAuthority(db, {
+      const pre = decideEnsureEmptyAuthority({
         driverId: input.driverId,
         companyId: input.companyId,
+        existing: null,
       });
-      if (ensure.wrote) {
-        const ref = db.doc(shiftAuthorityPath(input.driverId));
-        try {
-          await ref.update({ provisioningOpId: input.opId });
-        } catch {
-          const snap = await ref.get();
-          const data = snap.data();
-          const emptyOurs =
-            snap.exists
-            && data?.driverId === input.driverId
-            && data?.initialized === true
-            && (data?.openPeriodId == null)
-            && data?.provisioningOpId == null;
-          if (emptyOurs) await ref.delete();
-          throw new Error('authority_tag_failed');
+      if (pre.action === 'skip') return { action: 'skip', wrote: false };
+
+      const ref = db.doc(shiftAuthorityPath(input.driverId.trim()));
+      return db.runTransaction(async (tx) => {
+        const snap = await tx.get(ref);
+        if (!snap.exists) {
+          const d = decideEnsureEmptyAuthority({
+            driverId: input.driverId,
+            companyId: input.companyId,
+            existing: null,
+          });
+          if (d.action === 'create') {
+            tx.create(ref, {
+              ...d.record,
+              provisioningOpId: input.opId,
+              updatedAt: FieldValue.serverTimestamp(),
+            });
+            return { action: 'create', wrote: true };
+          }
+          return { action: d.action, wrote: false };
         }
-      }
-      return { action: ensure.decision.action, wrote: ensure.wrote };
+
+        const data = (snap.data() || {}) as Record<string, unknown>;
+        const existingOp = data.provisioningOpId;
+        if (typeof existingOp === 'string' && existingOp !== input.opId) {
+          // Foreign or previous-attempt ownership: never retag an open or
+          // modified pointer as this operation's. A healthy empty pointer
+          // is preserved as noop without attaching our marker.
+          const d = decideEnsureEmptyAuthority({
+            driverId: input.driverId,
+            companyId: input.companyId,
+            existing: {
+              driverId: String(data.driverId || ''),
+              companyId: String(data.companyId || ''),
+              initialized: data.initialized === true,
+              openPeriodId: typeof data.openPeriodId === 'string' ? data.openPeriodId : null,
+              originLocalDate: typeof data.originLocalDate === 'string' ? data.originLocalDate : null,
+              version: typeof data.version === 'number' ? data.version : 0,
+            },
+          });
+          return { action: d.action, wrote: false };
+        }
+
+        const d = decideEnsureEmptyAuthority({
+          driverId: input.driverId,
+          companyId: input.companyId,
+          existing: {
+            driverId: String(data.driverId || ''),
+            companyId: String(data.companyId || ''),
+            initialized: data.initialized === true,
+            openPeriodId: typeof data.openPeriodId === 'string' ? data.openPeriodId : null,
+            originLocalDate: typeof data.originLocalDate === 'string' ? data.originLocalDate : null,
+            version: typeof data.version === 'number' ? data.version : 0,
+          },
+        });
+        if (d.action === 'initialize_uninitialized') {
+          if (data.openPeriodId != null) return { action: 'refuse', wrote: false };
+          tx.update(ref, {
+            driverId: d.record.driverId,
+            companyId: d.record.companyId,
+            initialized: true,
+            openPeriodId: null,
+            originLocalDate: null,
+            version: d.record.version + 1,
+            provisioningOpId: input.opId,
+            updatedAt: FieldValue.serverTimestamp(),
+          });
+          return { action: 'initialize_uninitialized', wrote: true };
+        }
+        // noop / refuse / skip — never attach ownership to open or healthy
+        // pre-existing authority.
+        return { action: d.action, wrote: false };
+      });
     },
-    async removeAuthorityIfOwned(driverId, opId) {
+    async removeAuthorityIfOwned(driverId, opId, expectedCompanyId) {
       const ref = db.doc(shiftAuthorityPath(driverId));
-      const snap = await ref.get();
-      if (!snap.exists) return 'missing';
-      if (snap.data()?.provisioningOpId !== opId) return 'left_intact';
-      await ref.delete();
-      return 'removed';
+      return db.runTransaction(async (tx) => {
+        const snap = await tx.get(ref);
+        const existing = snap.exists ? (snap.data() as Record<string, unknown>) : null;
+        const d = decideAuthorityDelete({
+          existing,
+          myOpId: opId,
+          myDriverId: driverId,
+          expectedCompanyId,
+        });
+        if (d === 'removed') tx.delete(ref);
+        return d;
+      });
     },
     async inspect(driverId, nameNorm, approvedKey) {
       const [cred, idx, prof, auth, approved] = await Promise.all([
@@ -232,18 +310,27 @@ export function productionConversionStore(
       ]);
       const profile = prof.exists() ? (prof.val() as Record<string, unknown>) : null;
       const row = approved.exists() ? (approved.val() as Record<string, unknown>) : null;
+      const authData = auth.exists ? (auth.data() as Record<string, unknown>) : null;
+      const credData = cred.exists ? cred.data() : undefined;
       return {
-        credentialOpId: typeof cred.data()?.opId === 'string' ? String(cred.data()?.opId) : null,
+        credentialOpId: typeof credData?.opId === 'string' ? String(credData.opId) : null,
+        credentialDisplayNameNorm: typeof credData?.displayNameNorm === 'string'
+          ? String(credData.displayNameNorm) : null,
+        credentialActive: typeof credData?.active === 'boolean' ? credData.active : null,
         indexDriverId: typeof idx.data()?.driverId === 'string' ? String(idx.data()?.driverId) : null,
+        profile,
         profileOpId: typeof profile?.provisioningOpId === 'string' ? String(profile.provisioningOpId) : null,
-        authorityOpId: typeof auth.data()?.provisioningOpId === 'string'
-          ? String(auth.data()?.provisioningOpId) : null,
+        authority: authData,
+        authorityOpId: typeof authData?.provisioningOpId === 'string'
+          ? String(authData.provisioningOpId) : null,
+        authorityOpenPeriodId: typeof authData?.openPeriodId === 'string'
+          ? String(authData.openPeriodId) : null,
         legacyLinkedDriverId: typeof row?.migratedToDriverId === 'string'
           ? String(row.migratedToDriverId) : null,
         legacyLinkOpId: typeof row?.linkOpId === 'string' ? String(row.linkOpId) : null,
+        approvedDisplayName: typeof row?.displayName === 'string' ? String(row.displayName) : null,
+        approvedSecureProfileLinked: row?.secureProfileLinked === true,
       };
     },
   };
 }
-
-

@@ -15,15 +15,17 @@ describe('WB-M callable export / contract matrix', () => {
   const wellCfg = read('src/security/operational/getDriverWellConfig.ts');
   const driversTab = readFileSync(join(dashboardRoot, 'src/components/admin/DriversTab.tsx'), 'utf8');
 
-  it('exports getDriverWellConfig, ingestDriverPacket, and staffWriteDriverAssignment', () => {
+  it('exports getDriverWellConfig, ingestDriverPacket, staffWriteDriverAssignment, and staffConvertApprovedDriverSecureLogin', () => {
     expect(index).toMatch(/getDriverWellConfig,/);
     expect(index).toMatch(/bootstrapWbmSession,/);
     expect(index).toMatch(/ingestDriverPacket,/);
     expect(index).toMatch(/ingestWbmPull,/);
     expect(index).toMatch(/staffWriteDriverAssignment,/);
+    expect(index).toMatch(/staffConvertApprovedDriverSecureLogin,/);
     expect(securityIndex).toMatch(/getDriverWellConfig/);
     expect(securityIndex).toMatch(/ingestDriverPacket/);
     expect(securityIndex).toMatch(/staffWriteDriverAssignment/);
+    expect(securityIndex).toMatch(/staffConvertApprovedDriverSecureLogin/);
   });
 
   it('does not export nonexistent production callables', () => {

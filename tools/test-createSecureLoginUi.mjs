@@ -56,7 +56,8 @@ check('the request is built by the tested decision layer',
   check('17. no history or profile identifiers are added to the request',
     !/assignedRoutes|assignedCustomers|passcodeHash/.test(handler)
     && /const req = buildSetPasscodeRequest\(secureTarget, securePass\);/.test(handler)
-    && /await adminSetPasscode\(req\);/.test(handler)
+    && /staffConvertApprovedDriverSecureLogin\(req\)/.test(handler)
+    && !/adminSetPasscode\(req\)/.test(handler)
     && !/req\.\w+\s*=|Object\.assign\(req|\.\.\.req/.test(handler));
 }
 check('5. temporary:false comes from the decision layer, not the UI',

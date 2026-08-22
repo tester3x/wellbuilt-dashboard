@@ -6,7 +6,10 @@ import { readFileSync } from 'fs';
 import { join } from 'path';
 import {
   TEST_PASSCODE_RECORD,
+  clientOutcomeFor,
   createMemoryConversionStore,
+  decideAuthorityDelete,
+  decideProfileWrite,
   runApprovedRowConversion,
   type ConversionInput,
 } from '../approvedRowConversion';
@@ -182,6 +185,7 @@ describe('forced failures: owned compensation and resume', () => {
     seedBoth(store);
     const r = await runApprovedRowConversion(store, baseInput({ failAfter: 'identity', opId: 'op-f8' }));
     expect(r.status).toBe('rolled_back');
+    expect(clientOutcomeFor(r).success).toBe(false);
     expect(store.credentials.size).toBe(0);
     expect(store.index.size).toBe(0);
     expect(store.profiles.size).toBe(0);
@@ -217,7 +221,9 @@ describe('forced failures: owned compensation and resume', () => {
     const store = createMemoryConversionStore();
     seedBoth(store);
     const first = await runApprovedRowConversion(store, baseInput({ failAfter: 'legacy_link', opId: 'op-f11a' }));
-    expect(first.status).toBe('resumable');
+    expect(first.status).toBe('linked_resumable');
+    expect(first.terminalProven).toBe(false);
+    expect(clientOutcomeFor(first).success).toBe(false);
     expect(store.approved.get(MARCIAL_KEY)!.migratedToDriverId).toBe(first.driverId);
     expect(store.credentials.has(first.driverId!)).toBe(true);
     const retry = await runApprovedRowConversion(store, baseInput({ opId: 'op-f11b' }));
@@ -256,7 +262,9 @@ describe('forced failures: owned compensation and resume', () => {
       failAfter: 'journal_complete',
       opId: 'op-f13a',
     }));
-    expect(first.status).toBe('resumable');
+    expect(first.status).toBe('linked_resumable');
+    expect(first.terminalProven).toBe(false);
+    expect(clientOutcomeFor(first).success).toBe(false);
     expect(store.approved.get(MARCIAL_KEY)!.migratedToDriverId).toBe(first.driverId);
     const retry = await runApprovedRowConversion(store, baseInput({ opId: 'op-f13b' }));
     expect(retry.status).toBe('ok');
@@ -312,6 +320,8 @@ describe('full success', () => {
     seedBoth(store);
     const r = await runApprovedRowConversion(store, baseInput({ opId: 'op-ok' }));
     expect(r.status).toBe('ok');
+    expect(r.terminalProven).toBe(true);
+    expect(clientOutcomeFor(r).success).toBe(true);
     const id = r.driverId!;
     expect(store.credentials.get(id)).toBeTruthy();
     expect(store.index.get('marcial lebaron')!.driverId).toBe(id);
@@ -326,20 +336,73 @@ describe('full success', () => {
   });
 });
 
-describe('callable wiring: 31072 keyless refuse is before any conversion write', () => {
-  it('create_from_approved uses owned conversion; keyless refuse precedes it', () => {
-    const src = readFileSync(join(__dirname, '../../driverAuthCallables.ts'), 'utf8');
-    const start = src.indexOf('export const adminSetDriverPasscode');
-    const end = src.indexOf('export const adminDeleteSecureDriver');
-    const body = src.slice(start, end === -1 ? undefined : end);
-    const refuseIdx = body.indexOf("linkDecision.action === 'refuse'");
-    const convertIdx = body.indexOf('runApprovedRowConversion');
-    expect(refuseIdx).toBeGreaterThan(-1);
-    expect(convertIdx).toBeGreaterThan(refuseIdx);
-    expect(body).toContain('productionConversionStore');
-    expect(body).toContain('decideCreateSecureLoginLink');
-    expect(body).toContain('linkDecision.reason');
-    expect(body).not.toMatch(/console\.(log|info|debug|warn|error).*passcode/i);
+describe('client success is only proven terminal state', () => {
+  it('11b. inspection failure before linkage cannot return success', async () => {
+    const store = createMemoryConversionStore();
+    seedBoth(store);
+    const r = await runApprovedRowConversion(store, baseInput({ failAfter: 'inspect', opId: 'op-ins' }));
+    expect(r.status).toBe('unproven');
+    expect(r.reason).toBe('compensation_unproven');
+    expect(r.terminalProven).toBe(false);
+    expect(clientOutcomeFor(r)).toMatchObject({ success: false, reason: 'compensation_unproven' });
+    expect(store.approved.get(MARCIAL_KEY)!.migratedToDriverId).toBeUndefined();
+  });
+
+  it('13b. a foreign profile is refused and never linked', async () => {
+    const store = createMemoryConversionStore();
+    seedBoth(store);
+    const first = await runApprovedRowConversion(store, baseInput({ opId: 'op-ok' }));
+    expect(first.status).toBe('ok');
+    const id = first.driverId!;
+    store.profiles.set(id, {
+      ...store.profiles.get(id)!,
+      displayName: 'Someone Else',
+      provisioningOpId: 'op-other',
+      assignedRoutes: ['Other Route'],
+    });
+    store.journalMap.set(`legacy:${MARCIAL_KEY}`, {
+      ...store.journalMap.get(`legacy:${MARCIAL_KEY}`)!,
+      completed: false,
+    });
+    store.approved.set(MARCIAL_KEY, marcialRow());
+    const r = await runApprovedRowConversion(store, baseInput({ opId: 'op-foreign' }));
+    expect(r.status).toBe('refused');
+    expect(r.reason).toBe('profile_foreign');
+    expect(clientOutcomeFor(r).success).toBe(false);
+    expect(store.approved.get(MARCIAL_KEY)!.migratedToDriverId).toBeUndefined();
+  });
+
+  it('12b. authority cleanup cannot delete a concurrently opened pointer', () => {
+    expect(decideAuthorityDelete({
+      existing: {
+        driverId: 'aaaaaaaa-bbbb-4ccc-8ddd-000000000001',
+        companyId: 'liquid-gold',
+        initialized: true,
+        openPeriodId: '2026-08-21_120000',
+        provisioningOpId: 'op-old',
+      },
+      myOpId: 'op-old',
+      myDriverId: 'aaaaaaaa-bbbb-4ccc-8ddd-000000000001',
+      expectedCompanyId: 'liquid-gold',
+    })).toBe('left_intact');
+    expect(decideProfileWrite({
+      existing: { displayName: 'Other', companyId: 'x', provisioningOpId: 'op-b', assignedRoutes: [] },
+      incoming: { displayName: 'Marcial Lebaron', companyId: 'liquid-gold', provisioningOpId: 'op-a', assignedRoutes: ['Dunn County'] },
+    })).toBe('foreign');
+  });
+});
+
+describe('dedicated callable wiring: 31072 keyless refuse is before any conversion write', () => {
+  it('staffConvertApprovedDriverSecureLogin refuses extra fields and does not treat unproven as success', () => {
+    const src = readFileSync(join(__dirname, '../../staffConvertApprovedDriverSecureLogin.ts'), 'utf8');
+    expect(src).toContain('runApprovedRowConversion');
+    expect(src).toContain('clientOutcomeFor');
+    expect(src).toContain('legacy_link_required');
+    expect(src).toContain('driverId_reset_forbidden');
+    expect(src).toContain('legacyHash_forbidden');
+    expect(src).toContain('terminalProven');
+    expect(src).not.toMatch(/console\.(log|info|debug|warn|error).*passcode/i);
+    expect(src).not.toMatch(/legacyHash: data/);
     expect(JSON.stringify(TEST_PASSCODE_RECORD)).not.toMatch(/Wisho|Marcial|liquid-gold/i);
   });
 });

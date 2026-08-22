@@ -85,6 +85,47 @@ export async function adminSetPasscode(params: {
 }
 
 /**
+ * Emergency-branch create-from-approved only. Never a reset (driverId) or
+ * legacyHash mint. Production Hosting 31072 must not call this.
+ */
+export async function staffConvertApprovedDriverSecureLogin(params: {
+  displayName: string;
+  passcode: string;
+  approvedKey?: string;
+  companyId?: string;
+  companyName?: string;
+  legalName?: string;
+  temporary?: boolean;
+  driverId?: string;
+  legacyHash?: string;
+}) {
+  if (params.driverId) {
+    throw new Error('driverId_reset_forbidden');
+  }
+  if (params.legacyHash) {
+    throw new Error('legacyHash_forbidden');
+  }
+  const fn = httpsCallable(
+    getFirebaseFunctions(),
+    'staffConvertApprovedDriverSecureLogin',
+  );
+  const res = await fn({
+    displayName: params.displayName,
+    passcode: params.passcode,
+    approvedKey: params.approvedKey,
+    companyId: params.companyId,
+    companyName: params.companyName,
+    legalName: params.legalName,
+    temporary: params.temporary,
+  });
+  return res.data as {
+    driverId: string;
+    displayName: string;
+    mustChangePasscode?: boolean;
+  };
+}
+
+/**
  * Governed INITIAL company binding for a canonical secure driver. The
  * server validates preconditions, ensures the shift authority under the
  * same canonical UUID, and reports success only when profile and authority
