@@ -17,10 +17,20 @@ const NOW = 1_700_000_000_000;
 
 type FakeSnap = { exists(): boolean; val(): unknown };
 
-function makeFakeRef(initial: Record<string, unknown> | null): AssignmentProfileRef & {
+type FakeRefOpts = {
+  cancelWith?: Error;
+  throwOnAttach?: Error;
+  rejectTransaction?: Error;
+};
+
+function makeFakeRef(
+  initial: Record<string, unknown> | null,
+  opts: FakeRefOpts = {},
+): AssignmentProfileRef & {
   store: { value: Record<string, unknown> | null };
   writes: number;
   listenerCount(): number;
+  hasListener(cb: (...args: unknown[]) => void): boolean;
 } {
   const store = { value: initial ? { ...initial } : null };
   const listeners = new Set<(...args: unknown[]) => void>();
@@ -28,12 +38,18 @@ function makeFakeRef(initial: Record<string, unknown> | null): AssignmentProfile
     store,
     writes: 0,
     listenerCount: () => listeners.size,
+    hasListener: (cb: (...args: unknown[]) => void) => listeners.has(cb),
     on(
       _event: 'value',
       callback: (...args: unknown[]) => void,
-      _cancel?: (err: Error) => void,
+      cancel?: (err: Error) => void,
     ) {
+      if (opts.throwOnAttach) throw opts.throwOnAttach;
       listeners.add(callback);
+      if (opts.cancelWith) {
+        cancel?.(opts.cancelWith);
+        return callback;
+      }
       callback();
       return callback;
     },
@@ -45,6 +61,7 @@ function makeFakeRef(initial: Record<string, unknown> | null): AssignmentProfile
       committed: boolean;
       snapshot: FakeSnap;
     }> {
+      if (opts.rejectTransaction) throw opts.rejectTransaction;
       // Admin SDK: no complete listener cache → false null, abort on undefined.
       const current = listeners.size > 0 ? store.value : null;
       const next = update(current);
@@ -308,5 +325,101 @@ describe('commitCanonicalAssignmentWrite cache and isolation', () => {
     expect(refB.writes).toBe(1);
     expect(refA.store.value?.assignmentRevision).toBe(1);
     expect(refB.store.value?.assignmentRevision).toBe(1);
+  });
+
+  it('prime cancellation fails closed and removes the exact listener', async () => {
+    const live = baseProfile();
+    const ref = makeFakeRef(live, { cancelWith: new Error('listener_cancelled') });
+    const digest = digestFor(DRIVER_A, live, ROUTES, WELLS);
+    await expect(commitCanonicalAssignmentWrite({
+      profileRef: ref,
+      driverId: DRIVER_A,
+      expectedPreviewContextDigest: digest,
+      proposedRoutes: ROUTES,
+      proposedWells: WELLS,
+      isPlatformAdmin: true,
+      callerUid: ACTOR,
+      nowMs: NOW,
+    })).rejects.toThrow('listener_cancelled');
+    expect(ref.listenerCount()).toBe(0);
+    expect(ref.writes).toBe(0);
+    expect(ref.store.value).toEqual(live);
+  });
+
+  it('synchronous on() error fails closed and still removes the exact listener', async () => {
+    const live = baseProfile();
+    const ref = makeFakeRef(live, { throwOnAttach: new Error('on_failed') });
+    const digest = digestFor(DRIVER_A, live, ROUTES, WELLS);
+    await expect(commitCanonicalAssignmentWrite({
+      profileRef: ref,
+      driverId: DRIVER_A,
+      expectedPreviewContextDigest: digest,
+      proposedRoutes: ROUTES,
+      proposedWells: WELLS,
+      isPlatformAdmin: true,
+      callerUid: ACTOR,
+      nowMs: NOW,
+    })).rejects.toThrow('on_failed');
+    expect(ref.listenerCount()).toBe(0);
+    expect(ref.writes).toBe(0);
+    expect(ref.store.value).toEqual(live);
+  });
+
+  it('transaction rejection removes the exact listener and writes nothing', async () => {
+    const live = baseProfile();
+    const ref = makeFakeRef(live, { rejectTransaction: new Error('tx_failed') });
+    const digest = digestFor(DRIVER_A, live, ROUTES, WELLS);
+    await expect(commitCanonicalAssignmentWrite({
+      profileRef: ref,
+      driverId: DRIVER_A,
+      expectedPreviewContextDigest: digest,
+      proposedRoutes: ROUTES,
+      proposedWells: WELLS,
+      isPlatformAdmin: true,
+      callerUid: ACTOR,
+      nowMs: NOW,
+    })).rejects.toThrow('tx_failed');
+    expect(ref.listenerCount()).toBe(0);
+    expect(ref.writes).toBe(0);
+    expect(ref.store.value).toEqual(live);
+  });
+
+  it('success and stale-preview paths remove the listener', async () => {
+    const live = baseProfile();
+    const okRef = makeFakeRef(live);
+    const digest = digestFor(DRIVER_A, live, ROUTES, WELLS);
+    const ok = await commitCanonicalAssignmentWrite({
+      ...applyArgs(okRef),
+      expectedPreviewContextDigest: digest,
+    });
+    expect(ok.ok).toBe(true);
+    expect(okRef.listenerCount()).toBe(0);
+
+    const staleRef = makeFakeRef({ ...live, assignedRoutes: ['Other Route'] });
+    const stale = await commitCanonicalAssignmentWrite({
+      ...applyArgs(staleRef),
+      expectedPreviewContextDigest: digest,
+    });
+    expect(stale).toEqual({ ok: false, reason: 'stale_preview_context' });
+    expect(staleRef.listenerCount()).toBe(0);
+    expect(staleRef.writes).toBe(0);
+  });
+
+  it('one request cannot remove another request’s listener', async () => {
+    const live = baseProfile();
+    const ref = makeFakeRef(live);
+    const sentinel = () => undefined;
+    ref.on('value', sentinel);
+    expect(ref.hasListener(sentinel)).toBe(true);
+    const digest = digestFor(DRIVER_A, live, ROUTES, WELLS);
+    const applied = await commitCanonicalAssignmentWrite({
+      ...applyArgs(ref),
+      expectedPreviewContextDigest: digest,
+    });
+    expect(applied.ok).toBe(true);
+    expect(ref.hasListener(sentinel)).toBe(true);
+    expect(ref.listenerCount()).toBe(1);
+    ref.off('value', sentinel);
+    expect(ref.listenerCount()).toBe(0);
   });
 });

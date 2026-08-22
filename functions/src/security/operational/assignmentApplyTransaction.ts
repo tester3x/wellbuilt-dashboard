@@ -46,11 +46,11 @@ export async function commitCanonicalAssignmentWrite(input: {
   let abortReason = 'stale_preview';
   let resolvePrime: () => void = () => undefined;
   const listener = () => { resolvePrime(); };
-  await new Promise<void>((resolve, reject) => {
-    resolvePrime = resolve;
-    input.profileRef.on('value', listener, (err) => reject(err));
-  });
   try {
+    await new Promise<void>((resolve, reject) => {
+      resolvePrime = resolve;
+      input.profileRef.on('value', listener, (err) => reject(err));
+    });
     const tx = await input.profileRef.transaction((current) => {
       const rec = current && typeof current === 'object' && !Array.isArray(current)
         ? current as Record<string, unknown>

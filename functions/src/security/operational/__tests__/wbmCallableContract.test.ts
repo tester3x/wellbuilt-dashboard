@@ -78,12 +78,14 @@ describe('WB-M callable export / contract matrix', () => {
     expect(helper).toMatch(/profileRef\.on\('value', listener/);
     expect(helper).toMatch(/profileRef\.off\('value', listener\)/);
     expect(helper).not.toMatch(/profileRef\.off\('value'\);/);
+    expect(helper.indexOf('try {')).toBeLessThan(helper.indexOf("profileRef.on('value', listener"));
     expect(helper.indexOf("profileRef.on('value', listener")).toBeLessThan(
       helper.indexOf('profileRef.transaction('),
     );
     expect(helper.indexOf('profileRef.transaction(')).toBeLessThan(
       helper.indexOf("profileRef.off('value', listener)"),
     );
+    expect(helper.indexOf("profileRef.off('value', listener)")).toBeGreaterThan(helper.indexOf('} finally {'));
     expect(helper).toMatch(/evaluateAssignmentTransaction/);
     expect(helper).not.toMatch(/drivers\/approved/);
     expect(helper).not.toMatch(/let lastDigest|cachedProfile|globalThis/);
