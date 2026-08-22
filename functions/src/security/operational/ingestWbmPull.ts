@@ -14,6 +14,7 @@ import { checkRateLimit, hashIp } from '../rateLimit';
 import {
   decideWbmPullTransaction,
   evaluateWbmPull,
+  wbmIncomingPath,
   wbmPullStorageKey,
 } from './wbmPullAuthorize';
 
@@ -55,7 +56,8 @@ export const ingestWbmPull = httpsV2.onCall(
         'unexpected_object', 'missing_wellName', 'invalid_wellName', 'missing_dateTimeUTC',
         'invalid_dateTimeUTC', 'invalid_dateTime', 'invalid_timezone', 'invalid_tankLevelFeet',
         'invalid_bblsTaken', 'invalid_wellDown', 'invalid_wellDownIsAuthoritative',
-        'invalid_predictedLevelInches', 'invalid_packetId', 'missing_idempotency_key',
+        'invalid_predictedLevelInches', 'invalid_packetId', 'missing_packetId',
+        'missing_idempotency_key', 'packet_id_mismatch',
       ]);
       throw new httpsV2.HttpsError(
         arg.has(decided.reason) ? 'invalid-argument' : 'failed-precondition',
@@ -87,8 +89,8 @@ export const ingestWbmPull = httpsV2.onCall(
       payloadDigest: decided.payloadDigest,
     };
 
-    const key = wbmPullStorageKey(driver.driverId, decided.idempotencyKey);
-    const ref = admin.database().ref(`packets/incoming/${key}`);
+    const key = wbmPullStorageKey(decided.idempotencyKey);
+    const ref = admin.database().ref(wbmIncomingPath(decided.idempotencyKey));
     const box: { outcome: 'write' | 'duplicate' | 'abort'; abortReason: string } = {
       outcome: 'write',
       abortReason: 'ingest_conflict',
@@ -126,7 +128,7 @@ export const ingestWbmPull = httpsV2.onCall(
         driverId: driver.driverId,
         detail: { key },
       });
-      return { ok: true, key, duplicate: true };
+      return { ok: true, key, packetId: key, duplicate: true };
     }
 
     await writeSecurityAudit({
@@ -135,6 +137,6 @@ export const ingestWbmPull = httpsV2.onCall(
       driverId: driver.driverId,
       detail: { key, companyId: authority.companyId, wellName: decided.wellName },
     });
-    return { ok: true, key, duplicate: false };
+    return { ok: true, key, packetId: key, duplicate: false };
   },
 );

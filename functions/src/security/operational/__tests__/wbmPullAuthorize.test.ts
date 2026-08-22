@@ -1,6 +1,7 @@
 import {
   decideWbmPullTransaction,
   evaluateWbmPull,
+  wbmIncomingPath,
   wbmPullStorageKey,
 } from '../wbmPullAuthorize';
 
@@ -10,13 +11,16 @@ const wellConfig = {
   'Other Co 1': { route: 'Gabriels', companyId: 'other-co' },
 };
 
+const PID = '20260820_124211_Gabriel1_frr2t3';
+
 const pull = {
   requestType: 'pull',
   wellName: 'Gabriel 1',
   dateTimeUTC: '2026-08-21T12:00:00.000Z',
   tankLevelFeet: 8,
   bblsTaken: 140,
-  idempotencyKey: 'abc12345pull',
+  packetId: PID,
+  idempotencyKey: PID,
 };
 
 describe('evaluateWbmPull', () => {
@@ -40,8 +44,43 @@ describe('evaluateWbmPull', () => {
     expect(ok).toMatchObject({ ok: true, wellName: 'Gabriel 1' });
     if (ok.ok) {
       expect(ok.payload).not.toHaveProperty('isAdmin');
+      expect(ok.payload.packetId).toBe(PID);
+      expect(ok.payload.idempotencyKey).toBe(PID);
+      expect(ok.idempotencyKey).toBe(PID);
       expect(ok.payloadDigest).toHaveLength(64);
+      expect(ok.payload).not.toHaveProperty('assignedRoutes');
     }
+  });
+
+  it('requires packetId present, equal to idempotencyKey, mint-shaped, and Firebase-key safe', () => {
+    const base = {
+      companyId: 'liquid-gold',
+      assignedRoutes: ['Gabriels'] as string[],
+      assignedWells: [] as string[],
+      wellConfig,
+    };
+    expect(evaluateWbmPull({ packet: { ...pull, packetId: undefined }, ...base }))
+      .toEqual({ ok: false, reason: 'missing_packetId' });
+    expect(evaluateWbmPull({ packet: { ...pull, idempotencyKey: undefined }, ...base }))
+      .toEqual({ ok: false, reason: 'missing_idempotency_key' });
+    expect(evaluateWbmPull({ packet: { ...pull, idempotencyKey: 'other-id-xxxxxx' }, ...base }))
+      .toEqual({ ok: false, reason: 'packet_id_mismatch' });
+    expect(evaluateWbmPull({
+      packet: { ...pull, packetId: 'abc.12345_not_a_mint', idempotencyKey: 'abc.12345_not_a_mint' },
+      ...base,
+    })).toEqual({ ok: false, reason: 'invalid_packetId' });
+    expect(evaluateWbmPull({
+      packet: {
+        ...pull,
+        packetId: '20260820_124211_Gabriel1/frr2t3',
+        idempotencyKey: '20260820_124211_Gabriel1/frr2t3',
+      },
+      ...base,
+    })).toEqual({ ok: false, reason: 'invalid_packetId' });
+    expect(evaluateWbmPull({
+      packet: { ...pull, packetId: '20260820_124211_Watford1_frr2t3', idempotencyKey: '20260820_124211_Watford1_frr2t3' },
+      ...base,
+    })).toEqual({ ok: false, reason: 'invalid_packetId' });
   });
 
   it('rejects out-of-scope wells', () => {
@@ -55,8 +94,9 @@ describe('evaluateWbmPull', () => {
   });
 
   it('rejects another company\'s wells', () => {
+    const otherPid = '20260820_124211_OtherCo1_frr2t3';
     expect(evaluateWbmPull({
-      packet: { ...pull, wellName: 'Other Co 1' },
+      packet: { ...pull, wellName: 'Other Co 1', packetId: otherPid, idempotencyKey: otherPid },
       companyId: 'liquid-gold',
       assignedRoutes: ['Gabriels'],
       assignedWells: [],
@@ -89,27 +129,20 @@ describe('evaluateWbmPull', () => {
   });
 });
 
-describe('idempotency key and transaction', () => {
+describe('canonical storage key and transaction', () => {
   const d1 = '2cad521c-13ac-4b6c-b1ab-07843c6bf06f';
-  const d2 = '2cad521c-13ad-4b6c-b1ab-07843c6bf06f';
+  const d2 = '99ff4b35-51ab-4d45-8d54-18b3b8515c9b';
   const digest = 'abc';
 
-  it('two driverIds sharing the first 12 characters get different keys', () => {
-    expect(d1.slice(0, 12)).toBe(d2.slice(0, 12));
-    expect(wbmPullStorageKey(d1, 'abc12345pull')).not.toEqual(wbmPullStorageKey(d2, 'abc12345pull'));
+  it('storage key is the exact minted packetId, never a wbm_ hash', () => {
+    expect(wbmPullStorageKey(PID)).toBe(PID);
+    expect(wbmPullStorageKey(PID)).not.toMatch(/^wbm_/);
+    expect(wbmIncomingPath(PID)).toBe(`packets/incoming/${PID}`);
   });
 
-  it('sanitized-equivalent client keys still hash differently', () => {
-    const a = wbmPullStorageKey(d1, 'abc.12345pull');
-    const b = wbmPullStorageKey(d1, 'abc_12345pull');
-    expect(a).not.toEqual(b);
-  });
-
-  it('long keys are bounded by the digest', () => {
-    const long = 'k'.repeat(500);
-    const key = wbmPullStorageKey(d1, long);
-    expect(key.length).toBeLessThan(200);
-    expect(key.startsWith(`wbm_${d1}_`)).toBe(true);
+  it('does not sanitize a dotted id into a different key', () => {
+    const dotted = '20260820_124211_Gabriel.1_frr2t3';
+    expect(wbmPullStorageKey(dotted)).toBe(dotted);
   });
 
   it('same payload is duplicate; different payload conflicts; other driver rejected', () => {
@@ -130,13 +163,5 @@ describe('idempotency key and transaction', () => {
       driverId: d2,
       payloadDigest: digest,
     })).toEqual({ action: 'abort', reason: 'idempotency_cross_driver' });
-  });
-
-  it('concurrent same-payload decision is duplicate for the second observer', () => {
-    const first = decideWbmPullTransaction({ existing: null, driverId: d1, payloadDigest: digest });
-    const afterWrite = { driverId: d1, payloadDigest: digest };
-    const second = decideWbmPullTransaction({ existing: afterWrite, driverId: d1, payloadDigest: digest });
-    expect(first).toEqual({ action: 'write' });
-    expect(second).toEqual({ action: 'duplicate' });
   });
 });

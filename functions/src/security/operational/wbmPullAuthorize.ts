@@ -58,11 +58,34 @@ export function canonicalPayloadDigest(payload: Record<string, unknown>): string
   return sha256Hex(JSON.stringify(keys.map((k) => [k, payload[k]])));
 }
 
-/** Full driverId + digest of the client key. Not a 12-char prefix. */
-export function wbmPullStorageKey(driverId: string, clientIdempotencyKey: string): string {
-  const id = driverId.replace(/[.#$\[\]/]/g, '_');
-  const digest = sha256Hex(clientIdempotencyKey).slice(0, 40);
-  return `wbm_${id}_${digest}`;
+const FIREBASE_UNSAFE_KEY = /[.#$\[\]/]/;
+/** mintPacketId: YYYYMMDD_HHMMSS_{wellNameWithoutSpaces}_{rand6} */
+const MINT_PACKET_ID = /^(\d{8})_(\d{6})_(.+)_([a-z0-9]{6})$/;
+
+export function isFirebaseKeySafe(id: string): boolean {
+  if (!id || id.length < 8 || id.length > 128) return false;
+  if (FIREBASE_UNSAFE_KEY.test(id)) return false;
+  if (id === '.' || id === '..') return false;
+  return true;
+}
+
+export function matchesMintPacketId(id: string, wellName: string): boolean {
+  const m = MINT_PACKET_ID.exec(id);
+  if (!m) return false;
+  return m[3] === wellName.replace(/\s+/g, '');
+}
+
+/**
+ * The RTDB child key IS the minted WB-M packetId. Never hashed, prefixed,
+ * or sanitized into a different identifier. processIncomingPull binds
+ * context.params.packetId to this child key.
+ */
+export function wbmPullStorageKey(canonicalPacketId: string): string {
+  return canonicalPacketId;
+}
+
+export function wbmIncomingPath(canonicalPacketId: string): string {
+  return `packets/incoming/${wbmPullStorageKey(canonicalPacketId)}`;
 }
 
 export function evaluateWbmPull(input: {
@@ -126,12 +149,19 @@ export function evaluateWbmPull(input: {
       return { ok: false, reason: 'invalid_predictedLevelInches' };
     }
   }
-  if (packet.packetId !== undefined) {
-    const p = boundedString(packet.packetId, 'packetId', 8, 128);
-    if (!p.ok) return p;
+  if (typeof packet.packetId !== 'string' || !packet.packetId) {
+    return { ok: false, reason: 'missing_packetId' };
   }
-  const idem = boundedString(packet.idempotencyKey, 'idempotencyKey', 8, 128);
-  if (!idem.ok) return { ok: false, reason: 'missing_idempotency_key' };
+  if (typeof packet.idempotencyKey !== 'string' || !packet.idempotencyKey) {
+    return { ok: false, reason: 'missing_idempotency_key' };
+  }
+  if (packet.packetId !== packet.idempotencyKey) {
+    return { ok: false, reason: 'packet_id_mismatch' };
+  }
+  const canonicalId = packet.packetId;
+  if (!isFirebaseKeySafe(canonicalId) || !matchesMintPacketId(canonicalId, wellName.value)) {
+    return { ok: false, reason: 'invalid_packetId' };
+  }
 
   const scope = evaluateWbmWellScope(input.assignedRoutes, input.assignedWells);
   if (!scope.ok) return { ok: false, reason: scope.reason };
@@ -154,7 +184,8 @@ export function evaluateWbmPull(input: {
     dateTimeUTC: dateTimeUTC.value,
     tankLevelFeet: packet.tankLevelFeet,
     bblsTaken: packet.bblsTaken,
-    idempotencyKey: idem.value,
+    packetId: canonicalId,
+    idempotencyKey: canonicalId,
   };
   if (typeof packet.dateTime === 'string') payload.dateTime = packet.dateTime.trim();
   if (typeof packet.timezone === 'string') payload.timezone = packet.timezone.trim();
@@ -165,12 +196,11 @@ export function evaluateWbmPull(input: {
   if (typeof packet.predictedLevelInches === 'number') {
     payload.predictedLevelInches = packet.predictedLevelInches;
   }
-  if (typeof packet.packetId === 'string') payload.packetId = packet.packetId.trim();
 
   return {
     ok: true,
     wellName: wellName.value,
-    idempotencyKey: idem.value,
+    idempotencyKey: canonicalId,
     payload,
     payloadDigest: canonicalPayloadDigest(payload),
   };
