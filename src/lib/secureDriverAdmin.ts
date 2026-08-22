@@ -88,33 +88,30 @@ export async function adminSetPasscode(params: {
  * Emergency-branch create-from-approved only. Never a reset (driverId) or
  * legacyHash mint. Production Hosting 31072 must not call this.
  */
-export async function staffConvertApprovedDriverSecureLogin(params: {
+export async function staffConvertApprovedDriverSecureLogin(_params: {
   displayName: string;
   passcode: string;
   approvedKey?: string;
   temporary?: boolean;
+}): Promise<never> {
+  throw new Error('superseded_by_customer_owned_upgrade');
+}
+
+export async function staffHydrateCanonicalIdentity(params: {
+  driverId: string;
+  approvedKey: string;
+  mode: 'dry-run' | 'apply';
+  expectedPreviewDigest?: string;
 }) {
-  const allowed = new Set(['displayName', 'passcode', 'approvedKey', 'temporary']);
-  for (const key of Object.keys(params)) {
-    if (!allowed.has(key)) {
-      throw new Error(`Unexpected field: ${key}`);
-    }
-  }
-  const fn = httpsCallable(
-    getFirebaseFunctions(),
-    'staffConvertApprovedDriverSecureLogin',
-  );
-  const res = await fn({
-    displayName: params.displayName,
-    passcode: params.passcode,
-    approvedKey: params.approvedKey,
-    temporary: params.temporary,
-  });
-  return res.data as {
-    driverId: string;
-    displayName: string;
-    mustChangePasscode?: boolean;
-  };
+  const fn = httpsCallable(getFirebaseFunctions(), 'staffHydrateCanonicalIdentity');
+  const res = await fn(params);
+  return res.data;
+}
+
+export async function staffRetireLegacyDriverLogin(params: { driverId: string }) {
+  const fn = httpsCallable(getFirebaseFunctions(), 'staffRetireLegacyDriverLogin');
+  const res = await fn(params);
+  return res.data;
 }
 
 /**

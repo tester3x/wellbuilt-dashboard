@@ -11,14 +11,10 @@ import { mergeEmployees, EmployeeRow } from '@/lib/employees';
 import { EmployeePanel } from './EmployeePanel';
 import { useAuth } from '@/contexts/AuthContext';
 import {
-  buildConvertApprovedDriverRequest,
-  canSubmit,
   companyActionRouteFor,
   confirmationCopyFor,
   credentialActionFor,
   hasCanonicalDriverId,
-  localPolicyError,
-  PASSCODE_GUIDANCE,
 } from '@/lib/secureLoginProvisioning';
 import { getRoleLabel } from '@/lib/auth';
 import {
@@ -131,71 +127,11 @@ export function DriversTab({ scopeCompanyId, isWbAdmin = false }: DriversTabProp
   // against, so this tranche only CREATES a new secure identity. Reset is
   // deliberately not offered here.
   const [secureTarget, setSecureTarget] = useState<ApprovedDriver | null>(null);
-  const [securePass, setSecurePass] = useState('');
-  const [secureConfirm, setSecureConfirm] = useState('');
-  const [secureBusy, setSecureBusy] = useState(false);
-  const [secureError, setSecureError] = useState('');
-  const [secureDone, setSecureDone] = useState('');
-  // Rows provisioned during THIS session. The create path deliberately stamps
-  // nothing on the legacy row (no credential-derived linkage), so until a
-  // reload surfaces server-side state this set is the only signal that a row
-  // is already secured — it keeps the create action from being re-offered.
   const [securedKeys, setSecuredKeys] = useState<Set<string>>(new Set());
 
-  /** Drop every secret the modal holds. Used on cancel, success, and unmount. */
-  const clearSecureSecrets = useCallback(() => {
-    setSecurePass('');
-    setSecureConfirm('');
-    setSecureError('');
-  }, []);
-
   const closeSecureModal = useCallback(() => {
-    clearSecureSecrets();
-    setSecureDone('');
-    setSecureBusy(false);
     setSecureTarget(null);
-  }, [clearSecureSecrets]);
-
-  // Switching rows or unmounting must not leave a typed password in state.
-  useEffect(() => {
-    clearSecureSecrets();
-    setSecureDone('');
-    return clearSecureSecrets;
-  }, [secureTarget, clearSecureSecrets]);
-
-  const handleCreateSecureLogin = useCallback(async () => {
-    if (!secureTarget || secureBusy) return; // double-submit guard
-    if (!canSubmit({ passcode: securePass, confirm: secureConfirm, submitting: secureBusy })) {
-      return;
-    }
-    setSecureBusy(true);
-    setSecureError('');
-    try {
-      const { staffConvertApprovedDriverSecureLogin } = await import('@/lib/secureDriverAdmin');
-      // Four-field emergency request only. Server copies profile metadata
-      // from the exact approved row. Not adminSetDriverPasscode.
-      const req = buildConvertApprovedDriverRequest(secureTarget, securePass);
-      // The response carries the new canonical UUID; it is deliberately NOT
-      // rendered — success copy stays masked (display name only).
-      await staffConvertApprovedDriverSecureLogin(req);
-      clearSecureSecrets();
-      setSecuredKeys(prev => new Set(prev).add(secureTarget.key));
-      setSecureDone(`Secure login created for ${secureTarget.displayName}.`);
-    } catch (err) {
-      // Sanitized: render only our own copy, never the raw error, so a
-      // server message can never echo submitted input back into the DOM.
-      const code = (err as { code?: string })?.code || '';
-      setSecureError(
-        /already-exists/.test(code)
-          ? 'That login name is already assigned to another secure driver.'
-          : /permission-denied|unauthenticated/.test(code)
-            ? 'You are not authorized to create secure logins.'
-            : 'Could not create the secure login. Please try again.',
-      );
-    } finally {
-      setSecureBusy(false);
-    }
-  }, [secureTarget, secureBusy, securePass, secureConfirm, clearSecureSecrets]);
+  }, []);
 
   // ── One secure-credential state for BOTH employee views ────────────────
   // The primary EmployeePanel and the legacy list must not drift: each asks
@@ -1353,7 +1289,7 @@ export function DriversTab({ scopeCompanyId, isWbAdmin = false }: DriversTabProp
                 <button
                   onClick={() => { setSecureTarget(driver); }}
                   className="px-3 py-1 text-sm rounded bg-emerald-700 hover:bg-emerald-600 text-white"
-                  title="Create a new secure login. Existing history stays under the old identity."
+                  title="Customer sets the new password on their own device. Administrators do not enter customer passwords."
                 >
                   Create secure login
                 </button>
@@ -1890,75 +1826,18 @@ export function DriversTab({ scopeCompanyId, isWbAdmin = false }: DriversTabProp
               ))}
             </ul>
 
-            {secureDone ? (
-              <>
-                <p className="text-emerald-400 text-sm break-words">{secureDone}</p>
-                <div className="flex justify-end mt-5">
-                  <button
-                    onClick={closeSecureModal}
-                    className="px-4 py-2 text-sm rounded bg-gray-600 hover:bg-gray-500 text-white"
-                  >
-                    Done
-                  </button>
-                </div>
-              </>
-            ) : (
-              <>
-                <label className="block text-xs text-gray-400 mb-1" htmlFor="secure-pass">
-                  New password
-                </label>
-                <input
-                  id="secure-pass"
-                  type="password"
-                  autoComplete="new-password"
-                  value={securePass}
-                  onChange={(e) => { setSecurePass(e.target.value); setSecureError(''); }}
-                  disabled={secureBusy}
-                  className="w-full mb-3 px-3 py-2 rounded bg-gray-900 text-white text-sm border border-gray-700 focus:border-emerald-500 outline-none"
-                />
-
-                <label className="block text-xs text-gray-400 mb-1" htmlFor="secure-confirm">
-                  Confirm password
-                </label>
-                <input
-                  id="secure-confirm"
-                  type="password"
-                  autoComplete="new-password"
-                  value={secureConfirm}
-                  onChange={(e) => { setSecureConfirm(e.target.value); setSecureError(''); }}
-                  disabled={secureBusy}
-                  className="w-full mb-2 px-3 py-2 rounded bg-gray-900 text-white text-sm border border-gray-700 focus:border-emerald-500 outline-none"
-                />
-
-                <p className="text-[11px] text-gray-500 mb-1">{PASSCODE_GUIDANCE}</p>
-                {securePass && localPolicyError(securePass) && (
-                  <p className="text-[11px] text-amber-400 mb-1">{localPolicyError(securePass)}</p>
-                )}
-                {securePass && secureConfirm && securePass !== secureConfirm && (
-                  <p className="text-[11px] text-amber-400 mb-1">Passwords do not match.</p>
-                )}
-                {secureError && (
-                  <p className="text-[11px] text-red-400 mb-1 break-words">{secureError}</p>
-                )}
-
-                <div className="flex flex-wrap justify-end gap-2 mt-5">
-                  <button
-                    onClick={closeSecureModal}
-                    disabled={secureBusy}
-                    className="px-4 py-2 text-sm rounded bg-gray-600 hover:bg-gray-500 text-white disabled:opacity-50"
-                  >
-                    Cancel
-                  </button>
-                  <button
-                    onClick={() => { void handleCreateSecureLogin(); }}
-                    disabled={!canSubmit({ passcode: securePass, confirm: secureConfirm, submitting: secureBusy })}
-                    className="px-4 py-2 text-sm rounded bg-emerald-700 hover:bg-emerald-600 text-white disabled:opacity-50"
-                  >
-                    {secureBusy ? 'Creating…' : 'Create secure login'}
-                  </button>
-                </div>
-              </>
-            )}
+            <p className="text-amber-300 text-sm mb-4">
+              Do not enter a customer password here. The customer upgrades from
+              their own device after proving the existing login.
+            </p>
+            <div className="flex justify-end mt-5">
+              <button
+                onClick={closeSecureModal}
+                className="px-4 py-2 text-sm rounded bg-gray-600 hover:bg-gray-500 text-white"
+              >
+                Close
+              </button>
+            </div>
           </div>
         </div>
       )}

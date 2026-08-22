@@ -15,17 +15,23 @@ describe('WB-M callable export / contract matrix', () => {
   const wellCfg = read('src/security/operational/getDriverWellConfig.ts');
   const driversTab = readFileSync(join(dashboardRoot, 'src/components/admin/DriversTab.tsx'), 'utf8');
 
-  it('exports getDriverWellConfig, ingestDriverPacket, staffWriteDriverAssignment, and staffConvertApprovedDriverSecureLogin', () => {
+  it('exports getDriverWellConfig, ingestDriverPacket, staffWriteDriverAssignment, and customer-safe identity callables', () => {
     expect(index).toMatch(/getDriverWellConfig,/);
     expect(index).toMatch(/bootstrapWbmSession,/);
     expect(index).toMatch(/ingestDriverPacket,/);
     expect(index).toMatch(/ingestWbmPull,/);
     expect(index).toMatch(/staffWriteDriverAssignment,/);
     expect(index).toMatch(/staffConvertApprovedDriverSecureLogin,/);
+    expect(index).toMatch(/upgradeOwnLegacyDriverLogin,/);
+    expect(index).toMatch(/staffHydrateCanonicalIdentity,/);
+    expect(index).toMatch(/staffRetireLegacyDriverLogin,/);
+    expect(index).toMatch(/getOwnDriverHydration,/);
     expect(securityIndex).toMatch(/getDriverWellConfig/);
     expect(securityIndex).toMatch(/ingestDriverPacket/);
     expect(securityIndex).toMatch(/staffWriteDriverAssignment/);
     expect(securityIndex).toMatch(/staffConvertApprovedDriverSecureLogin/);
+    expect(securityIndex).toMatch(/upgradeOwnLegacyDriverLogin/);
+    expect(securityIndex).toMatch(/getOwnDriverHydration/);
   });
 
   it('does not export nonexistent production callables', () => {
@@ -62,6 +68,7 @@ describe('WB-M callable export / contract matrix', () => {
     expect(body).toMatch(/staffWriteDriverAssignment/);
     expect(body).toMatch(/dry-run/);
     expect(body).toMatch(/expectedPreviewContextDigest/);
+    expect(driversTab).not.toMatch(/staffConvertApprovedDriverSecureLogin/);
     expect(driversTab).toMatch(/shouldInstallPreview/);
     expect(driversTab).toMatch(/applyEnabled\(/);
     expect(body).not.toMatch(/mirrorLegacy/);
@@ -96,5 +103,24 @@ describe('WB-M callable export / contract matrix', () => {
     expect(dispatch).toMatch(/evaluateStaffWriteDispatch/);
     expect(dispatch).not.toMatch(/assignedRoutes/);
     expect(dispatch).not.toMatch(/getDriverWellConfig/);
+  });
+
+  it('customer-safe hydration never treats UUID as drivers/approved and never accepts client aliases', () => {
+    const hydration = read('src/security/getOwnDriverHydration.ts');
+    const upgrade = read('src/security/upgradeOwnLegacyDriverLogin.ts');
+    const retire = read('src/security/staffRetireLegacyDriverLogin.ts');
+    const convert = read('src/security/staffConvertApprovedDriverSecureLogin.ts');
+    expect(hydration).toMatch(/drivers\/profiles\/\$\{driver\.driverId\}/);
+    expect(hydration).toMatch(/alias_spoof/);
+    expect(hydration).toMatch(/allowLegacyHash: false/);
+    expect(hydration).not.toMatch(/drivers\/approved\/\$\{driver/);
+    expect(upgrade).toMatch(/legacySha256NamePasscode/);
+    expect(upgrade).not.toMatch(/raw\.approvedKey/);
+    expect(upgrade).toMatch(/currentPasscode/);
+    expect(upgrade).toMatch(/newPasscode/);
+    expect(retire).toMatch(/decideRetireLegacyLogin/);
+    expect(retire).not.toMatch(/raw\.approvedKey/);
+    expect(convert).toMatch(/superseded_by_customer_owned_upgrade/);
+    expect(convert).not.toMatch(/runApprovedRowConversion/);
   });
 });

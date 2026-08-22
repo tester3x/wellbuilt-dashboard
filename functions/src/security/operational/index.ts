@@ -14,6 +14,7 @@ export { getDriverReferenceBundle } from './referenceData';
 export { getDriverWellConfig } from './getDriverWellConfig';
 export { bootstrapWbmSession } from './bootstrapWbmSession';
 export { evaluateWbmWellScope, projectWbmWells } from './wbmWellScope';
+export { decideTrustedHistoryKeys } from './trustedHistoryAlias';
 export { requestStorageUploadPath } from './storageTokens';
 export {
   upsertDriverInvoice,

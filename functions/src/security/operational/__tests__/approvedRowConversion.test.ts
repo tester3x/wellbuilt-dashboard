@@ -438,23 +438,16 @@ describe('client success is only proven terminal state', () => {
   });
 });
 
-describe('dedicated callable wiring: 31072 keyless refuse is before any conversion write', () => {
-  it('staffConvertApprovedDriverSecureLogin is platform-admin only and never audits the approved key', () => {
+describe('dedicated callable wiring: staffConvert is superseded', () => {
+  it('staffConvertApprovedDriverSecureLogin refuses without hashing, converting, or logging passcodes', () => {
     const src = readFileSync(join(__dirname, '../../staffConvertApprovedDriverSecureLogin.ts'), 'utf8');
     expect(src).toContain('requirePlatformAdmin');
-    expect(src).not.toContain('requireManageDrivers(');
-    expect(src).toContain('runApprovedRowConversion');
-    expect(src).toContain('clientOutcomeFor');
-    expect(src).toContain('legacy_link_required');
-    expect(src).toContain('driverId_reset_forbidden');
-    expect(src).toContain('legacyHash_forbidden');
-    expect(src).toContain('terminalProven');
+    expect(src).toContain('superseded_by_customer_owned_upgrade');
+    expect(src).not.toContain('runApprovedRowConversion');
+    expect(src).not.toContain('hashPasscodeScrypt');
+    expect(src).not.toContain('passcodeRecord');
     expect(src).not.toMatch(/approvedKeyPrefix/);
-    expect(src).not.toMatch(/approvedKey\.slice/);
     expect(src).not.toMatch(/console\.(log|info|debug|warn|error).*passcode/i);
-    expect(src).not.toMatch(/legacyHash: data/);
-    expect(src).not.toMatch(/legalName: fields/);
-    expect(src).not.toMatch(/companyId: typeof raw/);
     expect(JSON.stringify(TEST_PASSCODE_RECORD)).not.toMatch(/Wisho|Marcial|liquid-gold/i);
   });
 });

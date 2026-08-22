@@ -188,9 +188,10 @@ export function companyActionRouteFor(
 export function confirmationCopyFor(action: CredentialAction): string[] {
   if (action === 'create_secure_login') {
     return [
-      'A new secure driver identity will be created.',
-      'Existing history stays under the old identity and will not appear under this new login.',
-      'Nothing is deleted by this operation.',
+      'The customer proves their existing login and sets the new password on their own device.',
+      'Administrators never type, see, receive, or log the new password.',
+      'Historical tickets and pulls stay in place and become visible under the new login through a server-controlled binding.',
+      'The old login stays available until a separate audited retirement.',
     ];
   }
   return ['The existing secure identity is kept. Only the passcode is replaced.'];

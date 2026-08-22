@@ -4761,6 +4761,10 @@ export {
   staffWriteDispatch,
   staffWriteDriverAssignment,
   staffConvertApprovedDriverSecureLogin,
+  upgradeOwnLegacyDriverLogin,
+  staffHydrateCanonicalIdentity,
+  staffRetireLegacyDriverLogin,
+  getOwnDriverHydration,
   // Operational path hardening
   ingestDriverPacket,
   ingestWbmPull,

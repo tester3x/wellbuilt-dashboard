@@ -28,6 +28,10 @@ export { dismissDispatch } from './dismissDispatchCallable';
 export { staffWriteDispatch } from './staffWriteDispatchCallable';
 export { staffWriteDriverAssignment } from './staffWriteDriverAssignmentCallable';
 export { staffConvertApprovedDriverSecureLogin } from './staffConvertApprovedDriverSecureLogin';
+export { upgradeOwnLegacyDriverLogin } from './upgradeOwnLegacyDriverLogin';
+export { staffHydrateCanonicalIdentity } from './staffHydrateCanonicalIdentity';
+export { staffRetireLegacyDriverLogin } from './staffRetireLegacyDriverLogin';
+export { getOwnDriverHydration } from './getOwnDriverHydration';
 
 export {
   ingestDriverPacket,
