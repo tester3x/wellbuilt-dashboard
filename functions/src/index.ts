@@ -4773,6 +4773,7 @@ export {
   adminBindDriverCompany,
   adminGetDashboardCatalog,
   adminGetWellPool,
+  adminSubmitPullEdit,
   adminGetWellHistory,
   adminGetWellPerformance,
   dismissDispatch,

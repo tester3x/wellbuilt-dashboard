@@ -926,32 +926,21 @@ export async function editPull(
   newDateTimeUTC?: string,
   wellDown?: boolean
 ): Promise<void> {
-  const db = getFirebaseDatabase();
-  const timestamp = Date.now();
-  const cleanWellName = wellName.replace(/\s/g, '');
-  const editPacketId = `edit_${timestamp}_${cleanWellName}`;
-
-  const editPacket: Record<string, any> = {
-    requestType: 'edit',
-    originalPacketId: originalPacketId,
-    wellName: wellName,
+  // Production rules refuse a browser write to packets/incoming. Route the edit
+  // through the authenticated adminSubmitPullEdit callable, which validates the
+  // caller (manageDrivers), company-scopes the well, and writes the same edit
+  // packet server-side. The rules stay closed.
+  const { httpsCallable } = await import('firebase/functions');
+  const { getFirebaseFunctions } = await import('./firebase');
+  const fn = httpsCallable(getFirebaseFunctions(), 'adminSubmitPullEdit');
+  await fn({
+    originalPacketId,
+    wellName,
     tankTopInches: newLevelInches,
     bblsTaken: newBbls,
-    timestamp: new Date().toISOString(),
-    source: 'dashboard',
     wellDown: wellDown || false,
-    // 5/8/2026 — explicit authority signal: a dashboard edit IS an
-    // authoritative statement about wellDown. CF respects this.
-    wellDownIsAuthoritative: true,
-  };
-
-  if (newDateTimeUTC) {
-    editPacket.dateTimeUTC = newDateTimeUTC;
-    editPacket.dateTime = new Date(newDateTimeUTC).toLocaleString();
-  }
-
-  const editRef = ref(db, `packets/incoming/${editPacketId}`);
-  await set(editRef, editPacket);
+    newDateTimeUTC: newDateTimeUTC || undefined,
+  });
 }
 
 /** Immutable correction trail for a processed packet (packets/editHistory/{id}). */

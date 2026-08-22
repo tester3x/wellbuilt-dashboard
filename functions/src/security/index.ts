@@ -58,3 +58,5 @@ export {
 
 /** Authenticated cold-start secure session verification (side-effect free). */
 export { verifyDriverSession } from './verifyDriverSession';
+
+export { adminSubmitPullEdit } from './dashboardPullEdit';
