@@ -37,7 +37,6 @@ import {
   type IdentityBinding,
 } from './identityBinding';
 import {
-  applyHydrationCopy,
   previewCanonicalHydration,
   profileContainsForbiddenLegacyKey,
   type HydrationPreview,
@@ -269,31 +268,37 @@ export async function runCustomerOwnedUpgrade(
     return refuse('approved_key_already_bound', writes);
   }
 
+  const boundUuid = existingByApproved && existingByApproved.approvedKey === approvedKey
+    ? existingByApproved.driverId
+    : null;
+  const requestedDriverId = input.existingDriverId || boundUuid || null;
+
   const indexOwner = await store.readNameIndex(nameNorm);
   const indexOwnerActive = indexOwner ? await store.readCredentialActive(indexOwner) : false;
-  const establishedId = indexOwner && indexOwnerActive ? indexOwner : null;
-  if (
-    input.existingDriverId
-    && establishedId
-    && establishedId !== input.existingDriverId
-  ) {
+  if (indexOwner && indexOwnerActive && requestedDriverId && indexOwner !== requestedDriverId) {
     return refuse('name_taken', writes);
   }
 
-  const skipCredentialWrite = input.skipCredentialWrite === true || !!establishedId;
+  const skipCredentialWrite = input.skipCredentialWrite === true;
 
   const resolved = await resolveProvisioningUuid(
     store.journal,
     { kind: 'legacy', legacyHash: approvedKey },
     {
-      requestedDriverId: input.existingDriverId || establishedId,
+      requestedDriverId,
       nameNorm,
       companyId,
+      indexOwnerDriverId: indexOwner,
+      indexOwnerActive,
       isReset: skipCredentialWrite,
     },
   );
   if (resolved.decision.action === 'refuse' || !resolved.driverId) {
-    return refuse('provisioning_refused', writes);
+    const reason = resolved.decision.action === 'refuse'
+      && resolved.decision.reason === 'unrelated_name_owner'
+      ? 'name_taken'
+      : 'provisioning_refused';
+    return refuse(reason, writes);
   }
   const driverId = resolved.driverId;
 
@@ -321,12 +326,6 @@ export async function runCustomerOwnedUpgrade(
       terminalProven: false,
     };
   }
-  const nextProfile = applyHydrationCopy(existingProfile, preview);
-  nextProfile.provisioningOpId = existingProfile?.provisioningOpId || input.opId;
-  if (typeof input.displayName === 'string' && !nextProfile.displayName) {
-    nextProfile.displayName = input.displayName;
-  }
-
   const inspectLive = async (honor: boolean): Promise<UpgradeInspect | null> => {
     if (honor && input.failAfter === 'inspect') return null;
     try {
@@ -414,17 +413,15 @@ export async function runCustomerOwnedUpgrade(
     }
     if (input.failAfter === 'identity') throw new Error('injected: after identity');
 
-    const wr = input.expectedPreviewDigest
-      ? await store.commitProfileHydration({
-          driverId,
-          approvedKey,
-          expectedDigest: input.expectedPreviewDigest,
-          legacyRow: row,
-          copy: preview.copy,
-          preview,
-          opId: input.opId,
-        })
-      : await store.writeProfile(driverId, nextProfile);
+    const wr = await store.commitProfileHydration({
+      driverId,
+      approvedKey,
+      expectedDigest: input.expectedPreviewDigest || preview.digest,
+      legacyRow: row,
+      copy: preview.copy,
+      preview,
+      opId: input.opId,
+    });
     if (wr === 'stale_preview') {
       return {
         status: 'refused',
@@ -701,6 +698,13 @@ export function createMemoryUpgradeStore(): UpgradeStore & {
       if (!claim.allow) throw new Error(`index_claim:${claim.reason}`);
       const existingCred = credentials.get(input.driverId);
       if (existingCred && typeof existingCred.opId === 'string' && existingCred.opId !== input.opId) {
+        if (
+          existingCred.active !== false
+          && isServerScryptRecord(existingCred.passcode)
+          && existingCred.displayNameNorm === input.nameNorm
+        ) {
+          return;
+        }
         throw new Error('credential_foreign');
       }
       index.set(input.nameNorm, { driverId: input.driverId });

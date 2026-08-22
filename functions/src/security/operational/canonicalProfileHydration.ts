@@ -240,6 +240,12 @@ export function applyHydrationCopy(
   if (typeof base.displayName === 'string') nextNested.displayName = base.displayName;
   if (typeof base.legalName === 'string') nextNested.legalName = base.legalName;
 
+  for (const field of AUTHORIZATION_ARRAY_FIELDS) {
+    if (!fieldIsPresent(base, field) && fieldIsPresent(nextNested, field)) {
+      base[field] = nextNested[field];
+    }
+  }
+
   base.profile = nextNested;
   base.mustUseSecureAuth = true;
   if (base.schemaVersion == null) base.schemaVersion = 1;
@@ -254,6 +260,17 @@ export function profileContainsForbiddenLegacyKey(
     || Object.prototype.hasOwnProperty.call(profile, 'legacyHash')
     || Object.prototype.hasOwnProperty.call(profile, 'legacyApprovedKey')
   );
+}
+
+function pickAuthArray(
+  top: Record<string, unknown>,
+  nested: Record<string, unknown>,
+  key: string,
+  fallback: unknown,
+): unknown {
+  if (Array.isArray(top[key])) return top[key];
+  if (Array.isArray(nested[key])) return nested[key];
+  return fallback;
 }
 
 export function projectDriverHydration(input: {
@@ -272,9 +289,9 @@ export function projectDriverHydration(input: {
     name: str(p.name),
     companyId: str(p.companyId) || str(nested.companyId),
     companyName: str(p.companyName) || str(nested.companyName),
-    assignedCustomers: Array.isArray(p.assignedCustomers) ? p.assignedCustomers : [],
-    assignedRoutes: Array.isArray(p.assignedRoutes) ? p.assignedRoutes : null,
-    assignedWells: Array.isArray(p.assignedWells) ? p.assignedWells : null,
+    assignedCustomers: pickAuthArray(p, nested, 'assignedCustomers', []),
+    assignedRoutes: pickAuthArray(p, nested, 'assignedRoutes', null),
+    assignedWells: pickAuthArray(p, nested, 'assignedWells', null),
     truckNumber: str(p.truckNumber) || str(nested.truckNumber),
     trailerNumber: str(p.trailerNumber) || str(nested.trailerNumber),
     signature: str(p.signature) || str(nested.signature),
@@ -283,7 +300,7 @@ export function projectDriverHydration(input: {
     cdl: str(p.cdl) || str(nested.cdl),
     isAdmin: p.isAdmin === true,
     isViewer: p.isViewer === true,
-    roles: Array.isArray(p.roles) ? p.roles : ['driver'],
+    roles: pickAuthArray(p, nested, 'roles', ['driver']),
     logoutAt: p.logoutAt ?? nested.logoutAt ?? null,
     trustedHistoryDriverIds: [...input.trustedHistoryDriverIds],
   };

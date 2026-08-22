@@ -108,10 +108,26 @@ export function decideBindIdentity(input: {
   }
 
   if (byDriver && !byApproved) {
-    return { action: 'repair', payload: { ...byDriver } };
+    return {
+      action: 'repair',
+      payload: {
+        driverId: byDriver.driverId,
+        approvedKey: byDriver.approvedKey,
+        status: intended.status,
+        opId: byDriver.opId,
+      },
+    };
   }
   if (byApproved && !byDriver) {
-    return { action: 'repair', payload: { ...byApproved } };
+    return {
+      action: 'repair',
+      payload: {
+        driverId: byApproved.driverId,
+        approvedKey: byApproved.approvedKey,
+        status: intended.status,
+        opId: byApproved.opId,
+      },
+    };
   }
 
   return { action: 'write', payload: intended };

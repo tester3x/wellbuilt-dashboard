@@ -19,6 +19,7 @@ import { checkRateLimit, hashIp } from './rateLimit';
 import { writeSecurityAudit } from './audit';
 import { runCustomerOwnedUpgrade } from './operational/customerOwnedUpgrade';
 import { productionUpgradeStore } from './operational/customerOwnedUpgradeStore';
+import { BINDING_BY_APPROVED, parseBinding } from './operational/identityBinding';
 
 const GENERIC_AUTH = 'Invalid name or passcode';
 const GENERIC_FAIL = 'Could not complete upgrade';
@@ -87,7 +88,14 @@ export const upgradeOwnLegacyDriverLogin = httpsV2.onCall(
       throw new httpsV2.HttpsError('permission-denied', GENERIC_AUTH);
     }
     const row = rowSnap.val() as Record<string, unknown>;
-    if (row.active !== true || row.legacyLoginRetired === true) {
+    const byApproved = parseBinding(
+      (await admin.database().ref(BINDING_BY_APPROVED(provenApprovedKey)).once('value')).val(),
+    );
+    if (
+      row.active !== true
+      || row.legacyLoginRetired === true
+      || byApproved?.status === 'legacy_login_retired'
+    ) {
       throw new httpsV2.HttpsError('permission-denied', GENERIC_AUTH);
     }
 

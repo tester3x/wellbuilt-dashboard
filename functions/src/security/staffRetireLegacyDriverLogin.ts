@@ -15,6 +15,7 @@ import {
   BINDING_ROOT,
   DRIVER_UUID_RE,
   IDENTITY_PROOF,
+  decideBindingTerminalProof,
   decideRetireLegacyLogin,
   parseBinding,
   parseIdentityProof,
@@ -104,8 +105,27 @@ export const staffRetireLegacyDriverLogin = httpsV2.onCall(
       opId: binding.opId,
     });
     if (!bindWrite.ok && bindWrite.reason !== 'already_exact') {
-      // One-sided retired state: retry is repair, not a delete.
       throw new httpsV2.HttpsError('failed-precondition', bindWrite.reason);
+    }
+
+    const liveByDriver = parseBinding(
+      (await rtdb.ref(BINDING_BY_DRIVER(binding.driverId)).once('value')).val(),
+    );
+    const liveByApproved = parseBinding(
+      (await rtdb.ref(BINDING_BY_APPROVED(binding.approvedKey)).once('value')).val(),
+    );
+    const terminal = decideBindingTerminalProof({
+      driverId: binding.driverId,
+      approvedKey: binding.approvedKey,
+      byDriver: liveByDriver,
+      byApproved: liveByApproved,
+    });
+    if (
+      !terminal.ok
+      || terminal.binding.status !== 'legacy_login_retired'
+      || terminal.binding.opId !== binding.opId
+    ) {
+      throw new httpsV2.HttpsError('failed-precondition', 'binding_incomplete');
     }
 
     await rtdb.ref(`drivers/approved/${binding.approvedKey}`).update({

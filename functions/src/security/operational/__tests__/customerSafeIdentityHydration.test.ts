@@ -568,5 +568,159 @@ describe('source contracts', () => {
     expect(tab).not.toMatch(/set\(ref\(db, `drivers\/approved\/\$\{driver\.key\}`\)/);
     expect(tab).toMatch(/Legacy row rewrite is disabled/);
   });
+
+  it('customer upgrade commits hydration through the transaction, not writeProfile/set', () => {
+    const src = readFileSync(join(__dirname, '../customerOwnedUpgrade.ts'), 'utf8');
+    const run = src.slice(src.indexOf('export async function runCustomerOwnedUpgrade'));
+    expect(run).toMatch(/commitProfileHydration/);
+    expect(run).not.toMatch(/await store\.writeProfile\(/);
+    expect(run).toMatch(/expectedPreviewDigest \|\| preview\.digest/);
+  });
+
+  it('upgradeOwnLegacyDriverLogin refuses retired login from either flag or binding', () => {
+    const src = readFileSync(join(__dirname, '../../upgradeOwnLegacyDriverLogin.ts'), 'utf8');
+    expect(src).toMatch(/legacyLoginRetired === true/);
+    expect(src).toMatch(/BINDING_BY_APPROVED/);
+    expect(src).toMatch(/status === 'legacy_login_retired'/);
+  });
 });
+
+describe('customer upgrade never adopts a name-index incumbent', () => {
+  it('two unrelated people sharing a normalized name: legacy proof does not touch the incumbent', async () => {
+    const store = createMemoryUpgradeStore();
+    const incumbentId = 'bbbbbbbb-cccc-4ddd-8eee-000000000099';
+    store.index.set('fixturedriveralpha', { driverId: incumbentId });
+    store.credentials.set(incumbentId, {
+      displayNameNorm: 'fixturedriveralpha',
+      displayName: ALPHA_NAME,
+      passcode: TEST_PASSCODE_RECORD,
+      active: true,
+      opId: 'op-incumbent',
+      setBy: 'other',
+    });
+    store.profiles.set(incumbentId, { displayName: ALPHA_NAME, companyId: 'other-co' });
+    store.approved.set(ALPHA_KEY, alphaRow());
+
+    const r = await runCustomerOwnedUpgrade(store, baseInput({ opId: 'op-legacy' }));
+    expect(r.status).toBe('refused');
+    expect(r.reason).toBe('name_taken');
+    expect(r.driverId).toBeNull();
+    expect(store.credentials.get(incumbentId)?.opId).toBe('op-incumbent');
+    expect(store.profiles.get(incumbentId)).toEqual({ displayName: ALPHA_NAME, companyId: 'other-co' });
+    expect(store.index.get('fixturedriveralpha')?.driverId).toBe(incumbentId);
+    expect(store.bindingsByDriver.size).toBe(0);
+    expect(store.bindingsByApproved.size).toBe(0);
+    expect(store.profiles.size).toBe(1);
+  });
+});
+
+describe('customer hydration compare-and-commit race', () => {
+  it('assignment change between read and transaction is stale_preview with no overwrite', async () => {
+    const store = createMemoryUpgradeStore();
+    store.approved.set(ALPHA_KEY, alphaRow());
+    const orig = store.commitProfileHydration.bind(store);
+    store.commitProfileHydration = async (input) => {
+      const current = store.profiles.get(input.driverId);
+      if (current) {
+        store.profiles.set(input.driverId, {
+          ...current,
+          assignedRoutes: ['Hijacked'],
+          assignmentRevision: 99,
+        });
+      } else {
+        store.profiles.set(input.driverId, {
+          displayName: ALPHA_NAME,
+          assignedRoutes: ['Hijacked'],
+          assignmentRevision: 99,
+        });
+      }
+      return orig(input);
+    };
+    const r = await runCustomerOwnedUpgrade(store, baseInput({ opId: 'op-race' }));
+    expect(r.status).toBe('refused');
+    expect(r.reason).toBe('stale_preview');
+    const written = [...store.profiles.values()];
+    const routes = written.map((p) => p.assignedRoutes);
+    expect(routes).toEqual([['Hijacked']]);
+  });
+});
+
+describe('retry after lost upgrade response', () => {
+  it('second call with the same new password reuses the UUID and binding', async () => {
+    const store = createMemoryUpgradeStore();
+    store.approved.set(ALPHA_KEY, alphaRow());
+    const first = await runCustomerOwnedUpgrade(store, baseInput({ opId: 'op-1' }));
+    expect(first.status).toBe('ok');
+    const second = await runCustomerOwnedUpgrade(store, baseInput({ opId: 'op-lost-retry' }));
+    expect(second.status).toBe('ok');
+    expect(second.driverId).toBe(first.driverId);
+    expect(store.credentials.size).toBe(1);
+    expect(store.bindingsByApproved.size).toBe(1);
+    expect(store.bindingsByDriver.size).toBe(1);
+  });
+});
+
+describe('one-sided retirement applies requested status', () => {
+  it('repair copies established pair/opId and the requested retired status', () => {
+    const driverId = 'bbbbbbbb-cccc-4ddd-8eee-000000000001';
+    const d = decideBindIdentity({
+      driverId,
+      approvedKey: ALPHA_KEY,
+      status: 'legacy_login_retired',
+      opId: 'op-new',
+      existingByDriver: {
+        driverId, approvedKey: ALPHA_KEY, status: 'active', opId: 'op-orig',
+      },
+      existingByApproved: null,
+    });
+    expect(d.action).toBe('repair');
+    if (d.action === 'repair') {
+      expect(d.payload).toEqual({
+        driverId,
+        approvedKey: ALPHA_KEY,
+        status: 'legacy_login_retired',
+        opId: 'op-orig',
+      });
+    }
+  });
+});
+
+describe('authorization array projection', () => {
+  it('uses nested nonempty and empty arrays when top-level is absent', () => {
+    const driverId = 'bbbbbbbb-cccc-4ddd-8eee-000000000001';
+    const nestedOnly = projectDriverHydration({
+      driverId,
+      profile: {
+        profile: {
+          assignedRoutes: ['Nested Route'],
+          assignedWells: [],
+          assignedCustomers: [{ companyId: 'c', name: 'N' }],
+          roles: [],
+        },
+      },
+      trustedHistoryDriverIds: [driverId],
+    });
+    expect(nestedOnly.assignedRoutes).toEqual(['Nested Route']);
+    expect(nestedOnly.assignedWells).toEqual([]);
+    expect(nestedOnly.assignedCustomers).toEqual([{ companyId: 'c', name: 'N' }]);
+    expect(nestedOnly.roles).toEqual([]);
+
+    const topEmpty = projectDriverHydration({
+      driverId,
+      profile: {
+        assignedRoutes: [],
+        assignedWells: [],
+        assignedCustomers: [],
+        roles: [],
+        profile: { assignedRoutes: ['Should not win'] },
+      },
+      trustedHistoryDriverIds: [driverId],
+    });
+    expect(topEmpty.assignedRoutes).toEqual([]);
+    expect(topEmpty.assignedWells).toEqual([]);
+    expect(topEmpty.assignedCustomers).toEqual([]);
+    expect(topEmpty.roles).toEqual([]);
+  });
+});
+
 
