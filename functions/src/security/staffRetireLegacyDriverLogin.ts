@@ -1,9 +1,10 @@
 /**
  * Separate audited retirement of the legacy approved-row login.
  *
- * Preview/Apply with a digest bound to driverId, complete binding, and both
- * proofs. Partial retirement is repaired. History and the binding used for
- * trusted aliases are never deleted.
+ * Preview/Apply digest is bound to driverId, approvedKey, surviving
+ * status/opId, both proof conditions, and approved-row retirement state.
+ * Partial bindings are repaired only after both proofs. The approved row
+ * is stamped only after a terminal reread of both binding sides.
  */
 import * as httpsV2 from 'firebase-functions/v2/https';
 import * as admin from 'firebase-admin';
@@ -15,15 +16,45 @@ import {
   BINDING_ROOT,
   DRIVER_UUID_RE,
   IDENTITY_PROOF,
-  decideBindingTerminalProof,
-  decideRetireLegacyLogin,
+  evaluateRetirementPreview,
   parseBinding,
   parseIdentityProof,
-  retirePreviewDigest,
+  retirementTerminalAllowsApprovedStamp,
+  type IdentityBinding,
 } from './operational/identityBinding';
 import { commitIdentityBindingWrite } from './operational/bindingApplyTransaction';
 
 const ALLOWED = new Set(['driverId', 'mode', 'expectedPreviewDigest']);
+
+async function loadRetirementBindings(
+  rtdb: admin.database.Database,
+  driverId: string,
+): Promise<{
+  byDriver: IdentityBinding | null;
+  byApproved: IdentityBinding | null;
+  byApprovedOwnedByDriver: IdentityBinding[];
+}> {
+  const byDriver = parseBinding(
+    (await rtdb.ref(BINDING_BY_DRIVER(driverId)).once('value')).val(),
+  );
+  if (byDriver) {
+    const byApproved = parseBinding(
+      (await rtdb.ref(BINDING_BY_APPROVED(byDriver.approvedKey)).once('value')).val(),
+    );
+    return { byDriver, byApproved, byApprovedOwnedByDriver: [] };
+  }
+  const owned: IdentityBinding[] = [];
+  const snap = await rtdb.ref(`${BINDING_ROOT}/byApproved`).once('value');
+  const raw = snap.val();
+  if (raw && typeof raw === 'object' && !Array.isArray(raw)) {
+    for (const rec of Object.values(raw as Record<string, unknown>)) {
+      const parsed = parseBinding(rec);
+      if (parsed && parsed.driverId === driverId) owned.push(parsed);
+    }
+  }
+  const byApproved = owned.length === 1 ? owned[0] : null;
+  return { byDriver: null, byApproved, byApprovedOwnedByDriver: owned };
+}
 
 export const staffRetireLegacyDriverLogin = httpsV2.onCall(
   { timeoutSeconds: 20, memory: '256MiB', enforceAppCheck: false },
@@ -45,90 +76,84 @@ export const staffRetireLegacyDriverLogin = httpsV2.onCall(
     }
 
     const rtdb = admin.database();
-    const byDriver = parseBinding((await rtdb.ref(BINDING_BY_DRIVER(driverId)).once('value')).val());
-    const approvedKey = byDriver?.approvedKey;
-    const byApproved = approvedKey
-      ? parseBinding((await rtdb.ref(BINDING_BY_APPROVED(approvedKey)).once('value')).val())
-      : null;
+    const loaded = await loadRetirementBindings(rtdb, driverId);
     const proof = parseIdentityProof((await rtdb.ref(IDENTITY_PROOF(driverId)).once('value')).val());
+    const approvedKey = loaded.byDriver?.approvedKey
+      || loaded.byApproved?.approvedKey
+      || loaded.byApprovedOwnedByDriver[0]?.approvedKey
+      || '';
     const approvedRow = approvedKey
       ? ((await rtdb.ref(`drivers/approved/${approvedKey}`).once('value')).val() as Record<string, unknown> | null)
       : null;
 
-    const decision = decideRetireLegacyLogin({
-      byDriver,
-      byApproved,
+    const preview = evaluateRetirementPreview({
+      requestedDriverId: driverId,
+      byDriver: loaded.byDriver,
+      byApproved: loaded.byApproved,
+      byApprovedOwnedByDriver: loaded.byApprovedOwnedByDriver,
       proof,
       approvedLegacyLoginRetired: approvedRow?.legacyLoginRetired === true,
     });
 
-    if (decision.action === 'refuse') {
+    if (!preview.ok) {
       await writeSecurityAudit({
         action: 'staffRetireLegacyDriverLogin_fail',
         actorUid: caller.uid,
         driverId,
-        detail: { reason: decision.reason },
+        detail: { reason: preview.reason },
       });
-      throw new httpsV2.HttpsError('failed-precondition', decision.reason);
+      throw new httpsV2.HttpsError('failed-precondition', preview.reason);
     }
-
-    const binding = byDriver && byApproved ? byDriver : byDriver || byApproved;
-    if (!binding) {
-      throw new httpsV2.HttpsError('failed-precondition', 'binding_missing');
-    }
-    const digest = retirePreviewDigest({ driverId, binding, proof });
 
     if (mode === 'dry-run') {
       return {
         ok: true,
         mode: 'dry-run' as const,
         driverId,
-        previewDigest: digest,
-        action: decision.action,
+        previewDigest: preview.digest,
+        action: preview.decision.action,
       };
     }
 
     const expected = typeof raw.expectedPreviewDigest === 'string' ? raw.expectedPreviewDigest : '';
-    if (!expected || expected !== digest) {
+    if (!expected || expected !== preview.digest) {
       throw new httpsV2.HttpsError('failed-precondition', 'stale_preview');
     }
 
-    if (decision.action === 'already_retired') {
+    if (preview.decision.action === 'already_retired') {
       return { ok: true, driverId, status: 'legacy_login_retired' as const, already: true };
     }
 
+    const surviving = preview.decision.surviving;
     const bindWrite = await commitIdentityBindingWrite({
       bindingsRef: rtdb.ref(BINDING_ROOT) as never,
-      driverId: binding.driverId,
-      approvedKey: binding.approvedKey,
+      driverId: surviving.driverId,
+      approvedKey: surviving.approvedKey,
       status: 'legacy_login_retired',
-      opId: binding.opId,
+      opId: surviving.opId,
     });
     if (!bindWrite.ok && bindWrite.reason !== 'already_exact') {
       throw new httpsV2.HttpsError('failed-precondition', bindWrite.reason);
     }
 
     const liveByDriver = parseBinding(
-      (await rtdb.ref(BINDING_BY_DRIVER(binding.driverId)).once('value')).val(),
+      (await rtdb.ref(BINDING_BY_DRIVER(surviving.driverId)).once('value')).val(),
     );
     const liveByApproved = parseBinding(
-      (await rtdb.ref(BINDING_BY_APPROVED(binding.approvedKey)).once('value')).val(),
+      (await rtdb.ref(BINDING_BY_APPROVED(surviving.approvedKey)).once('value')).val(),
     );
-    const terminal = decideBindingTerminalProof({
-      driverId: binding.driverId,
-      approvedKey: binding.approvedKey,
+    const stamp = retirementTerminalAllowsApprovedStamp({
+      driverId: surviving.driverId,
+      approvedKey: surviving.approvedKey,
+      expectedOpId: surviving.opId,
       byDriver: liveByDriver,
       byApproved: liveByApproved,
     });
-    if (
-      !terminal.ok
-      || terminal.binding.status !== 'legacy_login_retired'
-      || terminal.binding.opId !== binding.opId
-    ) {
-      throw new httpsV2.HttpsError('failed-precondition', 'binding_incomplete');
+    if (!stamp.ok) {
+      throw new httpsV2.HttpsError('failed-precondition', stamp.reason);
     }
 
-    await rtdb.ref(`drivers/approved/${binding.approvedKey}`).update({
+    await rtdb.ref(`drivers/approved/${surviving.approvedKey}`).update({
       legacyLoginRetired: true,
     });
 
@@ -136,7 +161,7 @@ export const staffRetireLegacyDriverLogin = httpsV2.onCall(
       action: 'staffRetireLegacyDriverLogin',
       actorUid: caller.uid,
       driverId,
-      detail: { status: 'legacy_login_retired', repaired: decision.action === 'repair' },
+      detail: { status: 'legacy_login_retired', repaired: preview.decision.action === 'repair' },
     });
     return {
       ok: true,

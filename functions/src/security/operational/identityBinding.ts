@@ -187,57 +187,176 @@ export function hydrationIsProven(proof: IdentityProofRecord, driverId: string):
 }
 
 export type RetireDecision =
-  | { action: 'retire' }
-  | { action: 'repair' }
-  | { action: 'already_retired' }
+  | { action: 'retire'; surviving: IdentityBinding; complete: boolean }
+  | { action: 'repair'; surviving: IdentityBinding; complete: boolean }
+  | { action: 'already_retired'; surviving: IdentityBinding; complete: boolean }
   | { action: 'refuse'; reason: string };
 
+export type SurvivingPairResult =
+  | { ok: true; surviving: IdentityBinding; complete: boolean }
+  | { ok: false; reason: string };
+
 /**
- * Legacy login retirement is a separate audited action. It requires both
- * server-side proofs, a complete bidirectional binding, and never deletes
- * history or the binding used for trusted history alias resolution.
+ * Resolve the surviving UUID↔approvedKey pair from server binding records.
+ * Never uses display-name equality or a client-supplied approved key.
+ * Ambiguous or conflicting one-sided state is refused.
  */
-export function decideRetireLegacyLogin(input: {
+export function resolveSurvivingRetirementPair(input: {
+  requestedDriverId: string;
   byDriver: IdentityBinding | null;
   byApproved: IdentityBinding | null;
+  byApprovedOwnedByDriver?: IdentityBinding[];
+}): SurvivingPairResult {
+  if (!DRIVER_UUID_RE.test(input.requestedDriverId)) {
+    return { ok: false, reason: 'driver_id_malformed' };
+  }
+  const byDriver = input.byDriver;
+  const byApproved = input.byApproved;
+
+  if (byDriver) {
+    if (byDriver.driverId !== input.requestedDriverId) {
+      return { ok: false, reason: 'binding_driver_mismatch' };
+    }
+    if (!APPROVED_KEY_RE.test(byDriver.approvedKey)) {
+      return { ok: false, reason: 'approved_key_malformed' };
+    }
+    if (byApproved) {
+      if (byApproved.driverId !== input.requestedDriverId) {
+        return { ok: false, reason: 'approved_key_already_bound' };
+      }
+      if (byApproved.approvedKey !== byDriver.approvedKey) {
+        return { ok: false, reason: 'binding_disagree' };
+      }
+      if (!bindingsAgree(byDriver, byApproved)) {
+        return { ok: false, reason: 'binding_disagree' };
+      }
+      return { ok: true, surviving: byDriver, complete: true };
+    }
+    return { ok: true, surviving: byDriver, complete: false };
+  }
+
+  const owned = (input.byApprovedOwnedByDriver || []).filter(
+    (b) => b.driverId === input.requestedDriverId,
+  );
+  if (owned.length === 0) return { ok: false, reason: 'binding_missing' };
+  if (owned.length > 1) return { ok: false, reason: 'binding_ambiguous' };
+  const only = owned[0];
+  if (!APPROVED_KEY_RE.test(only.approvedKey)) {
+    return { ok: false, reason: 'approved_key_malformed' };
+  }
+  return { ok: true, surviving: only, complete: false };
+}
+
+/**
+ * Legacy login retirement. Both field proofs are required for retire AND
+ * repair. A partial binding never bypasses secure-login or hydration proof.
+ */
+export function decideRetireLegacyLogin(input: {
+  requestedDriverId: string;
+  byDriver: IdentityBinding | null;
+  byApproved: IdentityBinding | null;
+  byApprovedOwnedByDriver?: IdentityBinding[];
   proof: IdentityProofRecord;
   approvedLegacyLoginRetired?: boolean;
 }): RetireDecision {
-  const term = decideBindingTerminalProof({
-    driverId: input.byDriver?.driverId || input.byApproved?.driverId || '',
-    approvedKey: input.byDriver?.approvedKey || input.byApproved?.approvedKey || '',
+  const pair = resolveSurvivingRetirementPair({
+    requestedDriverId: input.requestedDriverId,
     byDriver: input.byDriver,
     byApproved: input.byApproved,
+    byApprovedOwnedByDriver: input.byApprovedOwnedByDriver,
   });
-  if (!term.ok) {
-    if (term.reason === 'binding_incomplete') return { action: 'repair' };
-    return { action: 'refuse', reason: term.reason };
-  }
-  if (!secureLoginIsProven(input.proof, term.binding.driverId)) {
+  if (!pair.ok) return { action: 'refuse', reason: pair.reason };
+
+  if (!secureLoginIsProven(input.proof, pair.surviving.driverId)) {
     return { action: 'refuse', reason: 'secure_login_unproven' };
   }
-  if (!hydrationIsProven(input.proof, term.binding.driverId)) {
+  if (!hydrationIsProven(input.proof, pair.surviving.driverId)) {
     return { action: 'refuse', reason: 'hydration_unproven' };
   }
-  if (term.binding.status === 'legacy_login_retired' && input.approvedLegacyLoginRetired === true) {
-    return { action: 'already_retired' };
+
+  if (
+    pair.complete
+    && pair.surviving.status === 'legacy_login_retired'
+    && input.approvedLegacyLoginRetired === true
+  ) {
+    return { action: 'already_retired', surviving: pair.surviving, complete: true };
   }
-  if (term.binding.status === 'legacy_login_retired' && input.approvedLegacyLoginRetired !== true) {
-    return { action: 'repair' };
+  if (!pair.complete) {
+    return { action: 'repair', surviving: pair.surviving, complete: false };
   }
-  return { action: 'retire' };
+  if (pair.surviving.status === 'legacy_login_retired' && input.approvedLegacyLoginRetired !== true) {
+    return { action: 'repair', surviving: pair.surviving, complete: true };
+  }
+  return { action: 'retire', surviving: pair.surviving, complete: true };
 }
 
 export function retirePreviewDigest(input: {
   driverId: string;
-  binding: IdentityBinding;
-  proof: IdentityProofRecord;
+  approvedKey: string;
+  survivingStatus: BindingStatus;
+  survivingOpId: string;
+  complete: boolean;
+  secureLoginProven: boolean;
+  hydrationProven: boolean;
+  approvedLegacyLoginRetired: boolean;
 }): string {
   return createHash('sha256').update(JSON.stringify({
     driverId: input.driverId,
-    binding: input.binding,
-    proof: input.proof,
+    approvedKey: input.approvedKey,
+    survivingStatus: input.survivingStatus,
+    survivingOpId: input.survivingOpId,
+    complete: input.complete,
+    secureLoginProven: input.secureLoginProven,
+    hydrationProven: input.hydrationProven,
+    approvedLegacyLoginRetired: input.approvedLegacyLoginRetired,
   })).digest('hex');
+}
+
+export function evaluateRetirementPreview(input: {
+  requestedDriverId: string;
+  byDriver: IdentityBinding | null;
+  byApproved: IdentityBinding | null;
+  byApprovedOwnedByDriver?: IdentityBinding[];
+  proof: IdentityProofRecord;
+  approvedLegacyLoginRetired?: boolean;
+}): { ok: true; decision: Exclude<RetireDecision, { action: 'refuse' }>; digest: string }
+  | { ok: false; reason: string } {
+  const decision = decideRetireLegacyLogin(input);
+  if (decision.action === 'refuse') return { ok: false, reason: decision.reason };
+  const digest = retirePreviewDigest({
+    driverId: decision.surviving.driverId,
+    approvedKey: decision.surviving.approvedKey,
+    survivingStatus: decision.surviving.status,
+    survivingOpId: decision.surviving.opId,
+    complete: decision.complete,
+    secureLoginProven: true,
+    hydrationProven: true,
+    approvedLegacyLoginRetired: input.approvedLegacyLoginRetired === true,
+  });
+  return { ok: true, decision, digest };
+}
+
+export function retirementTerminalAllowsApprovedStamp(input: {
+  driverId: string;
+  approvedKey: string;
+  expectedOpId: string;
+  byDriver: IdentityBinding | null;
+  byApproved: IdentityBinding | null;
+}): { ok: true } | { ok: false; reason: string } {
+  const term = decideBindingTerminalProof({
+    driverId: input.driverId,
+    approvedKey: input.approvedKey,
+    byDriver: input.byDriver,
+    byApproved: input.byApproved,
+  });
+  if (!term.ok) return term;
+  if (term.binding.status !== 'legacy_login_retired') {
+    return { ok: false, reason: 'binding_not_retired' };
+  }
+  if (term.binding.opId !== input.expectedOpId) {
+    return { ok: false, reason: 'binding_op_mismatch' };
+  }
+  return { ok: true };
 }
 
 export function legacyLoginIsRetired(input: {

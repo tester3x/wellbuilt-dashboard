@@ -10,7 +10,9 @@ import {
   decideBindIdentity,
   decideBindingTerminalProof,
   decideRetireLegacyLogin,
+  evaluateRetirementPreview,
   legacyLoginIsRetired,
+  retirementTerminalAllowsApprovedStamp,
 } from '../identityBinding';
 import {
   applyHydrationCopy,
@@ -344,11 +346,13 @@ describe('separate legacy retirement', () => {
 
   it('refuses retirement until secure login and hydration are proven', () => {
     expect(decideRetireLegacyLogin({
+      requestedDriverId: complete.driverId,
       byDriver: null,
       byApproved: null,
       proof: proven,
     }).action).toBe('refuse');
     expect(decideRetireLegacyLogin({
+      requestedDriverId: complete.driverId,
       byDriver: complete,
       byApproved: complete,
       proof: { ...proven, secureLoginAt: null, secureLoginDriverId: null },
@@ -362,6 +366,7 @@ describe('separate legacy retirement', () => {
     expect(r.status).toBe('ok');
     const binding = store.bindingsByDriver.get(r.driverId!)!;
     expect(decideRetireLegacyLogin({
+      requestedDriverId: r.driverId!,
       byDriver: binding,
       byApproved: binding,
       proof: {
@@ -682,6 +687,139 @@ describe('one-sided retirement applies requested status', () => {
         opId: 'op-orig',
       });
     }
+  });
+});
+
+describe('retirement proofs gate repair in both partial directions', () => {
+  const driverId = 'bbbbbbbb-cccc-4ddd-8eee-000000000001';
+  const surviving = {
+    driverId,
+    approvedKey: ALPHA_KEY,
+    status: 'active' as const,
+    opId: 'op-orig',
+  };
+  const proven = {
+    secureLoginAt: 1,
+    secureLoginDriverId: driverId,
+    secureLoginUid: 'uid-1',
+    hydrationAt: 2,
+    hydrationDriverId: driverId,
+  };
+
+  it('byDriver-only incomplete binding without login proof is refuse, not repair', () => {
+    const d = decideRetireLegacyLogin({
+      requestedDriverId: driverId,
+      byDriver: surviving,
+      byApproved: null,
+      proof: { ...proven, secureLoginAt: null, secureLoginDriverId: null },
+    });
+    expect(d).toEqual({ action: 'refuse', reason: 'secure_login_unproven' });
+  });
+
+  it('byApproved-only incomplete binding without hydration proof is refuse, not repair', () => {
+    const d = decideRetireLegacyLogin({
+      requestedDriverId: driverId,
+      byDriver: null,
+      byApproved: surviving,
+      byApprovedOwnedByDriver: [surviving],
+      proof: { ...proven, hydrationAt: null, hydrationDriverId: null },
+    });
+    expect(d).toEqual({ action: 'refuse', reason: 'hydration_unproven' });
+  });
+
+  it('byDriver-only with both proofs is exact repair', () => {
+    const d = decideRetireLegacyLogin({
+      requestedDriverId: driverId,
+      byDriver: surviving,
+      byApproved: null,
+      proof: proven,
+    });
+    expect(d.action).toBe('repair');
+    if (d.action === 'repair') {
+      expect(d.surviving).toEqual(surviving);
+      expect(d.complete).toBe(false);
+    }
+  });
+
+  it('byApproved-only with both proofs is exact repair', () => {
+    const d = decideRetireLegacyLogin({
+      requestedDriverId: driverId,
+      byDriver: null,
+      byApproved: surviving,
+      byApprovedOwnedByDriver: [surviving],
+      proof: proven,
+    });
+    expect(d.action).toBe('repair');
+    if (d.action === 'repair') {
+      expect(d.surviving.approvedKey).toBe(ALPHA_KEY);
+      expect(d.surviving.opId).toBe('op-orig');
+      expect(d.complete).toBe(false);
+    }
+  });
+
+  it('ambiguous byApproved-only candidates are refused, not repaired', () => {
+    const d = decideRetireLegacyLogin({
+      requestedDriverId: driverId,
+      byDriver: null,
+      byApproved: null,
+      byApprovedOwnedByDriver: [
+        surviving,
+        { ...surviving, approvedKey: BRAVO_KEY, opId: 'op-other' },
+      ],
+      proof: proven,
+    });
+    expect(d).toEqual({ action: 'refuse', reason: 'binding_ambiguous' });
+  });
+
+  it('concurrent binding change stale-previews and does not allow an approved-row stamp', () => {
+    const preview = evaluateRetirementPreview({
+      requestedDriverId: driverId,
+      byDriver: surviving,
+      byApproved: surviving,
+      proof: proven,
+      approvedLegacyLoginRetired: false,
+    });
+    expect(preview.ok).toBe(true);
+    if (!preview.ok) return;
+    const concurrent = evaluateRetirementPreview({
+      requestedDriverId: driverId,
+      byDriver: { ...surviving, opId: 'op-hijack' },
+      byApproved: { ...surviving, opId: 'op-hijack' },
+      proof: proven,
+      approvedLegacyLoginRetired: false,
+    });
+    expect(concurrent.ok).toBe(true);
+    if (!concurrent.ok) return;
+    expect(concurrent.digest).not.toBe(preview.digest);
+
+    const failedTx = retirementTerminalAllowsApprovedStamp({
+      driverId,
+      approvedKey: ALPHA_KEY,
+      expectedOpId: surviving.opId,
+      byDriver: { ...surviving, status: 'active' },
+      byApproved: null,
+    });
+    expect(failedTx.ok).toBe(false);
+  });
+
+  it('successful repair reread allows the approved-row stamp only after both sides agree retired', () => {
+    const retired = { ...surviving, status: 'legacy_login_retired' as const };
+    const allowed = retirementTerminalAllowsApprovedStamp({
+      driverId,
+      approvedKey: ALPHA_KEY,
+      expectedOpId: 'op-orig',
+      byDriver: retired,
+      byApproved: retired,
+    });
+    expect(allowed).toEqual({ ok: true });
+    const incomplete = retirementTerminalAllowsApprovedStamp({
+      driverId,
+      approvedKey: ALPHA_KEY,
+      expectedOpId: 'op-orig',
+      byDriver: retired,
+      byApproved: null,
+    });
+    expect(incomplete.ok).toBe(false);
   });
 });
 
