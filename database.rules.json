@@ -1,10 +1,113 @@
 {
   "rules": {
-    ".read": true,
-    ".write": true,
+    ".read": false,
+    ".write": false,
+    "security": {
+      ".read": false,
+      ".write": false
+    },
+    "drivers": {
+      "profiles": {
+        "$driverId": {
+          ".read": "auth != null && (auth.token.kind == 'driver' && auth.token.driverId == $driverId || (auth.token.wellbuiltAdmin == true && auth.token.platformAdminEnabled == true) || (auth.token.staffCompanyId != null && data.child('companyId').val() == auth.token.staffCompanyId && (auth.token.staffRole == 'admin' || auth.token.staffRole == 'it' || auth.token.staffRole == 'manager' || auth.token.staffRole == 'dispatch')))",
+          ".write": false
+        }
+      },
+      "pending_secure": {
+        "$pendingId": {
+          ".read": "auth != null && auth.token.wellbuiltAdmin == true && auth.token.platformAdminEnabled == true",
+          ".write": false
+        }
+      },
+      "pending": {
+        ".read": "auth != null && auth.token.wellbuiltAdmin == true && auth.token.platformAdminEnabled == true",
+        ".write": false
+      },
+      "approved": {
+        ".read": "auth != null && auth.token.wellbuiltAdmin == true && auth.token.platformAdminEnabled == true",
+        ".write": false
+      }
+    },
+    "users": {
+      "$uid": {
+        ".read": "auth != null && (auth.uid == $uid || (auth.token.wellbuiltAdmin == true && auth.token.platformAdminEnabled == true))",
+        ".write": false
+      }
+    },
     "packets": {
+      "incoming": {
+        ".read": false,
+        ".write": false
+      },
+      "outgoing": {
+        ".indexOn": [
+          "companyId",
+          "wellName"
+        ],
+        ".read": "auth != null && ((auth.token.kind == 'driver' && query.orderByChild == 'companyId' && query.equalTo == auth.token.companyId) || (auth.token.wellbuiltAdmin == true && auth.token.platformAdminEnabled == true) || (auth.token.staffCompanyId != null && query.orderByChild == 'companyId' && query.equalTo == auth.token.staffCompanyId && (auth.token.staffRole == 'admin' || auth.token.staffRole == 'it' || auth.token.staffRole == 'manager')))",
+        ".write": false
+      },
+      "incoming_version": {
+        ".read": "auth != null",
+        ".write": false
+      },
       "processed": {
-        ".indexOn": ["driverId", "driverName", "wellName", "invoiceDocId"]
+        ".indexOn": [
+          "driverId",
+          "driverName",
+          "wellName",
+          "companyId",
+          "invoiceDocId"
+        ],
+        ".read": "auth != null && ((auth.token.kind == 'driver' && query.orderByChild == 'companyId' && query.equalTo == auth.token.companyId) || (auth.token.wellbuiltAdmin == true && auth.token.platformAdminEnabled == true) || (auth.token.staffCompanyId != null && query.orderByChild == 'companyId' && query.equalTo == auth.token.staffCompanyId && (auth.token.staffRole == 'admin' || auth.token.staffRole == 'it' || auth.token.staffRole == 'manager')))",
+        "$packetId": {
+          ".read": "auth != null && ((auth.token.kind == 'driver' && data.child('companyId').val() == auth.token.companyId) || (auth.token.wellbuiltAdmin == true && auth.token.platformAdminEnabled == true) || (auth.token.staffCompanyId != null && data.child('companyId').val() == auth.token.staffCompanyId && (auth.token.staffRole == 'admin' || auth.token.staffRole == 'it' || auth.token.staffRole == 'manager')))",
+          ".write": false
+        }
+      },
+      "rejected": {
+        ".read": "auth != null && auth.token.wellbuiltAdmin == true && auth.token.platformAdminEnabled == true",
+        ".write": false
+      }
+    },
+    "well_config": {
+      "$well": {
+        ".read": "auth != null && ((auth.token.wellbuiltAdmin == true && auth.token.platformAdminEnabled == true) || (auth.token.kind == 'driver' && data.child('companyId').val() != null && data.child('companyId').val() == auth.token.companyId) || (auth.token.staffCompanyId != null && data.child('companyId').val() == auth.token.staffCompanyId && (auth.token.staffRole == 'admin' || auth.token.staffRole == 'it' || auth.token.staffRole == 'manager')))",
+        ".write": false
+      }
+    },
+    "wells": {
+      "$well": {
+        ".read": "auth != null && ((auth.token.wellbuiltAdmin == true && auth.token.platformAdminEnabled == true) || (auth.token.kind == 'driver' && data.child('companyId').val() != null && data.child('companyId').val() == auth.token.companyId) || (auth.token.staffCompanyId != null && data.child('companyId').val() == auth.token.staffCompanyId && (auth.token.staffRole == 'admin' || auth.token.staffRole == 'it' || auth.token.staffRole == 'manager')))",
+        ".write": false
+      }
+    },
+    "production": {
+      ".read": "auth != null && auth.token.wellbuiltAdmin == true && auth.token.platformAdminEnabled == true",
+      ".write": false
+    },
+    "performance": {
+      ".read": "auth != null && auth.token.wellbuiltAdmin == true && auth.token.platformAdminEnabled == true",
+      ".write": false
+    },
+    "status": {
+      ".read": "auth != null && auth.token.wellbuiltAdmin == true && auth.token.platformAdminEnabled == true",
+      ".write": false
+    },
+    "driver_pulls": {
+      "$driverId": {
+        ".read": "auth != null && (auth.token.kind == 'driver' && auth.token.driverId == $driverId || (auth.token.wellbuiltAdmin == true && auth.token.platformAdminEnabled == true))",
+        ".write": false
+      }
+    },
+    "logs": {
+      ".read": "auth != null && auth.token.wellbuiltAdmin == true && auth.token.platformAdminEnabled == true",
+      ".write": false
+    },
+    "devices": {
+      "$deviceId": {
+        ".read": "auth != null && ((auth.token.wellbuiltAdmin == true && auth.token.platformAdminEnabled == true) || auth.uid == $deviceId)",
+        ".write": false
       }
     }
   }

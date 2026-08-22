@@ -1,7 +1,18 @@
 // Well data utilities - fetches from Firebase
-import { ref, get, onValue, query, orderByChild, set } from 'firebase/database';
+import { ref, get, onValue, set } from 'firebase/database';
 import { getFirebaseDatabase } from './firebase';
 import { adminGetWellHistory, adminGetWellPerformance, adminGetWellPool } from './adminDashboardCatalog';
+import {
+  buildWellRows,
+  computeHealth,
+  errorCodeOf,
+  routesFromRows,
+  type EstimationConfig,
+  type EstimationStatus,
+  type WellPoolHealth,
+} from './wellEstimation';
+
+export type { WellPoolHealth } from './wellEstimation';
 
 export interface WellResponse {
   wellName: string;
@@ -301,392 +312,85 @@ export async function fetchAllWellStatuses(): Promise<WellResponse[]> {
   }
 }
 
-// Helper: Parse "X'Y\"" to inches
-function parseFeetInchesStr(str: string): number {
-  if (!str) return 0;
-  const match = str.match(/(\d+)'(\d+)"/);
-  if (match) return parseInt(match[1]) * 12 + parseInt(match[2]);
-  return 0;
-}
 
-// Helper: Calculate Tank @ Level from config values
-// bblPerFootPerTank: per-tank BBL/ft (default 20 for standard 400BBL/20' tanks)
-function calcTankAtLevel(tanks: number, pullBbls: number, bottomInches: number, bblPerFootPerTank: number = 20): { tankAtInches: number; tankAtLevel: string } {
-  const bblsPerTank = pullBbls / tanks;
-  const tankAtInches = ((bblsPerTank / bblPerFootPerTank) * 12) + bottomInches;
-  const tankAtFeet = Math.floor(tankAtInches / 12);
-  const tankAtRemainder = Math.round(tankAtInches - (tankAtFeet * 12));
-  return { tankAtInches, tankAtLevel: `${tanks} @ ${tankAtFeet}'${tankAtRemainder}"` };
-}
+// Well Status data path.
+//
+// Production RTDB rules do NOT grant a read at `well_config` or `packets/outgoing`
+// themselves — `well_config`/`wells` carry only a `$well/.read`, and RTDB grants
+// cascade down, never up, so an unfiltered parent subscription is denied for every
+// caller including a platform admin. `packets/outgoing` additionally demands a
+// `companyId`-scoped query for non-platform callers.
+//
+// So the authoritative snapshot comes from the `adminGetWellPool` callable, which
+// authorises the caller server-side (requireRegisteredDashboardUser +
+// canViewWellPool) and returns a company-projected, field-allowlisted catalog.
+// Nothing here reads a broad RTDB parent node.
+//
+// Two clocks, deliberately separate:
+//   • AUTHORITATIVE_REFRESH_MS — re-fetch the snapshot, so a newly processed pull
+//     lands without a page reload and resets that well's estimate onto its new
+//     bottom level and timestamp.
+//   • ESTIMATE_TICK_MS — recompute levels from the snapshot already held. Local,
+//     free, and keeps the display moving between refreshes even while degraded.
+//
+// A failed refresh never silently serves a stale snapshot as if it were live: the
+// health object flips to degraded and the screen is expected to say so.
+export const AUTHORITATIVE_REFRESH_MS = 60 * 1000;
+export const ESTIMATE_TICK_MS = 30 * 1000;
 
-// Helper: Estimate current level from bottom level + elapsed time + flow rate
-function estimateCurrentLevel(
-  bottomInches: number,
-  lastPullTimeUTC: string,
-  flowRateMinutes: number,
-): number | null {
-  if (!lastPullTimeUTC || flowRateMinutes <= 0 || bottomInches <= 0) return null;
-  const lastPullTime = new Date(lastPullTimeUTC).getTime();
-  if (isNaN(lastPullTime) || lastPullTime <= 0) return null;
-  const minutesElapsed = (Date.now() - lastPullTime) / (1000 * 60);
-  const minutesPerInch = flowRateMinutes / 12;
-  const inchesRisen = minutesElapsed / minutesPerInch;
-  return bottomInches + inchesRisen;
-}
-
-// Helper: Format inches as feet'inches"
-function inchesToDisplay(totalInches: number): string {
-  const feet = Math.floor(totalInches / 12);
-  const inches = Math.floor(totalInches % 12);
-  return `${feet}'${inches}"`;
-}
-
-// Helper: Calculate time till pull from current inches to target inches at given flow rate
-function calcTimeTillPull(currentInches: number, targetInches: number, flowRateMinutes: number): string {
-  if (flowRateMinutes <= 0) return 'Unknown';
-  const inchesNeeded = targetInches - currentInches;
-  if (inchesNeeded <= 0) return 'Ready';
-  const minutesPerInch = flowRateMinutes / 12;
-  const totalMinutes = inchesNeeded * minutesPerInch;
-  const days = Math.floor(totalMinutes / 1440);
-  const hours = Math.floor((totalMinutes % 1440) / 60);
-  const mins = Math.floor(totalMinutes % 60);
-  if (days > 0) return `${days}d ${hours}h ${mins}m`;
-  return `${hours}h ${mins}m`;
-}
-
-// Subscribe to well statuses using packets/outgoing (the response packets) + well_config
-// packets/outgoing is THE source of current well status — written by Cloud Functions on every pull
 export function subscribeToWellStatusesUnified(
-  callback: (wells: WellResponse[], routes: string[]) => void,
+  callback: (wells: WellResponse[], routes: string[], health: WellPoolHealth) => void,
   onError?: (err: unknown) => void,
 ): () => void {
-  const db = getFirebaseDatabase();
-  const configRef = ref(db, 'well_config');
-  const outgoingRef = ref(db, 'packets/outgoing');
+  let stopped = false;
+  let wellConfig: Record<string, EstimationConfig> = {};
+  let wellStatus: Record<string, EstimationStatus> = {};
+  let lastAuthoritativeAt: number | null = null;
+  let errorCode: string | null = null;
+  let inFlight = false;
 
-  let configData: Record<string, WellConfig> = {};
-  let outgoingData: Record<string, WellResponse> = {};
-  let gotConfigs = false;
-  let gotOutgoing = false;
-  let failed = false;
-
-  let debounceTimer: ReturnType<typeof setTimeout> | null = null;
-  const DEBOUNCE_MS = 300;
-
-  const timeout = setTimeout(() => {
-    if (failed) return;
-    if (!gotConfigs || !gotOutgoing) {
-      console.warn('[wells.ts] Subscription timeout - showing partial data');
-      mergeAndCallback(true);
-    }
-  }, 5000);
-
-  const reportError = (err: Error) => {
-    failed = true;
-    onError?.(err);
-    wellPoolResponses()
-      .then(({ wells, routes }) => callback(wells, routes))
-      .catch(() => callback([], []));
+  const emit = () => {
+    if (stopped) return;
+    const nowMs = Date.now();
+    const rows = buildWellRows({ wellConfig, wellStatus, nowMs });
+    const health = computeHealth({ lastAuthoritativeAt, errorCode, nowMs });
+    callback(rows as unknown as WellResponse[], routesFromRows(rows), health);
   };
 
-  const mergeAndCallback = (force = false) => {
-    if (!force && (!gotConfigs || !gotOutgoing)) return;
-    if (gotConfigs && gotOutgoing) clearTimeout(timeout);
-
-    const allWells: WellResponse[] = [];
-
-    // Build wells list from well_config (master list), merge with outgoing response data
-    Object.entries(configData).forEach(([wellKey, config]) => {
-      const tanks = config.tanks || (config as any).numTanks || 1;
-      const pullBbls = config.pullBbls || 140;
-      const bottomLevelFeet = config.bottomLevel || (config as any).allowedBottom || 3;
-      const bottomInches = bottomLevelFeet * 12;
-      // Use stored bblPerFoot if available, else legacy 20 BBL/ft per tank
-      const bblPerFootPerTank = (config as any).bblPerFoot ? (config as any).bblPerFoot / tanks : 20;
-      const { tankAtInches, tankAtLevel } = calcTankAtLevel(tanks, pullBbls, bottomInches, bblPerFootPerTank);
-
-      // Look for outgoing response packet for this well
-      const configKeyNoSpaces = wellKey.replace(/\s/g, '');
-      const outgoing = outgoingData[configKeyNoSpaces];
-
-      if (outgoing) {
-        // Has outgoing response — use it as the source of truth
-        let currentLevel = outgoing.currentLevel || '--';
-        let timeTillPull = outgoing.timeTillPull || 'Unknown';
-        let flowRate = outgoing.flowRate || 'Unknown';
-        const isDown = outgoing.wellDown || false;
-
-        // Get flow rate in minutes from well_config (avgFlowRateMinutes written by Cloud Function)
-        const afrMinutes = (config as any).avgFlowRateMinutes || 0;
-
-        // Estimate current level from bottom level after last pull + flow rate + time elapsed
-        let currentLevelInches: number | undefined;
-        if (!isDown && outgoing.lastPullDateTimeUTC && outgoing.lastPullBottomLevel && afrMinutes > 0) {
-          const bottomAfterPull = parseFeetInchesStr(outgoing.lastPullBottomLevel);
-          const estInches = estimateCurrentLevel(bottomAfterPull, outgoing.lastPullDateTimeUTC, afrMinutes);
-          if (estInches !== null) {
-            currentLevelInches = estInches;
-            currentLevel = inchesToDisplay(estInches);
-            timeTillPull = calcTimeTillPull(estInches, tankAtInches, afrMinutes);
-          }
-        }
-        // Fallback: parse from formatted string if no estimation was done
-        if (currentLevelInches === undefined && currentLevel !== '--') {
-          currentLevelInches = parseFeetInchesStr(currentLevel);
-        }
-
-        // Use the stored AFR display string if we have it
-        if ((config as any).avgFlowRate) {
-          flowRate = (config as any).avgFlowRate;
-        }
-
-        allWells.push({
-          ...outgoing,
-          route: config.route || 'Unrouted',
-          tanks,
-          tankAtLevel,
-          pullBbls,
-          bottomLevel: bottomLevelFeet,
-          currentLevel,
-          currentLevelInches,
-          flowRate,
-          timeTillPull,
-          etaToMax: timeTillPull,
-          isDown,
-          timestampUTC: outgoing.lastPullDateTimeUTC || outgoing.timestampUTC,
-          ndicName: (config as any).ndicName || '',
-          bblPerFoot: (config as any).bblPerFoot || undefined,
-        });
-      } else {
-        // No outgoing data — placeholder (well exists in config but no pulls yet)
-        allWells.push({
-          wellName: wellKey,
-          currentLevel: '--',
-          etaToMax: '--',
-          flowRate: '--',
-          timestamp: '',
-          route: config.route || 'Unrouted',
-          tanks,
-          tankAtLevel,
-          pullBbls,
-          bottomLevel: bottomLevelFeet,
-          ndicName: (config as any).ndicName || '',
-          bblPerFoot: (config as any).bblPerFoot || undefined,
-        });
-      }
-    });
-
-    const routes = Array.from(new Set(allWells.map((w) => w.route).filter((r): r is string => !!r)))
-      .sort((a, b) => {
-        // "Unrouted" always sorts last
-        if (a === 'Unrouted') return 1;
-        if (b === 'Unrouted') return -1;
-        return a.localeCompare(b);
-      });
-    callback(allWells.sort((a, b) => a.wellName.localeCompare(b.wellName)), routes);
+  const refreshAuthoritative = async () => {
+    // Overlapping refreshes would let a slow response overwrite a newer one.
+    if (stopped || inFlight) return;
+    inFlight = true;
+    try {
+      const pool = await adminGetWellPool();
+      if (stopped) return;
+      wellConfig = (pool.wellConfig || {}) as Record<string, EstimationConfig>;
+      wellStatus = (pool.wellStatus || {}) as Record<string, EstimationStatus>;
+      lastAuthoritativeAt = Date.now();
+      errorCode = null;
+    } catch (err) {
+      if (stopped) return;
+      // Keep the last good snapshot and keep estimating from it — but mark the
+      // pool degraded so the UI can show the data is no longer being confirmed.
+      errorCode = errorCodeOf(err);
+      onError?.(err);
+    } finally {
+      inFlight = false;
+      emit();
+    }
   };
 
-  const debouncedMergeAndCallback = (force = false) => {
-    if (debounceTimer) clearTimeout(debounceTimer);
-    if (!gotConfigs || !gotOutgoing) {
-      mergeAndCallback(force);
-      return;
-    }
-    debounceTimer = setTimeout(() => mergeAndCallback(force), DEBOUNCE_MS);
-  };
-
-  const unsubConfigs = onValue(configRef, (snapshot) => {
-    gotConfigs = true;
-    if (!snapshot.exists()) {
-      configData = {};
-    } else {
-      const configs: Record<string, WellConfig> = {};
-      snapshot.forEach((child) => {
-        configs[child.key!] = child.val();
-      });
-      configData = configs;
-    }
-    debouncedMergeAndCallback();
-  }, reportError);
-
-  const unsubOutgoing = onValue(outgoingRef, (snapshot) => {
-    gotOutgoing = true;
-    if (!snapshot.exists()) {
-      outgoingData = {};
-    } else {
-      const responses: Record<string, WellResponse> = {};
-      snapshot.forEach((child) => {
-        const childKey = child.key || '';
-        const data = child.val();
-        if (childKey.startsWith('response_') && !childKey.includes('delete') && data.wellName) {
-          const key = data.wellName.replace(/\s/g, '');
-          responses[key] = { ...data, responseId: childKey };
-        }
-      });
-      outgoingData = responses;
-    }
-    debouncedMergeAndCallback();
-  }, reportError);
-
-  // Refresh every 30 seconds to update estimated levels (even if Firebase data hasn't changed)
-  const refreshInterval = setInterval(() => {
-    if (gotConfigs && gotOutgoing) {
-      mergeAndCallback(true);
-    }
-  }, 30000);
+  void refreshAuthoritative();
+  const refreshTimer = setInterval(() => { void refreshAuthoritative(); }, AUTHORITATIVE_REFRESH_MS);
+  const estimateTimer = setInterval(emit, ESTIMATE_TICK_MS);
 
   return () => {
-    clearTimeout(timeout);
-    if (debounceTimer) clearTimeout(debounceTimer);
-    clearInterval(refreshInterval);
-    unsubConfigs();
-    unsubOutgoing();
+    stopped = true;
+    clearInterval(refreshTimer);
+    clearInterval(estimateTimer);
   };
 }
 
-// LEGACY: Subscribe to well statuses (realtime updates) with route info
-// Shows ALL wells from well_config, merges with outgoing data where available
-export function subscribeToWellStatuses(callback: (wells: WellResponse[], routes: string[]) => void): () => void {
-  const db = getFirebaseDatabase();
-  const outgoingRef = ref(db, 'packets/outgoing');
-  const configRef = ref(db, 'well_config');
-
-  let outgoingData: Record<string, WellResponse> = {};
-  let configData: Record<string, WellConfig> = {};
-  let gotOutgoing = false;
-  let gotConfigs = false;
-  let timeoutFired = false;
-
-  // Debounce timer - prevents rapid re-renders from multiple Firebase updates
-  let debounceTimer: ReturnType<typeof setTimeout> | null = null;
-  const DEBOUNCE_MS = 300; // Wait 300ms after last update before calling callback
-
-  // Timeout fallback - if Firebase is slow, show what we have after 5 seconds
-  const timeout = setTimeout(() => {
-    timeoutFired = true;
-    if (!gotOutgoing || !gotConfigs) {
-      console.warn('Firebase subscription timeout - showing partial data');
-      mergeAndCallback(true);
-    }
-  }, 5000);
-
-  const mergeAndCallback = (force = false) => {
-    if (!force && (!gotOutgoing || !gotConfigs)) return;
-    if (gotOutgoing && gotConfigs) clearTimeout(timeout);
-
-    // console.log(`[wells.ts] Merging - configs: ${Object.keys(configData).length}, outgoing: ${Object.keys(outgoingData).length}`);
-
-    // Build wells list from ALL wells in config
-    const allWells: WellResponse[] = [];
-    let matchedCount = 0;
-
-    // First, add all wells from config (the master list)
-    Object.entries(configData).forEach(([wellKey, config]) => {
-      // Config keys may have spaces (e.g., "Gabriel 1" or "Atlas 1")
-      // Outgoing is keyed by wellName with spaces stripped
-      // So we need to strip spaces from config key to match
-      const configKeyNoSpaces = wellKey.replace(/\s/g, '');
-      const outgoing = outgoingData[configKeyNoSpaces];
-
-      if (outgoing) {
-        matchedCount++;
-        // Has outgoing data - use it with route and tanks from config
-        allWells.push({
-          ...outgoing,
-          route: config.route || 'Unrouted',
-          tanks: config.tanks || 1,
-        });
-      } else {
-        // No outgoing data - create placeholder from config
-        // Config key already has proper formatting (e.g., "Gabriel 1")
-        allWells.push({
-          wellName: wellKey,
-          currentLevel: '--',
-          etaToMax: '--',
-          flowRate: '--',
-          timestamp: '',
-          route: config.route || 'Unrouted',
-          maxLevel: config.maxLevel,
-          bottomLevel: config.bottomLevel,
-          tanks: config.tanks || 1,
-        });
-      }
-    });
-
-    // Get unique routes (filter out undefined)
-    const routes = Array.from(new Set(allWells.map((w) => w.route).filter((r): r is string => !!r))).sort();
-
-    // console.log(`[wells.ts] Final: ${allWells.length} wells, ${matchedCount} with outgoing data, ${routes.length} routes`);
-    callback(allWells.sort((a, b) => a.wellName.localeCompare(b.wellName)), routes);
-  };
-
-  // Debounced version - prevents rapid re-renders
-  const debouncedMergeAndCallback = (force = false) => {
-    if (debounceTimer) {
-      clearTimeout(debounceTimer);
-    }
-
-    // For initial load, call immediately
-    if (!gotOutgoing || !gotConfigs) {
-      mergeAndCallback(force);
-      return;
-    }
-
-    // For subsequent updates, debounce to prevent rapid re-renders
-    debounceTimer = setTimeout(() => {
-      mergeAndCallback(force);
-    }, DEBOUNCE_MS);
-  };
-
-  const unsubOutgoing = onValue(outgoingRef, (snapshot) => {
-    gotOutgoing = true;
-    if (!snapshot.exists()) {
-      console.log('[wells.ts] No outgoing data exists');
-      outgoingData = {};
-    } else {
-      const responses: Record<string, WellResponse> = {};
-      snapshot.forEach((child) => {
-        const childKey = child.key || '';
-        const data = child.val();
-        // Only process response_ packets (not history_, delete_, etc.)
-        if (childKey.startsWith('response_') && !childKey.includes('delete') && data.wellName) {
-          // Key by well name without spaces for easy lookup
-          const key = data.wellName.replace(/\s/g, '');
-          responses[key] = {
-            ...data,
-            responseId: childKey,
-          };
-        }
-      });
-      outgoingData = responses;
-    }
-    debouncedMergeAndCallback();
-  });
-
-  const unsubConfigs = onValue(configRef, (snapshot) => {
-    gotConfigs = true;
-    if (!snapshot.exists()) {
-      console.log('[wells.ts] No config data exists');
-      configData = {};
-    } else {
-      const configs: Record<string, WellConfig> = {};
-      snapshot.forEach((child) => {
-        configs[child.key!] = child.val();
-      });
-      // console.log(`[wells.ts] Loaded ${Object.keys(configs).length} well configs`);
-      configData = configs;
-    }
-    debouncedMergeAndCallback();
-  });
-
-  return () => {
-    clearTimeout(timeout);
-    if (debounceTimer) clearTimeout(debounceTimer);
-    unsubOutgoing();
-    unsubConfigs();
-  };
-}
 
 // Format days to H:MM string
 function daysToHMM(days: number): string {
