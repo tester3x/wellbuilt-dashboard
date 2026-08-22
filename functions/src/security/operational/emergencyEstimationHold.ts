@@ -230,23 +230,57 @@ export function parseBottomInches(raw: unknown): number {
 }
 
 export function holdSuppressesEstimation(
-  hold: Partial<EstimationHoldRecord> | null | undefined,
+  hold: unknown,
   currentLastPullUTC: string | null | undefined,
 ): boolean {
-  if (!hold || hold.active !== true) return false;
-  if (typeof hold.heldAtPullUTC !== 'string' || !hold.heldAtPullUTC) return false;
+  if (!hold || typeof hold !== 'object' || Array.isArray(hold)) return false;
+  const h = hold as Partial<EstimationHoldRecord>;
+  if (h.active !== true) return false;
+  if (typeof h.heldAtPullUTC !== 'string' || !h.heldAtPullUTC) return false;
   if (typeof currentLastPullUTC !== 'string' || !currentLastPullUTC) return false;
-  return hold.heldAtPullUTC === currentLastPullUTC;
+  return h.heldAtPullUTC === currentLastPullUTC;
 }
 
 /** Exact fingerprint of observed hold state — the compare in compare-and-set. */
-export function holdFingerprint(hold: Partial<EstimationHoldRecord> | null | undefined): string {
-  if (!hold || typeof hold !== 'object') return 'none';
-  if (hold.active !== true) return 'inactive';
-  return [
-    'active', hold.heldAtPullUTC ?? '', hold.heldAtResponseId ?? '',
-    hold.applyOpId ?? '', hold.heldAtMs != null ? String(hold.heldAtMs) : '',
-  ].join('|');
+/**
+ * Deterministic serialisation of ANY value, for exact comparison.
+ *
+ * Object keys are sorted recursively so two records that differ only in
+ * insertion order fingerprint identically, while arrays keep their order
+ * because order is meaningful in one. `undefined` and `null` get distinct
+ * sentinels — inside an object, a key present-but-null is a different fact
+ * from a key that is absent, and both differ from a key holding a value.
+ */
+export function canonicalJson(value: unknown): string {
+  if (value === undefined) return '#undef';
+  if (value === null) return '#null';
+  if (Array.isArray(value)) return `[${value.map(canonicalJson).join(',')}]`;
+  if (typeof value === 'object') {
+    const keys = Object.keys(value as Record<string, unknown>).sort();
+    const body = keys
+      .map((k) => `${JSON.stringify(k)}:${canonicalJson((value as Record<string, unknown>)[k])}`)
+      .join(',');
+    return `{${body}}`;
+  }
+  if (typeof value === 'number' && !Number.isFinite(value)) return `#num:${String(value)}`;
+  return JSON.stringify(value) ?? `#unser:${typeof value}`;
+}
+
+/**
+ * Exact fingerprint of the hold value observed at Preview — the compare in
+ * compare-and-set.
+ *
+ * This is the WHOLE value, not a chosen subset. An earlier version hashed five
+ * named fields and folded every inactive or malformed object into the literal
+ * "inactive", which meant a record differing only in `reason`, `heldByUid`,
+ * `wellName` or some field added later fingerprinted the same — so concurrent
+ * metadata drift passed the transaction check and was silently overwritten.
+ * Anything present in the node participates now, including keys this code does
+ * not know about.
+ */
+export function holdFingerprint(hold: unknown): string {
+  if (hold === undefined) return '#absent';
+  return canonicalJson(hold);
 }
 
 // ── per-well decision ───────────────────────────────────────────────────────
@@ -261,7 +295,8 @@ export interface HoldObservation {
     isDown?: boolean;
   } | null;
   statusIsDown: boolean;
-  hold: Partial<EstimationHoldRecord> | null;
+  /** Raw stored value — fingerprinted whole, so keep it exactly as read. */
+  hold: unknown;
   acceptedPullMs: number[];
   config: { companyId?: string; avgFlowRate?: string; avgFlowRateMinutes?: number };
 }
@@ -511,8 +546,9 @@ export function holdBatchCompareAndSet(
     Record<string, EstimationHoldRecord>;
   const conflicts: string[] = [];
   for (const e of entries) {
-    const live = root[e.wellKey] as Partial<EstimationHoldRecord> | undefined;
-    if (holdFingerprint(live ?? null) !== e.expectedFingerprint) conflicts.push(e.wellKey);
+    // No `?? null` here: an absent key and a key holding null are different
+    // facts, and collapsing them would let one pass as the other.
+    if (holdFingerprint(root[e.wellKey]) !== e.expectedFingerprint) conflicts.push(e.wellKey);
   }
   if (conflicts.length > 0) return { committed: false, conflicts };
   for (const e of entries) root[e.wellKey] = e.record;

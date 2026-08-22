@@ -129,14 +129,16 @@ async function readPool(): Promise<PoolSnapshot> {
     .sort((a, b) => a[0].localeCompare(b[0]))
     .map(([wellKey, wellName]) => {
       const cfg = configByKey.get(wellKey) ?? {};
-      const holdRaw = asRecord(holds[wellKey]);
+      // Raw, uncoerced: the fingerprint covers the whole stored value, so
+      // normalising it here would hide exactly the drift it exists to catch.
+      const holdRaw = holds[wellKey];
       return {
         wellKey,
         wellName,
         observed: {
           outgoing: outgoingByKey.get(wellKey) ?? null,
           statusIsDown: statusDownByKey.get(wellKey) === true,
-          hold: Object.keys(holdRaw).length ? (holdRaw as Partial<EstimationHoldRecord>) : null,
+          hold: holdRaw,
           acceptedPullMs: pullsByKey.get(wellKey) ?? [],
           config: {
             companyId: typeof cfg.companyId === 'string' ? cfg.companyId : undefined,

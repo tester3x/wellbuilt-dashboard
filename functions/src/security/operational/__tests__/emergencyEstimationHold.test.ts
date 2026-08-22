@@ -23,6 +23,7 @@ import {
   collectAcceptedPulls,
   holdBatchCompareAndSet,
   resolveWellIdentity,
+  canonicalJson,
 } from '../emergencyEstimationHold';
 
 const sha256 = (s: string) => createHash('sha256').update(s).digest('hex');
@@ -462,7 +463,7 @@ describe('holdBatchCompareAndSet', () => {
   const entry = (k: string, fp: string) => ({ wellKey: k, expectedFingerprint: fp, record: rec(k) });
 
   it('commits the whole reviewed set when every fingerprint matches', () => {
-    const out = holdBatchCompareAndSet({}, [entry('a', 'none'), entry('b', 'none')]);
+    const out = holdBatchCompareAndSet({}, [entry('a', holdFingerprint(undefined)), entry('b', holdFingerprint(undefined))]);
     expect(out.committed).toBe(true);
     if (out.committed) expect(Object.keys(out.root).sort()).toEqual(['a', 'b']);
   });
@@ -470,7 +471,7 @@ describe('holdBatchCompareAndSet', () => {
   it('writes NOTHING when a single well drifted — no partial state can exist', () => {
     const live = { b: { active: true, heldAtPullUTC: NEWER, heldAtMs: 9 } };
     const before = JSON.stringify(live);
-    const out = holdBatchCompareAndSet(live, [entry('a', 'none'), entry('b', 'none')]);
+    const out = holdBatchCompareAndSet(live, [entry('a', holdFingerprint(undefined)), entry('b', holdFingerprint(undefined))]);
     expect(out.committed).toBe(false);
     if (!out.committed) expect(out.conflicts).toEqual(['b']);
     expect(JSON.stringify(live)).toBe(before);
@@ -481,7 +482,7 @@ describe('holdBatchCompareAndSet', () => {
       a: { active: true, heldAtPullUTC: NEWER, heldAtMs: 1 },
       b: { active: true, heldAtPullUTC: NEWER, heldAtMs: 2 },
     };
-    const out = holdBatchCompareAndSet(live, [entry('a', 'none'), entry('b', 'none')]);
+    const out = holdBatchCompareAndSet(live, [entry('a', holdFingerprint(undefined)), entry('b', holdFingerprint(undefined))]);
     if (!out.committed) expect(out.conflicts.sort()).toEqual(['a', 'b']);
   });
 
@@ -493,7 +494,7 @@ describe('holdBatchCompareAndSet', () => {
 
   it('preserves holds outside the reviewed batch', () => {
     const live = { other: { active: true, heldAtPullUTC: PULL, heldAtMs: 3 } };
-    const out = holdBatchCompareAndSet(live, [entry('a', 'none')]);
+    const out = holdBatchCompareAndSet(live, [entry('a', holdFingerprint(undefined))]);
     expect(out.committed).toBe(true);
     if (out.committed) expect(out.root.other).toEqual(live.other);
   });
@@ -503,7 +504,151 @@ describe('holdBatchCompareAndSet', () => {
     // abort, leaving holds behind while the error claimed nothing was applied.
     const live = { b: { active: true, heldAtPullUTC: NEWER, heldAtMs: 9 } };
     const before = JSON.stringify(live);
-    const out = holdBatchCompareAndSet(live, [entry('a', 'none'), entry('b', 'none'), entry('c', 'none')]);
+    const out = holdBatchCompareAndSet(live, [entry('a', holdFingerprint(undefined)), entry('b', holdFingerprint(undefined)), entry('c', holdFingerprint(undefined))]);
+    expect(out.committed).toBe(false);
+    expect(JSON.stringify(live)).toBe(before);
+  });
+});
+
+// ── 13. exact full-value fingerprint ────────────────────────────────────────
+
+describe('canonicalJson', () => {
+  it('is insensitive to key insertion order, recursively', () => {
+    expect(canonicalJson({ b: 1, a: { d: 2, c: 3 } }))
+      .toBe(canonicalJson({ a: { c: 3, d: 2 }, b: 1 }));
+  });
+
+  it('keeps array order, which is meaningful', () => {
+    expect(canonicalJson([1, 2])).not.toBe(canonicalJson([2, 1]));
+  });
+
+  it('distinguishes absent, null, and every present value', () => {
+    const seen = new Set([
+      canonicalJson(undefined), canonicalJson(null), canonicalJson(''),
+      canonicalJson(0), canonicalJson(false), canonicalJson({}), canonicalJson([]),
+    ]);
+    expect(seen.size).toBe(7);
+  });
+
+  it('distinguishes a key present-but-null from an absent key', () => {
+    expect(canonicalJson({ a: null })).not.toBe(canonicalJson({}));
+    expect(canonicalJson({ a: null })).not.toBe(canonicalJson({ a: undefined }));
+  });
+
+  it('emits nothing a JSON value could collide with', () => {
+    for (const s of [canonicalJson(undefined), canonicalJson(null), canonicalJson(NaN)]) {
+      expect(s.startsWith('#')).toBe(true);
+    }
+  });
+});
+
+describe('holdFingerprint is exact', () => {
+  const base = {
+    active: true, wellName: 'Gabriel 1', heldAtPullUTC: PULL,
+    heldAtResponseId: 'response_1', heldByUid: 'admin-1', heldAtMs: 1000,
+    applyOpId: 'op-1', reason: 'outage',
+  };
+
+  it('is stable for an identical complete value', () => {
+    expect(holdFingerprint({ ...base })).toBe(holdFingerprint({ ...base }));
+  });
+
+  it('ignores key order but nothing else', () => {
+    const reordered = Object.fromEntries(Object.entries(base).reverse());
+    expect(holdFingerprint(reordered)).toBe(holdFingerprint(base));
+  });
+
+  it('CHANGES when any single field drifts, including metadata', () => {
+    const drifts: Array<[string, Record<string, unknown>]> = [
+      ['reason', { ...base, reason: 'different' }],
+      ['heldByUid', { ...base, heldByUid: 'admin-2' }],
+      ['wellName', { ...base, wellName: 'Gabriel 2' }],
+      ['extra field', { ...base, somethingNew: true }],
+      ['applyOpId', { ...base, applyOpId: 'op-2' }],
+      ['heldAtMs', { ...base, heldAtMs: 1001 }],
+      ['dropped field', (() => { const c = { ...base }; delete (c as Record<string, unknown>).reason; return c; })()],
+    ];
+    for (const [label, drifted] of drifts) {
+      expect(holdFingerprint(drifted)).not.toBe(holdFingerprint(base));
+      expect(label).toBeTruthy();
+    }
+  });
+
+  it('does NOT collapse inactive or malformed records together', () => {
+    // The defect: every one of these used to fingerprint as "inactive".
+    const variants = [
+      { active: false },
+      { active: false, reason: 'a' },
+      { active: false, reason: 'b' },
+      { active: 0 },
+      {},
+      'not-an-object',
+      42,
+      [],
+    ];
+    const prints = variants.map(holdFingerprint);
+    expect(new Set(prints).size).toBe(variants.length);
+  });
+
+  it('distinguishes absent from null and from empty', () => {
+    expect(holdFingerprint(undefined)).toBe('#absent');
+    expect(new Set([holdFingerprint(undefined), holdFingerprint(null), holdFingerprint({})]).size).toBe(3);
+  });
+});
+
+// ── 14. drift aborts the whole batch, root untouched ────────────────────────
+
+describe('metadata drift aborts the atomic batch', () => {
+  const observed = {
+    active: true, wellName: 'Gabriel 1', heldAtPullUTC: PULL,
+    heldByUid: 'admin-1', heldAtMs: 1000, applyOpId: 'op-1', reason: 'outage',
+  };
+  const record: EstimationHoldRecord = { active: true, heldAtPullUTC: PULL, applyOpId: 'op-new' };
+  const batch = (fp: string) => [{ wellKey: 'a', expectedFingerprint: fp, record }];
+
+  const mutations: Array<[string, Record<string, unknown>]> = [
+    ['reason', { ...observed, reason: 'changed' }],
+    ['heldByUid', { ...observed, heldByUid: 'admin-2' }],
+    ['wellName', { ...observed, wellName: 'Gabriel 9' }],
+    ['extra field', { ...observed, addedLater: 'x' }],
+  ];
+
+  for (const [label, mutated] of mutations) {
+    it(`aborts and leaves the root byte-identical when only ${label} changed`, () => {
+      const live: Record<string, unknown> = { a: mutated, untouched: { active: true, heldAtPullUTC: PULL } };
+      const before = JSON.stringify(live);
+      const out = holdBatchCompareAndSet(live, batch(holdFingerprint(observed)));
+      expect(out.committed).toBe(false);
+      if (!out.committed) expect(out.conflicts).toEqual(['a']);
+      expect(JSON.stringify(live)).toBe(before);
+    });
+  }
+
+  it('aborts when only the contents of an INACTIVE record changed', () => {
+    const observedInactive = { active: false, reason: 'parked' };
+    const live: Record<string, unknown> = { a: { active: false, reason: 'parked-differently' } };
+    const before = JSON.stringify(live);
+    const out = holdBatchCompareAndSet(live, batch(holdFingerprint(observedInactive)));
+    expect(out.committed).toBe(false);
+    expect(JSON.stringify(live)).toBe(before);
+  });
+
+  it('commits when the complete value is identical', () => {
+    const live: Record<string, unknown> = { a: { ...observed } };
+    const out = holdBatchCompareAndSet(live, batch(holdFingerprint(observed)));
+    expect(out.committed).toBe(true);
+    if (out.committed) expect(out.root.a).toEqual(record);
+  });
+
+  it('commits when the observed key was absent and still is', () => {
+    const out = holdBatchCompareAndSet({}, batch(holdFingerprint(undefined)));
+    expect(out.committed).toBe(true);
+  });
+
+  it('aborts when the key was absent at preview but exists now', () => {
+    const live: Record<string, unknown> = { a: { active: true, heldAtPullUTC: NEWER } };
+    const before = JSON.stringify(live);
+    const out = holdBatchCompareAndSet(live, batch(holdFingerprint(undefined)));
     expect(out.committed).toBe(false);
     expect(JSON.stringify(live)).toBe(before);
   });
