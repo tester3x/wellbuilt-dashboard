@@ -315,10 +315,14 @@ export const STALE_AFTER_MS = 3 * 60 * 1000;
  * Returns a notice in three cases: the refresh is failing, nothing has ever
  * loaded, or the last good snapshot has aged past STALE_AFTER_MS (which catches
  * a refresh that silently stopped without throwing).
+ *
+ * Reads the age off `health` rather than the clock, so this stays pure and can
+ * be called during render. `staleForMs` is stamped every time the subscription
+ * publishes — the same 30s tick that moves the levels — so the banner and the
+ * numbers beside it are always describing the same moment.
  */
 export function describePoolHealth(
   health: WellPoolHealth | null | undefined,
-  nowMs: number,
 ): PoolHealthNotice | null {
   if (!health) return null;
 
@@ -332,9 +336,7 @@ export function describePoolHealth(
       : null; // first load still in flight — not an error yet
   }
 
-  const ageMs = health.lastAuthoritativeAt === null
-    ? null
-    : Math.max(0, nowMs - health.lastAuthoritativeAt);
+  const ageMs = health.staleForMs;
 
   if (health.degraded) {
     return {
@@ -367,6 +369,103 @@ export function formatAge(ms: number | null): string {
   const hours = Math.floor(minutes / 60);
   if (hours < 24) return `${hours}h`;
   return `${Math.floor(hours / 24)}d`;
+}
+
+// ── subscription orchestration ──────────────────────────────────────────────
+
+export const AUTHORITATIVE_REFRESH_MS = 60 * 1000;
+export const ESTIMATE_TICK_MS = 30 * 1000;
+
+export interface WellPoolSnapshot {
+  wellConfig: Record<string, EstimationConfig>;
+  wellStatus: Record<string, EstimationStatus>;
+}
+
+export interface WellPoolSubscriptionDeps {
+  /** Authoritative, server-authorised snapshot load. */
+  loadPool: () => Promise<Partial<WellPoolSnapshot>>;
+  /** Receives freshly estimated rows. Never called after unsubscribe. */
+  emit: (rows: EstimatedWellRow[], routes: string[], health: WellPoolHealth) => void;
+  now: () => number;
+  setTimer: (fn: () => void, ms: number) => unknown;
+  clearTimer: (handle: unknown) => void;
+  onError?: (err: unknown) => void;
+  authoritativeMs?: number;
+  estimateMs?: number;
+}
+
+/**
+ * Drive the Well Status screen from an authoritative snapshot.
+ *
+ * Every side effect is injected, so the whole lifecycle — timers, ordering,
+ * teardown — is testable without Firebase, a bundler, or real time.
+ *
+ * Two clocks on purpose. `authoritativeMs` re-loads the snapshot so a newly
+ * processed pull lands and rebaselines that well without a page reload;
+ * `estimateMs` recomputes levels from the snapshot already held, which costs
+ * nothing and keeps the display moving even while a refresh is failing.
+ *
+ * Returns the unsubscribe function.
+ */
+export function createWellPoolSubscription(deps: WellPoolSubscriptionDeps): () => void {
+  const {
+    loadPool, emit, now, setTimer, clearTimer, onError,
+    authoritativeMs = AUTHORITATIVE_REFRESH_MS,
+    estimateMs = ESTIMATE_TICK_MS,
+  } = deps;
+
+  let stopped = false;
+  let inFlight = false;
+  let wellConfig: Record<string, EstimationConfig> = {};
+  let wellStatus: Record<string, EstimationStatus> = {};
+  let lastAuthoritativeAt: number | null = null;
+  let errorCode: string | null = null;
+
+  const publish = () => {
+    if (stopped) return;
+    const nowMs = now();
+    const rows = buildWellRows({ wellConfig, wellStatus, nowMs });
+    emit(rows, routesFromRows(rows), computeHealth({ lastAuthoritativeAt, errorCode, nowMs }));
+  };
+
+  const refresh = async () => {
+    // `inFlight` is what makes snapshots un-reorderable: a second load cannot
+    // start while one is outstanding, so two responses can never race to
+    // overwrite each other. It also caps the callable at one call in flight per
+    // subscription no matter how the timers drift.
+    if (stopped || inFlight) return;
+    inFlight = true;
+    try {
+      const pool = await loadPool();
+      // Re-checked after the await — unsubscribe can happen mid-flight. This
+      // only avoids writing state nobody will read; `publish` refuses to emit
+      // once stopped, so the guarantee the caller sees comes from there.
+      if (stopped) return;
+      wellConfig = (pool?.wellConfig || {}) as Record<string, EstimationConfig>;
+      wellStatus = (pool?.wellStatus || {}) as Record<string, EstimationStatus>;
+      lastAuthoritativeAt = now();
+      errorCode = null;
+    } catch (err) {
+      if (stopped) return;
+      // Keep the last good snapshot — estimating from it is still useful — but
+      // record the failure so the screen can say the data is unconfirmed.
+      errorCode = errorCodeOf(err);
+      onError?.(err);
+    } finally {
+      inFlight = false;
+      publish();
+    }
+  };
+
+  void refresh();
+  const refreshHandle = setTimer(() => { void refresh(); }, authoritativeMs);
+  const estimateHandle = setTimer(publish, estimateMs);
+
+  return () => {
+    stopped = true;
+    clearTimer(refreshHandle);
+    clearTimer(estimateHandle);
+  };
 }
 
 /** Stable code for a thrown value, for display and tests. */

@@ -3,10 +3,7 @@ import { ref, get, onValue, set } from 'firebase/database';
 import { getFirebaseDatabase } from './firebase';
 import { adminGetWellHistory, adminGetWellPerformance, adminGetWellPool } from './adminDashboardCatalog';
 import {
-  buildWellRows,
-  computeHealth,
-  errorCodeOf,
-  routesFromRows,
+  createWellPoolSubscription,
   type EstimationConfig,
   type EstimationStatus,
   type WellPoolHealth,
@@ -316,79 +313,37 @@ export async function fetchAllWellStatuses(): Promise<WellResponse[]> {
 // Well Status data path.
 //
 // Production RTDB rules do NOT grant a read at `well_config` or `packets/outgoing`
-// themselves — `well_config`/`wells` carry only a `$well/.read`, and RTDB grants
+// themselves. `well_config` and `wells` carry only a `$well/.read`, and RTDB grants
 // cascade down, never up, so an unfiltered parent subscription is denied for every
 // caller including a platform admin. `packets/outgoing` additionally demands a
-// `companyId`-scoped query for non-platform callers.
+// `companyId`-scoped query, which cannot work today because no outgoing row
+// carries that field.
 //
 // So the authoritative snapshot comes from the `adminGetWellPool` callable, which
-// authorises the caller server-side (requireRegisteredDashboardUser +
-// canViewWellPool) and returns a company-projected, field-allowlisted catalog.
-// Nothing here reads a broad RTDB parent node.
+// authenticates the caller, resolves their company server-side from the verified
+// uid, accepts no client-supplied company, and returns a projected,
+// field-allowlisted catalog. Nothing here reads a broad RTDB parent node.
 //
-// Two clocks, deliberately separate:
-//   • AUTHORITATIVE_REFRESH_MS — re-fetch the snapshot, so a newly processed pull
-//     lands without a page reload and resets that well's estimate onto its new
-//     bottom level and timestamp.
-//   • ESTIMATE_TICK_MS — recompute levels from the snapshot already held. Local,
-//     free, and keeps the display moving between refreshes even while degraded.
-//
-// A failed refresh never silently serves a stale snapshot as if it were live: the
-// health object flips to degraded and the screen is expected to say so.
-export const AUTHORITATIVE_REFRESH_MS = 60 * 1000;
-export const ESTIMATE_TICK_MS = 30 * 1000;
-
+// All lifecycle behaviour lives in createWellPoolSubscription so it can be tested
+// without Firebase or real time; this function only injects the real dependencies.
 export function subscribeToWellStatusesUnified(
   callback: (wells: WellResponse[], routes: string[], health: WellPoolHealth) => void,
   onError?: (err: unknown) => void,
 ): () => void {
-  let stopped = false;
-  let wellConfig: Record<string, EstimationConfig> = {};
-  let wellStatus: Record<string, EstimationStatus> = {};
-  let lastAuthoritativeAt: number | null = null;
-  let errorCode: string | null = null;
-  let inFlight = false;
-
-  const emit = () => {
-    if (stopped) return;
-    const nowMs = Date.now();
-    const rows = buildWellRows({ wellConfig, wellStatus, nowMs });
-    const health = computeHealth({ lastAuthoritativeAt, errorCode, nowMs });
-    callback(rows as unknown as WellResponse[], routesFromRows(rows), health);
-  };
-
-  const refreshAuthoritative = async () => {
-    // Overlapping refreshes would let a slow response overwrite a newer one.
-    if (stopped || inFlight) return;
-    inFlight = true;
-    try {
+  return createWellPoolSubscription({
+    loadPool: async () => {
       const pool = await adminGetWellPool();
-      if (stopped) return;
-      wellConfig = (pool.wellConfig || {}) as Record<string, EstimationConfig>;
-      wellStatus = (pool.wellStatus || {}) as Record<string, EstimationStatus>;
-      lastAuthoritativeAt = Date.now();
-      errorCode = null;
-    } catch (err) {
-      if (stopped) return;
-      // Keep the last good snapshot and keep estimating from it — but mark the
-      // pool degraded so the UI can show the data is no longer being confirmed.
-      errorCode = errorCodeOf(err);
-      onError?.(err);
-    } finally {
-      inFlight = false;
-      emit();
-    }
-  };
-
-  void refreshAuthoritative();
-  const refreshTimer = setInterval(() => { void refreshAuthoritative(); }, AUTHORITATIVE_REFRESH_MS);
-  const estimateTimer = setInterval(emit, ESTIMATE_TICK_MS);
-
-  return () => {
-    stopped = true;
-    clearInterval(refreshTimer);
-    clearInterval(estimateTimer);
-  };
+      return {
+        wellConfig: (pool.wellConfig || {}) as Record<string, EstimationConfig>,
+        wellStatus: (pool.wellStatus || {}) as Record<string, EstimationStatus>,
+      };
+    },
+    emit: (rows, routes, health) => callback(rows as unknown as WellResponse[], routes, health),
+    now: () => Date.now(),
+    setTimer: (fn, ms) => setInterval(fn, ms),
+    clearTimer: (h) => clearInterval(h as ReturnType<typeof setInterval>),
+    onError,
+  });
 }
 
 

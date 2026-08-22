@@ -220,9 +220,7 @@ test('a recovered refresh clears the degraded flag', () => {
 
 test('degraded pool produces a visible error notice naming the cause', () => {
   const notice = describePoolHealth(
-    computeHealth({ lastAuthoritativeAt: T0, errorCode: 'permission-denied', nowMs: T0 + 5 * MIN }),
-    T0 + 5 * MIN,
-  );
+    computeHealth({ lastAuthoritativeAt: T0, errorCode: 'permission-denied', nowMs: T0 + 5 * MIN }));
   assert.ok(notice, 'a degraded pool must never render silently');
   assert.equal(notice.severity, 'error');
   assert.match(notice.detail, /permission-denied/);
@@ -231,17 +229,14 @@ test('degraded pool produces a visible error notice naming the cause', () => {
 
 test('a healthy, fresh pool shows no banner', () => {
   const notice = describePoolHealth(
-    computeHealth({ lastAuthoritativeAt: T0, errorCode: null, nowMs: T0 + 5_000 }),
-    T0 + 5_000,
-  );
+    computeHealth({ lastAuthoritativeAt: T0, errorCode: null, nowMs: T0 + 5_000 }));
   assert.equal(notice, null);
 });
 
 test('a healthy but aged snapshot still warns — a silent stall is caught', () => {
   const at = T0 + STALE_AFTER_MS + 1000;
   const notice = describePoolHealth(
-    computeHealth({ lastAuthoritativeAt: T0, errorCode: null, nowMs: at }), at,
-  );
+    computeHealth({ lastAuthoritativeAt: T0, errorCode: null, nowMs: at }));
   assert.ok(notice);
   assert.equal(notice.severity, 'warning');
   assert.match(notice.title, /stale/i);
@@ -249,8 +244,7 @@ test('a healthy but aged snapshot still warns — a silent stall is caught', () 
 
 test('a total failure with no data ever loaded is reported as an error', () => {
   const notice = describePoolHealth(
-    computeHealth({ lastAuthoritativeAt: null, errorCode: 'permission-denied', nowMs: T0 }), T0,
-  );
+    computeHealth({ lastAuthoritativeAt: null, errorCode: 'permission-denied', nowMs: T0 }));
   assert.ok(notice);
   assert.equal(notice.severity, 'error');
   assert.match(notice.title, /unavailable/i);
@@ -258,8 +252,7 @@ test('a total failure with no data ever loaded is reported as an error', () => {
 
 test('the very first load in flight is not reported as an error', () => {
   const notice = describePoolHealth(
-    computeHealth({ lastAuthoritativeAt: null, errorCode: null, nowMs: T0 }), T0,
-  );
+    computeHealth({ lastAuthoritativeAt: null, errorCode: null, nowMs: T0 }));
   assert.equal(notice, null);
 });
 

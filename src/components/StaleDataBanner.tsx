@@ -13,7 +13,7 @@ import { describePoolHealth } from '@/lib/wellEstimation';
  * difference between "estimating from 9:05" and "current".
  */
 export function StaleDataBanner({ health }: { health: WellPoolHealth | null }) {
-  const notice = describePoolHealth(health, Date.now());
+  const notice = describePoolHealth(health);
   if (!notice) return null;
 
   const tone = notice.severity === 'error'
