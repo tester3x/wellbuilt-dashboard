@@ -10,9 +10,9 @@ import {
   assertCanonicalDriverId,
   evaluateStaffWriteDriverAssignment,
 } from './operational/staffWriteDriverAssignment';
+import { commitCanonicalAssignmentWrite } from './operational/assignmentApplyTransaction';
 import {
   assignmentDigest,
-  evaluateAssignmentTransaction,
   knownRouteNames,
   parseScopeList,
   previewContextDigest,
@@ -132,31 +132,20 @@ export const staffWriteDriverAssignment = httpsV2.onCall(
       throw new httpsV2.HttpsError('failed-precondition', 'expected_preview_context_required');
     }
 
-    const tx = await rtdb.ref(`drivers/profiles/${driverId}`).transaction((current) => {
-      const rec = current && typeof current === 'object' ? current as Record<string, unknown> : null;
-      const gate = evaluateAssignmentTransaction({
-        driverId,
-        profile: rec,
-        expectedPreviewContextDigest: expectedContext,
-        proposedRoutes: after.assignedRoutes,
-        proposedWells: after.assignedWells,
-        callerCompanyId: caller.companyId,
-        isPlatformAdmin: caller.isPlatformAdmin,
-      });
-      if (!gate.ok || !rec) return;
-      return {
-        ...rec,
-        assignedRoutes: after.assignedRoutes,
-        assignedWells: after.assignedWells,
-        assignmentRevision: gate.nextRevision,
-        assignmentUpdatedAt: Date.now(),
-        assignmentUpdatedBy: caller.uid,
-      };
+    const applied = await commitCanonicalAssignmentWrite({
+      profileRef: rtdb.ref(`drivers/profiles/${driverId}`),
+      driverId,
+      expectedPreviewContextDigest: expectedContext,
+      proposedRoutes: after.assignedRoutes,
+      proposedWells: after.assignedWells,
+      callerCompanyId: caller.companyId,
+      isPlatformAdmin: caller.isPlatformAdmin,
+      callerUid: caller.uid,
+      nowMs: Date.now(),
     });
-    if (!tx.committed || !tx.snapshot.exists()) {
+    if (!applied.ok) {
       throw new httpsV2.HttpsError('failed-precondition', 'stale_preview');
     }
-    const written = tx.snapshot.val() as Record<string, unknown>;
     await writeSecurityAudit({
       action: 'staffWriteDriverAssignment',
       actorUid: caller.uid,
@@ -165,12 +154,12 @@ export const staffWriteDriverAssignment = httpsV2.onCall(
         companyId: decided.companyId,
         before,
         after,
-        assignmentRevision: written.assignmentRevision ?? null,
+        assignmentRevision: applied.assignmentRevision,
       },
     });
     return {
       ...preview,
-      assignmentRevision: written.assignmentRevision ?? null,
+      assignmentRevision: applied.assignmentRevision,
     };
   },
 );

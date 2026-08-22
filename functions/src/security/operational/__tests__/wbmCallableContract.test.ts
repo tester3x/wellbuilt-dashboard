@@ -69,6 +69,26 @@ describe('WB-M callable export / contract matrix', () => {
     expect(body).not.toMatch(/drivers\/approved\/\$\{/);
   });
 
+  it('staffWriteDriverAssignment apply uses a path-scoped primed transaction, not once() snapshot', () => {
+    const body = read('src/security/staffWriteDriverAssignmentCallable.ts');
+    const helper = read('src/security/operational/assignmentApplyTransaction.ts');
+    expect(body).toMatch(/commitCanonicalAssignmentWrite/);
+    expect(body).toMatch(/expectedPreviewContextDigest: expectedContext/);
+    expect(body).not.toMatch(/profileRef\.off\('value'\)/);
+    expect(helper).toMatch(/profileRef\.on\('value', listener/);
+    expect(helper).toMatch(/profileRef\.off\('value', listener\)/);
+    expect(helper).not.toMatch(/profileRef\.off\('value'\);/);
+    expect(helper.indexOf("profileRef.on('value', listener")).toBeLessThan(
+      helper.indexOf('profileRef.transaction('),
+    );
+    expect(helper.indexOf('profileRef.transaction(')).toBeLessThan(
+      helper.indexOf("profileRef.off('value', listener)"),
+    );
+    expect(helper).toMatch(/evaluateAssignmentTransaction/);
+    expect(helper).not.toMatch(/drivers\/approved/);
+    expect(helper).not.toMatch(/let lastDigest|cachedProfile|globalThis/);
+  });
+
   it('WB-T dispatch write modules are untouched on this branch', () => {
     const dispatch = read('src/security/operational/staffWriteDispatch.ts');
     expect(dispatch).toMatch(/evaluateStaffWriteDispatch/);

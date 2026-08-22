@@ -112,6 +112,16 @@ describe('preview-context digest binds driver, company, revision, and scopes', (
       callerCompanyId: 'liquid-gold',
       isPlatformAdmin: false,
     })).toEqual({ ok: false, reason: 'stale_preview_context' });
+
+    expect(evaluateAssignmentTransaction({
+      driverId,
+      profile: DRIVER_ID_PROFILE,
+      expectedPreviewContextDigest: ctx(),
+      proposedRoutes: proposed,
+      proposedWells: ['Gabriel 1'],
+      callerCompanyId: 'liquid-gold',
+      isPlatformAdmin: false,
+    })).toEqual({ ok: false, reason: 'stale_preview_context' });
   });
 
   it('rejects inactive and tenant-mismatched profiles before digest compare', () => {
