@@ -1011,6 +1011,22 @@ export const processIncomingPull = functionsV1.database
     // before the heavy AFR/bbls calculations finish
     await db.ref(`wells/${wellName}/status/isDown`).set(nextIsDown);
 
+    // ─── emergency estimation hold release ──────────────────────────────
+    // A hold says "we cannot get a new pull, stop projecting this well
+    // forward". This packet IS a new pull, so the premise is gone and the
+    // hold is released here.
+    //
+    // Deliberately NOT touching isDown. A hold and a physical mark-down are
+    // different statements; clearing one must never clear the other, or a
+    // routine pull would silently reactivate a well someone marked down —
+    // exactly the regression the wellDown authority guard above exists to
+    // prevent.
+    //
+    // Consumers are already safe without this: a hold carries the pull it was
+    // taken against and is ignored once that is no longer the latest pull.
+    // Removing the record keeps the data honest rather than merely inert.
+    await db.ref(`wells/${wellName}/estimationHold`).remove();
+
     // Calculate all fields
     const tankTopInches = (parseFloat(String(data.tankLevelFeet)) || 0) * 12;
 
@@ -4768,6 +4784,8 @@ export {
   // Operational path hardening
   ingestDriverPacket,
   ingestWbmPull,
+  adminPreviewEstimationHold,
+  adminApplyEstimationHold,
   upsertDriverShift,
   resolveActiveDriverShift,
   claimDriverShift,

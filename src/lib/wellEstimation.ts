@@ -47,16 +47,36 @@ export interface EstimationStatus {
   bbls24hrs?: string;
   windowBblsDay?: string;
   overnightBblsDay?: string;
+  /** Server-owned emergency hold, projected by adminGetWellPool. */
+  estimationHoldActive?: boolean;
+  /** The pull the hold was taken against — the binding that makes it safe. */
+  estimationHeldAtPullUTC?: string;
   [k: string]: unknown;
 }
 
 /** Why a row is not showing a live estimate. `live` means it is. */
 export type EstimationBasis =
-  | 'live'          // estimated forward from the last pull
-  | 'well_down'     // wellDown — the level is not rising; show the recorded value
-  | 'no_pull'       // no pull on record for this well
-  | 'no_flow_rate'  // avgFlowRateMinutes missing or <= 0
-  | 'unparsable';   // bottom level or pull timestamp could not be read
+  | 'live'             // estimated forward from the last pull
+  | 'well_down'        // wellDown — the level is not rising; show the recorded value
+  | 'emergency_hold'   // server-side hold: freeze at the last accepted bottom level
+  | 'no_pull'          // no pull on record for this well
+  | 'no_flow_rate'     // avgFlowRateMinutes missing or <= 0
+  | 'unparsable';      // bottom level or pull timestamp could not be read
+
+/**
+ * Is an emergency estimation hold in force for this row?
+ *
+ * The hold names the pull it was taken against. It is honoured only while that
+ * is still the row's latest pull, so the moment a real pull lands the hold stops
+ * applying on its own — no write, no ordering assumption, and no window where a
+ * freshly pulled well stays frozen.
+ */
+export function estimationHoldApplies(status: EstimationStatus): boolean {
+  if (status.estimationHoldActive !== true) return false;
+  const heldAt = status.estimationHeldAtPullUTC;
+  if (typeof heldAt !== 'string' || !heldAt) return false;
+  return heldAt === status.lastPullDateTimeUTC;
+}
 
 /** Freshness of the authoritative snapshot the estimate is built on. */
 export interface WellPoolHealth {
@@ -228,6 +248,14 @@ export function buildWellRows(input: {
       // A down well is not filling. Show what was recorded, never a forecast.
       basis = 'well_down';
       timeTillPull = 'Down';
+    } else if (estimationHoldApplies(status)) {
+      // Held: the last pull is still correct, but no newer one can arrive, so
+      // projecting forward would invent barrels. Freeze at the level the driver
+      // actually left behind. lastPullDateTimeUTC and the flow rate are
+      // untouched, so the moment a real pull lands this resumes on its own.
+      basis = 'emergency_hold';
+      currentLevel = (status.lastPullBottomLevel as string) || currentLevel;
+      timeTillPull = 'Held';
     } else if (afrMinutes <= 0) {
       basis = 'no_flow_rate';
     } else {

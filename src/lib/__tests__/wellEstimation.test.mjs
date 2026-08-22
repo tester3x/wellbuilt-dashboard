@@ -320,3 +320,71 @@ test('age formatting', () => {
   assert.equal(formatAge(6 * MIN), '6m');
   assert.equal(formatAge(2 * 60 * MIN), '2h');
 });
+
+// ── 9. emergency estimation hold ────────────────────────────────────────────
+
+test('an active hold freezes the level at the last accepted bottom', () => {
+  const { wellConfig, wellStatus } = gabriel1();
+  Object.assign(wellStatus['Gabriel 1'], {
+    estimationHoldActive: true,
+    estimationHeldAtPullUTC: '2026-08-20T17:42:02.991Z',
+  });
+  const early = buildWellRows({ wellConfig, wellStatus, nowMs: T0 + 60 * MIN })[0];
+  const later = buildWellRows({ wellConfig, wellStatus, nowMs: T0 + 6000 * MIN })[0];
+
+  assert.equal(early.estimationBasis, 'emergency_hold');
+  assert.equal(early.currentLevel, "2'7\"", 'frozen at lastPullBottomLevel');
+  assert.equal(later.currentLevel, early.currentLevel, 'must not drift while held');
+  assert.equal(early.timeTillPull, 'Held');
+});
+
+test('a hold preserves flow rate, pull timestamp and history fields', () => {
+  const { wellConfig, wellStatus } = gabriel1();
+  Object.assign(wellStatus['Gabriel 1'], {
+    estimationHoldActive: true,
+    estimationHeldAtPullUTC: '2026-08-20T17:42:02.991Z',
+  });
+  const row = buildWellRows({ wellConfig, wellStatus, nowMs: T0 + 600 * MIN })[0];
+  assert.equal(row.flowRate, '6:00:33', 'flow rate untouched');
+  assert.equal(row.lastPullDateTimeUTC, '2026-08-20T17:42:02.991Z', 'pull timestamp untouched');
+  assert.equal(row.lastPullBottomLevel, "2'7\"", 'pull boundary untouched');
+  assert.equal(row.timestampUTC, '2026-08-20T17:42:02.991Z');
+  assert.equal(row.isDown, false, 'a hold is NOT a physical down state');
+});
+
+test('a hold bound to an older pull is ignored — a new pull resumes estimation', () => {
+  // The concurrency property, client side: no write is needed to release.
+  const { wellConfig, wellStatus } = gabriel1({
+    bottom: "2'0\"", pulledAt: new Date(T0 + 600 * MIN).toISOString(),
+  });
+  Object.assign(wellStatus['Gabriel 1'], {
+    estimationHoldActive: true,
+    estimationHeldAtPullUTC: '2026-08-20T17:42:02.991Z', // the OLD pull
+  });
+  const row = buildWellRows({ wellConfig, wellStatus, nowMs: T0 + 660 * MIN })[0];
+  assert.equal(row.estimationBasis, 'live', 'stale hold must not suppress a pulled well');
+  assert.ok(row.currentLevelInches > 24, 'estimating from the new bottom level');
+});
+
+test('physical wellDown still wins over a hold', () => {
+  const { wellConfig, wellStatus } = gabriel1({ down: true });
+  Object.assign(wellStatus['Gabriel 1'], {
+    estimationHoldActive: true,
+    estimationHeldAtPullUTC: '2026-08-20T17:42:02.991Z',
+  });
+  const row = buildWellRows({ wellConfig, wellStatus, nowMs: T0 + 600 * MIN })[0];
+  assert.equal(row.estimationBasis, 'well_down');
+  assert.equal(row.timeTillPull, 'Down');
+});
+
+test('an unbound or inactive hold does not freeze anything', () => {
+  for (const bad of [
+    { estimationHoldActive: true },
+    { estimationHoldActive: false, estimationHeldAtPullUTC: '2026-08-20T17:42:02.991Z' },
+  ]) {
+    const { wellConfig, wellStatus } = gabriel1();
+    Object.assign(wellStatus['Gabriel 1'], bad);
+    const row = buildWellRows({ wellConfig, wellStatus, nowMs: T0 + 600 * MIN })[0];
+    assert.equal(row.estimationBasis, 'live', JSON.stringify(bad));
+  }
+});
