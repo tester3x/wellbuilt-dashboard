@@ -2,7 +2,9 @@
  * Primed aborting stamp for approved-row retirement.
  *
  * Missing current must not become { legacyLoginRetired: true }.
+ * Transaction current must match the Preview fingerprint.
  */
+import { classifyApprovedRowForRetirement } from '../identityBinding';
 import { commitApprovedRetirementStamp, type ApprovedRowRef } from '../retirementApplyTransaction';
 
 const ALPHA_NAME = 'FixtureDriverAlpha';
@@ -16,12 +18,19 @@ function alphaRow(): Record<string, unknown> {
   };
 }
 
+function alphaFingerprint(row: Record<string, unknown> = alphaRow()): string {
+  const classified = classifyApprovedRowForRetirement(row);
+  if (!classified.present) throw new Error('expected present row');
+  return classified.fingerprint;
+}
+
 type FakeSnap = { exists(): boolean; val(): unknown };
 
 type FakeRefOpts = {
   cancelWith?: Error;
   throwOnAttach?: Error;
   rejectTransaction?: Error;
+  mutateBeforeTransaction?: (store: { value: Record<string, unknown> | null }) => void;
 };
 
 function makeFakeRef(
@@ -67,6 +76,7 @@ function makeFakeRef(
       snapshot: FakeSnap;
     }> {
       if (opts.rejectTransaction) throw opts.rejectTransaction;
+      opts.mutateBeforeTransaction?.(store);
       const current = listeners.size > 0 ? store.value : null;
       const next = update(current);
       if (next === undefined) {
@@ -91,8 +101,12 @@ function makeFakeRef(
 
 describe('commitApprovedRetirementStamp', () => {
   it('normal existing-row retirement succeeds, preserves fields, and rereads the flag', async () => {
-    const ref = makeFakeRef(alphaRow());
-    const result = await commitApprovedRetirementStamp({ approvedRef: ref });
+    const row = alphaRow();
+    const ref = makeFakeRef(row);
+    const result = await commitApprovedRetirementStamp({
+      approvedRef: ref,
+      expectedRowFingerprint: alphaFingerprint(row),
+    });
     expect(result.ok).toBe(true);
     if (!result.ok) return;
     expect(result.written.legacyLoginRetired).toBe(true);
@@ -106,7 +120,10 @@ describe('commitApprovedRetirementStamp', () => {
 
   it('row missing at stamp writes no ghost row', async () => {
     const ref = makeFakeRef(null);
-    const result = await commitApprovedRetirementStamp({ approvedRef: ref });
+    const result = await commitApprovedRetirementStamp({
+      approvedRef: ref,
+      expectedRowFingerprint: alphaFingerprint(),
+    });
     expect(result).toEqual({ ok: false, reason: 'approved_row_missing' });
     expect(ref.writes).toBe(0);
     expect(ref.store.value).toBeNull();
@@ -116,7 +133,23 @@ describe('commitApprovedRetirementStamp', () => {
   it('row deleted between binding repair and stamp aborts without creating a ghost', async () => {
     const ref = makeFakeRef(alphaRow());
     ref.store.value = null;
-    const result = await commitApprovedRetirementStamp({ approvedRef: ref });
+    const result = await commitApprovedRetirementStamp({
+      approvedRef: ref,
+      expectedRowFingerprint: alphaFingerprint(),
+    });
+    expect(result).toEqual({ ok: false, reason: 'approved_row_missing' });
+    expect(ref.writes).toBe(0);
+    expect(ref.store.value).toBeNull();
+  });
+
+  it('row deleted during the stamp transaction aborts without creating a ghost', async () => {
+    const ref = makeFakeRef(alphaRow(), {
+      mutateBeforeTransaction: (store) => { store.value = null; },
+    });
+    const result = await commitApprovedRetirementStamp({
+      approvedRef: ref,
+      expectedRowFingerprint: alphaFingerprint(),
+    });
     expect(result).toEqual({ ok: false, reason: 'approved_row_missing' });
     expect(ref.writes).toBe(0);
     expect(ref.store.value).toBeNull();
@@ -124,10 +157,64 @@ describe('commitApprovedRetirementStamp', () => {
 
   it('malformed row aborts and does not replace the node', async () => {
     const ref = makeFakeRef({ active: true });
-    const result = await commitApprovedRetirementStamp({ approvedRef: ref });
+    const result = await commitApprovedRetirementStamp({
+      approvedRef: ref,
+      expectedRowFingerprint: alphaFingerprint(),
+    });
     expect(result).toEqual({ ok: false, reason: 'approved_row_malformed' });
     expect(ref.writes).toBe(0);
     expect(ref.store.value).toEqual({ active: true });
+  });
+
+  it('same-name recreation with different fields is stale_preview and not stamped', async () => {
+    const original = alphaRow();
+    const recreated = {
+      displayName: ALPHA_NAME,
+      active: true,
+      companyId: 'other-co',
+      truckNumber: 'HIJACKED',
+    };
+    const ref = makeFakeRef(original, {
+      mutateBeforeTransaction: (store) => { store.value = { ...recreated }; },
+    });
+    const result = await commitApprovedRetirementStamp({
+      approvedRef: ref,
+      expectedRowFingerprint: alphaFingerprint(original),
+    });
+    expect(result).toEqual({ ok: false, reason: 'stale_preview' });
+    expect(ref.writes).toBe(0);
+    expect(ref.store.value).toEqual(recreated);
+    expect(ref.store.value?.legacyLoginRetired).toBeUndefined();
+  });
+
+  it('same-name replacement before the stamp is stale_preview', async () => {
+    const original = alphaRow();
+    const replaced = { ...original, legalName: 'Not Alpha' };
+    const ref = makeFakeRef(original);
+    ref.store.value = replaced;
+    const result = await commitApprovedRetirementStamp({
+      approvedRef: ref,
+      expectedRowFingerprint: alphaFingerprint(original),
+    });
+    expect(result).toEqual({ ok: false, reason: 'stale_preview' });
+    expect(ref.writes).toBe(0);
+    expect(ref.store.value).toEqual(replaced);
+  });
+
+  it('field mutation during the stamp is stale_preview', async () => {
+    const original = alphaRow();
+    const ref = makeFakeRef(original, {
+      mutateBeforeTransaction: (store) => {
+        store.value = { ...original, truckNumber: 'T-999' };
+      },
+    });
+    const result = await commitApprovedRetirementStamp({
+      approvedRef: ref,
+      expectedRowFingerprint: alphaFingerprint(original),
+    });
+    expect(result).toEqual({ ok: false, reason: 'stale_preview' });
+    expect(ref.writes).toBe(0);
+    expect(ref.store.value).toEqual({ ...original, truckNumber: 'T-999' });
   });
 
   it('naive update() of a missing path would ghost; the stamp does not', async () => {
@@ -139,7 +226,10 @@ describe('commitApprovedRetirementStamp', () => {
     expect(ghostStore.value).toEqual({ legacyLoginRetired: true });
 
     const ref = makeFakeRef(null);
-    const result = await commitApprovedRetirementStamp({ approvedRef: ref });
+    const result = await commitApprovedRetirementStamp({
+      approvedRef: ref,
+      expectedRowFingerprint: alphaFingerprint(),
+    });
     expect(result.ok).toBe(false);
     expect(ref.store.value).toBeNull();
     expect(ref.store.value).not.toEqual({ legacyLoginRetired: true });

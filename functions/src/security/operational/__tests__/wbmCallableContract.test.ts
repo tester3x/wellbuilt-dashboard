@@ -123,10 +123,15 @@ describe('WB-M callable export / contract matrix', () => {
     expect(retire).toMatch(/evaluateRetirementApplyGate/);
     expect(retire).toMatch(/retirementTerminalAllowsApprovedStamp/);
     expect(retire).toMatch(/commitApprovedRetirementStamp/);
+    expect(retire).toMatch(/expectedRowFingerprint/);
+    expect(retire).toMatch(/proveRetirementCommit/);
     expect(retire).toMatch(/byApprovedOwnedByDriver/);
-    expect(retire).toMatch(/legacyLoginRetired !== true/);
-    expect(retire.indexOf('retirementTerminalAllowsApprovedStamp')).toBeLessThan(
-      retire.indexOf('commitApprovedRetirementStamp'),
+    const apply = retire.slice(retire.indexOf("mode === 'dry-run'"));
+    expect(apply.indexOf('retirementTerminalAllowsApprovedStamp')).toBeLessThan(
+      apply.indexOf('commitApprovedRetirementStamp'),
+    );
+    expect(apply.indexOf('commitApprovedRetirementStamp')).toBeLessThan(
+      apply.indexOf('proveRetirementCommit'),
     );
     expect(retire).not.toMatch(/\.update\(/);
     expect(retire).not.toMatch(/raw\.approvedKey/);

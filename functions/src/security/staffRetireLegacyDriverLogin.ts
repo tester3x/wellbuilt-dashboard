@@ -1,9 +1,10 @@
 /**
  * Separate audited retirement of the legacy approved-row login.
  *
- * Preview requires a valid approved-row object and binds its fingerprint
- * into the digest. Apply stamps only through a primed aborting transaction
- * after terminal binding proof, then rereads legacyLoginRetired === true.
+ * Preview requires a valid approved-row object and binds the complete
+ * canonical row fingerprint into the digest. Apply stamps only through a
+ * primed aborting transaction that re-checks that fingerprint, then rereads
+ * the retired row and both exact binding sides before success.
  * update() is never used: it would create a ghost row from a missing path.
  */
 import * as httpsV2 from 'firebase-functions/v2/https';
@@ -20,6 +21,7 @@ import {
   evaluateRetirementPreview,
   parseBinding,
   parseIdentityProof,
+  proveRetirementCommit,
   retirementTerminalAllowsApprovedStamp,
   type IdentityBinding,
 } from './operational/identityBinding';
@@ -166,15 +168,29 @@ export const staffRetireLegacyDriverLogin = httpsV2.onCall(
 
     const stamped = await commitApprovedRetirementStamp({
       approvedRef: rtdb.ref(`drivers/approved/${surviving.approvedKey}`) as never,
+      expectedRowFingerprint: gate.approvedRowFingerprint,
     });
     if (!stamped.ok) {
       throw new httpsV2.HttpsError('failed-precondition', stamped.reason);
     }
 
-    const proved = (await rtdb.ref(`drivers/approved/${surviving.approvedKey}`).once('value')).val() as
-      Record<string, unknown> | null;
-    if (!proved || proved.legacyLoginRetired !== true) {
-      throw new httpsV2.HttpsError('failed-precondition', 'legacy_login_not_retired');
+    const provedRow = (await rtdb.ref(`drivers/approved/${surviving.approvedKey}`).once('value')).val();
+    const provedByDriver = parseBinding(
+      (await rtdb.ref(BINDING_BY_DRIVER(surviving.driverId)).once('value')).val(),
+    );
+    const provedByApproved = parseBinding(
+      (await rtdb.ref(BINDING_BY_APPROVED(surviving.approvedKey)).once('value')).val(),
+    );
+    const proved = proveRetirementCommit({
+      approvedRow: provedRow,
+      byDriver: provedByDriver,
+      byApproved: provedByApproved,
+      expectedDriverId: surviving.driverId,
+      expectedApprovedKey: surviving.approvedKey,
+      expectedOpId: surviving.opId,
+    });
+    if (!proved.ok) {
+      throw new httpsV2.HttpsError('failed-precondition', proved.reason);
     }
 
     await writeSecurityAudit({

@@ -15,6 +15,7 @@ import {
   evaluateRetirementApplyGate,
   evaluateRetirementPreview,
   legacyLoginIsRetired,
+  proveRetirementCommit,
   retirementTerminalAllowsApprovedStamp,
 } from '../identityBinding';
 import {
@@ -599,15 +600,18 @@ describe('source contracts', () => {
     expect(retire).toMatch(/approvedRow/);
     expect(retire).toMatch(/evaluateRetirementApplyGate/);
     expect(retire).toMatch(/commitApprovedRetirementStamp/);
-    expect(retire).toMatch(/legacyLoginRetired !== true/);
+    expect(retire).toMatch(/expectedRowFingerprint: gate\.approvedRowFingerprint/);
+    expect(retire).toMatch(/proveRetirementCommit/);
     expect(retire).not.toMatch(/\.update\(/);
-    expect(retire.indexOf('retirementTerminalAllowsApprovedStamp')).toBeLessThan(
-      retire.indexOf('commitApprovedRetirementStamp'),
+    const apply = retire.slice(retire.indexOf("mode === 'dry-run'"));
+    expect(apply.indexOf('retirementTerminalAllowsApprovedStamp')).toBeLessThan(
+      apply.indexOf('commitApprovedRetirementStamp'),
     );
-    expect(retire.indexOf('commitApprovedRetirementStamp')).toBeLessThan(
-      retire.indexOf('legacyLoginRetired !== true'),
+    expect(apply.indexOf('commitApprovedRetirementStamp')).toBeLessThan(
+      apply.indexOf('proveRetirementCommit'),
     );
     expect(stamp).toMatch(/evaluateApprovedRetirementStamp/);
+    expect(stamp).toMatch(/expectedRowFingerprint/);
     expect(stamp).toMatch(/approvedRef\.on\('value', listener/);
     expect(stamp).toMatch(/approvedRef\.off\('value', listener\)/);
     expect(stamp).not.toMatch(/\.update\(/);
@@ -924,16 +928,17 @@ describe('approved-row retirement existence guard', () => {
   });
 
   it('evaluateApprovedRetirementStamp never produces a ghost from missing or malformed', () => {
-    expect(evaluateApprovedRetirementStamp(null)).toEqual({
+    const fp = classifyApprovedRowForRetirement(alphaRow()).fingerprint;
+    expect(evaluateApprovedRetirementStamp(null, fp)).toEqual({
       ok: false, reason: 'approved_row_missing',
     });
-    expect(evaluateApprovedRetirementStamp(undefined)).toEqual({
+    expect(evaluateApprovedRetirementStamp(undefined, fp)).toEqual({
       ok: false, reason: 'approved_row_missing',
     });
-    expect(evaluateApprovedRetirementStamp([])).toEqual({
+    expect(evaluateApprovedRetirementStamp([], fp)).toEqual({
       ok: false, reason: 'approved_row_malformed',
     });
-    expect(evaluateApprovedRetirementStamp({ active: true })).toEqual({
+    expect(evaluateApprovedRetirementStamp({ active: true }, fp)).toEqual({
       ok: false, reason: 'approved_row_malformed',
     });
   });
@@ -943,7 +948,7 @@ describe('approved-row retirement existence guard', () => {
     expect(preview.ok).toBe(true);
     if (!preview.ok) return;
     expect(preview.decision.action).toBe('retire');
-    const stamp = evaluateApprovedRetirementStamp(alphaRow());
+    const stamp = evaluateApprovedRetirementStamp(alphaRow(), preview.approvedRowFingerprint);
     expect(stamp.ok).toBe(true);
     if (!stamp.ok) return;
     expect(stamp.next.legacyLoginRetired).toBe(true);
@@ -953,6 +958,96 @@ describe('approved-row retirement existence guard', () => {
       preview,
       expectedPreviewDigest: preview.digest,
     })).toEqual(preview);
+  });
+
+  it('same displayName/active/retired with a mutated field is a different fingerprint', () => {
+    const original = classifyApprovedRowForRetirement(alphaRow());
+    const sameName = classifyApprovedRowForRetirement({
+      ...alphaRow(),
+      truckNumber: 'HIJACKED',
+    });
+    expect(original.present).toBe(true);
+    expect(sameName.present).toBe(true);
+    expect(sameName.fingerprint).not.toBe(original.fingerprint);
+    expect(evaluateApprovedRetirementStamp(
+      { ...alphaRow(), truckNumber: 'HIJACKED' },
+      original.fingerprint,
+    )).toEqual({ ok: false, reason: 'stale_preview' });
+    const left = classifyApprovedRowForRetirement({ displayName: 'X', b: 1, a: 2 });
+    const right = classifyApprovedRowForRetirement({ a: 2, displayName: 'X', b: 1 });
+    expect(left.present && right.present).toBe(true);
+    expect(left.fingerprint).toBe(right.fingerprint);
+  });
+});
+
+describe('retirement stamp reread proves row and both binding sides', () => {
+  const driverId = 'bbbbbbbb-cccc-4ddd-8eee-000000000001';
+  const surviving = {
+    driverId,
+    approvedKey: ALPHA_KEY,
+    status: 'active' as const,
+    opId: 'op-orig',
+  };
+  const retired = { ...surviving, status: 'legacy_login_retired' as const };
+  const proven = {
+    secureLoginAt: 1,
+    secureLoginDriverId: driverId,
+    secureLoginUid: 'uid-1',
+    hydrationAt: 2,
+    hydrationDriverId: driverId,
+  };
+
+  function previewRow(row: Record<string, unknown> = alphaRow()) {
+    return evaluateRetirementPreview({
+      requestedDriverId: driverId,
+      byDriver: surviving,
+      byApproved: surviving,
+      proof: proven,
+      approvedRow: row,
+    });
+  }
+
+  it('post-stamp proof requires retired row and the exact retired pair/opId on both sides', () => {
+    const preview = previewRow();
+    expect(preview.ok).toBe(true);
+    if (!preview.ok) return;
+    const stamp = evaluateApprovedRetirementStamp(alphaRow(), preview.approvedRowFingerprint);
+    expect(stamp.ok).toBe(true);
+    if (!stamp.ok) return;
+    expect(proveRetirementCommit({
+      approvedRow: stamp.next,
+      byDriver: retired,
+      byApproved: retired,
+      expectedDriverId: driverId,
+      expectedApprovedKey: ALPHA_KEY,
+      expectedOpId: 'op-orig',
+    })).toEqual({ ok: true });
+  });
+
+  it('binding mutation after repair fails the post-stamp proof', () => {
+    const preview = previewRow();
+    expect(preview.ok).toBe(true);
+    if (!preview.ok) return;
+    const stamp = evaluateApprovedRetirementStamp(alphaRow(), preview.approvedRowFingerprint);
+    expect(stamp.ok).toBe(true);
+    if (!stamp.ok) return;
+    const hijacked = { ...retired, opId: 'op-hijack' };
+    expect(proveRetirementCommit({
+      approvedRow: stamp.next,
+      byDriver: hijacked,
+      byApproved: retired,
+      expectedDriverId: driverId,
+      expectedApprovedKey: ALPHA_KEY,
+      expectedOpId: 'op-orig',
+    }).ok).toBe(false);
+    expect(proveRetirementCommit({
+      approvedRow: stamp.next,
+      byDriver: retired,
+      byApproved: { ...retired, status: 'active' },
+      expectedDriverId: driverId,
+      expectedApprovedKey: ALPHA_KEY,
+      expectedOpId: 'op-orig',
+    }).ok).toBe(false);
   });
 });
 

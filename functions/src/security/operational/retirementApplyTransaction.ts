@@ -3,8 +3,8 @@
  *
  * RTDB update() creates a missing path. A transaction that returns an object
  * from null does the same. This stamp primes a path-specific listener, then
- * aborts (return undefined) when the approved row is missing or malformed.
- * Success rereads and requires legacyLoginRetired === true.
+ * aborts (return undefined) unless the live row is the exact Preview
+ * fingerprint. Success rereads and requires legacyLoginRetired === true.
  */
 import { evaluateApprovedRetirementStamp } from './identityBinding';
 
@@ -31,12 +31,14 @@ export type RetirementStampResult =
     reason:
       | 'approved_row_missing'
       | 'approved_row_malformed'
+      | 'stale_preview'
       | 'retirement_stamp_aborted'
       | 'legacy_login_not_retired';
   };
 
 export async function commitApprovedRetirementStamp(input: {
   approvedRef: ApprovedRowRef;
+  expectedRowFingerprint: string;
 }): Promise<RetirementStampResult> {
   let abortReason: Extract<RetirementStampResult, { ok: false }>['reason'] = 'retirement_stamp_aborted';
   let resolvePrime: () => void = () => undefined;
@@ -47,7 +49,7 @@ export async function commitApprovedRetirementStamp(input: {
       input.approvedRef.on('value', listener, (err) => reject(err));
     });
     const tx = await input.approvedRef.transaction((current) => {
-      const gate = evaluateApprovedRetirementStamp(current);
+      const gate = evaluateApprovedRetirementStamp(current, input.expectedRowFingerprint);
       if (!gate.ok) {
         abortReason = gate.reason;
         return;

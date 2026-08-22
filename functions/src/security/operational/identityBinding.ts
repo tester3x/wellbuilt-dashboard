@@ -256,8 +256,35 @@ export type ApprovedRowRetirementClass =
   | { present: false; reason: 'approved_row_missing' | 'approved_row_malformed'; fingerprint: string };
 
 /**
+ * Stable JSON for a complete approved-row fingerprint. Key order must not
+ * change the digest; nested objects are sorted, arrays keep order.
+ */
+export function canonicalJson(value: unknown): string {
+  if (value === null || typeof value === 'string' || typeof value === 'boolean') {
+    return JSON.stringify(value);
+  }
+  if (typeof value === 'number') {
+    return JSON.stringify(Number.isFinite(value) ? value : null);
+  }
+  if (Array.isArray(value)) {
+    return `[${value.map(canonicalJson).join(',')}]`;
+  }
+  if (typeof value === 'object') {
+    const obj = value as Record<string, unknown>;
+    const keys = Object.keys(obj).filter((k) => obj[k] !== undefined).sort();
+    return `{${keys.map((k) => `${JSON.stringify(k)}:${canonicalJson(obj[k])}`).join(',')}}`;
+  }
+  return JSON.stringify(value === undefined ? null : String(value));
+}
+
+export function canonicalApprovedRowFingerprint(row: Record<string, unknown>): string {
+  return createHash('sha256').update(canonicalJson(row)).digest('hex');
+}
+
+/**
  * Preview requires a real approved-row object. Missing and malformed are
  * distinct from an unretired present row so deletion cannot share a digest.
+ * The fingerprint covers the entire canonical row, not just name/active/retired.
  */
 export function classifyApprovedRowForRetirement(raw: unknown): ApprovedRowRetirementClass {
   if (raw === null || raw === undefined) {
@@ -271,28 +298,34 @@ export function classifyApprovedRowForRetirement(raw: unknown): ApprovedRowRetir
   if (!displayName) {
     return { present: false, reason: 'approved_row_malformed', fingerprint: 'malformed' };
   }
-  const fingerprint = createHash('sha256').update(JSON.stringify({
-    exists: true,
-    displayName,
-    active: row.active ?? null,
-    legacyLoginRetired: row.legacyLoginRetired === true,
-  })).digest('hex');
   return {
     present: true,
     retired: row.legacyLoginRetired === true,
-    fingerprint,
+    fingerprint: canonicalApprovedRowFingerprint(row),
   };
 }
+
+export type RetirementStampAbort =
+  | 'approved_row_missing'
+  | 'approved_row_malformed'
+  | 'stale_preview';
 
 /**
  * Stamp merge. Returning undefined aborts an RTDB transaction without
  * creating a ghost row. Never produce a new object from null/malformed.
+ * Current must match the exact Preview fingerprint or abort as stale.
  */
-export function evaluateApprovedRetirementStamp(current: unknown):
+export function evaluateApprovedRetirementStamp(
+  current: unknown,
+  expectedFingerprint: string,
+):
   | { ok: true; next: Record<string, unknown> }
-  | { ok: false; reason: 'approved_row_missing' | 'approved_row_malformed' } {
+  | { ok: false; reason: RetirementStampAbort } {
   const classified = classifyApprovedRowForRetirement(current);
   if (!classified.present) return { ok: false, reason: classified.reason };
+  if (!expectedFingerprint || classified.fingerprint !== expectedFingerprint) {
+    return { ok: false, reason: 'stale_preview' };
+  }
   return {
     ok: true,
     next: { ...(current as Record<string, unknown>), legacyLoginRetired: true },
@@ -367,6 +400,17 @@ export function retirePreviewDigest(input: {
   })).digest('hex');
 }
 
+export type RetirementPreviewOk = {
+  ok: true;
+  decision: Exclude<RetireDecision, { action: 'refuse' }>;
+  digest: string;
+  approvedRowFingerprint: string;
+};
+
+export type RetirementPreviewResult =
+  | RetirementPreviewOk
+  | { ok: false; reason: string };
+
 export function evaluateRetirementPreview(input: {
   requestedDriverId: string;
   byDriver: IdentityBinding | null;
@@ -375,8 +419,7 @@ export function evaluateRetirementPreview(input: {
   proof: IdentityProofRecord;
   approvedRow?: unknown;
   approvedLegacyLoginRetired?: boolean;
-}): { ok: true; decision: Exclude<RetireDecision, { action: 'refuse' }>; digest: string }
-  | { ok: false; reason: string } {
+}): RetirementPreviewResult {
   const row = classifyApprovedRowForRetirement(input.approvedRow);
   const decision = decideRetireLegacyLogin(input);
   if (decision.action === 'refuse') return { ok: false, reason: decision.reason };
@@ -391,7 +434,7 @@ export function evaluateRetirementPreview(input: {
     approvedLegacyLoginRetired: row.present && row.retired,
     approvedRowFingerprint: row.fingerprint,
   });
-  return { ok: true, decision, digest };
+  return { ok: true, decision, digest, approvedRowFingerprint: row.fingerprint };
 }
 
 /**
@@ -400,11 +443,9 @@ export function evaluateRetirementPreview(input: {
  * or malformed rows stay approved_row_missing / approved_row_malformed.
  */
 export function evaluateRetirementApplyGate(input: {
-  preview: { ok: true; decision: Exclude<RetireDecision, { action: 'refuse' }>; digest: string }
-    | { ok: false; reason: string };
+  preview: RetirementPreviewResult;
   expectedPreviewDigest: string;
-}): { ok: true; decision: Exclude<RetireDecision, { action: 'refuse' }>; digest: string }
-  | { ok: false; reason: string } {
+}): RetirementPreviewResult {
   const expected = input.expectedPreviewDigest;
   if (!input.preview.ok) {
     if (
@@ -443,6 +484,30 @@ export function retirementTerminalAllowsApprovedStamp(input: {
     return { ok: false, reason: 'binding_op_mismatch' };
   }
   return { ok: true };
+}
+
+/**
+ * Post-stamp reread. Success requires the approved row present and retired
+ * plus both binding sides equal to the exact expected retired pair/opId.
+ */
+export function proveRetirementCommit(input: {
+  approvedRow: unknown;
+  byDriver: IdentityBinding | null;
+  byApproved: IdentityBinding | null;
+  expectedDriverId: string;
+  expectedApprovedKey: string;
+  expectedOpId: string;
+}): { ok: true } | { ok: false; reason: string } {
+  const row = classifyApprovedRowForRetirement(input.approvedRow);
+  if (!row.present) return { ok: false, reason: row.reason };
+  if (!row.retired) return { ok: false, reason: 'legacy_login_not_retired' };
+  return retirementTerminalAllowsApprovedStamp({
+    driverId: input.expectedDriverId,
+    approvedKey: input.expectedApprovedKey,
+    expectedOpId: input.expectedOpId,
+    byDriver: input.byDriver,
+    byApproved: input.byApproved,
+  });
 }
 
 export function legacyLoginIsRetired(input: {
