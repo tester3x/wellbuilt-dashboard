@@ -8,6 +8,7 @@
  */
 import * as httpsV2 from 'firebase-functions/v2/https';
 import * as admin from 'firebase-admin';
+import { canonicalWellKey } from './operational/emergencyEstimationHold';
 import { requireManageDrivers, requireRegisteredDashboardUser } from './adminAuth';
 import {
   callerCanViewGlobalWellPool,
@@ -79,7 +80,7 @@ export const adminGetWellPool = httpsV2.onCall(
     const [wellSnap, outgoingSnap, wellsSnap] = await Promise.all([
       rtdb.ref('well_config').once('value'),
       rtdb.ref('packets/outgoing').once('value'),
-      rtdb.ref('wells').once('value'),
+      rtdb.ref('emergencyHolds').once('value'),
     ]);
     const full = projectDashboardCatalog({
       approved: {},
@@ -110,19 +111,25 @@ function asRecord(v: unknown): Record<string, unknown> {
 }
 
 /**
- * Copy `wells/{well}/estimationHold` onto the matching projected status row.
+ * Copy the emergency hold onto the matching projected status row.
  *
- * Only the two fields a consumer needs to decide whether to freeze — the record
- * also carries who took it and why, which is audit material, not display
- * material, and is left in the database.
+ * Joined on the canonical well key, not the raw name, so a legacy "Gabriel1"
+ * status row still finds the hold taken against "Gabriel 1".
+ *
+ * Only the two fields a consumer needs in order to decide whether to freeze —
+ * who took the hold and why is audit material, not display material, and stays
+ * in the database.
  */
 export function attachEstimationHolds(
   wellStatus: Record<string, Record<string, unknown>>,
-  wellsNode: Record<string, unknown>,
+  holdRoot: Record<string, unknown>,
 ): Record<string, Record<string, unknown>> {
+  const byKey = new Map<string, Record<string, unknown>>();
+  for (const [key, val] of Object.entries(holdRoot)) byKey.set(canonicalWellKey(key), asRecord(val));
+
   const out: Record<string, Record<string, unknown>> = {};
   for (const [wellName, row] of Object.entries(wellStatus)) {
-    const hold = asRecord(asRecord(wellsNode[wellName]).estimationHold);
+    const hold = byKey.get(canonicalWellKey(wellName)) ?? {};
     out[wellName] = hold.active === true && typeof hold.heldAtPullUTC === 'string'
       ? { ...row, estimationHoldActive: true, estimationHeldAtPullUTC: hold.heldAtPullUTC }
       : row;

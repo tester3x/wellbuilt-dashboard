@@ -7,90 +7,204 @@
  * is a separate, server-owned flag saying only: stop projecting this well
  * forward, the estimate is running on ground we can no longer refresh.
  *
- * Stored at `wells/{wellName}/estimationHold` — a stable path, deliberately not
- * on the outgoing response row, which is deleted and recreated on every pull.
+ * Stored under a single `emergencyHolds` root rather than one flag per well.
+ * That is what lets the whole reviewed set be taken in ONE transaction: the
+ * batch either commits entirely or writes nothing at all, with no compensation
+ * pass that could itself fail and strand a partial state.
  *
- * SELECTION IS THE WELL'S OWN HISTORY, not a model of it. For every well in the
- * pool we read the accepted production pulls, sort them, take the intervals
- * between consecutive pulls, and average those. A well is overdue when the time
- * since its latest accepted pull exceeds its own average interval. No flow rate
- * is required and no well is pre-filtered as "dormant" — a well that is pulled
- * every three weeks is simply a well with a three-week average, and it is
- * overdue on its own terms or it is not.
+ * SELECTION IS THE WELL'S OWN HISTORY. For every well in the pool we read the
+ * accepted production pulls, sort them, difference consecutive pairs, and
+ * average those gaps. A well is overdue when time since its latest accepted
+ * pull exceeds its own average. No flow rate is required, and no well is
+ * pre-filtered as "dormant" — a well pulled every three weeks simply has a
+ * three-week average.
  *
- * IDENTITY-BOUND, which is what makes it safe under concurrency. The hold
- * records the pull it was taken against. A consumer honours it only while that
- * is still the well's latest pull, so the instant a real pull lands the hold
- * stops applying — no write, no ordering assumption, no window in which a
- * freshly pulled well stays frozen.
+ * IDENTITY-BOUND. The hold records the pull it was taken against, and consumers
+ * honour it only while that is still the well's latest pull — so a real pull
+ * releases it with no write and no ordering assumption.
  */
 
 export const HOLD_REASON_MAX = 500;
-/** Fewest accepted pulls that can yield an average interval worth acting on. */
-export const MIN_PULLS_FOR_AVERAGE = 3;
+
+/**
+ * Two accepted pulls give one interval, which is an average.
+ *
+ * Mike's rule is the average gap between accepted pulls; a previous revision of
+ * this file required three pulls, which was an invented policy, not his.
+ */
+export const MIN_PULLS_FOR_AVERAGE = 2;
+
+export const HOLD_ROOT = 'emergencyHolds';
 
 export interface EstimationHoldRecord {
   active: boolean;
+  /** The well name as canonically resolved, for humans reading the node. */
+  wellName?: string;
   /** lastPullDateTimeUTC this hold was taken against. The binding. */
   heldAtPullUTC: string;
   heldAtResponseId?: string;
   heldByUid?: string;
   heldAtMs?: number;
-  /** Apply operation that wrote this hold — ownership for compensation. */
   applyOpId?: string;
   reason?: string;
 }
 
-export function holdSuppressesEstimation(
-  hold: Partial<EstimationHoldRecord> | null | undefined,
-  currentLastPullUTC: string | null | undefined,
-): boolean {
-  if (!hold || hold.active !== true) return false;
-  if (typeof hold.heldAtPullUTC !== 'string' || !hold.heldAtPullUTC) return false;
-  if (typeof currentLastPullUTC !== 'string' || !currentLastPullUTC) return false;
-  return hold.heldAtPullUTC === currentLastPullUTC;
+// ── well identity ───────────────────────────────────────────────────────────
+
+/**
+ * One key per real well, across every node that names wells differently.
+ *
+ * `well_config` uses "Gabriel 1", legacy rows and response ids use "Gabriel1",
+ * and processIncomingPull itself falls back between the two. Without a single
+ * join key, one well's history, physical-down state and hold end up on
+ * different records — which is how a well gets held while its own pull history
+ * sits under another name.
+ */
+export function canonicalWellKey(name: unknown): string {
+  if (typeof name !== 'string') return '';
+  return name.replace(/\s+/g, '').toLowerCase();
+}
+
+export interface IdentityResolution {
+  /** canonical key -> the display name to use. */
+  canonicalName: Map<string, string>;
+  /** canonical key -> every distinct config name that collapsed onto it. */
+  collisions: Map<string, string[]>;
 }
 
 /**
- * Exact fingerprint of the hold state observed at Preview.
+ * Resolve display names, and refuse to guess when two CONFIGURED wells collapse.
  *
- * Apply's transaction aborts unless the live hold still fingerprints to this,
- * so a *different* or *newer* hold can never be overwritten — only the precise
- * state the reviewer saw may be replaced.
+ * `well_config` is the authority on what a well is. If it lists both "Gabriel 1"
+ * and "Gabriel1" as separate wells, they may genuinely be two wells with an
+ * unfortunate naming clash — merging them would blend two histories, and
+ * picking one would hide the other. Those are reported and refused. Variants
+ * seen only in status/history are joined onto the configured name, which is the
+ * normal legacy case.
  */
-export function holdFingerprint(hold: Partial<EstimationHoldRecord> | null | undefined): string {
-  if (!hold || typeof hold !== 'object') return 'none';
-  if (hold.active !== true) return 'inactive';
-  return [
-    'active',
-    hold.heldAtPullUTC ?? '',
-    hold.heldAtResponseId ?? '',
-    hold.applyOpId ?? '',
-    hold.heldAtMs != null ? String(hold.heldAtMs) : '',
-  ].join('|');
+export function resolveWellIdentity(input: {
+  configNames: string[];
+  otherNames: string[];
+}): IdentityResolution {
+  const canonicalName = new Map<string, string>();
+  const configByKey = new Map<string, Set<string>>();
+
+  for (const name of input.configNames) {
+    const key = canonicalWellKey(name);
+    if (!key) continue;
+    const set = configByKey.get(key) ?? new Set<string>();
+    set.add(name);
+    configByKey.set(key, set);
+  }
+
+  const collisions = new Map<string, string[]>();
+  for (const [key, names] of configByKey) {
+    if (names.size > 1) collisions.set(key, Array.from(names).sort());
+    else canonicalName.set(key, Array.from(names)[0]);
+  }
+
+  // Names seen only outside config adopt their own spelling — but never
+  // override a configured name, and never resurrect a collided key.
+  for (const name of input.otherNames) {
+    const key = canonicalWellKey(name);
+    if (!key || collisions.has(key) || canonicalName.has(key)) continue;
+    canonicalName.set(key, name);
+  }
+
+  return { canonicalName, collisions };
 }
 
-// ── pull-history statistics ─────────────────────────────────────────────────
+// ── accepted production pulls ───────────────────────────────────────────────
+
+export type PullRejectReason =
+  | 'edit_or_delete_key'
+  | 'non_pull_request_type'
+  | 'no_level_service_packet'
+  | 'no_tank_level'
+  | 'invalid_timestamp'
+  | 'missing_well';
+
+export type PullClassification =
+  | { accepted: true; wellName: string; wellKey: string; timestampMs: number }
+  | { accepted: false; reason: PullRejectReason };
+
+/** Keys the pull processor never writes for a production pull. */
+const NON_PULL_KEY = /^(edit|delete|history)[_-]/i;
+
+/**
+ * Is this `packets/processed` record an accepted production tank pull?
+ *
+ * Takes the KEY as well as the value, because the key is load-bearing evidence:
+ * 23 live `edit_*`/`delete_*` records carry no `requestType` at all, and a
+ * value-only reader that defaults missing `requestType` to "pull" counts every
+ * one of them as a pull — inflating a well's history with corrections and
+ * deletions and dragging its average interval down.
+ *
+ * A missing `requestType` is still honoured for genuine legacy production
+ * pulls, which are plain-keyed and carry a real tank reading.
+ */
+export function classifyProcessedRecord(key: string, value: unknown): PullClassification {
+  if (typeof key === 'string' && NON_PULL_KEY.test(key)) {
+    return { accepted: false, reason: 'edit_or_delete_key' };
+  }
+  if (!value || typeof value !== 'object' || Array.isArray(value)) {
+    return { accepted: false, reason: 'missing_well' };
+  }
+  const v = value as Record<string, unknown>;
+
+  // Present-and-not-pull is decisive. Absent stays eligible for legacy rows.
+  if (v.requestType !== undefined && v.requestType !== 'pull') {
+    return { accepted: false, reason: 'non_pull_request_type' };
+  }
+  if (v.noLevel === true) return { accepted: false, reason: 'no_level_service_packet' };
+
+  const wellName = typeof v.wellName === 'string' ? v.wellName.trim() : '';
+  if (!wellName) return { accepted: false, reason: 'missing_well' };
+
+  // The processor's own test for a usable pull: a positive tank top. Legacy
+  // rows predate tankTopInches but carry the raw tankLevelFeet it derives from.
+  const top = typeof v.tankTopInches === 'number' ? v.tankTopInches : undefined;
+  const feet = typeof v.tankLevelFeet === 'number'
+    ? v.tankLevelFeet
+    : typeof v.tankLevelFeet === 'string' ? parseFloat(v.tankLevelFeet) : undefined;
+  const hasLevel = (top !== undefined && top > 0)
+    || (top === undefined && feet !== undefined && Number.isFinite(feet) && feet > 0);
+  if (!hasLevel) return { accepted: false, reason: 'no_tank_level' };
+
+  const ts = typeof v.dateTimeUTC === 'string' ? Date.parse(v.dateTimeUTC) : NaN;
+  if (!Number.isFinite(ts) || ts <= 0) return { accepted: false, reason: 'invalid_timestamp' };
+
+  return { accepted: true, wellName, wellKey: canonicalWellKey(wellName), timestampMs: ts };
+}
+
+/** Group accepted pull timestamps by canonical well key. */
+export function collectAcceptedPulls(
+  records: Array<{ key: string; value: unknown }>,
+): { byWellKey: Map<string, number[]>; rejected: Record<PullRejectReason, number> } {
+  const byWellKey = new Map<string, number[]>();
+  const rejected: Record<PullRejectReason, number> = {
+    edit_or_delete_key: 0, non_pull_request_type: 0, no_level_service_packet: 0,
+    no_tank_level: 0, invalid_timestamp: 0, missing_well: 0,
+  };
+  for (const { key, value } of records) {
+    const c = classifyProcessedRecord(key, value);
+    if (!c.accepted) { rejected[c.reason] += 1; continue; }
+    const list = byWellKey.get(c.wellKey);
+    if (list) list.push(c.timestampMs); else byWellKey.set(c.wellKey, [c.timestampMs]);
+  }
+  return { byWellKey, rejected };
+}
+
+// ── statistics ──────────────────────────────────────────────────────────────
 
 export interface PullIntervalStats {
-  /** Accepted pull timestamps used, ascending, as epoch ms. */
   pullCount: number;
   latestPullMs: number | null;
   latestPullUTC: string | null;
-  /** Gaps between consecutive accepted pulls, ms. */
   intervalCount: number;
-  /** Arithmetic mean of those gaps, ms. Null when there are none. */
   averageIntervalMs: number | null;
 }
 
-/**
- * Sort the accepted pulls, difference consecutive pairs, and take the plain
- * arithmetic mean — the average the operator would compute by hand.
- *
- * Non-finite and duplicate timestamps are dropped: a duplicate would contribute
- * a zero-length interval and drag the average down, making a well look overdue
- * sooner than its real cadence warrants.
- */
 export function computePullIntervalStats(timestampsMs: number[]): PullIntervalStats {
   const sorted = Array.from(new Set(timestampsMs.filter((t) => Number.isFinite(t) && t > 0)))
     .sort((a, b) => a - b);
@@ -105,18 +219,34 @@ export function computePullIntervalStats(timestampsMs: number[]): PullIntervalSt
     latestPullMs,
     latestPullUTC: new Date(latestPullMs).toISOString(),
     intervalCount: intervals.length,
-    averageIntervalMs: intervals.length
-      ? intervals.reduce((a, b) => a + b, 0) / intervals.length
-      : null,
+    averageIntervalMs: intervals.length ? intervals.reduce((a, b) => a + b, 0) / intervals.length : null,
   };
 }
 
-/** `X'Y"` to inches. 0 means unusable — never a valid freeze point. */
 export function parseBottomInches(raw: unknown): number {
   if (typeof raw !== 'string') return 0;
   const m = raw.match(/(\d+)'(\d+)"/);
-  if (!m) return 0;
-  return parseInt(m[1], 10) * 12 + parseInt(m[2], 10);
+  return m ? parseInt(m[1], 10) * 12 + parseInt(m[2], 10) : 0;
+}
+
+export function holdSuppressesEstimation(
+  hold: Partial<EstimationHoldRecord> | null | undefined,
+  currentLastPullUTC: string | null | undefined,
+): boolean {
+  if (!hold || hold.active !== true) return false;
+  if (typeof hold.heldAtPullUTC !== 'string' || !hold.heldAtPullUTC) return false;
+  if (typeof currentLastPullUTC !== 'string' || !currentLastPullUTC) return false;
+  return hold.heldAtPullUTC === currentLastPullUTC;
+}
+
+/** Exact fingerprint of observed hold state — the compare in compare-and-set. */
+export function holdFingerprint(hold: Partial<EstimationHoldRecord> | null | undefined): string {
+  if (!hold || typeof hold !== 'object') return 'none';
+  if (hold.active !== true) return 'inactive';
+  return [
+    'active', hold.heldAtPullUTC ?? '', hold.heldAtResponseId ?? '',
+    hold.applyOpId ?? '', hold.heldAtMs != null ? String(hold.heldAtMs) : '',
+  ].join('|');
 }
 
 // ── per-well decision ───────────────────────────────────────────────────────
@@ -132,7 +262,6 @@ export interface HoldObservation {
   } | null;
   statusIsDown: boolean;
   hold: Partial<EstimationHoldRecord> | null;
-  /** Accepted production-pull timestamps for this well, epoch ms, any order. */
   acceptedPullMs: number[];
   config: { companyId?: string; avgFlowRate?: string; avgFlowRateMinutes?: number };
 }
@@ -144,9 +273,11 @@ export type HoldAction =
   | 'skip_already_held'
   | 'insufficient_history'
   | 'refuse_missing_status'
-  | 'refuse_missing_bottom';
+  | 'refuse_missing_bottom'
+  | 'refuse_ambiguous_identity';
 
 export interface HoldDecision {
+  wellKey: string;
   wellName: string;
   action: HoldAction;
   reason: string;
@@ -154,7 +285,6 @@ export interface HoldDecision {
   observed: {
     responseId: string | null;
     companyId: string | null;
-    /** Latest accepted pull per the OUTGOING row — the hold binding target. */
     lastPullDateTimeUTC: string | null;
     lastPullBottomLevel: string | null;
     lastPullBottomInches: number | null;
@@ -165,7 +295,6 @@ export interface HoldDecision {
     avgFlowRate: string | null;
     avgFlowRateMinutes: number | null;
   };
-  /** The arithmetic the proposal rests on, exposed for the reviewer. */
   history: {
     pullCount: number;
     intervalCount: number;
@@ -178,20 +307,35 @@ export interface HoldDecision {
   };
 }
 
-/**
- * Decide one well against a fixed `asOfMs`.
- *
- * Pure: same inputs, same decision, no clock. Every well in the pool reaches
- * here — physically down wells and wells with thin history are reported, not
- * silently dropped, because "not proposed" and "not examined" must be
- * distinguishable to whoever reviews this.
- */
+/** A configured-name collision: reported, never resolved by guessing. */
+export function ambiguousIdentityDecision(wellKey: string, names: string[]): HoldDecision {
+  return {
+    wellKey,
+    wellName: names.join(' | '),
+    action: 'refuse_ambiguous_identity',
+    reason:
+      `well_config lists ${names.length} wells that normalise to "${wellKey}" (${names.join(', ')}); ` +
+      'refusing rather than merging two histories or hiding one',
+    willWrite: [],
+    observed: {
+      responseId: null, companyId: null, lastPullDateTimeUTC: null, lastPullBottomLevel: null,
+      lastPullBottomInches: null, currentLevel: null, wellDown: false, holdActive: false,
+      holdFingerprint: 'none', avgFlowRate: null, avgFlowRateMinutes: null,
+    },
+    history: {
+      pullCount: 0, intervalCount: 0, averageIntervalMs: null, averageIntervalHours: null,
+      latestPullUTC: null, elapsedMs: null, elapsedHours: null, overdueRatio: null,
+    },
+  };
+}
+
 export function decideEstimationHold(input: {
+  wellKey: string;
   wellName: string;
   asOfMs: number;
   observed: HoldObservation;
 }): HoldDecision {
-  const { wellName, asOfMs, observed } = input;
+  const { wellKey, wellName, asOfMs, observed } = input;
   const o = observed.outgoing;
   const stats = computePullIntervalStats(observed.acceptedPullMs);
   const physicallyDown = o?.wellDown === true || o?.isDown === true || observed.statusIsDown === true;
@@ -199,6 +343,7 @@ export function decideEstimationHold(input: {
   const elapsedMs = stats.latestPullMs === null ? null : Math.max(0, asOfMs - stats.latestPullMs);
 
   const base = {
+    wellKey,
     wellName,
     observed: {
       responseId: o?.responseId ?? null,
@@ -228,97 +373,62 @@ export function decideEstimationHold(input: {
     },
   };
 
-  if (!o) {
-    return { ...base, action: 'refuse_missing_status', reason: 'no outgoing status row', willWrite: [] };
-  }
+  if (!o) return { ...base, action: 'refuse_missing_status', reason: 'no outgoing status row', willWrite: [] };
 
-  // Reported, never held. A down well already is not estimating; adding a hold
-  // would give one visible state two causes and muddle the eventual clear.
   if (physicallyDown) {
     return {
-      ...base,
-      action: 'skip_physically_down',
+      ...base, action: 'skip_physically_down',
       reason: 'physically down — evaluated and reported, left physically down without a hold',
       willWrite: [],
     };
   }
-
   if (base.observed.holdActive) {
     return { ...base, action: 'skip_already_held', reason: 'hold already active for this pull', willWrite: [] };
   }
-
   if (stats.pullCount < MIN_PULLS_FOR_AVERAGE || stats.averageIntervalMs === null || elapsedMs === null) {
     return {
-      ...base,
-      action: 'insufficient_history',
+      ...base, action: 'insufficient_history',
       reason:
-        `only ${stats.pullCount} accepted pull(s) and ${stats.intervalCount} interval(s); ` +
+        `${stats.pullCount} accepted pull(s), ${stats.intervalCount} interval(s); ` +
         `need ${MIN_PULLS_FOR_AVERAGE} pulls for an average — manual review`,
       willWrite: [],
     };
   }
-
   if (elapsedMs <= stats.averageIntervalMs) {
     return {
-      ...base,
-      action: 'skip_within_average',
-      reason: 'elapsed time is within this well\'s own average pull interval',
-      willWrite: [],
+      ...base, action: 'skip_within_average',
+      reason: "elapsed time is within this well's own average pull interval", willWrite: [],
     };
   }
-
-  // A freeze needs somewhere real to freeze AT. currentLevel is the running
-  // estimate — falling back to it would pin the well to a projected number,
-  // which is precisely the value the hold exists to stop trusting.
   if (bottomInches <= 0) {
     return {
-      ...base,
-      action: 'refuse_missing_bottom',
+      ...base, action: 'refuse_missing_bottom',
       reason: `lastPullBottomLevel is ${o.lastPullBottomLevel ?? '(missing)'} — no valid freeze point`,
       willWrite: [],
     };
   }
-
   return {
-    ...base,
-    action: 'apply_hold',
+    ...base, action: 'apply_hold',
     reason:
       `elapsed ${base.history.elapsedHours}h exceeds this well's average pull interval ` +
       `${base.history.averageIntervalHours}h over ${stats.intervalCount} interval(s)`,
-    willWrite: [`wells/${wellName}/estimationHold`],
+    willWrite: [`${HOLD_ROOT}/${wellKey}`],
   };
 }
 
-// ── identity-bound preview digest ───────────────────────────────────────────
+// ── digest ──────────────────────────────────────────────────────────────────
 
-/**
- * Canonical serialisation of the evidence and the proposal.
- *
- * Apply recomputes this from a fresh read and refuses on any difference, so an
- * approval cannot be replayed against a world that has moved. Everything the
- * decision rested on is inside: the asOf it was computed at, the history
- * evidence and count, the average, the latest-pull identity, the exact bottom,
- * the precise existing hold state, the physical state, and the action.
- */
 export function previewDigestPayload(
-  callerUid: string,
-  asOfMs: number,
-  decisions: HoldDecision[],
+  callerUid: string, asOfMs: number, decisions: HoldDecision[],
 ): string {
   const rows = decisions
     .map((d) => [
-      d.wellName,
-      d.observed.responseId ?? '',
-      d.observed.lastPullDateTimeUTC ?? '',
-      String(d.observed.lastPullBottomInches ?? ''),
-      d.observed.holdFingerprint,
-      d.observed.wellDown ? 'down' : 'up',
-      String(d.history.pullCount),
-      String(d.history.intervalCount),
+      d.wellKey, d.wellName, d.observed.responseId ?? '', d.observed.lastPullDateTimeUTC ?? '',
+      String(d.observed.lastPullBottomInches ?? ''), d.observed.holdFingerprint,
+      d.observed.wellDown ? 'down' : 'up', String(d.history.pullCount), String(d.history.intervalCount),
       d.history.averageIntervalMs === null ? '' : String(Math.round(d.history.averageIntervalMs)),
       d.history.latestPullUTC ?? '',
-      d.history.elapsedMs === null ? '' : String(d.history.elapsedMs),
-      d.action,
+      d.history.elapsedMs === null ? '' : String(d.history.elapsedMs), d.action,
     ].join('|'))
     .sort();
   return [`uid=${callerUid}`, `asOf=${asOfMs}`, ...rows].join('\n');
@@ -340,6 +450,8 @@ export interface HoldPlan {
   counts: Record<HoldAction, number>;
   willWriteCount: number;
   previewDigest: string;
+  poolSize: number;
+  rejectedRecords?: Record<PullRejectReason, number>;
 }
 
 export function buildHoldPlan(input: {
@@ -348,11 +460,13 @@ export function buildHoldPlan(input: {
   callerUid: string;
   asOfMs: number;
   digest: DigestFn;
+  rejectedRecords?: Record<PullRejectReason, number>;
 }): HoldPlan {
-  const { decisions, dryRun, callerUid, asOfMs, digest } = input;
+  const { decisions, dryRun, callerUid, asOfMs, digest, rejectedRecords } = input;
   const counts: Record<HoldAction, number> = {
     apply_hold: 0, skip_within_average: 0, skip_physically_down: 0, skip_already_held: 0,
     insufficient_history: 0, refuse_missing_status: 0, refuse_missing_bottom: 0,
+    refuse_ambiguous_identity: 0,
   };
   for (const d of decisions) counts[d.action] += 1;
   return {
@@ -363,36 +477,44 @@ export function buildHoldPlan(input: {
     counts,
     willWriteCount: decisions.filter((d) => d.action === 'apply_hold').length,
     previewDigest: computePreviewDigest(callerUid, asOfMs, decisions, digest),
+    poolSize: decisions.length,
+    ...(rejectedRecords ? { rejectedRecords } : {}),
   };
 }
 
-// ── compare-and-commit ──────────────────────────────────────────────────────
+// ── atomic all-or-nothing commit ────────────────────────────────────────────
 
-/**
- * Transaction body: replace the hold ONLY if it is still exactly what Preview
- * saw. Any drift — a newer hold, a different pull, another operator's write,
- * even a re-taken hold with a new timestamp — aborts.
- *
- * Returning `undefined` aborts the RTDB transaction without writing.
- */
-export function holdCompareAndSet(
-  current: Partial<EstimationHoldRecord> | null,
-  expectedFingerprint: string,
-  next: EstimationHoldRecord,
-): EstimationHoldRecord | undefined {
-  return holdFingerprint(current) === expectedFingerprint ? next : undefined;
+export interface HoldBatchEntry {
+  wellKey: string;
+  expectedFingerprint: string;
+  record: EstimationHoldRecord;
 }
 
+export type HoldBatchOutcome =
+  | { committed: true; root: Record<string, EstimationHoldRecord> }
+  | { committed: false; conflicts: string[] };
+
 /**
- * Compensation body: remove a hold only if THIS apply wrote it.
+ * Verify EVERY expected fingerprint and write the whole set, or write nothing.
  *
- * Ownership is checked by applyOpId so rolling back a partially applied batch
- * can never delete a hold that belongs to someone else's operation.
+ * Run as one RTDB transaction over the `emergencyHolds` root, so there is no
+ * per-well window and no compensation pass. A compensating rollback can itself
+ * abort under concurrent drift, which is how a batch ends up partially applied
+ * while the error claims nothing was — this design cannot reach that state,
+ * because a single conflict aborts before anything is written.
  */
-export function holdCompensate(
-  current: Partial<EstimationHoldRecord> | null,
-  applyOpId: string,
-): null | undefined {
-  if (!current || typeof current !== 'object') return undefined;
-  return current.applyOpId === applyOpId ? null : undefined;
+export function holdBatchCompareAndSet(
+  currentRoot: Record<string, unknown> | null | undefined,
+  entries: HoldBatchEntry[],
+): HoldBatchOutcome {
+  const root = (currentRoot && typeof currentRoot === 'object' ? { ...currentRoot } : {}) as
+    Record<string, EstimationHoldRecord>;
+  const conflicts: string[] = [];
+  for (const e of entries) {
+    const live = root[e.wellKey] as Partial<EstimationHoldRecord> | undefined;
+    if (holdFingerprint(live ?? null) !== e.expectedFingerprint) conflicts.push(e.wellKey);
+  }
+  if (conflicts.length > 0) return { committed: false, conflicts };
+  for (const e of entries) root[e.wellKey] = e.record;
+  return { committed: true, root };
 }

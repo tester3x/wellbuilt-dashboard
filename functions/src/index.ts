@@ -20,6 +20,7 @@ import {
   resolveEditTarget,
   strandedPacketVerdict,
 } from './packetGuards';
+import { canonicalWellKey } from './security/operational/emergencyEstimationHold';
 import {
   buildAppliedEditEvent,
   buildFieldDiff,
@@ -1223,7 +1224,7 @@ export const processIncomingPull = functionsV1.database
     // Consumers are already safe without this: a hold names the pull it was
     // taken against and is ignored once that is no longer the latest. Removing
     // the record keeps the data honest rather than merely inert.
-    await db.ref(`wells/${wellName}/estimationHold`).remove();
+    await db.ref(`emergencyHolds/${canonicalWellKey(wellName)}`).remove();
 
     // Write performance data for Performance screen
     // Format: performance/{wellKey}/rows/{timestamp} = { d, a, p }

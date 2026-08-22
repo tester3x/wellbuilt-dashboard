@@ -11,14 +11,18 @@ import {
   computePreviewDigest,
   computePullIntervalStats,
   decideEstimationHold,
-  holdCompareAndSet,
-  holdCompensate,
   holdFingerprint,
   holdSuppressesEstimation,
   parseBottomInches,
   MIN_PULLS_FOR_AVERAGE,
   type EstimationHoldRecord,
   type HoldObservation,
+  ambiguousIdentityDecision,
+  canonicalWellKey,
+  classifyProcessedRecord,
+  collectAcceptedPulls,
+  holdBatchCompareAndSet,
+  resolveWellIdentity,
 } from '../emergencyEstimationHold';
 
 const sha256 = (s: string) => createHash('sha256').update(s).digest('hex');
@@ -49,7 +53,7 @@ function observation(over: Partial<HoldObservation> = {}): HoldObservation {
   };
 }
 const decide = (asOfMs: number, over: Partial<HoldObservation> = {}) =>
-  decideEstimationHold({ wellName: 'Gabriel 1', asOfMs, observed: observation(over) });
+  decideEstimationHold({ wellKey: 'gabriel1', wellName: 'Gabriel 1', asOfMs, observed: observation(over) });
 
 // ── 1. historical-average selection ─────────────────────────────────────────
 
@@ -96,7 +100,7 @@ describe('full-pool selection by the well\'s own cadence', () => {
     expect(d.history.averageIntervalHours).toBe(24);
     expect(d.history.elapsedHours).toBe(30);
     expect(d.history.overdueRatio).toBeCloseTo(1.25, 3);
-    expect(d.willWrite).toEqual(['wells/Gabriel 1/estimationHold']);
+    expect(d.willWrite).toEqual(['emergencyHolds/gabriel1']);
   });
 
   it('does not propose while still within the average', () => {
@@ -134,7 +138,7 @@ describe('full-pool selection by the well\'s own cadence', () => {
 
 describe('insufficient history', () => {
   it('reports, rather than proposes, when there are too few pulls', () => {
-    for (const pulls of [[], [PULL_MS], [PULL_MS - 24 * H, PULL_MS]]) {
+    for (const pulls of [[], [PULL_MS]]) {
       const d = decide(PULL_MS + 999 * H, { acceptedPullMs: pulls });
       expect(d.action).toBe('insufficient_history');
       expect(d.willWrite).toEqual([]);
@@ -257,50 +261,6 @@ describe('preview digest', () => {
 
 // ── 6. compare-and-set ──────────────────────────────────────────────────────
 
-describe('holdCompareAndSet', () => {
-  const next: EstimationHoldRecord = { active: true, heldAtPullUTC: PULL, applyOpId: 'op-new' };
-
-  it('writes when the live state is exactly what Preview saw', () => {
-    expect(holdCompareAndSet(null, holdFingerprint(null), next)).toEqual(next);
-  });
-
-  it('ABORTS when a different hold appeared since Preview', () => {
-    const observedNone = holdFingerprint(null);
-    const live = { active: true, heldAtPullUTC: PULL, applyOpId: 'op-other', heldAtMs: 5 };
-    expect(holdCompareAndSet(live, observedNone, next)).toBeUndefined();
-  });
-
-  it('ABORTS rather than overwrite a NEWER hold for a different pull', () => {
-    // The exact defect Codex found: an older Apply must not erase a newer hold.
-    const observedOld = holdFingerprint({ active: true, heldAtPullUTC: PULL, heldAtMs: 1 });
-    const live = { active: true, heldAtPullUTC: NEWER, heldAtMs: 2, applyOpId: 'op-newer' };
-    expect(holdCompareAndSet(live, observedOld, next)).toBeUndefined();
-  });
-
-  it('ABORTS on any drift, even a re-taken hold for the same pull', () => {
-    const observed = holdFingerprint({ active: true, heldAtPullUTC: PULL, heldAtMs: 1 });
-    const live = { active: true, heldAtPullUTC: PULL, heldAtMs: 999 };
-    expect(holdCompareAndSet(live, observed, next)).toBeUndefined();
-  });
-
-  it('replaces a hold that is still byte-identical to what Preview saw', () => {
-    const live = { active: true, heldAtPullUTC: PULL, heldAtMs: 7, applyOpId: 'op-a' };
-    expect(holdCompareAndSet(live, holdFingerprint(live), next)).toEqual(next);
-  });
-});
-
-describe('holdCompensate — ownership', () => {
-  it('removes only a hold this operation wrote', () => {
-    expect(holdCompensate({ active: true, heldAtPullUTC: PULL, applyOpId: 'op-1' }, 'op-1')).toBeNull();
-  });
-  it('refuses to remove another operation\'s hold', () => {
-    expect(holdCompensate({ active: true, heldAtPullUTC: PULL, applyOpId: 'op-2' }, 'op-1')).toBeUndefined();
-  });
-  it('refuses when there is nothing there', () => {
-    expect(holdCompensate(null, 'op-1')).toBeUndefined();
-  });
-});
-
 // ── 7. concurrency: a pull between Preview, Apply-read and Apply-write ──────
 
 describe('concurrent pull during apply', () => {
@@ -355,5 +315,196 @@ describe('plan', () => {
     expect(plan.willWriteCount).toBe(1);
     expect(plan.asOfMs).toBe(asOf);
     expect(plan.previewDigest).toHaveLength(64);
+  });
+});
+
+// ── 9. production-history extraction (key + value) ──────────────────────────
+
+describe('classifyProcessedRecord', () => {
+  const pull = (over: Record<string, unknown> = {}) => ({
+    wellName: 'Gabriel 1', dateTimeUTC: PULL, tankTopInches: 96, requestType: 'pull', ...over,
+  });
+
+  it('accepts a normal production pull', () => {
+    const c = classifyProcessedRecord('20260820_174213_Gabriel1_ab12', pull());
+    expect(c).toMatchObject({ accepted: true, wellName: 'Gabriel 1', wellKey: 'gabriel1' });
+  });
+
+  it('EXCLUDES edit_/delete_/history_ keys even with no requestType', () => {
+    // 23 live records are exactly this shape. A value-only reader that defaults
+    // missing requestType to "pull" counts every one of them as a production
+    // pull, inflating history and deflating the well's average interval.
+    for (const key of ['edit_1755_Gabriel1', 'delete_1755_Gabriel1', 'history_1755_Gabriel1',
+      'EDIT_1755_X', 'Delete-1755_X']) {
+      expect(classifyProcessedRecord(key, pull({ requestType: undefined })))
+        .toEqual({ accepted: false, reason: 'edit_or_delete_key' });
+    }
+  });
+
+  it('EXCLUDES explicit non-pull requestType on a plain key', () => {
+    for (const rt of ['edit', 'delete', 'correction']) {
+      expect(classifyProcessedRecord('20260820_1_G', pull({ requestType: rt })))
+        .toEqual({ accepted: false, reason: 'non_pull_request_type' });
+    }
+  });
+
+  it('EXCLUDES no-level service packets', () => {
+    expect(classifyProcessedRecord('20260820_1_G', pull({ noLevel: true, tankTopInches: 0 })))
+      .toEqual({ accepted: false, reason: 'no_level_service_packet' });
+  });
+
+  it('EXCLUDES a record with no usable tank level', () => {
+    expect(classifyProcessedRecord('20260820_1_G', pull({ tankTopInches: 0 })))
+      .toEqual({ accepted: false, reason: 'no_tank_level' });
+    expect(classifyProcessedRecord('20260820_1_G', pull({ tankTopInches: -5 })))
+      .toEqual({ accepted: false, reason: 'no_tank_level' });
+  });
+
+  it('EXCLUDES invalid or missing timestamps', () => {
+    expect(classifyProcessedRecord('20260820_1_G', pull({ dateTimeUTC: undefined })))
+      .toEqual({ accepted: false, reason: 'invalid_timestamp' });
+    expect(classifyProcessedRecord('20260820_1_G', pull({ dateTimeUTC: 'soon' })))
+      .toEqual({ accepted: false, reason: 'invalid_timestamp' });
+  });
+
+  it('PRESERVES a legacy production pull with no requestType and no tankTopInches', () => {
+    // The 7 real records of this shape: plain key, tankLevelFeet only.
+    const legacy = { wellName: 'Gabriel 1', dateTimeUTC: PULL, tankLevelFeet: 8, bblsTaken: 140 };
+    expect(classifyProcessedRecord('20260819_202539_Gabriel1_x1', legacy))
+      .toMatchObject({ accepted: true, wellKey: 'gabriel1' });
+  });
+
+  it('rejects a legacy row whose tankLevelFeet is zero', () => {
+    expect(classifyProcessedRecord('20260819_1_G', { wellName: 'G', dateTimeUTC: PULL, tankLevelFeet: 0 }))
+      .toEqual({ accepted: false, reason: 'no_tank_level' });
+  });
+
+  it('rejects junk and nameless records', () => {
+    expect(classifyProcessedRecord('x', null)).toEqual({ accepted: false, reason: 'missing_well' });
+    expect(classifyProcessedRecord('x', pull({ wellName: '' })))
+      .toEqual({ accepted: false, reason: 'missing_well' });
+  });
+});
+
+describe('collectAcceptedPulls on a realistic mixed tree', () => {
+  it('counts only production pulls and reports why the rest were dropped', () => {
+    const { byWellKey, rejected } = collectAcceptedPulls([
+      { key: '20260818_1_Gabriel1', value: { wellName: 'Gabriel 1', dateTimeUTC: '2026-08-18T00:00:00Z', tankTopInches: 90 } },
+      { key: '20260819_1_Gabriel1', value: { wellName: 'Gabriel1', dateTimeUTC: '2026-08-19T00:00:00Z', tankTopInches: 90 } },
+      { key: 'edit_1_Gabriel1', value: { wellName: 'Gabriel 1', dateTimeUTC: '2026-08-19T06:00:00Z', tankTopInches: 90 } },
+      { key: 'delete_1_Gabriel1', value: { wellName: 'Gabriel 1', requestType: 'delete' } },
+      { key: '20260820_1_Gabriel1', value: { wellName: 'Gabriel 1', dateTimeUTC: '2026-08-20T00:00:00Z', noLevel: true } },
+    ]);
+    // Both spellings join onto one well; edit/delete/no-level are excluded.
+    expect(byWellKey.get('gabriel1')).toHaveLength(2);
+    expect(rejected.edit_or_delete_key).toBe(2);
+    expect(rejected.no_level_service_packet).toBe(1);
+  });
+});
+
+// ── 10. canonical well identity ─────────────────────────────────────────────
+
+describe('well identity', () => {
+  it('joins spacing and case variants onto one key', () => {
+    expect(canonicalWellKey('Gabriel 1')).toBe(canonicalWellKey('Gabriel1'));
+    expect(canonicalWellKey('gabriel 1')).toBe(canonicalWellKey('Gabriel 1'));
+  });
+
+  it('adopts the configured spelling for display', () => {
+    const r = resolveWellIdentity({ configNames: ['Gabriel 1'], otherNames: ['Gabriel1'] });
+    expect(r.canonicalName.get('gabriel1')).toBe('Gabriel 1');
+    expect(r.collisions.size).toBe(0);
+  });
+
+  it('REFUSES when two CONFIGURED wells collapse onto one key', () => {
+    const r = resolveWellIdentity({ configNames: ['Gabriel 1', 'Gabriel1'], otherNames: [] });
+    expect(r.collisions.get('gabriel1')).toEqual(['Gabriel 1', 'Gabriel1']);
+    expect(r.canonicalName.has('gabriel1')).toBe(false);
+    const d = ambiguousIdentityDecision('gabriel1', ['Gabriel 1', 'Gabriel1']);
+    expect(d.action).toBe('refuse_ambiguous_identity');
+    expect(d.willWrite).toEqual([]);
+  });
+
+  it('does not let a status-only variant override a configured name', () => {
+    const r = resolveWellIdentity({ configNames: ['Gabriel 1'], otherNames: ['GABRIEL1', 'Gabriel1'] });
+    expect(r.canonicalName.get('gabriel1')).toBe('Gabriel 1');
+  });
+
+  it('keeps genuinely different wells apart', () => {
+    const r = resolveWellIdentity({ configNames: ['Gabriel 1', 'Gabriel 2'], otherNames: [] });
+    expect(r.canonicalName.size).toBe(2);
+    expect(r.collisions.size).toBe(0);
+  });
+});
+
+// ── 11. two pulls make an average ───────────────────────────────────────────
+
+describe('minimum history is two pulls', () => {
+  it('two accepted pulls yield one interval and can propose', () => {
+    const d = decide(PULL_MS + 30 * H, { acceptedPullMs: [PULL_MS - 24 * H, PULL_MS] });
+    expect(d.history.intervalCount).toBe(1);
+    expect(d.history.averageIntervalHours).toBe(24);
+    expect(d.action).toBe('apply_hold');
+  });
+
+  it('zero or one pull remains insufficient_history', () => {
+    for (const pulls of [[], [PULL_MS]]) {
+      expect(decide(PULL_MS + 999 * H, { acceptedPullMs: pulls }).action).toBe('insufficient_history');
+    }
+  });
+});
+
+// ── 12. atomic all-or-nothing batch ─────────────────────────────────────────
+
+describe('holdBatchCompareAndSet', () => {
+  const rec = (k: string): EstimationHoldRecord =>
+    ({ active: true, heldAtPullUTC: PULL, applyOpId: 'op-1', wellName: k });
+  const entry = (k: string, fp: string) => ({ wellKey: k, expectedFingerprint: fp, record: rec(k) });
+
+  it('commits the whole reviewed set when every fingerprint matches', () => {
+    const out = holdBatchCompareAndSet({}, [entry('a', 'none'), entry('b', 'none')]);
+    expect(out.committed).toBe(true);
+    if (out.committed) expect(Object.keys(out.root).sort()).toEqual(['a', 'b']);
+  });
+
+  it('writes NOTHING when a single well drifted — no partial state can exist', () => {
+    const live = { b: { active: true, heldAtPullUTC: NEWER, heldAtMs: 9 } };
+    const before = JSON.stringify(live);
+    const out = holdBatchCompareAndSet(live, [entry('a', 'none'), entry('b', 'none')]);
+    expect(out.committed).toBe(false);
+    if (!out.committed) expect(out.conflicts).toEqual(['b']);
+    expect(JSON.stringify(live)).toBe(before);
+  });
+
+  it('reports every conflicting well, not just the first', () => {
+    const live = {
+      a: { active: true, heldAtPullUTC: NEWER, heldAtMs: 1 },
+      b: { active: true, heldAtPullUTC: NEWER, heldAtMs: 2 },
+    };
+    const out = holdBatchCompareAndSet(live, [entry('a', 'none'), entry('b', 'none')]);
+    if (!out.committed) expect(out.conflicts.sort()).toEqual(['a', 'b']);
+  });
+
+  it('never overwrites a NEWER hold for a different pull', () => {
+    const observed = holdFingerprint({ active: true, heldAtPullUTC: PULL, heldAtMs: 1 });
+    const live = { a: { active: true, heldAtPullUTC: NEWER, heldAtMs: 2 } };
+    expect(holdBatchCompareAndSet(live, [entry('a', observed)]).committed).toBe(false);
+  });
+
+  it('preserves holds outside the reviewed batch', () => {
+    const live = { other: { active: true, heldAtPullUTC: PULL, heldAtMs: 3 } };
+    const out = holdBatchCompareAndSet(live, [entry('a', 'none')]);
+    expect(out.committed).toBe(true);
+    if (out.committed) expect(out.root.other).toEqual(live.other);
+  });
+
+  it('a conflicting batch leaves nothing to compensate — the failure is total', () => {
+    // This replaces sequential writes plus a rollback pass that could itself
+    // abort, leaving holds behind while the error claimed nothing was applied.
+    const live = { b: { active: true, heldAtPullUTC: NEWER, heldAtMs: 9 } };
+    const before = JSON.stringify(live);
+    const out = holdBatchCompareAndSet(live, [entry('a', 'none'), entry('b', 'none'), entry('c', 'none')]);
+    expect(out.committed).toBe(false);
+    expect(JSON.stringify(live)).toBe(before);
   });
 });
