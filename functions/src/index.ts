@@ -4797,6 +4797,7 @@ export {
   jsaGetReadRequest,
   jsaCompleteReadRequest,
   jsaConsumeReadResult,
+  jsaPersistGovernedArtifact,
 } from './jsaReceipt/jsaReceiptCallables';
 
 // ── vc51.9A6-B: protected platform-admin callables ─────────────────────────

@@ -38,6 +38,7 @@ import {
   type JsaCompanyPolicy,
   type ReceiptRefusal,
 } from './jsaReceiptCore.js';
+import { artifactPath, decideArtifactWrite, parseArtifactInput, type StoredArtifact } from './jsaArtifactCore.js';
 
 export type JsaReceiptHttp =
   | 'unauthenticated' | 'permission-denied' | 'invalid-argument'
@@ -226,6 +227,33 @@ export async function handleComplete(
     }
     deps.log('jsa.receipt.complete', { write: out.write, action: body.action });
     return { requestId: out.record.requestId, action: body.action, reused: out.write === 'reuse' };
+  });
+}
+
+export async function handlePersistArtifact(
+  deps: ReceiptDeps,
+  auth: { uid?: string | null; claims?: Record<string, unknown> | null },
+  data: unknown,
+): Promise<{ requestId: string; reused: boolean; schemaVersion: number; snapshotHash: string; artifactWrittenAtMs: number; signature: StoredArtifact['signature'] }> {
+  const p = principal(auth, JSA_APP_JSA);
+  const body = unwrap(parseArtifactInput(data));
+  const { binding } = await authorBinding(deps, p);
+  return deps.runTransaction(async (txn) => {
+    const requestSnap = await txn.get(recordPath(body.requestId));
+    const artifactSnap = await txn.get(artifactPath(body.requestId));
+    const requestRecord = requestSnap.exists ? fromStored(requestSnap.data) : null;
+    const existing = artifactSnap.exists ? artifactSnap.data as unknown as StoredArtifact : null;
+    const out = unwrap(decideArtifactWrite({
+      request: requestRecord, existing, requestId: body.requestId, snapshot: body.snapshot,
+      signatureBytes: body.signatureBytes, principal: p, binding, nowMs: deps.nowMs(),
+    }));
+    if (out.write === 'create') txn.create(artifactPath(body.requestId), out.artifact as unknown as Record<string, unknown>);
+    deps.log('jsa.artifact.persist', { write: out.write });
+    return {
+      requestId: out.artifact.requestId, reused: out.write === 'reuse', schemaVersion: out.artifact.schemaVersion,
+      snapshotHash: out.artifact.snapshotHash, artifactWrittenAtMs: out.artifact.artifactWrittenAtMs,
+      signature: out.artifact.signature,
+    };
   });
 }
 

@@ -13,6 +13,7 @@ import {
   handleComplete,
   handleConsume,
   handleGetContext,
+  handlePersistArtifact,
   handleRegister,
   type ReceiptDeps,
   type ReceiptTxn,
@@ -146,6 +147,13 @@ export const jsaCompleteReadRequest = httpsV2.onCall(OPTIONS, async (request) =>
   if (!request.auth?.uid) throw new httpsV2.HttpsError('unauthenticated', 'not_authorized');
   await limited(request.auth.uid, 'jsa_complete');
   try { return await handleComplete(buildReceiptDeps(), authOf(request), request.data); }
+  catch (err) { throw toHttps(err); }
+});
+
+export const jsaPersistGovernedArtifact = httpsV2.onCall({ ...OPTIONS, memory: '512MiB' }, async (request) => {
+  if (!request.auth?.uid) throw new httpsV2.HttpsError('unauthenticated', 'not_authorized');
+  await limited(request.auth.uid, 'jsa_artifact');
+  try { return await handlePersistArtifact(buildReceiptDeps(), authOf(request), request.data); }
   catch (err) { throw toHttps(err); }
 });
 
