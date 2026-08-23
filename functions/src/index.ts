@@ -360,6 +360,12 @@ interface OutgoingResponse {
   lastPullDriverId?: string | null;
   lastPullDriverName?: string | null;
   lastPullPacketId?: string | null;
+  companyId?: string;
+}
+
+function outgoingCompanyId(config: { companyId?: unknown } | null | undefined): string {
+  const cid = typeof config?.companyId === 'string' ? config.companyId.trim() : '';
+  return cid || 'liquid-gold';
 }
 
 // NEW UNIFIED STRUCTURE - Single source of truth
@@ -1185,6 +1191,7 @@ export const processIncomingPull = functionsV1.database
       lastPullDriverName: data.driverName || null,
       lastPullPacketId: packetId,
       wellDown: nextIsDown,
+      companyId: outgoingCompanyId(config),
       status: 'success',
       timestamp: timestamp.toISOString(),
       timestampUTC: timestamp.toISOString(),
@@ -2101,6 +2108,7 @@ export const processEditRequest = functionsV1.database
             lastPullPacketId: originalPacketId,
             windowBblsDay: editWindowBblsDay > 0 ? editWindowBblsDay.toString() : null,
             overnightBblsDay: editOvernightBblsDay > 0 ? editOvernightBblsDay.toString() : null,
+            companyId: outgoingCompanyId(config),
           });
         });
       } else {
@@ -2131,6 +2139,7 @@ export const processEditRequest = functionsV1.database
           lastPullPacketId: originalPacketId,
           windowBblsDay: editWindowBblsDay > 0 ? editWindowBblsDay.toString() : null,
           overnightBblsDay: editOvernightBblsDay > 0 ? editOvernightBblsDay.toString() : null,
+          companyId: outgoingCompanyId(config),
         });
         console.log(`Edit: Created new outgoing response for ${wellName} (none existed)`);
       }
@@ -2650,6 +2659,7 @@ export const processDeleteRequest = functionsV1.database
             isDeleteRebuild: true,
             windowBblsDay: windowBblsDay > 0 ? windowBblsDay.toString() : null,
             overnightBblsDay: overnightBblsDay > 0 ? overnightBblsDay.toString() : null,
+            companyId: outgoingCompanyId(config),
           });
 
           // Update well_config AFR
@@ -4778,6 +4788,7 @@ export {
   signalDriverLogout,
   getDriverReferenceBundle,
   getDriverWellConfig,
+  getDriverOutgoingStatus,
   bootstrapWbmSession,
   requestStorageUploadPath,
   upsertDriverInvoice,

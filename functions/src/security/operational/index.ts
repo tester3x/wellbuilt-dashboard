@@ -12,6 +12,7 @@ export { submitJsaRecord } from './jsaWrite';
 export { updateDriverProfile, signalDriverLogout } from './profileWrite';
 export { getDriverReferenceBundle } from './referenceData';
 export { getDriverWellConfig } from './getDriverWellConfig';
+export { getDriverOutgoingStatus } from './getDriverOutgoingStatus';
 export { bootstrapWbmSession } from './bootstrapWbmSession';
 export { evaluateWbmWellScope, projectWbmWells } from './wbmWellScope';
 export { decideTrustedHistoryKeys } from './trustedHistoryAlias';

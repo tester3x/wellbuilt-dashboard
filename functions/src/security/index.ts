@@ -46,6 +46,7 @@ export {
   signalDriverLogout,
   getDriverReferenceBundle,
   getDriverWellConfig,
+  getDriverOutgoingStatus,
   bootstrapWbmSession,
   requestStorageUploadPath,
   upsertDriverInvoice,
