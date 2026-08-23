@@ -52,6 +52,44 @@ describe('incoming_version publish contract', () => {
     expect(calls).toBe(0);
   });
 
+  it('skipped flags return null without logging or incrementing', async () => {
+    let calls = 0;
+    const logs: unknown[] = [];
+    const ref = {
+      transaction: async () => {
+        calls += 1;
+        return { committed: true, snapshot: { val: () => 2 } };
+      },
+    };
+    const skipped = await notifyIncomingVersionBestEffort(
+      ref,
+      { outgoingCommitted: false, pullAccepted: true },
+      (err) => logs.push(err),
+    );
+    const skippedPull = await notifyIncomingVersionBestEffort(
+      ref,
+      { outgoingCommitted: true, pullAccepted: false },
+      (err) => logs.push(err),
+    );
+    expect(skipped).toBeNull();
+    expect(skippedPull).toBeNull();
+    expect(calls).toBe(0);
+    expect(logs).toEqual([]);
+  });
+
+  it('a noncommitted transaction logs one redacted failure and returns null', async () => {
+    const logs: unknown[] = [];
+    const published = await notifyIncomingVersionBestEffort(
+      {
+        transaction: async () => ({ committed: false, snapshot: { val: () => 99 } }),
+      },
+      { outgoingCommitted: true, pullAccepted: true },
+      (err) => logs.push(err),
+    );
+    expect(published).toBeNull();
+    expect(logs).toEqual([{ reason: 'not_committed' }]);
+  });
+
   it('a thrown counter transaction after outgoing does not propagate', async () => {
     const ref = {
       transaction: async () => {
@@ -65,7 +103,7 @@ describe('incoming_version publish contract', () => {
       (err) => logs.push(err),
     );
     expect(published).toBeNull();
-    expect(logs).toHaveLength(1);
+    expect(logs).toEqual([{ reason: 'threw' }]);
   });
 
   it('two concurrent pulls cannot lose a version increment', async () => {
