@@ -36,6 +36,7 @@ export { getOwnDriverHydration } from './getOwnDriverHydration';
 export {
   ingestDriverPacket,
   ingestWbmPull,
+  ingestWbmEdit,
   upsertDriverShift,
   resolveActiveDriverShift,
   claimDriverShift,

@@ -22,6 +22,7 @@ describe('WB-M callable export / contract matrix', () => {
     expect(index).toMatch(/bootstrapWbmSession,/);
     expect(index).toMatch(/ingestDriverPacket,/);
     expect(index).toMatch(/ingestWbmPull,/);
+    expect(index).toMatch(/ingestWbmEdit,/);
     expect(index).toMatch(/staffWriteDriverAssignment,/);
     expect(index).toMatch(/staffConvertApprovedDriverSecureLogin,/);
     expect(index).toMatch(/upgradeOwnLegacyDriverLogin,/);
@@ -31,6 +32,7 @@ describe('WB-M callable export / contract matrix', () => {
     expect(securityIndex).toMatch(/getDriverWellConfig/);
     expect(securityIndex).toMatch(/getDriverOutgoingStatus/);
     expect(securityIndex).toMatch(/getDriverWellPerformance/);
+    expect(securityIndex).toMatch(/ingestWbmEdit/);
     expect(securityIndex).toMatch(/ingestDriverPacket/);
     expect(securityIndex).toMatch(/staffWriteDriverAssignment/);
     expect(securityIndex).toMatch(/staffConvertApprovedDriverSecureLogin/);

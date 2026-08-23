@@ -4774,6 +4774,7 @@ export {
   // Operational path hardening
   ingestDriverPacket,
   ingestWbmPull,
+  ingestWbmEdit,
   upsertDriverShift,
   resolveActiveDriverShift,
   claimDriverShift,
