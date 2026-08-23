@@ -59,7 +59,11 @@ export function rowsFromSecureWellPayload(
   payload: { wellName?: unknown; rows?: unknown },
   requestedWellName: string,
 ): WellPerformanceRow[] {
-  if (typeof payload.wellName === 'string' && payload.wellName !== requestedWellName) {
+  if (
+    typeof payload.wellName !== 'string'
+    || payload.wellName === ''
+    || payload.wellName !== requestedWellName
+  ) {
     return [];
   }
   if (!Array.isArray(payload.rows)) return [];

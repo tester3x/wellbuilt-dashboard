@@ -106,6 +106,61 @@ describe('individual-well Performance drill-down', () => {
     expect(rowsFromSecureWellPayload({ wellName: 'A_B', rows: [{ d: '2026-08-01', a: 1, p: 1 }] }, 'A B')).toEqual([]);
   });
 
+describe('rowsFromSecureWellPayload exact-name fail-closed', () => {
+  const sample = [{ d: '2026-08-01', a: 10, p: 11 }];
+
+  it('exact matching well name → rows accepted', () => {
+    expect(rowsFromSecureWellPayload(
+      { wellName: 'Gabriel 1', rows: sample },
+      'Gabriel 1',
+    )).toEqual(sample);
+  });
+
+  it('missing wellName → rejected', () => {
+    expect(rowsFromSecureWellPayload({ rows: sample }, 'Gabriel 1')).toEqual([]);
+  });
+
+  it('empty wellName → rejected', () => {
+    expect(rowsFromSecureWellPayload({ wellName: '', rows: sample }, 'Gabriel 1')).toEqual([]);
+    expect(rowsFromSecureWellPayload({ wellName: '', rows: sample }, '')).toEqual([]);
+  });
+
+  it('non-string wellName → rejected', () => {
+    expect(rowsFromSecureWellPayload({ wellName: 1, rows: sample }, 'Gabriel 1')).toEqual([]);
+    expect(rowsFromSecureWellPayload({ wellName: { name: 'Gabriel 1' }, rows: sample }, 'Gabriel 1')).toEqual([]);
+    expect(rowsFromSecureWellPayload({ wellName: null, rows: sample }, 'Gabriel 1')).toEqual([]);
+    expect(rowsFromSecureWellPayload({ wellName: true, rows: sample }, 'Gabriel 1')).toEqual([]);
+  });
+
+  it('different wellName → rejected', () => {
+    expect(rowsFromSecureWellPayload(
+      { wellName: 'Gabriel 9', rows: sample },
+      'Gabriel 1',
+    )).toEqual([]);
+  });
+
+  it('collision case remains rejected', () => {
+    expect(rowsFromSecureWellPayload(
+      { wellName: 'A_B', rows: sample },
+      'A B',
+    )).toEqual([]);
+    expect(rowsFromSecureWellPayload(
+      { wellName: 'A B', rows: sample },
+      'A_B',
+    )).toEqual([]);
+  });
+
+  it('a valid large response still returns every row without slicing', () => {
+    const accepted = rowsFromSecureWellPayload(
+      { wellName: 'Gabriel 1', rows: gabrielRows },
+      'Gabriel 1',
+    );
+    expect(accepted).toHaveLength(501);
+    expect(accepted).toEqual(gabrielRows);
+    expect(accepted).not.toBe(gabrielRows);
+  });
+});
+
   it('Loading, success, empty, and error states render correctly', () => {
     const page = src('src/app/performance/well/page.tsx');
     expect(page).toMatch(/dataLoading\s*\n\s*\? 'Loading\.\.\.'/);
