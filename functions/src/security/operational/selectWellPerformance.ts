@@ -124,10 +124,10 @@ export function projectWellPerformance(input: {
   toDate?: string;
 }): WellPerformanceProjection {
   const node = isPlainObject(input.node) ? input.node : {};
-  const wellName =
-    typeof node.wellName === 'string' && node.wellName.trim()
-      ? node.wellName.trim()
-      : input.requestedWellName;
+  const storedName = typeof node.wellName === 'string' ? node.wellName.trim() : '';
+  if (storedName && storedName !== input.requestedWellName) {
+    return { wellName: input.requestedWellName, updated: '', rows: [] };
+  }
   const updated = typeof node.updated === 'string' ? node.updated : '';
 
   const rawRows = node.rows;
@@ -157,7 +157,7 @@ export function projectWellPerformance(input: {
       : filtered;
 
   return {
-    wellName,
+    wellName: input.requestedWellName,
     updated,
     rows: bounded.map((row) => ({ d: row.d, a: row.a, p: row.p })),
   };

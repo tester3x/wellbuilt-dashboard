@@ -33,7 +33,24 @@ export async function publishIncomingVersionAfterOutgoing(
 ): Promise<number | null> {
   if (!shouldPublishIncomingVersion(flags)) return null;
   const result = await versionRef.transaction(nextIncomingVersion);
+  if (result?.committed !== true) return null;
   const val = result?.snapshot?.val();
   const n = Number(val);
   return Number.isFinite(n) ? n : null;
+}
+
+/** Notification after committed writes. Failures are logged, never thrown. */
+export async function notifyIncomingVersionBestEffort(
+  versionRef: VersionRef,
+  flags: { outgoingCommitted: boolean; pullAccepted: boolean },
+  logError: (err: unknown) => void = (err) => {
+    console.error('[incoming_version] notification failed after committed writes', err);
+  },
+): Promise<number | null> {
+  try {
+    return await publishIncomingVersionAfterOutgoing(versionRef, flags);
+  } catch (err) {
+    logError(err);
+    return null;
+  }
 }

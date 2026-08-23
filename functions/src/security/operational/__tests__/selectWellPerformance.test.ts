@@ -119,6 +119,35 @@ describe('well authorization helpers', () => {
     expect(isAuthorizedSnapshotWell(wells, 'Gabriel 9')).toBe(false);
   });
 
+  it('A B versus A_B collision fails closed and returns the authorized requested name', () => {
+    const node = {
+      wellName: 'A_B',
+      updated: '2026-08-22T12:00:00.000Z',
+      rows: { r: { d: '2026-08-01', a: 10, p: 10 } },
+    };
+    expect(wellKeyFromName('A B')).toBe(wellKeyFromName('A_B'));
+    const out = projectWellPerformance({
+      requestedWellName: 'A B',
+      node,
+    });
+    expect(out).toEqual({ wellName: 'A B', updated: '', rows: [] });
+    const ok = projectWellPerformance({
+      requestedWellName: 'A_B',
+      node,
+    });
+    expect(ok.wellName).toBe('A_B');
+    expect(ok.rows).toEqual([{ d: '2026-08-01', a: 10, p: 10 }]);
+  });
+
+  it('always returns the authorized requested well name when labels match or are absent', () => {
+    const unlabeled = projectWellPerformance({
+      requestedWellName: 'Gabriel 1',
+      node: { rows: { r: { d: '2026-08-01', a: 10, p: 11 } } },
+    });
+    expect(unlabeled.wellName).toBe('Gabriel 1');
+    expect(unlabeled.rows).toHaveLength(1);
+  });
+
   it('drops extra keys on a single row', () => {
     expect(projectPerformanceRow({ d: '2026-08-01', a: 10, p: 11, z: 1 })).toEqual({
       d: '2026-08-01',

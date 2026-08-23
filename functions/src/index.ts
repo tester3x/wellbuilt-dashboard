@@ -32,7 +32,7 @@ import {
   resolveEditEventId,
   resolveOriginalSubmissionAt,
 } from './editHistory';
-import { publishIncomingVersionAfterOutgoing } from './incomingVersionPublish';
+import { notifyIncomingVersionBestEffort } from './incomingVersionPublish';
 
 
 admin.initializeApp();
@@ -1215,10 +1215,6 @@ export const processIncomingPull = functionsV1.database
     // Write new response
     const responseId = `response_${timestamp.toISOString().replace(/[-:]/g, '').replace('T', '_').split('.')[0]}_${cleanName}`;
     await db.ref(`packets/outgoing/${responseId}`).set(outgoingResponse);
-    await publishIncomingVersionAfterOutgoing(db.ref('packets/incoming_version'), {
-      outgoingCommitted: true,
-      pullAccepted: true,
-    });
 
     // Write performance data for Performance screen
     // Format: performance/{wellKey}/rows/{timestamp} = { d, a, p }
@@ -1322,6 +1318,11 @@ export const processIncomingPull = functionsV1.database
     await db.ref(`wells/${wellName}/status`).set(wellStatus);
 
     console.log(`[NEW] Wrote wells/${wellName}/status`);
+
+    await notifyIncomingVersionBestEffort(db.ref('packets/incoming_version'), {
+      outgoingCommitted: true,
+      pullAccepted: true,
+    });
 
     // Write production log (AFR + window + overnight bbls/day for comparison)
     const afrBblsDay = afr > 0 ? Math.round((1 / afr) * bblPerFoot) : 0;
@@ -2454,7 +2455,7 @@ export const processEditRequest = functionsV1.database
     // Delete the edit request
     await snapshot.ref.remove();
 
-    await publishIncomingVersionAfterOutgoing(db.ref('packets/incoming_version'), {
+    await notifyIncomingVersionBestEffort(db.ref('packets/incoming_version'), {
       outgoingCommitted: true,
       pullAccepted: true,
     });
@@ -2701,11 +2702,6 @@ export const processDeleteRequest = functionsV1.database
       }
     }
 
-    await publishIncomingVersionAfterOutgoing(db.ref('packets/incoming_version'), {
-      outgoingCommitted: true,
-      pullAccepted: true,
-    });
-
     // Archive delete request for audit trail (instead of just removing it)
     const auditData = {
       ...data,
@@ -2721,6 +2717,11 @@ export const processDeleteRequest = functionsV1.database
     };
     await db.ref(`packets/processed/delete_${targetPacketId}`).set(auditData);
     await snapshot.ref.remove();
+
+    await notifyIncomingVersionBestEffort(db.ref('packets/incoming_version'), {
+      outgoingCommitted: true,
+      pullAccepted: true,
+    });
 
     console.log(`Delete complete for ${wellName}: ${targetPacketId}`);
     return null;
