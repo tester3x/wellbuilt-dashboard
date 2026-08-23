@@ -39,8 +39,10 @@ function WellPerformanceDetailPage() {
 
   const [stats, setStats] = useState<WellPerformanceStats | null>(null);
   const [dataLoading, setDataLoading] = useState(true);
+  const [loadError, setLoadError] = useState<string | null>(null);
   const [sortField, setSortField] = useState<SortField>('date');
   const [sortAsc, setSortAsc] = useState(false); // newest first
+  const [reloadToken, setReloadToken] = useState(0);
 
   useEffect(() => {
     if (!loading && !user) {
@@ -51,29 +53,37 @@ function WellPerformanceDetailPage() {
   useEffect(() => {
     if (!user) return;
 
+    let cancelled = false;
     const loadData = async () => {
+      setDataLoading(true);
+      setLoadError(null);
       try {
         const [rawRows, configs] = await Promise.all([
           fetchWellPerformance(wellName),
           fetchWellConfigs(),
         ]);
+        if (cancelled) return;
 
-        // Find route from config
         const configEntry = Object.entries(configs).find(([key]) => key === wellName);
         const route = configEntry?.[1]?.route || 'Unrouted';
-
         const processed = processPerformanceRows(rawRows);
-        const wellStats = calcWellStats(wellName, route, processed);
-        setStats(wellStats);
+        setStats(calcWellStats(wellName, route, processed));
       } catch (err) {
         console.error('Error fetching well performance:', err);
+        if (cancelled) return;
+        const { classifiedReadFailure } = await import('@/lib/adminDashboardCatalog');
+        setStats(null);
+        setLoadError(classifiedReadFailure('well performance', err));
       } finally {
-        setDataLoading(false);
+        if (!cancelled) setDataLoading(false);
       }
     };
 
-    loadData();
-  }, [user, wellName]);
+    void loadData();
+    return () => {
+      cancelled = true;
+    };
+  }, [user, wellName, reloadToken]);
 
   // Sort rows
   const sortedRows = useMemo(() => {
@@ -170,13 +180,34 @@ function WellPerformanceDetailPage() {
       <SubHeader
         backHref={backHref}
         title={wellName}
-        subtitle={stats ? `${stats.route} · ${stats.pullCount} pulls` : 'Loading...'}
+        subtitle={
+          dataLoading
+            ? 'Loading...'
+            : loadError
+              ? 'Unable to load'
+              : stats && stats.pullCount > 0
+                ? `${stats.route} · ${stats.pullCount} pulls`
+                : stats?.route && stats.route !== 'Unrouted'
+                  ? stats.route
+                  : ''
+        }
       />
 
       <main className="max-w-5xl mx-auto px-4 py-8">
         {dataLoading ? (
           <div className="text-gray-400">Loading performance data...</div>
-        ) : !stats ? (
+        ) : loadError ? (
+          <div className="bg-red-900/50 text-red-200 rounded-lg p-4">
+            <p>{loadError}</p>
+            <button
+              type="button"
+              className="mt-3 px-3 py-1.5 bg-red-800 hover:bg-red-700 rounded text-sm"
+              onClick={() => setReloadToken((n) => n + 1)}
+            >
+              Retry
+            </button>
+          </div>
+        ) : !stats || stats.pullCount === 0 ? (
           <div className="text-gray-400">No performance data for this well</div>
         ) : (
           <>
@@ -228,7 +259,7 @@ function WellPerformanceDetailPage() {
               <h3 className="text-white font-semibold">
                 Recent Pulls
                 <span className="text-gray-500 font-normal ml-2 text-sm">
-                  Showing last {sortedRows.length}
+                  Showing {sortedRows.length}
                 </span>
               </h3>
               {sortedRows.length > 0 && (

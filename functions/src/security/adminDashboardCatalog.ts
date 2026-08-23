@@ -15,6 +15,8 @@ import {
   projectDashboardCatalog,
   WELL_HISTORY_ALLOWLIST,
 } from './dashboardCatalogProjection';
+import { projectWellPerformance, wellKeyFromName } from './operational/selectWellPerformance';
+import { requestedAdminWellName } from './operational/staffWellPerformanceRequest';
 
 export const adminGetDashboardCatalog = httpsV2.onCall(
   { timeoutSeconds: 60, memory: '512MiB', enforceAppCheck: false },
@@ -145,6 +147,21 @@ export const adminGetWellPerformance = httpsV2.onCall(
     );
     if (!callerCanViewGlobalWellPool(caller)) {
       throw new httpsV2.HttpsError('permission-denied', 'Caller cannot view the global well pool');
+    }
+    const requested = requestedAdminWellName(request.data);
+    if (requested) {
+      const wellKey = wellKeyFromName(requested);
+      const nodeSnap = await admin.database().ref(`performance/${wellKey}`).once('value');
+      const projection = projectWellPerformance({
+        requestedWellName: requested,
+        node: nodeSnap.exists() ? nodeSnap.val() : null,
+      });
+      return {
+        ok: true as const,
+        wellName: projection.wellName,
+        updated: projection.updated,
+        rows: projection.rows,
+      };
     }
     const snap = await admin.database().ref('performance').once('value');
     const rows: Record<string, { d: string; a: number; p: number }[]> = {};

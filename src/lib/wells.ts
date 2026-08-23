@@ -1,7 +1,8 @@
 // Well data utilities - fetches from Firebase
 import { ref, get, onValue, query, orderByChild, set } from 'firebase/database';
 import { getFirebaseDatabase } from './firebase';
-import { adminGetWellHistory, adminGetWellPerformance, adminGetWellPool } from './adminDashboardCatalog';
+import { adminGetWellHistory, adminGetWellPerformance, adminGetWellPerformanceForWell, adminGetWellPool } from './adminDashboardCatalog';
+import { fetchWellPerformanceWithFallback, wellKeyFromName } from './wellPerformanceRead';
 
 export interface WellResponse {
   wellName: string;
@@ -1207,32 +1208,19 @@ export async function fetchWellHistory(wellName: string, limit: number = 0): Pro
   return limit > 0 ? pulls.slice(0, limit) : pulls;
 }
 
-// Fetch performance data for a well
+// Fetch performance data for a well. Direct RTDB first; denied reads fall
+// back to the staff adminGetWellPerformance({ wellName }) path.
 export async function fetchWellPerformance(wellName: string): Promise<PerformanceRow[]> {
   const db = getFirebaseDatabase();
-  // Performance keys use underscores for spaces (e.g. "Gabriel_3")
-  const cleanName = wellName.replace(/\s/g, '_');
-  const perfRef = ref(db, `performance/${cleanName}/rows`);
-  const snapshot = await get(perfRef);
-
-  if (!snapshot.exists()) return [];
-
-  const rows: PerformanceRow[] = [];
-  snapshot.forEach((child) => {
-    const data = child.val();
-    if (data.d && data.a !== undefined && data.p !== undefined) {
-      rows.push({
-        d: data.d,
-        a: data.a,
-        p: data.p,
-      });
-    }
+  const wellKey = wellKeyFromName(wellName);
+  return fetchWellPerformanceWithFallback({
+    wellName,
+    readNode: async () => {
+      const snapshot = await get(ref(db, `performance/${wellKey}`));
+      return snapshot.exists() ? snapshot.val() : null;
+    },
+    readSecure: (name) => adminGetWellPerformanceForWell(name),
   });
-
-  // Sort by date descending
-  rows.sort((a, b) => new Date(b.d).getTime() - new Date(a.d).getTime());
-
-  return rows;
 }
 
 // Delete a pull — sends delete request to incoming/ for Cloud Function to process

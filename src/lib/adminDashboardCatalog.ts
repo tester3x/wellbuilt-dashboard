@@ -53,6 +53,16 @@ export async function adminGetWellPerformance(): Promise<{ rows: Record<string, 
   return res.data as { rows: Record<string, { d: string; a: number; p: number }[]> };
 }
 
+/** Bounded staff per-well Performance read. Does not use the WB-M driver callable. */
+export async function adminGetWellPerformanceForWell(wellName: string): Promise<{
+  wellName: string;
+  rows: { d: string; a: number; p: number }[];
+}> {
+  const fn = httpsCallable(getFirebaseFunctions(), 'adminGetWellPerformance');
+  const res = await fn({ wellName });
+  return res.data as { wellName: string; rows: { d: string; a: number; p: number }[] };
+}
+
 export function catalogErrorCode(err: unknown): string {
   if (!err || typeof err !== 'object') return 'unknown';
   const e = err as { code?: string; message?: string };
