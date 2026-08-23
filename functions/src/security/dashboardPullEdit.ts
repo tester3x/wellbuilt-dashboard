@@ -95,25 +95,48 @@ export const adminSubmitPullEdit = httpsV2.onCall(
       throw new httpsV2.HttpsError('invalid-argument', parsed.error);
     }
 
-    // Company scope: a non-platform caller may only edit a well in their company.
+    // AUTHORITATIVE WELL comes from the stored pull, never the client. A caller
+    // could otherwise name well A (which they may edit) while targeting pull B
+    // (which they may not) — authorizing against one well while editing another.
+    const origSnap = await rtdb().ref(`packets/processed/${parsed.originalPacketId}`).once('value');
+    if (!origSnap.exists()) {
+      throw new httpsV2.HttpsError('not-found', 'original_pull_missing');
+    }
+    const original = asRecord(origSnap.val());
+    const authoritativeWell = typeof original.wellName === 'string' ? original.wellName.trim() : '';
+    if (!authoritativeWell) {
+      throw new httpsV2.HttpsError('failed-precondition', 'original_pull_has_no_well');
+    }
+
+    // The client's wellName must match the stored pull's well. A mismatch is a
+    // cross-well attempt, refused.
+    if (parsed.wellName !== authoritativeWell) {
+      throw new httpsV2.HttpsError('permission-denied', 'well_mismatch');
+    }
+
+    // Company scope is derived from the authoritative well's config, not the
+    // client. Platform admins pass; a company caller may only edit their own.
+    const wellSnap = await rtdb().ref(`well_config/${authoritativeWell}`).once('value');
+    const well = asRecord(wellSnap.val());
+    const wellCompany = typeof well.companyId === 'string' ? well.companyId : '';
     if (!caller.isPlatformAdmin) {
-      const wellSnap = await rtdb().ref(`well_config/${parsed.wellName}`).once('value');
-      const well = asRecord(wellSnap.val());
-      const wellCompany = typeof well.companyId === 'string' ? well.companyId : '';
       if (!caller.companyId || (wellCompany && wellCompany !== caller.companyId)) {
         throw new httpsV2.HttpsError('permission-denied', 'well_outside_company');
       }
     }
 
-    const { packetId, packet } = buildEditPacket(parsed, caller.uid, Date.now());
+    // Build against the AUTHORITATIVE well, not the client string.
+    const { packetId, packet } = buildEditPacket(
+      { ...parsed, wellName: authoritativeWell }, caller.uid, Date.now(),
+    );
     await rtdb().ref(`packets/incoming/${packetId}`).set(packet);
 
     await writeSecurityAudit({
       action: 'adminSubmitPullEdit',
       actorUid: caller.uid,
       detail: {
-        packetId, wellName: parsed.wellName, originalPacketId: parsed.originalPacketId,
-        wellDown: parsed.wellDown,
+        packetId, wellName: authoritativeWell, originalPacketId: parsed.originalPacketId,
+        wellDown: parsed.wellDown, wellCompany: wellCompany || null,
       },
     });
 

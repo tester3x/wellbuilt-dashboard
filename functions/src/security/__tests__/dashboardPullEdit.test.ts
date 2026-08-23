@@ -51,3 +51,22 @@ describe('buildEditPacket', () => {
     expect(packet.dateTimeUTC).toBe('2026-08-20T00:00:00Z');
   });
 });
+
+// Server-authoritative well derivation (the customer-safe hardening) is exercised
+// against the callable's stated contract via validatePullEdit + buildEditPacket;
+// the read/derive/mismatch/scope gates are covered by the callable integration
+// path. These unit tests pin the pure pieces the gates depend on.
+describe('edit safety invariants', () => {
+  it('buildEditPacket always uses the wellName it is given (server overrides client)', () => {
+    const { packet } = buildEditPacket(
+      { originalPacketId: 'p', wellName: 'AUTHORITATIVE Well', tankTopInches: 1, bblsTaken: 1, wellDown: false },
+      'u', 1,
+    );
+    expect(packet.wellName).toBe('AUTHORITATIVE Well');
+  });
+
+  it('rejects path-escaping originalPacketId before any read', () => {
+    expect(validatePullEdit({ originalPacketId: 'a#b', wellName: 'G', tankTopInches: 1, bblsTaken: 1, wellDown: false }))
+      .toEqual({ error: 'originalPacketId_malformed' });
+  });
+});
