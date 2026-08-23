@@ -125,7 +125,7 @@ export function projectWellPerformance(input: {
 }): WellPerformanceProjection {
   const node = isPlainObject(input.node) ? input.node : {};
   const storedName = typeof node.wellName === 'string' ? node.wellName.trim() : '';
-  if (storedName && storedName !== input.requestedWellName) {
+  if (storedName !== input.requestedWellName) {
     return { wellName: input.requestedWellName, updated: '', rows: [] };
   }
   const updated = typeof node.updated === 'string' ? node.updated : '';

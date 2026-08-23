@@ -44,13 +44,23 @@ export async function notifyIncomingVersionBestEffort(
   versionRef: VersionRef,
   flags: { outgoingCommitted: boolean; pullAccepted: boolean },
   logError: (err: unknown) => void = (err) => {
-    console.error('[incoming_version] notification failed after committed writes', err);
+    const reason =
+      err && typeof err === 'object' && 'reason' in err && typeof (err as { reason: unknown }).reason === 'string'
+        ? (err as { reason: string }).reason
+        : 'threw';
+    console.error('[incoming_version] notification failed after committed writes', { reason });
   },
 ): Promise<number | null> {
+  if (!shouldPublishIncomingVersion(flags)) return null;
   try {
-    return await publishIncomingVersionAfterOutgoing(versionRef, flags);
-  } catch (err) {
-    logError(err);
+    const published = await publishIncomingVersionAfterOutgoing(versionRef, flags);
+    if (published == null) {
+      logError({ reason: 'not_committed' });
+      return null;
+    }
+    return published;
+  } catch {
+    logError({ reason: 'threw' });
     return null;
   }
 }
