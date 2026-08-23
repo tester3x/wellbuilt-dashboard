@@ -33,6 +33,7 @@ import {
   resolveEditEventId,
   resolveOriginalSubmissionAt,
 } from './editHistory';
+import { notifyIncomingVersionBestEffort } from './incomingVersionPublish';
 
 
 admin.initializeApp();
@@ -1329,6 +1330,11 @@ export const processIncomingPull = functionsV1.database
 
     console.log(`[NEW] Wrote wells/${wellName}/status`);
 
+    await notifyIncomingVersionBestEffort(db.ref('packets/incoming_version'), {
+      outgoingCommitted: true,
+      pullAccepted: true,
+    });
+
     // Write production log (AFR + window + overnight bbls/day for comparison)
     const afrBblsDay = afr > 0 ? Math.round((1 / afr) * bblPerFoot) : 0;
     await writeProductionLog(wellName, pullTimeMs, afrBblsDay, windowBblsDay, overnightBblsDay);
@@ -2458,15 +2464,10 @@ export const processEditRequest = functionsV1.database
     // Delete the edit request
     await snapshot.ref.remove();
 
-    // Increment incoming_version so WB M app knows to refresh
-    try {
-      const versionSnap = await db.ref('packets/incoming_version').once('value');
-      const currentVersion = parseInt(versionSnap.val(), 10) || 0;
-      await db.ref('packets/incoming_version').set(currentVersion + 1);
-      console.log(`Edit: Incremented incoming_version to ${currentVersion + 1}`);
-    } catch (versionErr) {
-      console.error('Edit: Failed to increment incoming_version:', versionErr);
-    }
+    await notifyIncomingVersionBestEffort(db.ref('packets/incoming_version'), {
+      outgoingCommitted: true,
+      pullAccepted: true,
+    });
 
     console.log(`Edit complete for ${wellName}: ${originalPacketId}`);
     return null;
@@ -2709,16 +2710,6 @@ export const processDeleteRequest = functionsV1.database
       }
     }
 
-    // Increment incoming_version so WB M app knows to refresh
-    try {
-      const versionSnap = await db.ref('packets/incoming_version').once('value');
-      const currentVersion = parseInt(versionSnap.val(), 10) || 0;
-      await db.ref('packets/incoming_version').set(currentVersion + 1);
-      console.log(`Delete: Incremented incoming_version to ${currentVersion + 1}`);
-    } catch (versionErr) {
-      console.error('Delete: Failed to increment incoming_version:', versionErr);
-    }
-
     // Archive delete request for audit trail (instead of just removing it)
     const auditData = {
       ...data,
@@ -2734,6 +2725,11 @@ export const processDeleteRequest = functionsV1.database
     };
     await db.ref(`packets/processed/delete_${targetPacketId}`).set(auditData);
     await snapshot.ref.remove();
+
+    await notifyIncomingVersionBestEffort(db.ref('packets/incoming_version'), {
+      outgoingCommitted: true,
+      pullAccepted: true,
+    });
 
     console.log(`Delete complete for ${wellName}: ${targetPacketId}`);
     return null;
