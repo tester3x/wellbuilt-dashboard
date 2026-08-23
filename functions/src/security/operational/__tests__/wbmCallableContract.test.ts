@@ -18,6 +18,7 @@ describe('WB-M callable export / contract matrix', () => {
   it('exports getDriverWellConfig, ingestDriverPacket, staffWriteDriverAssignment, and customer-safe identity callables', () => {
     expect(index).toMatch(/getDriverWellConfig,/);
     expect(index).toMatch(/getDriverOutgoingStatus,/);
+    expect(index).toMatch(/getDriverWellPerformance,/);
     expect(index).toMatch(/bootstrapWbmSession,/);
     expect(index).toMatch(/ingestDriverPacket,/);
     expect(index).toMatch(/ingestWbmPull,/);
@@ -29,6 +30,7 @@ describe('WB-M callable export / contract matrix', () => {
     expect(index).toMatch(/getOwnDriverHydration,/);
     expect(securityIndex).toMatch(/getDriverWellConfig/);
     expect(securityIndex).toMatch(/getDriverOutgoingStatus/);
+    expect(securityIndex).toMatch(/getDriverWellPerformance/);
     expect(securityIndex).toMatch(/ingestDriverPacket/);
     expect(securityIndex).toMatch(/staffWriteDriverAssignment/);
     expect(securityIndex).toMatch(/staffConvertApprovedDriverSecureLogin/);
@@ -61,6 +63,13 @@ describe('WB-M callable export / contract matrix', () => {
     expect(outgoing).toMatch(/packets\/outgoing/);
     expect(outgoing).toMatch(/authorizedWells/);
     expect(outgoing).not.toMatch(/orderByChild\('companyId'\)/);
+    const performance = read('src/security/operational/getDriverWellPerformance.ts');
+    expect(performance).toMatch(/requireSecureDriver\(request, \{ allowLegacyHash: false \}\)/);
+    expect(performance).toMatch(/enforceAppCheck: false/);
+    expect(performance).toMatch(/buildWbmBootstrapSnapshot/);
+    expect(performance).toMatch(/performance\/\$\{wellKey\}/);
+    expect(performance).not.toMatch(/ref\('performance'\)/);
+    expect(performance).not.toMatch(/drivers\/approved/);
     expect(wellCfg).toMatch(/loadCanonicalDriverAuthority/);
     expect(wellCfg).toMatch(/buildWbmBootstrapSnapshot/);
     expect(wellCfg).not.toMatch(/drivers\/approved/);

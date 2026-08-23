@@ -47,6 +47,7 @@ export {
   getDriverReferenceBundle,
   getDriverWellConfig,
   getDriverOutgoingStatus,
+  getDriverWellPerformance,
   bootstrapWbmSession,
   requestStorageUploadPath,
   upsertDriverInvoice,

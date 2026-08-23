@@ -32,6 +32,7 @@ import {
   resolveEditEventId,
   resolveOriginalSubmissionAt,
 } from './editHistory';
+import { publishIncomingVersionAfterOutgoing } from './incomingVersionPublish';
 
 
 admin.initializeApp();
@@ -1214,6 +1215,10 @@ export const processIncomingPull = functionsV1.database
     // Write new response
     const responseId = `response_${timestamp.toISOString().replace(/[-:]/g, '').replace('T', '_').split('.')[0]}_${cleanName}`;
     await db.ref(`packets/outgoing/${responseId}`).set(outgoingResponse);
+    await publishIncomingVersionAfterOutgoing(db.ref('packets/incoming_version'), {
+      outgoingCommitted: true,
+      pullAccepted: true,
+    });
 
     // Write performance data for Performance screen
     // Format: performance/{wellKey}/rows/{timestamp} = { d, a, p }
@@ -2449,15 +2454,10 @@ export const processEditRequest = functionsV1.database
     // Delete the edit request
     await snapshot.ref.remove();
 
-    // Increment incoming_version so WB M app knows to refresh
-    try {
-      const versionSnap = await db.ref('packets/incoming_version').once('value');
-      const currentVersion = parseInt(versionSnap.val(), 10) || 0;
-      await db.ref('packets/incoming_version').set(currentVersion + 1);
-      console.log(`Edit: Incremented incoming_version to ${currentVersion + 1}`);
-    } catch (versionErr) {
-      console.error('Edit: Failed to increment incoming_version:', versionErr);
-    }
+    await publishIncomingVersionAfterOutgoing(db.ref('packets/incoming_version'), {
+      outgoingCommitted: true,
+      pullAccepted: true,
+    });
 
     console.log(`Edit complete for ${wellName}: ${originalPacketId}`);
     return null;
@@ -2701,15 +2701,10 @@ export const processDeleteRequest = functionsV1.database
       }
     }
 
-    // Increment incoming_version so WB M app knows to refresh
-    try {
-      const versionSnap = await db.ref('packets/incoming_version').once('value');
-      const currentVersion = parseInt(versionSnap.val(), 10) || 0;
-      await db.ref('packets/incoming_version').set(currentVersion + 1);
-      console.log(`Delete: Incremented incoming_version to ${currentVersion + 1}`);
-    } catch (versionErr) {
-      console.error('Delete: Failed to increment incoming_version:', versionErr);
-    }
+    await publishIncomingVersionAfterOutgoing(db.ref('packets/incoming_version'), {
+      outgoingCommitted: true,
+      pullAccepted: true,
+    });
 
     // Archive delete request for audit trail (instead of just removing it)
     const auditData = {
@@ -4789,6 +4784,7 @@ export {
   getDriverReferenceBundle,
   getDriverWellConfig,
   getDriverOutgoingStatus,
+  getDriverWellPerformance,
   bootstrapWbmSession,
   requestStorageUploadPath,
   upsertDriverInvoice,
