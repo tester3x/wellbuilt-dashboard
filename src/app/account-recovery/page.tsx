@@ -39,6 +39,11 @@ export default function AccountRecoveryPage() {
   const [login, setLogin] = useState(''); const [currentPasscode, setCurrent] = useState('');
   const [next, setNext] = useState(''); const [confirm, setConfirm] = useState('');
   const [message, setMessage] = useState(''); const [busy, setBusy] = useState(false);
+  const redemptionAttempt = () => {
+    const existing = sessionStorage.getItem(`wb_recovery_redeem_${requestId}`);
+    if (existing) return existing;
+    const created = crypto.randomUUID(); sessionStorage.setItem(`wb_recovery_redeem_${requestId}`, created); return created;
+  };
 
   const submitRequest = async () => {
     setBusy(true); setMessage('');
@@ -64,7 +69,8 @@ export default function AccountRecoveryPage() {
     if (!next || next !== confirm) { setMessage('The new passcodes do not match.'); return; }
     setBusy(true); try {
       await call('redeemDriverAccountRecovery', { requestId, recoverySecret, newPasscode: next,
-        redemptionAttemptId: crypto.randomUUID() });
+        redemptionAttemptId: redemptionAttempt() });
+      sessionStorage.removeItem(`wb_recovery_redeem_${requestId}`);
       setRecoverySecret(''); setNext(''); setConfirm(''); setMessage('Recovery completed. Reopen your WellBuilt app and sign in.'); setView('done');
     } catch { setMessage('Recovery could not be completed. Check the private value or request a new authorization.'); } finally { setBusy(false); }
   };
