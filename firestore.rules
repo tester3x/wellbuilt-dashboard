@@ -126,6 +126,21 @@ service cloud.firestore {
     match /companies/{docId} {
       allow read: if true;
 
+      match /spill_incidents/{incidentId} {
+        allow read: if request.auth != null && (
+          request.auth.token.wellbuiltAdmin == true
+          || (request.auth.token.kind == 'staff' && request.auth.token.companyId == docId)
+        );
+        allow write: if false;
+        match /deliveries/{deliveryId} {
+          allow read: if request.auth != null && (
+            request.auth.token.wellbuiltAdmin == true
+            || (request.auth.token.kind == 'staff' && request.auth.token.companyId == docId)
+          );
+          allow write: if false;
+        }
+      }
+
       // Create: legacy Dashboard flows (CompaniesTab saveCompany /
       // activatePendingSignup) — authenticated, protected keys cannot
       // be supplied at birth in any form (any value, incl. null).

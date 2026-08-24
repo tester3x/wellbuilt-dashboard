@@ -10,6 +10,7 @@ export const SPILL_ACTION_CALLABLES = {
   resolve: 'resolveSpillIncident',
   close: 'closeSpillIncident',
   reopen: 'reopenSpillIncident',
+  updatePolicy: 'updateSpillNotificationPolicy',
 } as const;
 
 export type SpillActionType = keyof typeof SPILL_ACTION_CALLABLES;
@@ -22,6 +23,7 @@ export const SPILL_ACTION_CALLABLES_AVAILABLE: Record<SpillActionType, boolean> 
   resolve: false,
   close: false,
   reopen: false,
+  updatePolicy: false,
 };
 
 export type SpillAction =
@@ -44,10 +46,11 @@ export interface SpillActionAudit {
   incidentId: string;
 }
 
+/** Reconciled with WB-T spillBackendCore: open may resolve; notes/assign keep status. */
 const NEXT: Record<string, Partial<Record<SpillActionType, string>>> = {
-  open: { acknowledge: 'acknowledged', assignOwner: 'open', addNote: 'open' },
-  acknowledged: { assignOwner: 'acknowledged', addNote: 'acknowledged', resolve: 'resolved' },
-  resolved: { addNote: 'resolved', close: 'closed', reopen: 'open' },
+  open: { acknowledge: 'acknowledged', resolve: 'resolved', assignOwner: 'open', addNote: 'open' },
+  acknowledged: { acknowledge: 'acknowledged', resolve: 'resolved', assignOwner: 'acknowledged', addNote: 'acknowledged' },
+  resolved: { addNote: 'resolved', close: 'closed', reopen: 'open', assignOwner: 'resolved' },
   closed: { reopen: 'open' },
 };
 
@@ -118,6 +121,7 @@ export function buildSpillActionCallablePayload(action: SpillAction, audit: Spil
     atIso: audit.atIso,
     ...(action.type === 'assignOwner' ? { ownerEmployeeId: action.ownerEmployeeId } : {}),
     ...(action.type === 'addNote' ? { note: action.note } : {}),
+    expectedRevision: (action as { expectedRevision?: number }).expectedRevision,
   };
 }
 

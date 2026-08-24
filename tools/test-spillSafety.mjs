@@ -164,7 +164,8 @@ check('validate ack from open', validateSpillAction(act, 'accepted').ok === true
 check('reopen requires reason', validateSpillAction({ type: 'reopen', companyId: 'acme', incidentId: 'inc-1', reason: '' }, 'closed').ok === false);
 const audit = buildSpillActionAudit(act, { uid: 't1', name: 'Pat' }, 'open', '2026-08-24T11:00:00.000Z');
 check('audit retains actor/time/reason/prior/result', audit.actorUid === 't1' && audit.priorStatus === 'open' && audit.resultingStatus === 'acknowledged' && audit.reason === 'seen');
-check('callable payload is typed not a direct write', buildSpillActionCallablePayload(act, audit).action === 'acknowledge' && REQUIRED_SPILL_ACTION_CONTRACTS.length === 6);
+check('callable payload is typed not a direct write', buildSpillActionCallablePayload(act, audit).action === 'acknowledge' && REQUIRED_SPILL_ACTION_CONTRACTS.length === 7);
+check('open may resolve without acknowledge', validateSpillAction({ type: 'resolve', companyId: 'acme', incidentId: 'inc-1' }, 'open').ok === true);
 
 // Source pins
 const listUi = src('src/components/safety/SpillIncidentList.tsx');

@@ -1,7 +1,10 @@
 'use client';
 
 import { useMemo, useState } from 'react';
-import { type CompanyConfig, updateCompanyFields } from '@/lib/companySettings';
+import { type CompanyConfig } from '@/lib/companySettings';
+import { httpsCallable } from 'firebase/functions';
+import { getFirebaseFunctions } from '@/lib/firebase';
+import { isSpillActionAvailable, spillActionDisabledReason } from '@/lib/spill/spillActions';
 import {
   SPILL_RECIPIENT_ROLES,
   bumpPolicyVersion,
@@ -46,8 +49,13 @@ export function SpillNotificationCard({ company, onSave, canEdit, actorUid }: Pr
     setSaving(true);
     setMsg('');
     try {
+      if (!isSpillActionAvailable('updatePolicy')) {
+        setMsg(spillActionDisabledReason('updatePolicy') || 'Policy callable is not deployed');
+        return;
+      }
       const next = bumpPolicyVersion(policy, new Date().toISOString(), actorUid);
-      await updateCompanyFields(company.id, { 'spillReporting.notifyPolicy': next });
+      const call = httpsCallable(getFirebaseFunctions(), 'updateSpillNotificationPolicy');
+      await call({ companyId: company.id, policy: next });
       setPolicy(next);
       setMsg('Saved policy version ' + next.version);
       onSave();
