@@ -39,6 +39,8 @@ import {
   retroCloseDryRunHandler,
   retroCloseExecuteHandler,
 } from '../security/operational/shiftAuthorityMigrationHandler';
+import { recoverUnclaimedDriverShiftHandler } from '../security/operational/unclaimedShiftRecoveryHandler';
+import type { UnclaimedRecoveryReaders } from '../security/operational/unclaimedShiftRecoveryHandler';
 
 export const ADMIN_CALLABLE_OPTIONS = {
   // Part 15: flip to true when App Check enforcement is approved live.
@@ -131,3 +133,46 @@ export const adminListAdminAudit = wrap(listAdminAuditHandler);
 // so a payload typo can never reach the writing path.
 export const adminRetroCloseDriverShiftDryRun = wrap(retroCloseDryRunHandler);
 export const adminRetroCloseDriverShift = wrap(retroCloseExecuteHandler);
+
+function productionUnclaimedReaders(): UnclaimedRecoveryReaders {
+  const db = admin.firestore();
+  return {
+    async findMintedDiagnostic(periodId) {
+      try {
+        const snap = await db.collection('wb_diagnostics')
+          .where('shiftId', '==', periodId)
+          .where('event', '==', 'shiftId.minted')
+          .limit(5)
+          .get();
+        const hit = snap.docs[0]?.data() as Record<string, unknown> | undefined;
+        if (!hit) return { found: false, reason: null, source: null };
+        return {
+          found: true,
+          reason: typeof hit.reason === 'string' ? hit.reason : null,
+          source: typeof hit.source === 'string' ? hit.source : null,
+        };
+      } catch {
+        return { found: false, reason: null, source: null };
+      }
+    },
+    async hasPostTripReceipt({ periodId, companyId }) {
+      try {
+        const snap = await db.collection(`companies/${companyId}/dvir_inspections`)
+          .where('inspectionType', '==', 'post_trip')
+          .limit(50)
+          .get();
+        return snap.docs.some((d) => {
+          const x = d.data() as Record<string, unknown>;
+          return x.shiftId === periodId || x.periodId === periodId;
+        });
+      } catch {
+        // Unreadable completion store: fail closed (do not recover).
+        return true;
+      }
+    },
+  };
+}
+
+export const adminRecoverUnclaimedDriverShift = wrap(
+  (deps, auth, data) => recoverUnclaimedDriverShiftHandler(deps, auth, data, productionUnclaimedReaders()),
+);

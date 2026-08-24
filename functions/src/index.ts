@@ -4814,6 +4814,9 @@ export {
   // Targeted historical correction of a stale origin-day shift marker.
   // Separate dry-run and execute endpoints; neither is reachable by drivers.
   adminRetroCloseDriverShiftDryRun, adminRetroCloseDriverShift,
+  // Admin recovery of one unclaimed local explicit-shift period.
+  // Inspect/execute via mode; not a driver callable. Do not invoke until authorized.
+  adminRecoverUnclaimedDriverShift,
 } from './admin/callables';
 
 
