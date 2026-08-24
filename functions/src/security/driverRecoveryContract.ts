@@ -28,11 +28,11 @@ export const RECOVERY_AUDIENCES = [
 export type RecoveryAudience = typeof RECOVERY_AUDIENCES[number];
 
 const RETURN_URIS: Record<RecoveryAudience, readonly string[]> = {
-  'wellbuilt-suite': ['wellbuilt://account-recovery'],
-  'wellbuilt-mobile': ['wellbuilt-mobile://account-recovery'],
+  'wellbuilt-suite': ['wellbuilt-suite://account-recovery'],
+  'wellbuilt-mobile': ['wellbuiltmobile://account-recovery'],
   'wellbuilt-tickets': ['wellbuilt-tickets://account-recovery'],
-  'wellbuilt-jsa': ['wellbuilt-jsa://account-recovery'],
-  'wellbuilt-equipment': ['wellbuilt-equipment://account-recovery'],
+  'wellbuilt-jsa': ['jsaapp://account-recovery'],
+  'wellbuilt-equipment': ['wbequipment://account-recovery'],
 };
 
 export function allowedRecoveryReturnUri(

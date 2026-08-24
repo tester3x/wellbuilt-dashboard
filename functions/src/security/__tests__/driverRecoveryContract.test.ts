@@ -16,9 +16,9 @@ const base = {
 
 describe('central driver recovery contract', () => {
   test('only exact app return URIs are allowed; open redirects fall back', () => {
-    expect(allowedRecoveryReturnUri('wellbuilt-mobile', 'wellbuilt-mobile://account-recovery')).toBeTruthy();
+    expect(allowedRecoveryReturnUri('wellbuilt-mobile', 'wellbuiltmobile://account-recovery')).toBeTruthy();
     expect(allowedRecoveryReturnUri('wellbuilt-mobile', 'https://evil.invalid')).toBeNull();
-    expect(allowedRecoveryReturnUri('unknown', 'wellbuilt-mobile://account-recovery')).toBeNull();
+    expect(allowedRecoveryReturnUri('unknown', 'wellbuiltmobile://account-recovery')).toBeNull();
   });
   test('forgot-login receipt is enumeration resistant', () => {
     expect(genericRequestReceipt()).toEqual(genericRequestReceipt());

@@ -28,7 +28,7 @@ export default function AccountRecoveryPage() {
   const audience = query.get('audience') || 'wellbuilt-mobile';
   const returnUri = query.get('return_uri') || '';
   const correlationState = query.get('state') || '';
-  const allowedReturn: Record<string,string> = {'wellbuilt-suite':'wellbuilt://account-recovery','wellbuilt-mobile':'wellbuilt-mobile://account-recovery','wellbuilt-tickets':'wellbuilt-tickets://account-recovery','wellbuilt-jsa':'wellbuilt-jsa://account-recovery','wellbuilt-equipment':'wellbuilt-equipment://account-recovery'};
+  const allowedReturn: Record<string,string> = {'wellbuilt-suite':'wellbuilt-suite://account-recovery','wellbuilt-mobile':'wellbuiltmobile://account-recovery','wellbuilt-tickets':'wellbuilt-tickets://account-recovery','wellbuilt-jsa':'jsaapp://account-recovery','wellbuilt-equipment':'wbequipment://account-recovery'};
   const safeReturn = allowedReturn[audience] === returnUri && /^[A-Za-z0-9_-]{32,128}$/.test(correlationState)
     ? `${returnUri}?outcome=success&state=${encodeURIComponent(correlationState)}` : null;
   const [view, setView] = useState<View>('menu');
