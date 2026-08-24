@@ -15,6 +15,25 @@ export const SPILL_ACTION_CALLABLES = {
 
 export type SpillActionType = keyof typeof SPILL_ACTION_CALLABLES;
 
+/**
+ * Bounded client-generated operation id — the authoritative idempotency key the
+ * server (spillBackendCore.OPERATION_ID_RE = /^[0-9a-zA-Z_-]{8,64}$/) uses to
+ * decide replay vs conflict. Generate ONE per submitted action attempt and
+ * RETAIN it: a network retry of the same attempt reuses it (→ server replay);
+ * a newly initiated action mints a fresh one (→ distinct operation).
+ */
+export function newOperationId(): string {
+  const uuid = typeof crypto !== 'undefined' && crypto.randomUUID
+    ? crypto.randomUUID()
+    : `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 10)}`;
+  return `op-${uuid}`.slice(0, 64);
+}
+
+/** True when a value is a valid bounded operation id (mirrors the server RE). */
+export function isValidOperationId(v: unknown): boolean {
+  return typeof v === 'string' && /^[0-9a-zA-Z_-]{8,64}$/.test(v);
+}
+
 /** Flip only when the matching callable is actually deployed. All false today. */
 export const SPILL_ACTION_CALLABLES_AVAILABLE: Record<SpillActionType, boolean> = {
   acknowledge: false,
@@ -109,8 +128,14 @@ export function buildSpillActionAudit(
   };
 }
 
-export function buildSpillActionCallablePayload(action: SpillAction, audit: SpillActionAudit): Record<string, unknown> {
+export function buildSpillActionCallablePayload(
+  action: SpillAction,
+  audit: SpillActionAudit,
+  operationId: string,
+): Record<string, unknown> {
   return {
+    // operationId is the idempotency key — retained per attempt, reused on retry.
+    operationId,
     companyId: action.companyId,
     incidentId: action.incidentId,
     action: action.type,
@@ -129,5 +154,5 @@ export const REQUIRED_SPILL_ACTION_CONTRACTS = Object.entries(SPILL_ACTION_CALLA
   type,
   callable,
   deployed: SPILL_ACTION_CALLABLES_AVAILABLE[type as SpillActionType],
-  notes: 'Idempotent by incidentId+action+atIso. Must append audit { actorUid, atIso, reason, priorStatus, resultingStatus }. Tenant: caller.companyId must match incident.companyId unless platform admin.',
+  notes: 'Idempotent by client operationId + canonical action hash (operationId+companyId+incidentId+action+expectedRevision+payload). Same operationId + identical hash → server returns the original result; changed payload → conflict; different operationId → distinct action. Must append audit { actorUid, atIso, reason, priorStatus, resultingStatus } atomically with the operation-ledger record. Tenant: caller.companyId must match incident.companyId unless platform admin.',
 }));

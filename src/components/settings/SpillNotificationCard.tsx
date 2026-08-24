@@ -1,10 +1,10 @@
 'use client';
 
-import { useMemo, useState } from 'react';
+import { useMemo, useRef, useState } from 'react';
 import { type CompanyConfig } from '@/lib/companySettings';
 import { httpsCallable } from 'firebase/functions';
 import { getFirebaseFunctions } from '@/lib/firebase';
-import { isSpillActionAvailable, spillActionDisabledReason } from '@/lib/spill/spillActions';
+import { isSpillActionAvailable, spillActionDisabledReason, newOperationId } from '@/lib/spill/spillActions';
 import {
   SPILL_RECIPIENT_ROLES,
   bumpPolicyVersion,
@@ -31,6 +31,10 @@ export function SpillNotificationCard({ company, onSave, canEdit, actorUid }: Pr
   const [extEmail, setExtEmail] = useState('');
   const [extChan, setExtChan] = useState<SpillNotifyChannelPref>('email');
   const [empId, setEmpId] = useState('');
+  // Retain ONE operationId per submitted attempt: a network retry of the SAME
+  // policy content reuses it (server replays); any content edit mints a new one
+  // (a distinct operation). Cleared on success.
+  const attemptRef = useRef<{ contentKey: string; operationId: string } | null>(null);
 
   const validation = validateSpillPolicy(policy);
 
@@ -54,8 +58,20 @@ export function SpillNotificationCard({ company, onSave, canEdit, actorUid }: Pr
         return;
       }
       const next = bumpPolicyVersion(policy, new Date().toISOString(), actorUid);
+      // One operationId per attempt: reuse across a retry of identical content
+      // (→ server replay), mint fresh when the content changed (→ new operation).
+      const contentKey = JSON.stringify({
+        enabled: policy.enabled,
+        recipients: policy.recipients,
+        externalAccessEnabled: policy.externalAccessEnabled ?? false,
+        externalAccessExpiresHours: policy.externalAccessExpiresHours ?? null,
+      });
+      if (!attemptRef.current || attemptRef.current.contentKey !== contentKey) {
+        attemptRef.current = { contentKey, operationId: newOperationId() };
+      }
       const call = httpsCallable(getFirebaseFunctions(), 'updateSpillNotificationPolicy');
-      await call({ companyId: company.id, policy: next });
+      await call({ companyId: company.id, operationId: attemptRef.current.operationId, policy: next });
+      attemptRef.current = null; // attempt succeeded → next save is a new operation
       setPolicy(next);
       setMsg('Saved policy version ' + next.version);
       onSave();
