@@ -1,15 +1,18 @@
 /**
- * adminRecoverUnclaimedDriverShift — inspect / execute.
+ * adminRecoverUnclaimedDriverShift — incident-bound inspect / execute.
  *
- * Dual-gated through requireAdmin (wellbuiltAdmin claim AND enabled
- * platform_admins record). Drivers cannot call this. Ordinary
- * claimDriverShift is untouched, including isPlausibleLocalDate.
+ * Authorizing Firestore evidence is re-read inside the execute transaction
+ * via getQuery (not out-of-band collection scans).
  *
- * Inspect writes nothing. Execute re-reads the inspect snapshot inside
- * one transaction before any write.
+ * Governed WB-E Post-Trip reports live at organizations/{companyId}/dvirReports
+ * in the dedicated equipment Firebase project, which cannot join a
+ * wellbuilt-sync transaction. This handler queries the same path ON
+ * wellbuilt-sync (may be empty) and companies/{id}/dvir_inspections with
+ * equality filters on period+post_trip. Unreadable/malformed/denied queries
+ * deny recovery. Device AsyncStorage receipts are not a server store.
  */
 import { createHash } from 'crypto';
-import { AdminCallError, type AdminDeps, type AdminTransaction } from '../../admin/adminDeps.js';
+import { AdminCallError, type AdminDeps, type AdminDocSnapshot } from '../../admin/adminDeps.js';
 import { requireAdmin } from '../../admin/adminHandlers.js';
 import { ADMIN_AUDIT_COLLECTION, AUDIT_REASON_MAX, buildAuditRecord } from '../../admin/adminAudit.js';
 import type { VerifiedCallerAuth } from '../../admin/authority.js';
@@ -22,14 +25,20 @@ import {
 import { readAuthorityRecord } from './shiftAuthorityMigrationHandler.js';
 import {
   AUTHORITY_RECOVERED_EVENT_TYPE,
+  INCIDENT,
   RECOVER_UNCLAIMED_OPERATION,
   buildAuthorityRecoveredEvent,
+  classifyDiagnosticDocs,
   computeInspectFingerprint,
+  credentialsPath,
   decideUnclaimedRecovery,
+  diagnosticMatchesIncidentShape,
+  nameIndexPath,
   recoveryAuditDocId,
   snapshotFromEvidence,
-  type MintedDiagnosticEvidence,
   type RecoverMode,
+  type RecoveryQueryResult,
+  type RecoveryQuerySpec,
   type UnclaimedRecoveryRequest,
 } from './unclaimedShiftRecovery.js';
 
@@ -43,13 +52,17 @@ const KEYS = [
   'inspectStateFingerprint',
 ] as const;
 
-export interface UnclaimedRecoveryReaders {
-  findMintedDiagnostic(periodId: string): Promise<MintedDiagnosticEvidence>;
-  hasPostTripReceipt(opts: {
-    periodId: string;
-    driverId: string;
-    companyId: string;
-  }): Promise<boolean>;
+export interface RecoveryTx {
+  get(path: string): Promise<AdminDocSnapshot>;
+  getQuery(spec: RecoveryQuerySpec): Promise<RecoveryQueryResult>;
+  update(path: string, fields: Record<string, unknown>): void;
+  create(path: string, data: Record<string, unknown>): void;
+}
+
+export interface UnclaimedRecoveryDeps extends AdminDeps {
+  getQuery(spec: RecoveryQuerySpec): Promise<RecoveryQueryResult>;
+  runRecoveryTransaction<T>(fn: (tx: RecoveryTx) => Promise<T>): Promise<T>;
+  resolveApprovedHash(driverHash: string): Promise<string | null>;
 }
 
 export interface UnclaimedRecoveryResult {
@@ -59,18 +72,8 @@ export interface UnclaimedRecoveryResult {
   alreadyRecovered?: boolean;
   fingerprint?: string;
   reason?: string;
-  evidence?: {
-    initialized: boolean;
-    authorityState: string;
-    openPeriodId: string | null;
-    lastClosedPeriodId: string | null;
-    authorityVersion: number | null;
-    originDayPresent: boolean;
-    originDayCurrentShiftId: string | null;
-    postTripPresent: boolean;
-    mintedFound: boolean;
-    mintedLegacyLocal: boolean;
-  };
+  evidence?: Record<string, unknown>;
+  completionStores?: Record<string, unknown>;
 }
 
 function sha256Hex(s: string): string {
@@ -115,19 +118,18 @@ function parseRequest(data: unknown): UnclaimedRecoveryRequest {
   if (typeof fingerprint !== 'string' || fingerprint.length > 128) {
     throw new AdminCallError('invalid-argument', 'invalid_field:inspectStateFingerprint');
   }
-  const reason = requireString(d, 'reason', AUDIT_REASON_MAX);
   return {
     driverId: requireString(d, 'driverId', 128),
     companyId: requireString(d, 'companyId', 128),
     periodId: requireString(d, 'periodId', 32),
     expectedAuthorityVersion,
     mode,
-    reason,
+    reason: requireString(d, 'reason', AUDIT_REASON_MAX),
     inspectStateFingerprint: fingerprint,
   };
 }
 
-function toOriginDay(snap: { exists: boolean; data?: Record<string, unknown> }) {
+function toOriginDay(snap: AdminDocSnapshot) {
   if (!snap.exists) return { readable: true, present: false as const };
   const current = snap.data?.currentShiftId;
   return {
@@ -137,26 +139,73 @@ function toOriginDay(snap: { exists: boolean; data?: Record<string, unknown> }) 
   };
 }
 
-async function gatherSnapshot(
-  read: (path: string) => Promise<{ exists: boolean; data?: Record<string, unknown> }>,
-  readers: UnclaimedRecoveryReaders,
+function matchingCountForPeriod(result: RecoveryQueryResult, periodId: string): RecoveryQueryResult {
+  if (!result.readable) return { ...result, matchingCount: 0 };
+  const n = result.docs.filter((d) => {
+    const summary = d.data.summary as { inspectionType?: unknown; shiftId?: unknown } | undefined;
+    const type = d.data.inspectionType ?? summary?.inspectionType;
+    const shift = d.data.shiftId ?? d.data.periodId ?? summary?.shiftId;
+    const isPost = type === 'post_trip';
+    return isPost && (shift === periodId);
+  }).length;
+  return { ...result, matchingCount: n };
+}
+
+async function gather(
+  get: (path: string) => Promise<AdminDocSnapshot>,
+  getQuery: (spec: RecoveryQuerySpec) => Promise<RecoveryQueryResult>,
+  resolveHash: (hash: string) => Promise<string | null>,
   req: UnclaimedRecoveryRequest,
 ) {
   const originLocalDate = req.periodId.slice(0, 10);
-  const authoritySnap = await read(shiftAuthorityPath(req.driverId));
-  const originSnap = await read(shiftDayPath(req.driverId, originLocalDate));
-  const [minted, postTripPresent] = await Promise.all([
-    readers.findMintedDiagnostic(req.periodId),
-    readers.hasPostTripReceipt({
-      periodId: req.periodId,
-      driverId: req.driverId,
-      companyId: req.companyId,
-    }),
+  const nameSnap = await get(nameIndexPath(INCIDENT.displayNameNorm));
+  const credSnap = await get(credentialsPath(req.driverId));
+  const authoritySnap = await get(shiftAuthorityPath(req.driverId));
+  const originSnap = await get(shiftDayPath(req.driverId, originLocalDate));
+  const [diagQ, inspQ, reportQ] = await Promise.all([
+    getQuery({ kind: 'minted_diagnostics', periodId: req.periodId }),
+    getQuery({ kind: 'sync_post_trip_inspections', companyId: req.companyId, periodId: req.periodId }),
+    getQuery({ kind: 'sync_dvir_reports', companyId: req.companyId, periodId: req.periodId }),
   ]);
+
+  const inspections = matchingCountForPeriod(inspQ, req.periodId);
+  const reports = matchingCountForPeriod(reportQ, req.periodId);
+
+  const hashCache = new Map<string, string | null>();
+  const resolve = (hash: string) => {
+    if (hashCache.has(hash)) return hashCache.get(hash) ?? null;
+    return null;
+  };
+  if (diagQ.readable) {
+    for (const d of diagQ.docs) {
+      const h = d.data.driverHash;
+      if (typeof h === 'string' && h && !hashCache.has(h)) {
+        hashCache.set(h, await resolveHash(h));
+      }
+    }
+  }
+  const diagnosticBound = classifyDiagnosticDocs(
+    { ...diagQ, matchingCount: diagQ.docs.length },
+    req.periodId,
+    req.driverId,
+    resolve,
+  );
+  const sample = (diagQ.docs || []).find((d) => diagnosticMatchesIncidentShape(d.data, req.periodId))?.data ?? null;
+
+  const nameIndexDriverId = typeof nameSnap.data?.driverId === 'string' ? nameSnap.data.driverId : null;
+  const credentialsActive = credSnap.exists && credSnap.data?.active !== false;
+
   const authority = readAuthorityRecord(authoritySnap);
-  const originDay = toOriginDay(originSnap);
   const snapshot = snapshotFromEvidence({
-    request: req, authority, originDay, postTripPresent, minted,
+    request: req,
+    authority,
+    originDay: toOriginDay(originSnap),
+    nameIndexDriverId,
+    credentialsActive,
+    diagnosticBound,
+    diagnosticSample: sample,
+    inspections,
+    reports,
   });
   const fingerprint = computeInspectFingerprint(snapshot, sha256Hex);
   return { authority, originSnap, snapshot, fingerprint };
@@ -167,27 +216,43 @@ function redactedEvidence(snapshot: ReturnType<typeof snapshotFromEvidence>) {
     initialized: snapshot.initialized,
     authorityState: snapshot.authorityState,
     openPeriodId: snapshot.openPeriodId,
+    authorityOriginLocalDate: snapshot.authorityOriginLocalDate,
     lastClosedPeriodId: snapshot.lastClosedPeriodId,
     authorityVersion: snapshot.authorityVersion,
     originDayPresent: snapshot.originDayPresent,
     originDayCurrentShiftId: snapshot.originDayCurrentShiftId,
-    postTripPresent: snapshot.postTripPresent,
-    mintedFound: snapshot.mintedFound,
-    mintedLegacyLocal: snapshot.mintedLegacyLocal,
+    identityMatch: snapshot.identityMatch,
+    nameIndexMatch: snapshot.nameIndexMatch,
+    credentialsActive: snapshot.credentialsActive,
+    diagnosticBound: snapshot.diagnosticBound,
+    postTripInspectionsMatching: snapshot.inspectionsPostTripMatching,
+    postTripReportsMatching: snapshot.reportsPostTripMatching,
+    completionReadable: snapshot.completionReadable,
   };
 }
 
+export const COMPLETION_STORE_NOTES = Object.freeze({
+  suiteReceipt: 'device AsyncStorage @wb/suite-dvir-gate/v1/receipt/{shiftId}/post_trip — not a server store',
+  syncDashboardInspections: 'wellbuilt-sync companies/{companyId}/dvir_inspections — Dashboard eQuipment writer dvir.submitPreTrip is pre_trip only; queried with inspectionType==post_trip AND shiftId==period',
+  syncDvirReports: 'wellbuilt-sync organizations/{companyId}/dvirReports/{inspectionId} — queried inspectionType/summary.inspectionType==post_trip AND shiftId==period',
+  equipmentProjectReports: 'dedicated DVIR Firebase organizations/{companyId}/dvirReports — cannot join wellbuilt-sync transactions; unreadable/denied denies recovery',
+});
+
 export async function recoverUnclaimedDriverShiftHandler(
-  deps: AdminDeps,
+  deps: UnclaimedRecoveryDeps,
   auth: VerifiedCallerAuth | null,
   data: unknown,
-  readers: UnclaimedRecoveryReaders,
 ): Promise<UnclaimedRecoveryResult> {
   const actor = await requireAdmin(deps, auth);
   const req = parseRequest(data);
 
   if (req.mode === 'inspect') {
-    const { snapshot, fingerprint } = await gatherSnapshot((p) => deps.getDoc(p), readers, req);
+    const { snapshot, fingerprint } = await gather(
+      (p) => deps.getDoc(p),
+      (s) => deps.getQuery(s),
+      (h) => deps.resolveApprovedHash(h),
+      req,
+    );
     const decision = decideUnclaimedRecovery({ request: req, snapshot, fingerprint });
     if (decision.action !== 'inspect') {
       throw new AdminCallError('internal', 'inspect_decision_mismatch');
@@ -199,13 +264,15 @@ export async function recoverUnclaimedDriverShiftHandler(
       fingerprint: decision.fingerprint,
       reason: decision.recoverable ? undefined : decision.reason,
       evidence: redactedEvidence(snapshot),
+      completionStores: COMPLETION_STORE_NOTES,
     };
   }
 
-  const outcome = await deps.runTransaction(async (tx: AdminTransaction) => {
-    const { authority, originSnap, snapshot, fingerprint } = await gatherSnapshot(
+  const outcome = await deps.runRecoveryTransaction(async (tx) => {
+    const { authority, originSnap, snapshot, fingerprint } = await gather(
       (p) => tx.get(p),
-      readers,
+      (s) => tx.getQuery(s),
+      (h) => deps.resolveApprovedHash(h),
       req,
     );
     const decision = decideUnclaimedRecovery({ request: req, snapshot, fingerprint });
@@ -228,11 +295,7 @@ export async function recoverUnclaimedDriverShiftHandler(
     }
 
     const originLocalDate = snapshot.originLocalDate;
-    const recovered: ShiftAuthorityRecord = recordAfterClaim(
-      authority,
-      req.periodId,
-      originLocalDate,
-    );
+    const recovered: ShiftAuthorityRecord = recordAfterClaim(authority, req.periodId, originLocalDate);
     tx.update(shiftAuthorityPath(req.driverId), {
       driverId: recovered.driverId,
       companyId: recovered.companyId,
@@ -243,21 +306,17 @@ export async function recoverUnclaimedDriverShiftHandler(
       version: recovered.version,
       updatedAt: deps.serverTimestamp(),
     });
-
     const recoveredIso = new Date(deps.nowMs()).toISOString();
-    const recoveryEvent = buildAuthorityRecoveredEvent(req.periodId, recoveredIso);
     tx.create(shiftDayPath(req.driverId, originLocalDate), {
       currentShiftId: req.periodId,
       driverId: req.driverId,
       companyId: req.companyId,
       date: originLocalDate,
       updatedAt: deps.serverTimestamp(),
-      events: [recoveryEvent],
+      events: [buildAuthorityRecoveredEvent(req.periodId, recoveredIso)],
     });
-
-    const driverFp12 = sha256Hex(req.driverId).slice(0, 12);
     tx.create(
-      `${ADMIN_AUDIT_COLLECTION}/${recoveryAuditDocId(req.periodId, driverFp12)}`,
+      `${ADMIN_AUDIT_COLLECTION}/${recoveryAuditDocId(req.periodId, sha256Hex(req.driverId).slice(0, 12))}`,
       buildAuditRecord({
         operation: RECOVER_UNCLAIMED_OPERATION,
         targetType: 'driver_shift',
@@ -272,7 +331,6 @@ export async function recoverUnclaimedDriverShiftHandler(
         ],
       }, deps.serverTimestamp()),
     );
-
     return { kind: 'executed' as const, snapshot, fingerprint };
   });
 
@@ -293,16 +351,5 @@ export async function recoverUnclaimedDriverShiftHandler(
     changed: true,
     fingerprint: outcome.fingerprint,
     evidence: redactedEvidence(outcome.snapshot),
-  };
-}
-
-export function silentUnclaimedReaders(): UnclaimedRecoveryReaders {
-  return {
-    async findMintedDiagnostic() {
-      return { found: false, reason: null, source: null };
-    },
-    async hasPostTripReceipt() {
-      return false;
-    },
   };
 }

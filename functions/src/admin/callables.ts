@@ -39,8 +39,12 @@ import {
   retroCloseDryRunHandler,
   retroCloseExecuteHandler,
 } from '../security/operational/shiftAuthorityMigrationHandler';
-import { recoverUnclaimedDriverShiftHandler } from '../security/operational/unclaimedShiftRecoveryHandler';
-import type { UnclaimedRecoveryReaders } from '../security/operational/unclaimedShiftRecoveryHandler';
+import {
+  recoverUnclaimedDriverShiftHandler,
+  type RecoveryTx,
+  type UnclaimedRecoveryDeps,
+} from '../security/operational/unclaimedShiftRecoveryHandler';
+import type { RecoveryQueryResult, RecoveryQuerySpec } from '../security/operational/unclaimedShiftRecovery';
 
 export const ADMIN_CALLABLE_OPTIONS = {
   // Part 15: flip to true when App Check enforcement is approved live.
@@ -134,45 +138,99 @@ export const adminListAdminAudit = wrap(listAdminAuditHandler);
 export const adminRetroCloseDriverShiftDryRun = wrap(retroCloseDryRunHandler);
 export const adminRetroCloseDriverShift = wrap(retroCloseExecuteHandler);
 
-function productionUnclaimedReaders(): UnclaimedRecoveryReaders {
+function classifyQueryError(err: unknown): RecoveryQueryResult {
+  const msg = String((err as Error)?.message || err);
+  const error = /index|FAILED_PRECONDITION/i.test(msg)
+    ? 'missing_index' as const
+    : /permission|denied|PERMISSION/i.test(msg)
+      ? 'denied' as const
+      : 'unreadable' as const;
+  return { readable: false, error, docs: [], matchingCount: 0 };
+}
+
+function productionQuery(db: admin.firestore.Firestore, spec: RecoveryQuerySpec): admin.firestore.Query {
+  if (spec.kind === 'minted_diagnostics') {
+    return db.collection('wb_diagnostics')
+      .where('shiftId', '==', spec.periodId)
+      .where('event', '==', 'shiftId.minted');
+  }
+  if (spec.kind === 'sync_post_trip_inspections') {
+    return db.collection(`companies/${spec.companyId}/dvir_inspections`)
+      .where('inspectionType', '==', 'post_trip')
+      .where('shiftId', '==', spec.periodId);
+  }
+  return db.collection(`organizations/${spec.companyId}/dvirReports`)
+    .where('inspectionType', '==', 'post_trip')
+    .where('shiftId', '==', spec.periodId);
+}
+
+function snapToResult(snap: admin.firestore.QuerySnapshot): RecoveryQueryResult {
+  const docs = snap.docs.map((d) => ({ id: d.id, data: (d.data() || {}) as Record<string, unknown> }));
+  return { readable: true, docs, matchingCount: docs.length };
+}
+
+function buildRecoveryDeps(): UnclaimedRecoveryDeps {
+  const base = buildFirestoreAdminDeps();
   const db = admin.firestore();
   return {
-    async findMintedDiagnostic(periodId) {
+    ...base,
+    async getQuery(spec) {
       try {
-        const snap = await db.collection('wb_diagnostics')
-          .where('shiftId', '==', periodId)
-          .where('event', '==', 'shiftId.minted')
-          .limit(5)
-          .get();
-        const hit = snap.docs[0]?.data() as Record<string, unknown> | undefined;
-        if (!hit) return { found: false, reason: null, source: null };
-        return {
-          found: true,
-          reason: typeof hit.reason === 'string' ? hit.reason : null,
-          source: typeof hit.source === 'string' ? hit.source : null,
-        };
-      } catch {
-        return { found: false, reason: null, source: null };
+        return snapToResult(await productionQuery(db, spec).get());
+      } catch (err) {
+        return classifyQueryError(err);
       }
     },
-    async hasPostTripReceipt({ periodId, companyId }) {
+    async runRecoveryTransaction(fn) {
+      return db.runTransaction(async (ftx) => {
+        const tx: RecoveryTx = {
+          async get(path) {
+            const snap = await ftx.get(db.doc(path));
+            return { exists: snap.exists, data: snap.data() as Record<string, unknown> | undefined };
+          },
+          async getQuery(spec) {
+            try {
+              return snapToResult(await ftx.get(productionQuery(db, spec)));
+            } catch (err) {
+              return classifyQueryError(err);
+            }
+          },
+          update(path, fields) { ftx.update(db.doc(path), fields); },
+          create(path, data) { ftx.create(db.doc(path), data); },
+        };
+        return fn(tx);
+      });
+    },
+    async resolveApprovedHash(driverHash) {
       try {
-        const snap = await db.collection(`companies/${companyId}/dvir_inspections`)
-          .where('inspectionType', '==', 'post_trip')
-          .limit(50)
-          .get();
-        return snap.docs.some((d) => {
-          const x = d.data() as Record<string, unknown>;
-          return x.shiftId === periodId || x.periodId === periodId;
-        });
+        const snap = await admin.database().ref(`drivers/approved/${driverHash}`).get();
+        if (!snap.exists()) return null;
+        const v = snap.val() as Record<string, unknown> | null;
+        if (!v || v.active === false) return null;
+        if (typeof v.driverId === 'string' && v.driverId) return v.driverId;
+        if (typeof v.canonicalDriverId === 'string' && v.canonicalDriverId) return v.canonicalDriverId;
+        return null;
       } catch {
-        // Unreadable completion store: fail closed (do not recover).
-        return true;
+        return null;
       }
     },
   };
 }
 
-export const adminRecoverUnclaimedDriverShift = wrap(
-  (deps, auth, data) => recoverUnclaimedDriverShiftHandler(deps, auth, data, productionUnclaimedReaders()),
-);
+export const adminRecoverUnclaimedDriverShift = httpsV2.onCall(ADMIN_CALLABLE_OPTIONS, async (request) => {
+  try {
+    return await recoverUnclaimedDriverShiftHandler(
+      buildRecoveryDeps(),
+      request.auth
+        ? { uid: request.auth.uid, token: request.auth.token as unknown as Record<string, unknown> }
+        : null,
+      request.data,
+    );
+  } catch (err) {
+    if (err instanceof AdminCallError) {
+      throw new httpsV2.HttpsError(err.code, err.adminCode, { adminCode: err.adminCode });
+    }
+    console.error('[adminRecoverUnclaimedDriverShift] unexpected failure:', (err as Error)?.message);
+    throw new httpsV2.HttpsError('internal', 'internal', { adminCode: 'internal' });
+  }
+});
