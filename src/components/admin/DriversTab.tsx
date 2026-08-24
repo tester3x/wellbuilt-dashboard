@@ -23,6 +23,7 @@ import {
   shouldInstallPreview,
   type BoundAssignmentPreview,
 } from '@/lib/wbmAssignmentPreview';
+import { getDriverSecureLoginStatuses } from '@/lib/secureDriverAdmin';
 
 interface AssignedCustomer {
   name: string;
@@ -128,6 +129,20 @@ export function DriversTab({ scopeCompanyId, isWbAdmin = false }: DriversTabProp
   // deliberately not offered here.
   const [secureTarget, setSecureTarget] = useState<ApprovedDriver | null>(null);
   const [securedKeys, setSecuredKeys] = useState<Set<string>>(new Set());
+  const [authoritativeSecure, setAuthoritativeSecure] = useState<Record<string, boolean>>({});
+
+  useEffect(() => {
+    let disposed = false;
+    if (!isWbAdmin || approvedDrivers.length === 0) return;
+    const rows = [...approvedDrivers];
+    void getDriverSecureLoginStatuses(rows.map(r => r.key)).then(statuses => {
+      if (disposed) return;
+      const next: Record<string, boolean> = {};
+      rows.forEach((row, i) => { next[row.key] = statuses[i]?.secureActive === true; });
+      setAuthoritativeSecure(next);
+    }).catch(() => { /* fail closed: never claim a secure login from a failed status read */ });
+    return () => { disposed = true; };
+  }, [approvedDrivers, isWbAdmin]);
 
   const closeSecureModal = useCallback(() => {
     setSecureTarget(null);
@@ -142,11 +157,11 @@ export function DriversTab({ scopeCompanyId, isWbAdmin = false }: DriversTabProp
   //   'none'    — not eligible (inactive row, or caller is not WB admin).
   const secureLoginStateFor = useCallback((driver: ApprovedDriver): SecureLoginState => {
     if (!isWbAdmin) return 'none';
-    if (securedKeys.has(driver.key) || credentialActionFor(driver) === 'reset_passcode') {
+    if (authoritativeSecure[driver.key] === true || securedKeys.has(driver.key)) {
       return 'secured';
     }
     return driver.active !== false ? 'create' : 'none';
-  }, [isWbAdmin, securedKeys]);
+  }, [isWbAdmin, securedKeys, authoritativeSecure]);
   const [newCustomerName, setNewCustomerName] = useState('');
   const [newCustomerCompanyId, setNewCustomerCompanyId] = useState('');
 

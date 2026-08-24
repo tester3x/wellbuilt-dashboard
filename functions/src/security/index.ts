@@ -32,6 +32,16 @@ export { upgradeOwnLegacyDriverLogin } from './upgradeOwnLegacyDriverLogin';
 export { staffHydrateCanonicalIdentity } from './staffHydrateCanonicalIdentity';
 export { staffRetireLegacyDriverLogin } from './staffRetireLegacyDriverLogin';
 export { getOwnDriverHydration } from './getOwnDriverHydration';
+export {
+  requestDriverAccountRecovery,
+  getOwnRecoveryRequestStatus,
+  listDriverAccountRecoveryRequests,
+  approveDriverAccountRecovery,
+  denyDriverAccountRecovery,
+  cancelDriverAccountRecovery,
+  redeemDriverAccountRecovery,
+  getDriverSecureLoginStatus,
+} from './driverAccountRecoveryCallables';
 
 export {
   ingestDriverPacket,

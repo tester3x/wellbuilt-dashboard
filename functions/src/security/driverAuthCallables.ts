@@ -371,6 +371,7 @@ export const driverChangeOwnPasscode = httpsV2.onCall(
       mustResetPasscode: false,
       updatedAt: FieldValue.serverTimestamp(),
       passcodeChangedAt: FieldValue.serverTimestamp(),
+      credentialGeneration: FieldValue.increment(1),
       // Invalidate any pending cleanup ownership. This is a partial update,
       // so without clearing it an admin create/reset whose RTDB write later
       // failed would still match its own opId and delete the passcode the
@@ -384,6 +385,17 @@ export const driverChangeOwnPasscode = httpsV2.onCall(
       ...existing,
       mustChangePasscode: false,
     });
+    await admin.auth().revokeRefreshTokens(authUid);
+    const [codes, recoveries] = await Promise.all([
+      fs().collection('sso_authorization_codes').where('driverId', '==', driverId).get(),
+      fs().collection('driver_account_recovery').where('driverId', '==', driverId).get(),
+    ]);
+    const batch = fs().batch();
+    codes.docs.forEach(d => batch.set(d.ref, { consumed: true, consumedAtMs: Date.now(), revokedAt: FieldValue.serverTimestamp() }, { merge: true }));
+    recoveries.docs.forEach(d => {
+      if (d.data().state !== 'used') batch.set(d.ref, { state: 'cancelled', recoverySecretHash: FieldValue.delete() }, { merge: true });
+    });
+    await batch.commit();
 
     await writeSecurityAudit({
       action: 'driverChangeOwnPasscode',

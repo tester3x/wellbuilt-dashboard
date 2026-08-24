@@ -114,6 +114,12 @@ export async function staffRetireLegacyDriverLogin(params: { driverId: string })
   return res.data;
 }
 
+export async function getDriverSecureLoginStatuses(approvedKeys: string[]) {
+  const fn = httpsCallable(getFirebaseFunctions(), 'getDriverSecureLoginStatus');
+  const res = await fn({ approvedKeys });
+  return (res.data as { statuses: { classification: string; secureActive: boolean }[] }).statuses;
+}
+
 /**
  * Governed INITIAL company binding for a canonical secure driver. The
  * server validates preconditions, ensures the shift authority under the
