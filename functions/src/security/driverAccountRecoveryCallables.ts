@@ -66,12 +66,24 @@ export const requestDriverAccountRecovery = httpsV2.onCall(
       companyHint: String(d.companyHint || '').trim().slice(0, 80),
       contactHint: String(d.contactHint || '').trim().slice(0, 160),
     };
+    // Private server-side routing only. The public response never confirms a match.
+    let routingCompanyId: string | null = null;
+    if (minimal.companyHint) {
+      const companies = await admin.firestore().collection('companies').limit(500).get();
+      const wanted = minimal.companyHint.toLowerCase().replace(/\s+/g, ' ').trim();
+      const match = companies.docs.find(x => {
+        const v = x.data();
+        return x.id.toLowerCase() === wanted
+          || String(v.name || v.companyName || '').toLowerCase().replace(/\s+/g, ' ').trim() === wanted;
+      });
+      routingCompanyId = match?.id || null;
+    }
     await admin.firestore().runTransaction(async (tx) => {
       const old = await tx.get(ref);
       if (old.exists) return; // identical public receipt; never enumerate
       tx.create(ref, {
         purpose, audience, returnUri, stateHash: String(d.stateHash || '').slice(0, 64),
-        statusSecretHash, ...minimal, state: 'pending', attempts: 0,
+        statusSecretHash, ...minimal, routingCompanyId, state: 'pending', attempts: 0,
         createdAtMs: now, expiresAtMs: now + DRIVER_RECOVERY_TTL_MS,
       });
     });
@@ -100,7 +112,7 @@ export const listDriverAccountRecoveryRequests = httpsV2.onCall(
     const snap = await admin.firestore().collection(REQUESTS).orderBy('createdAtMs', 'desc').limit(100).get();
     return { requests: snap.docs.map(doc => {
       const d = doc.data();
-      if (caller.companyId && d.companyId && caller.companyId !== d.companyId) return null;
+      if (caller.companyId && caller.companyId !== d.routingCompanyId && caller.companyId !== d.companyId) return null;
       return { requestId: doc.id, purpose: d.purpose, state: d.state,
         legalNameHint: d.legalNameHint || '', companyHint: d.companyHint || '', contactHint: d.contactHint || '',
         createdAtMs: d.createdAtMs, expiresAtMs: d.expiresAtMs };
@@ -152,6 +164,9 @@ export const approveDriverAccountRecovery = httpsV2.onCall(
     const companyId = String(profile.companyId || '');
     if (!companyId || (caller.companyId && caller.companyId !== companyId)) {
       throw new httpsV2.HttpsError('permission-denied', GENERIC_DENIAL);
+    }
+    if (rec.routingCompanyId && rec.routingCompanyId !== companyId) {
+      throw new httpsV2.HttpsError('failed-precondition', GENERIC_DENIAL);
     }
     const existingIndex = await admin.firestore().collection('driver_name_index').doc(normalizedName).get();
     if (targetKind === 'legacy' && existingIndex.exists) {
