@@ -1,6 +1,6 @@
 'use client';
 
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { useRouter } from 'next/navigation';
 import Link from 'next/link';
 import { useAuth } from '@/contexts/AuthContext';
@@ -27,6 +27,16 @@ import { EquipmentTab } from '@/components/admin/EquipmentTab';
 import dynamic from 'next/dynamic';
 import { useVerifiedAdmin } from '@/lib/useVerifiedAdmin';
 import { VerifiedAdminGate } from '@/components/admin/VerifiedAdminGate';
+import {
+  applyAddWellSuccess,
+  classifyAddWellError,
+  decideAddWellSubmit,
+  feetToDisplay,
+  parseLevelToFeet,
+  rebuildRoutesFromConfigs,
+  type AddWellSubmitStatus,
+} from '@/lib/addWellSubmit';
+import { staffCreateWellConfig } from '@/lib/staffWriteWellConfig';
 
 // vc51.9A7 — protected contract surfaces, lazy-loaded and visible only
 // after the verified wellbuiltAdmin claim (server stays authoritative).
@@ -131,6 +141,9 @@ export default function AdminPage() {
   const [editNdicApiNo, setEditNdicApiNo] = useState('');
 
   const [message, setMessage] = useState('');
+  const [isAddingWell, setIsAddingWell] = useState(false);
+  const [addWellStatus, setAddWellStatus] = useState<AddWellSubmitStatus>({ kind: 'idle' });
+  const addWellInflightRef = useRef(false);
   const [activeTab, setActiveTab] = useState<'routes' | 'wells' | 'drivers' | 'companies' | 'gpsroutes' | 'equipment' | 'plans' | 'adminaudit'>('wells');
 
   // vc51.9A7 — verified-admin session (display gate; server re-decides
@@ -221,28 +234,6 @@ export default function AdminPage() {
     return null; // valid (forbidden chars already filtered out on input)
   };
 
-  // Parse level input: "10 4" | "10.33" | "10'4\"" | "10'4" → decimal feet
-  const parseLevelToFeet = (input: string): number => {
-    const s = input.trim();
-    if (!s) return 0;
-    // "10'4\"" or "10'4" — feet'inches
-    const feetInchMatch = s.match(/^(\d+)\s*['']\s*(\d+)\s*[""]?\s*$/);
-    if (feetInchMatch) return parseInt(feetInchMatch[1]) + parseInt(feetInchMatch[2]) / 12;
-    // "10 4" — space separated feet inches
-    const spaceMatch = s.match(/^(\d+)\s+(\d+)\s*$/);
-    if (spaceMatch) return parseInt(spaceMatch[1]) + parseInt(spaceMatch[2]) / 12;
-    // Plain number (decimal feet)
-    const num = parseFloat(s);
-    return isNaN(num) ? 0 : num;
-  };
-
-  // Format decimal feet to display: 3.33 → "3'4\""
-  const feetToDisplay = (ft: number): string => {
-    const wholeFeet = Math.floor(ft);
-    const inches = Math.round((ft - wholeFeet) * 12);
-    return `${wholeFeet}'${inches}"`;
-  };
-
   // Edit well name state
   const [editWellName, setEditWellName] = useState('');
   const [isRenaming, setIsRenaming] = useState(false);
@@ -263,28 +254,24 @@ export default function AdminPage() {
     }
   }, [user, loading, router]);
 
+  const applyWellCatalog = (data: Record<string, WellConfig>) => {
+    setConfigs(data);
+    const rebuilt = rebuildRoutesFromConfigs(data);
+    setRoutes(rebuilt.routes);
+    setRouteWells(rebuilt.routeWells);
+  };
+
   // Load configs via Admin catalog (parent RTDB well_config is default-deny).
   useEffect(() => {
     let cancelled = false;
     (async () => {
       try {
-        const { adminGetDashboardCatalog, catalogErrorCode } = await import('@/lib/adminDashboardCatalog');
+        const { adminGetDashboardCatalog } = await import('@/lib/adminDashboardCatalog');
         const catalog = await adminGetDashboardCatalog();
         if (cancelled) return;
         const data = (catalog.wellConfig || {}) as Record<string, WellConfig>;
         setCatalogError(null);
-        setConfigs(data);
-        const routeSet = new Set<string>(['Unrouted']);
-        const wellsByRoute: RouteWells = { 'Unrouted': [] };
-        Object.entries(data).forEach(([wellName, config]) => {
-          const route = config.route || 'Unrouted';
-          routeSet.add(route);
-          if (!wellsByRoute[route]) wellsByRoute[route] = [];
-          wellsByRoute[route].push(wellName);
-        });
-        Object.keys(wellsByRoute).forEach(route => wellsByRoute[route].sort());
-        setRoutes(Array.from(routeSet).sort());
-        setRouteWells(wellsByRoute);
+        applyWellCatalog(data);
       } catch (err) {
         if (cancelled) return;
         const { catalogErrorCode } = await import('@/lib/adminDashboardCatalog');
@@ -734,56 +721,77 @@ export default function AdminPage() {
     }
   };
 
-  // Add new well
+  // Add new well — governed callable. Client RTDB well_config writes are denied.
   const handleAddWell = async () => {
-    const wellName = newWellName.trim();
-    const nameError = validateName(wellName);
-    if (nameError) {
-      showMessage(nameError);
-      return;
-    }
-    // Case-insensitive duplicate check
-    const duplicate = Object.keys(configs).find(k => k.toLowerCase() === wellName.toLowerCase());
-    if (duplicate) {
-      showMessage(`Well already exists as "${duplicate}"`);
-      return;
-    }
+    if (isAddingWell || addWellInflightRef.current) return;
+    addWellInflightRef.current = true;
 
-    const db = getFirebaseDatabase();
-    const tankCap = parseInt(newWellTankCapacity) || 400;
-    const tankHt = parseInt(newWellTankHeight) || 20;
-    const numTanks = parseInt(newWellTanks) || 1;
-    const bblPerFoot = (tankCap / tankHt) * numTanks;
-
-    const parsedBottom = parseLevelToFeet(newWellBottom) || 3;
-    const config: WellConfig = {
-      route: newWellRoute || 'Unrouted',
-      bottomLevel: parsedBottom,
-      tanks: numTanks,
-      // Also write app-compatible field names
-      allowedBottom: parsedBottom,
-      numTanks,
-      pullBbls: parseInt(newWellPullBbls) || 140,
-      // Tank dimensions + derived bblPerFoot
-      tankCapacity: tankCap,
-      tankHeight: tankHt,
-      bblPerFoot,
-      // NDIC linkage (from NDIC picker, if used)
-      ...(ndicSelectedWell ? {
-        ndicName: ndicSelectedWell.well_name,
-        ndicApiNo: ndicSelectedWell.api_no,
-      } : {}),
-      // Water properties
-      ...(newWellWaterWeight ? { waterWeight: parseFloat(newWellWaterWeight) } : {}),
+    const decision = decideAddWellSubmit({
+      wellName: newWellName,
+      route: newWellRoute,
+      bottomInput: newWellBottom,
+      tanks: newWellTanks,
+      pullBbls: newWellPullBbls,
+      tankCapacity: newWellTankCapacity,
+      tankHeight: newWellTankHeight,
+      waterWeight: newWellWaterWeight,
       h2sStatus: newWellH2s,
-    };
+      linkedWell: ndicSelectedWell
+        ? {
+            well_name: ndicSelectedWell.well_name,
+            api_no: ndicSelectedWell.api_no,
+            operator: ndicSelectedWell.operator,
+          }
+        : null,
+    }, configs);
 
-    await set(ref(db, `well_config/${wellName}`), config);
-    showMessage(`Well "${wellName}" created${ndicSelectedWell ? ` (linked: ${ndicSelectedWell.api_no})` : ''}`);
-    setNewWellName('');
-    setNewWellSearchTerm('');
-    setNdicSelectedWell(null);
-    setAutoLinkStatus('idle');
+    if (decision.action === 'reject') {
+      addWellInflightRef.current = false;
+      setAddWellStatus({ kind: 'error', reason: decision.reason, message: decision.message });
+      showMessage(decision.message);
+      return;
+    }
+
+    setIsAddingWell(true);
+    setAddWellStatus({ kind: 'submitting', wellName: decision.wellName });
+    try {
+      const result = await staffCreateWellConfig({
+        wellName: decision.wellName,
+        config: decision.config,
+      });
+      const written = { ...decision.config, ...(result.config || {}) };
+      const next = applyAddWellSuccess(configs, result.wellName, written);
+      applyWellCatalog(next);
+      setAddWellStatus({
+        kind: 'success',
+        wellName: result.wellName,
+        idempotent: result.idempotent === true,
+        apiNo: written.ndicApiNo,
+      });
+      showMessage(
+        result.idempotent
+          ? `Well "${result.wellName}" already exists (same API ${written.ndicApiNo})`
+          : `Well "${result.wellName}" created (linked: ${written.ndicApiNo})`,
+      );
+      setNewWellName('');
+      setNewWellSearchTerm('');
+      setNdicSelectedWell(null);
+      setAutoLinkStatus('idle');
+      try {
+        const { adminGetDashboardCatalog } = await import('@/lib/adminDashboardCatalog');
+        const catalog = await adminGetDashboardCatalog();
+        applyWellCatalog((catalog.wellConfig || {}) as Record<string, WellConfig>);
+      } catch {
+        /* local list already shows the created well */
+      }
+    } catch (err) {
+      const classified = classifyAddWellError(err);
+      setAddWellStatus({ kind: 'error', reason: classified.reason, message: classified.message });
+      showMessage(classified.message);
+    } finally {
+      addWellInflightRef.current = false;
+      setIsAddingWell(false);
+    }
   };
 
   // Update well config (with optional rename)
@@ -1469,15 +1477,42 @@ export default function AdminPage() {
                   </div>
                   {(() => {
                     const isDuplicate = newWellName.trim().length > 0 && Object.keys(configs).some(k => k.toLowerCase() === newWellName.trim().toLowerCase());
-                    const canAdd = ndicSelectedWell && !isDuplicate;
+                    const canAdd = !!ndicSelectedWell && !isDuplicate && !isAddingWell;
+                    const label = isAddingWell
+                      ? 'Adding Well…'
+                      : isDuplicate
+                        ? 'Well Already Exists'
+                        : ndicSelectedWell
+                          ? 'Add Well'
+                          : 'Link Well First';
                     return (
-                      <button
-                        onClick={handleAddWell}
-                        disabled={!canAdd}
-                        className={`w-full px-4 py-2 text-white rounded mt-2 ${isDuplicate ? 'bg-red-800 cursor-not-allowed' : canAdd ? 'bg-green-600 hover:bg-green-700' : 'bg-gray-600 cursor-not-allowed'}`}
-                      >
-                        {isDuplicate ? 'Well Already Exists' : ndicSelectedWell ? 'Add Well' : 'Link Well First'}
-                      </button>
+                      <>
+                        <button
+                          type="button"
+                          onClick={handleAddWell}
+                          disabled={!canAdd}
+                          className={`w-full px-4 py-2 text-white rounded mt-2 ${isDuplicate ? 'bg-red-800 cursor-not-allowed' : canAdd ? 'bg-green-600 hover:bg-green-700' : 'bg-gray-600 cursor-not-allowed'}`}
+                        >
+                          {label}
+                        </button>
+                        {addWellStatus.kind === 'submitting' && (
+                          <div className="mt-2 text-sm text-blue-300">
+                            Creating “{addWellStatus.wellName}”…
+                          </div>
+                        )}
+                        {addWellStatus.kind === 'success' && (
+                          <div className="mt-2 text-sm text-green-400">
+                            {addWellStatus.idempotent
+                              ? `Already on file: ${addWellStatus.wellName} (API ${addWellStatus.apiNo})`
+                              : `Added ${addWellStatus.wellName} (API ${addWellStatus.apiNo})`}
+                          </div>
+                        )}
+                        {addWellStatus.kind === 'error' && (
+                          <div className="mt-2 text-sm text-red-400">
+                            {addWellStatus.message}
+                          </div>
+                        )}
+                      </>
                     );
                   })()}
                 </div>

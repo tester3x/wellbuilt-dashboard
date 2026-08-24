@@ -45,6 +45,16 @@ describe('complete Dashboard write inventory vs live deny', () => {
     expect(wells).toMatch(/packets\/incoming\/\$\{/);
   });
 
+  it('Add Well submit uses staffCreateWellConfig instead of a silent client set', () => {
+    const addStart = adminPage.indexOf('const handleAddWell');
+    const addEnd = adminPage.indexOf('const handleUpdateWell');
+    const add = adminPage.slice(addStart, addEnd);
+    expect(add).toContain('staffCreateWellConfig');
+    expect(add).toContain('classifyAddWellError');
+    expect(add).not.toMatch(/set\(ref\(db,\s*`well_config/);
+    expect(src('src/lib/staffWriteWellConfig.ts')).toContain("staffWriteWellConfig");
+  });
+
   it('documents remaining denied Firestore client writes outside dispatches', () => {
     expect(dispatchPage).toMatch(/addDoc\(collection\(firestore, 'projects'/);
     expect(chat).toMatch(/chat_threads/);
