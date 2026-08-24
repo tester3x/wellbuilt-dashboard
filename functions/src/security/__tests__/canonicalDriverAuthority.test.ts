@@ -40,6 +40,7 @@ describe('loadCanonicalDriverAuthority', () => {
       driverId: 'd1',
       companyId: 'liquid-gold',
       displayName: 'Mike S',
+      credentialGeneration: 0,
       credentialsActive: true,
       profileActive: true,
       active: true,

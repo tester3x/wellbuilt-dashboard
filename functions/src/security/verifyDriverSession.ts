@@ -123,6 +123,11 @@ export async function evaluateVerifyDriverSession(input: {
       error: { code: 'permission-denied', message: 'not_authorized' },
     };
   }
+  const claimGeneration = typeof claims.credentialGeneration === 'number'
+    ? claims.credentialGeneration : 0;
+  if (claimGeneration !== authority.credentialGeneration) {
+    return { ok: false, error: { code: 'permission-denied', message: 'not_authorized' } };
+  }
 
   // Client cannot select another driver or company — identity is only claims.
   return {

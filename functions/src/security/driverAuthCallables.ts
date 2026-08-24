@@ -279,6 +279,7 @@ export const authenticateDriver = httpsV2.onCall(
       companyId: profile.companyId || null,
       roles,
       mustChangePasscode,
+      credentialGeneration: Number(cred.credentialGeneration || 0),
     };
 
     // PER-SESSION: the requested audience, this token only. Absent
@@ -1345,7 +1346,7 @@ export const registerStandaloneDriver = httpsV2.onCall(
     const { ensureDriverAuthUser, mintDriverSessionTokens } = await import('./tokenMint');
     const authUid = await ensureDriverAuthUser(driverId, fields.displayName);
     const claims: GlobalDriverClaims = {
-      kind: 'driver', driverId, companyId: null, roles: ['driver'],
+      kind: 'driver', driverId, companyId: null, roles: ['driver'], credentialGeneration: 0,
     };
     // No audience on the registration path — it has no requesting app yet.
     const minted = await mintDriverSessionTokens(authUid, claims);

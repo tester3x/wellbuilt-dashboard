@@ -36,11 +36,12 @@ export type CanonicalDriverAuthority = {
    * Matches the dual-check authenticateDriver already performs at login.
    */
   active: boolean;
+  credentialGeneration: number;
 };
 
 /** Injectable record readers so unit tests never touch Admin SDK. */
 export type CanonicalDriverRecordReaders = {
-  getCredentials(driverId: string): Promise<{ exists: boolean; active: boolean }>;
+  getCredentials(driverId: string): Promise<{ exists: boolean; active: boolean; credentialGeneration?: number }>;
   getProfile(driverId: string): Promise<{
     exists: boolean;
     active: boolean;
@@ -82,6 +83,7 @@ export async function loadCanonicalDriverAuthority(
     credentialsActive,
     profileActive,
     active: credentialsActive && profileActive,
+    credentialGeneration: Number.isFinite(cred.credentialGeneration) ? Math.max(0, Math.floor(cred.credentialGeneration!)) : 0,
   };
 }
 
@@ -93,7 +95,8 @@ export function productionCanonicalDriverReaders(): CanonicalDriverRecordReaders
     async getCredentials(driverId) {
       const snap = await db().collection('driver_credentials').doc(driverId).get();
       if (!snap.exists) return { exists: false, active: false };
-      return { exists: true, active: snap.data()?.active !== false };
+      return { exists: true, active: snap.data()?.active !== false,
+        credentialGeneration: Number(snap.data()?.credentialGeneration || 0) };
     },
     async getProfile(driverId) {
       const snap = await rtdb().ref(`drivers/profiles/${driverId}`).once('value');

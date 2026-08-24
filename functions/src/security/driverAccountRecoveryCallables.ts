@@ -255,6 +255,16 @@ export const redeemDriverAccountRecovery = httpsV2.onCall(
       });
       const uid = `driver_${driverId.replace(/-/g, '').slice(0, 28)}`;
       await admin.auth().revokeRefreshTokens(uid);
+      const [codes, otherRecoveries] = await Promise.all([
+        admin.firestore().collection('sso_authorization_codes').where('driverId', '==', driverId).get(),
+        admin.firestore().collection(REQUESTS).where('driverId', '==', driverId).get(),
+      ]);
+      const revoke = admin.firestore().batch();
+      codes.docs.forEach(x => revoke.set(x.ref, { consumed: true, consumedAtMs: Date.now(), revokedAt: FieldValue.serverTimestamp() }, { merge: true }));
+      otherRecoveries.docs.forEach(x => {
+        if (x.id !== requestId && x.data().state !== 'used') revoke.set(x.ref, { state: 'cancelled', recoverySecretHash: FieldValue.delete() }, { merge: true });
+      });
+      await revoke.commit();
     }
     await ref.update({ state: 'used', usedAtMs: Date.now(), driverId,
       recoverySecretHash: FieldValue.delete(), statusSecretHash: FieldValue.delete() });

@@ -44,6 +44,7 @@ export interface GlobalDriverClaims {
   companyId: string | null;
   roles: string[];
   mustChangePasscode?: boolean;
+  credentialGeneration?: number;
 }
 
 /**
