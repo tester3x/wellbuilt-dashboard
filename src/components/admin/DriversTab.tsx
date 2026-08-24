@@ -1220,7 +1220,7 @@ export function DriversTab({ scopeCompanyId, isWbAdmin = false }: DriversTabProp
               </button>
               {roleMenuForKey === driver.key && (
                 <div className="absolute top-full left-0 mt-1 z-30 bg-gray-800 border border-gray-600 rounded shadow-xl min-w-[200px] max-h-72 overflow-y-auto">
-                  {(['driver', 'viewer', 'dispatch', 'payroll', 'manager', 'admin', 'it'] as UserRole[]).map(r => {
+                  {(['driver', 'viewer', 'dispatch', 'safety', 'lead', 'payroll', 'manager', 'admin', 'it'] as UserRole[]).map(r => {
                     const isCurrent = (r === 'driver' && !driver.dashboardRole) || r === driver.dashboardRole;
                     return (
                       <button
@@ -2237,7 +2237,7 @@ export function DriversTab({ scopeCompanyId, isWbAdmin = false }: DriversTabProp
                       onChange={e => setInviteRole(e.target.value as UserRole)}
                       className="w-full bg-gray-900 border border-gray-700 rounded px-3 py-2 text-sm text-white focus:outline-none focus:border-purple-500"
                     >
-                      {(['viewer', 'dispatch', 'payroll', 'manager', 'admin', 'it'] as UserRole[]).map(r => (
+                      {(['viewer', 'dispatch', 'safety', 'lead', 'payroll', 'manager', 'admin', 'it'] as UserRole[]).map(r => (
                         <option key={r} value={r}>
                           {getRoleLabel(r, userCompany)} ({r})
                         </option>

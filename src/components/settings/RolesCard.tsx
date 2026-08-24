@@ -40,6 +40,7 @@ const CAPABILITY_GROUPS: { title: string; caps: { cap: Capability; label: string
       { cap: 'viewBilling', label: 'WB Billing' },
       { cap: 'viewPayroll', label: 'WB Payroll' },
       { cap: 'viewDriverLogs', label: 'Driver Logs' },
+      { cap: 'viewSafety', label: 'Safety (spill incidents)' },
       { cap: 'viewSettings', label: 'Settings' },
       { cap: 'viewAdmin', label: 'Admin panel' },
       { cap: 'viewChat', label: 'Chat sidebar + /chat page' },
@@ -63,6 +64,7 @@ const CAPABILITY_GROUPS: { title: string; caps: { cap: Capability; label: string
       { cap: 'viewEquipmentDocuments', label: 'View driver documents' },
       { cap: 'manageEquipmentDocuments', label: 'Manage driver documents (future)' },
       { cap: 'sendChat', label: 'Send chat messages' },
+      { cap: 'manageSafety', label: 'Acknowledge / resolve spill incidents and edit spill policy' },
     ],
   },
   {
@@ -79,7 +81,7 @@ const CAPABILITY_GROUPS: { title: string; caps: { cap: Capability; label: string
   },
 ];
 
-const ROLES_IN_DISPLAY_ORDER: UserRole[] = ['it', 'admin', 'manager', 'dispatch', 'payroll', 'driver', 'viewer'];
+const ROLES_IN_DISPLAY_ORDER: UserRole[] = ['it', 'admin', 'manager', 'lead', 'safety', 'dispatch', 'payroll', 'driver', 'viewer'];
 
 export function RolesCard({ company, onSave, canEdit }: Props) {
   const [saving, setSaving] = useState(false);

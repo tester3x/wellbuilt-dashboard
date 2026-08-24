@@ -25,6 +25,7 @@ import { SWDDirectoryCard } from '@/components/settings/SWDDirectoryCard';
 import { CustomJobTypesCard } from '@/components/settings/CustomJobTypesCard';
 import { PhotosCard } from '@/components/settings/PhotosCard';
 import { JsaCard } from '@/components/settings/JsaCard';
+import { SpillNotificationCard } from '@/components/settings/SpillNotificationCard';
 import { WorkPeriodCard } from '@/components/settings/WorkPeriodCard';
 import { LevelReportsCard } from '@/components/settings/LevelReportsCard';
 import { JobTypeRnDCard } from '@/components/settings/JobTypeRnDCard';
@@ -185,6 +186,14 @@ export default function SettingsPage() {
             <LevelReportsCard company={company} onSave={handleRefresh} />
             <PhotosCard company={company} onSave={handleRefresh} />
             <JsaCard company={company} onSave={handleRefresh} />
+            {(hasCapability(user, 'viewSafety', userCompany) || hasCapability(user, 'manageSafety', userCompany) || hasCapability(user, 'viewSettings', userCompany)) && (
+              <SpillNotificationCard
+                company={company}
+                onSave={handleRefresh}
+                canEdit={hasCapability(user, 'manageSafety', userCompany)}
+                actorUid={user.uid}
+              />
+            )}
             <WorkPeriodCard company={company} onSave={handleRefresh} />
             <OilCompaniesCard company={company} onSave={handleRefresh} />
             <SWDDirectoryCard company={company} onSave={handleRefresh} />
