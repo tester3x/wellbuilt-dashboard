@@ -123,18 +123,6 @@ export interface SsoDeps {
   }>;
   /** The plan document named by a contract, or null when absent. */
   getPlan(planId: string): Promise<PlanDefinition | null>;
-  /**
-   * The driver's server-owned shift-authority record (jsa audience only
-   * on this lineage).
-   *
-   * This is the DATE-FREE authority: it stores the open period and its
-   * origin day, so "is a shift open right now?" needs no company timezone
-   * — which matters because explicit_shift configurations store none, and
-   * a UTC date would misfile an evening shift in America/Chicago. A null
-   * return means the document is absent or unreadable; decideResolve turns
-   * that into `unverifiable`, never into a false `none`.
-   */
-  getShiftAuthority(driverId: string): Promise<ShiftAuthorityRecord | null>;
   runTransaction<T>(fn: (tx: SsoTransaction) => Promise<T>): Promise<T>;
   /**
    * Mint a custom token for `uid` with `developerClaims`.

@@ -1,6 +1,6 @@
 /**
  * Equipment issuance period authority — decideEquipmentAuthorization
- * reuses decideResolve. Origin-day driver_shifts docs cannot veto.
+ * reuses decideResolve. Origin-day driver_shifts docs are not an input.
  */
 import { decideEquipmentAuthorization } from '../equipmentAuthorization';
 import { decideResolve, type ShiftAuthorityRecord } from '../../security/operational/shiftAuthority';
@@ -13,6 +13,7 @@ const PERIOD = '2026-08-21_112421';
 const DAY = '2026-08-21';
 const OTHER = '2026-08-22_070000';
 const NOW = Date.parse('2026-08-23T20:16:00Z');
+const TWO_DAYS_LATER = NOW + 48 * 3600 * 1000;
 
 const CONTRACT: WellbuiltContract = {
   contractVersion: 1,
@@ -50,10 +51,6 @@ const closedAuth = (): ShiftAuthorityRecord => ({
   version: 5,
 });
 
-const originClosed = { readable: true, present: true, currentShiftId: '' as const };
-const originMissing = { readable: true, present: false };
-const originOpen = { readable: true, present: true, currentShiftId: PERIOD };
-
 function decide(over: Partial<Parameters<typeof decideEquipmentAuthorization>[0]> = {}) {
   return decideEquipmentAuthorization({
     driverId: DRIVER,
@@ -63,37 +60,31 @@ function decide(over: Partial<Parameters<typeof decideEquipmentAuthorization>[0]
     contractState: 'active',
     plan: PLAN,
     authority: openAuth(),
-    originDayDoc: originClosed,
     nowMs: NOW,
     ...over,
   });
 }
 
 describe('decideEquipmentAuthorization canonical period', () => {
-  test('reuses decideResolve: open canonical + closed origin-day issues', () => {
+  test('reuses decideResolve: open canonical issues', () => {
     const auth = openAuth();
     expect(decideResolve(auth, { driverId: DRIVER, companyId: COMPANY })).toEqual({
       state: 'open', periodId: PERIOD, originLocalDate: DAY,
     });
-    const d = decide({ authority: auth, originDayDoc: originClosed });
+    const d = decide({ authority: auth });
     expect(d.ok).toBe(true);
     if (d.ok) {
       expect(d.binding).toEqual({ shiftId: PERIOD, phase: 'post_trip' });
     }
   });
 
-  test('open canonical + missing origin-day issues (origin-day is not required)', () => {
-    const d = decide({ originDayDoc: originMissing });
+  test('shift age does not close an open canonical period', () => {
+    const d = decide({ nowMs: TWO_DAYS_LATER });
     expect(d.ok).toBe(true);
   });
 
-  test('open canonical + absent origin-day snapshot issues', () => {
-    const d = decide({ originDayDoc: null });
-    expect(d.ok).toBe(true);
-  });
-
-  test('canonical closed denies even if origin-day still says open', () => {
-    const d = decide({ authority: closedAuth(), originDayDoc: originOpen });
+  test('canonical closed denies', () => {
+    const d = decide({ authority: closedAuth() });
     expect(d.ok).toBe(false);
     if (!d.ok) {
       expect(d.reason).toBe('shift_not_active');
@@ -136,7 +127,7 @@ describe('decideEquipmentAuthorization canonical period', () => {
   });
 
   test('missing canonical period denies', () => {
-    const d = decide({ authority: null, originDayDoc: originOpen });
+    const d = decide({ authority: null });
     expect(d.ok).toBe(false);
     if (!d.ok) expect(d.reason).toBe('period_missing');
   });

@@ -175,13 +175,14 @@ check('handlers are exported for direct testing',
     /decideResolve\(input\.authority/.test(equip));
   check('equipment decision does not call resolveWorkPeriod',
     !/\bresolveWorkPeriod\s*\(/.test(equip));
-  check('equipment decision does not read originDayDoc.currentShiftId',
-    !/originDayDoc\.currentShiftId/.test(equip));
+  check('equipment decision has no originDayDoc input',
+    !/originDayDoc/.test(equip));
   check('equipment issuance loads canonical getShiftAuthority',
     /getShiftAuthority\(driver\.driverId\)/.test(issueSrc));
-  check('equipment issuance still consults origin-day only as audit',
-    /sso\.equipment\.origin_day_audit/.test(issueSrc)
-    && /veto:\s*false/.test(issueSrc));
+  check('equipment issuance does not call getShiftDay',
+    !/\.getShiftDay\s*\(/.test(issueSrc));
+  check('SsoDeps declares getShiftAuthority exactly once',
+    (depsSrc.match(/getShiftAuthority\s*\(/g) || []).length === 1);
   check('JSA issuance path is still present and distinct',
     /decideJsaAccess/.test(issueSrc) && /WELLBUILT_APP_JSA/.test(issueSrc));
 }

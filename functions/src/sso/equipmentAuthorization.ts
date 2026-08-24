@@ -23,9 +23,8 @@
  * (`driver_shift_authority/{driverId}`, decided by `decideResolve`). That
  * is the SAME resolver JSA issuance and commercial entitlement already
  * use. The origin-day `driver_shifts/{driverId}_{YYYY-MM-DD}` document is
- * durable history / audit metadata. It must never independently veto an
- * exact canonical period that `decideResolve` still marks open. A closed
- * or missing origin-day row is not a close of the explicit period.
+ * not consulted here. Shift age alone does not close or invalidate an
+ * open canonical period.
  */
 
 import {
@@ -89,7 +88,7 @@ export function shiftOriginDay(shiftId: string): string | null {
  * Decide an equipment authorization.
  *
  * Period activity is `decideResolve` on the canonical date-free record.
- * `originDayDoc` is accepted only so callers can log it; it is not read.
+ * Origin-day `driver_shifts` documents are not an input.
  */
 export function decideEquipmentAuthorization(input: {
   driverId: string;
@@ -102,14 +101,8 @@ export function decideEquipmentAuthorization(input: {
   plan: PlanDefinition | null;
   /** Canonical date-free explicit-period pointer. Null = absent/unreadable. */
   authority: ShiftAuthorityRecord | null;
-  /**
-   * Audit-only snapshot of `driver_shifts/{driverId}_{originDay}`.
-   * Presence, absence, closed, or unreadable MUST NOT change the decision.
-   */
-  originDayDoc?: ShiftDayDoc | null;
   nowMs: number;
 }): EquipmentAuthzDecision {
-  void input.originDayDoc;
 
   // 1. The company must be under an ENFORCED contract. An inert contract is
   //    configured but deliberately not in force, and a governed DVIR handoff

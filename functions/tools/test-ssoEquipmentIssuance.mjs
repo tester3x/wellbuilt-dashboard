@@ -2,9 +2,9 @@
  * Equipment SSO issuance — canonical date-free period authority.
  *
  * Drives the REAL handleSsoIssueCode / handleSsoExchange against in-memory
- * SsoDeps. Origin-day driver_shifts documents are audit-only and must not
- * veto an exact open canonical period. Code issuance must not write a
- * receipt, DVIR, or shift document.
+ * SsoDeps. Origin-day driver_shifts documents are not on the issuance
+ * path. A throwing or hung getShiftDay cannot delay or deny a code.
+ * Code issuance must not write a receipt, DVIR, or shift document.
  *
  * Run: npm run build && node tools/test-ssoEquipmentIssuance.mjs
  */
@@ -77,25 +77,22 @@ const SUPERSEDED_AUTH = {
   openPeriodId: OTHER, originLocalDate: '2026-08-22', lastClosedPeriodId: PERIOD, version: 6,
 };
 
-const ORIGIN_CLOSED = { readable: true, present: true, currentShiftId: '' };
-const ORIGIN_MISSING = { readable: true, present: false };
-const ORIGIN_OPEN = { readable: true, present: true, currentShiftId: PERIOD };
-
 function sha256Hex(s) {
   return createHash('sha256').update(s, 'utf8').digest('hex');
 }
 
 function makeWorld({
   authority = OPEN_AUTH,
-  originDay = ORIGIN_CLOSED,
   contract = CONTRACT,
   contractState = 'active',
   plan = PLAN,
+  shiftDayMode = 'throw',
 } = {}) {
   const docs = new Map();
   const logs = [];
   let now = NOW;
   let counter = 0;
+  let getShiftDayCalls = 0;
   const deps = {
     nowMs: () => now,
     randomBytes: (n) => {
@@ -113,7 +110,11 @@ function makeWorld({
     getCompanyContract: async () => ({ state: contractState, contract }),
     getPlan: async () => plan,
     getShiftAuthority: async () => authority,
-    getShiftDay: async () => originDay,
+    getShiftDay: () => {
+      getShiftDayCalls += 1;
+      if (shiftDayMode === 'hang') return new Promise(() => { /* never settles */ });
+      return Promise.reject(new Error('origin-day document must not be read'));
+    },
     runTransaction: async (fn) => {
       const writes = [];
       const r = await fn({
@@ -137,6 +138,7 @@ function makeWorld({
   };
   return {
     deps, docs, logs,
+    getShiftDayCalls: () => getShiftDayCalls,
     advance: (ms) => { now += ms; },
   };
 }
@@ -177,20 +179,16 @@ function mintedNothing(world) {
   return world.docs.size === 0 && !world.logs.some((l) => l.event === 'sso.code.issued');
 }
 
-function auditNoVeto(world) {
-  return world.logs.some((l) => l.event === 'sso.equipment.origin_day_audit' && l.fields.veto === false);
-}
-
-// ── Mikezfold field split: canonical open, origin-day closed ─────────────
+// ── Mikezfold: canonical open; origin-day stub cannot participate ────────
 {
-  const w = makeWorld({ authority: OPEN_AUTH, originDay: ORIGIN_CLOSED });
+  const w = makeWorld({ authority: OPEN_AUTH, shiftDayMode: 'throw' });
   const r = await issue(w);
-  check('canonical open + origin-day closed → equipment code issued',
+  check('canonical open → equipment code issued',
     r.ok && typeof r.res?.code === 'string' && r.res.code.length > 0);
   check('  stored binding is the exact canonical period + post_trip',
     [...w.docs.values()][0]?.shiftBinding?.shiftId === PERIOD
     && [...w.docs.values()][0]?.shiftBinding?.phase === 'post_trip');
-  check('  origin-day was consulted and did not veto', auditNoVeto(w));
+  check('  throwing getShiftDay was never called', w.getShiftDayCalls() === 0);
   check('  issuance wrote only sso_authorization_codes (no shift/DVIR/receipt)',
     onlySsoCodes(w) && w.docs.size === 1);
   check('  no driver_shifts / dvir / receipt path was written',
@@ -198,23 +196,35 @@ function auditNoVeto(world) {
 }
 
 {
-  const w = makeWorld({ authority: OPEN_AUTH, originDay: ORIGIN_MISSING });
-  const r = await issue(w);
-  check('canonical open + origin-day missing → equipment code issued',
-    r.ok && typeof r.res?.code === 'string');
-  check('  missing origin-day still logs no veto', auditNoVeto(w));
+  const w = makeWorld({ authority: OPEN_AUTH, shiftDayMode: 'hang' });
+  const r = await Promise.race([
+    issue(w),
+    new Promise((resolve) => setTimeout(() => resolve({ ok: false, timeout: true }), 1500)),
+  ]);
+  check('hung getShiftDay cannot delay or deny authorization',
+    r.ok === true && r.timeout !== true && typeof r.res?.code === 'string');
+  check('  hung getShiftDay was never called', w.getShiftDayCalls() === 0);
 }
 
 {
-  const w = makeWorld({ authority: CLOSED_AUTH, originDay: ORIGIN_OPEN });
+  const w = makeWorld({ authority: OPEN_AUTH });
+  w.advance(48 * 3600 * 1000);
   const r = await issue(w);
-  check('canonical closed denies even if origin-day says open',
+  check('shift age alone does not close an open canonical period',
+    r.ok && typeof r.res?.code === 'string');
+}
+
+{
+  const w = makeWorld({ authority: CLOSED_AUTH });
+  const r = await issue(w);
+  check('canonical closed denies',
     !r.ok && r.publicCode === 'not_authorized' && r.internal === 'shift_not_active');
   check('  closed canonical minted nothing', mintedNothing(w));
+  check('  closed path did not call getShiftDay', w.getShiftDayCalls() === 0);
 }
 
 {
-  const w = makeWorld({ authority: SUPERSEDED_AUTH, originDay: ORIGIN_OPEN });
+  const w = makeWorld({ authority: SUPERSEDED_AUTH });
   const r = await issue(w);
   check('canonical superseded/replaced denies',
     !r.ok && r.internal === 'shift_id_mismatch' && mintedNothing(w));
@@ -222,7 +232,7 @@ function auditNoVeto(world) {
 
 {
   // Local Suite "open" is not an input. Closed canonical still denies.
-  const w = makeWorld({ authority: CLOSED_AUTH, originDay: ORIGIN_CLOSED });
+  const w = makeWorld({ authority: CLOSED_AUTH });
   const r = await issue(w);
   check('canonical closed (Suite local open is not consulted) denies',
     !r.ok && r.internal === 'shift_not_active' && mintedNothing(w));
@@ -254,7 +264,16 @@ function auditNoVeto(world) {
 }
 
 {
-  const w = makeWorld({ authority: null, originDay: ORIGIN_OPEN });
+  const w = makeWorld({ authority: OPEN_AUTH });
+  const r = await issue(w, equipmentReq({
+    shiftBinding: { shiftId: 'not-a-period', phase: 'post_trip' },
+  }));
+  check('malformed period id denies',
+    !r.ok && mintedNothing(w));
+}
+
+{
+  const w = makeWorld({ authority: null });
   const r = await issue(w);
   check('missing canonical period denies',
     !r.ok && r.internal === 'period_missing' && mintedNothing(w));
@@ -278,7 +297,7 @@ function auditNoVeto(world) {
 
 {
   const w = makeWorld({
-    authority: OPEN_AUTH, originDay: ORIGIN_CLOSED,
+    authority: OPEN_AUTH,
     plan: WBT_PLAN, contract: { ...CONTRACT, workPeriodConfiguration: undefined },
   });
   const r = await issue(w, wbtReq());
@@ -288,7 +307,7 @@ function auditNoVeto(world) {
 
 // ── single-use, TTL, replay ──────────────────────────────────────────────
 {
-  const w = makeWorld({ authority: OPEN_AUTH, originDay: ORIGIN_CLOSED });
+  const w = makeWorld({ authority: OPEN_AUTH });
   const r = await issue(w);
   check('equipment issue succeeded for redeem tests', r.ok);
   const code = r.res.code;
@@ -315,7 +334,7 @@ function auditNoVeto(world) {
 }
 
 {
-  const w = makeWorld({ authority: OPEN_AUTH, originDay: ORIGIN_CLOSED });
+  const w = makeWorld({ authority: OPEN_AUTH });
   const r = await issue(w);
   w.advance(SSO_CODE_TTL_MS_PROVISIONAL + 1);
   let expired = null;

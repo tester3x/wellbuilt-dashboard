@@ -106,10 +106,11 @@ export async function handleSsoIssueCode(
   // 5b. EQUIPMENT ONLY — the governed DVIR handoff must be authorized
   //     against the canonical date-free explicit-period pointer
   //     (decideResolve on driver_shift_authority/{driverId}), not against
-  //     the client's word and not against origin-day driver_shifts docs.
-  //     The shift binding WB-S supplied is treated as a REQUEST, and is
-  //     replaced below by the normalized binding the server validated.
-  //     A well-formed shift id proves nothing on its own.
+  //     the client's word. Origin-day driver_shifts documents are not
+  //     read. The shift binding WB-S supplied is treated as a REQUEST, and
+  //     is replaced below by the normalized binding the server validated.
+  //     A well-formed shift id proves nothing on its own. Shift age does
+  //     not close an open canonical period.
   let storedBinding: SsoShiftBinding | undefined;
   if (req.audience === SSO_AUDIENCE_EQUIPMENT) {
     const requested = req.shiftBinding;
@@ -118,18 +119,17 @@ export async function handleSsoIssueCode(
       // here too rather than assumed from a caller two modules away.
       throw new SsoError('invalid-argument', 'malformed_request', 'shiftBinding required');
     }
-    const originDay = shiftOriginDay(requested.shiftId);
-    if (!originDay) {
+    // Format check only — derived from the requested period id. Never a
+    // driver_shifts document read. Shift age does not close an open period.
+    if (!shiftOriginDay(requested.shiftId)) {
       throw new SsoError('invalid-argument', 'malformed_request', 'shift id has no origin day');
     }
     // Canonical period = date-free driver_shift_authority/{driverId} via
     // decideResolve (same resolver as JSA / entitlement). Origin-day
-    // driver_shifts/{driverId}_{YYYY-MM-DD} is consulted for operator
-    // audit only and cannot veto an exact open canonical period.
-    const [contractState, authority, originDayDoc] = await Promise.all([
+    // driver_shifts/{driverId}_{YYYY-MM-DD} is not on this path.
+    const [contractState, authority] = await Promise.all([
       deps.getCompanyContract(driver.companyId),
       deps.getShiftAuthority(driver.driverId),
-      deps.getShiftDay(driver.driverId, originDay),
     ]);
     const plan = contractState.contract
       ? await deps.getPlan(contractState.contract.planId)
@@ -143,14 +143,7 @@ export async function handleSsoIssueCode(
       contractState: contractState.state,
       plan,
       authority,
-      originDayDoc,
       nowMs: issuedAtMsPre,
-    });
-    deps.log('sso.equipment.origin_day_audit', {
-      consulted: true,
-      present: originDayDoc.present === true,
-      readable: originDayDoc.readable === true,
-      veto: false,
     });
     if (!decision.ok) {
       // Coarse to the client, precise to the operator: a caller must not be
