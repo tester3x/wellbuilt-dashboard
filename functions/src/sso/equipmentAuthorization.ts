@@ -18,11 +18,17 @@
  * arrive already derived from the verified Auth context and revalidated
  * against the authoritative driver record. It only answers: may THIS
  * driver bridge to eQuipment for THIS shift and phase, right now?
+ *
+ * PERIOD AUTHORITY. Explicit-shift enforcement owns a date-free pointer
+ * (`driver_shift_authority/{driverId}`, decided by `decideResolve`). That
+ * is the SAME resolver JSA issuance and commercial entitlement already
+ * use. The origin-day `driver_shifts/{driverId}_{YYYY-MM-DD}` document is
+ * durable history / audit metadata. It must never independently veto an
+ * exact canonical period that `decideResolve` still marks open. A closed
+ * or missing origin-day row is not a close of the explicit period.
  */
 
 import {
-  isOperationallyOpen,
-  resolveWorkPeriod,
   type EffectiveCompanyCapabilities,
   type PlanDefinition,
 } from '@tester3x/wellbuilt-contracts';
@@ -31,10 +37,13 @@ import {
   type CapabilityResult,
 } from '../admin/effectiveCapabilities.js';
 import {
-  toContractsWorkPeriodConfiguration,
   type WellbuiltContract,
 } from '../admin/companyContract.js';
 import type { SsoShiftBinding } from '@tester3x/wellbuilt-contracts';
+import {
+  decideResolve,
+  type ShiftAuthorityRecord,
+} from '../security/operational/shiftAuthority.js';
 
 /** One `driver_shifts/{driverId}_{date}` document, as the server read it. */
 export interface ShiftDayDoc {
@@ -54,6 +63,9 @@ export type EquipmentAuthzRefusal =
   | 'capabilities_unavailable'
   | 'dvir_not_entitled'
   | 'work_period_not_required'
+  | 'period_missing'
+  | 'driver_mismatch'
+  | 'company_mismatch'
   | 'shift_not_active'
   | 'shift_id_mismatch';
 
@@ -65,10 +77,9 @@ export type EquipmentAuthzDecision =
  * The origin day of a shift id.
  *
  * WB-S mints `YYYY-MM-DD_HHMMSS`, so the first ten characters name the
- * local day whose document owns the shift. This is a LOOKUP HINT only —
- * the document read is the authority, and a well-formed id for a shift
- * that was never opened, or was closed, or was superseded, is refused all
- * the same. The census was explicit that format is never proof.
+ * local day. This is a FORMAT HINT and an audit lookup key — never
+ * period authority. A well-formed id for a shift that was never opened,
+ * or was closed, or was superseded, is still refused by `decideResolve`.
  */
 export function shiftOriginDay(shiftId: string): string | null {
   return /^\d{4}-\d{2}-\d{2}_/.test(shiftId) ? shiftId.slice(0, 10) : null;
@@ -77,14 +88,8 @@ export function shiftOriginDay(shiftId: string): string | null {
 /**
  * Decide an equipment authorization.
  *
- * `originDay` is passed as BOTH the resolver's `today` evidence and its
- * cached-origin evidence on purpose. The question being answered is not
- * "does this driver have some shift open today?" but "is THIS requested
- * shift still the open one on its own day?" — which is what makes a
- * cross-midnight shift resolve correctly without the server needing a
- * timezone it does not have. explicit_shift stores none, and
- * customerEditableFields is [], so there is no server-side local date to
- * borrow; the shift's own day is the only sound frame.
+ * Period activity is `decideResolve` on the canonical date-free record.
+ * `originDayDoc` is accepted only so callers can log it; it is not read.
  */
 export function decideEquipmentAuthorization(input: {
   driverId: string;
@@ -95,10 +100,17 @@ export function decideEquipmentAuthorization(input: {
   contractState: 'legacy' | 'inert' | 'active' | 'invalid';
   /** The plan named by the contract, or null when absent. */
   plan: PlanDefinition | null;
-  /** `driver_shifts/{driverId}_{originDay}`. */
-  originDayDoc: ShiftDayDoc;
+  /** Canonical date-free explicit-period pointer. Null = absent/unreadable. */
+  authority: ShiftAuthorityRecord | null;
+  /**
+   * Audit-only snapshot of `driver_shifts/{driverId}_{originDay}`.
+   * Presence, absence, closed, or unreadable MUST NOT change the decision.
+   */
+  originDayDoc?: ShiftDayDoc | null;
   nowMs: number;
 }): EquipmentAuthzDecision {
+  void input.originDayDoc;
+
   // 1. The company must be under an ENFORCED contract. An inert contract is
   //    configured but deliberately not in force, and a governed DVIR handoff
   //    is exactly the thing enforcement gates.
@@ -140,39 +152,46 @@ export function decideEquipmentAuthorization(input: {
     };
   }
 
-  // 3. The shift itself, judged by the canonical resolver rather than by a
-  //    local reading of the document. That keeps closed / superseded /
-  //    absent / unreadable semantics identical to every other consumer.
-  const config = toContractsWorkPeriodConfiguration(input.contract);
-  if (!config) {
-    return { ok: false, reason: 'capabilities_unavailable', detail: 'no work period configuration' };
+  // 3. Identity on the canonical record, then the SAME decideResolve used
+  //    by JSA issuance and commercial entitlement. Origin-day is not here.
+  if (input.authority) {
+    if (input.authority.driverId !== input.driverId) {
+      return { ok: false, reason: 'driver_mismatch', detail: 'authority belongs to another driver' };
+    }
+    if (input.authority.companyId !== input.companyId) {
+      return { ok: false, reason: 'company_mismatch', detail: 'authority belongs to another company' };
+    }
   }
-  const resolution = resolveWorkPeriod({
-    contractVersion: config.contractVersion,
-    companyId: input.companyId,
+
+  const resolved = decideResolve(input.authority, {
     driverId: input.driverId,
-    capabilities: caps.capabilities,
-    config,
-    nowMs: input.nowMs,
-    evidence: {
-      today: input.originDayDoc,
-      cachedShiftId: input.binding.shiftId,
-      cachedOriginDay: input.originDayDoc,
-    },
+    companyId: input.companyId,
   });
 
-  if (!isOperationallyOpen(resolution)) {
-    return { ok: false, reason: 'shift_not_active', detail: resolution.outcome };
+  if (resolved.state === 'unverifiable') {
+    return {
+      ok: false,
+      reason: 'period_missing',
+      detail: resolved.reason,
+    };
   }
-  // 4. THE binding check. The resolver may report an open period that is a
-  //    DIFFERENT shift — a newer one opened the same day supersedes the
-  //    requested id. Authorizing that would silently bridge eQuipment to a
-  //    shift the governed request never named.
-  if (resolution.periodId !== input.binding.shiftId) {
+  if (resolved.state === 'none') {
+    const closedThis = input.authority?.lastClosedPeriodId === input.binding.shiftId;
+    return {
+      ok: false,
+      reason: 'shift_not_active',
+      detail: closedThis ? 'closed' : 'none',
+    };
+  }
+
+  // 4. THE binding check. An open pointer for a DIFFERENT period means
+  //    the requested id was superseded or never this driver's open shift.
+  if (resolved.periodId !== input.binding.shiftId) {
+    const superseded = input.authority?.lastClosedPeriodId === input.binding.shiftId;
     return {
       ok: false,
       reason: 'shift_id_mismatch',
-      detail: 'requested shift is not the open period',
+      detail: superseded ? 'superseded' : 'requested shift is not the open period',
     };
   }
 
@@ -180,7 +199,7 @@ export function decideEquipmentAuthorization(input: {
   //    passed through, so nothing extra can ride along into storage.
   return {
     ok: true,
-    binding: { shiftId: resolution.periodId, phase: input.binding.phase },
+    binding: { shiftId: resolved.periodId, phase: input.binding.phase },
     capabilities: caps.capabilities,
   };
 }

@@ -104,8 +104,10 @@ export async function handleSsoIssueCode(
   const issuedAtMsPre = deps.nowMs();
 
   // 5b. EQUIPMENT ONLY — the governed DVIR handoff must be authorized
-  //     against authoritative state, not against the client's word. The
-  //     shift binding WB-S supplied is treated as a REQUEST, and is
+  //     against the canonical date-free explicit-period pointer
+  //     (decideResolve on driver_shift_authority/{driverId}), not against
+  //     the client's word and not against origin-day driver_shifts docs.
+  //     The shift binding WB-S supplied is treated as a REQUEST, and is
   //     replaced below by the normalized binding the server validated.
   //     A well-formed shift id proves nothing on its own.
   let storedBinding: SsoShiftBinding | undefined;
@@ -120,8 +122,13 @@ export async function handleSsoIssueCode(
     if (!originDay) {
       throw new SsoError('invalid-argument', 'malformed_request', 'shift id has no origin day');
     }
-    const [contractState, originDayDoc] = await Promise.all([
+    // Canonical period = date-free driver_shift_authority/{driverId} via
+    // decideResolve (same resolver as JSA / entitlement). Origin-day
+    // driver_shifts/{driverId}_{YYYY-MM-DD} is consulted for operator
+    // audit only and cannot veto an exact open canonical period.
+    const [contractState, authority, originDayDoc] = await Promise.all([
       deps.getCompanyContract(driver.companyId),
+      deps.getShiftAuthority(driver.driverId),
       deps.getShiftDay(driver.driverId, originDay),
     ]);
     const plan = contractState.contract
@@ -135,8 +142,15 @@ export async function handleSsoIssueCode(
       contract: contractState.contract,
       contractState: contractState.state,
       plan,
+      authority,
       originDayDoc,
       nowMs: issuedAtMsPre,
+    });
+    deps.log('sso.equipment.origin_day_audit', {
+      consulted: true,
+      present: originDayDoc.present === true,
+      readable: originDayDoc.readable === true,
+      veto: false,
     });
     if (!decision.ok) {
       // Coarse to the client, precise to the operator: a caller must not be

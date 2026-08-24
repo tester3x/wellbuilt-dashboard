@@ -167,5 +167,24 @@ check('handlers are exported for direct testing',
   /export async function handleSsoIssueCode/.test(issueSrc)
   && /export async function handleSsoExchange/.test(exchangeSrc));
 
+// ── 8. Equipment period authority is the canonical date-free pointer ──────
+{
+  const equipSrc = read('src/sso/equipmentAuthorization.ts');
+  const equip = strip(equipSrc);
+  check('equipment decision reuses decideResolve (same as JSA/entitlement)',
+    /decideResolve\(input\.authority/.test(equip));
+  check('equipment decision does not call resolveWorkPeriod',
+    !/\bresolveWorkPeriod\s*\(/.test(equip));
+  check('equipment decision does not read originDayDoc.currentShiftId',
+    !/originDayDoc\.currentShiftId/.test(equip));
+  check('equipment issuance loads canonical getShiftAuthority',
+    /getShiftAuthority\(driver\.driverId\)/.test(issueSrc));
+  check('equipment issuance still consults origin-day only as audit',
+    /sso\.equipment\.origin_day_audit/.test(issueSrc)
+    && /veto:\s*false/.test(issueSrc));
+  check('JSA issuance path is still present and distinct',
+    /decideJsaAccess/.test(issueSrc) && /WELLBUILT_APP_JSA/.test(issueSrc));
+}
+
 console.log(`\n${pass} passed, ${fail} failed`);
 if (fail) process.exitCode = 1;

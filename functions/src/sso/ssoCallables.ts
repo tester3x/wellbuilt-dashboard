@@ -106,6 +106,7 @@ export function buildSsoDeps(): SsoDeps {
           initialized: d.initialized,
           openPeriodId: typeof d.openPeriodId === 'string' ? d.openPeriodId : null,
           originLocalDate: typeof d.originLocalDate === 'string' ? d.originLocalDate : null,
+          lastClosedPeriodId: typeof d.lastClosedPeriodId === 'string' ? d.lastClosedPeriodId : null,
           version: d.version,
         };
       } catch {
