@@ -1,6 +1,6 @@
 'use client';
 
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { useRouter } from 'next/navigation';
 import Link from 'next/link';
 import { useAuth } from '@/contexts/AuthContext';
@@ -22,6 +22,13 @@ import { DriversTab } from '@/components/admin/DriversTab';
 import { CompaniesTab } from '@/components/admin/CompaniesTab';
 import GpsRoutesTab from '@/components/admin/GpsRoutesTab';
 import { EquipmentTab } from '@/components/admin/EquipmentTab';
+import {
+  applyAddWellSuccess,
+  classifyAddWellError,
+  decideAddWellSubmit,
+  type AddWellSubmitStatus,
+} from '@/lib/addWellSubmit';
+import { staffCreateWellConfig } from '@/lib/staffWriteWellConfig';
 
 interface WellConfig {
   route?: string;
@@ -120,6 +127,9 @@ export default function AdminPage() {
   const [editNdicApiNo, setEditNdicApiNo] = useState('');
 
   const [message, setMessage] = useState('');
+  const [isAddingWell, setIsAddingWell] = useState(false);
+  const [addWellStatus, setAddWellStatus] = useState<AddWellSubmitStatus>({ kind: 'idle' });
+  const addWellInflightRef = useRef(false);
   const [activeTab, setActiveTab] = useState<'routes' | 'wells' | 'drivers' | 'companies' | 'gpsroutes' | 'equipment'>('wells');
 
   // Read ?tab= from URL to deep-link into specific admin section (e.g. from pulsing Admin badge)
@@ -695,56 +705,69 @@ export default function AdminPage() {
     }
   };
 
-  // Add new well
+  // Add new well — governed callable. Client RTDB well_config writes are denied.
   const handleAddWell = async () => {
-    const wellName = newWellName.trim();
-    const nameError = validateName(wellName);
-    if (nameError) {
-      showMessage(nameError);
-      return;
-    }
-    // Case-insensitive duplicate check
-    const duplicate = Object.keys(configs).find(k => k.toLowerCase() === wellName.toLowerCase());
-    if (duplicate) {
-      showMessage(`Well already exists as "${duplicate}"`);
-      return;
-    }
+    if (isAddingWell || addWellInflightRef.current) return;
+    addWellInflightRef.current = true;
 
-    const db = getFirebaseDatabase();
-    const tankCap = parseInt(newWellTankCapacity) || 400;
-    const tankHt = parseInt(newWellTankHeight) || 20;
-    const numTanks = parseInt(newWellTanks) || 1;
-    const bblPerFoot = (tankCap / tankHt) * numTanks;
-
-    const parsedBottom = parseLevelToFeet(newWellBottom) || 3;
-    const config: WellConfig = {
-      route: newWellRoute || 'Unrouted',
-      bottomLevel: parsedBottom,
-      tanks: numTanks,
-      // Also write app-compatible field names
-      allowedBottom: parsedBottom,
-      numTanks,
-      pullBbls: parseInt(newWellPullBbls) || 140,
-      // Tank dimensions + derived bblPerFoot
-      tankCapacity: tankCap,
-      tankHeight: tankHt,
-      bblPerFoot,
-      // NDIC linkage (from NDIC picker, if used)
-      ...(ndicSelectedWell ? {
-        ndicName: ndicSelectedWell.well_name,
-        ndicApiNo: ndicSelectedWell.api_no,
-      } : {}),
-      // Water properties
-      ...(newWellWaterWeight ? { waterWeight: parseFloat(newWellWaterWeight) } : {}),
+    const decision = decideAddWellSubmit({
+      wellName: newWellName,
+      route: newWellRoute,
+      bottomInput: newWellBottom,
+      tanks: newWellTanks,
+      pullBbls: newWellPullBbls,
+      tankCapacity: newWellTankCapacity,
+      tankHeight: newWellTankHeight,
+      waterWeight: newWellWaterWeight,
       h2sStatus: newWellH2s,
-    };
+      linkedWell: ndicSelectedWell
+        ? {
+            well_name: ndicSelectedWell.well_name,
+            api_no: ndicSelectedWell.api_no,
+            operator: ndicSelectedWell.operator,
+          }
+        : null,
+    }, configs);
 
-    await set(ref(db, `well_config/${wellName}`), config);
-    showMessage(`Well "${wellName}" created${ndicSelectedWell ? ` (linked: ${ndicSelectedWell.api_no})` : ''}`);
-    setNewWellName('');
-    setNewWellSearchTerm('');
-    setNdicSelectedWell(null);
-    setAutoLinkStatus('idle');
+    if (decision.action === 'reject') {
+      addWellInflightRef.current = false;
+      setAddWellStatus({ kind: 'error', reason: decision.reason, message: decision.message });
+      showMessage(decision.message);
+      return;
+    }
+
+    setIsAddingWell(true);
+    setAddWellStatus({ kind: 'submitting', wellName: decision.wellName });
+    try {
+      const result = await staffCreateWellConfig({
+        wellName: decision.wellName,
+        config: decision.config,
+      });
+      const written = { ...decision.config, ...(result.config || {}) };
+      setConfigs((prev) => applyAddWellSuccess(prev, result.wellName, written));
+      setAddWellStatus({
+        kind: 'success',
+        wellName: result.wellName,
+        idempotent: result.idempotent === true,
+        apiNo: written.ndicApiNo,
+      });
+      showMessage(
+        result.idempotent
+          ? `Well "${result.wellName}" already exists (same API ${written.ndicApiNo})`
+          : `Well "${result.wellName}" created (linked: ${written.ndicApiNo})`,
+      );
+      setNewWellName('');
+      setNewWellSearchTerm('');
+      setNdicSelectedWell(null);
+      setAutoLinkStatus('idle');
+    } catch (err) {
+      const classified = classifyAddWellError(err);
+      setAddWellStatus({ kind: 'error', reason: classified.reason, message: classified.message });
+      showMessage(classified.message);
+    } finally {
+      addWellInflightRef.current = false;
+      setIsAddingWell(false);
+    }
   };
 
   // Update well config (with optional rename)
@@ -1388,15 +1411,42 @@ export default function AdminPage() {
                   </div>
                   {(() => {
                     const isDuplicate = newWellName.trim().length > 0 && Object.keys(configs).some(k => k.toLowerCase() === newWellName.trim().toLowerCase());
-                    const canAdd = ndicSelectedWell && !isDuplicate;
+                    const canAdd = !!ndicSelectedWell && !isDuplicate && !isAddingWell;
+                    const label = isAddingWell
+                      ? 'Adding Well…'
+                      : isDuplicate
+                        ? 'Well Already Exists'
+                        : ndicSelectedWell
+                          ? 'Add Well'
+                          : 'Link Well First';
                     return (
-                      <button
-                        onClick={handleAddWell}
-                        disabled={!canAdd}
-                        className={`w-full px-4 py-2 text-white rounded mt-2 ${isDuplicate ? 'bg-red-800 cursor-not-allowed' : canAdd ? 'bg-green-600 hover:bg-green-700' : 'bg-gray-600 cursor-not-allowed'}`}
-                      >
-                        {isDuplicate ? 'Well Already Exists' : ndicSelectedWell ? 'Add Well' : 'Link Well First'}
-                      </button>
+                      <>
+                        <button
+                          type="button"
+                          onClick={handleAddWell}
+                          disabled={!canAdd}
+                          className={`w-full px-4 py-2 text-white rounded mt-2 ${isDuplicate ? 'bg-red-800 cursor-not-allowed' : canAdd ? 'bg-green-600 hover:bg-green-700' : 'bg-gray-600 cursor-not-allowed'}`}
+                        >
+                          {label}
+                        </button>
+                        {addWellStatus.kind === 'submitting' && (
+                          <div className="mt-2 text-sm text-blue-300">
+                            Creating “{addWellStatus.wellName}”…
+                          </div>
+                        )}
+                        {addWellStatus.kind === 'success' && (
+                          <div className="mt-2 text-sm text-green-400">
+                            {addWellStatus.idempotent
+                              ? `Already on file: ${addWellStatus.wellName} (API ${addWellStatus.apiNo})`
+                              : `Added ${addWellStatus.wellName} (API ${addWellStatus.apiNo})`}
+                          </div>
+                        )}
+                        {addWellStatus.kind === 'error' && (
+                          <div className="mt-2 text-sm text-red-400">
+                            {addWellStatus.message}
+                          </div>
+                        )}
+                      </>
                     );
                   })()}
                 </div>
