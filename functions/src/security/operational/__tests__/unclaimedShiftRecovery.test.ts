@@ -1,5 +1,11 @@
 /**
- * Incident-bound unclaimed recovery — production-shaped query engine.
+ * Incident-bound unclaimed recovery.
+ *
+ * Handler tests use an in-memory store for wellbuilt-sync authority /
+ * diagnostic reads. They do not stand in for the dedicated WB-E
+ * Firestore project. Schema and Admin-SDK query construction are
+ * covered separately; emulator coverage is in
+ * unclaimedShiftRecovery.query.emulator.e2e.test.ts.
  */
 import { createHash } from 'crypto';
 import { readFileSync } from 'fs';
@@ -9,20 +15,26 @@ import { ADMIN_AUDIT_COLLECTION } from '../../../admin/adminAudit';
 import { ADMIN_POLICY_VERSION, PLATFORM_ADMINS_COLLECTION } from '../../../admin/authority';
 import { SERVER_AUTHORABLE_EVENT_TYPES, shiftAuthorityPath, shiftDayPath } from '../shiftAuthority';
 import {
-  AUTHORITY_RECOVERED_EVENT_TYPE,
   INCIDENT,
+  WB_E_COMPLETION_AUTHORITY,
   computeInspectFingerprint,
   credentialsPath,
+  dedicatedEquipmentPostTripQuerySpec,
+  dedicatedPostTripDocumentMatches,
   nameIndexPath,
   recoveryAuditDocId,
+  snapshotFromEvidence,
   type RecoveryQueryResult,
   type RecoveryQuerySpec,
+  type RedactedDiagnosticTuple,
+  type UnclaimedInspectSnapshot,
 } from '../unclaimedShiftRecovery';
 import {
   recoverUnclaimedDriverShiftHandler,
   type RecoveryTx,
   type UnclaimedRecoveryDeps,
 } from '../unclaimedShiftRecoveryHandler';
+import { applyDedicatedEquipmentPostTripQuery, assertDedicatedEquipmentProject } from '../unclaimedShiftRecoveryQueries';
 
 const DRIVER = 'aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee';
 const OTHER_DRIVER = '11111111-2222-3333-4444-555555555555';
@@ -52,16 +64,6 @@ const INCIDENT_DIAG = {
 
 interface Store { [path: string]: Record<string, unknown> }
 
-function fieldGet(data: Record<string, unknown>, path: string): unknown {
-  const parts = path.split('.');
-  let cur: unknown = data;
-  for (const p of parts) {
-    if (!cur || typeof cur !== 'object') return undefined;
-    cur = (cur as Record<string, unknown>)[p];
-  }
-  return cur;
-}
-
 function applySpec(store: Store, spec: RecoveryQuerySpec): RecoveryQueryResult {
   const docs: Array<{ id: string; data: Record<string, unknown> }> = [];
   if (spec.kind === 'minted_diagnostics') {
@@ -71,24 +73,6 @@ function applySpec(store: Store, spec: RecoveryQuerySpec): RecoveryQueryResult {
         docs.push({ id: path.slice('wb_diagnostics/'.length), data });
       }
     }
-  } else if (spec.kind === 'sync_post_trip_inspections') {
-    const prefix = `companies/${spec.companyId}/dvir_inspections/`;
-    for (const [path, data] of Object.entries(store)) {
-      if (!path.startsWith(prefix)) continue;
-      if (data.inspectionType === 'post_trip' && data.shiftId === spec.periodId) {
-        docs.push({ id: path.slice(prefix.length), data });
-      }
-    }
-  } else {
-    const prefix = `organizations/${spec.companyId}/dvirReports/`;
-    for (const [path, data] of Object.entries(store)) {
-      if (!path.startsWith(prefix)) continue;
-      const type = data.inspectionType ?? fieldGet(data, 'summary.inspectionType');
-      const shift = data.shiftId ?? fieldGet(data, 'summary.shiftId');
-      if (type === 'post_trip' && shift === spec.periodId) {
-        docs.push({ id: path.slice(prefix.length), data });
-      }
-    }
   }
   return { readable: true, docs, matchingCount: docs.length };
 }
@@ -96,11 +80,9 @@ function applySpec(store: Store, spec: RecoveryQuerySpec): RecoveryQueryResult {
 function buildDeps(seed: Store, opts: {
   hashMap?: Record<string, string | null>;
   queryError?: RecoveryQueryResult['error'];
-  abortOnceWithPostTrip?: string;
-} = {}): { deps: UnclaimedRecoveryDeps; store: Store; writes: string[]; attempts: { n: number } } {
+} = {}): { deps: UnclaimedRecoveryDeps; store: Store; writes: string[] } {
   const store: Store = JSON.parse(JSON.stringify(seed));
   const writes: string[] = [];
-  const attempts = { n: 0 };
   const snap = (p: string): AdminDocSnapshot => ({ exists: p in store, data: store[p] });
   const qrun = (spec: RecoveryQuerySpec): RecoveryQueryResult => {
     if (opts.queryError) {
@@ -112,17 +94,7 @@ function buildDeps(seed: Store, opts: {
     const staged: Array<() => void> = [];
     const tx: RecoveryTx = {
       async get(p) { return snap(p); },
-      async getQuery(spec) {
-        if (opts.abortOnceWithPostTrip && attempts.n === 1 && spec.kind === 'sync_post_trip_inspections') {
-          store[opts.abortOnceWithPostTrip] = {
-            inspectionType: 'post_trip', shiftId: PERIOD,
-          };
-          const err = new Error('aborted');
-          (err as { code?: string }).code = 'aborted';
-          throw err;
-        }
-        return qrun(spec);
-      },
+      async getQuery(spec) { return qrun(spec); },
       update(p, fields) {
         staged.push(() => {
           if (!(p in store)) throw new Error(`update_on_missing:${p}`);
@@ -149,16 +121,7 @@ function buildDeps(seed: Store, opts: {
       return runOnce(fn as never);
     },
     async runRecoveryTransaction(fn) {
-      for (let i = 0; i < 5; i++) {
-        attempts.n += 1;
-        try {
-          return await runOnce(fn);
-        } catch (e) {
-          if ((e as { code?: string }).code === 'aborted') continue;
-          throw e;
-        }
-      }
-      throw new Error('retry_exhausted');
+      return runOnce(fn);
     },
     async listDocsById() { return []; },
     newAuditId: () => 'unused',
@@ -169,7 +132,7 @@ function buildDeps(seed: Store, opts: {
       return Object.prototype.hasOwnProperty.call(opts.hashMap, hash) ? opts.hashMap[hash] : null;
     },
   };
-  return { deps, store, writes, attempts };
+  return { deps, store, writes };
 }
 
 const mikeSeed = (): Store => ({
@@ -198,41 +161,190 @@ function payload(over: Record<string, unknown> = {}) {
   };
 }
 
-describe('production-shaped queries — Mike incident', () => {
-  it('valid exact Mike-shaped diagnostic permits inspect with zero writes', async () => {
-    const { deps, writes } = buildDeps(mikeSeed());
-    const out = await recoverUnclaimedDriverShiftHandler(deps, ADMIN_AUTH, payload());
-    expect(out.recoverable).toBe(true);
-    expect(out.changed).toBe(false);
-    expect(writes).toEqual([]);
-    expect(out.evidence?.diagnosticBound).toBe('anonymous');
-    expect(out.evidence?.nameIndexMatch).toBe(true);
+function writerShapedPostTrip(periodId: string, orgId: string): Record<string, unknown> {
+  return {
+    inspectionId: 'insp-post-1',
+    reportId: 'insp-post-1',
+    orgId,
+    report: {
+      schemaVersion: 'dvir-report/2',
+      inspectionId: 'insp-post-1',
+      reportId: 'insp-post-1',
+      shiftId: periodId,
+      companyId: orgId,
+      inspectionType: 'post_trip',
+      driver: { driverHash: 'hhhh' },
+      noDefects: true,
+      issues: [],
+      version: 1,
+      completedAt: '2026-08-21T20:00:00.000Z',
+    },
+    summary: {
+      completedAt: '2026-08-21T20:00:00.000Z',
+      inspectionType: 'post_trip',
+      driverHash: 'hhhh',
+      noDefects: true,
+      issueCount: 0,
+      version: 1,
+    },
+    localCreatedAt: '2026-08-21T20:00:00.000Z',
+    syncedAt: '2026-08-21T20:00:00.000Z',
+  };
+}
+
+function assertZeroRecoveryWrites(store: Store, writes: string[], opts: {
+  originDayMayExist?: boolean;
+} = {}) {
+  expect(writes).toEqual([]);
+  expect(store[shiftAuthorityPath(DRIVER)]?.openPeriodId ?? null).toBeNull();
+  if (!opts.originDayMayExist) {
+    expect(store[shiftDayPath(DRIVER, ORIGIN)]).toBeUndefined();
+  } else {
+    const events = store[shiftDayPath(DRIVER, ORIGIN)]?.events as unknown[] | undefined;
+    expect(events ?? []).toEqual([]);
+  }
+  expect(store[`${ADMIN_AUDIT_COLLECTION}/${recoveryAuditDocId(PERIOD, sha(DRIVER).slice(0, 12))}`])
+    .toBeUndefined();
+}
+
+function baseSnap(over: Partial<UnclaimedInspectSnapshot> = {}): UnclaimedInspectSnapshot {
+  const tuples: RedactedDiagnosticTuple[] = over.diagnosticTuples ?? [{
+    id: 'mint-1',
+    app: 'wbs',
+    area: 'shift',
+    event: 'shiftId.minted',
+    result: 'ok',
+    reason: INCIDENT.diagnostic.reason,
+    source: INCIDENT.diagnostic.source,
+    shiftId: PERIOD,
+    clientTimestamp: '2026-08-21T16:24:21.855Z',
+  }];
+  return {
+    driverId: DRIVER,
+    companyId: COMPANY,
+    periodId: PERIOD,
+    originLocalDate: ORIGIN,
+    expectedAuthorityVersion: 5,
+    initialized: true,
+    authorityState: 'none',
+    openPeriodId: null,
+    authorityOriginLocalDate: null,
+    lastClosedPeriodId: LAST_CLOSED,
+    authorityVersion: 5,
+    originDayPresent: false,
+    originDayCurrentShiftId: null,
+    originDayReadable: true,
+    identityMatch: true,
+    nameIndexMatch: true,
+    credentialsActive: true,
+    diagnosticBound: 'anonymous',
+    diagnosticMatchingCount: tuples.length,
+    diagnosticTuples: tuples,
+    diagnosticSource: tuples[0]?.source ?? null,
+    diagnosticResult: tuples[0]?.result ?? null,
+    diagnosticReason: tuples[0]?.reason ?? null,
+    diagnosticApp: tuples[0]?.app ?? null,
+    diagnosticArea: tuples[0]?.area ?? null,
+    diagnosticEvent: tuples[0]?.event ?? null,
+    diagnosticShiftId: tuples[0]?.shiftId ?? null,
+    diagnosticClientTimestamp: tuples[0]?.clientTimestamp ?? null,
+    completionStoreKind: 'none_authoritative_server',
+    writerSha: WB_E_COMPLETION_AUTHORITY.writerSha,
+    dedicatedProjectProd: WB_E_COMPLETION_AUTHORITY.dedicatedProject.prod,
+    productionCloudWritesEnabled: false,
+    productionAuthoritativeServerStore: false,
+    productionCompletion: 'device_local',
+    crossProjectAtomicExclusion: false,
+    ...over,
+  };
+}
+
+describe('production WB-E completion authority pin', () => {
+  it('pins the audited writer SHA, dedicated projects, and hard-disabled production writes', () => {
+    expect(WB_E_COMPLETION_AUTHORITY.writerSha).toBe('994ddcee146194874bd8fa1b97b4990eb3193831');
+    expect(WB_E_COMPLETION_AUTHORITY.namedApp).toBe('dvir');
+    expect(WB_E_COMPLETION_AUTHORITY.dedicatedProject.prod).toBe('wellbuilt-equipment-prod');
+    expect(WB_E_COMPLETION_AUTHORITY.dedicatedProject.dev).toBe('wellbuilt-equipment-dev');
+    expect(WB_E_COMPLETION_AUTHORITY.forbiddenHostProject).toBe('wellbuilt-sync');
+    expect(WB_E_COMPLETION_AUTHORITY.productionCloudWritesEnabled).toBe(false);
+    expect(WB_E_COMPLETION_AUTHORITY.productionAuthoritativeServerStore).toBe(false);
+    expect(WB_E_COMPLETION_AUTHORITY.productionCompletion).toBe('device_local');
+    expect(WB_E_COMPLETION_AUTHORITY.crossProjectAtomicExclusion).toBe(false);
+    expect(WB_E_COMPLETION_AUTHORITY.query.inspectionTypeField).toBe('summary.inspectionType');
+    expect(WB_E_COMPLETION_AUTHORITY.query.shiftIdField).toBe('report.shiftId');
   });
 
-  it('anonymous diagnostic that is not the reviewed shape denies', async () => {
+  it('refuses wellbuilt-sync as the dedicated query project', () => {
+    expect(() => assertDedicatedEquipmentProject('wellbuilt-sync')).toThrow(/wellbuilt-sync/);
+    expect(() => assertDedicatedEquipmentProject('wellbuilt-equipment-prod')).not.toThrow();
+    expect(() => applyDedicatedEquipmentPostTripQuery(
+      {} as never, COMPANY, PERIOD, 'wellbuilt-sync',
+    )).toThrow(/wellbuilt-sync/);
+  });
+});
+
+describe('Mike incident — no authoritative server completion store', () => {
+  it('inspect of otherwise-valid evidence is not recoverable and writes nothing', async () => {
+    const { deps, store, writes } = buildDeps(mikeSeed());
+    const out = await recoverUnclaimedDriverShiftHandler(deps, ADMIN_AUTH, payload());
+    expect(out.recoverable).toBe(false);
+    expect(out.reason).toBe('no_authoritative_server_completion_store');
+    expect(out.changed).toBe(false);
+    expect(out.evidence?.diagnosticBound).toBe('anonymous');
+    expect(out.evidence?.nameIndexMatch).toBe(true);
+    expect(out.evidence?.productionAuthoritativeServerStore).toBe(false);
+    expect(out.evidence?.completionStoreKind).toBe('none_authoritative_server');
+    expect(out.evidence?.writerSha).toBe(WB_E_COMPLETION_AUTHORITY.writerSha);
+    expect(out.evidence?.crossProjectAtomicExclusion).toBe(false);
+    expect(out.completionStores?.wellbuiltSyncOrganizationsDvirReports).toMatch(/NOT the WB-E store/);
+    assertZeroRecoveryWrites(store, writes);
+  });
+
+  it('execute with a matching inspect fingerprint still refuses and writes nothing', async () => {
+    const { deps, store, writes } = buildDeps(mikeSeed());
+    const inspected = await recoverUnclaimedDriverShiftHandler(deps, ADMIN_AUTH, payload());
+    expect(inspected.fingerprint).toEqual(expect.any(String));
+    const writesBefore = writes.length;
+    await expect(recoverUnclaimedDriverShiftHandler(
+      deps, ADMIN_AUTH, payload({
+        mode: 'execute',
+        inspectStateFingerprint: inspected.fingerprint,
+      }),
+    )).rejects.toMatchObject({
+      adminCode: 'recover_unclaimed_refused:no_authoritative_server_completion_store',
+    });
+    expect(writes.length).toBe(writesBefore);
+    assertZeroRecoveryWrites(store, writes);
+  });
+});
+
+describe('diagnostic shape — Mike incident', () => {
+  it('anonymous diagnostic that is not the reviewed shape denies with zero writes', async () => {
     const seed = mikeSeed();
     seed['wb_diagnostics/mint-1'] = { ...INCIDENT_DIAG, source: 'spoof', reason: 'legacy path local mint' };
-    const { deps, writes } = buildDeps(seed);
+    const { deps, store, writes } = buildDeps(seed);
     const out = await recoverUnclaimedDriverShiftHandler(deps, ADMIN_AUTH, payload());
     expect(out.recoverable).toBe(false);
     expect(out.reason).toBe('diagnostic_mismatch');
-    expect(writes).toEqual([]);
+    assertZeroRecoveryWrites(store, writes);
   });
 
   it('diagnostic for another driver denies', async () => {
     const seed = mikeSeed();
     seed['wb_diagnostics/mint-1'] = { ...INCIDENT_DIAG, driverHash: OTHER_HASH };
-    const { deps } = buildDeps(seed, { hashMap: { [OTHER_HASH]: OTHER_DRIVER } });
+    const { deps, store, writes } = buildDeps(seed, { hashMap: { [OTHER_HASH]: OTHER_DRIVER } });
     const out = await recoverUnclaimedDriverShiftHandler(deps, ADMIN_AUTH, payload());
     expect(out.reason).toBe('foreign_diagnostic');
+    assertZeroRecoveryWrites(store, writes);
   });
 
   it('diagnostic for another company denies', async () => {
-    const { deps } = buildDeps(mikeSeed());
+    const { deps, store, writes } = buildDeps(mikeSeed());
     const out = await recoverUnclaimedDriverShiftHandler(
       deps, ADMIN_AUTH, payload({ companyId: 'acme-trucking' }),
     );
     expect(out.reason).toBe('not_incident_company');
+    assertZeroRecoveryWrites(store, writes);
   });
 
   it('wrong app/source/result/reason denies', async () => {
@@ -241,218 +353,267 @@ describe('production-shaped queries — Mike incident', () => {
     ]) {
       const seed = mikeSeed();
       seed['wb_diagnostics/mint-1'] = { ...INCIDENT_DIAG, ...over };
-      const { deps } = buildDeps(seed);
+      const { deps, store, writes } = buildDeps(seed);
       const out = await recoverUnclaimedDriverShiftHandler(deps, ADMIN_AUTH, payload());
       expect(out.recoverable).toBe(false);
+      assertZeroRecoveryWrites(store, writes);
     }
   });
 
   it('same period collision across two drivers denies the foreign hash', async () => {
     const seed = mikeSeed();
     seed['wb_diagnostics/mint-other'] = { ...INCIDENT_DIAG, driverHash: OTHER_HASH };
-    const { deps } = buildDeps(seed, { hashMap: { [OTHER_HASH]: OTHER_DRIVER } });
+    const { deps, store, writes } = buildDeps(seed, { hashMap: { [OTHER_HASH]: OTHER_DRIVER } });
     const out = await recoverUnclaimedDriverShiftHandler(deps, ADMIN_AUTH, payload());
     expect(out.reason).toBe('foreign_diagnostic');
+    assertZeroRecoveryWrites(store, writes);
   });
 });
 
-describe('fingerprint binding', () => {
-  it('cross-driver fingerprint replay denies without writes', async () => {
-    const { deps, store, writes } = buildDeps(mikeSeed());
-    const inspected = await recoverUnclaimedDriverShiftHandler(deps, ADMIN_AUTH, payload());
-    store[nameIndexPath('mikezfold')] = { driverId: OTHER_DRIVER };
-    store[credentialsPath(OTHER_DRIVER)] = { active: true };
-    store[shiftAuthorityPath(OTHER_DRIVER)] = { ...store[shiftAuthorityPath(DRIVER)], driverId: OTHER_DRIVER };
-    const writesBefore = writes.length;
-    await expect(recoverUnclaimedDriverShiftHandler(
-      deps, ADMIN_AUTH, payload({
-        mode: 'execute',
-        driverId: OTHER_DRIVER,
-        inspectStateFingerprint: inspected.fingerprint,
-      }),
-    )).rejects.toMatchObject({ adminCode: expect.stringMatching(/fingerprint_mismatch|identity_mismatch/) });
-    expect(writes.length).toBe(writesBefore);
+describe('fingerprint binds the complete redacted diagnostic evidence set', () => {
+  it('changes when diagnostic document id is replaced with a matching-shaped twin', () => {
+    const a = computeInspectFingerprint(baseSnap(), sha);
+    const b = computeInspectFingerprint(baseSnap({
+      diagnosticTuples: [{
+        id: 'mint-replaced',
+        app: 'wbs',
+        area: 'shift',
+        event: 'shiftId.minted',
+        result: 'ok',
+        reason: INCIDENT.diagnostic.reason,
+        source: INCIDENT.diagnostic.source,
+        shiftId: PERIOD,
+        clientTimestamp: '2026-08-21T16:24:21.855Z',
+      }],
+      diagnosticMatchingCount: 1,
+    }), sha);
+    expect(a).not.toBe(b);
   });
 
-  it('cross-company fingerprint replay denies', async () => {
-    const { deps } = buildDeps(mikeSeed());
-    const inspected = await recoverUnclaimedDriverShiftHandler(deps, ADMIN_AUTH, payload());
-    await expect(recoverUnclaimedDriverShiftHandler(
-      deps, ADMIN_AUTH, payload({
-        mode: 'execute',
-        companyId: 'other-co',
-        inspectStateFingerprint: inspected.fingerprint,
-      }),
-    )).rejects.toBeInstanceOf(AdminCallError);
+  it('changes when matching count, clientTimestamp, area, event, or shiftId change', () => {
+    const a = computeInspectFingerprint(baseSnap(), sha);
+    const extra = computeInspectFingerprint(baseSnap({
+      diagnosticMatchingCount: 2,
+      diagnosticTuples: [
+        ...(baseSnap().diagnosticTuples),
+        {
+          id: 'mint-2',
+          app: 'wbs',
+          area: 'shift',
+          event: 'shiftId.minted',
+          result: 'ok',
+          reason: INCIDENT.diagnostic.reason,
+          source: INCIDENT.diagnostic.source,
+          shiftId: PERIOD,
+          clientTimestamp: '2026-08-21T16:24:22.100Z',
+        },
+      ],
+    }), sha);
+    const ts = computeInspectFingerprint(baseSnap({
+      diagnosticClientTimestamp: '2026-08-21T16:24:22.900Z',
+      diagnosticTuples: [{
+        ...baseSnap().diagnosticTuples[0],
+        clientTimestamp: '2026-08-21T16:24:22.900Z',
+      }],
+    }), sha);
+    const area = computeInspectFingerprint(baseSnap({ diagnosticArea: 'other' }), sha);
+    const event = computeInspectFingerprint(baseSnap({ diagnosticEvent: 'other.event' }), sha);
+    const shift = computeInspectFingerprint(baseSnap({ diagnosticShiftId: '2026-08-21_000000' }), sha);
+    expect(a).not.toBe(extra);
+    expect(a).not.toBe(ts);
+    expect(a).not.toBe(area);
+    expect(a).not.toBe(event);
+    expect(a).not.toBe(shift);
   });
 
-  it('cross-period fingerprint replay denies', async () => {
-    const { deps } = buildDeps(mikeSeed());
-    const inspected = await recoverUnclaimedDriverShiftHandler(deps, ADMIN_AUTH, payload());
-    await expect(recoverUnclaimedDriverShiftHandler(
-      deps, ADMIN_AUTH, payload({
-        mode: 'execute',
-        periodId: '2026-08-22_070000',
-        inspectStateFingerprint: inspected.fingerprint,
-      }),
-    )).rejects.toBeInstanceOf(AdminCallError);
-  });
-
-  it('fingerprint includes driver, company, diagnostic, and completion fields', () => {
-    const snap = {
-      driverId: DRIVER, companyId: COMPANY, periodId: PERIOD, originLocalDate: ORIGIN,
-      expectedAuthorityVersion: 5, initialized: true, authorityState: 'none' as const,
-      openPeriodId: null, authorityOriginLocalDate: null, lastClosedPeriodId: LAST_CLOSED,
-      authorityVersion: 5, originDayPresent: false, originDayCurrentShiftId: null,
-      originDayReadable: true, identityMatch: true, nameIndexMatch: true, credentialsActive: true,
-      diagnosticBound: 'anonymous' as const, diagnosticSource: INCIDENT.diagnostic.source,
-      diagnosticResult: 'ok', diagnosticReason: INCIDENT.diagnostic.reason, diagnosticApp: 'wbs',
-      inspectionsPostTripMatching: 0, reportsPostTripMatching: 0, completionReadable: true,
-    };
-    const a = computeInspectFingerprint(snap, sha);
-    const b = computeInspectFingerprint({ ...snap, driverId: OTHER_DRIVER }, sha);
-    const c = computeInspectFingerprint({ ...snap, companyId: 'x' }, sha);
-    const d = computeInspectFingerprint({ ...snap, diagnosticSource: 'nope' }, sha);
+  it('changes across driver and company and does not embed raw driver hashes', () => {
+    const a = computeInspectFingerprint(baseSnap(), sha);
+    const b = computeInspectFingerprint(baseSnap({ driverId: OTHER_DRIVER }), sha);
+    const c = computeInspectFingerprint(baseSnap({ companyId: 'x' }), sha);
     expect(a).not.toBe(b);
     expect(a).not.toBe(c);
-    expect(a).not.toBe(d);
-  });
-});
-
-describe('completion stores', () => {
-  it('target Post-Trip beyond 50 other records still denies', async () => {
-    const seed = mikeSeed();
-    for (let i = 0; i < 60; i++) {
-      seed[`companies/${COMPANY}/dvir_inspections/other-${i}`] = {
-        inspectionType: 'post_trip', shiftId: `2026-01-01_${String(i).padStart(6, '0')}`,
-      };
-    }
-    seed[`companies/${COMPANY}/dvir_inspections/target`] = {
-      inspectionType: 'post_trip', shiftId: PERIOD,
-    };
-    const { deps } = buildDeps(seed);
-    const out = await recoverUnclaimedDriverShiftHandler(deps, ADMIN_AUTH, payload());
-    expect(out.reason).toBe('post_trip_exists');
-    expect(out.evidence?.postTripInspectionsMatching).toBe(1);
+    const payloadJson = JSON.stringify(baseSnap());
+    expect(payloadJson).not.toMatch(/driverHash/);
   });
 
-  it('receipt present in dvirReports store denies', async () => {
-    const seed = mikeSeed();
-    seed[`organizations/${COMPANY}/dvirReports/r1`] = {
-      inspectionType: 'post_trip', shiftId: PERIOD, summary: { inspectionType: 'post_trip', shiftId: PERIOD },
-    };
-    const { deps } = buildDeps(seed);
-    const out = await recoverUnclaimedDriverShiftHandler(deps, ADMIN_AUTH, payload());
-    expect(out.reason).toBe('post_trip_exists');
-  });
-
-  it('query denial / missing index / unreadable store denies', async () => {
-    for (const error of ['denied', 'missing_index', 'unreadable'] as const) {
-      const { deps } = buildDeps(mikeSeed(), { queryError: error });
-      const out = await recoverUnclaimedDriverShiftHandler(deps, ADMIN_AUTH, payload());
-      expect(['completion_unreadable', 'insufficient_evidence', 'diagnostic_mismatch']).toContain(out.reason);
-    }
-  });
-
-  it('Post-Trip appearing between inspect and execute denies with zero recovery writes', async () => {
-    const { deps, store, writes } = buildDeps(mikeSeed());
-    const inspected = await recoverUnclaimedDriverShiftHandler(deps, ADMIN_AUTH, payload());
-    store[`companies/${COMPANY}/dvir_inspections/late`] = { inspectionType: 'post_trip', shiftId: PERIOD };
-    const writesBefore = writes.length;
-    await expect(recoverUnclaimedDriverShiftHandler(
-      deps, ADMIN_AUTH, payload({ mode: 'execute', inspectStateFingerprint: inspected.fingerprint }),
-    )).rejects.toMatchObject({ adminCode: expect.stringContaining('post_trip_exists') });
-    expect(writes.length).toBe(writesBefore);
-    expect(store[shiftAuthorityPath(DRIVER)].openPeriodId).toBeNull();
-  });
-
-  it('transaction retry rechecks all evidence and denies a late Post-Trip', async () => {
-    const path = `companies/${COMPANY}/dvir_inspections/racy`;
-    const { deps, store } = buildDeps(mikeSeed(), { abortOnceWithPostTrip: path });
-    const inspected = await recoverUnclaimedDriverShiftHandler(deps, ADMIN_AUTH, payload());
-    await expect(recoverUnclaimedDriverShiftHandler(
-      deps, ADMIN_AUTH, payload({ mode: 'execute', inspectStateFingerprint: inspected.fingerprint }),
-    )).rejects.toMatchObject({ adminCode: expect.stringContaining('post_trip_exists') });
-    expect(store[shiftAuthorityPath(DRIVER)].openPeriodId).toBeNull();
-  });
-});
-
-describe('execute writes and idempotency', () => {
-  it('successful execute writes exactly pointer, origin-day, event, audit', async () => {
-    const { deps, store, writes } = buildDeps(mikeSeed());
-    const inspected = await recoverUnclaimedDriverShiftHandler(deps, ADMIN_AUTH, payload());
-    const out = await recoverUnclaimedDriverShiftHandler(
-      deps, ADMIN_AUTH, payload({ mode: 'execute', inspectStateFingerprint: inspected.fingerprint }),
-    );
-    expect(out.changed).toBe(true);
-    expect(writes.filter((w) => w.startsWith('update '))).toHaveLength(1);
-    expect(writes.filter((w) => w.startsWith('create '))).toHaveLength(2);
-    expect(store[shiftAuthorityPath(DRIVER)].openPeriodId).toBe(PERIOD);
-    const events = store[shiftDayPath(DRIVER, ORIGIN)].events as Array<{ type: string }>;
-    expect(events).toEqual([expect.objectContaining({ type: AUTHORITY_RECOVERED_EVENT_TYPE })]);
-    expect(events[0].type).not.toBe('login');
-    const audit = store[`${ADMIN_AUDIT_COLLECTION}/${recoveryAuditDocId(PERIOD, sha(DRIVER).slice(0, 12))}`];
-    expect(audit.operation).toBe('driverShift.recoverUnclaimedLocalPeriod');
-  });
-
-  it('duplicate exact execution remains idempotent', async () => {
+  it('inspect fingerprints differ after replacing the public diagnostic document', async () => {
     const { deps, store } = buildDeps(mikeSeed());
-    const inspected = await recoverUnclaimedDriverShiftHandler(deps, ADMIN_AUTH, payload());
-    const fp = inspected.fingerprint!;
-    await recoverUnclaimedDriverShiftHandler(deps, ADMIN_AUTH, payload({ mode: 'execute', inspectStateFingerprint: fp }));
-    const n = (store[shiftDayPath(DRIVER, ORIGIN)].events as unknown[]).length;
-    const second = await recoverUnclaimedDriverShiftHandler(
-      deps, ADMIN_AUTH, payload({ mode: 'execute', inspectStateFingerprint: fp }),
-    );
-    expect(second.alreadyRecovered).toBe(true);
-    expect((store[shiftDayPath(DRIVER, ORIGIN)].events as unknown[]).length).toBe(n);
+    const first = await recoverUnclaimedDriverShiftHandler(deps, ADMIN_AUTH, payload());
+    const original = store['wb_diagnostics/mint-1'];
+    delete store['wb_diagnostics/mint-1'];
+    store['wb_diagnostics/mint-replaced'] = original;
+    const second = await recoverUnclaimedDriverShiftHandler(deps, ADMIN_AUTH, payload());
+    expect(first.fingerprint).not.toBe(second.fingerprint);
+    expect(first.evidence?.diagnosticMatchingCount).toBe(1);
+    expect(second.evidence?.diagnosticMatchingCount).toBe(1);
   });
 });
 
-describe('classic refusals still hold', () => {
+describe('writer schema query construction', () => {
+  it('dedicated query uses summary.inspectionType and report.shiftId on the equipment project', () => {
+    const spec = dedicatedEquipmentPostTripQuerySpec(COMPANY, PERIOD);
+    expect(spec.projectId).toBe('wellbuilt-equipment-prod');
+    expect(spec.forbiddenProjectId).toBe('wellbuilt-sync');
+    expect(spec.namedApp).toBe('dvir');
+    expect(spec.collectionPath).toBe(`organizations/${COMPANY}/dvirReports`);
+    expect(spec.filters).toEqual([
+      { field: 'summary.inspectionType', op: '==', value: 'post_trip' },
+      { field: 'report.shiftId', op: '==', value: PERIOD },
+    ]);
+  });
+
+  it('matches FirebaseDvirTransport / buildCloudDocument documents only', () => {
+    const writer = writerShapedPostTrip(PERIOD, COMPANY);
+    expect(dedicatedPostTripDocumentMatches(writer, PERIOD)).toBe(true);
+    expect(dedicatedPostTripDocumentMatches({
+      inspectionType: 'post_trip',
+      shiftId: PERIOD,
+    }, PERIOD)).toBe(false);
+    expect(dedicatedPostTripDocumentMatches({
+      summary: { inspectionType: 'post_trip', shiftId: PERIOD },
+      report: {},
+    }, PERIOD)).toBe(false);
+    expect(dedicatedPostTripDocumentMatches({
+      summary: { inspectionType: 'post_trip' },
+      report: { shiftId: '2026-08-22_000000' },
+    }, PERIOD)).toBe(false);
+    expect(writer.summary).not.toHaveProperty('shiftId');
+  });
+
+  it('production callable source does not query wellbuilt-sync organizations/dvirReports', () => {
+    const callables = readFileSync(join(__dirname, '../../../admin/callables.ts'), 'utf8');
+    expect(callables).toMatch(/applyMintedDiagnosticsQuery/);
+    expect(callables).not.toMatch(/applyDedicatedEquipmentPostTripQuery/);
+    expect(callables).not.toMatch(/organizations\/\$\{spec\.companyId\}\/dvirReports/);
+    expect(callables).not.toMatch(/sync_post_trip_inspections/);
+    expect(callables).not.toMatch(/sync_dvir_reports/);
+    const handler = readFileSync(join(__dirname, '../unclaimedShiftRecoveryHandler.ts'), 'utf8');
+    expect(handler).not.toMatch(/summary\?\.shiftId/);
+    expect(handler).not.toMatch(/sync_dvir_reports/);
+    expect(handler).not.toMatch(/sync_post_trip_inspections/);
+    expect(handler).toMatch(/no_authoritative_server_completion_store/);
+  });
+});
+
+describe('refusal paths write nothing', () => {
   it('rejects unauthenticated callers with zero writes', async () => {
-    const { deps, writes } = buildDeps(mikeSeed());
+    const { deps, store, writes } = buildDeps(mikeSeed());
     await expect(recoverUnclaimedDriverShiftHandler(deps, null, payload()))
       .rejects.toBeInstanceOf(AdminCallError);
-    expect(writes).toEqual([]);
+    assertZeroRecoveryWrites(store, writes);
   });
-  it('last-closed match refuses', async () => {
+
+  it('last-closed match refuses with zero writes', async () => {
     const seed = mikeSeed();
     seed[shiftAuthorityPath(DRIVER)].lastClosedPeriodId = PERIOD;
-    const { deps } = buildDeps(seed);
+    const { deps, store, writes } = buildDeps(seed);
     const out = await recoverUnclaimedDriverShiftHandler(deps, ADMIN_AUTH, payload());
     expect(out.reason).toBe('last_closed_match');
+    assertZeroRecoveryWrites(store, writes);
   });
-  it('name-index mismatch refuses', async () => {
+
+  it('name-index mismatch refuses with zero writes', async () => {
     const seed = mikeSeed();
     seed[nameIndexPath('mikezfold')] = { driverId: OTHER_DRIVER };
-    const { deps } = buildDeps(seed);
+    const { deps, store, writes } = buildDeps(seed);
     const out = await recoverUnclaimedDriverShiftHandler(deps, ADMIN_AUTH, payload());
     expect(out.reason).toBe('identity_mismatch');
+    assertZeroRecoveryWrites(store, writes);
   });
-  it('conflicting origin-day marker refuses', async () => {
+
+  it('conflicting origin-day marker refuses with zero writes', async () => {
     const seed = mikeSeed();
     seed[shiftDayPath(DRIVER, ORIGIN)] = { currentShiftId: '2026-08-21_000000' };
-    const { deps } = buildDeps(seed);
+    const { deps, store, writes } = buildDeps(seed);
     const out = await recoverUnclaimedDriverShiftHandler(deps, ADMIN_AUTH, payload());
     expect(out.reason).toBe('origin_day_conflict');
+    assertZeroRecoveryWrites(store, writes, { originDayMayExist: true });
   });
-  it('missing minted diagnostic is insufficient', async () => {
+
+  it('missing minted diagnostic is insufficient with zero writes', async () => {
     const seed = mikeSeed();
     delete seed['wb_diagnostics/mint-1'];
-    const { deps } = buildDeps(seed);
+    const { deps, store, writes } = buildDeps(seed);
     const out = await recoverUnclaimedDriverShiftHandler(deps, ADMIN_AUTH, payload());
     expect(out.reason).toBe('insufficient_evidence');
+    assertZeroRecoveryWrites(store, writes);
   });
-  it('version race refuses without writes', async () => {
+
+  it('version race refuses execute with zero writes', async () => {
     const { deps, store, writes } = buildDeps(mikeSeed());
     const inspected = await recoverUnclaimedDriverShiftHandler(deps, ADMIN_AUTH, payload());
     store[shiftAuthorityPath(DRIVER)].version = 9;
     const n = writes.length;
     await expect(recoverUnclaimedDriverShiftHandler(
       deps, ADMIN_AUTH, payload({ mode: 'execute', inspectStateFingerprint: inspected.fingerprint }),
-    )).rejects.toMatchObject({ adminCode: expect.stringContaining('version_mismatch') });
+    )).rejects.toMatchObject({
+      adminCode: expect.stringMatching(/version_mismatch|no_authoritative_server_completion_store/),
+    });
     expect(writes.length).toBe(n);
+    assertZeroRecoveryWrites(store, writes);
+  });
+
+  it('unreadable diagnostics refuse execute with zero writes', async () => {
+    const { deps, store, writes } = buildDeps(mikeSeed(), { queryError: 'unreadable' });
+    const inspected = await recoverUnclaimedDriverShiftHandler(deps, ADMIN_AUTH, payload());
+    expect(inspected.reason).toBe('insufficient_evidence');
+    await expect(recoverUnclaimedDriverShiftHandler(
+      deps, ADMIN_AUTH, payload({ mode: 'execute', inspectStateFingerprint: inspected.fingerprint || '' }),
+    )).rejects.toMatchObject({
+      adminCode: expect.stringContaining('insufficient_evidence'),
+    });
+    assertZeroRecoveryWrites(store, writes);
+  });
+
+  it('already-recovered execute is idempotent and does not add writes', async () => {
+    const seed = mikeSeed();
+    seed[shiftAuthorityPath(DRIVER)] = {
+      ...seed[shiftAuthorityPath(DRIVER)],
+      openPeriodId: PERIOD,
+      originLocalDate: ORIGIN,
+    };
+    seed[shiftDayPath(DRIVER, ORIGIN)] = {
+      currentShiftId: PERIOD,
+      events: [{ type: 'authority_recovered' }],
+    };
+    const { deps, store, writes } = buildDeps(seed);
+    const out = await recoverUnclaimedDriverShiftHandler(
+      deps, ADMIN_AUTH, payload({ mode: 'execute', inspectStateFingerprint: 'any' }),
+    );
+    expect(out.alreadyRecovered).toBe(true);
+    expect(out.changed).toBe(false);
+    expect(writes).toEqual([]);
+    expect((store[shiftDayPath(DRIVER, ORIGIN)].events as unknown[]).length).toBe(1);
+  });
+});
+
+describe('snapshot pins the no-store fact', () => {
+  it('snapshotFromEvidence never claims an authoritative server completion store', () => {
+    const snap = snapshotFromEvidence({
+      request: payload() as never,
+      authority: {
+        driverId: DRIVER,
+        companyId: COMPANY,
+        initialized: true,
+        openPeriodId: null,
+        originLocalDate: null,
+        lastClosedPeriodId: LAST_CLOSED,
+        version: 5,
+      },
+      originDay: { readable: true, present: false },
+      nameIndexDriverId: DRIVER,
+      credentialsActive: true,
+      diagnosticBound: 'anonymous',
+      diagnosticTuples: baseSnap().diagnosticTuples,
+    });
+    expect(snap.productionAuthoritativeServerStore).toBe(false);
+    expect(snap.completionStoreKind).toBe('none_authoritative_server');
+    expect(snap.diagnosticMatchingCount).toBe(1);
+    expect(snap.diagnosticTuples[0].id).toBe('mint-1');
+    expect(snap.diagnosticArea).toBe('shift');
+    expect(snap.diagnosticEvent).toBe('shiftId.minted');
+    expect(snap.diagnosticShiftId).toBe(PERIOD);
+    expect(snap.diagnosticClientTimestamp).toBe('2026-08-21T16:24:21.855Z');
   });
 });
 

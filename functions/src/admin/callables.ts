@@ -45,6 +45,7 @@ import {
   type UnclaimedRecoveryDeps,
 } from '../security/operational/unclaimedShiftRecoveryHandler';
 import type { RecoveryQueryResult, RecoveryQuerySpec } from '../security/operational/unclaimedShiftRecovery';
+import { applyMintedDiagnosticsQuery } from '../security/operational/unclaimedShiftRecoveryQueries';
 
 export const ADMIN_CALLABLE_OPTIONS = {
   // Part 15: flip to true when App Check enforcement is approved live.
@@ -148,20 +149,19 @@ function classifyQueryError(err: unknown): RecoveryQueryResult {
   return { readable: false, error, docs: [], matchingCount: 0 };
 }
 
+/**
+ * wellbuilt-sync queries only. Suite mint diagnostics live here.
+ * Dedicated WB-E Post-Trip (organizations/{org}/dvirReports on
+ * wellbuilt-equipment-prod, summary.inspectionType + report.shiftId)
+ * is NOT queried: production has no authoritative server store, and
+ * that project cannot join this transaction. Empty same-path
+ * wellbuilt-sync collections are not completion proof.
+ */
 function productionQuery(db: admin.firestore.Firestore, spec: RecoveryQuerySpec): admin.firestore.Query {
   if (spec.kind === 'minted_diagnostics') {
-    return db.collection('wb_diagnostics')
-      .where('shiftId', '==', spec.periodId)
-      .where('event', '==', 'shiftId.minted');
+    return applyMintedDiagnosticsQuery(db, spec.periodId);
   }
-  if (spec.kind === 'sync_post_trip_inspections') {
-    return db.collection(`companies/${spec.companyId}/dvir_inspections`)
-      .where('inspectionType', '==', 'post_trip')
-      .where('shiftId', '==', spec.periodId);
-  }
-  return db.collection(`organizations/${spec.companyId}/dvirReports`)
-    .where('inspectionType', '==', 'post_trip')
-    .where('shiftId', '==', spec.periodId);
+  throw new Error(`recovery_query_not_on_wellbuilt_sync:${String((spec as { kind?: string }).kind)}`);
 }
 
 function snapToResult(snap: admin.firestore.QuerySnapshot): RecoveryQueryResult {

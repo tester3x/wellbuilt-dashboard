@@ -14,6 +14,24 @@
  * A diagnostic with another driver's hash, wrong shape, or a different
  * period is refused. Ordinary claimDriverShift is untouched.
  *
+ * COMPLETION AUTHORITY (source-audited, not invented):
+ * WB-E SHA 994ddcee FirebaseDvirTransport writes DvirCloudDocument to
+ * organizations/{orgId}/dvirReports on named app "dvir"
+ * (wellbuilt-equipment-prod / wellbuilt-equipment-dev). Schema is
+ * summary.inspectionType + report.shiftId — summary has no shiftId.
+ * Production cloud writes are hard-disabled (dvirCloudGate:
+ * isDvirCloudWritesEnabled() false unless development + flag +
+ * wellbuilt-equipment-dev; wellbuilt-equipment-prod always false;
+ * DVIR_CLOUD_WRITES_ENABLED = false). Therefore this historical
+ * incident has NO server-authoritative Post-Trip store. Device-local
+ * completion (LocalCompletedReportStore) is not a server store.
+ * wellbuilt-sync organizations/{id}/dvirReports is NOT the WB-E store.
+ * Dashboard dvir.submitPreTrip is pre_trip only.
+ *
+ * A dedicated-project read cannot join a wellbuilt-sync transaction.
+ * Absence of a Post-Trip server document therefore cannot be proven
+ * atomically. Execute refuses.
+ *
  * PURE. No firebase-admin, no I/O.
  */
 import {
@@ -45,6 +63,33 @@ export const INCIDENT = Object.freeze({
   }),
 });
 
+/**
+ * Exact WB-E writer this incident is judged against.
+ * Fold7-approved source SHA (994ddcee). Not a live production read.
+ */
+export const WB_E_COMPLETION_AUTHORITY = Object.freeze({
+  writerSha: '994ddcee146194874bd8fa1b97b4990eb3193831',
+  writerTransport: 'FirebaseDvirTransport.upsertReport',
+  writerDocumentBuilder: 'buildCloudDocument',
+  namedApp: 'dvir' as const,
+  dedicatedProject: Object.freeze({
+    prod: 'wellbuilt-equipment-prod',
+    dev: 'wellbuilt-equipment-dev',
+  }),
+  forbiddenHostProject: 'wellbuilt-sync',
+  collectionSegments: Object.freeze(['organizations', '{orgId}', 'dvirReports'] as const),
+  query: Object.freeze({
+    inspectionTypeField: 'summary.inspectionType' as const,
+    inspectionTypeValue: 'post_trip' as const,
+    shiftIdField: 'report.shiftId' as const,
+  }),
+  /** dvirCloudGate: production and wellbuilt-equipment-prod never write. */
+  productionCloudWritesEnabled: false as const,
+  productionAuthoritativeServerStore: false as const,
+  productionCompletion: 'device_local' as const,
+  crossProjectAtomicExclusion: false as const,
+});
+
 export type RecoverMode = 'inspect' | 'execute';
 
 export interface UnclaimedRecoveryRequest {
@@ -74,6 +119,19 @@ export interface CompletionQuery {
   matchingCount: number;
 }
 
+/** Redacted diagnostic tuple actually used for the decision. No driverHash. */
+export interface RedactedDiagnosticTuple {
+  id: string;
+  app: string | null;
+  area: string | null;
+  event: string | null;
+  result: string | null;
+  reason: string | null;
+  source: string | null;
+  shiftId: string | null;
+  clientTimestamp: string | null;
+}
+
 export interface UnclaimedInspectSnapshot {
   driverId: string;
   companyId: string;
@@ -93,13 +151,23 @@ export interface UnclaimedInspectSnapshot {
   nameIndexMatch: boolean;
   credentialsActive: boolean;
   diagnosticBound: 'incident_shape' | 'subject_bound' | 'anonymous' | 'foreign' | 'mismatch' | 'absent' | 'unreadable';
+  diagnosticMatchingCount: number;
+  diagnosticTuples: RedactedDiagnosticTuple[];
   diagnosticSource: string | null;
   diagnosticResult: string | null;
   diagnosticReason: string | null;
   diagnosticApp: string | null;
-  inspectionsPostTripMatching: number;
-  reportsPostTripMatching: number;
-  completionReadable: boolean;
+  diagnosticArea: string | null;
+  diagnosticEvent: string | null;
+  diagnosticShiftId: string | null;
+  diagnosticClientTimestamp: string | null;
+  completionStoreKind: 'none_authoritative_server';
+  writerSha: string;
+  dedicatedProjectProd: string;
+  productionCloudWritesEnabled: false;
+  productionAuthoritativeServerStore: false;
+  productionCompletion: 'device_local';
+  crossProjectAtomicExclusion: false;
 }
 
 export type UnclaimedRefusal =
@@ -118,6 +186,7 @@ export type UnclaimedRefusal =
   | 'origin_day_conflict'
   | 'post_trip_exists'
   | 'completion_unreadable'
+  | 'no_authoritative_server_completion_store'
   | 'insufficient_evidence'
   | 'identity_mismatch'
   | 'anonymous_diagnostic'
@@ -160,9 +229,7 @@ export function nameIndexPath(displayNameNorm: string): string {
 }
 
 export type RecoveryQuerySpec =
-  | { kind: 'minted_diagnostics'; periodId: string }
-  | { kind: 'sync_post_trip_inspections'; companyId: string; periodId: string }
-  | { kind: 'sync_dvir_reports'; companyId: string; periodId: string };
+  | { kind: 'minted_diagnostics'; periodId: string };
 
 export interface RecoveryQueryResult {
   readable: boolean;
@@ -175,10 +242,73 @@ export function credentialsPath(driverId: string): string {
   return `driver_credentials/${driverId}`;
 }
 
+export interface DedicatedPostTripQuerySpec {
+  projectId: typeof WB_E_COMPLETION_AUTHORITY.dedicatedProject.prod;
+  forbiddenProjectId: typeof WB_E_COMPLETION_AUTHORITY.forbiddenHostProject;
+  namedApp: typeof WB_E_COMPLETION_AUTHORITY.namedApp;
+  collectionPath: string;
+  filters: ReadonlyArray<{
+    field: typeof WB_E_COMPLETION_AUTHORITY.query.inspectionTypeField
+      | typeof WB_E_COMPLETION_AUTHORITY.query.shiftIdField;
+    op: '==';
+    value: string;
+  }>;
+}
+
+/**
+ * Query the dedicated equipment project would use IF a server store existed.
+ * Not used as execute proof: production has no authoritative store, and a
+ * dedicated-project read cannot join a wellbuilt-sync transaction.
+ */
+export function dedicatedEquipmentPostTripQuerySpec(
+  orgId: string,
+  periodId: string,
+): DedicatedPostTripQuerySpec {
+  return {
+    projectId: WB_E_COMPLETION_AUTHORITY.dedicatedProject.prod,
+    forbiddenProjectId: WB_E_COMPLETION_AUTHORITY.forbiddenHostProject,
+    namedApp: WB_E_COMPLETION_AUTHORITY.namedApp,
+    collectionPath: `organizations/${orgId}/dvirReports`,
+    filters: [
+      {
+        field: WB_E_COMPLETION_AUTHORITY.query.inspectionTypeField,
+        op: '==',
+        value: WB_E_COMPLETION_AUTHORITY.query.inspectionTypeValue,
+      },
+      {
+        field: WB_E_COMPLETION_AUTHORITY.query.shiftIdField,
+        op: '==',
+        value: periodId,
+      },
+    ],
+  };
+}
+
+/**
+ * Match the FirebaseDvirTransport / buildCloudDocument schema only.
+ * Top-level inspectionType/shiftId and summary.shiftId are NOT the writer.
+ */
+export function dedicatedPostTripDocumentMatches(
+  data: Record<string, unknown>,
+  periodId: string,
+): boolean {
+  const summary = data.summary;
+  const report = data.report;
+  if (!summary || typeof summary !== 'object' || Array.isArray(summary)) return false;
+  if (!report || typeof report !== 'object' || Array.isArray(report)) return false;
+  const type = (summary as Record<string, unknown>).inspectionType;
+  const shift = (report as Record<string, unknown>).shiftId;
+  return type === 'post_trip' && shift === periodId;
+}
+
 function clientTimestampMs(raw: unknown): number | null {
   if (typeof raw !== 'string' || !raw) return null;
   const n = Date.parse(raw);
   return Number.isFinite(n) ? n : null;
+}
+
+function asString(raw: unknown): string | null {
+  return typeof raw === 'string' && raw.length > 0 ? raw : null;
 }
 
 /** Exact reviewed WBS mint shape (not identity). */
@@ -195,6 +325,26 @@ export function diagnosticMatchesIncidentShape(data: Record<string, unknown>, pe
   if (ts == null) return false;
   if (ts < d.clientTimestampMinMs || ts > d.clientTimestampMaxMs) return false;
   return true;
+}
+
+export function redactedDiagnosticTuples(
+  docs: DiagnosticDoc[],
+  periodId: string,
+): RedactedDiagnosticTuple[] {
+  return docs
+    .filter((d) => diagnosticMatchesIncidentShape(d.data, periodId))
+    .map((d) => ({
+      id: d.id,
+      app: asString(d.data.app),
+      area: asString(d.data.area),
+      event: asString(d.data.event),
+      result: asString(d.data.result),
+      reason: asString(d.data.reason),
+      source: asString(d.data.source),
+      shiftId: asString(d.data.shiftId),
+      clientTimestamp: asString(d.data.clientTimestamp),
+    }))
+    .sort((a, b) => a.id.localeCompare(b.id));
 }
 
 export function classifyDiagnosticDocs(
@@ -229,13 +379,6 @@ export function classifyDiagnosticDocs(
   return 'mismatch';
 }
 
-export function countPostTripMatches(
-  result: CompletionQuery,
-): { readable: boolean; matchingCount: number } {
-  if (!result.readable) return { readable: false, matchingCount: 0 };
-  return { readable: true, matchingCount: result.matchingCount };
-}
-
 export function snapshotFromEvidence(input: {
   request: UnclaimedRecoveryRequest;
   authority: ShiftAuthorityRecord | null;
@@ -243,17 +386,15 @@ export function snapshotFromEvidence(input: {
   nameIndexDriverId: string | null;
   credentialsActive: boolean | null;
   diagnosticBound: UnclaimedInspectSnapshot['diagnosticBound'];
-  diagnosticSample: Record<string, unknown> | null;
-  inspections: CompletionQuery;
-  reports: CompletionQuery;
+  diagnosticTuples: RedactedDiagnosticTuple[];
 }): UnclaimedInspectSnapshot {
   const originLocalDate = originDayOf(input.request.periodId) || '';
   const resolved = decideResolve(input.authority, {
     driverId: input.request.driverId,
     companyId: input.request.companyId,
   });
-  const insp = countPostTripMatches(input.inspections);
-  const reps = countPostTripMatches(input.reports);
+  const tuples = [...input.diagnosticTuples].sort((a, b) => a.id.localeCompare(b.id));
+  const selected = tuples[0] ?? null;
   return {
     driverId: input.request.driverId,
     companyId: input.request.companyId,
@@ -279,13 +420,23 @@ export function snapshotFromEvidence(input: {
     nameIndexMatch: input.nameIndexDriverId === input.request.driverId,
     credentialsActive: input.credentialsActive === true,
     diagnosticBound: input.diagnosticBound,
-    diagnosticSource: typeof input.diagnosticSample?.source === 'string' ? input.diagnosticSample.source : null,
-    diagnosticResult: typeof input.diagnosticSample?.result === 'string' ? input.diagnosticSample.result : null,
-    diagnosticReason: typeof input.diagnosticSample?.reason === 'string' ? input.diagnosticSample.reason : null,
-    diagnosticApp: typeof input.diagnosticSample?.app === 'string' ? input.diagnosticSample.app : null,
-    inspectionsPostTripMatching: insp.matchingCount,
-    reportsPostTripMatching: reps.matchingCount,
-    completionReadable: insp.readable && reps.readable,
+    diagnosticMatchingCount: tuples.length,
+    diagnosticTuples: tuples,
+    diagnosticSource: selected?.source ?? null,
+    diagnosticResult: selected?.result ?? null,
+    diagnosticReason: selected?.reason ?? null,
+    diagnosticApp: selected?.app ?? null,
+    diagnosticArea: selected?.area ?? null,
+    diagnosticEvent: selected?.event ?? null,
+    diagnosticShiftId: selected?.shiftId ?? null,
+    diagnosticClientTimestamp: selected?.clientTimestamp ?? null,
+    completionStoreKind: 'none_authoritative_server',
+    writerSha: WB_E_COMPLETION_AUTHORITY.writerSha,
+    dedicatedProjectProd: WB_E_COMPLETION_AUTHORITY.dedicatedProject.prod,
+    productionCloudWritesEnabled: WB_E_COMPLETION_AUTHORITY.productionCloudWritesEnabled,
+    productionAuthoritativeServerStore: WB_E_COMPLETION_AUTHORITY.productionAuthoritativeServerStore,
+    productionCompletion: WB_E_COMPLETION_AUTHORITY.productionCompletion,
+    crossProjectAtomicExclusion: WB_E_COMPLETION_AUTHORITY.crossProjectAtomicExclusion,
   };
 }
 
@@ -294,7 +445,7 @@ export function computeInspectFingerprint(
   sha256Hex: (s: string) => string,
 ): string {
   return sha256Hex(JSON.stringify({
-    schema: 2,
+    schema: 3,
     incident: INCIDENT.periodId,
     driverId: snap.driverId,
     companyId: snap.companyId,
@@ -313,13 +464,23 @@ export function computeInspectFingerprint(
     nameIndexMatch: snap.nameIndexMatch,
     credentialsActive: snap.credentialsActive,
     diagnosticBound: snap.diagnosticBound,
+    diagnosticMatchingCount: snap.diagnosticMatchingCount,
+    diagnosticTuples: snap.diagnosticTuples,
     diagnosticSource: snap.diagnosticSource,
     diagnosticResult: snap.diagnosticResult,
     diagnosticReason: snap.diagnosticReason,
     diagnosticApp: snap.diagnosticApp,
-    inspectionsPostTripMatching: snap.inspectionsPostTripMatching,
-    reportsPostTripMatching: snap.reportsPostTripMatching,
-    completionReadable: snap.completionReadable,
+    diagnosticArea: snap.diagnosticArea,
+    diagnosticEvent: snap.diagnosticEvent,
+    diagnosticShiftId: snap.diagnosticShiftId,
+    diagnosticClientTimestamp: snap.diagnosticClientTimestamp,
+    completionStoreKind: snap.completionStoreKind,
+    writerSha: snap.writerSha,
+    dedicatedProjectProd: snap.dedicatedProjectProd,
+    productionCloudWritesEnabled: snap.productionCloudWritesEnabled,
+    productionAuthoritativeServerStore: snap.productionAuthoritativeServerStore,
+    productionCompletion: snap.productionCompletion,
+    crossProjectAtomicExclusion: snap.crossProjectAtomicExclusion,
   }));
 }
 
@@ -350,8 +511,6 @@ function classifyRefusal(snap: UnclaimedInspectSnapshot, req: UnclaimedRecoveryR
     if (marker === '') return 'origin_day_conflict';
     if (marker && marker === req.periodId && snap.authorityState !== 'open') return 'origin_day_conflict';
   }
-  if (!snap.completionReadable) return 'completion_unreadable';
-  if (snap.inspectionsPostTripMatching > 0 || snap.reportsPostTripMatching > 0) return 'post_trip_exists';
   if (!(snap.initialized && snap.authorityState === 'none')) return 'authority_not_initialized_none';
   if (snap.authorityVersion !== req.expectedAuthorityVersion) return 'version_mismatch';
   if (snap.diagnosticBound === 'unreadable') return 'insufficient_evidence';
@@ -371,8 +530,25 @@ function classifyRefusal(snap: UnclaimedInspectSnapshot, req: UnclaimedRecoveryR
   if (snap.diagnosticSource !== INCIDENT.diagnostic.source
     || snap.diagnosticResult !== INCIDENT.diagnostic.result
     || snap.diagnosticReason !== INCIDENT.diagnostic.reason
-    || snap.diagnosticApp !== INCIDENT.diagnostic.app) {
+    || snap.diagnosticApp !== INCIDENT.diagnostic.app
+    || snap.diagnosticArea !== INCIDENT.diagnostic.area
+    || snap.diagnosticEvent !== INCIDENT.diagnostic.event
+    || snap.diagnosticShiftId !== INCIDENT.periodId) {
     return 'diagnostic_mismatch';
+  }
+  const ts = clientTimestampMs(snap.diagnosticClientTimestamp);
+  if (ts == null
+    || ts < INCIDENT.diagnostic.clientTimestampMinMs
+    || ts > INCIDENT.diagnostic.clientTimestampMaxMs) {
+    return 'diagnostic_mismatch';
+  }
+  // Production WB-E has no server-authoritative Post-Trip store. A
+  // dedicated-project read cannot join this wellbuilt-sync transaction.
+  // Absence of completion cannot be proven; execute must refuse.
+  if (WB_E_COMPLETION_AUTHORITY.productionAuthoritativeServerStore === false
+    || snap.productionAuthoritativeServerStore === false
+    || snap.completionStoreKind === 'none_authoritative_server') {
+    return 'no_authoritative_server_completion_store';
   }
   return null;
 }

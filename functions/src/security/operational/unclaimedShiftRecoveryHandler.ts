@@ -1,15 +1,22 @@
 /**
  * adminRecoverUnclaimedDriverShift — incident-bound inspect / execute.
  *
- * Authorizing Firestore evidence is re-read inside the execute transaction
- * via getQuery (not out-of-band collection scans).
+ * Authorizing wellbuilt-sync evidence (authority, origin-day, diagnostics)
+ * is re-read inside the execute transaction via getQuery (diagnostics)
+ * and tx.get (docs).
  *
- * Governed WB-E Post-Trip reports live at organizations/{companyId}/dvirReports
- * in the dedicated equipment Firebase project, which cannot join a
- * wellbuilt-sync transaction. This handler queries the same path ON
- * wellbuilt-sync (may be empty) and companies/{id}/dvir_inspections with
- * equality filters on period+post_trip. Unreadable/malformed/denied queries
- * deny recovery. Device AsyncStorage receipts are not a server store.
+ * WB-E Post-Trip, if a server store existed, would live at
+ * organizations/{orgId}/dvirReports on wellbuilt-equipment-prod
+ * (named app "dvir"), schema summary.inspectionType + report.shiftId.
+ * That project cannot join a wellbuilt-sync transaction.
+ *
+ * Production WB-E cloud writes are hard-disabled at writer SHA
+ * 994ddcee146194874bd8fa1b97b4990eb3193831. There is no
+ * server-authoritative Post-Trip store. Device-local completion is not
+ * a server store. wellbuilt-sync organizations/{id}/dvirReports is not
+ * queried and is not proof. Execute refuses
+ * no_authoritative_server_completion_store. This is not atomic
+ * completion exclusion — it is refusal because exclusion cannot be proven.
  */
 import { createHash } from 'crypto';
 import { AdminCallError, type AdminDeps, type AdminDocSnapshot } from '../../admin/adminDeps.js';
@@ -27,14 +34,15 @@ import {
   AUTHORITY_RECOVERED_EVENT_TYPE,
   INCIDENT,
   RECOVER_UNCLAIMED_OPERATION,
+  WB_E_COMPLETION_AUTHORITY,
   buildAuthorityRecoveredEvent,
   classifyDiagnosticDocs,
   computeInspectFingerprint,
   credentialsPath,
   decideUnclaimedRecovery,
-  diagnosticMatchesIncidentShape,
   nameIndexPath,
   recoveryAuditDocId,
+  redactedDiagnosticTuples,
   snapshotFromEvidence,
   type RecoverMode,
   type RecoveryQueryResult,
@@ -139,18 +147,6 @@ function toOriginDay(snap: AdminDocSnapshot) {
   };
 }
 
-function matchingCountForPeriod(result: RecoveryQueryResult, periodId: string): RecoveryQueryResult {
-  if (!result.readable) return { ...result, matchingCount: 0 };
-  const n = result.docs.filter((d) => {
-    const summary = d.data.summary as { inspectionType?: unknown; shiftId?: unknown } | undefined;
-    const type = d.data.inspectionType ?? summary?.inspectionType;
-    const shift = d.data.shiftId ?? d.data.periodId ?? summary?.shiftId;
-    const isPost = type === 'post_trip';
-    return isPost && (shift === periodId);
-  }).length;
-  return { ...result, matchingCount: n };
-}
-
 async function gather(
   get: (path: string) => Promise<AdminDocSnapshot>,
   getQuery: (spec: RecoveryQuerySpec) => Promise<RecoveryQueryResult>,
@@ -162,14 +158,7 @@ async function gather(
   const credSnap = await get(credentialsPath(req.driverId));
   const authoritySnap = await get(shiftAuthorityPath(req.driverId));
   const originSnap = await get(shiftDayPath(req.driverId, originLocalDate));
-  const [diagQ, inspQ, reportQ] = await Promise.all([
-    getQuery({ kind: 'minted_diagnostics', periodId: req.periodId }),
-    getQuery({ kind: 'sync_post_trip_inspections', companyId: req.companyId, periodId: req.periodId }),
-    getQuery({ kind: 'sync_dvir_reports', companyId: req.companyId, periodId: req.periodId }),
-  ]);
-
-  const inspections = matchingCountForPeriod(inspQ, req.periodId);
-  const reports = matchingCountForPeriod(reportQ, req.periodId);
+  const diagQ = await getQuery({ kind: 'minted_diagnostics', periodId: req.periodId });
 
   const hashCache = new Map<string, string | null>();
   const resolve = (hash: string) => {
@@ -190,7 +179,9 @@ async function gather(
     req.driverId,
     resolve,
   );
-  const sample = (diagQ.docs || []).find((d) => diagnosticMatchesIncidentShape(d.data, req.periodId))?.data ?? null;
+  const diagnosticTuples = diagQ.readable
+    ? redactedDiagnosticTuples(diagQ.docs || [], req.periodId)
+    : [];
 
   const nameIndexDriverId = typeof nameSnap.data?.driverId === 'string' ? nameSnap.data.driverId : null;
   const credentialsActive = credSnap.exists && credSnap.data?.active !== false;
@@ -203,9 +194,7 @@ async function gather(
     nameIndexDriverId,
     credentialsActive,
     diagnosticBound,
-    diagnosticSample: sample,
-    inspections,
-    reports,
+    diagnosticTuples,
   });
   const fingerprint = computeInspectFingerprint(snapshot, sha256Hex);
   return { authority, originSnap, snapshot, fingerprint };
@@ -225,17 +214,39 @@ function redactedEvidence(snapshot: ReturnType<typeof snapshotFromEvidence>) {
     nameIndexMatch: snapshot.nameIndexMatch,
     credentialsActive: snapshot.credentialsActive,
     diagnosticBound: snapshot.diagnosticBound,
-    postTripInspectionsMatching: snapshot.inspectionsPostTripMatching,
-    postTripReportsMatching: snapshot.reportsPostTripMatching,
-    completionReadable: snapshot.completionReadable,
+    diagnosticMatchingCount: snapshot.diagnosticMatchingCount,
+    diagnosticArea: snapshot.diagnosticArea,
+    diagnosticEvent: snapshot.diagnosticEvent,
+    diagnosticShiftId: snapshot.diagnosticShiftId,
+    diagnosticClientTimestamp: snapshot.diagnosticClientTimestamp,
+    completionStoreKind: snapshot.completionStoreKind,
+    writerSha: snapshot.writerSha,
+    dedicatedProjectProd: snapshot.dedicatedProjectProd,
+    productionCloudWritesEnabled: snapshot.productionCloudWritesEnabled,
+    productionAuthoritativeServerStore: snapshot.productionAuthoritativeServerStore,
+    productionCompletion: snapshot.productionCompletion,
+    crossProjectAtomicExclusion: snapshot.crossProjectAtomicExclusion,
   };
 }
 
 export const COMPLETION_STORE_NOTES = Object.freeze({
+  writerSha: WB_E_COMPLETION_AUTHORITY.writerSha,
+  writerTransport: WB_E_COMPLETION_AUTHORITY.writerTransport,
+  namedApp: WB_E_COMPLETION_AUTHORITY.namedApp,
+  dedicatedProjectProd: WB_E_COMPLETION_AUTHORITY.dedicatedProject.prod,
+  dedicatedProjectDev: WB_E_COMPLETION_AUTHORITY.dedicatedProject.dev,
+  forbiddenProject: WB_E_COMPLETION_AUTHORITY.forbiddenHostProject,
+  schema: 'DvirCloudDocument.summary.inspectionType + DvirCloudDocument.report.shiftId at organizations/{orgId}/dvirReports',
+  productionCloudWritesEnabled: WB_E_COMPLETION_AUTHORITY.productionCloudWritesEnabled,
+  productionAuthoritativeServerStore: WB_E_COMPLETION_AUTHORITY.productionAuthoritativeServerStore,
+  productionCompletion: WB_E_COMPLETION_AUTHORITY.productionCompletion,
+  crossProjectAtomicExclusion: WB_E_COMPLETION_AUTHORITY.crossProjectAtomicExclusion,
+  wellbuiltSyncOrganizationsDvirReports:
+    'NOT the WB-E store. Not queried. An empty same-named collection on wellbuilt-sync is not proof.',
+  dashboardInspections:
+    'wellbuilt-sync companies/{companyId}/dvir_inspections is dvir.submitPreTrip, inspectionType pre_trip only — not a Post-Trip completion store',
   suiteReceipt: 'device AsyncStorage @wb/suite-dvir-gate/v1/receipt/{shiftId}/post_trip — not a server store',
-  syncDashboardInspections: 'wellbuilt-sync companies/{companyId}/dvir_inspections — Dashboard eQuipment writer dvir.submitPreTrip is pre_trip only; queried with inspectionType==post_trip AND shiftId==period',
-  syncDvirReports: 'wellbuilt-sync organizations/{companyId}/dvirReports/{inspectionId} — queried inspectionType/summary.inspectionType==post_trip AND shiftId==period',
-  equipmentProjectReports: 'dedicated DVIR Firebase organizations/{companyId}/dvirReports — cannot join wellbuilt-sync transactions; unreadable/denied denies recovery',
+  execute: 'refuses no_authoritative_server_completion_store because production has no authoritative server completion store and cross-project atomic exclusion does not exist',
 });
 
 export async function recoverUnclaimedDriverShiftHandler(
