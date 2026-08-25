@@ -10,6 +10,7 @@ import type {
   PaperInvoiceIndexRecord,
   PaperRevisionRecord,
   PaperSourceEventRecord,
+  PaperReviewBatchRecord,
   PaperWorkflowRecord,
   TicketReviewEventRecord,
   TicketSourceRecord,
@@ -129,6 +130,68 @@ export function createFirestorePaperStore(deps?: {
     },
     async putReviewEvent(event) {
       await fs().collection('ticket_review_events').doc(event.mutationId).set(event);
+    },
+    async getReviewBatch(batchId) {
+      const snap = await fs().collection('ticket_review_batches').doc(batchId).get();
+      return snap.exists ? snap.data() as PaperReviewBatchRecord : null;
+    },
+    async reserveReviewBatch(input) {
+      const db = fs();
+      const ref = db.collection('ticket_review_batches').doc(input.batchId);
+      return db.runTransaction(async (tx) => {
+        const snap = await tx.get(ref);
+        if (snap.exists) {
+          const existing = snap.data() as PaperReviewBatchRecord;
+          if (
+            existing.digest !== input.digest
+            || existing.actorUid !== input.actorUid
+            || existing.companyId !== input.companyId
+            || existing.action !== input.action
+          ) {
+            return { ok: false as const, reason: 'batch_id_conflict', message: 'batchId is already bound to a different command.' };
+          }
+          return {
+            ok: true as const,
+            action: existing.status === 'complete' ? 'idempotent' as const : 'resume' as const,
+            record: existing,
+          };
+        }
+        const record: PaperReviewBatchRecord = {
+          batchId: input.batchId,
+          actorUid: input.actorUid,
+          companyId: input.companyId,
+          action: input.action,
+          digest: input.digest,
+          itemCount: input.itemCount,
+          results: [],
+          status: 'pending',
+          createdAtMs: input.nowMs,
+          updatedAtMs: input.nowMs,
+        };
+        tx.set(ref, record);
+        return { ok: true as const, action: 'created' as const, record };
+      });
+    },
+    async appendReviewBatchResultIfAbsent(batchId, index, result, nowMs) {
+      const db = fs();
+      const ref = db.collection('ticket_review_batches').doc(batchId);
+      return db.runTransaction(async (tx) => {
+        const snap = await tx.get(ref);
+        if (!snap.exists) throw new Error('batch_not_found');
+        const existing = snap.data() as PaperReviewBatchRecord;
+        const results = [...(existing.results || [])];
+        if (results[index]) return { ...existing, results };
+        if (results.length !== index) return { ...existing, results };
+        results.push(result);
+        const row: PaperReviewBatchRecord = {
+          ...existing,
+          results,
+          status: results.length >= existing.itemCount ? 'complete' : 'pending',
+          updatedAtMs: nowMs,
+        };
+        tx.set(ref, row);
+        return row;
+      });
     },
     async runReviewTransaction(fn) {
       const db = fs();

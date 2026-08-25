@@ -7,7 +7,9 @@ import type {
   PaperRevisionRecord,
   PaperSourceEventRecord,
   PaperSourceSnapshot,
+  PaperReviewBatchRecord,
   PaperWorkflowRecord,
+  TicketReviewBatchItemResult,
   TicketReviewEventRecord,
   TicketSourceRecord,
 } from './types';
@@ -43,6 +45,25 @@ export interface PaperStore {
   patchTicket(ticketDocId: string, patch: Record<string, unknown>): Promise<void>;
   patchInvoice(invoiceDocId: string, patch: Record<string, unknown>): Promise<void>;
   putReviewEvent(event: TicketReviewEventRecord): Promise<void>;
+  getReviewBatch(batchId: string): Promise<PaperReviewBatchRecord | null>;
+  reserveReviewBatch(input: {
+    batchId: string;
+    actorUid: string;
+    companyId: string;
+    action: 'hand_to_payroll' | 'finalize_to_billing';
+    digest: string;
+    itemCount: number;
+    nowMs: number;
+  }): Promise<
+    | { ok: true; action: 'created' | 'resume' | 'idempotent'; record: PaperReviewBatchRecord }
+    | { ok: false; reason: string; message: string }
+  >;
+  appendReviewBatchResultIfAbsent(
+    batchId: string,
+    index: number,
+    result: TicketReviewBatchItemResult,
+    nowMs: number,
+  ): Promise<PaperReviewBatchRecord>;
   runReviewTransaction<T>(fn: (store: PaperStore) => Promise<T>): Promise<T>;
   readHtmlBytes(path: string): Promise<Buffer | null>;
 
@@ -83,6 +104,7 @@ export class MemoryPaperStore implements PaperStore {
   sourceEvents = new Map<string, PaperSourceEventRecord>();
   workflows = new Map<string, PaperWorkflowRecord>();
   reviewEvents = new Map<string, TicketReviewEventRecord>();
+  reviewBatches = new Map<string, PaperReviewBatchRecord>();
   liveAssets = new Map<string, Buffer>();
   companyTimezones = new Map<string, string>();
   fetchCount = 0;
@@ -177,6 +199,67 @@ export class MemoryPaperStore implements PaperStore {
   }
   async putReviewEvent(event: TicketReviewEventRecord) {
     this.reviewEvents.set(event.mutationId, { ...event });
+  }
+  async getReviewBatch(batchId: string) {
+    const row = this.reviewBatches.get(batchId);
+    return row ? { ...row, results: row.results.map((r) => ({ ...r })) } : null;
+  }
+  async reserveReviewBatch(input: Parameters<PaperStore['reserveReviewBatch']>[0]) {
+    return this.runExclusive(() => {
+      const existing = this.reviewBatches.get(input.batchId);
+      if (existing) {
+        if (
+          existing.digest !== input.digest
+          || existing.actorUid !== input.actorUid
+          || existing.companyId !== input.companyId
+          || existing.action !== input.action
+        ) {
+          return { ok: false as const, reason: 'batch_id_conflict', message: 'batchId is already bound to a different command.' };
+        }
+        const record = { ...existing, results: existing.results.map((r) => ({ ...r })) };
+        return { ok: true as const, action: existing.status === 'complete' ? 'idempotent' as const : 'resume' as const, record };
+      }
+      const record: PaperReviewBatchRecord = {
+        batchId: input.batchId,
+        actorUid: input.actorUid,
+        companyId: input.companyId,
+        action: input.action,
+        digest: input.digest,
+        itemCount: input.itemCount,
+        results: [],
+        status: 'pending',
+        createdAtMs: input.nowMs,
+        updatedAtMs: input.nowMs,
+      };
+      this.reviewBatches.set(input.batchId, { ...record, results: [] });
+      return { ok: true as const, action: 'created' as const, record };
+    });
+  }
+  async appendReviewBatchResultIfAbsent(
+    batchId: string,
+    index: number,
+    result: TicketReviewBatchItemResult,
+    nowMs: number,
+  ) {
+    return this.runExclusive(() => {
+      const existing = this.reviewBatches.get(batchId);
+      if (!existing) throw new Error('batch_not_found');
+      if (existing.results[index]) {
+        return { ...existing, results: existing.results.map((r) => ({ ...r })) };
+      }
+      if (existing.results.length !== index) {
+        return { ...existing, results: existing.results.map((r) => ({ ...r })) };
+      }
+      const results = [...existing.results, { ...result }];
+      const row: PaperReviewBatchRecord = {
+        ...existing,
+        results,
+        status: results.length >= existing.itemCount ? 'complete' : 'pending',
+        updatedAtMs: nowMs,
+      };
+      this.reviewBatches.set(batchId, row);
+      return { ...row, results: results.map((r) => ({ ...r })) };
+    });
   }
   async runReviewTransaction<T>(fn: (store: PaperStore) => Promise<T>): Promise<T> {
     return this.runExclusive(() => fn(this));

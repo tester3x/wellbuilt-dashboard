@@ -26,6 +26,9 @@ match /ticket_review_states/{ticketDocId} {
 match /ticket_review_events/{mutationId} {
   allow read, write: if false;
 }
+match /ticket_review_batches/{batchId} {
+  allow read, write: if false;
+}
 ```
 
 ## Storage fragment (do not merge until authorized)

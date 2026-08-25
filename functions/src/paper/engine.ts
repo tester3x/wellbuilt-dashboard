@@ -1,5 +1,5 @@
-import { authorizePaperMaterialize, authorizePaperRead } from './access';
-import { evaluatePaperPresentation, paperBytesAllowed } from './actorPolicy';
+import { authorizePaperMaterialize } from './access';
+import { evaluatePaperPresentation, evaluateStoredPaperAccess, paperBytesAllowed } from './actorPolicy';
 import { asTrimmedString, DEFAULT_PAPER_TIMEZONE } from './format';
 import { hashExactBytes, utf8Bytes } from './hash';
 import { buildWaterTicketHtml, normalizePaperHtml } from './html';
@@ -274,14 +274,19 @@ export async function getWaterTicketPaper(input: {
 
   const artifact = await input.store.getArtifact(artifactId);
   if (!artifact) return { ok: false, reason: 'document_unavailable', message: 'Document unavailable.' };
-  const ticket = await input.store.getTicket(ticketDocId || artifact.ticketDocId);
+  const resolvedTicketId = ticketDocId || artifact.ticketDocId;
+  const ticket = await input.store.getTicket(resolvedTicketId);
+  const workflow = await input.store.getWorkflow(resolvedTicketId);
   if (!ticket) {
-    const access = authorizePaperRead(input.caller, artifact);
+    const access = evaluateStoredPaperAccess({
+      caller: input.caller,
+      artifact,
+      workflow,
+    });
     if (!access.ok) return { ok: false, reason: access.reason, message: access.message };
   } else {
     const invoiceId = asTrimmedString(ticket.invoiceDocId);
     const invoice = invoiceId ? await input.store.getInvoice(invoiceId) : null;
-    const workflow = await input.store.getWorkflow(ticket.id);
     const decision = evaluatePaperPresentation({
       caller: input.caller,
       ticket,

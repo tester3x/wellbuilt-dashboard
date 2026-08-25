@@ -282,25 +282,69 @@ export function workflowStageFor(
   invoice: InvoiceSourceRecord | null,
   workflow: PaperWorkflowRecord | null,
 ): PaperWorkflowStage | 'open' | 'unavailable' {
+  if (workflow) return workflow.stage;
   if (!invoiceLooksClosed(invoice) && !driverEditWindowOriginMs(invoice)) return 'open';
-  if (!workflow) return 'unavailable';
-  return workflow.stage;
+  return 'unavailable';
 }
 
 export function resolveStageActor(
   caller: PaperCaller,
   stage: PaperWorkflowStage | 'open' | 'unavailable',
+  opts?: { explicitCapsOnly?: boolean },
 ): PaperStageActor {
   if (caller.kind === 'driver') return 'driver';
   if (caller.isPlatformAdmin) return 'admin';
   if (stage === 'payroll_review' && callerHasCap(caller, 'approvePayroll')) return 'payroll';
   if (stage === 'payroll_review' && callerHasCap(caller, 'viewPayroll')) return 'viewer';
   if (stage === 'dispatch_review' && callerHasCap(caller, 'createDispatch')) return 'dispatch';
+  if (stage === 'dispatch_review' && (callerHasCap(caller, 'viewDispatch') || callerHasCap(caller, 'viewTickets'))) return 'viewer';
   if (stage === 'billing' && (callerHasCap(caller, 'editBilling') || callerHasCap(caller, 'viewBilling'))) return 'billing';
   if (stage === 'billing' && (callerHasCap(caller, 'approvePayroll') || callerHasCap(caller, 'viewPayroll'))) return 'payroll';
   if (stage === 'open' && callerHasCap(caller, 'createDispatch')) return 'dispatch';
-  if (dashboardCanReadPaper(caller)) return 'viewer';
+  if (callerHasCap(caller, 'viewTickets') || callerHasCap(caller, 'viewDispatch')) return 'viewer';
+  if (!opts?.explicitCapsOnly && dashboardCanReadPaper(caller)) return 'viewer';
   return 'none';
+}
+
+export function evaluateStoredPaperAccess(input: {
+  caller: PaperCaller;
+  artifact: { companyId: string; ownerDriverId: string };
+  workflow: PaperWorkflowRecord | null;
+}): { ok: true; reason: string } | { ok: false; reason: string; message: string } {
+  const companyId = asTrimmedString(input.artifact.companyId);
+  if (!companyId) {
+    return { ok: false, reason: 'company_required', message: 'Artifact has no companyId.' };
+  }
+  if (input.caller.kind === 'driver') {
+    if (asTrimmedString(input.caller.companyId) !== companyId) {
+      return { ok: false, reason: 'record_company_mismatch', message: 'Driver company does not match the artifact.' };
+    }
+    if (!input.caller.driverId || input.caller.driverId !== input.artifact.ownerDriverId) {
+      return { ok: false, reason: 'not_document_owner', message: 'Driver may only read their own paper.' };
+    }
+    return { ok: true, reason: 'driver_historical' };
+  }
+  if (input.caller.isPlatformAdmin) {
+    return { ok: true, reason: 'admin_view_paper' };
+  }
+  if (!input.caller.companyId || input.caller.companyId !== companyId) {
+    return { ok: false, reason: 'record_company_mismatch', message: 'Caller company does not match the artifact.' };
+  }
+  if (!input.workflow) {
+    return { ok: false, reason: 'workflow_unavailable', message: 'Ticket review state is not available.' };
+  }
+  const actor = resolveStageActor(input.caller, input.workflow.stage, { explicitCapsOnly: true });
+  if (actor === 'none') {
+    return {
+      ok: false,
+      reason: 'unauthorized',
+      message: 'Caller cannot access this ticket at the current review stage.',
+    };
+  }
+  return {
+    ok: true,
+    reason: actor === 'billing' ? 'billing_receives_paper' : 'stage_locked_paper',
+  };
 }
 
 export function allowedFieldsFor(actor: PaperStageActor, overrideActive: boolean): string[] {

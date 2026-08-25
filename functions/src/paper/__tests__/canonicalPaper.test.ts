@@ -362,11 +362,12 @@ describe('materialize + get (Tickets vs Dispatch same bytes)', () => {
     });
     store.tickets.delete(TICKET_20100_ID);
     store.invoices.delete(INVOICE_20100_ID);
+    const dispatchCap = { ...dispatchLg, caps: ['createDispatch', 'viewDispatch'] };
     const fromTicket = await getWaterTicketPaper({
-      store, caller: dispatchLg, lookup: { ticketDocId: TICKET_20100_ID },
+      store, caller: dispatchCap, lookup: { ticketDocId: TICKET_20100_ID },
     });
     const fromInvoice = await getWaterTicketPaper({
-      store, caller: dispatchLg, lookup: { invoiceDocId: INVOICE_20100_ID },
+      store, caller: dispatchCap, lookup: { invoiceDocId: INVOICE_20100_ID },
     });
     expect(fromTicket.ok && fromInvoice.ok).toBe(true);
     if (!fromTicket.ok || !fromInvoice.ok) return;

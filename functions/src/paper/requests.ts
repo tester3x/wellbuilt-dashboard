@@ -98,17 +98,23 @@ export function parseWorkflowTicketRequest(raw: unknown):
   return { ok: true, ticketDocId, reason, expectedVersion: version.expectedVersion };
 }
 
+const BATCH_ID_RE = /^[A-Za-z0-9._:-]{1,128}$/;
+
 export function parseReviewBatchRequest(raw: unknown):
-  | { ok: true; items: Array<{ ticketDocId: string; expectedVersion: number }> }
+  | { ok: true; batchId: string; items: Array<{ ticketDocId: string; expectedVersion: number }> }
   | { ok: false; reason: string; message: string } {
   if (!raw || typeof raw !== 'object' || Array.isArray(raw)) {
     return { ok: false, reason: 'invalid_request', message: 'Request must be an object.' };
   }
   const rec = raw as Record<string, unknown>;
   for (const key of Object.keys(rec)) {
-    if (key !== 'tickets') {
+    if (key !== 'tickets' && key !== 'batchId') {
       return { ok: false, reason: 'unexpected_field', message: `Unexpected field: ${key}` };
     }
+  }
+  const batchId = typeof rec.batchId === 'string' ? rec.batchId.trim() : '';
+  if (!BATCH_ID_RE.test(batchId)) {
+    return { ok: false, reason: 'invalid_request', message: 'batchId is required.' };
   }
   if (!Array.isArray(rec.tickets) || rec.tickets.length < 1) {
     return { ok: false, reason: 'invalid_request', message: 'tickets must be a non-empty list.' };
@@ -117,6 +123,7 @@ export function parseReviewBatchRequest(raw: unknown):
     return { ok: false, reason: 'invalid_request', message: 'tickets exceeds the bounded batch size.' };
   }
   const items: Array<{ ticketDocId: string; expectedVersion: number }> = [];
+  const seen = new Set<string>();
   for (const row of rec.tickets) {
     if (!row || typeof row !== 'object' || Array.isArray(row)) {
       return { ok: false, reason: 'invalid_request', message: 'Each ticket entry must be an object.' };
@@ -129,9 +136,13 @@ export function parseReviewBatchRequest(raw: unknown):
     }
     const ticketDocId = typeof entry.ticketDocId === 'string' ? entry.ticketDocId.trim() : '';
     if (!ticketDocId) return { ok: false, reason: 'ticket_id_required', message: 'ticketDocId is required.' };
+    if (seen.has(ticketDocId)) {
+      return { ok: false, reason: 'duplicate_ticket', message: 'Duplicate ticketDocId in batch.' };
+    }
+    seen.add(ticketDocId);
     const version = parseExpectedVersion(entry.expectedVersion);
     if (!version.ok) return version;
     items.push({ ticketDocId, expectedVersion: version.expectedVersion });
   }
-  return { ok: true, items };
+  return { ok: true, batchId, items };
 }

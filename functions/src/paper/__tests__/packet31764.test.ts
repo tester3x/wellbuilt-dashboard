@@ -351,8 +351,16 @@ describe('request parsers require expectedVersion', () => {
   it('batch handoff accepts a one-ticket list and rejects an empty list', () => {
     expect(parseReviewBatchRequest({ tickets: [] })).toMatchObject({ ok: false, reason: 'invalid_request' });
     expect(parseReviewBatchRequest({
+      batchId: 'b1',
       tickets: [{ ticketDocId: 't1', expectedVersion: 1 }],
-    })).toMatchObject({ ok: true, items: [{ ticketDocId: 't1', expectedVersion: 1 }] });
+    })).toMatchObject({ ok: true, batchId: 'b1', items: [{ ticketDocId: 't1', expectedVersion: 1 }] });
+    expect(parseReviewBatchRequest({
+      batchId: 'b1',
+      tickets: [
+        { ticketDocId: 't1', expectedVersion: 1 },
+        { ticketDocId: 't1', expectedVersion: 2 },
+      ],
+    })).toMatchObject({ ok: false, reason: 'duplicate_ticket' });
   });
 });
 

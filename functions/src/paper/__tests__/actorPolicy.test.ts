@@ -663,6 +663,7 @@ describe('packet 31764 presentation and CAS', () => {
       store,
       caller: dispatchCap,
       action: 'hand_to_payroll',
+      batchId: 'handoff-1',
       items: [
         { ticketDocId: TICKET_20100_ID, expectedVersion: 1 },
         { ticketDocId: ticketB, expectedVersion: 9 },
@@ -670,24 +671,45 @@ describe('packet 31764 presentation and CAS', () => {
       nowMs: CLOSED_AT_MS + 5,
     });
     expect(first.ok).toBe(true);
+    if (!first.ok) return;
     expect(first.results).toHaveLength(2);
     expect(first.results.every((row) => row.ok)).toBe(true);
     const events = [...store.reviewEvents.values()];
     expect(events).toHaveLength(2);
     expect(new Set(events.map((e) => e.batchId)).size).toBe(1);
-    expect(events[0].batchId).toBe(first.batchId);
+    expect(events[0].batchId).toBe('handoff-1');
 
-    const dup = await applyTicketReviewBatch({
+    const retry = await applyTicketReviewBatch({
       store,
       caller: dispatchCap,
       action: 'hand_to_payroll',
+      batchId: 'handoff-1',
       items: [
         { ticketDocId: TICKET_20100_ID, expectedVersion: 1 },
         { ticketDocId: ticketB, expectedVersion: 9 },
       ],
       nowMs: CLOSED_AT_MS + 6,
     });
-    expect(dup.results.every((row) => !row.ok)).toBe(true);
-    expect(dup.results.map((row) => !row.ok && row.reason)).toEqual(['version_conflict', 'version_conflict']);
+    expect(retry.ok).toBe(true);
+    if (!retry.ok) return;
+    expect(retry.idempotent).toBe(true);
+    expect(retry.results).toEqual(first.results);
+    expect(store.reviewEvents.size).toBe(2);
+
+    const other = await applyTicketReviewBatch({
+      store,
+      caller: dispatchCap,
+      action: 'hand_to_payroll',
+      batchId: 'handoff-2',
+      items: [
+        { ticketDocId: TICKET_20100_ID, expectedVersion: 1 },
+        { ticketDocId: ticketB, expectedVersion: 9 },
+      ],
+      nowMs: CLOSED_AT_MS + 7,
+    });
+    expect(other.ok).toBe(true);
+    if (!other.ok) return;
+    expect(other.results.every((row) => !row.ok)).toBe(true);
+    expect(other.results.map((row) => !row.ok && row.reason)).toEqual(['version_conflict', 'version_conflict']);
   });
 });

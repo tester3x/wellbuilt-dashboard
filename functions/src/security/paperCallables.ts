@@ -16,20 +16,21 @@ import { requireSecureDriver } from './requireDriverAuth';
 function throwPaper(reason: string, message: string): never {
   const code = reason === 'wrong_company' || reason === 'caller_unscoped'
     || reason === 'missing_capability' || reason === 'not_document_owner'
-    || reason === 'drivers_cannot_materialize' || reason === 'unauthorized'
+    || reason === 'drivers_cannot_materialize' || reason === 'drivers_cannot_correct' || reason === 'unauthorized'
     || reason === 'driver_deactivated' || reason === 'not_dashboard_user'
     || reason === 'driver_unauthenticated' || reason === 'not_ticket_owner'
     ? 'permission-denied'
     : reason === 'unexpected_field' || reason === 'invalid_request' || reason === 'lookup_required'
       || reason === 'ticket_id_required' || reason === 'op_required' || reason === 'ambiguous_lookup'
       || reason === 'expected_version_required' || reason === 'invalid_field_type' || reason === 'invalid_field_value'
+      || reason === 'duplicate_ticket'
       ? 'invalid-argument'
     : reason === 'unauthenticated'
       ? 'unauthenticated'
       : reason === 'document_unavailable' || reason === 'ticket_not_found' || reason === 'invoice_not_found'
         || reason === 'event_not_found'
         ? 'not-found'
-        : reason === 'version_conflict'
+        : reason === 'version_conflict' || reason === 'batch_id_conflict'
           ? 'aborted'
         : reason === 'edit_window_expired' || reason === 'edit_window_unknown' || reason === 'policy_undefined'
           || reason === 'no_effective_change' || reason === 'paper_not_visible'
@@ -234,13 +235,16 @@ async function runReviewBatchCallable(
   const parsed = parseReviewBatchRequest(request.data);
   if (!parsed.ok) throwPaper(parsed.reason, parsed.message);
   const store = createFirestorePaperStore();
-  return applyTicketReviewBatch({
+  const result = await applyTicketReviewBatch({
     store,
     caller,
     action,
     items: parsed.items,
+    batchId: parsed.batchId,
     nowMs: Date.now(),
   });
+  if (!result.ok) throwPaper(result.reason, result.message);
+  return result;
 }
 
 export const staffHandReviewBatchToPayroll = httpsV2.onCall(

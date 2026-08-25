@@ -5,9 +5,9 @@
  */
 import * as admin from 'firebase-admin';
 import { createFirestorePaperStore } from '../firestoreStore';
-import { materializeWaterTicketPaper } from '../engine';
+import { getWaterTicketPaper, materializeWaterTicketPaper } from '../engine';
 import { applyInvoicePaperLifecycle, applyTicketPaperLifecycle } from '../lifecycle';
-import { applyTicketReviewAction } from '../ticketReview';
+import { applyTicketReviewAction, applyTicketReviewBatch } from '../ticketReview';
 import { parseGovernedStorageUri } from '../storageUri';
 import { waterTicketArtifactId } from '../types';
 import {
@@ -21,13 +21,18 @@ import {
   TICKET_20100_ID,
   invoice20100,
   dispatchLg,
+  driverOther,
+  driverOwner,
+  payrollLg,
   staffLg,
+  staffOther,
   ticket20100,
 } from './fixture20100';
 
 const EMULATOR = process.env.FIRESTORE_EMULATOR_HOST;
 const PROJECT = process.env.GCLOUD_PROJECT || 'wellbuilt-sync';
 const describeE2E = EMULATOR ? describe : describe.skip;
+jest.setTimeout(60000);
 
 function memBucket() {
   const files = new Map<string, Buffer>();
@@ -479,7 +484,7 @@ describeE2E('firestore emulator: write-order, retry, tenant assets', () => {
 
     const invoiceEditMs = CLOSED_AT_MS + 30;
     const invoiceBefore = { ...(invoiceAfter as object) } as Record<string, unknown>;
-    const invoiceOrdinary = { ...invoiceBefore, operator: 'Edited Operator', paperMutationId: mutationA, editedAt: invoiceEditMs };
+    const invoiceOrdinary = { ...invoiceBefore, operator: 'Edited Operator', paperMutationId: mutationA, updatedAt: invoiceEditMs, editedAt: invoiceEditMs };
     await db.collection('invoices').doc(invoiceId).set(invoiceOrdinary);
     const i4 = await applyInvoicePaperLifecycle({
       store, invoiceId, before: invoiceBefore, after: invoiceOrdinary, nowMs: invoiceEditMs,
@@ -518,5 +523,123 @@ describeE2E('firestore emulator: write-order, retry, tenant assets', () => {
     expect(ok).toHaveLength(1);
     expect(fail).toHaveLength(1);
     expect(fail[0]).toMatchObject({ ok: false, reason: 'version_conflict' });
+  });
+
+  it('batch retry returns original results and rejects duplicate ids', async () => {
+    const db = app.firestore();
+    const ticketId = `${TICKET_20100_ID}-batch`;
+    const invoiceId = `${INVOICE_20100_ID}-batch`;
+    await db.collection('tickets').doc(ticketId).set({ ...ticket20100, id: ticketId, invoiceDocId: invoiceId });
+    await db.collection('invoices').doc(invoiceId).set({ ...invoice20100, id: invoiceId, status: 'closed' });
+    const store = storeFor(db);
+    expect((await applyInvoicePaperLifecycle({
+      store, invoiceId, before: { status: 'open' },
+      after: { ...invoice20100, id: invoiceId, status: 'closed', closedAtMs: CLOSED_AT_MS },
+      nowMs: CLOSED_AT_MS,
+    })).class).toBe('success');
+    const dispatchCap = { ...dispatchLg, caps: ['createDispatch'] };
+    const review = await store.getWorkflow(ticketId);
+    const items = [{ ticketDocId: ticketId, expectedVersion: review?.version ?? 1 }];
+    const first = await applyTicketReviewBatch({
+      store, caller: dispatchCap, action: 'hand_to_payroll', items, batchId: 'emu-batch-1', nowMs: CLOSED_AT_MS + 1,
+    });
+    expect(first.ok).toBe(true);
+    if (!first.ok) return;
+    const retry = await applyTicketReviewBatch({
+      store, caller: dispatchCap, action: 'hand_to_payroll', items, batchId: 'emu-batch-1', nowMs: CLOSED_AT_MS + 2,
+    });
+    expect(retry.ok).toBe(true);
+    if (!retry.ok) return;
+    expect(retry.idempotent).toBe(true);
+    expect(retry.results).toEqual(first.results);
+    const clash = await applyTicketReviewBatch({
+      store, caller: dispatchCap, action: 'finalize_to_billing', items, batchId: 'emu-batch-1', nowMs: CLOSED_AT_MS + 3,
+    });
+    expect(clash).toMatchObject({ ok: false, reason: 'batch_id_conflict' });
+    const dup = await applyTicketReviewBatch({
+      store,
+      caller: dispatchCap,
+      action: 'hand_to_payroll',
+      batchId: 'emu-batch-dup',
+      items: [
+        { ticketDocId: ticketId, expectedVersion: 1 },
+        { ticketDocId: ticketId, expectedVersion: 1 },
+      ],
+      nowMs: CLOSED_AT_MS + 4,
+    });
+    expect(dup).toMatchObject({ ok: false, reason: 'duplicate_ticket' });
+  });
+
+  it('deleted live sources remain stage-aware for paper bytes', async () => {
+    const db = app.firestore();
+    const ticketId = `${TICKET_20100_ID}-hist`;
+    const invoiceId = `${INVOICE_20100_ID}-hist`;
+    await db.collection('tickets').doc(ticketId).set({ ...ticket20100, id: ticketId, invoiceDocId: invoiceId });
+    await db.collection('invoices').doc(invoiceId).set({ ...invoice20100, id: invoiceId, status: 'closed' });
+    const store = storeFor(db);
+    expect((await applyInvoicePaperLifecycle({
+      store, invoiceId, before: { status: 'open' },
+      after: { ...invoice20100, id: invoiceId, status: 'closed', closedAtMs: CLOSED_AT_MS },
+      nowMs: CLOSED_AT_MS,
+    })).class).toBe('success');
+    const dispatchCap = { ...dispatchLg, caps: ['createDispatch', 'viewDispatch'] };
+    const payrollCap = { ...payrollLg, caps: ['approvePayroll', 'viewPayroll'] };
+    await db.collection('tickets').doc(ticketId).delete();
+    await db.collection('invoices').doc(invoiceId).delete();
+    expect((await getWaterTicketPaper({
+      store, caller: dispatchCap, lookup: { ticketDocId: ticketId }, nowMs: CLOSED_AT_MS,
+    })).ok).toBe(true);
+    expect((await getWaterTicketPaper({
+      store, caller: payrollCap, lookup: { ticketDocId: ticketId }, nowMs: CLOSED_AT_MS,
+    })).ok).toBe(false);
+    expect((await getWaterTicketPaper({
+      store, caller: driverOwner, lookup: { ticketDocId: ticketId }, nowMs: CLOSED_AT_MS,
+    })).ok).toBe(true);
+    expect((await getWaterTicketPaper({
+      store, caller: driverOther, lookup: { ticketDocId: ticketId }, nowMs: CLOSED_AT_MS,
+    })).ok).toBe(false);
+    expect((await getWaterTicketPaper({
+      store, caller: staffOther, lookup: { ticketDocId: ticketId }, nowMs: CLOSED_AT_MS,
+    })).ok).toBe(false);
+  });
+
+  it('mirrored stale invoice truck creates one correction revision', async () => {
+    const db = app.firestore();
+    const ticketId = `${TICKET_20100_ID}-mirror`;
+    const invoiceId = `${INVOICE_20100_ID}-mirror`;
+    await db.collection('tickets').doc(ticketId).set({ ...ticket20100, id: ticketId, invoiceDocId: invoiceId });
+    await db.collection('invoices').doc(invoiceId).set({ ...invoice20100, id: invoiceId, status: 'closed', truckNumber: '000' });
+    const store = storeFor(db);
+    expect((await applyInvoicePaperLifecycle({
+      store, invoiceId, before: { status: 'open' },
+      after: { ...invoice20100, id: invoiceId, status: 'closed', closedAtMs: CLOSED_AT_MS, truckNumber: '000' },
+      nowMs: CLOSED_AT_MS,
+    })).class).toBe('success');
+    const dispatchCap = { ...dispatchLg, caps: ['createDispatch'] };
+    const review = await store.getWorkflow(ticketId);
+    const corrected = await applyTicketReviewAction({
+      store, caller: dispatchCap, ticketDocId: ticketId, action: 'correct',
+      fields: { truck: '102' }, nowMs: CLOSED_AT_MS + 10, expectedVersion: review?.version ?? 1,
+    });
+    expect(corrected.ok).toBe(true);
+    if (!corrected.ok) return;
+    const ticketAfter = await store.getTicket(ticketId);
+    const invoiceAfter = await store.getInvoice(invoiceId);
+    await Promise.all([
+      applyTicketPaperLifecycle({
+        store, ticketId,
+        before: { ...ticket20100, id: ticketId } as Record<string, unknown>,
+        after: { ...(ticketAfter as object) } as Record<string, unknown>,
+        nowMs: CLOSED_AT_MS + 11,
+      }),
+      applyInvoicePaperLifecycle({
+        store, invoiceId,
+        before: { ...invoice20100, id: invoiceId, status: 'closed', truckNumber: '000' } as Record<string, unknown>,
+        after: { ...(invoiceAfter as object) } as Record<string, unknown>,
+        nowMs: CLOSED_AT_MS + 11,
+      }),
+    ]);
+    expect(await store.getRevision(waterTicketArtifactId(ticketId), 'r2')).toBeTruthy();
+    expect(await store.getRevision(waterTicketArtifactId(ticketId), 'r3')).toBeNull();
   });
 });

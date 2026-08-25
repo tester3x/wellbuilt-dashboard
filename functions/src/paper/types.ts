@@ -215,6 +215,23 @@ export interface TicketReviewEventRecord {
   batchId?: string;
 }
 
+export type TicketReviewBatchItemResult =
+  | { ok: true; ticketDocId: string; via: string; mutationId: string; stage: string; version: number }
+  | { ok: false; ticketDocId: string; reason: string; message: string };
+
+export interface PaperReviewBatchRecord {
+  batchId: string;
+  actorUid: string;
+  companyId: string;
+  action: 'hand_to_payroll' | 'finalize_to_billing';
+  digest: string;
+  itemCount: number;
+  results: TicketReviewBatchItemResult[];
+  status: 'pending' | 'complete';
+  createdAtMs: number;
+  updatedAtMs: number;
+}
+
 export interface PaperSourceEventRecord {
   sourceEventId: string;
   artifactId: string;
