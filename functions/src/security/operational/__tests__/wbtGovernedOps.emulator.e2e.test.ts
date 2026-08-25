@@ -16,7 +16,15 @@ import {
 import { runIngestWbmEdit } from '../ingestWbmEdit';
 import {
   applyStatePath,
+  armGovernedEditLeaseHold,
+  clearGovernedEditLeaseHold,
+  decideAdvancePhase,
+  parseApplyState,
   setGovernedEditApplyFault,
+  setGovernedEditLeaseMs,
+  shouldRetriggerEditIncoming,
+  VERSION_LEDGER_PATH,
+  withPhase,
 } from '../governedEditApplyState';
 
 const EMULATOR = process.env.FIREBASE_DATABASE_EMULATOR_HOST;
@@ -65,8 +73,16 @@ describeE2E('emulator: real processIncomingEdit governed edit path', () => {
     db = admin.database();
   });
 
-  beforeEach(async () => {
+  afterEach(() => {
+    clearGovernedEditLeaseHold();
     setGovernedEditApplyFault(null);
+    setGovernedEditLeaseMs(30_000);
+  });
+
+  beforeEach(async () => {
+    clearGovernedEditLeaseHold();
+    setGovernedEditApplyFault(null);
+    setGovernedEditLeaseMs(30_000);
     await db.ref('packets').set(null);
     await db.ref('well_config').set(null);
     await db.ref('wells').set(null);
@@ -735,4 +751,354 @@ describeE2E('emulator: real processIncomingEdit governed edit path', () => {
     expect(replay).toMatchObject({ ok: true, status: 'accepted' });
     expect(await version()).toBe(1);
   });
+
+  async function waitFor(pred: () => Promise<boolean>, ms = 8000): Promise<void> {
+    const start = Date.now();
+    while (Date.now() - start < ms) {
+      if (await pred()) return;
+      await new Promise((r) => setTimeout(r, 25));
+    }
+    throw new Error('waitFor timeout');
+  }
+
+  async function ledgerClaim(editEventId: string): Promise<{ payloadDigest: string; seq: number } | null> {
+    const v = (await db.ref(`${VERSION_LEDGER_PATH}/claims/${editEventId}`).once('value')).val();
+    if (!v || typeof v !== 'object') return null;
+    return v as { payloadDigest: string; seq: number };
+  }
+
+  it('two different edits concurrent versioning each keep an event-specific claim', async () => {
+    await seedOriginal();
+    const queuedA = await ingest(packetA);
+    const queuedB = await ingest({
+      ...packetA,
+      editEventId: EVENT_B,
+      idempotencyKey: EVENT_B,
+      tankLevelFeet: 9.0,
+      bblsTaken: 130,
+    });
+    expect(queuedA.ok && queuedB.ok).toBe(true);
+    if (!queuedA.ok || !queuedB.ok) return;
+
+    await Promise.all([
+      invokeHandler(queuedA.incomingPath),
+      invokeHandler(queuedB.incomingPath),
+    ]);
+
+    const claimA = await ledgerClaim(EVENT_A);
+    const claimB = await ledgerClaim(EVENT_B);
+    expect(claimA?.payloadDigest).toBe(queuedA.payloadDigest);
+    expect(claimB?.payloadDigest).toBe(queuedB.payloadDigest);
+    expect(claimA?.seq).not.toBe(claimB?.seq);
+    expect(typeof claimA?.seq).toBe('number');
+    expect(typeof claimB?.seq).toBe('number');
+    expect(await version()).toBe(2);
+    expect((await db.ref(wbmEditReceiptPath(EVENT_A)).once('value')).val().status).toBe('accepted');
+    expect((await db.ref(wbmEditReceiptPath(EVENT_B)).once('value')).val().status).toBe('accepted');
+    const history = (await db.ref(`packets/editHistory/${PID}`).once('value')).val() as Record<string, unknown>;
+    expect(Object.keys(history).sort()).toEqual([EVENT_A, EVENT_B].sort());
+    expect((history[EVENT_A] as Record<string, unknown>).packetId).toBe(PID);
+    expect((history[EVENT_B] as Record<string, unknown>).packetId).toBe(PID);
+  });
+
+  it('A crash then B publish does not let A treat B\'s counter as A\'s proof', async () => {
+    await seedOriginal();
+    const queuedA = await ingest(packetA);
+    const queuedB = await ingest({
+      ...packetA,
+      editEventId: EVENT_B,
+      idempotencyKey: EVENT_B,
+      tankLevelFeet: 9.0,
+      bblsTaken: 130,
+    });
+    if (!queuedA.ok || !queuedB.ok) return;
+
+    setGovernedEditApplyFault('after_downstream');
+    await expect(invokeHandler(queuedA.incomingPath)).rejects.toThrow('GOVERNED_EDIT_APPLY_FAULT:after_downstream');
+    expect(await ledgerClaim(EVENT_A)).toBeNull();
+    expect(await version()).toBe(0);
+
+    setGovernedEditApplyFault(null);
+    await invokeHandler(queuedB.incomingPath);
+    const claimB = await ledgerClaim(EVENT_B);
+    expect(claimB?.seq).toBe(1);
+    expect(await version()).toBe(1);
+    expect((await db.ref(wbmEditReceiptPath(EVENT_A)).once('value')).val() == null
+      || (await db.ref(wbmEditReceiptPath(EVENT_A)).once('value')).val().status !== 'accepted').toBe(true);
+
+    await invokeHandler(queuedA.incomingPath);
+    const claimA = await ledgerClaim(EVENT_A);
+    expect(claimA?.seq).toBe(2);
+    expect(claimA?.seq).not.toBe(claimB?.seq);
+    expect(await version()).toBe(2);
+    expect((await db.ref(wbmEditReceiptPath(EVENT_A)).once('value')).val().status).toBe('accepted');
+    expect((await db.ref(wbmEditReceiptPath(EVENT_B)).once('value')).val().status).toBe('accepted');
+  });
+
+  it('same event two concurrent invocations: one owner, one history, one version claim', async () => {
+    await seedOriginal();
+    const queued = await ingest(packetA);
+    if (!queued.ok) return;
+    const release = armGovernedEditLeaseHold();
+    const first = invokeHandler(queued.incomingPath);
+    await waitFor(async () => {
+      const st = (await db.ref(applyStatePath(EVENT_A)).once('value')).val();
+      return !!(st && st.lease && st.lease.ownerId);
+    });
+    await invokeHandler(queued.incomingPath);
+    release();
+    await first;
+
+    const history = (await db.ref(`packets/editHistory/${PID}`).once('value')).val() as Record<string, unknown>;
+    expect(Object.keys(history)).toEqual([EVENT_A]);
+    expect(await ledgerClaim(EVENT_A)).toMatchObject({ payloadDigest: queued.payloadDigest, seq: 1 });
+    expect(await version()).toBe(1);
+    expect((await db.ref(wbmEditReceiptPath(EVENT_A)).once('value')).val().status).toBe('accepted');
+    expect((await db.ref(`packets/processed/${PID}`).once('value')).val().bblsTaken).toBe(140);
+  });
+
+  it('resumeAt during active execution does not duplicate apply', async () => {
+    await seedOriginal();
+    const queued = await ingest(packetA);
+    if (!queued.ok) return;
+    const release = armGovernedEditLeaseHold();
+    const first = invokeHandler(queued.incomingPath);
+    await waitFor(async () => {
+      const st = (await db.ref(applyStatePath(EVENT_A)).once('value')).val();
+      return !!(st && st.lease);
+    });
+    await db.ref(queued.incomingPath).update({ resumeAt: Date.now() });
+    await invokeHandler(queued.incomingPath);
+    release();
+    await first;
+    expect(Object.keys((await db.ref(`packets/editHistory/${PID}`).once('value')).val())).toEqual([EVENT_A]);
+    expect(await version()).toBe(1);
+  });
+
+  it('watchdog resumeAt during active execution does not duplicate apply', async () => {
+    await seedOriginal();
+    const queued = await ingest(packetA);
+    if (!queued.ok) return;
+    const release = armGovernedEditLeaseHold();
+    const first = invokeHandler(queued.incomingPath);
+    await waitFor(async () => {
+      const st = (await db.ref(applyStatePath(EVENT_A)).once('value')).val();
+      return !!(st && st.lease);
+    });
+    const st = parseApplyState((await db.ref(applyStatePath(EVENT_A)).once('value')).val());
+    expect(shouldRetriggerEditIncoming({ isGoverned: true, applyState: st })).toBe(true);
+    await db.ref(queued.incomingPath).update({ resumeAt: Date.now() });
+    await invokeHandler(queued.incomingPath);
+    release();
+    await first;
+    expect(Object.keys((await db.ref(`packets/editHistory/${PID}`).once('value')).val())).toEqual([EVENT_A]);
+    expect(await version()).toBe(1);
+  });
+
+  it('stale owner cannot regress a newer checkpoint after lease expiry takeover', async () => {
+    await seedOriginal();
+    const queued = await ingest(packetA);
+    if (!queued.ok) return;
+    setGovernedEditLeaseMs(200);
+    const release = armGovernedEditLeaseHold();
+    const stale = invokeHandler(queued.incomingPath);
+    await waitFor(async () => {
+      const st = (await db.ref(applyStatePath(EVENT_A)).once('value')).val();
+      return !!(st && st.lease);
+    });
+    await new Promise((r) => setTimeout(r, 250));
+    await invokeHandler(queued.incomingPath);
+    expect((await db.ref(wbmEditReceiptPath(EVENT_A)).once('value')).val().status).toBe('accepted');
+    const advanced = parseApplyState((await db.ref(applyStatePath(EVENT_A)).once('value')).val());
+    expect(advanced?.phase).toBe('terminal');
+    release();
+    await stale;
+    const after = parseApplyState((await db.ref(applyStatePath(EVENT_A)).once('value')).val());
+    expect(after?.phase).toBe('terminal');
+    expect(after?.assignedVersion).toBe(1);
+    expect(await version()).toBe(1);
+    expect(Object.keys((await db.ref(`packets/editHistory/${PID}`).once('value')).val())).toEqual([EVENT_A]);
+  });
+
+  it('lease expiry recovery: expired owner is taken over and the edit finishes', async () => {
+    await seedOriginal();
+    const queued = await ingest(packetA);
+    if (!queued.ok) return;
+    const now = Date.now();
+    await db.ref(applyStatePath(EVENT_A)).set({
+      editEventId: EVENT_A,
+      originalPacketId: PID,
+      incomingId: EVENT_A,
+      payloadDigest: queued.payloadDigest,
+      wellName: 'Gabriel 5',
+      noLevel: false,
+      phase: 'captured',
+      historyWritten: false,
+      processedWritten: false,
+      outgoingRequired: false,
+      outgoingCommitted: false,
+      wellStatusCommitted: false,
+      versionPublished: false,
+      publishedVersion: null,
+      assignedVersion: null,
+      seqBefore: null,
+      incomingPayload: packetA,
+      lease: { ownerId: 'dead-owner', expiresAt: now - 5_000 },
+      createdAt: new Date(now).toISOString(),
+      updatedAt: new Date(now).toISOString(),
+    });
+    await invokeHandler(queued.incomingPath);
+    expect((await db.ref(wbmEditReceiptPath(EVENT_A)).once('value')).val().status).toBe('accepted');
+    expect(await version()).toBe(1);
+    const st = parseApplyState((await db.ref(applyStatePath(EVENT_A)).once('value')).val());
+    expect(st?.phase).toBe('terminal');
+    expect(st?.lease == null || st?.lease?.ownerId !== 'dead-owner').toBe(true);
+  });
+
+  it('phase monotonicity: versioned→mutated and terminal→downstream are keep/no-op', async () => {
+    await seedOriginal();
+    const queued = await ingest(packetA);
+    if (!queued.ok) return;
+    setGovernedEditApplyFault('after_versioned');
+    await expect(invokeHandler(queued.incomingPath)).rejects.toThrow('GOVERNED_EDIT_APPLY_FAULT:after_versioned');
+    const versioned = parseApplyState((await db.ref(applyStatePath(EVENT_A)).once('value')).val());
+    expect(versioned?.phase).toBe('versioned');
+    expect(versioned?.assignedVersion).toBe(1);
+
+    await db.ref(applyStatePath(EVENT_A)).transaction((raw) => {
+      const current = parseApplyState(raw);
+      const decision = decideAdvancePhase({
+        current,
+        desired: withPhase(current || versioned!, 'mutated', {
+          versionPublished: false,
+          publishedVersion: null,
+          assignedVersion: null,
+        }, new Date().toISOString()),
+        ownerId: 'stale',
+        nowMs: Date.now(),
+      });
+      if (decision.action === 'write') return decision.state;
+      if (decision.action === 'keep') return raw;
+      return;
+    });
+    const stillVersioned = parseApplyState((await db.ref(applyStatePath(EVENT_A)).once('value')).val());
+    expect(stillVersioned?.phase).toBe('versioned');
+    expect(stillVersioned?.assignedVersion).toBe(1);
+    expect(stillVersioned?.publishedVersion).toBe(1);
+    expect(stillVersioned?.versionPublished).toBe(true);
+
+    setGovernedEditApplyFault(null);
+    await invokeHandler(queued.incomingPath);
+    const terminal = parseApplyState((await db.ref(applyStatePath(EVENT_A)).once('value')).val());
+    expect(terminal?.phase).toBe('terminal');
+    await db.ref(applyStatePath(EVENT_A)).transaction((raw) => {
+      const current = parseApplyState(raw);
+      const decision = decideAdvancePhase({
+        current,
+        desired: withPhase(current || terminal!, 'downstream', {}, new Date().toISOString()),
+        ownerId: 'stale',
+        nowMs: Date.now(),
+      });
+      if (decision.action === 'write') return decision.state;
+      if (decision.action === 'keep') return raw;
+      return;
+    });
+    const stillTerminal = parseApplyState((await db.ref(applyStatePath(EVENT_A)).once('value')).val());
+    expect(stillTerminal?.phase).toBe('terminal');
+    expect(stillTerminal?.assignedVersion).toBe(1);
+    expect(await version()).toBe(1);
+  });
+
+  it('crash before captured: watchdog/retry reconstructs and does not quarantine', async () => {
+    await seedOriginal();
+    const queued = await ingest(packetA);
+    if (!queued.ok) return;
+    setGovernedEditApplyFault('before_captured');
+    await expect(invokeHandler(queued.incomingPath)).rejects.toThrow('GOVERNED_EDIT_APPLY_FAULT:before_captured');
+    expect((await db.ref(applyStatePath(EVENT_A)).once('value')).exists()).toBe(false);
+    expect((await db.ref(queued.incomingPath).once('value')).exists()).toBe(true);
+    expect(shouldRetriggerEditIncoming({ isGoverned: true, applyState: null })).toBe(true);
+    expect((await db.ref('packets/rejected').once('value')).exists()).toBe(false);
+    await db.ref(queued.incomingPath).update({ resumeAt: Date.now() });
+    setGovernedEditApplyFault(null);
+    await invokeHandler(queued.incomingPath);
+    expect((await db.ref(wbmEditReceiptPath(EVENT_A)).once('value')).val().status).toBe('accepted');
+    expect((await db.ref('packets/rejected').once('value')).exists()).toBe(false);
+    expect(await version()).toBe(1);
+  });
+
+  it('initial capture idempotency: racing first invocations share one canonical state', async () => {
+    await seedOriginal();
+    const queued = await ingest(packetA);
+    if (!queued.ok) return;
+    const release = armGovernedEditLeaseHold();
+    const p1 = invokeHandler(queued.incomingPath);
+    const p2 = invokeHandler(queued.incomingPath);
+    await waitFor(async () => (await db.ref(applyStatePath(EVENT_A)).once('value')).exists());
+    const first = parseApplyState((await db.ref(applyStatePath(EVENT_A)).once('value')).val());
+    expect(first?.payloadDigest).toBe(queued.payloadDigest);
+    expect(first?.editEventId).toBe(EVENT_A);
+    release();
+    await Promise.all([p1, p2]);
+    const after = parseApplyState((await db.ref(applyStatePath(EVENT_A)).once('value')).val());
+    expect(after?.payloadDigest).toBe(queued.payloadDigest);
+    expect(after?.editEventId).toBe(EVENT_A);
+    expect(await ledgerClaim(EVENT_A)).toMatchObject({ payloadDigest: queued.payloadDigest, seq: 1 });
+    expect(await version()).toBe(1);
+    expect(Object.keys((await db.ref(`packets/editHistory/${PID}`).once('value')).val())).toEqual([EVENT_A]);
+  });
+
+  it('concurrent same editEventId different digest remains conflict and steals nothing', async () => {
+    await seedOriginal();
+    const queued = await ingest(packetA);
+    if (!queued.ok) return;
+    const release = armGovernedEditLeaseHold();
+    const first = invokeHandler(queued.incomingPath);
+    await waitFor(async () => (await db.ref(applyStatePath(EVENT_A)).once('value')).exists());
+    const conflictIncoming = {
+      ...packetA,
+      tankLevelFeet: 8,
+      bblsTaken: 200,
+      payloadDigest: 'deadbeefdeadbeef',
+    };
+    await db.ref(queued.incomingPath).set(conflictIncoming);
+    await invokeHandler(queued.incomingPath);
+    release();
+    await first;
+    expect(await ledgerClaim(EVENT_A)).toMatchObject({ payloadDigest: queued.payloadDigest, seq: 1 });
+    expect((await db.ref(`packets/processed/${PID}`).once('value')).val().bblsTaken).toBe(140);
+    expect((await db.ref(wbmEditReceiptPath(EVENT_A)).once('value')).val()).toMatchObject({
+      status: 'accepted',
+      payloadDigest: queued.payloadDigest,
+    });
+    expect(await version()).toBe(1);
+  });
+
+  it('concurrent second corrections to the same original stay separate events', async () => {
+    await seedOriginal();
+    const queuedA = await ingest(packetA);
+    const queuedB = await ingest({
+      ...packetA,
+      editEventId: EVENT_B,
+      idempotencyKey: EVENT_B,
+      tankLevelFeet: 9.0,
+      bblsTaken: 130,
+    });
+    if (!queuedA.ok || !queuedB.ok) return;
+    await Promise.all([
+      invokeHandler(queuedA.incomingPath),
+      invokeHandler(queuedB.incomingPath),
+    ]);
+    const history = (await db.ref(`packets/editHistory/${PID}`).once('value')).val() as Record<string, unknown>;
+    expect(Object.keys(history).sort()).toEqual([EVENT_A, EVENT_B].sort());
+    expect((history[EVENT_A] as Record<string, unknown>).packetId).toBe(PID);
+    expect((history[EVENT_B] as Record<string, unknown>).packetId).toBe(PID);
+    expect((history[EVENT_A] as Record<string, unknown>).eventId).toBe(EVENT_A);
+    expect((history[EVENT_B] as Record<string, unknown>).eventId).toBe(EVENT_B);
+    const claimA = await ledgerClaim(EVENT_A);
+    const claimB = await ledgerClaim(EVENT_B);
+    expect(claimA?.seq).not.toBe(claimB?.seq);
+    expect((await db.ref(`packets/processed/${PID}`).once('value')).val().packetId).toBe(PID);
+  });
 });
+

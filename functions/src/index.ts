@@ -46,14 +46,24 @@ import {
 import {
   applyStatePath,
   buildCapturedApplyState,
+  decideAcquireLease,
+  decideAdvancePhase,
+  decideLedgerClaim,
+  decidePublicVersionAdvance,
+  decideReleaseLease,
+  eventHasVersionClaim,
   getGovernedEditApplyFault,
+  getGovernedEditLeaseMs,
   GovernedEditApplyInterrupted,
   inferPhaseFromHistory,
+  maybeHoldLease,
   maybeInterrupt,
   parseApplyState,
+  parseVersionLedger,
   phaseAtLeast,
   readLiveVersion,
-  versionAlreadyPublished,
+  shouldRetriggerEditIncoming,
+  VERSION_LEDGER_PATH,
   withPhase,
   type GovernedEditApplyState,
 } from './security/operational/governedEditApplyState';
@@ -97,13 +107,103 @@ async function loadEditApplyState(editEventId: string): Promise<GovernedEditAppl
   return parseApplyState(snap.val());
 }
 
-async function saveEditApplyState(state: GovernedEditApplyState): Promise<void> {
-  await db.ref(applyStatePath(state.editEventId)).set(state);
+function newApplyOwnerId(): string {
+  return `${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 10)}`;
+}
+
+async function acquireGovernedApply(args: {
+  candidate: GovernedEditApplyState;
+  ownerId: string;
+}): Promise<ReturnType<typeof decideAcquireLease>> {
+  const box: { current: ReturnType<typeof decideAcquireLease> } = {
+    current: { action: 'busy', ownerId: '' },
+  };
+  const tx = await db.ref(applyStatePath(args.candidate.editEventId)).transaction((raw) => {
+    const decision = decideAcquireLease({
+      current: parseApplyState(raw),
+      candidate: args.candidate,
+      ownerId: args.ownerId,
+      nowMs: Date.now(),
+      leaseMs: getGovernedEditLeaseMs(),
+    });
+    box.current = decision;
+    if (decision.action === 'acquired') return decision.state;
+    return;
+  });
+  if (box.current.action === 'acquired' && tx.committed === false) {
+    return { action: 'busy', ownerId: '' };
+  }
+  return box.current;
+}
+
+async function casAdvanceApplyState(args: {
+  editEventId: string;
+  ownerId: string;
+  desired: GovernedEditApplyState;
+}): Promise<GovernedEditApplyState | null> {
+  let stale = false;
+  const tx = await db.ref(applyStatePath(args.editEventId)).transaction((raw) => {
+    // RTDB invokes once with null before the server value. Aborting on that
+    // speculative empty pass never retries with the real checkpoint.
+    const current = parseApplyState(raw);
+    if (!current) return args.desired;
+    const decision = decideAdvancePhase({
+      current,
+      desired: args.desired,
+      ownerId: args.ownerId,
+      nowMs: Date.now(),
+    });
+    if (decision.action === 'write') return decision.state;
+    if (decision.action === 'keep') return raw;
+    stale = true;
+    return;
+  });
+  if (stale || tx.committed === false) return null;
+  return parseApplyState(tx.snapshot?.val()) || args.desired;
+}
+
+async function releaseApplyLease(editEventId: string, ownerId: string): Promise<void> {
+  await db.ref(applyStatePath(editEventId)).transaction((raw) => {
+    const current = parseApplyState(raw);
+    if (!current) return raw;
+    return decideReleaseLease(current, ownerId);
+  });
+}
+
+async function claimEventVersionSeq(
+  editEventId: string,
+  payloadDigest: string,
+): Promise<number | null> {
+  let seq: number | null = null;
+  const tx = await db.ref(VERSION_LEDGER_PATH).transaction((raw) => {
+    const decided = decideLedgerClaim({
+      ledger: parseVersionLedger(raw),
+      editEventId,
+      payloadDigest,
+    });
+    if (!decided.ok) {
+      seq = null;
+      return;
+    }
+    seq = decided.seq;
+    return decided.ledger;
+  });
+  if (tx.committed === false) return null;
+  return seq;
+}
+
+async function publishAssignedPublicVersion(assignedSeq: number): Promise<number | null> {
+  const result = await db.ref('packets/incoming_version').transaction((cur) =>
+    decidePublicVersionAdvance(readLiveVersion(cur), assignedSeq),
+  );
+  if (result.committed !== true) return null;
+  const n = Number(result.snapshot?.val());
+  return Number.isFinite(n) ? n : null;
 }
 
 /**
- * Version then accepted receipt. Never writes accepted before a durable
- * version claim (publishedVersion or liveVersion > seqBefore).
+ * Version then accepted receipt. Proof is this editEventId's ledger claim,
+ * never unrelated movement of packets/incoming_version.
  */
 async function finishGovernedVersionAndReceipt(args: {
   applyState: GovernedEditApplyState;
@@ -111,38 +211,44 @@ async function finishGovernedVersionAndReceipt(args: {
   payloadDigest: string;
   at: string;
   outgoingCommitted: boolean;
+  ownerId: string;
 }): Promise<boolean> {
   let state = args.applyState;
   if (!phaseAtLeast(state, 'versioned')) {
-    const live = readLiveVersion((await db.ref('packets/incoming_version').once('value')).val());
-    if (state.seqBefore == null) {
-      state = withPhase(state, state.phase, { seqBefore: live }, args.at);
-      await saveEditApplyState(state);
-    }
     if (getGovernedEditApplyFault() === 'version_null') {
       return false;
     }
-    const already = versionAlreadyPublished({
+    const proven = eventHasVersionClaim({
+      assignedVersion: state.assignedVersion,
       publishedVersion: state.publishedVersion,
-      seqBefore: state.seqBefore,
-      liveVersion: live,
     });
-    let seq: number | null;
-    if (already.done) {
-      seq = already.seq;
-    } else {
-      seq = await notifyIncomingVersionBestEffort(db.ref('packets/incoming_version'), {
-        outgoingCommitted: args.outgoingCommitted,
-        pullAccepted: true,
+    const seq = proven.done
+      ? proven.seq
+      : await claimEventVersionSeq(state.editEventId, args.payloadDigest);
+    if (seq == null) return false;
+    if (state.assignedVersion !== seq) {
+      const assigned = await casAdvanceApplyState({
+        editEventId: state.editEventId,
+        ownerId: args.ownerId,
+        desired: withPhase(state, state.phase, { assignedVersion: seq }, args.at),
       });
-      if (seq == null) return false;
+      if (!assigned) return false;
+      state = assigned;
     }
-    state = withPhase(state, 'versioned', {
-      versionPublished: true,
-      publishedVersion: seq,
-      outgoingCommitted: args.outgoingCommitted,
-    }, args.at);
-    await saveEditApplyState(state);
+    const published = await publishAssignedPublicVersion(seq);
+    if (published == null) return false;
+    const versioned = await casAdvanceApplyState({
+      editEventId: state.editEventId,
+      ownerId: args.ownerId,
+      desired: withPhase(state, 'versioned', {
+        versionPublished: true,
+        assignedVersion: seq,
+        publishedVersion: seq,
+        outgoingCommitted: args.outgoingCommitted,
+      }, args.at),
+    });
+    if (!versioned) return false;
+    state = versioned;
     maybeInterrupt('after_versioned');
   }
   await publishGovernedAcceptedTerminal({
@@ -152,6 +258,7 @@ async function finishGovernedVersionAndReceipt(args: {
     payloadDigest: args.payloadDigest,
     at: args.at,
     applyState: state,
+    ownerId: args.ownerId,
   });
   return true;
 }
@@ -164,6 +271,7 @@ async function publishGovernedAcceptedTerminal(args: {
   payloadDigest: string;
   at: string;
   applyState: GovernedEditApplyState;
+  ownerId: string;
 }): Promise<void> {
   const receipt = buildAppliedEditReceipt({
     editEventId: args.editEventId,
@@ -172,13 +280,19 @@ async function publishGovernedAcceptedTerminal(args: {
     appliedAt: args.at,
     status: 'accepted',
   });
-  const terminal = withPhase(args.applyState, 'terminal', {
-    versionPublished: true,
-  }, args.at);
+  const terminal = await casAdvanceApplyState({
+    editEventId: args.editEventId,
+    ownerId: args.ownerId,
+    desired: withPhase(args.applyState, 'terminal', {
+      versionPublished: true,
+      assignedVersion: args.applyState.assignedVersion,
+      publishedVersion: args.applyState.publishedVersion,
+    }, args.at),
+  });
+  if (!terminal) return;
   await db.ref().update({
     [`packets/incoming/${args.incomingId}`]: null,
     ...editReceiptWritePaths(args.editEventId, receipt),
-    [applyStatePath(args.editEventId)]: terminal,
   });
 }
 
@@ -303,8 +417,12 @@ export const watchdogStrandedPackets = functionsV2.onSchedule('every 5 minutes',
         ? data.editEventId.trim()
         : key;
       const st = await loadEditApplyState(eventId);
-      if (st && st.phase !== 'terminal') {
-        console.log(`[Watchdog] ${data.wellName}: resumable governed edit ${eventId} phase=${st.phase} — retrigger`);
+      const governed = hasClientEditEventId(data as Record<string, unknown>);
+      if (shouldRetriggerEditIncoming({ isGoverned: governed, applyState: st })) {
+        console.log(
+          `[Watchdog] ${data.wellName}: resumable governed edit ${eventId} ` +
+            `phase=${st?.phase ?? 'pre_captured'} — retrigger`,
+        );
         await db.ref(`packets/incoming/${key}`).update({ resumeAt: Date.now() });
         retriggeredCount++;
         continue;
@@ -1806,6 +1924,77 @@ export async function processIncomingEdit(
 
     console.log(`Processing edit for ${wellName}: ${requestedPacketId}`);
 
+    const editEventId = resolveEditEventId({
+      incomingPacketId: context.params.packetId,
+      clientEventId: (data as { editEventId?: unknown }).editEventId,
+    });
+    const isGoverned = hasClientEditEventId(data as Record<string, unknown>);
+    const payloadDigest = isGoverned
+      ? digestGovernedEditIncoming(data as Record<string, unknown>)
+      : (typeof (data as { payloadDigest?: unknown }).payloadDigest === 'string'
+        ? (data as { payloadDigest: string }).payloadDigest
+        : null);
+    const governedNow = new Date().toISOString();
+    const ownerId = newApplyOwnerId();
+    let applyState: GovernedEditApplyState | null = null;
+    let leased = false;
+
+    try {
+
+    if (isGoverned && payloadDigest) {
+      maybeInterrupt('before_captured');
+      const acquired = await acquireGovernedApply({
+        candidate: buildCapturedApplyState({
+          editEventId,
+          originalPacketId: String(requestedPacketId),
+          incomingId: context.params.packetId,
+          payloadDigest,
+          wellName: typeof wellName === 'string' ? wellName : '',
+          noLevel: false,
+          now: governedNow,
+          incomingPayload: data as Record<string, unknown>,
+        }),
+        ownerId,
+      });
+      if (acquired.action === 'busy') {
+        console.log(`[EDIT_APPLY_BUSY] ${wellName}: ${editEventId} already owned`);
+        return null;
+      }
+      if (acquired.action === 'conflict') {
+        console.log(
+          `[EDIT_EVENT_CONFLICT] ${wellName}: event ${editEventId} digest mismatch — no overwrite, no replacement receipt`,
+        );
+        await db.ref().update({
+          [`packets/incoming/${context.params.packetId}`]: null,
+        });
+        return null;
+      }
+      if (acquired.action === 'terminal') {
+        const recSnap = await db.ref(`packets/editReceipts/${editEventId}`).once('value');
+        const rec = recSnap.exists() ? (recSnap.val() as Record<string, unknown>) : null;
+        if (rec?.status === 'accepted' && rec?.payloadDigest === payloadDigest) {
+          if (snapshot.exists()) {
+            await db.ref(`packets/incoming/${context.params.packetId}`).set(null);
+          }
+          return null;
+        }
+        await publishGovernedAcceptedTerminal({
+          incomingId: context.params.packetId,
+          editEventId,
+          originalPacketId: acquired.state.originalPacketId || String(requestedPacketId),
+          payloadDigest,
+          at: governedNow,
+          applyState: acquired.state,
+          ownerId,
+        });
+        return null;
+      }
+      applyState = acquired.state;
+      leased = true;
+      await maybeHoldLease();
+      maybeInterrupt('after_captured');
+    }
+
     // ── 7/25 exact invoice-identity resolution (ticket 19852) ─────────────
     // The requested id may be a client-persisted stale-rejected twin while
     // the REAL processed pull carries the same immutable invoiceDocId.
@@ -1871,6 +2060,15 @@ export async function processIncomingEdit(
     // every downstream write, back-patch, and linkage stamp uses it. On a
     // fallback the requested phantom id appears only in audit fields.
     const originalPacketId = resolution.packetId;
+    if (applyState && applyState.originalPacketId !== originalPacketId) {
+      const retargeted = await casAdvanceApplyState({
+        editEventId,
+        ownerId,
+        desired: { ...applyState, originalPacketId },
+      });
+      if (!retargeted) return null;
+      applyState = retargeted;
+    }
     const editResolvedViaFallback = resolution.kind === 'fallback';
     if (editResolvedViaFallback) {
       console.log(
@@ -1887,18 +2085,7 @@ export async function processIncomingEdit(
         }
       : {};
 
-    // ── Canonical edit event id + payload identity ────────────────────────
-    const editEventId = resolveEditEventId({
-      incomingPacketId: context.params.packetId,
-      clientEventId: (data as { editEventId?: unknown }).editEventId,
-    });
-    const isGoverned = hasClientEditEventId(data as Record<string, unknown>);
-    const payloadDigest = isGoverned
-      ? digestGovernedEditIncoming(data as Record<string, unknown>)
-      : (typeof (data as { payloadDigest?: unknown }).payloadDigest === 'string'
-        ? (data as { payloadDigest: string }).payloadDigest
-        : null);
-    const governedNow = new Date().toISOString();
+    // ── Canonical edit event id + payload identity (resolved above) ───────
     const terminalBase = {
       eventId: editEventId,
       packetId: originalPacketId,
@@ -1923,7 +2110,9 @@ export async function processIncomingEdit(
     const existingReceipt = existingReceiptSnap.exists()
       ? (existingReceiptSnap.val() as Record<string, unknown>)
       : null;
-    let applyState = await loadEditApplyState(editEventId);
+    if (!applyState) {
+      applyState = await loadEditApplyState(editEventId);
+    }
     let resumeApplied = false;
     if (existingEventSnap.exists()) {
       const existingEvent = (existingEventSnap.val() || {}) as Record<string, unknown>;
@@ -1979,7 +2168,19 @@ export async function processIncomingEdit(
         }
         // History proves mutation; resume missing downstream/version/receipt.
         resumeApplied = true;
-        if (!applyState) {
+        if (applyState && !phaseAtLeast(applyState, 'mutated')) {
+          const advanced = await casAdvanceApplyState({
+            editEventId,
+            ownerId,
+            desired: withPhase(applyState, 'mutated', {
+              historyWritten: true,
+              processedWritten: true,
+              originalPacketId,
+            }, governedNow),
+          });
+          if (!advanced) return null;
+          applyState = advanced;
+        } else if (!applyState) {
           applyState = withPhase(buildCapturedApplyState({
             editEventId,
             originalPacketId,
@@ -1990,7 +2191,13 @@ export async function processIncomingEdit(
             now: governedNow,
             incomingPayload: data as Record<string, unknown>,
           }), 'mutated', { historyWritten: true, processedWritten: true }, governedNow);
-          await saveEditApplyState(applyState);
+          const advanced = await casAdvanceApplyState({
+            editEventId,
+            ownerId,
+            desired: applyState,
+          });
+          if (!advanced) return null;
+          applyState = advanced;
         }
       } else {
         console.log(
@@ -2203,23 +2410,6 @@ export async function processIncomingEdit(
     const receiptPaths = editReceiptWritePaths(editEventId, receipt);
     const governedDurable = isGoverned && !!payloadDigest;
 
-    if (governedDurable && !applyState) {
-      applyState = buildCapturedApplyState({
-        editEventId,
-        originalPacketId,
-        incomingId: context.params.packetId,
-        payloadDigest,
-        wellName,
-        noLevel: newTankTopInches <= 0,
-        now: editedAtIso,
-        incomingPayload: data as Record<string, unknown>,
-      });
-      await saveEditApplyState(applyState);
-    }
-    if (governedDurable && applyState && !phaseAtLeast(applyState, 'mutated')) {
-      maybeInterrupt('after_captured');
-    }
-
     const processedNoLevelPatch = {
       tankTopInches: 0,
       tankLevelFeet: 0,
@@ -2247,27 +2437,34 @@ export async function processIncomingEdit(
               Object.entries(processedNoLevelPatch).map(([k, v]) => [`packets/processed/${originalPacketId}/${k}`, v]),
             ),
             ...historyPaths,
-            [applyStatePath(editEventId)]: withPhase(applyState, 'mutated', {
+          });
+          const mutated = await casAdvanceApplyState({
+            editEventId,
+            ownerId,
+            desired: withPhase(applyState, 'mutated', {
               historyWritten: true,
               processedWritten: true,
               noLevel: true,
+              originalPacketId,
             }, editedAtIso),
           });
-          applyState = withPhase(applyState, 'mutated', {
-            historyWritten: true,
-            processedWritten: true,
-            noLevel: true,
-          }, editedAtIso);
+          if (!mutated) return null;
+          applyState = mutated;
           maybeInterrupt('after_mutated');
         }
         if (!phaseAtLeast(applyState, 'downstream')) {
           await db.ref(`wells/${wellName}/status/isDown`).set(nextEditIsDown);
-          applyState = withPhase(applyState, 'downstream', {
-            wellStatusCommitted: true,
-            outgoingRequired: false,
-            outgoingCommitted: true,
-          }, editedAtIso);
-          await saveEditApplyState(applyState);
+          const down = await casAdvanceApplyState({
+            editEventId,
+            ownerId,
+            desired: withPhase(applyState, 'downstream', {
+              wellStatusCommitted: true,
+              outgoingRequired: false,
+              outgoingCommitted: true,
+            }, editedAtIso),
+          });
+          if (!down) return null;
+          applyState = down;
           maybeInterrupt('after_downstream');
         }
         const noLevelDone = await finishGovernedVersionAndReceipt({
@@ -2276,6 +2473,7 @@ export async function processIncomingEdit(
           payloadDigest,
           at: editedAtIso,
           outgoingCommitted: true,
+          ownerId,
         });
         if (noLevelDone) console.log(`Edit complete for ${wellName}: ${originalPacketId}`);
         return null;
@@ -2420,23 +2618,32 @@ export async function processIncomingEdit(
     // Processed + immutable history. Governed: NO accepted receipt and NO
     // incoming deletion here — those wait until version publication.
     if (!governedDurable || !applyState || !phaseAtLeast(applyState, 'mutated')) {
-      const mutatedState = governedDurable && applyState
-        ? withPhase(applyState, 'mutated', { historyWritten: true, processedWritten: true }, editedAtIso)
-        : null;
       await db.ref().update({
         ...Object.fromEntries(
           Object.entries(updates).map(([k, v]) => [`packets/processed/${originalPacketId}/${k}`, v]),
         ),
         ...historyPaths,
         ...(governedDurable
-          ? (mutatedState ? { [applyStatePath(editEventId)]: mutatedState } : {})
+          ? {}
           : {
             ...receiptPaths,
             [`packets/incoming/${context.params.packetId}`]: null,
           }),
       });
-      if (mutatedState) applyState = mutatedState;
-      if (governedDurable) maybeInterrupt('after_mutated');
+      if (governedDurable && applyState) {
+        const mutated = await casAdvanceApplyState({
+          editEventId,
+          ownerId,
+          desired: withPhase(applyState, 'mutated', {
+            historyWritten: true,
+            processedWritten: true,
+            originalPacketId,
+          }, editedAtIso),
+        });
+        if (!mutated) return null;
+        applyState = mutated;
+        maybeInterrupt('after_mutated');
+      }
     }
 
     const skipDownstream = governedDurable && applyState && phaseAtLeast(applyState, 'downstream');
@@ -2911,12 +3118,17 @@ export async function processIncomingEdit(
     }
 
     if (governedDurable && applyState) {
-      applyState = withPhase(applyState, 'downstream', {
-        wellStatusCommitted: true,
-        outgoingRequired: isLatestPull && afr > 0,
-        outgoingCommitted: true,
-      }, editedAtIso);
-      await saveEditApplyState(applyState);
+      const down = await casAdvanceApplyState({
+        editEventId,
+        ownerId,
+        desired: withPhase(applyState, 'downstream', {
+          wellStatusCommitted: true,
+          outgoingRequired: isLatestPull && afr > 0,
+          outgoingCommitted: true,
+        }, editedAtIso),
+      });
+      if (!down) return null;
+      applyState = down;
       maybeInterrupt('after_downstream');
     }
     } // !skipDownstream
@@ -2928,6 +3140,7 @@ export async function processIncomingEdit(
         payloadDigest,
         at: editedAtIso,
         outgoingCommitted: applyState.outgoingCommitted || !applyState.outgoingRequired,
+        ownerId,
       });
       if (done) console.log(`Edit complete for ${wellName}: ${originalPacketId}`);
       return null;
@@ -2943,6 +3156,11 @@ export async function processIncomingEdit(
 
     console.log(`Edit complete for ${wellName}: ${originalPacketId}`);
     return null;
+    } finally {
+      if (leased) {
+        await releaseApplyLease(editEventId, ownerId);
+      }
+    }
 }
 
 // Handle delete requests — removes from processed and recalculates outgoing from remaining data

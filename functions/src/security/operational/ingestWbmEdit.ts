@@ -257,7 +257,7 @@ export const ingestWbmEdit = httpsV2.onCall(
       onQueuedResume: async (path, editEventId) => {
         const snap = await admin.database().ref(applyStatePath(editEventId)).once('value');
         const st = parseApplyState(snap.val());
-        if (!st || st.phase === 'terminal') return;
+        if (st?.phase === 'terminal') return;
         await admin.database().ref(path).update({ resumeAt: Date.now() });
       },
     });

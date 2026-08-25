@@ -1,19 +1,21 @@
 /**
- * Durable governed-edit apply checkpoint.
+ * Durable governed-edit apply checkpoint, lease, and version ledger.
  *
  * Phases (RTDB packets/editApplyState/{editEventId}):
- *   captured   — incoming payload copied; no processed mutation yet
+ *   captured   — payload copied; no processed mutation yet
  *   mutated    — processed + immutable history written; no accepted receipt
  *   downstream — required outgoing/current/wells status committed (or not required)
- *   versioned  — incoming_version advanced exactly once for this event
+ *   versioned  — this event's version claim is published to incoming_version
  *   terminal   — accepted receipt published; incoming consumed
  *
- * Accepted is ONLY written at terminal. Crash/retry resumes the missing phase.
- * Same editEventId + same digest never double-applies, never double-increments
- * version, never duplicates history.
+ * Version proof is event-specific (packets/editVersionLedger.claims/{editEventId}),
+ * never "the global incoming_version number moved."
+ *
+ * Lease: one durable owner per editEventId. Stale owners cannot regress phase.
  */
 
 export const GOVERNED_EDIT_APPLY_STATE_ROOT = 'packets/editApplyState';
+export const VERSION_LEDGER_PATH = 'packets/editVersionLedger';
 
 export type GovernedEditApplyPhase =
   | 'captured'
@@ -21,6 +23,11 @@ export type GovernedEditApplyPhase =
   | 'downstream'
   | 'versioned'
   | 'terminal';
+
+export interface ApplyLease {
+  ownerId: string;
+  expiresAt: number;
+}
 
 export interface GovernedEditApplyState {
   editEventId: string;
@@ -37,17 +44,30 @@ export interface GovernedEditApplyState {
   wellStatusCommitted: boolean;
   versionPublished: boolean;
   publishedVersion: number | null;
+  assignedVersion: number | null;
   seqBefore: number | null;
   incomingPayload: Record<string, unknown> | null;
+  lease: ApplyLease | null;
   createdAt: string;
   updatedAt: string;
+}
+
+export interface VersionClaim {
+  editEventId: string;
+  payloadDigest: string;
+  seq: number;
+}
+
+export interface VersionLedger {
+  nextSeq: number;
+  claims: Record<string, VersionClaim>;
 }
 
 export function applyStatePath(editEventId: string): string {
   return `${GOVERNED_EDIT_APPLY_STATE_ROOT}/${editEventId}`;
 }
 
-const PHASE_RANK: Record<GovernedEditApplyPhase, number> = {
+export const PHASE_RANK: Record<GovernedEditApplyPhase, number> = {
   captured: 0,
   mutated: 1,
   downstream: 2,
@@ -61,6 +81,15 @@ export function phaseAtLeast(
 ): boolean {
   if (!state) return false;
   return PHASE_RANK[state.phase] >= PHASE_RANK[phase];
+}
+
+function parseLease(raw: unknown): ApplyLease | null {
+  if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return null;
+  const r = raw as Record<string, unknown>;
+  if (typeof r.ownerId !== 'string' || !r.ownerId) return null;
+  const expiresAt = typeof r.expiresAt === 'number' ? r.expiresAt : Number(r.expiresAt);
+  if (!Number.isFinite(expiresAt)) return null;
+  return { ownerId: r.ownerId, expiresAt };
 }
 
 export function parseApplyState(raw: unknown): GovernedEditApplyState | null {
@@ -90,10 +119,12 @@ export function parseApplyState(raw: unknown): GovernedEditApplyState | null {
     wellStatusCommitted: r.wellStatusCommitted === true,
     versionPublished: r.versionPublished === true,
     publishedVersion: typeof r.publishedVersion === 'number' ? r.publishedVersion : null,
+    assignedVersion: typeof r.assignedVersion === 'number' ? r.assignedVersion : null,
     seqBefore: typeof r.seqBefore === 'number' ? r.seqBefore : null,
     incomingPayload: r.incomingPayload && typeof r.incomingPayload === 'object' && !Array.isArray(r.incomingPayload)
       ? r.incomingPayload as Record<string, unknown>
       : null,
+    lease: parseLease(r.lease),
     createdAt: typeof r.createdAt === 'string' ? r.createdAt : '',
     updatedAt: typeof r.updatedAt === 'string' ? r.updatedAt : '',
   };
@@ -108,6 +139,7 @@ export function buildCapturedApplyState(args: {
   noLevel: boolean;
   now: string;
   incomingPayload?: Record<string, unknown> | null;
+  lease?: ApplyLease | null;
 }): GovernedEditApplyState {
   return {
     editEventId: args.editEventId,
@@ -124,8 +156,10 @@ export function buildCapturedApplyState(args: {
     wellStatusCommitted: false,
     versionPublished: false,
     publishedVersion: null,
+    assignedVersion: null,
     seqBefore: null,
     incomingPayload: args.incomingPayload ?? null,
+    lease: args.lease ?? null,
     createdAt: args.now,
     updatedAt: args.now,
   };
@@ -140,10 +174,127 @@ export function withPhase(
   return { ...state, ...patch, phase, updatedAt: now };
 }
 
-/**
- * If history already proves this event+digest was written but the checkpoint
- * lagged, treat the apply as at least mutated so retry does not re-mint history.
- */
+export function mergeMonotonic(
+  current: GovernedEditApplyState,
+  incoming: GovernedEditApplyState,
+): GovernedEditApplyState {
+  const phase = PHASE_RANK[incoming.phase] >= PHASE_RANK[current.phase]
+    ? incoming.phase
+    : current.phase;
+  return {
+    ...current,
+    ...incoming,
+    phase,
+    historyWritten: current.historyWritten || incoming.historyWritten,
+    processedWritten: current.processedWritten || incoming.processedWritten,
+    outgoingRequired: current.outgoingRequired || incoming.outgoingRequired,
+    outgoingCommitted: current.outgoingCommitted || incoming.outgoingCommitted,
+    wellStatusCommitted: current.wellStatusCommitted || incoming.wellStatusCommitted,
+    versionPublished: current.versionPublished || incoming.versionPublished,
+    publishedVersion: current.publishedVersion ?? incoming.publishedVersion,
+    assignedVersion: current.assignedVersion ?? incoming.assignedVersion,
+    seqBefore: current.seqBefore ?? incoming.seqBefore,
+    payloadDigest: current.payloadDigest,
+    editEventId: current.editEventId,
+    createdAt: current.createdAt || incoming.createdAt,
+  };
+}
+
+export function leaseIsHeld(
+  lease: ApplyLease | null | undefined,
+  nowMs: number,
+  ownerId?: string,
+): boolean {
+  if (!lease) return false;
+  if (lease.expiresAt <= nowMs) return false;
+  if (ownerId && lease.ownerId !== ownerId) return true;
+  if (ownerId && lease.ownerId === ownerId) return true;
+  return true;
+}
+
+export function isActiveOwner(
+  state: GovernedEditApplyState | null,
+  ownerId: string,
+  nowMs: number,
+): boolean {
+  if (!state?.lease) return false;
+  return state.lease.ownerId === ownerId && state.lease.expiresAt > nowMs;
+}
+
+export type AcquireDecision =
+  | { action: 'acquired'; state: GovernedEditApplyState }
+  | { action: 'busy'; ownerId: string }
+  | { action: 'conflict' }
+  | { action: 'terminal'; state: GovernedEditApplyState };
+
+export function decideAcquireLease(args: {
+  current: GovernedEditApplyState | null;
+  candidate: GovernedEditApplyState;
+  ownerId: string;
+  nowMs: number;
+  leaseMs: number;
+}): AcquireDecision {
+  const lease: ApplyLease = { ownerId: args.ownerId, expiresAt: args.nowMs + args.leaseMs };
+  if (!args.current) {
+    return { action: 'acquired', state: { ...args.candidate, lease, updatedAt: args.candidate.updatedAt } };
+  }
+  if (args.current.payloadDigest !== args.candidate.payloadDigest) {
+    return { action: 'conflict' };
+  }
+  if (args.current.phase === 'terminal') {
+    return { action: 'terminal', state: args.current };
+  }
+  if (
+    args.current.lease
+    && args.current.lease.ownerId !== args.ownerId
+    && args.current.lease.expiresAt > args.nowMs
+  ) {
+    return { action: 'busy', ownerId: args.current.lease.ownerId };
+  }
+  return {
+    action: 'acquired',
+    state: { ...args.current, lease, incomingId: args.candidate.incomingId || args.current.incomingId, incomingPayload: args.current.incomingPayload || args.candidate.incomingPayload, updatedAt: args.candidate.updatedAt },
+  };
+}
+
+export type AdvanceDecision =
+  | { action: 'write'; state: GovernedEditApplyState }
+  | { action: 'keep'; state: GovernedEditApplyState }
+  | { action: 'stale' }
+  | { action: 'conflict' };
+
+export function decideAdvancePhase(args: {
+  current: GovernedEditApplyState | null;
+  desired: GovernedEditApplyState;
+  ownerId: string;
+  nowMs: number;
+}): AdvanceDecision {
+  if (!args.current) return { action: 'stale' };
+  if (args.current.payloadDigest !== args.desired.payloadDigest) {
+    return { action: 'conflict' };
+  }
+  if (!isActiveOwner(args.current, args.ownerId, args.nowMs) && args.current.phase !== 'terminal') {
+    return { action: 'stale' };
+  }
+  const merged = mergeMonotonic(args.current, {
+    ...args.desired,
+    lease: args.current.lease,
+  });
+  if (PHASE_RANK[args.desired.phase] < PHASE_RANK[args.current.phase]) {
+    return { action: 'keep', state: args.current };
+  }
+  return { action: 'write', state: merged };
+}
+
+export function decideReleaseLease(
+  current: GovernedEditApplyState | null,
+  ownerId: string,
+): GovernedEditApplyState | null {
+  if (!current) return null;
+  if (!current.lease || current.lease.ownerId !== ownerId) return current;
+  return { ...current, lease: null };
+}
+
 export function inferPhaseFromHistory(args: {
   state: GovernedEditApplyState | null;
   historyDigest: string | null;
@@ -162,33 +313,101 @@ export function inferPhaseFromHistory(args: {
   return args.state?.phase ?? null;
 }
 
-/**
- * Version exactly-once: if seqBefore was captured and the live counter already
- * moved past it, this event's increment already happened (crash after publish,
- * before checkpoint). Do not increment again.
- */
-export function versionAlreadyPublished(args: {
+/** Event-specific proof only — never live global counter movement. */
+export function eventHasVersionClaim(args: {
+  assignedVersion: number | null;
   publishedVersion: number | null;
-  seqBefore: number | null;
-  liveVersion: number;
 }): { done: true; seq: number } | { done: false } {
+  if (typeof args.assignedVersion === 'number' && args.assignedVersion > 0) {
+    return { done: true, seq: args.assignedVersion };
+  }
   if (typeof args.publishedVersion === 'number' && args.publishedVersion > 0) {
     return { done: true, seq: args.publishedVersion };
   }
-  if (typeof args.seqBefore === 'number' && args.liveVersion > args.seqBefore) {
-    return { done: true, seq: args.liveVersion };
-  }
   return { done: false };
 }
+
+/** @deprecated Do not use liveVersion>seqBefore as event proof. Kept name unused. */
 
 export function readLiveVersion(raw: unknown): number {
   const n = typeof raw === 'number' ? raw : parseInt(String(raw ?? '0'), 10);
   return Number.isFinite(n) ? n : 0;
 }
 
+export function parseVersionLedger(raw: unknown): VersionLedger {
+  if (!raw || typeof raw !== 'object' || Array.isArray(raw)) {
+    return { nextSeq: 0, claims: {} };
+  }
+  const r = raw as Record<string, unknown>;
+  const nextSeq = typeof r.nextSeq === 'number' && r.nextSeq >= 0 ? Math.floor(r.nextSeq) : 0;
+  const claims: Record<string, VersionClaim> = {};
+  const rawClaims = r.claims && typeof r.claims === 'object' && !Array.isArray(r.claims)
+    ? r.claims as Record<string, unknown>
+    : {};
+  for (const [id, c] of Object.entries(rawClaims)) {
+    if (!c || typeof c !== 'object' || Array.isArray(c)) continue;
+    const row = c as Record<string, unknown>;
+    if (typeof row.payloadDigest !== 'string' || typeof row.seq !== 'number') continue;
+    claims[id] = {
+      editEventId: typeof row.editEventId === 'string' ? row.editEventId : id,
+      payloadDigest: row.payloadDigest,
+      seq: row.seq,
+    };
+  }
+  return { nextSeq, claims };
+}
+
+export function decideLedgerClaim(args: {
+  ledger: VersionLedger;
+  editEventId: string;
+  payloadDigest: string;
+}):
+  | { ok: true; ledger: VersionLedger; seq: number; reused: boolean }
+  | { ok: false; reason: 'edit_event_payload_conflict' } {
+  const existing = args.ledger.claims[args.editEventId];
+  if (existing) {
+    if (existing.payloadDigest !== args.payloadDigest) {
+      return { ok: false, reason: 'edit_event_payload_conflict' };
+    }
+    return { ok: true, ledger: args.ledger, seq: existing.seq, reused: true };
+  }
+  const seq = args.ledger.nextSeq + 1;
+  return {
+    ok: true,
+    reused: false,
+    seq,
+    ledger: {
+      nextSeq: seq,
+      claims: {
+        ...args.ledger.claims,
+        [args.editEventId]: {
+          editEventId: args.editEventId,
+          payloadDigest: args.payloadDigest,
+          seq,
+        },
+      },
+    },
+  };
+}
+
+export function decidePublicVersionAdvance(current: number, assignedSeq: number): number {
+  const cur = Number.isFinite(current) && current > 0 ? current : 0;
+  return assignedSeq > cur ? assignedSeq : cur;
+}
+
+export function shouldRetriggerEditIncoming(args: {
+  isGoverned: boolean;
+  applyState: GovernedEditApplyState | null;
+}): boolean {
+  if (args.applyState?.phase === 'terminal') return false;
+  if (args.isGoverned) return true;
+  return !!args.applyState;
+}
+
 /** Test-only crash/fault injection. Production leaves this null. */
 export type GovernedEditApplyFault =
   | null
+  | 'before_captured'
   | 'after_captured'
   | 'after_mutated'
   | 'outgoing_fail'
@@ -197,6 +416,8 @@ export type GovernedEditApplyFault =
   | 'after_versioned';
 
 let applyFault: GovernedEditApplyFault = null;
+let leaseMs = 30_000;
+let leaseHold: { promise: Promise<void>; resolve: () => void; consumed: boolean } | null = null;
 
 export function setGovernedEditApplyFault(fault: GovernedEditApplyFault): void {
   applyFault = fault;
@@ -206,6 +427,37 @@ export function getGovernedEditApplyFault(): GovernedEditApplyFault {
   return applyFault;
 }
 
+export function setGovernedEditLeaseMs(ms: number): void {
+  leaseMs = ms > 0 ? ms : 30_000;
+}
+
+export function getGovernedEditLeaseMs(): number {
+  return leaseMs;
+}
+
+export function armGovernedEditLeaseHold(): () => void {
+  let resolve = () => {};
+  const promise = new Promise<void>((r) => { resolve = r; });
+  leaseHold = { promise, resolve, consumed: false };
+  return () => {
+    resolve();
+    leaseHold = null;
+  };
+}
+
+export function clearGovernedEditLeaseHold(): void {
+  if (!leaseHold) return;
+  leaseHold.resolve();
+  leaseHold = null;
+}
+
+export async function maybeHoldLease(): Promise<void> {
+  if (!leaseHold) return;
+  if (leaseHold.consumed) return;
+  leaseHold.consumed = true;
+  await leaseHold.promise;
+}
+
 export class GovernedEditApplyInterrupted extends Error {
   constructor(public readonly after: Exclude<GovernedEditApplyFault, null>) {
     super(`GOVERNED_EDIT_APPLY_FAULT:${after}`);
@@ -213,7 +465,9 @@ export class GovernedEditApplyInterrupted extends Error {
   }
 }
 
-export function maybeInterrupt(after: Exclude<GovernedEditApplyFault, null | 'outgoing_fail' | 'version_null'>): void {
+export function maybeInterrupt(
+  after: Exclude<GovernedEditApplyFault, null | 'outgoing_fail' | 'version_null'>,
+): void {
   if (applyFault === after) {
     throw new GovernedEditApplyInterrupted(after);
   }
