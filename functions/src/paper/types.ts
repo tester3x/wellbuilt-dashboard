@@ -126,16 +126,71 @@ export interface PaperRevisionRecord {
   projection: WaterTicketProjection;
 }
 
+export interface PaperVisibleSource {
+  ticketNumber: string;
+  companyId: string;
+  invoiceDocId: string;
+  invoiceNumber: string;
+  invoicingMode: string;
+  dateRaw: string;
+  operator: string;
+  pickupLocation: string;
+  dropoffLocation: string;
+  driverLabel: string;
+  ownerDriverId: string;
+  submittedBy: string;
+  updatedBy: string;
+  truck: string;
+  trailer: string;
+  pickupBbls: string;
+  dropoffBbls: string;
+  tankTop: string;
+  tankBottom: string;
+  totalBbl: string;
+  totalHours: string;
+  invoiceStartedAt: string;
+  startTime: string;
+  timezone: string;
+  createdAtMs: number | null;
+  timeline: Array<{ type: string; timestamp: string; locationName: string; reason: string }>;
+  photos: Array<{ uri: string; type: string; location: string; takenAt: string }>;
+  jsaUri: string;
+}
+
 export interface PaperSourceSnapshot {
   op: PaperOp;
   editSource?: PaperEditSource;
-  ticket: TicketSourceRecord;
-  invoice: InvoiceSourceRecord | null;
+  ticketDocId: string;
+  invoiceDocId: string;
+  companyId: string;
+  ownerDriverId: string;
+  ticketNumber: string;
   fingerprint: string;
   paperTimeZone: string;
   legalName?: string;
   displayName?: string;
   assetUris: string[];
+  source: PaperVisibleSource;
+  snapshotBytes: number;
+}
+
+export type PaperWorkflowStage = 'dispatch_review' | 'payroll_review' | 'billing';
+
+export interface PaperWorkflowRecord {
+  ticketDocId: string;
+  invoiceDocId: string;
+  companyId: string;
+  stage: PaperWorkflowStage;
+  closedAtMs: number | null;
+  handedToPayrollAtMs: number | null;
+  handedToPayrollByUid: string | null;
+  finalizedToBillingAtMs: number | null;
+  finalizedToBillingByUid: string | null;
+  overrideActive: boolean;
+  overrideReason: string | null;
+  overrideByUid: string | null;
+  overrideAtMs: number | null;
+  updatedAtMs: number;
 }
 
 export interface PaperSourceEventRecord {

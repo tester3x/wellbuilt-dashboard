@@ -3,6 +3,7 @@ import { SYSTEM_PAPER_CALLER } from './paperCaller';
 import { materializeWaterTicketPaper } from './engine';
 import { isTicketOnlyWaterTicket, paperSourceFingerprint } from './projection';
 import { invoiceEditMs, ticketEditMs } from './sourceEvent';
+import { seedDispatchReviewWorkflow } from './workflow';
 import type { InvoiceSourceRecord, PaperEditSource, PaperOp, TicketSourceRecord } from './types';
 import type { PaperStore } from './store';
 
@@ -197,6 +198,18 @@ async function materializeOne(input: {
       sourceTicket: input.sourceTicket,
       sourceInvoice: input.sourceInvoice,
     });
+    if (result.ok && input.op === 'close') {
+      const existing = await input.store.getWorkflow(input.ticketDocId);
+      if (!existing) {
+        await input.store.putWorkflow(seedDispatchReviewWorkflow({
+          ticketDocId: input.ticketDocId,
+          invoiceDocId: input.invoiceDocId || '',
+          companyId: input.companyId || '',
+          invoice: input.sourceInvoice || null,
+          nowMs: input.nowMs,
+        }));
+      }
+    }
     return classifyMaterializeResult({
       op: input.op,
       ticketDocId: input.ticketDocId,

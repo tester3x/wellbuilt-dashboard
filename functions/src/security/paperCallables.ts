@@ -6,8 +6,10 @@ import * as admin from 'firebase-admin';
 import { getWaterTicketPaper, materializeWaterTicketPaper } from '../paper/engine';
 import { createFirestorePaperStore } from '../paper/firestoreStore';
 import { paperAuthIntent, resolvePaperCaller } from '../paper/paperCaller';
+import { mutateTicketPaper } from '../paper/paperMutate';
 import { resolvePaperPresentation } from '../paper/presentation';
-import { parseGetPaperRequest, parseMaterializeRequest } from '../paper/requests';
+import { parseGetPaperRequest, parseMaterializeRequest, parseMutatePaperRequest, parseWorkflowTicketRequest } from '../paper/requests';
+import { finalizeToBilling, handToPayroll, reopenForOverride, seedDispatchReviewWorkflow } from '../paper/workflow';
 import type { PaperCaller } from '../paper/types';
 import { requireManageDrivers } from './adminAuth';
 import { writeSecurityAudit } from './audit';
@@ -155,5 +157,112 @@ export const staffMaterializeTicketPaper = httpsV2.onCall(
       contentHash: result.revision.contentHash,
       storageHtmlPath: result.revision.storageHtmlPath,
     };
+  },
+);
+
+export const staffMutateTicketPaper = httpsV2.onCall(
+  { timeoutSeconds: 30, memory: '256MiB', enforceAppCheck: false },
+  async (request) => {
+    const caller = await loadPaperReader(request);
+    const parsed = parseMutatePaperRequest(request.data);
+    if (!parsed.ok) throwPaper(parsed.reason, parsed.message);
+    const store = createFirestorePaperStore();
+    const result = await mutateTicketPaper({
+      store,
+      caller,
+      ticketDocId: parsed.ticketDocId,
+      fields: parsed.fields,
+      nowMs: Date.now(),
+    });
+    if (!result.ok) throwPaper(result.reason, result.message);
+    await writeSecurityAudit({
+      action: 'staffMutateTicketPaper',
+      actorUid: caller.uid,
+      detail: { ticketDocId: result.ticketDocId, via: result.via },
+    });
+    return result;
+  },
+);
+
+async function loadWorkflowOrSeed(store: ReturnType<typeof createFirestorePaperStore>, ticketDocId: string, nowMs: number) {
+  const existing = await store.getWorkflow(ticketDocId);
+  if (existing) return existing;
+  const ticket = await store.getTicket(ticketDocId);
+  if (!ticket) return null;
+  const invoice = ticket.invoiceDocId ? await store.getInvoice(String(ticket.invoiceDocId)) : null;
+  const seeded = seedDispatchReviewWorkflow({
+    ticketDocId,
+    invoiceDocId: String(ticket.invoiceDocId || ''),
+    companyId: String(ticket.companyId || ''),
+    invoice,
+    nowMs,
+  });
+  await store.putWorkflow(seeded);
+  return seeded;
+}
+
+export const staffHandTicketToPayroll = httpsV2.onCall(
+  { timeoutSeconds: 30, memory: '256MiB', enforceAppCheck: false },
+  async (request) => {
+    const caller = await loadPaperReader(request);
+    const parsed = parseWorkflowTicketRequest(request.data);
+    if (!parsed.ok) throwPaper(parsed.reason, parsed.message);
+    const store = createFirestorePaperStore();
+    const nowMs = Date.now();
+    const current = await loadWorkflowOrSeed(store, parsed.ticketDocId, nowMs);
+    if (!current) throwPaper('ticket_not_found', 'Ticket not found.');
+    const next = handToPayroll(current, caller, nowMs);
+    if (!next.ok) throwPaper(next.reason, next.message);
+    await store.putWorkflow(next.workflow);
+    await writeSecurityAudit({
+      action: 'staffHandTicketToPayroll',
+      actorUid: caller.uid,
+      detail: { ticketDocId: parsed.ticketDocId, stage: next.workflow.stage },
+    });
+    return { ok: true as const, stage: next.workflow.stage };
+  },
+);
+
+export const staffFinalizeTicketToBilling = httpsV2.onCall(
+  { timeoutSeconds: 30, memory: '256MiB', enforceAppCheck: false },
+  async (request) => {
+    const caller = await loadPaperReader(request);
+    const parsed = parseWorkflowTicketRequest(request.data);
+    if (!parsed.ok) throwPaper(parsed.reason, parsed.message);
+    const store = createFirestorePaperStore();
+    const nowMs = Date.now();
+    const current = await loadWorkflowOrSeed(store, parsed.ticketDocId, nowMs);
+    if (!current) throwPaper('ticket_not_found', 'Ticket not found.');
+    const next = finalizeToBilling(current, caller, nowMs);
+    if (!next.ok) throwPaper(next.reason, next.message);
+    await store.putWorkflow(next.workflow);
+    await writeSecurityAudit({
+      action: 'staffFinalizeTicketToBilling',
+      actorUid: caller.uid,
+      detail: { ticketDocId: parsed.ticketDocId, stage: next.workflow.stage },
+    });
+    return { ok: true as const, stage: next.workflow.stage };
+  },
+);
+
+export const staffReopenTicketPaper = httpsV2.onCall(
+  { timeoutSeconds: 30, memory: '256MiB', enforceAppCheck: false },
+  async (request) => {
+    const caller = await loadPaperReader(request);
+    const parsed = parseWorkflowTicketRequest(request.data);
+    if (!parsed.ok) throwPaper(parsed.reason, parsed.message);
+    const store = createFirestorePaperStore();
+    const nowMs = Date.now();
+    const current = await loadWorkflowOrSeed(store, parsed.ticketDocId, nowMs);
+    if (!current) throwPaper('ticket_not_found', 'Ticket not found.');
+    const next = reopenForOverride(current, caller, parsed.reason, nowMs);
+    if (!next.ok) throwPaper(next.reason, next.message);
+    await store.putWorkflow(next.workflow);
+    await writeSecurityAudit({
+      action: 'staffReopenTicketPaper',
+      actorUid: caller.uid,
+      detail: { ticketDocId: parsed.ticketDocId, reason: next.workflow.overrideReason },
+    });
+    return { ok: true as const, overrideActive: true };
   },
 );

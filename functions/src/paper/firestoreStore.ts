@@ -10,6 +10,7 @@ import type {
   PaperInvoiceIndexRecord,
   PaperRevisionRecord,
   PaperSourceEventRecord,
+  PaperWorkflowRecord,
   TicketSourceRecord,
 } from './types';
 
@@ -111,6 +112,19 @@ export function createFirestorePaperStore(deps?: {
     async getSourceEvent(sourceEventId) {
       const snap = await fs().collection('paper_source_events').doc(eventDocId(sourceEventId)).get();
       return snap.exists ? (snap.data() as PaperSourceEventRecord) : null;
+    },
+    async getWorkflow(ticketDocId) {
+      const snap = await fs().collection('paper_ticket_workflows').doc(ticketDocId).get();
+      return snap.exists ? (snap.data() as PaperWorkflowRecord) : null;
+    },
+    async putWorkflow(row) {
+      await fs().collection('paper_ticket_workflows').doc(row.ticketDocId).set(row);
+    },
+    async patchTicket(ticketDocId, patch) {
+      await fs().collection('tickets').doc(ticketDocId).update(patch);
+    },
+    async patchInvoice(invoiceDocId, patch) {
+      await fs().collection('invoices').doc(invoiceDocId).update(patch);
     },
     async readHtmlBytes(path) {
       try {

@@ -1,6 +1,5 @@
-import { timestampMs } from './format';
-import { splitLivePhotos } from './photos';
-import { paperSourceFingerprint } from './projection';
+import { utf8Bytes } from './hash';
+import { collectPaperSource, paperSourceFingerprint } from './projection';
 import type {
   InvoiceSourceRecord,
   PaperEditSource,
@@ -9,26 +8,8 @@ import type {
   TicketSourceRecord,
 } from './types';
 
-function freezeValue(v: unknown): unknown {
-  if (v == null) return v;
-  if (typeof v === 'string' || typeof v === 'number' || typeof v === 'boolean') return v;
-  const ms = timestampMs(v);
-  if (ms != null && typeof v === 'object') return ms;
-  if (Array.isArray(v)) return v.map(freezeValue);
-  if (typeof v === 'object') {
-    const out: Record<string, unknown> = {};
-    for (const [k, val] of Object.entries(v as Record<string, unknown>)) {
-      if (typeof val === 'function' || val === undefined) continue;
-      out[k] = freezeValue(val);
-    }
-    return out;
-  }
-  return null;
-}
-
-export function freezeRecord<T extends Record<string, unknown>>(rec: T): T {
-  return freezeValue(rec) as T;
-}
+/** Event docs stay well under Firestore's 1MB limit. */
+export const MAX_SOURCE_SNAPSHOT_BYTES = 64 * 1024;
 
 export function buildPaperSourceSnapshot(input: {
   op: PaperOp;
@@ -38,20 +19,83 @@ export function buildPaperSourceSnapshot(input: {
   paperTimeZone: string;
   legalName?: string;
   displayName?: string;
-}): PaperSourceSnapshot {
-  const ticket = freezeRecord({ ...input.ticket });
-  const invoice = input.invoice ? freezeRecord({ ...input.invoice }) : null;
-  const live = splitLivePhotos(invoice?.photos);
+}): { ok: true; snapshot: PaperSourceSnapshot } | { ok: false; reason: string; message: string } {
+  const source = collectPaperSource(input.ticket, input.invoice);
   const snapshot: PaperSourceSnapshot = {
     op: input.op,
-    ticket,
-    invoice,
-    fingerprint: paperSourceFingerprint(ticket, invoice),
+    ticketDocId: input.ticket.id,
+    invoiceDocId: source.invoiceDocId,
+    companyId: source.companyId,
+    ownerDriverId: source.ownerDriverId,
+    ticketNumber: source.ticketNumber,
+    fingerprint: paperSourceFingerprint(input.ticket, input.invoice),
     paperTimeZone: input.paperTimeZone,
-    assetUris: [...live.photos.map((p) => p.uri), ...(live.jsaUri ? [live.jsaUri] : [])],
+    assetUris: [...source.photos.map((p) => p.uri), ...(source.jsaUri ? [source.jsaUri] : [])],
+    source,
+    snapshotBytes: 0,
   };
   if (input.editSource) snapshot.editSource = input.editSource;
   if (input.legalName) snapshot.legalName = input.legalName;
   if (input.displayName) snapshot.displayName = input.displayName;
-  return snapshot;
+  const bytes = utf8Bytes(JSON.stringify(snapshot));
+  snapshot.snapshotBytes = bytes.length;
+  if (bytes.length > MAX_SOURCE_SNAPSHOT_BYTES) {
+    return { ok: false, reason: 'snapshot_too_large', message: 'Paper source snapshot exceeds 64KB bound.' };
+  }
+  return { ok: true, snapshot };
+}
+
+export function recordsFromPaperSourceSnapshot(snap: PaperSourceSnapshot): {
+  ticket: TicketSourceRecord;
+  invoice: InvoiceSourceRecord | null;
+} {
+  const s = snap.source;
+  const ticket: TicketSourceRecord = {
+    id: snap.ticketDocId,
+    ticketNumber: s.ticketNumber,
+    companyId: s.companyId,
+    invoiceDocId: s.invoiceDocId,
+    date: s.dateRaw,
+    operator: s.operator,
+    location: s.pickupLocation,
+    hauledTo: s.dropoffLocation,
+    driver: s.driverLabel,
+    truck: s.truck,
+    trailer: s.trailer,
+    pickupBbls: s.pickupBbls,
+    dropoffBbls: s.dropoffBbls,
+    top: s.tankTop,
+    bottom: s.tankBottom,
+    hours: s.totalHours,
+    ownerDriverId: s.ownerDriverId,
+    submittedBy: s.submittedBy,
+    updatedBy: s.updatedBy,
+    createdAtMs: s.createdAtMs,
+    invoiceNumber: s.invoiceNumber,
+  };
+  if (!snap.invoiceDocId) return { ticket, invoice: null };
+  const photos = s.jsaUri
+    ? [...s.photos, { uri: s.jsaUri, type: 'jsa' }]
+    : s.photos;
+  const invoice: InvoiceSourceRecord = {
+    id: snap.invoiceDocId,
+    companyId: s.companyId,
+    invoiceNumber: s.invoiceNumber,
+    invoicingMode: s.invoicingMode,
+    operator: s.operator,
+    wellName: s.pickupLocation,
+    hauledTo: s.dropoffLocation,
+    driver: s.driverLabel,
+    truckNumber: s.truck,
+    trailer: s.trailer,
+    totalBBL: s.totalBbl,
+    totalHours: s.totalHours,
+    invoiceStartedAt: s.invoiceStartedAt,
+    startTime: s.startTime,
+    timezone: s.timezone,
+    ownerDriverId: s.ownerDriverId,
+    photos,
+    timeline: s.timeline,
+  };
+  return { ticket, invoice };
 }

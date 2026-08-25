@@ -8,7 +8,7 @@ import { splitLivePhotos } from './photos';
 import { buildRevisionRecord, paperAssetPath } from './persist';
 import { isTicketOnlyWaterTicket, projectWaterTicket } from './projection';
 import { deriveGovernedSourceEvent } from './sourceEvent';
-import { buildPaperSourceSnapshot } from './sourceSnapshot';
+import { buildPaperSourceSnapshot, recordsFromPaperSourceSnapshot } from './sourceSnapshot';
 import type { PaperStore } from './store';
 import {
   waterTicketArtifactId,
@@ -128,7 +128,7 @@ export async function materializeWaterTicketPaper(input: {
   const identity = ownerDriverId ? await input.store.getIdentityByDriverId(ownerDriverId) : null;
   const timeZone = (await input.store.getCompanyTimeZone(companyId)) || DEFAULT_PAPER_TIMEZONE;
   const artifactId = waterTicketArtifactId(ticket.id);
-  const sourceSnapshot = buildPaperSourceSnapshot({
+  const built = buildPaperSourceSnapshot({
     op: input.op,
     editSource: input.editSource,
     ticket,
@@ -137,6 +137,8 @@ export async function materializeWaterTicketPaper(input: {
     legalName: identity?.legalName,
     displayName: identity?.displayName,
   });
+  if (!built.ok) return built;
+  const sourceSnapshot = built.snapshot;
   const reserved = await input.store.reserveSourceEvent({
     sourceEventId: derived.sourceEventId,
     eventMs: derived.eventMs,
@@ -162,7 +164,8 @@ export async function materializeWaterTicketPaper(input: {
   }
 
   const frozen = reserved.event.sourceSnapshot || sourceSnapshot;
-  const snapped = await snapshotAssets(input.store, frozen.invoice?.photos, {
+  const records = recordsFromPaperSourceSnapshot(frozen);
+  const snapped = await snapshotAssets(input.store, records.invoice?.photos, {
     companyId,
     artifactId,
     revisionId: reserved.event.revisionId,
@@ -171,8 +174,8 @@ export async function materializeWaterTicketPaper(input: {
   });
   if (!snapped.ok) return snapped;
   const projected = projectWaterTicket({
-    ticket: frozen.ticket,
-    invoice: frozen.invoice,
+    ticket: records.ticket,
+    invoice: records.invoice,
     legalName: frozen.legalName,
     displayName: frozen.displayName,
     photos: snapped.photos,

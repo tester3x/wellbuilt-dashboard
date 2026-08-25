@@ -1,10 +1,13 @@
 'use client';
 
-import { useEffect, useState } from 'react';
+import { useEffect, useState, type ReactNode } from 'react';
 import { useRouter } from 'next/navigation';
 import { Ticket, InvoiceDetail, TimelineEvent, fetchInvoiceForTicket, fetchSiblingTickets } from '@/lib/tickets';
 import { getTicketPaperRoute, isCanonicalPaperEnabled, ticketsPaperLookup, type TicketPaperRoute } from '@/lib/canonicalPaper';
 import { CanonicalTicketPaperHost } from './CanonicalTicketPaperHost';
+import { TicketStructuredEditor } from './TicketStructuredEditor';
+import { TicketReadOnlyDetail } from './TicketReadOnlyDetail';
+import { TicketPolicyUnavailable, TicketRouteFailure } from './TicketPaperRouteStates';
 
 interface Props {
   ticket: Ticket;
@@ -12,73 +15,64 @@ interface Props {
   onNavigateTicket?: (ticket: Ticket) => void;
 }
 
-function TicketDetailModalCanonical({ ticket, onClose, onNavigateTicket }: Props) {
+function TicketDetailModalCanonical({ ticket, onClose }: Props) {
   const [route, setRoute] = useState<TicketPaperRoute | null>(null);
   const [preview, setPreview] = useState(false);
+  const [failed, setFailed] = useState(false);
 
   useEffect(() => {
     let cancelled = false;
     getTicketPaperRoute(ticketsPaperLookup(ticket.id)).then((r) => {
       if (!cancelled) setRoute(r);
     }).catch(() => {
-      if (!cancelled) {
-        setRoute({
-          ok: false,
-          reason: 'document_unavailable',
-          message: 'Document unavailable.',
-          canEdit: false,
-          evaluatedAtMs: Date.now(),
-          policyVersion: '',
-        });
-      }
+      if (!cancelled) setFailed(true);
     });
     return () => { cancelled = true; };
   }, [ticket.id]);
 
-  if (!route) {
-    return (
-      <div className="fixed inset-0 bg-black/70 flex items-start justify-center z-50 py-8" onClick={onClose}>
-        <div className="bg-[#FAFAF8] rounded-lg p-8 text-gray-500">Loading...</div>
-      </div>
-    );
-  }
-
-  const showPaper = route.ok && route.mode === 'canonical_paper' && !preview;
-  const showEditor = !route.ok || (route.ok && (route.mode === 'edit_form' || route.mode === 'read_only_detail'));
-  const previewAvailable = route.ok && route.previewAvailable;
-
-  if (showPaper || preview) {
-    return (
-      <div className="fixed inset-0 bg-black/70 flex items-start justify-center z-50 overflow-y-auto py-8" onClick={onClose}>
-        <div className="w-full max-w-2xl mx-4" onClick={(e) => e.stopPropagation()}>
-          <div className="flex items-center justify-between px-4 py-3 mb-0">
-            <button onClick={onClose} className="text-gray-400 hover:text-white text-sm flex items-center gap-1">
-              <span className="text-lg">&larr;</span>
-            </button>
-            <h2 className="text-white font-semibold">Ticket Detail</h2>
-            {route.ok && route.mode === 'edit_form' ? (
-              <button onClick={() => setPreview(false)} className="text-xs text-yellow-400">Editor</button>
-            ) : <div className="w-8" />}
-          </div>
-          <CanonicalTicketPaperHost lookup={ticketsPaperLookup(ticket.id)} onClose={onClose} />
-        </div>
-      </div>
-    );
-  }
-
-  return (
-    <>
-      {showEditor && previewAvailable && (
-        <button
-          type="button"
-          className="hidden"
-          aria-label="Preview paper"
-          onClick={() => setPreview(true)}
-        />
-      )}
-      <TicketDetailModalLegacy ticket={ticket} onClose={onClose} onNavigateTicket={onNavigateTicket} />
-    </>
+  const shell = (child: ReactNode) => (
+    <div className="fixed inset-0 bg-black/70 flex items-start justify-center z-50 overflow-y-auto py-8" onClick={onClose}>
+      <div className="w-full max-w-2xl mx-4" onClick={(e) => e.stopPropagation()}>{child}</div>
+    </div>
   );
+
+  if (failed) {
+    return shell(<TicketRouteFailure message="Could not load the paper route." onClose={onClose} />);
+  }
+  if (!route) {
+    return shell(<div className="bg-[#FAFAF8] rounded-lg p-8 text-center text-gray-500">Loading...</div>);
+  }
+  if (!route.ok) {
+    if (route.reason === 'policy_undefined') {
+      return shell(<TicketPolicyUnavailable message={route.message} gap={route.gap} onClose={onClose} />);
+    }
+    return shell(<TicketRouteFailure message={route.message} onClose={onClose} />);
+  }
+  if (preview || route.mode === 'canonical_paper') {
+    return shell(
+      <div data-paper-mode="canonical_paper">
+        {route.mode === 'edit_form' && (
+          <button type="button" className="mb-3 text-sm text-yellow-400 underline" onClick={() => setPreview(false)}>
+            Back to editor
+          </button>
+        )}
+        <CanonicalTicketPaperHost lookup={ticketsPaperLookup(ticket.id)} onClose={onClose} />
+      </div>,
+    );
+  }
+  if (route.mode === 'edit_form') {
+    return shell(
+      <TicketStructuredEditor
+        ticket={ticket}
+        allowedFields={route.allowedFields || []}
+        canEdit={route.canEdit}
+        previewAvailable={route.previewAvailable}
+        onPreview={() => setPreview(true)}
+        onClose={onClose}
+      />,
+    );
+  }
+  return shell(<TicketReadOnlyDetail ticket={ticket} onClose={onClose} />);
 }
 
 export function TicketDetailModal(props: Props) {

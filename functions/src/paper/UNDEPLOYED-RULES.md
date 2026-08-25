@@ -20,6 +20,9 @@ match /paper_source_events/{eventId} {
 match /paper_invoice_index/{invoiceDocId} {
   allow read, write: if false;
 }
+match /paper_ticket_workflows/{ticketDocId} {
+  allow read, write: if false;
+}
 ```
 
 ## Storage fragment (do not merge until authorized)

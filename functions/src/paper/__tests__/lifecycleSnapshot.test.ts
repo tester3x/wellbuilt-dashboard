@@ -1,5 +1,6 @@
 import { applyInvoicePaperLifecycle, applyTicketPaperLifecycle } from '../lifecycle';
 import { getWaterTicketPaper, materializeWaterTicketPaper } from '../engine';
+import { MAX_SOURCE_SNAPSHOT_BYTES, buildPaperSourceSnapshot } from '../sourceSnapshot';
 import { MemoryPaperStore } from '../store';
 import { waterTicketArtifactId } from '../types';
 import {
@@ -169,5 +170,39 @@ describe('media readiness', () => {
     const got = await getWaterTicketPaper({ store, caller: dispatchLg, lookup: { ticketDocId: TICKET_20100_ID } });
     expect(got.ok && got.html).toContain('data:image/png;base64,');
     expect(store.revisions.size).toBe(1);
+  });
+});
+
+describe('bounded source snapshot', () => {
+  it('stores paper-visible fields under the 64KB contract', () => {
+    const built = buildPaperSourceSnapshot({
+      op: 'close',
+      ticket: ticket20100,
+      invoice: invoice20100,
+      paperTimeZone: 'America/Chicago',
+      legalName: 'Mike ZFold7 Burger',
+    });
+    expect(built.ok).toBe(true);
+    if (!built.ok) return;
+    expect(built.snapshot.snapshotBytes).toBeLessThan(MAX_SOURCE_SNAPSHOT_BYTES);
+    expect(built.snapshot.source.pickupLocation).toBe('KAHUNA 2');
+    expect((built.snapshot as { ticket?: unknown }).ticket).toBeUndefined();
+    expect((built.snapshot as { invoice?: unknown }).invoice).toBeUndefined();
+  });
+
+  it('rejects a near-limit oversized source instead of writing an unbounded event', () => {
+    const hugeTimeline = Array.from({ length: 400 }, (_, i) => ({
+      type: 'arrive',
+      timestamp: `2026-08-23T18:00:00.${String(i).padStart(3, '0')}Z`,
+      locationName: 'X'.repeat(200),
+      reason: 'Y'.repeat(200),
+    }));
+    const built = buildPaperSourceSnapshot({
+      op: 'close',
+      ticket: ticket20100,
+      invoice: { ...invoice20100, timeline: hugeTimeline },
+      paperTimeZone: 'America/Chicago',
+    });
+    expect(built).toMatchObject({ ok: false, reason: 'snapshot_too_large' });
   });
 });

@@ -7,6 +7,7 @@ import type {
   PaperRevisionRecord,
   PaperSourceEventRecord,
   PaperSourceSnapshot,
+  PaperWorkflowRecord,
   TicketSourceRecord,
 } from './types';
 
@@ -36,6 +37,10 @@ export interface PaperStore {
   getRevision(artifactId: string, revisionId: string): Promise<PaperRevisionRecord | null>;
   getInvoiceIndex(invoiceDocId: string): Promise<PaperInvoiceIndexRecord | null>;
   getSourceEvent(sourceEventId: string): Promise<PaperSourceEventRecord | null>;
+  getWorkflow(ticketDocId: string): Promise<PaperWorkflowRecord | null>;
+  putWorkflow(row: PaperWorkflowRecord): Promise<void>;
+  patchTicket(ticketDocId: string, patch: Record<string, unknown>): Promise<void>;
+  patchInvoice(invoiceDocId: string, patch: Record<string, unknown>): Promise<void>;
   readHtmlBytes(path: string): Promise<Buffer | null>;
 
   reserveSourceEvent(input: {
@@ -72,6 +77,7 @@ export class MemoryPaperStore implements PaperStore {
   identities = new Map<string, PaperIdentity>();
   invoiceIndex = new Map<string, PaperInvoiceIndexRecord>();
   sourceEvents = new Map<string, PaperSourceEventRecord>();
+  workflows = new Map<string, PaperWorkflowRecord>();
   liveAssets = new Map<string, Buffer>();
   companyTimezones = new Map<string, string>();
   fetchCount = 0;
@@ -146,6 +152,23 @@ export class MemoryPaperStore implements PaperStore {
   async getSourceEvent(sourceEventId: string) {
     const ev = this.sourceEvents.get(sourceEventId);
     return ev ? { ...ev } : null;
+  }
+  async getWorkflow(ticketDocId: string) {
+    const row = this.workflows.get(ticketDocId);
+    return row ? { ...row } : null;
+  }
+  async putWorkflow(row: PaperWorkflowRecord) {
+    this.workflows.set(row.ticketDocId, { ...row });
+  }
+  async patchTicket(ticketDocId: string, patch: Record<string, unknown>) {
+    const cur = this.tickets.get(ticketDocId);
+    if (!cur) throw new Error('ticket_not_found');
+    this.tickets.set(ticketDocId, { ...cur, ...patch });
+  }
+  async patchInvoice(invoiceDocId: string, patch: Record<string, unknown>) {
+    const cur = this.invoices.get(invoiceDocId);
+    if (!cur) throw new Error('invoice_not_found');
+    this.invoices.set(invoiceDocId, { ...cur, ...patch });
   }
   async readHtmlBytes(path: string) {
     const buf = this.html.get(path);

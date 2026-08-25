@@ -62,6 +62,7 @@ export type TicketPaperRoute = {
   evaluatedAtMs: number;
   policyVersion: string;
   previewAvailable: boolean;
+  allowedFields?: string[];
   artifactId?: string;
   revisionId?: string;
 } | {
@@ -78,4 +79,10 @@ export async function getTicketPaperRoute(lookup: PaperLookup): Promise<TicketPa
   const fn = httpsCallable(getFirebaseFunctions(), 'getTicketPaperRoute');
   const res = await fn(lookup);
   return res.data as TicketPaperRoute;
+}
+
+export async function staffMutateTicketPaper(ticketDocId: string, fields: Record<string, unknown>): Promise<{ ok: true }> {
+  const fn = httpsCallable(getFirebaseFunctions(), 'staffMutateTicketPaper');
+  const res = await fn({ ticketDocId, fields });
+  return res.data as { ok: true };
 }

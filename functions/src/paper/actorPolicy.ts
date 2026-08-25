@@ -1,29 +1,59 @@
 /**
- * Actor presentation / mutation policy for canonical paper.
+ * Canonical paper actor routing v2.
  *
- * GOVERNED (copied, not invented):
- *   Driver owner 24h window from invoice.createdAt || closedAt.
- *   Matches WB-T functions/src/ticketEdit.ts authorizeTicketEditGoverned
- *   and HistoryScreen.canEdit / utils/historyCardCore.EDIT_WINDOW_MS.
- *   Server clock only. Platform admin is the WB-T privileged bypass.
+ * Driver 24h window starts at invoice.closedAt/closedAtMs only — not createdAt.
+ * Dashboard authority is capability + workflow stage, not roles[0].
+ * Platform admin is an explicit override, not a standing editor.
  *
- * NOT GOVERNED — do not invent:
- *   Dispatch pay-period ticket-edit window
- *   Payroll lock after dispatch
- *   Billing/finalization lock
- *   Offline: edit started before expiry, synced after (WB-T uses Date.now()
- *   at transaction time; this module identifies that boundary and does not
- *   decide a new rule)
+ * WB-T updateTicket still uses createdAt||closedAt. That mismatch is reported;
+ * this module does not edit WB-T.
  */
 import { asTrimmedString, timestampMs } from './format';
-import { isAuthoritativelyClosed } from './lifecycle';
 import { canonicalDriverIdFromRecords } from './identity';
-import type { InvoiceSourceRecord, PaperCaller, TicketSourceRecord } from './types';
+import type {
+  InvoiceSourceRecord,
+  PaperCaller,
+  PaperWorkflowRecord,
+  PaperWorkflowStage,
+  TicketSourceRecord,
+} from './types';
 
-export const PAPER_ACTOR_POLICY_VERSION = 'canonical-paper-actor-routing.v1';
+export const PAPER_ACTOR_POLICY_VERSION = 'canonical-paper-actor-routing.v2';
 export const DRIVER_EDIT_WINDOW_MS = 24 * 60 * 60 * 1000;
 
+export const DRIVER_MUTATION_FIELDS = [
+  'date', 'operator', 'company', 'location', 'wellName', 'hauledTo', 'disposal',
+  'truck', 'trailer', 'qty', 'bbls', 'pickupBbls', 'dropoffBbls', 'top', 'bottom',
+  'hours', 'notes',
+] as const;
+
+export const DISPATCH_MUTATION_FIELDS = [
+  'date', 'operator', 'company', 'location', 'wellName', 'hauledTo', 'disposal',
+  'truck', 'trailer', 'driver', 'hours', 'notes',
+] as const;
+
+export const PAYROLL_MUTATION_FIELDS = [
+  'qty', 'bbls', 'pickupBbls', 'dropoffBbls', 'top', 'bottom', 'hours',
+  'totalBBL', 'totalHours',
+] as const;
+
+export const BILLING_TICKET_MUTATION_FIELDS = [] as const;
+
+export const ADMIN_OVERRIDE_FIELDS = [
+  ...new Set([...DRIVER_MUTATION_FIELDS, ...DISPATCH_MUTATION_FIELDS, ...PAYROLL_MUTATION_FIELDS]),
+];
+
+const ROLE_CAPS: Record<string, string[]> = {
+  dispatch: ['viewDispatch', 'viewTickets', 'createDispatch'],
+  payroll: ['viewPayroll', 'viewBilling', 'approvePayroll', 'editBilling'],
+  manager: ['viewDispatch', 'viewTickets', 'viewPayroll', 'createDispatch', 'manageDrivers'],
+  admin: ['viewDispatch', 'viewTickets', 'viewPayroll', 'viewBilling', 'createDispatch', 'approvePayroll', 'editBilling', 'manageDrivers'],
+  it: ['viewDispatch', 'viewTickets', 'viewPayroll', 'viewBilling', 'createDispatch', 'approvePayroll', 'editBilling', 'manageDrivers'],
+  viewer: ['viewTickets', 'viewDispatch', 'viewPayroll', 'viewBilling'],
+};
+
 export type PaperPresentationMode = 'edit_form' | 'canonical_paper' | 'read_only_detail';
+export type PaperStageActor = 'driver' | 'dispatch' | 'payroll' | 'billing' | 'admin' | 'viewer';
 
 export type PaperPresentationDecision = {
   ok: true;
@@ -33,6 +63,9 @@ export type PaperPresentationDecision = {
   evaluatedAtMs: number;
   policyVersion: string;
   previewAvailable: boolean;
+  stageActor: PaperStageActor;
+  workflowStage: PaperWorkflowStage | 'open' | 'driver_correction';
+  allowedFields: string[];
   artifactId?: string;
   revisionId?: string;
   windowOriginMs?: number | null;
@@ -47,16 +80,33 @@ export type PaperPresentationDecision = {
   gap?: string;
 };
 
-/** Invoice createdAt || closedAt — same origin as WB-T updateTicket. */
+export function callerHasCap(caller: PaperCaller, cap: string): boolean {
+  if ((caller.caps || []).includes(cap)) return true;
+  for (const role of caller.roles || []) {
+    if ((ROLE_CAPS[role] || []).includes(cap)) return true;
+  }
+  return false;
+}
+
+function isClosedStatus(status: unknown): boolean {
+  const s = asTrimmedString(status).toLowerCase();
+  return s === 'closed' || s === 'complete' || s === 'completed';
+}
+
+function invoiceLooksClosed(invoice: InvoiceSourceRecord | Record<string, unknown> | null | undefined): boolean {
+  if (!invoice) return false;
+  const rec = invoice as Record<string, unknown>;
+  if (timestampMs(rec.closedAt) || timestampMs(rec.closedAtMs)) return true;
+  return isClosedStatus(rec.status);
+}
+
+/** Authoritative close instant only. Never createdAt. */
 export function driverEditWindowOriginMs(
   invoice: InvoiceSourceRecord | Record<string, unknown> | null | undefined,
 ): number | null {
   if (!invoice) return null;
   const rec = invoice as Record<string, unknown>;
-  return timestampMs(rec.createdAtMs)
-    || timestampMs(rec.createdAt)
-    || timestampMs(rec.closedAtMs)
-    || timestampMs(rec.closedAt);
+  return timestampMs(rec.closedAtMs) || timestampMs(rec.closedAt);
 }
 
 export function driverOwnsTicket(
@@ -75,45 +125,106 @@ export function driverOwnsTicket(
   return owner === caller.driverId;
 }
 
-/**
- * Server-side mutation gate. Hiding the form is not enforcement.
- * Dashboard dispatch/payroll ticket-field mutation is policy_undefined (deny).
- * WB-T updateTicket remains the live driver enforcement point (not edited here).
- */
+export function workflowStageFor(
+  invoice: InvoiceSourceRecord | null,
+  workflow: PaperWorkflowRecord | null,
+): PaperWorkflowStage | 'open' {
+  if (!invoiceLooksClosed(invoice) && !driverEditWindowOriginMs(invoice)) return 'open';
+  return workflow?.stage || 'dispatch_review';
+}
+
+export function resolveStageActor(
+  caller: PaperCaller,
+  stage: PaperWorkflowStage | 'open',
+): PaperStageActor {
+  if (caller.kind === 'driver') return 'driver';
+  if (caller.isPlatformAdmin) return 'admin';
+  if (stage === 'payroll_review' && callerHasCap(caller, 'approvePayroll')) return 'payroll';
+  if (stage === 'dispatch_review' && callerHasCap(caller, 'createDispatch')) return 'dispatch';
+  if (stage === 'billing' && (callerHasCap(caller, 'editBilling') || callerHasCap(caller, 'viewBilling'))) return 'billing';
+  if (stage === 'open' && callerHasCap(caller, 'createDispatch')) return 'dispatch';
+  if (callerHasCap(caller, 'viewTickets') || callerHasCap(caller, 'viewDispatch')) return 'viewer';
+  return 'viewer';
+}
+
+export function allowedFieldsFor(actor: PaperStageActor, overrideActive: boolean): string[] {
+  if (actor === 'driver') return [...DRIVER_MUTATION_FIELDS];
+  if (actor === 'dispatch') return [...DISPATCH_MUTATION_FIELDS];
+  if (actor === 'payroll') return [...PAYROLL_MUTATION_FIELDS];
+  if (actor === 'admin' && overrideActive) return [...ADMIN_OVERRIDE_FIELDS];
+  return [];
+}
+
 export function assertActorMayMutateTicket(input: {
   caller: PaperCaller;
   ticket: TicketSourceRecord;
   invoice: InvoiceSourceRecord | null;
+  workflow?: PaperWorkflowRecord | null;
   nowMs: number;
-}): { ok: true; via: string } | { ok: false; reason: string; message: string } {
-  const nowMs = input.nowMs;
+  fields?: string[];
+}): { ok: true; via: string; allowedFields: string[] } | { ok: false; reason: string; message: string } {
+  const closedAtMs = driverEditWindowOriginMs(input.invoice);
+  const closed = invoiceLooksClosed(input.invoice) || closedAtMs != null;
+  const stage = workflowStageFor(input.invoice, input.workflow || null);
+  const actor = resolveStageActor(input.caller, stage);
+
   if (input.caller.kind === 'system') {
     return { ok: false, reason: 'unauthorized', message: 'System callers do not mutate tickets.' };
   }
-  if (input.caller.isPlatformAdmin && input.caller.kind === 'dashboard') {
-    return { ok: true, via: 'admin' };
+
+  if (actor === 'admin') {
+    if (!input.workflow?.overrideActive) {
+      return { ok: false, reason: 'override_required', message: 'Platform admin must reopen with a reason before mutating.' };
+    }
+    return finish('admin_override', allowedFieldsFor('admin', true), input.fields);
   }
-  if (input.caller.kind === 'dashboard') {
-    return {
-      ok: false,
-      reason: 'policy_undefined',
-      message: 'No governed dispatch/payroll/billing ticket-edit window exists.',
-    };
+
+  if (actor === 'driver') {
+    if (!driverOwnsTicket(input.caller, input.ticket, input.invoice)) {
+      return { ok: false, reason: 'not_ticket_owner', message: 'Driver may only edit their own ticket.' };
+    }
+    if (closed && closedAtMs == null) {
+      return { ok: false, reason: 'edit_window_unknown', message: 'Closed job has no authoritative closedAt.' };
+    }
+    if (closed && input.nowMs - closedAtMs! >= DRIVER_EDIT_WINDOW_MS) {
+      return { ok: false, reason: 'edit_window_expired', message: 'Driver correction window has expired.' };
+    }
+    return finish('owner', allowedFieldsFor('driver', false), input.fields);
   }
-  if (input.caller.kind !== 'driver') {
-    return { ok: false, reason: 'unauthorized', message: 'Caller cannot mutate this ticket.' };
+
+  if (actor === 'dispatch') {
+    if (stage !== 'dispatch_review') {
+      return { ok: false, reason: 'workflow_locked', message: 'Dispatch handoff to payroll has already occurred.' };
+    }
+    return finish('dispatch', allowedFieldsFor('dispatch', false), input.fields);
   }
-  if (!driverOwnsTicket(input.caller, input.ticket, input.invoice)) {
-    return { ok: false, reason: 'not_ticket_owner', message: 'Driver may only edit their own ticket.' };
+
+  if (actor === 'payroll') {
+    if (stage !== 'payroll_review') {
+      return { ok: false, reason: 'workflow_locked', message: 'Payroll has finalized this ticket to billing.' };
+    }
+    return finish('payroll', allowedFieldsFor('payroll', false), input.fields);
   }
-  const originMs = driverEditWindowOriginMs(input.invoice);
-  if (originMs == null) {
-    return { ok: false, reason: 'edit_window_unknown', message: 'Edit window origin is unresolvable.' };
+
+  if (actor === 'billing') {
+    return { ok: false, reason: 'billing_cannot_mutate_ticket', message: 'Billing cannot mutate the original water ticket.' };
   }
-  if (nowMs - originMs >= DRIVER_EDIT_WINDOW_MS) {
-    return { ok: false, reason: 'edit_window_expired', message: 'Driver correction window has expired.' };
+
+  return { ok: false, reason: 'unauthorized', message: 'Caller cannot mutate this ticket.' };
+}
+
+function finish(
+  via: string,
+  allowedFields: string[],
+  fields?: string[],
+): { ok: true; via: string; allowedFields: string[] } | { ok: false; reason: string; message: string } {
+  if (fields) {
+    const extra = fields.filter((f) => !allowedFields.includes(f));
+    if (extra.length) {
+      return { ok: false, reason: 'unexpected_field', message: `Field not permitted in this stage: ${extra[0]}` };
+    }
   }
-  return { ok: true, via: 'owner' };
+  return { ok: true, via, allowedFields };
 }
 
 export function evaluatePaperPresentation(input: {
@@ -121,14 +232,24 @@ export function evaluatePaperPresentation(input: {
   ticket: TicketSourceRecord;
   invoice: InvoiceSourceRecord | null;
   nowMs: number;
+  workflow?: PaperWorkflowRecord | null;
   artifact?: { artifactId: string; currentRevisionId: string } | null;
 }): PaperPresentationDecision {
   const evaluatedAtMs = input.nowMs;
   const policyVersion = PAPER_ACTOR_POLICY_VERSION;
-  const closed = isAuthoritativelyClosed(input.invoice);
+  const closedAtMs = driverEditWindowOriginMs(input.invoice);
+  const closed = invoiceLooksClosed(input.invoice) || closedAtMs != null;
+  const stage = workflowStageFor(input.invoice, input.workflow || null);
+  const actor = resolveStageActor(input.caller, stage);
   const paperMeta = input.artifact?.currentRevisionId
     ? { artifactId: input.artifact.artifactId, revisionId: input.artifact.currentRevisionId }
     : {};
+  const base = {
+    evaluatedAtMs,
+    policyVersion,
+    stageActor: actor,
+    workflowStage: (closed ? stage : 'open') as PaperWorkflowStage | 'open' | 'driver_correction',
+  };
 
   if (input.caller.kind === 'driver') {
     if (!driverOwnsTicket(input.caller, input.ticket, input.invoice)) {
@@ -141,34 +262,44 @@ export function evaluatePaperPresentation(input: {
         policyVersion,
       };
     }
-    const originMs = driverEditWindowOriginMs(input.invoice);
-    const expiresAtMs = originMs != null ? originMs + DRIVER_EDIT_WINDOW_MS : null;
-    const withinWindow = originMs != null && evaluatedAtMs - originMs < DRIVER_EDIT_WINDOW_MS;
     if (!closed) {
       return {
         ok: true,
         mode: 'edit_form',
         canEdit: true,
         reason: 'driver_open_job',
-        evaluatedAtMs,
-        policyVersion,
         previewAvailable: false,
-        windowOriginMs: originMs,
-        windowExpiresAtMs: expiresAtMs,
+        allowedFields: [...DRIVER_MUTATION_FIELDS],
+        windowOriginMs: null,
+        windowExpiresAtMs: null,
+        ...base,
+        workflowStage: 'open',
       };
     }
-    if (withinWindow) {
+    if (closedAtMs == null) {
+      return {
+        ok: false,
+        reason: 'edit_window_unknown',
+        message: 'Closed job has no authoritative closedAt.',
+        canEdit: false,
+        evaluatedAtMs,
+        policyVersion,
+      };
+    }
+    const expiresAtMs = closedAtMs + DRIVER_EDIT_WINDOW_MS;
+    if (evaluatedAtMs - closedAtMs < DRIVER_EDIT_WINDOW_MS) {
       return {
         ok: true,
         mode: 'edit_form',
         canEdit: true,
         reason: 'driver_correction_window',
-        evaluatedAtMs,
-        policyVersion,
         previewAvailable: true,
-        windowOriginMs: originMs,
+        allowedFields: [...DRIVER_MUTATION_FIELDS],
+        windowOriginMs: closedAtMs,
         windowExpiresAtMs: expiresAtMs,
         ...paperMeta,
+        ...base,
+        workflowStage: 'driver_correction',
       };
     }
     return {
@@ -176,49 +307,89 @@ export function evaluatePaperPresentation(input: {
       mode: 'canonical_paper',
       canEdit: false,
       reason: 'edit_window_expired',
-      evaluatedAtMs,
-      policyVersion,
       previewAvailable: true,
-      windowOriginMs: originMs,
+      allowedFields: [],
+      windowOriginMs: closedAtMs,
       windowExpiresAtMs: expiresAtMs,
       ...paperMeta,
+      ...base,
     };
   }
 
-  if (input.caller.kind === 'dashboard' && input.caller.isPlatformAdmin) {
+  if (actor === 'admin') {
+    if (input.workflow?.overrideActive) {
+      return {
+        ok: true,
+        mode: 'edit_form',
+        canEdit: true,
+        reason: 'admin_override',
+        previewAvailable: true,
+        allowedFields: [...ADMIN_OVERRIDE_FIELDS],
+        ...paperMeta,
+        ...base,
+      };
+    }
+    return {
+      ok: true,
+      mode: closed ? 'canonical_paper' : 'read_only_detail',
+      canEdit: false,
+      reason: closed ? 'admin_view_paper' : 'admin_open_readonly',
+      previewAvailable: false,
+      allowedFields: [],
+      ...paperMeta,
+      ...base,
+    };
+  }
+
+  if (!closed) {
+    return {
+      ok: true,
+      mode: 'read_only_detail',
+      canEdit: false,
+      reason: 'open_job_unproven_edit',
+      previewAvailable: false,
+      allowedFields: [],
+      ...base,
+      workflowStage: 'open',
+    };
+  }
+
+  if (actor === 'dispatch' && stage === 'dispatch_review') {
     return {
       ok: true,
       mode: 'edit_form',
       canEdit: true,
-      reason: 'privileged_admin',
-      evaluatedAtMs,
-      policyVersion,
-      previewAvailable: closed,
+      reason: 'dispatch_review',
+      previewAvailable: true,
+      allowedFields: [...DISPATCH_MUTATION_FIELDS],
       ...paperMeta,
+      ...base,
     };
   }
 
-  if (input.caller.kind === 'dashboard') {
-    const role = (input.caller.roles || [])[0] || 'dashboard';
-    if (!closed) {
-      return {
-        ok: true,
-        mode: 'read_only_detail',
-        canEdit: false,
-        reason: 'open_job_unproven_edit',
-        evaluatedAtMs,
-        policyVersion,
-        previewAvailable: false,
-      };
-    }
+  if (actor === 'payroll' && stage === 'payroll_review') {
     return {
-      ok: false,
-      reason: 'policy_undefined',
-      message: 'No governed dispatch/payroll/billing ticket-edit window exists.',
+      ok: true,
+      mode: 'edit_form',
+      canEdit: true,
+      reason: 'payroll_review',
+      previewAvailable: true,
+      allowedFields: [...PAYROLL_MUTATION_FIELDS],
+      ...paperMeta,
+      ...base,
+    };
+  }
+
+  if (actor === 'dispatch' || actor === 'payroll' || actor === 'billing' || actor === 'viewer') {
+    return {
+      ok: true,
+      mode: 'canonical_paper',
       canEdit: false,
-      evaluatedAtMs,
-      policyVersion,
-      gap: `${role}_ticket_edit_window`,
+      reason: actor === 'billing' ? 'billing_receives_paper' : 'stage_locked_paper',
+      previewAvailable: true,
+      allowedFields: [],
+      ...paperMeta,
+      ...base,
     };
   }
 
@@ -235,5 +406,8 @@ export function evaluatePaperPresentation(input: {
 export function presentationRoleLabel(caller: PaperCaller): string {
   if (caller.kind === 'driver') return 'driver';
   if (caller.isPlatformAdmin) return 'platform_admin';
+  if (callerHasCap(caller, 'approvePayroll')) return 'payroll';
+  if (callerHasCap(caller, 'createDispatch')) return 'dispatch';
+  if (callerHasCap(caller, 'editBilling')) return 'billing';
   return asTrimmedString((caller.roles || [])[0]) || 'dashboard';
 }

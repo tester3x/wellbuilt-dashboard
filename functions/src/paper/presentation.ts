@@ -43,11 +43,13 @@ export async function resolvePaperPresentation(input: {
   const invoiceId = String(ticket.invoiceDocId || '').trim();
   const invoice = invoiceId ? await input.store.getInvoice(invoiceId) : null;
   const artifact = await input.store.getArtifact(waterTicketArtifactId(ticket.id));
+  const workflow = await input.store.getWorkflow(ticket.id);
   return evaluatePaperPresentation({
     caller: input.caller,
     ticket,
     invoice,
     nowMs: input.nowMs,
+    workflow,
     artifact: artifact
       ? { artifactId: artifact.artifactId, currentRevisionId: artifact.currentRevisionId }
       : null,

@@ -45,3 +45,41 @@ export function parseMaterializeRequest(raw: unknown):
   }
   return { ok: true, ticketDocId, op };
 }
+
+export function parseMutatePaperRequest(raw: unknown):
+  | { ok: true; ticketDocId: string; fields: Record<string, unknown> }
+  | { ok: false; reason: string; message: string } {
+  if (!raw || typeof raw !== 'object' || Array.isArray(raw)) {
+    return { ok: false, reason: 'invalid_request', message: 'Request must be an object.' };
+  }
+  const rec = raw as Record<string, unknown>;
+  for (const key of Object.keys(rec)) {
+    if (key !== 'ticketDocId' && key !== 'fields') {
+      return { ok: false, reason: 'unexpected_field', message: `Unexpected field: ${key}` };
+    }
+  }
+  const ticketDocId = typeof rec.ticketDocId === 'string' ? rec.ticketDocId.trim() : '';
+  if (!ticketDocId) return { ok: false, reason: 'ticket_id_required', message: 'ticketDocId is required.' };
+  if (!rec.fields || typeof rec.fields !== 'object' || Array.isArray(rec.fields)) {
+    return { ok: false, reason: 'invalid_request', message: 'fields must be an object.' };
+  }
+  return { ok: true, ticketDocId, fields: rec.fields as Record<string, unknown> };
+}
+
+export function parseWorkflowTicketRequest(raw: unknown):
+  | { ok: true; ticketDocId: string; reason: string }
+  | { ok: false; reason: string; message: string } {
+  if (!raw || typeof raw !== 'object' || Array.isArray(raw)) {
+    return { ok: false, reason: 'invalid_request', message: 'Request must be an object.' };
+  }
+  const rec = raw as Record<string, unknown>;
+  for (const key of Object.keys(rec)) {
+    if (key !== 'ticketDocId' && key !== 'reason') {
+      return { ok: false, reason: 'unexpected_field', message: `Unexpected field: ${key}` };
+    }
+  }
+  const ticketDocId = typeof rec.ticketDocId === 'string' ? rec.ticketDocId.trim() : '';
+  if (!ticketDocId) return { ok: false, reason: 'ticket_id_required', message: 'ticketDocId is required.' };
+  const reason = typeof rec.reason === 'string' ? rec.reason.trim() : '';
+  return { ok: true, ticketDocId, reason };
+}
