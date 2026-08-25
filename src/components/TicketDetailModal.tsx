@@ -3,7 +3,7 @@
 import { useEffect, useState } from 'react';
 import { useRouter } from 'next/navigation';
 import { Ticket, InvoiceDetail, TimelineEvent, fetchInvoiceForTicket, fetchSiblingTickets } from '@/lib/tickets';
-import { isCanonicalPaperEnabled, ticketsPaperLookup } from '@/lib/canonicalPaper';
+import { getTicketPaperRoute, isCanonicalPaperEnabled, ticketsPaperLookup, type TicketPaperRoute } from '@/lib/canonicalPaper';
 import { CanonicalTicketPaperHost } from './CanonicalTicketPaperHost';
 
 interface Props {
@@ -12,20 +12,72 @@ interface Props {
   onNavigateTicket?: (ticket: Ticket) => void;
 }
 
-function TicketDetailModalCanonical({ ticket, onClose }: Props) {
-  return (
-    <div className="fixed inset-0 bg-black/70 flex items-start justify-center z-50 overflow-y-auto py-8" onClick={onClose}>
-      <div className="w-full max-w-2xl mx-4" onClick={(e) => e.stopPropagation()}>
-        <div className="flex items-center justify-between px-4 py-3 mb-0">
-          <button onClick={onClose} className="text-gray-400 hover:text-white text-sm flex items-center gap-1">
-            <span className="text-lg">&larr;</span>
-          </button>
-          <h2 className="text-white font-semibold">Ticket Detail</h2>
-          <div className="w-8" />
-        </div>
-        <CanonicalTicketPaperHost lookup={ticketsPaperLookup(ticket.id)} onClose={onClose} />
+function TicketDetailModalCanonical({ ticket, onClose, onNavigateTicket }: Props) {
+  const [route, setRoute] = useState<TicketPaperRoute | null>(null);
+  const [preview, setPreview] = useState(false);
+
+  useEffect(() => {
+    let cancelled = false;
+    getTicketPaperRoute(ticketsPaperLookup(ticket.id)).then((r) => {
+      if (!cancelled) setRoute(r);
+    }).catch(() => {
+      if (!cancelled) {
+        setRoute({
+          ok: false,
+          reason: 'document_unavailable',
+          message: 'Document unavailable.',
+          canEdit: false,
+          evaluatedAtMs: Date.now(),
+          policyVersion: '',
+        });
+      }
+    });
+    return () => { cancelled = true; };
+  }, [ticket.id]);
+
+  if (!route) {
+    return (
+      <div className="fixed inset-0 bg-black/70 flex items-start justify-center z-50 py-8" onClick={onClose}>
+        <div className="bg-[#FAFAF8] rounded-lg p-8 text-gray-500">Loading...</div>
       </div>
-    </div>
+    );
+  }
+
+  const showPaper = route.ok && route.mode === 'canonical_paper' && !preview;
+  const showEditor = !route.ok || (route.ok && (route.mode === 'edit_form' || route.mode === 'read_only_detail'));
+  const previewAvailable = route.ok && route.previewAvailable;
+
+  if (showPaper || preview) {
+    return (
+      <div className="fixed inset-0 bg-black/70 flex items-start justify-center z-50 overflow-y-auto py-8" onClick={onClose}>
+        <div className="w-full max-w-2xl mx-4" onClick={(e) => e.stopPropagation()}>
+          <div className="flex items-center justify-between px-4 py-3 mb-0">
+            <button onClick={onClose} className="text-gray-400 hover:text-white text-sm flex items-center gap-1">
+              <span className="text-lg">&larr;</span>
+            </button>
+            <h2 className="text-white font-semibold">Ticket Detail</h2>
+            {route.ok && route.mode === 'edit_form' ? (
+              <button onClick={() => setPreview(false)} className="text-xs text-yellow-400">Editor</button>
+            ) : <div className="w-8" />}
+          </div>
+          <CanonicalTicketPaperHost lookup={ticketsPaperLookup(ticket.id)} onClose={onClose} />
+        </div>
+      </div>
+    );
+  }
+
+  return (
+    <>
+      {showEditor && previewAvailable && (
+        <button
+          type="button"
+          className="hidden"
+          aria-label="Preview paper"
+          onClick={() => setPreview(true)}
+        />
+      )}
+      <TicketDetailModalLegacy ticket={ticket} onClose={onClose} onNavigateTicket={onNavigateTicket} />
+    </>
   );
 }
 

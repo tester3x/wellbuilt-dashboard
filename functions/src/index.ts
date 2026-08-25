@@ -4778,6 +4778,7 @@ export {
   getTicketPaper,
   staffGetTicketPaper,
   staffMaterializeTicketPaper,
+  getTicketPaperRoute,
   adminGetWellHistory,
   adminGetWellPerformance,
   dismissDispatch,

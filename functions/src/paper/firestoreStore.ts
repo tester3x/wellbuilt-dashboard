@@ -84,14 +84,16 @@ export function createFirestorePaperStore(deps?: {
         invoiceDocId: opts?.invoiceDocId,
         ticketDocId: opts?.ticketDocId,
       });
-      if (!parsed.ok) return null;
+      if (!parsed.ok) return { ok: false, reason: parsed.reason, retry: false };
       try {
         const [buf] = await file(parsed.objectPath).download();
         const bytes = Buffer.isBuffer(buf) ? buf : Buffer.from(buf);
-        if (bytes.length > MAX_SOURCE_ASSET_BYTES) return null;
-        return bytes;
+        if (bytes.length > MAX_SOURCE_ASSET_BYTES) {
+          return { ok: false, reason: 'asset_too_large', retry: false };
+        }
+        return { ok: true, bytes };
       } catch {
-        return null;
+        return { ok: false, reason: 'asset_unavailable', retry: true };
       }
     },
     async getArtifact(artifactId) {
@@ -157,6 +159,7 @@ export function createFirestorePaperStore(deps?: {
           revisionId,
           eventMs: input.eventMs,
           status: 'reserved',
+          sourceSnapshot: input.sourceSnapshot,
         };
         tx.set(eventRef, event);
         tx.set(artifactRef, artifact);

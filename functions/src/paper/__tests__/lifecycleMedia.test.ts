@@ -271,12 +271,12 @@ describe('write-order reconciliation', () => {
       nowMs: CLOSED_AT_MS - 10,
     });
     expect(create.class).toBe('ignored');
-    store.invoices.set(INVOICE_20100_ID, { ...invoice20100, status: 'closed' });
+    store.invoices.set(INVOICE_20100_ID, { ...invoice20100, status: 'closed', photos: [] });
     const close = await applyInvoicePaperLifecycle({
       store,
       invoiceId: INVOICE_20100_ID,
       before: { status: 'open' },
-      after: { ...invoice20100, status: 'closed', closedAtMs: CLOSED_AT_MS } as Record<string, unknown>,
+      after: { ...invoice20100, status: 'closed', closedAtMs: CLOSED_AT_MS, photos: [] } as Record<string, unknown>,
       nowMs: CLOSED_AT_MS,
     });
     expect(close.class).toBe('success');
@@ -286,12 +286,12 @@ describe('write-order reconciliation', () => {
   it('invoice close first, ticket second converges to one r1', async () => {
     const store = new MemoryPaperStore();
     store.identities.set(DRIVER_ZFOLD, { driverId: DRIVER_ZFOLD, legalName: 'Mike ZFold7 Burger' });
-    store.invoices.set(INVOICE_20100_ID, { ...invoice20100, status: 'closed' });
+    store.invoices.set(INVOICE_20100_ID, { ...invoice20100, status: 'closed', photos: [] });
     const closeFirst = await applyInvoicePaperLifecycle({
       store,
       invoiceId: INVOICE_20100_ID,
       before: { status: 'open' },
-      after: { ...invoice20100, status: 'closed', closedAtMs: CLOSED_AT_MS } as Record<string, unknown>,
+      after: { ...invoice20100, status: 'closed', closedAtMs: CLOSED_AT_MS, photos: [] } as Record<string, unknown>,
       nowMs: CLOSED_AT_MS,
     });
     expect(closeFirst.class).toBe('pending_reconciliation');
@@ -314,13 +314,13 @@ describe('write-order reconciliation', () => {
     const store = new MemoryPaperStore();
     store.identities.set(DRIVER_ZFOLD, { driverId: DRIVER_ZFOLD, legalName: 'Mike ZFold7 Burger' });
     store.tickets.set(TICKET_20100_ID, { ...ticket20100 });
-    store.invoices.set(INVOICE_20100_ID, { ...invoice20100, status: 'closed' });
+    store.invoices.set(INVOICE_20100_ID, { ...invoice20100, status: 'closed', photos: [] });
     const [a, b] = await Promise.all([
       applyInvoicePaperLifecycle({
         store,
         invoiceId: INVOICE_20100_ID,
         before: { status: 'open' },
-        after: { ...invoice20100, status: 'closed', closedAtMs: CLOSED_AT_MS } as Record<string, unknown>,
+        after: { ...invoice20100, status: 'closed', closedAtMs: CLOSED_AT_MS, photos: [] } as Record<string, unknown>,
         nowMs: CLOSED_AT_MS,
       }),
       applyTicketPaperLifecycle({
@@ -359,7 +359,7 @@ describe('write-order reconciliation', () => {
   it('first invoiceDocId linkage after a prior close materializes r1', async () => {
     const store = new MemoryPaperStore();
     store.identities.set(DRIVER_ZFOLD, { driverId: DRIVER_ZFOLD, legalName: 'Mike ZFold7 Burger' });
-    store.invoices.set(INVOICE_20100_ID, { ...invoice20100, status: 'closed' });
+    store.invoices.set(INVOICE_20100_ID, { ...invoice20100, status: 'closed', photos: [] });
     const unlinked = { ...ticket20100, invoiceDocId: '' };
     store.tickets.set(TICKET_20100_ID, unlinked);
     await applyTicketPaperLifecycle({

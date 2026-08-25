@@ -8,43 +8,56 @@ import { splitLivePhotos } from './photos';
 import { buildRevisionRecord, paperAssetPath } from './persist';
 import { isTicketOnlyWaterTicket, projectWaterTicket } from './projection';
 import { deriveGovernedSourceEvent } from './sourceEvent';
+import { buildPaperSourceSnapshot } from './sourceSnapshot';
 import type { PaperStore } from './store';
 import {
   waterTicketArtifactId,
   type GetPaperDecision,
+  type InvoiceSourceRecord,
   type MaterializeDecision,
   type PaperCaller,
   type PaperEditSource,
   type PaperLookup,
   type PaperOp,
   type PaperPhotoMeta,
+  type TicketSourceRecord,
 } from './types';
 
 async function snapshotAssets(
   store: PaperStore,
   invoicePhotos: unknown,
   ctx: { companyId: string; artifactId: string; revisionId: string; invoiceDocId: string; ticketDocId: string },
-): Promise<{
-  photos: PaperPhotoMeta[];
-  thumbs: Record<string, string>;
-  originals: Array<{ path: string; bytes: Buffer }>;
-  jsaContentHash: string;
-  jsaPath: string;
-  jsaBytes: Buffer | null;
-}> {
+): Promise<
+  | {
+      ok: true;
+      photos: PaperPhotoMeta[];
+      thumbs: Record<string, string>;
+      originals: Array<{ path: string; bytes: Buffer }>;
+      jsaContentHash: string;
+      jsaPath: string;
+      jsaBytes: Buffer | null;
+    }
+  | { ok: false; reason: string; message: string }
+> {
   const live = splitLivePhotos(invoicePhotos);
   const photos: PaperPhotoMeta[] = [];
   const thumbs: Record<string, string> = {};
   const originals: Array<{ path: string; bytes: Buffer }> = [];
+  const owner = {
+    companyId: ctx.companyId,
+    invoiceDocId: ctx.invoiceDocId,
+    ticketDocId: ctx.ticketDocId,
+  };
   for (const ref of live.photos.slice(0, MAX_PAPER_PHOTOS)) {
-    const bytes = await store.readLiveAsset(ref.uri, {
-      companyId: ctx.companyId,
-      invoiceDocId: ctx.invoiceDocId,
-      ticketDocId: ctx.ticketDocId,
-    });
-    if (!bytes) continue;
+    const got = await store.readLiveAsset(ref.uri, owner);
+    if (!got.ok) {
+      if (got.retry) {
+        return { ok: false, reason: 'asset_unavailable', message: 'Referenced tenant asset is not yet readable.' };
+      }
+      continue;
+    }
     const originalPath = paperAssetPath(ctx.companyId, ctx.artifactId, ctx.revisionId, 'pending-orig');
-    const snapped = snapshotPhotoForPaper(bytes, ref, {
+    const snapped = snapshotPhotoForPaper(got.bytes, ref, {
       originalPath,
       thumbPath: paperAssetPath(ctx.companyId, ctx.artifactId, ctx.revisionId, 'pending-thumb'),
     });
@@ -61,17 +74,18 @@ async function snapshotAssets(
   let jsaPath = '';
   let jsaBytes: Buffer | null = null;
   if (live.jsaUri) {
-    jsaBytes = await store.readLiveAsset(live.jsaUri, {
-      companyId: ctx.companyId,
-      invoiceDocId: ctx.invoiceDocId,
-      ticketDocId: ctx.ticketDocId,
-    });
-    if (jsaBytes) {
-      jsaContentHash = hashExactBytes(jsaBytes);
+    const got = await store.readLiveAsset(live.jsaUri, owner);
+    if (!got.ok) {
+      if (got.retry) {
+        return { ok: false, reason: 'asset_unavailable', message: 'Referenced tenant asset is not yet readable.' };
+      }
+    } else {
+      jsaBytes = got.bytes;
+      jsaContentHash = hashExactBytes(got.bytes);
       jsaPath = paperAssetPath(ctx.companyId, ctx.artifactId, ctx.revisionId, jsaContentHash);
     }
   }
-  return { photos, thumbs, originals, jsaContentHash, jsaPath, jsaBytes };
+  return { ok: true, photos, thumbs, originals, jsaContentHash, jsaPath, jsaBytes };
 }
 
 export async function materializeWaterTicketPaper(input: {
@@ -81,14 +95,18 @@ export async function materializeWaterTicketPaper(input: {
   op: PaperOp;
   nowMs: number;
   editSource?: PaperEditSource;
+  sourceTicket?: TicketSourceRecord;
+  sourceInvoice?: InvoiceSourceRecord | null;
 }): Promise<MaterializeDecision> {
-  const ticket = await input.store.getTicket(input.ticketDocId);
+  const ticket = input.sourceTicket || await input.store.getTicket(input.ticketDocId);
   if (!ticket) return { ok: false, reason: 'ticket_not_found', message: 'Ticket not found.' };
   const companyId = asTrimmedString(ticket.companyId);
   const access = authorizePaperMaterialize(input.caller, companyId);
   if (!access.ok) return access;
-  const invoiceId = asTrimmedString(ticket.invoiceDocId);
-  const invoice = invoiceId ? await input.store.getInvoice(invoiceId) : null;
+  const invoiceId = asTrimmedString(ticket.invoiceDocId) || asTrimmedString(input.sourceInvoice?.id);
+  const invoice = input.sourceInvoice !== undefined
+    ? input.sourceInvoice
+    : (invoiceId ? await input.store.getInvoice(invoiceId) : null);
   if (!isTicketOnlyWaterTicket(ticket, invoice)) {
     return { ok: false, reason: 'not_ticket_only', message: 'This slice materializes ticket-only Water Tickets.' };
   }
@@ -110,9 +128,19 @@ export async function materializeWaterTicketPaper(input: {
   const identity = ownerDriverId ? await input.store.getIdentityByDriverId(ownerDriverId) : null;
   const timeZone = (await input.store.getCompanyTimeZone(companyId)) || DEFAULT_PAPER_TIMEZONE;
   const artifactId = waterTicketArtifactId(ticket.id);
+  const sourceSnapshot = buildPaperSourceSnapshot({
+    op: input.op,
+    editSource: input.editSource,
+    ticket,
+    invoice,
+    paperTimeZone: timeZone,
+    legalName: identity?.legalName,
+    displayName: identity?.displayName,
+  });
   const reserved = await input.store.reserveSourceEvent({
     sourceEventId: derived.sourceEventId,
     eventMs: derived.eventMs,
+    sourceSnapshot,
     artifactSeed: {
       artifactId,
       artifactType: 'water_ticket',
@@ -133,22 +161,24 @@ export async function materializeWaterTicketPaper(input: {
     return { ok: true, action: 'idempotent', revision, artifact: reserved.artifact };
   }
 
-  const snapped = await snapshotAssets(input.store, invoice?.photos, {
+  const frozen = reserved.event.sourceSnapshot || sourceSnapshot;
+  const snapped = await snapshotAssets(input.store, frozen.invoice?.photos, {
     companyId,
     artifactId,
     revisionId: reserved.event.revisionId,
     invoiceDocId: invoiceId,
     ticketDocId: ticket.id,
   });
+  if (!snapped.ok) return snapped;
   const projected = projectWaterTicket({
-    ticket,
-    invoice,
-    legalName: identity?.legalName,
-    displayName: identity?.displayName,
+    ticket: frozen.ticket,
+    invoice: frozen.invoice,
+    legalName: frozen.legalName,
+    displayName: frozen.displayName,
     photos: snapped.photos,
     jsaContentHash: snapped.jsaContentHash,
     jsaPath: snapped.jsaPath,
-    paperTimeZone: timeZone,
+    paperTimeZone: frozen.paperTimeZone,
   });
   if ('reason' in projected) return projected;
 

@@ -6,6 +6,7 @@ import type {
   PaperInvoiceIndexRecord,
   PaperRevisionRecord,
   PaperSourceEventRecord,
+  PaperSourceSnapshot,
   TicketSourceRecord,
 } from './types';
 
@@ -19,13 +20,17 @@ export type ReserveResult =
   | { action: 'idempotent'; event: PaperSourceEventRecord; artifact: PaperArtifactRecord }
   | { action: 'reserved'; event: PaperSourceEventRecord; artifact: PaperArtifactRecord };
 
+export type LiveAssetRead =
+  | { ok: true; bytes: Buffer }
+  | { ok: false; reason: string; retry: boolean };
+
 export interface PaperStore {
   getTicket(ticketDocId: string): Promise<TicketSourceRecord | null>;
   getInvoice(invoiceDocId: string): Promise<InvoiceSourceRecord | null>;
   findTicketsByInvoiceDocId(invoiceDocId: string): Promise<TicketSourceRecord[]>;
   getCompanyTimeZone(companyId: string): Promise<string>;
   getIdentityByDriverId(driverId: string): Promise<PaperIdentity | null>;
-  readLiveAsset(uri: string, opts?: { companyId?: string; invoiceDocId?: string; ticketDocId?: string }): Promise<Buffer | null>;
+  readLiveAsset(uri: string, opts?: { companyId?: string; invoiceDocId?: string; ticketDocId?: string }): Promise<LiveAssetRead>;
 
   getArtifact(artifactId: string): Promise<PaperArtifactRecord | null>;
   getRevision(artifactId: string, revisionId: string): Promise<PaperRevisionRecord | null>;
@@ -41,6 +46,7 @@ export interface PaperStore {
       nextRevisionSeq?: number;
       updatedAtMs?: number;
     };
+    sourceSnapshot: PaperSourceSnapshot;
   }): Promise<ReserveResult>;
   createHtmlBytes(path: string, bytes: Buffer): Promise<void>;
   createAssetBytes(path: string, bytes: Buffer): Promise<void>;
@@ -110,7 +116,7 @@ export class MemoryPaperStore implements PaperStore {
   async getIdentityByDriverId(driverId: string) {
     return this.identities.get(driverId) || null;
   }
-  async readLiveAsset(uri: string, opts?: { companyId?: string; invoiceDocId?: string; ticketDocId?: string }) {
+  async readLiveAsset(uri: string, opts?: { companyId?: string; invoiceDocId?: string; ticketDocId?: string }): Promise<LiveAssetRead> {
     this.fetchCount += 1;
     if (/^gs:\/\//i.test(uri) || /storage\.googleapis\.com|firebasestorage\.googleapis\.com/i.test(uri)) {
       const parsed = parseGovernedStorageUri(uri, {
@@ -119,10 +125,11 @@ export class MemoryPaperStore implements PaperStore {
         invoiceDocId: opts?.invoiceDocId,
         ticketDocId: opts?.ticketDocId,
       });
-      if (!parsed.ok) return null;
+      if (!parsed.ok) return { ok: false, reason: parsed.reason, retry: false };
     }
     const buf = this.liveAssets.get(uri);
-    return buf ? cloneBuf(buf) : null;
+    if (!buf) return { ok: false, reason: 'asset_unavailable', retry: true };
+    return { ok: true, bytes: cloneBuf(buf) };
   }
   async getArtifact(id: string) {
     const art = this.artifacts.get(id);
@@ -176,6 +183,7 @@ export class MemoryPaperStore implements PaperStore {
         revisionId,
         eventMs: input.eventMs,
         status: 'reserved',
+        sourceSnapshot: input.sourceSnapshot,
       };
       this.sourceEvents.set(input.sourceEventId, event);
       return { action: 'reserved', event, artifact: { ...artifact } };

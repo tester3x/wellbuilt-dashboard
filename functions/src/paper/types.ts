@@ -126,12 +126,25 @@ export interface PaperRevisionRecord {
   projection: WaterTicketProjection;
 }
 
+export interface PaperSourceSnapshot {
+  op: PaperOp;
+  editSource?: PaperEditSource;
+  ticket: TicketSourceRecord;
+  invoice: InvoiceSourceRecord | null;
+  fingerprint: string;
+  paperTimeZone: string;
+  legalName?: string;
+  displayName?: string;
+  assetUris: string[];
+}
+
 export interface PaperSourceEventRecord {
   sourceEventId: string;
   artifactId: string;
   revisionId: string;
   eventMs: number;
   status: 'reserved' | 'complete';
+  sourceSnapshot?: PaperSourceSnapshot;
 }
 
 export interface PaperInvoiceIndexRecord {
@@ -199,6 +212,8 @@ export interface InvoiceSourceRecord {
   notes?: unknown;
   closedAt?: unknown;
   closedAtMs?: unknown;
+  createdAt?: unknown;
+  createdAtMs?: unknown;
   ownerDriverId?: unknown;
   driverId?: unknown;
   timezone?: unknown;

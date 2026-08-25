@@ -3,7 +3,7 @@ import { SYSTEM_PAPER_CALLER } from './paperCaller';
 import { materializeWaterTicketPaper } from './engine';
 import { isTicketOnlyWaterTicket, paperSourceFingerprint } from './projection';
 import { invoiceEditMs, ticketEditMs } from './sourceEvent';
-import type { InvoiceSourceRecord, PaperOp, TicketSourceRecord } from './types';
+import type { InvoiceSourceRecord, PaperEditSource, PaperOp, TicketSourceRecord } from './types';
 import type { PaperStore } from './store';
 
 export type PaperLifecycleClass =
@@ -29,6 +29,7 @@ const RETRIABLE_REASONS = new Set([
   'document_unavailable',
   'ticket_not_found',
   'invoice_not_found',
+  'asset_unavailable',
 ]);
 
 function fieldStr(rec: Record<string, unknown> | null | undefined, key: string): string {
@@ -180,8 +181,10 @@ async function materializeOne(input: {
   invoiceDocId?: string;
   companyId?: string;
   op: PaperOp;
-  editSource?: 'ticket' | 'invoice';
+  editSource?: PaperEditSource;
   nowMs: number;
+  sourceTicket?: TicketSourceRecord;
+  sourceInvoice?: InvoiceSourceRecord | null;
 }): Promise<PaperLifecycleOutcome> {
   try {
     const result = await materializeWaterTicketPaper({
@@ -191,6 +194,8 @@ async function materializeOne(input: {
       op: input.op,
       nowMs: input.nowMs,
       editSource: input.editSource,
+      sourceTicket: input.sourceTicket,
+      sourceInvoice: input.sourceInvoice,
     });
     return classifyMaterializeResult({
       op: input.op,
@@ -256,6 +261,8 @@ export async function applyInvoicePaperLifecycle(input: {
       op,
       editSource: op === 'edit' ? 'invoice' : undefined,
       nowMs: input.nowMs,
+      sourceTicket: ticket,
+      sourceInvoice: invoice,
     }));
   }
   return foldOutcomes(op, outcomes);
@@ -299,6 +306,8 @@ export async function applyTicketPaperLifecycle(input: {
       companyId,
       op: 'close',
       nowMs: input.nowMs,
+      sourceTicket: ticket,
+      sourceInvoice: invoice,
     });
   }
 
@@ -310,6 +319,8 @@ export async function applyTicketPaperLifecycle(input: {
     op: 'edit',
     editSource: 'ticket',
     nowMs: input.nowMs,
+    sourceTicket: ticket,
+    sourceInvoice: invoice,
   });
 }
 

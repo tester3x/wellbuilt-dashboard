@@ -60,4 +60,4 @@ export {
 export { verifyDriverSession } from './verifyDriverSession';
 
 export { adminSubmitPullEdit } from './dashboardPullEdit';
-export { getTicketPaper, staffGetTicketPaper, staffMaterializeTicketPaper } from './paperCallables';
+export { getTicketPaper, staffGetTicketPaper, staffMaterializeTicketPaper, getTicketPaperRoute } from './paperCallables';

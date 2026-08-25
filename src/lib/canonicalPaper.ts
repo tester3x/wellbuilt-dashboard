@@ -51,3 +51,31 @@ export async function staffGetTicketPaper(lookup: PaperLookup, revisionId?: stri
   const res = await fn(payload);
   return res.data as CanonicalPaperView;
 }
+
+export type PaperPresentationMode = 'edit_form' | 'canonical_paper' | 'read_only_detail';
+
+export type TicketPaperRoute = {
+  ok: true;
+  mode: PaperPresentationMode;
+  canEdit: boolean;
+  reason: string;
+  evaluatedAtMs: number;
+  policyVersion: string;
+  previewAvailable: boolean;
+  artifactId?: string;
+  revisionId?: string;
+} | {
+  ok: false;
+  reason: string;
+  message: string;
+  canEdit: false;
+  evaluatedAtMs: number;
+  policyVersion: string;
+  gap?: string;
+};
+
+export async function getTicketPaperRoute(lookup: PaperLookup): Promise<TicketPaperRoute> {
+  const fn = httpsCallable(getFirebaseFunctions(), 'getTicketPaperRoute');
+  const res = await fn(lookup);
+  return res.data as TicketPaperRoute;
+}

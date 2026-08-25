@@ -95,9 +95,9 @@ describeE2E('firestore emulator: concurrent paper revisions', () => {
     });
     const origRead = store.readLiveAsset.bind(store);
     store.readLiveAsset = async (uri: string) => {
-      if (uri.includes('a.jpg')) return PIXEL_A;
-      if (uri.includes('b.jpg')) return PIXEL_B;
-      if (uri.includes('jsa')) return JSA_BYTES;
+      if (uri.includes('a.jpg')) return { ok: true, bytes: PIXEL_A };
+      if (uri.includes('b.jpg')) return { ok: true, bytes: PIXEL_B };
+      if (uri.includes('jsa')) return { ok: true, bytes: JSA_BYTES };
       return origRead(uri);
     };
 
@@ -165,8 +165,8 @@ describeE2E('firestore emulator: concurrent paper revisions', () => {
       } as unknown as admin.database.Database,
     });
     store.readLiveAsset = async (uri: string) => {
-      if (uri.includes('jsa')) return JSA_BYTES;
-      return PIXEL_A;
+      if (uri.includes('jsa')) return { ok: true, bytes: JSA_BYTES };
+      return { ok: true, bytes: PIXEL_A };
     };
     const editFirst = await materializeWaterTicketPaper({
       store, caller: staffLg, ticketDocId: ticketId, op: 'edit', nowMs: CLOSED_AT_MS + 80,
@@ -214,11 +214,13 @@ describeE2E('firestore emulator: write-order, retry, tenant assets', () => {
         invoiceDocId: opts?.invoiceDocId,
         ticketDocId: opts?.ticketDocId,
       });
-      if (/storage\.googleapis\.com|gs:\/\//.test(uri) && !parsed.ok) return null;
-      if (uri.includes('jsa')) return JSA_BYTES;
-      if (uri.includes('a.jpg') || uri.includes('own.jpg')) return PIXEL_A;
-      if (uri.includes('b.jpg')) return PIXEL_B;
-      return PIXEL_A;
+      if (/storage\.googleapis\.com|gs:\/\//.test(uri) && !parsed.ok) {
+        return { ok: false, reason: parsed.reason, retry: false };
+      }
+      if (uri.includes('jsa')) return { ok: true, bytes: JSA_BYTES };
+      if (uri.includes('a.jpg') || uri.includes('own.jpg')) return { ok: true, bytes: PIXEL_A };
+      if (uri.includes('b.jpg')) return { ok: true, bytes: PIXEL_B };
+      return { ok: true, bytes: PIXEL_A };
     };
     return store;
   }
@@ -349,5 +351,82 @@ describeE2E('firestore emulator: write-order, retry, tenant assets', () => {
       invoiceDocId: invoiceId,
     });
     expect(cross).toMatchObject({ ok: false, reason: 'path_not_owned' });
+  });
+
+  it('retry of reserved edit A after live B still materializes A, then B as rN+1', async () => {
+    const db = app.firestore();
+    const ticketId = `${TICKET_20100_ID}-snap`;
+    const invoiceId = `${INVOICE_20100_ID}-snap`;
+    await db.collection('tickets').doc(ticketId).set({ ...ticket20100, id: ticketId, invoiceDocId: invoiceId });
+    await db.collection('invoices').doc(invoiceId).set({ ...invoice20100, id: invoiceId, status: 'closed' });
+    const store = storeFor(db);
+    const close = await applyInvoicePaperLifecycle({
+      store, invoiceId, before: { status: 'open' },
+      after: { ...invoice20100, id: invoiceId, status: 'closed', closedAtMs: CLOSED_AT_MS },
+      nowMs: CLOSED_AT_MS,
+    });
+    expect(close.class).toBe('success');
+
+    const ticketA = { ...ticket20100, id: ticketId, invoiceDocId: invoiceId, pickupBbls: 80, dropoffBbls: 80, qty: '80', updatedAt: CLOSED_AT_MS + 5000 };
+    await db.collection('tickets').doc(ticketId).set(ticketA);
+    const origHtml = store.createHtmlBytes.bind(store);
+    store.createHtmlBytes = async () => { throw new Error('html_fail'); };
+    expect((await applyTicketPaperLifecycle({
+      store, ticketId, before: { ...ticket20100, id: ticketId }, after: ticketA, nowMs: CLOSED_AT_MS + 5000,
+    })).class).toBe('retriable');
+
+    const ticketB = { ...ticketA, pickupBbls: 70, dropoffBbls: 70, qty: '70', updatedAt: CLOSED_AT_MS + 9000 };
+    await db.collection('tickets').doc(ticketId).set(ticketB);
+    store.createHtmlBytes = origHtml;
+    const retryA = await applyTicketPaperLifecycle({
+      store, ticketId, before: { ...ticket20100, id: ticketId }, after: ticketA, nowMs: CLOSED_AT_MS + 10000,
+    });
+    expect(retryA.class).toBe('success');
+    const r2 = await store.getRevision(waterTicketArtifactId(ticketId), 'r2');
+    expect(r2?.projection.pickupBbls).toBe('80');
+
+    const doneB = await applyTicketPaperLifecycle({
+      store, ticketId, before: ticketA, after: ticketB, nowMs: CLOSED_AT_MS + 11000,
+    });
+    expect(doneB.class).toBe('success');
+    const art = await store.getArtifact(waterTicketArtifactId(ticketId));
+    expect(art?.currentRevisionId).toBe('r3');
+    const r3 = await store.getRevision(waterTicketArtifactId(ticketId), 'r3');
+    expect(r3?.projection.pickupBbls).toBe('70');
+    expect(await store.getRevision(waterTicketArtifactId(ticketId), 'r2')).toBeTruthy();
+  });
+
+  it('owned photo unavailable then readable yields one revision with the photo', async () => {
+    const db = app.firestore();
+    const ticketId = `${TICKET_20100_ID}-media`;
+    const invoiceId = `${INVOICE_20100_ID}-media`;
+    const ownUri = `https://storage.googleapis.com/wellbuilt-sync.appspot.com/photos/${COMPANY_LG}/${invoiceId}/own.jpg`;
+    await db.collection('tickets').doc(ticketId).set({ ...ticket20100, id: ticketId, invoiceDocId: invoiceId });
+    await db.collection('invoices').doc(invoiceId).set({
+      ...invoice20100, id: invoiceId, photos: [{ uri: ownUri, type: 'pickup', location: 'X', takenAt: '2026-08-23T18:50:00.000Z' }],
+    });
+    const store = storeFor(db);
+    const origRead = store.readLiveAsset.bind(store);
+    store.readLiveAsset = async (uri, opts) => {
+      if (uri === ownUri) return { ok: false, reason: 'asset_unavailable', retry: true };
+      return origRead(uri, opts);
+    };
+    const first = await applyInvoicePaperLifecycle({
+      store, invoiceId, before: { status: 'open' },
+      after: { ...invoice20100, id: invoiceId, status: 'closed', closedAtMs: CLOSED_AT_MS, photos: [{ uri: ownUri, type: 'pickup', location: 'X', takenAt: '2026-08-23T18:50:00.000Z' }] },
+      nowMs: CLOSED_AT_MS,
+    });
+    expect(first.class).toBe('retriable');
+    expect(await store.getRevision(waterTicketArtifactId(ticketId), 'r1')).toBeNull();
+    store.readLiveAsset = origRead;
+    const retry = await applyInvoicePaperLifecycle({
+      store, invoiceId, before: { status: 'open' },
+      after: { ...invoice20100, id: invoiceId, status: 'closed', closedAtMs: CLOSED_AT_MS, photos: [{ uri: ownUri, type: 'pickup', location: 'X', takenAt: '2026-08-23T18:50:00.000Z' }] },
+      nowMs: CLOSED_AT_MS + 1,
+    });
+    expect(retry.class).toBe('success');
+    const rev = await store.getRevision(waterTicketArtifactId(ticketId), 'r1');
+    expect(rev?.projection.photos).toHaveLength(1);
+    expect(await store.getRevision(waterTicketArtifactId(ticketId), 'r2')).toBeNull();
   });
 });

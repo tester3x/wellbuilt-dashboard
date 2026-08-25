@@ -6,6 +6,7 @@ import * as admin from 'firebase-admin';
 import { getWaterTicketPaper, materializeWaterTicketPaper } from '../paper/engine';
 import { createFirestorePaperStore } from '../paper/firestoreStore';
 import { paperAuthIntent, resolvePaperCaller } from '../paper/paperCaller';
+import { resolvePaperPresentation } from '../paper/presentation';
 import { parseGetPaperRequest, parseMaterializeRequest } from '../paper/requests';
 import type { PaperCaller } from '../paper/types';
 import { requireManageDrivers } from './adminAuth';
@@ -17,7 +18,7 @@ function throwPaper(reason: string, message: string): never {
     || reason === 'missing_capability' || reason === 'not_document_owner'
     || reason === 'drivers_cannot_materialize' || reason === 'unauthorized'
     || reason === 'driver_deactivated' || reason === 'not_dashboard_user'
-    || reason === 'driver_unauthenticated'
+    || reason === 'driver_unauthenticated' || reason === 'not_ticket_owner'
     ? 'permission-denied'
     : reason === 'unexpected_field' || reason === 'invalid_request' || reason === 'lookup_required'
       || reason === 'ticket_id_required' || reason === 'op_required' || reason === 'ambiguous_lookup'
@@ -27,6 +28,8 @@ function throwPaper(reason: string, message: string): never {
       : reason === 'document_unavailable' || reason === 'ticket_not_found' || reason === 'invoice_not_found'
         || reason === 'event_not_found'
         ? 'not-found'
+        : reason === 'edit_window_expired' || reason === 'edit_window_unknown' || reason === 'policy_undefined'
+          ? 'failed-precondition'
         : 'failed-precondition';
   throw new httpsV2.HttpsError(code, `${reason}:${message}`);
 }
@@ -88,6 +91,22 @@ export const getTicketPaper = httpsV2.onCall(
 );
 
 export const staffGetTicketPaper = getTicketPaper;
+
+export const getTicketPaperRoute = httpsV2.onCall(
+  { timeoutSeconds: 30, memory: '256MiB', enforceAppCheck: false },
+  async (request) => {
+    const caller = await loadPaperReader(request);
+    const parsed = parseGetPaperRequest(request.data);
+    if (!parsed.ok) throwPaper(parsed.reason, parsed.message);
+    const store = createFirestorePaperStore();
+    return resolvePaperPresentation({
+      store,
+      caller,
+      lookup: parsed.lookup,
+      nowMs: Date.now(),
+    });
+  },
+);
 
 export const staffMaterializeTicketPaper = httpsV2.onCall(
   { timeoutSeconds: 60, memory: '512MiB', enforceAppCheck: false },
