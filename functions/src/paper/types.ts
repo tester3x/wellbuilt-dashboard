@@ -1,6 +1,6 @@
 /**
  * Canonical paper v1 — ticket-only Water Ticket.
- * Structured tickets/invoices remain editable source of truth.
+ * Structured tickets/invoices remain the editable source of truth.
  * Stored HTML is an immutable presentation revision.
  */
 
@@ -8,6 +8,7 @@ export const PAPER_ARTIFACT_TYPE = 'water_ticket' as const;
 export type PaperArtifactType = typeof PAPER_ARTIFACT_TYPE;
 
 export const PAPER_FEATURE_FLAG = 'CANONICAL_PAPER_TICKET_ONLY_V1';
+export const DEFAULT_PAPER_TIMEZONE = 'America/Chicago';
 
 export function waterTicketArtifactId(ticketDocId: string): string {
   return `wt:${ticketDocId}`;
@@ -17,15 +18,33 @@ export function paperStorageHtmlPath(companyId: string, artifactId: string, revi
   return `paper/${companyId}/${artifactId}/${revisionId}/document.html`;
 }
 
+export function paperAssetPath(
+  companyId: string,
+  artifactId: string,
+  revisionId: string,
+  contentHash: string,
+): string {
+  return `paper/${companyId}/${artifactId}/${revisionId}/assets/${contentHash}`;
+}
+
 export interface PaperTimelineEvent {
   type: string;
   timestamp: string;
+  timeDisplay: string;
   label: string;
   locationName: string;
 }
 
-export interface PaperPhoto {
+export interface LivePhotoRef {
   uri: string;
+  location: string;
+  type: string;
+  takenAt: string;
+}
+
+export interface PaperPhoto {
+  contentHash: string;
+  dataUri: string;
   location: string;
   type: string;
   takenAt: string;
@@ -34,8 +53,11 @@ export interface PaperPhoto {
 export interface WaterTicketProjection {
   artifactType: PaperArtifactType;
   ticketDocId: string;
+  invoiceDocId: string;
   ticketNumber: string;
   companyId: string;
+  ownerDriverId: string;
+  paperTimeZone: string;
   dateDisplay: string;
   acceptedTimeDisplay: string;
   operator: string;
@@ -50,7 +72,7 @@ export interface WaterTicketProjection {
   tankBottom: string;
   timeline: PaperTimelineEvent[];
   photos: PaperPhoto[];
-  jsaUri: string;
+  jsaContentHash: string;
   totalBbl: string;
   totalHours: string;
   ticketCount: string;
@@ -63,10 +85,13 @@ export interface PaperArtifactRecord {
   artifactId: string;
   artifactType: PaperArtifactType;
   currentRevisionId: string;
+  nextRevisionSeq: number;
   displayNumber: string;
   companyId: string;
   ticketDocId: string;
   invoiceDocId: string;
+  ownerDriverId: string;
+  paperTimeZone: string;
   createdAtMs: number;
   updatedAtMs: number;
 }
@@ -77,6 +102,9 @@ export interface PaperRevisionRecord {
   revisionId: string;
   displayNumber: string;
   companyId: string;
+  ticketDocId: string;
+  invoiceDocId: string;
+  ownerDriverId: string;
   contentHash: string;
   storageHtmlPath: string;
   storagePdfPath: string | null;
@@ -86,6 +114,20 @@ export interface PaperRevisionRecord {
   actorDriverId: string | null;
   humanAuditLabel: string;
   projection: WaterTicketProjection;
+}
+
+export interface PaperSourceEventRecord {
+  sourceEventId: string;
+  artifactId: string;
+  revisionId: string;
+  status: 'reserved' | 'complete';
+}
+
+export interface PaperInvoiceIndexRecord {
+  invoiceDocId: string;
+  artifactId: string;
+  ticketDocId: string;
+  companyId: string;
 }
 
 export interface TicketSourceRecord {
@@ -115,8 +157,11 @@ export interface TicketSourceRecord {
   updatedBy?: unknown;
   updatedByUid?: unknown;
   updatedByDriverId?: unknown;
+  ownerDriverId?: unknown;
+  driverId?: unknown;
   createdAtMs?: unknown;
   createdAt?: unknown;
+  updatedAtMs?: unknown;
   packageId?: unknown;
 }
 
@@ -139,17 +184,30 @@ export interface InvoiceSourceRecord {
   timeline?: unknown;
   photos?: unknown;
   notes?: unknown;
+  closedAt?: unknown;
+  closedAtMs?: unknown;
+  ownerDriverId?: unknown;
+  driverId?: unknown;
+  timezone?: unknown;
 }
 
+export type PaperCallerKind = 'dashboard' | 'driver';
+
 export interface PaperCaller {
+  kind: PaperCallerKind;
   uid: string;
   companyId?: string;
   isPlatformAdmin: boolean;
+  roles?: string[];
+  caps?: string[];
+  driverId?: string;
 }
 
 export type PaperLookup =
   | { ticketDocId: string; invoiceDocId?: undefined }
   | { invoiceDocId: string; ticketDocId?: undefined };
+
+export type PaperOp = 'close' | 'edit';
 
 export type MaterializeDecision =
   | { ok: true; action: 'created'; revision: PaperRevisionRecord; artifact: PaperArtifactRecord }

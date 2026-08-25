@@ -1,8 +1,7 @@
-import { asBblString, asTrimmedString, formatDateDisplay, formatDateTimeDisplay } from './format';
-import { resolveHumanAuditLabel } from './identity';
-import { splitPhotos } from './photos';
-import { acceptedTimeFromInvoice, buildPaperTimeline } from './timeline';
-import type { InvoiceSourceRecord, TicketSourceRecord, WaterTicketProjection } from './types';
+import { asBblString, asTrimmedString, DEFAULT_PAPER_TIMEZONE, formatDateDisplay, formatDateTimeDisplay, timestampMs } from './format';
+import { canonicalDriverIdFromRecords, resolveHumanAuditLabel } from './identity';
+import { buildPaperTimeline, acceptedTimeFromInvoice } from './timeline';
+import type { InvoiceSourceRecord, PaperPhoto, TicketSourceRecord, WaterTicketProjection } from './types';
 
 export function isTicketOnlyWaterTicket(
   ticket: TicketSourceRecord,
@@ -15,26 +14,14 @@ export function isTicketOnlyWaterTicket(
   return invoiceNumber.length === 0;
 }
 
-function createdAtMs(ticket: TicketSourceRecord): number | null {
-  if (typeof ticket.createdAtMs === 'number' && Number.isFinite(ticket.createdAtMs)) {
-    return ticket.createdAtMs;
-  }
-  const created = ticket.createdAt as { toMillis?: () => number } | string | undefined;
-  if (created && typeof created === 'object' && typeof created.toMillis === 'function') {
-    return created.toMillis();
-  }
-  if (typeof created === 'string') {
-    const t = Date.parse(created);
-    return Number.isNaN(t) ? null : t;
-  }
-  return null;
-}
-
 export function projectWaterTicket(input: {
   ticket: TicketSourceRecord;
   invoice: InvoiceSourceRecord | null;
   legalName?: string;
   displayName?: string;
+  photos: PaperPhoto[];
+  jsaContentHash?: string;
+  paperTimeZone?: string;
 }): WaterTicketProjection | { ok: false; reason: string; message: string } {
   const { ticket, invoice } = input;
   const ticketDocId = asTrimmedString(ticket.id);
@@ -56,30 +43,35 @@ export function projectWaterTicket(input: {
   const qty = asBblString(ticket.qty) || asBblString(ticket.bbls);
   const pickupBbls = asBblString(ticket.pickupBbls) || qty;
   const dropoffBbls = asBblString(ticket.dropoffBbls) || qty;
+  const timeZone = input.paperTimeZone || asTrimmedString(invoice?.timezone) || DEFAULT_PAPER_TIMEZONE;
+  const ownerDriverId = canonicalDriverIdFromRecords({
+    ownerDriverId: ticket.ownerDriverId,
+    driverId: ticket.driverId,
+    submittedBy: ticket.submittedBy,
+    invoiceOwnerDriverId: invoice?.ownerDriverId,
+    invoiceDriverId: invoice?.driverId,
+  });
 
-  const { photos, jsaUri } = splitPhotos(invoice?.photos);
   const driverDisplayName = resolveHumanAuditLabel({
     legalName: input.legalName,
     displayName: input.displayName,
-    driverField: ticket.driver || invoice?.driver,
-    submittedBy: ticket.submittedBy,
+    historicalLabel: ticket.driver || invoice?.driver,
   });
-  const editedRaw = ticket.updatedBy;
   const auditEditedBy = resolveHumanAuditLabel({
-    legalName: undefined,
-    displayName: undefined,
-    driverField: editedRaw,
-    submittedBy: ticket.updatedByUid,
+    historicalLabel: ticket.updatedBy,
   });
-  const createdMs = createdAtMs(ticket);
+  const createdMs = timestampMs(ticket.createdAtMs) || timestampMs(ticket.createdAt);
 
   return {
     artifactType: 'water_ticket',
     ticketDocId,
+    invoiceDocId: asTrimmedString(ticket.invoiceDocId) || asTrimmedString(invoice?.id),
     ticketNumber,
     companyId,
+    ownerDriverId,
+    paperTimeZone: timeZone,
     dateDisplay: formatDateDisplay(ticket.date),
-    acceptedTimeDisplay: invoice ? acceptedTimeFromInvoice(invoice) : '',
+    acceptedTimeDisplay: invoice ? acceptedTimeFromInvoice(invoice, timeZone) : '',
     operator: asTrimmedString(ticket.operator) || asTrimmedString(ticket.company) || asTrimmedString(invoice?.operator),
     pickupLocation: asTrimmedString(ticket.location) || asTrimmedString(ticket.wellName) || asTrimmedString(invoice?.wellName),
     dropoffLocation: asTrimmedString(ticket.hauledTo) || asTrimmedString(ticket.disposal) || asTrimmedString(invoice?.hauledTo),
@@ -90,14 +82,14 @@ export function projectWaterTicket(input: {
     dropoffBbls,
     tankTop: asTrimmedString(ticket.top),
     tankBottom: asTrimmedString(ticket.bottom),
-    timeline: buildPaperTimeline(invoice?.timeline),
-    photos,
-    jsaUri,
+    timeline: buildPaperTimeline(invoice?.timeline, timeZone),
+    photos: input.photos,
+    jsaContentHash: input.jsaContentHash || '',
     totalBbl: asBblString(invoice?.totalBBL) || dropoffBbls || qty,
     totalHours: asBblString(invoice?.totalHours) || asBblString(ticket.hours),
     ticketCount: '1',
     auditSubmittedBy: driverDisplayName,
     auditEditedBy: auditEditedBy === 'Unknown driver' ? '' : auditEditedBy,
-    auditCreatedAtDisplay: createdMs ? formatDateTimeDisplay(new Date(createdMs).toISOString()) : '',
+    auditCreatedAtDisplay: createdMs ? formatDateTimeDisplay(new Date(createdMs).toISOString(), timeZone) : '',
   };
 }

@@ -21,6 +21,7 @@ const check = (name, ok, detail = '') => {
   check('Tickets lookup helper exists', lib.includes('export function ticketsPaperLookup'));
   check('Dispatch lookup helper exists', lib.includes('export function dispatchPaperLookup'));
   check('client get uses staffGetTicketPaper callable', lib.includes("httpsCallable") && lib.includes("'staffGetTicketPaper'"));
+  check('feature flag still defaults OFF', /export const CANONICAL_PAPER_TICKET_ONLY_V1 = false/.test(lib));
   check('client get payload is lookup only', /fn\(payload\)/.test(lib) && !/fn\(\{[\s\S]*companyId/.test(lib));
 }
 
@@ -53,8 +54,13 @@ const check = (name, ok, detail = '') => {
 {
   const rules = src('functions/src/paper/UNDEPLOYED-RULES.md');
   check('undeployed rules deny client paper reads', rules.includes('allow read, write: if false') && rules.includes('NOT applied'));
+  check('undeployed rules include source-event and invoice index', rules.includes('paper_source_events') && rules.includes('paper_invoice_index'));
   const liveRules = src('firestore.rules');
-  check('live firestore.rules were not modified for paper', !liveRules.includes('paper_artifacts'));
+  check('live firestore.rules were not modified for paper', !liveRules.includes('paper_artifacts') && !liveRules.includes('paper_source_events'));
+  const callables = src('functions/src/security/paperCallables.ts');
+  check('get path does not require manageDrivers', callables.includes('loadPaperReader') && callables.includes('requireSecureDriver'));
+  check('materialize remains manageDrivers', callables.includes('requireManageDrivers') && callables.includes('staffMaterializeTicketPaper'));
+  check('shared getTicketPaper export exists', callables.includes('export const getTicketPaper'));
 }
 
 console.log(`\n${pass} passed, ${fail} failed`);

@@ -33,7 +33,7 @@ export function labelTimelineEvent(
   return type || 'Event';
 }
 
-export function buildPaperTimeline(raw: unknown): PaperTimelineEvent[] {
+export function buildPaperTimeline(raw: unknown, timeZone: string): PaperTimelineEvent[] {
   const events = asEvents(raw)
     .map((e) => ({
       type: asTrimmedString(e.type),
@@ -52,6 +52,7 @@ export function buildPaperTimeline(raw: unknown): PaperTimelineEvent[] {
     return {
       type: e.type,
       timestamp: e.timestamp,
+      timeDisplay: formatTimeDisplay(e.timestamp, timeZone),
       label: labelTimelineEvent(e.type, arriveCount, departSiteCount, e.reason),
       locationName: e.locationName,
     };
@@ -62,13 +63,13 @@ export function acceptedTimeFromInvoice(invoice: {
   invoiceStartedAt?: unknown;
   timeline?: unknown;
   startTime?: unknown;
-}): string {
+}, timeZone: string): string {
   const started = asTrimmedString(invoice.invoiceStartedAt);
-  if (started) return formatTimeDisplay(started);
+  if (started) return formatTimeDisplay(started, timeZone);
   const events = asEvents(invoice.timeline);
   const depart = events.find((e) => asTrimmedString(e.type) === 'depart');
-  if (depart && depart.timestamp) return formatTimeDisplay(depart.timestamp);
+  if (depart && depart.timestamp) return formatTimeDisplay(depart.timestamp, timeZone);
   const startTime = asTrimmedString(invoice.startTime);
-  if (startTime) return formatTimeDisplay(startTime);
+  if (startTime) return formatTimeDisplay(startTime, timeZone);
   return '';
 }

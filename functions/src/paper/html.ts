@@ -1,4 +1,4 @@
-import { escapeHtml, formatTimeDisplay } from './format';
+import { escapeHtml } from './format';
 import type { WaterTicketProjection } from './types';
 
 function row(label: string, value: string): string {
@@ -16,21 +16,20 @@ export function buildWaterTicketHtml(p: WaterTicketProjection): string {
   const ticketNo = `Ticket #${p.ticketNumber}`;
 
   const timelineRows = p.timeline.map((ev) => {
-    const time = formatTimeDisplay(ev.timestamp);
     const loc = ev.locationName
       ? `<div class="tl-loc">${escapeHtml(ev.locationName)}</div>`
       : '';
-    return `<div class="tl-row"><span class="tl-time">${escapeHtml(time)}</span><div><div class="tl-label">${escapeHtml(ev.label)}</div>${loc}</div></div>`;
+    return `<div class="tl-row"><span class="tl-time">${escapeHtml(ev.timeDisplay)}</span><div><div class="tl-label">${escapeHtml(ev.label)}</div>${loc}</div></div>`;
   }).join('');
 
   const photoCells = p.photos.map((photo, i) => {
     const cap = [photo.type, photo.location].filter(Boolean).join(' · ');
     const capHtml = cap ? `<div class="photo-cap">${escapeHtml(cap)}</div>` : '';
-    return `<figure class="photo"><img src="${escapeHtml(photo.uri)}" alt="Photo ${i + 1}" />${capHtml}</figure>`;
+    return `<figure class="photo"><img src="${escapeHtml(photo.dataUri)}" alt="Photo ${i + 1}" data-paper-asset="${escapeHtml(photo.contentHash)}" />${capHtml}</figure>`;
   }).join('');
 
-  const jsa = p.jsaUri
-    ? `<section class="block"><h2>JSA</h2><p class="jsa">Signed JSA PDF</p><p class="muted">${escapeHtml(p.jsaUri)}</p></section>`
+  const jsa = p.jsaContentHash
+    ? `<section class="block"><h2>JSA</h2><p class="jsa">Signed JSA snapshot</p><p class="muted">paper-asset:${escapeHtml(p.jsaContentHash)}</p></section>`
     : '';
 
   const hoursRow = p.totalHours && p.totalHours !== '0' ? row('Total Hours', p.totalHours) : '';

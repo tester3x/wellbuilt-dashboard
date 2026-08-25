@@ -1,5 +1,6 @@
 import { asTrimmedString } from './format';
-import type { PaperPhoto } from './types';
+import { hashExactBytes } from './hash';
+import type { LivePhotoRef, PaperPhoto } from './types';
 
 const TYPE_RANK: Record<string, number> = {
   pickup: 0,
@@ -7,9 +8,9 @@ const TYPE_RANK: Record<string, number> = {
   jsa: 9,
 };
 
-export function splitPhotos(raw: unknown): { photos: PaperPhoto[]; jsaUri: string } {
+export function splitLivePhotos(raw: unknown): { photos: LivePhotoRef[]; jsaUri: string } {
   const list = Array.isArray(raw) ? raw : [];
-  const photos: PaperPhoto[] = [];
+  const photos: LivePhotoRef[] = [];
   let jsaUri = '';
   for (const item of list) {
     if (typeof item === 'string') {
@@ -43,4 +44,18 @@ export function splitPhotos(raw: unknown): { photos: PaperPhoto[]; jsaUri: strin
     return a.uri.localeCompare(b.uri);
   });
   return { photos, jsaUri };
+}
+
+export function snapshotPhotoBytes(bytes: Buffer, meta: LivePhotoRef): PaperPhoto {
+  const contentHash = hashExactBytes(bytes);
+  const mime = meta.uri.toLowerCase().endsWith('.png') ? 'image/png'
+    : meta.uri.toLowerCase().endsWith('.webp') ? 'image/webp'
+      : 'image/jpeg';
+  return {
+    contentHash,
+    dataUri: `data:${mime};base64,${bytes.toString('base64')}`,
+    location: meta.location,
+    type: meta.type,
+    takenAt: meta.takenAt,
+  };
 }

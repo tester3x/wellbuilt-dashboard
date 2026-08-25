@@ -1,4 +1,4 @@
-import type { PaperLookup } from './types';
+import type { PaperLookup, PaperOp } from './types';
 
 export function parseGetPaperRequest(raw: unknown):
   | { ok: true; lookup: PaperLookup; revisionId: string }
@@ -25,27 +25,23 @@ export function parseGetPaperRequest(raw: unknown):
 }
 
 export function parseMaterializeRequest(raw: unknown):
-  | { ok: true; ticketDocId: string; sourceEventId: string }
+  | { ok: true; ticketDocId: string; op: PaperOp }
   | { ok: false; reason: string; message: string } {
   if (!raw || typeof raw !== 'object' || Array.isArray(raw)) {
     return { ok: false, reason: 'invalid_request', message: 'Request must be an object.' };
   }
   const rec = raw as Record<string, unknown>;
-  const allowed = new Set(['ticketDocId', 'sourceEventId']);
+  const allowed = new Set(['ticketDocId', 'op']);
   for (const key of Object.keys(rec)) {
     if (!allowed.has(key)) {
       return { ok: false, reason: 'unexpected_field', message: `Unexpected field: ${key}` };
     }
   }
   const ticketDocId = typeof rec.ticketDocId === 'string' ? rec.ticketDocId.trim() : '';
-  const sourceEventId = typeof rec.sourceEventId === 'string' ? rec.sourceEventId.trim() : '';
+  const op = rec.op;
   if (!ticketDocId) return { ok: false, reason: 'ticket_id_required', message: 'ticketDocId is required.' };
-  if (!sourceEventId) return { ok: false, reason: 'source_event_required', message: 'sourceEventId is required.' };
-  if (!/^(close|edit):/.test(sourceEventId)) {
-    return { ok: false, reason: 'source_event_invalid', message: 'sourceEventId must start with close: or edit:.' };
+  if (op !== 'close' && op !== 'edit') {
+    return { ok: false, reason: 'op_required', message: 'op must be close or edit.' };
   }
-  if (!sourceEventId.includes(ticketDocId)) {
-    return { ok: false, reason: 'source_event_mismatch', message: 'sourceEventId must include ticketDocId.' };
-  }
-  return { ok: true, ticketDocId, sourceEventId };
+  return { ok: true, ticketDocId, op };
 }

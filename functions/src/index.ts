@@ -4775,6 +4775,7 @@ export {
   adminGetWellPool,
   adminSubmitPullEdit,
   // Canonical paper v1. SOURCE ONLY / NOT DEPLOYED.
+  getTicketPaper,
   staffGetTicketPaper,
   staffMaterializeTicketPaper,
   adminGetWellHistory,
