@@ -77,8 +77,13 @@ check('blocked routes return before any write',
 // pending / retry / error safety
 check('double submission is suppressed while in flight',
   /if \(!companyTarget \|\| companyBusy\) return;/.test(handler));
-check('the submit control is disabled while pending',
-  /disabled=\{companyBusy\}/.test(tab) && /companyBusy \? 'Assigning…'/.test(tab));
+check('the submit control is disabled while pending or ineligible',
+  /companyAssignEnabled\(/.test(tab) && /companyBusy \? 'Assigning…'/.test(tab));
+check('current company is labeled in the customer list',
+  /\(current\)/.test(tab));
+check('same-company click does not write',
+  /route === 'noop_current'/.test(handler) && /Already assigned to this company/.test(handler)
+  && handler.indexOf("route === 'noop_current'") < handler.indexOf('adminBindCompany'));
 check('errors render sanitized copy, never the raw server error',
   !/setCompanyError\(\s*(String\()?err/.test(handler)
   && /Nothing was changed — you can retry|Nothing partial was kept — you can retry/.test(handler));
@@ -110,19 +115,30 @@ check('the legacy staging message says when it applies',
   const probePath = join(ROOT, 'tools', '.companyBindingUi.probe.mts');
   try {
     writeFileSync(probePath, `
-      import { companyActionRouteFor } from '../src/lib/secureLoginProvisioning';
+      import { companyActionRouteFor, companyAssignEnabled } from '../src/lib/secureLoginProvisioning';
       const HASH = 'da561bc4hash';
       const legacy = { key: HASH, displayName: 'MikeS24' };
+      const legacyBound = { key: HASH, displayName: 'Marcial Lebaron', companyId: 'liquid-gold' };
       const canonicalUnbound = { key: HASH, driverId: 'uuid-7f3a-9c21', displayName: 'MikeS24' };
       const canonicalBound = { key: HASH, driverId: 'uuid-7f3a-9c21', displayName: 'MikeS24', companyId: 'liquid-gold' };
       const hashEcho = { key: HASH, driverId: HASH, displayName: 'MikeS24' };
+      const same = companyActionRouteFor(canonicalBound, 'liquid-gold');
+      const legacyCurrent = companyActionRouteFor(legacyBound, 'liquid-gold');
+      const legacyEmpty = companyActionRouteFor(legacyBound, '');
+      const legacyOther = companyActionRouteFor(legacyBound, 'dakota-hauling');
       console.log(JSON.stringify({
         legacyAny: companyActionRouteFor(legacy, 'liquid-gold'),
         canonicalInitial: companyActionRouteFor(canonicalUnbound, 'liquid-gold'),
-        canonicalSame: companyActionRouteFor(canonicalBound, 'liquid-gold'),
+        canonicalSame: same,
         canonicalTransfer: companyActionRouteFor(canonicalBound, 'dakota-hauling'),
         canonicalUnbind: companyActionRouteFor(canonicalBound, ''),
         hashEcho: companyActionRouteFor(hashEcho, 'liquid-gold'),
+        legacyCurrent, legacyEmpty, legacyOther,
+        enableSame: companyAssignEnabled(same, { busy: false, authorized: true }),
+        enableBusy: companyAssignEnabled(legacyOther, { busy: true, authorized: true }),
+        enableUnauthorized: companyAssignEnabled(legacyOther, { busy: false, authorized: false }),
+        enableOther: companyAssignEnabled(legacyOther, { busy: false, authorized: true }),
+        enableEmpty: companyAssignEnabled(legacyEmpty, { busy: false, authorized: true }),
       }));
     `, 'utf8');
     const r = JSON.parse(execFileSync('npx', ['tsx', probePath], {
@@ -130,7 +146,15 @@ check('the legacy staging message says when it applies',
     }).trim().split('\n').pop());
     check('legacy-only rows stay on the staging route', r.legacyAny === 'legacy_staging');
     check('canonical unbound routes to the governed bind', r.canonicalInitial === 'governed_bind');
-    check('canonical same-target is governed (idempotent server-side)', r.canonicalSame === 'governed_bind');
+    check('canonical same-target is a no-op (current company)', r.canonicalSame === 'noop_current');
+    check('legacy already on that company is a no-op', r.legacyCurrent === 'noop_current');
+    check('legacy empty selection is idle, not a remove write', r.legacyEmpty === 'noop_empty');
+    check('legacy different company still stages', r.legacyOther === 'legacy_staging');
+    check('Assign disabled for current company', r.enableSame === false);
+    check('Assign disabled while in flight', r.enableBusy === false);
+    check('Assign disabled when unauthorized', r.enableUnauthorized === false);
+    check('Assign enabled only for a different eligible company', r.enableOther === true);
+    check('Assign disabled when selection is empty', r.enableEmpty === false);
     check('canonical different-target is blocked as a transfer', r.canonicalTransfer === 'blocked_transfer');
     check('canonical removal is blocked as an unbind', r.canonicalUnbind === 'blocked_unbind');
     check('a hash echoed as driverId still routes as legacy staging', r.hashEcho === 'legacy_staging');

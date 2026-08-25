@@ -163,25 +163,42 @@ export function buildSetPasscodeRequest(
 //     unbind are refused with explicit copy, never silently patched.
 
 export type CompanyActionRoute =
-  /** Canonical row, initial (or idempotent same-target) bind → callable. */
+  /** Canonical row, initial bind → callable. */
   | 'governed_bind'
   /** Canonical row already bound to a DIFFERENT company — not supported here. */
   | 'blocked_transfer'
   /** Canonical row, removal requested — no governed unbind exists yet. */
   | 'blocked_unbind'
   /** Legacy-only row — staging metadata for the future secure creation. */
-  | 'legacy_staging';
+  | 'legacy_staging'
+  /** Selection is the row's current company — no write. */
+  | 'noop_current'
+  /** No company selected — Assign stays idle. */
+  | 'noop_empty';
 
 export function companyActionRouteFor(
   row: DriverRowLike & { companyId?: string },
   targetCompanyId: string,
 ): CompanyActionRoute {
-  if (!hasCanonicalDriverId(row)) return 'legacy_staging';
   const target = targetCompanyId.trim().toLowerCase();
-  if (!target) return 'blocked_unbind';
-  const bound = (row.companyId || '').trim();
+  const bound = (row.companyId || '').trim().toLowerCase();
+  if (!target) {
+    return hasCanonicalDriverId(row) ? 'blocked_unbind' : 'noop_empty';
+  }
+  if (bound && bound === target) return 'noop_current';
+  if (!hasCanonicalDriverId(row)) return 'legacy_staging';
   if (bound && bound !== target) return 'blocked_transfer';
   return 'governed_bind';
+}
+
+/** Assign is enabled only for a different eligible company, and never in-flight. */
+export function companyAssignEnabled(
+  route: CompanyActionRoute,
+  opts: { busy?: boolean; authorized?: boolean } = {},
+): boolean {
+  if (opts.busy) return false;
+  if (opts.authorized === false) return false;
+  return route === 'governed_bind' || route === 'legacy_staging';
 }
 
 /** Copy shown before a destructive-by-omission operation. */

@@ -12,6 +12,7 @@ import { EmployeePanel } from './EmployeePanel';
 import { useAuth } from '@/contexts/AuthContext';
 import {
   companyActionRouteFor,
+  companyAssignEnabled,
   confirmationCopyFor,
   credentialActionFor,
   hasCanonicalDriverId,
@@ -523,6 +524,15 @@ export function DriversTab({ scopeCompanyId, isWbAdmin = false }: DriversTabProp
   const assignDriverCompany = async () => {
     if (!companyTarget || companyBusy) return; // double-submit guard
     const route = companyActionRouteFor(companyTarget, assignCompanyId);
+    if (route === 'noop_current') {
+      setCompanyError('Already assigned to this company. Nothing was changed.');
+      return;
+    }
+    if (route === 'noop_empty') return;
+    if (!isWbAdmin) {
+      setCompanyError('You are not authorized to assign companies.');
+      return;
+    }
 
     if (route === 'blocked_unbind') {
       setCompanyError(
@@ -1723,10 +1733,15 @@ export function DriversTab({ scopeCompanyId, isWbAdmin = false }: DriversTabProp
                   className="w-full px-3 py-2 bg-gray-700 text-white rounded text-sm"
                   autoFocus
                 >
-                  <option value="">— No Customer (Remove) —</option>
-                  {companiesList.map(c => (
-                    <option key={c.id} value={c.id}>{c.name}</option>
-                  ))}
+                  <option value="">— Select a customer —</option>
+                  {companiesList.map(c => {
+                    const isCurrent = (companyTarget.companyId || '').trim().toLowerCase() === c.id.trim().toLowerCase();
+                    return (
+                      <option key={c.id} value={c.id}>
+                        {c.name}{isCurrent ? ' (current)' : ''}
+                      </option>
+                    );
+                  })}
                 </select>
               </div>
             </div>
@@ -1738,10 +1753,13 @@ export function DriversTab({ scopeCompanyId, isWbAdmin = false }: DriversTabProp
             <div className="flex gap-2 mt-4">
               <button
                 onClick={assignDriverCompany}
-                disabled={companyBusy}
+                disabled={!companyAssignEnabled(
+                  companyActionRouteFor(companyTarget, assignCompanyId),
+                  { busy: companyBusy, authorized: isWbAdmin },
+                )}
                 className="flex-1 px-4 py-2 bg-teal-600 hover:bg-teal-500 text-white rounded disabled:opacity-50"
               >
-                {companyBusy ? 'Assigning…' : assignCompanyId.trim() ? 'Assign' : 'Remove from Customer'}
+                {companyBusy ? 'Assigning…' : 'Assign'}
               </button>
               <button
                 onClick={() => {
