@@ -8,7 +8,11 @@
  */
 import * as admin from 'firebase-admin';
 import { evaluateGovernedWellConfig } from '../governedWellConfig';
-import { wbmEditIncomingPath, wbmEditReceiptPath } from '../wbmEditAuthorize';
+import {
+  digestGovernedEditIncoming,
+  wbmEditIncomingPath,
+  wbmEditReceiptPath,
+} from '../wbmEditAuthorize';
 import { runIngestWbmEdit } from '../ingestWbmEdit';
 
 const EMULATOR = process.env.FIREBASE_DATABASE_EMULATOR_HOST;
@@ -61,8 +65,14 @@ describeE2E('emulator: real processIncomingEdit governed edit path', () => {
     await db.ref('packets').set(null);
     await db.ref('well_config').set(null);
     await db.ref('wells').set(null);
+    await db.ref('packets/incoming_version').set(0);
     await db.ref(`drivers/profiles/${DRIVER}`).set(null);
   });
+
+  async function version(): Promise<number> {
+    const n = (await db.ref('packets/incoming_version').once('value')).val();
+    return typeof n === 'number' ? n : Number(n) || 0;
+  }
 
   async function seedOriginal(): Promise<void> {
     await db.ref(`packets/processed/${PREV_PID}`).set({
@@ -219,7 +229,9 @@ describeE2E('emulator: real processIncomingEdit governed edit path', () => {
       packetId: PID,
       sequence: 1,
       outcome: 'applied',
+      payloadDigest: first.payloadDigest,
     });
+    expect(await version()).toBe(1);
 
     const receiptA = (await db.ref(wbmEditReceiptPath(EVENT_A)).once('value')).val() as Record<string, unknown>;
     expect(receiptA).toMatchObject({
@@ -240,10 +252,12 @@ describeE2E('emulator: real processIncomingEdit governed edit path', () => {
 
     const appliedAck = await ingest(packetA);
     expect(appliedAck).toMatchObject({ ok: true, status: 'accepted', editEventId: EVENT_A });
+    expect(await version()).toBe(1);
 
     const retryIncoming = await ingest(packetA);
     expect(retryIncoming).toMatchObject({ ok: true, status: 'accepted' });
     expect((await db.ref(wbmEditIncomingPath(EVENT_A)).once('value')).exists()).toBe(false);
+    expect(await version()).toBe(1);
 
     const packetB = {
       ...packetA,
@@ -273,6 +287,11 @@ describeE2E('emulator: real processIncomingEdit governed edit path', () => {
     expect(Object.keys(historyRoot).sort()).toEqual([EVENT_A, EVENT_B].sort());
     expect((historyRoot[EVENT_A] as Record<string, unknown>).sequence).toBe(1);
     expect((historyRoot[EVENT_B] as Record<string, unknown>).sequence).toBe(2);
+    expect((historyRoot[EVENT_A] as Record<string, unknown>).payloadDigest).toBe(first.payloadDigest);
+    expect((historyRoot[EVENT_B] as Record<string, unknown>).payloadDigest).toBe(second.payloadDigest);
+    expect((historyRoot[EVENT_A] as Record<string, unknown>).payloadDigest)
+      .not.toBe((historyRoot[EVENT_B] as Record<string, unknown>).payloadDigest);
+    expect(await version()).toBe(2);
 
     await db.ref(wbmEditIncomingPath(EVENT_A)).set({
       requestType: 'edit',
@@ -291,6 +310,7 @@ describeE2E('emulator: real processIncomingEdit governed edit path', () => {
     expect(processedRetry.editCount).toBe(2);
     expect(processedRetry.bblsTaken).toBe(130);
     expect((await db.ref(wbmEditIncomingPath(EVENT_A)).once('value')).exists()).toBe(false);
+    expect(await version()).toBe(2);
 
     const cfg = evaluateGovernedWellConfig({
       companyId: COMPANY,
@@ -305,5 +325,274 @@ describeE2E('emulator: real processIncomingEdit governed edit path', () => {
     expect(cfg.config.wellName).toBe('Gabriel 5');
     expect(cfg.config.ndicApiNo).toBe('33-053-01234-00-00');
     expect(cfg.config.bblPerFoot).toBe(40);
+  });
+
+  it('same event + different digest is conflict with no overwrite or replacement receipt', async () => {
+    await seedOriginal();
+    const packetA = {
+      requestType: 'edit',
+      wellName: 'Gabriel 5',
+      originalPacketId: PID,
+      packetId: PID,
+      editEventId: EVENT_A,
+      tankLevelFeet: 9.5,
+      bblsTaken: 140,
+      wellDown: false,
+      idempotencyKey: EVENT_A,
+    };
+    const first = await ingest(packetA);
+    expect(first.ok).toBe(true);
+    if (!first.ok) return;
+    await invokeHandler(first.incomingPath);
+    const digestA = first.payloadDigest;
+    const receiptBefore = (await db.ref(wbmEditReceiptPath(EVENT_A)).once('value')).val();
+
+    await db.ref(wbmEditIncomingPath(EVENT_A)).set({
+      requestType: 'edit',
+      wellName: 'Gabriel 5',
+      originalPacketId: PID,
+      packetId: PID,
+      editEventId: EVENT_A,
+      tankLevelFeet: 8,
+      bblsTaken: 200,
+      wellDown: false,
+      idempotencyKey: EVENT_A,
+    });
+    await invokeHandler(wbmEditIncomingPath(EVENT_A));
+
+    const processed = (await db.ref(`packets/processed/${PID}`).once('value')).val() as Record<string, unknown>;
+    expect(processed.bblsTaken).toBe(140);
+    expect(processed.editCount).toBe(1);
+    const history = (await db.ref(`packets/editHistory/${PID}/${EVENT_A}`).once('value')).val() as Record<string, unknown>;
+    expect(history.payloadDigest).toBe(digestA);
+    expect(history.outcome).toBe('applied');
+    const receiptAfter = (await db.ref(wbmEditReceiptPath(EVENT_A)).once('value')).val() as Record<string, unknown>;
+    expect(receiptAfter).toEqual(receiptBefore);
+    expect(receiptAfter.status).toBe('accepted');
+    expect(receiptAfter.payloadDigest).toBe(digestA);
+    expect((await db.ref(wbmEditIncomingPath(EVENT_A)).once('value')).exists()).toBe(false);
+    expect(await version()).toBe(1);
+  });
+
+  it('governed no-op writes an acknowledged receipt and does not strand or reapply', async () => {
+    await seedOriginal();
+    const packet = {
+      requestType: 'edit',
+      wellName: 'Gabriel 5',
+      originalPacketId: PID,
+      packetId: PID,
+      editEventId: EVENT_A,
+      tankLevelFeet: 10.5,
+      bblsTaken: 160,
+      wellDown: false,
+      idempotencyKey: EVENT_A,
+    };
+    const queued = await ingest(packet);
+    expect(queued).toMatchObject({ ok: true, status: 'pending' });
+    if (!queued.ok) return;
+    await invokeHandler(queued.incomingPath);
+    expect((await db.ref(queued.incomingPath).once('value')).exists()).toBe(false);
+    const receipt = (await db.ref(wbmEditReceiptPath(EVENT_A)).once('value')).val() as Record<string, unknown>;
+    expect(receipt).toMatchObject({
+      status: 'acknowledged',
+      reason: 'material_noop',
+      editEventId: EVENT_A,
+      originalPacketId: PID,
+      payloadDigest: queued.payloadDigest,
+    });
+    const history = (await db.ref(`packets/editHistory/${PID}/${EVENT_A}`).once('value')).val() as Record<string, unknown>;
+    expect(history.outcome).toBe('noop');
+    const processed = (await db.ref(`packets/processed/${PID}`).once('value')).val() as Record<string, unknown>;
+    expect(processed.bblsTaken).toBe(160);
+    expect(processed.editCount).toBeUndefined();
+    expect(await version()).toBe(0);
+    const ack = await ingest(packet);
+    expect(ack).toMatchObject({ ok: true, status: 'acknowledged' });
+  });
+
+  it('governed stale revision is rejected with a durable receipt, not silently dropped', async () => {
+    await seedOriginal();
+    await db.ref(`packets/processed/${PID}/lastRevisionAt`).set('2026-08-23T18:00:00.000Z');
+    const incoming = {
+      requestType: 'edit',
+      wellName: 'Gabriel 5',
+      originalPacketId: PID,
+      packetId: PID,
+      editEventId: EVENT_A,
+      tankLevelFeet: 9.5,
+      bblsTaken: 140,
+      wellDown: false,
+      idempotencyKey: EVENT_A,
+      revisionAt: '2026-08-23T17:00:00.000Z',
+      driverId: DRIVER,
+    };
+    const digest = digestGovernedEditIncoming(incoming);
+    await db.ref(wbmEditIncomingPath(EVENT_A)).set({ ...incoming, payloadDigest: digest });
+    await invokeHandler(wbmEditIncomingPath(EVENT_A));
+    expect((await db.ref(wbmEditIncomingPath(EVENT_A)).once('value')).exists()).toBe(false);
+    const receipt = (await db.ref(wbmEditReceiptPath(EVENT_A)).once('value')).val() as Record<string, unknown>;
+    expect(receipt).toMatchObject({
+      status: 'rejected',
+      reason: 'stale_revision',
+      editEventId: EVENT_A,
+      originalPacketId: PID,
+      payloadDigest: digest,
+    });
+    const processed = (await db.ref(`packets/processed/${PID}`).once('value')).val() as Record<string, unknown>;
+    expect(processed.bblsTaken).toBe(160);
+    expect(await version()).toBe(0);
+  });
+
+  it('no-level applied edit writes history+receipt and advances version once', async () => {
+    await seedOriginal();
+    const packet = {
+      requestType: 'edit',
+      wellName: 'Gabriel 5',
+      originalPacketId: PID,
+      packetId: PID,
+      editEventId: EVENT_A,
+      tankLevelFeet: 0,
+      bblsTaken: 155,
+      wellDown: false,
+      idempotencyKey: EVENT_A,
+    };
+    const queued = await ingest(packet);
+    expect(queued.ok).toBe(true);
+    if (!queued.ok) return;
+    await invokeHandler(queued.incomingPath);
+    const processed = (await db.ref(`packets/processed/${PID}`).once('value')).val() as Record<string, unknown>;
+    expect(processed.noLevel).toBe(true);
+    expect(processed.bblsTaken).toBe(155);
+    expect(processed.tankTopInches).toBe(0);
+    const receipt = (await db.ref(wbmEditReceiptPath(EVENT_A)).once('value')).val() as Record<string, unknown>;
+    expect(receipt).toMatchObject({
+      status: 'accepted',
+      payloadDigest: queued.payloadDigest,
+      originalPacketId: PID,
+    });
+    const history = (await db.ref(`packets/editHistory/${PID}/${EVENT_A}`).once('value')).val() as Record<string, unknown>;
+    expect(history).toMatchObject({ outcome: 'applied', payloadDigest: queued.payloadDigest });
+    expect(await version()).toBe(1);
+    const replay = await ingest(packet);
+    expect(replay).toMatchObject({ ok: true, status: 'accepted' });
+    expect(await version()).toBe(1);
+  });
+
+  it('stored numeric-string BBL/ft is used; missing rate never falls back to 20×tanks', async () => {
+    await seedOriginal();
+    await db.ref('well_config/Gabriel 5').update({ bblPerFoot: '40' });
+    const packet = {
+      requestType: 'edit',
+      wellName: 'Gabriel 5',
+      originalPacketId: PID,
+      packetId: PID,
+      editEventId: EVENT_A,
+      tankLevelFeet: 9.5,
+      bblsTaken: 140,
+      wellDown: false,
+      idempotencyKey: EVENT_A,
+    };
+    const queued = await ingest(packet);
+    if (!queued.ok) return;
+    await invokeHandler(queued.incomingPath);
+    const processed = (await db.ref(`packets/processed/${PID}`).once('value')).val() as Record<string, unknown>;
+    expect(processed.bblsTaken).toBe(140);
+    // 9.5 ft = 114"; 140 BBL / 40 BBL/ft * 12 = 42"; after = 72"
+    expect(processed.tankAfterInches).toBe(72);
+
+    await db.ref('packets').set(null);
+    await db.ref('packets/incoming_version').set(0);
+    await seedOriginal();
+    await db.ref('well_config/Gabriel 5').set({
+      route: 'Gabriels',
+      companyId: COMPANY,
+      tanks: 2,
+    });
+    const missing = await ingest({ ...packet, editEventId: EVENT_B, idempotencyKey: EVENT_B });
+    if (!missing.ok) return;
+    const before = (await db.ref(`packets/processed/${PID}`).once('value')).val() as Record<string, unknown>;
+    await invokeHandler(missing.incomingPath);
+    const after = (await db.ref(`packets/processed/${PID}`).once('value')).val() as Record<string, unknown>;
+    expect(after.bblsTaken).toBe(before.bblsTaken);
+    expect(after.tankAfterInches).toBe(before.tankAfterInches);
+    const rejected = (await db.ref(wbmEditReceiptPath(EVENT_B)).once('value')).val() as Record<string, unknown>;
+    expect(rejected).toMatchObject({
+      status: 'rejected',
+      reason: 'bbl_per_foot_unavailable',
+      originalPacketId: PID,
+    });
+    expect(await version()).toBe(0);
+  });
+
+  it('derives BBL/ft from capacity/height/tanks including numeric strings', async () => {
+    await seedOriginal();
+    await db.ref('well_config/Gabriel 5').set({
+      route: 'Gabriels',
+      companyId: COMPANY,
+      tankCapacity: '400',
+      tankHeight: '20',
+      tanks: '2',
+      pullBbls: 140,
+      bottomLevel: 1,
+      loadLine: 1,
+    });
+    const packet = {
+      requestType: 'edit',
+      wellName: 'Gabriel 5',
+      originalPacketId: PID,
+      packetId: PID,
+      editEventId: EVENT_A,
+      tankLevelFeet: 9.5,
+      bblsTaken: 140,
+      wellDown: false,
+      idempotencyKey: EVENT_A,
+    };
+    const queued = await ingest(packet);
+    if (!queued.ok) return;
+    await invokeHandler(queued.incomingPath);
+    const processed = (await db.ref(`packets/processed/${PID}`).once('value')).val() as Record<string, unknown>;
+    expect(processed.tankAfterInches).toBe(72);
+    expect((await db.ref(wbmEditReceiptPath(EVENT_A)).once('value')).val().status).toBe('accepted');
+  });
+
+  it('standalone display dateTime does not mutate operational instant; offsetless UTC is ignored', async () => {
+    await seedOriginal();
+    const packet = {
+      requestType: 'edit',
+      wellName: 'Gabriel 5',
+      originalPacketId: PID,
+      packetId: PID,
+      editEventId: EVENT_A,
+      tankLevelFeet: 9.5,
+      bblsTaken: 140,
+      wellDown: false,
+      idempotencyKey: EVENT_A,
+      dateTime: '1/1/1999 3:00 AM',
+    };
+    const queued = await ingest(packet);
+    if (!queued.ok) return;
+    expect(queued.ok && !('dateTimeUTC' in (queued as { payloadDigest: string }))).toBe(true);
+    await invokeHandler(queued.incomingPath);
+    const processed = (await db.ref(`packets/processed/${PID}`).once('value')).val() as Record<string, unknown>;
+    expect(processed.dateTimeUTC).toBe(ORIGINAL_UTC);
+    expect(processed.dateTime).toBe('8/23/2026 11:23 AM');
+
+    await db.ref(wbmEditIncomingPath(EVENT_B)).set({
+      requestType: 'edit',
+      wellName: 'Gabriel 5',
+      originalPacketId: PID,
+      packetId: PID,
+      editEventId: EVENT_B,
+      tankLevelFeet: 9.0,
+      bblsTaken: 130,
+      wellDown: false,
+      idempotencyKey: EVENT_B,
+      dateTimeUTC: '2026-08-23T18:00:00',
+      dateTime: '8/23/2026 1:00 PM',
+      payloadDigest: 'deadbeef',
+    });
+    await invokeHandler(wbmEditIncomingPath(EVENT_B));
+    const afterOffsetless = (await db.ref(`packets/processed/${PID}`).once('value')).val() as Record<string, unknown>;
+    expect(afterOffsetless.dateTimeUTC).toBe(ORIGINAL_UTC);
   });
 });

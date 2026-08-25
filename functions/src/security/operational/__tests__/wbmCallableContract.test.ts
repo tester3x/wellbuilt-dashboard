@@ -136,6 +136,14 @@ describe('WB-M callable export / contract matrix', () => {
     expect(index).toMatch(/export async function processIncomingEdit/);
     expect(index).toMatch(/editReceiptWritePaths/);
     expect(history).toMatch(/packets\/editReceipts\/\$\{editEventId\}/);
+    const editFn = index.slice(
+      index.indexOf('export async function processIncomingEdit'),
+      index.indexOf('export const processDeleteRequest'),
+    );
+    expect(editFn).toMatch(/resolveEditBblPerFoot/);
+    expect(editFn).not.toMatch(/20 \* tanks/);
+    expect(editFn).toMatch(/digestGovernedEditIncoming/);
+    expect(editFn).toMatch(/isAbsoluteInstant/);
   });
 
   it('WB-T dispatch write modules are untouched on this branch', () => {

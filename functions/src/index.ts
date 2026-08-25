@@ -23,6 +23,7 @@ import {
 import {
   buildAppliedEditEvent,
   buildAppliedEditReceipt,
+  buildTerminalEditEvent,
   buildFieldDiff,
   editHistoryWritePaths,
   editReceiptWritePaths,
@@ -33,13 +34,49 @@ import {
   resolveEditAuditContext,
   resolveEditEventId,
   resolveOriginalSubmissionAt,
+  type EditHistoryEvent,
 } from './editHistory';
 import { notifyIncomingVersionBestEffort } from './incomingVersionPublish';
+import { resolveEditBblPerFoot } from './security/operational/editBblPerFoot';
+import {
+  digestGovernedEditIncoming,
+  hasClientEditEventId,
+  isAbsoluteInstant,
+} from './security/operational/wbmEditAuthorize';
 
 
 admin.initializeApp();
 admin.firestore().settings({ ignoreUndefinedProperties: true });
 const db = admin.database();
+
+/** Governed incoming consume: incoming gone only with a durable receipt. */
+async function consumeGovernedIncoming(args: {
+  incomingId: string;
+  editEventId: string;
+  originalPacketId: string;
+  payloadDigest: string;
+  status: 'accepted' | 'acknowledged' | 'rejected' | 'conflict';
+  at: string;
+  reason?: string;
+  historyEvent?: EditHistoryEvent;
+}): Promise<void> {
+  const receipt = buildAppliedEditReceipt({
+    editEventId: args.editEventId,
+    originalPacketId: args.originalPacketId,
+    payloadDigest: args.payloadDigest,
+    appliedAt: args.at,
+    status: args.status,
+    reason: args.reason,
+  });
+  const updates: Record<string, unknown> = {
+    [`packets/incoming/${args.incomingId}`]: null,
+    ...editReceiptWritePaths(args.editEventId, receipt),
+  };
+  if (args.historyEvent) {
+    Object.assign(updates, editHistoryWritePaths(args.originalPacketId, args.historyEvent));
+  }
+  await db.ref().update(updates);
+}
 
 // Format a Date to "MM/DD/YYYY H:MM AM/PM" (no comma — matches WB M/WB T format)
 // Node's toLocaleString() produces "M/D/YYYY, H:MM:SS AM/PM" which Hermes can't parse
@@ -1720,74 +1757,92 @@ export async function processIncomingEdit(
         }
       : {};
 
-    // Exact duplicate edit replay: PROVABLY already applied only when the
-    // original carries an edit marker AND its values already equal this
-    // edit's requested values — then re-applying would only re-run
-    // enrichment for nothing. Provable → remove the duplicate incoming
-    // copy atomically and stop. Unprovable (null) → proceed normally;
-    // the schema keeps no per-edit operation log to check against.
-    const editDup = editAlreadyApplied(data, origPacket);
-    if (editDup === true) {
-      console.log(`[IDEMPOTENT_REPLAY_ALREADY_PROCESSED] ${wellName}: edit ${context.params.packetId} already applied to ${originalPacketId} — duplicate incoming removed`);
-      await removeIncomingPacket(db.ref(), context.params.packetId);
-      return null;
-    }
-
-    // ── 7/25 revision ordering (optional metadata, backward compatible) ──
-    // An edit carrying revisionAt older than the pull's lastRevisionAt is a
-    // late straggler: acknowledge (consume) and drop — never revert newer
-    // business state. Clients without revisionAt keep last-write-wins.
-    if (isStaleRevision(data, origPacket)) {
-      console.log(
-        `[EDIT_STALE_REVISION] ${wellName}: edit ${context.params.packetId} ` +
-          `(revisionAt ${data.revisionAt}) older than applied ${origPacket.lastRevisionAt} — acknowledged, not applied`,
-      );
-      await removeIncomingPacket(db.ref(), context.params.packetId);
-      return null;
-    }
-
-    // ── 7/25 normalized no-op: identical milestone revisions ─────────────
-    // WB-T sends the complete canonical state on every Depart / Close /
-    // Split / History save. When no MATERIAL field differs (top, BBLs,
-    // well identity, operational instant, asserted wellDown), the revision
-    // acknowledges successfully by consuming the incoming packet — the
-    // pull is not rewritten, tank-after / flow / AFR are not recomputed,
-    // and the original operational timestamps are untouched. Transport and
-    // audit fields can never create a false material change
-    // (editMaterialChange inspects material fields only).
-    const material = editMaterialChange(data, origPacket);
-    if (!material.changed) {
-      console.log(
-        `[EDIT_NOOP_IDENTICAL] ${wellName}: edit ${context.params.packetId} matches ` +
-          `processed ${originalPacketId} on all material fields — acknowledged without reapply`,
-      );
-      await removeIncomingPacket(db.ref(), context.params.packetId);
-      return null;
-    }
-    console.log(
-      `[EDIT_MATERIAL_CHANGE] ${wellName}: ${originalPacketId} fields changed: ${material.fields.join(', ')}`,
-    );
-
-    // ── Canonical edit event id + idempotency (retry / watchdog) ──────────
+    // ── Canonical edit event id + payload identity ────────────────────────
     const editEventId = resolveEditEventId({
       incomingPacketId: context.params.packetId,
       clientEventId: (data as { editEventId?: unknown }).editEventId,
     });
+    const isGoverned = hasClientEditEventId(data as Record<string, unknown>);
+    const payloadDigest = isGoverned
+      ? digestGovernedEditIncoming(data as Record<string, unknown>)
+      : (typeof (data as { payloadDigest?: unknown }).payloadDigest === 'string'
+        ? (data as { payloadDigest: string }).payloadDigest
+        : null);
+    const governedNow = new Date().toISOString();
+    const terminalBase = {
+      eventId: editEventId,
+      packetId: originalPacketId,
+      sequence: nextEditCount(origPacket as Record<string, unknown>),
+      editedAt: governedNow,
+      source: normalizeEditSource((data as { source?: unknown }).source),
+      originAppContext: normalizeOriginAppContext(origPacket.originAppContext),
+      actorDriverId: (data as any).driverId ?? origPacket.driverId ?? null,
+      actorDriverName: (data as any).driverName ?? null,
+      fields: [] as ReturnType<typeof buildFieldDiff>,
+      originalSubmissionAt: resolveOriginalSubmissionAt(origPacket as Record<string, unknown>),
+      resolutionPath: (editResolvedViaFallback ? 'invoiceDocId_fallback' : 'direct') as
+        'direct' | 'invoiceDocId_fallback',
+      editRequestId: context.params.packetId,
+      payloadDigest,
+    };
+
     const existingEventSnap = await db
       .ref(`packets/editHistory/${originalPacketId}/${editEventId}`)
       .once('value');
     if (existingEventSnap.exists()) {
+      const existingEvent = (existingEventSnap.val() || {}) as Record<string, unknown>;
+      const historyDigest = typeof existingEvent.payloadDigest === 'string'
+        ? existingEvent.payloadDigest
+        : '';
+      if (isGoverned) {
+        if (!historyDigest || !payloadDigest) {
+          console.error(
+            `[EDIT_EVENT_UNPROVEN] ${wellName}: history ${editEventId} lacks digest proof — incoming left intact`,
+          );
+          return null;
+        }
+        if (historyDigest !== payloadDigest) {
+          console.log(
+            `[EDIT_EVENT_CONFLICT] ${wellName}: event ${editEventId} digest mismatch — no overwrite, no replacement receipt`,
+          );
+          // Incoming is consumed so the trigger does not loop; the existing
+          // accepted receipt + history digest remain the only terminal proof.
+          // A client retry of the new bytes sees digest mismatch → conflict.
+          await db.ref().update({
+            [`packets/incoming/${context.params.packetId}`]: null,
+          });
+          return null;
+        }
+        const priorOutcome = existingEvent.outcome;
+        const status = priorOutcome === 'noop'
+          ? 'acknowledged'
+          : priorOutcome === 'rejected'
+            ? 'rejected'
+            : 'accepted';
+        console.log(
+          `[EDIT_EVENT_IDEMPOTENT] ${wellName}: event ${editEventId} proven applied digest — consume with receipt`,
+        );
+        await consumeGovernedIncoming({
+          incomingId: context.params.packetId,
+          editEventId,
+          originalPacketId,
+          payloadDigest: historyDigest,
+          status,
+          at: typeof existingEvent.editedAt === 'string' ? existingEvent.editedAt : governedNow,
+          reason: typeof existingEvent.reason === 'string' ? existingEvent.reason : undefined,
+        });
+        return null;
+      }
       console.log(
         `[EDIT_EVENT_IDEMPOTENT] ${wellName}: event ${editEventId} already on ${originalPacketId} — consume incoming only`,
       );
-      const existingEvent = (existingEventSnap.val() || {}) as Record<string, unknown>;
       const receipt = buildAppliedEditReceipt({
         editEventId,
         originalPacketId,
-        payloadDigest: (data as { payloadDigest?: unknown }).payloadDigest,
+        payloadDigest: historyDigest || payloadDigest,
         appliedAt: typeof existingEvent.editedAt === 'string'
           ? existingEvent.editedAt
-          : new Date().toISOString(),
+          : governedNow,
       });
       await db.ref().update({
         [`packets/incoming/${context.params.packetId}`]: null,
@@ -1795,6 +1850,83 @@ export async function processIncomingEdit(
       });
       return null;
     }
+
+    // Exact duplicate edit replay: PROVABLY already applied only when the
+    // original carries an edit marker AND its values already equal this
+    // edit's requested values. Governed: only consume when THIS event's
+    // history (above) proved the payload. Unproven governed → fail closed.
+    const editDup = editAlreadyApplied(data, origPacket);
+    if (editDup === true) {
+      if (isGoverned && payloadDigest) {
+        console.error(
+          `[EDIT_DUP_UNPROVEN_EVENT] ${wellName}: values match processed but event ${editEventId} has no history — incoming left intact`,
+        );
+        return null;
+      }
+      console.log(`[IDEMPOTENT_REPLAY_ALREADY_PROCESSED] ${wellName}: edit ${context.params.packetId} already applied to ${originalPacketId} — duplicate incoming removed`);
+      await removeIncomingPacket(db.ref(), context.params.packetId);
+      return null;
+    }
+
+    // ── 7/25 revision ordering (optional metadata, backward compatible) ──
+    // An edit carrying revisionAt older than the pull's lastRevisionAt is a
+    // late straggler: never revert newer business state.
+    if (isStaleRevision(data, origPacket)) {
+      console.log(
+        `[EDIT_STALE_REVISION] ${wellName}: edit ${context.params.packetId} ` +
+          `(revisionAt ${data.revisionAt}) older than applied ${origPacket.lastRevisionAt} — not applied`,
+      );
+      if (isGoverned && payloadDigest) {
+        await consumeGovernedIncoming({
+          incomingId: context.params.packetId,
+          editEventId,
+          originalPacketId,
+          payloadDigest,
+          status: 'rejected',
+          at: governedNow,
+          reason: 'stale_revision',
+          historyEvent: buildTerminalEditEvent({
+            ...terminalBase,
+            outcome: 'rejected',
+            reason: 'stale_revision',
+          }),
+        });
+      } else {
+        await removeIncomingPacket(db.ref(), context.params.packetId);
+      }
+      return null;
+    }
+
+    // ── 7/25 normalized no-op: identical milestone revisions ─────────────
+    const material = editMaterialChange(data, origPacket);
+    if (!material.changed) {
+      console.log(
+        `[EDIT_NOOP_IDENTICAL] ${wellName}: edit ${context.params.packetId} matches ` +
+          `processed ${originalPacketId} on all material fields — acknowledged without reapply`,
+      );
+      if (isGoverned && payloadDigest) {
+        await consumeGovernedIncoming({
+          incomingId: context.params.packetId,
+          editEventId,
+          originalPacketId,
+          payloadDigest,
+          status: 'acknowledged',
+          at: governedNow,
+          reason: 'material_noop',
+          historyEvent: buildTerminalEditEvent({
+            ...terminalBase,
+            outcome: 'noop',
+            reason: 'material_noop',
+          }),
+        });
+      } else {
+        await removeIncomingPacket(db.ref(), context.params.packetId);
+      }
+      return null;
+    }
+    console.log(
+      `[EDIT_MATERIAL_CHANGE] ${wellName}: ${originalPacketId} fields changed: ${material.fields.join(', ')}`,
+    );
 
     // Product: WB-M / Dashboard pull corrections are never age-gated.
     // originalSubmittedAt is audit-only (does not create a deadline).
@@ -1821,8 +1953,6 @@ export async function processIncomingEdit(
     }
     const config = configSnap.val() || {};
     const tanks = config.tanks || config.numTanks || DEFAULTS.tanks;
-    // Effective bbl/ft (override / derived); legacy 20×tanks fallback only.
-    const bblPerFoot = Number(config.bblPerFoot) > 0 ? Number(config.bblPerFoot) : 20 * tanks;
     const pullBbls = config.pullBbls || DEFAULTS.pullBbls;
     const bottomInches = (config.bottomLevel || config.allowedBottom || DEFAULTS.bottomLevel) * 12;
     const loadLineInches = (config.loadLine ?? DEFAULTS.loadLine) * 12; // load-line floor (feet→inches)
@@ -1836,9 +1966,13 @@ export async function processIncomingEdit(
     }
     const newBblsTaken = data.bblsTaken !== undefined ? data.bblsTaken : origPacket.bblsTaken;
 
-    // Apply date/time edit if present
-    const newDateTimeUTC = data.dateTimeUTC || origPacket.dateTimeUTC;
-    const rawDateTime = data.dateTime || origPacket.dateTime;
+    // Operational instant: only a validated offset-aware dateTimeUTC may
+    // change it. Standalone display dateTime cannot. Empty preserves original.
+    const utcOk = isAbsoluteInstant(data.dateTimeUTC);
+    const newDateTimeUTC = utcOk ? String(data.dateTimeUTC).trim() : origPacket.dateTimeUTC;
+    const rawDateTime = utcOk
+      ? (data.dateTime || origPacket.dateTime)
+      : origPacket.dateTime;
     // Strip seconds from display time (e.g. "4/9/2026, 2:40:00 PM" → "4/9/2026, 2:40 PM")
     const newDateTime = rawDateTime ? rawDateTime.replace(/:(\d{2})\s*(AM|PM)/i, ' $2') : '';
 
@@ -1867,8 +2001,8 @@ export async function processIncomingEdit(
       tankTopInches: newTankTopInches,
       tankLevelFeet: newTankTopInches / 12,
       bblsTaken: newBblsTaken,
-      dateTimeUTC: data.dateTimeUTC ? newDateTimeUTC : undefined,
-      dateTime: data.dateTime ? newDateTime : undefined,
+      dateTimeUTC: utcOk ? newDateTimeUTC : undefined,
+      dateTime: utcOk ? newDateTime : undefined,
       wellDown: data.wellDown !== undefined ? newWellDown : undefined,
     });
     const editEvent = buildAppliedEditEvent({
@@ -1885,6 +2019,7 @@ export async function processIncomingEdit(
       originalSubmissionAt,
       resolutionPath: editResolvedViaFallback ? 'invoiceDocId_fallback' : 'direct',
       editRequestId: context.params.packetId,
+      payloadDigest,
     });
     const trailSummary = editSummaryFields({
       editedAt: editedAtIso,
@@ -1897,7 +2032,7 @@ export async function processIncomingEdit(
     const receipt = buildAppliedEditReceipt({
       editEventId,
       originalPacketId,
-      payloadDigest: (data as { payloadDigest?: unknown }).payloadDigest,
+      payloadDigest,
       appliedAt: editedAtIso,
     });
     const receiptPaths = editReceiptWritePaths(editEventId, receipt);
@@ -1929,8 +2064,49 @@ export async function processIncomingEdit(
         [`packets/incoming/${context.params.packetId}`]: null,
       });
       await db.ref(`wells/${wellName}/status/isDown`).set(nextEditIsDown);
+      await notifyIncomingVersionBestEffort(db.ref('packets/incoming_version'), {
+        outgoingCommitted: true,
+        pullAccepted: true,
+      });
       return null;
     }
+
+    const bblResolved = resolveEditBblPerFoot(config);
+    if (!bblResolved.ok) {
+      console.error(
+        `[EDIT_BBL_UNAVAILABLE] ${wellName}: ${bblResolved.reason} — tank math not applied`,
+      );
+      if (isGoverned && payloadDigest) {
+        await consumeGovernedIncoming({
+          incomingId: context.params.packetId,
+          editEventId,
+          originalPacketId,
+          payloadDigest,
+          status: 'rejected',
+          at: editedAtIso,
+          reason: bblResolved.reason,
+          historyEvent: buildTerminalEditEvent({
+            eventId: editEventId,
+            packetId: originalPacketId,
+            sequence,
+            editedAt: editedAtIso,
+            source: editSource,
+            originAppContext,
+            actorDriverId: (data as any).driverId ?? origPacket.driverId ?? null,
+            actorDriverName: (data as any).driverName ?? null,
+            fields: fieldDiff,
+            originalSubmissionAt,
+            resolutionPath: editResolvedViaFallback ? 'invoiceDocId_fallback' : 'direct',
+            editRequestId: context.params.packetId,
+            payloadDigest,
+            outcome: 'rejected',
+            reason: bblResolved.reason,
+          }),
+        });
+      }
+      return null;
+    }
+    const bblPerFoot = bblResolved.bblPerFoot;
 
     // Recalculate tankAfter
     const bblsInInches = newBblsTaken > 0 ? (newBblsTaken / bblPerFoot) * 12 : 0;

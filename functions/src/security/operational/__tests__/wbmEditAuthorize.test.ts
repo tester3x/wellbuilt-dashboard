@@ -1,6 +1,7 @@
 import {
   decideWbmEditReceipt,
   decideWbmEditTransaction,
+  digestGovernedEditIncoming,
   evaluateWbmEdit,
   isAbsoluteInstant,
   resolveOriginalEditAuthority,
@@ -103,6 +104,22 @@ describe('evaluateWbmEdit', () => {
     expect(decided.ok).toBe(true);
     if (!decided.ok) return;
     expect(decided.payload.dateTimeUTC).toBe('2026-08-23T16:40:00.000Z');
+    expect(decided.payload.dateTime).toBe('8/23/2026 11:40 AM');
+  });
+
+  it('ignores standalone display dateTime so it cannot mutate operational time', () => {
+    const decided = evaluateWbmEdit({
+      ...scope,
+      packet: {
+        ...basePacket,
+        dateTime: '1/1/1999 3:00 AM',
+      },
+      original,
+    });
+    expect(decided.ok).toBe(true);
+    if (!decided.ok) return;
+    expect(decided.payload.dateTimeUTC).toBeUndefined();
+    expect(decided.payload.dateTime).toBeUndefined();
   });
 
   it('rejects offsetless explicit timestamps', () => {
@@ -194,6 +211,19 @@ describe('evaluateWbmEdit', () => {
     }) as { reason: string }).reason).toBe('well_out_of_scope');
   });
 
+  it('incoming digest matches evaluateWbmEdit and ignores ingest stamps', () => {
+    const decided = evaluateWbmEdit({ ...scope, packet: basePacket, original });
+    expect(decided.ok).toBe(true);
+    if (!decided.ok) return;
+    const stamped = {
+      ...decided.payload,
+      driverId: 'driver-a',
+      ingestedAt: 1,
+      payloadDigest: decided.payloadDigest,
+    };
+    expect(digestGovernedEditIncoming(stamped)).toBe(decided.payloadDigest);
+  });
+
   it('same digest on incoming is queued; different digest is conflict; applied receipt is accepted', () => {
     const a = evaluateWbmEdit({ ...scope, packet: basePacket, original });
     expect(a.ok).toBe(true);
@@ -209,12 +239,78 @@ describe('evaluateWbmEdit', () => {
       payloadDigest: a.payloadDigest,
     }).action).toBe('abort');
     expect(decideWbmEditReceipt({
-      receipt: { payloadDigest: a.payloadDigest, status: 'accepted' },
+      receipt: {
+        payloadDigest: a.payloadDigest,
+        status: 'accepted',
+        editEventId: EVENT_A,
+        originalPacketId: PID,
+      },
       payloadDigest: a.payloadDigest,
+      editEventId: EVENT_A,
+      originalPacketId: PID,
     }).action).toBe('accepted');
     expect(decideWbmEditReceipt({
-      receipt: { payloadDigest: 'other', status: 'accepted' },
+      receipt: { payloadDigest: 'other', status: 'accepted', editEventId: EVENT_A },
       payloadDigest: a.payloadDigest,
+      editEventId: EVENT_A,
+      originalPacketId: PID,
     }).action).toBe('abort');
+  });
+
+  it('receipt validation requires accepted status + matching digest and identities', () => {
+    const a = evaluateWbmEdit({ ...scope, packet: basePacket, original });
+    expect(a.ok).toBe(true);
+    if (!a.ok) return;
+    const base = {
+      payloadDigest: a.payloadDigest,
+      editEventId: EVENT_A,
+      originalPacketId: PID,
+    };
+    expect(decideWbmEditReceipt({ receipt: null, ...base }).action).toBe('absent');
+    expect(decideWbmEditReceipt({
+      receipt: { payloadDigest: a.payloadDigest },
+      ...base,
+    }).action).toBe('absent');
+    expect(decideWbmEditReceipt({
+      receipt: { payloadDigest: a.payloadDigest, status: 'pending', editEventId: EVENT_A },
+      ...base,
+    }).action).toBe('absent');
+    expect(decideWbmEditReceipt({
+      receipt: {
+        payloadDigest: a.payloadDigest,
+        status: 'accepted',
+        editEventId: EVENT_B,
+        originalPacketId: PID,
+      },
+      ...base,
+    }).action).toBe('absent');
+    expect(decideWbmEditReceipt({
+      receipt: {
+        payloadDigest: a.payloadDigest,
+        status: 'accepted',
+        editEventId: EVENT_A,
+        originalPacketId: 'other-original',
+      },
+      ...base,
+    }).action).toBe('absent');
+    expect(decideWbmEditReceipt({
+      receipt: {
+        payloadDigest: a.payloadDigest,
+        status: 'acknowledged',
+        editEventId: EVENT_A,
+        originalPacketId: PID,
+      },
+      ...base,
+    }).action).toBe('acknowledged');
+    expect(decideWbmEditReceipt({
+      receipt: {
+        payloadDigest: a.payloadDigest,
+        status: 'rejected',
+        editEventId: EVENT_A,
+        originalPacketId: PID,
+        reason: 'stale_revision',
+      },
+      ...base,
+    }).action).toBe('rejected');
   });
 });

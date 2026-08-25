@@ -180,8 +180,10 @@ export function evaluateWbmEdit(input: {
     if (year < 2020 || year > 2036) return { ok: false, reason: 'invalid_dateTimeUTC' };
     dateTimeUTC = d.value;
   }
+  // Display companion only. A nonempty dateTime without a validated
+  // offset-aware dateTimeUTC must NOT independently change operational time.
   let dateTime: string | undefined;
-  if (packet.dateTime !== undefined && packet.dateTime !== '') {
+  if (dateTimeUTC && packet.dateTime !== undefined && packet.dateTime !== '') {
     const d = boundedString(packet.dateTime, 'dateTime', 1, 64);
     if (!d.ok) return d;
     dateTime = d.value;
@@ -247,6 +249,47 @@ export function evaluateWbmEdit(input: {
   };
 }
 
+/**
+ * Digest of a governed incoming edit using the same allowlisted payload
+ * evaluateWbmEdit persists. Extra ingest stamps (driverId, ingestedAt, …)
+ * are ignored. Standalone display dateTime is omitted unless UTC is absolute.
+ */
+export function digestGovernedEditIncoming(data: Record<string, unknown>): string {
+  const originalPacketId = String(data.originalPacketId || data.packetId || '').trim();
+  const editEventId = String(data.editEventId || '').trim();
+  const payload: Record<string, unknown> = {
+    requestType: 'edit',
+    wellName: typeof data.wellName === 'string' ? data.wellName.trim() : data.wellName,
+    originalPacketId,
+    packetId: originalPacketId,
+    editEventId,
+    tankLevelFeet: data.tankLevelFeet,
+    bblsTaken: data.bblsTaken,
+    wellDown: data.wellDown === true,
+    idempotencyKey: (typeof data.idempotencyKey === 'string' && data.idempotencyKey.trim())
+      ? data.idempotencyKey.trim()
+      : editEventId,
+  };
+  if (isAbsoluteInstant(data.dateTimeUTC)) {
+    payload.dateTimeUTC = String(data.dateTimeUTC).trim();
+    if (typeof data.dateTime === 'string' && data.dateTime.trim()) {
+      payload.dateTime = data.dateTime.trim();
+    }
+  }
+  if (typeof data.timezone === 'string' && data.timezone.trim()) {
+    payload.timezone = data.timezone.trim();
+  }
+  if (typeof data.wellDownIsAuthoritative === 'boolean') {
+    payload.wellDownIsAuthoritative = data.wellDownIsAuthoritative;
+  }
+  return canonicalPayloadDigest(payload);
+}
+
+export function hasClientEditEventId(data: Record<string, unknown> | null | undefined): boolean {
+  if (!data) return false;
+  return typeof data.editEventId === 'string' && data.editEventId.trim().length >= 8;
+}
+
 export type WbmEditTxDecision =
   | { action: 'write' }
   | { action: 'queued' }
@@ -267,15 +310,41 @@ export function decideWbmEditTransaction(input: {
   return { action: 'abort', reason: 'idempotency_payload_conflict' };
 }
 
+export type WbmEditReceiptDecision =
+  | { action: 'absent' }
+  | { action: 'accepted' }
+  | { action: 'acknowledged' }
+  | { action: 'rejected' }
+  | { action: 'abort'; reason: 'edit_event_payload_conflict' };
+
+/**
+ * An applied receipt is authoritative only when it proves terminal
+ * application: status accepted, matching digest, matching editEventId
+ * (keyed identity and body when present), matching originalPacketId when
+ * present. Malformed / pending / unrelated / different-digest receipts
+ * are never treated as accepted.
+ */
 export function decideWbmEditReceipt(input: {
   receipt: Record<string, unknown> | null;
   payloadDigest: string;
-}):
-  | { action: 'absent' }
-  | { action: 'accepted' }
-  | { action: 'abort'; reason: 'edit_event_payload_conflict' } {
+  editEventId: string;
+  originalPacketId?: string;
+}): WbmEditReceiptDecision {
   if (!input.receipt) return { action: 'absent' };
   const digest = typeof input.receipt.payloadDigest === 'string' ? input.receipt.payloadDigest : '';
-  if (digest && digest === input.payloadDigest) return { action: 'accepted' };
-  return { action: 'abort', reason: 'edit_event_payload_conflict' };
+  if (digest && digest !== input.payloadDigest) {
+    return { action: 'abort', reason: 'edit_event_payload_conflict' };
+  }
+  const bodyEvent = typeof input.receipt.editEventId === 'string' ? input.receipt.editEventId.trim() : '';
+  if (bodyEvent && bodyEvent !== input.editEventId) return { action: 'absent' };
+  const bodyOrig = typeof input.receipt.originalPacketId === 'string' ? input.receipt.originalPacketId.trim() : '';
+  if (input.originalPacketId && bodyOrig && bodyOrig !== input.originalPacketId) {
+    return { action: 'absent' };
+  }
+  if (!digest || digest !== input.payloadDigest) return { action: 'absent' };
+  const status = input.receipt.status;
+  if (status === 'accepted') return { action: 'accepted' };
+  if (status === 'acknowledged') return { action: 'acknowledged' };
+  if (status === 'rejected') return { action: 'rejected' };
+  return { action: 'absent' };
 }

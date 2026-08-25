@@ -24,17 +24,25 @@ import {
   wbmEditReceiptPath,
 } from './wbmEditAuthorize';
 
-export type WbmEditIngestStatus = 'accepted' | 'duplicate' | 'conflict' | 'pending' | 'invalid';
+export type WbmEditIngestStatus =
+  | 'accepted'
+  | 'duplicate'
+  | 'conflict'
+  | 'pending'
+  | 'invalid'
+  | 'acknowledged'
+  | 'rejected';
 
 export type WbmEditIngestResult =
   | {
     ok: true;
-    status: 'pending' | 'accepted' | 'duplicate';
+    status: 'pending' | 'accepted' | 'duplicate' | 'acknowledged' | 'rejected';
     originalPacketId: string;
     editEventId: string;
     idempotencyKey: string;
     payloadDigest: string;
     incomingPath: string;
+    reason?: string;
   }
   | {
     ok: false;
@@ -79,6 +87,8 @@ export async function runIngestWbmEdit(input: {
   const receiptGate = decideWbmEditReceipt({
     receipt,
     payloadDigest: decided.payloadDigest,
+    editEventId: decided.editEventId,
+    originalPacketId: decided.originalPacketId,
   });
   if (receiptGate.action === 'accepted') {
     return {
@@ -89,6 +99,18 @@ export async function runIngestWbmEdit(input: {
       idempotencyKey: decided.idempotencyKey,
       payloadDigest: decided.payloadDigest,
       incomingPath: wbmEditIncomingPath(decided.editEventId),
+    };
+  }
+  if (receiptGate.action === 'acknowledged' || receiptGate.action === 'rejected') {
+    return {
+      ok: true,
+      status: receiptGate.action,
+      originalPacketId: decided.originalPacketId,
+      editEventId: decided.editEventId,
+      idempotencyKey: decided.idempotencyKey,
+      payloadDigest: decided.payloadDigest,
+      incomingPath: wbmEditIncomingPath(decided.editEventId),
+      reason: typeof receipt?.reason === 'string' ? receipt.reason : undefined,
     };
   }
   if (receiptGate.action === 'abort') {

@@ -152,6 +152,7 @@ describe('history event provenance', () => {
     });
     expect(ev.source).toBe('wbm');
     expect(ev.originAppContext).toBe('wbt');
+    expect(ev.payloadDigest).toBeNull();
     expect(editHistoryWritePaths('pkt1', ev)['packets/editHistory/pkt1/e1']).toEqual(ev);
   });
   test('nextEditCount increments', () => {

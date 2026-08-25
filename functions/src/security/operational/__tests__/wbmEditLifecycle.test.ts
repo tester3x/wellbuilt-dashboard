@@ -57,6 +57,21 @@ describe('planWbmEditLifecycle', () => {
     expect(plan.processedPatch.bblsTaken).toBe(140);
     expect(plan.outgoingPatch.lastPullPacketId).toBe(PID);
   });
+
+  it('standalone display dateTime does not change operational instant', () => {
+    const decided = evaluateWbmEdit({
+      ...scope,
+      packet: { ...packet, dateTime: '1/1/1999 3:00 AM' },
+      original,
+    });
+    expect(decided.ok).toBe(true);
+    if (!decided.ok) return;
+    const plan = planWbmEditLifecycle({ original, payload: decided.payload });
+    expect(plan).toMatchObject({ ok: true, preservedOriginalEventTime: true });
+    if (!('ok' in plan) || !plan.ok) return;
+    expect(plan.processedPatch.dateTimeUTC).toBe('2026-08-23T16:23:00.000Z');
+    expect(plan.processedPatch.dateTime).toBe('8/23/2026 11:23 AM');
+  });
 });
 
 describe('runIngestWbmEdit', () => {

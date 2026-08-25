@@ -245,7 +245,10 @@ export interface BuildAppliedEventArgs {
   originalSubmissionAt: string | null;
   resolutionPath: EditResolutionPath;
   editRequestId: string;
+  payloadDigest?: string | null;
 }
+
+export type EditHistoryOutcome = 'applied' | 'noop' | 'rejected';
 
 export interface EditHistoryEvent {
   eventId: string;
@@ -259,9 +262,11 @@ export interface EditHistoryEvent {
   clientAppVersion?: string | null;
   fields: FieldChange[];
   originalSubmissionAt: string | null;
-  outcome: 'applied';
+  outcome: EditHistoryOutcome;
   resolutionPath: EditResolutionPath;
   editRequestId: string;
+  payloadDigest: string | null;
+  reason?: string;
 }
 
 export function buildAppliedEditEvent(args: BuildAppliedEventArgs): EditHistoryEvent {
@@ -280,6 +285,21 @@ export function buildAppliedEditEvent(args: BuildAppliedEventArgs): EditHistoryE
     outcome: 'applied',
     resolutionPath: args.resolutionPath,
     editRequestId: args.editRequestId,
+    payloadDigest: typeof args.payloadDigest === 'string' && args.payloadDigest
+      ? args.payloadDigest
+      : null,
+  };
+}
+
+export function buildTerminalEditEvent(args: BuildAppliedEventArgs & {
+  outcome: 'noop' | 'rejected';
+  reason: string;
+}): EditHistoryEvent {
+  return {
+    ...buildAppliedEditEvent(args),
+    outcome: args.outcome,
+    reason: args.reason,
+    fields: args.fields,
   };
 }
 
@@ -293,12 +313,15 @@ export function editHistoryWritePaths(
   };
 }
 
+export type EditReceiptStatus = 'accepted' | 'acknowledged' | 'rejected' | 'conflict';
+
 export type EditAppliedReceipt = {
   editEventId: string;
   originalPacketId: string;
   payloadDigest: string | null;
   appliedAt: string;
-  status: 'accepted';
+  status: EditReceiptStatus;
+  reason?: string;
 };
 
 export function buildAppliedEditReceipt(args: {
@@ -306,16 +329,20 @@ export function buildAppliedEditReceipt(args: {
   originalPacketId: string;
   payloadDigest: unknown;
   appliedAt: string;
+  status?: EditReceiptStatus;
+  reason?: string;
 }): EditAppliedReceipt {
-  return {
+  const receipt: EditAppliedReceipt = {
     editEventId: args.editEventId,
     originalPacketId: args.originalPacketId,
     payloadDigest: typeof args.payloadDigest === 'string' && args.payloadDigest
       ? args.payloadDigest
       : null,
     appliedAt: args.appliedAt,
-    status: 'accepted',
+    status: args.status || 'accepted',
   };
+  if (args.reason) receipt.reason = args.reason;
+  return receipt;
 }
 
 export function editReceiptWritePaths(

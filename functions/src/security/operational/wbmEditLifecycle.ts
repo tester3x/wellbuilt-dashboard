@@ -31,8 +31,12 @@ export function planWbmEditLifecycle(input: {
   const originalEventTimeUtc = asString(input.original.dateTimeUTC);
   const editTime = asString(input.payload.dateTimeUTC);
   const preservedOriginalEventTime = !editTime;
+  // Operational instant comes only from validated payload.dateTimeUTC.
+  // Standalone display dateTime cannot redefine it.
   const dateTimeUTC = editTime || originalEventTimeUtc;
-  const dateTime = asString(input.payload.dateTime) || asString(input.original.dateTime);
+  const dateTime = editTime
+    ? (asString(input.payload.dateTime) || asString(input.original.dateTime))
+    : asString(input.original.dateTime);
 
   const tankLevelFeet = typeof input.payload.tankLevelFeet === 'number'
     ? input.payload.tankLevelFeet
