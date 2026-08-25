@@ -1,7 +1,11 @@
 /**
  * Governed WB-M / WB-T edit ingest. Authenticated driver only.
- * Writes packets/incoming/edit_* for live processEditRequest.
+ * Writes packets/incoming/{editEventId} for live processEditRequest.
  * Does not remint the original packet id or substitute "now" for empty time.
+ *
+ * Completion: pending while queued; accepted once packets/editReceipts/{editEventId}
+ * has this digest; conflict when the same event id has different bytes.
+ * Incoming write success is NOT applied — WB-T must not clear its outbox on pending.
  */
 import * as httpsV2 from 'firebase-functions/v2/https';
 import * as admin from 'firebase-admin';
@@ -13,9 +17,11 @@ import {
 import { writeSecurityAudit } from '../audit';
 import { checkRateLimit, hashIp } from '../rateLimit';
 import {
+  decideWbmEditReceipt,
   decideWbmEditTransaction,
   evaluateWbmEdit,
   wbmEditIncomingPath,
+  wbmEditReceiptPath,
 } from './wbmEditAuthorize';
 
 export type WbmEditIngestStatus = 'accepted' | 'duplicate' | 'conflict' | 'pending' | 'invalid';
@@ -23,8 +29,9 @@ export type WbmEditIngestStatus = 'accepted' | 'duplicate' | 'conflict' | 'pendi
 export type WbmEditIngestResult =
   | {
     ok: true;
-    status: 'pending' | 'duplicate';
+    status: 'pending' | 'accepted' | 'duplicate';
     originalPacketId: string;
+    editEventId: string;
     idempotencyKey: string;
     payloadDigest: string;
     incomingPath: string;
@@ -46,13 +53,14 @@ export async function runIngestWbmEdit(input: {
   assignedWells: unknown;
   wellConfig: Record<string, unknown>;
   original: Record<string, unknown> | null;
+  readReceipt: (editEventId: string) => Promise<Record<string, unknown> | null>;
   writeIncoming: (
     path: string,
     decide: (current: Record<string, unknown> | null) =>
       | { action: 'write'; stamped: Record<string, unknown> }
-      | { action: 'duplicate' }
+      | { action: 'queued' }
       | { action: 'abort'; reason: string },
-  ) => Promise<{ committed: boolean; outcome: 'write' | 'duplicate' | 'abort'; abortReason: string }>;
+  ) => Promise<{ committed: boolean; outcome: 'write' | 'queued' | 'abort'; abortReason: string }>;
 }): Promise<WbmEditIngestResult> {
   const decided = evaluateWbmEdit({
     packet: input.packet,
@@ -67,6 +75,26 @@ export async function runIngestWbmEdit(input: {
     return { ok: false, status: 'invalid', reason: decided.reason };
   }
 
+  const receipt = await input.readReceipt(decided.editEventId);
+  const receiptGate = decideWbmEditReceipt({
+    receipt,
+    payloadDigest: decided.payloadDigest,
+  });
+  if (receiptGate.action === 'accepted') {
+    return {
+      ok: true,
+      status: 'accepted',
+      originalPacketId: decided.originalPacketId,
+      editEventId: decided.editEventId,
+      idempotencyKey: decided.idempotencyKey,
+      payloadDigest: decided.payloadDigest,
+      incomingPath: wbmEditIncomingPath(decided.editEventId),
+    };
+  }
+  if (receiptGate.action === 'abort') {
+    return { ok: false, status: 'conflict', reason: receiptGate.reason };
+  }
+
   const stamped: Record<string, unknown> = {
     ...decided.payload,
     driverId: input.driverId,
@@ -78,7 +106,7 @@ export async function runIngestWbmEdit(input: {
     payloadDigest: decided.payloadDigest,
   };
 
-  const path = wbmEditIncomingPath(decided.idempotencyKey);
+  const path = wbmEditIncomingPath(decided.editEventId);
   const tx = await input.writeIncoming(path, (existing) => {
     const gate = decideWbmEditTransaction({
       existing,
@@ -86,7 +114,7 @@ export async function runIngestWbmEdit(input: {
       payloadDigest: decided.payloadDigest,
     });
     if (gate.action === 'write') return { action: 'write', stamped };
-    if (gate.action === 'duplicate') return { action: 'duplicate' };
+    if (gate.action === 'queued') return { action: 'queued' };
     return { action: 'abort', reason: gate.reason };
   });
 
@@ -95,8 +123,9 @@ export async function runIngestWbmEdit(input: {
   }
   return {
     ok: true,
-    status: tx.outcome === 'duplicate' ? 'duplicate' : 'pending',
+    status: 'pending',
     originalPacketId: decided.originalPacketId,
+    editEventId: decided.editEventId,
     idempotencyKey: decided.idempotencyKey,
     payloadDigest: decided.payloadDigest,
     incomingPath: path,
@@ -168,9 +197,13 @@ export const ingestWbmEdit = httpsV2.onCall(
       assignedWells: profile.assignedWells,
       wellConfig,
       original,
+      readReceipt: async (editEventId) => {
+        const snap = await admin.database().ref(wbmEditReceiptPath(editEventId)).once('value');
+        return snap.exists() ? (snap.val() as Record<string, unknown>) : null;
+      },
       writeIncoming: async (path, decide) => {
         const ref = admin.database().ref(path);
-        const box: { outcome: 'write' | 'duplicate' | 'abort'; abortReason: string } = {
+        const box: { outcome: 'write' | 'queued' | 'abort'; abortReason: string } = {
           outcome: 'write',
           abortReason: 'ingest_conflict',
         };
@@ -183,8 +216,8 @@ export const ingestWbmEdit = httpsV2.onCall(
             box.outcome = 'write';
             return gate.stamped;
           }
-          if (gate.action === 'duplicate') {
-            box.outcome = 'duplicate';
+          if (gate.action === 'queued') {
+            box.outcome = 'queued';
             return current;
           }
           box.outcome = 'abort';
@@ -200,10 +233,17 @@ export const ingestWbmEdit = httpsV2.onCall(
     }
 
     await writeSecurityAudit({
-      action: result.status === 'duplicate' ? 'ingestWbmEdit_idempotent' : 'ingestWbmEdit',
+      action: result.status === 'accepted' || result.status === 'duplicate'
+        ? 'ingestWbmEdit_applied'
+        : 'ingestWbmEdit',
       actorUid: driver.uid,
       driverId: driver.driverId,
-      detail: { key: result.idempotencyKey, companyId: authority.companyId, status: result.status },
+      detail: {
+        key: result.editEventId,
+        originalPacketId: result.originalPacketId,
+        companyId: authority.companyId,
+        status: result.status,
+      },
     });
     return result;
   },

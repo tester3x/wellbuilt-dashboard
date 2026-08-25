@@ -119,6 +119,25 @@ describe('WB-M callable export / contract matrix', () => {
     expect(helper).not.toMatch(/let lastDigest|cachedProfile|globalThis/);
   });
 
+  it('getGovernedWellConfig matches the WB-T {ok, found, config, reason} contract', () => {
+    const src = read('src/security/operational/getGovernedWellConfig.ts');
+    const evalSrc = read('src/security/operational/governedWellConfig.ts');
+    expect(src).toMatch(/evaluateGovernedWellConfigRequest/);
+    expect(evalSrc).toMatch(/GOVERNED_WELL_CONFIG_REQUEST_ALLOWLIST/);
+    expect(evalSrc).toMatch(/wellName.*assignmentKey/);
+    expect(src).not.toMatch(/wellCount/);
+    expect(src).not.toMatch(/wells: decided\.wells/);
+    expect(evalSrc).not.toMatch(/20 \* tanks/);
+  });
+
+  it('processEditRequest is the real processIncomingEdit handler with applied receipts', () => {
+    const history = read('src/editHistory.ts');
+    expect(index).toMatch(/onCreate\(processIncomingEdit\)/);
+    expect(index).toMatch(/export async function processIncomingEdit/);
+    expect(index).toMatch(/editReceiptWritePaths/);
+    expect(history).toMatch(/packets\/editReceipts\/\$\{editEventId\}/);
+  });
+
   it('WB-T dispatch write modules are untouched on this branch', () => {
     const dispatch = read('src/security/operational/staffWriteDispatch.ts');
     expect(dispatch).toMatch(/evaluateStaffWriteDispatch/);

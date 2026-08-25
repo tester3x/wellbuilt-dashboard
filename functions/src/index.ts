@@ -22,8 +22,10 @@ import {
 } from './packetGuards';
 import {
   buildAppliedEditEvent,
+  buildAppliedEditReceipt,
   buildFieldDiff,
   editHistoryWritePaths,
+  editReceiptWritePaths,
   editSummaryFields,
   nextEditCount,
   normalizeEditSource,
@@ -1602,10 +1604,17 @@ async function materializeQueuedEditTrail(
   console.log(`[QUEUED_EDIT_TRAIL] ${packetId}: materialized ${eventCount} event(s)`);
 }
 
-// Handle edit requests — updates processed packet and recalculates dependent fields
+// Handle edit requests — updates processed packet and recalculates dependent fields.
+// processIncomingEdit IS the production handler. Tests must invoke it with the
+// exact incoming payload; do not mirror apply in a parallel lifecycle.
 export const processEditRequest = functionsV1.database
   .ref('packets/incoming/{packetId}')
-  .onCreate(async (snapshot, context) => {
+  .onCreate(processIncomingEdit);
+
+export async function processIncomingEdit(
+  snapshot: functionsV1.database.DataSnapshot,
+  context: { params: { packetId: string } },
+): Promise<null> {
     const data = snapshot.val();
 
     if (data.requestType !== 'edit') {
@@ -1771,7 +1780,19 @@ export const processEditRequest = functionsV1.database
       console.log(
         `[EDIT_EVENT_IDEMPOTENT] ${wellName}: event ${editEventId} already on ${originalPacketId} — consume incoming only`,
       );
-      await removeIncomingPacket(db.ref(), context.params.packetId);
+      const existingEvent = (existingEventSnap.val() || {}) as Record<string, unknown>;
+      const receipt = buildAppliedEditReceipt({
+        editEventId,
+        originalPacketId,
+        payloadDigest: (data as { payloadDigest?: unknown }).payloadDigest,
+        appliedAt: typeof existingEvent.editedAt === 'string'
+          ? existingEvent.editedAt
+          : new Date().toISOString(),
+      });
+      await db.ref().update({
+        [`packets/incoming/${context.params.packetId}`]: null,
+        ...editReceiptWritePaths(editEventId, receipt),
+      });
       return null;
     }
 
@@ -1873,6 +1894,13 @@ export const processEditRequest = functionsV1.database
       freezeOriginal,
     });
     const historyPaths = editHistoryWritePaths(originalPacketId, editEvent);
+    const receipt = buildAppliedEditReceipt({
+      editEventId,
+      originalPacketId,
+      payloadDigest: (data as { payloadDigest?: unknown }).payloadDigest,
+      appliedAt: editedAtIso,
+    });
+    const receiptPaths = editReceiptWritePaths(editEventId, receipt);
 
     // No top level = non-production-tank edit. Update basic fields only, skip tank math.
     if (newTankTopInches <= 0) {
@@ -1897,6 +1925,7 @@ export const processEditRequest = functionsV1.database
           }).map(([k, v]) => [`packets/processed/${originalPacketId}/${k}`, v]),
         ),
         ...historyPaths,
+        ...receiptPaths,
         [`packets/incoming/${context.params.packetId}`]: null,
       });
       await db.ref(`wells/${wellName}/status/isDown`).set(nextEditIsDown);
@@ -1993,6 +2022,7 @@ export const processEditRequest = functionsV1.database
         Object.entries(updates).map(([k, v]) => [`packets/processed/${originalPacketId}/${k}`, v]),
       ),
       ...historyPaths,
+      ...receiptPaths,
       [`packets/incoming/${context.params.packetId}`]: null,
     });
 
@@ -2462,7 +2492,7 @@ export const processEditRequest = functionsV1.database
 
     console.log(`Edit complete for ${wellName}: ${originalPacketId}`);
     return null;
-  });
+}
 
 // Handle delete requests — removes from processed and recalculates outgoing from remaining data
 

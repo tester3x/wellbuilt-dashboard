@@ -1,7 +1,9 @@
 import {
   buildAppliedEditEvent,
+  buildAppliedEditReceipt,
   buildFieldDiff,
   editHistoryWritePaths,
+  editReceiptWritePaths,
   editSummaryFields,
   nextEditCount,
   normalizeEditSource,
@@ -85,6 +87,27 @@ describe('resolveEditEventId', () => {
       clientEventId: 'op_stable_01',
     });
     expect(a).toBe(b);
+  });
+});
+
+describe('applied edit receipts', () => {
+  test('keyed by editEventId with digest; does not replace originalPacketId', () => {
+    const receipt = buildAppliedEditReceipt({
+      editEventId: 'editevt_a',
+      originalPacketId: '20260823_112300_Gabriel5_fx0001',
+      payloadDigest: 'abc123',
+      appliedAt: '2026-08-23T17:00:00.000Z',
+    });
+    expect(receipt).toEqual({
+      editEventId: 'editevt_a',
+      originalPacketId: '20260823_112300_Gabriel5_fx0001',
+      payloadDigest: 'abc123',
+      appliedAt: '2026-08-23T17:00:00.000Z',
+      status: 'accepted',
+    });
+    expect(editReceiptWritePaths('editevt_a', receipt)).toEqual({
+      'packets/editReceipts/editevt_a': receipt,
+    });
   });
 });
 

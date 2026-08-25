@@ -1,4 +1,8 @@
-import { evaluateGovernedWellConfig, toGovernedWellRecord } from '../governedWellConfig';
+import {
+  evaluateGovernedWellConfig,
+  evaluateGovernedWellConfigRequest,
+  toGovernedWellConfig,
+} from '../governedWellConfig';
 
 const COMPANY = 'liquid-gold';
 const wellConfig = {
@@ -20,6 +24,15 @@ const wellConfig = {
     ndicApiNo: '33-053-09999-00-00',
     tanks: 1,
   },
+  'String Rate 1': {
+    route: 'Gabriels',
+    companyId: COMPANY,
+    bblPerFoot: '40.5',
+    tankCapacity: '400',
+    tankHeight: '20',
+    numTanks: '2',
+    waterWeight: '8.34',
+  },
   'Other Co 1': {
     route: 'Gabriels',
     companyId: 'other-co',
@@ -27,21 +40,44 @@ const wellConfig = {
   },
 };
 
+describe('evaluateGovernedWellConfigRequest', () => {
+  it('accepts the WB-T allowlist { wellName, assignmentKey }', () => {
+    expect(evaluateGovernedWellConfigRequest({
+      wellName: 'Gabriel 5',
+      assignmentKey: 'inv_abc',
+    })).toEqual({ ok: true, wellName: 'Gabriel 5', assignmentKey: 'inv_abc' });
+    expect(evaluateGovernedWellConfigRequest({
+      wellName: 'Gabriel 5',
+      assignmentKey: null,
+    })).toEqual({ ok: true, wellName: 'Gabriel 5', assignmentKey: null });
+  });
+
+  it('rejects extra fields and missing wellName', () => {
+    expect(evaluateGovernedWellConfigRequest({
+      wellName: 'Gabriel 5',
+      companyId: COMPANY,
+    })).toEqual({ ok: false, reason: 'unexpected_field' });
+    expect(evaluateGovernedWellConfigRequest({ assignmentKey: 'x' }))
+      .toEqual({ ok: false, reason: 'missing_wellName' });
+  });
+});
+
 describe('evaluateGovernedWellConfig', () => {
-  it('returns owner/route scoped wells with review fields', () => {
+  it('returns {ok, found, config, reason} for one requested well', () => {
     const r = evaluateGovernedWellConfig({
       companyId: COMPANY,
       assignedRoutes: ['Gabriels'],
       assignedWells: [],
       wellConfig,
+      wellName: 'Gabriel 5',
+      assignmentKey: 'inv_abc',
     });
-    expect(r.ok).toBe(true);
-    if (!r.ok) return;
-    expect(Object.keys(r.wells)).toEqual(['Gabriel 5']);
-    expect(r.wells['Gabriel 5']).toMatchObject({
-      canonicalWellKey: 'Gabriel 5',
-      displayName: 'GABRIEL 5',
-      apiNumber: '33-053-01234-00-00',
+    expect(r).toMatchObject({ ok: true, found: true, reason: null });
+    if (!r.found) return;
+    expect(r.config).toMatchObject({
+      wellName: 'Gabriel 5',
+      ndicName: 'GABRIEL 5',
+      ndicApiNo: '33-053-01234-00-00',
       h2sStatus: 'low',
       waterWeight: 8.34,
       bblPerFoot: 40,
@@ -49,10 +85,13 @@ describe('evaluateGovernedWellConfig', () => {
       tankCapacity: 400,
       tankHeight: 20,
       route: 'Gabriels',
+      companyId: COMPANY,
     });
+    expect(r.config).not.toHaveProperty('canonicalWellKey');
+    expect(r.config).not.toHaveProperty('wells');
   });
 
-  it('allows an explicitly assigned well outside the route list', () => {
+  it('does not invent 20×tanks when bblPerFoot is absent', () => {
     const r = evaluateGovernedWellConfig({
       companyId: COMPANY,
       assignedRoutes: ['Gabriels'],
@@ -61,9 +100,29 @@ describe('evaluateGovernedWellConfig', () => {
       wellName: 'Watford 1',
     });
     expect(r.ok).toBe(true);
-    if (!r.ok) return;
-    expect(r.wells['Watford 1'].canonicalWellKey).toBe('Watford 1');
-    expect(r.wells['Watford 1'].bblPerFoot).toBe(20);
+    expect(r.found).toBe(true);
+    if (!r.found) return;
+    expect(r.config.bblPerFoot).toBeUndefined();
+    expect(r.config.tanks).toBe(1);
+    expect(r.config.tankCapacity).toBeUndefined();
+    expect(r.config.tankHeight).toBeUndefined();
+  });
+
+  it('passes through numeric strings used by governed well_config', () => {
+    const r = evaluateGovernedWellConfig({
+      companyId: COMPANY,
+      assignedRoutes: ['Gabriels'],
+      assignedWells: [],
+      wellConfig,
+      wellName: 'String Rate 1',
+    });
+    expect(r.found).toBe(true);
+    if (!r.found) return;
+    expect(r.config.bblPerFoot).toBe('40.5');
+    expect(r.config.tankCapacity).toBe('400');
+    expect(r.config.tankHeight).toBe('20');
+    expect(r.config.numTanks).toBe('2');
+    expect(r.config.waterWeight).toBe('8.34');
   });
 
   it('denies cross-company wells without leaking the row', () => {
@@ -74,7 +133,7 @@ describe('evaluateGovernedWellConfig', () => {
       wellConfig,
       wellName: 'Other Co 1',
     });
-    expect(r).toMatchObject({ ok: false, reason: 'well_not_found' });
+    expect(r).toMatchObject({ ok: true, found: false, config: null, reason: 'well_not_found' });
   });
 
   it('denies unassigned wells in the same company', () => {
@@ -85,14 +144,15 @@ describe('evaluateGovernedWellConfig', () => {
       wellConfig,
       wellName: 'Watford 1',
     });
-    expect(r).toMatchObject({ ok: false, reason: 'well_out_of_scope' });
+    expect(r).toMatchObject({ ok: true, found: false, config: null, reason: 'well_out_of_scope' });
   });
 
   it('does not project secret or unbounded fields', () => {
-    const rec = toGovernedWellRecord('Gabriel 5', {
+    const rec = toGovernedWellConfig('Gabriel 5', {
       ...wellConfig['Gabriel 5'],
       secretToken: 'nope',
     });
     expect(rec).not.toHaveProperty('secretToken');
+    expect(rec.wellName).toBe('Gabriel 5');
   });
 });

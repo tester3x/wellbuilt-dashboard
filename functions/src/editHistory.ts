@@ -293,6 +293,40 @@ export function editHistoryWritePaths(
   };
 }
 
+export type EditAppliedReceipt = {
+  editEventId: string;
+  originalPacketId: string;
+  payloadDigest: string | null;
+  appliedAt: string;
+  status: 'accepted';
+};
+
+export function buildAppliedEditReceipt(args: {
+  editEventId: string;
+  originalPacketId: string;
+  payloadDigest: unknown;
+  appliedAt: string;
+}): EditAppliedReceipt {
+  return {
+    editEventId: args.editEventId,
+    originalPacketId: args.originalPacketId,
+    payloadDigest: typeof args.payloadDigest === 'string' && args.payloadDigest
+      ? args.payloadDigest
+      : null,
+    appliedAt: args.appliedAt,
+    status: 'accepted',
+  };
+}
+
+export function editReceiptWritePaths(
+  editEventId: string,
+  receipt: EditAppliedReceipt,
+): Record<string, unknown> {
+  return {
+    [`packets/editReceipts/${editEventId}`]: receipt,
+  };
+}
+
 /** Summary fields stamped on the processed packet for badge + counters. */
 export function editSummaryFields(args: {
   editedAt: string;

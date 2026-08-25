@@ -1,6 +1,12 @@
 /**
  * Governed well configuration for Current Job Review.
  * Catalog filtering is not authorization; scope is evaluated here.
+ *
+ * WB-T client contract (governedConfigClient / governedConfigCore):
+ *   request allowlist: { wellName, assignmentKey }
+ *   reply: { ok, found, config, reason }
+ * config is the allowlisted well_config record for ONE well. Never a wells
+ * map. Never a hardcoded 20×tanks bbl-per-foot. Numeric strings pass through.
  */
 import { pickAllowlisted, WELL_CONFIG_ALLOWLIST } from '../dashboardCatalogProjection';
 import {
@@ -9,26 +15,22 @@ import {
   wellMatchesWbmScope,
 } from './wbmWellScope';
 
-export type GovernedWellRecord = {
-  canonicalWellKey: string;
-  displayName: string;
-  apiNumber: string;
-  h2sStatus: string;
-  waterWeight: number | null;
-  bblPerFoot: number | null;
-  tanks: number | null;
-  tankCapacity: number | null;
-  tankHeight: number | null;
-  route: string;
+export const GOVERNED_WELL_CONFIG_REQUEST_ALLOWLIST = ['wellName', 'assignmentKey'] as const;
+
+/** WB-T GovernedWellConfig-compatible record for one assigned well. */
+export type GovernedWellConfig = {
+  wellName: string;
+  [k: string]: unknown;
 };
 
-export type GovernedWellConfigDecision =
-  | { ok: true; wells: Record<string, GovernedWellRecord>; wellCount: number }
+export type GovernedWellConfigRequest =
+  | { ok: true; wellName: string; assignmentKey: string | null }
   | { ok: false; reason: string };
 
-function finiteNumber(v: unknown): number | null {
-  return typeof v === 'number' && Number.isFinite(v) ? v : null;
-}
+export type GovernedWellConfigDecision =
+  | { ok: true; found: true; config: GovernedWellConfig; reason: null }
+  | { ok: true; found: false; config: null; reason: string }
+  | { ok: false; found: false; config: null; reason: string };
 
 function asWell(raw: unknown): Record<string, unknown> {
   return raw && typeof raw === 'object' && !Array.isArray(raw)
@@ -36,34 +38,50 @@ function asWell(raw: unknown): Record<string, unknown> {
     : {};
 }
 
+/**
+ * Project one well_config row for WB-T. Stored numeric representation is
+ * preserved (including numeric strings). bblPerFoot is never invented from
+ * 20×tanks — the client derives from stored rate or tankCapacity/height.
+ */
+export function toGovernedWellConfig(
+  wellName: string,
+  well: Record<string, unknown>,
+): GovernedWellConfig {
+  const bounded = pickAllowlisted(well, WELL_CONFIG_ALLOWLIST);
+  return { wellName, ...bounded };
+}
+
+/** @deprecated Use toGovernedWellConfig. Kept as an alias for existing imports. */
 export function toGovernedWellRecord(
   wellName: string,
   well: Record<string, unknown>,
-): GovernedWellRecord {
-  const bounded = pickAllowlisted(well, WELL_CONFIG_ALLOWLIST);
-  const tanks = finiteNumber(bounded.tanks) ?? finiteNumber(bounded.numTanks);
-  const display = typeof bounded.ndicName === 'string' && bounded.ndicName.trim()
-    ? bounded.ndicName.trim()
-    : wellName;
-  const api = typeof bounded.ndicApiNo === 'string' ? bounded.ndicApiNo.trim() : '';
-  const h2s = typeof bounded.h2sStatus === 'string' && bounded.h2sStatus.trim()
-    ? bounded.h2sStatus.trim()
-    : 'unknown';
-  const route = typeof bounded.route === 'string' ? bounded.route : '';
-  const bblPerFoot = finiteNumber(bounded.bblPerFoot)
-    ?? (tanks != null && tanks > 0 ? 20 * tanks : null);
-  return {
-    canonicalWellKey: wellName,
-    displayName: display,
-    apiNumber: api,
-    h2sStatus: h2s,
-    waterWeight: finiteNumber(bounded.waterWeight),
-    bblPerFoot,
-    tanks,
-    tankCapacity: finiteNumber(bounded.tankCapacity),
-    tankHeight: finiteNumber(bounded.tankHeight),
-    route,
-  };
+): GovernedWellConfig {
+  return toGovernedWellConfig(wellName, well);
+}
+
+export function evaluateGovernedWellConfigRequest(data: unknown): GovernedWellConfigRequest {
+  if (!data || typeof data !== 'object' || Array.isArray(data)) {
+    return { ok: false, reason: 'request_required' };
+  }
+  const req = data as Record<string, unknown>;
+  const allowed = new Set<string>(GOVERNED_WELL_CONFIG_REQUEST_ALLOWLIST);
+  for (const key of Object.keys(req)) {
+    if (!allowed.has(key)) return { ok: false, reason: 'unexpected_field' };
+  }
+
+  if (typeof req.wellName !== 'string') return { ok: false, reason: 'missing_wellName' };
+  const wellName = req.wellName.trim();
+  if (!wellName || wellName.length > 120) return { ok: false, reason: 'invalid_wellName' };
+
+  let assignmentKey: string | null = null;
+  if (req.assignmentKey !== undefined && req.assignmentKey !== null) {
+    if (typeof req.assignmentKey !== 'string') return { ok: false, reason: 'invalid_assignmentKey' };
+    const trimmed = req.assignmentKey.trim();
+    if (trimmed.length > 128) return { ok: false, reason: 'invalid_assignmentKey' };
+    assignmentKey = trimmed.length > 0 ? trimmed : null;
+  }
+
+  return { ok: true, wellName, assignmentKey };
 }
 
 export function evaluateGovernedWellConfig(input: {
@@ -71,36 +89,35 @@ export function evaluateGovernedWellConfig(input: {
   assignedRoutes: unknown;
   assignedWells: unknown;
   wellConfig: Record<string, unknown>;
-  wellName?: string;
+  wellName: string;
+  assignmentKey?: string | null;
 }): GovernedWellConfigDecision {
+  const requested = typeof input.wellName === 'string' ? input.wellName.trim() : '';
+  if (!requested) {
+    return { ok: false, found: false, config: null, reason: 'missing_wellName' };
+  }
+
   const scope = evaluateWbmWellScope(input.assignedRoutes, input.assignedWells);
   if (!scope.ok) {
-    return { ok: false, reason: scope.reason };
+    return { ok: false, found: false, config: null, reason: scope.reason };
   }
 
-  const requested = typeof input.wellName === 'string' ? input.wellName.trim() : '';
-  if (requested) {
-    const raw = input.wellConfig[requested];
-    if (raw === undefined) {
-      return { ok: false, reason: 'well_not_found' };
-    }
-    const well = asWell(raw);
-    if (!wellBelongsToDriverCompany(well, input.companyId)) {
-      return { ok: false, reason: 'well_not_found' };
-    }
-    if (!wellMatchesWbmScope(requested, well, scope)) {
-      return { ok: false, reason: 'well_out_of_scope' };
-    }
-    const record = toGovernedWellRecord(requested, well);
-    return { ok: true, wells: { [requested]: record }, wellCount: 1 };
+  const raw = input.wellConfig[requested];
+  if (raw === undefined) {
+    return { ok: true, found: false, config: null, reason: 'well_not_found' };
+  }
+  const well = asWell(raw);
+  if (!wellBelongsToDriverCompany(well, input.companyId)) {
+    return { ok: true, found: false, config: null, reason: 'well_not_found' };
+  }
+  if (!wellMatchesWbmScope(requested, well, scope)) {
+    return { ok: true, found: false, config: null, reason: 'well_out_of_scope' };
   }
 
-  const wells: Record<string, GovernedWellRecord> = {};
-  for (const [wellName, raw] of Object.entries(input.wellConfig || {})) {
-    const well = asWell(raw);
-    if (!wellBelongsToDriverCompany(well, input.companyId)) continue;
-    if (!wellMatchesWbmScope(wellName, well, scope)) continue;
-    wells[wellName] = toGovernedWellRecord(wellName, well);
-  }
-  return { ok: true, wells, wellCount: Object.keys(wells).length };
+  return {
+    ok: true,
+    found: true,
+    config: toGovernedWellConfig(requested, well),
+    reason: null,
+  };
 }

@@ -1,7 +1,8 @@
 /**
  * Governed well configuration for WB-T Current Job Review.
  * Authenticated driver + canonical company/route/well scope only.
- * Never returns global well_config.
+ * Never returns global well_config. Reply matches WB-T:
+ *   { ok, found, config, reason }
  */
 import * as httpsV2 from 'firebase-functions/v2/https';
 import * as admin from 'firebase-admin';
@@ -10,15 +11,19 @@ import {
   loadCanonicalDriverAuthority,
   productionCanonicalDriverReaders,
 } from '../canonicalDriverAuthority';
-import { evaluateGovernedWellConfig } from './governedWellConfig';
+import {
+  evaluateGovernedWellConfig,
+  evaluateGovernedWellConfigRequest,
+} from './governedWellConfig';
 
 export const getGovernedWellConfig = httpsV2.onCall(
   { timeoutSeconds: 30, memory: '256MiB', enforceAppCheck: false },
   async (request) => {
-    const data = (request.data || {}) as { wellName?: unknown; companyId?: unknown };
-    if (data.companyId !== undefined) {
-      throw new httpsV2.HttpsError('invalid-argument', 'unexpected_field');
+    const req = evaluateGovernedWellConfigRequest(request.data);
+    if (!req.ok) {
+      throw new httpsV2.HttpsError('invalid-argument', req.reason);
     }
+
     const driver = await requireSecureDriver(request, { allowLegacyHash: false });
     const authority = await loadCanonicalDriverAuthority(
       driver.driverId,
@@ -38,23 +43,14 @@ export const getGovernedWellConfig = httpsV2.onCall(
     const profile = (profSnap.val() || {}) as Record<string, unknown>;
     const wellSnap = await admin.database().ref('well_config').once('value');
     const wellConfig = wellSnap.exists() ? (wellSnap.val() as Record<string, unknown>) : {};
-    const wellName = typeof data.wellName === 'string' ? data.wellName.trim() : '';
 
-    const decided = evaluateGovernedWellConfig({
+    return evaluateGovernedWellConfig({
       companyId: authority.companyId,
       assignedRoutes: profile.assignedRoutes,
       assignedWells: profile.assignedWells,
       wellConfig,
-      wellName: wellName || undefined,
+      wellName: req.wellName,
+      assignmentKey: req.assignmentKey,
     });
-    if (!decided.ok) {
-      throw new httpsV2.HttpsError('failed-precondition', decided.reason);
-    }
-    return {
-      ok: true as const,
-      companyId: authority.companyId,
-      wells: decided.wells,
-      wellCount: decided.wellCount,
-    };
   },
 );

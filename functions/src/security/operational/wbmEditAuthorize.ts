@@ -1,7 +1,12 @@
 /**
- * Canonical WB-M edit authorization. Writes nothing. Catalog filtering
+ * Canonical WB-M / WB-T edit authorization. Writes nothing. Catalog filtering
  * is not authorization. Empty dateTime/dateTimeUTC means preserve the
- * original pull's operational time — never substitute "now".
+ * original pull's operational time — never substitute "now". Explicit times
+ * must be offset-aware (Z or numeric offset).
+ *
+ * Identity: client-minted editEventId is the incoming child and history key.
+ * originalPacketId is never reminted. Missing original driverId/companyId
+ * fails closed — present-day well assignment is not ownership.
  */
 import {
   canonicalPayloadDigest,
@@ -19,6 +24,7 @@ export const EDIT_ALLOWLIST = [
   'wellName',
   'originalPacketId',
   'packetId',
+  'editEventId',
   'dateTimeUTC',
   'dateTime',
   'timezone',
@@ -31,10 +37,22 @@ export const EDIT_ALLOWLIST = [
 
 const ALLOWED = new Set<string>(EDIT_ALLOWLIST);
 
+/** Absolute instants must carry Z or a numeric offset. Offsetless is rejected. */
+const OFFSET_AWARE = /(Z|[+-]\d{2}:?\d{2})$/;
+
+export function isAbsoluteInstant(iso: unknown): iso is string {
+  if (typeof iso !== 'string') return false;
+  const s = iso.trim();
+  if (!s || !OFFSET_AWARE.test(s)) return false;
+  const t = Date.parse(s);
+  return Number.isFinite(t);
+}
+
 export type WbmEditOk = {
   ok: true;
   wellName: string;
   originalPacketId: string;
+  editEventId: string;
   idempotencyKey: string;
   payload: Record<string, unknown>;
   payloadDigest: string;
@@ -54,14 +72,32 @@ function boundedString(v: unknown, field: string, min: number, max: number):
   return { ok: true, value };
 }
 
-export function wbmEditIncomingPath(idempotencyKey: string): string {
-  return `packets/incoming/${idempotencyKey}`;
+export function wbmEditIncomingPath(editEventId: string): string {
+  return `packets/incoming/${editEventId}`;
 }
 
-export function expectedEditIdempotencyKey(originalPacketId: string, wellName: string): string | null {
-  const m = /^(\d{8}_\d{6})_/.exec(originalPacketId);
-  if (!m) return null;
-  return `edit_${m[1]}_${wellName.replace(/\s+/g, '')}`;
+export function wbmEditReceiptPath(editEventId: string): string {
+  return `packets/editReceipts/${editEventId}`;
+}
+
+/**
+ * Original pull owner/company. Missing identity is unavailable, not a grant
+ * via present-day well assignment.
+ */
+export function resolveOriginalEditAuthority(input: {
+  original: Record<string, unknown>;
+  driverId: string;
+  companyId: string;
+}): { ok: true } | { ok: false; reason: string } {
+  const origDriver = typeof input.original.driverId === 'string' ? input.original.driverId.trim() : '';
+  if (!origDriver) return { ok: false, reason: 'original_owner_unavailable' };
+  if (origDriver !== input.driverId) return { ok: false, reason: 'cross_driver' };
+
+  const origCompany = typeof input.original.companyId === 'string' ? input.original.companyId.trim() : '';
+  if (!origCompany) return { ok: false, reason: 'original_company_unavailable' };
+  if (origCompany !== input.companyId) return { ok: false, reason: 'cross_company' };
+
+  return { ok: true };
 }
 
 export function evaluateWbmEdit(input: {
@@ -101,6 +137,25 @@ export function evaluateWbmEdit(input: {
     return { ok: false, reason: 'invalid_originalPacketId' };
   }
 
+  const editEventId = boundedString(packet.editEventId, 'editEventId', 8, 128);
+  if (!editEventId.ok) return editEventId;
+  if (!isFirebaseKeySafe(editEventId.value)) {
+    return { ok: false, reason: 'invalid_editEventId' };
+  }
+  if (editEventId.value === originalPacketId.value) {
+    return { ok: false, reason: 'editEventId_collides_with_original' };
+  }
+
+  let idempotencyKey = editEventId.value;
+  if (packet.idempotencyKey !== undefined && packet.idempotencyKey !== '') {
+    const key = boundedString(packet.idempotencyKey, 'idempotency_key', 8, 128);
+    if (!key.ok) return key;
+    if (key.value !== editEventId.value) {
+      return { ok: false, reason: 'idempotency_key_mismatch' };
+    }
+    idempotencyKey = key.value;
+  }
+
   if (typeof packet.tankLevelFeet !== 'number' || !Number.isFinite(packet.tankLevelFeet)
     || packet.tankLevelFeet < 0 || packet.tankLevelFeet > 40) {
     return { ok: false, reason: 'invalid_tankLevelFeet' };
@@ -120,9 +175,8 @@ export function evaluateWbmEdit(input: {
   if (packet.dateTimeUTC !== undefined && packet.dateTimeUTC !== '') {
     const d = boundedString(packet.dateTimeUTC, 'dateTimeUTC', 10, 40);
     if (!d.ok) return d;
-    const parsed = Date.parse(d.value);
-    if (!Number.isFinite(parsed)) return { ok: false, reason: 'invalid_dateTimeUTC' };
-    const year = new Date(parsed).getUTCFullYear();
+    if (!isAbsoluteInstant(d.value)) return { ok: false, reason: 'invalid_dateTimeUTC' };
+    const year = new Date(d.value).getUTCFullYear();
     if (year < 2020 || year > 2036) return { ok: false, reason: 'invalid_dateTimeUTC' };
     dateTimeUTC = d.value;
   }
@@ -139,19 +193,16 @@ export function evaluateWbmEdit(input: {
     timezone = tz.value;
   }
 
-  const expectedKey = expectedEditIdempotencyKey(originalPacketId.value, wellName.value);
-  if (!expectedKey) return { ok: false, reason: 'invalid_originalPacketId' };
-  const idempotencyKey = boundedString(packet.idempotencyKey, 'idempotency_key', 8, 128);
-  if (!idempotencyKey.ok) return idempotencyKey;
-  if (idempotencyKey.value !== expectedKey || !isFirebaseKeySafe(idempotencyKey.value)) {
-    return { ok: false, reason: 'idempotency_key_mismatch' };
-  }
-
   if (!input.original) return { ok: false, reason: 'missing_original' };
   const origWell = typeof input.original.wellName === 'string' ? input.original.wellName : '';
   if (origWell !== wellName.value) return { ok: false, reason: 'forged_well' };
-  const origDriver = typeof input.original.driverId === 'string' ? input.original.driverId : '';
-  if (origDriver && origDriver !== input.driverId) return { ok: false, reason: 'cross_driver' };
+
+  const owner = resolveOriginalEditAuthority({
+    original: input.original,
+    driverId: input.driverId,
+    companyId: input.companyId,
+  });
+  if (!owner.ok) return owner;
 
   const scope = evaluateWbmWellScope(input.assignedRoutes, input.assignedWells);
   if (!scope.ok) return { ok: false, reason: scope.reason };
@@ -172,10 +223,11 @@ export function evaluateWbmEdit(input: {
     wellName: wellName.value,
     originalPacketId: originalPacketId.value,
     packetId: originalPacketId.value,
+    editEventId: editEventId.value,
     tankLevelFeet: packet.tankLevelFeet,
     bblsTaken: packet.bblsTaken,
     wellDown: packet.wellDown === true,
-    idempotencyKey: idempotencyKey.value,
+    idempotencyKey,
   };
   if (dateTimeUTC) payload.dateTimeUTC = dateTimeUTC;
   if (dateTime) payload.dateTime = dateTime;
@@ -188,7 +240,8 @@ export function evaluateWbmEdit(input: {
     ok: true,
     wellName: wellName.value,
     originalPacketId: originalPacketId.value,
-    idempotencyKey: idempotencyKey.value,
+    editEventId: editEventId.value,
+    idempotencyKey,
     payload,
     payloadDigest: canonicalPayloadDigest(payload),
   };
@@ -196,8 +249,8 @@ export function evaluateWbmEdit(input: {
 
 export type WbmEditTxDecision =
   | { action: 'write' }
-  | { action: 'duplicate' }
-  | { action: 'abort'; reason: 'idempotency_cross_driver' | 'idempotency_payload_conflict' };
+  | { action: 'queued' }
+  | { action: 'abort'; reason: 'idempotency_cross_driver' | 'idempotency_payload_conflict' | 'edit_event_payload_conflict' };
 
 export function decideWbmEditTransaction(input: {
   existing: Record<string, unknown> | null;
@@ -209,7 +262,20 @@ export function decideWbmEditTransaction(input: {
     return { action: 'abort', reason: 'idempotency_cross_driver' };
   }
   if (input.existing.payloadDigest === input.payloadDigest) {
-    return { action: 'duplicate' };
+    return { action: 'queued' };
   }
   return { action: 'abort', reason: 'idempotency_payload_conflict' };
+}
+
+export function decideWbmEditReceipt(input: {
+  receipt: Record<string, unknown> | null;
+  payloadDigest: string;
+}):
+  | { action: 'absent' }
+  | { action: 'accepted' }
+  | { action: 'abort'; reason: 'edit_event_payload_conflict' } {
+  if (!input.receipt) return { action: 'absent' };
+  const digest = typeof input.receipt.payloadDigest === 'string' ? input.receipt.payloadDigest : '';
+  if (digest && digest === input.payloadDigest) return { action: 'accepted' };
+  return { action: 'abort', reason: 'edit_event_payload_conflict' };
 }

@@ -1,7 +1,10 @@
 /**
- * Bounded processed/outgoing patch for a governed WB-M edit.
+ * Bounded processed/outgoing patch planner for a governed WB-M edit.
  * Does not remint the original packet id. Empty edit times preserve
- * the original operational event time. Does not replace processEditRequest.
+ * the original operational event time.
+ *
+ * NOT the production apply path. Live apply is processIncomingEdit /
+ * processEditRequest. Tests must invoke that handler, not this helper.
  */
 export type WbmEditLifecyclePlan = {
   ok: true;
