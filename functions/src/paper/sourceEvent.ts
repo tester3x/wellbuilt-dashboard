@@ -22,18 +22,28 @@ export function inferPaperEditSource(
   return 'ticket';
 }
 
+export function changedPaperMutationId(
+  before: Record<string, unknown> | null | undefined,
+  after: Record<string, unknown> | null | undefined,
+): string {
+  const afterId = asTrimmedString(after?.paperMutationId);
+  const beforeId = asTrimmedString(before?.paperMutationId);
+  if (afterId && afterId !== beforeId) return afterId;
+  return '';
+}
+
 export function deriveGovernedSourceEvent(input: {
   ticket: TicketSourceRecord;
   invoice: InvoiceSourceRecord | null;
   op: PaperOp;
   editSource?: PaperEditSource;
+  correctionMutationId?: string;
 }): { ok: true; sourceEventId: string; eventMs: number } | { ok: false; reason: string; message: string } {
   const ticketDocId = asTrimmedString(input.ticket.id);
   if (!ticketDocId) {
     return { ok: false, reason: 'ticket_id_required', message: 'Ticket document id is required.' };
   }
-  const mutationId = asTrimmedString((input.ticket as { paperMutationId?: unknown }).paperMutationId)
-    || asTrimmedString((input.invoice as { paperMutationId?: unknown } | null)?.paperMutationId);
+  const mutationId = asTrimmedString(input.correctionMutationId);
   if (input.op !== 'close' && mutationId) {
     const eventMs = ticketEditMs(input.ticket) || invoiceEditMs(input.invoice);
     if (!eventMs) {

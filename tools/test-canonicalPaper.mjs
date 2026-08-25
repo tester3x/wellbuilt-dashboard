@@ -41,13 +41,13 @@ const check = (name, ok, detail = '') => {
 {
   const modal = src('src/components/TicketDetailModal.tsx');
   check('legacy Tickets renderer remains when flag OFF', modal.includes('TicketDetailModalLegacy') && modal.includes('INVOICE'));
-  check('Tickets canonical path uses stored host', modal.includes('CanonicalTicketPaperHost') && modal.includes('ticketsPaperLookup'));
+  check('Tickets canonical path uses stored host', modal.includes('TicketPaperRoutedView') && modal.includes('ticketsPaperLookup'));
 }
 
 {
   const dispatch = src('src/app/dispatch/page.tsx');
   check('legacy Dispatch renderer remains when flag OFF', dispatch.includes('!isCanonicalPaperEnabled()') && dispatch.includes('INVOICE'));
-  check('Dispatch canonical path uses stored host', dispatch.includes('CanonicalTicketPaperHost') && dispatch.includes('dispatchPaperLookup'));
+  check('Dispatch canonical path uses stored host', dispatch.includes('TicketPaperRoutedView') && dispatch.includes('dispatchPaperLookup'));
   check('flag ON does not call loadTicketDetail', dispatch.includes('if (isCanonicalPaperEnabled())') && dispatch.includes('setTicketDetailJobId(ticketDetailJobId === job.id ? null : job.id!)'));
 }
 

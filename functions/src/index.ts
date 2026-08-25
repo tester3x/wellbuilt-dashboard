@@ -4787,6 +4787,8 @@ export {
   staffFinalizeTicketToBilling,
   staffReopenTicketReview,
   staffReopenTicketPaper,
+  staffHandReviewBatchToPayroll,
+  staffHandReviewBatchToBilling,
   adminGetWellHistory,
   adminGetWellPerformance,
   dismissDispatch,

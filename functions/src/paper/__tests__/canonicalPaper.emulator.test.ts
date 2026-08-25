@@ -446,8 +446,9 @@ describeE2E('firestore emulator: write-order, retry, tenant assets', () => {
     });
     expect(close.class).toBe('success');
     const dispatchCap = { ...dispatchLg, caps: ['createDispatch'] };
+    const review = await store.getWorkflow(ticketId);
     const corrected = await applyTicketReviewAction({
-      store, caller: dispatchCap, ticketDocId: ticketId, action: 'correct', fields: { truck: '888' }, nowMs: CLOSED_AT_MS + 10,
+      store, caller: dispatchCap, ticketDocId: ticketId, action: 'correct', fields: { truck: '888' }, nowMs: CLOSED_AT_MS + 10, expectedVersion: review?.version ?? 1,
     });
     expect(corrected.ok).toBe(true);
     if (!corrected.ok) return;
@@ -464,5 +465,58 @@ describeE2E('firestore emulator: write-order, retry, tenant assets', () => {
     expect(tLife.class === 'success' || iLife.class === 'success').toBe(true);
     expect(await store.getRevision(waterTicketArtifactId(ticketId), 'r2')).toBeTruthy();
     expect(await store.getRevision(waterTicketArtifactId(ticketId), 'r3')).toBeNull();
+
+    const mutationA = corrected.mutationId;
+    const ticketEditMs = CLOSED_AT_MS + 20;
+    const ticketBefore = { ...(ticketAfter as object) } as Record<string, unknown>;
+    const ticketOrdinary = { ...ticketBefore, location: 'NEW WELL', paperMutationId: mutationA, updatedAt: ticketEditMs };
+    await db.collection('tickets').doc(ticketId).set(ticketOrdinary);
+    const t3 = await applyTicketPaperLifecycle({
+      store, ticketId, before: ticketBefore, after: ticketOrdinary, nowMs: ticketEditMs,
+    });
+    expect(t3.class).toBe('success');
+    expect(await store.getRevision(waterTicketArtifactId(ticketId), 'r3')).toBeTruthy();
+
+    const invoiceEditMs = CLOSED_AT_MS + 30;
+    const invoiceBefore = { ...(invoiceAfter as object) } as Record<string, unknown>;
+    const invoiceOrdinary = { ...invoiceBefore, operator: 'Edited Operator', paperMutationId: mutationA, editedAt: invoiceEditMs };
+    await db.collection('invoices').doc(invoiceId).set(invoiceOrdinary);
+    const i4 = await applyInvoicePaperLifecycle({
+      store, invoiceId, before: invoiceBefore, after: invoiceOrdinary, nowMs: invoiceEditMs,
+    });
+    expect(i4.class).toBe('success');
+    expect(await store.getRevision(waterTicketArtifactId(ticketId), 'r4')).toBeTruthy();
+    expect(await store.getRevision(waterTicketArtifactId(ticketId), 'r5')).toBeNull();
+  });
+
+  it('concurrent corrections with the same expectedVersion produce one success and one version_conflict', async () => {
+    const db = app.firestore();
+    const ticketId = `${TICKET_20100_ID}-cas`;
+    const invoiceId = `${INVOICE_20100_ID}-cas`;
+    await db.collection('tickets').doc(ticketId).set({ ...ticket20100, id: ticketId, invoiceDocId: invoiceId });
+    await db.collection('invoices').doc(invoiceId).set({ ...invoice20100, id: invoiceId, status: 'closed' });
+    const store = storeFor(db);
+    const close = await applyInvoicePaperLifecycle({
+      store, invoiceId, before: { status: 'open' },
+      after: { ...invoice20100, id: invoiceId, status: 'closed', closedAtMs: CLOSED_AT_MS },
+      nowMs: CLOSED_AT_MS,
+    });
+    expect(close.class).toBe('success');
+    const dispatchCap = { ...dispatchLg, caps: ['createDispatch'] };
+    const review = await store.getWorkflow(ticketId);
+    const version = review?.version ?? 1;
+    const [a, b] = await Promise.all([
+      applyTicketReviewAction({
+        store, caller: dispatchCap, ticketDocId: ticketId, action: 'correct', fields: { truck: '111' }, nowMs: CLOSED_AT_MS + 10, expectedVersion: version,
+      }),
+      applyTicketReviewAction({
+        store, caller: dispatchCap, ticketDocId: ticketId, action: 'correct', fields: { truck: '222' }, nowMs: CLOSED_AT_MS + 10, expectedVersion: version,
+      }),
+    ]);
+    const ok = [a, b].filter((x) => x.ok);
+    const fail = [a, b].filter((x) => !x.ok);
+    expect(ok).toHaveLength(1);
+    expect(fail).toHaveLength(1);
+    expect(fail[0]).toMatchObject({ ok: false, reason: 'version_conflict' });
   });
 });

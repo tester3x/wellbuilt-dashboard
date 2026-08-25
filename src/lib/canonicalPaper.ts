@@ -54,6 +54,68 @@ export async function staffGetTicketPaper(lookup: PaperLookup, revisionId?: stri
 
 export type PaperPresentationMode = 'edit_form' | 'canonical_paper' | 'read_only_detail';
 
+export type PaperStructuredTicket = {
+  id: string;
+  ticketNumber: string;
+  date: string;
+  company: string;
+  companyId: string;
+  location: string;
+  hauledTo: string;
+  type: string;
+  qty: string;
+  bbls: string;
+  pickupBbls?: number | string;
+  dropoffBbls?: number | string;
+  top: string;
+  bottom: string;
+  driver: string;
+  truck: string;
+  trailer: string;
+  notes: string;
+  apiNo: string;
+  invoiceNumber: string;
+  invoiceDocId: string;
+  createdAt: null;
+  updatedAt: null;
+  submittedBy: string;
+  updatedBy: string;
+  status: string;
+  voidedAt: null;
+  gpsLat: string;
+  gpsLng: string;
+  legalDesc: string;
+  county: string;
+  fieldName: string;
+  disposalApiNo: string;
+  disposalGpsLat: string;
+  disposalGpsLng: string;
+  hauledToLegalDesc: string;
+  hauledToCounty: string;
+  hauledToOperator: string;
+  startTime: string;
+  stopTime: string;
+  hours: string;
+  timeGauged: string;
+  packageId: string;
+  materialType: string;
+  grossWeight: string;
+  tareWeight: string;
+  netWeight: string;
+  tons: string;
+  sourceName: string;
+  deliverySite: string;
+  customer: string;
+  splitGroupId: string;
+  splitRole: string;
+  state: string;
+  operator: string;
+  wellName?: string;
+  disposal?: string;
+  totalHours?: string;
+  totalBBL?: string;
+};
+
 export type TicketPaperRoute = {
   ok: true;
   mode: PaperPresentationMode;
@@ -65,6 +127,8 @@ export type TicketPaperRoute = {
   allowedFields?: string[];
   artifactId?: string;
   revisionId?: string;
+  reviewVersion: number;
+  structuredRecord: PaperStructuredTicket;
 } | {
   ok: false;
   reason: string;
@@ -81,9 +145,13 @@ export async function getTicketPaperRoute(lookup: PaperLookup): Promise<TicketPa
   return res.data as TicketPaperRoute;
 }
 
-export async function staffCorrectTicket(ticketDocId: string, fields: Record<string, unknown>): Promise<{ ok: true }> {
+export async function staffCorrectTicket(
+  ticketDocId: string,
+  fields: Record<string, unknown>,
+  expectedVersion: number,
+): Promise<{ ok: true; version: number }> {
   const fn = httpsCallable(getFirebaseFunctions(), 'staffCorrectTicket');
-  const res = await fn({ ticketDocId, fields });
-  return res.data as { ok: true };
+  const res = await fn({ ticketDocId, fields, expectedVersion });
+  return res.data as { ok: true; version: number };
 }
 export const staffMutateTicketPaper = staffCorrectTicket;

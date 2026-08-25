@@ -34,7 +34,10 @@ export function TicketReviewEditor(input: {
   canEdit: boolean;
   onPreview?: () => void;
   previewAvailable?: boolean;
+  reviewVersion: number;
   onClose: () => void;
+  onVersionConflict?: () => Promise<void> | void;
+  onSaved?: (version: number) => void;
 }) {
   const [draft, setDraft] = useState<Record<string, string>>({});
   const [error, setError] = useState('');
@@ -69,10 +72,15 @@ export function TicketReviewEditor(input: {
       return;
     }
     try {
-      await staffCorrectTicket(input.ticket.id, fields);
+      const result = await staffCorrectTicket(input.ticket.id, fields, input.reviewVersion);
+      input.onSaved?.(result.version);
       setSaved('Saved.');
     } catch (err) {
-      setError(err instanceof Error ? err.message : 'mutation_rejected');
+      const msg = err instanceof Error ? err.message : 'mutation_rejected';
+      setError(msg);
+      if (msg.includes('version_conflict') && input.onVersionConflict) {
+        await input.onVersionConflict();
+      }
     }
   }
 

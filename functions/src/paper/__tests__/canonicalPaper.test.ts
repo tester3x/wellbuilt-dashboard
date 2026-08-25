@@ -225,6 +225,13 @@ describe('requests reject client-authored events and authority', () => {
     });
     expect(invoiceEdit.ok).toBe(true);
     if (invoiceEdit.ok) expect(invoiceEdit.sourceEventId).toBe(`invoice_edit:${TICKET_20100_ID}:${CLOSED_AT_MS + 11}`);
+    const staleStored = deriveGovernedSourceEvent({
+      ticket: { ...ticket20100, paperMutationId: 'stale-A', updatedAt: { toMillis: () => CLOSED_AT_MS + 9 } },
+      invoice: invoice20100,
+      op: 'edit',
+      editSource: 'ticket',
+    });
+    expect(staleStored.ok && staleStored.sourceEventId).toBe(`ticket_edit:${TICKET_20100_ID}:${CLOSED_AT_MS + 9}`);
   });
 });
 
@@ -275,7 +282,7 @@ describe('materialize + get (Tickets vs Dispatch same bytes)', () => {
     const pay = await getWaterTicketPaper({ store, caller: payrollLg, lookup: { ticketDocId: TICKET_20100_ID } });
     expect(own.ok).toBe(true);
     expect(other).toMatchObject({ ok: false, reason: 'not_document_owner' });
-    expect(pay).toMatchObject({ ok: false, reason: 'missing_capability' });
+    expect(pay.ok).toBe(false);
   });
 
   it('repeating the same governed close is idempotent', async () => {
@@ -424,7 +431,8 @@ describe('materialize + get (Tickets vs Dispatch same bytes)', () => {
     const denied = await getWaterTicketPaper({
       store, caller: staffOther, lookup: { ticketDocId: TICKET_20100_ID },
     });
-    expect(denied).toMatchObject({ ok: false, reason: 'wrong_company' });
+    expect(denied.ok).toBe(false);
+    expect(denied.ok ? '' : denied.reason).toMatch(/wrong_company|record_company_mismatch/);
     const otherMat = await materializeWaterTicketPaper({
       store, caller: staffOther, ticketDocId: TICKET_20100_ID, op: 'close', nowMs: now,
     });

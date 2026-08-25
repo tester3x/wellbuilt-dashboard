@@ -212,6 +212,7 @@ export interface TicketReviewEventRecord {
   versionBefore: number;
   versionAfter: number;
   nowMs: number;
+  batchId?: string;
 }
 
 export interface PaperSourceEventRecord {

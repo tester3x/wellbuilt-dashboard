@@ -20,5 +20,9 @@ describe('flag-ON route uses distinct governed surfaces', () => {
     expect(editor).toContain('Preview paper');
     expect(dispatch).toContain('TicketPaperRoutedView');
     expect(dispatch).not.toMatch(/isCanonicalPaperEnabled\(\) && \(\s*<CanonicalTicketPaperHost/);
+    expect(routed).toContain('structured_record_unavailable');
+    expect(routed).not.toContain("id: '', ticketNumber: ''");
+    expect(editor).toContain('reviewVersion');
+    expect(editor).toContain('version_conflict');
   });
 });

@@ -8,6 +8,7 @@
  * WB-T updateTicket still uses createdAt||closedAt. That mismatch is reported;
  * this module does not edit WB-T.
  */
+import { dashboardCanReadPaper } from './access';
 import { asTrimmedString, timestampMs } from './format';
 import { canonicalDriverIdFromRecords } from './identity';
 import type {
@@ -18,7 +19,7 @@ import type {
   TicketSourceRecord,
 } from './types';
 
-export const PAPER_ACTOR_POLICY_VERSION = 'canonical-paper-actor-routing.v3';
+export const PAPER_ACTOR_POLICY_VERSION = 'canonical-paper-actor-routing.v4';
 export const DRIVER_EDIT_WINDOW_MS = 24 * 60 * 60 * 1000;
 
 export const DRIVER_MUTATION_FIELDS = [
@@ -43,7 +44,69 @@ export const ADMIN_OVERRIDE_FIELDS = [
 ];
 
 export type PaperPresentationMode = 'edit_form' | 'canonical_paper' | 'read_only_detail';
-export type PaperStageActor = 'driver' | 'dispatch' | 'payroll' | 'billing' | 'admin' | 'viewer';
+export type PaperStageActor = 'driver' | 'dispatch' | 'payroll' | 'billing' | 'admin' | 'viewer' | 'none';
+
+export type PaperStructuredTicket = {
+  id: string;
+  ticketNumber: string;
+  date: string;
+  company: string;
+  companyId: string;
+  location: string;
+  hauledTo: string;
+  type: string;
+  qty: string;
+  bbls: string;
+  pickupBbls?: number | string;
+  dropoffBbls?: number | string;
+  top: string;
+  bottom: string;
+  driver: string;
+  truck: string;
+  trailer: string;
+  notes: string;
+  apiNo: string;
+  invoiceNumber: string;
+  invoiceDocId: string;
+  createdAt: null;
+  updatedAt: null;
+  submittedBy: string;
+  updatedBy: string;
+  status: string;
+  voidedAt: null;
+  gpsLat: string;
+  gpsLng: string;
+  legalDesc: string;
+  county: string;
+  fieldName: string;
+  disposalApiNo: string;
+  disposalGpsLat: string;
+  disposalGpsLng: string;
+  hauledToLegalDesc: string;
+  hauledToCounty: string;
+  hauledToOperator: string;
+  startTime: string;
+  stopTime: string;
+  hours: string;
+  timeGauged: string;
+  packageId: string;
+  materialType: string;
+  grossWeight: string;
+  tareWeight: string;
+  netWeight: string;
+  tons: string;
+  sourceName: string;
+  deliverySite: string;
+  customer: string;
+  splitGroupId: string;
+  splitRole: string;
+  state: string;
+  operator: string;
+  wellName: string;
+  disposal: string;
+  totalHours: string;
+  totalBBL: string;
+};
 
 export type PaperPresentationDecision = {
   ok: true;
@@ -60,6 +123,8 @@ export type PaperPresentationDecision = {
   revisionId?: string;
   windowOriginMs?: number | null;
   windowExpiresAtMs?: number | null;
+  reviewVersion: number;
+  structuredRecord: PaperStructuredTicket;
 } | {
   ok: false;
   reason: string;
@@ -69,6 +134,82 @@ export type PaperPresentationDecision = {
   policyVersion: string;
   gap?: string;
 };
+
+export function paperBytesAllowed(decision: PaperPresentationDecision): boolean {
+  return decision.ok && (decision.mode === 'canonical_paper' || decision.previewAvailable === true);
+}
+
+function s(v: unknown): string {
+  if (v == null) return '';
+  return String(v);
+}
+
+export function structuredTicketRecord(
+  ticket: TicketSourceRecord,
+  invoice: InvoiceSourceRecord | null,
+): PaperStructuredTicket {
+  return {
+    id: ticket.id,
+    ticketNumber: s(ticket.ticketNumber),
+    date: s(ticket.date),
+    company: s(ticket.company),
+    companyId: s(ticket.companyId),
+    location: s(ticket.location),
+    hauledTo: s(ticket.hauledTo),
+    type: '',
+    qty: s(ticket.qty),
+    bbls: s(ticket.bbls),
+    pickupBbls: ticket.pickupBbls as number | string | undefined,
+    dropoffBbls: ticket.dropoffBbls as number | string | undefined,
+    top: s(ticket.top),
+    bottom: s(ticket.bottom),
+    driver: s(ticket.driver),
+    truck: s(ticket.truck),
+    trailer: s(ticket.trailer),
+    notes: s((ticket as { notes?: unknown }).notes),
+    apiNo: '',
+    invoiceNumber: s(ticket.invoiceNumber),
+    invoiceDocId: s(ticket.invoiceDocId),
+    createdAt: null,
+    updatedAt: null,
+    submittedBy: s(ticket.submittedBy),
+    updatedBy: s(ticket.updatedBy),
+    status: '',
+    voidedAt: null,
+    gpsLat: '',
+    gpsLng: '',
+    legalDesc: '',
+    county: '',
+    fieldName: '',
+    disposalApiNo: '',
+    disposalGpsLat: '',
+    disposalGpsLng: '',
+    hauledToLegalDesc: '',
+    hauledToCounty: '',
+    hauledToOperator: '',
+    startTime: '',
+    stopTime: '',
+    hours: s(ticket.hours ?? invoice?.totalHours),
+    timeGauged: '',
+    packageId: s(ticket.packageId),
+    materialType: '',
+    grossWeight: '',
+    tareWeight: '',
+    netWeight: '',
+    tons: '',
+    sourceName: '',
+    deliverySite: '',
+    customer: '',
+    splitGroupId: '',
+    splitRole: '',
+    state: '',
+    operator: s(ticket.operator || invoice?.operator),
+    wellName: s(ticket.wellName || invoice?.wellName),
+    disposal: s(ticket.disposal),
+    totalHours: s(invoice?.totalHours ?? ticket.hours),
+    totalBBL: s(invoice?.totalBBL ?? ticket.qty ?? ticket.bbls),
+  };
+}
 
 export function callerHasCap(caller: PaperCaller, cap: string): boolean {
   return (caller.caps || []).includes(cap);
@@ -153,11 +294,13 @@ export function resolveStageActor(
   if (caller.kind === 'driver') return 'driver';
   if (caller.isPlatformAdmin) return 'admin';
   if (stage === 'payroll_review' && callerHasCap(caller, 'approvePayroll')) return 'payroll';
+  if (stage === 'payroll_review' && callerHasCap(caller, 'viewPayroll')) return 'viewer';
   if (stage === 'dispatch_review' && callerHasCap(caller, 'createDispatch')) return 'dispatch';
   if (stage === 'billing' && (callerHasCap(caller, 'editBilling') || callerHasCap(caller, 'viewBilling'))) return 'billing';
+  if (stage === 'billing' && (callerHasCap(caller, 'approvePayroll') || callerHasCap(caller, 'viewPayroll'))) return 'payroll';
   if (stage === 'open' && callerHasCap(caller, 'createDispatch')) return 'dispatch';
-  if (callerHasCap(caller, 'viewTickets') || callerHasCap(caller, 'viewDispatch')) return 'viewer';
-  return 'viewer';
+  if (dashboardCanReadPaper(caller)) return 'viewer';
+  return 'none';
 }
 
 export function allowedFieldsFor(actor: PaperStageActor, overrideActive: boolean): string[] {
@@ -293,6 +436,8 @@ export function evaluatePaperPresentation(input: {
     policyVersion,
     stageActor: actor,
     workflowStage: (closed ? stage : 'open') as PaperWorkflowStage | 'open' | 'driver_correction',
+    reviewVersion: input.workflow?.version ?? 0,
+    structuredRecord: structuredTicketRecord(input.ticket, input.invoice),
   };
 
   if (input.caller.kind === 'driver') {
@@ -398,6 +543,17 @@ export function evaluatePaperPresentation(input: {
     };
   }
 
+  if (actor === 'none') {
+    return {
+      ok: false,
+      reason: 'unauthorized',
+      message: 'Caller cannot access this ticket at the current review stage.',
+      canEdit: false,
+      evaluatedAtMs,
+      policyVersion,
+    };
+  }
+
   if (actor === 'dispatch' && stage === 'dispatch_review') {
     return {
       ok: true,
@@ -424,7 +580,12 @@ export function evaluatePaperPresentation(input: {
     };
   }
 
-  if (actor === 'dispatch' || actor === 'payroll' || actor === 'billing' || actor === 'viewer') {
+  const paperAfterStage =
+    (actor === 'dispatch' && stage !== 'dispatch_review')
+    || (actor === 'payroll' && stage === 'billing')
+    || (actor === 'billing' && stage === 'billing')
+    || actor === 'viewer';
+  if (paperAfterStage) {
     return {
       ok: true,
       mode: 'canonical_paper',

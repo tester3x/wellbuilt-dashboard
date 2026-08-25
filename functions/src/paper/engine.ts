@@ -1,4 +1,5 @@
 import { authorizePaperMaterialize, authorizePaperRead } from './access';
+import { evaluatePaperPresentation, paperBytesAllowed } from './actorPolicy';
 import { asTrimmedString, DEFAULT_PAPER_TIMEZONE } from './format';
 import { hashExactBytes, utf8Bytes } from './hash';
 import { buildWaterTicketHtml, normalizePaperHtml } from './html';
@@ -98,6 +99,7 @@ export async function materializeWaterTicketPaper(input: {
   editSource?: PaperEditSource;
   sourceTicket?: TicketSourceRecord;
   sourceInvoice?: InvoiceSourceRecord | null;
+  correctionMutationId?: string;
 }): Promise<MaterializeDecision> {
   const ticket = input.sourceTicket || await input.store.getTicket(input.ticketDocId);
   if (!ticket) return { ok: false, reason: 'ticket_not_found', message: 'Ticket not found.' };
@@ -116,6 +118,7 @@ export async function materializeWaterTicketPaper(input: {
     invoice,
     op: input.op,
     editSource: input.editSource,
+    correctionMutationId: input.correctionMutationId,
   });
   if (!derived.ok) return derived;
 
@@ -253,22 +256,45 @@ export async function getWaterTicketPaper(input: {
   caller: PaperCaller;
   lookup: PaperLookup;
   revisionId?: string;
+  nowMs?: number;
 }): Promise<GetPaperDecision> {
   let artifactId = '';
+  let ticketDocId = '';
   if ('ticketDocId' in input.lookup && input.lookup.ticketDocId) {
+    ticketDocId = input.lookup.ticketDocId;
     artifactId = waterTicketArtifactId(input.lookup.ticketDocId);
   } else if ('invoiceDocId' in input.lookup && input.lookup.invoiceDocId) {
     const idx = await input.store.getInvoiceIndex(input.lookup.invoiceDocId);
     if (!idx) return { ok: false, reason: 'document_unavailable', message: 'Document unavailable.' };
     artifactId = idx.artifactId;
+    ticketDocId = idx.ticketDocId;
   } else {
     return { ok: false, reason: 'lookup_required', message: 'Document unavailable.' };
   }
 
   const artifact = await input.store.getArtifact(artifactId);
   if (!artifact) return { ok: false, reason: 'document_unavailable', message: 'Document unavailable.' };
-  const access = authorizePaperRead(input.caller, artifact);
-  if (!access.ok) return { ok: false, reason: access.reason, message: access.message };
+  const ticket = await input.store.getTicket(ticketDocId || artifact.ticketDocId);
+  if (!ticket) {
+    const access = authorizePaperRead(input.caller, artifact);
+    if (!access.ok) return { ok: false, reason: access.reason, message: access.message };
+  } else {
+    const invoiceId = asTrimmedString(ticket.invoiceDocId);
+    const invoice = invoiceId ? await input.store.getInvoice(invoiceId) : null;
+    const workflow = await input.store.getWorkflow(ticket.id);
+    const decision = evaluatePaperPresentation({
+      caller: input.caller,
+      ticket,
+      invoice,
+      nowMs: input.nowMs ?? Date.now(),
+      workflow,
+      artifact: { artifactId: artifact.artifactId, currentRevisionId: artifact.currentRevisionId },
+    });
+    if (!decision.ok) return { ok: false, reason: decision.reason, message: decision.message };
+    if (!paperBytesAllowed(decision)) {
+      return { ok: false, reason: 'paper_not_visible', message: 'Caller cannot retrieve paper at this review stage.' };
+    }
+  }
   const revisionId = input.revisionId || artifact.currentRevisionId;
   if (!revisionId) return { ok: false, reason: 'document_unavailable', message: 'Document unavailable.' };
   const revision = await input.store.getRevision(artifactId, revisionId);

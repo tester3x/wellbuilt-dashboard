@@ -6,8 +6,8 @@ import { getWaterTicketPaper, materializeWaterTicketPaper } from '../paper/engin
 import { createFirestorePaperStore } from '../paper/firestoreStore';
 import { paperAuthIntent, resolvePaperCaller } from '../paper/paperCaller';
 import { resolvePaperPresentation } from '../paper/presentation';
-import { parseGetPaperRequest, parseMaterializeRequest, parseMutatePaperRequest, parseWorkflowTicketRequest } from '../paper/requests';
-import { applyTicketReviewAction } from '../paper/ticketReview';
+import { parseGetPaperRequest, parseMaterializeRequest, parseMutatePaperRequest, parseReviewBatchRequest, parseWorkflowTicketRequest } from '../paper/requests';
+import { applyTicketReviewAction, applyTicketReviewBatch } from '../paper/ticketReview';
 import type { PaperCaller } from '../paper/types';
 import { requireManageDrivers, resolveDashboardCaller } from './adminAuth';
 import { writeSecurityAudit } from './audit';
@@ -22,13 +22,17 @@ function throwPaper(reason: string, message: string): never {
     ? 'permission-denied'
     : reason === 'unexpected_field' || reason === 'invalid_request' || reason === 'lookup_required'
       || reason === 'ticket_id_required' || reason === 'op_required' || reason === 'ambiguous_lookup'
+      || reason === 'expected_version_required' || reason === 'invalid_field_type' || reason === 'invalid_field_value'
       ? 'invalid-argument'
     : reason === 'unauthenticated'
       ? 'unauthenticated'
       : reason === 'document_unavailable' || reason === 'ticket_not_found' || reason === 'invoice_not_found'
         || reason === 'event_not_found'
         ? 'not-found'
+        : reason === 'version_conflict'
+          ? 'aborted'
         : reason === 'edit_window_expired' || reason === 'edit_window_unknown' || reason === 'policy_undefined'
+          || reason === 'no_effective_change' || reason === 'paper_not_visible'
           ? 'failed-precondition'
         : 'failed-precondition';
   throw new httpsV2.HttpsError(code, `${reason}:${message}`);
@@ -172,7 +176,13 @@ async function runReviewCallable(
     const parsed = parseMutatePaperRequest(request.data);
     if (!parsed.ok) throwPaper(parsed.reason, parsed.message);
     const result = await applyTicketReviewAction({
-      store, caller, ticketDocId: parsed.ticketDocId, action, fields: parsed.fields, nowMs: Date.now(),
+      store,
+      caller,
+      ticketDocId: parsed.ticketDocId,
+      action,
+      fields: parsed.fields,
+      expectedVersion: parsed.expectedVersion,
+      nowMs: Date.now(),
     });
     if (!result.ok) throwPaper(result.reason, result.message);
     return result;
@@ -180,7 +190,13 @@ async function runReviewCallable(
   const parsed = parseWorkflowTicketRequest(request.data);
   if (!parsed.ok) throwPaper(parsed.reason, parsed.message);
   const result = await applyTicketReviewAction({
-    store, caller, ticketDocId: parsed.ticketDocId, action, reason: parsed.reason, nowMs: Date.now(),
+    store,
+    caller,
+    ticketDocId: parsed.ticketDocId,
+    action,
+    reason: parsed.reason,
+    expectedVersion: parsed.expectedVersion,
+    nowMs: Date.now(),
   });
   if (!result.ok) throwPaper(result.reason, result.message);
   return result;
@@ -209,3 +225,30 @@ export const staffReopenTicketReview = httpsV2.onCall(
   (request) => runReviewCallable(request, 'reopen'),
 );
 export const staffReopenTicketPaper = staffReopenTicketReview;
+
+async function runReviewBatchCallable(
+  request: httpsV2.CallableRequest,
+  action: 'hand_to_payroll' | 'finalize_to_billing',
+) {
+  const caller = await loadPaperReader(request);
+  const parsed = parseReviewBatchRequest(request.data);
+  if (!parsed.ok) throwPaper(parsed.reason, parsed.message);
+  const store = createFirestorePaperStore();
+  return applyTicketReviewBatch({
+    store,
+    caller,
+    action,
+    items: parsed.items,
+    nowMs: Date.now(),
+  });
+}
+
+export const staffHandReviewBatchToPayroll = httpsV2.onCall(
+  { timeoutSeconds: 60, memory: '256MiB', enforceAppCheck: false },
+  (request) => runReviewBatchCallable(request, 'hand_to_payroll'),
+);
+
+export const staffHandReviewBatchToBilling = httpsV2.onCall(
+  { timeoutSeconds: 60, memory: '256MiB', enforceAppCheck: false },
+  (request) => runReviewBatchCallable(request, 'finalize_to_billing'),
+);

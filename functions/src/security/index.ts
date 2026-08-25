@@ -73,4 +73,6 @@ export {
   staffFinalizeTicketToBilling,
   staffReopenTicketReview,
   staffReopenTicketPaper,
+  staffHandReviewBatchToPayroll,
+  staffHandReviewBatchToBilling,
 } from './paperCallables';

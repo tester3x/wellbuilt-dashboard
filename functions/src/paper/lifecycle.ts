@@ -2,7 +2,7 @@ import { asTrimmedString, timestampMs } from './format';
 import { SYSTEM_PAPER_CALLER } from './paperCaller';
 import { materializeWaterTicketPaper } from './engine';
 import { isTicketOnlyWaterTicket, paperSourceFingerprint } from './projection';
-import { invoiceEditMs, ticketEditMs } from './sourceEvent';
+import { changedPaperMutationId, invoiceEditMs, ticketEditMs } from './sourceEvent';
 import type { InvoiceSourceRecord, PaperEditSource, PaperOp, TicketSourceRecord } from './types';
 import type { PaperStore } from './store';
 
@@ -185,6 +185,7 @@ async function materializeOne(input: {
   nowMs: number;
   sourceTicket?: TicketSourceRecord;
   sourceInvoice?: InvoiceSourceRecord | null;
+  correctionMutationId?: string;
 }): Promise<PaperLifecycleOutcome> {
   try {
     const result = await materializeWaterTicketPaper({
@@ -196,6 +197,7 @@ async function materializeOne(input: {
       editSource: input.editSource,
       sourceTicket: input.sourceTicket,
       sourceInvoice: input.sourceInvoice,
+      correctionMutationId: input.correctionMutationId,
     });
     return classifyMaterializeResult({
       op: input.op,
@@ -263,6 +265,7 @@ export async function applyInvoicePaperLifecycle(input: {
       nowMs: input.nowMs,
       sourceTicket: ticket,
       sourceInvoice: invoice,
+      correctionMutationId: changedPaperMutationId(input.before, input.after) || undefined,
     }));
   }
   return foldOutcomes(op, outcomes);
@@ -321,6 +324,7 @@ export async function applyTicketPaperLifecycle(input: {
     nowMs: input.nowMs,
     sourceTicket: ticket,
     sourceInvoice: invoice,
+    correctionMutationId: changedPaperMutationId(input.before, input.after) || undefined,
   });
 }
 
