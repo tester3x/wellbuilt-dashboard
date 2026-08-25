@@ -219,6 +219,11 @@ export type TicketReviewBatchItemResult =
   | { ok: true; ticketDocId: string; via: string; mutationId: string; stage: string; version: number }
   | { ok: false; ticketDocId: string; reason: string; message: string };
 
+export interface PaperReviewBatchItemSpec {
+  ticketDocId: string;
+  expectedVersion: number;
+}
+
 export interface PaperReviewBatchRecord {
   batchId: string;
   actorUid: string;
@@ -226,6 +231,7 @@ export interface PaperReviewBatchRecord {
   action: 'hand_to_payroll' | 'finalize_to_billing';
   digest: string;
   itemCount: number;
+  items: PaperReviewBatchItemSpec[];
   results: TicketReviewBatchItemResult[];
   status: 'pending' | 'complete';
   createdAtMs: number;

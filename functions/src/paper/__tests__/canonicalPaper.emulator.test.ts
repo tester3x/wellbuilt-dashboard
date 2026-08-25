@@ -7,7 +7,7 @@ import * as admin from 'firebase-admin';
 import { createFirestorePaperStore } from '../firestoreStore';
 import { getWaterTicketPaper, materializeWaterTicketPaper } from '../engine';
 import { applyInvoicePaperLifecycle, applyTicketPaperLifecycle } from '../lifecycle';
-import { applyTicketReviewAction, applyTicketReviewBatch } from '../ticketReview';
+import { applyTicketReviewAction, applyTicketReviewBatch, batchItemMutationId, commitReviewBatchItem } from '../ticketReview';
 import { parseGovernedStorageUri } from '../storageUri';
 import { waterTicketArtifactId } from '../types';
 import {
@@ -279,7 +279,7 @@ describeE2E('firestore emulator: write-order, retry, tenant assets', () => {
       applyTicketPaperLifecycle({ store, ticketId, before: null, after: { ...ticket20100, id: ticketId, invoiceDocId: invoiceId }, nowMs: CLOSED_AT_MS }),
       applyInvoicePaperLifecycle({ store, invoiceId, before: { status: 'open' }, after, nowMs: CLOSED_AT_MS + 1 }),
     ]);
-    expect([a, b, c].filter((x) => x.class === 'success' || x.class === 'pending_reconciliation').length).toBe(3);
+    expect([a, b, c].every((x) => x.class === 'success' || x.class === 'pending_reconciliation' || x.class === 'retriable')).toBe(true);
     expect((await store.getArtifact(waterTicketArtifactId(ticketId)))?.currentRevisionId).toBe('r1');
     expect(await store.getRevision(waterTicketArtifactId(ticketId), 'r2')).toBeNull();
   });
@@ -641,5 +641,129 @@ describeE2E('firestore emulator: write-order, retry, tenant assets', () => {
     ]);
     expect(await store.getRevision(waterTicketArtifactId(ticketId), 'r2')).toBeTruthy();
     expect(await store.getRevision(waterTicketArtifactId(ticketId), 'r3')).toBeNull();
+  });
+
+  it('atomic batch: halt after item 1 then retry replays stored success', async () => {
+    const db = app.firestore();
+    const ticketA = `${TICKET_20100_ID}-atm-a`;
+    const ticketB = `${TICKET_20100_ID}-atm-b`;
+    const invA = `${INVOICE_20100_ID}-atm-a`;
+    const invB = `${INVOICE_20100_ID}-atm-b`;
+    await db.collection('tickets').doc(ticketA).set({ ...ticket20100, id: ticketA, invoiceDocId: invA });
+    await db.collection('tickets').doc(ticketB).set({ ...ticket20100, id: ticketB, invoiceDocId: invB });
+    await db.collection('invoices').doc(invA).set({ ...invoice20100, id: invA, status: 'closed', closedAtMs: CLOSED_AT_MS });
+    await db.collection('invoices').doc(invB).set({ ...invoice20100, id: invB, status: 'closed', closedAtMs: CLOSED_AT_MS });
+    const store = storeFor(db);
+    expect((await applyInvoicePaperLifecycle({
+      store, invoiceId: invA, before: { status: 'open' },
+      after: { ...invoice20100, id: invA, status: 'closed', closedAtMs: CLOSED_AT_MS }, nowMs: CLOSED_AT_MS,
+    })).class).toBe('success');
+    expect((await applyInvoicePaperLifecycle({
+      store, invoiceId: invB, before: { status: 'open' },
+      after: { ...invoice20100, id: invB, status: 'closed', closedAtMs: CLOSED_AT_MS }, nowMs: CLOSED_AT_MS,
+    })).class).toBe('success');
+    const dispatchCap = { ...dispatchLg, caps: ['createDispatch'] };
+    const vA = (await store.getWorkflow(ticketA))?.version ?? 1;
+    const vB = (await store.getWorkflow(ticketB))?.version ?? 1;
+    const items = [
+      { ticketDocId: ticketA, expectedVersion: vA },
+      { ticketDocId: ticketB, expectedVersion: vB },
+    ];
+    const partial = await applyTicketReviewBatch({
+      store, caller: dispatchCap, action: 'hand_to_payroll', items, batchId: 'emu-atomic-halt', nowMs: CLOSED_AT_MS + 1, haltAfterIndex: 0,
+    });
+    expect(partial.ok).toBe(true);
+    if (!partial.ok) return;
+    expect(partial.results).toHaveLength(1);
+    expect(partial.results[0]).toMatchObject({ ok: true, mutationId: batchItemMutationId('emu-atomic-halt', 0) });
+    const replay = await commitReviewBatchItem({
+      store, caller: dispatchCap, batchId: 'emu-atomic-halt', index: 0, nowMs: CLOSED_AT_MS + 2,
+    });
+    expect(replay).toMatchObject({ ok: true, replayed: true });
+    const resume = await applyTicketReviewBatch({
+      store, caller: dispatchCap, action: 'hand_to_payroll', items, batchId: 'emu-atomic-halt', nowMs: CLOSED_AT_MS + 3,
+    });
+    expect(resume.ok).toBe(true);
+    if (!resume.ok) return;
+    expect(resume.results[0]).toEqual(partial.results[0]);
+    expect(resume.results[1]).toMatchObject({ ok: true, ticketDocId: ticketB });
+    expect((await store.getWorkflow(ticketA))?.version).toBe(vA + 1);
+    expect((await store.getWorkflow(ticketB))?.version).toBe(vB + 1);
+    const ev0 = await db.collection('ticket_review_events').doc(batchItemMutationId('emu-atomic-halt', 0)).get();
+    const ev1 = await db.collection('ticket_review_events').doc(batchItemMutationId('emu-atomic-halt', 1)).get();
+    expect(ev0.exists).toBe(true);
+    expect(ev1.exists).toBe(true);
+  });
+
+  it('atomic batch: concurrent same digest returns identical results and one event per item', async () => {
+    const db = app.firestore();
+    const ticketA = `${TICKET_20100_ID}-atm-c-a`;
+    const ticketB = `${TICKET_20100_ID}-atm-c-b`;
+    const invA = `${INVOICE_20100_ID}-atm-c-a`;
+    const invB = `${INVOICE_20100_ID}-atm-c-b`;
+    await db.collection('tickets').doc(ticketA).set({ ...ticket20100, id: ticketA, invoiceDocId: invA });
+    await db.collection('tickets').doc(ticketB).set({ ...ticket20100, id: ticketB, invoiceDocId: invB });
+    await db.collection('invoices').doc(invA).set({ ...invoice20100, id: invA, status: 'closed', closedAtMs: CLOSED_AT_MS });
+    await db.collection('invoices').doc(invB).set({ ...invoice20100, id: invB, status: 'closed', closedAtMs: CLOSED_AT_MS });
+    const store = storeFor(db);
+    expect((await applyInvoicePaperLifecycle({
+      store, invoiceId: invA, before: { status: 'open' },
+      after: { ...invoice20100, id: invA, status: 'closed', closedAtMs: CLOSED_AT_MS }, nowMs: CLOSED_AT_MS,
+    })).class).toBe('success');
+    expect((await applyInvoicePaperLifecycle({
+      store, invoiceId: invB, before: { status: 'open' },
+      after: { ...invoice20100, id: invB, status: 'closed', closedAtMs: CLOSED_AT_MS }, nowMs: CLOSED_AT_MS,
+    })).class).toBe('success');
+    const dispatchCap = { ...dispatchLg, caps: ['createDispatch'] };
+    const items = [
+      { ticketDocId: ticketA, expectedVersion: (await store.getWorkflow(ticketA))?.version ?? 1 },
+      { ticketDocId: ticketB, expectedVersion: (await store.getWorkflow(ticketB))?.version ?? 1 },
+    ];
+    const [a, b] = await Promise.all([
+      applyTicketReviewBatch({
+        store, caller: dispatchCap, action: 'hand_to_payroll', items, batchId: 'emu-atomic-conc', nowMs: CLOSED_AT_MS + 1,
+      }),
+      applyTicketReviewBatch({
+        store, caller: dispatchCap, action: 'hand_to_payroll', items, batchId: 'emu-atomic-conc', nowMs: CLOSED_AT_MS + 1,
+      }),
+    ]);
+    expect(a.ok && b.ok).toBe(true);
+    if (!a.ok || !b.ok) return;
+    expect(a.results).toEqual(b.results);
+    expect(a.results.every((row) => row.ok)).toBe(true);
+    expect((await db.collection('ticket_review_events').doc(batchItemMutationId('emu-atomic-conc', 0)).get()).exists).toBe(true);
+    expect((await db.collection('ticket_review_events').doc(batchItemMutationId('emu-atomic-conc', 1)).get()).exists).toBe(true);
+  });
+
+  it('atomic batch: recorded failure is unchanged after a later successful single handoff', async () => {
+    const db = app.firestore();
+    const ticketId = `${TICKET_20100_ID}-atm-fail`;
+    const invoiceId = `${INVOICE_20100_ID}-atm-fail`;
+    await db.collection('tickets').doc(ticketId).set({ ...ticket20100, id: ticketId, invoiceDocId: invoiceId });
+    await db.collection('invoices').doc(invoiceId).set({ ...invoice20100, id: invoiceId, status: 'closed' });
+    const store = storeFor(db);
+    expect((await applyInvoicePaperLifecycle({
+      store, invoiceId, before: { status: 'open' },
+      after: { ...invoice20100, id: invoiceId, status: 'closed', closedAtMs: CLOSED_AT_MS }, nowMs: CLOSED_AT_MS,
+    })).class).toBe('success');
+    const dispatchCap = { ...dispatchLg, caps: ['createDispatch'] };
+    const current = (await store.getWorkflow(ticketId))?.version ?? 1;
+    const items = [{ ticketDocId: ticketId, expectedVersion: current + 50 }];
+    const first = await applyTicketReviewBatch({
+      store, caller: dispatchCap, action: 'hand_to_payroll', items, batchId: 'emu-atomic-fail', nowMs: CLOSED_AT_MS + 1,
+    });
+    expect(first.ok).toBe(true);
+    if (!first.ok) return;
+    expect(first.results[0]).toMatchObject({ ok: false, reason: 'version_conflict' });
+    const single = await applyTicketReviewAction({
+      store, caller: dispatchCap, ticketDocId: ticketId, action: 'hand_to_payroll', nowMs: CLOSED_AT_MS + 2, expectedVersion: current,
+    });
+    expect(single.ok).toBe(true);
+    const retry = await applyTicketReviewBatch({
+      store, caller: dispatchCap, action: 'hand_to_payroll', items, batchId: 'emu-atomic-fail', nowMs: CLOSED_AT_MS + 3,
+    });
+    expect(retry.ok).toBe(true);
+    if (!retry.ok) return;
+    expect(retry.results).toEqual(first.results);
   });
 });

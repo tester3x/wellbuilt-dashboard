@@ -135,6 +135,9 @@ export function createFirestorePaperStore(deps?: {
       const snap = await fs().collection('ticket_review_batches').doc(batchId).get();
       return snap.exists ? snap.data() as PaperReviewBatchRecord : null;
     },
+    async putReviewBatch(row) {
+      await fs().collection('ticket_review_batches').doc(row.batchId).set(row);
+    },
     async reserveReviewBatch(input) {
       const db = fs();
       const ref = db.collection('ticket_review_batches').doc(input.batchId);
@@ -162,7 +165,8 @@ export function createFirestorePaperStore(deps?: {
           companyId: input.companyId,
           action: input.action,
           digest: input.digest,
-          itemCount: input.itemCount,
+          itemCount: input.items.length,
+          items: input.items,
           results: [],
           status: 'pending',
           createdAtMs: input.nowMs,
@@ -170,27 +174,6 @@ export function createFirestorePaperStore(deps?: {
         };
         tx.set(ref, record);
         return { ok: true as const, action: 'created' as const, record };
-      });
-    },
-    async appendReviewBatchResultIfAbsent(batchId, index, result, nowMs) {
-      const db = fs();
-      const ref = db.collection('ticket_review_batches').doc(batchId);
-      return db.runTransaction(async (tx) => {
-        const snap = await tx.get(ref);
-        if (!snap.exists) throw new Error('batch_not_found');
-        const existing = snap.data() as PaperReviewBatchRecord;
-        const results = [...(existing.results || [])];
-        if (results[index]) return { ...existing, results };
-        if (results.length !== index) return { ...existing, results };
-        results.push(result);
-        const row: PaperReviewBatchRecord = {
-          ...existing,
-          results,
-          status: results.length >= existing.itemCount ? 'complete' : 'pending',
-          updatedAtMs: nowMs,
-        };
-        tx.set(ref, row);
-        return row;
       });
     },
     async runReviewTransaction(fn) {
@@ -207,6 +190,10 @@ export function createFirestorePaperStore(deps?: {
             const snap = await tx.get(db.collection('ticket_review_states').doc(id));
             return snap.exists ? snap.data() as PaperWorkflowRecord : null;
           },
+          async getReviewBatch(id: string) {
+            const snap = await tx.get(db.collection('ticket_review_batches').doc(id));
+            return snap.exists ? snap.data() as PaperReviewBatchRecord : null;
+          },
           async patchTicket(id: string, patch: Record<string, unknown>) {
             tx.update(db.collection('tickets').doc(id), patch);
           },
@@ -218,6 +205,9 @@ export function createFirestorePaperStore(deps?: {
           },
           async putReviewEvent(event: TicketReviewEventRecord) {
             tx.set(db.collection('ticket_review_events').doc(event.mutationId), event);
+          },
+          async putReviewBatch(row: PaperReviewBatchRecord) {
+            tx.set(db.collection('ticket_review_batches').doc(row.batchId), row);
           },
         };
         return fn(scoped as unknown as PaperStore);

@@ -10,11 +10,13 @@ import {
   reopenForOverride,
 } from './workflow';
 import type {
+  InvoiceSourceRecord,
   PaperCaller,
   PaperReviewBatchRecord,
   PaperWorkflowRecord,
   TicketReviewBatchItemResult,
   TicketReviewEventRecord,
+  TicketSourceRecord,
 } from './types';
 import type { PaperStore } from './store';
 
@@ -172,6 +174,135 @@ export function reviewBatchDigest(input: {
   })));
 }
 
+export function batchItemMutationId(batchId: string, index: number): string {
+  return `batch:${batchId}:${index}`;
+}
+
+function evaluateHandoffOrFinalize(input: {
+  caller: PaperCaller;
+  action: 'hand_to_payroll' | 'finalize_to_billing';
+  ticket: TicketSourceRecord;
+  invoice: InvoiceSourceRecord | null;
+  review: PaperWorkflowRecord | null;
+  expectedVersion: number;
+  nowMs: number;
+}): { ok: true; via: string; nextReview: PaperWorkflowRecord } | { ok: false; reason: string; message: string } {
+  const tenant = assertRecordTenant({
+    caller: input.caller,
+    ticket: input.ticket,
+    invoice: input.invoice,
+    review: input.review,
+  });
+  if (!tenant.ok) return tenant;
+  if (!input.review) return { ok: false, reason: 'workflow_unavailable', message: 'Ticket review state is not available.' };
+  if (input.review.version !== input.expectedVersion) {
+    return { ok: false, reason: 'version_conflict', message: 'Review state changed; retry with current version.' };
+  }
+  if (!driverEditWindowOriginMs(input.invoice)) {
+    return { ok: false, reason: 'edit_window_unknown', message: 'No authoritative closedAt; cannot hand off an open invoice.' };
+  }
+  if (!isTicketOnlyWaterTicket(input.ticket, input.invoice)) {
+    return { ok: false, reason: 'not_ticket_only', message: 'This slice is ticket-only Water Tickets.' };
+  }
+  const next = input.action === 'hand_to_payroll'
+    ? handToPayroll(input.review, input.caller, input.nowMs)
+    : finalizeToBilling(input.review, input.caller, input.nowMs);
+  if (!next.ok) return next;
+  return { ok: true, via: input.action, nextReview: next.workflow };
+}
+
+export async function commitReviewBatchItem(input: {
+  store: PaperStore;
+  caller: PaperCaller;
+  batchId: string;
+  index: number;
+  nowMs: number;
+}): Promise<
+  | { ok: true; record: PaperReviewBatchRecord; replayed: boolean }
+  | { ok: false; reason: string; message: string }
+> {
+  return input.store.runReviewTransaction(async (store) => {
+    const batch = await store.getReviewBatch(input.batchId);
+    if (!batch) return { ok: false as const, reason: 'batch_not_found', message: 'Batch command was not reserved.' };
+    if (
+      batch.actorUid !== input.caller.uid
+      || batch.companyId !== asTrimmedString(input.caller.companyId)
+    ) {
+      return { ok: false as const, reason: 'batch_id_conflict', message: 'batchId is already bound to a different command.' };
+    }
+    const spec = batch.items[input.index];
+    if (!spec) return { ok: false as const, reason: 'invalid_request', message: 'Batch item index is out of range.' };
+    if (batch.results[input.index]) {
+      return { ok: true as const, record: batch, replayed: true };
+    }
+    if (batch.results.length !== input.index) {
+      return { ok: false as const, reason: 'batch_item_not_ready', message: 'Previous batch items are not yet durable.' };
+    }
+
+    const ticket = await store.getTicket(spec.ticketDocId);
+    const invoiceId = ticket ? asTrimmedString(ticket.invoiceDocId) : '';
+    const invoice = invoiceId ? await store.getInvoice(invoiceId) : null;
+    const review = ticket ? await store.getWorkflow(spec.ticketDocId) : null;
+    const mutationId = batchItemMutationId(input.batchId, input.index);
+
+    let result: TicketReviewBatchItemResult;
+    if (!ticket) {
+      result = { ok: false, ticketDocId: spec.ticketDocId, reason: 'ticket_not_found', message: 'Ticket not found.' };
+    } else {
+      const planned = evaluateHandoffOrFinalize({
+        caller: input.caller,
+        action: batch.action,
+        ticket,
+        invoice,
+        review,
+        expectedVersion: spec.expectedVersion,
+        nowMs: input.nowMs,
+      });
+      if (!planned.ok) {
+        result = { ok: false, ticketDocId: spec.ticketDocId, reason: planned.reason, message: planned.message };
+      } else {
+        const nextReview = { ...planned.nextReview, lastMutationId: mutationId };
+        await store.putWorkflow(nextReview);
+        await store.putReviewEvent({
+          mutationId,
+          ticketDocId: spec.ticketDocId,
+          invoiceDocId: invoiceId,
+          companyId: asTrimmedString(ticket.companyId),
+          action: batch.action,
+          actorUid: input.caller.uid,
+          via: planned.via,
+          reason: null,
+          fields: [],
+          stageBefore: review?.stage || 'none',
+          stageAfter: nextReview.stage,
+          versionBefore: review?.version || 0,
+          versionAfter: nextReview.version,
+          nowMs: input.nowMs,
+          batchId: input.batchId,
+        });
+        result = {
+          ok: true,
+          ticketDocId: spec.ticketDocId,
+          via: planned.via,
+          mutationId,
+          stage: nextReview.stage,
+          version: nextReview.version,
+        };
+      }
+    }
+
+    const results = [...batch.results, result];
+    const record: PaperReviewBatchRecord = {
+      ...batch,
+      results,
+      status: results.length >= batch.itemCount ? 'complete' : 'pending',
+      updatedAtMs: input.nowMs,
+    };
+    await store.putReviewBatch(record);
+    return { ok: true as const, record, replayed: false };
+  });
+}
+
 export async function applyTicketReviewAction(input: {
   store: PaperStore;
   caller: PaperCaller;
@@ -316,6 +447,7 @@ export async function applyTicketReviewBatch(input: {
   items: Array<{ ticketDocId: string; expectedVersion: number }>;
   nowMs: number;
   batchId: string;
+  haltAfterIndex?: number;
 }): Promise<
   | { ok: true; batchId: string; results: TicketReviewBatchItemResult[]; idempotent?: boolean }
   | { ok: false; reason: string; message: string }
@@ -338,7 +470,7 @@ export async function applyTicketReviewBatch(input: {
     companyId,
     action: input.action,
     digest,
-    itemCount: input.items.length,
+    items: input.items,
     nowMs: input.nowMs,
   });
   if (!reserved.ok) return reserved;
@@ -346,37 +478,25 @@ export async function applyTicketReviewBatch(input: {
     return { ok: true, batchId: input.batchId, results: reserved.record.results, idempotent: true };
   }
 
-  let record: PaperReviewBatchRecord = reserved.record;
-  for (let i = record.results.length; i < input.items.length; i++) {
-    const current = await input.store.getReviewBatch(input.batchId);
-    if (current?.status === 'complete') {
-      return { ok: true, batchId: input.batchId, results: current.results, idempotent: true };
-    }
-    if (current?.results[i]) {
-      record = current;
-      continue;
-    }
-    const item = input.items[i];
-    const r = await applyTicketReviewAction({
+  let replayedAll = true;
+  for (let i = 0; i < reserved.record.itemCount; i++) {
+    const committed = await commitReviewBatchItem({
       store: input.store,
       caller: input.caller,
-      ticketDocId: item.ticketDocId,
-      action: input.action,
-      nowMs: input.nowMs,
-      expectedVersion: item.expectedVersion,
       batchId: input.batchId,
+      index: i,
+      nowMs: input.nowMs,
     });
-    const row: TicketReviewBatchItemResult = r.ok
-      ? {
-        ok: true,
-        ticketDocId: item.ticketDocId,
-        via: r.via,
-        mutationId: r.mutationId,
-        stage: r.stage,
-        version: r.version,
-      }
-      : { ok: false, ticketDocId: item.ticketDocId, reason: r.reason, message: r.message };
-    record = await input.store.appendReviewBatchResultIfAbsent(input.batchId, i, row, input.nowMs);
+    if (!committed.ok) return committed;
+    if (!committed.replayed) replayedAll = false;
+    if (input.haltAfterIndex != null && i >= input.haltAfterIndex) break;
   }
-  return { ok: true, batchId: input.batchId, results: record.results };
+  const final = await input.store.getReviewBatch(input.batchId);
+  if (!final) return { ok: false, reason: 'batch_not_found', message: 'Batch command was not reserved.' };
+  return {
+    ok: true,
+    batchId: input.batchId,
+    results: final.results,
+    idempotent: replayedAll,
+  };
 }
