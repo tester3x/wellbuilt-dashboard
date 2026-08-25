@@ -14,6 +14,10 @@ import {
   wbmEditReceiptPath,
 } from '../wbmEditAuthorize';
 import { runIngestWbmEdit } from '../ingestWbmEdit';
+import {
+  applyStatePath,
+  setGovernedEditApplyFault,
+} from '../governedEditApplyState';
 
 const EMULATOR = process.env.FIREBASE_DATABASE_EMULATOR_HOST;
 const PROJECT = process.env.GCLOUD_PROJECT || 'wellbuilt-sync';
@@ -62,6 +66,7 @@ describeE2E('emulator: real processIncomingEdit governed edit path', () => {
   });
 
   beforeEach(async () => {
+    setGovernedEditApplyFault(null);
     await db.ref('packets').set(null);
     await db.ref('well_config').set(null);
     await db.ref('wells').set(null);
@@ -594,5 +599,140 @@ describeE2E('emulator: real processIncomingEdit governed edit path', () => {
     await invokeHandler(wbmEditIncomingPath(EVENT_B));
     const afterOffsetless = (await db.ref(`packets/processed/${PID}`).once('value')).val() as Record<string, unknown>;
     expect(afterOffsetless.dateTimeUTC).toBe(ORIGINAL_UTC);
+  });
+
+  const packetA = {
+    requestType: 'edit',
+    wellName: 'Gabriel 5',
+    originalPacketId: PID,
+    packetId: PID,
+    editEventId: EVENT_A,
+    tankLevelFeet: 9.5,
+    bblsTaken: 140,
+    wellDown: false,
+    idempotencyKey: EVENT_A,
+  };
+
+  async function expectNoAccepted(): Promise<void> {
+    const rec = (await db.ref(wbmEditReceiptPath(EVENT_A)).once('value')).val();
+    expect(rec == null || rec.status !== 'accepted').toBe(true);
+  }
+
+  it('crash before processed mutation: no accepted receipt; retry recovers', async () => {
+    await seedOriginal();
+    const queued = await ingest(packetA);
+    if (!queued.ok) return;
+    setGovernedEditApplyFault('after_captured');
+    await expect(invokeHandler(queued.incomingPath)).rejects.toThrow('GOVERNED_EDIT_APPLY_FAULT:after_captured');
+    expect((await db.ref(`packets/processed/${PID}`).once('value')).val().bblsTaken).toBe(160);
+    await expectNoAccepted();
+    expect((await db.ref(queued.incomingPath).once('value')).exists()).toBe(true);
+    expect(await version()).toBe(0);
+    setGovernedEditApplyFault(null);
+    await invokeHandler(queued.incomingPath);
+    expect((await db.ref(wbmEditReceiptPath(EVENT_A)).once('value')).val().status).toBe('accepted');
+    expect((await db.ref(`packets/processed/${PID}`).once('value')).val().bblsTaken).toBe(140);
+    expect(await version()).toBe(1);
+  });
+
+  it('crash after processed mutation before outgoing: no accepted receipt; retry does not double-apply', async () => {
+    await seedOriginal();
+    const queued = await ingest(packetA);
+    if (!queued.ok) return;
+    setGovernedEditApplyFault('after_mutated');
+    await expect(invokeHandler(queued.incomingPath)).rejects.toThrow('GOVERNED_EDIT_APPLY_FAULT:after_mutated');
+    expect((await db.ref(`packets/processed/${PID}`).once('value')).val().bblsTaken).toBe(140);
+    expect((await db.ref(`packets/editHistory/${PID}/${EVENT_A}`).once('value')).exists()).toBe(true);
+    await expectNoAccepted();
+    expect((await db.ref(queued.incomingPath).once('value')).exists()).toBe(true);
+    expect(await version()).toBe(0);
+    setGovernedEditApplyFault(null);
+    await invokeHandler(queued.incomingPath);
+    expect((await db.ref(wbmEditReceiptPath(EVENT_A)).once('value')).val().status).toBe('accepted');
+    expect((await db.ref(`packets/editHistory/${PID}`).once('value')).val()[EVENT_A].outcome).toBe('applied');
+    expect(Object.keys((await db.ref(`packets/editHistory/${PID}`).once('value')).val())).toEqual([EVENT_A]);
+    expect(await version()).toBe(1);
+    const outgoing = (await db.ref('packets/outgoing/response_g5').once('value')).val();
+    expect(outgoing.lastPullBbls).toBe('140');
+  });
+
+  it('outgoing write failure: no accepted receipt; retry completes outgoing', async () => {
+    await seedOriginal();
+    const queued = await ingest(packetA);
+    if (!queued.ok) return;
+    setGovernedEditApplyFault('outgoing_fail');
+    await expect(invokeHandler(queued.incomingPath)).rejects.toThrow('GOVERNED_EDIT_APPLY_FAULT:outgoing_fail');
+    await expectNoAccepted();
+    expect((await db.ref('packets/outgoing/response_g5').once('value')).val().lastPullBbls).toBe('160');
+    setGovernedEditApplyFault(null);
+    await invokeHandler(queued.incomingPath);
+    expect((await db.ref(wbmEditReceiptPath(EVENT_A)).once('value')).val().status).toBe('accepted');
+    expect((await db.ref('packets/outgoing/response_g5').once('value')).val().lastPullBbls).toBe('140');
+    expect(await version()).toBe(1);
+  });
+
+  it('crash after outgoing/current before version: no accepted receipt; retry publishes version once', async () => {
+    await seedOriginal();
+    const queued = await ingest(packetA);
+    if (!queued.ok) return;
+    setGovernedEditApplyFault('after_downstream');
+    await expect(invokeHandler(queued.incomingPath)).rejects.toThrow('GOVERNED_EDIT_APPLY_FAULT:after_downstream');
+    await expectNoAccepted();
+    expect((await db.ref('packets/outgoing/response_g5').once('value')).val().lastPullBbls).toBe('140');
+    expect(await version()).toBe(0);
+    setGovernedEditApplyFault(null);
+    await invokeHandler(queued.incomingPath);
+    expect((await db.ref(wbmEditReceiptPath(EVENT_A)).once('value')).val().status).toBe('accepted');
+    expect(await version()).toBe(1);
+  });
+
+  it('version transaction null: no accepted receipt; remains resumable', async () => {
+    await seedOriginal();
+    const queued = await ingest(packetA);
+    if (!queued.ok) return;
+    setGovernedEditApplyFault('version_null');
+    await invokeHandler(queued.incomingPath);
+    await expectNoAccepted();
+    expect((await db.ref(queued.incomingPath).once('value')).exists()).toBe(true);
+    expect(await version()).toBe(0);
+    const st = (await db.ref(applyStatePath(EVENT_A)).once('value')).val();
+    expect(st.phase).toBe('downstream');
+    setGovernedEditApplyFault(null);
+    await invokeHandler(queued.incomingPath);
+    expect((await db.ref(wbmEditReceiptPath(EVENT_A)).once('value')).val().status).toBe('accepted');
+    expect(await version()).toBe(1);
+  });
+
+  it('crash after version before receipt: retry does not increment version again', async () => {
+    await seedOriginal();
+    const queued = await ingest(packetA);
+    if (!queued.ok) return;
+    setGovernedEditApplyFault('after_versioned');
+    await expect(invokeHandler(queued.incomingPath)).rejects.toThrow('GOVERNED_EDIT_APPLY_FAULT:after_versioned');
+    await expectNoAccepted();
+    expect(await version()).toBe(1);
+    setGovernedEditApplyFault(null);
+    await invokeHandler(queued.incomingPath);
+    expect((await db.ref(wbmEditReceiptPath(EVENT_A)).once('value')).val().status).toBe('accepted');
+    expect(await version()).toBe(1);
+  });
+
+  it('no-level path crash boundaries match the durable invariant', async () => {
+    await seedOriginal();
+    const packet = { ...packetA, tankLevelFeet: 0, bblsTaken: 155 };
+    const queued = await ingest(packet);
+    if (!queued.ok) return;
+    setGovernedEditApplyFault('after_mutated');
+    await expect(invokeHandler(queued.incomingPath)).rejects.toThrow('GOVERNED_EDIT_APPLY_FAULT:after_mutated');
+    expect((await db.ref(`packets/processed/${PID}`).once('value')).val().noLevel).toBe(true);
+    await expectNoAccepted();
+    expect(await version()).toBe(0);
+    setGovernedEditApplyFault(null);
+    await invokeHandler(queued.incomingPath);
+    expect((await db.ref(wbmEditReceiptPath(EVENT_A)).once('value')).val().status).toBe('accepted');
+    expect(await version()).toBe(1);
+    const replay = await ingest(packet);
+    expect(replay).toMatchObject({ ok: true, status: 'accepted' });
+    expect(await version()).toBe(1);
   });
 });

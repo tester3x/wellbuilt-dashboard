@@ -23,6 +23,7 @@ import {
   wbmEditIncomingPath,
   wbmEditReceiptPath,
 } from './wbmEditAuthorize';
+import { applyStatePath, parseApplyState } from './governedEditApplyState';
 
 export type WbmEditIngestStatus =
   | 'accepted'
@@ -69,6 +70,8 @@ export async function runIngestWbmEdit(input: {
       | { action: 'queued' }
       | { action: 'abort'; reason: string },
   ) => Promise<{ committed: boolean; outcome: 'write' | 'queued' | 'abort'; abortReason: string }>;
+  /** When incoming is already queued, bump resume so onWrite re-enters apply. */
+  onQueuedResume?: (path: string, editEventId: string) => Promise<void>;
 }): Promise<WbmEditIngestResult> {
   const decided = evaluateWbmEdit({
     packet: input.packet,
@@ -142,6 +145,9 @@ export async function runIngestWbmEdit(input: {
 
   if (!tx.committed || tx.outcome === 'abort') {
     return { ok: false, status: 'conflict', reason: tx.abortReason };
+  }
+  if (tx.outcome === 'queued' && input.onQueuedResume) {
+    await input.onQueuedResume(path, decided.editEventId);
   }
   return {
     ok: true,
@@ -247,6 +253,12 @@ export const ingestWbmEdit = httpsV2.onCall(
           return;
         });
         return { committed: tx.committed, outcome: box.outcome, abortReason: box.abortReason };
+      },
+      onQueuedResume: async (path, editEventId) => {
+        const snap = await admin.database().ref(applyStatePath(editEventId)).once('value');
+        const st = parseApplyState(snap.val());
+        if (!st || st.phase === 'terminal') return;
+        await admin.database().ref(path).update({ resumeAt: Date.now() });
       },
     });
 

@@ -43,6 +43,20 @@ import {
   hasClientEditEventId,
   isAbsoluteInstant,
 } from './security/operational/wbmEditAuthorize';
+import {
+  applyStatePath,
+  buildCapturedApplyState,
+  getGovernedEditApplyFault,
+  GovernedEditApplyInterrupted,
+  inferPhaseFromHistory,
+  maybeInterrupt,
+  parseApplyState,
+  phaseAtLeast,
+  readLiveVersion,
+  versionAlreadyPublished,
+  withPhase,
+  type GovernedEditApplyState,
+} from './security/operational/governedEditApplyState';
 
 
 admin.initializeApp();
@@ -76,6 +90,96 @@ async function consumeGovernedIncoming(args: {
     Object.assign(updates, editHistoryWritePaths(args.originalPacketId, args.historyEvent));
   }
   await db.ref().update(updates);
+}
+
+async function loadEditApplyState(editEventId: string): Promise<GovernedEditApplyState | null> {
+  const snap = await db.ref(applyStatePath(editEventId)).once('value');
+  return parseApplyState(snap.val());
+}
+
+async function saveEditApplyState(state: GovernedEditApplyState): Promise<void> {
+  await db.ref(applyStatePath(state.editEventId)).set(state);
+}
+
+/**
+ * Version then accepted receipt. Never writes accepted before a durable
+ * version claim (publishedVersion or liveVersion > seqBefore).
+ */
+async function finishGovernedVersionAndReceipt(args: {
+  applyState: GovernedEditApplyState;
+  incomingId: string;
+  payloadDigest: string;
+  at: string;
+  outgoingCommitted: boolean;
+}): Promise<boolean> {
+  let state = args.applyState;
+  if (!phaseAtLeast(state, 'versioned')) {
+    const live = readLiveVersion((await db.ref('packets/incoming_version').once('value')).val());
+    if (state.seqBefore == null) {
+      state = withPhase(state, state.phase, { seqBefore: live }, args.at);
+      await saveEditApplyState(state);
+    }
+    if (getGovernedEditApplyFault() === 'version_null') {
+      return false;
+    }
+    const already = versionAlreadyPublished({
+      publishedVersion: state.publishedVersion,
+      seqBefore: state.seqBefore,
+      liveVersion: live,
+    });
+    let seq: number | null;
+    if (already.done) {
+      seq = already.seq;
+    } else {
+      seq = await notifyIncomingVersionBestEffort(db.ref('packets/incoming_version'), {
+        outgoingCommitted: args.outgoingCommitted,
+        pullAccepted: true,
+      });
+      if (seq == null) return false;
+    }
+    state = withPhase(state, 'versioned', {
+      versionPublished: true,
+      publishedVersion: seq,
+      outgoingCommitted: args.outgoingCommitted,
+    }, args.at);
+    await saveEditApplyState(state);
+    maybeInterrupt('after_versioned');
+  }
+  await publishGovernedAcceptedTerminal({
+    incomingId: args.incomingId,
+    editEventId: state.editEventId,
+    originalPacketId: state.originalPacketId,
+    payloadDigest: args.payloadDigest,
+    at: args.at,
+    applyState: state,
+  });
+  return true;
+}
+
+/** Accepted receipt + incoming consume ONLY after versioned checkpoint. */
+async function publishGovernedAcceptedTerminal(args: {
+  incomingId: string;
+  editEventId: string;
+  originalPacketId: string;
+  payloadDigest: string;
+  at: string;
+  applyState: GovernedEditApplyState;
+}): Promise<void> {
+  const receipt = buildAppliedEditReceipt({
+    editEventId: args.editEventId,
+    originalPacketId: args.originalPacketId,
+    payloadDigest: args.payloadDigest,
+    appliedAt: args.at,
+    status: 'accepted',
+  });
+  const terminal = withPhase(args.applyState, 'terminal', {
+    versionPublished: true,
+  }, args.at);
+  await db.ref().update({
+    [`packets/incoming/${args.incomingId}`]: null,
+    ...editReceiptWritePaths(args.editEventId, receipt),
+    [applyStatePath(args.editEventId)]: terminal,
+  });
 }
 
 // Format a Date to "MM/DD/YYYY H:MM AM/PM" (no comma — matches WB M/WB T format)
@@ -180,7 +284,7 @@ export const watchdogStrandedPackets = functionsV2.onSchedule('every 5 minutes',
     // and should never be retriggered by the watchdog (causes ghost duplicate entries).
     // GS3 7/22/2026: this exact remove() destroyed a stranded driver edit —
     // quarantine instead so the evidence survives for review.
-    if (data.requestType === 'edit' || data.requestType === 'delete') {
+    if (data.requestType === 'delete') {
       console.log(`[Watchdog] ${data.wellName}: skipping ${data.requestType} packet (${key}), quarantining`);
       await quarantineIncomingPacket(db.ref(), {
         packetId: key,
@@ -188,6 +292,30 @@ export const watchdogStrandedPackets = functionsV2.onSchedule('every 5 minutes',
         verdict: strandedPacketVerdict({
           ageMs: now - packet.arrivedAt,
           context: `stranded ${data.requestType} packet — handled by its own function and never watchdog-retriggered; its handler did not consume it`,
+        }),
+        nowMs: now,
+      });
+      alreadyProcessedCount++;
+      continue;
+    }
+    if (data.requestType === 'edit') {
+      const eventId = typeof data.editEventId === 'string' && data.editEventId.trim()
+        ? data.editEventId.trim()
+        : key;
+      const st = await loadEditApplyState(eventId);
+      if (st && st.phase !== 'terminal') {
+        console.log(`[Watchdog] ${data.wellName}: resumable governed edit ${eventId} phase=${st.phase} — retrigger`);
+        await db.ref(`packets/incoming/${key}`).update({ resumeAt: Date.now() });
+        retriggeredCount++;
+        continue;
+      }
+      console.log(`[Watchdog] ${data.wellName}: skipping edit packet (${key}), quarantining`);
+      await quarantineIncomingPacket(db.ref(), {
+        packetId: key,
+        packet: data,
+        verdict: strandedPacketVerdict({
+          ageMs: now - packet.arrivedAt,
+          context: `stranded edit packet — handled by its own function and never watchdog-retriggered; its handler did not consume it`,
         }),
         nowMs: now,
       });
@@ -1646,15 +1774,17 @@ async function materializeQueuedEditTrail(
 // exact incoming payload; do not mirror apply in a parallel lifecycle.
 export const processEditRequest = functionsV1.database
   .ref('packets/incoming/{packetId}')
-  .onCreate(processIncomingEdit);
+  .onWrite(async (change, context) => {
+    if (!change.after.exists()) return null;
+    return processIncomingEdit(change.after, context);
+  });
 
 export async function processIncomingEdit(
   snapshot: functionsV1.database.DataSnapshot,
   context: { params: { packetId: string } },
 ): Promise<null> {
     const data = snapshot.val();
-
-    if (data.requestType !== 'edit') {
+    if (!data || data.requestType !== 'edit') {
       return null;
     }
 
@@ -1789,6 +1919,12 @@ export async function processIncomingEdit(
     const existingEventSnap = await db
       .ref(`packets/editHistory/${originalPacketId}/${editEventId}`)
       .once('value');
+    const existingReceiptSnap = await db.ref(`packets/editReceipts/${editEventId}`).once('value');
+    const existingReceipt = existingReceiptSnap.exists()
+      ? (existingReceiptSnap.val() as Record<string, unknown>)
+      : null;
+    let applyState = await loadEditApplyState(editEventId);
+    let resumeApplied = false;
     if (existingEventSnap.exists()) {
       const existingEvent = (existingEventSnap.val() || {}) as Record<string, unknown>;
       const historyDigest = typeof existingEvent.payloadDigest === 'string'
@@ -1805,58 +1941,84 @@ export async function processIncomingEdit(
           console.log(
             `[EDIT_EVENT_CONFLICT] ${wellName}: event ${editEventId} digest mismatch — no overwrite, no replacement receipt`,
           );
-          // Incoming is consumed so the trigger does not loop; the existing
-          // accepted receipt + history digest remain the only terminal proof.
-          // A client retry of the new bytes sees digest mismatch → conflict.
           await db.ref().update({
             [`packets/incoming/${context.params.packetId}`]: null,
           });
           return null;
         }
         const priorOutcome = existingEvent.outcome;
-        const status = priorOutcome === 'noop'
-          ? 'acknowledged'
-          : priorOutcome === 'rejected'
-            ? 'rejected'
-            : 'accepted';
+        if (priorOutcome === 'noop' || priorOutcome === 'rejected') {
+          const status = priorOutcome === 'noop' ? 'acknowledged' : 'rejected';
+          await consumeGovernedIncoming({
+            incomingId: context.params.packetId,
+            editEventId,
+            originalPacketId,
+            payloadDigest: historyDigest,
+            status,
+            at: typeof existingEvent.editedAt === 'string' ? existingEvent.editedAt : governedNow,
+            reason: typeof existingEvent.reason === 'string' ? existingEvent.reason : undefined,
+          });
+          return null;
+        }
+        const acceptedAlready = existingReceipt?.status === 'accepted'
+          && existingReceipt?.payloadDigest === historyDigest;
+        const inferred = inferPhaseFromHistory({
+          state: applyState,
+          historyDigest,
+          incomingDigest: payloadDigest,
+          acceptedReceipt: acceptedAlready,
+        });
+        if (inferred === 'terminal' || acceptedAlready) {
+          console.log(
+            `[EDIT_EVENT_IDEMPOTENT] ${wellName}: event ${editEventId} already terminal accepted`,
+          );
+          if (snapshot.exists()) {
+            await db.ref(`packets/incoming/${context.params.packetId}`).set(null);
+          }
+          return null;
+        }
+        // History proves mutation; resume missing downstream/version/receipt.
+        resumeApplied = true;
+        if (!applyState) {
+          applyState = withPhase(buildCapturedApplyState({
+            editEventId,
+            originalPacketId,
+            incomingId: context.params.packetId,
+            payloadDigest,
+            wellName,
+            noLevel: false,
+            now: governedNow,
+            incomingPayload: data as Record<string, unknown>,
+          }), 'mutated', { historyWritten: true, processedWritten: true }, governedNow);
+          await saveEditApplyState(applyState);
+        }
+      } else {
         console.log(
-          `[EDIT_EVENT_IDEMPOTENT] ${wellName}: event ${editEventId} proven applied digest — consume with receipt`,
+          `[EDIT_EVENT_IDEMPOTENT] ${wellName}: event ${editEventId} already on ${originalPacketId} — consume incoming only`,
         );
-        await consumeGovernedIncoming({
-          incomingId: context.params.packetId,
+        const receipt = buildAppliedEditReceipt({
           editEventId,
           originalPacketId,
-          payloadDigest: historyDigest,
-          status,
-          at: typeof existingEvent.editedAt === 'string' ? existingEvent.editedAt : governedNow,
-          reason: typeof existingEvent.reason === 'string' ? existingEvent.reason : undefined,
+          payloadDigest: historyDigest || payloadDigest,
+          appliedAt: typeof existingEvent.editedAt === 'string'
+            ? existingEvent.editedAt
+            : governedNow,
+        });
+        await db.ref().update({
+          [`packets/incoming/${context.params.packetId}`]: null,
+          ...editReceiptWritePaths(editEventId, receipt),
         });
         return null;
       }
-      console.log(
-        `[EDIT_EVENT_IDEMPOTENT] ${wellName}: event ${editEventId} already on ${originalPacketId} — consume incoming only`,
-      );
-      const receipt = buildAppliedEditReceipt({
-        editEventId,
-        originalPacketId,
-        payloadDigest: historyDigest || payloadDigest,
-        appliedAt: typeof existingEvent.editedAt === 'string'
-          ? existingEvent.editedAt
-          : governedNow,
-      });
-      await db.ref().update({
-        [`packets/incoming/${context.params.packetId}`]: null,
-        ...editReceiptWritePaths(editEventId, receipt),
-      });
-      return null;
     }
 
     // Exact duplicate edit replay: PROVABLY already applied only when the
     // original carries an edit marker AND its values already equal this
     // edit's requested values. Governed: only consume when THIS event's
     // history (above) proved the payload. Unproven governed → fail closed.
+    // Resume of a partial apply skips this: processed already matches.
     const editDup = editAlreadyApplied(data, origPacket);
-    if (editDup === true) {
+    if (!resumeApplied && editDup === true) {
       if (isGoverned && payloadDigest) {
         console.error(
           `[EDIT_DUP_UNPROVEN_EVENT] ${wellName}: values match processed but event ${editEventId} has no history — incoming left intact`,
@@ -1871,7 +2033,7 @@ export async function processIncomingEdit(
     // ── 7/25 revision ordering (optional metadata, backward compatible) ──
     // An edit carrying revisionAt older than the pull's lastRevisionAt is a
     // late straggler: never revert newer business state.
-    if (isStaleRevision(data, origPacket)) {
+    if (!resumeApplied && isStaleRevision(data, origPacket)) {
       console.log(
         `[EDIT_STALE_REVISION] ${wellName}: edit ${context.params.packetId} ` +
           `(revisionAt ${data.revisionAt}) older than applied ${origPacket.lastRevisionAt} — not applied`,
@@ -1899,7 +2061,7 @@ export async function processIncomingEdit(
 
     // ── 7/25 normalized no-op: identical milestone revisions ─────────────
     const material = editMaterialChange(data, origPacket);
-    if (!material.changed) {
+    if (!resumeApplied && !material.changed) {
       console.log(
         `[EDIT_NOOP_IDENTICAL] ${wellName}: edit ${context.params.packetId} matches ` +
           `processed ${originalPacketId} on all material fields — acknowledged without reapply`,
@@ -1973,8 +2135,11 @@ export async function processIncomingEdit(
     const rawDateTime = utcOk
       ? (data.dateTime || origPacket.dateTime)
       : origPacket.dateTime;
-    // Strip seconds from display time (e.g. "4/9/2026, 2:40:00 PM" → "4/9/2026, 2:40 PM")
-    const newDateTime = rawDateTime ? rawDateTime.replace(/:(\d{2})\s*(AM|PM)/i, ' $2') : '';
+    // Strip seconds from display time only when UTC is being updated.
+    // Standalone display dateTime must not rewrite the stored companion.
+    const newDateTime = utcOk && rawDateTime
+      ? rawDateTime.replace(/:(\d{2})\s*(AM|PM)/i, ' $2')
+      : (origPacket.dateTime || '');
 
     // Apply wellDown edit — use edited value if present, otherwise keep original.
     // newWellDown is the value stamped onto the historical packet record
@@ -2036,28 +2201,88 @@ export async function processIncomingEdit(
       appliedAt: editedAtIso,
     });
     const receiptPaths = editReceiptWritePaths(editEventId, receipt);
+    const governedDurable = isGoverned && !!payloadDigest;
+
+    if (governedDurable && !applyState) {
+      applyState = buildCapturedApplyState({
+        editEventId,
+        originalPacketId,
+        incomingId: context.params.packetId,
+        payloadDigest,
+        wellName,
+        noLevel: newTankTopInches <= 0,
+        now: editedAtIso,
+        incomingPayload: data as Record<string, unknown>,
+      });
+      await saveEditApplyState(applyState);
+    }
+    if (governedDurable && applyState && !phaseAtLeast(applyState, 'mutated')) {
+      maybeInterrupt('after_captured');
+    }
+
+    const processedNoLevelPatch = {
+      tankTopInches: 0,
+      tankLevelFeet: 0,
+      bblsTaken: newBblsTaken,
+      tankAfterInches: 0,
+      tankAfterFeet: '',
+      dateTimeUTC: newDateTimeUTC,
+      dateTime: newDateTime,
+      noLevel: true,
+      wellDown: newWellDown,
+      ...fallbackAuditFields,
+      ...trailSummary,
+      ...(typeof data.revisionAt === 'string' && data.revisionAt
+        ? { lastRevisionAt: data.revisionAt }
+        : {}),
+    };
 
     // No top level = non-production-tank edit. Update basic fields only, skip tank math.
     if (newTankTopInches <= 0) {
       console.log(`[NO-LEVEL EDIT] ${wellName}: No top level, skipping tank math`);
+      if (governedDurable && applyState) {
+        if (!phaseAtLeast(applyState, 'mutated')) {
+          await db.ref().update({
+            ...Object.fromEntries(
+              Object.entries(processedNoLevelPatch).map(([k, v]) => [`packets/processed/${originalPacketId}/${k}`, v]),
+            ),
+            ...historyPaths,
+            [applyStatePath(editEventId)]: withPhase(applyState, 'mutated', {
+              historyWritten: true,
+              processedWritten: true,
+              noLevel: true,
+            }, editedAtIso),
+          });
+          applyState = withPhase(applyState, 'mutated', {
+            historyWritten: true,
+            processedWritten: true,
+            noLevel: true,
+          }, editedAtIso);
+          maybeInterrupt('after_mutated');
+        }
+        if (!phaseAtLeast(applyState, 'downstream')) {
+          await db.ref(`wells/${wellName}/status/isDown`).set(nextEditIsDown);
+          applyState = withPhase(applyState, 'downstream', {
+            wellStatusCommitted: true,
+            outgoingRequired: false,
+            outgoingCommitted: true,
+          }, editedAtIso);
+          await saveEditApplyState(applyState);
+          maybeInterrupt('after_downstream');
+        }
+        const noLevelDone = await finishGovernedVersionAndReceipt({
+          applyState,
+          incomingId: context.params.packetId,
+          payloadDigest,
+          at: editedAtIso,
+          outgoingCommitted: true,
+        });
+        if (noLevelDone) console.log(`Edit complete for ${wellName}: ${originalPacketId}`);
+        return null;
+      }
       await db.ref().update({
         ...Object.fromEntries(
-          Object.entries({
-            tankTopInches: 0,
-            tankLevelFeet: 0,
-            bblsTaken: newBblsTaken,
-            tankAfterInches: 0,
-            tankAfterFeet: '',
-            dateTimeUTC: newDateTimeUTC,
-            dateTime: newDateTime,
-            noLevel: true,
-            wellDown: newWellDown,
-            ...fallbackAuditFields,
-            ...trailSummary,
-            ...(typeof data.revisionAt === 'string' && data.revisionAt
-              ? { lastRevisionAt: data.revisionAt }
-              : {}),
-          }).map(([k, v]) => [`packets/processed/${originalPacketId}/${k}`, v]),
+          Object.entries(processedNoLevelPatch).map(([k, v]) => [`packets/processed/${originalPacketId}/${k}`, v]),
         ),
         ...historyPaths,
         ...receiptPaths,
@@ -2192,17 +2417,32 @@ export async function processIncomingEdit(
       ...(typeof data.revisionAt === 'string' && data.revisionAt ? { lastRevisionAt: data.revisionAt } : {}),
     };
 
-    // Atomic multi-path: processed summary + immutable history event + consume incoming
-    await db.ref().update({
-      ...Object.fromEntries(
-        Object.entries(updates).map(([k, v]) => [`packets/processed/${originalPacketId}/${k}`, v]),
-      ),
-      ...historyPaths,
-      ...receiptPaths,
-      [`packets/incoming/${context.params.packetId}`]: null,
-    });
+    // Processed + immutable history. Governed: NO accepted receipt and NO
+    // incoming deletion here — those wait until version publication.
+    if (!governedDurable || !applyState || !phaseAtLeast(applyState, 'mutated')) {
+      const mutatedState = governedDurable && applyState
+        ? withPhase(applyState, 'mutated', { historyWritten: true, processedWritten: true }, editedAtIso)
+        : null;
+      await db.ref().update({
+        ...Object.fromEntries(
+          Object.entries(updates).map(([k, v]) => [`packets/processed/${originalPacketId}/${k}`, v]),
+        ),
+        ...historyPaths,
+        ...(governedDurable
+          ? (mutatedState ? { [applyStatePath(editEventId)]: mutatedState } : {})
+          : {
+            ...receiptPaths,
+            [`packets/incoming/${context.params.packetId}`]: null,
+          }),
+      });
+      if (mutatedState) applyState = mutatedState;
+      if (governedDurable) maybeInterrupt('after_mutated');
+    }
+
+    const skipDownstream = governedDurable && applyState && phaseAtLeast(applyState, 'downstream');
 
     // Update well down status if this is the latest packet (authority-gated)
+    if (!skipDownstream) {
     await db.ref(`wells/${wellName}/status/isDown`).set(nextEditIsDown);
 
     // CASCADE: Recalculate flowRateDays on the NEXT packet after the edited one.
@@ -2298,31 +2538,42 @@ export async function processIncomingEdit(
       const bbls24hrs = Math.round(bbls24).toString();
 
       if (hasOutgoing) {
-        // Update existing outgoing response
+        // Awaited multipath — never fire-and-forget inside forEach.
+        const outgoingPatch = {
+          currentLevel: inchesToFeetInches(newTankAfterInches),
+          flowRate: daysToHMMSS(afr),
+          bbls24hrs,
+          lastPullTopLevel: inchesToFeetInches(newTankTopInches),
+          lastPullBottomLevel: inchesToFeetInches(newTankAfterInches),
+          lastPullBbls: newBblsTaken.toString(),
+          lastPullDateTime: newDateTime || formatLocalDateTime(new Date(newDateTimeUTC)),
+          lastPullDateTimeUTC: newDateTimeUTC,
+          timeTillPull: nextEditIsDown ? 'Down' : (estTimeToPull || 'Calculating...'),
+          nextPullTime: estDateTimePull ? formatLocalDateTime(new Date(estDateTimePull)) : 'Unknown',
+          nextPullTimeUTC: estDateTimePull,
+          isEdit: true,
+          originalPacketId,
+          wellDown: nextEditIsDown,
+          lastPullDriverId: origPacket.driverId || null,
+          lastPullDriverName: origPacket.driverName || null,
+          lastPullPacketId: originalPacketId,
+          windowBblsDay: editWindowBblsDay > 0 ? editWindowBblsDay.toString() : null,
+          overnightBblsDay: editOvernightBblsDay > 0 ? editOvernightBblsDay.toString() : null,
+          companyId: outgoingCompanyId(config),
+        };
+        const outgoingUpdates: Record<string, unknown> = {};
         outgoingSnap.forEach((child) => {
-          child.ref.update({
-            currentLevel: inchesToFeetInches(newTankAfterInches),
-            flowRate: daysToHMMSS(afr),
-            bbls24hrs,
-            lastPullTopLevel: inchesToFeetInches(newTankTopInches),
-            lastPullBottomLevel: inchesToFeetInches(newTankAfterInches),
-            lastPullBbls: newBblsTaken.toString(),
-            lastPullDateTime: newDateTime || formatLocalDateTime(new Date(newDateTimeUTC)),
-            lastPullDateTimeUTC: newDateTimeUTC,
-            timeTillPull: nextEditIsDown ? 'Down' : (estTimeToPull || 'Calculating...'),
-            nextPullTime: estDateTimePull ? formatLocalDateTime(new Date(estDateTimePull)) : 'Unknown',
-            nextPullTimeUTC: estDateTimePull,
-            isEdit: true,
-            originalPacketId,
-            wellDown: nextEditIsDown,
-            lastPullDriverId: origPacket.driverId || null,
-            lastPullDriverName: origPacket.driverName || null,
-            lastPullPacketId: originalPacketId,
-            windowBblsDay: editWindowBblsDay > 0 ? editWindowBblsDay.toString() : null,
-            overnightBblsDay: editOvernightBblsDay > 0 ? editOvernightBblsDay.toString() : null,
-            companyId: outgoingCompanyId(config),
-          });
+          if (!child.key) return;
+          for (const [k, v] of Object.entries(outgoingPatch)) {
+            outgoingUpdates[`packets/outgoing/${child.key}/${k}`] = v;
+          }
         });
+        if (getGovernedEditApplyFault() === 'outgoing_fail') {
+          throw new GovernedEditApplyInterrupted('outgoing_fail');
+        }
+        if (Object.keys(outgoingUpdates).length > 0) {
+          await db.ref().update(outgoingUpdates);
+        }
       } else {
         // No outgoing response exists — create one
         const responseTimestamp = new Date();
@@ -2655,10 +2906,34 @@ export async function processIncomingEdit(
       }
     } catch (fsErr) {
       // Non-blocking — RTDB is already updated, Firestore cascade is best-effort
+      // and is NOT part of the governed accepted-receipt contract.
       console.error(`Edit: Firestore cascade error (non-blocking):`, fsErr);
     }
 
-    // Delete the edit request
+    if (governedDurable && applyState) {
+      applyState = withPhase(applyState, 'downstream', {
+        wellStatusCommitted: true,
+        outgoingRequired: isLatestPull && afr > 0,
+        outgoingCommitted: true,
+      }, editedAtIso);
+      await saveEditApplyState(applyState);
+      maybeInterrupt('after_downstream');
+    }
+    } // !skipDownstream
+
+    if (governedDurable && applyState && payloadDigest) {
+      const done = await finishGovernedVersionAndReceipt({
+        applyState,
+        incomingId: context.params.packetId,
+        payloadDigest,
+        at: editedAtIso,
+        outgoingCommitted: applyState.outgoingCommitted || !applyState.outgoingRequired,
+      });
+      if (done) console.log(`Edit complete for ${wellName}: ${originalPacketId}`);
+      return null;
+    }
+
+    // Legacy (non-governed): consume incoming then notify.
     await snapshot.ref.remove();
 
     await notifyIncomingVersionBestEffort(db.ref('packets/incoming_version'), {

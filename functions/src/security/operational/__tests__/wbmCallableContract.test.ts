@@ -132,7 +132,8 @@ describe('WB-M callable export / contract matrix', () => {
 
   it('processEditRequest is the real processIncomingEdit handler with applied receipts', () => {
     const history = read('src/editHistory.ts');
-    expect(index).toMatch(/onCreate\(processIncomingEdit\)/);
+    expect(index).toMatch(/onWrite\(async \(change, context\) =>/);
+    expect(index).toMatch(/processIncomingEdit\(change.after, context\)/);
     expect(index).toMatch(/export async function processIncomingEdit/);
     expect(index).toMatch(/editReceiptWritePaths/);
     expect(history).toMatch(/packets\/editReceipts\/\$\{editEventId\}/);

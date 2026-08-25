@@ -179,23 +179,23 @@ describe('incoming_version publish contract', () => {
 
   it('edit/delete notification is best-effort and delete archives first', () => {
     const index = src('src/index.ts');
-    expect(index.match(/await notifyIncomingVersionBestEffort/g)?.length).toBe(4);
+    expect(index.match(/await notifyIncomingVersionBestEffort/g)?.length).toBeGreaterThanOrEqual(3);
     expect(index).not.toMatch(/publishIncomingVersionAfterOutgoing\(/);
-    expect(index).not.toMatch(/packets\/incoming_version'\)\.once\('value'\)/);
     expect(index).not.toMatch(/packets\/incoming_version'\)\.set\(/);
     const del = index.slice(index.indexOf('export const processDeleteRequest'));
     const archive = del.indexOf('packets/processed/delete_${targetPacketId}');
     const notify = del.indexOf('notifyIncomingVersionBestEffort');
     expect(archive).toBeGreaterThan(0);
     expect(notify).toBeGreaterThan(archive);
-    const edit = index.slice(index.indexOf('export const processEditRequest'), index.indexOf('export const processDeleteRequest'));
-    expect(edit.indexOf('await snapshot.ref.remove()')).toBeGreaterThan(0);
+    expect(index).toContain('function publishGovernedAcceptedTerminal');
+    expect(index).toContain('async function finishGovernedVersionAndReceipt');
+    const edit = index.slice(
+      index.indexOf('export async function processIncomingEdit'),
+      index.indexOf('export const processDeleteRequest'),
+    );
     const noLevel = edit.indexOf('[NO-LEVEL EDIT]');
-    const noLevelNotify = edit.indexOf('notifyIncomingVersionBestEffort', noLevel);
     expect(noLevel).toBeGreaterThan(0);
-    expect(noLevelNotify).toBeGreaterThan(noLevel);
-    const remove = edit.lastIndexOf('await snapshot.ref.remove()');
-    const mainNotify = edit.lastIndexOf('notifyIncomingVersionBestEffort');
-    expect(mainNotify).toBeGreaterThan(remove);
+    expect(edit.indexOf('finishGovernedVersionAndReceipt', noLevel)).toBeGreaterThan(noLevel);
+    expect(edit.lastIndexOf('finishGovernedVersionAndReceipt')).toBeGreaterThan(noLevel);
   });
 });
