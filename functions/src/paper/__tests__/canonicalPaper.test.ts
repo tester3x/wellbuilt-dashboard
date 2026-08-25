@@ -244,7 +244,7 @@ describe('materialize + get (Tickets vs Dispatch same bytes)', () => {
     expect(fromTickets.html).toContain('WATER TICKET');
     expect(fromTickets.html).toContain('Ticket #20100');
     expect(htmlContainsForbiddenInvoice(fromTickets.html)).toBe(false);
-    expect(fromTickets.html).toContain('data:image/jpeg;base64,');
+    expect(fromTickets.html).toContain('data:image/png;base64,');
     expect(fromTickets.html).toContain('paper-asset:');
     expect(fromTickets.html).not.toContain('https://storage.example/');
   });
@@ -294,7 +294,7 @@ describe('materialize + get (Tickets vs Dispatch same bytes)', () => {
     const t = store.tickets.get(TICKET_20100_ID)!;
     t.qty = '88';
     t.dropoffBbls = 88;
-    t.updatedAtMs = now + 1;
+    t.updatedAt = { toMillis: () => now + 1 };
     const edit = await materializeWaterTicketPaper({
       store, caller: staffLg, ticketDocId: TICKET_20100_ID, op: 'edit', nowMs: now + 1,
     });
@@ -323,7 +323,7 @@ describe('materialize + get (Tickets vs Dispatch same bytes)', () => {
       store, caller: staffLg, ticketDocId: TICKET_20100_ID, op: 'close', nowMs: now,
     });
     store.tickets.get(TICKET_20100_ID)!.qty = '70';
-    store.tickets.get(TICKET_20100_ID)!.updatedAtMs = now + 2;
+    store.tickets.get(TICKET_20100_ID)!.updatedAt = { toMillis: () => now + 2 };
     store.failAt = 'finalize';
     const failed = await materializeWaterTicketPaper({
       store, caller: staffLg, ticketDocId: TICKET_20100_ID, op: 'edit', nowMs: now + 2,
@@ -364,7 +364,8 @@ describe('materialize + get (Tickets vs Dispatch same bytes)', () => {
     expect(got.ok).toBe(true);
     if (!got.ok) return;
     expect(got.contentHash).toBe(created.revision.contentHash);
-    expect(got.html).toContain(PIXEL_A.toString('base64'));
+    expect(got.html).toContain('data:image/png;base64,');
+    expect(JSON.stringify(created.revision.projection.photos).length).toBeLessThan(4000);
   });
 
   it('exact retrieved bytes are hashed without renormalizing', async () => {
@@ -431,7 +432,7 @@ describe('concurrency: distinct events never share a revision identity', () => {
 
   it('concurrent close+edit allocate r1 and r2 without overwrite', async () => {
     const store = seed();
-    store.tickets.get(TICKET_20100_ID)!.updatedAtMs = now + 9;
+    store.tickets.get(TICKET_20100_ID)!.updatedAt = { toMillis: () => now + 9 };
     const [close, edit] = await Promise.all([
       materializeWaterTicketPaper({ store, caller: staffLg, ticketDocId: TICKET_20100_ID, op: 'close', nowMs: now }),
       materializeWaterTicketPaper({ store, caller: staffLg, ticketDocId: TICKET_20100_ID, op: 'edit', nowMs: now + 9 }),
@@ -439,10 +440,11 @@ describe('concurrency: distinct events never share a revision identity', () => {
     expect(close.ok && edit.ok).toBe(true);
     if (!close.ok || !edit.ok) return;
     expect(new Set([close.revision.revisionId, edit.revision.revisionId]).size).toBe(2);
-    const r1 = await store.getRevision(close.artifact.artifactId, 'r1');
-    const r2 = await store.getRevision(close.artifact.artifactId, 'r2');
+    const artifact = store.artifacts.get(close.artifact.artifactId);
+    expect(artifact?.currentRevisionId).toBe(edit.revision.revisionId);
+    const r1 = await store.getRevision(close.artifact.artifactId, close.revision.revisionId);
+    const r2 = await store.getRevision(close.artifact.artifactId, edit.revision.revisionId);
     expect(r1 && r2).toBeTruthy();
-    expect(r1!.revisionId).not.toBe(r2!.revisionId);
     expect(r1!.sourceEventId).not.toBe(r2!.sourceEventId);
   });
 

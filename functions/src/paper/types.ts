@@ -42,9 +42,15 @@ export interface LivePhotoRef {
   takenAt: string;
 }
 
-export interface PaperPhoto {
+export interface PaperPhotoMeta {
   contentHash: string;
-  dataUri: string;
+  thumbHash: string;
+  originalPath: string;
+  thumbPath: string;
+  mimeType: string;
+  thumbMimeType: string;
+  width: number;
+  height: number;
   location: string;
   type: string;
   takenAt: string;
@@ -71,8 +77,9 @@ export interface WaterTicketProjection {
   tankTop: string;
   tankBottom: string;
   timeline: PaperTimelineEvent[];
-  photos: PaperPhoto[];
+  photos: PaperPhotoMeta[];
   jsaContentHash: string;
+  jsaPath: string;
   totalBbl: string;
   totalHours: string;
   ticketCount: string;
@@ -92,6 +99,8 @@ export interface PaperArtifactRecord {
   invoiceDocId: string;
   ownerDriverId: string;
   paperTimeZone: string;
+  currentEventMs: number;
+  currentSourceEventId: string;
   createdAtMs: number;
   updatedAtMs: number;
 }
@@ -109,6 +118,7 @@ export interface PaperRevisionRecord {
   storageHtmlPath: string;
   storagePdfPath: string | null;
   sourceEventId: string;
+  eventMs: number;
   createdAtMs: number;
   actorUid: string;
   actorDriverId: string | null;
@@ -120,6 +130,7 @@ export interface PaperSourceEventRecord {
   sourceEventId: string;
   artifactId: string;
   revisionId: string;
+  eventMs: number;
   status: 'reserved' | 'complete';
 }
 
@@ -161,7 +172,9 @@ export interface TicketSourceRecord {
   driverId?: unknown;
   createdAtMs?: unknown;
   createdAt?: unknown;
+  updatedAt?: unknown;
   updatedAtMs?: unknown;
+  editedAt?: unknown;
   packageId?: unknown;
 }
 
@@ -191,7 +204,7 @@ export interface InvoiceSourceRecord {
   timezone?: unknown;
 }
 
-export type PaperCallerKind = 'dashboard' | 'driver';
+export type PaperCallerKind = 'dashboard' | 'driver' | 'system';
 
 export interface PaperCaller {
   kind: PaperCallerKind;

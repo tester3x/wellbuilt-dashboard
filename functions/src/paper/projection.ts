@@ -1,7 +1,7 @@
 import { asBblString, asTrimmedString, DEFAULT_PAPER_TIMEZONE, formatDateDisplay, formatDateTimeDisplay, timestampMs } from './format';
 import { canonicalDriverIdFromRecords, resolveHumanAuditLabel } from './identity';
 import { buildPaperTimeline, acceptedTimeFromInvoice } from './timeline';
-import type { InvoiceSourceRecord, PaperPhoto, TicketSourceRecord, WaterTicketProjection } from './types';
+import type { InvoiceSourceRecord, PaperPhotoMeta, TicketSourceRecord, WaterTicketProjection } from './types';
 
 export function isTicketOnlyWaterTicket(
   ticket: TicketSourceRecord,
@@ -19,8 +19,9 @@ export function projectWaterTicket(input: {
   invoice: InvoiceSourceRecord | null;
   legalName?: string;
   displayName?: string;
-  photos: PaperPhoto[];
+  photos: PaperPhotoMeta[];
   jsaContentHash?: string;
+  jsaPath?: string;
   paperTimeZone?: string;
 }): WaterTicketProjection | { ok: false; reason: string; message: string } {
   const { ticket, invoice } = input;
@@ -85,6 +86,7 @@ export function projectWaterTicket(input: {
     timeline: buildPaperTimeline(invoice?.timeline, timeZone),
     photos: input.photos,
     jsaContentHash: input.jsaContentHash || '',
+    jsaPath: input.jsaPath || '',
     totalBbl: asBblString(invoice?.totalBBL) || dropoffBbls || qty,
     totalHours: asBblString(invoice?.totalHours) || asBblString(ticket.hours),
     ticketCount: '1',

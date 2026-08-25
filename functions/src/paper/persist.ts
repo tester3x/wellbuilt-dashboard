@@ -9,6 +9,7 @@ export function buildRevisionRecord(input: {
   projection: PaperRevisionRecord['projection'];
   revisionId: string;
   sourceEventId: string;
+  eventMs: number;
   contentHash: string;
   actorUid: string;
   actorDriverId: string | null;
@@ -29,6 +30,7 @@ export function buildRevisionRecord(input: {
     storageHtmlPath: paperStorageHtmlPath(p.companyId, artifactId, input.revisionId),
     storagePdfPath: null,
     sourceEventId: input.sourceEventId,
+    eventMs: input.eventMs,
     createdAtMs: input.createdAtMs,
     actorUid: input.actorUid,
     actorDriverId: input.actorDriverId,
@@ -49,6 +51,8 @@ export function buildArtifactSeed(p: PaperRevisionRecord['projection'], createdA
     invoiceDocId: p.invoiceDocId,
     ownerDriverId: p.ownerDriverId,
     paperTimeZone: p.paperTimeZone,
+    currentEventMs: 0,
+    currentSourceEventId: '',
     createdAtMs,
     updatedAtMs: createdAtMs,
   };

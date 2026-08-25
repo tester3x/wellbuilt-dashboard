@@ -11,7 +11,7 @@ function row(label: string, value: string): string {
  * Semantic contract from receiptBuilder; not 4-inch thermal geometry.
  * Deterministic: no render-time clock, no host locale, no random ids.
  */
-export function buildWaterTicketHtml(p: WaterTicketProjection): string {
+export function buildWaterTicketHtml(p: WaterTicketProjection, thumbs: Record<string, string> = {}): string {
   const title = 'WATER TICKET';
   const ticketNo = `Ticket #${p.ticketNumber}`;
 
@@ -25,7 +25,8 @@ export function buildWaterTicketHtml(p: WaterTicketProjection): string {
   const photoCells = p.photos.map((photo, i) => {
     const cap = [photo.type, photo.location].filter(Boolean).join(' · ');
     const capHtml = cap ? `<div class="photo-cap">${escapeHtml(cap)}</div>` : '';
-    return `<figure class="photo"><img src="${escapeHtml(photo.dataUri)}" alt="Photo ${i + 1}" data-paper-asset="${escapeHtml(photo.contentHash)}" />${capHtml}</figure>`;
+    const src = thumbs[photo.thumbHash] || thumbs[photo.contentHash] || '';
+    return `<figure class="photo"><img src="${escapeHtml(src)}" alt="Photo ${i + 1}" data-paper-asset="${escapeHtml(photo.contentHash)}" />${capHtml}</figure>`;
   }).join('');
 
   const jsa = p.jsaContentHash

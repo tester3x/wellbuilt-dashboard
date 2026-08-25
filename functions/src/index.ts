@@ -4841,3 +4841,6 @@ export {
 // whole-codebase deploy would have pruned them.
 export { validatePhotoCompliance, suggestPhotoCriteria } from './photoCompliance';
 export { scheduledWellCatalogRefresh, triggerWellCatalogRefresh } from './wellCatalogRefresh';
+
+// Canonical paper lifecycle. SOURCE ONLY / NOT DEPLOYED.
+export { onInvoicePaperLifecycle, onTicketPaperLifecycle } from './paper/lifecycleTriggers';

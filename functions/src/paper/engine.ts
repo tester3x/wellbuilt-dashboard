@@ -3,9 +3,10 @@ import { asTrimmedString, DEFAULT_PAPER_TIMEZONE } from './format';
 import { hashExactBytes, utf8Bytes } from './hash';
 import { buildWaterTicketHtml, normalizePaperHtml } from './html';
 import { canonicalDriverIdFromRecords } from './identity';
-import { snapshotPhotoBytes, splitLivePhotos } from './photos';
-import { buildArtifactSeed, buildRevisionRecord, paperAssetPath } from './persist';
-import { projectWaterTicket } from './projection';
+import { MAX_CANONICAL_HTML_BYTES, MAX_PAPER_PHOTOS, snapshotPhotoForPaper, thumbDataUri } from './media';
+import { splitLivePhotos } from './photos';
+import { buildRevisionRecord, paperAssetPath } from './persist';
+import { isTicketOnlyWaterTicket, projectWaterTicket } from './projection';
 import { deriveGovernedSourceEvent } from './sourceEvent';
 import type { PaperStore } from './store';
 import {
@@ -15,27 +16,53 @@ import {
   type PaperCaller,
   type PaperLookup,
   type PaperOp,
-  type PaperPhoto,
+  type PaperPhotoMeta,
 } from './types';
 
 async function snapshotAssets(
   store: PaperStore,
   invoicePhotos: unknown,
-): Promise<{ photos: PaperPhoto[]; jsaContentHash: string; jsaBytes: Buffer | null }> {
+  ctx: { companyId: string; artifactId: string; revisionId: string },
+): Promise<{
+  photos: PaperPhotoMeta[];
+  thumbs: Record<string, string>;
+  originals: Array<{ path: string; bytes: Buffer }>;
+  jsaContentHash: string;
+  jsaPath: string;
+  jsaBytes: Buffer | null;
+}> {
   const live = splitLivePhotos(invoicePhotos);
-  const photos: PaperPhoto[] = [];
-  for (const ref of live.photos) {
-    const bytes = await store.readLiveAsset(ref.uri);
+  const photos: PaperPhotoMeta[] = [];
+  const thumbs: Record<string, string> = {};
+  const originals: Array<{ path: string; bytes: Buffer }> = [];
+  for (const ref of live.photos.slice(0, MAX_PAPER_PHOTOS)) {
+    const bytes = await store.readLiveAsset(ref.uri, { companyId: ctx.companyId });
     if (!bytes) continue;
-    photos.push(snapshotPhotoBytes(bytes, ref));
+    const originalPath = paperAssetPath(ctx.companyId, ctx.artifactId, ctx.revisionId, 'pending-orig');
+    const snapped = snapshotPhotoForPaper(bytes, ref, {
+      originalPath,
+      thumbPath: paperAssetPath(ctx.companyId, ctx.artifactId, ctx.revisionId, 'pending-thumb'),
+    });
+    const originalStorePath = paperAssetPath(ctx.companyId, ctx.artifactId, ctx.revisionId, snapped.meta.contentHash);
+    const thumbStorePath = paperAssetPath(ctx.companyId, ctx.artifactId, ctx.revisionId, `t-${snapped.meta.thumbHash}`);
+    snapped.meta.originalPath = originalStorePath;
+    snapped.meta.thumbPath = thumbStorePath;
+    photos.push(snapped.meta);
+    thumbs[snapped.meta.thumbHash] = thumbDataUri(snapped.thumb, snapped.meta.thumbMimeType);
+    originals.push({ path: originalStorePath, bytes: snapped.original });
+    originals.push({ path: thumbStorePath, bytes: snapped.thumb });
   }
   let jsaContentHash = '';
+  let jsaPath = '';
   let jsaBytes: Buffer | null = null;
   if (live.jsaUri) {
-    jsaBytes = await store.readLiveAsset(live.jsaUri);
-    if (jsaBytes) jsaContentHash = hashExactBytes(jsaBytes);
+    jsaBytes = await store.readLiveAsset(live.jsaUri, { companyId: ctx.companyId });
+    if (jsaBytes) {
+      jsaContentHash = hashExactBytes(jsaBytes);
+      jsaPath = paperAssetPath(ctx.companyId, ctx.artifactId, ctx.revisionId, jsaContentHash);
+    }
   }
-  return { photos, jsaContentHash, jsaBytes };
+  return { photos, thumbs, originals, jsaContentHash, jsaPath, jsaBytes };
 }
 
 export async function materializeWaterTicketPaper(input: {
@@ -52,6 +79,9 @@ export async function materializeWaterTicketPaper(input: {
   if (!access.ok) return access;
   const invoiceId = asTrimmedString(ticket.invoiceDocId);
   const invoice = invoiceId ? await input.store.getInvoice(invoiceId) : null;
+  if (!isTicketOnlyWaterTicket(ticket, invoice)) {
+    return { ok: false, reason: 'not_ticket_only', message: 'This slice materializes ticket-only Water Tickets.' };
+  }
   const derived = deriveGovernedSourceEvent({ ticket, invoice, op: input.op });
   if (!derived.ok) return derived;
 
@@ -64,26 +94,23 @@ export async function materializeWaterTicketPaper(input: {
   });
   const identity = ownerDriverId ? await input.store.getIdentityByDriverId(ownerDriverId) : null;
   const timeZone = (await input.store.getCompanyTimeZone(companyId)) || DEFAULT_PAPER_TIMEZONE;
-  const snapped = await snapshotAssets(input.store, invoice?.photos);
-  const projected = projectWaterTicket({
-    ticket,
-    invoice,
-    legalName: identity?.legalName,
-    displayName: identity?.displayName,
-    photos: snapped.photos,
-    jsaContentHash: snapped.jsaContentHash,
-    paperTimeZone: timeZone,
-  });
-  if ('reason' in projected) return projected;
-
-  const htmlText = normalizePaperHtml(buildWaterTicketHtml(projected));
-  const htmlBytes = utf8Bytes(htmlText);
-  const contentHash = hashExactBytes(htmlBytes);
-  const seed = buildArtifactSeed(projected, input.nowMs);
-
+  const artifactId = waterTicketArtifactId(ticket.id);
   const reserved = await input.store.reserveSourceEvent({
     sourceEventId: derived.sourceEventId,
-    artifactSeed: seed,
+    eventMs: derived.eventMs,
+    artifactSeed: {
+      artifactId,
+      artifactType: 'water_ticket',
+      displayNumber: asTrimmedString(ticket.ticketNumber),
+      companyId,
+      ticketDocId: ticket.id,
+      invoiceDocId: invoiceId,
+      ownerDriverId,
+      paperTimeZone: timeZone,
+      currentEventMs: 0,
+      currentSourceEventId: '',
+      createdAtMs: input.nowMs,
+    },
   });
   if (reserved.action === 'idempotent') {
     const revision = await input.store.getRevision(reserved.event.artifactId, reserved.event.revisionId);
@@ -91,10 +118,34 @@ export async function materializeWaterTicketPaper(input: {
     return { ok: true, action: 'idempotent', revision, artifact: reserved.artifact };
   }
 
+  const snapped = await snapshotAssets(input.store, invoice?.photos, {
+    companyId,
+    artifactId,
+    revisionId: reserved.event.revisionId,
+  });
+  const projected = projectWaterTicket({
+    ticket,
+    invoice,
+    legalName: identity?.legalName,
+    displayName: identity?.displayName,
+    photos: snapped.photos,
+    jsaContentHash: snapped.jsaContentHash,
+    jsaPath: snapped.jsaPath,
+    paperTimeZone: timeZone,
+  });
+  if ('reason' in projected) return projected;
+
+  const htmlText = normalizePaperHtml(buildWaterTicketHtml(projected, snapped.thumbs));
+  const htmlBytes = utf8Bytes(htmlText);
+  if (htmlBytes.length > MAX_CANONICAL_HTML_BYTES) {
+    return { ok: false, reason: 'html_too_large', message: 'Canonical HTML exceeds 512KB.' };
+  }
+  const contentHash = hashExactBytes(htmlBytes);
   const revision = buildRevisionRecord({
     projection: projected,
     revisionId: reserved.event.revisionId,
     sourceEventId: derived.sourceEventId,
+    eventMs: derived.eventMs,
     contentHash,
     actorUid: input.caller.uid,
     actorDriverId: input.caller.kind === 'driver' ? input.caller.driverId || null : ownerDriverId || null,
@@ -103,19 +154,11 @@ export async function materializeWaterTicketPaper(input: {
 
   try {
     await input.store.createHtmlBytes(revision.storageHtmlPath, htmlBytes);
-    for (const photo of projected.photos) {
-      const raw = photo.dataUri.split(',')[1] || '';
-      const bytes = Buffer.from(raw, 'base64');
-      await input.store.createAssetBytes(
-        paperAssetPath(revision.companyId, revision.artifactId, revision.revisionId, photo.contentHash),
-        bytes,
-      );
+    for (const asset of snapped.originals) {
+      await input.store.createAssetBytes(asset.path, asset.bytes);
     }
-    if (snapped.jsaBytes && snapped.jsaContentHash) {
-      await input.store.createAssetBytes(
-        paperAssetPath(revision.companyId, revision.artifactId, revision.revisionId, snapped.jsaContentHash),
-        snapped.jsaBytes,
-      );
+    if (snapped.jsaBytes && snapped.jsaPath) {
+      await input.store.createAssetBytes(snapped.jsaPath, snapped.jsaBytes);
     }
     const finalized = await input.store.finalizeRevision({
       sourceEventId: derived.sourceEventId,

@@ -58,7 +58,7 @@ const check = (name, ok, detail = '') => {
   const liveRules = src('firestore.rules');
   check('live firestore.rules were not modified for paper', !liveRules.includes('paper_artifacts') && !liveRules.includes('paper_source_events'));
   const callables = src('functions/src/security/paperCallables.ts');
-  check('get path does not require manageDrivers', callables.includes('loadPaperReader') && callables.includes('requireSecureDriver'));
+  check('get path does not require manageDrivers', callables.includes('loadPaperReader') && callables.includes("token?.kind === 'driver'"));
   check('materialize remains manageDrivers', callables.includes('requireManageDrivers') && callables.includes('staffMaterializeTicketPaper'));
   check('shared getTicketPaper export exists', callables.includes('export const getTicketPaper'));
 }

@@ -1,25 +1,28 @@
 /**
  * Governed canonical paper callables. NOT DEPLOYED in this slice.
- * Selector when approved:
- *   --only functions:getTicketPaper,functions:staffGetTicketPaper,functions:staffMaterializeTicketPaper
  */
 import * as httpsV2 from 'firebase-functions/v2/https';
+import * as admin from 'firebase-admin';
 import { getWaterTicketPaper, materializeWaterTicketPaper } from '../paper/engine';
 import { createFirestorePaperStore } from '../paper/firestoreStore';
+import { resolvePaperCaller } from '../paper/paperCaller';
 import { parseGetPaperRequest, parseMaterializeRequest } from '../paper/requests';
 import type { PaperCaller } from '../paper/types';
-import { requireManageDrivers, requireRegisteredDashboardUser } from './adminAuth';
+import { requireManageDrivers } from './adminAuth';
 import { writeSecurityAudit } from './audit';
-import { requireSecureDriver } from './requireDriverAuth';
 
 function throwPaper(reason: string, message: string): never {
   const code = reason === 'wrong_company' || reason === 'caller_unscoped'
     || reason === 'missing_capability' || reason === 'not_document_owner'
     || reason === 'drivers_cannot_materialize' || reason === 'unauthorized'
+    || reason === 'driver_deactivated' || reason === 'not_dashboard_user'
+    || reason === 'driver_unauthenticated'
     ? 'permission-denied'
     : reason === 'unexpected_field' || reason === 'invalid_request' || reason === 'lookup_required'
       || reason === 'ticket_id_required' || reason === 'op_required' || reason === 'ambiguous_lookup'
       ? 'invalid-argument'
+    : reason === 'unauthenticated'
+      ? 'unauthenticated'
       : reason === 'document_unavailable' || reason === 'ticket_not_found' || reason === 'invoice_not_found'
         || reason === 'event_not_found'
         ? 'not-found'
@@ -27,34 +30,28 @@ function throwPaper(reason: string, message: string): never {
   throw new httpsV2.HttpsError(code, `${reason}:${message}`);
 }
 
-async function loadPaperReader(request: httpsV2.CallableRequest): Promise<PaperCaller> {
-  try {
-    const dash = await requireRegisteredDashboardUser(
-      request.auth?.uid,
-      request.auth?.token as Record<string, unknown> | undefined,
-    );
-    return {
-      kind: 'dashboard',
-      uid: dash.uid,
-      companyId: dash.companyId,
-      isPlatformAdmin: dash.isPlatformAdmin,
-      roles: dash.roles,
-      caps: dash.caps,
-    };
-  } catch (err) {
-    const code = err && typeof err === 'object' && 'code' in err ? String((err as { code: unknown }).code) : '';
-    if (code && !code.includes('unauthenticated') && !code.includes('permission-denied')) throw err;
+export async function loadPaperReader(request: httpsV2.CallableRequest): Promise<PaperCaller> {
+  const uid = request.auth?.uid;
+  const token = (request.auth?.token || null) as Record<string, unknown> | null;
+  if (token?.kind === 'driver') {
+    const driverId = typeof token.driverId === 'string' ? token.driverId : '';
+    let profile: { active?: boolean; companyId?: string } | null = null;
+    let exists = false;
+    if (driverId) {
+      const snap = await admin.database().ref(`drivers/profiles/${driverId}`).once('value');
+      exists = snap.exists();
+      profile = exists ? snap.val() as { active?: boolean; companyId?: string } : null;
+    }
+    const resolved = resolvePaperCaller({ uid, token, driverProfile: profile, driverProfileExists: exists });
+    if (!resolved.ok) throwPaper(resolved.reason, resolved.message);
+    return resolved.caller;
   }
-  const driver = await requireSecureDriver(request);
-  return {
-    kind: 'driver',
-    uid: driver.uid,
-    companyId: driver.companyId,
-    isPlatformAdmin: false,
-    driverId: driver.driverId,
-    roles: driver.roles,
-    caps: [],
-  };
+
+  const userSnap = uid ? await admin.database().ref(`users/${uid}`).once('value') : null;
+  const rtdbUser = userSnap && userSnap.exists() ? userSnap.val() as Record<string, unknown> : null;
+  const resolved = resolvePaperCaller({ uid, token, rtdbUser });
+  if (!resolved.ok) throwPaper(resolved.reason, resolved.message);
+  return resolved.caller;
 }
 
 export const getTicketPaper = httpsV2.onCall(
@@ -75,7 +72,6 @@ export const getTicketPaper = httpsV2.onCall(
   },
 );
 
-/** Dashboard alias for the shared read callable. */
 export const staffGetTicketPaper = getTicketPaper;
 
 export const staffMaterializeTicketPaper = httpsV2.onCall(

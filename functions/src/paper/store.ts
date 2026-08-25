@@ -21,9 +21,10 @@ export type ReserveResult =
 export interface PaperStore {
   getTicket(ticketDocId: string): Promise<TicketSourceRecord | null>;
   getInvoice(invoiceDocId: string): Promise<InvoiceSourceRecord | null>;
+  findTicketsByInvoiceDocId(invoiceDocId: string): Promise<TicketSourceRecord[]>;
   getCompanyTimeZone(companyId: string): Promise<string>;
   getIdentityByDriverId(driverId: string): Promise<PaperIdentity | null>;
-  readLiveAsset(uri: string): Promise<Buffer | null>;
+  readLiveAsset(uri: string, opts?: { companyId?: string }): Promise<Buffer | null>;
 
   getArtifact(artifactId: string): Promise<PaperArtifactRecord | null>;
   getRevision(artifactId: string, revisionId: string): Promise<PaperRevisionRecord | null>;
@@ -33,6 +34,7 @@ export interface PaperStore {
 
   reserveSourceEvent(input: {
     sourceEventId: string;
+    eventMs: number;
     artifactSeed: Omit<PaperArtifactRecord, 'currentRevisionId' | 'nextRevisionSeq' | 'updatedAtMs'> & {
       currentRevisionId?: string;
       nextRevisionSeq?: number;
@@ -65,6 +67,7 @@ export class MemoryPaperStore implements PaperStore {
   sourceEvents = new Map<string, PaperSourceEventRecord>();
   liveAssets = new Map<string, Buffer>();
   companyTimezones = new Map<string, string>();
+  fetchCount = 0;
   failAt: 'html' | 'revision' | 'finalize' | null = null;
   private chain: Promise<unknown> = Promise.resolve();
 
@@ -80,6 +83,9 @@ export class MemoryPaperStore implements PaperStore {
   async getInvoice(id: string) {
     return this.invoices.get(id) || null;
   }
+  async findTicketsByInvoiceDocId(invoiceDocId: string) {
+    return [...this.tickets.values()].filter((t) => String(t.invoiceDocId || '') === invoiceDocId);
+  }
   async getCompanyTimeZone(companyId: string) {
     return this.companyTimezones.get(companyId) || 'America/Chicago';
   }
@@ -87,6 +93,7 @@ export class MemoryPaperStore implements PaperStore {
     return this.identities.get(driverId) || null;
   }
   async readLiveAsset(uri: string) {
+    this.fetchCount += 1;
     const buf = this.liveAssets.get(uri);
     return buf ? cloneBuf(buf) : null;
   }
@@ -126,6 +133,8 @@ export class MemoryPaperStore implements PaperStore {
       const artifact: PaperArtifactRecord = {
         ...input.artifactSeed,
         currentRevisionId: current?.currentRevisionId || '',
+        currentEventMs: current?.currentEventMs || 0,
+        currentSourceEventId: current?.currentSourceEventId || '',
         nextRevisionSeq: nextSeq,
         createdAtMs: current?.createdAtMs || input.artifactSeed.createdAtMs,
         updatedAtMs: current?.updatedAtMs || input.artifactSeed.createdAtMs,
@@ -138,6 +147,7 @@ export class MemoryPaperStore implements PaperStore {
         sourceEventId: input.sourceEventId,
         artifactId,
         revisionId,
+        eventMs: input.eventMs,
         status: 'reserved',
       };
       this.sourceEvents.set(input.sourceEventId, event);
@@ -180,7 +190,15 @@ export class MemoryPaperStore implements PaperStore {
       if (this.revisions.has(key)) throw new Error('immutable_overwrite');
       this.revisions.set(key, input.revision);
       event.status = 'complete';
-      artifact.currentRevisionId = input.revision.revisionId;
+      event.eventMs = input.revision.eventMs;
+      const newer = !artifact.currentSourceEventId
+        || input.revision.eventMs > artifact.currentEventMs
+        || (input.revision.eventMs === artifact.currentEventMs && input.revision.sourceEventId > artifact.currentSourceEventId);
+      if (newer) {
+        artifact.currentRevisionId = input.revision.revisionId;
+        artifact.currentEventMs = input.revision.eventMs;
+        artifact.currentSourceEventId = input.revision.sourceEventId;
+      }
       artifact.updatedAtMs = input.nowMs;
       if (input.invoiceIndex) {
         const existingIdx = this.invoiceIndex.get(input.invoiceIndex.invoiceDocId);

@@ -1,3 +1,4 @@
+import { encodePngRgb } from '../png';
 import type { InvoiceSourceRecord, PaperCaller, TicketSourceRecord } from '../types';
 
 /** Synthetic ticket-only Water Ticket #20100. Not a production record. */
@@ -64,8 +65,8 @@ export const invoice20100: InvoiceSourceRecord = {
   ],
 };
 
-export const PIXEL_A = Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==', 'base64');
-export const PIXEL_B = Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNkYAAAAAYAAjCB0C8AAAAASUVORK5CYII=', 'base64');
+export const PIXEL_A = encodePngRgb(1, 1, Buffer.from([220, 20, 20]));
+export const PIXEL_B = encodePngRgb(1, 1, Buffer.from([20, 20, 220]));
 export const JSA_BYTES = Buffer.from('%PDF-1.4 jsa-snapshot');
 
 export const staffLg: PaperCaller = {

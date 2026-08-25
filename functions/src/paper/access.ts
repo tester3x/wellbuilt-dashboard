@@ -33,7 +33,7 @@ export function authorizePaperCompany(
   if (!companyId) {
     return { ok: false, reason: 'company_required', message: 'Artifact has no companyId.' };
   }
-  if (caller.isPlatformAdmin && caller.kind === 'dashboard') return { ok: true };
+  if (caller.isPlatformAdmin && (caller.kind === 'dashboard' || caller.kind === 'system')) return { ok: true };
   if (!caller.companyId) {
     return { ok: false, reason: 'caller_unscoped', message: 'Caller has no company scope.' };
   }
@@ -70,6 +70,10 @@ export function authorizePaperMaterialize(
 ): { ok: true } | { ok: false; reason: string; message: string } {
   if (caller.kind === 'driver') {
     return { ok: false, reason: 'drivers_cannot_materialize', message: 'Drivers cannot materialize paper.' };
+  }
+  if (caller.kind === 'system') {
+    if (!companyId) return { ok: false, reason: 'company_required', message: 'Artifact has no companyId.' };
+    return { ok: true };
   }
   const company = authorizePaperCompany(caller, companyId);
   if (!company.ok) return company;

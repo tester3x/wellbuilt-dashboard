@@ -34,15 +34,28 @@ export function timestampMs(raw: unknown): number | null {
   return Number.isNaN(parsed) ? null : parsed;
 }
 
-/** MM/DD/YYYY from a date-only string, ISO, or already-formatted value. */
-export function formatDateDisplay(raw: unknown): string {
+/** MM/DD/YYYY. Business dates stay as written; instants use the governed IANA zone. */
+export function formatDateDisplay(raw: unknown, timeZone: string = DEFAULT_PAPER_TIMEZONE): string {
   const s = asTrimmedString(raw);
   if (!s) return '';
   const mdy = s.match(/^(\d{1,2})\/(\d{1,2})\/(\d{4})$/);
   if (mdy) {
     return `${mdy[1].padStart(2, '0')}/${mdy[2].padStart(2, '0')}/${mdy[3]}`;
   }
-  const iso = s.match(/^(\d{4})-(\d{2})-(\d{2})/);
+  const instant = timestampMs(s);
+  if (instant != null && /T|\d{2}:\d{2}/.test(s)) {
+    const parts = new Intl.DateTimeFormat('en-US', {
+      timeZone,
+      month: '2-digit',
+      day: '2-digit',
+      year: 'numeric',
+    }).formatToParts(new Date(instant));
+    const month = parts.find((p) => p.type === 'month')?.value;
+    const day = parts.find((p) => p.type === 'day')?.value;
+    const year = parts.find((p) => p.type === 'year')?.value;
+    if (month && day && year) return `${month}/${day}/${year}`;
+  }
+  const iso = s.match(/^(\d{4})-(\d{2})-(\d{2})$/);
   if (iso) return `${iso[2]}/${iso[3]}/${iso[1]}`;
   return s;
 }
@@ -96,7 +109,7 @@ export function formatTimeDisplay(raw: unknown, timeZone: string = DEFAULT_PAPER
 export function formatDateTimeDisplay(raw: unknown, timeZone: string = DEFAULT_PAPER_TIMEZONE): string {
   const s = asTrimmedString(raw);
   if (!s) return '';
-  const date = formatDateDisplay(s);
+  const date = formatDateDisplay(s, timeZone);
   const time = formatTimeDisplay(s, timeZone);
   if (date && time && date !== s) return `${date}  ${time}`;
   if (date) return date;

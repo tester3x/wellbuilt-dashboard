@@ -1,5 +1,8 @@
 import * as admin from 'firebase-admin';
 import { eventDocId } from './persist';
+import { parseGovernedStorageUri } from './storageUri';
+import { eventIsNewerThanCurrent } from './eventOrder';
+import { MAX_SOURCE_ASSET_BYTES } from './media';
 import type { PaperStore, ReserveResult } from './store';
 import type {
   InvoiceSourceRecord,
@@ -56,6 +59,10 @@ export function createFirestorePaperStore(deps?: {
     async getInvoice(invoiceDocId) {
       return dataWithId<InvoiceSourceRecord>(await fs().collection('invoices').doc(invoiceDocId).get());
     },
+    async findTicketsByInvoiceDocId(invoiceDocId) {
+      const snap = await fs().collection('tickets').where('invoiceDocId', '==', invoiceDocId).limit(20).get();
+      return snap.docs.map((d) => ({ id: d.id, ...d.data() } as TicketSourceRecord));
+    },
     async getCompanyTimeZone(companyId) {
       const snap = await fs().collection('companies').doc(companyId).get();
       const tz = snap.exists && typeof snap.data()?.timezone === 'string' ? String(snap.data()?.timezone).trim() : '';
@@ -67,16 +74,20 @@ export function createFirestorePaperStore(deps?: {
       const row = snap.val() as { legalName?: string; displayName?: string };
       return { driverId, legalName: row.legalName, displayName: row.displayName };
     },
-    async readLiveAsset(uri) {
-      if (!uri) return null;
-      if (uri.startsWith('data:')) {
-        const b64 = uri.split(',')[1] || '';
-        return Buffer.from(b64, 'base64');
-      }
+    async readLiveAsset(uri, opts) {
+      const bucketName = (deps?.bucket as { name?: string } | undefined)?.name
+        || process.env.GCLOUD_PROJECT && `${process.env.GCLOUD_PROJECT}.appspot.com`
+        || 'wellbuilt-sync.appspot.com';
+      const parsed = parseGovernedStorageUri(uri, {
+        projectBucket: typeof bucketName === 'string' ? bucketName : 'wellbuilt-sync.appspot.com',
+        companyId: opts?.companyId,
+      });
+      if (!parsed.ok) return null;
       try {
-        const res = await fetch(uri);
-        if (!res.ok) return null;
-        return Buffer.from(await res.arrayBuffer());
+        const [buf] = await file(parsed.objectPath).download();
+        const bytes = Buffer.isBuffer(buf) ? buf : Buffer.from(buf);
+        if (bytes.length > MAX_SOURCE_ASSET_BYTES) return null;
+        return bytes;
       } catch {
         return null;
       }
@@ -129,6 +140,8 @@ export function createFirestorePaperStore(deps?: {
         const artifact: PaperArtifactRecord = {
           ...input.artifactSeed,
           currentRevisionId: current?.currentRevisionId || '',
+          currentEventMs: current?.currentEventMs || 0,
+          currentSourceEventId: current?.currentSourceEventId || '',
           nextRevisionSeq: nextSeq,
           createdAtMs: current?.createdAtMs || input.artifactSeed.createdAtMs,
           updatedAtMs: current?.updatedAtMs || input.artifactSeed.createdAtMs,
@@ -140,6 +153,7 @@ export function createFirestorePaperStore(deps?: {
           sourceEventId: input.sourceEventId,
           artifactId: artifact.artifactId,
           revisionId,
+          eventMs: input.eventMs,
           status: 'reserved',
         };
         tx.set(eventRef, event);
@@ -175,11 +189,20 @@ export function createFirestorePaperStore(deps?: {
         }
         if (revSnap.exists) throw new Error('immutable_overwrite');
         tx.create(revRef, input.revision);
-        tx.update(eventRef, { status: 'complete' });
-        tx.update(artifactRef, {
-          currentRevisionId: input.revision.revisionId,
-          updatedAtMs: input.nowMs,
-        });
+        tx.update(eventRef, { status: 'complete', eventMs: input.revision.eventMs });
+        const newer = eventIsNewerThanCurrent(
+          { eventMs: input.revision.eventMs, sourceEventId: input.revision.sourceEventId },
+          artifact.currentSourceEventId
+            ? { eventMs: artifact.currentEventMs, sourceEventId: artifact.currentSourceEventId }
+            : null,
+        );
+        const artPatch: Record<string, unknown> = { updatedAtMs: input.nowMs };
+        if (newer) {
+          artPatch.currentRevisionId = input.revision.revisionId;
+          artPatch.currentEventMs = input.revision.eventMs;
+          artPatch.currentSourceEventId = input.revision.sourceEventId;
+        }
+        tx.update(artifactRef, artPatch);
         if (input.invoiceIndex && idxRef) {
           if (idxSnap && idxSnap.exists) {
             const existing = idxSnap.data() as PaperInvoiceIndexRecord;
@@ -192,7 +215,10 @@ export function createFirestorePaperStore(deps?: {
         }
         return {
           action: 'created' as const,
-          artifact: { ...artifact, currentRevisionId: input.revision.revisionId, updatedAtMs: input.nowMs },
+          artifact: {
+            ...artifact,
+            ...artPatch,
+          } as PaperArtifactRecord,
           revision: input.revision,
         };
       });

@@ -17,11 +17,13 @@ export function deriveGovernedSourceEvent(input: {
     }
     return { ok: true, sourceEventId: `close:${ticketDocId}:${closedAtMs}`, eventMs: closedAtMs };
   }
-  const updatedAtMs = timestampMs(input.ticket.updatedAtMs);
+  const updatedAtMs = timestampMs(input.ticket.updatedAt)
+    || timestampMs(input.ticket.editedAt)
+    || timestampMs(input.ticket.updatedAtMs);
   if (!updatedAtMs) {
     return { ok: false, reason: 'event_not_found', message: 'No authoritative edit timestamp on the ticket.' };
   }
-  const createdAtMs = timestampMs(input.ticket.createdAtMs);
+  const createdAtMs = timestampMs(input.ticket.createdAtMs) || timestampMs(input.ticket.createdAt);
   if (createdAtMs && updatedAtMs <= createdAtMs) {
     return { ok: false, reason: 'event_not_found', message: 'Ticket has no governed edit after create.' };
   }

@@ -133,6 +133,49 @@ describeE2E('firestore emulator: concurrent paper revisions', () => {
     if (!close.ok || !edit.ok) return;
     expect(close.revision.revisionId).not.toBe(edit.revision.revisionId);
     const artifact = await store.getArtifact(waterTicketArtifactId(ticketId2));
-    expect(artifact?.currentRevisionId === 'r1' || artifact?.currentRevisionId === 'r2').toBe(true);
+    expect(artifact?.currentRevisionId).toBe(edit.revision.revisionId);
+    const older = await store.getRevision(waterTicketArtifactId(ticketId2), close.revision.revisionId);
+    const newer = await store.getRevision(waterTicketArtifactId(ticketId2), edit.revision.revisionId);
+    expect(older && newer).toBeTruthy();
+  });
+
+  it('later-finishing older close cannot replace a newer current edit', async () => {
+    const db = app.firestore();
+    const ticketId = `${TICKET_20100_ID}-order`;
+    const invoiceId = `${INVOICE_20100_ID}-order`;
+    await db.collection('tickets').doc(ticketId).set({
+      ...ticket20100,
+      id: ticketId,
+      invoiceDocId: invoiceId,
+      updatedAt: { seconds: Math.floor((CLOSED_AT_MS + 80) / 1000), nanoseconds: 0 },
+    });
+    await db.collection('invoices').doc(invoiceId).set({ ...invoice20100, id: invoiceId });
+    const store = createFirestorePaperStore({
+      firestore: db,
+      bucket: memBucket(),
+      rtdb: {
+        ref: (path: string) => ({
+          once: async () => ({
+            exists: () => path.includes(DRIVER_ZFOLD),
+            val: () => ({ legalName: 'Mike ZFold7 Burger' }),
+          }),
+        }),
+      } as unknown as admin.database.Database,
+    });
+    store.readLiveAsset = async (uri: string) => {
+      if (uri.includes('jsa')) return JSA_BYTES;
+      return PIXEL_A;
+    };
+    const editFirst = await materializeWaterTicketPaper({
+      store, caller: staffLg, ticketDocId: ticketId, op: 'edit', nowMs: CLOSED_AT_MS + 80,
+    });
+    const closeLate = await materializeWaterTicketPaper({
+      store, caller: staffLg, ticketDocId: ticketId, op: 'close', nowMs: CLOSED_AT_MS,
+    });
+    expect(editFirst.ok && closeLate.ok).toBe(true);
+    if (!editFirst.ok || !closeLate.ok) return;
+    const artifact = await store.getArtifact(waterTicketArtifactId(ticketId));
+    expect(artifact?.currentRevisionId).toBe(editFirst.revision.revisionId);
+    expect(await store.getRevision(waterTicketArtifactId(ticketId), closeLate.revision.revisionId)).toBeTruthy();
   });
 });
