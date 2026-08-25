@@ -49,11 +49,15 @@ import {
   decideAcquireLease,
   decideAdvancePhase,
   decideLedgerClaim,
-  decidePublicVersionAdvance,
+  decidePublicVersionPublish,
   decideReleaseLease,
+  decideRenewLease,
   eventHasVersionClaim,
   getGovernedEditApplyFault,
   getGovernedEditLeaseMs,
+  getGovernedEditLeaseRenew,
+  GOVERNED_EDIT_FUNCTION_TIMEOUT_SECONDS,
+  governedEditLeaseHeartbeatMs,
   GovernedEditApplyInterrupted,
   inferPhaseFromHistory,
   maybeHoldLease,
@@ -170,31 +174,62 @@ async function releaseApplyLease(editEventId: string, ownerId: string): Promise<
   });
 }
 
+async function renewGovernedApplyLease(editEventId: string, ownerId: string): Promise<boolean> {
+  const box = { lost: false };
+  const tx = await db.ref(applyStatePath(editEventId)).transaction((raw) => {
+    const current = parseApplyState(raw);
+    if (!current) return raw;
+    const decided = decideRenewLease({
+      current,
+      ownerId,
+      nowMs: Date.now(),
+      leaseMs: getGovernedEditLeaseMs(),
+    });
+    if (decided.action !== 'renew') {
+      box.lost = true;
+      return;
+    }
+    return decided.state;
+  });
+  if (box.lost || tx.committed === false) return false;
+  return true;
+}
+
 async function claimEventVersionSeq(
   editEventId: string,
   payloadDigest: string,
-): Promise<number | null> {
-  let seq: number | null = null;
+): Promise<{ seq: number; reused: boolean } | null> {
+  const publicFloor = readLiveVersion((await db.ref('packets/incoming_version').once('value')).val());
+  const box: { seq: number | null; reused: boolean } = { seq: null, reused: false };
   const tx = await db.ref(VERSION_LEDGER_PATH).transaction((raw) => {
     const decided = decideLedgerClaim({
       ledger: parseVersionLedger(raw),
       editEventId,
       payloadDigest,
+      publicFloor,
     });
     if (!decided.ok) {
-      seq = null;
+      box.seq = null;
       return;
     }
-    seq = decided.seq;
+    box.seq = decided.seq;
+    box.reused = decided.reused;
     return decided.ledger;
   });
-  if (tx.committed === false) return null;
-  return seq;
+  if (tx.committed === false || box.seq == null) return null;
+  return { seq: box.seq, reused: box.reused };
 }
 
-async function publishAssignedPublicVersion(assignedSeq: number): Promise<number | null> {
+async function publishAssignedPublicVersion(
+  assignedSeq: number,
+  forceIfAbsorbed: boolean,
+): Promise<number | null> {
   const result = await db.ref('packets/incoming_version').transaction((cur) =>
-    decidePublicVersionAdvance(readLiveVersion(cur), assignedSeq),
+    decidePublicVersionPublish({
+      current: readLiveVersion(cur),
+      assignedSeq,
+      forceIfAbsorbed,
+    }),
   );
   if (result.committed !== true) return null;
   const n = Number(result.snapshot?.val());
@@ -222,10 +257,16 @@ async function finishGovernedVersionAndReceipt(args: {
       assignedVersion: state.assignedVersion,
       publishedVersion: state.publishedVersion,
     });
-    const seq = proven.done
-      ? proven.seq
-      : await claimEventVersionSeq(state.editEventId, args.payloadDigest);
-    if (seq == null) return false;
+    let seq: number;
+    let forceIfAbsorbed = false;
+    if (proven.done) {
+      seq = proven.seq;
+    } else {
+      const claimed = await claimEventVersionSeq(state.editEventId, args.payloadDigest);
+      if (claimed == null) return false;
+      seq = claimed.seq;
+      forceIfAbsorbed = !claimed.reused;
+    }
     if (state.assignedVersion !== seq) {
       const assigned = await casAdvanceApplyState({
         editEventId: state.editEventId,
@@ -235,8 +276,10 @@ async function finishGovernedVersionAndReceipt(args: {
       if (!assigned) return false;
       state = assigned;
     }
-    const published = await publishAssignedPublicVersion(seq);
+    maybeInterrupt('after_claim_before_public');
+    const published = await publishAssignedPublicVersion(seq, forceIfAbsorbed);
     if (published == null) return false;
+    maybeInterrupt('after_public_before_versioned');
     const versioned = await casAdvanceApplyState({
       editEventId: state.editEventId,
       ownerId: args.ownerId,
@@ -1890,7 +1933,9 @@ async function materializeQueuedEditTrail(
 // Handle edit requests — updates processed packet and recalculates dependent fields.
 // processIncomingEdit IS the production handler. Tests must invoke it with the
 // exact incoming payload; do not mirror apply in a parallel lifecycle.
-export const processEditRequest = functionsV1.database
+export const processEditRequest = functionsV1
+  .runWith({ timeoutSeconds: GOVERNED_EDIT_FUNCTION_TIMEOUT_SECONDS })
+  .database
   .ref('packets/incoming/{packetId}')
   .onWrite(async (change, context) => {
     if (!change.after.exists()) return null;
@@ -1938,6 +1983,20 @@ export async function processIncomingEdit(
     const ownerId = newApplyOwnerId();
     let applyState: GovernedEditApplyState | null = null;
     let leased = false;
+    let ownershipLost = false;
+    let heartbeat: ReturnType<typeof setInterval> | null = null;
+
+    const mustOwnGoverned = async (): Promise<boolean> => {
+      if (!leased) return true;
+      if (ownershipLost) return false;
+      const ok = await renewGovernedApplyLease(editEventId, ownerId);
+      if (!ok) {
+        ownershipLost = true;
+        console.log(`[EDIT_APPLY_LOST] ${wellName}: ${editEventId} lost lease ${ownerId}`);
+        return false;
+      }
+      return true;
+    };
 
     try {
 
@@ -1991,8 +2050,16 @@ export async function processIncomingEdit(
       }
       applyState = acquired.state;
       leased = true;
+      if (getGovernedEditLeaseRenew()) {
+        heartbeat = setInterval(() => {
+          void renewGovernedApplyLease(editEventId, ownerId).then((ok) => {
+            if (!ok) ownershipLost = true;
+          });
+        }, governedEditLeaseHeartbeatMs());
+      }
       await maybeHoldLease();
       maybeInterrupt('after_captured');
+      if (!(await mustOwnGoverned())) return null;
     }
 
     // ── 7/25 exact invoice-identity resolution (ticket 19852) ─────────────
@@ -2431,6 +2498,7 @@ export async function processIncomingEdit(
     if (newTankTopInches <= 0) {
       console.log(`[NO-LEVEL EDIT] ${wellName}: No top level, skipping tank math`);
       if (governedDurable && applyState) {
+        if (!(await mustOwnGoverned())) return null;
         if (!phaseAtLeast(applyState, 'mutated')) {
           await db.ref().update({
             ...Object.fromEntries(
@@ -2617,6 +2685,7 @@ export async function processIncomingEdit(
 
     // Processed + immutable history. Governed: NO accepted receipt and NO
     // incoming deletion here — those wait until version publication.
+    if (governedDurable && !(await mustOwnGoverned())) return null;
     if (!governedDurable || !applyState || !phaseAtLeast(applyState, 'mutated')) {
       await db.ref().update({
         ...Object.fromEntries(
@@ -2650,6 +2719,7 @@ export async function processIncomingEdit(
 
     // Update well down status if this is the latest packet (authority-gated)
     if (!skipDownstream) {
+    if (governedDurable && !(await mustOwnGoverned())) return null;
     await db.ref(`wells/${wellName}/status/isDown`).set(nextEditIsDown);
 
     // CASCADE: Recalculate flowRateDays on the NEXT packet after the edited one.
@@ -3134,6 +3204,7 @@ export async function processIncomingEdit(
     } // !skipDownstream
 
     if (governedDurable && applyState && payloadDigest) {
+      if (!(await mustOwnGoverned())) return null;
       const done = await finishGovernedVersionAndReceipt({
         applyState,
         incomingId: context.params.packetId,
@@ -3157,6 +3228,7 @@ export async function processIncomingEdit(
     console.log(`Edit complete for ${wellName}: ${originalPacketId}`);
     return null;
     } finally {
+      if (heartbeat) clearInterval(heartbeat);
       if (leased) {
         await releaseApplyLease(editEventId, ownerId);
       }

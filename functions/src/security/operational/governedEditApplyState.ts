@@ -17,6 +17,11 @@
 export const GOVERNED_EDIT_APPLY_STATE_ROOT = 'packets/editApplyState';
 export const VERSION_LEDGER_PATH = 'packets/editVersionLedger';
 
+/** v1 database onWrite default/declared timeout for processEditRequest. */
+export const GOVERNED_EDIT_FUNCTION_TIMEOUT_SECONDS = 60;
+/** Production lease length. Heartbeat renews so a healthy 60s run cannot be stolen. */
+export const GOVERNED_EDIT_LEASE_MS_DEFAULT = 30_000;
+
 export type GovernedEditApplyPhase =
   | 'captured'
   | 'mutated'
@@ -221,6 +226,14 @@ export function isActiveOwner(
   return state.lease.ownerId === ownerId && state.lease.expiresAt > nowMs;
 }
 
+/** Fencing token: recorded owner may write until another owner acquires. */
+export function isWriteOwner(
+  state: GovernedEditApplyState | null,
+  ownerId: string,
+): boolean {
+  return !!state?.lease && state.lease.ownerId === ownerId;
+}
+
 export type AcquireDecision =
   | { action: 'acquired'; state: GovernedEditApplyState }
   | { action: 'busy'; ownerId: string }
@@ -273,7 +286,7 @@ export function decideAdvancePhase(args: {
   if (args.current.payloadDigest !== args.desired.payloadDigest) {
     return { action: 'conflict' };
   }
-  if (!isActiveOwner(args.current, args.ownerId, args.nowMs) && args.current.phase !== 'terminal') {
+  if (!isWriteOwner(args.current, args.ownerId) && args.current.phase !== 'terminal') {
     return { action: 'stale' };
   }
   const merged = mergeMonotonic(args.current, {
@@ -284,6 +297,25 @@ export function decideAdvancePhase(args: {
     return { action: 'keep', state: args.current };
   }
   return { action: 'write', state: merged };
+}
+
+export function decideRenewLease(args: {
+  current: GovernedEditApplyState | null;
+  ownerId: string;
+  nowMs: number;
+  leaseMs: number;
+}): { action: 'renew'; state: GovernedEditApplyState } | { action: 'lost' } {
+  if (!args.current) return { action: 'lost' };
+  if (!args.current.lease || args.current.lease.ownerId !== args.ownerId) {
+    return { action: 'lost' };
+  }
+  return {
+    action: 'renew',
+    state: {
+      ...args.current,
+      lease: { ownerId: args.ownerId, expiresAt: args.nowMs + args.leaseMs },
+    },
+  };
 }
 
 export function decideReleaseLease(
@@ -361,6 +393,7 @@ export function decideLedgerClaim(args: {
   ledger: VersionLedger;
   editEventId: string;
   payloadDigest: string;
+  publicFloor?: number;
 }):
   | { ok: true; ledger: VersionLedger; seq: number; reused: boolean }
   | { ok: false; reason: 'edit_event_payload_conflict' } {
@@ -371,7 +404,12 @@ export function decideLedgerClaim(args: {
     }
     return { ok: true, ledger: args.ledger, seq: existing.seq, reused: true };
   }
-  const seq = args.ledger.nextSeq + 1;
+  const floor = Math.max(
+    args.ledger.nextSeq,
+    Number.isFinite(args.publicFloor) ? Math.floor(args.publicFloor as number) : 0,
+    0,
+  );
+  const seq = floor + 1;
   return {
     ok: true,
     reused: false,
@@ -390,9 +428,41 @@ export function decideLedgerClaim(args: {
   };
 }
 
+export function decideAnonymousVersionTick(args: {
+  ledger: VersionLedger;
+  publicFloor?: number;
+}): { ledger: VersionLedger; seq: number } {
+  const floor = Math.max(
+    args.ledger.nextSeq,
+    Number.isFinite(args.publicFloor) ? Math.floor(args.publicFloor as number) : 0,
+    0,
+  );
+  const seq = floor + 1;
+  return { seq, ledger: { nextSeq: seq, claims: args.ledger.claims } };
+}
+
 export function decidePublicVersionAdvance(current: number, assignedSeq: number): number {
   const cur = Number.isFinite(current) && current > 0 ? current : 0;
   return assignedSeq > cur ? assignedSeq : cur;
+}
+
+/**
+ * First publication of a new claim must be observable even when an unrelated
+ * writer already moved the public scalar onto this event's seq. Concurrent
+ * higher governed seqs (current > assignedSeq) must not extra-increment.
+ * Retries (forceIfAbsorbed=false) are strictly max() / idempotent.
+ */
+export function decidePublicVersionPublish(args: {
+  current: number;
+  assignedSeq: number;
+  forceIfAbsorbed: boolean;
+}): number {
+  const cur = decidePublicVersionAdvance(args.current, 0);
+  if (args.assignedSeq > cur) return args.assignedSeq;
+  if (args.forceIfAbsorbed && args.assignedSeq > 0 && args.assignedSeq === cur) {
+    return cur + 1;
+  }
+  return cur;
 }
 
 export function shouldRetriggerEditIncoming(args: {
@@ -413,10 +483,13 @@ export type GovernedEditApplyFault =
   | 'outgoing_fail'
   | 'after_downstream'
   | 'version_null'
+  | 'after_claim_before_public'
+  | 'after_public_before_versioned'
   | 'after_versioned';
 
 let applyFault: GovernedEditApplyFault = null;
-let leaseMs = 30_000;
+let leaseMs = GOVERNED_EDIT_LEASE_MS_DEFAULT;
+let leaseRenewEnabled = true;
 let leaseHold: { promise: Promise<void>; resolve: () => void; consumed: boolean } | null = null;
 
 export function setGovernedEditApplyFault(fault: GovernedEditApplyFault): void {
@@ -428,11 +501,23 @@ export function getGovernedEditApplyFault(): GovernedEditApplyFault {
 }
 
 export function setGovernedEditLeaseMs(ms: number): void {
-  leaseMs = ms > 0 ? ms : 30_000;
+  leaseMs = ms > 0 ? ms : GOVERNED_EDIT_LEASE_MS_DEFAULT;
 }
 
 export function getGovernedEditLeaseMs(): number {
   return leaseMs;
+}
+
+export function setGovernedEditLeaseRenew(enabled: boolean): void {
+  leaseRenewEnabled = enabled;
+}
+
+export function getGovernedEditLeaseRenew(): boolean {
+  return leaseRenewEnabled;
+}
+
+export function governedEditLeaseHeartbeatMs(): number {
+  return Math.max(250, Math.floor(getGovernedEditLeaseMs() / 3));
 }
 
 export function armGovernedEditLeaseHold(): () => void {

@@ -22,6 +22,7 @@ import {
   parseApplyState,
   setGovernedEditApplyFault,
   setGovernedEditLeaseMs,
+  setGovernedEditLeaseRenew,
   shouldRetriggerEditIncoming,
   VERSION_LEDGER_PATH,
   withPhase,
@@ -47,7 +48,7 @@ type ProcessIncomingEdit = (
 ) => Promise<null>;
 
 describeE2E('emulator: real processIncomingEdit governed edit path', () => {
-  jest.setTimeout(30000);
+  jest.setTimeout(90000);
   let db: admin.database.Database;
   let processIncomingEdit: ProcessIncomingEdit;
 
@@ -77,12 +78,14 @@ describeE2E('emulator: real processIncomingEdit governed edit path', () => {
     clearGovernedEditLeaseHold();
     setGovernedEditApplyFault(null);
     setGovernedEditLeaseMs(30_000);
+    setGovernedEditLeaseRenew(true);
   });
 
   beforeEach(async () => {
     clearGovernedEditLeaseHold();
     setGovernedEditApplyFault(null);
     setGovernedEditLeaseMs(30_000);
+    setGovernedEditLeaseRenew(true);
     await db.ref('packets').set(null);
     await db.ref('well_config').set(null);
     await db.ref('wells').set(null);
@@ -899,6 +902,7 @@ describeE2E('emulator: real processIncomingEdit governed edit path', () => {
     await seedOriginal();
     const queued = await ingest(packetA);
     if (!queued.ok) return;
+    setGovernedEditLeaseRenew(false);
     setGovernedEditLeaseMs(200);
     const release = armGovernedEditLeaseHold();
     const stale = invokeHandler(queued.incomingPath);
@@ -924,6 +928,7 @@ describeE2E('emulator: real processIncomingEdit governed edit path', () => {
     await seedOriginal();
     const queued = await ingest(packetA);
     if (!queued.ok) return;
+    setGovernedEditLeaseRenew(false);
     const now = Date.now();
     await db.ref(applyStatePath(EVENT_A)).set({
       editEventId: EVENT_A,
@@ -1100,5 +1105,172 @@ describeE2E('emulator: real processIncomingEdit governed edit path', () => {
     expect(claimA?.seq).not.toBe(claimB?.seq);
     expect((await db.ref(`packets/processed/${PID}`).once('value')).val().packetId).toBe(PID);
   });
+
+  it('pre-existing public version 5000 + empty ledger: first governed edit advances the public scalar', async () => {
+    await seedOriginal();
+    await db.ref('packets/incoming_version').set(5000);
+    const queued = await ingest(packetA);
+    if (!queued.ok) return;
+    await invokeHandler(queued.incomingPath);
+    expect(await ledgerClaim(EVENT_A)).toMatchObject({ payloadDigest: queued.payloadDigest, seq: 5001 });
+    expect(await version()).toBe(5001);
+    expect((await db.ref(wbmEditReceiptPath(EVENT_A)).once('value')).val().status).toBe('accepted');
+  });
+
+  it('pre-existing public version 5000 + two concurrent governed edits both publish above the floor', async () => {
+    await seedOriginal();
+    await db.ref('packets/incoming_version').set(5000);
+    const queuedA = await ingest(packetA);
+    const queuedB = await ingest({
+      ...packetA,
+      editEventId: EVENT_B,
+      idempotencyKey: EVENT_B,
+      tankLevelFeet: 9.0,
+      bblsTaken: 130,
+    });
+    if (!queuedA.ok || !queuedB.ok) return;
+    await Promise.all([
+      invokeHandler(queuedA.incomingPath),
+      invokeHandler(queuedB.incomingPath),
+    ]);
+    const claimA = await ledgerClaim(EVENT_A);
+    const claimB = await ledgerClaim(EVENT_B);
+    expect(claimA?.seq).toBeGreaterThan(5000);
+    expect(claimB?.seq).toBeGreaterThan(5000);
+    expect(claimA?.seq).not.toBe(claimB?.seq);
+    const live = await version();
+    expect(live).toBeGreaterThanOrEqual(5002);
+    expect(live).toBeGreaterThanOrEqual(Math.max(claimA!.seq, claimB!.seq));
+    expect((await db.ref(wbmEditReceiptPath(EVENT_A)).once('value')).val().status).toBe('accepted');
+    expect((await db.ref(wbmEditReceiptPath(EVENT_B)).once('value')).val().status).toBe('accepted');
+  });
+
+  it('legacy/unrelated version movement racing a new governed claim still publishes', async () => {
+    await seedOriginal();
+    await db.ref('packets/incoming_version').set(5000);
+    const queued = await ingest(packetA);
+    if (!queued.ok) return;
+    const release = armGovernedEditLeaseHold();
+    const running = invokeHandler(queued.incomingPath);
+    await waitFor(async () => !!(await db.ref(applyStatePath(EVENT_A)).once('value')).val()?.lease);
+    await db.ref('packets/incoming_version').transaction((cur) => {
+      const n = typeof cur === 'number' ? cur : Number(cur) || 0;
+      return n + 1;
+    });
+    release();
+    await running;
+    expect((await db.ref(wbmEditReceiptPath(EVENT_A)).once('value')).val().status).toBe('accepted');
+    const claim = await ledgerClaim(EVENT_A);
+    expect(claim?.seq).toBeGreaterThan(5000);
+    expect(await version()).toBeGreaterThan(5000);
+    expect(await version()).toBeGreaterThanOrEqual(claim!.seq);
+  });
+
+  it('crash after event claim but before public publication: retry publishes exactly once', async () => {
+    await seedOriginal();
+    await db.ref('packets/incoming_version').set(5000);
+    const queued = await ingest(packetA);
+    if (!queued.ok) return;
+    setGovernedEditApplyFault('after_claim_before_public');
+    await expect(invokeHandler(queued.incomingPath)).rejects.toThrow('GOVERNED_EDIT_APPLY_FAULT:after_claim_before_public');
+    expect(await ledgerClaim(EVENT_A)).toMatchObject({ seq: 5001 });
+    expect(await version()).toBe(5000);
+    await expectNoAccepted();
+    setGovernedEditApplyFault(null);
+    await invokeHandler(queued.incomingPath);
+    expect(await version()).toBe(5001);
+    expect((await db.ref(wbmEditReceiptPath(EVENT_A)).once('value')).val().status).toBe('accepted');
+    await invokeHandler(queued.incomingPath);
+    expect(await version()).toBe(5001);
+  });
+
+  it('crash after public publication before versioned checkpoint: retry does not publish again', async () => {
+    await seedOriginal();
+    await db.ref('packets/incoming_version').set(5000);
+    const queued = await ingest(packetA);
+    if (!queued.ok) return;
+    setGovernedEditApplyFault('after_public_before_versioned');
+    await expect(invokeHandler(queued.incomingPath)).rejects.toThrow('GOVERNED_EDIT_APPLY_FAULT:after_public_before_versioned');
+    expect(await version()).toBe(5001);
+    await expectNoAccepted();
+    setGovernedEditApplyFault(null);
+    await invokeHandler(queued.incomingPath);
+    expect(await version()).toBe(5001);
+    expect((await db.ref(wbmEditReceiptPath(EVENT_A)).once('value')).val().status).toBe('accepted');
+  });
+
+  it('existing terminal retry does not advance a mature public scalar again', async () => {
+    await seedOriginal();
+    await db.ref('packets/incoming_version').set(5000);
+    const queued = await ingest(packetA);
+    if (!queued.ok) return;
+    await invokeHandler(queued.incomingPath);
+    expect(await version()).toBe(5001);
+    const replay = await ingest(packetA);
+    expect(replay).toMatchObject({ ok: true, status: 'accepted' });
+    expect(await version()).toBe(5001);
+    await db.ref(queued.incomingPath).set({
+      ...packetA,
+      payloadDigest: queued.payloadDigest,
+      driverId: DRIVER,
+    });
+    await invokeHandler(queued.incomingPath);
+    expect(await version()).toBe(5001);
+  });
+
+  it('restart with populated ledger and high public scalar stays monotonic', async () => {
+    await seedOriginal();
+    await db.ref('packets/incoming_version').set(5000);
+    await db.ref(VERSION_LEDGER_PATH).set({
+      nextSeq: 5000,
+      claims: {
+        prior_evt: { editEventId: 'prior_evt', payloadDigest: 'prior', seq: 5000 },
+      },
+    });
+    const queued = await ingest(packetA);
+    if (!queued.ok) return;
+    await invokeHandler(queued.incomingPath);
+    expect(await ledgerClaim(EVENT_A)).toMatchObject({ seq: 5001 });
+    expect(await ledgerClaim('prior_evt')).toMatchObject({ seq: 5000 });
+    expect(await version()).toBe(5001);
+  });
+
+  it('healthy execution longer than 30s is not taken over; resumeAt and watchdog stay busy', async () => {
+    await seedOriginal();
+    const queued = await ingest(packetA);
+    if (!queued.ok) return;
+    const release = armGovernedEditLeaseHold();
+    const first = invokeHandler(queued.incomingPath);
+    await waitFor(async () => !!(await db.ref(applyStatePath(EVENT_A)).once('value')).val()?.lease);
+    await new Promise((r) => setTimeout(r, 31_000));
+    await db.ref(queued.incomingPath).update({ resumeAt: Date.now() });
+    await invokeHandler(queued.incomingPath);
+    await invokeHandler(queued.incomingPath);
+    release();
+    await first;
+    expect(Object.keys((await db.ref(`packets/editHistory/${PID}`).once('value')).val())).toEqual([EVENT_A]);
+    expect(await version()).toBe(1);
+    expect((await db.ref(wbmEditReceiptPath(EVENT_A)).once('value')).val().status).toBe('accepted');
+  });
+
+  it('lost ownership before a business phase exits without mutating processed', async () => {
+    await seedOriginal();
+    const queued = await ingest(packetA);
+    if (!queued.ok) return;
+    setGovernedEditLeaseRenew(false);
+    setGovernedEditLeaseMs(200);
+    const release = armGovernedEditLeaseHold();
+    const stale = invokeHandler(queued.incomingPath);
+    await waitFor(async () => !!(await db.ref(applyStatePath(EVENT_A)).once('value')).val()?.lease);
+    await new Promise((r) => setTimeout(r, 250));
+    await invokeHandler(queued.incomingPath);
+    expect((await db.ref(wbmEditReceiptPath(EVENT_A)).once('value')).val().status).toBe('accepted');
+    const bbls = (await db.ref(`packets/processed/${PID}`).once('value')).val().bblsTaken;
+    release();
+    await stale;
+    expect((await db.ref(`packets/processed/${PID}`).once('value')).val().bblsTaken).toBe(bbls);
+    expect(Object.keys((await db.ref(`packets/editHistory/${PID}`).once('value')).val())).toEqual([EVENT_A]);
+  });
 });
+
 

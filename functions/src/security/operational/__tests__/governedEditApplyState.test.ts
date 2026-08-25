@@ -5,8 +5,11 @@ import {
   decideAdvancePhase,
   decideLedgerClaim,
   decidePublicVersionAdvance,
+  decidePublicVersionPublish,
   decideReleaseLease,
+  decideRenewLease,
   eventHasVersionClaim,
+  GOVERNED_EDIT_FUNCTION_TIMEOUT_SECONDS,
   inferPhaseFromHistory,
   mergeMonotonic,
   parseApplyState,
@@ -79,6 +82,37 @@ describe('governedEditApplyState', () => {
     })).toEqual({ done: false });
   });
 
+  it('ledger baselines new claims to a mature public floor', () => {
+    const first = decideLedgerClaim({
+      ledger: { nextSeq: 0, claims: {} },
+      editEventId: 'e1',
+      payloadDigest: 'abc',
+      publicFloor: 5000,
+    });
+    expect(first.ok).toBe(true);
+    if (!first.ok) return;
+    expect(first.seq).toBe(5001);
+    expect(first.ledger.nextSeq).toBe(5001);
+    const next = decideLedgerClaim({
+      ledger: first.ledger,
+      editEventId: 'e2',
+      payloadDigest: 'def',
+      publicFloor: 5000,
+    });
+    expect(next.ok).toBe(true);
+    if (!next.ok) return;
+    expect(next.seq).toBe(5002);
+    const restarted = decideLedgerClaim({
+      ledger: { nextSeq: 5000, claims: { old: { editEventId: 'old', payloadDigest: 'x', seq: 5000 } } },
+      editEventId: 'e3',
+      payloadDigest: 'ghi',
+      publicFloor: 5000,
+    });
+    expect(restarted.ok).toBe(true);
+    if (!restarted.ok) return;
+    expect(restarted.seq).toBe(5001);
+  });
+
   it('ledger assigns once, reuses same digest, conflicts on different digest', () => {
     const first = decideLedgerClaim({
       ledger: { nextSeq: 10, claims: {} },
@@ -114,6 +148,30 @@ describe('governedEditApplyState', () => {
     expect(decidePublicVersionAdvance(0, 1)).toBe(1);
     expect(decidePublicVersionAdvance(11, 10)).toBe(11);
     expect(decidePublicVersionAdvance(11, 12)).toBe(12);
+  });
+
+  it('first publish is observable against a mature scalar; retries and higher concurrent seqs do not extra-tick', () => {
+    expect(decidePublicVersionPublish({ current: 5000, assignedSeq: 5001, forceIfAbsorbed: true })).toBe(5001);
+    expect(decidePublicVersionPublish({ current: 5001, assignedSeq: 5001, forceIfAbsorbed: true })).toBe(5002);
+    expect(decidePublicVersionPublish({ current: 5001, assignedSeq: 5001, forceIfAbsorbed: false })).toBe(5001);
+    expect(decidePublicVersionPublish({ current: 2, assignedSeq: 1, forceIfAbsorbed: true })).toBe(2);
+    expect(decidePublicVersionPublish({ current: 0, assignedSeq: 2, forceIfAbsorbed: true })).toBe(2);
+  });
+
+  it('declared processEditRequest timeout is 60s and lease renews for the recorded owner only', () => {
+    expect(GOVERNED_EDIT_FUNCTION_TIMEOUT_SECONDS).toBe(60);
+    const s = captured({ lease: { ownerId: 'A', expiresAt: 1 } });
+    const renewed = decideRenewLease({ current: s, ownerId: 'A', nowMs: 10_000, leaseMs: 30_000 });
+    expect(renewed.action).toBe('renew');
+    if (renewed.action !== 'renew') return;
+    expect(renewed.state.lease).toEqual({ ownerId: 'A', expiresAt: 40_000 });
+    expect(decideRenewLease({ current: s, ownerId: 'B', nowMs: 10_000, leaseMs: 30_000 }).action).toBe('lost');
+    expect(decideRenewLease({
+      current: captured({ lease: { ownerId: 'B', expiresAt: 99_000 } }),
+      ownerId: 'A',
+      nowMs: 10_000,
+      leaseMs: 30_000,
+    }).action).toBe('lost');
   });
 
   it('parseVersionLedger accepts empty and compact claims', () => {
