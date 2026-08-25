@@ -1,22 +1,24 @@
 import { readFileSync } from 'fs';
 import { join } from 'path';
 
-const root = join(__dirname, '../../../../src/components');
-const modal = readFileSync(join(root, 'TicketDetailModal.tsx'), 'utf8');
-const editor = readFileSync(join(root, 'TicketStructuredEditor.tsx'), 'utf8');
+const root = join(__dirname, '../../../../src');
+const modal = readFileSync(join(root, 'components/TicketDetailModal.tsx'), 'utf8');
+const editor = readFileSync(join(root, 'components/TicketReviewEditor.tsx'), 'utf8');
+const routed = readFileSync(join(root, 'components/TicketPaperRoutedView.tsx'), 'utf8');
+const dispatch = readFileSync(join(root, 'app/dispatch/page.tsx'), 'utf8');
 
 describe('flag-ON route uses distinct governed surfaces', () => {
   it('edit_form, read_only_detail, canonical_paper, policy_undefined, and route failure are distinct', () => {
-    expect(modal).toContain('TicketStructuredEditor');
-    expect(modal).toContain('TicketReadOnlyDetail');
-    expect(modal).toContain('CanonicalTicketPaperHost');
-    expect(modal).toContain('TicketPolicyUnavailable');
-    expect(modal).toContain('TicketRouteFailure');
-    const canonicalFn = modal.slice(modal.indexOf('function TicketDetailModalCanonical'), modal.indexOf('export function TicketDetailModal'));
-    expect(canonicalFn).not.toContain('TicketDetailModalLegacy');
-    expect(canonicalFn).not.toContain('className="hidden"');
-    expect(canonicalFn).toContain('Back to editor');
+    expect(modal).toContain('TicketPaperRoutedView');
+    expect(modal).not.toContain('TicketStructuredEditor');
+    expect(routed).toContain('TicketReviewEditor');
+    expect(routed).toContain('TicketReadOnlyDetail');
+    expect(routed).toContain('CanonicalTicketPaperHost');
+    expect(routed).toContain('TicketPolicyUnavailable');
+    expect(routed).toContain('TicketRouteFailure');
+    expect(editor).toContain("type={NUMERIC.has(field) ? 'number' : 'text'}");
     expect(editor).toContain('Preview paper');
-    expect(editor).toContain('data-paper-rejected-draft');
+    expect(dispatch).toContain('TicketPaperRoutedView');
+    expect(dispatch).not.toMatch(/isCanonicalPaperEnabled\(\) && \(\s*<CanonicalTicketPaperHost/);
   });
 });

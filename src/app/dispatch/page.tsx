@@ -17,7 +17,7 @@ import { trackJobTypeUsage } from '@/lib/jobTypeUsage';
 import { dismissDispatch } from '@/lib/dismissDispatch';
 import { staffCancelDispatch, staffCreateDispatch, staffUpdateDispatch } from '@/lib/staffWriteDispatch';
 import { dispatchPaperLookup, isCanonicalPaperEnabled } from '@/lib/canonicalPaper';
-import { CanonicalTicketPaperHost } from '@/components/CanonicalTicketPaperHost';
+import { TicketPaperRoutedView } from '@/components/TicketPaperRoutedView';
 
 // ─── Types ───────────────────────────────────────────────────────────────────
 
@@ -4787,7 +4787,7 @@ function CompletedJobsPanel({ jobs, drivers, allWells, allDisposals, highlightJo
                   {/* Canonical stored paper (flag ON) or legacy live JSX paper (flag OFF) */}
                   {ticketDetailJobId === job.id && isCanonicalPaperEnabled() && (
                     <div className="mt-3" onClick={(e) => e.stopPropagation()}>
-                      <CanonicalTicketPaperHost
+                      <TicketPaperRoutedView
                         lookup={dispatchPaperLookup({ ticketDocId: (job as any).ticketDocId, invoiceDocId: job.invoiceDocId })}
                         embedded
                       />

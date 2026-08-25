@@ -181,6 +181,7 @@ export interface PaperWorkflowRecord {
   invoiceDocId: string;
   companyId: string;
   stage: PaperWorkflowStage;
+  version: number;
   closedAtMs: number | null;
   handedToPayrollAtMs: number | null;
   handedToPayrollByUid: string | null;
@@ -190,7 +191,27 @@ export interface PaperWorkflowRecord {
   overrideReason: string | null;
   overrideByUid: string | null;
   overrideAtMs: number | null;
+  lastMutationId: string | null;
   updatedAtMs: number;
+}
+
+export type TicketReviewRecord = PaperWorkflowRecord;
+
+export interface TicketReviewEventRecord {
+  mutationId: string;
+  ticketDocId: string;
+  invoiceDocId: string;
+  companyId: string;
+  action: 'correct' | 'hand_to_payroll' | 'finalize_to_billing' | 'reopen';
+  actorUid: string;
+  via: string;
+  reason: string | null;
+  fields: string[];
+  stageBefore: string;
+  stageAfter: string;
+  versionBefore: number;
+  versionAfter: number;
+  nowMs: number;
 }
 
 export interface PaperSourceEventRecord {
@@ -244,6 +265,7 @@ export interface TicketSourceRecord {
   updatedAtMs?: unknown;
   editedAt?: unknown;
   packageId?: unknown;
+  paperMutationId?: unknown;
 }
 
 export interface InvoiceSourceRecord {
@@ -276,6 +298,7 @@ export interface InvoiceSourceRecord {
   updatedAt?: unknown;
   updatedAtMs?: unknown;
   editedAt?: unknown;
+  paperMutationId?: unknown;
 }
 
 export type PaperCallerKind = 'dashboard' | 'driver' | 'system';

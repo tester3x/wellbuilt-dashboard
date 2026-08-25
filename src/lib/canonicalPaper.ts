@@ -81,8 +81,9 @@ export async function getTicketPaperRoute(lookup: PaperLookup): Promise<TicketPa
   return res.data as TicketPaperRoute;
 }
 
-export async function staffMutateTicketPaper(ticketDocId: string, fields: Record<string, unknown>): Promise<{ ok: true }> {
-  const fn = httpsCallable(getFirebaseFunctions(), 'staffMutateTicketPaper');
+export async function staffCorrectTicket(ticketDocId: string, fields: Record<string, unknown>): Promise<{ ok: true }> {
+  const fn = httpsCallable(getFirebaseFunctions(), 'staffCorrectTicket');
   const res = await fn({ ticketDocId, fields });
   return res.data as { ok: true };
 }
+export const staffMutateTicketPaper = staffCorrectTicket;

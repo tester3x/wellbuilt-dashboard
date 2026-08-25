@@ -11,6 +11,7 @@ import type {
   PaperRevisionRecord,
   PaperSourceEventRecord,
   PaperWorkflowRecord,
+  TicketReviewEventRecord,
   TicketSourceRecord,
 } from './types';
 
@@ -114,17 +115,50 @@ export function createFirestorePaperStore(deps?: {
       return snap.exists ? (snap.data() as PaperSourceEventRecord) : null;
     },
     async getWorkflow(ticketDocId) {
-      const snap = await fs().collection('paper_ticket_workflows').doc(ticketDocId).get();
+      const snap = await fs().collection('ticket_review_states').doc(ticketDocId).get();
       return snap.exists ? (snap.data() as PaperWorkflowRecord) : null;
     },
     async putWorkflow(row) {
-      await fs().collection('paper_ticket_workflows').doc(row.ticketDocId).set(row);
+      await fs().collection('ticket_review_states').doc(row.ticketDocId).set(row);
     },
     async patchTicket(ticketDocId, patch) {
       await fs().collection('tickets').doc(ticketDocId).update(patch);
     },
     async patchInvoice(invoiceDocId, patch) {
       await fs().collection('invoices').doc(invoiceDocId).update(patch);
+    },
+    async putReviewEvent(event) {
+      await fs().collection('ticket_review_events').doc(event.mutationId).set(event);
+    },
+    async runReviewTransaction(fn) {
+      const db = fs();
+      return db.runTransaction(async (tx) => {
+        const scoped = {
+          async getTicket(id: string) {
+            return dataWithId<TicketSourceRecord>(await tx.get(db.collection('tickets').doc(id)));
+          },
+          async getInvoice(id: string) {
+            return dataWithId<InvoiceSourceRecord>(await tx.get(db.collection('invoices').doc(id)));
+          },
+          async getWorkflow(id: string) {
+            const snap = await tx.get(db.collection('ticket_review_states').doc(id));
+            return snap.exists ? snap.data() as PaperWorkflowRecord : null;
+          },
+          async patchTicket(id: string, patch: Record<string, unknown>) {
+            tx.update(db.collection('tickets').doc(id), patch);
+          },
+          async patchInvoice(id: string, patch: Record<string, unknown>) {
+            tx.update(db.collection('invoices').doc(id), patch);
+          },
+          async putWorkflow(row: PaperWorkflowRecord) {
+            tx.set(db.collection('ticket_review_states').doc(row.ticketDocId), row);
+          },
+          async putReviewEvent(event: TicketReviewEventRecord) {
+            tx.set(db.collection('ticket_review_events').doc(event.mutationId), event);
+          },
+        };
+        return fn(scoped as unknown as PaperStore);
+      });
     },
     async readHtmlBytes(path) {
       try {
@@ -199,6 +233,10 @@ export function createFirestorePaperStore(deps?: {
           ? db.collection('paper_invoice_index').doc(input.invoiceIndex.invoiceDocId)
           : null;
         const idxSnap = idxRef ? await tx.get(idxRef) : null;
+        const reviewRef = input.reviewSeed
+          ? db.collection('ticket_review_states').doc(input.reviewSeed.ticketDocId)
+          : null;
+        const reviewSnap = reviewRef ? await tx.get(reviewRef) : null;
         if (!eventSnap.exists || !artSnap.exists) throw new Error('event_not_reserved');
         const event = eventSnap.data() as PaperSourceEventRecord;
         const artifact = artSnap.data() as PaperArtifactRecord;
@@ -231,6 +269,9 @@ export function createFirestorePaperStore(deps?: {
           } else {
             tx.create(idxRef, input.invoiceIndex);
           }
+        }
+        if (input.reviewSeed && reviewRef && reviewSnap && !reviewSnap.exists) {
+          tx.create(reviewRef, input.reviewSeed);
         }
         return {
           action: 'created' as const,

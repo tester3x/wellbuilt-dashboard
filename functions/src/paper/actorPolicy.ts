@@ -18,7 +18,7 @@ import type {
   TicketSourceRecord,
 } from './types';
 
-export const PAPER_ACTOR_POLICY_VERSION = 'canonical-paper-actor-routing.v2';
+export const PAPER_ACTOR_POLICY_VERSION = 'canonical-paper-actor-routing.v3';
 export const DRIVER_EDIT_WINDOW_MS = 24 * 60 * 60 * 1000;
 
 export const DRIVER_MUTATION_FIELDS = [
@@ -33,8 +33,7 @@ export const DISPATCH_MUTATION_FIELDS = [
 ] as const;
 
 export const PAYROLL_MUTATION_FIELDS = [
-  'qty', 'bbls', 'pickupBbls', 'dropoffBbls', 'top', 'bottom', 'hours',
-  'totalBBL', 'totalHours',
+  'hours', 'totalHours',
 ] as const;
 
 export const BILLING_TICKET_MUTATION_FIELDS = [] as const;
@@ -42,15 +41,6 @@ export const BILLING_TICKET_MUTATION_FIELDS = [] as const;
 export const ADMIN_OVERRIDE_FIELDS = [
   ...new Set([...DRIVER_MUTATION_FIELDS, ...DISPATCH_MUTATION_FIELDS, ...PAYROLL_MUTATION_FIELDS]),
 ];
-
-const ROLE_CAPS: Record<string, string[]> = {
-  dispatch: ['viewDispatch', 'viewTickets', 'createDispatch'],
-  payroll: ['viewPayroll', 'viewBilling', 'approvePayroll', 'editBilling'],
-  manager: ['viewDispatch', 'viewTickets', 'viewPayroll', 'createDispatch', 'manageDrivers'],
-  admin: ['viewDispatch', 'viewTickets', 'viewPayroll', 'viewBilling', 'createDispatch', 'approvePayroll', 'editBilling', 'manageDrivers'],
-  it: ['viewDispatch', 'viewTickets', 'viewPayroll', 'viewBilling', 'createDispatch', 'approvePayroll', 'editBilling', 'manageDrivers'],
-  viewer: ['viewTickets', 'viewDispatch', 'viewPayroll', 'viewBilling'],
-};
 
 export type PaperPresentationMode = 'edit_form' | 'canonical_paper' | 'read_only_detail';
 export type PaperStageActor = 'driver' | 'dispatch' | 'payroll' | 'billing' | 'admin' | 'viewer';
@@ -81,11 +71,33 @@ export type PaperPresentationDecision = {
 };
 
 export function callerHasCap(caller: PaperCaller, cap: string): boolean {
-  if ((caller.caps || []).includes(cap)) return true;
-  for (const role of caller.roles || []) {
-    if ((ROLE_CAPS[role] || []).includes(cap)) return true;
+  return (caller.caps || []).includes(cap);
+}
+
+export function assertRecordTenant(input: {
+  caller: PaperCaller;
+  ticket: TicketSourceRecord;
+  invoice: InvoiceSourceRecord | null;
+  review?: PaperWorkflowRecord | null;
+  allowAdminCrossTenant?: boolean;
+}): { ok: true } | { ok: false; reason: string; message: string } {
+  const ticketCo = asTrimmedString(input.ticket.companyId);
+  const invoiceCo = input.invoice ? asTrimmedString(input.invoice.companyId) : ticketCo;
+  const reviewCo = input.review ? asTrimmedString(input.review.companyId) : ticketCo;
+  if (!ticketCo || (input.invoice && invoiceCo !== ticketCo) || (input.review && reviewCo !== ticketCo)) {
+    return { ok: false, reason: 'record_company_mismatch', message: 'Ticket, invoice, and review companyId must agree.' };
   }
-  return false;
+  if (input.caller.kind === 'driver') {
+    if (asTrimmedString(input.caller.companyId) !== ticketCo) {
+      return { ok: false, reason: 'record_company_mismatch', message: 'Driver company does not match the ticket.' };
+    }
+    return { ok: true };
+  }
+  if (input.caller.isPlatformAdmin && input.allowAdminCrossTenant) return { ok: true };
+  if (!input.caller.companyId || input.caller.companyId !== ticketCo) {
+    return { ok: false, reason: 'record_company_mismatch', message: 'Caller company does not match the ticket.' };
+  }
+  return { ok: true };
 }
 
 function isClosedStatus(status: unknown): boolean {
@@ -128,14 +140,15 @@ export function driverOwnsTicket(
 export function workflowStageFor(
   invoice: InvoiceSourceRecord | null,
   workflow: PaperWorkflowRecord | null,
-): PaperWorkflowStage | 'open' {
+): PaperWorkflowStage | 'open' | 'unavailable' {
   if (!invoiceLooksClosed(invoice) && !driverEditWindowOriginMs(invoice)) return 'open';
-  return workflow?.stage || 'dispatch_review';
+  if (!workflow) return 'unavailable';
+  return workflow.stage;
 }
 
 export function resolveStageActor(
   caller: PaperCaller,
-  stage: PaperWorkflowStage | 'open',
+  stage: PaperWorkflowStage | 'open' | 'unavailable',
 ): PaperStageActor {
   if (caller.kind === 'driver') return 'driver';
   if (caller.isPlatformAdmin) return 'admin';
@@ -163,9 +176,20 @@ export function assertActorMayMutateTicket(input: {
   nowMs: number;
   fields?: string[];
 }): { ok: true; via: string; allowedFields: string[] } | { ok: false; reason: string; message: string } {
+  const tenant = assertRecordTenant({
+    caller: input.caller,
+    ticket: input.ticket,
+    invoice: input.invoice,
+    review: input.workflow,
+    allowAdminCrossTenant: input.caller.isPlatformAdmin && !!input.workflow?.overrideActive,
+  });
+  if (!tenant.ok) return tenant;
   const closedAtMs = driverEditWindowOriginMs(input.invoice);
   const closed = invoiceLooksClosed(input.invoice) || closedAtMs != null;
   const stage = workflowStageFor(input.invoice, input.workflow || null);
+  if (stage === 'unavailable' && input.caller.kind !== 'driver') {
+    return { ok: false, reason: 'workflow_unavailable', message: 'Ticket review state is not available.' };
+  }
   const actor = resolveStageActor(input.caller, stage);
 
   if (input.caller.kind === 'system') {
@@ -237,9 +261,29 @@ export function evaluatePaperPresentation(input: {
 }): PaperPresentationDecision {
   const evaluatedAtMs = input.nowMs;
   const policyVersion = PAPER_ACTOR_POLICY_VERSION;
+  const tenant = assertRecordTenant({
+    caller: input.caller,
+    ticket: input.ticket,
+    invoice: input.invoice,
+    review: input.workflow,
+    allowAdminCrossTenant: input.caller.isPlatformAdmin,
+  });
+  if (!tenant.ok) {
+    return { ...tenant, canEdit: false, evaluatedAtMs: input.nowMs, policyVersion: PAPER_ACTOR_POLICY_VERSION };
+  }
   const closedAtMs = driverEditWindowOriginMs(input.invoice);
   const closed = invoiceLooksClosed(input.invoice) || closedAtMs != null;
   const stage = workflowStageFor(input.invoice, input.workflow || null);
+  if (closed && stage === 'unavailable' && input.caller.kind !== 'driver') {
+    return {
+      ok: false,
+      reason: 'workflow_unavailable',
+      message: 'Ticket review state is not available.',
+      canEdit: false,
+      evaluatedAtMs: input.nowMs,
+      policyVersion: PAPER_ACTOR_POLICY_VERSION,
+    };
+  }
   const actor = resolveStageActor(input.caller, stage);
   const paperMeta = input.artifact?.currentRevisionId
     ? { artifactId: input.artifact.artifactId, revisionId: input.artifact.currentRevisionId }

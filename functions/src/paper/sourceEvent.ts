@@ -32,6 +32,15 @@ export function deriveGovernedSourceEvent(input: {
   if (!ticketDocId) {
     return { ok: false, reason: 'ticket_id_required', message: 'Ticket document id is required.' };
   }
+  const mutationId = asTrimmedString((input.ticket as { paperMutationId?: unknown }).paperMutationId)
+    || asTrimmedString((input.invoice as { paperMutationId?: unknown } | null)?.paperMutationId);
+  if (input.op !== 'close' && mutationId) {
+    const eventMs = ticketEditMs(input.ticket) || invoiceEditMs(input.invoice);
+    if (!eventMs) {
+      return { ok: false, reason: 'event_not_found', message: 'No authoritative correction timestamp.' };
+    }
+    return { ok: true, sourceEventId: `correction:${mutationId}`, eventMs };
+  }
   if (input.op === 'close') {
     const closedAtMs = timestampMs(input.invoice?.closedAtMs) || timestampMs(input.invoice?.closedAt);
     if (!closedAtMs) {

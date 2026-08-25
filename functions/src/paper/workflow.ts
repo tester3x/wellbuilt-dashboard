@@ -14,6 +14,7 @@ export function seedDispatchReviewWorkflow(input: {
     invoiceDocId: input.invoiceDocId,
     companyId: input.companyId,
     stage: 'dispatch_review',
+    version: 1,
     closedAtMs: timestampMs(input.invoice?.closedAtMs) || timestampMs(input.invoice?.closedAt),
     handedToPayrollAtMs: null,
     handedToPayrollByUid: null,
@@ -23,6 +24,7 @@ export function seedDispatchReviewWorkflow(input: {
     overrideReason: null,
     overrideByUid: null,
     overrideAtMs: null,
+    lastMutationId: null,
     updatedAtMs: input.nowMs,
   };
 }
@@ -32,7 +34,7 @@ export function handToPayroll(
   caller: PaperCaller,
   nowMs: number,
 ): { ok: true; workflow: PaperWorkflowRecord } | { ok: false; reason: string; message: string } {
-  if (!callerHasCap(caller, 'createDispatch') && !caller.isPlatformAdmin) {
+  if (!callerHasCap(caller, 'createDispatch')) {
     return { ok: false, reason: 'missing_capability', message: 'Dispatch handoff requires createDispatch.' };
   }
   if (current.stage !== 'dispatch_review') {
@@ -46,6 +48,7 @@ export function handToPayroll(
       handedToPayrollAtMs: nowMs,
       handedToPayrollByUid: caller.uid,
       overrideActive: false,
+      version: current.version + 1,
       updatedAtMs: nowMs,
     },
   };
@@ -56,7 +59,7 @@ export function finalizeToBilling(
   caller: PaperCaller,
   nowMs: number,
 ): { ok: true; workflow: PaperWorkflowRecord } | { ok: false; reason: string; message: string } {
-  if (!callerHasCap(caller, 'approvePayroll') && !caller.isPlatformAdmin) {
+  if (!callerHasCap(caller, 'approvePayroll')) {
     return { ok: false, reason: 'missing_capability', message: 'Payroll finalization requires approvePayroll.' };
   }
   if (current.stage !== 'payroll_review') {
@@ -70,6 +73,7 @@ export function finalizeToBilling(
       finalizedToBillingAtMs: nowMs,
       finalizedToBillingByUid: caller.uid,
       overrideActive: false,
+      version: current.version + 1,
       updatedAtMs: nowMs,
     },
   };
@@ -96,6 +100,7 @@ export function reopenForOverride(
       overrideReason: trimmed,
       overrideByUid: caller.uid,
       overrideAtMs: nowMs,
+      version: current.version + 1,
       updatedAtMs: nowMs,
     },
   };

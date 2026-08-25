@@ -20,7 +20,10 @@ match /paper_source_events/{eventId} {
 match /paper_invoice_index/{invoiceDocId} {
   allow read, write: if false;
 }
-match /paper_ticket_workflows/{ticketDocId} {
+match /ticket_review_states/{ticketDocId} {
+  allow read, write: if false;
+}
+match /ticket_review_events/{mutationId} {
   allow read, write: if false;
 }
 ```

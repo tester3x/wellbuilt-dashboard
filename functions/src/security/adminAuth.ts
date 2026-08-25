@@ -35,7 +35,7 @@ export interface DashboardCaller {
   isPlatformAdmin: boolean;
 }
 
-async function loadDashboardCaller(
+export async function resolveDashboardCaller(
   authUid: string | undefined,
   authToken?: Record<string, unknown> | null,
 ): Promise<DashboardCaller> {
@@ -97,7 +97,7 @@ export async function requireRegisteredDashboardUser(
   authUid: string | undefined,
   authToken?: Record<string, unknown> | null,
 ): Promise<DashboardCaller> {
-  return loadDashboardCaller(authUid, authToken);
+  return resolveDashboardCaller(authUid, authToken);
 }
 
 /**
@@ -112,7 +112,7 @@ export async function requireManageDrivers(
   authUid: string | undefined,
   authToken?: Record<string, unknown> | null,
 ): Promise<DashboardCaller> {
-  const caller = await loadDashboardCaller(authUid, authToken);
+  const caller = await resolveDashboardCaller(authUid, authToken);
   if (caller.caps.includes('manageDrivers')) return caller;
   if (authToken && (authToken.manageDrivers === true || authToken.manageDrivers === 'true')) {
     return { ...caller, caps: [...caller.caps, 'manageDrivers'] };

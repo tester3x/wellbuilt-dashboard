@@ -9,6 +9,7 @@ import { buildRevisionRecord, paperAssetPath } from './persist';
 import { isTicketOnlyWaterTicket, projectWaterTicket } from './projection';
 import { deriveGovernedSourceEvent } from './sourceEvent';
 import { buildPaperSourceSnapshot, recordsFromPaperSourceSnapshot } from './sourceSnapshot';
+import { seedDispatchReviewWorkflow } from './workflow';
 import type { PaperStore } from './store';
 import {
   waterTicketArtifactId,
@@ -222,6 +223,15 @@ export async function materializeWaterTicketPaper(input: {
         }
         : null,
       nowMs: input.nowMs,
+      reviewSeed: input.op === 'close'
+        ? seedDispatchReviewWorkflow({
+          ticketDocId: ticket.id,
+          invoiceDocId: invoiceId,
+          companyId,
+          invoice,
+          nowMs: input.nowMs,
+        })
+        : null,
     });
     return {
       ok: true,

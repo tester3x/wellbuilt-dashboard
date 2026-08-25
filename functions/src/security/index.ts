@@ -65,8 +65,12 @@ export {
   staffGetTicketPaper,
   staffMaterializeTicketPaper,
   getTicketPaperRoute,
+  staffCorrectTicket,
   staffMutateTicketPaper,
+  staffHandReviewToPayroll,
   staffHandTicketToPayroll,
+  staffFinalizeReviewToBilling,
   staffFinalizeTicketToBilling,
+  staffReopenTicketReview,
   staffReopenTicketPaper,
 } from './paperCallables';

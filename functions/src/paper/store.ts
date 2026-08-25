@@ -8,6 +8,7 @@ import type {
   PaperSourceEventRecord,
   PaperSourceSnapshot,
   PaperWorkflowRecord,
+  TicketReviewEventRecord,
   TicketSourceRecord,
 } from './types';
 
@@ -41,6 +42,8 @@ export interface PaperStore {
   putWorkflow(row: PaperWorkflowRecord): Promise<void>;
   patchTicket(ticketDocId: string, patch: Record<string, unknown>): Promise<void>;
   patchInvoice(invoiceDocId: string, patch: Record<string, unknown>): Promise<void>;
+  putReviewEvent(event: TicketReviewEventRecord): Promise<void>;
+  runReviewTransaction<T>(fn: (store: PaperStore) => Promise<T>): Promise<T>;
   readHtmlBytes(path: string): Promise<Buffer | null>;
 
   reserveSourceEvent(input: {
@@ -60,6 +63,7 @@ export interface PaperStore {
     revision: PaperRevisionRecord;
     invoiceIndex: PaperInvoiceIndexRecord | null;
     nowMs: number;
+    reviewSeed?: PaperWorkflowRecord | null;
   }): Promise<{ action: 'created' | 'idempotent'; artifact: PaperArtifactRecord; revision: PaperRevisionRecord }>;
 }
 
@@ -78,6 +82,7 @@ export class MemoryPaperStore implements PaperStore {
   invoiceIndex = new Map<string, PaperInvoiceIndexRecord>();
   sourceEvents = new Map<string, PaperSourceEventRecord>();
   workflows = new Map<string, PaperWorkflowRecord>();
+  reviewEvents = new Map<string, TicketReviewEventRecord>();
   liveAssets = new Map<string, Buffer>();
   companyTimezones = new Map<string, string>();
   fetchCount = 0;
@@ -169,6 +174,12 @@ export class MemoryPaperStore implements PaperStore {
     const cur = this.invoices.get(invoiceDocId);
     if (!cur) throw new Error('invoice_not_found');
     this.invoices.set(invoiceDocId, { ...cur, ...patch });
+  }
+  async putReviewEvent(event: TicketReviewEventRecord) {
+    this.reviewEvents.set(event.mutationId, { ...event });
+  }
+  async runReviewTransaction<T>(fn: (store: PaperStore) => Promise<T>): Promise<T> {
+    return this.runExclusive(() => fn(this));
   }
   async readHtmlBytes(path: string) {
     const buf = this.html.get(path);
@@ -265,6 +276,9 @@ export class MemoryPaperStore implements PaperStore {
           throw new Error('ambiguous_invoice_index');
         }
         if (!existingIdx) this.invoiceIndex.set(input.invoiceIndex.invoiceDocId, { ...input.invoiceIndex });
+      }
+      if (input.reviewSeed && !this.workflows.get(input.reviewSeed.ticketDocId)) {
+        this.workflows.set(input.reviewSeed.ticketDocId, { ...input.reviewSeed });
       }
       return { action: 'created' as const, artifact: { ...artifact }, revision: input.revision };
     });

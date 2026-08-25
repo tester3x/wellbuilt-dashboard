@@ -23,7 +23,12 @@ jest.mock('firebase-admin', () => ({
       },
     }),
   }),
-  firestore: () => ({ collection: () => ({ add: async () => ({}) }) }),
+  firestore: () => ({
+    collection: () => ({
+      add: async () => ({}),
+      doc: () => ({ get: async () => ({ exists: false, data: () => undefined }) }),
+    }),
+  }),
   apps: [],
 }));
 

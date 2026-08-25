@@ -7,6 +7,7 @@ import * as admin from 'firebase-admin';
 import { createFirestorePaperStore } from '../firestoreStore';
 import { materializeWaterTicketPaper } from '../engine';
 import { applyInvoicePaperLifecycle, applyTicketPaperLifecycle } from '../lifecycle';
+import { applyTicketReviewAction } from '../ticketReview';
 import { parseGovernedStorageUri } from '../storageUri';
 import { waterTicketArtifactId } from '../types';
 import {
@@ -19,6 +20,7 @@ import {
   PIXEL_B,
   TICKET_20100_ID,
   invoice20100,
+  dispatchLg,
   staffLg,
   ticket20100,
 } from './fixture20100';
@@ -428,5 +430,39 @@ describeE2E('firestore emulator: write-order, retry, tenant assets', () => {
     const rev = await store.getRevision(waterTicketArtifactId(ticketId), 'r1');
     expect(rev?.projection.photos).toHaveLength(1);
     expect(await store.getRevision(waterTicketArtifactId(ticketId), 'r2')).toBeNull();
+  });
+
+  it('one correction touching ticket and invoice creates exactly one new revision', async () => {
+    const db = app.firestore();
+    const ticketId = `${TICKET_20100_ID}-mut`;
+    const invoiceId = `${INVOICE_20100_ID}-mut`;
+    await db.collection('tickets').doc(ticketId).set({ ...ticket20100, id: ticketId, invoiceDocId: invoiceId });
+    await db.collection('invoices').doc(invoiceId).set({ ...invoice20100, id: invoiceId, status: 'closed' });
+    const store = storeFor(db);
+    const close = await applyInvoicePaperLifecycle({
+      store, invoiceId, before: { status: 'open' },
+      after: { ...invoice20100, id: invoiceId, status: 'closed', closedAtMs: CLOSED_AT_MS },
+      nowMs: CLOSED_AT_MS,
+    });
+    expect(close.class).toBe('success');
+    const dispatchCap = { ...dispatchLg, caps: ['createDispatch'] };
+    const corrected = await applyTicketReviewAction({
+      store, caller: dispatchCap, ticketDocId: ticketId, action: 'correct', fields: { truck: '888' }, nowMs: CLOSED_AT_MS + 10,
+    });
+    expect(corrected.ok).toBe(true);
+    if (!corrected.ok) return;
+    const ticketAfter = await store.getTicket(ticketId);
+    const invoiceAfter = await store.getInvoice(invoiceId);
+    const [tLife, iLife] = await Promise.all([
+      applyTicketPaperLifecycle({
+        store, ticketId, before: { ...ticket20100, id: ticketId }, after: { ...(ticketAfter as object) } as Record<string, unknown>, nowMs: CLOSED_AT_MS + 11,
+      }),
+      applyInvoicePaperLifecycle({
+        store, invoiceId, before: { ...invoice20100, id: invoiceId, status: 'closed' }, after: { ...(invoiceAfter as object) } as Record<string, unknown>, nowMs: CLOSED_AT_MS + 11,
+      }),
+    ]);
+    expect(tLife.class === 'success' || iLife.class === 'success').toBe(true);
+    expect(await store.getRevision(waterTicketArtifactId(ticketId), 'r2')).toBeTruthy();
+    expect(await store.getRevision(waterTicketArtifactId(ticketId), 'r3')).toBeNull();
   });
 });
