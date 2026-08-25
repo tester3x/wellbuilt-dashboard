@@ -6,6 +6,8 @@
 import * as admin from 'firebase-admin';
 import { createFirestorePaperStore } from '../firestoreStore';
 import { materializeWaterTicketPaper } from '../engine';
+import { applyInvoicePaperLifecycle, applyTicketPaperLifecycle } from '../lifecycle';
+import { parseGovernedStorageUri } from '../storageUri';
 import { waterTicketArtifactId } from '../types';
 import {
   CLOSED_AT_MS,
@@ -177,5 +179,175 @@ describeE2E('firestore emulator: concurrent paper revisions', () => {
     const artifact = await store.getArtifact(waterTicketArtifactId(ticketId));
     expect(artifact?.currentRevisionId).toBe(editFirst.revision.revisionId);
     expect(await store.getRevision(waterTicketArtifactId(ticketId), closeLate.revision.revisionId)).toBeTruthy();
+  });
+});
+
+describeE2E('firestore emulator: write-order, retry, tenant assets', () => {
+  let app: admin.app.App;
+
+  beforeAll(() => {
+    process.env.FIRESTORE_EMULATOR_HOST = EMULATOR!;
+    app = admin.initializeApp({ projectId: PROJECT }, `paper-life-${Date.now()}`);
+  });
+
+  afterAll(async () => {
+    await app.delete();
+  });
+
+  function identityRtdb() {
+    return {
+      ref: (path: string) => ({
+        once: async () => ({
+          exists: () => path.includes(DRIVER_ZFOLD),
+          val: () => ({ legalName: 'Mike ZFold7 Burger' }),
+        }),
+      }),
+    } as unknown as admin.database.Database;
+  }
+
+  function storeFor(db: admin.firestore.Firestore, bucket = memBucket()) {
+    const store = createFirestorePaperStore({ firestore: db, bucket, rtdb: identityRtdb() });
+    store.readLiveAsset = async (uri: string, opts) => {
+      const parsed = parseGovernedStorageUri(uri, {
+        projectBucket: 'wellbuilt-sync.appspot.com',
+        companyId: opts?.companyId,
+        invoiceDocId: opts?.invoiceDocId,
+        ticketDocId: opts?.ticketDocId,
+      });
+      if (/storage\.googleapis\.com|gs:\/\//.test(uri) && !parsed.ok) return null;
+      if (uri.includes('jsa')) return JSA_BYTES;
+      if (uri.includes('a.jpg') || uri.includes('own.jpg')) return PIXEL_A;
+      if (uri.includes('b.jpg')) return PIXEL_B;
+      return PIXEL_A;
+    };
+    return store;
+  }
+
+  it('ticket first then invoice close, and the reverse, each yield one r1', async () => {
+    const db = app.firestore();
+    const ticketA = `${TICKET_20100_ID}-order-a`;
+    const invA = `${INVOICE_20100_ID}-order-a`;
+    await db.collection('tickets').doc(ticketA).set({ ...ticket20100, id: ticketA, invoiceDocId: invA });
+    const storeA = storeFor(db);
+    const beforeClose = await applyTicketPaperLifecycle({
+      store: storeA, ticketId: ticketA, before: null, after: { ...ticket20100, id: ticketA, invoiceDocId: invA }, nowMs: CLOSED_AT_MS - 1,
+    });
+    expect(beforeClose.class).toBe('ignored');
+    await db.collection('invoices').doc(invA).set({ ...invoice20100, id: invA, status: 'closed' });
+    const closeA = await applyInvoicePaperLifecycle({
+      store: storeA, invoiceId: invA, before: { status: 'open' }, after: { ...invoice20100, id: invA, status: 'closed', closedAtMs: CLOSED_AT_MS }, nowMs: CLOSED_AT_MS,
+    });
+    expect(closeA.class).toBe('success');
+    expect((await storeA.getArtifact(waterTicketArtifactId(ticketA)))?.currentRevisionId).toBe('r1');
+
+    const ticketB = `${TICKET_20100_ID}-order-b`;
+    const invB = `${INVOICE_20100_ID}-order-b`;
+    const storeB = storeFor(db);
+    await db.collection('invoices').doc(invB).set({ ...invoice20100, id: invB, status: 'closed', closedAtMs: CLOSED_AT_MS });
+    const closeB = await applyInvoicePaperLifecycle({
+      store: storeB, invoiceId: invB, before: { status: 'open' }, after: { ...invoice20100, id: invB, status: 'closed', closedAtMs: CLOSED_AT_MS }, nowMs: CLOSED_AT_MS,
+    });
+    expect(closeB.class).toBe('pending_reconciliation');
+    await db.collection('tickets').doc(ticketB).set({ ...ticket20100, id: ticketB, invoiceDocId: invB });
+    const ticketArrive = await applyTicketPaperLifecycle({
+      store: storeB, ticketId: ticketB, before: null, after: { ...ticket20100, id: ticketB, invoiceDocId: invB }, nowMs: CLOSED_AT_MS + 2,
+    });
+    expect(ticketArrive.class).toBe('success');
+    expect((await storeB.getArtifact(waterTicketArtifactId(ticketB)))?.currentRevisionId).toBe('r1');
+    expect(await storeB.getRevision(waterTicketArtifactId(ticketB), 'r2')).toBeNull();
+  });
+
+  it('concurrent and duplicated close deliveries create exactly one r1', async () => {
+    const db = app.firestore();
+    const ticketId = `${TICKET_20100_ID}-dup`;
+    const invoiceId = `${INVOICE_20100_ID}-dup`;
+    await db.collection('tickets').doc(ticketId).set({ ...ticket20100, id: ticketId, invoiceDocId: invoiceId });
+    await db.collection('invoices').doc(invoiceId).set({ ...invoice20100, id: invoiceId, status: 'closed' });
+    const store = storeFor(db);
+    const after = { ...invoice20100, id: invoiceId, status: 'closed', closedAtMs: CLOSED_AT_MS };
+    const [a, b, c] = await Promise.all([
+      applyInvoicePaperLifecycle({ store, invoiceId, before: { status: 'open' }, after, nowMs: CLOSED_AT_MS }),
+      applyTicketPaperLifecycle({ store, ticketId, before: null, after: { ...ticket20100, id: ticketId, invoiceDocId: invoiceId }, nowMs: CLOSED_AT_MS }),
+      applyInvoicePaperLifecycle({ store, invoiceId, before: { status: 'open' }, after, nowMs: CLOSED_AT_MS + 1 }),
+    ]);
+    expect([a, b, c].filter((x) => x.class === 'success' || x.class === 'pending_reconciliation').length).toBe(3);
+    expect((await store.getArtifact(waterTicketArtifactId(ticketId)))?.currentRevisionId).toBe('r1');
+    expect(await store.getRevision(waterTicketArtifactId(ticketId), 'r2')).toBeNull();
+  });
+
+  it('partial persist failures retry into the same completed revision', async () => {
+    const db = app.firestore();
+    const ticketId = `${TICKET_20100_ID}-retry`;
+    const invoiceId = `${INVOICE_20100_ID}-retry`;
+    await db.collection('tickets').doc(ticketId).set({ ...ticket20100, id: ticketId, invoiceDocId: invoiceId });
+    await db.collection('invoices').doc(invoiceId).set({ ...invoice20100, id: invoiceId, status: 'closed' });
+    const bucket = memBucket();
+    const store = storeFor(db, bucket);
+    const origHtml = store.createHtmlBytes.bind(store);
+    const origAsset = store.createAssetBytes.bind(store);
+    const origFin = store.finalizeRevision.bind(store);
+    const after = { ...invoice20100, id: invoiceId, status: 'closed', closedAtMs: CLOSED_AT_MS };
+
+    store.createHtmlBytes = async () => { throw new Error('html_fail'); };
+    expect((await applyInvoicePaperLifecycle({ store, invoiceId, before: { status: 'open' }, after, nowMs: CLOSED_AT_MS })).class).toBe('retriable');
+    store.createHtmlBytes = origHtml;
+
+    let assets = 0;
+    store.createAssetBytes = async (path, bytes) => {
+      assets += 1;
+      if (assets === 1) throw new Error('asset_fail');
+      return origAsset(path, bytes);
+    };
+    expect((await applyInvoicePaperLifecycle({ store, invoiceId, before: { status: 'open' }, after, nowMs: CLOSED_AT_MS })).class).toBe('retriable');
+    store.createAssetBytes = origAsset;
+
+    assets = 0;
+    store.createAssetBytes = async (path, bytes) => {
+      assets += 1;
+      if (assets === 2) throw new Error('asset2_fail');
+      return origAsset(path, bytes);
+    };
+    expect((await applyInvoicePaperLifecycle({ store, invoiceId, before: { status: 'open' }, after, nowMs: CLOSED_AT_MS })).class).toBe('retriable');
+    store.createAssetBytes = origAsset;
+
+    store.finalizeRevision = async () => { throw new Error('fin_fail'); };
+    expect((await applyInvoicePaperLifecycle({ store, invoiceId, before: { status: 'open' }, after, nowMs: CLOSED_AT_MS })).class).toBe('retriable');
+    store.finalizeRevision = origFin;
+
+    const ok = await applyInvoicePaperLifecycle({ store, invoiceId, before: { status: 'open' }, after, nowMs: CLOSED_AT_MS });
+    expect(ok.class).toBe('success');
+    expect((await store.getArtifact(waterTicketArtifactId(ticketId)))?.currentRevisionId).toBe('r1');
+    expect(await store.getRevision(waterTicketArtifactId(ticketId), 'r2')).toBeNull();
+  });
+
+  it('rejects the other company’s Storage object during materialize', async () => {
+    const db = app.firestore();
+    const ticketId = `${TICKET_20100_ID}-tenant`;
+    const invoiceId = `${INVOICE_20100_ID}-tenant`;
+    const otherUri = 'https://storage.googleapis.com/wellbuilt-sync.appspot.com/photos/other-co/inv-x/secret.jpg';
+    const ownUri = `https://storage.googleapis.com/wellbuilt-sync.appspot.com/photos/${COMPANY_LG}/${invoiceId}/own.jpg`;
+    await db.collection('tickets').doc(ticketId).set({ ...ticket20100, id: ticketId, invoiceDocId: invoiceId });
+    await db.collection('invoices').doc(invoiceId).set({
+      ...invoice20100,
+      id: invoiceId,
+      photos: [
+        { uri: otherUri, type: 'pickup', location: 'X', takenAt: '2026-08-23T18:50:00.000Z' },
+        { uri: ownUri, type: 'dropoff', location: 'Y', takenAt: '2026-08-23T19:50:00.000Z' },
+      ],
+    });
+    const store = storeFor(db);
+    const created = await materializeWaterTicketPaper({
+      store, caller: staffLg, ticketDocId: ticketId, op: 'close', nowMs: CLOSED_AT_MS,
+    });
+    expect(created.ok).toBe(true);
+    if (!created.ok) return;
+    expect(created.revision.projection.photos).toHaveLength(1);
+    expect(JSON.stringify(created.revision.projection.photos)).not.toContain('other-co');
+    const cross = parseGovernedStorageUri(otherUri, {
+      projectBucket: 'wellbuilt-sync.appspot.com',
+      companyId: COMPANY_LG,
+      invoiceDocId: invoiceId,
+    });
+    expect(cross).toMatchObject({ ok: false, reason: 'path_not_owned' });
   });
 });

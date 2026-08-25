@@ -1,4 +1,5 @@
 import { hashExactBytes } from './hash';
+import { parseGovernedStorageUri } from './storageUri';
 import type {
   InvoiceSourceRecord,
   PaperArtifactRecord,
@@ -24,7 +25,7 @@ export interface PaperStore {
   findTicketsByInvoiceDocId(invoiceDocId: string): Promise<TicketSourceRecord[]>;
   getCompanyTimeZone(companyId: string): Promise<string>;
   getIdentityByDriverId(driverId: string): Promise<PaperIdentity | null>;
-  readLiveAsset(uri: string, opts?: { companyId?: string }): Promise<Buffer | null>;
+  readLiveAsset(uri: string, opts?: { companyId?: string; invoiceDocId?: string; ticketDocId?: string }): Promise<Buffer | null>;
 
   getArtifact(artifactId: string): Promise<PaperArtifactRecord | null>;
   getRevision(artifactId: string, revisionId: string): Promise<PaperRevisionRecord | null>;
@@ -68,8 +69,25 @@ export class MemoryPaperStore implements PaperStore {
   liveAssets = new Map<string, Buffer>();
   companyTimezones = new Map<string, string>();
   fetchCount = 0;
-  failAt: 'html' | 'revision' | 'finalize' | null = null;
+  failAt: 'html' | 'asset' | 'revision' | 'finalize' | null = null;
+  failAfterAssetWrites = 0;
+  projectBucket = 'wellbuilt-sync.appspot.com';
+  private assetWriteCount = 0;
   private chain: Promise<unknown> = Promise.resolve();
+
+  private takeFail(kind: 'html' | 'asset' | 'revision' | 'finalize'): boolean {
+    if (this.failAt !== kind) return false;
+    if (kind === 'asset') {
+      this.assetWriteCount += 1;
+      if (this.assetWriteCount > this.failAfterAssetWrites) {
+        this.failAt = null;
+        return true;
+      }
+      return false;
+    }
+    this.failAt = null;
+    return true;
+  }
 
   private runExclusive<T>(fn: () => T | Promise<T>): Promise<T> {
     const run = this.chain.then(fn, fn);
@@ -92,8 +110,17 @@ export class MemoryPaperStore implements PaperStore {
   async getIdentityByDriverId(driverId: string) {
     return this.identities.get(driverId) || null;
   }
-  async readLiveAsset(uri: string) {
+  async readLiveAsset(uri: string, opts?: { companyId?: string; invoiceDocId?: string; ticketDocId?: string }) {
     this.fetchCount += 1;
+    if (/^gs:\/\//i.test(uri) || /storage\.googleapis\.com|firebasestorage\.googleapis\.com/i.test(uri)) {
+      const parsed = parseGovernedStorageUri(uri, {
+        projectBucket: this.projectBucket,
+        companyId: opts?.companyId,
+        invoiceDocId: opts?.invoiceDocId,
+        ticketDocId: opts?.ticketDocId,
+      });
+      if (!parsed.ok) return null;
+    }
     const buf = this.liveAssets.get(uri);
     return buf ? cloneBuf(buf) : null;
   }
@@ -156,7 +183,7 @@ export class MemoryPaperStore implements PaperStore {
   }
 
   async createHtmlBytes(path: string, bytes: Buffer) {
-    if (this.failAt === 'html') throw new Error('storage_html_failed');
+    if (this.takeFail('html')) throw new Error('storage_html_failed');
     const existing = this.html.get(path);
     if (existing) {
       if (hashExactBytes(existing) === hashExactBytes(bytes)) return;
@@ -166,6 +193,7 @@ export class MemoryPaperStore implements PaperStore {
   }
 
   async createAssetBytes(path: string, bytes: Buffer) {
+    if (this.takeFail('asset')) throw new Error('storage_asset_failed');
     const existing = this.assets.get(path);
     if (existing) {
       if (hashExactBytes(existing) === hashExactBytes(bytes)) return;
@@ -176,7 +204,7 @@ export class MemoryPaperStore implements PaperStore {
 
   async finalizeRevision(input: Parameters<PaperStore['finalizeRevision']>[0]) {
     return this.runExclusive(() => {
-      if (this.failAt === 'finalize' || this.failAt === 'revision') throw new Error('revision_write_failed');
+      if (this.takeFail('finalize') || this.takeFail('revision')) throw new Error('revision_write_failed');
       const event = this.sourceEvents.get(input.sourceEventId);
       if (!event) throw new Error('event_not_reserved');
       const artifact = this.artifacts.get(event.artifactId);

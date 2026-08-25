@@ -14,6 +14,7 @@ import {
   type GetPaperDecision,
   type MaterializeDecision,
   type PaperCaller,
+  type PaperEditSource,
   type PaperLookup,
   type PaperOp,
   type PaperPhotoMeta,
@@ -22,7 +23,7 @@ import {
 async function snapshotAssets(
   store: PaperStore,
   invoicePhotos: unknown,
-  ctx: { companyId: string; artifactId: string; revisionId: string },
+  ctx: { companyId: string; artifactId: string; revisionId: string; invoiceDocId: string; ticketDocId: string },
 ): Promise<{
   photos: PaperPhotoMeta[];
   thumbs: Record<string, string>;
@@ -36,7 +37,11 @@ async function snapshotAssets(
   const thumbs: Record<string, string> = {};
   const originals: Array<{ path: string; bytes: Buffer }> = [];
   for (const ref of live.photos.slice(0, MAX_PAPER_PHOTOS)) {
-    const bytes = await store.readLiveAsset(ref.uri, { companyId: ctx.companyId });
+    const bytes = await store.readLiveAsset(ref.uri, {
+      companyId: ctx.companyId,
+      invoiceDocId: ctx.invoiceDocId,
+      ticketDocId: ctx.ticketDocId,
+    });
     if (!bytes) continue;
     const originalPath = paperAssetPath(ctx.companyId, ctx.artifactId, ctx.revisionId, 'pending-orig');
     const snapped = snapshotPhotoForPaper(bytes, ref, {
@@ -56,7 +61,11 @@ async function snapshotAssets(
   let jsaPath = '';
   let jsaBytes: Buffer | null = null;
   if (live.jsaUri) {
-    jsaBytes = await store.readLiveAsset(live.jsaUri, { companyId: ctx.companyId });
+    jsaBytes = await store.readLiveAsset(live.jsaUri, {
+      companyId: ctx.companyId,
+      invoiceDocId: ctx.invoiceDocId,
+      ticketDocId: ctx.ticketDocId,
+    });
     if (jsaBytes) {
       jsaContentHash = hashExactBytes(jsaBytes);
       jsaPath = paperAssetPath(ctx.companyId, ctx.artifactId, ctx.revisionId, jsaContentHash);
@@ -71,6 +80,7 @@ export async function materializeWaterTicketPaper(input: {
   ticketDocId: string;
   op: PaperOp;
   nowMs: number;
+  editSource?: PaperEditSource;
 }): Promise<MaterializeDecision> {
   const ticket = await input.store.getTicket(input.ticketDocId);
   if (!ticket) return { ok: false, reason: 'ticket_not_found', message: 'Ticket not found.' };
@@ -82,7 +92,12 @@ export async function materializeWaterTicketPaper(input: {
   if (!isTicketOnlyWaterTicket(ticket, invoice)) {
     return { ok: false, reason: 'not_ticket_only', message: 'This slice materializes ticket-only Water Tickets.' };
   }
-  const derived = deriveGovernedSourceEvent({ ticket, invoice, op: input.op });
+  const derived = deriveGovernedSourceEvent({
+    ticket,
+    invoice,
+    op: input.op,
+    editSource: input.editSource,
+  });
   if (!derived.ok) return derived;
 
   const ownerDriverId = canonicalDriverIdFromRecords({
@@ -122,6 +137,8 @@ export async function materializeWaterTicketPaper(input: {
     companyId,
     artifactId,
     revisionId: reserved.event.revisionId,
+    invoiceDocId: invoiceId,
+    ticketDocId: ticket.id,
   });
   const projected = projectWaterTicket({
     ticket,

@@ -1,5 +1,13 @@
 /**
  * Governed Storage resolution. Never fetch arbitrary HTTP URLs.
+ *
+ * WB-T job photo object paths (do not invent a new write convention):
+ *   photos/{companyId}/{invoiceDocId}/{photoId}.jpg
+ *   photos/{companyId}/{YYYY-MM-DD}/{invoiceDocId}_{timestamp}.jpg
+ *
+ * A broad prefix such as photos/ is not tenant authorization. The companyId
+ * path segment must match the ticket/invoice company. When invoiceDocId is
+ * known, the object must also belong to that invoice.
  */
 
 export const MAX_SOURCE_ASSET_BYTES = 8 * 1024 * 1024;
@@ -9,21 +17,66 @@ const ALLOWED_HOSTS = new Set([
   'firebasestorage.googleapis.com',
 ]);
 
-const ALLOWED_PATH_PREFIXES = [
-  'tickets/',
-  'invoices/',
-  'photos/',
-  'ticket-photos/',
-  'invoice-photos/',
-];
+const DATE_SEG = /^\d{4}-\d{2}-\d{2}$/;
+
+const GOVERNED_PREFIXES = [
+  'photos',
+  'tickets',
+  'invoices',
+  'ticket-photos',
+  'invoice-photos',
+] as const;
 
 export type GovernedAssetRef =
   | { ok: true; bucket: string; objectPath: string }
   | { ok: false; reason: string; message: string };
 
+export type GovernedAssetOwner = {
+  projectBucket: string;
+  companyId?: string;
+  invoiceDocId?: string;
+  ticketDocId?: string;
+};
+
+function pathOwnedByTenant(objectPath: string, opts: GovernedAssetOwner): boolean {
+  const companyId = (opts.companyId || '').trim();
+  if (!companyId) return false;
+  const segs = objectPath.split('/').filter(Boolean);
+  if (segs.length < 2) return false;
+  if (segs.includes('..')) return false;
+
+  const root = segs[0];
+  if (root === companyId) {
+    return segs.length >= 2;
+  }
+  if (!(GOVERNED_PREFIXES as readonly string[]).includes(root)) return false;
+  if (segs[1] !== companyId) return false;
+  if (segs.length < 3) return false;
+
+  const invoiceDocId = (opts.invoiceDocId || '').trim();
+  if (root === 'photos' && invoiceDocId) {
+    // photos/{companyId}/{invoiceDocId}/{photoId}.jpg
+    if (segs[2] === invoiceDocId) return segs.length >= 4;
+    // photos/{companyId}/{YYYY-MM-DD}/{invoiceDocId}_{timestamp}.jpg
+    if (DATE_SEG.test(segs[2]) && segs.length >= 4) {
+      const fileName = segs.slice(3).join('/');
+      return fileName.startsWith(`${invoiceDocId}_`) || fileName.startsWith(`${invoiceDocId}.`);
+    }
+    return false;
+  }
+  if (root === 'invoices' && invoiceDocId) {
+    return segs.includes(invoiceDocId);
+  }
+  const ticketDocId = (opts.ticketDocId || '').trim();
+  if ((root === 'tickets' || root === 'ticket-photos') && ticketDocId) {
+    return segs.includes(ticketDocId);
+  }
+  return true;
+}
+
 export function parseGovernedStorageUri(
   uri: string,
-  opts: { projectBucket: string; companyId?: string },
+  opts: GovernedAssetOwner,
 ): GovernedAssetRef {
   const raw = (uri || '').trim();
   if (!raw) return { ok: false, reason: 'empty_uri', message: 'Asset URI is empty.' };
@@ -71,12 +124,8 @@ export function parseGovernedStorageUri(
   if (objectPath.includes('..') || objectPath.startsWith('/')) {
     return { ok: false, reason: 'malformed_path', message: 'Illegal object path.' };
   }
-  const companyOk = opts.companyId && (
-    objectPath.startsWith(`${opts.companyId}/`) || objectPath.includes(`/${opts.companyId}/`)
-  );
-  const prefixOk = ALLOWED_PATH_PREFIXES.some((p) => objectPath.startsWith(p));
-  if (!prefixOk && !companyOk) {
-    return { ok: false, reason: 'path_not_owned', message: 'Asset path is outside governed ticket/invoice photo prefixes.' };
+  if (!pathOwnedByTenant(objectPath, opts)) {
+    return { ok: false, reason: 'path_not_owned', message: 'Asset path is outside this company ticket/invoice Storage tree.' };
   }
   return { ok: true, bucket, objectPath };
 }

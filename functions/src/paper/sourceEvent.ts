@@ -1,10 +1,32 @@
 import { asTrimmedString, timestampMs } from './format';
-import type { InvoiceSourceRecord, PaperOp, TicketSourceRecord } from './types';
+import type { InvoiceSourceRecord, PaperEditSource, PaperOp, TicketSourceRecord } from './types';
+
+export function ticketEditMs(ticket: TicketSourceRecord | Record<string, unknown> | null | undefined): number | null {
+  if (!ticket) return null;
+  return timestampMs(ticket.updatedAt) || timestampMs(ticket.editedAt) || timestampMs((ticket as { updatedAtMs?: unknown }).updatedAtMs);
+}
+
+export function invoiceEditMs(invoice: InvoiceSourceRecord | Record<string, unknown> | null | undefined): number | null {
+  if (!invoice) return null;
+  return timestampMs(invoice.updatedAt) || timestampMs(invoice.editedAt) || timestampMs((invoice as { updatedAtMs?: unknown }).updatedAtMs);
+}
+
+export function inferPaperEditSource(
+  ticket: TicketSourceRecord,
+  invoice: InvoiceSourceRecord | null,
+): PaperEditSource {
+  const t = ticketEditMs(ticket);
+  const i = invoiceEditMs(invoice);
+  if (t && i) return t >= i ? 'ticket' : 'invoice';
+  if (i && !t) return 'invoice';
+  return 'ticket';
+}
 
 export function deriveGovernedSourceEvent(input: {
   ticket: TicketSourceRecord;
   invoice: InvoiceSourceRecord | null;
   op: PaperOp;
+  editSource?: PaperEditSource;
 }): { ok: true; sourceEventId: string; eventMs: number } | { ok: false; reason: string; message: string } {
   const ticketDocId = asTrimmedString(input.ticket.id);
   if (!ticketDocId) {
@@ -17,9 +39,17 @@ export function deriveGovernedSourceEvent(input: {
     }
     return { ok: true, sourceEventId: `close:${ticketDocId}:${closedAtMs}`, eventMs: closedAtMs };
   }
-  const updatedAtMs = timestampMs(input.ticket.updatedAt)
-    || timestampMs(input.ticket.editedAt)
-    || timestampMs(input.ticket.updatedAtMs);
+
+  const editSource = input.editSource || inferPaperEditSource(input.ticket, input.invoice);
+  if (editSource === 'invoice') {
+    const updatedAtMs = invoiceEditMs(input.invoice);
+    if (!updatedAtMs) {
+      return { ok: false, reason: 'event_not_found', message: 'No authoritative edit timestamp on the invoice.' };
+    }
+    return { ok: true, sourceEventId: `invoice_edit:${ticketDocId}:${updatedAtMs}`, eventMs: updatedAtMs };
+  }
+
+  const updatedAtMs = ticketEditMs(input.ticket);
   if (!updatedAtMs) {
     return { ok: false, reason: 'event_not_found', message: 'No authoritative edit timestamp on the ticket.' };
   }
@@ -27,5 +57,5 @@ export function deriveGovernedSourceEvent(input: {
   if (createdAtMs && updatedAtMs <= createdAtMs) {
     return { ok: false, reason: 'event_not_found', message: 'Ticket has no governed edit after create.' };
   }
-  return { ok: true, sourceEventId: `edit:${ticketDocId}:${updatedAtMs}`, eventMs: updatedAtMs };
+  return { ok: true, sourceEventId: `ticket_edit:${ticketDocId}:${updatedAtMs}`, eventMs: updatedAtMs };
 }

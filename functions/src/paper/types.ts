@@ -202,6 +202,10 @@ export interface InvoiceSourceRecord {
   ownerDriverId?: unknown;
   driverId?: unknown;
   timezone?: unknown;
+  status?: unknown;
+  updatedAt?: unknown;
+  updatedAtMs?: unknown;
+  editedAt?: unknown;
 }
 
 export type PaperCallerKind = 'dashboard' | 'driver' | 'system';
@@ -221,6 +225,7 @@ export type PaperLookup =
   | { invoiceDocId: string; ticketDocId?: undefined };
 
 export type PaperOp = 'close' | 'edit';
+export type PaperEditSource = 'ticket' | 'invoice';
 
 export type MaterializeDecision =
   | { ok: true; action: 'created'; revision: PaperRevisionRecord; artifact: PaperArtifactRecord }

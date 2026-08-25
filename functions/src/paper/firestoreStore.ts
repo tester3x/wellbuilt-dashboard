@@ -81,6 +81,8 @@ export function createFirestorePaperStore(deps?: {
       const parsed = parseGovernedStorageUri(uri, {
         projectBucket: typeof bucketName === 'string' ? bucketName : 'wellbuilt-sync.appspot.com',
         companyId: opts?.companyId,
+        invoiceDocId: opts?.invoiceDocId,
+        ticketDocId: opts?.ticketDocId,
       });
       if (!parsed.ok) return null;
       try {

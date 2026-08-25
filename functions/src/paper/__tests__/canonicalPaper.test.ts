@@ -209,6 +209,22 @@ describe('requests reject client-authored events and authority', () => {
     expect(missing).toMatchObject({ ok: false, reason: 'event_not_found' });
     const noEdit = deriveGovernedSourceEvent({ ticket: ticket20100, invoice: invoice20100, op: 'edit' });
     expect(noEdit).toMatchObject({ ok: false, reason: 'event_not_found' });
+    const ticketEdit = deriveGovernedSourceEvent({
+      ticket: { ...ticket20100, updatedAt: { toMillis: () => CLOSED_AT_MS + 9 } },
+      invoice: invoice20100,
+      op: 'edit',
+      editSource: 'ticket',
+    });
+    expect(ticketEdit.ok).toBe(true);
+    if (ticketEdit.ok) expect(ticketEdit.sourceEventId).toBe(`ticket_edit:${TICKET_20100_ID}:${CLOSED_AT_MS + 9}`);
+    const invoiceEdit = deriveGovernedSourceEvent({
+      ticket: ticket20100,
+      invoice: { ...invoice20100, editedAt: { toMillis: () => CLOSED_AT_MS + 11 } },
+      op: 'edit',
+      editSource: 'invoice',
+    });
+    expect(invoiceEdit.ok).toBe(true);
+    if (invoiceEdit.ok) expect(invoiceEdit.sourceEventId).toBe(`invoice_edit:${TICKET_20100_ID}:${CLOSED_AT_MS + 11}`);
   });
 });
 

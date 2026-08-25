@@ -5,11 +5,12 @@ import * as httpsV2 from 'firebase-functions/v2/https';
 import * as admin from 'firebase-admin';
 import { getWaterTicketPaper, materializeWaterTicketPaper } from '../paper/engine';
 import { createFirestorePaperStore } from '../paper/firestoreStore';
-import { resolvePaperCaller } from '../paper/paperCaller';
+import { paperAuthIntent, resolvePaperCaller } from '../paper/paperCaller';
 import { parseGetPaperRequest, parseMaterializeRequest } from '../paper/requests';
 import type { PaperCaller } from '../paper/types';
 import { requireManageDrivers } from './adminAuth';
 import { writeSecurityAudit } from './audit';
+import { requireSecureDriver } from './requireDriverAuth';
 
 function throwPaper(reason: string, message: string): never {
   const code = reason === 'wrong_company' || reason === 'caller_unscoped'
@@ -33,16 +34,30 @@ function throwPaper(reason: string, message: string): never {
 export async function loadPaperReader(request: httpsV2.CallableRequest): Promise<PaperCaller> {
   const uid = request.auth?.uid;
   const token = (request.auth?.token || null) as Record<string, unknown> | null;
-  if (token?.kind === 'driver') {
-    const driverId = typeof token.driverId === 'string' ? token.driverId : '';
-    let profile: { active?: boolean; companyId?: string } | null = null;
-    let exists = false;
-    if (driverId) {
-      const snap = await admin.database().ref(`drivers/profiles/${driverId}`).once('value');
-      exists = snap.exists();
-      profile = exists ? snap.val() as { active?: boolean; companyId?: string } : null;
+  if (paperAuthIntent(token) === 'driver') {
+    let driver;
+    try {
+      driver = await requireSecureDriver(request, { allowLegacyHash: false });
+    } catch (err) {
+      if (err instanceof httpsV2.HttpsError) {
+        const msg = String(err.message || '');
+        if (/deactivated/i.test(msg)) throwPaper('driver_deactivated', 'Driver deactivated.');
+        if (err.code === 'unauthenticated') throwPaper('driver_unauthenticated', 'Driver authentication required.');
+        throwPaper('unauthorized', 'Driver authentication required.');
+      }
+      throw err;
     }
-    const resolved = resolvePaperCaller({ uid, token, driverProfile: profile, driverProfileExists: exists });
+    const resolved = resolvePaperCaller({
+      uid: driver.uid,
+      token: {
+        kind: 'driver',
+        driverId: driver.driverId,
+        companyId: driver.companyId,
+        roles: driver.roles,
+      },
+      driverProfile: { active: true, companyId: driver.companyId },
+      driverProfileExists: true,
+    });
     if (!resolved.ok) throwPaper(resolved.reason, resolved.message);
     return resolved.caller;
   }
