@@ -3,6 +3,8 @@
 import { useEffect, useState } from 'react';
 import { useRouter } from 'next/navigation';
 import { Ticket, InvoiceDetail, TimelineEvent, fetchInvoiceForTicket, fetchSiblingTickets } from '@/lib/tickets';
+import { isCanonicalPaperEnabled, ticketsPaperLookup } from '@/lib/canonicalPaper';
+import { CanonicalTicketPaperHost } from './CanonicalTicketPaperHost';
 
 interface Props {
   ticket: Ticket;
@@ -10,7 +12,29 @@ interface Props {
   onNavigateTicket?: (ticket: Ticket) => void;
 }
 
-export function TicketDetailModal({ ticket, onClose, onNavigateTicket }: Props) {
+function TicketDetailModalCanonical({ ticket, onClose }: Props) {
+  return (
+    <div className="fixed inset-0 bg-black/70 flex items-start justify-center z-50 overflow-y-auto py-8" onClick={onClose}>
+      <div className="w-full max-w-2xl mx-4" onClick={(e) => e.stopPropagation()}>
+        <div className="flex items-center justify-between px-4 py-3 mb-0">
+          <button onClick={onClose} className="text-gray-400 hover:text-white text-sm flex items-center gap-1">
+            <span className="text-lg">&larr;</span>
+          </button>
+          <h2 className="text-white font-semibold">Ticket Detail</h2>
+          <div className="w-8" />
+        </div>
+        <CanonicalTicketPaperHost lookup={ticketsPaperLookup(ticket.id)} onClose={onClose} />
+      </div>
+    </div>
+  );
+}
+
+export function TicketDetailModal(props: Props) {
+  if (isCanonicalPaperEnabled()) return <TicketDetailModalCanonical {...props} />;
+  return <TicketDetailModalLegacy {...props} />;
+}
+
+function TicketDetailModalLegacy({ ticket, onClose, onNavigateTicket }: Props) {
   const router = useRouter();
   const [invoice, setInvoice] = useState<InvoiceDetail | null>(null);
   const [siblings, setSiblings] = useState<Ticket[]>([]);

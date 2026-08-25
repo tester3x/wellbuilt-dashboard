@@ -16,6 +16,8 @@ import { loadCompanyById } from '@/lib/companySettings';
 import { trackJobTypeUsage } from '@/lib/jobTypeUsage';
 import { dismissDispatch } from '@/lib/dismissDispatch';
 import { staffCancelDispatch, staffCreateDispatch, staffUpdateDispatch } from '@/lib/staffWriteDispatch';
+import { dispatchPaperLookup, isCanonicalPaperEnabled } from '@/lib/canonicalPaper';
+import { CanonicalTicketPaperHost } from '@/components/CanonicalTicketPaperHost';
 
 // ─── Types ───────────────────────────────────────────────────────────────────
 
@@ -4767,7 +4769,14 @@ function CompletedJobsPanel({ jobs, drivers, allWells, allDisposals, highlightJo
                     </button>
                     {(job.invoiceNumber || job.ticketNumber || (job as any).invoiceDocId) && (
                       <button
-                        onClick={(e) => { e.stopPropagation(); loadTicketDetail(job.invoiceNumber || job.ticketNumber || '', job.id!, (job as any).invoiceDocId); }}
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          if (isCanonicalPaperEnabled()) {
+                            setTicketDetailJobId(ticketDetailJobId === job.id ? null : job.id!);
+                            return;
+                          }
+                          loadTicketDetail(job.invoiceNumber || job.ticketNumber || '', job.id!, (job as any).invoiceDocId);
+                        }}
                         className={`px-3 py-1 text-xs rounded transition-colors ${ticketDetailJobId === job.id ? 'bg-cyan-600 text-white' : 'bg-gray-700 hover:bg-gray-600 text-cyan-400'}`}
                       >
                         {ticketDetailJobId === job.id ? 'Hide Ticket' : 'View Ticket'}
@@ -4775,8 +4784,18 @@ function CompletedJobsPanel({ jobs, drivers, allWells, allDisposals, highlightJo
                     )}
                   </div>
 
+                  {/* Canonical stored paper (flag ON) or legacy live JSX paper (flag OFF) */}
+                  {ticketDetailJobId === job.id && isCanonicalPaperEnabled() && (
+                    <div className="mt-3" onClick={(e) => e.stopPropagation()}>
+                      <CanonicalTicketPaperHost
+                        lookup={dispatchPaperLookup({ ticketDocId: (job as any).ticketDocId, invoiceDocId: job.invoiceDocId })}
+                        embedded
+                      />
+                    </div>
+                  )}
+
                   {/* Inline paper-style ticket detail */}
-                  {ticketDetailJobId === job.id && (
+                  {ticketDetailJobId === job.id && !isCanonicalPaperEnabled() && (
                     <div className="mt-3">
                       {ticketDetailLoading ? (
                         <div className="bg-[#FAFAF8] rounded-lg p-6 text-center text-gray-400 text-sm animate-pulse">Loading...</div>
