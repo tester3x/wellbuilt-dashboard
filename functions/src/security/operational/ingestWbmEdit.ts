@@ -1,7 +1,7 @@
 /**
- * Governed WB-M edit ingest. Authenticated driver only. Writes the
- * deterministic packets/incoming/edit_* key so live processEditRequest
- * can apply. Does not replace or merge the live processor body.
+ * Governed WB-M / WB-T edit ingest. Authenticated driver only.
+ * Writes packets/incoming/edit_* for live processEditRequest.
+ * Does not remint the original packet id or substitute "now" for empty time.
  */
 import * as httpsV2 from 'firebase-functions/v2/https';
 import * as admin from 'firebase-admin';
@@ -18,22 +18,98 @@ import {
   wbmEditIncomingPath,
 } from './wbmEditAuthorize';
 
-const ARG = new Set([
-  'packet_required', 'packet_too_large', 'unsupported_request_type', 'unexpected_field',
-  'unexpected_object', 'missing_wellName', 'invalid_wellName', 'missing_originalPacketId',
-  'invalid_originalPacketId', 'invalid_tankLevelFeet', 'invalid_bblsTaken', 'invalid_wellDown',
-  'invalid_wellDownIsAuthoritative', 'invalid_dateTimeUTC', 'invalid_dateTime', 'invalid_timezone',
-  'missing_idempotency_key', 'idempotency_key_mismatch',
-]);
+export type WbmEditIngestStatus = 'accepted' | 'duplicate' | 'conflict' | 'pending' | 'invalid';
 
-const PERM = new Set([
-  'cross_driver', 'cross_company_well', 'well_out_of_scope', 'forged_well', 'well_not_found',
-]);
+export type WbmEditIngestResult =
+  | {
+    ok: true;
+    status: 'pending' | 'duplicate';
+    originalPacketId: string;
+    idempotencyKey: string;
+    payloadDigest: string;
+    incomingPath: string;
+  }
+  | {
+    ok: false;
+    status: 'invalid' | 'conflict';
+    reason: string;
+  };
+
+export async function runIngestWbmEdit(input: {
+  packet: unknown;
+  driverId: string;
+  uid: string;
+  displayName: string | null;
+  authSource: string;
+  companyId: string;
+  assignedRoutes: unknown;
+  assignedWells: unknown;
+  wellConfig: Record<string, unknown>;
+  original: Record<string, unknown> | null;
+  writeIncoming: (
+    path: string,
+    decide: (current: Record<string, unknown> | null) =>
+      | { action: 'write'; stamped: Record<string, unknown> }
+      | { action: 'duplicate' }
+      | { action: 'abort'; reason: string },
+  ) => Promise<{ committed: boolean; outcome: 'write' | 'duplicate' | 'abort'; abortReason: string }>;
+}): Promise<WbmEditIngestResult> {
+  const decided = evaluateWbmEdit({
+    packet: input.packet,
+    companyId: input.companyId,
+    driverId: input.driverId,
+    assignedRoutes: input.assignedRoutes,
+    assignedWells: input.assignedWells,
+    wellConfig: input.wellConfig,
+    original: input.original,
+  });
+  if (!decided.ok) {
+    return { ok: false, status: 'invalid', reason: decided.reason };
+  }
+
+  const stamped: Record<string, unknown> = {
+    ...decided.payload,
+    driverId: input.driverId,
+    driverName: input.displayName,
+    companyId: input.companyId,
+    ingestedAt: Date.now(),
+    ingestedBy: input.uid,
+    authSource: input.authSource,
+    payloadDigest: decided.payloadDigest,
+  };
+
+  const path = wbmEditIncomingPath(decided.idempotencyKey);
+  const tx = await input.writeIncoming(path, (existing) => {
+    const gate = decideWbmEditTransaction({
+      existing,
+      driverId: input.driverId,
+      payloadDigest: decided.payloadDigest,
+    });
+    if (gate.action === 'write') return { action: 'write', stamped };
+    if (gate.action === 'duplicate') return { action: 'duplicate' };
+    return { action: 'abort', reason: gate.reason };
+  });
+
+  if (!tx.committed || tx.outcome === 'abort') {
+    return { ok: false, status: 'conflict', reason: tx.abortReason };
+  }
+  return {
+    ok: true,
+    status: tx.outcome === 'duplicate' ? 'duplicate' : 'pending',
+    originalPacketId: decided.originalPacketId,
+    idempotencyKey: decided.idempotencyKey,
+    payloadDigest: decided.payloadDigest,
+    incomingPath: path,
+  };
+}
 
 export const ingestWbmEdit = httpsV2.onCall(
   { timeoutSeconds: 30, memory: '256MiB', enforceAppCheck: false },
   async (request) => {
-    const data = (request.data || {}) as { packet?: unknown };
+    const data = (request.data || {}) as { packet?: unknown; companyId?: unknown };
+    if (data.companyId !== undefined) {
+      throw new httpsV2.HttpsError('invalid-argument', 'unexpected_field');
+    }
     const driver = await requireSecureDriver(request, { allowLegacyHash: false });
     const authority = await loadCanonicalDriverAuthority(
       driver.driverId,
@@ -68,24 +144,6 @@ export const ingestWbmEdit = httpsV2.onCall(
     const wellConfig = wellSnap.exists() ? (wellSnap.val() as Record<string, unknown>) : {};
     const original = origSnap.exists() ? (origSnap.val() as Record<string, unknown>) : null;
 
-    const decided = evaluateWbmEdit({
-      packet: data.packet,
-      companyId: authority.companyId,
-      driverId: driver.driverId,
-      assignedRoutes: profile.assignedRoutes,
-      assignedWells: profile.assignedWells,
-      wellConfig,
-      original,
-    });
-    if (!decided.ok) {
-      throw new httpsV2.HttpsError(
-        ARG.has(decided.reason) ? 'invalid-argument'
-          : PERM.has(decided.reason) ? 'permission-denied'
-            : 'failed-precondition',
-        decided.reason,
-      );
-    }
-
     const ip =
       (request.rawRequest?.headers?.['x-forwarded-for'] as string)?.split(',')[0]?.trim() ||
       request.rawRequest?.ip;
@@ -99,64 +157,54 @@ export const ingestWbmEdit = httpsV2.onCall(
       throw new httpsV2.HttpsError('resource-exhausted', 'Packet rate limit');
     }
 
-    const stamped: Record<string, unknown> = {
-      ...decided.payload,
+    const result = await runIngestWbmEdit({
+      packet: data.packet,
       driverId: driver.driverId,
-      driverName: driver.displayName || null,
-      companyId: authority.companyId,
-      ingestedAt: Date.now(),
-      ingestedBy: driver.uid,
+      uid: driver.uid,
+      displayName: driver.displayName || null,
       authSource: driver.authSource,
-      payloadDigest: decided.payloadDigest,
-    };
-
-    const key = decided.idempotencyKey;
-    const ref = admin.database().ref(wbmEditIncomingPath(key));
-    const box: { outcome: 'write' | 'duplicate' | 'abort'; abortReason: string } = {
-      outcome: 'write',
-      abortReason: 'ingest_conflict',
-    };
-    const tx = await ref.transaction((current) => {
-      const existing = current && typeof current === 'object'
-        ? current as Record<string, unknown>
-        : null;
-      const gate = decideWbmEditTransaction({
-        existing,
-        driverId: driver.driverId,
-        payloadDigest: decided.payloadDigest,
-      });
-      if (gate.action === 'write') {
-        box.outcome = 'write';
-        return stamped;
-      }
-      if (gate.action === 'duplicate') {
-        box.outcome = 'duplicate';
-        return current;
-      }
-      box.outcome = 'abort';
-      box.abortReason = gate.reason;
-      return;
+      companyId: authority.companyId,
+      assignedRoutes: profile.assignedRoutes,
+      assignedWells: profile.assignedWells,
+      wellConfig,
+      original,
+      writeIncoming: async (path, decide) => {
+        const ref = admin.database().ref(path);
+        const box: { outcome: 'write' | 'duplicate' | 'abort'; abortReason: string } = {
+          outcome: 'write',
+          abortReason: 'ingest_conflict',
+        };
+        const tx = await ref.transaction((current) => {
+          const existing = current && typeof current === 'object'
+            ? current as Record<string, unknown>
+            : null;
+          const gate = decide(existing);
+          if (gate.action === 'write') {
+            box.outcome = 'write';
+            return gate.stamped;
+          }
+          if (gate.action === 'duplicate') {
+            box.outcome = 'duplicate';
+            return current;
+          }
+          box.outcome = 'abort';
+          box.abortReason = gate.reason;
+          return;
+        });
+        return { committed: tx.committed, outcome: box.outcome, abortReason: box.abortReason };
+      },
     });
 
-    if (!tx.committed || box.outcome === 'abort') {
-      throw new httpsV2.HttpsError('failed-precondition', box.abortReason);
+    if (!result.ok) {
+      return result;
     }
 
     await writeSecurityAudit({
-      action: box.outcome === 'duplicate' ? 'ingestWbmEdit_idempotent' : 'ingestWbmEdit',
+      action: result.status === 'duplicate' ? 'ingestWbmEdit_idempotent' : 'ingestWbmEdit',
       actorUid: driver.uid,
       driverId: driver.driverId,
-      detail: { key, companyId: authority.companyId, wellName: decided.wellName },
+      detail: { key: result.idempotencyKey, companyId: authority.companyId, status: result.status },
     });
-
-    return {
-      ok: true as const,
-      key,
-      packetId: decided.originalPacketId,
-      idempotencyKey: key,
-      duplicate: box.outcome === 'duplicate',
-      queued: true as const,
-      committed: false as const,
-    };
+    return result;
   },
 );

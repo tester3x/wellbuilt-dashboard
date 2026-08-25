@@ -1,6 +1,7 @@
 export { ingestDriverPacket } from './packetIngest';
 export { ingestWbmPull } from './ingestWbmPull';
 export { ingestWbmEdit } from './ingestWbmEdit';
+export { getGovernedWellConfig } from './getGovernedWellConfig';
 export { upsertDriverShift } from './shiftWrite';
 // vc51.9AG — server-owned explicit-shift authority (resolve/claim/close).
 export {

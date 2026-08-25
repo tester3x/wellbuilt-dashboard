@@ -4775,6 +4775,7 @@ export {
   ingestDriverPacket,
   ingestWbmPull,
   ingestWbmEdit,
+  getGovernedWellConfig,
   upsertDriverShift,
   resolveActiveDriverShift,
   claimDriverShift,

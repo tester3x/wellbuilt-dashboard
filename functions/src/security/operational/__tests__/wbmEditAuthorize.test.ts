@@ -101,6 +101,16 @@ describe('evaluateWbmEdit', () => {
     }) as { reason: string }).reason).toBe('unexpected_field');
   });
 
+  it('rejects an unassigned well in the same company', () => {
+    expect((evaluateWbmEdit({
+      ...scope,
+      assignedRoutes: ['Watford'],
+      assignedWells: [],
+      packet: basePacket,
+      original,
+    }) as { reason: string }).reason).toBe('well_out_of_scope');
+  });
+
   it('same digest is a duplicate; different digest after write is a conflict', () => {
     const a = evaluateWbmEdit({ ...scope, packet: basePacket, original });
     expect(a.ok).toBe(true);
