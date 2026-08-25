@@ -16,6 +16,13 @@ import {
   credentialActionFor,
   hasCanonicalDriverId,
 } from '@/lib/secureLoginProvisioning';
+import {
+  interpretCatalogProfiles,
+  parseCanonicalProfiles,
+  secureLoginUiState,
+  unboundSameNameProfile,
+  type CanonicalCatalogStatus,
+} from '@/lib/canonicalCatalogUi';
 import { getRoleLabel } from '@/lib/auth';
 import {
   applyEnabled,
@@ -73,7 +80,7 @@ interface CanonicalWbmDriver {
 }
 
 /** Secure-credential presentation state shared by BOTH employee views. */
-type SecureLoginState = 'create' | 'secured' | 'none';
+type SecureLoginState = 'create' | 'secured' | 'none' | 'unknown' | 'duplicate';
 
 interface DriversTabProps {
   scopeCompanyId?: string;  // if set, only show drivers for this company
@@ -141,12 +148,23 @@ export function DriversTab({ scopeCompanyId, isWbAdmin = false }: DriversTabProp
   //   'create'  — active legacy-only row, eligible for a new secure login;
   //   'none'    — not eligible (inactive row, or caller is not WB admin).
   const secureLoginStateFor = useCallback((driver: ApprovedDriver): SecureLoginState => {
-    if (!isWbAdmin) return 'none';
-    if (securedKeys.has(driver.key) || credentialActionFor(driver) === 'reset_passcode') {
-      return 'secured';
-    }
-    return driver.active !== false ? 'create' : 'none';
-  }, [isWbAdmin, securedKeys]);
+    const unbound = unboundSameNameProfile(
+      driver,
+      canonicalDrivers.map((c) => ({
+        driverId: c.driverId,
+        displayName: c.displayName,
+        legalName: c.legalName,
+        companyId: c.companyId,
+      })),
+    );
+    return secureLoginUiState({
+      isWbAdmin,
+      catalogStatus: canonicalCatalogStatus,
+      driverActive: driver.active !== false,
+      hasCanonicalDriverId: securedKeys.has(driver.key) || credentialActionFor(driver) === 'reset_passcode',
+      unboundSameName: unbound,
+    });
+  }, [isWbAdmin, securedKeys, canonicalCatalogStatus, canonicalDrivers]);
   const [newCustomerName, setNewCustomerName] = useState('');
   const [newCustomerCompanyId, setNewCustomerCompanyId] = useState('');
 
@@ -175,6 +193,7 @@ export function DriversTab({ scopeCompanyId, isWbAdmin = false }: DriversTabProp
     setAssignmentPreview(null);
   };
   const [canonicalDrivers, setCanonicalDrivers] = useState<CanonicalWbmDriver[]>([]);
+  const [canonicalCatalogStatus, setCanonicalCatalogStatus] = useState<CanonicalCatalogStatus>('loading');
 
   // Combined approval modal (forces company + customers + route on approve)
   const [showApprovalModal, setShowApprovalModal] = useState(false);
@@ -235,12 +254,16 @@ export function DriversTab({ scopeCompanyId, isWbAdmin = false }: DriversTabProp
       } catch (catalogErr) {
         setApprovedDrivers([]);
         setDashboardUsers([]);
+        setCanonicalDrivers([]);
+        setCanonicalCatalogStatus('unavailable');
         setMessage(`Failed to load employees [${catalogErrorCode(catalogErr)}]`);
         throw catalogErr;
       }
+      const interpreted = interpretCatalogProfiles(catalog, false);
+      setCanonicalCatalogStatus(interpreted.status);
       const canonical: CanonicalWbmDriver[] = [];
       {
-        const data = (catalog.profiles || {}) as Record<string, any>;
+        const data = interpreted.profiles as Record<string, any>;
         Object.entries(data).forEach(([id, val]) => {
           if (!val || typeof val !== 'object') return;
           canonical.push({
@@ -383,6 +406,8 @@ export function DriversTab({ scopeCompanyId, isWbAdmin = false }: DriversTabProp
       setDashboardUsers(userList);
     } catch (err) {
       console.error('Failed to load employees:', err);
+      setCanonicalCatalogStatus('unavailable');
+      setCanonicalDrivers([]);
       setMessage('Failed to load employees');
     } finally {
       setLoading(false);
@@ -1254,6 +1279,16 @@ export function DriversTab({ scopeCompanyId, isWbAdmin = false }: DriversTabProp
                   Create secure login
                 </button>
               )}
+              {secureLoginStateFor(driver) === 'unknown' && (
+                <span className="px-3 py-1 text-sm rounded bg-amber-900/60 text-amber-300">
+                  Secure login status unavailable
+                </span>
+              )}
+              {secureLoginStateFor(driver) === 'duplicate' && (
+                <span className="px-3 py-1 text-sm rounded bg-amber-900/60 text-amber-300" title="A canonical profile exists with the same name but is not bound to this legacy row.">
+                  Possible duplicate canonical profile
+                </span>
+              )}
               {secureLoginStateFor(driver) === 'secured' && (
                 <span
                   className="px-3 py-1 text-sm rounded bg-emerald-900/60 text-emerald-300"
@@ -1468,7 +1503,9 @@ export function DriversTab({ scopeCompanyId, isWbAdmin = false }: DriversTabProp
         <p className="text-gray-400 text-xs mb-3">
           Sole WB-M route/well authority. Legacy approved rows below are evidence only.
         </p>
-        {canonicalDrivers.length === 0 ? (
+        {canonicalCatalogStatus === 'unavailable' || canonicalCatalogStatus === 'loading' ? (
+          <p className="text-amber-300 text-sm">Canonical driver status unavailable</p>
+        ) : canonicalDrivers.length === 0 ? (
           <p className="text-gray-500 text-sm">No canonical profiles in catalog.</p>
         ) : (
           <div className="space-y-2">

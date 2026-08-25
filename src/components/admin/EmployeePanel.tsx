@@ -39,7 +39,7 @@ interface EmployeePanelProps<D, U> {
    * parent's shared state resolver so this panel and the legacy list can
    * never drift. 'none' hides the block entirely.
    */
-  secureLoginStateFor?: (row: EmployeeRow<any, any>) => 'create' | 'secured' | 'none';
+  secureLoginStateFor?: (row: EmployeeRow<any, any>) => 'create' | 'secured' | 'none' | 'unknown' | 'duplicate';
   /** Open the parent's shared Create-secure-login modal for this row. */
   onCreateSecureLogin?: (row: EmployeeRow<any, any>) => void;
 }
@@ -207,6 +207,14 @@ export function EmployeePanel<D, U>({
                               title="This employee already has a canonical secure WellBuilt login."
                             >
                               Active
+                            </span>
+                          ) : secureLoginStateFor(row) === 'unknown' ? (
+                            <span className="text-amber-300" title="Canonical catalog is unavailable. Create is disabled so a second identity cannot be minted from an incomplete view.">
+                              Status unavailable
+                            </span>
+                          ) : secureLoginStateFor(row) === 'duplicate' ? (
+                            <span className="text-amber-300" title="A canonical profile with this name exists but is not bound to this legacy row. Not linked automatically.">
+                              Possible duplicate — not linked
                             </span>
                           ) : (
                             <button
