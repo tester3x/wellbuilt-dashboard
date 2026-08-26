@@ -1615,12 +1615,60 @@ async function materializeQueuedEditTrail(
 type V2CorrectionEntry = { t: string; v: EditableSnapshot; e?: string; src?: string };
 
 /**
- * Test-only barrier. When set, applyV2ChronologicalEdit awaits it once, right
- * after committing its processed-record transaction and before any follow-up
- * write. Lets a test deterministically interleave a second correction between
- * one apply's transaction and its follow-ups. Null (no-op) in production.
+ * Test-only barriers. applyV2ChronologicalEdit awaits each once (then clears it)
+ * at a specific point, letting a test deterministically interleave a newer
+ * correction: `beforeClassification` fires just before the receipt/effect
+ * classification writes; `beforeProjection` fires just before the first derived
+ * projection write. Both null (no-op) in production.
  */
-export const __v2FollowupBarrier: { hook: null | (() => Promise<void>) } = { hook: null };
+export const __v2FollowupBarrier: {
+  beforeClassification: null | (() => Promise<void>);
+  beforeProjection: null | (() => Promise<void>);
+} = { beforeClassification: null, beforeProjection: null };
+
+/**
+ * Fence a P-scoped mutable node (a receipt or a trail effect) by a revision
+ * field. A write carrying `myRev` is a no-op when the node already stores a
+ * GREATER revision — the newer classification wins. Immutable `core` fields are
+ * backfilled even when fenced, so durable receipt proof always exists.
+ */
+async function fencedRevWrite(
+  ref: admin.database.Reference,
+  revField: string,
+  myRev: number,
+  values: Record<string, unknown>,
+  core?: Record<string, unknown>,
+): Promise<void> {
+  await ref.transaction((cur: any) => {
+    const node = cur && typeof cur === 'object' && cur !== null ? cur : {};
+    if ((Number(node[revField]) || 0) > myRev) {
+      if (core) return { ...core, ...node }; // fenced: keep newer node, ensure core
+      return node; // fenced: no-op
+    }
+    return { ...node, ...(core || {}), ...values, [revField]: myRev };
+  });
+}
+
+/**
+ * Fence a shared derived projection (outgoing / AFR / performance / next-pull
+ * cascade / live status) by the SOURCE packet's revision. A write from packet P
+ * at `myRev` is a no-op when that target was last written by P at a greater
+ * revision. A different source packet (a newer pull taking over) passes — pull
+ * ordering, not this fence, arbitrates across distinct pulls.
+ */
+async function fencedSourceWrite(
+  ref: admin.database.Reference,
+  sourceId: string,
+  myRev: number,
+  values: Record<string, unknown>,
+): Promise<void> {
+  await ref.transaction((cur: any) => {
+    const node = cur && typeof cur === 'object' && cur !== null ? cur : {};
+    const sameSource = node.editSourceId === undefined || node.editSourceId === sourceId;
+    if (sameSource && (Number(node.editSourceRev) || 0) > myRev) return; // fenced no-op
+    return { ...node, ...values, editSourceId: sourceId, editSourceRev: myRev };
+  });
+}
 
 interface EditNeighbor {
   key: string;
@@ -1888,28 +1936,20 @@ export async function applyV2ChronologicalEdit(args: {
     return;
   }
 
+  // Correctness comes from the per-write REVISION FENCE below, never from a
+  // pre-write re-read. We classify + project from our own committed snapshot;
+  // any of these writes that carries a revision older than what a target
+  // already holds is a no-op at the write itself (compare-and-set). Because the
+  // transaction bumps the revision monotonically AND includes every previously
+  // committed correction, the highest-revision apply necessarily has the
+  // fullest set and its fenced writes win every target.
   const committed = txn.snapshot.val() as Record<string, any>;
   const myRev = Number(committed.materializationRev) || 0;
-
-  // Test-only interleaving barrier: pause after commit, before any follow-up
-  // write, so a test can complete a newer correction in between.
-  if (__v2FollowupBarrier.hook) {
-    const hook = __v2FollowupBarrier.hook;
-    __v2FollowupBarrier.hook = null;
-    await hook();
-  }
-
-  // Re-read the AUTHORITATIVE committed state. A newer correction may have
-  // landed between our transaction and here; every classification and
-  // projection below derives from THIS set, never from our local snapshot.
-  const authSnap = await db.ref(`packets/processed/${originalPacketId}`).once('value');
-  const authNode = (authSnap.exists() ? authSnap.val() : committed) as Record<string, any>;
-  const authRev = Number(authNode.materializationRev) || myRev;
   const baseline: EditableSnapshot =
-    authNode.editBaseline && typeof authNode.editBaseline === 'object'
-      ? authNode.editBaseline
+    committed.editBaseline && typeof committed.editBaseline === 'object'
+      ? committed.editBaseline
       : frozenBaseline;
-  const correctionsMap: Record<string, V2CorrectionEntry> = authNode.editCorrections || {};
+  const correctionsMap: Record<string, V2CorrectionEntry> = committed.editCorrections || {};
   const allEvents = Object.entries(correctionsMap).map(([id, c]) => ({
     eventId: id,
     correctionCreatedAtUTC: c.t,
@@ -1925,7 +1965,7 @@ export async function applyV2ChronologicalEdit(args: {
   const newWellDown = matFinal.fields.wellDown === true;
   const derived = computeEditDerived(
     newTankTopInches, newBblsTaken, newDateTimeUTC, bblPerFoot, loadLineInches, neighbors, originalPacketId,
-    Number(authNode.timeDifDays) || 0, typeof authNode.timeDif === 'string' ? authNode.timeDif : '',
+    Number(committed.timeDifDays) || 0, typeof committed.timeDif === 'string' ? committed.timeDif : '',
   );
   const newTankAfterInches = newTankTopInches <= 0 ? 0 : derived.newTankAfterInches;
 
@@ -1952,11 +1992,6 @@ export async function applyV2ChronologicalEdit(args: {
     },
   );
   const outcome = classifyEditOutcome(editEventId, correctionValues, matFinal.authority);
-  const currentEffect = {
-    outcome: outcome.outcome,
-    fieldsAffectingCurrent: outcome.fieldsAffectingCurrent,
-    fieldsSuperseded: outcome.fieldsSuperseded,
-  };
   const editEvent = buildAppliedEditEvent({
     eventId: editEventId,
     packetId: originalPacketId,
@@ -1975,64 +2010,65 @@ export async function applyV2ChronologicalEdit(args: {
     serverReceivedAtUTC,
     correctionValues,
   });
-  // Immutable event record carries the effect it had at apply time; the effect
-  // is re-annotated below for prior events a newer correction may supersede.
-  (editEvent as unknown as Record<string, unknown>).currentEffect = currentEffect;
-  const receipt = buildAppliedEditReceipt({
-    editEventId,
-    originalPacketId,
-    payloadDigest: data.payloadDigest,
-    appliedAt: serverReceivedAtUTC,
-    correctionCreatedAtUTC,
-    serverReceivedAtUTC,
-    serverAppliedAtUTC: serverReceivedAtUTC,
-    outcome: outcome.outcome,
-    fieldsAffectingCurrent: outcome.fieldsAffectingCurrent,
-    fieldsSuperseded: outcome.fieldsSuperseded,
-  });
 
-  // Our own event (immutable) + receipt (classified vs the authoritative set)
-  // are durable regardless of whether we are the latest apply.
-  await db.ref().update({
-    ...editHistoryWritePaths(originalPacketId, editEvent),
-    ...editReceiptWritePaths(editEventId, receipt),
-  });
+  // Immutable event insertion — write-once, keyed by editEventId. Carries only
+  // the change it made (never mutable effect), so it is idempotent and needs no
+  // fence. `.update` merges, so it never clobbers the fenced currentEffect child.
+  await db.ref(`packets/editHistory/${originalPacketId}/${editEventId}`)
+    .update(editEvent as unknown as Record<string, unknown>);
 
-  // Revision guard: if a newer correction has superseded our revision, IT owns
-  // the global re-classification and every projection below. Defer — never let
-  // our stale correction set overwrite newer receipt classifications or derived
-  // projections. Our own event + receipt are already written.
-  if (authRev > myRev) {
-    console.log(
-      `[V2_EDIT_DEFER] ${wellName}: ${editEventId} rev ${myRev} < current ${authRev} — newer apply owns projections`,
-    );
-    await removeIncomingPacket(db.ref(), incomingPacketId);
-    return;
+  // Test seam: pause immediately before the classification writes.
+  if (__v2FollowupBarrier.beforeClassification) {
+    const hook = __v2FollowupBarrier.beforeClassification;
+    __v2FollowupBarrier.beforeClassification = null;
+    await hook();
   }
 
-  // We are the latest apply: re-classify every OTHER correction's receipt +
-  // trail effect against the authoritative set (superseded events are never
-  // erased — only their current-effect annotation changes).
-  const reclass: Record<string, unknown> = {};
+  // Fence-classify EVERY correction's receipt + trail effect against our
+  // materialized set. Each write is a compare-and-set on the classification
+  // revision: a write older than the target's stored revision is a no-op, so a
+  // stale apply can never overwrite a newer classification. Superseded events
+  // stay in the trail — only their effect annotation moves. The receipt's
+  // immutable core (durable proof) is backfilled even when the fence blocks a
+  // stale classification, so a receipt is never left without proof.
   for (const [id, c] of Object.entries(correctionsMap)) {
-    if (id === editEventId) continue;
     const oc = classifyEditOutcome(id, (c.v || {}) as EditableSnapshot, matFinal.authority);
-    reclass[`packets/editReceipts/${id}/outcome`] = oc.outcome;
-    reclass[`packets/editReceipts/${id}/fieldsAffectingCurrent`] = oc.fieldsAffectingCurrent;
-    reclass[`packets/editReceipts/${id}/fieldsSuperseded`] = oc.fieldsSuperseded;
-    reclass[`packets/editHistory/${originalPacketId}/${id}/currentEffect`] = {
+    const effect = {
       outcome: oc.outcome,
       fieldsAffectingCurrent: oc.fieldsAffectingCurrent,
       fieldsSuperseded: oc.fieldsSuperseded,
     };
+    const core = id === editEventId
+      ? {
+        editEventId,
+        originalPacketId,
+        payloadDigest: typeof data.payloadDigest === 'string' ? data.payloadDigest : null,
+        status: 'accepted',
+        appliedAt: serverReceivedAtUTC,
+        correctionCreatedAtUTC: typeof c.t === 'string' ? c.t : correctionCreatedAtUTC,
+        serverReceivedAtUTC: typeof c.e === 'string' ? c.e : serverReceivedAtUTC,
+        serverAppliedAtUTC: serverReceivedAtUTC,
+      }
+      : undefined;
+    await fencedRevWrite(db.ref(`packets/editReceipts/${id}`), 'classificationRev', myRev, effect, core);
+    await fencedRevWrite(
+      db.ref(`packets/editHistory/${originalPacketId}/${id}/currentEffect`), 'rev', myRev, effect,
+    );
   }
-  if (Object.keys(reclass).length) await db.ref().update(reclass);
+
+  // Test seam: pause immediately before the first derived projection write.
+  if (__v2FollowupBarrier.beforeProjection) {
+    const hook = __v2FollowupBarrier.beforeProjection;
+    __v2FollowupBarrier.beforeProjection = null;
+    await hook();
+  }
 
   // Live wellDown status: only authoritative edits flip it (mirror legacy).
+  // Fenced by source revision so a stale apply cannot revert it.
   const editIsAuthoritative = data.wellDownIsAuthoritative === true && data.wellDown !== undefined;
   const editExistingIsDownSnap = await db.ref(`wells/${wellName}/status/isDown`).once('value');
   const nextEditIsDown = editIsAuthoritative ? newWellDown : editExistingIsDownSnap.val() === true;
-  await db.ref(`wells/${wellName}/status/isDown`).set(nextEditIsDown);
+  await fencedSourceWrite(db.ref(`wells/${wellName}/status`), originalPacketId, myRev, { isDown: nextEditIsDown });
 
   // Cascade: recompute the NEXT pull's recovery/flow off our new tankAfter.
   if (newTankTopInches > 0) {
@@ -2058,7 +2094,7 @@ export async function applyV2ChronologicalEdit(args: {
         nextFlowRateDays = (nextTimeDifDays / nextRecovery) * 12;
         nextFlowRate = daysToHMMSS(nextFlowRateDays);
       }
-      await db.ref(`packets/processed/${nextKey}`).update({
+      await fencedSourceWrite(db.ref(`packets/processed/${nextKey}`), originalPacketId, myRev, {
         recoveryInches: nextRecovery,
         flowRateDays: nextFlowRateDays,
         flowRate: nextFlowRate,
@@ -2130,12 +2166,14 @@ export async function applyV2ChronologicalEdit(args: {
     };
     if (hasOutgoing) {
       const updates: Array<Promise<unknown>> = [];
-      outgoingSnap.forEach((child) => { updates.push(child.ref.update(outFields)); });
+      outgoingSnap.forEach((child) => {
+        updates.push(fencedSourceWrite(child.ref, originalPacketId, myRev, outFields));
+      });
       await Promise.all(updates);
     } else {
       const responseTimestamp = new Date();
       const responseId = `response_${responseTimestamp.toISOString().replace(/[-:]/g, '').replace('T', '_').split('.')[0]}_${cleanName}`;
-      await db.ref(`packets/outgoing/${responseId}`).set({
+      await fencedSourceWrite(db.ref(`packets/outgoing/${responseId}`), originalPacketId, myRev, {
         wellName,
         ...outFields,
         status: 'success',
@@ -2144,7 +2182,7 @@ export async function applyV2ChronologicalEdit(args: {
       });
     }
     const afrMinutes = afr * 24 * 60;
-    await db.ref(`well_config/${wellName}`).update({
+    await fencedSourceWrite(db.ref(`well_config/${wellName}`), originalPacketId, myRev, {
       avgFlowRate: daysToHMMSS(afr),
       avgFlowRateMinutes: Math.round(afrMinutes * 100) / 100,
     });
@@ -2164,7 +2202,7 @@ export async function applyV2ChronologicalEdit(args: {
       }
     }
     const predicted = Number(origPacket.predictedInches) > 0 ? Number(origPacket.predictedInches) : actualInches;
-    await db.ref(`performance/${perfWellKey}/rows/${perfTimestamp}`).update({
+    await fencedSourceWrite(db.ref(`performance/${perfWellKey}/rows/${perfTimestamp}`), originalPacketId, myRev, {
       d: `${perfPullTime.getFullYear()}-${String(perfPullTime.getMonth() + 1).padStart(2, '0')}-${String(perfPullTime.getDate()).padStart(2, '0')}`,
       a: actualInches,
       p: predicted,

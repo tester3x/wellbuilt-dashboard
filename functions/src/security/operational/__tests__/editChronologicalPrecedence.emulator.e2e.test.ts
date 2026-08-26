@@ -37,7 +37,12 @@ describeE2E('emulator: chronological edit precedence (real handlers)', () => {
   jest.setTimeout(60000);
   let db: admin.database.Database;
   let processIncomingEdit: ProcessIncomingEdit;
-  let idxMod: { __v2FollowupBarrier: { hook: null | (() => Promise<void>) } };
+  let idxMod: {
+    __v2FollowupBarrier: {
+      beforeClassification: null | (() => Promise<void>);
+      beforeProjection: null | (() => Promise<void>);
+    };
+  };
 
   beforeAll(() => {
     process.env.FIREBASE_DATABASE_EMULATOR_HOST = EMULATOR!;
@@ -390,27 +395,72 @@ describeE2E('emulator: chronological edit precedence (real handlers)', () => {
     expect(Object.keys(await history()).length).toBe(1);
   });
 
-  // 25 — controlled interleaving: A commits its txn, pauses before follow-ups,
-  // B completes fully, A resumes. Final state must reflect the A+B set.
-  it('a stale-resuming apply never overwrites a newer apply’s receipts or projections', async () => {
-    // A masks level (11), B masks bbls (150).
-    await ingest(correction({ editEventId: 'editevt_a1', editedFields: ['tankLevelFeet'], correctionCreatedAtUTC: '2026-08-24T10:30:00.000Z', tankLevelFeet: 11 }));
-    await ingest(correction({ editEventId: 'editevt_b1', editedFields: ['bblsTaken'], correctionCreatedAtUTC: '2026-08-24T10:45:00.000Z', bblsTaken: 150 }));
-    // When A commits its processed transaction, deliver B fully before A's follow-ups.
-    idxMod.__v2FollowupBarrier.hook = async () => { await deliver('editevt_b1'); };
-    await deliver('editevt_a1'); // A: txn → barrier(delivers B) → A resumes and defers
+  // Shared readers for the interleaving tests (every mutable target).
+  const effectOf = async (id: string) => (await db.ref(`packets/editHistory/${PID}/${id}/currentEffect`).once('value')).val();
+  const wellCfg = async () => (await db.ref(`well_config/${WELL}`).once('value')).val();
+  const perfRow = async (utc: string) => {
+    const t = new Date(utc);
+    const ts = `${t.getFullYear()}${String(t.getMonth() + 1).padStart(2, '0')}${String(t.getDate()).padStart(2, '0')}_${String(t.getHours()).padStart(2, '0')}${String(t.getMinutes()).padStart(2, '0')}${String(t.getSeconds()).padStart(2, '0')}`;
+    return (await db.ref(`performance/${WELL.replace(/\s+/g, '_')}/rows/${ts}`).once('value')).val();
+  };
+  const outgoingRow = async () => {
+    const s = await db.ref('packets/outgoing').orderByChild('wellName').equalTo(WELL).once('value');
+    let row: any = null;
+    s.forEach((c) => { row = c.val(); });
+    return row;
+  };
+
+  // Same-field A(150) then newer B(155): B is authoritative, so a stale A write
+  // would visibly corrupt state (bbls 150, A recorded_current). Assert every
+  // mutable target reflects the authoritative A+B (revision-2) set instead.
+  async function assertAuthoritativeAB(): Promise<void> {
     const p = await processed();
-    expect(p.tankTopInches).toBe(132); // A's level survived
-    expect(p.bblsTaken).toBe(150); // B's bbls survived
-    const h = await history();
-    expect(Object.keys(h).sort()).toEqual(['editevt_a1', 'editevt_b1']); // both events durable
-    // Every receipt reflects the authoritative A+B set (both own their field).
-    expect((await receiptOf('editevt_a1')).outcome).toBe('recorded_current');
-    expect((await receiptOf('editevt_b1')).outcome).toBe('recorded_current');
-    // Projection reflects the full set (B's bbls in the outgoing response).
-    const outSnap = await db.ref('packets/outgoing').orderByChild('wellName').equalTo(WELL).once('value');
-    let lastBbls: string | null = null;
-    outSnap.forEach((c) => { lastBbls = c.val().lastPullBbls; });
-    expect(lastBbls).toBe('150');
+    const maxRev = Number(p.materializationRev);
+    expect(maxRev).toBe(2); // two applies committed
+    // Current processed materialization.
+    expect(p.bblsTaken).toBe(155);
+    // Immutable correction set + history (both events durable).
+    expect(Object.keys(await history()).sort()).toEqual(['editevt_a1', 'editevt_b1']);
+    expect(Object.keys(p.editCorrections).sort()).toEqual(['editevt_a1', 'editevt_b1']);
+    // Every receipt + outcome (A superseded, B current).
+    const ra = await receiptOf('editevt_a1');
+    const rb = await receiptOf('editevt_b1');
+    expect(ra.outcome).toBe('recorded_superseded');
+    expect(ra.status).toBe('accepted'); // immutable core still present
+    expect(ra.classificationRev).toBe(2); // fenced to the winning revision
+    expect(rb.outcome).toBe('recorded_current');
+    expect(rb.classificationRev).toBe(2);
+    // Trail current-effect annotation.
+    expect((await effectOf('editevt_a1')).outcome).toBe('recorded_superseded');
+    expect((await effectOf('editevt_b1')).outcome).toBe('recorded_current');
+    // Outgoing projection.
+    const out = await outgoingRow();
+    expect(out.lastPullBbls).toBe('155');
+    expect(out.editSourceRev).toBe(2);
+    // AFR (well_config) + performance projections fenced to revision 2.
+    expect(Number((await wellCfg()).editSourceRev)).toBe(2);
+    expect(Number((await perfRow(ORIGINAL_UTC)).editSourceRev)).toBe(2);
+  }
+
+  // TEST A — stale receipt/classification write.
+  it('stale classification write is fenced: pause A before classification, B completes, A resumes', async () => {
+    await ingest(correction({ editEventId: 'editevt_a1', editedFields: ['bblsTaken'], correctionCreatedAtUTC: '2026-08-24T10:30:00.000Z', bblsTaken: 150 }));
+    await ingest(correction({ editEventId: 'editevt_b1', editedFields: ['bblsTaken'], correctionCreatedAtUTC: '2026-08-24T10:45:00.000Z', bblsTaken: 155 }));
+    // A commits (rev 1), classifies itself recorded_current, then pauses right
+    // before writing that classification; B completes revision 2 fully.
+    idxMod.__v2FollowupBarrier.beforeClassification = async () => { await deliver('editevt_b1'); };
+    await deliver('editevt_a1');
+    await assertAuthoritativeAB(); // A's stale rev-1 classification never lands
+  });
+
+  // TEST B — stale projection write after passing the (now removed) guard.
+  it('stale projection write is fenced: pause A before projections, B completes, A resumes', async () => {
+    await ingest(correction({ editEventId: 'editevt_a1', editedFields: ['bblsTaken'], correctionCreatedAtUTC: '2026-08-24T10:30:00.000Z', bblsTaken: 150 }));
+    await ingest(correction({ editEventId: 'editevt_b1', editedFields: ['bblsTaken'], correctionCreatedAtUTC: '2026-08-24T10:45:00.000Z', bblsTaken: 155 }));
+    // A commits (rev 1), writes its rev-1 classification, then pauses right
+    // before its first projection write; B completes revision 2 fully.
+    idxMod.__v2FollowupBarrier.beforeProjection = async () => { await deliver('editevt_b1'); };
+    await deliver('editevt_a1');
+    await assertAuthoritativeAB(); // A's stale rev-1 projections never land
   });
 });
