@@ -21,6 +21,8 @@ import {
 
 export const EDIT_ALLOWLIST = [
   'requestType',
+  'schemaVersion',
+  'editedFields',
   'wellName',
   'originalPacketId',
   'packetId',
@@ -37,6 +39,20 @@ export const EDIT_ALLOWLIST = [
 ] as const;
 
 const ALLOWED = new Set<string>(EDIT_ALLOWLIST);
+
+/** The governed v2 contract version. Selected explicitly; never inferred. */
+export const GOVERNED_EDIT_SCHEMA_VERSION = 2 as const;
+
+/** Field names a v2 correction may declare in editedFields. */
+export const EDITED_FIELD_MASK_ALLOWLIST = [
+  'tankLevelFeet',
+  'tankTopInches',
+  'bblsTaken',
+  'dateTimeUTC',
+  'dateTime',
+  'wellDown',
+] as const;
+const EDITED_FIELD_MASK = new Set<string>(EDITED_FIELD_MASK_ALLOWLIST);
 
 /** Absolute instants must carry Z or a numeric offset. Offsetless is rejected. */
 const OFFSET_AWARE = /(Z|[+-]\d{2}:?\d{2})$/;
@@ -120,9 +136,39 @@ export function evaluateWbmEdit(input: {
   for (const key of Object.keys(packet)) {
     if (!ALLOWED.has(key)) return { ok: false, reason: 'unexpected_field' };
     const v = packet[key];
+    // editedFields is the one allowed array; everything else must be scalar.
+    if (key === 'editedFields') {
+      if (!Array.isArray(v)) return { ok: false, reason: 'invalid_editedFields' };
+      continue;
+    }
     if (v !== null && typeof v === 'object') return { ok: false, reason: 'unexpected_object' };
   }
   if (packet.requestType !== 'edit') return { ok: false, reason: 'unsupported_request_type' };
+
+  // Governed v2 contract must be selected EXPLICITLY — never inferred from the
+  // presence of a timestamp or any other field. Fail closed otherwise.
+  if (packet.schemaVersion === undefined) return { ok: false, reason: 'missing_schemaVersion' };
+  if (packet.schemaVersion !== GOVERNED_EDIT_SCHEMA_VERSION) {
+    return { ok: false, reason: 'invalid_schemaVersion' };
+  }
+
+  // Explicit, immutable per-field mutation mask. Required, non-empty, unique,
+  // restricted to the editable-field allowlist. This — not any baseline diff —
+  // is the authority for which fields the correction touched.
+  const rawMask = packet.editedFields;
+  if (!Array.isArray(rawMask)) return { ok: false, reason: 'missing_editedFields' };
+  if (rawMask.length === 0) return { ok: false, reason: 'empty_editedFields' };
+  const maskSeen = new Set<string>();
+  for (const m of rawMask) {
+    if (typeof m !== 'string' || !EDITED_FIELD_MASK.has(m)) {
+      return { ok: false, reason: 'unknown_editedField' };
+    }
+    if (maskSeen.has(m)) return { ok: false, reason: 'duplicate_editedField' };
+    maskSeen.add(m);
+  }
+  // Canonicalized, sorted mask for a stable digest (order-independent, so a
+  // different SET of fields — not merely a reordering — changes the digest).
+  const editedFields = Array.from(maskSeen).sort();
 
   const wellName = boundedString(packet.wellName, 'wellName', 1, 120);
   if (!wellName.ok) return wellName;
@@ -205,6 +251,18 @@ export function evaluateWbmEdit(input: {
     timezone = tz.value;
   }
 
+  // Mask/payload consistency: an optional field declared in editedFields must
+  // actually carry a value. (Level and BBLs are always present and validated.)
+  if (maskSeen.has('dateTimeUTC') && dateTimeUTC === undefined) {
+    return { ok: false, reason: 'editedField_value_missing' };
+  }
+  if (maskSeen.has('dateTime') && dateTime === undefined) {
+    return { ok: false, reason: 'editedField_value_missing' };
+  }
+  if (maskSeen.has('wellDown') && packet.wellDown === undefined) {
+    return { ok: false, reason: 'editedField_value_missing' };
+  }
+
   if (!input.original) return { ok: false, reason: 'missing_original' };
   const origWell = typeof input.original.wellName === 'string' ? input.original.wellName : '';
   if (origWell !== wellName.value) return { ok: false, reason: 'forged_well' };
@@ -232,6 +290,8 @@ export function evaluateWbmEdit(input: {
 
   const payload: Record<string, unknown> = {
     requestType: 'edit',
+    schemaVersion: GOVERNED_EDIT_SCHEMA_VERSION,
+    editedFields,
     wellName: wellName.value,
     originalPacketId: originalPacketId.value,
     packetId: originalPacketId.value,

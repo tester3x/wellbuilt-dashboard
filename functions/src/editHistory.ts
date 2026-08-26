@@ -446,52 +446,53 @@ export function extractAssertedEditableValues(raw: Record<string, unknown>): Edi
 }
 
 /**
- * The fields a correction actually CHANGES, relative to the frozen baseline.
- *
- * The governed wire always carries the full snapshot (tankLevelFeet + bblsTaken
- * are always present), so field PRESENCE cannot express intent. A correction is
- * treated as touching a field only when its value differs from the frozen
- * baseline — this is what lets a level-only correction and a bbls-only
- * correction each own their own field regardless of arrival order, while an
- * echoed-unchanged field never supersedes a prior real change.
- *
- * Known boundary: a correction that deliberately restores a field to its exact
- * original (baseline) value is indistinguishable from an unchanged echo and is
- * therefore not treated as a change. This is inherent to a full-snapshot wire.
+ * Wire field names a governed v2 correction may declare in `editedFields`.
+ * `tankLevelFeet` and `tankTopInches` both denote the level (canonicalized to
+ * tankTopInches); `dateTimeUTC`/`dateTime` are the operational-time pair.
  */
-export function assertedChangesAgainstBaseline(
+export const EDITED_FIELD_ALLOWLIST = [
+  'tankLevelFeet',
+  'tankTopInches',
+  'bblsTaken',
+  'dateTimeUTC',
+  'dateTime',
+  'wellDown',
+] as const;
+export type EditedFieldName = (typeof EDITED_FIELD_ALLOWLIST)[number];
+
+/**
+ * The fields a governed v2 correction touched, taken from its EXPLICIT
+ * `editedFields` mask — never inferred by diffing against the baseline.
+ *
+ * A field listed in the mask applies its submitted value even when that value
+ * equals the frozen baseline (so a deliberate restore-to-original is a real,
+ * authoritative correction). A field NOT listed never participates in
+ * precedence and can never overwrite another correction. This is what lets a
+ * level-only correction and a bbls-only correction each own their own field
+ * regardless of arrival order, and lets a newer correction reclaim a field even
+ * by setting it back to the original value.
+ */
+export function assertedFromEditedFields(
   raw: Record<string, unknown>,
-  baseline: EditableSnapshot,
+  editedFields: readonly string[],
 ): EditableSnapshot {
-  const sent = extractAssertedEditableValues(raw);
+  const canonical = extractAssertedEditableValues(raw);
+  const listed = new Set(editedFields);
   const out: EditableSnapshot = {};
-  if (sent.tankTopInches !== undefined && sent.tankTopInches !== null) {
-    const b = baseline.tankTopInches;
-    if (b === undefined || b === null
-      || Math.round(Number(sent.tankTopInches)) !== Math.round(Number(b))) {
-      out.tankTopInches = sent.tankTopInches;
-    }
+  if (listed.has('tankLevelFeet') || listed.has('tankTopInches')) {
+    if (canonical.tankTopInches !== undefined) out.tankTopInches = canonical.tankTopInches;
   }
-  if (sent.bblsTaken !== undefined && sent.bblsTaken !== null) {
-    const b = baseline.bblsTaken;
-    if (b === undefined || b === null || Number(sent.bblsTaken) !== Number(b)) {
-      out.bblsTaken = sent.bblsTaken;
-    }
+  if (listed.has('bblsTaken') && canonical.bblsTaken !== undefined) {
+    out.bblsTaken = canonical.bblsTaken;
   }
-  if (sent.dateTimeUTC !== undefined) {
-    if (String(sent.dateTimeUTC) !== String(baseline.dateTimeUTC ?? '')) {
-      out.dateTimeUTC = sent.dateTimeUTC;
-    }
+  if (listed.has('dateTimeUTC') && canonical.dateTimeUTC !== undefined) {
+    out.dateTimeUTC = canonical.dateTimeUTC;
   }
-  if (sent.dateTime !== undefined) {
-    if (String(sent.dateTime) !== String(baseline.dateTime ?? '')) {
-      out.dateTime = sent.dateTime;
-    }
+  if (listed.has('dateTime') && canonical.dateTime !== undefined) {
+    out.dateTime = canonical.dateTime;
   }
-  if (sent.wellDown !== undefined) {
-    if ((sent.wellDown === true) !== (baseline.wellDown === true)) {
-      out.wellDown = sent.wellDown;
-    }
+  if (listed.has('wellDown') && canonical.wellDown !== undefined) {
+    out.wellDown = canonical.wellDown;
   }
   return out;
 }

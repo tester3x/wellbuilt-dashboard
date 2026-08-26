@@ -21,7 +21,7 @@ import {
   strandedPacketVerdict,
 } from './packetGuards';
 import {
-  assertedChangesAgainstBaseline,
+  assertedFromEditedFields,
   buildAppliedEditEvent,
   buildAppliedEditReceipt,
   buildEditBaseline,
@@ -1614,6 +1614,14 @@ async function materializeQueuedEditTrail(
 
 type V2CorrectionEntry = { t: string; v: EditableSnapshot; e?: string; src?: string };
 
+/**
+ * Test-only barrier. When set, applyV2ChronologicalEdit awaits it once, right
+ * after committing its processed-record transaction and before any follow-up
+ * write. Lets a test deterministically interleave a second correction between
+ * one apply's transaction and its follow-ups. Null (no-op) in production.
+ */
+export const __v2FollowupBarrier: { hook: null | (() => Promise<void>) } = { hook: null };
+
 interface EditNeighbor {
   key: string;
   dateTimeUTC: string;
@@ -1741,13 +1749,31 @@ export async function applyV2ChronologicalEdit(args: {
     normalizeOriginAppContext(origPacket.originAppContext) !== 'unknown'
       ? normalizeOriginAppContext(origPacket.originAppContext)
       : normalizeOriginAppContext(data.originAppContext);
-  // Diff against the FROZEN original baseline (stored once, or the current
-  // original on the first edit) so per-field precedence reflects real changes.
+  // Frozen original baseline (stored once, or the current original on the
+  // first edit) — the START of chronological replay, NOT an assertion filter.
   const frozenBaseline: EditableSnapshot =
     origPacket.editBaseline && typeof origPacket.editBaseline === 'object'
       ? (origPacket.editBaseline as EditableSnapshot)
       : buildEditBaseline(origPacket as Record<string, unknown>);
-  const correctionValues = assertedChangesAgainstBaseline(data as Record<string, unknown>, frozenBaseline);
+  // Which fields this correction touched comes from its EXPLICIT editedFields
+  // mask. A governed v2 request that reached here without a valid mask must
+  // fail closed (quarantine) — it must never silently downgrade to legacy.
+  const editedFieldsRaw = (data as { editedFields?: unknown }).editedFields;
+  if (!Array.isArray(editedFieldsRaw) || editedFieldsRaw.length === 0
+    || !editedFieldsRaw.every((f) => typeof f === 'string')) {
+    console.error(`[V2_EDIT_INVALID_MASK] ${wellName}: ${editEventId} on ${originalPacketId} — missing/invalid editedFields`);
+    await quarantineIncomingPacket(db.ref(), {
+      packetId: incomingPacketId,
+      packet: data,
+      verdict: orphanEditVerdict(originalPacketId),
+      nowMs: Date.now(),
+    });
+    return;
+  }
+  const correctionValues = assertedFromEditedFields(
+    data as Record<string, unknown>,
+    editedFieldsRaw as string[],
+  );
   const originalSubmissionAt =
     resolveEditAuditContext(origPacket as Record<string, unknown>).originalSubmissionAt ||
     resolveOriginalSubmissionAt(origPacket as Record<string, unknown>);
@@ -1812,6 +1838,10 @@ export async function applyV2ChronologicalEdit(args: {
       ...src,
       editBaseline: baseline,
       editCorrections: corrections,
+      // Monotonic materialization revision — bumped on every committed apply.
+      // Follow-up writes (receipts, projections) guard on this so a stale
+      // invocation can never overwrite a newer correction set's output.
+      materializationRev: (Number(src.materializationRev) || 0) + 1,
       bblsTaken: newBbls,
       wellDown: newDown,
       dateTimeUTC: newUTC,
@@ -1859,11 +1889,27 @@ export async function applyV2ChronologicalEdit(args: {
   }
 
   const committed = txn.snapshot.val() as Record<string, any>;
+  const myRev = Number(committed.materializationRev) || 0;
+
+  // Test-only interleaving barrier: pause after commit, before any follow-up
+  // write, so a test can complete a newer correction in between.
+  if (__v2FollowupBarrier.hook) {
+    const hook = __v2FollowupBarrier.hook;
+    __v2FollowupBarrier.hook = null;
+    await hook();
+  }
+
+  // Re-read the AUTHORITATIVE committed state. A newer correction may have
+  // landed between our transaction and here; every classification and
+  // projection below derives from THIS set, never from our local snapshot.
+  const authSnap = await db.ref(`packets/processed/${originalPacketId}`).once('value');
+  const authNode = (authSnap.exists() ? authSnap.val() : committed) as Record<string, any>;
+  const authRev = Number(authNode.materializationRev) || myRev;
   const baseline: EditableSnapshot =
-    committed.editBaseline && typeof committed.editBaseline === 'object'
-      ? committed.editBaseline
+    authNode.editBaseline && typeof authNode.editBaseline === 'object'
+      ? authNode.editBaseline
       : frozenBaseline;
-  const correctionsMap: Record<string, V2CorrectionEntry> = committed.editCorrections || {};
+  const correctionsMap: Record<string, V2CorrectionEntry> = authNode.editCorrections || {};
   const allEvents = Object.entries(correctionsMap).map(([id, c]) => ({
     eventId: id,
     correctionCreatedAtUTC: c.t,
@@ -1879,7 +1925,7 @@ export async function applyV2ChronologicalEdit(args: {
   const newWellDown = matFinal.fields.wellDown === true;
   const derived = computeEditDerived(
     newTankTopInches, newBblsTaken, newDateTimeUTC, bblPerFoot, loadLineInches, neighbors, originalPacketId,
-    Number(committed.timeDifDays) || 0, typeof committed.timeDif === 'string' ? committed.timeDif : '',
+    Number(authNode.timeDifDays) || 0, typeof authNode.timeDif === 'string' ? authNode.timeDif : '',
   );
   const newTankAfterInches = newTankTopInches <= 0 ? 0 : derived.newTankAfterInches;
 
@@ -1945,28 +1991,42 @@ export async function applyV2ChronologicalEdit(args: {
     fieldsSuperseded: outcome.fieldsSuperseded,
   });
 
-  // History + receipt first (durable proof), THEN consume the incoming packet.
-  // Receipt is written only after materialization has been committed above.
-  const trailUpdate: Record<string, unknown> = {
+  // Our own event (immutable) + receipt (classified vs the authoritative set)
+  // are durable regardless of whether we are the latest apply.
+  await db.ref().update({
     ...editHistoryWritePaths(originalPacketId, editEvent),
     ...editReceiptWritePaths(editEventId, receipt),
-  };
-  // Re-annotate PRIOR corrections: a newer correction may have just superseded
-  // one of their fields, so their receipt + trail effect must reflect the
-  // current materialized state (superseded events are never erased).
+  });
+
+  // Revision guard: if a newer correction has superseded our revision, IT owns
+  // the global re-classification and every projection below. Defer — never let
+  // our stale correction set overwrite newer receipt classifications or derived
+  // projections. Our own event + receipt are already written.
+  if (authRev > myRev) {
+    console.log(
+      `[V2_EDIT_DEFER] ${wellName}: ${editEventId} rev ${myRev} < current ${authRev} — newer apply owns projections`,
+    );
+    await removeIncomingPacket(db.ref(), incomingPacketId);
+    return;
+  }
+
+  // We are the latest apply: re-classify every OTHER correction's receipt +
+  // trail effect against the authoritative set (superseded events are never
+  // erased — only their current-effect annotation changes).
+  const reclass: Record<string, unknown> = {};
   for (const [id, c] of Object.entries(correctionsMap)) {
     if (id === editEventId) continue;
     const oc = classifyEditOutcome(id, (c.v || {}) as EditableSnapshot, matFinal.authority);
-    trailUpdate[`packets/editReceipts/${id}/outcome`] = oc.outcome;
-    trailUpdate[`packets/editReceipts/${id}/fieldsAffectingCurrent`] = oc.fieldsAffectingCurrent;
-    trailUpdate[`packets/editReceipts/${id}/fieldsSuperseded`] = oc.fieldsSuperseded;
-    trailUpdate[`packets/editHistory/${originalPacketId}/${id}/currentEffect`] = {
+    reclass[`packets/editReceipts/${id}/outcome`] = oc.outcome;
+    reclass[`packets/editReceipts/${id}/fieldsAffectingCurrent`] = oc.fieldsAffectingCurrent;
+    reclass[`packets/editReceipts/${id}/fieldsSuperseded`] = oc.fieldsSuperseded;
+    reclass[`packets/editHistory/${originalPacketId}/${id}/currentEffect`] = {
       outcome: oc.outcome,
       fieldsAffectingCurrent: oc.fieldsAffectingCurrent,
       fieldsSuperseded: oc.fieldsSuperseded,
     };
   }
-  await db.ref().update(trailUpdate);
+  if (Object.keys(reclass).length) await db.ref().update(reclass);
 
   // Live wellDown status: only authoritative edits flip it (mirror legacy).
   const editIsAuthoritative = data.wellDownIsAuthoritative === true && data.wellDown !== undefined;
@@ -2237,14 +2297,14 @@ export async function processIncomingEdit(
         }
       : {};
 
-    // ── v2 chronological correction (event-time precedence) ───────────────
-    // A correction carrying an immutable client event-time (correctionCreatedAtUTC)
-    // is materialized deterministically by creation order, per editable field —
-    // never by network/trigger/retry arrival. Legacy edits (no event-time) keep
-    // the historical incremental last-write-wins path below, unchanged.
-    const isV2Correction =
-      typeof (data as { correctionCreatedAtUTC?: unknown }).correctionCreatedAtUTC === 'string' &&
-      (data as { correctionCreatedAtUTC: string }).correctionCreatedAtUTC.length > 0;
+    // ── v2 chronological correction (event-time + explicit field mask) ────
+    // v2 is selected EXPLICITLY by schemaVersion === 2 (never inferred from a
+    // timestamp). Such a correction is materialized deterministically by
+    // creation order, per field declared in its editedFields mask — never by
+    // network/trigger/retry arrival, and never by diffing against the baseline.
+    // Genuinely legacy edits (no schemaVersion) keep the historical incremental
+    // path below, unchanged. A governed request never downgrades into it.
+    const isV2Correction = (data as { schemaVersion?: unknown }).schemaVersion === 2;
 
     // Exact duplicate edit replay: PROVABLY already applied only when the
     // original carries an edit marker AND its values already equal this

@@ -179,6 +179,8 @@ describeE2E('emulator: real processIncomingEdit governed edit path', () => {
 
     const packetA = {
       requestType: 'edit',
+      schemaVersion: 2,
+      editedFields: ['tankLevelFeet', 'bblsTaken'],
       wellName: 'Gabriel 5',
       originalPacketId: PID,
       packetId: PID,

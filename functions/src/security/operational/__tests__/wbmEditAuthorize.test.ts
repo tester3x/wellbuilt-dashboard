@@ -12,6 +12,8 @@ const EVENT_B = 'editevt_g2_corr_b';
 
 const basePacket = {
   requestType: 'edit',
+  schemaVersion: 2,
+  editedFields: ['tankLevelFeet', 'bblsTaken'],
   wellName: 'Gabriel 2',
   originalPacketId: PID,
   packetId: PID,
@@ -132,6 +134,51 @@ describe('evaluateWbmEdit', () => {
       packet: { ...basePacket, correctionCreatedAtUTC: '1999-01-01T00:00:00.000Z' },
       original,
     }) as { reason: string }).reason).toBe('invalid_correctionCreatedAtUTC');
+  });
+
+  it('selects governed v2 EXPLICITLY via schemaVersion (never inferred)', () => {
+    const { schemaVersion, ...noVer } = basePacket;
+    void schemaVersion;
+    expect((evaluateWbmEdit({ ...scope, packet: noVer, original }) as { reason: string }).reason)
+      .toBe('missing_schemaVersion');
+    expect((evaluateWbmEdit({ ...scope, packet: { ...basePacket, schemaVersion: 1 }, original }) as { reason: string }).reason)
+      .toBe('invalid_schemaVersion');
+    expect((evaluateWbmEdit({ ...scope, packet: { ...basePacket, schemaVersion: '2' }, original }) as { reason: string }).reason)
+      .toBe('invalid_schemaVersion');
+  });
+
+  it('requires a valid editedFields mask — missing/empty/duplicate/unknown fail closed', () => {
+    const { editedFields, ...noMask } = basePacket;
+    void editedFields;
+    expect((evaluateWbmEdit({ ...scope, packet: noMask, original }) as { reason: string }).reason)
+      .toBe('missing_editedFields');
+    expect((evaluateWbmEdit({ ...scope, packet: { ...basePacket, editedFields: [] }, original }) as { reason: string }).reason)
+      .toBe('empty_editedFields');
+    expect((evaluateWbmEdit({ ...scope, packet: { ...basePacket, editedFields: ['bblsTaken', 'bblsTaken'] }, original }) as { reason: string }).reason)
+      .toBe('duplicate_editedField');
+    expect((evaluateWbmEdit({ ...scope, packet: { ...basePacket, editedFields: ['nope'] }, original }) as { reason: string }).reason)
+      .toBe('unknown_editedField');
+    expect((evaluateWbmEdit({ ...scope, packet: { ...basePacket, editedFields: 'bblsTaken' }, original }) as { reason: string }).reason)
+      .toBe('invalid_editedFields');
+  });
+
+  it('a masked optional field with no value fails closed', () => {
+    expect((evaluateWbmEdit({
+      ...scope,
+      packet: { ...basePacket, editedFields: ['bblsTaken', 'dateTimeUTC'] }, // no dateTimeUTC sent
+      original,
+    }) as { reason: string }).reason).toBe('editedField_value_missing');
+  });
+
+  it('a different field mask changes the digest (same id, different mask → conflict)', () => {
+    const a = evaluateWbmEdit({ ...scope, packet: basePacket, original });
+    const b = evaluateWbmEdit({ ...scope, packet: { ...basePacket, editedFields: ['bblsTaken'] }, original });
+    if (!a.ok || !b.ok) throw new Error('expected ok');
+    expect(a.payloadDigest).not.toBe(b.payloadDigest);
+    // Reordering the same set does NOT change the digest.
+    const c = evaluateWbmEdit({ ...scope, packet: { ...basePacket, editedFields: ['bblsTaken', 'tankLevelFeet'] }, original });
+    if (!c.ok) throw new Error('expected ok');
+    expect(c.payloadDigest).toBe(a.payloadDigest);
   });
 
   it('carries event-time into the payload + digest, distinct from dateTimeUTC', () => {

@@ -37,6 +37,7 @@ describeE2E('emulator: chronological edit precedence (real handlers)', () => {
   jest.setTimeout(60000);
   let db: admin.database.Database;
   let processIncomingEdit: ProcessIncomingEdit;
+  let idxMod: { __v2FollowupBarrier: { hook: null | (() => Promise<void>) } };
 
   beforeAll(() => {
     process.env.FIREBASE_DATABASE_EMULATOR_HOST = EMULATOR!;
@@ -49,7 +50,8 @@ describeE2E('emulator: chronological edit precedence (real handlers)', () => {
     });
     // Real production applier — imported AFTER emulator env is set.
     // eslint-disable-next-line @typescript-eslint/no-var-requires
-    processIncomingEdit = require('../../../index').processIncomingEdit as ProcessIncomingEdit;
+    idxMod = require('../../../index');
+    processIncomingEdit = (idxMod as unknown as { processIncomingEdit: ProcessIncomingEdit }).processIncomingEdit;
     if (!admin.apps.length) {
       admin.initializeApp({ projectId: PROJECT, databaseURL: `http://${EMULATOR}?ns=${NS}` });
     }
@@ -85,6 +87,7 @@ describeE2E('emulator: chronological edit precedence (real handlers)', () => {
   // ── real ingest + real trigger wiring ────────────────────────────────────
   function correction(f: {
     editEventId: string;
+    editedFields?: unknown; // explicit mutation mask (default ['bblsTaken'])
     correctionCreatedAtUTC?: string;
     tankLevelFeet?: number;
     bblsTaken?: number;
@@ -92,15 +95,19 @@ describeE2E('emulator: chronological edit precedence (real handlers)', () => {
     dateTimeUTC?: string;
     dateTime?: string;
     omitEventTime?: boolean;
+    omitSchemaVersion?: boolean;
+    schemaVersion?: unknown;
   }): Record<string, unknown> {
     const p: Record<string, unknown> = {
       requestType: 'edit', wellName: WELL, originalPacketId: PID, packetId: PID,
       editEventId: f.editEventId,
+      editedFields: f.editedFields === undefined ? ['bblsTaken'] : f.editedFields,
       tankLevelFeet: f.tankLevelFeet ?? BASE_FEET,
       bblsTaken: f.bblsTaken ?? BASE_BBLS,
       wellDown: f.wellDown ?? false,
       idempotencyKey: f.editEventId,
     };
+    if (!f.omitSchemaVersion) p.schemaVersion = f.schemaVersion === undefined ? 2 : f.schemaVersion;
     if (!f.omitEventTime) p.correctionCreatedAtUTC = f.correctionCreatedAtUTC ?? '2026-08-24T10:30:00.000Z';
     if (f.dateTimeUTC) { p.dateTimeUTC = f.dateTimeUTC; p.dateTime = f.dateTime ?? ''; }
     return p;
@@ -194,9 +201,9 @@ describeE2E('emulator: chronological edit precedence (real handlers)', () => {
 
   // 5
   it('A changes level, B changes BBLs, reverse arrival → both survive per field', async () => {
-    // A: level 10→11 (bbls echoes baseline 160). B: bbls 160→150 (level echoes baseline 10).
-    const a = correction({ editEventId: 'editevt_a1', correctionCreatedAtUTC: '2026-08-24T10:30:00.000Z', tankLevelFeet: 11, bblsTaken: 160 });
-    const b = correction({ editEventId: 'editevt_b1', correctionCreatedAtUTC: '2026-08-24T10:45:00.000Z', tankLevelFeet: 10, bblsTaken: 150 });
+    // A masks level only (11 ft). B masks bbls only (150).
+    const a = correction({ editEventId: 'editevt_a1', editedFields: ['tankLevelFeet'], correctionCreatedAtUTC: '2026-08-24T10:30:00.000Z', tankLevelFeet: 11, bblsTaken: 160 });
+    const b = correction({ editEventId: 'editevt_b1', editedFields: ['bblsTaken'], correctionCreatedAtUTC: '2026-08-24T10:45:00.000Z', tankLevelFeet: 10, bblsTaken: 150 });
     await submit(b); // B arrives first
     await submit(a); // A (older) later — must NOT revert B's bbls, must keep its own level
     const p = await processed();
@@ -271,12 +278,15 @@ describeE2E('emulator: chronological edit precedence (real handlers)', () => {
   });
 
   // 14
-  it('an echoed-unchanged correction overwrites nothing (recorded, no-change)', async () => {
-    await submit(correction({ editEventId: 'editevt_a1', correctionCreatedAtUTC: '2026-08-24T10:30:00.000Z', tankLevelFeet: 11, bblsTaken: 160 }));
-    // B echoes the ORIGINAL snapshot (no real change) — must not revert A's level.
-    await submit(correction({ editEventId: 'editevt_b1', correctionCreatedAtUTC: '2026-08-24T10:45:00.000Z', tankLevelFeet: 10, bblsTaken: 160 }));
-    expect((await processed()).tankTopInches).toBe(132); // A's level preserved
-    expect((await receiptOf('editevt_b1')).outcome).toBe('recorded_no_change');
+  it('an unmasked (echoed) field supersedes nothing — only the masked field applies', async () => {
+    // A masks level→11. B masks bbls only but its wire ALSO echoes level 10;
+    // because level is not in B's mask, A's level must survive.
+    await submit(correction({ editEventId: 'editevt_a1', editedFields: ['tankLevelFeet'], correctionCreatedAtUTC: '2026-08-24T10:30:00.000Z', tankLevelFeet: 11, bblsTaken: 160 }));
+    await submit(correction({ editEventId: 'editevt_b1', editedFields: ['bblsTaken'], correctionCreatedAtUTC: '2026-08-24T10:45:00.000Z', tankLevelFeet: 10, bblsTaken: 150 }));
+    const p = await processed();
+    expect(p.tankTopInches).toBe(132); // A's level preserved (B did not mask level)
+    expect(p.bblsTaken).toBe(150);
+    expect((await receiptOf('editevt_a1')).outcome).toBe('recorded_current'); // A still owns level
   });
 
   // 15
@@ -316,8 +326,8 @@ describeE2E('emulator: chronological edit precedence (real handlers)', () => {
   it('per-field receipt: partial supersede reports affected vs superseded fields', async () => {
     // A (older) changes level AND bbls; B (newer) changes bbls only (echoes the
     // baseline level, so it does not touch the level field).
-    await submit(correction({ editEventId: 'editevt_a1', correctionCreatedAtUTC: '2026-08-24T10:30:00.000Z', tankLevelFeet: 11, bblsTaken: 150 }));
-    await submit(correction({ editEventId: 'editevt_b1', correctionCreatedAtUTC: '2026-08-24T10:45:00.000Z', tankLevelFeet: 10, bblsTaken: 155 }));
+    await submit(correction({ editEventId: 'editevt_a1', editedFields: ['tankLevelFeet', 'bblsTaken'], correctionCreatedAtUTC: '2026-08-24T10:30:00.000Z', tankLevelFeet: 11, bblsTaken: 150 }));
+    await submit(correction({ editEventId: 'editevt_b1', editedFields: ['bblsTaken'], correctionCreatedAtUTC: '2026-08-24T10:45:00.000Z', tankLevelFeet: 10, bblsTaken: 155 }));
     const ra = await receiptOf('editevt_a1');
     expect(ra.outcome).toBe('recorded_partial');
     expect(ra.fieldsAffectingCurrent).toEqual(['tankTopInches']); // A still owns level
@@ -325,5 +335,82 @@ describeE2E('emulator: chronological edit precedence (real handlers)', () => {
     const p = await processed();
     expect(p.tankTopInches).toBe(132);
     expect(p.bblsTaken).toBe(155);
+  });
+
+  // 19 — the blocking defect: revert to the exact baseline value must win.
+  it('older A sets level 11, newer B explicitly sets level back to 10 → final 10', async () => {
+    await submit(correction({ editEventId: 'editevt_a1', editedFields: ['tankLevelFeet'], correctionCreatedAtUTC: '2026-08-24T10:30:00.000Z', tankLevelFeet: 11 }));
+    await submit(correction({ editEventId: 'editevt_b1', editedFields: ['tankLevelFeet'], correctionCreatedAtUTC: '2026-08-24T10:45:00.000Z', tankLevelFeet: 10 }));
+    expect((await processed()).tankTopInches).toBe(120); // 10 ft — B (newer) wins even though == baseline
+    expect((await receiptOf('editevt_b1')).outcome).toBe('recorded_current');
+    expect((await receiptOf('editevt_a1')).outcome).toBe('recorded_superseded');
+  });
+
+  // 20 — same case, B arrives FIRST, A (older) arrives late.
+  it('revert-to-baseline holds when B arrives first and older A arrives late', async () => {
+    await submit(correction({ editEventId: 'editevt_b1', editedFields: ['tankLevelFeet'], correctionCreatedAtUTC: '2026-08-24T10:45:00.000Z', tankLevelFeet: 10 }));
+    await submit(correction({ editEventId: 'editevt_a1', editedFields: ['tankLevelFeet'], correctionCreatedAtUTC: '2026-08-24T10:30:00.000Z', tankLevelFeet: 11 }));
+    expect((await processed()).tankTopInches).toBe(120); // B still authoritative
+  });
+
+  // 21 — level-only A + bbl-only B in FORWARD arrival order (reverse is #5).
+  it('level-only A then bbls-only B (forward order) → both survive', async () => {
+    await submit(correction({ editEventId: 'editevt_a1', editedFields: ['tankLevelFeet'], correctionCreatedAtUTC: '2026-08-24T10:30:00.000Z', tankLevelFeet: 11 }));
+    await submit(correction({ editEventId: 'editevt_b1', editedFields: ['bblsTaken'], correctionCreatedAtUTC: '2026-08-24T10:45:00.000Z', bblsTaken: 150 }));
+    const p = await processed();
+    expect(p.tankTopInches).toBe(132); // A owns level
+    expect(p.bblsTaken).toBe(150); // B owns bbls
+  });
+
+  // 22 — mask fail-closed at ingest.
+  it('missing / empty / duplicate / unknown editedFields fail closed', async () => {
+    const missingPkt = correction({ editEventId: 'editevt_m1', bblsTaken: 150 });
+    delete (missingPkt as Record<string, unknown>).editedFields;
+    expect(await ingest(missingPkt)).toMatchObject({ ok: false, status: 'invalid', reason: 'missing_editedFields' });
+    expect(await ingest(correction({ editEventId: 'editevt_e1', editedFields: [], bblsTaken: 150 }))).toMatchObject({ ok: false, status: 'invalid', reason: 'empty_editedFields' });
+    expect(await ingest(correction({ editEventId: 'editevt_d1', editedFields: ['bblsTaken', 'bblsTaken'], bblsTaken: 150 }))).toMatchObject({ ok: false, status: 'invalid', reason: 'duplicate_editedField' });
+    expect(await ingest(correction({ editEventId: 'editevt_u1', editedFields: ['nope'], bblsTaken: 150 }))).toMatchObject({ ok: false, status: 'invalid', reason: 'unknown_editedField' });
+    expect((await processed()).bblsTaken).toBe(BASE_BBLS); // nothing applied
+  });
+
+  // 23 — schemaVersion fail-closed at ingest.
+  it('missing or invalid schemaVersion fails closed (never inferred, never legacy downgrade)', async () => {
+    expect(await ingest(correction({ editEventId: 'editevt_a1', omitSchemaVersion: true, bblsTaken: 150 }))).toMatchObject({ ok: false, status: 'invalid', reason: 'missing_schemaVersion' });
+    expect(await ingest(correction({ editEventId: 'editevt_a2', schemaVersion: 1, bblsTaken: 150 }))).toMatchObject({ ok: false, status: 'invalid', reason: 'invalid_schemaVersion' });
+    expect((await processed()).bblsTaken).toBe(BASE_BBLS);
+  });
+
+  // 24 — same id, same complete payload → idempotent; different mask → conflict.
+  it('same id/same payload is idempotent; same id/different mask conflicts', async () => {
+    const a = correction({ editEventId: 'editevt_a1', editedFields: ['bblsTaken'], correctionCreatedAtUTC: '2026-08-24T10:30:00.000Z', bblsTaken: 150 });
+    await submit(a);
+    expect(await ingest(a)).toMatchObject({ ok: true, status: 'accepted' }); // idempotent
+    const differentMask = correction({ editEventId: 'editevt_a1', editedFields: ['tankLevelFeet', 'bblsTaken'], correctionCreatedAtUTC: '2026-08-24T10:30:00.000Z', bblsTaken: 150 });
+    expect(await ingest(differentMask)).toMatchObject({ ok: false, status: 'conflict' });
+    expect(Object.keys(await history()).length).toBe(1);
+  });
+
+  // 25 — controlled interleaving: A commits its txn, pauses before follow-ups,
+  // B completes fully, A resumes. Final state must reflect the A+B set.
+  it('a stale-resuming apply never overwrites a newer apply’s receipts or projections', async () => {
+    // A masks level (11), B masks bbls (150).
+    await ingest(correction({ editEventId: 'editevt_a1', editedFields: ['tankLevelFeet'], correctionCreatedAtUTC: '2026-08-24T10:30:00.000Z', tankLevelFeet: 11 }));
+    await ingest(correction({ editEventId: 'editevt_b1', editedFields: ['bblsTaken'], correctionCreatedAtUTC: '2026-08-24T10:45:00.000Z', bblsTaken: 150 }));
+    // When A commits its processed transaction, deliver B fully before A's follow-ups.
+    idxMod.__v2FollowupBarrier.hook = async () => { await deliver('editevt_b1'); };
+    await deliver('editevt_a1'); // A: txn → barrier(delivers B) → A resumes and defers
+    const p = await processed();
+    expect(p.tankTopInches).toBe(132); // A's level survived
+    expect(p.bblsTaken).toBe(150); // B's bbls survived
+    const h = await history();
+    expect(Object.keys(h).sort()).toEqual(['editevt_a1', 'editevt_b1']); // both events durable
+    // Every receipt reflects the authoritative A+B set (both own their field).
+    expect((await receiptOf('editevt_a1')).outcome).toBe('recorded_current');
+    expect((await receiptOf('editevt_b1')).outcome).toBe('recorded_current');
+    // Projection reflects the full set (B's bbls in the outgoing response).
+    const outSnap = await db.ref('packets/outgoing').orderByChild('wellName').equalTo(WELL).once('value');
+    let lastBbls: string | null = null;
+    outSnap.forEach((c) => { lastBbls = c.val().lastPullBbls; });
+    expect(lastBbls).toBe('150');
   });
 });

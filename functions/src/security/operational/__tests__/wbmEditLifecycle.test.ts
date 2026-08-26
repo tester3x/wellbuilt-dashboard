@@ -20,6 +20,8 @@ const original = {
 
 const packet = {
   requestType: 'edit',
+  schemaVersion: 2,
+  editedFields: ['tankLevelFeet', 'bblsTaken'],
   wellName: 'Gabriel 5',
   originalPacketId: PID,
   packetId: PID,

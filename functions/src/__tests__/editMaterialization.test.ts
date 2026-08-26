@@ -7,7 +7,7 @@
  * transactional apply converge under concurrency).
  */
 import {
-  assertedChangesAgainstBaseline,
+  assertedFromEditedFields,
   buildEditBaseline,
   classifyEditOutcome,
   extractAssertedEditableValues,
@@ -174,18 +174,11 @@ describe('extractAssertedEditableValues + buildEditBaseline', () => {
     expect(extractAssertedEditableValues({ tankLevelFeet: 10, bblsTaken: 1, wellDown: true }).wellDown).toBe(true);
   });
 
-  it('treats only fields that DIFFER from baseline as asserted (full-snapshot wire)', () => {
-    // Wire always carries both level + bbls. "Level-only" correction echoes bbls.
-    const levelOnly = assertedChangesAgainstBaseline(
-      { tankLevelFeet: 11, bblsTaken: 160 }, // bbls == baseline 160
-      BASELINE,
-    );
-    expect(levelOnly).toEqual({ tankTopInches: 132 }); // bbls not asserted
-    // "BBLs-only" correction echoes the baseline level.
-    const bblsOnly = assertedChangesAgainstBaseline(
-      { tankLevelFeet: 10, bblsTaken: 150 }, // level == baseline 120
-      BASELINE,
-    );
+  it('asserts exactly the fields named in the editedFields mask (never a baseline diff)', () => {
+    // Wire always carries both level + bbls. The mask says what was touched.
+    const levelOnly = assertedFromEditedFields({ tankLevelFeet: 11, bblsTaken: 160 }, ['tankLevelFeet']);
+    expect(levelOnly).toEqual({ tankTopInches: 132 }); // bbls present but NOT masked
+    const bblsOnly = assertedFromEditedFields({ tankLevelFeet: 10, bblsTaken: 150 }, ['bblsTaken']);
     expect(bblsOnly).toEqual({ bblsTaken: 150 });
     // Composed through the materializer: both survive regardless of order.
     const a = { eventId: 'a', correctionCreatedAtUTC: '2026-08-24T10:30:00.000Z', correctionValues: levelOnly };
@@ -193,8 +186,22 @@ describe('extractAssertedEditableValues + buildEditBaseline', () => {
     const r = materializeEditableFields(BASELINE, [b, a]);
     expect(r.fields.tankTopInches).toBe(132);
     expect(r.fields.bblsTaken).toBe(150);
-    // Echoing the whole unchanged snapshot asserts nothing.
-    expect(assertedChangesAgainstBaseline({ tankLevelFeet: 10, bblsTaken: 160 }, BASELINE)).toEqual({});
+  });
+
+  it('a masked field equal to the baseline is still an intentional, authoritative correction', () => {
+    // The blocking case: baseline 120(=10ft); older A sets 132(=11ft); newer B
+    // explicitly sets it back to 120(=10ft). B masks the level, so B wins.
+    const a = { eventId: 'a', correctionCreatedAtUTC: '2026-08-24T10:30:00.000Z', correctionValues: assertedFromEditedFields({ tankLevelFeet: 11, bblsTaken: 160 }, ['tankLevelFeet']) };
+    const b = { eventId: 'b', correctionCreatedAtUTC: '2026-08-24T10:45:00.000Z', correctionValues: assertedFromEditedFields({ tankLevelFeet: 10, bblsTaken: 160 }, ['tankLevelFeet']) };
+    expect(b.correctionValues).toEqual({ tankTopInches: 120 }); // masked even though == baseline
+    expect(materializeEditableFields(BASELINE, [a, b]).fields.tankTopInches).toBe(120);
+    expect(materializeEditableFields(BASELINE, [b, a]).fields.tankTopInches).toBe(120); // arrival-order proof
+  });
+
+  it('an unmasked (echoed) field asserts nothing and supersedes nothing', () => {
+    expect(assertedFromEditedFields({ tankLevelFeet: 10, bblsTaken: 160 }, ['bblsTaken'])).toEqual({ bblsTaken: 160 });
+    // Level echoed but not masked → empty for a mask that lists nothing relevant.
+    expect(assertedFromEditedFields({ tankLevelFeet: 11, bblsTaken: 150, wellDown: true }, ['bblsTaken'])).toEqual({ bblsTaken: 150 });
   });
 
   it('freezes a full baseline snapshot from a processed row', () => {
