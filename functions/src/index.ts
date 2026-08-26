@@ -21,18 +21,24 @@ import {
   strandedPacketVerdict,
 } from './packetGuards';
 import {
+  assertedChangesAgainstBaseline,
   buildAppliedEditEvent,
   buildAppliedEditReceipt,
+  buildEditBaseline,
   buildFieldDiff,
+  classifyEditOutcome,
+  compareEditEvents,
   editHistoryWritePaths,
   editReceiptWritePaths,
   editSummaryFields,
+  materializeEditableFields,
   nextEditCount,
   normalizeEditSource,
   normalizeOriginAppContext,
   resolveEditAuditContext,
   resolveEditEventId,
   resolveOriginalSubmissionAt,
+  type EditableSnapshot,
 } from './editHistory';
 import { notifyIncomingVersionBestEffort } from './incomingVersionPublish';
 
@@ -1604,6 +1610,517 @@ async function materializeQueuedEditTrail(
   console.log(`[QUEUED_EDIT_TRAIL] ${packetId}: materialized ${eventCount} event(s)`);
 }
 
+// ── v2 chronological correction support ──────────────────────────────────
+
+type V2CorrectionEntry = { t: string; v: EditableSnapshot; e?: string; src?: string };
+
+interface EditNeighbor {
+  key: string;
+  dateTimeUTC: string;
+  tankAfterInches: number;
+  tankTopInches: number;
+}
+
+/**
+ * Pure derived tank math for an edited pull, from MATERIALIZED editable values.
+ * Identical arithmetic to processIncomingPull / the legacy edit path; kept pure
+ * so it can run both inside the convergent transaction and in the follow-ups.
+ */
+function computeEditDerived(
+  newTankTopInches: number,
+  newBblsTaken: number,
+  newDateTimeUTC: string,
+  bblPerFoot: number,
+  loadLineInches: number,
+  neighbors: EditNeighbor[],
+  selfKey: string,
+  fallbackTimeDifDays: number,
+  fallbackTimeDif: string,
+): {
+  newTankAfterInches: number;
+  rawNewTankAfterInches: number;
+  editHitLoadLine: boolean;
+  recoveryInches: number;
+  flowRateDays: number;
+  flowRate: string;
+  timeDif: string;
+  timeDifDays: number;
+} {
+  const bblsInInches = newBblsTaken > 0 ? (newBblsTaken / bblPerFoot) * 12 : 0;
+  const rawNewTankAfterInches = newTankTopInches - bblsInInches;
+  const newTankAfterInches = Math.max(rawNewTankAfterInches, loadLineInches);
+  const editHitLoadLine = rawNewTankAfterInches < loadLineInches;
+
+  const editedTime = new Date(newDateTimeUTC).getTime();
+  let prevTankAfterInches = 0;
+  let prevTimestamp = '';
+  for (const n of neighbors) {
+    if (n.key === selfKey) continue;
+    const pktTime = new Date(n.dateTimeUTC).getTime();
+    if (!isNaN(pktTime) && pktTime < editedTime) {
+      if (!prevTimestamp || pktTime > new Date(prevTimestamp).getTime()) {
+        prevTankAfterInches = n.tankAfterInches || 0;
+        prevTimestamp = n.dateTimeUTC;
+      }
+    }
+  }
+
+  let timeDifDays = fallbackTimeDifDays || 0;
+  let timeDif = fallbackTimeDif || '';
+  let recoveryInches = 0;
+  let flowRateDays = 0;
+  let flowRate = '';
+  if (prevTimestamp) {
+    const currentDT = new Date(newDateTimeUTC).getTime();
+    const prevDT = new Date(prevTimestamp).getTime();
+    if (!isNaN(currentDT) && !isNaN(prevDT) && currentDT > prevDT) {
+      timeDifDays = (currentDT - prevDT) / (1000 * 60 * 60 * 24);
+      timeDif = daysToHMM(timeDifDays);
+    }
+  }
+  if (prevTankAfterInches > 0) {
+    recoveryInches = Math.max(0, newTankTopInches - prevTankAfterInches);
+  }
+  if (recoveryInches > 0 && timeDifDays > 0) {
+    flowRateDays = (timeDifDays / recoveryInches) * 12;
+    if (flowRateDays >= 365) {
+      flowRateDays = 0;
+    } else {
+      flowRate = daysToHMMSS(flowRateDays);
+    }
+  }
+  return {
+    newTankAfterInches,
+    rawNewTankAfterInches,
+    editHitLoadLine,
+    recoveryInches,
+    flowRateDays,
+    flowRate,
+    timeDif,
+    timeDifDays,
+  };
+}
+
+/**
+ * Apply one v2 event-time correction with chronological, per-field precedence.
+ *
+ * Convergence: all accepted corrections for a packet live in
+ * packets/processed/{id}/editCorrections keyed by editEventId. A single RTDB
+ * transaction merges this correction into that map and re-materializes the
+ * editable fields from {frozen baseline, full correction set}. Because RTDB
+ * re-runs the update until commit, concurrent triggers / retries never drop a
+ * correction, and the committed editable + derived state is a pure function of
+ * the correction SET — independent of arrival, trigger, or retry order. The
+ * immutable durable trail (editHistory) and receipt are written afterward.
+ */
+export async function applyV2ChronologicalEdit(args: {
+  data: Record<string, any>;
+  origPacket: Record<string, any>;
+  originalPacketId: string;
+  wellName: string;
+  editEventId: string;
+  incomingPacketId: string;
+  editResolvedViaFallback: boolean;
+  fallbackAuditFields: Record<string, unknown>;
+}): Promise<void> {
+  const {
+    data,
+    origPacket,
+    originalPacketId,
+    wellName,
+    editEventId,
+    incomingPacketId,
+    editResolvedViaFallback,
+    fallbackAuditFields,
+  } = args;
+
+  const correctionCreatedAtUTC = String(data.correctionCreatedAtUTC);
+  const serverReceivedAtUTC = new Date().toISOString();
+  const editSource = normalizeEditSource(data.source);
+  const originAppContext =
+    normalizeOriginAppContext(origPacket.originAppContext) !== 'unknown'
+      ? normalizeOriginAppContext(origPacket.originAppContext)
+      : normalizeOriginAppContext(data.originAppContext);
+  // Diff against the FROZEN original baseline (stored once, or the current
+  // original on the first edit) so per-field precedence reflects real changes.
+  const frozenBaseline: EditableSnapshot =
+    origPacket.editBaseline && typeof origPacket.editBaseline === 'object'
+      ? (origPacket.editBaseline as EditableSnapshot)
+      : buildEditBaseline(origPacket as Record<string, unknown>);
+  const correctionValues = assertedChangesAgainstBaseline(data as Record<string, unknown>, frozenBaseline);
+  const originalSubmissionAt =
+    resolveEditAuditContext(origPacket as Record<string, unknown>).originalSubmissionAt ||
+    resolveOriginalSubmissionAt(origPacket as Record<string, unknown>);
+
+  // Well config (static during this edit) — read once, used inside the txn.
+  const cleanName = wellName.replace(/\s/g, '');
+  let configSnap = await db.ref(`well_config/${wellName}`).once('value');
+  if (!configSnap.exists()) configSnap = await db.ref(`well_config/${cleanName}`).once('value');
+  const config = configSnap.val() || {};
+  const tanks = config.tanks || config.numTanks || DEFAULTS.tanks;
+  const bblPerFoot = Number(config.bblPerFoot) > 0 ? Number(config.bblPerFoot) : 20 * tanks;
+  const pullBbls = config.pullBbls || DEFAULTS.pullBbls;
+  const bottomInches = (config.bottomLevel || config.allowedBottom || DEFAULTS.bottomLevel) * 12;
+  const loadLineInches = (config.loadLine ?? DEFAULTS.loadLine) * 12;
+
+  // Neighbor pulls for this well (static set) — used to pick the previous pull
+  // for recovery/flow, and later the next pull for the cascade.
+  const neighborSnap = await db
+    .ref('packets/processed')
+    .orderByChild('wellName')
+    .equalTo(wellName)
+    .once('value');
+  const neighbors: EditNeighbor[] = [];
+  neighborSnap.forEach((child) => {
+    const p = child.val() || {};
+    neighbors.push({
+      key: String(child.key),
+      dateTimeUTC: typeof p.dateTimeUTC === 'string' ? p.dateTimeUTC : '',
+      tankAfterInches: Number(p.tankAfterInches) || 0,
+      tankTopInches: Number(p.tankTopInches) || 0,
+    });
+  });
+
+  // ── Transactional convergence: editable + derived from the full set ──────
+  const txn = await db.ref(`packets/processed/${originalPacketId}`).transaction((cur: any) => {
+    const src = cur && typeof cur === 'object' ? cur : origPacket;
+    const baseline: EditableSnapshot =
+      src.editBaseline && typeof src.editBaseline === 'object' ? src.editBaseline : frozenBaseline;
+    const corrections: Record<string, V2CorrectionEntry> = { ...(src.editCorrections || {}) };
+    corrections[editEventId] = {
+      t: correctionCreatedAtUTC,
+      v: correctionValues,
+      e: serverReceivedAtUTC,
+      src: editSource,
+    };
+    const evs = Object.entries(corrections).map(([id, c]) => ({
+      eventId: id,
+      correctionCreatedAtUTC: c.t,
+      correctionValues: (c.v || {}) as EditableSnapshot,
+    }));
+    const mat = materializeEditableFields(baseline, evs);
+    const f = mat.fields;
+    const newTop = typeof f.tankTopInches === 'number' ? f.tankTopInches : Number(src.tankTopInches) || 0;
+    const newBbls = typeof f.bblsTaken === 'number' ? f.bblsTaken : Number(src.bblsTaken) || 0;
+    const newUTC = typeof f.dateTimeUTC === 'string' && f.dateTimeUTC
+      ? f.dateTimeUTC
+      : (typeof src.dateTimeUTC === 'string' ? src.dateTimeUTC : '');
+    const newDisplay = typeof f.dateTime === 'string' ? f.dateTime : (src.dateTime || '');
+    const newDown = f.wellDown === true;
+
+    const next: any = {
+      ...src,
+      editBaseline: baseline,
+      editCorrections: corrections,
+      bblsTaken: newBbls,
+      wellDown: newDown,
+      dateTimeUTC: newUTC,
+      dateTime: newDisplay,
+      editedAt: serverReceivedAtUTC,
+      editedBy: editSource,
+      editCount: Object.keys(corrections).length,
+      ...fallbackAuditFields,
+    };
+    if (!src.originalSubmittedAt && originalSubmissionAt) next.originalSubmittedAt = originalSubmissionAt;
+    if (typeof data.revisionAt === 'string' && data.revisionAt) next.lastRevisionAt = data.revisionAt;
+
+    if (newTop <= 0) {
+      next.tankTopInches = 0;
+      next.tankLevelFeet = 0;
+      next.tankAfterInches = 0;
+      next.tankAfterFeet = '';
+      next.noLevel = true;
+    } else {
+      const d = computeEditDerived(
+        newTop, newBbls, newUTC, bblPerFoot, loadLineInches, neighbors, originalPacketId,
+        Number(src.timeDifDays) || 0, typeof src.timeDif === 'string' ? src.timeDif : '',
+      );
+      next.tankTopInches = newTop;
+      next.tankLevelFeet = newTop / 12;
+      next.tankAfterInches = d.newTankAfterInches;
+      next.tankAfterFeet = inchesToFeetInches(d.newTankAfterInches);
+      next.rawCalculatedBottomInches = d.rawNewTankAfterInches;
+      next.hitLoadLine = d.editHitLoadLine;
+      next.recoveryInches = d.recoveryInches;
+      next.flowRateDays = d.flowRateDays;
+      next.flowRate = d.flowRate;
+      next.timeDif = d.timeDif;
+      next.timeDifDays = d.timeDifDays;
+      next.noLevel = false;
+    }
+    return next;
+  });
+
+  if (!txn.committed || !txn.snapshot || !txn.snapshot.exists()) {
+    // Original vanished mid-flight — do not fabricate. Leave the incoming for
+    // the watchdog; the correction is not lost.
+    console.error(`[V2_EDIT_ABORT] ${wellName}: could not converge ${editEventId} on ${originalPacketId}`);
+    return;
+  }
+
+  const committed = txn.snapshot.val() as Record<string, any>;
+  const baseline: EditableSnapshot =
+    committed.editBaseline && typeof committed.editBaseline === 'object'
+      ? committed.editBaseline
+      : frozenBaseline;
+  const correctionsMap: Record<string, V2CorrectionEntry> = committed.editCorrections || {};
+  const allEvents = Object.entries(correctionsMap).map(([id, c]) => ({
+    eventId: id,
+    correctionCreatedAtUTC: c.t,
+    correctionValues: (c.v || {}) as EditableSnapshot,
+  }));
+  const matFinal = materializeEditableFields(baseline, allEvents);
+  const newTankTopInches = typeof matFinal.fields.tankTopInches === 'number' ? matFinal.fields.tankTopInches : 0;
+  const newBblsTaken = typeof matFinal.fields.bblsTaken === 'number' ? matFinal.fields.bblsTaken : 0;
+  const newDateTimeUTC = typeof matFinal.fields.dateTimeUTC === 'string' && matFinal.fields.dateTimeUTC
+    ? matFinal.fields.dateTimeUTC
+    : (origPacket.dateTimeUTC || '');
+  const newDateTime = typeof matFinal.fields.dateTime === 'string' ? matFinal.fields.dateTime : '';
+  const newWellDown = matFinal.fields.wellDown === true;
+  const derived = computeEditDerived(
+    newTankTopInches, newBblsTaken, newDateTimeUTC, bblPerFoot, loadLineInches, neighbors, originalPacketId,
+    Number(committed.timeDifDays) || 0, typeof committed.timeDif === 'string' ? committed.timeDif : '',
+  );
+  const newTankAfterInches = newTankTopInches <= 0 ? 0 : derived.newTankAfterInches;
+
+  // ── Durable trail event (immutable) with chronological before/after ──────
+  const priorEvents = allEvents.filter((e) =>
+    e.eventId !== editEventId
+    && compareEditEvents(e, { eventId: editEventId, correctionCreatedAtUTC, correctionValues }) < 0);
+  const matBefore = materializeEditableFields(baseline, priorEvents);
+  const fieldDiff = buildFieldDiff(
+    {
+      tankTopInches: matBefore.fields.tankTopInches ?? undefined,
+      tankLevelFeet: typeof matBefore.fields.tankTopInches === 'number' ? matBefore.fields.tankTopInches / 12 : undefined,
+      bblsTaken: matBefore.fields.bblsTaken ?? undefined,
+      dateTimeUTC: matBefore.fields.dateTimeUTC ?? undefined,
+      dateTime: matBefore.fields.dateTime ?? undefined,
+      wellDown: matBefore.fields.wellDown ?? undefined,
+    } as Record<string, unknown>,
+    {
+      tankTopInches: correctionValues.tankTopInches ?? undefined,
+      bblsTaken: correctionValues.bblsTaken ?? undefined,
+      dateTimeUTC: correctionValues.dateTimeUTC ?? undefined,
+      dateTime: correctionValues.dateTime ?? undefined,
+      wellDown: correctionValues.wellDown ?? undefined,
+    },
+  );
+  const outcome = classifyEditOutcome(editEventId, correctionValues, matFinal.authority);
+  const currentEffect = {
+    outcome: outcome.outcome,
+    fieldsAffectingCurrent: outcome.fieldsAffectingCurrent,
+    fieldsSuperseded: outcome.fieldsSuperseded,
+  };
+  const editEvent = buildAppliedEditEvent({
+    eventId: editEventId,
+    packetId: originalPacketId,
+    sequence: Object.keys(correctionsMap).length,
+    editedAt: serverReceivedAtUTC,
+    source: editSource,
+    originAppContext,
+    actorDriverId: data.driverId ?? origPacket.driverId ?? null,
+    actorDriverName: data.driverName ?? null,
+    clientAppVersion: data.clientAppVersion ?? null,
+    fields: fieldDiff,
+    originalSubmissionAt,
+    resolutionPath: editResolvedViaFallback ? 'invoiceDocId_fallback' : 'direct',
+    editRequestId: incomingPacketId,
+    correctionCreatedAtUTC,
+    serverReceivedAtUTC,
+    correctionValues,
+  });
+  // Immutable event record carries the effect it had at apply time; the effect
+  // is re-annotated below for prior events a newer correction may supersede.
+  (editEvent as unknown as Record<string, unknown>).currentEffect = currentEffect;
+  const receipt = buildAppliedEditReceipt({
+    editEventId,
+    originalPacketId,
+    payloadDigest: data.payloadDigest,
+    appliedAt: serverReceivedAtUTC,
+    correctionCreatedAtUTC,
+    serverReceivedAtUTC,
+    serverAppliedAtUTC: serverReceivedAtUTC,
+    outcome: outcome.outcome,
+    fieldsAffectingCurrent: outcome.fieldsAffectingCurrent,
+    fieldsSuperseded: outcome.fieldsSuperseded,
+  });
+
+  // History + receipt first (durable proof), THEN consume the incoming packet.
+  // Receipt is written only after materialization has been committed above.
+  const trailUpdate: Record<string, unknown> = {
+    ...editHistoryWritePaths(originalPacketId, editEvent),
+    ...editReceiptWritePaths(editEventId, receipt),
+  };
+  // Re-annotate PRIOR corrections: a newer correction may have just superseded
+  // one of their fields, so their receipt + trail effect must reflect the
+  // current materialized state (superseded events are never erased).
+  for (const [id, c] of Object.entries(correctionsMap)) {
+    if (id === editEventId) continue;
+    const oc = classifyEditOutcome(id, (c.v || {}) as EditableSnapshot, matFinal.authority);
+    trailUpdate[`packets/editReceipts/${id}/outcome`] = oc.outcome;
+    trailUpdate[`packets/editReceipts/${id}/fieldsAffectingCurrent`] = oc.fieldsAffectingCurrent;
+    trailUpdate[`packets/editReceipts/${id}/fieldsSuperseded`] = oc.fieldsSuperseded;
+    trailUpdate[`packets/editHistory/${originalPacketId}/${id}/currentEffect`] = {
+      outcome: oc.outcome,
+      fieldsAffectingCurrent: oc.fieldsAffectingCurrent,
+      fieldsSuperseded: oc.fieldsSuperseded,
+    };
+  }
+  await db.ref().update(trailUpdate);
+
+  // Live wellDown status: only authoritative edits flip it (mirror legacy).
+  const editIsAuthoritative = data.wellDownIsAuthoritative === true && data.wellDown !== undefined;
+  const editExistingIsDownSnap = await db.ref(`wells/${wellName}/status/isDown`).once('value');
+  const nextEditIsDown = editIsAuthoritative ? newWellDown : editExistingIsDownSnap.val() === true;
+  await db.ref(`wells/${wellName}/status/isDown`).set(nextEditIsDown);
+
+  // Cascade: recompute the NEXT pull's recovery/flow off our new tankAfter.
+  if (newTankTopInches > 0) {
+    const editedTime = new Date(newDateTimeUTC).getTime();
+    let nextKey: string | null = null;
+    let nextPkt: EditNeighbor | null = null;
+    let closest = Infinity;
+    for (const n of neighbors) {
+      if (n.key === originalPacketId) continue;
+      const t = new Date(n.dateTimeUTC).getTime();
+      if (!isNaN(t) && t > editedTime && t < closest) {
+        closest = t;
+        nextKey = n.key;
+        nextPkt = n;
+      }
+    }
+    if (nextKey && nextPkt && nextPkt.tankTopInches > 0) {
+      const nextRecovery = Math.max(0, nextPkt.tankTopInches - newTankAfterInches);
+      const nextTimeDifDays = (closest - editedTime) / (1000 * 60 * 60 * 24);
+      let nextFlowRateDays = 0;
+      let nextFlowRate = '';
+      if (nextRecovery > 0 && nextTimeDifDays > 0) {
+        nextFlowRateDays = (nextTimeDifDays / nextRecovery) * 12;
+        nextFlowRate = daysToHMMSS(nextFlowRateDays);
+      }
+      await db.ref(`packets/processed/${nextKey}`).update({
+        recoveryInches: nextRecovery,
+        flowRateDays: nextFlowRateDays,
+        flowRate: nextFlowRate,
+      });
+    }
+  }
+
+  // Outgoing response + AFR + windows (only if this is the latest pull).
+  const afr = await calculateAFR(wellName, derived.flowRateDays);
+  const editHistoricalPulls = await getHistoricalPulls(wellName, 500);
+  const editPullTimeMs = new Date(newDateTimeUTC).getTime();
+  const editWindowBblsDay = calculateWindowBblsPerDay(editHistoricalPulls, bblPerFoot, editPullTimeMs);
+  const editOvernightBblsDay = calculateOvernightBblsPerDay(editHistoricalPulls, bblPerFoot, editPullTimeMs);
+
+  const outgoingSnap = await db.ref('packets/outgoing')
+    .orderByChild('wellName')
+    .equalTo(wellName)
+    .limitToLast(1)
+    .once('value');
+  let isLatestPull = false;
+  let hasOutgoing = false;
+  outgoingSnap.forEach((child) => {
+    hasOutgoing = true;
+    const resp = child.val();
+    if (resp.lastPullDateTimeUTC === origPacket.dateTimeUTC || resp.lastPullDateTimeUTC === newDateTimeUTC) {
+      isLatestPull = true;
+    }
+  });
+  if (!hasOutgoing) isLatestPull = true;
+
+  if (isLatestPull && afr > 0) {
+    const pullHeightInches = (pullBbls / bblPerFoot) * 12;
+    const targetLevel = bottomInches + pullHeightInches;
+    const recoveryNeeded = Math.max(0, targetLevel - newTankAfterInches);
+    let estTimeToPull = '';
+    let estDateTimePull = '';
+    if (recoveryNeeded > 0) {
+      const estDays = (recoveryNeeded / 12) * afr;
+      estTimeToPull = daysToHMM(estDays);
+      const estDate = new Date(new Date(newDateTimeUTC).getTime() + estDays * 24 * 60 * 60 * 1000);
+      estDateTimePull = estDate.toISOString();
+    } else {
+      estTimeToPull = '0:00';
+      estDateTimePull = newDateTimeUTC;
+    }
+    const bbls24 = (1 / afr) * bblPerFoot;
+    const bbls24hrs = Math.round(bbls24).toString();
+    const outFields = {
+      currentLevel: inchesToFeetInches(newTankAfterInches),
+      flowRate: daysToHMMSS(afr),
+      bbls24hrs,
+      lastPullTopLevel: inchesToFeetInches(newTankTopInches),
+      lastPullBottomLevel: inchesToFeetInches(newTankAfterInches),
+      lastPullBbls: newBblsTaken.toString(),
+      lastPullDateTime: newDateTime || formatLocalDateTime(new Date(newDateTimeUTC)),
+      lastPullDateTimeUTC: newDateTimeUTC,
+      timeTillPull: nextEditIsDown ? 'Down' : (estTimeToPull || 'Calculating...'),
+      nextPullTime: estDateTimePull ? formatLocalDateTime(new Date(estDateTimePull)) : 'Unknown',
+      nextPullTimeUTC: estDateTimePull,
+      isEdit: true,
+      originalPacketId,
+      wellDown: nextEditIsDown,
+      lastPullDriverId: origPacket.driverId || null,
+      lastPullDriverName: origPacket.driverName || null,
+      lastPullPacketId: originalPacketId,
+      windowBblsDay: editWindowBblsDay > 0 ? editWindowBblsDay.toString() : null,
+      overnightBblsDay: editOvernightBblsDay > 0 ? editOvernightBblsDay.toString() : null,
+      companyId: outgoingCompanyId(config),
+    };
+    if (hasOutgoing) {
+      const updates: Array<Promise<unknown>> = [];
+      outgoingSnap.forEach((child) => { updates.push(child.ref.update(outFields)); });
+      await Promise.all(updates);
+    } else {
+      const responseTimestamp = new Date();
+      const responseId = `response_${responseTimestamp.toISOString().replace(/[-:]/g, '').replace('T', '_').split('.')[0]}_${cleanName}`;
+      await db.ref(`packets/outgoing/${responseId}`).set({
+        wellName,
+        ...outFields,
+        status: 'success',
+        timestamp: responseTimestamp.toISOString(),
+        timestampUTC: responseTimestamp.toISOString(),
+      });
+    }
+    const afrMinutes = afr * 24 * 60;
+    await db.ref(`well_config/${wellName}`).update({
+      avgFlowRate: daysToHMMSS(afr),
+      avgFlowRateMinutes: Math.round(afrMinutes * 100) / 100,
+    });
+  }
+
+  // Performance row (WB-M reads here). Clean up an old row if the date moved.
+  try {
+    const perfPullTime = new Date(newDateTimeUTC);
+    const perfTimestamp = `${perfPullTime.getFullYear()}${String(perfPullTime.getMonth() + 1).padStart(2, '0')}${String(perfPullTime.getDate()).padStart(2, '0')}_${String(perfPullTime.getHours()).padStart(2, '0')}${String(perfPullTime.getMinutes()).padStart(2, '0')}${String(perfPullTime.getSeconds()).padStart(2, '0')}`;
+    const perfWellKey = wellName.replace(/\s+/g, '_');
+    const actualInches = Math.floor(newTankTopInches);
+    if (typeof origPacket.dateTimeUTC === 'string' && origPacket.dateTimeUTC && origPacket.dateTimeUTC !== newDateTimeUTC) {
+      const oldPullTime = new Date(origPacket.dateTimeUTC);
+      const oldPerfTimestamp = `${oldPullTime.getFullYear()}${String(oldPullTime.getMonth() + 1).padStart(2, '0')}${String(oldPullTime.getDate()).padStart(2, '0')}_${String(oldPullTime.getHours()).padStart(2, '0')}${String(oldPullTime.getMinutes()).padStart(2, '0')}${String(oldPullTime.getSeconds()).padStart(2, '0')}`;
+      if (oldPerfTimestamp !== perfTimestamp) {
+        await db.ref(`performance/${perfWellKey}/rows/${oldPerfTimestamp}`).remove();
+      }
+    }
+    const predicted = Number(origPacket.predictedInches) > 0 ? Number(origPacket.predictedInches) : actualInches;
+    await db.ref(`performance/${perfWellKey}/rows/${perfTimestamp}`).update({
+      d: `${perfPullTime.getFullYear()}-${String(perfPullTime.getMonth() + 1).padStart(2, '0')}-${String(perfPullTime.getDate()).padStart(2, '0')}`,
+      a: actualInches,
+      p: predicted,
+    });
+  } catch (perfErr) {
+    console.error(`[V2_EDIT_PERF] ${wellName}: performance row update failed`, perfErr);
+  }
+
+  // Consume the incoming packet last — after durable history + receipt exist.
+  await removeIncomingPacket(db.ref(), incomingPacketId);
+  console.log(
+    `[V2_EDIT_APPLIED] ${wellName}: ${editEventId} (${outcome.outcome}) on ${originalPacketId} — ` +
+      `affects=[${outcome.fieldsAffectingCurrent.join(',')}] superseded=[${outcome.fieldsSuperseded.join(',')}]`,
+  );
+}
+
 // Handle edit requests — updates processed packet and recalculates dependent fields.
 // processIncomingEdit IS the production handler. Tests must invoke it with the
 // exact incoming payload; do not mirror apply in a parallel lifecycle.
@@ -1720,6 +2237,15 @@ export async function processIncomingEdit(
         }
       : {};
 
+    // ── v2 chronological correction (event-time precedence) ───────────────
+    // A correction carrying an immutable client event-time (correctionCreatedAtUTC)
+    // is materialized deterministically by creation order, per editable field —
+    // never by network/trigger/retry arrival. Legacy edits (no event-time) keep
+    // the historical incremental last-write-wins path below, unchanged.
+    const isV2Correction =
+      typeof (data as { correctionCreatedAtUTC?: unknown }).correctionCreatedAtUTC === 'string' &&
+      (data as { correctionCreatedAtUTC: string }).correctionCreatedAtUTC.length > 0;
+
     // Exact duplicate edit replay: PROVABLY already applied only when the
     // original carries an edit marker AND its values already equal this
     // edit's requested values — then re-applying would only re-run
@@ -1727,7 +2253,7 @@ export async function processIncomingEdit(
     // copy atomically and stop. Unprovable (null) → proceed normally;
     // the schema keeps no per-edit operation log to check against.
     const editDup = editAlreadyApplied(data, origPacket);
-    if (editDup === true) {
+    if (!isV2Correction && editDup === true) {
       console.log(`[IDEMPOTENT_REPLAY_ALREADY_PROCESSED] ${wellName}: edit ${context.params.packetId} already applied to ${originalPacketId} — duplicate incoming removed`);
       await removeIncomingPacket(db.ref(), context.params.packetId);
       return null;
@@ -1737,7 +2263,7 @@ export async function processIncomingEdit(
     // An edit carrying revisionAt older than the pull's lastRevisionAt is a
     // late straggler: acknowledge (consume) and drop — never revert newer
     // business state. Clients without revisionAt keep last-write-wins.
-    if (isStaleRevision(data, origPacket)) {
+    if (!isV2Correction && isStaleRevision(data, origPacket)) {
       console.log(
         `[EDIT_STALE_REVISION] ${wellName}: edit ${context.params.packetId} ` +
           `(revisionAt ${data.revisionAt}) older than applied ${origPacket.lastRevisionAt} — acknowledged, not applied`,
@@ -1756,7 +2282,7 @@ export async function processIncomingEdit(
     // audit fields can never create a false material change
     // (editMaterialChange inspects material fields only).
     const material = editMaterialChange(data, origPacket);
-    if (!material.changed) {
+    if (!isV2Correction && !material.changed) {
       console.log(
         `[EDIT_NOOP_IDENTICAL] ${wellName}: edit ${context.params.packetId} matches ` +
           `processed ${originalPacketId} on all material fields — acknowledged without reapply`,
@@ -1773,6 +2299,24 @@ export async function processIncomingEdit(
       incomingPacketId: context.params.packetId,
       clientEventId: (data as { editEventId?: unknown }).editEventId,
     });
+
+    // v2 event-time corrections are materialized chronologically (per field)
+    // and converge transactionally regardless of arrival order. Fully handles
+    // idempotency, history, and receipt, then consumes the incoming packet.
+    if (isV2Correction) {
+      await applyV2ChronologicalEdit({
+        data,
+        origPacket,
+        originalPacketId,
+        wellName,
+        editEventId,
+        incomingPacketId: context.params.packetId,
+        editResolvedViaFallback,
+        fallbackAuditFields,
+      });
+      return null;
+    }
+
     const existingEventSnap = await db
       .ref(`packets/editHistory/${originalPacketId}/${editEventId}`)
       .once('value');

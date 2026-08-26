@@ -25,6 +25,7 @@ export const EDIT_ALLOWLIST = [
   'originalPacketId',
   'packetId',
   'editEventId',
+  'correctionCreatedAtUTC',
   'dateTimeUTC',
   'dateTime',
   'timezone',
@@ -171,6 +172,17 @@ export function evaluateWbmEdit(input: {
     return { ok: false, reason: 'invalid_wellDownIsAuthoritative' };
   }
 
+  // Immutable event-time. v2 governed corrections MUST carry it; it is the
+  // ordering key for chronological materialization. Offset-aware, plausible
+  // year, and DISTINCT from the editable business time (dateTimeUTC). Never
+  // defaulted to "now" and never inferred from the pull's date/time.
+  const cca = boundedString(packet.correctionCreatedAtUTC, 'correctionCreatedAtUTC', 10, 40);
+  if (!cca.ok) return cca;
+  if (!isAbsoluteInstant(cca.value)) return { ok: false, reason: 'invalid_correctionCreatedAtUTC' };
+  const ccaYear = new Date(cca.value).getUTCFullYear();
+  if (ccaYear < 2020 || ccaYear > 2036) return { ok: false, reason: 'invalid_correctionCreatedAtUTC' };
+  const correctionCreatedAtUTC = cca.value;
+
   let dateTimeUTC: string | undefined;
   if (packet.dateTimeUTC !== undefined && packet.dateTimeUTC !== '') {
     const d = boundedString(packet.dateTimeUTC, 'dateTimeUTC', 10, 40);
@@ -224,6 +236,7 @@ export function evaluateWbmEdit(input: {
     originalPacketId: originalPacketId.value,
     packetId: originalPacketId.value,
     editEventId: editEventId.value,
+    correctionCreatedAtUTC,
     tankLevelFeet: packet.tankLevelFeet,
     bblsTaken: packet.bblsTaken,
     wellDown: packet.wellDown === true,

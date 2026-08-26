@@ -24,6 +24,7 @@ const packet = {
   originalPacketId: PID,
   packetId: PID,
   editEventId: EVENT_A,
+  correctionCreatedAtUTC: '2026-08-24T10:30:00.000Z',
   tankLevelFeet: 9.5,
   bblsTaken: 140,
   wellDown: false,

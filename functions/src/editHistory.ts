@@ -40,6 +40,31 @@ export interface FieldChange {
 }
 
 /**
+ * Canonical editable-value snapshot used for chronological materialization.
+ * `tankTopInches` is the canonical level (feet are derived at write time),
+ * and `dateTime` is the display companion of `dateTimeUTC`. Only the keys a
+ * correction actually asserts are present on a correction's snapshot; a frozen
+ * baseline snapshot carries every field of the original pull.
+ */
+export interface EditableSnapshot {
+  tankTopInches?: number | null;
+  bblsTaken?: number | null;
+  dateTimeUTC?: string | null;
+  dateTime?: string | null;
+  wellDown?: boolean | null;
+}
+
+/** Logical materialization fields (dateTime rides with dateTimeUTC). */
+export const MATERIALIZED_FIELDS = [
+  'tankTopInches',
+  'bblsTaken',
+  'dateTimeUTC',
+  'dateTime',
+  'wellDown',
+] as const;
+export type MaterializedField = (typeof MATERIALIZED_FIELDS)[number];
+
+/**
  * Product boundary (authoritative):
  * - WB-T ticket editing has its own 24h limit (WB-T app only — not this CF).
  * - WB-M route/flow corrections have NO age deadline.
@@ -245,6 +270,19 @@ export interface BuildAppliedEventArgs {
   originalSubmissionAt: string | null;
   resolutionPath: EditResolutionPath;
   editRequestId: string;
+  /**
+   * Immutable event-time captured once on the client at correction submit
+   * (offset-aware ISO). Ordering key for chronological materialization. Never
+   * network-arrival, retry, or server time; never inferred from the pull's
+   * business date/time (dateTimeUTC). Null for legacy (pre-v2) events, which
+   * are never re-materialized and keep their existing trail — a missing
+   * timestamp is preserved as null, never back-filled with "now".
+   */
+  correctionCreatedAtUTC?: string | null;
+  /** Server wall-clock when this correction was received/applied (audit only). */
+  serverReceivedAtUTC?: string | null;
+  /** The editable fields THIS correction actually asserts (present-only). */
+  correctionValues?: EditableSnapshot;
 }
 
 export interface EditHistoryEvent {
@@ -262,6 +300,9 @@ export interface EditHistoryEvent {
   outcome: 'applied';
   resolutionPath: EditResolutionPath;
   editRequestId: string;
+  correctionCreatedAtUTC: string | null;
+  serverReceivedAtUTC: string | null;
+  correctionValues: EditableSnapshot;
 }
 
 export function buildAppliedEditEvent(args: BuildAppliedEventArgs): EditHistoryEvent {
@@ -280,6 +321,9 @@ export function buildAppliedEditEvent(args: BuildAppliedEventArgs): EditHistoryE
     outcome: 'applied',
     resolutionPath: args.resolutionPath,
     editRequestId: args.editRequestId,
+    correctionCreatedAtUTC: args.correctionCreatedAtUTC ?? null,
+    serverReceivedAtUTC: args.serverReceivedAtUTC ?? args.editedAt,
+    correctionValues: args.correctionValues ?? {},
   };
 }
 
@@ -293,12 +337,34 @@ export function editHistoryWritePaths(
   };
 }
 
+/**
+ * How a recorded correction relates to the current materialized state:
+ * - recorded_current    every field it asserts is authoritative for current state
+ * - recorded_partial    some asserted fields authoritative, others superseded
+ * - recorded_superseded recorded + durable, but no asserted field affects current
+ * - recorded_no_change  recorded, asserted no editable field (nothing to materialize)
+ */
+export type EditMaterializationOutcome =
+  | 'recorded_current'
+  | 'recorded_partial'
+  | 'recorded_superseded'
+  | 'recorded_no_change';
+
 export type EditAppliedReceipt = {
   editEventId: string;
   originalPacketId: string;
   payloadDigest: string | null;
   appliedAt: string;
   status: 'accepted';
+  /** Immutable client event-time this receipt corresponds to (when known). */
+  correctionCreatedAtUTC?: string | null;
+  /** Server receive + apply wall-clock, recorded separately from event-time. */
+  serverReceivedAtUTC?: string | null;
+  serverAppliedAtUTC?: string | null;
+  /** Materialization effect of this correction on the current record. */
+  outcome?: EditMaterializationOutcome;
+  fieldsAffectingCurrent?: MaterializedField[];
+  fieldsSuperseded?: MaterializedField[];
 };
 
 export function buildAppliedEditReceipt(args: {
@@ -306,8 +372,14 @@ export function buildAppliedEditReceipt(args: {
   originalPacketId: string;
   payloadDigest: unknown;
   appliedAt: string;
+  correctionCreatedAtUTC?: string | null;
+  serverReceivedAtUTC?: string | null;
+  serverAppliedAtUTC?: string | null;
+  outcome?: EditMaterializationOutcome;
+  fieldsAffectingCurrent?: MaterializedField[];
+  fieldsSuperseded?: MaterializedField[];
 }): EditAppliedReceipt {
-  return {
+  const receipt: EditAppliedReceipt = {
     editEventId: args.editEventId,
     originalPacketId: args.originalPacketId,
     payloadDigest: typeof args.payloadDigest === 'string' && args.payloadDigest
@@ -316,6 +388,15 @@ export function buildAppliedEditReceipt(args: {
     appliedAt: args.appliedAt,
     status: 'accepted',
   };
+  if (args.correctionCreatedAtUTC !== undefined) {
+    receipt.correctionCreatedAtUTC = args.correctionCreatedAtUTC;
+  }
+  if (args.serverReceivedAtUTC !== undefined) receipt.serverReceivedAtUTC = args.serverReceivedAtUTC;
+  if (args.serverAppliedAtUTC !== undefined) receipt.serverAppliedAtUTC = args.serverAppliedAtUTC;
+  if (args.outcome !== undefined) receipt.outcome = args.outcome;
+  if (args.fieldsAffectingCurrent !== undefined) receipt.fieldsAffectingCurrent = args.fieldsAffectingCurrent;
+  if (args.fieldsSuperseded !== undefined) receipt.fieldsSuperseded = args.fieldsSuperseded;
+  return receipt;
 }
 
 export function editReceiptWritePaths(
@@ -325,6 +406,207 @@ export function editReceiptWritePaths(
   return {
     [`packets/editReceipts/${editEventId}`]: receipt,
   };
+}
+
+/** Strip seconds from a display time ("4/9/2026, 2:40:00 PM" → "4/9/2026, 2:40 PM"). */
+export function normalizeDisplayDateTime(raw: unknown): string {
+  if (typeof raw !== 'string') return '';
+  return raw.replace(/:(\d{2})\s*(AM|PM)/i, ' $2');
+}
+
+/**
+ * The editable fields a single incoming correction actually asserts, present
+ * only. Level is canonicalized to tankTopInches (dashboard inches or WB-M
+ * feet×12). Empty/absent operational time is NOT an assertion — it preserves
+ * the prior value in replay (never substitutes "now").
+ */
+export function extractAssertedEditableValues(raw: Record<string, unknown>): EditableSnapshot {
+  const out: EditableSnapshot = {};
+  if (raw.tankTopInches !== undefined && raw.tankTopInches !== null && raw.tankTopInches !== '') {
+    const n = Number(raw.tankTopInches);
+    if (Number.isFinite(n)) out.tankTopInches = n;
+  } else if (raw.tankLevelFeet !== undefined && raw.tankLevelFeet !== null && raw.tankLevelFeet !== '') {
+    const n = Number(raw.tankLevelFeet);
+    if (Number.isFinite(n)) out.tankTopInches = n * 12;
+  }
+  if (raw.bblsTaken !== undefined && raw.bblsTaken !== null && raw.bblsTaken !== '') {
+    const n = Number(raw.bblsTaken);
+    if (Number.isFinite(n)) out.bblsTaken = n;
+  }
+  if (typeof raw.dateTimeUTC === 'string' && raw.dateTimeUTC.trim() !== '') {
+    out.dateTimeUTC = raw.dateTimeUTC.trim();
+  }
+  if (typeof raw.dateTime === 'string' && raw.dateTime.trim() !== '') {
+    out.dateTime = normalizeDisplayDateTime(raw.dateTime);
+  }
+  if (raw.wellDown !== undefined) {
+    out.wellDown = raw.wellDown === true || raw.wellDown === 'true';
+  }
+  return out;
+}
+
+/**
+ * The fields a correction actually CHANGES, relative to the frozen baseline.
+ *
+ * The governed wire always carries the full snapshot (tankLevelFeet + bblsTaken
+ * are always present), so field PRESENCE cannot express intent. A correction is
+ * treated as touching a field only when its value differs from the frozen
+ * baseline — this is what lets a level-only correction and a bbls-only
+ * correction each own their own field regardless of arrival order, while an
+ * echoed-unchanged field never supersedes a prior real change.
+ *
+ * Known boundary: a correction that deliberately restores a field to its exact
+ * original (baseline) value is indistinguishable from an unchanged echo and is
+ * therefore not treated as a change. This is inherent to a full-snapshot wire.
+ */
+export function assertedChangesAgainstBaseline(
+  raw: Record<string, unknown>,
+  baseline: EditableSnapshot,
+): EditableSnapshot {
+  const sent = extractAssertedEditableValues(raw);
+  const out: EditableSnapshot = {};
+  if (sent.tankTopInches !== undefined && sent.tankTopInches !== null) {
+    const b = baseline.tankTopInches;
+    if (b === undefined || b === null
+      || Math.round(Number(sent.tankTopInches)) !== Math.round(Number(b))) {
+      out.tankTopInches = sent.tankTopInches;
+    }
+  }
+  if (sent.bblsTaken !== undefined && sent.bblsTaken !== null) {
+    const b = baseline.bblsTaken;
+    if (b === undefined || b === null || Number(sent.bblsTaken) !== Number(b)) {
+      out.bblsTaken = sent.bblsTaken;
+    }
+  }
+  if (sent.dateTimeUTC !== undefined) {
+    if (String(sent.dateTimeUTC) !== String(baseline.dateTimeUTC ?? '')) {
+      out.dateTimeUTC = sent.dateTimeUTC;
+    }
+  }
+  if (sent.dateTime !== undefined) {
+    if (String(sent.dateTime) !== String(baseline.dateTime ?? '')) {
+      out.dateTime = sent.dateTime;
+    }
+  }
+  if (sent.wellDown !== undefined) {
+    if ((sent.wellDown === true) !== (baseline.wellDown === true)) {
+      out.wellDown = sent.wellDown;
+    }
+  }
+  return out;
+}
+
+/**
+ * Frozen editable-field snapshot of the original pull BEFORE any correction.
+ * Captured once (on the first applied edit) and never rewritten — the anchor
+ * for deterministic chronological replay.
+ */
+export function buildEditBaseline(p: Record<string, unknown>): EditableSnapshot {
+  const ti = num(p.tankTopInches);
+  const feet = num(p.tankLevelFeet);
+  const top = ti !== null ? ti : feet !== null ? feet * 12 : null;
+  return {
+    tankTopInches: top,
+    bblsTaken: num(p.bblsTaken),
+    dateTimeUTC: typeof p.dateTimeUTC === 'string' && p.dateTimeUTC ? p.dateTimeUTC : null,
+    dateTime: typeof p.dateTime === 'string' && p.dateTime ? p.dateTime : null,
+    wellDown: p.wellDown === true || p.wellDown === 'true',
+  };
+}
+
+/** Minimal event shape the materializer needs (subset of EditHistoryEvent). */
+export interface MaterializableEvent {
+  eventId: string;
+  correctionCreatedAtUTC: string;
+  correctionValues: EditableSnapshot;
+}
+
+/**
+ * Deterministic total order over corrections: ascending event-time
+ * (correctionCreatedAtUTC), then ascending eventId as a stable tie-break so
+ * equal timestamps never depend on arrival / trigger / array order.
+ * Unparseable timestamps sort last (deterministically) but are rejected before
+ * they can be recorded, so this is a guard, not a live path.
+ */
+export function compareEditEvents(a: MaterializableEvent, b: MaterializableEvent): number {
+  const ta = Date.parse(a.correctionCreatedAtUTC);
+  const tb = Date.parse(b.correctionCreatedAtUTC);
+  const va = Number.isFinite(ta) ? ta : Number.POSITIVE_INFINITY;
+  const vb = Number.isFinite(tb) ? tb : Number.POSITIVE_INFINITY;
+  if (va !== vb) return va - vb;
+  if (a.eventId < b.eventId) return -1;
+  if (a.eventId > b.eventId) return 1;
+  return 0;
+}
+
+export function sortEditEventsChronologically<T extends MaterializableEvent>(events: T[]): T[] {
+  return [...events].sort(compareEditEvents);
+}
+
+export interface MaterializationResult {
+  /** Current editable values after chronological replay from baseline. */
+  fields: EditableSnapshot;
+  /** field → eventId of the newest correction that set it (baseline has none). */
+  authority: Partial<Record<MaterializedField, string>>;
+  /** Applied order (chronological), for the audit trail. */
+  orderedEventIds: string[];
+}
+
+/**
+ * Pure, order-independent, idempotent materialization. The current record is a
+ * deterministic function of {frozen baseline, set of accepted corrections}: sort
+ * by event-time, replay applying ONLY the fields each correction asserts, and
+ * the newest correction touching a field is authoritative for it. Because the
+ * result depends only on the SET of events (not their insertion/arrival order),
+ * concurrent triggers, retries, and re-applies all converge to the same value.
+ */
+export function materializeEditableFields(
+  baseline: EditableSnapshot,
+  events: MaterializableEvent[],
+): MaterializationResult {
+  const sorted = sortEditEventsChronologically(events);
+  const fields: EditableSnapshot = { ...baseline };
+  const authority: Partial<Record<MaterializedField, string>> = {};
+  for (const ev of sorted) {
+    const cv = ev.correctionValues || {};
+    for (const f of MATERIALIZED_FIELDS) {
+      if (Object.prototype.hasOwnProperty.call(cv, f) && cv[f] !== undefined) {
+        (fields as Record<string, unknown>)[f] = (cv as Record<string, unknown>)[f];
+        authority[f] = ev.eventId;
+      }
+    }
+  }
+  return { fields, authority, orderedEventIds: sorted.map((e) => e.eventId) };
+}
+
+/**
+ * Classify how one recorded correction relates to the materialized current
+ * state, for the receipt: which asserted fields it still owns vs which were
+ * superseded by a newer correction.
+ */
+export function classifyEditOutcome(
+  eventId: string,
+  correctionValues: EditableSnapshot,
+  authority: Partial<Record<MaterializedField, string>>,
+): {
+  outcome: EditMaterializationOutcome;
+  fieldsAffectingCurrent: MaterializedField[];
+  fieldsSuperseded: MaterializedField[];
+} {
+  const asserted = MATERIALIZED_FIELDS.filter(
+    (f) => Object.prototype.hasOwnProperty.call(correctionValues, f)
+      && (correctionValues as Record<string, unknown>)[f] !== undefined,
+  );
+  if (asserted.length === 0) {
+    return { outcome: 'recorded_no_change', fieldsAffectingCurrent: [], fieldsSuperseded: [] };
+  }
+  const fieldsAffectingCurrent = asserted.filter((f) => authority[f] === eventId);
+  const fieldsSuperseded = asserted.filter((f) => authority[f] !== eventId);
+  let outcome: EditMaterializationOutcome;
+  if (fieldsAffectingCurrent.length === 0) outcome = 'recorded_superseded';
+  else if (fieldsSuperseded.length === 0) outcome = 'recorded_current';
+  else outcome = 'recorded_partial';
+  return { outcome, fieldsAffectingCurrent, fieldsSuperseded };
 }
 
 /** Summary fields stamped on the processed packet for badge + counters. */

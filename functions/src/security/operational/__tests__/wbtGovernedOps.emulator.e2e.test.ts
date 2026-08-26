@@ -183,6 +183,7 @@ describeE2E('emulator: real processIncomingEdit governed edit path', () => {
       originalPacketId: PID,
       packetId: PID,
       editEventId: EVENT_A,
+      correctionCreatedAtUTC: '2026-08-24T10:30:00.000Z',
       tankLevelFeet: 9.5,
       bblsTaken: 140,
       wellDown: false,
@@ -249,6 +250,7 @@ describeE2E('emulator: real processIncomingEdit governed edit path', () => {
       ...packetA,
       editEventId: EVENT_B,
       idempotencyKey: EVENT_B,
+      correctionCreatedAtUTC: '2026-08-24T10:45:00.000Z', // newer → its values win
       tankLevelFeet: 9.0,
       bblsTaken: 130,
     };

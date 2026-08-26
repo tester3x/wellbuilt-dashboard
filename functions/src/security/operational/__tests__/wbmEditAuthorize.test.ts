@@ -16,6 +16,7 @@ const basePacket = {
   originalPacketId: PID,
   packetId: PID,
   editEventId: EVENT_A,
+  correctionCreatedAtUTC: '2026-08-24T10:30:00.000Z',
   tankLevelFeet: 10.5,
   bblsTaken: 140,
   wellDown: false,
@@ -111,6 +112,52 @@ describe('evaluateWbmEdit', () => {
       packet: { ...basePacket, dateTimeUTC: '2026-08-23T16:40:00' },
       original,
     }) as { reason: string }).reason).toBe('invalid_dateTimeUTC');
+  });
+
+  it('requires an immutable event-time (correctionCreatedAtUTC) distinct from business time', () => {
+    // Missing → rejected (never defaulted to "now").
+    const { correctionCreatedAtUTC, ...noEventTime } = basePacket;
+    void correctionCreatedAtUTC;
+    expect((evaluateWbmEdit({ ...scope, packet: noEventTime, original }) as { reason: string }).reason)
+      .toBe('missing_correctionCreatedAtUTC');
+    // Offsetless → rejected (must be offset-aware).
+    expect((evaluateWbmEdit({
+      ...scope,
+      packet: { ...basePacket, correctionCreatedAtUTC: '2026-08-24T10:30:00' },
+      original,
+    }) as { reason: string }).reason).toBe('invalid_correctionCreatedAtUTC');
+    // Implausible year → rejected.
+    expect((evaluateWbmEdit({
+      ...scope,
+      packet: { ...basePacket, correctionCreatedAtUTC: '1999-01-01T00:00:00.000Z' },
+      original,
+    }) as { reason: string }).reason).toBe('invalid_correctionCreatedAtUTC');
+  });
+
+  it('carries event-time into the payload + digest, distinct from dateTimeUTC', () => {
+    const decided = evaluateWbmEdit({
+      ...scope,
+      packet: {
+        ...basePacket,
+        correctionCreatedAtUTC: '2026-08-24T10:30:00.000Z',
+        dateTimeUTC: '2026-08-23T16:40:00.000Z',
+        dateTime: '8/23/2026 11:40 AM',
+      },
+      original,
+    });
+    expect(decided.ok).toBe(true);
+    if (!decided.ok) return;
+    expect(decided.payload.correctionCreatedAtUTC).toBe('2026-08-24T10:30:00.000Z');
+    expect(decided.payload.dateTimeUTC).toBe('2026-08-23T16:40:00.000Z');
+    expect(decided.payload.correctionCreatedAtUTC).not.toBe(decided.payload.dateTimeUTC);
+    // Event-time participates in the idempotency digest.
+    const other = evaluateWbmEdit({
+      ...scope,
+      packet: { ...basePacket, correctionCreatedAtUTC: '2026-08-24T10:45:00.000Z' },
+      original,
+    });
+    if (!other.ok) throw new Error('expected ok');
+    expect(other.payloadDigest).not.toBe(decided.payloadDigest);
   });
 
   it('requires a distinct client-minted editEventId and does not remint originalPacketId', () => {
