@@ -6,6 +6,7 @@ import { upsertCanonicalJob } from './canonical-jobs/upsertCanonicalJob';
 import { logCanonicalDiag } from './canonical-jobs/diag';
 import { ANTHROPIC_API_KEY, logRedacted, toSafeProviderError } from './secrets';
 import { createAnthropicClient } from './ai/anthropicClient';
+import { buildProcessedRecord } from './processedRecord';
 import {
   ambiguousEditVerdict,
   comparePullEquivalence,
@@ -318,6 +319,11 @@ interface PullPacket {
   wellDown?: boolean;
   predictedLevelInches?: number;
   jobType?: string; // Commodity type from WB T (e.g. "Production Water", "Fresh Water")
+  /** Recovery provenance: when a corrected replacement pull is submitted to
+   *  recover a losslessly-quarantined original (Mechanism A), this carries the
+   *  ORIGINAL rejected packetId. It is a passthrough field — preserved onto the
+   *  processed record so the recovery runner + audit can correlate. */
+  recoveredFromPacketId?: string;
 }
 
 interface ProcessedPacket extends PullPacket {
@@ -1127,9 +1133,11 @@ export const processIncomingPull = functionsV1.database
       estDateTimePull = data.dateTimeUTC;
     }
 
-    // Build processed packet with all calculated fields
-    const processedPacket: ProcessedPacket = {
-      ...data,
+    // Build processed packet with all calculated fields, then strip client
+    // trail-only helpers — extracted to buildProcessedRecord (behavior-
+    // preserving). The `...data` spread preserves passthrough fields, incl.
+    // recoveredFromPacketId (Mechanism A recovery provenance), onto the record.
+    const processedClean = buildProcessedRecord(data as unknown as Record<string, unknown>, {
       packetId,
       tankTopInches,
       tankAfterInches,
@@ -1143,19 +1151,7 @@ export const processIncomingPull = functionsV1.database
       estTimeToPull,
       estDateTimePull,
       processedAt: new Date().toISOString(),
-    };
-
-    // Write to processed/ — strip client trail-only helpers from the stored pull
-    const {
-      pendingEditEvents: _pendingEditEvents,
-      originalSubmittedValues: _originalSubmittedValues,
-      hasQueuedCorrection: _hasQueuedCorrection,
-      ...processedClean
-    } = processedPacket as any;
-    // Keep originalSubmittedAt when a queued correction froze it.
-    if ((data as any).originalSubmittedAt) {
-      (processedClean as any).originalSubmittedAt = (data as any).originalSubmittedAt;
-    }
+    });
     await db.ref(`packets/processed/${packetId}`).set(processedClean);
 
     // Materialize queued post-Send correction trail (product: Send is the edit boundary).
