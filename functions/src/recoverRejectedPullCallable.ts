@@ -1,36 +1,35 @@
 // recoverRejectedPullCallable.ts — authenticated, company-scoped onCall wrapper
-// around the pure recovery ladder in recoverRejectedPull.ts.
+// around the pure recovery runner in recoverRejectedPull.ts.
 //
-// Auth: authenticated driver (claims); the caller must own the rejected pull
-// (same company + same driver). The decision is made by planRecovery(); this
-// wrapper only supplies the read/write surface and executes the plan.
+// Auth: authenticated driver (claims) who owns the rejected pull (same company +
+// driver). All decisions come from planRecovery/executeRecovery; this wrapper
+// only supplies the real transactional read/write/claim surface and maps
+// outcomes to callable results / HttpsErrors.
 //
-// Idempotent by construction:
-//   - 'process'       → write the replacement to packets/incoming (canonical
-//                       processIncomingPull materializes it). Same id/content on
-//                       retry is harmless; the processor is id-idempotent.
-//   - 'annotate_only' → the replacement is already processed but the rejected
-//                       record is not yet annotated → write ONLY the annotation.
-//   - 'noop_complete' → already fully recovered → nothing to do.
-// A partial failure after canonical processing is finished by simply calling
-// again: the plan resolves to 'annotate_only' and completes the annotation
-// without reprocessing the pull.
+// Single-winner: an atomic transaction on packets/rejected/<id>/recoveryClaim
+// (a SIBLING of the preserved .packet) guarantees at most one replacement id can
+// enter processing. Incoming is written only-if-absent (never overwritten). The
+// bounded runner takes the second (annotate) step as soon as the canonical
+// processor writes the processed receipt, so recovery cannot stall.
 
 import * as httpsV2 from 'firebase-functions/v2/https';
 import * as admin from 'firebase-admin';
 import { requireSecureDriver, assertSameCompany, assertDriverOwns } from './security/requireDriverAuth.js';
 import {
-  planRecovery,
-  buildReplacementIncomingPacket,
-  buildRecoveryAnnotation,
+  executeRecovery,
+  planClaim,
+  type RecoveryIO,
   type RecoveryInput,
+  type RecoveryState,
   type RejectedRecord,
+  type ClaimResult,
   type RecoveryRejectCode,
 } from './recoverRejectedPull.js';
 
 const REJECT_CODE_TO_HTTPS: Record<RecoveryRejectCode, httpsV2.FunctionsErrorCode> = {
   INVALID_ARGUMENT: 'invalid-argument',
   REJECTED_RECORD_NOT_FOUND: 'not-found',
+  REJECTION_NOT_RECOVERABLE: 'failed-precondition',
   NOT_A_PULL: 'failed-precondition',
   CROSS_COMPANY: 'permission-denied',
   NOT_OWNER: 'permission-denied',
@@ -38,10 +37,10 @@ const REJECT_CODE_TO_HTTPS: Record<RecoveryRejectCode, httpsV2.FunctionsErrorCod
   MALFORMED_REPLACEMENT_TIME: 'invalid-argument',
   REPLACEMENT_NOT_NEWER: 'failed-precondition',
   REPLACEMENT_ID_CONFLICT: 'already-exists',
+  REPLACEMENT_REJECTED: 'failed-precondition',
   RECOVERED_UNDER_DIFFERENT_ID: 'already-exists',
 };
 
-/** Current watermark (lastPullDateTimeUTC) for a well, or null. */
 async function readWatermark(db: admin.database.Database, wellName: string): Promise<string | null> {
   const snap = await db.ref('packets/outgoing').orderByChild('wellName').equalTo(wellName).once('value');
   let watermark: string | null = null;
@@ -67,26 +66,14 @@ export const recoverRejectedPull = httpsV2.onCall(
 
     const db = admin.database();
 
-    // Read the preserved rejected record first — it carries the well/company/
-    // driver identity we validate against and recover from.
-    const rejectedSnap = await db.ref(`packets/rejected/${rejectedPacketId}`).once('value');
-    const rejected = (rejectedSnap.val() as RejectedRecord | null) ?? null;
-
-    // Company/driver ownership gate (defence-in-depth; planRecovery re-checks).
-    if (rejected) {
-      const pkt = (rejected.packet ?? {}) as Record<string, unknown>;
+    // Ownership gate on the preserved record (defence-in-depth; planRecovery re-checks).
+    const gateSnap = await db.ref(`packets/rejected/${rejectedPacketId}`).once('value');
+    const gateRec = (gateSnap.val() as RejectedRecord | null) ?? null;
+    if (gateRec) {
+      const pkt = (gateRec.packet ?? {}) as Record<string, unknown>;
       assertSameCompany(driver.companyId, typeof pkt.companyId === 'string' ? pkt.companyId : undefined);
       assertDriverOwns(driver.driverId, typeof pkt.driverId === 'string' ? pkt.driverId : undefined);
     }
-
-    const wellName =
-      (rejected?.packet && typeof rejected.packet.wellName === 'string' && rejected.packet.wellName) ||
-      (typeof rejected?.wellName === 'string' ? rejected.wellName : '') || '';
-
-    const [replacementSnap, watermark] = await Promise.all([
-      db.ref(`packets/processed/${replacementPacketId}`).once('value'),
-      wellName ? readWatermark(db, wellName) : Promise.resolve<string | null>(null),
-    ]);
 
     const input: RecoveryInput = {
       rejectedPacketId,
@@ -95,35 +82,78 @@ export const recoverRejectedPull = httpsV2.onCall(
       caller: { companyId: driver.companyId, driverId: driver.driverId },
     };
 
-    const plan = planRecovery(input, {
-      rejected,
-      replacementProcessed: (replacementSnap.val() as Record<string, unknown> | null) ?? null,
-      watermarkDateTimeUTC: watermark,
-      nowMs: Date.now(),
-    });
+    const io: RecoveryIO = {
+      async readState(): Promise<RecoveryState> {
+        const rejectedSnap = await db.ref(`packets/rejected/${rejectedPacketId}`).once('value');
+        const rejected = (rejectedSnap.val() as RejectedRecord | null) ?? null;
+        const wellName =
+          (rejected?.packet && typeof rejected.packet.wellName === 'string' && rejected.packet.wellName) ||
+          (typeof rejected?.wellName === 'string' ? rejected.wellName : '') || '';
+        const [processedSnap, incomingSnap, replRejSnap, watermark] = await Promise.all([
+          db.ref(`packets/processed/${replacementPacketId}`).once('value'),
+          db.ref(`packets/incoming/${replacementPacketId}`).once('value'),
+          db.ref(`packets/rejected/${replacementPacketId}`).once('value'),
+          wellName ? readWatermark(db, wellName) : Promise.resolve<string | null>(null),
+        ]);
+        return {
+          rejected,
+          replacementProcessed: (processedSnap.val() as Record<string, unknown> | null) ?? null,
+          replacementIncoming: incomingSnap.exists(),
+          replacementRejected: (replRejSnap.val() as Record<string, unknown> | null) ?? null,
+          watermarkDateTimeUTC: watermark,
+          nowMs: Date.now(),
+        };
+      },
 
-    if (plan.action === 'reject') {
-      throw new httpsV2.HttpsError(REJECT_CODE_TO_HTTPS[plan.code], `${plan.code}: ${plan.message}`);
+      async claimRecovery(replId: string): Promise<ClaimResult> {
+        const ref = db.ref(`packets/rejected/${rejectedPacketId}/recoveryClaim`);
+        let conflictWith = '';
+        const res = await ref.transaction((cur: { replacementPacketId?: string } | null) => {
+          const d = planClaim(cur, replId, admin.database.ServerValue.TIMESTAMP);
+          if (d.decision === 'acquire') return d.value;
+          if (d.decision === 'matched') return cur; // keep — our own claim
+          conflictWith = d.existingReplacementId;
+          return; // abort — a different id already won
+        });
+        if (!res.committed && conflictWith && conflictWith !== replId) {
+          return { ok: false, existingReplacementId: conflictWith };
+        }
+        return { ok: true };
+      },
+
+      async writeIncomingIfAbsent(replId: string, packet: Record<string, unknown>): Promise<'written' | 'exists'> {
+        const ref = db.ref(`packets/incoming/${replId}`);
+        const enriched = {
+          ...packet,
+          ingestedBy: `recovery_${driver.driverId}`.slice(0, 128),
+          ingestedAt: admin.database.ServerValue.TIMESTAMP,
+        };
+        let outcome: 'written' | 'exists' = 'exists';
+        await ref.transaction((cur: unknown) => {
+          if (cur == null) { outcome = 'written'; return enriched; }
+          return cur; // never overwrite an in-flight incoming packet
+        });
+        return outcome;
+      },
+
+      async annotate(update: Record<string, unknown>): Promise<void> {
+        await db.ref().update(update);
+      },
+
+      sleep: (ms: number) => new Promise((r) => setTimeout(r, ms)),
+      now: () => Date.now(),
+    };
+
+    const outcome = await executeRecovery(io, input, { maxAttempts: 6, backoffMs: 800 });
+
+    if (outcome.status === 'rejected') {
+      throw new httpsV2.HttpsError(REJECT_CODE_TO_HTTPS[outcome.code], `${outcome.code}: ${outcome.message}`);
     }
-
-    if (plan.action === 'noop_complete') {
-      return { status: 'already_recovered', replacementPacketId, rejectedPacketId };
+    if (outcome.status === 'conflict') {
+      throw new httpsV2.HttpsError(REJECT_CODE_TO_HTTPS[outcome.code], `${outcome.code}: ${outcome.message}`);
     }
-
-    if (plan.action === 'annotate_only') {
-      // Replacement already processed — finish ONLY the recovery annotation.
-      await db.ref().update(buildRecoveryAnnotation(input, new Date().toISOString()));
-      console.log(`[recoverRejectedPull] annotated ${rejectedPacketId} recovered by ${replacementPacketId}`);
-      return { status: 'recovered', replacementPacketId, rejectedPacketId };
-    }
-
-    // plan.action === 'process' — submit the replacement to the canonical
-    // processor. Annotation happens on a follow-up call once processed exists.
-    const packet = buildReplacementIncomingPacket(input, rejected as RejectedRecord);
-    packet.ingestedBy = `recovery_${driver.driverId}`.slice(0, 128);
-    packet.ingestedAt = admin.database.ServerValue.TIMESTAMP as unknown as number;
-    await db.ref(`packets/incoming/${replacementPacketId}`).set(packet);
-    console.log(`[recoverRejectedPull] submitted replacement ${replacementPacketId} for ${rejectedPacketId} (well=${wellName})`);
-    return { status: 'processing_submitted', replacementPacketId, rejectedPacketId };
+    // recovered | already_recovered | processing_submitted | replacement_rejected
+    console.log(`[recoverRejectedPull] ${rejectedPacketId} → ${outcome.status} (${replacementPacketId})`);
+    return { ...outcome, rejectedPacketId };
   },
 );
