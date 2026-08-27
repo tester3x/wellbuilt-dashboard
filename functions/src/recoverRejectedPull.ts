@@ -129,11 +129,23 @@ export type RecoveryPlan =
   | { action: 'reject'; code: RecoveryRejectCode; message: string }
   | { action: 'noop_complete'; code: 'ALREADY_RECOVERED'; replacementPacketId: string }
   | { action: 'annotate_only'; code: 'PROCESSED_AWAIT_ANNOTATION'; replacementPacketId: string }
+  | { action: 'pending_processing'; code: 'PROCESSED_INCOMPLETE'; replacementPacketId: string }
   | { action: 'already_in_flight'; code: 'REPLACEMENT_IN_INCOMING'; replacementPacketId: string }
   | { action: 'process'; code: 'SUBMIT_REPLACEMENT'; incomingPath: string };
 
 const norm = (v: unknown): string | undefined =>
   typeof v === 'string' && v.trim() !== '' ? v.trim() : undefined;
+
+/**
+ * The AUTHORITATIVE completion signal. processIncomingPull writes the processed
+ * row EARLY in a non-atomic chain (processed → outgoing → performance → AFR →
+ * wells/status → production) and stamps canonicalProcessingComplete ONLY after
+ * every required write succeeds. Recovery must never treat an early processed row
+ * (no marker) as complete.
+ */
+export function isCanonicalComplete(processed: Record<string, unknown> | null | undefined): boolean {
+  return !!processed && processed.canonicalProcessingComplete === true;
+}
 
 /**
  * Pure decision from the current server state. Order: argument shape →
@@ -205,6 +217,12 @@ export function planRecovery(input: RecoveryInput, state: RecoveryState): Recove
     const provenance = norm((state.replacementProcessed as Record<string, unknown>).recoveredFromPacketId);
     if (provenance !== rejectedId) {
       return { action: 'reject', code: 'REPLACEMENT_ID_CONFLICT', message: `packets/processed/${replacementId} exists without recoveredFromPacketId=${rejectedId}` };
+    }
+    // The processed row exists but the non-atomic canonical chain has NOT
+    // finished — an early row, not a completion receipt. Distinct pending state:
+    // never annotate/recover/conflict on it.
+    if (!isCanonicalComplete(state.replacementProcessed)) {
+      return { action: 'pending_processing', code: 'PROCESSED_INCOMPLETE', replacementPacketId: replacementId };
     }
     if (norm(rec.recoveredByPacketId) === replacementId) {
       return { action: 'noop_complete', code: 'ALREADY_RECOVERED', replacementPacketId: replacementId };
@@ -340,6 +358,7 @@ export type RecoveryOutcome =
   | { status: 'recovered'; replacementPacketId: string }
   | { status: 'already_recovered'; replacementPacketId: string }
   | { status: 'processing_submitted'; replacementPacketId: string }
+  | { status: 'pending_processing'; replacementPacketId: string }
   | { status: 'replacement_rejected'; replacementPacketId: string; reason: string }
   | { status: 'conflict'; code: RecoveryRejectCode; message: string }
   | { status: 'rejected'; code: RecoveryRejectCode; message: string };
@@ -372,7 +391,8 @@ export async function executeRecovery(
     return { status: 'recovered', replacementPacketId: plan.replacementPacketId };
   }
 
-  // process | already_in_flight → ensure the claim + incoming write, then poll.
+  // process | already_in_flight | pending_processing → ensure claim + write (if
+  // not yet submitted), then poll for the canonical-completion receipt.
   if (plan.action === 'process') {
     const claim = await io.claimRecovery(input.replacementPacketId);
     if (!claim.ok) {
@@ -381,7 +401,8 @@ export async function executeRecovery(
     await io.writeIncomingIfAbsent(input.replacementPacketId, buildReplacementIncomingPacket(input, s0.rejected as RejectedRecord));
   }
 
-  // Bounded runner: wait for the canonical processor, then take the SECOND step.
+  // Bounded runner: annotate ONLY once the authoritative completion receipt
+  // exists — never on an early, incomplete processed row.
   for (let i = 0; i < maxAttempts; i++) {
     const s = await io.readState();
     if (s.replacementProcessed) {
@@ -392,15 +413,22 @@ export async function executeRecovery(
       if (norm(s.rejected?.recoveredByPacketId) === input.replacementPacketId) {
         return { status: 'already_recovered', replacementPacketId: input.replacementPacketId };
       }
-      await io.annotate(buildRecoveryAnnotation(input, new Date(io.now()).toISOString()));
-      return { status: 'recovered', replacementPacketId: input.replacementPacketId };
-    }
-    if (s.replacementRejected) {
+      if (isCanonicalComplete(s.replacementProcessed)) {
+        await io.annotate(buildRecoveryAnnotation(input, new Date(io.now()).toISOString()));
+        return { status: 'recovered', replacementPacketId: input.replacementPacketId };
+      }
+      // Processed but incomplete — keep waiting for the completion receipt.
+    } else if (s.replacementRejected) {
       const r = norm((s.replacementRejected as Record<string, unknown>).reason) ?? 'rejected by processor';
       return { status: 'replacement_rejected', replacementPacketId: input.replacementPacketId, reason: r };
     }
     if (i < maxAttempts - 1) await io.sleep(backoffMs);
   }
-  // Not yet processed — idempotent; a later call finishes at annotate_only.
+  // Either not yet processed, or processed-but-incomplete. Idempotent: a later
+  // same-id retry finishes at annotate_only once the completion receipt lands.
+  const sf = await io.readState();
+  if (sf.replacementProcessed && !isCanonicalComplete(sf.replacementProcessed)) {
+    return { status: 'pending_processing', replacementPacketId: input.replacementPacketId };
+  }
   return { status: 'processing_submitted', replacementPacketId: input.replacementPacketId };
 }

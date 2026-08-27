@@ -1324,6 +1324,20 @@ export const processIncomingPull = functionsV1.database
     const afrBblsDay = afr > 0 ? Math.round((1 / afr) * bblPerFoot) : 0;
     await writeProductionLog(wellName, pullTimeMs, afrBblsDay, windowBblsDay, overnightBblsDay);
 
+    // ── Canonical-completion receipt ──────────────────────────────────────
+    // The sequential write chain above (processed → outgoing/current →
+    // performance → AFR/config → wells/status → production) is NOT atomic. This
+    // final marker is written ONLY after every required canonical write for this
+    // pull has succeeded, so it — not the EARLY processed-row existence — is the
+    // authoritative completion signal. Recovery annotation + WB-M reconciliation
+    // gate on this receipt; a crash anywhere above leaves processed present WITHOUT
+    // the marker, i.e. an explicit "processed-but-incomplete" state. Anything
+    // below (canonical_jobs / Firestore back-patch) is best-effort and advisory.
+    await db.ref(`packets/processed/${packetId}`).update({
+      canonicalProcessingComplete: true,
+      canonicalProcessingCompletedAt: admin.database.ServerValue.TIMESTAMP,
+    });
+
     // ── canonical_jobs + Phase 1.2 server-side back-patch ─────────────────
     // Best-effort. Failure here never blocks packet processing — canonical_jobs
     // has no readers in Phase 1, and the Firestore back-patches are advisory

@@ -45,6 +45,10 @@ function makeHarness(initialWatermark: string) {
     rejectedByProcessor: {} as Record<string, Record<string, unknown>>,
     watermark: initialWatermark,
     calls: { write: 0, annotate: 0 },
+    // Simulates whether the processor's non-atomic chain reaches the FINAL
+    // canonical-completion receipt. false = crash somewhere after the early
+    // processed row but before the receipt.
+    completeAfterProcess: true,
   };
   const io: RecoveryIO = {
     async readState() {
@@ -81,8 +85,11 @@ function makeHarness(initialWatermark: string) {
         delete db.incoming[replId];
         return 'written';
       }
-      // 2) real processed-record construction (preserves passthrough provenance).
+      // 2) real processed-record construction (preserves passthrough provenance)
+      //    — the EARLY row, written before the rest of the non-atomic chain.
       db.processed[replId] = buildProcessedRecord(packet, { ...COMPUTED, packetId: replId });
+      // 3) FINAL canonical-completion receipt — only if the chain fully succeeds.
+      if (db.completeAfterProcess) db.processed[replId].canonicalProcessingComplete = true;
       delete db.incoming[replId];
       return 'written';
     },
@@ -150,5 +157,39 @@ describe('real-processor end-to-end — processor rejects the replacement after 
     expect(db.rejected[REJECTED_ID].recoveredByPacketId).toBeUndefined();
     expect(db.rejected[REJECTED_ID].packet).toEqual(original);
     expect(db.calls.annotate).toBe(0);
+  });
+});
+
+describe('real-processor end-to-end — failure injection before the completion receipt', () => {
+  // Every partial-failure point (after the early processed row, before
+  // outgoing/performance/AFR/wells-status/production, before the final receipt)
+  // presents identically to recovery: a processed row WITHOUT
+  // canonicalProcessingComplete. Recovery must treat all of them as pending.
+  test('processed row exists but chain crashed before the receipt → pending_processing; NOTHING cleared; same-id retry completes once processing finishes', async () => {
+    const { db, io } = makeHarness('2026-08-26T18:01:07.025Z');
+    const original = { ...db.rejected[REJECTED_ID].packet };
+    db.completeAfterProcess = false; // crash after early processed row, before receipt
+
+    const out = await executeRecovery(io, input(), { maxAttempts: 3, backoffMs: 0 });
+    expect(out).toMatchObject({ status: 'pending_processing' });
+
+    // Early processed row exists, but WITHOUT the completion receipt.
+    expect(db.processed[REPLACEMENT_ID]).toBeDefined();
+    expect(db.processed[REPLACEMENT_ID].canonicalProcessingComplete).toBeUndefined();
+    // The original rejection is NOT annotated; payload untouched; no annotate call.
+    expect(db.rejected[REJECTED_ID].recoveredByPacketId).toBeUndefined();
+    expect(db.rejected[REJECTED_ID].recoveryStatus).toBeUndefined();
+    expect(db.rejected[REJECTED_ID].packet).toEqual(original);
+    expect(db.calls.annotate).toBe(0);
+
+    // Processing later completes (the receipt lands). The SAME replacement id
+    // retry finishes annotation — exactly once, no second processed row.
+    db.processed[REPLACEMENT_ID].canonicalProcessingComplete = true;
+    const writesBefore = db.calls.write;
+    const retry = await executeRecovery(io, input(), { maxAttempts: 3, backoffMs: 0 });
+    expect(retry).toMatchObject({ status: 'recovered' });
+    expect(db.rejected[REJECTED_ID].recoveredByPacketId).toBe(REPLACEMENT_ID);
+    expect(Object.keys(db.processed)).toEqual([REPLACEMENT_ID]); // no 2nd row
+    expect(db.calls.write).toBe(writesBefore);                   // no incoming rewrite
   });
 });

@@ -112,18 +112,25 @@ describe('planRecovery — key + time validation', () => {
 });
 
 describe('planRecovery — race + idempotency states', () => {
-  const ours = { recoveredFromPacketId: REJECTED_ID, wellName: 'Gabriel 5', bblsTaken: 60 };
+  // A COMPLETE processed replacement carries the canonical-completion receipt.
+  const ours = { recoveredFromPacketId: REJECTED_ID, wellName: 'Gabriel 5', bblsTaken: 60, canonicalProcessingComplete: true };
   test('newer pull moved watermark past corrected time → REPLACEMENT_NOT_NEWER', () => {
     expect(planRecovery(input(), state({ watermarkDateTimeUTC: '2026-08-27T02:00:00.000Z' }))).toMatchObject({ action: 'reject', code: 'REPLACEMENT_NOT_NEWER' });
   });
-  test('processed + annotated → noop_complete', () => {
+  test('processed + complete + annotated → noop_complete', () => {
     expect(planRecovery(input(), state({ replacementProcessed: ours, rejected: rejectedRecord({ recoveredByPacketId: REPLACEMENT_ID }) }))).toMatchObject({ action: 'noop_complete' });
   });
-  test('processed, annotation missing → annotate_only', () => {
+  test('processed + complete + annotation missing → annotate_only', () => {
     expect(planRecovery(input(), state({ replacementProcessed: ours }))).toMatchObject({ action: 'annotate_only' });
   });
-  test('processed WITHOUT our provenance → REPLACEMENT_ID_CONFLICT', () => {
-    expect(planRecovery(input(), state({ replacementProcessed: { bblsTaken: 99 } }))).toMatchObject({ action: 'reject', code: 'REPLACEMENT_ID_CONFLICT' });
+  test('processed EARLY (no completion receipt) → pending_processing (never annotate)', () => {
+    const early = { recoveredFromPacketId: REJECTED_ID, wellName: 'Gabriel 5', bblsTaken: 60 }; // no marker
+    expect(planRecovery(input(), state({ replacementProcessed: early }))).toMatchObject({ action: 'pending_processing', code: 'PROCESSED_INCOMPLETE' });
+    // still incomplete even if the original were already claimed under our id
+    expect(planRecovery(input(), state({ replacementProcessed: early, rejected: rejectedRecord({ recoveryClaim: { replacementPacketId: REPLACEMENT_ID } }) }))).toMatchObject({ action: 'pending_processing' });
+  });
+  test('processed WITHOUT our provenance → REPLACEMENT_ID_CONFLICT (checked before completeness)', () => {
+    expect(planRecovery(input(), state({ replacementProcessed: { bblsTaken: 99, canonicalProcessingComplete: true } }))).toMatchObject({ action: 'reject', code: 'REPLACEMENT_ID_CONFLICT' });
   });
   test('replacement rejected by processor → REPLACEMENT_REJECTED', () => {
     expect(planRecovery(input(), state({ replacementRejected: { reason: 'STALE_PULL_TIME' } }))).toMatchObject({ action: 'reject', code: 'REPLACEMENT_REJECTED' });
@@ -205,11 +212,21 @@ describe('executeRecovery — race-state table', () => {
   test('process → processed with provenance → recovered (claim + write + annotate once)', async () => {
     const io = scriptedIO([
       state(),                                                   // plan: process
-      state({ replacementProcessed: { recoveredFromPacketId: REJECTED_ID } }), // poll: processed
+      state({ replacementProcessed: { recoveredFromPacketId: REJECTED_ID } }), // poll: processed, NOT complete yet
+      state({ replacementProcessed: { recoveredFromPacketId: REJECTED_ID, canonicalProcessingComplete: true } }), // poll: complete
     ]);
-    const out = await executeRecovery(io, input(), { maxAttempts: 3, backoffMs: 0 });
+    const out = await executeRecovery(io, input(), { maxAttempts: 4, backoffMs: 0 });
     expect(out).toMatchObject({ status: 'recovered' });
+    // annotates only after the completion receipt (waited one extra poll).
     expect(io.calls).toEqual({ claim: 1, write: 1, annotate: 1 });
+  });
+
+  test('processed EARLY but never completes within budget → pending_processing, NO annotate', async () => {
+    const early = state({ replacementProcessed: { recoveredFromPacketId: REJECTED_ID } }); // no marker, ever
+    const io = scriptedIO([state(), early, early]);
+    const out = await executeRecovery(io, input(), { maxAttempts: 2, backoffMs: 0 });
+    expect(out).toMatchObject({ status: 'pending_processing' });
+    expect(io.calls.annotate).toBe(0);
   });
 
   test('process → replacement rejected by processor → replacement_rejected, NO annotate', async () => {
@@ -236,11 +253,18 @@ describe('executeRecovery — race-state table', () => {
     expect(io.calls.write).toBe(0);
   });
 
-  test('annotate_only (already processed) → recovered, no claim/write', async () => {
-    const io = scriptedIO([state({ replacementProcessed: { recoveredFromPacketId: REJECTED_ID } })]);
+  test('annotate_only (already processed + complete) → recovered, no claim/write', async () => {
+    const io = scriptedIO([state({ replacementProcessed: { recoveredFromPacketId: REJECTED_ID, canonicalProcessingComplete: true } })]);
     const out = await executeRecovery(io, input(), { maxAttempts: 2, backoffMs: 0 });
     expect(out).toMatchObject({ status: 'recovered' });
     expect(io.calls).toMatchObject({ claim: 0, write: 0, annotate: 1 });
+  });
+
+  test('pending_processing plan (processed EARLY, no marker) → does not annotate', async () => {
+    const io = scriptedIO([state({ replacementProcessed: { recoveredFromPacketId: REJECTED_ID } })]);
+    const out = await executeRecovery(io, input(), { maxAttempts: 1, backoffMs: 0 });
+    expect(out).toMatchObject({ status: 'pending_processing' });
+    expect(io.calls).toMatchObject({ claim: 0, write: 0, annotate: 0 });
   });
 });
 
@@ -277,9 +301,10 @@ describe('executeRecovery — integration with a simulated processIncomingPull',
       async writeIncomingIfAbsent(replId, packet) {
         if (replId in db.incoming) return 'exists';
         db.incoming[replId] = packet;
-        // Simulate the CANONICAL processor consuming incoming → processed,
-        // preserving recoveredFromPacketId and NOT touching packets/rejected.
+        // Simulate the CANONICAL processor: write the EARLY processed row, then
+        // (after its full non-atomic chain) stamp the completion receipt.
         db.processed[replId] = { ...packet, processedAt: '2026-08-27T00:39:05Z' };
+        db.processed[replId].canonicalProcessingComplete = true; // final marker
         delete db.incoming[replId];
         return 'written';
       },
