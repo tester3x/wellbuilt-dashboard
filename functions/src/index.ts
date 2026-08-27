@@ -4741,6 +4741,13 @@ export {
   listStuckHandoffs,
 } from './handoff-recovery';
 
+// Governed, company-scoped recovery of a losslessly-quarantined pull
+// (Mechanism A): submit ONE corrected replacement pull via the canonical
+// processor with provenance to the rejected original, then mark the rejected
+// record recovered only after an authoritative processed receipt exists.
+// See recoverRejectedPull.ts (pure ladder) + recoverRejectedPullCallable.ts.
+export { recoverRejectedPull } from './recoverRejectedPullCallable';
+
 export { eQuipmentDocuments, eQuipmentEquipment, eQuipmentAssignments, eQuipmentDVIR } from './equipment';
 
 // Security containment — driver identity (dual-run; rules enforcement is separate stage)
