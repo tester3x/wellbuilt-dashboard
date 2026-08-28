@@ -6,6 +6,8 @@ import {
   commitHorizonMs, DEFAULT_TIMEOUTS, CANONICAL_COMMIT_TIMEOUT_SECONDS,
   type CoordinatorIO, type LockRecord, type CommitReceipt, type MutationRequest,
 } from '../chronoCommitCoordinator';
+import { readFileSync } from 'fs';
+import { join } from 'path';
 
 const WELL = 'Atlas1';
 const T = DEFAULT_TIMEOUTS;
@@ -160,6 +162,25 @@ describe('horizon is tied to the real function lifetime', () => {
     // Horizon derives from the EXPLICIT commit-owner timeout (not an inferred v1 default).
     expect(T.functionMaxMs).toBe(CANONICAL_COMMIT_TIMEOUT_SECONDS * 1000); // explicit
     expect(HORIZON).toBe(CANONICAL_COMMIT_TIMEOUT_SECONDS * 1000 + 60_000);
+    // Pin the exact contract: 120s trigger timeout + 60s recovery margin = 180s.
+    expect(CANONICAL_COMMIT_TIMEOUT_SECONDS).toBe(120);
+    expect(T.recoveryMarginMs).toBe(60_000);
+    expect(HORIZON).toBe(180_000);
+    expect(CANONICAL_COMMIT_TIMEOUT_SECONDS * 1000 + T.recoveryMarginMs).toBe(180_000);
+  });
+
+  test('all three commit-owning triggers set the EXPLICIT 120s timeout (source)', () => {
+    const src = readFileSync(join(__dirname, '../index.ts'), 'utf8');
+    // Each of processIncomingPull / processEditRequest / processDeleteRequest is
+    // declared with .runWith({ timeoutSeconds: CANONICAL_COMMIT_TIMEOUT_SECONDS }),
+    // so the recovery horizon can never drift from the real function lifetime.
+    const owners = ['processIncomingPull', 'processEditRequest', 'processDeleteRequest'];
+    for (const name of owners) {
+      const at = src.indexOf(`export const ${name} = functionsV1`);
+      expect(at).toBeGreaterThan(-1);
+      const decl = src.slice(at, at + 200);
+      expect(decl).toMatch(/runWith\(\{ timeoutSeconds: CANONICAL_COMMIT_TIMEOUT_SECONDS/);
+    }
   });
 
   test('takeover cannot occur while an original invocation could still legally execute', () => {
