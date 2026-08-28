@@ -75,6 +75,17 @@ describe('canonical-writer call graph', () => {
     expect(del).not.toMatch(/await snapshot\.ref\.remove\(\)/);
   });
 
+  test('DELETE-not-found is a receipted coordinator no-op; malformed delete is a distinct governed reject', () => {
+    const del = triggerBody('processDeleteRequest');
+    // Authorized target-absent delete routes through the coordinator (receipt) —
+    // not a lone {archive, incoming:null} write.
+    expect(del).toMatch(/if \(!deletedPacket\) \{[\s\S]*runCanonicalMutation\(makeCoordinatorIO\(db, wellName\)/);
+    expect(del).toMatch(/affectedPacketIds: \[\]/); // terminal no-op
+    // Malformed (no well / no target id) takes the governed quarantine path.
+    expect(del).toMatch(/malformedDeleteVerdict\(/);
+    expect(del).toMatch(/quarantineIncomingPacket\(/);
+  });
+
   test('removed legacy writers are absent from the whole module', () => {
     expect(index).not.toMatch(/function makeBackdatedIO\(/);
     expect(index).not.toMatch(/async function writeProductionLog\(/);
