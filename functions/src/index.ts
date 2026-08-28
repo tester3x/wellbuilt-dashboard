@@ -344,6 +344,9 @@ interface ProcessedPacket extends PullPacket {
   estDateTimePull: string; // ISO string
   processedAt: string;
   noLevel?: boolean; // True when driver didn't enter a top level (non-PW source)
+  // Stored Late-Entry provenance (accepted behind an already-existing later pull).
+  // Stable review signal, set once at mutation time; never re-derived from position.
+  lateEntry?: boolean;
 }
 
 interface OutgoingResponse {
@@ -512,6 +515,8 @@ async function loadChronoPulls(wellName: string): Promise<ChronoPullInput[]> {
       ...(Number.isFinite(storedBottom) ? { knownBottomInches: storedBottom } : {}),
       ...(typeof p.operationId === 'string' ? { operationId: p.operationId } : {}),
       ...(typeof p.recoveredFromPacketId === 'string' ? { recoveredFromPacketId: p.recoveredFromPacketId } : {}),
+      // Preserve the STORED Late-Entry provenance so a recompute never relabels it.
+      ...(typeof p.lateEntry === 'boolean' ? { lateEntry: p.lateEntry } : {}),
     });
     return undefined;
   });
@@ -733,6 +738,8 @@ export const processIncomingPull = functionsV1.runWith({ timeoutSeconds: CANONIC
         bblsTaken: parseFloat(String(data.bblsTaken)) || 0,
         wellDown: data.wellDown === true || (data.wellDown as unknown) === 'true',
         submittedAtMs: Date.now(),
+        // Accepted behind an already-existing later pull → stable Late-Entry provenance.
+        lateEntry: true,
         operationId: typeof (data as { operationId?: unknown }).operationId === 'string' ? (data as { operationId?: string }).operationId : undefined,
         recoveredFromPacketId: typeof (data as { recoveredFromPacketId?: unknown }).recoveredFromPacketId === 'string' ? (data as { recoveredFromPacketId?: string }).recoveredFromPacketId : undefined,
       };
@@ -897,6 +904,10 @@ export const processIncomingPull = functionsV1.runWith({ timeoutSeconds: CANONIC
       estTimeToPull,
       estDateTimePull,
       processedAt: new Date().toISOString(),
+      // Stored Late-Entry provenance: the guard routed this pull to the newest
+      // path (strictly newer than the watermark), so it was NOT accepted behind a
+      // later pull. This is stable — a future later pull never relabels it.
+      lateEntry: false,
     };
 
     // Write to processed/ — strip client trail-only helpers from the stored pull
@@ -2291,15 +2302,20 @@ export async function processIncomingEdit(
       .equalTo(wellName)
       .once('value');
 
-    // Find the pull immediately before the edited one (by timestamp)
+    // Find the pull immediately before the edited one (by timestamp), and evaluate
+    // the edited logical pull's Late-Entry provenance AT MUTATION TIME: it is late
+    // iff a strictly-newer pull already exists among the OTHER rows for this well.
+    // This is stored on the edited row only — unrelated rows are never relabeled.
     const editedTime = new Date(newDateTimeUTC).getTime();
     let prevTankAfterInches = 0;
     let prevTimestamp = '';
+    let editLateEntry = false;
 
     prevOutgoingSnap.forEach((child) => {
       if (child.key === originalPacketId) return; // Skip self
       const pkt = child.val();
       const pktTime = new Date(pkt.dateTimeUTC).getTime();
+      if (Number.isFinite(pktTime) && pktTime > editedTime) editLateEntry = true; // a later pull exists
       if (pktTime < editedTime) {
         // This is a candidate for "previous pull"
         if (!prevTimestamp || pktTime > new Date(prevTimestamp).getTime()) {
@@ -2356,6 +2372,7 @@ export async function processIncomingEdit(
       dateTimeUTC: newDateTimeUTC,
       dateTime: newDateTime,
       wellDown: newWellDown,
+      lateEntry: editLateEntry, // stable provenance for the edited pull (evaluated above)
       ...fallbackAuditFields,
       ...trailSummary,
       ...(typeof data.revisionAt === 'string' && data.revisionAt ? { lastRevisionAt: data.revisionAt } : {}),

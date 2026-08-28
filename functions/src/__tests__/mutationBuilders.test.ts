@@ -9,8 +9,10 @@ const WELL = 'Gabriel 5';
 const cfg: WellChronoConfig = { bblPerFoot: 20, tanks: 1, allowedBottomInches: 30 };
 
 // A: 12:00 top158 bbls145 → bottom 71.  B (newest): 18:00 top100 bbls60 → bottom 64, recovery 100-71=29.
-const A: ChronoPullInput = { packetId: 'A', dateTimeUTC: '2026-08-27T12:00:00.000Z', tankTopInches: 158, bblsTaken: 145 };
-const B: ChronoPullInput = { packetId: 'B', dateTimeUTC: '2026-08-27T18:00:00.000Z', tankTopInches: 100, bblsTaken: 60 };
+// Both carry STORED lateEntry:false (each was the newest when inserted) so a later
+// pull never relabels them — Late Entry is stable provenance, not positional.
+const A: ChronoPullInput = { packetId: 'A', dateTimeUTC: '2026-08-27T12:00:00.000Z', tankTopInches: 158, bblsTaken: 145, lateEntry: false };
+const B: ChronoPullInput = { packetId: 'B', dateTimeUTC: '2026-08-27T18:00:00.000Z', tankTopInches: 100, bblsTaken: 60, lateEntry: false };
 
 const sidecar: CanonicalSidecar = {
   outgoing: { deleteResponseIds: ['oldResp'], responseId: 'newResp', response: { packetId: 'X' } },
@@ -30,17 +32,16 @@ describe('buildCreateMutation', () => {
     });
     expect(isCurrent).toBe(true);
     expect(receipt.mutationType).toBe('create');
-    // C is new; B is a changed successor because it is no longer the newest row
-    // (engine `lateEntry` = not-newest flips false→true).
-    expect(receipt.affectedPacketIds).toEqual(['C', 'B']);
-    expect(patch['packets/processed/B/lateEntry']).toBe(true);
-    expect(patch['packets/processed/B/chronoRevision']).toBe(7);
+    // Only C is affected: appending a newer pull does NOT relabel B (its stored
+    // lateEntry:false is preserved), so B is not rewritten.
+    expect(receipt.affectedPacketIds).toEqual(['C']);
+    expect(patch['packets/processed/B/lateEntry']).toBeUndefined(); // B untouched
     // Full new record present with derived overlaid.
     const rec = patch['packets/processed/C'] as Record<string, unknown>;
     expect(rec.source).toBe('test');
     expect(rec.tankAfterInches).toBe(66);     // 90 - (40/20)*12 = 66
     expect(rec.recoveryInches).toBe(26);      // 90 - 64
-    expect(rec.lateEntry).toBe(false);        // C IS the newest
+    expect(rec.lateEntry).toBe(false);        // C IS the newest → not late
     expect(rec.chronoRevision).toBe(7);
     // Receipt is part of the SAME patch.
     expect(patch[receiptPathFor(WELL, 'op-c')]).toBe(receipt);

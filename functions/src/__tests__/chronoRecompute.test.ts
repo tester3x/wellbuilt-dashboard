@@ -13,7 +13,9 @@ const pull = (over: Partial<ChronoPullInput> & { packetId: string; dateTimeUTC: 
 // ── Gabriel 5 exact regression fixture (packet 18462) ──────────────────────
 const PRED_825 = pull({ packetId: '20260825_135400_Gabriel5_pred', dateTimeUTC: '2026-08-25T18:54:00.000Z', knownBottomInches: 66 });
 const PULL_101PM = pull({ packetId: '20260826_130158_Gabriel5_existing', dateTimeUTC: '2026-08-26T18:01:07.025Z', tankTopInches: 158, bblsTaken: 145 });
-const AM_CREATE = pull({ packetId: '20260827_062211_Gabriel5_lbuegt', dateTimeUTC: '2026-08-26T12:39:00.000Z', tankTopInches: 84, bblsTaken: 60 });
+// Accepted behind the existing 1:01 PM pull → the backdated handler stamps stored
+// lateEntry:true; the engine preserves it (never re-derives from position).
+const AM_CREATE = pull({ packetId: '20260827_062211_Gabriel5_lbuegt', dateTimeUTC: '2026-08-26T12:39:00.000Z', tankTopInches: 84, bblsTaken: 60, lateEntry: true });
 const PM_EDIT_UTC = '2026-08-27T00:39:00.000Z';
 
 describe('Gabriel 5 — late AM CREATE accepted + inserted chronologically', () => {
@@ -76,11 +78,14 @@ describe('matrix — inserts and edits across multiple successors', () => {
 
   test('older CREATE with one later pull → inserted before; later recomputed; current = later', () => {
     const later = P('b', '2026-08-26T18:00:00Z', 158, 145);
-    const older = P('a', '2026-08-26T06:00:00Z', 84, 60);
+    // 'a' was accepted behind 'b' → handler stamps stored lateEntry:true; the engine
+    // preserves it. (A plain older input with no stored flag would NOT be relabeled.)
+    const older = { ...P('a', '2026-08-26T06:00:00Z', 84, 60), lateEntry: true };
     const res = recomputeWell([later, older], { ...CFG });
     expect(res.map((r) => r.packetId)).toEqual(['a', 'b']);
     expect(currentPull(res)!.packetId).toBe('b');
     expect(res.find((r) => r.packetId === 'a')!.lateEntry).toBe(true);
+    expect(res.find((r) => r.packetId === 'b')!.lateEntry).toBe(false); // newest, never late
   });
 
   test('older CREATE with several later pulls → ALL successors recomputed', () => {

@@ -44,6 +44,13 @@ export interface ChronoPullInput {
   operationId?: string;
   /** When this row is a recovery/replacement, the original packetId it supersedes. */
   recoveredFromPacketId?: string;
+  /** STORED Late-Entry provenance: this pull was ACCEPTED behind an already-existing
+   *  later pull (a backdated CREATE, or an EDIT that moved a row behind a newer one).
+   *  It is a STABLE review signal set ONCE at mutation time and PRESERVED on every
+   *  later recompute — never a positional synonym for "not the newest row". When
+   *  present it is authoritative; only legacy rows that never stored it fall back to
+   *  a positional estimate. */
+  lateEntry?: boolean;
 }
 
 export interface ChronoPullResult extends ChronoPullInput {
@@ -134,8 +141,12 @@ export function recomputeWell(
     if (recoveryInches > 0 && timeDifDays > 0) flowRateDays = (timeDifDays / recoveryInches) * 12;
     const bblsPerDay = timeDifDays > 0 ? (p.bblsTaken / timeDifDays) : 0;
 
-    // Late entry: a strictly newer pull exists (this row is not the newest).
-    const lateEntry = Number.isFinite(newestMs) && Number.isFinite(tMs) && tMs < newestMs;
+    // Late Entry is a PURELY STORED provenance signal (accepted behind an
+    // already-existing later pull), set once at mutation time by the handler and
+    // only PRESERVED here. Recompute never invents or relabels it from position:
+    // a row that never stored the flag is simply not late (default false). This is
+    // what keeps a later CREATE/EDIT/DELETE from relabeling unrelated history.
+    const lateEntry = p.lateEntry === true;
 
     // Anomaly (never a rejection): continuity break or flow far off the well band.
     const anomalyReasons: string[] = [];
