@@ -59,6 +59,22 @@ describe('canonical-writer call graph', () => {
     expect(body.length).toBeGreaterThan(0);
   });
 
+  test('source-request removal joins the canonical patch (no lone snapshot.ref.remove in the routed paths)', () => {
+    // CREATE + EDIT consume the incoming request INSIDE buildPatch (atomic with
+    // canonical state + receipt), never via a trailing remove.
+    const create = triggerBody('processIncomingPull');
+    expect(create).toMatch(/patch\[`packets\/incoming\/\$\{packetId\}`\] = null/);
+    expect(create).not.toMatch(/await snapshot\.ref\.remove\(\)/);
+    const editSection = index.slice(index.indexOf('export const processEditRequest'), index.indexOf('export const processDeleteRequest'));
+    expect(editSection).toMatch(/patch\[`packets\/incoming\/\$\{context\.params\.packetId\}`\] = null/);
+    expect(editSection).not.toMatch(/await snapshot\.ref\.remove\(\)/);
+    // DELETE consumes the request in the commit patch (found) or one atomic update
+    // (not-found) — never a lone remove.
+    const del = triggerBody('processDeleteRequest');
+    expect(del).toMatch(/built\.patch\[`packets\/incoming\/\$\{deleteIncomingId\}`\] = null/);
+    expect(del).not.toMatch(/await snapshot\.ref\.remove\(\)/);
+  });
+
   test('removed legacy writers are absent from the whole module', () => {
     expect(index).not.toMatch(/function makeBackdatedIO\(/);
     expect(index).not.toMatch(/async function writeProductionLog\(/);

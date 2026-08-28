@@ -35,21 +35,13 @@ describe('processIncomingPull wiring', () => {
     expect(block).toContain('return null;');
   });
 
-  test('no destructive removal remains before processing commits', () => {
-    // The old [STALE] guard deleted the incoming packet BEFORE anything was
-    // processed. The only legitimate snapshot.ref.remove() calls are the
-    // post-success cleanups, which all come AFTER the packet has been
-    // written to packets/processed. Assert every remove sits after the
-    // first processed-write in the handler.
-    const firstProcessedWrite = pullHandler.indexOf('packets/processed/');
-    expect(firstProcessedWrite).toBeGreaterThan(-1);
-    const removeCall = 'await snapshot.ref.remove()';
-    let at = pullHandler.indexOf(removeCall);
-    expect(at).toBeGreaterThan(-1); // cleanups still exist
-    while (at !== -1) {
-      expect(at).toBeGreaterThan(firstProcessedWrite);
-      at = pullHandler.indexOf(removeCall, at + 1);
-    }
+  test('the incoming request is consumed INSIDE the canonical atomic patch, never a lone remove', () => {
+    // Stronger than the old contract: the incoming packet is not removed by a
+    // separate snapshot.ref.remove() at all — it is set to null as PART of the same
+    // canonical multipath update that writes processed/outgoing/status/receipt, so
+    // canonical state and request consumption are all-or-nothing.
+    expect(pullHandler).not.toContain('await snapshot.ref.remove()');
+    expect(pullHandler).toMatch(/patch\[`packets\/incoming\/\$\{packetId\}`\] = null/);
     // And the stale verdict itself no longer logs/executes as a deletion.
     expect(pullHandler).not.toContain("console.log(`[STALE]");
   });

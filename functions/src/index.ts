@@ -709,14 +709,28 @@ export const processIncomingPull = functionsV1.runWith({ timeoutSeconds: CANONIC
     if (guardVerdict.action === 'process_backdated') {
       const backdatedTop = (parseFloat(String(data.tankLevelFeet)) || 0) * 12;
       if (backdatedTop <= 0) {
-        // No-level (non-production) older pull — persist as a standalone row; it
-        // does not participate in tank-top continuity, so no cascade.
+        // No-level (non-production) older pull — a standalone row; no cascade. Still
+        // through the ONE coordinator so the row + request removal + receipt are atomic.
         const nowIso = new Date().toISOString();
-        await db.ref(`packets/processed/${packetId}`).set({
-          ...data, packetId, noLevel: true, lateEntry: true, processedAt: nowIso,
+        const noLevelBackdatedOutcome = await runCanonicalMutation(makeCoordinatorIO(db, wellName), {
+          wellName, operationId: packetId,
+          buildPatch: async () => {
+            const curRev = Number((await db.ref(`wells/${wellName}/status/chronoRevision`).once('value')).val()) || 0;
+            const revision = curRev + 1;
+            const receipt: CommitReceipt = {
+              operationId: packetId, mutationType: 'backdated_create', wellName, fence: revision, revision,
+              affectedPacketIds: [packetId], committedAtMs: Date.now(), patchHash: `${packetId}:${revision}:nolevel`,
+            };
+            const patch = assembleCanonicalPatch({
+              processedUpdates: { [`packets/processed/${packetId}`]: { ...data, packetId, noLevel: true, lateEntry: true, processedAt: nowIso } },
+              fence: { wellName, revision },
+              receipt, receiptPath: receiptPathFor(wellName, packetId),
+            });
+            patch[`packets/incoming/${packetId}`] = null;
+            return { patch, receipt };
+          },
         });
-        console.log(`[BACKDATED] ${wellName}: ${packetId} → inserted (no-level, standalone)`);
-        await db.ref(`packets/incoming/${packetId}`).remove();
+        console.log(`[BACKDATED] ${wellName}: ${packetId} → ${noLevelBackdatedOutcome.status} (no-level standalone, 1 atomic update)`);
         return null;
       }
       const cfg: WellChronoConfig = {
@@ -758,13 +772,12 @@ export const processIncomingPull = functionsV1.runWith({ timeoutSeconds: CANONIC
             committedAtMs: Date.now(), patchHash: `${packetId}:${revision}`, sidecar: {},
             existingChain: chain, newPull, newProcessedRecord, cfg,
           });
+          // Source-request removal is part of the SAME atomic patch.
+          built.patch[`packets/incoming/${packetId}`] = null;
           return { patch: built.patch, receipt: built.receipt };
         },
       });
       console.log(`[BACKDATED] ${wellName}: ${packetId} → ${outcome.status}`);
-      if (outcome.status === 'committed' || outcome.status === 'already_done') {
-        await db.ref(`packets/incoming/${packetId}`).remove();
-      }
       return null;
     }
 
@@ -819,12 +832,31 @@ export const processIncomingPull = functionsV1.runWith({ timeoutSeconds: CANONIC
         estDateTimePull: '',
         processedAt: new Date().toISOString(),
         noLevel: true,
+        lateEntry: false,
       };
 
-      await db.ref(`packets/processed/${packetId}`).set(processedPacket);
-      await snapshot.ref.remove();
-
-      console.log(`[NO-LEVEL] ${wellName}: Stored to processed (bbls=${data.bblsTaken}), existing well status preserved`);
+      // Even a no-level pull writes business state (the processed row), so it goes
+      // through the ONE coordinator: processed row + source-request removal + receipt
+      // commit together. No canonical current/outgoing/status change (non-production).
+      const noLevelOutcome = await runCanonicalMutation(makeCoordinatorIO(db, wellName), {
+        wellName, operationId: packetId,
+        buildPatch: async () => {
+          const curRev = Number((await db.ref(`wells/${wellName}/status/chronoRevision`).once('value')).val()) || 0;
+          const revision = curRev + 1;
+          const receipt: CommitReceipt = {
+            operationId: packetId, mutationType: 'create', wellName, fence: revision, revision,
+            affectedPacketIds: [packetId], committedAtMs: Date.now(), patchHash: `${packetId}:${revision}:nolevel`,
+          };
+          const patch = assembleCanonicalPatch({
+            processedUpdates: { [`packets/processed/${packetId}`]: processedPacket },
+            fence: { wellName, revision },
+            receipt, receiptPath: receiptPathFor(wellName, packetId),
+          });
+          patch[`packets/incoming/${packetId}`] = null;
+          return { patch, receipt };
+        },
+      });
+      console.log(`[NO-LEVEL] ${wellName}: ${packetId} → ${noLevelOutcome.status} (processed + request consumed, 1 atomic update)`);
       return null;
     }
 
@@ -1026,6 +1058,10 @@ export const processIncomingPull = functionsV1.runWith({ timeoutSeconds: CANONIC
           receipt, receiptPath: receiptPathFor(wellName, packetId),
         });
         patch[`production/${prodWellKey}/wellName`] = wellName;
+        // Source-request consumption is PART of the same atomic update — canonical
+        // state + receipt + incoming removal commit together, closing the crash
+        // window where state is written but the request lingers for reprocessing.
+        patch[`packets/incoming/${packetId}`] = null;
         return { patch, receipt };
       },
     });
@@ -1236,8 +1272,8 @@ export const processIncomingPull = functionsV1.runWith({ timeoutSeconds: CANONIC
       }
     }
 
-    // Delete from incoming/
-    await snapshot.ref.remove();
+    // (incoming/ was consumed as part of the ONE canonical atomic update above —
+    // never a separate write.)
 
     console.log(`Processed ${wellName}: ${packetId} -> ${responseId}`);
 
@@ -2790,8 +2826,8 @@ export async function processIncomingEdit(
       console.error(`Edit: Firestore cascade error (non-blocking):`, fsErr);
     }
 
-    // Delete the edit request
-    await snapshot.ref.remove();
+    // (the edit request was consumed as part of the ONE canonical atomic update
+    // above — never a separate remove here.)
 
     await notifyIncomingVersionBestEffort(db.ref('packets/incoming_version'), {
       outgoingCommitted: true,
@@ -2821,6 +2857,22 @@ export const processDeleteRequest = functionsV1.runWith({ timeoutSeconds: CANONI
     // Read the packet before deleting (to check if it was the latest)
     const targetSnap = await db.ref(`packets/processed/${targetPacketId}`).once('value');
     const deletedPacket = targetSnap.exists() ? targetSnap.val() : null;
+
+    // Audit archive of the delete request — computed up front so it commits inside
+    // the SAME atomic patch as the canonical state + receipt + request removal.
+    const auditData = {
+      ...data,
+      processedAt: new Date().toISOString(),
+      deletedPacketData: deletedPacket ? {
+        wellName: deletedPacket.wellName,
+        dateTimeUTC: deletedPacket.dateTimeUTC,
+        tankLevelFeet: deletedPacket.tankLevelFeet,
+        bblsTaken: deletedPacket.bblsTaken,
+        driverName: deletedPacket.driverName,
+      } : null,
+      result: deletedPacket ? 'rebuilt_from_previous' : 'packet_not_found',
+    };
+    const deleteIncomingId = context.params.packetId;
 
     // Route the delete through the ONE canonical coordinator: null the row,
     // recompute every affected successor via the engine (each successor's
@@ -2937,6 +2989,9 @@ export const processDeleteRequest = functionsV1.runWith({ timeoutSeconds: CANONI
             existingChain: chain, deletePacketId: targetPacketId, cfg,
           });
           if (deletedPerfTs) built.patch[`performance/${wellKey}/rows/${deletedPerfTs}`] = null;
+          // Audit archive + source-request removal are PART of the same atomic patch.
+          built.patch[`packets/processed/delete_${targetPacketId}`] = auditData;
+          built.patch[`packets/incoming/${deleteIncomingId}`] = null;
           return { patch: built.patch, receipt: built.receipt };
         },
       });
@@ -2947,21 +3002,15 @@ export const processDeleteRequest = functionsV1.runWith({ timeoutSeconds: CANONI
       }
     }
 
-    // Archive delete request for audit trail (instead of just removing it)
-    const auditData = {
-      ...data,
-      processedAt: new Date().toISOString(),
-      deletedPacketData: deletedPacket ? {
-        wellName: deletedPacket.wellName,
-        dateTimeUTC: deletedPacket.dateTimeUTC,
-        tankLevelFeet: deletedPacket.tankLevelFeet,
-        bblsTaken: deletedPacket.bblsTaken,
-        driverName: deletedPacket.driverName,
-      } : null,
-      result: deletedPacket ? 'rebuilt_from_previous' : 'packet_not_found',
-    };
-    await db.ref(`packets/processed/delete_${targetPacketId}`).set(auditData);
-    await snapshot.ref.remove();
+    // packet-not-found: no canonical state changed, so there is no coordinator
+    // commit — consume the orphan delete request + write its audit archive as ONE
+    // atomic update (never a lone remove that could strand the audit).
+    if (!deletedPacket) {
+      await db.ref().update({
+        [`packets/processed/delete_${targetPacketId}`]: auditData,
+        [`packets/incoming/${deleteIncomingId}`]: null,
+      });
+    }
 
     await notifyIncomingVersionBestEffort(db.ref('packets/incoming_version'), {
       outgoingCommitted: true,

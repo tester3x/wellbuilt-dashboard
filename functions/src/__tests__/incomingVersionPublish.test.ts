@@ -194,8 +194,12 @@ describe('incoming_version publish contract', () => {
     const notify = del.indexOf('notifyIncomingVersionBestEffort');
     expect(archive).toBeGreaterThan(0);
     expect(notify).toBeGreaterThan(archive);
+    // The edit request is now consumed AS PART OF the canonical atomic patch
+    // (packets/incoming/<id> = null inside buildPatch), never a separate remove.
     const edit = index.slice(index.indexOf('export const processEditRequest'), index.indexOf('export const processDeleteRequest'));
-    expect(edit.indexOf('await snapshot.ref.remove()')).toBeGreaterThan(0);
-    expect(edit.indexOf('notifyIncomingVersionBestEffort')).toBeGreaterThan(edit.indexOf('await snapshot.ref.remove()'));
+    expect(edit).not.toMatch(/await snapshot\.ref\.remove\(\)/);          // no lone request-remove write
+    expect(edit).toMatch(/patch\[`packets\/incoming\/\$\{context\.params\.packetId\}`\] = null/); // consumed in the patch
+    expect(edit.indexOf('runCanonicalMutation')).toBeGreaterThan(0);
+    expect(edit.indexOf('notifyIncomingVersionBestEffort')).toBeGreaterThan(edit.indexOf('runCanonicalMutation'));
   });
 });
