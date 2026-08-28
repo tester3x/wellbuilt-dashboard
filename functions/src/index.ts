@@ -29,6 +29,7 @@ import { getProductionDate, calculateWindowBblsPerDay, calculateOvernightBblsPer
 import { formatLocalDateTime, outgoingCompanyId, inchesToFeetInches, feetInchesToInches, daysToHMM, daysToHMMSS } from './wbmFormat';
 import { buildOutgoingResponse, buildWellStatus } from './outgoingBuilders';
 import { buildPerformanceRow } from './performanceBuilders';
+import { computeTankTopInches, computeTankAfterInches, computeRecoveryInches, computeFlowRateDays } from './tankFormulas';
 import {
   assertedFromEditedFields,
   buildAppliedEditEvent,
@@ -841,7 +842,7 @@ export const processIncomingPull = functionsV1.runWith({ timeoutSeconds: CANONIC
     await db.ref(`wells/${wellName}/status/isDown`).set(nextIsDown);
 
     // Calculate all fields
-    const tankTopInches = (parseFloat(String(data.tankLevelFeet)) || 0) * 12;
+    const tankTopInches = computeTankTopInches(data.tankLevelFeet);
 
     // No top level = not a production tank pull (fresh water, service work, etc.)
     // Log the packet but skip all tank math — don't corrupt existing well data
@@ -873,8 +874,7 @@ export const processIncomingPull = functionsV1.runWith({ timeoutSeconds: CANONIC
       return null;
     }
 
-    const bblsInInches = data.bblsTaken > 0 ? (data.bblsTaken / 20 / tanks) * 12 : 0;
-    const tankAfterInches = tankTopInches - bblsInInches;
+    const tankAfterInches = computeTankAfterInches(tankTopInches, data.bblsTaken, tanks);
 
     // Time Dif
     let timeDifDays = 0;
@@ -889,24 +889,10 @@ export const processIncomingPull = functionsV1.runWith({ timeoutSeconds: CANONIC
     }
 
     // Recovery Inches
-    let recoveryInches = 0;
-    if (prevTankAfterInches > 0) {
-      recoveryInches = Math.max(0, tankTopInches - prevTankAfterInches);
-    }
+    const recoveryInches = computeRecoveryInches(tankTopInches, prevTankAfterInches);
 
-    // Flow Rate (days per foot)
-    let flowRateDays = 0;
-    let flowRate = '';
-    if (recoveryInches > 0 && timeDifDays > 0) {
-      flowRateDays = (timeDifDays / recoveryInches) * 12;
-      // Reject unreasonable flow rates (matches windowBblsPerDay safeguard)
-      if (flowRateDays >= 365) {
-        console.log(`[FlowRate] ${wellName}: rejecting anomalous ${flowRateDays.toFixed(2)} days/ft (timeDif=${timeDifDays.toFixed(4)}d, recovery=${recoveryInches}in)`);
-        flowRateDays = 0;
-      } else {
-        flowRate = daysToHMMSS(flowRateDays);
-      }
-    }
+    const flowRateDays = computeFlowRateDays(timeDifDays, recoveryInches);
+    const flowRate = flowRateDays > 0 ? daysToHMMSS(flowRateDays) : '';
 
     // Calculate AFR
     const afr = await calculateAFR(wellName, flowRateDays);
