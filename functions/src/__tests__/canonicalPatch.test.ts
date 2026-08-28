@@ -1,4 +1,4 @@
-import { assembleCanonicalPatch, receiptPathFor } from '../canonicalPatch';
+import { assembleCanonicalPatch, receiptPathFor, CANONICAL_STATUS_KEYS } from '../canonicalPatch';
 import type { CommitReceipt } from '../chronoCommitCoordinator';
 
 const receipt: CommitReceipt = {
@@ -28,6 +28,14 @@ describe('assembleCanonicalPatch — one atomic patch incl. receipt', () => {
       'packets/outgoing/response_old_Gabriel5': null,           // prior response removed
       'packets/outgoing/response_new_Gabriel5': { wellName: 'Gabriel 5', status: 'success' },
       'wells/Gabriel 5/status/isDown': false,                   // status written as child keys, not a full-node set
+      // This minimal status supplied only isDown → every OTHER owned key is nulled
+      // (explicit replacement: obsolete canonical children cannot linger).
+      'wells/Gabriel 5/status/wellName': null,
+      'wells/Gabriel 5/status/config': null,
+      'wells/Gabriel 5/status/current': null,
+      'wells/Gabriel 5/status/lastPull': null,
+      'wells/Gabriel 5/status/calculated': null,
+      'wells/Gabriel 5/status/updatedAt': null,
       'performance/Gabriel_5/rows/20260826_193900': { d: '2026-08-26', a: 84, p: 52 },
       'performance/Gabriel_5/wellName': 'Gabriel 5',
       'performance/Gabriel_5/updated': '2026-08-27T13:00:00Z',
@@ -74,6 +82,68 @@ describe('assembleCanonicalPatch — one atomic patch incl. receipt', () => {
       if (a === b) continue;
       expect(a.startsWith(b + '/')).toBe(false); // a is never a descendant of b
     }
+  });
+
+  describe('status replacement semantics (Gap 2)', () => {
+    const fullStatus = {
+      wellName: 'Gabriel 5', config: { tanks: 1 }, current: { level: 60 }, lastPull: { p: 1 },
+      calculated: { flowRate: '1:00' }, isDown: false, updatedAt: 'iso',
+    };
+    const build = (status: Record<string, unknown>) => assembleCanonicalPatch({
+      processedUpdates: {}, wellStatus: { wellName: 'Gabriel 5', status },
+      fence: { wellName: 'Gabriel 5', revision: 6 },
+      receipt, receiptPath: receiptPathFor('Gabriel 5', 'op1'),
+    });
+
+    test('a complete status writes every owned key and nulls none', () => {
+      const patch = build(fullStatus);
+      for (const k of CANONICAL_STATUS_KEYS) {
+        expect(patch[`wells/Gabriel 5/status/${k}`]).not.toBeNull();
+        expect(`wells/Gabriel 5/status/${k}` in patch).toBe(true);
+      }
+    });
+
+    test('a removed canonical status field is nulled (never left stale)', () => {
+      const { calculated: _omit, ...withoutCalculated } = fullStatus;
+      const patch = build(withoutCalculated);
+      expect(patch['wells/Gabriel 5/status/calculated']).toBeNull(); // explicitly removed
+      expect(patch['wells/Gabriel 5/status/current']).toEqual({ level: 60 }); // still present
+    });
+
+    test('chronoLock is NEVER written by a status commit (survives the business commit)', () => {
+      // Even if a status object somehow carried chronoLock, it is not emitted.
+      const patch = build({ ...fullStatus, chronoLock: { token: 'x' } } as Record<string, unknown>);
+      expect('wells/Gabriel 5/status/chronoLock' in patch).toBe(false);
+    });
+
+    test('chronoRevision is written exactly once (by the fence, not the status object)', () => {
+      const patch = build({ ...fullStatus, chronoRevision: 999 } as Record<string, unknown>);
+      const revKeys = Object.keys(patch).filter((k) => k === 'wells/Gabriel 5/status/chronoRevision');
+      expect(revKeys).toHaveLength(1);
+      expect(patch['wells/Gabriel 5/status/chronoRevision']).toBe(6); // the fence value, not 999
+    });
+
+    test('unrelated status children are left untouched (only owned keys are managed)', () => {
+      // The patch only ever addresses owned keys + chronoRevision; it never writes
+      // (or nulls) an unrelated child like status/adminNote, so RTDB preserves it.
+      const patch = build(fullStatus);
+      const managed = new Set<string>([
+        ...CANONICAL_STATUS_KEYS.map((k) => `wells/Gabriel 5/status/${k}`),
+        'wells/Gabriel 5/status/chronoRevision',
+      ]);
+      for (const key of Object.keys(patch)) {
+        if (key.startsWith('wells/Gabriel 5/status/')) expect(managed.has(key)).toBe(true);
+      }
+    });
+
+    test('no ancestor/descendant overlap with a full status + fence (real RTDB accepts it)', () => {
+      const patch = build(fullStatus);
+      const keys = Object.keys(patch);
+      for (const a of keys) for (const b of keys) {
+        if (a === b) continue;
+        expect(a.startsWith(b + '/')).toBe(false);
+      }
+    });
   });
 
   test('minimal patch still carries the receipt', () => {

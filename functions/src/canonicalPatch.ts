@@ -6,6 +6,21 @@
 // failure exposes none of it. The receipt is part of the SAME patch.
 import type { CommitReceipt } from './chronoCommitCoordinator';
 
+/**
+ * The EXACT set of `wells/<well>/status` child keys OWNED by a canonical mutation.
+ * A status commit writes each of these (new value when present in the status
+ * object, else `null` so an obsolete canonical child cannot linger forever) and
+ * NOTHING else under status. Coordinator-owned metadata (`chronoLock`,
+ * `chronoRevision`) and any unrelated/non-canonical child are deliberately left
+ * untouched. Keep this in lockstep with buildWellStatus / the edit status object.
+ */
+export const CANONICAL_STATUS_KEYS = [
+  'wellName', 'config', 'current', 'lastPull', 'calculated', 'isDown', 'updatedAt',
+] as const;
+
+/** Never written from the status object — the coordinator owns these under status. */
+const COORDINATOR_STATUS_KEYS = new Set(['chronoLock', 'chronoRevision']);
+
 export interface CanonicalPatchPieces {
   /** packets/processed/<id>/<field> updates for the mutated + changed neighbor
    *  rows (from the chrono engine / planBackdatedCommit). */
@@ -39,15 +54,23 @@ export function assembleCanonicalPatch(p: CanonicalPatchPieces): Record<string, 
     if (p.outgoing.responseId) patch[`packets/outgoing/${p.outgoing.responseId}`] = p.outgoing.response ?? null;
   }
   if (p.wellStatus) {
-    // Write each status field as its OWN child path — never a full-node set of
+    // Write status as OWNED child-key paths — never a full-node set of
     // wells/<well>/status. A full-node set would (1) collide with the
     // status/chronoRevision child path below (Firebase update() rejects
-    // overlapping locations) and (2) wipe the coordinator's live
-    // status/chronoLock mid-commit. Child-key writes replace each subtree
-    // (current/lastPull/afr/isDown/…) while leaving lock + revision intact.
-    for (const [k, v] of Object.entries(p.wellStatus.status)) {
-      if (k === 'chronoLock' || k === 'chronoRevision') continue; // never let status carry these
-      patch[`wells/${p.wellStatus.wellName}/status/${k}`] = v;
+    // overlapping locations) and (2) wipe the coordinator's live status/chronoLock
+    // mid-commit. Explicit replacement semantics: every value the mutation
+    // produced is written (except coordinator-owned metadata), AND every OWNED key
+    // the new status omits is nulled so an obsolete canonical child cannot linger.
+    // Unrelated/non-canonical children (and chronoLock/chronoRevision) are left
+    // untouched.
+    const well = p.wellStatus.wellName;
+    const status = p.wellStatus.status;
+    for (const [k, v] of Object.entries(status)) {
+      if (COORDINATOR_STATUS_KEYS.has(k)) continue; // never let status carry these
+      patch[`wells/${well}/status/${k}`] = v;
+    }
+    for (const k of CANONICAL_STATUS_KEYS) {
+      if (!(k in status)) patch[`wells/${well}/status/${k}`] = null; // remove stale owned child
     }
   }
   if (p.performance) {
