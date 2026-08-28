@@ -704,6 +704,9 @@ export const processIncomingPull = functionsV1.runWith({ timeoutSeconds: CANONIC
     const bottomInches = (config.bottomLevel || config.allowedBottom || DEFAULTS.bottomLevel) * 12;
     const tanks = config.tanks || config.numTanks || DEFAULTS.tanks;
     const pullBbls = config.pullBbls || DEFAULTS.pullBbls;
+    // Resolved TOTAL bbl/ft for THIS well (edit-path contract: config value, else
+    // 20 * tanks). Never a universal 20. Used for tank-after + window/overnight.
+    const bblPerFoot = Number(config.bblPerFoot) > 0 ? Number(config.bblPerFoot) : 20 * tanks;
 
     // Get current outgoing response (previous row data)
     const outgoingSnap = await db.ref('packets/outgoing')
@@ -800,7 +803,7 @@ export const processIncomingPull = functionsV1.runWith({ timeoutSeconds: CANONIC
         return null;
       }
       const cfg: WellChronoConfig = {
-        bblPerFoot: Number((config as { bblPerFoot?: unknown }).bblPerFoot) > 0 ? Number((config as { bblPerFoot?: unknown }).bblPerFoot) : 20,
+        bblPerFoot: Number((config as { bblPerFoot?: unknown }).bblPerFoot) > 0 ? Number((config as { bblPerFoot?: unknown }).bblPerFoot) : 20 * tanks,
         tanks,
         allowedBottomInches: (Number((config as { allowedBottom?: unknown; bottomLevel?: unknown }).allowedBottom ?? (config as { bottomLevel?: unknown }).bottomLevel) || 0) * 12 || undefined,
         avgFlowRateDays: Number((config as { avgFlowRateMinutes?: unknown }).avgFlowRateMinutes) > 0 ? Number((config as { avgFlowRateMinutes?: unknown }).avgFlowRateMinutes) / 1440 : undefined,
@@ -874,7 +877,7 @@ export const processIncomingPull = functionsV1.runWith({ timeoutSeconds: CANONIC
       return null;
     }
 
-    const tankAfterInches = computeTankAfterInches(tankTopInches, data.bblsTaken, tanks);
+    const tankAfterInches = computeTankAfterInches(tankTopInches, data.bblsTaken, bblPerFoot);
 
     // Time Dif
     let timeDifDays = 0;
@@ -898,7 +901,6 @@ export const processIncomingPull = functionsV1.runWith({ timeoutSeconds: CANONIC
     const afr = await calculateAFR(wellName, flowRateDays);
 
     // Calculate window-averaged and overnight bbls/day
-    const bblPerFoot = tanks * 20;
     const historicalPulls = await getHistoricalPulls(wellName, 500);
     const pullTimeMs = new Date(data.dateTimeUTC).getTime();
 

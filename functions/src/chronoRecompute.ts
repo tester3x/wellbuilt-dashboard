@@ -76,9 +76,11 @@ export const PULL_START_TIMESTAMP_GAP =
 const DAY_MS = 24 * 60 * 60 * 1000;
 
 export function computeBottomInches(topInches: number, bblsTaken: number, cfg: WellChronoConfig): number {
-  const perFoot = cfg.bblPerFoot > 0 ? cfg.bblPerFoot : 20;
+  // bblPerFoot is the well's RESOLVED TOTAL bbl/ft (across all tanks). Missing →
+  // the existing default contract 20 * tanks. Never divide by tanks again.
   const tanks = cfg.tanks > 0 ? cfg.tanks : 1;
-  return topInches - (bblsTaken / perFoot / tanks) * 12;
+  const perFoot = cfg.bblPerFoot > 0 ? cfg.bblPerFoot : 20 * tanks;
+  return topInches - (bblsTaken / perFoot) * 12;
 }
 
 /** Deterministic chronological order: event time asc, then packetId asc. */
