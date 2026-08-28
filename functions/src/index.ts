@@ -5438,6 +5438,7 @@ export {
   dismissDispatch,
   staffWriteDispatch,
   staffWriteDriverAssignment,
+  staffWriteWellConfig,
   staffConvertApprovedDriverSecureLogin,
   upgradeOwnLegacyDriverLogin,
   staffHydrateCanonicalIdentity,

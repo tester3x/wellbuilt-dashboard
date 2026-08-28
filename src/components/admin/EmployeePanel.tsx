@@ -14,6 +14,8 @@ import { EmployeeRow } from '@/lib/employees';
 const ROLE_CHECKBOXES: { role: UserRole; label: string }[] = [
   { role: 'driver', label: 'Driver' },
   { role: 'dispatch', label: 'Dispatch' },
+  { role: 'safety', label: 'Safety' },
+  { role: 'lead', label: 'Lead' },
   { role: 'payroll', label: 'Payroll / Billing' },
   { role: 'manager', label: 'Manager' },
   { role: 'admin', label: 'Admin' },

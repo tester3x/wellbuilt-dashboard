@@ -452,6 +452,23 @@ export interface CompanyConfig {
    * only governs the per-shift close shortcut.
    */
   jsaJobPolicy?: 'acknowledge' | 'read' | 'read_and_acknowledge';
+  /**
+   * Spill notification policy (Safety). Written as
+   * companies/{id}.spillReporting.notifyPolicy — same path WB-T snapshots
+   * at acceptSpillIncident. Never hardcoded recipients.
+   */
+  spillReporting?: {
+    spillVideoEnabled?: boolean;
+    notifyPolicy?: {
+      enabled?: boolean;
+      recipients?: unknown[];
+      externalAccessEnabled?: boolean | null;
+      externalAccessExpiresHours?: number | null;
+      version?: number;
+      updatedAtIso?: string | null;
+      updatedByUid?: string | null;
+    };
+  };
   // JSA contacts — shown on JSA signoff screen. Company-managed via Dashboard Settings.
   emergencyContacts?: { label: string; phone: string }[];
   companyContacts?: { label: string; phone: string }[];

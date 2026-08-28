@@ -1,0 +1,26 @@
+<!DOCTYPE html>
+<html lang="en"><head><meta charset="utf-8"/><title>Safety / Spill Incidents — local render proof</title>
+<style>
+  body { font-family: sans-serif; background:#111827; color:#e5e7eb; margin:24px; }
+  h1,h2 { color:#fff; }
+  table { border-collapse: collapse; width:100%; background:#1f2937; }
+  th,td { border:1px solid #374151; padding:8px; font-size:13px; }
+  th { color:#9ca3af; text-align:left; }
+  .chip { display:inline-block; background:#1d4ed8; padding:4px 8px; border-radius:4px; font-size:12px; }
+  .muted { color:#9ca3af; }
+  .warn { color:#fbbf24; }
+</style></head>
+<body>
+<h1>Safety</h1>
+<p class="muted">Local fixture render — not live production data. Path: companies/{companyId}/spill_incidents/{incidentId}</p>
+<div class="chip">Spill Incidents</div>
+<p class="muted">Filters: Open · Acknowledged · Resolved · Closed · All</p>
+<table>
+  <tr><th>Date/time</th><th>Status</th><th>Driver</th><th>Company</th><th>Ticket</th><th>Phase</th><th>Location</th><th>Media</th><th>Notification</th></tr>
+  <tr><td>2026-08-24 10:00</td><td>open</td><td>Mikezfold</td><td>liquid-gold</td><td>20100</td><td>pickup</td><td>GABRIEL 5-36-25TFH</td><td>3 photo / 1 video</td><td>Notification service not configured</td></tr>
+</table>
+<p class="warn">Empty collection copy: “No spill incidents” (not an error).</p>
+<h2>Detail (fixture)</h2>
+<p>Incident ID <code>inc-demo-1</code> · schema 1 · GPS 47.84, -103.29 · media upload pending · no delivery records claimed sent.</p>
+<p class="muted">Actions disabled: acknowledgeSpillIncident is not deployed.</p>
+</body></html>

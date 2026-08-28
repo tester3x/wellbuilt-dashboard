@@ -73,6 +73,13 @@ export const TABS: TabConfig[] = [
     capability: 'viewEQuipment',
   },
   {
+    id: 'safety',
+    label: 'Safety',
+    href: '/safety',
+    matchPrefixes: ['/safety'],
+    capability: 'viewSafety',
+  },
+  {
     id: 'settings',
     label: 'Settings',
     href: '/settings',

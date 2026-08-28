@@ -10,10 +10,11 @@ import { ref, get, set, update, serverTimestamp } from 'firebase/database';
 import { getFirebaseAuth, getFirebaseDatabase } from './firebase';
 
 // ── Role primitives ─────────────────────────────────────────────────────────
-// Seven canonical roles. Customers can RELABEL (roleLabels on companies/{id})
-// but cannot invent new role primitives — security rules / Cloud Functions
-// reference these strings. Relabelling does not change logic, only display.
-export type UserRole = 'driver' | 'viewer' | 'dispatch' | 'payroll' | 'manager' | 'admin' | 'it';
+// Canonical employee responsibilities. Customers can RELABEL (roleLabels on
+// companies/{id}) but cannot invent new primitives — security rules / Cloud
+// Functions reference these strings. Relabelling does not change logic.
+// `safety` and `lead` are first-class responsibilities for Safety / spills.
+export type UserRole = 'driver' | 'viewer' | 'dispatch' | 'payroll' | 'manager' | 'admin' | 'it' | 'safety' | 'lead';
 
 // Role hierarchy — kept for backwards-compatibility with hasRole(). New code
 // should prefer hasCapability() instead; hasRole() is only useful for coarse
@@ -23,6 +24,8 @@ export const ROLE_LEVELS: Record<UserRole, number> = {
   viewer: 1,
   dispatch: 2,
   payroll: 2,
+  safety: 2,
+  lead: 3,
   manager: 3,
   admin: 4,
   it: 5,
@@ -41,6 +44,7 @@ export type Capability =
   | 'viewBilling'
   | 'viewPayroll'
   | 'viewDriverLogs'
+  | 'viewSafety'
   | 'viewSettings'
   | 'viewAdmin'
   | 'viewChat'
@@ -60,6 +64,7 @@ export type Capability =
   | 'viewEquipmentDocuments' // read driver documents
   | 'manageEquipmentDocuments' // future document approval/admin
   | 'sendChat'
+  | 'manageSafety'              // acknowledge / resolve / policy editor
   // Meta (system owner only)
   | 'manageRolesAndCapabilities'  // edit roleLabels / roleCapabilities per company
   | 'viewAllCompanies'            // WB-admin-only — cross-company visibility
@@ -81,34 +86,42 @@ export type Capability =
 export const DEFAULT_ROLE_CAPABILITIES: Record<UserRole, Capability[]> = {
   it: [
     'viewHome', 'viewMobile', 'viewTickets', 'viewDispatch', 'viewBilling',
-    'viewPayroll', 'viewDriverLogs', 'viewSettings', 'viewAdmin', 'viewChat',
+    'viewPayroll', 'viewDriverLogs', 'viewSafety', 'viewSettings', 'viewAdmin', 'viewChat',
     'createDispatch', 'manageDrivers', 'manageCompany', 'editBilling',
     'approvePayroll', 'manageWells', 'manageRoutes',
     'viewEQuipment', 'manageEquipment', 'manageEquipmentAssignments',
     'viewDVIR', 'manageDVIR', 'viewEquipmentDocuments', 'manageEquipmentDocuments',
-    'sendChat',
+    'sendChat', 'manageSafety',
     'manageRolesAndCapabilities', 'viewAllCompanies', 'viewTruthDebug',
     'viewDiagnostics',
   ],
   admin: [
     'viewHome', 'viewMobile', 'viewTickets', 'viewDispatch', 'viewBilling',
-    'viewPayroll', 'viewDriverLogs', 'viewSettings', 'viewAdmin', 'viewChat',
+    'viewPayroll', 'viewDriverLogs', 'viewSafety', 'viewSettings', 'viewAdmin', 'viewChat',
     'createDispatch', 'manageDrivers', 'manageCompany', 'editBilling',
     'approvePayroll', 'manageWells', 'manageRoutes',
     'viewEQuipment', 'manageEquipment', 'manageEquipmentAssignments',
     'viewDVIR', 'manageDVIR', 'viewEquipmentDocuments', 'manageEquipmentDocuments',
-    'sendChat',
+    'sendChat', 'manageSafety',
   ],
   manager: [
     'viewHome', 'viewMobile', 'viewTickets', 'viewDispatch', 'viewPayroll',
-    'viewDriverLogs', 'viewChat',
+    'viewDriverLogs', 'viewSafety', 'viewChat',
     'createDispatch', 'sendChat', 'manageDrivers', 'manageEquipmentAssignments',
-    'viewEQuipment', 'viewDVIR', 'viewEquipmentDocuments',
+    'viewEQuipment', 'viewDVIR', 'viewEquipmentDocuments', 'manageSafety',
   ],
   dispatch: [
-    'viewHome', 'viewMobile', 'viewTickets', 'viewDispatch', 'viewChat',
+    'viewHome', 'viewMobile', 'viewTickets', 'viewDispatch', 'viewSafety', 'viewChat',
     'createDispatch', 'sendChat', 'manageEquipmentAssignments',
     'viewEQuipment', 'viewDVIR', 'viewEquipmentDocuments',
+  ],
+  safety: [
+    'viewHome', 'viewTickets', 'viewDispatch', 'viewSafety', 'viewChat',
+    'sendChat', 'manageSafety', 'viewEQuipment', 'viewDVIR',
+  ],
+  lead: [
+    'viewHome', 'viewTickets', 'viewDispatch', 'viewSafety', 'viewChat',
+    'sendChat', 'manageSafety', 'viewEQuipment', 'viewDVIR',
   ],
   payroll: [
     'viewHome', 'viewBilling', 'viewPayroll', 'viewChat',
@@ -127,6 +140,8 @@ export const DEFAULT_ROLE_LABELS: Record<UserRole, string> = {
   it: 'Owner',
   admin: 'Admin',
   manager: 'Manager',
+  lead: 'Lead',
+  safety: 'Safety',
   dispatch: 'Dispatcher',
   payroll: 'Payroll',
   viewer: 'Viewer',
