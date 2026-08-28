@@ -97,23 +97,31 @@ describe(`Atlas1 — COMPLETE live assembled patch over ${N} pulls`, () => {
     expect(r.affected).toBe(1);                             // no successor relabel (stored lateEntry)
   });
 
-  test('older/backdated CREATE: processed + successor + receipt + incoming-delete; projections INTENTIONALLY absent', () => {
-    // Live backdated handler uses an EMPTY sidecar: a backdated insert never becomes
-    // the newest pull, so current/outgoing/wells-status/AFR are UNCHANGED and must not
-    // be rewritten. performance/production for the historical row are also not written
-    // (the newest pull owns the live projections). The patch is therefore processed
-    // (new + recomputed successors) + fence + receipt + incoming-delete only.
+  test('older/backdated CREATE: processed + successor + performance + production + receipt; current-only projections absent', () => {
+    // A backdated insert never becomes newest, so outgoing/wells-status/AFR (which
+    // derive exclusively from the current pull) are INTENTIONALLY absent. But it DOES
+    // participate in history aggregates → it carries its own performance row and its
+    // production-date total (count recomputed from authoritative rows). Patch =
+    // processed(new + recomputed successor) + performance + production + fence +
+    // receipt + incoming-delete.
     const p: ChronoPullInput = { packetId: 'atlas_mid', dateTimeUTC: new Date(START + 322 * STEP + STEP / 2).toISOString(), tankTopInches: 240, bblsTaken: 60, lateEntry: true };
+    const sidecar: CanonicalSidecar = {
+      performance: { wellKey: WELLKEY, perfTimestamp: '20250108_040000', row: { d: '2025-01-08', a: 240, p: 238 }, wellName: WELL, updatedIso: '2026-08-28T00:00:00.000Z' },
+      production: [{ wellKey: WELLKEY, date: '2025-01-08', value: { a: 40, w: 42, o: 39, u: '2026-08-28T00:00:00.000Z', n: 4 } }],
+    };
     const { patch, receipt } = buildCreateMutation({
-      wellName: WELL, operationId: p.packetId, fence: 647, revision: 647, committedAtMs: 0, patchHash: `${p.packetId}:647`, sidecar: {},
+      wellName: WELL, operationId: p.packetId, fence: 647, revision: 647, committedAtMs: 0, patchHash: `${p.packetId}:647`, sidecar,
       existingChain: chain, newPull: p, cfg, newProcessedRecord: { packetId: p.packetId, dateTimeUTC: p.dateTimeUTC, tankTopInches: 240, bblsTaken: 60, lateEntry: true, processedAt: '2026-08-28T00:00:00.000Z' },
     });
+    patch[`production/${WELLKEY}/wellName`] = WELL;
     patch[`packets/incoming/${p.packetId}`] = null;
     const r = report('backdated CREATE', patch, receipt, p.packetId);
     expect(r.hasReceipt).toBe(true);
     expect(r.hasIncomingDelete).toBe(true);
-    expect(r.projections).not.toContain('outgoing');       // intentionally absent (current unchanged)
+    expect(r.projections).toEqual(expect.arrayContaining(['performance', 'production'])); // history aggregates DO update
+    expect(r.projections).not.toContain('outgoing');       // current-only projection absent
     expect(r.projections).not.toContain('status');
+    expect(r.projections).not.toContain('afr');
     expect(r.affected).toBe(2);                             // new row + one recomputed successor
   });
 

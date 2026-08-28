@@ -766,17 +766,64 @@ export const processIncomingPull = functionsV1.runWith({ timeoutSeconds: CANONIC
         ...backdatedClean, packetId, tankTopInches: backdatedTop, tankAfterFeet: '',
         processedAt: backdatedNowIso, lateEntry: true,
       };
+
+      // A backdated insert never becomes CURRENT, so outgoing/wells-status/AFR
+      // (which derive exclusively from the NEWEST pull) are intentionally left
+      // unchanged. But it DOES participate in history aggregates: it gets its own
+      // performance row, and its production-date total's pull-count is recomputed
+      // from authoritative rows (never blind-incremented → replay-safe). The date's
+      // a/w/o rates are preserved when a newer pull on that date already set them
+      // (they belong to that later pull), so an old insert cannot regress them.
+      const backdatedPullMs = new Date(data.dateTimeUTC).getTime();
+      const backdatedProdDate = getProductionDate(backdatedPullMs);
+      const backdatedWellKey = wellName.replace(/\s+/g, '_');
+      const datePullCount = [...chain, newPull].filter(
+        (p) => Number.isFinite(Date.parse(p.dateTimeUTC)) && getProductionDate(Date.parse(p.dateTimeUTC)) === backdatedProdDate,
+      ).length;
+      const isNewestOnItsDate = ![...chain].some(
+        (p) => getProductionDate(Date.parse(p.dateTimeUTC)) === backdatedProdDate && Date.parse(p.dateTimeUTC) > backdatedPullMs,
+      );
+      let backdatedPerf: { wellKey: string; perfTimestamp: string; row: Record<string, unknown>; wellName: string; updatedIso: string } | null = null;
+      try {
+        const perf = buildPerformanceRow({
+          wellName, dateTimeUTC: data.dateTimeUTC, tankLevelFeet: data.tankLevelFeet,
+          predictedLevelInches: data.predictedLevelInches, prevResponse: null,
+        });
+        backdatedPerf = { wellKey: perf.wellKey, perfTimestamp: perf.perfTimestamp, row: perf.row as unknown as Record<string, unknown>, wellName, updatedIso: backdatedNowIso };
+      } catch (e) { console.error(`[BACKDATED] perf build failed:`, e); }
+
       const outcome = await runCanonicalMutation(makeCoordinatorIO(db, wellName), {
         wellName, operationId: packetId,
         buildPatch: async () => {
           const curRev = Number((await db.ref(`wells/${wellName}/status/chronoRevision`).once('value')).val()) || 0;
           const revision = curRev + 1;
+          // Recompute the production date's total from authoritative state: preserve
+          // the existing a/w/o (a newer pull owns them) and just set the recomputed
+          // count; if this backdated pull IS the newest on its date (empty date), seed
+          // from the pull itself.
+          const curProd = (await db.ref(`production/${backdatedWellKey}/${backdatedProdDate}`).once('value')).val() as { a?: number; w?: number; o?: number } | null;
+          const historicalPulls = await getHistoricalPulls(wellName, 500);
+          const winBbls = calculateWindowBblsPerDay(historicalPulls, cfg.bblPerFoot, backdatedPullMs);
+          const overBbls = calculateOvernightBblsPerDay(historicalPulls, cfg.bblPerFoot, backdatedPullMs);
+          const prodValue = {
+            a: (isNewestOnItsDate ? undefined : curProd?.a) ?? 0,
+            w: (isNewestOnItsDate ? winBbls : (curProd?.w ?? winBbls)) || 0,
+            o: (isNewestOnItsDate ? overBbls : (curProd?.o ?? overBbls)) || 0,
+            u: backdatedNowIso,
+            n: datePullCount, // authoritative count — never a blind increment
+          };
+          const backdatedSidecar: CanonicalSidecar = {
+            performance: backdatedPerf,
+            production: [{ wellKey: backdatedWellKey, date: backdatedProdDate, value: prodValue }],
+          };
           const built = buildCreateMutation({
             wellName, operationId: packetId, fence: revision, revision,
-            committedAtMs: Date.now(), patchHash: `${packetId}:${revision}`, sidecar: {},
+            committedAtMs: Date.now(), patchHash: `${packetId}:${revision}`, sidecar: backdatedSidecar,
             existingChain: chain, newPull, newProcessedRecord, cfg,
           });
-          // Source-request removal is part of the SAME atomic patch.
+          // Production label (sibling of the date node) + source-request removal are
+          // part of the SAME atomic patch.
+          built.patch[`production/${backdatedWellKey}/wellName`] = wellName;
           built.patch[`packets/incoming/${packetId}`] = null;
           return { patch: built.patch, receipt: built.receipt };
         },
