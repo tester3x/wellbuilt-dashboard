@@ -20,10 +20,11 @@ import {
   resolveEditTarget,
   strandedPacketVerdict,
 } from './packetGuards';
-import { runBackdatedInsertion, type BackdatedIO } from './processBackdatedPull';
 import type { ChronoPullInput, WellChronoConfig } from './chronoRecompute';
-import { planAcquire, canCommit, planRelease, acceptFencedWrite, type FenceRecord } from './wellFence';
-import { CANONICAL_COMMIT_TIMEOUT_SECONDS } from './chronoCommitCoordinator';
+import { CANONICAL_COMMIT_TIMEOUT_SECONDS, runCanonicalMutation, type CommitReceipt } from './chronoCommitCoordinator';
+import { makeCoordinatorIO } from './coordinatorIO';
+import { assembleCanonicalPatch, receiptPathFor } from './canonicalPatch';
+import { buildCreateMutation } from './mutationBuilders';
 import { computeAFRFromRates } from './pullFormulas';
 import { getProductionDate, calculateWindowBblsPerDay, calculateOvernightBblsPerDay, computeBbls24hrs, type HistoricalPull } from './productionFormulas';
 import { formatLocalDateTime, outgoingCompanyId, inchesToFeetInches, feetInchesToInches, daysToHMM, daysToHMMSS } from './wbmFormat';
@@ -517,78 +518,14 @@ async function loadChronoPulls(wellName: string): Promise<ChronoPullInput[]> {
   return out;
 }
 
-// EXCLUSIVE per-well serialization via a leased lock. The entire
-// read→compute→commit runs while the lock is held, so no other writer can
-// interleave between plan and commit (closing the check/commit race a bare
-// revision increment would leave open). A crashed holder's lease expires so the
-// well is never wedged. The atomic multi-location update is safe under the lock.
-const CHRONO_LEASE_MS = 30_000;
-function makeBackdatedIO(wellName: string): BackdatedIO {
-  const fenceRef = db.ref(`wells/${wellName}/status/chronoFence`);
-  const revRef = db.ref(`wells/${wellName}/status/chronoRevision`);
-  let heldToken: string | null = null;
-  let heldFence = 0;
-  return {
-    loadWellPulls: () => loadChronoPulls(wellName),
-    readWellRevision: async () => {
-      const s = await revRef.once('value');
-      const v = Number(s.val());
-      return Number.isFinite(v) ? v : 0;
-    },
-    withWellLock: async (_w, fn) => {
-      const token = `${wellName}_${Date.now()}_${Math.floor(Math.random() * 1e9)}`;
-      let acquired: FenceRecord | null = null;
-      const res = await fenceRef.transaction((cur: FenceRecord | null) => {
-        const d = planAcquire(cur, token, Date.now(), CHRONO_LEASE_MS);
-        if (d.decision === 'contended') return; // abort — another owner holds it
-        acquired = d.next;
-        return d.next;
-      });
-      if (!res.committed || !acquired) return { ran: false };
-      heldToken = token; heldFence = (acquired as FenceRecord).fence;
-      try {
-        return { ran: true, value: await fn() };
-      } finally {
-        await fenceRef.transaction((cur: FenceRecord | null) => planRelease(cur, token));
-        heldToken = null;
-      }
-    },
-    // Fence-gated commit. canCommit is a FAST pre-check; correctness comes from
-    // per-node fence CAS below — the final write of each row lands ONLY if our
-    // fence >= the fence already stamped on that node. A stale worker that paused
-    // past its lease while a higher-fenced worker committed is rejected at every
-    // node (closes the post-canCommit TOCTOU window); an equal-fence retry is
-    // idempotent. (The chrono cascade is bounded to ~1–6 rows, so per-node CAS is
-    // cheap; strict single-atomic-across-all-paths is the serialized-queue's job
-    // in the unified coordinator — see design notes.)
-    commit: async (updates) => {
-      const check = await fenceRef.transaction((cur: FenceRecord | null) =>
-        canCommit(cur, heldToken ?? '', heldFence) ? cur : undefined);
-      if (!check.committed) throw new Error('chrono_fence_lost');
-
-      // Group flat path updates back into per-processed-row field maps.
-      const byRow = new Map<string, Record<string, unknown>>();
-      const other: Record<string, unknown> = {};
-      for (const [path, value] of Object.entries(updates)) {
-        const m = path.match(/^(packets\/processed\/[^/]+)\/(.+)$/);
-        if (m) {
-          const row = byRow.get(m[1]) ?? {};
-          row[m[2]] = value;
-          byRow.set(m[1], row);
-        } else {
-          other[path] = value;
-        }
-      }
-      for (const [rowPath, fields] of byRow) {
-        await db.ref(rowPath).transaction((cur: { chronoFence?: unknown } | null) => {
-          if (!acceptFencedWrite(cur?.chronoFence, heldFence)) return cur; // reject stale (unchanged)
-          return { ...(cur ?? {}), ...fields, chronoFence: heldFence };
-        });
-      }
-      if (Object.keys(other).length) await db.ref().update(other);
-    },
-  };
-}
+// EXCLUSIVE per-well serialization is provided by the canonical coordinator's
+// leased lock (chronoCommitCoordinator): the entire read→compute→commit runs
+// while the lock is held, so no other writer interleaves between plan and
+// commit, and a crashed holder's lease expires past the recovery horizon.
+// (Legacy backdated-only writer removed 2026-08-28: makeBackdatedIO/
+// runBackdatedInsertion is superseded by the unified canonical coordinator.
+// The older-CREATE path now routes through runCanonicalMutation +
+// buildCreateMutation, exactly like the newest path — ONE writer.)
 
 /**
  * CST/CDT offset in milliseconds.
@@ -596,34 +533,9 @@ function makeBackdatedIO(wellName: string): BackdatedIO {
  */
 // production/date formulas extracted to ./productionFormulas (imported above).
 
-/**
- * Write daily production log to Firebase.
- * Stores AFR, window-averaged, and overnight bbls/day for comparison.
- */
-async function writeProductionLog(
-  wellName: string, pullTimestamp: number,
-  afrBblsDay: number, windowBblsDay: number, overnightBblsDay: number
-): Promise<void> {
-  try {
-    const wellKey = wellName.replace(/\s+/g, '_');
-    const prodDate = getProductionDate(pullTimestamp);
-    const ref = db.ref(`production/${wellKey}/${prodDate}`);
-    const current = (await ref.once('value')).val();
-    const pullCount = (current?.n || 0) + 1;
-
-    await ref.set({
-      a: afrBblsDay || 0,
-      w: windowBblsDay || 0,
-      o: overnightBblsDay || 0,
-      u: new Date().toISOString(),
-      n: pullCount,
-    });
-    await db.ref(`production/${wellKey}/wellName`).set(wellName);
-    console.log(`[Production] ${wellName} ${prodDate}: afr=${afrBblsDay} window=${windowBblsDay} overnight=${overnightBblsDay} pulls=${pullCount}`);
-  } catch (error) {
-    console.error(`[Production] Error writing log for ${wellName}:`, error);
-  }
-}
+// (Daily production log is now written as part of the ONE canonical commit in
+// processIncomingPull — production/<key>/<date> {a,w,o,u,n} + wellName — never
+// as a standalone writeProductionLog set.)
 
 // Anomaly detection constants (tighter than VBA for better accuracy)
 // VBA uses 5x/2.5x but that's too loose for wells with consistent flow rates
@@ -808,12 +720,44 @@ export const processIncomingPull = functionsV1.runWith({ timeoutSeconds: CANONIC
         allowedBottomInches: (Number((config as { allowedBottom?: unknown; bottomLevel?: unknown }).allowedBottom ?? (config as { bottomLevel?: unknown }).bottomLevel) || 0) * 12 || undefined,
         avgFlowRateDays: Number((config as { avgFlowRateMinutes?: unknown }).avgFlowRateMinutes) > 0 ? Number((config as { avgFlowRateMinutes?: unknown }).avgFlowRateMinutes) / 1440 : undefined,
       };
-      const outcome = await runBackdatedInsertion(makeBackdatedIO(wellName), {
-        wellName, packetId, data: data as unknown as Record<string, unknown>,
-        tankTopInches: backdatedTop, cfg, nowIso: new Date().toISOString(),
+      // Route the older CREATE through the SAME canonical coordinator as the
+      // newest path — one writer, one atomic patch, one receipt. buildCreateMutation
+      // inserts by event time, recomputes every affected successor via the engine
+      // (historical bottoms preserved), and leaves current/outgoing unchanged (a
+      // backdated insert never becomes newest). Empty sidecar: the current pull's
+      // outgoing/status/AFR do not change.
+      const chain = await loadChronoPulls(wellName);
+      const backdatedNowIso = new Date().toISOString();
+      const newPull: ChronoPullInput = {
+        packetId, dateTimeUTC: data.dateTimeUTC, tankTopInches: backdatedTop,
+        bblsTaken: parseFloat(String(data.bblsTaken)) || 0,
+        wellDown: data.wellDown === true || (data.wellDown as unknown) === 'true',
+        submittedAtMs: Date.now(),
+        operationId: typeof (data as { operationId?: unknown }).operationId === 'string' ? (data as { operationId?: string }).operationId : undefined,
+        recoveredFromPacketId: typeof (data as { recoveredFromPacketId?: unknown }).recoveredFromPacketId === 'string' ? (data as { recoveredFromPacketId?: string }).recoveredFromPacketId : undefined,
+      };
+      const { pendingEditEvents: _bpe, originalSubmittedValues: _bov, hasQueuedCorrection: _bhq, ...backdatedClean } = data as unknown as Record<string, unknown>;
+      const newProcessedRecord: Record<string, unknown> = {
+        ...backdatedClean, packetId, tankTopInches: backdatedTop, tankAfterFeet: '',
+        processedAt: backdatedNowIso, lateEntry: true,
+      };
+      const outcome = await runCanonicalMutation(makeCoordinatorIO(db, wellName), {
+        wellName, operationId: packetId,
+        buildPatch: async () => {
+          const curRev = Number((await db.ref(`wells/${wellName}/status/chronoRevision`).once('value')).val()) || 0;
+          const revision = curRev + 1;
+          const built = buildCreateMutation({
+            wellName, operationId: packetId, fence: revision, revision,
+            committedAtMs: Date.now(), patchHash: `${packetId}:${revision}`, sidecar: {},
+            existingChain: chain, newPull, newProcessedRecord, cfg,
+          });
+          return { patch: built.patch, receipt: built.receipt };
+        },
       });
       console.log(`[BACKDATED] ${wellName}: ${packetId} → ${outcome.status}`);
-      await db.ref(`packets/incoming/${packetId}`).remove();
+      if (outcome.status === 'committed' || outcome.status === 'already_done') {
+        await db.ref(`packets/incoming/${packetId}`).remove();
+      }
       return null;
     }
 
@@ -966,7 +910,7 @@ export const processIncomingPull = functionsV1.runWith({ timeoutSeconds: CANONIC
     if ((data as any).originalSubmittedAt) {
       (processedClean as any).originalSubmittedAt = (data as any).originalSubmittedAt;
     }
-    await db.ref(`packets/processed/${packetId}`).set(processedClean);
+    // (processed row is written by the ONE canonical commit below — never here.)
 
     // Materialize queued post-Send correction trail (product: Send is the edit boundary).
     await materializeQueuedEditTrail(packetId, data as any);
@@ -988,48 +932,36 @@ export const processIncomingPull = functionsV1.runWith({ timeoutSeconds: CANONIC
       packetId, config, timestampIso: timestamp.toISOString(), windowBblsDay, overnightBblsDay,
     }) as unknown as OutgoingResponse;
 
-    // Write to outgoing/ (delete old responses for this well first)
+    // Collect the prior response ids for this well — the canonical commit deletes
+    // them and writes the new one in ONE atomic update (never a read-then-remove
+    // race, never a partial outgoing/current state).
     const oldResponses = await db.ref('packets/outgoing')
       .orderByChild('wellName')
       .equalTo(wellName)
       .once('value');
+    const oldResponseIds: string[] = [];
+    oldResponses.forEach((child) => { if (child.key) oldResponseIds.push(child.key); });
 
-    const deletePromises: Promise<void>[] = [];
-    oldResponses.forEach((child) => {
-      deletePromises.push(child.ref.remove());
-    });
-    await Promise.all(deletePromises);
-
-    // Write new response
     const responseId = `response_${timestamp.toISOString().replace(/[-:]/g, '').replace('T', '_').split('.')[0]}_${cleanName}`;
-    await db.ref(`packets/outgoing/${responseId}`).set(outgoingResponse);
 
-    // Write performance data for Performance screen
-    // Format: performance/{wellKey}/rows/{timestamp} = { d, a, p }
+    // Performance row — computed here, committed atomically below.
+    let perfPiece: { wellKey: string; perfTimestamp: string; row: Record<string, unknown>; wellName: string; updatedIso: string } | null = null;
     try {
       const perf = buildPerformanceRow({
         wellName, dateTimeUTC: data.dateTimeUTC, tankLevelFeet: data.tankLevelFeet,
         predictedLevelInches: data.predictedLevelInches, prevResponse,
       });
-      const wellKey = perf.wellKey;
-
-      await db.ref(`performance/${wellKey}/rows/${perf.perfTimestamp}`).set(perf.row);
-      await db.ref(`performance/${wellKey}/wellName`).set(wellName);
-      await db.ref(`performance/${wellKey}/updated`).set(new Date().toISOString());
+      perfPiece = { wellKey: perf.wellKey, perfTimestamp: perf.perfTimestamp, row: perf.row as unknown as Record<string, unknown>, wellName, updatedIso: new Date().toISOString() };
       console.log(`[Performance] ${wellName}: a=${perf.row.a} p=${perf.row.p}`);
     } catch (perfError) {
-      console.error(`[Performance] Error writing data for ${wellName}:`, perfError);
+      console.error(`[Performance] Error building perf row for ${wellName}:`, perfError);
     }
 
-    // Update well_config with calculated AFR so app stays in sync
-    // This is the SINGLE SOURCE OF TRUTH for flow rate
+    // AFR rolling values (well_config) — committed atomically below.
+    let afrPiece: { wellName: string; avgFlowRate: string; avgFlowRateMinutes: number } | null = null;
     if (afr > 0) {
-      const afrMinutes = afr * 24 * 60; // Convert days to minutes
-      await db.ref(`well_config/${wellName}`).update({
-        avgFlowRate: daysToHMMSS(afr),
-        avgFlowRateMinutes: Math.round(afrMinutes * 100) / 100, // Round to 2 decimal places
-      });
-      console.log(`Updated well_config/${wellName} avgFlowRate: ${daysToHMMSS(afr)} (${afrMinutes.toFixed(2)} min)`);
+      const afrMin = afr * 24 * 60;
+      afrPiece = { wellName, avgFlowRate: daysToHMMSS(afr), avgFlowRateMinutes: Math.round(afrMin * 100) / 100 };
     }
 
     // ============================================================
@@ -1046,19 +978,58 @@ export const processIncomingPull = functionsV1.runWith({ timeoutSeconds: CANONIC
       nowIso: new Date().toISOString(),
     }) as unknown as WellStatus;
 
-    // Write to wells/{wellName}/status (THE source of truth)
-    await db.ref(`wells/${wellName}/status`).set(wellStatus);
+    // Production value (AFR + window + overnight bbls/day) for THIS pull's date.
+    const afrBblsDay = afr > 0 ? Math.round((1 / afr) * bblPerFoot) : 0;
+    const prodWellKey = wellName.replace(/\s+/g, '_');
+    const prodDate = getProductionDate(pullTimeMs);
 
-    console.log(`[NEW] Wrote wells/${wellName}/status`);
+    // ── ONE canonical commit ───────────────────────────────────────────────
+    // processed + outgoing(delete olds + new) + wells/status + performance +
+    // production + well_config AFR + chronoRevision + completion receipt land as
+    // a single atomic multipath update, serialized by the per-well lock. Nothing
+    // above wrote any of these paths directly. The receipt is part of the SAME
+    // update, so it can never exist without the canonical state (and vice versa).
+    const commitOutcome = await runCanonicalMutation(makeCoordinatorIO(db, wellName), {
+      wellName, operationId: packetId,
+      buildPatch: async () => {
+        // Monotonic well revision — decoupled from the coordinator's lock fence
+        // (which resets each lock lifecycle). Read+increment under the held lock.
+        const curRev = Number((await db.ref(`wells/${wellName}/status/chronoRevision`).once('value')).val()) || 0;
+        const revision = curRev + 1;
+        // Production pull-count for the date (read under the lock).
+        const curProd = (await db.ref(`production/${prodWellKey}/${prodDate}`).once('value')).val() as { n?: number } | null;
+        const nowIso = new Date().toISOString();
+        const receipt: CommitReceipt = {
+          operationId: packetId, mutationType: 'create', wellName, fence: revision, revision,
+          affectedPacketIds: [packetId], committedAtMs: Date.now(), patchHash: `${packetId}:${revision}`,
+        };
+        const patch = assembleCanonicalPatch({
+          processedUpdates: { [`packets/processed/${packetId}`]: processedClean },
+          outgoing: { deleteResponseIds: oldResponseIds, responseId, response: outgoingResponse as unknown as Record<string, unknown> },
+          wellStatus: { wellName, status: wellStatus as unknown as Record<string, unknown> },
+          performance: perfPiece,
+          production: [{ wellKey: prodWellKey, date: prodDate, value: { a: afrBblsDay || 0, w: windowBblsDay || 0, o: overnightBblsDay || 0, u: nowIso, n: (curProd?.n || 0) + 1 } }],
+          afr: afrPiece,
+          // Also stamp production wellName label (sibling of the date node).
+          fence: { wellName, revision },
+          receipt, receiptPath: receiptPathFor(wellName, packetId),
+        });
+        patch[`production/${prodWellKey}/wellName`] = wellName;
+        return { patch, receipt };
+      },
+    });
+    if (commitOutcome.status !== 'committed' && commitOutcome.status !== 'already_done') {
+      // contended / lost_ownership / commit_failed → leave the incoming packet in
+      // place for the trigger to retry; do NOT partially write anything.
+      console.error(`[CANONICAL] ${wellName}: ${packetId} → ${commitOutcome.status} (incoming left for retry)`);
+      return null;
+    }
+    console.log(`[CANONICAL] ${wellName}: ${packetId} → ${commitOutcome.status} (processed+outgoing+status+perf+production+afr+receipt, 1 atomic update)`);
 
     await notifyIncomingVersionBestEffort(db.ref('packets/incoming_version'), {
       outgoingCommitted: true,
       pullAccepted: true,
     });
-
-    // Write production log (AFR + window + overnight bbls/day for comparison)
-    const afrBblsDay = afr > 0 ? Math.round((1 / afr) * bblPerFoot) : 0;
-    await writeProductionLog(wellName, pullTimeMs, afrBblsDay, windowBblsDay, overnightBblsDay);
 
     // ── canonical_jobs + Phase 1.2 server-side back-patch ─────────────────
     // Best-effort. Failure here never blocks packet processing — canonical_jobs

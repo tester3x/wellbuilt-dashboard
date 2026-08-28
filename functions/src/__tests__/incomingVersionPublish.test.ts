@@ -10,17 +10,23 @@ import { join } from 'path';
 const src = (rel: string) => readFileSync(join(__dirname, '../..', rel), 'utf8');
 
 describe('incoming_version publish contract', () => {
-  it('outgoing and performance writes precede the publication signal', () => {
+  it('the ONE canonical commit precedes the publication signal (no sequential writes)', () => {
     const index = src('src/index.ts');
     const pull = index.slice(index.indexOf('export const processIncomingPull'), index.indexOf('export const processEditRequest'));
-    const outgoing = pull.indexOf('packets/outgoing/${responseId}');
-    const perf = pull.indexOf("performance/${wellKey}/rows/${perf.perfTimestamp}`).set(");
-    const wells = pull.indexOf("wells/${wellName}/status`).set(wellStatus)");
+    // Canonical state (outgoing/performance/wells-status/production/afr) is now
+    // composed into ONE atomic patch via assembleCanonicalPatch and submitted by
+    // runCanonicalMutation — the publish signal fires AFTER that commit.
+    const commit = pull.indexOf('runCanonicalMutation(makeCoordinatorIO(db, wellName)');
+    const assemble = pull.indexOf('assembleCanonicalPatch({');
     const notify = pull.indexOf('notifyIncomingVersionBestEffort');
-    expect(outgoing).toBeGreaterThan(0);
-    expect(perf).toBeGreaterThan(outgoing);
-    expect(wells).toBeGreaterThan(perf);
-    expect(notify).toBeGreaterThan(wells);
+    expect(commit).toBeGreaterThan(0);
+    expect(assemble).toBeGreaterThan(commit);
+    expect(notify).toBeGreaterThan(assemble);
+    // The legacy sequential canonical writes are GONE from the pull handler.
+    expect(pull).not.toMatch(/packets\/outgoing\/\$\{responseId\}`\)\.set\(/);
+    expect(pull).not.toMatch(/wells\/\$\{wellName\}\/status`\)\.set\(wellStatus\)/);
+    expect(pull).not.toMatch(/performance\/\$\{wellKey\}\/rows\/\$\{perf\.perfTimestamp\}`\)\.set\(/);
+    expect(pull).not.toMatch(/well_config\/\$\{wellName\}`\)\.update\(/);
   });
 
   it('{committed:false} returns no published version', async () => {
