@@ -63,6 +63,47 @@ describe('makeCoordinatorIO + runCanonicalMutation (in-memory RTDB)', () => {
     expect(store).toEqual(before);
   });
 
+  test('authorized DELETE-not-found: receipted terminal no-op, replay + collision idempotent', async () => {
+    const { db, store } = makeMemDb();
+    const targetId = 'gone123';
+    const op = `delete_${targetId}`;
+    // Mirror the handler's not-found buildPatch: audit archive + incoming null +
+    // receipt (affectedPacketIds []), NO processed row change, NO well-state change.
+    const notFoundReq = (incomingId: string, auditResult: string): MutationRequest => ({
+      wellName: WELL, operationId: op,
+      buildPatch: async () => {
+        const rec: CommitReceipt = { operationId: op, mutationType: 'delete', wellName: WELL, fence: 1, revision: 1, affectedPacketIds: [], committedAtMs: 0, patchHash: `${op}:1:notfound` };
+        return {
+          patch: {
+            [`packets/processed/delete_${targetId}`]: { result: auditResult },
+            [`packets/incoming/${incomingId}`]: null,
+            [receiptPathFor(WELL, op)]: rec,
+          },
+          receipt: rec,
+        };
+      },
+    });
+
+    // First execution → committed; receipt present; no well current/outgoing/status.
+    const first = await runCanonicalMutation(makeCoordinatorIO(db, WELL), notFoundReq('inc_A', 'packet_not_found'));
+    expect(first.status).toBe('committed');
+    expect(store[receiptPathFor(WELL, op)]).toBeTruthy();
+    expect((store[receiptPathFor(WELL, op)] as CommitReceipt).affectedPacketIds).toEqual([]);
+    expect(store[`packets/processed/delete_${targetId}`]).toEqual({ result: 'packet_not_found' });
+    expect(Object.keys(store).some((k) => k.includes('/outgoing/') || k.endsWith('/current'))).toBe(false);
+
+    // Same-id replay → already_done, no change (idempotent by operationId).
+    const before = JSON.stringify(store);
+    const replay = await runCanonicalMutation(makeCoordinatorIO(db, WELL), notFoundReq('inc_B', 'packet_not_found'));
+    expect(replay.status).toBe('already_done');
+    expect(JSON.stringify(store)).toBe(before);
+
+    // Same-target/different-request collision → SAME operationId → already_done.
+    const collision = await runCanonicalMutation(makeCoordinatorIO(db, WELL), notFoundReq('inc_C', 'DIFFERENT_material'));
+    expect(collision.status).toBe('already_done');
+    expect(store[`packets/processed/delete_${targetId}`]).toEqual({ result: 'packet_not_found' }); // first result stands
+  });
+
   test('a second op while the first holds the lock is contended (serialized)', async () => {
     const { db, store } = makeMemDb();
     // Pre-seed a live committing lock held by someone else.

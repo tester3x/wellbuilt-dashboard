@@ -13,6 +13,7 @@ import {
   editMaterialChange,
   evaluateIncomingPull,
   isStaleRevision,
+  malformedDeleteVerdict,
   orphanEditVerdict,
   packetIdCollisionVerdict,
   quarantineIncomingPacket,
@@ -2859,6 +2860,21 @@ export const processDeleteRequest = functionsV1.runWith({ timeoutSeconds: CANONI
 
     console.log(`Processing delete for ${wellName}: ${targetPacketId}`);
 
+    // Malformed/unresolvable delete (no well or no target id) → governed quarantine,
+    // NOT a silent no-op. A well-formed delete whose target happens to be absent is
+    // handled below as an authorized terminal no-op (with a receipt), which is a
+    // DIFFERENT, deterministic outcome from a malformed request.
+    if (typeof wellName !== 'string' || !wellName || typeof targetPacketId !== 'string' || !targetPacketId) {
+      console.log(`[QUARANTINE] delete request malformed — wellName=${JSON.stringify(wellName)} targetPacketId=${JSON.stringify(targetPacketId)}`);
+      await quarantineIncomingPacket(db.ref(), {
+        packetId: context.params.packetId,
+        packet: data,
+        verdict: malformedDeleteVerdict(wellName, targetPacketId),
+        nowMs: Date.now(),
+      });
+      return null;
+    }
+
     // Read the packet before deleting (to check if it was the latest)
     const targetSnap = await db.ref(`packets/processed/${targetPacketId}`).once('value');
     const deletedPacket = targetSnap.exists() ? targetSnap.val() : null;
@@ -3011,10 +3027,31 @@ export const processDeleteRequest = functionsV1.runWith({ timeoutSeconds: CANONI
     // commit — consume the orphan delete request + write its audit archive as ONE
     // atomic update (never a lone remove that could strand the audit).
     if (!deletedPacket) {
-      await db.ref().update({
-        [`packets/processed/delete_${targetPacketId}`]: auditData,
-        [`packets/incoming/${deleteIncomingId}`]: null,
+      // Authorized, well-formed delete whose target is already absent: a terminal,
+      // deterministic NO-OP mutation. It still routes through the governed
+      // coordinator so it gets an operation RECEIPT (same-id replay → already_done,
+      // distinguishable from a collision) and consumes the source request in the
+      // SAME atomic update — with NO well-state (current/outgoing/status/perf) change.
+      const notFoundOutcome = await runCanonicalMutation(makeCoordinatorIO(db, wellName), {
+        wellName, operationId: `delete_${targetPacketId}`,
+        buildPatch: async () => {
+          const curRev = Number((await db.ref(`wells/${wellName}/status/chronoRevision`).once('value')).val()) || 0;
+          const revision = curRev + 1;
+          const receipt: CommitReceipt = {
+            operationId: `delete_${targetPacketId}`, mutationType: 'delete', wellName, fence: revision, revision,
+            affectedPacketIds: [], committedAtMs: Date.now(), patchHash: `delete_${targetPacketId}:${revision}:notfound`,
+          };
+          const patch = assembleCanonicalPatch({
+            processedUpdates: {}, // no row removed — the target was already absent
+            fence: { wellName, revision },
+            receipt, receiptPath: receiptPathFor(wellName, `delete_${targetPacketId}`),
+          });
+          patch[`packets/processed/delete_${targetPacketId}`] = auditData; // terminal audit result
+          patch[`packets/incoming/${deleteIncomingId}`] = null;            // source-request consumption
+          return { patch, receipt };
+        },
       });
+      console.log(`[CANONICAL-DELETE] ${wellName}: ${targetPacketId} → ${notFoundOutcome.status} (authorized no-op, target absent)`);
     }
 
     await notifyIncomingVersionBestEffort(db.ref('packets/incoming_version'), {

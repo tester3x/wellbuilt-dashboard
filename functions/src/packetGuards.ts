@@ -30,8 +30,19 @@ export type RejectionReason =
   | 'AMBIGUOUS_EDIT_TARGET'
   | 'MALFORMED_PULL_TIME'
   | 'MALFORMED_WELL_WATERMARK'
+  | 'MALFORMED_DELETE'
   | 'STRANDED_INCOMING_PACKET'
   | 'PACKET_ID_COLLISION';
+
+/** A malformed delete request (no well or no target id) — governed rejection,
+ *  distinct from an authorized delete whose target is merely absent. */
+export function malformedDeleteVerdict(wellName: unknown, targetPacketId: unknown): GuardVerdict {
+  return {
+    action: 'quarantine',
+    reason: 'MALFORMED_DELETE',
+    readableReason: `delete request missing wellName or target packetId (wellName=${JSON.stringify(wellName)}, packetId=${JSON.stringify(targetPacketId)})`,
+  };
+}
 
 export interface GuardVerdict {
   /** 'process' — accept as (potentially) newest, advancing the watermark.
