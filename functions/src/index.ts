@@ -28,6 +28,7 @@ import { computeAFRFromRates } from './pullFormulas';
 import { getProductionDate, calculateWindowBblsPerDay, calculateOvernightBblsPerDay, computeBbls24hrs, type HistoricalPull } from './productionFormulas';
 import { formatLocalDateTime, outgoingCompanyId, inchesToFeetInches, feetInchesToInches, daysToHMM, daysToHMMSS } from './wbmFormat';
 import { buildOutgoingResponse, buildWellStatus } from './outgoingBuilders';
+import { buildPerformanceRow } from './performanceBuilders';
 import {
   assertedFromEditedFields,
   buildAppliedEditEvent,
@@ -1018,44 +1019,16 @@ export const processIncomingPull = functionsV1.runWith({ timeoutSeconds: CANONIC
     // Write performance data for Performance screen
     // Format: performance/{wellKey}/rows/{timestamp} = { d, a, p }
     try {
-      const pullTime = new Date(data.dateTimeUTC);
-      const perfTimestamp = `${pullTime.getFullYear()}${String(pullTime.getMonth() + 1).padStart(2, '0')}${String(pullTime.getDate()).padStart(2, '0')}_${String(pullTime.getHours()).padStart(2, '0')}${String(pullTime.getMinutes()).padStart(2, '0')}${String(pullTime.getSeconds()).padStart(2, '0')}`;
-      const perfDateStr = `${pullTime.getFullYear()}-${String(pullTime.getMonth() + 1).padStart(2, '0')}-${String(pullTime.getDate()).padStart(2, '0')}`;
-      const wellKey = wellName.replace(/\s+/g, '_');
-      const actualInches = Math.floor(data.tankLevelFeet * 12);
-
-      // Best: use predictedLevelInches from packet (what driver saw on screen)
-      let predictedInches: number | undefined;
-      if (data.predictedLevelInches !== undefined && data.predictedLevelInches !== null) {
-        predictedInches = Math.floor(Number(data.predictedLevelInches));
-      } else if (prevResponse && prevResponse.currentLevel && prevResponse.flowRate && prevResponse.flowRate !== 'Unknown') {
-        // Fallback: calculate from previous response (what driver was looking at)
-        const levelMatch = prevResponse.currentLevel.match(/(\d+)'(\d+)"/);
-        const flowMatch = prevResponse.flowRate.match(/^(\d+):(\d{2}):(\d{2})$/);
-        if (levelMatch && flowMatch) {
-          const prevBottomFeet = parseInt(levelMatch[1]) + parseInt(levelMatch[2]) / 12;
-          const afrDays = (parseInt(flowMatch[1]) + parseInt(flowMatch[2]) / 60 + parseInt(flowMatch[3]) / 3600) / 24;
-          const prevTime = new Date(prevResponse.timestampUTC || prevResponse.timestamp).getTime();
-          const timeDiffDays = (pullTime.getTime() - prevTime) / (1000 * 60 * 60 * 24);
-          if (afrDays > 0 && timeDiffDays > 0) {
-            const growthFeet = timeDiffDays / afrDays;
-            predictedInches = Math.floor((prevBottomFeet + growthFeet) * 12);
-          }
-        }
-      }
-
-      if (predictedInches === undefined) {
-        predictedInches = actualInches;
-      }
-
-      await db.ref(`performance/${wellKey}/rows/${perfTimestamp}`).set({
-        d: perfDateStr,
-        a: actualInches,
-        p: predictedInches,
+      const perf = buildPerformanceRow({
+        wellName, dateTimeUTC: data.dateTimeUTC, tankLevelFeet: data.tankLevelFeet,
+        predictedLevelInches: data.predictedLevelInches, prevResponse,
       });
+      const wellKey = perf.wellKey;
+
+      await db.ref(`performance/${wellKey}/rows/${perf.perfTimestamp}`).set(perf.row);
       await db.ref(`performance/${wellKey}/wellName`).set(wellName);
       await db.ref(`performance/${wellKey}/updated`).set(new Date().toISOString());
-      console.log(`[Performance] ${wellName}: a=${actualInches} p=${predictedInches}`);
+      console.log(`[Performance] ${wellName}: a=${perf.row.a} p=${perf.row.p}`);
     } catch (perfError) {
       console.error(`[Performance] Error writing data for ${wellName}:`, perfError);
     }

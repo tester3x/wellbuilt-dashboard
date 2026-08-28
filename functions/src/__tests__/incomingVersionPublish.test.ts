@@ -14,7 +14,7 @@ describe('incoming_version publish contract', () => {
     const index = src('src/index.ts');
     const pull = index.slice(index.indexOf('export const processIncomingPull'), index.indexOf('export const processEditRequest'));
     const outgoing = pull.indexOf('packets/outgoing/${responseId}');
-    const perf = pull.indexOf("performance/${wellKey}/rows/${perfTimestamp}`).set(");
+    const perf = pull.indexOf("performance/${wellKey}/rows/${perf.perfTimestamp}`).set(");
     const wells = pull.indexOf("wells/${wellName}/status`).set(wellStatus)");
     const notify = pull.indexOf('notifyIncomingVersionBestEffort');
     expect(outgoing).toBeGreaterThan(0);
