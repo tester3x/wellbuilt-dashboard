@@ -27,7 +27,7 @@ import { CANONICAL_COMMIT_TIMEOUT_SECONDS } from './chronoCommitCoordinator';
 import { computeAFRFromRates } from './pullFormulas';
 import { getProductionDate, calculateWindowBblsPerDay, calculateOvernightBblsPerDay, computeBbls24hrs, type HistoricalPull } from './productionFormulas';
 import { formatLocalDateTime, outgoingCompanyId, inchesToFeetInches, feetInchesToInches, daysToHMM, daysToHMMSS } from './wbmFormat';
-import { buildOutgoingResponse } from './outgoingBuilders';
+import { buildOutgoingResponse, buildWellStatus } from './outgoingBuilders';
 import {
   assertedFromEditedFields,
   buildAppliedEditEvent,
@@ -1077,41 +1077,13 @@ export const processIncomingPull = functionsV1.runWith({ timeoutSeconds: CANONIC
     // ============================================================
     const afrMinutes = afr > 0 ? afr * 24 * 60 : 0;
 
-    const wellStatus: WellStatus = {
-      wellName,
-      config: {
-        tanks,
-        bottomLevel: bottomInches / 12, // Convert back to feet
-        route: config.route || 'Unassigned',
-        pullBbls,
-      },
-      current: {
-        level: inchesToFeetInches(currentLevelInches),
-        levelInches: currentLevelInches,
-        asOf: new Date().toISOString(),
-      },
-      lastPull: {
-        dateTime: data.dateTime || formatLocalDateTime(new Date(data.dateTimeUTC)),
-        dateTimeUTC: data.dateTimeUTC,
-        topLevel: inchesToFeetInches(tankTopInches),
-        topLevelInches: tankTopInches,
-        bottomLevel: inchesToFeetInches(tankAfterInches),
-        bottomLevelInches: tankAfterInches,
-        bblsTaken: data.bblsTaken,
-        driverName: data.driverName,
-        packetId,
-      },
-      calculated: {
-        flowRate: afr > 0 ? daysToHMMSS(afr) : 'Unknown',
-        flowRateMinutes: Math.round(afrMinutes * 100) / 100,
-        bbls24hrs: parseInt(bbls24hrs) || 0,
-        nextPullTime: estDateTimePull ? formatLocalDateTime(new Date(estDateTimePull)) : 'Unknown',
-        nextPullTimeUTC: estDateTimePull || '',
-        timeTillPull: nextIsDown ? 'Down' : (estTimeToPull || 'Calculating...'),
-      },
-      isDown: nextIsDown,
-      updatedAt: new Date().toISOString(),
-    };
+    const wellStatus: WellStatus = buildWellStatus({
+      wellName, tanks, bottomInches, route: config.route, pullBbls,
+      currentLevelInches, dateTime: data.dateTime, dateTimeUTC: data.dateTimeUTC,
+      tankTopInches, tankAfterInches, bblsTaken: data.bblsTaken, driverName: data.driverName,
+      packetId, afr, afrMinutes, bbls24hrs, estDateTimePull, estTimeToPull, nextIsDown,
+      nowIso: new Date().toISOString(),
+    }) as unknown as WellStatus;
 
     // Write to wells/{wellName}/status (THE source of truth)
     await db.ref(`wells/${wellName}/status`).set(wellStatus);

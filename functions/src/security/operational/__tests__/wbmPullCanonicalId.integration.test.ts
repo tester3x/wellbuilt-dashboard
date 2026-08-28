@@ -176,10 +176,16 @@ describe('canonical packet ID joins ingest storage key to processor trigger', ()
 
   it('the same ID reaches processed record, outgoing, well status, and canonical-job linkage', () => {
     expect(pullHandler).toMatch(/packets\/processed\/\$\{packetId\}/);
-    expect(pullHandler).toMatch(/lastPullPacketId: packetId/);
     expect(pullHandler).toMatch(/canonicalJobId: result\.canonicalJobId/);
-    const lastPullBlock = pullHandler.slice(pullHandler.indexOf('lastPull: {'));
-    expect(lastPullBlock).toMatch(/packetId,/);
+    // The outgoing/current + well-status objects are now built by pure builders
+    // (calculation separated from persistence). Assert the processor wires them
+    // and the builders carry the canonical packetId through to lastPull.
+    expect(pullHandler).toMatch(/buildOutgoingResponse\(/);
+    expect(pullHandler).toMatch(/buildWellStatus\(/);
+    const builderSrc = readFileSync(join(functionsRoot, 'src/outgoingBuilders.ts'), 'utf8');
+    expect(builderSrc).toMatch(/lastPullPacketId: i\.packetId/);
+    const lastPullBlock = builderSrc.slice(builderSrc.indexOf('lastPull: {'));
+    expect(lastPullBlock).toMatch(/packetId: i\.packetId/);
 
     const store: Store = {};
     const ingested = ingestToStore(store, GABRIEL_PACKET, DRIVER);

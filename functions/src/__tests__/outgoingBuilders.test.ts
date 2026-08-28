@@ -36,3 +36,21 @@ test('down well → timeTillPull Down, wellDown true; unknown afr → Unknown fl
   expect(r.nextPullTime).toBe('Unknown');
   expect(r.companyId).toBe('liquid-gold'); // default
 });
+
+import { buildWellStatus } from '../outgoingBuilders';
+test('buildWellStatus — golden pin', () => {
+  const r = buildWellStatus({
+    wellName: 'Gabriel 5', tanks: 1, bottomInches: 36, route: 'Gabriels', pullBbls: 140,
+    currentLevelInches: 48, dateTime: '8/26/2026 7:39 PM', dateTimeUTC: '2026-08-27T00:39:00.000Z',
+    tankTopInches: 84, tankAfterInches: 48, bblsTaken: 60, driverName: 'Mikezfold', packetId: 'pk1',
+    afr: 0.1443, afrMinutes: 207.792, bbls24hrs: '139', estDateTimePull: '2026-08-27T05:39:00.000Z',
+    estTimeToPull: '5:00', nextIsDown: false, nowIso: '2026-08-27T13:00:00.000Z',
+  });
+  expect(r).toEqual({
+    wellName: 'Gabriel 5', config: { tanks: 1, bottomLevel: 3, route: 'Gabriels', pullBbls: 140 },
+    current: { level: '4\'0"', levelInches: 48, asOf: '2026-08-27T13:00:00.000Z' },
+    lastPull: { dateTime: '8/26/2026 7:39 PM', dateTimeUTC: '2026-08-27T00:39:00.000Z', topLevel: '7\'0"', topLevelInches: 84, bottomLevel: '4\'0"', bottomLevelInches: 48, bblsTaken: 60, driverName: 'Mikezfold', packetId: 'pk1' },
+    calculated: { flowRate: '3:27:47', flowRateMinutes: 207.79, bbls24hrs: 139, nextPullTime: '08/27/2026 12:39 AM', nextPullTimeUTC: '2026-08-27T05:39:00.000Z', timeTillPull: '5:00' },
+    isDown: false, updatedAt: '2026-08-27T13:00:00.000Z',
+  });
+});
