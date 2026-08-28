@@ -36,7 +36,16 @@ export function assembleCanonicalPatch(p: CanonicalPatchPieces): Record<string, 
     patch[`packets/outgoing/${p.outgoing.responseId}`] = p.outgoing.response;
   }
   if (p.wellStatus) {
-    patch[`wells/${p.wellStatus.wellName}/status`] = p.wellStatus.status;
+    // Write each status field as its OWN child path — never a full-node set of
+    // wells/<well>/status. A full-node set would (1) collide with the
+    // status/chronoRevision child path below (Firebase update() rejects
+    // overlapping locations) and (2) wipe the coordinator's live
+    // status/chronoLock mid-commit. Child-key writes replace each subtree
+    // (current/lastPull/afr/isDown/…) while leaving lock + revision intact.
+    for (const [k, v] of Object.entries(p.wellStatus.status)) {
+      if (k === 'chronoLock' || k === 'chronoRevision') continue; // never let status carry these
+      patch[`wells/${p.wellStatus.wellName}/status/${k}`] = v;
+    }
   }
   if (p.performance) {
     patch[`performance/${p.performance.wellKey}/rows/${p.performance.perfTimestamp}`] = p.performance.row;

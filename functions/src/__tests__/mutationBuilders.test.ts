@@ -47,7 +47,8 @@ describe('buildCreateMutation', () => {
     // Sidecar flowed through.
     expect(patch['packets/outgoing/oldResp']).toBeNull();
     expect(patch['packets/outgoing/newResp']).toEqual({ packetId: 'X' });
-    expect(patch['wells/Gabriel 5/status']).toEqual({ current: { level: 66 } });
+    expect(patch['wells/Gabriel 5/status/current']).toEqual({ level: 66 }); // child-key write, not full-node
+    expect(patch['wells/Gabriel 5/status']).toBeUndefined();                 // never a full-node set (would wipe lock)
     expect(patch['wells/Gabriel 5/status/chronoRevision']).toBe(7);
     expect(patch['well_config/Gabriel 5/avgFlowRate']).toBe('0:30');
   });
