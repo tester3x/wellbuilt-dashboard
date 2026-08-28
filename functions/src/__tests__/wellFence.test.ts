@@ -1,6 +1,6 @@
 // Fencing-token serialization proof — the stale holder cannot commit after
 // another worker takes ownership (barrier-controlled interleaving).
-import { planAcquire, canCommit, planRelease, type FenceRecord } from '../wellFence';
+import { planAcquire, canCommit, planRelease, acceptFencedWrite, type FenceRecord } from '../wellFence';
 
 const LEASE = 30_000;
 
@@ -71,5 +71,43 @@ describe('fencing guarantee — stale holder cannot commit after ownership chang
     expect(planRelease(rec, 'tA')).toBe(rec);
     // B releases its own → cleared.
     expect(planRelease(rec, 'tB')).toBeNull();
+  });
+});
+
+describe('post-canCommit TOCTOU — the exact adversarial window', () => {
+  test('A passes canCommit, PAUSES, lease expires, B commits, A resumes → A writes NOTHING (per-node fence CAS)', () => {
+    // The canonical rows carry a chronoFence; the final write is per-node fenced.
+    const rows: Record<string, { chronoFence: number; recovery: number }> = { r1: { chronoFence: 0, recovery: 10 } };
+    // Apply a fenced write only if acceptFencedWrite passes (simulates the CAS transaction).
+    const fencedWrite = (id: string, myFence: number, recovery: number) => {
+      if (acceptFencedWrite(rows[id].chronoFence, myFence)) { rows[id] = { chronoFence: myFence, recovery }; return true; }
+      return false;
+    };
+
+    // 1. A acquires fence 1 and passes the fast pre-check.
+    let rec: FenceRecord = { token: 'tA', fence: 1, expiresAt: 1000 };
+    expect(canCommit(rec, 'tA', 1)).toBe(true);
+
+    // 2. A PAUSES before its multi-location write. 3. A's lease expires.
+    // 4. B acquires a higher fence and COMMITS its write (fence 2 > 0 → lands).
+    rec = { token: 'tB', fence: 2, expiresAt: 100000 };
+    expect(fencedWrite('r1', 2, 20)).toBe(true);
+    expect(rows.r1).toEqual({ chronoFence: 2, recovery: 20 });
+
+    // 5. A RESUMES and sends its ALREADY-AUTHORIZED write stamped fence 1.
+    const aLanded = fencedWrite('r1', 1, 10);
+    expect(aLanded).toBe(false);              // per-node fence CAS rejects the stale write
+    expect(rows.r1).toEqual({ chronoFence: 2, recovery: 20 }); // B's data intact — no lost update
+
+    // An equal-fence retry by the CURRENT owner is idempotent.
+    expect(fencedWrite('r1', 2, 20)).toBe(true);
+    expect(rows.r1).toEqual({ chronoFence: 2, recovery: 20 });
+  });
+
+  test('acceptFencedWrite: lower rejected, equal idempotent, higher wins', () => {
+    expect(acceptFencedWrite(2, 1)).toBe(false); // stale
+    expect(acceptFencedWrite(2, 2)).toBe(true);  // retry
+    expect(acceptFencedWrite(2, 3)).toBe(true);  // newer
+    expect(acceptFencedWrite(undefined, 1)).toBe(true); // unset node
   });
 });

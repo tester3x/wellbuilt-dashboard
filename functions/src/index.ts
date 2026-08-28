@@ -22,7 +22,7 @@ import {
 } from './packetGuards';
 import { runBackdatedInsertion, type BackdatedIO } from './processBackdatedPull';
 import type { ChronoPullInput, WellChronoConfig } from './chronoRecompute';
-import { planAcquire, canCommit, planRelease, type FenceRecord } from './wellFence';
+import { planAcquire, canCommit, planRelease, acceptFencedWrite, type FenceRecord } from './wellFence';
 import {
   assertedFromEditedFields,
   buildAppliedEditEvent,
@@ -596,14 +596,39 @@ function makeBackdatedIO(wellName: string): BackdatedIO {
         heldToken = null;
       }
     },
-    // Fence-gated commit: apply the atomic update ONLY if we STILL hold the exact
-    // token+fence we claimed. A stale holder whose lease expired and was taken by
-    // another worker fails this check and can never overwrite the newer owner.
+    // Fence-gated commit. canCommit is a FAST pre-check; correctness comes from
+    // per-node fence CAS below — the final write of each row lands ONLY if our
+    // fence >= the fence already stamped on that node. A stale worker that paused
+    // past its lease while a higher-fenced worker committed is rejected at every
+    // node (closes the post-canCommit TOCTOU window); an equal-fence retry is
+    // idempotent. (The chrono cascade is bounded to ~1–6 rows, so per-node CAS is
+    // cheap; strict single-atomic-across-all-paths is the serialized-queue's job
+    // in the unified coordinator — see design notes.)
     commit: async (updates) => {
       const check = await fenceRef.transaction((cur: FenceRecord | null) =>
         canCommit(cur, heldToken ?? '', heldFence) ? cur : undefined);
-      if (!check.committed) throw new Error('chrono_fence_lost'); // refuse stale commit
-      await db.ref().update(updates);
+      if (!check.committed) throw new Error('chrono_fence_lost');
+
+      // Group flat path updates back into per-processed-row field maps.
+      const byRow = new Map<string, Record<string, unknown>>();
+      const other: Record<string, unknown> = {};
+      for (const [path, value] of Object.entries(updates)) {
+        const m = path.match(/^(packets\/processed\/[^/]+)\/(.+)$/);
+        if (m) {
+          const row = byRow.get(m[1]) ?? {};
+          row[m[2]] = value;
+          byRow.set(m[1], row);
+        } else {
+          other[path] = value;
+        }
+      }
+      for (const [rowPath, fields] of byRow) {
+        await db.ref(rowPath).transaction((cur: { chronoFence?: unknown } | null) => {
+          if (!acceptFencedWrite(cur?.chronoFence, heldFence)) return cur; // reject stale (unchanged)
+          return { ...(cur ?? {}), ...fields, chronoFence: heldFence };
+        });
+      }
+      if (Object.keys(other).length) await db.ref().update(other);
     },
   };
 }

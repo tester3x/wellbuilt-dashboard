@@ -57,3 +57,17 @@ export function planRelease(cur: FenceRecord | null | undefined, myToken: string
   if (cur && cur.token === myToken) return null; // clear
   return (cur ?? null); // leave a newer owner's record intact
 }
+
+/**
+ * Per-node fence CAS — closes the post-`canCommit` TOCTOU window. `canCommit` is
+ * only a fast pre-check; the FINAL write of each row is applied inside a
+ * transaction that stamps `myFence` and lands ONLY if `myFence >= the fence
+ * already on that node`. Therefore a stale worker that passed `canCommit`, then
+ * paused past its lease while a higher-fenced worker committed, is REJECTED at
+ * every node (its lower fence loses) — its already-authorized update writes
+ * nothing. An equal-fence retry re-applies identically (idempotent).
+ */
+export function acceptFencedWrite(storedFence: unknown, myFence: number): boolean {
+  const s = Number.isFinite(Number(storedFence)) ? Number(storedFence) : 0;
+  return myFence >= s;
+}

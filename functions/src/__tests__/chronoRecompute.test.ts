@@ -1,6 +1,6 @@
 // Chronological recomputation engine — Gabriel 5 regression + matrix.
 import {
-  recomputeWell, orderChrono, upsertPull, currentPull, computeBottomInches, planBackdatedCommit,
+  recomputeWell, orderChrono, upsertPull, currentPull, computeBottomInches, planBackdatedCommit, classifyPullPair,
   type ChronoPullInput, type WellChronoConfig,
 } from '../chronoRecompute';
 
@@ -219,10 +219,46 @@ describe('potential duplicate — reversed arrival, neither pull disappears', ()
     expect(r1.every((r) => r.anomalyReasons.includes('potential_duplicate'))).toBe(true);
   });
 
-  test('shared operationId collapses them (proven same logical pull) → not flagged', () => {
+  test('shared operationId + EQUIVALENT material → proven duplicate (not flagged potential)', () => {
     const a2 = { ...a, operationId: 'op-1' };
-    const b2 = { ...b, operationId: 'op-1' };
+    const b2 = { ...b, operationId: 'op-1' }; // same time+values + same lineage
     const r = recomputeWell([a2, b2], CFG);
     expect(r.every((x) => x.potentialDuplicate)).toBe(false);
+    expect(r.every((x) => x.needsReview)).toBe(false);
+  });
+});
+
+describe('provenance verdicts — lineage is NOT material equivalence', () => {
+  const base = { packetId: 'x', dateTimeUTC: '2026-08-26T10:00:00Z', tankTopInches: 100, bblsTaken: 60 } as ChronoPullInput;
+
+  test('classifyPullPair full verdict table', () => {
+    expect(classifyPullPair(base, { ...base })).toBe('replay');                                  // same id, equiv
+    expect(classifyPullPair(base, { ...base, bblsTaken: 70 })).toBe('collision');                // same id, diff
+    expect(classifyPullPair({ ...base, packetId: 'a', operationId: 'op' }, { ...base, packetId: 'b', operationId: 'op' })).toBe('proven_duplicate'); // diff id, lineage, equiv
+    expect(classifyPullPair({ ...base, packetId: 'a', operationId: 'op' }, { ...base, packetId: 'b', operationId: 'op', bblsTaken: 75 })).toBe('correction_conflict'); // diff id, lineage, DIFF material
+    expect(classifyPullPair({ ...base, packetId: 'a' }, { ...base, packetId: 'b' })).toBe('potential_duplicate'); // diff id, values match, no lineage
+    expect(classifyPullPair({ ...base, packetId: 'a' }, { ...base, packetId: 'b', bblsTaken: 99 })).toBe('distinct'); // diff id, distinct
+  });
+
+  test('multiple corrections sharing operationId with DIFFERENT material all survive + Needs Review (never a silent no-op)', () => {
+    const attempt1 = { packetId: 'r1', dateTimeUTC: '2026-08-26T10:00:00Z', tankTopInches: 100, bblsTaken: 60, operationId: 'recover-op' } as ChronoPullInput;
+    const attempt2 = { packetId: 'r2', dateTimeUTC: '2026-08-26T11:00:00Z', tankTopInches: 100, bblsTaken: 75, operationId: 'recover-op' } as ChronoPullInput; // later, different time+bbls
+    const r = recomputeWell([attempt1, attempt2], CFG);
+    expect(r).toHaveLength(2);                                  // neither dropped
+    expect(r.find((x) => x.packetId === 'r1')!.needsReview).toBe(true);
+    expect(r.find((x) => x.packetId === 'r2')!.needsReview).toBe(true);
+    expect(r.some((x) => x.anomalyReasons.includes('lineage_material_conflict'))).toBe(true);
+  });
+
+  test('planBackdatedCommit no-op ONLY on proven duplicate (lineage + equivalent material)', () => {
+    const existing = { packetId: 'e', dateTimeUTC: '2026-08-26T10:00:00Z', tankTopInches: 100, bblsTaken: 60, operationId: 'op' } as ChronoPullInput;
+    const equivDup = { packetId: 'n', dateTimeUTC: '2026-08-26T10:00:00Z', tankTopInches: 100, bblsTaken: 60, operationId: 'op' } as ChronoPullInput; // lineage + equiv → no-op
+    const conflict = { packetId: 'n', dateTimeUTC: '2026-08-26T10:00:00Z', tankTopInches: 100, bblsTaken: 99, operationId: 'op' } as ChronoPullInput; // lineage + DIFF → accept + review
+    const before = recomputeWell([existing], CFG);
+    const p1 = planBackdatedCommit({ before, after: recomputeWell(upsertPull([existing], equivDup), CFG), newPacketId: 'n', wellRevision: 1 });
+    expect(p1.duplicateNoop).toBe(true);
+    const p2 = planBackdatedCommit({ before, after: recomputeWell(upsertPull([existing], conflict), CFG), newPacketId: 'n', wellRevision: 1 });
+    expect(p2.duplicateNoop).toBe(false);
+    expect(p2.needsReview).toBe(true);
   });
 });

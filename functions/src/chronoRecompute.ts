@@ -61,6 +61,9 @@ export interface ChronoPullResult extends ChronoPullInput {
   /** Distinct packetId sharing another pull's event time + values with NO shared
    *  operation identity — accepted, never dropped; flagged for dispatch review. */
   potentialDuplicate: boolean;
+  /** Same operation lineage as another pull but DIFFERENT material — a later
+   *  correction that conflicts; accepted, never dropped; flagged Needs Review. */
+  needsReview: boolean;
 }
 
 /** A distinct pull-start timestamp is NOT stored today — recorded for a later
@@ -144,16 +147,24 @@ export function recomputeWell(
       anomalyReasons.push('no_recovery_between_pulls');
     }
 
-    // Potential duplicate: a DISTINCT packetId shares this pull's event time +
-    // values with NO shared operation identity/provenance. Accepted, never
-    // dropped — flagged for dispatch review (multiple trucks / repeated gauges /
-    // wrong-well corrections can legitimately collide).
-    const potentialDuplicate = ordered.some((o) =>
-      o.packetId !== p.packetId
-      && o.dateTimeUTC === p.dateTimeUTC
-      && Math.round(o.tankTopInches) === Math.round(p.tankTopInches)
-      && Number(o.bblsTaken) === Number(p.bblsTaken)
-      && !isProvenSameLogicalPull(o, p));
+    // Pairwise review flags against every other pull in the well:
+    //  - potential_duplicate: matching values, NO lineage (multiple trucks /
+    //    repeated gauges / wrong-well corrections can legitimately collide);
+    //  - needs_review: SAME lineage but DIFFERENT material (a later correction
+    //    that conflicts). Both are ACCEPTED, never dropped.
+    let potentialDuplicate = false;
+    let needsReview = false;
+    for (const o of ordered) {
+      if (o.packetId === p.packetId) continue;
+      const v = classifyPullPair(o, p);
+      if (v === 'potential_duplicate') potentialDuplicate = true;
+      if (v === 'correction_conflict') needsReview = true;
+    }
+    const reviewReasons = [
+      ...anomalyReasons,
+      ...(potentialDuplicate ? ['potential_duplicate'] : []),
+      ...(needsReview ? ['lineage_material_conflict'] : []),
+    ];
 
     results.push({
       ...p,
@@ -166,9 +177,10 @@ export function recomputeWell(
       bblsPerDay,
       isCurrent: Number.isFinite(tMs) && tMs === newestMs && (i === ordered.length - 1),
       lateEntry,
-      anomaly: anomalyReasons.length > 0 || potentialDuplicate,
-      anomalyReasons: potentialDuplicate ? [...anomalyReasons, 'potential_duplicate'] : anomalyReasons,
+      anomaly: reviewReasons.length > 0,
+      anomalyReasons: reviewReasons,
       potentialDuplicate,
+      needsReview,
     });
   }
   return results;
@@ -189,19 +201,51 @@ export function upsertPull(pulls: ChronoPullInput[], next: ChronoPullInput): Chr
   return [...rest, next];
 }
 
-/** PROVEN same logical pull — the ONLY basis for a duplicate/superseded no-op.
- *  Requires explicit shared operation identity/provenance, never matching values:
- *   - identical non-empty operationId, or
- *   - one row's recoveredFromPacketId points at the other's packetId.
- *  Matching time+top+bbls WITHOUT this is a POTENTIAL duplicate (accept + flag). */
-export function isProvenSameLogicalPull(a: ChronoPullInput, b: ChronoPullInput): boolean {
-  if (a.packetId === b.packetId) return true;
+/** Shared operation LINEAGE (identity/provenance) — necessary but NOT sufficient
+ *  for a duplicate: identical non-empty operationId, or one row's
+ *  recoveredFromPacketId points at the other's packetId. */
+export function sameLineage(a: ChronoPullInput, b: ChronoPullInput): boolean {
   const opA = a.operationId && a.operationId.trim();
   const opB = b.operationId && b.operationId.trim();
   if (opA && opB && opA === opB) return true;
   if (a.recoveredFromPacketId && a.recoveredFromPacketId === b.packetId) return true;
   if (b.recoveredFromPacketId && b.recoveredFromPacketId === a.packetId) return true;
   return false;
+}
+
+/** Equivalent MATERIAL (final values): event time + top + bbls + wellDown. */
+export function materialEquivalent(a: ChronoPullInput, b: ChronoPullInput): boolean {
+  return a.dateTimeUTC === b.dateTimeUTC
+    && Math.round(a.tankTopInches) === Math.round(b.tankTopInches)
+    && Number(a.bblsTaken) === Number(b.bblsTaken)
+    && Boolean(a.wellDown) === Boolean(b.wellDown);
+}
+
+export type PairVerdict =
+  | 'replay'              // same id, equivalent material
+  | 'collision'           // same id, different material
+  | 'proven_duplicate'    // diff id, SAME lineage, equivalent final material → no-op
+  | 'correction_conflict' // diff id, SAME lineage, DIFFERENT material → Needs Review, NEVER no-op
+  | 'potential_duplicate' // diff id, NO lineage, matching values → accept both + flag
+  | 'distinct';           // diff id, distinct values → accept both
+
+/** The authoritative pair verdict. Lineage alone never collapses two ids — a
+ *  no-op requires lineage AND equivalent final material; lineage with different
+ *  material is a later correction that must survive for review. */
+export function classifyPullPair(a: ChronoPullInput, b: ChronoPullInput): PairVerdict {
+  if (a.packetId === b.packetId) return materialEquivalent(a, b) ? 'replay' : 'collision';
+  const lineage = sameLineage(a, b);
+  const equiv = materialEquivalent(a, b);
+  if (lineage && equiv) return 'proven_duplicate';
+  if (lineage && !equiv) return 'correction_conflict';
+  if (!lineage && equiv) return 'potential_duplicate';
+  return 'distinct';
+}
+
+/** @deprecated use classifyPullPair — a duplicate no-op now requires lineage AND
+ *  equivalent material. */
+export function isProvenSameLogicalPull(a: ChronoPullInput, b: ChronoPullInput): boolean {
+  return classifyPullPair(a, b) === 'proven_duplicate' || (a.packetId === b.packetId && materialEquivalent(a, b));
 }
 
 /** @deprecated value-only match is NOT proof of duplication — see
@@ -215,7 +259,7 @@ export function isLogicalDuplicate(a: ChronoPullInput, b: ChronoPullInput): bool
 
 const DERIVED_KEYS = [
   'tankAfterInches', 'recoveryInches', 'timeDifDays', 'flowRateDays', 'bblsPerDay',
-  'lateEntry', 'anomaly', 'anomalyReasons', 'prevPacketId', 'potentialDuplicate',
+  'lateEntry', 'anomaly', 'anomalyReasons', 'prevPacketId', 'potentialDuplicate', 'needsReview',
 ] as const;
 
 export interface BackdatedCommitPlan {
@@ -234,6 +278,9 @@ export interface BackdatedCommitPlan {
   /** True when the accepted new pull collides on values with a distinct id but
    *  no provenance → accepted + flagged Potential Duplicate / Needs Review. */
   potentialDuplicate: boolean;
+  /** True when the accepted new pull shares lineage with another but differs in
+   *  material (a later correction) → accepted + flagged Needs Review. */
+  needsReview: boolean;
 }
 
 const round = (n: number): number => Math.round(n * 1e6) / 1e6;
@@ -263,9 +310,9 @@ export function planBackdatedCommit(args: {
   // PROVEN duplicate → idempotent no-op — ONLY when explicit operation identity/
   // provenance shows the same logical pull. Matching values alone are NOT proof.
   const newRow = args.after.find((r) => r.packetId === args.newPacketId);
-  const proven = !!newRow && args.before.some((b) => isProvenSameLogicalPull(b, newRow));
+  const proven = !!newRow && args.before.some((b) => classifyPullPair(b, newRow) === 'proven_duplicate');
   if (proven) {
-    return { updates: {}, currentPacketId: currentAfter, watermarkRegressed: false, changedPacketIds: [], insertedLateEntry: false, duplicateNoop: true, potentialDuplicate: false };
+    return { updates: {}, currentPacketId: currentAfter, watermarkRegressed: false, changedPacketIds: [], insertedLateEntry: false, duplicateNoop: true, potentialDuplicate: false, needsReview: false };
   }
 
   const updates: Record<string, unknown> = {};
@@ -292,6 +339,7 @@ export function planBackdatedCommit(args: {
     updates[`${p}/anomaly`] = row.anomaly;
     updates[`${p}/anomalyReasons`] = row.anomalyReasons;
     updates[`${p}/potentialDuplicate`] = row.potentialDuplicate;
+    updates[`${p}/needsReview`] = row.needsReview;
     updates[`${p}/chronoRevision`] = args.wellRevision;
   }
 
@@ -304,5 +352,6 @@ export function planBackdatedCommit(args: {
     insertedLateEntry: !!newRow?.lateEntry,
     duplicateNoop: false,
     potentialDuplicate: !!newRow?.potentialDuplicate,
+    needsReview: !!newRow?.needsReview,
   };
 }
