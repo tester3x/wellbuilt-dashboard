@@ -43,6 +43,43 @@ function check(name, cond, detail = '') {
   else { failures++; results.push(`  FAIL  ${name}  ${detail}`); }
 }
 
+// ── THE COMPLETE REQUIRED EMULATOR MATRIX (packet 60427) ───────────────────
+// Every case the final real-trigger emulator run must cover, with how it is driven.
+// `real-trigger` cases are scripted below and run against the actual exported
+// handlers once the host JVM can start the emulator. `fault-injection` cases need
+// process-kill / clock control that emulators:exec cannot cleanly do; they are
+// proven at unit level by chronoCommitCoordinator.test.ts (crash/recovery/horizon)
+// and wellFence.test.ts (stale worker / fence TOCTOU) until an injection rig exists.
+// NOTHING here is VERIFIED until it runs green against Firebase emulators.
+const REQUIRED_MATRIX = [
+  { id: 'newest-create',                 kind: 'real-trigger', scripted: true },
+  { id: 'old-create-no-current-regress', kind: 'real-trigger', scripted: true },
+  { id: 'gabriel-am-then-pm-edit',       kind: 'real-trigger', scripted: false },
+  { id: 'edit-moving-earlier',           kind: 'real-trigger', scripted: false },
+  { id: 'edit-moving-later-becomes-current', kind: 'real-trigger', scripted: true },
+  { id: 'equal-time-arrival-order-A',    kind: 'real-trigger', scripted: true },
+  { id: 'equal-time-arrival-order-B',    kind: 'real-trigger', scripted: false },
+  { id: 'same-id-replay',                kind: 'real-trigger', scripted: true },
+  { id: 'same-id-collision',             kind: 'real-trigger', scripted: false },
+  { id: 'proven-duplicate',              kind: 'real-trigger', scripted: false },
+  { id: 'shared-lineage-correction-conflict', kind: 'real-trigger', scripted: false },
+  { id: 'potential-duplicate-no-lineage', kind: 'real-trigger', scripted: true },
+  { id: 'delete-oldest',                 kind: 'real-trigger', scripted: true },
+  { id: 'delete-middle',                 kind: 'real-trigger', scripted: true },
+  { id: 'delete-newest',                 kind: 'real-trigger', scripted: true },
+  { id: 'authorized-delete-not-found-replay-collision', kind: 'real-trigger', scripted: true },
+  { id: 'edit-create-race',              kind: 'fault-injection', scripted: false },
+  { id: 'stale-worker-fence',            kind: 'fault-injection', scripted: false },
+  { id: 'crash-during-planning',         kind: 'fault-injection', scripted: false },
+  { id: 'crash-before-commit',           kind: 'fault-injection', scripted: false },
+  { id: 'crash-after-update-before-release', kind: 'fault-injection', scripted: false },
+  { id: 'retry-before-180s',             kind: 'fault-injection', scripted: false },
+  { id: 'retry-after-180s',              kind: 'fault-injection', scripted: false },
+  { id: 'cross-production-date-move',    kind: 'real-trigger', scripted: false },
+  { id: 'non-20-bbl-per-ft',             kind: 'real-trigger', scripted: true },
+  { id: 'multiple-equalized-tanks',      kind: 'real-trigger', scripted: true },
+];
+
 /** Poll a path until predicate(value) or timeout. Returns the last value. */
 async function waitFor(path, pred, { timeoutMs = 20000, intervalMs = 250 } = {}) {
   const started = Date.now();
@@ -215,6 +252,12 @@ async function main() {
   // cross-date production buckets, non-20/multi-tank geometry, potential-duplicate
   // vs proven-duplicate) are exercised at unit level and are added here as the
   // emulator becomes runnable.
+
+  const scripted = REQUIRED_MATRIX.filter((m) => m.scripted).length;
+  const realTrigger = REQUIRED_MATRIX.filter((m) => m.kind === 'real-trigger').length;
+  const faultInj = REQUIRED_MATRIX.filter((m) => m.kind === 'fault-injection').length;
+  console.log(`\n=== REQUIRED MATRIX: ${REQUIRED_MATRIX.length} cases (${realTrigger} real-trigger, ${faultInj} fault-injection) — ${scripted} scripted here ===`);
+  for (const m of REQUIRED_MATRIX) console.log(`  [${m.scripted ? 'scripted' : 'PENDING '}] (${m.kind}) ${m.id}`);
 
   console.log('\n=== EMULATOR HARNESS RESULTS (UNVERIFIED until run green) ===');
   console.log(results.join('\n'));
