@@ -70,6 +70,9 @@ export async function runBackdatedInsertion(
     bblsTaken: Number(args.data.bblsTaken),
     wellDown: args.data.wellDown === true,
     submittedAtMs: typeof args.data.ingestedAt === 'number' ? args.data.ingestedAt : undefined,
+    // Provenance carried so proven-duplicate collapse works; value-match alone never dedups.
+    ...(typeof args.data.operationId === 'string' ? { operationId: args.data.operationId } : {}),
+    ...(typeof args.data.recoveredFromPacketId === 'string' ? { recoveredFromPacketId: args.data.recoveredFromPacketId } : {}),
   };
 
   for (let attempt = 0; attempt < maxAttempts; attempt++) {

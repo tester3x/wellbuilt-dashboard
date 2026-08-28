@@ -53,12 +53,20 @@ describe('runBackdatedInsertion — under exclusive well lock', () => {
     expect(Object.keys(u).some((k) => k.startsWith('packets/outgoing'))).toBe(false);
   });
 
-  test('logical duplicate → no-op, no commit', async () => {
-    const existingAm = { packetId: 'existing_am', dateTimeUTC: amData.dateTimeUTC, tankTopInches: 84, bblsTaken: 60 } as ChronoPullInput;
+  test('PROVEN duplicate (shared operationId) → no-op, no commit', async () => {
+    const existingAm = { packetId: 'existing_am', dateTimeUTC: amData.dateTimeUTC, tankTopInches: 84, bblsTaken: 60, operationId: 'op-x' } as ChronoPullInput;
     const { store, io } = makeServer([PRED, P101, existingAm]);
-    const out = await runBackdatedInsertion(io(), args);
+    const out = await runBackdatedInsertion(io(), { ...args, data: { ...amData, operationId: 'op-x' } });
     expect(out.status).toBe('duplicate_noop');
     expect(store.commits).toBe(0);
+  });
+
+  test('value-match WITHOUT provenance → accepted (inserted), never dropped', async () => {
+    const lookalike = { packetId: 'existing_am', dateTimeUTC: amData.dateTimeUTC, tankTopInches: 84, bblsTaken: 60 } as ChronoPullInput; // no operationId
+    const { store, io } = makeServer([PRED, P101, lookalike]);
+    const out = await runBackdatedInsertion(io(), args);
+    expect(out.status).toBe('inserted'); // NOT dropped — both survive
+    expect(store.commits).toBe(1);
   });
 });
 

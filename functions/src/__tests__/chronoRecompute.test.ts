@@ -184,11 +184,45 @@ describe('planBackdatedCommit — atomic single-update, no watermark regression'
     expect(Object.keys(plan.updates).some((k) => k.startsWith('packets/outgoing'))).toBe(false);
   });
 
-  test('a logical-duplicate backdated insert is an idempotent no-op (empty update)', () => {
-    const dupInput = { ...AM_CREATE, packetId: '20260827_999999_Gabriel5_dupe' }; // different id, same material+time
-    const afterDup = recomputeWell([PRED_825, PULL_101PM, AM_CREATE, dupInput], CFG);
-    const plan = planBackdatedCommit({ before: after, after: afterDup, newPacketId: dupInput.packetId, wellRevision: 8 });
+  test('PROVEN duplicate (shared operationId) → idempotent no-op', () => {
+    const provenDup = { ...AM_CREATE, packetId: '20260827_999999_Gabriel5_dupe', operationId: 'op-shared', };
+    const amWithOp = { ...AM_CREATE, operationId: 'op-shared' };
+    const before2 = recomputeWell([PRED_825, PULL_101PM, amWithOp], CFG);
+    const afterDup = recomputeWell([PRED_825, PULL_101PM, amWithOp, provenDup], CFG);
+    const plan = planBackdatedCommit({ before: before2, after: afterDup, newPacketId: provenDup.packetId, wellRevision: 8 });
     expect(plan.duplicateNoop).toBe(true);
     expect(Object.keys(plan.updates)).toHaveLength(0);
+  });
+
+  test('value-match WITHOUT provenance → NOT a no-op: accepted + Potential Duplicate', () => {
+    const lookalike = { ...AM_CREATE, packetId: '20260827_999999_Gabriel5_diff' }; // same values, distinct id, no provenance
+    const afterDup = recomputeWell([PRED_825, PULL_101PM, AM_CREATE, lookalike], CFG);
+    const plan = planBackdatedCommit({ before: after, after: afterDup, newPacketId: lookalike.packetId, wellRevision: 8 });
+    expect(plan.duplicateNoop).toBe(false);
+    expect(plan.potentialDuplicate).toBe(true);
+    expect(plan.updates[`packets/processed/${lookalike.packetId}/potentialDuplicate`]).toBe(true);
+  });
+});
+
+describe('potential duplicate — reversed arrival, neither pull disappears', () => {
+  const P = (id: string, t: string, top: number, bbls: number) => pull({ packetId: id, dateTimeUTC: t, tankTopInches: top, bblsTaken: bbls });
+  const a = P('truckA', '2026-08-26T10:00:00Z', 100, 60);
+  const b = P('truckB', '2026-08-26T10:00:00Z', 100, 60); // identical time+values, distinct id
+
+  test('both arrival orders → both present, both flagged potential_duplicate, deterministic order', () => {
+    const r1 = recomputeWell([a, b], CFG);
+    const r2 = recomputeWell([b, a], CFG);
+    expect(r1.map((r) => r.packetId)).toEqual(['truckA', 'truckB']); // packetId tie-break
+    expect(r2.map((r) => r.packetId)).toEqual(['truckA', 'truckB']); // identical regardless of input order
+    expect(r1.length).toBe(2);
+    expect(r1.every((r) => r.potentialDuplicate)).toBe(true);
+    expect(r1.every((r) => r.anomalyReasons.includes('potential_duplicate'))).toBe(true);
+  });
+
+  test('shared operationId collapses them (proven same logical pull) → not flagged', () => {
+    const a2 = { ...a, operationId: 'op-1' };
+    const b2 = { ...b, operationId: 'op-1' };
+    const r = recomputeWell([a2, b2], CFG);
+    expect(r.every((x) => x.potentialDuplicate)).toBe(false);
   });
 });

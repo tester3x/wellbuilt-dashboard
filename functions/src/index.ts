@@ -22,6 +22,7 @@ import {
 } from './packetGuards';
 import { runBackdatedInsertion, type BackdatedIO } from './processBackdatedPull';
 import type { ChronoPullInput, WellChronoConfig } from './chronoRecompute';
+import { planAcquire, canCommit, planRelease, type FenceRecord } from './wellFence';
 import {
   assertedFromEditedFields,
   buildAppliedEditEvent,
@@ -551,6 +552,8 @@ async function loadChronoPulls(wellName: string): Promise<ChronoPullInput[]> {
       bblsTaken: parseFloat(String(p.bblsTaken)) || 0,
       wellDown: p.wellDown === true || p.wellDown === 'true',
       ...(Number.isFinite(storedBottom) ? { knownBottomInches: storedBottom } : {}),
+      ...(typeof p.operationId === 'string' ? { operationId: p.operationId } : {}),
+      ...(typeof p.recoveredFromPacketId === 'string' ? { recoveredFromPacketId: p.recoveredFromPacketId } : {}),
     });
     return undefined;
   });
@@ -564,8 +567,10 @@ async function loadChronoPulls(wellName: string): Promise<ChronoPullInput[]> {
 // well is never wedged. The atomic multi-location update is safe under the lock.
 const CHRONO_LEASE_MS = 30_000;
 function makeBackdatedIO(wellName: string): BackdatedIO {
-  const lockRef = db.ref(`wells/${wellName}/status/chronoLock`);
+  const fenceRef = db.ref(`wells/${wellName}/status/chronoFence`);
   const revRef = db.ref(`wells/${wellName}/status/chronoRevision`);
+  let heldToken: string | null = null;
+  let heldFence = 0;
   return {
     loadWellPulls: () => loadChronoPulls(wellName),
     readWellRevision: async () => {
@@ -574,24 +579,32 @@ function makeBackdatedIO(wellName: string): BackdatedIO {
       return Number.isFinite(v) ? v : 0;
     },
     withWellLock: async (_w, fn) => {
-      const now = Date.now();
-      const owner = `${wellName}_${now}_${Math.round(now % 1e6)}`;
-      let acquired = false;
-      const res = await lockRef.transaction((cur: { owner?: string; expiresAt?: number } | null) => {
-        const t = Date.now();
-        if (cur && typeof cur.expiresAt === 'number' && cur.expiresAt > t) return; // held + unexpired → abort
-        acquired = true;
-        return { owner, expiresAt: t + CHRONO_LEASE_MS };
+      const token = `${wellName}_${Date.now()}_${Math.floor(Math.random() * 1e9)}`;
+      let acquired: FenceRecord | null = null;
+      const res = await fenceRef.transaction((cur: FenceRecord | null) => {
+        const d = planAcquire(cur, token, Date.now(), CHRONO_LEASE_MS);
+        if (d.decision === 'contended') return; // abort — another owner holds it
+        acquired = d.next;
+        return d.next;
       });
       if (!res.committed || !acquired) return { ran: false };
+      heldToken = token; heldFence = (acquired as FenceRecord).fence;
       try {
         return { ran: true, value: await fn() };
       } finally {
-        // Release only if still ours (lease may have expired + been re-taken).
-        await lockRef.transaction((cur: { owner?: string } | null) => (cur && cur.owner === owner ? null : cur));
+        await fenceRef.transaction((cur: FenceRecord | null) => planRelease(cur, token));
+        heldToken = null;
       }
     },
-    commit: async (updates) => { await db.ref().update(updates); },
+    // Fence-gated commit: apply the atomic update ONLY if we STILL hold the exact
+    // token+fence we claimed. A stale holder whose lease expired and was taken by
+    // another worker fails this check and can never overwrite the newer owner.
+    commit: async (updates) => {
+      const check = await fenceRef.transaction((cur: FenceRecord | null) =>
+        canCommit(cur, heldToken ?? '', heldFence) ? cur : undefined);
+      if (!check.committed) throw new Error('chrono_fence_lost'); // refuse stale commit
+      await db.ref().update(updates);
+    },
   };
 }
 

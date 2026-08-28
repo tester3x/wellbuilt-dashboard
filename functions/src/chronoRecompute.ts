@@ -38,6 +38,12 @@ export interface ChronoPullInput {
   /** Historical bottom snapshot (inches). When present it is PRESERVED (not
    *  recomputed with today's config) and used as this pull's bottom. */
   knownBottomInches?: number;
+  /** Explicit shared-operation identity/provenance. Only THIS proves two
+   *  packetIds are the SAME logical pull (e.g. a recovery replacement pointing at
+   *  the original, or a shared operationId). Matching values alone never do. */
+  operationId?: string;
+  /** When this row is a recovery/replacement, the original packetId it supersedes. */
+  recoveredFromPacketId?: string;
 }
 
 export interface ChronoPullResult extends ChronoPullInput {
@@ -52,6 +58,9 @@ export interface ChronoPullResult extends ChronoPullInput {
   lateEntry: boolean;        // a newer pull already exists (submitted out of order)
   anomaly: boolean;
   anomalyReasons: string[];
+  /** Distinct packetId sharing another pull's event time + values with NO shared
+   *  operation identity — accepted, never dropped; flagged for dispatch review. */
+  potentialDuplicate: boolean;
 }
 
 /** A distinct pull-start timestamp is NOT stored today — recorded for a later
@@ -135,6 +144,17 @@ export function recomputeWell(
       anomalyReasons.push('no_recovery_between_pulls');
     }
 
+    // Potential duplicate: a DISTINCT packetId shares this pull's event time +
+    // values with NO shared operation identity/provenance. Accepted, never
+    // dropped — flagged for dispatch review (multiple trucks / repeated gauges /
+    // wrong-well corrections can legitimately collide).
+    const potentialDuplicate = ordered.some((o) =>
+      o.packetId !== p.packetId
+      && o.dateTimeUTC === p.dateTimeUTC
+      && Math.round(o.tankTopInches) === Math.round(p.tankTopInches)
+      && Number(o.bblsTaken) === Number(p.bblsTaken)
+      && !isProvenSameLogicalPull(o, p));
+
     results.push({
       ...p,
       order: i,
@@ -146,8 +166,9 @@ export function recomputeWell(
       bblsPerDay,
       isCurrent: Number.isFinite(tMs) && tMs === newestMs && (i === ordered.length - 1),
       lateEntry,
-      anomaly: anomalyReasons.length > 0,
-      anomalyReasons,
+      anomaly: anomalyReasons.length > 0 || potentialDuplicate,
+      anomalyReasons: potentialDuplicate ? [...anomalyReasons, 'potential_duplicate'] : anomalyReasons,
+      potentialDuplicate,
     });
   }
   return results;
@@ -168,9 +189,23 @@ export function upsertPull(pulls: ChronoPullInput[], next: ChronoPullInput): Chr
   return [...rest, next];
 }
 
-/** True when two pulls are the SAME logical pull materially (well-scoped):
- *  same event time + top + bbls + wellDown. Used to make a backdated insert an
- *  idempotent no-op against a logical duplicate. */
+/** PROVEN same logical pull — the ONLY basis for a duplicate/superseded no-op.
+ *  Requires explicit shared operation identity/provenance, never matching values:
+ *   - identical non-empty operationId, or
+ *   - one row's recoveredFromPacketId points at the other's packetId.
+ *  Matching time+top+bbls WITHOUT this is a POTENTIAL duplicate (accept + flag). */
+export function isProvenSameLogicalPull(a: ChronoPullInput, b: ChronoPullInput): boolean {
+  if (a.packetId === b.packetId) return true;
+  const opA = a.operationId && a.operationId.trim();
+  const opB = b.operationId && b.operationId.trim();
+  if (opA && opB && opA === opB) return true;
+  if (a.recoveredFromPacketId && a.recoveredFromPacketId === b.packetId) return true;
+  if (b.recoveredFromPacketId && b.recoveredFromPacketId === a.packetId) return true;
+  return false;
+}
+
+/** @deprecated value-only match is NOT proof of duplication — see
+ *  isProvenSameLogicalPull. Retained only for legacy callers/tests. */
 export function isLogicalDuplicate(a: ChronoPullInput, b: ChronoPullInput): boolean {
   return a.dateTimeUTC === b.dateTimeUTC
     && Math.round(a.tankTopInches) === Math.round(b.tankTopInches)
@@ -180,7 +215,7 @@ export function isLogicalDuplicate(a: ChronoPullInput, b: ChronoPullInput): bool
 
 const DERIVED_KEYS = [
   'tankAfterInches', 'recoveryInches', 'timeDifDays', 'flowRateDays', 'bblsPerDay',
-  'lateEntry', 'anomaly', 'anomalyReasons', 'prevPacketId',
+  'lateEntry', 'anomaly', 'anomalyReasons', 'prevPacketId', 'potentialDuplicate',
 ] as const;
 
 export interface BackdatedCommitPlan {
@@ -193,8 +228,12 @@ export interface BackdatedCommitPlan {
   /** Successor ids whose derived fields changed and were rewritten. */
   changedPacketIds: string[];
   insertedLateEntry: boolean;
-  /** True when the new pull is a logical duplicate → idempotent no-op. */
+  /** True ONLY when the new pull is a PROVEN duplicate (shared operation
+   *  identity/provenance) → idempotent no-op. Value-match alone never sets this. */
   duplicateNoop: boolean;
+  /** True when the accepted new pull collides on values with a distinct id but
+   *  no provenance → accepted + flagged Potential Duplicate / Needs Review. */
+  potentialDuplicate: boolean;
 }
 
 const round = (n: number): number => Math.round(n * 1e6) / 1e6;
@@ -221,12 +260,12 @@ export function planBackdatedCommit(args: {
   const currentBefore = currentPull(args.before)?.packetId ?? null;
   const currentAfter = currentPull(args.after)?.packetId ?? null;
 
-  // Logical duplicate → no-op (idempotent). The new id equals an existing row's
-  // material content at the same time.
+  // PROVEN duplicate → idempotent no-op — ONLY when explicit operation identity/
+  // provenance shows the same logical pull. Matching values alone are NOT proof.
   const newRow = args.after.find((r) => r.packetId === args.newPacketId);
-  const dup = !!newRow && args.before.some((b) => isLogicalDuplicate(b, newRow));
-  if (dup) {
-    return { updates: {}, currentPacketId: currentAfter, watermarkRegressed: false, changedPacketIds: [], insertedLateEntry: false, duplicateNoop: true };
+  const proven = !!newRow && args.before.some((b) => isProvenSameLogicalPull(b, newRow));
+  if (proven) {
+    return { updates: {}, currentPacketId: currentAfter, watermarkRegressed: false, changedPacketIds: [], insertedLateEntry: false, duplicateNoop: true, potentialDuplicate: false };
   }
 
   const updates: Record<string, unknown> = {};
@@ -252,6 +291,7 @@ export function planBackdatedCommit(args: {
     updates[`${p}/lateEntry`] = row.lateEntry;
     updates[`${p}/anomaly`] = row.anomaly;
     updates[`${p}/anomalyReasons`] = row.anomalyReasons;
+    updates[`${p}/potentialDuplicate`] = row.potentialDuplicate;
     updates[`${p}/chronoRevision`] = args.wellRevision;
   }
 
@@ -263,5 +303,6 @@ export function planBackdatedCommit(args: {
     changedPacketIds: changed,
     insertedLateEntry: !!newRow?.lateEntry,
     duplicateNoop: false,
+    potentialDuplicate: !!newRow?.potentialDuplicate,
   };
 }
