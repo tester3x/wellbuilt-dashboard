@@ -91,14 +91,42 @@ export function computeBottomInches(topInches: number, bblsTaken: number, cfg: W
 }
 
 /** Deterministic chronological order: event time asc, then packetId asc. */
+/**
+ * THE canonical total order for pulls: event time (`dateTimeUTC`) first, then a
+ * deterministic packetId tie-break for equal (or equally-unparseable) timestamps.
+ * Every ordering decision — engine sort, CREATE newest-vs-backdated routing, EDIT
+ * Late-Entry evaluation — MUST use this one comparator so equal-time packets never
+ * disagree about who is "behind" whom. Returns <0 if (aTime,aId) sorts before
+ * (bTime,bId), >0 if after, 0 if identical.
+ */
+export function compareChronoKey(aTime: string, aId: string, bTime: string, bId: string): number {
+  const ta = Date.parse(aTime);
+  const tb = Date.parse(bTime);
+  if (Number.isFinite(ta) && Number.isFinite(tb) && ta !== tb) return ta < tb ? -1 : 1;
+  return String(aId) < String(bId) ? -1 : String(aId) > String(bId) ? 1 : 0;
+}
+
 export function orderChrono<T extends ChronoPullInput>(pulls: T[]): T[] {
-  return [...pulls].sort((a, b) => {
-    const ta = Date.parse(a.dateTimeUTC);
-    const tb = Date.parse(b.dateTimeUTC);
-    if (Number.isFinite(ta) && Number.isFinite(tb) && ta !== tb) return ta - tb;
-    // Identical (or unparseable-equal) timestamps → stable packetId tie-break.
-    return String(a.packetId) < String(b.packetId) ? -1 : String(a.packetId) > String(b.packetId) ? 1 : 0;
-  });
+  return [...pulls].sort((a, b) => compareChronoKey(a.dateTimeUTC, a.packetId, b.dateTimeUTC, b.packetId));
+}
+
+/**
+ * Late-Entry provenance for a single logical pull, evaluated at mutation time
+ * against its peers using the COMPLETE canonical order. The pull is late iff some
+ * DISTINCT peer sorts strictly AFTER it — i.e. it was accepted behind an already-
+ * existing later pull. Equal timestamps are resolved by packetId exactly as the
+ * engine orders them, so an equal-time pull that sorts before a peer is "behind"
+ * it and one that sorts after is not. Used by the EDIT path (and mirrors what the
+ * CREATE guard decides via compareChronoKey).
+ */
+export function isLateEntryByCanonicalOrder(
+  time: string,
+  packetId: string,
+  peers: Array<{ dateTimeUTC: string; packetId: string }>,
+): boolean {
+  return peers.some((p) =>
+    String(p.packetId) !== String(packetId)
+    && compareChronoKey(time, packetId, p.dateTimeUTC, p.packetId) < 0);
 }
 
 function bottomOf(p: ChronoPullInput, cfg: WellChronoConfig): number {

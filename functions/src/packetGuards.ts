@@ -71,8 +71,14 @@ export function evaluateIncomingPull(args: {
   /** prevResponse?.lastPullDateTimeUTC — only meaningful when hasOutgoingResponse. */
   watermarkDateTimeUTC: unknown;
   nowMs: number;
+  /** The incoming pull's packetId + the watermark pull's packetId. Used ONLY to
+   *  break an EQUAL-timestamp tie with the canonical order (event time, then
+   *  packetId): an equal-time pull whose id sorts AFTER the watermark is genuinely
+   *  newest (process), not backdated. Omitted → equal-time defaults to backdated. */
+  incomingPacketId?: unknown;
+  watermarkPacketId?: unknown;
 }): GuardVerdict {
-  const { incomingDateTimeUTC, hasOutgoingResponse, watermarkDateTimeUTC, nowMs } = args;
+  const { incomingDateTimeUTC, hasOutgoingResponse, watermarkDateTimeUTC, nowMs, incomingPacketId, watermarkPacketId } = args;
 
   // 1: incoming timestamp must parse.
   const incomingMs =
@@ -149,6 +155,15 @@ export function evaluateIncomingPull(args: {
   //     (same time+material, different id) collapses to a no-op there.
   // Never blanket-reject a distinct pull for sharing/preceding the watermark.
   if (!isNaN(incomingMs) && !isNaN(watermarkMs) && incomingMs <= watermarkMs) {
+    // EQUAL timestamp → decide by the COMPLETE canonical order (packetId tie-break):
+    // an equal-time pull whose id sorts AFTER the watermark is genuinely the newest
+    // (process), not backdated. Strictly-older, or equal-time sorting before/at the
+    // watermark, is backdated. Missing ids → default equal-time to backdated.
+    if (incomingMs === watermarkMs
+      && typeof incomingPacketId === 'string' && typeof watermarkPacketId === 'string'
+      && incomingPacketId > watermarkPacketId) {
+      return PROCESS; // newest by canonical order despite the shared timestamp
+    }
     return { action: 'process_backdated', comparedWatermarkUTC: String(watermarkDateTimeUTC) };
   }
 

@@ -20,7 +20,7 @@ import {
   resolveEditTarget,
   strandedPacketVerdict,
 } from './packetGuards';
-import type { ChronoPullInput, WellChronoConfig } from './chronoRecompute';
+import { isLateEntryByCanonicalOrder, type ChronoPullInput, type WellChronoConfig } from './chronoRecompute';
 import { CANONICAL_COMMIT_TIMEOUT_SECONDS, runCanonicalMutation, type CommitReceipt } from './chronoCommitCoordinator';
 import { makeCoordinatorIO } from './coordinatorIO';
 import { assembleCanonicalPatch, receiptPathFor } from './canonicalPatch';
@@ -688,6 +688,9 @@ export const processIncomingPull = functionsV1.runWith({ timeoutSeconds: CANONIC
       hasOutgoingResponse: prevResponse !== null,
       watermarkDateTimeUTC: prevResponse ? prevResponse.lastPullDateTimeUTC : undefined,
       nowMs: Date.now(),
+      // Complete canonical-order tie-break for equal-timestamp packets.
+      incomingPacketId: packetId,
+      watermarkPacketId: prevResponse ? prevResponse.lastPullPacketId : undefined,
     });
     if (guardVerdict.action === 'quarantine') {
       console.log(`[QUARANTINE] ${wellName}: ${guardVerdict.reason} — ${guardVerdict.readableReason}`);
@@ -2345,13 +2348,13 @@ export async function processIncomingEdit(
     const editedTime = new Date(newDateTimeUTC).getTime();
     let prevTankAfterInches = 0;
     let prevTimestamp = '';
-    let editLateEntry = false;
+    const editPeers: Array<{ dateTimeUTC: string; packetId: string }> = [];
 
     prevOutgoingSnap.forEach((child) => {
       if (child.key === originalPacketId) return; // Skip self
       const pkt = child.val();
       const pktTime = new Date(pkt.dateTimeUTC).getTime();
-      if (Number.isFinite(pktTime) && pktTime > editedTime) editLateEntry = true; // a later pull exists
+      editPeers.push({ dateTimeUTC: String(pkt.dateTimeUTC), packetId: String(child.key) });
       if (pktTime < editedTime) {
         // This is a candidate for "previous pull"
         if (!prevTimestamp || pktTime > new Date(prevTimestamp).getTime()) {
@@ -2360,6 +2363,8 @@ export async function processIncomingEdit(
         }
       }
     });
+    // Late-Entry provenance for the edited pull, by the COMPLETE canonical order.
+    const editLateEntry = isLateEntryByCanonicalOrder(newDateTimeUTC, String(originalPacketId), editPeers);
 
     // Recalculate timeDif, recovery, flowRate
     let timeDifDays = origPacket.timeDifDays || 0;

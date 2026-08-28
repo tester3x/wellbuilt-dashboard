@@ -2,8 +2,9 @@
 // an already-existing later pull" — set once at mutation time and PRESERVED on every
 // recompute. It is NOT a positional synonym for "not the newest row". These pins are
 // the contract Codex requires before the Dashboard review tag is valid.
-import { recomputeWell, upsertPull, type ChronoPullInput, type WellChronoConfig } from '../chronoRecompute';
+import { recomputeWell, upsertPull, compareChronoKey, isLateEntryByCanonicalOrder, type ChronoPullInput, type WellChronoConfig } from '../chronoRecompute';
 import { buildCreateMutation, buildEditMutation } from '../mutationBuilders';
+import { evaluateIncomingPull } from '../packetGuards';
 
 const cfg: WellChronoConfig = { bblPerFoot: 20, tanks: 1, allowedBottomInches: 30 };
 const P = (id: string, t: string, top: number, bbls: number, over: Partial<ChronoPullInput> = {}): ChronoPullInput =>
@@ -70,6 +71,72 @@ describe('Late Entry — stable stored provenance', () => {
     expect((patch['packets/processed/C'] as Record<string, unknown>).lateEntry).toBe(false);
     expect(patch['packets/processed/B/lateEntry']).toBeUndefined(); // B not rewritten
     expect(receipt.affectedPacketIds).toEqual(['C']);
+  });
+
+  describe('EDIT Late Entry uses the COMPLETE canonical order (event time, then packetId)', () => {
+    const T = '2026-08-27T18:00:00.000Z';
+    // Peer shares the edited pull's exact timestamp.
+    const peer = { dateTimeUTC: T, packetId: 'pkt_MMMM' };
+
+    test('equal timestamp, edited sorts BEFORE peer → accepted behind peer → late', () => {
+      // edited id 'pkt_AAAA' < peer id 'pkt_MMMM' → edited is earlier in canonical
+      // order → a later peer exists → late.
+      expect(compareChronoKey(T, 'pkt_AAAA', T, 'pkt_MMMM')).toBeLessThan(0);
+      expect(isLateEntryByCanonicalOrder(T, 'pkt_AAAA', [peer])).toBe(true);
+    });
+
+    test('equal timestamp, edited sorts AFTER peer → deterministic opposite → not late', () => {
+      // edited id 'pkt_ZZZZ' > peer id 'pkt_MMMM' → edited is the later one → not late.
+      expect(compareChronoKey(T, 'pkt_ZZZZ', T, 'pkt_MMMM')).toBeGreaterThan(0);
+      expect(isLateEntryByCanonicalOrder(T, 'pkt_ZZZZ', [peer])).toBe(false);
+    });
+
+    test('result is independent of arrival/peer-array order', () => {
+      const peers = [
+        { dateTimeUTC: T, packetId: 'pkt_MMMM' },
+        { dateTimeUTC: '2026-08-27T06:00:00.000Z', packetId: 'pkt_early' },
+      ];
+      expect(isLateEntryByCanonicalOrder(T, 'pkt_AAAA', peers)).toBe(true);
+      expect(isLateEntryByCanonicalOrder(T, 'pkt_AAAA', [...peers].reverse())).toBe(true);
+    });
+
+    test('a strictly-later peer makes it late; no later peer → not late; unrelated rows unaffected', () => {
+      const later = { dateTimeUTC: '2026-08-27T22:00:00.000Z', packetId: 'pkt_late' };
+      const earlier = { dateTimeUTC: '2026-08-27T06:00:00.000Z', packetId: 'pkt_early' };
+      expect(isLateEntryByCanonicalOrder(T, 'x', [later])).toBe(true);
+      expect(isLateEntryByCanonicalOrder(T, 'x', [earlier])).toBe(false);
+      // The helper evaluates ONLY the target pull; it never returns/relabels peers.
+      expect(isLateEntryByCanonicalOrder(T, 'x', [])).toBe(false);
+    });
+
+    test('self is ignored (a pull is never late against itself)', () => {
+      expect(isLateEntryByCanonicalOrder(T, 'same', [{ dateTimeUTC: '2099-01-01T00:00:00Z', packetId: 'same' }])).toBe(false);
+    });
+  });
+
+  describe('CREATE guard routes equal-time packets by the SAME complete comparator', () => {
+    const T = '2026-08-27T18:00:00.000Z';
+    const base = { incomingDateTimeUTC: T, hasOutgoingResponse: true, watermarkDateTimeUTC: T, nowMs: Date.parse('2026-08-27T19:00:00Z') };
+
+    test('equal time, incoming id sorts AFTER watermark → newest → process', () => {
+      const v = evaluateIncomingPull({ ...base, incomingPacketId: 'pkt_ZZZZ', watermarkPacketId: 'pkt_MMMM' });
+      expect(v.action).toBe('process');
+    });
+
+    test('equal time, incoming id sorts BEFORE watermark → backdated', () => {
+      const v = evaluateIncomingPull({ ...base, incomingPacketId: 'pkt_AAAA', watermarkPacketId: 'pkt_MMMM' });
+      expect(v.action).toBe('process_backdated');
+    });
+
+    test('strictly older → backdated regardless of id', () => {
+      const v = evaluateIncomingPull({ ...base, incomingDateTimeUTC: '2026-08-27T06:00:00.000Z', incomingPacketId: 'pkt_ZZZZ', watermarkPacketId: 'pkt_AAAA' });
+      expect(v.action).toBe('process_backdated');
+    });
+
+    test('missing ids → equal-time defaults to backdated (safe)', () => {
+      const v = evaluateIncomingPull(base);
+      expect(v.action).toBe('process_backdated');
+    });
   });
 
   test('buildEditMutation: editing a row only touches the edited/affected rows, not unrelated provenance', () => {
