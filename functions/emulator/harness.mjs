@@ -77,6 +77,21 @@ async function sendPull(id, well, over = {}) {
   });
 }
 
+/** Write an EDIT request targeting an existing processed pull. */
+async function sendEdit(incomingId, well, targetPacketId, changes = {}) {
+  await db.ref(`packets/incoming/${incomingId}`).set({
+    requestType: 'edit', wellName: well, packetId: targetPacketId,
+    editEventId: incomingId, ...changes,
+  });
+}
+
+/** Write a DELETE request targeting a processed pull id. */
+async function sendDelete(incomingId, well, targetPacketId) {
+  await db.ref(`packets/incoming/${incomingId}`).set({
+    requestType: 'delete', wellName: well, packetId: targetPacketId,
+  });
+}
+
 const receiptPath = (well, op) => `wells/${well}/chronoReceipts/${op}`;
 
 async function main() {
@@ -110,7 +125,62 @@ async function main() {
   const procCount = Object.keys((await db.ref('packets/processed').once('value')).val() || {}).length;
   check('replay same id → still exactly one processed row', procCount === 1, `count=${procCount}`);
 
-  console.log('\n=== EMULATOR HARNESS RESULTS ===');
+  // ── Scenario 3: older CREATE (Late Entry) inserts chronologically; current NOT regressed
+  const p1Utc = '2026-08-27T18:00:00.000Z';
+  const olderUtc = '2026-08-27T06:00:00.000Z';
+  await sendPull('p_old', WELL, { dateTimeUTC: olderUtc, dateTime: '8/27/2026 1:00 AM', tankLevelFeet: '7', bblsTaken: 60 });
+  const procOld = await waitFor('packets/processed/p_old', (v) => v && v.processedAt);
+  check('older CREATE → processed row inserted', !!procOld, JSON.stringify(!!procOld));
+  check('older CREATE → stored lateEntry:true (accepted behind newer)', procOld && procOld.lateEntry === true, JSON.stringify(procOld && procOld.lateEntry));
+  const outAfterOld = Object.values((await db.ref('packets/outgoing').once('value')).val() || {})[0];
+  check('older CREATE → current/outgoing NOT regressed (still p1)', outAfterOld && outAfterOld.lastPullPacketId === 'p1', JSON.stringify(outAfterOld && outAfterOld.lastPullPacketId));
+  const rcOld = (await db.ref(receiptPath(WELL, 'p_old')).once('value')).val();
+  check('older CREATE → receipt committed', !!rcOld && rcOld.mutationType === 'backdated_create', JSON.stringify(rcOld && rcOld.mutationType));
+
+  // ── Scenario 4: equal-time pulls both persist, ordered by packetId tie-break
+  await sendPull('p_eqA', WELL, { dateTimeUTC: p1Utc, packetId: 'p_eqA', tankLevelFeet: '9', bblsTaken: 30 });
+  await sleep(2500);
+  await sendPull('p_eqB', WELL, { dateTimeUTC: p1Utc, packetId: 'p_eqB', tankLevelFeet: '9', bblsTaken: 30 });
+  await sleep(2500);
+  const eqA = (await db.ref('packets/processed/p_eqA').once('value')).val();
+  const eqB = (await db.ref('packets/processed/p_eqB').once('value')).val();
+  check('equal-time → BOTH pulls persist (neither dropped)', !!eqA && !!eqB, `A=${!!eqA} B=${!!eqB}`);
+
+  // ── Scenario 5: EDIT moving a row to newest promotes it to current
+  await sendEdit('e1', WELL, 'p_old', { dateTimeUTC: '2026-08-27T23:30:00.000Z', dateTime: '8/27/2026 6:30 PM', tankLevelFeet: '10', bblsTaken: 40 });
+  await sleep(4000);
+  const outAfterEdit = Object.values((await db.ref('packets/outgoing').once('value')).val() || {})[0];
+  check('EDIT to newest → current promoted to edited pull', outAfterEdit && outAfterEdit.lastPullPacketId === 'p_old', JSON.stringify(outAfterEdit && outAfterEdit.lastPullPacketId));
+  const editedRow = (await db.ref('packets/processed/p_old').once('value')).val();
+  check('EDIT → same logical id (p_old) retained', !!editedRow, JSON.stringify(!!editedRow));
+  check('EDIT → edited pull no longer late (now newest)', editedRow && editedRow.lateEntry === false, JSON.stringify(editedRow && editedRow.lateEntry));
+
+  // ── Scenario 6: DELETE the newest refreshes current to the new newest
+  await sendDelete('d1', WELL, 'p_old');
+  await sleep(4000);
+  const delRow = (await db.ref('packets/processed/p_old').once('value')).val();
+  check('DELETE newest → row removed', delRow === null, JSON.stringify(delRow));
+  const rcDel = (await db.ref(receiptPath(WELL, 'delete_p_old')).once('value')).val();
+  check('DELETE → receipt committed', !!rcDel && rcDel.mutationType === 'delete', JSON.stringify(rcDel && rcDel.mutationType));
+
+  // ── Scenario 7: authorized DELETE-not-found → receipted no-op
+  await sendDelete('d2', WELL, 'does_not_exist');
+  const rcNF = await waitFor(receiptPath(WELL, 'delete_does_not_exist'), (v) => !!v);
+  check('DELETE-not-found → receipted terminal no-op (empty affected)', !!rcNF && Array.isArray(rcNF.affectedPacketIds) && rcNF.affectedPacketIds.length === 0, JSON.stringify(rcNF && rcNF.affectedPacketIds));
+
+  // ── Scenario 8: status has no stale owned children + lock survived every commit
+  const statusNow = (await db.ref(`wells/${WELL}/status`).once('value')).val() || {};
+  check('status: chronoLock is clear (released) after all commits', statusNow.chronoLock == null, JSON.stringify(statusNow.chronoLock));
+  check('status: chronoRevision advanced monotonically (> 1)', typeof statusNow.chronoRevision === 'number' && statusNow.chronoRevision > 1, JSON.stringify(statusNow.chronoRevision));
+
+  // NOTE: this matrix is a SUPERSET scaffold and remains UNVERIFIED until it runs
+  // green against the real emulator (blocked by the host JVM NIO defect). Additional
+  // required cases (crash/timeout-recovery inside vs after the 180s horizon,
+  // cross-date production buckets, non-20/multi-tank geometry, potential-duplicate
+  // vs proven-duplicate) are exercised at unit level and are added here as the
+  // emulator becomes runnable.
+
+  console.log('\n=== EMULATOR HARNESS RESULTS (UNVERIFIED until run green) ===');
   console.log(results.join('\n'));
   console.log(`\n${failures === 0 ? 'ALL PASS' : failures + ' FAILURES'} (${results.length} checks)`);
   await admin.app().delete();
