@@ -2239,33 +2239,41 @@ export async function processIncomingEdit(
     });
     const receiptPaths = editReceiptWritePaths(editEventId, receipt);
 
-    // No top level = non-production-tank edit. Update basic fields only, skip tank math.
+    // No top level = non-production-tank edit. Update basic fields only, skip tank
+    // math — but still through the ONE canonical coordinator (it writes isDown, a
+    // canonical-status location) so nothing bypasses the serialized writer.
     if (newTankTopInches <= 0) {
       console.log(`[NO-LEVEL EDIT] ${wellName}: No top level, skipping tank math`);
-      await db.ref().update({
-        ...Object.fromEntries(
-          Object.entries({
-            tankTopInches: 0,
-            tankLevelFeet: 0,
-            bblsTaken: newBblsTaken,
-            tankAfterInches: 0,
-            tankAfterFeet: '',
-            dateTimeUTC: newDateTimeUTC,
-            dateTime: newDateTime,
-            noLevel: true,
-            wellDown: newWellDown,
-            ...fallbackAuditFields,
-            ...trailSummary,
-            ...(typeof data.revisionAt === 'string' && data.revisionAt
-              ? { lastRevisionAt: data.revisionAt }
-              : {}),
-          }).map(([k, v]) => [`packets/processed/${originalPacketId}/${k}`, v]),
-        ),
-        ...historyPaths,
-        ...receiptPaths,
-        [`packets/incoming/${context.params.packetId}`]: null,
+      const noLevelCommit = await runCanonicalMutation(makeCoordinatorIO(db, wellName), {
+        wellName, operationId: editEventId,
+        buildPatch: async () => {
+          const curRev = Number((await db.ref(`wells/${wellName}/status/chronoRevision`).once('value')).val()) || 0;
+          const revision = curRev + 1;
+          const noLevelReceipt: CommitReceipt = {
+            operationId: editEventId, mutationType: 'edit', wellName, fence: revision, revision,
+            affectedPacketIds: [originalPacketId], committedAtMs: Date.now(), patchHash: `${editEventId}:${revision}:nolevel`,
+          };
+          const patch = assembleCanonicalPatch({
+            processedUpdates: Object.fromEntries(
+              Object.entries({
+                tankTopInches: 0, tankLevelFeet: 0, bblsTaken: newBblsTaken, tankAfterInches: 0, tankAfterFeet: '',
+                dateTimeUTC: newDateTimeUTC, dateTime: newDateTime, noLevel: true, wellDown: newWellDown,
+                ...fallbackAuditFields, ...trailSummary,
+                ...(typeof data.revisionAt === 'string' && data.revisionAt ? { lastRevisionAt: data.revisionAt } : {}),
+              }).map(([k, v]) => [`packets/processed/${originalPacketId}/${k}`, v]),
+            ),
+            fence: { wellName, revision },
+            receipt: noLevelReceipt, receiptPath: receiptPathFor(wellName, editEventId),
+          });
+          Object.assign(patch, historyPaths, receiptPaths);
+          patch[`packets/incoming/${context.params.packetId}`] = null;
+          patch[`wells/${wellName}/status/isDown`] = nextEditIsDown;
+          return { patch, receipt: noLevelReceipt };
+        },
       });
-      await db.ref(`wells/${wellName}/status/isDown`).set(nextEditIsDown);
+      if (noLevelCommit.status !== 'committed' && noLevelCommit.status !== 'already_done') {
+        console.error(`[CANONICAL-EDIT] ${wellName}: ${originalPacketId} → ${noLevelCommit.status} (no-level; incoming left for retry)`);
+      }
       return null;
     }
 
@@ -2353,25 +2361,15 @@ export async function processIncomingEdit(
       ...(typeof data.revisionAt === 'string' && data.revisionAt ? { lastRevisionAt: data.revisionAt } : {}),
     };
 
-    // Atomic multi-path: processed summary + immutable history event + consume incoming
-    await db.ref().update({
-      ...Object.fromEntries(
-        Object.entries(updates).map(([k, v]) => [`packets/processed/${originalPacketId}/${k}`, v]),
-      ),
-      ...historyPaths,
-      ...receiptPaths,
-      [`packets/incoming/${context.params.packetId}`]: null,
-    });
+    // The edit's processed summary + immutable history + receipt + isDown +
+    // successor cascade + outgoing/current + wells-status + performance + AFR are
+    // ALL committed as ONE atomic patch through the serialized coordinator at the
+    // end of this block (never as separate writes). We only COMPUTE here.
 
-    // Update well down status if this is the latest packet (authority-gated)
-    await db.ref(`wells/${wellName}/status/isDown`).set(nextEditIsDown);
-
-    // CASCADE: Recalculate flowRateDays on the NEXT packet after the edited one.
-    // That packet's recovery was based on our old tankAfterInches — now stale.
+    // CASCADE: the NEXT packet's recovery was based on our old tankAfterInches.
     let nextPacketKey: string | null = null;
     let nextPacket: any = null;
     let closestNextTime = Infinity;
-
     prevOutgoingSnap.forEach((child) => {
       if (child.key === originalPacketId) return;
       const pkt = child.val();
@@ -2382,9 +2380,8 @@ export async function processIncomingEdit(
         nextPacket = pkt;
       }
     });
-
+    const cascadeUpdates: Record<string, unknown> = {};
     if (nextPacketKey && nextPacket && nextPacket.tankTopInches > 0) {
-      // Recalculate the next packet's recovery + flowRate using our NEW tankAfterInches
       const nextRecovery = Math.max(0, nextPacket.tankTopInches - newTankAfterInches);
       const nextTimeDifDays = (closestNextTime - editedTime) / (1000 * 60 * 60 * 24);
       let nextFlowRateDays = 0;
@@ -2393,12 +2390,9 @@ export async function processIncomingEdit(
         nextFlowRateDays = (nextTimeDifDays / nextRecovery) * 12;
         nextFlowRate = daysToHMMSS(nextFlowRateDays);
       }
-      await db.ref(`packets/processed/${nextPacketKey}`).update({
-        recoveryInches: nextRecovery,
-        flowRateDays: nextFlowRateDays,
-        flowRate: nextFlowRate,
-      });
-      console.log(`Edit cascade: Updated next packet ${nextPacketKey} — recovery=${nextRecovery.toFixed(1)}", flowRate=${nextFlowRate}`);
+      cascadeUpdates[`packets/processed/${nextPacketKey}/recoveryInches`] = nextRecovery;
+      cascadeUpdates[`packets/processed/${nextPacketKey}/flowRateDays`] = nextFlowRateDays;
+      cascadeUpdates[`packets/processed/${nextPacketKey}/flowRate`] = nextFlowRate;
     }
 
     // Recalculate AFR and update outgoing response if this was the most recent pull
@@ -2411,200 +2405,160 @@ export async function processIncomingEdit(
     const editWindowBblsDay = calculateWindowBblsPerDay(editHistoricalPulls, editBblPerFoot, editPullTimeMs);
     const editOvernightBblsDay = calculateOvernightBblsPerDay(editHistoricalPulls, editBblPerFoot, editPullTimeMs);
 
-    // Check if this is the most recent pull for the well
+    // Check if this is the most recent pull for the well, and collect the prior
+    // response ids (the canonical commit deletes them + writes the new one).
     const outgoingSnap = await db.ref('packets/outgoing')
       .orderByChild('wellName')
       .equalTo(wellName)
-      .limitToLast(1)
       .once('value');
 
     let isLatestPull = false;
     let hasOutgoing = false;
+    const editOldResponseIds: string[] = [];
     outgoingSnap.forEach((child) => {
       hasOutgoing = true;
+      if (child.key) editOldResponseIds.push(child.key);
       const resp = child.val();
       // If the outgoing response points to this packet's timestamp, it's the latest
-      // Check both original and new dateTimeUTC in case date was edited
+      // (check both original and new dateTimeUTC in case date was edited).
       if (resp.lastPullDateTimeUTC === origPacket.dateTimeUTC || resp.lastPullDateTimeUTC === newDateTimeUTC) {
         isLatestPull = true;
       }
     });
-
-    // If no outgoing response exists for this well at all, treat as latest
-    // (fixes wells that never got an outgoing response due to requestType bug)
+    // If no outgoing response exists for this well at all, treat as latest.
     if (!hasOutgoing) {
       isLatestPull = true;
     }
 
+    // Build the outgoing / AFR / wells-status sidecar — only when this edit is the
+    // latest pull (otherwise current/outgoing are unchanged). Computed here, all
+    // committed in ONE atomic patch below.
+    const editSidecar: CanonicalSidecar = {};
     if (isLatestPull && afr > 0) {
-      // Recalculate outgoing response fields
       const pullHeightInches = (pullBbls / bblPerFoot) * 12;
-      const targetLevel = bottomInches + pullHeightInches;
-      const recoveryNeeded = Math.max(0, targetLevel - newTankAfterInches);
-
+      const recoveryNeeded = Math.max(0, (bottomInches + pullHeightInches) - newTankAfterInches);
       let estTimeToPull = '';
       let estDateTimePull = '';
       if (recoveryNeeded > 0) {
         const estDays = (recoveryNeeded / 12) * afr;
         estTimeToPull = daysToHMM(estDays);
-        const pullDate = new Date(newDateTimeUTC);
-        const estDate = new Date(pullDate.getTime() + estDays * 24 * 60 * 60 * 1000);
-        estDateTimePull = estDate.toISOString();
+        estDateTimePull = new Date(new Date(newDateTimeUTC).getTime() + estDays * 86400000).toISOString();
       } else {
         estTimeToPull = '0:00';
         estDateTimePull = newDateTimeUTC;
       }
-
-      const bbls24 = (1 / afr) * bblPerFoot;
-      const bbls24hrs = Math.round(bbls24).toString();
-
-      if (hasOutgoing) {
-        // Update existing outgoing response
-        outgoingSnap.forEach((child) => {
-          child.ref.update({
-            currentLevel: inchesToFeetInches(newTankAfterInches),
-            flowRate: daysToHMMSS(afr),
-            bbls24hrs,
-            lastPullTopLevel: inchesToFeetInches(newTankTopInches),
-            lastPullBottomLevel: inchesToFeetInches(newTankAfterInches),
-            lastPullBbls: newBblsTaken.toString(),
-            lastPullDateTime: newDateTime || formatLocalDateTime(new Date(newDateTimeUTC)),
-            lastPullDateTimeUTC: newDateTimeUTC,
-            timeTillPull: nextEditIsDown ? 'Down' : (estTimeToPull || 'Calculating...'),
-            nextPullTime: estDateTimePull ? formatLocalDateTime(new Date(estDateTimePull)) : 'Unknown',
-            nextPullTimeUTC: estDateTimePull,
-            isEdit: true,
-            originalPacketId,
-            wellDown: nextEditIsDown,
-            lastPullDriverId: origPacket.driverId || null,
-            lastPullDriverName: origPacket.driverName || null,
-            lastPullPacketId: originalPacketId,
-            windowBblsDay: editWindowBblsDay > 0 ? editWindowBblsDay.toString() : null,
-            overnightBblsDay: editOvernightBblsDay > 0 ? editOvernightBblsDay.toString() : null,
-            companyId: outgoingCompanyId(config),
-          });
-        });
-      } else {
-        // No outgoing response exists — create one
-        const responseTimestamp = new Date();
-        const responseId = `response_${responseTimestamp.toISOString().replace(/[-:]/g, '').replace('T', '_').split('.')[0]}_${cleanName}`;
-        await db.ref(`packets/outgoing/${responseId}`).set({
-          wellName,
-          currentLevel: inchesToFeetInches(newTankAfterInches),
-          flowRate: daysToHMMSS(afr),
-          bbls24hrs,
-          lastPullTopLevel: inchesToFeetInches(newTankTopInches),
-          lastPullBottomLevel: inchesToFeetInches(newTankAfterInches),
-          lastPullBbls: newBblsTaken.toString(),
-          lastPullDateTime: newDateTime || formatLocalDateTime(new Date(newDateTimeUTC)),
-          lastPullDateTimeUTC: newDateTimeUTC,
-          timeTillPull: nextEditIsDown ? 'Down' : (estTimeToPull || 'Calculating...'),
-          nextPullTime: estDateTimePull ? formatLocalDateTime(new Date(estDateTimePull)) : 'Unknown',
-          nextPullTimeUTC: estDateTimePull,
-          wellDown: nextEditIsDown,
-          status: 'success',
-          timestamp: responseTimestamp.toISOString(),
-          timestampUTC: responseTimestamp.toISOString(),
-          isEdit: true,
-          originalPacketId,
-          lastPullDriverId: origPacket.driverId || null,
-          lastPullDriverName: origPacket.driverName || null,
-          lastPullPacketId: originalPacketId,
-          windowBblsDay: editWindowBblsDay > 0 ? editWindowBblsDay.toString() : null,
-          overnightBblsDay: editOvernightBblsDay > 0 ? editOvernightBblsDay.toString() : null,
-          companyId: outgoingCompanyId(config),
-        });
-        console.log(`Edit: Created new outgoing response for ${wellName} (none existed)`);
-      }
-
-      // Update well_config AFR
-      const afrMinutes = afr * 24 * 60;
-      await db.ref(`well_config/${wellName}`).update({
-        avgFlowRate: daysToHMMSS(afr),
-        avgFlowRateMinutes: Math.round(afrMinutes * 100) / 100,
-      });
-
-      console.log(`Edit: Updated outgoing + AFR for ${wellName}`);
-    }
-
-    // Update performance/ row (WB M reads from here)
-    // processIncomingPull writes these on initial pull, but edits were never synced — fix that
-    try {
-      const perfPullTime = new Date(newDateTimeUTC);
-      const perfTimestamp = `${perfPullTime.getFullYear()}${String(perfPullTime.getMonth() + 1).padStart(2, '0')}${String(perfPullTime.getDate()).padStart(2, '0')}_${String(perfPullTime.getHours()).padStart(2, '0')}${String(perfPullTime.getMinutes()).padStart(2, '0')}${String(perfPullTime.getSeconds()).padStart(2, '0')}`;
-      const perfDateStr = `${perfPullTime.getFullYear()}-${String(perfPullTime.getMonth() + 1).padStart(2, '0')}-${String(perfPullTime.getDate()).padStart(2, '0')}`;
-      const perfWellKey = wellName.replace(/\s+/g, '_');
-      const actualInches = Math.floor(newTankTopInches);
-
-      // If date was edited, clean up the OLD performance row (different timestamp key)
-      if (data.dateTimeUTC && data.dateTimeUTC !== origPacket.dateTimeUTC) {
-        const oldPullTime = new Date(origPacket.dateTimeUTC);
-        const oldPerfTimestamp = `${oldPullTime.getFullYear()}${String(oldPullTime.getMonth() + 1).padStart(2, '0')}${String(oldPullTime.getDate()).padStart(2, '0')}_${String(oldPullTime.getHours()).padStart(2, '0')}${String(oldPullTime.getMinutes()).padStart(2, '0')}${String(oldPullTime.getSeconds()).padStart(2, '0')}`;
-        await db.ref(`performance/${perfWellKey}/rows/${oldPerfTimestamp}`).remove();
-        console.log(`Edit: Removed old performance row ${oldPerfTimestamp} for ${wellName}`);
-      }
-
-      // Use predicted from original packet if available, otherwise default to actual
-      const predictedInches = origPacket.predictedLevelInches
-        ? Math.floor(Number(origPacket.predictedLevelInches))
-        : actualInches;
-
-      await db.ref(`performance/${perfWellKey}/rows/${perfTimestamp}`).set({
-        d: perfDateStr,
-        a: actualInches,
-        p: predictedInches,
-      });
-      await db.ref(`performance/${perfWellKey}/wellName`).set(wellName);
-      await db.ref(`performance/${perfWellKey}/updated`).set(new Date().toISOString());
-      console.log(`Edit: Updated performance/ for ${wellName}: a=${actualInches} p=${predictedInches}`);
-    } catch (perfError) {
-      console.error(`Edit: Error updating performance/ for ${wellName}:`, perfError);
-    }
-
-    // ── Update wells/{wellName}/status (same structure as processIncomingPull) ──
-    if (isLatestPull && afr > 0) {
-      const editAfrMinutes = afr * 24 * 60;
-      const editWellStatus = {
+      const bbls24hrs = Math.round((1 / afr) * bblPerFoot).toString();
+      const responseTimestamp = new Date();
+      const responseId = `response_${responseTimestamp.toISOString().replace(/[-:]/g, '').replace('T', '_').split('.')[0]}_${cleanName}`;
+      const response: Record<string, unknown> = {
         wellName,
-        config: {
-          tanks,
-          bottomLevel: bottomInches / 12,
-          route: config.route || 'Unassigned',
-          pullBbls,
-        },
-        current: {
-          level: inchesToFeetInches(newTankAfterInches),
-          levelInches: newTankAfterInches,
-          asOf: new Date().toISOString(),
-        },
+        currentLevel: inchesToFeetInches(newTankAfterInches),
+        flowRate: daysToHMMSS(afr),
+        bbls24hrs,
+        lastPullTopLevel: inchesToFeetInches(newTankTopInches),
+        lastPullBottomLevel: inchesToFeetInches(newTankAfterInches),
+        lastPullBbls: newBblsTaken.toString(),
+        lastPullDateTime: newDateTime || formatLocalDateTime(new Date(newDateTimeUTC)),
+        lastPullDateTimeUTC: newDateTimeUTC,
+        timeTillPull: nextEditIsDown ? 'Down' : (estTimeToPull || 'Calculating...'),
+        nextPullTime: estDateTimePull ? formatLocalDateTime(new Date(estDateTimePull)) : 'Unknown',
+        nextPullTimeUTC: estDateTimePull,
+        wellDown: nextEditIsDown,
+        status: 'success',
+        timestamp: responseTimestamp.toISOString(),
+        timestampUTC: responseTimestamp.toISOString(),
+        isEdit: true,
+        originalPacketId,
+        lastPullDriverId: origPacket.driverId || null,
+        lastPullDriverName: origPacket.driverName || null,
+        lastPullPacketId: originalPacketId,
+        windowBblsDay: editWindowBblsDay > 0 ? editWindowBblsDay.toString() : null,
+        overnightBblsDay: editOvernightBblsDay > 0 ? editOvernightBblsDay.toString() : null,
+        companyId: outgoingCompanyId(config),
+      };
+      editSidecar.outgoing = { deleteResponseIds: editOldResponseIds, responseId, response };
+      const afrMinutes = afr * 24 * 60;
+      editSidecar.afr = { wellName, avgFlowRate: daysToHMMSS(afr), avgFlowRateMinutes: Math.round(afrMinutes * 100) / 100 };
+      editSidecar.wellStatus = { wellName, status: {
+        wellName,
+        config: { tanks, bottomLevel: bottomInches / 12, route: config.route || 'Unassigned', pullBbls },
+        current: { level: inchesToFeetInches(newTankAfterInches), levelInches: newTankAfterInches, asOf: new Date().toISOString() },
         lastPull: {
-          dateTime: newDateTime || formatLocalDateTime(new Date(newDateTimeUTC)),
-          dateTimeUTC: newDateTimeUTC,
-          topLevel: inchesToFeetInches(newTankTopInches),
-          topLevelInches: newTankTopInches,
-          bottomLevel: inchesToFeetInches(newTankAfterInches),
-          bottomLevelInches: newTankAfterInches,
-          rawCalculatedBottom: inchesToFeetInches(rawNewTankAfterInches),
-          rawCalculatedBottomInches: rawNewTankAfterInches,
-          hitLoadLine: editHitLoadLine,
-          bblsTaken: newBblsTaken,
-          driverName: origPacket.driverName || '',
-          packetId: originalPacketId,
+          dateTime: newDateTime || formatLocalDateTime(new Date(newDateTimeUTC)), dateTimeUTC: newDateTimeUTC,
+          topLevel: inchesToFeetInches(newTankTopInches), topLevelInches: newTankTopInches,
+          bottomLevel: inchesToFeetInches(newTankAfterInches), bottomLevelInches: newTankAfterInches,
+          rawCalculatedBottom: inchesToFeetInches(rawNewTankAfterInches), rawCalculatedBottomInches: rawNewTankAfterInches,
+          hitLoadLine: editHitLoadLine, bblsTaken: newBblsTaken, driverName: origPacket.driverName || '', packetId: originalPacketId,
         },
         calculated: {
-          flowRate: daysToHMMSS(afr),
-          flowRateMinutes: Math.round(editAfrMinutes * 100) / 100,
+          flowRate: daysToHMMSS(afr), flowRateMinutes: Math.round(afrMinutes * 100) / 100,
           bbls24hrs: Math.round((1 / afr) * bblPerFoot) || 0,
-          nextPullTime: (() => { const pullHeightIn = (pullBbls / bblPerFoot) * 12; const targetLvl = bottomInches + pullHeightIn; const recovNeeded = Math.max(0, targetLvl - newTankAfterInches); if (recovNeeded <= 0) return formatLocalDateTime(new Date(newDateTimeUTC)); const estDays = (recovNeeded / 12) * afr; const estDate = new Date(new Date(newDateTimeUTC).getTime() + estDays * 24 * 60 * 60 * 1000); return formatLocalDateTime(estDate); })(),
-          nextPullTimeUTC: (() => { const pullHeightIn = (pullBbls / bblPerFoot) * 12; const targetLvl = bottomInches + pullHeightIn; const recovNeeded = Math.max(0, targetLvl - newTankAfterInches); if (recovNeeded <= 0) return newDateTimeUTC; const estDays = (recovNeeded / 12) * afr; return new Date(new Date(newDateTimeUTC).getTime() + estDays * 24 * 60 * 60 * 1000).toISOString(); })(),
-          timeTillPull: nextEditIsDown ? 'Down' : (() => { const pullHeightIn = (pullBbls / bblPerFoot) * 12; const targetLvl = bottomInches + pullHeightIn; const recovNeeded = Math.max(0, targetLvl - newTankAfterInches); if (recovNeeded <= 0) return '0:00'; return daysToHMM((recovNeeded / 12) * afr); })(),
+          nextPullTime: recoveryNeeded <= 0 ? formatLocalDateTime(new Date(newDateTimeUTC)) : formatLocalDateTime(new Date(new Date(newDateTimeUTC).getTime() + (recoveryNeeded / 12) * afr * 86400000)),
+          nextPullTimeUTC: estDateTimePull,
+          timeTillPull: nextEditIsDown ? 'Down' : (recoveryNeeded <= 0 ? '0:00' : daysToHMM((recoveryNeeded / 12) * afr)),
         },
-        isDown: nextEditIsDown,
-        updatedAt: new Date().toISOString(),
-      };
-      await db.ref(`wells/${wellName}/status`).set(editWellStatus);
-      console.log(`Edit: Updated wells/${wellName}/status (full recalc)`);
+        isDown: nextEditIsDown, updatedAt: new Date().toISOString(),
+      } };
     }
+
+    // Performance row (WB M reads here) — computed; committed atomically below.
+    const perfPullTime = new Date(newDateTimeUTC);
+    const editPerfTimestamp = `${perfPullTime.getFullYear()}${String(perfPullTime.getMonth() + 1).padStart(2, '0')}${String(perfPullTime.getDate()).padStart(2, '0')}_${String(perfPullTime.getHours()).padStart(2, '0')}${String(perfPullTime.getMinutes()).padStart(2, '0')}${String(perfPullTime.getSeconds()).padStart(2, '0')}`;
+    const editPerfDateStr = `${perfPullTime.getFullYear()}-${String(perfPullTime.getMonth() + 1).padStart(2, '0')}-${String(perfPullTime.getDate()).padStart(2, '0')}`;
+    const editPerfWellKey = wellName.replace(/\s+/g, '_');
+    const editActualInches = Math.floor(newTankTopInches);
+    const editPredictedInches = origPacket.predictedLevelInches ? Math.floor(Number(origPacket.predictedLevelInches)) : editActualInches;
+    // On a date edit, remove the OLD performance row (different timestamp key).
+    let editOldPerfRemovalPath: string | null = null;
+    if (data.dateTimeUTC && data.dateTimeUTC !== origPacket.dateTimeUTC) {
+      const oldPullTime = new Date(origPacket.dateTimeUTC);
+      const oldPerfTimestamp = `${oldPullTime.getFullYear()}${String(oldPullTime.getMonth() + 1).padStart(2, '0')}${String(oldPullTime.getDate()).padStart(2, '0')}_${String(oldPullTime.getHours()).padStart(2, '0')}${String(oldPullTime.getMinutes()).padStart(2, '0')}${String(oldPullTime.getSeconds()).padStart(2, '0')}`;
+      editOldPerfRemovalPath = `performance/${editPerfWellKey}/rows/${oldPerfTimestamp}`;
+    }
+    const editPerfPiece = { wellKey: editPerfWellKey, perfTimestamp: editPerfTimestamp, row: { d: editPerfDateStr, a: editActualInches, p: editPredictedInches } as Record<string, unknown>, wellName, updatedIso: new Date().toISOString() };
+
+    // ── ONE canonical commit for the edit ───────────────────────────────────
+    // processed material + derived (edited row) + single-hop successor cascade +
+    // outgoing/current + wells-status + performance + AFR + chronoRevision +
+    // immutable edit-history + edit-receipt + isDown + incoming-consume, as a
+    // single atomic multipath update, serialized by the per-well lock, with the
+    // completion receipt in the SAME update.
+    const editCommit = await runCanonicalMutation(makeCoordinatorIO(db, wellName), {
+      wellName, operationId: editEventId,
+      buildPatch: async () => {
+        const curRev = Number((await db.ref(`wells/${wellName}/status/chronoRevision`).once('value')).val()) || 0;
+        const revision = curRev + 1;
+        const editReceipt: CommitReceipt = {
+          operationId: editEventId, mutationType: 'edit', wellName, fence: revision, revision,
+          affectedPacketIds: [originalPacketId, ...(nextPacketKey ? [nextPacketKey as string] : [])],
+          committedAtMs: Date.now(), patchHash: `${editEventId}:${revision}`,
+        };
+        const patch = assembleCanonicalPatch({
+          processedUpdates: {
+            ...Object.fromEntries(Object.entries(updates).map(([k, v]) => [`packets/processed/${originalPacketId}/${k}`, v])),
+            ...cascadeUpdates,
+          },
+          outgoing: editSidecar.outgoing ?? null,
+          wellStatus: editSidecar.wellStatus ?? null,
+          performance: editPerfPiece,
+          production: [],
+          afr: editSidecar.afr ?? null,
+          fence: { wellName, revision },
+          receipt: editReceipt, receiptPath: receiptPathFor(wellName, editEventId),
+        });
+        // Edit-specific atomic locations layered into the SAME patch.
+        Object.assign(patch, historyPaths, receiptPaths);
+        patch[`packets/incoming/${context.params.packetId}`] = null;
+        patch[`wells/${wellName}/status/isDown`] = nextEditIsDown; // always, even when not latest
+        if (editOldPerfRemovalPath) patch[editOldPerfRemovalPath] = null;
+        return { patch, receipt: editReceipt };
+      },
+    });
+    if (editCommit.status !== 'committed' && editCommit.status !== 'already_done') {
+      console.error(`[CANONICAL-EDIT] ${wellName}: ${originalPacketId} → ${editCommit.status} (incoming left for retry)`);
+      return null;
+    }
+    console.log(`[CANONICAL-EDIT] ${wellName}: ${originalPacketId} → ${editCommit.status} (processed+cascade+outgoing+status+perf+afr+history+receipt, 1 atomic update)`);
 
     // ── Cascade to Firestore: DETERMINISTIC identity resolution ──
     // P0 (2026-06-23): the prior back-patch matched a ticket by packetId and, on
