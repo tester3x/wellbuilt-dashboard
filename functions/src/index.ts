@@ -25,6 +25,7 @@ import type { ChronoPullInput, WellChronoConfig } from './chronoRecompute';
 import { planAcquire, canCommit, planRelease, acceptFencedWrite, type FenceRecord } from './wellFence';
 import { CANONICAL_COMMIT_TIMEOUT_SECONDS } from './chronoCommitCoordinator';
 import { computeAFRFromRates } from './pullFormulas';
+import { getProductionDate, calculateWindowBblsPerDay, calculateOvernightBblsPerDay, computeBbls24hrs, type HistoricalPull } from './productionFormulas';
 import {
   assertedFromEditedFields,
   buildAppliedEditEvent,
@@ -456,13 +457,6 @@ function daysToHMMSS(days: number): string {
 // ========== BBLs/Day Calculation Functions ==========
 // Ported from WB Mobile functions/index.js — must stay in sync
 
-interface HistoricalPull {
-  key: string;
-  timestamp: number;
-  tankLevelFeet: number;
-  bblsTaken: number;
-  wellDown: boolean;
-}
 
 /**
  * Parse packet timestamp from dateTimeUTC or dateTime field.
@@ -639,130 +633,7 @@ function makeBackdatedIO(wellName: string): BackdatedIO {
  * CST/CDT offset in milliseconds.
  * CST = UTC-6, CDT = UTC-5. DST: 2nd Sunday March → 1st Sunday November.
  */
-function getCSTOffset(timestampMs: number): number {
-  const date = new Date(timestampMs);
-  const year = date.getUTCFullYear();
-  const marchFirst = new Date(Date.UTC(year, 2, 1));
-  const marchSecondSun = new Date(Date.UTC(year, 2, 8 + (7 - marchFirst.getUTCDay()) % 7, 8));
-  const novFirst = new Date(Date.UTC(year, 10, 1));
-  const novFirstSun = new Date(Date.UTC(year, 10, 1 + (7 - novFirst.getUTCDay()) % 7, 7));
-  if (timestampMs >= marchSecondSun.getTime() && timestampMs < novFirstSun.getTime()) {
-    return -5 * 60 * 60 * 1000; // CDT
-  }
-  return -6 * 60 * 60 * 1000; // CST
-}
-
-/**
- * Get the 6am-6am window end for a timestamp.
- * Before 6am → window ends at 6am same day. 6am or after → 6am next day.
- */
-function getWindowEnd(timestampMs: number): number {
-  const cstOffset = getCSTOffset(timestampMs);
-  const localMs = timestampMs + cstOffset;
-  const localDate = new Date(localMs);
-  const hour = localDate.getUTCHours();
-  const sixAmLocal = new Date(localDate);
-  sixAmLocal.setUTCHours(6, 0, 0, 0);
-  const sixAmUtc = sixAmLocal.getTime() - cstOffset;
-  return hour < 6 ? sixAmUtc : sixAmUtc + 24 * 60 * 60 * 1000;
-}
-
-/**
- * Get the production date (yyyy-mm-dd) for a timestamp using 6am boundary.
- */
-function getProductionDate(timestampMs: number): string {
-  const cstOffset = getCSTOffset(timestampMs);
-  const localMs = timestampMs + cstOffset;
-  const d = new Date(localMs);
-  if (d.getUTCHours() < 6) {
-    d.setUTCDate(d.getUTCDate() - 1);
-  }
-  return `${d.getUTCFullYear()}-${String(d.getUTCMonth() + 1).padStart(2, '0')}-${String(d.getUTCDate()).padStart(2, '0')}`;
-}
-
-/**
- * Window-averaged bbls/day.
- * Groups flow rates by 6am-6am window, averages current window (falls back to previous).
- */
-function calculateWindowBblsPerDay(historicalPulls: HistoricalPull[], bblPerFoot: number, pullTimestamp: number): number {
-  if (!historicalPulls || historicalPulls.length < 2) return 0;
-
-  const currentWindowEnd = getWindowEnd(pullTimestamp);
-  const windowFlowRates = new Map<number, number[]>();
-
-  for (let i = 1; i < historicalPulls.length; i++) {
-    const current = historicalPulls[i];
-    const previous = historicalPulls[i - 1];
-    if (current.wellDown || previous.wellDown) continue;
-
-    const timeDifDays = (current.timestamp - previous.timestamp) / (1000 * 60 * 60 * 24);
-    if (timeDifDays <= 0) continue;
-
-    const prevBottomFeet = Math.max(previous.tankLevelFeet - (previous.bblsTaken / bblPerFoot), 0);
-    const recoveryFeet = current.tankLevelFeet - prevBottomFeet;
-    if (recoveryFeet <= 0) continue;
-
-    const flowRateDays = timeDifDays / recoveryFeet;
-    if (flowRateDays <= 0 || flowRateDays >= 365) continue;
-
-    const windowEnd = getWindowEnd(current.timestamp);
-    const existing = windowFlowRates.get(windowEnd) || [];
-    existing.push(flowRateDays);
-    windowFlowRates.set(windowEnd, existing);
-  }
-
-  let flowRates = windowFlowRates.get(currentWindowEnd);
-  if (!flowRates || flowRates.length === 0) {
-    const prevWindowEnd = currentWindowEnd - 24 * 60 * 60 * 1000;
-    flowRates = windowFlowRates.get(prevWindowEnd);
-  }
-  if (!flowRates || flowRates.length === 0) return 0;
-
-  const avgFlowRateDays = flowRates.reduce((a, b) => a + b, 0) / flowRates.length;
-  if (avgFlowRateDays <= 0) return 0;
-
-  return Math.round((1 / avgFlowRateDays) * bblPerFoot);
-}
-
-/**
- * Overnight/longest-gap bbls/day.
- * Finds the longest time gap between pulls in the current 6am window.
- */
-function calculateOvernightBblsPerDay(historicalPulls: HistoricalPull[], bblPerFoot: number, pullTimestamp: number): number {
-  if (!historicalPulls || historicalPulls.length < 2) return 0;
-
-  // Driver's manual method: most recent pull from any previous day → first pull today.
-  const todayDate = new Date(pullTimestamp).toISOString().slice(0, 10);
-
-  let firstPullToday: HistoricalPull | null = null;
-  let lastPullPrevDay: HistoricalPull | null = null;
-
-  // Pulls are chronological (oldest first). Walk backwards.
-  for (let i = historicalPulls.length - 1; i >= 0; i--) {
-    const pull = historicalPulls[i];
-    const pullDate = new Date(pull.timestamp).toISOString().slice(0, 10);
-
-    if (pullDate === todayDate) {
-      firstPullToday = pull; // Keeps overwriting — last one standing is earliest today
-    } else {
-      lastPullPrevDay = pull; // Most recent pull from a previous day
-      break;
-    }
-  }
-
-  if (!firstPullToday || !lastPullPrevDay) return 0;
-  if (firstPullToday.wellDown || lastPullPrevDay.wellDown) return 0;
-
-  const timeDifDays = (firstPullToday.timestamp - lastPullPrevDay.timestamp) / (1000 * 60 * 60 * 24);
-  if (timeDifDays <= 0) return 0;
-
-  const prevBottomFeet = Math.max(lastPullPrevDay.tankLevelFeet - (lastPullPrevDay.bblsTaken / bblPerFoot), 0);
-  const recoveryFeet = firstPullToday.tankLevelFeet - prevBottomFeet;
-  if (recoveryFeet <= 0) return 0;
-
-  const flowRateDays = timeDifDays / recoveryFeet;
-  return Math.round((1 / flowRateDays) * bblPerFoot);
-}
+// production/date formulas extracted to ./productionFormulas (imported above).
 
 /**
  * Write daily production log to Firebase.
@@ -1158,11 +1029,7 @@ export const processIncomingPull = functionsV1.runWith({ timeoutSeconds: CANONIC
     const currentLevelInches = tankAfterInches;
 
     // BBLs per 24 hours
-    let bbls24hrs = '0';
-    if (afr > 0) {
-      const bbls24 = (1 / afr) * 20 * tanks;
-      bbls24hrs = Math.round(bbls24).toString();
-    }
+    const bbls24hrs = computeBbls24hrs(afr, tanks);
 
     // Build outgoing response
     const timestamp = new Date();
