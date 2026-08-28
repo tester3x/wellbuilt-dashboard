@@ -26,6 +26,8 @@ import { planAcquire, canCommit, planRelease, acceptFencedWrite, type FenceRecor
 import { CANONICAL_COMMIT_TIMEOUT_SECONDS } from './chronoCommitCoordinator';
 import { computeAFRFromRates } from './pullFormulas';
 import { getProductionDate, calculateWindowBblsPerDay, calculateOvernightBblsPerDay, computeBbls24hrs, type HistoricalPull } from './productionFormulas';
+import { formatLocalDateTime, outgoingCompanyId, inchesToFeetInches, feetInchesToInches, daysToHMM, daysToHMMSS } from './wbmFormat';
+import { buildOutgoingResponse } from './outgoingBuilders';
 import {
   assertedFromEditedFields,
   buildAppliedEditEvent,
@@ -55,16 +57,6 @@ const db = admin.database();
 
 // Format a Date to "MM/DD/YYYY H:MM AM/PM" (no comma — matches WB M/WB T format)
 // Node's toLocaleString() produces "M/D/YYYY, H:MM:SS AM/PM" which Hermes can't parse
-function formatLocalDateTime(d: Date): string {
-  const month = String(d.getMonth() + 1).padStart(2, '0');
-  const day = String(d.getDate()).padStart(2, '0');
-  const year = d.getFullYear();
-  let hours = d.getHours();
-  const mins = String(d.getMinutes()).padStart(2, '0');
-  const ampm = hours >= 12 ? 'PM' : 'AM';
-  hours = hours % 12 || 12;
-  return `${month}/${day}/${year} ${hours}:${mins} ${ampm}`;
-}
 
 // ============================================================
 // WATCHDOG: Catches stranded packets that failed to process
@@ -378,10 +370,6 @@ interface OutgoingResponse {
   companyId?: string;
 }
 
-function outgoingCompanyId(config: { companyId?: unknown } | null | undefined): string {
-  const cid = typeof config?.companyId === 'string' ? config.companyId.trim() : '';
-  return cid || 'liquid-gold';
-}
 
 // NEW UNIFIED STRUCTURE - Single source of truth
 interface WellStatus {
@@ -421,38 +409,9 @@ interface WellStatus {
 }
 
 // Helper: Convert inches to feet'inches" format
-function inchesToFeetInches(inches: number): string {
-  const feet = Math.floor(inches / 12);
-  const remainingInches = Math.floor(inches % 12);
-  return `${feet}'${remainingInches}"`;
-}
 
-// Helper: Parse feet'inches" to inches
-function feetInchesToInches(str: string): number {
-  if (!str) return 0;
-  const match = str.match(/(\d+)'(\d+)"/);
-  if (match) {
-    return parseInt(match[1]) * 12 + parseInt(match[2]);
-  }
-  return 0;
-}
 
-// Helper: Format days to H:MM
-function daysToHMM(days: number): string {
-  const totalMinutes = Math.floor(days * 24 * 60);
-  const hours = Math.floor(totalMinutes / 60);
-  const mins = totalMinutes % 60;
-  return `${hours}:${mins.toString().padStart(2, '0')}`;
-}
 
-// Helper: Format days to H:MM:SS
-function daysToHMMSS(days: number): string {
-  const totalSeconds = Math.floor(days * 24 * 60 * 60);
-  const hours = Math.floor(totalSeconds / 3600);
-  const mins = Math.floor((totalSeconds % 3600) / 60);
-  const secs = totalSeconds % 60;
-  return `${hours}:${mins.toString().padStart(2, '0')}:${secs.toString().padStart(2, '0')}`;
-}
 
 // ========== BBLs/Day Calculation Functions ==========
 // Ported from WB Mobile functions/index.js — must stay in sync
@@ -1033,30 +992,12 @@ export const processIncomingPull = functionsV1.runWith({ timeoutSeconds: CANONIC
 
     // Build outgoing response
     const timestamp = new Date();
-    const outgoingResponse: OutgoingResponse = {
-      wellName,
-      currentLevel: inchesToFeetInches(currentLevelInches),
-      flowRate: afr > 0 ? daysToHMMSS(afr) : 'Unknown',
-      bbls24hrs,
-      timeTillPull: nextIsDown ? 'Down' : (estTimeToPull || 'Calculating...'),
-      nextPullTime: estDateTimePull ? formatLocalDateTime(new Date(estDateTimePull)) : 'Unknown',
-      nextPullTimeUTC: estDateTimePull,
-      lastPullDateTime: data.dateTime || formatLocalDateTime(new Date(data.dateTimeUTC)),
-      lastPullDateTimeUTC: data.dateTimeUTC,
-      lastPullBbls: data.bblsTaken.toString(),
-      lastPullTopLevel: inchesToFeetInches(tankTopInches),
-      lastPullBottomLevel: inchesToFeetInches(tankAfterInches),
-      lastPullDriverId: data.driverId || null,
-      lastPullDriverName: data.driverName || null,
-      lastPullPacketId: packetId,
-      wellDown: nextIsDown,
-      companyId: outgoingCompanyId(config),
-      status: 'success',
-      timestamp: timestamp.toISOString(),
-      timestampUTC: timestamp.toISOString(),
-      windowBblsDay: windowBblsDay > 0 ? windowBblsDay.toString() : null,
-      overnightBblsDay: overnightBblsDay > 0 ? overnightBblsDay.toString() : null,
-    };
+    const outgoingResponse: OutgoingResponse = buildOutgoingResponse({
+      wellName, currentLevelInches, afr, bbls24hrs, nextIsDown, estTimeToPull, estDateTimePull,
+      dateTime: data.dateTime, dateTimeUTC: data.dateTimeUTC, bblsTaken: data.bblsTaken,
+      driverId: data.driverId, driverName: data.driverName, tankTopInches, tankAfterInches,
+      packetId, config, timestampIso: timestamp.toISOString(), windowBblsDay, overnightBblsDay,
+    }) as unknown as OutgoingResponse;
 
     // Write to outgoing/ (delete old responses for this well first)
     const oldResponses = await db.ref('packets/outgoing')
