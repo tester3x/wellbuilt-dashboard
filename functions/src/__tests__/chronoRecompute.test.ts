@@ -262,3 +262,19 @@ describe('provenance verdicts — lineage is NOT material equivalence', () => {
     expect(p2.needsReview).toBe(true);
   });
 });
+
+describe('historical rows retain stored/config-derived bottoms (no recompute with today config)', () => {
+  test('a row with knownBottomInches keeps its bottom even under a DIFFERENT bblPerFoot', () => {
+    // Existing processed row carries its stored tankAfterInches as knownBottomInches.
+    const stored = { packetId: 'old', dateTimeUTC: '2026-08-26T18:01:07.025Z', tankTopInches: 158, bblsTaken: 145, knownBottomInches: 71 } as ChronoPullInput;
+    // Recompute under a CHANGED config (bblPerFoot 40, not the original 20).
+    const res = recomputeWell([stored], { bblPerFoot: 40, tanks: 2 });
+    // Stored bottom preserved (would be 158-(145/40)*12=114.5 if recomputed — it is NOT).
+    expect(res[0].tankAfterInches).toBe(71);
+  });
+  test('a NEW row (no stored bottom) DOES compute with the current config', () => {
+    const fresh = { packetId: 'new', dateTimeUTC: '2026-08-27T00:39:00.000Z', tankTopInches: 240, bblsTaken: 100 } as ChronoPullInput;
+    const res = recomputeWell([fresh], { bblPerFoot: 200, tanks: 6 }); // Daredevil-style
+    expect(res[0].tankAfterInches).toBe(234); // 240 - (100/200)*12
+  });
+});

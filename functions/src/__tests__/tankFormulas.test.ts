@@ -13,17 +13,20 @@ describe('tank formulas — golden pins', () => {
     expect(computeTankTopInches(undefined)).toBe(0);
   });
 
-  test('tank after uses resolved bblPerFoot (top − (bbls/bblPerFoot)*12)', () => {
-    // 20 bbl/ft, one tank (Gabriel 5): 158,145,20 → 71 ; 84,60,20 → 48
-    expect(computeTankAfterInches(158, 145, 20)).toBe(71);
+  test('tank after uses the CONFIGURED TOTAL bblPerFoot — count distinguished from geometry', () => {
+    // The formula divides by the configured bank total; it never divides by tank
+    // count again. Cases distinguish a standard equalized bank (total = 20×count)
+    // from genuinely different geometry (total != 20×count).
+    expect(computeTankAfterInches(158, 145, 20)).toBe(71);   // 20/ft, 1 tank (Gabriel 5) — Standard
     expect(computeTankAfterInches(84, 60, 20)).toBe(48);
     expect(computeBblsInInches(145, 20)).toBe(87);
-    // NON-20 single tank (Predator 1 = 25): 120,50,25 → 120 - (50/25)*12 = 96
-    expect(computeTankAfterInches(120, 50, 25)).toBe(96);
-    // multiple tanks — total bblPerFoot=40 (Atlas 1, 2 tanks): 120,60,40 → 120 - (60/40)*12 = 102
-    expect(computeTankAfterInches(120, 60, 40)).toBe(102);
-    // multiple tanks — non-20 total (Daredevil 1 = 200, 6 tanks): 240,100,200 → 240 - (100/200)*12 = 234
-    expect(computeTankAfterInches(240, 100, 200)).toBe(234);
+    // Standard equalized banks: total = 20 × count.
+    expect(computeTankAfterInches(120, 60, 40)).toBe(102);   // 40/ft, 2 tanks (Atlas 1) — Standard
+    expect(computeTankAfterInches(240, 120, 120)).toBe(228); // 120/ft, 6 tanks (Thor 5) — Standard (20/tank)
+    // Geometry/capacity configured: total != 20 × count.
+    expect(computeTankAfterInches(120, 50, 25)).toBe(96);              // 25/ft, 1 tank (Predator 1)
+    expect(computeTankAfterInches(120, 60, 66.66666666666667)).toBeCloseTo(109.2, 6); // 66.67/ft, 2 tanks (Barnstormer 3)
+    expect(computeTankAfterInches(240, 100, 200)).toBe(234);          // 200/ft, 6 tanks (Daredevil 1)
     // guards
     expect(computeBblsInInches(0, 20)).toBe(0);   // zero bbls
     expect(computeBblsInInches(50, 0)).toBe(0);   // no bblPerFoot → 0 (caller resolves a real value)
