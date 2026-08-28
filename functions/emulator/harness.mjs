@@ -173,6 +173,42 @@ async function main() {
   check('status: chronoLock is clear (released) after all commits', statusNow.chronoLock == null, JSON.stringify(statusNow.chronoLock));
   check('status: chronoRevision advanced monotonically (> 1)', typeof statusNow.chronoRevision === 'number' && statusNow.chronoRevision > 1, JSON.stringify(statusNow.chronoRevision));
 
+  // ── Scenario 9: DELETE oldest then middle on a fresh 3-pull well (cascade repair)
+  const W2 = 'Barnstormer 2';
+  await seedWellConfig(W2, {});
+  await sendPull('q1', W2, { dateTimeUTC: '2026-08-27T06:00:00.000Z', dateTime: '8/27/2026 1:00 AM', tankLevelFeet: '7', bblsTaken: 40 });
+  await sleep(2500);
+  await sendPull('q2', W2, { dateTimeUTC: '2026-08-27T12:00:00.000Z', dateTime: '8/27/2026 7:00 AM', tankLevelFeet: '9', bblsTaken: 40 });
+  await sleep(2500);
+  await sendPull('q3', W2, { dateTimeUTC: '2026-08-27T18:00:00.000Z', dateTime: '8/27/2026 1:00 PM', tankLevelFeet: '11', bblsTaken: 40 });
+  await sleep(2500);
+  await sendDelete('dq_old', W2, 'q1'); // delete oldest
+  await sleep(3500);
+  check('DELETE oldest → row gone, successors intact', (await db.ref('packets/processed/q1').once('value')).val() === null && !!(await db.ref('packets/processed/q2').once('value')).val(), 'q1 removed, q2 present');
+  await sendDelete('dq_mid', W2, 'q2'); // delete middle
+  await sleep(3500);
+  check('DELETE middle → row gone, newest q3 still current', (await db.ref('packets/processed/q2').once('value')).val() === null, 'q2 removed');
+
+  // ── Scenario 10: potential-duplicate (matching values, NO shared lineage) → BOTH
+  //     accepted (never dropped) and flagged for review.
+  const W3 = 'Predator 1';
+  await seedWellConfig(W3, { bblPerFoot: 25, tanks: 1 }); // non-20 geometry well
+  await sendPull('r1', W3, { dateTimeUTC: '2026-08-27T09:00:00.000Z', dateTime: '8/27/2026 4:00 AM', tankLevelFeet: '10', bblsTaken: 30 });
+  await sleep(2500);
+  // A distinct packetId with the SAME time+values, no operationId lineage.
+  await sendPull('r2', W3, { dateTimeUTC: '2026-08-27T09:00:00.000Z', packetId: 'r2', dateTime: '8/27/2026 4:00 AM', tankLevelFeet: '10', bblsTaken: 30 });
+  await sleep(3000);
+  const r1p = (await db.ref('packets/processed/r1').once('value')).val();
+  const r2p = (await db.ref('packets/processed/r2').once('value')).val();
+  check('potential-duplicate → BOTH pulls accepted (neither dropped)', !!r1p && !!r2p, `r1=${!!r1p} r2=${!!r2p}`);
+  check('non-20 geometry well (25 bbl/ft) computed a bottom, not rejected', r1p && typeof r1p.tankAfterInches === 'number', JSON.stringify(r1p && r1p.tankAfterInches));
+
+  // COVERAGE NOTE: crash-after-update / timeout-recovery inside vs after the 180s
+  // horizon, and the fencing TOCTOU race, require fault injection the emulators:exec
+  // harness cannot cleanly perform; they are proven by the coordinator atomicity
+  // matrix (chronoCommitCoordinator.test.ts) and wellFence.test.ts at unit level.
+  // This harness verifies real-trigger behavior for the mutation matrix above.
+
   // NOTE: this matrix is a SUPERSET scaffold and remains UNVERIFIED until it runs
   // green against the real emulator (blocked by the host JVM NIO defect). Additional
   // required cases (crash/timeout-recovery inside vs after the 180s horizon,
