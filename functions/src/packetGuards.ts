@@ -34,7 +34,11 @@ export type RejectionReason =
   | 'PACKET_ID_COLLISION';
 
 export interface GuardVerdict {
-  action: 'process' | 'quarantine';
+  /** 'process' — accept as (potentially) newest, advancing the watermark.
+   *  'process_backdated' — a VALID older pull: accept into chronological history
+   *    WITHOUT advancing/regressing the watermark (Late-Entry lane).
+   *  'quarantine' — reject losslessly. */
+  action: 'process' | 'process_backdated' | 'quarantine';
   reason?: RejectionReason;
   readableReason?: string;
   /** The watermark the packet was compared against, when one was involved. */
@@ -131,18 +135,30 @@ export function evaluateIncomingPull(args: {
     };
   }
 
-  // 5: stale comparison, only with two valid timestamps.
-  if (!isNaN(incomingMs) && !isNaN(watermarkMs) && incomingMs <= watermarkMs) {
-    return {
-      action: 'quarantine',
-      reason: 'STALE_PULL_TIME',
-      readableReason:
-        `Incoming pull time ${String(incomingDateTimeUTC)} is not newer than the ` +
-        `well's outgoing watermark ${String(watermarkDateTimeUTC)} — duplicate upload, ` +
-        `watchdog re-trigger, or an already-edited pull. Held in packets/rejected ` +
-        `instead of being deleted.`,
-      comparedWatermarkUTC: String(watermarkDateTimeUTC),
-    };
+  // 5: order comparison, only with two valid timestamps.
+  if (!isNaN(incomingMs) && !isNaN(watermarkMs)) {
+    // Exactly at the watermark → a duplicate re-submit / watchdog re-trigger of
+    // the current pull (a genuinely distinct pull never shares the exact current
+    // event time). Keep the lossless STALE quarantine; same-id replays are
+    // handled earlier by idempotency.
+    if (incomingMs === watermarkMs) {
+      return {
+        action: 'quarantine',
+        reason: 'STALE_PULL_TIME',
+        readableReason:
+          `Incoming pull time ${String(incomingDateTimeUTC)} equals the well's outgoing ` +
+          `watermark ${String(watermarkDateTimeUTC)} — duplicate upload or watchdog ` +
+          `re-trigger of the current pull. Held in packets/rejected instead of being deleted.`,
+        comparedWatermarkUTC: String(watermarkDateTimeUTC),
+      };
+    }
+    // Strictly OLDER than the current pull → a VALID late/back-dated entry.
+    // Accept it into chronological history WITHOUT regressing current. It is NOT
+    // stale merely for being older; logical-duplicate detection happens at
+    // chronological insertion, not here. (Late Entry + anomaly tagging follow.)
+    if (incomingMs < watermarkMs) {
+      return { action: 'process_backdated', comparedWatermarkUTC: String(watermarkDateTimeUTC) };
+    }
   }
 
   // 6: all guards passed.

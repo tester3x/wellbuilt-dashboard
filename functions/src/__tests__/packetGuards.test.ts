@@ -265,11 +265,16 @@ describe('GS3 five-replay regression — nothing disappears against the poisoned
     { id: '20260722_034317_Gunslinger3_33bnyw', pullUTC: '2026-07-22T01:32:00.000Z', clock: '2026-07-22T08:43:21.063Z' },
   ];
 
-  test('all five are quarantined losslessly with distinct rejected keys', async () => {
-    const written: Record<string, unknown> = {};
-    const rootRef: RootRefLike = {
-      update: async (v) => { Object.assign(written, v); },
-    };
+  // BEHAVIOR CHANGE (backdated-CREATE repair): the poisoned watermark (04:07Z) is
+  // in the PAST relative to the replay clock (08:41Z), so the future-WATERMARK
+  // guard (rule 4) does not fire and each replay is strictly OLDER than it. Under
+  // the old stopgap these were quarantined to avoid the GS3 deletion; under the
+  // chronological lane a valid older pull is ACCEPTED (process_backdated) and
+  // inserted into chronological history — lossless survival is preserved, now via
+  // insertion rather than quarantine. The future-time (rule 2) and
+  // future-watermark (rule 4) protections remain; only the "older ⇒ stale"
+  // stopgap is superseded, exactly as the requirement mandates.
+  test('all five are ACCEPTED as backdated (lossless) — no deletion, no stale-reject', () => {
     for (const r of replays) {
       const verdict = evaluateIncomingPull({
         incomingDateTimeUTC: r.pullUTC,
@@ -277,24 +282,53 @@ describe('GS3 five-replay regression — nothing disappears against the poisoned
         watermarkDateTimeUTC: POISONED_WATERMARK,
         nowMs: ms(r.clock),
       });
-      expect(verdict.action).toBe('quarantine'); // never processed against poison
-      const ok = await quarantineIncomingPacket(rootRef, {
-        packetId: r.id,
-        packet: { packetId: r.id, requestType: 'pull', wellName: 'Gunslinger 3', dateTimeUTC: r.pullUTC, bblsTaken: 170 },
-        verdict,
-        nowMs: ms(r.clock),
-      });
-      expect(ok).toBe(true);
+      expect(verdict.action).toBe('process_backdated'); // accepted, never deleted
+      expect(verdict.reason).toBeUndefined();
+      expect(verdict.comparedWatermarkUTC).toBe(POISONED_WATERMARK);
     }
-    // All five survive — including BOTH 8:32 PM twins under distinct ids.
-    const rejectedKeys = Object.keys(written).filter((k) => k.startsWith('packets/rejected/'));
-    expect(rejectedKeys).toHaveLength(5);
-    for (const r of replays) {
-      const rec = written[`packets/rejected/${r.id}`] as any;
-      expect(rec.packet.dateTimeUTC).toBe(r.pullUTC);
-      expect(rec.packet.bblsTaken).toBe(170);
-      expect(rec.comparedWatermarkUTC).toBe(POISONED_WATERMARK);
-    }
+  });
+});
+
+describe('backdated-CREATE lane — valid older pull is accepted, not stale', () => {
+  const WM = '2026-08-26T18:01:07.025Z';
+  test('strictly older than the watermark → process_backdated (Late Entry lane)', () => {
+    const v = evaluateIncomingPull({
+      incomingDateTimeUTC: '2026-08-26T12:39:00.000Z', // 7:39 AM — older
+      hasOutgoingResponse: true,
+      watermarkDateTimeUTC: WM,
+      nowMs: ms('2026-08-27T13:00:00.000Z'),
+    });
+    expect(v.action).toBe('process_backdated');
+  });
+  test('EXACTLY at the watermark → STALE_PULL_TIME (duplicate / watchdog re-trigger)', () => {
+    const v = evaluateIncomingPull({
+      incomingDateTimeUTC: WM,
+      hasOutgoingResponse: true,
+      watermarkDateTimeUTC: WM,
+      nowMs: ms('2026-08-27T13:00:00.000Z'),
+    });
+    expect(v.action).toBe('quarantine');
+    expect(v.reason).toBe('STALE_PULL_TIME');
+  });
+  test('newer than the watermark → normal process (advances watermark)', () => {
+    const v = evaluateIncomingPull({
+      incomingDateTimeUTC: '2026-08-27T00:39:00.000Z', // 7:39 PM — newer
+      hasOutgoingResponse: true,
+      watermarkDateTimeUTC: WM,
+      nowMs: ms('2026-08-27T13:00:00.000Z'),
+    });
+    expect(v.action).toBe('process');
+  });
+  test('future-time incoming still rejected even if older than a future watermark', () => {
+    const nowMs = ms('2026-08-27T13:00:00.000Z');
+    const v = evaluateIncomingPull({
+      incomingDateTimeUTC: new Date(nowMs + 10 * 60 * 1000).toISOString(), // 10 min ahead
+      hasOutgoingResponse: true,
+      watermarkDateTimeUTC: WM,
+      nowMs,
+    });
+    expect(v.action).toBe('quarantine');
+    expect(v.reason).toBe('FUTURE_PULL_TIME');
   });
 });
 

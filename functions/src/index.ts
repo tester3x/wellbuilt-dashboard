@@ -20,6 +20,8 @@ import {
   resolveEditTarget,
   strandedPacketVerdict,
 } from './packetGuards';
+import { runBackdatedInsertion, type BackdatedIO } from './processBackdatedPull';
+import type { ChronoPullInput, WellChronoConfig } from './chronoRecompute';
 import {
   assertedFromEditedFields,
   buildAppliedEditEvent,
@@ -525,6 +527,63 @@ async function getHistoricalPulls(wellName: string, limit: number = 50): Promise
   }
 }
 
+// ── Backdated-CREATE chronological lane ────────────────────────────────────
+// Load the well's CURRENT processed chain as engine inputs. Unlike
+// getHistoricalPulls this keeps edited rows (their present values) and carries
+// dateTimeUTC (ordering authority) + the STORED tankAfterInches as a preserved
+// historical bottom (knownBottomInches) — so the engine recomputes only the
+// derived relationships affected by a changed predecessor, never a row's tank
+// conversion with today's config.
+async function loadChronoPulls(wellName: string): Promise<ChronoPullInput[]> {
+  const snap = await db.ref('packets/processed').orderByChild('wellName').equalTo(wellName).once('value');
+  const out: ChronoPullInput[] = [];
+  snap.forEach((child) => {
+    const p = child.val() as Record<string, unknown> | null;
+    const key = String(child.key);
+    if (!p || p.requestType === 'wellHistory' || key.startsWith('history_')) return;
+    const dt = typeof p.dateTimeUTC === 'string' ? p.dateTimeUTC : null;
+    if (!dt || !Number.isFinite(Date.parse(dt))) return;
+    const storedBottom = Number(p.tankAfterInches);
+    out.push({
+      packetId: key,
+      dateTimeUTC: dt,
+      tankTopInches: (parseFloat(String(p.tankLevelFeet)) || 0) * 12,
+      bblsTaken: parseFloat(String(p.bblsTaken)) || 0,
+      wellDown: p.wellDown === true || p.wellDown === 'true',
+      ...(Number.isFinite(storedBottom) ? { knownBottomInches: storedBottom } : {}),
+    });
+    return undefined;
+  });
+  return out;
+}
+
+// Per-well revision fence + one atomic multi-location commit. Claims the next
+// chronoRevision via a transaction (aborts if a newer pull already advanced it),
+// then applies the whole recomputed set in a single db.ref().update().
+function makeBackdatedIO(wellName: string): BackdatedIO {
+  const revRef = db.ref(`wells/${wellName}/status/chronoRevision`);
+  return {
+    loadWellPulls: () => loadChronoPulls(wellName),
+    readWellRevision: async () => {
+      const s = await revRef.once('value');
+      const v = Number(s.val());
+      return Number.isFinite(v) ? v : 0;
+    },
+    commitFenced: async (_w, expected, updates) => {
+      let claimed = false;
+      const res = await revRef.transaction((cur: unknown) => {
+        const c = Number.isFinite(Number(cur)) ? Number(cur) : 0;
+        if (c !== expected) return; // abort — a newer version won
+        claimed = true;
+        return expected + 1;
+      });
+      if (!res.committed || !claimed) return 'stale_revision';
+      await db.ref().update(updates); // atomic across all recomputed rows
+      return 'committed';
+    },
+  };
+}
+
 /**
  * CST/CDT offset in milliseconds.
  * CST = UTC-6, CDT = UTC-5. DST: 2nd Sunday March → 1st Sunday November.
@@ -996,6 +1055,37 @@ export const processIncomingPull = functionsV1.database
         verdict: guardVerdict,
         nowMs: Date.now(),
       });
+      return null;
+    }
+
+    // Valid OLDER CREATE (Late Entry): accept into chronological history,
+    // recompute every affected successor, and commit atomically under the
+    // per-well revision fence. The current/outgoing watermark is NEVER regressed.
+    if (guardVerdict.action === 'process_backdated') {
+      const backdatedTop = (parseFloat(String(data.tankLevelFeet)) || 0) * 12;
+      if (backdatedTop <= 0) {
+        // No-level (non-production) older pull — persist as a standalone row; it
+        // does not participate in tank-top continuity, so no cascade.
+        const nowIso = new Date().toISOString();
+        await db.ref(`packets/processed/${packetId}`).set({
+          ...data, packetId, noLevel: true, lateEntry: true, processedAt: nowIso,
+        });
+        console.log(`[BACKDATED] ${wellName}: ${packetId} → inserted (no-level, standalone)`);
+        await db.ref(`packets/incoming/${packetId}`).remove();
+        return null;
+      }
+      const cfg: WellChronoConfig = {
+        bblPerFoot: Number((config as { bblPerFoot?: unknown }).bblPerFoot) > 0 ? Number((config as { bblPerFoot?: unknown }).bblPerFoot) : 20,
+        tanks,
+        allowedBottomInches: (Number((config as { allowedBottom?: unknown; bottomLevel?: unknown }).allowedBottom ?? (config as { bottomLevel?: unknown }).bottomLevel) || 0) * 12 || undefined,
+        avgFlowRateDays: Number((config as { avgFlowRateMinutes?: unknown }).avgFlowRateMinutes) > 0 ? Number((config as { avgFlowRateMinutes?: unknown }).avgFlowRateMinutes) / 1440 : undefined,
+      };
+      const outcome = await runBackdatedInsertion(makeBackdatedIO(wellName), {
+        wellName, packetId, data: data as unknown as Record<string, unknown>,
+        tankTopInches: backdatedTop, cfg, nowIso: new Date().toISOString(),
+      });
+      console.log(`[BACKDATED] ${wellName}: ${packetId} → ${outcome.status}`);
+      await db.ref(`packets/incoming/${packetId}`).remove();
       return null;
     }
 
