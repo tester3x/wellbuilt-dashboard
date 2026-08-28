@@ -53,8 +53,20 @@ export interface CoordinatorTimeouts {
   planningLeaseMs: number;
 }
 
+/**
+ * The EXPLICIT maximum execution lifetime for EVERY canonical-mutation commit
+ * owner. The RTDB triggers (processIncomingPull/EditRequest/DeleteRequest) set
+ * this verbatim via `.runWith({ timeoutSeconds })`, and the recovery horizon
+ * derives from it here — so a committing lock can never be recovered while an
+ * original invocation could still legally execute, and the two values cannot
+ * drift. Any caller that could own the lock MUST carry this same explicit
+ * lifetime (or route through one dedicated worker); a longer-lived caller must
+ * never own the lock. Verified against deployed metadata at the deploy gate.
+ */
+export const CANONICAL_COMMIT_TIMEOUT_SECONDS = 120;
+
 export const DEFAULT_TIMEOUTS: CoordinatorTimeouts = {
-  functionMaxMs: 60_000,      // processIncomingPull v1 default (confirmed: no runWith override)
+  functionMaxMs: CANONICAL_COMMIT_TIMEOUT_SECONDS * 1000, // explicit, not an inferred default
   recoveryMarginMs: 60_000,
   planningLeaseMs: 30_000,
 };

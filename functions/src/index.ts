@@ -23,6 +23,7 @@ import {
 import { runBackdatedInsertion, type BackdatedIO } from './processBackdatedPull';
 import type { ChronoPullInput, WellChronoConfig } from './chronoRecompute';
 import { planAcquire, canCommit, planRelease, acceptFencedWrite, type FenceRecord } from './wellFence';
+import { CANONICAL_COMMIT_TIMEOUT_SECONDS } from './chronoCommitCoordinator';
 import {
   assertedFromEditedFields,
   buildAppliedEditEvent,
@@ -1000,7 +1001,7 @@ async function calculateAFR(wellName: string, newFlowRateDays: number): Promise<
 }
 
 // Main function: Process incoming pull packets
-export const processIncomingPull = functionsV1.database
+export const processIncomingPull = functionsV1.runWith({ timeoutSeconds: CANONICAL_COMMIT_TIMEOUT_SECONDS, memory: '512MB' }).database
   .ref('packets/incoming/{packetId}')
   .onCreate(async (snapshot, context) => {
     const packetId = context.params.packetId;
@@ -2361,7 +2362,7 @@ export async function applyV2ChronologicalEdit(args: {
 // Handle edit requests — updates processed packet and recalculates dependent fields.
 // processIncomingEdit IS the production handler. Tests must invoke it with the
 // exact incoming payload; do not mirror apply in a parallel lifecycle.
-export const processEditRequest = functionsV1.database
+export const processEditRequest = functionsV1.runWith({ timeoutSeconds: CANONICAL_COMMIT_TIMEOUT_SECONDS, memory: '512MB' }).database
   .ref('packets/incoming/{packetId}')
   .onCreate(processIncomingEdit);
 
@@ -3277,7 +3278,7 @@ export async function processIncomingEdit(
 
 // Handle delete requests — removes from processed and recalculates outgoing from remaining data
 
-export const processDeleteRequest = functionsV1.database
+export const processDeleteRequest = functionsV1.runWith({ timeoutSeconds: CANONICAL_COMMIT_TIMEOUT_SECONDS, memory: '512MB' }).database
   .ref('packets/incoming/{packetId}')
   .onCreate(async (snapshot, context) => {
     const data = snapshot.val();

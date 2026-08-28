@@ -3,7 +3,7 @@
 // entirely-new at every interruption point.
 import {
   runCanonicalMutation, planLockAcquire, planTransitionToCommitting,
-  commitHorizonMs, DEFAULT_TIMEOUTS,
+  commitHorizonMs, DEFAULT_TIMEOUTS, CANONICAL_COMMIT_TIMEOUT_SECONDS,
   type CoordinatorIO, type LockRecord, type CommitReceipt, type MutationRequest,
 } from '../chronoCommitCoordinator';
 
@@ -153,10 +153,20 @@ describe('stale worker cannot commit after ownership changes', () => {
 });
 
 describe('horizon is tied to the real function lifetime', () => {
-  test('committing lock recoverable only after functionMaxMs + margin', () => {
+  test('committing lock recoverable only after the EXPLICIT functionMaxMs + margin', () => {
     const lock: LockRecord = { token: 'x', fence: 1, phase: 'committing', at: 0, operationId: 'op' };
-    expect(planLockAcquire(lock, 'y', HORIZON - 1, T, 'op2').kind).toBe('contended');   // within horizon
+    expect(planLockAcquire(lock, 'y', HORIZON - 1, T, 'op2').kind).toBe('contended');   // within horizon → no takeover
     expect(planLockAcquire(lock, 'y', HORIZON + 1, T, 'op2').kind).toBe('recover');      // past horizon
-    expect(HORIZON).toBe(60_000 + 60_000); // 60s v1 max + 60s margin
+    // Horizon derives from the EXPLICIT commit-owner timeout (not an inferred v1 default).
+    expect(T.functionMaxMs).toBe(CANONICAL_COMMIT_TIMEOUT_SECONDS * 1000); // explicit
+    expect(HORIZON).toBe(CANONICAL_COMMIT_TIMEOUT_SECONDS * 1000 + 60_000);
+  });
+
+  test('takeover cannot occur while an original invocation could still legally execute', () => {
+    // Within the full explicit lifetime, a committing lock is NEVER taken over.
+    const lock: LockRecord = { token: 'x', fence: 1, phase: 'committing', at: 0, operationId: 'op' };
+    for (const dt of [0, T.functionMaxMs, T.functionMaxMs + T.recoveryMarginMs - 1]) {
+      expect(planLockAcquire(lock, 'y', dt, T, 'op2').kind).toBe('contended');
+    }
   });
 });
