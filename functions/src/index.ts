@@ -24,7 +24,7 @@ import type { ChronoPullInput, WellChronoConfig } from './chronoRecompute';
 import { CANONICAL_COMMIT_TIMEOUT_SECONDS, runCanonicalMutation, type CommitReceipt } from './chronoCommitCoordinator';
 import { makeCoordinatorIO } from './coordinatorIO';
 import { assembleCanonicalPatch, receiptPathFor } from './canonicalPatch';
-import { buildCreateMutation } from './mutationBuilders';
+import { buildCreateMutation, buildDeleteMutation, type CanonicalSidecar } from './mutationBuilders';
 import { computeAFRFromRates } from './pullFormulas';
 import { getProductionDate, calculateWindowBblsPerDay, calculateOvernightBblsPerDay, computeBbls24hrs, type HistoricalPull } from './productionFormulas';
 import { formatLocalDateTime, outgoingCompanyId, inchesToFeetInches, feetInchesToInches, daysToHMM, daysToHMMSS } from './wbmFormat';
@@ -2851,221 +2851,128 @@ export const processDeleteRequest = functionsV1.runWith({ timeoutSeconds: CANONI
     const targetSnap = await db.ref(`packets/processed/${targetPacketId}`).once('value');
     const deletedPacket = targetSnap.exists() ? targetSnap.val() : null;
 
-    // CASCADE: Before deleting, fix the next packet's flowRateDays.
-    // The next packet's recovery was measured from this packet's tankAfterInches.
-    // After deletion, it should use the PREVIOUS packet's tankAfterInches instead.
-    if (deletedPacket && deletedPacket.dateTimeUTC) {
-      const allWellSnap = await db.ref('packets/processed')
-        .orderByChild('wellName')
-        .equalTo(wellName)
-        .once('value');
-
-      const deletedTime = new Date(deletedPacket.dateTimeUTC).getTime();
-      let prevPkt: any = null;
-      let prevTime = 0;
-      let nextKey: string | null = null;
-      let nextPkt: any = null;
-      let nextTime = Infinity;
-
-      allWellSnap.forEach((child) => {
-        if (child.key === targetPacketId) return;
-        const pkt = child.val();
-        const pktTime = new Date(pkt.dateTimeUTC).getTime();
-        if (pktTime < deletedTime && pktTime > prevTime) {
-          prevTime = pktTime;
-          prevPkt = pkt;
-        }
-        if (pktTime > deletedTime && pktTime < nextTime) {
-          nextTime = pktTime;
-          nextKey = child.key;
-          nextPkt = pkt;
-        }
-      });
-
-      if (nextKey && nextPkt && nextPkt.tankTopInches > 0) {
-        const prevAfterInches = prevPkt?.tankAfterInches || 0;
-        const nextRecovery = prevAfterInches > 0 ? Math.max(0, nextPkt.tankTopInches - prevAfterInches) : 0;
-        const nextTimeDif = prevTime > 0 ? (nextTime - prevTime) / (1000 * 60 * 60 * 24) : 0;
-        let nextFlowRateDays = 0;
-        let nextFlowRate = '';
-        if (nextRecovery > 0 && nextTimeDif > 0) {
-          nextFlowRateDays = (nextTimeDif / nextRecovery) * 12;
-          nextFlowRate = daysToHMMSS(nextFlowRateDays);
-        }
-        await db.ref(`packets/processed/${nextKey}`).update({
-          recoveryInches: nextRecovery,
-          flowRateDays: nextFlowRateDays,
-          flowRate: nextFlowRate,
-          timeDifDays: nextTimeDif,
-          timeDif: nextTimeDif > 0 ? daysToHMM(nextTimeDif) : '',
-        });
-        console.log(`Delete cascade: Updated next packet ${nextKey} — recovery=${nextRecovery.toFixed(1)}", flowRate=${nextFlowRate}`);
-      }
-    }
-
-    // Delete from processed
-    await db.ref(`packets/processed/${targetPacketId}`).remove();
-
-    // If the deleted packet was the latest pull, recalculate outgoing from the new latest
+    // Route the delete through the ONE canonical coordinator: null the row,
+    // recompute every affected successor via the engine (each successor's
+    // predecessor moves; historical bottoms preserved), rebuild outgoing/current
+    // from the new latest, and land it all — plus the completion receipt — in ONE
+    // atomic patch. This replaces the hand-rolled next-packet cascade (which used
+    // the universal 20 bbl/ft); recovery now uses the well's RESOLVED total.
     if (deletedPacket) {
       const cleanName = wellName.replace(/\s/g, '');
-
-      // Get well config
       let configSnap = await db.ref(`well_config/${wellName}`).once('value');
-      if (!configSnap.exists()) {
-        configSnap = await db.ref(`well_config/${cleanName}`).once('value');
-      }
+      if (!configSnap.exists()) configSnap = await db.ref(`well_config/${cleanName}`).once('value');
       const config = configSnap.val() || {};
       const tanks = config.tanks || config.numTanks || DEFAULTS.tanks;
       const pullBbls = config.pullBbls || DEFAULTS.pullBbls;
       const bottomInches = (config.bottomLevel || config.allowedBottom || DEFAULTS.bottomLevel) * 12;
+      const bblPerFoot = Number(config.bblPerFoot) > 0 ? Number(config.bblPerFoot) : 20 * tanks;
+      const cfg: WellChronoConfig = {
+        bblPerFoot, tanks,
+        allowedBottomInches: (Number(config.allowedBottom ?? config.bottomLevel) || 0) * 12 || undefined,
+        avgFlowRateDays: Number(config.avgFlowRateMinutes) > 0 ? Number(config.avgFlowRateMinutes) / 1440 : undefined,
+      };
 
-      // Find the new latest pull for this well
+      const chain = await loadChronoPulls(wellName);
+
+      // New latest (current) among the remaining FULL processed records (need
+      // driver/display fields the chain doesn't carry). Skip the row being deleted.
       const remainingSnap = await db.ref('packets/processed')
-        .orderByChild('wellName')
-        .equalTo(wellName)
-        .once('value');
-
-      let latestPacket: any = null;
+        .orderByChild('wellName').equalTo(wellName).once('value');
+      let latestPacket: Record<string, any> | null = null;
       let latestTime = 0;
-
       remainingSnap.forEach((child) => {
+        if (child.key === targetPacketId) return;
         const pkt = child.val();
         const pktTime = new Date(pkt.dateTimeUTC).getTime();
-        if (pktTime > latestTime) {
-          latestTime = pktTime;
-          latestPacket = pkt;
-        }
+        if (pktTime > latestTime) { latestTime = pktTime; latestPacket = pkt; }
       });
 
-      // Clean up performance data for the deleted packet
+      // Prior outgoing response ids (the commit deletes them atomically).
+      const oldResponses = await db.ref('packets/outgoing')
+        .orderByChild('wellName').equalTo(wellName).once('value');
+      const oldResponseIds: string[] = [];
+      oldResponses.forEach((child) => { if (child.key) oldResponseIds.push(child.key); });
+
+      // Deleted row's performance timestamp (removed in the same patch).
+      const wellKey = wellName.replace(/\s+/g, '_');
+      let deletedPerfTs: string | null = null;
       if (deletedPacket.dateTimeUTC) {
-        try {
-          const delTime = new Date(deletedPacket.dateTimeUTC);
-          const perfTimestamp = `${delTime.getFullYear()}${String(delTime.getMonth() + 1).padStart(2, '0')}${String(delTime.getDate()).padStart(2, '0')}_${String(delTime.getHours()).padStart(2, '0')}${String(delTime.getMinutes()).padStart(2, '0')}${String(delTime.getSeconds()).padStart(2, '0')}`;
-          const wellKey = wellName.replace(/\s+/g, '_');
-          await db.ref(`performance/${wellKey}/rows/${perfTimestamp}`).remove();
-          console.log(`Delete: Cleaned up performance row ${perfTimestamp} for ${wellName}`);
-        } catch (perfErr) {
-          console.error(`Delete: Failed to clean performance data:`, perfErr);
-        }
+        const dt = new Date(deletedPacket.dateTimeUTC);
+        deletedPerfTs = `${dt.getFullYear()}${String(dt.getMonth() + 1).padStart(2, '0')}${String(dt.getDate()).padStart(2, '0')}_${String(dt.getHours()).padStart(2, '0')}${String(dt.getMinutes()).padStart(2, '0')}${String(dt.getSeconds()).padStart(2, '0')}`;
       }
 
-      // Always rebuild outgoing — wrapped in try/catch so delete completes even if rebuild fails
-      try {
-        if (latestPacket) {
-          console.log(`Delete: Rebuilding outgoing for ${wellName} from packet ${latestPacket.packetId || 'unknown'} (dateTimeUTC=${latestPacket.dateTimeUTC})`);
+      // Build the outgoing/AFR sidecar from the new latest, or clear when none remain.
+      const sidecar: CanonicalSidecar = {};
+      if (latestPacket) {
+        const lp = latestPacket as Record<string, any>;
+        const afr = await calculateAFR(wellName, lp.flowRateDays || 0);
+        const latestTimeMs = new Date(lp.dateTimeUTC).getTime();
+        const historicalPulls = await getHistoricalPulls(wellName, 500);
+        const windowBblsDay = calculateWindowBblsPerDay(historicalPulls, bblPerFoot, latestTimeMs);
+        const overnightBblsDay = calculateOvernightBblsPerDay(historicalPulls, bblPerFoot, latestTimeMs);
+        const tankAfterInches = lp.tankAfterInches || 0;
+        const pullHeightInches = (pullBbls / 20 / tanks) * 12;
+        const recoveryNeeded = Math.max(0, (bottomInches + pullHeightInches) - tankAfterInches);
+        let estTimeToPull = ''; let estDateTimePull = '';
+        if (afr > 0 && recoveryNeeded > 0) {
+          const estDays = (recoveryNeeded / 12) * afr;
+          estTimeToPull = daysToHMM(estDays);
+          estDateTimePull = new Date(latestTimeMs + estDays * 86400000).toISOString();
+        } else if (recoveryNeeded === 0) { estTimeToPull = '0:00'; estDateTimePull = lp.dateTimeUTC; }
+        const bbls24hrs = (afr > 0 ? Math.round((1 / afr) * 20 * tanks) : 0).toString();
+        const timestamp = new Date();
+        const responseId = `response_${timestamp.toISOString().replace(/[-:]/g, '').replace('T', '_').split('.')[0]}_${cleanName}`;
+        const response: Record<string, unknown> = {
+          wellName,
+          currentLevel: inchesToFeetInches(tankAfterInches),
+          flowRate: afr > 0 ? daysToHMMSS(afr) : 'Unknown',
+          bbls24hrs,
+          timeTillPull: lp.wellDown ? 'Down' : (estTimeToPull || 'Calculating...'),
+          nextPullTime: estDateTimePull ? formatLocalDateTime(new Date(estDateTimePull)) : 'Unknown',
+          nextPullTimeUTC: estDateTimePull,
+          lastPullDateTime: lp.dateTime || formatLocalDateTime(new Date(lp.dateTimeUTC)),
+          lastPullDateTimeUTC: lp.dateTimeUTC,
+          lastPullBbls: String(lp.bblsTaken),
+          lastPullTopLevel: inchesToFeetInches(lp.tankTopInches),
+          lastPullBottomLevel: inchesToFeetInches(tankAfterInches),
+          lastPullDriverId: lp.driverId || null,
+          lastPullDriverName: lp.driverName || null,
+          lastPullPacketId: lp.packetId || null,
+          wellDown: lp.wellDown || false,
+          status: 'success',
+          timestamp: timestamp.toISOString(),
+          timestampUTC: timestamp.toISOString(),
+          isEdit: true,          // WB M accepts even though lastPullDateTimeUTC may be older
+          isDeleteRebuild: true,
+          windowBblsDay: windowBblsDay > 0 ? windowBblsDay.toString() : null,
+          overnightBblsDay: overnightBblsDay > 0 ? overnightBblsDay.toString() : null,
+          companyId: outgoingCompanyId(config),
+        };
+        sidecar.outgoing = { deleteResponseIds: oldResponseIds, responseId, response };
+        if (afr > 0) { const m = afr * 24 * 60; sidecar.afr = { wellName, avgFlowRate: daysToHMMSS(afr), avgFlowRateMinutes: Math.round(m * 100) / 100 }; }
+      } else {
+        // No remaining pulls — clear outgoing (delete-only, no replacement).
+        sidecar.outgoing = { deleteResponseIds: oldResponseIds };
+      }
 
-          // Recalculate AFR from remaining packets
-          const afr = await calculateAFR(wellName, latestPacket.flowRateDays || 0);
-          console.log(`Delete: AFR for ${wellName} = ${afr}`);
-
-          // Calculate windowBblsDay and overnightBblsDay from remaining historical pulls
-          const bblPerFoot = tanks * 20;
-          const latestTimeMs = new Date(latestPacket.dateTimeUTC).getTime();
-          const historicalPulls = await getHistoricalPulls(wellName, 500);
-          const windowBblsDay = calculateWindowBblsPerDay(historicalPulls, bblPerFoot, latestTimeMs);
-          const overnightBblsDay = calculateOvernightBblsPerDay(historicalPulls, bblPerFoot, latestTimeMs);
-
-          const tankAfterInches = latestPacket.tankAfterInches || 0;
-          const pullHeightInches = (pullBbls / 20 / tanks) * 12;
-          const targetLevel = bottomInches + pullHeightInches;
-          const recoveryNeeded = Math.max(0, targetLevel - tankAfterInches);
-
-          let estTimeToPull = '';
-          let estDateTimePull = '';
-          if (afr > 0 && recoveryNeeded > 0) {
-            const estDays = (recoveryNeeded / 12) * afr;
-            estTimeToPull = daysToHMM(estDays);
-            const pullDate = new Date(latestPacket.dateTimeUTC);
-            const estDate = new Date(pullDate.getTime() + estDays * 24 * 60 * 60 * 1000);
-            estDateTimePull = estDate.toISOString();
-          } else if (recoveryNeeded === 0) {
-            estTimeToPull = '0:00';
-            estDateTimePull = latestPacket.dateTimeUTC;
-          }
-
-          const bbls24 = afr > 0 ? (1 / afr) * 20 * tanks : 0;
-          const bbls24hrs = Math.round(bbls24).toString();
-
-          // Delete old outgoing responses for this well and write new one
-          const oldResponses = await db.ref('packets/outgoing')
-            .orderByChild('wellName')
-            .equalTo(wellName)
-            .once('value');
-
-          const deleteOldPromises: Promise<void>[] = [];
-          oldResponses.forEach((child) => {
-            deleteOldPromises.push(child.ref.remove());
+      const outcome = await runCanonicalMutation(makeCoordinatorIO(db, wellName), {
+        wellName, operationId: `delete_${targetPacketId}`,
+        buildPatch: async () => {
+          const curRev = Number((await db.ref(`wells/${wellName}/status/chronoRevision`).once('value')).val()) || 0;
+          const revision = curRev + 1;
+          const built = buildDeleteMutation({
+            wellName, operationId: `delete_${targetPacketId}`, fence: revision, revision,
+            committedAtMs: Date.now(), patchHash: `delete_${targetPacketId}:${revision}`, sidecar,
+            existingChain: chain, deletePacketId: targetPacketId, cfg,
           });
-          await Promise.all(deleteOldPromises);
-
-          const timestamp = new Date();
-          const responseId = `response_${timestamp.toISOString().replace(/[-:]/g, '').replace('T', '_').split('.')[0]}_${cleanName}`;
-
-          await db.ref(`packets/outgoing/${responseId}`).set({
-            wellName,
-            currentLevel: inchesToFeetInches(tankAfterInches),
-            flowRate: afr > 0 ? daysToHMMSS(afr) : 'Unknown',
-            bbls24hrs,
-            timeTillPull: latestPacket.wellDown ? 'Down' : (estTimeToPull || 'Calculating...'),
-            nextPullTime: estDateTimePull ? formatLocalDateTime(new Date(estDateTimePull)) : 'Unknown',
-            nextPullTimeUTC: estDateTimePull,
-            lastPullDateTime: latestPacket.dateTime || formatLocalDateTime(new Date(latestPacket.dateTimeUTC)),
-            lastPullDateTimeUTC: latestPacket.dateTimeUTC,
-            lastPullBbls: latestPacket.bblsTaken.toString(),
-            lastPullTopLevel: inchesToFeetInches(latestPacket.tankTopInches),
-            lastPullBottomLevel: inchesToFeetInches(tankAfterInches),
-            lastPullDriverId: latestPacket.driverId || null,
-            lastPullDriverName: latestPacket.driverName || null,
-            lastPullPacketId: latestPacket.packetId || null,
-            wellDown: latestPacket.wellDown || false,
-            status: 'success',
-            timestamp: timestamp.toISOString(),
-            timestampUTC: timestamp.toISOString(),
-            isEdit: true,  // Force WB M to accept this even though lastPullDateTimeUTC is older
-            isDeleteRebuild: true,
-            windowBblsDay: windowBblsDay > 0 ? windowBblsDay.toString() : null,
-            overnightBblsDay: overnightBblsDay > 0 ? overnightBblsDay.toString() : null,
-            companyId: outgoingCompanyId(config),
-          });
-
-          // Update well_config AFR
-          if (afr > 0) {
-            const afrMinutes = afr * 24 * 60;
-            await db.ref(`well_config/${wellName}`).update({
-              avgFlowRate: daysToHMMSS(afr),
-              avgFlowRateMinutes: Math.round(afrMinutes * 100) / 100,
-            });
-          }
-
-          console.log(`Delete: Rebuilt outgoing for ${wellName} from remaining data (windowBblsDay=${windowBblsDay}, overnightBblsDay=${overnightBblsDay})`);
-        } else {
-          // No remaining pulls — remove outgoing response entirely
-          const oldResponses = await db.ref('packets/outgoing')
-            .orderByChild('wellName')
-            .equalTo(wellName)
-            .once('value');
-
-          const deleteOldPromises: Promise<void>[] = [];
-          oldResponses.forEach((child) => {
-            deleteOldPromises.push(child.ref.remove());
-          });
-          await Promise.all(deleteOldPromises);
-
-          console.log(`Delete: No remaining pulls for ${wellName}, cleared outgoing`);
-        }
-      } catch (rebuildErr) {
-        console.error(`Delete: FAILED to rebuild outgoing for ${wellName}:`, rebuildErr);
-        // Outgoing is now stale, but at least the processed packet is deleted
-        // Log the error details for debugging
-        console.error(`Delete: latestPacket was:`, latestPacket ? {
-          packetId: latestPacket.packetId,
-          wellName: latestPacket.wellName,
-          dateTimeUTC: latestPacket.dateTimeUTC,
-          tankAfterInches: latestPacket.tankAfterInches,
-          flowRateDays: latestPacket.flowRateDays,
-        } : 'null');
+          if (deletedPerfTs) built.patch[`performance/${wellKey}/rows/${deletedPerfTs}`] = null;
+          return { patch: built.patch, receipt: built.receipt };
+        },
+      });
+      console.log(`[CANONICAL-DELETE] ${wellName}: ${targetPacketId} → ${outcome.status}`);
+      if (outcome.status !== 'committed' && outcome.status !== 'already_done') {
+        console.error(`[CANONICAL-DELETE] ${wellName}: ${targetPacketId} → ${outcome.status} (incoming left for retry)`);
+        return null;
       }
     }
 

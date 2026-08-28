@@ -10,8 +10,10 @@ export interface CanonicalPatchPieces {
   /** packets/processed/<id>/<field> updates for the mutated + changed neighbor
    *  rows (from the chrono engine / planBackdatedCommit). */
   processedUpdates: Record<string, unknown>;
-  /** Outgoing/current: delete the well's prior response ids, write the new one. */
-  outgoing?: { deleteResponseIds: string[]; responseId: string; response: Record<string, unknown> } | null;
+  /** Outgoing/current: delete the well's prior response ids, and (unless a delete
+   *  cleared the last pull) write the new one. Omit responseId/response to clear
+   *  outgoing without writing a replacement. */
+  outgoing?: { deleteResponseIds: string[]; responseId?: string; response?: Record<string, unknown> } | null;
   /** wells/<well>/status object. */
   wellStatus?: { wellName: string; status: Record<string, unknown> } | null;
   /** performance/<wellKey>/rows/<ts> row + wellName + updated. */
@@ -33,7 +35,8 @@ export function assembleCanonicalPatch(p: CanonicalPatchPieces): Record<string, 
 
   if (p.outgoing) {
     for (const id of p.outgoing.deleteResponseIds) patch[`packets/outgoing/${id}`] = null;
-    patch[`packets/outgoing/${p.outgoing.responseId}`] = p.outgoing.response;
+    // A delete that removed the last pull clears outgoing with no replacement.
+    if (p.outgoing.responseId) patch[`packets/outgoing/${p.outgoing.responseId}`] = p.outgoing.response ?? null;
   }
   if (p.wellStatus) {
     // Write each status field as its OWN child path — never a full-node set of
