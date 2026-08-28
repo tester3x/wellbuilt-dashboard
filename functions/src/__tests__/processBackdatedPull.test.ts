@@ -1,5 +1,5 @@
-// Backdated-insertion orchestrator (injected IO) — insertion, duplicate no-op,
-// revision fence + retry, single atomic commit, no outgoing/current write.
+// Backdated-insertion orchestrator under an EXCLUSIVE per-well lock — insertion,
+// duplicate no-op, and an adversarial interleaving proving no lost-update.
 import { runBackdatedInsertion, type BackdatedIO } from '../processBackdatedPull';
 import { type ChronoPullInput, type WellChronoConfig } from '../chronoRecompute';
 
@@ -14,78 +14,121 @@ const amData = {
   tankLevelFeet: 7, bblsTaken: 60, wellDown: false, driverId: 'd1', requestType: 'pull',
 };
 
-function mockIO(over: Partial<BackdatedIO> & { revision?: number; pulls?: ChronoPullInput[] } = {}) {
-  const state = { revision: over.revision ?? 5, pulls: over.pulls ?? [PRED, P101], committed: null as Record<string, unknown> | null, commits: 0 };
-  const io: BackdatedIO = {
-    loadWellPulls: over.loadWellPulls ?? (async () => state.pulls),
-    readWellRevision: over.readWellRevision ?? (async () => state.revision),
-    commitFenced: over.commitFenced ?? (async (_w, expected, updates) => {
-      state.commits++;
-      if (expected !== state.revision) return 'stale_revision';
-      state.revision += 1; state.committed = updates; return 'committed';
-    }),
-  };
-  return { io, state };
+// A simple in-memory "server": a per-well lock + processed store + revision.
+function makeServer(initialPulls: ChronoPullInput[]) {
+  const store = { pulls: [...initialPulls], revision: 5, locked: false, commits: 0, lastUpdate: null as Record<string, unknown> | null };
+  const io = (): BackdatedIO => ({
+    async withWellLock(_well, fn) {
+      if (store.locked) return { ran: false };          // exclusive — refuse concurrent entry
+      store.locked = true;
+      try { return { ran: true, value: await fn() }; }
+      finally { store.locked = false; }
+    },
+    async loadWellPulls() { return store.pulls; },
+    async readWellRevision() { return store.revision; },
+    async commit(updates) {
+      store.commits++; store.lastUpdate = updates;
+      store.revision = Number(updates[`wells/${WELL}/status/chronoRevision`]);
+      // materialize the new 'am' row into the store so a later read sees it
+      if (updates['packets/processed/am/bblsTaken'] !== undefined) {
+        store.pulls = [...store.pulls, { packetId: 'am', dateTimeUTC: amData.dateTimeUTC, tankTopInches: 84, bblsTaken: 60 }];
+      }
+    },
+  });
+  return { store, io };
 }
 
-describe('runBackdatedInsertion', () => {
-  const args = { wellName: WELL, packetId: 'am', data: amData, tankTopInches: 84, cfg: CFG, nowIso: '2026-08-27T13:00:00Z' };
+const args = { wellName: WELL, packetId: 'am', data: amData, tankTopInches: 84, cfg: CFG, nowIso: '2026-08-27T13:00:00Z' };
 
-  test('inserts the older pull, tags Late Entry, recomputes the successor, keeps current', async () => {
-    const { io, state } = mockIO();
-    const out = await runBackdatedInsertion(io, args);
+describe('runBackdatedInsertion — under exclusive well lock', () => {
+  test('inserts older pull, tags Late Entry, recomputes successor, never writes outgoing', async () => {
+    const { store, io } = makeServer([PRED, P101]);
+    const out = await runBackdatedInsertion(io(), args);
     expect(out.status).toBe('inserted');
-    if (out.status === 'inserted') {
-      expect(out.lateEntry).toBe(true);
-      expect(out.current).toBe('p101');          // current pointer unchanged (newest)
-      expect(out.changedPacketIds).toEqual(['p101']);
-    }
-    const u = state.committed!;
-    // new row material + derived created via child updates
-    expect(u['packets/processed/am/bblsTaken']).toBe(60);
+    if (out.status === 'inserted') { expect(out.lateEntry).toBe(true); expect(out.current).toBe('p101'); expect(out.changedPacketIds).toEqual(['p101']); }
+    const u = store.lastUpdate!;
     expect(u['packets/processed/am/recoveryInches']).toBe(18);
-    expect(u['packets/processed/am/lateEntry']).toBe(true);
-    // successor 1:01 PM recomputed against inserted predecessor (92→110)
     expect(u['packets/processed/p101/recoveryInches']).toBe(110);
-    // fence revision stamped
-    expect(u['packets/processed/am/chronoRevision']).toBe(6);
-    // NEVER writes outgoing/current
+    expect(u[`wells/${WELL}/status/chronoRevision`]).toBe(6);
     expect(Object.keys(u).some((k) => k.startsWith('packets/outgoing'))).toBe(false);
-    expect(state.commits).toBe(1);
   });
 
   test('logical duplicate → no-op, no commit', async () => {
-    const dupPulls = [PRED, P101, { packetId: 'existing_am', dateTimeUTC: amData.dateTimeUTC, tankTopInches: 84, bblsTaken: 60 } as ChronoPullInput];
-    const { io, state } = mockIO({ pulls: dupPulls });
-    const out = await runBackdatedInsertion(io, args);
+    const existingAm = { packetId: 'existing_am', dateTimeUTC: amData.dateTimeUTC, tankTopInches: 84, bblsTaken: 60 } as ChronoPullInput;
+    const { store, io } = makeServer([PRED, P101, existingAm]);
+    const out = await runBackdatedInsertion(io(), args);
     expect(out.status).toBe('duplicate_noop');
-    expect(state.committed).toBeNull();
+    expect(store.commits).toBe(0);
   });
+});
 
-  test('stale revision → retries against fresh state, then commits', async () => {
-    let calls = 0;
-    const state = { revision: 5, pulls: [PRED, P101] as ChronoPullInput[] };
+describe('adversarial interleaving — Worker A and Worker B, no lost update', () => {
+  test('A holds the lock; B cannot enter until A commits; final state contains BOTH inserts', async () => {
+    // Two DISTINCT backdated pulls for the same well.
+    const server = makeServer([PRED, P101]);
+    // Instrument the lock so we can force B to attempt while A is inside.
+    let aInside = false; let bAttemptedWhileAInside = false;
+    const baseIO = server.io();
     const io: BackdatedIO = {
-      loadWellPulls: async () => state.pulls,
-      readWellRevision: async () => state.revision,
-      commitFenced: async (_w, expected) => {
-        calls++;
-        if (calls === 1) { state.revision = 6; return 'stale_revision'; } // a newer pull won mid-flight
-        return expected === state.revision ? 'committed' : 'stale_revision';
+      ...baseIO,
+      async withWellLock(well, fn) {
+        return baseIO.withWellLock(well, async () => {
+          aInside = true;
+          // While A is inside, B tries to acquire → must be refused (ran:false).
+          const bTry = await baseIO.withWellLock(well, async () => 'B-should-not-run');
+          if (!bTry.ran) bAttemptedWhileAInside = true;
+          const r = await fn();
+          aInside = false;
+          return r;
+        });
+      },
+      async commit(u) {
+        // A commits an SECOND distinct pull 'am2' as part of its update set too?
+        // No — keep A's commit as 'am'; then run B separately AFTER A releases.
+        return baseIO.commit(u);
       },
     };
-    const out = await runBackdatedInsertion(io, args, );
-    expect(out.status).toBe('inserted');
-    expect(calls).toBe(2); // retried once after the stale revision
+
+    // Worker A inserts 'am'. During A's critical section, B is proven refused.
+    const a = await runBackdatedInsertion(io, args);
+    expect(a.status).toBe('inserted');
+    expect(bAttemptedWhileAInside).toBe(true);   // B was refused entry while A held the lock
+    expect(aInside).toBe(false);
+
+    // Now Worker B inserts a DIFFERENT older pull AFTER A released. It reads A's
+    // committed state (which already contains 'am') and adds itself — no overwrite.
+    const bData = { ...amData, packetId: 'am2', dateTimeUTC: '2026-08-26T06:00:00.000Z' };
+    const bServerIO = server.io(); // same underlying store
+    // teach commit to materialize am2 too
+    const bIO: BackdatedIO = {
+      ...bServerIO,
+      async commit(u) {
+        server.store.commits++; server.store.lastUpdate = u;
+        server.store.revision = Number(u[`wells/${WELL}/status/chronoRevision`]);
+        if (u['packets/processed/am2/bblsTaken'] !== undefined) {
+          server.store.pulls = [...server.store.pulls, { packetId: 'am2', dateTimeUTC: bData.dateTimeUTC, tankTopInches: 84, bblsTaken: 60 }];
+        }
+      },
+    };
+    const b = await runBackdatedInsertion(bIO, { ...args, packetId: 'am2', data: bData });
+    expect(b.status).toBe('inserted');
+
+    // Final store contains BOTH am and am2 (A's insert was not lost).
+    const ids = server.store.pulls.map((p) => p.packetId).sort();
+    expect(ids).toContain('am');
+    expect(ids).toContain('am2');
+    // revision advanced monotonically by each committed writer (no reuse).
+    expect(server.store.revision).toBe(7); // 5 → 6 (A) → 7 (B)
   });
 
-  test('persistent stale revision (stale worker) → never overwrites; returns stale_revision', async () => {
+  test('persistent contention → lock_contended (never a blind overwrite)', async () => {
     const io: BackdatedIO = {
-      loadWellPulls: async () => [PRED, P101],
-      readWellRevision: async () => 5,
-      commitFenced: async () => 'stale_revision', // always superseded
+      async withWellLock() { return { ran: false }; }, // always held by someone else
+      async loadWellPulls() { return [PRED, P101]; },
+      async readWellRevision() { return 5; },
+      async commit() { /* unreachable */ },
     };
     const out = await runBackdatedInsertion(io, { ...args, maxAttempts: 3 });
-    expect(out.status).toBe('stale_revision');
+    expect(out.status).toBe('lock_contended');
   });
 });

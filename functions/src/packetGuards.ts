@@ -136,29 +136,20 @@ export function evaluateIncomingPull(args: {
   }
 
   // 5: order comparison, only with two valid timestamps.
-  if (!isNaN(incomingMs) && !isNaN(watermarkMs)) {
-    // Exactly at the watermark → a duplicate re-submit / watchdog re-trigger of
-    // the current pull (a genuinely distinct pull never shares the exact current
-    // event time). Keep the lossless STALE quarantine; same-id replays are
-    // handled earlier by idempotency.
-    if (incomingMs === watermarkMs) {
-      return {
-        action: 'quarantine',
-        reason: 'STALE_PULL_TIME',
-        readableReason:
-          `Incoming pull time ${String(incomingDateTimeUTC)} equals the well's outgoing ` +
-          `watermark ${String(watermarkDateTimeUTC)} — duplicate upload or watchdog ` +
-          `re-trigger of the current pull. Held in packets/rejected instead of being deleted.`,
-        comparedWatermarkUTC: String(watermarkDateTimeUTC),
-      };
-    }
-    // Strictly OLDER than the current pull → a VALID late/back-dated entry.
-    // Accept it into chronological history WITHOUT regressing current. It is NOT
-    // stale merely for being older; logical-duplicate detection happens at
-    // chronological insertion, not here. (Late Entry + anomaly tagging follow.)
-    if (incomingMs < watermarkMs) {
-      return { action: 'process_backdated', comparedWatermarkUTC: String(watermarkDateTimeUTC) };
-    }
+  // NOT newer than the current pull (older OR sharing the exact watermark
+  // minute). This is NOT stale merely for being older/equal:
+  //   - same packetId + equivalent material → idempotent replay, and
+  //   - same packetId + different material → PACKET_ID_COLLISION
+  //     are BOTH decided BEFORE this guard (processed-existence +
+  //     comparePullEquivalence), so only a DISTINCT packetId reaches here;
+  //   - a distinct pull at/below the watermark (a back-dated entry, or a second
+  //     truck / minute-rounded manual entry sharing the current minute) is
+  //     ACCEPTED into chronological history and ordered by the COMPLETE sort key
+  //     (event time + packetId tie-break) at insertion; a logical duplicate
+  //     (same time+material, different id) collapses to a no-op there.
+  // Never blanket-reject a distinct pull for sharing/preceding the watermark.
+  if (!isNaN(incomingMs) && !isNaN(watermarkMs) && incomingMs <= watermarkMs) {
+    return { action: 'process_backdated', comparedWatermarkUTC: String(watermarkDateTimeUTC) };
   }
 
   // 6: all guards passed.

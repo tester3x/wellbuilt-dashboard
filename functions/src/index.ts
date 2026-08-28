@@ -557,10 +557,14 @@ async function loadChronoPulls(wellName: string): Promise<ChronoPullInput[]> {
   return out;
 }
 
-// Per-well revision fence + one atomic multi-location commit. Claims the next
-// chronoRevision via a transaction (aborts if a newer pull already advanced it),
-// then applies the whole recomputed set in a single db.ref().update().
+// EXCLUSIVE per-well serialization via a leased lock. The entire
+// read→compute→commit runs while the lock is held, so no other writer can
+// interleave between plan and commit (closing the check/commit race a bare
+// revision increment would leave open). A crashed holder's lease expires so the
+// well is never wedged. The atomic multi-location update is safe under the lock.
+const CHRONO_LEASE_MS = 30_000;
 function makeBackdatedIO(wellName: string): BackdatedIO {
+  const lockRef = db.ref(`wells/${wellName}/status/chronoLock`);
   const revRef = db.ref(`wells/${wellName}/status/chronoRevision`);
   return {
     loadWellPulls: () => loadChronoPulls(wellName),
@@ -569,18 +573,25 @@ function makeBackdatedIO(wellName: string): BackdatedIO {
       const v = Number(s.val());
       return Number.isFinite(v) ? v : 0;
     },
-    commitFenced: async (_w, expected, updates) => {
-      let claimed = false;
-      const res = await revRef.transaction((cur: unknown) => {
-        const c = Number.isFinite(Number(cur)) ? Number(cur) : 0;
-        if (c !== expected) return; // abort — a newer version won
-        claimed = true;
-        return expected + 1;
+    withWellLock: async (_w, fn) => {
+      const now = Date.now();
+      const owner = `${wellName}_${now}_${Math.round(now % 1e6)}`;
+      let acquired = false;
+      const res = await lockRef.transaction((cur: { owner?: string; expiresAt?: number } | null) => {
+        const t = Date.now();
+        if (cur && typeof cur.expiresAt === 'number' && cur.expiresAt > t) return; // held + unexpired → abort
+        acquired = true;
+        return { owner, expiresAt: t + CHRONO_LEASE_MS };
       });
-      if (!res.committed || !claimed) return 'stale_revision';
-      await db.ref().update(updates); // atomic across all recomputed rows
-      return 'committed';
+      if (!res.committed || !acquired) return { ran: false };
+      try {
+        return { ran: true, value: await fn() };
+      } finally {
+        // Release only if still ours (lease may have expired + been re-taken).
+        await lockRef.transaction((cur: { owner?: string } | null) => (cur && cur.owner === owner ? null : cur));
+      }
     },
+    commit: async (updates) => { await db.ref().update(updates); },
   };
 }
 

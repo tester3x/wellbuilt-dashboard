@@ -15,20 +15,27 @@ import {
 } from './chronoRecompute';
 
 export interface BackdatedIO {
-  /** All of the well's processed pulls as engine inputs. */
+  /** EXCLUSIVE per-well serialization. Runs `fn` only while holding the well's
+   *  lock; a concurrent caller cannot enter until the holder releases (or the
+   *  lease expires on crash). Returns 'contended' without running `fn` when the
+   *  lock is held. This — not a check-then-update revision claim — is what makes
+   *  the read→compute→commit sequence atomic against other writers: no second
+   *  worker can interleave between another's plan and its commit. Every writer
+   *  that mutates chronology/current MUST route through the same lock. */
+  withWellLock<T>(wellName: string, fn: () => Promise<T>): Promise<{ ran: true; value: T } | { ran: false }>;
+  /** All of the well's processed pulls as engine inputs (read under the lock). */
   loadWellPulls(wellName: string): Promise<ChronoPullInput[]>;
-  /** Current per-well chronological revision (monotonic). */
+  /** Current per-well chronological revision (read under the lock). */
   readWellRevision(wellName: string): Promise<number>;
-  /** Apply the atomic update ONLY if the well revision is still `expected`
-   *  (fences out a stale worker / concurrent newer pull); bumps the revision on
-   *  success. Returns 'stale_revision' when a newer version has committed. */
-  commitFenced(wellName: string, expected: number, updates: Record<string, unknown>): Promise<'committed' | 'stale_revision'>;
+  /** One atomic multi-location update — safe because it runs while the caller
+   *  holds the exclusive well lock, so no interleaving commit exists. */
+  commit(updates: Record<string, unknown>): Promise<void>;
 }
 
 export type BackdatedOutcome =
-  | { status: 'inserted'; changedPacketIds: string[]; lateEntry: boolean; current: string | null }
+  | { status: 'inserted'; changedPacketIds: string[]; lateEntry: boolean; current: string | null; revision: number }
   | { status: 'duplicate_noop' }
-  | { status: 'stale_revision' };
+  | { status: 'lock_contended' };
 
 /** Immutable material fields written for the NEW row (as child-key updates so the
  *  whole record is created within the single atomic commit). */
@@ -66,27 +73,30 @@ export async function runBackdatedInsertion(
   };
 
   for (let attempt = 0; attempt < maxAttempts; attempt++) {
-    const revision = await io.readWellRevision(args.wellName);
-    const existing = await io.loadWellPulls(args.wellName);
-    const before = recomputeWell(existing, args.cfg);
-    const after = recomputeWell(upsertPull(existing, newInput), args.cfg);
-    const nextRevision = revision + 1;
+    // The ENTIRE read→compute→commit runs under the exclusive well lock, so no
+    // other writer can interleave between our plan and our commit.
+    const outcome = await io.withWellLock(args.wellName, async (): Promise<BackdatedOutcome> => {
+      const revision = await io.readWellRevision(args.wellName);
+      const existing = await io.loadWellPulls(args.wellName);
+      const before = recomputeWell(existing, args.cfg);
+      const after = recomputeWell(upsertPull(existing, newInput), args.cfg);
+      const nextRevision = revision + 1;
 
-    const plan = planBackdatedCommit({ before, after, newPacketId: args.packetId, wellRevision: nextRevision });
-    if (plan.duplicateNoop) return { status: 'duplicate_noop' };
+      const plan = planBackdatedCommit({ before, after, newPacketId: args.packetId, wellRevision: nextRevision });
+      if (plan.duplicateNoop) return { status: 'duplicate_noop' };
 
-    // Fold in the new row's material fields so the single commit creates the full
-    // record (child-key writes only → no parent/child path conflict).
-    const updates = {
-      ...plan.updates,
-      ...newRowChildUpdates(`packets/processed/${args.packetId}`, args.data, args.nowIso),
-    };
+      const updates = {
+        ...plan.updates,
+        ...newRowChildUpdates(`packets/processed/${args.packetId}`, args.data, args.nowIso),
+        [`wells/${args.wellName}/status/chronoRevision`]: nextRevision, // bump under lock
+      };
+      await io.commit(updates);
+      return { status: 'inserted', changedPacketIds: plan.changedPacketIds, lateEntry: plan.insertedLateEntry, current: plan.currentPacketId, revision: nextRevision };
+    });
 
-    const result = await io.commitFenced(args.wellName, revision, updates);
-    if (result === 'committed') {
-      return { status: 'inserted', changedPacketIds: plan.changedPacketIds, lateEntry: plan.insertedLateEntry, current: plan.currentPacketId };
-    }
-    // stale_revision → a newer pull committed during recompute; retry with fresh state.
+    if (outcome.ran) return outcome.value;
+    // Lock was contended — another writer holds it. Retry acquires fresh state
+    // AFTER that writer commits, so we never overwrite it.
   }
-  return { status: 'stale_revision' };
+  return { status: 'lock_contended' };
 }

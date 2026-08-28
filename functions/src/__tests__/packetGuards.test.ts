@@ -83,15 +83,18 @@ describe('evaluateIncomingPull — validation ladder', () => {
     expect(v.comparedWatermarkUTC).toBe(POISONED_WATERMARK);
   });
 
-  test('6. a genuinely stale pull is quarantined as STALE_PULL_TIME', () => {
+  test('6. a DISTINCT pull at the watermark is accepted (not blanket-stale); same-id duplicates are caught pre-guard', () => {
+    // Superseded stopgap: a distinct pull sharing the watermark minute is no
+    // longer quarantined here. Same-packetId replays/collisions are decided
+    // BEFORE the guard (idempotency + comparePullEquivalence); this guard only
+    // orders distinct pulls chronologically.
     const v = evaluateIncomingPull({
-      incomingDateTimeUTC: VALID_WATERMARK, // duplicate of the processed pull
+      incomingDateTimeUTC: VALID_WATERMARK,
       hasOutgoingResponse: true,
       watermarkDateTimeUTC: VALID_WATERMARK,
       nowMs: ms('2026-07-21T17:30:00.000Z'),
     });
-    expect(v.action).toBe('quarantine');
-    expect(v.reason).toBe('STALE_PULL_TIME');
+    expect(v.action).toBe('process_backdated');
   });
 
   test('12. a normal current-time pull is unchanged by the guards', () => {
@@ -175,12 +178,14 @@ describe('orphan edits', () => {
 });
 
 describe('quarantine record + atomicity', () => {
-  const verdict = evaluateIncomingPull({
-    incomingDateTimeUTC: VALID_WATERMARK,
-    hasOutgoingResponse: true,
-    watermarkDateTimeUTC: VALID_WATERMARK,
-    nowMs: ms('2026-07-21T17:30:00.000Z'),
-  });
+  // Record-building/atomicity fixture — exercises buildQuarantineUpdate for a
+  // quarantine verdict regardless of which reasons the guard currently emits.
+  const verdict = {
+    action: 'quarantine' as const,
+    reason: 'STALE_PULL_TIME' as const,
+    readableReason: 'quarantine record-building fixture',
+    comparedWatermarkUTC: VALID_WATERMARK,
+  };
   const packet = {
     packetId: '20260721_123000_Gunslinger3_abc123',
     requestType: 'pull',
@@ -300,15 +305,18 @@ describe('backdated-CREATE lane — valid older pull is accepted, not stale', ()
     });
     expect(v.action).toBe('process_backdated');
   });
-  test('EXACTLY at the watermark → STALE_PULL_TIME (duplicate / watchdog re-trigger)', () => {
+  test('EXACTLY at the watermark (a DISTINCT pull) → process_backdated, ordered by tie-break', () => {
+    // Same-id replay / collision are decided BEFORE the guard; a distinct pull
+    // sharing the minute (second truck, minute-rounded entry) must NOT be
+    // blanket-stale — it is accepted and ordered by the complete sort key.
     const v = evaluateIncomingPull({
       incomingDateTimeUTC: WM,
       hasOutgoingResponse: true,
       watermarkDateTimeUTC: WM,
       nowMs: ms('2026-08-27T13:00:00.000Z'),
     });
-    expect(v.action).toBe('quarantine');
-    expect(v.reason).toBe('STALE_PULL_TIME');
+    expect(v.action).toBe('process_backdated');
+    expect(v.reason).toBeUndefined();
   });
   test('newer than the watermark → normal process (advances watermark)', () => {
     const v = evaluateIncomingPull({
