@@ -7,11 +7,30 @@
  * transaction-safe increment used after outgoing status is readable.
  */
 
+/**
+ * Representable, monotonic bump for the LEGACY node (Phase 2 bridge).
+ *
+ * Production holds ~4.3005e20 — a float64 whose ULP is 65,536, so the historic
+ * `+1` was a permanent no-op (proven live by the 2026-08-28 Gabriel 5 edit
+ * log). Old installed clients persist that saturated value behind a
+ * strict-greater comparison, so the node can never be reset downward; it must
+ * keep producing an OBSERVABLE UPWARD change until those consumers retire.
+ * The bump adapts to the stored magnitude: +1 while representable, else one
+ * ULP — the smallest guaranteed-upward move at any magnitude. Never a
+ * hardcoded larger constant (it stops being representable as the value grows)
+ * and never ServerValue.increment (float addition server-side — the same
+ * saturation no-op). Runs inside an RTDB transaction, so concurrent mutations
+ * serialize and no revision signal is lost.
+ */
 export function nextIncomingVersion(current: unknown): number {
   const n = typeof current === 'number'
     ? current
     : parseInt(String(current ?? '0'), 10);
-  return (Number.isFinite(n) ? n : 0) + 1;
+  const base = Number.isFinite(n) && n > 0 ? n : 0;
+  const bumped = base + 1;
+  if (bumped > base) return bumped;
+  // Saturated: +1 fell below the ULP. Step by exactly one ULP instead.
+  return base + Math.pow(2, Math.floor(Math.log2(base)) - 52);
 }
 
 export function shouldPublishIncomingVersion(input: {

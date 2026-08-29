@@ -33,17 +33,33 @@ describe('saturated legacy incoming_version — frozen production facts', () => 
     expect(v).toBeGreaterThan(Number.MAX_SAFE_INTEGER);
   });
 
-  test('DEPLOYED DEFECT (frozen): the legacy +1 increment cannot change the stored value', () => {
-    // nextIncomingVersion is the shared transaction updater. At the production
-    // magnitude its result is bit-identical to the input — the observable
-    // "increment" the Dashboard edit logged was this exact no-op.
-    expect(nextIncomingVersion(SATURATED_LEGACY_VERSION)).toBe(SATURATED_LEGACY_VERSION);
+  test('DEPLOYED DEFECT → PHASE-2 BRIDGE: the bump is now representable at the production magnitude', () => {
+    // Phase 1 froze the deployed no-op (`+1` bit-identical to the input — the
+    // observable "increment" the Dashboard edit logged). Phase 2 deliberately
+    // flips this pin: the shared transaction updater now steps by one ULP when
+    // +1 is not representable, so the legacy node moves again.
+    const bumped = nextIncomingVersion(SATURATED_LEGACY_VERSION);
+    expect(bumped).toBeGreaterThan(SATURATED_LEGACY_VERSION);          // observable
+    expect(bumped).toBe(SATURATED_LEGACY_VERSION + 65536);             // exactly one ULP
+    expect(oldClientWouldSync(bumped, SATURATED_LEGACY_VERSION)).toBe(true); // old strict-greater clients wake
+    // Ordinary magnitudes keep the historic +1 exactly.
+    expect(nextIncomingVersion(61)).toBe(62);
+    expect(nextIncomingVersion('61')).toBe(62);
+    expect(nextIncomingVersion(undefined)).toBe(1);
+    expect(nextIncomingVersion(Number.MAX_SAFE_INTEGER)).toBeGreaterThan(Number.MAX_SAFE_INTEGER);
+    // Monotone: repeated bumps keep climbing (never a decrease, never a stall).
+    let v = SATURATED_LEGACY_VERSION;
+    for (let i = 0; i < 5; i++) {
+      const next = nextIncomingVersion(v);
+      expect(next).toBeGreaterThan(v);
+      v = next;
+    }
   });
 
-  test('strict-greater consumers remain blind while the value cannot move', () => {
+  test('strict-greater consumers are blind exactly while the value cannot move', () => {
     const applied = SATURATED_LEGACY_VERSION;                  // a device that ever applied the node
-    expect(oldClientWouldSync(SATURATED_LEGACY_VERSION, applied)).toBe(false); // frozen → never syncs
-    expect(oldClientWouldSync(nextIncomingVersion(SATURATED_LEGACY_VERSION), applied)).toBe(false);
+    expect(oldClientWouldSync(SATURATED_LEGACY_VERSION, applied)).toBe(false); // unchanged → never syncs
+    expect(oldClientWouldSync(applied + 1, applied)).toBe(false);              // the deployed +1 no-op, numerically
   });
 
   test('a downward reset to epoch milliseconds leaves old strict-greater clients permanently blind', () => {

@@ -5,6 +5,7 @@
 // patch. The coordinator (runCanonicalMutation) submits exactly this map; a
 // failure exposes none of it. The receipt is part of the SAME patch.
 import type { CommitReceipt } from './chronoCommitCoordinator';
+import { INCOMING_REVISION_V2_PATH, buildRevisionV2 } from './revisionV2';
 
 /**
  * The EXACT set of `wells/<well>/status` child keys OWNED by a canonical mutation.
@@ -88,6 +89,9 @@ export function assembleCanonicalPatch(p: CanonicalPatchPieces): Record<string, 
   if (p.fence) {
     patch[`wells/${p.fence.wellName}/status/chronoRevision`] = p.fence.revision;
   }
+  // The v2 refresh signal is part of the SAME atomic update: every committed
+  // canonical mutation replaces the token; a failed commit exposes none of it.
+  patch[INCOMING_REVISION_V2_PATH] = buildRevisionV2(p.receipt);
   // The completion receipt lands in the SAME atomic update.
   patch[p.receiptPath] = p.receipt;
   return patch;
