@@ -165,3 +165,49 @@ describe('canonical storage key and transaction', () => {
     })).toEqual({ action: 'abort', reason: 'idempotency_cross_driver' });
   });
 });
+
+// Phase-1 regression freeze (2026-08-29): stable client-visible refusal
+// reasons for the ingest gate, and the no-physical-plausibility contract.
+// Three production HTTP 400s on 2026-08-28 left no server trace; these pins
+// guarantee every governed refusal has a stable reason a client can parse.
+describe('ingest refusal reasons — Phase-1 freeze', () => {
+  const scope = { companyId: 'liquid-gold', assignedRoutes: ['Gabriels'], assignedWells: [], wellConfig };
+  const PID2 = '20260828_090803_Gabriel1_3k806o';
+  const base = {
+    requestType: 'pull', wellName: 'Gabriel 1', dateTimeUTC: '2026-08-28T14:07:57.497Z',
+    tankLevelFeet: 14, bblsTaken: 140, packetId: PID2, idempotencyKey: PID2,
+  };
+
+  it('unsupported request type → stable reason', () => {
+    expect(evaluateWbmPull({ ...scope, packet: { ...base, requestType: 'edit' } }))
+      .toEqual({ ok: false, reason: 'unsupported_request_type' });
+  });
+
+  it('oversized packet → stable reason (before any field inspection)', () => {
+    expect(evaluateWbmPull({ ...scope, packet: { ...base, blob: 'x'.repeat(200_001) } }))
+      .toEqual({ ok: false, reason: 'packet_too_large' });
+  });
+
+  it('malformed packet → stable reason', () => {
+    expect(evaluateWbmPull({ ...scope, packet: null })).toEqual({ ok: false, reason: 'packet_required' });
+    expect(evaluateWbmPull({ ...scope, packet: { ...base, dateTimeUTC: 'not-a-time' } }))
+      .toMatchObject({ ok: false, reason: 'invalid_dateTimeUTC' });
+  });
+
+  it('out-of-scope well → stable reason (authorization, not silence)', () => {
+    const wid = '20260828_090803_Watford1_3k806o';
+    expect(evaluateWbmPull({
+      ...scope,
+      packet: { ...base, wellName: 'Watford 1', packetId: wid, idempotencyKey: wid },
+    })).toMatchObject({ ok: false, reason: 'well_out_of_scope' });
+  });
+
+  it('unusual field readings are ACCEPTED for review, never physically rejected', () => {
+    // Big-but-bounded gauge and pull values pass the gate; review tags are a
+    // downstream concern, not an ingest rejection.
+    const r = evaluateWbmPull({ ...scope, packet: { ...base, tankLevelFeet: 39.9, bblsTaken: 19999 } });
+    expect(r).toMatchObject({ ok: true });
+    const zero = evaluateWbmPull({ ...scope, packet: { ...base, bblsTaken: 0 } });
+    expect(zero).toMatchObject({ ok: true }); // 0-BBL well-down gauge (Gabriel 5 shape)
+  });
+});
