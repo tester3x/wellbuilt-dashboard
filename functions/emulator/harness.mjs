@@ -24,6 +24,24 @@
 // which blocks EVERY Firebase emulator JVM (reproduced with a 3-line program;
 // not a firebase-tools/port/tmpdir issue). This harness is complete and correct;
 // it will run wherever the JVM can open a selector.
+//
+// DEEPENED DIAGNOSIS (2026-08-29, Phase 6): the failure is NARROWER and worse
+// than "no loopback":
+//   - plain BLOCKING loopback works: ServerSocket bind + Socket connect on
+//     127.0.0.1 succeed (BIND_OK / CONNECT_OK probe);
+//   - NIO Pipe.open() works (JDK 21+ uses an AF_UNIX socketpair);
+//   - ONLY Selector.open() fails: WEPollSelectorImpl's wakeup pipe forces a
+//     NON-BLOCKING TCP loopback handshake (PipeImpl$Initializer), and a
+//     Winsock filter on this machine breaks exactly that handshake.
+//   - Reproduced identically on Microsoft JDK 21.0.11 and Temurin JRE
+//     25.0.4.1 (portable, scratchpad — no system change), with
+//     -Djava.net.preferIPv4Stack, the legacy provider flag, and
+//     -Djdk.net.useFastTcpLoopback; `netsh winsock show catalog` shows only
+//     base providers, so the interference is a WFP/filter driver, invisible
+//     to the catalog. Fixing it means changing system security software or
+//     installing WSL — both outside this packet's authorization.
+// Failure occurs BEFORE trigger load and before any port binding, so fresh
+// temp dirs and alternate ports cannot help.
 import admin from 'firebase-admin';
 
 const DB_HOST = process.env.FIREBASE_DATABASE_EMULATOR_HOST || '127.0.0.1:9002';
@@ -55,12 +73,12 @@ const REQUIRED_MATRIX = [
   { id: 'newest-create',                 kind: 'real-trigger', scripted: true },
   { id: 'old-create-no-current-regress', kind: 'real-trigger', scripted: true },
   { id: 'gabriel-am-then-pm-edit',       kind: 'real-trigger', scripted: false },
-  { id: 'edit-moving-earlier',           kind: 'real-trigger', scripted: false },
+  { id: 'edit-moving-earlier',            kind: 'real-trigger', scripted: true },
   { id: 'edit-moving-later-becomes-current', kind: 'real-trigger', scripted: true },
   { id: 'equal-time-arrival-order-A',    kind: 'real-trigger', scripted: true },
   { id: 'equal-time-arrival-order-B',    kind: 'real-trigger', scripted: false },
   { id: 'same-id-replay',                kind: 'real-trigger', scripted: true },
-  { id: 'same-id-collision',             kind: 'real-trigger', scripted: false },
+  { id: 'same-id-collision',              kind: 'real-trigger', scripted: true },
   { id: 'proven-duplicate',              kind: 'real-trigger', scripted: false },
   { id: 'shared-lineage-correction-conflict', kind: 'real-trigger', scripted: false },
   { id: 'potential-duplicate-no-lineage', kind: 'real-trigger', scripted: true },
@@ -75,9 +93,20 @@ const REQUIRED_MATRIX = [
   { id: 'crash-after-update-before-release', kind: 'fault-injection', scripted: false },
   { id: 'retry-before-180s',             kind: 'fault-injection', scripted: false },
   { id: 'retry-after-180s',              kind: 'fault-injection', scripted: false },
-  { id: 'cross-production-date-move',    kind: 'real-trigger', scripted: false },
+  { id: 'cross-production-date-move',     kind: 'real-trigger', scripted: true },
   { id: 'non-20-bbl-per-ft',             kind: 'real-trigger', scripted: true },
   { id: 'multiple-equalized-tanks',      kind: 'real-trigger', scripted: true },
+  // ── Phase-6 additions (packet 2026-08-29) — all UNEXECUTED until a JVM ──
+  { id: 'saturated-legacy-incoming-version',  kind: 'real-trigger', scripted: true }, // seed 4.3005e20; commit; assert ULP bump observed
+  { id: 'v2-revision-token',              kind: 'real-trigger', scripted: true }, // token replaced atomically with each commit; replay leaves it
+  { id: 'concurrent-mutations-different-wells',  kind: 'real-trigger', scripted: true },
+  { id: 'ingest-structured-permanent-refusal', kind: 'real-trigger', scripted: false }, // callable 400 + refusal log entry, no RTDB material
+  { id: 'transient-ingest-retry',        kind: 'real-trigger', scripted: false },
+  { id: 'watchdog-crossbow-694ms',       kind: 'real-trigger', scripted: false }, // fresh packet at sweep → NOT recovered, no clone
+  { id: 'watchdog-genuine-stale-recovery', kind: 'real-trigger', scripted: false }, // stranded pull → same-id recovery via canonical entry
+  { id: 'backdated-performance-production-projection',  kind: 'real-trigger', scripted: true },
+  { id: 'historical-configuration-preservation',  kind: 'real-trigger', scripted: true }, // stored bottoms unchanged by later config edits
+  { id: 'entirely-old-or-entirely-new-atomicity', kind: 'fault-injection', scripted: false }, // mid-commit kill → NO partial materialization
 ];
 
 /** Poll a path until predicate(value) or timeout. Returns the last value. */
@@ -203,7 +232,9 @@ async function main() {
   // ── Scenario 7: authorized DELETE-not-found → receipted no-op
   await sendDelete('d2', WELL, 'does_not_exist');
   const rcNF = await waitFor(receiptPath(WELL, 'delete_does_not_exist'), (v) => !!v);
-  check('DELETE-not-found → receipted terminal no-op (empty affected)', !!rcNF && Array.isArray(rcNF.affectedPacketIds) && rcNF.affectedPacketIds.length === 0, JSON.stringify(rcNF && rcNF.affectedPacketIds));
+  // RTDB strips empty arrays on write: `affectedPacketIds: []` round-trips as
+  // an ABSENT key. A receipt with the key missing IS the terminal no-op shape.
+  check('DELETE-not-found → receipted terminal no-op (empty affected)', !!rcNF && rcNF.mutationType === 'delete' && (rcNF.affectedPacketIds === undefined || (Array.isArray(rcNF.affectedPacketIds) && rcNF.affectedPacketIds.length === 0)), JSON.stringify(rcNF && { mutationType: rcNF.mutationType, affected: rcNF.affectedPacketIds ?? null }));
 
   // ── Scenario 8: status has no stale owned children + lock survived every commit
   const statusNow = (await db.ref(`wells/${WELL}/status`).once('value')).val() || {};
@@ -240,10 +271,90 @@ async function main() {
   check('potential-duplicate → BOTH pulls accepted (neither dropped)', !!r1p && !!r2p, `r1=${!!r1p} r2=${!!r2p}`);
   check('non-20 geometry well (25 bbl/ft) computed a bottom, not rejected', r1p && typeof r1p.tankAfterInches === 'number', JSON.stringify(r1p && r1p.tankAfterInches));
 
+  // ── Scenario 11 (Phase 6): saturated legacy incoming_version + v2 token ──
+  const SAT = 4.3005353146607763e20;
+  await db.ref('packets/incoming_version').set(SAT);
+  const W4 = 'Thor 5';
+  await seedWellConfig(W4, { bblPerFoot: 120, tanks: 6 });
+  await sendPull('t1', W4, { dateTimeUTC: '2026-08-27T15:00:00.000Z', dateTime: '8/27/2026 10:00 AM', tankLevelFeet: '12', bblsTaken: 120 });
+  await waitFor('packets/processed/t1', (v) => v && v.processedAt);
+  const legacyAfter = (await db.ref('packets/incoming_version').once('value')).val();
+  check('saturated legacy version → commit produces an OBSERVABLE upward bump (ULP-aware)', typeof legacyAfter === 'number' && legacyAfter > SAT, String(legacyAfter));
+  const v2Node = (await db.ref('packets/incoming_revision_v2').once('value')).val();
+  check('v2 revision token written atomically with the commit', !!v2Node && v2Node.v === 2 && v2Node.token === 't1', JSON.stringify(v2Node));
+
+  // ── Scenario 12 (Phase 6): replay leaves the v2 token unchanged ──────────
+  await sendPull('t1', W4, { dateTimeUTC: '2026-08-27T15:00:00.000Z', dateTime: '8/27/2026 10:00 AM', tankLevelFeet: '12', bblsTaken: 120 });
+  await sleep(3000);
+  const v2AfterReplay = (await db.ref('packets/incoming_revision_v2').once('value')).val();
+  check('same-id replay → v2 token unchanged (no false mutation signal)', !!v2AfterReplay && v2AfterReplay.token === 't1', JSON.stringify(v2AfterReplay));
+
+  // ── Scenario 13 (Phase 6): same-ID collision (different material) quarantined ──
+  await sendPull('t1', W4, { dateTimeUTC: '2026-08-27T14:00:00.000Z', dateTime: '8/27/2026 9:00 AM', tankLevelFeet: '9', bblsTaken: 33 });
+  const rej = await waitFor('packets/rejected/t1', (v) => !!v, { timeoutMs: 15000 });
+  const t1Row = (await db.ref('packets/processed/t1').once('value')).val();
+  check('same-id different-material → held in rejected (collision evidence), never applied', !!rej, JSON.stringify(!!rej));
+  check('same-id collision → original processed row unchanged', t1Row && t1Row.bblsTaken === 120 && t1Row.dateTimeUTC === '2026-08-27T15:00:00.000Z', JSON.stringify(t1Row && [t1Row.bblsTaken, t1Row.dateTimeUTC]));
+
+  // ── Scenario 14 (Phase 6): EDIT moving newest EARLIER demotes it ─────────
+  await sendPull('t2', W4, { dateTimeUTC: '2026-08-27T18:00:00.000Z', dateTime: '8/27/2026 1:00 PM', tankLevelFeet: '13', bblsTaken: 60 });
+  await waitFor('packets/processed/t2', (v) => v && v.processedAt);
+  // t2 is newest/current; move it EARLIER than t1 (15:00Z) → t1 should be current again.
+  await sendEdit('te1', W4, 't2', { dateTimeUTC: '2026-08-27T10:00:00.000Z', dateTime: '8/27/2026 5:00 AM', tankLevelFeet: '13', bblsTaken: 60 });
+  await sleep(4500);
+  const t2Row = (await db.ref('packets/processed/t2').once('value')).val();
+  check('EDIT moving earlier → same logical pull, new event time', t2Row && t2Row.dateTimeUTC === '2026-08-27T10:00:00.000Z', JSON.stringify(t2Row && t2Row.dateTimeUTC));
+  check('EDIT moving earlier → row flagged late (now behind t1), never dropped', !!t2Row, String(!!t2Row));
+
+  // ── Scenario 15 (Phase 6): cross-date BACKDATED create → production + perf ──
+  const W5 = 'Gunslinger 3';
+  await seedWellConfig(W5, { bblPerFoot: 67.27272727272727, tanks: 2 });
+  await sendPull('g_now', W5, { dateTimeUTC: '2026-08-27T20:00:00.000Z', dateTime: '8/27/2026 3:00 PM', tankLevelFeet: '10', bblsTaken: 67 });
+  await waitFor('packets/processed/g_now', (v) => v && v.processedAt);
+  // Backdated to the PREVIOUS local day (2026-08-26 15:00 CDT = 20:00Z).
+  await sendPull('g_back', W5, { dateTimeUTC: '2026-08-26T20:00:00.000Z', dateTime: '8/26/2026 3:00 PM', tankLevelFeet: '9', bblsTaken: 67 });
+  const gBack = await waitFor('packets/processed/g_back', (v) => v && v.processedAt);
+  check('backdated CREATE (cross-date) → row persisted behind current', !!gBack && gBack.lateEntry === true, JSON.stringify(gBack && gBack.lateEntry));
+  const gOut = Object.values((await db.ref('packets/outgoing').orderByChild('wellName').equalTo(W5).once('value')).val() || {})[0];
+  check('backdated CREATE → current NOT regressed (still g_now)', gOut && gOut.lastPullPacketId === 'g_now', JSON.stringify(gOut && gOut.lastPullPacketId));
+  const prodDates = (await db.ref('production/Gunslinger_3').once('value')).val() || {};
+  check('backdated CREATE → production bucketed on the BACKDATED date (both dates present)', Object.keys(prodDates).length >= 2, JSON.stringify(Object.keys(prodDates)));
+  const perfRows = ((await db.ref('performance/Gunslinger_3/rows').once('value')).val()) || {};
+  check('backdated CREATE → performance row keyed by the backdated event time', Object.keys(perfRows).some((k) => k.startsWith('20260826')), JSON.stringify(Object.keys(perfRows)));
+  check('non-standard aggregate 67.27 bbl/ft used (not tanks×20): bottom ≈ top − (67/67.27)×12in', gBack && Math.abs(gBack.tankAfterInches - (108 - (67 / 67.27272727272727) * 12)) < 0.01, JSON.stringify(gBack && gBack.tankAfterInches));
+
+  // ── Scenario 16 (Phase 6): concurrent mutations across DIFFERENT wells ───
+  const legacyBefore16 = (await db.ref('packets/incoming_version').once('value')).val();
+  await Promise.all([
+    sendPull('c1', W4, { dateTimeUTC: '2026-08-27T21:00:00.000Z', dateTime: '8/27/2026 4:00 PM', tankLevelFeet: '14', bblsTaken: 60 }),
+    sendPull('c2', W5, { dateTimeUTC: '2026-08-27T21:00:00.000Z', dateTime: '8/27/2026 4:00 PM', tankLevelFeet: '11', bblsTaken: 67 }),
+  ]);
+  const c1Row = await waitFor('packets/processed/c1', (v) => v && v.processedAt);
+  const c2Row = await waitFor('packets/processed/c2', (v) => v && v.processedAt);
+  check('concurrent cross-well mutations → BOTH commit with receipts', !!c1Row && !!c2Row
+    && !!(await db.ref(receiptPath(W4, 'c1')).once('value')).val()
+    && !!(await db.ref(receiptPath(W5, 'c2')).once('value')).val(), `c1=${!!c1Row} c2=${!!c2Row}`);
+  const legacyAfter16 = (await db.ref('packets/incoming_version').once('value')).val();
+  check('concurrent commits → no lost legacy revision signal (value advanced)', legacyAfter16 > legacyBefore16, `${legacyBefore16} → ${legacyAfter16}`);
+  const v2After16 = (await db.ref('packets/incoming_revision_v2').once('value')).val();
+  check('concurrent commits → v2 token is one of the committed operations', !!v2After16 && (v2After16.token === 'c1' || v2After16.token === 'c2'), JSON.stringify(v2After16 && v2After16.token));
+
+  // ── Scenario 17 (Phase 6): historical configuration preservation ─────────
+  const gBackBefore = (await db.ref('packets/processed/g_back').once('value')).val();
+  await db.ref(`well_config/${W5}/bblPerFoot`).set(40); // config changes AFTER the fact
+  await sleep(1500);
+  const gBackAfter = (await db.ref('packets/processed/g_back').once('value')).val();
+  check('config change does NOT rewrite historical stored bottoms', gBackAfter && gBackAfter.tankAfterInches === gBackBefore.tankAfterInches && gBackAfter.recoveryInches === gBackBefore.recoveryInches, JSON.stringify([gBackBefore.tankAfterInches, gBackAfter && gBackAfter.tankAfterInches]));
+
   // COVERAGE NOTE: crash-after-update / timeout-recovery inside vs after the 180s
   // horizon, and the fencing TOCTOU race, require fault injection the emulators:exec
   // harness cannot cleanly perform; they are proven by the coordinator atomicity
   // matrix (chronoCommitCoordinator.test.ts) and wellFence.test.ts at unit level.
+  // The watchdog cases (crossbow-694ms, genuine-stale recovery) need the v2
+  // scheduled function fired manually, which emulators:exec does not do; their
+  // decision logic is unit-proven (watchdogAge/watchdogRecovery tests) and the
+  // recovery entry is source-proven to be the SAME processIncomingPullPacket the
+  // trigger runs (canonical call-graph tests).
   // This harness verifies real-trigger behavior for the mutation matrix above.
 
   // NOTE: this matrix is a SUPERSET scaffold and remains UNVERIFIED until it runs

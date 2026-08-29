@@ -1794,7 +1794,15 @@ export async function applyV2ChronologicalEdit(args: {
         hasOutgoing = true;
         outgoingKeys.push(String(child.key));
         const resp = child.val();
-        if (resp.lastPullDateTimeUTC === origPacket.dateTimeUTC || resp.lastPullDateTimeUTC === newDateTimeUTC) {
+        // Latest = event-time comparison, not string identity: an edit that
+        // MOVES this pull to the newest event time must promote it even though
+        // the current response belongs to a different pull (emulator case
+        // 'edit-moving-later-becomes-current'). Equal times defer to the
+        // standing response (packetId tie-break is arbitrated at CREATE time).
+        const respUtcMs = Date.parse(String(resp.lastPullDateTimeUTC ?? '')) || 0;
+        const editedUtcMs = Date.parse(newDateTimeUTC) || 0;
+        if (resp.lastPullDateTimeUTC === origPacket.dateTimeUTC || resp.lastPullDateTimeUTC === newDateTimeUTC
+          || editedUtcMs > respUtcMs) {
           isLatestPull = true;
         }
       });
@@ -2451,7 +2459,11 @@ export async function processIncomingEdit(
       const resp = child.val();
       // If the outgoing response points to this packet's timestamp, it's the latest
       // (check both original and new dateTimeUTC in case date was edited).
-      if (resp.lastPullDateTimeUTC === origPacket.dateTimeUTC || resp.lastPullDateTimeUTC === newDateTimeUTC) {
+      // Latest = event-time comparison, not string identity (see v2 note above).
+      const respUtcMs2 = Date.parse(String(resp.lastPullDateTimeUTC ?? '')) || 0;
+      const editedUtcMs2 = Date.parse(newDateTimeUTC) || 0;
+      if (resp.lastPullDateTimeUTC === origPacket.dateTimeUTC || resp.lastPullDateTimeUTC === newDateTimeUTC
+        || editedUtcMs2 > respUtcMs2) {
         isLatestPull = true;
       }
     });
