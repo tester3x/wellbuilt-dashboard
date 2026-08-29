@@ -53,7 +53,7 @@ function currentSidecar(pull: { packetId: string; dateTimeUTC: string; tankTopIn
   };
 }
 
-interface Report { label: string; affected: number; paths: number; bytes: number; largest: string; hasReceipt: boolean; hasIncomingDelete: boolean; projections: string[]; }
+interface Report { label: string; affected: number; paths: number; bytes: number; largest: string; hasReceipt: boolean; hasIncomingDelete: boolean; hasV2Revision: boolean; projections: string[]; }
 function report(label: string, patch: Record<string, unknown>, receipt: CommitReceipt, incomingId: string): Report {
   const keys = Object.keys(patch);
   let largestKey = '', largestBytes = 0;
@@ -71,10 +71,13 @@ function report(label: string, patch: Record<string, unknown>, receipt: CommitRe
     label, affected: receipt.affectedPacketIds.length, paths: keys.length, bytes: bytes(patch),
     largest: `${largestKey} (${largestBytes}B)`,
     hasReceipt: keys.some((k) => k.includes('/chronoReceipts/')),
+    hasV2Revision: keys.includes('packets/incoming_revision_v2'),
     hasIncomingDelete: patch[`packets/incoming/${incomingId}`] === null,
     projections,
   };
-  console.log(`[Atlas1] ${label.padEnd(24)} affected=${String(r.affected).padStart(2)} paths=${String(r.paths).padStart(3)} bytes=${String(r.bytes).padStart(6)} receipt=${r.hasReceipt} incomingΔ=${r.hasIncomingDelete} proj=[${r.projections.join(',')}] largest=${r.largest}`);
+  console.log(`[Atlas1] ${label.padEnd(24)} affected=${String(r.affected).padStart(2)} paths=${String(r.paths).padStart(3)} bytes=${String(r.bytes).padStart(6)} receipt=${r.hasReceipt} incomingΔ=${r.hasIncomingDelete} v2rev=${r.hasV2Revision} proj=[${r.projections.join(',')}] largest=${r.largest}`);
+  // legacy incoming_version is deliberately NOT in the patch — it is the
+  // post-commit best-effort ULP-aware transaction (incomingVersionPublish).
   return r;
 }
 
@@ -178,5 +181,90 @@ describe(`Atlas1 — COMPLETE live assembled patch over ${N} pulls`, () => {
     expect(r.affected).toBeLessThan(60);
     expect(r.bytes).toBeLessThan(250_000);
     expect(r.paths).toBeLessThan(400);
+  });
+});
+
+// ── Phase-9 additions (packet 2026-08-29): the remaining required mutations ──
+describe(`Atlas1 — Phase-9 scale completions over ${N} pulls`, () => {
+  test('OLDEST CREATE (backdated before row 0): bounded insert + receipt + v2', () => {
+    const p = { packetId: 'atlas_oldest', dateTimeUTC: new Date(START - STEP).toISOString(), tankTopInches: 240, bblsTaken: 120, tankAfterInches: 204 };
+    const { patch, receipt } = buildCreateMutation({
+      wellName: WELL, operationId: p.packetId, fence: 648, revision: 648, committedAtMs: 0, patchHash: `${p.packetId}:648`,
+      sidecar: { performance: { wellKey: WELLKEY, perfTimestamp: '20241231_160000', row: { d: '2024-12-31', a: 240, p: 200 }, wellName: WELL, updatedIso: '2026-08-29T00:00:00.000Z' }, production: [{ wellKey: WELLKEY, date: getProductionDate(Date.parse(p.dateTimeUTC)), value: { a: 40, w: 42, o: 39, u: '2026-08-29T00:00:00.000Z', n: 1 } }] },
+      existingChain: chain, newPull: { ...p, lateEntry: true }, cfg,
+      newProcessedRecord: { ...p, driverName: 'Driver One', driverId: 'd1', processedAt: '2026-08-29T00:00:00.000Z', lateEntry: true },
+    });
+    patch['packets/incoming/atlas_oldest'] = null;
+    const r = report('OLDEST CREATE', patch, receipt, 'atlas_oldest');
+    expect(r.hasReceipt).toBe(true);
+    expect(r.hasV2Revision).toBe(true);
+    expect(r.affected).toBeLessThanOrEqual(2);      // inserted row + first successor recompute
+    expect(r.bytes).toBeLessThan(250_000);
+    expect(r.paths).toBeLessThan(60);               // never scales with the 646-row history
+  });
+
+  test('DELETE oldest: successor recompute only — bounded, receipted, v2', () => {
+    const { patch, receipt } = buildDeleteMutation({
+      wellName: WELL, operationId: 'delete_atlas_0000', fence: 649, revision: 649, committedAtMs: 0, patchHash: 'del0:649',
+      sidecar: {}, existingChain: chain, deletePacketId: 'atlas_0000', cfg,
+    });
+    patch['packets/incoming/del0_incoming'] = null;
+    const r = report('DELETE oldest', patch, receipt, 'del0_incoming');
+    expect(r.hasReceipt).toBe(true);
+    expect(r.hasV2Revision).toBe(true);
+    expect(r.bytes).toBeLessThan(250_000);
+    expect(r.paths).toBeLessThan(60);
+  });
+
+  test('DELETE middle: neighbor stitch — bounded, receipted, v2', () => {
+    const { patch, receipt } = buildDeleteMutation({
+      wellName: WELL, operationId: 'delete_atlas_0323', fence: 650, revision: 650, committedAtMs: 0, patchHash: 'delm:650',
+      sidecar: {}, existingChain: chain, deletePacketId: 'atlas_0323', cfg,
+    });
+    patch['packets/incoming/delm_incoming'] = null;
+    const r = report('DELETE middle', patch, receipt, 'delm_incoming');
+    expect(r.hasReceipt).toBe(true);
+    expect(r.hasV2Revision).toBe(true);
+    expect(r.bytes).toBeLessThan(250_000);
+    expect(r.paths).toBeLessThan(60);
+  });
+
+  test('CROSS-PRODUCTION-DATE EDIT: vacated old date nulled + new date written in ONE patch', () => {
+    // Move row 200 (its own 8h slot) to a completely different production date.
+    const edited: ChronoPullInput = { ...chain[200], dateTimeUTC: new Date(START + 500 * STEP + 3600_000).toISOString(), tankTopInches: 238, bblsTaken: 110 };
+    const oldDate = getProductionDate(Date.parse(chain[200].dateTimeUTC));
+    const newDate = getProductionDate(Date.parse(edited.dateTimeUTC));
+    const { patch, receipt } = buildEditMutation({
+      wellName: WELL, operationId: 'edit_xdate', fence: 651, revision: 651, committedAtMs: 0, patchHash: 'x:651',
+      sidecar: { production: [
+        { wellKey: WELLKEY, date: oldDate, value: null },                       // vacated date removed
+        { wellKey: WELLKEY, date: newDate, value: { a: 40, w: 42, o: 39, u: '2026-08-29T00:00:00.000Z', n: 4 } },
+      ] },
+      existingChain: chain, editedPull: edited, cfg,
+    });
+    patch['packets/editHistory/atlas_0200/edit_xdate'] = { eventId: 'edit_xdate' };
+    patch['packets/editReceipts/edit_xdate'] = { status: 'accepted' };
+    patch['packets/incoming/x_incoming'] = null;
+    const r = report('CROSS-DATE EDIT', patch, receipt, 'x_incoming');
+    expect(oldDate).not.toBe(newDate);
+    expect(patch[`production/${WELLKEY}/${oldDate}`]).toBeNull();
+    expect(patch[`production/${WELLKEY}/${newDate}`]).toBeTruthy();
+    expect(r.hasReceipt).toBe(true);
+    expect(r.hasV2Revision).toBe(true);
+    expect(r.projections).toEqual(expect.arrayContaining(['production']));
+    expect(r.bytes).toBeLessThan(250_000);
+  });
+
+  test('every measured patch carries the v2 refresh token; legacy stays post-commit by design', () => {
+    // The atomic patch NEVER contains packets/incoming_version — the legacy
+    // node is bumped by the post-commit ULP-aware transaction, best-effort.
+    const p = { packetId: 'atlas_v2chk', dateTimeUTC: new Date(START + (N + 5) * STEP).toISOString(), tankTopInches: 240, bblsTaken: 120, tankAfterInches: 204 };
+    const { patch } = buildCreateMutation({
+      wellName: WELL, operationId: p.packetId, fence: 652, revision: 652, committedAtMs: 0, patchHash: 'v:652',
+      sidecar: {}, existingChain: chain, newPull: { ...p, lateEntry: false }, cfg,
+      newProcessedRecord: { ...p, processedAt: '2026-08-29T00:00:00.000Z', lateEntry: false },
+    });
+    expect(patch['packets/incoming_revision_v2']).toMatchObject({ v: 2, token: 'atlas_v2chk' });
+    expect(Object.keys(patch)).not.toContain('packets/incoming_version');
   });
 });
