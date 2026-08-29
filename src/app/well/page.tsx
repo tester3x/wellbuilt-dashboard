@@ -11,11 +11,13 @@ import {
   WellResponse,
   WellNavItem,
   fetchWellHistoryUnified,
+  fetchWellQuarantine,
   fetchEditHistory,
   deletePull,
   editPull,
   subscribeToWellNavList,
 } from '@/lib/wells';
+import { chipsForPacket, type QuarantineRow } from '@/lib/reviewSignals';
 import {
   packetShowsEditBadge,
   formatEditSourceLabel,
@@ -89,6 +91,7 @@ function WellDetailPage() {
   const wellName = searchParams.get('name') || '';
 
   const [pulls, setPulls] = useState<PullPacket[]>([]);
+  const [quarantine, setQuarantine] = useState<QuarantineRow[]>([]);
   const [wellStatus, setWellStatus] = useState<WellResponse | null>(null);
   const [wellTanks, setWellTanks] = useState<number>(1);
   const [dataLoading, setDataLoading] = useState(true);
@@ -289,6 +292,11 @@ function WellDetailPage() {
           setPulls(history);
           setError('');
         }
+        // Quarantine/collision evidence — best-effort review surface; a read
+        // failure never blocks the pull history itself.
+        fetchWellQuarantine(wellName)
+          .then((rows) => { if (!cancelled) setQuarantine(rows); })
+          .catch(() => { if (!cancelled) setQuarantine([]); });
       } catch (err) {
         console.error('Error fetching well history:', err);
         if (!cancelled) {
@@ -756,6 +764,17 @@ function WellDetailPage() {
                             Edited{typeof pull.editCount === 'number' && pull.editCount > 1 ? ` ×${pull.editCount}` : ''}
                           </button>
                         )}
+                        {/* Review tags — informational review surfaces, never rejection gates */}
+                        {chipsForPacket(pull as unknown as Record<string, unknown>).map((chip) => (
+                          <span
+                            key={chip.key}
+                            className="ml-2 px-1.5 py-0.5 text-xs rounded"
+                            style={{ backgroundColor: chip.bg, color: chip.fg }}
+                            title={chip.title}
+                          >
+                            {chip.label}
+                          </span>
+                        ))}
                         {trailOpenId === pull.packetId && (
                           <div className="mt-2 ml-0 text-xs text-left bg-gray-900/80 border border-orange-700/40 rounded p-2 max-w-md">
                             <div className="text-orange-200 font-medium mb-1">Correction history</div>
@@ -829,6 +848,45 @@ function WellDetailPage() {
                 })}
               </tbody>
             </table>
+          </div>
+        )}
+
+        {/* Quarantined / collision evidence — retained rows from packets/rejected.
+            Review information for authorized users; nothing here was silently
+            deleted, and nothing here gates the pull history above. */}
+        {quarantine.length > 0 && (
+          <div className="mt-6 bg-gray-800/60 border border-gray-700 rounded-lg p-4">
+            <h2 className="text-sm font-semibold text-gray-200 mb-1">
+              Quarantined packets ({quarantine.length})
+            </h2>
+            <p className="text-xs text-gray-400 mb-3">
+              Held as evidence instead of being deleted — duplicates, collisions, and
+              stranded requests land here for review. They are not part of the pull history.
+            </p>
+            <div className="overflow-x-auto">
+              <table className="w-full text-xs">
+                <thead>
+                  <tr className="text-left text-gray-400">
+                    <th className="px-2 py-1">Rejected</th>
+                    <th className="px-2 py-1">Packet</th>
+                    <th className="px-2 py-1">Original / lineage</th>
+                    <th className="px-2 py-1">Event time</th>
+                    <th className="px-2 py-1">Reason</th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-gray-700/60">
+                  {quarantine.map((q) => (
+                    <tr key={q.key} className="text-gray-300">
+                      <td className="px-2 py-1 font-mono whitespace-nowrap">{q.rejectedAt ? formatDateTime(q.rejectedAt) : '--'}</td>
+                      <td className="px-2 py-1 font-mono">{q.packetId}</td>
+                      <td className="px-2 py-1 font-mono">{q.originalId || '--'}</td>
+                      <td className="px-2 py-1 font-mono whitespace-nowrap">{q.eventTimeUTC ? formatDateTime(q.eventTimeUTC) : '--'}</td>
+                      <td className="px-2 py-1" title={q.readableReason}>{q.reason}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
           </div>
         )}
       </main>

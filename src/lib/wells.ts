@@ -183,6 +183,11 @@ export interface PullPacket {
   noLevel?: boolean;
   jobType?: string;          // Commodity type from WB T (e.g. "Production Water")
   wellDown?: boolean;        // Well is down (not producing)
+  // Chronological-pipeline review tags — informational, never rejection gates.
+  lateEntry?: boolean;
+  anomaly?: boolean;
+  potentialDuplicate?: boolean;
+  needsReview?: boolean;
 }
 
 export interface PerformanceRow {
@@ -889,6 +894,10 @@ export async function fetchWellHistoryUnified(wellName: string, limit: number = 
         noLevel: data.noLevel || false,
         jobType: data.jobType,
         wellDown: data.wellDown || false,
+        lateEntry: data.lateEntry === true,
+        anomaly: data.anomaly === true,
+        potentialDuplicate: data.potentialDuplicate === true,
+        needsReview: data.needsReview === true,
       });
     }
   });
@@ -1629,4 +1638,26 @@ export async function buildPerformanceSummary(): Promise<{
     totalWells: wellStats.filter(w => !w.route.toLowerCase().includes('test')).length,
     totalPulls: wellStats.filter(w => !w.route.toLowerCase().includes('test')).reduce((s, w) => s + w.pullCount, 0),
   };
+}
+
+/**
+ * Quarantined/collision evidence for one well (packets/rejected) — Phase 8.
+ * Quarantine is lossless evidence retention, never deletion; authorized users
+ * review these rows alongside the pull history. Sorted newest-rejected first.
+ */
+export async function fetchWellQuarantine(wellName: string): Promise<import('./reviewSignals').QuarantineRow[]> {
+  const { describeQuarantineRow } = await import('./reviewSignals');
+  const db = getFirebaseDatabase();
+  const snapshot = await get(ref(db, 'packets/rejected'));
+  if (!snapshot.exists()) return [];
+  const clean = wellName.toLowerCase().replace(/\s/g, '');
+  const rows: import('./reviewSignals').QuarantineRow[] = [];
+  snapshot.forEach((child) => {
+    const described = describeQuarantineRow(child.key || '', child.val());
+    if (described && described.wellName.toLowerCase().replace(/\s/g, '') === clean) {
+      rows.push(described);
+    }
+  });
+  rows.sort((a, b) => (b.rejectedAt || '').localeCompare(a.rejectedAt || ''));
+  return rows;
 }
