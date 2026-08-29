@@ -1365,49 +1365,11 @@ export const __v2FollowupBarrier: {
   beforeProjection: null | (() => Promise<void>);
 } = { beforeClassification: null, beforeProjection: null };
 
-/**
- * Fence a P-scoped mutable node (a receipt or a trail effect) by a revision
- * field. A write carrying `myRev` is a no-op when the node already stores a
- * GREATER revision — the newer classification wins. Immutable `core` fields are
- * backfilled even when fenced, so durable receipt proof always exists.
- */
-async function fencedRevWrite(
-  ref: admin.database.Reference,
-  revField: string,
-  myRev: number,
-  values: Record<string, unknown>,
-  core?: Record<string, unknown>,
-): Promise<void> {
-  await ref.transaction((cur: any) => {
-    const node = cur && typeof cur === 'object' && cur !== null ? cur : {};
-    if ((Number(node[revField]) || 0) > myRev) {
-      if (core) return { ...core, ...node }; // fenced: keep newer node, ensure core
-      return node; // fenced: no-op
-    }
-    return { ...node, ...(core || {}), ...values, [revField]: myRev };
-  });
-}
-
-/**
- * Fence a shared derived projection (outgoing / AFR / performance / next-pull
- * cascade / live status) by the SOURCE packet's revision. A write from packet P
- * at `myRev` is a no-op when that target was last written by P at a greater
- * revision. A different source packet (a newer pull taking over) passes — pull
- * ordering, not this fence, arbitrates across distinct pulls.
- */
-async function fencedSourceWrite(
-  ref: admin.database.Reference,
-  sourceId: string,
-  myRev: number,
-  values: Record<string, unknown>,
-): Promise<void> {
-  await ref.transaction((cur: any) => {
-    const node = cur && typeof cur === 'object' && cur !== null ? cur : {};
-    const sameSource = node.editSourceId === undefined || node.editSourceId === sourceId;
-    if (sameSource && (Number(node.editSourceRev) || 0) > myRev) return; // fenced no-op
-    return { ...node, ...values, editSourceId: sourceId, editSourceRev: myRev };
-  });
-}
+// Phase 5: the fenced follow-up writers (fencedRevWrite / fencedSourceWrite)
+// are GONE — every v2 correction now commits through runCanonicalMutation as
+// ONE atomic multi-location update, so there are no follow-up writers left to
+// fence. Merged targets still carry editSourceId/editSourceRev stamps for
+// mixed-deploy safety.
 
 interface EditNeighbor {
   key: string;
@@ -1594,367 +1556,383 @@ export async function applyV2ChronologicalEdit(args: {
     });
   });
 
-  // ── Transactional convergence: editable + derived from the full set ──────
-  const txn = await db.ref(`packets/processed/${originalPacketId}`).transaction((cur: any) => {
-    const src = cur && typeof cur === 'object' ? cur : origPacket;
-    const baseline: EditableSnapshot =
-      src.editBaseline && typeof src.editBaseline === 'object' ? src.editBaseline : frozenBaseline;
-    const corrections: Record<string, V2CorrectionEntry> = { ...(src.editCorrections || {}) };
-    corrections[editEventId] = {
-      t: correctionCreatedAtUTC,
-      v: correctionValues,
-      e: serverReceivedAtUTC,
-      src: editSource,
-    };
-    const evs = Object.entries(corrections).map(([id, c]) => ({
-      eventId: id,
-      correctionCreatedAtUTC: c.t,
-      correctionValues: (c.v || {}) as EditableSnapshot,
-    }));
-    const mat = materializeEditableFields(baseline, evs);
-    const f = mat.fields;
-    const newTop = typeof f.tankTopInches === 'number' ? f.tankTopInches : Number(src.tankTopInches) || 0;
-    const newBbls = typeof f.bblsTaken === 'number' ? f.bblsTaken : Number(src.bblsTaken) || 0;
-    const newUTC = typeof f.dateTimeUTC === 'string' && f.dateTimeUTC
-      ? f.dateTimeUTC
-      : (typeof src.dateTimeUTC === 'string' ? src.dateTimeUTC : '');
-    const newDisplay = typeof f.dateTime === 'string' ? f.dateTime : (src.dateTime || '');
-    const newDown = f.wellDown === true;
-
-    const next: any = {
-      ...src,
-      editBaseline: baseline,
-      editCorrections: corrections,
-      // Monotonic materialization revision — bumped on every committed apply.
-      // Follow-up writes (receipts, projections) guard on this so a stale
-      // invocation can never overwrite a newer correction set's output.
-      materializationRev: (Number(src.materializationRev) || 0) + 1,
-      bblsTaken: newBbls,
-      wellDown: newDown,
-      dateTimeUTC: newUTC,
-      dateTime: newDisplay,
-      editedAt: serverReceivedAtUTC,
-      editedBy: editSource,
-      editCount: Object.keys(corrections).length,
-      ...fallbackAuditFields,
-    };
-    if (!src.originalSubmittedAt && originalSubmissionAt) next.originalSubmittedAt = originalSubmissionAt;
-    if (typeof data.revisionAt === 'string' && data.revisionAt) next.lastRevisionAt = data.revisionAt;
-
-    if (newTop <= 0) {
-      next.tankTopInches = 0;
-      next.tankLevelFeet = 0;
-      next.tankAfterInches = 0;
-      next.tankAfterFeet = '';
-      next.noLevel = true;
-    } else {
-      const d = computeEditDerived(
-        newTop, newBbls, newUTC, bblPerFoot, loadLineInches, neighbors, originalPacketId,
+  // ── Coordinator-native convergence (Phase 5): ONE atomic patch ────────────
+  // The per-well coordinator lock serializes every canonical writer, so the
+  // old convergence transaction and the fenced follow-up writers collapse
+  // into a single all-or-nothing multi-location update: converged row +
+  // durable trail + classification receipts + status + cascade + outgoing +
+  // AFR + performance + incoming consumption + completion receipt. The
+  // editSourceId/editSourceRev stamps are still written on merged targets so
+  // any straggler fenced writer from a mixed deploy remains safely fenced.
+  const v2Summary: { value: { outcome: string; affects: string[]; superseded: string[] } | null } = { value: null };
+  const commit = await runCanonicalMutation(makeCoordinatorIO(db, wellName), {
+    wellName,
+    operationId: editEventId,
+    buildPatch: async () => {
+      // Serialized under the per-well lock — read the CURRENT row.
+      const curSnap = await db.ref(`packets/processed/${originalPacketId}`).once('value');
+      const src: Record<string, any> = curSnap.exists() ? curSnap.val() : origPacket;
+      const baseline: EditableSnapshot =
+        src.editBaseline && typeof src.editBaseline === 'object' ? src.editBaseline : frozenBaseline;
+      const correctionsMap: Record<string, V2CorrectionEntry> = { ...(src.editCorrections || {}) };
+      correctionsMap[editEventId] = {
+        t: correctionCreatedAtUTC,
+        v: correctionValues,
+        e: serverReceivedAtUTC,
+        src: editSource,
+      };
+      const myRev = (Number(src.materializationRev) || 0) + 1;
+      const allEvents = Object.entries(correctionsMap).map(([id, c]) => ({
+        eventId: id,
+        correctionCreatedAtUTC: c.t,
+        correctionValues: (c.v || {}) as EditableSnapshot,
+      }));
+      const matFinal = materializeEditableFields(baseline, allEvents);
+      const f = matFinal.fields;
+      const newTankTopInches = typeof f.tankTopInches === 'number' ? f.tankTopInches : Number(src.tankTopInches) || 0;
+      const newBblsTaken = typeof f.bblsTaken === 'number' ? f.bblsTaken : Number(src.bblsTaken) || 0;
+      const newDateTimeUTC = typeof f.dateTimeUTC === 'string' && f.dateTimeUTC
+        ? f.dateTimeUTC
+        : (typeof src.dateTimeUTC === 'string' ? src.dateTimeUTC : '');
+      const newDateTime = typeof f.dateTime === 'string' ? f.dateTime : (src.dateTime || '');
+      const newWellDown = f.wellDown === true;
+      const derived = computeEditDerived(
+        newTankTopInches, newBblsTaken, newDateTimeUTC, bblPerFoot, loadLineInches, neighbors, originalPacketId,
         Number(src.timeDifDays) || 0, typeof src.timeDif === 'string' ? src.timeDif : '',
       );
-      next.tankTopInches = newTop;
-      next.tankLevelFeet = newTop / 12;
-      next.tankAfterInches = d.newTankAfterInches;
-      next.tankAfterFeet = inchesToFeetInches(d.newTankAfterInches);
-      next.rawCalculatedBottomInches = d.rawNewTankAfterInches;
-      next.hitLoadLine = d.editHitLoadLine;
-      next.recoveryInches = d.recoveryInches;
-      next.flowRateDays = d.flowRateDays;
-      next.flowRate = d.flowRate;
-      next.timeDif = d.timeDif;
-      next.timeDifDays = d.timeDifDays;
-      next.noLevel = false;
-    }
-    return next;
+      const newTankAfterInches = newTankTopInches <= 0 ? 0 : derived.newTankAfterInches;
+
+      // The converged processed row — full replacement, same shape the old
+      // transaction produced.
+      const nextRow: Record<string, any> = {
+        ...src,
+        editBaseline: baseline,
+        editCorrections: correctionsMap,
+        materializationRev: myRev,
+        bblsTaken: newBblsTaken,
+        wellDown: newWellDown,
+        dateTimeUTC: newDateTimeUTC,
+        dateTime: newDateTime,
+        editedAt: serverReceivedAtUTC,
+        editedBy: editSource,
+        editCount: Object.keys(correctionsMap).length,
+        ...fallbackAuditFields,
+      };
+      if (!src.originalSubmittedAt && originalSubmissionAt) nextRow.originalSubmittedAt = originalSubmissionAt;
+      if (typeof data.revisionAt === 'string' && data.revisionAt) nextRow.lastRevisionAt = data.revisionAt;
+      if (newTankTopInches <= 0) {
+        nextRow.tankTopInches = 0;
+        nextRow.tankLevelFeet = 0;
+        nextRow.tankAfterInches = 0;
+        nextRow.tankAfterFeet = '';
+        nextRow.noLevel = true;
+      } else {
+        nextRow.tankTopInches = newTankTopInches;
+        nextRow.tankLevelFeet = newTankTopInches / 12;
+        nextRow.tankAfterInches = derived.newTankAfterInches;
+        nextRow.tankAfterFeet = inchesToFeetInches(derived.newTankAfterInches);
+        nextRow.rawCalculatedBottomInches = derived.rawNewTankAfterInches;
+        nextRow.hitLoadLine = derived.editHitLoadLine;
+        nextRow.recoveryInches = derived.recoveryInches;
+        nextRow.flowRateDays = derived.flowRateDays;
+        nextRow.flowRate = derived.flowRate;
+        nextRow.timeDif = derived.timeDif;
+        nextRow.timeDifDays = derived.timeDifDays;
+        nextRow.noLevel = false;
+      }
+
+      // ── Durable trail event (immutable) with chronological before/after ──
+      const priorEvents = allEvents.filter((e) =>
+        e.eventId !== editEventId
+        && compareEditEvents(e, { eventId: editEventId, correctionCreatedAtUTC, correctionValues }) < 0);
+      const matBefore = materializeEditableFields(baseline, priorEvents);
+      const fieldDiff = buildFieldDiff(
+        {
+          tankTopInches: matBefore.fields.tankTopInches ?? undefined,
+          tankLevelFeet: typeof matBefore.fields.tankTopInches === 'number' ? matBefore.fields.tankTopInches / 12 : undefined,
+          bblsTaken: matBefore.fields.bblsTaken ?? undefined,
+          dateTimeUTC: matBefore.fields.dateTimeUTC ?? undefined,
+          dateTime: matBefore.fields.dateTime ?? undefined,
+          wellDown: matBefore.fields.wellDown ?? undefined,
+        } as Record<string, unknown>,
+        {
+          tankTopInches: correctionValues.tankTopInches ?? undefined,
+          bblsTaken: correctionValues.bblsTaken ?? undefined,
+          dateTimeUTC: correctionValues.dateTimeUTC ?? undefined,
+          dateTime: correctionValues.dateTime ?? undefined,
+          wellDown: correctionValues.wellDown ?? undefined,
+        },
+      );
+      const outcome = classifyEditOutcome(editEventId, correctionValues, matFinal.authority);
+      const editEvent = buildAppliedEditEvent({
+        eventId: editEventId,
+        packetId: originalPacketId,
+        sequence: Object.keys(correctionsMap).length,
+        editedAt: serverReceivedAtUTC,
+        source: editSource,
+        originAppContext,
+        actorDriverId: data.driverId ?? origPacket.driverId ?? null,
+        actorDriverName: data.driverName ?? null,
+        clientAppVersion: data.clientAppVersion ?? null,
+        fields: fieldDiff,
+        originalSubmissionAt,
+        resolutionPath: editResolvedViaFallback ? 'invoiceDocId_fallback' : 'direct',
+        editRequestId: incomingPacketId,
+        correctionCreatedAtUTC,
+        serverReceivedAtUTC,
+        correctionValues,
+      });
+
+      const extraPaths: Record<string, unknown> = {};
+      // Immutable event insertion — child-path merge (never clobbers currentEffect).
+      for (const [k, v] of Object.entries(editEvent as unknown as Record<string, unknown>)) {
+        extraPaths[`packets/editHistory/${originalPacketId}/${editEventId}/${k}`] = v ?? null;
+      }
+
+      // Test seam kept for ordering probes; with one atomic patch there is no
+      // partial-state window between these phases anymore.
+      if (__v2FollowupBarrier.beforeClassification) {
+        const hook = __v2FollowupBarrier.beforeClassification;
+        __v2FollowupBarrier.beforeClassification = null;
+        await hook();
+      }
+
+      // Classify EVERY correction's receipt + trail effect from the union set.
+      for (const [id, c] of Object.entries(correctionsMap)) {
+        const oc = classifyEditOutcome(id, (c.v || {}) as EditableSnapshot, matFinal.authority);
+        const effect = {
+          outcome: oc.outcome,
+          fieldsAffectingCurrent: oc.fieldsAffectingCurrent,
+          fieldsSuperseded: oc.fieldsSuperseded,
+        };
+        for (const [k, v] of Object.entries(effect)) {
+          extraPaths[`packets/editReceipts/${id}/${k}`] = v;
+        }
+        extraPaths[`packets/editReceipts/${id}/classificationRev`] = myRev;
+        if (id === editEventId) {
+          const core = {
+            editEventId,
+            originalPacketId,
+            payloadDigest: typeof data.payloadDigest === 'string' ? data.payloadDigest : null,
+            status: 'accepted',
+            appliedAt: serverReceivedAtUTC,
+            correctionCreatedAtUTC: typeof c.t === 'string' ? c.t : correctionCreatedAtUTC,
+            serverReceivedAtUTC: typeof c.e === 'string' ? c.e : serverReceivedAtUTC,
+            serverAppliedAtUTC: serverReceivedAtUTC,
+          };
+          for (const [k, v] of Object.entries(core)) {
+            extraPaths[`packets/editReceipts/${id}/${k}`] = v;
+          }
+        }
+        extraPaths[`packets/editHistory/${originalPacketId}/${id}/currentEffect`] = { ...effect, rev: myRev };
+      }
+
+      if (__v2FollowupBarrier.beforeProjection) {
+        const hook = __v2FollowupBarrier.beforeProjection;
+        __v2FollowupBarrier.beforeProjection = null;
+        await hook();
+      }
+
+      // Live wellDown status: only authoritative edits flip it (mirror legacy).
+      const editIsAuthoritative = data.wellDownIsAuthoritative === true && data.wellDown !== undefined;
+      const editExistingIsDownSnap = await db.ref(`wells/${wellName}/status/isDown`).once('value');
+      const nextEditIsDown = editIsAuthoritative ? newWellDown : editExistingIsDownSnap.val() === true;
+      extraPaths[`wells/${wellName}/status/isDown`] = nextEditIsDown;
+      extraPaths[`wells/${wellName}/status/editSourceId`] = originalPacketId;
+      extraPaths[`wells/${wellName}/status/editSourceRev`] = myRev;
+
+      // Cascade: recompute the NEXT pull's recovery/flow off the new tankAfter.
+      const cascadeAffected: string[] = [];
+      if (newTankTopInches > 0) {
+        const editedTime = new Date(newDateTimeUTC).getTime();
+        let nextKey: string | null = null;
+        let nextPkt: EditNeighbor | null = null;
+        let closest = Infinity;
+        for (const n of neighbors) {
+          if (n.key === originalPacketId) continue;
+          const t = new Date(n.dateTimeUTC).getTime();
+          if (!isNaN(t) && t > editedTime && t < closest) {
+            closest = t;
+            nextKey = n.key;
+            nextPkt = n;
+          }
+        }
+        if (nextKey && nextPkt && nextPkt.tankTopInches > 0) {
+          const nextRecovery = Math.max(0, nextPkt.tankTopInches - newTankAfterInches);
+          const nextTimeDifDays = (closest - editedTime) / (1000 * 60 * 60 * 24);
+          let nextFlowRateDays = 0;
+          let nextFlowRate = '';
+          if (nextRecovery > 0 && nextTimeDifDays > 0) {
+            nextFlowRateDays = (nextTimeDifDays / nextRecovery) * 12;
+            nextFlowRate = daysToHMMSS(nextFlowRateDays);
+          }
+          extraPaths[`packets/processed/${nextKey}/recoveryInches`] = nextRecovery;
+          extraPaths[`packets/processed/${nextKey}/flowRateDays`] = nextFlowRateDays;
+          extraPaths[`packets/processed/${nextKey}/flowRate`] = nextFlowRate;
+          extraPaths[`packets/processed/${nextKey}/editSourceId`] = originalPacketId;
+          extraPaths[`packets/processed/${nextKey}/editSourceRev`] = myRev;
+          cascadeAffected.push(nextKey);
+        }
+      }
+
+      // Outgoing response + AFR + windows (only if this is the latest pull).
+      const afr = await calculateAFR(wellName, derived.flowRateDays);
+      const editHistoricalPulls = await getHistoricalPulls(wellName, 500);
+      const editPullTimeMs = new Date(newDateTimeUTC).getTime();
+      const editWindowBblsDay = calculateWindowBblsPerDay(editHistoricalPulls, bblPerFoot, editPullTimeMs);
+      const editOvernightBblsDay = calculateOvernightBblsPerDay(editHistoricalPulls, bblPerFoot, editPullTimeMs);
+
+      const outgoingSnap = await db.ref('packets/outgoing')
+        .orderByChild('wellName')
+        .equalTo(wellName)
+        .limitToLast(1)
+        .once('value');
+      let isLatestPull = false;
+      let hasOutgoing = false;
+      const outgoingKeys: string[] = [];
+      outgoingSnap.forEach((child) => {
+        hasOutgoing = true;
+        outgoingKeys.push(String(child.key));
+        const resp = child.val();
+        if (resp.lastPullDateTimeUTC === origPacket.dateTimeUTC || resp.lastPullDateTimeUTC === newDateTimeUTC) {
+          isLatestPull = true;
+        }
+      });
+      if (!hasOutgoing) isLatestPull = true;
+
+      if (isLatestPull && afr > 0) {
+        const pullHeightInches = (pullBbls / bblPerFoot) * 12;
+        const targetLevel = bottomInches + pullHeightInches;
+        const recoveryNeeded = Math.max(0, targetLevel - newTankAfterInches);
+        let estTimeToPull = '';
+        let estDateTimePull = '';
+        if (recoveryNeeded > 0) {
+          const estDays = (recoveryNeeded / 12) * afr;
+          estTimeToPull = daysToHMM(estDays);
+          const estDate = new Date(new Date(newDateTimeUTC).getTime() + estDays * 24 * 60 * 60 * 1000);
+          estDateTimePull = estDate.toISOString();
+        } else {
+          estTimeToPull = '0:00';
+          estDateTimePull = newDateTimeUTC;
+        }
+        const bbls24 = (1 / afr) * bblPerFoot;
+        const bbls24hrs = Math.round(bbls24).toString();
+        const outFields: Record<string, unknown> = {
+          currentLevel: inchesToFeetInches(newTankAfterInches),
+          flowRate: daysToHMMSS(afr),
+          bbls24hrs,
+          lastPullTopLevel: inchesToFeetInches(newTankTopInches),
+          lastPullBottomLevel: inchesToFeetInches(newTankAfterInches),
+          lastPullBbls: newBblsTaken.toString(),
+          lastPullDateTime: newDateTime || formatLocalDateTime(new Date(newDateTimeUTC)),
+          lastPullDateTimeUTC: newDateTimeUTC,
+          timeTillPull: nextEditIsDown ? 'Down' : (estTimeToPull || 'Calculating...'),
+          nextPullTime: estDateTimePull ? formatLocalDateTime(new Date(estDateTimePull)) : 'Unknown',
+          nextPullTimeUTC: estDateTimePull,
+          isEdit: true,
+          originalPacketId,
+          wellDown: nextEditIsDown,
+          lastPullDriverId: origPacket.driverId || null,
+          lastPullDriverName: origPacket.driverName || null,
+          lastPullPacketId: originalPacketId,
+          windowBblsDay: editWindowBblsDay > 0 ? editWindowBblsDay.toString() : null,
+          overnightBblsDay: editOvernightBblsDay > 0 ? editOvernightBblsDay.toString() : null,
+          companyId: outgoingCompanyId(config),
+          editSourceId: originalPacketId,
+          editSourceRev: myRev,
+        };
+        if (hasOutgoing) {
+          for (const outKey of outgoingKeys) {
+            for (const [k, v] of Object.entries(outFields)) {
+              extraPaths[`packets/outgoing/${outKey}/${k}`] = v;
+            }
+          }
+        } else {
+          const responseTimestamp = new Date();
+          const responseId = `response_${responseTimestamp.toISOString().replace(/[-:]/g, '').replace('T', '_').split('.')[0]}_${cleanName}`;
+          extraPaths[`packets/outgoing/${responseId}`] = {
+            wellName,
+            ...outFields,
+            status: 'success',
+            timestamp: responseTimestamp.toISOString(),
+            timestampUTC: responseTimestamp.toISOString(),
+          };
+        }
+        const afrMinutes = afr * 24 * 60;
+        extraPaths[`well_config/${wellName}/avgFlowRate`] = daysToHMMSS(afr);
+        extraPaths[`well_config/${wellName}/avgFlowRateMinutes`] = Math.round(afrMinutes * 100) / 100;
+      }
+
+      // Performance row (WB-M reads here). Clean up an old row if the date moved.
+      const perfPullTime = new Date(newDateTimeUTC);
+      const perfTimestamp = `${perfPullTime.getFullYear()}${String(perfPullTime.getMonth() + 1).padStart(2, '0')}${String(perfPullTime.getDate()).padStart(2, '0')}_${String(perfPullTime.getHours()).padStart(2, '0')}${String(perfPullTime.getMinutes()).padStart(2, '0')}${String(perfPullTime.getSeconds()).padStart(2, '0')}`;
+      const perfWellKey = wellName.replace(/\s+/g, '_');
+      const actualInches = Math.floor(newTankTopInches);
+      if (typeof origPacket.dateTimeUTC === 'string' && origPacket.dateTimeUTC && origPacket.dateTimeUTC !== newDateTimeUTC) {
+        const oldPullTime = new Date(origPacket.dateTimeUTC);
+        const oldPerfTimestamp = `${oldPullTime.getFullYear()}${String(oldPullTime.getMonth() + 1).padStart(2, '0')}${String(oldPullTime.getDate()).padStart(2, '0')}_${String(oldPullTime.getHours()).padStart(2, '0')}${String(oldPullTime.getMinutes()).padStart(2, '0')}${String(oldPullTime.getSeconds()).padStart(2, '0')}`;
+        if (oldPerfTimestamp !== perfTimestamp) {
+          extraPaths[`performance/${perfWellKey}/rows/${oldPerfTimestamp}`] = null;
+        }
+      }
+      const predicted = Number(origPacket.predictedInches) > 0 ? Number(origPacket.predictedInches) : actualInches;
+      extraPaths[`performance/${perfWellKey}/rows/${perfTimestamp}`] = {
+        d: `${perfPullTime.getFullYear()}-${String(perfPullTime.getMonth() + 1).padStart(2, '0')}-${String(perfPullTime.getDate()).padStart(2, '0')}`,
+        a: actualInches,
+        p: predicted,
+        editSourceId: originalPacketId,
+        editSourceRev: myRev,
+      };
+
+      // Consume the incoming request in the SAME atomic update.
+      const curFenceRev = Number((await db.ref(`wells/${wellName}/status/chronoRevision`).once('value')).val()) || 0;
+      const revision = curFenceRev + 1;
+      const receipt: CommitReceipt = {
+        operationId: editEventId,
+        mutationType: 'edit',
+        wellName,
+        fence: revision,
+        revision,
+        affectedPacketIds: [originalPacketId, ...cascadeAffected],
+        committedAtMs: Date.now(),
+        patchHash: `${editEventId}:${myRev}`,
+      };
+      const patch = assembleCanonicalPatch({
+        processedUpdates: { [`packets/processed/${originalPacketId}`]: nextRow },
+        fence: { wellName, revision },
+        receipt,
+        receiptPath: receiptPathFor(wellName, editEventId),
+      });
+      Object.assign(patch, extraPaths);
+      patch[`packets/incoming/${incomingPacketId}`] = null;
+
+      // For the completion log outside the coordinator.
+      v2Summary.value = {
+        outcome: outcome.outcome,
+        affects: outcome.fieldsAffectingCurrent,
+        superseded: outcome.fieldsSuperseded,
+      };
+      return { patch, receipt };
+    },
   });
 
-  if (!txn.committed || !txn.snapshot || !txn.snapshot.exists()) {
-    // Original vanished mid-flight — do not fabricate. Leave the incoming for
-    // the watchdog; the correction is not lost.
-    console.error(`[V2_EDIT_ABORT] ${wellName}: could not converge ${editEventId} on ${originalPacketId}`);
+  if (commit.status === 'already_done') {
+    // The correction is committed (receipt proves it) — the incoming request
+    // is stale residue; consume it and stop.
+    await removeIncomingPacket(db.ref(), incomingPacketId);
+    console.log(`[V2_EDIT_REPLAY] ${wellName}: ${editEventId} already committed — incoming consumed`);
+    return;
+  }
+  if (commit.status !== 'committed') {
+    // Contended / lost / failed: NOTHING was exposed. The incoming edit stays
+    // for retry — never quarantined here, never partially applied.
+    console.error(`[V2_EDIT_DEFERRED] ${wellName}: ${editEventId} on ${originalPacketId} → ${commit.status} (incoming left for retry)`);
     return;
   }
 
-  // Correctness comes from the per-write REVISION FENCE below, never from a
-  // pre-write re-read. We classify + project from our own committed snapshot;
-  // any of these writes that carries a revision older than what a target
-  // already holds is a no-op at the write itself (compare-and-set). Because the
-  // transaction bumps the revision monotonically AND includes every previously
-  // committed correction, the highest-revision apply necessarily has the
-  // fullest set and its fenced writes win every target.
-  const committed = txn.snapshot.val() as Record<string, any>;
-  const myRev = Number(committed.materializationRev) || 0;
-  const baseline: EditableSnapshot =
-    committed.editBaseline && typeof committed.editBaseline === 'object'
-      ? committed.editBaseline
-      : frozenBaseline;
-  const correctionsMap: Record<string, V2CorrectionEntry> = committed.editCorrections || {};
-  const allEvents = Object.entries(correctionsMap).map(([id, c]) => ({
-    eventId: id,
-    correctionCreatedAtUTC: c.t,
-    correctionValues: (c.v || {}) as EditableSnapshot,
-  }));
-  const matFinal = materializeEditableFields(baseline, allEvents);
-  const newTankTopInches = typeof matFinal.fields.tankTopInches === 'number' ? matFinal.fields.tankTopInches : 0;
-  const newBblsTaken = typeof matFinal.fields.bblsTaken === 'number' ? matFinal.fields.bblsTaken : 0;
-  const newDateTimeUTC = typeof matFinal.fields.dateTimeUTC === 'string' && matFinal.fields.dateTimeUTC
-    ? matFinal.fields.dateTimeUTC
-    : (origPacket.dateTimeUTC || '');
-  const newDateTime = typeof matFinal.fields.dateTime === 'string' ? matFinal.fields.dateTime : '';
-  const newWellDown = matFinal.fields.wellDown === true;
-  const derived = computeEditDerived(
-    newTankTopInches, newBblsTaken, newDateTimeUTC, bblPerFoot, loadLineInches, neighbors, originalPacketId,
-    Number(committed.timeDifDays) || 0, typeof committed.timeDif === 'string' ? committed.timeDif : '',
-  );
-  const newTankAfterInches = newTankTopInches <= 0 ? 0 : derived.newTankAfterInches;
-
-  // ── Durable trail event (immutable) with chronological before/after ──────
-  const priorEvents = allEvents.filter((e) =>
-    e.eventId !== editEventId
-    && compareEditEvents(e, { eventId: editEventId, correctionCreatedAtUTC, correctionValues }) < 0);
-  const matBefore = materializeEditableFields(baseline, priorEvents);
-  const fieldDiff = buildFieldDiff(
-    {
-      tankTopInches: matBefore.fields.tankTopInches ?? undefined,
-      tankLevelFeet: typeof matBefore.fields.tankTopInches === 'number' ? matBefore.fields.tankTopInches / 12 : undefined,
-      bblsTaken: matBefore.fields.bblsTaken ?? undefined,
-      dateTimeUTC: matBefore.fields.dateTimeUTC ?? undefined,
-      dateTime: matBefore.fields.dateTime ?? undefined,
-      wellDown: matBefore.fields.wellDown ?? undefined,
-    } as Record<string, unknown>,
-    {
-      tankTopInches: correctionValues.tankTopInches ?? undefined,
-      bblsTaken: correctionValues.bblsTaken ?? undefined,
-      dateTimeUTC: correctionValues.dateTimeUTC ?? undefined,
-      dateTime: correctionValues.dateTime ?? undefined,
-      wellDown: correctionValues.wellDown ?? undefined,
-    },
-  );
-  const outcome = classifyEditOutcome(editEventId, correctionValues, matFinal.authority);
-  const editEvent = buildAppliedEditEvent({
-    eventId: editEventId,
-    packetId: originalPacketId,
-    sequence: Object.keys(correctionsMap).length,
-    editedAt: serverReceivedAtUTC,
-    source: editSource,
-    originAppContext,
-    actorDriverId: data.driverId ?? origPacket.driverId ?? null,
-    actorDriverName: data.driverName ?? null,
-    clientAppVersion: data.clientAppVersion ?? null,
-    fields: fieldDiff,
-    originalSubmissionAt,
-    resolutionPath: editResolvedViaFallback ? 'invoiceDocId_fallback' : 'direct',
-    editRequestId: incomingPacketId,
-    correctionCreatedAtUTC,
-    serverReceivedAtUTC,
-    correctionValues,
-  });
-
-  // Immutable event insertion — write-once, keyed by editEventId. Carries only
-  // the change it made (never mutable effect), so it is idempotent and needs no
-  // fence. `.update` merges, so it never clobbers the fenced currentEffect child.
-  await db.ref(`packets/editHistory/${originalPacketId}/${editEventId}`)
-    .update(editEvent as unknown as Record<string, unknown>);
-
-  // Test seam: pause immediately before the classification writes.
-  if (__v2FollowupBarrier.beforeClassification) {
-    const hook = __v2FollowupBarrier.beforeClassification;
-    __v2FollowupBarrier.beforeClassification = null;
-    await hook();
-  }
-
-  // Fence-classify EVERY correction's receipt + trail effect against our
-  // materialized set. Each write is a compare-and-set on the classification
-  // revision: a write older than the target's stored revision is a no-op, so a
-  // stale apply can never overwrite a newer classification. Superseded events
-  // stay in the trail — only their effect annotation moves. The receipt's
-  // immutable core (durable proof) is backfilled even when the fence blocks a
-  // stale classification, so a receipt is never left without proof.
-  for (const [id, c] of Object.entries(correctionsMap)) {
-    const oc = classifyEditOutcome(id, (c.v || {}) as EditableSnapshot, matFinal.authority);
-    const effect = {
-      outcome: oc.outcome,
-      fieldsAffectingCurrent: oc.fieldsAffectingCurrent,
-      fieldsSuperseded: oc.fieldsSuperseded,
-    };
-    const core = id === editEventId
-      ? {
-        editEventId,
-        originalPacketId,
-        payloadDigest: typeof data.payloadDigest === 'string' ? data.payloadDigest : null,
-        status: 'accepted',
-        appliedAt: serverReceivedAtUTC,
-        correctionCreatedAtUTC: typeof c.t === 'string' ? c.t : correctionCreatedAtUTC,
-        serverReceivedAtUTC: typeof c.e === 'string' ? c.e : serverReceivedAtUTC,
-        serverAppliedAtUTC: serverReceivedAtUTC,
-      }
-      : undefined;
-    await fencedRevWrite(db.ref(`packets/editReceipts/${id}`), 'classificationRev', myRev, effect, core);
-    await fencedRevWrite(
-      db.ref(`packets/editHistory/${originalPacketId}/${id}/currentEffect`), 'rev', myRev, effect,
-    );
-  }
-
-  // Test seam: pause immediately before the first derived projection write.
-  if (__v2FollowupBarrier.beforeProjection) {
-    const hook = __v2FollowupBarrier.beforeProjection;
-    __v2FollowupBarrier.beforeProjection = null;
-    await hook();
-  }
-
-  // Live wellDown status: only authoritative edits flip it (mirror legacy).
-  // Fenced by source revision so a stale apply cannot revert it.
-  const editIsAuthoritative = data.wellDownIsAuthoritative === true && data.wellDown !== undefined;
-  const editExistingIsDownSnap = await db.ref(`wells/${wellName}/status/isDown`).once('value');
-  const nextEditIsDown = editIsAuthoritative ? newWellDown : editExistingIsDownSnap.val() === true;
-  await fencedSourceWrite(db.ref(`wells/${wellName}/status`), originalPacketId, myRev, { isDown: nextEditIsDown });
-
-  // Cascade: recompute the NEXT pull's recovery/flow off our new tankAfter.
-  if (newTankTopInches > 0) {
-    const editedTime = new Date(newDateTimeUTC).getTime();
-    let nextKey: string | null = null;
-    let nextPkt: EditNeighbor | null = null;
-    let closest = Infinity;
-    for (const n of neighbors) {
-      if (n.key === originalPacketId) continue;
-      const t = new Date(n.dateTimeUTC).getTime();
-      if (!isNaN(t) && t > editedTime && t < closest) {
-        closest = t;
-        nextKey = n.key;
-        nextPkt = n;
-      }
-    }
-    if (nextKey && nextPkt && nextPkt.tankTopInches > 0) {
-      const nextRecovery = Math.max(0, nextPkt.tankTopInches - newTankAfterInches);
-      const nextTimeDifDays = (closest - editedTime) / (1000 * 60 * 60 * 24);
-      let nextFlowRateDays = 0;
-      let nextFlowRate = '';
-      if (nextRecovery > 0 && nextTimeDifDays > 0) {
-        nextFlowRateDays = (nextTimeDifDays / nextRecovery) * 12;
-        nextFlowRate = daysToHMMSS(nextFlowRateDays);
-      }
-      await fencedSourceWrite(db.ref(`packets/processed/${nextKey}`), originalPacketId, myRev, {
-        recoveryInches: nextRecovery,
-        flowRateDays: nextFlowRateDays,
-        flowRate: nextFlowRate,
-      });
-    }
-  }
-
-  // Outgoing response + AFR + windows (only if this is the latest pull).
-  const afr = await calculateAFR(wellName, derived.flowRateDays);
-  const editHistoricalPulls = await getHistoricalPulls(wellName, 500);
-  const editPullTimeMs = new Date(newDateTimeUTC).getTime();
-  const editWindowBblsDay = calculateWindowBblsPerDay(editHistoricalPulls, bblPerFoot, editPullTimeMs);
-  const editOvernightBblsDay = calculateOvernightBblsPerDay(editHistoricalPulls, bblPerFoot, editPullTimeMs);
-
-  const outgoingSnap = await db.ref('packets/outgoing')
-    .orderByChild('wellName')
-    .equalTo(wellName)
-    .limitToLast(1)
-    .once('value');
-  let isLatestPull = false;
-  let hasOutgoing = false;
-  outgoingSnap.forEach((child) => {
-    hasOutgoing = true;
-    const resp = child.val();
-    if (resp.lastPullDateTimeUTC === origPacket.dateTimeUTC || resp.lastPullDateTimeUTC === newDateTimeUTC) {
-      isLatestPull = true;
-    }
-  });
-  if (!hasOutgoing) isLatestPull = true;
-
-  if (isLatestPull && afr > 0) {
-    const pullHeightInches = (pullBbls / bblPerFoot) * 12;
-    const targetLevel = bottomInches + pullHeightInches;
-    const recoveryNeeded = Math.max(0, targetLevel - newTankAfterInches);
-    let estTimeToPull = '';
-    let estDateTimePull = '';
-    if (recoveryNeeded > 0) {
-      const estDays = (recoveryNeeded / 12) * afr;
-      estTimeToPull = daysToHMM(estDays);
-      const estDate = new Date(new Date(newDateTimeUTC).getTime() + estDays * 24 * 60 * 60 * 1000);
-      estDateTimePull = estDate.toISOString();
-    } else {
-      estTimeToPull = '0:00';
-      estDateTimePull = newDateTimeUTC;
-    }
-    const bbls24 = (1 / afr) * bblPerFoot;
-    const bbls24hrs = Math.round(bbls24).toString();
-    const outFields = {
-      currentLevel: inchesToFeetInches(newTankAfterInches),
-      flowRate: daysToHMMSS(afr),
-      bbls24hrs,
-      lastPullTopLevel: inchesToFeetInches(newTankTopInches),
-      lastPullBottomLevel: inchesToFeetInches(newTankAfterInches),
-      lastPullBbls: newBblsTaken.toString(),
-      lastPullDateTime: newDateTime || formatLocalDateTime(new Date(newDateTimeUTC)),
-      lastPullDateTimeUTC: newDateTimeUTC,
-      timeTillPull: nextEditIsDown ? 'Down' : (estTimeToPull || 'Calculating...'),
-      nextPullTime: estDateTimePull ? formatLocalDateTime(new Date(estDateTimePull)) : 'Unknown',
-      nextPullTimeUTC: estDateTimePull,
-      isEdit: true,
-      originalPacketId,
-      wellDown: nextEditIsDown,
-      lastPullDriverId: origPacket.driverId || null,
-      lastPullDriverName: origPacket.driverName || null,
-      lastPullPacketId: originalPacketId,
-      windowBblsDay: editWindowBblsDay > 0 ? editWindowBblsDay.toString() : null,
-      overnightBblsDay: editOvernightBblsDay > 0 ? editOvernightBblsDay.toString() : null,
-      companyId: outgoingCompanyId(config),
-    };
-    if (hasOutgoing) {
-      const updates: Array<Promise<unknown>> = [];
-      outgoingSnap.forEach((child) => {
-        updates.push(fencedSourceWrite(child.ref, originalPacketId, myRev, outFields));
-      });
-      await Promise.all(updates);
-    } else {
-      const responseTimestamp = new Date();
-      const responseId = `response_${responseTimestamp.toISOString().replace(/[-:]/g, '').replace('T', '_').split('.')[0]}_${cleanName}`;
-      await fencedSourceWrite(db.ref(`packets/outgoing/${responseId}`), originalPacketId, myRev, {
-        wellName,
-        ...outFields,
-        status: 'success',
-        timestamp: responseTimestamp.toISOString(),
-        timestampUTC: responseTimestamp.toISOString(),
-      });
-    }
-    const afrMinutes = afr * 24 * 60;
-    await fencedSourceWrite(db.ref(`well_config/${wellName}`), originalPacketId, myRev, {
-      avgFlowRate: daysToHMMSS(afr),
-      avgFlowRateMinutes: Math.round(afrMinutes * 100) / 100,
-    });
-  }
-
-  // Performance row (WB-M reads here). Clean up an old row if the date moved.
-  try {
-    const perfPullTime = new Date(newDateTimeUTC);
-    const perfTimestamp = `${perfPullTime.getFullYear()}${String(perfPullTime.getMonth() + 1).padStart(2, '0')}${String(perfPullTime.getDate()).padStart(2, '0')}_${String(perfPullTime.getHours()).padStart(2, '0')}${String(perfPullTime.getMinutes()).padStart(2, '0')}${String(perfPullTime.getSeconds()).padStart(2, '0')}`;
-    const perfWellKey = wellName.replace(/\s+/g, '_');
-    const actualInches = Math.floor(newTankTopInches);
-    if (typeof origPacket.dateTimeUTC === 'string' && origPacket.dateTimeUTC && origPacket.dateTimeUTC !== newDateTimeUTC) {
-      const oldPullTime = new Date(origPacket.dateTimeUTC);
-      const oldPerfTimestamp = `${oldPullTime.getFullYear()}${String(oldPullTime.getMonth() + 1).padStart(2, '0')}${String(oldPullTime.getDate()).padStart(2, '0')}_${String(oldPullTime.getHours()).padStart(2, '0')}${String(oldPullTime.getMinutes()).padStart(2, '0')}${String(oldPullTime.getSeconds()).padStart(2, '0')}`;
-      if (oldPerfTimestamp !== perfTimestamp) {
-        await db.ref(`performance/${perfWellKey}/rows/${oldPerfTimestamp}`).remove();
-      }
-    }
-    const predicted = Number(origPacket.predictedInches) > 0 ? Number(origPacket.predictedInches) : actualInches;
-    await fencedSourceWrite(db.ref(`performance/${perfWellKey}/rows/${perfTimestamp}`), originalPacketId, myRev, {
-      d: `${perfPullTime.getFullYear()}-${String(perfPullTime.getMonth() + 1).padStart(2, '0')}-${String(perfPullTime.getDate()).padStart(2, '0')}`,
-      a: actualInches,
-      p: predicted,
-    });
-  } catch (perfErr) {
-    console.error(`[V2_EDIT_PERF] ${wellName}: performance row update failed`, perfErr);
-  }
-
-  // Consume the incoming packet last — after durable history + receipt exist.
-  await removeIncomingPacket(db.ref(), incomingPacketId);
   console.log(
-    `[V2_EDIT_APPLIED] ${wellName}: ${editEventId} (${outcome.outcome}) on ${originalPacketId} — ` +
-      `affects=[${outcome.fieldsAffectingCurrent.join(',')}] superseded=[${outcome.fieldsSuperseded.join(',')}]`,
+    `[V2_EDIT_APPLIED] ${wellName}: ${editEventId} (${v2Summary.value?.outcome ?? 'applied'}) on ${originalPacketId} — ` +
+      `affects=[${(v2Summary.value?.affects ?? []).join(',')}] superseded=[${(v2Summary.value?.superseded ?? []).join(',')}] (1 atomic update)`,
   );
 }
 

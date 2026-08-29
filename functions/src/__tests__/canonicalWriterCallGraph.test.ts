@@ -102,20 +102,30 @@ describe('canonical-writer call graph', () => {
     expect(index).not.toMatch(/chronoReceipts\/\$\{[^}]+\}`\)\.set\(/);      // no ad-hoc receipt writes
   });
 
-  // ── The tracked remaining gap ────────────────────────────────────────────
-  // applyV2ChronologicalEdit (the schemaVersion===2 chronological-edit path) still
-  // converges the edited row via a transaction and projects canonical state via
-  // fencedSourceWrite — it does NOT yet route through runCanonicalMutation. This
-  // is a protocol-level redesign (moving correction-materialization inside the
-  // coordinator's buildPatch) that must be verified on the real Firebase emulator
-  // before it lands. This test PINS that gap so it cannot be silently forgotten:
-  // when the v2 path is unified, delete this test (and the fencedSourceWrite refs).
-  test('KNOWN GAP: v2 chronological-edit still uses fencedSourceWrite (not yet unified)', () => {
+  // ── Phase 5 (2026-08-29): the gap is CLOSED ─────────────────────────────
+  // applyV2ChronologicalEdit now converges corrections and projects EVERY
+  // canonical location through runCanonicalMutation → assembleCanonicalPatch:
+  // ONE atomic multi-location update (converged row + trail + classification
+  // receipts + status + cascade + outgoing + AFR + performance + incoming
+  // consumption + completion receipt). The fenced follow-up writers are gone.
+  test('v2 chronological-edit routes through the coordinator — ONE canonical writer, fenced writers removed', () => {
     const v2 = index.slice(index.indexOf('export async function applyV2ChronologicalEdit'), index.indexOf('export const processEditRequest'));
-    expect(v2).toMatch(/fencedSourceWrite\(/);                 // still the fenced writer
-    expect(v2).not.toMatch(/runCanonicalMutation\(/);          // not yet on the coordinator
-    // It is reached only for schemaVersion===2 corrections.
+    expect(v2).toMatch(/runCanonicalMutation\(makeCoordinatorIO\(db, wellName\)/);
+    expect(v2).toMatch(/assembleCanonicalPatch\(\{/);
+    expect(v2).toMatch(/receiptPathFor\(wellName, editEventId\)/);
+    expect(v2).toMatch(/patch\[`packets\/incoming\/\$\{incomingPacketId\}`\] = null/); // consumed atomically
+    expect(v2).not.toMatch(/fencedSourceWrite\(/);
+    expect(v2).not.toMatch(/fencedRevWrite\(/);
+    expect(v2).not.toMatch(/\.transaction\(/);                 // convergence is lock-serialized, not a txn
+    // The fenced writers are gone from the whole module — no writer left to fence.
+    expect(index).not.toMatch(/async function fencedSourceWrite\(/);
+    expect(index).not.toMatch(/async function fencedRevWrite\(/);
+    // Still reached only for schemaVersion===2 corrections.
     expect(index).toMatch(/const isV2Correction = \(data as \{ schemaVersion\?: unknown \}\)\.schemaVersion === 2;/);
     expect(index).toMatch(/if \(isV2Correction\) \{\s*await applyV2ChronologicalEdit\(/);
+    // Deferred outcomes leave the incoming request untouched for retry.
+    expect(v2).toMatch(/V2_EDIT_DEFERRED/);
+    // Replays consume the residue without re-committing.
+    expect(v2).toMatch(/already_done/);
   });
 });
