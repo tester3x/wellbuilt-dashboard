@@ -16,13 +16,21 @@ import {
   evaluateWbmPull,
   wbmIncomingPath,
   wbmPullStorageKey,
+  isFirebaseKeySafe,
 } from './wbmPullAuthorize';
+import { logIngestRefusal, safePayloadDigest, sanitizeClientMeta } from './ingestRefusalLog';
 
 export const ingestWbmPull = httpsV2.onCall(
   { timeoutSeconds: 30, memory: '256MiB', enforceAppCheck: false },
   async (request) => {
-    const data = (request.data || {}) as { packet?: unknown };
+    const data = (request.data || {}) as { packet?: unknown; clientMeta?: unknown };
+    // Phase 4: every governed refusal leaves ONE structured, redacted log
+    // entry — identity + reason + payload digest, never the payload.
+    const refusalCtx: { uid?: string; driverId?: string; companyId?: string } = {};
+    const handle = async () => {
     const driver = await requireSecureDriver(request, { allowLegacyHash: false });
+    refusalCtx.uid = driver.uid;
+    refusalCtx.driverId = driver.driverId;
     const authority = await loadCanonicalDriverAuthority(
       driver.driverId,
       productionCanonicalDriverReaders(),
@@ -33,6 +41,7 @@ export const ingestWbmPull = httpsV2.onCall(
     if (!authority.companyId) {
       throw new httpsV2.HttpsError('failed-precondition', 'company_required');
     }
+    refusalCtx.companyId = authority.companyId;
 
     const profSnap = await admin.database().ref(`drivers/profiles/${driver.driverId}`).once('value');
     if (!profSnap.exists()) {
@@ -138,5 +147,31 @@ export const ingestWbmPull = httpsV2.onCall(
       detail: { key, companyId: authority.companyId, wellName: decided.wellName },
     });
     return { ok: true, key, packetId: key, duplicate: false };
+    };
+
+    try {
+      return await handle();
+    } catch (err) {
+      if (err instanceof httpsV2.HttpsError) {
+        const rawPacket = data.packet && typeof data.packet === 'object' && !Array.isArray(data.packet)
+          ? data.packet as Record<string, unknown>
+          : null;
+        const rawId = typeof rawPacket?.packetId === 'string' ? rawPacket.packetId : null;
+        logIngestRefusal({
+          endpoint: 'ingestWbmPull',
+          reason: err.message,
+          uid: refusalCtx.uid ?? null,
+          driverId: refusalCtx.driverId ?? null,
+          companyId: refusalCtx.companyId ?? null,
+          wellName: typeof rawPacket?.wellName === 'string' ? rawPacket.wellName : null,
+          operationType: typeof rawPacket?.requestType === 'string' ? rawPacket.requestType : null,
+          packetId: rawId && isFirebaseKeySafe(rawId) ? rawId : null,
+          payloadDigest: safePayloadDigest(data.packet),
+          clientMeta: sanitizeClientMeta(data.clientMeta),
+          nowMs: Date.now(),
+        });
+      }
+      throw err;
+    }
   },
 );
