@@ -57,37 +57,50 @@ describe('watchdogStrandedPackets wiring', () => {
     expect(wdEnd).toBeGreaterThan(wdStart);
   });
 
-  test('duplicate-grouped and stranded edit/delete packets are quarantined, not removed', () => {
-    const quarantineCalls = watchdog.split('quarantineIncomingPacket(').length - 1;
-    expect(quarantineCalls).toBeGreaterThanOrEqual(2); // duplicates + edit/delete skip
+  // Phase 3 (2026-08-29): the watchdog is a RECOVERY DRIVER, not a second
+  // writer. It ages packets from the server-stamped ingestedAt, and recovers
+  // a stranded pull by calling the ONE canonical processing entry with the
+  // SAME packetId. It can no longer re-key, clone, or invent identity.
+
+  test('age comes from estimatePacketAge (ingestedAt) — the local-time key is never parsed', () => {
+    expect(watchdog).toContain('estimatePacketAge(data, now)');
+    expect(watchdog).toContain('isStranded(age)');
+    expect(watchdog).not.toMatch(/key\.match\(/);          // the deployed key-parse defect is gone
+    expect(watchdog).not.toMatch(/\d{2}\}\)_\(\\d/);
+    expect(watchdog).not.toContain("}T${");                 // no hand-built UTC string from key parts
+    expect(watchdog).not.toContain('TWO_MINUTES');          // threshold owned by watchdogAge module
+  });
+
+  test('recovery preserves packet identity: no re-key, no clone, no second logical pull', () => {
+    expect(watchdog).toContain('processIncomingPullPacket(data, key)');
+    expect(watchdog).not.toContain('newKey');
+    expect(watchdog).not.toContain('_retriggeredBy');
+    expect(watchdog).not.toContain('_originalKey');
+    expect(watchdog).not.toContain('Math.random');
+  });
+
+  test('watchdog owns the commit-lock lifetime: explicit canonical timeout on the schedule', () => {
+    expect(watchdog).toContain('timeoutSeconds: CANONICAL_COMMIT_TIMEOUT_SECONDS');
+  });
+
+  test('stranded edit/delete packets are quarantined losslessly, never removed or recovered here', () => {
     expect(watchdog).toContain('strandedPacketVerdict(');
-    expect(watchdog).not.toContain('Deleting'); // old "Deleting N duplicate packets" log gone
+    expect(watchdog).toContain("reqType === 'edit' || reqType === 'delete'");
+    expect(watchdog.split('quarantineIncomingPacket(').length - 1).toBeGreaterThanOrEqual(1);
+    expect(watchdog).not.toContain('Deleting');
   });
 
-  test('retrigger re-key is one atomic update (no delete-then-set crash window)', () => {
-    expect(watchdog).toContain('[`packets/incoming/${key}`]: null');
-    expect(watchdog).toContain('[`packets/incoming/${newKey}`]: data');
-    // Both paths live in the SAME update call.
-    const updIdx = watchdog.indexOf('await db.ref().update({');
-    expect(updIdx).toBeGreaterThan(-1);
-    const updBlock = watchdog.slice(updIdx, updIdx + 220);
-    expect(updBlock).toContain('${key}`]: null');
-    expect(updBlock).toContain('${newKey}`]: data');
-  });
-
-  test('only already-processed cleanup may still remove incoming directly (content preserved in processed/)', () => {
-    // Every remaining direct remove must sit inside an "already processed"
-    // branch, i.e. after an exists() check against packets/processed.
+  test('direct incoming removes only in the already-committed branch (receipt or processed row proven)', () => {
     const removeCall = '.remove()';
     let at = watchdog.indexOf(removeCall);
     let count = 0;
     while (at !== -1) {
       count++;
-      const before = watchdog.slice(Math.max(0, at - 700), at);
-      expect(before).toMatch(/processedSnap\.exists\(\)|origProcessedSnap\.exists\(\)/);
+      const before = watchdog.slice(Math.max(0, at - 900), at);
+      expect(before).toMatch(/receiptPathFor\(wellName, key\)|processedDone/);
       at = watchdog.indexOf(removeCall, at + 1);
     }
-    expect(count).toBe(2); // already-processed cleanup + unreachable legacy edit branch
+    expect(count).toBe(1); // exactly the stale-residue cleanup
   });
 
   test('watchdog never touches packets/rejected — quarantined evidence cannot be deleted by it', () => {

@@ -25,6 +25,7 @@ import { isLateEntryByCanonicalOrder, type ChronoPullInput, type WellChronoConfi
 import { CANONICAL_COMMIT_TIMEOUT_SECONDS, runCanonicalMutation, type CommitReceipt } from './chronoCommitCoordinator';
 import { makeCoordinatorIO } from './coordinatorIO';
 import { assembleCanonicalPatch, receiptPathFor } from './canonicalPatch';
+import { estimatePacketAge, isStranded } from './watchdogAge';
 import { buildCreateMutation, buildDeleteMutation, type CanonicalSidecar } from './mutationBuilders';
 import { computeAFRFromRates } from './pullFormulas';
 import { getProductionDate, calculateWindowBblsPerDay, calculateOvernightBblsPerDay, computeBbls24hrs, type HistoricalPull } from './productionFormulas';
@@ -66,176 +67,110 @@ const db = admin.database();
 // WATCHDOG: Catches stranded packets that failed to process
 // Runs every 5 minutes, reprocesses any packets stuck in incoming/
 // ============================================================
-export const watchdogStrandedPackets = functionsV2.onSchedule('every 5 minutes', async (event) => {
+export const watchdogStrandedPackets = functionsV2.onSchedule(
+  { schedule: 'every 5 minutes', timeoutSeconds: CANONICAL_COMMIT_TIMEOUT_SECONDS },
+  async () => {
   console.log('[Watchdog] Checking for stranded packets...');
 
   const incomingSnap = await db.ref('packets/incoming').once('value');
 
   if (!incomingSnap.exists()) {
     console.log('[Watchdog] No packets in incoming - all clear');
+    await writeWatchdogHealth(0, 0, 0);
     return;
   }
 
-  const packets = incomingSnap.val();
-  const keys = Object.keys(packets);
+  const packets = incomingSnap.val() as Record<string, any>;
   const now = Date.now();
-  const TWO_MINUTES = 2 * 60 * 1000;
 
-  // Group by unique timestamp+well to detect duplicates
-  const uniquePackets: Record<string, { key: string; data: any; arrivedAt: number }> = {};
-  const arrivedAtByKey: Record<string, number> = {};
+  // Recovery contract (Phase 3, packet 2026-08-29):
+  //  - Age comes ONLY from the server-stamped ingestedAt (estimatePacketAge).
+  //    The deployed key-parse read local-time keys as UTC and cloned Crossbow 1
+  //    694 ms after arrival; unknown age is NEVER stranded.
+  //  - A stranded pull is recovered by CALLING the same canonical processing
+  //    entry with the SAME packetId (operation id). No delete+rewrite, no new
+  //    key, no second logical pull, no rejected duplicate. The coordinator's
+  //    receipt short-circuit makes the call idempotent, its lock/fence makes
+  //    it race-safe, and a committing lock inside the derived 180 s horizon
+  //    (CANONICAL_COMMIT_TIMEOUT_SECONDS + recovery margin) is never taken over.
+  //  - The old dateTimeUTC+well duplicate-grouping is gone: distinct packet
+  //    ids are distinct submissions; the canonical duplicate rules decide
+  //    downstream. Nothing is grouped away, nothing silently disappears.
+  //  - Stranded edit/delete packets keep the governed lossless quarantine
+  //    (their own handlers consume them; GS3: never destroy the evidence).
+  let recovered = 0;
+  let alreadyProcessed = 0;
+  let skippedFresh = 0;
 
-  for (const key of keys) {
-    const data = packets[key];
-    const groupKey = `${data.dateTimeUTC || data.dateTime}_${data.wellName}`;
-
-    // Estimate arrival time from packetId (format: YYYYMMDD_HHMMSS_...)
-    const match = key.match(/^(\d{4})(\d{2})(\d{2})_(\d{2})(\d{2})(\d{2})/);
-    let arrivedAt = now - TWO_MINUTES - 1000; // Default: assume old enough
-    if (match) {
-      arrivedAt = new Date(`${match[1]}-${match[2]}-${match[3]}T${match[4]}:${match[5]}:${match[6]}Z`).getTime();
+  for (const [key, data] of Object.entries(packets)) {
+    const age = estimatePacketAge(data, now);
+    if (!isStranded(age)) {
+      if (age.kind === 'unknown') {
+        console.log(`[Watchdog] ${key}: age unknown (${age.reason}) — never stranded from a guess`);
+      }
+      skippedFresh++;
+      continue;
     }
-    arrivedAtByKey[key] = arrivedAt;
+    if (age.kind !== 'known') continue; // isStranded already guarantees this; narrows the type
 
-    // Keep only first occurrence of each unique packet
-    if (!uniquePackets[groupKey] || arrivedAt < uniquePackets[groupKey].arrivedAt) {
-      uniquePackets[groupKey] = { key, data, arrivedAt };
-    }
-  }
-
-  // Quarantine duplicates and re-trigger unique ones that are old enough
-  const allKeys = new Set(keys);
-  const keepKeys = new Set(Object.values(uniquePackets).map(p => p.key));
-  const duplicateKeys = [...allKeys].filter(k => !keepKeys.has(k));
-
-  // GS3 follow-up: "duplicates" are grouped only by dateTimeUTC+well and can
-  // be DISTINCT legitimate submissions (the real 8:32 PM twins differed in
-  // BBLs but shared the group key). Never delete them — quarantine
-  // losslessly; a failed quarantine leaves the packet in incoming.
-  if (duplicateKeys.length > 0) {
-    console.log(`[Watchdog] Quarantining ${duplicateKeys.length} duplicate-grouped packets`);
-    for (const key of duplicateKeys) {
-      await quarantineIncomingPacket(db.ref(), {
-        packetId: key,
-        packet: packets[key],
-        verdict: strandedPacketVerdict({
-          ageMs: now - arrivedAtByKey[key],
-          context: `duplicate-grouped incoming packet (same dateTimeUTC+well as retained key); may be a distinct legitimate submission`,
-        }),
-        nowMs: now,
-      });
-    }
-  }
-
-  // Check which unique packets are stranded (older than 2 minutes)
-  const strandedPackets = Object.values(uniquePackets).filter(p => {
-    const age = now - p.arrivedAt;
-    return age > TWO_MINUTES;
-  });
-
-  if (strandedPackets.length === 0) {
-    console.log(`[Watchdog] No stranded packets (${Object.keys(uniquePackets).length} pending, all recent)`);
-    return;
-  }
-
-  console.log(`[Watchdog] Found ${strandedPackets.length} stranded packets - checking`);
-
-  let retriggeredCount = 0;
-  let alreadyProcessedCount = 0;
-
-  // Delete and re-write each stranded packet to re-trigger onCreate
-  for (const packet of strandedPackets) {
-    const { key, data } = packet;
-
-    // Skip edit and delete packets — they are handled by their own Cloud Functions
-    // and should never be retriggered by the watchdog (causes ghost duplicate entries).
-    // GS3 7/22/2026: this exact remove() destroyed a stranded driver edit —
-    // quarantine instead so the evidence survives for review.
-    if (data.requestType === 'edit' || data.requestType === 'delete') {
-      console.log(`[Watchdog] ${data.wellName}: skipping ${data.requestType} packet (${key}), quarantining`);
+    const reqType = data?.requestType || 'pull';
+    if (reqType === 'edit' || reqType === 'delete') {
+      console.log(`[Watchdog] ${data?.wellName}: stranded ${reqType} packet (${key}) — quarantining losslessly`);
       await quarantineIncomingPacket(db.ref(), {
         packetId: key,
         packet: data,
         verdict: strandedPacketVerdict({
-          ageMs: now - packet.arrivedAt,
-          context: `stranded ${data.requestType} packet — handled by its own function and never watchdog-retriggered; its handler did not consume it`,
+          ageMs: age.ageMs,
+          context: `stranded ${reqType} packet — handled by its own function and never watchdog-recovered; its handler did not consume it`,
         }),
         nowMs: now,
       });
-      alreadyProcessedCount++;
       continue;
     }
 
-    // FIX: Check if this packet was already processed before re-triggering.
-    // Race condition: if processIncomingPull was slow (cold start), the packet
-    // may still be in incoming/ even though it was already processed + outgoing written.
-    // Re-triggering would cause processIncomingPull to run AGAIN, overwriting any
-    // edits that were applied to the outgoing in between.
-    const processedSnap = await db.ref(`packets/processed/${key}`).once('value');
-    if (processedSnap.exists()) {
-      console.log(`[Watchdog] ${data.wellName}: already processed (${key}), cleaning up stale incoming`);
+    const wellName = typeof data?.wellName === 'string' ? data.wellName : null;
+
+    // Completion check: the canonical receipt (authoritative) or the processed
+    // row (part of the same atomic patch) proves the commit landed — the
+    // incoming request is stale residue and is simply consumed.
+    const receiptDone = wellName
+      ? (await db.ref(receiptPathFor(wellName, key)).once('value')).exists()
+      : false;
+    const processedDone = receiptDone
+      || (await db.ref(`packets/processed/${key}`).once('value')).exists();
+    if (processedDone) {
+      console.log(`[Watchdog] ${wellName}: already committed (${key}) — consuming stale incoming`);
       await db.ref(`packets/incoming/${key}`).remove();
-      alreadyProcessedCount++;
+      alreadyProcessed++;
       continue;
     }
 
-    // For edit packets, check if the original was already processed + edited
-    if (data.requestType === 'edit' && data.originalPacketId) {
-      const origProcessedSnap = await db.ref(`packets/processed/${data.originalPacketId}`).once('value');
-      if (origProcessedSnap.exists()) {
-        const origPacket = origProcessedSnap.val();
-        if (origPacket.editedAt) {
-          console.log(`[Watchdog] ${data.wellName}: edit already applied to ${data.originalPacketId}, cleaning up`);
-          await db.ref(`packets/incoming/${key}`).remove();
-          alreadyProcessedCount++;
-          continue;
-        }
-      }
+    // Recover through the SAME canonical operation id. The packet identity is
+    // untouched; contention with a live worker resolves inside the
+    // coordinator (contended within the horizon → this call is a no-op).
+    console.log(`[Watchdog] ${wellName}: recovering stranded pull ${key} via the canonical entry (age ${age.ageMs} ms)`);
+    try {
+      await processIncomingPullPacket(data, key);
+      recovered++;
+    } catch (err) {
+      console.error(`[Watchdog] recovery failed for ${key}:`, err);
     }
-
-    // Generate new key with current timestamp
-    // Use YYYYMMDD_HHMMSS format (with underscore between date and time)
-    // to match normal packet key format. Without the underscore, these keys
-    // sort differently in Firebase (digits < underscore in ASCII) and pollute
-    // calculateAFR's flow rate window.
-    const cleanName = data.wellName.replace(/\s/g, '');
-    const now2 = new Date();
-    const datePart = now2.toISOString().replace(/[-]/g, '').substr(0, 8);
-    const timePart = now2.toISOString().replace(/[-:T]/g, '').substr(8, 6);
-    const rand = Math.random().toString(36).substr(2, 6);
-    const newKey = `${datePart}_${timePart}_${cleanName}_${rand}`;
-
-    // Re-key to trigger onCreate
-    data.packetId = newKey;
-    data.requestType = data.requestType || 'pull';
-    data._retriggeredBy = 'watchdog';
-    data._retriggeredAt = new Date().toISOString();
-    data._originalKey = key; // Track original key for debugging
-
-    // GS3 follow-up: remove-old + write-new as ONE atomic multi-location
-    // update — the old delete-then-set left a crash window where the packet
-    // vanished entirely. Both writes commit or neither does.
-    await db.ref().update({
-      [`packets/incoming/${key}`]: null,
-      [`packets/incoming/${newKey}`]: data,
-    });
-    console.log(`[Watchdog] Retriggered: ${data.wellName} (${key} -> ${newKey})`);
-    retriggeredCount++;
-
-    // Small delay between writes
-    await new Promise(r => setTimeout(r, 200));
   }
 
-  console.log(`[Watchdog] Done - retriggered ${retriggeredCount}, already processed ${alreadyProcessedCount}`);
+  console.log(`[Watchdog] Done - recovered ${recovered}, already processed ${alreadyProcessed}, fresh/unknown ${skippedFresh}`);
+  await writeWatchdogHealth(recovered, alreadyProcessed, skippedFresh);
+});
 
-  // Update health status
+async function writeWatchdogHealth(recovered: number, alreadyProcessed: number, skippedFresh: number): Promise<void> {
   await db.ref('system_health/watchdog').set({
     lastRun: new Date().toISOString(),
-    strandedFound: strandedPackets.length,
-    duplicatesDeleted: duplicateKeys.length,
-    status: 'ok'
+    strandedFound: recovered + alreadyProcessed,
+    recovered,
+    alreadyProcessed,
+    skippedFresh,
+    status: 'ok',
   });
-});
+}
 
 // ============================================================
 // HEALTH CHECK: Runs every 10 minutes, verifies system is working
@@ -596,9 +531,20 @@ async function calculateAFR(wellName: string, newFlowRateDays: number): Promise<
 // Main function: Process incoming pull packets
 export const processIncomingPull = functionsV1.runWith({ timeoutSeconds: CANONICAL_COMMIT_TIMEOUT_SECONDS, memory: '512MB' }).database
   .ref('packets/incoming/{packetId}')
-  .onCreate(async (snapshot, context) => {
-    const packetId = context.params.packetId;
-    const data = snapshot.val() as PullPacket;
+  .onCreate(async (snapshot, context) =>
+    processIncomingPullPacket(snapshot.val() as PullPacket, context.params.packetId));
+
+/**
+ * The ONE canonical pull-processing entry. Invoked by the RTDB onCreate
+ * trigger AND by watchdog recovery with the SAME packetId (operation id) —
+ * recovery re-runs the operation, never a re-keyed clone. The coordinator's
+ * receipt short-circuit makes a duplicate call idempotent and its lock/fence
+ * makes concurrent calls race-safe. Every caller that can own the commit lock
+ * carries CANONICAL_COMMIT_TIMEOUT_SECONDS.
+ */
+export async function processIncomingPullPacket(dataIn: PullPacket, packetIdIn: string): Promise<null> {
+    const packetId = packetIdIn;
+    const data = dataIn;
 
     // Skip non-pull requests (delete, edit handled separately)
     // Treat missing requestType as 'pull' — WB M app historically didn't set it on pull packets
@@ -1340,7 +1286,7 @@ export const processIncomingPull = functionsV1.runWith({ timeoutSeconds: CANONIC
     }
 
     return null;
-  });
+}
 
 /**
  * When a pull was corrected after Send while still queued, WB-M stamps

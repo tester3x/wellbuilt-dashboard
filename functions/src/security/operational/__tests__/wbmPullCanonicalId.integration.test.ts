@@ -164,7 +164,9 @@ describe('canonical packet ID joins ingest storage key to processor trigger', ()
 
   it('processIncomingPull receives that identical context.params.packetId', () => {
     expect(pullHandler).toMatch(/ref\('packets\/incoming\/\{packetId\}'\)/);
-    expect(pullHandler).toMatch(/const packetId = context\.params\.packetId/);
+    // Phase 3: the trigger delegates to the ONE canonical processing entry,
+    // passing the identical context.params.packetId as the operation id.
+    expect(pullHandler).toMatch(/processIncomingPullPacket\(snapshot\.val\(\) as PullPacket, context\.params\.packetId\)/);
     const store: Store = {};
     const ingested = ingestToStore(store, GABRIEL_PACKET, DRIVER);
     expect(ingested.ok).toBe(true);
