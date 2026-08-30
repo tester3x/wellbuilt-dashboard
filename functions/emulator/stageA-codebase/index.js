@@ -24,6 +24,22 @@ admin.initializeApp = (...a) => {
     throw e;
   }
 };
+// The branch lib AND the deployed archive(s) each call firestore.settings() at
+// load; only the first may. Patch the Firestore class prototype (catches both
+// admin.firestore() and the modular getFirestore()) so subsequent settings()
+// calls are idempotent. Harmless for a single lib.
+try {
+  const FS = require('@google-cloud/firestore').Firestore;
+  if (FS && !FS.prototype.__settingsGuarded) {
+    const _settings = FS.prototype.settings;
+    FS.prototype.settings = function guardedSettings(...a) {
+      if (this.__didSettings) return;
+      try { const r = _settings.apply(this, a); this.__didSettings = true; return r; }
+      catch (e) { if (/already been initialized|settings\(\) once/i.test(e && e.message || '')) return; throw e; }
+    };
+    FS.prototype.__settingsGuarded = true;
+  }
+} catch { /* firestore not present */ }
 
 const NEW_LIB = path.join(__dirname, '..', '..', 'lib', 'index.js'); // this branch's build
 // The Functions emulator runtime does NOT inherit arbitrary parent env vars, so

@@ -63,6 +63,15 @@ const MODES = {
 // (a detached worktree; never deployed).
 const OLD_CONSUMER_COMMIT = 'c7378d6';
 function prepStageA(root) {
+  // Honor a preset WB_OLD_LIB (e.g. the composite of exact DEPLOYED consumer
+  // archives) — skip the c7378d6 rebuild and just point the codebase at it.
+  if (process.env.WB_OLD_LIB && existsSync(process.env.WB_OLD_LIB)) {
+    const cbNm = join(root, 'functions', 'emulator', 'stageA-codebase', 'node_modules');
+    if (!existsSync(cbNm)) { try { execSync(`cmd /c mklink /J "${cbNm}" "${join(root, 'functions', 'node_modules')}"`, { stdio: 'pipe' }); } catch { /* exists */ } }
+    writeFileSync(join(root, 'functions', 'emulator', 'stageA-codebase', '.old-lib.json'), JSON.stringify({ path: process.env.WB_OLD_LIB }));
+    console.log(`[run] stagea prep: using PRESET WB_OLD_LIB → ${process.env.WB_OLD_LIB}`);
+    return { WB_OLD_LIB: process.env.WB_OLD_LIB };
+  }
   const wt = join(root, 'functions', 'emulator', '.stagea-old-consumers');
   const oldLib = join(wt, 'functions', 'lib', 'index.js');
   try {
