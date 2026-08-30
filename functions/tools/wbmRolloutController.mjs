@@ -94,7 +94,7 @@ function rulesHashOk() {
   // equal the LIVE deployed rules (liveRules normalized sha256). A raw-byte hash
   // is CRLF-fragile and does not survive a fresh git checkout.
   let norm;
-  try { norm = JSON.stringify(JSON.parse(readFileSync(fixture, 'utf8'))); }
+  try { const p = JSON.parse(readFileSync(fixture, 'utf8')); norm = JSON.stringify(p.rules ?? p); }
   catch { return { ok: false, detail: 'fixture not valid JSON' }; }
   const h = createHash('sha256').update(norm).digest('hex');
   return { ok: h === DEPLOYED_RULES_NORMALIZED_SHA256, detail: `${h.slice(0, 16)} vs ${DEPLOYED_RULES_NORMALIZED_SHA256.slice(0, 16)}` };
