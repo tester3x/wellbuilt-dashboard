@@ -842,10 +842,10 @@ export async function processIncomingPullPacket(dataIn: PullPacket, packetIdIn: 
     const nextIsDown = incomingHasAuthoritativeWellDown
       ? ((data as any).wellDown === true)
       : existingIsDown;
-
-    // Immediately update down/up status so the app reflects the change
-    // before the heavy AFR/bbls calculations finish
-    await db.ref(`wells/${wellName}/status/isDown`).set(nextIsDown);
+    // (No early isDown write: the ONE atomic patch carries status.isDown.
+    //  A pre-commit write would leave a mutated flag beside entirely-old
+    //  state if the worker crashed — exactly what the atomicity contract
+    //  forbids. Caught by the one-writer enumeration test.)
 
     // Calculate all fields
     const tankTopInches = computeTankTopInches(data.tankLevelFeet);
@@ -1909,6 +1909,8 @@ export async function applyV2ChronologicalEdit(args: {
         const afrMinutes = afr * 24 * 60;
         extraPaths[`well_config/${wellName}/avgFlowRate`] = daysToHMMSS(afr);
         extraPaths[`well_config/${wellName}/avgFlowRateMinutes`] = Math.round(afrMinutes * 100) / 100;
+        extraPaths[`well_config/${wellName}/editSourceId`] = originalPacketId;
+        extraPaths[`well_config/${wellName}/editSourceRev`] = myRev;
       }
 
       // Performance row (WB-M reads here). Clean up an old row if the date moved.

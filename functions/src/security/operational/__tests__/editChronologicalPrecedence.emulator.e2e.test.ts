@@ -151,10 +151,19 @@ describeE2E('emulator: chronological edit precedence (real handlers)', () => {
     });
   }
 
-  async function deliver(editEventId: string): Promise<void> {
+  /** One trigger invocation — a contended/deferred edit leaves its incoming. */
+  async function deliverOnce(editEventId: string): Promise<void> {
     const snap = await db.ref(`packets/incoming/${editEventId}`).once('value');
     if (!snap.exists()) return;
     await processIncomingEdit(snap as admin.database.DataSnapshot, { params: { packetId: editEventId } });
+  }
+
+  /** Production retry contract: contended edits stay queued and re-fire. */
+  async function deliver(editEventId: string, attempts = 5): Promise<void> {
+    for (let i = 0; i < attempts; i++) {
+      if (!(await db.ref(`packets/incoming/${editEventId}`).once('value')).exists()) return;
+      await deliverOnce(editEventId);
+    }
   }
 
   async function submit(packet: Record<string, unknown>, driverId = DRIVER) {
@@ -442,25 +451,39 @@ describeE2E('emulator: chronological edit precedence (real handlers)', () => {
     expect(Number((await perfRow(ORIGINAL_UTC)).editSourceRev)).toBe(2);
   }
 
-  // TEST A — stale receipt/classification write.
-  it('stale classification write is fenced: pause A before classification, B completes, A resumes', async () => {
+  // TEST A — REWRITTEN for the one-writer coordinator (the original asserted
+  // fenced follow-up writers that no longer exist): while A holds the per-well
+  // lock mid-patch, B's invocation must DEFER — commit nothing, classify
+  // nothing, leave its request queued — and B's retry after A completes must
+  // converge every target to the authoritative A+B (revision 2) set.
+  it('B invoked while A holds the lock: B defers untouched, retry converges to the authoritative set', async () => {
     await ingest(correction({ editEventId: 'editevt_a1', editedFields: ['bblsTaken'], correctionCreatedAtUTC: '2026-08-24T10:30:00.000Z', bblsTaken: 150 }));
     await ingest(correction({ editEventId: 'editevt_b1', editedFields: ['bblsTaken'], correctionCreatedAtUTC: '2026-08-24T10:45:00.000Z', bblsTaken: 155 }));
-    // A commits (rev 1), classifies itself recorded_current, then pauses right
-    // before writing that classification; B completes revision 2 fully.
-    idxMod.__v2FollowupBarrier.beforeClassification = async () => { await deliver('editevt_b1'); };
+    let bDeferredWhileALocked = false;
+    idxMod.__v2FollowupBarrier.beforeClassification = async () => {
+      await deliverOnce('editevt_b1'); // fires INSIDE A's buildPatch — must contend
+      bDeferredWhileALocked = (await db.ref('packets/incoming/editevt_b1').once('value')).exists()
+        && (await receiptOf('editevt_b1')) === null;
+    };
     await deliver('editevt_a1');
-    await assertAuthoritativeAB(); // A's stale rev-1 classification never lands
+    expect(bDeferredWhileALocked).toBe(true); // B committed NOTHING under contention
+    await deliver('editevt_b1');              // production retry converges
+    await assertAuthoritativeAB();
   });
 
-  // TEST B — stale projection write after passing the (now removed) guard.
-  it('stale projection write is fenced: pause A before projections, B completes, A resumes', async () => {
+  // TEST B — same contract probed at the later (projection-composition) point.
+  it('B invoked during A patch composition: still deferred whole, retry converges', async () => {
     await ingest(correction({ editEventId: 'editevt_a1', editedFields: ['bblsTaken'], correctionCreatedAtUTC: '2026-08-24T10:30:00.000Z', bblsTaken: 150 }));
     await ingest(correction({ editEventId: 'editevt_b1', editedFields: ['bblsTaken'], correctionCreatedAtUTC: '2026-08-24T10:45:00.000Z', bblsTaken: 155 }));
-    // A commits (rev 1), writes its rev-1 classification, then pauses right
-    // before its first projection write; B completes revision 2 fully.
-    idxMod.__v2FollowupBarrier.beforeProjection = async () => { await deliver('editevt_b1'); };
+    let bDeferredWhileALocked = false;
+    idxMod.__v2FollowupBarrier.beforeProjection = async () => {
+      await deliverOnce('editevt_b1');
+      bDeferredWhileALocked = (await db.ref('packets/incoming/editevt_b1').once('value')).exists()
+        && (await receiptOf('editevt_b1')) === null;
+    };
     await deliver('editevt_a1');
-    await assertAuthoritativeAB(); // A's stale rev-1 projections never land
+    expect(bDeferredWhileALocked).toBe(true);
+    await deliver('editevt_b1');
+    await assertAuthoritativeAB();
   });
 });

@@ -19,12 +19,13 @@ describe('processIncomingPull wiring', () => {
     expect(editStart).toBeGreaterThan(pullStart);
   });
 
-  test('guard evaluates before ANY well-state write (isDown is the first one)', () => {
+  test('guard evaluates before any well-state write — and NO pre-commit state write exists at all', () => {
     const guardIdx = pullHandler.indexOf('evaluateIncomingPull({');
-    const isDownWrite = pullHandler.indexOf('status/isDown`).set');
     expect(guardIdx).toBeGreaterThan(-1);
-    expect(isDownWrite).toBeGreaterThan(-1);
-    expect(guardIdx).toBeLessThan(isDownWrite);
+    // Completion audit: the early "immediate isDown" write is GONE — the ONE
+    // atomic patch carries status.isDown, so a crash can never leave a
+    // mutated flag beside entirely-old state.
+    expect(pullHandler).not.toContain('status/isDown`).set');
   });
 
   test('quarantine branch hard-stops with return null', () => {
