@@ -59,13 +59,35 @@ async function main() {
   const token = (pf.out.match(/Confirmation token.*?:\s*([0-9a-f]{24})/) || [])[1];
   check('preflight passes on the clean reviewed HEAD and mints a token', pf.code === 0 && !!token, pf.out.split('\n').slice(-3).join(' | '));
 
-  // 3) close WITHOUT --execute → planned, no DB write.
-  const closePlan = run(['close', '--rollout-id', RID, '--sha', HEAD, '--confirm', token, '--expect-state', 'OPEN']);
+  const auth = ['--execute', '--target', 'emulator', '--project', PROJECT_ID, '--sha', HEAD, '--confirm', token, '--rollout-id', RID];
+  const prodRev = JSON.stringify({ ingestWbmPull: 'r1', ingestWbmEdit: 'r1', adminSubmitPullEdit: 'r1' });
+  const prodMismatch = JSON.stringify({ ingestWbmPull: 'r1', ingestWbmEdit: 'r0', adminSubmitPullEdit: 'r1' });
+
+  // 3) CLOSE before Stage-A producers are verified → refused.
+  const closeNoStageA = run(['close', ...auth, '--expect-state', 'OPEN', '--producer-revisions', prodRev]);
+  check('CLOSE refused before Stage-A producers verified (run stage-a first)', closeNoStageA.code !== 0 && /run .?stage-a/i.test(closeNoStageA.out) && (await flagVal()) === null, closeNoStageA.out.split('\n').slice(-1)[0]);
+
+  // 3a) Stage-A partial producer set → refused (not all three on the intended revision).
+  const partialProd = JSON.stringify({ ingestWbmPull: 'r1', ingestWbmEdit: 'r0', adminSubmitPullEdit: 'r1' });
+  const stageAPartial = run(['stage-a', ...auth, '--expect-state', 'OPEN', '--producer-revisions', partialProd, '--producer-intended', prodRev]);
+  check('Stage-A with a producer NOT on the intended revision → refused (partial)', stageAPartial.code !== 0 && /partial deploy/i.test(stageAPartial.out), stageAPartial.out.split('\n').slice(-1)[0]);
+
+  // 3b) Stage-A verified with a LONG stabilization window → CLOSE refused (not elapsed).
+  run(['stage-a', ...auth, '--expect-state', 'OPEN', '--producer-revisions', prodRev, '--producer-intended', prodRev], { WB_STAGE_A_STABILIZE_SECONDS: '999' });
+  const closeEarly = run(['close', ...auth, '--expect-state', 'OPEN', '--producer-revisions', prodRev]);
+  check('CLOSE refused while the Stage-A stabilization window has not elapsed', closeEarly.code !== 0 && /stabilization not elapsed/i.test(closeEarly.out) && (await flagVal()) === null, closeEarly.out.split('\n').slice(-1)[0]);
+
+  // 3c) Re-verify with an elapsed (0s) window, then CLOSE with a MISMATCHED recheck → refused.
+  run(['stage-a', ...auth, '--expect-state', 'OPEN', '--producer-revisions', prodRev, '--producer-intended', prodRev], { WB_STAGE_A_STABILIZE_SECONDS: '0' });
+  const closeMis = run(['close', ...auth, '--expect-state', 'OPEN', '--producer-revisions', prodMismatch]);
+  check('CLOSE refused when the repeat producer-revision check mismatches (producer changed/rolled)', closeMis.code !== 0 && /repeat producer-revision check does NOT match/i.test(closeMis.out) && (await flagVal()) === null, closeMis.out.split('\n').slice(-1)[0]);
+
+  // 3d) CLOSE without --execute (but stabilized + matching recheck) → DRY-RUN, no write.
+  const closePlan = run(['close', '--rollout-id', RID, '--sha', HEAD, '--confirm', token, '--expect-state', 'OPEN', '--producer-revisions', prodRev]);
   check('close without --execute is DRY-RUN (flag stays absent)', (await flagVal()) === null && /PLANNED|dry-run/i.test(closePlan.out), JSON.stringify(await flagVal()));
 
-  // 4) close WITH full auth (emulator target) → real CAS close.
-  const auth = ['--execute', '--target', 'emulator', '--project', PROJECT_ID, '--sha', HEAD, '--confirm', token, '--rollout-id', RID];
-  run(['close', ...auth, '--expect-state', 'OPEN']);
+  // 4) CLOSE with full auth + stabilized + matching recheck → real CAS close.
+  run(['close', ...auth, '--expect-state', 'OPEN', '--producer-revisions', prodRev]);
   check('close --execute performs the CAS: flag paused:true, governed metadata present', (await flagVal())?.paused === true && (await flagVal())?.rolloutId === RID && (await flagVal())?.state === 'CLOSED', JSON.stringify(await flagVal()));
   check('CAS changedAt is a server timestamp (number)', typeof (await flagVal())?.changedAt === 'number', JSON.stringify((await flagVal())?.changedAt));
 
@@ -139,7 +161,10 @@ async function main() {
   const token2 = (run(['preflight', '--rollout-id', RID2, '--sha', HEAD]).out.match(/Confirmation token.*?:\s*([0-9a-f]{24})/) || [])[1];
   await db.ref(FLAG).set({ paused: true, state: 'CLOSED', rolloutId: 'someone-else', reviewedSha: HEAD, changedAt: 1, changedBy: 'x', reason: 'y' });
   const auth2 = ['--execute', '--target', 'emulator', '--project', PROJECT_ID, '--sha', HEAD, '--confirm', token2, '--rollout-id', RID2];
-  const closeHeld = run(['close', ...auth2, '--expect-state', 'OPEN']);
+  // Stage-A verified + stabilized (0s) so close reaches the CAS, which then refuses
+  // (flag already CLOSED by another rollout) → HELD_CLOSED.
+  run(['stage-a', ...auth2, '--expect-state', 'OPEN', '--producer-revisions', prodRev, '--producer-intended', prodRev], { WB_STAGE_A_STABILIZE_SECONDS: '0' });
+  const closeHeld = run(['close', ...auth2, '--expect-state', 'OPEN', '--producer-revisions', prodRev]);
   const j2 = JSON.parse(readFileSync(jpath2, 'utf8'));
   check('a refused CAS close forces HELD_CLOSED', closeHeld.code !== 0 && j2.state === 'HELD_CLOSED' && /HELD_CLOSED/.test(closeHeld.out), closeHeld.out.split('\n').slice(-6).join(' | '));
   check('HELD_CLOSED leaves admission CLOSED (never auto-reopened)', (await flagVal())?.paused === true);

@@ -40,6 +40,13 @@ const STAGE_A = ['ingestWbmPull', 'ingestWbmEdit', 'adminSubmitPullEdit'];
 const STAGE_C = ['processIncomingPull', 'processEditRequest', 'processDeleteRequest', 'watchdogStrandedPackets'];
 const ALL_SEVEN = [...STAGE_A, ...STAGE_C];
 const HORIZON_MS = 180_000;
+// Stage-A stabilization before CLOSE: the deployed producers time out at 30s
+// (REST-confirmed: ingest*/admin = 30s), plus a stated 90s propagation/recovery
+// margin = 120s. CLOSE is refused until all three producer revisions match the
+// intended build, that duration has elapsed since they were verified, a repeat
+// check still shows the intended revisions, and no producer deploy is partial.
+const STAGE_A_STABILIZE_SECONDS = Number(process.env.WB_STAGE_A_STABILIZE_SECONDS || 120);
+const STAGE_A_PRODUCERS = ['ingestWbmPull', 'ingestWbmEdit', 'adminSubmitPullEdit'];
 const JOURNAL_DIR = join(HERE, '.rollout-journal');
 
 // ── args ──
@@ -98,8 +105,11 @@ const stageCommand = (fns) => `firebase deploy --project ${PROJECT} --only ${fns
 function readOnlyChecks() {
   const c = {};
   c.project = { ok: (PROJECT_ARG ?? PROJECT) === PROJECT, detail: PROJECT_ARG ?? '(default)' };
-  c.branch = { ok: gitBranch() === BRANCH, detail: gitBranch() };
   const head = gitHead();
+  // The integration branch, OR a detached HEAD pinned to the reviewed SHA (a
+  // clean deployment worktree at the exact commit) — the SHA match is the
+  // authoritative invariant, enforced separately by head/requireExecutionAuth.
+  c.branch = { ok: gitBranch() === BRANCH || (gitBranch() === 'HEAD' && !!SHA && head === SHA), detail: gitBranch() };
   c.head = { ok: !SHA || SHA === head, detail: head, value: head };
   c.clean = { ok: worktreeClean(), detail: c => c };
   const ex = builtExports();
@@ -278,20 +288,48 @@ async function main() {
     const allowed = deployGuardAllows(cmd, j.reviewedSha);
     log(`  deployGuard: ${allowed ? 'ALLOW' : 'REFUSE'}  ${cmd}`);
     if (!allowed) die('deploy guard refused the Stage-A command');
-    const reasons = requireExecutionAuth(j, 'OPEN');
-    if (reasons.length || !EXECUTE) {
-      log('[controller] Stage-A deploy is PLANNED (dry-run). Operator runs the guarded command above after satisfying:');
-      reasons.forEach((r) => log(`   - ${r}`));
-      log('  Then re-run: stage-a --execute ... to record producer revisions.');
-      j.state = 'OPEN'; appendHistory(j, { mode, event: 'stage_a_planned' });
+    // Record the producer revisions the operator observed live (read-only
+    // describe) and open the stabilization window. --producer-revisions and
+    // --producer-intended are fn->revision JSON maps for the three producers.
+    const obsRaw = opt('--producer-revisions', null);
+    const intRaw = opt('--producer-intended', null);
+    if (obsRaw && intRaw) {
+      const obs = JSON.parse(obsRaw); const intended = JSON.parse(intRaw);
+      const missing = STAGE_A_PRODUCERS.filter((f) => !obs[f]);
+      const mismatch = STAGE_A_PRODUCERS.filter((f) => obs[f] && intended[f] && obs[f] !== intended[f]);
+      if (missing.length || mismatch.length) { appendHistory(j, { mode, event: 'stage_a_producers_partial', missing, mismatch }); die(`Stage-A producers not all on the intended revision (missing ${missing}, mismatch ${mismatch}) — partial deploy, do not proceed`); }
+      const nowMs = Date.now();
+      j.stageA = { producers: obs, intended, verifiedAtMs: nowMs, settleSeconds: STAGE_A_STABILIZE_SECONDS, settleDeadlineMs: nowMs + STAGE_A_STABILIZE_SECONDS * 1000 };
+      j.state = 'OPEN'; appendHistory(j, { mode, event: 'stage_a_producers_verified', settleSeconds: STAGE_A_STABILIZE_SECONDS });
+      log(`[controller] Stage-A producers verified on the intended revisions; stabilization window ${STAGE_A_STABILIZE_SECONDS}s started. CLOSE is refused until it elapses AND a repeat check still matches.`);
       process.exit(0);
     }
-    die('production Stage-A execution is not authorized in this environment', 1); // never reached without full auth
+    // No producer revisions supplied → this is the plan/guard step. The DEPLOY
+    // itself is the operator running the guarded command above; recording the
+    // live producer revisions (a read-only describe) then re-running stage-a is
+    // what opens the stabilization window.
+    log('[controller] Stage-A deploy is PLANNED. Operator runs the guarded command above, then re-runs:');
+    log('  stage-a --producer-revisions <live-describe> --producer-intended <reviewed> --sha <HEAD> --confirm <token> --rollout-id <id>');
+    j.state = 'OPEN'; appendHistory(j, { mode, event: 'stage_a_planned' });
+    process.exit(0);
   }
 
   if (mode === 'close') {
     if (j.state === 'HELD_CLOSED') die('rollout is HELD_CLOSED — reconcile via resume before any further action');
-    log('Close admission (atomic CAS)…');
+    // Stage-A stabilization gate: CLOSE is refused until the producers are
+    // verified on the intended revisions, the stabilization duration has
+    // elapsed, and a repeat revision check STILL matches (no partial/rollback).
+    const sa = j.stageA;
+    if (!sa?.settleDeadlineMs) die('CLOSE refused — run `stage-a` with --producer-revisions/--producer-intended first (producers not verified/stabilizing)');
+    const remainingMs = sa.settleDeadlineMs - Date.now();
+    if (remainingMs > 0) die(`CLOSE refused — Stage-A stabilization not elapsed (${Math.ceil(remainingMs / 1000)}s of ${sa.settleSeconds}s remaining)`);
+    const recheckRaw = opt('--producer-revisions', null);
+    if (!recheckRaw) die('CLOSE refused — pass --producer-revisions for the mandatory repeat revision check');
+    const recheck = JSON.parse(recheckRaw);
+    const stable = STAGE_A_PRODUCERS.every((f) => recheck[f] && recheck[f] === sa.producers[f]);
+    if (!stable) die('CLOSE refused — repeat producer-revision check does NOT match the stabilized revisions (a producer changed/rolled — investigate)');
+    j.stageA.recheckPassedMs = Date.now(); appendHistory(j, { mode, event: 'stage_a_stabilized_confirmed' });
+    log('Close admission (atomic CAS)… (Stage-A stabilized + revisions re-confirmed)');
     try {
       const r = await casTransition('close', j, 'OPEN');
       if (!r.executed) { j.state = 'PAUSE_REQUESTED'; appendHistory(j, { mode, event: 'close_planned' }); process.exit(0); }

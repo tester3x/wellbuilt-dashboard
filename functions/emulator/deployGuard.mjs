@@ -61,7 +61,11 @@ try {
   if (REVIEWED_SHA && head !== REVIEWED_SHA) refuse(`server HEAD ${head.slice(0, 12)} != reviewed ${REVIEWED_SHA.slice(0, 12)}`);
   if (execSync('git status --porcelain', { cwd: ROOT, encoding: 'utf8' }).trim()) refuse('worktree is dirty');
   const branch = execSync('git rev-parse --abbrev-ref HEAD', { cwd: ROOT, encoding: 'utf8' }).trim();
-  if (branch !== 'integration/wbm-backdated-chrono-reconcile') refuse(`wrong branch: ${branch}`);
+  // Accept the integration branch OR a DETACHED HEAD pinned to the exact reviewed
+  // SHA (a clean deployment worktree checked out at the reviewed commit is a
+  // valid, precise deploy source — the SHA match is the strong invariant).
+  const detachedAtReviewed = branch === 'HEAD' && REVIEWED_SHA && head === REVIEWED_SHA;
+  if (branch !== 'integration/wbm-backdated-chrono-reconcile' && !detachedAtReviewed) refuse(`wrong branch: ${branch}${branch === 'HEAD' && !REVIEWED_SHA ? ' (detached — pass --expect-sha to deploy from a pinned SHA)' : ''}`);
 } catch { refuse('could not verify git HEAD/branch/cleanliness'); }
 
 // 6) All SEVEN functions + the admission gate must exist in the built output at
