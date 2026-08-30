@@ -85,3 +85,7 @@ functions/emulator/.stagea-old-consumers/
 functions/emulator/stageA-codebase/node_modules/
 functions/emulator/stageA-codebase/.old-lib.json
 functions/tools/.rollout-journal/
+*-debug.log
+firebase-debug.log
+ui-debug.log
+pubsub-debug.log
