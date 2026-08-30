@@ -51,6 +51,9 @@ const MODES = {
   stagea: { only: 'functions,database,firestore,auth', script: 'node functions/emulator/stageA.mjs', config: 'firebase.stageA.json', prep: 'stagea' },
   drainrace: { only: 'database', script: 'node functions/emulator/watchdogDrainRace.mjs', prep: 'stagea' },
   suites: { only: 'database', script: 'cd functions && npx jest editTrail.emulator wbmPullCanonicalId.emulator editChronologicalPrecedence wbtGovernedOps --silent --runInBand --forceExit', env: { FIRESTORE_EMULATOR_HOST: '127.0.0.1:8099' } },
+  // The live-trigger CREATE variant of the canonical-id e2e (the one skipped
+  // under `suites` because it needs the functions emulator + WBM_FUNCTIONS_E2E).
+  canonicalid: { only: 'functions,database,firestore', script: 'cd functions && npx jest wbmPullCanonicalId.emulator --runInBand --forceExit', env: { WBM_FUNCTIONS_E2E: '1', FIRESTORE_EMULATOR_HOST: '127.0.0.1:8082' } },
 };
 
 // Stage-A prep: build the OLD (deployed, pre-chrono) consumers from commit
