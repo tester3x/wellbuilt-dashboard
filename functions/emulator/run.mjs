@@ -47,6 +47,7 @@ const MODES = {
   mixed: { only: 'functions,database,firestore', script: 'node functions/emulator/mixedVersion.mjs' },
   rulesprobe: { only: 'database,auth', script: 'node functions/emulator/rulesprobe.mjs', config: 'firebase.rulesprobe.json' },
   flagcas: { only: 'database', script: 'node functions/emulator/flagCas.mjs' },
+  controller: { only: 'database', script: 'node functions/emulator/controllerDemo.mjs' },
   stagea: { only: 'functions,database,firestore,auth', script: 'node functions/emulator/stageA.mjs', config: 'firebase.stageA.json', prep: 'stagea' },
   drainrace: { only: 'functions,database,firestore,auth', script: 'node functions/emulator/watchdogDrainRace.mjs', config: 'firebase.stageA.json', prep: 'stagea' },
   suites: { only: 'database', script: 'cd functions && npx jest editTrail.emulator wbmPullCanonicalId.emulator editChronologicalPrecedence wbtGovernedOps --silent --runInBand --forceExit', env: { FIRESTORE_EMULATOR_HOST: '127.0.0.1:8099' } },

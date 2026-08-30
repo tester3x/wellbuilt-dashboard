@@ -1,0 +1,377 @@
+#!/usr/bin/env node
+// wbmRolloutController.mjs — the ONE executable, fail-closed controller for the
+// governed WB-M staged rollout (predeploy gate Rev-4 Blocker 1). It integrates
+// every safety check into a single enforced procedure with a durable journal
+// and interruption recovery. It is DRY-RUN by default and performs NO
+// production mutation or deploy unless the operator supplies the full execution
+// authorization set — which is intentionally NOT supplied in this engagement.
+//
+// Modes:  plan preflight stage-a close drain stage-c verify reopen status resume
+//
+// Execution of any state-changing mode (stage-a, close, stage-c, reopen)
+// requires ALL of:
+//   --execute
+//   --project wellbuilt-sync           (exact reviewed project)
+//   --sha <reviewed HEAD>              (exact; must equal git HEAD and journal)
+//   --expect-state <state>            (exact expected current state)
+//   --confirm <token>                 (operator token minted by `preflight`)
+//   appropriate credentials for the operation (never printed)
+// and, for --target production, the env WB_ROLLOUT_PROD_AUTHORIZED=1 (a
+// deliberate belt-and-suspenders that is never set here). Default target is
+// 'emulator' so a stray run cannot touch production.
+//
+// The controller NEVER auto-reopens on error. On any exception after admission
+// closes it records the failure, forces HELD_CLOSED, leaves admission closed,
+// prints exact recovery steps, and refuses Stage C / reopen until reconciled.
+import { execSync, execFileSync } from 'node:child_process';
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
+import { createHash } from 'node:crypto';
+import { dirname, join } from 'node:path';
+import { fileURLToPath } from 'node:url';
+import { createRequire } from 'node:module';
+
+const require = createRequire(import.meta.url);
+const HERE = dirname(fileURLToPath(import.meta.url));
+const ROOT = join(HERE, '..', '..');
+const PROJECT = 'wellbuilt-sync';
+const BRANCH = 'integration/wbm-backdated-chrono-reconcile';
+const DEPLOYED_RULES_SHA256 = '5ba10f055a0673e151302b5f9b80ef6e38f006448acc8c7cd5bb47344899b314';
+const STAGE_A = ['ingestWbmPull', 'ingestWbmEdit', 'adminSubmitPullEdit'];
+const STAGE_C = ['processIncomingPull', 'processEditRequest', 'processDeleteRequest', 'watchdogStrandedPackets'];
+const ALL_SEVEN = [...STAGE_A, ...STAGE_C];
+const HORIZON_MS = 180_000;
+const JOURNAL_DIR = join(HERE, '.rollout-journal');
+
+// ── args ──
+const argv = process.argv.slice(2);
+const mode = argv[0];
+const flag = (k) => argv.includes(k);
+const opt = (k, d) => (argv.includes(k) ? argv[argv.indexOf(k) + 1] : d);
+const EXECUTE = flag('--execute');
+const TARGET = opt('--target', 'emulator');            // 'emulator' | 'production'
+const SHA = opt('--sha', null);
+const PROJECT_ARG = opt('--project', null);
+const EXPECT_STATE = opt('--expect-state', null);
+const CONFIRM = opt('--confirm', null);
+const ROLLOUT_ID = opt('--rollout-id', null);
+const REASON = opt('--reason', 'wbm-canonical-rollout');
+const CHANGED_BY = opt('--by', 'operator');
+const HORIZON_SECONDS = Number(opt('--horizon-seconds', String(HORIZON_MS / 1000)));
+
+const MODES = ['plan', 'preflight', 'stage-a', 'close', 'drain', 'stage-c', 'verify', 'reopen', 'status', 'resume'];
+if (!MODES.includes(mode)) { console.error(`usage: wbmRolloutController.mjs <${MODES.join('|')}> [flags]`); process.exit(2); }
+
+const log = (m) => console.log(m);
+const die = (m, code = 1) => { console.error(`[controller] ${m}`); process.exit(code); };
+
+// ── git / build / rules checks (read-only) ──
+function gitHead() { return execSync('git rev-parse HEAD', { cwd: ROOT, encoding: 'utf8' }).trim(); }
+function gitBranch() { return execSync('git rev-parse --abbrev-ref HEAD', { cwd: ROOT, encoding: 'utf8' }).trim(); }
+function worktreeClean() { return execSync('git status --porcelain', { cwd: ROOT, encoding: 'utf8' }).trim() === ''; }
+function builtExports() {
+  const lib = join(ROOT, 'functions', 'lib', 'index.js').replace(/\\/g, '/');
+  const out = execSync(`node -e "process.stdout.write(Object.keys(require('${lib}')).join(','))"`, {
+    cwd: ROOT, encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'],
+    env: { ...process.env, FIREBASE_CONFIG: JSON.stringify({ projectId: PROJECT, databaseURL: `http://127.0.0.1:9/?ns=${PROJECT}` }), GCLOUD_PROJECT: PROJECT },
+  });
+  return new Set(out.split(','));
+}
+function rulesHashOk() {
+  const fixture = join(ROOT, 'functions', 'emulator', 'fixtures', 'deployed-rules.json');
+  if (!existsSync(fixture)) return { ok: false, detail: 'deployed-rules fixture missing' };
+  const h = createHash('sha256').update(readFileSync(fixture)).digest('hex');
+  return { ok: h === DEPLOYED_RULES_SHA256, detail: `${h.slice(0, 16)} vs ${DEPLOYED_RULES_SHA256.slice(0, 16)}` };
+}
+function gateImplemented() {
+  const src = readFileSync(join(ROOT, 'functions', 'src', 'security', 'dashboardPullEdit.ts'), 'utf8');
+  return src.includes('checkMutationAdmission');
+}
+function deployGuardAllows(command, sha) {
+  try {
+    execFileSync('node', [join(ROOT, 'functions', 'emulator', 'deployGuard.mjs'), command, '--expect-sha', sha], { cwd: ROOT, stdio: 'pipe' });
+    return true;
+  } catch { return false; }
+}
+const stageCommand = (fns) => `firebase deploy --project ${PROJECT} --only ${fns.map((f) => `functions:${f}`).join(',')}`;
+
+// ── read-only verification bundle ──
+function readOnlyChecks() {
+  const c = {};
+  c.project = { ok: (PROJECT_ARG ?? PROJECT) === PROJECT, detail: PROJECT_ARG ?? '(default)' };
+  c.branch = { ok: gitBranch() === BRANCH, detail: gitBranch() };
+  const head = gitHead();
+  c.head = { ok: !SHA || SHA === head, detail: head, value: head };
+  c.clean = { ok: worktreeClean(), detail: c => c };
+  const ex = builtExports();
+  const missing = ALL_SEVEN.filter((f) => !ex.has(f));
+  c.sevenExports = { ok: missing.length === 0, detail: missing.length ? `missing ${missing}` : '7/7' };
+  c.rules = rulesHashOk();
+  c.gate = { ok: gateImplemented(), detail: 'checkMutationAdmission present' };
+  c.stageAcmd = { ok: deployGuardAllows(stageCommand(STAGE_A), head), detail: stageCommand(STAGE_A) };
+  c.stageCcmd = { ok: deployGuardAllows(stageCommand(STAGE_C), head), detail: stageCommand(STAGE_C) };
+  return c;
+}
+function printChecks(c) {
+  for (const [k, v] of Object.entries(c)) log(`  ${v.ok ? 'OK  ' : 'FAIL'} ${k.padEnd(13)} ${typeof v.detail === 'string' ? v.detail : ''}`);
+  return Object.values(c).every((v) => v.ok);
+}
+
+// ── journal ──
+function journalPath(id) { return join(JOURNAL_DIR, `${id}.json`); }
+function loadJournal(id) { const p = journalPath(id); return existsSync(p) ? JSON.parse(readFileSync(p, 'utf8')) : null; }
+function saveJournal(j) { mkdirSync(JOURNAL_DIR, { recursive: true }); writeFileSync(journalPath(j.rolloutId), JSON.stringify(j, null, 2)); }
+function appendHistory(j, entry) { j.history = j.history || []; j.history.push({ ...entry, atLocalIso: nowIso() }); saveJournal(j); }
+// Date.now()/new Date() are fine in a Node CLI (only Workflow scripts forbid them).
+function nowIso() { return new Date().toISOString(); }
+
+// ── db (target-scoped) ──
+async function getDb() {
+  const isEmu = TARGET === 'emulator';
+  if (isEmu) process.env.FIREBASE_DATABASE_EMULATOR_HOST = process.env.FIREBASE_DATABASE_EMULATOR_HOST || '127.0.0.1:9002';
+  process.env.FIREBASE_CONFIG = JSON.stringify({ projectId: PROJECT, databaseURL: `http://${process.env.FIREBASE_DATABASE_EMULATOR_HOST || 'db'}/?ns=${PROJECT}-default-rtdb` });
+  const adminMod = await import('firebase-admin');
+  const admin = adminMod.default ?? adminMod;
+  if (!admin.apps.length) admin.initializeApp();
+  return { admin, db: admin.database() };
+}
+async function incomingEmpty(db) { return !(await db.ref('packets/incoming').once('value')).exists(); }
+async function anyLock(db) {
+  const w = (await db.ref('wells').once('value')).val() || {};
+  return Object.values(w).some((x) => x?.status?.chronoLock);
+}
+async function watchdogKeys(db) {
+  const inc = (await db.ref('packets/incoming').once('value')).val() || {};
+  return Object.keys(inc).filter((k) => /_clone|_retrig/i.test(k));
+}
+
+// ── execution authorization ──
+function requireExecutionAuth(j, expectState) {
+  const reasons = [];
+  if (!EXECUTE) reasons.push('missing --execute (dry-run)');
+  if ((PROJECT_ARG ?? PROJECT) !== PROJECT) reasons.push(`project must be ${PROJECT}`);
+  if (!SHA) reasons.push('missing --sha');
+  else if (SHA !== gitHead()) reasons.push('--sha != git HEAD');
+  else if (j && SHA !== j.reviewedSha) reasons.push('--sha != journal reviewedSha');
+  if (!worktreeClean()) reasons.push('worktree dirty');
+  if (!CONFIRM) reasons.push('missing --confirm token (run preflight)');
+  else if (!j || CONFIRM !== j.confirmationToken) reasons.push('--confirm does not match the journal token');
+  if (expectState !== null && EXPECT_STATE !== expectState) reasons.push(`--expect-state must be ${expectState} (got ${EXPECT_STATE ?? 'none'})`);
+  if (TARGET === 'production' && process.env.WB_ROLLOUT_PROD_AUTHORIZED !== '1') reasons.push('production target requires WB_ROLLOUT_PROD_AUTHORIZED=1 (not set)');
+  return reasons;
+}
+// Credentials presence WITHOUT reading/printing them.
+function credentialsPresent() {
+  if (TARGET === 'emulator') return true;
+  return !!(process.env.GOOGLE_APPLICATION_CREDENTIALS || process.env.FIREBASE_TOKEN || process.env.GCLOUD_PROJECT);
+}
+
+async function casTransition(op, j, expectStatePrecond) {
+  const authReasons = requireExecutionAuth(j, expectStatePrecond);
+  if (!credentialsPresent()) authReasons.push('no credentials available for the target operation');
+  if (authReasons.length) {
+    log(`[controller] ${op.toUpperCase()} is a PLANNED (dry-run) action. To execute, satisfy:`);
+    authReasons.forEach((r) => log(`   - ${r}`));
+    log(`[controller] planned CAS: ${op} rolloutId=${j.rolloutId} sha=${j.reviewedSha.slice(0, 12)} target=${TARGET}`);
+    return { executed: false };
+  }
+  // EXECUTE path (never reached in this engagement).
+  const { admin, db } = await getDb();
+  const { executeFlagTransition } = await import('./rolloutFlagCas.mjs');
+  const intent = { op, rolloutId: j.rolloutId, reviewedSha: j.reviewedSha, changedBy: CHANGED_BY, reason: REASON };
+  const res = await executeFlagTransition(admin, db, intent);
+  appendHistory(j, { mode, op, outcome: res.outcome, reason: res.reason });
+  return { executed: true, res };
+}
+
+// Force HELD_CLOSED on any post-close failure; never auto-reopen.
+function heldClosed(j, why) {
+  j.state = 'HELD_CLOSED';
+  j.heldReason = why;
+  appendHistory(j, { mode, event: 'HELD_CLOSED', why });
+  console.error('\n[controller] ===== HELD_CLOSED =====');
+  console.error(`[controller] ${why}`);
+  console.error('[controller] Admission is LEFT CLOSED. The controller will NOT reopen automatically.');
+  console.error('[controller] Recovery:');
+  console.error('   1. node functions/tools/wbmRolloutController.mjs status --rollout-id ' + j.rolloutId);
+  console.error('   2. Inventory live consumer revisions and packets/incoming + locks (read-only).');
+  console.error('   3. Complete any missing forward Stage-C deploy, OR keep the gate closed.');
+  console.error('   4. Only after a full `verify` passes may `reopen` be attempted.');
+  console.error('   5. Never reopen on a CLI exit code alone.');
+  process.exit(1);
+}
+
+// ─────────────────────────── modes ───────────────────────────
+async function main() {
+  if (mode === 'plan') {
+    log('WB-M governed staged rollout — PLAN (nothing is executed)\n');
+    log('Reviewed project : ' + PROJECT);
+    log('Reviewed branch  : ' + BRANCH);
+    log('Reviewed HEAD    : ' + gitHead());
+    log('\nSequence (fail-closed state machine):');
+    log('  preflight → stage-a → close → drain → (180s horizon) → stage-c → verify → reopen');
+    log('\nStage A (gated producers):\n  ' + stageCommand(STAGE_A));
+    log('\nStage C (canonical consumers):\n  ' + stageCommand(STAGE_C));
+    log('\nAdmission flag (CAS): system/maintenance/wbmMutations');
+    log('Horizon: 180s continuous-empty incoming + no lock + no new watchdog keys.');
+    log('\nRead-only gate checks:');
+    const ok = printChecks(readOnlyChecks());
+    log(`\nPLAN ${ok ? 'CLEAN' : 'has FAILURES'}. Execution requires --execute + --project + --sha + --expect-state + --confirm + credentials.`);
+    process.exit(ok ? 0 : 1);
+  }
+
+  if (mode === 'preflight') {
+    const id = ROLLOUT_ID || `rollout-${gitHead().slice(0, 8)}`;
+    log(`WB-M rollout PREFLIGHT — rolloutId ${id}\n`);
+    const checks = readOnlyChecks();
+    const ok = printChecks(checks);
+    if (!ok) die('preflight FAILED — resolve the FAIL rows before minting a confirmation token', 1);
+    const head = gitHead();
+    // Confirmation token binds rolloutId + reviewed SHA + project (no secrets).
+    const token = createHash('sha256').update(`${id}|${head}|${PROJECT}|preflight-v1`).digest('hex').slice(0, 24);
+    const j = loadJournal(id) || { rolloutId: id, project: PROJECT, reviewedSha: head, createdIso: nowIso(), history: [] };
+    j.reviewedSha = head; j.state = 'OPEN'; j.confirmationToken = token; j.stageA = j.stageA || {}; j.stageC = j.stageC || {};
+    appendHistory(j, { mode, event: 'preflight_ok', head });
+    saveJournal(j);
+    log(`\nPreflight OK. Journal: ${journalPath(id)}`);
+    log(`Confirmation token (bind to this rollout): ${token}`);
+    log('Pass it to execute modes as: --confirm ' + token + ' --sha ' + head + ' --rollout-id ' + id);
+    process.exit(0);
+  }
+
+  // All remaining modes need a journal.
+  const id = ROLLOUT_ID || die('--rollout-id required for this mode (from preflight)');
+  const j = loadJournal(id) || die(`no journal for rolloutId ${id} — run preflight first`);
+
+  if (mode === 'status') {
+    log(`Rollout ${id} — state ${j.state}  reviewedSha ${j.reviewedSha.slice(0, 12)}  target ${TARGET}`);
+    log(`Journal: ${journalPath(id)}`);
+    log('History:');
+    (j.history || []).slice(-12).forEach((h) => log(`  ${h.atLocalIso}  ${h.mode || ''} ${h.event || h.op || ''} ${h.outcome || ''} ${h.reason || h.why || ''}`));
+    try {
+      const { db } = await getDb();
+      log(`\nLive (${TARGET}) — incoming empty: ${await incomingEmpty(db)}, any lock: ${await anyLock(db)}`);
+    } catch (e) { log(`\n(live read unavailable: ${e.message.split('\n')[0]})`); }
+    process.exit(0);
+  }
+
+  if (mode === 'stage-a') {
+    const cmd = stageCommand(STAGE_A);
+    log('Stage A — gated producers. Guard check:');
+    const allowed = deployGuardAllows(cmd, j.reviewedSha);
+    log(`  deployGuard: ${allowed ? 'ALLOW' : 'REFUSE'}  ${cmd}`);
+    if (!allowed) die('deploy guard refused the Stage-A command');
+    const reasons = requireExecutionAuth(j, 'OPEN');
+    if (reasons.length || !EXECUTE) {
+      log('[controller] Stage-A deploy is PLANNED (dry-run). Operator runs the guarded command above after satisfying:');
+      reasons.forEach((r) => log(`   - ${r}`));
+      log('  Then re-run: stage-a --execute ... to record producer revisions.');
+      j.state = 'OPEN'; appendHistory(j, { mode, event: 'stage_a_planned' });
+      process.exit(0);
+    }
+    die('production Stage-A execution is not authorized in this environment', 1); // never reached without full auth
+  }
+
+  if (mode === 'close') {
+    if (j.state === 'HELD_CLOSED') die('rollout is HELD_CLOSED — reconcile via resume before any further action');
+    log('Close admission (atomic CAS)…');
+    try {
+      const r = await casTransition('close', j, 'OPEN');
+      if (!r.executed) { j.state = 'PAUSE_REQUESTED'; appendHistory(j, { mode, event: 'close_planned' }); process.exit(0); }
+      if (r.res.outcome === 'refused') heldClosed(j, `CAS close refused: ${r.res.reason}`);
+      j.state = 'DRAINING'; saveJournal(j);
+      log(`[controller] admission CLOSED (${r.res.outcome}).`);
+    } catch (e) { heldClosed(j, `exception during close: ${e.message.split('\n')[0]}`); }
+    process.exit(0);
+  }
+
+  if (mode === 'drain') {
+    if (j.state === 'HELD_CLOSED') die('HELD_CLOSED — reconcile first');
+    log(`Drain + ${HORIZON_SECONDS}s horizon (continuous-empty incoming, no lock, no new watchdog keys)…`);
+    let db;
+    try { ({ db } = await getDb()); }
+    catch (e) { log(`[controller] drain PLANNED (no live target: ${e.message.split('\n')[0]}). Would poll incoming+lock for the horizon.`); j.state = 'PAUSE_REQUESTED'; appendHistory(j, { mode, event: 'drain_planned' }); process.exit(0); }
+    const start = Date.now();
+    const horizonMs = HORIZON_SECONDS * 1000;
+    let ok = true, firstBreach = null;
+    // Sample continuously — a single empty snapshot is NOT sufficient.
+    while (Date.now() - start < horizonMs) {
+      const empty = await incomingEmpty(db);
+      const lock = await anyLock(db);
+      const clones = await watchdogKeys(db);
+      if (!empty || lock || clones.length) { ok = false; firstBreach = firstBreach || { at: nowIso(), empty, lock, clones }; }
+      await new Promise((r) => setTimeout(r, Math.min(1000, horizonMs / 5)));
+    }
+    if (!ok) { j.state = 'DRAINING'; appendHistory(j, { mode, event: 'drain_breached', firstBreach }); die(`drain horizon BREACHED (incoming/lock/watchdog activity): ${JSON.stringify(firstBreach)}`); }
+    j.state = 'DRAINED_180'; j.horizonClearedIso = nowIso(); appendHistory(j, { mode, event: 'drained_180', horizonSeconds: HORIZON_SECONDS });
+    log(`[controller] DRAINED_180 — incoming continuously empty, no lock, no new watchdog keys for ${HORIZON_SECONDS}s.`);
+    process.exit(0);
+  }
+
+  if (mode === 'stage-c') {
+    if (j.state === 'HELD_CLOSED') die('HELD_CLOSED — reconcile first');
+    if (j.state !== 'DRAINED_180') die(`refusing Stage C: state is ${j.state}, must be DRAINED_180 (drain + horizon first)`);
+    const cmd = stageCommand(STAGE_C);
+    const allowed = deployGuardAllows(cmd, j.reviewedSha);
+    log(`Stage C — canonical consumers. deployGuard: ${allowed ? 'ALLOW' : 'REFUSE'}  ${cmd}`);
+    if (!allowed) heldClosed(j, 'deploy guard refused the Stage-C command');
+    const reasons = requireExecutionAuth(j, 'DRAINED_180');
+    if (reasons.length || !EXECUTE) {
+      log('[controller] Stage-C deploy is PLANNED (dry-run). Operator runs the guarded command above after satisfying:');
+      reasons.forEach((r) => log(`   - ${r}`));
+      j.state = 'DRAINED_180'; appendHistory(j, { mode, event: 'stage_c_planned' });
+      process.exit(0);
+    }
+    heldClosed(j, 'production Stage-C execution is not authorized in this environment');
+  }
+
+  if (mode === 'verify') {
+    if (j.state === 'HELD_CLOSED') die('HELD_CLOSED — reconcile first');
+    log('Verify — 4 consumer revisions match intended, incoming empty, no lock…');
+    let db; try { ({ db } = await getDb()); } catch (e) { die(`cannot reach target to verify: ${e.message.split('\n')[0]}`); }
+    const empty = await incomingEmpty(db); const lock = await anyLock(db);
+    // Revision verification against live functions metadata is a production
+    // read-only step (firebase functions:list); in dry-run/emulator we record
+    // the intended set and require the operator's revision proof.
+    const revisionsProven = j.stageC?.revisionsProven === true;
+    const allOk = empty && !lock && revisionsProven;
+    log(`  incoming empty: ${empty}  no lock: ${!lock}  4-revisions proven: ${revisionsProven}`);
+    if (!allOk) { appendHistory(j, { mode, event: 'verify_incomplete', empty, lock, revisionsProven }); die('verify incomplete — reopen is refused until all proofs hold'); }
+    j.state = 'VERIFYING'; j.verifyPassed = true; appendHistory(j, { mode, event: 'verify_passed' });
+    log('[controller] verify PASSED — reopen is now permitted (still requires full execution auth).');
+    process.exit(0);
+  }
+
+  if (mode === 'reopen') {
+    if (j.state === 'HELD_CLOSED') die('HELD_CLOSED — reconcile first; reopen refused');
+    if (!j.verifyPassed) die('reopen refused — a full `verify` has not passed for this rollout');
+    log('Reopen admission (atomic CAS, only after verify)…');
+    try {
+      const r = await casTransition('reopen', j, 'VERIFYING');
+      if (!r.executed) { appendHistory(j, { mode, event: 'reopen_planned' }); process.exit(0); }
+      if (r.res.outcome === 'refused') heldClosed(j, `CAS reopen refused: ${r.res.reason}`);
+      j.state = 'OPEN'; appendHistory(j, { mode, event: 'reopened', outcome: r.res.outcome });
+      log(`[controller] admission REOPENED (${r.res.outcome}).`);
+    } catch (e) { heldClosed(j, `exception during reopen: ${e.message.split('\n')[0]}`); }
+    process.exit(0);
+  }
+
+  if (mode === 'resume') {
+    log(`Resume — reconciling rollout ${id} (state ${j.state}) fail-closed…`);
+    // Never assume the last command was atomic. Inventory the live state.
+    let db; try { ({ db } = await getDb()); } catch (e) { log(`(live read unavailable: ${e.message.split('\n')[0]})`); }
+    if (db) {
+      const empty = await incomingEmpty(db); const lock = await anyLock(db);
+      log(`  live incoming empty: ${empty}  any lock: ${lock}`);
+    }
+    if (j.state === 'HELD_CLOSED') {
+      log('  state is HELD_CLOSED. Admission stays CLOSED.');
+      log('  To move forward: complete the missing Stage-C deploy (inventory revisions), run `verify`,');
+      log('  and only then `reopen`. This tool will not reopen on a CLI exit code.');
+    } else {
+      log(`  resumable from ${j.state}. Re-run the next mode in sequence; each re-checks live state.`);
+    }
+    appendHistory(j, { mode, event: 'resume_inspected', state: j.state });
+    process.exit(0);
+  }
+}
+main().catch((e) => die(`fatal: ${e.message.split('\n')[0]}`, 2));
