@@ -305,7 +305,18 @@ export function evaluateWbmEdit(input: {
   if (dateTimeUTC) payload.dateTimeUTC = dateTimeUTC;
   if (dateTime) payload.dateTime = dateTime;
   if (timezone) payload.timezone = timezone;
-  if (typeof packet.wellDownIsAuthoritative === 'boolean') {
+  // Three-state wellDown contract (Thor 1 incident, 8/30/2026): an explicit
+  // wellDown correction in a governed WB-M edit — i.e. `wellDown` is present in
+  // the editedFields mask — IS an authoritative driver assertion. Explicit
+  // true marks the well down; explicit false brings it online; an OMITTED
+  // wellDown (not in the mask) preserves the prior status. Previously the
+  // authority flag was only forwarded when the client happened to send it, so a
+  // driver's "bring online" edit (wellDown:false, no flag) was treated as
+  // non-authoritative and the live status stayed DOWN even though the processed
+  // record showed false. Deriving authority from the mask closes that gap.
+  if (maskSeen.has('wellDown')) {
+    payload.wellDownIsAuthoritative = true;
+  } else if (typeof packet.wellDownIsAuthoritative === 'boolean') {
     payload.wellDownIsAuthoritative = packet.wellDownIsAuthoritative;
   }
 

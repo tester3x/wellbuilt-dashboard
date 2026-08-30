@@ -312,3 +312,30 @@ describe('evaluateWbmEdit', () => {
     }).action).toBe('abort');
   });
 });
+
+describe('evaluateWbmEdit — three-state wellDown authority (Thor 1 incident, 8/30/2026)', () => {
+  const asPayload = (packet: Record<string, unknown>) =>
+    (evaluateWbmEdit({ ...scope, packet, original }) as { payload: Record<string, unknown> }).payload;
+
+  it('explicit wellDown:false in the editedFields mask → authoritative bring-online', () => {
+    const p = asPayload({ ...basePacket, editedFields: ['bblsTaken', 'wellDown'], wellDown: false });
+    expect(p.wellDown).toBe(false);
+    expect(p.wellDownIsAuthoritative).toBe(true); // was the Thor 1 gap: the flag was absent → status stayed DOWN
+  });
+
+  it('explicit wellDown:true in the mask → authoritative mark-down', () => {
+    const p = asPayload({ ...basePacket, editedFields: ['wellDown'], wellDown: true });
+    expect(p.wellDown).toBe(true);
+    expect(p.wellDownIsAuthoritative).toBe(true);
+  });
+
+  it('wellDown OMITTED from the mask → NOT authoritative (prior status preserved downstream)', () => {
+    const p = asPayload(basePacket); // mask = [tankLevelFeet, bblsTaken], no wellDown
+    expect(p.wellDownIsAuthoritative).toBeUndefined();
+  });
+
+  it('a client-sent wellDownIsAuthoritative is still honored when wellDown is not in the mask', () => {
+    const p = asPayload({ ...basePacket, wellDownIsAuthoritative: true });
+    expect(p.wellDownIsAuthoritative).toBe(true);
+  });
+});
