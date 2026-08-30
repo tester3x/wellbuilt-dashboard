@@ -329,13 +329,25 @@ async function main() {
     log('Verify — 4 consumer revisions match intended, incoming empty, no lock…');
     let db; try { ({ db } = await getDb()); } catch (e) { die(`cannot reach target to verify: ${e.message.split('\n')[0]}`); }
     const empty = await incomingEmpty(db); const lock = await anyLock(db);
-    // Revision verification against live functions metadata is a production
-    // read-only step (firebase functions:list); in dry-run/emulator we record
-    // the intended set and require the operator's revision proof.
-    const revisionsProven = j.stageC?.revisionsProven === true;
+    // Revision proof: reconcile live consumer revisions against the intended set
+    // (fail-closed; a CLI exit code is never trusted). --observed-revisions is a
+    // JSON map fn->revision from a read-only `firebase functions:list`; --intended
+    // -revisions likewise. When both are present we reconcile; otherwise we fall
+    // back to a recorded proof flag (set by an executed stage-c).
+    let revisionsProven = j.stageC?.revisionsProven === true;
+    let reconcileNote = 'recorded proof flag';
+    const observedRaw = opt('--observed-revisions', null);
+    const intendedRaw = opt('--intended-revisions', j.stageC?.intended ? JSON.stringify(j.stageC.intended) : null);
+    if (observedRaw && intendedRaw) {
+      const { reconcileStageC } = require(join(ROOT, 'functions', 'lib', 'security', 'operational', 'stageCReconcile.js'));
+      const rr = reconcileStageC({ intended: JSON.parse(intendedRaw), observed: JSON.parse(observedRaw), lookupOk: true });
+      revisionsProven = rr.reopenAllowed;
+      reconcileNote = rr.note;
+      j.stageC = { ...(j.stageC || {}), lastReconcile: rr };
+    }
     const allOk = empty && !lock && revisionsProven;
-    log(`  incoming empty: ${empty}  no lock: ${!lock}  4-revisions proven: ${revisionsProven}`);
-    if (!allOk) { appendHistory(j, { mode, event: 'verify_incomplete', empty, lock, revisionsProven }); die('verify incomplete — reopen is refused until all proofs hold'); }
+    log(`  incoming empty: ${empty}  no lock: ${!lock}  4-revisions proven: ${revisionsProven} (${reconcileNote})`);
+    if (!allOk) { appendHistory(j, { mode, event: 'verify_incomplete', empty, lock, revisionsProven, reconcileNote }); die('verify incomplete — reopen is refused until all proofs hold'); }
     j.state = 'VERIFYING'; j.verifyPassed = true; appendHistory(j, { mode, event: 'verify_passed' });
     log('[controller] verify PASSED — reopen is now permitted (still requires full execution auth).');
     process.exit(0);

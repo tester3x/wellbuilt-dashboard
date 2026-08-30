@@ -79,17 +79,17 @@ async function main() {
   const verifyNoProof = run(['verify', '--rollout-id', RID]);
   check('verify without the 4-consumer revision proof is INCOMPLETE', verifyNoProof.code !== 0 && /revisions proven: false/i.test(verifyNoProof.out), verifyNoProof.out.split('\n').slice(-2).join(' | '));
 
-  // Simulate a COMPLETED Stage-C (all 4 consumer revisions verified) by setting
-  // the journal proof — in a real rollout `stage-c --execute` sets this. We
-  // cannot deploy here, so we record the proof the operator's revision check
-  // would produce.
-  const j = JSON.parse(readFileSync(jpath, 'utf8'));
-  j.stageC = { ...(j.stageC || {}), revisionsProven: true };
-  writeFileSync(jpath, JSON.stringify(j, null, 2));
+  // 8b) PARTIAL Stage-C: only 1 of 4 consumer revisions live → reconcile holds,
+  //     verify INCOMPLETE (a CLI exit code is never trusted).
+  const intended = JSON.stringify({ processIncomingPull: 'r1', processEditRequest: 'r1', processDeleteRequest: 'r1', watchdogStrandedPackets: 'r1' });
+  const partial = JSON.stringify({ processIncomingPull: 'r1', processEditRequest: 'r0', processDeleteRequest: 'r0', watchdogStrandedPackets: 'r0' });
+  const verifyPartial = run(['verify', '--rollout-id', RID, '--intended-revisions', intended, '--observed-revisions', partial]);
+  check('PARTIAL Stage-C (1/4 revisions) → verify INCOMPLETE, reopen blocked', verifyPartial.code !== 0 && /revisions proven: false/i.test(verifyPartial.out), verifyPartial.out.split('\n').slice(-2).join(' | '));
 
-  // 9) verify WITH proof + empty/no-lock → passes.
-  const verifyOk = run(['verify', '--rollout-id', RID]);
-  check('verify PASSES with 4-revision proof + empty incoming + no lock', verifyOk.code === 0 && /verify PASSED/.test(verifyOk.out), verifyOk.out.split('\n').slice(-2).join(' | '));
+  // 9) verify with all FOUR intended revisions live → passes (reconcile ok).
+  const complete = JSON.stringify({ processIncomingPull: 'r1', processEditRequest: 'r1', processDeleteRequest: 'r1', watchdogStrandedPackets: 'r1' });
+  const verifyOk = run(['verify', '--rollout-id', RID, '--intended-revisions', intended, '--observed-revisions', complete]);
+  check('verify PASSES with all 4 consumer revisions matching + empty incoming + no lock', verifyOk.code === 0 && /verify PASSED/.test(verifyOk.out), verifyOk.out.split('\n').slice(-2).join(' | '));
 
   // 10) reopen WITH full auth → CAS reopen (paused:false).
   const reopen = run(['reopen', ...auth, '--expect-state', 'VERIFYING']);
