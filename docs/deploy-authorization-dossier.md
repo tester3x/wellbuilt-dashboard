@@ -154,6 +154,45 @@ original ids; the new canonical consumers process them idempotently (the
 content-derived ids dedupe retries), so no pull is lost or double-counted. The
 window is a few minutes (Stage-C deploy + 180 s + verify).
 
+## Rev-4 final-preflight updates (items 1–5)
+
+1. **Mutation roots enumerated.** All three of processIncomingPull /
+   processEditRequest / processDeleteRequest trigger on the SINGLE root
+   `packets/incoming/{packetId}` (proven from the trigger defs, dispatched by
+   `requestType`); the watchdog is scheduled over the same root. The only other
+   RTDB trigger in the codebase is `users/{uid}` (unrelated). Live read-only
+   counts: `packets/incoming` = 0 (create 0 / edit 0 / delete 0); no
+   `packets/editRequests` or `packets/deleteRequests` roots exist; `rejected`
+   (258) and `outgoing` (75) are not mutation queues. The controller drain now
+   samples all roots (incoming by requestType, coordinator `chronoLock`,
+   watchdog re-keys) and requires CONTINUOUS cleanliness for the full 180s —
+   any dirty sample RESETS the horizon. Emulator-proven: a queued EDIT / DELETE
+   / active lock each block the drain (→ Stage C refused), and a mid-horizon
+   EDIT restarts the full horizon yet completes after removal.
+2. **Deployed artifacts downloaded + proven.** All seven deployed source
+   bundles were downloaded read-only, SHA-256'd (see
+   `deployed-old-provenance.md`), extracted, and confirmed redeployment-ready.
+   The four EXACT deployed consumer libs were composed and Stage-A re-ran
+   against them: 19/19. Deployed-artifact compatibility is proven (not just the
+   c7378d6 family).
+3. **One deployment SHA** — see the authorization block; the seven deployed
+   functions are byte-identical to `c3fc989` across the audit-only doc/tooling
+   commits (git diff `functions/src` = empty).
+4. **Stage-A stabilization rule pinned:** 120s (30s producer timeout + 90s
+   propagation/recovery margin). CLOSE is refused until all three producer
+   revisions match the intended build, the 120s has elapsed since they were
+   verified, and a repeat revision check still matches (a partial or
+   changed/rolled producer refuses).
+5. **Client claim corrected.** The phase-4 client
+   (`integration/wbm-chrono-client-refresh`, app 2.1.0 build 24) classifies the
+   maintenance response (UNAVAILABLE / 503 `wbm_mutations_paused`) as transient
+   and retains the queued CREATE **and** EDIT with original id + payload
+   (regression tests added). vc25 and older builds predate this phase-4
+   `ingestRefusal` module and are NOT proven to behave this way. The installed
+   build on each physical phone is UNKNOWN. Correct phrasing: *"Compatible
+   client builds retain the mutation for retry; behavior of the currently
+   installed builds is unverified."*
+
 ## 6. Final authorization request — see the authorization block
 
 Assembled in the session response and reproduced from this dossier. It names

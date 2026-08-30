@@ -68,17 +68,45 @@ Because the input contract and trigger are stable across these versions, the
 Stage-A acceptance/drain/watchdog conclusions transfer to the deployed artifacts
 even though the exact deployed source is unproven.
 
-## Operator action to close before rollout (read-only)
+## Deployed-artifact download, hashes, and compatibility (final preflight item 2)
 
-To convert **UNKNOWN → byte-exact or a precise delta**, the authorized operator
-should, before the Stage-C cutover:
-1. Download the deployed source archives (v1 `sourceUploadUrl`, v2
-   `storageSource` above — read-only GCS) and diff the four consumers against
-   the candidate commits (`c7378d6` and the deploy-era `2774168`), OR
-2. Consult the deploy/CI records that produced buildIds
-   `3b4ea964…`, `2048a987…`, `e81d4fe1…`, `01d3c002…` to pin the exact source
-   commit for each, then re-run `stageA.mjs` against that source.
+The deployed source bundles for ALL SEVEN functions were downloaded read-only
+(v1 via Cloud Functions `generateDownloadUrl`; v2 via the GCS `storageSource`
+JSON API — tokens and signed URLs never printed), SHA-256'd, and extracted to a
+non-repository rollback directory. Each contains `package.json`, compiled
+`lib/index.js`, `src/`, and `package-lock.json` (firebase-functions ^7.0.5); no
+`node_modules` (Cloud Build installs them) — readable and redeployment-sufficient.
 
-This is a read-only verification step; it was not performed here because it
-requires downloading and diffing deployed artifacts, and the field-contract
-stability above already makes the compatibility conclusion robust.
+| function | gen | deployed id | archive SHA-256 | bytes |
+|---|---|---|---|---|
+| processIncomingPull | v1 | versionId 79 | `ad824ef04eb56011fe56f5ce70e48d2998f427b07574b82cbedc99b2b14b2d99` | 1,754,905 |
+| processEditRequest | v1 | versionId 77 | `cf3c03d5cce19df93dfdaf6c062c0c0591c4c8f17a34c5c12dd3526e8d26f252` | 805,398 |
+| processDeleteRequest | v1 | versionId 72 | `708b33adf1adf3df8c4e1e072cdc98e63a6537c96cfadb86b2384736713c33bb` | 13,959,198 |
+| watchdogStrandedPackets | v2 | obj gen 1784749082509910 | `d3e0fc135183ad86ff5e8ef7599d8e935b903b3bd101e34df6b2c17ae3aab59e` | 777,255 |
+| ingestWbmPull | v2 | obj gen 1787441787281543 | `097a1233733966019ba8794f3b6908c01208527bc6d209db3a0626c055b42df0` | 1,754,650 |
+| ingestWbmEdit | v2 | obj gen 1787724935413483 | `d895b907fd67acffc50073c3c1285d32ad1e804502386759a5440f270703cf3f` | 1,784,302 |
+| adminSubmitPullEdit | v2 | obj gen 1787445498852255 | `f6a06a70b350438f7cf26a7428b99aa8c934e09439caa3ba9951dd5885b81f41` | 1,762,065 |
+
+The four deployed **consumer** libs each load, export their function, and
+register the correct trigger (`packets/incoming/{packetId}` ×3; scheduled
+watchdog). Composing the four exact deployed consumer libs (each from its own
+archive) and re-running the Stage-A mixed-generation harness against them
+(`WB_OLD_LIB=<composite>`): **ALL 19 pass** — the actual deployed consumer code
+accepts and applies the new gated-producer packet shapes, already-accepted work
+drains, incoming empties, and the deployed watchdog leaves no stranded work.
+
+**Upgraded typed conclusion:** the deployed-consumer compatibility is now proven
+against the **exact deployed artifacts** (downloaded, byte-hashed, and executed
+in the emulator), not merely the `c7378d6` source family. The archive SHA-256s
+above are the byte-identities of the deployed source bundles; they are the
+authoritative rollback sources. The `c7378d6` reconstruction remains valid
+secondary evidence (the packet field-contract is identical across the family).
+Residual nuance: the archive is the deployed **source** bundle for the active
+revision; the running container is Cloud-Build-produced from it (adds
+node_modules) — the source `lib/index.js` is the authoritative code and is what
+the proof exercised.
+
+Reproduce (read-only): download via the API paths above → extract → junction
+`node_modules` → compose the four consumer exports → `WB_OLD_LIB=<composite>
+node functions/emulator/run.mjs stagea`. Archives are NOT committed (large;
+deployment artifacts).
