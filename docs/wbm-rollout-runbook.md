@@ -17,6 +17,16 @@ commit **regresses current** to the wrong pull. History is never lost, but
 current/outgoing can disagree. Quiescence during the deploy window eliminates
 the overlap.
 
+## Rules landmine — hashes, guard, and prepared (unapplied) fix
+
+- **Deployed (locked) rules** sha256 `5ba10f055a0673e151302b5f9b80ef6e38f006448acc8c7cd5bb47344899b314` — snapshot at `functions/emulator/fixtures/deployed-rules.json`.
+- **Local OPEN `database.rules.json`** sha256 `9271065c0f8639df63cd998333cba5ec6bce20ca90c1f779e117410cf0c29cea` (`.read:true, .write:true`) — a dev stub that MUST NOT reach production.
+- **Deployment guard** `functions/emulator/deployGuard.mjs` validates a proposed command and REFUSES if it references `database`/`hosting`, is a bare/whole-codebase deploy, names any function outside the approved allowlist (or an excluded new export), targets a project other than `wellbuilt-sync`, or runs from a dirty tree / wrong HEAD. Run it on the exact command before deploying:
+  ```bash
+  node functions/emulator/deployGuard.mjs '<the exact firebase deploy command>' --expect-sha <reviewed server SHA>
+  ```
+- **Prepared fix (do NOT apply without separate authorization):** align `database.rules.json` to the deployed locked ruleset by replacing its contents with `functions/emulator/fixtures/deployed-rules.json`. This is a **rules change** — out of scope for the functions-only deploy and left unapplied.
+
 ## Rules protection (verified — no rules change in this deploy)
 
 The **deployed** RTDB rules already deny every client write to all
