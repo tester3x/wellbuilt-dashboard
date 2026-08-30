@@ -23,6 +23,7 @@ import {
   wbmEditIncomingPath,
   wbmEditReceiptPath,
 } from './wbmEditAuthorize';
+import { checkMutationAdmission, MAINTENANCE_ERROR_CODE } from './mutationAdmission';
 
 export type WbmEditIngestStatus = 'accepted' | 'duplicate' | 'conflict' | 'pending' | 'invalid';
 
@@ -140,6 +141,11 @@ export const ingestWbmEdit = httpsV2.onCall(
       throw new httpsV2.HttpsError('invalid-argument', 'unexpected_field');
     }
     const driver = await requireSecureDriver(request, { allowLegacyHash: false });
+    // Blocker-3: staged-rollout admission gate (retryable when paused).
+    const admission = await checkMutationAdmission();
+    if (!admission.admitted) {
+      throw new httpsV2.HttpsError(MAINTENANCE_ERROR_CODE, admission.reason);
+    }
     const authority = await loadCanonicalDriverAuthority(
       driver.driverId,
       productionCanonicalDriverReaders(),

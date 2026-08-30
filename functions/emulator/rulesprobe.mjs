@@ -68,6 +68,7 @@ const PATHS = [
   ['packets/rejected/opX', null],                                  // delete evidence
   ['packets/incoming/forged_pkt', { requestType: 'pull', wellName: 'Gabriel 1', ingestedBy: 'driver_x', authSource: 'claims', payloadDigest: 'deadbeef' }],
   ['packets/outgoing/response_forged', { wellName: 'Gabriel 1' }],
+  ['system/maintenance/wbmMutations', { paused: false }], // Blocker-3 gate flag — server-owned
 ];
 
 async function probeRole(label, signIn) {

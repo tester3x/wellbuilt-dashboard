@@ -64,19 +64,68 @@ functions:processIncomingPull,functions:processEditRequest,functions:processDele
    `incoming_version`, and a well-state checksum (hash of
    `wells/<well>/status/lastPull.packetId` across wells — no private data).
 
-## Rollout (server-first, quiesced)
+## Enforceable admission gate (Blocker-3 mechanism)
 
-1. **Quiesce producers.** Pause driver submissions (operational notice) and
-   avoid Dashboard pull edits during the window. WB-M submissions are human-
-   paced, so a short window suffices.
-2. **Drain.** Confirm `packets/incoming` is empty and no `chronoLock` is held.
-3. **Deploy** the name-filtered list above. Watch the CLI: it must report
-   updates only to those six functions and **no deletions**. Abort if it
-   proposes deleting anything.
-4. **Wait past the takeover horizon** (≥ 180 s: 120 s trigger timeout + 60 s
-   recovery margin) before resuming producers, so any old in-flight worker has
-   provably ended before new work begins.
-5. **Resume producers.**
+Quiescence is MECHANICALLY ENFORCED by a governed flag, not by operator
+discipline:
+
+- `system/maintenance/wbmMutations = { paused: true|false, reason, at, by }` —
+  a **server-owned** path (deployed rules deny every client write; proven by
+  `rulesprobe.mjs`). Only the deploy operator (Admin SDK / console) sets it.
+- Every WB-M mutation **producer** checks it before writing `packets/incoming`
+  and, when paused, refuses with a **retryable** callable code
+  (`unavailable` / HTTP 503, message `wbm_mutations_paused`). The WB-M client
+  classifies that as transient and **retains** the queued packet — never
+  marks it sent/rejected, never falls back to a direct RTDB write.
+- Gated in this candidate: `ingestWbmPull`, `ingestWbmEdit`. The retained
+  Dashboard `adminSubmitPullEdit` needs the same 4-line check (patch below) —
+  add it to the manifest (making 7 functions) so the pause covers **every**
+  producer.
+- The flag **fails OPEN** (absent/malformed → admitted), so a missing flag can
+  never wedge production.
+
+Proven on the real emulator (`gate.mjs`, 10/10): open→accepted;
+closed→retryable refusal with NO incoming write and no revision signal;
+already-accepted incoming still drains; retry-while-closed stays refused with
+the packet retained; reopen→the same packet id is accepted and materializes.
+
+### Prepared `adminSubmitPullEdit` gate patch (report only — apply on its own branch, do NOT deploy here)
+
+In `functions/src/security/dashboardPullEdit.ts`, immediately after
+`requireManageDrivers(...)` resolves:
+```ts
+// Blocker-3: honor the WB-M mutation admission gate (retryable when paused).
+const gate = (await admin.database().ref('system/maintenance/wbmMutations').once('value')).val();
+if (gate && typeof gate === 'object' && gate.paused === true) {
+  throw new httpsV2.HttpsError('unavailable', typeof gate.reason === 'string' && gate.reason ? gate.reason : 'wbm_mutations_paused');
+}
+```
+
+## Staged rollout (server-first, gate-enforced)
+
+**STAGE A — deploy gate-capable producers, gate OPEN.**
+Deploy `ingestWbmPull`, `ingestWbmEdit` (+ gated `adminSubmitPullEdit` from its
+branch) while `wbmMutations.paused` is false/absent. Prove packet shape and
+normal behavior unchanged (a real pull still processes). No trigger swap yet.
+
+**STAGE B — CLOSE the gate, drain, wait.**
+Set `wbmMutations = { paused: true, reason: 'rollout-<date>', at, by }`.
+Verify new submissions return the retryable maintenance code and are retained
+client-side. Drain: confirm `packets/incoming` is empty and no
+`wells/<well>/status/chronoLock` is held. **Wait ≥ 180 s** (120 s trigger
+timeout + 60 s recovery margin) so no old commit-owning invocation remains.
+
+**STAGE C — deploy the canonical triggers + watchdog.**
+Deploy `processIncomingPull`, `processEditRequest`, `processDeleteRequest`,
+`watchdogStrandedPackets` with the exact name filter. Watch the CLI plan:
+**abort** on any deletion, rules, hosting, or unrelated-function action.
+
+**STAGE D — verify, reopen, monitor.**
+Read-only health check (function revisions report the intended hash, no lock
+held, incoming empty). Set `wbmMutations.paused = false`. Monitor the first
+genuine field mutation end-to-end: receipt, chronological history, current
+state, both revision signals, performance, production, outgoing, incoming
+deletion.
 
 Success proof (read-only): the next pull writes a
 `wells/<well>/chronoReceipts/<packetId>` receipt, advances

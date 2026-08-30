@@ -19,6 +19,7 @@ import {
   isFirebaseKeySafe,
 } from './wbmPullAuthorize';
 import { logIngestRefusal, safePayloadDigest, sanitizeClientMeta } from './ingestRefusalLog';
+import { checkMutationAdmission, MAINTENANCE_ERROR_CODE } from './mutationAdmission';
 
 export const ingestWbmPull = httpsV2.onCall(
   { timeoutSeconds: 30, memory: '256MiB', enforceAppCheck: false },
@@ -31,6 +32,13 @@ export const ingestWbmPull = httpsV2.onCall(
     const driver = await requireSecureDriver(request, { allowLegacyHash: false });
     refusalCtx.uid = driver.uid;
     refusalCtx.driverId = driver.driverId;
+    // Blocker-3: staged-rollout admission gate. When paused, refuse with a
+    // RETRYABLE code BEFORE writing packets/incoming so no new mutation input
+    // enters during the trigger swap; the client keeps the queued packet.
+    const admission = await checkMutationAdmission();
+    if (!admission.admitted) {
+      throw new httpsV2.HttpsError(MAINTENANCE_ERROR_CODE, admission.reason);
+    }
     const authority = await loadCanonicalDriverAuthority(
       driver.driverId,
       productionCanonicalDriverReaders(),

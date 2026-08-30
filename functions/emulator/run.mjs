@@ -41,6 +41,7 @@ const MODES = {
     },
   },
   ingest: { only: 'functions,database,firestore,auth', script: 'node functions/emulator/ingest.mjs' },
+  gate: { only: 'functions,database,firestore,auth', script: 'node functions/emulator/gate.mjs' },
   adminedit: { only: 'functions,database,firestore', script: 'node functions/emulator/adminEditCompat.mjs' },
   mixed: { only: 'functions,database,firestore', script: 'node functions/emulator/mixedVersion.mjs' },
   rulesprobe: { only: 'database,auth', script: 'node functions/emulator/rulesprobe.mjs', config: 'firebase.rulesprobe.json' },
