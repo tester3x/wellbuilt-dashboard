@@ -110,6 +110,18 @@ async function main() {
 
   await signOut(cauth).catch(() => {});
 
+  // 5b) INGEST TRUST (item 2): the trust anchor is `packets/incoming .write:false`
+  //     + Admin-SDK-only callable. Prove no client can (a) forge an incoming
+  //     packet carrying callable stamps, or (b) tamper with an admin-written
+  //     incoming packet after ingest — for EVERY authenticated role.
+  await adb.ref('packets/incoming/admin_written_pkt').set({ requestType: 'pull', wellName: 'Gabriel 1', packetId: 'admin_written_pkt', companyId: 'liquid-gold', ingestedBy: 'driver_real', authSource: 'claims', payloadDigest: 'realdigest', bblsTaken: 140 });
+  for (const [label, tok] of [['driver', driverTok], ['other-co', otherTok], ['platform-admin', adminTok], ['staff', staffTok]]) {
+    await signInWithCustomToken(cauth, tok);
+    check(`[${label}] cannot FORGE an incoming packet with callable stamps`, (await clientWrite('packets/incoming/forged_stamped', { requestType: 'pull', wellName: 'Gabriel 1', packetId: 'forged_stamped', ingestedBy: 'driver_real', authSource: 'claims', payloadDigest: 'deadbeef', companyId: 'liquid-gold' })) === 'denied');
+    check(`[${label}] cannot TAMPER with an admin-written incoming packet`, (await clientWrite('packets/incoming/admin_written_pkt/bblsTaken', 99999)) === 'denied');
+    await signOut(cauth).catch(() => {});
+  }
+
   // 6) Admin SDK RETAINS server access to every coordinator path.
   const adminOk = [];
   for (const [path, value] of PATHS) {
