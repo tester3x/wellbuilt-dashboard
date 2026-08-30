@@ -126,7 +126,10 @@ Proven on the real emulator:
   different material→both events evidenced; auth failures stay auth failures
   (checked before the gate); the gate is server-owned and not client-forgeable.
 - `stageA.mjs` (19/19) — the exact Stage-A window (new gated producers + the
-  deployed OLD consumers built from `c7378d6`): old consumers accept and apply
+  OLD consumers built from `c7378d6`, a pre-chrono source-family commit — see
+  `docs/deployed-old-provenance.md`: the exact deployed source is UNKNOWN, but
+  the old processor's read fields + trigger are identical across the family):
+  old consumers accept and apply
   the new producer packet shapes; closing the gate stops all three producers;
   already-accepted old work drains; the old watchdog leaves no stranded work;
   the drain window stays quiescent.

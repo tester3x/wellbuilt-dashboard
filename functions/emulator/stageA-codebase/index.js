@@ -6,7 +6,8 @@
 //
 // The producers are the REAL compiled functions from THIS branch's build
 // (functions/lib). The consumers are the REAL compiled functions built from the
-// deployed pre-chrono commit c7378d6, whose absolute lib path is supplied by the
+// pre-chrono source-family commit c7378d6 (NOT proven to be the deployed source;
+// see docs/deployed-old-provenance.md), whose absolute lib path is supplied by the
 // WB_OLD_LIB env var (the stagea run mode builds it into a throwaway worktree).
 //
 // EMULATOR-ONLY. Never referenced by firebase.json; never deployed.

@@ -49,12 +49,15 @@ for (const fn of CONSUMERS) {
   if (f.source?.storageSource) console.log(`    source archive: gs://${f.source.storageSource.bucket}/${f.source.storageSource.object} (gen ${f.source.storageSource.generation})`);
 }
 
-console.log(`\nClassification: SOURCE-IDENTICAL to c7378d6 with EXACT old runtime deps`);
-console.log(`  (firebase-functions@7.0.5, firebase-admin@13.6.0 — byte-identical to the c7378d6 functions/package-lock.json).`);
-console.log(`  Every observable deployed metadata field is CONSISTENT with the c7378d6 source (${allConsistent ? 'all consistent' : 'SEE MISMATCH ABOVE'}).`);
-console.log(`Limitation (honest): gcloud is unavailable here and functions:list exposes no updateTime/versionId`);
-console.log(`  and no downloadable v1 source archive, so the DEPLOYED ARTIFACT byte-identity cannot be`);
-console.log(`  recomputed locally (firebase's deploy-time hash is not reproducible without the deploy`);
-console.log(`  packaging pipeline). Byte-identity: UNPROVEN. Deploy-lineage: c7378d6 is INFERRED as the`);
-console.log(`  deployed pre-chrono source (it is this branch's merge-base and every field matches).`);
+console.log(`\nClassification (corrected Rev-4 preflight): deployed metadata CONSISTENT with the`);
+console.log(`  OLD-consumer source family (${allConsistent ? 'all fields consistent' : 'SEE MISMATCH ABOVE'}); deployed-artifact`);
+console.log(`  identity UNKNOWN. The four consumers were last deployed at DIFFERENT times`);
+console.log(`  (versionIds 79/77/72; Jun–Aug 2026), whereas c7378d6 is the branch MERGE-BASE`);
+console.log(`  dated 2026-07-09 — it is NOT the deployed source (processIncomingPull was deployed`);
+console.log(`  2026-08-22). No local commit is proven to equal a deployed artifact.`);
+console.log(`  The Stage-A harness built from c7378d6 is a SOURCE-FAMILY reconstruction; its`);
+console.log(`  compatibility conclusion holds because the old processor's read fields + trigger`);
+console.log(`  path are identical across c7378d6 / deploy-era 2774168 / branch tip 36d37e5.`);
+console.log(`  See docs/deployed-old-provenance.md for the REST-described identities (versionId,`);
+console.log(`  updateTime, buildId) and the read-only operator step to reach byte-exact.`);
 process.exit(allConsistent ? 0 : 1);
