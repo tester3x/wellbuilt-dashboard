@@ -143,6 +143,24 @@ async function watchdogKeys(db) {
   const inc = (await db.ref('packets/incoming').once('value')).val() || {};
   return Object.keys(inc).filter((k) => /_clone|_retrig/i.test(k));
 }
+// The three mutation triggers (processIncomingPull / processEditRequest /
+// processDeleteRequest) all fire on packets/incoming/{packetId} and dispatch by
+// requestType (proven from the trigger definitions). So the CREATE, EDIT and
+// DELETE queues are one RTDB root; we still report each logical count and treat
+// a coordinator lock as the in-flight-work marker.
+async function sampleQuiescence(db) {
+  const inc = (await db.ref('packets/incoming').once('value')).val() || {};
+  const keys = Object.keys(inc);
+  const byType = { create: 0, edit: 0, delete: 0, other: 0 };
+  for (const k of keys) {
+    const t = inc[k]?.requestType;
+    if (t === 'edit') byType.edit++; else if (t === 'delete') byType.delete++; else if (t === undefined || t === 'pull') byType.create++; else byType.other++;
+  }
+  const clones = keys.filter((k) => /_clone|_retrig/i.test(k));
+  const lock = await anyLock(db);
+  const dirty = keys.length > 0 || lock || clones.length > 0;
+  return { keys: keys.length, byType, clones: clones.length, lock, dirty };
+}
 
 // ── execution authorization ──
 function requireExecutionAuth(j, expectState) {
@@ -286,24 +304,32 @@ async function main() {
 
   if (mode === 'drain') {
     if (j.state === 'HELD_CLOSED') die('HELD_CLOSED — reconcile first');
-    log(`Drain + ${HORIZON_SECONDS}s horizon (continuous-empty incoming, no lock, no new watchdog keys)…`);
+    log(`Drain + ${HORIZON_SECONDS}s CONTINUOUS-clean horizon across CREATE/EDIT/DELETE (packets/incoming), coordinator lock, and watchdog re-keys…`);
     let db;
     try { ({ db } = await getDb()); }
-    catch (e) { log(`[controller] drain PLANNED (no live target: ${e.message.split('\n')[0]}). Would poll incoming+lock for the horizon.`); j.state = 'PAUSE_REQUESTED'; appendHistory(j, { mode, event: 'drain_planned' }); process.exit(0); }
-    const start = Date.now();
+    catch (e) { log(`[controller] drain PLANNED (no live target: ${e.message.split('\n')[0]}). Would poll all roots for the horizon.`); j.state = 'PAUSE_REQUESTED'; appendHistory(j, { mode, event: 'drain_planned' }); process.exit(0); }
     const horizonMs = HORIZON_SECONDS * 1000;
-    let ok = true, firstBreach = null;
-    // Sample continuously — a single empty snapshot is NOT sufficient.
-    while (Date.now() - start < horizonMs) {
-      const empty = await incomingEmpty(db);
-      const lock = await anyLock(db);
-      const clones = await watchdogKeys(db);
-      if (!empty || lock || clones.length) { ok = false; firstBreach = firstBreach || { at: nowIso(), empty, lock, clones }; }
+    // The horizon must be met by CONTINUOUS cleanliness: ANY dirty sample RESETS
+    // the clock (a queued EDIT/DELETE at second 179 restarts the full 180 s).
+    // We give up (stay DRAINING → refuse) if we cannot achieve a clean horizon
+    // within a bounded budget.
+    const budgetMs = Number(process.env.WB_DRAIN_BUDGET_MS || horizonMs * 8);
+    const overallStart = Date.now();
+    let cleanSince = Date.now();
+    let restarts = 0; let lastDirty = null;
+    for (;;) {
+      const s = await sampleQuiescence(db);
+      if (s.dirty) { restarts++; lastDirty = { at: nowIso(), ...s }; cleanSince = Date.now(); }
+      else if (Date.now() - cleanSince >= horizonMs) break; // clean for the full horizon
+      if (Date.now() - overallStart > budgetMs) {
+        j.state = 'DRAINING'; appendHistory(j, { mode, event: 'drain_not_reached', restarts, lastDirty });
+        die(`drain did NOT reach a clean ${HORIZON_SECONDS}s horizon within budget (restarts=${restarts}, lastDirty=${JSON.stringify(lastDirty)}) — Stage C refused`);
+      }
       await new Promise((r) => setTimeout(r, Math.min(1000, horizonMs / 5)));
     }
-    if (!ok) { j.state = 'DRAINING'; appendHistory(j, { mode, event: 'drain_breached', firstBreach }); die(`drain horizon BREACHED (incoming/lock/watchdog activity): ${JSON.stringify(firstBreach)}`); }
-    j.state = 'DRAINED_180'; j.horizonClearedIso = nowIso(); appendHistory(j, { mode, event: 'drained_180', horizonSeconds: HORIZON_SECONDS });
-    log(`[controller] DRAINED_180 — incoming continuously empty, no lock, no new watchdog keys for ${HORIZON_SECONDS}s.`);
+    j.state = 'DRAINED_180'; j.horizonClearedIso = nowIso();
+    appendHistory(j, { mode, event: 'drained_180', horizonSeconds: HORIZON_SECONDS, restarts });
+    log(`[controller] DRAINED_180 — CREATE/EDIT/DELETE incoming empty, no coordinator lock, no watchdog re-key, CONTINUOUSLY for ${HORIZON_SECONDS}s (restarts during drain: ${restarts}).`);
     process.exit(0);
   }
 

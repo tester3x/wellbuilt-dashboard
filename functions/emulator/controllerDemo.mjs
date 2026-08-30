@@ -6,7 +6,7 @@
 // production path additionally requires WB_ROLLOUT_PROD_AUTHORIZED=1, never set.
 //
 // RUN: node functions/emulator/run.mjs controller
-import { execFileSync } from 'node:child_process';
+import { execFileSync, spawn } from 'node:child_process';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { rmSync, existsSync, readFileSync, writeFileSync } from 'node:fs';
@@ -31,6 +31,15 @@ function run(args, env = {}) {
     const out = execFileSync('node', [CTRL, ...args], { cwd: ROOT, encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'], env: { ...process.env, ...env } });
     return { code: 0, out };
   } catch (e) { return { code: e.status ?? 1, out: `${e.stdout || ''}${e.stderr || ''}` }; }
+}
+const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+function runAsync(args, env = {}) {
+  return new Promise((resolve) => {
+    const p = spawn('node', [CTRL, ...args], { cwd: ROOT, env: { ...process.env, ...env } });
+    let out = '';
+    p.stdout.on('data', (d) => (out += d)); p.stderr.on('data', (d) => (out += d));
+    p.on('close', (code) => resolve({ code: code ?? 1, out }));
+  });
 }
 const git = (a) => execFileSync('git', a, { cwd: ROOT, encoding: 'utf8' }).trim();
 
@@ -60,16 +69,42 @@ async function main() {
   check('close --execute performs the CAS: flag paused:true, governed metadata present', (await flagVal())?.paused === true && (await flagVal())?.rolloutId === RID && (await flagVal())?.state === 'CLOSED', JSON.stringify(await flagVal()));
   check('CAS changedAt is a server timestamp (number)', typeof (await flagVal())?.changedAt === 'number', JSON.stringify((await flagVal())?.changedAt));
 
-  // 5) drain with a NON-empty incoming → horizon BREACH → fail-closed, stays CLOSED.
-  await db.ref('packets/incoming/wbm_x').set({ requestType: 'pull', wellName: 'W', packetId: 'wbm_x' });
-  const drainBreach = run(['drain', '--rollout-id', RID, '--horizon-seconds', '2']);
-  check('drain BREACHES on non-empty incoming and refuses DRAINED_180', drainBreach.code !== 0 && /BREACH/i.test(drainBreach.out), drainBreach.out.split('\n').slice(-2).join(' | '));
-  check('after a drain breach the gate is STILL closed (fail-closed)', (await flagVal())?.paused === true);
+  // 5) A queued EDIT keeps the shared packets/incoming root dirty → drain never
+  //    reaches a clean horizon within budget → refused, gate stays CLOSED.
+  await db.ref('packets/incoming').set(null);
+  await db.ref('packets/incoming/edit_blk').set({ requestType: 'edit', wellName: 'W', packetId: 'edit_blk' });
+  const drainEdit = run(['drain', '--rollout-id', RID, '--horizon-seconds', '1'], { WB_DRAIN_BUDGET_MS: '2500' });
+  check('a queued EDIT blocks drain: no clean horizon within budget → refused', drainEdit.code !== 0 && /did NOT reach a clean/i.test(drainEdit.out), drainEdit.out.split('\n').slice(-2).join(' | '));
+  check('EDIT-blocked drain leaves state DRAINING (not DRAINED_180) → Stage C refused', run(['stage-c', ...auth, '--expect-state', 'DRAINED_180']).code !== 0 && (await flagVal())?.paused === true);
+
+  // 5b) A queued DELETE (same shared root) blocks drain identically.
+  await db.ref('packets/incoming').set(null);
+  await db.ref('packets/incoming/del_blk').set({ requestType: 'delete', wellName: 'W', packetId: 'del_blk' });
+  const drainDelete = run(['drain', '--rollout-id', RID, '--horizon-seconds', '1'], { WB_DRAIN_BUDGET_MS: '2500' });
+  check('a queued DELETE blocks drain: no clean horizon within budget → refused', drainDelete.code !== 0 && /did NOT reach a clean/i.test(drainDelete.out), drainDelete.out.split('\n').slice(-2).join(' | '));
+
+  // 5c) An active coordinator lock (in-flight canonical work) blocks drain.
+  await db.ref('packets/incoming').set(null);
+  await db.ref('wells/Gabriel 1/status/chronoLock').set({ token: 'x', at: Date.now() });
+  const drainLock = run(['drain', '--rollout-id', RID, '--horizon-seconds', '1'], { WB_DRAIN_BUDGET_MS: '2500' });
+  check('an active coordinator chronoLock blocks drain → refused', drainLock.code !== 0 && /did NOT reach a clean/i.test(drainLock.out), drainLock.out.split('\n').slice(-2).join(' | '));
+  await db.ref('wells/Gabriel 1/status/chronoLock').set(null);
 
   // 6) drain clean → DRAINED_180.
   await db.ref('packets/incoming').set(null);
   const drainOk = run(['drain', '--rollout-id', RID, '--horizon-seconds', '2']);
   check('drain over a continuously-empty horizon → DRAINED_180', drainOk.code === 0 && /DRAINED_180/.test(drainOk.out), drainOk.out.split('\n').slice(-2).join(' | '));
+
+  // 6b) SECOND-179 RESTART: a queued EDIT appearing mid-horizon RESTARTS the full
+  //     drain — the drain only completes a fresh clean horizon after removal.
+  await db.ref('packets/incoming').set(null);
+  const drainAsync = runAsync(['drain', '--rollout-id', RID, '--horizon-seconds', '2'], { WB_DRAIN_BUDGET_MS: '30000' });
+  await sleep(900); await db.ref('packets/incoming/edit_179').set({ requestType: 'edit', wellName: 'W', packetId: 'edit_179' }); // arrives mid-horizon
+  await sleep(400); await db.ref('packets/incoming').set(null); // clears; a fresh full horizon must now elapse
+  const restartRes = await drainAsync;
+  const jr = JSON.parse(readFileSync(jpath, 'utf8'));
+  const drained = [...(jr.history || [])].reverse().find((h) => h.event === 'drained_180');
+  check('mid-horizon EDIT RESTARTS the drain (restarts>=1) yet it still completes cleanly', restartRes.code === 0 && drained && drained.restarts >= 1, JSON.stringify({ code: restartRes.code, restarts: drained?.restarts }));
 
   // 7) reopen BEFORE verify → refused (verify not passed).
   const reopenEarly = run(['reopen', ...auth, '--expect-state', 'VERIFYING']);
