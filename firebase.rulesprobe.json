@@ -1,0 +1,11 @@
+{
+  "database": { "rules": "functions/emulator/fixtures/deployed-rules.json" },
+  "emulators": {
+    "database": { "port": 9002 },
+    "auth": { "port": 9199 },
+    "hub": { "port": 4402 },
+    "logging": { "port": 4502 },
+    "ui": { "enabled": false },
+    "singleProjectMode": true
+  }
+}

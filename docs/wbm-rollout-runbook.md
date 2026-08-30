@@ -1,0 +1,121 @@
+# WB-M canonical pipeline — rollout & rollback runbook
+
+Prepared by the predeployment safety gate (2026-08-30). **Operational
+reference only — this document performs nothing.** Server candidate
+`integration/wbm-backdated-chrono-reconcile` @ `ef2e711`, client
+`integration/wbm-chrono-client-refresh` @ `19e4876`.
+
+## Why a governed rollout (not "deploy all filtered quickly")
+
+A filtered multi-function deploy is **not atomic**, and the old and new
+pipelines have **incompatible concurrency models**: the old pipeline writes
+`wells/<well>/status` as a **full-node `.set()`** (wiping `chronoLock` /
+`chronoRevision`) with sequential non-atomic writes; the new pipeline uses a
+per-well lock + one atomic multipath patch. Proven on the emulator
+(`mixedVersion.mjs`, RACE2): an old operation acting on a well **after** a new
+commit **regresses current** to the wrong pull. History is never lost, but
+current/outgoing can disagree. Quiescence during the deploy window eliminates
+the overlap.
+
+## Rules protection (verified — no rules change in this deploy)
+
+The **deployed** RTDB rules already deny every client write to all
+coordinator-owned state — `packets/{incoming,processed,rejected,outgoing,
+incoming_version}` and `wells/$well/*` each resolve to `.write:false`, so the
+new children (`incoming_revision_v2`, `editReceipts`, `chronoReceipts`,
+`chronoLock`, `chronoRevision`) inherit denial. Proven by `rulesprobe.mjs`
+(client SDK, 59/59 denied across unauth / driver / other-company / platform-
+admin / staff; Admin SDK retains access). **The local `database.rules.json`
+in this repo is OPEN (`.write:true`) — a dev stub. It MUST NOT be deployed.**
+
+## Deploy manifest (exact — do not run here)
+
+Single codebase `dashboard`. Deploy ONLY the WB-M pipeline functions by name:
+
+```bash
+firebase deploy --project wellbuilt-sync --only \
+functions:processIncomingPull,functions:processEditRequest,functions:processDeleteRequest,functions:watchdogStrandedPackets,functions:ingestWbmPull,functions:ingestWbmEdit
+```
+
+- A **name-filtered** function deploy touches only the listed functions and
+  never deletes unlisted ones.
+- **NEVER** run `firebase deploy` (bare), `--only functions` (whole codebase),
+  or `--only functions:dashboard` — the branch source is missing 31 live
+  functions (adminSubmitPullEdit, estimation-hold, split-leg, transfer, WB-T,
+  JSA, hosting SSR, …), so a whole-codebase deploy would **prompt to delete
+  them**. Never accept a deletion prompt.
+- **NEVER** run `--only database` / `--only hosting` — the open local rules
+  would clobber the safe deployed rules.
+- New branch exports that must **not** deploy: `getGovernedWellConfig`,
+  `staffHydrateCanonicalIdentity`, `staffRetireLegacyDriverLogin` (excluded by
+  the name filter above).
+
+## Preflight
+
+1. Confirm SHAs: server `ef2e711`, client `19e4876`; both worktrees clean.
+2. Confirm the deploy string is the exact name-filtered list above.
+3. Confirm rules protection unchanged (deployed rules locked; do not deploy
+   `database`).
+4. `packets/incoming` **must be empty** (no active work): read-only
+   `firebase database:get /packets/incoming --shallow`.
+5. No active coordinator lock: read-only check that no
+   `wells/<well>/status/chronoLock` exists.
+6. Record current function revisions (`firebase functions:list`), current
+   `incoming_version`, and a well-state checksum (hash of
+   `wells/<well>/status/lastPull.packetId` across wells — no private data).
+
+## Rollout (server-first, quiesced)
+
+1. **Quiesce producers.** Pause driver submissions (operational notice) and
+   avoid Dashboard pull edits during the window. WB-M submissions are human-
+   paced, so a short window suffices.
+2. **Drain.** Confirm `packets/incoming` is empty and no `chronoLock` is held.
+3. **Deploy** the name-filtered list above. Watch the CLI: it must report
+   updates only to those six functions and **no deletions**. Abort if it
+   proposes deleting anything.
+4. **Wait past the takeover horizon** (≥ 180 s: 120 s trigger timeout + 60 s
+   recovery margin) before resuming producers, so any old in-flight worker has
+   provably ended before new work begins.
+5. **Resume producers.**
+
+Success proof (read-only): the next pull writes a
+`wells/<well>/chronoReceipts/<packetId>` receipt, advances
+`wells/<well>/status/chronoRevision`, replaces `packets/incoming_revision_v2`,
+and moves `packets/incoming_version` by exactly `1048576` per committed
+mutation. vc25 clients refresh because their strict-greater comparison against
+the persisted saturated value now passes (`incoming_version` finally moves).
+
+Abort conditions: CLI proposes a deletion; a deploy error leaves a partial
+function set; post-deploy a pull fails to produce a receipt.
+
+## Post-rollout smoke (real driver activity, read-only verification — no test packets under this authorization)
+
+- Newest CREATE → receipt + current advance + both revision signals.
+- Truly older CREATE (backdated) → stored behind current, `lateEntry:true`.
+- Equal-time CREATE → both survive, deterministic current.
+- EDIT moving later → current promotes.
+- DELETE → current recomputes.
+- vc25 legacy refresh observed (a vc25 device syncs on the first commit).
+- **No production repair/replay/reset** unless separately authorized.
+
+## Rollback (data-safe, behavior-regressive)
+
+Rollback = redeploy the previous (currently-deployed) legacy functions by the
+same name filter. Data written by the new pipeline stays **readable** by the
+old code (extra fields are additive; the old edit path recomputes from raw
+fields). Constraints:
+
+- **Quiesce and drain** first, exactly as for rollout.
+- **Wait ≥ 180 s** so no new-pipeline worker holds a lease across the swap.
+- The new `2^20` `incoming_version` increments remain compatible (old `+1`
+  resumes; old clients still see monotone growth).
+- New receipts / v2 nodes are ignored by the old server — harmless residue.
+- **Re-enabled old defects:** watchdog local-key-as-UTC cloning, the
+  20 BBL/ft tank-geometry hardcode, pre-commit partial writes, the frozen
+  revision signal, timestamp-identity current selection.
+- **Forward-fix-only case:** if **equal-time sibling rows** exist (created by
+  the new canonical tie-break), the old time-only/iteration-order current
+  selection can pick the wrong sibling after a delete — forward-fix rather
+  than roll back in that state.
+- Rollback is **prohibited** while any `chronoLock` is held or
+  `packets/incoming` is non-empty (drain first).

@@ -41,6 +41,9 @@ const MODES = {
     },
   },
   ingest: { only: 'functions,database,firestore,auth', script: 'node functions/emulator/ingest.mjs' },
+  adminedit: { only: 'functions,database,firestore', script: 'node functions/emulator/adminEditCompat.mjs' },
+  mixed: { only: 'functions,database,firestore', script: 'node functions/emulator/mixedVersion.mjs' },
+  rulesprobe: { only: 'database,auth', script: 'node functions/emulator/rulesprobe.mjs', config: 'firebase.rulesprobe.json' },
   suites: { only: 'database', script: 'cd functions && npx jest editTrail.emulator wbmPullCanonicalId.emulator editChronologicalPrecedence wbtGovernedOps --silent --runInBand --forceExit', env: { FIRESTORE_EMULATOR_HOST: '127.0.0.1:8099' } },
 };
 
@@ -50,9 +53,10 @@ if (!mode) {
   process.exit(2);
 }
 
-const cfgPath = join(ROOT, CONFIG);
+const activeConfig = mode.config || CONFIG;
+const cfgPath = join(ROOT, activeConfig);
 if (!existsSync(cfgPath)) {
-  console.error(`[run] refusing to launch: ${CONFIG} not found — never run harnesses against a default (production) config`);
+  console.error(`[run] refusing to launch: ${activeConfig} not found — never run harnesses against a default (production) config`);
   process.exit(2);
 }
 const ports = Object.entries(JSON.parse(readFileSync(cfgPath, 'utf8')).emulators || {})
@@ -82,7 +86,7 @@ console.log(`  os:        ${os.platform()} ${os.release()}`);
 console.log(`  java:      ${javaVersion}`);
 console.log(`  firebase:  ${cliVersion}`);
 console.log(`  socketTmp: ${process.platform === 'win32' ? SHORT_TMP : '(not needed on this OS)'}`);
-console.log(`  project:   ${PROJECT} (emulator config ${CONFIG})`);
+console.log(`  project:   ${PROJECT} (emulator config ${activeConfig})`);
 console.log(`  ports:     ${ports.map(([k, p]) => `${k}:${p}`).join(' ')}`);
 
 // Port availability: refuse rather than fight an unknown occupant.
@@ -101,7 +105,7 @@ for (const [name, port] of ports) {
 }
 
 const isWin = process.platform === 'win32';
-const args = ['firebase', 'emulators:exec', '--config', CONFIG, '--only', mode.only, '--project', PROJECT,
+const args = ['firebase', 'emulators:exec', '--config', activeConfig, '--only', mode.only, '--project', PROJECT,
   // The exec script is ONE argument; the Windows shell needs it quoted.
   isWin ? `"${mode.script}"` : mode.script];
 const child = spawn(
