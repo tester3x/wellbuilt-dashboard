@@ -18,6 +18,7 @@ export {
  * NOT deployed yet; selector: --only functions:adminBindDriverCompany
  */
 export { adminBindDriverCompany } from './companyBindingCallable';
+export { adminSubmitPullEdit } from './dashboardPullEdit';
 export {
   adminGetDashboardCatalog,
   adminGetWellPool,

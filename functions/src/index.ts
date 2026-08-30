@@ -5211,6 +5211,7 @@ export {
   // Governed initial company binding (canonical drivers). NOT deployed yet;
   // selector when approved: --only functions:adminBindDriverCompany
   adminBindDriverCompany,
+  adminSubmitPullEdit,
   adminGetDashboardCatalog,
   adminGetWellPool,
   adminGetWellHistory,
