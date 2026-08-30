@@ -35,7 +35,10 @@ const HERE = dirname(fileURLToPath(import.meta.url));
 const ROOT = join(HERE, '..', '..');
 const PROJECT = 'wellbuilt-sync';
 const BRANCH = 'integration/wbm-backdated-chrono-reconcile';
-const DEPLOYED_RULES_SHA256 = '5ba10f055a0673e151302b5f9b80ef6e38f006448acc8c7cd5bb47344899b314';
+const DEPLOYED_RULES_SHA256 = '5ba10f055a0673e151302b5f9b80ef6e38f006448acc8c7cd5bb47344899b314'; // raw-file (LF) reference
+// sha256 of JSON.stringify(JSON.parse(fixture)) — proven == the LIVE deployed
+// RTDB rules (read-only fetch of .settings/rules.json), and CRLF-independent.
+const DEPLOYED_RULES_NORMALIZED_SHA256 = 'fa73df0ac6dad02184c63a926d11e4972167042f547776eb20414f84d26c895c';
 const STAGE_A = ['ingestWbmPull', 'ingestWbmEdit', 'adminSubmitPullEdit'];
 const STAGE_C = ['processIncomingPull', 'processEditRequest', 'processDeleteRequest', 'watchdogStrandedPackets'];
 const ALL_SEVEN = [...STAGE_A, ...STAGE_C];
@@ -86,8 +89,15 @@ function builtExports() {
 function rulesHashOk() {
   const fixture = join(ROOT, 'functions', 'emulator', 'fixtures', 'deployed-rules.json');
   if (!existsSync(fixture)) return { ok: false, detail: 'deployed-rules fixture missing' };
-  const h = createHash('sha256').update(readFileSync(fixture)).digest('hex');
-  return { ok: h === DEPLOYED_RULES_SHA256, detail: `${h.slice(0, 16)} vs ${DEPLOYED_RULES_SHA256.slice(0, 16)}` };
+  // Hash the NORMALIZED JSON (parse → stringify) so the check is independent of
+  // line endings across checkouts/worktrees, and pin it to the value proven to
+  // equal the LIVE deployed rules (liveRules normalized sha256). A raw-byte hash
+  // is CRLF-fragile and does not survive a fresh git checkout.
+  let norm;
+  try { norm = JSON.stringify(JSON.parse(readFileSync(fixture, 'utf8'))); }
+  catch { return { ok: false, detail: 'fixture not valid JSON' }; }
+  const h = createHash('sha256').update(norm).digest('hex');
+  return { ok: h === DEPLOYED_RULES_NORMALIZED_SHA256, detail: `${h.slice(0, 16)} vs ${DEPLOYED_RULES_NORMALIZED_SHA256.slice(0, 16)}` };
 }
 function gateImplemented() {
   const src = readFileSync(join(ROOT, 'functions', 'src', 'security', 'dashboardPullEdit.ts'), 'utf8');
