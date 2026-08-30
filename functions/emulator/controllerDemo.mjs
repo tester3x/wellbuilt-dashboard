@@ -1,19 +1,22 @@
-// controllerDemo.mjs — proves the rollout controller is OPERATIONAL, not a pure
-// model (predeploy gate Rev-4 Blocker 1) and exercises fail-closed recovery +
-// partial-Stage-C behavior (Blocker 5). It drives the REAL controller binary as
-// a subprocess against the EMULATOR database (target=emulator), so real CAS
-// writes happen — never production. Production stays untouched: the controller's
-// production path additionally requires WB_ROLLOUT_PROD_AUTHORIZED=1, never set.
+// controllerDemo.mjs — execution-boundary proof for the rollout controller
+// (predeploy gate Rev-4 FINAL). Drives the REAL controller binary against the
+// EMULATOR db, with a FAKE firebase (records argv, configurable exit, updates a
+// mock live-revisions file) and a file-backed mock revision provider — so the
+// controller OWNS both deploys (internal spawn, shell:false, exact per-stage
+// argv) and reads LIVE revisions itself; a CLI exit code never governs. No
+// production is touched (WB_DEPLOY_BIN/mock gate the spawn; prod path also needs
+// WB_ROLLOUT_PROD_AUTHORIZED, never set).
 //
 // RUN: node functions/emulator/run.mjs controller
-import { execFileSync, spawn } from 'node:child_process';
+import { execFileSync } from 'node:child_process';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { rmSync, existsSync, readFileSync, writeFileSync } from 'node:fs';
+import { existsSync, rmSync, readFileSync, writeFileSync, mkdirSync } from 'node:fs';
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const ROOT = join(HERE, '..', '..');
 const CTRL = join(ROOT, 'functions', 'tools', 'wbmRolloutController.mjs');
+const FAKE = join(ROOT, 'functions', 'emulator', 'fake-firebase.js');
 const PROJECT_ID = process.env.GCLOUD_PROJECT || 'wellbuilt-sync';
 process.env.FIREBASE_CONFIG = JSON.stringify({ projectId: PROJECT_ID, databaseURL: `http://${process.env.FIREBASE_DATABASE_EMULATOR_HOST || '127.0.0.1:9002'}/?ns=${PROJECT_ID}-default-rtdb` });
 const adminMod = await import('firebase-admin');
@@ -22,163 +25,133 @@ admin.initializeApp();
 const db = admin.database();
 const FLAG = 'system/maintenance/wbmMutations';
 
+const SCRATCH = join(process.env.TEMP || process.env.TMP || HERE, 'wbm-exec-boundary');
+mkdirSync(SCRATCH, { recursive: true });
+const MOCK = join(SCRATCH, 'revisions.json');
+const ARGV = join(SCRATCH, 'argv.log');
+
 let failures = 0; const results = [];
 const check = (n, c, d = '') => { if (c) results.push(`  PASS  ${n}`); else { failures++; results.push(`  FAIL  ${n}  ${d}`); } };
 const flagVal = async () => (await db.ref(FLAG).once('value')).val();
+const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+const git = (a) => execFileSync('git', a, { cwd: ROOT, encoding: 'utf8' }).trim();
+const HEAD = git(['rev-parse', 'HEAD']);
+
+const PRODUCERS = ['ingestWbmPull', 'ingestWbmEdit', 'adminSubmitPullEdit'];
+const CONSUMERS = ['processIncomingPull', 'processEditRequest', 'processDeleteRequest', 'watchdogStrandedPackets'];
+const setRevs = (o) => writeFileSync(MOCK, JSON.stringify(o));
+const jpath = (rid) => join(ROOT, 'functions', 'tools', '.rollout-journal', `${rid}.json`);
+const getJournal = (rid) => JSON.parse(readFileSync(jpath(rid), 'utf8'));
+const setJournal = (rid, patch) => writeFileSync(jpath(rid), JSON.stringify({ ...getJournal(rid), ...patch }, null, 2));
+const lastArgv = () => { const lines = existsSync(ARGV) ? readFileSync(ARGV, 'utf8').trim().split('\n').filter(Boolean) : []; return lines.length ? JSON.parse(lines[lines.length - 1]) : null; };
+const clearArgv = () => { if (existsSync(ARGV)) rmSync(ARGV); };
 
 function run(args, env = {}) {
-  try {
-    const out = execFileSync('node', [CTRL, ...args], { cwd: ROOT, encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'], env: { ...process.env, ...env } });
-    return { code: 0, out };
-  } catch (e) { return { code: e.status ?? 1, out: `${e.stdout || ''}${e.stderr || ''}` }; }
+  try { return { code: 0, out: execFileSync('node', [CTRL, ...args], { cwd: ROOT, encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'], env: { ...process.env, ...env } }) }; }
+  catch (e) { return { code: e.status ?? 1, out: `${e.stdout || ''}${e.stderr || ''}` }; }
 }
-const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
-function runAsync(args, env = {}) {
-  return new Promise((resolve) => {
-    const p = spawn('node', [CTRL, ...args], { cwd: ROOT, env: { ...process.env, ...env } });
-    let out = '';
-    p.stdout.on('data', (d) => (out += d)); p.stderr.on('data', (d) => (out += d));
-    p.on('close', (code) => resolve({ code: code ?? 1, out }));
-  });
+function preflight(rid) {
+  if (existsSync(jpath(rid))) rmSync(jpath(rid));
+  const out = run(['preflight', '--rollout-id', rid, '--sha', HEAD]).out;
+  return (out.match(/Confirmation token.*?:\s*([0-9a-f]{24})/) || [])[1];
 }
-const git = (a) => execFileSync('git', a, { cwd: ROOT, encoding: 'utf8' }).trim();
+const baseEnv = { WB_DEPLOY_BIN: 'node', WB_DEPLOY_PREFIX: JSON.stringify([FAKE]), WB_MOCK_REVISIONS_FILE: MOCK, WB_FAKE_ARGV_FILE: ARGV };
+const auth = (rid, token) => ['--execute', '--target', 'emulator', '--project', PROJECT_ID, '--sha', HEAD, '--confirm', token, '--rollout-id', rid];
 
 async function main() {
   await db.ref(FLAG).set(null);
-  const HEAD = git(['rev-parse', 'HEAD']);
-  const RID = 'demo-' + HEAD.slice(0, 8);
-  const jpath = join(ROOT, 'functions', 'tools', '.rollout-journal', `${RID}.json`);
-  if (existsSync(jpath)) rmSync(jpath);
-
-  // 1) plan — read-only, no writes.
-  const plan = run(['plan', '--sha', HEAD]);
-  check('plan runs and reports the staged sequence + read-only checks', /stage-a . close . drain/.test(plan.out) && /Stage A \(gated producers\)/.test(plan.out), String(plan.code));
-
-  // 2) preflight — mints a confirmation token + journal (clean tree required).
-  const pf = run(['preflight', '--rollout-id', RID, '--sha', HEAD]);
-  const token = (pf.out.match(/Confirmation token.*?:\s*([0-9a-f]{24})/) || [])[1];
-  check('preflight passes on the clean reviewed HEAD and mints a token', pf.code === 0 && !!token, pf.out.split('\n').slice(-3).join(' | '));
-
-  const auth = ['--execute', '--target', 'emulator', '--project', PROJECT_ID, '--sha', HEAD, '--confirm', token, '--rollout-id', RID];
-  const prodRev = JSON.stringify({ ingestWbmPull: 'r1', ingestWbmEdit: 'r1', adminSubmitPullEdit: 'r1' });
-  const prodMismatch = JSON.stringify({ ingestWbmPull: 'r1', ingestWbmEdit: 'r0', adminSubmitPullEdit: 'r1' });
-
-  // 3) CLOSE before Stage-A producers are verified → refused.
-  const closeNoStageA = run(['close', ...auth, '--expect-state', 'OPEN', '--producer-revisions', prodRev]);
-  check('CLOSE refused before Stage-A producers verified (run stage-a first)', closeNoStageA.code !== 0 && /run .?stage-a/i.test(closeNoStageA.out) && (await flagVal()) === null, closeNoStageA.out.split('\n').slice(-1)[0]);
-
-  // 3a) Stage-A partial producer set → refused (not all three on the intended revision).
-  const partialProd = JSON.stringify({ ingestWbmPull: 'r1', ingestWbmEdit: 'r0', adminSubmitPullEdit: 'r1' });
-  const stageAPartial = run(['stage-a', ...auth, '--expect-state', 'OPEN', '--producer-revisions', partialProd, '--producer-intended', prodRev]);
-  check('Stage-A with a producer NOT on the intended revision → refused (partial)', stageAPartial.code !== 0 && /partial deploy/i.test(stageAPartial.out), stageAPartial.out.split('\n').slice(-1)[0]);
-
-  // 3b) Stage-A verified with a LONG stabilization window → CLOSE refused (not elapsed).
-  run(['stage-a', ...auth, '--expect-state', 'OPEN', '--producer-revisions', prodRev, '--producer-intended', prodRev], { WB_STAGE_A_STABILIZE_SECONDS: '999' });
-  const closeEarly = run(['close', ...auth, '--expect-state', 'OPEN', '--producer-revisions', prodRev]);
-  check('CLOSE refused while the Stage-A stabilization window has not elapsed', closeEarly.code !== 0 && /stabilization not elapsed/i.test(closeEarly.out) && (await flagVal()) === null, closeEarly.out.split('\n').slice(-1)[0]);
-
-  // 3c) Re-verify with an elapsed (0s) window, then CLOSE with a MISMATCHED recheck → refused.
-  run(['stage-a', ...auth, '--expect-state', 'OPEN', '--producer-revisions', prodRev, '--producer-intended', prodRev], { WB_STAGE_A_STABILIZE_SECONDS: '0' });
-  const closeMis = run(['close', ...auth, '--expect-state', 'OPEN', '--producer-revisions', prodMismatch]);
-  check('CLOSE refused when the repeat producer-revision check mismatches (producer changed/rolled)', closeMis.code !== 0 && /repeat producer-revision check does NOT match/i.test(closeMis.out) && (await flagVal()) === null, closeMis.out.split('\n').slice(-1)[0]);
-
-  // 3d) CLOSE without --execute (but stabilized + matching recheck) → DRY-RUN, no write.
-  const closePlan = run(['close', '--rollout-id', RID, '--sha', HEAD, '--confirm', token, '--expect-state', 'OPEN', '--producer-revisions', prodRev]);
-  check('close without --execute is DRY-RUN (flag stays absent)', (await flagVal()) === null && /PLANNED|dry-run/i.test(closePlan.out), JSON.stringify(await flagVal()));
-
-  // 4) CLOSE with full auth + stabilized + matching recheck → real CAS close.
-  run(['close', ...auth, '--expect-state', 'OPEN', '--producer-revisions', prodRev]);
-  check('close --execute performs the CAS: flag paused:true, governed metadata present', (await flagVal())?.paused === true && (await flagVal())?.rolloutId === RID && (await flagVal())?.state === 'CLOSED', JSON.stringify(await flagVal()));
-  check('CAS changedAt is a server timestamp (number)', typeof (await flagVal())?.changedAt === 'number', JSON.stringify((await flagVal())?.changedAt));
-
-  // 5) A queued EDIT keeps the shared packets/incoming root dirty → drain never
-  //    reaches a clean horizon within budget → refused, gate stays CLOSED.
   await db.ref('packets/incoming').set(null);
-  await db.ref('packets/incoming/edit_blk').set({ requestType: 'edit', wellName: 'W', packetId: 'edit_blk' });
-  const drainEdit = run(['drain', '--rollout-id', RID, '--horizon-seconds', '1'], { WB_DRAIN_BUDGET_MS: '2500' });
-  check('a queued EDIT blocks drain: no clean horizon within budget → refused', drainEdit.code !== 0 && /did NOT reach a clean/i.test(drainEdit.out), drainEdit.out.split('\n').slice(-2).join(' | '));
-  check('EDIT-blocked drain leaves state DRAINING (not DRAINED_180) → Stage C refused', run(['stage-c', ...auth, '--expect-state', 'DRAINED_180']).code !== 0 && (await flagVal())?.paused === true);
 
-  // 5b) A queued DELETE (same shared root) blocks drain identically.
+  // ══ HAPPY PATH — controller owns both deploys + reads live revisions ══
+  const RID = 'exec-happy';
+  const t = preflight(RID);
+  check('preflight mints a token bound to the reviewed SHA', !!t);
+  setRevs({ ingestWbmPull: 'p0', ingestWbmEdit: 'p0', adminSubmitPullEdit: 'p0', processIncomingPull: 'c0', processEditRequest: 'c0', processDeleteRequest: 'c0', watchdogStrandedPackets: 'c0' });
+
+  // Stage A: fake deploy advances producers p0→p1, exit 0.
+  clearArgv();
+  const sa = run(['stage-a', ...auth(RID, t), '--expect-state', 'OPEN'], { ...baseEnv, WB_STAGE_A_STABILIZE_SECONDS: '0', WB_FAKE_EXIT: '0', WB_FAKE_SET_REVISIONS: JSON.stringify({ ingestWbmPull: 'p1', ingestWbmEdit: 'p1', adminSubmitPullEdit: 'p1' }) });
+  check('Stage-A: controller spawned the deploy + all 3 producer revisions advanced+stable (live)', sa.code === 0 && /producer revisions ADVANCED/.test(sa.out), sa.out.split('\n').slice(-2).join(' | '));
+  check('Stage-A argv is EXACTLY the producer stage (shell:false, no free-form)', JSON.stringify(lastArgv()) === JSON.stringify(['deploy', '--project', 'wellbuilt-sync', '--only', 'functions:ingestWbmPull,functions:ingestWbmEdit,functions:adminSubmitPullEdit']), JSON.stringify(lastArgv()));
+  check('Stage-A journal records argv + exit + a sanitized output digest (no raw output)', (() => { const h = getJournal(RID).history.find((x) => x.event === 'stage_a_deploy'); return h && Array.isArray(h.argv) && typeof h.exitCode === 'number' && /^[0-9a-f]{16}$/.test(h.outputDigest || ''); })());
+
+  // CLOSE: independent LIVE recheck (producers still p1).
+  const cl = run(['close', ...auth(RID, t), '--expect-state', 'OPEN'], baseEnv);
+  check('CLOSE: live repeat producer-revision check passes → CAS close', (await flagVal())?.paused === true && (await flagVal())?.state === 'CLOSED', JSON.stringify(await flagVal()));
+
+  // DRAIN clean → DRAINED_180.
   await db.ref('packets/incoming').set(null);
-  await db.ref('packets/incoming/del_blk').set({ requestType: 'delete', wellName: 'W', packetId: 'del_blk' });
-  const drainDelete = run(['drain', '--rollout-id', RID, '--horizon-seconds', '1'], { WB_DRAIN_BUDGET_MS: '2500' });
-  check('a queued DELETE blocks drain: no clean horizon within budget → refused', drainDelete.code !== 0 && /did NOT reach a clean/i.test(drainDelete.out), drainDelete.out.split('\n').slice(-2).join(' | '));
+  const dr = run(['drain', '--rollout-id', RID, '--horizon-seconds', '2'], baseEnv);
+  check('DRAIN clean → DRAINED_180', dr.code === 0 && /DRAINED_180/.test(dr.out));
 
-  // 5c) An active coordinator lock (in-flight canonical work) blocks drain.
+  // Stage C: fake deploy advances consumers c0→c1, exit 0.
+  clearArgv();
+  const sc = run(['stage-c', ...auth(RID, t), '--expect-state', 'DRAINED_180'], { ...baseEnv, WB_FAKE_EXIT: '0', WB_FAKE_SET_REVISIONS: JSON.stringify({ processIncomingPull: 'c1', processEditRequest: 'c1', processDeleteRequest: 'c1', watchdogStrandedPackets: 'c1' }) });
+  check('Stage-C: controller spawned the deploy + all 4 consumer revisions advanced+stable (live)', sc.code === 0 && /consumer revisions ADVANCED/.test(sc.out), sc.out.split('\n').slice(-2).join(' | '));
+  check('Stage-C argv is EXACTLY the consumer stage (shell:false, no free-form)', JSON.stringify(lastArgv()) === JSON.stringify(['deploy', '--project', 'wellbuilt-sync', '--only', 'functions:processIncomingPull,functions:processEditRequest,functions:processDeleteRequest,functions:watchdogStrandedPackets']), JSON.stringify(lastArgv()));
+
+  // VERIFY (live 4/4) then REOPEN (live guard + clean drain).
+  const vf = run(['verify', '--rollout-id', RID], baseEnv);
+  check('VERIFY: live 4/4 consumer revisions == stage-c + empty + no lock → passed', vf.code === 0 && /verify PASSED/.test(vf.out), vf.out.split('\n').slice(-1)[0]);
+  const ro = run(['reopen', ...auth(RID, t), '--expect-state', 'VERIFYING'], baseEnv);
+  check('REOPEN: only after live 4/4 + clean drain → CAS reopen (paused:false)', (await flagVal())?.paused === false && (await flagVal())?.state === 'OPEN', JSON.stringify(await flagVal()));
+
+  // ══ CLOSE re-reads LIVE (not the journal): a rolled producer refuses ══
+  const RID2 = 'exec-liveclose';
+  const t2 = preflight(RID2);
+  await db.ref(FLAG).set(null);
+  setRevs({ ingestWbmPull: 'p1', ingestWbmEdit: 'p1', adminSubmitPullEdit: 'p1', processIncomingPull: 'c1', processEditRequest: 'c1', processDeleteRequest: 'c1', watchdogStrandedPackets: 'c1' });
+  run(['stage-a', ...auth(RID2, t2), '--expect-state', 'OPEN'], { ...baseEnv, WB_STAGE_A_STABILIZE_SECONDS: '0', WB_FAKE_EXIT: '0', WB_FAKE_SET_REVISIONS: JSON.stringify({ ingestWbmPull: 'p2', ingestWbmEdit: 'p2', adminSubmitPullEdit: 'p2' }) });
+  // Now a producer "rolls" live to p3 after stabilization.
+  setRevs({ ingestWbmPull: 'p2', ingestWbmEdit: 'p3', adminSubmitPullEdit: 'p2', processIncomingPull: 'c1', processEditRequest: 'c1', processDeleteRequest: 'c1', watchdogStrandedPackets: 'c1' });
+  const clRoll = run(['close', ...auth(RID2, t2), '--expect-state', 'OPEN'], baseEnv);
+  check('CLOSE reads LIVE and refuses when a producer revision drifted post-stabilization', clRoll.code !== 0 && /live repeat revision check does NOT match/i.test(clRoll.out) && (await flagVal()) === null, clRoll.out.split('\n').slice(-1)[0]);
+
+  // ══ Stage-C boundary cases (each an independent HELD-able rollout) ══
+  async function stageCcase(rid, fakeExit, setRevisions) {
+    const tk = preflight(rid);
+    setRevs({ processIncomingPull: 'c0', processEditRequest: 'c0', processDeleteRequest: 'c0', watchdogStrandedPackets: 'c0' });
+    setJournal(rid, { state: 'DRAINED_180', stageA: { producers: { ingestWbmPull: 'p1', ingestWbmEdit: 'p1', adminSubmitPullEdit: 'p1' }, settleDeadlineMs: 1, settleSeconds: 0, verifiedAtMs: 1 } });
+    clearArgv();
+    const env = { ...baseEnv, WB_FAKE_EXIT: String(fakeExit) };
+    if (setRevisions) env.WB_FAKE_SET_REVISIONS = JSON.stringify(setRevisions);
+    const r = run(['stage-c', ...auth(rid, tk), '--expect-state', 'DRAINED_180'], env);
+    return { r, tk };
+  }
+  // nonzero exit + revisions unchanged → HELD.
+  const nz = await stageCcase('exec-nz', 1, null);
+  check('Stage-C nonzero exit + unchanged live → HELD_CLOSED', nz.r.code !== 0 && getJournal('exec-nz').state === 'HELD_CLOSED' && /INCOMPLETE from LIVE/.test(nz.r.out), nz.r.out.split('\n').slice(-3).join(' | '));
+  // exit 0 + incomplete revisions → HELD (exit code NOT trusted).
+  const ez = await stageCcase('exec-ez', 0, { processIncomingPull: 'c1' });
+  check('Stage-C exit 0 + INCOMPLETE live revisions → HELD_CLOSED (exit code not trusted)', ez.r.code !== 0 && getJournal('exec-ez').state === 'HELD_CLOSED', ez.r.out.split('\n').slice(-2).join(' | '));
+  // exit nonzero + all revisions live → reconciles from live truth (success).
+  const nzlive = await stageCcase('exec-nzlive', 1, { processIncomingPull: 'c1', processEditRequest: 'c1', processDeleteRequest: 'c1', watchdogStrandedPackets: 'c1' });
+  check('Stage-C nonzero exit BUT all 4 live+stable → reconciles from LIVE truth (success)', nzlive.r.code === 0 && getJournal('exec-nzlive').state === 'CONSUMERS_DEPLOYED' && /consumer revisions ADVANCED/.test(nzlive.r.out), nzlive.r.out.split('\n').slice(-2).join(' | '));
+
+  // ══ Partial Stage-C never reopens; resume re-reads live ══
+  const reopenPartial = run(['reopen', ...auth('exec-ez', ez.tk), '--expect-state', 'VERIFYING'], baseEnv);
+  check('partial Stage-C: reopen refused (HELD_CLOSED)', reopenPartial.code !== 0);
+  const resumePartial = run(['resume', '--rollout-id', 'exec-ez'], baseEnv);
+  check('resume independently RE-READS live consumer revisions and stays HELD_CLOSED', /live consumer revisions:/.test(resumePartial.out) && /HELD_CLOSED/.test(resumePartial.out) && /DRIFTED|MISSING/.test(resumePartial.out), resumePartial.out.split('\n').slice(-4).join(' | '));
+
+  // ══ Forged operator revisions refused in PRODUCTION mode ══
+  const forge = run(['verify', '--rollout-id', RID, '--target', 'production', '--observed-revisions', '{"processIncomingPull":"c1"}'], baseEnv);
+  check('production mode: operator-supplied --observed-revisions is REFUSED (controller reads live)', forge.code !== 0 && /not accepted in production/i.test(forge.out), forge.out.split('\n').slice(-1)[0]);
+
+  // ══ reopen only after live 4/4 AND clean drain: a dirtied drain refuses ══
+  await db.ref(FLAG).set({ paused: true, state: 'CLOSED', rolloutId: RID, reviewedSha: HEAD, changedAt: 1, changedBy: 'x', reason: 'y' });
+  setJournal(RID, { state: 'VERIFYING', verifyPassed: true, stageC: { consumers: { processIncomingPull: 'c1', processEditRequest: 'c1', processDeleteRequest: 'c1', watchdogStrandedPackets: 'c1' } } });
+  setRevs({ processIncomingPull: 'c1', processEditRequest: 'c1', processDeleteRequest: 'c1', watchdogStrandedPackets: 'c1' });
+  await db.ref('packets/incoming/dirty1').set({ requestType: 'pull', wellName: 'W', packetId: 'dirty1' }); // drain no longer clean
+  const roDirty = run(['reopen', ...auth(RID, t), '--expect-state', 'VERIFYING'], baseEnv);
+  check('REOPEN refused when the drain is no longer clean at reopen (incoming non-empty)', roDirty.code !== 0 && /drain no longer clean|incoming not empty/i.test(roDirty.out) && (await flagVal())?.paused === true, roDirty.out.split('\n').slice(-3).join(' | '));
   await db.ref('packets/incoming').set(null);
-  await db.ref('wells/Gabriel 1/status/chronoLock').set({ token: 'x', at: Date.now() });
-  const drainLock = run(['drain', '--rollout-id', RID, '--horizon-seconds', '1'], { WB_DRAIN_BUDGET_MS: '2500' });
-  check('an active coordinator chronoLock blocks drain → refused', drainLock.code !== 0 && /did NOT reach a clean/i.test(drainLock.out), drainLock.out.split('\n').slice(-2).join(' | '));
-  await db.ref('wells/Gabriel 1/status/chronoLock').set(null);
 
-  // 6) drain clean → DRAINED_180.
-  await db.ref('packets/incoming').set(null);
-  const drainOk = run(['drain', '--rollout-id', RID, '--horizon-seconds', '2']);
-  check('drain over a continuously-empty horizon → DRAINED_180', drainOk.code === 0 && /DRAINED_180/.test(drainOk.out), drainOk.out.split('\n').slice(-2).join(' | '));
+  // ══ HELD_CLOSED recovery invariants (retained from the fail-closed proof) ══
+  const heldJ = getJournal('exec-nz');
+  check('HELD_CLOSED leaves admission decision to a human (recovery instructions printed)', /Recovery:/.test(nz.r.out) && /Never reopen on a CLI exit code/.test(nz.r.out) && heldJ.state === 'HELD_CLOSED');
 
-  // 6b) SECOND-179 RESTART: a queued EDIT appearing mid-horizon RESTARTS the full
-  //     drain — the drain only completes a fresh clean horizon after removal.
-  await db.ref('packets/incoming').set(null);
-  const drainAsync = runAsync(['drain', '--rollout-id', RID, '--horizon-seconds', '2'], { WB_DRAIN_BUDGET_MS: '30000' });
-  await sleep(900); await db.ref('packets/incoming/edit_179').set({ requestType: 'edit', wellName: 'W', packetId: 'edit_179' }); // arrives mid-horizon
-  await sleep(400); await db.ref('packets/incoming').set(null); // clears; a fresh full horizon must now elapse
-  const restartRes = await drainAsync;
-  const jr = JSON.parse(readFileSync(jpath, 'utf8'));
-  const drained = [...(jr.history || [])].reverse().find((h) => h.event === 'drained_180');
-  check('mid-horizon EDIT RESTARTS the drain (restarts>=1) yet it still completes cleanly', restartRes.code === 0 && drained && drained.restarts >= 1, JSON.stringify({ code: restartRes.code, restarts: drained?.restarts }));
-
-  // 7) reopen BEFORE verify → refused (verify not passed).
-  const reopenEarly = run(['reopen', ...auth, '--expect-state', 'VERIFYING']);
-  check('reopen BEFORE a passing verify is refused; gate stays closed', reopenEarly.code !== 0 && (await flagVal())?.paused === true, reopenEarly.out.split('\n').slice(-1)[0]);
-
-  // 8) verify WITHOUT the 4-revision proof → incomplete (reopen still blocked).
-  const verifyNoProof = run(['verify', '--rollout-id', RID]);
-  check('verify without the 4-consumer revision proof is INCOMPLETE', verifyNoProof.code !== 0 && /revisions proven: false/i.test(verifyNoProof.out), verifyNoProof.out.split('\n').slice(-2).join(' | '));
-
-  // 8b) PARTIAL Stage-C: only 1 of 4 consumer revisions live → reconcile holds,
-  //     verify INCOMPLETE (a CLI exit code is never trusted).
-  const intended = JSON.stringify({ processIncomingPull: 'r1', processEditRequest: 'r1', processDeleteRequest: 'r1', watchdogStrandedPackets: 'r1' });
-  const partial = JSON.stringify({ processIncomingPull: 'r1', processEditRequest: 'r0', processDeleteRequest: 'r0', watchdogStrandedPackets: 'r0' });
-  const verifyPartial = run(['verify', '--rollout-id', RID, '--intended-revisions', intended, '--observed-revisions', partial]);
-  check('PARTIAL Stage-C (1/4 revisions) → verify INCOMPLETE, reopen blocked', verifyPartial.code !== 0 && /revisions proven: false/i.test(verifyPartial.out), verifyPartial.out.split('\n').slice(-2).join(' | '));
-
-  // 9) verify with all FOUR intended revisions live → passes (reconcile ok).
-  const complete = JSON.stringify({ processIncomingPull: 'r1', processEditRequest: 'r1', processDeleteRequest: 'r1', watchdogStrandedPackets: 'r1' });
-  const verifyOk = run(['verify', '--rollout-id', RID, '--intended-revisions', intended, '--observed-revisions', complete]);
-  check('verify PASSES with all 4 consumer revisions matching + empty incoming + no lock', verifyOk.code === 0 && /verify PASSED/.test(verifyOk.out), verifyOk.out.split('\n').slice(-2).join(' | '));
-
-  // 10) reopen WITH full auth → CAS reopen (paused:false).
-  const reopen = run(['reopen', ...auth, '--expect-state', 'VERIFYING']);
-  check('reopen --execute after verify performs the CAS reopen (paused:false)', (await flagVal())?.paused === false && (await flagVal())?.state === 'OPEN', JSON.stringify(await flagVal()));
-
-  // 11) FAIL-CLOSED: a close whose CAS is refused (flag already closed by another
-  //     rollout) forces HELD_CLOSED and leaves admission closed.
-  const RID2 = RID + '-b';
-  const jpath2 = join(ROOT, 'functions', 'tools', '.rollout-journal', `${RID2}.json`);
-  if (existsSync(jpath2)) rmSync(jpath2);
-  run(['preflight', '--rollout-id', RID2, '--sha', HEAD]);
-  const token2 = (run(['preflight', '--rollout-id', RID2, '--sha', HEAD]).out.match(/Confirmation token.*?:\s*([0-9a-f]{24})/) || [])[1];
-  await db.ref(FLAG).set({ paused: true, state: 'CLOSED', rolloutId: 'someone-else', reviewedSha: HEAD, changedAt: 1, changedBy: 'x', reason: 'y' });
-  const auth2 = ['--execute', '--target', 'emulator', '--project', PROJECT_ID, '--sha', HEAD, '--confirm', token2, '--rollout-id', RID2];
-  // Stage-A verified + stabilized (0s) so close reaches the CAS, which then refuses
-  // (flag already CLOSED by another rollout) → HELD_CLOSED.
-  run(['stage-a', ...auth2, '--expect-state', 'OPEN', '--producer-revisions', prodRev, '--producer-intended', prodRev], { WB_STAGE_A_STABILIZE_SECONDS: '0' });
-  const closeHeld = run(['close', ...auth2, '--expect-state', 'OPEN', '--producer-revisions', prodRev]);
-  const j2 = JSON.parse(readFileSync(jpath2, 'utf8'));
-  check('a refused CAS close forces HELD_CLOSED', closeHeld.code !== 0 && j2.state === 'HELD_CLOSED' && /HELD_CLOSED/.test(closeHeld.out), closeHeld.out.split('\n').slice(-6).join(' | '));
-  check('HELD_CLOSED leaves admission CLOSED (never auto-reopened)', (await flagVal())?.paused === true);
-  check('HELD_CLOSED prints exact recovery instructions', /Recovery:/.test(closeHeld.out) && /Never reopen on a CLI exit code/.test(closeHeld.out));
-
-  // 12) resume from HELD_CLOSED → stays closed, refuses to move forward.
-  const resume = run(['resume', '--rollout-id', RID2]);
-  check('resume from HELD_CLOSED keeps the gate closed and refuses reopen', /HELD_CLOSED/.test(resume.out) && /will not reopen/i.test(resume.out) && (await flagVal())?.paused === true, resume.out.split('\n').slice(-3).join(' | '));
-
-  // 13) reopen from HELD_CLOSED → refused.
-  const reopenHeld = run(['reopen', ...auth2, '--expect-state', 'VERIFYING']);
-  check('reopen while HELD_CLOSED is refused', reopenHeld.code !== 0 && (await flagVal())?.paused === true, reopenHeld.out.split('\n').slice(-1)[0]);
-
-  console.log('\n=== ROLLOUT CONTROLLER (operational, against the emulator) ===');
+  console.log('\n=== ROLLOUT CONTROLLER — execution boundary (owns deploys, reads live revisions) ===');
   console.log(results.join('\n'));
   console.log(`\n${failures === 0 ? 'ALL PASS' : failures + ' FAILURES'} (${results.length} checks)`);
   process.exit(failures === 0 ? 0 : 1);

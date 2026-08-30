@@ -23,11 +23,12 @@
 // The controller NEVER auto-reopens on error. On any exception after admission
 // closes it records the failure, forces HELD_CLOSED, leaves admission closed,
 // prints exact recovery steps, and refuses Stage C / reopen until reconciled.
-import { execSync, execFileSync } from 'node:child_process';
+import { execSync, execFileSync, spawnSync } from 'node:child_process';
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { createHash } from 'node:crypto';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { homedir } from 'node:os';
 import { createRequire } from 'node:module';
 
 const require = createRequire(import.meta.url);
@@ -238,6 +239,87 @@ function heldClosed(j, why) {
   process.exit(1);
 }
 
+// ── live deployed-revision provider (controller reads REST itself) ──
+// Production: query the official Cloud Functions REST metadata. Test/emulator:
+// a file-backed mock (WB_MOCK_REVISIONS_FILE) — NEVER accepted in production.
+const V1_FNS = new Set(['processIncomingPull', 'processEditRequest', 'processDeleteRequest']);
+function mockRevisionsAllowed() { return TARGET !== 'production' || process.env.WB_ALLOW_MOCK_REVISIONS === '1'; }
+async function restAccessToken() {
+  const CLIENT_ID = '563584335869-fgrhgmd47bqnekij5i8b5pr03ho849e6.apps.googleusercontent.com';
+  const CLIENT_SECRET = 'j9iVZfS8kkCEFUPaAeJV0sAi'; // public firebase-tools client
+  const cs = [join(homedir(), '.config', 'configstore', 'firebase-tools.json'), process.env.APPDATA && join(process.env.APPDATA, 'configstore', 'firebase-tools.json')].filter(Boolean).find(existsSync);
+  if (!cs) throw new Error('no firebase credential store');
+  const rt = (JSON.parse(readFileSync(cs, 'utf8')).tokens || {}).refresh_token;
+  const b = new URLSearchParams({ client_id: CLIENT_ID, client_secret: CLIENT_SECRET, refresh_token: rt, grant_type: 'refresh_token' });
+  const j = await (await fetch('https://oauth2.googleapis.com/token', { method: 'POST', headers: { 'Content-Type': 'application/x-www-form-urlencoded' }, body: b })).json();
+  if (!j.access_token) throw new Error('token refresh failed'); // token never logged
+  return j.access_token;
+}
+/** Return { fn: stableRevisionId } for the given functions, from live truth. */
+async function liveRevisions(fns) {
+  const mockFile = process.env.WB_MOCK_REVISIONS_FILE;
+  if (mockFile && mockRevisionsAllowed()) {
+    const map = existsSync(mockFile) ? JSON.parse(readFileSync(mockFile, 'utf8')) : {};
+    return Object.fromEntries(fns.map((f) => [f, map[f] ?? null]));
+  }
+  const tok = await restAccessToken();
+  const out = {};
+  for (const fn of fns) {
+    if (V1_FNS.has(fn)) {
+      const r = await fetch(`https://cloudfunctions.googleapis.com/v1/projects/${PROJECT}/locations/us-central1/functions/${fn}`, { headers: { Authorization: `Bearer ${tok}` } });
+      out[fn] = r.ok ? (await r.json()).versionId ?? null : null;
+    } else {
+      const r = await fetch(`https://cloudfunctions.googleapis.com/v2/projects/${PROJECT}/locations/us-central1/functions/${fn}`, { headers: { Authorization: `Bearer ${tok}` } });
+      out[fn] = r.ok ? (await r.json()).serviceConfig?.revision ?? null : null;
+    }
+  }
+  return out;
+}
+
+// ── the controller OWNS the two deploys (internal spawn, argv array, shell:false) ──
+function stageFns(stage) { return stage === 'A' ? STAGE_A : STAGE_C; }
+/** Execute exactly one staged deploy. Never takes a free-form command. Records
+ *  argv + timings + exit + a sanitized output digest (never raw output/secrets). */
+function deployStage(stage, j) {
+  const fns = stageFns(stage);
+  const only = fns.map((f) => `functions:${f}`).join(',');
+  const argv = ['deploy', '--project', PROJECT, '--only', only];        // fixed, per stage — never operator free-form
+  // SAFETY: never spawn the real firebase CLI unless this is authorized
+  // production, OR a test fake bin is injected. Prevents an emulator --execute
+  // from touching production.
+  const testFake = !!process.env.WB_DEPLOY_BIN;
+  const authorizedProd = TARGET === 'production' && process.env.WB_ROLLOUT_PROD_AUTHORIZED === '1';
+  if (!testFake && !authorizedProd) {
+    appendHistory(j, { mode, event: `stage_${stage.toLowerCase()}_deploy_planned`, argv });
+    return { planned: true, argv };
+  }
+  const bin = process.env.WB_DEPLOY_BIN || 'firebase';                  // fake bin in tests
+  const prefix = JSON.parse(process.env.WB_DEPLOY_PREFIX || '[]');       // e.g. ['<fake.js>'] for node
+  const startedIso = nowIso();
+  const res = spawnSync(bin, [...prefix, ...argv], { cwd: ROOT, encoding: 'utf8', shell: false, env: process.env });
+  const endedIso = nowIso();
+  const combined = `${res.stdout || ''}${res.stderr || ''}`;
+  const outputDigest = createHash('sha256').update(combined).digest('hex').slice(0, 16); // digest, never the raw text/secrets
+  const exitCode = res.status;
+  appendHistory(j, { mode, event: `stage_${stage.toLowerCase()}_deploy`, argv, startedIso, endedIso, exitCode, outputDigest });
+  return { exitCode, spawnError: res.error ? res.error.message.split('\n')[0] : null, argv };
+}
+// Decide deployment completion from LIVE revisions only (never the CLI exit).
+async function revsAdvancedAndStable(fns, pre) {
+  const post = await liveRevisions(fns);
+  const post2 = await liveRevisions(fns);
+  const advanced = fns.filter((f) => post[f] != null && post[f] !== pre[f]);
+  const stable = fns.every((f) => post[f] != null && post2[f] === post[f]);
+  const missing = fns.filter((f) => post[f] == null || post[f] === pre[f]);
+  return { post, allAdvanced: advanced.length === fns.length, stable, missing };
+}
+function refuseOperatorRevisionsInProd() {
+  if (TARGET !== 'production') return;
+  for (const flag of ['--producer-revisions', '--producer-intended', '--observed-revisions', '--intended-revisions']) {
+    if (argv.includes(flag)) die(`${flag} is NOT accepted in production — the controller reads live Cloud Functions revisions itself`);
+  }
+}
+
 // ─────────────────────────── modes ───────────────────────────
 async function main() {
   if (mode === 'plan') {
@@ -293,53 +375,48 @@ async function main() {
   }
 
   if (mode === 'stage-a') {
+    refuseOperatorRevisionsInProd();
     const cmd = stageCommand(STAGE_A);
-    log('Stage A — gated producers. Guard check:');
-    const allowed = deployGuardAllows(cmd, j.reviewedSha);
-    log(`  deployGuard: ${allowed ? 'ALLOW' : 'REFUSE'}  ${cmd}`);
-    if (!allowed) die('deploy guard refused the Stage-A command');
-    // Record the producer revisions the operator observed live (read-only
-    // describe) and open the stabilization window. --producer-revisions and
-    // --producer-intended are fn->revision JSON maps for the three producers.
-    const obsRaw = opt('--producer-revisions', null);
-    const intRaw = opt('--producer-intended', null);
-    if (obsRaw && intRaw) {
-      const obs = JSON.parse(obsRaw); const intended = JSON.parse(intRaw);
-      const missing = STAGE_A_PRODUCERS.filter((f) => !obs[f]);
-      const mismatch = STAGE_A_PRODUCERS.filter((f) => obs[f] && intended[f] && obs[f] !== intended[f]);
-      if (missing.length || mismatch.length) { appendHistory(j, { mode, event: 'stage_a_producers_partial', missing, mismatch }); die(`Stage-A producers not all on the intended revision (missing ${missing}, mismatch ${mismatch}) — partial deploy, do not proceed`); }
-      const nowMs = Date.now();
-      j.stageA = { producers: obs, intended, verifiedAtMs: nowMs, settleSeconds: STAGE_A_STABILIZE_SECONDS, settleDeadlineMs: nowMs + STAGE_A_STABILIZE_SECONDS * 1000 };
-      j.state = 'OPEN'; appendHistory(j, { mode, event: 'stage_a_producers_verified', settleSeconds: STAGE_A_STABILIZE_SECONDS });
-      log(`[controller] Stage-A producers verified on the intended revisions; stabilization window ${STAGE_A_STABILIZE_SECONDS}s started. CLOSE is refused until it elapses AND a repeat check still matches.`);
+    if (!deployGuardAllows(cmd, j.reviewedSha)) die('deploy guard refused the Stage-A command');
+    log('Stage A — gated producers.  deployGuard: ALLOW  ' + cmd);
+    const reasons = requireExecutionAuth(j, 'OPEN');
+    if (reasons.length || !EXECUTE) {
+      log('[controller] Stage-A deploy is PLANNED (dry-run). The controller will itself spawn (argv, shell:false):');
+      log('  firebase ' + ['deploy', '--project', PROJECT, '--only', STAGE_A.map((f) => `functions:${f}`).join(',')].join(' '));
+      reasons.forEach((r) => log('   - ' + r));
+      j.state = 'OPEN'; appendHistory(j, { mode, event: 'stage_a_planned' });
       process.exit(0);
     }
-    // No producer revisions supplied → this is the plan/guard step. The DEPLOY
-    // itself is the operator running the guarded command above; recording the
-    // live producer revisions (a read-only describe) then re-running stage-a is
-    // what opens the stabilization window.
-    log('[controller] Stage-A deploy is PLANNED. Operator runs the guarded command above, then re-runs:');
-    log('  stage-a --producer-revisions <live-describe> --producer-intended <reviewed> --sha <HEAD> --confirm <token> --rollout-id <id>');
-    j.state = 'OPEN'; appendHistory(j, { mode, event: 'stage_a_planned' });
+    // EXECUTE — the controller OWNS the deploy and reads live revisions itself.
+    try {
+      if (!deployGuardAllows(cmd, j.reviewedSha)) heldClosed(j, 'guard revalidation failed immediately before the Stage-A deploy');
+      const pre = await liveRevisions(STAGE_A_PRODUCERS);
+      const dep = deployStage('A', j);
+      if (dep.spawnError) heldClosed(j, `Stage-A deploy spawn error: ${dep.spawnError}`);
+      const rv = await revsAdvancedAndStable(STAGE_A_PRODUCERS, pre);
+      if (!(rv.allAdvanced && rv.stable)) heldClosed(j, `Stage-A producers not all live+stable after deploy (missing/unchanged ${JSON.stringify(rv.missing)}); CLI exit was ${dep.exitCode} — LIVE truth governs, not the exit code`);
+      const nowMs = Date.now();
+      j.stageA = { pre, producers: rv.post, verifiedAtMs: nowMs, settleSeconds: STAGE_A_STABILIZE_SECONDS, settleDeadlineMs: nowMs + STAGE_A_STABILIZE_SECONDS * 1000, deployExit: dep.exitCode };
+      j.state = 'OPEN'; appendHistory(j, { mode, event: 'stage_a_producers_verified', settleSeconds: STAGE_A_STABILIZE_SECONDS });
+      log(`[controller] Stage-A deployed; all 3 producer revisions ADVANCED + STABLE (live). Stabilization window ${STAGE_A_STABILIZE_SECONDS}s started.`);
+    } catch (e) { heldClosed(j, `exception during Stage-A: ${e.message.split('\n')[0]}`); }
     process.exit(0);
   }
 
   if (mode === 'close') {
     if (j.state === 'HELD_CLOSED') die('rollout is HELD_CLOSED — reconcile via resume before any further action');
-    // Stage-A stabilization gate: CLOSE is refused until the producers are
-    // verified on the intended revisions, the stabilization duration has
-    // elapsed, and a repeat revision check STILL matches (no partial/rollback).
+    refuseOperatorRevisionsInProd();
     const sa = j.stageA;
-    if (!sa?.settleDeadlineMs) die('CLOSE refused — run `stage-a` with --producer-revisions/--producer-intended first (producers not verified/stabilizing)');
+    if (!sa?.settleDeadlineMs) die('CLOSE refused — Stage-A not deployed/verified (run stage-a --execute first)');
     const remainingMs = sa.settleDeadlineMs - Date.now();
     if (remainingMs > 0) die(`CLOSE refused — Stage-A stabilization not elapsed (${Math.ceil(remainingMs / 1000)}s of ${sa.settleSeconds}s remaining)`);
-    const recheckRaw = opt('--producer-revisions', null);
-    if (!recheckRaw) die('CLOSE refused — pass --producer-revisions for the mandatory repeat revision check');
-    const recheck = JSON.parse(recheckRaw);
+    // Independent LIVE repeat check (never operator-supplied): producers still on
+    // the stabilized revisions.
+    let recheck; try { recheck = await liveRevisions(STAGE_A_PRODUCERS); } catch (e) { die(`CLOSE refused — could not read live producer revisions: ${e.message.split('\n')[0]}`); }
     const stable = STAGE_A_PRODUCERS.every((f) => recheck[f] && recheck[f] === sa.producers[f]);
-    if (!stable) die('CLOSE refused — repeat producer-revision check does NOT match the stabilized revisions (a producer changed/rolled — investigate)');
+    if (!stable) die('CLOSE refused — live repeat revision check does NOT match the stabilized producer revisions (changed/rolled — investigate)');
     j.stageA.recheckPassedMs = Date.now(); appendHistory(j, { mode, event: 'stage_a_stabilized_confirmed' });
-    log('Close admission (atomic CAS)… (Stage-A stabilized + revisions re-confirmed)');
+    log('Close admission (atomic CAS)… (Stage-A stabilized + live revisions re-confirmed)');
     try {
       const r = await casTransition('close', j, 'OPEN');
       if (!r.executed) { j.state = 'PAUSE_REQUESTED'; appendHistory(j, { mode, event: 'close_planned' }); process.exit(0); }
@@ -384,53 +461,69 @@ async function main() {
   if (mode === 'stage-c') {
     if (j.state === 'HELD_CLOSED') die('HELD_CLOSED — reconcile first');
     if (j.state !== 'DRAINED_180') die(`refusing Stage C: state is ${j.state}, must be DRAINED_180 (drain + horizon first)`);
+    refuseOperatorRevisionsInProd();
     const cmd = stageCommand(STAGE_C);
-    const allowed = deployGuardAllows(cmd, j.reviewedSha);
-    log(`Stage C — canonical consumers. deployGuard: ${allowed ? 'ALLOW' : 'REFUSE'}  ${cmd}`);
-    if (!allowed) heldClosed(j, 'deploy guard refused the Stage-C command');
+    if (!deployGuardAllows(cmd, j.reviewedSha)) heldClosed(j, 'deploy guard refused the Stage-C command');
+    log('Stage C — canonical consumers.  deployGuard: ALLOW  ' + cmd);
     const reasons = requireExecutionAuth(j, 'DRAINED_180');
     if (reasons.length || !EXECUTE) {
-      log('[controller] Stage-C deploy is PLANNED (dry-run). Operator runs the guarded command above after satisfying:');
-      reasons.forEach((r) => log(`   - ${r}`));
+      log('[controller] Stage-C deploy is PLANNED (dry-run). The controller will itself spawn (argv, shell:false):');
+      log('  firebase ' + ['deploy', '--project', PROJECT, '--only', STAGE_C.map((f) => `functions:${f}`).join(',')].join(' '));
+      reasons.forEach((r) => log('   - ' + r));
       j.state = 'DRAINED_180'; appendHistory(j, { mode, event: 'stage_c_planned' });
       process.exit(0);
     }
-    heldClosed(j, 'production Stage-C execution is not authorized in this environment');
+    // EXECUTE — controller owns the deploy; completion is judged from LIVE truth.
+    try {
+      if (!deployGuardAllows(cmd, j.reviewedSha)) heldClosed(j, 'guard revalidation failed immediately before the Stage-C deploy');
+      const pre = await liveRevisions(STAGE_C);
+      const dep = deployStage('C', j);
+      if (dep.spawnError) heldClosed(j, `Stage-C deploy spawn error: ${dep.spawnError}`);
+      const rv = await revsAdvancedAndStable(STAGE_C, pre);
+      if (!(rv.allAdvanced && rv.stable)) heldClosed(j, `Stage-C INCOMPLETE from LIVE truth (missing/unchanged ${JSON.stringify(rv.missing)}); CLI exit was ${dep.exitCode} — never reopen on an exit code. Forward-deploy the missing consumers or stay HELD_CLOSED.`);
+      j.stageC = { pre, consumers: rv.post, deployExit: dep.exitCode }; j.state = 'CONSUMERS_DEPLOYED';
+      appendHistory(j, { mode, event: 'stage_c_all_advanced' });
+      log('[controller] Stage-C deployed; all 4 consumer revisions ADVANCED + STABLE (live).');
+    } catch (e) { heldClosed(j, `exception during Stage-C: ${e.message.split('\n')[0]}`); }
+    process.exit(0);
   }
 
   if (mode === 'verify') {
     if (j.state === 'HELD_CLOSED') die('HELD_CLOSED — reconcile first');
-    log('Verify — 4 consumer revisions match intended, incoming empty, no lock…');
+    refuseOperatorRevisionsInProd();
+    log('Verify — LIVE 4/4 consumer revisions == the Stage-C post-deploy revisions, incoming empty, no lock…');
     let db; try { ({ db } = await getDb()); } catch (e) { die(`cannot reach target to verify: ${e.message.split('\n')[0]}`); }
     const empty = await incomingEmpty(db); const lock = await anyLock(db);
-    // Revision proof: reconcile live consumer revisions against the intended set
-    // (fail-closed; a CLI exit code is never trusted). --observed-revisions is a
-    // JSON map fn->revision from a read-only `firebase functions:list`; --intended
-    // -revisions likewise. When both are present we reconcile; otherwise we fall
-    // back to a recorded proof flag (set by an executed stage-c).
-    let revisionsProven = j.stageC?.revisionsProven === true;
-    let reconcileNote = 'recorded proof flag';
-    const observedRaw = opt('--observed-revisions', null);
-    const intendedRaw = opt('--intended-revisions', j.stageC?.intended ? JSON.stringify(j.stageC.intended) : null);
-    if (observedRaw && intendedRaw) {
-      const { reconcileStageC } = require(join(ROOT, 'functions', 'lib', 'security', 'operational', 'stageCReconcile.js'));
-      const rr = reconcileStageC({ intended: JSON.parse(intendedRaw), observed: JSON.parse(observedRaw), lookupOk: true });
-      revisionsProven = rr.reopenAllowed;
-      reconcileNote = rr.note;
-      j.stageC = { ...(j.stageC || {}), lastReconcile: rr };
+    let revisionsProven = false, note = 'no stage-c deploy record';
+    if (j.stageC?.consumers) {
+      let live; try { live = await liveRevisions(STAGE_C); } catch (e) { die(`verify: could not read live consumer revisions: ${e.message.split('\n')[0]}`); }
+      const drift = STAGE_C.filter((f) => live[f] !== j.stageC.consumers[f]);
+      revisionsProven = drift.length === 0;
+      note = revisionsProven ? 'live 4/4 == stage-c revisions' : `drifted from stage-c: ${JSON.stringify(drift)}`;
+      j.stageC.verifyLive = live;
     }
     const allOk = empty && !lock && revisionsProven;
-    log(`  incoming empty: ${empty}  no lock: ${!lock}  4-revisions proven: ${revisionsProven} (${reconcileNote})`);
-    if (!allOk) { appendHistory(j, { mode, event: 'verify_incomplete', empty, lock, revisionsProven, reconcileNote }); die('verify incomplete — reopen is refused until all proofs hold'); }
+    log(`  incoming empty: ${empty}  no lock: ${!lock}  live 4/4 revisions: ${revisionsProven} (${note})`);
+    if (!allOk) { appendHistory(j, { mode, event: 'verify_incomplete', empty, lock, revisionsProven, note }); die('verify incomplete — reopen refused until all LIVE proofs hold'); }
     j.state = 'VERIFYING'; j.verifyPassed = true; appendHistory(j, { mode, event: 'verify_passed' });
-    log('[controller] verify PASSED — reopen is now permitted (still requires full execution auth).');
+    log('[controller] verify PASSED (live) — reopen now permitted (still requires full execution auth + a clean drain at reopen).');
     process.exit(0);
   }
 
   if (mode === 'reopen') {
     if (j.state === 'HELD_CLOSED') die('HELD_CLOSED — reconcile first; reopen refused');
     if (!j.verifyPassed) die('reopen refused — a full `verify` has not passed for this rollout');
-    log('Reopen admission (atomic CAS, only after verify)…');
+    refuseOperatorRevisionsInProd();
+    // Final LIVE guard (only when actually executing): clean drain still holds AND
+    // live 4/4 consumer revisions still match — reopen only after live 4/4 + clean drain.
+    if (EXECUTE) {
+      try {
+        const { db } = await getDb();
+        if (!(await incomingEmpty(db)) || (await anyLock(db))) heldClosed(j, 'reopen refused — incoming not empty / lock present (drain no longer clean)');
+        if (j.stageC?.consumers) { const live = await liveRevisions(STAGE_C); if (!STAGE_C.every((f) => live[f] === j.stageC.consumers[f])) heldClosed(j, 'reopen refused — live consumer revisions drifted since verify'); }
+      } catch (e) { heldClosed(j, `reopen refused — could not confirm live state: ${e.message.split('\n')[0]}`); }
+    }
+    log('Reopen admission (atomic CAS, after live verify + clean drain)…');
     try {
       const r = await casTransition('reopen', j, 'VERIFYING');
       if (!r.executed) { appendHistory(j, { mode, event: 'reopen_planned' }); process.exit(0); }
@@ -442,19 +535,21 @@ async function main() {
   }
 
   if (mode === 'resume') {
+    refuseOperatorRevisionsInProd();
     log(`Resume — reconciling rollout ${id} (state ${j.state}) fail-closed…`);
-    // Never assume the last command was atomic. Inventory the live state.
-    let db; try { ({ db } = await getDb()); } catch (e) { log(`(live read unavailable: ${e.message.split('\n')[0]})`); }
-    if (db) {
-      const empty = await incomingEmpty(db); const lock = await anyLock(db);
-      log(`  live incoming empty: ${empty}  any lock: ${lock}`);
-    }
+    // Independently RE-READ live consumer revisions + queues — never trust the
+    // journal or a prior CLI exit.
+    try {
+      const consumers = await liveRevisions(STAGE_C);
+      log('  live consumer revisions: ' + STAGE_C.map((f) => `${f}=${consumers[f]}`).join('  '));
+      if (j.stageC?.consumers) { const drift = STAGE_C.filter((f) => consumers[f] !== j.stageC.consumers[f]); log('  vs recorded stage-c: ' + (drift.length ? `DRIFTED/MISSING ${JSON.stringify(drift)}` : 'all match')); }
+    } catch (e) { log(`  (live revision read unavailable: ${e.message.split('\n')[0]})`); }
+    try { const { db } = await getDb(); log(`  live incoming empty: ${await incomingEmpty(db)}  any lock: ${await anyLock(db)}`); } catch (e) { log(`  (live db read unavailable: ${e.message.split('\n')[0]})`); }
     if (j.state === 'HELD_CLOSED') {
-      log('  state is HELD_CLOSED. Admission stays CLOSED.');
-      log('  To move forward: complete the missing Stage-C deploy (inventory revisions), run `verify`,');
-      log('  and only then `reopen`. This tool will not reopen on a CLI exit code.');
+      log('  state is HELD_CLOSED. Admission stays CLOSED. Complete the missing forward Stage-C deploy, run `verify`,');
+      log('  then `reopen` — only after LIVE 4/4 + a clean drain. Never reopen on a CLI exit code.');
     } else {
-      log(`  resumable from ${j.state}. Re-run the next mode in sequence; each re-checks live state.`);
+      log(`  resumable from ${j.state}. Re-run the next mode; each re-checks LIVE state.`);
     }
     appendHistory(j, { mode, event: 'resume_inspected', state: j.state });
     process.exit(0);
