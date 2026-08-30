@@ -282,6 +282,14 @@ async function main() {
   check('saturated legacy version → in-patch increment sentinel applies EXACTLY 2^20 (16 ULP)', legacyAfter === SAT + 1048576, `${legacyAfter} vs ${SAT + 1048576}`);
   const v2Node = (await db.ref('packets/incoming_revision_v2').once('value')).val();
   check('v2 revision token written atomically with the commit', !!v2Node && v2Node.v === 2 && v2Node.token === 't1', JSON.stringify(v2Node));
+  // vc25 COMPATIBILITY (deploy-surface audit): the installed field client
+  // decides sync via decideIncomingVersionEvent — STRICT GREATER-THAN against
+  // its persisted appliedVersion. Reproduce that exact comparison against the
+  // node the new server just wrote: a vc25 that persisted the saturated value
+  // wakes on the very first canonical commit, with NO client update required.
+  const vc25WouldSync = (incoming, applied) => Number.isFinite(incoming) && incoming > applied;
+  check('vc25 compatibility: strict-greater client with persisted SATURATED applied syncs on the new bridge', vc25WouldSync(legacyAfter, SAT) === true, `${legacyAfter} > ${SAT}`);
+  check('vc25 compatibility: unchanged node still (correctly) does not sync', vc25WouldSync(legacyAfter, legacyAfter) === false, 'no self-wake');
 
   // ── Scenario 12 (Phase 6): replay leaves the v2 token unchanged ──────────
   await sendPull('t1', W4, { dateTimeUTC: '2026-08-27T15:00:00.000Z', dateTime: '8/27/2026 10:00 AM', tankLevelFeet: '12', bblsTaken: 120 });
@@ -461,6 +469,25 @@ async function main() {
   await sleep(4000);
   const conflictHeld = (await db.ref('packets/rejected/vB_conflict').once('value')).val();
   check('correction conflict (shared lineage, different material): BOTH survive — original untouched, conflict retained with its material for review', !!conflictHeld && Number(conflictHeld?.packet?.bblsTaken) === 55 && ((await db.ref('packets/processed/vB').once('value')).val() || {}).bblsTaken === 40, JSON.stringify(conflictHeld?.packet?.bblsTaken));
+  // Losslessness detail (final candidate audit item 2): COMPLETE governed
+  // material + stable ids + explicit lineage + explicit distinct reason; and
+  // CURRENT STATE does not move without governed resolution.
+  check('conflict wrapper holds COMPLETE material + ids + lineage + explicit reason',
+    conflictHeld
+    && conflictHeld.reason === 'CORRECTION_CONFLICT'
+    && /vB/.test(conflictHeld.readableReason || '')
+    && conflictHeld.packetId === 'vB_conflict'
+    && conflictHeld.packet?.idempotencyKey === 'vB'
+    && conflictHeld.packet?._originalKey === 'vB'
+    && conflictHeld.packet?.dateTimeUTC === TEQ2
+    && conflictHeld.packet?.wellName === W7
+    && Number(conflictHeld.packet?.tankLevelFeet) === 11,
+    JSON.stringify(conflictHeld && { reason: conflictHeld.reason, id: conflictHeld.packetId }));
+  check('conflict reason is DISTINCT from proven-duplicate and collision reasons',
+    conflictHeld?.reason === 'CORRECTION_CONFLICT'
+    && ((await db.ref('packets/rejected/vB_clone1').once('value')).val() || {}).reason === 'PROVEN_DUPLICATE',
+    'distinct reasons');
+  check('conflict does NOT move current state (still vB)', (await outW7())?.lastPullPacketId === 'vB', JSON.stringify((await outW7())?.lastPullPacketId));
 
   // COVERAGE NOTE: fault/fence/horizon/watchdog cases run in faults.mjs (same
   // real triggers + the real exported watchdog, lease clock controlled by

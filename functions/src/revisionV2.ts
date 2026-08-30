@@ -58,11 +58,21 @@ export function buildRevisionV2(receipt: { operationId: string; committedAtMs: n
  * else — null, numbers, objects without a string token — is null: consumers
  * must IGNORE malformed values, never sync-loop on them.
  */
+/** Tokens are minted packet/operation ids (≤128 by isFirebaseKeySafe); the
+ *  parser enforces the same bound so an attacker-writable node (rules are
+ *  open today) can never hand consumers an unbounded string to persist,
+ *  compare, or log. Over-long values are MALFORMED → null → ignored. */
+export const MAX_REVISION_TOKEN_LENGTH = 128;
+
 export function revisionV2TokenOf(raw: unknown): string | null {
-  if (typeof raw === 'string') return raw.trim() || null;
+  const bounded = (v: string): string | null => {
+    const t = v.trim();
+    return t && t.length <= MAX_REVISION_TOKEN_LENGTH ? t : null;
+  };
+  if (typeof raw === 'string') return bounded(raw);
   if (raw && typeof raw === 'object' && !Array.isArray(raw)) {
     const token = (raw as { token?: unknown }).token;
-    if (typeof token === 'string' && token.trim()) return token.trim();
+    if (typeof token === 'string') return bounded(token);
   }
   return null;
 }

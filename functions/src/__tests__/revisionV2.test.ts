@@ -44,6 +44,11 @@ describe('revision v2 token contract', () => {
     expect(revisionV2TokenOf({ v: 2 })).toBeNull();
     expect(revisionV2TokenOf({ token: 42 })).toBeNull();
     expect(revisionV2TokenOf(['op1'])).toBeNull();
+    // Security bound: an attacker-writable node cannot hand consumers an
+    // unbounded string — over-long tokens are malformed.
+    expect(revisionV2TokenOf('x'.repeat(129))).toBeNull();
+    expect(revisionV2TokenOf({ v: 2, token: 'y'.repeat(4096) })).toBeNull();
+    expect(revisionV2TokenOf('z'.repeat(128))).toBe('z'.repeat(128));
   });
 });
 

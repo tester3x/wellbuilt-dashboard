@@ -871,6 +871,7 @@ function WellDetailPage() {
                     <th className="px-2 py-1">Packet</th>
                     <th className="px-2 py-1">Original / lineage</th>
                     <th className="px-2 py-1">Event time</th>
+                    <th className="px-2 py-1">Held material</th>
                     <th className="px-2 py-1">Reason</th>
                   </tr>
                 </thead>
@@ -881,6 +882,14 @@ function WellDetailPage() {
                       <td className="px-2 py-1 font-mono">{q.packetId}</td>
                       <td className="px-2 py-1 font-mono">{q.originalId || '--'}</td>
                       <td className="px-2 py-1 font-mono whitespace-nowrap">{q.eventTimeUTC ? formatDateTime(q.eventTimeUTC) : '--'}</td>
+                      {/* The held submission's business values — a correction
+                          conflict's ALTERNATIVE is reviewable next to the
+                          standing pull in the history above. */}
+                      <td className="px-2 py-1 font-mono whitespace-nowrap">
+                        {q.material.bblsTaken != null ? `${q.material.bblsTaken} bbl` : '--'}
+                        {q.material.tankLevelFeet != null ? ` @ ${q.material.tankLevelFeet} ft` : ''}
+                        {q.material.wellDown ? ' · DOWN' : ''}
+                      </td>
                       <td className="px-2 py-1" title={q.readableReason}>{q.reason}</td>
                     </tr>
                   ))}

@@ -53,6 +53,19 @@ const crossbow = describeQuarantineRow('20260828_142508_Crossbow1_c8neoe', {
     dateTimeUTC: '2026-08-28T14:24:41.920Z',
   },
 });
+check('quarantine row surfaces the held BUSINESS material (reviewable alternative), never credentials', (() => {
+  const conflict = describeQuarantineRow('vB_conflict', {
+    wellName: 'Gabriel 6', reason: 'CORRECTION_CONFLICT', readableReason: 'differs in bblsTaken',
+    rejectedAt: '2026-08-30T00:00:00.000Z', packetId: 'vB_conflict',
+    packet: { wellName: 'Gabriel 6', idempotencyKey: 'vB', _originalKey: 'vB', dateTimeUTC: '2026-08-28T02:00:00.000Z', tankLevelFeet: 11, bblsTaken: 55, wellDown: false, authToken: 'never-shown' },
+  });
+  return conflict
+    && conflict.material.bblsTaken === 55
+    && conflict.material.tankLevelFeet === 11
+    && conflict.material.wellDown === false
+    && conflict.originalId === 'vB'
+    && !JSON.stringify(conflict).includes('never-shown'); // raw auth material never in the row model
+})());
 check('quarantine row keeps reason + exact identities + timestamps', crossbow
   && crossbow.reason === 'STALE_PULL_TIME'
   && crossbow.originalId === '20260828_092503_Crossbow1_dstw6f'

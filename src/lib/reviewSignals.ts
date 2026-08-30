@@ -55,6 +55,10 @@ export interface QuarantineRow {
   /** The original identity when the quarantined item was a re-trigger/copy. */
   originalId: string | null;
   eventTimeUTC: string | null;
+  /** The held submission's BUSINESS material — a reviewer must be able to
+   *  compare a correction conflict's alternative against the standing row
+   *  without opening raw data. Business fields only; never credentials. */
+  material: { bblsTaken: number | null; tankLevelFeet: number | null; wellDown: boolean };
 }
 
 export function describeQuarantineRow(key: string, raw: Record<string, unknown> | null | undefined): QuarantineRow | null {
@@ -76,5 +80,10 @@ export function describeQuarantineRow(key: string, raw: Record<string, unknown> 
     originalId: orig ?? (idem && idem !== key ? idem : null),
     eventTimeUTC: typeof packet.dateTimeUTC === 'string' ? packet.dateTimeUTC
       : (typeof raw.incomingDateTimeUTC === 'string' ? raw.incomingDateTimeUTC : null),
+    material: {
+      bblsTaken: Number.isFinite(Number(packet.bblsTaken)) ? Number(packet.bblsTaken) : null,
+      tankLevelFeet: Number.isFinite(Number(packet.tankLevelFeet)) ? Number(packet.tankLevelFeet) : null,
+      wellDown: packet.wellDown === true,
+    },
   };
 }
