@@ -2,8 +2,10 @@
 
 Prepared by the predeployment safety gate (2026-08-30). **Operational
 reference only — this document performs nothing.** Server candidate
-`integration/wbm-backdated-chrono-reconcile` @ `ef2e711`, client
-`integration/wbm-chrono-client-refresh` @ `19e4876`.
+`integration/wbm-backdated-chrono-reconcile` @ `901c00d` (the SEVEN-function
+single reviewed HEAD, gate included), client
+`integration/wbm-chrono-client-refresh` @ `19e4876`. Re-pin `--expect-sha` to
+whatever `git rev-parse HEAD` reports at deploy time on this branch.
 
 ## Why a governed rollout (not "deploy all filtered quickly")
 
@@ -21,7 +23,7 @@ the overlap.
 
 - **Deployed (locked) rules** sha256 `5ba10f055a0673e151302b5f9b80ef6e38f006448acc8c7cd5bb47344899b314` — snapshot at `functions/emulator/fixtures/deployed-rules.json`.
 - **Local OPEN `database.rules.json`** sha256 `9271065c0f8639df63cd998333cba5ec6bce20ca90c1f779e117410cf0c29cea` (`.read:true, .write:true`) — a dev stub that MUST NOT reach production.
-- **Deployment guard** `functions/emulator/deployGuard.mjs` validates a proposed command and REFUSES if it references `database`/`hosting`, is a bare/whole-codebase deploy, names any function outside the approved allowlist (or an excluded new export), targets a project other than `wellbuilt-sync`, or runs from a dirty tree / wrong HEAD. Run it on the exact command before deploying:
+- **Deployment guard** `functions/emulator/deployGuard.mjs` recognizes EXACTLY the two staged commands (Stage A producers, Stage C consumers) from one clean reviewed HEAD and REFUSES everything else: the seven- or six-function combined command, a bare/whole-codebase deploy, `--only functions:dashboard`, `database`/`hosting`, any function outside a stage set (or an excluded new export), a project other than `wellbuilt-sync`, a dirty tree, the wrong branch, `HEAD != --expect-sha`, or a HEAD whose built output is missing any of the 7 / whose `adminSubmitPullEdit` lacks the admission gate. Run it on the exact command before each stage:
   ```bash
   node functions/emulator/deployGuard.mjs '<the exact firebase deploy command>' --expect-sha <reviewed server SHA>
   ```
@@ -38,32 +40,47 @@ new children (`incoming_revision_v2`, `editReceipts`, `chronoReceipts`,
 admin / staff; Admin SDK retains access). **The local `database.rules.json`
 in this repo is OPEN (`.write:true`) — a dev stub. It MUST NOT be deployed.**
 
-## Deploy manifest (exact — do not run here)
+## Deploy manifest (exact — TWO staged commands — do not run here)
 
-Single codebase `dashboard`. Deploy ONLY the WB-M pipeline functions by name:
+Single codebase `dashboard`. The rollout is **two** name-filtered commands from
+the same reviewed HEAD, never one combined command. Run the deploy guard on
+each exact string first.
 
+**Stage A — gated producers (deploy while the gate is OPEN):**
 ```bash
 firebase deploy --project wellbuilt-sync --only \
-functions:processIncomingPull,functions:processEditRequest,functions:processDeleteRequest,functions:watchdogStrandedPackets,functions:ingestWbmPull,functions:ingestWbmEdit
+functions:ingestWbmPull,functions:ingestWbmEdit,functions:adminSubmitPullEdit
+```
+
+**Stage C — canonical consumers (deploy after the gate is CLOSED + drained + 180 s):**
+```bash
+firebase deploy --project wellbuilt-sync --only \
+functions:processIncomingPull,functions:processEditRequest,functions:processDeleteRequest,functions:watchdogStrandedPackets
 ```
 
 - A **name-filtered** function deploy touches only the listed functions and
   never deletes unlisted ones.
+- **NEVER** deploy Stage A and Stage C as one combined command — the staged
+  gate window (close → drain → 180 s) between them is what prevents the
+  old/new concurrency regression (RACE2). The guard refuses the combined form.
 - **NEVER** run `firebase deploy` (bare), `--only functions` (whole codebase),
-  or `--only functions:dashboard` — the branch source is missing 31 live
-  functions (adminSubmitPullEdit, estimation-hold, split-leg, transfer, WB-T,
-  JSA, hosting SSR, …), so a whole-codebase deploy would **prompt to delete
-  them**. Never accept a deletion prompt.
+  or `--only functions:dashboard` — the branch source is missing ~30 live
+  functions (estimation-hold, split-leg, transfer, WB-T, JSA, hosting SSR, …),
+  so a whole-codebase deploy would **prompt to delete them**. Never accept a
+  deletion prompt.
 - **NEVER** run `--only database` / `--only hosting` — the open local rules
   would clobber the safe deployed rules.
 - New branch exports that must **not** deploy: `getGovernedWellConfig`,
-  `staffHydrateCanonicalIdentity`, `staffRetireLegacyDriverLogin` (excluded by
-  the name filter above).
+  `staffHydrateCanonicalIdentity`, `staffRetireLegacyDriverLogin`,
+  `recoverRejectedPull` (excluded by the stage name filters; the guard refuses
+  any command that names one).
 
 ## Preflight
 
-1. Confirm SHAs: server `ef2e711`, client `19e4876`; both worktrees clean.
-2. Confirm the deploy string is the exact name-filtered list above.
+1. Confirm SHAs: server `901c00d` (re-pin to `git rev-parse HEAD`), client
+   `19e4876`; both worktrees clean.
+2. Confirm both deploy strings are the exact Stage-A and Stage-C name filters
+   above, and that `deployGuard.mjs --expect-sha <HEAD>` ALLOWs each.
 3. Confirm rules protection unchanged (deployed rules locked; do not deploy
    `database`).
 4. `packets/incoming` **must be empty** (no active work): read-only
@@ -87,55 +104,84 @@ discipline:
   (`unavailable` / HTTP 503, message `wbm_mutations_paused`). The WB-M client
   classifies that as transient and **retains** the queued packet — never
   marks it sent/rejected, never falls back to a direct RTDB write.
-- Gated in this candidate: `ingestWbmPull`, `ingestWbmEdit`. The retained
-  Dashboard `adminSubmitPullEdit` needs the same 4-line check (patch below) —
-  add it to the manifest (making 7 functions) so the pause covers **every**
-  producer.
+- Gated producers, **all three now on this HEAD**: `ingestWbmPull`,
+  `ingestWbmEdit`, and `adminSubmitPullEdit` (ported verbatim from Dashboard
+  `9e9c837` with only the admission gate added; provenance in the commit
+  message). All three form Stage A, so closing the flag covers **every**
+  producer with no separate-branch dependency.
+- The gate is checked **after** authorization (an auth failure stays an auth
+  failure, never a maintenance error) and **before** writing `packets/incoming`.
 - The flag **fails OPEN** (absent/malformed → admitted), so a missing flag can
   never wedge production.
 
-Proven on the real emulator (`gate.mjs`, 10/10): open→accepted;
-closed→retryable refusal with NO incoming write and no revision signal;
-already-accepted incoming still drains; retry-while-closed stays refused with
-the packet retained; reopen→the same packet id is accepted and materializes.
+Proven on the real emulator:
+- `gate.mjs` (10/10) — the real `ingestWbmPull` callable: open→accepted;
+  closed→retryable refusal with NO incoming write and no revision signal;
+  already-accepted incoming still drains; retry-while-closed stays refused with
+  the packet retained; reopen→the same packet id is accepted and materializes.
+- `adminGate.mjs` (16/16) — the real `adminSubmitPullEdit` callable: gate
+  missing/open→accepted; closed→retryable `UNAVAILABLE` with NO `edit_`
+  incoming, no revision bump, no receipt, no processed/status change;
+  reopen→accepted; distinct callable keys + equivalent material dedupe;
+  different material→both events evidenced; auth failures stay auth failures
+  (checked before the gate); the gate is server-owned and not client-forgeable.
+- `stageA.mjs` (19/19) — the exact Stage-A window (new gated producers + the
+  deployed OLD consumers built from `c7378d6`): old consumers accept and apply
+  the new producer packet shapes; closing the gate stops all three producers;
+  already-accepted old work drains; the old watchdog leaves no stranded work;
+  the drain window stays quiescent.
 
-### Prepared `adminSubmitPullEdit` gate patch (report only — apply on its own branch, do NOT deploy here)
+## Staged rollout (server-first, gate-enforced, FAIL CLOSED)
 
-In `functions/src/security/dashboardPullEdit.ts`, immediately after
-`requireManageDrivers(...)` resolves:
-```ts
-// Blocker-3: honor the WB-M mutation admission gate (retryable when paused).
-const gate = (await admin.database().ref('system/maintenance/wbmMutations').once('value')).val();
-if (gate && typeof gate === 'object' && gate.paused === true) {
-  throw new httpsV2.HttpsError('unavailable', typeof gate.reason === 'string' && gate.reason ? gate.reason : 'wbm_mutations_paused');
-}
+The quiescence procedure is a fail-closed state machine — pure decision logic
+in `functions/src/security/operational/rolloutStateMachine.ts`, unit-proven in
+its `__tests__` (33/33, interruption after every transition):
+
+```
+OPEN → PAUSE_REQUESTED → DRAINING → DRAINED_180
+     → CONSUMERS_DEPLOYING → VERIFYING → OPEN
 ```
 
-## Staged rollout (server-first, gate-enforced)
+Reopening to OPEN requires an affirmative `verify` (all four consumer revisions
+match the reviewed build **and** no coordinator lock is held **and**
+`packets/incoming` is empty). **Any** interrupt, timeout, read failure,
+unknown revision, or failed consumer deploy from a closed state routes to
+`HELD_CLOSED` — never auto-reopen. If anything goes wrong, the gate stays shut
+and a human decides; the flag is never re-opened by a failure path.
 
-**STAGE A — deploy gate-capable producers, gate OPEN.**
-Deploy `ingestWbmPull`, `ingestWbmEdit` (+ gated `adminSubmitPullEdit` from its
-branch) while `wbmMutations.paused` is false/absent. Prove packet shape and
-normal behavior unchanged (a real pull still processes). No trigger swap yet.
+Prepared (unexecuted) flag tooling: `functions/emulator/rolloutFlag.mjs` plans
+each flag write and is DRY-RUN by default; it refuses an unexpected pre-existing
+value (close only when OPEN/absent; reopen/confirm only when CLOSED; a malformed
+flag is always refused) and refuses `--execute` from the harness — a production
+flag write is a human operator action with service-account credentials.
 
-**STAGE B — CLOSE the gate, drain, wait.**
-Set `wbmMutations = { paused: true, reason: 'rollout-<date>', at, by }`.
-Verify new submissions return the retryable maintenance code and are retained
+**STAGE A — deploy the three gated producers, gate OPEN.**
+Guard, then deploy `ingestWbmPull`, `ingestWbmEdit`, `adminSubmitPullEdit`
+(the Stage-A command above) while `wbmMutations.paused` is false/absent. Prove
+packet shape and normal behavior unchanged (a real pull still processes). No
+trigger swap yet.
+
+**STAGE B — CLOSE the gate, drain, wait (machine: PAUSE_REQUESTED → DRAINED_180).**
+Set `wbmMutations = { paused: true, reason: 'rollout-<date>', at, by }` (plan it
+with `rolloutFlag.mjs close --observed <read>`). Verify new submissions from all
+three producers return the retryable maintenance code and are retained
 client-side. Drain: confirm `packets/incoming` is empty and no
 `wells/<well>/status/chronoLock` is held. **Wait ≥ 180 s** (120 s trigger
-timeout + 60 s recovery margin) so no old commit-owning invocation remains.
+timeout + 60 s recovery margin) so no old commit-owning invocation remains. If
+drain or the wait is interrupted, the machine is `HELD_CLOSED` — do not reopen.
 
-**STAGE C — deploy the canonical triggers + watchdog.**
-Deploy `processIncomingPull`, `processEditRequest`, `processDeleteRequest`,
-`watchdogStrandedPackets` with the exact name filter. Watch the CLI plan:
-**abort** on any deletion, rules, hosting, or unrelated-function action.
+**STAGE C — deploy the canonical triggers + watchdog (machine: CONSUMERS_DEPLOYING).**
+Guard, then deploy `processIncomingPull`, `processEditRequest`,
+`processDeleteRequest`, `watchdogStrandedPackets` (the Stage-C command above).
+Watch the CLI plan: **abort** on any deletion, rules, hosting, or
+unrelated-function action. A failed/partial deploy holds the gate closed.
 
-**STAGE D — verify, reopen, monitor.**
-Read-only health check (function revisions report the intended hash, no lock
-held, incoming empty). Set `wbmMutations.paused = false`. Monitor the first
-genuine field mutation end-to-end: receipt, chronological history, current
-state, both revision signals, performance, production, outgoing, incoming
-deletion.
+**STAGE D — verify, reopen, monitor (machine: VERIFYING → OPEN only on full proof).**
+Read-only health check (all four consumer revisions report the intended hash,
+no lock held, incoming empty). Only then set `wbmMutations.paused = false`
+(`rolloutFlag.mjs reopen --observed <read>`). Monitor the first genuine field
+mutation end-to-end: receipt, chronological history, current state, both
+revision signals, performance, production, outgoing, incoming deletion.
 
 Success proof (read-only): the next pull writes a
 `wells/<well>/chronoReceipts/<packetId>` receipt, advances
