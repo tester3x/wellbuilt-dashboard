@@ -2,7 +2,7 @@
 // canonical patch, and the legacy-bridge invariants.
 import { INCOMING_REVISION_V2_PATH, buildRevisionV2, revisionV2TokenOf } from '../revisionV2';
 import { assembleCanonicalPatch, receiptPathFor } from '../canonicalPatch';
-import { nextIncomingVersion } from '../incomingVersionPublish';
+import { applyLegacyBump } from '../incomingVersionPublish';
 import type { CommitReceipt } from '../chronoCommitCoordinator';
 
 const receipt = (operationId: string, committedAtMs = 1787927108195): CommitReceipt => ({
@@ -66,20 +66,21 @@ describe('atomic placement in the canonical patch', () => {
   });
 });
 
-describe('legacy bridge invariants (transaction updater)', () => {
-  test('cannot decrease, at any magnitude', () => {
+describe('legacy bridge invariants (atomic increment sentinel)', () => {
+  test('cannot decrease, at any magnitude below the proof bound', () => {
     for (const v of [0, 1, 61, 1787927108195, Number.MAX_SAFE_INTEGER, 4.3005353146607763e20, 8.6e20]) {
-      expect(nextIncomingVersion(v)).toBeGreaterThan(v);
+      expect(applyLegacyBump(v)).toBeGreaterThan(v);
     }
   });
 
-  test('concurrent mutations cannot lose a signal: N serialized bumps yield N distinct increasing values', () => {
-    // The RTDB transaction serializes concurrent writers; each retry re-reads.
-    // Simulate the serialized outcome from the saturated production value.
+  test('serialized server-side application yields N distinct increasing values from the saturated start', () => {
+    // RTDB applies each update's increment atomically against the then-current
+    // value — concurrent commits serialize server-side. Model the serialized
+    // outcome from the saturated production value.
     let v = 4.3005353146607763e20;
     const seen = new Set<number>([v]);
     for (let i = 0; i < 10; i++) {
-      v = nextIncomingVersion(v);
+      v = applyLegacyBump(v);
       expect(seen.has(v)).toBe(false); // every bump observable
       seen.add(v);
     }

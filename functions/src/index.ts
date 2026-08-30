@@ -11,17 +11,20 @@ import {
   comparePullEquivalence,
   editAlreadyApplied,
   editMaterialChange,
+  correctionConflictVerdict,
   evaluateIncomingPull,
   isStaleRevision,
+  lineageMaterialDifferences,
   malformedDeleteVerdict,
   orphanEditVerdict,
   packetIdCollisionVerdict,
+  provenDuplicateVerdict,
   quarantineIncomingPacket,
   removeIncomingPacket,
   resolveEditTarget,
   strandedPacketVerdict,
 } from './packetGuards';
-import { isLateEntryByCanonicalOrder, type ChronoPullInput, type WellChronoConfig } from './chronoRecompute';
+import { compareChronoKey, isLateEntryByCanonicalOrder, type ChronoPullInput, type WellChronoConfig } from './chronoRecompute';
 import { CANONICAL_COMMIT_TIMEOUT_SECONDS, runCanonicalMutation, type CommitReceipt } from './chronoCommitCoordinator';
 import { makeCoordinatorIO } from './coordinatorIO';
 import { assembleCanonicalPatch, receiptPathFor } from './canonicalPatch';
@@ -53,7 +56,6 @@ import {
   resolveOriginalSubmissionAt,
   type EditableSnapshot,
 } from './editHistory';
-import { notifyIncomingVersionBestEffort } from './incomingVersionPublish';
 
 
 admin.initializeApp();
@@ -620,6 +622,46 @@ export async function processIncomingPullPacket(dataIn: PullPacket, packetIdIn: 
       return null;
     }
 
+    // ─── Lineage rules (duplicate contract): a NEW id pointing at an
+    // EXISTING processed pull via idempotencyKey/_originalKey. Equivalent
+    // material → PROVEN duplicate collapses into quarantine (the original
+    // stands alone). Different material → CORRECTION CONFLICT: both survive —
+    // the original in processed, the conflicting material in packets/rejected
+    // where the review surfaces present it. No annotation is written onto the
+    // original (the ONE canonical writer owns processed rows). ─────────────
+    const lineageRaw = (data as { idempotencyKey?: unknown; _originalKey?: unknown });
+    const lineageRef =
+      typeof lineageRaw.idempotencyKey === 'string' && lineageRaw.idempotencyKey !== packetId
+        ? lineageRaw.idempotencyKey
+        : (typeof lineageRaw._originalKey === 'string' && lineageRaw._originalKey !== packetId
+          ? lineageRaw._originalKey
+          : null);
+    if (lineageRef) {
+      const lineageSnap = await db.ref(`packets/processed/${lineageRef}`).once('value');
+      if (lineageSnap.exists()) {
+        const lineageOriginal = lineageSnap.val() as Record<string, unknown>;
+        const lineageDiffs = lineageMaterialDifferences(data as unknown as Record<string, unknown>, lineageOriginal);
+        if (lineageDiffs.length === 0) {
+          console.log(`[QUARANTINE] ${wellName}: PROVEN_DUPLICATE — ${packetId} carries lineage to ${lineageRef} with equivalent material`);
+          await quarantineIncomingPacket(db.ref(), {
+            packetId,
+            packet: data,
+            verdict: provenDuplicateVerdict(lineageRef),
+            nowMs: Date.now(),
+          });
+        } else {
+          console.log(`[QUARANTINE] ${wellName}: CORRECTION_CONFLICT — ${packetId} vs ${lineageRef} differs in ${lineageDiffs.join(', ')}`);
+          await quarantineIncomingPacket(db.ref(), {
+            packetId,
+            packet: data,
+            verdict: correctionConflictVerdict(lineageRef, lineageDiffs),
+            nowMs: Date.now(),
+          });
+        }
+        return null;
+      }
+    }
+
     // ─── GS3 7/21/2026 guards: future-time + lossless quarantine ────────
     // A pull entered as 11:07 PM instead of 11:07 AM became this well's
     // outgoing watermark; five legitimate packets then compared "stale"
@@ -1069,11 +1111,8 @@ export async function processIncomingPullPacket(dataIn: PullPacket, packetIdIn: 
       return null;
     }
     console.log(`[CANONICAL] ${wellName}: ${packetId} → ${commitOutcome.status} (processed+outgoing+status+perf+production+afr+receipt, 1 atomic update)`);
-
-    await notifyIncomingVersionBestEffort(db.ref('packets/incoming_version'), {
-      outgoingCommitted: true,
-      pullAccepted: true,
-    });
+    // (both revision signals — v2 token + legacy increment — commit INSIDE the
+    //  canonical atomic update; no post-commit publication step remains.)
 
     // ── canonical_jobs + Phase 1.2 server-side back-patch ─────────────────
     // Best-effort. Failure here never blocks packet processing — canonical_jobs
@@ -1794,15 +1833,16 @@ export async function applyV2ChronologicalEdit(args: {
         hasOutgoing = true;
         outgoingKeys.push(String(child.key));
         const resp = child.val();
-        // Latest = event-time comparison, not string identity: an edit that
-        // MOVES this pull to the newest event time must promote it even though
-        // the current response belongs to a different pull (emulator case
-        // 'edit-moving-later-becomes-current'). Equal times defer to the
-        // standing response (packetId tie-break is arbitrated at CREATE time).
-        const respUtcMs = Date.parse(String(resp.lastPullDateTimeUTC ?? '')) || 0;
-        const editedUtcMs = Date.parse(newDateTimeUTC) || 0;
+        // Latest = the FULL canonical order (compareChronoKey: dateTimeUTC,
+        // then deterministic packetId tie-break) — never timestamp-only,
+        // string identity, arrival order, or key iteration order. An edit
+        // that moves this pull chronologically AFTER the standing response's
+        // pull promotes it, including the equal-time/higher-id case.
         if (resp.lastPullDateTimeUTC === origPacket.dateTimeUTC || resp.lastPullDateTimeUTC === newDateTimeUTC
-          || editedUtcMs > respUtcMs) {
+          || compareChronoKey(
+            newDateTimeUTC, originalPacketId,
+            String(resp.lastPullDateTimeUTC ?? ''), String(resp.lastPullPacketId ?? ''),
+          ) > 0) {
           isLatestPull = true;
         }
       });
@@ -2457,13 +2497,20 @@ export async function processIncomingEdit(
       hasOutgoing = true;
       if (child.key) editOldResponseIds.push(child.key);
       const resp = child.val();
-      // If the outgoing response points to this packet's timestamp, it's the latest
-      // (check both original and new dateTimeUTC in case date was edited).
-      // Latest = event-time comparison, not string identity (see v2 note above).
-      const respUtcMs2 = Date.parse(String(resp.lastPullDateTimeUTC ?? '')) || 0;
-      const editedUtcMs2 = Date.parse(newDateTimeUTC) || 0;
-      if (resp.lastPullDateTimeUTC === origPacket.dateTimeUTC || resp.lastPullDateTimeUTC === newDateTimeUTC
-        || editedUtcMs2 > respUtcMs2) {
+      // Identity FIRST: the response points at this pull only when its
+      // lastPullPacketId says so — timestamp equality is not identity (a
+      // different pull can share the second). Legacy responses without an id
+      // fall back to the timestamp match. Otherwise the FULL canonical
+      // comparator (dateTimeUTC, then packetId tie-break) decides promotion.
+      const standingId3 = String(resp.lastPullPacketId ?? '');
+      const respIsThisPull3 = standingId3
+        ? standingId3 === originalPacketId
+        : (resp.lastPullDateTimeUTC === origPacket.dateTimeUTC || resp.lastPullDateTimeUTC === newDateTimeUTC);
+      if (respIsThisPull3
+        || compareChronoKey(
+          newDateTimeUTC, originalPacketId,
+          String(resp.lastPullDateTimeUTC ?? ''), standingId3,
+        ) > 0) {
         isLatestPull = true;
       }
     });
@@ -2817,11 +2864,8 @@ export async function processIncomingEdit(
 
     // (the edit request was consumed as part of the ONE canonical atomic update
     // above — never a separate remove here.)
-
-    await notifyIncomingVersionBestEffort(db.ref('packets/incoming_version'), {
-      outgoingCommitted: true,
-      pullAccepted: true,
-    });
+    // (both revision signals — v2 token + legacy increment — commit INSIDE the
+    //  canonical atomic update; no post-commit publication step remains.)
 
     console.log(`Edit complete for ${wellName}: ${originalPacketId}`);
     return null;
@@ -2905,13 +2949,20 @@ export const processDeleteRequest = functionsV1.runWith({ timeoutSeconds: CANONI
       // driver/display fields the chain doesn't carry). Skip the row being deleted.
       const remainingSnap = await db.ref('packets/processed')
         .orderByChild('wellName').equalTo(wellName).once('value');
+      // New latest = the FULL canonical order (compareChronoKey: dateTimeUTC,
+      // then packetId tie-break) — never time-only or key-iteration order,
+      // so equal-time survivors resolve deterministically.
       let latestPacket: Record<string, any> | null = null;
-      let latestTime = 0;
+      let latestKey = '';
       remainingSnap.forEach((child) => {
         if (child.key === targetPacketId) return;
         const pkt = child.val();
-        const pktTime = new Date(pkt.dateTimeUTC).getTime();
-        if (pktTime > latestTime) { latestTime = pktTime; latestPacket = pkt; }
+        const key = String(child.key ?? pkt.packetId ?? '');
+        if (!latestPacket
+          || compareChronoKey(String(pkt.dateTimeUTC ?? ''), key, String(latestPacket.dateTimeUTC ?? ''), latestKey) > 0) {
+          latestPacket = pkt;
+          latestKey = key;
+        }
       });
 
       // Prior outgoing response ids (the commit deletes them atomically).
@@ -3036,11 +3087,8 @@ export const processDeleteRequest = functionsV1.runWith({ timeoutSeconds: CANONI
       });
       console.log(`[CANONICAL-DELETE] ${wellName}: ${targetPacketId} → ${notFoundOutcome.status} (authorized no-op, target absent)`);
     }
-
-    await notifyIncomingVersionBestEffort(db.ref('packets/incoming_version'), {
-      outgoingCommitted: true,
-      pullAccepted: true,
-    });
+    // (both revision signals — v2 token + legacy increment — commit INSIDE the
+    //  canonical atomic update; no post-commit publication step remains.)
 
     console.log(`Delete complete for ${wellName}: ${targetPacketId}`);
     return null;

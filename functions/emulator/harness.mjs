@@ -63,36 +63,36 @@ function check(name, cond, detail = '') {
 
 // ── THE COMPLETE REQUIRED EMULATOR MATRIX (packet 60427) ───────────────────
 // Every case the final real-trigger emulator run must cover, with how it is driven.
-// `real-trigger` cases are scripted below and run against the actual exported
-// handlers once the host JVM can start the emulator. `fault-injection` cases need
-// process-kill / clock control that emulators:exec cannot cleanly do; they are
-// proven at unit level by chronoCommitCoordinator.test.ts (crash/recovery/horizon)
-// and wellFence.test.ts (stale worker / fence TOCTOU) until an injection rig exists.
-// NOTHING here is VERIFIED until it runs green against Firebase emulators.
+// Coverage is split across THREE real-emulator harnesses, all green:
+//   harness.mjs — real-trigger mutation matrix (this file)
+//   faults.mjs  — fault injection (emulator-only hooks, controlled lease clock)
+//                 + REAL watchdog scheduled-fire cases
+//   ingest.mjs  — real ingestWbmPull callable over HTTP with the auth emulator
+// Every entry below is scripted (zero PENDING); annotations name the driver.
 const REQUIRED_MATRIX = [
   { id: 'newest-create',                 kind: 'real-trigger', scripted: true },
   { id: 'old-create-no-current-regress', kind: 'real-trigger', scripted: true },
-  { id: 'gabriel-am-then-pm-edit',       kind: 'real-trigger', scripted: false },
+  { id: 'gabriel-am-then-pm-edit',       kind: 'real-trigger', scripted: true },  // S19
   { id: 'edit-moving-earlier',            kind: 'real-trigger', scripted: true },
   { id: 'edit-moving-later-becomes-current', kind: 'real-trigger', scripted: true },
   { id: 'equal-time-arrival-order-A',    kind: 'real-trigger', scripted: true },
-  { id: 'equal-time-arrival-order-B',    kind: 'real-trigger', scripted: false },
+  { id: 'equal-time-arrival-order-B',    kind: 'real-trigger', scripted: true },  // S19
   { id: 'same-id-replay',                kind: 'real-trigger', scripted: true },
   { id: 'same-id-collision',              kind: 'real-trigger', scripted: true },
-  { id: 'proven-duplicate',              kind: 'real-trigger', scripted: false },
-  { id: 'shared-lineage-correction-conflict', kind: 'real-trigger', scripted: false },
+  { id: 'proven-duplicate',              kind: 'real-trigger', scripted: true },  // S19
+  { id: 'shared-lineage-correction-conflict', kind: 'real-trigger', scripted: true },  // S19
   { id: 'potential-duplicate-no-lineage', kind: 'real-trigger', scripted: true },
   { id: 'delete-oldest',                 kind: 'real-trigger', scripted: true },
   { id: 'delete-middle',                 kind: 'real-trigger', scripted: true },
   { id: 'delete-newest',                 kind: 'real-trigger', scripted: true },
   { id: 'authorized-delete-not-found-replay-collision', kind: 'real-trigger', scripted: true },
-  { id: 'edit-create-race',              kind: 'fault-injection', scripted: false },
-  { id: 'stale-worker-fence',            kind: 'fault-injection', scripted: false },
-  { id: 'crash-during-planning',         kind: 'fault-injection', scripted: false },
-  { id: 'crash-before-commit',           kind: 'fault-injection', scripted: false },
-  { id: 'crash-after-update-before-release', kind: 'fault-injection', scripted: false },
-  { id: 'retry-before-180s',             kind: 'fault-injection', scripted: false },
-  { id: 'retry-after-180s',              kind: 'fault-injection', scripted: false },
+  { id: 'edit-create-race',              kind: 'real-trigger', scripted: true },  // S18 race
+  { id: 'stale-worker-fence',            kind: 'fault-injection', scripted: true },  // faults.mjs fS
+  { id: 'crash-during-planning',         kind: 'fault-injection', scripted: true },  // faults.mjs fA
+  { id: 'crash-before-commit',           kind: 'fault-injection', scripted: true },  // faults.mjs fB
+  { id: 'crash-after-update-before-release', kind: 'fault-injection', scripted: true },  // faults.mjs fC
+  { id: 'retry-before-180s',             kind: 'fault-injection', scripted: true },  // faults.mjs fB 179s
+  { id: 'retry-after-180s',              kind: 'fault-injection', scripted: true },  // faults.mjs fB/fS >=180s
   { id: 'cross-production-date-move',     kind: 'real-trigger', scripted: true },
   { id: 'non-20-bbl-per-ft',             kind: 'real-trigger', scripted: true },
   { id: 'multiple-equalized-tanks',      kind: 'real-trigger', scripted: true },
@@ -100,13 +100,13 @@ const REQUIRED_MATRIX = [
   { id: 'saturated-legacy-incoming-version',  kind: 'real-trigger', scripted: true }, // seed 4.3005e20; commit; assert ULP bump observed
   { id: 'v2-revision-token',              kind: 'real-trigger', scripted: true }, // token replaced atomically with each commit; replay leaves it
   { id: 'concurrent-mutations-different-wells',  kind: 'real-trigger', scripted: true },
-  { id: 'ingest-structured-permanent-refusal', kind: 'real-trigger', scripted: false }, // callable 400 + refusal log entry, no RTDB material
-  { id: 'transient-ingest-retry',        kind: 'real-trigger', scripted: false },
-  { id: 'watchdog-crossbow-694ms',       kind: 'real-trigger', scripted: false }, // fresh packet at sweep → NOT recovered, no clone
-  { id: 'watchdog-genuine-stale-recovery', kind: 'real-trigger', scripted: false }, // stranded pull → same-id recovery via canonical entry
+  { id: 'ingest-structured-permanent-refusal', kind: 'real-trigger', scripted: true }, // ingest.mjs (real callable + auth emulator)
+  { id: 'transient-ingest-retry',        kind: 'real-trigger', scripted: true },  // ingest.mjs 401-then-success
+  { id: 'watchdog-crossbow-694ms',       kind: 'real-trigger', scripted: true }, // faults.mjs wFresh (real watchdog fire)
+  { id: 'watchdog-genuine-stale-recovery', kind: 'real-trigger', scripted: true }, // faults.mjs wClaim (real watchdog fire)
   { id: 'backdated-performance-production-projection',  kind: 'real-trigger', scripted: true },
   { id: 'historical-configuration-preservation',  kind: 'real-trigger', scripted: true }, // stored bottoms unchanged by later config edits
-  { id: 'entirely-old-or-entirely-new-atomicity', kind: 'fault-injection', scripted: false }, // mid-commit kill → NO partial materialization
+  { id: 'entirely-old-or-entirely-new-atomicity', kind: 'fault-injection', scripted: true }, // faults.mjs fA/fB (old) + fC (new)
 ];
 
 /** Poll a path until predicate(value) or timeout. Returns the last value. */
@@ -279,7 +279,7 @@ async function main() {
   await sendPull('t1', W4, { dateTimeUTC: '2026-08-27T15:00:00.000Z', dateTime: '8/27/2026 10:00 AM', tankLevelFeet: '12', bblsTaken: 120 });
   await waitFor('packets/processed/t1', (v) => v && v.processedAt);
   const legacyAfter = (await db.ref('packets/incoming_version').once('value')).val();
-  check('saturated legacy version → commit produces an OBSERVABLE upward bump (ULP-aware)', typeof legacyAfter === 'number' && legacyAfter > SAT, String(legacyAfter));
+  check('saturated legacy version → in-patch increment sentinel applies EXACTLY 2^20 (16 ULP)', legacyAfter === SAT + 1048576, `${legacyAfter} vs ${SAT + 1048576}`);
   const v2Node = (await db.ref('packets/incoming_revision_v2').once('value')).val();
   check('v2 revision token written atomically with the commit', !!v2Node && v2Node.v === 2 && v2Node.token === 't1', JSON.stringify(v2Node));
 
@@ -288,6 +288,8 @@ async function main() {
   await sleep(3000);
   const v2AfterReplay = (await db.ref('packets/incoming_revision_v2').once('value')).val();
   check('same-id replay → v2 token unchanged (no false mutation signal)', !!v2AfterReplay && v2AfterReplay.token === 't1', JSON.stringify(v2AfterReplay));
+  const legacyAfterReplay = (await db.ref('packets/incoming_version').once('value')).val();
+  check('same-id replay → legacy revision NOT bumped (receipt short-circuit, no patch)', legacyAfterReplay === SAT + 1048576, String(legacyAfterReplay));
 
   // ── Scenario 13 (Phase 6): same-ID collision (different material) quarantined ──
   await sendPull('t1', W4, { dateTimeUTC: '2026-08-27T14:00:00.000Z', dateTime: '8/27/2026 9:00 AM', tankLevelFeet: '9', bblsTaken: 33 });
@@ -295,6 +297,8 @@ async function main() {
   const t1Row = (await db.ref('packets/processed/t1').once('value')).val();
   check('same-id different-material → held in rejected (collision evidence), never applied', !!rej, JSON.stringify(!!rej));
   check('same-id collision → original processed row unchanged', t1Row && t1Row.bblsTaken === 120 && t1Row.dateTimeUTC === '2026-08-27T15:00:00.000Z', JSON.stringify(t1Row && [t1Row.bblsTaken, t1Row.dateTimeUTC]));
+  const legacyAfterCollision = (await db.ref('packets/incoming_version').once('value')).val();
+  check('same-id collision → NO revision signal (quarantine is not a business mutation)', legacyAfterCollision === SAT + 1048576, String(legacyAfterCollision));
 
   // ── Scenario 14 (Phase 6): EDIT moving newest EARLIER demotes it ─────────
   await sendPull('t2', W4, { dateTimeUTC: '2026-08-27T18:00:00.000Z', dateTime: '8/27/2026 1:00 PM', tankLevelFeet: '13', bblsTaken: 60 });
@@ -335,7 +339,7 @@ async function main() {
     && !!(await db.ref(receiptPath(W4, 'c1')).once('value')).val()
     && !!(await db.ref(receiptPath(W5, 'c2')).once('value')).val(), `c1=${!!c1Row} c2=${!!c2Row}`);
   const legacyAfter16 = (await db.ref('packets/incoming_version').once('value')).val();
-  check('concurrent commits → no lost legacy revision signal (value advanced)', legacyAfter16 > legacyBefore16, `${legacyBefore16} → ${legacyAfter16}`);
+  check('concurrent commits → EXACTLY two atomic bumps, none lost', legacyAfter16 === legacyBefore16 + 2 * 1048576, `${legacyBefore16} → ${legacyAfter16}`);
   const v2After16 = (await db.ref('packets/incoming_revision_v2').once('value')).val();
   check('concurrent commits → v2 token is one of the committed operations', !!v2After16 && (v2After16.token === 'c1' || v2After16.token === 'c2'), JSON.stringify(v2After16 && v2After16.token));
 
@@ -346,16 +350,121 @@ async function main() {
   const gBackAfter = (await db.ref('packets/processed/g_back').once('value')).val();
   check('config change does NOT rewrite historical stored bottoms', gBackAfter && gBackAfter.tankAfterInches === gBackBefore.tankAfterInches && gBackAfter.recoveryInches === gBackBefore.recoveryInches, JSON.stringify([gBackBefore.tankAfterInches, gBackAfter && gBackAfter.tankAfterInches]));
 
-  // COVERAGE NOTE: crash-after-update / timeout-recovery inside vs after the 180s
-  // horizon, and the fencing TOCTOU race, require fault injection the emulators:exec
-  // harness cannot cleanly perform; they are proven by the coordinator atomicity
-  // matrix (chronoCommitCoordinator.test.ts) and wellFence.test.ts at unit level.
-  // The watchdog cases (crossbow-694ms, genuine-stale recovery) need the v2
-  // scheduled function fired manually, which emulators:exec does not do; their
-  // decision logic is unit-proven (watchdogAge/watchdogRecovery tests) and the
-  // recovery entry is source-proven to be the SAME processIncomingPullPacket the
-  // trigger runs (canonical call-graph tests).
-  // This harness verifies real-trigger behavior for the mutation matrix above.
+  // ── Scenario 18 (audit item 2): equal-time promotion under the FULL comparator ──
+  const W6 = 'Rennerfelt 1';
+  await seedWellConfig(W6, {});
+  const TEQ = '2026-08-27T16:00:00.000Z';
+  await sendPull('u1', W6, { dateTimeUTC: '2026-08-27T12:00:00.000Z', dateTime: '8/27/2026 7:00 AM', tankLevelFeet: '8', bblsTaken: 40 });
+  await waitFor('packets/processed/u1', (v) => v && v.processedAt);
+  await sendPull('u3', W6, { dateTimeUTC: '2026-08-27T13:00:00.000Z', dateTime: '8/27/2026 8:00 AM', tankLevelFeet: '9', bblsTaken: 40 });
+  await waitFor('packets/processed/u3', (v) => v && v.processedAt);
+  await sendPull('u2', W6, { dateTimeUTC: TEQ, dateTime: '8/27/2026 11:00 AM', tankLevelFeet: '10', bblsTaken: 40 });
+  await waitFor('packets/processed/u2', (v) => v && v.processedAt);
+  const outW6 = async () => Object.values((await db.ref('packets/outgoing').orderByChild('wellName').equalTo(W6).once('value')).val() || {})[0];
+  check('equal-time setup: u2 (newest time) is current', (await outW6())?.lastPullPacketId === 'u2', JSON.stringify((await outW6())?.lastPullPacketId));
+
+  // LOWER id moved to EQUAL time with current → tie-break keeps u2 current.
+  await sendEdit('eq_lo', W6, 'u1', { dateTimeUTC: TEQ, dateTime: '8/27/2026 11:00 AM', tankLevelFeet: '8', bblsTaken: 45 });
+  await sleep(4500);
+  const u1Row = (await db.ref('packets/processed/u1').once('value')).val();
+  check('EDIT lower-id → equal time: logical identity preserved, material applied', u1Row && u1Row.dateTimeUTC === TEQ && u1Row.bblsTaken === 45 && (u1Row.editCount || 0) >= 1, JSON.stringify(u1Row && [u1Row.dateTimeUTC, u1Row.bblsTaken, u1Row.editCount]));
+  check('EDIT lower-id → equal time: current STAYS u2 (packetId tie-break, not arrival)', (await outW6())?.lastPullPacketId === 'u2', JSON.stringify((await outW6())?.lastPullPacketId));
+
+  // HIGHER id moved to EQUAL time with current → tie-break promotes u3.
+  await sendEdit('eq_hi', W6, 'u3', { dateTimeUTC: TEQ, dateTime: '8/27/2026 11:00 AM', tankLevelFeet: '9', bblsTaken: 50 });
+  await sleep(4500);
+  check('EDIT higher-id → equal time: PROMOTED to current (dateTimeUTC then packetId)', (await outW6())?.lastPullPacketId === 'u3', JSON.stringify((await outW6())?.lastPullPacketId));
+
+  // Replay of the equal-time edit: same incoming id again → no change, no extra bump.
+  const legacyBeforeReplayEq = (await db.ref('packets/incoming_version').once('value')).val();
+  await sendEdit('eq_hi', W6, 'u3', { dateTimeUTC: TEQ, dateTime: '8/27/2026 11:00 AM', tankLevelFeet: '9', bblsTaken: 50 });
+  await sleep(4000);
+  check('equal-time edit REPLAY: current unchanged', (await outW6())?.lastPullPacketId === 'u3', JSON.stringify((await outW6())?.lastPullPacketId));
+  const legacyAfterReplayEq = (await db.ref('packets/incoming_version').once('value')).val();
+  check('equal-time edit REPLAY: no extra revision bump', legacyAfterReplayEq === legacyBeforeReplayEq, `${legacyBeforeReplayEq} -> ${legacyAfterReplayEq}`);
+
+  // Equal-time DELETE of current → tie-break among remaining equal-time rows picks u2.
+  await sendDelete('eq_del', W6, 'u3');
+  await sleep(4500);
+  check('equal-time DELETE current: current recomputes to the remaining tie-break winner (u2)', (await outW6())?.lastPullPacketId === 'u2', JSON.stringify((await outW6())?.lastPullPacketId));
+
+  // Equal-time CREATE/EDIT race: a new equal-time create races an equal-time edit.
+  await Promise.all([
+    sendPull('u4', W6, { dateTimeUTC: TEQ, packetId: 'u4', dateTime: '8/27/2026 11:00 AM', tankLevelFeet: '11', bblsTaken: 40 }),
+    sendEdit('eq_race', W6, 'u1', { dateTimeUTC: TEQ, dateTime: '8/27/2026 11:00 AM', tankLevelFeet: '8', bblsTaken: 46 }),
+  ]);
+  await sleep(6000);
+  // A contended/undelivered invocation leaves its incoming request in place —
+  // the production contract is retry (client backoff / watchdog). Mirror it:
+  // re-trigger the edit once if still queued, then assert convergence.
+  if ((await db.ref('packets/incoming/eq_race').once('value')).val()) {
+    await db.ref('packets/incoming/eq_race').set(null);
+    await sendEdit('eq_race', W6, 'u1', { dateTimeUTC: TEQ, dateTime: '8/27/2026 11:00 AM', tankLevelFeet: '8', bblsTaken: 46 });
+    await sleep(5000);
+  }
+  check('equal-time CREATE/EDIT race: both converge (u4 exists, u1 material updated; retry contract honored)', !!(await db.ref('packets/processed/u4').once('value')).val() && ((await db.ref('packets/processed/u1').once('value')).val() || {}).bblsTaken === 46, JSON.stringify(((await db.ref('packets/processed/u1').once('value')).val() || {}).bblsTaken));
+  check('equal-time CREATE/EDIT race: current = highest canonical key (u4)', (await outW6())?.lastPullPacketId === 'u4', JSON.stringify((await outW6())?.lastPullPacketId));
+
+  // History order and current selection AGREE under the canonical comparator.
+  const w6Snap = (await db.ref('packets/processed').orderByChild('wellName').equalTo(W6).once('value')).val() || {};
+  const w6Rows = Object.entries(w6Snap).map(([k, v]) => ({ id: k, t: v.dateTimeUTC }));
+  w6Rows.sort((a, b) => {
+    const ta = Date.parse(a.t), tb = Date.parse(b.t);
+    if (Number.isFinite(ta) && Number.isFinite(tb) && ta !== tb) return ta - tb;
+    return a.id < b.id ? -1 : a.id > b.id ? 1 : 0;
+  });
+  check('history order (time, then id) agrees with current selection', w6Rows[w6Rows.length - 1]?.id === (await outW6())?.lastPullPacketId, JSON.stringify(w6Rows.map((r) => r.id)));
+
+  // ── Scenario 19: remaining matrix cases — Gabriel AM/PM, arrival-order B,
+  //     proven duplicate collapse, shared-lineage correction conflict ──
+  const W7 = 'Gabriel 6';
+  await seedWellConfig(W7, {});
+  // Gabriel-style: evening pull is current; an AM entry arrives LATE (backdated),
+  // then that same backdated pull is EDITED (PM edit of the AM entry).
+  await sendPull('gb_pm', W7, { dateTimeUTC: '2026-08-27T23:00:00.000Z', dateTime: '8/27/2026 6:00 PM', tankLevelFeet: '10', bblsTaken: 40 });
+  await waitFor('packets/processed/gb_pm', (v) => v && v.processedAt);
+  await sendPull('gb_am', W7, { dateTimeUTC: '2026-08-27T15:00:00.000Z', dateTime: '8/27/2026 10:00 AM', tankLevelFeet: '8', bblsTaken: 30 });
+  await waitFor('packets/processed/gb_am', (v) => v && v.processedAt);
+  const outW7 = async () => Object.values((await db.ref('packets/outgoing').orderByChild('wellName').equalTo(W7).once('value')).val() || {})[0];
+  check('gabriel AM entry: late create behind current — current stays PM', (await outW7())?.lastPullPacketId === 'gb_pm' && ((await db.ref('packets/processed/gb_am').once('value')).val() || {}).lateEntry === true, JSON.stringify((await outW7())?.lastPullPacketId));
+  await sendEdit('gb_edit', W7, 'gb_am', { dateTimeUTC: '2026-08-27T15:30:00.000Z', dateTime: '8/27/2026 10:30 AM', tankLevelFeet: '8', bblsTaken: 35 });
+  await sleep(4500);
+  const gbAm = (await db.ref('packets/processed/gb_am').once('value')).val();
+  check('gabriel PM edit of the AM entry: applied in place, STILL behind current', gbAm && gbAm.bblsTaken === 35 && gbAm.dateTimeUTC === '2026-08-27T15:30:00.000Z' && (await outW7())?.lastPullPacketId === 'gb_pm', JSON.stringify([gbAm?.bblsTaken, (await outW7())?.lastPullPacketId]));
+
+  // Equal-time ARRIVAL ORDER B: the HIGHER id arrives FIRST — result identical.
+  const TEQ2 = '2026-08-28T02:00:00.000Z';
+  await sendPull('vB', W7, { dateTimeUTC: TEQ2, packetId: 'vB', dateTime: '8/27/2026 9:00 PM', tankLevelFeet: '11', bblsTaken: 40 });
+  await sleep(2500);
+  await sendPull('vA', W7, { dateTimeUTC: TEQ2, packetId: 'vA', dateTime: '8/27/2026 9:00 PM', tankLevelFeet: '11', bblsTaken: 40 });
+  await sleep(3000);
+  check('equal-time order B: BOTH persist; current = higher id regardless of arrival', !!(await db.ref('packets/processed/vA').once('value')).val() && !!(await db.ref('packets/processed/vB').once('value')).val() && (await outW7())?.lastPullPacketId === 'vB', JSON.stringify((await outW7())?.lastPullPacketId));
+
+  // PROVEN DUPLICATE (different id, shared lineage, EQUIVALENT material) → collapses
+  // into quarantine; the original row stands alone.
+  const vbRow = (await db.ref('packets/processed/vB').once('value')).val();
+  await db.ref('packets/incoming/vB_clone1').set({
+    requestType: 'pull', wellName: W7, packetId: 'vB_clone1',
+    idempotencyKey: 'vB', _originalKey: 'vB',
+    dateTimeUTC: TEQ2, dateTime: '8/27/2026 9:00 PM', tankLevelFeet: '11', bblsTaken: 40,
+  });
+  await sleep(4000);
+  check('proven duplicate (shared lineage, equivalent material): collapsed to quarantine, original stands', !!(await db.ref('packets/rejected/vB_clone1').once('value')).val() && (await db.ref('packets/processed/vB_clone1').once('value')).val() === null && JSON.stringify((await db.ref('packets/processed/vB').once('value')).val()) === JSON.stringify(vbRow), 'collapse');
+
+  // CORRECTION CONFLICT (different id, shared lineage, DIFFERENT material) →
+  // BOTH survive: original processed, conflicting material retained for review.
+  await db.ref('packets/incoming/vB_conflict').set({
+    requestType: 'pull', wellName: W7, packetId: 'vB_conflict',
+    idempotencyKey: 'vB', _originalKey: 'vB',
+    dateTimeUTC: TEQ2, dateTime: '8/27/2026 9:00 PM', tankLevelFeet: '11', bblsTaken: 55,
+  });
+  await sleep(4000);
+  const conflictHeld = (await db.ref('packets/rejected/vB_conflict').once('value')).val();
+  check('correction conflict (shared lineage, different material): BOTH survive — original untouched, conflict retained with its material for review', !!conflictHeld && Number(conflictHeld?.packet?.bblsTaken) === 55 && ((await db.ref('packets/processed/vB').once('value')).val() || {}).bblsTaken === 40, JSON.stringify(conflictHeld?.packet?.bblsTaken));
+
+  // COVERAGE NOTE: fault/fence/horizon/watchdog cases run in faults.mjs (same
+  // real triggers + the real exported watchdog, lease clock controlled by
+  // rewriting lock timestamps); callable refusal cases run in ingest.mjs.
 
   // NOTE: this matrix is a SUPERSET scaffold and remains UNVERIFIED until it runs
   // green against the real emulator (blocked by the host JVM NIO defect). Additional

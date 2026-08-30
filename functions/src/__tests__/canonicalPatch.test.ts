@@ -44,6 +44,7 @@ describe('assembleCanonicalPatch — one atomic patch incl. receipt', () => {
       'well_config/Gabriel 5/avgFlowRateMinutes': 207.79,
       'wells/Gabriel 5/status/chronoRevision': 6,
       'packets/incoming_revision_v2': { v: 2, token: 'op1', at: 0 }, // v2 refresh signal in the SAME patch (Phase 2)
+      'packets/incoming_version': { '.sv': { increment: 1048576 } }, // legacy revision — atomic server-side increment
       'wells/Gabriel 5/chronoReceipts/op1': receipt,            // receipt in the SAME patch
     });
   });
@@ -147,9 +148,10 @@ describe('assembleCanonicalPatch — one atomic patch incl. receipt', () => {
     });
   });
 
-  test('minimal patch still carries the receipt and the v2 refresh signal', () => {
+  test('minimal patch still carries the receipt and BOTH revision signals', () => {
     const patch = assembleCanonicalPatch({ processedUpdates: { 'packets/processed/x/anomaly': true }, receipt, receiptPath: 'r/op1' });
-    expect(Object.keys(patch).sort()).toEqual(['packets/incoming_revision_v2', 'packets/processed/x/anomaly', 'r/op1']);
+    expect(Object.keys(patch).sort()).toEqual(['packets/incoming_revision_v2', 'packets/incoming_version', 'packets/processed/x/anomaly', 'r/op1']);
     expect(patch['packets/incoming_revision_v2']).toEqual({ v: 2, token: 'op1', at: 0 });
+    expect(patch['packets/incoming_version']).toEqual({ '.sv': { increment: 1048576 } });
   });
 });

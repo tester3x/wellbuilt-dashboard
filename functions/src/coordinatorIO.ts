@@ -7,6 +7,7 @@
 // tests without an emulator; index.ts passes the real db.
 import type { CoordinatorIO, LockRecord, CommitReceipt } from './chronoCommitCoordinator';
 import { receiptPathFor } from './canonicalPatch';
+import { makeFaultHook, type FaultDb } from './faultInjection';
 
 export interface RefLike {
   once(evt: 'value'): Promise<{ val(): unknown }>;
@@ -25,7 +26,10 @@ let _tokenCounter = 0;
 
 export function makeCoordinatorIO(db: DbLike, wellName: string): CoordinatorIO {
   const lockRef = db.ref(`wells/${wellName}/status/chronoLock`);
+  // undefined in production — see faultInjection.ts (emulator-only, fail closed).
+  const fault = makeFaultHook(db as unknown as FaultDb);
   return {
+    ...(fault ? { fault } : {}),
     now: () => Date.now(),
     newToken: () => `${wellName}_${Date.now()}_${(_tokenCounter = (_tokenCounter + 1) % 1e9)}_${Math.floor(Math.random() * 1e9)}`,
 

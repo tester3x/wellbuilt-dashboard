@@ -1,85 +1,62 @@
-/**
- * Publish-order contract for packets/incoming_version.
- *
- * Live processIncomingPull (9f75da9 and e049e2f) writes packets/outgoing
- * for accepted pulls and does not bump the counter. Edit/delete already
- * bump it with a non-atomic read/set. This helper is the shared,
- * transaction-safe increment used after outgoing status is readable.
- */
+// Legacy revision contract for `packets/incoming_version` — ATOMIC edition.
+//
+// HISTORY: the node is a saturated float64 (~4.3005e20, production evidence
+// 2026-08-28): its ULP is 65,536, so the historic `current + 1` transaction
+// was a permanent no-op, and old clients persist the saturated value behind a
+// strict-greater comparison that a downward reset would blind forever.
+//
+// PHASE-2 first bridged it with a post-commit ULP-aware transaction; the
+// completion audit rejected post-commit publication (crash window: business
+// state commits, worker dies, old clients never hear about it). The bridge is
+// now a SERVER-SIDE INCREMENT SENTINEL inside the SAME atomic multi-location
+// update as the business state, receipt, incoming removal, and v2 token:
+//
+//   patch['packets/incoming_version'] = { '.sv': { increment: 2^20 } }
+//
+// WHY 2^20 (1,048,576) and not +1 or one ULP:
+//   - a fixed sentinel value must be chosen BEFORE the server applies it, so
+//     it cannot adapt to the stored magnitude the way the old transaction
+//     updater could;
+//   - +1 is below the ULP at the production magnitude → no-op;
+//   - exactly one ULP (65,536) stops producing a guaranteed change as soon as
+//     the magnitude doubles (round-to-nearest ties at half-ULP);
+//   - 2^20 = 16 ULPs at today's magnitude. Round-to-nearest changes any
+//     double v whenever the added constant exceeds half of ULP(v); with
+//     bump = 2^20 that holds for every v with ULP(v) ≤ 2^21, i.e. all
+//     v < 2^73 ≈ 9.44e21 — 22× the saturated value, unreachable by adding
+//     2^20 per mutation (≈ 8.6e15 mutations away). Monotonic and observable
+//     for the life of the node.
+//   - RTDB applies increment sentinels server-side against the then-current
+//     value atomically per write, so concurrent cross-well commits cannot
+//     lose a bump.
+//
+// Replay/refusal safety comes from the coordinator: an idempotent replay
+// short-circuits on the receipt and never submits a patch; a refusal or
+// collision never reaches the patch — so the node moves exactly once per
+// distinct committed canonical mutation.
+
+export const LEGACY_INCOMING_VERSION_PATH = 'packets/incoming_version';
+
+/** 2^20 — see the header for the proof obligations this satisfies. */
+export const LEGACY_REVISION_BUMP = 1 << 20;
+
+/** Bound under which the bump provably changes the stored double. */
+export const LEGACY_BUMP_VALID_BELOW = Math.pow(2, 73);
 
 /**
- * Representable, monotonic bump for the LEGACY node (Phase 2 bridge).
- *
- * Production holds ~4.3005e20 — a float64 whose ULP is 65,536, so the historic
- * `+1` was a permanent no-op (proven live by the 2026-08-28 Gabriel 5 edit
- * log). Old installed clients persist that saturated value behind a
- * strict-greater comparison, so the node can never be reset downward; it must
- * keep producing an OBSERVABLE UPWARD change until those consumers retire.
- * The bump adapts to the stored magnitude: +1 while representable, else one
- * ULP — the smallest guaranteed-upward move at any magnitude. Never a
- * hardcoded larger constant (it stops being representable as the value grows)
- * and never ServerValue.increment (float addition server-side — the same
- * saturation no-op). Runs inside an RTDB transaction, so concurrent mutations
- * serialize and no revision signal is lost.
+ * The raw RTDB server-value increment sentinel, exactly what
+ * admin.database.ServerValue.increment(LEGACY_REVISION_BUMP) produces —
+ * constructed literally so canonicalPatch stays pure and unit-testable.
  */
-export function nextIncomingVersion(current: unknown): number {
-  const n = typeof current === 'number'
-    ? current
-    : parseInt(String(current ?? '0'), 10);
-  const base = Number.isFinite(n) && n > 0 ? n : 0;
-  const bumped = base + 1;
-  if (bumped > base) return bumped;
-  // Saturated: +1 fell below the ULP. Step by exactly one ULP instead.
-  return base + Math.pow(2, Math.floor(Math.log2(base)) - 52);
+export function legacyRevisionIncrement(): { '.sv': { increment: number } } {
+  return { '.sv': { increment: LEGACY_REVISION_BUMP } };
 }
 
-export function shouldPublishIncomingVersion(input: {
-  outgoingCommitted: boolean;
-  pullAccepted: boolean;
-}): boolean {
-  return input.outgoingCommitted === true && input.pullAccepted === true;
-}
-
-export type VersionRef = {
-  transaction: (
-    updater: (current: unknown) => number,
-  ) => Promise<{ committed?: boolean; snapshot?: { val(): unknown } }>;
-};
-
-export async function publishIncomingVersionAfterOutgoing(
-  versionRef: VersionRef,
-  flags: { outgoingCommitted: boolean; pullAccepted: boolean },
-): Promise<number | null> {
-  if (!shouldPublishIncomingVersion(flags)) return null;
-  const result = await versionRef.transaction(nextIncomingVersion);
-  if (result?.committed !== true) return null;
-  const val = result?.snapshot?.val();
-  const n = Number(val);
-  return Number.isFinite(n) ? n : null;
-}
-
-/** Notification after committed writes. Failures are logged, never thrown. */
-export async function notifyIncomingVersionBestEffort(
-  versionRef: VersionRef,
-  flags: { outgoingCommitted: boolean; pullAccepted: boolean },
-  logError: (err: unknown) => void = (err) => {
-    const reason =
-      err && typeof err === 'object' && 'reason' in err && typeof (err as { reason: unknown }).reason === 'string'
-        ? (err as { reason: string }).reason
-        : 'threw';
-    console.error('[incoming_version] notification failed after committed writes', { reason });
-  },
-): Promise<number | null> {
-  if (!shouldPublishIncomingVersion(flags)) return null;
-  try {
-    const published = await publishIncomingVersionAfterOutgoing(versionRef, flags);
-    if (published == null) {
-      logError({ reason: 'not_committed' });
-      return null;
-    }
-    return published;
-  } catch {
-    logError({ reason: 'threw' });
-    return null;
-  }
+/**
+ * Pure model of the server-side application (for proofs/tests): IEEE-754
+ * double addition, which is what the RTDB server and emulator perform.
+ */
+export function applyLegacyBump(current: unknown): number {
+  const n = typeof current === 'number' && Number.isFinite(current) ? current : 0;
+  return n + LEGACY_REVISION_BUMP;
 }

@@ -6,6 +6,7 @@
 // failure exposes none of it. The receipt is part of the SAME patch.
 import type { CommitReceipt } from './chronoCommitCoordinator';
 import { INCOMING_REVISION_V2_PATH, buildRevisionV2 } from './revisionV2';
+import { LEGACY_INCOMING_VERSION_PATH, legacyRevisionIncrement } from './incomingVersionPublish';
 
 /**
  * The EXACT set of `wells/<well>/status` child keys OWNED by a canonical mutation.
@@ -89,9 +90,12 @@ export function assembleCanonicalPatch(p: CanonicalPatchPieces): Record<string, 
   if (p.fence) {
     patch[`wells/${p.fence.wellName}/status/chronoRevision`] = p.fence.revision;
   }
-  // The v2 refresh signal is part of the SAME atomic update: every committed
-  // canonical mutation replaces the token; a failed commit exposes none of it.
+  // BOTH revision signals are part of the SAME atomic update: the v2 token is
+  // replaced, and the legacy node moves via a server-side increment sentinel
+  // (see incomingVersionPublish for the 2^20 proof). A failed commit exposes
+  // neither; a crash after the update leaves business state AND both signals.
   patch[INCOMING_REVISION_V2_PATH] = buildRevisionV2(p.receipt);
+  patch[LEGACY_INCOMING_VERSION_PATH] = legacyRevisionIncrement();
   // The completion receipt lands in the SAME atomic update.
   patch[p.receiptPath] = p.receipt;
   return patch;

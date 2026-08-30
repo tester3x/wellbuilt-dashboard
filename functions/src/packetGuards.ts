@@ -23,6 +23,8 @@
 export const FUTURE_TOLERANCE_MS = 5 * 60 * 1000;
 
 export type RejectionReason =
+  | 'PROVEN_DUPLICATE'
+  | 'CORRECTION_CONFLICT'
   | 'FUTURE_PULL_TIME'
   | 'FUTURE_WELL_WATERMARK'
   | 'STALE_PULL_TIME'
@@ -566,4 +568,48 @@ export async function quarantineIncomingPacket(
     );
     return false;
   }
+}
+
+/**
+ * Lineage verdicts (completion audit, duplicate rules): a NEW packet id that
+ * carries lineage (idempotencyKey/_originalKey) to an EXISTING processed pull.
+ *  - equivalent material → PROVEN duplicate: collapse into quarantine, the
+ *    original row stands alone (nothing silently disappears — the copy is
+ *    held as evidence);
+ *  - different material → CORRECTION CONFLICT: both survive — the original
+ *    in processed, the conflicting material in packets/rejected where the
+ *    review surfaces present it beside the history.
+ */
+export function provenDuplicateVerdict(lineageRef: string): GuardVerdict {
+  return {
+    action: 'quarantine',
+    reason: 'PROVEN_DUPLICATE',
+    readableReason: `New packet id carries lineage to processed ${lineageRef} with EQUIVALENT material — a proven duplicate collapsed into quarantine; the original row stands.`,
+    comparedWatermarkUTC: null,
+  };
+}
+
+export function correctionConflictVerdict(lineageRef: string, differences: string[]): GuardVerdict {
+  return {
+    action: 'quarantine',
+    reason: 'CORRECTION_CONFLICT',
+    readableReason: `New packet id carries lineage to processed ${lineageRef} with DIFFERENT material (${differences.join(', ')}) — both survive: the original in processed, this correction held for review.`,
+    comparedWatermarkUTC: null,
+  };
+}
+
+/** Material equivalence for lineage decisions — business fields only. */
+export function lineageMaterialDifferences(
+  incoming: Record<string, unknown>,
+  original: Record<string, unknown>,
+): string[] {
+  const diffs: string[] = [];
+  const numEq = (a: unknown, b: unknown) => Number(a) === Number(b);
+  if (String(incoming.dateTimeUTC ?? '') !== String(original.dateTimeUTC ?? '')) diffs.push('dateTimeUTC');
+  if (!numEq(incoming.bblsTaken, original.bblsTaken)) diffs.push('bblsTaken');
+  const inTop = Number(incoming.tankLevelFeet) * 12;
+  const origTop = Number(original.tankTopInches ?? Number(original.tankLevelFeet) * 12);
+  if (Number.isFinite(inTop) && Number.isFinite(origTop) && Math.abs(inTop - origTop) > 0.001) diffs.push('tankLevel');
+  if ((incoming.wellDown === true) !== (original.wellDown === true)) diffs.push('wellDown');
+  return diffs;
 }

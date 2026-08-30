@@ -131,6 +131,10 @@ export function planReleaseCommitting(cur: LockRecord | null | undefined, token:
 // ── Orchestrator (injected IO) ─────────────────────────────────────────────
 
 export interface CoordinatorIO {
+  /** Emulator-only fault hook (faultInjection.makeFaultHook). Absent in
+   *  production — makeCoordinatorIO wires it only when the emulator gate
+   *  passes, so exported handlers carry no reachable injection surface. */
+  fault?: (point: 'crash_during_planning' | 'crash_before_commit' | 'crash_after_commit' | 'pause_before_transition', operationId: string) => Promise<void>;
   now(): number;
   newToken(): string;
   /** Read the well lock node. */
@@ -201,23 +205,29 @@ export async function runCanonicalMutation(
   });
   if (!acq.ok || !acq.value) return { status: 'contended', reason: 'acquire_race' };
   const myFence = acq.value.fence;
+  await io.fault?.('crash_during_planning', req.operationId);
 
   // 2. Load + compute the COMPLETE patch (+ receipt).
   const { patch, receipt } = await req.buildPatch({ fence: myFence, token });
+  await io.fault?.('pause_before_transition', req.operationId);
 
   // 3. Transition planning → committing (verify same token+fence). Once here,
   //    no TTL takeover until the horizon.
   const trans = await io.casLock(req.wellName, (c) => planTransitionToCommitting(c, token, myFence, io.now()));
   if (!trans.ok) return { status: 'lost_ownership' };
+  await io.fault?.('crash_before_commit', req.operationId);
 
   // 4. ONE atomic multi-location update = whole patch + receipt (all-or-nothing).
   try {
     await io.commitAtomic(patch);
-  } catch {
+  } catch (err) {
+    console.error(`[CANONICAL] commitAtomic failed for ${req.operationId}:`, err);
     // The atomic update exposes NONE of the patch. Leave the lock committing; a
     // recovery past the horizon sees no receipt and requeues the same op id.
     return { status: 'commit_failed' };
   }
+
+  await io.fault?.('crash_after_commit', req.operationId);
 
   // 5. Release.
   await io.casLock(req.wellName, (c) => planReleaseCommitting(c, token, myFence) ?? null);

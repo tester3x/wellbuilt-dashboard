@@ -53,7 +53,7 @@ function currentSidecar(pull: { packetId: string; dateTimeUTC: string; tankTopIn
   };
 }
 
-interface Report { label: string; affected: number; paths: number; bytes: number; largest: string; hasReceipt: boolean; hasIncomingDelete: boolean; hasV2Revision: boolean; projections: string[]; }
+interface Report { label: string; affected: number; paths: number; bytes: number; largest: string; hasReceipt: boolean; hasIncomingDelete: boolean; hasV2Revision: boolean; hasLegacyRevision: boolean; projections: string[]; }
 function report(label: string, patch: Record<string, unknown>, receipt: CommitReceipt, incomingId: string): Report {
   const keys = Object.keys(patch);
   let largestKey = '', largestBytes = 0;
@@ -72,12 +72,13 @@ function report(label: string, patch: Record<string, unknown>, receipt: CommitRe
     largest: `${largestKey} (${largestBytes}B)`,
     hasReceipt: keys.some((k) => k.includes('/chronoReceipts/')),
     hasV2Revision: keys.includes('packets/incoming_revision_v2'),
+    hasLegacyRevision: JSON.stringify(patch['packets/incoming_version'] ?? null) === JSON.stringify({ '.sv': { increment: 1048576 } }),
     hasIncomingDelete: patch[`packets/incoming/${incomingId}`] === null,
     projections,
   };
-  console.log(`[Atlas1] ${label.padEnd(24)} affected=${String(r.affected).padStart(2)} paths=${String(r.paths).padStart(3)} bytes=${String(r.bytes).padStart(6)} receipt=${r.hasReceipt} incomingΔ=${r.hasIncomingDelete} v2rev=${r.hasV2Revision} proj=[${r.projections.join(',')}] largest=${r.largest}`);
-  // legacy incoming_version is deliberately NOT in the patch — it is the
-  // post-commit best-effort ULP-aware transaction (incomingVersionPublish).
+  console.log(`[Atlas1] ${label.padEnd(24)} affected=${String(r.affected).padStart(2)} paths=${String(r.paths).padStart(3)} bytes=${String(r.bytes).padStart(6)} receipt=${r.hasReceipt} incomingΔ=${r.hasIncomingDelete} v2rev=${r.hasV2Revision} legacyRev=${r.hasLegacyRevision} proj=[${r.projections.join(',')}] largest=${r.largest}`);
+  // (completion audit item 1: the legacy revision is now IN the same atomic
+  //  patch as a 2^20 server-side increment sentinel — no post-commit step.)
   return r;
 }
 
@@ -255,9 +256,9 @@ describe(`Atlas1 — Phase-9 scale completions over ${N} pulls`, () => {
     expect(r.bytes).toBeLessThan(250_000);
   });
 
-  test('every measured patch carries the v2 refresh token; legacy stays post-commit by design', () => {
-    // The atomic patch NEVER contains packets/incoming_version — the legacy
-    // node is bumped by the post-commit ULP-aware transaction, best-effort.
+  test('every measured patch carries BOTH revision signals atomically', () => {
+    // Completion audit item 1: the legacy node moves via the in-patch
+    // server-side increment sentinel; no post-commit revision step exists.
     const p = { packetId: 'atlas_v2chk', dateTimeUTC: new Date(START + (N + 5) * STEP).toISOString(), tankTopInches: 240, bblsTaken: 120, tankAfterInches: 204 };
     const { patch } = buildCreateMutation({
       wellName: WELL, operationId: p.packetId, fence: 652, revision: 652, committedAtMs: 0, patchHash: 'v:652',
@@ -265,6 +266,6 @@ describe(`Atlas1 — Phase-9 scale completions over ${N} pulls`, () => {
       newProcessedRecord: { ...p, processedAt: '2026-08-29T00:00:00.000Z', lateEntry: false },
     });
     expect(patch['packets/incoming_revision_v2']).toMatchObject({ v: 2, token: 'atlas_v2chk' });
-    expect(Object.keys(patch)).not.toContain('packets/incoming_version');
+    expect(patch['packets/incoming_version']).toEqual({ '.sv': { increment: 1048576 } });
   });
 });

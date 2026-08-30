@@ -102,7 +102,10 @@ export function buildWellStatus(i: WellStatusInputs): Record<string, unknown> {
       bottomLevel: inchesToFeetInches(i.tankAfterInches),
       bottomLevelInches: i.tankAfterInches,
       bblsTaken: i.bblsTaken,
-      driverName: i.driverName,
+      // A packet missing driverName must not poison the atomic update:
+      // RTDB update() rejects `undefined` values outright (caught live on the
+      // fault harness), which would fail EVERY commit for that pull forever.
+      driverName: i.driverName ?? null,
       packetId: i.packetId,
     },
     calculated: {

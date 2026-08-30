@@ -11,7 +11,7 @@
 // Phase-2 replacement must satisfy. nextIncomingVersion's defect is pinned
 // here verbatim; when Phase 2 lands a representable bump, THIS test is updated
 // deliberately in the same commit.
-import { nextIncomingVersion } from '../incomingVersionPublish';
+import { LEGACY_REVISION_BUMP, applyLegacyBump, legacyRevisionIncrement } from '../incomingVersionPublish';
 
 /** Exact production magnitude read from packets/incoming_version. */
 export const SATURATED_LEGACY_VERSION = 4.3005353146607763e20;
@@ -33,24 +33,18 @@ describe('saturated legacy incoming_version — frozen production facts', () => 
     expect(v).toBeGreaterThan(Number.MAX_SAFE_INTEGER);
   });
 
-  test('DEPLOYED DEFECT → PHASE-2 BRIDGE: the bump is now representable at the production magnitude', () => {
-    // Phase 1 froze the deployed no-op (`+1` bit-identical to the input — the
-    // observable "increment" the Dashboard edit logged). Phase 2 deliberately
-    // flips this pin: the shared transaction updater now steps by one ULP when
-    // +1 is not representable, so the legacy node moves again.
-    const bumped = nextIncomingVersion(SATURATED_LEGACY_VERSION);
-    expect(bumped).toBeGreaterThan(SATURATED_LEGACY_VERSION);          // observable
-    expect(bumped).toBe(SATURATED_LEGACY_VERSION + 65536);             // exactly one ULP
+  test('DEPLOYED DEFECT → ATOMIC BRIDGE: the in-patch increment sentinel moves the node', () => {
+    // Phase 1 froze the deployed no-op; the completion audit replaced the
+    // post-commit ULP transaction with a server-side increment sentinel that
+    // commits INSIDE the canonical atomic update.
+    expect(legacyRevisionIncrement()).toEqual({ '.sv': { increment: LEGACY_REVISION_BUMP } });
+    const bumped = applyLegacyBump(SATURATED_LEGACY_VERSION);
+    expect(bumped).toBeGreaterThan(SATURATED_LEGACY_VERSION);            // observable
     expect(oldClientWouldSync(bumped, SATURATED_LEGACY_VERSION)).toBe(true); // old strict-greater clients wake
-    // Ordinary magnitudes keep the historic +1 exactly.
-    expect(nextIncomingVersion(61)).toBe(62);
-    expect(nextIncomingVersion('61')).toBe(62);
-    expect(nextIncomingVersion(undefined)).toBe(1);
-    expect(nextIncomingVersion(Number.MAX_SAFE_INTEGER)).toBeGreaterThan(Number.MAX_SAFE_INTEGER);
     // Monotone: repeated bumps keep climbing (never a decrease, never a stall).
     let v = SATURATED_LEGACY_VERSION;
     for (let i = 0; i < 5; i++) {
-      const next = nextIncomingVersion(v);
+      const next = applyLegacyBump(v);
       expect(next).toBeGreaterThan(v);
       v = next;
     }
@@ -73,15 +67,11 @@ describe('saturated legacy incoming_version — frozen production facts', () => 
     expect(epochMsNow).not.toBe(applied);
   });
 
-  test('what any Phase-2 legacy bridge must satisfy at this magnitude', () => {
-    // A compliant bump produces a REPRESENTABLE, MONOTONIC increase from the
-    // saturated value (one ULP or more), so both inequality consumers (VBA)
-    // and strict-greater consumers (old WB-M) observe it.
+  test('the sentinel satisfies the bridge requirement: representable, monotonic, wakes strict-greater consumers', () => {
     const v = SATURATED_LEGACY_VERSION;
-    const ulp = Math.pow(2, Math.floor(Math.log2(v)) - 52);
-    const bumped = v + ulp;
+    const bumped = applyLegacyBump(v);
     expect(bumped).toBeGreaterThan(v);
     expect(oldClientWouldSync(bumped, v)).toBe(true);
-    expect(bumped !== v).toBe(true);
+    expect(bumped).not.toBe(v);
   });
 });
