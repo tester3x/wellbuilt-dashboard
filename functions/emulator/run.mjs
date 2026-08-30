@@ -20,7 +20,7 @@
 // it did not start (emulators:exec owns its children); checks that the
 // configured ports are free before launching; project id is pinned.
 import { execSync, spawn } from 'node:child_process';
-import { existsSync, mkdirSync, readFileSync } from 'node:fs';
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import net from 'node:net';
 import os from 'node:os';
 import { dirname, join } from 'node:path';
@@ -46,8 +46,44 @@ const MODES = {
   adminedit: { only: 'functions,database,firestore', script: 'node functions/emulator/adminEditCompat.mjs' },
   mixed: { only: 'functions,database,firestore', script: 'node functions/emulator/mixedVersion.mjs' },
   rulesprobe: { only: 'database,auth', script: 'node functions/emulator/rulesprobe.mjs', config: 'firebase.rulesprobe.json' },
+  stagea: { only: 'functions,database,firestore,auth', script: 'node functions/emulator/stageA.mjs', config: 'firebase.stageA.json', prep: 'stagea' },
   suites: { only: 'database', script: 'cd functions && npx jest editTrail.emulator wbmPullCanonicalId.emulator editChronologicalPrecedence wbtGovernedOps --silent --runInBand --forceExit', env: { FIRESTORE_EMULATOR_HOST: '127.0.0.1:8099' } },
 };
+
+// Stage-A prep: build the OLD (deployed, pre-chrono) consumers from commit
+// c7378d6 into a throwaway worktree, junction node_modules so the mixed
+// codebase resolves firebase-functions, and hand the harness + the codebase
+// loader the absolute old-lib path via WB_OLD_LIB. Read-only w.r.t. the repo
+// (a detached worktree; never deployed).
+const OLD_CONSUMER_COMMIT = 'c7378d6';
+function prepStageA(root) {
+  const wt = join(root, 'functions', 'emulator', '.stagea-old-consumers');
+  const oldLib = join(wt, 'functions', 'lib', 'index.js');
+  try {
+    if (!existsSync(join(wt, 'functions', 'src', 'index.ts'))) {
+      try { execSync(`git worktree add --detach "${wt}" ${OLD_CONSUMER_COMMIT}`, { cwd: root, stdio: 'pipe' }); }
+      catch { execSync(`git worktree add --force --detach "${wt}" ${OLD_CONSUMER_COMMIT}`, { cwd: root, stdio: 'pipe' }); }
+    }
+    // Junction the old worktree's node_modules → the real functions/node_modules.
+    const oldNm = join(wt, 'functions', 'node_modules');
+    if (!existsSync(oldNm)) execSync(`cmd /c mklink /J "${oldNm}" "${join(root, 'functions', 'node_modules')}"`, { stdio: 'pipe' });
+    // Junction the mixed codebase's node_modules too (CLI runtime detection).
+    const cbNm = join(root, 'functions', 'emulator', 'stageA-codebase', 'node_modules');
+    if (!existsSync(cbNm)) execSync(`cmd /c mklink /J "${cbNm}" "${join(root, 'functions', 'node_modules')}"`, { stdio: 'pipe' });
+    if (!existsSync(oldLib)) {
+      execSync(`"${join(root, 'functions', 'node_modules', '.bin', 'tsc.cmd')}" -p "${join(wt, 'functions', 'tsconfig.json')}"`, { stdio: 'pipe' });
+    }
+    if (!existsSync(oldLib)) throw new Error('old consumer lib did not build');
+    // Hand the absolute old-lib path to the codebase loader via a file (the
+    // emulator runtime does not inherit WB_OLD_LIB from this process).
+    writeFileSync(join(root, 'functions', 'emulator', 'stageA-codebase', '.old-lib.json'), JSON.stringify({ path: oldLib }));
+    console.log(`[run] stagea prep: OLD consumers built at ${OLD_CONSUMER_COMMIT} → ${oldLib}`);
+    return { WB_OLD_LIB: oldLib };
+  } catch (e) {
+    console.error(`[run] stagea prep FAILED: ${e.message.split('\n')[0]}`);
+    process.exit(2);
+  }
+}
 
 const mode = MODES[process.argv[2]];
 if (!mode) {
@@ -106,6 +142,9 @@ for (const [name, port] of ports) {
   }
 }
 
+// Mode-specific prep (e.g. stagea builds the old consumer lib) → extra env.
+const prepEnv = mode.prep === 'stagea' ? prepStageA(ROOT) : {};
+
 const isWin = process.platform === 'win32';
 const args = ['firebase', 'emulators:exec', '--config', activeConfig, '--only', mode.only, '--project', PROJECT,
   // The exec script is ONE argument; the Windows shell needs it quoted.
@@ -117,7 +156,7 @@ const child = spawn(
     cwd: ROOT,
     stdio: 'inherit',
     shell: isWin,
-    env: { ...process.env, ...(mode.env || {}), JAVA_TOOL_OPTIONS: javaToolOptions, GCLOUD_PROJECT: PROJECT },
+    env: { ...process.env, ...(mode.env || {}), ...prepEnv, JAVA_TOOL_OPTIONS: javaToolOptions, GCLOUD_PROJECT: PROJECT },
   },
 );
 child.on('exit', (code) => process.exit(code ?? 1));

@@ -1,0 +1,7 @@
+{
+  "name": "wbm-stagea-mixed",
+  "description": "Emulator-only mixed generation: NEW gated producers + OLD deployed consumers (predeploy gate Rev-3 item 3). NEVER deployed.",
+  "main": "index.js",
+  "private": true,
+  "engines": { "node": "20" }
+}

@@ -79,3 +79,8 @@ rtdb-rules-tests/
 _live_*.json
 firestore-debug.log
 database-debug.log
+
+# stage-A mixed-generation emulator scaffolding (built on demand; never deployed)
+functions/emulator/.stagea-old-consumers/
+functions/emulator/stageA-codebase/node_modules/
+functions/emulator/stageA-codebase/.old-lib.json
