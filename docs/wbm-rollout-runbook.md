@@ -131,6 +131,37 @@ Proven on the real emulator:
   already-accepted old work drains; the old watchdog leaves no stranded work;
   the drain window stays quiescent.
 
+## The rollout controller (single enforced procedure)
+
+The governed rollout is executed through ONE binary,
+`functions/tools/wbmRolloutController.mjs` (Rev-4). It is DRY-RUN by default and
+integrates every check below into a fail-closed state machine with a durable
+journal and interruption recovery. Modes: `plan preflight stage-a close drain
+stage-c verify reopen status resume`. Any state-changing mode requires ALL of:
+`--execute`, exact `--project wellbuilt-sync`, `--sha` == `git HEAD` == journal,
+`--expect-state`, a `--confirm` token minted by `preflight`, credentials for the
+operation (never read/printed), and — for `--target production` — the env
+`WB_ROLLOUT_PROD_AUTHORIZED=1` (default target is `emulator`). It NEVER
+auto-reopens: any exception after close, a refused CAS, or a refused guard forces
+`HELD_CLOSED`, leaves admission closed, prints exact recovery, and refuses
+stage-c/reopen until reconciled. `reopen` additionally requires a passing
+`verify` (all four consumer revisions reconciled + incoming empty + no lock).
+Operationally proven against the emulator: `controllerDemo.mjs` (18/18).
+
+Flag writes are atomic **compare-and-set** (`functions/tools/rolloutFlagCas.mjs`
+over the pure `rolloutFlagTransition.ts`, 14 jest + `flagCas.mjs` 13/13):
+CLOSE `absent|OPEN → CLOSED (rolloutId+sha)`, REOPEN only a flag closed by THIS
+rollout+sha; malformed/other-rollout/other-sha/already-closed/between-read-and-
+write-change all refuse; retries are idempotent noops; `changedAt` is a SERVER
+timestamp. Partial Stage-C is reconciled by `stageCReconcile.ts` (13 jest): a
+CLI exit code is never trusted; reopen is allowed only when all four intended
+consumer revisions are observed live, else hold closed and forward-deploy the
+rest. The old watchdog/drain race is proven in `watchdogDrainRace.mjs` (11/11):
+a one-shot empty snapshot is UNSAFE (an original invocation is still executing
+after incoming empties), a "179s" check is unsafe, and only the 180s continuous
+horizon is safe. Deployed-old provenance is captured read-only in
+`docs/deployed-old-provenance.md` (`deployedProvenance.mjs`).
+
 ## Staged rollout (server-first, gate-enforced, FAIL CLOSED)
 
 The quiescence procedure is a fail-closed state machine — pure decision logic
