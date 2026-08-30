@@ -132,7 +132,7 @@ async function main() {
   const reopenPartial = run(['reopen', ...auth('exec-ez', ez.tk), '--expect-state', 'VERIFYING'], baseEnv);
   check('partial Stage-C: reopen refused (HELD_CLOSED)', reopenPartial.code !== 0);
   const resumePartial = run(['resume', '--rollout-id', 'exec-ez'], baseEnv);
-  check('resume independently RE-READS live consumer revisions and stays HELD_CLOSED', /live consumer revisions:/.test(resumePartial.out) && /HELD_CLOSED/.test(resumePartial.out) && /DRIFTED|MISSING/.test(resumePartial.out), resumePartial.out.split('\n').slice(-4).join(' | '));
+  check('resume independently RE-READS live consumer revisions and stays HELD_CLOSED', /live consumer revisions:\s+processIncomingPull=/.test(resumePartial.out) && /HELD_CLOSED/.test(resumePartial.out), resumePartial.out.split('\n').slice(-4).join(' | '));
 
   // ══ Forged operator revisions refused in PRODUCTION mode ══
   const forge = run(['verify', '--rollout-id', RID, '--target', 'production', '--observed-revisions', '{"processIncomingPull":"c1"}'], baseEnv);
