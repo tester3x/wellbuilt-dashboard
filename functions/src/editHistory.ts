@@ -12,6 +12,8 @@
  * Server derives previous values from stored packet; client "before" is never trusted.
  */
 
+import { createHash } from 'crypto';
+
 export const EDIT_SOURCES = ['wbm', 'dashboard', 'legacy', 'unknown'] as const;
 export type EditSource = (typeof EDIT_SOURCES)[number];
 
@@ -93,14 +95,55 @@ export function normalizeOriginAppContext(raw: unknown): 'wbt' | 'wbm' | 'unknow
  * Stable edit-event id. Prefer client-supplied idempotency key; else the
  * incoming RTDB key (edit_…). Retries of the same request reuse the same id.
  */
+/**
+ * Normalized final material for legacy edit idempotency (Blocker-2). Two
+ * distinct admin `edit_<ms>_<well>` keys carrying the SAME final material must
+ * map to ONE operation id (idempotent retry); different material → a different
+ * id (a distinct, separately-evidenced edit event). Only the fields an edit can
+ * assert are included, rounded/normalized so equivalent submissions collide.
+ */
+export function normalizeFinalEditMaterial(m: {
+  tankTopInches?: unknown; tankLevelFeet?: unknown; bblsTaken?: unknown;
+  wellDown?: unknown; dateTimeUTC?: unknown;
+}): string {
+  const top = topInches(m as Record<string, unknown>);
+  const bbls = num(m.bblsTaken);
+  const down = m.wellDown === true ? 1 : 0;
+  const dt = typeof m.dateTimeUTC === 'string' && m.dateTimeUTC
+    ? new Date(m.dateTimeUTC).toISOString() : '';
+  return JSON.stringify({ top: top ?? null, bbls: bbls ?? null, down, dt });
+}
+
+/**
+ * Deterministic legacy edit id: sha256(originalPacketId + normalized final
+ * material). Stable across wall-clock keys, so an admin retry that mints a new
+ * `edit_<ms>_<well>` key still resolves to the same operation id and the
+ * coordinator's receipt short-circuits the second apply.
+ */
+export function deriveLegacyEditEventId(originalPacketId: string, material: Parameters<typeof normalizeFinalEditMaterial>[0]): string {
+  const h = createHash('sha256')
+    .update(`${originalPacketId}|${normalizeFinalEditMaterial(material)}`, 'utf8')
+    .digest('hex')
+    .slice(0, 32);
+  const safeOrig = String(originalPacketId).replace(/[.#$\[\]/]/g, '_').slice(0, 60);
+  return `edit_c_${safeOrig}_${h}`.slice(0, 120);
+}
+
 export function resolveEditEventId(args: {
   incomingPacketId: string;
   clientEventId?: unknown;
+  /** When present (and no explicit clientEventId), a content-derived id is used
+   *  so legacy admin retries under fresh keys stay idempotent. */
+  originalPacketId?: string;
+  finalMaterial?: Parameters<typeof normalizeFinalEditMaterial>[0];
 }): string {
   const client =
     typeof args.clientEventId === 'string' ? args.clientEventId.trim() : '';
   if (client.length >= 8) {
     return client.replace(/[.#$\[\]/]/g, '_').slice(0, 120);
+  }
+  if (args.originalPacketId && args.finalMaterial) {
+    return deriveLegacyEditEventId(args.originalPacketId, args.finalMaterial);
   }
   return String(args.incomingPacketId).replace(/[.#$\[\]/]/g, '_').slice(0, 120);
 }

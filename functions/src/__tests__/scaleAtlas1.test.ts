@@ -159,6 +159,10 @@ describe(`Atlas1 — COMPLETE live assembled patch over ${N} pulls`, () => {
     patch['packets/editHistory/atlas_0300/edit_e1'] = { eventId: 'edit_e1', fields: { bblsTaken: { from: 120, to: 110 } } };
     patch['packets/editReceipts/edit_e1'] = { status: 'accepted', appliedAt: '2026-08-28T00:00:00.000Z' };
     patch[`wells/${WELL}/status/isDown`] = false;
+    // Blocker-1: edits now recompute affected production bucket(s) — an edit
+    // that changes the event time touches at most two dates (old + new).
+    patch[`production/${WELLKEY}/2025-01-01`] = { a: 40, w: 42, o: 39, u: '2026-08-28T00:00:00.000Z', n: 1 };
+    patch[`production/${WELLKEY}/wellName`] = WELL;
     patch[`packets/incoming/edit_incoming`] = null;
     const r = report('EDIT later→current', patch, receipt, 'edit_incoming');
     expect(current).toBe('atlas_0300');
@@ -177,6 +181,10 @@ describe(`Atlas1 — COMPLETE live assembled patch over ${N} pulls`, () => {
     patch['packets/editHistory/atlas_0400/edit_earlier'] = { eventId: 'edit_earlier' };
     patch['packets/editReceipts/edit_earlier'] = { status: 'accepted' };
     patch[`wells/${WELL}/status/isDown`] = false;
+    // Blocker-1: cross-date edit-earlier vacates the old date + writes the new.
+    patch[`production/${WELLKEY}/2025-04-11`] = null;                                  // old date vacated
+    patch[`production/${WELLKEY}/2025-01-05`] = { a: 40, w: 42, o: 39, u: '2026-08-28T00:00:00.000Z', n: 3 }; // new date recomputed
+    patch[`production/${WELLKEY}/wellName`] = WELL;
     patch['packets/incoming/e_incoming'] = null;
     const r = report('EDIT earlier (cascade)', patch, receipt, 'e_incoming');
     expect(r.affected).toBeLessThan(60);

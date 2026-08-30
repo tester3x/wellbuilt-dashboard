@@ -32,6 +32,7 @@ import { estimatePacketAge, isStranded } from './watchdogAge';
 import { buildCreateMutation, buildDeleteMutation, type CanonicalSidecar } from './mutationBuilders';
 import { computeAFRFromRates } from './pullFormulas';
 import { getProductionDate, calculateWindowBblsPerDay, calculateOvernightBblsPerDay, computeBbls24hrs, type HistoricalPull } from './productionFormulas';
+import { computeEditProductionBuckets, type EditProdRow } from './editProduction';
 import { formatLocalDateTime, outgoingCompanyId, inchesToFeetInches, feetInchesToInches, daysToHMM, daysToHMMSS } from './wbmFormat';
 import { buildOutgoingResponse, buildWellStatus } from './outgoingBuilders';
 import { buildPerformanceRow } from './performanceBuilders';
@@ -483,6 +484,51 @@ async function loadChronoPulls(wellName: string): Promise<ChronoPullInput[]> {
 // Anomaly detection constants (tighter than VBA for better accuracy)
 // VBA uses 5x/2.5x but that's too loose for wells with consistent flow rates
 // AFR flow-rate formulas extracted to ./pullFormulas (imported above).
+
+/**
+ * Read the well's processed rows + current affected buckets and recompute the
+ * production date bucket(s) an edit touches (Blocker-1). Async shell around the
+ * pure computeEditProductionBuckets; called INSIDE the edit's buildPatch so the
+ * read is serialized under the per-well lock.
+ */
+async function computeEditProductionSidecar(args: {
+  wellName: string; wellKey: string; originalPacketId: string;
+  oldDateTimeUTC: string; newDateTimeUTC: string;
+  newFlowRateDays: number; newTankLevelFeet: number; newBblsTaken: number;
+  newWellDown: boolean; bblPerFoot: number;
+}): Promise<Array<{ wellKey: string; date: string; value: Record<string, unknown> | null }>> {
+  const snap = await db.ref('packets/processed').orderByChild('wellName').equalTo(args.wellName).once('value');
+  const rows: EditProdRow[] = [];
+  snap.forEach((child) => {
+    const k = child.key || '';
+    if (k.startsWith('edit_') || k.startsWith('delete_') || k.startsWith('history_')) return;
+    const p = child.val() || {};
+    const ms = p.dateTimeUTC ? new Date(p.dateTimeUTC).getTime() : NaN;
+    if (!Number.isFinite(ms)) return;
+    rows.push({
+      key: k, ms,
+      flowRateDays: Number(p.flowRateDays) > 0 ? Number(p.flowRateDays) : 0,
+      tankLevelFeet: Number(p.tankLevelFeet) || (Number(p.tankTopInches) || 0) / 12,
+      bblsTaken: Number(p.bblsTaken) || 0,
+      wellDown: p.wellDown === true,
+    });
+  });
+  const oldMs = new Date(args.oldDateTimeUTC).getTime();
+  const newMs = new Date(args.newDateTimeUTC).getTime();
+  const oldDate = getProductionDate(oldMs);
+  const newDate = getProductionDate(newMs);
+  const curBuckets: Record<string, { a?: number } | null> = {};
+  for (const d of new Set([oldDate, newDate])) {
+    curBuckets[d] = (await db.ref(`production/${args.wellKey}/${d}`).once('value')).val() as { a?: number } | null;
+  }
+  return computeEditProductionBuckets({
+    rows, editedKey: args.originalPacketId, oldMs, newMs,
+    newFlowRateDays: args.newFlowRateDays, newTankLevelFeet: args.newTankLevelFeet,
+    newBblsTaken: args.newBblsTaken, newWellDown: args.newWellDown,
+    bblPerFoot: args.bblPerFoot, wellKey: args.wellKey, nowIso: new Date().toISOString(),
+    curBuckets,
+  });
+}
 
 async function calculateAFR(wellName: string, newFlowRateDays: number): Promise<number> {
 
@@ -1947,12 +1993,22 @@ export async function applyV2ChronologicalEdit(args: {
         committedAtMs: Date.now(),
         patchHash: `${editEventId}:${myRev}`,
       };
+      // Blocker-1: v2 edits recompute affected production buckets too, so no
+      // live edit entry point can leave production-date aggregates stale.
+      const v2ProdBuckets = await computeEditProductionSidecar({
+        wellName, wellKey: perfWellKey, originalPacketId,
+        oldDateTimeUTC: typeof origPacket.dateTimeUTC === 'string' ? origPacket.dateTimeUTC : newDateTimeUTC,
+        newDateTimeUTC, newFlowRateDays: derived.flowRateDays, newTankLevelFeet: newTankTopInches / 12,
+        newBblsTaken, newWellDown, bblPerFoot,
+      });
       const patch = assembleCanonicalPatch({
         processedUpdates: { [`packets/processed/${originalPacketId}`]: nextRow },
+        production: v2ProdBuckets,
         fence: { wellName, revision },
         receipt,
         receiptPath: receiptPathFor(wellName, editEventId),
       });
+      patch[`production/${perfWellKey}/wellName`] = wellName;
       Object.assign(patch, extraPaths);
       patch[`packets/incoming/${incomingPacketId}`] = null;
 
@@ -2160,9 +2216,23 @@ export async function processIncomingEdit(
     );
 
     // ── Canonical edit event id + idempotency (retry / watchdog) ──────────
+    // Blocker-2: legacy admin edits carry NO editEventId and mint a fresh
+    // `edit_<ms>_<well>` key per callable invocation. Resolve a CONTENT-derived
+    // id (originalPacketId + normalized final material) so a repeated admin
+    // submission with equivalent final material collapses to ONE operation id
+    // (idempotent via the coordinator receipt); different material yields a
+    // different id (a distinct, separately-evidenced edit event).
     const editEventId = resolveEditEventId({
       incomingPacketId: context.params.packetId,
       clientEventId: (data as { editEventId?: unknown }).editEventId,
+      originalPacketId,
+      finalMaterial: {
+        tankTopInches: (data as { tankTopInches?: unknown }).tankTopInches,
+        tankLevelFeet: (data as { tankLevelFeet?: unknown }).tankLevelFeet,
+        bblsTaken: (data as { bblsTaken?: unknown }).bblsTaken,
+        wellDown: (data as { wellDown?: unknown }).wellDown,
+        dateTimeUTC: (data as { dateTimeUTC?: unknown }).dateTimeUTC,
+      },
     });
 
     // v2 event-time corrections are materialized chronologically (per field)
@@ -2624,6 +2694,17 @@ export async function processIncomingEdit(
           affectedPacketIds: [originalPacketId, ...(nextPacketKey ? [nextPacketKey as string] : [])],
           committedAtMs: Date.now(), patchHash: `${editEventId}:${revision}`,
         };
+        // Blocker-1 fix: recompute the affected production-date bucket(s) from
+        // AUTHORITATIVE surviving rows (count-based n → replay-safe). A cross-
+        // date move drops the pull from the old date and adds it to the new
+        // date; a same-date edit recomputes the one bucket. Read under the
+        // lock so the recompute sees a consistent row set.
+        const editProdBuckets = await computeEditProductionSidecar({
+          wellName, wellKey: editPerfWellKey, originalPacketId,
+          oldDateTimeUTC: origPacket.dateTimeUTC, newDateTimeUTC,
+          newFlowRateDays: flowRateDays, newTankLevelFeet: newTankTopInches / 12,
+          newBblsTaken, newWellDown: nextEditIsDown, bblPerFoot,
+        });
         const patch = assembleCanonicalPatch({
           processedUpdates: {
             ...Object.fromEntries(Object.entries(updates).map(([k, v]) => [`packets/processed/${originalPacketId}/${k}`, v])),
@@ -2632,11 +2713,13 @@ export async function processIncomingEdit(
           outgoing: editSidecar.outgoing ?? null,
           wellStatus: editSidecar.wellStatus ?? null,
           performance: editPerfPiece,
-          production: [],
+          production: editProdBuckets,
           afr: editSidecar.afr ?? null,
           fence: { wellName, revision },
           receipt: editReceipt, receiptPath: receiptPathFor(wellName, editEventId),
         });
+        // Production wellName label sibling (kept in lockstep with CREATE).
+        patch[`production/${editPerfWellKey}/wellName`] = wellName;
         // Edit-specific atomic locations layered into the SAME patch.
         Object.assign(patch, historyPaths, receiptPaths);
         patch[`packets/incoming/${context.params.packetId}`] = null;
