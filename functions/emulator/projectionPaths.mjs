@@ -93,7 +93,8 @@ async function main() {
   await sleep(2000);
   const perfC1 = await perfKeys(), prodC1 = await prodDates(), curC1 = await currentId(), revC1 = await revision();
   const chg = changedDates(prodC0, prodC1);
-  console.log(`[C del-oldest-samedate] changedDates=${JSON.stringify(chg)} DayA(${dy.A}) n ${nOf(prodC0, dy.A)}→${nOf(prodC1, dy.A)}`);
+  console.log(`[C del-oldest] changedDates=${JSON.stringify(chg)} bucket ${dy.A}: ${JSON.stringify(prodC0[dy.A])} → ${JSON.stringify(prodC1[dy.A])}`);
+  console.log(`[C del-oldest] other dates B(${dy.B})=${JSON.stringify(prodC1[dy.B])} C(${dy.C})=${JSON.stringify(prodC1[dy.C])} (byte-identical to before)`);
   check('C: DELETE-oldest recomputes ONLY the deleted date bucket (Day A), n 3→2 (count of survivors, not blind −1)', nOf(prodC1, dy.A) === 2, `n=${nOf(prodC1, dy.A)}`);
   check('C: DELETE-oldest leaves EVERY OTHER production date byte-identical (B,C untouched)', chg.length === 1 && chg[0] === dy.A, JSON.stringify(chg));
   check('C: DELETE-oldest removes the deleted row performance key', setDelta(perfC0, perfC1).removed.length >= 1, JSON.stringify(setDelta(perfC0, perfC1).removed));
@@ -124,6 +125,7 @@ async function main() {
   await sleep(2500);
   const prodE1 = await prodDates(), curE1 = await currentId();
   const chgE = changedDates(prodE0, prodE1);
+  console.log(`[E del-newest] bucket ${dyE.C}: ${JSON.stringify(prodE0[dyE.C])} → ${JSON.stringify(prodE1[dyE.C])}`);
   check('E: DELETE-newest recomputes Day C (n 2→1), no other date touched', nOf(prodE1, dyE.C) === 1 && chgE.length === 1 && chgE[0] === dyE.C, `n=${nOf(prodE1, dyE.C)} chg=${JSON.stringify(chgE)}`);
   check('E: DELETE-newest PROMOTES current to the new newest (pC2→pC1, same date)', curE1 === 'pC1', `${curE0}→${curE1}`);
 
@@ -135,41 +137,51 @@ async function main() {
   await sleep(2000);
   const prodF1 = await prodDates();
   const chgF = changedDates(prodF0, prodF1);
+  console.log(`[F del-sole] bucket ${dyF.B}: ${JSON.stringify(prodF0[dyF.B])} → ${JSON.stringify(prodF1[dyF.B] ?? null)} (removed)`);
   check('F: DELETE sole-pull-on-date removes the Day B bucket entirely (null)', !(dyF.B in prodF1), JSON.stringify(Object.keys(prodF1)));
   check('F: DELETE sole-pull-on-date touches NO other date (A,C untouched)', chgF.length === 1 && chgF[0] === dyF.B, JSON.stringify(chgF));
 
-  // ── G: SUCCESSOR performance INVARIANCE under a predecessor DELETE ──
-  //    The successor's PROCESSED derived fields (flowRateDays/recovery/timeDif)
-  //    are recomputed, but its PERFORMANCE row {d,a,p} is a pull-time accuracy
-  //    snapshot (own date, own raw level, prediction the driver saw) → unchanged.
-  await seedChain();
-  const succProcBefore = (await db.ref('packets/processed/pA3').once('value')).val();
-  const perfRowsBefore = (await db.ref(`performance/${WK}/rows`).once('value')).val() || {};
-  const succPerfKey = Object.keys(perfRowsBefore).find((k) => JSON.stringify(perfRowsBefore[k]) && k.startsWith('20260301_18')); // pA3's own event-time key
-  const succPerfBefore = succPerfKey ? perfRowsBefore[succPerfKey] : null;
-  await sendDelete('d_pred', 'pA2');                                   // delete pA3's immediate predecessor
-  await waitFor('packets/processed/pA2', (v) => v === null, { timeoutMs: 15000 });
-  await sleep(2000);
-  const succProcAfter = (await db.ref('packets/processed/pA3').once('value')).val();
-  const succPerfAfter = succPerfKey ? ((await db.ref(`performance/${WK}/rows/${succPerfKey}`).once('value')).val()) : null;
-  console.log(`[G] succ pA3 flowRateDays ${succProcBefore?.flowRateDays}→${succProcAfter?.flowRateDays}; perf ${JSON.stringify(succPerfBefore)}→${JSON.stringify(succPerfAfter)}`);
-  check('G: predecessor DELETE recomputes the successor PROCESSED derived fields (flowRateDays changes)', String(succProcBefore?.flowRateDays) !== String(succProcAfter?.flowRateDays), `${succProcBefore?.flowRateDays}→${succProcAfter?.flowRateDays}`);
-  check('G: successor PERFORMANCE row {d,a,p} is BYTE-IDENTICAL (pull-time snapshot, not chain-derived)', JSON.stringify(succPerfBefore) === JSON.stringify(succPerfAfter) && !!succPerfBefore, `${JSON.stringify(succPerfBefore)} vs ${JSON.stringify(succPerfAfter)}`);
-
-  // ── H: SUCCESSOR performance INVARIANCE under a backdated CREATE-before-successor ──
-  await seedChain();
-  const hProcBefore = (await db.ref('packets/processed/pA1').once('value')).val();
-  const hRows = (await db.ref(`performance/${WK}/rows`).once('value')).val() || {};
-  const hKey = Object.keys(hRows).find((k) => k.startsWith('20260301_14')); // pA1's own key
-  const hPerfBefore = hKey ? hRows[hKey] : null;
-  await sendPull('pIns', '2026-03-01T09:00:00.000Z', { tankLevelFeet: '12.7' }); // insert BEFORE pA1
-  await waitFor('packets/processed/pIns', (v) => v && v.processedAt, { timeoutMs: 15000 });
-  await sleep(2000);
-  const hProcAfter = (await db.ref('packets/processed/pA1').once('value')).val();
-  const hPerfAfter = hKey ? ((await db.ref(`performance/${WK}/rows/${hKey}`).once('value')).val()) : null;
-  console.log(`[H] succ pA1 flowRateDays ${hProcBefore?.flowRateDays}→${hProcAfter?.flowRateDays}; perf ${JSON.stringify(hPerfBefore)}→${JSON.stringify(hPerfAfter)}`);
-  check('H: backdated CREATE-before-successor recomputes the successor PROCESSED derived fields', String(hProcBefore?.flowRateDays) !== String(hProcAfter?.flowRateDays) || String(hProcBefore?.recoveryInches) !== String(hProcAfter?.recoveryInches), `flow ${hProcBefore?.flowRateDays}→${hProcAfter?.flowRateDays}`);
-  check('H: successor PERFORMANCE row {d,a,p} is BYTE-IDENTICAL (pull-time snapshot)', JSON.stringify(hPerfBefore) === JSON.stringify(hPerfAfter) && !!hPerfBefore, `${JSON.stringify(hPerfBefore)} vs ${JSON.stringify(hPerfAfter)}`);
+  // ── NEIGHBOR-PERFORMANCE MATRIX: for each mutation of a predecessor, the
+  //    affected SUCCESSOR's PROCESSED derived fields are recomputed, but its
+  //    PERFORMANCE row {d,a,p} is a pull-time accuracy snapshot (own date, own
+  //    raw level, the prediction the driver saw) → BYTE-IDENTICAL, and its perf
+  //    path never appears in the mutation's atomic patch. `succPrefix` selects
+  //    the successor's own event-time perf key. ──
+  async function neighborCase(label, succId, succPrefix, mutate, waitPath, waitPred) {
+    await seedChain();
+    const rows0 = (await db.ref(`performance/${WK}/rows`).once('value')).val() || {};
+    const succKey = Object.keys(rows0).find((k) => k.startsWith(succPrefix));
+    const proc0 = (await db.ref(`packets/processed/${succId}`).once('value')).val();
+    const perf0 = succKey ? rows0[succKey] : null;
+    await mutate();
+    await waitFor(waitPath, waitPred, { timeoutMs: 15000 });
+    await sleep(2000);
+    const proc1 = (await db.ref(`packets/processed/${succId}`).once('value')).val();
+    const perf1 = succKey ? (await db.ref(`performance/${WK}/rows/${succKey}`).once('value')).val() : null;
+    const changed = String(proc0?.flowRateDays) !== String(proc1?.flowRateDays) || String(proc0?.recoveryInches) !== String(proc1?.recoveryInches) || String(proc0?.timeDifDays) !== String(proc1?.timeDifDays);
+    console.log(`[NPM ${label}] succ ${succId} flowRateDays ${proc0?.flowRateDays}→${proc1?.flowRateDays} recovery ${proc0?.recoveryInches}→${proc1?.recoveryInches}; perf ${JSON.stringify(perf0)}→${JSON.stringify(perf1)}`);
+    check(`${label}: successor PROCESSED derived fields recomputed (flow/recovery/timeDif change)`, changed, `flow ${proc0?.flowRateDays}→${proc1?.flowRateDays}`);
+    check(`${label}: successor PERFORMANCE row {d,a,p} BYTE-IDENTICAL (pull-time snapshot; perf path NOT in the patch)`, JSON.stringify(perf0) === JSON.stringify(perf1) && !!perf0, `${JSON.stringify(perf0)} vs ${JSON.stringify(perf1)}`);
+  }
+  // 1. CREATE before successor (insert pIns before pA1; successor = pA1).
+  await neighborCase('CREATE-before-succ', 'pA1', '20260301_14',
+    () => sendPull('pIns', '2026-03-01T09:00:00.000Z', { tankLevelFeet: '12.7' }),
+    'packets/processed/pIns', (v) => v && v.processedAt);
+  // 2. EDIT earlier, SAME production date (pA2 → 03-01T15:00; successor = pA3).
+  await neighborCase('EDIT-earlier-same-date', 'pA3', '20260301_18',
+    () => sendEdit('e_same', 'pA2', { dateTimeUTC: '2026-03-01T15:00:00.000Z', dateTime: '2026-03-01', tankLevelFeet: '11.5', bblsTaken: 50 }),
+    'packets/processed/pA2', (v) => v && v.dateTimeUTC === '2026-03-01T15:00:00.000Z');
+  // 3. EDIT earlier, ACROSS a production date (pA2 → 02-24, moving BEFORE pA1;
+  //    the affected successor is pA1, which gains pA2 as its new predecessor).
+  await neighborCase('EDIT-earlier-cross-date', 'pA1', '20260301_14',
+    () => sendEdit('e_cross', 'pA2', { dateTimeUTC: '2026-02-24T18:00:00.000Z', dateTime: '2026-02-24', tankLevelFeet: '11.0', bblsTaken: 45 }),
+    'packets/processed/pA2', (v) => v && v.dateTimeUTC === '2026-02-24T18:00:00.000Z');
+  // 4. DELETE oldest (pA1; successor = pA2).
+  await neighborCase('DELETE-oldest', 'pA2', '20260301_16',
+    () => sendDelete('d_np_old', 'pA1'), 'packets/processed/pA1', (v) => v === null);
+  // 5. DELETE middle (pA2; successor = pA3).
+  await neighborCase('DELETE-middle', 'pA3', '20260301_18',
+    () => sendDelete('d_np_mid', 'pA2'), 'packets/processed/pA2', (v) => v === null);
 
   console.log('\n=== PROJECTION-PATH CLASSIFICATION (real edit/delete handlers) ===');
   console.log(results.join('\n'));

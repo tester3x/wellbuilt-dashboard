@@ -24,7 +24,7 @@ import {
   resolveEditTarget,
   strandedPacketVerdict,
 } from './packetGuards';
-import { compareChronoKey, isLateEntryByCanonicalOrder, type ChronoPullInput, type WellChronoConfig } from './chronoRecompute';
+import { compareChronoKey, isLateEntryByCanonicalOrder, recomputeWell, type ChronoPullInput, type WellChronoConfig } from './chronoRecompute';
 import { CANONICAL_COMMIT_TIMEOUT_SECONDS, runCanonicalMutation, type CommitReceipt } from './chronoCommitCoordinator';
 import { makeCoordinatorIO } from './coordinatorIO';
 import { assembleCanonicalPatch, receiptPathFor } from './canonicalPatch';
@@ -531,36 +531,32 @@ async function computeEditProductionSidecar(args: {
 }
 
 /**
- * Read the well's SURVIVING processed rows (excluding the row being deleted) and
- * recompute the deleted pull's production-date bucket — the same authoritative,
- * count-based surviving-row semantics used by the edit path (Blocker-1), applied
- * to the single date a delete touches. Returns the one production entry (a null
- * value when the deleted pull was the last on its date), or [] when the deleted
- * time is unparseable. Idempotent: depends only on the surviving row set, so a
- * replayed delete yields the identical bucket with no double-decrement.
+ * Recompute the deleted pull's production-date bucket from the POST-CASCADE
+ * canonical rows. Critically, the surviving rows are re-derived via the SAME
+ * engine (`recomputeWell`) the delete commit applies — so a successor whose
+ * flowRateDays changes because its predecessor was the deleted pull contributes
+ * its POST-DELETE flow rate to the bucket's AFR (`a`), never the stale
+ * pre-delete value. Count `n` = surviving pulls on the date (never a blind −1),
+ * so replay is idempotent with no double-decrement; `value:null` when the
+ * deleted pull was the last on its date; other dates untouched; `[]` when the
+ * deleted time is unparseable.
  */
 async function computeDeleteProductionSidecar(args: {
-  wellName: string; wellKey: string; deletedPacketId: string; deletedDateTimeUTC: string; bblPerFoot: number;
+  wellName: string; wellKey: string; deletedPacketId: string; deletedDateTimeUTC: string;
+  chain: ChronoPullInput[]; cfg: WellChronoConfig; bblPerFoot: number;
 }): Promise<Array<{ wellKey: string; date: string; value: Record<string, unknown> | null }>> {
   const deletedMs = new Date(args.deletedDateTimeUTC).getTime();
   if (!Number.isFinite(deletedMs)) return [];
-  const snap = await db.ref('packets/processed').orderByChild('wellName').equalTo(args.wellName).once('value');
-  const rows: EditProdRow[] = [];
-  snap.forEach((child) => {
-    const k = child.key || '';
-    if (k === args.deletedPacketId) return; // the row being deleted is NOT a survivor
-    if (k.startsWith('edit_') || k.startsWith('delete_') || k.startsWith('history_')) return;
-    const p = child.val() || {};
-    const ms = p.dateTimeUTC ? new Date(p.dateTimeUTC).getTime() : NaN;
-    if (!Number.isFinite(ms)) return;
-    rows.push({
-      key: k, ms,
-      flowRateDays: Number(p.flowRateDays) > 0 ? Number(p.flowRateDays) : 0,
-      tankLevelFeet: Number(p.tankLevelFeet) || (Number(p.tankTopInches) || 0) / 12,
-      bblsTaken: Number(p.bblsTaken) || 0,
-      wellDown: p.wellDown === true,
-    });
-  });
+  // POST-CASCADE: recompute the surviving chain through the engine so every
+  // successor's flowRateDays reflects the delete, exactly as the commit will.
+  const survivors = recomputeWell(args.chain.filter((p) => p.packetId !== args.deletedPacketId), args.cfg);
+  const rows: EditProdRow[] = survivors.map((r) => ({
+    key: r.packetId, ms: Date.parse(r.dateTimeUTC),
+    flowRateDays: Number(r.flowRateDays) > 0 ? Number(r.flowRateDays) : 0,
+    tankLevelFeet: Number(r.tankTopInches) / 12,
+    bblsTaken: Number(r.bblsTaken) || 0,
+    wellDown: r.wellDown === true,
+  })).filter((r) => Number.isFinite(r.ms));
   const date = getProductionDate(deletedMs);
   const curBuckets: Record<string, { a?: number } | null> = {};
   curBuckets[date] = (await db.ref(`production/${args.wellKey}/${date}`).once('value')).val() as { a?: number } | null;
@@ -3165,7 +3161,7 @@ export const processDeleteRequest = functionsV1.runWith({ timeoutSeconds: CANONI
       if (deletedPacket.dateTimeUTC) {
         const prodBuckets = await computeDeleteProductionSidecar({
           wellName, wellKey, deletedPacketId: targetPacketId,
-          deletedDateTimeUTC: String(deletedPacket.dateTimeUTC), bblPerFoot,
+          deletedDateTimeUTC: String(deletedPacket.dateTimeUTC), chain, cfg, bblPerFoot,
         });
         if (prodBuckets.length) sidecar.production = prodBuckets;
       }

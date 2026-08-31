@@ -46,6 +46,7 @@ const MODES = {
   welldown: { only: 'functions,database,firestore,auth', script: 'node functions/emulator/wellDownThreeState.mjs' },
   equalorder: { only: 'functions,database', script: 'node functions/emulator/equalTimeArrivalOrder.mjs' },
   projpaths: { only: 'functions,database', script: 'node functions/emulator/projectionPaths.mjs' },
+  delprodvalue: { only: 'functions,database', script: 'node functions/emulator/deleteProductionValue.mjs' },
   contractfixture: { only: 'functions,database,firestore,auth', script: 'node functions/emulator/governedContractFixture.mjs' },
   adminedit: { only: 'functions,database,firestore', script: 'node functions/emulator/adminEditCompat.mjs' },
   mixed: { only: 'functions,database,firestore', script: 'node functions/emulator/mixedVersion.mjs' },
