@@ -29,7 +29,7 @@ import { CANONICAL_COMMIT_TIMEOUT_SECONDS, runCanonicalMutation, type CommitRece
 import { makeCoordinatorIO } from './coordinatorIO';
 import { assembleCanonicalPatch, receiptPathFor } from './canonicalPatch';
 import { estimatePacketAge, isStranded } from './watchdogAge';
-import { buildCreateMutation, buildDeleteMutation, type CanonicalSidecar } from './mutationBuilders';
+import { buildCreateMutation, buildDeleteMutation, derivedRowUpdates, derivedRowFields, derivedRowChanged, type CanonicalSidecar } from './mutationBuilders';
 import { computeAFRFromRates } from './pullFormulas';
 import { getProductionDate, calculateWindowBblsPerDay, calculateOvernightBblsPerDay, computeBbls24hrs, type HistoricalPull } from './productionFormulas';
 import { computeAffectedProductionBuckets, type EditProdRow } from './editProduction';
@@ -523,6 +523,50 @@ async function computeAffectedProductionSidecar(args: {
   const curBuckets: Record<string, { a?: number } | null> = {};
   for (const d of affected) curBuckets[d] = (await db.ref(`production/${args.wellKey}/${d}`).once('value')).val() as { a?: number } | null;
   return computeAffectedProductionBuckets({ beforeRows, afterRows, bblPerFoot: args.bblPerFoot, wellKey: args.wellKey, nowIso: new Date().toISOString(), curBuckets });
+}
+
+/**
+ * ONE canonical mutation pipeline for the EDIT path. Recompute the BEFORE and
+ * AFTER chains through the engine ONCE, and derive EVERYTHING from that single
+ * result so the committed processed rows and the production buckets are the SAME
+ * canonical state:
+ *   • editedDerived     — the edited row's canonical derived fields (to overlay
+ *                         onto its processed record, so the stored row equals the
+ *                         recompute).
+ *   • successorUpdates  — child-path derived updates for EVERY OTHER row whose
+ *                         derived fields changed (not just the immediate one), so
+ *                         a reorder that re-predecessors a NON-immediate successor
+ *                         is committed too.
+ *   • production        — every affected date rebuilt from the SAME afterRows.
+ * Neighbor performance rows are NOT touched (immutable pull-time snapshot).
+ */
+async function computeEditCanonicalCascade(args: {
+  wellName: string; wellKey: string; beforeChain: ChronoPullInput[]; afterChain: ChronoPullInput[];
+  cfg: WellChronoConfig; editedKey: string; fence: number; bblPerFoot: number;
+}): Promise<{ editedDerived: Record<string, unknown>; successorUpdates: Record<string, unknown>; production: Array<{ wellKey: string; date: string; value: Record<string, unknown> | null }> }> {
+  const before = recomputeWell(args.beforeChain, args.cfg);
+  const after = recomputeWell(args.afterChain, args.cfg);
+  const beforeByKey = new Map(before.map((r) => [r.packetId, r]));
+  const editedAfter = after.find((r) => r.packetId === args.editedKey);
+  const editedDerived = editedAfter ? derivedRowFields(editedAfter, args.fence) : {};
+  const successorUpdates: Record<string, unknown> = {};
+  for (const r of after) {
+    if (r.packetId === args.editedKey) continue;
+    const b = beforeByKey.get(r.packetId);
+    if (b && derivedRowChanged(b, r)) Object.assign(successorUpdates, derivedRowUpdates(`packets/processed/${r.packetId}`, r, args.fence));
+  }
+  // Production from the SAME recompute (before/after prod rows).
+  const toProd = (rows: typeof after): EditProdRow[] => rows.map((r) => ({ key: r.packetId, ms: Date.parse(r.dateTimeUTC), flowRateDays: Number(r.flowRateDays) > 0 ? Number(r.flowRateDays) : 0, tankLevelFeet: Number(r.tankTopInches) / 12, bblsTaken: Number(r.bblsTaken) || 0, wellDown: r.wellDown === true })).filter((r) => Number.isFinite(r.ms));
+  const beforeRows = toProd(before), afterRows = toProd(after);
+  const bByKey = new Map(beforeRows.map((r) => [r.key, r])); const aByKey = new Map(afterRows.map((r) => [r.key, r]));
+  const affected = new Set<string>();
+  for (const [k, r] of bByKey) if (!aByKey.has(k)) affected.add(getProductionDate(r.ms));
+  for (const [k, r] of aByKey) if (!bByKey.has(k)) affected.add(getProductionDate(r.ms));
+  for (const [k, a] of aByKey) { const b = bByKey.get(k); if (!b) continue; const bd = getProductionDate(b.ms), ad = getProductionDate(a.ms); if (bd !== ad) { affected.add(bd); affected.add(ad); } }
+  const curBuckets: Record<string, { a?: number } | null> = {};
+  for (const d of affected) curBuckets[d] = (await db.ref(`production/${args.wellKey}/${d}`).once('value')).val() as { a?: number } | null;
+  const production = computeAffectedProductionBuckets({ beforeRows, afterRows, bblPerFoot: args.bblPerFoot, wellKey: args.wellKey, nowIso: new Date().toISOString(), curBuckets });
+  return { editedDerived, successorUpdates, production };
 }
 
 
@@ -1087,15 +1131,13 @@ export async function processIncomingPullPacket(dataIn: PullPacket, packetIdIn: 
     // Production value (AFR + window + overnight bbls/day) for THIS pull's date.
     const afrBblsDay = afr > 0 ? Math.round((1 / afr) * bblPerFoot) : 0;
     const prodWellKey = wellName.replace(/\s+/g, '_');
-    const prodDate = getProductionDate(pullTimeMs);
-    // Unified production invariant, newest lane: a newest CREATE has NO successors,
-    // so the ONLY affected date is its own. a/w/o are owned by this (latest) pull —
-    // kept from the live AFR/window/overnight calc. Only the COUNT is made
-    // authoritative (surviving rows on the date + this pull) instead of a blind +1.
-    const newestChainForCount = await loadChronoPulls(wellName);
-    const newestDateCount = newestChainForCount.filter(
-      (p) => Number.isFinite(Date.parse(p.dateTimeUTC)) && getProductionDate(Date.parse(p.dateTimeUTC)) === prodDate,
-    ).length + 1;
+    // Unified production invariant, newest lane: the production bucket is built by
+    // the SAME shared builder (computeAffectedProductionSidecar) as CREATE-backdated/
+    // EDIT/DELETE, so EVERY production bucket is a projection of the canonical rows.
+    // (The main-screen windowBblsDay lives in packets/outgoing and is untouched.)
+    const newestCfg: WellChronoConfig = { bblPerFoot, tanks, allowedBottomInches: (Number((config as { allowedBottom?: unknown; bottomLevel?: unknown }).allowedBottom ?? (config as { bottomLevel?: unknown }).bottomLevel) || 0) * 12 || undefined, avgFlowRateDays: Number((config as { avgFlowRateMinutes?: unknown }).avgFlowRateMinutes) > 0 ? Number((config as { avgFlowRateMinutes?: unknown }).avgFlowRateMinutes) / 1440 : undefined };
+    const newestBeforeChain = await loadChronoPulls(wellName);
+    const newestNewPull: ChronoPullInput = { packetId, dateTimeUTC: data.dateTimeUTC, tankTopInches, bblsTaken: parseFloat(String(data.bblsTaken)) || 0, wellDown: data.wellDown === true || (data.wellDown as unknown) === 'true' };
 
     // ── ONE canonical commit ───────────────────────────────────────────────
     // processed + outgoing(delete olds + new) + wells/status + performance +
@@ -1110,23 +1152,27 @@ export async function processIncomingPullPacket(dataIn: PullPacket, packetIdIn: 
         // (which resets each lock lifecycle). Read+increment under the held lock.
         const curRev = Number((await db.ref(`wells/${wellName}/status/chronoRevision`).once('value')).val()) || 0;
         const revision = curRev + 1;
-        const nowIso = new Date().toISOString();
+        void afrBblsDay; // production bucket now via the shared builder (outgoing still uses afr/window/overnight)
         const receipt: CommitReceipt = {
           operationId: packetId, mutationType: 'create', wellName, fence: revision, revision,
           affectedPacketIds: [packetId], committedAtMs: Date.now(), patchHash: `${packetId}:${revision}`,
         };
+        const newestProd = await computeAffectedProductionSidecar({
+          wellName, wellKey: prodWellKey, beforeChain: newestBeforeChain,
+          afterChain: [...newestBeforeChain, newestNewPull], cfg: newestCfg, bblPerFoot,
+        });
         const patch = assembleCanonicalPatch({
           processedUpdates: { [`packets/processed/${packetId}`]: processedClean },
           outgoing: { deleteResponseIds: oldResponseIds, responseId, response: outgoingResponse as unknown as Record<string, unknown> },
           wellStatus: { wellName, status: wellStatus as unknown as Record<string, unknown> },
           performance: perfPiece,
-          production: [{ wellKey: prodWellKey, date: prodDate, value: { a: afrBblsDay || 0, w: windowBblsDay || 0, o: overnightBblsDay || 0, u: nowIso, n: newestDateCount } }],
+          production: newestProd,
           afr: afrPiece,
           // Also stamp production wellName label (sibling of the date node).
           fence: { wellName, revision },
           receipt, receiptPath: receiptPathFor(wellName, packetId),
         });
-        patch[`production/${prodWellKey}/wellName`] = wellName;
+        if (newestProd.some((p) => p.value !== null)) patch[`production/${prodWellKey}/wellName`] = wellName;
         // Source-request consumption is PART of the same atomic update — canonical
         // state + receipt + incoming removal commit together, closing the crash
         // window where state is written but the request lingers for reprocessing.
@@ -1810,39 +1856,11 @@ export async function applyV2ChronologicalEdit(args: {
       extraPaths[`wells/${wellName}/status/editSourceId`] = originalPacketId;
       extraPaths[`wells/${wellName}/status/editSourceRev`] = myRev;
 
-      // Cascade: recompute the NEXT pull's recovery/flow off the new tankAfter.
+      // Successor cascade is derived from the SINGLE canonical recompute below
+      // (computeEditCanonicalCascade), covering EVERY changed successor — not just
+      // the immediate one — so committed processed rows == the recompute that
+      // production is derived from. cascadeAffected is populated from that result.
       const cascadeAffected: string[] = [];
-      if (newTankTopInches > 0) {
-        const editedTime = new Date(newDateTimeUTC).getTime();
-        let nextKey: string | null = null;
-        let nextPkt: EditNeighbor | null = null;
-        let closest = Infinity;
-        for (const n of neighbors) {
-          if (n.key === originalPacketId) continue;
-          const t = new Date(n.dateTimeUTC).getTime();
-          if (!isNaN(t) && t > editedTime && t < closest) {
-            closest = t;
-            nextKey = n.key;
-            nextPkt = n;
-          }
-        }
-        if (nextKey && nextPkt && nextPkt.tankTopInches > 0) {
-          const nextRecovery = Math.max(0, nextPkt.tankTopInches - newTankAfterInches);
-          const nextTimeDifDays = (closest - editedTime) / (1000 * 60 * 60 * 24);
-          let nextFlowRateDays = 0;
-          let nextFlowRate = '';
-          if (nextRecovery > 0 && nextTimeDifDays > 0) {
-            nextFlowRateDays = (nextTimeDifDays / nextRecovery) * 12;
-            nextFlowRate = daysToHMMSS(nextFlowRateDays);
-          }
-          extraPaths[`packets/processed/${nextKey}/recoveryInches`] = nextRecovery;
-          extraPaths[`packets/processed/${nextKey}/flowRateDays`] = nextFlowRateDays;
-          extraPaths[`packets/processed/${nextKey}/flowRate`] = nextFlowRate;
-          extraPaths[`packets/processed/${nextKey}/editSourceId`] = originalPacketId;
-          extraPaths[`packets/processed/${nextKey}/editSourceRev`] = myRev;
-          cascadeAffected.push(nextKey);
-        }
-      }
 
       // Outgoing response + AFR + windows (only if this is the latest pull).
       const afr = await calculateAFR(wellName, derived.flowRateDays);
@@ -1967,6 +1985,19 @@ export async function applyV2ChronologicalEdit(args: {
       // Consume the incoming request in the SAME atomic update.
       const curFenceRev = Number((await db.ref(`wells/${wellName}/status/chronoRevision`).once('value')).val()) || 0;
       const revision = curFenceRev + 1;
+      // ONE canonical mutation pipeline (see computeEditCanonicalCascade): recompute
+      // the post-edit chain ONCE; derive the edited row's canonical fields, EVERY
+      // changed successor's processed derived fields, AND all affected production
+      // buckets from that SAME result. cascadeAffected = the changed successor ids.
+      const v2EditCfg: WellChronoConfig = { bblPerFoot, tanks, allowedBottomInches: (Number(config.allowedBottom ?? config.bottomLevel) || 0) * 12 || undefined, avgFlowRateDays: Number(config.avgFlowRateMinutes) > 0 ? Number(config.avgFlowRateMinutes) / 1440 : undefined };
+      const v2BeforeChain = await loadChronoPulls(wellName);
+      // Strip the edited row's stored knownBottomInches so its bottom is recomputed.
+      const v2AfterChain = v2BeforeChain.map((p) => p.packetId === originalPacketId ? { ...p, dateTimeUTC: newDateTimeUTC, tankTopInches: newTankTopInches, bblsTaken: newBblsTaken, wellDown: newWellDown, knownBottomInches: undefined } : p);
+      const v2Canon = await computeEditCanonicalCascade({
+        wellName, wellKey: perfWellKey, beforeChain: v2BeforeChain, afterChain: v2AfterChain,
+        cfg: v2EditCfg, editedKey: originalPacketId, fence: revision, bblPerFoot,
+      });
+      for (const k of Object.keys(v2Canon.successorUpdates)) { const m = k.match(/^packets\/processed\/([^/]+)\//); if (m && !cascadeAffected.includes(m[1])) cascadeAffected.push(m[1]); }
       const receipt: CommitReceipt = {
         operationId: editEventId,
         mutationType: 'edit',
@@ -1977,25 +2008,17 @@ export async function applyV2ChronologicalEdit(args: {
         committedAtMs: Date.now(),
         patchHash: `${editEventId}:${myRev}`,
       };
-      // Blocker-1: v2 edits recompute affected production buckets too, so no
-      // live edit entry point can leave production-date aggregates stale.
-      // Unified production invariant (full canonical recompute) — every affected
-      // date rebuilt from the engine-recomputed post-edit chain.
-      const v2EditCfg: WellChronoConfig = { bblPerFoot, tanks, allowedBottomInches: (Number(config.allowedBottom ?? config.bottomLevel) || 0) * 12 || undefined, avgFlowRateDays: Number(config.avgFlowRateMinutes) > 0 ? Number(config.avgFlowRateMinutes) / 1440 : undefined };
-      const v2BeforeChain = await loadChronoPulls(wellName);
-      const v2AfterChain = v2BeforeChain.map((p) => p.packetId === originalPacketId ? { ...p, dateTimeUTC: newDateTimeUTC, tankTopInches: newTankTopInches, bblsTaken: newBblsTaken, wellDown: newWellDown } : p);
-      const v2ProdBuckets = await computeAffectedProductionSidecar({
-        wellName, wellKey: perfWellKey, beforeChain: v2BeforeChain, afterChain: v2AfterChain, cfg: v2EditCfg, bblPerFoot,
-      });
       const patch = assembleCanonicalPatch({
-        processedUpdates: { [`packets/processed/${originalPacketId}`]: nextRow },
-        production: v2ProdBuckets,
+        // Edited row overlaid with CANONICAL derived fields (stored == recompute).
+        processedUpdates: { [`packets/processed/${originalPacketId}`]: { ...nextRow, ...v2Canon.editedDerived } },
+        production: v2Canon.production,
         fence: { wellName, revision },
         receipt,
         receiptPath: receiptPathFor(wellName, editEventId),
       });
       patch[`production/${perfWellKey}/wellName`] = wellName;
       Object.assign(patch, extraPaths);
+      Object.assign(patch, v2Canon.successorUpdates); // EVERY changed successor, canonical
       patch[`packets/incoming/${incomingPacketId}`] = null;
 
       // For the completion log outside the coordinator.
@@ -2685,27 +2708,36 @@ export async function processIncomingEdit(
         // date move drops the pull from the old date and adds it to the new
         // date; a same-date edit recomputes the one bucket. Read under the
         // lock so the recompute sees a consistent row set.
-        // Unified production invariant (full canonical recompute, same as CREATE/
-        // DELETE): rebuild EVERY affected date — old, new, and every successor whose
-        // rate changed, even a NON-immediate one on another date — from the
-        // engine-recomputed post-edit chain. (The processed-row cascade below is
-        // single-hop; production is computed from the canonical recompute, which is
-        // the source of truth for the aggregates.)
+        // ONE canonical mutation pipeline: recompute the post-edit chain ONCE and
+        // derive the edited row's canonical fields, EVERY changed successor's
+        // processed derived fields (not just the immediate one), AND every affected
+        // production bucket from that SAME result — so committed processed rows and
+        // production are the identical canonical state.
         const editCfg: WellChronoConfig = { bblPerFoot, tanks, allowedBottomInches: (Number(config.allowedBottom ?? config.bottomLevel) || 0) * 12 || undefined, avgFlowRateDays: Number(config.avgFlowRateMinutes) > 0 ? Number(config.avgFlowRateMinutes) / 1440 : undefined };
         const editBeforeChain = await loadChronoPulls(wellName);
-        const editAfterChain = editBeforeChain.map((p) => p.packetId === originalPacketId ? { ...p, dateTimeUTC: newDateTimeUTC, tankTopInches: newTankTopInches, bblsTaken: newBblsTaken, wellDown: nextEditIsDown } : p);
-        const editProdBuckets = await computeAffectedProductionSidecar({
-          wellName, wellKey: editPerfWellKey, beforeChain: editBeforeChain, afterChain: editAfterChain, cfg: editCfg, bblPerFoot,
+        // Feed the edit's freshly-evaluated arrival provenance (editLateEntry) so the
+        // recompute (which PRESERVES input lateEntry) yields the correct canonical row.
+        // The edited row's material changed → strip its stored knownBottomInches so
+        // the recompute derives a FRESH bottom (recomputeWell preserves knownBottom
+        // for unchanged rows, but the edited row's bottom must be recomputed).
+        const editAfterChain = editBeforeChain.map((p) => p.packetId === originalPacketId ? { ...p, dateTimeUTC: newDateTimeUTC, tankTopInches: newTankTopInches, bblsTaken: newBblsTaken, wellDown: nextEditIsDown, lateEntry: editLateEntry, knownBottomInches: undefined } : p);
+        const editCanon = await computeEditCanonicalCascade({
+          wellName, wellKey: editPerfWellKey, beforeChain: editBeforeChain, afterChain: editAfterChain,
+          cfg: editCfg, editedKey: originalPacketId, fence: revision, bblPerFoot,
         });
+        void cascadeUpdates; // superseded by the full canonical successor cascade
         const patch = assembleCanonicalPatch({
           processedUpdates: {
-            ...Object.fromEntries(Object.entries(updates).map(([k, v]) => [`packets/processed/${originalPacketId}/${k}`, v])),
-            ...cascadeUpdates,
+            // Edited row = its material/audit overlaid with the CANONICAL derived
+            // fields (so the stored row equals the recompute), as child paths.
+            ...Object.fromEntries(Object.entries({ ...updates, ...editCanon.editedDerived }).map(([k, v]) => [`packets/processed/${originalPacketId}/${k}`, v])),
+            // EVERY changed successor (full canonical cascade), not just the immediate one.
+            ...editCanon.successorUpdates,
           },
           outgoing: editSidecar.outgoing ?? null,
           wellStatus: editSidecar.wellStatus ?? null,
           performance: editPerfPiece,
-          production: editProdBuckets,
+          production: editCanon.production,
           afr: editSidecar.afr ?? null,
           fence: { wellName, revision },
           receipt: editReceipt, receiptPath: receiptPathFor(wellName, editEventId),

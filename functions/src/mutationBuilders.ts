@@ -38,7 +38,7 @@ const round = (n: number): number => Math.round(n * 1e6) / 1e6;
 
 /** Derived-field updates for one processed row (the mutated row or a changed
  *  successor), including the chronology fence + review tags. */
-function derivedRowUpdates(base: string, r: ChronoPullResult, fence: number): Record<string, unknown> {
+export function derivedRowUpdates(base: string, r: ChronoPullResult, fence: number): Record<string, unknown> {
   return {
     [`${base}/tankAfterInches`]: round(r.tankAfterInches),
     [`${base}/recoveryInches`]: round(r.recoveryInches),
@@ -51,6 +51,34 @@ function derivedRowUpdates(base: string, r: ChronoPullResult, fence: number): Re
     [`${base}/needsReview`]: r.needsReview,
     [`${base}/chronoRevision`]: fence,
   };
+}
+
+/** The canonical derived fields for ONE recomputed row, as a plain object (no
+ *  path prefix) — for overlaying onto a nested processed record so the stored
+ *  row's derived fields EQUAL the authoritative recompute output. */
+export function derivedRowFields(r: ChronoPullResult, fence: number): Record<string, unknown> {
+  return {
+    tankAfterInches: round(r.tankAfterInches),
+    recoveryInches: round(r.recoveryInches),
+    timeDifDays: round(r.timeDifDays),
+    flowRateDays: round(r.flowRateDays),
+    lateEntry: r.lateEntry,
+    anomaly: r.anomaly,
+    anomalyReasons: r.anomalyReasons,
+    potentialDuplicate: r.potentialDuplicate,
+    needsReview: r.needsReview,
+    chronoRevision: fence,
+  };
+}
+
+/** True when a row's canonical derived fields changed between two recomputes. */
+export function derivedRowChanged(b: ChronoPullResult, r: ChronoPullResult): boolean {
+  return round(b.tankAfterInches) !== round(r.tankAfterInches)
+    || round(b.recoveryInches) !== round(r.recoveryInches)
+    || round(b.timeDifDays) !== round(r.timeDifDays)
+    || round(b.flowRateDays) !== round(r.flowRateDays)
+    || b.lateEntry !== r.lateEntry || b.anomaly !== r.anomaly
+    || b.potentialDuplicate !== r.potentialDuplicate || b.needsReview !== r.needsReview;
 }
 
 function makeReceipt(c: MutationCommon, mutationType: CommitReceipt['mutationType'], affectedPacketIds: string[]): CommitReceipt {
