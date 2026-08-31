@@ -78,23 +78,35 @@ async function main() {
   // ── CASE 1 — Thor 1: prior DOWN, edit wellDown:false in the mask → RUNNING everywhere ──
   await seedDownWell();
   check('precondition: well is DOWN (status.isDown:true)', (await val(`wells/${WELL}/status/isDown`)) === true);
-  const r1 = await callEdit(editPkt({ eid: 'editevt_thor_online1', editedFields: ['wellDown'], wellDown: false }), tok);
+  // editedFields is the EXACT full WB-M client mask that buildWbmEditCommand emits.
+  const CLIENT_MASK = ['tankLevelFeet', 'bblsTaken', 'wellDown'];
+  const verBefore = await val('packets/incoming_version');
+  const r1 = await callEdit(editPkt({ eid: 'editevt_thor_online1', editedFields: CLIENT_MASK, wellDown: false }), tok);
   check('governed bring-online edit accepted by ingestWbmEdit', r1.status === 200 && r1.body?.result?.ok === true, JSON.stringify(r1.body));
   const cleared = await waitStatus(async () => (await val(`wells/${WELL}/status/isDown`)) === false);
-  check('THOR 1 FIX: explicit false in the mask CLEARS DOWN — status.isDown:false', cleared, JSON.stringify(await val(`wells/${WELL}/status/isDown`)));
+  check('THOR 1 FIX: explicit false in the real client mask CLEARS DOWN — status.isDown:false', cleared, JSON.stringify(await val(`wells/${WELL}/status/isDown`)));
   check('processed record reflects wellDown:false (authoritative)', (await val(`packets/processed/${PID}`))?.wellDown === false);
   const o1 = await outRow();
   check('outgoing agrees: wellDown:false (Running)', o1 && o1.wellDown === false, JSON.stringify(o1 && { wellDown: o1.wellDown }));
   check('status, processed, and outgoing ALL agree (Running)', (await val(`wells/${WELL}/status/isDown`)) === false && (await val(`packets/processed/${PID}`))?.wellDown === false && (await outRow())?.wellDown === false);
+
+  // ── Two-client refresh (item 6): the edit must move the revision signals so a
+  //    SECOND client refreshes promptly — not rely on a saturated incoming_version. ──
+  const verAfter = await val('packets/incoming_version');
+  check('incoming_version ADVANCED by the 2^20 sentinel (not stuck — legacy +1 would no-op at saturation)', typeof verAfter === 'number' && verAfter !== verBefore && (verAfter - verBefore) % 1048576 === 0, JSON.stringify({ before: verBefore, after: verAfter, delta: verAfter - verBefore }));
+  check('incoming_revision_v2 advanced (token present) for the edit', !!(await val('packets/incoming_revision_v2'))?.token);
+  // A fresh "second client" read observes the confirmed Running state immediately.
+  const secondClientView = { isDown: await val(`wells/${WELL}/status/isDown`), outgoingWellDown: (await outRow())?.wellDown };
+  check('a SECOND client reading after receipt sees Running (isDown:false, outgoing:false)', secondClientView.isDown === false && secondClientView.outgoingWellDown === false, JSON.stringify(secondClientView));
 
   check('exactly one outgoing row for the well (no stale duplicate)', (await outCount()) === 1, `count=${await outCount()}`);
 
   // ── CASE 2 — fresh DOWN well; explicit true in the mask → marks DOWN everywhere ──
   // (start from RUNNING so a true edit is a real change)
   await seedDownWell();
-  await callEdit(editPkt({ eid: 'editevt_c2_online', editedFields: ['wellDown'], wellDown: false }), tok);
+  await callEdit(editPkt({ eid: 'editevt_c2_online', editedFields: CLIENT_MASK, wellDown: false }), tok);
   await waitStatus(async () => (await val(`wells/${WELL}/status/isDown`)) === false);
-  const r2 = await callEdit(editPkt({ eid: 'editevt_c2_down', editedFields: ['wellDown'], wellDown: true }), tok);
+  const r2 = await callEdit(editPkt({ eid: 'editevt_c2_down', editedFields: CLIENT_MASK, wellDown: true }), tok);
   check('mark-down edit accepted', r2.status === 200 && r2.body?.result?.ok === true, JSON.stringify(r2.body));
   const downAgain = await waitStatus(async () => (await val(`wells/${WELL}/status/isDown`)) === true);
   check('explicit true in the mask MARKS DOWN — status.isDown:true', downAgain, JSON.stringify(await val(`wells/${WELL}/status/isDown`)));
@@ -109,12 +121,24 @@ async function main() {
 
   // ── CASE 4 — idempotent retry of the bring-online correction ──
   await seedDownWell();
-  await callEdit(editPkt({ eid: 'editevt_thor_idem', editedFields: ['wellDown'], wellDown: false }), tok);
+  await callEdit(editPkt({ eid: 'editevt_thor_idem', editedFields: CLIENT_MASK, wellDown: false }), tok);
   await waitStatus(async () => (await val(`wells/${WELL}/status/isDown`)) === false);
   const revA = (await val(`packets/processed/${PID}`))?.editCount ?? (await val('packets/incoming_version'));
-  await callEdit(editPkt({ eid: 'editevt_thor_idem', editedFields: ['wellDown'], wellDown: false }), tok); // same editEventId
+  await callEdit(editPkt({ eid: 'editevt_thor_idem', editedFields: CLIENT_MASK, wellDown: false }), tok); // same editEventId
   await sleep(3000);
   check('idempotent retry (same editEventId) keeps Running, no double-apply', (await val(`wells/${WELL}/status/isDown`)) === false);
+
+  // ── CASE 5 — legacy edit (no editedFields) FAILS CLOSED at admission (item 5) ──
+  // The governed producer rejects a non-v2 edit rather than silently applying it
+  // — so an older client can NEVER get "edited successfully" while the well
+  // stays DOWN; the failure is explicit (client-update-required), not silent.
+  await seedDownWell();
+  const legacy = { requestType: 'edit', wellName: WELL, originalPacketId: PID, packetId: PID, editEventId: 'editevt_legacy1', idempotencyKey: 'editevt_legacy1', tankLevelFeet: 136 / 12, bblsTaken: 140, wellDown: false }; // NO schemaVersion / editedFields / correctionCreatedAtUTC
+  const rl = await callEdit(legacy, tok);
+  const legacyRejected = rl.status >= 400 || rl.body?.result?.ok === false;
+  check('legacy edit (no editedFields) FAILS CLOSED at ingestWbmEdit — not silently applied', legacyRejected, JSON.stringify([rl.status, rl.body?.result || rl.body?.error]));
+  await sleep(2500);
+  check('legacy-edit rejection leaves the well DOWN (never "edited successfully" while DOWN)', (await val(`wells/${WELL}/status/isDown`)) === true);
 
   console.log('\n=== WELL-DOWN THREE-STATE CONTRACT (real candidate ingestWbmEdit → processEditRequest) ===');
   console.log(results.join('\n'));
