@@ -1,6 +1,6 @@
 // Predeploy gate Blockers 1 & 2 — pure-unit proofs for the cross-date
 // production recompute and the deterministic legacy edit id.
-import { computeEditProductionBuckets, computeDeleteProductionBuckets, type EditProdRow } from '../editProduction';
+import { computeEditProductionBuckets, computeDeleteProductionBuckets, computeAffectedProductionBuckets, type EditProdRow } from '../editProduction';
 import { deriveLegacyEditEventId, normalizeFinalEditMaterial, resolveEditEventId } from '../editHistory';
 import { getProductionDate } from '../productionFormulas';
 
@@ -98,6 +98,50 @@ describe('computeDeleteProductionBuckets — DELETE production recompute', () =>
     expect(computeDeleteProductionBuckets({
       survivingRows: [row('pB', isoB, 120, 160)], deletedMs: NaN, bblPerFoot: BPF, wellKey: KEY, nowIso: 'T', curBuckets: {},
     })).toEqual([]);
+  });
+});
+
+describe('computeAffectedProductionBuckets — unified CREATE/EDIT/DELETE invariant', () => {
+  const BPF = 20, KEY = 'Gabriel_1';
+  const d1a = '2026-08-27T15:00:00.000Z', d1b = '2026-08-27T20:00:00.000Z', d2 = '2026-08-28T15:00:00.000Z';
+  const dateOf = (iso: string) => getProductionDate(new Date(iso).getTime());
+  const has = (out: ReturnType<typeof computeAffectedProductionBuckets>, iso: string) => out.find((b) => b.date === dateOf(iso));
+
+  test('ADDED row → only its date is affected; unrelated date not emitted', () => {
+    const before = [row('a', d1a, 140, 168)];
+    const after = [row('a', d1a, 140, 168), row('b', d2, 120, 160)]; // add on d2
+    const out = computeAffectedProductionBuckets({ beforeRows: before, afterRows: after, bblPerFoot: BPF, wellKey: KEY, nowIso: 'T', curBuckets: {} });
+    expect(out).toHaveLength(1);
+    expect((has(out, d2)?.value as any)?.n).toBe(1);
+    expect(has(out, d1a)).toBeUndefined(); // unrelated date NOT emitted → stays byte-identical
+  });
+
+  test('REMOVED sole row on its date → date emitted null', () => {
+    const before = [row('a', d1a, 140, 168), row('b', d2, 120, 160)];
+    const after = [row('a', d1a, 140, 168)]; // remove b (sole on d2)
+    const out = computeAffectedProductionBuckets({ beforeRows: before, afterRows: after, bblPerFoot: BPF, wellKey: KEY, nowIso: 'T', curBuckets: {} });
+    expect(has(out, d2)?.value).toBeNull();
+    expect(has(out, d1a)).toBeUndefined();
+  });
+
+  test('MOVED row across dates → both old and new dates affected', () => {
+    const before = [row('a', d1a, 140, 168)];
+    const after = [{ ...row('a', d1a, 140, 168), ms: new Date(d2).getTime() }]; // a moves d1→d2
+    const out = computeAffectedProductionBuckets({ beforeRows: before, afterRows: after, bblPerFoot: BPF, wellKey: KEY, nowIso: 'T', curBuckets: {} });
+    expect(has(out, d1a)?.value).toBeNull(); // vacated
+    expect((has(out, d2)?.value as any)?.n).toBe(1); // new
+  });
+
+  test('MATERIALLY-CHANGED successor (rate) → its date affected even if the mutation was elsewhere', () => {
+    const before = [row('a', d1a, 140, 168, 0.2), row('b', d1b, 120, 160, 0.2)];
+    const after = [row('a', d1a, 140, 168, 0.2), { ...row('b', d1b, 120, 160, 0.2), flowRateDays: 0.9 }]; // b's rate changed
+    const out = computeAffectedProductionBuckets({ beforeRows: before, afterRows: after, bblPerFoot: BPF, wellKey: KEY, nowIso: 'T', curBuckets: {} });
+    expect(has(out, d1b)).toBeDefined(); // b's date rebuilt
+  });
+
+  test('nothing changed → no buckets emitted (all dates byte-identical)', () => {
+    const rows = [row('a', d1a, 140, 168), row('b', d2, 120, 160)];
+    expect(computeAffectedProductionBuckets({ beforeRows: rows, afterRows: rows, bblPerFoot: BPF, wellKey: KEY, nowIso: 'T', curBuckets: {} })).toEqual([]);
   });
 });
 

@@ -59,13 +59,16 @@ async function main() {
   const yBefore = (await db.ref('packets/processed/Ypv').once('value')).val();
   const bucketBefore = (await db.ref(`production/${WK}/${dDate}`).once('value')).val();
   const { chain, stored } = await readRows();
-  const deletedMs = Date.parse('2026-04-02T14:00:00.000Z');
   const curBuckets = { [dDate]: (await db.ref(`production/${WK}/${dDate}`).once('value')).val() };
-  // STALE expected: stored (pre-delete) rows minus X → Y keeps its OLD flowRateDays.
-  const staleExpected = prod.computeDeleteProductionBuckets({ survivingRows: stored.filter((r) => r.key !== 'Xpv'), deletedMs, bblPerFoot: 20, wellKey: WK, nowIso: 'T', curBuckets })[0];
-  // POST-CASCADE expected: recompute the surviving chain → Y gets its NEW flowRateDays.
-  const postRows = toRows(chrono.recomputeWell(chain.filter((p) => p.packetId !== 'Xpv'), CFG));
-  const postExpected = prod.computeDeleteProductionBuckets({ survivingRows: postRows, deletedMs, bblPerFoot: 20, wellKey: WK, nowIso: 'T', curBuckets })[0];
+  const pick = (entries, d) => entries.find((e) => e.date === d);
+  // STALE expected: BEFORE = stored, AFTER = stored minus X → Y keeps its OLD stored
+  // flowRateDays (no cascade), so only X's removal is seen (the stale-rate bucket).
+  const staleExpected = pick(prod.computeAffectedProductionBuckets({ beforeRows: stored, afterRows: stored.filter((r) => r.key !== 'Xpv'), bblPerFoot: 20, wellKey: WK, nowIso: 'T', curBuckets }), dDate);
+  // POST-CASCADE expected (SAME unified fn the handler uses): BEFORE = recompute(chain),
+  // AFTER = recompute(chain minus X) → Y's NEW flowRateDays feeds the bucket.
+  const beforePost = toRows(chrono.recomputeWell(chain, CFG));
+  const afterPost = toRows(chrono.recomputeWell(chain.filter((p) => p.packetId !== 'Xpv'), CFG));
+  const postExpected = pick(prod.computeAffectedProductionBuckets({ beforeRows: beforePost, afterRows: afterPost, bblPerFoot: 20, wellKey: WK, nowIso: 'T', curBuckets }), dDate);
 
   // ── delete X through the REAL handler ──
   const paths = {};

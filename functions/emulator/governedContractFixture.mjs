@@ -65,7 +65,27 @@ const call = async (fn, packet, tok) => { const r = await fetch(FN(fn), { method
 const isDown = async () => val(`wells/${WELL}/status/isDown`);
 async function waitDown(want, ms = 14000) { const s = Date.now(); while (Date.now() - s < ms) { if ((await isDown()) === want) return true; await sleep(300); } return false; }
 
+// Fully DRAIN any in-flight RTDB trigger before resetting the DB. `waitDown`
+// only confirms isDown flipped; the trigger keeps running (writes its receipt,
+// deletes its incoming). Without this, a prior block's async trigger (e.g.
+// editTrue) could land AFTER the next block's seed() reset and clobber state —
+// a harness-sequencing artifact, NOT a coordinator/production race. Quiesce
+// waits for no chronoLock AND no pending packets/incoming, stable for 1.5s.
+async function quiesce(ms = 15000) {
+  const s = Date.now(); let stableSince = 0;
+  while (Date.now() - s < ms) {
+    const w = (await val('wells')) || {};
+    const lock = Object.values(w).some((x) => x?.status?.chronoLock);
+    const incoming = (await val('packets/incoming')) || {};
+    const pending = Object.keys(incoming).length > 0;
+    if (!lock && !pending) { if (!stableSince) stableSince = Date.now(); else if (Date.now() - stableSince > 1500) return; }
+    else stableSince = 0;
+    await sleep(250);
+  }
+}
+
 async function seed() {
+  await quiesce();            // let any prior block's trigger fully drain first
   await db.ref('/').set(null);
   await db.ref(`well_config/${WELL}`).set({ tanks: 1, bblPerFoot: 20, bottomLevel: 3, pullBbls: 140, route: 'Thors', companyId: 'liquid-gold' });
   await db.ref(`drivers/profiles/${DRIVER_ID}`).set({ active: true, companyId: 'liquid-gold', displayName: 'FX', assignedRoutes: ['Thors'], assignedWells: [] });

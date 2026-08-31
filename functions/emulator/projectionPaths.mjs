@@ -82,6 +82,20 @@ async function main() {
   check('B: cross-date EDIT recomputes the OLD (Day A) bucket n 3→2', nOf(prodA1, dyA.A) === 2, `n=${nOf(prodA1, dyA.A)}`);
   check('A: EDIT-earlier leaves current pointer UNCHANGED (still pC2)', curA1 === curA0 && curA1 === 'pC2', `${curA0}→${curA1}`);
 
+  // ── EP: EDIT affecting an OTHER-DATE successor. Edit pA3 (last on Day A); its
+  //    successor pB1 is on Day B → pB1's rate changes → Day B rebuilt too. ──
+  await seedChain();
+  const prodEP0 = await prodDates(), dyEP = dayDates(prodEP0), curEP0 = await currentId();
+  await sendEdit('e_otherdate', 'pA3', { dateTimeUTC: '2026-03-01T19:30:00.000Z', dateTime: '2026-03-01', tankLevelFeet: '12.2', bblsTaken: 48 });
+  await waitFor(`wells/${WELL}/chronoReceipts/edit_pA3`, (v) => !!v, { timeoutMs: 15000 });
+  await sleep(2500);
+  const prodEP1 = await prodDates();
+  const chgEP = changedDates(prodEP0, prodEP1);
+  console.log(`[EP edit-other-date-succ] changed=${JSON.stringify(chgEP)} DayA=${JSON.stringify(prodEP1[dyEP.A])} DayB=${JSON.stringify(prodEP0[dyEP.B])}→${JSON.stringify(prodEP1[dyEP.B])}`);
+  check('EP: EDIT rebuilds the edited pull date (Day A) AND its other-date successor date (Day B)', chgEP.includes(dyEP.A) && chgEP.includes(dyEP.B), JSON.stringify(chgEP));
+  check('EP: EDIT leaves the unrelated Day C byte-identical', JSON.stringify(prodEP0[dyEP.C]) === JSON.stringify(prodEP1[dyEP.C]), `${JSON.stringify(prodEP0[dyEP.C])} vs ${JSON.stringify(prodEP1[dyEP.C])}`);
+  check('EP: EDIT (pA3 stays on Day A, non-current) does not change current', (await currentId()) === curEP0, `${curEP0}`);
+
   // ── C: DELETE OLDEST same-date (pA1 on Day A, 2 remain) → bucket RECOMPUTED, others untouched ──
   await seedChain();
   const perfC0 = await perfKeys(), prodC0 = await prodDates(), curC0 = await currentId(), revC0 = await revision();
@@ -137,9 +151,12 @@ async function main() {
   await sleep(2000);
   const prodF1 = await prodDates();
   const chgF = changedDates(prodF0, prodF1);
-  console.log(`[F del-sole] bucket ${dyF.B}: ${JSON.stringify(prodF0[dyF.B])} → ${JSON.stringify(prodF1[dyF.B] ?? null)} (removed)`);
+  console.log(`[F del-sole] bucket ${dyF.B}: ${JSON.stringify(prodF0[dyF.B])} → ${JSON.stringify(prodF1[dyF.B] ?? null)} (removed); successor date ${dyF.C}: ${JSON.stringify(prodF0[dyF.C])} → ${JSON.stringify(prodF1[dyF.C])}`);
   check('F: DELETE sole-pull-on-date removes the Day B bucket entirely (null)', !(dyF.B in prodF1), JSON.stringify(Object.keys(prodF1)));
-  check('F: DELETE sole-pull-on-date touches NO other date (A,C untouched)', chgF.length === 1 && chgF[0] === dyF.B, JSON.stringify(chgF));
+  // Unified invariant: pB1's successor pC1 (Day C) loses pB1 as predecessor → its
+  // rate changes → Day C is rebuilt too. Day A (pB1's predecessor's date) is untouched.
+  check('F: DELETE sole-pull rebuilds ONLY the removed date + the successor date (Day A untouched)', chgF.sort().join(',') === [dyF.B, dyF.C].sort().join(','), JSON.stringify(chgF));
+  check('F: unrelated Day A byte-identical', JSON.stringify(prodF0[dyF.A]) === JSON.stringify(prodF1[dyF.A]), `${JSON.stringify(prodF0[dyF.A])} vs ${JSON.stringify(prodF1[dyF.A])}`);
 
   // ── NEIGHBOR-PERFORMANCE MATRIX: for each mutation of a predecessor, the
   //    affected SUCCESSOR's PROCESSED derived fields are recomputed, but its

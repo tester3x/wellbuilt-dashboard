@@ -82,6 +82,67 @@ export function computeEditProductionBuckets(input: EditProductionInput):
   return out;
 }
 
+/** One production bucket rebuilt from the POST-CASCADE rows on a date, or null
+ *  when no qualifying pull remains. a/w/o are owned by the LATEST pull on the
+ *  date (the canonical owner); n is the authoritative surviving count. */
+function bucketForDate(
+  afterRows: EditProdRow[], hist: HistoricalPull[], date: string,
+  bblPerFoot: number, wellKey: string, nowIso: string,
+  curBuckets: Record<string, { a?: number } | null | undefined>,
+): { wellKey: string; date: string; value: Record<string, unknown> | null } {
+  const onDate = afterRows.filter((r) => getProductionDate(r.ms) === date).sort(cmp);
+  if (onDate.length === 0) return { wellKey, date, value: null };
+  const latest = onDate[onDate.length - 1];
+  const w = calculateWindowBblsPerDay(hist, bblPerFoot, latest.ms) || 0;
+  const o = calculateOvernightBblsPerDay(hist, bblPerFoot, latest.ms) || 0;
+  const rates = afterRows.filter((r) => r.ms <= latest.ms && r.flowRateDays > 0).sort(cmp).map((r) => r.flowRateDays).slice(-15);
+  const afr = computeAFRFromRates(rates);
+  const a = afr > 0 ? Math.round((1 / afr) * bblPerFoot) : (curBuckets[date]?.a ?? 0);
+  return { wellKey, date, value: { a, w, o, u: nowIso, n: onDate.length } };
+}
+
+export interface AffectedProductionInput {
+  /** Pre-mutation canonical rows (engine-recomputed BEFORE state). */
+  beforeRows: EditProdRow[];
+  /** Post-mutation canonical rows (engine-recomputed AFTER state — post-cascade). */
+  afterRows: EditProdRow[];
+  bblPerFoot: number;
+  wellKey: string;
+  nowIso: string;
+  curBuckets: Record<string, { a?: number } | null | undefined>;
+}
+
+/**
+ * THE unified production invariant for CREATE, EDIT, and DELETE. Given the
+ * engine-recomputed BEFORE and AFTER canonical rows, the AFFECTED production-date
+ * set is every date containing a row that was ADDED, REMOVED, MOVED (its date
+ * changed → both old + new dates), or MATERIALLY CHANGED by cascade recomputation
+ * (its flowRateDays / tankLevelFeet / bblsTaken / wellDown / ms differs). Each
+ * affected date is rebuilt from the POST-CASCADE afterRows (bucketForDate): a/w/o
+ * owned by the latest surviving pull on the date, n the authoritative count,
+ * value null when none survive. A date with no added/removed/moved/changed row is
+ * NOT emitted → genuinely-unrelated dates stay byte-identical. Idempotent: depends
+ * only on the before/after row sets, so a replay yields identical buckets.
+ */
+export function computeAffectedProductionBuckets(input: AffectedProductionInput):
+  Array<{ wellKey: string; date: string; value: Record<string, unknown> | null }> {
+  const beforeByKey = new Map(input.beforeRows.map((r) => [r.key, r]));
+  const afterByKey = new Map(input.afterRows.map((r) => [r.key, r]));
+  const material = (r: EditProdRow) => `${r.flowRateDays}|${r.tankLevelFeet}|${r.bblsTaken}|${r.wellDown}|${r.ms}`;
+  const dates = new Set<string>();
+  for (const [k, r] of beforeByKey) if (!afterByKey.has(k)) dates.add(getProductionDate(r.ms));       // removed
+  for (const [k, r] of afterByKey) if (!beforeByKey.has(k)) dates.add(getProductionDate(r.ms));       // added
+  for (const [k, a] of afterByKey) {                                                                    // moved / changed
+    const b = beforeByKey.get(k);
+    if (!b) continue;
+    const bDate = getProductionDate(b.ms), aDate = getProductionDate(a.ms);
+    if (bDate !== aDate) { dates.add(bDate); dates.add(aDate); }
+    else if (material(a) !== material(b)) dates.add(aDate);
+  }
+  const hist = asHistorical(input.afterRows);
+  return [...dates].map((date) => bucketForDate(input.afterRows, hist, date, input.bblPerFoot, input.wellKey, input.nowIso, input.curBuckets));
+}
+
 export interface DeleteProductionInput {
   /** Post-delete SURVIVING processed rows (the deleted row already excluded). */
   survivingRows: EditProdRow[];

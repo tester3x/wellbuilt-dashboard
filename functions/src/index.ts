@@ -32,7 +32,7 @@ import { estimatePacketAge, isStranded } from './watchdogAge';
 import { buildCreateMutation, buildDeleteMutation, type CanonicalSidecar } from './mutationBuilders';
 import { computeAFRFromRates } from './pullFormulas';
 import { getProductionDate, calculateWindowBblsPerDay, calculateOvernightBblsPerDay, computeBbls24hrs, type HistoricalPull } from './productionFormulas';
-import { computeEditProductionBuckets, computeDeleteProductionBuckets, type EditProdRow } from './editProduction';
+import { computeAffectedProductionBuckets, type EditProdRow } from './editProduction';
 import { formatLocalDateTime, outgoingCompanyId, inchesToFeetInches, feetInchesToInches, daysToHMM, daysToHMMSS } from './wbmFormat';
 import { buildOutgoingResponse, buildWellStatus } from './outgoingBuilders';
 import { buildPerformanceRow } from './performanceBuilders';
@@ -485,86 +485,46 @@ async function loadChronoPulls(wellName: string): Promise<ChronoPullInput[]> {
 // VBA uses 5x/2.5x but that's too loose for wells with consistent flow rates
 // AFR flow-rate formulas extracted to ./pullFormulas (imported above).
 
-/**
- * Read the well's processed rows + current affected buckets and recompute the
- * production date bucket(s) an edit touches (Blocker-1). Async shell around the
- * pure computeEditProductionBuckets; called INSIDE the edit's buildPatch so the
- * read is serialized under the per-well lock.
- */
-async function computeEditProductionSidecar(args: {
-  wellName: string; wellKey: string; originalPacketId: string;
-  oldDateTimeUTC: string; newDateTimeUTC: string;
-  newFlowRateDays: number; newTankLevelFeet: number; newBblsTaken: number;
-  newWellDown: boolean; bblPerFoot: number;
-}): Promise<Array<{ wellKey: string; date: string; value: Record<string, unknown> | null }>> {
-  const snap = await db.ref('packets/processed').orderByChild('wellName').equalTo(args.wellName).once('value');
-  const rows: EditProdRow[] = [];
-  snap.forEach((child) => {
-    const k = child.key || '';
-    if (k.startsWith('edit_') || k.startsWith('delete_') || k.startsWith('history_')) return;
-    const p = child.val() || {};
-    const ms = p.dateTimeUTC ? new Date(p.dateTimeUTC).getTime() : NaN;
-    if (!Number.isFinite(ms)) return;
-    rows.push({
-      key: k, ms,
-      flowRateDays: Number(p.flowRateDays) > 0 ? Number(p.flowRateDays) : 0,
-      tankLevelFeet: Number(p.tankLevelFeet) || (Number(p.tankTopInches) || 0) / 12,
-      bblsTaken: Number(p.bblsTaken) || 0,
-      wellDown: p.wellDown === true,
-    });
-  });
-  const oldMs = new Date(args.oldDateTimeUTC).getTime();
-  const newMs = new Date(args.newDateTimeUTC).getTime();
-  const oldDate = getProductionDate(oldMs);
-  const newDate = getProductionDate(newMs);
-  const curBuckets: Record<string, { a?: number } | null> = {};
-  for (const d of new Set([oldDate, newDate])) {
-    curBuckets[d] = (await db.ref(`production/${args.wellKey}/${d}`).once('value')).val() as { a?: number } | null;
-  }
-  return computeEditProductionBuckets({
-    rows, editedKey: args.originalPacketId, oldMs, newMs,
-    newFlowRateDays: args.newFlowRateDays, newTankLevelFeet: args.newTankLevelFeet,
-    newBblsTaken: args.newBblsTaken, newWellDown: args.newWellDown,
-    bblPerFoot: args.bblPerFoot, wellKey: args.wellKey, nowIso: new Date().toISOString(),
-    curBuckets,
-  });
-}
-
-/**
- * Recompute the deleted pull's production-date bucket from the POST-CASCADE
- * canonical rows. Critically, the surviving rows are re-derived via the SAME
- * engine (`recomputeWell`) the delete commit applies — so a successor whose
- * flowRateDays changes because its predecessor was the deleted pull contributes
- * its POST-DELETE flow rate to the bucket's AFR (`a`), never the stale
- * pre-delete value. Count `n` = surviving pulls on the date (never a blind −1),
- * so replay is idempotent with no double-decrement; `value:null` when the
- * deleted pull was the last on its date; other dates untouched; `[]` when the
- * deleted time is unparseable.
- */
-async function computeDeleteProductionSidecar(args: {
-  wellName: string; wellKey: string; deletedPacketId: string; deletedDateTimeUTC: string;
-  chain: ChronoPullInput[]; cfg: WellChronoConfig; bblPerFoot: number;
-}): Promise<Array<{ wellKey: string; date: string; value: Record<string, unknown> | null }>> {
-  const deletedMs = new Date(args.deletedDateTimeUTC).getTime();
-  if (!Number.isFinite(deletedMs)) return [];
-  // POST-CASCADE: recompute the surviving chain through the engine so every
-  // successor's flowRateDays reflects the delete, exactly as the commit will.
-  const survivors = recomputeWell(args.chain.filter((p) => p.packetId !== args.deletedPacketId), args.cfg);
-  const rows: EditProdRow[] = survivors.map((r) => ({
+/** Engine-recompute a chain and project it to production rows (post-cascade
+ *  flowRateDays). */
+function chainToProdRows(chain: ChronoPullInput[], cfg: WellChronoConfig): EditProdRow[] {
+  return recomputeWell(chain, cfg).map((r) => ({
     key: r.packetId, ms: Date.parse(r.dateTimeUTC),
     flowRateDays: Number(r.flowRateDays) > 0 ? Number(r.flowRateDays) : 0,
     tankLevelFeet: Number(r.tankTopInches) / 12,
     bblsTaken: Number(r.bblsTaken) || 0,
     wellDown: r.wellDown === true,
   })).filter((r) => Number.isFinite(r.ms));
-  const date = getProductionDate(deletedMs);
-  const curBuckets: Record<string, { a?: number } | null> = {};
-  curBuckets[date] = (await db.ref(`production/${args.wellKey}/${date}`).once('value')).val() as { a?: number } | null;
-  return computeDeleteProductionBuckets({
-    survivingRows: rows, deletedMs, bblPerFoot: args.bblPerFoot,
-    wellKey: args.wellKey, nowIso: new Date().toISOString(), curBuckets,
-  });
 }
+
+/**
+ * THE unified production sidecar for CREATE, EDIT, and DELETE. Recomputes the
+ * BEFORE and AFTER canonical chains through the SAME engine the commit applies,
+ * then rebuilds every AFFECTED production date (added/removed/moved/cascade-changed
+ * row) from the POST-CASCADE afterRows via computeAffectedProductionBuckets — so a
+ * recomputed successor that belongs to ANOTHER date has that date rebuilt too, and
+ * no bucket is derived from a stale aggregate, a stored pre-cascade successor rate,
+ * or a blind increment/decrement. curBuckets (read under the per-well lock) is the
+ * a-fallback only. Genuinely-unrelated dates are not emitted → stay byte-identical.
+ */
+async function computeAffectedProductionSidecar(args: {
+  wellName: string; wellKey: string; beforeChain: ChronoPullInput[]; afterChain: ChronoPullInput[];
+  cfg: WellChronoConfig; bblPerFoot: number;
+}): Promise<Array<{ wellKey: string; date: string; value: Record<string, unknown> | null }>> {
+  const beforeRows = chainToProdRows(args.beforeChain, args.cfg);
+  const afterRows = chainToProdRows(args.afterChain, args.cfg);
+  // Affected dates first (to read only the buckets we might fall back on).
+  const beforeByKey = new Map(beforeRows.map((r) => [r.key, r]));
+  const afterByKey = new Map(afterRows.map((r) => [r.key, r]));
+  const affected = new Set<string>();
+  for (const [k, r] of beforeByKey) if (!afterByKey.has(k)) affected.add(getProductionDate(r.ms));
+  for (const [k, r] of afterByKey) if (!beforeByKey.has(k)) affected.add(getProductionDate(r.ms));
+  for (const [k, a] of afterByKey) { const b = beforeByKey.get(k); if (!b) continue; const bd = getProductionDate(b.ms), ad = getProductionDate(a.ms); if (bd !== ad) { affected.add(bd); affected.add(ad); } }
+  const curBuckets: Record<string, { a?: number } | null> = {};
+  for (const d of affected) curBuckets[d] = (await db.ref(`production/${args.wellKey}/${d}`).once('value')).val() as { a?: number } | null;
+  return computeAffectedProductionBuckets({ beforeRows, afterRows, bblPerFoot: args.bblPerFoot, wellKey: args.wellKey, nowIso: new Date().toISOString(), curBuckets });
+}
+
 
 async function calculateAFR(wellName: string, newFlowRateDays: number): Promise<number> {
 
@@ -844,15 +804,7 @@ export async function processIncomingPullPacket(dataIn: PullPacket, packetIdIn: 
       // from authoritative rows (never blind-incremented → replay-safe). The date's
       // a/w/o rates are preserved when a newer pull on that date already set them
       // (they belong to that later pull), so an old insert cannot regress them.
-      const backdatedPullMs = new Date(data.dateTimeUTC).getTime();
-      const backdatedProdDate = getProductionDate(backdatedPullMs);
       const backdatedWellKey = wellName.replace(/\s+/g, '_');
-      const datePullCount = [...chain, newPull].filter(
-        (p) => Number.isFinite(Date.parse(p.dateTimeUTC)) && getProductionDate(Date.parse(p.dateTimeUTC)) === backdatedProdDate,
-      ).length;
-      const isNewestOnItsDate = ![...chain].some(
-        (p) => getProductionDate(Date.parse(p.dateTimeUTC)) === backdatedProdDate && Date.parse(p.dateTimeUTC) > backdatedPullMs,
-      );
       let backdatedPerf: { wellKey: string; perfTimestamp: string; row: Record<string, unknown>; wellName: string; updatedIso: string } | null = null;
       try {
         const perf = buildPerformanceRow({
@@ -867,25 +819,15 @@ export async function processIncomingPullPacket(dataIn: PullPacket, packetIdIn: 
         buildPatch: async () => {
           const curRev = Number((await db.ref(`wells/${wellName}/status/chronoRevision`).once('value')).val()) || 0;
           const revision = curRev + 1;
-          // Recompute the production date's total from authoritative state: preserve
-          // the existing a/w/o (a newer pull owns them) and just set the recomputed
-          // count; if this backdated pull IS the newest on its date (empty date), seed
-          // from the pull itself.
-          const curProd = (await db.ref(`production/${backdatedWellKey}/${backdatedProdDate}`).once('value')).val() as { a?: number; w?: number; o?: number } | null;
-          const historicalPulls = await getHistoricalPulls(wellName, 500);
-          const winBbls = calculateWindowBblsPerDay(historicalPulls, cfg.bblPerFoot, backdatedPullMs);
-          const overBbls = calculateOvernightBblsPerDay(historicalPulls, cfg.bblPerFoot, backdatedPullMs);
-          const prodValue = {
-            a: (isNewestOnItsDate ? undefined : curProd?.a) ?? 0,
-            w: (isNewestOnItsDate ? winBbls : (curProd?.w ?? winBbls)) || 0,
-            o: (isNewestOnItsDate ? overBbls : (curProd?.o ?? overBbls)) || 0,
-            u: backdatedNowIso,
-            n: datePullCount, // authoritative count — never a blind increment
-          };
-          const backdatedSidecar: CanonicalSidecar = {
-            performance: backdatedPerf,
-            production: [{ wellKey: backdatedWellKey, date: backdatedProdDate, value: prodValue }],
-          };
+          // Unified production invariant: rebuild EVERY affected date (the backdated
+          // pull's date + any successor whose cascade rate changed, even on another
+          // date) from the POST-CASCADE canonical rows — authoritative count, a/w/o
+          // owned by each date's latest pull, no stale aggregate / blind increment.
+          const affectedProd = await computeAffectedProductionSidecar({
+            wellName, wellKey: backdatedWellKey, beforeChain: chain,
+            afterChain: [...chain, newPull], cfg, bblPerFoot: cfg.bblPerFoot,
+          });
+          const backdatedSidecar: CanonicalSidecar = { performance: backdatedPerf, production: affectedProd };
           const built = buildCreateMutation({
             wellName, operationId: packetId, fence: revision, revision,
             committedAtMs: Date.now(), patchHash: `${packetId}:${revision}`, sidecar: backdatedSidecar,
@@ -893,7 +835,7 @@ export async function processIncomingPullPacket(dataIn: PullPacket, packetIdIn: 
           });
           // Production label (sibling of the date node) + source-request removal are
           // part of the SAME atomic patch.
-          built.patch[`production/${backdatedWellKey}/wellName`] = wellName;
+          if (affectedProd.some((p) => p.value !== null)) built.patch[`production/${backdatedWellKey}/wellName`] = wellName;
           built.patch[`packets/incoming/${packetId}`] = null;
           return { patch: built.patch, receipt: built.receipt };
         },
@@ -1146,6 +1088,14 @@ export async function processIncomingPullPacket(dataIn: PullPacket, packetIdIn: 
     const afrBblsDay = afr > 0 ? Math.round((1 / afr) * bblPerFoot) : 0;
     const prodWellKey = wellName.replace(/\s+/g, '_');
     const prodDate = getProductionDate(pullTimeMs);
+    // Unified production invariant, newest lane: a newest CREATE has NO successors,
+    // so the ONLY affected date is its own. a/w/o are owned by this (latest) pull —
+    // kept from the live AFR/window/overnight calc. Only the COUNT is made
+    // authoritative (surviving rows on the date + this pull) instead of a blind +1.
+    const newestChainForCount = await loadChronoPulls(wellName);
+    const newestDateCount = newestChainForCount.filter(
+      (p) => Number.isFinite(Date.parse(p.dateTimeUTC)) && getProductionDate(Date.parse(p.dateTimeUTC)) === prodDate,
+    ).length + 1;
 
     // ── ONE canonical commit ───────────────────────────────────────────────
     // processed + outgoing(delete olds + new) + wells/status + performance +
@@ -1160,8 +1110,6 @@ export async function processIncomingPullPacket(dataIn: PullPacket, packetIdIn: 
         // (which resets each lock lifecycle). Read+increment under the held lock.
         const curRev = Number((await db.ref(`wells/${wellName}/status/chronoRevision`).once('value')).val()) || 0;
         const revision = curRev + 1;
-        // Production pull-count for the date (read under the lock).
-        const curProd = (await db.ref(`production/${prodWellKey}/${prodDate}`).once('value')).val() as { n?: number } | null;
         const nowIso = new Date().toISOString();
         const receipt: CommitReceipt = {
           operationId: packetId, mutationType: 'create', wellName, fence: revision, revision,
@@ -1172,7 +1120,7 @@ export async function processIncomingPullPacket(dataIn: PullPacket, packetIdIn: 
           outgoing: { deleteResponseIds: oldResponseIds, responseId, response: outgoingResponse as unknown as Record<string, unknown> },
           wellStatus: { wellName, status: wellStatus as unknown as Record<string, unknown> },
           performance: perfPiece,
-          production: [{ wellKey: prodWellKey, date: prodDate, value: { a: afrBblsDay || 0, w: windowBblsDay || 0, o: overnightBblsDay || 0, u: nowIso, n: (curProd?.n || 0) + 1 } }],
+          production: [{ wellKey: prodWellKey, date: prodDate, value: { a: afrBblsDay || 0, w: windowBblsDay || 0, o: overnightBblsDay || 0, u: nowIso, n: newestDateCount } }],
           afr: afrPiece,
           // Also stamp production wellName label (sibling of the date node).
           fence: { wellName, revision },
@@ -2031,11 +1979,13 @@ export async function applyV2ChronologicalEdit(args: {
       };
       // Blocker-1: v2 edits recompute affected production buckets too, so no
       // live edit entry point can leave production-date aggregates stale.
-      const v2ProdBuckets = await computeEditProductionSidecar({
-        wellName, wellKey: perfWellKey, originalPacketId,
-        oldDateTimeUTC: typeof origPacket.dateTimeUTC === 'string' ? origPacket.dateTimeUTC : newDateTimeUTC,
-        newDateTimeUTC, newFlowRateDays: derived.flowRateDays, newTankLevelFeet: newTankTopInches / 12,
-        newBblsTaken, newWellDown, bblPerFoot,
+      // Unified production invariant (full canonical recompute) — every affected
+      // date rebuilt from the engine-recomputed post-edit chain.
+      const v2EditCfg: WellChronoConfig = { bblPerFoot, tanks, allowedBottomInches: (Number(config.allowedBottom ?? config.bottomLevel) || 0) * 12 || undefined, avgFlowRateDays: Number(config.avgFlowRateMinutes) > 0 ? Number(config.avgFlowRateMinutes) / 1440 : undefined };
+      const v2BeforeChain = await loadChronoPulls(wellName);
+      const v2AfterChain = v2BeforeChain.map((p) => p.packetId === originalPacketId ? { ...p, dateTimeUTC: newDateTimeUTC, tankTopInches: newTankTopInches, bblsTaken: newBblsTaken, wellDown: newWellDown } : p);
+      const v2ProdBuckets = await computeAffectedProductionSidecar({
+        wellName, wellKey: perfWellKey, beforeChain: v2BeforeChain, afterChain: v2AfterChain, cfg: v2EditCfg, bblPerFoot,
       });
       const patch = assembleCanonicalPatch({
         processedUpdates: { [`packets/processed/${originalPacketId}`]: nextRow },
@@ -2735,11 +2685,17 @@ export async function processIncomingEdit(
         // date move drops the pull from the old date and adds it to the new
         // date; a same-date edit recomputes the one bucket. Read under the
         // lock so the recompute sees a consistent row set.
-        const editProdBuckets = await computeEditProductionSidecar({
-          wellName, wellKey: editPerfWellKey, originalPacketId,
-          oldDateTimeUTC: origPacket.dateTimeUTC, newDateTimeUTC,
-          newFlowRateDays: flowRateDays, newTankLevelFeet: newTankTopInches / 12,
-          newBblsTaken, newWellDown: nextEditIsDown, bblPerFoot,
+        // Unified production invariant (full canonical recompute, same as CREATE/
+        // DELETE): rebuild EVERY affected date — old, new, and every successor whose
+        // rate changed, even a NON-immediate one on another date — from the
+        // engine-recomputed post-edit chain. (The processed-row cascade below is
+        // single-hop; production is computed from the canonical recompute, which is
+        // the source of truth for the aggregates.)
+        const editCfg: WellChronoConfig = { bblPerFoot, tanks, allowedBottomInches: (Number(config.allowedBottom ?? config.bottomLevel) || 0) * 12 || undefined, avgFlowRateDays: Number(config.avgFlowRateMinutes) > 0 ? Number(config.avgFlowRateMinutes) / 1440 : undefined };
+        const editBeforeChain = await loadChronoPulls(wellName);
+        const editAfterChain = editBeforeChain.map((p) => p.packetId === originalPacketId ? { ...p, dateTimeUTC: newDateTimeUTC, tankTopInches: newTankTopInches, bblsTaken: newBblsTaken, wellDown: nextEditIsDown } : p);
+        const editProdBuckets = await computeAffectedProductionSidecar({
+          wellName, wellKey: editPerfWellKey, beforeChain: editBeforeChain, afterChain: editAfterChain, cfg: editCfg, bblPerFoot,
         });
         const patch = assembleCanonicalPatch({
           processedUpdates: {
@@ -3159,9 +3115,11 @@ export const processDeleteRequest = functionsV1.runWith({ timeoutSeconds: CANONI
       // is no longer counted. Nulls the bucket when it was the last pull on that
       // date; leaves every other date untouched. Folded into the one atomic patch.
       if (deletedPacket.dateTimeUTC) {
-        const prodBuckets = await computeDeleteProductionSidecar({
-          wellName, wellKey, deletedPacketId: targetPacketId,
-          deletedDateTimeUTC: String(deletedPacket.dateTimeUTC), chain, cfg, bblPerFoot,
+        // Unified production invariant: rebuild EVERY affected date (deleted date +
+        // any date whose surviving successor's rate changed) from post-cascade rows.
+        const prodBuckets = await computeAffectedProductionSidecar({
+          wellName, wellKey, beforeChain: chain,
+          afterChain: chain.filter((p) => p.packetId !== targetPacketId), cfg, bblPerFoot,
         });
         if (prodBuckets.length) sidecar.production = prodBuckets;
       }
