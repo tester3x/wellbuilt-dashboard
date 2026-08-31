@@ -37,6 +37,13 @@ async function callEdit(packet, idToken) {
   const res = await fetch(FN('ingestWbmEdit'), { method: 'POST', headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${idToken}` }, body: JSON.stringify({ data: { packet } }) });
   return { status: res.status, body: await res.json().catch(() => ({})) };
 }
+async function callPull(packet, idToken) {
+  const res = await fetch(FN('ingestWbmPull'), { method: 'POST', headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${idToken}` }, body: JSON.stringify({ data: { packet } }) });
+  return { status: res.status, body: await res.json().catch(() => ({})) };
+}
+// The EXACT shape the WB-M client create builder emits (firebase.ts): explicit
+// wellDown boolean + wellDownIsAuthoritative:true.
+const pullPkt = (id, wellDown) => ({ requestType: 'pull', wellName: WELL, dateTimeUTC: '2026-08-30T20:00:00.000Z', dateTime: '8/30/2026 3PM', timezone: 'America/Chicago', tankLevelFeet: 136 / 12, bblsTaken: 140, wellDown, wellDownIsAuthoritative: true, packetId: id, idempotencyKey: id });
 // The row the edit wrote: prefer isEdit, else the most recent by time.
 const outRow = async () => {
   const all = Object.values((await val('packets/outgoing')) || {}).filter((x) => x && x.wellName === WELL);
@@ -139,6 +146,27 @@ async function main() {
   check('legacy edit (no editedFields) FAILS CLOSED at ingestWbmEdit — not silently applied', legacyRejected, JSON.stringify([rl.status, rl.body?.result || rl.body?.error]));
   await sleep(2500);
   check('legacy-edit rejection leaves the well DOWN (never "edited successfully" while DOWN)', (await val(`wells/${WELL}/status/isDown`)) === true);
+
+  // ══ CREATE three-state (item 1): the newest CREATE controls current status ══
+  // C1 — prior DOWN + newest CREATE wellDown:false authoritative → RUNNING everywhere.
+  await seedDownWell();
+  const cid1 = '20260830_200000_Thor1_crt001';
+  const cv = await callPull(pullPkt(cid1, false), tok);
+  check('CREATE accepted by ingestWbmPull (explicit false + authoritative)', cv.status === 200 && cv.body?.result?.ok === true, JSON.stringify(cv.body));
+  const cCleared = await waitStatus(async () => (await val(`wells/${WELL}/status/isDown`)) === false);
+  check('CREATE C1: newest CREATE with explicit false CLEARS a previously DOWN well', cCleared, JSON.stringify(await val(`wells/${WELL}/status/isDown`)));
+  const co = Object.values((await val('packets/outgoing')) || {}).filter((x) => x && x.wellName === WELL).sort((a, b) => new Date(b.lastPullDateTimeUTC || 0) - new Date(a.lastPullDateTimeUTC || 0))[0];
+  check('CREATE C1: status/outgoing/processed agree Running', (await val(`wells/${WELL}/status/isDown`)) === false && co?.wellDown === false && (await val(`packets/processed/${cid1}`))?.wellDown === false, JSON.stringify({ isDown: await val(`wells/${WELL}/status/isDown`), out: co?.wellDown }));
+
+  // C2 — prior Running (from C1) + newest CREATE wellDown:true authoritative → DOWN.
+  const cid2 = '20260830_210000_Thor1_crt002';
+  await callPull(pullPkt(cid2, true), tok);
+  check('CREATE C2: newest CREATE with explicit true MARKS a running well DOWN', await waitStatus(async () => (await val(`wells/${WELL}/status/isDown`)) === true));
+
+  // C3 — CREATE idempotent retry (same packetId) → single processed, still DOWN.
+  await callPull(pullPkt(cid2, true), tok);
+  await sleep(2500);
+  check('CREATE C3: idempotent retry (same packetId) does not double-apply', (await val(`wells/${WELL}/status/isDown`)) === true && !!(await val(`packets/processed/${cid2}`)));
 
   console.log('\n=== WELL-DOWN THREE-STATE CONTRACT (real candidate ingestWbmEdit → processEditRequest) ===');
   console.log(results.join('\n'));
