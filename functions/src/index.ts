@@ -32,7 +32,7 @@ import { estimatePacketAge, isStranded } from './watchdogAge';
 import { buildCreateMutation, buildDeleteMutation, type CanonicalSidecar } from './mutationBuilders';
 import { computeAFRFromRates } from './pullFormulas';
 import { getProductionDate, calculateWindowBblsPerDay, calculateOvernightBblsPerDay, computeBbls24hrs, type HistoricalPull } from './productionFormulas';
-import { computeEditProductionBuckets, type EditProdRow } from './editProduction';
+import { computeEditProductionBuckets, computeDeleteProductionBuckets, type EditProdRow } from './editProduction';
 import { formatLocalDateTime, outgoingCompanyId, inchesToFeetInches, feetInchesToInches, daysToHMM, daysToHMMSS } from './wbmFormat';
 import { buildOutgoingResponse, buildWellStatus } from './outgoingBuilders';
 import { buildPerformanceRow } from './performanceBuilders';
@@ -527,6 +527,46 @@ async function computeEditProductionSidecar(args: {
     newBblsTaken: args.newBblsTaken, newWellDown: args.newWellDown,
     bblPerFoot: args.bblPerFoot, wellKey: args.wellKey, nowIso: new Date().toISOString(),
     curBuckets,
+  });
+}
+
+/**
+ * Read the well's SURVIVING processed rows (excluding the row being deleted) and
+ * recompute the deleted pull's production-date bucket — the same authoritative,
+ * count-based surviving-row semantics used by the edit path (Blocker-1), applied
+ * to the single date a delete touches. Returns the one production entry (a null
+ * value when the deleted pull was the last on its date), or [] when the deleted
+ * time is unparseable. Idempotent: depends only on the surviving row set, so a
+ * replayed delete yields the identical bucket with no double-decrement.
+ */
+async function computeDeleteProductionSidecar(args: {
+  wellName: string; wellKey: string; deletedPacketId: string; deletedDateTimeUTC: string; bblPerFoot: number;
+}): Promise<Array<{ wellKey: string; date: string; value: Record<string, unknown> | null }>> {
+  const deletedMs = new Date(args.deletedDateTimeUTC).getTime();
+  if (!Number.isFinite(deletedMs)) return [];
+  const snap = await db.ref('packets/processed').orderByChild('wellName').equalTo(args.wellName).once('value');
+  const rows: EditProdRow[] = [];
+  snap.forEach((child) => {
+    const k = child.key || '';
+    if (k === args.deletedPacketId) return; // the row being deleted is NOT a survivor
+    if (k.startsWith('edit_') || k.startsWith('delete_') || k.startsWith('history_')) return;
+    const p = child.val() || {};
+    const ms = p.dateTimeUTC ? new Date(p.dateTimeUTC).getTime() : NaN;
+    if (!Number.isFinite(ms)) return;
+    rows.push({
+      key: k, ms,
+      flowRateDays: Number(p.flowRateDays) > 0 ? Number(p.flowRateDays) : 0,
+      tankLevelFeet: Number(p.tankLevelFeet) || (Number(p.tankTopInches) || 0) / 12,
+      bblsTaken: Number(p.bblsTaken) || 0,
+      wellDown: p.wellDown === true,
+    });
+  });
+  const date = getProductionDate(deletedMs);
+  const curBuckets: Record<string, { a?: number } | null> = {};
+  curBuckets[date] = (await db.ref(`production/${args.wellKey}/${date}`).once('value')).val() as { a?: number } | null;
+  return computeDeleteProductionBuckets({
+    survivingRows: rows, deletedMs, bblPerFoot: args.bblPerFoot,
+    wellKey: args.wellKey, nowIso: new Date().toISOString(), curBuckets,
   });
 }
 
@@ -3118,6 +3158,18 @@ export const processDeleteRequest = functionsV1.runWith({ timeoutSeconds: CANONI
         sidecar.outgoing = { deleteResponseIds: oldResponseIds };
       }
 
+      // Recompute the deleted pull's production-date bucket from the SURVIVING
+      // canonical rows (same count-based semantics as EDIT) so the deleted pull
+      // is no longer counted. Nulls the bucket when it was the last pull on that
+      // date; leaves every other date untouched. Folded into the one atomic patch.
+      if (deletedPacket.dateTimeUTC) {
+        const prodBuckets = await computeDeleteProductionSidecar({
+          wellName, wellKey, deletedPacketId: targetPacketId,
+          deletedDateTimeUTC: String(deletedPacket.dateTimeUTC), bblPerFoot,
+        });
+        if (prodBuckets.length) sidecar.production = prodBuckets;
+      }
+
       const outcome = await runCanonicalMutation(makeCoordinatorIO(db, wellName), {
         wellName, operationId: `delete_${targetPacketId}`,
         buildPatch: async () => {
@@ -3129,6 +3181,10 @@ export const processDeleteRequest = functionsV1.runWith({ timeoutSeconds: CANONI
             existingChain: chain, deletePacketId: targetPacketId, cfg,
           });
           if (deletedPerfTs) built.patch[`performance/${wellKey}/rows/${deletedPerfTs}`] = null;
+          // Keep the production wellName sibling present whenever a bucket is (re)written.
+          if (sidecar.production && sidecar.production.some((p) => p.value !== null)) {
+            built.patch[`production/${wellKey}/wellName`] = wellName;
+          }
           // Audit archive + source-request removal are PART of the same atomic patch.
           built.patch[`packets/processed/delete_${targetPacketId}`] = auditData;
           built.patch[`packets/incoming/${deleteIncomingId}`] = null;

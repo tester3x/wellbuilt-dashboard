@@ -81,3 +81,44 @@ export function computeEditProductionBuckets(input: EditProductionInput):
   }
   return out;
 }
+
+export interface DeleteProductionInput {
+  /** Post-delete SURVIVING processed rows (the deleted row already excluded). */
+  survivingRows: EditProdRow[];
+  /** Event time of the pull being deleted (its production date is the only one touched). */
+  deletedMs: number;
+  bblPerFoot: number;
+  wellKey: string;
+  nowIso: string;
+  /** Current stored bucket a-values by date; fallback only when a surviving date
+   *  has no computable flow rate. */
+  curBuckets: Record<string, { a?: number } | null | undefined>;
+}
+
+/**
+ * Pure. Recompute the SINGLE production-date bucket a DELETE touches (the deleted
+ * pull's date), from the AUTHORITATIVE surviving rows — the exact per-date
+ * semantics of computeEditProductionBuckets, so DELETE and EDIT agree. Count `n`
+ * is the number of surviving pulls on that date (never a blind −1), so replay is
+ * idempotent and cannot double-decrement; a/w/o reflect the actual latest
+ * surviving pull on the date. `value: null` removes the bucket when the deleted
+ * pull was the last one on that date. Historical stored tank bottoms are never
+ * touched. Returns [] only for an unparseable deleted time (no date to recompute).
+ */
+export function computeDeleteProductionBuckets(input: DeleteProductionInput):
+  Array<{ wellKey: string; date: string; value: Record<string, unknown> | null }> {
+  if (!Number.isFinite(input.deletedMs)) return [];
+  const hist = asHistorical(input.survivingRows);
+  const date = getProductionDate(input.deletedMs);
+  const onDate = input.survivingRows.filter((r) => getProductionDate(r.ms) === date).sort(cmp);
+  if (onDate.length === 0) {
+    return [{ wellKey: input.wellKey, date, value: null }]; // last pull on the date removed → bucket gone
+  }
+  const latest = onDate[onDate.length - 1];
+  const w = calculateWindowBblsPerDay(hist, input.bblPerFoot, latest.ms) || 0;
+  const o = calculateOvernightBblsPerDay(hist, input.bblPerFoot, latest.ms) || 0;
+  const rates = input.survivingRows.filter((r) => r.ms <= latest.ms && r.flowRateDays > 0).sort(cmp).map((r) => r.flowRateDays).slice(-15);
+  const afr = computeAFRFromRates(rates);
+  const a = afr > 0 ? Math.round((1 / afr) * input.bblPerFoot) : (input.curBuckets[date]?.a ?? 0);
+  return [{ wellKey: input.wellKey, date, value: { a, w, o, u: input.nowIso, n: onDate.length } }];
+}

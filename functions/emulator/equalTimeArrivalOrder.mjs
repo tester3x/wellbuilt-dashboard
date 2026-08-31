@@ -1,8 +1,17 @@
-// Equal-time CREATE arrival-order determinism (Thor 1 final proof #4). Two pulls
-// at the SAME event-time must BOTH persist, and the canonical current must be
-// selected by the deterministic packetId tie-break (highest id wins) — the SAME
-// result regardless of which physically arrived/processed first. Drives the REAL
-// processIncomingPull trigger by writing packets/incoming/<id>.
+// Equal-time CREATE arrival-order determinism + provenance semantics (Thor 1).
+// Two pulls at the SAME event-time must BOTH persist, and the canonical current
+// must be selected by the deterministic packetId tie-break (HIGHER id is current)
+// — the SAME result regardless of which physically arrived/processed first.
+//
+// `lateEntry` is DEFINED as ARRIVAL PROVENANCE: "this packet arrived after a
+// canonical successor already existed", NOT "this packet is chronologically
+// behind a successor." So for two equal-time pulls the SAME lower-id packet is
+// lateEntry=false when it arrived FIRST (no successor existed yet) and
+// lateEntry=true when it arrived SECOND (the higher-id current already existed).
+// The current pointer and all MATERIAL canonical state are identical between the
+// two arrival orders; only this provenance flag differs, and it is an
+// informational review signal that gates no formula, billing, production,
+// current-status, or mutation-eligibility decision.
 //
 // RUN: node functions/emulator/run.mjs equalorder
 import admin from 'firebase-admin';
@@ -34,34 +43,55 @@ async function currentIdFor(well) {
 // TEQ: identical event-time for both pulls in a well. Highest packetId must win.
 const TEQ = '2026-08-27T18:00:00.000Z';
 
-async function runOrder(well, firstId, secondId, expectedCurrent) {
+// Fixed material per LOGICAL pull (attached to identity, not arrival slot):
+const MAT = { p1: { tankLevelFeet: '13.0', bblsTaken: 60 }, p2: { tankLevelFeet: '12.5', bblsTaken: 55 } };
+async function runOrder(well, lowerId, higherId, arrivalOrder /* [id,id] */, expectedCurrent) {
   await seedWellConfig(well);
-  await sendPull(firstId, well, { dateTimeUTC: TEQ });          // arrives/processes FIRST
-  await waitFor(`packets/processed/${firstId}`, (v) => v && v.processedAt);
-  await sendPull(secondId, well, { dateTimeUTC: TEQ });         // arrives/processes SECOND
-  await waitFor(`packets/processed/${secondId}`, (v) => v && v.processedAt);
+  const matFor = (id) => (id === lowerId ? MAT.p1 : MAT.p2); // identity → material, regardless of arrival
+  for (const id of arrivalOrder) {
+    await sendPull(id, well, { dateTimeUTC: TEQ, ...matFor(id) });
+    await waitFor(`packets/processed/${id}`, (v) => v && v.processedAt);
+  }
   await sleep(2500);
-  const a = (await db.ref(`packets/processed/${firstId}`).once('value')).val();
-  const b = (await db.ref(`packets/processed/${secondId}`).once('value')).val();
+  const lower = (await db.ref(`packets/processed/${lowerId}`).once('value')).val();
+  const higher = (await db.ref(`packets/processed/${higherId}`).once('value')).val();
   const cur = await currentIdFor(well);
-  check(`[${well}] arrival ${firstId}→${secondId}: BOTH pulls persist (neither dropped)`, !!a && !!b, `a=${!!a} b=${!!b}`);
-  check(`[${well}] arrival ${firstId}→${secondId}: canonical current = ${expectedCurrent} (packetId tie-break, not arrival)`, cur === expectedCurrent, `current=${cur}`);
-  return cur;
+  check(`[${well}] arrival ${arrivalOrder.join('→')}: BOTH pulls persist (neither dropped)`, !!lower && !!higher, `lo=${!!lower} hi=${!!higher}`);
+  check(`[${well}] arrival ${arrivalOrder.join('→')}: canonical current = ${expectedCurrent} (packetId tie-break, not arrival)`, cur === expectedCurrent, `current=${cur}`);
+  return { cur, lower, higher };
 }
 
 async function main() {
   await db.ref('/').set(null);
   console.log(`[equalorder] db=${DB_HOST} ns=${NS}`);
   // Canonical tie-break = event-time asc, then packetId ASC → the LEXICALLY-HIGHER
-  // packetId is the canonical-newest/current. Ids chosen so the intended winner
-  // (…_p2) is unambiguously the higher STRING (p2 > p1), avoiding hi/lo confusion.
-  // Order A: p1 first, p2 second (lower id arrives first).
-  const curA = await runOrder('EqOrdA', 'eq_A_p1', 'eq_A_p2', 'eq_A_p2');
-  // Order B: p2 first, p1 second (higher id arrives first — reverse arrival).
-  const curB = await runOrder('EqOrdB', 'eq_B_p2', 'eq_B_p1', 'eq_B_p2');
+  // packetId is the canonical-newest/current. Ids chosen so the winner (…_p2) is
+  // unambiguously the higher STRING (p2 > p1). Both orders use the same well-local
+  // p1/p2 material so material state is comparable across orders.
+  // Order A: p1 (lower) arrives FIRST, then p2 (higher).
+  const A = await runOrder('EqOrdA', 'eq_A_p1', 'eq_A_p2', ['eq_A_p1', 'eq_A_p2'], 'eq_A_p2');
+  // Order B: p2 (higher) arrives FIRST, then p1 (lower) — reverse arrival.
+  const B = await runOrder('EqOrdB', 'eq_B_p1', 'eq_B_p2', ['eq_B_p2', 'eq_B_p1'], 'eq_B_p2');
   // The canonical winner is the HIGHER packetId in BOTH orders — arrival-independent.
   check('tie-break is arrival-INDEPENDENT: higher packetId is current in both orders',
-    curA === 'eq_A_p2' && curB === 'eq_B_p2', `A=${curA} B=${curB}`);
+    A.cur === 'eq_A_p2' && B.cur === 'eq_B_p2', `A=${A.cur} B=${B.cur}`);
+
+  // ── Provenance semantics: lateEntry = ARRIVAL provenance (not chronology) ──
+  check('provenance: lower-id-FIRST is NOT labeled late (arrived before any successor existed)', A.lower.lateEntry === false, `lateEntry=${A.lower.lateEntry}`);
+  check('provenance: lower-id-SECOND IS labeled late (arrived after the higher-id current existed)', B.lower.lateEntry === true, `lateEntry=${B.lower.lateEntry}`);
+
+  // ── Material canonical state is IDENTICAL between the two arrival orders ──
+  // Material is attached to identity (p1/p2), so the SAME logical pull is compared
+  // across orders; only lateEntry differs.
+  const matFields = (p) => ({ tankTopInches: p.tankTopInches, tankAfterInches: p.tankAfterInches, bblsTaken: p.bblsTaken, dateTimeUTC: p.dateTimeUTC, flowRateDays: p.flowRateDays, wellDown: p.wellDown ?? false });
+  check('material: the CURRENT (higher-id p2) pull is materially identical across both orders', JSON.stringify(matFields(A.higher)) === JSON.stringify(matFields(B.higher)), `${JSON.stringify(matFields(A.higher))} vs ${JSON.stringify(matFields(B.higher))}`);
+  check('material: the demoted (lower-id p1) pull is materially identical across both orders (ONLY lateEntry differs)', JSON.stringify(matFields(A.lower)) === JSON.stringify(matFields(B.lower)), `${JSON.stringify(matFields(A.lower))} vs ${JSON.stringify(matFields(B.lower))}`);
+
+  // ── Provenance does not alter current status or production between orders ──
+  const prodA = (await db.ref('production/EqOrdA').once('value')).val() || {};
+  const prodB = (await db.ref('production/EqOrdB').once('value')).val() || {};
+  const bucketN = (o) => { const d = Object.keys(o).find((k) => /^\d{4}-\d{2}-\d{2}$/.test(k)); return d ? o[d].n : null; };
+  check('provenance does NOT alter production: both pulls counted in the date bucket in BOTH orders', bucketN(prodA) === 2 && bucketN(prodB) === 2, `A=${bucketN(prodA)} B=${bucketN(prodB)}`);
 
   console.log('\n=== EQUAL-TIME ARRIVAL-ORDER DETERMINISM (real processIncomingPull) ===');
   console.log(results.join('\n'));

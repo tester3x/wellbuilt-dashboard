@@ -144,8 +144,30 @@ describe(`Atlas1 — COMPLETE live assembled patch over ${N} pulls`, () => {
     const r = report('DELETE newest', patch, receipt, 'del_incoming');
     expect(r.hasReceipt).toBe(true);
     expect(r.hasIncomingDelete).toBe(true);
-    expect(r.projections).toEqual(expect.arrayContaining(['outgoing', 'status', 'performance']));
+    // COMPLETENESS: the live handler now supplies a production sidecar on delete,
+    // so the recomputed bucket is in the same atomic patch (value-level real-
+    // handler proof: functions/emulator/projectionPaths.mjs).
+    expect(r.projections).toEqual(expect.arrayContaining(['outgoing', 'status', 'performance', 'production']));
+    const prevDate = getProductionDate(Date.parse(prev.dateTimeUTC));
+    expect(patch[`production/${WELLKEY}/${prevDate}`]).toMatchObject({ n: expect.any(Number) });
     expect(r.paths).toBeGreaterThan(15);                    // complete, not 3
+  });
+
+  test('DELETE production sidecar: recomputed bucket AND vacated-date removal are forwarded into the ONE atomic patch', () => {
+    // The delete builder forwards sidecar.production verbatim: a surviving date is
+    // (re)written with its recomputed count, a vacated date is set null (removed).
+    const delId = `atlas_${String(300).padStart(4, '0')}`;
+    const survDate = '2025-02-01', vacatedDate = '2025-02-02';
+    const { patch } = buildDeleteMutation({
+      wellName: WELL, operationId: `delete_${delId}`, fence: 660, revision: 660, committedAtMs: 0, patchHash: 'delp:660',
+      sidecar: { production: [
+        { wellKey: WELLKEY, date: survDate, value: { a: 40, w: 42, o: 39, u: '2026-08-31T00:00:00.000Z', n: 2 } }, // recomputed (survivors remain)
+        { wellKey: WELLKEY, date: vacatedDate, value: null },                                                       // last pull on date removed
+      ] },
+      existingChain: chain, deletePacketId: delId, cfg,
+    });
+    expect(patch[`production/${WELLKEY}/${survDate}`]).toEqual({ a: 40, w: 42, o: 39, u: '2026-08-31T00:00:00.000Z', n: 2 });
+    expect(patch[`production/${WELLKEY}/${vacatedDate}`]).toBeNull();
   });
 
   test('EDIT moving later→current: full projections + edit-trail + isDown + receipt + incoming-delete', () => {
@@ -171,8 +193,11 @@ describe(`Atlas1 — COMPLETE live assembled patch over ${N} pulls`, () => {
     expect(r.projections).toEqual(expect.arrayContaining(['outgoing', 'status', 'performance']));
   });
 
-  test('all complete patches remain bounded far below the 646-row history', () => {
-    // Guard: even the largest (EDIT-earlier full cascade) stays well under N and 250KB.
+  test('[BOUNDS] EDIT-earlier full cascade stays bounded far below the 646-row history (sidecar:{})', () => {
+    // BOUNDS TEST: measures the EDIT-earlier cascade SIZE only (sidecar:{}); it is
+    // NOT live projection evidence. Real-handler EDIT projection values are proven
+    // in functions/emulator/projectionPaths.mjs. Guard: even the largest cascade
+    // stays well under N and 250KB.
     const edited: ChronoPullInput = { ...chain[400], dateTimeUTC: new Date(START + 100 * STEP + STEP / 3).toISOString(), tankTopInches: 236, bblsTaken: 100 };
     const { patch, receipt } = buildEditMutation({
       wellName: WELL, operationId: 'edit_earlier', fence: 647, revision: 647, committedAtMs: 0, patchHash: 'e:647',
@@ -212,7 +237,9 @@ describe(`Atlas1 — Phase-9 scale completions over ${N} pulls`, () => {
     expect(r.paths).toBeLessThan(60);               // never scales with the 646-row history
   });
 
-  test('DELETE oldest: successor recompute only — bounded, receipted, v2', () => {
+  // BOUNDS TEST (sidecar:{}) — measures cascade SIZE only, NOT live projections.
+  // Real-handler projection/production evidence: functions/emulator/projectionPaths.mjs.
+  test('[BOUNDS] DELETE oldest: cascade size only (sidecar:{}) — bounded, receipted, v2', () => {
     const { patch, receipt } = buildDeleteMutation({
       wellName: WELL, operationId: 'delete_atlas_0000', fence: 649, revision: 649, committedAtMs: 0, patchHash: 'del0:649',
       sidecar: {}, existingChain: chain, deletePacketId: 'atlas_0000', cfg,
@@ -225,7 +252,8 @@ describe(`Atlas1 — Phase-9 scale completions over ${N} pulls`, () => {
     expect(r.paths).toBeLessThan(60);
   });
 
-  test('DELETE middle: neighbor stitch — bounded, receipted, v2', () => {
+  // BOUNDS TEST (sidecar:{}) — measures cascade SIZE only, NOT live projections.
+  test('[BOUNDS] DELETE middle: cascade size only (sidecar:{}) — bounded, receipted, v2', () => {
     const { patch, receipt } = buildDeleteMutation({
       wellName: WELL, operationId: 'delete_atlas_0323', fence: 650, revision: 650, committedAtMs: 0, patchHash: 'delm:650',
       sidecar: {}, existingChain: chain, deletePacketId: 'atlas_0323', cfg,

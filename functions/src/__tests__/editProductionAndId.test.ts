@@ -1,6 +1,6 @@
 // Predeploy gate Blockers 1 & 2 — pure-unit proofs for the cross-date
 // production recompute and the deterministic legacy edit id.
-import { computeEditProductionBuckets, type EditProdRow } from '../editProduction';
+import { computeEditProductionBuckets, computeDeleteProductionBuckets, type EditProdRow } from '../editProduction';
 import { deriveLegacyEditEventId, normalizeFinalEditMaterial, resolveEditEventId } from '../editHistory';
 import { getProductionDate } from '../productionFormulas';
 
@@ -57,6 +57,47 @@ describe('computeEditProductionBuckets — Blocker 1', () => {
     });
     expect(out).toHaveLength(1);
     expect((out[0].value as any)?.n).toBe(1);
+  });
+});
+
+describe('computeDeleteProductionBuckets — DELETE production recompute', () => {
+  const BPF = 20, KEY = 'Gabriel_1';
+  const d = '2026-08-27'; // same production window (6am-6am): 15:00Z, 20:00Z land here
+  const isoA = '2026-08-27T15:00:00.000Z', isoB = '2026-08-27T20:00:00.000Z';
+  const deletedMs = new Date(isoA).getTime();
+
+  test('other pulls remain on the date: bucket RECOMPUTED, n = surviving count (not blind −1)', () => {
+    // deleted = isoA; survivors = [isoB] on the same date.
+    const survivors = [row('pB', isoB, 120, 160)];
+    const out = computeDeleteProductionBuckets({
+      survivingRows: survivors, deletedMs, bblPerFoot: BPF, wellKey: KEY, nowIso: 'T', curBuckets: {},
+    });
+    const date = getProductionDate(deletedMs);
+    expect(out).toHaveLength(1);
+    expect(out[0].date).toBe(date);
+    expect((out[0].value as any)?.n).toBe(1); // one survivor on the date
+  });
+
+  test('deleted pull was the LAST on its date: bucket REMOVED (null)', () => {
+    const out = computeDeleteProductionBuckets({
+      survivingRows: [row('pOther', '2026-08-28T15:00:00.000Z', 100, 150)], // different date
+      deletedMs, bblPerFoot: BPF, wellKey: KEY, nowIso: 'T', curBuckets: {},
+    });
+    expect(out).toHaveLength(1);
+    expect(out[0].value).toBeNull();
+  });
+
+  test('idempotent: depends only on the surviving set → same result twice (no double decrement)', () => {
+    const survivors = [row('pB', isoB, 120, 160), row('pC', '2026-08-27T22:00:00.000Z', 90, 140)];
+    const args = { survivingRows: survivors, deletedMs, bblPerFoot: BPF, wellKey: KEY, nowIso: 'T', curBuckets: {} };
+    expect(JSON.stringify(computeDeleteProductionBuckets(args))).toBe(JSON.stringify(computeDeleteProductionBuckets(args)));
+    expect((computeDeleteProductionBuckets(args)[0].value as any)?.n).toBe(2); // two survivors on the date
+  });
+
+  test('unparseable deleted time → no bucket touched ([])', () => {
+    expect(computeDeleteProductionBuckets({
+      survivingRows: [row('pB', isoB, 120, 160)], deletedMs: NaN, bblPerFoot: BPF, wellKey: KEY, nowIso: 'T', curBuckets: {},
+    })).toEqual([]);
   });
 });
 
