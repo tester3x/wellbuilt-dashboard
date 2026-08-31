@@ -27,13 +27,22 @@ export const CATEGORY_COLORS: Record<NotificationCategory, string> = {
   ticket_submitted: '#6366F1',    // indigo
 };
 
-// Default notification preferences per role
-// Users can override these in their settings
+// Default notification preferences per role. Users can override these in their
+// settings. This is a `Record<UserRole, …>` on purpose: it is a COMPILE-TIME
+// exhaustiveness pin — every UserRole must have a default, so adding a role
+// without a default fails `tsc` (which is how the missing safety/lead defaults
+// surfaced). Each default is the intersection of the role's view capabilities
+// (DEFAULT_ROLE_CAPABILITIES in auth.ts) with the notification surfaces; these
+// are display defaults only and grant no access.
 export const DEFAULT_PREFS: Record<UserRole, NotificationCategory[]> = {
   it: ['driver_registration', 'dispatch_update', 'pull_submitted', 'well_alert', 'payroll_dispute', 'ticket_submitted'],
   manager: ['driver_registration', 'dispatch_update', 'pull_submitted', 'well_alert', 'payroll_dispute', 'ticket_submitted'],
   admin: ['driver_registration', 'dispatch_update', 'well_alert'],
   dispatch: ['dispatch_update', 'pull_submitted', 'ticket_submitted'],
+  // safety / lead: viewDispatch + viewTickets (+ viewSafety/manageSafety); NO
+  // viewMobile/viewPayroll/manageDrivers → dispatch + tickets only. Overridable.
+  safety: ['dispatch_update', 'ticket_submitted'],
+  lead: ['dispatch_update', 'ticket_submitted'],
   payroll: ['payroll_dispute', 'ticket_submitted'],
   viewer: ['well_alert'],
   driver: [],
