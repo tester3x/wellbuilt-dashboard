@@ -44,6 +44,7 @@ const MODES = {
   gate: { only: 'functions,database,firestore,auth', script: 'node functions/emulator/gate.mjs' },
   admingate: { only: 'functions,database,firestore,auth', script: 'node functions/emulator/adminGate.mjs' },
   welldown: { only: 'functions,database,firestore,auth', script: 'node functions/emulator/wellDownThreeState.mjs' },
+  contractfixture: { only: 'functions,database,firestore,auth', script: 'node functions/emulator/governedContractFixture.mjs' },
   adminedit: { only: 'functions,database,firestore', script: 'node functions/emulator/adminEditCompat.mjs' },
   mixed: { only: 'functions,database,firestore', script: 'node functions/emulator/mixedVersion.mjs' },
   rulesprobe: { only: 'database,auth', script: 'node functions/emulator/rulesprobe.mjs', config: 'firebase.rulesprobe.json' },

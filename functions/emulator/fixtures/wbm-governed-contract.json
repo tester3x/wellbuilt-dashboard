@@ -1,0 +1,126 @@
+{
+  "version": 1,
+  "digest": "64bd92b4d70c96e6233ef24a0c7e19abc626bbee3c479ac7debef700379b4b9f",
+  "fixtures": {
+    "createFalse": {
+      "packetId": "20260830_200000_Thor1_crt001",
+      "idempotencyKey": "20260830_200000_Thor1_crt001",
+      "requestType": "pull",
+      "wellName": "Thor 1",
+      "dateTimeUTC": "2026-08-30T20:00:00.000Z",
+      "dateTime": "8/30/2026 3PM",
+      "timezone": "America/Chicago",
+      "tankLevelFeet": 11.333333333333334,
+      "bblsTaken": 140,
+      "wellDown": false,
+      "wellDownIsAuthoritative": true
+    },
+    "createTrue": {
+      "packetId": "20260830_210000_Thor1_crt002",
+      "idempotencyKey": "20260830_210000_Thor1_crt002",
+      "requestType": "pull",
+      "wellName": "Thor 1",
+      "dateTimeUTC": "2026-08-30T21:00:00.000Z",
+      "dateTime": "8/30/2026 4PM",
+      "timezone": "America/Chicago",
+      "tankLevelFeet": 11.333333333333334,
+      "bblsTaken": 140,
+      "wellDown": true,
+      "wellDownIsAuthoritative": true
+    },
+    "editFalse": {
+      "requestType": "edit",
+      "schemaVersion": 2,
+      "editedFields": [
+        "tankLevelFeet",
+        "bblsTaken",
+        "wellDown"
+      ],
+      "wellName": "Thor 1",
+      "originalPacketId": "20260830_123821_Thor1_unozct",
+      "packetId": "20260830_123821_Thor1_unozct",
+      "editEventId": "editevt_00000000-0000-4000-8000-000000000001",
+      "idempotencyKey": "editevt_00000000-0000-4000-8000-000000000001",
+      "correctionCreatedAtUTC": "2026-08-30T19:09:00.000Z",
+      "tankLevelFeet": 11.333333333333334,
+      "bblsTaken": 140,
+      "wellDown": false,
+      "timezone": "America/Chicago"
+    },
+    "editTrue": {
+      "requestType": "edit",
+      "schemaVersion": 2,
+      "editedFields": [
+        "tankLevelFeet",
+        "bblsTaken",
+        "wellDown"
+      ],
+      "wellName": "Thor 1",
+      "originalPacketId": "20260830_123821_Thor1_unozct",
+      "packetId": "20260830_123821_Thor1_unozct",
+      "editEventId": "editevt_00000000-0000-4000-8000-000000000002",
+      "idempotencyKey": "editevt_00000000-0000-4000-8000-000000000002",
+      "correctionCreatedAtUTC": "2026-08-30T19:09:00.000Z",
+      "tankLevelFeet": 11.333333333333334,
+      "bblsTaken": 140,
+      "wellDown": true,
+      "timezone": "America/Chicago"
+    },
+    "editRetry": {
+      "requestType": "edit",
+      "schemaVersion": 2,
+      "editedFields": [
+        "tankLevelFeet",
+        "bblsTaken",
+        "wellDown"
+      ],
+      "wellName": "Thor 1",
+      "originalPacketId": "20260830_123821_Thor1_unozct",
+      "packetId": "20260830_123821_Thor1_unozct",
+      "editEventId": "editevt_00000000-0000-4000-8000-000000000001",
+      "idempotencyKey": "editevt_00000000-0000-4000-8000-000000000001",
+      "correctionCreatedAtUTC": "2026-08-30T19:09:00.000Z",
+      "tankLevelFeet": 11.333333333333334,
+      "bblsTaken": 140,
+      "wellDown": false,
+      "timezone": "America/Chicago"
+    },
+    "editSecond": {
+      "requestType": "edit",
+      "schemaVersion": 2,
+      "editedFields": [
+        "tankLevelFeet",
+        "bblsTaken",
+        "wellDown"
+      ],
+      "wellName": "Thor 1",
+      "originalPacketId": "20260830_123821_Thor1_unozct",
+      "packetId": "20260830_123821_Thor1_unozct",
+      "editEventId": "editevt_00000000-0000-4000-8000-000000000002",
+      "idempotencyKey": "editevt_00000000-0000-4000-8000-000000000002",
+      "correctionCreatedAtUTC": "2026-08-30T19:15:00.000Z",
+      "tankLevelFeet": 11.333333333333334,
+      "bblsTaken": 140,
+      "wellDown": true,
+      "timezone": "America/Chicago"
+    },
+    "editOmitted": {
+      "requestType": "edit",
+      "schemaVersion": 2,
+      "editedFields": [
+        "tankLevelFeet",
+        "bblsTaken"
+      ],
+      "wellName": "Thor 1",
+      "originalPacketId": "20260830_123821_Thor1_unozct",
+      "packetId": "20260830_123821_Thor1_unozct",
+      "editEventId": "editevt_00000000-0000-4000-8000-0000000000ff",
+      "idempotencyKey": "editevt_00000000-0000-4000-8000-0000000000ff",
+      "correctionCreatedAtUTC": "2026-08-30T19:09:00.000Z",
+      "tankLevelFeet": 11.333333333333334,
+      "bblsTaken": 140,
+      "wellDown": false,
+      "timezone": "America/Chicago"
+    }
+  }
+}
