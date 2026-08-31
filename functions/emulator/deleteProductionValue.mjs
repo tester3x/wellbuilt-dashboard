@@ -70,6 +70,11 @@ async function main() {
   const afterPost = toRows(chrono.recomputeWell(chain.filter((p) => p.packetId !== 'Xpv'), CFG));
   const postExpected = pick(prod.computeAffectedProductionBuckets({ beforeRows: beforePost, afterRows: afterPost, bblPerFoot: 20, wellKey: WK, nowIso: 'T', curBuckets }), dDate);
 
+  // Flatten a subtree to leaf paths for a complete before/after patch-key diff.
+  const flatten = (obj, prefix, out) => { if (obj === null || typeof obj !== 'object') { out[prefix] = obj; return out; } for (const k of Object.keys(obj)) flatten(obj[k], prefix ? `${prefix}/${k}` : k, out); return out; };
+  const snapshot = async () => { const o = {}; for (const root of ['packets', 'performance', 'production', 'wells']) flatten((await db.ref(root).once('value')).val(), root, o); return o; };
+  const before = await snapshot();
+
   // ── delete X through the REAL handler ──
   const paths = {};
   await sendDelete('delX', 'Xpv');
@@ -92,6 +97,14 @@ async function main() {
   console.log(`[VALUE] STALE expected a=${aOf(staleExpected?.value)} value=${JSON.stringify(staleExpected?.value)}`);
   console.log(`[VALUE] POST-CASCADE expected a=${aOf(postExpected?.value)} value=${JSON.stringify(postExpected?.value)}`);
   console.log(`[VALUE] atomic patch paths = ${JSON.stringify(paths, null, 0)}`);
+  // COMPLETE flat patch-key list: every leaf path that changed (written or nulled).
+  const after = await snapshot();
+  const allKeys = new Set([...Object.keys(before), ...Object.keys(after)]);
+  const changed = [];
+  for (const k of allKeys) { if (JSON.stringify(before[k] ?? null) !== JSON.stringify(after[k] ?? null)) changed.push(`${k} = ${k in after ? JSON.stringify(after[k]) : 'null(removed)'}`); }
+  // incoming_version is a server-increment sentinel (value differs each run) — note it.
+  console.log(`[VALUE] COMPLETE atomic patch keys (${changed.length}):`);
+  for (const c of changed.sort()) console.log(`   ${c}`);
 
   check('successor Y flowRateDays CHANGES when its predecessor X is deleted', String(yBefore?.flowRateDays) !== String(yAfter?.flowRateDays), `${yBefore?.flowRateDays}→${yAfter?.flowRateDays}`);
   check('post-cascade and stale expected buckets genuinely DIFFER on `a` (the fix matters)', aOf(postExpected?.value) !== aOf(staleExpected?.value), `post=${aOf(postExpected?.value)} stale=${aOf(staleExpected?.value)}`);
