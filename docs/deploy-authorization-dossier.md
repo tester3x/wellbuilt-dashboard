@@ -1,5 +1,21 @@
 # WB-M rollout — deployment-authorization dossier (Rev-4 final preflight)
 
+> **SUPERSEDED SHA (Thor 1 fix, 8/30/2026).** The candidate has advanced past
+> `c3fc989`/`21383e1` because the Thor 1 well-down edit fix changed
+> `functions/src/security/operational/wbmEditAuthorize.ts` (the `ingestWbmEdit`
+> producer). **New reviewed server SHA `dff3acdb0eb770a41a5f7f68591bc494a33bfefe`;
+> new client SHA `b8bbbf1b506076dd18d58596b6e9ab057c150be0`.** The `c3fc989`
+> byte-identity claim is **superseded for `ingestWbmEdit`** (still holds for the
+> other six functions — `git diff c3fc989 dff3acd -- functions/src` shows only
+> `wbmEditAuthorize.ts`). Re-frozen candidate proven: seven exports 7/7, guard
+> ALLOWs both staged commands (detached, pinned), plan CLEAN, preflight token
+> bound to the new SHA; server suite 906 pass + functions tsc zero; Stage-A vs
+> the exact deployed consumer archives 19/19 with the fixed producer; matrix
+> green (harness 64, controller 19, flagcas 13, rulesprobe 72, adminedit 26,
+> guarded suites 40, welldown 19). See `THOR1` report in-session. Rollback
+> archives (§4) still target the CURRENTLY-deployed pre-fix revisions.
+
+
 **Prepared read-only. Nothing here is authorization. No deploy, flag write,
 production write, push, replay, rules change, APK, or device action was
 performed.** Reviewed server HEAD `f6d90afbb35b20ae793f8280cdbd23c94dba1122`
