@@ -69,6 +69,14 @@ describe('orchestrateGovernedRecovery', () => {
     expect(state.pendingRecorded).toBe(1); // operator can now verify + promote the exact editEventId
   });
 
+  test('master ON with NO allow-list (RTDB drops empty {}) ⇒ still captures pending', async () => {
+    const { io, state } = makeIO({ flag: { enabled: true } }); // allow absent
+    const r = await orchestrateGovernedRecovery({ ...base, io });
+    expect(r).toEqual({ ok: false, status: 'refused', reason: 'canary_disabled:canary_allowlist_empty' });
+    expect(state.applyCount).toBe(0);
+    expect(state.pendingRecorded).toBe(1);
+  });
+
   test('missing edit + gate ON ⇒ applies exactly once and yields a terminal receipt', async () => {
     const { io, state } = makeIO();
     const r = await orchestrateGovernedRecovery({ ...base, io });

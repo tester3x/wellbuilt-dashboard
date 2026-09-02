@@ -176,9 +176,13 @@ export async function orchestrateGovernedRecovery(input: {
   const flag = await io.readFlag();
   const gate = evaluateCanaryGate({ flag, editEventId, wellName, originalPacketId });
   if (!gate.allowed) {
-    // Master on but this exact editEventId not yet allow-listed → record a
-    // governed pending request so an operator can verify + promote it.
-    if (gate.reason === 'edit_event_id_not_allowlisted' && io.recordPendingRequest) {
+    // Master ON but this exact editEventId is not yet allow-listed (whether the
+    // allow-list is empty/absent — RTDB drops empty objects — or simply missing
+    // this id) → record a governed pending request so an operator can verify +
+    // promote it. NOT when the master switch is off/absent (fully behavior-neutral).
+    const masterOnNotAllowlisted =
+      gate.reason === 'edit_event_id_not_allowlisted' || gate.reason === 'canary_allowlist_empty';
+    if (masterOnNotAllowlisted && io.recordPendingRequest) {
       try { await io.recordPendingRequest(); } catch { /* best-effort */ }
     }
     return { ok: false, status: 'refused', reason: `canary_disabled:${gate.reason}` };
