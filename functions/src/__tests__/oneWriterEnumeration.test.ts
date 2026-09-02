@@ -110,11 +110,13 @@ describe('one-writer enumeration — every live mutation entry', () => {
   test('legitimate exceptions are non-canonical: quarantine evidence, incoming consumption, health, diagnostics', () => {
     // Every remaining direct RTDB write target in index.ts must be one of:
     // packets/incoming (consumption), packets/rejected (via packetGuards
-    // quarantine), system_health, logs/diagnostics. Enumerate .set( calls on
-    // db.ref template literals and classify.
+    // quarantine), system_health, logs/diagnostics, OR the additive
+    // flags/wbmEditCanary control subtree (WBM_EDIT_CANARY_FLAG_PATH) — a
+    // kill-switch/operator-capture node, never canonical well state.
+    // Enumerate .set( calls on db.ref template literals and classify.
     const setCalls = index.match(/db\.ref\((`[^`]*`|'[^']*')\)\s*\.\s*set\(/g) || [];
     for (const call of setCalls) {
-      expect(call).toMatch(/system_health|packets\/incoming\//);
+      expect(call).toMatch(/system_health|packets\/incoming\/|WBM_EDIT_CANARY_FLAG_PATH/);
     }
     // packetGuards owns rejected/ writes and pairs them with the incoming
     // removal in ONE update — never deletion without evidence.
