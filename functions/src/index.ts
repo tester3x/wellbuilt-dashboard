@@ -37,6 +37,13 @@ import { formatLocalDateTime, outgoingCompanyId, inchesToFeetInches, feetInchesT
 import { buildOutgoingResponse, buildWellStatus } from './outgoingBuilders';
 import { buildPerformanceRow } from './performanceBuilders';
 import { computeTankTopInches, computeTankAfterInches, computeRecoveryInches, computeFlowRateDays } from './tankFormulas';
+// Additive, kill-switch-gated WB-M edit canary (recovery + governed status).
+// Does NOT modify any deployed global handler; gated OFF by default.
+import { requireSecureDriver } from './security/requireDriverAuth';
+import { loadCanonicalDriverAuthority, productionCanonicalDriverReaders } from './security/canonicalDriverAuthority';
+import { checkMutationAdmission, MAINTENANCE_ERROR_CODE } from './security/operational/mutationAdmission';
+import { evaluateWbmEdit, resolveOriginalEditAuthority } from './security/operational/wbmEditAuthorize';
+import { classifyEditStatus, orchestrateGovernedRecovery, WBM_EDIT_CANARY_FLAG_PATH } from './security/operational/wbmEditCanary';
 import {
   assertedFromEditedFields,
   buildAppliedEditEvent,
@@ -617,6 +624,164 @@ async function calculateAFR(wellName: string, newFlowRateDays: number): Promise<
 }
 
 // Main function: Process incoming pull packets
+// ═══════════════════════════════════════════════════════════════════════════
+// ADDITIVE WB-M EDIT CANARY — governed status + gated recovery.
+//
+// These two callables are ADDITIVE: they do not change any deployed global
+// handler (processIncomingPull / processEditRequest / watchdog / ingestWbmEdit).
+// getWbmEditStatus is read-only. governedRecoverWbmEdit refuses unless the
+// flags/wbmEditCanary kill switch explicitly allow-lists the exact editEventId
+// (default OFF ⇒ deploying these is behavior-neutral for every well/company).
+// Recovery reapplies the caller's PRESERVED packet through the SAME governed
+// validator (evaluateWbmEdit) and the canonical applier (applyV2ChronologicalEdit),
+// idempotently and only when the edit is proven missing (accepted-then-lost).
+// ═══════════════════════════════════════════════════════════════════════════
+
+/** Minimal governed edit-status. Authenticated driver + ownership only. No
+ *  receipt bodies, no payload — just pending | applied | rejected | missing. */
+export const getWbmEditStatus = httpsV2.onCall(
+  { timeoutSeconds: 30, memory: '256MiB', enforceAppCheck: false },
+  async (request) => {
+    const data = (request.data || {}) as { editEventId?: unknown; originalPacketId?: unknown };
+    const editEventId = typeof data.editEventId === 'string' ? data.editEventId.trim() : '';
+    const originalPacketId = typeof data.originalPacketId === 'string' ? data.originalPacketId.trim() : '';
+    if (!editEventId || !originalPacketId) {
+      throw new httpsV2.HttpsError('invalid-argument', 'editEventId_and_originalPacketId_required');
+    }
+    const driver = await requireSecureDriver(request, { allowLegacyHash: false });
+    const authority = await loadCanonicalDriverAuthority(driver.driverId, productionCanonicalDriverReaders());
+    if (!authority || !authority.active) throw new httpsV2.HttpsError('permission-denied', 'driver_inactive');
+    if (!authority.companyId) throw new httpsV2.HttpsError('failed-precondition', 'company_required');
+
+    const db = admin.database();
+    const [receiptS, origS, rejS, incS] = await Promise.all([
+      db.ref(`packets/editReceipts/${editEventId}`).once('value'),
+      db.ref(`packets/processed/${originalPacketId}`).once('value'),
+      db.ref(`packets/rejected/${editEventId}`).once('value'),
+      db.ref(`packets/incoming/${editEventId}`).once('value'),
+    ]);
+    const original = origS.exists() ? (origS.val() as Record<string, unknown>) : null;
+    // Ownership: only the owning company may read the status. Fail-closed when
+    // the original is absent (no leak; and there is nothing applied to report).
+    if (!original) return { status: 'missing' as const };
+    const owner = resolveOriginalEditAuthority({ original, driverId: driver.driverId, companyId: authority.companyId });
+    if (!owner.ok) throw new httpsV2.HttpsError('permission-denied', 'not_owner');
+
+    const status = classifyEditStatus({
+      receipt: receiptS.exists() ? (receiptS.val() as Record<string, unknown>) : null,
+      original,
+      rejected: rejS.exists() ? (rejS.val() as Record<string, unknown>) : null,
+      incoming: incS.exists() ? (incS.val() as Record<string, unknown>) : null,
+      editEventId,
+    });
+    let reason: string | undefined;
+    if (status === 'rejected' && rejS.exists()) {
+      const r = rejS.val() as Record<string, unknown>;
+      reason = typeof r.reason === 'string' ? r.reason : 'rejected';
+    }
+    return reason ? { status, reason } : { status };
+  },
+);
+
+/** Gated recovery of a preserved, accepted-then-lost WB-M edit. Refuses unless
+ *  the kill switch explicitly allow-lists this exact editEventId+well+original.
+ *  Idempotent: a claimed/applied edit returns its existing status, never a
+ *  duplicate. Reapplies the caller's preserved packet via the canonical applier. */
+export const governedRecoverWbmEdit = httpsV2.onCall(
+  { timeoutSeconds: 60, memory: '512MiB', enforceAppCheck: false },
+  async (request) => {
+    const body = (request.data || {}) as { packet?: unknown; companyId?: unknown };
+    if (body.companyId !== undefined) throw new httpsV2.HttpsError('invalid-argument', 'unexpected_field');
+    const driver = await requireSecureDriver(request, { allowLegacyHash: false });
+    const admission = await checkMutationAdmission();
+    if (!admission.admitted) throw new httpsV2.HttpsError(MAINTENANCE_ERROR_CODE, admission.reason);
+    const authority = await loadCanonicalDriverAuthority(driver.driverId, productionCanonicalDriverReaders());
+    if (!authority || !authority.active) throw new httpsV2.HttpsError('permission-denied', 'driver_inactive');
+    if (!authority.companyId) throw new httpsV2.HttpsError('failed-precondition', 'company_required');
+
+    const db = admin.database();
+    const packetObj = body.packet && typeof body.packet === 'object' && !Array.isArray(body.packet)
+      ? (body.packet as Record<string, unknown>) : null;
+    const origIdGuess = packetObj && typeof (packetObj.originalPacketId || packetObj.packetId) === 'string'
+      ? String(packetObj.originalPacketId || packetObj.packetId).trim() : '';
+    const [profS, wellS, origS] = await Promise.all([
+      db.ref(`drivers/profiles/${driver.driverId}`).once('value'),
+      db.ref('well_config').once('value'),
+      origIdGuess ? db.ref(`packets/processed/${origIdGuess}`).once('value')
+        : Promise.resolve({ exists: () => false, val: () => null } as admin.database.DataSnapshot),
+    ]);
+    if (!profS.exists()) throw new httpsV2.HttpsError('failed-precondition', 'profile_missing');
+    const profile = (profS.val() || {}) as Record<string, unknown>;
+    const wellConfig = wellS.exists() ? (wellS.val() as Record<string, unknown>) : {};
+    const original = origS.exists() ? (origS.val() as Record<string, unknown>) : null;
+
+    // Validate + authorize the preserved packet through the SAME governed path
+    // ingestWbmEdit uses (ownership, company, scope, schemaVersion, editedFields).
+    const decision = evaluateWbmEdit({
+      packet: body.packet,
+      companyId: authority.companyId,
+      driverId: driver.driverId,
+      assignedRoutes: profile.assignedRoutes,
+      assignedWells: profile.assignedWells,
+      wellConfig,
+      original,
+    });
+    if (!decision.ok) throw new httpsV2.HttpsError('failed-precondition', `edit_invalid:${decision.reason}`);
+    if (!original) throw new httpsV2.HttpsError('failed-precondition', 'original_missing');
+    const { editEventId, originalPacketId, wellName, payload } = decision;
+
+    // Gate → precondition → single-claim → apply → verify, via the unit-tested
+    // orchestrator (behavior-neutral when the kill switch is off).
+    const claimRef = db.ref(`${WBM_EDIT_CANARY_FLAG_PATH}/recoveryClaims/${editEventId}`);
+    const outcome = await orchestrateGovernedRecovery({
+      editEventId, wellName, originalPacketId, original,
+      io: {
+        readFlag: async () => {
+          const s = await db.ref(WBM_EDIT_CANARY_FLAG_PATH).once('value');
+          return s.exists() ? (s.val() as Record<string, unknown>) : null;
+        },
+        readReceipt: async () => {
+          const s = await db.ref(`packets/editReceipts/${editEventId}`).once('value');
+          return s.exists() ? (s.val() as Record<string, unknown>) : null;
+        },
+        readRejected: async () => {
+          const s = await db.ref(`packets/rejected/${editEventId}`).once('value');
+          return s.exists() ? (s.val() as Record<string, unknown>) : null;
+        },
+        readIncoming: async () => {
+          const s = await db.ref(`packets/incoming/${editEventId}`).once('value');
+          return s.exists() ? (s.val() as Record<string, unknown>) : null;
+        },
+        claim: async () => {
+          const tx = await claimRef.transaction((cur) => {
+            if (cur) return; // already claimed → abort
+            return { claimedAt: admin.database.ServerValue.TIMESTAMP, claimedBy: driver.driverId, originalPacketId };
+          });
+          return tx.committed;
+        },
+        apply: async () => {
+          await applyV2ChronologicalEdit({
+            data: payload as Record<string, any>,
+            origPacket: original as Record<string, any>,
+            originalPacketId,
+            wellName,
+            editEventId,
+            incomingPacketId: editEventId,
+            editResolvedViaFallback: false,
+            fallbackAuditFields: { recoveredVia: 'governedRecoverWbmEdit' },
+          });
+        },
+        readReceiptAfterApply: async () => {
+          const s = await db.ref(`packets/editReceipts/${editEventId}`).once('value');
+          return s.exists() ? (s.val() as Record<string, unknown>) : null;
+        },
+      },
+    });
+    if (!outcome.ok) throw new httpsV2.HttpsError('permission-denied', outcome.reason);
+    return { editEventId, ...outcome };
+  },
+);
+
 export const processIncomingPull = functionsV1.runWith({ timeoutSeconds: CANONICAL_COMMIT_TIMEOUT_SECONDS, memory: '512MB' }).database
   .ref('packets/incoming/{packetId}')
   .onCreate(async (snapshot, context) =>
@@ -2057,6 +2222,7 @@ export async function applyV2ChronologicalEdit(args: {
 export const processEditRequest = functionsV1.runWith({ timeoutSeconds: CANONICAL_COMMIT_TIMEOUT_SECONDS, memory: '512MB' }).database
   .ref('packets/incoming/{packetId}')
   .onCreate(processIncomingEdit);
+
 
 export async function processIncomingEdit(
   snapshot: functionsV1.database.DataSnapshot,
