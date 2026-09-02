@@ -33,7 +33,7 @@ const GOLDEN = join(HERE, 'fixtures', 'wbm-governed-contract.json');
 
 // EXTERNALLY-PINNED expected client contract (update in lockstep with the client
 // via the sync command). A stale/divergent server golden fails against this.
-const EXPECTED_CLIENT_CONTRACT = { version: 1, digest: '64bd92b4d70c96e6233ef24a0c7e19abc626bbee3c479ac7debef700379b4b9f' };
+const EXPECTED_CLIENT_CONTRACT = { version: 1, digest: 'a3c3279097b95ce260f10e7d37b93e83e92219148b231f3136d50e7a42a76e7e' };
 
 const PROJECT_ID = process.env.GCLOUD_PROJECT || 'wellbuilt-sync';
 process.env.FIREBASE_CONFIG = JSON.stringify({ projectId: PROJECT_ID, databaseURL: `http://${process.env.FIREBASE_DATABASE_EMULATOR_HOST || '127.0.0.1:9002'}/?ns=${PROJECT_ID}-default-rtdb` });

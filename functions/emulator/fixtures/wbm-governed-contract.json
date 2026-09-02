@@ -1,6 +1,6 @@
 {
   "version": 1,
-  "digest": "64bd92b4d70c96e6233ef24a0c7e19abc626bbee3c479ac7debef700379b4b9f",
+  "digest": "a3c3279097b95ce260f10e7d37b93e83e92219148b231f3136d50e7a42a76e7e",
   "fixtures": {
     "createFalse": {
       "packetId": "20260830_200000_Thor1_crt001",
@@ -27,6 +27,19 @@
       "bblsTaken": 140,
       "wellDown": true,
       "wellDownIsAuthoritative": true
+    },
+    "createUntouched": {
+      "packetId": "20260830_220000_Thor1_crt003",
+      "idempotencyKey": "20260830_220000_Thor1_crt003",
+      "requestType": "pull",
+      "wellName": "Thor 1",
+      "dateTimeUTC": "2026-08-30T22:00:00.000Z",
+      "dateTime": "8/30/2026 5PM",
+      "timezone": "America/Chicago",
+      "tankLevelFeet": 11.333333333333334,
+      "bblsTaken": 140,
+      "wellDown": true,
+      "wellDownIsAuthoritative": false
     },
     "editFalse": {
       "requestType": "edit",
