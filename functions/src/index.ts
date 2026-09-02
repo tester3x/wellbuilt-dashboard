@@ -44,6 +44,7 @@ import { loadCanonicalDriverAuthority, productionCanonicalDriverReaders } from '
 import { checkMutationAdmission, MAINTENANCE_ERROR_CODE } from './security/operational/mutationAdmission';
 import { evaluateWbmEdit, resolveOriginalEditAuthority } from './security/operational/wbmEditAuthorize';
 import { classifyEditStatus, orchestrateGovernedRecovery, WBM_EDIT_CANARY_FLAG_PATH } from './security/operational/wbmEditCanary';
+import { computeEditDisplay, type EditHistoryEntry } from './security/operational/wbmEditDisplay';
 import {
   assertedFromEditedFields,
   buildAppliedEditEvent,
@@ -654,11 +655,12 @@ export const getWbmEditStatus = httpsV2.onCall(
     if (!authority.companyId) throw new httpsV2.HttpsError('failed-precondition', 'company_required');
 
     const db = admin.database();
-    const [receiptS, origS, rejS, incS] = await Promise.all([
+    const [receiptS, origS, rejS, incS, histS] = await Promise.all([
       db.ref(`packets/editReceipts/${editEventId}`).once('value'),
       db.ref(`packets/processed/${originalPacketId}`).once('value'),
       db.ref(`packets/rejected/${editEventId}`).once('value'),
       db.ref(`packets/incoming/${editEventId}`).once('value'),
+      db.ref(`packets/editHistory/${originalPacketId}`).once('value'),
     ]);
     const original = origS.exists() ? (origS.val() as Record<string, unknown>) : null;
     // Ownership: only the owning company may read the status. Fail-closed when
@@ -679,7 +681,21 @@ export const getWbmEditStatus = httpsV2.onCall(
       const r = rejS.val() as Record<string, unknown>;
       reason = typeof r.reason === 'string' ? r.reason : 'rejected';
     }
-    return reason ? { status, reason } : { status };
+
+    // Governed before→after display for the WHOLE original (all corrections,
+    // chronological). Server derives BEFORE from stored packets; never fabricated.
+    const histVal = histS.exists() ? (histS.val() as Record<string, unknown>) : null;
+    const entries: EditHistoryEntry[] = histVal && typeof histVal === 'object'
+      ? (Object.values(histVal) as EditHistoryEntry[])
+      : [];
+    const display = computeEditDisplay(entries);
+    const editedAt = typeof (original as { editedAt?: unknown }).editedAt === 'string'
+      ? (original as { editedAt: string }).editedAt : null;
+    const edit = display.correctionCount > 0
+      ? { editedAt, changes: display.changes, corrections: display.corrections, unavailableBeforeFields: display.unavailableBeforeFields, correctionCount: display.correctionCount, detailAvailable: true as const }
+      : { editedAt, changes: [], corrections: [], unavailableBeforeFields: [], correctionCount: 0, detailAvailable: false as const };
+
+    return reason ? { status, reason, edit } : { status, edit };
   },
 );
 
