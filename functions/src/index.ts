@@ -728,7 +728,7 @@ export const governedRecoverWbmEdit = httpsV2.onCall(
     });
     if (!decision.ok) throw new httpsV2.HttpsError('failed-precondition', `edit_invalid:${decision.reason}`);
     if (!original) throw new httpsV2.HttpsError('failed-precondition', 'original_missing');
-    const { editEventId, originalPacketId, wellName, payload } = decision;
+    const { editEventId, originalPacketId, wellName, payload, payloadDigest } = decision;
 
     // Gate → precondition → single-claim → apply → verify, via the unit-tested
     // orchestrator (behavior-neutral when the kill switch is off).
@@ -780,6 +780,8 @@ export const governedRecoverWbmEdit = httpsV2.onCall(
           // the exact editEventId and promote it to flags/wbmEditCanary/allow.
           await db.ref(`${WBM_EDIT_CANARY_FLAG_PATH}/pending/${editEventId}`).set({
             wellName, originalPacketId,
+            companyId: authority.companyId,   // operator verifies tenant (liquid-gold)
+            payloadDigest,                    // operator verifies the correction's fingerprint
             requestedAt: admin.database.ServerValue.TIMESTAMP,
             requestedBy: driver.driverId,
           });
