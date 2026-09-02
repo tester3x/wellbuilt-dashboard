@@ -26,6 +26,7 @@ function makeIO(over: Partial<{
     incoming: over.incoming ?? null,
     claimTaken: over.claimTaken ?? false,
     applyCount: 0,
+    pendingRecorded: 0,
   };
   const flag: CanaryFlag = 'flag' in over ? over.flag : { enabled: true, allow: { [EVT]: { wellName: WELL, originalPacketId: ORIG } } };
   const io: RecoveryIO = {
@@ -44,6 +45,7 @@ function makeIO(over: Partial<{
       state.receipt = { editEventId: EVT, appliedAt: 1 };
     },
     readReceiptAfterApply: async () => state.receipt,
+    recordPendingRequest: async () => { state.pendingRecorded += 1; },
   };
   return { io, state };
 }
@@ -56,6 +58,15 @@ describe('orchestrateGovernedRecovery', () => {
     const r = await orchestrateGovernedRecovery({ ...base, io });
     expect(r).toEqual({ ok: false, status: 'refused', reason: 'canary_disabled:canary_flag_absent' });
     expect(state.applyCount).toBe(0);
+    expect(state.pendingRecorded).toBe(0); // master off ⇒ no capture
+  });
+
+  test('master ON but not allow-listed ⇒ refused + governed pending capture (no apply)', async () => {
+    const { io, state } = makeIO({ flag: { enabled: true, allow: {} } });
+    const r = await orchestrateGovernedRecovery({ ...base, io });
+    expect(r).toEqual({ ok: false, status: 'refused', reason: 'canary_disabled:edit_event_id_not_allowlisted' });
+    expect(state.applyCount).toBe(0);
+    expect(state.pendingRecorded).toBe(1); // operator can now verify + promote the exact editEventId
   });
 
   test('missing edit + gate ON ⇒ applies exactly once and yields a terminal receipt', async () => {

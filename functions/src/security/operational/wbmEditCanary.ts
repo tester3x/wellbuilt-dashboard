@@ -146,6 +146,12 @@ export type RecoveryIO = {
   apply: () => Promise<void>;
   /** editReceipts/{editEventId} after apply — proves the terminal record exists. */
   readReceiptAfterApply: () => Promise<Record<string, unknown> | null>;
+  /** Record a governed pending-canary request so an operator can verify the
+   *  exact editEventId and promote it to the allow-list. Called ONLY when the
+   *  master switch is on but this (authenticated, ownership-verified) edit's
+   *  editEventId is not yet allow-listed. Writes to the flags subtree — never a
+   *  log. Optional. */
+  recordPendingRequest?: () => Promise<void>;
 };
 
 export type RecoveryOutcome =
@@ -169,7 +175,14 @@ export async function orchestrateGovernedRecovery(input: {
   const { editEventId, wellName, originalPacketId, original, io } = input;
   const flag = await io.readFlag();
   const gate = evaluateCanaryGate({ flag, editEventId, wellName, originalPacketId });
-  if (!gate.allowed) return { ok: false, status: 'refused', reason: `canary_disabled:${gate.reason}` };
+  if (!gate.allowed) {
+    // Master on but this exact editEventId not yet allow-listed → record a
+    // governed pending request so an operator can verify + promote it.
+    if (gate.reason === 'edit_event_id_not_allowlisted' && io.recordPendingRequest) {
+      try { await io.recordPendingRequest(); } catch { /* best-effort */ }
+    }
+    return { ok: false, status: 'refused', reason: `canary_disabled:${gate.reason}` };
+  }
 
   const [receipt, rejected, incoming] = await Promise.all([
     io.readReceipt(), io.readRejected(), io.readIncoming(),

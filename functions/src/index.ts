@@ -775,6 +775,15 @@ export const governedRecoverWbmEdit = httpsV2.onCall(
           const s = await db.ref(`packets/editReceipts/${editEventId}`).once('value');
           return s.exists() ? (s.val() as Record<string, unknown>) : null;
         },
+        recordPendingRequest: async () => {
+          // Governed capture (flags subtree, not a log) so an operator can verify
+          // the exact editEventId and promote it to flags/wbmEditCanary/allow.
+          await db.ref(`${WBM_EDIT_CANARY_FLAG_PATH}/pending/${editEventId}`).set({
+            wellName, originalPacketId,
+            requestedAt: admin.database.ServerValue.TIMESTAMP,
+            requestedBy: driver.driverId,
+          });
+        },
       },
     });
     if (!outcome.ok) throw new httpsV2.HttpsError('permission-denied', outcome.reason);
