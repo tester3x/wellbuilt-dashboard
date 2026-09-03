@@ -848,14 +848,28 @@ async function driveWbmEditV3Op(editEventId: string): Promise<void> {
   const opRef = db.ref(wbmEditV3OpPath(editEventId));
 
   // 1. Single-claim: accepted | due-retry | dead-applying → applying.
+  //    Prime the cache with a SERVER read first: the admin SDK's transaction
+  //    invokes updateFn with an optimistic `null` on its first run, and returning
+  //    `undefined` there would abort BEFORE the server value is fetched (leaving
+  //    the op stuck `accepted`). The priming read + `?? preOp` fallback makes the
+  //    first run see the real value; a genuine concurrent claim still aborts when
+  //    the server re-runs updateFn with the updated (non-claimable) value.
+  const primeSnap = await opRef.once('value');
+  if (!primeSnap.exists()) { console.log(`[V3WORK] ${editEventId.slice(-6)} absent`); return; }
+  const preOp = primeSnap.val() as WbmEditV3Op;
+  const preClaim = decideClaim(preOp, Date.now());
+  if (!preClaim.claim) { console.log(`[V3WORK] ${editEventId.slice(-6)} not-claimable status=${preOp.status}`); return; }
+
   const claimTx = await opRef.transaction((cur) => {
-    const c = decideClaim((cur as WbmEditV3Op | null) ?? null, Date.now());
+    const base = (cur as WbmEditV3Op | null) ?? preOp;
+    const c = decideClaim(base, Date.now());
     if (c.claim) return c.next;
-    return undefined; // abort — not claimable
+    return undefined; // exists but not claimable (someone else won) → abort
   });
-  if (!claimTx.committed || !claimTx.snapshot.exists()) return;
+  if (!claimTx.committed || !claimTx.snapshot.exists()) { console.log(`[V3WORK] ${editEventId.slice(-6)} claim-lost committed=${claimTx.committed}`); return; }
   const op = claimTx.snapshot.val() as WbmEditV3Op;
-  if (op.status !== 'applying') return;
+  if (op.status !== 'applying') { console.log(`[V3WORK] ${editEventId.slice(-6)} not-applying status=${op.status}`); return; }
+  console.log(`[V3WORK] ${editEventId.slice(-6)} claimed ${op.wellName} -> applying`);
 
   // 2. Apply via the canonical applier; then VERIFY the durable trail landed.
   let error: string | null = null;
@@ -890,10 +904,14 @@ async function driveWbmEditV3Op(editEventId: string): Promise<void> {
   }
 
   // 3. Resolve outcome (pure) and persist — guarded so a concurrent reclaim wins.
+  //    Same admin-SDK null-first-run defense as the claim: the `?? op` fallback
+  //    makes the optimistic-null run see our claimed op; a real concurrent reclaim
+  //    (different claimedAt) still aborts when the server re-runs with fresh data.
   const next = decideApplyOutcome({ op, trailVerified, error, permanent, beforeAfter, nowMs: Date.now() });
+  console.log(`[V3WORK] ${editEventId.slice(-6)} apply done error=${error ?? 'none'} trailVerified=${trailVerified} -> ${next.status}`);
   await opRef.transaction((cur) => {
-    const c = cur as WbmEditV3Op | null;
-    if (!c || c.status !== 'applying' || c.claimedAt !== op.claimedAt) return undefined; // reclaimed elsewhere
+    const c = ((cur as WbmEditV3Op | null) ?? op);
+    if (c.status !== 'applying' || c.claimedAt !== op.claimedAt) return undefined; // reclaimed elsewhere
     return next;
   });
 }
@@ -998,8 +1016,8 @@ export const reconcileWbmEditsV3 = functionsV2.onSchedule('every 2 minutes', asy
     handled += 1;
     if (action === 'reject_exhausted') {
       await db.ref(wbmEditV3OpPath(editEventId)).transaction((cur) => {
-        const c = cur as WbmEditV3Op | null;
-        if (!c || c.status === 'applied' || c.status === 'rejected') return undefined;
+        const c = ((cur as WbmEditV3Op | null) ?? op); // null-first-run defense
+        if (c.status === 'applied' || c.status === 'rejected') return undefined;
         return rejectExhausted(c, Date.now());
       });
     } else {
