@@ -33,7 +33,7 @@ import { buildCreateMutation, buildDeleteMutation, derivedRowUpdates, derivedRow
 import { computeAFRFromRates } from './pullFormulas';
 import { getProductionDate, calculateWindowBblsPerDay, calculateOvernightBblsPerDay, computeBbls24hrs, type HistoricalPull } from './productionFormulas';
 import { computeAffectedProductionBuckets, type EditProdRow } from './editProduction';
-import { formatLocalDateTime, outgoingCompanyId, inchesToFeetInches, feetInchesToInches, daysToHMM, daysToHMMSS } from './wbmFormat';
+import { formatLocalDateTime, formatLocalDateTimeInZone, outgoingCompanyId, inchesToFeetInches, feetInchesToInches, daysToHMM, daysToHMMSS } from './wbmFormat';
 import { buildOutgoingResponse, buildWellStatus } from './outgoingBuilders';
 import { buildPerformanceRow } from './performanceBuilders';
 import { computeTankTopInches, computeTankAfterInches, computeRecoveryInches, computeFlowRateDays } from './tankFormulas';
@@ -2138,7 +2138,19 @@ export async function applyV2ChronologicalEdit(args: {
       const newDateTimeUTC = typeof f.dateTimeUTC === 'string' && f.dateTimeUTC
         ? f.dateTimeUTC
         : (typeof src.dateTimeUTC === 'string' ? src.dateTimeUTC : '');
-      const newDateTime = typeof f.dateTime === 'string' ? f.dateTime : (src.dateTime || '');
+      // TIMESTAMP CONSISTENCY (Hard Blocker 1): `dateTime` is the denormalized
+      // LOCAL companion of `dateTimeUTC`. RE-DERIVE it from the edited instant +
+      // the pull's timezone so the two never diverge — never trust the client's
+      // asserted `dateTime` string nor the stale baseline (which left processed
+      // .dateTime showing the OLD wall-clock after a time edit). Timezone comes
+      // from the edit packet, else the original pull, else the company default.
+      // Derivation failure (invalid instant/tz) preserves the prior value.
+      const editTimezone = typeof data.timezone === 'string' && data.timezone.trim()
+        ? data.timezone.trim()
+        : (typeof src.timezone === 'string' ? src.timezone : '');
+      const derivedDateTime = formatLocalDateTimeInZone(newDateTimeUTC, editTimezone);
+      const newDateTime = derivedDateTime
+        || (typeof f.dateTime === 'string' ? f.dateTime : (src.dateTime || ''));
       const newWellDown = f.wellDown === true;
       const derived = computeEditDerived(
         newTankTopInches, newBblsTaken, newDateTimeUTC, bblPerFoot, loadLineInches, neighbors, originalPacketId,
