@@ -48,6 +48,7 @@ import { computeEditDisplay, type EditHistoryEntry } from './security/operationa
 import {
   decideSubmit, decideClaim, decideApplyOutcome, decideReconcile,
   claimTransactionUpdate, outcomeTransactionUpdate, rejectExhaustedTransactionUpdate,
+  resolveAbsentOriginalStatus,
   wbmEditV3OpPath, WBM_EDIT_V3_OPS_PATH,
   type WbmEditV3Op, type SubmitIncoming,
 } from './security/operational/wbmEditV3Lane';
@@ -661,18 +662,26 @@ export const getWbmEditStatus = httpsV2.onCall(
     if (!authority.companyId) throw new httpsV2.HttpsError('failed-precondition', 'company_required');
 
     const db = admin.database();
-    const [receiptS, origS, rejS, incS, histS, v3S] = await Promise.all([
+    const [receiptS, origS, rejS, incS, histS, v3S, origRejS] = await Promise.all([
       db.ref(`packets/editReceipts/${editEventId}`).once('value'),
       db.ref(`packets/processed/${originalPacketId}`).once('value'),
       db.ref(`packets/rejected/${editEventId}`).once('value'),
       db.ref(`packets/incoming/${editEventId}`).once('value'),
       db.ref(`packets/editHistory/${originalPacketId}`).once('value'),
       db.ref(wbmEditV3OpPath(editEventId)).once('value'),
+      db.ref(`packets/rejected/${originalPacketId}`).once('value'),
     ]);
     const original = origS.exists() ? (origS.val() as Record<string, unknown>) : null;
     // Ownership: only the owning company may read the status. Fail-closed when
     // the original is absent (no leak; and there is nothing applied to report).
-    if (!original) return { status: 'missing' as const };
+    if (!original) {
+      // Absent because REJECTED → report a TERMINAL `rejected` (not the legacy
+      // `missing`, which trips client retry/recovery and shows "edit pending"
+      // forever). Revealed only to the original's own driver. Otherwise `missing`.
+      const absent = resolveAbsentOriginalStatus(origRejS.exists() ? origRejS.val() : null, driver.driverId);
+      if (absent.terminal === 'rejected') return { status: 'rejected' as const, reason: absent.reason };
+      return { status: 'missing' as const };
+    }
     const owner = resolveOriginalEditAuthority({ original, driverId: driver.driverId, companyId: authority.companyId });
     if (!owner.ok) throw new httpsV2.HttpsError('permission-denied', 'not_owner');
 
@@ -957,7 +966,24 @@ export const submitWbmEditV3 = httpsV2.onCall(
       original,
     });
     if (!decision.ok) throw new httpsV2.HttpsError('failed-precondition', `edit_invalid:${decision.reason}`);
-    if (!original) throw new httpsV2.HttpsError('failed-precondition', 'original_missing');
+    if (!original) {
+      // The original pull is absent from packets/processed. Distinguish
+      // "REJECTED by the server" (permanent — no original will ever exist to
+      // correct) from "not yet landed" (transient — the CREATE may still be
+      // processing). A rejected original returns a TERMINAL `rejected` response
+      // (the client marks the pull edit_rejected and stops) instead of a
+      // retryable throw that loops as "edit pending" forever. We never create a
+      // v3 op for an un-appliable edit, so there is no orphan. The rejection is
+      // only revealed to the ORIGINAL's own driver (no cross-driver probe).
+      const rejS = origIdGuess
+        ? await db.ref(`packets/rejected/${origIdGuess}`).once('value')
+        : null;
+      const absent = resolveAbsentOriginalStatus(rejS && rejS.exists() ? rejS.val() : null, driver.driverId);
+      if (absent.terminal === 'rejected') {
+        return { ok: true as const, status: 'rejected' as const, editEventId: decision.editEventId, reason: absent.reason };
+      }
+      throw new httpsV2.HttpsError('failed-precondition', 'original_missing');
+    }
     const { editEventId, originalPacketId, wellName, payload, payloadDigest } = decision;
     const editedFields = Array.isArray((payload as { editedFields?: unknown }).editedFields)
       ? ((payload as { editedFields: unknown[] }).editedFields as string[]) : [];

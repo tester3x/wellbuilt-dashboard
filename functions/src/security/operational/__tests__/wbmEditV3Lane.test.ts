@@ -7,6 +7,7 @@ import {
   claimTransactionUpdate,
   outcomeTransactionUpdate,
   rejectExhaustedTransactionUpdate,
+  resolveAbsentOriginalStatus,
   wbmEditV3OpPath,
   WBM_EDIT_V3_OPS_PATH,
   V3_MAX_APPLY_ATTEMPTS,
@@ -304,5 +305,47 @@ describe('end-to-end lifecycle (pure)', () => {
     // a late duplicate submit resumes, does not fork
     const dup = decideSubmit({ existing: op, incoming: incoming(), nowMs: T0 + 3 });
     expect(dup.action).toBe('resume');
+  });
+});
+
+describe('resolveAbsentOriginalStatus — un-appliable (rejected) vs not-yet-landed', () => {
+  const DRIVER = '2cad521c-13ac-4b6c-b1ab-07843c6bf06f';
+  const rejectedNode = (over = {}) => ({
+    reason: 'STALE_PULL_TIME',
+    packet: { driverId: DRIVER, companyId: 'liquid-gold', wellName: 'Gabriel 5' },
+    ...over,
+  });
+
+  test('rejected original owned by the caller → TERMINAL rejected with reason', () => {
+    const r = resolveAbsentOriginalStatus(rejectedNode(), DRIVER);
+    expect(r.terminal).toBe('rejected');
+    if (r.terminal === 'rejected') expect(r.reason).toBe('original_rejected: STALE_PULL_TIME');
+  });
+
+  test('no rejected node (not yet landed) → missing (transient, client retries)', () => {
+    expect(resolveAbsentOriginalStatus(null, DRIVER)).toEqual({ terminal: 'missing' });
+    expect(resolveAbsentOriginalStatus(undefined, DRIVER)).toEqual({ terminal: 'missing' });
+  });
+
+  test('rejected original owned by ANOTHER driver → missing (no cross-driver probe/leak)', () => {
+    const r = resolveAbsentOriginalStatus(rejectedNode({ packet: { driverId: 'someone-else' } }), DRIVER);
+    expect(r).toEqual({ terminal: 'missing' });
+  });
+
+  test('rejected node without a packet block → missing (cannot verify ownership)', () => {
+    const r = resolveAbsentOriginalStatus({ reason: 'STALE_PULL_TIME' }, DRIVER);
+    expect(r).toEqual({ terminal: 'missing' });
+  });
+
+  test('falls back to readableReason, then a generic reason', () => {
+    const r1 = resolveAbsentOriginalStatus(rejectedNode({ reason: undefined, readableReason: 'time is stale' }), DRIVER);
+    expect(r1.terminal === 'rejected' && r1.reason).toBe('original_rejected: time is stale');
+    const r2 = resolveAbsentOriginalStatus(rejectedNode({ reason: undefined, readableReason: undefined }), DRIVER);
+    expect(r2.terminal === 'rejected' && r2.reason).toBe('original_rejected: original_rejected');
+  });
+
+  test('array / primitive nodes are treated as absent → missing', () => {
+    expect(resolveAbsentOriginalStatus([rejectedNode()], DRIVER)).toEqual({ terminal: 'missing' });
+    expect(resolveAbsentOriginalStatus('rejected', DRIVER)).toEqual({ terminal: 'missing' });
   });
 });

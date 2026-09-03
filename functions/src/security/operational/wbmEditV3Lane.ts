@@ -370,3 +370,37 @@ export function rejectExhaustedTransactionUpdate(
   if (c.status !== 'accepted' && c.status !== 'retry_wait') return undefined;
   return rejectExhausted(c, nowMs);
 }
+
+/**
+ * Decide what an ABSENT original (not in packets/processed) means for an edit.
+ * The original is either REJECTED by the server (permanent — no original will
+ * ever exist to correct) or simply not-yet-landed (transient — the CREATE may
+ * still be processing). A rejected original, revealed ONLY to its own driver,
+ * yields a TERMINAL `rejected` with a reason so the client marks the pull
+ * edit_rejected and stops — never the retryable `missing` / `original_missing`
+ * that loops as "edit pending" forever. This is the un-appliable-edit rule the
+ * client cannot evaluate itself (RTDB rules deny it a direct read of
+ * packets/rejected), so the server is the sole authority.
+ *
+ * PURE: pass the raw packets/rejected/{originalPacketId} node value (or null)
+ * plus the calling driverId. No Firebase, no I/O, no clock.
+ */
+export function resolveAbsentOriginalStatus(
+  rejectedNode: unknown,
+  callerDriverId: string,
+): { terminal: 'rejected'; reason: string } | { terminal: 'missing' } {
+  const rej = rejectedNode && typeof rejectedNode === 'object' && !Array.isArray(rejectedNode)
+    ? (rejectedNode as Record<string, unknown>) : null;
+  if (!rej) return { terminal: 'missing' };
+  const packet = rej.packet && typeof rej.packet === 'object' && !Array.isArray(rej.packet)
+    ? (rej.packet as Record<string, unknown>) : null;
+  // Only the original's own driver may learn it was rejected (no cross-driver probe).
+  if (!packet || packet.driverId !== callerDriverId) return { terminal: 'missing' };
+  const readable = (rej as { readableReason?: unknown }).readableReason;
+  const why = typeof rej.reason === 'string' && rej.reason
+    ? rej.reason
+    : typeof readable === 'string' && readable
+      ? readable
+      : 'original_rejected';
+  return { terminal: 'rejected', reason: `original_rejected: ${why}` };
+}
