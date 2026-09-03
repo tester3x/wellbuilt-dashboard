@@ -44,6 +44,36 @@ const scope = {
   wellConfig: { 'Gabriel 2': { route: 'Gabriels', companyId: 'liquid-gold' } },
 };
 
+describe('Gate 6 — ownership & tenancy (fail closed BEFORE any mutation)', () => {
+  it('the original owner may edit', () => {
+    expect((evaluateWbmEdit({ ...scope, packet: basePacket, original }) as { ok: boolean }).ok).toBe(true);
+  });
+
+  it('cross-driver is rejected (a different driver cannot edit driver-a\'s pull)', () => {
+    const asDriverB = { ...scope, driverId: 'driver-b' };
+    expect((evaluateWbmEdit({ ...asDriverB, packet: basePacket, original }) as { reason: string }).reason).toBe('cross_driver');
+  });
+
+  it('cross-company is rejected (same-driver-id in another company cannot edit)', () => {
+    const otherCo = { ...scope, companyId: 'other-co', wellConfig: { 'Gabriel 2': { route: 'Gabriels', companyId: 'other-co' } } };
+    expect((evaluateWbmEdit({ ...otherCo, packet: basePacket, original }) as { reason: string }).reason).toBe('cross_company');
+  });
+
+  it('ownership cannot be forged — authority comes from the SERVER-read original, not the packet', () => {
+    // A perfectly well-formed packet still cannot edit a pull the server says is
+    // owned by driver-b: authority is resolved from the server-read `original`,
+    // so driver-a is rejected cross_driver regardless of what the packet claims.
+    const originalOwnedByB = { ...original, driverId: 'driver-b' };
+    expect((evaluateWbmEdit({ ...scope, packet: basePacket, original: originalOwnedByB }) as { reason: string }).reason).toBe('cross_driver');
+  });
+
+  it('resolveOriginalEditAuthority: exact driverId AND companyId required', () => {
+    expect(resolveOriginalEditAuthority({ original, driverId: 'driver-a', companyId: 'liquid-gold' })).toEqual({ ok: true });
+    expect((resolveOriginalEditAuthority({ original, driverId: 'driver-b', companyId: 'liquid-gold' }) as { reason: string }).reason).toBe('cross_driver');
+    expect((resolveOriginalEditAuthority({ original, driverId: 'driver-a', companyId: 'other-co' }) as { reason: string }).reason).toBe('cross_company');
+  });
+});
+
 describe('isAbsoluteInstant', () => {
   it('accepts Z and numeric offsets; rejects offsetless', () => {
     expect(isAbsoluteInstant('2026-08-23T16:40:00.000Z')).toBe(true);

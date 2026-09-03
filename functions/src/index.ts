@@ -46,7 +46,8 @@ import { evaluateWbmEdit, resolveOriginalEditAuthority } from './security/operat
 import { classifyEditStatus, orchestrateGovernedRecovery, WBM_EDIT_CANARY_FLAG_PATH } from './security/operational/wbmEditCanary';
 import { computeEditDisplay, type EditHistoryEntry } from './security/operational/wbmEditDisplay';
 import {
-  decideSubmit, decideClaim, decideApplyOutcome, decideReconcile, rejectExhausted,
+  decideSubmit, decideClaim, decideApplyOutcome, decideReconcile,
+  claimTransactionUpdate, outcomeTransactionUpdate, rejectExhaustedTransactionUpdate,
   wbmEditV3OpPath, WBM_EDIT_V3_OPS_PATH,
   type WbmEditV3Op, type SubmitIncoming,
 } from './security/operational/wbmEditV3Lane';
@@ -860,12 +861,9 @@ async function driveWbmEditV3Op(editEventId: string): Promise<void> {
   const preClaim = decideClaim(preOp, Date.now());
   if (!preClaim.claim) { console.log(`[V3WORK] ${editEventId.slice(-6)} not-claimable status=${preOp.status}`); return; }
 
-  const claimTx = await opRef.transaction((cur) => {
-    const base = (cur as WbmEditV3Op | null) ?? preOp;
-    const c = decideClaim(base, Date.now());
-    if (c.claim) return c.next;
-    return undefined; // exists but not claimable (someone else won) → abort
-  });
+  const claimTx = await opRef.transaction((cur) =>
+    claimTransactionUpdate((cur as WbmEditV3Op | null) ?? null, preOp, Date.now()),
+  );
   if (!claimTx.committed || !claimTx.snapshot.exists()) { console.log(`[V3WORK] ${editEventId.slice(-6)} claim-lost committed=${claimTx.committed}`); return; }
   const op = claimTx.snapshot.val() as WbmEditV3Op;
   if (op.status !== 'applying') { console.log(`[V3WORK] ${editEventId.slice(-6)} not-applying status=${op.status}`); return; }
@@ -909,11 +907,9 @@ async function driveWbmEditV3Op(editEventId: string): Promise<void> {
   //    (different claimedAt) still aborts when the server re-runs with fresh data.
   const next = decideApplyOutcome({ op, trailVerified, error, permanent, beforeAfter, nowMs: Date.now() });
   console.log(`[V3WORK] ${editEventId.slice(-6)} apply done error=${error ?? 'none'} trailVerified=${trailVerified} -> ${next.status}`);
-  await opRef.transaction((cur) => {
-    const c = ((cur as WbmEditV3Op | null) ?? op);
-    if (c.status !== 'applying' || c.claimedAt !== op.claimedAt) return undefined; // reclaimed elsewhere
-    return next;
-  });
+  await opRef.transaction((cur) =>
+    outcomeTransactionUpdate((cur as WbmEditV3Op | null) ?? null, op, next),
+  );
 }
 
 /**
@@ -1015,11 +1011,9 @@ export const reconcileWbmEditsV3 = functionsV2.onSchedule('every 2 minutes', asy
     if (action === 'skip') continue;
     handled += 1;
     if (action === 'reject_exhausted') {
-      await db.ref(wbmEditV3OpPath(editEventId)).transaction((cur) => {
-        const c = ((cur as WbmEditV3Op | null) ?? op); // null-first-run defense
-        if (c.status === 'applied' || c.status === 'rejected') return undefined;
-        return rejectExhausted(c, Date.now());
-      });
+      await db.ref(wbmEditV3OpPath(editEventId)).transaction((cur) =>
+        rejectExhaustedTransactionUpdate((cur as WbmEditV3Op | null) ?? null, op, Date.now()),
+      );
     } else {
       try { await driveWbmEditV3Op(editEventId); } catch { /* next tick retries */ }
     }

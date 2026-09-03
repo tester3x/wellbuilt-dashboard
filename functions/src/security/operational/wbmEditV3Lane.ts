@@ -314,3 +314,59 @@ export function rejectExhausted(op: WbmEditV3Op, nowMs: number): WbmEditV3Op {
     updatedAt: nowMs,
   };
 }
+
+// ---------------------------------------------------------------------------
+// RTDB transaction updateFns (PURE). The admin SDK invokes a transaction's
+// updateFn with an optimistic `null` on its first run, then re-runs it with the
+// authoritative server value; returning `undefined` aborts the write. These pure
+// functions encode exactly what each transaction returns for every `cur` the SDK
+// can pass, so the transaction's safety (no resurrection, no double-apply, no
+// terminal overwrite, no stale replacement) is unit-provable rather than argued
+// from the priming read alone.
+//
+// `cur` is what the SDK passes (possibly the optimistic null on the first run).
+// `preOp` / `knownOp` is the op the caller just read from the SERVER (proving it
+// exists). The `cur ?? preOp` fallback lets the optimistic-null first run resolve
+// against the known real op; when the SDK then re-runs with the true server
+// value, `cur` is non-null and drives the real decision (so a concurrent change
+// still wins). A genuinely absent op cannot be resurrected because the v3 lane
+// has NO delete path (proven by wbmEditV3NoDelete.test): `cur === null` therefore
+// only ever means "optimistic first run of an op that exists on the server".
+// ---------------------------------------------------------------------------
+
+/** Claim transaction: accepted | due-retry | dead-applying → applying, else abort. */
+export function claimTransactionUpdate(
+  cur: WbmEditV3Op | null,
+  preOp: WbmEditV3Op,
+  nowMs: number,
+): WbmEditV3Op | undefined {
+  const base = cur ?? preOp;
+  const c = decideClaim(base, nowMs);
+  return c.claim ? c.next : undefined;
+}
+
+/** Apply-outcome transaction: persist `next` ONLY if still our own live claim. */
+export function outcomeTransactionUpdate(
+  cur: WbmEditV3Op | null,
+  claimedOp: WbmEditV3Op,
+  next: WbmEditV3Op,
+): WbmEditV3Op | undefined {
+  const c = cur ?? claimedOp;
+  // Only the worker that holds THIS claim (same claimedAt, still applying) may
+  // write the outcome — a reclaim (different claimedAt) or a terminal state aborts.
+  if (c.status !== 'applying' || c.claimedAt !== claimedOp.claimedAt) return undefined;
+  return next;
+}
+
+/** Reject-exhausted transaction: durably reject a non-terminal op, else abort. */
+export function rejectExhaustedTransactionUpdate(
+  cur: WbmEditV3Op | null,
+  knownOp: WbmEditV3Op,
+  nowMs: number,
+): WbmEditV3Op | undefined {
+  const c = cur ?? knownOp;
+  // Never overwrite a terminal op, and never abort a worker that has since
+  // claimed it (applying) — only an accepted/retry_wait op is exhaustible.
+  if (c.status !== 'accepted' && c.status !== 'retry_wait') return undefined;
+  return rejectExhausted(c, nowMs);
+}

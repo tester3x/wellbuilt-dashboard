@@ -4,6 +4,9 @@ import {
   decideApplyOutcome,
   decideReconcile,
   rejectExhausted,
+  claimTransactionUpdate,
+  outcomeTransactionUpdate,
+  rejectExhaustedTransactionUpdate,
   wbmEditV3OpPath,
   WBM_EDIT_V3_OPS_PATH,
   V3_MAX_APPLY_ATTEMPTS,
@@ -176,6 +179,111 @@ describe('decideReconcile — bounded, never drops', () => {
     expect(r.status).toBe('rejected');
     expect(r.rejectReason).toBe('max_retries:contended');
     expect(r.rejectedAt).toBe(T0 + 9);
+  });
+});
+
+describe('TRANSACTION AUDIT — claimTransactionUpdate (admin-SDK null-first-run safety)', () => {
+  const preAccepted = () => opFrom({ status: 'accepted' });
+
+  test('null-first-run (cur=null) resolves against the SERVER-read op → claims (fixes the stall)', () => {
+    const out = claimTransactionUpdate(null, preAccepted(), T0 + 5);
+    expect(out?.status).toBe('applying');
+    expect(out?.claimedAt).toBe(T0 + 5);
+  });
+
+  test('true server value on re-run drives the decision: cur=accepted → claims', () => {
+    expect(claimTransactionUpdate(opFrom({ status: 'accepted' }), preAccepted(), T0 + 5)?.status).toBe('applying');
+  });
+
+  test('NO DOUBLE CLAIM: cur=applying (fresh, another worker) → abort (undefined)', () => {
+    const cur = opFrom({ status: 'applying', claimedAt: T0 + 1 });
+    expect(claimTransactionUpdate(cur, preAccepted(), T0 + 2)).toBeUndefined();
+  });
+
+  test('NO TERMINAL OVERWRITE/RESURRECTION: cur=applied → abort; cur=rejected → abort', () => {
+    expect(claimTransactionUpdate(opFrom({ status: 'applied' }), preAccepted(), T0 + 9)).toBeUndefined();
+    expect(claimTransactionUpdate(opFrom({ status: 'rejected' }), preAccepted(), T0 + 9)).toBeUndefined();
+  });
+
+  test('retry_wait respected: not-due cur → abort; due cur → claim', () => {
+    const notDue = opFrom({ status: 'retry_wait', retryWaitUntil: T0 + 5000, attempts: 1 });
+    expect(claimTransactionUpdate(notDue, notDue, T0 + 4999)).toBeUndefined();
+    const due = opFrom({ status: 'retry_wait', retryWaitUntil: T0, attempts: 1 });
+    expect(claimTransactionUpdate(due, due, T0 + 1)?.status).toBe('applying');
+  });
+
+  test('dead applying (stale claim past timeout) is reclaimable', () => {
+    const dead = opFrom({ status: 'applying', claimedAt: T0 });
+    expect(claimTransactionUpdate(dead, dead, T0 + V3_CLAIM_TIMEOUT_MS + 1)?.status).toBe('applying');
+  });
+});
+
+describe('TRANSACTION AUDIT — outcomeTransactionUpdate (only our live claim writes)', () => {
+  const claimed = () => opFrom({ status: 'applying', claimedAt: T0 + 10, attempts: 0 });
+  const nextApplied = (op: WbmEditV3Op) => decideApplyOutcome({ op, trailVerified: true, error: null, permanent: false, nowMs: T0 + 20 });
+
+  test('cur = our own applying (same claimedAt) → writes the outcome', () => {
+    const op = claimed();
+    const out = outcomeTransactionUpdate(op, op, nextApplied(op));
+    expect(out?.status).toBe('applied');
+  });
+
+  test('null-first-run → resolves against our claimedOp → writes the outcome', () => {
+    const op = claimed();
+    expect(outcomeTransactionUpdate(null, op, nextApplied(op))?.status).toBe('applied');
+  });
+
+  test('NO STALE REPLACEMENT: cur reclaimed by another worker (different claimedAt) → abort', () => {
+    const op = claimed();
+    const reclaimed = { ...op, claimedAt: T0 + 999 };
+    expect(outcomeTransactionUpdate(reclaimed, op, nextApplied(op))).toBeUndefined();
+  });
+
+  test('NO TERMINAL OVERWRITE: cur already applied/rejected → abort', () => {
+    const op = claimed();
+    expect(outcomeTransactionUpdate(opFrom({ status: 'applied' }), op, nextApplied(op))).toBeUndefined();
+    expect(outcomeTransactionUpdate(opFrom({ status: 'rejected' }), op, nextApplied(op))).toBeUndefined();
+  });
+});
+
+describe('TRANSACTION AUDIT — rejectExhaustedTransactionUpdate', () => {
+  const known = () => opFrom({ status: 'retry_wait', lastError: 'contended', attempts: V3_MAX_APPLY_ATTEMPTS });
+
+  test('exhausted retry_wait → durable reject', () => {
+    const out = rejectExhaustedTransactionUpdate(known(), known(), T0 + 3);
+    expect(out?.status).toBe('rejected');
+    expect(out?.rejectReason).toBe('max_retries:contended');
+  });
+
+  test('null-first-run → rejects against the known op', () => {
+    expect(rejectExhaustedTransactionUpdate(null, known(), T0 + 3)?.status).toBe('rejected');
+  });
+
+  test('NEVER abort an in-flight worker: cur=applying → undefined (let the worker finish)', () => {
+    expect(rejectExhaustedTransactionUpdate(opFrom({ status: 'applying', claimedAt: T0 }), known(), T0 + 3)).toBeUndefined();
+  });
+
+  test('NO TERMINAL OVERWRITE: cur=applied/rejected → undefined', () => {
+    expect(rejectExhaustedTransactionUpdate(opFrom({ status: 'applied' }), known(), T0 + 3)).toBeUndefined();
+    expect(rejectExhaustedTransactionUpdate(opFrom({ status: 'rejected' }), known(), T0 + 3)).toBeUndefined();
+  });
+});
+
+describe('TRANSACTION AUDIT — concurrent worker + reconciler cannot double-apply', () => {
+  test('two workers race the claim: exactly one wins; the loser aborts', () => {
+    const pre = opFrom({ status: 'accepted' });
+    // Worker A claims first (server was accepted).
+    const a = claimTransactionUpdate(pre, pre, T0 + 1)!;
+    expect(a.status).toBe('applying');
+    // Worker B's transaction re-runs with the TRUE server value (A's applying).
+    const b = claimTransactionUpdate(a, pre, T0 + 2);
+    expect(b).toBeUndefined(); // B cannot double-claim
+    // A applies and writes its outcome; B (had it applied) would see A's live claim.
+    const nextA = decideApplyOutcome({ op: a, trailVerified: true, error: null, permanent: false, nowMs: T0 + 3 });
+    expect(outcomeTransactionUpdate(a, a, nextA)?.status).toBe('applied');
+    // The reconciler, seeing the now-applied op, cannot reject or re-drive it.
+    expect(rejectExhaustedTransactionUpdate(opFrom({ status: 'applied' }), a, T0 + 4)).toBeUndefined();
+    expect(decideReconcile(opFrom({ status: 'applied' }), T0 + 5)).toBe('skip');
   });
 });
 
