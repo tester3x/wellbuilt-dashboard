@@ -46,6 +46,11 @@ import { evaluateWbmEdit, resolveOriginalEditAuthority } from './security/operat
 import { classifyEditStatus, orchestrateGovernedRecovery, WBM_EDIT_CANARY_FLAG_PATH } from './security/operational/wbmEditCanary';
 import { computeEditDisplay, type EditHistoryEntry } from './security/operational/wbmEditDisplay';
 import {
+  decideSubmit, decideClaim, decideApplyOutcome, decideReconcile, rejectExhausted,
+  wbmEditV3OpPath, WBM_EDIT_V3_OPS_PATH,
+  type WbmEditV3Op, type SubmitIncoming,
+} from './security/operational/wbmEditV3Lane';
+import {
   assertedFromEditedFields,
   buildAppliedEditEvent,
   buildAppliedEditReceipt,
@@ -655,12 +660,13 @@ export const getWbmEditStatus = httpsV2.onCall(
     if (!authority.companyId) throw new httpsV2.HttpsError('failed-precondition', 'company_required');
 
     const db = admin.database();
-    const [receiptS, origS, rejS, incS, histS] = await Promise.all([
+    const [receiptS, origS, rejS, incS, histS, v3S] = await Promise.all([
       db.ref(`packets/editReceipts/${editEventId}`).once('value'),
       db.ref(`packets/processed/${originalPacketId}`).once('value'),
       db.ref(`packets/rejected/${editEventId}`).once('value'),
       db.ref(`packets/incoming/${editEventId}`).once('value'),
       db.ref(`packets/editHistory/${originalPacketId}`).once('value'),
+      db.ref(wbmEditV3OpPath(editEventId)).once('value'),
     ]);
     const original = origS.exists() ? (origS.val() as Record<string, unknown>) : null;
     // Ownership: only the owning company may read the status. Fail-closed when
@@ -669,7 +675,7 @@ export const getWbmEditStatus = httpsV2.onCall(
     const owner = resolveOriginalEditAuthority({ original, driverId: driver.driverId, companyId: authority.companyId });
     if (!owner.ok) throw new httpsV2.HttpsError('permission-denied', 'not_owner');
 
-    const status = classifyEditStatus({
+    let status = classifyEditStatus({
       receipt: receiptS.exists() ? (receiptS.val() as Record<string, unknown>) : null,
       original,
       rejected: rejS.exists() ? (rejS.val() as Record<string, unknown>) : null,
@@ -680,6 +686,17 @@ export const getWbmEditStatus = httpsV2.onCall(
     if (status === 'rejected' && rejS.exists()) {
       const r = rejS.val() as Record<string, unknown>;
       reason = typeof r.reason === 'string' ? r.reason : 'rejected';
+    }
+
+    // Durable-lane (v3) lifecycle is AUTHORITATIVE when a v3 op exists: it owns
+    // the accepted→applying→applied|rejected|retry_wait truth. Only its terminal
+    // `rejected` overrides an already-applied trail; while it is still working the
+    // status is `pending` (never the legacy `missing`, which would trip recovery).
+    const v3 = v3S.exists() ? (v3S.val() as WbmEditV3Op) : null;
+    if (v3) {
+      if (v3.status === 'applied') status = 'applied';
+      else if (v3.status === 'rejected') { status = 'rejected'; reason = v3.rejectReason || 'rejected'; }
+      else status = 'pending'; // accepted | applying | retry_wait
     }
 
     // Governed before→after display for the WHOLE original (all corrections,
@@ -808,6 +825,188 @@ export const governedRecoverWbmEdit = httpsV2.onCall(
     return { editEventId, ...outcome };
   },
 );
+
+// ===========================================================================
+// WB-M ORDINARY EDIT — DURABLE LANE (v3). Additive, edit-only. Its own namespace
+// `wbmEdits/v3/ops/{editEventId}`. NEVER uses packets/incoming and NEVER falls
+// back to the legacy edit route. Acceptance is acknowledged only after the op is
+// durably stored; the worker verifies the durable trail actually landed before
+// declaring `applied`, so the receipt-vs-trail asymmetry that loses legacy edits
+// cannot silently lose a v3 edit. Lifecycle logic lives in the pure, unit-tested
+// wbmEditV3Lane module; these are the thin RTDB adapters.
+// ===========================================================================
+
+/**
+ * Claim → apply → verify → resolve one v3 op. Shared by the onCreate worker and
+ * the reconciler. Single-claim via transaction; the apply reuses the canonical
+ * applier (incomingPacketId = editEventId makes its packets/incoming delete a
+ * harmless no-op — v3 never writes there). Marks `applied` only when the durable
+ * trail (packets/editHistory/{orig}/{id}) is read back present.
+ */
+async function driveWbmEditV3Op(editEventId: string): Promise<void> {
+  const db = admin.database();
+  const opRef = db.ref(wbmEditV3OpPath(editEventId));
+
+  // 1. Single-claim: accepted | due-retry | dead-applying → applying.
+  const claimTx = await opRef.transaction((cur) => {
+    const c = decideClaim((cur as WbmEditV3Op | null) ?? null, Date.now());
+    if (c.claim) return c.next;
+    return undefined; // abort — not claimable
+  });
+  if (!claimTx.committed || !claimTx.snapshot.exists()) return;
+  const op = claimTx.snapshot.val() as WbmEditV3Op;
+  if (op.status !== 'applying') return;
+
+  // 2. Apply via the canonical applier; then VERIFY the durable trail landed.
+  let error: string | null = null;
+  let permanent = false;
+  try {
+    const origS = await db.ref(`packets/processed/${op.originalPacketId}`).once('value');
+    const original = origS.exists() ? (origS.val() as Record<string, unknown>) : null;
+    if (!original) { error = 'original_missing'; permanent = true; }
+    else {
+      await applyV2ChronologicalEdit({
+        data: op.payload as Record<string, any>,
+        origPacket: original as Record<string, any>,
+        originalPacketId: op.originalPacketId,
+        wellName: op.wellName,
+        editEventId,
+        incomingPacketId: editEventId, // no-op delete: v3 never wrote packets/incoming
+        editResolvedViaFallback: false,
+        fallbackAuditFields: { appliedVia: 'submitWbmEditV3' },
+      });
+    }
+  } catch (e: any) {
+    error = String(e?.message || e || 'apply_failed');
+    permanent = false; // apply-time failures are contention/infra → retry (validation ran at submit)
+  }
+
+  let trailVerified = false;
+  let beforeAfter: unknown = null;
+  if (!error) {
+    const trailS = await db.ref(`packets/editHistory/${op.originalPacketId}/${editEventId}`).once('value');
+    trailVerified = trailS.exists();
+    if (trailVerified) beforeAfter = trailS.val();
+  }
+
+  // 3. Resolve outcome (pure) and persist — guarded so a concurrent reclaim wins.
+  const next = decideApplyOutcome({ op, trailVerified, error, permanent, beforeAfter, nowMs: Date.now() });
+  await opRef.transaction((cur) => {
+    const c = cur as WbmEditV3Op | null;
+    if (!c || c.status !== 'applying' || c.claimedAt !== op.claimedAt) return undefined; // reclaimed elsewhere
+    return next;
+  });
+}
+
+/**
+ * The additive ordinary edit callable. Validates + authorizes through the SAME
+ * governed path (evaluateWbmEdit), then durably stores an `accepted` op keyed by
+ * editEventId. Idempotent on the op record: same id+digest resumes; same id+
+ * different digest is a permanent idempotency conflict. Acceptance is returned
+ * only after the durable transaction commits.
+ */
+export const submitWbmEditV3 = httpsV2.onCall(
+  { timeoutSeconds: 30, memory: '256MiB', enforceAppCheck: false },
+  async (request) => {
+    const body = (request.data || {}) as { packet?: unknown; companyId?: unknown };
+    if (body.companyId !== undefined) throw new httpsV2.HttpsError('invalid-argument', 'unexpected_field');
+    const driver = await requireSecureDriver(request, { allowLegacyHash: false });
+    const admission = await checkMutationAdmission();
+    if (!admission.admitted) throw new httpsV2.HttpsError(MAINTENANCE_ERROR_CODE, admission.reason);
+    const authority = await loadCanonicalDriverAuthority(driver.driverId, productionCanonicalDriverReaders());
+    if (!authority || !authority.active) throw new httpsV2.HttpsError('permission-denied', 'driver_inactive');
+    if (!authority.companyId) throw new httpsV2.HttpsError('failed-precondition', 'company_required');
+
+    const db = admin.database();
+    const packetObj = body.packet && typeof body.packet === 'object' && !Array.isArray(body.packet)
+      ? (body.packet as Record<string, unknown>) : null;
+    const origIdGuess = packetObj && typeof (packetObj.originalPacketId || packetObj.packetId) === 'string'
+      ? String(packetObj.originalPacketId || packetObj.packetId).trim() : '';
+    const [profS, wellS, origS] = await Promise.all([
+      db.ref(`drivers/profiles/${driver.driverId}`).once('value'),
+      db.ref('well_config').once('value'),
+      origIdGuess ? db.ref(`packets/processed/${origIdGuess}`).once('value')
+        : Promise.resolve({ exists: () => false, val: () => null } as admin.database.DataSnapshot),
+    ]);
+    if (!profS.exists()) throw new httpsV2.HttpsError('failed-precondition', 'profile_missing');
+    const profile = (profS.val() || {}) as Record<string, unknown>;
+    const wellConfig = wellS.exists() ? (wellS.val() as Record<string, unknown>) : {};
+    const original = origS.exists() ? (origS.val() as Record<string, unknown>) : null;
+
+    const decision = evaluateWbmEdit({
+      packet: body.packet,
+      companyId: authority.companyId,
+      driverId: driver.driverId,
+      assignedRoutes: profile.assignedRoutes,
+      assignedWells: profile.assignedWells,
+      wellConfig,
+      original,
+    });
+    if (!decision.ok) throw new httpsV2.HttpsError('failed-precondition', `edit_invalid:${decision.reason}`);
+    if (!original) throw new httpsV2.HttpsError('failed-precondition', 'original_missing');
+    const { editEventId, originalPacketId, wellName, payload, payloadDigest } = decision;
+    const editedFields = Array.isArray((payload as { editedFields?: unknown }).editedFields)
+      ? ((payload as { editedFields: unknown[] }).editedFields as string[]) : [];
+
+    const incoming: SubmitIncoming = {
+      editEventId, originalPacketId, wellName,
+      companyId: authority.companyId, driverId: driver.driverId,
+      digest: payloadDigest, editedFields, payload,
+    };
+
+    // Durable-first, idempotent acceptance. The transaction only WRITES on a
+    // genuine create; resume/conflict abort without mutating the existing op.
+    let response = { ok: true, status: 'accepted' as const, editEventId };
+    const tx = await db.ref(wbmEditV3OpPath(editEventId)).transaction((cur) => {
+      const d = decideSubmit({ existing: (cur as WbmEditV3Op | null) ?? null, incoming, nowMs: Date.now() });
+      response = d.response as typeof response;
+      if (d.action === 'create') return d.op;
+      return undefined; // resume / reject_conflict → no write
+    });
+    if (tx.committed) {
+      // Fresh accept — drive it immediately (the onCreate trigger also fires; the
+      // claim transaction makes the double-drive a harmless single-claim).
+      try { await driveWbmEditV3Op(editEventId); } catch { /* reconciler backstops */ }
+    }
+    return response;
+  },
+);
+
+/** Dedicated edit worker: fires on a fresh accepted op and drives it to a terminal state. */
+export const processWbmEditV3 = functionsV1
+  .runWith({ timeoutSeconds: CANONICAL_COMMIT_TIMEOUT_SECONDS, memory: '512MB' })
+  .database.ref(`${WBM_EDIT_V3_OPS_PATH}/{editEventId}`)
+  .onCreate(async (_snapshot, context) => {
+    await driveWbmEditV3Op(context.params.editEventId);
+    return null;
+  });
+
+/** Bounded reconciler: re-drive stuck/overdue ops; durably reject the exhausted. Never drops. */
+export const reconcileWbmEditsV3 = functionsV2.onSchedule('every 2 minutes', async () => {
+  const db = admin.database();
+  const opsS = await db.ref(WBM_EDIT_V3_OPS_PATH).once('value');
+  if (!opsS.exists()) return;
+  const ops = opsS.val() as Record<string, WbmEditV3Op>;
+  const now = Date.now();
+  const entries = Object.entries(ops);
+  // Bounded per-run fan-out so one tick can never stampede.
+  let handled = 0;
+  for (const [editEventId, op] of entries) {
+    if (handled >= 50) break;
+    const action = decideReconcile(op, now);
+    if (action === 'skip') continue;
+    handled += 1;
+    if (action === 'reject_exhausted') {
+      await db.ref(wbmEditV3OpPath(editEventId)).transaction((cur) => {
+        const c = cur as WbmEditV3Op | null;
+        if (!c || c.status === 'applied' || c.status === 'rejected') return undefined;
+        return rejectExhausted(c, Date.now());
+      });
+    } else {
+      try { await driveWbmEditV3Op(editEventId); } catch { /* next tick retries */ }
+    }
+  }
+});
 
 export const processIncomingPull = functionsV1.runWith({ timeoutSeconds: CANONICAL_COMMIT_TIMEOUT_SECONDS, memory: '512MB' }).database
   .ref('packets/incoming/{packetId}')
