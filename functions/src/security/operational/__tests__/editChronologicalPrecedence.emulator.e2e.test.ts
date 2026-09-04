@@ -99,6 +99,7 @@ describeE2E('emulator: chronological edit precedence (real handlers)', () => {
     wellDown?: boolean;
     dateTimeUTC?: string;
     dateTime?: string;
+    timezone?: string;
     omitEventTime?: boolean;
     omitSchemaVersion?: boolean;
     schemaVersion?: unknown;
@@ -115,6 +116,7 @@ describeE2E('emulator: chronological edit precedence (real handlers)', () => {
     if (!f.omitSchemaVersion) p.schemaVersion = f.schemaVersion === undefined ? 2 : f.schemaVersion;
     if (!f.omitEventTime) p.correctionCreatedAtUTC = f.correctionCreatedAtUTC ?? '2026-08-24T10:30:00.000Z';
     if (f.dateTimeUTC) { p.dateTimeUTC = f.dateTimeUTC; p.dateTime = f.dateTime ?? ''; }
+    if (f.timezone) p.timezone = f.timezone;
     return p;
   }
 
@@ -185,6 +187,41 @@ describeE2E('emulator: chronological edit precedence (real handlers)', () => {
     await submit(correction({ editEventId: 'editevt_a1', correctionCreatedAtUTC: '2026-08-24T10:30:00.000Z', bblsTaken: 150 }));
     await submit(correction({ editEventId: 'editevt_b1', correctionCreatedAtUTC: '2026-08-24T10:45:00.000Z', bblsTaken: 155 }));
     expect((await processed()).bblsTaken).toBe(155);
+  });
+
+  // 1b — Hard Blocker 1: a TIME-only edit re-derives processed.dateTime from the
+  // edited dateTimeUTC even though the client mask lists ONLY dateTimeUTC (so the
+  // asserted dateTime is dropped by materialization). processed.dateTime must NOT
+  // stay stale at the old wall clock; it must render the new instant in the
+  // company zone (America/Chicago, since the original row carries no timezone).
+  it('time-only edit → processed.dateTime is re-derived from dateTimeUTC (not stale)', async () => {
+    await submit(correction({
+      editEventId: 'editevt_time1',
+      correctionCreatedAtUTC: '2026-08-24T11:00:00.000Z',
+      editedFields: ['dateTimeUTC'],
+      dateTimeUTC: '2026-08-24T20:30:00.000Z', // 3:30 PM CDT
+      dateTime: '', // client mask drops the display string — the stale surface
+    }));
+    const p = await processed();
+    expect(p.dateTimeUTC).toBe('2026-08-24T20:30:00.000Z');
+    expect(p.dateTime).toBe('8/24/2026 3:30 PM');   // re-derived, not '8/24/2026 10:00 AM'
+    // Outgoing projection mirrors the same corrected local string.
+    const outKey = `${WELL}`.replace(/[.#$/\[\]]/g, '_');
+    const out = (await db.ref(`packets/outgoing/${outKey}`).once('value')).val();
+    if (out) expect(out.lastPullDateTime).toBe('8/24/2026 3:30 PM');
+  });
+
+  // 1c — honors the edit packet's timezone when present (renders that wall clock).
+  it('time edit with an explicit timezone renders that zone', async () => {
+    await submit(correction({
+      editEventId: 'editevt_tz1',
+      correctionCreatedAtUTC: '2026-08-24T11:05:00.000Z',
+      editedFields: ['dateTimeUTC'],
+      dateTimeUTC: '2026-08-24T20:30:00.000Z', // 4:30 PM EDT
+      dateTime: '',
+      timezone: 'America/New_York',
+    }));
+    expect((await processed()).dateTime).toBe('8/24/2026 4:30 PM');
   });
 
   // 2
