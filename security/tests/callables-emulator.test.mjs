@@ -289,8 +289,10 @@ async function main() {
     const replacementCred = (await admin.firestore().collection('pending_credentials').doc(replacementId).get()).data();
     if (replacementId !== expId && replacementCred?.passcode?.algo === 'scrypt') ok('expired name re-registers with new pendingId and scrypt credential');
     else fail('expired name re-registration', new Error(`${expId}/${replacementId}`));
-    await call('checkDriverRegistrationStatus')({ pendingId: expId });
+    const oldTerminalAgain = await call('checkDriverRegistrationStatus')({ pendingId: expId });
     const activeReservation = (await expReservation.get()).data();
+    if (oldTerminalAgain.data.status === 'rejected' && oldTerminalAgain.data.terminalReason === 'expired') ok('old pendingId remains terminal after replacement');
+    else fail('old pendingId remains terminal after replacement', new Error(JSON.stringify(oldTerminalAgain.data)));
     if (activeReservation?.pendingId === replacementId && activeReservation?.status === 'pending') ok('old expiration cannot close replacement reservation');
     else fail('old expiration cannot close replacement reservation', new Error(JSON.stringify(activeReservation)));
     await signInWithEmailAndPassword(auth, adminEmail, adminPass);
@@ -322,8 +324,17 @@ async function main() {
     const partialTerminal = await call('checkDriverRegistrationStatus')({ pendingId: partialId });
     const partialReservation = (await admin.firestore().collection('driver_provisioning_attempts').doc('registration:partialexpiredriver').get()).data();
     const partialCred = await admin.firestore().collection('pending_credentials').doc(partialId).get();
-    if (partialTerminal.data.status === 'rejected' && partialTerminal.data.terminalReason === 'expired' && partialReservation?.status === 'expired' && !partialCred.exists) ok('missing-credential partial write expires closed without credential recreation');
-    else fail('missing-credential partial write recovery', new Error(JSON.stringify({ terminal: partialTerminal.data, reservation: partialReservation, credentialExists: partialCred.exists })));
+    const partialRows = [];
+    for (const ns of [RTDB_NS, PROJECT_ID]) {
+      const [secureResponse, legacyResponse] = await Promise.all([
+        fetch(`http://127.0.0.1:9000/drivers/pending_secure/${partialId}.json?ns=${encodeURIComponent(ns)}`),
+        fetch(`http://127.0.0.1:9000/drivers/pending/${partialId}.json?ns=${encodeURIComponent(ns)}`),
+      ]);
+      partialRows.push({ secure: await secureResponse.json(), legacy: await legacyResponse.json() });
+    }
+    const expiredProjection = partialRows.some((row) => row.secure?.status === 'expired' && row.legacy?.status === 'expired');
+    if (partialTerminal.data.status === 'rejected' && partialTerminal.data.terminalReason === 'expired' && expiredProjection && partialReservation?.status === 'expired' && !partialCred.exists) ok('missing-credential partial write expires every matching row without credential recreation');
+    else fail('missing-credential partial write recovery', new Error(JSON.stringify({ terminal: partialTerminal.data, rows: partialRows, reservation: partialReservation, credentialExists: partialCred.exists })));
     await signInWithEmailAndPassword(auth, adminEmail, adminPass);
     const listed = await call('adminListPendingRegistrations')({});
     if (!listed.data.pending?.some((row) => row.pendingId === partialId)) ok('expired partial-write request excluded from admin list');
