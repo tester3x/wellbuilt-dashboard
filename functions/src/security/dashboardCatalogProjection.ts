@@ -35,6 +35,10 @@ export const APPROVED_ALLOWLIST = [
 ] as const;
 
 export const PROFILE_ALLOWLIST = [
+  'email',
+  'preferredLanguage',
+  'truckNumber',
+  'trailerNumber',
   'displayName',
   'legalName',
   'phone',
@@ -44,6 +48,24 @@ export const PROFILE_ALLOWLIST = [
 
 /** Canonical drivers/profiles fields for WB-M administration. */
 export const CANONICAL_PROFILE_ALLOWLIST = [
+  'dashboardUid',
+  'dashboardEmail',
+  'email',
+  'preferredLanguage',
+  'profile',
+  'truckNumber',
+  'trailerNumber',
+  'registrationCompany',
+  'approvedBy',
+  'assignmentUpdatedBy',
+  'logoutAt',
+  'suspendedAt',
+  'suspendedReason',
+  'assignedCustomers',
+  'defaultPackageId',
+  'tier',
+  'source',
+  'approvedAt',
   'displayName',
   'legalName',
   'name',
@@ -63,6 +85,7 @@ export const CANONICAL_PROFILE_ALLOWLIST = [
 ] as const;
 
 export const USER_ALLOWLIST = [
+  'driverId',
   'email',
   'displayName',
   'role',
