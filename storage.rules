@@ -6,7 +6,9 @@ service firebase.storage {
     function driverId() { return request.auth.token.driverId; }
     function companyId() { return request.auth.token.companyId; }
     function isPlatformAdmin() {
-      return signedIn() && request.auth.token.wellbuiltAdmin == true;
+      return signedIn()
+        && ('wellbuiltAdmin' in request.auth.token)
+        && request.auth.token.wellbuiltAdmin == true;
     }
     function isImage() { return request.resource.contentType.matches('image/.*'); }
     function isPdf() { return request.resource.contentType == 'application/pdf'; }
@@ -38,6 +40,17 @@ service firebase.storage {
     match /vehicle_documents/{cid}/{allPaths=**} {
       allow read: if isPlatformAdmin() || (isDriver() && companyId() == cid);
       allow write: if false;
+    }
+
+    // Reference samples used to configure customer photo requirements.
+    // These are platform configuration assets, not driver ticket photos.
+    // Keep this intentionally platform-admin-only until tenant staff have a
+    // server-issued, storage-verifiable customer-scope claim.
+    match /photo_requirements/{customerId}/{fileName} {
+      allow read: if isPlatformAdmin();
+      allow write: if isPlatformAdmin()
+        && underSize(12 * 1024 * 1024)
+        && isImage();
     }
 
     match /{allPaths=**} {
