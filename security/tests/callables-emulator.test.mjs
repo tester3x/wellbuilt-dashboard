@@ -20,6 +20,7 @@ import {
 import { getDatabase, connectDatabaseEmulator, ref, get, set } from 'firebase/database';
 import { getFirestore, connectFirestoreEmulator, collection, getDocs, query, where, limit } from 'firebase/firestore';
 import admin from 'firebase-admin';
+import { createHash } from 'crypto';
 
 process.env.FIREBASE_AUTH_EMULATOR_HOST = '127.0.0.1:9099';
 process.env.FIRESTORE_EMULATOR_HOST = '127.0.0.1:8080';
@@ -30,6 +31,8 @@ const PROJECT_ID = 'demo-wb-sec';
 // Default RTDB namespace used by Firebase emulator for the default instance
 const RTDB_NS = `${PROJECT_ID}-default-rtdb`;
 const RTDB_URL = `http://127.0.0.1:9000?ns=${RTDB_NS}`;
+const COMPANY_CODE = 'TEST-2345';
+const COMPANY_CODE_DIGEST = createHash('sha256').update('TEST2345').digest('hex');
 
 let passed = 0;
 let failed = 0;
@@ -67,6 +70,10 @@ async function main() {
   }
   // Ensure admin auth hits emulator
   admin.auth();
+  await admin.firestore().collection('companies').doc('co-test').set({ name: 'Test Co', status: 'active' });
+  await admin.firestore().collection('company_join_codes').doc(COMPANY_CODE_DIGEST).set({
+    companyId: 'co-test', active: true,
+  });
 
   const app = initializeApp({
     apiKey: 'fake-api-key',
@@ -207,6 +214,7 @@ async function main() {
       passcode: regPass,
       legalName: 'Security Test Driver',
       companyName: 'Test Co',
+      companyCode: COMPANY_CODE,
       source: 'test',
     });
     pendingId = res.data.pendingId;
@@ -214,6 +222,80 @@ async function main() {
     else fail('requestDriverRegistration creates pendingId', new Error('no pendingId'));
   } catch (e) {
     fail('requestDriverRegistration creates pendingId', e);
+  }
+
+  // Sequential/lost-response retry returns the same logical request.
+  try {
+    const retry = await call('requestDriverRegistration')({
+      displayName: regName,
+      passcode: regPass,
+      legalName: 'Security Test Driver',
+      companyCode: COMPANY_CODE,
+      source: 'test',
+    });
+    if (retry.data.pendingId === pendingId) ok('lost-response retry returns the same pendingId');
+    else fail('lost-response retry returns the same pendingId', new Error(JSON.stringify(retry.data)));
+    const creds = await admin.firestore().collection('pending_credentials').get();
+    const reservation = await admin.firestore().collection('driver_provisioning_attempts').doc('registration:sectestdriver01').get();
+    if (creds.size === 1 && reservation.data()?.pendingId === pendingId) {
+      ok('sequential duplicate creates one credential and one reservation');
+    } else fail('sequential duplicate cardinality', new Error(`${creds.size}/${reservation.data()?.pendingId}`));
+  } catch (e) {
+    fail('sequential duplicate retry', e);
+  }
+
+  // Reset only the emulator registration limiter before the true race.
+  for (const ns of [RTDB_NS, PROJECT_ID]) {
+    await fetch(`http://127.0.0.1:9000/security/rate_limit/register.json?ns=${encodeURIComponent(ns)}`, { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: 'null' });
+  }
+
+  // Expiration is terminal, removes credential material, and blocks approval.
+  try {
+    const exp = await call('requestDriverRegistration')({
+      displayName: 'ExpireMeDriver', passcode: 'ExpireMe99!', companyCode: COMPANY_CODE, source: 'test',
+    });
+    const expId = exp.data.pendingId;
+    const expReservation = admin.firestore().collection('driver_provisioning_attempts').doc('registration:expiremedriver');
+    await expReservation.update({ expiresAtMs: Date.now() - 1 });
+    await admin.firestore().collection('pending_credentials').doc(expId).update({ expiresAtMs: Date.now() - 1 });
+    for (const ns of [RTDB_NS, PROJECT_ID]) {
+      await fetch(`http://127.0.0.1:9000/drivers/pending_secure/${expId}.json?ns=${encodeURIComponent(ns)}`, {
+        method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ expiresAtMs: Date.now() - 1 }),
+      });
+    }
+    const terminal = await call('checkDriverRegistrationStatus')({ pendingId: expId });
+    if (terminal.data.status === 'rejected' && terminal.data.terminalReason === 'expired') ok('expiration polls as compatible terminal rejection');
+    else fail('expiration terminal response', new Error(JSON.stringify(terminal.data)));
+    const expiredCredential = (await admin.firestore().collection('pending_credentials').doc(expId).get()).data();
+    if (expiredCredential?.status === 'expired' && !expiredCredential.passcode) ok('expiration removes pending credential material');
+    else fail('expiration removes pending credential material', new Error('active credential material remains'));
+    await signInWithEmailAndPassword(auth, adminEmail, adminPass);
+    await expectThrow('expired request cannot be approved', () => call('adminApproveDriverRegistration')({ pendingId: expId }), /expired|already|failed/i);
+    await signOut(auth);
+  } catch (e) {
+    fail('expiration lifecycle', e);
+  }
+
+  for (const ns of [RTDB_NS, PROJECT_ID]) {
+    await fetch(`http://127.0.0.1:9000/security/rate_limit/register.json?ns=${encodeURIComponent(ns)}`, { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: 'null' });
+  }
+  try {
+    const body = { displayName: 'ConcurrentDriver01', passcode: 'Concurrent99!', companyCode: COMPANY_CODE, source: 'test' };
+    const [a, b] = await Promise.all([call('requestDriverRegistration')(body), call('requestDriverRegistration')(body)]);
+    if (a.data.pendingId === b.data.pendingId) ok('true concurrent duplicate converges on one pendingId');
+    else fail('true concurrent duplicate', new Error(`${a.data.pendingId}/${b.data.pendingId}`));
+    const before = (await admin.firestore().collection('pending_credentials').doc(a.data.pendingId).get()).data()?.passcode;
+    const changed = await call('requestDriverRegistration')({ ...body, passcode: 'Different99!' });
+    const after = (await admin.firestore().collection('pending_credentials').doc(a.data.pendingId).get()).data()?.passcode;
+    if (changed.data.pendingId === a.data.pendingId && JSON.stringify(before) === JSON.stringify(after)) {
+      ok('different retry passcode does not replace pending credential');
+    } else fail('different retry passcode protection', new Error('credential changed'));
+  } catch (e) {
+    fail('concurrent duplicate matrix', e);
+  }
+
+  for (const ns of [RTDB_NS, PROJECT_ID]) {
+    await fetch(`http://127.0.0.1:9000/security/rate_limit/register.json?ns=${encodeURIComponent(ns)}`, { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: 'null' });
   }
 
   // status pending
@@ -318,12 +400,16 @@ async function main() {
     else fail('security_audit records present', new Error(`count=${snap.size}`));
     // ensure no plaintext passcode fields
     let leaked = false;
+    let identifierLeaked = false;
     snap.forEach((d) => {
       const j = JSON.stringify(d.data());
       if (j.includes(regPass) || j.includes('TempSecure')) leaked = true;
+      if (j.includes(COMPANY_CODE) || j.includes(pendingId)) identifierLeaked = true;
     });
     if (!leaked) ok('audit does not contain passcode plaintext');
     else fail('audit does not contain passcode plaintext', new Error('leak'));
+    if (!identifierLeaked) ok('audit contains neither join code nor pendingId');
+    else fail('audit contains neither join code nor pendingId', new Error('identifier leak'));
   } catch (e) {
     fail('security_audit records present', e);
   }
@@ -416,6 +502,7 @@ async function main() {
       displayName: 'RejectMeDriver',
       passcode: 'RejectMe99!',
       source: 'test',
+      companyCode: COMPANY_CODE,
     });
     const pid2 = r2.data.pendingId;
     await signInWithEmailAndPassword(auth, adminEmail, adminPass);
@@ -442,6 +529,7 @@ async function main() {
         displayName: `RateLimUser${i}${Date.now() % 1000}`,
         passcode: 'RateLimit99!',
         source: 'test',
+        companyCode: COMPANY_CODE,
       });
     } catch (e) {
       if (/resource|exhaust|too many|Too many/i.test(e?.message || e?.code || '')) {

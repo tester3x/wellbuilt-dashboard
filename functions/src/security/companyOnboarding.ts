@@ -16,6 +16,23 @@ export function companyJoinCodeDigest(value: unknown): string {
   return createHash('sha256').update(normalizeCompanyJoinCode(value)).digest('hex');
 }
 
+export function decideCompanyJoinCodeResolution(input: {
+  matchExists: boolean;
+  mapping?: Record<string, unknown>;
+  companyExists: boolean;
+  company?: Record<string, unknown>;
+}): { ok: true; companyId: string; companyName: string } | { ok: false; reason: 'unknown' | 'unavailable' } {
+  const companyId = input.mapping?.companyId;
+  if (!input.matchExists || input.mapping?.active !== true || typeof companyId !== 'string') {
+    return { ok: false, reason: 'unknown' };
+  }
+  const companyName = input.company?.name;
+  if (!input.companyExists || input.company?.status === 'archived' || typeof companyName !== 'string') {
+    return { ok: false, reason: 'unavailable' };
+  }
+  return { ok: true, companyId, companyName };
+}
+
 export function slugifyCompanyName(value: unknown): string {
   return String(value || '').trim().toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '').slice(0, 60);
 }
@@ -96,11 +113,16 @@ export async function resolveCompanyJoinCode(code: unknown): Promise<{ companyId
     throw new httpsV2.HttpsError('not-found', 'Company join code was not found');
   }
   const company = await admin.firestore().collection('companies').doc(data.companyId).get();
-  const companyName = company.data()?.name;
-  if (!company.exists || company.data()?.status === 'archived' || typeof companyName !== 'string') {
+  const decision = decideCompanyJoinCodeResolution({
+    matchExists: match.exists,
+    mapping: data,
+    companyExists: company.exists,
+    company: company.data(),
+  });
+  if (!decision.ok) {
     throw new httpsV2.HttpsError('failed-precondition', 'Company is not available for employee registration');
   }
-  return { companyId: data.companyId, companyName };
+  return { companyId: decision.companyId, companyName: decision.companyName };
 }
 
 export const requestCompanyOnboarding = httpsV2.onCall(
