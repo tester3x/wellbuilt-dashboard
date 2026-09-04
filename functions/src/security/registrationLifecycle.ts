@@ -1,4 +1,4 @@
-export const PENDING_REGISTRATION_TTL_MS = 72 * 60 * 60 * 1000;
+export const PENDING_REGISTRATION_TTL_MS = 7 * 24 * 60 * 60 * 1000;
 
 export type PendingTerminalStatus = 'approved' | 'rejected' | 'cancelled' | 'expired';
 

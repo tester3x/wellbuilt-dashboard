@@ -63,22 +63,29 @@ async function expirePendingRegistration(
 ): Promise<boolean> {
   if (!isPendingExpired(pending, nowMs)) return false;
   const credRef = fs().collection('pending_credentials').doc(pendingId);
-  let nameNorm = '';
+  let nameNorm = String(pending.nameNorm || '');
   const claimed = await fs().runTransaction(async tx => {
     const snap = await tx.get(credRef);
     const value = snap.data();
-    nameNorm = String(value?.displayNameNorm || pending.nameNorm || '');
-    if (!snap.exists) return false;
+    nameNorm = String(value?.displayNameNorm || nameNorm);
+    // A missing credential is a recoverable partial write. The authoritative
+    // RTDB request still expires, but credential material must never be recreated.
+    if (!snap.exists) return true;
     if (value?.status === 'expired') return true;
     if ((value?.status || 'pending') !== 'pending' || Number(value?.expiresAtMs || pendingExpiresAtMs(pending, nowMs)) > nowMs) return false;
     tx.update(credRef, { status: 'expired', closedAtMs: nowMs, passcode: FieldValue.delete() });
     return true;
   });
   if (!claimed) return false;
-  if (!nameNorm) return false;
+  if (!nameNorm) {
+    const reservation = await fs().collection('driver_provisioning_attempts')
+      .where('pendingId', '==', pendingId).limit(1).get();
+    const value = reservation.docs[0]?.data();
+    if (value?.pendingId === pendingId) nameNorm = String(value.nameNorm || '');
+  }
   const ref = rtdb().ref(`drivers/pending_secure/${pendingId}`);
   await ref.update({ status: 'expired', expiredAt: nowMs });
-  await releasePendingReservation(nameNorm, pendingId, 'expired');
+  if (nameNorm) await releasePendingReservation(nameNorm, pendingId, 'expired');
   await rtdb().ref(`drivers/pending/${pendingId}`).update({ status: 'expired', expiredAt: nowMs }).catch(() => undefined);
   return true;
 }
@@ -629,6 +636,12 @@ export const adminApproveDriverRegistration = httpsV2.onCall(
     }
 
     const approvalNowMs = Date.now();
+    // The RTDB request timestamp is authoritative. Refuse approval at the
+    // boundary even if cleanup has not yet tombstoned the credential copy.
+    if (isPendingExpired(pending, approvalNowMs)) {
+      await expirePendingRegistration(pendingId, pending, approvalNowMs);
+      throw new httpsV2.HttpsError('failed-precondition', 'Registration expired');
+    }
     const approvalCredRef = fs().collection('pending_credentials').doc(pendingId);
     const approvalCred = await approvalCredRef.get();
     const approvalNameNorm = String(approvalCred.data()?.displayNameNorm || '');

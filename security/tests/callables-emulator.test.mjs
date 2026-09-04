@@ -33,6 +33,8 @@ const RTDB_NS = `${PROJECT_ID}-default-rtdb`;
 const RTDB_URL = `http://127.0.0.1:9000?ns=${RTDB_NS}`;
 const COMPANY_CODE = 'TEST-2345';
 const COMPANY_CODE_DIGEST = createHash('sha256').update('TEST2345').digest('hex');
+const OTHER_COMPANY_CODE = 'OTHR-6789';
+const OTHER_COMPANY_CODE_DIGEST = createHash('sha256').update('OTHR6789').digest('hex');
 
 let passed = 0;
 let failed = 0;
@@ -73,6 +75,10 @@ async function main() {
   await admin.firestore().collection('companies').doc('co-test').set({ name: 'Test Co', status: 'active' });
   await admin.firestore().collection('company_join_codes').doc(COMPANY_CODE_DIGEST).set({
     companyId: 'co-test', active: true,
+  });
+  await admin.firestore().collection('companies').doc('co-other').set({ name: 'Other Co', status: 'active' });
+  await admin.firestore().collection('company_join_codes').doc(OTHER_COMPANY_CODE_DIGEST).set({
+    companyId: 'co-other', active: true,
   });
 
   const app = initializeApp({
@@ -249,7 +255,8 @@ async function main() {
     await fetch(`http://127.0.0.1:9000/security/rate_limit/register.json?ns=${encodeURIComponent(ns)}`, { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: 'null' });
   }
 
-  // Expiration is terminal, removes credential material, and blocks approval.
+  // Expiration is terminal, removes credential material, blocks approval, and
+  // permits a new registration without allowing the old request to close it.
   try {
     const exp = await call('requestDriverRegistration')({
       displayName: 'ExpireMeDriver', passcode: 'ExpireMe99!', companyCode: COMPANY_CODE, source: 'test',
@@ -272,8 +279,59 @@ async function main() {
     await signInWithEmailAndPassword(auth, adminEmail, adminPass);
     await expectThrow('expired request cannot be approved', () => call('adminApproveDriverRegistration')({ pendingId: expId }), /expired|already|failed/i);
     await signOut(auth);
+    for (const ns of [RTDB_NS, PROJECT_ID]) {
+      await fetch(`http://127.0.0.1:9000/security/rate_limit/register.json?ns=${encodeURIComponent(ns)}`, { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: 'null' });
+    }
+    const replacement = await call('requestDriverRegistration')({
+      displayName: 'ExpireMeDriver', passcode: 'Replacement99!', companyCode: COMPANY_CODE, source: 'test',
+    });
+    const replacementId = replacement.data.pendingId;
+    const replacementCred = (await admin.firestore().collection('pending_credentials').doc(replacementId).get()).data();
+    if (replacementId !== expId && replacementCred?.passcode?.algo === 'scrypt') ok('expired name re-registers with new pendingId and scrypt credential');
+    else fail('expired name re-registration', new Error(`${expId}/${replacementId}`));
+    await call('checkDriverRegistrationStatus')({ pendingId: expId });
+    const activeReservation = (await expReservation.get()).data();
+    if (activeReservation?.pendingId === replacementId && activeReservation?.status === 'pending') ok('old expiration cannot close replacement reservation');
+    else fail('old expiration cannot close replacement reservation', new Error(JSON.stringify(activeReservation)));
+    await signInWithEmailAndPassword(auth, adminEmail, adminPass);
+    const replacementApproval = await call('adminApproveDriverRegistration')({ pendingId: replacementId });
+    await signOut(auth);
+    const replacementLogin = await call('authenticateDriver')({ displayName: 'ExpireMeDriver', passcode: 'Replacement99!' });
+    if (replacementApproval.data.driverId && replacementLogin.data.driverId === replacementApproval.data.driverId) ok('replacement request approves and authenticates');
+    else fail('replacement request approves and authenticates', new Error(JSON.stringify(replacementLogin.data)));
   } catch (e) {
     fail('expiration lifecycle', e);
+  }
+
+  // An expired RTDB request without its credential document still expires
+  // closed, is hidden from admins, and never recreates credential material.
+  for (const ns of [RTDB_NS, PROJECT_ID]) {
+    await fetch(`http://127.0.0.1:9000/security/rate_limit/register.json?ns=${encodeURIComponent(ns)}`, { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: 'null' });
+  }
+  try {
+    const partial = await call('requestDriverRegistration')({ displayName: 'PartialExpireDriver', passcode: 'Partial99!', companyCode: COMPANY_CODE, source: 'test' });
+    const partialId = partial.data.pendingId;
+    await admin.firestore().collection('pending_credentials').doc(partialId).delete();
+    for (const ns of [RTDB_NS, PROJECT_ID]) {
+      for (const path of ['pending_secure', 'pending']) {
+        await fetch(`http://127.0.0.1:9000/drivers/${path}/${partialId}.json?ns=${encodeURIComponent(ns)}`, {
+          method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ expiresAtMs: Date.now() - 1 }),
+        });
+      }
+    }
+    const partialTerminal = await call('checkDriverRegistrationStatus')({ pendingId: partialId });
+    const partialReservation = (await admin.firestore().collection('driver_provisioning_attempts').doc('registration:partialexpiredriver').get()).data();
+    const partialCred = await admin.firestore().collection('pending_credentials').doc(partialId).get();
+    if (partialTerminal.data.status === 'rejected' && partialTerminal.data.terminalReason === 'expired' && partialReservation?.status === 'expired' && !partialCred.exists) ok('missing-credential partial write expires closed without credential recreation');
+    else fail('missing-credential partial write recovery', new Error(JSON.stringify({ terminal: partialTerminal.data, reservation: partialReservation, credentialExists: partialCred.exists })));
+    await signInWithEmailAndPassword(auth, adminEmail, adminPass);
+    const listed = await call('adminListPendingRegistrations')({});
+    if (!listed.data.pending?.some((row) => row.pendingId === partialId)) ok('expired partial-write request excluded from admin list');
+    else fail('expired partial-write request excluded from admin list', new Error('request remained actionable'));
+    await expectThrow('missing-credential expired request cannot be approved', () => call('adminApproveDriverRegistration')({ pendingId: partialId }), /expired|already|failed/i);
+    await signOut(auth);
+  } catch (e) {
+    fail('missing-credential expiration lifecycle', e);
   }
 
   for (const ns of [RTDB_NS, PROJECT_ID]) {
@@ -290,6 +348,7 @@ async function main() {
     if (changed.data.pendingId === a.data.pendingId && JSON.stringify(before) === JSON.stringify(after)) {
       ok('different retry passcode does not replace pending credential');
     } else fail('different retry passcode protection', new Error('credential changed'));
+    await expectThrow('different-company retry rejected under global-name invariant', () => call('requestDriverRegistration')({ ...body, companyCode: OTHER_COMPANY_CODE }), /already|pending|exists/i);
   } catch (e) {
     fail('concurrent duplicate matrix', e);
   }
@@ -516,6 +575,18 @@ async function main() {
       () => call('authenticateDriver')({ displayName: 'RejectMeDriver', passcode: 'RejectMe99!' }),
       /permission|invalid|denied/i,
     );
+    for (const ns of [RTDB_NS, PROJECT_ID]) {
+      await fetch(`http://127.0.0.1:9000/security/rate_limit/register.json?ns=${encodeURIComponent(ns)}`, { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: 'null' });
+    }
+    const retry = await call('requestDriverRegistration')({ displayName: 'RejectMeDriver', passcode: 'RejectRetry99!', source: 'test', companyCode: COMPANY_CODE });
+    if (retry.data.pendingId !== pid2) ok('rejected name re-registers with a new pendingId');
+    else fail('rejected name re-registers with a new pendingId', new Error('pendingId reused'));
+    await signInWithEmailAndPassword(auth, adminEmail, adminPass);
+    const approvedRetry = await call('adminApproveDriverRegistration')({ pendingId: retry.data.pendingId });
+    await signOut(auth);
+    const retryLogin = await call('authenticateDriver')({ displayName: 'RejectMeDriver', passcode: 'RejectRetry99!' });
+    if (approvedRetry.data.driverId && retryLogin.data.driverId === approvedRetry.data.driverId) ok('rejected-name replacement approves and authenticates');
+    else fail('rejected-name replacement approves and authenticates', new Error(JSON.stringify(retryLogin.data)));
   } catch (e) {
     fail('reject flow', e);
   }

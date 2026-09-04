@@ -10,8 +10,8 @@ import {
 describe('pending registration lifecycle policy', () => {
   const now = 1_000_000;
 
-  test('TTL is an explicit 72-hour policy', () => {
-    expect(PENDING_REGISTRATION_TTL_MS).toBe(72 * 60 * 60 * 1000);
+  test('TTL is an explicit seven-day policy', () => {
+    expect(PENDING_REGISTRATION_TTL_MS).toBe(7 * 24 * 60 * 60 * 1000);
   });
 
   test('explicit expiry is authoritative', () => {
@@ -20,6 +20,21 @@ describe('pending registration lifecycle policy', () => {
 
   test('pre-fix rows derive expiry from requestedAt', () => {
     expect(pendingExpiresAtMs({ requestedAt: 100 }, now)).toBe(100 + PENDING_REGISTRATION_TTL_MS);
+  });
+
+  test('one millisecond before expiry remains pending', () => {
+    expect(isPendingExpired({ status: 'pending', expiresAtMs: now + 1 }, now)).toBe(false);
+    expect(pollStatusFor({ status: 'pending', expiresAtMs: now + 1 }, now)).toBe('pending');
+  });
+
+  test('the exact expiration boundary is expired', () => {
+    expect(isPendingExpired({ status: 'pending', expiresAtMs: now }, now)).toBe(true);
+    expect(pollStatusFor({ status: 'pending', expiresAtMs: now }, now)).toBe('rejected');
+  });
+
+  test('after the expiration boundary is expired', () => {
+    expect(isPendingExpired({ status: 'pending', expiresAtMs: now - 1 }, now)).toBe(true);
+    expect(pollStatusFor({ status: 'pending', expiresAtMs: now - 1 }, now)).toBe('rejected');
   });
 
   test('undated pre-fix rows expire closed', () => {
