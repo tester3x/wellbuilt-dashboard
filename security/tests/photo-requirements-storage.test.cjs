@@ -5,7 +5,7 @@ const {
   assertSucceeds,
   initializeTestEnvironment,
 } = require('@firebase/rules-unit-testing');
-const { ref, uploadBytes } = require('firebase/storage');
+const { deleteObject, getBytes, ref, uploadBytes } = require('firebase/storage');
 
 const root = resolve(__dirname, '../..');
 const projectId = 'demo-wb-photo-requirements';
@@ -23,13 +23,21 @@ async function main() {
   });
 
   try {
-    const upload = (context) => uploadBytes(ref(context.storage(), target), image, {
-      contentType: 'image/jpeg',
+    const upload = (context, path = target, bytes = image, contentType = 'image/jpeg') => uploadBytes(ref(context.storage(), path), bytes, {
+      contentType,
     });
 
-    await assertSucceeds(upload(env.authenticatedContext('owner', {
-      wellbuiltAdmin: true,
-    })));
+    const owner = env.authenticatedContext('owner', { wellbuiltAdmin: true });
+    const ownerRef = ref(owner.storage(), target);
+    await assertSucceeds(uploadBytes(ownerRef, image, { contentType: 'image/jpeg' }));
+    await assertSucceeds(getBytes(ownerRef));
+    await assertSucceeds(uploadBytes(ownerRef, new Uint8Array([0xff, 0xd8, 1, 0xff, 0xd9]), {
+      contentType: 'image/jpeg',
+    }));
+    await assertFails(deleteObject(ownerRef));
+    await assertFails(upload(owner, target, new Uint8Array(12 * 1024 * 1024), 'image/jpeg'));
+    await assertFails(upload(owner, target, new TextEncoder().encode('not an image'), 'text/plain'));
+    await assertFails(upload(owner, 'photo_requirements/slawsonexplorationcompanyinc/nested/sample.jpg'));
 
     // Dashboard company staff currently have RTDB roles, not trusted custom
     // claims that bind them to an operator/customer path. Authentication alone
@@ -48,12 +56,6 @@ async function main() {
     })));
 
     await assertFails(upload(env.unauthenticatedContext()));
-
-    await assertFails(uploadBytes(
-      ref(env.authenticatedContext('owner-text', { wellbuiltAdmin: true }).storage(), target),
-      new TextEncoder().encode('not an image'),
-      { contentType: 'text/plain' },
-    ));
 
     console.log('PASS photo_requirements Storage authorization matrix');
   } finally {

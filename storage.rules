@@ -48,9 +48,11 @@ service firebase.storage {
     // server-issued, storage-verifiable customer-scope claim.
     match /photo_requirements/{customerId}/{fileName} {
       allow read: if isPlatformAdmin();
-      allow write: if isPlatformAdmin()
+      allow create, update: if isPlatformAdmin()
         && underSize(12 * 1024 * 1024)
         && isImage();
+      // Dashboard removal currently deletes requirement metadata only.
+      allow delete: if false;
     }
 
     match /{allPaths=**} {
