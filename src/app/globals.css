@@ -99,7 +99,11 @@ body {
   border: 1px solid #374151;
 }
 
-.dispatch-queue:not(.is-expanded) .dispatch-queue-body {
+.dispatch-queue:not(.is-expanded):not(.has-search) .dispatch-queue-body {
+  display: none;
+}
+
+.dispatch-queue.has-search:not(.is-expanded) .dispatch-queue-filters {
   display: none;
 }
 
@@ -119,7 +123,10 @@ body {
     display: none;
   }
   .dispatch-queue .dispatch-queue-body,
-  .dispatch-queue:not(.is-expanded) .dispatch-queue-body {
+  .dispatch-queue:not(.is-expanded):not(.has-search) .dispatch-queue-body {
     display: block;
+  }
+  .dispatch-queue.has-search:not(.is-expanded) .dispatch-queue-filters {
+    display: flex;
   }
 }

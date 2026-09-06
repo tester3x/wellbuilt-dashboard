@@ -13,8 +13,11 @@ import { adminGetDashboardCatalog, classifiedReadFailure } from '@/lib/adminDash
 import { canViewGlobalWellPool, docBelongsToTenant } from '@/lib/tenantScope';
 import {
   canListenPacketsOutgoingParent,
+  isStackedDispatchLayout,
   nextWellsErrorAfterEvent,
   wellQueueLiveGate,
+  wellQueueSearchActive,
+  wellQueueUsesSearchHits,
 } from '@/lib/dispatchWellQueueLive';
 import { AppHeader } from '@/components/AppHeader';
 import { getFirebaseAuth, getFirestoreDb } from '@/lib/firebase';
@@ -360,6 +363,7 @@ function DispatchPageInner() {
   const [routeFilter, setRouteFilter] = useState<string>('all');
   const [priorityFilter, setPriorityFilter] = useState<PriorityLevel | 'all'>('all');
   const [wellQueueExpanded, setWellQueueExpanded] = useState(false);
+  const [stackedLayout, setStackedLayout] = useState(isStackedDispatchLayout);
   const [message, setMessage] = useState('');
 
   // Assign modal state (single-well PW)
@@ -541,6 +545,14 @@ function DispatchPageInner() {
       router.push('/login');
     }
   }, [user, loading, router]);
+
+  useEffect(() => {
+    const mq = window.matchMedia('(min-width: 1280px) and (min-height: 900px)');
+    const apply = () => setStackedLayout(!mq.matches);
+    apply();
+    mq.addEventListener('change', apply);
+    return () => mq.removeEventListener('change', apply);
+  }, []);
 
   // Well queue: catalog is the authorized well_config source. Live RTDB
   // well_config parent has no .read. packets/outgoing parent is only
@@ -1033,6 +1045,38 @@ function DispatchPageInner() {
         return aH - bH;
       });
   }, [wells, dispatches, search, routeFilter, priorityFilter]);
+
+  const searchHits = useMemo(() => {
+    const q = search.trim().toLowerCase();
+    if (!q) return [];
+    const dispatchedWellDrivers = new Map<string, string[]>();
+    dispatches
+      .filter(d => d.jobType === 'pw' && ['pending', 'accepted', 'in_progress', 'paused'].includes(d.status))
+      .forEach(d => {
+        const driversList = dispatchedWellDrivers.get(d.wellName) || [];
+        driversList.push(d.driverFirstName || d.driverName || '?');
+        dispatchedWellDrivers.set(d.wellName, driversList);
+      });
+    return wells
+      .filter(w => {
+        const isDown = w.isDown || w.currentLevel === 'DOWN';
+        if (isDown) return false;
+        if (w.currentLevel === '--' && !w.nextPullTimeUTC) return false;
+        return w.wellName.toLowerCase().includes(q) || (w.route || '').toLowerCase().includes(q);
+      })
+      .map(w => ({ well: w, priority: getPriority(w), dispatched: dispatchedWellDrivers.has(w.wellName), assignedDrivers: dispatchedWellDrivers.get(w.wellName) || [] }))
+      .sort((a, b) => {
+        if (a.dispatched !== b.dispatched) return a.dispatched ? 1 : -1;
+        if (a.priority.sortOrder !== b.priority.sortOrder) return a.priority.sortOrder - b.priority.sortOrder;
+        const aH = a.priority.hoursUntilPull ?? 99999;
+        const bH = b.priority.hoursUntilPull ?? 99999;
+        return aH - bH;
+      });
+  }, [wells, dispatches, search]);
+
+  const showingSearchHits = wellQueueUsesSearchHits(stackedLayout, wellQueueExpanded, search);
+  const queueRows = showingSearchHits ? searchHits : pwQueue;
+  const searchActive = wellQueueSearchActive(search);
 
   // Priority summary counts
   const priorityCounts = useMemo(() => {
@@ -1803,7 +1847,7 @@ function DispatchPageInner() {
 
   function toggleSelectAll() {
     setAssignTarget(null); // Clear single-well mode
-    const selectableWells = pwQueue.map(q => q.well.wellName);
+    const selectableWells = queueRows.map(q => q.well.wellName);
 
     if (selectableWells.every(w => selectedWells.has(w))) {
       setSelectedWells(new Map());
@@ -2889,9 +2933,16 @@ function DispatchPageInner() {
             </div>{/* end Tabbed Builder panel */}
 
             {/* ═══════ Well Queue ═══════ */}
-            <div className={`dispatch-queue bg-gray-800 rounded-lg border border-gray-700 flex flex-col${wellQueueExpanded ? ' is-expanded' : ''}`}>
-              <div className="flex items-center gap-3 px-4 py-2.5 border-b border-gray-700 flex-shrink-0">
+            <div className={`dispatch-queue bg-gray-800 rounded-lg border border-gray-700 flex flex-col${wellQueueExpanded ? ' is-expanded' : ''}${searchActive ? ' has-search' : ''}`}>
+              <div className="flex items-center gap-2 px-4 py-2.5 border-b border-gray-700 flex-shrink-0">
                 <h3 className="text-sm font-semibold text-white flex-shrink-0">Well Queue</h3>
+                <input
+                  type="text"
+                  placeholder="Search wells..."
+                  value={search}
+                  onChange={(e) => setSearch(e.target.value)}
+                  className="flex-1 min-w-0 px-2.5 py-1 bg-gray-900 border border-gray-700 rounded text-white text-xs placeholder-gray-500 focus:outline-none focus:border-blue-500"
+                />
                 <button
                   type="button"
                   className="dispatch-queue-toggle"
@@ -2901,8 +2952,7 @@ function DispatchPageInner() {
                 >
                   {wellQueueExpanded ? 'Hide list' : 'Show list'}
                 </button>
-                <span className="flex-1" />
-                <span className="text-gray-500 text-xs">{pwQueue.length} wells</span>
+                <span className="text-gray-500 text-xs flex-shrink-0">{queueRows.length} wells</span>
               </div>
 
               {/* Selection indicator — shows in Well Queue header area */}
@@ -2918,14 +2968,7 @@ function DispatchPageInner() {
               )}
 
               <div id="dispatch-queue-body" className="dispatch-queue-body">
-              <div className="flex items-center gap-3 px-4 py-2 border-b border-gray-700 flex-shrink-0">
-                <input
-                  type="text"
-                  placeholder="Search wells..."
-                  value={search}
-                  onChange={(e) => setSearch(e.target.value)}
-                  className="px-2.5 py-1 bg-gray-900 border border-gray-700 rounded text-white text-xs placeholder-gray-500 focus:outline-none focus:border-blue-500 w-40"
-                />
+              <div className="dispatch-queue-filters flex items-center gap-3 px-4 py-2 border-b border-gray-700 flex-shrink-0">
                 <select value={routeFilter} onChange={(e) => setRouteFilter(e.target.value)}
                   className="px-2 py-1 bg-gray-900 border border-gray-700 rounded text-white text-xs focus:outline-none focus:border-blue-500">
                   <option value="all">All Routes</option>
@@ -2936,8 +2979,8 @@ function DispatchPageInner() {
               <div className="overflow-x-auto">
                 {dataLoading ? (
                   <div className="text-gray-400 py-8 text-center">Loading well data...</div>
-                ) : pwQueue.length === 0 ? (
-                  <div className="text-gray-400 py-8 text-center">No wells match filters</div>
+                ) : queueRows.length === 0 ? (
+                  <div className="text-gray-400 py-8 text-center">{showingSearchHits ? 'No wells match search' : 'No wells match filters'}</div>
                 ) : (
                   <table className="w-full">
                     <thead className="bg-gray-700 sticky top-0 z-10">
@@ -2951,13 +2994,13 @@ function DispatchPageInner() {
                         <th className="px-2 py-2 text-right text-[11px] font-medium text-gray-300 w-28">
                           <div className="flex items-center justify-end gap-1.5">
                             <span>Action</span>
-                            <input type="checkbox" checked={pwQueue.length > 0 && pwQueue.every(q => selectedWells.has(q.well.wellName))} onChange={toggleSelectAll} className="w-4 h-4 rounded border-gray-600 bg-gray-800 text-blue-600 focus:ring-blue-500 focus:ring-offset-0 cursor-pointer" />
+                            <input type="checkbox" checked={queueRows.length > 0 && queueRows.every(q => selectedWells.has(q.well.wellName))} onChange={toggleSelectAll} className="w-4 h-4 rounded border-gray-600 bg-gray-800 text-blue-600 focus:ring-blue-500 focus:ring-offset-0 cursor-pointer" />
                           </div>
                         </th>
                       </tr>
                     </thead>
                     <tbody className="divide-y divide-gray-700/50">
-                      {pwQueue.map(({ well, priority, dispatched, assignedDrivers: wellAssignedDrivers }) => {
+                      {queueRows.map(({ well, priority, dispatched, assignedDrivers: wellAssignedDrivers }) => {
                         const isSelected = selectedWells.has(well.wellName);
                         const loadCount = selectedWells.get(well.wellName) || 1;
                         return (

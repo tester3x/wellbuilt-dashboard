@@ -32,6 +32,25 @@ export function canListenPacketsOutgoingParent(claims: unknown): boolean {
   return c.wellbuiltAdmin === true && c.platformAdminEnabled === true;
 }
 
+/** Collapsed Fold queue: search hits without opening the full list. */
+export function wellQueueSearchActive(search: string): boolean {
+  return search.trim().length > 0;
+}
+
+export function wellQueueBodyOpen(expanded: boolean, search: string): boolean {
+  return expanded || wellQueueSearchActive(search);
+}
+
+/** Stacked + collapsed + query → name matches only. Full list stays behind Show list. */
+export function wellQueueUsesSearchHits(stacked: boolean, expanded: boolean, search: string): boolean {
+  return stacked && !expanded && wellQueueSearchActive(search);
+}
+
+export function isStackedDispatchLayout(): boolean {
+  if (typeof window === 'undefined') return true;
+  return !window.matchMedia('(min-width: 1280px) and (min-height: 900px)').matches;
+}
+
 export function nextWellsErrorAfterEvent(args: {
   eventGen: number;
   activeGen: number;

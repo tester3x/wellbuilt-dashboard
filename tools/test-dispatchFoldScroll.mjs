@@ -42,10 +42,20 @@ check('stacked layouts put jobs pane first',
 check('desktop split restores jobs pane order',
   /@media \(min-width: 1280px\) and \(min-height: 900px\)[\s\S]*\.dispatch-pane-jobs[\s\S]*order: 0/.test(globals));
 check('stacked well queue is collapsed unless expanded',
-  globals.includes('.dispatch-queue:not(.is-expanded) .dispatch-queue-body') &&
+  globals.includes('.dispatch-queue:not(.is-expanded):not(.has-search) .dispatch-queue-body') &&
   dispatchPage.includes('wellQueueExpanded') &&
   dispatchPage.includes('dispatch-queue-toggle') &&
   dispatchPage.includes('aria-controls="dispatch-queue-body"'));
+check('search box lives in the well queue title row', (() => {
+  const title = dispatchPage.indexOf('>Well Queue<');
+  const searchBox = dispatchPage.indexOf('placeholder="Search wells..."', title);
+  const body = dispatchPage.indexOf('id="dispatch-queue-body"', title);
+  return title !== -1 && searchBox > title && body > searchBox;
+})());
+check('search hits open the queue without Show list',
+  globals.includes('.has-search') &&
+  dispatchPage.includes('has-search') &&
+  dispatchPage.includes('wellQueueUsesSearchHits'));
 
 function load(file, dependencies) {
   const code = ts.transpileModule(readFileSync(file, 'utf8'), {
@@ -118,8 +128,9 @@ ${builtCss}
           <button id="dispatch-form-bottom" type="button">Create Pull</button>
         </div>
         <div class="dispatch-queue" style="background:#1f2937;color:#fff">
-          <div style="padding:12px">Well Queue <button type="button" class="dispatch-queue-toggle">Show list</button></div>
+          <div style="padding:12px">Well Queue <input placeholder="Search wells..." /><button type="button" class="dispatch-queue-toggle">Show list</button></div>
           <div class="dispatch-queue-body" style="padding:12px">
+            <div class="dispatch-queue-filters">All Routes</div>
             <div style="height:640px">queue rows</div>
             <div id="dispatch-queue-bottom">final queue row</div>
           </div>
@@ -197,7 +208,19 @@ try {
         `jobsTop=${layout.jobsTop} headerBottom=${layout.headerBottom}`);
       check(`${vp.name} well list starts collapsed`, layout.bodyDisplay === 'none', layout.bodyDisplay);
       check(`${vp.name} well list toggle is visible`, layout.toggleDisplay !== 'none', layout.toggleDisplay);
-      await page.evaluate(() => document.querySelector('.dispatch-queue').classList.add('is-expanded'));
+      const searched = await page.evaluate(() => {
+        document.querySelector('.dispatch-queue').classList.add('has-search');
+        return {
+          body: getComputedStyle(document.querySelector('.dispatch-queue-body')).display,
+          filters: getComputedStyle(document.querySelector('.dispatch-queue-filters')).display,
+        };
+      });
+      check(`${vp.name} search shows hits without Show list`, searched.body !== 'none', searched.body);
+      check(`${vp.name} search hits hide the full-list route filter`, searched.filters === 'none', searched.filters);
+      await page.evaluate(() => {
+        document.querySelector('.dispatch-queue').classList.remove('has-search');
+        document.querySelector('.dispatch-queue').classList.add('is-expanded');
+      });
     } else {
       check(`${vp.name} jobs sit to the right of the builder`, layout.jobsLeft > layout.builderLeft + 40,
         `jobsLeft=${layout.jobsLeft} builderLeft=${layout.builderLeft}`);

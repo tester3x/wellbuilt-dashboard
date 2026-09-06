@@ -9,8 +9,11 @@ import { fileURLToPath } from 'node:url';
 import {
   canListenPacketsOutgoingParent,
   nextWellsErrorAfterEvent,
+  wellQueueBodyOpen,
   wellQueueLiveGate,
   wellQueueLiveGenerationApplies,
+  wellQueueSearchActive,
+  wellQueueUsesSearchHits,
 } from '../src/lib/dispatchWellQueueLive.ts';
 import { mergeWellPool } from '../src/lib/wellPoolMerge.ts';
 
@@ -92,6 +95,17 @@ check('space-stripped wellStatus still merges',
     { 'Gabriel 1': { route: 'Gabriels' } },
     { Gabriel1: { currentLevel: '4\'0"', nextPullTimeUTC: '2026-09-06T13:00:00Z' } },
   )[0].currentLevel === '4\'0"');
+check('blank search is not active', wellQueueSearchActive('   ') === false);
+check('Gabriel query is active', wellQueueSearchActive('Gabriel 1') === true);
+check('collapsed without search hides body', wellQueueBodyOpen(false, '') === false);
+check('search opens body without Show list', wellQueueBodyOpen(false, 'Gabriel') === true);
+check('Show list opens body without search', wellQueueBodyOpen(true, '') === true);
+check('stacked collapsed search uses hits only',
+  wellQueueUsesSearchHits(true, false, 'Gabriel 1') === true);
+check('Show list uses full queue not search hits',
+  wellQueueUsesSearchHits(true, true, 'Gabriel 1') === false);
+check('desktop never uses search-hit dropdown',
+  wellQueueUsesSearchHits(false, false, 'Gabriel 1') === false);
 
 console.log(`\n${pass} passed, ${fail} failed`);
 if (fail) process.exit(1);
