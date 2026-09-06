@@ -1096,18 +1096,23 @@ function OperatorRow({
   legalNameMap?: Record<string, string>;
 }) {
   const rateInfo = getFuelSurchargeRate(summary.billingConfig, dieselPrice);
+  const colSpan = showDetention ? 11 : 10;
+  const pinCell = isExpanded ? ' bg-gray-800' : '';
   return (
     <>
-      <tr className="hover:bg-gray-750 cursor-pointer" onClick={onToggle}>
-        <td className="px-4 py-3 text-white font-medium whitespace-nowrap">{summary.operator}</td>
-        <td className="px-4 py-3 text-center text-white font-mono">{summary.loads}</td>
-        <td className="px-4 py-3 text-right text-white font-mono">{summary.totalBBLs.toLocaleString()}</td>
-        <td className="px-4 py-3 text-right text-white font-mono">{summary.totalHours.toFixed(1)}</td>
-        <td className="px-4 py-3 text-right text-white font-mono">{formatCurrency(summary.subtotal)}</td>
-        <td className="px-4 py-3 text-right text-yellow-400 font-mono">{formatCurrency(summary.totalFuelSurcharge)}</td>
-        {showDetention && <td className="px-4 py-3 text-right text-orange-400 font-mono">{summary.totalDetentionPay > 0 ? formatCurrency(summary.totalDetentionPay) : '--'}</td>}
-        <td className="px-4 py-3 text-right text-green-400 font-mono font-semibold">{formatCurrency(summary.grandTotal)}</td>
-        <td className="px-4 py-3 text-right text-sm">
+      <tr
+        className={`hover:bg-gray-750 cursor-pointer${isExpanded ? ' sticky top-10 z-[15] bg-gray-800' : ''}`}
+        onClick={onToggle}
+      >
+        <td className={`px-4 py-3 text-white font-medium whitespace-nowrap${pinCell}`}>{summary.operator}</td>
+        <td className={`px-4 py-3 text-center text-white font-mono${pinCell}`}>{summary.loads}</td>
+        <td className={`px-4 py-3 text-right text-white font-mono${pinCell}`}>{summary.totalBBLs.toLocaleString()}</td>
+        <td className={`px-4 py-3 text-right text-white font-mono${pinCell}`}>{summary.totalHours.toFixed(1)}</td>
+        <td className={`px-4 py-3 text-right text-white font-mono${pinCell}`}>{formatCurrency(summary.subtotal)}</td>
+        <td className={`px-4 py-3 text-right text-yellow-400 font-mono${pinCell}`}>{formatCurrency(summary.totalFuelSurcharge)}</td>
+        {showDetention && <td className={`px-4 py-3 text-right text-orange-400 font-mono${pinCell}`}>{summary.totalDetentionPay > 0 ? formatCurrency(summary.totalDetentionPay) : '--'}</td>}
+        <td className={`px-4 py-3 text-right text-green-400 font-mono font-semibold${pinCell}`}>{formatCurrency(summary.grandTotal)}</td>
+        <td className={`px-4 py-3 text-right text-sm${pinCell}`}>
           <span className="text-gray-400">{getFuelSurchargeLabel(summary.billingConfig)}</span>
           {rateInfo && rateInfo.rate > 0 && (
             <span className="block text-cyan-400 font-mono text-xs mt-0.5">
@@ -1115,7 +1120,7 @@ function OperatorRow({
             </span>
           )}
         </td>
-        <td className="px-4 py-3 text-center" onClick={(e) => e.stopPropagation()}>
+        <td className={`px-4 py-3 text-center${pinCell}`} onClick={(e) => e.stopPropagation()}>
           {alreadyBilled ? (
             <span className="px-3 py-1 bg-green-600/20 text-green-400 rounded text-xs font-medium">Billed</span>
           ) : (
@@ -1130,26 +1135,32 @@ function OperatorRow({
         </td>
       </tr>
       {isExpanded && (
-        <tr>
-          <td colSpan={showDetention ? 11 : 10} className="px-0 py-0">
-            <div className="bg-gray-850 border-t border-gray-700">
-              <table className="w-full min-w-max">
-                <thead className="sticky top-10 z-10 bg-gray-800">
-                  <tr className="text-xs text-gray-400">
-                    <th className="px-4 py-1 text-left sticky top-10 bg-gray-800">Invoice #</th>
-                    <th className="px-4 py-1 text-left sticky top-10 bg-gray-800">Date</th>
-                    <th className="px-4 py-1 text-left sticky top-10 bg-gray-800">Well</th>
-                    <th className="px-4 py-1 text-left sticky top-10 bg-gray-800">Drop-off</th>
-                    <th className="px-4 py-1 text-left sticky top-10 bg-gray-800">Driver</th>
-                    <th className="px-4 py-1 text-right sticky top-10 bg-gray-800">BBLs</th>
-                    <th className="px-4 py-1 text-right sticky top-10 bg-gray-800">Hours</th>
-                    <th className="px-4 py-1 text-right sticky top-10 bg-gray-800">Fuel Min</th>
-                    <th className="px-4 py-1 text-right sticky top-10 bg-gray-800">Base</th>
-                    <th className="px-4 py-1 text-right sticky top-10 bg-gray-800">FSC</th>
-                    {showDetention && <th className="px-4 py-1 text-right sticky top-10 bg-gray-800">Detention</th>}
-                    <th className="px-4 py-1 text-right sticky top-10 bg-gray-800">Total</th>
+        <>
+          <tr data-billing-pin="ticket-labels" className="sticky top-[6.5rem] z-[15] bg-gray-800">
+            <td colSpan={colSpan} className="px-0 py-0 bg-gray-800">
+              <table className="w-full min-w-max table-fixed">
+                <thead>
+                  <tr className="text-xs text-gray-400 border-t border-gray-700">
+                    <th className="px-4 py-1 text-left font-medium">Invoice #</th>
+                    <th className="px-4 py-1 text-left font-medium">Date</th>
+                    <th className="px-4 py-1 text-left font-medium">Well</th>
+                    <th className="px-4 py-1 text-left font-medium">Drop-off</th>
+                    <th className="px-4 py-1 text-left font-medium">Driver</th>
+                    <th className="px-4 py-1 text-right font-medium">BBLs</th>
+                    <th className="px-4 py-1 text-right font-medium">Hours</th>
+                    <th className="px-4 py-1 text-right font-medium">Fuel Min</th>
+                    <th className="px-4 py-1 text-right font-medium">Base</th>
+                    <th className="px-4 py-1 text-right font-medium">FSC</th>
+                    {showDetention && <th className="px-4 py-1 text-right font-medium">Detention</th>}
+                    <th className="px-4 py-1 text-right font-medium">Total</th>
                   </tr>
                 </thead>
+              </table>
+            </td>
+          </tr>
+          <tr>
+            <td colSpan={colSpan} className="px-0 py-0">
+              <table className="w-full min-w-max table-fixed">
                 <tbody className="divide-y divide-gray-800">
                   {summary.lineItems.map(item => (
                     <tr key={item.invoiceId} className="text-sm hover:bg-gray-800">
@@ -1169,9 +1180,9 @@ function OperatorRow({
                   ))}
                 </tbody>
               </table>
-            </div>
-          </td>
-        </tr>
+            </td>
+          </tr>
+        </>
       )}
     </>
   );

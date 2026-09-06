@@ -33,7 +33,11 @@ check('operator table header is sticky',
 check('totals footer is sticky to the card bottom',
   pageSrc.includes('sticky bottom-0 z-20') && pageSrc.includes('sticky bottom-0 bg-gray-800'));
 check('ticket column labels pin under the operator header',
-  pageSrc.includes('sticky top-10 bg-gray-800') && pageSrc.includes('Invoice #'));
+  pageSrc.includes('data-billing-pin="ticket-labels"') &&
+  pageSrc.includes('sticky top-[6.5rem]') &&
+  pageSrc.includes('Invoice #'));
+check('expanded operator row pins with the header chrome',
+  pageSrc.includes('sticky top-10 z-[15] bg-gray-800'));
 check('tab labels do not wrap',
   (pageSrc.match(/whitespace-nowrap shrink-0 transition-colors/g) || []).length >= 3);
 check('tab group is items-center not stretch',
@@ -77,7 +81,6 @@ table{width:max-content;min-width:2200px;border-collapse:collapse;}
 th{position:sticky;top:0;background:#374151;padding:8px 12px;text-align:left;font-size:13px;z-index:20;}
 td{padding:8px 12px;white-space:nowrap;}
 tfoot td{position:sticky;bottom:0;background:#1f2937;z-index:20;}
-.ticket-head th{top:40px;background:#111827;z-index:10;}
 .action{background:#2563eb;color:#fff;border:0;border-radius:4px;padding:4px 8px;font-size:12px;}
 </style></head><body>
 <div class="page">
@@ -104,12 +107,11 @@ tfoot td{position:sticky;bottom:0;background:#1f2937;z-index:20;}
               <td>$587.09</td><td>$22,367.09</td><td>DOE/hr</td>
               <td><button class="action" id="generate-bill">Generate Bill</button></td>
             </tr>
+            <tr data-billing-pin="ticket-labels" style="position:sticky;top:104px;z-index:15;background:#1f2937">
+              <td colspan="9" style="padding:8px 12px">Invoice #</td>
+            </tr>
             <tr><td colspan="9" style="padding:0">
               <table>
-                <thead class="ticket-head"><tr>
-                  <th>Invoice #</th><th>Date</th><th>Well</th><th>Drop-off</th><th>Driver</th>
-                  <th>BBLs</th><th>Hours</th><th>Base</th><th>FSC</th>
-                </tr></thead>
                 <tbody>${rows}</tbody>
               </table>
             </td></tr>
@@ -214,7 +216,7 @@ try {
       scroller.scrollTop = 400;
       const sb = scroller.getBoundingClientRect();
       const op = [...document.querySelectorAll('th')].find((el) => el.textContent === 'Operator');
-      const inv = [...document.querySelectorAll('th')].find((el) => el.textContent === 'Invoice #');
+      const inv = document.querySelector('[data-billing-pin="ticket-labels"]');
       const foot = document.getElementById('totals-foot');
       const oh = op.getBoundingClientRect();
       const ih = inv.getBoundingClientRect();
@@ -232,7 +234,7 @@ try {
       pinned.opVisible && pinned.opTop >= -2 && pinned.opTop < 8,
       `opTop=${pinned.opTop}`);
     check(`${vp.name} ticket column labels stay under the operator header`,
-      pinned.invVisible && pinned.invTop >= 24 && pinned.invTop < 72,
+      pinned.invVisible && pinned.invTop >= 80 && pinned.invTop < 160,
       `invTop=${pinned.invTop}`);
     check(`${vp.name} Totals footer stays pinned at the card bottom`,
       pinned.footVisible && pinned.footBottom >= -2 && pinned.footBottom < 16,
