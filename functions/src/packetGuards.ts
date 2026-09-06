@@ -58,23 +58,77 @@ const PROCESS: GuardVerdict = { action: 'process' };
  * and an unparseable stored watermark (when an outgoing response exists) is
  * MALFORMED_WELL_WATERMARK — corrupted state must be reviewed, not trusted.
  */
+export function parsePullUtcMs(v: unknown): number {
+  if (typeof v !== 'string' || !v.trim()) return NaN;
+  const ms = new Date(v).getTime();
+  return Number.isFinite(ms) ? ms : NaN;
+}
+
+export type PullHighWater = {
+  dateTimeUTC: string;
+  packetId: string;
+  ms: number;
+};
+
+/** Max of any pull timestamps (outgoing, wellStatus, processed, high-water). */
+export function maxPullWatermark(
+  sources: Array<{ utc: unknown; packetId?: string | null }>,
+): PullHighWater | null {
+  let best: PullHighWater | null = null;
+  for (const s of sources) {
+    const ms = parsePullUtcMs(s.utc);
+    if (isNaN(ms)) continue;
+    if (!best || ms > best.ms) {
+      best = { dateTimeUTC: String(s.utc), packetId: String(s.packetId || ''), ms };
+    }
+  }
+  return best;
+}
+
 /** Later of two pull timestamps; used so wellStatus cannot be older than outgoing. */
 export function laterPullWatermark(
   outgoingUTC: unknown,
   wellStatusUTC: unknown,
 ): { utc: string | null; ms: number | null } {
-  const parse = (v: unknown): number =>
-    typeof v === 'string' ? new Date(v).getTime() : NaN;
-  const a = parse(outgoingUTC);
-  const b = parse(wellStatusUTC);
-  if (!isNaN(a) && !isNaN(b)) {
-    return a >= b
-      ? { utc: String(outgoingUTC), ms: a }
-      : { utc: String(wellStatusUTC), ms: b };
+  const best = maxPullWatermark([
+    { utc: outgoingUTC },
+    { utc: wellStatusUTC },
+  ]);
+  return best ? { utc: best.dateTimeUTC, ms: best.ms } : { utc: null, ms: null };
+}
+
+/**
+ * Compare-and-set for the per-well high-water mark.
+ * `current` is the transaction's existing value; `seed` is the max of
+ * outgoing / wellStatus / newest processed (hydrated outside the txn).
+ * Abort leaves current unchanged so a concurrent older pull cannot win.
+ */
+export function nextHighWaterFromTxn(input: {
+  current: { dateTimeUTC?: unknown; packetId?: unknown } | null | undefined;
+  seed: PullHighWater | null;
+  incomingDateTimeUTC: string;
+  incomingPacketId: string;
+}): { action: 'commit'; next: PullHighWater } | { action: 'abort'; compared: PullHighWater } {
+  const incomingMs = parsePullUtcMs(input.incomingDateTimeUTC);
+  const incoming: PullHighWater = {
+    dateTimeUTC: input.incomingDateTimeUTC,
+    packetId: input.incomingPacketId,
+    ms: incomingMs,
+  };
+  const currentHw = input.current
+    ? maxPullWatermark([{ utc: input.current.dateTimeUTC, packetId: String(input.current.packetId || '') }])
+    : null;
+  const baseline = maxPullWatermark([
+    ...(currentHw ? [{ utc: currentHw.dateTimeUTC, packetId: currentHw.packetId }] : []),
+    ...(input.seed ? [{ utc: input.seed.dateTimeUTC, packetId: input.seed.packetId }] : []),
+  ]);
+  if (isNaN(incomingMs)) {
+    return { action: 'abort', compared: baseline || incoming };
   }
-  if (!isNaN(a)) return { utc: String(outgoingUTC), ms: a };
-  if (!isNaN(b)) return { utc: String(wellStatusUTC), ms: b };
-  return { utc: null, ms: null };
+  if (baseline && incomingMs <= baseline.ms) {
+    return { action: 'abort', compared: baseline };
+  }
+  return { action: 'commit', next: incoming };
 }
 
 export function evaluateIncomingPull(args: {

@@ -6,6 +6,8 @@ import {
   buildQuarantineUpdate,
   evaluateIncomingPull,
   laterPullWatermark,
+  maxPullWatermark,
+  nextHighWaterFromTxn,
   orphanEditVerdict,
   quarantineIncomingPacket,
   strandedPacketVerdict,
@@ -113,6 +115,54 @@ describe('evaluateIncomingPull — validation ladder', () => {
   test('canonical watermark prefers the later of outgoing vs wellStatus', () => {
     const wm = laterPullWatermark('2026-09-05T17:21:38.000Z', '2026-09-05T19:35:00.000Z');
     expect(wm.utc).toBe('2026-09-05T19:35:00.000Z');
+  });
+
+  test('absence of outgoing and wellStatus still honors a newer processed pull', () => {
+    const processed = '2026-09-05T19:35:00.000Z';
+    const lateOld = '2026-09-05T17:21:38.000Z';
+    const seed = maxPullWatermark([
+      { utc: undefined },
+      { utc: undefined },
+      { utc: processed, packetId: 'newer' },
+    ]);
+    expect(seed?.dateTimeUTC).toBe(processed);
+    const v = evaluateIncomingPull({
+      incomingDateTimeUTC: lateOld,
+      hasOutgoingResponse: false,
+      watermarkDateTimeUTC: undefined,
+      canonicalLastPullUTC: seed?.dateTimeUTC,
+      nowMs: ms('2026-09-06T10:00:00.000Z'),
+    });
+    expect(v.action).toBe('quarantine');
+    expect(v.reason).toBe('STALE_PULL_TIME');
+  });
+
+  test('atomic high-water: concurrent older arrival aborts after newer commit', () => {
+    const newer = nextHighWaterFromTxn({
+      current: null,
+      seed: null,
+      incomingDateTimeUTC: '2026-09-05T19:35:00.000Z',
+      incomingPacketId: 'new',
+    });
+    expect(newer.action).toBe('commit');
+    const older = nextHighWaterFromTxn({
+      current: newer.action === 'commit' ? newer.next : null,
+      seed: null,
+      incomingDateTimeUTC: '2026-09-05T17:21:38.000Z',
+      incomingPacketId: 'old',
+    });
+    expect(older.action).toBe('abort');
+    if (older.action === 'abort') expect(older.compared.packetId).toBe('new');
+  });
+
+  test('atomic high-water: seed from processed blocks older incoming when current is empty', () => {
+    const d = nextHighWaterFromTxn({
+      current: null,
+      seed: { dateTimeUTC: '2026-09-05T19:35:00.000Z', packetId: 'processed', ms: ms('2026-09-05T19:35:00.000Z') },
+      incomingDateTimeUTC: '2026-09-05T17:21:38.000Z',
+      incomingPacketId: 'old',
+    });
+    expect(d.action).toBe('abort');
   });
 
   test('6. a genuinely stale pull is quarantined as STALE_PULL_TIME', () => {

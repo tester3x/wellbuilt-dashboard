@@ -19,12 +19,13 @@ describe('processIncomingPull wiring', () => {
     expect(editStart).toBeGreaterThan(pullStart);
   });
 
-  test('guard evaluates before ANY well-state write (isDown is the first one)', () => {
+  test('guard evaluates before ANY well-state write (high-water txn then wellStatus)', () => {
     const guardIdx = pullHandler.indexOf('evaluateIncomingPull({');
-    const isDownWrite = pullHandler.indexOf('status/isDown`).set');
+    const hwTxn = pullHandler.indexOf("wells/${wellName}/pullHighWater`).transaction");
+    const statusWrite = pullHandler.indexOf("wells/${wellName}/status`).set");
     expect(guardIdx).toBeGreaterThan(-1);
-    expect(isDownWrite).toBeGreaterThan(-1);
-    expect(guardIdx).toBeLessThan(isDownWrite);
+    expect(hwTxn).toBeGreaterThan(guardIdx);
+    expect(statusWrite).toBeGreaterThan(hwTxn);
   });
 
   test('canonical wellStatus lastPull is read before the stale guard', () => {
@@ -32,7 +33,9 @@ describe('processIncomingPull wiring', () => {
     const guardIdx = pullHandler.indexOf('evaluateIncomingPull({');
     expect(statusRead).toBeGreaterThan(-1);
     expect(statusRead).toBeLessThan(guardIdx);
-    expect(pullHandler).toContain('canonicalLastPullUTC: wellStatusLastPullUTC');
+    expect(pullHandler).toContain('canonicalLastPullUTC: seed?.dateTimeUTC ?? wellStatusLastPullUTC');
+    expect(pullHandler).toContain("orderByChild('wellName')");
+    expect(pullHandler).toContain('nextHighWaterFromTxn');
   });
 
   test('AFR / wellStatus / outgoing writes sit after the quarantine return', () => {

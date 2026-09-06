@@ -13,6 +13,8 @@ import {
   editAlreadyApplied,
   editMaterialChange,
   evaluateIncomingPull,
+  maxPullWatermark,
+  nextHighWaterFromTxn,
   isStaleRevision,
   orphanEditVerdict,
   packetIdCollisionVerdict,
@@ -981,11 +983,40 @@ export const processIncomingPull = functionsV1.database
       .ref(`wells/${wellName}/status/lastPull/dateTimeUTC`)
       .once('value');
     const wellStatusLastPullUTC = wellStatusLastPullSnap.val();
+    const highWaterSnap = await db.ref(`wells/${wellName}/pullHighWater`).once('value');
+    const highWaterVal = highWaterSnap.val() || null;
+    let newestProcessedUtc: string | null = null;
+    let newestProcessedId: string | null = null;
+    try {
+      const processedForWell = await db
+        .ref('packets/processed')
+        .orderByChild('wellName')
+        .equalTo(wellName)
+        .once('value');
+      processedForWell.forEach((child) => {
+        const row = child.val() || {};
+        const utc = row.dateTimeUTC;
+        const ms = typeof utc === 'string' ? new Date(utc).getTime() : NaN;
+        const prevMs = newestProcessedUtc ? new Date(newestProcessedUtc).getTime() : NaN;
+        if (!isNaN(ms) && (isNaN(prevMs) || ms > prevMs)) {
+          newestProcessedUtc = utc;
+          newestProcessedId = String(child.key || row.packetId || '');
+        }
+      });
+    } catch (procErr) {
+      console.warn(`[PULL] processed hydrate failed for ${wellName}:`, (procErr as Error)?.message);
+    }
+    const seed = maxPullWatermark([
+      { utc: prevResponse ? prevResponse.lastPullDateTimeUTC : null, packetId: prevResponse?.lastPullPacketId },
+      { utc: wellStatusLastPullUTC },
+      { utc: highWaterVal?.dateTimeUTC, packetId: highWaterVal?.packetId },
+      { utc: newestProcessedUtc, packetId: newestProcessedId },
+    ]);
     const guardVerdict = evaluateIncomingPull({
       incomingDateTimeUTC: data.dateTimeUTC,
       hasOutgoingResponse: prevResponse !== null,
       watermarkDateTimeUTC: prevResponse ? prevResponse.lastPullDateTimeUTC : undefined,
-      canonicalLastPullUTC: wellStatusLastPullUTC,
+      canonicalLastPullUTC: seed?.dateTimeUTC ?? wellStatusLastPullUTC,
       nowMs: Date.now(),
     });
     if (guardVerdict.action === 'quarantine') {
@@ -997,6 +1028,35 @@ export const processIncomingPull = functionsV1.database
         packetId,
         packet: data,
         verdict: guardVerdict,
+        nowMs: Date.now(),
+      });
+      return null;
+    }
+
+    // Atomic per-well high-water: compare-and-materialize so concurrent
+    // old/new arrivals cannot race the older pull into current state.
+    const hwTxn = await db.ref(`wells/${wellName}/pullHighWater`).transaction((current) => {
+      const decision = nextHighWaterFromTxn({
+        current,
+        seed,
+        incomingDateTimeUTC: String(data.dateTimeUTC),
+        incomingPacketId: packetId,
+      });
+      if (decision.action === 'abort') return undefined;
+      return { dateTimeUTC: decision.next.dateTimeUTC, packetId: decision.next.packetId };
+    });
+    if (!hwTxn.committed) {
+      const compared = seed?.dateTimeUTC || wellStatusLastPullUTC || prevResponse?.lastPullDateTimeUTC || null;
+      console.log(`[QUARANTINE] ${wellName}: STALE_PULL_TIME — lost high-water race vs ${compared}`);
+      await quarantineIncomingPacket(db.ref(), {
+        packetId,
+        packet: data,
+        verdict: {
+          action: 'quarantine',
+          reason: 'STALE_PULL_TIME',
+          readableReason: `Incoming pull lost the per-well high-water compare-and-set against ${compared}`,
+          comparedWatermarkUTC: compared,
+        },
         nowMs: Date.now(),
       });
       return null;
@@ -1025,9 +1085,10 @@ export const processIncomingPull = functionsV1.database
       ? ((data as any).wellDown === true)
       : existingIsDown;
 
-    // Immediately update down/up status so the app reflects the change
-    // before the heavy AFR/bbls calculations finish
-    await db.ref(`wells/${wellName}/status/isDown`).set(nextIsDown);
+    const stillHoldsHighWater = async (): Promise<boolean> => {
+      const snap = await db.ref(`wells/${wellName}/pullHighWater/packetId`).once('value');
+      return snap.val() === packetId;
+    };
 
     // Calculate all fields
     const tankTopInches = (parseFloat(String(data.tankLevelFeet)) || 0) * 12;
@@ -1201,7 +1262,13 @@ export const processIncomingPull = functionsV1.database
       overnightBblsDay: overnightBblsDay > 0 ? overnightBblsDay.toString() : null,
     };
 
+    const holdsHighWater = await stillHoldsHighWater();
+    if (!holdsHighWater) {
+      console.log(`[PULL] ${wellName}: ${packetId} no longer holds high-water — preserving processed history, skipping current-state writes`);
+    }
+
     // Write to outgoing/ (delete old responses for this well first)
+    if (holdsHighWater) {
     const oldResponses = await db.ref('packets/outgoing')
       .orderByChild('wellName')
       .equalTo(wellName)
@@ -1216,6 +1283,7 @@ export const processIncomingPull = functionsV1.database
     // Write new response
     const responseId = `response_${timestamp.toISOString().replace(/[-:]/g, '').replace('T', '_').split('.')[0]}_${cleanName}`;
     await db.ref(`packets/outgoing/${responseId}`).set(outgoingResponse);
+    }
 
     // Write performance data for Performance screen
     // Format: performance/{wellKey}/rows/{timestamp} = { d, a, p }
@@ -1264,7 +1332,7 @@ export const processIncomingPull = functionsV1.database
 
     // Update well_config with calculated AFR so app stays in sync
     // This is the SINGLE SOURCE OF TRUTH for flow rate
-    if (afr > 0) {
+    if (holdsHighWater && afr > 0) {
       const afrMinutes = afr * 24 * 60; // Convert days to minutes
       await db.ref(`well_config/${wellName}`).update({
         avgFlowRate: daysToHMMSS(afr),
@@ -1316,9 +1384,10 @@ export const processIncomingPull = functionsV1.database
     };
 
     // Write to wells/{wellName}/status (THE source of truth)
+    if (holdsHighWater) {
     await db.ref(`wells/${wellName}/status`).set(wellStatus);
-
     console.log(`[NEW] Wrote wells/${wellName}/status`);
+    }
 
     await notifyIncomingVersionBestEffort(db.ref('packets/incoming_version'), {
       outgoingCommitted: true,
