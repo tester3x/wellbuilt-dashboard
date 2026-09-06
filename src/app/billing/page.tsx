@@ -506,63 +506,75 @@ export default function BillingPage() {
             ) : (
               <>
                 {/* Operator Summary Table */}
-                {(() => { const hasDetention = summaries.some(s => s.totalDetentionPay > 0); return (
+                {(() => {
+                  const hasDetention = summaries.some(s => s.totalDetentionPay > 0);
+                  const expanded = summaries.find(s => s.operator === expandedOp) || null;
+                  const rest = expanded ? summaries.filter(s => s.operator !== expandedOp) : summaries;
+                  const rowProps = (summary: OperatorBillingSummary) => ({
+                    summary,
+                    dieselPrice: summary.dieselPriceUsed ?? currentDiesel,
+                    isExpanded: expandedOp === summary.operator,
+                    onToggle: () => setExpandedOp(expandedOp === summary.operator ? null : summary.operator),
+                    onGenerate: () => handleGenerateBill(summary),
+                    generating: generating === summary.operator,
+                    alreadyBilled: billingRecords.some(r => r.operator === summary.operator),
+                    showDetention: hasDetention,
+                    legalNameMap,
+                  });
+                  return (
                 <div className="flex-1 min-h-0 flex flex-col bg-gray-800 rounded-lg border border-gray-700 overflow-hidden mb-4">
+                  <div data-billing-pin="chrome" className="shrink-0">
+                    <table className="w-full">
+                      <OperatorColHead showDetention={hasDetention} />
+                      {expanded && (
+                        <tbody>
+                          <OperatorSummaryRow {...rowProps(expanded)} />
+                        </tbody>
+                      )}
+                    </table>
+                    {expanded && <TicketLabelRow showDetention={hasDetention} />}
+                  </div>
                   <div
                     data-billing-scroll="receivables"
-                    className="flex-1 min-h-0 overflow-auto"
+                    className="flex-1 min-h-0 overflow-y-auto"
                   >
+                    {expanded && (
+                      <TicketLineList
+                        summary={expanded}
+                        showDetention={hasDetention}
+                        legalNameMap={legalNameMap}
+                      />
+                    )}
+                    {rest.length > 0 && (
+                      <table className="w-full">
+                        <tbody className="divide-y divide-gray-700">
+                          {rest.map(summary => (
+                            <OperatorSummaryRow key={summary.operator} {...rowProps(summary)} />
+                          ))}
+                        </tbody>
+                      </table>
+                    )}
+                  </div>
+                  <div data-billing-pin="footer" className="shrink-0 border-t border-gray-600 bg-gray-800">
                     <table className="w-full">
-                      <thead className="bg-gray-700 sticky top-0 z-20">
+                      <tbody>
                         <tr>
-                          <th className="px-4 py-2 text-left text-sm font-medium text-gray-300 sticky top-0 bg-gray-700 z-20">Operator</th>
-                          <th className="px-4 py-2 text-center text-sm font-medium text-gray-300 sticky top-0 bg-gray-700 z-20">Loads</th>
-                          <th className="px-4 py-2 text-right text-sm font-medium text-gray-300 sticky top-0 bg-gray-700 z-20">BBLs</th>
-                          <th className="px-4 py-2 text-right text-sm font-medium text-gray-300 sticky top-0 bg-gray-700 z-20">Hours</th>
-                          <th className="px-4 py-2 text-right text-sm font-medium text-gray-300 sticky top-0 bg-gray-700 z-20">Base Amount</th>
-                          <th className="px-4 py-2 text-right text-sm font-medium text-gray-300 whitespace-nowrap sticky top-0 bg-gray-700 z-20">Fuel Surcharge</th>
-                          {hasDetention && <th className="px-4 py-2 text-right text-sm font-medium text-gray-300 sticky top-0 bg-gray-700 z-20">Detention</th>}
-                          <th className="px-4 py-2 text-right text-sm font-medium text-gray-300 sticky top-0 bg-gray-700 z-20">Total</th>
-                          <th className="px-4 py-2 text-right text-sm font-medium text-gray-300 whitespace-nowrap sticky top-0 bg-gray-700 z-20">FSC Method</th>
-                          <th className="px-4 py-2 text-center text-sm font-medium text-gray-300 sticky top-0 bg-gray-700 z-20">Actions</th>
+                          <td className="px-4 py-2 text-white font-semibold">Totals</td>
+                          <td className="px-4 py-2 text-center text-white font-mono">{summaries.reduce((s, o) => s + o.loads, 0)}</td>
+                          <td className="px-4 py-2 text-right text-white font-mono">{summaries.reduce((s, o) => s + o.totalBBLs, 0).toLocaleString()}</td>
+                          <td className="px-4 py-2 text-right text-white font-mono">{summaries.reduce((s, o) => s + o.totalHours, 0).toFixed(1)}</td>
+                          <td className="px-4 py-2 text-right text-white font-mono">{formatCurrency(summaries.reduce((s, o) => s + o.subtotal, 0))}</td>
+                          <td className="px-4 py-2 text-right text-yellow-400 font-mono">{formatCurrency(summaries.reduce((s, o) => s + o.totalFuelSurcharge, 0))}</td>
+                          {hasDetention && <td className="px-4 py-2 text-right text-orange-400 font-mono">{formatCurrency(summaries.reduce((s, o) => s + o.totalDetentionPay, 0))}</td>}
+                          <td className="px-4 py-2 text-right text-green-400 font-mono font-semibold">{formatCurrency(summaries.reduce((s, o) => s + o.grandTotal, 0))}</td>
+                          <td colSpan={2} />
                         </tr>
-                      </thead>
-                      <tbody className="divide-y divide-gray-700">
-                        {summaries.map(summary => {
-                          const alreadyBilled = billingRecords.some(r => r.operator === summary.operator);
-                          return (
-                            <OperatorRow
-                              key={summary.operator}
-                              summary={summary}
-                              dieselPrice={summary.dieselPriceUsed ?? currentDiesel}
-                              isExpanded={expandedOp === summary.operator}
-                              onToggle={() => setExpandedOp(expandedOp === summary.operator ? null : summary.operator)}
-                              onGenerate={() => handleGenerateBill(summary)}
-                              generating={generating === summary.operator}
-                              alreadyBilled={alreadyBilled}
-                              showDetention={hasDetention}
-                              legalNameMap={legalNameMap}
-                            />
-                          );
-                        })}
                       </tbody>
-                      <tfoot className="bg-gray-800 border-t border-gray-600 sticky bottom-0 z-20">
-                        <tr>
-                          <td className="px-4 py-2 text-white font-semibold sticky bottom-0 bg-gray-800">Totals</td>
-                          <td className="px-4 py-2 text-center text-white font-mono sticky bottom-0 bg-gray-800">{summaries.reduce((s, o) => s + o.loads, 0)}</td>
-                          <td className="px-4 py-2 text-right text-white font-mono sticky bottom-0 bg-gray-800">{summaries.reduce((s, o) => s + o.totalBBLs, 0).toLocaleString()}</td>
-                          <td className="px-4 py-2 text-right text-white font-mono sticky bottom-0 bg-gray-800">{summaries.reduce((s, o) => s + o.totalHours, 0).toFixed(1)}</td>
-                          <td className="px-4 py-2 text-right text-white font-mono sticky bottom-0 bg-gray-800">{formatCurrency(summaries.reduce((s, o) => s + o.subtotal, 0))}</td>
-                          <td className="px-4 py-2 text-right text-yellow-400 font-mono sticky bottom-0 bg-gray-800">{formatCurrency(summaries.reduce((s, o) => s + o.totalFuelSurcharge, 0))}</td>
-                          {hasDetention && <td className="px-4 py-2 text-right text-orange-400 font-mono sticky bottom-0 bg-gray-800">{formatCurrency(summaries.reduce((s, o) => s + o.totalDetentionPay, 0))}</td>}
-                          <td className="px-4 py-2 text-right text-green-400 font-mono font-semibold sticky bottom-0 bg-gray-800">{formatCurrency(summaries.reduce((s, o) => s + o.grandTotal, 0))}</td>
-                          <td colSpan={2} className="sticky bottom-0 bg-gray-800" />
-                        </tr>
-                      </tfoot>
                     </table>
                   </div>
                 </div>
-                ); })()}
+                  );
+                })()}
 
                 {/* Generated Bills */}
                 {billingRecords.length > 0 && (
@@ -1098,7 +1110,26 @@ export default function BillingPage() {
 
 // ─── Sub-components ──────────────────────────────────────────────────────────
 
-function OperatorRow({
+function OperatorColHead({ showDetention }: { showDetention: boolean }) {
+  return (
+    <thead className="bg-gray-700">
+      <tr>
+        <th className="px-4 py-2 text-left text-sm font-medium text-gray-300">Operator</th>
+        <th className="px-4 py-2 text-center text-sm font-medium text-gray-300">Loads</th>
+        <th className="px-4 py-2 text-right text-sm font-medium text-gray-300">BBLs</th>
+        <th className="px-4 py-2 text-right text-sm font-medium text-gray-300">Hours</th>
+        <th className="px-4 py-2 text-right text-sm font-medium text-gray-300">Base Amount</th>
+        <th className="px-4 py-2 text-right text-sm font-medium text-gray-300 whitespace-nowrap">Fuel Surcharge</th>
+        {showDetention && <th className="px-4 py-2 text-right text-sm font-medium text-gray-300">Detention</th>}
+        <th className="px-4 py-2 text-right text-sm font-medium text-gray-300">Total</th>
+        <th className="px-4 py-2 text-right text-sm font-medium text-gray-300 whitespace-nowrap">FSC Method</th>
+        <th className="px-4 py-2 text-center text-sm font-medium text-gray-300">Actions</th>
+      </tr>
+    </thead>
+  );
+}
+
+function OperatorSummaryRow({
   summary,
   dieselPrice,
   isExpanded,
@@ -1107,7 +1138,6 @@ function OperatorRow({
   generating,
   alreadyBilled,
   showDetention,
-  legalNameMap = {},
 }: {
   summary: OperatorBillingSummary;
   dieselPrice: number | undefined;
@@ -1120,92 +1150,94 @@ function OperatorRow({
   legalNameMap?: Record<string, string>;
 }) {
   const rateInfo = getFuelSurchargeRate(summary.billingConfig, dieselPrice);
-  const colSpan = showDetention ? 11 : 10;
-  const pinCell = isExpanded ? ' bg-gray-800' : '';
   return (
-    <>
-      <tr
-        className={`hover:bg-gray-750 cursor-pointer${isExpanded ? ' sticky top-10 z-[15] bg-gray-800' : ''}`}
-        onClick={onToggle}
-      >
-        <td className={`px-4 py-3 text-white font-medium whitespace-nowrap${pinCell}`}>{summary.operator}</td>
-        <td className={`px-4 py-3 text-center text-white font-mono${pinCell}`}>{summary.loads}</td>
-        <td className={`px-4 py-3 text-right text-white font-mono${pinCell}`}>{summary.totalBBLs.toLocaleString()}</td>
-        <td className={`px-4 py-3 text-right text-white font-mono${pinCell}`}>{summary.totalHours.toFixed(1)}</td>
-        <td className={`px-4 py-3 text-right text-white font-mono${pinCell}`}>{formatCurrency(summary.subtotal)}</td>
-        <td className={`px-4 py-3 text-right text-yellow-400 font-mono${pinCell}`}>{formatCurrency(summary.totalFuelSurcharge)}</td>
-        {showDetention && <td className={`px-4 py-3 text-right text-orange-400 font-mono${pinCell}`}>{summary.totalDetentionPay > 0 ? formatCurrency(summary.totalDetentionPay) : '--'}</td>}
-        <td className={`px-4 py-3 text-right text-green-400 font-mono font-semibold${pinCell}`}>{formatCurrency(summary.grandTotal)}</td>
-        <td className={`px-4 py-3 text-right text-sm${pinCell}`}>
-          <span className="text-gray-400">{getFuelSurchargeLabel(summary.billingConfig)}</span>
-          {rateInfo && rateInfo.rate > 0 && (
-            <span className="block text-cyan-400 font-mono text-xs mt-0.5">
-              ${rateInfo.rate.toFixed(2)}{rateInfo.unit}
-            </span>
-          )}
-        </td>
-        <td className={`px-4 py-3 text-center${pinCell}`} onClick={(e) => e.stopPropagation()}>
-          {alreadyBilled ? (
-            <span className="px-3 py-1 bg-green-600/20 text-green-400 rounded text-xs font-medium">Billed</span>
-          ) : (
-            <button
-              onClick={onGenerate}
-              disabled={generating}
-              className="px-3 py-1 bg-blue-600 hover:bg-blue-500 text-white rounded text-xs font-medium disabled:opacity-50"
-            >
-              {generating ? 'Generating...' : 'Generate Bill'}
-            </button>
-          )}
-        </td>
-      </tr>
-      {isExpanded && (
-        <>
-          <tr data-billing-pin="ticket-labels" className="sticky top-[6.5rem] z-[15] bg-gray-800">
-            <td colSpan={colSpan} className="px-0 py-0 bg-gray-800">
-              <div className={`${TICKET_GRID} ${showDetention ? TICKET_COLS_DETENTION : TICKET_COLS} text-xs text-gray-400 font-medium py-1 border-t border-gray-700`}>
-                <span>Invoice #</span>
-                <span>Date</span>
-                <span>Well</span>
-                <span>Drop-off</span>
-                <span>Driver</span>
-                <span className="text-right">BBLs</span>
-                <span className="text-right">Hours</span>
-                <span className="text-right">Fuel Min</span>
-                <span className="text-right">Base</span>
-                <span className="text-right">FSC</span>
-                {showDetention && <span className="text-right">Detention</span>}
-                <span className="text-right">Total</span>
-              </div>
-            </td>
-          </tr>
-          <tr>
-            <td colSpan={colSpan} className="px-0 py-0">
-              <div>
-                {summary.lineItems.map(item => (
-                  <div
-                    key={item.invoiceId}
-                    className={`${TICKET_GRID} ${showDetention ? TICKET_COLS_DETENTION : TICKET_COLS} text-sm py-1.5 border-t border-gray-800 hover:bg-gray-800`}
-                  >
-                    <span className="text-blue-400 font-mono truncate">{item.invoiceNumber}</span>
-                    <span className="text-gray-300 truncate">{item.date}</span>
-                    <span className="text-gray-300 min-w-0 break-words">{item.wellName}</span>
-                    <span className="text-gray-400 min-w-0 break-words">{item.hauledTo || '--'}</span>
-                    <span className="text-gray-400 min-w-0 break-words">{legalNameMap[item.driver] || item.driver}</span>
-                    <span className="text-right text-white font-mono">{item.bbls || '--'}</span>
-                    <span className="text-right text-white font-mono">{item.hours || '--'}</span>
-                    <span className="text-right text-gray-400 font-mono">{item.fuelMinutes || '--'}</span>
-                    <span className="text-right text-white font-mono">{formatCurrency(item.baseAmount)}</span>
-                    <span className="text-right text-yellow-400 font-mono">{item.fuelSurcharge > 0 ? formatCurrency(item.fuelSurcharge) : '--'}</span>
-                    {showDetention && <span className="text-right text-orange-400 font-mono">{item.detentionPay > 0 ? formatCurrency(item.detentionPay) : '--'}</span>}
-                    <span className="text-right text-green-400 font-mono">{formatCurrency(item.total)}</span>
-                  </div>
-                ))}
-              </div>
-            </td>
-          </tr>
-        </>
-      )}
-    </>
+    <tr className="hover:bg-gray-750 cursor-pointer" onClick={onToggle}>
+      <td className="px-4 py-3 text-white font-medium whitespace-nowrap">{summary.operator}</td>
+      <td className="px-4 py-3 text-center text-white font-mono">{summary.loads}</td>
+      <td className="px-4 py-3 text-right text-white font-mono">{summary.totalBBLs.toLocaleString()}</td>
+      <td className="px-4 py-3 text-right text-white font-mono">{summary.totalHours.toFixed(1)}</td>
+      <td className="px-4 py-3 text-right text-white font-mono">{formatCurrency(summary.subtotal)}</td>
+      <td className="px-4 py-3 text-right text-yellow-400 font-mono">{formatCurrency(summary.totalFuelSurcharge)}</td>
+      {showDetention && <td className="px-4 py-3 text-right text-orange-400 font-mono">{summary.totalDetentionPay > 0 ? formatCurrency(summary.totalDetentionPay) : '--'}</td>}
+      <td className="px-4 py-3 text-right text-green-400 font-mono font-semibold">{formatCurrency(summary.grandTotal)}</td>
+      <td className="px-4 py-3 text-right text-sm">
+        <span className="text-gray-400">{getFuelSurchargeLabel(summary.billingConfig)}</span>
+        {rateInfo && rateInfo.rate > 0 && (
+          <span className="block text-cyan-400 font-mono text-xs mt-0.5">
+            ${rateInfo.rate.toFixed(2)}{rateInfo.unit}
+          </span>
+        )}
+      </td>
+      <td className="px-4 py-3 text-center" onClick={(e) => e.stopPropagation()}>
+        {alreadyBilled ? (
+          <span className="px-3 py-1 bg-green-600/20 text-green-400 rounded text-xs font-medium">Billed</span>
+        ) : (
+          <button
+            onClick={onGenerate}
+            disabled={generating}
+            className="px-3 py-1 bg-blue-600 hover:bg-blue-500 text-white rounded text-xs font-medium disabled:opacity-50"
+          >
+            {generating ? 'Generating...' : 'Generate Bill'}
+          </button>
+        )}
+      </td>
+    </tr>
+  );
+}
+
+function TicketLabelRow({ showDetention }: { showDetention: boolean }) {
+  return (
+    <div
+      data-billing-pin="ticket-labels"
+      className={`${TICKET_GRID} ${showDetention ? TICKET_COLS_DETENTION : TICKET_COLS} text-xs text-gray-400 font-medium py-1 border-t border-gray-700 bg-gray-800`}
+    >
+      <span>Invoice #</span>
+      <span>Date</span>
+      <span>Well</span>
+      <span>Drop-off</span>
+      <span>Driver</span>
+      <span className="text-right">BBLs</span>
+      <span className="text-right">Hours</span>
+      <span className="text-right">Fuel Min</span>
+      <span className="text-right">Base</span>
+      <span className="text-right">FSC</span>
+      {showDetention && <span className="text-right">Detention</span>}
+      <span className="text-right">Total</span>
+    </div>
+  );
+}
+
+function TicketLineList({
+  summary,
+  showDetention,
+  legalNameMap = {},
+}: {
+  summary: OperatorBillingSummary;
+  showDetention: boolean;
+  legalNameMap?: Record<string, string>;
+}) {
+  return (
+    <div>
+      {summary.lineItems.map(item => (
+        <div
+          key={item.invoiceId}
+          className={`${TICKET_GRID} ${showDetention ? TICKET_COLS_DETENTION : TICKET_COLS} text-sm py-1.5 border-t border-gray-800 hover:bg-gray-800`}
+        >
+          <span className="text-blue-400 font-mono truncate">{item.invoiceNumber}</span>
+          <span className="text-gray-300 truncate">{item.date}</span>
+          <span className="text-gray-300 min-w-0 break-words">{item.wellName}</span>
+          <span className="text-gray-400 min-w-0 break-words">{item.hauledTo || '--'}</span>
+          <span className="text-gray-400 min-w-0 break-words">{legalNameMap[item.driver] || item.driver}</span>
+          <span className="text-right text-white font-mono">{item.bbls || '--'}</span>
+          <span className="text-right text-white font-mono">{item.hours || '--'}</span>
+          <span className="text-right text-gray-400 font-mono">{item.fuelMinutes || '--'}</span>
+          <span className="text-right text-white font-mono">{formatCurrency(item.baseAmount)}</span>
+          <span className="text-right text-yellow-400 font-mono">{item.fuelSurcharge > 0 ? formatCurrency(item.fuelSurcharge) : '--'}</span>
+          {showDetention && <span className="text-right text-orange-400 font-mono">{item.detentionPay > 0 ? formatCurrency(item.detentionPay) : '--'}</span>}
+          <span className="text-right text-green-400 font-mono">{formatCurrency(item.total)}</span>
+        </div>
+      ))}
+    </div>
   );
 }
 

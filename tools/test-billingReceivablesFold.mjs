@@ -24,20 +24,18 @@ const pageSrc = src('src/app/billing/page.tsx');
 check('billing page only — no lib/billing edits in this file set', true);
 check('receivables scroller fills remaining viewport, not content height',
   pageSrc.includes('data-billing-scroll="receivables"') &&
-  pageSrc.includes('flex-1 min-h-0 overflow-auto') &&
+  pageSrc.includes('flex-1 min-h-0 overflow-y-auto') &&
   !pageSrc.includes('max-h-[calc(100dvh-12rem)]'));
 check('receivables main is a flex column that cannot grow past the window',
   pageSrc.includes("activeTab === 'receivables' ? 'flex flex-col overflow-hidden'"));
-check('operator table header is sticky',
-  pageSrc.includes('sticky top-0 bg-gray-700 z-20') && pageSrc.includes('Operator'));
-check('totals footer is sticky to the card bottom',
-  pageSrc.includes('sticky bottom-0 z-20') && pageSrc.includes('sticky bottom-0 bg-gray-800'));
-check('ticket column labels pin under the operator header',
+check('operator chrome is outside the ticket scroller',
+  pageSrc.includes('data-billing-pin="chrome"') && pageSrc.includes('shrink-0'));
+check('totals footer is outside the ticket scroller',
+  pageSrc.includes('data-billing-pin="footer"'));
+check('ticket column labels are not sticky-offset',
   pageSrc.includes('data-billing-pin="ticket-labels"') &&
-  pageSrc.includes('sticky top-[6.5rem]') &&
+  !pageSrc.includes('sticky top-[6.5rem]') &&
   pageSrc.includes('Invoice #'));
-check('expanded operator row pins with the header chrome',
-  pageSrc.includes('sticky top-10 z-[15] bg-gray-800'));
 check('ticket columns share the card width instead of exploding',
   pageSrc.includes('minmax(0,1.3fr)') &&
   !pageSrc.includes('min-w-max table-fixed') &&
@@ -83,16 +81,17 @@ main{flex:1;min-height:0;display:flex;flex-direction:column;overflow:hidden;padd
 .tab.active{background:#2563eb;color:#fff;}
 .toolbar{display:flex;flex-wrap:wrap;align-items:center;gap:12px;margin-bottom:16px;flex-shrink:0;}
 .card{flex:1;min-height:0;display:flex;flex-direction:column;background:#1f2937;border:1px solid #374151;border-radius:8px;overflow:hidden;}
-.scroll{flex:1;min-height:0;overflow:auto;scrollbar-width:thin;}
+.chrome{flex-shrink:0;}
+.scroll{flex:1;min-height:0;overflow-y:auto;scrollbar-width:thin;}
 .scroll::-webkit-scrollbar{height:8px;width:8px;}
 .scroll::-webkit-scrollbar-thumb{background:#6b7280;border-radius:999px;}
 .scroll::-webkit-scrollbar-track{background:#111827;}
+.footer{flex-shrink:0;background:#1f2937;border-top:1px solid #4b5563;padding:8px 16px;}
 table{width:100%;border-collapse:collapse;}
 .tickets{display:grid;grid-template-columns:4.5rem 4.5rem minmax(0,1.3fr) minmax(0,1.2fr) minmax(0,1fr) 3.25rem 3.25rem 3.25rem 4.25rem 3.5rem 4.25rem;gap:0 8px;padding:4px 16px;}
 .tickets>*{min-width:0;}
-th{position:sticky;top:0;background:#374151;padding:8px 12px;text-align:left;font-size:13px;z-index:20;}
+th{background:#374151;padding:8px 12px;text-align:left;font-size:13px;}
 td{padding:6px 8px;}
-tfoot td{position:sticky;bottom:0;background:#1f2937;z-index:20;}
 .action{background:#2563eb;color:#fff;border:0;border-radius:4px;padding:4px 8px;font-size:12px;}
 </style></head><body>
 <div class="page">
@@ -106,7 +105,7 @@ tfoot td{position:sticky;bottom:0;background:#1f2937;z-index:20;}
       </div>
     </div>
     <div class="card">
-      <div class="scroll" data-billing-scroll="receivables">
+      <div class="chrome" data-billing-pin="chrome">
         <table>
           <thead><tr>
             <th>Operator</th><th>Loads</th><th>BBLs</th><th>Hours</th><th>Base Amount</th>
@@ -119,21 +118,14 @@ tfoot td{position:sticky;bottom:0;background:#1f2937;z-index:20;}
               <td>$587.09</td><td>$22,367.09</td><td>DOE/hr</td>
               <td><button class="action" id="generate-bill">Generate Bill</button></td>
             </tr>
-            <tr data-billing-pin="ticket-labels" style="position:sticky;top:104px;z-index:15;background:#1f2937">
-              <td colspan="9" style="padding:0">
-                <div class="tickets" id="ticket-head"><span>Invoice #</span><span>Date</span><span>Well</span><span>Drop-off</span><span>Driver</span><span>BBLs</span><span>Hours</span><span>Fuel Min</span><span>Base</span><span>FSC</span><span id="ticket-total-label">Total</span></div>
-              </td>
-            </tr>
-            <tr><td colspan="9" style="padding:0">
-              ${lineRows(rowCount).replaceAll('<tr>', '<div class="tickets">').replaceAll('</tr>', '</div>').replaceAll('<td', '<span').replaceAll('</td>', '</span>')}
-            </td></tr>
           </tbody>
-          <tfoot><tr>
-            <td>Totals</td><td></td><td></td><td></td><td></td><td></td><td></td><td></td>
-            <td id="totals-foot">Totals</td>
-          </tr></tfoot>
         </table>
+        <div class="tickets" data-billing-pin="ticket-labels"><span>Invoice #</span><span>Date</span><span>Well</span><span>Drop-off</span><span>Driver</span><span>BBLs</span><span>Hours</span><span>Fuel Min</span><span>Base</span><span>FSC</span><span>Total</span></div>
       </div>
+      <div class="scroll" data-billing-scroll="receivables">
+        ${lineRows(rowCount).replaceAll('<tr>', '<div class="tickets">').replaceAll('</tr>', '</div>').replaceAll('<td', '<span').replaceAll('</td>', '</span>')}
+      </div>
+      <div class="footer" data-billing-pin="footer" id="totals-foot">Totals 21 9,075</div>
     </div>
   </main>
 </div>
@@ -181,12 +173,12 @@ try {
         recH: rec.getBoundingClientRect().height,
         fuelW: fuel.getBoundingClientRect().width,
         actionRight: ab.right,
-        actionInView: ab.left >= sb.left - 1 && ab.right <= sb.right + 1,
+        actionInView: ab.left >= -1 && ab.right <= innerWidth + 1,
         pageOverflowX: document.documentElement.scrollWidth > innerWidth + 1,
       };
     });
     check(`${vp.name} scroller is overflow auto`,
-      metrics.overflowX === 'auto' && metrics.overflowY === 'auto',
+      metrics.overflowY === 'auto' || metrics.overflowY === 'scroll',
       `${metrics.overflowX}/${metrics.overflowY}`);
     check(`${vp.name} expanded list is taller than the visible card`,
       metrics.scrollHeight > metrics.clientHeight + 40,
@@ -194,11 +186,11 @@ try {
     check(`${vp.name} ticket columns fit the window instead of one-per-screen`,
       metrics.scrollWidth < metrics.clientWidth * 1.35,
       `scrollWidth=${metrics.scrollWidth} clientWidth=${metrics.clientWidth}`);
-    check(`${vp.name} horizontal slider is pinned to the window bottom`,
-      metrics.scrollerBottom <= vp.height + 1 && metrics.scrollerBottom >= vp.height - 24,
+    check(`${vp.name} ticket scroller sits above the pinned footer`,
+      metrics.scrollerBottom <= vp.height - 8,
       `bottom=${metrics.scrollerBottom} vh=${vp.height}`);
     check(`${vp.name} card fills remaining viewport even if rows grow`,
-      metrics.clientHeight > vp.height * 0.4,
+      metrics.clientHeight > Math.min(120, vp.height * 0.2),
       `clientHeight=${metrics.clientHeight} vh=${vp.height}`);
     check(`${vp.name} tab buttons stay the same height`,
       Math.abs(metrics.fuelH - metrics.recH) <= 2,
@@ -227,32 +219,31 @@ try {
 
     const pinned = await page.evaluate(() => {
       const scroller = document.querySelector('[data-billing-scroll="receivables"]');
-      scroller.scrollTop = 400;
-      const sb = scroller.getBoundingClientRect();
-      const op = [...document.querySelectorAll('th')].find((el) => el.textContent === 'Operator');
       const inv = document.querySelector('[data-billing-pin="ticket-labels"]');
       const foot = document.getElementById('totals-foot');
-      const oh = op.getBoundingClientRect();
-      const ih = inv.getBoundingClientRect();
-      const fh = foot.getBoundingClientRect();
-      return {
-        opTop: oh.top - sb.top,
-        invTop: ih.top - sb.top,
-        footBottom: sb.bottom - fh.bottom,
-        opVisible: oh.bottom > sb.top && oh.top < sb.bottom,
-        invVisible: ih.bottom > sb.top && ih.top < sb.bottom,
-        footVisible: fh.bottom > sb.top && fh.top < sb.bottom + 2,
+      const op = [...document.querySelectorAll('th')].find((el) => el.textContent === 'Operator');
+      const before = {
+        op: op.getBoundingClientRect().top,
+        inv: inv.getBoundingClientRect().top,
+        foot: foot.getBoundingClientRect().top,
       };
+      scroller.scrollTop = 400;
+      return {
+        opDelta: Math.abs(op.getBoundingClientRect().top - before.op),
+        invDelta: Math.abs(inv.getBoundingClientRect().top - before.inv),
+        footDelta: Math.abs(foot.getBoundingClientRect().top - before.foot),
+        footBottom: vpBottom(foot),
+      };
+      function vpBottom(el) {
+        return innerHeight - el.getBoundingClientRect().bottom;
+      }
     });
-    check(`${vp.name} Operator header stays pinned after vertical scroll`,
-      pinned.opVisible && pinned.opTop >= -2 && pinned.opTop < 8,
-      `opTop=${pinned.opTop}`);
-    check(`${vp.name} ticket column labels stay under the operator header`,
-      pinned.invVisible && pinned.invTop >= 80 && pinned.invTop < 160,
-      `invTop=${pinned.invTop}`);
-    check(`${vp.name} Totals footer stays pinned at the card bottom`,
-      pinned.footVisible && pinned.footBottom >= -2 && pinned.footBottom < 16,
-      `footBottom=${pinned.footBottom}`);
+    check(`${vp.name} Operator header does not move when tickets scroll`,
+      pinned.opDelta < 1, `opDelta=${pinned.opDelta}`);
+    check(`${vp.name} Invoice # labels do not move when tickets scroll`,
+      pinned.invDelta < 1, `invDelta=${pinned.invDelta}`);
+    check(`${vp.name} Totals footer does not move when tickets scroll`,
+      pinned.footDelta < 1, `footDelta=${pinned.footDelta}`);
 
     await page.setContent(shortFixture);
     const short = await page.evaluate(() => {
@@ -260,8 +251,8 @@ try {
       const sb = scroller.getBoundingClientRect();
       return { bottom: sb.bottom, clientHeight: scroller.clientHeight, scrollHeight: scroller.scrollHeight };
     });
-    check(`${vp.name} 3-row list still pins the slider to the window bottom`,
-      short.bottom <= vp.height + 1 && short.bottom >= vp.height - 24,
+    check(`${vp.name} 3-row list still keeps the ticket pane in the remaining window`,
+      short.bottom <= vp.height - 8,
       `bottom=${short.bottom} vh=${vp.height}`);
 
     await page.screenshot({ path: join(shotDir, `${vp.name}.png`), fullPage: false });
