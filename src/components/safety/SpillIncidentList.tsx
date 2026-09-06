@@ -3,6 +3,7 @@
 import Link from 'next/link';
 import type { SpillListFilter, SpillListRow, SpillLoadState } from '@/lib/spill/spillIncidentProjection';
 import { emptyListCopy, filterSpillRows, notifyRollupLabel } from '@/lib/spill/spillIncidentProjection';
+import { buildSpillDetailHref } from '@/lib/spill/spillDetailRoute';
 
 const FILTERS: { id: SpillListFilter; label: string }[] = [
   { id: 'open', label: 'Open' },
@@ -111,7 +112,7 @@ export function SpillIncidentList(props: {
               {visible.map((row) => (
                 <tr key={`${row.companyId}-${row.incidentId}`} className="border-t border-gray-800 hover:bg-gray-800/60">
                   <td className="px-3 py-2">
-                    <Link href={`/safety/spills/${encodeURIComponent(row.incidentId)}?companyId=${encodeURIComponent(row.companyId)}`} className="text-blue-400 hover:underline">
+                    <Link href={buildSpillDetailHref(row.incidentId, row.companyId)} className="text-blue-400 hover:underline">
                       {fmt(row.occurredAtIso)}
                     </Link>
                     {row.malformed && <div className="text-amber-400 text-xs">malformed</div>}

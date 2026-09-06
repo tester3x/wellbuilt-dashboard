@@ -1,0 +1,21 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8"/>
+  <title>Spill incident</title>
+  <script>
+    (function () {
+      var path = location.pathname.replace(/\/+$/, '');
+      var parts = path.split('/');
+      var id = parts[3] || '';
+      var q = new URLSearchParams(location.search);
+      if (id && id !== 'detail' && !q.get('incidentId')) {
+        try { q.set('incidentId', decodeURIComponent(id)); }
+        catch (e) { q.set('incidentId', id); }
+      }
+      location.replace('/safety/spills/detail/' + (q.toString() ? '?' + q.toString() : ''));
+    })();
+  </script>
+</head>
+<body>Redirecting…</body>
+</html>

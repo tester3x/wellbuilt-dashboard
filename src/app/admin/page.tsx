@@ -1510,6 +1510,9 @@ export default function AdminPage() {
                           type="button"
                           onClick={handleAddWell}
                           disabled={isAddingWell}
+                          data-add-well-click="decideAddWellClick"
+                          data-add-well-adapter="staffCreateWellConfig"
+                          data-add-well-callable="staffWriteWellConfig"
                           className={`w-full px-4 py-3 text-white rounded min-h-12 ${isDuplicate ? 'bg-red-800 hover:bg-red-700' : canSubmit ? 'bg-green-600 hover:bg-green-700' : 'bg-gray-600 hover:bg-gray-500'}`}
                         >
                           {label}

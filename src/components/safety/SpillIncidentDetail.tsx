@@ -7,6 +7,7 @@ import {
 } from '@/lib/spill/spillActions';
 import type { SpillDetailView, SpillLoadState } from '@/lib/spill/spillIncidentProjection';
 import { notifyRollupLabel } from '@/lib/spill/spillIncidentProjection';
+import { SPILL_DETAIL_NOT_FOUND_COPY } from '@/lib/spill/spillDetailRoute';
 
 function fmt(iso: string | null): string {
   if (!iso) return '—';
@@ -42,7 +43,7 @@ export function SpillIncidentDetail(props: {
     return <div className="text-red-400 text-center py-16">Access denied for this incident.</div>;
   }
   if (props.state.kind === 'empty') {
-    return <div className="text-gray-400 text-center py-16">Incident not found.</div>;
+    return <div className="text-gray-400 text-center py-16">{SPILL_DETAIL_NOT_FOUND_COPY}</div>;
   }
   if (props.state.kind === 'missing_index' || props.state.kind === 'retryable' || props.state.kind === 'error') {
     const msg = props.state.kind === 'missing_index'
@@ -58,7 +59,7 @@ export function SpillIncidentDetail(props: {
     );
   }
   const d = props.detail;
-  if (!d) return <div className="text-gray-400 text-center py-16">Incident not found.</div>;
+  if (!d) return <div className="text-gray-400 text-center py-16">{SPILL_DETAIL_NOT_FOUND_COPY}</div>;
 
   return (
     <div className="space-y-6 text-sm">

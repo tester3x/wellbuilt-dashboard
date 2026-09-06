@@ -40,6 +40,10 @@
     ],
     "rewrites": [
       {
+        "source": "/safety/spills/**",
+        "destination": "/spill-legacy-redirect.html"
+      },
+      {
         "source": "**",
         "destination": "/index.html"
       }
