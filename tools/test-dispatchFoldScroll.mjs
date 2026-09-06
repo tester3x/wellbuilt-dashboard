@@ -37,6 +37,15 @@ check('dispatch dropped locked 50% overflow-hidden panes',
 check('globals define dispatch-scroll-main', globals.includes('.dispatch-scroll-main') && globals.includes('overflow-y: auto'));
 check('globals do not nest another 100dvh under header for dispatch',
   !/dispatch-scroll-main[\s\S]{0,200}100dvh/.test(globals));
+check('stacked layouts put jobs pane first',
+  globals.includes('.dispatch-pane-jobs') && globals.includes('order: -1'));
+check('desktop split restores jobs pane order',
+  /@media \(min-width: 1280px\) and \(min-height: 900px\)[\s\S]*\.dispatch-pane-jobs[\s\S]*order: 0/.test(globals));
+check('stacked well queue is collapsed unless expanded',
+  globals.includes('.dispatch-queue:not(.is-expanded) .dispatch-queue-body') &&
+  dispatchPage.includes('wellQueueExpanded') &&
+  dispatchPage.includes('dispatch-queue-toggle') &&
+  dispatchPage.includes('aria-controls="dispatch-queue-body"'));
 
 function load(file, dependencies) {
   const code = ts.transpileModule(readFileSync(file, 'utf8'), {
@@ -104,17 +113,20 @@ ${builtCss}
   <main data-dashboard-scroll="dispatch" data-dispatch-scroll="primary" class="dispatch-scroll-main px-4 py-4">
     <div class="dispatch-workspace">
       <div class="dispatch-pane">
-        <div class="dispatch-builder" style="min-height:720px;background:#1f2937;color:#fff;padding:12px">
+        <div class="dispatch-builder" id="dispatch-builder" style="min-height:720px;background:#1f2937;color:#fff;padding:12px">
           <div>PW / SW form</div>
           <button id="dispatch-form-bottom" type="button">Create Pull</button>
         </div>
-        <div class="dispatch-queue" style="background:#1f2937;color:#fff;padding:12px">
-          <div style="height:640px">queue rows</div>
-          <div id="dispatch-queue-bottom">final queue row</div>
+        <div class="dispatch-queue" style="background:#1f2937;color:#fff">
+          <div style="padding:12px">Well Queue <button type="button" class="dispatch-queue-toggle">Show list</button></div>
+          <div class="dispatch-queue-body" style="padding:12px">
+            <div style="height:640px">queue rows</div>
+            <div id="dispatch-queue-bottom">final queue row</div>
+          </div>
         </div>
       </div>
-      <div class="dispatch-pane">
-        <div class="dispatch-jobs" style="background:#1f2937;color:#fff;padding:12px">
+      <div class="dispatch-pane dispatch-pane-jobs">
+        <div class="dispatch-jobs" id="dispatch-jobs" style="background:#1f2937;color:#fff;padding:12px">
           <div style="height:520px">jobs</div>
           <div id="dispatch-job-bottom">final job row</div>
         </div>
@@ -158,6 +170,40 @@ try {
     check(`${vp.name} starts at scrollTop 0`, start.scrollTop === 0);
     const pad = await page.evaluate(() => parseFloat(getComputedStyle(document.querySelector('[data-dispatch-scroll="primary"]')).paddingBottom) || 0);
     check(`${vp.name} scroller has bottom safe-area padding`, pad >= 16, `paddingBottom=${pad}`);
+
+    const stacked = vp.width < 1280 || vp.height < 900;
+    const layout = await page.evaluate(() => {
+      const jobs = document.getElementById('dispatch-jobs').getBoundingClientRect();
+      const builder = document.getElementById('dispatch-builder').getBoundingClientRect();
+      const body = getComputedStyle(document.querySelector('.dispatch-queue-body'));
+      const toggle = getComputedStyle(document.querySelector('.dispatch-queue-toggle'));
+      const header = document.querySelector('header');
+      const hb = header ? header.getBoundingClientRect().bottom : 0;
+      return {
+        jobsTop: jobs.top,
+        jobsLeft: jobs.left,
+        builderTop: builder.top,
+        builderLeft: builder.left,
+        bodyDisplay: body.display,
+        toggleDisplay: toggle.display,
+        headerBottom: hb,
+      };
+    });
+    if (stacked) {
+      check(`${vp.name} jobs sit above the builder`, layout.jobsTop < layout.builderTop - 1,
+        `jobsTop=${layout.jobsTop} builderTop=${layout.builderTop}`);
+      check(`${vp.name} jobs card is on screen at top`,
+        layout.jobsTop >= layout.headerBottom - 1 && layout.jobsTop < vp.height,
+        `jobsTop=${layout.jobsTop} headerBottom=${layout.headerBottom}`);
+      check(`${vp.name} well list starts collapsed`, layout.bodyDisplay === 'none', layout.bodyDisplay);
+      check(`${vp.name} well list toggle is visible`, layout.toggleDisplay !== 'none', layout.toggleDisplay);
+      await page.evaluate(() => document.querySelector('.dispatch-queue').classList.add('is-expanded'));
+    } else {
+      check(`${vp.name} jobs sit to the right of the builder`, layout.jobsLeft > layout.builderLeft + 40,
+        `jobsLeft=${layout.jobsLeft} builderLeft=${layout.builderLeft}`);
+      check(`${vp.name} well list is expanded`, layout.bodyDisplay === 'block', layout.bodyDisplay);
+      check(`${vp.name} well list toggle is hidden`, layout.toggleDisplay === 'none', layout.toggleDisplay);
+    }
 
     await page.evaluate(() => {
       const main = document.querySelector('[data-dispatch-scroll="primary"]');

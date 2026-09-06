@@ -80,6 +80,29 @@ body {
   min-width: 0;
 }
 
+/* Fold / narrow / short: jobs (activity) first so the well list is not a
+   touch trap on the way to a job card. Desktop split restores left/right. */
+.dispatch-pane-jobs {
+  order: -1;
+}
+
+.dispatch-queue-toggle {
+  display: inline-flex;
+  align-items: center;
+  flex-shrink: 0;
+  padding: 0.15rem 0.5rem;
+  border-radius: 0.25rem;
+  font-size: 0.75rem;
+  line-height: 1rem;
+  color: #d1d5db;
+  background: #111827;
+  border: 1px solid #374151;
+}
+
+.dispatch-queue:not(.is-expanded) .dispatch-queue-body {
+  display: none;
+}
+
 @media (min-width: 1280px) and (min-height: 900px) {
   .dispatch-workspace {
     flex-direction: row;
@@ -88,5 +111,15 @@ body {
   .dispatch-pane {
     width: 50%;
     flex: 1 1 0%;
+  }
+  .dispatch-pane-jobs {
+    order: 0;
+  }
+  .dispatch-queue-toggle {
+    display: none;
+  }
+  .dispatch-queue .dispatch-queue-body,
+  .dispatch-queue:not(.is-expanded) .dispatch-queue-body {
+    display: block;
   }
 }

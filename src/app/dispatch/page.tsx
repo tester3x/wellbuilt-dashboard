@@ -359,6 +359,7 @@ function DispatchPageInner() {
   const [search, setSearch] = useState('');
   const [routeFilter, setRouteFilter] = useState<string>('all');
   const [priorityFilter, setPriorityFilter] = useState<PriorityLevel | 'all'>('all');
+  const [wellQueueExpanded, setWellQueueExpanded] = useState(false);
   const [message, setMessage] = useState('');
 
   // Assign modal state (single-well PW)
@@ -2192,7 +2193,8 @@ function DispatchPageInner() {
         </div>
 
         {/* ═══════════════════════════════════════════════════════════════════════
-            MAIN WORKSPACE — 50/50. Left: PW+SW top, Well Queue below. Right: Active Jobs full height.
+            MAIN WORKSPACE — Fold/stacked: jobs, builder, collapsible wells.
+            Tall wide desktop: left builder+queue, right jobs.
             ═══════════════════════════════════════════════════════════════════════ */}
         <div className="dispatch-workspace">
 
@@ -2887,22 +2889,18 @@ function DispatchPageInner() {
             </div>{/* end Tabbed Builder panel */}
 
             {/* ═══════ Well Queue ═══════ */}
-            <div className="dispatch-queue bg-gray-800 rounded-lg border border-gray-700 flex flex-col">
-              {/* Panel header with filters */}
+            <div className={`dispatch-queue bg-gray-800 rounded-lg border border-gray-700 flex flex-col${wellQueueExpanded ? ' is-expanded' : ''}`}>
               <div className="flex items-center gap-3 px-4 py-2.5 border-b border-gray-700 flex-shrink-0">
                 <h3 className="text-sm font-semibold text-white flex-shrink-0">Well Queue</h3>
-                <input
-                  type="text"
-                  placeholder="Search wells..."
-                  value={search}
-                  onChange={(e) => setSearch(e.target.value)}
-                  className="px-2.5 py-1 bg-gray-900 border border-gray-700 rounded text-white text-xs placeholder-gray-500 focus:outline-none focus:border-blue-500 w-40"
-                />
-                <select value={routeFilter} onChange={(e) => setRouteFilter(e.target.value)}
-                  className="px-2 py-1 bg-gray-900 border border-gray-700 rounded text-white text-xs focus:outline-none focus:border-blue-500">
-                  <option value="all">All Routes</option>
-                  {routes.map(r => <option key={r} value={r}>{r}</option>)}
-                </select>
+                <button
+                  type="button"
+                  className="dispatch-queue-toggle"
+                  aria-expanded={wellQueueExpanded}
+                  aria-controls="dispatch-queue-body"
+                  onClick={() => setWellQueueExpanded((open) => !open)}
+                >
+                  {wellQueueExpanded ? 'Hide list' : 'Show list'}
+                </button>
                 <span className="flex-1" />
                 <span className="text-gray-500 text-xs">{pwQueue.length} wells</span>
               </div>
@@ -2919,6 +2917,21 @@ function DispatchPageInner() {
                 </div>
               )}
 
+              <div id="dispatch-queue-body" className="dispatch-queue-body">
+              <div className="flex items-center gap-3 px-4 py-2 border-b border-gray-700 flex-shrink-0">
+                <input
+                  type="text"
+                  placeholder="Search wells..."
+                  value={search}
+                  onChange={(e) => setSearch(e.target.value)}
+                  className="px-2.5 py-1 bg-gray-900 border border-gray-700 rounded text-white text-xs placeholder-gray-500 focus:outline-none focus:border-blue-500 w-40"
+                />
+                <select value={routeFilter} onChange={(e) => setRouteFilter(e.target.value)}
+                  className="px-2 py-1 bg-gray-900 border border-gray-700 rounded text-white text-xs focus:outline-none focus:border-blue-500">
+                  <option value="all">All Routes</option>
+                  {routes.map(r => <option key={r} value={r}>{r}</option>)}
+                </select>
+              </div>
               {/* Scrollable well table */}
               <div className="overflow-x-auto">
                 {dataLoading ? (
@@ -2998,12 +3011,13 @@ function DispatchPageInner() {
                   </table>
                 )}
               </div>
+              </div>
             </div>
 
           </div>{/* end left half */}
 
           {/* ═══════ RIGHT HALF (50%): Active Jobs / Projects ═══════ */}
-          <div className="dispatch-pane">
+          <div className="dispatch-pane dispatch-pane-jobs">
             <div className="dispatch-jobs bg-gray-800 rounded-lg border border-gray-700 flex flex-col">
               {/* Panel header with tabs */}
               <div className="flex items-center justify-between px-4 py-2.5 border-b border-gray-700 flex-shrink-0">
