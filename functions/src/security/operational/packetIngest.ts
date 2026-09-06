@@ -4,9 +4,14 @@
  */
 import * as httpsV2 from 'firebase-functions/v2/https';
 import * as admin from 'firebase-admin';
-import { requireSecureDriver, assertSameCompany } from '../requireDriverAuth';
+import { requireSecureDriver } from '../requireDriverAuth';
 import { writeSecurityAudit } from '../audit';
 import { checkRateLimit, hashIp } from '../rateLimit';
+import {
+  requireVerifiedDriverIdentity,
+  rejectSpoofedResourceIdentity,
+  stampDriverOwnedResource,
+} from './driverOwnedWrite';
 
 const MAX_PACKET_BYTES = 200_000;
 
@@ -26,6 +31,17 @@ export const ingestDriverPacket = httpsV2.onCall(
       packet?: Record<string, unknown>;
       driverHash?: string; // transitional
     };
+    const driverRaw = await requireSecureDriver(request, {
+      allowLegacyHash: true,
+      legacyDriverHash: data.driverHash,
+    });
+    const identity = requireVerifiedDriverIdentity(driverRaw);
+    if (!identity.ok) {
+      throw new httpsV2.HttpsError(
+        identity.error === 'unauthenticated' ? 'unauthenticated' : 'permission-denied',
+        identity.error,
+      );
+    }
     if (!data.packet || typeof data.packet !== 'object') {
       throw new httpsV2.HttpsError('invalid-argument', 'packet required');
     }
@@ -33,11 +49,11 @@ export const ingestDriverPacket = httpsV2.onCall(
     if (raw.length > MAX_PACKET_BYTES) {
       throw new httpsV2.HttpsError('invalid-argument', 'packet too large');
     }
-
-    const driver = await requireSecureDriver(request, {
-      allowLegacyHash: true,
-      legacyDriverHash: data.driverHash,
-    });
+    const spoof = rejectSpoofedResourceIdentity(identity.driver, data.packet);
+    if (!spoof.ok) {
+      throw new httpsV2.HttpsError('permission-denied', spoof.error);
+    }
+    const driver = identity.driver;
 
     const ip =
       (request.rawRequest?.headers?.['x-forwarded-for'] as string)?.split(',')[0]?.trim() ||
@@ -52,21 +68,9 @@ export const ingestDriverPacket = httpsV2.onCall(
       throw new httpsV2.HttpsError('resource-exhausted', 'Packet rate limit');
     }
 
-    const packet = { ...data.packet };
-    // Server stamps — client cannot spoof identity fields
-    packet.driverId = driver.driverId;
-    if (driver.displayName) packet.driverName = driver.displayName;
-    if (driver.companyId) {
-      packet.companyId = driver.companyId;
-      assertSameCompany(driver.companyId, packet.companyId as string);
-    }
+    const packet = stampDriverOwnedResource(driver, { ...data.packet });
     packet.ingestedAt = Date.now();
-    packet.ingestedBy = driver.uid;
-    packet.authSource = driver.authSource;
-    // Strip privilege fields if client sent them
-    delete (packet as any).isAdmin;
-    delete (packet as any).roles;
-    delete (packet as any).tier;
+    delete (packet as { tier?: unknown }).tier;
 
     const key = packetKey(packet, driver.driverId);
     const ref = admin.database().ref(`packets/incoming/${key}`);

@@ -8,6 +8,10 @@ import * as admin from 'firebase-admin';
 import { FieldValue } from 'firebase-admin/firestore';
 import { requireSecureDriver, assertSameCompany } from '../requireDriverAuth';
 import { writeSecurityAudit } from '../audit';
+import {
+  requireVerifiedDriverIdentity,
+  rejectSpoofedResourceIdentity,
+} from './driverOwnedWrite';
 
 const MAX_JSON = 400_000;
 
@@ -37,25 +41,34 @@ export const upsertDriverInvoice = httpsV2.onCall(
       driverHash?: string;
       idempotencyKey?: string;
     };
+    const driverRaw = await requireSecureDriver(request, {
+      allowLegacyHash: true,
+      legacyDriverHash: data.driverHash,
+    });
+    const identity = requireVerifiedDriverIdentity(driverRaw);
+    if (!identity.ok) {
+      throw new httpsV2.HttpsError(
+        identity.error === 'unauthenticated' ? 'unauthenticated' : 'permission-denied',
+        identity.error,
+      );
+    }
     if (!data.invoice || typeof data.invoice !== 'object') {
       throw new httpsV2.HttpsError('invalid-argument', 'invoice required');
     }
     if (JSON.stringify(data.invoice).length > MAX_JSON) {
       throw new httpsV2.HttpsError('invalid-argument', 'invoice too large');
     }
-
-    const driver = await requireSecureDriver(request, {
-      allowLegacyHash: true,
-      legacyDriverHash: data.driverHash,
-    });
+    const spoof = rejectSpoofedResourceIdentity(identity.driver, data.invoice);
+    if (!spoof.ok) {
+      throw new httpsV2.HttpsError('permission-denied', spoof.error);
+    }
+    const driver = identity.driver;
 
     const inv = { ...data.invoice };
     stripPrivilege(inv);
     inv.driverId = driver.driverId;
-    if (driver.companyId) {
-      inv.companyId = driver.companyId;
-      assertSameCompany(driver.companyId, inv.companyId as string);
-    }
+    inv.companyId = driver.companyId;
+    assertSameCompany(driver.companyId, inv.companyId as string);
     // Keep legacy hash stamp for dual-run report joins
     if (data.driverHash) inv.driverHash = data.driverHash;
     inv.updatedAt = FieldValue.serverTimestamp();

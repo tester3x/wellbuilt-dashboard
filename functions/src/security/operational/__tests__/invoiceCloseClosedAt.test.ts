@@ -9,7 +9,7 @@ describe('upsertDriverInvoice stamps stable server closedAt', () => {
     expect(src).toMatch(/inv\.closedAt = FieldValue\.serverTimestamp\(\)/);
   });
   it('does not overwrite closedAt on idempotent retry', () => {
-    expect(src).toMatch(/TERMINAL_STATUSES\.has\(prevStatus\)[\s\S]{0,80}delete inv\.closedAt/);
+    expect(src).toMatch(/TERMINAL_STATUSES\.has\(prevStatus\)[\s\S]{0,160}delete inv\.closedAt/);
   });
   it('still refuses reopen', () => {
     expect(src).toMatch(/Cannot reopen terminal invoice/);

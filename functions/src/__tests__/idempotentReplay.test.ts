@@ -145,10 +145,12 @@ describe('wiring: idempotency precedes every guard; no re-processing paths', () 
   test('already-processed check runs BEFORE the future/stale guard ladder', () => {
     const idemIdx = pullHandler.indexOf('alreadyProcessedSnap');
     const guardIdx = pullHandler.indexOf('evaluateIncomingPull({');
-    const isDownIdx = pullHandler.indexOf('status/isDown`).set');
+    const materializeIdx = pullHandler.indexOf('applyCurrentStateIfOwner');
     expect(idemIdx).toBeGreaterThan(-1);
     expect(idemIdx).toBeLessThan(guardIdx);   // before stale/future guards
-    expect(idemIdx).toBeLessThan(isDownIdx);  // before any state write
+    expect(materializeIdx).toBeGreaterThan(guardIdx);
+    expect(idemIdx).toBeLessThan(materializeIdx);  // before namespaced current-state write
+    expect(pullHandler).not.toMatch(/status\/isDown`\)\.set/);
   });
 
   test('equivalent replay path removes incoming and returns — no enrichment, no outgoing rewrite, no quarantine', () => {

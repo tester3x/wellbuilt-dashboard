@@ -53,9 +53,12 @@ describe('WB-M callable export / contract matrix', () => {
   it('preserves ingestDriverPacket request envelope { packet, driverHash? }', () => {
     expect(ingest).toMatch(/packet\?: Record<string, unknown>/);
     expect(ingest).toMatch(/driverHash\?: string/);
-    expect(ingest).toMatch(/packet\.driverId = driver\.driverId/);
+    expect(ingest).toMatch(/stampDriverOwnedResource\(driver, \{ \.\.\.data\.packet \}\)/);
     expect(ingest).toMatch(/packets\/incoming\/\$\{key\}/);
     expect(ingest).toMatch(/duplicate: true/);
+    const stamp = read('src/security/operational/driverOwnedWrite.ts');
+    expect(stamp).toMatch(/stamped\.driverId = driver\.driverId/);
+    expect(stamp).toMatch(/stamped\.companyId = driver\.companyId/);
   });
 
   it('getDriverWellConfig uses claims + canonical authority, never drivers/approved', () => {
