@@ -376,9 +376,9 @@ export default function BillingPage() {
     <div className="h-[100dvh] max-h-[100dvh] flex flex-col overflow-hidden bg-gray-900">
       <AppHeader />
 
-      <main className="flex-1 min-h-0 overflow-y-auto max-w-[1600px] w-full mx-auto px-4 py-4">
+      <main className={`flex-1 min-h-0 max-w-[1600px] w-full mx-auto px-4 py-4 ${activeTab === 'receivables' ? 'flex flex-col overflow-hidden' : 'overflow-y-auto'}`}>
         {/* Title + Sub-tabs */}
-        <div className="flex flex-wrap items-center gap-3 mb-4">
+        <div className="flex flex-wrap items-center gap-3 mb-4 shrink-0">
           <div className="flex flex-wrap items-center gap-3 min-w-0">
             <img src="/billing-icon.png" alt="WB Billing" className="w-14 h-14 lg:w-28 lg:h-28 shrink-0" />
             <h2 className="text-xl font-semibold text-white shrink-0">Billing</h2>
@@ -454,19 +454,19 @@ export default function BillingPage() {
         </div>
 
         {error && (
-          <div className="mb-4 p-3 bg-red-900/50 text-red-200 rounded-lg">{error}</div>
+          <div className="mb-4 p-3 bg-red-900/50 text-red-200 rounded-lg shrink-0">{error}</div>
         )}
 
         {/* ─── Receivables Tab ─── */}
         {activeTab === 'receivables' && (
-          <>
+          <div className="flex-1 min-h-0 flex flex-col min-w-0">
             {/* Warn if no diesel price set but DOE-based FSC configured */}
             {!currentDiesel && summaries.some(s =>
               s.billingConfig?.fuelSurchargeMethod === 'hourly' ||
               s.billingConfig?.fuelSurchargeMethod === 'per_mile' ||
               s.billingConfig?.fuelSurchargeMethod === 'flat_doe'
             ) && (
-              <div className="mb-4 p-3 bg-yellow-900/40 border border-yellow-500/30 text-yellow-200 rounded-lg flex items-center gap-3">
+              <div className="mb-4 p-3 bg-yellow-900/40 border border-yellow-500/30 text-yellow-200 rounded-lg flex items-center gap-3 shrink-0">
                 <span className="text-yellow-400 text-lg">&#9888;</span>
                 <div>
                   <span className="font-medium">No diesel price set.</span>{' '}
@@ -483,10 +483,10 @@ export default function BillingPage() {
               <>
                 {/* Operator Summary Table */}
                 {(() => { const hasDetention = summaries.some(s => s.totalDetentionPay > 0); return (
-                <div className="bg-gray-800 rounded-lg border border-gray-700 overflow-hidden mb-8">
+                <div className="flex-1 min-h-0 flex flex-col bg-gray-800 rounded-lg border border-gray-700 overflow-hidden mb-4">
                   <div
                     data-billing-scroll="receivables"
-                    className="overflow-auto max-h-[calc(100dvh-12rem)] lg:max-h-[calc(100dvh-16rem)]"
+                    className="flex-1 min-h-0 overflow-auto"
                   >
                     <table className="w-full min-w-max">
                       <thead className="bg-gray-700 sticky top-0 z-10">
@@ -542,9 +542,9 @@ export default function BillingPage() {
 
                 {/* Generated Bills */}
                 {billingRecords.length > 0 && (
-                  <>
-                    <h3 className="text-lg font-semibold text-white mb-3">Generated Bills</h3>
-                    <div className="bg-gray-800 rounded-lg border border-gray-700 overflow-hidden">
+                  <div className="shrink-0 max-h-40 flex flex-col min-h-0">
+                    <h3 className="text-lg font-semibold text-white mb-3 shrink-0">Generated Bills</h3>
+                    <div className="bg-gray-800 rounded-lg border border-gray-700 overflow-hidden min-h-0 flex-1">
                       <div className="overflow-x-auto">
                         <table className="w-full">
                           <thead className="bg-gray-700">
@@ -576,11 +576,11 @@ export default function BillingPage() {
                         </table>
                       </div>
                     </div>
-                  </>
+                  </div>
                 )}
               </>
             )}
-          </>
+          </div>
         )}
 
         {/* ─── Fuel Prices Tab ─── */}

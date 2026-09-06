@@ -22,9 +22,12 @@ const check = (name, ok, detail = '') => {
 
 const pageSrc = src('src/app/billing/page.tsx');
 check('billing page only — no lib/billing edits in this file set', true);
-check('receivables scroller is overflow-auto with viewport max-height',
+check('receivables scroller fills remaining viewport, not content height',
   pageSrc.includes('data-billing-scroll="receivables"') &&
-  pageSrc.includes('overflow-auto max-h-[calc(100dvh-12rem)]'));
+  pageSrc.includes('flex-1 min-h-0 overflow-auto') &&
+  !pageSrc.includes('max-h-[calc(100dvh-12rem)]'));
+check('receivables main is a flex column that cannot grow past the window',
+  pageSrc.includes("activeTab === 'receivables' ? 'flex flex-col overflow-hidden'"));
 check('operator table header is sticky',
   pageSrc.includes('sticky top-0 z-10'));
 check('tab labels do not wrap',
@@ -38,7 +41,8 @@ check('invoice number still renders raw field, not synthesized',
 check('Generate Bill control still present',
   pageSrc.includes('Generate Bill'));
 
-const rows = Array.from({ length: 40 }, (_, i) => `
+function lineRows(n) {
+  return Array.from({ length: n }, (_, i) => `
   <tr>
     <td style="padding:8px 12px;white-space:nowrap">GABRIEL ${i + 1}-36-25H</td>
     <td style="padding:8px 12px">08/0${(i % 9) + 1}/2026</td>
@@ -50,18 +54,21 @@ const rows = Array.from({ length: 40 }, (_, i) => `
     <td style="padding:8px 12px;text-align:right">$25.75</td>
     <td style="padding:8px 12px;text-align:right">$361.75</td>
   </tr>`).join('');
+}
 
-const fixture = `<!doctype html><html><head><style>
+function makeFixture(rowCount) {
+  const rows = lineRows(rowCount);
+  return `<!doctype html><html><head><style>
 html,body{margin:0;background:#111827;color:#fff;font-family:sans-serif;}
 .page{height:100dvh;max-height:100dvh;display:flex;flex-direction:column;overflow:hidden;}
 header{flex-shrink:0;height:56px;background:#0f172a;}
-main{flex:1;min-height:0;overflow-y:auto;padding:16px;}
+main{flex:1;min-height:0;display:flex;flex-direction:column;overflow:hidden;padding:16px;}
 .tabs{display:flex;align-items:center;gap:4px;background:#1f2937;border-radius:8px;padding:4px;flex-shrink:0;}
 .tab{padding:6px 12px;border-radius:6px;font-size:14px;white-space:nowrap;flex-shrink:0;border:0;color:#9ca3af;background:transparent;}
 .tab.active{background:#2563eb;color:#fff;}
-.toolbar{display:flex;flex-wrap:wrap;align-items:center;gap:12px;margin-bottom:16px;}
-.card{background:#1f2937;border:1px solid #374151;border-radius:8px;overflow:hidden;}
-.scroll{overflow:auto;max-height:calc(100dvh - 12rem);}
+.toolbar{display:flex;flex-wrap:wrap;align-items:center;gap:12px;margin-bottom:16px;flex-shrink:0;}
+.card{flex:1;min-height:0;display:flex;flex-direction:column;background:#1f2937;border:1px solid #374151;border-radius:8px;overflow:hidden;}
+.scroll{flex:1;min-height:0;overflow:auto;}
 table{width:max-content;min-width:2200px;border-collapse:collapse;}
 th{position:sticky;top:0;background:#374151;padding:8px 12px;text-align:left;font-size:13px;}
 td{padding:8px 12px;white-space:nowrap;}
@@ -107,6 +114,10 @@ td{padding:8px 12px;white-space:nowrap;}
   </main>
 </div>
 </body></html>`;
+}
+
+const fixture = makeFixture(80);
+const shortFixture = makeFixture(3);
 
 const viewports = [
   { name: 'desktop-1600x900', width: 1600, height: 900 },
@@ -158,9 +169,12 @@ try {
     check(`${vp.name} table is wider than the visible card`,
       metrics.scrollWidth > metrics.clientWidth + 20,
       `scrollWidth=${metrics.scrollWidth} clientWidth=${metrics.clientWidth}`);
-    check(`${vp.name} horizontal slider is on screen`,
-      metrics.scrollerBottom <= vp.height + 1 && metrics.scrollerBottom > 40,
+    check(`${vp.name} horizontal slider is pinned to the window bottom`,
+      metrics.scrollerBottom <= vp.height + 1 && metrics.scrollerBottom >= vp.height - 24,
       `bottom=${metrics.scrollerBottom} vh=${vp.height}`);
+    check(`${vp.name} card fills remaining viewport even if rows grow`,
+      metrics.clientHeight > vp.height * 0.4,
+      `clientHeight=${metrics.clientHeight} vh=${vp.height}`);
     check(`${vp.name} tab buttons stay the same height`,
       Math.abs(metrics.fuelH - metrics.recH) <= 2,
       `fuel=${metrics.fuelH} rec=${metrics.recH}`);
@@ -184,6 +198,16 @@ try {
       afterH.endTop === afterH.startTop, `scrollTop ${afterH.startTop} -> ${afterH.endTop}`);
     check(`${vp.name} right-side Actions can be brought into view`,
       afterH.actionVisible, `actionRight=${afterH.actionRight}`);
+
+    await page.setContent(shortFixture);
+    const short = await page.evaluate(() => {
+      const scroller = document.querySelector('[data-billing-scroll="receivables"]');
+      const sb = scroller.getBoundingClientRect();
+      return { bottom: sb.bottom, clientHeight: scroller.clientHeight, scrollHeight: scroller.scrollHeight };
+    });
+    check(`${vp.name} 3-row list still pins the slider to the window bottom`,
+      short.bottom <= vp.height + 1 && short.bottom >= vp.height - 24,
+      `bottom=${short.bottom} vh=${vp.height}`);
 
     await page.screenshot({ path: join(shotDir, `${vp.name}.png`), fullPage: false });
     await page.close();
