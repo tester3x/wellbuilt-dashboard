@@ -518,7 +518,7 @@ export default function BillingPage() {
                     legalNameMap,
                   });
                   return (
-                <div className="flex-1 min-h-0 flex flex-col bg-gray-800 rounded-lg border border-gray-700 overflow-hidden mb-4">
+                <div className={`${expanded ? 'flex-1 min-h-0' : ''} flex flex-col bg-gray-800 rounded-lg border border-gray-700 overflow-hidden mb-4`}>
                   <div data-billing-pin="chrome" className="shrink-0">
                     <table className="w-full">
                       <OperatorColHead showDetention={hasDetention} />
@@ -528,11 +528,10 @@ export default function BillingPage() {
                         </tbody>
                       )}
                     </table>
-                    {expanded && <TicketLabelRow showDetention={hasDetention} />}
                   </div>
                   <div
                     data-billing-scroll="receivables"
-                    className="flex-1 min-h-[10rem] overflow-auto"
+                    className={expanded ? 'flex-1 min-h-[10rem] overflow-auto' : ''}
                   >
                     {expanded && (
                       <TicketLineList
@@ -1181,29 +1180,6 @@ function OperatorSummaryRow({
   );
 }
 
-function TicketLabelRow({ showDetention }: { showDetention: boolean }) {
-  return (
-    <table data-billing-pin="ticket-labels" className="w-full">
-      <thead>
-        <tr className="text-xs text-gray-400 border-t border-gray-700">
-          <th className="px-3 py-1 text-left font-medium">Invoice #</th>
-          <th className="px-3 py-1 text-left font-medium">Date</th>
-          <th className="px-3 py-1 text-left font-medium">Well</th>
-          <th className="px-3 py-1 text-left font-medium">Drop-off</th>
-          <th className="px-3 py-1 text-left font-medium">Driver</th>
-          <th className="px-3 py-1 text-right font-medium">BBLs</th>
-          <th className="px-3 py-1 text-right font-medium">Hours</th>
-          <th className="px-3 py-1 text-right font-medium">Fuel Min</th>
-          <th className="px-3 py-1 text-right font-medium">Base</th>
-          <th className="px-3 py-1 text-right font-medium">FSC</th>
-          {showDetention && <th className="px-3 py-1 text-right font-medium">Detention</th>}
-          <th className="px-3 py-1 text-right font-medium">Total</th>
-        </tr>
-      </thead>
-    </table>
-  );
-}
-
 function TicketLineList({
   summary,
   showDetention,
@@ -1215,6 +1191,22 @@ function TicketLineList({
 }) {
   return (
     <table className="w-full">
+      <thead data-billing-pin="ticket-labels" className="sticky top-0 z-10 bg-gray-800">
+        <tr className="text-xs text-gray-400 border-t border-gray-700">
+          <th className="px-3 py-1 text-left font-medium bg-gray-800">Invoice #</th>
+          <th className="px-3 py-1 text-left font-medium bg-gray-800">Date</th>
+          <th className="px-3 py-1 text-left font-medium bg-gray-800">Well</th>
+          <th className="px-3 py-1 text-left font-medium bg-gray-800">Drop-off</th>
+          <th className="px-3 py-1 text-left font-medium bg-gray-800">Driver</th>
+          <th className="px-3 py-1 text-right font-medium bg-gray-800">BBLs</th>
+          <th className="px-3 py-1 text-right font-medium bg-gray-800">Hours</th>
+          <th className="px-3 py-1 text-right font-medium bg-gray-800">Fuel Min</th>
+          <th className="px-3 py-1 text-right font-medium bg-gray-800">Base</th>
+          <th className="px-3 py-1 text-right font-medium bg-gray-800">FSC</th>
+          {showDetention && <th className="px-3 py-1 text-right font-medium bg-gray-800">Detention</th>}
+          <th className="px-3 py-1 text-right font-medium bg-gray-800">Total</th>
+        </tr>
+      </thead>
       <tbody className="divide-y divide-gray-800">
         {summary.lineItems.map(item => (
           <tr key={item.invoiceId} className="text-sm hover:bg-gray-800">

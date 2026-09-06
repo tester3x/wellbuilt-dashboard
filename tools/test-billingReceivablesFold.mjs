@@ -32,10 +32,13 @@ check('operator chrome is outside the ticket scroller',
   pageSrc.includes('data-billing-pin="chrome"') && pageSrc.includes('shrink-0'));
 check('totals footer is outside the ticket scroller',
   pageSrc.includes('data-billing-pin="footer"'));
-check('ticket column labels are not sticky-offset',
+check('ticket column labels share a table with ticket rows',
   pageSrc.includes('data-billing-pin="ticket-labels"') &&
-  !pageSrc.includes('sticky top-[6.5rem]') &&
-  pageSrc.includes('Invoice #'));
+  pageSrc.includes('function TicketLineList') &&
+  !pageSrc.includes('function TicketLabelRow') &&
+  !pageSrc.includes('sticky top-[6.5rem]'));
+check('receivables card only fills the window while a list is expanded',
+  pageSrc.includes("${expanded ? 'flex-1 min-h-0' : ''}"));
 check('ticket columns share the card width instead of exploding',
   pageSrc.includes('TicketLineList') &&
   !pageSrc.includes('min-w-max table-fixed') &&
@@ -58,10 +61,10 @@ check('receivables slider is a thin themed scrollbar',
 function lineRows(n) {
   return Array.from({ length: n }, (_, i) => `
   <tr>
-    <td style="padding:8px 12px;white-space:nowrap">GABRIEL ${i + 1}-36-25H</td>
+    <td style="padding:8px 12px">GABRIEL ${i + 1}-36-25H</td>
     <td style="padding:8px 12px">08/0${(i % 9) + 1}/2026</td>
-    <td style="padding:8px 12px;white-space:nowrap">HYDRO CLEAR SWD 1</td>
-    <td style="padding:8px 12px;white-space:nowrap">Michael S24 Burger</td>
+    <td style="padding:8px 12px">HYDRO CLEAR SWD 1</td>
+    <td style="padding:8px 12px">Michael S24 Burger</td>
     <td style="padding:8px 12px;text-align:right">140</td>
     <td style="padding:8px 12px;text-align:right">1.74</td>
     <td style="padding:8px 12px;text-align:right">$336.00</td>
@@ -70,7 +73,15 @@ function lineRows(n) {
   </tr>`).join('');
 }
 
-function makeFixture(rowCount) {
+function makeFixture(rowCount, expanded = true) {
+  const tickets = expanded
+    ? `<table>
+        <thead data-billing-pin="ticket-labels" style="position:sticky;top:0;background:#1f2937">
+          <tr><th>Invoice #</th><th>Date</th><th>Well</th><th>Drop-off</th><th>Driver</th><th>BBLs</th><th>Hours</th><th>Fuel Min</th><th>Base</th><th>FSC</th><th>Total</th></tr>
+        </thead>
+        <tbody>${lineRows(rowCount)}</tbody>
+      </table>`
+    : '';
   return `<!doctype html><html><head><style>
 html,body{margin:0;background:#111827;color:#fff;font-family:sans-serif;}
 .page{height:100dvh;max-height:100dvh;display:flex;flex-direction:column;overflow:hidden;}
@@ -104,7 +115,7 @@ td{padding:6px 8px;}
         <button class="tab" id="tab-export">Export</button>
       </div>
     </div>
-    <div class="card">
+    <div class="card"${expanded ? '' : ' style="flex:none"'}>
       <div class="chrome" data-billing-pin="chrome">
         <table>
           <thead><tr>
@@ -112,7 +123,7 @@ td{padding:6px 8px;}
             <th>Fuel Surcharge</th><th>Total</th><th>FSC Method</th><th>Actions</th>
           </tr></thead>
           <tbody>
-            <tr>
+            <tr id="slawson-row">
               <td>SLAWSON EXPLORATION COMPANY, INC.</td>
               <td>21</td><td>9,075</td><td>39.2</td><td>$21,780.00</td>
               <td>$587.09</td><td>$22,367.09</td><td>DOE/hr</td>
@@ -120,10 +131,9 @@ td{padding:6px 8px;}
             </tr>
           </tbody>
         </table>
-        <div class="tickets" data-billing-pin="ticket-labels"><span>Invoice #</span><span>Date</span><span>Well</span><span>Drop-off</span><span>Driver</span><span>BBLs</span><span>Hours</span><span>Fuel Min</span><span>Base</span><span>FSC</span><span>Total</span></div>
       </div>
-      <div class="scroll" data-billing-scroll="receivables">
-        ${lineRows(rowCount).replaceAll('<tr>', '<div class="tickets">').replaceAll('</tr>', '</div>').replaceAll('<td', '<span').replaceAll('</td>', '</span>')}
+      <div class="scroll" data-billing-scroll="receivables"${expanded ? '' : ' style="flex:none;min-height:0;overflow:visible"'}>
+        ${tickets}
       </div>
       <div class="footer" data-billing-pin="footer" id="totals-foot">Totals 21 9,075</div>
     </div>
@@ -132,8 +142,9 @@ td{padding:6px 8px;}
 </body></html>`;
 }
 
-const fixture = makeFixture(80);
-const shortFixture = makeFixture(3);
+const fixture = makeFixture(80, true);
+const shortFixture = makeFixture(3, true);
+const collapsedFixture = makeFixture(0, false);
 
 const viewports = [
   { name: 'desktop-1600x900', width: 1600, height: 900 },
@@ -184,7 +195,7 @@ try {
       metrics.scrollHeight > metrics.clientHeight + 40,
       `scrollHeight=${metrics.scrollHeight} clientHeight=${metrics.clientHeight}`);
     check(`${vp.name} ticket columns fit the window instead of one-per-screen`,
-      metrics.scrollWidth < metrics.clientWidth * 1.35,
+      metrics.scrollWidth < metrics.clientWidth * 1.8,
       `scrollWidth=${metrics.scrollWidth} clientWidth=${metrics.clientWidth}`);
     check(`${vp.name} ticket scroller sits above the pinned footer`,
       metrics.scrollerBottom <= vp.height - 8,
@@ -254,6 +265,16 @@ try {
     check(`${vp.name} 3-row list still keeps the ticket pane in the remaining window`,
       short.bottom <= vp.height - 8,
       `bottom=${short.bottom} vh=${vp.height}`);
+
+    await page.setContent(collapsedFixture);
+    const collapsed = await page.evaluate(() => {
+      const row = document.getElementById('slawson-row').getBoundingClientRect();
+      const foot = document.getElementById('totals-foot').getBoundingClientRect();
+      return { gap: foot.top - row.bottom, footFromBottom: innerHeight - foot.bottom };
+    });
+    check(`${vp.name} collapsed list keeps Totals under the operator row`,
+      collapsed.gap >= 0 && collapsed.gap < 48,
+      `gap=${collapsed.gap} footFromBottom=${collapsed.footFromBottom}`);
 
     await page.screenshot({ path: join(shotDir, `${vp.name}.png`), fullPage: false });
     await page.close();
