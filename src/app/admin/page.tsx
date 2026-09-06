@@ -36,7 +36,13 @@ import {
   rebuildRoutesFromConfigs,
   type AddWellSubmitStatus,
 } from '@/lib/addWellSubmit';
-import { staffCreateWellConfig } from '@/lib/staffWriteWellConfig';
+import { staffCreateWellConfig, staffUpdateWellConfig } from '@/lib/staffWriteWellConfig';
+import {
+  applyUpdateWellSuccess,
+  buildUpdateWellConfigPatch,
+  classifyUpdateWellError,
+  type EditWellSaveStatus,
+} from '@/lib/updateWellConfig';
 
 // vc51.9A7 — protected contract surfaces, lazy-loaded and visible only
 // after the verified wellbuiltAdmin claim (server stays authoritative).
@@ -144,6 +150,9 @@ export default function AdminPage() {
   const [isAddingWell, setIsAddingWell] = useState(false);
   const [addWellStatus, setAddWellStatus] = useState<AddWellSubmitStatus>({ kind: 'idle' });
   const addWellInflightRef = useRef(false);
+  const [isUpdatingWell, setIsUpdatingWell] = useState(false);
+  const [editWellSaveStatus, setEditWellSaveStatus] = useState<EditWellSaveStatus>({ kind: 'idle' });
+  const updateWellInflightRef = useRef(false);
   const addWellNdicRef = useRef<HTMLDivElement | null>(null);
   const addWellActionRef = useRef<HTMLDivElement | null>(null);
   type AdminTab = 'routes' | 'wells' | 'drivers' | 'companies' | 'gpsroutes' | 'equipment' | 'plans' | 'adminaudit';
@@ -299,6 +308,10 @@ export default function AdminPage() {
     })();
     return () => { cancelled = true; };
   }, []);
+
+  useEffect(() => {
+    setEditWellSaveStatus({ kind: 'idle' });
+  }, [selectedWell]);
 
   // Load selected well config into edit form
   useEffect(() => {
@@ -931,11 +944,57 @@ export default function AdminPage() {
         setIsRenaming(false);
       }
     } else {
-      // Merge update — preserves avgFlowRate, avgFlowRateMinutes, and other
-      // fields written by Cloud Functions that aren't in the admin edit form
-      const updateData: Record<string, any> = { ...config };
-      await update(ref(db, `well_config/${selectedWell}`), updateData);
-      showMessage(`Well "${selectedWell}" updated`);
+      if (updateWellInflightRef.current || isUpdatingWell) {
+        setEditWellSaveStatus({ kind: 'error', reason: 'busy', message: 'Save already in progress.' });
+        showMessage('Save already in progress.');
+        return;
+      }
+      updateWellInflightRef.current = true;
+      setIsUpdatingWell(true);
+      setEditWellSaveStatus({ kind: 'submitting', wellName: selectedWell });
+      try {
+        const patch = buildUpdateWellConfigPatch({
+          wellName: selectedWell,
+          route: editWellRoute,
+          bottomLevel: parseLevelToFeet(editWellBottom) || 3,
+          tanks: editWellTanks,
+          pullBbls: editWellPullBbls,
+          tankCapacity: editWellTankCapacity,
+          tankHeight: editWellTankHeight,
+          waterWeight: editWellWaterWeight,
+          h2sStatus: editWellH2s,
+        });
+        const result = await staffUpdateWellConfig({
+          wellName: selectedWell,
+          config: patch,
+        });
+        const written = { ...(configs[selectedWell] || {}), ...(result.config || {}) } as WellConfig;
+        applyWellCatalog(applyUpdateWellSuccess(configs, result.wellName, written));
+        setEditWellSaveStatus({
+          kind: 'success',
+          wellName: result.wellName,
+          idempotent: result.idempotent === true,
+        });
+        showMessage(
+          result.idempotent
+            ? `Well "${result.wellName}" already had those values`
+            : `Well "${result.wellName}" updated`,
+        );
+        try {
+          const { adminGetDashboardCatalog } = await import('@/lib/adminDashboardCatalog');
+          const catalog = await adminGetDashboardCatalog();
+          applyWellCatalog((catalog.wellConfig || {}) as Record<string, WellConfig>);
+        } catch {
+          /* local list already shows the saved well */
+        }
+      } catch (err) {
+        const classified = classifyUpdateWellError(err);
+        setEditWellSaveStatus({ kind: 'error', reason: classified.reason, message: classified.message });
+        showMessage(classified.message);
+      } finally {
+        updateWellInflightRef.current = false;
+        setIsUpdatingWell(false);
+      }
     }
   };
 
@@ -1793,20 +1852,36 @@ export default function AdminPage() {
                     </div>
                     <div className="flex gap-2 mt-2">
                       <button
+                        type="button"
                         onClick={handleUpdateWell}
-                        disabled={isRenaming}
+                        disabled={isRenaming || isUpdatingWell}
+                        data-edit-well-save="staffUpdateWellConfig"
+                        data-edit-well-callable="staffWriteWellConfig"
                         className="flex-1 px-4 py-2 bg-blue-600 hover:bg-blue-700 text-white rounded disabled:opacity-50"
                       >
-                        {isRenaming ? 'Renaming...' : 'Save Changes'}
+                        {isRenaming ? 'Renaming...' : isUpdatingWell ? 'Saving…' : 'Save Changes'}
                       </button>
                       <button
                         onClick={handleDeleteWell}
-                        disabled={isRenaming}
+                        disabled={isRenaming || isUpdatingWell}
                         className="px-4 py-2 bg-red-600 hover:bg-red-700 text-white rounded disabled:opacity-50"
                       >
                         Delete
                       </button>
                     </div>
+                    {editWellSaveStatus.kind === 'submitting' && (
+                      <div className="mt-2 text-sm text-blue-300">Saving “{editWellSaveStatus.wellName}”…</div>
+                    )}
+                    {editWellSaveStatus.kind === 'success' && (
+                      <div className="mt-2 text-sm text-green-400">
+                        {editWellSaveStatus.idempotent
+                          ? `Already exact: ${editWellSaveStatus.wellName}`
+                          : `Saved ${editWellSaveStatus.wellName}`}
+                      </div>
+                    )}
+                    {editWellSaveStatus.kind === 'error' && (
+                      <div className="mt-2 text-sm text-red-400">{editWellSaveStatus.message}</div>
+                    )}
                   </div>
                 </div>
               )}

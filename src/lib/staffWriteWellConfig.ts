@@ -5,6 +5,7 @@
 import { httpsCallable } from 'firebase/functions';
 import { getFirebaseFunctions } from './firebase';
 import type { WellConfigRecord } from './addWellSubmit';
+import type { WellConfigUpdatePatch } from './updateWellConfig';
 
 export type StaffCreateWellResult = {
   ok: true;
@@ -25,4 +26,27 @@ export async function staffCreateWellConfig(params: {
     config: params.config,
   });
   return res.data as StaffCreateWellResult;
+}
+
+export type { WellConfigUpdatePatch };
+
+export type StaffUpdateWellResult = {
+  ok: true;
+  wellName: string;
+  updated: boolean;
+  idempotent: boolean;
+  config: Record<string, unknown>;
+};
+
+export async function staffUpdateWellConfig(params: {
+  wellName: string;
+  config: WellConfigUpdatePatch;
+}): Promise<StaffUpdateWellResult> {
+  const fn = httpsCallable(getFirebaseFunctions(), 'staffWriteWellConfig');
+  const res = await fn({
+    op: 'update',
+    wellName: params.wellName,
+    config: params.config,
+  });
+  return res.data as StaffUpdateWellResult;
 }

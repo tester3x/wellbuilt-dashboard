@@ -5,6 +5,7 @@ import {
   findDuplicateApiWell,
   findWellNameKey,
   WELL_CONFIG_CREATE_ALLOWLIST,
+  WELL_CONFIG_UPDATE_ALLOWLIST,
 } from '../staffWriteWellConfig';
 
 const root = join(__dirname, '../../../../../');
@@ -115,15 +116,190 @@ describe('catalog helpers', () => {
   });
 });
 
+const tornadoExisting = {
+  route: 'Unrouted',
+  bottomLevel: 3,
+  tanks: 1,
+  allowedBottom: 3,
+  numTanks: 1,
+  pullBbls: 140,
+  tankCapacity: 400,
+  tankHeight: 20,
+  bblPerFoot: 20,
+  ndicName: 'Tornado 1-24H',
+  ndicApiNo: '25-083-22277-00-00',
+  h2sStatus: 'unknown',
+  avgFlowRate: '12.4',
+  routeRecording: true,
+  currentState: 'idle',
+};
+
+const tornadoMontanaPatch = {
+  route: 'Montana',
+  bottomLevel: 3,
+  tanks: 1,
+  allowedBottom: 3,
+  numTanks: 1,
+  pullBbls: 140,
+  tankCapacity: 400,
+  tankHeight: 20,
+  bblPerFoot: 20,
+  h2sStatus: 'unknown',
+};
+
+describe('evaluateStaffWriteWellConfig update', () => {
+  it('Unrouted → Montana merges route and preserves non-form fields', () => {
+    const d = evaluateStaffWriteWellConfig({
+      op: 'update',
+      wellName: 'Tornado 1',
+      config: tornadoMontanaPatch,
+      existingByName: tornadoExisting,
+      existingNameKey: 'Tornado 1',
+      duplicateApiWell: null,
+      ...lg,
+    });
+    expect(d.ok).toBe(true);
+    if (!d.ok || d.action !== 'update') throw new Error('expected update');
+    expect(d.wellName).toBe('Tornado 1');
+    expect(d.patch.route).toBe('Montana');
+    expect(d.payload.route).toBe('Montana');
+    expect(d.payload.ndicName).toBe('Tornado 1-24H');
+    expect(d.payload.ndicApiNo).toBe('25-083-22277-00-00');
+    expect(d.payload.avgFlowRate).toBe('12.4');
+    expect(d.payload.routeRecording).toBe(true);
+    expect(d.payload.currentState).toBe('idle');
+    expect(d.patch).not.toHaveProperty('ndicName');
+    expect(d.patch).not.toHaveProperty('avgFlowRate');
+  });
+
+  it('Montana → Unrouted blank route canonicalizes', () => {
+    const d = evaluateStaffWriteWellConfig({
+      op: 'update',
+      wellName: 'Tornado 1',
+      config: { ...tornadoMontanaPatch, route: '   ' },
+      existingByName: { ...tornadoExisting, route: 'Montana' },
+      existingNameKey: 'Tornado 1',
+      duplicateApiWell: null,
+      ...lg,
+    });
+    expect(d.ok).toBe(true);
+    if (!d.ok || d.action !== 'update') throw new Error('expected update');
+    expect(d.patch.route).toBe('Unrouted');
+  });
+
+  it('numeric configuration edit updates tanks and derived BBL/ft', () => {
+    const d = evaluateStaffWriteWellConfig({
+      op: 'update',
+      wellName: 'Tornado 1',
+      config: { ...tornadoMontanaPatch, route: 'Unrouted', tanks: 6, numTanks: 6, bblPerFoot: 120 },
+      existingByName: tornadoExisting,
+      existingNameKey: 'Tornado 1',
+      duplicateApiWell: null,
+      ...lg,
+    });
+    expect(d.ok).toBe(true);
+    if (!d.ok || d.action !== 'update') throw new Error('expected update');
+    expect(d.patch.tanks).toBe(6);
+    expect(d.patch.bblPerFoot).toBe(120);
+    expect(d.payload.ndicApiNo).toBe('25-083-22277-00-00');
+  });
+
+  it('omitted water weight leaves existing waterWeight on the merged payload', () => {
+    const d = evaluateStaffWriteWellConfig({
+      op: 'update',
+      wellName: 'Tornado 1',
+      config: tornadoMontanaPatch,
+      existingByName: { ...tornadoExisting, waterWeight: 9.7 },
+      existingNameKey: 'Tornado 1',
+      duplicateApiWell: null,
+      ...lg,
+    });
+    expect(d.ok).toBe(true);
+    if (!d.ok || d.action !== 'update') throw new Error('expected update');
+    expect(d.patch).not.toHaveProperty('waterWeight');
+    expect(d.payload.waterWeight).toBe(9.7);
+  });
+
+  it('missing target is not-found', () => {
+    const d = evaluateStaffWriteWellConfig({
+      op: 'update',
+      wellName: 'Ghost Well',
+      config: tornadoMontanaPatch,
+      existingByName: null,
+      existingNameKey: null,
+      duplicateApiWell: null,
+      ...lg,
+    });
+    expect(d).toMatchObject({ ok: false, reason: 'not_found' });
+  });
+
+  it('refuses other-company callers', () => {
+    const d = evaluateStaffWriteWellConfig({
+      op: 'update',
+      wellName: 'Tornado 1',
+      config: tornadoMontanaPatch,
+      existingByName: tornadoExisting,
+      existingNameKey: 'Tornado 1',
+      duplicateApiWell: null,
+      callerCompanyId: 'home-hauling',
+      isPlatformAdmin: false,
+    });
+    expect(d).toMatchObject({ ok: false, reason: 'pool_forbidden' });
+  });
+
+  it('rejects unknown fields including NDIC and AFR', () => {
+    const d = evaluateStaffWriteWellConfig({
+      op: 'update',
+      wellName: 'Tornado 1',
+      config: { ...tornadoMontanaPatch, ndicApiNo: '25-083-22277-00-00' },
+      existingByName: tornadoExisting,
+      existingNameKey: 'Tornado 1',
+      duplicateApiWell: null,
+      ...lg,
+    });
+    expect(d).toMatchObject({ ok: false, reason: 'unexpected_field' });
+  });
+
+  it('rejects malformed numbers', () => {
+    const d = evaluateStaffWriteWellConfig({
+      op: 'update',
+      wellName: 'Tornado 1',
+      config: { ...tornadoMontanaPatch, pullBbls: -1 },
+      existingByName: tornadoExisting,
+      existingNameKey: 'Tornado 1',
+      duplicateApiWell: null,
+      ...lg,
+    });
+    expect(d).toMatchObject({ ok: false, reason: 'invalid_pull_bbls' });
+  });
+
+  it('identical retry is already_exact', () => {
+    const d = evaluateStaffWriteWellConfig({
+      op: 'update',
+      wellName: 'Tornado 1',
+      config: { ...tornadoMontanaPatch, route: 'Unrouted' },
+      existingByName: tornadoExisting,
+      existingNameKey: 'Tornado 1',
+      duplicateApiWell: null,
+      ...lg,
+    });
+    expect(d).toMatchObject({ ok: true, action: 'already_exact', wellName: 'Tornado 1' });
+  });
+});
+
 describe('Add Well wiring pins', () => {
-  it('callable is create-only, allowlisted, and Admin-SDK writes', () => {
+  it('callable is allowlisted, requireManageDrivers, create set and update merge', () => {
     const callable = src('functions/src/security/staffWriteWellConfigCallable.ts');
     expect(callable).toContain('requireManageDrivers');
     expect(callable).toContain('evaluateStaffWriteWellConfig');
     expect(callable).toContain('well_config/${decided.wellName}');
-    expect(callable).toContain(".set(decided.payload)");
+    expect(callable).toContain('.set(decided.payload)');
+    expect(callable).toContain('.update(decided.patch)');
+    expect(callable).toContain("raw.op !== 'create' && raw.op !== 'update'");
     expect(WELL_CONFIG_CREATE_ALLOWLIST).toContain('ndicApiNo');
     expect(WELL_CONFIG_CREATE_ALLOWLIST).not.toContain('avgFlowRate');
+    expect(WELL_CONFIG_UPDATE_ALLOWLIST).not.toContain('ndicApiNo');
+    expect(WELL_CONFIG_UPDATE_ALLOWLIST).toContain('route');
   });
 
   it('Dashboard Add Well uses the production adapter, not a client RTDB set', () => {
