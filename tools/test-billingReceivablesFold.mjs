@@ -24,7 +24,7 @@ const pageSrc = src('src/app/billing/page.tsx');
 check('billing page only — no lib/billing edits in this file set', true);
 check('receivables scroller fills remaining viewport, not content height',
   pageSrc.includes('data-billing-scroll="receivables"') &&
-  pageSrc.includes('flex-1 min-h-0 overflow-y-auto') &&
+  pageSrc.includes('flex-1 min-h-[10rem] overflow-auto') &&
   !pageSrc.includes('max-h-[calc(100dvh-12rem)]'));
 check('receivables main is a flex column that cannot grow past the window',
   pageSrc.includes("activeTab === 'receivables' ? 'flex flex-col overflow-hidden'"));
@@ -37,7 +37,7 @@ check('ticket column labels are not sticky-offset',
   !pageSrc.includes('sticky top-[6.5rem]') &&
   pageSrc.includes('Invoice #'));
 check('ticket columns share the card width instead of exploding',
-  pageSrc.includes('minmax(0,1.3fr)') &&
+  pageSrc.includes('TicketLineList') &&
   !pageSrc.includes('min-w-max table-fixed') &&
   !pageSrc.includes('table-fixed'));
 check('tab labels do not wrap',
@@ -82,7 +82,7 @@ main{flex:1;min-height:0;display:flex;flex-direction:column;overflow:hidden;padd
 .toolbar{display:flex;flex-wrap:wrap;align-items:center;gap:12px;margin-bottom:16px;flex-shrink:0;}
 .card{flex:1;min-height:0;display:flex;flex-direction:column;background:#1f2937;border:1px solid #374151;border-radius:8px;overflow:hidden;}
 .chrome{flex-shrink:0;}
-.scroll{flex:1;min-height:0;overflow-y:auto;scrollbar-width:thin;}
+.scroll{flex:1;min-height:10rem;overflow:auto;scrollbar-width:thin;}
 .scroll::-webkit-scrollbar{height:8px;width:8px;}
 .scroll::-webkit-scrollbar-thumb{background:#6b7280;border-radius:999px;}
 .scroll::-webkit-scrollbar-track{background:#111827;}

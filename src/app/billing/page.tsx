@@ -69,10 +69,6 @@ const RECEIVABLES_SCROLLBAR_CSS = `
 }
 `;
 
-const TICKET_GRID = 'grid gap-x-2 px-4 items-center [&>*]:min-w-0';
-const TICKET_COLS = 'grid-cols-[4.5rem_4.5rem_minmax(0,1.3fr)_minmax(0,1.2fr)_minmax(0,1fr)_3.25rem_3.25rem_3.25rem_4.25rem_3.5rem_4.25rem]';
-const TICKET_COLS_DETENTION = 'grid-cols-[4.5rem_4.5rem_minmax(0,1.2fr)_minmax(0,1.1fr)_minmax(0,1fr)_3rem_3rem_3rem_4rem_3.25rem_3.75rem_4rem]';
-
 export default function BillingPage() {
   const { user, loading } = useAuth();
   const router = useRouter();
@@ -504,7 +500,7 @@ export default function BillingPage() {
             ) : summaries.length === 0 ? (
               <div className="text-gray-400">No closed invoices found for this period</div>
             ) : (
-              <>
+              <div className="flex-1 min-h-0 flex flex-col min-w-0">
                 {/* Operator Summary Table */}
                 {(() => {
                   const hasDetention = summaries.some(s => s.totalDetentionPay > 0);
@@ -536,7 +532,7 @@ export default function BillingPage() {
                   </div>
                   <div
                     data-billing-scroll="receivables"
-                    className="flex-1 min-h-0 overflow-y-auto"
+                    className="flex-1 min-h-[10rem] overflow-auto"
                   >
                     {expanded && (
                       <TicketLineList
@@ -614,7 +610,7 @@ export default function BillingPage() {
                     </div>
                   </div>
                 )}
-              </>
+              </div>
             )}
           </div>
         )}
@@ -1187,23 +1183,24 @@ function OperatorSummaryRow({
 
 function TicketLabelRow({ showDetention }: { showDetention: boolean }) {
   return (
-    <div
-      data-billing-pin="ticket-labels"
-      className={`${TICKET_GRID} ${showDetention ? TICKET_COLS_DETENTION : TICKET_COLS} text-xs text-gray-400 font-medium py-1 border-t border-gray-700 bg-gray-800`}
-    >
-      <span>Invoice #</span>
-      <span>Date</span>
-      <span>Well</span>
-      <span>Drop-off</span>
-      <span>Driver</span>
-      <span className="text-right">BBLs</span>
-      <span className="text-right">Hours</span>
-      <span className="text-right">Fuel Min</span>
-      <span className="text-right">Base</span>
-      <span className="text-right">FSC</span>
-      {showDetention && <span className="text-right">Detention</span>}
-      <span className="text-right">Total</span>
-    </div>
+    <table data-billing-pin="ticket-labels" className="w-full">
+      <thead>
+        <tr className="text-xs text-gray-400 border-t border-gray-700">
+          <th className="px-3 py-1 text-left font-medium">Invoice #</th>
+          <th className="px-3 py-1 text-left font-medium">Date</th>
+          <th className="px-3 py-1 text-left font-medium">Well</th>
+          <th className="px-3 py-1 text-left font-medium">Drop-off</th>
+          <th className="px-3 py-1 text-left font-medium">Driver</th>
+          <th className="px-3 py-1 text-right font-medium">BBLs</th>
+          <th className="px-3 py-1 text-right font-medium">Hours</th>
+          <th className="px-3 py-1 text-right font-medium">Fuel Min</th>
+          <th className="px-3 py-1 text-right font-medium">Base</th>
+          <th className="px-3 py-1 text-right font-medium">FSC</th>
+          {showDetention && <th className="px-3 py-1 text-right font-medium">Detention</th>}
+          <th className="px-3 py-1 text-right font-medium">Total</th>
+        </tr>
+      </thead>
+    </table>
   );
 }
 
@@ -1217,27 +1214,26 @@ function TicketLineList({
   legalNameMap?: Record<string, string>;
 }) {
   return (
-    <div>
-      {summary.lineItems.map(item => (
-        <div
-          key={item.invoiceId}
-          className={`${TICKET_GRID} ${showDetention ? TICKET_COLS_DETENTION : TICKET_COLS} text-sm py-1.5 border-t border-gray-800 hover:bg-gray-800`}
-        >
-          <span className="text-blue-400 font-mono truncate">{item.invoiceNumber}</span>
-          <span className="text-gray-300 truncate">{item.date}</span>
-          <span className="text-gray-300 min-w-0 break-words">{item.wellName}</span>
-          <span className="text-gray-400 min-w-0 break-words">{item.hauledTo || '--'}</span>
-          <span className="text-gray-400 min-w-0 break-words">{legalNameMap[item.driver] || item.driver}</span>
-          <span className="text-right text-white font-mono">{item.bbls || '--'}</span>
-          <span className="text-right text-white font-mono">{item.hours || '--'}</span>
-          <span className="text-right text-gray-400 font-mono">{item.fuelMinutes || '--'}</span>
-          <span className="text-right text-white font-mono">{formatCurrency(item.baseAmount)}</span>
-          <span className="text-right text-yellow-400 font-mono">{item.fuelSurcharge > 0 ? formatCurrency(item.fuelSurcharge) : '--'}</span>
-          {showDetention && <span className="text-right text-orange-400 font-mono">{item.detentionPay > 0 ? formatCurrency(item.detentionPay) : '--'}</span>}
-          <span className="text-right text-green-400 font-mono">{formatCurrency(item.total)}</span>
-        </div>
-      ))}
-    </div>
+    <table className="w-full">
+      <tbody className="divide-y divide-gray-800">
+        {summary.lineItems.map(item => (
+          <tr key={item.invoiceId} className="text-sm hover:bg-gray-800">
+            <td className="px-3 py-1.5 text-blue-400 font-mono">{item.invoiceNumber}</td>
+            <td className="px-3 py-1.5 text-gray-300 whitespace-nowrap">{item.date}</td>
+            <td className="px-3 py-1.5 text-gray-300">{item.wellName}</td>
+            <td className="px-3 py-1.5 text-gray-400">{item.hauledTo || '--'}</td>
+            <td className="px-3 py-1.5 text-gray-400">{legalNameMap[item.driver] || item.driver}</td>
+            <td className="px-3 py-1.5 text-right text-white font-mono">{item.bbls || '--'}</td>
+            <td className="px-3 py-1.5 text-right text-white font-mono">{item.hours || '--'}</td>
+            <td className="px-3 py-1.5 text-right text-gray-400 font-mono">{item.fuelMinutes || '--'}</td>
+            <td className="px-3 py-1.5 text-right text-white font-mono">{formatCurrency(item.baseAmount)}</td>
+            <td className="px-3 py-1.5 text-right text-yellow-400 font-mono">{item.fuelSurcharge > 0 ? formatCurrency(item.fuelSurcharge) : '--'}</td>
+            {showDetention && <td className="px-3 py-1.5 text-right text-orange-400 font-mono">{item.detentionPay > 0 ? formatCurrency(item.detentionPay) : '--'}</td>}
+            <td className="px-3 py-1.5 text-right text-green-400 font-mono">{formatCurrency(item.total)}</td>
+          </tr>
+        ))}
+      </tbody>
+    </table>
   );
 }
 
