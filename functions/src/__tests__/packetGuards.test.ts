@@ -5,6 +5,7 @@ import {
   RootRefLike,
   buildQuarantineUpdate,
   evaluateIncomingPull,
+  laterPullWatermark,
   orphanEditVerdict,
   quarantineIncomingPacket,
   strandedPacketVerdict,
@@ -81,6 +82,37 @@ describe('evaluateIncomingPull — validation ladder', () => {
     expect(v.action).toBe('quarantine');
     expect(v.reason).toBe('FUTURE_WELL_WATERMARK');
     expect(v.comparedWatermarkUTC).toBe(POISONED_WATERMARK);
+  });
+
+  test('stale pull vs newer wellStatus lastPull is quarantined even without outgoing', () => {
+    const newerStatus = '2026-09-05T19:35:00.000Z';
+    const lateOld = '2026-09-05T17:21:38.000Z';
+    const v = evaluateIncomingPull({
+      incomingDateTimeUTC: lateOld,
+      hasOutgoingResponse: false,
+      watermarkDateTimeUTC: undefined,
+      canonicalLastPullUTC: newerStatus,
+      nowMs: ms('2026-09-06T10:00:00.000Z'),
+    });
+    expect(v.action).toBe('quarantine');
+    expect(v.reason).toBe('STALE_PULL_TIME');
+    expect(v.comparedWatermarkUTC).toBe(newerStatus);
+    const update = buildQuarantineUpdate({
+      packetId: '20260905_122138_GABRIEL7-36-25TFH_6fdul3',
+      packet: { dateTimeUTC: lateOld, wellName: 'GABRIEL 7-36-25TFH' },
+      verdict: v,
+      nowMs: ms('2026-09-06T10:00:00.000Z'),
+    });
+    expect(Object.keys(update).some((k) => k.includes('outgoing'))).toBe(false);
+    expect(Object.keys(update).some((k) => k.includes('well_config'))).toBe(false);
+    expect(Object.keys(update).some((k) => k.includes('wells/'))).toBe(false);
+    expect(Object.keys(update).some((k) => k.includes('performance'))).toBe(false);
+    expect(update['packets/rejected/20260905_122138_GABRIEL7-36-25TFH_6fdul3']).toBeTruthy();
+  });
+
+  test('canonical watermark prefers the later of outgoing vs wellStatus', () => {
+    const wm = laterPullWatermark('2026-09-05T17:21:38.000Z', '2026-09-05T19:35:00.000Z');
+    expect(wm.utc).toBe('2026-09-05T19:35:00.000Z');
   });
 
   test('6. a genuinely stale pull is quarantined as STALE_PULL_TIME', () => {

@@ -977,10 +977,15 @@ export const processIncomingPull = functionsV1.database
     // well state (isDown, outgoing, processed, performance, production,
     // wellStatus, enrichment) is touched. A failed quarantine write leaves
     // the incoming packet intact for retry. See packetGuards.ts.
+    const wellStatusLastPullSnap = await db
+      .ref(`wells/${wellName}/status/lastPull/dateTimeUTC`)
+      .once('value');
+    const wellStatusLastPullUTC = wellStatusLastPullSnap.val();
     const guardVerdict = evaluateIncomingPull({
       incomingDateTimeUTC: data.dateTimeUTC,
       hasOutgoingResponse: prevResponse !== null,
       watermarkDateTimeUTC: prevResponse ? prevResponse.lastPullDateTimeUTC : undefined,
+      canonicalLastPullUTC: wellStatusLastPullUTC,
       nowMs: Date.now(),
     });
     if (guardVerdict.action === 'quarantine') {

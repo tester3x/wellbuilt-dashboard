@@ -27,6 +27,22 @@ describe('processIncomingPull wiring', () => {
     expect(guardIdx).toBeLessThan(isDownWrite);
   });
 
+  test('canonical wellStatus lastPull is read before the stale guard', () => {
+    const statusRead = pullHandler.indexOf('status/lastPull/dateTimeUTC');
+    const guardIdx = pullHandler.indexOf('evaluateIncomingPull({');
+    expect(statusRead).toBeGreaterThan(-1);
+    expect(statusRead).toBeLessThan(guardIdx);
+    expect(pullHandler).toContain('canonicalLastPullUTC: wellStatusLastPullUTC');
+  });
+
+  test('AFR / wellStatus / outgoing writes sit after the quarantine return', () => {
+    const quarantineReturn = pullHandler.indexOf("guardVerdict.action === 'quarantine'");
+    expect(quarantineReturn).toBeGreaterThan(-1);
+    expect(pullHandler.indexOf('avgFlowRateMinutes')).toBeGreaterThan(quarantineReturn);
+    expect(pullHandler.indexOf('const wellStatus: WellStatus')).toBeGreaterThan(quarantineReturn);
+    expect(pullHandler.indexOf('packets/outgoing/${responseId}')).toBeGreaterThan(quarantineReturn);
+  });
+
   test('quarantine branch hard-stops with return null', () => {
     const guardIdx = pullHandler.indexOf("guardVerdict.action === 'quarantine'");
     expect(guardIdx).toBeGreaterThan(-1);

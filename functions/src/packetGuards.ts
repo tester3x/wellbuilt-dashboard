@@ -58,6 +58,25 @@ const PROCESS: GuardVerdict = { action: 'process' };
  * and an unparseable stored watermark (when an outgoing response exists) is
  * MALFORMED_WELL_WATERMARK — corrupted state must be reviewed, not trusted.
  */
+/** Later of two pull timestamps; used so wellStatus cannot be older than outgoing. */
+export function laterPullWatermark(
+  outgoingUTC: unknown,
+  wellStatusUTC: unknown,
+): { utc: string | null; ms: number | null } {
+  const parse = (v: unknown): number =>
+    typeof v === 'string' ? new Date(v).getTime() : NaN;
+  const a = parse(outgoingUTC);
+  const b = parse(wellStatusUTC);
+  if (!isNaN(a) && !isNaN(b)) {
+    return a >= b
+      ? { utc: String(outgoingUTC), ms: a }
+      : { utc: String(wellStatusUTC), ms: b };
+  }
+  if (!isNaN(a)) return { utc: String(outgoingUTC), ms: a };
+  if (!isNaN(b)) return { utc: String(wellStatusUTC), ms: b };
+  return { utc: null, ms: null };
+}
+
 export function evaluateIncomingPull(args: {
   incomingDateTimeUTC: unknown;
   /** True when the well HAS an outgoing response — distinguishes "no
@@ -66,6 +85,8 @@ export function evaluateIncomingPull(args: {
   hasOutgoingResponse: boolean;
   /** prevResponse?.lastPullDateTimeUTC — only meaningful when hasOutgoingResponse. */
   watermarkDateTimeUTC: unknown;
+  /** wells/{name}/status/lastPull/dateTimeUTC — canonical last-pull if present. */
+  canonicalLastPullUTC?: unknown;
   nowMs: number;
 }): GuardVerdict {
   const { incomingDateTimeUTC, hasOutgoingResponse, watermarkDateTimeUTC, nowMs } = args;
@@ -131,17 +152,24 @@ export function evaluateIncomingPull(args: {
     };
   }
 
-  // 5: stale comparison, only with two valid timestamps.
-  if (!isNaN(incomingMs) && !isNaN(watermarkMs) && incomingMs <= watermarkMs) {
+  // 5: stale comparison against the later of outgoing vs wellStatus lastPull.
+  const canonical = laterPullWatermark(
+    !isNaN(watermarkMs) ? watermarkDateTimeUTC : null,
+    args.canonicalLastPullUTC,
+  );
+  const compareMs = canonical.ms ?? (isNaN(watermarkMs) ? NaN : watermarkMs);
+  const compareUtc = canonical.utc ?? (!isNaN(watermarkMs) ? String(watermarkDateTimeUTC) : null);
+  if (!isNaN(incomingMs) && compareMs != null && !isNaN(compareMs) && incomingMs <= compareMs) {
     return {
       action: 'quarantine',
       reason: 'STALE_PULL_TIME',
       readableReason:
         `Incoming pull time ${String(incomingDateTimeUTC)} is not newer than the ` +
-        `well's outgoing watermark ${String(watermarkDateTimeUTC)} — duplicate upload, ` +
-        `watchdog re-trigger, or an already-edited pull. Held in packets/rejected ` +
-        `instead of being deleted.`,
-      comparedWatermarkUTC: String(watermarkDateTimeUTC),
+        `well's canonical last-pull watermark ${String(compareUtc)} — duplicate upload, ` +
+        `late historical create, watchdog re-trigger, or an already-edited pull. ` +
+        `Held in packets/rejected without changing currentLevel, wellStatus, AFR, ` +
+        `or lastPull timestamp.`,
+      comparedWatermarkUTC: compareUtc,
     };
   }
 
