@@ -3,10 +3,14 @@
 import {
   FUTURE_TOLERANCE_MS,
   RootRefLike,
+  applyCurrentStateIfOwner,
   buildQuarantineUpdate,
+  canonicalWellKey,
   evaluateIncomingPull,
+  isGlobalDisplayNameHighWaterPath,
   laterPullWatermark,
   maxPullWatermark,
+  namespacedWellStatePath,
   nextHighWaterFromTxn,
   orphanEditVerdict,
   quarantineIncomingPacket,
@@ -153,6 +157,32 @@ describe('evaluateIncomingPull — validation ladder', () => {
     });
     expect(older.action).toBe('abort');
     if (older.action === 'abort') expect(older.compared.packetId).toBe('new');
+  });
+
+  test('high-water path is company + canonical well, not global display name', () => {
+    const a = namespacedWellStatePath('liquid-gold', 'well_abc');
+    const b = namespacedWellStatePath('other-co', 'well_abc');
+    expect(a).toBe('companyWells/liquid-gold/well_abc');
+    expect(a).not.toBe(b);
+    expect(isGlobalDisplayNameHighWaterPath(a)).toBe(false);
+    expect(isGlobalDisplayNameHighWaterPath('wells/GABRIEL 7-36-25TFH/pullHighWater')).toBe(true);
+    expect(canonicalWellKey({ wellId: 'wid-1', wellConfigKey: 'GABRIEL 7' })).toBe('wid-1');
+    expect(canonicalWellKey({ wellConfigKey: 'GABRIEL 7-36-25TFH' })).toBe('GABRIEL 7-36-25TFH');
+  });
+
+  test('materialize aborts when concurrent packet replaced high-water owner', () => {
+    const ok = applyCurrentStateIfOwner({
+      node: { pullHighWater: { packetId: 'new', dateTimeUTC: '2026-09-05T19:35:00.000Z' } },
+      packetId: 'new',
+      current: { level: '7\'9"' },
+    });
+    expect(ok.action).toBe('commit');
+    const lost = applyCurrentStateIfOwner({
+      node: { pullHighWater: { packetId: 'new', dateTimeUTC: '2026-09-05T19:35:00.000Z' } },
+      packetId: 'old',
+      current: { level: '1\'0"' },
+    });
+    expect(lost.action).toBe('abort');
   });
 
   test('atomic high-water: seed from processed blocks older incoming when current is empty', () => {

@@ -19,13 +19,16 @@ describe('processIncomingPull wiring', () => {
     expect(editStart).toBeGreaterThan(pullStart);
   });
 
-  test('guard evaluates before ANY well-state write (high-water txn then wellStatus)', () => {
+  test('guard evaluates before ANY well-state write (namespaced high-water txn then wellStatus)', () => {
     const guardIdx = pullHandler.indexOf('evaluateIncomingPull({');
-    const hwTxn = pullHandler.indexOf("wells/${wellName}/pullHighWater`).transaction");
+    const hwTxn = pullHandler.indexOf('namespacedWellStatePath');
     const statusWrite = pullHandler.indexOf("wells/${wellName}/status`).set");
     expect(guardIdx).toBeGreaterThan(-1);
-    expect(hwTxn).toBeGreaterThan(guardIdx);
-    expect(statusWrite).toBeGreaterThan(hwTxn);
+    expect(pullHandler).toContain('namespacedWellStatePath(hwCompanyId, wellKey)');
+    expect(pullHandler).not.toContain("wells/${wellName}/pullHighWater");
+    expect(statusWrite).toBeGreaterThan(guardIdx);
+    expect(pullHandler).toContain('applyCurrentStateIfOwner');
+    expect(hwTxn).toBeGreaterThan(-1);
   });
 
   test('canonical wellStatus lastPull is read before the stale guard', () => {

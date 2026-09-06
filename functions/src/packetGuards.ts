@@ -70,6 +70,59 @@ export type PullHighWater = {
   ms: number;
 };
 
+function seg(raw: string): string {
+  return String(raw || '')
+    .trim()
+    .replace(/[.#$\[\]/]/g, '_')
+    .slice(0, 120);
+}
+
+/**
+ * Tenant + canonical well identity. Never a global display-name path.
+ * Prefer wellId; fall back to the well_config key used for lookup.
+ */
+export function namespacedWellStatePath(companyId: string, wellKey: string): string {
+  return `companyWells/${seg(companyId)}/${seg(wellKey)}`;
+}
+
+export function canonicalWellKey(input: {
+  wellId?: unknown;
+  wellConfigKey?: unknown;
+}): string | null {
+  const wellId = typeof input.wellId === 'string' ? input.wellId.trim() : '';
+  if (wellId) return wellId;
+  const cfg = typeof input.wellConfigKey === 'string' ? input.wellConfigKey.trim() : '';
+  return cfg || null;
+}
+
+export function isGlobalDisplayNameHighWaterPath(path: string): boolean {
+  return /^wells\/[^/]+\/pullHighWater$/.test(path);
+}
+
+/**
+ * Second-phase txn: write current-state only while this packet still owns
+ * the namespaced high-water. Concurrent replacement aborts.
+ */
+export function applyCurrentStateIfOwner(input: {
+  node: { pullHighWater?: { packetId?: unknown; [k: string]: unknown } | null; [k: string]: unknown } | null | undefined;
+  packetId: string;
+  current: Record<string, unknown>;
+}): { action: 'commit'; next: Record<string, unknown> } | { action: 'abort' } {
+  const owner = input.node?.pullHighWater && typeof input.node.pullHighWater === 'object'
+    ? String((input.node.pullHighWater as { packetId?: unknown }).packetId || '')
+    : '';
+  if (!input.packetId || owner !== input.packetId) return { action: 'abort' };
+  return {
+    action: 'commit',
+    next: {
+      ...(input.node as Record<string, unknown>),
+      pullHighWater: input.node!.pullHighWater,
+      current: input.current,
+      materializedPacketId: input.packetId,
+    },
+  };
+}
+
 /** Max of any pull timestamps (outgoing, wellStatus, processed, high-water). */
 export function maxPullWatermark(
   sources: Array<{ utc: unknown; packetId?: string | null }>,

@@ -12,8 +12,11 @@ import {
   comparePullEquivalence,
   editAlreadyApplied,
   editMaterialChange,
+  applyCurrentStateIfOwner,
+  canonicalWellKey,
   evaluateIncomingPull,
   maxPullWatermark,
+  namespacedWellStatePath,
   nextHighWaterFromTxn,
   isStaleRevision,
   orphanEditVerdict,
@@ -911,10 +914,12 @@ export const processIncomingPull = functionsV1.database
     console.log(`Processing pull for ${wellName}: ${packetId}`);
 
     // Get well config - try with spaces first (dashboard format), fall back to no spaces (legacy)
+    let wellConfigKey = wellName;
     let configSnap = await db.ref(`well_config/${wellName}`).once('value');
     if (!configSnap.exists()) {
       // Try legacy format without spaces
       configSnap = await db.ref(`well_config/${cleanName}`).once('value');
+      if (configSnap.exists()) wellConfigKey = cleanName;
     }
     const config = configSnap.val() || {};
     const bottomInches = (config.bottomLevel || config.allowedBottom || DEFAULTS.bottomLevel) * 12;
@@ -983,7 +988,23 @@ export const processIncomingPull = functionsV1.database
       .ref(`wells/${wellName}/status/lastPull/dateTimeUTC`)
       .once('value');
     const wellStatusLastPullUTC = wellStatusLastPullSnap.val();
-    const highWaterSnap = await db.ref(`wells/${wellName}/pullHighWater`).once('value');
+    let hwCompanyId =
+      (typeof (data as any).companyId === 'string' && (data as any).companyId.trim()) ||
+      (typeof config.companyId === 'string' && config.companyId.trim()) ||
+      '';
+    if (!hwCompanyId && data.driverId) {
+      try {
+        const driverCo = await db.ref(`drivers/approved/${data.driverId}/companyId`).once('value');
+        if (driverCo.exists()) hwCompanyId = String(driverCo.val() || '').trim();
+      } catch { /* best-effort */ }
+    }
+    if (!hwCompanyId) hwCompanyId = outgoingCompanyId(config);
+    const wellKey = canonicalWellKey({
+      wellId: (data as any).wellId || config.wellId || config.id,
+      wellConfigKey,
+    }) || wellConfigKey;
+    const wellStatePath = namespacedWellStatePath(hwCompanyId, wellKey);
+    const highWaterSnap = await db.ref(`${wellStatePath}/pullHighWater`).once('value');
     const highWaterVal = highWaterSnap.val() || null;
     let newestProcessedUtc: string | null = null;
     let newestProcessedId: string | null = null;
@@ -1035,15 +1056,26 @@ export const processIncomingPull = functionsV1.database
 
     // Atomic per-well high-water: compare-and-materialize so concurrent
     // old/new arrivals cannot race the older pull into current state.
-    const hwTxn = await db.ref(`wells/${wellName}/pullHighWater`).transaction((current) => {
+    const hwTxn = await db.ref(wellStatePath).transaction((node) => {
+      const currentHw = node && typeof node === 'object' ? (node as any).pullHighWater : node;
       const decision = nextHighWaterFromTxn({
-        current,
+        current: currentHw,
         seed,
         incomingDateTimeUTC: String(data.dateTimeUTC),
         incomingPacketId: packetId,
       });
       if (decision.action === 'abort') return undefined;
-      return { dateTimeUTC: decision.next.dateTimeUTC, packetId: decision.next.packetId };
+      return {
+        ...(node && typeof node === 'object' ? node : {}),
+        companyId: hwCompanyId,
+        wellKey,
+        pullHighWater: {
+          dateTimeUTC: decision.next.dateTimeUTC,
+          packetId: decision.next.packetId,
+          companyId: hwCompanyId,
+          wellKey,
+        },
+      };
     });
     if (!hwTxn.committed) {
       const compared = seed?.dateTimeUTC || wellStatusLastPullUTC || prevResponse?.lastPullDateTimeUTC || null;
@@ -1085,9 +1117,17 @@ export const processIncomingPull = functionsV1.database
       ? ((data as any).wellDown === true)
       : existingIsDown;
 
-    const stillHoldsHighWater = async (): Promise<boolean> => {
-      const snap = await db.ref(`wells/${wellName}/pullHighWater/packetId`).once('value');
-      return snap.val() === packetId;
+    const materializeIfOwner = async (current: Record<string, unknown>): Promise<boolean> => {
+      const txn = await db.ref(wellStatePath).transaction((node) => {
+        const decision = applyCurrentStateIfOwner({
+          node,
+          packetId,
+          current,
+        });
+        if (decision.action === 'abort') return undefined;
+        return decision.next;
+      });
+      return !!txn.committed;
     };
 
     // Calculate all fields
@@ -1262,28 +1302,7 @@ export const processIncomingPull = functionsV1.database
       overnightBblsDay: overnightBblsDay > 0 ? overnightBblsDay.toString() : null,
     };
 
-    const holdsHighWater = await stillHoldsHighWater();
-    if (!holdsHighWater) {
-      console.log(`[PULL] ${wellName}: ${packetId} no longer holds high-water — preserving processed history, skipping current-state writes`);
-    }
-
-    // Write to outgoing/ (delete old responses for this well first)
-    if (holdsHighWater) {
-    const oldResponses = await db.ref('packets/outgoing')
-      .orderByChild('wellName')
-      .equalTo(wellName)
-      .once('value');
-
-    const deletePromises: Promise<void>[] = [];
-    oldResponses.forEach((child) => {
-      deletePromises.push(child.ref.remove());
-    });
-    await Promise.all(deletePromises);
-
-    // Write new response
     const responseId = `response_${timestamp.toISOString().replace(/[-:]/g, '').replace('T', '_').split('.')[0]}_${cleanName}`;
-    await db.ref(`packets/outgoing/${responseId}`).set(outgoingResponse);
-    }
 
     // Write performance data for Performance screen
     // Format: performance/{wellKey}/rows/{timestamp} = { d, a, p }
@@ -1330,17 +1349,6 @@ export const processIncomingPull = functionsV1.database
       console.error(`[Performance] Error writing data for ${wellName}:`, perfError);
     }
 
-    // Update well_config with calculated AFR so app stays in sync
-    // This is the SINGLE SOURCE OF TRUTH for flow rate
-    if (holdsHighWater && afr > 0) {
-      const afrMinutes = afr * 24 * 60; // Convert days to minutes
-      await db.ref(`well_config/${wellName}`).update({
-        avgFlowRate: daysToHMMSS(afr),
-        avgFlowRateMinutes: Math.round(afrMinutes * 100) / 100, // Round to 2 decimal places
-      });
-      console.log(`Updated well_config/${wellName} avgFlowRate: ${daysToHMMSS(afr)} (${afrMinutes.toFixed(2)} min)`);
-    }
-
     // ============================================================
     // NEW UNIFIED STRUCTURE - Write to wells/{name}/status + history
     // This is THE single source of truth going forward
@@ -1383,10 +1391,29 @@ export const processIncomingPull = functionsV1.database
       updatedAt: new Date().toISOString(),
     };
 
-    // Write to wells/{wellName}/status (THE source of truth)
-    if (holdsHighWater) {
-    await db.ref(`wells/${wellName}/status`).set(wellStatus);
-    console.log(`[NEW] Wrote wells/${wellName}/status`);
+    const holdsHighWater = await materializeIfOwner(wellStatus as unknown as Record<string, unknown>);
+    if (!holdsHighWater) {
+      console.log(`[PULL] ${wellName}: ${packetId} lost namespaced high-water — preserving processed history, skipping current-state writes`);
+    } else {
+      const oldResponses = await db.ref('packets/outgoing')
+        .orderByChild('wellName')
+        .equalTo(wellName)
+        .once('value');
+      const deletePromises: Promise<void>[] = [];
+      oldResponses.forEach((child) => {
+        deletePromises.push(child.ref.remove());
+      });
+      await Promise.all(deletePromises);
+      await db.ref(`packets/outgoing/${responseId}`).set(outgoingResponse);
+      if (afr > 0) {
+        await db.ref(`well_config/${wellName}`).update({
+          avgFlowRate: daysToHMMSS(afr),
+          avgFlowRateMinutes: Math.round(afrMinutes * 100) / 100,
+        });
+        console.log(`Updated well_config/${wellName} avgFlowRate: ${daysToHMMSS(afr)} (${afrMinutes.toFixed(2)} min)`);
+      }
+      await db.ref(`wells/${wellName}/status`).set(wellStatus);
+      console.log(`[NEW] Wrote wells/${wellName}/status`);
     }
 
     await notifyIncomingVersionBestEffort(db.ref('packets/incoming_version'), {
