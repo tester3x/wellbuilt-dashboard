@@ -489,18 +489,18 @@ export default function BillingPage() {
                     className="flex-1 min-h-0 overflow-auto"
                   >
                     <table className="w-full min-w-max">
-                      <thead className="bg-gray-700 sticky top-0 z-10">
+                      <thead className="bg-gray-700 sticky top-0 z-20">
                         <tr>
-                          <th className="px-4 py-2 text-left text-sm font-medium text-gray-300">Operator</th>
-                          <th className="px-4 py-2 text-center text-sm font-medium text-gray-300">Loads</th>
-                          <th className="px-4 py-2 text-right text-sm font-medium text-gray-300">BBLs</th>
-                          <th className="px-4 py-2 text-right text-sm font-medium text-gray-300">Hours</th>
-                          <th className="px-4 py-2 text-right text-sm font-medium text-gray-300">Base Amount</th>
-                          <th className="px-4 py-2 text-right text-sm font-medium text-gray-300 whitespace-nowrap">Fuel Surcharge</th>
-                          {hasDetention && <th className="px-4 py-2 text-right text-sm font-medium text-gray-300">Detention</th>}
-                          <th className="px-4 py-2 text-right text-sm font-medium text-gray-300">Total</th>
-                          <th className="px-4 py-2 text-right text-sm font-medium text-gray-300 whitespace-nowrap">FSC Method</th>
-                          <th className="px-4 py-2 text-center text-sm font-medium text-gray-300">Actions</th>
+                          <th className="px-4 py-2 text-left text-sm font-medium text-gray-300 sticky top-0 bg-gray-700 z-20">Operator</th>
+                          <th className="px-4 py-2 text-center text-sm font-medium text-gray-300 sticky top-0 bg-gray-700 z-20">Loads</th>
+                          <th className="px-4 py-2 text-right text-sm font-medium text-gray-300 sticky top-0 bg-gray-700 z-20">BBLs</th>
+                          <th className="px-4 py-2 text-right text-sm font-medium text-gray-300 sticky top-0 bg-gray-700 z-20">Hours</th>
+                          <th className="px-4 py-2 text-right text-sm font-medium text-gray-300 sticky top-0 bg-gray-700 z-20">Base Amount</th>
+                          <th className="px-4 py-2 text-right text-sm font-medium text-gray-300 whitespace-nowrap sticky top-0 bg-gray-700 z-20">Fuel Surcharge</th>
+                          {hasDetention && <th className="px-4 py-2 text-right text-sm font-medium text-gray-300 sticky top-0 bg-gray-700 z-20">Detention</th>}
+                          <th className="px-4 py-2 text-right text-sm font-medium text-gray-300 sticky top-0 bg-gray-700 z-20">Total</th>
+                          <th className="px-4 py-2 text-right text-sm font-medium text-gray-300 whitespace-nowrap sticky top-0 bg-gray-700 z-20">FSC Method</th>
+                          <th className="px-4 py-2 text-center text-sm font-medium text-gray-300 sticky top-0 bg-gray-700 z-20">Actions</th>
                         </tr>
                       </thead>
                       <tbody className="divide-y divide-gray-700">
@@ -522,17 +522,17 @@ export default function BillingPage() {
                           );
                         })}
                       </tbody>
-                      <tfoot className="bg-gray-750 border-t border-gray-600">
+                      <tfoot className="bg-gray-800 border-t border-gray-600 sticky bottom-0 z-20">
                         <tr>
-                          <td className="px-4 py-2 text-white font-semibold">Totals</td>
-                          <td className="px-4 py-2 text-center text-white font-mono">{summaries.reduce((s, o) => s + o.loads, 0)}</td>
-                          <td className="px-4 py-2 text-right text-white font-mono">{summaries.reduce((s, o) => s + o.totalBBLs, 0).toLocaleString()}</td>
-                          <td className="px-4 py-2 text-right text-white font-mono">{summaries.reduce((s, o) => s + o.totalHours, 0).toFixed(1)}</td>
-                          <td className="px-4 py-2 text-right text-white font-mono">{formatCurrency(summaries.reduce((s, o) => s + o.subtotal, 0))}</td>
-                          <td className="px-4 py-2 text-right text-yellow-400 font-mono">{formatCurrency(summaries.reduce((s, o) => s + o.totalFuelSurcharge, 0))}</td>
-                          {hasDetention && <td className="px-4 py-2 text-right text-orange-400 font-mono">{formatCurrency(summaries.reduce((s, o) => s + o.totalDetentionPay, 0))}</td>}
-                          <td className="px-4 py-2 text-right text-green-400 font-mono font-semibold">{formatCurrency(summaries.reduce((s, o) => s + o.grandTotal, 0))}</td>
-                          <td colSpan={2} />
+                          <td className="px-4 py-2 text-white font-semibold sticky bottom-0 bg-gray-800">Totals</td>
+                          <td className="px-4 py-2 text-center text-white font-mono sticky bottom-0 bg-gray-800">{summaries.reduce((s, o) => s + o.loads, 0)}</td>
+                          <td className="px-4 py-2 text-right text-white font-mono sticky bottom-0 bg-gray-800">{summaries.reduce((s, o) => s + o.totalBBLs, 0).toLocaleString()}</td>
+                          <td className="px-4 py-2 text-right text-white font-mono sticky bottom-0 bg-gray-800">{summaries.reduce((s, o) => s + o.totalHours, 0).toFixed(1)}</td>
+                          <td className="px-4 py-2 text-right text-white font-mono sticky bottom-0 bg-gray-800">{formatCurrency(summaries.reduce((s, o) => s + o.subtotal, 0))}</td>
+                          <td className="px-4 py-2 text-right text-yellow-400 font-mono sticky bottom-0 bg-gray-800">{formatCurrency(summaries.reduce((s, o) => s + o.totalFuelSurcharge, 0))}</td>
+                          {hasDetention && <td className="px-4 py-2 text-right text-orange-400 font-mono sticky bottom-0 bg-gray-800">{formatCurrency(summaries.reduce((s, o) => s + o.totalDetentionPay, 0))}</td>}
+                          <td className="px-4 py-2 text-right text-green-400 font-mono font-semibold sticky bottom-0 bg-gray-800">{formatCurrency(summaries.reduce((s, o) => s + o.grandTotal, 0))}</td>
+                          <td colSpan={2} className="sticky bottom-0 bg-gray-800" />
                         </tr>
                       </tfoot>
                     </table>
@@ -1134,20 +1134,20 @@ function OperatorRow({
           <td colSpan={showDetention ? 11 : 10} className="px-0 py-0">
             <div className="bg-gray-850 border-t border-gray-700">
               <table className="w-full min-w-max">
-                <thead>
-                  <tr className="text-xs text-gray-500">
-                    <th className="px-4 py-1 text-left">Invoice #</th>
-                    <th className="px-4 py-1 text-left">Date</th>
-                    <th className="px-4 py-1 text-left">Well</th>
-                    <th className="px-4 py-1 text-left">Drop-off</th>
-                    <th className="px-4 py-1 text-left">Driver</th>
-                    <th className="px-4 py-1 text-right">BBLs</th>
-                    <th className="px-4 py-1 text-right">Hours</th>
-                    <th className="px-4 py-1 text-right">Fuel Min</th>
-                    <th className="px-4 py-1 text-right">Base</th>
-                    <th className="px-4 py-1 text-right">FSC</th>
-                    {showDetention && <th className="px-4 py-1 text-right">Detention</th>}
-                    <th className="px-4 py-1 text-right">Total</th>
+                <thead className="sticky top-10 z-10 bg-gray-800">
+                  <tr className="text-xs text-gray-400">
+                    <th className="px-4 py-1 text-left sticky top-10 bg-gray-800">Invoice #</th>
+                    <th className="px-4 py-1 text-left sticky top-10 bg-gray-800">Date</th>
+                    <th className="px-4 py-1 text-left sticky top-10 bg-gray-800">Well</th>
+                    <th className="px-4 py-1 text-left sticky top-10 bg-gray-800">Drop-off</th>
+                    <th className="px-4 py-1 text-left sticky top-10 bg-gray-800">Driver</th>
+                    <th className="px-4 py-1 text-right sticky top-10 bg-gray-800">BBLs</th>
+                    <th className="px-4 py-1 text-right sticky top-10 bg-gray-800">Hours</th>
+                    <th className="px-4 py-1 text-right sticky top-10 bg-gray-800">Fuel Min</th>
+                    <th className="px-4 py-1 text-right sticky top-10 bg-gray-800">Base</th>
+                    <th className="px-4 py-1 text-right sticky top-10 bg-gray-800">FSC</th>
+                    {showDetention && <th className="px-4 py-1 text-right sticky top-10 bg-gray-800">Detention</th>}
+                    <th className="px-4 py-1 text-right sticky top-10 bg-gray-800">Total</th>
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-gray-800">

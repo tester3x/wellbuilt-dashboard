@@ -29,7 +29,11 @@ check('receivables scroller fills remaining viewport, not content height',
 check('receivables main is a flex column that cannot grow past the window',
   pageSrc.includes("activeTab === 'receivables' ? 'flex flex-col overflow-hidden'"));
 check('operator table header is sticky',
-  pageSrc.includes('sticky top-0 z-10'));
+  pageSrc.includes('sticky top-0 bg-gray-700 z-20') && pageSrc.includes('Operator'));
+check('totals footer is sticky to the card bottom',
+  pageSrc.includes('sticky bottom-0 z-20') && pageSrc.includes('sticky bottom-0 bg-gray-800'));
+check('ticket column labels pin under the operator header',
+  pageSrc.includes('sticky top-10 bg-gray-800') && pageSrc.includes('Invoice #'));
 check('tab labels do not wrap',
   (pageSrc.match(/whitespace-nowrap shrink-0 transition-colors/g) || []).length >= 3);
 check('tab group is items-center not stretch',
@@ -70,8 +74,10 @@ main{flex:1;min-height:0;display:flex;flex-direction:column;overflow:hidden;padd
 .card{flex:1;min-height:0;display:flex;flex-direction:column;background:#1f2937;border:1px solid #374151;border-radius:8px;overflow:hidden;}
 .scroll{flex:1;min-height:0;overflow:auto;}
 table{width:max-content;min-width:2200px;border-collapse:collapse;}
-th{position:sticky;top:0;background:#374151;padding:8px 12px;text-align:left;font-size:13px;}
+th{position:sticky;top:0;background:#374151;padding:8px 12px;text-align:left;font-size:13px;z-index:20;}
 td{padding:8px 12px;white-space:nowrap;}
+tfoot td{position:sticky;bottom:0;background:#1f2937;z-index:20;}
+.ticket-head th{top:40px;background:#111827;z-index:10;}
 .action{background:#2563eb;color:#fff;border:0;border-radius:4px;padding:4px 8px;font-size:12px;}
 </style></head><body>
 <div class="page">
@@ -100,7 +106,7 @@ td{padding:8px 12px;white-space:nowrap;}
             </tr>
             <tr><td colspan="9" style="padding:0">
               <table>
-                <thead><tr>
+                <thead class="ticket-head"><tr>
                   <th>Invoice #</th><th>Date</th><th>Well</th><th>Drop-off</th><th>Driver</th>
                   <th>BBLs</th><th>Hours</th><th>Base</th><th>FSC</th>
                 </tr></thead>
@@ -108,6 +114,10 @@ td{padding:8px 12px;white-space:nowrap;}
               </table>
             </td></tr>
           </tbody>
+          <tfoot><tr>
+            <td>Totals</td><td></td><td></td><td></td><td></td><td></td><td></td><td></td>
+            <td id="totals-foot">Totals</td>
+          </tr></tfoot>
         </table>
       </div>
     </div>
@@ -198,6 +208,35 @@ try {
       afterH.endTop === afterH.startTop, `scrollTop ${afterH.startTop} -> ${afterH.endTop}`);
     check(`${vp.name} right-side Actions can be brought into view`,
       afterH.actionVisible, `actionRight=${afterH.actionRight}`);
+
+    const pinned = await page.evaluate(() => {
+      const scroller = document.querySelector('[data-billing-scroll="receivables"]');
+      scroller.scrollTop = 400;
+      const sb = scroller.getBoundingClientRect();
+      const op = [...document.querySelectorAll('th')].find((el) => el.textContent === 'Operator');
+      const inv = [...document.querySelectorAll('th')].find((el) => el.textContent === 'Invoice #');
+      const foot = document.getElementById('totals-foot');
+      const oh = op.getBoundingClientRect();
+      const ih = inv.getBoundingClientRect();
+      const fh = foot.getBoundingClientRect();
+      return {
+        opTop: oh.top - sb.top,
+        invTop: ih.top - sb.top,
+        footBottom: sb.bottom - fh.bottom,
+        opVisible: oh.bottom > sb.top && oh.top < sb.bottom,
+        invVisible: ih.bottom > sb.top && ih.top < sb.bottom,
+        footVisible: fh.bottom > sb.top && fh.top < sb.bottom + 2,
+      };
+    });
+    check(`${vp.name} Operator header stays pinned after vertical scroll`,
+      pinned.opVisible && pinned.opTop >= -2 && pinned.opTop < 8,
+      `opTop=${pinned.opTop}`);
+    check(`${vp.name} ticket column labels stay under the operator header`,
+      pinned.invVisible && pinned.invTop >= 24 && pinned.invTop < 72,
+      `invTop=${pinned.invTop}`);
+    check(`${vp.name} Totals footer stays pinned at the card bottom`,
+      pinned.footVisible && pinned.footBottom >= -2 && pinned.footBottom < 16,
+      `footBottom=${pinned.footBottom}`);
 
     await page.setContent(shortFixture);
     const short = await page.evaluate(() => {
