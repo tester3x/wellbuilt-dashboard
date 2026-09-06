@@ -8,12 +8,16 @@ import { fileURLToPath } from 'node:url';
 
 import {
   KAHUNA_2_ATTEMPT,
+  TORNADO_1_ATTEMPT,
   applyAddWellSuccess,
   buildAddWellConfig,
   classifyAddWellError,
   createAddWellClickGuard,
+  decideAddWellClick,
   decideAddWellSubmit,
+  defaultAddWellRoute,
   feetToDisplay,
+  normalizeLinkedApiNo,
   parseLevelToFeet,
   rebuildRoutesFromConfigs,
 } from '../src/lib/addWellSubmit.ts';
@@ -97,15 +101,56 @@ check('empty bottom is 0, not silently 3', parseLevelToFeet('') === 0);
 }
 
 {
+  const tornado = decideAddWellClick({ form: TORNADO_1_ATTEMPT, configs: {}, inflight: false });
+  check('Tornado 1 with no route submits', tornado.action === 'submit');
+  if (tornado.action === 'submit') {
+    check('Tornado 1 stores Unrouted', tornado.config.route === 'Unrouted');
+    check('Tornado 1 driver-facing name', tornado.wellName === 'Tornado 1');
+    check('Tornado 1 NDIC name Tornado 1-24H', tornado.config.ndicName === 'Tornado 1-24H');
+    check('Tornado MT API normalized to 25-083-22277-00-00', tornado.config.ndicApiNo === '25-083-22277-00-00');
+    check('Tornado blank water weight omitted', tornado.config.waterWeight === undefined);
+    check('Tornado H2S unknown preserved', tornado.config.h2sStatus === 'unknown');
+  }
+  const tornadoRouted = decideAddWellClick({
+    form: { ...TORNADO_1_ATTEMPT, route: 'Cyclone 1' },
+    configs: {},
+    inflight: false,
+  });
+  check('Tornado 1 with selected route keeps that route', tornadoRouted.action === 'submit' && tornadoRouted.config.route === 'Cyclone 1');
+}
+
+check('empty route defaults to Unrouted', defaultAddWellRoute('') === 'Unrouted' && defaultAddWellRoute('  ') === 'Unrouted');
+check('selected route is preserved', defaultAddWellRoute('Kahuna 381') === 'Kahuna 381');
+check('MT display API strips (MT) and pads -00-00', normalizeLinkedApiNo('25-083-22277 (MT)') === '25-083-22277-00-00');
+check('full API is unchanged', normalizeLinkedApiNo('33-053-10170-00-00') === '33-053-10170-00-00');
+
+{
+  const missing = decideAddWellClick({
+    form: { ...TORNADO_1_ATTEMPT, linkedWell: null },
+    configs: {},
+    inflight: false,
+  });
+  check('missing NDIC is a visible reject, not a silent skip', missing.action === 'reject' && missing.reason === 'ndic_required' && missing.focus === 'ndic');
+  const busy = decideAddWellClick({ form: TORNADO_1_ATTEMPT, configs: {}, inflight: true });
+  check('in-flight click is busy with a message, not a silent return', busy.action === 'busy' && /Already submitting/i.test(busy.message));
+}
+
+{
   const page = src('src/app/admin/page.tsx');
   const adapter = src('src/lib/staffWriteWellConfig.ts');
   const add = page.slice(page.indexOf('const handleAddWell'), page.indexOf('const handleUpdateWell'));
   check('page uses production staffCreateWellConfig adapter', add.includes('staffCreateWellConfig'));
   check('adapter calls staffWriteWellConfig', adapter.includes("'staffWriteWellConfig'"));
   check('Add Well no longer silently set()s well_config', !/set\(ref\(db,\s*`well_config/.test(add));
+  check('green-button path uses decideAddWellClick', add.includes('decideAddWellClick'));
+  check('no silent inflight return', !/if \(isAddingWell \|\| addWellInflightRef\.current\) return;/.test(add));
   check('submitting progress is rendered', page.includes("Creating “{addWellStatus.wellName}”") || page.includes('Adding Well'));
   check('errors stay on the Add Well card', page.includes("addWellStatus.kind === 'error'"));
   check('success stays on the Add Well card', page.includes("addWellStatus.kind === 'success'"));
+  check('missing NDIC button remains clickable', page.includes('disabled={isAddingWell}') && !page.includes('disabled={!canAdd}'));
+  check('Fold keyboard action bar is sticky', page.includes('sticky bottom-0') && page.includes('add-well-action'));
+  check('NDIC section can be scrolled into view', page.includes('add-well-ndic') && add.includes('scrollIntoView'));
+  check('GPS Routes tab file is untouched in this handler', add.includes('staffCreateWellConfig'));
 }
 
 console.log(`\n${pass} passed, ${fail} failed`);

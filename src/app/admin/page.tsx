@@ -30,7 +30,7 @@ import { VerifiedAdminGate } from '@/components/admin/VerifiedAdminGate';
 import {
   applyAddWellSuccess,
   classifyAddWellError,
-  decideAddWellSubmit,
+  decideAddWellClick,
   feetToDisplay,
   parseLevelToFeet,
   rebuildRoutesFromConfigs,
@@ -144,6 +144,8 @@ export default function AdminPage() {
   const [isAddingWell, setIsAddingWell] = useState(false);
   const [addWellStatus, setAddWellStatus] = useState<AddWellSubmitStatus>({ kind: 'idle' });
   const addWellInflightRef = useRef(false);
+  const addWellNdicRef = useRef<HTMLDivElement | null>(null);
+  const addWellActionRef = useRef<HTMLDivElement | null>(null);
   const [activeTab, setActiveTab] = useState<'routes' | 'wells' | 'drivers' | 'companies' | 'gpsroutes' | 'equipment' | 'plans' | 'adminaudit'>('wells');
 
   // vc51.9A7 — verified-admin session (display gate; server re-decides
@@ -723,43 +725,54 @@ export default function AdminPage() {
 
   // Add new well — governed callable. Client RTDB well_config writes are denied.
   const handleAddWell = async () => {
-    if (isAddingWell || addWellInflightRef.current) return;
-    addWellInflightRef.current = true;
+    const click = decideAddWellClick({
+      form: {
+        wellName: newWellName,
+        route: newWellRoute,
+        bottomInput: newWellBottom,
+        tanks: newWellTanks,
+        pullBbls: newWellPullBbls,
+        tankCapacity: newWellTankCapacity,
+        tankHeight: newWellTankHeight,
+        waterWeight: newWellWaterWeight,
+        h2sStatus: newWellH2s,
+        linkedWell: ndicSelectedWell
+          ? {
+              well_name: ndicSelectedWell.well_name,
+              api_no: ndicSelectedWell.api_no,
+              operator: ndicSelectedWell.operator,
+            }
+          : null,
+      },
+      configs,
+      inflight: isAddingWell || addWellInflightRef.current,
+    });
 
-    const decision = decideAddWellSubmit({
-      wellName: newWellName,
-      route: newWellRoute,
-      bottomInput: newWellBottom,
-      tanks: newWellTanks,
-      pullBbls: newWellPullBbls,
-      tankCapacity: newWellTankCapacity,
-      tankHeight: newWellTankHeight,
-      waterWeight: newWellWaterWeight,
-      h2sStatus: newWellH2s,
-      linkedWell: ndicSelectedWell
-        ? {
-            well_name: ndicSelectedWell.well_name,
-            api_no: ndicSelectedWell.api_no,
-            operator: ndicSelectedWell.operator,
-          }
-        : null,
-    }, configs);
-
-    if (decision.action === 'reject') {
-      addWellInflightRef.current = false;
-      setAddWellStatus({ kind: 'error', reason: decision.reason, message: decision.message });
-      showMessage(decision.message);
+    if (click.action === 'busy') {
+      setAddWellStatus({ kind: 'error', reason: 'busy', message: click.message });
+      addWellActionRef.current?.scrollIntoView({ block: 'nearest', behavior: 'smooth' });
+      return;
+    }
+    if (click.action === 'reject') {
+      setAddWellStatus({ kind: 'error', reason: click.reason, message: click.message });
+      showMessage(click.message);
+      if (click.focus === 'ndic') {
+        addWellNdicRef.current?.scrollIntoView({ block: 'center', behavior: 'smooth' });
+      } else {
+        addWellActionRef.current?.scrollIntoView({ block: 'nearest', behavior: 'smooth' });
+      }
       return;
     }
 
+    addWellInflightRef.current = true;
     setIsAddingWell(true);
-    setAddWellStatus({ kind: 'submitting', wellName: decision.wellName });
+    setAddWellStatus({ kind: 'submitting', wellName: click.wellName });
     try {
       const result = await staffCreateWellConfig({
-        wellName: decision.wellName,
-        config: decision.config,
+        wellName: click.wellName,
+        config: click.config,
       });
-      const written = { ...decision.config, ...(result.config || {}) };
+      const written = { ...click.config, ...(result.config || {}) };
       const next = applyAddWellSuccess(configs, result.wellName, written);
       applyWellCatalog(next);
       setAddWellStatus({
@@ -775,6 +788,7 @@ export default function AdminPage() {
       );
       setNewWellName('');
       setNewWellSearchTerm('');
+      setNewWellRoute('');
       setNdicSelectedWell(null);
       setAutoLinkStatus('idle');
       try {
@@ -788,6 +802,7 @@ export default function AdminPage() {
       const classified = classifyAddWellError(err);
       setAddWellStatus({ kind: 'error', reason: classified.reason, message: classified.message });
       showMessage(classified.message);
+      addWellActionRef.current?.scrollIntoView({ block: 'nearest', behavior: 'smooth' });
     } finally {
       addWellInflightRef.current = false;
       setIsAddingWell(false);
@@ -1260,7 +1275,7 @@ export default function AdminPage() {
                 <h3 className="text-white font-medium mb-3">Add New Well</h3>
                 <div className="space-y-3">
                   {/* State + Database search row — finds the legal NDIC/MBOGC record */}
-                  <div className="flex gap-2">
+                  <div id="add-well-ndic" ref={addWellNdicRef} className="flex gap-2 scroll-mt-24">
                     <select
                       value={newWellSearchState}
                       onChange={(e) => setNewWellSearchState(e.target.value as 'all' | 'ND' | 'MT')}
@@ -1477,7 +1492,7 @@ export default function AdminPage() {
                   </div>
                   {(() => {
                     const isDuplicate = newWellName.trim().length > 0 && Object.keys(configs).some(k => k.toLowerCase() === newWellName.trim().toLowerCase());
-                    const canAdd = !!ndicSelectedWell && !isDuplicate && !isAddingWell;
+                    const canSubmit = !!ndicSelectedWell && !isDuplicate && !isAddingWell;
                     const label = isAddingWell
                       ? 'Adding Well…'
                       : isDuplicate
@@ -1486,12 +1501,16 @@ export default function AdminPage() {
                           ? 'Add Well'
                           : 'Link Well First';
                     return (
-                      <>
+                      <div
+                        id="add-well-action"
+                        ref={addWellActionRef}
+                        className="sticky bottom-0 z-10 -mx-4 px-4 pt-2 pb-[max(0.75rem,env(safe-area-inset-bottom))] bg-gray-800 border-t border-gray-700 mt-2"
+                      >
                         <button
                           type="button"
                           onClick={handleAddWell}
-                          disabled={!canAdd}
-                          className={`w-full px-4 py-2 text-white rounded mt-2 ${isDuplicate ? 'bg-red-800 cursor-not-allowed' : canAdd ? 'bg-green-600 hover:bg-green-700' : 'bg-gray-600 cursor-not-allowed'}`}
+                          disabled={isAddingWell}
+                          className={`w-full px-4 py-3 text-white rounded min-h-12 ${isDuplicate ? 'bg-red-800 hover:bg-red-700' : canSubmit ? 'bg-green-600 hover:bg-green-700' : 'bg-gray-600 hover:bg-gray-500'}`}
                         >
                           {label}
                         </button>
@@ -1512,7 +1531,7 @@ export default function AdminPage() {
                             {addWellStatus.message}
                           </div>
                         )}
-                      </>
+                      </div>
                     );
                   })()}
                 </div>

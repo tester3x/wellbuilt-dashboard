@@ -156,11 +156,81 @@ export function findDuplicateApi(
   return null;
 }
 
+/** Empty route is valid and stores as Unrouted. */
+export function defaultAddWellRoute(route: string): string {
+  const t = (route || '').trim();
+  return t || 'Unrouted';
+}
+
+/**
+ * Catalog/UI APIs may be `25-083-22277 (MT)` or 5-part `25-083-22277`.
+ * well_config requires `##-###-#####-##-##`.
+ */
+export function normalizeLinkedApiNo(apiNo: string): string {
+  let t = (apiNo || '').trim();
+  t = t.replace(/\s*\((ND|MT)\)\s*$/i, '').trim();
+  if (/^\d{2}-\d{3}-\d{5}$/.test(t)) return `${t}-00-00`;
+  return t;
+}
+
+export function projectLinkedWell(linked: LinkedNdicWell | null): LinkedNdicWell | null {
+  if (!linked) return null;
+  return {
+    well_name: linked.well_name,
+    api_no: normalizeLinkedApiNo(linked.api_no),
+    operator: linked.operator,
+  };
+}
+
+export type AddWellClickDecision =
+  | { action: 'submit'; wellName: string; config: WellConfigRecord }
+  | { action: 'reject'; reason: string; message: string; focus?: 'ndic' | 'form' }
+  | { action: 'busy'; message: string };
+
+/** UI click: never a silent no-op. Route defaults to Unrouted. */
+export function decideAddWellClick(input: {
+  form: AddWellFormInput;
+  configs: Record<string, { ndicApiNo?: string }>;
+  inflight: boolean;
+}): AddWellClickDecision {
+  if (input.inflight) {
+    return {
+      action: 'busy',
+      message: 'Already submitting this well. Wait for the current attempt to finish.',
+    };
+  }
+  const form: AddWellFormInput = {
+    ...input.form,
+    route: defaultAddWellRoute(input.form.route),
+    linkedWell: projectLinkedWell(input.form.linkedWell),
+  };
+  if (!form.linkedWell) {
+    return {
+      action: 'reject',
+      reason: 'ndic_required',
+      message: 'Link a well from the database before adding.',
+      focus: 'ndic',
+    };
+  }
+  const decided = decideAddWellSubmit(form, input.configs);
+  if (decided.action === 'reject') {
+    return {
+      ...decided,
+      focus: decided.reason === 'ndic_required' ? 'ndic' : 'form',
+    };
+  }
+  return decided;
+}
+
 export function decideAddWellSubmit(
   input: AddWellFormInput,
   configs: Record<string, { ndicApiNo?: string }>,
 ): AddWellUiDecision {
-  const built = buildAddWellConfig(input);
+  const built = buildAddWellConfig({
+    ...input,
+    route: defaultAddWellRoute(input.route),
+    linkedWell: projectLinkedWell(input.linkedWell),
+  });
   if (!built.ok) return { action: 'reject', reason: built.reason, message: built.message };
 
   const dupName = findDuplicateName(configs, built.wellName);
@@ -252,6 +322,22 @@ export function rebuildRoutesFromConfigs(
   Object.keys(wellsByRoute).forEach((route) => wellsByRoute[route].sort());
   return { routes: Array.from(routeSet).sort(), routeWells: wellsByRoute };
 }
+
+export const TORNADO_1_ATTEMPT: AddWellFormInput = {
+  wellName: 'Tornado 1',
+  route: '',
+  bottomInput: '3',
+  tanks: '1',
+  pullBbls: '140',
+  tankCapacity: '400',
+  tankHeight: '20',
+  waterWeight: '',
+  h2sStatus: 'unknown',
+  linkedWell: {
+    well_name: 'Tornado 1-24H',
+    api_no: '25-083-22277 (MT)',
+  },
+};
 
 export const KAHUNA_2_ATTEMPT: AddWellFormInput = {
   wellName: 'Kahuna 2',
