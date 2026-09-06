@@ -37,6 +37,9 @@ export const DEFAULT_PREFS: Record<UserRole, NotificationCategory[]> = {
   payroll: ['payroll_dispute', 'ticket_submitted'],
   viewer: ['well_alert'],
   driver: [],
+  // safety/lead: viewSafety+manageSafety, viewDispatch, viewTickets. Not manageDrivers or payroll.
+  safety: ['dispatch_update', 'well_alert', 'ticket_submitted'],
+  lead: ['dispatch_update', 'well_alert', 'ticket_submitted'],
 };
 
 export interface NotificationItem {
