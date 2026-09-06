@@ -6,8 +6,12 @@ import { useAuth } from '@/contexts/AuthContext';
 import { WellResponse, subscribeToWellStatusesUnified, wellResponsesFromCatalog } from '@/lib/wells';
 import { adminGetDashboardCatalog, classifiedReadFailure } from '@/lib/adminDashboardCatalog';
 import { canViewGlobalWellPool, docBelongsToTenant } from '@/lib/tenantScope';
+import {
+  nextWellsErrorAfterEvent,
+  wellQueueLiveGate,
+} from '@/lib/dispatchWellQueueLive';
 import { AppHeader } from '@/components/AppHeader';
-import { getFirestoreDb } from '@/lib/firebase';
+import { getFirebaseAuth, getFirestoreDb } from '@/lib/firebase';
 import { AddPullModal } from '@/components/AddPullModal';
 import { collection, addDoc, getDocs, getDoc, setDoc, query, where, orderBy, Timestamp, doc, updateDoc, onSnapshot, deleteDoc } from 'firebase/firestore';
 import { loadDisposals, searchDisposals, type NdicWell, loadOperators, searchOperators, type NdicOperator, loadWellsForOperator } from '@/lib/firestoreWells';
@@ -534,43 +538,84 @@ function DispatchPageInner() {
   // Subscribe to well data — tenant containment (7/9): the RTDB well queue is
   // the global (Liquid Gold) pool with no tenancy dimension. Scoped
   // non-liquid-gold companies get an empty queue (see lib/tenantScope.ts).
+  // Do not attach well_config / packets/outgoing until Auth has a minted
+  // ID token; a listen while RTDB is still anonymous is intermittent
+  // permission-denied for the same Owner.
   useEffect(() => {
-    if (!user) return;
-    if (!canViewGlobalWellPool(user)) {
+    const gate = wellQueueLiveGate({
+      loading,
+      uid: user?.uid,
+      companyId: user?.companyId,
+    });
+    if (gate === 'wait') return;
+    if (gate === 'skip') {
       setWells([]);
       setRoutes([]);
       setDataLoading(false);
       return;
     }
+    const uid = user!.uid;
     let cancelled = false;
-    const unsubscribe = subscribeToWellStatusesUnified((wellData, routeList) => {
+    let activeGen = 0;
+    let unsubscribe: (() => void) | undefined;
+    (async () => {
+      const auth = getFirebaseAuth();
+      await auth.authStateReady();
+      const current = auth.currentUser;
+      const ready = current?.uid === uid ? !!(await current.getIdToken()) : false;
       if (cancelled) return;
-      setWells(wellData);
-      setRoutes(routeList.filter(r => r !== 'Unrouted'));
-      setReadErrors(prev => ({ ...prev, wells: undefined }));
-      setDataLoading(false);
-    }, async (err) => {
-      try {
-        const catalog = await adminGetDashboardCatalog();
-        if (cancelled) return;
-        const snapshot = wellResponsesFromCatalog((catalog.wellConfig || {}) as Record<string, unknown>);
-        setWells(snapshot);
-        setRoutes([...new Set(snapshot.map(w => w.route).filter((r): r is string => !!r && r !== 'Unrouted'))]);
-        setReadErrors(prev => ({ ...prev, wells: classifiedReadFailure('well queue live status', err) }));
-      } catch (catalogErr) {
-        if (cancelled) return;
-        setWells([]);
-        setRoutes([]);
-        setReadErrors(prev => ({ ...prev, wells: classifiedReadFailure('well queue', catalogErr) }));
-      } finally {
-        if (!cancelled) setDataLoading(false);
-      }
-    });
+      if (!ready) return;
+      const gen = ++activeGen;
+      unsubscribe = subscribeToWellStatusesUnified((wellData, routeList) => {
+        if (cancelled || gen !== activeGen) return;
+        setWells(wellData);
+        setRoutes(routeList.filter(r => r !== 'Unrouted'));
+        setReadErrors((prev) => ({
+          ...prev,
+          wells: nextWellsErrorAfterEvent({
+            eventGen: gen,
+            activeGen,
+            event: 'success',
+            previous: prev.wells,
+          }),
+        }));
+        setDataLoading(false);
+      }, async (err) => {
+        if (cancelled || gen !== activeGen) return;
+        const liveError = classifiedReadFailure('well queue live status', err);
+        setReadErrors((prev) => ({
+          ...prev,
+          wells: nextWellsErrorAfterEvent({
+            eventGen: gen,
+            activeGen,
+            event: 'error',
+            previous: prev.wells,
+            nextError: liveError,
+          }),
+        }));
+        try {
+          const catalog = await adminGetDashboardCatalog();
+          if (cancelled || gen !== activeGen) return;
+          const snapshot = wellResponsesFromCatalog((catalog.wellConfig || {}) as Record<string, unknown>);
+          setWells(snapshot);
+          setRoutes([...new Set(snapshot.map(w => w.route).filter((r): r is string => !!r && r !== 'Unrouted'))]);
+        } catch (catalogErr) {
+          if (cancelled || gen !== activeGen) return;
+          setReadErrors((prev) => ({
+            ...prev,
+            wells: prev.wells || classifiedReadFailure('well queue', catalogErr),
+          }));
+        } finally {
+          if (!cancelled && gen === activeGen) setDataLoading(false);
+        }
+      }, { catalogFallback: false });
+    })();
     return () => {
       cancelled = true;
-      unsubscribe();
+      activeGen += 1;
+      unsubscribe?.();
     };
-  }, [user]);
+  }, [loading, user?.uid, user?.companyId]);
 
   // Load drivers + disposals
   useEffect(() => {
@@ -2066,7 +2111,7 @@ function DispatchPageInner() {
     <div className="dashboard-viewport-shell bg-gray-900">
       <AppHeader />
 
-      <main data-dashboard-scroll="workspace" className="flex-1 flex flex-col min-h-0 overflow-hidden px-4 py-4 pb-[max(1rem,env(safe-area-inset-bottom))]">
+      <main data-dashboard-scroll="dispatch" data-dispatch-scroll="primary" className="dispatch-scroll-main px-4 py-4">
 
         {/* ═══════════════════════════════════════════════════════════════════════
             DISPATCH TOOLBAR — Always visible at top. Quick actions + inline forms.
@@ -2121,13 +2166,13 @@ function DispatchPageInner() {
         {/* ═══════════════════════════════════════════════════════════════════════
             MAIN WORKSPACE — 50/50. Left: PW+SW top, Well Queue below. Right: Active Jobs full height.
             ═══════════════════════════════════════════════════════════════════════ */}
-        <div className="flex-1 flex gap-3 min-h-0">
+        <div className="dispatch-workspace">
 
-          {/* ═══════ LEFT HALF (50%): dispatch cards + well queue ═══════ */}
-          <div className="w-[50%] flex-shrink-0 flex flex-col gap-3 min-h-0 overflow-hidden">
+          {/* ═══════ LEFT: dispatch cards + well queue ═══════ */}
+          <div className="dispatch-pane">
 
             {/* ── Tabbed Dispatch Builder (PW / SW / Projects) ── */}
-            <div className={`bg-gray-800 border rounded-lg p-4 flex-shrink-0 flex flex-col h-[460px] ${
+            <div className={`dispatch-builder bg-gray-800 border rounded-lg p-4 flex flex-col ${
               builderTab === 'pw' ? 'border-blue-600/40' : builderTab === 'sw' ? 'border-purple-600/40' : 'border-emerald-600/40'
             }`}>
               {/* Builder tab bar + Add Pull */}
@@ -2813,8 +2858,8 @@ function DispatchPageInner() {
               )}{/* end Projects tab */}
             </div>{/* end Tabbed Builder panel */}
 
-            {/* ═══════ Well Queue (fills remaining left half) ═══════ */}
-            <div className="bg-gray-800 rounded-lg border border-gray-700 flex-1 flex flex-col overflow-hidden">
+            {/* ═══════ Well Queue ═══════ */}
+            <div className="dispatch-queue bg-gray-800 rounded-lg border border-gray-700 flex flex-col">
               {/* Panel header with filters */}
               <div className="flex items-center gap-3 px-4 py-2.5 border-b border-gray-700 flex-shrink-0">
                 <h3 className="text-sm font-semibold text-white flex-shrink-0">Well Queue</h3>
@@ -2847,7 +2892,7 @@ function DispatchPageInner() {
               )}
 
               {/* Scrollable well table */}
-              <div className="flex-1 min-h-0 overflow-y-auto overflow-x-auto pb-[max(1rem,env(safe-area-inset-bottom))]">
+              <div className="overflow-x-auto">
                 {dataLoading ? (
                   <div className="text-gray-400 py-8 text-center">Loading well data...</div>
                 ) : pwQueue.length === 0 ? (
@@ -2930,8 +2975,8 @@ function DispatchPageInner() {
           </div>{/* end left half */}
 
           {/* ═══════ RIGHT HALF (50%): Active Jobs / Projects ═══════ */}
-          <div className="w-[50%] flex-shrink-0 flex flex-col min-h-0 overflow-hidden">
-            <div className="bg-gray-800 rounded-lg border border-gray-700 flex-1 flex flex-col overflow-hidden">
+          <div className="dispatch-pane">
+            <div className="dispatch-jobs bg-gray-800 rounded-lg border border-gray-700 flex flex-col">
               {/* Panel header with tabs */}
               <div className="flex items-center justify-between px-4 py-2.5 border-b border-gray-700 flex-shrink-0">
                 <div className="flex items-center gap-1">
@@ -3033,7 +3078,7 @@ function DispatchPageInner() {
                 </div>
               )}
               {/* Scrollable content */}
-              <div className="flex-1 overflow-y-auto p-3">
+              <div className="p-3">
                 {rightPanelTab === 'jobs' && (
                   <ActiveDispatchPanel
                     dispatches={dispatches.filter(d => d.status !== 'completed' && d.status !== 'dismissed')}

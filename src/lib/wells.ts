@@ -361,16 +361,19 @@ function calcTimeTillPull(currentInches: number, targetInches: number, flowRateM
 export function subscribeToWellStatusesUnified(
   callback: (wells: WellResponse[], routes: string[]) => void,
   onError?: (err: unknown) => void,
+  options?: { catalogFallback?: boolean },
 ): () => void {
   const db = getFirebaseDatabase();
   const configRef = ref(db, 'well_config');
   const outgoingRef = ref(db, 'packets/outgoing');
+  const catalogFallback = options?.catalogFallback !== false;
 
   let configData: Record<string, WellConfig> = {};
   let outgoingData: Record<string, WellResponse> = {};
   let gotConfigs = false;
   let gotOutgoing = false;
   let failed = false;
+  let active = true;
 
   let debounceTimer: ReturnType<typeof setTimeout> | null = null;
   const DEBOUNCE_MS = 300;
@@ -384,14 +387,23 @@ export function subscribeToWellStatusesUnified(
   }, 5000);
 
   const reportError = (err: Error) => {
+    if (!active || failed) return;
     failed = true;
     onError?.(err);
+    if (!catalogFallback) return;
     wellPoolResponses()
-      .then(({ wells, routes }) => callback(wells, routes))
-      .catch(() => callback([], []));
+      .then(({ wells, routes }) => {
+        if (!active) return;
+        callback(wells, routes);
+      })
+      .catch(() => {
+        if (!active) return;
+        callback([], []);
+      });
   };
 
   const mergeAndCallback = (force = false) => {
+    if (!active || failed) return;
     if (!force && (!gotConfigs || !gotOutgoing)) return;
     if (gotConfigs && gotOutgoing) clearTimeout(timeout);
 
@@ -538,6 +550,7 @@ export function subscribeToWellStatusesUnified(
   }, 30000);
 
   return () => {
+    active = false;
     clearTimeout(timeout);
     if (debounceTimer) clearTimeout(debounceTimer);
     clearInterval(refreshInterval);

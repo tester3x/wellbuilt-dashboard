@@ -45,3 +45,48 @@ body {
   overflow-y: auto;
   padding-bottom: max(1.5rem, env(safe-area-inset-bottom, 0px));
 }
+
+/* Dispatch-only: page-level vertical scroll. Do not nest another 100dvh.
+   Short/narrow/Fold: stacked document flow. Tall wide desktop: side-by-side
+   columns that still grow so this main scroller can reach the bottom. */
+.dispatch-scroll-main {
+  flex: 1 1 0%;
+  min-height: 0;
+  overflow-x: hidden;
+  overflow-y: auto;
+  overscroll-behavior-y: contain;
+  padding-bottom: max(1.5rem, env(safe-area-inset-bottom, 0px));
+}
+
+.dispatch-workspace {
+  display: flex;
+  flex-direction: column;
+  gap: 0.75rem;
+  min-width: 0;
+}
+
+.dispatch-pane {
+  width: 100%;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 0.75rem;
+}
+
+.dispatch-builder,
+.dispatch-queue,
+.dispatch-jobs {
+  flex-shrink: 0;
+  min-width: 0;
+}
+
+@media (min-width: 1280px) and (min-height: 900px) {
+  .dispatch-workspace {
+    flex-direction: row;
+    align-items: flex-start;
+  }
+  .dispatch-pane {
+    width: 50%;
+    flex: 1 1 0%;
+  }
+}
