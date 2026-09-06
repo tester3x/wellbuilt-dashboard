@@ -38,6 +38,10 @@ check('ticket column labels pin under the operator header',
   pageSrc.includes('Invoice #'));
 check('expanded operator row pins with the header chrome',
   pageSrc.includes('sticky top-10 z-[15] bg-gray-800'));
+check('ticket columns share the card width instead of exploding',
+  pageSrc.includes('minmax(0,1.3fr)') &&
+  !pageSrc.includes('min-w-max table-fixed') &&
+  !pageSrc.includes('table-fixed'));
 check('tab labels do not wrap',
   (pageSrc.match(/whitespace-nowrap shrink-0 transition-colors/g) || []).length >= 3);
 check('tab group is items-center not stretch',
@@ -48,6 +52,10 @@ check('invoice number still renders raw field, not synthesized',
   !pageSrc.includes('invoiceNumber ??'));
 check('Generate Bill control still present',
   pageSrc.includes('Generate Bill'));
+check('receivables slider is a thin themed scrollbar',
+  pageSrc.includes('[data-billing-scroll="receivables"]::-webkit-scrollbar') &&
+  pageSrc.includes('height: 8px') &&
+  pageSrc.includes('scrollbar-width: thin'));
 
 function lineRows(n) {
   return Array.from({ length: n }, (_, i) => `
@@ -65,7 +73,6 @@ function lineRows(n) {
 }
 
 function makeFixture(rowCount) {
-  const rows = lineRows(rowCount);
   return `<!doctype html><html><head><style>
 html,body{margin:0;background:#111827;color:#fff;font-family:sans-serif;}
 .page{height:100dvh;max-height:100dvh;display:flex;flex-direction:column;overflow:hidden;}
@@ -76,10 +83,15 @@ main{flex:1;min-height:0;display:flex;flex-direction:column;overflow:hidden;padd
 .tab.active{background:#2563eb;color:#fff;}
 .toolbar{display:flex;flex-wrap:wrap;align-items:center;gap:12px;margin-bottom:16px;flex-shrink:0;}
 .card{flex:1;min-height:0;display:flex;flex-direction:column;background:#1f2937;border:1px solid #374151;border-radius:8px;overflow:hidden;}
-.scroll{flex:1;min-height:0;overflow:auto;}
-table{width:max-content;min-width:2200px;border-collapse:collapse;}
+.scroll{flex:1;min-height:0;overflow:auto;scrollbar-width:thin;}
+.scroll::-webkit-scrollbar{height:8px;width:8px;}
+.scroll::-webkit-scrollbar-thumb{background:#6b7280;border-radius:999px;}
+.scroll::-webkit-scrollbar-track{background:#111827;}
+table{width:100%;border-collapse:collapse;}
+.tickets{display:grid;grid-template-columns:4.5rem 4.5rem minmax(0,1.3fr) minmax(0,1.2fr) minmax(0,1fr) 3.25rem 3.25rem 3.25rem 4.25rem 3.5rem 4.25rem;gap:0 8px;padding:4px 16px;}
+.tickets>*{min-width:0;}
 th{position:sticky;top:0;background:#374151;padding:8px 12px;text-align:left;font-size:13px;z-index:20;}
-td{padding:8px 12px;white-space:nowrap;}
+td{padding:6px 8px;}
 tfoot td{position:sticky;bottom:0;background:#1f2937;z-index:20;}
 .action{background:#2563eb;color:#fff;border:0;border-radius:4px;padding:4px 8px;font-size:12px;}
 </style></head><body>
@@ -108,12 +120,12 @@ tfoot td{position:sticky;bottom:0;background:#1f2937;z-index:20;}
               <td><button class="action" id="generate-bill">Generate Bill</button></td>
             </tr>
             <tr data-billing-pin="ticket-labels" style="position:sticky;top:104px;z-index:15;background:#1f2937">
-              <td colspan="9" style="padding:8px 12px">Invoice #</td>
+              <td colspan="9" style="padding:0">
+                <div class="tickets" id="ticket-head"><span>Invoice #</span><span>Date</span><span>Well</span><span>Drop-off</span><span>Driver</span><span>BBLs</span><span>Hours</span><span>Fuel Min</span><span>Base</span><span>FSC</span><span id="ticket-total-label">Total</span></div>
+              </td>
             </tr>
             <tr><td colspan="9" style="padding:0">
-              <table>
-                <tbody>${rows}</tbody>
-              </table>
+              ${lineRows(rowCount).replaceAll('<tr>', '<div class="tickets">').replaceAll('</tr>', '</div>').replaceAll('<td', '<span').replaceAll('</td>', '</span>')}
             </td></tr>
           </tbody>
           <tfoot><tr>
@@ -169,6 +181,7 @@ try {
         recH: rec.getBoundingClientRect().height,
         fuelW: fuel.getBoundingClientRect().width,
         actionRight: ab.right,
+        actionInView: ab.left >= sb.left - 1 && ab.right <= sb.right + 1,
         pageOverflowX: document.documentElement.scrollWidth > innerWidth + 1,
       };
     });
@@ -178,8 +191,8 @@ try {
     check(`${vp.name} expanded list is taller than the visible card`,
       metrics.scrollHeight > metrics.clientHeight + 40,
       `scrollHeight=${metrics.scrollHeight} clientHeight=${metrics.clientHeight}`);
-    check(`${vp.name} table is wider than the visible card`,
-      metrics.scrollWidth > metrics.clientWidth + 20,
+    check(`${vp.name} ticket columns fit the window instead of one-per-screen`,
+      metrics.scrollWidth < metrics.clientWidth * 1.35,
       `scrollWidth=${metrics.scrollWidth} clientWidth=${metrics.clientWidth}`);
     check(`${vp.name} horizontal slider is pinned to the window bottom`,
       metrics.scrollerBottom <= vp.height + 1 && metrics.scrollerBottom >= vp.height - 24,
@@ -208,8 +221,9 @@ try {
     });
     check(`${vp.name} H-scroll does not jump to the bottom of the list`,
       afterH.endTop === afterH.startTop, `scrollTop ${afterH.startTop} -> ${afterH.endTop}`);
-    check(`${vp.name} right-side Actions can be brought into view`,
-      afterH.actionVisible, `actionRight=${afterH.actionRight}`);
+    check(`${vp.name} Generate Bill is on screen without hunting the slider`,
+      metrics.actionInView || metrics.actionRight < vp.width + 100,
+      `actionRight=${metrics.actionRight} vw=${vp.width}`);
 
     const pinned = await page.evaluate(() => {
       const scroller = document.querySelector('[data-billing-scroll="receivables"]');
