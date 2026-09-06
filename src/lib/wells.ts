@@ -56,6 +56,47 @@ export interface WellConfig {
 }
 
 /** Snapshot well list from the admin catalog when RTDB parent reads are denied. */
+export function parseOutgoingResponses(raw: unknown): Record<string, WellResponse> {
+  const responses: Record<string, WellResponse> = {};
+  if (!raw || typeof raw !== 'object') return responses;
+  for (const [childKey, data] of Object.entries(raw as Record<string, any>)) {
+    if (!childKey.startsWith('response_') || childKey.includes('delete') || !data?.wellName) continue;
+    const key = String(data.wellName).replace(/\s/g, '');
+    responses[key] = { ...data, responseId: childKey };
+  }
+  return responses;
+}
+
+/** Parent listen. Live rules allow this only for wellbuiltAdmin && platformAdminEnabled. */
+export function subscribePacketsOutgoing(
+  onData: (rows: Record<string, WellResponse>) => void,
+  onError?: (err: Error) => void,
+): () => void {
+  const outgoingRef = ref(getFirebaseDatabase(), 'packets/outgoing');
+  return onValue(outgoingRef, (snapshot) => {
+    onData(snapshot.exists() ? parseOutgoingResponses(snapshot.val()) : {});
+  }, (err) => {
+    onError?.(err);
+  });
+}
+
+export function overlayOutgoingOnCatalog(
+  catalogWells: WellResponse[],
+  outgoing: Record<string, WellResponse>,
+): WellResponse[] {
+  return catalogWells.map((well) => {
+    const hit = outgoing[well.wellName.replace(/\s/g, '')];
+    if (!hit) return well;
+    return {
+      ...well,
+      ...hit,
+      wellName: well.wellName,
+      route: well.route || hit.route,
+      ndicName: well.ndicName || hit.ndicName,
+    };
+  });
+}
+
 export function wellResponsesFromCatalog(wellConfig: Record<string, unknown>): WellResponse[] {
   return Object.entries(wellConfig).map(([wellName, raw]) => {
     const config = (raw && typeof raw === 'object' ? raw : {}) as Record<string, unknown>;

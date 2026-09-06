@@ -7,6 +7,7 @@ import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 import {
+  canListenPacketsOutgoingParent,
   nextWellsErrorAfterEvent,
   wellQueueLiveGate,
   wellQueueLiveGenerationApplies,
@@ -43,21 +44,29 @@ check('stale success does not clear newer error',
 
 const page = src('src/app/dispatch/page.tsx');
 const wells = src('src/lib/wells.ts');
-check('dispatch waits for loading+uid gate', page.includes('wellQueueLiveGate') && page.includes('authStateReady') && page.includes('getIdToken'));
+check('platform admin claims may listen outgoing parent',
+  canListenPacketsOutgoingParent({ wellbuiltAdmin: true, platformAdminEnabled: true }) === true);
+check('admin claim without platformAdminEnabled cannot listen outgoing',
+  canListenPacketsOutgoingParent({ wellbuiltAdmin: true }) === false);
+check('empty claims cannot listen outgoing', canListenPacketsOutgoingParent({}) === false);
+check('dispatch waits for loading+uid gate', page.includes('wellQueueLiveGate') && page.includes('authStateReady') && page.includes('getIdTokenResult'));
 check('dispatch effect keys uid not whole user object', page.includes('[loading, user?.uid, user?.companyId]'));
-check('dispatch live subscribe disables inner catalog success callback',
-  page.includes('catalogFallback: false'));
-check('dispatch well-queue effect is not keyed on whole user object',
-  page.includes('[loading, user?.uid, user?.companyId]') &&
-  !/subscribeToWellStatusesUnified[\s\S]{0,900}\}, \[user\]\);/.test(page));
-check('unified subscriber honors catalogFallback false',
-  wells.includes('catalogFallback') && wells.includes('if (!catalogFallback) return;'));
-check('unified subscriber ignores merges after failure',
-  wells.includes('if (!active || failed) return;'));
-check('paths remain well_config and packets/outgoing',
-  wells.includes("ref(db, 'well_config')") && wells.includes("ref(db, 'packets/outgoing')"));
+check('dispatch does not parent-listen well_config',
+  !page.includes("subscribeToWellStatusesUnified") && !page.includes("'well_config'"));
+check('dispatch uses authorized catalog for well_config', page.includes('adminGetDashboardCatalog'));
+check('dispatch outgoing listen is claim-gated',
+  page.includes('canListenPacketsOutgoingParent') && page.includes('subscribePacketsOutgoing'));
 check('no getIdToken(true) force refresh',
-  !page.includes('getIdToken(true)') && !src('src/lib/dispatchWellQueueLive.ts').includes('getIdToken(true)'));
+  !page.includes('getIdToken(true)'));
+check('packets/outgoing helper exists',
+  wells.includes("ref(getFirebaseDatabase(), 'packets/outgoing')"));
+check('wb admin without platformAdminEnabled is catalog-only',
+  canListenPacketsOutgoingParent({ wellbuiltAdmin: true, platformAdminEnabled: false }) === false);
+check('live-status deny is only from outgoing error callback',
+  (page.match(/classifiedReadFailure\('well queue live status'/g) || []).length === 1
+  && page.includes("classifiedReadFailure('well queue live status', err)"));
+check('outgoing listener detaches if effect cancelled during attach',
+  /if \(cancelled\) \{\s*unsubscribe\(\);\s*unsubscribe = undefined;/s.test(page));
 
 console.log(`\n${pass} passed, ${fail} failed`);
 if (fail) process.exit(1);

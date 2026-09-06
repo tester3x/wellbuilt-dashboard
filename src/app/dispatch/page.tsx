@@ -3,10 +3,16 @@
 import { useEffect, useState, useMemo, useCallback, Suspense } from 'react';
 import { useRouter, useSearchParams } from 'next/navigation';
 import { useAuth } from '@/contexts/AuthContext';
-import { WellResponse, subscribeToWellStatusesUnified, wellResponsesFromCatalog } from '@/lib/wells';
+import {
+  WellResponse,
+  overlayOutgoingOnCatalog,
+  subscribePacketsOutgoing,
+  wellResponsesFromCatalog,
+} from '@/lib/wells';
 import { adminGetDashboardCatalog, classifiedReadFailure } from '@/lib/adminDashboardCatalog';
 import { canViewGlobalWellPool, docBelongsToTenant } from '@/lib/tenantScope';
 import {
+  canListenPacketsOutgoingParent,
   nextWellsErrorAfterEvent,
   wellQueueLiveGate,
 } from '@/lib/dispatchWellQueueLive';
@@ -535,12 +541,9 @@ function DispatchPageInner() {
     }
   }, [user, loading, router]);
 
-  // Subscribe to well data — tenant containment (7/9): the RTDB well queue is
-  // the global (Liquid Gold) pool with no tenancy dimension. Scoped
-  // non-liquid-gold companies get an empty queue (see lib/tenantScope.ts).
-  // Do not attach well_config / packets/outgoing until Auth has a minted
-  // ID token; a listen while RTDB is still anonymous is intermittent
-  // permission-denied for the same Owner.
+  // Well queue: catalog is the authorized well_config source. Live RTDB
+  // well_config parent has no .read. packets/outgoing parent is only
+  // readable with wellbuiltAdmin && platformAdminEnabled.
   useEffect(() => {
     const gate = wellQueueLiveGate({
       loading,
@@ -558,18 +561,49 @@ function DispatchPageInner() {
     let cancelled = false;
     let activeGen = 0;
     let unsubscribe: (() => void) | undefined;
+    let catalogWells: WellResponse[] = [];
+    const applyWells = (rows: WellResponse[]) => {
+      setWells(rows);
+      setRoutes([...new Set(rows.map((w) => w.route).filter((r): r is string => !!r && r !== 'Unrouted'))]);
+    };
     (async () => {
       const auth = getFirebaseAuth();
       await auth.authStateReady();
       const current = auth.currentUser;
-      const ready = current?.uid === uid ? !!(await current.getIdToken()) : false;
+      if (!current || current.uid !== uid) return;
+      const token = await current.getIdTokenResult();
       if (cancelled) return;
-      if (!ready) return;
       const gen = ++activeGen;
-      unsubscribe = subscribeToWellStatusesUnified((wellData, routeList) => {
+      try {
+        const catalog = await adminGetDashboardCatalog();
         if (cancelled || gen !== activeGen) return;
-        setWells(wellData);
-        setRoutes(routeList.filter(r => r !== 'Unrouted'));
+        catalogWells = wellResponsesFromCatalog((catalog.wellConfig || {}) as Record<string, unknown>);
+        applyWells(catalogWells);
+        setReadErrors((prev) => ({
+          ...prev,
+          wells: nextWellsErrorAfterEvent({
+            eventGen: gen,
+            activeGen,
+            event: 'success',
+            previous: prev.wells,
+          }),
+        }));
+      } catch (catalogErr) {
+        if (cancelled || gen !== activeGen) return;
+        setReadErrors((prev) => ({
+          ...prev,
+          wells: prev.wells || classifiedReadFailure('well queue', catalogErr),
+        }));
+        setDataLoading(false);
+        return;
+      }
+      if (!canListenPacketsOutgoingParent(token.claims)) {
+        setDataLoading(false);
+        return;
+      }
+      unsubscribe = subscribePacketsOutgoing((outgoing) => {
+        if (cancelled || gen !== activeGen) return;
+        applyWells(overlayOutgoingOnCatalog(catalogWells, outgoing));
         setReadErrors((prev) => ({
           ...prev,
           wells: nextWellsErrorAfterEvent({
@@ -580,9 +614,8 @@ function DispatchPageInner() {
           }),
         }));
         setDataLoading(false);
-      }, async (err) => {
+      }, (err) => {
         if (cancelled || gen !== activeGen) return;
-        const liveError = classifiedReadFailure('well queue live status', err);
         setReadErrors((prev) => ({
           ...prev,
           wells: nextWellsErrorAfterEvent({
@@ -590,25 +623,15 @@ function DispatchPageInner() {
             activeGen,
             event: 'error',
             previous: prev.wells,
-            nextError: liveError,
+            nextError: classifiedReadFailure('well queue live status', err),
           }),
         }));
-        try {
-          const catalog = await adminGetDashboardCatalog();
-          if (cancelled || gen !== activeGen) return;
-          const snapshot = wellResponsesFromCatalog((catalog.wellConfig || {}) as Record<string, unknown>);
-          setWells(snapshot);
-          setRoutes([...new Set(snapshot.map(w => w.route).filter((r): r is string => !!r && r !== 'Unrouted'))]);
-        } catch (catalogErr) {
-          if (cancelled || gen !== activeGen) return;
-          setReadErrors((prev) => ({
-            ...prev,
-            wells: prev.wells || classifiedReadFailure('well queue', catalogErr),
-          }));
-        } finally {
-          if (!cancelled && gen === activeGen) setDataLoading(false);
-        }
-      }, { catalogFallback: false });
+        setDataLoading(false);
+      });
+      if (cancelled) {
+        unsubscribe();
+        unsubscribe = undefined;
+      }
     })();
     return () => {
       cancelled = true;

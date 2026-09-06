@@ -1,7 +1,8 @@
 /**
  * Dispatch well-queue live-status attach policy.
- * RTDB well_config / packets/outgoing require auth != null. Subscribing
- * before Auth has minted an ID token produces intermittent permission-denied.
+ * Live RTDB well_config has no parent .read — catalog is the authorized
+ * source. packets/outgoing parent read is wellbuiltAdmin &&
+ * platformAdminEnabled only. Do not parent-listen well_config.
  */
 
 export type WellQueueLiveAuth = {
@@ -24,6 +25,13 @@ export function wellQueueLiveGenerationApplies(eventGen: number, activeGen: numb
 }
 
 /** Stale error must not replace a newer live success. */
+/** Live RTDB packets/outgoing parent read is claim-gated. well_config parent has no .read. */
+export function canListenPacketsOutgoingParent(claims: unknown): boolean {
+  if (!claims || typeof claims !== 'object') return false;
+  const c = claims as Record<string, unknown>;
+  return c.wellbuiltAdmin === true && c.platformAdminEnabled === true;
+}
+
 export function nextWellsErrorAfterEvent(args: {
   eventGen: number;
   activeGen: number;
