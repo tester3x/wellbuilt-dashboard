@@ -41,9 +41,9 @@ check('wells grid no longer traps in flex-1 min-h-0 overflow',
 check('add-well action id preserved',
   admin.includes('id="add-well-action"') && admin.includes('staffCreateWellConfig'));
 check('dispatch uses viewport shell',
-  dispatch.includes('dashboard-viewport-shell') && dispatch.includes('data-dashboard-scroll="workspace"'));
-check('dispatch main has min-h-0',
-  dispatch.includes('flex-1 flex flex-col min-h-0 overflow-hidden'));
+  dispatch.includes('dashboard-viewport-shell'));
+check('dispatch main is the page scroller',
+  dispatch.includes('data-dispatch-scroll="primary"') && dispatch.includes('dispatch-scroll-main'));
 check('header title still centered wrapping tools then tabs',
   header.includes('order-2 w-full min-w-0 flex flex-wrap justify-center') &&
   header.includes('aria-label="Account and administration"') &&
