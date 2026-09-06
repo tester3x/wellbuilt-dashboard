@@ -89,12 +89,19 @@ export const upsertDriverInvoice = httpsV2.onCall(
         }
         if (TERMINAL_STATUSES.has(nextStatus) && !TERMINAL_STATUSES.has(prevStatus)) {
           inv.closedAt = FieldValue.serverTimestamp();
-        } else if (TERMINAL_STATUSES.has(prevStatus)) {
+        } else {
           delete inv.closedAt;
         }
+        if (prev.packetId) delete inv.packetId;
+        if (prev.canonicalJobId) delete inv.canonicalJobId;
         await ref.set(inv, { merge: data.merge !== false });
       } else {
         inv.createdAt = FieldValue.serverTimestamp();
+        if (TERMINAL_STATUSES.has(String(inv.status || '').toLowerCase())) {
+          inv.closedAt = FieldValue.serverTimestamp();
+        } else {
+          delete inv.closedAt;
+        }
         await ref.set(inv);
       }
     } else {

@@ -14,4 +14,8 @@ describe('upsertDriverInvoice stamps stable server closedAt', () => {
   it('still refuses reopen', () => {
     expect(src).toMatch(/Cannot reopen terminal invoice/);
   });
+  it('freezes packetId and canonicalJobId after first write', () => {
+    expect(src).toMatch(/if \(prev\.packetId\) delete inv\.packetId/);
+    expect(src).toMatch(/if \(prev\.canonicalJobId\) delete inv\.canonicalJobId/);
+  });
 });
