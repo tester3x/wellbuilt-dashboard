@@ -12,6 +12,7 @@ import {
   wellQueueLiveGate,
   wellQueueLiveGenerationApplies,
 } from '../src/lib/dispatchWellQueueLive.ts';
+import { mergeWellPool } from '../src/lib/wellPoolMerge.ts';
 
 const root = join(dirname(fileURLToPath(import.meta.url)), '..');
 const src = (rel) => readFileSync(join(root, rel), 'utf8');
@@ -67,6 +68,30 @@ check('live-status deny is only from outgoing error callback',
   && page.includes("classifiedReadFailure('well queue live status', err)"));
 check('outgoing listener detaches if effect cancelled during attach',
   /if \(cancelled\) \{\s*unsubscribe\(\);\s*unsubscribe = undefined;/s.test(page));
+check('dispatch merges catalog wellStatus onto wellConfig',
+  page.includes('mergeWellPool') && page.includes('catalog.wellStatus'));
+
+const configOnly = mergeWellPool(
+  { 'Gabriel 1': { route: 'Gabriels' } },
+  {},
+);
+check('config-only catalog row has no live data',
+  configOnly[0].currentLevel === '--' && !configOnly[0].nextPullTimeUTC);
+
+const merged = mergeWellPool(
+  { 'Gabriel 1': { route: 'Gabriels' } },
+  { 'Gabriel 1': { currentLevel: '5\'0"', nextPullTimeUTC: '2026-09-06T12:00:00Z', timeTillPull: '2h' } },
+);
+check('catalog wellStatus fills queue live fields',
+  merged[0].currentLevel === '5\'0"'
+  && merged[0].nextPullTimeUTC === '2026-09-06T12:00:00Z'
+  && merged[0].timeTillPull === '2h'
+  && merged[0].route === 'Gabriels');
+check('space-stripped wellStatus still merges',
+  mergeWellPool(
+    { 'Gabriel 1': { route: 'Gabriels' } },
+    { Gabriel1: { currentLevel: '4\'0"', nextPullTimeUTC: '2026-09-06T13:00:00Z' } },
+  )[0].currentLevel === '4\'0"');
 
 console.log(`\n${pass} passed, ${fail} failed`);
 if (fail) process.exit(1);

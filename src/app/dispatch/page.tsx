@@ -5,9 +5,9 @@ import { useRouter, useSearchParams } from 'next/navigation';
 import { useAuth } from '@/contexts/AuthContext';
 import {
   WellResponse,
+  mergeWellPool,
   overlayOutgoingOnCatalog,
   subscribePacketsOutgoing,
-  wellResponsesFromCatalog,
 } from '@/lib/wells';
 import { adminGetDashboardCatalog, classifiedReadFailure } from '@/lib/adminDashboardCatalog';
 import { canViewGlobalWellPool, docBelongsToTenant } from '@/lib/tenantScope';
@@ -577,7 +577,12 @@ function DispatchPageInner() {
       try {
         const catalog = await adminGetDashboardCatalog();
         if (cancelled || gen !== activeGen) return;
-        catalogWells = wellResponsesFromCatalog((catalog.wellConfig || {}) as Record<string, unknown>);
+        // wellStatus is the authorized outgoing projection. Config-only rows
+        // have currentLevel '--' and the queue hides those as "no data".
+        catalogWells = mergeWellPool(
+          (catalog.wellConfig || {}) as Record<string, unknown>,
+          (catalog.wellStatus || {}) as Record<string, unknown>,
+        );
         applyWells(catalogWells);
         setReadErrors((prev) => ({
           ...prev,
