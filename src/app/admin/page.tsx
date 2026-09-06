@@ -146,7 +146,16 @@ export default function AdminPage() {
   const addWellInflightRef = useRef(false);
   const addWellNdicRef = useRef<HTMLDivElement | null>(null);
   const addWellActionRef = useRef<HTMLDivElement | null>(null);
-  const [activeTab, setActiveTab] = useState<'routes' | 'wells' | 'drivers' | 'companies' | 'gpsroutes' | 'equipment' | 'plans' | 'adminaudit'>('wells');
+  type AdminTab = 'routes' | 'wells' | 'drivers' | 'companies' | 'gpsroutes' | 'equipment' | 'plans' | 'adminaudit';
+  const [activeTab, setActiveTabState] = useState<AdminTab>('wells');
+  const setActiveTab = (tab: AdminTab) => {
+    setActiveTabState(tab);
+    // Keep the active section in the URL so reload preserves it. Retain
+    // unrelated query parameters, the current path and the fragment.
+    const url = new URL(window.location.href);
+    url.searchParams.set('tab', tab);
+    window.history.replaceState(window.history.state, '', url);
+  };
 
   // vc51.9A7 — verified-admin session (display gate; server re-decides
   // authority on every protected call).
@@ -154,12 +163,17 @@ export default function AdminPage() {
 
   // Read ?tab= from URL to deep-link into specific admin section (e.g. from pulsing Admin badge)
   useEffect(() => {
+    const restoreTab = () => {
     const params = new URLSearchParams(window.location.search);
     const tab = params.get('tab');
     const validTabs = ['routes', 'wells', 'drivers', 'companies', 'gpsroutes', 'equipment', 'plans', 'adminaudit'];
     if (tab && validTabs.includes(tab)) {
-      setActiveTab(tab as any);
+      setActiveTabState(tab as AdminTab);
     }
+    };
+    restoreTab();
+    window.addEventListener('popstate', restoreTab);
+    return () => window.removeEventListener('popstate', restoreTab);
   }, []);
 
   // Direct-route manipulation into the protected tabs is bounced until
