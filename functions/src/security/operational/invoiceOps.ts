@@ -87,6 +87,11 @@ export const upsertDriverInvoice = httpsV2.onCall(
         if (TERMINAL_STATUSES.has(prevStatus) && !TERMINAL_STATUSES.has(nextStatus)) {
           throw new httpsV2.HttpsError('failed-precondition', 'Cannot reopen terminal invoice');
         }
+        if (TERMINAL_STATUSES.has(nextStatus) && !TERMINAL_STATUSES.has(prevStatus)) {
+          inv.closedAt = FieldValue.serverTimestamp();
+        } else if (TERMINAL_STATUSES.has(prevStatus)) {
+          delete inv.closedAt;
+        }
         await ref.set(inv, { merge: data.merge !== false });
       } else {
         inv.createdAt = FieldValue.serverTimestamp();
