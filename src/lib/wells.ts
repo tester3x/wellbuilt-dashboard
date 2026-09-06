@@ -383,6 +383,17 @@ export function subscribeToWellStatusesUnified(
     }
   }, 5000);
 
+  // Authorized well-pool source. Parent RTDB well_config listens are denied
+  // under live rules; adminGetWellPool already merges outgoing/status.
+  wellPoolResponses()
+    .then(({ wells, routes }) => {
+      if (failed) return;
+      callback(wells, routes);
+    })
+    .catch((err) => {
+      console.warn('[wells.ts] adminGetWellPool seed failed', err);
+    });
+
   const reportError = (err: Error) => {
     failed = true;
     onError?.(err);

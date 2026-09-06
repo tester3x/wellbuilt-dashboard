@@ -261,12 +261,13 @@ describe('canonical packet ID joins ingest storage key to processor trigger', ()
     expect(pullHandler).not.toMatch(/wbm_\$\{/);
   });
 
-  it('WB-T ingestDriverPacket remains unchanged and does not use canonical mint keys', () => {
+  it('WB-T ingestDriverPacket uses the minted packetId as the incoming key (no idem_ rewrite)', () => {
     expect(wbtIngestSrc).toMatch(/export const ingestDriverPacket/);
-    expect(wbtIngestSrc).toMatch(/idem_\$\{packet\.idempotencyKey/);
-    expect(wbtIngestSrc).not.toMatch(/wbmPullStorageKey/);
-    expect(wbtIngestSrc).not.toMatch(/matchesMintPacketId/);
+    expect(wbtIngestSrc).toMatch(/wbtIncomingPath/);
+    expect(wbtIngestSrc).toMatch(/wbtPullStorageKey/);
+    expect(wbtIngestSrc).not.toMatch(/idem_\$\{packet\.idempotencyKey/);
     expect(wbtIngestSrc).not.toMatch(/wbmIncomingPath/);
+    expect(wbtIngestSrc).not.toMatch(/evaluateWbmPull/);
   });
 
   it('pull envelope has no route assignment and ingest does not mutate profiles', () => {

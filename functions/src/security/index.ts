@@ -38,6 +38,7 @@ export {
   ingestDriverPacket,
   ingestWbmPull,
   ingestWbmEdit,
+  resolveWbtWellConfig,
   upsertDriverShift,
   resolveActiveDriverShift,
   claimDriverShift,

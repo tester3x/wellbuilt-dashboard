@@ -1393,7 +1393,14 @@ export const processIncomingPull = functionsV1.database
           driverHash: data.driverId ?? null,
           driverName: data.driverName ?? null,
           wellName,
-          wellConfigKey: wellName,
+          wellConfigKey:
+            typeof (data as any).wellConfigKey === 'string' && (data as any).wellConfigKey.trim()
+              ? (data as any).wellConfigKey.trim()
+              : wellName,
+          wellId:
+            typeof (data as any).wellId === 'string' && (data as any).wellId.trim()
+              ? (data as any).wellId.trim()
+              : null,
           bblsTaken: bblsNum,
           tankLevelFeet: tankLevelFeetNum,
           tankAfterFeet: tankAfterFeetNum,
@@ -4793,6 +4800,7 @@ export {
   ingestDriverPacket,
   ingestWbmPull,
   ingestWbmEdit,
+  resolveWbtWellConfig,
   upsertDriverShift,
   resolveActiveDriverShift,
   claimDriverShift,

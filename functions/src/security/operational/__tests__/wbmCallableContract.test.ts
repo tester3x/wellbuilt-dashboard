@@ -23,6 +23,7 @@ describe('WB-M callable export / contract matrix', () => {
     expect(index).toMatch(/ingestDriverPacket,/);
     expect(index).toMatch(/ingestWbmPull,/);
     expect(index).toMatch(/ingestWbmEdit,/);
+    expect(index).toMatch(/resolveWbtWellConfig,/);
     expect(index).toMatch(/staffWriteDriverAssignment,/);
     expect(index).toMatch(/staffConvertApprovedDriverSecureLogin,/);
     expect(index).toMatch(/upgradeOwnLegacyDriverLogin,/);
@@ -34,6 +35,7 @@ describe('WB-M callable export / contract matrix', () => {
     expect(securityIndex).toMatch(/getDriverWellPerformance/);
     expect(securityIndex).toMatch(/ingestWbmEdit/);
     expect(securityIndex).toMatch(/ingestDriverPacket/);
+    expect(securityIndex).toMatch(/resolveWbtWellConfig/);
     expect(securityIndex).toMatch(/staffWriteDriverAssignment/);
     expect(securityIndex).toMatch(/staffConvertApprovedDriverSecureLogin/);
     expect(securityIndex).toMatch(/upgradeOwnLegacyDriverLogin/);
@@ -50,12 +52,13 @@ describe('WB-M callable export / contract matrix', () => {
     expect(securityIndex).not.toMatch(/bootstrapDriverSession/);
   });
 
-  it('preserves ingestDriverPacket request envelope { packet, driverHash? }', () => {
+  it('preserves ingestDriverPacket request envelope { packet, driverHash? } with canonical mint key', () => {
     expect(ingest).toMatch(/packet\?: Record<string, unknown>/);
     expect(ingest).toMatch(/driverHash\?: string/);
-    expect(ingest).toMatch(/packet\.driverId = driver\.driverId/);
-    expect(ingest).toMatch(/packets\/incoming\/\$\{key\}/);
+    expect(ingest).toMatch(/driverId: driver\.driverId/);
+    expect(ingest).toMatch(/wbtIncomingPath/);
     expect(ingest).toMatch(/duplicate: true/);
+    expect(ingest).not.toMatch(/idem_\$\{/);
   });
 
   it('getDriverWellConfig uses claims + canonical authority, never drivers/approved', () => {
