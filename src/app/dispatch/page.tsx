@@ -1062,7 +1062,9 @@ function DispatchPageInner() {
         const isDown = w.isDown || w.currentLevel === 'DOWN';
         if (isDown) return false;
         if (w.currentLevel === '--' && !w.nextPullTimeUTC) return false;
-        return w.wellName.toLowerCase().includes(q) || (w.route || '').toLowerCase().includes(q);
+        if (!(w.wellName.toLowerCase().includes(q) || (w.route || '').toLowerCase().includes(q))) return false;
+        if (routeFilter !== 'all' && w.route !== routeFilter) return false;
+        return true;
       })
       .map(w => ({ well: w, priority: getPriority(w), dispatched: dispatchedWellDrivers.has(w.wellName), assignedDrivers: dispatchedWellDrivers.get(w.wellName) || [] }))
       .sort((a, b) => {
@@ -1072,7 +1074,7 @@ function DispatchPageInner() {
         const bH = b.priority.hoursUntilPull ?? 99999;
         return aH - bH;
       });
-  }, [wells, dispatches, search]);
+  }, [wells, dispatches, search, routeFilter]);
 
   const showingSearchHits = wellQueueUsesSearchHits(stackedLayout, wellQueueExpanded, search);
   const queueRows = showingSearchHits ? searchHits : pwQueue;
@@ -2941,8 +2943,17 @@ function DispatchPageInner() {
                   placeholder="Search wells..."
                   value={search}
                   onChange={(e) => setSearch(e.target.value)}
-                  className="flex-1 min-w-0 px-2.5 py-1 bg-gray-900 border border-gray-700 rounded text-white text-xs placeholder-gray-500 focus:outline-none focus:border-blue-500"
+                  className="dispatch-queue-search px-2.5 py-1 bg-gray-900 border border-gray-700 rounded text-white text-xs placeholder-gray-500 focus:outline-none focus:border-blue-500"
                 />
+                <select
+                  value={routeFilter}
+                  onChange={(e) => setRouteFilter(e.target.value)}
+                  className="dispatch-queue-route px-2 py-1 bg-gray-900 border border-gray-700 rounded text-white text-xs focus:outline-none focus:border-blue-500"
+                >
+                  <option value="all">All Routes</option>
+                  {routes.map(r => <option key={r} value={r}>{r}</option>)}
+                </select>
+                <span className="flex-1" />
                 <button
                   type="button"
                   className="dispatch-queue-toggle"
@@ -2968,13 +2979,6 @@ function DispatchPageInner() {
               )}
 
               <div id="dispatch-queue-body" className="dispatch-queue-body">
-              <div className="dispatch-queue-filters flex items-center gap-3 px-4 py-2 border-b border-gray-700 flex-shrink-0">
-                <select value={routeFilter} onChange={(e) => setRouteFilter(e.target.value)}
-                  className="px-2 py-1 bg-gray-900 border border-gray-700 rounded text-white text-xs focus:outline-none focus:border-blue-500">
-                  <option value="all">All Routes</option>
-                  {routes.map(r => <option key={r} value={r}>{r}</option>)}
-                </select>
-              </div>
               {/* Scrollable well table */}
               <div className="overflow-x-auto">
                 {dataLoading ? (

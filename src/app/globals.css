@@ -99,11 +99,18 @@ body {
   border: 1px solid #374151;
 }
 
-.dispatch-queue:not(.is-expanded):not(.has-search) .dispatch-queue-body {
-  display: none;
+.dispatch-queue-search {
+  width: 8.5rem;
+  flex: 0 0 8.5rem;
+  min-width: 0;
 }
 
-.dispatch-queue.has-search:not(.is-expanded) .dispatch-queue-filters {
+.dispatch-queue-route {
+  flex-shrink: 0;
+  max-width: 9rem;
+}
+
+.dispatch-queue:not(.is-expanded):not(.has-search) .dispatch-queue-body {
   display: none;
 }
 
@@ -125,8 +132,5 @@ body {
   .dispatch-queue .dispatch-queue-body,
   .dispatch-queue:not(.is-expanded):not(.has-search) .dispatch-queue-body {
     display: block;
-  }
-  .dispatch-queue.has-search:not(.is-expanded) .dispatch-queue-filters {
-    display: flex;
   }
 }

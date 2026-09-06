@@ -49,13 +49,21 @@ check('stacked well queue is collapsed unless expanded',
 check('search box lives in the well queue title row', (() => {
   const title = dispatchPage.indexOf('>Well Queue<');
   const searchBox = dispatchPage.indexOf('placeholder="Search wells..."', title);
+  const route = dispatchPage.indexOf('dispatch-queue-route', title);
   const body = dispatchPage.indexOf('id="dispatch-queue-body"', title);
-  return title !== -1 && searchBox > title && body > searchBox;
+  return title !== -1 && searchBox > title && route > searchBox && body > route;
 })());
+check('search box is a fixed narrow width',
+  globals.includes('.dispatch-queue-search') &&
+  globals.includes('width: 8.5rem') &&
+  dispatchPage.includes('dispatch-queue-search') &&
+  !dispatchPage.includes('className="flex-1 min-w-0 px-2.5 py-1 bg-gray-900 border border-gray-700 rounded text-white text-xs placeholder-gray-500 focus:outline-none focus:border-blue-500"'));
 check('search hits open the queue without Show list',
   globals.includes('.has-search') &&
   dispatchPage.includes('has-search') &&
   dispatchPage.includes('wellQueueUsesSearchHits'));
+check('route filter is not a second row under the title',
+  !dispatchPage.includes('dispatch-queue-filters'));
 
 function load(file, dependencies) {
   const code = ts.transpileModule(readFileSync(file, 'utf8'), {
@@ -128,9 +136,8 @@ ${builtCss}
           <button id="dispatch-form-bottom" type="button">Create Pull</button>
         </div>
         <div class="dispatch-queue" style="background:#1f2937;color:#fff">
-          <div style="padding:12px">Well Queue <input placeholder="Search wells..." /><button type="button" class="dispatch-queue-toggle">Show list</button></div>
+          <div style="padding:12px">Well Queue <input class="dispatch-queue-search" placeholder="Search wells..." /><select class="dispatch-queue-route"><option>All Routes</option></select><button type="button" class="dispatch-queue-toggle">Show list</button></div>
           <div class="dispatch-queue-body" style="padding:12px">
-            <div class="dispatch-queue-filters">All Routes</div>
             <div style="height:640px">queue rows</div>
             <div id="dispatch-queue-bottom">final queue row</div>
           </div>
@@ -210,13 +217,18 @@ try {
       check(`${vp.name} well list toggle is visible`, layout.toggleDisplay !== 'none', layout.toggleDisplay);
       const searched = await page.evaluate(() => {
         document.querySelector('.dispatch-queue').classList.add('has-search');
+        const search = document.querySelector('.dispatch-queue-search');
+        const route = document.querySelector('.dispatch-queue-route');
         return {
           body: getComputedStyle(document.querySelector('.dispatch-queue-body')).display,
-          filters: getComputedStyle(document.querySelector('.dispatch-queue-filters')).display,
+          searchWidth: search ? parseFloat(getComputedStyle(search).width) : 0,
+          routeDisplay: route ? getComputedStyle(route).display : 'missing',
         };
       });
       check(`${vp.name} search shows hits without Show list`, searched.body !== 'none', searched.body);
-      check(`${vp.name} search hits hide the full-list route filter`, searched.filters === 'none', searched.filters);
+      check(`${vp.name} search box stays narrow`, searched.searchWidth > 80 && searched.searchWidth < 160,
+        `width=${searched.searchWidth}`);
+      check(`${vp.name} route dropdown stays in the title`, searched.routeDisplay !== 'none', searched.routeDisplay);
       await page.evaluate(() => {
         document.querySelector('.dispatch-queue').classList.remove('has-search');
         document.querySelector('.dispatch-queue').classList.add('is-expanded');
