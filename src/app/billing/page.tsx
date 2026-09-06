@@ -373,19 +373,19 @@ export default function BillingPage() {
   if (!user) return null;
 
   return (
-    <div className="min-h-screen bg-gray-900">
+    <div className="h-[100dvh] max-h-[100dvh] flex flex-col overflow-hidden bg-gray-900">
       <AppHeader />
 
-      <main className="max-w-[1600px] mx-auto px-4 py-8">
+      <main className="flex-1 min-h-0 overflow-y-auto max-w-[1600px] w-full mx-auto px-4 py-4">
         {/* Title + Sub-tabs */}
-        <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-4 mb-6">
-          <div className="flex items-center gap-4">
-            <img src="/billing-icon.png" alt="WB Billing" className="w-28 h-28" />
-            <h2 className="text-xl font-semibold text-white">Billing</h2>
-            <div className="flex gap-1 bg-gray-800 rounded-lg p-1">
+        <div className="flex flex-wrap items-center gap-3 mb-4">
+          <div className="flex flex-wrap items-center gap-3 min-w-0">
+            <img src="/billing-icon.png" alt="WB Billing" className="w-14 h-14 lg:w-28 lg:h-28 shrink-0" />
+            <h2 className="text-xl font-semibold text-white shrink-0">Billing</h2>
+            <div className="flex items-center gap-1 bg-gray-800 rounded-lg p-1 shrink-0">
               <button
                 onClick={() => setActiveTab('receivables')}
-                className={`px-3 py-1.5 rounded-md text-sm font-medium transition-colors ${
+                className={`px-3 py-1.5 rounded-md text-sm font-medium whitespace-nowrap shrink-0 transition-colors ${
                   activeTab === 'receivables'
                     ? 'bg-blue-600 text-white'
                     : 'text-gray-400 hover:text-white'
@@ -395,7 +395,7 @@ export default function BillingPage() {
               </button>
               <button
                 onClick={() => setActiveTab('fuel')}
-                className={`px-3 py-1.5 rounded-md text-sm font-medium transition-colors ${
+                className={`px-3 py-1.5 rounded-md text-sm font-medium whitespace-nowrap shrink-0 transition-colors ${
                   activeTab === 'fuel'
                     ? 'bg-blue-600 text-white'
                     : 'text-gray-400 hover:text-white'
@@ -405,7 +405,7 @@ export default function BillingPage() {
               </button>
               <button
                 onClick={() => setActiveTab('export')}
-                className={`px-3 py-1.5 rounded-md text-sm font-medium transition-colors ${
+                className={`px-3 py-1.5 rounded-md text-sm font-medium whitespace-nowrap shrink-0 transition-colors ${
                   activeTab === 'export'
                     ? 'bg-green-600 text-white'
                     : 'text-gray-400 hover:text-white'
@@ -419,7 +419,7 @@ export default function BillingPage() {
               <select
                 value={selectedCompanyId || ''}
                 onChange={(e) => setSelectedCompanyId(e.target.value)}
-                className="px-3 py-2 bg-gray-800 border border-gray-600 rounded-lg text-white text-sm focus:outline-none focus:border-blue-500"
+                className="px-3 py-2 bg-gray-800 border border-gray-600 rounded-lg text-white text-sm focus:outline-none focus:border-blue-500 shrink-0 max-w-[14rem]"
               >
                 {Array.from(companies.values()).map(c => (
                   <option key={c.id} value={c.id}>{c.name}</option>
@@ -429,7 +429,7 @@ export default function BillingPage() {
           </div>
 
           {activeTab === 'receivables' && (
-            <div className="flex items-center gap-4">
+            <div className="flex items-center gap-3 shrink-0 ml-auto">
               <select
                 value={selectedPeriod.type}
                 onChange={(e) => {
@@ -484,9 +484,12 @@ export default function BillingPage() {
                 {/* Operator Summary Table */}
                 {(() => { const hasDetention = summaries.some(s => s.totalDetentionPay > 0); return (
                 <div className="bg-gray-800 rounded-lg border border-gray-700 overflow-hidden mb-8">
-                  <div className="overflow-x-auto">
-                    <table className="w-full">
-                      <thead className="bg-gray-700">
+                  <div
+                    data-billing-scroll="receivables"
+                    className="overflow-auto max-h-[calc(100dvh-12rem)] lg:max-h-[calc(100dvh-16rem)]"
+                  >
+                    <table className="w-full min-w-max">
+                      <thead className="bg-gray-700 sticky top-0 z-10">
                         <tr>
                           <th className="px-4 py-2 text-left text-sm font-medium text-gray-300">Operator</th>
                           <th className="px-4 py-2 text-center text-sm font-medium text-gray-300">Loads</th>
@@ -1130,7 +1133,7 @@ function OperatorRow({
         <tr>
           <td colSpan={showDetention ? 11 : 10} className="px-0 py-0">
             <div className="bg-gray-850 border-t border-gray-700">
-              <table className="w-full">
+              <table className="w-full min-w-max">
                 <thead>
                   <tr className="text-xs text-gray-500">
                     <th className="px-4 py-1 text-left">Invoice #</th>
