@@ -2063,10 +2063,10 @@ function DispatchPageInner() {
   // ─── Render ────────────────────────────────────────────────────────────────
 
   return (
-    <div className="h-screen bg-gray-900 flex flex-col overflow-hidden">
+    <div className="dashboard-viewport-shell bg-gray-900">
       <AppHeader />
 
-      <main className="flex-1 flex flex-col px-4 py-4 overflow-hidden">
+      <main data-dashboard-scroll="workspace" className="flex-1 flex flex-col min-h-0 overflow-hidden px-4 py-4 pb-[max(1rem,env(safe-area-inset-bottom))]">
 
         {/* ═══════════════════════════════════════════════════════════════════════
             DISPATCH TOOLBAR — Always visible at top. Quick actions + inline forms.
@@ -2847,7 +2847,7 @@ function DispatchPageInner() {
               )}
 
               {/* Scrollable well table */}
-              <div className="flex-1 overflow-y-auto overflow-x-auto">
+              <div className="flex-1 min-h-0 overflow-y-auto overflow-x-auto pb-[max(1rem,env(safe-area-inset-bottom))]">
                 {dataLoading ? (
                   <div className="text-gray-400 py-8 text-center">Loading well data...</div>
                 ) : pwQueue.length === 0 ? (

@@ -1018,11 +1018,11 @@ export default function AdminPage() {
   }
 
   return (
-    <div className="h-screen bg-gray-900 flex flex-col overflow-hidden">
+    <div className="dashboard-viewport-shell bg-gray-900">
       <AppHeader />
       <SubHeader backHref="/" title="Admin Panel" />
 
-      <main className="p-6 flex-1 flex flex-col min-h-0 overflow-auto">
+      <main data-dashboard-scroll="primary" className="dashboard-viewport-main p-6 flex flex-col">
         {message && (
           <div className="mb-4 p-3 bg-blue-900 text-blue-200 rounded">{message}</div>
         )}
@@ -1135,7 +1135,7 @@ export default function AdminPage() {
                   className="w-1/3 px-3 py-1 bg-gray-700 text-white rounded text-sm"
                 />
               </div>
-              <div className="space-y-2 overflow-y-auto" style={{ maxHeight: 'calc(100vh - 220px)' }}>
+              <div className="space-y-2">
                 {routes
                   .filter(route => route.toLowerCase().includes(routeSearch.toLowerCase()))
                   .map(route => (
@@ -1235,9 +1235,9 @@ export default function AdminPage() {
 
         {/* Wells Tab */}
         {activeTab === 'wells' && canManageGlobalWellConfig && (
-          <div className="flex-1 grid grid-cols-1 lg:grid-cols-2 gap-6 min-h-0">
+          <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
             {/* Well List */}
-            <div className="bg-gray-800 rounded-lg p-4 flex flex-col min-h-0 overflow-hidden">
+            <div className="bg-gray-800 rounded-lg p-4 flex flex-col">
               <div className="flex items-center justify-between mb-4 flex-shrink-0">
                 <h2 className="text-lg font-semibold text-white">Wells</h2>
                 <input
@@ -1248,7 +1248,7 @@ export default function AdminPage() {
                   className="w-1/3 px-3 py-1 bg-gray-700 text-white rounded text-sm"
                 />
               </div>
-              <div className="space-y-2 overflow-y-auto flex-1 min-h-0">
+              <div className="space-y-2">
                 {Object.keys(configs)
                   .filter(wellName => wellName.toLowerCase().includes(wellSearch.toLowerCase()))
                   .sort()
@@ -1282,8 +1282,8 @@ export default function AdminPage() {
               </div>
             </div>
 
-            {/* Well Actions — scrollable right column */}
-            <div className="space-y-4 overflow-y-auto min-h-0">
+            {/* Well Actions — flows with the page scroller so Fold can reach Add Well */}
+            <div className="space-y-4">
               {/* Add Well */}
               <div className="bg-gray-800 rounded-lg p-4">
                 <h3 className="text-white font-medium mb-3">Add New Well</h3>
