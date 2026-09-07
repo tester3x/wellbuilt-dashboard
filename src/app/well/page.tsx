@@ -12,10 +12,10 @@ import {
   WellNavItem,
   fetchWellHistoryUnified,
   fetchEditHistory,
-  deletePull,
   editPull,
   subscribeToWellNavList,
 } from '@/lib/wells';
+import { deletePull, movePull, describeCorrectionError } from '@/lib/pullCorrection';
 import {
   packetShowsEditBadge,
   formatEditSourceLabel,
@@ -136,6 +136,13 @@ function WellDetailPage() {
   // Delete confirmation state
   const [deletingPull, setDeletingPull] = useState<PullPacket | null>(null);
   const [deleteSubmitting, setDeleteSubmitting] = useState(false);
+
+  // Governed "move to correct well" correction
+  const [movingPull, setMovingPull] = useState<PullPacket | null>(null);
+  const [moveTargetWell, setMoveTargetWell] = useState<string | null>(null);
+  const [moveSubmitting, setMoveSubmitting] = useState(false);
+  const [showMoveTargetPicker, setShowMoveTargetPicker] = useState(false);
+  const [moveSearchQuery, setMoveSearchQuery] = useState('');
 
   // Well navigation list (all wells for prev/next + picker)
   const [allWells, setAllWells] = useState<WellNavItem[]>([]);
@@ -403,6 +410,7 @@ function WellDetailPage() {
   };
 
   const handleDelete = (pull: PullPacket) => {
+    setError('');
     setDeletingPull(pull);
   };
 
@@ -411,6 +419,7 @@ function WellDetailPage() {
 
     setDeleteSubmitting(true);
     try {
+      // Governed correction — success only after the server acknowledges.
       await deletePull(deletingPull.packetId, deletingPull.wellName);
       // Refresh data
       const history = await fetchWellHistoryUnified(wellName);
@@ -418,9 +427,37 @@ function WellDetailPage() {
       setDeletingPull(null);
     } catch (err) {
       console.error('Error deleting pull:', err);
-      setError('Failed to delete pull');
+      setError(describeCorrectionError(err));
     } finally {
       setDeleteSubmitting(false);
+    }
+  };
+
+  // Move a load entered on the wrong well to the correct well (governed).
+  const handleMove = (pull: PullPacket) => {
+    setError('');
+    setMovingPull(pull);
+    setMoveTargetWell(null);
+    setMoveSearchQuery('');
+    // A move supersedes an in-progress delete of the same row.
+    setDeletingPull(null);
+  };
+
+  const confirmMove = async () => {
+    if (!movingPull || !moveTargetWell) return;
+
+    setMoveSubmitting(true);
+    try {
+      await movePull(movingPull.packetId, movingPull.wellName, moveTargetWell);
+      const history = await fetchWellHistoryUnified(wellName);
+      setPulls(history);
+      setMovingPull(null);
+      setMoveTargetWell(null);
+    } catch (err) {
+      console.error('Error moving pull:', err);
+      setError(describeCorrectionError(err));
+    } finally {
+      setMoveSubmitting(false);
     }
   };
 
@@ -818,6 +855,11 @@ function WellDetailPage() {
                             >✏️</button>
                           )}
                           <button
+                            onClick={() => handleMove(pull)}
+                            className="p-1 text-gray-600 hover:text-amber-400 transition-colors"
+                            title="Move to correct well"
+                          >↪️</button>
+                          <button
                             onClick={() => handleDelete(pull)}
                             className="p-1 text-gray-600 hover:text-red-400 transition-colors"
                             title="Delete pull"
@@ -914,23 +956,41 @@ function WellDetailPage() {
 
       {/* Delete Confirmation Modal */}
       {deletingPull && (
-        <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50">
+        <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4">
           <div className="bg-gray-800 rounded-lg p-6 w-full max-w-md">
             <h2 className="text-xl font-bold text-white mb-4">Delete Pull?</h2>
             <p className="text-gray-300 mb-2">
               Are you sure you want to delete this pull?
             </p>
-            <p className="text-gray-400 text-sm mb-4">
-              {formatDateTime(deletingPull.timestamp)} - {formatLevelFtIn(deletingPull.tankTopLevel)} - {deletingPull.bblsTaken} BBLs
+            <div className="bg-gray-900/60 border border-gray-700 rounded p-3 mb-4 text-sm">
+              <div className="text-white font-medium mb-1">{deletingPull.wellName}</div>
+              <div className="text-gray-400">
+                {formatDateTime(deletingPull.timestamp)} · {deletingPull.bblsTaken} BBLs · {formatLevelFtIn(deletingPull.tankTopLevel)}
+              </div>
+            </div>
+            <p className="text-amber-300/90 text-sm mb-4">
+              Entered on the wrong well?{' '}
+              <button
+                onClick={() => handleMove(deletingPull)}
+                className="underline hover:text-amber-200"
+              >
+                Move it to the correct well
+              </button>{' '}
+              instead of deleting.
             </p>
             <p className="text-red-400 text-sm mb-6">
               This action cannot be undone.
             </p>
 
-            <div className="flex justify-end gap-3">
+            {error && (
+              <p className="text-red-300 text-sm mb-4 bg-red-950/40 border border-red-800 rounded px-3 py-2">{error}</p>
+            )}
+
+            <div className="flex flex-wrap justify-end gap-3">
               <button
-                onClick={() => setDeletingPull(null)}
-                className="px-4 py-2 bg-gray-600 hover:bg-gray-500 text-white rounded transition-colors"
+                onClick={() => { setDeletingPull(null); setError(''); }}
+                disabled={deleteSubmitting}
+                className="px-4 py-2 bg-gray-600 hover:bg-gray-500 disabled:opacity-60 text-white rounded transition-colors"
               >
                 Cancel
               </button>
@@ -939,7 +999,125 @@ function WellDetailPage() {
                 disabled={deleteSubmitting}
                 className="px-4 py-2 bg-red-600 hover:bg-red-700 disabled:bg-red-800 text-white rounded transition-colors"
               >
-                {deleteSubmitting ? 'Deleting...' : 'Delete'}
+                {deleteSubmitting ? 'Deleting…' : 'Delete'}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Move-to-correct-well Confirmation Modal */}
+      {movingPull && (
+        <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4">
+          <div className="bg-gray-800 rounded-lg p-6 w-full max-w-md">
+            <h2 className="text-xl font-bold text-white mb-4">Move to correct well</h2>
+            <p className="text-gray-300 mb-3 text-sm">
+              This keeps the load and its history — only the well changes.
+            </p>
+            <div className="bg-gray-900/60 border border-gray-700 rounded p-3 mb-4 text-sm">
+              <div className="text-gray-400">
+                {formatDateTime(movingPull.timestamp)} · {movingPull.bblsTaken} BBLs · {formatLevelFtIn(movingPull.tankTopLevel)}
+              </div>
+              <div className="mt-2 flex items-center gap-2 flex-wrap">
+                <span className="px-2 py-1 rounded bg-red-950/50 border border-red-800 text-red-200 text-xs">
+                  From: {movingPull.wellName}
+                </span>
+                <span className="text-gray-500">→</span>
+                {moveTargetWell ? (
+                  <span className="px-2 py-1 rounded bg-green-950/50 border border-green-800 text-green-200 text-xs">
+                    To: {moveTargetWell}
+                  </span>
+                ) : (
+                  <span className="text-gray-500 text-xs italic">choose a target well</span>
+                )}
+              </div>
+            </div>
+
+            <button
+              onClick={() => { setShowMoveTargetPicker(true); setMoveSearchQuery(''); }}
+              disabled={moveSubmitting}
+              className="w-full mb-4 px-4 py-2 bg-gray-700 hover:bg-gray-600 disabled:opacity-60 text-white rounded transition-colors text-sm"
+            >
+              {moveTargetWell ? 'Change target well' : 'Choose target well'}
+            </button>
+
+            {error && (
+              <p className="text-red-300 text-sm mb-4 bg-red-950/40 border border-red-800 rounded px-3 py-2">{error}</p>
+            )}
+
+            <div className="flex flex-wrap justify-end gap-3">
+              <button
+                onClick={() => { setMovingPull(null); setMoveTargetWell(null); setError(''); }}
+                disabled={moveSubmitting}
+                className="px-4 py-2 bg-gray-600 hover:bg-gray-500 disabled:opacity-60 text-white rounded transition-colors"
+              >
+                Cancel
+              </button>
+              <button
+                onClick={confirmMove}
+                disabled={moveSubmitting || !moveTargetWell}
+                className="px-4 py-2 bg-green-600 hover:bg-green-700 disabled:bg-green-900 disabled:text-green-300/60 text-white rounded transition-colors"
+              >
+                {moveSubmitting ? 'Moving…' : 'Move load'}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Move Target Well Picker */}
+      {showMoveTargetPicker && movingPull && (
+        <div className="fixed inset-0 bg-black/60 flex items-start justify-center z-[60] pt-16 p-4" onClick={() => setShowMoveTargetPicker(false)}>
+          <div className="bg-gray-800 rounded-lg w-full max-w-lg max-h-[70vh] flex flex-col" onClick={(e) => e.stopPropagation()}>
+            <div className="p-4 border-b border-gray-700">
+              <div className="text-sm text-gray-400 mb-2">Move to which well?</div>
+              <input
+                type="text"
+                autoFocus
+                placeholder="Search wells…"
+                value={moveSearchQuery}
+                onChange={(e) => setMoveSearchQuery(e.target.value)}
+                className="w-full px-4 py-2 bg-gray-700 border border-gray-600 rounded text-white placeholder-gray-400 focus:outline-none focus:border-green-500"
+              />
+            </div>
+            <div className="overflow-y-auto flex-1 p-2">
+              {(() => {
+                const q = moveSearchQuery.toLowerCase();
+                const candidates = allWells.filter((w) => w.wellName !== movingPull.wellName);
+                const filtered = q ? candidates.filter((w) => w.wellName.toLowerCase().includes(q)) : candidates;
+                if (filtered.length === 0) {
+                  return <p className="text-gray-400 text-center py-8">No wells found</p>;
+                }
+                const grouped: Record<string, WellNavItem[]> = {};
+                filtered.forEach((w) => {
+                  const r = w.route || 'Unrouted';
+                  if (!grouped[r]) grouped[r] = [];
+                  grouped[r].push(w);
+                });
+                return Object.keys(grouped)
+                  .sort((a, b) => (a === 'Unrouted' ? 1 : b === 'Unrouted' ? -1 : a.localeCompare(b)))
+                  .map((route) => (
+                    <div key={route} className="mb-2">
+                      <div className="text-xs font-medium text-gray-500 uppercase tracking-wider px-3 py-1">{route}</div>
+                      {grouped[route].map((w) => (
+                        <button
+                          key={w.wellName}
+                          onClick={() => { setMoveTargetWell(w.wellName); setShowMoveTargetPicker(false); }}
+                          className="block w-full text-left px-3 py-2 rounded text-sm text-gray-300 hover:bg-gray-700 hover:text-white transition-colors"
+                        >
+                          {w.wellName}
+                        </button>
+                      ))}
+                    </div>
+                  ));
+              })()}
+            </div>
+            <div className="p-3 border-t border-gray-700 flex justify-end">
+              <button
+                onClick={() => setShowMoveTargetPicker(false)}
+                className="px-4 py-2 bg-gray-600 hover:bg-gray-500 text-white rounded transition-colors text-sm"
+              >
+                Cancel
               </button>
             </div>
           </div>

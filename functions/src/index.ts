@@ -34,6 +34,14 @@ import {
   resolveOriginalSubmissionAt,
 } from './editHistory';
 import { notifyIncomingVersionBestEffort } from './incomingVersionPublish';
+import {
+  timeMs as movePlanTimeMs,
+  findAdjacent as movePlanFindAdjacent,
+  tankAfterInches as movePlanTankAfterInches,
+  recomputeAgainstPrior as movePlanRecompute,
+  perfRowKey as movePlanPerfRowKey,
+  wellPerfKey as movePlanWellPerfKey,
+} from './security/operational/movePlan';
 
 
 admin.initializeApp();
@@ -2738,6 +2746,260 @@ export const processDeleteRequest = functionsV1.database
   });
 
 // ============================================================
+// GOVERNED PULL MOVE — correction for a load entered on the WRONG well.
+// Triggered by a governed packet minted by the staffCorrectPull callable
+// (requestType 'move'; direct client writes to packets/incoming are denied by
+// the deployed secure rules). Re-anchors the immutable packetId to the correct
+// well and recomputes BOTH wells' canonical outgoing state + AFR from their
+// remaining history. Identity (packetId) and edit history are preserved.
+// Idempotent (already-moved is a no-op) and fail-closed on identity mismatch.
+//
+// NOT YET DEPLOYED — this new trigger requires Firebase-emulator verification
+// before the authorized deploy.
+// ============================================================
+
+/**
+ * Rebuild a well's single outgoing status row + well_config AFR from its live
+ * remaining processed history. Mirrors the proven processDeleteRequest rebuild
+ * (index.ts) so both operations behave identically; kept separate so the
+ * deployed delete handler is not modified.
+ */
+async function rebuildWellOutgoing(wellName: string): Promise<void> {
+  const cleanName = wellName.replace(/\s/g, '');
+  let configSnap = await db.ref(`well_config/${wellName}`).once('value');
+  if (!configSnap.exists()) configSnap = await db.ref(`well_config/${cleanName}`).once('value');
+  const config = configSnap.val() || {};
+  const tanks = config.tanks || config.numTanks || DEFAULTS.tanks;
+  const pullBbls = config.pullBbls || DEFAULTS.pullBbls;
+  const bottomInches = (config.bottomLevel || config.allowedBottom || DEFAULTS.bottomLevel) * 12;
+
+  const remainingSnap = await db.ref('packets/processed')
+    .orderByChild('wellName')
+    .equalTo(wellName)
+    .once('value');
+  let latestPacket: any = null;
+  let latestTime = 0;
+  remainingSnap.forEach((child) => {
+    const key = child.key || '';
+    if (key.startsWith('edit_') || key.startsWith('delete_') || key.startsWith('history_') || key.startsWith('move_')) return;
+    const pkt = child.val();
+    const t = new Date(pkt.dateTimeUTC).getTime();
+    if (!Number.isNaN(t) && t > latestTime) { latestTime = t; latestPacket = pkt; }
+  });
+
+  // Remove existing outgoing rows for this well before writing the fresh one.
+  const oldResponses = await db.ref('packets/outgoing')
+    .orderByChild('wellName')
+    .equalTo(wellName)
+    .once('value');
+  const removals: Promise<void>[] = [];
+  oldResponses.forEach((child) => { removals.push(child.ref.remove()); });
+  await Promise.all(removals);
+
+  if (!latestPacket) {
+    console.log(`Move rebuild: no remaining pulls for ${wellName}, cleared outgoing`);
+    return;
+  }
+
+  const afr = await calculateAFR(wellName, latestPacket.flowRateDays || 0);
+  const bblPerFoot = tanks * 20;
+  const latestTimeMs = new Date(latestPacket.dateTimeUTC).getTime();
+  const historicalPulls = await getHistoricalPulls(wellName, 500);
+  const windowBblsDay = calculateWindowBblsPerDay(historicalPulls, bblPerFoot, latestTimeMs);
+  const overnightBblsDay = calculateOvernightBblsPerDay(historicalPulls, bblPerFoot, latestTimeMs);
+
+  const tankAfterInchesVal = latestPacket.tankAfterInches || 0;
+  const pullHeightInches = (pullBbls / 20 / tanks) * 12;
+  const targetLevel = bottomInches + pullHeightInches;
+  const recoveryNeeded = Math.max(0, targetLevel - tankAfterInchesVal);
+
+  let estTimeToPull = '';
+  let estDateTimePull = '';
+  if (afr > 0 && recoveryNeeded > 0) {
+    const estDays = (recoveryNeeded / 12) * afr;
+    estTimeToPull = daysToHMM(estDays);
+    estDateTimePull = new Date(new Date(latestPacket.dateTimeUTC).getTime() + estDays * 24 * 60 * 60 * 1000).toISOString();
+  } else if (recoveryNeeded === 0) {
+    estTimeToPull = '0:00';
+    estDateTimePull = latestPacket.dateTimeUTC;
+  }
+
+  const bbls24 = afr > 0 ? (1 / afr) * 20 * tanks : 0;
+  const timestamp = new Date();
+  const responseId = `response_${timestamp.toISOString().replace(/[-:]/g, '').replace('T', '_').split('.')[0]}_${cleanName}`;
+
+  await db.ref(`packets/outgoing/${responseId}`).set({
+    wellName,
+    currentLevel: inchesToFeetInches(tankAfterInchesVal),
+    flowRate: afr > 0 ? daysToHMMSS(afr) : 'Unknown',
+    bbls24hrs: Math.round(bbls24).toString(),
+    timeTillPull: latestPacket.wellDown ? 'Down' : (estTimeToPull || 'Calculating...'),
+    nextPullTime: estDateTimePull ? formatLocalDateTime(new Date(estDateTimePull)) : 'Unknown',
+    nextPullTimeUTC: estDateTimePull,
+    lastPullDateTime: latestPacket.dateTime || formatLocalDateTime(new Date(latestPacket.dateTimeUTC)),
+    lastPullDateTimeUTC: latestPacket.dateTimeUTC,
+    lastPullBbls: (latestPacket.bblsTaken ?? 0).toString(),
+    lastPullTopLevel: inchesToFeetInches(latestPacket.tankTopInches || 0),
+    lastPullBottomLevel: inchesToFeetInches(tankAfterInchesVal),
+    lastPullDriverId: latestPacket.driverId || null,
+    lastPullDriverName: latestPacket.driverName || null,
+    lastPullPacketId: latestPacket.packetId || null,
+    wellDown: latestPacket.wellDown || false,
+    status: 'success',
+    timestamp: timestamp.toISOString(),
+    timestampUTC: timestamp.toISOString(),
+    isEdit: true, // accept even though lastPullDateTimeUTC may be older
+    isMoveRebuild: true,
+    windowBblsDay: windowBblsDay > 0 ? windowBblsDay.toString() : null,
+    overnightBblsDay: overnightBblsDay > 0 ? overnightBblsDay.toString() : null,
+    companyId: outgoingCompanyId(config),
+  });
+
+  if (afr > 0) {
+    await db.ref(`well_config/${wellName}`).update({
+      avgFlowRate: daysToHMMSS(afr),
+      avgFlowRateMinutes: Math.round(afr * 24 * 60 * 100) / 100,
+    });
+  }
+  console.log(`Move rebuild: rebuilt outgoing for ${wellName} from ${latestPacket.packetId || 'unknown'}`);
+}
+
+export const processMoveRequest = functionsV1.database
+  .ref('packets/incoming/{packetId}')
+  .onCreate(async (snapshot) => {
+    const data = snapshot.val();
+    if (!data || data.requestType !== 'move') {
+      return null;
+    }
+
+    const targetPacketId = data.packetId;
+    const fromWell = data.fromWell;
+    const toWell = data.toWell;
+    if (!targetPacketId || !fromWell || !toWell || fromWell === toWell) {
+      await snapshot.ref.remove();
+      return null;
+    }
+
+    const targetSnap = await db.ref(`packets/processed/${targetPacketId}`).once('value');
+    const pull = targetSnap.exists() ? targetSnap.val() : null;
+
+    // Fail-closed / idempotent identity checks (mirror the callable spine).
+    if (!pull) {
+      await db.ref(`packets/processed/move_${targetPacketId}`).set({
+        ...data, processedAt: new Date().toISOString(), result: 'packet_not_found',
+      });
+      await snapshot.ref.remove();
+      return null;
+    }
+    const storedWell = typeof pull.wellName === 'string' ? pull.wellName : '';
+    if (storedWell === toWell) {
+      console.log(`Move: ${targetPacketId} already on ${toWell}; idempotent no-op`);
+      await snapshot.ref.remove();
+      return null;
+    }
+    if (storedWell && storedWell !== fromWell) {
+      await db.ref(`packets/rejected/move_${targetPacketId}_conflict`).set({
+        ...data, storedWell, result: 'well_mismatch', rejectedAt: new Date().toISOString(),
+      });
+      await snapshot.ref.remove();
+      return null;
+    }
+
+    // Recompute the moved pull's own recovery/flow against the TARGET well's prior pull.
+    const toSnap = await db.ref('packets/processed')
+      .orderByChild('wellName')
+      .equalTo(toWell)
+      .once('value');
+    const toPulls: any[] = [];
+    toSnap.forEach((c) => {
+      const k = c.key || '';
+      if (k.startsWith('edit_') || k.startsWith('delete_') || k.startsWith('move_') || k.startsWith('history_')) return;
+      toPulls.push({ ...c.val(), packetId: c.key });
+    });
+    const pivotMs = movePlanTimeMs(pull.dateTimeUTC);
+    const { prev } = movePlanFindAdjacent(toPulls, pivotMs);
+    const toConfigSnap = await db.ref(`well_config/${toWell}`).once('value');
+    const toConfig = toConfigSnap.val() || {};
+    const toTanks = toConfig.tanks || toConfig.numTanks || DEFAULTS.tanks;
+    const newTankAfter = movePlanTankAfterInches(pull.tankTopInches || 0, pull.bblsTaken || 0, toTanks);
+    const recomputed = movePlanRecompute(
+      { dateTimeUTC: pull.dateTimeUTC, tankTopInches: pull.tankTopInches },
+      prev ? { dateTimeUTC: prev.dateTimeUTC, tankAfterInches: prev.tankAfterInches } : null,
+    );
+
+    // Re-anchor identity to the correct well; packetId + editHistory preserved.
+    await db.ref(`packets/processed/${targetPacketId}`).update({
+      wellName: toWell,
+      tankAfterInches: newTankAfter,
+      recoveryInches: recomputed.recoveryInches,
+      flowRateDays: recomputed.flowRateDays,
+      flowRate: recomputed.flowRateDays > 0 ? daysToHMMSS(recomputed.flowRateDays) : '',
+      timeDifDays: recomputed.timeDifDays,
+      timeDif: recomputed.timeDifDays > 0 ? daysToHMM(recomputed.timeDifDays) : '',
+      movedFrom: fromWell,
+      movedTo: toWell,
+      movedAt: data.movedAt || new Date().toISOString(),
+      movedBy: data.movedBy || null,
+      correctionType: 'move',
+    });
+
+    // Move the performance row from the wrong well to the correct well.
+    // (For a re-anchored pull, predicted collapses to actual, so a === p.)
+    try {
+      if (pull.dateTimeUTC) {
+        const rowKey = movePlanPerfRowKey(pull.dateTimeUTC);
+        await db.ref(`performance/${movePlanWellPerfKey(fromWell)}/rows/${rowKey}`).remove();
+        const d = new Date(pull.dateTimeUTC);
+        const perfDateStr = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+        const actualInches = Math.floor(pull.tankTopInches || 0);
+        await db.ref(`performance/${movePlanWellPerfKey(toWell)}/rows/${rowKey}`).set({
+          d: perfDateStr, a: actualInches, p: actualInches,
+        });
+        await db.ref(`performance/${movePlanWellPerfKey(toWell)}/wellName`).set(toWell);
+        await db.ref(`performance/${movePlanWellPerfKey(toWell)}/updated`).set(new Date().toISOString());
+      }
+    } catch (perfErr) {
+      console.error('Move: performance re-anchor failed', perfErr);
+    }
+
+    // Rebuild BOTH wells' outgoing + AFR from their (now-updated) history.
+    try { await rebuildWellOutgoing(fromWell); } catch (e) { console.error(`Move: rebuild fromWell ${fromWell} failed`, e); }
+    try { await rebuildWellOutgoing(toWell); } catch (e) { console.error(`Move: rebuild toWell ${toWell} failed`, e); }
+
+    // Re-anchor the canonical job's denormalized wellName (identity is packetId,
+    // which is unchanged, so the ticket/invoice association is preserved).
+    try {
+      await admin.firestore().collection('canonical_jobs').doc(targetPacketId).set(
+        { wellName: toWell, movedFrom: fromWell, movedAt: data.movedAt || new Date().toISOString() },
+        { merge: true },
+      );
+    } catch (fsErr) {
+      console.error('Move: canonical_jobs re-anchor failed', fsErr);
+    }
+
+    // Audit trail + cleanup.
+    await db.ref(`packets/processed/move_${targetPacketId}`).set({
+      ...data,
+      processedAt: new Date().toISOString(),
+      movedPacketData: {
+        fromWell, toWell,
+        dateTimeUTC: pull.dateTimeUTC,
+        bblsTaken: pull.bblsTaken,
+        driverName: pull.driverName || null,
+      },
+      result: 'moved',
+    });
+    await snapshot.ref.remove();
+    await notifyIncomingVersionBestEffort(db.ref('packets/incoming_version'), {
+      outgoingCommitted: true,
+      pullAccepted: true,
+    });
+
+    console.log(`Move complete: ${targetPacketId} ${fromWell} → ${toWell}`);
+    return null;
+  });
+
+// ============================================================
 // WEEKLY DIESEL PRICE AUTO-FETCH
 // Runs every Monday at 10:00 AM CT (16:00 UTC) — DOE publishes Mondays
 // Fetches latest EIA diesel price for each company with a doeRegion set
@@ -4784,6 +5046,7 @@ export {
   staffWriteDispatch,
   staffWriteDriverAssignment,
   staffWriteWellConfig,
+  staffCorrectPull,
   staffConvertApprovedDriverSecureLogin,
   upgradeOwnLegacyDriverLogin,
   staffHydrateCanonicalIdentity,

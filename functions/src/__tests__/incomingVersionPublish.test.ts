@@ -179,7 +179,9 @@ describe('incoming_version publish contract', () => {
 
   it('edit/delete notification is best-effort and delete archives first', () => {
     const index = src('src/index.ts');
-    expect(index.match(/await notifyIncomingVersionBestEffort/g)?.length).toBe(3);
+    // pull + edit + delete + governed move (a move changes canonical state, so
+    // it bumps incoming_version so WB-M refreshes) — all via the best-effort helper.
+    expect(index.match(/await notifyIncomingVersionBestEffort/g)?.length).toBe(4);
     expect(index).not.toMatch(/publishIncomingVersionAfterOutgoing\(/);
     expect(index).not.toMatch(/packets\/incoming_version'\)\.once\('value'\)/);
     expect(index).not.toMatch(/packets\/incoming_version'\)\.set\(/);
