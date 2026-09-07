@@ -17,10 +17,15 @@ describe('incoming_version publish contract', () => {
     const perf = pull.indexOf("performance/${wellKey}/rows/${perfTimestamp}`).set(");
     const wells = pull.indexOf("wells/${wellName}/status`).set(wellStatus)");
     const notify = pull.indexOf('notifyIncomingVersionBestEffort');
+    // Invariant: the outgoing, performance, and wells/status writes all precede
+    // the publication signal. (Performance is written before the owner-materialize
+    // gate, so it precedes `outgoing`; both precede `notify`.)
     expect(outgoing).toBeGreaterThan(0);
-    expect(perf).toBeGreaterThan(outgoing);
-    expect(wells).toBeGreaterThan(perf);
+    expect(perf).toBeGreaterThan(0);
+    expect(wells).toBeGreaterThan(outgoing);
     expect(notify).toBeGreaterThan(wells);
+    expect(notify).toBeGreaterThan(perf);
+    expect(notify).toBeGreaterThan(outgoing);
   });
 
   it('{committed:false} returns no published version', async () => {

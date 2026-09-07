@@ -12,7 +12,6 @@ import {
   comparePullEquivalence,
   editAlreadyApplied,
   editMaterialChange,
-  applyCurrentStateIfOwner,
   canonicalWellKey,
   evaluateIncomingPull,
   maxPullWatermark,
@@ -39,6 +38,7 @@ import {
   resolveOriginalSubmissionAt,
 } from './editHistory';
 import { notifyIncomingVersionBestEffort } from './incomingVersionPublish';
+import { runOwnerMaterializeTxn } from './pullMaterialize';
 
 
 admin.initializeApp();
@@ -1118,16 +1118,26 @@ export const processIncomingPull = functionsV1.database
       : existingIsDown;
 
     const materializeIfOwner = async (current: Record<string, unknown>): Promise<boolean> => {
-      const txn = await db.ref(wellStatePath).transaction((node) => {
-        const decision = applyCurrentStateIfOwner({
-          node,
-          packetId,
-          current,
-        });
-        if (decision.action === 'abort') return undefined;
-        return decision.next;
+      const { materialized, outcome } = await runOwnerMaterializeTxn({
+        ref: db.ref(wellStatePath),
+        packetId,
+        current,
+        onEvent: (event) => {
+          if (event === 'retry') {
+            console.log(`[PULL] ${wellName}: ${packetId} optimistic-null high-water read — retrying against server`);
+          }
+        },
       });
-      return !!txn.committed;
+      if (outcome === 'materialized') {
+        console.log(`[PULL] ${wellName}: ${packetId} owner matched — materialized current-state`);
+      } else if (outcome === 'already') {
+        console.log(`[PULL] ${wellName}: ${packetId} already materialized — idempotent no-op`);
+      } else if (outcome === 'superseded') {
+        console.log(`[PULL] ${wellName}: ${packetId} superseded by a newer high-water owner — skipping current-state`);
+      } else {
+        console.log(`[PULL] ${wellName}: ${packetId} no high-water owner to materialize — fail-closed`);
+      }
+      return materialized;
     };
 
     // Calculate all fields

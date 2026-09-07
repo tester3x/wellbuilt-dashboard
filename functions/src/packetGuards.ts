@@ -107,16 +107,30 @@ export function applyCurrentStateIfOwner(input: {
   node: { pullHighWater?: { packetId?: unknown; [k: string]: unknown } | null; [k: string]: unknown } | null | undefined;
   packetId: string;
   current: Record<string, unknown>;
-}): { action: 'commit'; next: Record<string, unknown> } | { action: 'abort' } {
-  const owner = input.node?.pullHighWater && typeof input.node.pullHighWater === 'object'
+}): { action: 'commit'; next: Record<string, unknown>; already: boolean } | { action: 'abort' } | { action: 'retry' } {
+  // The Admin SDK runs a transaction's update function against the LOCAL cache
+  // first, which — with no active listener — is null even though the server node
+  // already exists (written by the phase-1 high-water CAS in this same run).
+  // Returning an abort on that optimistic null-first invocation was the P0 bug:
+  // it aborted the transaction before the authoritative server value was ever
+  // read, so the rightful owner could never materialize. Signal a retry so the
+  // caller keeps the transaction alive and re-runs against the server node.
+  if (input.node == null || typeof input.node !== 'object') {
+    return { action: 'retry' };
+  }
+  const owner = input.node.pullHighWater && typeof input.node.pullHighWater === 'object'
     ? String((input.node.pullHighWater as { packetId?: unknown }).packetId || '')
     : '';
+  // Fail closed: no owner (empty) or a different owner (superseded) never writes.
   if (!input.packetId || owner !== input.packetId) return { action: 'abort' };
+  const already =
+    String((input.node as { materializedPacketId?: unknown }).materializedPacketId || '') === input.packetId;
   return {
     action: 'commit',
+    already,
     next: {
       ...(input.node as Record<string, unknown>),
-      pullHighWater: input.node!.pullHighWater,
+      pullHighWater: input.node.pullHighWater,
       current: input.current,
       materializedPacketId: input.packetId,
     },

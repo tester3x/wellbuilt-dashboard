@@ -27,7 +27,9 @@ describe('processIncomingPull wiring', () => {
     expect(pullHandler).toContain('namespacedWellStatePath(hwCompanyId, wellKey)');
     expect(pullHandler).not.toContain("wells/${wellName}/pullHighWater");
     expect(statusWrite).toBeGreaterThan(guardIdx);
-    expect(pullHandler).toContain('applyCurrentStateIfOwner');
+    // Phase-two owner materialization is invoked (extracted to pullMaterialize.ts
+    // as runOwnerMaterializeTxn, which wraps applyCurrentStateIfOwner).
+    expect(pullHandler).toContain('runOwnerMaterializeTxn');
     expect(hwTxn).toBeGreaterThan(-1);
   });
 

@@ -145,7 +145,7 @@ describe('wiring: idempotency precedes every guard; no re-processing paths', () 
   test('already-processed check runs BEFORE the future/stale guard ladder', () => {
     const idemIdx = pullHandler.indexOf('alreadyProcessedSnap');
     const guardIdx = pullHandler.indexOf('evaluateIncomingPull({');
-    const materializeIdx = pullHandler.indexOf('applyCurrentStateIfOwner');
+    const materializeIdx = pullHandler.indexOf('runOwnerMaterializeTxn');
     expect(idemIdx).toBeGreaterThan(-1);
     expect(idemIdx).toBeLessThan(guardIdx);   // before stale/future guards
     expect(materializeIdx).toBeGreaterThan(guardIdx);
