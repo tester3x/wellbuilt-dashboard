@@ -1432,13 +1432,6 @@ export const processIncomingPull = functionsV1.database
       outgoingCommitted: true,
       pullAccepted: true,
     });
-    await notifyMaterializedBestEffort(db.ref(), {
-      companyId: outgoingCompanyId(config),
-      wellName,
-      packetId,
-      kind: 'pull',
-      nowMs: Date.now(),
-    });
 
     // Write production log (AFR + window + overnight bbls/day for comparison)
     const afrBblsDay = afr > 0 ? Math.round((1 / afr) * bblPerFoot) : 0;
@@ -1456,6 +1449,15 @@ export const processIncomingPull = functionsV1.database
     await db.ref(`packets/processed/${packetId}`).update({
       canonicalProcessingComplete: true,
       canonicalProcessingCompletedAt: admin.database.ServerValue.TIMESTAMP,
+    });
+    await notifyMaterializedBestEffort(db.ref(), {
+      companyId: outgoingCompanyId(config),
+      wellName,
+      kind: 'pull',
+      opId: `pull:${packetId}`,
+      packetId,
+      resultAtMs: Date.now(),
+      nowMs: Date.now(),
     });
 
     // ── canonical_jobs + Phase 1.2 server-side back-patch ─────────────────
@@ -2592,8 +2594,11 @@ export const processEditRequest = functionsV1.database
     await notifyMaterializedBestEffort(db.ref(), {
       companyId: outgoingCompanyId(config),
       wellName,
-      packetId: originalPacketId,
       kind: 'edit',
+      opId: `edit:${context.params.packetId}:${originalPacketId}`,
+      packetId: originalPacketId,
+      targetPacketId: originalPacketId,
+      resultAtMs: Date.now(),
       nowMs: Date.now(),
     });
 
@@ -2677,6 +2682,8 @@ export const processDeleteRequest = functionsV1.database
     await db.ref(`packets/processed/${targetPacketId}`).remove();
 
     // If the deleted packet was the latest pull, recalculate outgoing from the new latest
+    let deleteCompanyId: string | null = null;
+    let survivorPacketId: string | null = null;
     if (deletedPacket) {
       const cleanName = wellName.replace(/\s/g, '');
 
@@ -2689,6 +2696,7 @@ export const processDeleteRequest = functionsV1.database
         if (configSnap.exists()) wellConfigKey = cleanName;
       }
       const config = configSnap.val() || {};
+      deleteCompanyId = outgoingCompanyId(config);
       const tanks = config.tanks || config.numTanks || DEFAULTS.tanks;
       const pullBbls = config.pullBbls || DEFAULTS.pullBbls;
       const bottomInches = (config.bottomLevel || config.allowedBottom || DEFAULTS.bottomLevel) * 12;
@@ -2710,6 +2718,7 @@ export const processDeleteRequest = functionsV1.database
           latestPacket = pkt;
         }
       });
+      survivorPacketId = latestPacket?.packetId || null;
 
       // Clean up performance data for the deleted packet
       if (deletedPacket.dateTimeUTC) {
@@ -2944,10 +2953,14 @@ export const processDeleteRequest = functionsV1.database
       pullAccepted: true,
     });
     await notifyMaterializedBestEffort(db.ref(), {
-      companyId: outgoingCompanyId(config),
+      companyId: deleteCompanyId || outgoingCompanyId(deletedPacket),
       wellName,
-      packetId: targetPacketId,
       kind: 'delete',
+      opId: `delete:${context.params.packetId}:${targetPacketId}:${survivorPacketId || 'none'}`,
+      packetId: targetPacketId,
+      targetPacketId,
+      survivorPacketId,
+      resultAtMs: Date.now(),
       nowMs: Date.now(),
     });
 

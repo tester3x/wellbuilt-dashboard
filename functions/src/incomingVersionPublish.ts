@@ -9,6 +9,7 @@
 
 import {
   buildMaterializedEvent,
+  materializedCasUpdater,
   materializedPath,
   nextIncomingVersion as safeNextIncomingVersion,
   type MaterializedKind,
@@ -70,17 +71,26 @@ export async function notifyIncomingVersionBestEffort(
 }
 
 export type MaterializedRoot = {
-  child: (path: string) => { set: (value: unknown) => Promise<unknown> };
+  child: (path: string) => {
+    set?: (value: unknown) => Promise<unknown>;
+    transaction: (
+      updater: (current: unknown) => unknown,
+    ) => Promise<{ committed?: boolean; snapshot?: { val(): unknown } }>;
+  };
 };
 
-/** Dual-write: collision-safe per-well event after materialization. Never resets incoming_version. */
+/** Dual-write after canonical projection. CAS: older retry cannot overwrite newer. */
 export async function notifyMaterializedBestEffort(
   root: MaterializedRoot,
   input: {
     companyId: string;
     wellName: string;
-    packetId?: string | null;
     kind: MaterializedKind;
+    opId: string;
+    packetId?: string | null;
+    targetPacketId?: string | null;
+    survivorPacketId?: string | null;
+    resultAtMs: number;
     nowMs: number;
   },
   logError: (err: unknown) => void = () => undefined,
@@ -90,11 +100,19 @@ export async function notifyMaterializedBestEffort(
       kind: input.kind,
       wellName: input.wellName,
       companyId: input.companyId,
+      opId: input.opId,
       packetId: input.packetId,
+      targetPacketId: input.targetPacketId,
+      survivorPacketId: input.survivorPacketId,
       atMs: input.nowMs,
+      resultAtMs: input.resultAtMs,
     });
-    await root.child(materializedPath(input.companyId, input.wellName)).set(event);
-    return event.eventId;
+    const result = await root.child(materializedPath(input.companyId, input.wellName)).transaction(
+      materializedCasUpdater(event),
+    );
+    if (result?.committed !== true) return null;
+    const stored = result.snapshot?.val() as { opId?: string } | null;
+    return stored?.opId || event.opId;
   } catch (err) {
     logError(err);
     return null;

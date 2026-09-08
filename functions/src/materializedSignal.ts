@@ -1,25 +1,30 @@
 /**
  * Collision-safe well materialization signal.
  *
- * packets/incoming_version is a legacy global counter. Production currently
- * holds ~4.3e20, beyond Number.MAX_SAFE_INTEGER, so `n + 1 === n` and
- * listeners never see a change. Do NOT reset that path.
- *
- * New path (per company/well, string event id):
+ * Do NOT reset packets/incoming_version. Dual-write per company/well:
  *   packets/materialized/{companyId}/{wellKey}
- * Written AFTER outgoing/status materialization (pull, edit, delete).
+ *
+ * Operation identity is stable (not wall-clock):
+ *   pull:   pull:{packetId}
+ *   edit:   edit:{editRequestId}:{targetPacketId}
+ *   delete: delete:{deleteRequestId}:{targetPacketId}:{survivorPacketId|none}
+ * atMs / resultAtMs are metadata. CAS rejects an older retry.
  */
 export const MAX_SAFE = Number.MAX_SAFE_INTEGER;
 
 export type MaterializedKind = 'pull' | 'edit' | 'delete' | 'status';
 
 export interface MaterializedEvent {
+  opId: string;
   eventId: string;
   packetId: string | null;
+  targetPacketId: string | null;
+  survivorPacketId: string | null;
   wellName: string;
   companyId: string;
   kind: MaterializedKind;
   atMs: number;
+  resultAtMs: number;
 }
 
 export function isUnsafeVersionNumber(current: unknown): boolean {
@@ -28,15 +33,14 @@ export function isUnsafeVersionNumber(current: unknown): boolean {
   return n > MAX_SAFE || n + 1 === n;
 }
 
-/**
- * Legacy +1. If the stored value cannot represent +1, return it unchanged
- * so we never pretend the poison counter still signals listeners.
- */
 export function nextIncomingVersion(current: unknown): number {
   if (typeof current === 'string') {
-    // Historic bug: CF used `val + 1` which concatenates strings ("5"+1="51").
+    const asNum = Number(current);
+    if (Number.isFinite(asNum) && isUnsafeVersionNumber(asNum)) return asNum;
     const n = parseInt(current, 10);
-    if (!Number.isFinite(n) || isUnsafeVersionNumber(n)) return Number.NaN;
+    if (!Number.isFinite(n) || isUnsafeVersionNumber(n)) {
+      return Number.isFinite(asNum) ? asNum : 0;
+    }
     return n + 1;
   }
   const n = typeof current === 'number' ? current : parseInt(String(current ?? '0'), 10);
@@ -45,7 +49,6 @@ export function nextIncomingVersion(current: unknown): number {
   return n + 1;
 }
 
-/** Demonstrates the historic string-concat growth. */
 export function unsafeStringIncrement(current: unknown): unknown {
   return (current as any || 0) + 1;
 }
@@ -60,33 +63,76 @@ export function materializedPath(companyId: string, wellName: string): string {
   return `packets/materialized/${company}/${well}`;
 }
 
+export function pullOpId(packetId: string): string {
+  return `pull:${packetId}`;
+}
+
+export function editOpId(editRequestId: string, targetPacketId: string): string {
+  return `edit:${editRequestId}:${targetPacketId}`;
+}
+
+export function deleteOpId(
+  deleteRequestId: string,
+  targetPacketId: string,
+  survivorPacketId: string | null,
+): string {
+  return `delete:${deleteRequestId}:${targetPacketId}:${survivorPacketId || 'none'}`;
+}
+
 export function buildMaterializedEvent(input: {
   kind: MaterializedKind;
   wellName: string;
   companyId: string;
+  opId: string;
   packetId?: string | null;
+  targetPacketId?: string | null;
+  survivorPacketId?: string | null;
   atMs: number;
+  resultAtMs: number;
 }): MaterializedEvent {
   const packetId = input.packetId ? String(input.packetId) : null;
-  const eventId = `${input.kind}:${packetId || 'none'}:${input.atMs}`;
   return {
-    eventId,
+    opId: input.opId,
+    eventId: input.opId,
     packetId,
+    targetPacketId: input.targetPacketId ? String(input.targetPacketId) : packetId,
+    survivorPacketId: input.survivorPacketId ? String(input.survivorPacketId) : null,
     wellName: input.wellName,
     companyId: input.companyId,
     kind: input.kind,
     atMs: input.atMs,
+    resultAtMs: input.resultAtMs,
+  };
+}
+
+export type CasDecision = 'write' | 'idempotent' | 'reject_stale';
+
+export function decideMaterializedCas(
+  existing: MaterializedEvent | null,
+  incoming: MaterializedEvent,
+): CasDecision {
+  if (!existing) return 'write';
+  if (existing.opId === incoming.opId) return 'idempotent';
+  if (incoming.resultAtMs < existing.resultAtMs) return 'reject_stale';
+  if (incoming.resultAtMs === existing.resultAtMs && incoming.opId < existing.opId) {
+    return 'reject_stale';
+  }
+  return 'write';
+}
+
+/** Transaction updater: abort (undefined) keeps existing. */
+export function materializedCasUpdater(incoming: MaterializedEvent) {
+  return (current: unknown): MaterializedEvent | undefined => {
+    const existing =
+      current && typeof current === 'object' ? (current as MaterializedEvent) : null;
+    const d = decideMaterializedCas(existing, incoming);
+    if (d === 'write') return incoming;
+    return undefined;
   };
 }
 
 export type ApplyDecision = 'apply' | 'wait' | 'ignore';
 
-/**
- * Verify projections match the signal before display.
- * Pull: outgoing lastPullPacketId must equal event.packetId.
- * Edit: same packet id (identity preserved) — apply when lastPullPacketId matches.
- * Delete: outgoing must NOT still be the deleted packet id.
- */
 export function decideApplyMaterialized(
   event: MaterializedEvent,
   outgoing: { lastPullPacketId?: string | null; wellName?: string } | null,
@@ -94,7 +140,9 @@ export function decideApplyMaterialized(
   if (!outgoing) return 'wait';
   const outId = outgoing.lastPullPacketId || null;
   if (event.kind === 'delete') {
+    const survivor = event.survivorPacketId;
     if (event.packetId && outId === event.packetId) return 'wait';
+    if (survivor && outId && outId !== survivor) return 'wait';
     return 'apply';
   }
   if (event.packetId && outId && outId !== event.packetId) return 'ignore';
@@ -109,10 +157,8 @@ export function coalesceByWell(
 ): Record<string, MaterializedEvent> {
   const key = `${event.companyId}:${wellKeyOf(event.wellName)}`;
   const prev = pending[key];
-  if (!prev || event.atMs >= prev.atMs) {
+  if (!prev || event.resultAtMs >= prev.resultAtMs) {
     return { ...pending, [key]: event };
   }
   return pending;
 }
-
-export const FULL_PAGE_RELOAD_FORBIDDEN = 'window.location.reload';
