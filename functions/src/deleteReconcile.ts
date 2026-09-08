@@ -31,16 +31,21 @@ export function decideDeleteReconcile(input: {
 }): ReconcileAction {
   const deletedWasOwner = !!input.storedOwnerId && input.storedOwnerId === input.deletedPacketId;
   if (!input.survivingLatestId) {
-    // Well emptied. Clear only when we owned it (or nothing owns it).
+    // Well emptied. Clear only when the projection still shows the deleted
+    // packet (or nothing). A different (newer) pull now owning it → skip.
     return deletedWasOwner || !input.storedOwnerId ? 'clear' : 'skip';
   }
   if (deletedWasOwner) return 'set';
-  // Owner is a different packet. Never regress a strictly-newer owner (a
-  // concurrent natural pull that landed during the delete).
+  if (input.storedOwnerId === input.survivingLatestId) return 'set'; // owner IS the survivor → refresh (historical delete)
+  if (!input.storedOwnerId) return 'set'; // no owner recorded → adopt the survivor
+  // A DIFFERENT pull owns the projection. Fail closed: only overwrite when it is
+  // PROVABLY strictly older than the survivor. Newer, equal-timestamp (canonical
+  // tie-break: existing owner wins), or unreadable timestamps → skip, never
+  // regressing a concurrent newer pull.
   const ownerMs = input.storedOwnerUtc ? Date.parse(input.storedOwnerUtc) : NaN;
   const survMs = input.survivingLatestUtc ? Date.parse(input.survivingLatestUtc) : NaN;
-  if (!Number.isNaN(ownerMs) && !Number.isNaN(survMs) && ownerMs > survMs) return 'skip';
-  return 'set'; // owner == survivor (historical delete) or older → refresh
+  if (!Number.isNaN(ownerMs) && !Number.isNaN(survMs) && ownerMs < survMs) return 'set';
+  return 'skip';
 }
 
 export interface PullOwnedStatus {
@@ -71,7 +76,10 @@ export async function reconcileWellAfterDelete(deps: {
   /** Pull-owned status rebuilt from the surviving latest; null when clearing. */
   pullOwned: PullOwnedStatus | null;
   now?: () => string;
-}): Promise<{ action: ReconcileAction }> {
+  /** Test hook: fired after the companyWells CAS commits and BEFORE the
+   *  wells/status transaction, to force the delete/new-pull interleaving. */
+  afterCasHook?: () => Promise<void>;
+}): Promise<{ action: ReconcileAction; statusAction: ReconcileAction }> {
   const now = deps.now || (() => new Date().toISOString());
   const path = namespacedWellStatePath(deps.companyId, deps.wellKey);
   // Boxed so the outcome survives the transaction-callback boundary (its final
@@ -121,24 +129,50 @@ export async function reconcileWellAfterDelete(deps: {
     };
   });
 
-  // wells/{well}/status — only pull-owned fields. isDown (authoritative
-  // well-down) and static config are deliberately preserved (never written here).
-  const statusRef = deps.db.ref(`wells/${deps.wellName}/status`);
-  if (box.action === 'set' && deps.pullOwned) {
-    await statusRef.update({
+  // Forced-interleaving hook (tests only): a newer natural pull may materialize
+  // BOTH projections here, after the companyWells CAS and before the status write.
+  if (deps.afterCasHook) await deps.afterCasHook();
+
+  // wells/{well}/status — INDEPENDENT ownership-aware transaction. The companyWells
+  // CAS cannot protect a later write to this separate node, so re-evaluate
+  // ownership against the status's OWN current owner (lastPull.packetId/time)
+  // inside the transaction and abort if a newer pull now owns it. Only pull-owned
+  // fields are touched; isDown (authoritative well-down), static config, and every
+  // other field are preserved.
+  const statusBox: { action: ReconcileAction } = { action: 'skip' };
+  await deps.db.ref(`wells/${deps.wellName}/status`).transaction((node) => {
+    // Optimistic null-first: keep the transaction alive so it re-runs against the
+    // authoritative server value (wells/status exists after any pull).
+    if (node == null) return {};
+    if (typeof node !== 'object') return node;
+    const n = node as Record<string, unknown>;
+    const lp = n.lastPull && typeof n.lastPull === 'object' ? (n.lastPull as Record<string, unknown>) : null;
+    const action = decideDeleteReconcile({
+      storedOwnerId: lp ? String(lp.packetId || '') : '',
+      storedOwnerUtc: lp ? (typeof lp.dateTimeUTC === 'string' ? lp.dateTimeUTC : null) : null,
+      deletedPacketId: deps.deletedPacketId,
+      survivingLatestId: deps.survivingLatestId,
+      survivingLatestUtc: deps.survivingLatestUtc,
+    });
+    statusBox.action = action;
+    if (action === 'skip') return undefined; // a newer pull owns status → do not regress
+    if (action === 'clear') {
+      const next = { ...n };
+      delete next.current;
+      delete next.lastPull;
+      delete next.calculated;
+      next.updatedAt = now();
+      return next; // isDown + config + others preserved
+    }
+    if (!deps.pullOwned) return undefined; // set requires the rebuilt fields
+    return {
+      ...n,
       current: deps.pullOwned.current,
       lastPull: deps.pullOwned.lastPull,
       calculated: deps.pullOwned.calculated,
       updatedAt: now(),
-    });
-  } else if (box.action === 'clear') {
-    await statusRef.update({
-      current: null,
-      lastPull: null,
-      calculated: null,
-      updatedAt: now(),
-    });
-  }
+    };
+  });
 
-  return { action: box.action };
+  return { action: box.action, statusAction: statusBox.action };
 }

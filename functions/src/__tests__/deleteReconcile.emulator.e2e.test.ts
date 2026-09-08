@@ -102,6 +102,45 @@ describeE2E('governed delete reconciliation — real RTDB emulator', () => {
     expect(cw.materializedPacketId).toBe('C');
   });
 
+  it('FORCED INTERLEAVING (predecessor): newer pull materializes BOTH after the companyWells CAS → status write skips', async () => {
+    await db.ref(CW).set({ companyId: CO, wellKey: WELL, pullHighWater: { packetId: 'B', dateTimeUTC: '2026-09-07T02:00:00Z' }, materializedPacketId: 'B', current: { isDown: false } });
+    await db.ref(STATUS).set({ isDown: false, config: { tanks: 1 }, lastPull: { packetId: 'B', dateTimeUTC: '2026-09-07T02:00:00Z' } });
+    const res = await reconcileWellAfterDelete({
+      db: db as unknown as ReconcileDb, companyId: CO, wellKey: WELL, wellName: WELL,
+      deletedPacketId: 'B', survivingLatestId: 'A', survivingLatestUtc: '2026-09-07T01:00:00Z',
+      pullOwned: pullOwned('A', 42, '2026-09-07T01:00:00Z'),
+      // After the delete's companyWells CAS commits the predecessor, a strictly
+      // newer pull D lands and materializes BOTH projections (as processIncomingPull would).
+      afterCasHook: async () => {
+        await db.ref(CW).set({ companyId: CO, wellKey: WELL, pullHighWater: { packetId: 'D', dateTimeUTC: '2026-09-07T04:00:00Z' }, materializedPacketId: 'D', current: { isDown: false } });
+        await db.ref(STATUS).set({ isDown: false, config: { tanks: 1 }, lastPull: { packetId: 'D', dateTimeUTC: '2026-09-07T04:00:00Z' }, current: { levelInches: 88 } });
+      },
+    });
+    expect(res.statusAction).toBe('skip'); // the delayed status write did NOT regress to the survivor
+    const st = (await db.ref(STATUS).once('value')).val();
+    const cw = (await db.ref(CW).once('value')).val();
+    expect(st.lastPull.packetId).toBe('D');
+    expect(st.current.levelInches).toBe(88);
+    expect(cw.pullHighWater.packetId).toBe('D'); // both projections identify the newer pull
+  });
+
+  it('FORCED INTERLEAVING (only-pull clear): newer pull lands after the clear CAS → status clear skips', async () => {
+    await db.ref(CW).set({ companyId: CO, wellKey: WELL, pullHighWater: { packetId: 'B', dateTimeUTC: '2026-09-07T02:00:00Z' }, materializedPacketId: 'B', current: { isDown: false } });
+    await db.ref(STATUS).set({ isDown: false, config: { tanks: 1 }, lastPull: { packetId: 'B', dateTimeUTC: '2026-09-07T02:00:00Z' } });
+    const res = await reconcileWellAfterDelete({
+      db: db as unknown as ReconcileDb, companyId: CO, wellKey: WELL, wellName: WELL,
+      deletedPacketId: 'B', survivingLatestId: null, survivingLatestUtc: null, pullOwned: null,
+      afterCasHook: async () => {
+        await db.ref(CW).set({ companyId: CO, wellKey: WELL, pullHighWater: { packetId: 'D', dateTimeUTC: '2026-09-07T04:00:00Z' }, materializedPacketId: 'D', current: { isDown: false } });
+        await db.ref(STATUS).set({ isDown: false, config: { tanks: 1 }, lastPull: { packetId: 'D', dateTimeUTC: '2026-09-07T04:00:00Z' }, current: { levelInches: 5 } });
+      },
+    });
+    expect(res.statusAction).toBe('skip'); // did NOT clear the new pull's status
+    const st = (await db.ref(STATUS).once('value')).val();
+    expect(st.lastPull.packetId).toBe('D');
+    expect(st.current.levelInches).toBe(5);
+  });
+
   it('another company with the same well name is untouched', async () => {
     const otherCw = namespacedWellStatePath('acme', WELL);
     await db.ref(CW).set({ pullHighWater: { packetId: 'B', dateTimeUTC: '2026-09-07T02:00:00Z' }, materializedPacketId: 'B', current: {} });

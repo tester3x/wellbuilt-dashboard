@@ -103,17 +103,68 @@ describe('reconcileWellAfterDelete (applied, in-memory)', () => {
     expect(db.store[STATUS].config.tanks).toBe(2);              // preserved
   });
 
-  it('concurrent NEWER owner → skip, nothing regressed', async () => {
+  it('concurrent NEWER owner → skip on BOTH nodes, nothing regressed', async () => {
     const before = cwNode('C', '2026-09-07T03:00:00Z');
-    const db = fakeDb({ [CW]: JSON.parse(JSON.stringify(before)), [STATUS]: { lastPull: { packetId: 'C' } } });
+    const status = { lastPull: { packetId: 'C', dateTimeUTC: '2026-09-07T03:00:00Z' }, isDown: false };
+    const db = fakeDb({ [CW]: JSON.parse(JSON.stringify(before)), [STATUS]: JSON.parse(JSON.stringify(status)) });
     const res = await reconcileWellAfterDelete({
       db, companyId: CO, wellKey: WELL, wellName: WELL,
       deletedPacketId: 'X', survivingLatestId: 'A', survivingLatestUtc: '2026-09-07T01:00:00Z',
       pullOwned: pullOwned('A', 1, '2026-09-07T01:00:00Z'), now: () => 'T',
     });
     expect(res.action).toBe('skip');
-    expect(db.store[CW]).toEqual(before);                        // untouched
+    expect(res.statusAction).toBe('skip');
+    expect(db.store[CW]).toEqual(before);                        // companyWells untouched
     expect(db.store[STATUS].lastPull.packetId).toBe('C');        // wells/status untouched
+  });
+
+  it('FORCED INTERLEAVING (predecessor): newer pull materializes BOTH after the companyWells CAS → status write skips', async () => {
+    // companyWells starts owned by the deleted current pull 'B'.
+    const db = fakeDb({ [CW]: cwNode('B', '2026-09-07T02:00:00Z'), [STATUS]: { isDown: false, config: { tanks: 1 }, lastPull: { packetId: 'B', dateTimeUTC: '2026-09-07T02:00:00Z' } } });
+    const res = await reconcileWellAfterDelete({
+      db, companyId: CO, wellKey: WELL, wellName: WELL,
+      deletedPacketId: 'B', survivingLatestId: 'A', survivingLatestUtc: '2026-09-07T01:00:00Z',
+      pullOwned: pullOwned('A', 42, '2026-09-07T01:00:00Z'), now: () => 'T',
+      // AFTER the companyWells CAS commits the survivor, a strictly newer pull 'D'
+      // lands and materializes BOTH projections (as processIncomingPull would).
+      afterCasHook: async () => {
+        db.store[CW] = cwNode('D', '2026-09-07T04:00:00Z');
+        db.store[STATUS] = { isDown: false, config: { tanks: 1 }, lastPull: { packetId: 'D', dateTimeUTC: '2026-09-07T04:00:00Z' }, current: { levelInches: 88 } };
+      },
+    });
+    expect(res.statusAction).toBe('skip'); // did NOT regress status to the survivor
+    expect(db.store[STATUS].lastPull.packetId).toBe('D');
+    expect(db.store[STATUS].current.levelInches).toBe(88);
+    expect(db.store[CW].pullHighWater.packetId).toBe('D');       // both identify the newer pull
+  });
+
+  it('FORCED INTERLEAVING (only-pull clear): newer pull lands after the clear CAS → status clear skips', async () => {
+    const db = fakeDb({ [CW]: cwNode('B', '2026-09-07T02:00:00Z'), [STATUS]: { isDown: false, config: { tanks: 1 }, lastPull: { packetId: 'B', dateTimeUTC: '2026-09-07T02:00:00Z' } } });
+    const res = await reconcileWellAfterDelete({
+      db, companyId: CO, wellKey: WELL, wellName: WELL,
+      deletedPacketId: 'B', survivingLatestId: null, survivingLatestUtc: null, pullOwned: null, now: () => 'T',
+      afterCasHook: async () => {
+        db.store[CW] = cwNode('D', '2026-09-07T04:00:00Z');
+        db.store[STATUS] = { isDown: false, config: { tanks: 1 }, lastPull: { packetId: 'D', dateTimeUTC: '2026-09-07T04:00:00Z' }, current: { levelInches: 5 } };
+      },
+    });
+    expect(res.statusAction).toBe('skip'); // did NOT clear the new pull's status
+    expect(db.store[STATUS].lastPull.packetId).toBe('D');
+    expect(db.store[STATUS].current.levelInches).toBe(5);
+  });
+
+  it('equal-timestamp different packet → skip (canonical tie-break: existing owner wins)', () => {
+    expect(decideDeleteReconcile({
+      storedOwnerId: 'C', storedOwnerUtc: '2026-09-07T01:00:00Z', deletedPacketId: 'X',
+      survivingLatestId: 'A', survivingLatestUtc: '2026-09-07T01:00:00Z',
+    })).toBe('skip');
+  });
+
+  it('unreadable owner timestamp on a different packet → skip (fail closed)', () => {
+    expect(decideDeleteReconcile({
+      storedOwnerId: 'C', storedOwnerUtc: null, deletedPacketId: 'X',
+      survivingLatestId: 'A', survivingLatestUtc: '2026-09-07T01:00:00Z',
+    })).toBe('skip');
   });
 
   it('same well name in ANOTHER company is untouched (namespace isolation)', async () => {
