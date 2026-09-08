@@ -1223,25 +1223,11 @@ export async function fetchWellPerformance(wellName: string): Promise<Performanc
   });
 }
 
-// Delete a pull — sends delete request to incoming/ for Cloud Function to process
-// Cloud Function handles: removing from processed/, recalculating outgoing response
-export async function deletePull(packetId: string, wellName: string): Promise<void> {
-  const db = getFirebaseDatabase();
-  const timestamp = Date.now();
-  const cleanWellName = wellName.replace(/\s/g, '');
-  const deletePacketId = `delete_${timestamp}_${cleanWellName}`;
-
-  const deletePacket = {
-    requestType: 'delete',
-    packetId: packetId,
-    wellName: wellName,
-    timestamp: new Date().toISOString(),
-    source: 'dashboard',
-  };
-
-  const deleteRef = ref(db, `packets/incoming/${deletePacketId}`);
-  await set(deleteRef, deletePacket);
-}
+// Delete a pull is now a governed correction through the authenticated
+// staffDeletePull callable — see src/lib/pullDelete.ts. The legacy direct RTDB
+// write to packets/incoming was removed: the deployed secure rules deny it
+// (packets/incoming .write:false), which surfaced as "Failed to delete pull".
+// There is deliberately no direct-database delete fallback.
 
 // Edit a pull (sends edit packet for Cloud Function to process)
 // newLevelInches: tank top level in inches
