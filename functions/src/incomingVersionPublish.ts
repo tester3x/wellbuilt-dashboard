@@ -7,11 +7,15 @@
  * transaction-safe increment used after outgoing status is readable.
  */
 
+import {
+  buildMaterializedEvent,
+  materializedPath,
+  nextIncomingVersion as safeNextIncomingVersion,
+  type MaterializedKind,
+} from './materializedSignal';
+
 export function nextIncomingVersion(current: unknown): number {
-  const n = typeof current === 'number'
-    ? current
-    : parseInt(String(current ?? '0'), 10);
-  return (Number.isFinite(n) ? n : 0) + 1;
+  return safeNextIncomingVersion(current);
 }
 
 export function shouldPublishIncomingVersion(input: {
@@ -61,6 +65,38 @@ export async function notifyIncomingVersionBestEffort(
     return published;
   } catch {
     logError({ reason: 'threw' });
+    return null;
+  }
+}
+
+export type MaterializedRoot = {
+  child: (path: string) => { set: (value: unknown) => Promise<unknown> };
+};
+
+/** Dual-write: collision-safe per-well event after materialization. Never resets incoming_version. */
+export async function notifyMaterializedBestEffort(
+  root: MaterializedRoot,
+  input: {
+    companyId: string;
+    wellName: string;
+    packetId?: string | null;
+    kind: MaterializedKind;
+    nowMs: number;
+  },
+  logError: (err: unknown) => void = () => undefined,
+): Promise<string | null> {
+  try {
+    const event = buildMaterializedEvent({
+      kind: input.kind,
+      wellName: input.wellName,
+      companyId: input.companyId,
+      packetId: input.packetId,
+      atMs: input.nowMs,
+    });
+    await root.child(materializedPath(input.companyId, input.wellName)).set(event);
+    return event.eventId;
+  } catch (err) {
+    logError(err);
     return null;
   }
 }

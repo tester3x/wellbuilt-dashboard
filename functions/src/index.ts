@@ -37,7 +37,7 @@ import {
   resolveEditEventId,
   resolveOriginalSubmissionAt,
 } from './editHistory';
-import { notifyIncomingVersionBestEffort } from './incomingVersionPublish';
+import { notifyIncomingVersionBestEffort, notifyMaterializedBestEffort } from './incomingVersionPublish';
 import { runOwnerMaterializeTxn } from './pullMaterialize';
 import { reconcileWellAfterDelete, type ReconcileDb } from './deleteReconcile';
 import { applyOutgoingAfterDelete, type OutgoingDb } from './outgoingReconcile';
@@ -1432,6 +1432,13 @@ export const processIncomingPull = functionsV1.database
       outgoingCommitted: true,
       pullAccepted: true,
     });
+    await notifyMaterializedBestEffort(db.ref(), {
+      companyId: outgoingCompanyId(config),
+      wellName,
+      packetId,
+      kind: 'pull',
+      nowMs: Date.now(),
+    });
 
     // Write production log (AFR + window + overnight bbls/day for comparison)
     const afrBblsDay = afr > 0 ? Math.round((1 / afr) * bblPerFoot) : 0;
@@ -2582,6 +2589,13 @@ export const processEditRequest = functionsV1.database
       outgoingCommitted: true,
       pullAccepted: true,
     });
+    await notifyMaterializedBestEffort(db.ref(), {
+      companyId: outgoingCompanyId(config),
+      wellName,
+      packetId: originalPacketId,
+      kind: 'edit',
+      nowMs: Date.now(),
+    });
 
     console.log(`Edit complete for ${wellName}: ${originalPacketId}`);
     return null;
@@ -2928,6 +2942,13 @@ export const processDeleteRequest = functionsV1.database
     await notifyIncomingVersionBestEffort(db.ref('packets/incoming_version'), {
       outgoingCommitted: true,
       pullAccepted: true,
+    });
+    await notifyMaterializedBestEffort(db.ref(), {
+      companyId: outgoingCompanyId(config),
+      wellName,
+      packetId: targetPacketId,
+      kind: 'delete',
+      nowMs: Date.now(),
     });
 
     console.log(`Delete complete for ${wellName}: ${targetPacketId}`);
