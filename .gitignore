@@ -79,3 +79,4 @@ rtdb-rules-tests/
 _live_*.json
 firestore-debug.log
 database-debug.log
+tools/billing-fold-shots/

@@ -4,6 +4,14 @@ import { useEffect, useState, useMemo, useCallback, Suspense } from 'react';
 import { useRouter, useSearchParams } from 'next/navigation';
 import { useAuth } from '@/contexts/AuthContext';
 import { WellResponse, subscribeToWellStatusesUnified, wellResponsesFromCatalog } from '@/lib/wells';
+// Z Fold recovery — layout helpers only (collapsed queue / stacked layout).
+// The realtime gate helpers from this module are intentionally NOT used:
+// 3ea36d84's subscribeToWellStatusesUnified realtime path is preserved.
+import {
+  isStackedDispatchLayout,
+  wellQueueSearchActive,
+  wellQueueUsesSearchHits,
+} from '@/lib/dispatchWellQueueLive';
 import { adminGetDashboardCatalog, classifiedReadFailure } from '@/lib/adminDashboardCatalog';
 import { canViewGlobalWellPool, docBelongsToTenant } from '@/lib/tenantScope';
 import { AppHeader } from '@/components/AppHeader';
@@ -16,6 +24,13 @@ import { loadCompanyById } from '@/lib/companySettings';
 import { trackJobTypeUsage } from '@/lib/jobTypeUsage';
 import { dismissDispatch } from '@/lib/dismissDispatch';
 import { staffCancelDispatch, staffCreateDispatch, staffUpdateDispatch } from '@/lib/staffWriteDispatch';
+import {
+  filterTicketsForCompany,
+  invoiceBelongsToCompany,
+  planInvoiceLookup,
+  planTicketFetch,
+  scopeCompanyId,
+} from '@/lib/ticketCompanyLookup';
 
 // ─── Types ───────────────────────────────────────────────────────────────────
 
@@ -349,6 +364,9 @@ function DispatchPageInner() {
   const [search, setSearch] = useState('');
   const [routeFilter, setRouteFilter] = useState<string>('all');
   const [priorityFilter, setPriorityFilter] = useState<PriorityLevel | 'all'>('all');
+  // Z Fold recovery — collapsed-queue + stacked-layout UI state.
+  const [wellQueueExpanded, setWellQueueExpanded] = useState(false);
+  const [stackedLayout, setStackedLayout] = useState(isStackedDispatchLayout);
   const [message, setMessage] = useState('');
 
   // Assign modal state (single-well PW)
@@ -530,6 +548,15 @@ function DispatchPageInner() {
       router.push('/login');
     }
   }, [user, loading, router]);
+
+  // Z Fold recovery — track stacked (Fold/narrow/short) vs desktop-split layout.
+  useEffect(() => {
+    const mq = window.matchMedia('(min-width: 1280px) and (min-height: 900px)');
+    const apply = () => setStackedLayout(!mq.matches);
+    apply();
+    mq.addEventListener('change', apply);
+    return () => mq.removeEventListener('change', apply);
+  }, []);
 
   // Subscribe to well data — tenant containment (7/9): the RTDB well queue is
   // the global (Liquid Gold) pool with no tenancy dimension. Scoped
@@ -959,6 +986,42 @@ function DispatchPageInner() {
         return aH - bH;
       });
   }, [wells, dispatches, search, routeFilter, priorityFilter]);
+
+  // Z Fold recovery — when the queue is collapsed (stacked + not expanded), a
+  // search still surfaces matching wells so the list is reachable on the Fold.
+  const searchHits = useMemo(() => {
+    const q = search.trim().toLowerCase();
+    if (!q) return [];
+    const dispatchedWellDrivers = new Map<string, string[]>();
+    dispatches
+      .filter(d => d.jobType === 'pw' && ['pending', 'accepted', 'in_progress', 'paused'].includes(d.status))
+      .forEach(d => {
+        const driversList = dispatchedWellDrivers.get(d.wellName) || [];
+        driversList.push(d.driverFirstName || d.driverName || '?');
+        dispatchedWellDrivers.set(d.wellName, driversList);
+      });
+    return wells
+      .filter(w => {
+        const isDown = w.isDown || w.currentLevel === 'DOWN';
+        if (isDown) return false;
+        if (w.currentLevel === '--' && !w.nextPullTimeUTC) return false;
+        if (!(w.wellName.toLowerCase().includes(q) || (w.route || '').toLowerCase().includes(q))) return false;
+        if (routeFilter !== 'all' && w.route !== routeFilter) return false;
+        return true;
+      })
+      .map(w => ({ well: w, priority: getPriority(w), dispatched: dispatchedWellDrivers.has(w.wellName), assignedDrivers: dispatchedWellDrivers.get(w.wellName) || [] }))
+      .sort((a, b) => {
+        if (a.dispatched !== b.dispatched) return a.dispatched ? 1 : -1;
+        if (a.priority.sortOrder !== b.priority.sortOrder) return a.priority.sortOrder - b.priority.sortOrder;
+        const aH = a.priority.hoursUntilPull ?? 99999;
+        const bH = b.priority.hoursUntilPull ?? 99999;
+        return aH - bH;
+      });
+  }, [wells, dispatches, search, routeFilter]);
+
+  const showingSearchHits = wellQueueUsesSearchHits(stackedLayout, wellQueueExpanded, search);
+  const queueRows = showingSearchHits ? searchHits : pwQueue;
+  const searchActive = wellQueueSearchActive(search);
 
   // Priority summary counts
   const priorityCounts = useMemo(() => {
@@ -1729,7 +1792,7 @@ function DispatchPageInner() {
 
   function toggleSelectAll() {
     setAssignTarget(null); // Clear single-well mode
-    const selectableWells = pwQueue.map(q => q.well.wellName);
+    const selectableWells = queueRows.map(q => q.well.wellName);
 
     if (selectableWells.every(w => selectedWells.has(w))) {
       setSelectedWells(new Map());
@@ -2066,7 +2129,7 @@ function DispatchPageInner() {
     <div className="dashboard-viewport-shell bg-gray-900">
       <AppHeader />
 
-      <main data-dashboard-scroll="workspace" className="flex-1 flex flex-col min-h-0 overflow-hidden px-4 py-4 pb-[max(1rem,env(safe-area-inset-bottom))]">
+      <main data-dashboard-scroll="dispatch" data-dispatch-scroll="primary" className="dispatch-scroll-main px-4 py-4">
 
         {/* ═══════════════════════════════════════════════════════════════════════
             DISPATCH TOOLBAR — Always visible at top. Quick actions + inline forms.
@@ -2121,13 +2184,13 @@ function DispatchPageInner() {
         {/* ═══════════════════════════════════════════════════════════════════════
             MAIN WORKSPACE — 50/50. Left: PW+SW top, Well Queue below. Right: Active Jobs full height.
             ═══════════════════════════════════════════════════════════════════════ */}
-        <div className="flex-1 flex gap-3 min-h-0">
+        <div className="dispatch-workspace">
 
-          {/* ═══════ LEFT HALF (50%): dispatch cards + well queue ═══════ */}
-          <div className="w-[50%] flex-shrink-0 flex flex-col gap-3 min-h-0 overflow-hidden">
+          {/* ═══════ LEFT: dispatch cards + well queue ═══════ */}
+          <div className="dispatch-pane">
 
             {/* ── Tabbed Dispatch Builder (PW / SW / Projects) ── */}
-            <div className={`bg-gray-800 border rounded-lg p-4 flex-shrink-0 flex flex-col h-[460px] ${
+            <div className={`dispatch-builder bg-gray-800 border rounded-lg p-4 flex flex-col ${
               builderTab === 'pw' ? 'border-blue-600/40' : builderTab === 'sw' ? 'border-purple-600/40' : 'border-emerald-600/40'
             }`}>
               {/* Builder tab bar + Add Pull */}
@@ -2814,24 +2877,36 @@ function DispatchPageInner() {
             </div>{/* end Tabbed Builder panel */}
 
             {/* ═══════ Well Queue (fills remaining left half) ═══════ */}
-            <div className="bg-gray-800 rounded-lg border border-gray-700 flex-1 flex flex-col overflow-hidden">
+            <div className={`dispatch-queue bg-gray-800 rounded-lg border border-gray-700 flex flex-col${wellQueueExpanded ? ' is-expanded' : ''}${searchActive ? ' has-search' : ''}`}>
               {/* Panel header with filters */}
-              <div className="flex items-center gap-3 px-4 py-2.5 border-b border-gray-700 flex-shrink-0">
+              <div className="flex items-center gap-2 px-4 py-2.5 border-b border-gray-700 flex-shrink-0">
                 <h3 className="text-sm font-semibold text-white flex-shrink-0">Well Queue</h3>
                 <input
                   type="text"
                   placeholder="Search wells..."
                   value={search}
                   onChange={(e) => setSearch(e.target.value)}
-                  className="px-2.5 py-1 bg-gray-900 border border-gray-700 rounded text-white text-xs placeholder-gray-500 focus:outline-none focus:border-blue-500 w-40"
+                  className="dispatch-queue-search px-2.5 py-1 bg-gray-900 border border-gray-700 rounded text-white text-xs placeholder-gray-500 focus:outline-none focus:border-blue-500"
                 />
-                <select value={routeFilter} onChange={(e) => setRouteFilter(e.target.value)}
-                  className="px-2 py-1 bg-gray-900 border border-gray-700 rounded text-white text-xs focus:outline-none focus:border-blue-500">
+                <select
+                  value={routeFilter}
+                  onChange={(e) => setRouteFilter(e.target.value)}
+                  className="dispatch-queue-route px-2 py-1 bg-gray-900 border border-gray-700 rounded text-white text-xs focus:outline-none focus:border-blue-500"
+                >
                   <option value="all">All Routes</option>
                   {routes.map(r => <option key={r} value={r}>{r}</option>)}
                 </select>
                 <span className="flex-1" />
-                <span className="text-gray-500 text-xs">{pwQueue.length} wells</span>
+                <button
+                  type="button"
+                  className="dispatch-queue-toggle"
+                  aria-expanded={wellQueueExpanded}
+                  aria-controls="dispatch-queue-body"
+                  onClick={() => setWellQueueExpanded((open) => !open)}
+                >
+                  {wellQueueExpanded ? 'Hide list' : 'Show list'}
+                </button>
+                <span className="text-gray-500 text-xs flex-shrink-0">{queueRows.length} wells</span>
               </div>
 
               {/* Selection indicator — shows in Well Queue header area */}
@@ -2846,12 +2921,13 @@ function DispatchPageInner() {
                 </div>
               )}
 
+              <div id="dispatch-queue-body" className="dispatch-queue-body">
               {/* Scrollable well table */}
-              <div className="flex-1 min-h-0 overflow-y-auto overflow-x-auto pb-[max(1rem,env(safe-area-inset-bottom))]">
+              <div className="overflow-x-auto">
                 {dataLoading ? (
                   <div className="text-gray-400 py-8 text-center">Loading well data...</div>
-                ) : pwQueue.length === 0 ? (
-                  <div className="text-gray-400 py-8 text-center">No wells match filters</div>
+                ) : queueRows.length === 0 ? (
+                  <div className="text-gray-400 py-8 text-center">{showingSearchHits ? 'No wells match search' : 'No wells match filters'}</div>
                 ) : (
                   <table className="w-full">
                     <thead className="bg-gray-700 sticky top-0 z-10">
@@ -2865,13 +2941,13 @@ function DispatchPageInner() {
                         <th className="px-2 py-2 text-right text-[11px] font-medium text-gray-300 w-28">
                           <div className="flex items-center justify-end gap-1.5">
                             <span>Action</span>
-                            <input type="checkbox" checked={pwQueue.length > 0 && pwQueue.every(q => selectedWells.has(q.well.wellName))} onChange={toggleSelectAll} className="w-4 h-4 rounded border-gray-600 bg-gray-800 text-blue-600 focus:ring-blue-500 focus:ring-offset-0 cursor-pointer" />
+                            <input type="checkbox" checked={queueRows.length > 0 && queueRows.every(q => selectedWells.has(q.well.wellName))} onChange={toggleSelectAll} className="w-4 h-4 rounded border-gray-600 bg-gray-800 text-blue-600 focus:ring-blue-500 focus:ring-offset-0 cursor-pointer" />
                           </div>
                         </th>
                       </tr>
                     </thead>
                     <tbody className="divide-y divide-gray-700/50">
-                      {pwQueue.map(({ well, priority, dispatched, assignedDrivers: wellAssignedDrivers }) => {
+                      {queueRows.map(({ well, priority, dispatched, assignedDrivers: wellAssignedDrivers }) => {
                         const isSelected = selectedWells.has(well.wellName);
                         const loadCount = selectedWells.get(well.wellName) || 1;
                         return (
@@ -2925,13 +3001,14 @@ function DispatchPageInner() {
                   </table>
                 )}
               </div>
+              </div>
             </div>
 
           </div>{/* end left half */}
 
-          {/* ═══════ RIGHT HALF (50%): Active Jobs / Projects ═══════ */}
-          <div className="w-[50%] flex-shrink-0 flex flex-col min-h-0 overflow-hidden">
-            <div className="bg-gray-800 rounded-lg border border-gray-700 flex-1 flex flex-col overflow-hidden">
+          {/* ═══════ RIGHT: Active Jobs / Projects (jobs-first on Fold) ═══════ */}
+          <div className="dispatch-pane dispatch-pane-jobs">
+            <div className="dispatch-jobs bg-gray-800 rounded-lg border border-gray-700 flex flex-col">
               {/* Panel header with tabs */}
               <div className="flex items-center justify-between px-4 py-2.5 border-b border-gray-700 flex-shrink-0">
                 <div className="flex items-center gap-1">
@@ -3033,7 +3110,7 @@ function DispatchPageInner() {
                 </div>
               )}
               {/* Scrollable content */}
-              <div className="flex-1 overflow-y-auto p-3">
+              <div className="p-3">
                 {rightPanelTab === 'jobs' && (
                   <ActiveDispatchPanel
                     dispatches={dispatches.filter(d => d.status !== 'completed' && d.status !== 'dismissed')}
@@ -3053,6 +3130,7 @@ function DispatchPageInner() {
                     allDisposals={allDisposals}
                     highlightJobId={highlightJobId}
                     onHighlightClear={() => setHighlightJobId(null)}
+                    authenticatedCompanyId={user?.companyId || null}
                   />
                 )}
                 {rightPanelTab === 'projects' && !selectedProject && (
@@ -4221,13 +4299,14 @@ function ActiveDispatchPanel({ dispatches, cancelDispatch, drivers, assignTransf
 
 // ─── Completed Jobs Panel (own tab) ──────────────────────────────────────────
 
-function CompletedJobsPanel({ jobs, drivers, allWells, allDisposals, highlightJobId, onHighlightClear }: {
+function CompletedJobsPanel({ jobs, drivers, allWells, allDisposals, highlightJobId, onHighlightClear, authenticatedCompanyId }: {
   jobs: DispatchJob[];
   drivers?: { key: string; displayName: string; legalName?: string }[];
   allWells?: NdicWell[];
   allDisposals?: NdicWell[];
   highlightJobId?: string | null;
   onHighlightClear?: () => void;
+  authenticatedCompanyId?: string | null;
 }) {
   const [driverFilter, setDriverFilter] = useState<string>('all');
   const [searchQuery, setSearchQuery] = useState('');
@@ -4257,8 +4336,8 @@ function CompletedJobsPanel({ jobs, drivers, allWells, allDisposals, highlightJo
   const [ticketDetailData, setTicketDetailData] = useState<any>(null);
   const [ticketDetailLoading, setTicketDetailLoading] = useState(false);
 
-  // Fetch invoice/ticket data from Firestore for inline viewing
-  // Supports lookup by invoiceDocId (preferred for s_t) or invoiceNumber (fallback for i+t)
+  // Fetch invoice/ticket data from Firestore for inline viewing.
+  // Durable invoiceDocId / ticketDocId first; human numbers only with companyId.
   async function loadTicketDetail(identifier: string, jobId: string, invoiceDocId?: string) {
     if (ticketDetailJobId === jobId) { setTicketDetailJobId(null); return; } // toggle off
     setTicketDetailJobId(jobId);
@@ -4267,32 +4346,64 @@ function CompletedJobsPanel({ jobs, drivers, allWells, allDisposals, highlightJo
       const { collection, query, where, getDocs, doc, getDoc } = await import('firebase/firestore');
       const { getFirestoreDb } = await import('@/lib/firebase');
       const db = getFirestoreDb();
-
-      let inv: any = null;
-
-      // Prefer direct doc lookup by invoiceDocId (reliable for both s_t and i+t)
-      if (invoiceDocId) {
-        const docSnap = await getDoc(doc(db, 'invoices', invoiceDocId));
-        if (docSnap.exists()) inv = docSnap.data();
+      const job = jobs.find((j) => j.id === jobId);
+      const companyId = scopeCompanyId({
+        authenticatedCompanyId: authenticatedCompanyId || null,
+        jobCompanyId: job?.companyId,
+      });
+      const plan = planInvoiceLookup({
+        invoiceDocId,
+        invoiceNumber: identifier,
+        companyId,
+      });
+      if (plan.kind === 'refuse_unscoped') {
+        setTicketDetailData(null);
+        return;
       }
 
-      // Fallback: search by invoiceNumber (legacy i+t jobs without invoiceDocId on dispatch)
-      if (!inv && identifier) {
-        const q = query(collection(db, 'invoices'), where('invoiceNumber', '==', identifier));
+      let inv: any = null;
+      if (plan.kind === 'by_doc_id') {
+        const docSnap = await getDoc(doc(db, 'invoices', plan.invoiceDocId));
+        if (docSnap.exists() && invoiceBelongsToCompany(docSnap.data(), plan.companyId)) {
+          inv = docSnap.data();
+        }
+      }
+      if (!inv && plan.kind === 'by_company_and_number') {
+        const q = query(
+          collection(db, 'invoices'),
+          where('companyId', '==', plan.companyId),
+          where('invoiceNumber', '==', plan.invoiceNumber),
+        );
         const snap = await getDocs(q);
-        if (!snap.empty) inv = snap.docs[0].data();
+        const owned = snap.docs.filter((d) => invoiceBelongsToCompany(d.data(), plan.companyId));
+        if (owned.length === 1) inv = owned[0].data();
       }
 
       if (inv) {
-        // Also fetch child tickets
-        const ticketNumbers = inv.tickets || [];
+        const ticketPlan = planTicketFetch({
+          companyId: plan.companyId,
+          ticketSummaries: Array.isArray(inv.ticketSummaries) ? inv.ticketSummaries : [],
+          ticketNumbers: Array.isArray(inv.tickets) ? inv.tickets : [],
+        });
         const tickets: any[] = [];
-        if (ticketNumbers.length > 0) {
-          const tq = query(collection(db, 'tickets'), where('ticketNumber', 'in', ticketNumbers.slice(0, 10)));
+        if (ticketPlan.kind === 'by_doc_ids') {
+          for (const id of ticketPlan.ticketDocIds.slice(0, 10)) {
+            const snap = await getDoc(doc(db, 'tickets', id));
+            if (snap.exists()) tickets.push({ id: snap.id, ...snap.data() });
+          }
+        } else if (ticketPlan.kind === 'by_company_and_numbers') {
+          const tq = query(
+            collection(db, 'tickets'),
+            where('companyId', '==', ticketPlan.companyId),
+            where('ticketNumber', 'in', ticketPlan.ticketNumbers.slice(0, 10)),
+          );
           const tsnap = await getDocs(tq);
-          tsnap.forEach(d => tickets.push(d.data()));
+          tsnap.forEach((d) => tickets.push({ id: d.id, ...d.data() }));
         }
-        setTicketDetailData({ invoice: inv, tickets });
+        setTicketDetailData({
+          invoice: inv,
+          tickets: filterTicketsForCompany(tickets, plan.companyId),
+        });
       } else {
         setTicketDetailData(null);
       }

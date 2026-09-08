@@ -1,5 +1,6 @@
 import { getFirestoreDb } from './firebase';
 import { collection, getDocs, getDoc, doc, query, orderBy, limit, where } from 'firebase/firestore';
+import { invoiceBelongsToCompany, planInvoiceLookup } from './ticketCompanyLookup';
 
 export interface Ticket {
   id: string;
@@ -125,14 +126,20 @@ export async function fetchTickets(limitCount = 200, companyId?: string): Promis
   const scope = (rows: Ticket[]) =>
     companyId ? rows.filter(t => t.companyId === companyId) : rows;
 
-  // Try ordering by createdAt (newest first). Falls back to ticketNumber if createdAt missing.
   let q;
   try {
-    q = query(
-      collection(db, 'tickets'),
-      orderBy('createdAt', 'desc'),
-      limit(limitCount)
-    );
+    q = companyId
+      ? query(
+          collection(db, 'tickets'),
+          where('companyId', '==', companyId),
+          orderBy('createdAt', 'desc'),
+          limit(limitCount),
+        )
+      : query(
+          collection(db, 'tickets'),
+          orderBy('createdAt', 'desc'),
+          limit(limitCount),
+        );
     const snapshot = await getDocs(q);
     if (snapshot.size > 0) {
       return scope(snapshot.docs.map(mapTicketDoc));
@@ -141,56 +148,87 @@ export async function fetchTickets(limitCount = 200, companyId?: string): Promis
     // Index may not exist yet — fall back to ticketNumber ordering
   }
 
-  // Fallback: order by ticketNumber (legacy)
-  q = query(
-    collection(db, 'tickets'),
-    orderBy('ticketNumber', 'desc'),
-    limit(limitCount)
-  );
+  q = companyId
+    ? query(
+        collection(db, 'tickets'),
+        where('companyId', '==', companyId),
+        orderBy('ticketNumber', 'desc'),
+        limit(limitCount),
+      )
+    : query(
+        collection(db, 'tickets'),
+        orderBy('ticketNumber', 'desc'),
+        limit(limitCount),
+      );
   const snapshot = await getDocs(q);
   return scope(snapshot.docs.map(mapTicketDoc));
 }
 
-/** Fetch the parent invoice for a ticket (by invoiceDocId or invoiceNumber lookup) */
+/** Fetch the parent invoice for a ticket (docId first, then companyId + invoiceNumber). */
 export async function fetchInvoiceForTicket(ticket: Ticket): Promise<InvoiceDetail | null> {
   const db = getFirestoreDb();
+  const companyId = String(ticket.companyId || '').trim();
+  const plan = planInvoiceLookup({
+    invoiceDocId: ticket.invoiceDocId,
+    invoiceNumber: ticket.invoiceNumber,
+    companyId,
+  });
+  if (plan.kind === 'refuse_unscoped') return null;
 
-  // Try direct doc lookup first
-  if (ticket.invoiceDocId) {
+  if (plan.kind === 'by_doc_id') {
     try {
-      const snap = await getDoc(doc(db, 'invoices', ticket.invoiceDocId));
-      if (snap.exists()) return mapInvoiceDetail(snap);
+      const snap = await getDoc(doc(db, 'invoices', plan.invoiceDocId));
+      if (snap.exists() && invoiceBelongsToCompany(snap.data(), plan.companyId)) {
+        return mapInvoiceDetail(snap);
+      }
     } catch { /* fall through */ }
   }
 
-  // Fallback: query by invoiceNumber
-  if (ticket.invoiceNumber) {
+  if (plan.kind === 'by_company_and_number' || (ticket.invoiceNumber && companyId)) {
     try {
       const q = query(
         collection(db, 'invoices'),
+        where('companyId', '==', companyId),
         where('invoiceNumber', '==', ticket.invoiceNumber),
-        limit(1)
+        limit(2),
       );
       const snap = await getDocs(q);
-      if (!snap.empty) return mapInvoiceDetail(snap.docs[0]);
+      if (snap.size === 1) return mapInvoiceDetail(snap.docs[0]);
     } catch { /* fall through */ }
   }
 
   return null;
 }
 
-/** Fetch sibling tickets that share the same invoice */
-export async function fetchSiblingTickets(invoiceNumber: string, excludeTicketId: string): Promise<Ticket[]> {
-  if (!invoiceNumber) return [];
+/** Fetch sibling tickets that share the same invoice, scoped to one company. */
+export async function fetchSiblingTickets(
+  invoiceNumber: string,
+  excludeTicketId: string,
+  opts?: { companyId?: string; invoiceDocId?: string },
+): Promise<Ticket[]> {
+  const companyId = String(opts?.companyId || '').trim();
+  if (!companyId) return [];
   const db = getFirestoreDb();
   try {
+    if (opts?.invoiceDocId) {
+      const q = query(
+        collection(db, 'tickets'),
+        where('companyId', '==', companyId),
+        where('invoiceDocId', '==', opts.invoiceDocId),
+        limit(20),
+      );
+      const snap = await getDocs(q);
+      return snap.docs.map(mapTicketDoc).filter((t) => t.id !== excludeTicketId);
+    }
+    if (!invoiceNumber) return [];
     const q = query(
       collection(db, 'tickets'),
+      where('companyId', '==', companyId),
       where('invoiceNumber', '==', invoiceNumber),
-      limit(20)
+      limit(20),
     );
     const snap = await getDocs(q);
-    return snap.docs.map(mapTicketDoc).filter(t => t.id !== excludeTicketId);
+    return snap.docs.map(mapTicketDoc).filter((t) => t.id !== excludeTicketId);
   } catch {
     return [];
   }

@@ -21,7 +21,10 @@ export function TicketDetailModal({ ticket, onClose, onNavigateTicket }: Props) 
     setLoading(true);
     Promise.all([
       fetchInvoiceForTicket(ticket),
-      fetchSiblingTickets(ticket.invoiceNumber, ticket.id),
+      fetchSiblingTickets(ticket.invoiceNumber, ticket.id, {
+        companyId: ticket.companyId,
+        invoiceDocId: ticket.invoiceDocId,
+      }),
     ]).then(([inv, sibs]) => {
       if (cancelled) return;
       setInvoice(inv);
