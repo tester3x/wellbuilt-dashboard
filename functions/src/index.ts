@@ -40,6 +40,7 @@ import {
 import { notifyIncomingVersionBestEffort } from './incomingVersionPublish';
 import { runOwnerMaterializeTxn } from './pullMaterialize';
 import { reconcileWellAfterDelete, type ReconcileDb } from './deleteReconcile';
+import { applyOutgoingAfterDelete, type OutgoingDb } from './outgoingReconcile';
 
 
 admin.initializeApp();
@@ -2746,22 +2747,8 @@ export const processDeleteRequest = functionsV1.database
           const bbls24 = afr > 0 ? (1 / afr) * 20 * tanks : 0;
           const bbls24hrs = Math.round(bbls24).toString();
 
-          // Delete old outgoing responses for this well and write new one
-          const oldResponses = await db.ref('packets/outgoing')
-            .orderByChild('wellName')
-            .equalTo(wellName)
-            .once('value');
-
-          const deleteOldPromises: Promise<void>[] = [];
-          oldResponses.forEach((child) => {
-            deleteOldPromises.push(child.ref.remove());
-          });
-          await Promise.all(deleteOldPromises);
-
           const timestamp = new Date();
-          const responseId = `response_${timestamp.toISOString().replace(/[-:]/g, '').replace('T', '_').split('.')[0]}_${cleanName}`;
-
-          await db.ref(`packets/outgoing/${responseId}`).set({
+          const outgoingResponse = {
             wellName,
             currentLevel: inchesToFeetInches(tankAfterInches),
             flowRate: afr > 0 ? daysToHMMSS(afr) : 'Unknown',
@@ -2786,7 +2773,23 @@ export const processDeleteRequest = functionsV1.database
             windowBblsDay: windowBblsDay > 0 ? windowBblsDay.toString() : null,
             overnightBblsDay: overnightBblsDay > 0 ? overnightBblsDay.toString() : null,
             companyId: outgoingCompanyId(config),
+          };
+
+          // Owner-scoped outgoing reconcile: remove ONLY the deleted packet's
+          // outgoing row, and (re)write the survivor's row under a deterministic
+          // backdated key ONLY if no newer pull already owns the well — so a
+          // concurrent newer pull is never displaced (it outranks the backdated
+          // key under the existing max-key reader/guard). Never delete-all.
+          const outRes = await applyOutgoingAfterDelete({
+            db: db as unknown as OutgoingDb,
+            wellName,
+            cleanName,
+            deletedPacketId: targetPacketId,
+            survivorRow: outgoingResponse,
+            survivorId: latestPacket.packetId || null,
+            survivorUtc: latestPacket.dateTimeUTC || null,
           });
+          console.log(`Delete: outgoing owner-scoped for ${wellName} — removed=${outRes.removed} wroteSurvivor=${outRes.wroteSurvivor}`);
 
           // Update well_config AFR
           if (afr > 0) {
@@ -2852,19 +2855,19 @@ export const processDeleteRequest = functionsV1.database
             console.error(`Delete: high-water reconcile failed for ${wellName}:`, recErr);
           }
         } else {
-          // No remaining pulls — remove outgoing response entirely
-          const oldResponses = await db.ref('packets/outgoing')
-            .orderByChild('wellName')
-            .equalTo(wellName)
-            .once('value');
-
-          const deleteOldPromises: Promise<void>[] = [];
-          oldResponses.forEach((child) => {
-            deleteOldPromises.push(child.ref.remove());
+          // No remaining pulls — owner-scoped removal of ONLY the deleted packet's
+          // outgoing row. A concurrently-arriving replacement pull (which owns a
+          // different row) is left intact and no survivor row is written.
+          const outRes = await applyOutgoingAfterDelete({
+            db: db as unknown as OutgoingDb,
+            wellName,
+            cleanName,
+            deletedPacketId: targetPacketId,
+            survivorRow: null,
+            survivorId: null,
+            survivorUtc: null,
           });
-          await Promise.all(deleteOldPromises);
-
-          console.log(`Delete: No remaining pulls for ${wellName}, cleared outgoing`);
+          console.log(`Delete: No remaining pulls for ${wellName}, removed ${outRes.removed} owned outgoing row(s)`);
 
           // No surviving pull — clear only pull-derived current-state + high-water
           // ownership (preserve static config + authoritative well-down).
