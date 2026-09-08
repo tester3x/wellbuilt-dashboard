@@ -6,6 +6,7 @@ import { useAuth } from '@/contexts/AuthContext';
 import { AppHeader } from '@/components/AppHeader';
 import { loadAllCompanies, updateCompanyFields, type CompanyConfig, type DoeRegion, DOE_REGIONS, STATE_TO_PADD } from '@/lib/companySettings';
 import { adminGetDashboardCatalog, classifiedReadFailure } from '@/lib/adminDashboardCatalog';
+import { backfillDieselPrices, describeBackfillError } from '@/lib/dieselBackfill';
 import { Timestamp } from 'firebase/firestore';
 import {
   type InvoiceGrouping,
@@ -59,6 +60,10 @@ export default function BillingPage() {
 
   // Shared state
   const [companies, setCompanies] = useState<Map<string, CompanyConfig>>(new Map());
+  // Whether the company billing configuration has resolved. Until it does, the
+  // Price History shows a loading state instead of raw prices without the FSC
+  // Rate column — which previously looked like a "complete" table missing FSC.
+  const [companiesLoaded, setCompaniesLoaded] = useState(false);
   const [selectedCompanyId, setSelectedCompanyId] = useState<string | null>(null);
   const [periods] = useState(() => getPayPeriods());
   const [selectedPeriod, setSelectedPeriod] = useState<PayPeriod>(() => getPayPeriods()[0]);
@@ -119,9 +124,15 @@ export default function BillingPage() {
       if (!user.companyId && !selectedCompanyId && list.length > 0) {
         setSelectedCompanyId(list[0].id);
       }
+      // Billing configuration is now resolved — the FSC Rate column can render
+      // automatically (no user interaction required).
+      setCompaniesLoaded(true);
     }).catch((err) => {
       setError(classifiedReadFailure('companies', err));
       setDataLoading(false);
+      // Resolved (failed) — stop showing the loading state; the table falls back
+      // to prices without an FSC column rather than hanging on "loading".
+      setCompaniesLoaded(true);
     });
   }, [user]);
 
@@ -334,30 +345,36 @@ export default function BillingPage() {
   };
 
   const handleBackfillHistory = async () => {
-    if (!effectiveCompanyId) return;
+    // Duplicate-submit guard (button is also disabled while fetchingEia).
+    if (!effectiveCompanyId || fetchingEia) return;
     try {
       setFetchingEia(true);
       setEiaResult(null);
-      const results = await fetchEiaDieselPrice(currentRegion, 12);
-      let saved = 0;
-      // Save each week's price with its correct EIA date (oldest first)
-      for (const r of results.reverse()) {
-        await saveDieselPrice(effectiveCompanyId, r.price, 'EIA Backfill', user?.displayName || 'Admin', r.date);
-        saved++;
-      }
-      setEiaResult(`Backfilled ${saved} weeks of diesel prices from EIA`);
+      // Governed server backfill: the callable derives company + authorization
+      // server-side, fetches/validates the EIA history, and atomically writes
+      // every week's price + companies.currentDieselPrice. No direct client
+      // write to diesel_prices or companies here.
+      const res = await backfillDieselPrices(12);
+      const priceNote = res.currentPrice != null ? ` (current $${res.currentPrice.toFixed(2)})` : '';
+      setEiaResult(`Backfilled ${res.written} weeks of diesel prices from EIA${priceNote}`);
       await loadFuelPrices();
-      // Refresh billing data too
-      if (companies.size > 0) {
+      // The server updated companies.currentDieselPrice — refresh the company
+      // map so the current price + FSC display reflect it (no client write).
+      const list = await loadAllCompanies();
+      const map = new Map<string, CompanyConfig>();
+      list.forEach(c => map.set(c.id, c));
+      setCompanies(map);
+      // Refresh billing summaries too.
+      if (map.size > 0) {
         const allOps2 = new Set<string>();
-        companies.forEach(c => c.assignedOperators?.forEach(op => allOps2.add(op)));
+        map.forEach(c => c.assignedOperators?.forEach(op => allOps2.add(op)));
         const { buildWellCountyMap: buildMap } = await import('@/lib/payroll');
         const cm2 = await buildMap([...allOps2]);
-        const data = await fetchBillingData(selectedPeriod, companies, effectiveCompanyId, cm2);
+        const data = await fetchBillingData(selectedPeriod, map, effectiveCompanyId, cm2);
         setSummaries(data);
       }
     } catch (err: any) {
-      setEiaResult(`Error: ${err?.message || 'Backfill failed'}`);
+      setEiaResult(`Error: ${describeBackfillError(err)}`);
     } finally {
       setFetchingEia(false);
     }
@@ -706,7 +723,12 @@ export default function BillingPage() {
               <div className="px-4 py-3 border-b border-gray-700">
                 <h3 className="text-lg font-semibold text-white">Price History</h3>
               </div>
-              {dieselHistory.length === 0 ? (
+              {!companiesLoaded ? (
+                <div className="p-4 text-gray-400 flex items-center gap-2">
+                  <span className="inline-block h-4 w-4 rounded-full border-2 border-gray-500 border-t-transparent animate-spin" aria-hidden />
+                  Loading billing configuration…
+                </div>
+              ) : dieselHistory.length === 0 ? (
                 <div className="p-4 text-gray-400">No price history yet</div>
               ) : (
                 <table className="w-full">
