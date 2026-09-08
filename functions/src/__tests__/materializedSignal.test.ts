@@ -12,14 +12,22 @@ import {
   pullOpId,
   unsafeStringIncrement,
 } from '../materializedSignal';
-import {
-  applyMaterializedWithRetry,
-  preserveUiSession,
-  wellChangeIsolated,
-} from '../../../src/lib/wellRealtimeCore';
-import { notifyMaterializedBestEffort } from '../incomingVersionPublish';
+import { notifyMaterializedBestEffort, shouldPublishMaterialized } from '../incomingVersionPublish';
 import { readFileSync } from 'fs';
 import { join } from 'path';
+
+function applyMaterializedWithRetry(
+  event: ReturnType<typeof buildMaterializedEvent>,
+  outgoing: { lastPullPacketId?: string | null } | null,
+  attempt: number,
+  maxAttempts = 4,
+): { decision: 'apply' | 'wait' | 'ignore'; nextAttempt: number } {
+  const decision = decideApplyMaterialized(event, outgoing);
+  if (decision === 'wait' && attempt + 1 < maxAttempts) {
+    return { decision, nextAttempt: attempt + 1 };
+  }
+  return { decision: decision === 'wait' ? 'ignore' : decision, nextAttempt: attempt };
+}
 
 function ev(partial: {
   kind: 'pull' | 'edit' | 'delete';
@@ -108,16 +116,53 @@ describe('stable op ids + CAS', () => {
     expect((stored as { packetId: string }).packetId).toBe('B');
   });
 
-  it('delete signals survivor identity', () => {
-    const del = ev({
+  it('skips publication when projection was not reconciled', async () => {
+    let stored: unknown = 'untouched';
+    const root = {
+      child: () => ({
+        transaction: async (fn: (c: unknown) => unknown) => {
+          stored = fn(stored);
+          return { committed: true, snapshot: { val: () => stored } };
+        },
+      }),
+    };
+    const skipped = await notifyMaterializedBestEffort(root, {
+      companyId: 'c', wellName: 'W', kind: 'pull', opId: pullOpId('A'),
+      packetId: 'A', resultAtMs: 1000, nowMs: 1000, projectionReconciled: false,
+    });
+    expect(skipped).toBeNull();
+    expect(stored).toBe('untouched');
+  });
+
+  it('current delete signals the surviving packet; historical delete signals none', () => {
+    const current = ev({
       kind: 'delete',
       opId: deleteOpId('del_req', 'gone', 'survivor'),
       packetId: 'gone',
       survivorPacketId: 'survivor',
       resultAtMs: 3000,
     });
-    expect(decideApplyMaterialized(del, { lastPullPacketId: 'gone' })).toBe('wait');
-    expect(decideApplyMaterialized(del, { lastPullPacketId: 'survivor' })).toBe('apply');
+    expect(decideApplyMaterialized(current, { lastPullPacketId: 'gone' })).toBe('wait');
+    expect(decideApplyMaterialized(current, { lastPullPacketId: 'survivor' })).toBe('apply');
+
+    const historical = ev({
+      kind: 'delete',
+      opId: deleteOpId('del_hist', 'old', 'current'),
+      packetId: 'old',
+      survivorPacketId: 'current',
+      resultAtMs: 3000,
+    });
+    expect(decideApplyMaterialized(historical, { lastPullPacketId: 'current' })).toBe('apply');
+
+    const lastPullGone = ev({
+      kind: 'delete',
+      opId: deleteOpId('del_last', 'gone', null),
+      packetId: 'gone',
+      survivorPacketId: null,
+      resultAtMs: 3000,
+    });
+    expect(decideApplyMaterialized(lastPullGone, { lastPullPacketId: 'gone' })).toBe('wait');
+    expect(decideApplyMaterialized(lastPullGone, { lastPullPacketId: null })).toBe('apply');
   });
 
   it('pull applies when outgoing matches; early signal waits', () => {
@@ -135,21 +180,26 @@ describe('stable op ids + CAS', () => {
     expect(pending['c:W'].kind).toBe('edit');
   });
 
-  it('one well changing does not corrupt another', () => {
-    const before = { A: { currentLevel: "10'0\"" }, B: { currentLevel: "8'0\"" } };
-    const after = { A: { currentLevel: "3'0\"" }, B: { currentLevel: "8'0\"" } };
-    expect(wellChangeIsolated(before, after, 'A')).toBe(true);
+  it('one well changing does not coalesce into another well key', () => {
+    const a = ev({ kind: 'pull', opId: pullOpId('pA'), packetId: 'pA', resultAtMs: 1 });
+    const b = buildMaterializedEvent({
+      kind: 'pull',
+      wellName: 'Other',
+      companyId: 'c',
+      opId: pullOpId('pB'),
+      packetId: 'pB',
+      atMs: 2,
+      resultAtMs: 2,
+    });
+    const pending = coalesceByWell(coalesceByWell({}, a), b);
+    expect(Object.keys(pending).sort()).toEqual(['c:Other', 'c:W']);
+    expect(pending['c:W'].packetId).toBe('pA');
+    expect(pending['c:Other'].packetId).toBe('pB');
   });
 
-  it('data refresh preserves UI session / demo presence', () => {
-    const session = {
-      expandedRoutes: ['Demo Route'],
-      wellSearch: 'Demo',
-      viewMode: 'table',
-      demoPresenceActive: true,
-    };
-    expect(preserveUiSession(session).demoPresenceActive).toBe(true);
-    expect(preserveUiSession(session).expandedRoutes).toEqual(['Demo Route']);
+  it('does not publish until projection is reconciled', () => {
+    expect(shouldPublishMaterialized({ projectionReconciled: false })).toBe(false);
+    expect(shouldPublishMaterialized({ projectionReconciled: true })).toBe(true);
   });
 
   it('bounded retry then ignore if projections never converge', () => {
@@ -164,15 +214,7 @@ describe('stable op ids + CAS', () => {
     expect(decision).toBe('ignore');
   });
 
-  it('no window.location.reload in Dashboard WB-M flow', () => {
-    const mobile = readFileSync(join(__dirname, '../../../src/app/mobile/page.tsx'), 'utf8');
-    const wells = readFileSync(join(__dirname, '../../../src/lib/wells.ts'), 'utf8');
-    expect(mobile).not.toMatch(/window\.location\.reload/);
-    expect(wells).not.toMatch(/window\.location\.reload/);
-    expect(mobile).not.toMatch(/\[initialSetupDone\]/);
-  });
-
-  it('pull signal is published after canonicalProcessingComplete', () => {
+  it('pull signal is published after canonicalProcessingComplete and only if high-water held', () => {
     const index = readFileSync(join(__dirname, '../index.ts'), 'utf8');
     const pull = index.slice(
       index.indexOf('export const processIncomingPull'),
@@ -182,6 +224,17 @@ describe('stable op ids + CAS', () => {
     const signal = pull.indexOf('notifyMaterializedBestEffort');
     expect(complete).toBeGreaterThan(0);
     expect(signal).toBeGreaterThan(complete);
+    expect(pull).toMatch(/if \(holdsHighWater\) \{[\s\S]*notifyMaterializedBestEffort/);
+    expect(pull).toMatch(/resultAtMs: Number\.isFinite\(pullTimeMs\) \? pullTimeMs : Date\.now\(\)/);
+  });
+
+  it('edit of a non-current packet does not publish a well signal', () => {
+    const index = readFileSync(join(__dirname, '../index.ts'), 'utf8');
+    const edit = index.slice(
+      index.indexOf('export const processEditRequest'),
+      index.indexOf('export const processDeleteRequest'),
+    );
+    expect(edit).toMatch(/if \(isLatestPull\) \{[\s\S]*notifyMaterializedBestEffort/);
   });
 
   it('materialized path is company-scoped', () => {

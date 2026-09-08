@@ -38,6 +38,7 @@ import {
   resolveOriginalSubmissionAt,
 } from './editHistory';
 import { notifyIncomingVersionBestEffort, notifyMaterializedBestEffort } from './incomingVersionPublish';
+import { deleteOpId, editOpId, pullOpId } from './materializedSignal';
 import { runOwnerMaterializeTxn } from './pullMaterialize';
 import { reconcileWellAfterDelete, type ReconcileDb } from './deleteReconcile';
 import { applyOutgoingAfterDelete, type OutgoingDb } from './outgoingReconcile';
@@ -1450,15 +1451,19 @@ export const processIncomingPull = functionsV1.database
       canonicalProcessingComplete: true,
       canonicalProcessingCompletedAt: admin.database.ServerValue.TIMESTAMP,
     });
-    await notifyMaterializedBestEffort(db.ref(), {
-      companyId: outgoingCompanyId(config),
-      wellName,
-      kind: 'pull',
-      opId: `pull:${packetId}`,
-      packetId,
-      resultAtMs: Date.now(),
-      nowMs: Date.now(),
-    });
+    // Signal only after current-state projection actually reconciled. A delayed
+    // older pull that lost high-water must not overwrite a newer well signal.
+    if (holdsHighWater) {
+      await notifyMaterializedBestEffort(db.ref(), {
+        companyId: outgoingCompanyId(config),
+        wellName,
+        kind: 'pull',
+        opId: pullOpId(packetId),
+        packetId,
+        resultAtMs: Number.isFinite(pullTimeMs) ? pullTimeMs : Date.now(),
+        nowMs: Date.now(),
+      });
+    }
 
     // ── canonical_jobs + Phase 1.2 server-side back-patch ─────────────────
     // Best-effort. Failure here never blocks packet processing — canonical_jobs
@@ -2591,16 +2596,19 @@ export const processEditRequest = functionsV1.database
       outgoingCommitted: true,
       pullAccepted: true,
     });
-    await notifyMaterializedBestEffort(db.ref(), {
-      companyId: outgoingCompanyId(config),
-      wellName,
-      kind: 'edit',
-      opId: `edit:${context.params.packetId}:${originalPacketId}`,
-      packetId: originalPacketId,
-      targetPacketId: originalPacketId,
-      resultAtMs: Date.now(),
-      nowMs: Date.now(),
-    });
+    // Historical edits update processed history but not current outgoing.
+    if (isLatestPull) {
+      await notifyMaterializedBestEffort(db.ref(), {
+        companyId: outgoingCompanyId(config),
+        wellName,
+        kind: 'edit',
+        opId: editOpId(context.params.packetId, originalPacketId),
+        packetId: originalPacketId,
+        targetPacketId: originalPacketId,
+        resultAtMs: Date.now(),
+        nowMs: Date.now(),
+      });
+    }
 
     console.log(`Edit complete for ${wellName}: ${originalPacketId}`);
     return null;
@@ -2956,7 +2964,7 @@ export const processDeleteRequest = functionsV1.database
       companyId: deleteCompanyId || outgoingCompanyId(deletedPacket),
       wellName,
       kind: 'delete',
-      opId: `delete:${context.params.packetId}:${targetPacketId}:${survivorPacketId || 'none'}`,
+      opId: deleteOpId(context.params.packetId, targetPacketId, survivorPacketId),
       packetId: targetPacketId,
       targetPacketId,
       survivorPacketId,

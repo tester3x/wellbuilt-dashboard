@@ -79,6 +79,10 @@ export type MaterializedRoot = {
   };
 };
 
+export function shouldPublishMaterialized(input: { projectionReconciled: boolean }): boolean {
+  return input.projectionReconciled === true;
+}
+
 /** Dual-write after canonical projection. CAS: older retry cannot overwrite newer. */
 export async function notifyMaterializedBestEffort(
   root: MaterializedRoot,
@@ -92,9 +96,11 @@ export async function notifyMaterializedBestEffort(
     survivorPacketId?: string | null;
     resultAtMs: number;
     nowMs: number;
+    projectionReconciled?: boolean;
   },
   logError: (err: unknown) => void = () => undefined,
 ): Promise<string | null> {
+  if (input.projectionReconciled === false) return null;
   try {
     const event = buildMaterializedEvent({
       kind: input.kind,
