@@ -24,3 +24,113 @@ body {
   color: var(--foreground);
   font-family: Arial, Helvetica, sans-serif;
 }
+
+/* Viewport shell for Admin / Dispatch: 100vh fallback, 100dvh when supported.
+   Header/subheader stay in the flex column; main (or inner panes) own scrolling. */
+.dashboard-viewport-shell {
+  height: 100vh;
+  height: 100dvh;
+  max-height: 100vh;
+  max-height: 100dvh;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+
+.dashboard-viewport-main {
+  flex: 1 1 0%;
+  min-height: 0;
+  overflow-x: hidden;
+  overflow-y: auto;
+  padding-bottom: max(1.5rem, env(safe-area-inset-bottom, 0px));
+}
+
+/* Dispatch-only: page-level vertical scroll. Do not nest another 100dvh.
+   Short/narrow/Fold: stacked document flow. Tall wide desktop: side-by-side
+   columns that still grow so this main scroller can reach the bottom. */
+.dispatch-scroll-main {
+  flex: 1 1 0%;
+  min-height: 0;
+  overflow-x: hidden;
+  overflow-y: auto;
+  overscroll-behavior-y: contain;
+  padding-bottom: max(1.5rem, env(safe-area-inset-bottom, 0px));
+}
+
+.dispatch-workspace {
+  display: flex;
+  flex-direction: column;
+  gap: 0.75rem;
+  min-width: 0;
+}
+
+.dispatch-pane {
+  width: 100%;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 0.75rem;
+}
+
+.dispatch-builder,
+.dispatch-queue,
+.dispatch-jobs {
+  flex-shrink: 0;
+  min-width: 0;
+}
+
+/* Fold / narrow / short: jobs (activity) first so the well list is not a
+   touch trap on the way to a job card. Desktop split restores left/right. */
+.dispatch-pane-jobs {
+  order: -1;
+}
+
+.dispatch-queue-toggle {
+  display: inline-flex;
+  align-items: center;
+  flex-shrink: 0;
+  padding: 0.15rem 0.5rem;
+  border-radius: 0.25rem;
+  font-size: 0.75rem;
+  line-height: 1rem;
+  color: #d1d5db;
+  background: #111827;
+  border: 1px solid #374151;
+}
+
+.dispatch-queue-search {
+  width: 8.5rem;
+  flex: 0 0 8.5rem;
+  min-width: 0;
+}
+
+.dispatch-queue-route {
+  flex-shrink: 0;
+  max-width: 9rem;
+}
+
+.dispatch-queue:not(.is-expanded):not(.has-search) .dispatch-queue-body {
+  display: none;
+}
+
+@media (min-width: 1280px) and (min-height: 900px) {
+  .dispatch-workspace {
+    flex-direction: row;
+    align-items: flex-start;
+  }
+  .dispatch-pane {
+    width: 50%;
+    flex: 1 1 0%;
+  }
+  .dispatch-pane-jobs {
+    order: 0;
+  }
+  .dispatch-queue-toggle {
+    display: none;
+  }
+  .dispatch-queue .dispatch-queue-body,
+  .dispatch-queue:not(.is-expanded):not(.has-search) .dispatch-queue-body {
+    display: block;
+  }
+}

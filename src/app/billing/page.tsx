@@ -50,6 +50,25 @@ import {
 
 type SubTab = 'receivables' | 'fuel' | 'export';
 
+const RECEIVABLES_SCROLLBAR_CSS = `
+[data-billing-scroll="receivables"] {
+  scrollbar-width: thin;
+  scrollbar-color: #6b7280 #111827;
+}
+[data-billing-scroll="receivables"]::-webkit-scrollbar {
+  height: 8px;
+  width: 8px;
+}
+[data-billing-scroll="receivables"]::-webkit-scrollbar-thumb {
+  background: #6b7280;
+  border-radius: 999px;
+}
+[data-billing-scroll="receivables"]::-webkit-scrollbar-track,
+[data-billing-scroll="receivables"]::-webkit-scrollbar-corner {
+  background: #111827;
+}
+`;
+
 export default function BillingPage() {
   const { user, loading } = useAuth();
   const router = useRouter();
@@ -373,19 +392,20 @@ export default function BillingPage() {
   if (!user) return null;
 
   return (
-    <div className="min-h-screen bg-gray-900">
+    <div className="h-[100dvh] max-h-[100dvh] flex flex-col overflow-hidden bg-gray-900">
+      <style>{RECEIVABLES_SCROLLBAR_CSS}</style>
       <AppHeader />
 
-      <main className="max-w-[1600px] mx-auto px-4 py-8">
+      <main className={`flex-1 min-h-0 max-w-[1600px] w-full mx-auto px-4 py-4 ${activeTab === 'receivables' ? 'flex flex-col overflow-hidden' : 'overflow-y-auto'}`}>
         {/* Title + Sub-tabs */}
-        <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-4 mb-6">
-          <div className="flex items-center gap-4">
-            <img src="/billing-icon.png" alt="WB Billing" className="w-28 h-28" />
-            <h2 className="text-xl font-semibold text-white">Billing</h2>
-            <div className="flex gap-1 bg-gray-800 rounded-lg p-1">
+        <div className="flex flex-wrap items-center gap-3 mb-4 shrink-0">
+          <div className="flex flex-wrap items-center gap-3 min-w-0">
+            <img src="/billing-icon.png" alt="WB Billing" className="w-14 h-14 lg:w-28 lg:h-28 shrink-0" />
+            <h2 className="text-xl font-semibold text-white shrink-0">Billing</h2>
+            <div className="flex items-center gap-1 bg-gray-800 rounded-lg p-1 shrink-0">
               <button
                 onClick={() => setActiveTab('receivables')}
-                className={`px-3 py-1.5 rounded-md text-sm font-medium transition-colors ${
+                className={`px-3 py-1.5 rounded-md text-sm font-medium whitespace-nowrap shrink-0 transition-colors ${
                   activeTab === 'receivables'
                     ? 'bg-blue-600 text-white'
                     : 'text-gray-400 hover:text-white'
@@ -395,7 +415,7 @@ export default function BillingPage() {
               </button>
               <button
                 onClick={() => setActiveTab('fuel')}
-                className={`px-3 py-1.5 rounded-md text-sm font-medium transition-colors ${
+                className={`px-3 py-1.5 rounded-md text-sm font-medium whitespace-nowrap shrink-0 transition-colors ${
                   activeTab === 'fuel'
                     ? 'bg-blue-600 text-white'
                     : 'text-gray-400 hover:text-white'
@@ -405,7 +425,7 @@ export default function BillingPage() {
               </button>
               <button
                 onClick={() => setActiveTab('export')}
-                className={`px-3 py-1.5 rounded-md text-sm font-medium transition-colors ${
+                className={`px-3 py-1.5 rounded-md text-sm font-medium whitespace-nowrap shrink-0 transition-colors ${
                   activeTab === 'export'
                     ? 'bg-green-600 text-white'
                     : 'text-gray-400 hover:text-white'
@@ -419,7 +439,7 @@ export default function BillingPage() {
               <select
                 value={selectedCompanyId || ''}
                 onChange={(e) => setSelectedCompanyId(e.target.value)}
-                className="px-3 py-2 bg-gray-800 border border-gray-600 rounded-lg text-white text-sm focus:outline-none focus:border-blue-500"
+                className="px-3 py-2 bg-gray-800 border border-gray-600 rounded-lg text-white text-sm focus:outline-none focus:border-blue-500 shrink-0 max-w-[14rem]"
               >
                 {Array.from(companies.values()).map(c => (
                   <option key={c.id} value={c.id}>{c.name}</option>
@@ -429,7 +449,7 @@ export default function BillingPage() {
           </div>
 
           {activeTab === 'receivables' && (
-            <div className="flex items-center gap-4">
+            <div className="flex items-center gap-3 shrink-0 ml-auto">
               <select
                 value={selectedPeriod.type}
                 onChange={(e) => {
@@ -454,19 +474,19 @@ export default function BillingPage() {
         </div>
 
         {error && (
-          <div className="mb-4 p-3 bg-red-900/50 text-red-200 rounded-lg">{error}</div>
+          <div className="mb-4 p-3 bg-red-900/50 text-red-200 rounded-lg shrink-0">{error}</div>
         )}
 
         {/* ─── Receivables Tab ─── */}
         {activeTab === 'receivables' && (
-          <>
+          <div className="flex-1 min-h-0 flex flex-col min-w-0">
             {/* Warn if no diesel price set but DOE-based FSC configured */}
             {!currentDiesel && summaries.some(s =>
               s.billingConfig?.fuelSurchargeMethod === 'hourly' ||
               s.billingConfig?.fuelSurchargeMethod === 'per_mile' ||
               s.billingConfig?.fuelSurchargeMethod === 'flat_doe'
             ) && (
-              <div className="mb-4 p-3 bg-yellow-900/40 border border-yellow-500/30 text-yellow-200 rounded-lg flex items-center gap-3">
+              <div className="mb-4 p-3 bg-yellow-900/40 border border-yellow-500/30 text-yellow-200 rounded-lg flex items-center gap-3 shrink-0">
                 <span className="text-yellow-400 text-lg">&#9888;</span>
                 <div>
                   <span className="font-medium">No diesel price set.</span>{' '}
@@ -480,46 +500,59 @@ export default function BillingPage() {
             ) : summaries.length === 0 ? (
               <div className="text-gray-400">No closed invoices found for this period</div>
             ) : (
-              <>
+              <div className="flex-1 min-h-0 flex flex-col min-w-0">
                 {/* Operator Summary Table */}
-                {(() => { const hasDetention = summaries.some(s => s.totalDetentionPay > 0); return (
-                <div className="bg-gray-800 rounded-lg border border-gray-700 overflow-hidden mb-8">
-                  <div className="overflow-x-auto">
+                {(() => {
+                  const hasDetention = summaries.some(s => s.totalDetentionPay > 0);
+                  const expanded = summaries.find(s => s.operator === expandedOp) || null;
+                  const rest = expanded ? summaries.filter(s => s.operator !== expandedOp) : summaries;
+                  const rowProps = (summary: OperatorBillingSummary) => ({
+                    summary,
+                    dieselPrice: summary.dieselPriceUsed ?? currentDiesel,
+                    isExpanded: expandedOp === summary.operator,
+                    onToggle: () => setExpandedOp(expandedOp === summary.operator ? null : summary.operator),
+                    onGenerate: () => handleGenerateBill(summary),
+                    generating: generating === summary.operator,
+                    alreadyBilled: billingRecords.some(r => r.operator === summary.operator),
+                    showDetention: hasDetention,
+                    legalNameMap,
+                  });
+                  return (
+                <div className={`${expanded ? 'flex-1 min-h-0' : ''} flex flex-col bg-gray-800 rounded-lg border border-gray-700 overflow-hidden mb-4`}>
+                  <div data-billing-pin="chrome" className="shrink-0">
                     <table className="w-full">
-                      <thead className="bg-gray-700">
-                        <tr>
-                          <th className="px-4 py-2 text-left text-sm font-medium text-gray-300">Operator</th>
-                          <th className="px-4 py-2 text-center text-sm font-medium text-gray-300">Loads</th>
-                          <th className="px-4 py-2 text-right text-sm font-medium text-gray-300">BBLs</th>
-                          <th className="px-4 py-2 text-right text-sm font-medium text-gray-300">Hours</th>
-                          <th className="px-4 py-2 text-right text-sm font-medium text-gray-300">Base Amount</th>
-                          <th className="px-4 py-2 text-right text-sm font-medium text-gray-300 whitespace-nowrap">Fuel Surcharge</th>
-                          {hasDetention && <th className="px-4 py-2 text-right text-sm font-medium text-gray-300">Detention</th>}
-                          <th className="px-4 py-2 text-right text-sm font-medium text-gray-300">Total</th>
-                          <th className="px-4 py-2 text-right text-sm font-medium text-gray-300 whitespace-nowrap">FSC Method</th>
-                          <th className="px-4 py-2 text-center text-sm font-medium text-gray-300">Actions</th>
-                        </tr>
-                      </thead>
-                      <tbody className="divide-y divide-gray-700">
-                        {summaries.map(summary => {
-                          const alreadyBilled = billingRecords.some(r => r.operator === summary.operator);
-                          return (
-                            <OperatorRow
-                              key={summary.operator}
-                              summary={summary}
-                              dieselPrice={summary.dieselPriceUsed ?? currentDiesel}
-                              isExpanded={expandedOp === summary.operator}
-                              onToggle={() => setExpandedOp(expandedOp === summary.operator ? null : summary.operator)}
-                              onGenerate={() => handleGenerateBill(summary)}
-                              generating={generating === summary.operator}
-                              alreadyBilled={alreadyBilled}
-                              showDetention={hasDetention}
-                              legalNameMap={legalNameMap}
-                            />
-                          );
-                        })}
-                      </tbody>
-                      <tfoot className="bg-gray-750 border-t border-gray-600">
+                      <OperatorColHead showDetention={hasDetention} />
+                      {expanded && (
+                        <tbody>
+                          <OperatorSummaryRow {...rowProps(expanded)} />
+                        </tbody>
+                      )}
+                    </table>
+                  </div>
+                  <div
+                    data-billing-scroll="receivables"
+                    className={expanded ? 'flex-1 min-h-[10rem] overflow-auto' : ''}
+                  >
+                    {expanded && (
+                      <TicketLineList
+                        summary={expanded}
+                        showDetention={hasDetention}
+                        legalNameMap={legalNameMap}
+                      />
+                    )}
+                    {rest.length > 0 && (
+                      <table className="w-full">
+                        <tbody className="divide-y divide-gray-700">
+                          {rest.map(summary => (
+                            <OperatorSummaryRow key={summary.operator} {...rowProps(summary)} />
+                          ))}
+                        </tbody>
+                      </table>
+                    )}
+                  </div>
+                  <div data-billing-pin="footer" className="shrink-0 border-t border-gray-600 bg-gray-800">
+                    <table className="w-full">
+                      <tbody>
                         <tr>
                           <td className="px-4 py-2 text-white font-semibold">Totals</td>
                           <td className="px-4 py-2 text-center text-white font-mono">{summaries.reduce((s, o) => s + o.loads, 0)}</td>
@@ -531,17 +564,18 @@ export default function BillingPage() {
                           <td className="px-4 py-2 text-right text-green-400 font-mono font-semibold">{formatCurrency(summaries.reduce((s, o) => s + o.grandTotal, 0))}</td>
                           <td colSpan={2} />
                         </tr>
-                      </tfoot>
+                      </tbody>
                     </table>
                   </div>
                 </div>
-                ); })()}
+                  );
+                })()}
 
                 {/* Generated Bills */}
                 {billingRecords.length > 0 && (
-                  <>
-                    <h3 className="text-lg font-semibold text-white mb-3">Generated Bills</h3>
-                    <div className="bg-gray-800 rounded-lg border border-gray-700 overflow-hidden">
+                  <div className="shrink-0 max-h-40 flex flex-col min-h-0">
+                    <h3 className="text-lg font-semibold text-white mb-3 shrink-0">Generated Bills</h3>
+                    <div className="bg-gray-800 rounded-lg border border-gray-700 overflow-hidden min-h-0 flex-1">
                       <div className="overflow-x-auto">
                         <table className="w-full">
                           <thead className="bg-gray-700">
@@ -573,11 +607,11 @@ export default function BillingPage() {
                         </table>
                       </div>
                     </div>
-                  </>
+                  </div>
                 )}
-              </>
+              </div>
             )}
-          </>
+          </div>
         )}
 
         {/* ─── Fuel Prices Tab ─── */}
@@ -1071,7 +1105,26 @@ export default function BillingPage() {
 
 // ─── Sub-components ──────────────────────────────────────────────────────────
 
-function OperatorRow({
+function OperatorColHead({ showDetention }: { showDetention: boolean }) {
+  return (
+    <thead className="bg-gray-700">
+      <tr>
+        <th className="px-4 py-2 text-left text-sm font-medium text-gray-300">Operator</th>
+        <th className="px-4 py-2 text-center text-sm font-medium text-gray-300">Loads</th>
+        <th className="px-4 py-2 text-right text-sm font-medium text-gray-300">BBLs</th>
+        <th className="px-4 py-2 text-right text-sm font-medium text-gray-300">Hours</th>
+        <th className="px-4 py-2 text-right text-sm font-medium text-gray-300">Base Amount</th>
+        <th className="px-4 py-2 text-right text-sm font-medium text-gray-300 whitespace-nowrap">Fuel Surcharge</th>
+        {showDetention && <th className="px-4 py-2 text-right text-sm font-medium text-gray-300">Detention</th>}
+        <th className="px-4 py-2 text-right text-sm font-medium text-gray-300">Total</th>
+        <th className="px-4 py-2 text-right text-sm font-medium text-gray-300 whitespace-nowrap">FSC Method</th>
+        <th className="px-4 py-2 text-center text-sm font-medium text-gray-300">Actions</th>
+      </tr>
+    </thead>
+  );
+}
+
+function OperatorSummaryRow({
   summary,
   dieselPrice,
   isExpanded,
@@ -1080,7 +1133,6 @@ function OperatorRow({
   generating,
   alreadyBilled,
   showDetention,
-  legalNameMap = {},
 }: {
   summary: OperatorBillingSummary;
   dieselPrice: number | undefined;
@@ -1094,83 +1146,86 @@ function OperatorRow({
 }) {
   const rateInfo = getFuelSurchargeRate(summary.billingConfig, dieselPrice);
   return (
-    <>
-      <tr className="hover:bg-gray-750 cursor-pointer" onClick={onToggle}>
-        <td className="px-4 py-3 text-white font-medium whitespace-nowrap">{summary.operator}</td>
-        <td className="px-4 py-3 text-center text-white font-mono">{summary.loads}</td>
-        <td className="px-4 py-3 text-right text-white font-mono">{summary.totalBBLs.toLocaleString()}</td>
-        <td className="px-4 py-3 text-right text-white font-mono">{summary.totalHours.toFixed(1)}</td>
-        <td className="px-4 py-3 text-right text-white font-mono">{formatCurrency(summary.subtotal)}</td>
-        <td className="px-4 py-3 text-right text-yellow-400 font-mono">{formatCurrency(summary.totalFuelSurcharge)}</td>
-        {showDetention && <td className="px-4 py-3 text-right text-orange-400 font-mono">{summary.totalDetentionPay > 0 ? formatCurrency(summary.totalDetentionPay) : '--'}</td>}
-        <td className="px-4 py-3 text-right text-green-400 font-mono font-semibold">{formatCurrency(summary.grandTotal)}</td>
-        <td className="px-4 py-3 text-right text-sm">
-          <span className="text-gray-400">{getFuelSurchargeLabel(summary.billingConfig)}</span>
-          {rateInfo && rateInfo.rate > 0 && (
-            <span className="block text-cyan-400 font-mono text-xs mt-0.5">
-              ${rateInfo.rate.toFixed(2)}{rateInfo.unit}
-            </span>
-          )}
-        </td>
-        <td className="px-4 py-3 text-center" onClick={(e) => e.stopPropagation()}>
-          {alreadyBilled ? (
-            <span className="px-3 py-1 bg-green-600/20 text-green-400 rounded text-xs font-medium">Billed</span>
-          ) : (
-            <button
-              onClick={onGenerate}
-              disabled={generating}
-              className="px-3 py-1 bg-blue-600 hover:bg-blue-500 text-white rounded text-xs font-medium disabled:opacity-50"
-            >
-              {generating ? 'Generating...' : 'Generate Bill'}
-            </button>
-          )}
-        </td>
-      </tr>
-      {isExpanded && (
-        <tr>
-          <td colSpan={showDetention ? 11 : 10} className="px-0 py-0">
-            <div className="bg-gray-850 border-t border-gray-700">
-              <table className="w-full">
-                <thead>
-                  <tr className="text-xs text-gray-500">
-                    <th className="px-4 py-1 text-left">Invoice #</th>
-                    <th className="px-4 py-1 text-left">Date</th>
-                    <th className="px-4 py-1 text-left">Well</th>
-                    <th className="px-4 py-1 text-left">Drop-off</th>
-                    <th className="px-4 py-1 text-left">Driver</th>
-                    <th className="px-4 py-1 text-right">BBLs</th>
-                    <th className="px-4 py-1 text-right">Hours</th>
-                    <th className="px-4 py-1 text-right">Fuel Min</th>
-                    <th className="px-4 py-1 text-right">Base</th>
-                    <th className="px-4 py-1 text-right">FSC</th>
-                    {showDetention && <th className="px-4 py-1 text-right">Detention</th>}
-                    <th className="px-4 py-1 text-right">Total</th>
-                  </tr>
-                </thead>
-                <tbody className="divide-y divide-gray-800">
-                  {summary.lineItems.map(item => (
-                    <tr key={item.invoiceId} className="text-sm hover:bg-gray-800">
-                      <td className="px-4 py-1.5 text-blue-400 font-mono">{item.invoiceNumber}</td>
-                      <td className="px-4 py-1.5 text-gray-300">{item.date}</td>
-                      <td className="px-4 py-1.5 text-gray-300">{item.wellName}</td>
-                      <td className="px-4 py-1.5 text-gray-400">{item.hauledTo || '--'}</td>
-                      <td className="px-4 py-1.5 text-gray-400">{legalNameMap[item.driver] || item.driver}</td>
-                      <td className="px-4 py-1.5 text-right text-white font-mono">{item.bbls || '--'}</td>
-                      <td className="px-4 py-1.5 text-right text-white font-mono">{item.hours || '--'}</td>
-                      <td className="px-4 py-1.5 text-right text-gray-400 font-mono">{item.fuelMinutes || '--'}</td>
-                      <td className="px-4 py-1.5 text-right text-white font-mono">{formatCurrency(item.baseAmount)}</td>
-                      <td className="px-4 py-1.5 text-right text-yellow-400 font-mono">{item.fuelSurcharge > 0 ? formatCurrency(item.fuelSurcharge) : '--'}</td>
-                      {showDetention && <td className="px-4 py-1.5 text-right text-orange-400 font-mono">{item.detentionPay > 0 ? formatCurrency(item.detentionPay) : '--'}</td>}
-                      <td className="px-4 py-1.5 text-right text-green-400 font-mono">{formatCurrency(item.total)}</td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            </div>
-          </td>
+    <tr className="hover:bg-gray-750 cursor-pointer" onClick={onToggle}>
+      <td className="px-4 py-3 text-white font-medium whitespace-nowrap">{summary.operator}</td>
+      <td className="px-4 py-3 text-center text-white font-mono">{summary.loads}</td>
+      <td className="px-4 py-3 text-right text-white font-mono">{summary.totalBBLs.toLocaleString()}</td>
+      <td className="px-4 py-3 text-right text-white font-mono">{summary.totalHours.toFixed(1)}</td>
+      <td className="px-4 py-3 text-right text-white font-mono">{formatCurrency(summary.subtotal)}</td>
+      <td className="px-4 py-3 text-right text-yellow-400 font-mono">{formatCurrency(summary.totalFuelSurcharge)}</td>
+      {showDetention && <td className="px-4 py-3 text-right text-orange-400 font-mono">{summary.totalDetentionPay > 0 ? formatCurrency(summary.totalDetentionPay) : '--'}</td>}
+      <td className="px-4 py-3 text-right text-green-400 font-mono font-semibold">{formatCurrency(summary.grandTotal)}</td>
+      <td className="px-4 py-3 text-right text-sm">
+        <span className="text-gray-400">{getFuelSurchargeLabel(summary.billingConfig)}</span>
+        {rateInfo && rateInfo.rate > 0 && (
+          <span className="block text-cyan-400 font-mono text-xs mt-0.5">
+            ${rateInfo.rate.toFixed(2)}{rateInfo.unit}
+          </span>
+        )}
+      </td>
+      <td className="px-4 py-3 text-center" onClick={(e) => e.stopPropagation()}>
+        {alreadyBilled ? (
+          <span className="px-3 py-1 bg-green-600/20 text-green-400 rounded text-xs font-medium">Billed</span>
+        ) : (
+          <button
+            onClick={onGenerate}
+            disabled={generating}
+            className="px-3 py-1 bg-blue-600 hover:bg-blue-500 text-white rounded text-xs font-medium disabled:opacity-50"
+          >
+            {generating ? 'Generating...' : 'Generate Bill'}
+          </button>
+        )}
+      </td>
+    </tr>
+  );
+}
+
+function TicketLineList({
+  summary,
+  showDetention,
+  legalNameMap = {},
+}: {
+  summary: OperatorBillingSummary;
+  showDetention: boolean;
+  legalNameMap?: Record<string, string>;
+}) {
+  return (
+    <table className="w-full">
+      <thead data-billing-pin="ticket-labels" className="sticky top-0 z-10 bg-gray-800">
+        <tr className="text-xs text-gray-400 border-t border-gray-700">
+          <th className="px-3 py-1 text-left font-medium bg-gray-800">Invoice #</th>
+          <th className="px-3 py-1 text-left font-medium bg-gray-800">Date</th>
+          <th className="px-3 py-1 text-left font-medium bg-gray-800">Well</th>
+          <th className="px-3 py-1 text-left font-medium bg-gray-800">Drop-off</th>
+          <th className="px-3 py-1 text-left font-medium bg-gray-800">Driver</th>
+          <th className="px-3 py-1 text-right font-medium bg-gray-800">BBLs</th>
+          <th className="px-3 py-1 text-right font-medium bg-gray-800">Hours</th>
+          <th className="px-3 py-1 text-right font-medium bg-gray-800">Fuel Min</th>
+          <th className="px-3 py-1 text-right font-medium bg-gray-800">Base</th>
+          <th className="px-3 py-1 text-right font-medium bg-gray-800">FSC</th>
+          {showDetention && <th className="px-3 py-1 text-right font-medium bg-gray-800">Detention</th>}
+          <th className="px-3 py-1 text-right font-medium bg-gray-800">Total</th>
         </tr>
-      )}
-    </>
+      </thead>
+      <tbody className="divide-y divide-gray-800">
+        {summary.lineItems.map(item => (
+          <tr key={item.invoiceId} className="text-sm hover:bg-gray-800">
+            <td className="px-3 py-1.5 text-blue-400 font-mono">{item.invoiceNumber}</td>
+            <td className="px-3 py-1.5 text-gray-300 whitespace-nowrap">{item.date}</td>
+            <td className="px-3 py-1.5 text-gray-300">{item.wellName}</td>
+            <td className="px-3 py-1.5 text-gray-400">{item.hauledTo || '--'}</td>
+            <td className="px-3 py-1.5 text-gray-400">{legalNameMap[item.driver] || item.driver}</td>
+            <td className="px-3 py-1.5 text-right text-white font-mono">{item.bbls || '--'}</td>
+            <td className="px-3 py-1.5 text-right text-white font-mono">{item.hours || '--'}</td>
+            <td className="px-3 py-1.5 text-right text-gray-400 font-mono">{item.fuelMinutes || '--'}</td>
+            <td className="px-3 py-1.5 text-right text-white font-mono">{formatCurrency(item.baseAmount)}</td>
+            <td className="px-3 py-1.5 text-right text-yellow-400 font-mono">{item.fuelSurcharge > 0 ? formatCurrency(item.fuelSurcharge) : '--'}</td>
+            {showDetention && <td className="px-3 py-1.5 text-right text-orange-400 font-mono">{item.detentionPay > 0 ? formatCurrency(item.detentionPay) : '--'}</td>}
+            <td className="px-3 py-1.5 text-right text-green-400 font-mono">{formatCurrency(item.total)}</td>
+          </tr>
+        ))}
+      </tbody>
+    </table>
   );
 }
 

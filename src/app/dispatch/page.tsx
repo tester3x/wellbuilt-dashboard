@@ -3,11 +3,24 @@
 import { useEffect, useState, useMemo, useCallback, Suspense } from 'react';
 import { useRouter, useSearchParams } from 'next/navigation';
 import { useAuth } from '@/contexts/AuthContext';
-import { WellResponse, subscribeToWellStatusesUnified, wellResponsesFromCatalog } from '@/lib/wells';
+import {
+  WellResponse,
+  mergeWellPool,
+  overlayOutgoingOnCatalog,
+  subscribePacketsOutgoing,
+} from '@/lib/wells';
 import { adminGetDashboardCatalog, classifiedReadFailure } from '@/lib/adminDashboardCatalog';
 import { canViewGlobalWellPool, docBelongsToTenant } from '@/lib/tenantScope';
+import {
+  canListenPacketsOutgoingParent,
+  isStackedDispatchLayout,
+  nextWellsErrorAfterEvent,
+  wellQueueLiveGate,
+  wellQueueSearchActive,
+  wellQueueUsesSearchHits,
+} from '@/lib/dispatchWellQueueLive';
 import { AppHeader } from '@/components/AppHeader';
-import { getFirestoreDb } from '@/lib/firebase';
+import { getFirebaseAuth, getFirestoreDb } from '@/lib/firebase';
 import { AddPullModal } from '@/components/AddPullModal';
 import { collection, addDoc, getDocs, getDoc, setDoc, query, where, orderBy, Timestamp, doc, updateDoc, onSnapshot, deleteDoc } from 'firebase/firestore';
 import { loadDisposals, searchDisposals, type NdicWell, loadOperators, searchOperators, type NdicOperator, loadWellsForOperator } from '@/lib/firestoreWells';
@@ -349,6 +362,8 @@ function DispatchPageInner() {
   const [search, setSearch] = useState('');
   const [routeFilter, setRouteFilter] = useState<string>('all');
   const [priorityFilter, setPriorityFilter] = useState<PriorityLevel | 'all'>('all');
+  const [wellQueueExpanded, setWellQueueExpanded] = useState(false);
+  const [stackedLayout, setStackedLayout] = useState(isStackedDispatchLayout);
   const [message, setMessage] = useState('');
 
   // Assign modal state (single-well PW)
@@ -531,46 +546,117 @@ function DispatchPageInner() {
     }
   }, [user, loading, router]);
 
-  // Subscribe to well data — tenant containment (7/9): the RTDB well queue is
-  // the global (Liquid Gold) pool with no tenancy dimension. Scoped
-  // non-liquid-gold companies get an empty queue (see lib/tenantScope.ts).
   useEffect(() => {
-    if (!user) return;
-    if (!canViewGlobalWellPool(user)) {
+    const mq = window.matchMedia('(min-width: 1280px) and (min-height: 900px)');
+    const apply = () => setStackedLayout(!mq.matches);
+    apply();
+    mq.addEventListener('change', apply);
+    return () => mq.removeEventListener('change', apply);
+  }, []);
+
+  // Well queue: catalog is the authorized well_config source. Live RTDB
+  // well_config parent has no .read. packets/outgoing parent is only
+  // readable with wellbuiltAdmin && platformAdminEnabled.
+  useEffect(() => {
+    const gate = wellQueueLiveGate({
+      loading,
+      uid: user?.uid,
+      companyId: user?.companyId,
+    });
+    if (gate === 'wait') return;
+    if (gate === 'skip') {
       setWells([]);
       setRoutes([]);
       setDataLoading(false);
       return;
     }
+    const uid = user!.uid;
     let cancelled = false;
-    const unsubscribe = subscribeToWellStatusesUnified((wellData, routeList) => {
+    let activeGen = 0;
+    let unsubscribe: (() => void) | undefined;
+    let catalogWells: WellResponse[] = [];
+    const applyWells = (rows: WellResponse[]) => {
+      setWells(rows);
+      setRoutes([...new Set(rows.map((w) => w.route).filter((r): r is string => !!r && r !== 'Unrouted'))]);
+    };
+    (async () => {
+      const auth = getFirebaseAuth();
+      await auth.authStateReady();
+      const current = auth.currentUser;
+      if (!current || current.uid !== uid) return;
+      const token = await current.getIdTokenResult();
       if (cancelled) return;
-      setWells(wellData);
-      setRoutes(routeList.filter(r => r !== 'Unrouted'));
-      setReadErrors(prev => ({ ...prev, wells: undefined }));
-      setDataLoading(false);
-    }, async (err) => {
+      const gen = ++activeGen;
       try {
         const catalog = await adminGetDashboardCatalog();
-        if (cancelled) return;
-        const snapshot = wellResponsesFromCatalog((catalog.wellConfig || {}) as Record<string, unknown>);
-        setWells(snapshot);
-        setRoutes([...new Set(snapshot.map(w => w.route).filter((r): r is string => !!r && r !== 'Unrouted'))]);
-        setReadErrors(prev => ({ ...prev, wells: classifiedReadFailure('well queue live status', err) }));
+        if (cancelled || gen !== activeGen) return;
+        // wellStatus is the authorized outgoing projection. Config-only rows
+        // have currentLevel '--' and the queue hides those as "no data".
+        catalogWells = mergeWellPool(
+          (catalog.wellConfig || {}) as Record<string, unknown>,
+          (catalog.wellStatus || {}) as Record<string, unknown>,
+        );
+        applyWells(catalogWells);
+        setReadErrors((prev) => ({
+          ...prev,
+          wells: nextWellsErrorAfterEvent({
+            eventGen: gen,
+            activeGen,
+            event: 'success',
+            previous: prev.wells,
+          }),
+        }));
       } catch (catalogErr) {
-        if (cancelled) return;
-        setWells([]);
-        setRoutes([]);
-        setReadErrors(prev => ({ ...prev, wells: classifiedReadFailure('well queue', catalogErr) }));
-      } finally {
-        if (!cancelled) setDataLoading(false);
+        if (cancelled || gen !== activeGen) return;
+        setReadErrors((prev) => ({
+          ...prev,
+          wells: prev.wells || classifiedReadFailure('well queue', catalogErr),
+        }));
+        setDataLoading(false);
+        return;
       }
-    });
+      if (!canListenPacketsOutgoingParent(token.claims)) {
+        setDataLoading(false);
+        return;
+      }
+      unsubscribe = subscribePacketsOutgoing((outgoing) => {
+        if (cancelled || gen !== activeGen) return;
+        applyWells(overlayOutgoingOnCatalog(catalogWells, outgoing));
+        setReadErrors((prev) => ({
+          ...prev,
+          wells: nextWellsErrorAfterEvent({
+            eventGen: gen,
+            activeGen,
+            event: 'success',
+            previous: prev.wells,
+          }),
+        }));
+        setDataLoading(false);
+      }, (err) => {
+        if (cancelled || gen !== activeGen) return;
+        setReadErrors((prev) => ({
+          ...prev,
+          wells: nextWellsErrorAfterEvent({
+            eventGen: gen,
+            activeGen,
+            event: 'error',
+            previous: prev.wells,
+            nextError: classifiedReadFailure('well queue live status', err),
+          }),
+        }));
+        setDataLoading(false);
+      });
+      if (cancelled) {
+        unsubscribe();
+        unsubscribe = undefined;
+      }
+    })();
     return () => {
       cancelled = true;
-      unsubscribe();
+      activeGen += 1;
+      unsubscribe?.();
     };
-  }, [user]);
+  }, [loading, user?.uid, user?.companyId]);
 
   // Load drivers + disposals
   useEffect(() => {
@@ -959,6 +1045,40 @@ function DispatchPageInner() {
         return aH - bH;
       });
   }, [wells, dispatches, search, routeFilter, priorityFilter]);
+
+  const searchHits = useMemo(() => {
+    const q = search.trim().toLowerCase();
+    if (!q) return [];
+    const dispatchedWellDrivers = new Map<string, string[]>();
+    dispatches
+      .filter(d => d.jobType === 'pw' && ['pending', 'accepted', 'in_progress', 'paused'].includes(d.status))
+      .forEach(d => {
+        const driversList = dispatchedWellDrivers.get(d.wellName) || [];
+        driversList.push(d.driverFirstName || d.driverName || '?');
+        dispatchedWellDrivers.set(d.wellName, driversList);
+      });
+    return wells
+      .filter(w => {
+        const isDown = w.isDown || w.currentLevel === 'DOWN';
+        if (isDown) return false;
+        if (w.currentLevel === '--' && !w.nextPullTimeUTC) return false;
+        if (!(w.wellName.toLowerCase().includes(q) || (w.route || '').toLowerCase().includes(q))) return false;
+        if (routeFilter !== 'all' && w.route !== routeFilter) return false;
+        return true;
+      })
+      .map(w => ({ well: w, priority: getPriority(w), dispatched: dispatchedWellDrivers.has(w.wellName), assignedDrivers: dispatchedWellDrivers.get(w.wellName) || [] }))
+      .sort((a, b) => {
+        if (a.dispatched !== b.dispatched) return a.dispatched ? 1 : -1;
+        if (a.priority.sortOrder !== b.priority.sortOrder) return a.priority.sortOrder - b.priority.sortOrder;
+        const aH = a.priority.hoursUntilPull ?? 99999;
+        const bH = b.priority.hoursUntilPull ?? 99999;
+        return aH - bH;
+      });
+  }, [wells, dispatches, search, routeFilter]);
+
+  const showingSearchHits = wellQueueUsesSearchHits(stackedLayout, wellQueueExpanded, search);
+  const queueRows = showingSearchHits ? searchHits : pwQueue;
+  const searchActive = wellQueueSearchActive(search);
 
   // Priority summary counts
   const priorityCounts = useMemo(() => {
@@ -1729,7 +1849,7 @@ function DispatchPageInner() {
 
   function toggleSelectAll() {
     setAssignTarget(null); // Clear single-well mode
-    const selectableWells = pwQueue.map(q => q.well.wellName);
+    const selectableWells = queueRows.map(q => q.well.wellName);
 
     if (selectableWells.every(w => selectedWells.has(w))) {
       setSelectedWells(new Map());
@@ -2063,10 +2183,10 @@ function DispatchPageInner() {
   // ─── Render ────────────────────────────────────────────────────────────────
 
   return (
-    <div className="h-screen bg-gray-900 flex flex-col overflow-hidden">
+    <div className="dashboard-viewport-shell bg-gray-900">
       <AppHeader />
 
-      <main className="flex-1 flex flex-col px-4 py-4 overflow-hidden">
+      <main data-dashboard-scroll="dispatch" data-dispatch-scroll="primary" className="dispatch-scroll-main px-4 py-4">
 
         {/* ═══════════════════════════════════════════════════════════════════════
             DISPATCH TOOLBAR — Always visible at top. Quick actions + inline forms.
@@ -2119,15 +2239,16 @@ function DispatchPageInner() {
         </div>
 
         {/* ═══════════════════════════════════════════════════════════════════════
-            MAIN WORKSPACE — 50/50. Left: PW+SW top, Well Queue below. Right: Active Jobs full height.
+            MAIN WORKSPACE — Fold/stacked: jobs, builder, collapsible wells.
+            Tall wide desktop: left builder+queue, right jobs.
             ═══════════════════════════════════════════════════════════════════════ */}
-        <div className="flex-1 flex gap-3 min-h-0">
+        <div className="dispatch-workspace">
 
-          {/* ═══════ LEFT HALF (50%): dispatch cards + well queue ═══════ */}
-          <div className="w-[50%] flex-shrink-0 flex flex-col gap-3 min-h-0 overflow-hidden">
+          {/* ═══════ LEFT: dispatch cards + well queue ═══════ */}
+          <div className="dispatch-pane">
 
             {/* ── Tabbed Dispatch Builder (PW / SW / Projects) ── */}
-            <div className={`bg-gray-800 border rounded-lg p-4 flex-shrink-0 flex flex-col h-[460px] ${
+            <div className={`dispatch-builder bg-gray-800 border rounded-lg p-4 flex flex-col ${
               builderTab === 'pw' ? 'border-blue-600/40' : builderTab === 'sw' ? 'border-purple-600/40' : 'border-emerald-600/40'
             }`}>
               {/* Builder tab bar + Add Pull */}
@@ -2813,25 +2934,36 @@ function DispatchPageInner() {
               )}{/* end Projects tab */}
             </div>{/* end Tabbed Builder panel */}
 
-            {/* ═══════ Well Queue (fills remaining left half) ═══════ */}
-            <div className="bg-gray-800 rounded-lg border border-gray-700 flex-1 flex flex-col overflow-hidden">
-              {/* Panel header with filters */}
-              <div className="flex items-center gap-3 px-4 py-2.5 border-b border-gray-700 flex-shrink-0">
+            {/* ═══════ Well Queue ═══════ */}
+            <div className={`dispatch-queue bg-gray-800 rounded-lg border border-gray-700 flex flex-col${wellQueueExpanded ? ' is-expanded' : ''}${searchActive ? ' has-search' : ''}`}>
+              <div className="flex items-center gap-2 px-4 py-2.5 border-b border-gray-700 flex-shrink-0">
                 <h3 className="text-sm font-semibold text-white flex-shrink-0">Well Queue</h3>
                 <input
                   type="text"
                   placeholder="Search wells..."
                   value={search}
                   onChange={(e) => setSearch(e.target.value)}
-                  className="px-2.5 py-1 bg-gray-900 border border-gray-700 rounded text-white text-xs placeholder-gray-500 focus:outline-none focus:border-blue-500 w-40"
+                  className="dispatch-queue-search px-2.5 py-1 bg-gray-900 border border-gray-700 rounded text-white text-xs placeholder-gray-500 focus:outline-none focus:border-blue-500"
                 />
-                <select value={routeFilter} onChange={(e) => setRouteFilter(e.target.value)}
-                  className="px-2 py-1 bg-gray-900 border border-gray-700 rounded text-white text-xs focus:outline-none focus:border-blue-500">
+                <select
+                  value={routeFilter}
+                  onChange={(e) => setRouteFilter(e.target.value)}
+                  className="dispatch-queue-route px-2 py-1 bg-gray-900 border border-gray-700 rounded text-white text-xs focus:outline-none focus:border-blue-500"
+                >
                   <option value="all">All Routes</option>
                   {routes.map(r => <option key={r} value={r}>{r}</option>)}
                 </select>
                 <span className="flex-1" />
-                <span className="text-gray-500 text-xs">{pwQueue.length} wells</span>
+                <button
+                  type="button"
+                  className="dispatch-queue-toggle"
+                  aria-expanded={wellQueueExpanded}
+                  aria-controls="dispatch-queue-body"
+                  onClick={() => setWellQueueExpanded((open) => !open)}
+                >
+                  {wellQueueExpanded ? 'Hide list' : 'Show list'}
+                </button>
+                <span className="text-gray-500 text-xs flex-shrink-0">{queueRows.length} wells</span>
               </div>
 
               {/* Selection indicator — shows in Well Queue header area */}
@@ -2846,12 +2978,13 @@ function DispatchPageInner() {
                 </div>
               )}
 
+              <div id="dispatch-queue-body" className="dispatch-queue-body">
               {/* Scrollable well table */}
-              <div className="flex-1 overflow-y-auto overflow-x-auto">
+              <div className="overflow-x-auto">
                 {dataLoading ? (
                   <div className="text-gray-400 py-8 text-center">Loading well data...</div>
-                ) : pwQueue.length === 0 ? (
-                  <div className="text-gray-400 py-8 text-center">No wells match filters</div>
+                ) : queueRows.length === 0 ? (
+                  <div className="text-gray-400 py-8 text-center">{showingSearchHits ? 'No wells match search' : 'No wells match filters'}</div>
                 ) : (
                   <table className="w-full">
                     <thead className="bg-gray-700 sticky top-0 z-10">
@@ -2865,13 +2998,13 @@ function DispatchPageInner() {
                         <th className="px-2 py-2 text-right text-[11px] font-medium text-gray-300 w-28">
                           <div className="flex items-center justify-end gap-1.5">
                             <span>Action</span>
-                            <input type="checkbox" checked={pwQueue.length > 0 && pwQueue.every(q => selectedWells.has(q.well.wellName))} onChange={toggleSelectAll} className="w-4 h-4 rounded border-gray-600 bg-gray-800 text-blue-600 focus:ring-blue-500 focus:ring-offset-0 cursor-pointer" />
+                            <input type="checkbox" checked={queueRows.length > 0 && queueRows.every(q => selectedWells.has(q.well.wellName))} onChange={toggleSelectAll} className="w-4 h-4 rounded border-gray-600 bg-gray-800 text-blue-600 focus:ring-blue-500 focus:ring-offset-0 cursor-pointer" />
                           </div>
                         </th>
                       </tr>
                     </thead>
                     <tbody className="divide-y divide-gray-700/50">
-                      {pwQueue.map(({ well, priority, dispatched, assignedDrivers: wellAssignedDrivers }) => {
+                      {queueRows.map(({ well, priority, dispatched, assignedDrivers: wellAssignedDrivers }) => {
                         const isSelected = selectedWells.has(well.wellName);
                         const loadCount = selectedWells.get(well.wellName) || 1;
                         return (
@@ -2925,13 +3058,14 @@ function DispatchPageInner() {
                   </table>
                 )}
               </div>
+              </div>
             </div>
 
           </div>{/* end left half */}
 
           {/* ═══════ RIGHT HALF (50%): Active Jobs / Projects ═══════ */}
-          <div className="w-[50%] flex-shrink-0 flex flex-col min-h-0 overflow-hidden">
-            <div className="bg-gray-800 rounded-lg border border-gray-700 flex-1 flex flex-col overflow-hidden">
+          <div className="dispatch-pane dispatch-pane-jobs">
+            <div className="dispatch-jobs bg-gray-800 rounded-lg border border-gray-700 flex flex-col">
               {/* Panel header with tabs */}
               <div className="flex items-center justify-between px-4 py-2.5 border-b border-gray-700 flex-shrink-0">
                 <div className="flex items-center gap-1">
@@ -3033,7 +3167,7 @@ function DispatchPageInner() {
                 </div>
               )}
               {/* Scrollable content */}
-              <div className="flex-1 overflow-y-auto p-3">
+              <div className="p-3">
                 {rightPanelTab === 'jobs' && (
                   <ActiveDispatchPanel
                     dispatches={dispatches.filter(d => d.status !== 'completed' && d.status !== 'dismissed')}

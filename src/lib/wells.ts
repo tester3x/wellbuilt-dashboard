@@ -56,50 +56,49 @@ export interface WellConfig {
 }
 
 /** Snapshot well list from the admin catalog when RTDB parent reads are denied. */
-export function wellResponsesFromCatalog(wellConfig: Record<string, unknown>): WellResponse[] {
-  return Object.entries(wellConfig).map(([wellName, raw]) => {
-    const config = (raw && typeof raw === 'object' ? raw : {}) as Record<string, unknown>;
-    const tanks = typeof config.tanks === 'number'
-      ? config.tanks
-      : typeof config.numTanks === 'number' ? config.numTanks : 1;
+export function parseOutgoingResponses(raw: unknown): Record<string, WellResponse> {
+  const responses: Record<string, WellResponse> = {};
+  if (!raw || typeof raw !== 'object') return responses;
+  for (const [childKey, data] of Object.entries(raw as Record<string, any>)) {
+    if (!childKey.startsWith('response_') || childKey.includes('delete') || !data?.wellName) continue;
+    const key = String(data.wellName).replace(/\s/g, '');
+    responses[key] = { ...data, responseId: childKey };
+  }
+  return responses;
+}
+
+/** Parent listen. Live rules allow this only for wellbuiltAdmin && platformAdminEnabled. */
+export function subscribePacketsOutgoing(
+  onData: (rows: Record<string, WellResponse>) => void,
+  onError?: (err: Error) => void,
+): () => void {
+  const outgoingRef = ref(getFirebaseDatabase(), 'packets/outgoing');
+  return onValue(outgoingRef, (snapshot) => {
+    onData(snapshot.exists() ? parseOutgoingResponses(snapshot.val()) : {});
+  }, (err) => {
+    onError?.(err);
+  });
+}
+
+export function overlayOutgoingOnCatalog(
+  catalogWells: WellResponse[],
+  outgoing: Record<string, WellResponse>,
+): WellResponse[] {
+  return catalogWells.map((well) => {
+    const hit = outgoing[well.wellName.replace(/\s/g, '')];
+    if (!hit) return well;
     return {
-      wellName,
-      currentLevel: '--',
-      etaToMax: '',
-      flowRate: typeof config.avgFlowRate === 'string' ? config.avgFlowRate : 'Unknown',
-      timestamp: '',
-      route: typeof config.route === 'string' ? config.route : 'Unrouted',
-      tanks,
-      pullBbls: typeof config.pullBbls === 'number' ? config.pullBbls : 140,
-      ndicName: typeof config.ndicName === 'string' ? config.ndicName : '',
-      isDown: config.isDown === true,
+      ...well,
+      ...hit,
+      wellName: well.wellName,
+      route: well.route || hit.route,
+      ndicName: well.ndicName || hit.ndicName,
     };
   });
 }
 
-export function mergeWellPool(
-  wellConfig: Record<string, unknown>,
-  wellStatus: Record<string, unknown> = {},
-): WellResponse[] {
-  return wellResponsesFromCatalog(wellConfig).map((well) => {
-    const st = (wellStatus[well.wellName] && typeof wellStatus[well.wellName] === 'object')
-      ? wellStatus[well.wellName] as Record<string, unknown>
-      : {};
-    return {
-      ...well,
-      currentLevel: typeof st.currentLevel === 'string' ? st.currentLevel : well.currentLevel,
-      flowRate: typeof st.flowRate === 'string' ? st.flowRate : well.flowRate,
-      timestamp: typeof st.timestamp === 'string' ? st.timestamp : well.timestamp,
-      timeTillPull: typeof st.timeTillPull === 'string' ? st.timeTillPull : well.timeTillPull,
-      nextPullTime: typeof st.nextPullTime === 'string' ? st.nextPullTime : well.nextPullTime,
-      nextPullTimeUTC: typeof st.nextPullTimeUTC === 'string' ? st.nextPullTimeUTC : well.nextPullTimeUTC,
-      lastPullDateTimeUTC: typeof st.lastPullDateTimeUTC === 'string' ? st.lastPullDateTimeUTC : well.lastPullDateTimeUTC,
-      lastPullBbls: st.lastPullBbls != null ? String(st.lastPullBbls) : well.lastPullBbls,
-      isDown: st.wellDown === true || st.isDown === true || well.isDown,
-      status: typeof st.status === 'string' ? st.status : well.status,
-    };
-  });
-}
+import { mergeWellPool, wellResponsesFromCatalog } from './wellPoolMerge';
+export { mergeWellPool, wellResponsesFromCatalog };
 
 async function wellPoolResponses(): Promise<{ wells: WellResponse[]; routes: string[] }> {
   const pool = await adminGetWellPool();
@@ -361,16 +360,19 @@ function calcTimeTillPull(currentInches: number, targetInches: number, flowRateM
 export function subscribeToWellStatusesUnified(
   callback: (wells: WellResponse[], routes: string[]) => void,
   onError?: (err: unknown) => void,
+  options?: { catalogFallback?: boolean },
 ): () => void {
   const db = getFirebaseDatabase();
   const configRef = ref(db, 'well_config');
   const outgoingRef = ref(db, 'packets/outgoing');
+  const catalogFallback = options?.catalogFallback !== false;
 
   let configData: Record<string, WellConfig> = {};
   let outgoingData: Record<string, WellResponse> = {};
   let gotConfigs = false;
   let gotOutgoing = false;
   let failed = false;
+  let active = true;
 
   let debounceTimer: ReturnType<typeof setTimeout> | null = null;
   const DEBOUNCE_MS = 300;
@@ -384,14 +386,23 @@ export function subscribeToWellStatusesUnified(
   }, 5000);
 
   const reportError = (err: Error) => {
+    if (!active || failed) return;
     failed = true;
     onError?.(err);
+    if (!catalogFallback) return;
     wellPoolResponses()
-      .then(({ wells, routes }) => callback(wells, routes))
-      .catch(() => callback([], []));
+      .then(({ wells, routes }) => {
+        if (!active) return;
+        callback(wells, routes);
+      })
+      .catch(() => {
+        if (!active) return;
+        callback([], []);
+      });
   };
 
   const mergeAndCallback = (force = false) => {
+    if (!active || failed) return;
     if (!force && (!gotConfigs || !gotOutgoing)) return;
     if (gotConfigs && gotOutgoing) clearTimeout(timeout);
 
@@ -538,6 +549,7 @@ export function subscribeToWellStatusesUnified(
   }, 30000);
 
   return () => {
+    active = false;
     clearTimeout(timeout);
     if (debounceTimer) clearTimeout(debounceTimer);
     clearInterval(refreshInterval);
