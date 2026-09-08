@@ -82,9 +82,13 @@ export function AddPullModal({
   const [selfWells, setSelfWells] = useState<WellResponse[]>([]);
   useEffect(() => {
     if (wellsProp && wellsProp.length > 0) return;
-    const unsub = subscribeToWellStatusesUnified((w) => setSelfWells(w));
+    const unsub = subscribeToWellStatusesUnified(
+      (w) => setSelfWells(w),
+      undefined,
+      { companyId: user?.companyId || null },
+    );
     return unsub;
-  }, [wellsProp]);
+  }, [wellsProp, user?.companyId]);
   const wells = (wellsProp && wellsProp.length > 0) ? wellsProp : selfWells;
 
   // Form state

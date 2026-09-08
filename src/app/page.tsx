@@ -41,7 +41,7 @@ export default function HomePage() {
         setWellCount(wells.length);
         setDownCount(wells.filter(w => w.isDown || w.currentLevel === 'DOWN').length);
         setStatsLoading(false);
-      });
+      }, undefined, { companyId: user.companyId || null });
     } else {
       setWellCount(0);
       setDownCount(0);

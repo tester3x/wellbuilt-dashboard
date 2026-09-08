@@ -1,5 +1,5 @@
 // Well data utilities - fetches from Firebase
-import { ref, get, onValue, query, orderByChild, set } from 'firebase/database';
+import { ref, get, onValue, query, orderByChild, equalTo, set } from 'firebase/database';
 import { getFirebaseDatabase } from './firebase';
 import { adminGetWellHistory, adminGetWellPerformance, adminGetWellPerformanceForWell, adminGetWellPool } from './adminDashboardCatalog';
 import { fetchWellPerformanceWithFallback, wellKeyFromName } from './wellPerformanceRead';
@@ -361,10 +361,16 @@ function calcTimeTillPull(currentInches: number, targetInches: number, flowRateM
 export function subscribeToWellStatusesUnified(
   callback: (wells: WellResponse[], routes: string[]) => void,
   onError?: (err: unknown) => void,
+  opts?: { companyId?: string | null },
 ): () => void {
   const db = getFirebaseDatabase();
   const configRef = ref(db, 'well_config');
-  const outgoingRef = ref(db, 'packets/outgoing');
+  const outgoingBase = ref(db, 'packets/outgoing');
+  // Native WB-M uses companyId-scoped outgoing. Unscoped list is denied by
+  // live rules and was falling back to a one-shot catalog (manual refresh).
+  const outgoingRef = opts?.companyId
+    ? query(outgoingBase, orderByChild('companyId'), equalTo(opts.companyId))
+    : outgoingBase;
 
   let configData: Record<string, WellConfig> = {};
   let outgoingData: Record<string, WellResponse> = {};
@@ -530,6 +536,16 @@ export function subscribeToWellStatusesUnified(
     debouncedMergeAndCallback();
   }, reportError);
 
+  // Collision-safe per-company materialization signal (pull/edit/delete).
+  // Does not replace outgoing; it coalesces a rematerialize of current data.
+  let unsubMaterialized: () => void = () => {};
+  if (opts?.companyId) {
+    const matRef = ref(db, `packets/materialized/${opts.companyId}`);
+    unsubMaterialized = onValue(matRef, () => {
+      if (gotConfigs && gotOutgoing) debouncedMergeAndCallback();
+    });
+  }
+
   // Refresh every 30 seconds to update estimated levels (even if Firebase data hasn't changed)
   const refreshInterval = setInterval(() => {
     if (gotConfigs && gotOutgoing) {
@@ -543,6 +559,7 @@ export function subscribeToWellStatusesUnified(
     clearInterval(refreshInterval);
     unsubConfigs();
     unsubOutgoing();
+    unsubMaterialized();
   };
 }
 

@@ -1,6 +1,6 @@
 'use client';
 
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { useRouter } from 'next/navigation';
 import { useAuth } from '@/contexts/AuthContext';
 import { canViewGlobalWellPool } from '@/lib/tenantScope';
@@ -68,11 +68,14 @@ export default function MobilePage() {
     }
   }, [user, loading, router]);
 
-  // Track if we've done initial setup (don't reset state on every Firebase update)
-  const [initialSetupDone, setInitialSetupDone] = useState(false);
+  // Track if we've done initial setup (don't reset state on every Firebase update).
+  // Ref — not useState — so the listener is not torn down on first snapshot
+  // (that resubscribe was dropping in-flight outgoing events).
+  const initialSetupDoneRef = useRef(false);
 
-  // Subscribe to well data from packets/outgoing
+  // Subscribe to well data from packets/outgoing (company-scoped, like native WB-M)
   useEffect(() => {
+    if (!user) return;
     const unsubscribe = subscribeToWellStatusesUnified((wellData, routeList) => {
       // Always update wells and routes - this is the data that changes
       setWells(wellData);
@@ -83,7 +86,8 @@ export default function MobilePage() {
       setRoutes(routesWithUnrouted);
 
       // Only do initial setup ONCE, not on every Firebase update
-      if (!initialSetupDone) {
+      if (!initialSetupDoneRef.current) {
+        initialSetupDoneRef.current = true;
         // expandedRoutes already restored from localStorage in useState init
 
         // Initialize sort state for each route
@@ -100,8 +104,6 @@ export default function MobilePage() {
           initialPullBbls[route] = firstWell?.pullBbls || 140;
         });
         setRoutePullBbls(initialPullBbls);
-
-        setInitialSetupDone(true);
       } else {
         // On subsequent updates, only add sort state for NEW routes
         setRouteSorts(prev => {
@@ -116,10 +118,10 @@ export default function MobilePage() {
       }
 
       setDataLoading(false);
-    });
+    }, undefined, { companyId: user.companyId || null });
 
     return unsubscribe;
-  }, [initialSetupDone]);
+  }, [user]);
 
   // Load edge case tickets (submitted for wells not in well_config)
   useEffect(() => {

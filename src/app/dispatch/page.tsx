@@ -565,7 +565,7 @@ function DispatchPageInner() {
       } finally {
         if (!cancelled) setDataLoading(false);
       }
-    });
+    }, { companyId: user.companyId || null });
     return () => {
       cancelled = true;
       unsubscribe();
