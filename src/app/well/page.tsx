@@ -12,10 +12,10 @@ import {
   WellNavItem,
   fetchWellHistoryUnified,
   fetchEditHistory,
-  deletePull,
   editPull,
   subscribeToWellNavList,
 } from '@/lib/wells';
+import { deletePull, describeDeleteError } from '@/lib/pullDelete';
 import {
   packetShowsEditBadge,
   formatEditSourceLabel,
@@ -403,22 +403,26 @@ function WellDetailPage() {
   };
 
   const handleDelete = (pull: PullPacket) => {
+    setError('');
     setDeletingPull(pull);
   };
 
   const confirmDelete = async () => {
     if (!deletingPull) return;
+    if (deleteSubmitting) return; // prevent double submission
 
     setDeleteSubmitting(true);
     try {
+      // Governed delete — success only after the server acknowledges the
+      // callable. The row is NOT removed optimistically; we refresh from the
+      // server instead.
       await deletePull(deletingPull.packetId, deletingPull.wellName);
-      // Refresh data
       const history = await fetchWellHistoryUnified(wellName);
       setPulls(history);
       setDeletingPull(null);
     } catch (err) {
       console.error('Error deleting pull:', err);
-      setError('Failed to delete pull');
+      setError(describeDeleteError(err));
     } finally {
       setDeleteSubmitting(false);
     }
@@ -927,10 +931,15 @@ function WellDetailPage() {
               This action cannot be undone.
             </p>
 
+            {error && (
+              <p className="text-red-300 text-sm mb-4 bg-red-950/40 border border-red-800 rounded px-3 py-2">{error}</p>
+            )}
+
             <div className="flex justify-end gap-3">
               <button
-                onClick={() => setDeletingPull(null)}
-                className="px-4 py-2 bg-gray-600 hover:bg-gray-500 text-white rounded transition-colors"
+                onClick={() => { setDeletingPull(null); setError(''); }}
+                disabled={deleteSubmitting}
+                className="px-4 py-2 bg-gray-600 hover:bg-gray-500 disabled:opacity-60 text-white rounded transition-colors"
               >
                 Cancel
               </button>
@@ -939,7 +948,7 @@ function WellDetailPage() {
                 disabled={deleteSubmitting}
                 className="px-4 py-2 bg-red-600 hover:bg-red-700 disabled:bg-red-800 text-white rounded transition-colors"
               >
-                {deleteSubmitting ? 'Deleting...' : 'Delete'}
+                {deleteSubmitting ? 'Deleting…' : 'Delete'}
               </button>
             </div>
           </div>

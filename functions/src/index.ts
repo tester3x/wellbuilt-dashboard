@@ -4895,6 +4895,7 @@ export {
   staffWriteDispatch,
   staffWriteDriverAssignment,
   staffWriteWellConfig,
+  staffDeletePull,
   staffConvertApprovedDriverSecureLogin,
   upgradeOwnLegacyDriverLogin,
   staffHydrateCanonicalIdentity,
