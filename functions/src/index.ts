@@ -39,6 +39,7 @@ import {
 } from './editHistory';
 import { notifyIncomingVersionBestEffort } from './incomingVersionPublish';
 import { runOwnerMaterializeTxn } from './pullMaterialize';
+import { reconcileWellAfterDelete, type ReconcileDb } from './deleteReconcile';
 
 
 admin.initializeApp();
@@ -2664,10 +2665,13 @@ export const processDeleteRequest = functionsV1.database
     if (deletedPacket) {
       const cleanName = wellName.replace(/\s/g, '');
 
-      // Get well config
+      // Get well config (track the key it was found under so the namespaced
+      // high-water reconcile targets the SAME node processIncomingPull created).
+      let wellConfigKey = wellName;
       let configSnap = await db.ref(`well_config/${wellName}`).once('value');
       if (!configSnap.exists()) {
         configSnap = await db.ref(`well_config/${cleanName}`).once('value');
+        if (configSnap.exists()) wellConfigKey = cleanName;
       }
       const config = configSnap.val() || {};
       const tanks = config.tanks || config.numTanks || DEFAULTS.tanks;
@@ -2794,6 +2798,59 @@ export const processDeleteRequest = functionsV1.database
           }
 
           console.log(`Delete: Rebuilt outgoing for ${wellName} from remaining data (windowBblsDay=${windowBblsDay}, overnightBblsDay=${overnightBblsDay})`);
+
+          // Reconcile the namespaced current-state ownership + wells/status to
+          // the surviving latest pull. Fail-closed on races (a newer natural
+          // pull that already owns the high-water wins). Best-effort: a reconcile
+          // failure never breaks the delete.
+          try {
+            const afrMinutesRec = afr > 0 ? afr * 24 * 60 : 0;
+            const pullOwned = {
+              wellName,
+              config: { tanks, bottomLevel: bottomInches / 12, route: config.route || 'Unassigned', pullBbls },
+              current: { level: inchesToFeetInches(tankAfterInches), levelInches: tankAfterInches, asOf: new Date().toISOString() },
+              lastPull: {
+                dateTime: latestPacket.dateTime || formatLocalDateTime(new Date(latestPacket.dateTimeUTC)),
+                dateTimeUTC: latestPacket.dateTimeUTC,
+                topLevel: inchesToFeetInches(latestPacket.tankTopInches),
+                topLevelInches: latestPacket.tankTopInches,
+                bottomLevel: inchesToFeetInches(tankAfterInches),
+                bottomLevelInches: tankAfterInches,
+                bblsTaken: latestPacket.bblsTaken,
+                driverName: latestPacket.driverName || null,
+                packetId: latestPacket.packetId || null,
+              },
+              calculated: {
+                flowRate: afr > 0 ? daysToHMMSS(afr) : 'Unknown',
+                flowRateMinutes: Math.round(afrMinutesRec * 100) / 100,
+                bbls24hrs: parseInt(bbls24hrs) || 0,
+                nextPullTime: estDateTimePull ? formatLocalDateTime(new Date(estDateTimePull)) : 'Unknown',
+                nextPullTimeUTC: estDateTimePull || '',
+                timeTillPull: latestPacket.wellDown ? 'Down' : (estTimeToPull || 'Calculating...'),
+              },
+            };
+            const hwCompanyId =
+              (typeof latestPacket.companyId === 'string' && latestPacket.companyId.trim()) ||
+              (typeof config.companyId === 'string' && config.companyId.trim()) ||
+              outgoingCompanyId(config);
+            const recWellKey = canonicalWellKey({
+              wellId: latestPacket.wellId || config.wellId || config.id,
+              wellConfigKey,
+            }) || wellConfigKey;
+            const rec = await reconcileWellAfterDelete({
+              db: db as unknown as ReconcileDb,
+              companyId: hwCompanyId,
+              wellKey: recWellKey,
+              wellName,
+              deletedPacketId: targetPacketId,
+              survivingLatestId: latestPacket.packetId || null,
+              survivingLatestUtc: latestPacket.dateTimeUTC || null,
+              pullOwned,
+            });
+            console.log(`Delete: reconciled current-state for ${wellName} → ${rec.action} (owner=${latestPacket.packetId})`);
+          } catch (recErr) {
+            console.error(`Delete: high-water reconcile failed for ${wellName}:`, recErr);
+          }
         } else {
           // No remaining pulls — remove outgoing response entirely
           const oldResponses = await db.ref('packets/outgoing')
@@ -2808,6 +2865,32 @@ export const processDeleteRequest = functionsV1.database
           await Promise.all(deleteOldPromises);
 
           console.log(`Delete: No remaining pulls for ${wellName}, cleared outgoing`);
+
+          // No surviving pull — clear only pull-derived current-state + high-water
+          // ownership (preserve static config + authoritative well-down).
+          try {
+            const hwCompanyId =
+              (typeof deletedPacket.companyId === 'string' && deletedPacket.companyId.trim()) ||
+              (typeof config.companyId === 'string' && config.companyId.trim()) ||
+              outgoingCompanyId(config);
+            const recWellKey = canonicalWellKey({
+              wellId: deletedPacket.wellId || config.wellId || config.id,
+              wellConfigKey,
+            }) || wellConfigKey;
+            const rec = await reconcileWellAfterDelete({
+              db: db as unknown as ReconcileDb,
+              companyId: hwCompanyId,
+              wellKey: recWellKey,
+              wellName,
+              deletedPacketId: targetPacketId,
+              survivingLatestId: null,
+              survivingLatestUtc: null,
+              pullOwned: null,
+            });
+            console.log(`Delete: cleared current-state for ${wellName} → ${rec.action}`);
+          } catch (recErr) {
+            console.error(`Delete: high-water clear failed for ${wellName}:`, recErr);
+          }
         }
       } catch (rebuildErr) {
         console.error(`Delete: FAILED to rebuild outgoing for ${wellName}:`, rebuildErr);
