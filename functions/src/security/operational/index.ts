@@ -13,6 +13,8 @@ export { submitJsaRecord } from './jsaWrite';
 export { updateDriverProfile, signalDriverLogout } from './profileWrite';
 export { getDriverReferenceBundle } from './referenceData';
 export { getDriverWellConfig } from './getDriverWellConfig';
+export { resolveWbtWellConfig } from './resolveWbtWellConfig';
+export { createDriverDispatchIfAbsent } from './createDriverDispatchIfAbsent';
 export { getDriverOutgoingStatus } from './getDriverOutgoingStatus';
 export { getDriverWellPerformance } from './getDriverWellPerformance';
 export { bootstrapWbmSession } from './bootstrapWbmSession';
