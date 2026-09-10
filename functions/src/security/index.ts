@@ -41,6 +41,7 @@ export {
   ingestWbmEdit,
   resolveWbtWellConfig,
   createDriverDispatchIfAbsent,
+  acceptDriverDispatch,
   upsertDriverShift,
   resolveActiveDriverShift,
   claimDriverShift,

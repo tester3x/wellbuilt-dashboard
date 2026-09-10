@@ -15,6 +15,7 @@ export { getDriverReferenceBundle } from './referenceData';
 export { getDriverWellConfig } from './getDriverWellConfig';
 export { resolveWbtWellConfig } from './resolveWbtWellConfig';
 export { createDriverDispatchIfAbsent } from './createDriverDispatchIfAbsent';
+export { acceptDriverDispatch } from './acceptDriverDispatch';
 export { getDriverOutgoingStatus } from './getDriverOutgoingStatus';
 export { getDriverWellPerformance } from './getDriverWellPerformance';
 export { bootstrapWbmSession } from './bootstrapWbmSession';
