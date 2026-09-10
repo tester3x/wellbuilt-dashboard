@@ -7,7 +7,7 @@ import { logCanonicalDiag } from './canonical-jobs/diag';
 import { ANTHROPIC_API_KEY, logRedacted, toSafeProviderError } from './secrets';
 import { createAnthropicClient } from './ai/anthropicClient';
 import { AFR_V2_POLICY } from './afr/afrV2Policy';
-import { computeAfrHybrid } from './afr/afrV2';
+import { computeAfrEventGated } from './afr/afrEventGated';
 import type { AfrInterval } from './afr/afrTypes';
 import { buildProcessedRecord } from './processedRecord';
 import {
@@ -773,10 +773,15 @@ async function calculateAFR(wellName: string, newFlowRateDays: number, bblPerFoo
 
   if (intervals.length === 0) return 0;
 
-  // Hybrid: stable data → byte-identical v1; weighting engages only on a proven
-  // condition. No event windows are passed (no explicit event source in prod).
-  const result = computeAfrHybrid(intervals, AFR_V2_POLICY);
-  console.log(`[AFR] ${wellName}: ${result.mode} afr=${result.afr.toFixed(6)} (${(result.afr * 24 * 60).toFixed(1)} min/ft) over ${intervals.length} intervals${result.activated ? ` [activated: ${result.activationReasons.join(',')}]` : ''}`);
+  // EVENT-GATED production path: with no active validated washout event this
+  // returns v1 byte-identically. No event windows are passed — there is no
+  // client event producer yet (well_events is unwritten), so production AFR is
+  // exactly v1. When a producer + canonical wellId mapping exist, fetch this
+  // well's active washout windows (buildWashoutWindows) + qualified ON and pass
+  // them here. The generic confidence hybrid (computeAfrHybrid) is shadow/replay
+  // research only and is intentionally NOT on this path.
+  const result = computeAfrEventGated(intervals, AFR_V2_POLICY, { eventWindows: [] });
+  console.log(`[AFR] ${wellName}: ${result.mode} afr=${result.afr.toFixed(6)} (${(result.afr * 24 * 60).toFixed(1)} min/ft) over ${intervals.length} intervals`);
   return result.afr;
 }
 

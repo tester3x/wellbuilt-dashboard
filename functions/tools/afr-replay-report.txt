@@ -1,31 +1,35 @@
-===== AFR v1 vs v2-HYBRID — read-only replay (no writes) =====
-wells total: 73 | backtested (>=5 pulls): 55 | one-step preds compared: 4855
-AGGREGATE MAE (days/ft): v1=0.43780  v2=0.40266  (-8.0%)
+===== AFR replay (READ-ONLY) =====
 
-PER-WELL MAE distribution (>=3 preds, n=52):
-  v1: median=0.1946 p90=1.6816 mean=0.8711
-  v2: median=0.2230 p90=1.7658 mean=0.8758
-  per-well winner: v2 better=20  v1 better=26  tie(identical)=6
+(1) PRODUCTION event-gated (no events fed):
+    55/55 wells: computeAfrEventGated === computeAfrV1FromRates EXACTLY (mode v1). Production == v1.
 
-ACTIVATION: 3211/4855 backtest steps activated (66.1%); wells that ever activated: 44/55
-BYTE-IDENTICAL: 11/55 wells' final AFR is v1_passthrough and === computeAfrV1FromRates exactly
+(2) GENERIC SHADOW — computeAfrHybrid (research only, NOT production):
+    one-step preds=4855
+    aggregate MAE  v1=0.43780  hybrid=0.40266  (-8.0%)
+    aggregate MAE excl. Gabriel 4  v1=0.36416  hybrid=0.40882  (12.3%)
+    per-well (>=3 preds, n=52): v1 median=0.1946 p90=1.6816; hybrid median=0.2230 p90=1.7658
+    activation: 3211/4855 steps (66.1%)
+    activation counts BY REASON (steps): invalid=1167 anomaly=2860 change_point=194 event=0
 
-WORST REGRESSIONS (v2 - v1, days/ft) — all should be activated wells:
-  Dagger 1             delta=+1.0784 maeV1=11.1787 maeV2=12.2571 activation=95%
-  Gabriel 3            delta=+0.4358 maeV1=1.4095 maeV2=1.8454 activation=91%
-  Pesek 10             delta=+0.3560 maeV1=0.2223 maeV2=0.5783 activation=62%
-  Test Well            delta=+0.2023 maeV1=0.3176 maeV2=0.5199 activation=100%
-  AddedTest            delta=+0.1202 maeV1=0.9466 maeV2=1.0668 activation=100%
-BIGGEST IMPROVEMENTS (v1 - v2):
-  Gabriel 4            delta=-1.9734 maeV1=2.2263 maeV2=0.2530 activation=76%
-  Culverine            delta=-0.1392 maeV1=10.5607 maeV2=10.4215 activation=100%
-  Crossbow 1           delta=-0.0989 maeV1=2.0714 maeV2=1.9725 activation=83%
-  Rennerfelt 1         delta=-0.0600 maeV1=0.1892 maeV2=0.1292 activation=41%
-  Gunslinger 3         delta=-0.0540 maeV1=0.1299 maeV2=0.0759 activation=100%
+    top regressions BY REASON (hybrid worse than v1, >=3 preds):
+      Dagger 1             +1.0784 reasons=[anomaly,change_point]
+      Gabriel 3            +0.4358 reasons=[anomaly,change_point,invalid]
+      Pesek 10             +0.3560 reasons=[invalid,anomaly,change_point]
+      Test Well            +0.2023 reasons=[anomaly,invalid,change_point]
+      AddedTest            +0.1202 reasons=[invalid,anomaly,change_point]
+      Ambush               +0.0842 reasons=[invalid,anomaly]
+    top improvements:
+      Gabriel 4            -1.9734 reasons=[invalid,anomaly,change_point]
+      Culverine            -0.1392 reasons=[invalid]
+      Crossbow 1           -0.0989 reasons=[anomaly,invalid]
+      Rennerfelt 1         -0.0600 reasons=[anomaly,change_point]
+      Gunslinger 3         -0.0540 reasons=[anomaly,invalid,change_point]
 
-RECONCILE: backtested 55 = winner-tallied 52 (>=3 preds) + 3 with <3 comparable preds:
-  Boomerang            pulls=6 comparable-preds=2
-  Matador 1            pulls=5 comparable-preds=1
-  Dirk                 pulls=5 comparable-preds=1
+(3) RECONCILE passthrough vs ties (two different metrics):
+    16/55 wells: FINAL hybrid computation is v1_passthrough (no active condition in the last 15-window).
+    6/52 wells: one-step MAE identical v1==hybrid across the whole backtest (activated at NO step).
+    (A well can be passthrough at the final window yet have activated earlier in its history → the two counts differ.)
 
-WASHOUT: no explicit event source in production → Days 1-3 windows N/A, not inferred. Anthony wells not identifiable without guessing; none singled out.
+(4) WASHOUT recovery benefit is NOT claimed from unlabeled production history.
+    Production has no washout events; the recovery path is proven by controlled fixtures in
+    washoutContract.test.ts (Days 0/1/2/3/4, ON blend, DST, restart). Anthony wells not identifiable without guessing.

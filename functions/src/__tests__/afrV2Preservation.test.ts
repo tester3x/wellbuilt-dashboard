@@ -62,8 +62,9 @@ describe('persisted schema unchanged (mobile/dashboard compatible)', () => {
 });
 
 describe('calculateAFR wired to v2; v1 island removed from index', () => {
-  it('calculateAFR computes via computeAfrHybrid and passes bblPerFoot', () => {
-    expect(indexSrc).toContain('const result = computeAfrHybrid(intervals, AFR_V2_POLICY);');
+  it('production calculateAFR is EVENT-GATED (computeAfrEventGated, no events → v1); the generic hybrid is NOT on the prod path', () => {
+    expect(indexSrc).toContain('const result = computeAfrEventGated(intervals, AFR_V2_POLICY, { eventWindows: [] });');
+    expect(indexSrc).not.toContain('computeAfrHybrid('); // shadow/replay only, never production
     expect(indexSrc).toContain('async function calculateAFR(wellName: string, newFlowRateDays: number, bblPerFoot?: number)');
   });
 
