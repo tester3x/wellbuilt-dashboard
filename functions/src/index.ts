@@ -8,7 +8,10 @@ import { ANTHROPIC_API_KEY, logRedacted, toSafeProviderError } from './secrets';
 import { createAnthropicClient } from './ai/anthropicClient';
 import { AFR_V2_POLICY } from './afr/afrV2Policy';
 import { computeAfrEventGated } from './afr/afrEventGated';
+import type { EventWindow } from './afr/afrV2';
 import type { AfrInterval } from './afr/afrTypes';
+import { activeWashoutEvents, buildWashoutWindows, type WashoutEvent } from './afr/washoutWindow';
+import { resolveTimeZoneForState } from './afr/wellEventContract';
 import { buildProcessedRecord } from './processedRecord';
 import {
   ambiguousEditVerdict,
@@ -699,7 +702,62 @@ async function writeProductionLog(
 // via ./afr/afrV2 (validity → confidence → change-point → confidence-weighted
 // EMA). calculateOvernightBblsPerDay and the ON output are unchanged.
 
-async function calculateAFR(wellName: string, newFlowRateDays: number, bblPerFoot?: number): Promise<number> {
+/**
+ * Resolve a company's IANA timezone: explicit companies/{id}.timezone if set,
+ * else a documented per-company state->IANA fallback. Returns '' if unresolved
+ * (the washout window is then not applied — fails safe to v1).
+ */
+async function resolveCompanyTimeZone(companyId: string): Promise<string> {
+  try {
+    const snap = await admin.firestore().collection('companies').doc(companyId).get();
+    const data = snap.exists ? (snap.data() || {}) : {};
+    const explicit = data.timezone || data.ianaTimezone;
+    if (typeof explicit === 'string' && explicit) return explicit;
+    return resolveTimeZoneForState(data.state);
+  } catch {
+    return '';
+  }
+}
+
+/**
+ * Read this well's active washout recovery windows for a forecast computed at
+ * `observationMs`. Targeted single-path read (no broad scan); voided and
+ * future-relative events are excluded; empty → no windows (v1).
+ */
+async function loadWashoutWindows(companyId: string, wellKey: string, observationMs: number): Promise<EventWindow[]> {
+  if (!companyId) return [];
+  try {
+    const snap = await db.ref(`well_events/${companyId}/${wellKey}`).once('value');
+    if (!snap.exists()) return [];
+    const raw = snap.val() || {};
+    const events: WashoutEvent[] = Object.entries(raw).map(([eventId, v]) => {
+      const rec = v as Record<string, unknown>;
+      return {
+        eventId,
+        companyId,
+        wellKey,
+        type: 'hot_oiler_washout',
+        occurredAtUtc: Number(rec.occurredAtUtc),
+        voidedAtUtc: rec.voidedAtUtc != null ? Number(rec.voidedAtUtc) : undefined,
+      };
+    });
+    const active = activeWashoutEvents(events, observationMs);
+    if (active.length === 0) return [];
+    const tz = await resolveCompanyTimeZone(companyId);
+    if (!tz) return []; // unresolved tz → cannot place local Days 1-3 → fail safe to v1
+    return buildWashoutWindows(active, tz, AFR_V2_POLICY);
+  } catch {
+    return [];
+  }
+}
+
+async function calculateAFR(
+  wellName: string,
+  newFlowRateDays: number,
+  bblPerFoot?: number,
+  companyId?: string,
+  observationMs?: number,
+): Promise<number> {
 
   // Get recent processed packets for this well
   // NOTE: Don't use limitToLast() - Firebase sorts by key alphabetically,
@@ -773,15 +831,18 @@ async function calculateAFR(wellName: string, newFlowRateDays: number, bblPerFoo
 
   if (intervals.length === 0) return 0;
 
-  // EVENT-GATED production path: with no active validated washout event this
-  // returns v1 byte-identically. No event windows are passed — there is no
-  // client event producer yet (well_events is unwritten), so production AFR is
-  // exactly v1. When a producer + canonical wellId mapping exist, fetch this
-  // well's active washout windows (buildWashoutWindows) + qualified ON and pass
-  // them here. The generic confidence hybrid (computeAfrHybrid) is shadow/replay
-  // research only and is intentionally NOT on this path.
-  const result = computeAfrEventGated(intervals, AFR_V2_POLICY, { eventWindows: [] });
-  console.log(`[AFR] ${wellName}: ${result.mode} afr=${result.afr.toFixed(6)} (${(result.afr * 24 * 60).toFixed(1)} min/ft) over ${intervals.length} intervals`);
+  // EVENT-GATED production path. Windows are evaluated at the OBSERVATION time
+  // (this pull), never wall-clock now, so a future event cannot affect a past
+  // forecast. With no active validated washout event this returns v1
+  // byte-identically. well_events is currently unwritten (no producer) → v1.
+  // The generic confidence hybrid (computeAfrHybrid) is shadow/replay research
+  // only and is intentionally NOT on this path.
+  const obsMs = observationMs ?? intervals[intervals.length - 1].timestamp;
+  const eventWindows = companyId ? await loadWashoutWindows(companyId, wellName, obsMs) : [];
+  // qualifiedOn wiring (ON→days/ft blend on Days 1-3) is deferred to the producer
+  // batch; the mechanism is proven in tests. Gating (v1 vs recovery) is live here.
+  const result = computeAfrEventGated(intervals, AFR_V2_POLICY, { eventWindows, nowMs: obsMs });
+  console.log(`[AFR] ${wellName}: ${result.mode} afr=${result.afr.toFixed(6)} (${(result.afr * 24 * 60).toFixed(1)} min/ft) over ${intervals.length} intervals${result.mode === 'washout_recovery' ? ` [washout D${result.washoutDayIndex}]` : ''}`);
   return result.afr;
 }
 
@@ -1100,7 +1161,7 @@ export const processIncomingPull = functionsV1.database
     }
 
     // Calculate AFR
-    const afr = await calculateAFR(wellName, flowRateDays, tanks * 20);
+    const afr = await calculateAFR(wellName, flowRateDays, tanks * 20, hwCompanyId, new Date(data.dateTimeUTC).getTime());
 
     // Calculate window-averaged and overnight bbls/day
     const bblPerFoot = tanks * 20;
@@ -2060,7 +2121,7 @@ export const processEditRequest = functionsV1.database
     }
 
     // Recalculate AFR and update outgoing response if this was the most recent pull
-    const afr = await calculateAFR(wellName, flowRateDays, bblPerFoot);
+    const afr = await calculateAFR(wellName, flowRateDays, bblPerFoot, (origPacket as { companyId?: string }).companyId, new Date(origPacket.dateTimeUTC).getTime());
 
     // Recalculate window/overnight bbls/day (edit may have changed flow rates)
     const editBblPerFoot = bblPerFoot;
@@ -2635,7 +2696,7 @@ export const processDeleteRequest = functionsV1.database
           console.log(`Delete: Rebuilding outgoing for ${wellName} from packet ${latestPacket.packetId || 'unknown'} (dateTimeUTC=${latestPacket.dateTimeUTC})`);
 
           // Recalculate AFR from remaining packets
-          const afr = await calculateAFR(wellName, latestPacket.flowRateDays || 0, tanks * 20);
+          const afr = await calculateAFR(wellName, latestPacket.flowRateDays || 0, tanks * 20, (latestPacket as { companyId?: string }).companyId, new Date(latestPacket.dateTimeUTC).getTime());
           console.log(`Delete: AFR for ${wellName} = ${afr}`);
 
           // Calculate windowBblsDay and overnightBblsDay from remaining historical pulls
@@ -4974,3 +5035,10 @@ export {
 // whole-codebase deploy would have pruned them.
 export { validatePhotoCompliance, suggestPhotoCriteria } from './photoCompliance';
 export { scheduledWellCatalogRefresh, triggerWellCatalogRefresh } from './wellCatalogRefresh';
+
+// ── Governed washout-event callables (emulator-proven) ──────────────────────
+// Exported into the deployable set AFTER emulator proof (wellEvents.emulator.e2e).
+// NOT deployed in this batch and NOT on the AFR trigger selector; deploy only
+// with the client producer via functions:dashboard:recordWellEvent /
+// functions:dashboard:voidWellEvent.
+export { recordWellEvent, voidWellEvent } from './wellEvents';

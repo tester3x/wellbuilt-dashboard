@@ -62,10 +62,11 @@ describe('persisted schema unchanged (mobile/dashboard compatible)', () => {
 });
 
 describe('calculateAFR wired to v2; v1 island removed from index', () => {
-  it('production calculateAFR is EVENT-GATED (computeAfrEventGated, no events → v1); the generic hybrid is NOT on the prod path', () => {
-    expect(indexSrc).toContain('const result = computeAfrEventGated(intervals, AFR_V2_POLICY, { eventWindows: [] });');
+  it('production calculateAFR is EVENT-GATED (computeAfrEventGated, windows at observation time); generic hybrid NOT on the prod path', () => {
+    expect(indexSrc).toContain('computeAfrEventGated(intervals, AFR_V2_POLICY, { eventWindows, nowMs: obsMs })');
     expect(indexSrc).not.toContain('computeAfrHybrid('); // shadow/replay only, never production
-    expect(indexSrc).toContain('async function calculateAFR(wellName: string, newFlowRateDays: number, bblPerFoot?: number)');
+    expect(indexSrc).toContain('loadWashoutWindows(companyId, wellName, obsMs)'); // event consumption wired
+    expect(indexSrc).toContain('async function calculateAFR(');
   });
 
   it('the dead v1 rate math is gone from index.ts (moved to afr/afrV1.ts)', () => {
@@ -74,9 +75,9 @@ describe('calculateAFR wired to v2; v1 island removed from index', () => {
     expect(indexSrc).not.toContain('const EMA_ALPHA');
   });
 
-  it('all three recompute paths pass a bblPerFoot to calculateAFR', () => {
-    expect(indexSrc).toContain('await calculateAFR(wellName, flowRateDays, tanks * 20)');   // incoming
-    expect(indexSrc).toContain('await calculateAFR(wellName, flowRateDays, bblPerFoot)');    // edit
-    expect(indexSrc).toContain('await calculateAFR(wellName, latestPacket.flowRateDays || 0, tanks * 20)'); // delete
+  it('all three recompute paths pass bblPerFoot + companyId + observation timestamp to calculateAFR', () => {
+    expect(indexSrc).toContain('await calculateAFR(wellName, flowRateDays, tanks * 20, hwCompanyId, new Date(data.dateTimeUTC).getTime())'); // incoming
+    expect(indexSrc).toContain('await calculateAFR(wellName, flowRateDays, bblPerFoot, (origPacket as { companyId?: string }).companyId, new Date(origPacket.dateTimeUTC).getTime())'); // edit
+    expect(indexSrc).toContain('await calculateAFR(wellName, latestPacket.flowRateDays || 0, tanks * 20, (latestPacket as { companyId?: string }).companyId, new Date(latestPacket.dateTimeUTC).getTime())'); // delete
   });
 });

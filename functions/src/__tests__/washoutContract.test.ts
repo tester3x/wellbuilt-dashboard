@@ -3,12 +3,13 @@
  * GATED in production; proven correct here. Synthetic identities only.
  */
 import { AFR_V2_POLICY } from '../afr/afrV2Policy';
-import { localDayStartMs, buildWashoutWindows, type WashoutEvent } from '../afr/washoutWindow';
+import { localDayStartMs, buildWashoutWindows, activeWashoutEvents, type WashoutEvent } from '../afr/washoutWindow';
 import { computeAfrEventGated } from '../afr/afrEventGated';
 import { computeAfrV1FromRates } from '../afr/afrV1';
 import {
   validateAndBuildWellEvent, reconcileWellEventIdempotency, wellEventPayloadDigest,
-  type WellEventInput,
+  decideVoidWellEvent, isWellEventActive, resolveTimeZoneForState,
+  type WellEventInput, type WellEventRecord,
 } from '../afr/wellEventContract';
 import type { AfrInterval } from '../afr/afrTypes';
 
@@ -42,7 +43,7 @@ describe('EVENT-GATED production AFR — v1 unless an active washout window', ()
   it('Days 0/1/2/3/4 — washout day normal (v1), Days 1-3 recovery, Day 4 back to v1', () => {
     const occ = Date.parse('2026-08-10T18:00:00Z');
     const windows = buildWashoutWindows(
-      [{ eventId: 'e1', companyId: 'c', wellId: 'w', type: 'hot_oiler_washout', occurredAtUtc: occ }], TZ, P);
+      [{ eventId: 'e1', companyId: 'c', wellKey: 'w', type: 'hot_oiler_washout', occurredAtUtc: occ }], TZ, P);
     const rates = [0.5, 0.5, 0.5, 0.5, 0.5, 2.0, 2.0]; // disturbed tail
     const at = (dayOffset: number) => localDayStartMs(occ, TZ) + dayOffset * DAY + 12 * 3600000;
     const call = (nowMs: number) => computeAfrEventGated(ivsAt(rates, occ - 5 * DAY), P, { eventWindows: windows, nowMs });
@@ -56,7 +57,7 @@ describe('EVENT-GATED production AFR — v1 unless an active washout window', ()
 
   it('inside a recovery window a qualified ON nudges the effective forecast (not the underlying afr)', () => {
     const occ = Date.parse('2026-08-10T18:00:00Z');
-    const windows = buildWashoutWindows([{ eventId: 'e', companyId: 'c', wellId: 'w', type: 'hot_oiler_washout', occurredAtUtc: occ }], TZ, P);
+    const windows = buildWashoutWindows([{ eventId: 'e', companyId: 'c', wellKey: 'w', type: 'hot_oiler_washout', occurredAtUtc: occ }], TZ, P);
     const nowMs = localDayStartMs(occ, TZ) + 1 * DAY + 12 * 3600000; // Day 1
     const rates = [0.5, 0.5, 0.5, 0.5, 2.0, 2.0];
     const noOn = computeAfrEventGated(ivsAt(rates, occ - 4 * DAY), P, { eventWindows: windows, nowMs });
@@ -69,7 +70,7 @@ describe('EVENT-GATED production AFR — v1 unless an active washout window', ()
 
 describe('washout windows — local days, DST, restart no-stacking', () => {
   const ev = (eventId: string, occurredAtUtc: number): WashoutEvent =>
-    ({ eventId, companyId: 'c', wellId: 'w', type: 'hot_oiler_washout', occurredAtUtc });
+    ({ eventId, companyId: 'c', wellKey: 'w', type: 'hot_oiler_washout', occurredAtUtc });
 
   it('localDayStartMs is local midnight; zone matters', () => {
     const ms = Date.parse('2026-08-24T04:36:37Z');
@@ -105,7 +106,7 @@ describe('washout windows — local days, DST, restart no-stacking', () => {
 
 describe('event contract — governed, canonical ids, tz snapshot, idempotency', () => {
   const base: WellEventInput = {
-    eventId: 'evt-01', companyId: 'liquid-gold', wellId: 'gabriel-4',
+    eventId: 'evt-01', companyId: 'liquid-gold', wellKey: 'gabriel-4',
     type: 'hot_oiler_washout', occurredAtUtc: Date.parse('2026-08-23T18:00:00Z'),
   };
   const ctx = { serverNowMs: Date.parse('2026-08-23T19:00:00Z'), timeZone: TZ, wellExists: true };
@@ -115,8 +116,14 @@ describe('event contract — governed, canonical ids, tz snapshot, idempotency',
     expect(validateAndBuildWellEvent(base, { uid: undefined }, ctx)).toMatchObject({ ok: false, code: 'unauthenticated' });
     expect(validateAndBuildWellEvent({ ...base, companyId: 'other' }, driver, ctx)).toMatchObject({ ok: false, code: 'permission-denied' });
   });
-  it('a spaced display wellName is rejected — canonical wellId only', () => {
-    expect(validateAndBuildWellEvent({ ...base, wellId: 'Gabriel 4' }, driver, ctx)).toMatchObject({ ok: false, code: 'invalid-argument' });
+  it('the well key IS the wellName (spaces + API-number keys accepted; RTDB-forbidden chars rejected)', () => {
+    // Proven identity: companyWells is keyed by wellName ("Gabriel 4"), so a
+    // spaced key is valid; API-number keys are valid; . # / [ ] are RTDB-illegal.
+    expect(validateAndBuildWellEvent({ ...base, wellKey: 'Gabriel 4' }, driver, ctx).ok).toBe(true);
+    expect(validateAndBuildWellEvent({ ...base, wellKey: '33-053-04319-00-00' }, driver, ctx).ok).toBe(true);
+    for (const bad of ['a/b', 'a.b', 'a#b', 'a[b]']) {
+      expect(validateAndBuildWellEvent({ ...base, wellKey: bad }, driver, ctx)).toMatchObject({ ok: false, reason: 'well_key_malformed' });
+    }
   });
   it('missing/invalid/future occurredAtUtc and unresolved timezone are rejected', () => {
     expect(validateAndBuildWellEvent({ ...base, occurredAtUtc: NaN }, driver, ctx)).toMatchObject({ ok: false });
@@ -151,5 +158,51 @@ describe('event contract — governed, canonical ids, tz snapshot, idempotency',
     expect(reconcileWellEventIdempotency({ payloadDigest: digest }, digest)).toEqual({ action: 'idempotent' });
     const conflictDigest = wellEventPayloadDigest({ ...base, occurredAtUtc: base.occurredAtUtc + DAY });
     expect(reconcileWellEventIdempotency({ payloadDigest: digest }, conflictDigest)).toMatchObject({ action: 'conflict' });
+  });
+});
+
+describe('timezone resolver, void, and active-event filtering', () => {
+  it('resolveTimeZoneForState maps company state → IANA (never a global hardcode); unknown → empty', () => {
+    expect(resolveTimeZoneForState('ND')).toBe('America/Chicago'); // liquid-gold (state ND) fallback
+    expect(resolveTimeZoneForState('MT')).toBe('America/Denver');
+    expect(resolveTimeZoneForState('ZZ')).toBe('');               // unknown → fail closed
+    expect(resolveTimeZoneForState(undefined)).toBe('');
+  });
+
+  const rec = (over: Partial<WellEventRecord> = {}): WellEventRecord => ({
+    eventId: 'e', companyId: 'liquid-gold', wellKey: 'Gabriel 4', type: 'hot_oiler_washout',
+    occurredAtUtc: Date.parse('2026-08-23T18:00:00Z'), serverRecordedAtUtc: 1, recordedBy: 'm1',
+    recordedByRole: 'manager', ianaTimezoneSnapshot: 'America/Chicago', payloadDigest: 'd', schemaVersion: 1, ...over,
+  });
+  const mgr = { uid: 'm1', companyId: 'liquid-gold', isPlatformAdmin: false, role: 'manager' as const };
+
+  it('void is manager-only, auditable overlay (original preserved), repeated void idempotent', () => {
+    expect(decideVoidWellEvent(rec(), { uid: 'd', companyId: 'liquid-gold', role: 'driver' }, { serverNowMs: 2 }))
+      .toMatchObject({ ok: false, code: 'permission-denied' });
+    expect(decideVoidWellEvent(null, mgr, { serverNowMs: 2 })).toMatchObject({ ok: false, code: 'not-found' });
+    expect(decideVoidWellEvent(rec(), { uid: 'x', companyId: 'other', role: 'manager' }, { serverNowMs: 2 }))
+      .toMatchObject({ ok: false, code: 'permission-denied' });
+    const v = decideVoidWellEvent(rec(), mgr, { serverNowMs: 2, reason: 'mistake' });
+    expect(v).toMatchObject({ ok: true, action: 'void' });
+    if (v.ok) {
+      expect(v.record.voidedAtUtc).toBe(2);
+      expect(v.record.voidedBy).toBe('m1');
+      expect(v.record.occurredAtUtc).toBe(rec().occurredAtUtc); // original preserved
+      // repeated void is idempotent (no re-void)
+      expect(decideVoidWellEvent(v.record, mgr, { serverNowMs: 9 })).toMatchObject({ ok: true, action: 'already_voided' });
+    }
+  });
+
+  it('a voided event never activates AFR (excluded by activeWashoutEvents)', () => {
+    expect(isWellEventActive(rec())).toBe(true);
+    expect(isWellEventActive(rec({ voidedAtUtc: 5 }))).toBe(false);
+    const occ = Date.parse('2026-08-23T18:00:00Z');
+    const evs: WashoutEvent[] = [
+      { eventId: 'a', companyId: 'c', wellKey: 'w', type: 'hot_oiler_washout', occurredAtUtc: occ },
+      { eventId: 'b', companyId: 'c', wellKey: 'w', type: 'hot_oiler_washout', occurredAtUtc: occ, voidedAtUtc: occ + 1 },
+      { eventId: 'future', companyId: 'c', wellKey: 'w', type: 'hot_oiler_washout', occurredAtUtc: occ + 100 * DAY },
+    ];
+    const active = activeWashoutEvents(evs, occ + DAY); // future & voided excluded
+    expect(active.map((e) => e.eventId)).toEqual(['a']);
   });
 });

@@ -17,9 +17,20 @@ import type { AfrV2Policy } from './afrV2Policy';
 export interface WashoutEvent {
   eventId: string;
   companyId: string;
-  wellId: string;
+  wellKey: string;        // the well's key = its wellName (no separate wellId)
   type: 'hot_oiler_washout';
-  occurredAtUtc: number; // ms epoch
+  occurredAtUtc: number;  // ms epoch
+  voidedAtUtc?: number;   // set when the event was voided (never activates AFR)
+}
+
+/**
+ * Active washout events for a forecast at `asOfMs`: not voided, and occurring
+ * strictly before the observation. A FUTURE event can never affect a past
+ * forecast (windows are always after their event, but this also excludes an
+ * event recorded with occurredAtUtc after the observation being computed).
+ */
+export function activeWashoutEvents(events: WashoutEvent[], asOfMs: number): WashoutEvent[] {
+  return (events || []).filter((e) => !e.voidedAtUtc && Number.isFinite(e.occurredAtUtc) && e.occurredAtUtc <= asOfMs);
 }
 
 /** Wall-clock offset (localWall - UTC) in ms for `ms` in `timeZone`. */
