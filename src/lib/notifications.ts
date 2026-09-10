@@ -36,6 +36,8 @@ export const DEFAULT_PREFS: Record<UserRole, NotificationCategory[]> = {
   dispatch: ['dispatch_update', 'pull_submitted', 'ticket_submitted'],
   payroll: ['payroll_dispute', 'ticket_submitted'],
   viewer: ['well_alert'],
+  safety: ['dispatch_update', 'well_alert'],
+  lead: ['dispatch_update', 'pull_submitted', 'well_alert'],
   driver: [],
 };
 
