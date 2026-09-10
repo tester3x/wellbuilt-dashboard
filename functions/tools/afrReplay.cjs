@@ -1,116 +1,93 @@
 /**
- * AFR v1 vs v2 — READ-ONLY replay/shadow over real packets/processed.
- * No writes, no deploy. Compares one-step-ahead prediction error and final AFR.
+ * AFR v1 vs v2-HYBRID — READ-ONLY replay/shadow over real packets/processed.
+ * No writes, no deploy. Reports per-well MAE distribution (median/p90), worst
+ * regression, activation frequency, and reconciliation of the backtested set.
  *
  * Usage: node tools/afrReplay.cjs <path-to-all-processed.json>
  */
 const fs = require('fs');
 const { computeAfrV1FromRates } = require('../lib/afr/afrV1.js');
-const { computeAfrV2 } = require('../lib/afr/afrV2.js');
+const { computeAfrHybrid } = require('../lib/afr/afrV2.js');
 const { AFR_V2_POLICY } = require('../lib/afr/afrV2Policy.js');
 
-const path = process.argv[2];
-const raw = JSON.parse(fs.readFileSync(path, 'utf8')) || {};
+const raw = JSON.parse(fs.readFileSync(process.argv[2], 'utf8')) || {};
+const P = AFR_V2_POLICY;
 
-// Group processed packets by well (mirror calculateAFR's intake filters).
 const byWell = new Map();
 for (const [key, d] of Object.entries(raw)) {
   if (!d || typeof d !== 'object') continue;
   if (key.startsWith('edit_') || key.startsWith('delete_') || key.startsWith('history_')) continue;
   if (!(d.flowRateDays > 0)) continue;
-  let ts = d.dateTimeUTC ? Date.parse(d.dateTimeUTC)
-    : d.gaugeTime ? Date.parse(d.gaugeTime)
-    : d.dateTime ? Date.parse(d.dateTime) : 0;
+  let ts = d.dateTimeUTC ? Date.parse(d.dateTimeUTC) : d.gaugeTime ? Date.parse(d.gaugeTime) : d.dateTime ? Date.parse(d.dateTime) : 0;
   if (Number.isNaN(ts)) ts = 0;
   const w = d.wellName || '(unknown)';
   if (!byWell.has(w)) byWell.set(w, []);
-  byWell.get(w).push({
-    key, timestamp: ts, rate: d.flowRateDays,
-    topLevelFeet: typeof d.tankLevelFeet === 'number' ? d.tankLevelFeet : undefined,
-    bblsTaken: typeof d.bblsTaken === 'number' ? d.bblsTaken : undefined,
-  });
+  byWell.get(w).push({ key, timestamp: ts, rate: d.flowRateDays, topLevelFeet: typeof d.tankLevelFeet === 'number' ? d.tankLevelFeet : undefined, bblsTaken: typeof d.bblsTaken === 'number' ? d.bblsTaken : undefined });
 }
 
-const P = AFR_V2_POLICY;
-let totalWells = 0, comparedWells = 0;
-let sumAbsV1 = 0, sumAbsV2 = 0, nPred = 0;
-let v2Better = 0, v1Better = 0, tie = 0;
-let regimeWells = 0, invalidIntervals = 0, lowConfIntervals = 0, totalIntervals = 0;
+const pct = (arr, p) => { if (!arr.length) return 0; const s = [...arr].sort((a, b) => a - b); return s[Math.min(s.length - 1, Math.floor(p * (s.length - 1)))]; };
+const mean = (arr) => arr.length ? arr.reduce((a, b) => a + b, 0) / arr.length : 0;
+
+let totalWells = 0, backtested = 0, sumV1 = 0, sumV2 = 0, nPred = 0;
+let stepsTotal = 0, stepsActivated = 0, wellsEverActivated = 0, passthroughExactV1 = 0;
 const perWell = [];
+const fewPred = [];
 
-for (const [well, entriesRaw] of byWell) {
+for (const [well, esRaw] of byWell) {
   totalWells++;
-  const entries = entriesRaw.sort((a, b) => a.timestamp - b.timestamp);
-  if (entries.length < 5) continue; // need history to backtest
-  comparedWells++;
-
-  let wV1 = 0, wV2 = 0, wN = 0, wRegime = false;
-  // One-step-ahead: predict entry i from history [0..i-1].
-  for (let i = 4; i < entries.length; i++) {
-    const hist = entries.slice(0, i);
-    const actual = entries[i].rate;
-    const v1 = computeAfrV1FromRates(hist.map(e => e.rate));
-    const intervals = hist.map((e, j) => ({
-      key: e.key, timestamp: e.timestamp, flowRateDays: e.rate,
-      intervalMs: j > 0 ? e.timestamp - hist[j - 1].timestamp : undefined,
-      topLevelFeet: e.topLevelFeet, priorTopLevelFeet: j > 0 ? hist[j - 1].topLevelFeet : undefined,
-      bblsTaken: e.bblsTaken, bblPerFoot: 20,
-    }));
-    const res = computeAfrV2(intervals, P);
-    if (v1 > 0 && actual > 0) { sumAbsV1 += Math.abs(v1 - actual); wV1 += Math.abs(v1 - actual); }
-    if (res.afr > 0 && actual > 0) { sumAbsV2 += Math.abs(res.afr - actual); wV2 += Math.abs(res.afr - actual); }
-    if (v1 > 0 && res.afr > 0 && actual > 0) { nPred++; wN++; }
-    if (res.regimeAccepted) wRegime = true;
+  const es = esRaw.sort((a, b) => a.timestamp - b.timestamp);
+  if (es.length < 5) continue;
+  backtested++;
+  let wV1 = 0, wV2 = 0, wN = 0, wAct = 0, wSteps = 0;
+  for (let i = 4; i < es.length; i++) {
+    const hist = es.slice(0, i);
+    const actual = es[i].rate;
+    const v1 = computeAfrV1FromRates(hist.map((e) => e.rate));
+    const intervals = hist.map((e, j) => ({ key: e.key, timestamp: e.timestamp, flowRateDays: e.rate, intervalMs: j > 0 ? e.timestamp - hist[j - 1].timestamp : undefined, topLevelFeet: e.topLevelFeet, priorTopLevelFeet: j > 0 ? hist[j - 1].topLevelFeet : undefined, bblsTaken: e.bblsTaken, bblPerFoot: 20 }));
+    const h = computeAfrHybrid(intervals, P);
+    wSteps++; stepsTotal++;
+    if (h.activated) { wAct++; stepsActivated++; }
+    if (v1 > 0 && h.afr > 0 && actual > 0) { sumV1 += Math.abs(v1 - actual); sumV2 += Math.abs(h.afr - actual); wV1 += Math.abs(v1 - actual); wV2 += Math.abs(h.afr - actual); nPred++; wN++; }
   }
-
-  // Final-state diagnostics on the full series.
-  const allIntervals = entries.map((e, j) => ({
-    key: e.key, timestamp: e.timestamp, flowRateDays: e.rate,
-    intervalMs: j > 0 ? e.timestamp - entries[j - 1].timestamp : undefined,
-    topLevelFeet: e.topLevelFeet, priorTopLevelFeet: j > 0 ? entries[j - 1].topLevelFeet : undefined,
-    bblsTaken: e.bblsTaken, bblPerFoot: 20,
-  }));
-  const finalV2 = computeAfrV2(allIntervals, P);
-  const finalV1 = computeAfrV1FromRates(entries.map(e => e.rate));
-  totalIntervals += finalV2.perInterval.length;
-  invalidIntervals += finalV2.perInterval.filter(p => !p.validity.valid).length;
-  lowConfIntervals += finalV2.perInterval.filter(p => p.validity.valid && p.weight < 0.5).length;
-  if (finalV2.regimeAccepted) regimeWells++;
-  if (wRegime) {} // per-well regime seen during backtest
-
+  if (wAct > 0) wellsEverActivated++;
   const maeV1 = wN ? wV1 / wN : 0, maeV2 = wN ? wV2 / wN : 0;
-  if (wN >= 3) {
-    if (maeV2 < maeV1 * 0.999) v2Better++;
-    else if (maeV1 < maeV2 * 0.999) v1Better++;
-    else tie++;
-  }
-  perWell.push({ well, n: entries.length, preds: wN, maeV1, maeV2, finalV1, finalV2: finalV2.afr, regime: finalV2.regimeAccepted });
+  if (wN < 3) fewPred.push({ well, n: es.length, preds: wN });
+  perWell.push({ well, n: es.length, preds: wN, maeV1, maeV2, delta: maeV2 - maeV1, actRate: wSteps ? wAct / wSteps : 0 });
 }
 
-const maeV1 = nPred ? sumAbsV1 / nPred : 0;
-const maeV2 = nPred ? sumAbsV2 / nPred : 0;
+// Byte-identical proof: non-activated final computations equal v1 exactly.
+for (const [well, esRaw] of byWell) {
+  const es = esRaw.sort((a, b) => a.timestamp - b.timestamp);
+  if (es.length < 5) continue;
+  const intervals = es.map((e, j) => ({ key: e.key, timestamp: e.timestamp, flowRateDays: e.rate, intervalMs: j > 0 ? e.timestamp - es[j - 1].timestamp : undefined, topLevelFeet: e.topLevelFeet, priorTopLevelFeet: j > 0 ? es[j - 1].topLevelFeet : undefined, bblsTaken: e.bblsTaken, bblPerFoot: 20 }));
+  const h = computeAfrHybrid(intervals, P);
+  if (!h.activated && h.afr === computeAfrV1FromRates(es.map((e) => e.rate))) passthroughExactV1++;
+}
 
-console.log('===== AFR v1 vs v2 — read-only replay (no writes) =====');
-console.log(`wells total: ${totalWells}  | backtested (>=5 pulls): ${comparedWells}`);
-console.log(`one-step-ahead predictions compared: ${nPred}`);
-console.log(`MAE (days/ft)  v1=${maeV1.toFixed(5)}  v2=${maeV2.toFixed(5)}  ` +
-  `→ v2 ${maeV2 < maeV1 ? 'LOWER (better)' : maeV2 > maeV1 ? 'higher (worse)' : 'equal'} by ${(Math.abs(maeV1 - maeV2)).toFixed(5)} (${maeV1 ? ((maeV2 - maeV1) / maeV1 * 100).toFixed(1) : '—'}%)`);
-console.log(`per-well winner (>=3 preds):  v2 better=${v2Better}  v1 better=${v1Better}  tie=${tie}`);
-console.log(`v2 interval classification: total=${totalIntervals}  invalid(0.0)=${invalidIntervals}  valid-but-low-weight(<0.5)=${lowConfIntervals}`);
-console.log(`wells where v2 accepted a sustained regime change: ${regimeWells}`);
+const withPreds = perWell.filter((w) => w.preds >= 3);
+const deltas = withPreds.map((w) => w.delta);
+let v2Better = 0, v1Better = 0, tie = 0;
+for (const w of withPreds) { if (w.maeV2 < w.maeV1 - 1e-9) v2Better++; else if (w.maeV1 < w.maeV2 - 1e-9) v1Better++; else tie++; }
+withPreds.sort((a, b) => b.delta - a.delta);
+
+console.log('===== AFR v1 vs v2-HYBRID — read-only replay (no writes) =====');
+console.log(`wells total: ${totalWells} | backtested (>=5 pulls): ${backtested} | one-step preds compared: ${nPred}`);
+console.log(`AGGREGATE MAE (days/ft): v1=${(sumV1 / nPred).toFixed(5)}  v2=${(sumV2 / nPred).toFixed(5)}  (${((sumV2 - sumV1) / (sumV1) * 100).toFixed(1)}%)`);
 console.log('');
-console.log('WASHOUT WINDOWS: no explicit washout/hot-oiler/maintenance event exists in production');
-console.log('  → post-washout Days 1-3 error is NOT computable and is NOT inferred (event capture required).');
-console.log('  → Anthony\'s specific tested wells are not identifiable from the data without guessing; none singled out.');
+console.log('PER-WELL MAE distribution (>=3 preds, n=' + withPreds.length + '):');
+console.log(`  v1: median=${pct(withPreds.map((w) => w.maeV1), 0.5).toFixed(4)} p90=${pct(withPreds.map((w) => w.maeV1), 0.9).toFixed(4)} mean=${mean(withPreds.map((w) => w.maeV1)).toFixed(4)}`);
+console.log(`  v2: median=${pct(withPreds.map((w) => w.maeV2), 0.5).toFixed(4)} p90=${pct(withPreds.map((w) => w.maeV2), 0.9).toFixed(4)} mean=${mean(withPreds.map((w) => w.maeV2)).toFixed(4)}`);
+console.log(`  per-well winner: v2 better=${v2Better}  v1 better=${v1Better}  tie(identical)=${tie}`);
 console.log('');
-// Show the 8 wells with the largest v1→v2 improvement and 4 with the largest regression.
-perWell.sort((a, b) => (a.maeV2 - a.maeV1) - (b.maeV2 - b.maeV1));
-const fmt = (x) => x.toFixed(4);
-console.log('Top wells where v2 improves one-step MAE:');
-for (const w of perWell.filter(w => w.preds >= 3).slice(0, 8)) {
-  console.log(`  ${w.well.padEnd(22)} n=${String(w.n).padStart(3)} preds=${String(w.preds).padStart(3)} maeV1=${fmt(w.maeV1)} maeV2=${fmt(w.maeV2)} finalV1=${fmt(w.finalV1)} finalV2=${fmt(w.finalV2)}${w.regime ? ' [regime]' : ''}`);
-}
-console.log('Wells where v2 regresses one-step MAE most:');
-for (const w of perWell.filter(w => w.preds >= 3).slice(-4).reverse()) {
-  console.log(`  ${w.well.padEnd(22)} n=${String(w.n).padStart(3)} preds=${String(w.preds).padStart(3)} maeV1=${fmt(w.maeV1)} maeV2=${fmt(w.maeV2)} finalV1=${fmt(w.finalV1)} finalV2=${fmt(w.finalV2)}${w.regime ? ' [regime]' : ''}`);
-}
+console.log(`ACTIVATION: ${stepsActivated}/${stepsTotal} backtest steps activated (${(stepsActivated / stepsTotal * 100).toFixed(1)}%); wells that ever activated: ${wellsEverActivated}/${backtested}`);
+console.log(`BYTE-IDENTICAL: ${passthroughExactV1}/${backtested} wells' final AFR is v1_passthrough and === computeAfrV1FromRates exactly`);
+console.log('');
+console.log('WORST REGRESSIONS (v2 - v1, days/ft) — all should be activated wells:');
+for (const w of withPreds.slice(0, 5)) console.log(`  ${w.well.padEnd(20)} delta=+${w.delta.toFixed(4)} maeV1=${w.maeV1.toFixed(4)} maeV2=${w.maeV2.toFixed(4)} activation=${(w.actRate * 100).toFixed(0)}%`);
+console.log('BIGGEST IMPROVEMENTS (v1 - v2):');
+for (const w of withPreds.slice(-5).reverse()) console.log(`  ${w.well.padEnd(20)} delta=${w.delta.toFixed(4)} maeV1=${w.maeV1.toFixed(4)} maeV2=${w.maeV2.toFixed(4)} activation=${(w.actRate * 100).toFixed(0)}%`);
+console.log('');
+console.log(`RECONCILE: backtested ${backtested} = winner-tallied ${withPreds.length} (>=3 preds) + ${fewPred.length} with <3 comparable preds:`);
+for (const w of fewPred) console.log(`  ${w.well.padEnd(20)} pulls=${w.n} comparable-preds=${w.preds}`);
+console.log('');
+console.log('WASHOUT: no explicit event source in production → Days 1-3 windows N/A, not inferred. Anthony wells not identifiable without guessing; none singled out.');

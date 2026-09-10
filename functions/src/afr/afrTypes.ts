@@ -61,3 +61,15 @@ export interface AfrV2Result {
   /** true when a genuine sustained regime change was accepted this computation. */
   regimeAccepted: boolean;
 }
+
+export type ActivationReason = 'invalid' | 'anomaly' | 'change_point' | 'event';
+
+/** Hybrid result: stable/ordinary data passes through v1 byte-identically;
+ *  confidence weighting engages ONLY when a proven condition activates it. */
+export interface AfrHybridResult extends AfrV2Result {
+  /** 'v1_passthrough' when no condition activated (afr === computeAfrV1FromRates);
+   *  'v2_active' when confidence weighting engaged. */
+  mode: 'v1_passthrough' | 'v2_active';
+  activated: boolean;
+  activationReasons: ActivationReason[];
+}

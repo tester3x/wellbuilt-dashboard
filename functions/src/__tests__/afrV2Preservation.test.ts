@@ -62,8 +62,8 @@ describe('persisted schema unchanged (mobile/dashboard compatible)', () => {
 });
 
 describe('calculateAFR wired to v2; v1 island removed from index', () => {
-  it('calculateAFR computes via computeAfrV2 and passes bblPerFoot', () => {
-    expect(indexSrc).toContain('const result = computeAfrV2(intervals, AFR_V2_POLICY);');
+  it('calculateAFR computes via computeAfrHybrid and passes bblPerFoot', () => {
+    expect(indexSrc).toContain('const result = computeAfrHybrid(intervals, AFR_V2_POLICY);');
     expect(indexSrc).toContain('async function calculateAFR(wellName: string, newFlowRateDays: number, bblPerFoot?: number)');
   });
 

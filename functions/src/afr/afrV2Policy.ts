@@ -106,10 +106,14 @@ export const AFR_V2_POLICY: AfrV2Policy = {
   consistency: { anomalyRatio: 2.0, itReviewRatio: 1.5 },
   confidence: {
     normal: 1.0,
-    slightlyUnusual: 0.8,
-    knownDisturbance: 0.4,
-    highlyQuestionable: 0.1,
-    invalid: 0.0,
+    // RETAINED at full weight: the deployed AFR "retains 1.5x–<2.0x" readings, and
+    // a 1.5–2.0x reading alone must NOT activate confidence weighting (stable
+    // ordinary data stays v1 byte-identical). Kept as a named tier so replay can
+    // tune it downward later if evidence supports it.
+    slightlyUnusual: 1.0,
+    knownDisturbance: 0.4,   // explicit operational-event window only (gated)
+    highlyQuestionable: 0.1, // valid >=2.0x — an activation condition, low weight
+    invalid: 0.0,            // technically impossible — the only 0.0
   },
   regime: { acceptAfter: 3, acceptedConfidence: 1.0 },
   validity: {

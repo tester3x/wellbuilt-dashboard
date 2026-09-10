@@ -1,26 +1,41 @@
 /**
- * AFR v2 orchestrator — PURE (no I/O). Turns a chronological interval sequence
- * into a confidence-weighted AFR plus per-interval diagnostics.
+ * AFR HYBRID orchestrator — PURE (no I/O).
  *
- * Pipeline:
- *   1. Window to the most-recent N intervals.
- *   2. Per interval: consistency vs the running median of PRIOR VALID rates →
- *      confidence weight (validity 0.0 excluded from the trend entirely; a
- *      questionable-but-valid reading contributes "a little piece").
- *   3. Change-point acceptance: a run of >= regime.acceptAfter consecutive
- *      same-direction off-trend intervals is a genuine regime shift — restore
- *      their confidence so a sustained change is learned, never suppressed
- *      forever.
- *   4. Weighted EMA: ema += alpha * weight * (rate - ema). Zero-weight (invalid)
- *      intervals cannot move the trend; low-weight ones nudge it slightly.
+ * Requirement: stable, ordinary data must follow the v1 calculation
+ * BYTE-IDENTICALLY. Confidence weighting engages ONLY when a proven condition is
+ * present: an invalid observation, a >=2.0x anomaly, a change-point (sustained
+ * same-direction run), or an explicit operational-event window. When NOTHING
+ * activates, the result is exactly computeAfrV1FromRates — no per-well hindsight,
+ * decided live from the data itself.
  *
- * Effective forecast == afr here. The washout-window ON blend is intentionally
- * NOT applied (no explicit event source in production; policy.washout.enabled
- * is false) — the forecast never pretends to know post-washout Days 1-3.
+ * When activated:
+ *   - invalid (0.0) cannot steer the trend;
+ *   - a valid >=2.0x anomaly contributes "a little piece" (0.1);
+ *   - 1.5–<2.0x is retained at full weight (v1 parity);
+ *   - a change-point run restores confidence so a sustained regime change is
+ *     learned, never suppressed forever;
+ *   - event-window intervals are capped (knownDisturbance) — GATED: no explicit
+ *     event source in production, so no window is ever passed there.
+ * Prediction error is never an input.
  */
-import type { AfrInterval, AfrV2Result, ConfidenceResult } from './afrTypes';
+import type { AfrInterval, AfrHybridResult, ConfidenceResult, ActivationReason } from './afrTypes';
 import type { AfrV2Policy } from './afrV2Policy';
 import { scoreConfidence } from './confidence';
+import { computeAfrV1FromRates } from './afrV1';
+
+/** A local-calendar-day washout recovery window (built by washoutWindow.ts). */
+export interface EventWindow {
+  startMs: number;
+  endMs: number;
+  /** 1-based recovery day index (Day 1/2/3). */
+  dayIndex: number;
+}
+
+export interface HybridOptions {
+  /** Explicit operational-event windows (washout recovery). Empty/omitted in
+   *  production — no event producer exists yet. */
+  eventWindows?: EventWindow[];
+}
 
 function median(nums: number[]): number {
   if (nums.length === 0) return 0;
@@ -29,23 +44,37 @@ function median(nums: number[]): number {
   return s.length % 2 ? s[mid] : (s[mid - 1] + s[mid]) / 2;
 }
 
-export function computeAfrV2(intervalsIn: AfrInterval[], policy: AfrV2Policy): AfrV2Result {
-  const empty: AfrV2Result = { afr: 0, effectiveForecast: 0, perInterval: [], regimeAccepted: false };
+function inAnyWindow(ts: number, windows?: EventWindow[]): boolean {
+  return !!windows && windows.some((w) => ts >= w.startMs && ts < w.endMs);
+}
+
+export function computeAfrHybrid(
+  intervalsIn: AfrInterval[],
+  policy: AfrV2Policy,
+  opts: HybridOptions = {},
+): AfrHybridResult {
+  const empty: AfrHybridResult = {
+    afr: 0, effectiveForecast: 0, perInterval: [], regimeAccepted: false,
+    mode: 'v1_passthrough', activated: false, activationReasons: [],
+  };
   if (!intervalsIn || intervalsIn.length === 0) return empty;
 
-  // Most-recent N (input assumed chronological ascending).
   const intervals = intervalsIn.slice(-policy.windowSize);
+  const rates = intervals.map((iv) => iv.flowRateDays);
 
-  // Per-interval confidence vs the running median of prior VALID rates.
+  // Classify each interval vs the running median of PRIOR valid rates.
   const priorValidRates: number[] = [];
   const results: ConfidenceResult[] = [];
-  const directions: number[] = []; // +1 higher than surrounding median, -1 lower, 0 on-trend/none
+  const directions: number[] = [];
   for (const iv of intervals) {
     const medianRate = priorValidRates.length >= 2 ? median(priorValidRates) : null;
-    const r = scoreConfidence(iv, { medianRate }, policy);
+    const knownDisturbance = inAnyWindow(iv.timestamp, opts.eventWindows);
+    const r = scoreConfidence(iv, { medianRate, knownDisturbance }, policy);
     results.push(r);
     if (r.validity.valid) {
       priorValidRates.push(iv.flowRateDays);
+      // Change-point direction uses DEVIATION from the surrounding median (either
+      // off-trend tier), independent of the learning weight.
       if (medianRate != null && (r.tier === 'slightlyUnusual' || r.tier === 'highlyQuestionable')) {
         directions.push(iv.flowRateDays > medianRate ? 1 : -1);
       } else {
@@ -56,7 +85,7 @@ export function computeAfrV2(intervalsIn: AfrInterval[], policy: AfrV2Policy): A
     }
   }
 
-  // Change-point acceptance: a tail run of same-direction off-trend intervals.
+  // Change-point run (tail of consecutive same-direction off-trend intervals).
   let runDir = 0;
   let runStart = -1;
   for (let i = directions.length - 1; i >= 0; i--) {
@@ -66,8 +95,32 @@ export function computeAfrV2(intervalsIn: AfrInterval[], policy: AfrV2Policy): A
     if (d !== runDir) break;
     runStart = i;
   }
+  const changePoint = runStart >= 0 && directions.length - runStart >= policy.regime.acceptAfter;
+
+  // Activation conditions.
+  const reasons: ActivationReason[] = [];
+  if (results.some((r) => !r.validity.valid)) reasons.push('invalid');
+  if (results.some((r) => r.validity.valid && r.tier === 'highlyQuestionable')) reasons.push('anomaly');
+  if (changePoint) reasons.push('change_point');
+  if (results.some((r) => r.validity.valid && r.tier === 'knownDisturbance')) reasons.push('event');
+  const activated = reasons.length > 0;
+
+  const perIntervalBase = intervals.map((iv, i) => ({
+    key: iv.key, timestamp: iv.timestamp, rate: iv.flowRateDays, ...results[i],
+  }));
+
+  // ── Not activated → byte-identical v1 passthrough ──────────────────────────
+  if (!activated) {
+    const afr = computeAfrV1FromRates(rates);
+    return {
+      afr, effectiveForecast: afr, perInterval: perIntervalBase,
+      regimeAccepted: false, mode: 'v1_passthrough', activated: false, activationReasons: [],
+    };
+  }
+
+  // ── Activated → confidence-weighted path ───────────────────────────────────
   let regimeAccepted = false;
-  if (runStart >= 0 && directions.length - runStart >= policy.regime.acceptAfter) {
+  if (changePoint) {
     regimeAccepted = true;
     for (let i = runStart; i < results.length; i++) {
       if (results[i].validity.valid) {
@@ -76,32 +129,23 @@ export function computeAfrV2(intervalsIn: AfrInterval[], policy: AfrV2Policy): A
     }
   }
 
-  // Weighted EMA over the windowed intervals.
   let ema: number | null = null;
   for (let i = 0; i < intervals.length; i++) {
-    const rate = intervals[i].flowRateDays;
     const w = results[i].weight;
-    if (!results[i].validity.valid || w <= 0) continue; // zero-weight cannot steer the trend
-    if (ema == null) {
-      ema = rate; // seed from the first contributing rate
-    } else {
-      ema = ema + policy.emaAlpha * w * (rate - ema);
-    }
+    if (!results[i].validity.valid || w <= 0) continue;
+    ema = ema == null ? rates[i] : ema + policy.emaAlpha * w * (rates[i] - ema);
   }
-
-  // Fallback: nothing contributed → last valid rate, else last raw rate (mirrors
-  // v1's "fall back to unfiltered when fewer than three usable pulls remain").
   if (ema == null) {
-    const lastValid = [...intervals].reverse().find((_, i) => results[results.length - 1 - i].validity.valid);
-    ema = lastValid ? lastValid.flowRateDays : intervals[intervals.length - 1].flowRateDays;
+    const lastValidIdx = [...results].reverse().findIndex((r) => r.validity.valid);
+    ema = lastValidIdx >= 0 ? rates[rates.length - 1 - lastValidIdx] : rates[rates.length - 1];
   }
 
   const perInterval = intervals.map((iv, i) => ({
-    key: iv.key,
-    timestamp: iv.timestamp,
-    rate: iv.flowRateDays,
-    ...results[i],
+    key: iv.key, timestamp: iv.timestamp, rate: iv.flowRateDays, ...results[i],
   }));
 
-  return { afr: ema, effectiveForecast: ema, perInterval, regimeAccepted };
+  return {
+    afr: ema, effectiveForecast: ema, perInterval, regimeAccepted,
+    mode: 'v2_active', activated: true, activationReasons: reasons,
+  };
 }

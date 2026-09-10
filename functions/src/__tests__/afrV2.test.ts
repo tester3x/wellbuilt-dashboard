@@ -5,7 +5,7 @@
 import { AFR_V2_POLICY, type AfrV2Policy } from '../afr/afrV2Policy';
 import { decideValidity } from '../afr/validity';
 import { scoreConfidence } from '../afr/confidence';
-import { computeAfrV2 } from '../afr/afrV2';
+import { computeAfrHybrid } from '../afr/afrV2';
 import { qualifyOvernight } from '../afr/onQualification';
 import { computeAfrV1FromRates } from '../afr/afrV1';
 import type { AfrInterval } from '../afr/afrTypes';
@@ -51,10 +51,10 @@ describe('CONFIDENCE — weight from consistency + timing, NEVER prediction erro
     expect(r.tier).toBe('normal');
     expect(r.weight).toBe(P.confidence.normal);
   });
-  it('slightly unusual (1.5x–<2.0x) → 0.8', () => {
+  it('slightly unusual (1.5x–<2.0x) is RETAINED at full weight (v1 parity)', () => {
     const r = scoreConfidence(iv(0.8), { medianRate: 0.5 }, P); // 1.6x
     expect(r.tier).toBe('slightlyUnusual');
-    expect(r.weight).toBeCloseTo(0.8);
+    expect(r.weight).toBeCloseTo(1.0); // retained — never an activation trigger, never down-weighted
   });
   it('questionable but plausible (>=2.0x) → low weight 0.1, NEVER 0.0', () => {
     const r = scoreConfidence(iv(1.2), { medianRate: 0.5 }, P); // 2.4x, valid
@@ -75,18 +75,61 @@ describe('CONFIDENCE — weight from consistency + timing, NEVER prediction erro
   });
 });
 
+describe('HYBRID — stable/ordinary data is v1 BYTE-IDENTICAL; weighting only on a proven condition', () => {
+  it('a clean, stable well passes through to v1 exactly (byte-identical)', () => {
+    const arr = [0.50, 0.52, 0.49, 0.51, 0.50, 0.53, 0.48, 0.50];
+    const res = computeAfrHybrid(rates(arr), P);
+    expect(res.mode).toBe('v1_passthrough');
+    expect(res.activated).toBe(false);
+    expect(res.afr).toBe(computeAfrV1FromRates(arr)); // exact equality, not close
+  });
+  it('a well with only 1.5–<2.0x readings (no >=2.0x) does NOT activate → still v1 exact', () => {
+    // 0.75 vs a ~0.5 trend is ~1.5x (IT-review tier), retained, not an anomaly.
+    const arr = [0.5, 0.5, 0.5, 0.5, 0.75, 0.5, 0.5];
+    const res = computeAfrHybrid(rates(arr), P);
+    expect(res.mode).toBe('v1_passthrough');
+    expect(res.afr).toBe(computeAfrV1FromRates(arr));
+  });
+  it('byte-identical to v1 across many clean sequences (no anomaly/invalid/change-point)', () => {
+    const seqs = [
+      [0.2, 0.21, 0.19, 0.2, 0.2], [1.0, 1.05, 0.98, 1.02, 1.0, 0.99],
+      [0.33, 0.34, 0.32, 0.33, 0.35, 0.33, 0.34, 0.32, 0.33],
+      [5, 5.2, 4.9, 5.1, 5.0], [0.8, 0.82, 0.78, 0.81, 0.79, 0.80],
+    ];
+    for (const s of seqs) {
+      const res = computeAfrHybrid(rates(s), P);
+      expect(res.mode).toBe('v1_passthrough');
+      expect(res.afr).toBe(computeAfrV1FromRates(s));
+    }
+  });
+  it('a >=2.0x anomaly activates (mode v2_active, reason anomaly)', () => {
+    const res = computeAfrHybrid(rates([0.5, 0.5, 0.5, 0.5, 0.5, 1.5]), P); // 3x
+    expect(res.mode).toBe('v2_active');
+    expect(res.activationReasons).toContain('anomaly');
+  });
+  it('an invalid observation activates (reason invalid)', () => {
+    const res = computeAfrHybrid([...rates([0.5, 0.5, 0.5, 0.5, 0.5]), iv(0)], P);
+    expect(res.activationReasons).toContain('invalid');
+  });
+  it('a sustained change-point activates (reason change_point) and does not stay v1', () => {
+    const res = computeAfrHybrid(rates([0.5, 0.5, 0.5, 0.5, 1.3, 1.3, 1.3]), P);
+    expect(res.mode).toBe('v2_active');
+    expect(res.activationReasons).toContain('change_point');
+  });
+});
+
 describe('EFFECTIVE FORECAST — weighted EMA, disturbed pulls contribute "a little piece"', () => {
   it('stable well: AFR tracks the level rate; no regime accepted', () => {
-    const res = computeAfrV2(rates([0.5, 0.5, 0.5, 0.5, 0.5, 0.5]), P);
+    const res = computeAfrHybrid(rates([0.5, 0.5, 0.5, 0.5, 0.5, 0.5]), P);
     expect(res.afr).toBeCloseTo(0.5, 6);
     expect(res.regimeAccepted).toBe(false);
     expect(res.effectiveForecast).toBe(res.afr); // washout blend gated
   });
   it('one questionable spike barely moves the trend (low weight), invalid moves it not at all', () => {
-    const base = computeAfrV2(rates([0.5, 0.5, 0.5, 0.5, 0.5]), P).afr;
-    const withSpike = computeAfrV2(rates([0.5, 0.5, 0.5, 0.5, 0.5, 1.2]), P).afr; // 2.4x valid → w 0.1
+    const base = computeAfrHybrid(rates([0.5, 0.5, 0.5, 0.5, 0.5]), P).afr;
+    const withSpike = computeAfrHybrid(rates([0.5, 0.5, 0.5, 0.5, 0.5, 1.2]), P).afr; // 2.4x valid → w 0.1
     expect(Math.abs(withSpike - base)).toBeLessThan(0.05); // nudged only a little
-    const withInvalid = computeAfrV2([...rates([0.5, 0.5, 0.5, 0.5, 0.5]), iv(0)], P).afr; // 0.0
+    const withInvalid = computeAfrHybrid([...rates([0.5, 0.5, 0.5, 0.5, 0.5]), iv(0)], P).afr; // 0.0
     expect(withInvalid).toBeCloseTo(base, 6); // zero-weight cannot steer
   });
 });
@@ -94,7 +137,7 @@ describe('EFFECTIVE FORECAST — weighted EMA, disturbed pulls contribute "a lit
 describe('CHANGE-POINT — sustained same-direction change is eventually accepted (not suppressed forever)', () => {
   it('three consecutive same-direction off-trend intervals accept the regime and restore weight', () => {
     // Stable 0.5, then a genuine step up to ~1.3 sustained for 3 pulls.
-    const res = computeAfrV2(rates([0.5, 0.5, 0.5, 0.5, 1.3, 1.3, 1.3]), P);
+    const res = computeAfrHybrid(rates([0.5, 0.5, 0.5, 0.5, 1.3, 1.3, 1.3]), P);
     expect(res.regimeAccepted).toBe(true);
     // The regime intervals were restored to full confidence → AFR moves decisively toward the new rate.
     expect(res.afr).toBeGreaterThan(0.8);
@@ -102,7 +145,7 @@ describe('CHANGE-POINT — sustained same-direction change is eventually accepte
     expect(accepted.length).toBeGreaterThanOrEqual(P.regime.acceptAfter);
   });
   it('two off-trend intervals do NOT trigger acceptance (below threshold)', () => {
-    const res = computeAfrV2(rates([0.5, 0.5, 0.5, 0.5, 1.3, 1.3]), P);
+    const res = computeAfrHybrid(rates([0.5, 0.5, 0.5, 0.5, 1.3, 1.3]), P);
     expect(res.regimeAccepted).toBe(false);
   });
 });
@@ -114,9 +157,9 @@ describe('WASHOUT window — GATED (no explicit event source)', () => {
   it('generic behavior is identical regardless of calendar position (no day-based modifier applied)', () => {
     // Same rate sequence starting on two different calendar days → identical AFR,
     // because no event-anchored window exists to change weights by date.
-    const a = computeAfrV2(rates([0.5, 0.6, 0.55, 0.5, 0.52]), P).afr;
+    const a = computeAfrHybrid(rates([0.5, 0.6, 0.55, 0.5, 0.52]), P).afr;
     seq += 100; // shift all timestamps to a different set of calendar days
-    const b = computeAfrV2(rates([0.5, 0.6, 0.55, 0.5, 0.52]), P).afr;
+    const b = computeAfrHybrid(rates([0.5, 0.6, 0.55, 0.5, 0.52]), P).afr;
     expect(a).toBeCloseTo(b, 6);
   });
 });
@@ -143,11 +186,11 @@ describe('ON qualification — separate consumer, does not alter ON', () => {
 describe('DETERMINISM — late entry / edit / delete recompute the same', () => {
   it('same intervals → identical result (order-independent of when entered)', () => {
     const base = rates([0.5, 0.6, 0.55, 0.5, 0.52, 0.51]);
-    const a = computeAfrV2(base, P);
-    const b = computeAfrV2(base.map((x) => ({ ...x, enteredAtMs: x.timestamp + 5 * DAY })), P);
+    const a = computeAfrHybrid(base, P);
+    const b = computeAfrHybrid(base.map((x) => ({ ...x, enteredAtMs: x.timestamp + 5 * DAY })), P);
     // Late entry lowers per-interval weight but the computation is deterministic
     // for identical inputs; recomputation on a fixed set is stable.
-    const c = computeAfrV2(base, P);
+    const c = computeAfrHybrid(base, P);
     expect(a.afr).toBeCloseTo(c.afr, 9);
     expect(typeof b.afr).toBe('number');
   });
@@ -162,7 +205,7 @@ describe('v1 baseline regression (extracted, byte-equivalent)', () => {
   it('v1 excludes a >=2.0x anomaly from the average; v2 keeps it at low weight', () => {
     const arr = [0.5, 0.5, 0.5, 0.5, 0.5, 2.0]; // last is 4x
     const v1 = computeAfrV1FromRates(arr);
-    const v2 = computeAfrV2(rates(arr), P).afr;
+    const v2 = computeAfrHybrid(rates(arr), P).afr;
     expect(v1).toBeLessThan(0.8);          // v1 filtered the spike out
     expect(v2).toBeLessThan(0.8);          // v2 kept it but at 0.1 weight → barely moved
   });

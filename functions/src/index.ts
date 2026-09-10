@@ -7,7 +7,7 @@ import { logCanonicalDiag } from './canonical-jobs/diag';
 import { ANTHROPIC_API_KEY, logRedacted, toSafeProviderError } from './secrets';
 import { createAnthropicClient } from './ai/anthropicClient';
 import { AFR_V2_POLICY } from './afr/afrV2Policy';
-import { computeAfrV2 } from './afr/afrV2';
+import { computeAfrHybrid } from './afr/afrV2';
 import type { AfrInterval } from './afr/afrTypes';
 import { buildProcessedRecord } from './processedRecord';
 import {
@@ -773,8 +773,10 @@ async function calculateAFR(wellName: string, newFlowRateDays: number, bblPerFoo
 
   if (intervals.length === 0) return 0;
 
-  const result = computeAfrV2(intervals, AFR_V2_POLICY);
-  console.log(`[AFR] ${wellName}: v2 afr=${result.afr.toFixed(6)} (${(result.afr * 24 * 60).toFixed(1)} min/ft) over ${intervals.length} intervals${result.regimeAccepted ? ' [regime accepted]' : ''}`);
+  // Hybrid: stable data → byte-identical v1; weighting engages only on a proven
+  // condition. No event windows are passed (no explicit event source in prod).
+  const result = computeAfrHybrid(intervals, AFR_V2_POLICY);
+  console.log(`[AFR] ${wellName}: ${result.mode} afr=${result.afr.toFixed(6)} (${(result.afr * 24 * 60).toFixed(1)} min/ft) over ${intervals.length} intervals${result.activated ? ` [activated: ${result.activationReasons.join(',')}]` : ''}`);
   return result.afr;
 }
 

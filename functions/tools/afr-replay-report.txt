@@ -1,26 +1,31 @@
-===== AFR v1 vs v2 — read-only replay (no writes) =====
-wells total: 73  | backtested (>=5 pulls): 55
-one-step-ahead predictions compared: 4855
-MAE (days/ft)  v1=0.43780  v2=0.40475  → v2 LOWER (better) by 0.03305 (-7.5%)
-per-well winner (>=3 preds):  v2 better=20  v1 better=30  tie=2
-v2 interval classification: total=742  invalid(0.0)=44  valid-but-low-weight(<0.5)=72
-wells where v2 accepted a sustained regime change: 1
+===== AFR v1 vs v2-HYBRID — read-only replay (no writes) =====
+wells total: 73 | backtested (>=5 pulls): 55 | one-step preds compared: 4855
+AGGREGATE MAE (days/ft): v1=0.43780  v2=0.40266  (-8.0%)
 
-WASHOUT WINDOWS: no explicit washout/hot-oiler/maintenance event exists in production
-  → post-washout Days 1-3 error is NOT computable and is NOT inferred (event capture required).
-  → Anthony's specific tested wells are not identifiable from the data without guessing; none singled out.
+PER-WELL MAE distribution (>=3 preds, n=52):
+  v1: median=0.1946 p90=1.6816 mean=0.8711
+  v2: median=0.2230 p90=1.7658 mean=0.8758
+  per-well winner: v2 better=20  v1 better=26  tie(identical)=6
 
-Top wells where v2 improves one-step MAE:
-  Gabriel 4              n=196 preds=192 maeV1=2.2263 maeV2=0.2551 finalV1=0.1998 finalV2=0.2375
-  Culverine              n=  7 preds=  3 maeV1=10.5607 maeV2=10.4215 finalV1=2.4876 finalV2=3.8074
-  Hercules 4 SOG         n=  7 preds=  3 maeV1=1.0919 maeV2=0.9795 finalV1=3.8983 finalV2=3.7248
-  Crossbow 1             n= 45 preds= 41 maeV1=2.0714 maeV2=1.9803 finalV1=0.5003 finalV2=0.5845
-  Rennerfelt 1           n= 41 preds= 37 maeV1=0.1892 maeV2=0.1328 finalV1=0.7045 finalV2=0.7128
-  Gunslinger 5           n= 58 preds= 54 maeV1=0.1747 maeV2=0.1212 finalV1=0.1369 finalV2=0.1342
-  Gunslinger 3           n= 98 preds= 94 maeV1=0.1299 maeV2=0.0778 finalV1=0.1056 finalV2=0.1445
-  Stiletto               n= 11 preds=  7 maeV1=2.1314 maeV2=2.1057 finalV1=6.2306 finalV2=6.0070
-Wells where v2 regresses one-step MAE most:
-  Dagger 1               n= 47 preds= 43 maeV1=11.1787 maeV2=12.2940 finalV1=3.3473 finalV2=3.4152 [regime]
-  Gabriel 3              n=194 preds=190 maeV1=1.4095 maeV2=1.8477 finalV1=0.4369 finalV2=0.4662
-  Pesek 10               n= 83 preds= 79 maeV1=0.2223 maeV2=0.6104 finalV1=0.3773 finalV2=0.3774
-  Test Well              n= 73 preds= 69 maeV1=0.3176 maeV2=0.5209 finalV1=0.4635 finalV2=0.1904
+ACTIVATION: 3211/4855 backtest steps activated (66.1%); wells that ever activated: 44/55
+BYTE-IDENTICAL: 11/55 wells' final AFR is v1_passthrough and === computeAfrV1FromRates exactly
+
+WORST REGRESSIONS (v2 - v1, days/ft) — all should be activated wells:
+  Dagger 1             delta=+1.0784 maeV1=11.1787 maeV2=12.2571 activation=95%
+  Gabriel 3            delta=+0.4358 maeV1=1.4095 maeV2=1.8454 activation=91%
+  Pesek 10             delta=+0.3560 maeV1=0.2223 maeV2=0.5783 activation=62%
+  Test Well            delta=+0.2023 maeV1=0.3176 maeV2=0.5199 activation=100%
+  AddedTest            delta=+0.1202 maeV1=0.9466 maeV2=1.0668 activation=100%
+BIGGEST IMPROVEMENTS (v1 - v2):
+  Gabriel 4            delta=-1.9734 maeV1=2.2263 maeV2=0.2530 activation=76%
+  Culverine            delta=-0.1392 maeV1=10.5607 maeV2=10.4215 activation=100%
+  Crossbow 1           delta=-0.0989 maeV1=2.0714 maeV2=1.9725 activation=83%
+  Rennerfelt 1         delta=-0.0600 maeV1=0.1892 maeV2=0.1292 activation=41%
+  Gunslinger 3         delta=-0.0540 maeV1=0.1299 maeV2=0.0759 activation=100%
+
+RECONCILE: backtested 55 = winner-tallied 52 (>=3 preds) + 3 with <3 comparable preds:
+  Boomerang            pulls=6 comparable-preds=2
+  Matador 1            pulls=5 comparable-preds=1
+  Dirk                 pulls=5 comparable-preds=1
+
+WASHOUT: no explicit event source in production → Days 1-3 windows N/A, not inferred. Anthony wells not identifiable without guessing; none singled out.
