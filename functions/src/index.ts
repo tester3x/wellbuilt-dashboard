@@ -3030,87 +3030,99 @@ async function fetchDieselFromEIA(doeRegion: string): Promise<{ price: number; d
   }
 }
 
+export async function runWeeklyDieselFetch(firestore: admin.firestore.Firestore): Promise<{ totalCompanies: number; updated: number }> {
+  console.log('[DieselFetch] Starting weekly diesel price update...');
+
+  // Get all companies that have a doeRegion configured
+  const companiesSnap = await firestore.collection('companies').get();
+  const companies: { id: string; doeRegion: string; name: string }[] = [];
+
+  companiesSnap.forEach(doc => {
+    const data = doc.data();
+    const region = data.doeRegion || (data.state ? STATE_TO_PADD[data.state.toUpperCase()] : null);
+    if (region) {
+      companies.push({ id: doc.id, doeRegion: region, name: data.name || doc.id });
+    }
+  });
+
+  if (companies.length === 0) {
+    console.log('[DieselFetch] No companies with doeRegion configured, skipping');
+    return { totalCompanies: 0, updated: 0 };
+  }
+
+  console.log(`[DieselFetch] Fetching prices for ${companies.length} companies`);
+
+  // Group by region to avoid duplicate API calls
+  const regionMap = new Map<string, string[]>();
+  for (const co of companies) {
+    const existing = regionMap.get(co.doeRegion) || [];
+    existing.push(co.id);
+    regionMap.set(co.doeRegion, existing);
+  }
+
+  // Fetch once per unique region
+  const regionPrices = new Map<string, { price: number; date: string }>();
+  for (const [region] of regionMap) {
+    const result = await fetchDieselFromEIA(region);
+    if (result) {
+      regionPrices.set(region, result);
+      console.log(`[DieselFetch] ${region}: $${result.price} (${result.date})`);
+    }
+  }
+
+  // Update each company
+  let updated = 0;
+  for (const co of companies) {
+    const priceData = regionPrices.get(co.doeRegion);
+    if (!priceData) continue;
+
+    // Check if price already saved for this date (idempotent)
+    const existingSnap = await firestore.collection('diesel_prices')
+      .where('companyId', '==', co.id)
+      .where('date', '==', priceData.date)
+      .limit(1)
+      .get();
+
+    if (!existingSnap.empty) {
+      console.log(`[DieselFetch] ${co.name}: Already has price for ${priceData.date}, skipping`);
+      continue;
+    }
+
+    // Save to price history
+    await firestore.collection('diesel_prices').add({
+      companyId: co.id,
+      price: priceData.price,
+      date: priceData.date,
+      source: 'EIA Auto-Fetch',
+      updatedBy: 'system',
+      createdAt: admin.firestore.Timestamp.now(),
+    });
+
+    // Update company's current price
+    await firestore.collection('companies').doc(co.id).update({
+      currentDieselPrice: priceData.price,
+      currentPriceDate: priceData.date,
+    });
+
+    updated++;
+    console.log(`[DieselFetch] ${co.name}: Updated to $${priceData.price}`);
+  }
+
+  console.log(`[DieselFetch] Complete. Updated ${updated}/${companies.length} companies.`);
+  return { totalCompanies: companies.length, updated };
+}
+
 export const weeklyDieselPriceFetch = functionsV2.onSchedule(
   { schedule: 'every tuesday 16:00', timeZone: 'UTC' },
   async () => {
-    console.log('[DieselFetch] Starting weekly diesel price update...');
-    const firestore = admin.firestore();
+    await runWeeklyDieselFetch(admin.firestore());
+  }
+);
 
-    // Get all companies that have a doeRegion configured
-    const companiesSnap = await firestore.collection('companies').get();
-    const companies: { id: string; doeRegion: string; name: string }[] = [];
-
-    companiesSnap.forEach(doc => {
-      const data = doc.data();
-      const region = data.doeRegion || (data.state ? STATE_TO_PADD[data.state.toUpperCase()] : null);
-      if (region) {
-        companies.push({ id: doc.id, doeRegion: region, name: data.name || doc.id });
-      }
-    });
-
-    if (companies.length === 0) {
-      console.log('[DieselFetch] No companies with doeRegion configured, skipping');
-      return;
-    }
-
-    console.log(`[DieselFetch] Fetching prices for ${companies.length} companies`);
-
-    // Group by region to avoid duplicate API calls
-    const regionMap = new Map<string, string[]>();
-    for (const co of companies) {
-      const existing = regionMap.get(co.doeRegion) || [];
-      existing.push(co.id);
-      regionMap.set(co.doeRegion, existing);
-    }
-
-    // Fetch once per unique region
-    const regionPrices = new Map<string, { price: number; date: string }>();
-    for (const [region] of regionMap) {
-      const result = await fetchDieselFromEIA(region);
-      if (result) {
-        regionPrices.set(region, result);
-        console.log(`[DieselFetch] ${region}: $${result.price} (${result.date})`);
-      }
-    }
-
-    // Update each company
-    let updated = 0;
-    for (const co of companies) {
-      const priceData = regionPrices.get(co.doeRegion);
-      if (!priceData) continue;
-
-      // Check if price already saved for this date (idempotent)
-      const existingSnap = await firestore.collection('diesel_prices')
-        .where('companyId', '==', co.id)
-        .where('date', '==', priceData.date)
-        .limit(1)
-        .get();
-
-      if (!existingSnap.empty) {
-        console.log(`[DieselFetch] ${co.name}: Already has price for ${priceData.date}, skipping`);
-        continue;
-      }
-
-      // Save to price history
-      await firestore.collection('diesel_prices').add({
-        companyId: co.id,
-        price: priceData.price,
-        date: priceData.date,
-        source: 'EIA Auto-Fetch',
-        updatedBy: 'system',
-        createdAt: admin.firestore.Timestamp.now(),
-      });
-
-      // Update company's current price
-      await firestore.collection('companies').doc(co.id).update({
-        currentDieselPrice: priceData.price,
-      });
-
-      updated++;
-      console.log(`[DieselFetch] ${co.name}: Updated to $${priceData.price}`);
-    }
-
-    console.log(`[DieselFetch] Complete. Updated ${updated}/${companies.length} companies.`);
+export const weeklyDieselPriceCatchupFetch = functionsV2.onSchedule(
+  { schedule: 'every wednesday 16:00', timeZone: 'UTC' },
+  async () => {
+    await runWeeklyDieselFetch(admin.firestore());
   }
 );
 
@@ -5059,6 +5071,8 @@ export {
   commitDriverPhotoUpload,
   // Secure cold-start session verification (side-effect free)
   verifyDriverSession,
+  // Governed Fuel Prices mutation (Save Price)
+  staffSaveDieselPrice,
 } from './security';
 
 // ── vc51.9J: WB-S -> WB-T SSO authorization-code bridge ────────────────────

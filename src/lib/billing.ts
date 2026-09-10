@@ -1,5 +1,6 @@
-import { getFirestoreDb } from './firebase';
+import { getFirestoreDb, getFirebaseFunctions } from './firebase';
 import { collection, getDocs, query, where, orderBy, Timestamp, doc, setDoc, updateDoc, getDoc, deleteDoc } from 'firebase/firestore';
+import { httpsCallable } from 'firebase/functions';
 import { type CompanyConfig, type OperatorBillingConfig } from './companySettings';
 import { lookupRate, getEffectiveRate, formatCurrency, type PayPeriod, type CompanyRateSheets } from './payroll';
 
@@ -537,51 +538,23 @@ export async function saveDieselPrice(
   companyId: string,
   price: number,
   source: string,
-  updatedBy: string,
+  _updatedBy: string,
   /** Optional date override (YYYY-MM-DD). EIA fetches should pass the EIA period date, not today. */
   dateOverride?: string
 ): Promise<void> {
-  const db = getFirestoreDb();
+  const functions = getFirebaseFunctions();
+  const fn = httpsCallable<
+    { targetCompanyId: string; price: number; date: string; source: string },
+    { ok: boolean; isCurrent: boolean; docId: string; fscRate: number | null; fscUnit: string | null }
+  >(functions, 'staffSaveDieselPrice');
+
   const today = dateOverride || new Date().toISOString().split('T')[0];
-
-  // Check if we already have a price for this company today — one save per day
-  const existingSnap = await getDocs(
-    query(
-      collection(db, 'diesel_prices'),
-      where('companyId', '==', companyId),
-      where('date', '==', today)
-    )
-  );
-
-  if (existingSnap.empty) {
-    // First save today — create new history entry
-    const priceRef = doc(collection(db, 'diesel_prices'));
-    await setDoc(priceRef, {
-      companyId,
-      price,
-      date: today,
-      source,
-      updatedBy,
-      createdAt: Timestamp.now(),
-    });
-  } else {
-    // Already saved today — update existing entry
-    const existingDoc = existingSnap.docs[0];
-    await updateDoc(existingDoc.ref, {
-      price,
-      source,
-      updatedBy,
-      updatedAt: Timestamp.now(),
-    });
-  }
-
-  // Only update company's current price if this is the most recent entry
-  const todayStr = new Date().toISOString().split('T')[0];
-  if (today >= todayStr || !dateOverride) {
-    await updateDoc(doc(db, 'companies', companyId), {
-      currentDieselPrice: price,
-    });
-  }
+  await fn({
+    targetCompanyId: companyId,
+    price,
+    date: today,
+    source,
+  });
 }
 
 // ─── EIA API — Auto-fetch diesel prices ─────────────────────────────────────

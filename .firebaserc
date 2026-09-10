@@ -1,5 +1,14 @@
 {
   "projects": {
     "default": "wellbuilt-sync"
+  },
+  "targets": {
+    "wellbuilt-sync": {
+      "hosting": {
+        "dashboard": [
+          "wellbuilt-sync"
+        ]
+      }
+    }
   }
 }
