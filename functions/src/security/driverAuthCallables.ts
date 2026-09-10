@@ -20,6 +20,9 @@ import { checkRateLimit, hashIp } from './rateLimit';
 import { writeSecurityAudit } from './audit';
 import { requireManageDrivers, requirePlatformAdmin } from './adminAuth';
 import { resolveCompanyJoinCode } from './companyOnboarding';
+import { runCustomerOwnedUpgrade } from './operational/customerOwnedUpgrade';
+import { productionUpgradeStore } from './operational/customerOwnedUpgradeStore';
+import { decideLegacyBinding } from './operational/legacyBindingDecision';
 import {
   PENDING_REGISTRATION_TTL_MS,
   isPendingExpired,
@@ -580,6 +583,14 @@ export const adminApproveDriverRegistration = httpsV2.onCall(
       assignedCustomers?: { name: string; companyId: string }[];
       assignedRoutes?: string[];
       roles?: string[];
+      /**
+       * Recurrence prevention: when this approval REPLACES a known legacy login
+       * (e.g. a re-registration), the admin passes the exact prior legacy
+       * approved key. After provisioning, it is bound to the fresh canonical
+       * UUID via the governed upgrade path so future dispatches/entitlements
+       * resolve canonically — no manual hydrate, no display-name inference.
+       */
+      legacyApprovedKey?: string;
     };
     const pendingId = String(data.pendingId || '').trim();
     if (!pendingId) {
@@ -838,14 +849,61 @@ export const adminApproveDriverRegistration = httpsV2.onCall(
       }
     }
 
+    // ── Recurrence prevention: optional atomic legacy→canonical binding ──────
+    // A replacement approval may carry the exact prior legacy approved key. When
+    // present, bind it to the freshly-provisioned canonical UUID via the SAME
+    // governed upgrade path staffHydrateCanonicalIdentity uses (writes the
+    // binding + trusted history + retires the legacy login, atomically and
+    // idempotently). Company-scoped: a key from another company is refused.
+    // Binding is reported, never inferred by display name. On a binding failure
+    // the driver is still provisioned and can sign in; the outcome is surfaced
+    // so an admin can retry via Hydrate Identity — we never pretend it bound.
+    let binding: { attempted: boolean; status?: string; reason?: string } = { attempted: false };
+    const legacyApprovedKey = String(data.legacyApprovedKey || '').trim();
+    if (legacyApprovedKey) {
+      const bindStore = productionUpgradeStore(fs(), rtdb());
+      const legacyRow = await bindStore.readApproved(legacyApprovedKey);
+      const decision = decideLegacyBinding({
+        legacyApprovedKey,
+        approvalCompanyId: companyId,
+        legacyRow: (legacyRow as Record<string, unknown> | null) ?? null,
+      });
+      if (decision.action === 'refuse') {
+        if (decision.code === 'malformed') {
+          throw new httpsV2.HttpsError('invalid-argument', 'legacy_approved_key_malformed');
+        }
+        if (decision.code === 'missing_row') {
+          throw new httpsV2.HttpsError('not-found', 'legacy_approved_row_missing');
+        }
+        throw new httpsV2.HttpsError('permission-denied', 'legacy_key_company_mismatch');
+      }
+      const upgrade = await runCustomerOwnedUpgrade(bindStore, {
+        provenApprovedKey: legacyApprovedKey,
+        displayName: pending.displayName,
+        callerUid: caller.uid,
+        opId: randomUUID(),
+        existingDriverId: driverId,
+        skipCredentialWrite: true,
+      });
+      binding = { attempted: true, status: upgrade.status, reason: upgrade.reason };
+      await writeSecurityAudit({
+        action: upgrade.status === 'ok' && upgrade.terminalProven
+          ? 'adminApproveDriverRegistration_bind'
+          : 'adminApproveDriverRegistration_bind_incomplete',
+        actorUid: caller.uid,
+        driverId,
+        detail: { status: upgrade.status, reason: upgrade.reason, terminalProven: upgrade.terminalProven },
+      });
+    }
+
     await writeSecurityAudit({
       action: 'adminApproveDriverRegistration',
       actorUid: caller.uid,
       driverId,
-      detail: { companyId, shiftAuthority: authorityOutcomeLabel },
+      detail: { companyId, shiftAuthority: authorityOutcomeLabel, bindingAttempted: binding.attempted },
     });
 
-    return { driverId, displayName: pending.displayName, companyId, companyName };
+    return { driverId, displayName: pending.displayName, companyId, companyName, binding };
   },
 );
 
