@@ -5054,6 +5054,9 @@ export {
   upsertDriverDispatch,
   sendChatMessage,
   getPublicClientMeta,
+  listDispatchPhotoReviews,
+  reviewDispatchPhoto,
+  commitDriverPhotoUpload,
   // Secure cold-start session verification (side-effect free)
   verifyDriverSession,
 } from './security';

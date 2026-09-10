@@ -28,3 +28,6 @@ export {
   sendChatMessage,
 } from './invoiceOps';
 export { getPublicClientMeta } from './publicMeta';
+export { listDispatchPhotoReviews } from './listDispatchPhotoReviews';
+export { reviewDispatchPhoto } from './reviewDispatchPhoto';
+export { commitDriverPhotoUpload } from './commitDriverPhotoUpload';

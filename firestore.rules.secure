@@ -179,6 +179,13 @@ service cloud.firestore {
       allow read: if isDashboard();
       allow write: if false;
     }
+    // Photo Review sidecar — Admin SDK callables only. Catch-all also denies.
+    match /dispatchPhotoReviews/{id} {
+      allow read, write: if false;
+    }
+    match /dispatchPhotoReviewEvents/{id} {
+      allow read, write: if false;
+    }
     match /daps_waitlist/{id} {
       allow read: if false;
       allow create: if true;

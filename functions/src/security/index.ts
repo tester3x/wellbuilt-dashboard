@@ -60,6 +60,9 @@ export {
   upsertDriverDispatch,
   sendChatMessage,
   getPublicClientMeta,
+  listDispatchPhotoReviews,
+  reviewDispatchPhoto,
+  commitDriverPhotoUpload,
 } from './operational';
 
 /** Authenticated cold-start secure session verification (side-effect free). */

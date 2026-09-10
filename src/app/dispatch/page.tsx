@@ -1,6 +1,6 @@
 'use client';
 
-import { useEffect, useState, useMemo, useCallback, Suspense } from 'react';
+import { useEffect, useState, useMemo, useCallback, useRef, Suspense } from 'react';
 import { useRouter, useSearchParams } from 'next/navigation';
 import { useAuth } from '@/contexts/AuthContext';
 import { WellResponse, subscribeToWellStatusesUnified, wellResponsesFromCatalog } from '@/lib/wells';
@@ -489,9 +489,11 @@ function DispatchPageInner() {
   useEffect(() => {
     const tab = searchParams.get('tab');
     const highlight = searchParams.get('highlight');
-    if (tab === 'completed') {
+    const invoice = searchParams.get('invoice');
+    if (tab === 'completed' || invoice) {
       setRightPanelTab('completed');
       if (highlight) setHighlightJobId(highlight);
+      if (invoice) setHighlightJobId(invoice);
     } else if (tab === 'projects') {
       setRightPanelTab('projects');
     }
@@ -4243,6 +4245,7 @@ function CompletedJobsPanel({ jobs, drivers, allWells, allDisposals, highlightJo
   const [showWellDropdown, setShowWellDropdown] = useState(false);
   const [showDisposalDropdown, setShowDisposalDropdown] = useState(false);
   const [ticketDetailJobId, setTicketDetailJobId] = useState<string | null>(null);
+  const invoiceDeepLinkOpened = useRef(false);
 
   // Auto-expand highlighted job from notification deep link
   useEffect(() => {
@@ -4252,6 +4255,16 @@ function CompletedJobsPanel({ jobs, drivers, allWells, allDisposals, highlightJo
       // Clear highlight after 5 seconds
       const timer = setTimeout(() => onHighlightClear?.(), 5000);
       return () => clearTimeout(timer);
+    }
+  }, [highlightJobId, jobs]);
+
+  useEffect(() => {
+    if (!highlightJobId || invoiceDeepLinkOpened.current) return;
+    const match = jobs.find((j) => j.id === highlightJobId || j.invoiceDocId === highlightJobId);
+    if (match?.invoiceDocId || highlightJobId) {
+      invoiceDeepLinkOpened.current = true;
+      setDateRange('all');
+      void loadTicketDetail(match?.invoiceNumber || '', match?.id || highlightJobId, match?.invoiceDocId || highlightJobId);
     }
   }, [highlightJobId, jobs]);
   const [ticketDetailData, setTicketDetailData] = useState<any>(null);
