@@ -67,3 +67,6 @@ export {
 
 /** Authenticated cold-start secure session verification (side-effect free). */
 export { verifyDriverSession } from './verifyDriverSession';
+
+/** Governed Fuel Prices mutation (Save Price) */
+export { staffSaveDieselPrice } from './dieselPriceMutations';
