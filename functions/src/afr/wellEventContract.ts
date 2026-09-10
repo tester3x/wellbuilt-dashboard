@@ -65,7 +65,19 @@ export type WellEventDecision =
 const COMPANY_ID_RE = /^[a-z0-9][a-z0-9_-]{0,119}$/i; // slug
 // RTDB-key-safe well key: forbids . $ # [ ] / and control chars; trims required.
 const WELL_KEY_RE = /^[^.$#/\[\]\x00-\x1f]{1,256}$/;
-const IANA_TZ_RE = /^[A-Za-z][A-Za-z0-9_+-]*(?:\/[A-Za-z0-9_+-]+)+$/;
+
+/** True iff `tz` is a real IANA zone (dependency-free: Intl throws RangeError on
+ *  an unknown zone). Fails closed for '', non-strings, 'Chicago', 'America/Nowhere'. */
+export function isValidIanaTimezone(tz: unknown): boolean {
+  if (typeof tz !== 'string' || !tz) return false;
+  try {
+    // eslint-disable-next-line no-new
+    new Intl.DateTimeFormat('en-US', { timeZone: tz });
+    return true;
+  } catch {
+    return false;
+  }
+}
 // A washout is an OBSERVED event, not a scheduled one — reject anything beyond a
 // small clock-skew allowance. Backdated events remain permitted (and audited).
 const MAX_FUTURE_MS = 5 * 60 * 1000;
@@ -113,7 +125,8 @@ export function validateAndBuildWellEvent(
   if (input.occurredAtUtc > ctx.serverNowMs + MAX_FUTURE_MS) {
     return { ok: false, code: 'invalid-argument', reason: 'occurred_at_in_future' };
   }
-  if (!IANA_TZ_RE.test(ctx.timeZone)) return { ok: false, code: 'invalid-argument', reason: 'timezone_unresolved' };
+  // Require an explicit, REAL IANA zone (not just a plausible-looking string).
+  if (!isValidIanaTimezone(ctx.timeZone)) return { ok: false, code: 'invalid-argument', reason: 'timezone_unresolved' };
 
   for (const [k, v] of [['freshWaterBbls', input.freshWaterBbls], ['saltWaterBbls', input.saltWaterBbls]] as const) {
     if (v !== undefined && (!Number.isFinite(v) || (v as number) < 0)) {

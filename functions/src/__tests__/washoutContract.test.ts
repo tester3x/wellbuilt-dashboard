@@ -8,7 +8,7 @@ import { computeAfrEventGated } from '../afr/afrEventGated';
 import { computeAfrV1FromRates } from '../afr/afrV1';
 import {
   validateAndBuildWellEvent, reconcileWellEventIdempotency, wellEventPayloadDigest,
-  decideVoidWellEvent, isWellEventActive,
+  decideVoidWellEvent, isWellEventActive, isValidIanaTimezone,
   type WellEventInput, type WellEventRecord,
 } from '../afr/wellEventContract';
 import type { AfrInterval } from '../afr/afrTypes';
@@ -129,7 +129,10 @@ describe('event contract — governed, canonical ids, tz snapshot, idempotency',
     expect(validateAndBuildWellEvent({ ...base, occurredAtUtc: NaN }, driver, ctx)).toMatchObject({ ok: false });
     expect(validateAndBuildWellEvent({ ...base, occurredAtUtc: 0 }, driver, ctx)).toMatchObject({ ok: false, reason: 'occurred_at_missing_or_invalid' });
     expect(validateAndBuildWellEvent({ ...base, occurredAtUtc: ctx.serverNowMs + 5 * DAY }, driver, ctx)).toMatchObject({ ok: false, reason: 'occurred_at_in_future' });
-    expect(validateAndBuildWellEvent(base, driver, { ...ctx, timeZone: 'Chicago' })).toMatchObject({ ok: false, reason: 'timezone_unresolved' });
+    expect(validateAndBuildWellEvent(base, driver, { ...ctx, timeZone: 'Chicago' })).toMatchObject({ ok: false, reason: 'timezone_unresolved' });        // not a zone
+    expect(validateAndBuildWellEvent(base, driver, { ...ctx, timeZone: 'America/Nowhere' })).toMatchObject({ ok: false, reason: 'timezone_unresolved' }); // fake IANA
+    expect(validateAndBuildWellEvent(base, driver, { ...ctx, timeZone: '' })).toMatchObject({ ok: false, reason: 'timezone_unresolved' });                // empty (no fallback)
+    expect(validateAndBuildWellEvent(base, driver, { ...ctx, timeZone: 'America/Denver' }).ok).toBe(true);                                                 // valid IANA
   });
   it('well must exist in the company', () => {
     expect(validateAndBuildWellEvent(base, driver, { ...ctx, wellExists: false })).toMatchObject({ ok: false, code: 'not-found' });
@@ -162,6 +165,16 @@ describe('event contract — governed, canonical ids, tz snapshot, idempotency',
 });
 
 describe('timezone resolver, void, and active-event filtering', () => {
+  it('isValidIanaTimezone accepts real zones and fails closed on bad/empty ones', () => {
+    expect(isValidIanaTimezone('America/Chicago')).toBe(true);
+    expect(isValidIanaTimezone('America/Denver')).toBe(true);
+    expect(isValidIanaTimezone('UTC')).toBe(true);
+    expect(isValidIanaTimezone('Chicago')).toBe(false);
+    expect(isValidIanaTimezone('America/Nowhere')).toBe(false);
+    expect(isValidIanaTimezone('')).toBe(false);
+    expect(isValidIanaTimezone(undefined)).toBe(false);
+  });
+
   it('occurredAtUtc within the 5-min skew is accepted; beyond it is rejected (observed, not scheduled)', () => {
     const ctx = { serverNowMs: Date.parse('2026-08-23T19:00:00Z'), timeZone: TZ, wellExists: true };
     const driver = { uid: 'd', companyId: 'liquid-gold', isPlatformAdmin: false, role: 'driver' as const };
