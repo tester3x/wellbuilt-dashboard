@@ -11,7 +11,7 @@ import { computeAfrEventGated } from './afr/afrEventGated';
 import type { EventWindow } from './afr/afrV2';
 import type { AfrInterval } from './afr/afrTypes';
 import { activeWashoutEvents, buildWashoutWindows, type WashoutEvent } from './afr/washoutWindow';
-import { resolveTimeZoneForState } from './afr/wellEventContract';
+import { decideRecomputeClaim, type RecomputeStatus } from './afr/recomputeClaim';
 import { buildProcessedRecord } from './processedRecord';
 import {
   ambiguousEditVerdict,
@@ -712,8 +712,8 @@ async function resolveCompanyTimeZone(companyId: string): Promise<string> {
     const snap = await admin.firestore().collection('companies').doc(companyId).get();
     const data = snap.exists ? (snap.data() || {}) : {};
     const explicit = data.timezone || data.ianaTimezone;
-    if (typeof explicit === 'string' && explicit) return explicit;
-    return resolveTimeZoneForState(data.state);
+    // REQUIRE explicit companies/{companyId}.timezone — no state fallback.
+    return typeof explicit === 'string' ? explicit : '';
   } catch {
     return '';
   }
@@ -845,6 +845,95 @@ async function calculateAFR(
   console.log(`[AFR] ${wellName}: ${result.mode} afr=${result.afr.toFixed(6)} (${(result.afr * 24 * 60).toFixed(1)} min/ft) over ${intervals.length} intervals${result.mode === 'washout_recovery' ? ` [washout D${result.washoutDayIndex}]` : ''}`);
   return result.afr;
 }
+
+/**
+ * Targeted per-well recompute: re-run the event-gated AFR for the well's LATEST
+ * pull (reusing calculateAFR) and rewrite only the AFR-derived fields on that
+ * well's outgoing row. On void the well has no active event → calculateAFR
+ * returns v1 → the exact event-free v1 result is restored. Single-well only —
+ * never scans all companies/wells. Writes outgoing (not incoming/requests) so it
+ * cannot re-trigger the pull processor or itself.
+ */
+async function recomputeWellAfrOutgoing(companyId: string, wellKey: string): Promise<{ recomputed: boolean; afr: number; reason: string }> {
+  const snap = await db.ref('packets/processed').orderByChild('wellName').equalTo(wellKey).once('value');
+  let latest: PullPacket | null = null;
+  let latestTs = -Infinity;
+  snap.forEach((c) => {
+    const d = c.val();
+    const k = c.key || '';
+    if (k.startsWith('edit_') || k.startsWith('delete_') || k.startsWith('history_')) return;
+    if (!(d.flowRateDays > 0)) return;
+    const ts = d.dateTimeUTC ? new Date(d.dateTimeUTC).getTime() : 0;
+    if (ts > latestTs) { latestTs = ts; latest = d; }
+  });
+  if (!latest) return { recomputed: false, afr: 0, reason: 'no_pulls' };
+  const lp = latest as PullPacket;
+
+  const cfg = (await db.ref(`well_config/${wellKey}`).once('value')).val() || {};
+  const tanks = cfg.tanks || cfg.numTanks || DEFAULTS.tanks;
+  const bblPerFoot = Number(cfg.bblPerFoot) > 0 ? Number(cfg.bblPerFoot) : tanks * 20;
+
+  // newFlowRateDays = 0: the latest pull is ALREADY in packets/processed here
+  // (unlike processIncomingPull, where the new pull is not yet stored), so we do
+  // NOT re-append it. observation time = the latest pull's timestamp.
+  void lp;
+  const afr = await calculateAFR(wellKey, 0, bblPerFoot, companyId, latestTs);
+
+  const outSnap = await db.ref('packets/outgoing').orderByChild('wellName').equalTo(wellKey).limitToLast(1).once('value');
+  let outKey: string | null = null;
+  outSnap.forEach((o) => { outKey = o.key; });
+  if (outKey) {
+    await db.ref(`packets/outgoing/${outKey}`).update({
+      flowRate: afr > 0 ? daysToHMMSS(afr) : 'Unknown',
+      bbls24hrs: afr > 0 ? Math.round((1 / afr) * bblPerFoot) : 0,
+    });
+  }
+  return { recomputed: true, afr, reason: outKey ? 'ok' : 'no_outgoing' };
+}
+
+/**
+ * Consumer of targeted recompute requests. Triggered by record/void writing
+ * well_recompute_requests/{companyId}/{wellKey}. Claims via a transaction on a
+ * SEPARATE status node (no recursion), prevents concurrent/duplicate recompute
+ * (idempotent by requestedAtUtc version), and records completed/failed server
+ * timestamps.
+ */
+/** Testable body of the recompute consumer: claim (idempotent by version, no
+ *  concurrent double recompute) → targeted recompute → completed/failed status.
+ *  Writes only well_recompute_status + outgoing → no self-retrigger. */
+export async function runWellRecompute(
+  companyId: string,
+  wellKey: string,
+  after: { requestedAtUtc?: unknown; byEventId?: unknown } | null,
+): Promise<'skipped' | 'completed' | 'failed'> {
+  if (!after || !Number.isFinite(Number(after.requestedAtUtc))) return 'skipped';
+  const version = Number(after.requestedAtUtc);
+  const statusRef = db.ref(`well_recompute_status/${companyId}/${wellKey}`);
+  const claim = await statusRef.transaction((cur: RecomputeStatus | null) => {
+    if (decideRecomputeClaim(cur, version) === 'skip') return; // abort — no double recompute
+    return { status: 'processing', forRequestedAtUtc: version, claimedAtUtc: Date.now(), byEventId: after.byEventId || null };
+  });
+  if (!claim.committed) return 'skipped';
+  try {
+    const r = await recomputeWellAfrOutgoing(companyId, wellKey);
+    await statusRef.update({ status: 'completed', forRequestedAtUtc: version, completedAtUtc: Date.now(), afr: r.afr, reason: r.reason });
+    return 'completed';
+  } catch (err) {
+    await statusRef.update({ status: 'failed', forRequestedAtUtc: version, failedAtUtc: Date.now(), error: String((err as Error)?.message || err).slice(0, 200) });
+    return 'failed';
+  }
+}
+
+/**
+ * Consumer of targeted recompute requests. Triggered by record/void writing
+ * well_recompute_requests/{companyId}/{wellKey}. Delegates to runWellRecompute.
+ */
+export const processWellRecomputeRequest = functionsV1.database
+  .ref('well_recompute_requests/{companyId}/{wellKey}')
+  .onWrite(async (change, context) => {
+    await runWellRecompute(context.params.companyId as string, context.params.wellKey as string, change.after.val());
+    return null;
+  });
 
 // Main function: Process incoming pull packets
 export const processIncomingPull = functionsV1.database

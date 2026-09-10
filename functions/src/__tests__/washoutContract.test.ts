@@ -8,7 +8,7 @@ import { computeAfrEventGated } from '../afr/afrEventGated';
 import { computeAfrV1FromRates } from '../afr/afrV1';
 import {
   validateAndBuildWellEvent, reconcileWellEventIdempotency, wellEventPayloadDigest,
-  decideVoidWellEvent, isWellEventActive, resolveTimeZoneForState,
+  decideVoidWellEvent, isWellEventActive,
   type WellEventInput, type WellEventRecord,
 } from '../afr/wellEventContract';
 import type { AfrInterval } from '../afr/afrTypes';
@@ -162,11 +162,13 @@ describe('event contract — governed, canonical ids, tz snapshot, idempotency',
 });
 
 describe('timezone resolver, void, and active-event filtering', () => {
-  it('resolveTimeZoneForState maps company state → IANA (never a global hardcode); unknown → empty', () => {
-    expect(resolveTimeZoneForState('ND')).toBe('America/Chicago'); // liquid-gold (state ND) fallback
-    expect(resolveTimeZoneForState('MT')).toBe('America/Denver');
-    expect(resolveTimeZoneForState('ZZ')).toBe('');               // unknown → fail closed
-    expect(resolveTimeZoneForState(undefined)).toBe('');
+  it('occurredAtUtc within the 5-min skew is accepted; beyond it is rejected (observed, not scheduled)', () => {
+    const ctx = { serverNowMs: Date.parse('2026-08-23T19:00:00Z'), timeZone: TZ, wellExists: true };
+    const driver = { uid: 'd', companyId: 'liquid-gold', isPlatformAdmin: false, role: 'driver' as const };
+    const b = { eventId: 'e', companyId: 'liquid-gold', wellKey: 'Gabriel 4', type: 'hot_oiler_washout' as const };
+    expect(validateAndBuildWellEvent({ ...b, occurredAtUtc: ctx.serverNowMs + 2 * 60 * 1000 }, driver, ctx).ok).toBe(true);   // within skew
+    expect(validateAndBuildWellEvent({ ...b, occurredAtUtc: ctx.serverNowMs + 10 * 60 * 1000 }, driver, ctx)).toMatchObject({ ok: false, reason: 'occurred_at_in_future' });
+    expect(validateAndBuildWellEvent({ ...b, occurredAtUtc: ctx.serverNowMs - 30 * 86400000 }, driver, ctx).ok).toBe(true);   // backdated allowed
   });
 
   const rec = (over: Partial<WellEventRecord> = {}): WellEventRecord => ({

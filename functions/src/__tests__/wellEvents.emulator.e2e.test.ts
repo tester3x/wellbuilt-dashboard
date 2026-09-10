@@ -40,14 +40,15 @@ describeE2E('emulator: recordWellEvent / voidWellEvent', () => {
     await admin.database().ref('well_events').set(null);
     await admin.database().ref('well_recompute_requests').set(null);
     await admin.database().ref(`companyWells/${C}/${WELL}`).set(true);       // well exists
-    await admin.firestore().collection('companies').doc(C).set({ state: 'ND' }); // tz via state fallback
+    await admin.firestore().collection('companies').doc(C).set({ timezone: 'America/Chicago' }); // explicit tz required
     await admin.firestore().collection('companies').doc('tz-co').set({ timezone: 'America/Denver' });
+    await admin.firestore().collection('companies').doc('no-tz-co').set({ state: 'ND' }); // NO timezone field
   });
 
   it('driver authorization: a field driver records for their own company; tz snapshot + recompute request written', async () => {
     const res: any = await run(recordWellEvent, { ...base, eventId: 'e1' }, driverAuth);
     expect(res.ok).toBe(true);
-    expect(res.ianaTimezoneSnapshot).toBe('America/Chicago'); // resolved from state ND
+    expect(res.ianaTimezoneSnapshot).toBe('America/Chicago'); // explicit companies.timezone (no state fallback)
     const rec = (await admin.database().ref(`well_events/${C}/${WELL}/e1`).once('value')).val();
     expect(rec.recordedByRole).toBe('driver');
     expect(rec.occurredAtUtc).toBe(base.occurredAtUtc);
@@ -68,6 +69,13 @@ describeE2E('emulator: recordWellEvent / voidWellEvent', () => {
       .rejects.toThrow(/company_scope_mismatch/);
     await expect(run(recordWellEvent, { ...base, wellKey: 'No Such Well', eventId: 'x' }, managerAuth))
       .rejects.toThrow(/well_not_found_in_company/);
+  });
+
+  it('missing company timezone is rejected (no state fallback)', async () => {
+    await admin.database().ref(`companyWells/no-tz-co/${WELL}`).set(true);
+    await expect(run(recordWellEvent, { ...base, companyId: 'no-tz-co', eventId: 'x' },
+      { uid: 'm', token: { roles: ['manager'], companyId: 'no-tz-co', manageDrivers: true } }))
+      .rejects.toThrow(/timezone_unresolved/);
   });
 
   it('create / idempotent / conflict', async () => {

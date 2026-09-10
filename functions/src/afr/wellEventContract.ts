@@ -66,19 +66,9 @@ const COMPANY_ID_RE = /^[a-z0-9][a-z0-9_-]{0,119}$/i; // slug
 // RTDB-key-safe well key: forbids . $ # [ ] / and control chars; trims required.
 const WELL_KEY_RE = /^[^.$#/\[\]\x00-\x1f]{1,256}$/;
 const IANA_TZ_RE = /^[A-Za-z][A-Za-z0-9_+-]*(?:\/[A-Za-z0-9_+-]+)+$/;
-const MAX_FUTURE_MS = 48 * 60 * 60 * 1000;
-
-/** Documented state->IANA fallback when a company has no explicit timezone.
- *  Per-company (via the company's own state) — NOT a global hardcode. Returns ''
- *  for unknown states so the contract fails closed (timezone_unresolved). */
-export function resolveTimeZoneForState(state: unknown): string {
-  const map: Record<string, string> = {
-    ND: 'America/Chicago', SD: 'America/Chicago', MN: 'America/Chicago', TX: 'America/Chicago',
-    MT: 'America/Denver', WY: 'America/Denver', CO: 'America/Denver', NM: 'America/Denver',
-    OK: 'America/Chicago', KS: 'America/Chicago', NE: 'America/Chicago',
-  };
-  return typeof state === 'string' ? map[state.trim().toUpperCase()] || '' : '';
-}
+// A washout is an OBSERVED event, not a scheduled one — reject anything beyond a
+// small clock-skew allowance. Backdated events remain permitted (and audited).
+const MAX_FUTURE_MS = 5 * 60 * 1000;
 
 export function wellEventPayloadDigest(input: WellEventInput): string {
   const canonical = JSON.stringify([

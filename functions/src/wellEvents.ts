@@ -23,7 +23,6 @@ import { requireSecureDriver } from './security/requireDriverAuth';
 import { requireManageDrivers } from './security/adminAuth';
 import {
   validateAndBuildWellEvent, reconcileWellEventIdempotency, decideVoidWellEvent,
-  resolveTimeZoneForState,
   type WellEventInput, type EventCaller, type WellEventRecord,
 } from './afr/wellEventContract';
 
@@ -38,11 +37,12 @@ async function resolveManagerCaller(request: httpsV2.CallableRequest<unknown>): 
 }
 
 async function resolveCompanyTimeZone(companyId: string): Promise<string> {
+  // REQUIRE an explicit companies/{companyId}.timezone. State is not a reliable
+  // timezone identity — no fallback; unresolved → contract rejects.
   const snap = await admin.firestore().collection('companies').doc(companyId).get();
   const data = snap.exists ? (snap.data() || {}) : {};
   const explicit = data.timezone || data.ianaTimezone;
-  if (typeof explicit === 'string' && explicit) return explicit;
-  return resolveTimeZoneForState(data.state);
+  return typeof explicit === 'string' ? explicit : '';
 }
 async function wellExistsInCompany(companyId: string, wellKey: string): Promise<boolean> {
   return (await admin.database().ref(`companyWells/${companyId}/${wellKey}`).once('value')).exists();
