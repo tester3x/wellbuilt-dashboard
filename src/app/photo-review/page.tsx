@@ -160,7 +160,17 @@ export default function PhotoReviewPage() {
   }
 
   // Capability protection fallback
-  if (!authLoading && user && !canView) {
+  if (authLoading) {
+    return (
+      <div className="min-h-screen bg-gray-900 flex items-center justify-center">
+        <div className="text-gray-400 text-lg">Loading...</div>
+      </div>
+    );
+  }
+
+  if (!user) return null;
+
+  if (!canView) {
     return (
       <div className="min-h-screen bg-gray-900 text-white flex flex-col">
         <AppHeader />
@@ -196,7 +206,7 @@ export default function PhotoReviewPage() {
               <div className="flex items-center gap-2">
                 <label
                   htmlFor="company-context-selector"
-                  className="text-xs font-medium text-gray-300 whitespace-nowrap"
+                  className="text-sm font-medium text-gray-300 whitespace-nowrap"
                 >
                   Company:
                 </label>
@@ -204,7 +214,7 @@ export default function PhotoReviewPage() {
                   id="company-context-selector"
                   value={selectedCompanyId || ''}
                   onChange={(e) => setSelectedCompanyId(e.target.value || null)}
-                  className="px-3 py-1.5 bg-gray-800 border border-gray-700 rounded-lg text-white text-xs focus:outline-none focus:border-blue-500 shrink-0 min-w-[14rem]"
+                  className="px-3 py-2 bg-gray-800 border border-gray-700 rounded-lg text-white text-sm focus:outline-none focus:border-blue-500 shrink-0 min-w-[14rem]"
                 >
                   <option value="">Select a company to review photos...</option>
                   {companies.map((c) => (
@@ -220,7 +230,7 @@ export default function PhotoReviewPage() {
               type="button"
               onClick={() => void load()}
               disabled={loadState === 'loading' || !effectiveCompanyId}
-              className="px-3 py-1.5 bg-gray-800 hover:bg-gray-700 border border-gray-700 rounded-lg text-xs font-medium text-gray-200 hover:text-white transition-colors flex items-center gap-1.5 disabled:opacity-50"
+              className="px-4 py-2 bg-gray-800 hover:bg-gray-700 border border-gray-700 rounded-lg text-sm font-medium text-gray-200 hover:text-white transition-colors flex items-center gap-1.5 disabled:opacity-50"
             >
               <span className={loadState === 'loading' ? 'animate-spin' : ''}>↻</span>
               Refresh
@@ -269,7 +279,7 @@ export default function PhotoReviewPage() {
                   type="date"
                   value={filters.dateFrom}
                   onChange={(e) => setFilters({ ...filters, dateFrom: e.target.value })}
-                  className="w-full bg-gray-900 text-white text-xs rounded-lg px-3 py-2 border border-gray-700 focus:outline-none focus:border-blue-500"
+                  className="w-full bg-gray-900 text-white text-sm rounded-lg px-3 py-2 border border-gray-700 focus:outline-none focus:border-blue-500"
                 />
               </div>
 
@@ -282,7 +292,7 @@ export default function PhotoReviewPage() {
                   type="date"
                   value={filters.dateTo}
                   onChange={(e) => setFilters({ ...filters, dateTo: e.target.value })}
-                  className="w-full bg-gray-900 text-white text-xs rounded-lg px-3 py-2 border border-gray-700 focus:outline-none focus:border-blue-500"
+                  className="w-full bg-gray-900 text-white text-sm rounded-lg px-3 py-2 border border-gray-700 focus:outline-none focus:border-blue-500"
                 />
               </div>
 
@@ -296,7 +306,7 @@ export default function PhotoReviewPage() {
                   placeholder="Driver search..."
                   value={filters.driver}
                   onChange={(e) => setFilters({ ...filters, driver: e.target.value })}
-                  className="w-full bg-gray-900 text-white text-xs rounded-lg px-3 py-2 border border-gray-700 focus:outline-none focus:border-blue-500"
+                  className="w-full bg-gray-900 text-white text-sm rounded-lg px-3 py-2 border border-gray-700 focus:outline-none focus:border-blue-500"
                 />
               </div>
 
@@ -310,7 +320,7 @@ export default function PhotoReviewPage() {
                   placeholder="Ticket or invoice #..."
                   value={filters.ticketOrJob}
                   onChange={(e) => setFilters({ ...filters, ticketOrJob: e.target.value })}
-                  className="w-full bg-gray-900 text-white text-xs rounded-lg px-3 py-2 border border-gray-700 focus:outline-none focus:border-blue-500"
+                  className="w-full bg-gray-900 text-white text-sm rounded-lg px-3 py-2 border border-gray-700 focus:outline-none focus:border-blue-500"
                 />
               </div>
 
@@ -324,7 +334,7 @@ export default function PhotoReviewPage() {
                   placeholder="Well or pickup..."
                   value={filters.pickup}
                   onChange={(e) => setFilters({ ...filters, pickup: e.target.value })}
-                  className="w-full bg-gray-900 text-white text-xs rounded-lg px-3 py-2 border border-gray-700 focus:outline-none focus:border-blue-500"
+                  className="w-full bg-gray-900 text-white text-sm rounded-lg px-3 py-2 border border-gray-700 focus:outline-none focus:border-blue-500"
                 />
               </div>
 
@@ -338,7 +348,7 @@ export default function PhotoReviewPage() {
                   placeholder="Disposal or drop-off..."
                   value={filters.dropoff}
                   onChange={(e) => setFilters({ ...filters, dropoff: e.target.value })}
-                  className="w-full bg-gray-900 text-white text-xs rounded-lg px-3 py-2 border border-gray-700 focus:outline-none focus:border-blue-500"
+                  className="w-full bg-gray-900 text-white text-sm rounded-lg px-3 py-2 border border-gray-700 focus:outline-none focus:border-blue-500"
                 />
               </div>
 
@@ -350,7 +360,7 @@ export default function PhotoReviewPage() {
                   id="filter-photo-type"
                   value={filters.photoType}
                   onChange={(e) => setFilters({ ...filters, photoType: e.target.value })}
-                  className="w-full bg-gray-900 text-white text-xs rounded-lg px-3 py-2 border border-gray-700 focus:outline-none focus:border-blue-500"
+                  className="w-full bg-gray-900 text-white text-sm rounded-lg px-3 py-2 border border-gray-700 focus:outline-none focus:border-blue-500"
                 >
                   <option value="">All photo types</option>
                   <option value="pickup">Pickup</option>
@@ -366,7 +376,7 @@ export default function PhotoReviewPage() {
                   id="filter-status"
                   value={filters.reviewStatus}
                   onChange={(e) => setFilters({ ...filters, reviewStatus: e.target.value as StatusFilter })}
-                  className="w-full bg-gray-900 text-white text-xs rounded-lg px-3 py-2 border border-gray-700 focus:outline-none focus:border-blue-500"
+                  className="w-full bg-gray-900 text-white text-sm rounded-lg px-3 py-2 border border-gray-700 focus:outline-none focus:border-blue-500"
                 >
                   <option value="all">All statuses</option>
                   <option value="unreviewed">Unreviewed</option>
