@@ -3,7 +3,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { chromium } from 'playwright';
 
-const AUTH_ROUTES = [
+export const AUTH_ROUTES = [
   '/',
   '/admin',
   '/admin/diagnostics',
@@ -21,6 +21,7 @@ const AUTH_ROUTES = [
   '/performance',
   '/performance/route',
   '/performance/well',
+  '/photo-review',
   '/register',
   '/safety',
   '/safety/spills/detail',
@@ -69,11 +70,12 @@ export async function renderAllAuthenticatedRoutes() {
     throw new Error('Build output directory "out" does not exist. Run clean build first.');
   }
 
-  // 1. Strict absence assertion: photo-review must NOT exist in the build output
-  if (fs.existsSync(path.join(outDir, 'photo-review'))) {
-    throw new Error('FAIL: Forbidden out/photo-review directory exists in build output.');
+  // 1. Strict presence assertion: photo-review MUST exist in the build output
+  const photoReviewHtml = path.join(outDir, 'photo-review', 'index.html');
+  if (!fs.existsSync(photoReviewHtml)) {
+    throw new Error('FAIL: Required out/photo-review/index.html is missing from build output.');
   }
-  console.log('✓ Verified: out/photo-review directory is completely absent from build output.');
+  console.log('✓ Verified: out/photo-review/index.html exists in build output.');
 
   const server = createStaticServer(outDir);
   await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve));
@@ -97,9 +99,6 @@ export async function renderAllAuthenticatedRoutes() {
             scrollWidth: document.documentElement.scrollWidth,
             clientWidth: window.innerWidth,
             overflow: document.documentElement.scrollWidth > window.innerWidth,
-            hasPhotoInNav: Array.from(document.querySelectorAll('nav a')).some((a) =>
-              (a.textContent || '').toLowerCase().includes('photo review'),
-            ),
           };
         });
 
@@ -112,17 +111,25 @@ export async function renderAllAuthenticatedRoutes() {
             scrollWidth: document.documentElement.scrollWidth,
             clientWidth: window.innerWidth,
             overflow: document.documentElement.scrollWidth > window.innerWidth,
-            hasPhotoInNav: Array.from(document.querySelectorAll('nav a')).some((a) =>
-              (a.textContent || '').toLowerCase().includes('photo review'),
-            ),
+          };
+        });
+
+        // 3. Galaxy Z Fold collapsed (344 x 882)
+        await page.setViewportSize({ width: 344, height: 882 });
+        await page.reload({ waitUntil: 'domcontentloaded' });
+
+        const foldMetrics = await page.evaluate(() => {
+          return {
+            scrollWidth: document.documentElement.scrollWidth,
+            clientWidth: window.innerWidth,
+            overflow: document.documentElement.scrollWidth > window.innerWidth,
           };
         });
 
         const status =
           !desktopMetrics.overflow &&
           !mobileMetrics.overflow &&
-          !desktopMetrics.hasPhotoInNav &&
-          !mobileMetrics.hasPhotoInNav;
+          !foldMetrics.overflow;
 
         results.push({
           route,
@@ -130,11 +137,11 @@ export async function renderAllAuthenticatedRoutes() {
           desktopStatus,
           desktopOverflow: desktopMetrics.overflow,
           mobileOverflow: mobileMetrics.overflow,
-          photoInNav: desktopMetrics.hasPhotoInNav || mobileMetrics.hasPhotoInNav,
+          foldOverflow: foldMetrics.overflow,
         });
 
         console.log(
-          `  ✓ Route ${route.padEnd(26)} | Desktop 1280px: OK | Mobile 390px: OK | Photo In Nav: NO | PASS`,
+          `  ✓ Route ${route.padEnd(26)} | Desktop 1280px: OK | Mobile 390px: OK | Fold 344px: OK | PASS`,
         );
       } finally {
         await page.close();
@@ -147,7 +154,7 @@ export async function renderAllAuthenticatedRoutes() {
 
   const failed = results.filter((r) => r.status !== 'PASS');
   if (failed.length > 0) {
-    throw new Error(`FAIL: ${failed.length} routes failed responsive or nav checks: ${JSON.stringify(failed, null, 2)}`);
+    throw new Error(`FAIL: ${failed.length} routes failed responsive checks: ${JSON.stringify(failed, null, 2)}`);
   }
 
   console.log(`=== All ${AUTH_ROUTES.length} Routes Rendered and Verified Cleanly ===`);

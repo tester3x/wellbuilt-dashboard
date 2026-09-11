@@ -80,3 +80,4 @@ _live_*.json
 firestore-debug.log
 database-debug.log
 tools/billing-fold-shots/
+/screenshots/

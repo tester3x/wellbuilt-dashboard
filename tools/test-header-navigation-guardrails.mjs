@@ -8,17 +8,18 @@ import { chromium } from 'playwright';
 
 const require = createRequire(import.meta.url);
 
-const EXPECTED_TABS = [
+export const EXPECTED_TABS = [
   { id: 'home', label: 'Home', href: '/' },
-  { id: 'mobile', label: 'WB Mobile', href: '/mobile' },
-  { id: 'tickets', label: 'WB Tickets', href: '/tickets' },
-  { id: 'dispatch', label: 'Dispatch', href: '/dispatch' },
-  { id: 'billing', label: 'WB Billing', href: '/billing' },
-  { id: 'payroll', label: 'WB Payroll', href: '/payroll' },
-  { id: 'driverlogs', label: 'Driver Logs', href: '/driverlogs' },
-  { id: 'equipment', label: 'eQuipment', href: '/equipment' },
-  { id: 'safety', label: 'Safety', href: '/safety' },
-  { id: 'settings', label: 'Settings', href: '/settings' },
+  { id: 'mobile', label: 'WB Mobile', href: '/mobile', capability: 'viewMobile' },
+  { id: 'tickets', label: 'WB Tickets', href: '/tickets', capability: 'viewTickets' },
+  { id: 'dispatch', label: 'Dispatch', href: '/dispatch', capability: 'viewDispatch' },
+  { id: 'photo-review', label: 'Photo Review', href: '/photo-review', capability: 'viewDispatch' },
+  { id: 'billing', label: 'WB Billing', href: '/billing', capability: 'viewBilling' },
+  { id: 'payroll', label: 'WB Payroll', href: '/payroll', capability: 'viewPayroll' },
+  { id: 'driverlogs', label: 'Driver Logs', href: '/driverlogs', capability: 'viewDriverLogs' },
+  { id: 'equipment', label: 'eQuipment', href: '/equipment', capability: 'viewEQuipment' },
+  { id: 'safety', label: 'Safety', href: '/safety', capability: 'viewSafety' },
+  { id: 'settings', label: 'Settings', href: '/settings', capability: 'viewSettings' },
 ];
 
 function transpileAndLoad(filePath, dependencies = {}) {
@@ -53,13 +54,23 @@ export function validateTabs(actualTabs) {
         `FAIL: Tab mismatch at position ${i}. Expected [${exp.id}: "${exp.label}" -> ${exp.href}], got [${act.id}: "${act.label}" -> ${act.href}]`,
       );
     }
+    if (exp.capability && act.capability !== exp.capability) {
+      throw new Error(
+        `FAIL: Capability mismatch for tab ${exp.id}. Expected ${exp.capability}, got ${act.capability}`,
+      );
+    }
   }
 
-  const hasPhotoReviewInNav = actualTabs.some(
-    (t) => t.id === 'photo-review' || t.label.toLowerCase().includes('photo'),
-  );
-  if (hasPhotoReviewInNav) {
-    throw new Error('FAIL: Photo Review is forbidden from appearing in primary navigation.');
+  // Ensure Photo Review is at index 4, directly between Dispatch (3) and WB Billing (5)
+  const prIndex = actualTabs.findIndex((t) => t.id === 'photo-review');
+  if (prIndex !== 4) {
+    throw new Error(`FAIL: Photo Review must be at index 4 (between Dispatch and WB Billing), found at index ${prIndex}`);
+  }
+  if (actualTabs[prIndex - 1]?.id !== 'dispatch') {
+    throw new Error(`FAIL: Tab preceding Photo Review must be 'dispatch', found '${actualTabs[prIndex - 1]?.id}'`);
+  }
+  if (actualTabs[prIndex + 1]?.id !== 'billing') {
+    throw new Error(`FAIL: Tab following Photo Review must be 'billing', found '${actualTabs[prIndex + 1]?.id}'`);
   }
 }
 
@@ -80,49 +91,63 @@ export function validateHeaderSource(headerSource) {
 export function runNegativeUnitTests() {
   console.log('--- Running Negative Guardrail Verifications ---');
 
-  // Test 1: Photo Review in primary navigation must fail
+  // Test 1: Missing Photo Review must fail
   let threw = false;
   try {
-    validateTabs([...EXPECTED_TABS, { id: 'photo-review', label: 'Photo Review', href: '/photo-review' }]);
-  } catch (err) {
-    threw = true;
-    if (!err.message.includes('Primary navigation tabs count mismatch') && !err.message.includes('Photo Review is forbidden')) {
-      throw new Error(`Unexpected error message: ${err.message}`);
-    }
-  }
-  if (!threw) throw new Error('FAIL: Negative test 1 (Photo Review in nav) did not throw!');
-  console.log('  ✓ Negative Test 1 Passed: Photo Review tab insertion was caught and rejected.');
-
-  // Test 2: Wrong tab ordering must fail
-  threw = false;
-  try {
-    const swapped = [...EXPECTED_TABS];
-    swapped[0] = EXPECTED_TABS[1];
-    swapped[1] = EXPECTED_TABS[0];
-    validateTabs(swapped);
-  } catch (err) {
-    threw = true;
-    if (!err.message.includes('Tab mismatch at position 0')) {
-      throw new Error(`Unexpected error message: ${err.message}`);
-    }
-  }
-  if (!threw) throw new Error('FAIL: Negative test 2 (wrong tab order) did not throw!');
-  console.log('  ✓ Negative Test 2 Passed: Wrong tab ordering was caught and rejected.');
-
-  // Test 3: Unexpected / extraneous tabs must fail
-  threw = false;
-  try {
-    validateTabs([...EXPECTED_TABS, { id: 'billing-admin', label: 'Billing Admin', href: '/billing-admin' }]);
+    validateTabs(EXPECTED_TABS.filter((t) => t.id !== 'photo-review'));
   } catch (err) {
     threw = true;
     if (!err.message.includes('Primary navigation tabs count mismatch')) {
       throw new Error(`Unexpected error message: ${err.message}`);
     }
   }
-  if (!threw) throw new Error('FAIL: Negative test 3 (extra tab) did not throw!');
-  console.log('  ✓ Negative Test 3 Passed: Unexpected primary navigation entry was caught and rejected.');
+  if (!threw) throw new Error('FAIL: Negative test 1 (missing Photo Review) did not throw!');
+  console.log('  ✓ Negative Test 1 Passed: Missing Photo Review tab caught.');
 
-  // Test 4: Legacy 3-column header pattern must fail
+  // Test 2: Wrong tab ordering (Photo Review not between Dispatch and Billing) must fail
+  threw = false;
+  try {
+    const moved = [...EXPECTED_TABS];
+    const pr = moved.splice(4, 1)[0];
+    moved.push(pr); // Move to end
+    validateTabs(moved);
+  } catch (err) {
+    threw = true;
+    if (!err.message.includes('Photo Review must be at index 4') && !err.message.includes('Tab mismatch')) {
+      throw new Error(`Unexpected error message: ${err.message}`);
+    }
+  }
+  if (!threw) throw new Error('FAIL: Negative test 2 (misplaced Photo Review) did not throw!');
+  console.log('  ✓ Negative Test 2 Passed: Misplaced Photo Review tab caught.');
+
+  // Test 3: Extraneous tab must fail
+  threw = false;
+  try {
+    validateTabs([...EXPECTED_TABS, { id: 'extra', label: 'Extra', href: '/extra' }]);
+  } catch (err) {
+    threw = true;
+    if (!err.message.includes('Primary navigation tabs count mismatch')) {
+      throw new Error(`Unexpected error message: ${err.message}`);
+    }
+  }
+  if (!threw) throw new Error('FAIL: Negative test 3 (extraneous tab) did not throw!');
+  console.log('  ✓ Negative Test 3 Passed: Extraneous tab caught.');
+
+  // Test 4: Missing capability gate must fail
+  threw = false;
+  try {
+    const noCap = EXPECTED_TABS.map((t) => (t.id === 'photo-review' ? { ...t, capability: undefined } : t));
+    validateTabs(noCap);
+  } catch (err) {
+    threw = true;
+    if (!err.message.includes('Capability mismatch for tab photo-review')) {
+      throw new Error(`Unexpected error message: ${err.message}`);
+    }
+  }
+  if (!threw) throw new Error('FAIL: Negative test 4 (missing capability gate) did not throw!');
+  console.log('  ✓ Negative Test 4 Passed: Missing capability gate on Photo Review caught.');
+
+  // Test 5: Legacy 3-column header pattern must fail
   threw = false;
   try {
     validateHeaderSource('<header><div className="w-full grid grid-cols-[auto_1fr_auto] items-start"></div></header>');
@@ -132,8 +157,34 @@ export function runNegativeUnitTests() {
       throw new Error(`Unexpected error message: ${err.message}`);
     }
   }
-  if (!threw) throw new Error('FAIL: Negative test 4 (legacy 3-column header) did not throw!');
-  console.log('  ✓ Negative Test 4 Passed: Legacy 3-column grid in AppHeader was caught and rejected.');
+  if (!threw) throw new Error('FAIL: Negative test 5 (legacy 3-column header) did not throw!');
+  console.log('  ✓ Negative Test 5 Passed: Legacy 3-column grid caught.');
+}
+
+export function testCapabilityGating(tabs) {
+  console.log('--- Running Tab Capability Gating Tests ---');
+
+  // Case A: User with viewDispatch capability
+  const authorizedUser = { uid: 'auth-user', role: 'admin' };
+  const authorizedCapabilities = new Set(['viewDispatch', 'viewMobile', 'viewTickets', 'viewBilling', 'viewPayroll', 'viewDriverLogs', 'viewEQuipment', 'viewSafety', 'viewSettings']);
+  const visibleTabsAuth = tabs.filter((t) => !t.capability || authorizedCapabilities.has(t.capability));
+
+  if (!visibleTabsAuth.some((t) => t.id === 'photo-review')) {
+    throw new Error('FAIL: Authorized user with viewDispatch cannot see photo-review tab.');
+  }
+  console.log('  ✓ Authorized user with viewDispatch sees Photo Review tab.');
+
+  // Case B: User without viewDispatch capability
+  const unauthCapabilities = new Set(['viewBilling', 'viewPayroll']);
+  const visibleTabsUnauth = tabs.filter((t) => !t.capability || unauthCapabilities.has(t.capability));
+
+  if (visibleTabsUnauth.some((t) => t.id === 'photo-review')) {
+    throw new Error('FAIL: Unauthorized user without viewDispatch sees photo-review tab.');
+  }
+  if (visibleTabsUnauth.some((t) => t.id === 'dispatch')) {
+    throw new Error('FAIL: Unauthorized user without viewDispatch sees dispatch tab.');
+  }
+  console.log('  ✓ Unauthorized user without viewDispatch correctly hides Photo Review and Dispatch.');
 }
 
 export async function runHeaderNavigationGuardrails() {
@@ -145,14 +196,18 @@ export async function runHeaderNavigationGuardrails() {
   // Step B: Static tab configuration verification
   const tabsModule = transpileAndLoad('src/lib/tabs.ts');
   validateTabs(tabsModule.TABS);
-  console.log('✓ Tab count (10), ordering, labels, and Photo Review absence strictly verified.');
+  console.log('✓ Tab count (11), ordering, labels, and Photo Review positioning strictly verified.');
 
-  // Step C: Source AST / layout contract inspection
+  // Step C: Capability gating verification
+  testCapabilityGating(tabsModule.TABS);
+  console.log('✓ Tab capability gating strictly verified.');
+
+  // Step D: Source AST / layout contract inspection
   const headerSource = fs.readFileSync('src/components/AppHeader.tsx', 'utf8');
   validateHeaderSource(headerSource);
   console.log('✓ AppHeader source verified: legacy 3-column grid absent; compact centered wrappers present.');
 
-  // Step D: Playwright Headless Layout Proof across viewports
+  // Step E: Playwright Headless Layout Proof across viewports
   const { AppHeader } = transpileAndLoad('src/components/AppHeader.tsx', {
     'next/link': { default: ({ children, ...props }) => React.createElement('a', props, children) },
     'next/navigation': { usePathname: () => '/dispatch', useRouter: () => ({}) },

@@ -45,6 +45,13 @@ export const TABS: TabConfig[] = [
     capability: 'viewDispatch',
   },
   {
+    id: 'photo-review',
+    label: 'Photo Review',
+    href: '/photo-review',
+    matchPrefixes: ['/photo-review'],
+    capability: 'viewDispatch',
+  },
+  {
     id: 'billing',
     label: 'WB Billing',
     href: '/billing',

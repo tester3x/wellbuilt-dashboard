@@ -106,6 +106,14 @@ try {
 }
 
 try {
+  console.log('Executing: node tools/test-photo-review-contract.mjs ...');
+  execSync('node tools/test-photo-review-contract.mjs', { stdio: 'inherit' });
+  console.log('✓ Photo Review Contract Verification: PASSED');
+} catch (err) {
+  fatal('Photo Review Contract Verification FAILED. Deployment aborted.');
+}
+
+try {
   console.log('Executing: node tools/test-render-all-authenticated-routes.mjs ...');
   execSync('node tools/test-render-all-authenticated-routes.mjs', { stdio: 'inherit' });
   console.log('✓ Authenticated Route Responsive Render Verification: PASSED');
