@@ -83,8 +83,8 @@ try {
   if (fs.existsSync(nextDir)) {
     fs.rmSync(nextDir, { recursive: true, force: true });
   }
-  console.log('Executing clean build: npm run build ...');
-  execSync('npm run build', { stdio: 'inherit' });
+  console.log('Executing clean build: npx next build --webpack ...');
+  execSync('npx next build --webpack', { stdio: 'inherit' });
 
   if (!fs.existsSync(outDir) || !fs.existsSync(path.join(outDir, 'index.html'))) {
     fatal('Fresh build failed: out/index.html was not created.');
