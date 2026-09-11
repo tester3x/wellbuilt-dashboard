@@ -6,12 +6,23 @@ import { useAuth } from '@/contexts/AuthContext';
 import { AppHeader } from '@/components/AppHeader';
 import { hasCapability } from '@/lib/auth';
 import { loadAllCompanies, type CompanyConfig } from '@/lib/companySettings';
+import { adminGetDashboardCatalog } from '@/lib/adminDashboardCatalog';
 import { WellBuiltDialog } from '@/components/WellBuiltDialog';
 import {
   listDispatchPhotoReviews,
   reviewDispatchPhoto,
   type PhotoReviewListItem,
 } from '@/lib/dispatchPhotoReview';
+import {
+  toIsoDate,
+  toMdyDate,
+  validateDateRange,
+} from '@/lib/chicagoDate';
+import {
+  buildCanonicalDriverMap,
+  resolveCanonicalDriverName,
+  findMatchingCanonicalDriverIds,
+} from '@/lib/canonicalDriverRoster';
 
 type StatusFilter = 'all' | 'unreviewed' | 'approved' | 'rejected' | 'addressed';
 
@@ -36,10 +47,15 @@ export default function PhotoReviewPage() {
   const [companies, setCompanies] = useState<CompanyConfig[]>([]);
   const [selectedCompanyId, setSelectedCompanyId] = useState<string | null>(null);
 
+  // Canonical driver roster map: driverId/UID/hash -> canonical legalName
+  // Scoped strictly to effectiveCompanyId (tenant containment)
+  const [driverMap, setDriverMap] = useState<Map<string, string>>(new Map());
+
   // Results & query state (initial load fetches zero photos)
   const [items, setItems] = useState<PhotoReviewListItem[]>([]);
   const [loadState, setLoadState] = useState<'idle' | 'loading' | 'ready' | 'error'>('idle');
   const [error, setError] = useState('');
+  const [dateError, setDateError] = useState<string | null>(null);
   const [searchNotice, setSearchNotice] = useState<string | null>(null);
   const [lastQueryType, setLastQueryType] = useState<'search' | 'all' | null>(null);
   const [pageLimit, setPageLimit] = useState(PAGE_SIZE);
@@ -95,12 +111,35 @@ export default function PhotoReviewPage() {
 
   const effectiveCompanyId = user?.companyId || selectedCompanyId || null;
 
+  // Load canonical driver roster scoped to effectiveCompanyId
+  useEffect(() => {
+    if (!user || !effectiveCompanyId) {
+      setDriverMap(new Map());
+      return;
+    }
+    let cancelled = false;
+    adminGetDashboardCatalog()
+      .then((catalog) => {
+        if (cancelled) return;
+        const map = buildCanonicalDriverMap(catalog, effectiveCompanyId);
+        setDriverMap(map);
+      })
+      .catch((err) => {
+        console.warn('Failed to load canonical driver catalog:', err);
+      });
+
+    return () => {
+      cancelled = true;
+    };
+  }, [user, effectiveCompanyId]);
+
   // When company context changes, reset results and state — DO NOT auto-fetch
   const handleCompanyChange = (newCid: string | null) => {
     setSelectedCompanyId(newCid);
     setItems([]);
     setLoadState('idle');
     setError('');
+    setDateError(null);
     setSearchNotice(null);
     setLastQueryType(null);
     setPageLimit(PAGE_SIZE);
@@ -110,8 +149,8 @@ export default function PhotoReviewPage() {
   // Helper: check if at least one search filter is specified
   const hasFilterCriteria = useCallback((): boolean => {
     return !!(
-      filters.dateFrom ||
-      filters.dateTo ||
+      filters.dateFrom.trim() ||
+      filters.dateTo.trim() ||
       filters.driver.trim() ||
       filters.ticketOrJob.trim() ||
       filters.pickup.trim() ||
@@ -121,10 +160,18 @@ export default function PhotoReviewPage() {
     );
   }, [filters]);
 
-  // Server-filtered query executor
+  // Server-filtered query executor with America/Chicago date boundaries
   const executeQuery = useCallback(
     async (queryType: 'search' | 'all', limit: number) => {
       if (!user || !canView || !effectiveCompanyId) return;
+
+      // Validate date entry using America/Chicago boundaries
+      const dateValidation = validateDateRange(filters.dateFrom, filters.dateTo);
+      if (!dateValidation.valid) {
+        setDateError(dateValidation.error || 'Invalid date range.');
+        return;
+      }
+      setDateError(null);
 
       setLoadState('loading');
       setError('');
@@ -137,9 +184,20 @@ export default function PhotoReviewPage() {
         };
 
         if (queryType === 'search') {
-          if (filters.dateFrom) payload.dateFromMs = Date.parse(filters.dateFrom);
-          if (filters.dateTo) payload.dateToMs = Date.parse(filters.dateTo + 'T23:59:59');
-          if (filters.driver.trim()) payload.driver = filters.driver.trim();
+          if (dateValidation.dateFromMs !== undefined) {
+            payload.dateFromMs = dateValidation.dateFromMs;
+          }
+          if (dateValidation.dateToMs !== undefined) {
+            payload.dateToMs = dateValidation.dateToMs;
+          }
+          if (filters.driver.trim()) {
+            const matchingIds = findMatchingCanonicalDriverIds(driverMap, filters.driver);
+            if (matchingIds.size === 1) {
+              payload.driver = [...matchingIds][0];
+            } else {
+              payload.driver = filters.driver.trim();
+            }
+          }
           if (filters.ticketOrJob.trim()) payload.ticketOrJob = filters.ticketOrJob.trim();
           if (filters.pickup.trim()) payload.pickup = filters.pickup.trim();
           if (filters.dropoff.trim()) payload.dropoff = filters.dropoff.trim();
@@ -151,7 +209,17 @@ export default function PhotoReviewPage() {
         }
 
         const data = await listDispatchPhotoReviews(payload);
-        const fetched = data.items || [];
+        let fetched = data.items || [];
+
+        // When searching by driver name, filter client results strictly by canonical legal name
+        if (queryType === 'search' && filters.driver.trim()) {
+          const q = filters.driver.trim().toLowerCase();
+          fetched = fetched.filter((it) => {
+            const canonicalName = resolveCanonicalDriverName(driverMap, it.driverId).toLowerCase();
+            return canonicalName.includes(q);
+          });
+        }
+
         setItems(fetched);
         setHasMore(fetched.length >= limit);
         setPageLimit(limit);
@@ -167,7 +235,7 @@ export default function PhotoReviewPage() {
         }
       }
     },
-    [user, canView, effectiveCompanyId, filters],
+    [user, canView, effectiveCompanyId, filters, driverMap],
   );
 
   // Search button click handler
@@ -192,6 +260,8 @@ export default function PhotoReviewPage() {
       setSearchNotice('Please select a company context first.');
       return;
     }
+    setDateError(null);
+    setSearchNotice(null);
     setPageLimit(PAGE_SIZE);
     void executeQuery('all', PAGE_SIZE);
   };
@@ -211,6 +281,7 @@ export default function PhotoReviewPage() {
     setItems([]);
     setLoadState('idle');
     setError('');
+    setDateError(null);
     setSearchNotice(null);
     setLastQueryType(null);
     setPageLimit(PAGE_SIZE);
@@ -346,6 +417,7 @@ export default function PhotoReviewPage() {
 
           <div className="flex flex-wrap items-center gap-3">
             {/* Authenticated Platform Admin Company Picker (Explicit Selection Required) */}
+            {/* Natural Keyboard Tab Order step 1: Company selector */}
             {!user?.companyId && (
               <div className="flex items-center gap-2">
                 <label
@@ -358,7 +430,7 @@ export default function PhotoReviewPage() {
                   id="company-context-selector"
                   value={selectedCompanyId || ''}
                   onChange={(e) => handleCompanyChange(e.target.value || null)}
-                  className="px-3 py-2 bg-gray-800 border border-gray-700 rounded-lg text-white text-sm focus:outline-none focus:border-blue-500 shrink-0 min-w-[14rem]"
+                  className="px-3 py-2 bg-gray-800 border border-gray-700 rounded-lg text-white text-sm focus:outline-none focus:border-blue-500 focus:ring-1 focus:ring-blue-500 shrink-0 min-w-[14rem]"
                 >
                   <option value="">Select a company to review photos...</option>
                   {companies.map((c) => (
@@ -393,87 +465,118 @@ export default function PhotoReviewPage() {
         )}
 
         {/* Governed Filter Card - only rendered when company context is active */}
+        {/* Natural DOM Order: Start Date → End Date → Driver → Ticket/Invoice → Pickup → Drop-off → Photo Type → Review Status → Search → All Photos → Clear */}
         {effectiveCompanyId && (
           <div className="bg-gray-800 border border-gray-700 rounded-xl p-4 shadow-sm">
-            {/* Filter Card Header with Search, All Photos, Clear buttons */}
-            <div className="flex flex-wrap items-center justify-between gap-3 mb-4 pb-3 border-b border-gray-700/60">
-              <div className="flex items-center gap-2">
-                <span className="text-xs font-semibold text-gray-400 uppercase tracking-wider">
-                  Filter Records
-                </span>
-                {searchNotice && (
-                  <span className="text-xs text-amber-400 font-medium ml-2">
-                    ⚠️ {searchNotice}
-                  </span>
-                )}
-              </div>
-
-              <div className="flex items-center gap-2">
-                <button
-                  type="button"
-                  id="action-search"
-                  onClick={handleSearch}
-                  disabled={loadState === 'loading'}
-                  className="px-4 py-2 bg-blue-600 hover:bg-blue-500 text-white rounded-lg text-sm font-semibold transition-colors disabled:opacity-50 flex items-center gap-1.5"
-                >
-                  {loadState === 'loading' && lastQueryType === 'search' ? (
-                    <span className="animate-spin">↻</span>
-                  ) : null}
-                  Search
-                </button>
-
-                <button
-                  type="button"
-                  id="action-all-photos"
-                  onClick={handleAllPhotos}
-                  disabled={loadState === 'loading'}
-                  className="px-4 py-2 bg-gray-700 hover:bg-gray-600 text-white rounded-lg text-sm font-semibold transition-colors disabled:opacity-50 flex items-center gap-1.5"
-                >
-                  {loadState === 'loading' && lastQueryType === 'all' ? (
-                    <span className="animate-spin">↻</span>
-                  ) : null}
-                  All Photos
-                </button>
-
-                <button
-                  type="button"
-                  id="action-clear"
-                  onClick={handleClear}
-                  className="px-3 py-2 text-xs text-gray-400 hover:text-gray-200 transition-colors"
-                >
-                  Clear
-                </button>
-              </div>
+            <div className="text-xs font-semibold text-gray-400 uppercase tracking-wider mb-3">
+              Filter Records
             </div>
 
-            {/* Filter Inputs Grid */}
+            {/* Filter Inputs Grid in strict natural Tab order */}
             <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-4 gap-3">
+              {/* 1. Start Date (Typed MM/DD/YYYY or calendar picker) */}
               <div>
                 <label htmlFor="filter-date-from" className="block text-xs font-medium text-gray-300 mb-1">
                   Start Date
                 </label>
-                <input
-                  id="filter-date-from"
-                  type="date"
-                  value={filters.dateFrom}
-                  onChange={(e) => setFilters({ ...filters, dateFrom: e.target.value })}
-                  className="w-full bg-gray-900 text-white text-sm rounded-lg px-3 py-2 border border-gray-700 focus:outline-none focus:border-blue-500"
-                />
+                <div className="relative flex items-center">
+                  <input
+                    id="filter-date-from"
+                    type="text"
+                    placeholder="MM/DD/YYYY"
+                    value={filters.dateFrom}
+                    onChange={(e) => {
+                      setFilters({ ...filters, dateFrom: e.target.value });
+                      setDateError(null);
+                    }}
+                    onKeyDown={(e) => {
+                      if (e.key === 'Enter') handleSearch();
+                    }}
+                    className={`w-full bg-gray-900 text-white text-sm rounded-lg pl-3 pr-9 py-2 border ${
+                      dateError && dateError.includes('Start Date')
+                        ? 'border-red-500 focus:border-red-500 focus:ring-1 focus:ring-red-500'
+                        : 'border-gray-700 focus:border-blue-500 focus:ring-1 focus:ring-blue-500'
+                    } focus:outline-none`}
+                  />
+                  <input
+                    type="date"
+                    tabIndex={-1}
+                    aria-hidden="true"
+                    value={toIsoDate(filters.dateFrom)}
+                    onChange={(e) => {
+                      if (e.target.value) {
+                        setFilters({ ...filters, dateFrom: toMdyDate(e.target.value) });
+                        setDateError(null);
+                      }
+                    }}
+                    className="absolute right-2.5 top-1/2 -translate-y-1/2 w-5 h-5 opacity-0 cursor-pointer pointer-events-auto"
+                    title="Select start date"
+                  />
+                  <div className="absolute right-2.5 top-1/2 -translate-y-1/2 pointer-events-none text-gray-400">
+                    <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                      <path
+                        strokeLinecap="round"
+                        strokeLinejoin="round"
+                        strokeWidth={2}
+                        d="M8 7V3m8 4V3m-9 8h10M5 21h14a2 2 0 002-2V7a2 2 0 00-2-2H5a2 2 0 00-2 2v12a2 2 0 002 2z"
+                      />
+                    </svg>
+                  </div>
+                </div>
               </div>
 
+              {/* 2. End Date (Typed MM/DD/YYYY or calendar picker) */}
               <div>
                 <label htmlFor="filter-date-to" className="block text-xs font-medium text-gray-300 mb-1">
                   End Date
                 </label>
-                <input
-                  id="filter-date-to"
-                  type="date"
-                  value={filters.dateTo}
-                  onChange={(e) => setFilters({ ...filters, dateTo: e.target.value })}
-                  className="w-full bg-gray-900 text-white text-sm rounded-lg px-3 py-2 border border-gray-700 focus:outline-none focus:border-blue-500"
-                />
+                <div className="relative flex items-center">
+                  <input
+                    id="filter-date-to"
+                    type="text"
+                    placeholder="MM/DD/YYYY"
+                    value={filters.dateTo}
+                    onChange={(e) => {
+                      setFilters({ ...filters, dateTo: e.target.value });
+                      setDateError(null);
+                    }}
+                    onKeyDown={(e) => {
+                      if (e.key === 'Enter') handleSearch();
+                    }}
+                    className={`w-full bg-gray-900 text-white text-sm rounded-lg pl-3 pr-9 py-2 border ${
+                      dateError && dateError.includes('End Date')
+                        ? 'border-red-500 focus:border-red-500 focus:ring-1 focus:ring-red-500'
+                        : 'border-gray-700 focus:border-blue-500 focus:ring-1 focus:ring-blue-500'
+                    } focus:outline-none`}
+                  />
+                  <input
+                    type="date"
+                    tabIndex={-1}
+                    aria-hidden="true"
+                    value={toIsoDate(filters.dateTo)}
+                    onChange={(e) => {
+                      if (e.target.value) {
+                        setFilters({ ...filters, dateTo: toMdyDate(e.target.value) });
+                        setDateError(null);
+                      }
+                    }}
+                    className="absolute right-2.5 top-1/2 -translate-y-1/2 w-5 h-5 opacity-0 cursor-pointer pointer-events-auto"
+                    title="Select end date"
+                  />
+                  <div className="absolute right-2.5 top-1/2 -translate-y-1/2 pointer-events-none text-gray-400">
+                    <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                      <path
+                        strokeLinecap="round"
+                        strokeLinejoin="round"
+                        strokeWidth={2}
+                        d="M8 7V3m8 4V3m-9 8h10M5 21h14a2 2 0 002-2V7a2 2 0 00-2-2H5a2 2 0 00-2 2v12a2 2 0 002 2z"
+                      />
+                    </svg>
+                  </div>
+                </div>
               </div>
 
+              {/* 3. Driver Name (Canonical legalName search) */}
               <div>
                 <label htmlFor="filter-driver" className="block text-xs font-medium text-gray-300 mb-1">
                   Driver Name
@@ -484,10 +587,14 @@ export default function PhotoReviewPage() {
                   placeholder="Driver search..."
                   value={filters.driver}
                   onChange={(e) => setFilters({ ...filters, driver: e.target.value })}
-                  className="w-full bg-gray-900 text-white text-sm rounded-lg px-3 py-2 border border-gray-700 focus:outline-none focus:border-blue-500"
+                  onKeyDown={(e) => {
+                    if (e.key === 'Enter') handleSearch();
+                  }}
+                  className="w-full bg-gray-900 text-white text-sm rounded-lg px-3 py-2 border border-gray-700 focus:outline-none focus:border-blue-500 focus:ring-1 focus:ring-blue-500"
                 />
               </div>
 
+              {/* 4. Ticket / Invoice */}
               <div>
                 <label htmlFor="filter-ticket" className="block text-xs font-medium text-gray-300 mb-1">
                   Ticket / Invoice
@@ -498,10 +605,14 @@ export default function PhotoReviewPage() {
                   placeholder="Ticket or invoice #..."
                   value={filters.ticketOrJob}
                   onChange={(e) => setFilters({ ...filters, ticketOrJob: e.target.value })}
-                  className="w-full bg-gray-900 text-white text-sm rounded-lg px-3 py-2 border border-gray-700 focus:outline-none focus:border-blue-500"
+                  onKeyDown={(e) => {
+                    if (e.key === 'Enter') handleSearch();
+                  }}
+                  className="w-full bg-gray-900 text-white text-sm rounded-lg px-3 py-2 border border-gray-700 focus:outline-none focus:border-blue-500 focus:ring-1 focus:ring-blue-500"
                 />
               </div>
 
+              {/* 5. Pickup Location */}
               <div>
                 <label htmlFor="filter-pickup" className="block text-xs font-medium text-gray-300 mb-1">
                   Pickup Location
@@ -512,10 +623,14 @@ export default function PhotoReviewPage() {
                   placeholder="Well or pickup..."
                   value={filters.pickup}
                   onChange={(e) => setFilters({ ...filters, pickup: e.target.value })}
-                  className="w-full bg-gray-900 text-white text-sm rounded-lg px-3 py-2 border border-gray-700 focus:outline-none focus:border-blue-500"
+                  onKeyDown={(e) => {
+                    if (e.key === 'Enter') handleSearch();
+                  }}
+                  className="w-full bg-gray-900 text-white text-sm rounded-lg px-3 py-2 border border-gray-700 focus:outline-none focus:border-blue-500 focus:ring-1 focus:ring-blue-500"
                 />
               </div>
 
+              {/* 6. Drop-off Location */}
               <div>
                 <label htmlFor="filter-dropoff" className="block text-xs font-medium text-gray-300 mb-1">
                   Drop-off Location
@@ -526,10 +641,14 @@ export default function PhotoReviewPage() {
                   placeholder="Disposal or drop-off..."
                   value={filters.dropoff}
                   onChange={(e) => setFilters({ ...filters, dropoff: e.target.value })}
-                  className="w-full bg-gray-900 text-white text-sm rounded-lg px-3 py-2 border border-gray-700 focus:outline-none focus:border-blue-500"
+                  onKeyDown={(e) => {
+                    if (e.key === 'Enter') handleSearch();
+                  }}
+                  className="w-full bg-gray-900 text-white text-sm rounded-lg px-3 py-2 border border-gray-700 focus:outline-none focus:border-blue-500 focus:ring-1 focus:ring-blue-500"
                 />
               </div>
 
+              {/* 7. Photo Type */}
               <div>
                 <label htmlFor="filter-photo-type" className="block text-xs font-medium text-gray-300 mb-1">
                   Photo Type
@@ -538,7 +657,7 @@ export default function PhotoReviewPage() {
                   id="filter-photo-type"
                   value={filters.photoType}
                   onChange={(e) => setFilters({ ...filters, photoType: e.target.value })}
-                  className="w-full bg-gray-900 text-white text-sm rounded-lg px-3 py-2 border border-gray-700 focus:outline-none focus:border-blue-500"
+                  className="w-full bg-gray-900 text-white text-sm rounded-lg px-3 py-2 border border-gray-700 focus:outline-none focus:border-blue-500 focus:ring-1 focus:ring-blue-500"
                 >
                   <option value="">All photo types</option>
                   <option value="pickup">Pickup</option>
@@ -546,6 +665,7 @@ export default function PhotoReviewPage() {
                 </select>
               </div>
 
+              {/* 8. Review Status */}
               <div>
                 <label htmlFor="filter-status" className="block text-xs font-medium text-gray-300 mb-1">
                   Review Status
@@ -554,7 +674,7 @@ export default function PhotoReviewPage() {
                   id="filter-status"
                   value={filters.reviewStatus}
                   onChange={(e) => setFilters({ ...filters, reviewStatus: e.target.value as StatusFilter })}
-                  className="w-full bg-gray-900 text-white text-sm rounded-lg px-3 py-2 border border-gray-700 focus:outline-none focus:border-blue-500"
+                  className="w-full bg-gray-900 text-white text-sm rounded-lg px-3 py-2 border border-gray-700 focus:outline-none focus:border-blue-500 focus:ring-1 focus:ring-blue-500"
                 >
                   <option value="all">All statuses</option>
                   <option value="unreviewed">Unreviewed</option>
@@ -563,6 +683,52 @@ export default function PhotoReviewPage() {
                   <option value="addressed">Addressed</option>
                 </select>
               </div>
+            </div>
+
+            {/* Inline Date Validation Error or Notices */}
+            {(dateError || searchNotice) && (
+              <div className="mt-3 text-xs font-medium text-amber-400 flex items-center gap-1.5">
+                <span>⚠️</span>
+                <span>{dateError || searchNotice}</span>
+              </div>
+            )}
+
+            {/* Action Buttons in natural DOM tab order: Search → All Photos → Clear */}
+            <div className="flex flex-wrap items-center justify-end gap-2 mt-4 pt-3 border-t border-gray-700/60">
+              <button
+                type="button"
+                id="action-search"
+                onClick={handleSearch}
+                disabled={loadState === 'loading'}
+                className="px-4 py-2 bg-blue-600 hover:bg-blue-500 text-white rounded-lg text-sm font-semibold transition-colors disabled:opacity-50 flex items-center gap-1.5 focus:outline-none focus:ring-2 focus:ring-blue-500"
+              >
+                {loadState === 'loading' && lastQueryType === 'search' ? (
+                  <span className="animate-spin">↻</span>
+                ) : null}
+                Search
+              </button>
+
+              <button
+                type="button"
+                id="action-all-photos"
+                onClick={handleAllPhotos}
+                disabled={loadState === 'loading'}
+                className="px-4 py-2 bg-gray-700 hover:bg-gray-600 text-white rounded-lg text-sm font-semibold transition-colors disabled:opacity-50 flex items-center gap-1.5 focus:outline-none focus:ring-2 focus:ring-blue-500"
+              >
+                {loadState === 'loading' && lastQueryType === 'all' ? (
+                  <span className="animate-spin">↻</span>
+                ) : null}
+                All Photos
+              </button>
+
+              <button
+                type="button"
+                id="action-clear"
+                onClick={handleClear}
+                className="px-3 py-2 text-xs text-gray-400 hover:text-gray-200 transition-colors focus:outline-none focus:ring-2 focus:ring-blue-500 rounded"
+              >
+                Clear
+              </button>
             </div>
           </div>
         )}
@@ -648,6 +814,7 @@ export default function PhotoReviewPage() {
                 const itemKey = `${item.invoiceId}_${item.photoId}`;
                 const isItemBusy = !!cardBusy[itemKey];
                 const hasValidImage = !!item.displayUrl && !item.deliveryPending;
+                const canonicalDriver = resolveCanonicalDriverName(driverMap, item.driverId);
 
                 const statusClass =
                   item.reviewStatus === 'approved'
@@ -663,11 +830,11 @@ export default function PhotoReviewPage() {
                     key={itemKey}
                     className="bg-gray-800 border border-gray-700 hover:border-gray-600 rounded-xl overflow-hidden text-left flex flex-col transition-all shadow-sm"
                   >
-                    {/* Thumbnail Image Button (Clicking image opens larger inspector) */}
+                    {/* Thumbnail Image Button (Natural Tab order step: thumbnail click opens inspector) */}
                     <button
                       type="button"
                       onClick={() => setViewer(item)}
-                      className="relative aspect-video w-full bg-black/60 flex items-center justify-center overflow-hidden group focus:outline-none focus:ring-2 focus:ring-blue-500/50 cursor-pointer"
+                      className="relative aspect-video w-full bg-black/60 flex items-center justify-center overflow-hidden group focus:outline-none focus:ring-2 focus:ring-blue-500 cursor-pointer"
                       aria-label={`Inspect photo for ticket ${item.ticketNumber || item.invoiceNumber}`}
                     >
                       {hasValidImage ? (
@@ -707,15 +874,15 @@ export default function PhotoReviewPage() {
                       </span>
                     </button>
 
-                    {/* Metadata Body */}
+                    {/* Metadata Body — Driver name strictly resolved to canonical profile name */}
                     <div className="p-3 flex flex-col gap-1 w-full text-xs flex-1">
                       <div className="flex items-center justify-between gap-1 text-gray-400 text-[11px]">
                         <span className="font-semibold text-white capitalize">{item.photoType || 'Photo'}</span>
                         <span>{item.takenAt ? item.takenAt.split('T')[0] : '—'}</span>
                       </div>
 
-                      <div className="text-gray-200 font-medium truncate" title={item.driverName}>
-                        {item.driverName || 'Unknown Driver'}
+                      <div className="text-gray-200 font-medium truncate" title={canonicalDriver}>
+                        {canonicalDriver}
                       </div>
 
                       <div className="text-gray-400 text-[11px] truncate">
@@ -738,7 +905,7 @@ export default function PhotoReviewPage() {
                               type="button"
                               disabled={isItemBusy || !hasValidImage}
                               onClick={() => void runReview(item, 'approve')}
-                              className="flex-1 min-w-[4.5rem] px-2.5 py-1.5 rounded-lg bg-green-600 hover:bg-green-500 text-white font-semibold text-xs transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
+                              className="flex-1 min-w-[4.5rem] px-2.5 py-1.5 rounded-lg bg-green-600 hover:bg-green-500 text-white font-semibold text-xs transition-colors disabled:opacity-40 disabled:cursor-not-allowed focus:outline-none focus:ring-2 focus:ring-green-500"
                               title={!hasValidImage ? 'Waiting for photo upload' : 'Approve photo'}
                             >
                               {isItemBusy ? 'Saving...' : 'Approve'}
@@ -751,7 +918,7 @@ export default function PhotoReviewPage() {
                                 setRejectReason('');
                                 setSupervisorNote('');
                               }}
-                              className="flex-1 min-w-[4.5rem] px-2.5 py-1.5 rounded-lg bg-red-600 hover:bg-red-500 text-white font-semibold text-xs transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
+                              className="flex-1 min-w-[4.5rem] px-2.5 py-1.5 rounded-lg bg-red-600 hover:bg-red-500 text-white font-semibold text-xs transition-colors disabled:opacity-40 disabled:cursor-not-allowed focus:outline-none focus:ring-2 focus:ring-red-500"
                               title={!hasValidImage ? 'Waiting for photo upload' : 'Reject photo'}
                             >
                               Reject
@@ -766,7 +933,7 @@ export default function PhotoReviewPage() {
                               setAddressTarget(item);
                               setAddressedNote('');
                             }}
-                            className="w-full px-2.5 py-1.5 rounded-lg bg-gray-700 hover:bg-gray-600 text-white font-semibold text-xs transition-colors disabled:opacity-40"
+                            className="w-full px-2.5 py-1.5 rounded-lg bg-gray-700 hover:bg-gray-600 text-white font-semibold text-xs transition-colors disabled:opacity-40 focus:outline-none focus:ring-2 focus:ring-blue-500"
                           >
                             Mark Coaching Addressed
                           </button>
@@ -786,7 +953,7 @@ export default function PhotoReviewPage() {
                   id="action-load-more"
                   onClick={handleLoadMore}
                   disabled={loadState === 'loading'}
-                  className="px-6 py-2.5 bg-gray-800 hover:bg-gray-700 border border-gray-700 rounded-xl text-sm font-semibold text-white transition-colors flex items-center gap-2 disabled:opacity-50"
+                  className="px-6 py-2.5 bg-gray-800 hover:bg-gray-700 border border-gray-700 rounded-xl text-sm font-semibold text-white transition-colors flex items-center gap-2 disabled:opacity-50 focus:outline-none focus:ring-2 focus:ring-blue-500"
                 >
                   {loadState === 'loading' ? <span className="animate-spin">↻</span> : null}
                   Load More Photos
@@ -805,20 +972,21 @@ export default function PhotoReviewPage() {
           aria-modal="true"
         >
           <div className="w-full max-w-4xl max-h-[90vh] rounded-xl border border-gray-700 bg-gray-900 shadow-2xl flex flex-col overflow-hidden">
-            {/* Modal Header */}
+            {/* Modal Header — Canonical real driver legalName */}
             <div className="flex items-center justify-between border-b border-gray-800 px-5 py-3">
               <div>
                 <h2 className="text-base font-bold text-white capitalize">
                   {viewer.photoType || 'Photo'} Inspection
                 </h2>
                 <p className="text-xs text-gray-400">
-                  Ticket {viewer.ticketNumber || viewer.invoiceNumber} &bull; Driver: {viewer.driverName}
+                  Ticket {viewer.ticketNumber || viewer.invoiceNumber} &bull; Driver:{' '}
+                  {resolveCanonicalDriverName(driverMap, viewer.driverId)}
                 </p>
               </div>
               <button
                 type="button"
                 onClick={() => setViewer(null)}
-                className="text-gray-400 hover:text-white text-2xl leading-none px-2"
+                className="text-gray-400 hover:text-white text-2xl leading-none px-2 focus:outline-none focus:ring-2 focus:ring-blue-500 rounded"
                 aria-label="Close"
               >
                 &times;
@@ -924,7 +1092,7 @@ export default function PhotoReviewPage() {
                           !!cardBusy[`${viewer.invoiceId}_${viewer.photoId}`]
                         }
                         onClick={() => void runReview(viewer, 'approve')}
-                        className="px-4 py-2 rounded-lg bg-green-600 hover:bg-green-500 text-white font-semibold text-xs transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
+                        className="px-4 py-2 rounded-lg bg-green-600 hover:bg-green-500 text-white font-semibold text-xs transition-colors disabled:opacity-40 disabled:cursor-not-allowed focus:outline-none focus:ring-2 focus:ring-green-500"
                       >
                         Approve Photo
                       </button>
@@ -942,7 +1110,7 @@ export default function PhotoReviewPage() {
                           setRejectReason('');
                           setSupervisorNote('');
                         }}
-                        className="px-4 py-2 rounded-lg bg-red-600 hover:bg-red-500 text-white font-semibold text-xs transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
+                        className="px-4 py-2 rounded-lg bg-red-600 hover:bg-red-500 text-white font-semibold text-xs transition-colors disabled:opacity-40 disabled:cursor-not-allowed focus:outline-none focus:ring-2 focus:ring-red-500"
                       >
                         Reject Photo
                       </button>
@@ -955,7 +1123,7 @@ export default function PhotoReviewPage() {
                           setAddressTarget(viewer);
                           setAddressedNote('');
                         }}
-                        className="px-4 py-2 rounded-lg bg-gray-700 hover:bg-gray-600 text-white font-semibold text-xs transition-colors disabled:opacity-40"
+                        className="px-4 py-2 rounded-lg bg-gray-700 hover:bg-gray-600 text-white font-semibold text-xs transition-colors disabled:opacity-40 focus:outline-none focus:ring-2 focus:ring-blue-500"
                       >
                         Mark Coaching Addressed
                       </button>

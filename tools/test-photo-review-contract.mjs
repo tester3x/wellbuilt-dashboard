@@ -1,5 +1,15 @@
 import fs from 'node:fs';
 import path from 'node:path';
+import {
+  parseDateInput,
+  validateDateRange,
+  getChicagoDayBoundaries,
+} from '../src/lib/chicagoDate.ts';
+import {
+  buildCanonicalDriverMap,
+  resolveCanonicalDriverName,
+  findMatchingCanonicalDriverIds,
+} from '../src/lib/canonicalDriverRoster.ts';
 
 export function runPhotoReviewContractTests() {
   console.log('=== Running Photo Review Contract Tests ===');
@@ -73,7 +83,6 @@ export function runPhotoReviewContractTests() {
   console.log('  ✓ Verified: Behavioral tenancy derivation logic matches specifications.');
 
   // 7. Regression Test: No initial photo request & no filter-change request
-  // Verify no useEffect triggers executeQuery or load
   const useEffectMatches = [...pageSource.matchAll(/useEffect\(\s*\(\)\s*=>\s*\{([\s\S]*?)\},\s*\[(.*?)\]\);/g)];
   for (const match of useEffectMatches) {
     const effectBody = match[1];
@@ -112,7 +121,6 @@ export function runPhotoReviewContractTests() {
 
   // 11. Regression Test: Card-level review actions without parent button nesting
   if (pageSource.includes('<button') && pageSource.includes('key={itemKey}')) {
-    // Check that card container itself is not a <button>
     const cardContainerRegex = /<button[^>]*key=\{itemKey\}/;
     if (cardContainerRegex.test(pageSource)) {
       throw new Error('FAIL: Card container must not be a <button>; cannot nest Approve/Reject buttons inside a clickable card.');
@@ -120,9 +128,6 @@ export function runPhotoReviewContractTests() {
   }
   if (!pageSource.includes("runReview(item, 'approve')") || !pageSource.includes("setRejectTarget(item)")) {
     throw new Error('FAIL: Card does not have direct card-level Approve and Reject actions.');
-  }
-  if (!pageSource.includes('setItems((prev) =>') || pageSource.includes('await executeQuery(')) {
-    // Check that runReview updates setItems locally without re-running executeQuery
   }
   if (!pageSource.includes('setCardBusy')) {
     throw new Error('FAIL: Card-level busy state (cardBusy) missing.');
@@ -137,6 +142,183 @@ export function runPhotoReviewContractTests() {
     throw new Error('FAIL: Approve and Reject buttons must be disabled when photo is not synced or lacks verified image.');
   }
   console.log('  ✓ Verified: Unsynced photos display "Waiting for photo upload" and disable review actions.');
+
+  // 13. Usability Test: Keyboard Tab order & Enter-to-search
+  // No positive tabIndex allowed
+  const positiveTabIndex = /tabIndex=\{?[1-9][0-9]*\}?/;
+  if (positiveTabIndex.test(pageSource)) {
+    throw new Error('FAIL: Positive tabIndex detected! Tab order must be natural DOM order.');
+  }
+
+  // Verify DOM order of interactive controls
+  const expectedControlOrder = [
+    'company-context-selector',
+    'filter-date-from',
+    'filter-date-to',
+    'filter-driver',
+    'filter-ticket',
+    'filter-pickup',
+    'filter-dropoff',
+    'filter-photo-type',
+    'filter-status',
+    'action-search',
+    'action-all-photos',
+    'action-clear',
+  ];
+
+  let lastIndex = -1;
+  for (const controlId of expectedControlOrder) {
+    const idx = pageSource.indexOf(`id="${controlId}"`);
+    if (idx === -1) {
+      throw new Error(`FAIL: Missing control id="${controlId}" in DOM order check.`);
+    }
+    if (idx < lastIndex) {
+      throw new Error(`FAIL: Control id="${controlId}" is out of natural DOM tab order!`);
+    }
+    lastIndex = idx;
+  }
+  console.log('  ✓ Verified: Natural DOM tab order with zero positive tabIndex attributes.');
+
+  // Verify Enter key on inputs triggers handleSearch
+  const inputIdsWithEnter = [
+    'filter-date-from',
+    'filter-date-to',
+    'filter-driver',
+    'filter-ticket',
+    'filter-pickup',
+    'filter-dropoff',
+  ];
+  for (const inputId of inputIdsWithEnter) {
+    const inputBlockRegex = new RegExp(`id="${inputId}"[\\s\\S]*?onKeyDown=\\{\\(e\\)\\s*=>\\s*\\{[\\s\\S]*?handleSearch\\(\\)[\\s\\S]*?\\}\\}`);
+    if (!inputBlockRegex.test(pageSource)) {
+      throw new Error(`FAIL: Input id="${inputId}" does not trigger handleSearch on Enter key.`);
+    }
+  }
+  console.log('  ✓ Verified: All text/date filter inputs handle Enter key by running Search.');
+
+  // 14. Usability Test: America/Chicago date entry and validation
+  // Test valid date range
+  const validRange = validateDateRange('09/10/2026', '09/15/2026');
+  if (!validRange.valid || !validRange.dateFromMs || !validRange.dateToMs) {
+    throw new Error('FAIL: validateDateRange failed for valid MM/DD/YYYY range');
+  }
+
+  // Test Start Date > End Date
+  const invalidOrder = validateDateRange('09/20/2026', '09/10/2026');
+  if (invalidOrder.valid || !invalidOrder.error?.includes('Start Date must be on or before End Date')) {
+    throw new Error('FAIL: validateDateRange did not reject Start Date > End Date');
+  }
+
+  // Test invalid calendar date (Feb 30)
+  const invalidDate = validateDateRange('02/30/2026', '03/01/2026');
+  if (invalidDate.valid) {
+    throw new Error('FAIL: validateDateRange accepted non-existent calendar date 02/30/2026');
+  }
+
+  // Test America/Chicago exact boundaries without UTC shifting
+  const boundaries = getChicagoDayBoundaries(2026, 9, 10);
+  const startChicagoStr = new Intl.DateTimeFormat('en-US', {
+    timeZone: 'America/Chicago',
+    hour: 'numeric',
+    minute: 'numeric',
+    second: 'numeric',
+    hour12: false,
+  }).format(new Date(boundaries.startMs));
+
+  const endChicagoStr = new Intl.DateTimeFormat('en-US', {
+    timeZone: 'America/Chicago',
+    hour: 'numeric',
+    minute: 'numeric',
+    second: 'numeric',
+    hour12: false,
+  }).format(new Date(boundaries.endMs));
+
+  if (!startChicagoStr.includes('00:00:00') && !startChicagoStr.includes('24:00:00')) {
+    throw new Error(`FAIL: America/Chicago start of day is not midnight: ${startChicagoStr}`);
+  }
+  if (!endChicagoStr.includes('23:59:59')) {
+    throw new Error(`FAIL: America/Chicago end of day is not 23:59:59: ${endChicagoStr}`);
+  }
+  console.log('  ✓ Verified: America/Chicago calendar-day boundaries and date validation.');
+
+  // 15. Usability Test: Canonical driver identity & privacy boundary
+  // 15. Usability Test: Canonical driver identity & privacy boundary
+  // Raw item.driverName must NEVER be rendered in JSX
+  if (pageSource.includes('{item.driverName}') || pageSource.includes('{viewer.driverName}')) {
+    throw new Error('FAIL: Raw snapshot driverName rendered in JSX! Forbidden.');
+  }
+
+  // Test canonical driver resolution logic
+  const mockCatalog = {
+    approved: {
+      hash1: {
+        displayName: 'Mike ZFold7 Burger',
+        companyId: 'liquid-gold',
+        driverId: 'drv_mike_1',
+      },
+      hash2: {
+        displayName: 'Rogue Device Driver',
+        companyId: 'other-co',
+        driverId: 'drv_other_2',
+      },
+      hash3: {
+        displayName: 'driver.auth@wellbuilt.com', // Auth email must be rejected
+        companyId: 'liquid-gold',
+        driverId: 'drv_email_3',
+      },
+    },
+    profiles: {
+      prof4: {
+        legalName: 'Adan Salcido',
+        companyId: 'liquid-gold',
+      },
+    },
+  };
+
+  const driverMap = buildCanonicalDriverMap(mockCatalog, 'liquid-gold');
+
+  // Test 1: Operational name "Mike ZFold7 Burger" is PRESERVED as intentional canonical test-driver name
+  const resolvedMike = resolveCanonicalDriverName(driverMap, 'drv_mike_1');
+  if (resolvedMike !== 'Mike ZFold7 Burger') {
+    throw new Error(`FAIL: Expected 'Mike ZFold7 Burger' to be preserved, got '${resolvedMike}'`);
+  }
+
+  // Test 2: Canonical search finds driver by profile operational name (e.g. "ZFold7" or "Burger")
+  const matchZFold = findMatchingCanonicalDriverIds(driverMap, 'ZFold7');
+  if (!matchZFold.has('drv_mike_1')) {
+    throw new Error('FAIL: Canonical search failed to find driver by operational profile name ZFold7');
+  }
+
+  // Test 3: Auth email addresses are rejected and not used as profile names
+  const resolvedEmail = resolveCanonicalDriverName(driverMap, 'drv_email_3');
+  if (resolvedEmail !== 'Unknown driver') {
+    throw new Error(`FAIL: Auth email address must not be used as profile name, got '${resolvedEmail}'`);
+  }
+
+  // Test 4: Profile legalName from profiles is preserved
+  const resolvedAdan = resolveCanonicalDriverName(driverMap, 'prof4');
+  if (resolvedAdan !== 'Adan Salcido') {
+    throw new Error(`FAIL: Expected 'Adan Salcido', got '${resolvedAdan}'`);
+  }
+
+  // Test 5: Wrong-company driver resolves to 'Unknown driver' (tenant containment)
+  const resolvedOther = resolveCanonicalDriverName(driverMap, 'drv_other_2');
+  if (resolvedOther !== 'Unknown driver') {
+    throw new Error(`FAIL: Wrong-company driver must resolve to 'Unknown driver', got '${resolvedOther}'`);
+  }
+
+  // Test 6: Missing or unresolvable driver resolves to 'Unknown driver'
+  const resolvedMissing = resolveCanonicalDriverName(driverMap, 'non_existent_id');
+  if (resolvedMissing !== 'Unknown driver') {
+    throw new Error(`FAIL: Non-existent driver must resolve to 'Unknown driver', got '${resolvedMissing}'`);
+  }
+
+  const resolvedEmpty = resolveCanonicalDriverName(driverMap, '');
+  if (resolvedEmpty !== 'Unknown driver') {
+    throw new Error(`FAIL: Empty driverId must resolve to 'Unknown driver', got '${resolvedEmpty}'`);
+  }
+
+  console.log('  ✓ Verified: Canonical driver identity resolution preserves Mike ZFold7 Burger, rejects auth emails, and respects tenant containment.');
 
   console.log('=== All Photo Review Contract Tests Passed ===');
 }
