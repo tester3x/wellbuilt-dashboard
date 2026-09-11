@@ -74,6 +74,28 @@ export interface AfrV2Policy {
     shortGapFactor: number;
     /** a pull entered/edited long after its event has softer weight. */
     lateEntryFactor: number;
+    /** entered/edited more than this (ms) after the pull → late-entry soft weight. */
+    lateEntryMs: number;
+  };
+
+  /**
+   * AUTOMATIC, event-free transient detection (afrAutoTransient.ts). NO driver /
+   * dispatcher / weekday / explicit washout-event input — each well is judged only
+   * against its OWN robust history (median + MAD), never a global cutoff or a
+   * calendar day. All knobs tunable from replay without touching logic.
+   */
+  autoTransient: {
+    enabled: boolean;            // production auto-detection switch
+    minBaseline: number;         // prior valid stable rates required before judging
+    madScaleK: number;           // robust-z threshold: |rate-med|/(madNormalize*MAD) >= this ⇒ off-trend
+    madNormalize: number;        // MAD→sigma normaliser (1.4826)
+    madFloorFrac: number;        // MAD-scale floor as a fraction of |median| (dead-well guard)
+    madFloorAbs: number;         // absolute MAD-scale floor (days/ft) for near-zero baselines
+    transientWeight: number;     // minimal learning weight for disturbed intervals
+    returnToStableCount: number; // consecutive in-band intervals to exit TRANSIENT
+    maxTransientIntervals: number; // bounded expiry — never suppress longer than this
+    regimeAcceptAfter: number;   // consecutive same-direction off-trend to accept a regime
+    regimeConsistencyK: number;  // run rates mutually within this robust band
   };
 
   /**
@@ -122,12 +144,25 @@ export const AFR_V2_POLICY: AfrV2Policy = {
     unexplainedLevelJumpFeet: 7.0,      // the observed ~7-ft artifact
     haulMatchToleranceFeet: 1.0,
   },
-  timing: { shortGapMs: 60 * 60 * 1000, shortGapFactor: 0.4, lateEntryFactor: 0.8 },
+  timing: { shortGapMs: 60 * 60 * 1000, shortGapFactor: 0.4, lateEntryFactor: 0.8, lateEntryMs: 3 * 24 * 60 * 60 * 1000 },
   washout: {
     enabled: false,                     // GATED: no explicit washout event exists in production
     recoveryDays: 3,
     dayConfidenceCap: [0.4, 0.4, 0.4],
     onBlendWeight: [0.6, 0.4, 0.2],
     timezone: 'America/Chicago',        // Williston, ND (well/company local)
+  },
+  autoTransient: {
+    enabled: true,                      // event-free transient resistance (production candidate)
+    minBaseline: 3,                     // need >=3 prior valid stable rates to judge off-trend
+    madScaleK: 3.5,                     // robust-z threshold (≈ 3.5σ on a normal baseline)
+    madNormalize: 1.4826,               // MAD→sigma
+    madFloorFrac: 0.15,                 // scale never below 15% of |median| …
+    madFloorAbs: 0.02,                  // … nor below this absolute floor (dead-well guard)
+    transientWeight: 0.1,               // disturbed intervals kept but near-silent
+    returnToStableCount: 2,             // 2 consecutive in-band → exit transient
+    maxTransientIntervals: 5,           // bounded expiry — never suppress forever
+    regimeAcceptAfter: 3,               // 3 consecutive same-direction consistent → regime
+    regimeConsistencyK: 2.5,            // run rates mutually within 2.5× robust band
   },
 };
