@@ -33,6 +33,9 @@
   },
   "hosting": {
     "public": "out",
+    "predeploy": [
+      "node scripts/preflight-hosting-deploy.cjs"
+    ],
     "ignore": [
       "firebase.json",
       "**/.*",
