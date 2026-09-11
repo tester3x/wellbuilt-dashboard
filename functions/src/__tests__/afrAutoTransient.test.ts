@@ -41,9 +41,10 @@ describe('computeAfrAuto — automatic per-well transient detection (no events)'
     expect(rs[4]).toBe('inferred-transient');
     expect(rs[5]).toBe('returning-to-baseline');   // first in-band after spike
     expect(rs[6]).toBe('stable');                   // 2nd consecutive in-band → exited
-    // spike retained (valid) but near-silent → AFR stays near the ~0.50 baseline
+    // spike retained (valid) but near-silent → AFR stays near the ~0.50 baseline.
+    // 1.60 vs ~0.50 median ⇒ ratio 3.2 ≥ anomalyRatio(2.0) ⇒ MAJOR anomaly tier 0.1.
     expect(r.perInterval[4].valid).toBe(true);
-    expect(r.perInterval[4].weight).toBeLessThanOrEqual(P.autoTransient.transientWeight);
+    expect(r.perInterval[4].weight).toBe(P.confidence.highlyQuestionable); // 0.1
     expect(r.afr).toBeLessThan(0.75);               // never inflated toward 1.6
   });
 
@@ -182,7 +183,37 @@ describe('computeAfrAuto — automatic per-well transient detection (no events)'
     const r = computeAfrAuto(series(rates, over), P);
     expect(r.perInterval[4].valid).toBe(true);
     expect(r.perInterval[4].reason).toBe('timing-low-confidence');
-    expect(r.perInterval[4].weight).toBeLessThan(1);
+    expect(r.perInterval[4].weight).toBe(P.confidence.weakTiming); // 0.8 exactly, not dropped
+  });
+
+  it('unified confidence tiers: 1.0 stable / 0.8 weak-timing / 0.4 disturbed / 0.1 major anomaly / 0.0 invalid — ONE system', () => {
+    // Ordinary disturbed/recovery (off-trend but NOT a major >=2.0x anomaly) → 0.4,
+    // NOT 0.1. 0.90 vs ~0.50 median ⇒ ratio 1.8 (< 2.0) yet robust-z well past 3.5.
+    const disturbed = computeAfrAuto(series([0.50, 0.49, 0.51, 0.50, 0.90, 0.50, 0.49]), P);
+    expect(disturbed.perInterval[4].reason).toBe('inferred-transient');
+    expect(disturbed.perInterval[4].weight).toBe(P.confidence.knownDisturbance); // 0.4 (disturbed, not anomaly)
+    // the first in-band recovery reading is also disturbed-tier 0.4…
+    expect(disturbed.perInterval[5].reason).toBe('returning-to-baseline');
+    expect(disturbed.perInterval[5].weight).toBe(P.confidence.knownDisturbance); // 0.4
+    // …and once the baseline is re-held, confidence returns to full 1.0.
+    expect(disturbed.perInterval[6].reason).toBe('stable');
+    expect(disturbed.perInterval[6].weight).toBe(P.confidence.normal); // 1.0
+
+    // Every weight emitted by the engine is one of exactly five discrete tiers.
+    const allowedWeights = new Set([
+      P.confidence.normal,           // 1.0
+      P.confidence.weakTiming,       // 0.8
+      P.confidence.knownDisturbance, // 0.4
+      P.confidence.highlyQuestionable, // 0.1
+      P.confidence.invalid,          // 0.0
+    ]);
+    const mixed = computeAfrAuto(series(
+      [0.50, 0.49, 0.51, 0.50, 1.60, 0.90, 0.50, 0.49, 1.2, 1.22, 1.19, 1.21],
+      { 6: { intervalMs: 20 * 60 * 1000 } }, // a weak-timing pull in the mix
+    ), P);
+    for (const p of mixed.perInterval) {
+      expect(allowedWeights.has(p.weight)).toBe(true); // no continuous transientWeight*tf values remain
+    }
   });
 
   it('#12 ON is never consulted: computeAfrAuto takes only intervals + policy (no ON/washout input)', () => {

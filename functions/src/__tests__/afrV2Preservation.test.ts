@@ -62,10 +62,13 @@ describe('persisted schema unchanged (mobile/dashboard compatible)', () => {
 });
 
 describe('calculateAFR wired to v2; v1 island removed from index', () => {
-  it('production calculateAFR is EVENT-GATED (computeAfrEventGated, windows at observation time); generic hybrid NOT on the prod path', () => {
-    expect(indexSrc).toContain('computeAfrEventGated(intervals, AFR_V2_POLICY, { eventWindows, nowMs: obsMs })');
-    expect(indexSrc).not.toContain('computeAfrHybrid('); // shadow/replay only, never production
-    expect(indexSrc).toContain('loadWashoutWindows(companyId, wellName, obsMs)'); // event consumption wired
+  it('production calculateAFR runs the SINGLE automatic event-free engine (computeAfrAuto); no competing engine on the prod path', () => {
+    // ONE production AFR/confidence engine. The event-gated washout path was
+    // removed from index.ts entirely (see the integration gate).
+    expect(indexSrc).toContain('computeAfrAuto(intervals, AFR_V2_POLICY)');
+    expect(indexSrc).not.toContain('computeAfrEventGated('); // event-gated path removed from prod
+    expect(indexSrc).not.toContain('loadWashoutWindows(');   // no washout-window consumption
+    expect(indexSrc).not.toContain('computeAfrHybrid(');     // shadow/replay only, never production
     expect(indexSrc).toContain('async function calculateAFR(');
   });
 

@@ -1,0 +1,37 @@
+===== AFR INTEGRATION — READ-ONLY REAL-HISTORY REPLAY =====
+Source: production packets/processed (read-only), routes Gabriels + Watford. windowSize=15.
+Sanity — 53fb454a production path (computeAfrEventGated, no events) == v1 exactly: 15/15 wells.
+
+AGGREGATE one-step MAE (days/ft), all eligible steps:
+  n=2959  v1=0.37349  baseV2(hybrid@53fb454a)=0.28790 (-22.9%)  candidate(auto)=0.26220 (-29.8%)
+
+CANDIDATE accuracy split by its OWN confidence tier of the target reading (nothing hidden):
+  all-eligible          n=2959  MAE=0.26220
+  high-confidence (1.0) n=2424  MAE=0.06949
+  weak-timing (0.8)     n=30  MAE=0.08819
+  disturbed-low (<=0.4) n=454  MAE=1.24808
+
+PAIRED on the SAME high-confidence (candidate weight 1.0) steps — does the candidate worsen STABLE forecasting?
+  n=2424  MAE v1=0.20169  baseV2=0.09591  candidate=0.06949
+
+PER-WELL bounded accuracy % (100*(1-min(1,|err|/actual))); flags vs v1 AND vs base-v2 (the integration start point):
+  well              n  preds   MAE_v1   MAE_base  MAE_cand   acc_v1 acc_base acc_cand   dVSv1  dVSbase  flags
+  Gabriel 1        253   249  0.13158  0.13852  0.13906    72.0   67.8   67.9  -4.1  +0.1   vs-v1
+  Gabriel 2        99    95  0.07374  0.07462  0.07333    86.1   85.8   86.2  +0.1  +0.4   
+  Gabriel 3        195   191  1.40245  1.83610  1.47337    60.4   53.2   55.9  -4.5  +2.7   vs-v1
+  Gabriel 4        196   192  2.22634  0.25298  0.28666    75.6   70.5   70.4  -5.2  -0.1   vs-v1
+  Gabriel 5        103    99  0.08145  0.08098  0.08059    71.4   70.8   70.7  -0.7  -0.1   
+  Gabriel 6        231   227  0.15124  0.19846  0.17669    74.3   68.9   69.2  -5.1  +0.3   vs-v1
+  Gabriel 7        257   253  0.12499  0.13497  0.13311    79.8   74.8   73.8  -6.0  -1.0   vs-v1
+  Thor 1           172   168  0.11050  0.10783  0.11326    79.9   79.1   78.4  -1.5  -0.6   
+  Thor 5            2   (skip <6 pulls)
+  Atlas 1          650   646  0.07313  0.07599  0.07707    82.1   78.6   76.6  -5.4  -1.9   vs-v1
+  Crossbow 1       46    42  2.02495  1.92676  1.95445    64.3   56.3   54.8  -9.5  -1.5   vs-v1
+  Cyclone 1        315   311  0.16245  0.17542  0.17489    78.2   73.2   71.5  -6.7  -1.7   vs-v1
+  Hatchet 1        55    51  0.12921  0.12863  0.12953    85.3   85.2   85.1  -0.1  -0.1   
+  Kahuna 1         309   305  0.18809  0.18152  0.18634    73.7   69.2   68.0  -5.7  -1.2   vs-v1
+  Pesek 10         83    79  0.22233  0.57834  0.41720    81.9   72.5   74.1  -7.8  +1.7   vs-v1
+  Phazor 1         55    51  0.25746  0.26520  0.28115    68.2   66.6   64.9  -3.3  -1.8   vs-v1
+
+FLAG vs v1 (deployed): 11/15 wells worse >2pp — reflects the KNOWN v1→v2-family robustness/relative-accuracy trade-off.
+FLAG vs base-v2 @53fb454a (the integration's actual start point): 0/15 wells worse >2pp.

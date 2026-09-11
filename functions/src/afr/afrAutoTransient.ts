@@ -93,6 +93,26 @@ function timingFactor(iv: AfrInterval, policy: AfrV2Policy): number {
   return f;
 }
 
+/** Unified confidence for an in-band (stable) interval: normal 1.0, or the weaker
+ *  timing tier 0.8 when a valid pull has soft timing (short-gap-valid / late entry). */
+function stableConfidence(tf: number, policy: AfrV2Policy): { weight: number; reason: AutoReason } {
+  return tf < 1
+    ? { weight: policy.confidence.weakTiming, reason: 'timing-low-confidence' }
+    : { weight: policy.confidence.normal, reason: 'stable' };
+}
+
+/** Unified confidence for a DISTURBED (off-trend, recovery) interval: ordinary
+ *  disturbance → 0.4 (knownDisturbance); a MAJOR anomaly (>= anomalyRatio off the
+ *  well's own median, either direction) → 0.1 (highlyQuestionable). Never 0.0
+ *  (valid pulls are retained), never inflates. */
+function disturbedConfidence(rate: number, med: number, policy: AfrV2Policy): number {
+  const m = med === 0 ? 1e-9 : med;
+  const ratio = Math.max(rate / m, m / rate);
+  return ratio >= policy.consistency.anomalyRatio
+    ? policy.confidence.highlyQuestionable
+    : policy.confidence.knownDisturbance;
+}
+
 /** Are all rates mutually consistent within a robust band around their median? */
 function mutuallyConsistent(rates: number[], policy: AfrV2Policy): boolean {
   if (rates.length < 2) return true;
@@ -149,7 +169,8 @@ export function computeAfrAuto(intervalsIn: AfrInterval[], policy: AfrV2Policy):
     // ── Seeding: not enough baseline yet → treat as stable seed ────────────────
     if (med == null) {
       stableRates.push(iv.flowRateDays);
-      out.push({ ...base, reason: tf < 1 ? 'timing-low-confidence' : 'stable', weight: 1 * tf, baselineMedian: null, robustScore: null, state });
+      const sc = stableConfidence(tf, policy);
+      out.push({ ...base, reason: sc.reason, weight: sc.weight, baselineMedian: null, robustScore: null, state });
       continue;
     }
 
@@ -186,12 +207,13 @@ export function computeAfrAuto(intervalsIn: AfrInterval[], policy: AfrV2Policy):
         state = 'STABLE';
         runDir = 0; runRates = []; runIdx.length = 0;
         stableRates.push(iv.flowRateDays);
-        out.push({ ...b, reason: tf < 1 ? 'timing-low-confidence' : 'stable', weight: 1 * tf, state });
+        const sc = stableConfidence(tf, policy);
+        out.push({ ...b, reason: sc.reason, weight: sc.weight, state });
       } else {
         // Sudden off-trend from a stable/regime baseline → enter TRANSIENT.
         state = 'TRANSIENT'; transientCount = 1; returnCount = 0;
         const idx = out.length;
-        out.push({ ...b, reason: 'inferred-transient', weight: at.transientWeight * tf, state });
+        out.push({ ...b, reason: 'inferred-transient', weight: disturbedConfidence(iv.flowRateDays, med, policy), state });
         pushRun(direction as 1 | -1, idx);
         tryAcceptRegime(); // a lone spike won't reach the threshold; guards future
       }
@@ -203,7 +225,8 @@ export function computeAfrAuto(intervalsIn: AfrInterval[], policy: AfrV2Policy):
     if (!offTrend) {
       returnCount += 1;
       const idx = out.length;
-      out.push({ ...b, reason: 'returning-to-baseline', weight: at.transientWeight * tf, state });
+      // In-band recovery reading → reduced (disturbed/recovery) confidence 0.4.
+      out.push({ ...b, reason: 'returning-to-baseline', weight: policy.confidence.knownDisturbance, state });
       if (returnCount >= at.returnToStableCount) {
         // Confirmed return: exit to STABLE and let the in-band returning rates
         // re-seed the baseline (only the qualified in-band ones).
@@ -211,8 +234,9 @@ export function computeAfrAuto(intervalsIn: AfrInterval[], policy: AfrV2Policy):
         runDir = 0; runRates = []; runIdx.length = 0;
         const returned = out.slice(-at.returnToStableCount).filter((r) => r.valid && !r.offTrend).map((r) => r.rate);
         stableRates.push(...returned);
-        // mark the confirming interval as stable now that the baseline holds
-        out[idx].reason = tf < 1 ? 'timing-low-confidence' : 'stable';
+        // The confirming interval now sits on a held baseline → normal confidence.
+        const sc = stableConfidence(tf, policy);
+        out[idx].reason = sc.reason; out[idx].weight = sc.weight;
       }
       continue;
     }
@@ -220,7 +244,7 @@ export function computeAfrAuto(intervalsIn: AfrInterval[], policy: AfrV2Policy):
     // still off-trend during a transient → suppressed; extend/curb the regime run
     returnCount = 0;
     const idx = out.length;
-    out.push({ ...b, reason: 'inferred-transient', weight: at.transientWeight * tf, state });
+    out.push({ ...b, reason: 'inferred-transient', weight: disturbedConfidence(iv.flowRateDays, med, policy), state });
     pushRun(direction as 1 | -1, idx);
     if (tryAcceptRegime()) continue;
 

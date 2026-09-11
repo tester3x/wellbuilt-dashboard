@@ -20,11 +20,12 @@
 
 /** Confidence tiers — starting candidates, tune from replay. */
 export interface ConfidenceScale {
-  normal: number;              // ordinary, consistent reading
-  slightlyUnusual: number;     // valid but mildly off the surrounding trend
-  knownDisturbance: number;    // an explicit operational disturbance/recovery
-  highlyQuestionable: number;  // valid + technically possible, but far off
-  invalid: number;             // technically impossible — the ONLY 0.0
+  normal: number;              // 1.0 — strong/normal, consistent reading
+  slightlyUnusual: number;     // valid but mildly off the surrounding trend (kept at normal for v1 parity)
+  weakTiming: number;          // 0.8 — usable but weaker timing/evidence (short-gap-valid / late entry)
+  knownDisturbance: number;    // 0.4 — ordinary disturbed / recovery evidence
+  highlyQuestionable: number;  // 0.1 — major anomaly (valid but far off, >= anomalyRatio)
+  invalid: number;             // 0.0 — technically impossible / unusable — the ONLY 0.0
 }
 
 export interface AfrV2Policy {
@@ -133,8 +134,9 @@ export const AFR_V2_POLICY: AfrV2Policy = {
     // ordinary data stays v1 byte-identical). Kept as a named tier so replay can
     // tune it downward later if evidence supports it.
     slightlyUnusual: 1.0,
-    knownDisturbance: 0.4,   // explicit operational-event window only (gated)
-    highlyQuestionable: 0.1, // valid >=2.0x — an activation condition, low weight
+    weakTiming: 0.8,         // usable but weaker timing/evidence
+    knownDisturbance: 0.4,   // ordinary disturbed/recovery evidence (auto or event window)
+    highlyQuestionable: 0.1, // valid >=2.0x anomaly — major, minimal weight
     invalid: 0.0,            // technically impossible — the only 0.0
   },
   regime: { acceptAfter: 3, acceptedConfidence: 1.0 },

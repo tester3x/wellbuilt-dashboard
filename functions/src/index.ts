@@ -7,11 +7,8 @@ import { logCanonicalDiag } from './canonical-jobs/diag';
 import { ANTHROPIC_API_KEY, logRedacted, toSafeProviderError } from './secrets';
 import { createAnthropicClient } from './ai/anthropicClient';
 import { AFR_V2_POLICY } from './afr/afrV2Policy';
-import { computeAfrEventGated } from './afr/afrEventGated';
-import type { EventWindow } from './afr/afrV2';
+import { computeAfrAuto } from './afr/afrAutoTransient';
 import type { AfrInterval } from './afr/afrTypes';
-import { activeWashoutEvents, buildWashoutWindows, type WashoutEvent } from './afr/washoutWindow';
-import { resolveTimeZoneForState } from './afr/wellEventContract';
 import { buildProcessedRecord } from './processedRecord';
 import {
   ambiguousEditVerdict,
@@ -702,54 +699,11 @@ async function writeProductionLog(
 // via ./afr/afrV2 (validity → confidence → change-point → confidence-weighted
 // EMA). calculateOvernightBblsPerDay and the ON output are unchanged.
 
-/**
- * Resolve a company's IANA timezone: explicit companies/{id}.timezone if set,
- * else a documented per-company state->IANA fallback. Returns '' if unresolved
- * (the washout window is then not applied — fails safe to v1).
- */
-async function resolveCompanyTimeZone(companyId: string): Promise<string> {
-  try {
-    const snap = await admin.firestore().collection('companies').doc(companyId).get();
-    const data = snap.exists ? (snap.data() || {}) : {};
-    const explicit = data.timezone || data.ianaTimezone;
-    if (typeof explicit === 'string' && explicit) return explicit;
-    return resolveTimeZoneForState(data.state);
-  } catch {
-    return '';
-  }
-}
-
-/**
- * Read this well's active washout recovery windows for a forecast computed at
- * `observationMs`. Targeted single-path read (no broad scan); voided and
- * future-relative events are excluded; empty → no windows (v1).
- */
-async function loadWashoutWindows(companyId: string, wellKey: string, observationMs: number): Promise<EventWindow[]> {
-  if (!companyId) return [];
-  try {
-    const snap = await db.ref(`well_events/${companyId}/${wellKey}`).once('value');
-    if (!snap.exists()) return [];
-    const raw = snap.val() || {};
-    const events: WashoutEvent[] = Object.entries(raw).map(([eventId, v]) => {
-      const rec = v as Record<string, unknown>;
-      return {
-        eventId,
-        companyId,
-        wellKey,
-        type: 'hot_oiler_washout',
-        occurredAtUtc: Number(rec.occurredAtUtc),
-        voidedAtUtc: rec.voidedAtUtc != null ? Number(rec.voidedAtUtc) : undefined,
-      };
-    });
-    const active = activeWashoutEvents(events, observationMs);
-    if (active.length === 0) return [];
-    const tz = await resolveCompanyTimeZone(companyId);
-    if (!tz) return []; // unresolved tz → cannot place local Days 1-3 → fail safe to v1
-    return buildWashoutWindows(active, tz, AFR_V2_POLICY);
-  } catch {
-    return [];
-  }
-}
+// NOTE: the event-gated washout path (resolveCompanyTimeZone / loadWashoutWindows
+// + computeAfrEventGated) was removed here. calculateAFR now runs a SINGLE
+// automatic, event-free engine (computeAfrAuto). The washoutWindow /
+// wellEventContract / afrV2 / afrEventGated modules remain in the tree as
+// tested, non-wired research code but no longer participate in production.
 
 async function calculateAFR(
   wellName: string,
@@ -831,18 +785,16 @@ async function calculateAFR(
 
   if (intervals.length === 0) return 0;
 
-  // EVENT-GATED production path. Windows are evaluated at the OBSERVATION time
-  // (this pull), never wall-clock now, so a future event cannot affect a past
-  // forecast. With no active validated washout event this returns v1
-  // byte-identically. well_events is currently unwritten (no producer) → v1.
-  // The generic confidence hybrid (computeAfrHybrid) is shadow/replay research
-  // only and is intentionally NOT on this path.
-  const obsMs = observationMs ?? intervals[intervals.length - 1].timestamp;
-  const eventWindows = companyId ? await loadWashoutWindows(companyId, wellName, obsMs) : [];
-  // qualifiedOn wiring (ON→days/ft blend on Days 1-3) is deferred to the producer
-  // batch; the mechanism is proven in tests. Gating (v1 vs recovery) is live here.
-  const result = computeAfrEventGated(intervals, AFR_V2_POLICY, { eventWindows, nowMs: obsMs });
-  console.log(`[AFR] ${wellName}: ${result.mode} afr=${result.afr.toFixed(6)} (${(result.afr * 24 * 60).toFixed(1)} min/ft) over ${intervals.length} intervals${result.mode === 'washout_recovery' ? ` [washout D${result.washoutDayIndex}]` : ''}`);
+  // SINGLE PRODUCTION AFR ENGINE: automatic, event-free per-well transient/regime
+  // detection. No washout event, no calendar/weekday, no ON input, no cross-well
+  // data — each well is judged only against its OWN robust history. Unified
+  // confidence: 1.0 stable / 0.8 weak-timing / 0.4 disturbed-recovery / 0.1 major
+  // anomaly / 0.0 invalid. Contract UNCHANGED — returns the afr number the mobile/
+  // API clients already consume (no AFR-specific rebuild). companyId/observationMs
+  // are retained in the signature for callers but no longer steer the calculation.
+  void companyId; void observationMs;
+  const result = computeAfrAuto(intervals, AFR_V2_POLICY);
+  console.log(`[AFR] ${wellName}: ${result.mode} afr=${result.afr.toFixed(6)} (${(result.afr * 24 * 60).toFixed(1)} min/ft) over ${intervals.length} intervals${result.regimeAccepted ? ' [regime-change]' : ''}`);
   return result.afr;
 }
 
