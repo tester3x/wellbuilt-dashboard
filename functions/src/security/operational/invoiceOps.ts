@@ -8,17 +8,9 @@ import * as admin from 'firebase-admin';
 import { FieldValue } from 'firebase-admin/firestore';
 import { requireSecureDriver, assertSameCompany } from '../requireDriverAuth';
 import { writeSecurityAudit } from '../audit';
+import { decideInvoiceWrite, type InvoiceUpsertMode } from './invoiceUpsertCore';
 
 const MAX_JSON = 400_000;
-
-const TERMINAL_STATUSES = new Set([
-  'closed',
-  'complete',
-  'completed',
-  'cancelled',
-  'canceled',
-  'void',
-]);
 
 function stripPrivilege(obj: Record<string, unknown>) {
   delete obj.isAdmin;
@@ -34,9 +26,16 @@ export const upsertDriverInvoice = httpsV2.onCall(
       invoiceId?: string;
       invoice?: Record<string, unknown>;
       merge?: boolean;
+      mode?: InvoiceUpsertMode;
       driverHash?: string;
       idempotencyKey?: string;
     };
+
+    const driver = await requireSecureDriver(request, {
+      allowLegacyHash: true,
+      legacyDriverHash: data.driverHash,
+    });
+
     if (!data.invoice || typeof data.invoice !== 'object') {
       throw new httpsV2.HttpsError('invalid-argument', 'invoice required');
     }
@@ -44,10 +43,10 @@ export const upsertDriverInvoice = httpsV2.onCall(
       throw new httpsV2.HttpsError('invalid-argument', 'invoice too large');
     }
 
-    const driver = await requireSecureDriver(request, {
-      allowLegacyHash: true,
-      legacyDriverHash: data.driverHash,
-    });
+    const invoiceId = (data.invoiceId || '').trim();
+    if (!invoiceId) {
+      throw new httpsV2.HttpsError('invalid-argument', 'invoiceId required');
+    }
 
     const inv = { ...data.invoice };
     stripPrivilege(inv);
@@ -56,55 +55,86 @@ export const upsertDriverInvoice = httpsV2.onCall(
       inv.companyId = driver.companyId;
       assertSameCompany(driver.companyId, inv.companyId as string);
     }
-    // Keep legacy hash stamp for dual-run report joins
     if (data.driverHash) inv.driverHash = data.driverHash;
     inv.updatedAt = FieldValue.serverTimestamp();
     inv.authSource = driver.authSource;
 
-    let invoiceId = (data.invoiceId || '').trim();
-    if (!invoiceId && data.idempotencyKey) {
-      invoiceId = `idem_${String(data.idempotencyKey).replace(/\//g, '_').slice(0, 80)}`;
+    const col = admin.firestore().collection('invoices');
+    const ref = col.doc(invoiceId);
+    const ex = await ref.get();
+    const existing = ex.exists ? (ex.data() || {}) : null;
+    const mode: InvoiceUpsertMode = data.mode === 'upsert' ? 'upsert' : 'create';
+    const decided = decideInvoiceWrite({
+      invoiceId,
+      mode,
+      existing,
+      driverId: driver.driverId,
+      companyId: driver.companyId,
+      nextStatus: typeof inv.status === 'string' ? inv.status : undefined,
+      phoneSplitOperationId:
+        typeof inv.phoneSplitOperationId === 'string' ? inv.phoneSplitOperationId : undefined,
+    });
+
+    if (decided.result === 'invalid') {
+      throw new httpsV2.HttpsError('invalid-argument', 'invoiceId required');
+    }
+    if (decided.result === 'unauthorized') {
+      throw new httpsV2.HttpsError('permission-denied', 'unauthorized');
+    }
+    if (decided.result === 'conflict') {
+      throw new httpsV2.HttpsError('failed-precondition', 'conflict');
     }
 
-    const col = admin.firestore().collection('invoices');
-    if (invoiceId) {
-      const ref = col.doc(invoiceId);
-      const ex = await ref.get();
-      if (ex.exists) {
-        const prev = ex.data() || {};
-        const owner =
-          prev.driverId === driver.driverId ||
-          prev.driverHash === data.driverHash ||
-          prev.driverHash === driver.driverId;
-        if (!owner && prev.driverId) {
-          throw new httpsV2.HttpsError('permission-denied', 'Invoice owned by another driver');
-        }
-        if (driver.companyId && prev.companyId && prev.companyId !== driver.companyId) {
-          throw new httpsV2.HttpsError('permission-denied', 'Cross-company invoice');
-        }
-        const prevStatus = String(prev.status || '').toLowerCase();
-        const nextStatus = String(inv.status || prevStatus).toLowerCase();
-        if (TERMINAL_STATUSES.has(prevStatus) && !TERMINAL_STATUSES.has(nextStatus)) {
-          throw new httpsV2.HttpsError('failed-precondition', 'Cannot reopen terminal invoice');
-        }
-        await ref.set(inv, { merge: data.merge !== false });
-      } else {
-        inv.createdAt = FieldValue.serverTimestamp();
-        await ref.set(inv);
-      }
-    } else {
-      inv.createdAt = FieldValue.serverTimestamp();
-      const created = await col.add(inv);
-      invoiceId = created.id;
+    if (decided.write) {
+      if (!existing) inv.createdAt = FieldValue.serverTimestamp();
+      await ref.set(inv, { merge: decided.merge });
     }
 
     await writeSecurityAudit({
       action: 'upsertDriverInvoice',
       actorUid: driver.uid,
       driverId: driver.driverId,
-      detail: { invoiceId },
+      detail: { invoiceId, result: decided.result },
     });
-    return { ok: true, invoiceId };
+    return { ok: true, invoiceId, result: decided.result };
+  },
+);
+
+/** Owner-scoped invoice existence for photo recovery. Never a client getDoc. */
+export const getDriverInvoice = httpsV2.onCall(
+  { timeoutSeconds: 30, memory: '256MiB', enforceAppCheck: false },
+  async (request) => {
+    const data = (request.data || {}) as { invoiceId?: string; driverHash?: string };
+    const driver = await requireSecureDriver(request, {
+      allowLegacyHash: true,
+      legacyDriverHash: data.driverHash,
+    });
+    const invoiceId = (data.invoiceId || '').trim();
+    if (!invoiceId) throw new httpsV2.HttpsError('invalid-argument', 'invoiceId required');
+    const snap = await admin.firestore().collection('invoices').doc(invoiceId).get();
+    if (!snap.exists) return { ok: true, exists: false, invoiceId };
+    const prev = snap.data() || {};
+    const owner =
+      prev.driverId === driver.driverId ||
+      prev.driverHash === driver.driverId;
+    if (!owner && prev.driverId) {
+      throw new httpsV2.HttpsError('permission-denied', 'unauthorized');
+    }
+    if (driver.companyId && prev.companyId && prev.companyId !== driver.companyId) {
+      throw new httpsV2.HttpsError('permission-denied', 'unauthorized');
+    }
+    const photos = Array.isArray(prev.photos) ? prev.photos : [];
+    const photoIds = photos
+      .map((p: any) => (p && typeof p.photoId === 'string' ? p.photoId : null))
+      .filter(Boolean);
+    return {
+      ok: true,
+      exists: true,
+      invoiceId,
+      companyId: prev.companyId || driver.companyId || null,
+      status: prev.status || null,
+      photoIds,
+    };
   },
 );
 

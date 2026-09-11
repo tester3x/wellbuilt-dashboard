@@ -14,6 +14,10 @@ import {
   wbtIncomingPath,
   wbtPullStorageKey,
 } from './wbtPacketAuthorize';
+import {
+  decideProcessedPullReconcile,
+  legacyIdemStorageKey,
+} from './packetReconcileCore';
 
 const MAX_PACKET_BYTES = 200_000;
 
@@ -94,6 +98,39 @@ export const ingestDriverPacket = httpsV2.onCall(
     delete (stamped as any).tier;
 
     const key = wbtPullStorageKey(decided.packetId);
+
+    const [exactProcessed, legacyProcessed] = await Promise.all([
+      admin.database().ref(`packets/processed/${key}`).once('value'),
+      admin.database().ref(`packets/processed/${legacyIdemStorageKey(key)}`).once('value'),
+    ]);
+    const proven = decideProcessedPullReconcile({
+      canonicalPacketId: key,
+      driverId: driver.driverId,
+      companyId: driver.companyId,
+      localIdentity: decided.payload,
+      exact: exactProcessed.exists() ? (exactProcessed.val() as Record<string, unknown>) : null,
+      legacyIdem: legacyProcessed.exists() ? (legacyProcessed.val() as Record<string, unknown>) : null,
+    });
+    if (proven.match) {
+      await writeSecurityAudit({
+        action: 'ingestDriverPacket_reconciled',
+        actorUid: driver.uid,
+        driverId: driver.driverId,
+        detail: { key, packetId: key, location: proven.location },
+      });
+      return {
+        ok: true,
+        key,
+        packetId: key,
+        duplicate: true,
+        result: 'already_exists',
+        location: proven.location,
+      };
+    }
+    if (proven.reason === 'payload_mismatch' || proven.reason === 'cross_tenant') {
+      throw new httpsV2.HttpsError('failed-precondition', proven.reason);
+    }
+
     const ref = admin.database().ref(wbtIncomingPath(decided.packetId));
     const box: { outcome: 'write' | 'duplicate' | 'abort'; abortReason: string } = {
       outcome: 'write',
@@ -132,7 +169,7 @@ export const ingestDriverPacket = httpsV2.onCall(
         driverId: driver.driverId,
         detail: { key, packetId: key },
       });
-      return { ok: true, key, packetId: key, duplicate: true };
+      return { ok: true, key, packetId: key, duplicate: true, result: 'already_exists' };
     }
 
     await writeSecurityAudit({
@@ -141,6 +178,6 @@ export const ingestDriverPacket = httpsV2.onCall(
       driverId: driver.driverId,
       detail: { key, packetId: key, companyId: driver.companyId, wellName: decided.wellName },
     });
-    return { ok: true, key, packetId: key, duplicate: false };
+    return { ok: true, key, packetId: key, duplicate: false, result: 'created' };
   },
 );

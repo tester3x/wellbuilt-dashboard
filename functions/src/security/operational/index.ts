@@ -22,7 +22,9 @@ export { decideTrustedHistoryKeys } from './trustedHistoryAlias';
 export { requestStorageUploadPath } from './storageTokens';
 export {
   upsertDriverInvoice,
+  getDriverInvoice,
   upsertDriverDispatch,
   sendChatMessage,
 } from './invoiceOps';
+export { reconcileDriverPacket } from './reconcileDriverPacket';
 export { getPublicClientMeta } from './publicMeta';
