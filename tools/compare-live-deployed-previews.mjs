@@ -3,7 +3,7 @@ import path from 'node:path';
 import { chromium } from 'playwright';
 
 const BASELINE_URL = 'https://wellbuilt-sync--qa-ui-576fb63b-v3b1glwn.web.app';
-const CANDIDATE_URL = 'https://wellbuilt-sync--qa-photo-review-v2-2fl9fj4v.web.app';
+const CANDIDATE_URL = 'https://wellbuilt-sync--qa-photo-review-v3-lupo6jhs.web.app';
 
 const SCREENSHOT_DIR = 'C:/Users/Michael Burger/.gemini/antigravity/brain/f3966df2-0095-4713-a527-e5b5081a57fd/screenshots';
 
