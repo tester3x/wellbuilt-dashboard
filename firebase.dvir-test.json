@@ -1,0 +1,11 @@
+{
+  "firestore": { "rules": "firestore.rules" },
+  "database": { "rules": "database.rules.json" },
+  "emulators": {
+    "firestore": { "port": 8945 },
+    "database": { "port": 9345 },
+    "hub": { "port": 4445 },
+    "logging": { "port": 4545 },
+    "ui": { "enabled": false }
+  }
+}

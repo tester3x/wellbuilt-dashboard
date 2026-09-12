@@ -5605,3 +5605,5 @@ export {
 // whole-codebase deploy would have pruned them.
 export { validatePhotoCompliance, suggestPhotoCriteria } from './photoCompliance';
 export { scheduledWellCatalogRefresh, triggerWellCatalogRefresh } from './wellCatalogRefresh';
+export { recordDriverDvirCompletion, registerDriverDvirPostTrip,
+  resolveDriverDvirStatus, resolveEquipmentDvirEntry } from './security/operational/dvirCompletionCallables';
