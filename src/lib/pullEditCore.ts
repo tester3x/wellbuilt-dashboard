@@ -23,6 +23,29 @@ export interface EditPullResult {
 }
 
 /**
+ * Injectable callable seam: `(name, data) => Promise<{ data }>`. In production
+ * this is a thin adapter over firebase `httpsCallable`; in tests it is a spy, so
+ * the invocation boundary (callable name, single call, payload) is verifiable
+ * without the firebase SDK or a DOM.
+ */
+export type CallableInvoker = (name: string, data: AdminPullEditRequest) => Promise<{ data: unknown }>;
+
+/** The one callable this client is allowed to invoke for a pull edit. */
+export const ADMIN_PULL_EDIT_CALLABLE = 'adminSubmitPullEdit';
+
+/**
+ * Invoke the governed edit callable exactly once with the built request and
+ * return its `{ ok, packetId }` data. Never writes to the database directly.
+ */
+export async function invokeAdminPullEdit(
+  call: CallableInvoker,
+  req: AdminPullEditRequest,
+): Promise<EditPullResult> {
+  const res = await call(ADMIN_PULL_EDIT_CALLABLE, req);
+  return res.data as EditPullResult;
+}
+
+/**
  * Build the callable request. It NEVER mints a packet id and NEVER carries a
  * requestType — the second-pull class of bug is impossible from here: the edit
  * is addressed solely by `originalPacketId`, and the server derives the edit

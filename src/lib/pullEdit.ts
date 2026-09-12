@@ -15,10 +15,19 @@
  */
 import { httpsCallable } from 'firebase/functions';
 import { getFirebaseFunctions } from './firebase';
-import { buildAdminPullEditRequest, type EditPullResult } from './pullEditCore';
+import {
+  buildAdminPullEditRequest,
+  invokeAdminPullEdit,
+  type AdminPullEditRequest,
+  type EditPullResult,
+} from './pullEditCore';
 
 export { describeEditError } from './pullEditCore';
 export type { EditPullResult } from './pullEditCore';
+
+/** Production adapter: run one governed callable by name and return its result. */
+const httpsCallableInvoker = (name: string, data: AdminPullEditRequest) =>
+  httpsCallable(getFirebaseFunctions(), name)(data);
 
 /**
  * Governed edit of a pull by its immutable originalPacketId + its (scope) well.
@@ -41,7 +50,5 @@ export async function editPull(
     newDateTimeUTC,
     wellDown,
   );
-  const fn = httpsCallable(getFirebaseFunctions(), 'adminSubmitPullEdit');
-  const res = await fn(req);
-  return res.data as EditPullResult;
+  return invokeAdminPullEdit(httpsCallableInvoker, req);
 }

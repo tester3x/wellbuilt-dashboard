@@ -8,7 +8,17 @@
  */
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { buildAdminPullEditRequest, describeEditError } from './pullEditCore.ts';
+import { readFileSync } from 'node:fs';
+import { fileURLToPath } from 'node:url';
+import {
+  buildAdminPullEditRequest,
+  describeEditError,
+  invokeAdminPullEdit,
+  ADMIN_PULL_EDIT_CALLABLE,
+  type AdminPullEditRequest,
+} from './pullEditCore.ts';
+
+const readSibling = (rel: string) => readFileSync(fileURLToPath(new URL(rel, import.meta.url)), 'utf8');
 
 const ORIG = '20260911_213623_Cyclone2_fbxyqp'; // the accepted original from the incident
 
@@ -84,4 +94,59 @@ test('unknown error never leaks raw text and states no change occurred', () => {
 test('null / undefined error is handled safely', () => {
   assert.match(describeEditError(undefined), /NOT changed/i);
   assert.match(describeEditError(null), /NOT changed/i);
+});
+
+// ── client invocation boundary (spy over the injectable callable) ────────────
+
+test('invokes the callable EXACTLY ONCE, named adminSubmitPullEdit, with the original packet id', async () => {
+  const calls: Array<{ name: string; data: AdminPullEditRequest }> = [];
+  const spy = async (name: string, data: AdminPullEditRequest) => {
+    calls.push({ name, data });
+    return { data: { ok: true as const, packetId: 'edit_server_minted_Cyclone2' } };
+  };
+  const req = buildAdminPullEditRequest('20260911_213623_Cyclone2_fbxyqp', 'Cyclone 2', 104, 165, undefined, false);
+  const res = await invokeAdminPullEdit(spy, req);
+
+  assert.equal(calls.length, 1);                                  // exactly one invocation
+  assert.equal(calls[0].name, 'adminSubmitPullEdit');            // correct callable
+  assert.equal(calls[0].name, ADMIN_PULL_EDIT_CALLABLE);
+  assert.equal(calls[0].data.originalPacketId, '20260911_213623_Cyclone2_fbxyqp'); // immutable target
+  assert.deepEqual(res, { ok: true, packetId: 'edit_server_minted_Cyclone2' });    // returns server data
+});
+
+test('callable rejection propagates (so the caller can keep the modal open and show it)', async () => {
+  const spy = async () => { throw { code: 'permission-denied', message: 'well_outside_company' }; };
+  const req = buildAdminPullEditRequest('P', 'W', 1, 1);
+  await assert.rejects(() => invokeAdminPullEdit(spy, req));
+});
+
+// ── source guards: the legacy direct-write path is gone and the UI fails safe ─
+
+test('SOURCE: no client write to packets/incoming remains in the edit path', () => {
+  const wells = readSibling('./wells.ts');
+  const pullEdit = readSibling('./pullEdit.ts');
+  // The legacy bug wrote set(ref(db, `packets/incoming/${editPacketId}`), ...).
+  assert.ok(!/packets\/incoming\/\$\{editPacketId\}/.test(wells), 'wells.ts must not write packets/incoming');
+  assert.ok(!/export\s+async\s+function\s+editPull/.test(wells), 'legacy editPull must be removed from wells.ts');
+  // pullEdit.ts may mention packets/incoming in its docstring, but must never
+  // WRITE it (no set(ref(...)) / no `packets/incoming/${...}` path build).
+  assert.ok(!/set\s*\(\s*ref\s*\(/.test(pullEdit), 'pullEdit.ts must not call set(ref(...))');
+  assert.ok(!/packets\/incoming\/\$\{/.test(pullEdit), 'pullEdit.ts must not build a packets/incoming write path');
+  // The governed path must go through the callable.
+  assert.ok(/adminSubmitPullEdit|invokeAdminPullEdit/.test(pullEdit), 'pullEdit.ts must use the governed callable');
+});
+
+test('SOURCE: a failed edit stays visible in the modal and cannot double-submit', () => {
+  const page = readSibling('../app/well/page.tsx');
+  // editPull now comes from the governed module, not wells.ts.
+  assert.ok(/from '@\/lib\/pullEdit'/.test(page), 'page must import editPull from the governed module');
+  // Failure path sets the in-modal error (not only a page-level banner) …
+  assert.ok(/setEditError\(describeEditError\(err\)\)/.test(page), 'catch must set the in-modal error');
+  // … and an editError banner is rendered inside the modal.
+  assert.ok(/\{editError && \(/.test(page), 'modal must render the editError banner');
+  // Double-click guard: ignore re-entry while a submit is in flight.
+  assert.ok(/if \(editSubmitting\) return;/.test(page), 'submitEdit must guard against double submit');
+  // On failure the modal is NOT closed (no setEditingPull(null) in the catch block).
+  const catchBlock = page.slice(page.indexOf('} catch (err) {'), page.indexOf('} finally {'));
+  assert.ok(!/setEditingPull\(null\)/.test(catchBlock), 'a failed edit must not close the modal');
 });
