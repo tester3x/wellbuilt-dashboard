@@ -51,3 +51,8 @@ Validation: 14 model tests; existing SSO bridge/wrapper/entitlement suites inclu
 lookup/feedback, off-shift recovery proof and unchanged shift authority. Updated
 deployment targets are only resolveEquipmentDvirEntry, resolveDriverDvirRecovery,
 recordDriverDvirRecoveryFeedback and ssoIssueAuthorizationCode. Deployment pending.
+
+Deployed those four targets from ac11ee4f on September 12 at 20:26 UTC. Each is
+ACTIVE and returns HTTP 401 UNAUTHENTICATED to a valid unauthenticated probe.
+Downloaded deployment archives match committed recovery/SSO TypeScript and compiled
+JavaScript on all four functions. No rules or Hosting targets were deployed.
