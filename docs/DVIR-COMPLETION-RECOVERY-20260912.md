@@ -70,3 +70,7 @@ The full SSO tests now include the restored JSA spine: 115 entitlement checks an
 shift-required customers, inconsistent/absent authority, exclusions and exact
 server binding round-trip. The mirror verifier confirms 59 immutable files.
 Redeploy only ssoIssueAuthorizationCode for this compatibility correction.
+
+Corrected issuer deployed from 16f5bbf4 at 20:39 UTC, revision 00009-biz. Live
+metadata reports ACTIVE and unauthenticated HTTP 401. Its source archive matches
+the committed issuer, JSA binding module, deps, compiled issuer and contracts 0.5.
