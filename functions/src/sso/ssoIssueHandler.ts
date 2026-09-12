@@ -107,6 +107,7 @@ export async function handleSsoIssueCode(
   //     replaced below by the normalized binding the server validated.
   //     A well-formed shift id proves nothing on its own.
   let storedBinding: SsoShiftBinding | undefined;
+  let recoveryAuthorized = false;
   if (req.audience === SSO_AUDIENCE_EQUIPMENT) {
     const requested = req.shiftBinding;
     if (!requested) {
@@ -126,7 +127,10 @@ export async function handleSsoIssueCode(
       ? await deps.getPlan(contractState.contract.planId)
       : null;
 
+    recoveryAuthorized = requested.phase === 'post_trip'
+      && await deps.canRecoverDvir?.(driver.driverId, driver.companyId, requested.shiftId) === true;
     const decision = decideEquipmentAuthorization({
+      recoveryAuthorized,
       driverId: driver.driverId,
       companyId: driver.companyId,
       binding: requested,
@@ -188,7 +192,8 @@ export async function handleSsoIssueCode(
       });
       decision = decideAppEntitlementAuthorization({ ...authzInput, shift });
     }
-    if (!decision.ok) {
+    if (!decision.ok && !(recoveryAuthorized && req.audience === SSO_AUDIENCE_EQUIPMENT
+        && storedBinding?.phase === 'post_trip' && decision.refusal === 'active_shift_required')) {
       // Coarse to the client, precise to the operator — the same shape the
       // equipment refusal uses. `refusal` separates commercial exclusion
       // from an unmet shift gate for whoever reads the logs; the client is

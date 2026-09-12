@@ -5606,4 +5606,5 @@ export {
 export { validatePhotoCompliance, suggestPhotoCriteria } from './photoCompliance';
 export { scheduledWellCatalogRefresh, triggerWellCatalogRefresh } from './wellCatalogRefresh';
 export { recordDriverDvirCompletion, registerDriverDvirPostTrip,
-  resolveDriverDvirStatus, resolveEquipmentDvirEntry } from './security/operational/dvirCompletionCallables';
+  resolveDriverDvirStatus, resolveEquipmentDvirEntry, resolveDriverDvirRecovery,
+  recordDriverDvirRecoveryFeedback } from './security/operational/dvirCompletionCallables';

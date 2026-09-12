@@ -4,6 +4,7 @@ import { FieldValue } from 'firebase-admin/firestore';
 import { SSO_SESSION_APP_CLAIM, SSO_SESSION_APP_EQUIPMENT } from '@tester3x/wellbuilt-contracts';
 import { resolveSubject, SHIFT_AUTHORITY_OPTIONS } from './shiftAuthorityCallables';
 import { isPeriodId, shiftAuthorityPath, shiftDayPath } from './shiftAuthority';
+import { isDvirRecovery, parseRecoveryFeedback } from './dvirRecovery';
 import { assertExpectedOwner, assertLedgerOwner, emptyLedger, parseCompletion,
   recordCompletion, selectDvirEntry, type DvirLedger, type DvirSubject } from './dvirCompletion';
 
@@ -131,5 +132,44 @@ export const resolveEquipmentDvirEntry = https.onCall(SHIFT_AUTHORITY_OPTIONS, a
     .where('postTripPending', '==', true).get();
   const result = selectDvirEntry(pending.docs.map(d => d.data() as DvirLedger), who,
     { shiftId, phase: data.phase });
-  return { protocolVersion: 1, ...who, ...result };
+  const authority = (await db().doc(shiftAuthorityPath(who.driverId)).get()).data();
+  const selected = pending.docs.find(d => d.id === result.binding.shiftId)?.data() as DvirLedger | undefined;
+  const closingOlder = isDvirRecovery(selected ?? null, who, authority as any);
+  return { protocolVersion: 1, ...who, ...result, recovery: result.recovery || closingOlder };
+});
+
+/** Own unfinished reports only. This endpoint neither claims nor closes work periods. */
+export const resolveDriverDvirRecovery = https.onCall(SHIFT_AUTHORITY_OPTIONS, async request => {
+  const data = request.data;
+  if (!data || typeof data !== 'object' || Array.isArray(data)
+      || Object.keys(data).some(k => !OWNER_KEYS.includes(k))) {
+    throw new https.HttpsError('invalid-argument', 'invalid_recovery_request');
+  }
+  const who = await subject(request, data, false);
+  const authority = (await db().doc(shiftAuthorityPath(who.driverId)).get()).data();
+  if (!authority || authority.driverId !== who.driverId || authority.companyId !== who.companyId
+      || authority.initialized !== true) throw new https.HttpsError('failed-precondition', 'shift_authority_unavailable');
+  const pending = await db().collection(`driver_dvir_completions/${who.driverId}/shifts`)
+    .where('postTripPending', '==', true).get();
+  const oldest = pending.docs.map(d => d.data() as DvirLedger)
+    .filter(d => isDvirRecovery(d, who, authority as any)).sort((a, b) => a.shiftId.localeCompare(b.shiftId))[0];
+  return { protocolVersion: 1, ...who, recovery: oldest ? { shiftId: oldest.shiftId, phase: 'post_trip' } : null };
+});
+
+export const recordDriverDvirRecoveryFeedback = https.onCall(SHIFT_AUTHORITY_OPTIONS, async request => {
+  const data = payload(request.data, [...OWNER_KEYS, 'shiftId', 'reason', 'note']);
+  const who = await subject(request, data, false);
+  let feedback;
+  try { feedback = parseRecoveryFeedback(data); }
+  catch { throw new https.HttpsError('invalid-argument', 'invalid_recovery_feedback'); }
+  const ref = ledgerRef(who.driverId, data.shiftId as string);
+  await db().runTransaction(async tx => {
+    const [snap, a] = await Promise.all([tx.get(ref), tx.get(db().doc(shiftAuthorityPath(who.driverId)))]);
+    if (!isDvirRecovery(snap.data() as DvirLedger ?? null, who, a.data() as any)) {
+      throw new https.HttpsError('failed-precondition', 'recovery_not_pending');
+    }
+    // Feedback is separate from the immutable signed inspection. No reason is required to close.
+    tx.set(ref, { recoveryFeedback: { ...feedback, recordedAt: FieldValue.serverTimestamp() } }, { merge: true });
+  });
+  return { protocolVersion: 1, saved: true };
 });

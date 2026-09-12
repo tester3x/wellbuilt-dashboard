@@ -98,6 +98,8 @@ export function decideEquipmentAuthorization(input: {
   /** `driver_shifts/{driverId}_{originDay}`. */
   originDayDoc: ShiftDayDoc;
   nowMs: number;
+  /** Server-proven own unfinished inspection outside the active period. */
+  recoveryAuthorized?: boolean;
 }): EquipmentAuthzDecision {
   // 1. The company must be under an ENFORCED contract. An inert contract is
   //    configured but deliberately not in force, and a governed DVIR handoff
@@ -146,6 +148,9 @@ export function decideEquipmentAuthorization(input: {
   const config = toContractsWorkPeriodConfiguration(input.contract);
   if (!config) {
     return { ok: false, reason: 'capabilities_unavailable', detail: 'no work period configuration' };
+  }
+  if (input.recoveryAuthorized === true && input.binding.phase === 'post_trip') {
+    return { ok: true, binding: { shiftId: input.binding.shiftId, phase: 'post_trip' }, capabilities: caps.capabilities };
   }
   const resolution = resolveWorkPeriod({
     contractVersion: config.contractVersion,

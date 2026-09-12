@@ -541,5 +541,32 @@ const INCLUDED_PLAN = planWith({ [WELLBUILT_APP_TICKETS]: { included: true } });
     d.ok === false && d.refusal === 'app_not_recognized');
 }
 
+// Recovery is a narrow server-proven Post-Trip exception to shift gating.
+{
+  const recoveryContract = { ...CONTRACT, contractVersion: 1, configurationVersion: 1,
+    entitlementOverrides: [], workPeriodConfiguration: { mode: 'explicit_shift' } };
+  const recoveryPlan = { ...planWith({ [WELLBUILT_APP_EQUIPMENT]: { included: true, requiresActiveShift: true } }),
+    capabilities: ['dvir', 'explicitShiftLifecycle'] };
+  const request = { ...REQUEST, audience: SSO_AUDIENCE_EQUIPMENT,
+    shiftBinding: { shiftId: '2026-08-11_223000', phase: 'post_trip' } };
+  for (const [name, proof, phase, excluded, expected] of [
+    ['own pending Post-Trip while off shift', true, 'post_trip', false, true],
+    ['unproven Post-Trip while off shift', false, 'post_trip', false, false],
+    ['Pre-Trip cannot use recovery proof', true, 'pre_trip', false, false],
+    ['recovery cannot bypass app entitlement', true, 'post_trip', true, false],
+  ]) {
+    const plan = excluded ? { ...recoveryPlan, apps: {} } : recoveryPlan;
+    const w = makeWorld({ contract: recoveryContract, contractState: 'active', plan,
+      authority: { ...OPEN_AUTHORITY, openPeriodId: null, originLocalDate: null } });
+    w.deps.canRecoverDvir = async (driverId, companyId, shiftId) =>
+      proof && driverId === DRIVER && companyId === COMPANY && shiftId === request.shiftBinding.shiftId;
+    const result = await issue(w, { ...request, shiftBinding: { ...request.shiftBinding, phase } });
+    check(name, result.ok === expected, JSON.stringify(result));
+    check(`${name}: exact issuance count`, w.docs.size === (expected ? 1 : 0));
+    if (expected) check('recovery stores Post-Trip binding only',
+      [...w.docs.values()][0].shiftBinding?.phase === 'post_trip');
+  }
+}
+
 console.log(`\nsso entitlement: ${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);

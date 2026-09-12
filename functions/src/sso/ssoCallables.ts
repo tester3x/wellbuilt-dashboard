@@ -47,6 +47,14 @@ const fs = () => admin.firestore();
 export function buildSsoDeps(): SsoDeps {
   const db = fs();
   return {
+    async canRecoverDvir(driverId, companyId, shiftId) {
+      const { isDvirRecovery } = await import('../security/operational/dvirRecovery');
+      const [ledger, authority] = await Promise.all([
+        db.doc(`driver_dvir_completions/${driverId}/shifts/${shiftId}`).get(),
+        db.doc(shiftAuthorityPath(driverId)).get(),
+      ]);
+      return isDvirRecovery(ledger.data() as any, { driverId, companyId }, authority.data() as any);
+    },
     nowMs: () => Date.now(),
     randomBytes: (count) => new Uint8Array(randomBytes(count)),
     sha256Hex: (input) => createHash('sha256').update(input, 'utf8').digest('hex'),

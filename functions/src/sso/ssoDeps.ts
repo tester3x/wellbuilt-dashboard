@@ -99,6 +99,8 @@ export interface SsoDeps {
    * that into `unverifiable`, never into a false `none`.
    */
   getShiftAuthority(driverId: string): Promise<ShiftAuthorityRecord | null>;
+  /** Server ledger proof for Post-Trip close-out only; absent dependency denies recovery. */
+  canRecoverDvir?(driverId: string, companyId: string, shiftId: string): Promise<boolean>;
   /**
    * The company's parsed contract, with its canonical state label, so the
    * handler never re-implements parsing and never mistakes a malformed

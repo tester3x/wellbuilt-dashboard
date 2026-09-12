@@ -32,3 +32,22 @@ named dashboard-codebase functions. All four report ACTIVE, and each live HTTP
 endpoint returns 401 UNAUTHENTICATED without a session. Downloaded deployed source
 and compiled JavaScript match the committed implementation for all four functions.
 No rules or Hosting target was deployed. Device completion validation remains pending.
+
+Follow-up: resolveDriverDvirRecovery finds the current owner's oldest pending
+Post-Trip outside the server's active period, including when no period is open.
+recordDriverDvirRecoveryFeedback accepts optional bounded reason/notes separately
+from signed report fields. Ownership, profile activity and recovery state are
+rechecked server-side; feedback cannot create a completion or modify shift authority.
+
+Equipment authorization now permits a Post-Trip-only recovery when the server
+ledger proves the same driver's unfinished inspection outside the active period.
+The exception applies only to shift requirements for Equipment; authentication,
+company contract, DVIR capability and app entitlement checks still apply. Pre-Trip,
+other audiences, completed records and foreign records cannot use the exception.
+No protocol identity fields or permissive client rules were added.
+
+Validation: 14 model tests; existing SSO bridge/wrapper/entitlement suites including
+112 entitlement checks; real callable-body Firestore/RTDB emulator tests for new
+lookup/feedback, off-shift recovery proof and unchanged shift authority. Updated
+deployment targets are only resolveEquipmentDvirEntry, resolveDriverDvirRecovery,
+recordDriverDvirRecoveryFeedback and ssoIssueAuthorizationCode. Deployment pending.
