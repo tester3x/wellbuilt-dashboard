@@ -26,6 +26,8 @@ export interface ManualPullRequest {
   reason?: string;
   idempotencyKey?: string;
   timezone?: string;
+  /** Optional link to an EXISTING dispatch (metadata only; never triggers invoicing). */
+  linkedDispatchId?: string;
 }
 
 export interface ManualPullResult {
@@ -50,6 +52,7 @@ export function buildManualPullRequest(input: ManualPullRequest): Record<string,
   if (input.reason) req.reason = input.reason;
   if (input.idempotencyKey) req.idempotencyKey = input.idempotencyKey;
   if (input.timezone) req.timezone = input.timezone;
+  if (input.linkedDispatchId) req.linkedDispatchId = input.linkedDispatchId;
   return req;
 }
 

@@ -150,13 +150,17 @@ test('CONTRACT GAP: Save Changes sends op:update but deployed staffWriteWellConf
 
 // ── +Add Pull: rules-denied direct write, no governed dashboard target (BLOCKED) ─
 
-test('+Add Pull is now GOVERNED: no direct packets/incoming write; routes through submitManualPull', () => {
+test('+Add Pull is GOVERNED and WB-M-only: no direct write, and CANNOT create tickets/invoices', () => {
   const modal = read('../../components/AddPullModal.tsx');
-  // The legacy rules-denied direct write is gone.
+  // The legacy rules-denied direct write is gone; routes through the governed adapter.
   assert.ok(!/set\s*\(\s*ref\s*\([^)]*packets\/incoming/.test(modal), 'AddPullModal must not direct-write packets/incoming');
-  // The pull now goes through the governed manual-pull adapter.
   assert.match(modal, /submitManualPull\(/, 'AddPullModal must submit via submitManualPull');
-  // Adapter targets the new callable; core carries no commercial projection.
+  // Proof it cannot produce commercial documents: no ticket/invoice creation
+  // code path or block-number helpers remain in this control.
+  assert.ok(!/addDoc\s*\(\s*collection\([^)]*'(invoices|tickets)'/.test(modal), 'AddPullModal must not create invoices/tickets');
+  assert.ok(!/getNextInvoiceNumber|getNextTicketNumber/.test(modal), 'AddPullModal must not allocate invoice/ticket numbers');
+  assert.ok(!/createTicket/.test(modal), 'the createTicket option must be removed');
+  // Adapter targets the new callable.
   const adapter = read('../staffSubmitManualPull.ts');
   assert.match(adapter, /MANUAL_PULL_CALLABLE\s*=\s*'staffSubmitManualPull'/);
 });

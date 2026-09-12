@@ -1,22 +1,23 @@
 /**
- * staffSubmitManualPull — governed dispatcher/admin MANUAL pull entry (+Add Pull).
+ * staffSubmitManualPull — governed Dashboard Dispatch MANUAL pull (+Add Pull).
  *
- * The browser used to write packets/incoming directly (denied by production
- * rules → the +Add Pull no-op). This authenticated callable is the governed
- * path for water moved by hot oilers / washout crews / third-party haulers /
- * anyone not on WB-M/WB-T. It reuses the existing manageDrivers guard (same as
- * staffWriteDispatch / staffWriteWellConfig), derives the company from the
- * caller (never a client override), and submits through the canonical WB-M
- * pull-input path (packets/incoming) under the Admin SDK so processIncomingPull
- * updates level/history normally. It carries NO invoice/dispatch/ticket context,
- * so no ticket/invoice/Payroll/Billing projection is produced. Idempotent by a
- * deterministic packet id.
+ * Authorized by DISPATCH-WRITE security: the caller must hold the canonical
+ * `createDispatch` capability (dispatch managers + admins; dispatch VIEWERS are
+ * denied). Reuses the existing exported requireRegisteredDashboardUser loader +
+ * the existing capability model — it does NOT add or modify shared claims/guard
+ * architecture.
  *
- * It does NOT modify any shared guard, rule, AFR logic, or driver identity.
+ * Records water moved by hot oilers / washout crews / third-party haulers /
+ * non-WB-M/WB-T people. Company is derived from the caller (never a client
+ * override). Submits through the canonical WB-M pull-input path (packets/incoming)
+ * under the Admin SDK so processIncomingPull updates level/history. Carries no
+ * invoice/dispatch/ticket invoicing context ⇒ no ticket/invoice/Payroll/Billing.
+ * The authenticated dispatcher is audited separately (dispatchActorUid); the
+ * entry is never a real driver. Idempotent by a deterministic packet id.
  */
 import * as httpsV2 from 'firebase-functions/v2/https';
 import * as admin from 'firebase-admin';
-import { requireManageDrivers } from './adminAuth';
+import { requireRegisteredDashboardUser } from './adminAuth';
 import { writeSecurityAudit } from './audit';
 import {
   validateManualPull,
@@ -25,19 +26,27 @@ import {
   type ManualPullInput,
 } from './operational/staffManualPull';
 
+/** The canonical dispatch-write capability that gates this control. */
+const DISPATCH_WRITE_CAPABILITY = 'createDispatch';
+
 const ALLOWED = new Set([
   'wellName', 'tankLevelFeet', 'bblsTaken', 'dateTimeUTC', 'wellDown',
   'serviceCategory', 'externalCompany', 'externalDriver', 'reason',
-  'idempotencyKey', 'timezone',
+  'idempotencyKey', 'timezone', 'linkedDispatchId',
 ]);
 
 export const staffSubmitManualPull = httpsV2.onCall(
   { timeoutSeconds: 30, memory: '256MiB', enforceAppCheck: false },
   async (request) => {
-    const caller = await requireManageDrivers(
+    // Dispatch-write authorization: any registered user WITH createDispatch
+    // (dispatch managers + admins). Dispatch viewers (viewDispatch only) are denied.
+    const caller = await requireRegisteredDashboardUser(
       request.auth?.uid,
       request.auth?.token as Record<string, unknown> | undefined,
     );
+    if (!caller.caps.includes(DISPATCH_WRITE_CAPABILITY)) {
+      throw new httpsV2.HttpsError('permission-denied', 'createDispatch_required:You need dispatch-management permission to add a pull.');
+    }
 
     const raw = (request.data || {}) as Record<string, unknown>;
     for (const key of Object.keys(raw)) {
@@ -46,8 +55,7 @@ export const staffSubmitManualPull = httpsV2.onCall(
       }
     }
 
-    // Company is authoritative from the caller. A platform admin with no company
-    // scope cannot manual-enter a pull without impersonating a company.
+    // Company is authoritative from the caller.
     if (!caller.companyId) {
       throw new httpsV2.HttpsError('failed-precondition', 'company_required:No company is bound to your account.');
     }
@@ -66,7 +74,7 @@ export const staffSubmitManualPull = httpsV2.onCall(
       companyId: caller.companyId,
       nowMs: Date.now(),
     });
-    // Hard invariant: never a commercial projection.
+    // Hard invariants: never a commercial projection, never a driver-shaped actor.
     assertNoCommercialProjection(packet);
 
     const rtdb = admin.database();
@@ -78,7 +86,7 @@ export const staffSubmitManualPull = httpsV2.onCall(
         await writeSecurityAudit({
           action: 'staffSubmitManualPull',
           actorUid: caller.uid,
-          detail: { packetId, wellName: verdict.value.wellName, idempotent: true, serviceCategory: verdict.value.serviceCategory },
+          detail: { packetId, wellName: verdict.value.wellName, idempotent: true, dispatchActorUid: caller.uid, serviceCategory: verdict.value.serviceCategory },
         });
         return { ok: true as const, packetId, idempotent: true, submitted: false };
       }
@@ -93,6 +101,10 @@ export const staffSubmitManualPull = httpsV2.onCall(
         packetId,
         wellName: verdict.value.wellName,
         companyId: caller.companyId,
+        dispatchActorUid: caller.uid, // authenticated dispatcher (audited separately from any external driver)
+        externalDriver: verdict.value.externalDriver || undefined,
+        externalCompany: verdict.value.externalCompany || undefined,
+        linkedDispatchId: verdict.value.linkedDispatchId || undefined,
         serviceCategory: verdict.value.serviceCategory,
         bblsTaken: verdict.value.bblsTaken,
       },
