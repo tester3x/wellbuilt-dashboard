@@ -20,3 +20,12 @@ wrong verifier, replay/concurrent redemption, expiration, revoked plan/driver,
 company change and request identity injection. Existing complete SSO suites pass.
 Only issueEquipmentAppSession and exchangeEquipmentAppSession are deployment
 targets. Phone verification remains pending.
+
+Deployed from a6bb004c on 2026-09-12. Both new functions are ACTIVE:
+issueequipmentappsession-00001-weh (23:16:37 UTC) and
+exchangeequipmentappsession-00001-liw (23:16:42 UTC). Live probes verify issuer
+401 without Auth and exchange 403 invalid_grant for a fabricated code. Existing
+shared issuer remains ssoissueauthorizationcode-00009-biz at 20:39:55 UTC;
+shared exchange remains ssoexchangeauthorizationcode-00007-zex from August 23.
+No rules, Hosting, plans, existing SSO functions or driver records were deployed
+or modified by this deployment.
