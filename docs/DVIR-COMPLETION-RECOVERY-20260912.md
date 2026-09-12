@@ -26,3 +26,9 @@ actual callable bodies covering unauthenticated, wrong-app, cross-driver, revoke
 profile, immutable retries, recovery, legacy registration and unchanged authority.
 Emulator invocation tests callable bodies rather than network JWT verification or
 Firestore client rules. No synthetic completion is written to production.
+
+Deployed September 12 at 18:08 UTC from 857c1412 using only the four explicitly
+named dashboard-codebase functions. All four report ACTIVE, and each live HTTP
+endpoint returns 401 UNAUTHENTICATED without a session. Downloaded deployed source
+and compiled JavaScript match the committed implementation for all four functions.
+No rules or Hosting target was deployed. Device completion validation remains pending.
