@@ -2,12 +2,14 @@
 import {
   signInWithEmailAndPassword,
   createUserWithEmailAndPassword,
+  deleteUser,
   signOut as firebaseSignOut,
   onAuthStateChanged,
   User
 } from 'firebase/auth';
-import { ref, get, set, update, serverTimestamp } from 'firebase/database';
+import { ref, get, update } from 'firebase/database';
 import { getFirebaseAuth, getFirebaseDatabase } from './firebase';
+import { requestCompanyOnboarding } from './companyOnboarding';
 
 // ── Role primitives ─────────────────────────────────────────────────────────
 // Seven canonical roles. Customers can RELABEL (roleLabels on companies/{id})
@@ -255,21 +257,15 @@ export async function registerWithEmail(
 ): Promise<WellBuiltUser> {
   const auth = getFirebaseAuth();
   const result = await createUserWithEmailAndPassword(auth, email, password);
-  // Capture the signup so the requested company name isn't lost.
+  // The signed-in account requests company creation through the governed
+  // server boundary. The browser never assigns its own companyId or role.
   try {
-    const db = getFirebaseDatabase();
-    await set(ref(db, `users/${result.user.uid}`), {
-      status: 'pending',
-      requestedCompanyName: companyName?.trim() || null,
-      requestedAt: serverTimestamp(),
-      role: 'viewer',
-      companyId: null,
-      onboardingStatus: 'pending_company_assignment',
-      email: result.user.email || email,
-      displayName: result.user.email || email,
-    });
-  } catch (err) {
-    console.warn('[auth] failed to write pending signup record (non-fatal):', err);
+    await requestCompanyOnboarding(companyName?.trim() || email.split('@')[0]);
+  } catch (error) {
+    // Do not strand a brand-new Auth identity without its governed pending
+    // request. This user was created in this call and has no application data.
+    await deleteUser(result.user).catch(() => undefined);
+    throw error;
   }
   return await getUserWithRole(result.user);
 }

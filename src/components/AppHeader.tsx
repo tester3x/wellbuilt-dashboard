@@ -55,10 +55,10 @@ export function AppHeader() {
 
   return (
     <header className="bg-gray-800 border-b border-gray-700 sticky top-0 z-40">
-      {/* Three-column grid: buttons | title+tabs | bell */}
-      <div className="w-full grid grid-cols-[auto_1fr_auto] items-start">
+      {/* Full-width rows keep the title and navigation centered independently of tools. */}
+      <div className="w-full min-w-0 flex flex-col items-center gap-2 px-3 pt-3">
         {/* LEFT: Admin + Truth tools (admin/it) + Sign Out, pinned to left edge */}
-        <div className="flex items-center gap-2 px-4 pt-3">
+        <div aria-label="Account and administration" className="order-2 w-full min-w-0 flex flex-wrap justify-center items-center gap-2 [&>a]:whitespace-nowrap [&>button]:whitespace-nowrap">
           {hasCapability(user, 'viewAdmin', userCompany) && (
             <Link
               href={pendingDriverCount > 0 ? '/admin?tab=drivers' : '/admin'}
@@ -127,14 +127,21 @@ export function AppHeader() {
         </div>
 
         {/* CENTER: Title + user info + tabs */}
-        <div className="flex flex-col items-center">
-          <div className="pt-2 pb-1 text-center">
-            <h1 className="text-3xl font-bold text-white">WellBuilt Suite</h1>
-            <p className="text-gray-400 text-sm">
+        <div className="contents">
+          <div className="order-1 w-full min-w-0 grid grid-cols-[5.5rem_minmax(0,1fr)_5.5rem] items-start text-center">
+            <div aria-hidden="true" />
+            <div className="min-w-0">
+            <h1 className="text-xl sm:text-3xl font-bold text-white">WellBuilt Suite</h1>
+            <p className="text-gray-400 text-sm break-words">
               {user.email} &bull; <span>{getRoleLabel(user.role, userCompany)}</span>
             </p>
+            </div>
+            <div aria-label="Chat and notifications" className="flex justify-end items-center gap-2">
+              <ChatIcon onClick={() => setChatOpen(!chatOpen)} unreadCount={chatUnread} />
+              <NotificationBell />
+            </div>
           </div>
-          <nav className="flex gap-0">
+          <nav aria-label="Main navigation" className="order-3 flex w-full min-w-0 flex-wrap justify-center gap-x-1 gap-y-0">
             {TABS.filter(tab => {
               if (tab.id === 'equipment') return hasEQuipmentAccess(user, userCompany);
               // Capability-based gate wins when set. Falls back to legacy minRole
@@ -148,7 +155,7 @@ export function AppHeader() {
                 <Link
                   key={tab.id}
                   href={tab.href}
-                  className={`relative px-5 py-3 text-sm font-medium transition-colors border-b-2 ${
+                  className={`relative whitespace-nowrap px-3 py-2 text-sm font-medium transition-colors border-b-2 ${
                     isActive
                       ? 'border-blue-500 text-white'
                       : 'border-transparent text-gray-400 hover:text-gray-200 hover:border-gray-600'
@@ -161,11 +168,6 @@ export function AppHeader() {
           </nav>
         </div>
 
-        {/* RIGHT: Chat + Bell, pinned to right edge */}
-        <div className="px-4 pt-3 flex items-center gap-2">
-          <ChatIcon onClick={() => setChatOpen(!chatOpen)} unreadCount={chatUnread} />
-          <NotificationBell />
-        </div>
       </div>
 
       {/* Chat Sidebar */}

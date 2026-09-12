@@ -2,12 +2,18 @@
 
 import { useEffect, useState, useRef } from 'react';
 import { getFirestoreDb, getFirebaseDatabase } from '@/lib/firebase';
-import { collection, getDocs, getDoc, doc, setDoc, deleteDoc, updateDoc } from 'firebase/firestore';
+import { collection, getDocs, doc, deleteDoc, updateDoc } from 'firebase/firestore';
 import { createAdminContractService, AdminServiceError } from '@/lib/adminContractService';
 import { companyMutationRoute, errorGuidance } from '@/lib/adminUiLogic';
 import { CompanyContractPanel } from './CompanyContractPanel';
 import { ref as dbRef, get as dbGet, update as dbUpdate } from 'firebase/database';
 import { loadOperators, searchOperators, NdicOperator } from '@/lib/firestoreWells';
+import {
+  approveCompanyOnboarding,
+  createCompanyWithJoinCode,
+  fetchCompanyJoinCode,
+  listCompanyOnboardingRequests,
+} from '@/lib/companyOnboarding';
 import {
   type Tier,
   type RateEntry,
@@ -47,7 +53,6 @@ export function CompaniesTab({ scopeCompanyId, isWbAdmin = false }: CompaniesTab
   // Add / Edit company
   const [showForm, setShowForm] = useState(false);
   const [editingCompany, setEditingCompany] = useState<CompanyConfig | null>(null);
-  const [formId, setFormId] = useState('');
   const [formName, setFormName] = useState('');
   const [formAddress, setFormAddress] = useState('');
   const [formCity, setFormCity] = useState('');
@@ -63,6 +68,7 @@ export function CompaniesTab({ scopeCompanyId, isWbAdmin = false }: CompaniesTab
 
   // Expanded company
   const [expandedCompany, setExpandedCompany] = useState<string | null>(null);
+  const [companyJoinCodes, setCompanyJoinCodes] = useState<Record<string, string>>({});
 
   // Operator assignment
   const [showOperatorModal, setShowOperatorModal] = useState<string | null>(null); // company ID
@@ -124,20 +130,12 @@ export function CompaniesTab({ scopeCompanyId, isWbAdmin = false }: CompaniesTab
     if (!isWbAdmin || scopeCompanyId) return;
     (async () => {
       try {
-        const snap = await dbGet(dbRef(getFirebaseDatabase(), 'users'));
-        if (!snap.exists()) { setPendingSignups([]); return; }
-        const data = snap.val() as Record<string, any>;
-        const pending: PendingSignup[] = [];
-        Object.entries(data).forEach(([uid, u]: [string, any]) => {
-          if (u?.status === 'pending' || u?.onboardingStatus === 'pending_company_assignment') {
-            pending.push({
-              uid,
-              email: u.email,
-              requestedCompanyName: u.requestedCompanyName,
-              requestedAt: typeof u.requestedAt === 'number' ? u.requestedAt : undefined,
-            });
-          }
-        });
+        const pending = (await listCompanyOnboardingRequests()).map(p => ({
+          uid: p.uid,
+          email: p.email || undefined,
+          requestedCompanyName: p.requestedCompanyName || undefined,
+          requestedAt: p.requestedAt || undefined,
+        }));
         pending.sort((a, b) => (b.requestedAt || 0) - (a.requestedAt || 0));
         setPendingSignups(pending);
       } catch (err) {
@@ -156,27 +154,10 @@ export function CompaniesTab({ scopeCompanyId, isWbAdmin = false }: CompaniesTab
     if (!window.confirm(`Create customer "${name}" and make ${p.email || p.uid} its owner?`)) return;
     setActivatingUid(p.uid);
     try {
-      // 1. Unique company slug
-      const base = name.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '').slice(0, 60) || 'company';
-      const existing = new Set(companies.map(c => c.id));
-      let slug = base;
-      let n = 2;
-      while (existing.has(slug)) slug = `${base}-${n++}`;
-
-      // 2. Create the company (active)
-      await setDoc(doc(firestore, 'companies', slug), { name, status: 'active' });
-
-      // 3. Activate the user as the company owner
-      await dbUpdate(dbRef(getFirebaseDatabase(), `users/${p.uid}`), {
-        companyId: slug,
-        companyName: name,
-        role: 'it',
-        status: 'active',
-        onboardingStatus: 'active',
-      });
+      const approved = await approveCompanyOnboarding(p.uid, name);
 
       setPendingSignups(prev => prev.filter(x => x.uid !== p.uid));
-      setMessage(`Created customer "${name}" and assigned ${p.email || p.uid} as owner.`);
+      setMessage(`Created "${approved.companyName}" (${approved.companyId}), assigned ${p.email || p.uid} as owner, join code ${approved.joinCode || 'unavailable'}.`);
       await loadCompanies();
     } catch (err) {
       console.error('Failed to activate pending signup:', err);
@@ -192,7 +173,6 @@ export function CompaniesTab({ scopeCompanyId, isWbAdmin = false }: CompaniesTab
   }, []);
 
   const resetForm = () => {
-    setFormId('');
     setFormName('');
     setFormAddress('');
     setFormCity('');
@@ -215,7 +195,6 @@ export function CompaniesTab({ scopeCompanyId, isWbAdmin = false }: CompaniesTab
 
   const openEditForm = (company: CompanyConfig) => {
     setEditingCompany(company);
-    setFormId(company.id);
     setFormName(company.name || '');
     setFormAddress(company.address || '');
     setFormCity(company.city || '');
@@ -232,9 +211,9 @@ export function CompaniesTab({ scopeCompanyId, isWbAdmin = false }: CompaniesTab
   };
 
   const saveCompany = async () => {
-    const id = editingCompany ? editingCompany.id : formId.trim().toLowerCase().replace(/\s+/g, '-');
-    if (!id || !formName.trim()) {
-      setMessage('Company ID and Name are required');
+    const id = editingCompany?.id || '';
+    if (!formName.trim()) {
+      setMessage('Company Name is required');
       return;
     }
 
@@ -266,16 +245,10 @@ export function CompaniesTab({ scopeCompanyId, isWbAdmin = false }: CompaniesTab
         }
         setMessage(`Updated: ${formName.trim()}`);
       } else {
-        // vc51.9A7: creation may never become a whole-document
-        // replacement of an existing company (the old maskless setDoc
-        // hazard) — refuse when the id already exists.
-        const existing = await getDoc(doc(firestore, 'companies', id));
-        if (existing.exists()) {
-          setMessage(`A company with id "${id}" already exists — open it and use Edit instead. Nothing was overwritten.`);
-          return;
-        }
-        await setDoc(doc(firestore, 'companies', id), data);
-        setMessage(`Created: ${formName.trim()}`);
+        // The server owns internal IDs. It slugifies the name and safely
+        // adds a numeric suffix when that slug already exists.
+        const created = await createCompanyWithJoinCode({ companyName: formName.trim(), fields: data });
+        setMessage(`Created: ${created.companyName} · Employee join code: ${created.joinCode}`);
       }
       setShowForm(false);
       resetForm();
@@ -840,6 +813,26 @@ export function CompaniesTab({ scopeCompanyId, isWbAdmin = false }: CompaniesTab
                         </button>
                       </div>
                       <div className="grid grid-cols-2 gap-3 text-sm">
+                        <div className="col-span-2 flex items-center gap-2">
+                          <span className="text-gray-400">Employee join code:</span>
+                          <span className="text-cyan-300 font-mono font-semibold tracking-wider">
+                            {companyJoinCodes[company.id] || 'Hidden'}
+                          </span>
+                          <button
+                            onClick={async (e) => {
+                              e.stopPropagation();
+                              try {
+                                const result = await fetchCompanyJoinCode(company.id);
+                                setCompanyJoinCodes(prev => ({ ...prev, [company.id]: result.joinCode }));
+                              } catch {
+                                setMessage('Unable to load employee join code');
+                              }
+                            }}
+                            className="px-2 py-1 text-xs rounded bg-cyan-700 hover:bg-cyan-600 text-white"
+                          >
+                            {companyJoinCodes[company.id] ? 'Refresh' : 'Show code'}
+                          </button>
+                        </div>
                         <div>
                           <span className="text-gray-400">Address:</span>
                           <span className="text-white ml-2">{company.address || '—'}</span>
@@ -1165,26 +1158,6 @@ export function CompaniesTab({ scopeCompanyId, isWbAdmin = false }: CompaniesTab
             </h3>
 
             <div className="space-y-3">
-              {!editingCompany && (
-                <div>
-                  {/* BACKLOG (7/9 PO note — do not redesign in this patch):
-                      auto-generate companyId from Company Name (slugify +
-                      collision check against existing ids, as the pending-
-                      signup activation already does), keep manual ID as an
-                      advanced override only. */}
-                  <label className="text-gray-400 text-sm block mb-1">
-                    Company ID (lowercase, no spaces — used as Firestore doc ID)
-                  </label>
-                  <input
-                    type="text"
-                    value={formId}
-                    onChange={e => setFormId(e.target.value.toLowerCase().replace(/\s+/g, '-'))}
-                    placeholder="e.g., liquid-gold, home-hauler"
-                    className="w-full px-3 py-2 bg-gray-700 text-white rounded text-sm"
-                    autoFocus
-                  />
-                </div>
-              )}
               <div>
                 <label className="text-gray-400 text-sm block mb-1">Company Name</label>
                 <input
@@ -1193,7 +1166,7 @@ export function CompaniesTab({ scopeCompanyId, isWbAdmin = false }: CompaniesTab
                   onChange={e => setFormName(e.target.value)}
                   placeholder="e.g., LIQUID GOLD TRUCKING LLC"
                   className="w-full px-3 py-2 bg-gray-700 text-white rounded text-sm"
-                  autoFocus={!!editingCompany}
+                  autoFocus
                 />
               </div>
               <div>
@@ -1323,7 +1296,7 @@ export function CompaniesTab({ scopeCompanyId, isWbAdmin = false }: CompaniesTab
             <div className="flex gap-2 mt-4">
               <button
                 onClick={saveCompany}
-                disabled={!formName.trim() || (!editingCompany && !formId.trim())}
+                disabled={!formName.trim()}
                 className="flex-1 px-4 py-2 bg-green-600 hover:bg-green-500 text-white rounded disabled:opacity-30 disabled:cursor-not-allowed"
               >
                 {editingCompany ? 'Update' : 'Create'}

@@ -81,6 +81,10 @@ function RegisterForm(): React.ReactElement {
       setError('Password must be at least 6 characters');
       return;
     }
+    if (company.trim().length < 2) {
+      setError('Enter the company name you are registering.');
+      return;
+    }
 
     setLoading(true);
     try {
@@ -165,10 +169,7 @@ function RegisterForm(): React.ReactElement {
               htmlFor="company"
               className="block text-sm font-medium text-gray-300 mb-2"
             >
-              Company name{' '}
-              <span className="text-xs text-gray-500 font-normal">
-                (optional — you can set this after sign-up)
-              </span>
+              Company name
             </label>
             <input
               id="company"
@@ -178,6 +179,7 @@ function RegisterForm(): React.ReactElement {
               autoComplete="organization"
               className="w-full px-4 py-3 bg-gray-700 border border-gray-600 rounded-lg text-white placeholder-gray-400 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent"
               placeholder="Acme Hauling Co."
+              required
             />
           </div>
 

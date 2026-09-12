@@ -18,7 +18,8 @@ import {
 } from './passcode';
 import { checkRateLimit, hashIp } from './rateLimit';
 import { writeSecurityAudit } from './audit';
-import { requireManageDrivers } from './adminAuth';
+import { requireManageDrivers, requirePlatformAdmin } from './adminAuth';
+import { resolveCompanyJoinCode } from './companyOnboarding';
 import {
   claimRefusalMessage,
   decideCompensation,
@@ -98,6 +99,11 @@ export const requestDriverRegistration = httpsV2.onCall(
     const source = typeof (request.data as any)?.source === 'string'
       ? String((request.data as any).source).slice(0, 16)
       : 'unknown';
+    const companyCode = String((request.data as any)?.companyCode || '').trim();
+    if (!companyCode) {
+      throw new httpsV2.HttpsError('invalid-argument', 'Company join code is required');
+    }
+    const company = await resolveCompanyJoinCode(companyCode);
 
     // Block if active secure driver already uses this display name
     const idx = await fs().collection('driver_name_index').doc(nameNorm).get();
@@ -127,7 +133,9 @@ export const requestDriverRegistration = httpsV2.onCall(
     await rtdb().ref(`drivers/pending_secure/${pendingId}`).set({
       displayName: fields.displayName,
       legalName: fields.legalName || null,
-      companyName: fields.companyName || null,
+      companyName: company.companyName,
+      companyId: company.companyId,
+      resolvedCompanyName: company.companyName,
       source,
       status: 'pending',
       schemaVersion: 1,
@@ -139,7 +147,9 @@ export const requestDriverRegistration = httpsV2.onCall(
     const legacyPush = await rtdb().ref('drivers/pending').push({
       displayName: fields.displayName,
       legalName: fields.legalName || null,
-      companyName: fields.companyName || null,
+      companyName: company.companyName,
+      companyId: company.companyId,
+      resolvedCompanyName: company.companyName,
       source,
       status: 'pending',
       requestedAt: new Date().toISOString(),
@@ -153,7 +163,7 @@ export const requestDriverRegistration = httpsV2.onCall(
       appId: meta.appId,
       appCheckPresent: meta.appCheckPresent,
       ipHash: meta.ipHash,
-      detail: { source, legacyKey: legacyPush.key },
+      detail: { source, legacyKey: legacyPush.key, companyId: company.companyId },
     });
 
     return {
@@ -411,11 +421,13 @@ export const adminListPendingRegistrations = httpsV2.onCall(
       for (const [pendingId, raw] of Object.entries(val)) {
         const p = raw as any;
         if (p.status === 'approved' || p.status === 'rejected') continue;
+        if (caller.companyId && p.companyId !== caller.companyId) continue;
         out.push({
           pendingId,
           displayName: p.displayName,
           legalName: p.legalName,
-          companyName: p.companyName,
+          companyName: p.resolvedCompanyName || p.companyName,
+          companyId: p.companyId || null,
           source: p.source,
           requestedAt: p.requestedAt,
           status: p.status || 'pending',
@@ -429,11 +441,13 @@ export const adminListPendingRegistrations = httpsV2.onCall(
       for (const [key, raw] of Object.entries(legacy.val())) {
         const p = raw as any;
         if (p.status === 'approved' || p.status === 'rejected') continue;
+        if (caller.companyId && p.companyId !== caller.companyId) continue;
         legacyPending.push({
           key,
           displayName: p.displayName,
           legalName: p.legalName,
-          companyName: p.companyName,
+          companyName: p.resolvedCompanyName || p.companyName,
+          companyId: p.companyId || null,
           source: p.source,
           requestedAt: p.requestedAt,
           securePendingId: p.securePendingId || null,
@@ -475,6 +489,9 @@ export const adminApproveDriverRegistration = httpsV2.onCall(
       throw new httpsV2.HttpsError('not-found', 'Pending registration not found');
     }
     const pending = pendingSnap.val();
+    if (caller.companyId && pending.companyId !== caller.companyId) {
+      throw new httpsV2.HttpsError('permission-denied', 'Employee request belongs to another company');
+    }
 
     /**
      * Read the durable attempt record BEFORE any pending-state guard.
@@ -516,8 +533,8 @@ export const adminApproveDriverRegistration = httpsV2.onCall(
       throw new httpsV2.HttpsError('failed-precondition', `Already ${pending.status}`);
     }
 
-    let companyId = (data.companyId || '').trim().toLowerCase() || null;
-    let companyName = (data.companyName || '').trim() || pending.companyName || null;
+    let companyId = (pending.companyId || data.companyId || '').trim().toLowerCase() || null;
+    let companyName = (pending.resolvedCompanyName || data.companyName || pending.companyName || '').trim() || null;
     if (caller.companyId) {
       companyId = caller.companyId;
     }
@@ -711,6 +728,10 @@ export const adminRejectDriverRegistration = httpsV2.onCall(
       const ref = rtdb().ref(`drivers/pending_secure/${pendingId}`);
       const snap = await ref.once('value');
       if (snap.exists()) {
+        const pending = snap.val();
+        if (caller.companyId && pending.companyId !== caller.companyId) {
+          throw new httpsV2.HttpsError('permission-denied', 'Employee request belongs to another company');
+        }
         await ref.update({
           status: 'rejected',
           rejectedAt: ServerValue.TIMESTAMP,
@@ -1224,13 +1245,13 @@ export const adminSetDriverPasscode = httpsV2.onCall(
 export const adminDeleteSecureDriver = httpsV2.onCall(
   { timeoutSeconds: 30, memory: '256MiB' },
   async (request) => {
-    const caller = await requireManageDrivers(
+    const caller = await requirePlatformAdmin(
       request.auth?.uid,
       request.auth?.token as Record<string, unknown> | undefined,
     );
     const driverId = String((request.data as any)?.driverId || '').trim();
     const confirm = String((request.data as any)?.confirm || '');
-    if (!driverId || confirm !== 'DELETE_SECURE_DRIVER') {
+    if (!/^[A-Za-z0-9_-]{1,128}$/.test(driverId) || confirm !== 'DELETE_SECURE_DRIVER') {
       throw new httpsV2.HttpsError(
         'invalid-argument',
         'driverId and confirm=DELETE_SECURE_DRIVER required',
@@ -1238,18 +1259,24 @@ export const adminDeleteSecureDriver = httpsV2.onCall(
     }
     const cred = await fs().collection('driver_credentials').doc(driverId).get();
     const nameNorm = cred.exists ? (cred.data()?.displayNameNorm as string) : null;
-    if (nameNorm) {
-      await fs().collection('driver_name_index').doc(nameNorm).delete().catch(() => undefined);
-    }
-    await fs().collection('driver_credentials').doc(driverId).delete().catch(() => undefined);
-    await rtdb().ref(`drivers/profiles/${driverId}`).remove().catch(() => undefined);
+    // Disable first; preserve credentials/name for a safe retry if another
+    // service fails. Never report success after a swallowed delete failure.
+    if (cred.exists) await cred.ref.update({ active: false });
     const { driverAuthUid } = await import('./tokenMint');
     const authUid = driverAuthUid(driverId);
     try {
       await admin.auth().deleteUser(authUid);
-    } catch {
-      /* may not exist */
+    } catch (error) {
+      if ((error as { code?: string }).code !== 'auth/user-not-found') throw error;
     }
+    await rtdb().ref(`drivers/profiles/${driverId}`).remove();
+    await fs().runTransaction(async (tx) => {
+      const indexRef = nameNorm ? fs().collection('driver_name_index').doc(nameNorm) : null;
+      const index = indexRef ? await tx.get(indexRef) : null;
+      // A stale name index must never delete another driver's name reservation.
+      if (indexRef && index?.data()?.driverId === driverId) tx.delete(indexRef);
+      tx.delete(cred.ref);
+    });
     await writeSecurityAudit({
       action: 'adminDeleteSecureDriver',
       actorUid: caller.uid,

@@ -30,6 +30,7 @@ interface AssignedCustomer {
 }
 
 interface ApprovedDriver {
+  _canonicalOnly?: boolean;
   key: string;           // passcode hash (Firebase key)
   displayName: string;
   legalName?: string;    // full legal name for payroll/printed docs
@@ -61,6 +62,7 @@ interface ApprovedDriver {
 }
 
 interface CanonicalWbmDriver {
+  details: Record<string, unknown>;
   driverId: string;
   displayName: string;
   legalName?: string;
@@ -95,6 +97,7 @@ interface PendingDriver {
 // via inviteEmployee both have an entry here. We show them as a separate
 // subsection inside each company group in the Employees tab.
 interface DashboardUser {
+  driverId?: string;
   uid: string;
   email: string;
   displayName: string;
@@ -106,6 +109,28 @@ interface DashboardUser {
 }
 
 export function DriversTab({ scopeCompanyId, isWbAdmin = false }: DriversTabProps) {
+  const [dashboardTarget, setDashboardTarget] = useState<CanonicalWbmDriver | null>(null);
+  const [dashboardEmail, setDashboardEmail] = useState('');
+  const [dashboardRoles, setDashboardRoles] = useState<string[]>([]);
+  const [dashboardBusy, setDashboardBusy] = useState(false);
+  const [dashboardError, setDashboardError] = useState('');
+  const [dashboardSetup, setDashboardSetup] = useState(true);
+  const [dashboardResult, setDashboardResult] = useState<{ email: string; setupLink: string | null; setupLinkError?: string | null } | null>(null);
+  const [addOpen, setAddOpen] = useState(false);
+  const [addDraft, setAddDraft] = useState({ requestId: '', displayName: '', legalName: '', companyId: '' });
+  const [addPasscode, setAddPasscode] = useState('');
+  const [addConfirm, setAddConfirm] = useState('');
+  const [addBusy, setAddBusy] = useState(false);
+  const [addAttempted, setAddAttempted] = useState(false);
+  const [addError, setAddError] = useState('');
+  const [profileTarget, setProfileTarget] = useState<CanonicalWbmDriver | null>(null);
+  const [profileEdits, setProfileEdits] = useState<Record<string, string>>({});
+  const [profileBusy, setProfileBusy] = useState(false);
+  const [profileError, setProfileError] = useState('');
+  const [deleteTarget, setDeleteTarget] = useState<CanonicalWbmDriver | null>(null);
+  const [deleteConfirmation, setDeleteConfirmation] = useState('');
+  const [deleteBusy, setDeleteBusy] = useState(false);
+  const [deleteError, setDeleteError] = useState('');
   const [approvedDrivers, setApprovedDrivers] = useState<ApprovedDriver[]>([]);
   const [dashboardUsers, setDashboardUsers] = useState<DashboardUser[]>([]);
   // Per-company collapse state for WB-admin grouped view. Key = companyId
@@ -209,7 +234,7 @@ export function DriversTab({ scopeCompanyId, isWbAdmin = false }: DriversTabProp
     existed: boolean;
   }>(null);
 
-  const { userCompany } = useAuth();
+  const { user, userCompany } = useAuth();
   const db = getFirebaseDatabase();
 
   // ── Unified employee rows (7/9 refactor) — one row per PERSON, merging
@@ -234,6 +259,7 @@ export function DriversTab({ scopeCompanyId, isWbAdmin = false }: DriversTabProp
         catalog = await adminGetDashboardCatalog();
       } catch (catalogErr) {
         setApprovedDrivers([]);
+        setCanonicalDrivers([]);
         setDashboardUsers([]);
         setMessage(`Failed to load employees [${catalogErrorCode(catalogErr)}]`);
         throw catalogErr;
@@ -244,6 +270,7 @@ export function DriversTab({ scopeCompanyId, isWbAdmin = false }: DriversTabProp
         Object.entries(data).forEach(([id, val]) => {
           if (!val || typeof val !== 'object') return;
           canonical.push({
+            details: val,
             driverId: id,
             displayName: val.displayName || val.name || 'Unknown',
             legalName: typeof val.legalName === 'string' ? val.legalName : undefined,
@@ -376,6 +403,7 @@ export function DriversTab({ scopeCompanyId, isWbAdmin = false }: DriversTabProp
             companyId: val.companyId || undefined,
             companyName: val.companyName || undefined,
             driverHash: val.driverHash || undefined,
+            driverId: typeof val.driverId === 'string' ? val.driverId : undefined,
           });
         });
       }
@@ -553,7 +581,7 @@ export function DriversTab({ scopeCompanyId, isWbAdmin = false }: DriversTabProp
         // profile + authority; the legacy approved row is what this list
         // renders, so reflect the result there. Never authority.
         try {
-          await update(ref(db, `drivers/approved/${companyTarget.key}`), {
+          if (!companyTarget._canonicalOnly) await update(ref(db, `drivers/approved/${companyTarget.key}`), {
             companyId: res.companyId,
             companyName: res.companyName || null,
           });
@@ -1464,19 +1492,37 @@ export function DriversTab({ scopeCompanyId, isWbAdmin = false }: DriversTabProp
 
       {/* ── Canonical WB-M authority ── */}
       <div className="mb-6 border border-blue-800/60 rounded-lg p-4 bg-gray-900/40">
-        <h3 className="text-white font-medium mb-1">WB-M canonical drivers</h3>
+        <div className="flex flex-wrap justify-between items-center gap-3 mb-3">
+          <h3 className="text-white font-medium">WB-M canonical drivers</h3>
+          <button className="px-4 py-2 rounded bg-green-700 hover:bg-green-600 text-white" onClick={() => {
+            let recovered = null;
+            try { recovered = JSON.parse(sessionStorage.getItem(`wb:addEmployee:${user?.uid}`) || 'null'); } catch { /* new draft */ }
+            if (recovered?.requestId && typeof recovered.displayName === 'string' && typeof recovered.legalName === 'string' && typeof recovered.companyId === 'string') {
+              setAddDraft(recovered); setAddAttempted(true);
+            } else {
+              setAddDraft({ requestId: crypto.randomUUID(), displayName: '', legalName: '', companyId: scopeCompanyId || '' }); setAddAttempted(false);
+            }
+            setAddPasscode(''); setAddConfirm(''); setAddError(''); setAddOpen(true);
+          }}>+ Add Employee</button>
+        </div>
         <p className="text-gray-400 text-xs mb-3">
-          Sole WB-M route/well authority. Legacy approved rows below are evidence only.
+          Secure driver profiles and current route/well permissions. Legacy accounts are hidden separately below.
         </p>
         {canonicalDrivers.length === 0 ? (
           <p className="text-gray-500 text-sm">No canonical profiles in catalog.</p>
         ) : (
           <div className="space-y-2">
+            {Array.from(new Set(canonicalDrivers.filter(d => !scopeCompanyId || d.companyId === scopeCompanyId).map(d => d.companyId || ''))).sort().map(companyId => (
+              <details key={companyId} open className="border border-gray-600 rounded p-3">
+                <summary className="cursor-pointer text-white font-semibold">{canonicalDrivers.find(d => (d.companyId || '') === companyId)?.companyName || companyId || 'Unassigned company'} ({canonicalDrivers.filter(d => (d.companyId || '') === companyId).length})</summary>
             {canonicalDrivers
+              .filter(d => (d.companyId || '') === companyId)
               .filter(d => !scopeCompanyId || d.companyId === scopeCompanyId)
-              .filter(d => !search.trim() || d.displayName.toLowerCase().includes(search.toLowerCase()))
+              .filter(d => !search.trim() || [d.displayName, d.legalName, d.driverId, d.companyName, d.companyId].some(v => v?.toLowerCase().includes(search.trim().toLowerCase())))
               .map((d) => (
-                <div key={d.driverId} className="flex flex-wrap items-center justify-between gap-2 bg-gray-800 rounded p-3">
+                <details key={d.driverId} className="bg-gray-800 rounded p-3 mt-2">
+                  <summary className="cursor-pointer text-white font-medium">{d.displayName} <span className="text-gray-400 text-xs">· {d.active ? 'Active' : 'Inactive'}</span></summary>
+                  <div className="flex flex-wrap items-center justify-between gap-2 pt-3">
                   <div>
                     <div className="text-white font-medium">{d.displayName}</div>
                     <div className="text-gray-400 text-xs font-mono">{d.driverId}</div>
@@ -1499,14 +1545,202 @@ export function DriversTab({ scopeCompanyId, isWbAdmin = false }: DriversTabProp
                   >
                     Preview WB-M routes
                   </button>
-                </div>
+                  <button className="px-3 py-1 text-sm rounded bg-gray-600 text-white" onClick={() => {
+                    setProfileTarget(d); setProfileError('');
+                    setProfileEdits(Object.fromEntries(['legalName', 'phone', 'email', 'truckNumber', 'trailerNumber', 'preferredLanguage'].map(key => [key, String(d.details[key] ?? (d.details.profile as Record<string, unknown> | undefined)?.[key] ?? '')])));
+                  }}>Edit profile</button>
+                  <button className="px-3 py-1 text-sm rounded bg-gray-600 text-white" onClick={() => {
+                    setCompanyTarget({ key: '', driverId: d.driverId, displayName: d.displayName, companyId: d.companyId, companyName: d.companyName, _canonicalOnly: true });
+                    setAssignCompanyId(d.companyId || ''); setAssignCompanyName(d.companyName || ''); setCompanyError(''); setShowCompanyModal(true);
+                  }}>Edit company</button>
+                  {isWbAdmin && <button
+                    className="px-3 py-1 text-sm rounded border border-red-600 text-red-300 hover:bg-red-950"
+                    onClick={() => { setDeleteTarget(d); setDeleteConfirmation(''); setDeleteError(''); }}
+                  >Delete secure driver</button>}
+                  <dl className="w-full grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3 border-t border-gray-700 pt-3 text-sm">
+                    {[
+                      ['Legal name', d.legalName || (d.details.profile as Record<string, unknown> | undefined)?.legalName],
+                      ['Phone', d.details.phone || (d.details.profile as Record<string, unknown> | undefined)?.phone],
+                      ['Contact email (not dashboard login)', d.details.email || (d.details.profile as Record<string, unknown> | undefined)?.email],
+                      ['Language', d.details.preferredLanguage || (d.details.profile as Record<string, unknown> | undefined)?.preferredLanguage],
+                      ['Truck number', d.details.truckNumber || (d.details.profile as Record<string, unknown> | undefined)?.truckNumber],
+                      ['Trailer number', d.details.trailerNumber || (d.details.profile as Record<string, unknown> | undefined)?.trailerNumber],
+                      ['Company', d.companyName || d.companyId],
+                      ['App roles', d.details.roles],
+                      ['App admin flag', d.details.isAdmin],
+                      ['App viewer flag', d.details.isViewer],
+                      ['Assigned routes', d.assignedRoutes],
+                      ['Direct well permissions', d.assignedWells],
+                      ['Customers', d.details.assignedCustomers],
+                      ['Default package', d.details.defaultPackageId],
+                      ['Assignment revision', d.assignmentRevision],
+                      ['Assignment updated', d.details.assignmentUpdatedAt],
+                      ['Secure auth required', d.details.mustUseSecureAuth],
+                      ['Tier', d.details.tier],
+                      ['Registration source', d.details.source],
+                      ['Approved at', d.details.approvedAt],
+                      ['Approved by', d.details.approvedBy],
+                      ['Registration company', d.details.registrationCompany],
+                      ['Assignment updated by', d.details.assignmentUpdatedBy],
+                      ['Last logout', d.details.logoutAt],
+                      ['Suspended at', d.details.suspendedAt],
+                      ['Suspension reason', d.details.suspendedReason],
+                      ['Schema version', d.details.schemaVersion],
+                    ].map(([label, value]) => <div key={String(label)} className="min-w-0">
+                      <dt className="text-gray-400 text-xs">{String(label)}</dt>
+                      <dd className="text-gray-100 break-words">{value == null ? 'Not set' : typeof value === 'boolean' ? (value ? 'Yes' : 'No') : typeof value === 'number' && ['Assignment updated', 'Approved at', 'Last logout', 'Suspended at'].includes(String(label)) ? new Date(value).toLocaleString() : Array.isArray(value) ? (value.length ? value.map(v => typeof v === 'object' ? JSON.stringify(v) : String(v)).join(', ') : 'None') : String(value)}</dd>
+                    </div>)}
+                  </dl>
+                  {(() => {
+                    const linked = dashboardUsers.find(u => u.driverId === d.driverId && u.uid === d.details.dashboardUid && u.companyId === d.companyId);
+                    const canManage = isWbAdmin || (!!scopeCompanyId && scopeCompanyId === d.companyId && (user?.roles || [user?.role]).some(r => r === 'admin' || r === 'it'));
+                    return <section className="w-full border-t border-gray-600 pt-3 space-y-2 text-sm text-gray-200">
+                      <p><strong>App access:</strong> {d.active ? 'Active' : 'Inactive'} · login name: {d.displayName} · email not required</p>
+                      <p><strong>Dashboard access:</strong> {linked ? `${linked.email} · ${(linked.roles || [linked.role]).join(', ')} · ${d.companyName || d.companyId}` : d.details.dashboardUid ? 'Link pending or unavailable—review setup' : 'Not enabled—email login required'}</p>
+                      {!linked && <p className="text-gray-400">App roles alone do not enable the web login. Enable dashboard access below to link this employee.</p>}
+                      {canManage && <button disabled={!d.companyId || !d.active} className="px-3 py-2 rounded bg-blue-700 hover:bg-blue-600 disabled:opacity-40 text-white" onClick={() => {
+                        const appRoles = Array.isArray(d.details.roles) ? d.details.roles as string[] : [];
+                        const mapped = appRoles.map(r => r === 'dispatcher' ? 'dispatch' : r === 'billing' ? 'payroll' : r).filter(r => ['viewer', 'dispatch', 'payroll', 'manager', 'admin', 'it'].includes(r));
+                        setDashboardTarget(d); setDashboardEmail(linked?.email || String(d.details.dashboardEmail || d.details.email || (d.details.profile as Record<string, unknown> | undefined)?.email || ''));
+                        setDashboardRoles(linked ? linked.roles || [linked.role] : [...new Set(mapped)]);
+                        setDashboardError(''); setDashboardResult(null); setDashboardSetup(!linked);
+                      }}>{linked ? 'Manage dashboard access' : 'Enable dashboard access'}</button>}
+                      {!d.companyId && <p className="text-amber-300">Assign a company before enabling its dashboard access.</p>}
+                    </section>;
+                  })()}
+                  </div>
+                </details>
               ))}
+              </details>
+            ))}
           </div>
         )}
       </div>
 
+      {dashboardTarget && <div className="fixed inset-0 z-50 bg-black/80 flex items-center justify-center p-4">
+        <form role="dialog" aria-modal="true" aria-label="Employee dashboard access" className="bg-gray-800 text-gray-200 rounded-lg p-6 w-full max-w-lg max-h-[90vh] overflow-y-auto space-y-4" onSubmit={async e => {
+          e.preventDefault(); if (dashboardBusy || !dashboardRoles.length) return;
+          setDashboardBusy(true); setDashboardError(''); setDashboardResult(null);
+          try {
+            const fn = httpsCallable(getFirebaseFunctions(), 'adminEmployeeDashboardAccess');
+            const response = await fn({ driverId: dashboardTarget.driverId, email: dashboardEmail, roles: dashboardRoles, generateSetupLink: dashboardSetup });
+            const result = response.data as { ok: boolean; email: string; setupLink: string | null; setupLinkError?: string | null };
+            if (!result.ok) throw new Error('Dashboard access could not be confirmed');
+            setDashboardResult(result); await loadDrivers();
+          } catch (error) { const err = error as { code?: string; message?: string }; setDashboardError(`${err.code || 'Setup failed'}: ${err.message || 'Retry with the same email.'}`); }
+          finally { setDashboardBusy(false); }
+        }}>
+          <h3 className="text-white text-xl">Dashboard access · {dashboardTarget.displayName}</h3>
+          <p>Company: <strong>{dashboardTarget.companyName || dashboardTarget.companyId}</strong></p>
+          <p className="text-sm text-gray-400">Same employee, additional email/password login for the website. The app login and passcode stay unchanged.</p>
+          <label className="block">Dashboard login email<input required type="email" autoComplete="off" disabled={dashboardBusy || !!dashboardResult || !!dashboardTarget.details.dashboardUid} value={dashboardEmail} onChange={e => setDashboardEmail(e.target.value)} className="block w-full p-2 border border-gray-600 bg-gray-900 rounded" /></label>
+          <fieldset disabled={dashboardBusy || !!dashboardResult} className="space-y-2"><legend className="mb-2">Confirm dashboard permissions</legend>
+            {(['viewer', 'dispatch', 'payroll', 'manager', 'admin', 'it'] as const).map(role => <label key={role} className="flex gap-2 items-center"><input type="checkbox" checked={dashboardRoles.includes(role)} disabled={role === 'it' && !isWbAdmin && !(user?.roles || [user?.role]).includes('it')} onChange={e => setDashboardRoles(p => e.target.checked ? [...p, role] : p.filter(r => r !== role))} />{role === 'it' ? 'Company Owner / IT' : role === 'payroll' ? 'Payroll / Billing' : role === 'dispatch' ? 'Dispatch' : role.charAt(0).toUpperCase() + role.slice(1)}</label>)}
+          </fieldset>
+          <p className="text-xs text-gray-400">Suggestions come from recognized app roles. Confirm only the web permissions this employee needs. App-only roles are not changed.</p>
+          <label className="flex gap-2"><input type="checkbox" disabled={dashboardBusy || !!dashboardResult} checked={dashboardSetup} onChange={e => setDashboardSetup(e.target.checked)} />Generate password setup/reset link to share privately</label>
+          {dashboardError && <p role="alert" className="text-red-300 break-words">{dashboardError}</p>}
+          {dashboardResult && <div className="border border-green-700 rounded p-3 space-y-2">
+            <p>Dashboard access linked to {dashboardResult.email}. Sign in at the same WellBuilt dashboard using email and password.</p>
+            <p className="text-sm">No email was sent automatically.</p>
+            {dashboardResult.setupLink && <><p className="text-sm">Share this password link privately with the employee:</p><input aria-label="Password setup link" readOnly className="w-full bg-gray-900 p-2 text-xs" value={dashboardResult.setupLink} /><button type="button" className="px-3 py-1 bg-gray-600 rounded" onClick={async () => { try { await navigator.clipboard.writeText(dashboardResult.setupLink!); } catch { setDashboardError('Copy unavailable—select and copy the link above.'); } }}>Copy password link</button></>}
+            {dashboardResult.setupLinkError && <p className="text-amber-300">{dashboardResult.setupLinkError}</p>}
+          </div>}
+          <div className="flex gap-3"><button type="button" disabled={dashboardBusy} onClick={() => { setDashboardTarget(null); setDashboardResult(null); }} className="px-4 py-2 bg-gray-600 rounded">Close</button>
+          {!dashboardResult && <button disabled={dashboardBusy || !dashboardRoles.length} className="px-4 py-2 bg-blue-700 disabled:opacity-40 rounded">{dashboardBusy ? 'Saving…' : 'Save dashboard access'}</button>}</div>
+        </form>
+      </div>}
+      {addOpen && <div className="fixed inset-0 z-50 bg-black/80 flex items-center justify-center p-4">
+        <form role="dialog" aria-modal="true" aria-label="Add Employee" className="bg-gray-800 rounded-lg p-6 w-full max-w-lg max-h-[90vh] overflow-y-auto space-y-3 text-gray-200" onSubmit={async e => {
+          e.preventDefault(); if (addBusy || addPasscode !== addConfirm || addPasscode.length < 6) return;
+          setAddBusy(true); setAddError('');
+          try {
+            // Keep only non-secret request details for safe retries after a reload.
+            sessionStorage.setItem(`wb:addEmployee:${user?.uid}`, JSON.stringify(addDraft));
+            setAddAttempted(true);
+            const create = httpsCallable(getFirebaseFunctions(), 'adminCreateEmployee');
+            const result = await create({ ...addDraft, passcode: addPasscode });
+            const data = result.data as { ok: boolean; driverId: string };
+            if (!data.ok || !data.driverId) throw new Error('Account creation could not be confirmed. Retry this request.');
+            sessionStorage.removeItem(`wb:addEmployee:${user?.uid}`);
+            setAddOpen(false); setAddPasscode(''); setAddConfirm(''); setAddAttempted(false);
+            setMessage(`${addDraft.displayName} created in the secure system. Review and apply route/well access next. This did not create a dashboard login or convert a legacy account.`);
+            await loadDrivers();
+            const target: CanonicalWbmDriver = { driverId: data.driverId, displayName: addDraft.displayName, legalName: addDraft.legalName, companyId: addDraft.companyId, active: true, assignedRoutes: [], assignedWells: [], assignmentRevision: 0, details: {} };
+            bumpAssignmentGeneration(); setRouteTarget(target); setSelectedRoutes([]); setSelectedWells([]); setShowRoutesModal(true);
+          } catch (error) {
+            const err = error as { code?: string; message?: string };
+            if (['functions/invalid-argument', 'functions/permission-denied', 'functions/already-exists'].includes(err.code || '')) {
+              sessionStorage.removeItem(`wb:addEmployee:${user?.uid}`); setAddAttempted(false);
+            }
+            setAddError(`${err.code || 'Creation failed'}: ${err.message || 'Retry with the same details and original passcode.'}`);
+          } finally { setAddBusy(false); }
+        }}>
+          <h3 className="text-xl text-white">Add Employee</h3>
+          <p className="text-sm text-gray-400">Creates a secure app login, not a dashboard administrator. Existing legacy accounts and history are unchanged.</p>
+          {addAttempted && <p className="text-amber-300 text-sm">Resuming the same request. Use the original passcode. Account details stay locked to prevent a duplicate.</p>}
+          <label className="block">Display / login name<input required maxLength={64} disabled={addBusy || addAttempted} className="block w-full p-2 bg-gray-900 border border-gray-600 rounded" value={addDraft.displayName} onChange={e => setAddDraft(p => ({ ...p, displayName: e.target.value }))} /></label>
+          <label className="block">Legal name<input required maxLength={64} disabled={addBusy || addAttempted} className="block w-full p-2 bg-gray-900 border border-gray-600 rounded" value={addDraft.legalName} onChange={e => setAddDraft(p => ({ ...p, legalName: e.target.value }))} /></label>
+          <label className="block">Hauling company<select required disabled={!!scopeCompanyId || addBusy || addAttempted} className="block w-full p-2 bg-gray-900 border border-gray-600 rounded" value={addDraft.companyId} onChange={e => setAddDraft(p => ({ ...p, companyId: e.target.value }))}>
+            <option value="">Select company</option>
+            {companiesList.filter(c => !scopeCompanyId || c.id === scopeCompanyId).map(c => <option key={c.id} value={c.id}>{c.name}</option>)}
+          </select></label>
+          <label className="block">Passcode<input required type="password" autoComplete="new-password" minLength={6} maxLength={128} disabled={addBusy} className="block w-full p-2 bg-gray-900 border border-gray-600 rounded" value={addPasscode} onChange={e => setAddPasscode(e.target.value)} /></label>
+          <label className="block">Confirm passcode<input required type="password" autoComplete="new-password" disabled={addBusy} className="block w-full p-2 bg-gray-900 border border-gray-600 rounded" value={addConfirm} onChange={e => setAddConfirm(e.target.value)} /></label>
+          <p className="text-sm text-gray-400">Use a unique passcode chosen with the driver. Forced first-login password change is not enabled. Route access starts empty and is assigned in the next step.</p>
+          {addError && <p role="alert" className="text-red-300 break-words">{addError}</p>}
+          <div className="flex gap-3"><button type="button" disabled={addBusy} className="px-4 py-2 bg-gray-600 rounded" onClick={() => { setAddOpen(false); setAddPasscode(''); setAddConfirm(''); }}>Close</button>
+          <button disabled={addBusy || !addDraft.companyId || !addDraft.displayName.trim() || !addDraft.legalName.trim() || addPasscode.length < 6 || addPasscode !== addConfirm} className="px-4 py-2 bg-green-700 disabled:opacity-40 rounded">{addBusy ? 'Creating…' : addAttempted ? 'Retry creation' : 'Create and assign access'}</button></div>
+        </form>
+      </div>}
+      {profileTarget && <div className="fixed inset-0 z-50 bg-black/80 flex items-center justify-center p-4">
+        <form role="dialog" aria-modal="true" aria-label="Edit driver profile" className="bg-gray-800 p-6 rounded-lg max-w-lg w-full max-h-[90vh] overflow-y-auto space-y-3" onSubmit={async e => {
+          e.preventDefault(); if (profileBusy) return;
+          setProfileBusy(true); setProfileError('');
+          try {
+            const save = httpsCallable(getFirebaseFunctions(), 'adminEditDriverProfile');
+            await save({ driverId: profileTarget.driverId, edits: profileEdits });
+            setProfileTarget(null); setMessage('Driver profile saved.'); await loadDrivers();
+          } catch (error) { setProfileError(error instanceof Error ? error.message : String(error)); }
+          finally { setProfileBusy(false); }
+        }}>
+          <h3 className="text-white text-lg">Edit {profileTarget.displayName}</h3>
+          {Object.entries({ legalName: 'Legal name', phone: 'Phone', email: 'Email', truckNumber: 'Truck number', trailerNumber: 'Trailer number', preferredLanguage: 'Preferred language' }).map(([key, label]) => <label key={key} className="block text-gray-300">{label}<input maxLength={250} disabled={profileBusy} value={profileEdits[key] || ''} onChange={e => setProfileEdits(p => ({ ...p, [key]: e.target.value }))} className="block w-full bg-gray-900 border border-gray-600 rounded p-2" /></label>)}
+          <p className="text-xs text-gray-400">Company and routes use their own actions. Login identity, access roles and audit history are not changed by this form.</p>
+          {profileError && <p role="alert" className="text-red-300">{profileError}</p>}
+          <button type="button" disabled={profileBusy} onClick={() => setProfileTarget(null)} className="px-4 py-2 text-white">Cancel</button>
+          <button disabled={profileBusy} className="px-4 py-2 bg-blue-600 rounded text-white">{profileBusy ? 'Saving…' : 'Save profile'}</button>
+        </form>
+      </div>}
+      {deleteTarget && <div className="fixed inset-0 z-50 bg-black/80 flex items-center justify-center p-4">
+        <div role="dialog" aria-modal="true" aria-labelledby="delete-driver-title" className="bg-gray-800 rounded-lg p-6 max-w-lg w-full space-y-4">
+          <h3 id="delete-driver-title" className="text-white text-lg">Delete {deleteTarget.displayName}?</h3>
+          <p className="text-gray-300">This permanently removes the secure login and profile. History and separate legacy/dashboard accounts are kept.</p>
+          <label className="block text-gray-300">Type DELETE to confirm<input autoFocus className="block bg-gray-900 border border-gray-600 p-2 w-full" value={deleteConfirmation} onChange={e => setDeleteConfirmation(e.target.value)} disabled={deleteBusy} /></label>
+          {deleteError && <p role="alert" className="text-red-300">{deleteError}</p>}
+          <div className="flex gap-3">
+            <button disabled={deleteBusy} onClick={() => setDeleteTarget(null)} className="px-4 py-2 bg-gray-600 rounded text-white">Cancel</button>
+            <button disabled={deleteBusy || deleteConfirmation.trim() !== 'DELETE'} className="px-4 py-2 bg-red-700 disabled:opacity-40 rounded text-white" onClick={async () => {
+              if (deleteBusy || deleteConfirmation.trim() !== 'DELETE') return;
+              setDeleteBusy(true); setDeleteError('');
+              try {
+                const { adminDeleteSecureDriver } = await import('@/lib/secureDriverAdmin');
+                await adminDeleteSecureDriver({ driverId: deleteTarget.driverId });
+                setCanonicalDrivers(previous => previous.filter(d => d.driverId !== deleteTarget.driverId));
+                setMessage(`Deleted secure driver ${deleteTarget.displayName}. Historical records kept.`);
+                setDeleteTarget(null);
+                await loadDrivers();
+              } catch (error) {
+                const e = error as { code?: string; message?: string };
+                setDeleteError(`${e.code || 'Delete failed'}: ${e.message || 'Please retry.'}`);
+              } finally { setDeleteBusy(false); }
+            }}>{deleteBusy ? 'Deleting…' : 'Delete permanently'}</button>
+          </div>
+        </div>
+      </div>}
+
       {/* ── Unified Employee panel (7/9 refactor) ── */}
-      <EmployeePanel
+      {showLegacyView && <EmployeePanel
         employees={scopeCompanyId ? employees.filter(e => e.companyId === scopeCompanyId) : employees}
         isWbAdmin={isWbAdmin}
         scopeCompanyId={scopeCompanyId}
@@ -1544,14 +1778,14 @@ export function DriversTab({ scopeCompanyId, isWbAdmin = false }: DriversTabProp
           if (!row.driver) return;
           setCompanyTarget(row.driver); setAssignCompanyId(row.driver.companyId || ''); setAssignCompanyName(row.driver.companyName || ''); setCompanyError(''); setShowCompanyModal(true);
         }}
-      />
+      />}
 
       <div className="flex justify-end">
         <button
           onClick={() => setShowLegacyView(v => !v)}
-          className="text-xs text-gray-500 hover:text-gray-300 underline"
+          className="text-sm px-4 py-2 border border-gray-500 rounded text-gray-200 hover:bg-gray-700"
         >
-          {showLegacyView ? 'Hide legacy view' : 'Show legacy view'}
+          {showLegacyView ? 'Hide legacy / separate dashboard accounts' : 'Show legacy / separate dashboard accounts (not canonical drivers)'}
         </button>
       </div>
 
