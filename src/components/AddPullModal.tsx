@@ -6,9 +6,9 @@
 // Optionally creates Firestore invoice + ticket for billing/payroll.
 
 import { useState, useEffect } from 'react';
-import { ref, set } from 'firebase/database';
 import { collection, addDoc, updateDoc, Timestamp } from 'firebase/firestore';
-import { getFirebaseDatabase, getFirestoreDb, getNextInvoiceNumber, getNextTicketNumber } from '@/lib/firebase';
+import { getFirestoreDb, getNextInvoiceNumber, getNextTicketNumber } from '@/lib/firebase';
+import { submitManualPull, describeManualPullError } from '@/lib/staffSubmitManualPull';
 import { WellResponse, subscribeToWellStatusesUnified } from '@/lib/wells';
 import { loadCompanyById } from '@/lib/companySettings';
 import { searchDisposals, type NdicWell } from '@/lib/firestoreWells';
@@ -165,31 +165,24 @@ export function AddPullModal({
     setSubmitting(true);
 
     try {
-      const db = getFirebaseDatabase();
       const parsed = parseLevelInput(pullLevel);
       const levelFeet = parsed ?? 0;
       const dt = new Date(pullDateTime);
-      const packetId = `${dt.toISOString().replace(/[-:T.]/g, '').slice(0, 14)}_${pullWell.replace(/\s/g, '')}_dashboard`;
 
-      const packet = {
-        packetId,
+      // Governed dispatcher/admin MANUAL pull (hot oiler / washout / third-party /
+      // non-WB-M/WB-T water). Replaces the legacy direct packets/incoming write
+      // (denied by production rules). The callable authenticates the staff caller,
+      // derives company from auth (never a client override), submits through the
+      // canonical WB-M pull-input path, and creates NO ticket/invoice/Payroll/
+      // Billing projection. No driver impersonation. Idempotent server-side.
+      await submitManualPull({
         wellName: pullWell,
         tankLevelFeet: levelFeet,
         bblsTaken: parseInt(pullBbls) || 0,
-        dateTime: dt.toLocaleString(),
         dateTimeUTC: dt.toISOString(),
-        driverName: user?.displayName || user?.email || 'Dashboard',
-        driverId: user?.uid || 'dashboard',
-        requestType: 'pull',
-        timezone: Intl.DateTimeFormat().resolvedOptions().timeZone,
         wellDown: pullWellDown,
-        // 5/8/2026 — explicit authority signal so the CF respects this
-        // dashboard-asserted wellDown value. Routine WB T pulls omit this
-        // flag and the CF preserves existing isDown for them.
-        wellDownIsAuthoritative: true,
-      };
-
-      await set(ref(db, `packets/incoming/${packetId}`), packet);
+        timezone: Intl.DateTimeFormat().resolvedOptions().timeZone,
+      });
 
       // Create Firestore ticket + invoice for billing/payroll
       let ticketCreated: { invoiceNumber: string; ticketNumber: number; driverName: string } | null = null;
@@ -302,8 +295,8 @@ export function AddPullModal({
       }
     } catch (error) {
       console.error('Error adding pull:', error);
-      setMessage('Failed to add pull. Check connection and try again.');
-      setTimeout(() => setMessage(''), 5000);
+      setMessage(describeManualPullError(error));
+      setTimeout(() => setMessage(''), 6000);
     } finally {
       setSubmitting(false);
     }

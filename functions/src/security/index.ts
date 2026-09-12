@@ -28,6 +28,7 @@ export { dismissDispatch } from './dismissDispatchCallable';
 export { staffWriteDispatch } from './staffWriteDispatchCallable';
 export { staffWriteDriverAssignment } from './staffWriteDriverAssignmentCallable';
 export { staffWriteWellConfig } from './staffWriteWellConfigCallable';
+export { staffSubmitManualPull } from './staffSubmitManualPullCallable';
 export { staffConvertApprovedDriverSecureLogin } from './staffConvertApprovedDriverSecureLogin';
 export { upgradeOwnLegacyDriverLogin } from './upgradeOwnLegacyDriverLogin';
 export { staffHydrateCanonicalIdentity } from './staffHydrateCanonicalIdentity';

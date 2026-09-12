@@ -42,7 +42,17 @@ describe('complete Dashboard write inventory vs live deny', () => {
     expect(driversTab).toMatch(/drivers\/approved\/\$\{/);
     expect(driversTab).toMatch(/drivers\/pending\/\$\{/);
     expect(driversTab).toMatch(/users\/\$\{/);
-    expect(wells).toMatch(/packets\/incoming\/\$\{/);
+    // wells.ts (pull edit) and AddPullModal (+Add Pull) no longer direct-write
+    // packets/incoming — both are now governed (see next test).
+    expect(wells).not.toMatch(/packets\/incoming\/\$\{/);
+  });
+
+  it('+Add Pull and pull edit are governed: no packets/incoming client write', () => {
+    const addPull = src('src/components/AddPullModal.tsx');
+    expect(addPull).not.toMatch(/set\(ref\([^)]*packets\/incoming/);
+    expect(addPull).toContain('submitManualPull');
+    expect(src('src/lib/staffSubmitManualPull.ts')).toContain("'staffSubmitManualPull'");
+    expect(wells).not.toMatch(/set\(editRef|packets\/incoming\/\$\{editPacketId\}/);
   });
 
   it('Add Well submit uses staffCreateWellConfig instead of a silent client set', () => {

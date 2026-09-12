@@ -38,6 +38,15 @@ const KNOWN_BLOCKED_MISSING: Record<string, string> = {
 /** Callable names reached via a constant/adapter, not a string literal in the httpsCallable call. */
 const KNOWN_INDIRECT_CALLABLES = ['adminSubmitPullEdit'];
 
+/**
+ * Callables AUTHORED in this branch (functions/src) that are not yet in the
+ * deployed snapshot — code-path verified + emulator-tested here, pending a
+ * backend deploy (lineage reconciliation). Distinct from BLOCKED-missing.
+ */
+const KNOWN_NEW_PENDING_DEPLOY: Record<string, string> = {
+  staffSubmitManualPull: 'NEW (Priority 1): governed dispatcher/admin manual-pull callable authored + emulator-tested; pending backend deploy.',
+};
+
 function walkTsx(dir: string): string[] {
   const out: string[] = [];
   for (const ent of readdirSync(dir, { withFileTypes: true, recursive: true }) as Array<{ name: string; parentPath?: string; path?: string; isFile(): boolean }>) {
@@ -71,6 +80,7 @@ test('every httpsCallable name is DEPLOYED or explicitly BLOCKED (catches missin
   for (const name of called.keys()) {
     if (deployedSet.has(name)) continue;
     if (name in KNOWN_BLOCKED_MISSING) continue;
+    if (name in KNOWN_NEW_PENDING_DEPLOY) continue;
     unknown.push(name);
   }
   assert.deepEqual(unknown, [], `Callable(s) neither deployed nor documented-blocked: ${unknown.join(', ')}`);
@@ -140,9 +150,13 @@ test('CONTRACT GAP: Save Changes sends op:update but deployed staffWriteWellConf
 
 // ── +Add Pull: rules-denied direct write, no governed dashboard target (BLOCKED) ─
 
-test('+Add Pull is a known rules-denied direct write (BLOCKED — no governed dashboard add-pull callable)', () => {
+test('+Add Pull is now GOVERNED: no direct packets/incoming write; routes through submitManualPull', () => {
   const modal = read('../../components/AddPullModal.tsx');
-  assert.match(modal, /set\s*\(\s*ref\s*\([^)]*packets\/incoming/, 'AddPullModal still direct-writes packets/incoming (documented BLOCKED)');
-  // Neither ingestDriverPacket nor ingestWbmPull is dashboard-callable (both requireSecureDriver);
-  // a governed staff add-pull callable is the backend dependency.
+  // The legacy rules-denied direct write is gone.
+  assert.ok(!/set\s*\(\s*ref\s*\([^)]*packets\/incoming/.test(modal), 'AddPullModal must not direct-write packets/incoming');
+  // The pull now goes through the governed manual-pull adapter.
+  assert.match(modal, /submitManualPull\(/, 'AddPullModal must submit via submitManualPull');
+  // Adapter targets the new callable; core carries no commercial projection.
+  const adapter = read('../staffSubmitManualPull.ts');
+  assert.match(adapter, /MANUAL_PULL_CALLABLE\s*=\s*'staffSubmitManualPull'/);
 });
