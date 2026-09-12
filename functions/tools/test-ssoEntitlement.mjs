@@ -11,9 +11,10 @@
  */
 import { createHash, randomBytes as nodeRandomBytes } from 'node:crypto';
 import { handleSsoIssueCode } from '../lib/sso/ssoIssueHandler.js';
+import { handleSsoExchange } from '../lib/sso/ssoExchangeHandler.js';
 import { decideAppEntitlementAuthorization } from '../lib/sso/appEntitlementAuthorization.js';
 import {
-  SSO_AUDIENCE_WBT, SSO_AUDIENCE_EQUIPMENT, SSO_PROTOCOL_VERSION,
+  SSO_AUDIENCE_WBT, SSO_AUDIENCE_EQUIPMENT, SSO_AUDIENCE_JSA, WELLBUILT_APP_JSA, SSO_PROTOCOL_VERSION,
   SSO_CHALLENGE_METHOD,
   WELLBUILT_APP_TICKETS, WELLBUILT_APP_MOBILE, WELLBUILT_APP_SUITE,
   WELLBUILT_APP_DASHBOARD, WELLBUILT_APP_EQUIPMENT,
@@ -565,6 +566,20 @@ const INCLUDED_PLAN = planWith({ [WELLBUILT_APP_TICKETS]: { included: true } });
     check(`${name}: exact issuance count`, w.docs.size === (expected ? 1 : 0));
     if (expected) check('recovery stores Post-Trip binding only',
       [...w.docs.values()][0].shiftBinding?.phase === 'post_trip');
+  }
+}
+
+{
+  const plan = { ...planWith({ [WELLBUILT_APP_JSA]: { included: true } }), capabilities: ['jsa'] };
+  const w = makeWorld({ contract: CONTRACT, contractState: 'active', plan, authority: OPEN_AUTHORITY });
+  const result = await issue(w, { ...REQUEST, audience: SSO_AUDIENCE_JSA });
+  check('existing JSA issuance keeps its server-authored binding', result.ok
+    && [...w.docs.values()][0]?.jsaBinding?.periodId === OPEN_AUTHORITY.openPeriodId);
+  if (result.ok) {
+    const exchanged = await handleSsoExchange(w.deps, { protocolVersion: SSO_PROTOCOL_VERSION,
+      audience: SSO_AUDIENCE_JSA, code: result.res.code, codeVerifier: 'v'.repeat(64) });
+    check('existing JSA exchange returns the same server period', exchanged.jsaBinding?.periodId === OPEN_AUTHORITY.openPeriodId);
+    check('JSA binding keeps policy facts', exchanged.jsaBinding?.jsaEnabled === true && exchanged.jsaBinding?.shiftState === 'open');
   }
 }
 

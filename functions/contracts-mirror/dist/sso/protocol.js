@@ -55,9 +55,19 @@ export const SSO_AUDIENCE_WBT = 'wellbuilt-tickets';
  * exchange rather than getting a parallel protocol.
  */
 export const SSO_AUDIENCE_EQUIPMENT = 'wellbuilt-equipment';
+/**
+ * JSA-audience addendum — WB-JSA. Added because WB-JSA's launch previously
+ * carried a passcode-derived hash and display name in `jsaapp://start` and
+ * treated possession of them as identity — which is how a stale legacy
+ * session reused a June shift during an active August one. WB-JSA joins
+ * the same authorization-code exchange; its launch link (see
+ * ./jsaLaunch.ts) carries only non-authoritative request metadata.
+ */
+export const SSO_AUDIENCE_JSA = 'wellbuilt-jsa';
 export const SSO_AUDIENCES = Object.freeze([
     SSO_AUDIENCE_WBT,
     SSO_AUDIENCE_EQUIPMENT,
+    SSO_AUDIENCE_JSA,
 ]);
 export function isSsoAudience(v) {
     return typeof v === 'string' && SSO_AUDIENCES.includes(v);
@@ -73,6 +83,8 @@ export function isSsoAudience(v) {
 export const SSO_SESSION_APP_CLAIM = 'app';
 export const SSO_SESSION_APP_WBT = 'wbt';
 export const SSO_SESSION_APP_EQUIPMENT = 'equipment';
+/** Matches the established 'wbjsa' switcher alias family; claim stays short. */
+export const SSO_SESSION_APP_JSA = 'jsa';
 /**
  * Audience → per-session app claim. A map rather than a conditional so a
  * new audience cannot be added without deciding what it is called in the
@@ -81,6 +93,7 @@ export const SSO_SESSION_APP_EQUIPMENT = 'equipment';
 export const SSO_SESSION_APP_BY_AUDIENCE = Object.freeze({
     [SSO_AUDIENCE_WBT]: SSO_SESSION_APP_WBT,
     [SSO_AUDIENCE_EQUIPMENT]: SSO_SESSION_APP_EQUIPMENT,
+    [SSO_AUDIENCE_JSA]: SSO_SESSION_APP_JSA,
 });
 // ── PKCE ──────────────────────────────────────────────────────────────────
 /** Only S256. `plain` is never acceptable. */
@@ -145,6 +158,8 @@ export const SSO_CALLBACK_SCHEME = 'wellbuilt-tickets';
 export const SSO_CALLBACK_HOST = 'sso-callback';
 /** vc51.9AE — eQuipment's fixed callback identity. Same host, own scheme. */
 export const SSO_CALLBACK_SCHEME_EQUIPMENT = 'wbequipment';
+/** JSA addendum — WB-JSA's registered scheme. Same fixed host, own scheme. */
+export const SSO_CALLBACK_SCHEME_JSA = 'jsaapp';
 /**
  * Audience → fixed callback route. Still constants, never a client-supplied
  * redirect URI: the destination is chosen by the audience the code was
@@ -154,6 +169,10 @@ export const SSO_CALLBACK_BY_AUDIENCE = Object.freeze({
     [SSO_AUDIENCE_WBT]: Object.freeze({ scheme: SSO_CALLBACK_SCHEME, host: SSO_CALLBACK_HOST }),
     [SSO_AUDIENCE_EQUIPMENT]: Object.freeze({
         scheme: SSO_CALLBACK_SCHEME_EQUIPMENT,
+        host: SSO_CALLBACK_HOST,
+    }),
+    [SSO_AUDIENCE_JSA]: Object.freeze({
+        scheme: SSO_CALLBACK_SCHEME_JSA,
         host: SSO_CALLBACK_HOST,
     }),
 });
@@ -174,20 +193,68 @@ export function isSsoShiftBinding(v) {
         && o.shiftId.length <= SSO_SHIFT_ID_MAX
         && isPhase(o.phase);
 }
-/** Shift binding is mandatory for equipment and forbidden for every other audience. */
+/**
+ * Shift binding is mandatory for equipment and forbidden for every other
+ * audience. WB-JSA deliberately does NOT take a client-proposed binding:
+ * the SERVER derives the authoritative shift state itself at issuance (see
+ * SsoJsaBinding below), so there is nothing a client could propose that
+ * the server would not have to discard.
+ */
 export function audienceRequiresShiftBinding(audience) {
     return audience === SSO_AUDIENCE_EQUIPMENT;
+}
+// ── JSA authority binding (jsa audience only, server-authored) ────────────
+/**
+ * Textually identical to the shift-authority formats in the backend's
+ * shiftAuthority module (PERIOD_ID_PATTERN / LOCAL_DATE_PATTERN).
+ * Deliberately NOT imported — this module documents itself as having no
+ * runtime imports — and the conformance test asserts the two agree, so a
+ * change to either is caught rather than silently tolerated.
+ */
+export const SSO_JSA_PERIOD_ID_PATTERN = '^\\d{4}-\\d{2}-\\d{2}_\\d{6}$';
+export const SSO_JSA_LOCAL_DATE_PATTERN = '^\\d{4}-\\d{2}-\\d{2}$';
+export function isSsoJsaBinding(v) {
+    const o = v;
+    if (typeof o !== 'object' || o === null || Array.isArray(o))
+        return false;
+    if (typeof o.requiresActiveShift !== 'boolean')
+        return false;
+    if (typeof o.jsaEnabled !== 'boolean')
+        return false;
+    const keys = Object.keys(o);
+    if (o.shiftState === 'open') {
+        if (keys.length !== 5)
+            return false;
+        if (!matches(SSO_JSA_PERIOD_ID_PATTERN, o.periodId))
+            return false;
+        if (!matches(SSO_JSA_LOCAL_DATE_PATTERN, o.originLocalDate))
+            return false;
+        // Internal consistency: the period id's day IS its origin day.
+        return o.periodId.slice(0, 10) === o.originLocalDate;
+    }
+    if (o.shiftState === 'none') {
+        // Half a binding is not a binding — no period fields may ride along.
+        return keys.length === 3;
+    }
+    return false;
+}
+/** The JSA audience returns a server-authored binding; no other audience does. */
+export function audienceCarriesJsaBinding(audience) {
+    return audience === SSO_AUDIENCE_JSA;
 }
 /** Upper bound on an authoritative display name carried in a response. */
 export const SSO_DISPLAY_NAME_MAX = 120;
 /**
- * The tickets app persists a local identity and therefore needs a name;
- * no other audience does. Keeping this a predicate rather than an inline
- * comparison means the server and the client cannot disagree about which
- * audiences carry the field.
+ * Audiences whose apps persist a local identity and therefore need a name.
+ * WB-JSA joins WB-T here: it supports governed DIRECT start (no Suite hop)
+ * on later launches, which requires a persisted identity — and that
+ * identity needs a server-resolved name, never one from a launch URI.
+ * Keeping this a predicate rather than an inline comparison means the
+ * server and the client cannot disagree about which audiences carry the
+ * field.
  */
 export function audienceCarriesDisplayName(audience) {
-    return audience === SSO_AUDIENCE_WBT;
+    return audience === SSO_AUDIENCE_WBT || audience === SSO_AUDIENCE_JSA;
 }
 /**
  * Normalize an authoritative display name, or null when it is unusable.

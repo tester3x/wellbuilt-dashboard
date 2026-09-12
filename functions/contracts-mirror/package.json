@@ -1,6 +1,6 @@
 {
   "name": "@tester3x/wellbuilt-contracts",
-  "version": "0.4.0",
+  "version": "0.5.0",
   "description": "Pure, environment-neutral WellBuilt Suite contracts: plan entitlements, company work-period configuration, and the canonical work-period resolver.",
   "license": "UNLICENSED",
   "private": false,
@@ -36,7 +36,7 @@
   },
   "scripts": {
     "build": "tsc -p tsconfig.json",
-    "test": "npm run build && node tools/test-contracts.mjs && node tools/test-dvir-protocol.mjs && node tools/test-regex-safety.mjs && node tools/test-sso-protocol.mjs && node tools/test-session-audience.mjs && node tools/test-app-entitlement.mjs && node tools/test-company-app-configuration.mjs",
+    "test": "npm run build && node tools/test-contracts.mjs && node tools/test-dvir-protocol.mjs && node tools/test-regex-safety.mjs && node tools/test-sso-protocol.mjs && node tools/test-session-audience.mjs && node tools/test-app-entitlement.mjs && node tools/test-company-app-configuration.mjs && node tools/test-jsa-launch.mjs",
     "prepack": "npm run build"
   },
   "dependencies": {},

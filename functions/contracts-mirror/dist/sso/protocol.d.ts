@@ -46,7 +46,16 @@ export declare const SSO_AUDIENCE_WBT: "wellbuilt-tickets";
  * exchange rather than getting a parallel protocol.
  */
 export declare const SSO_AUDIENCE_EQUIPMENT: "wellbuilt-equipment";
-export type SsoAudience = typeof SSO_AUDIENCE_WBT | typeof SSO_AUDIENCE_EQUIPMENT;
+/**
+ * JSA-audience addendum — WB-JSA. Added because WB-JSA's launch previously
+ * carried a passcode-derived hash and display name in `jsaapp://start` and
+ * treated possession of them as identity — which is how a stale legacy
+ * session reused a June shift during an active August one. WB-JSA joins
+ * the same authorization-code exchange; its launch link (see
+ * ./jsaLaunch.ts) carries only non-authoritative request metadata.
+ */
+export declare const SSO_AUDIENCE_JSA: "wellbuilt-jsa";
+export type SsoAudience = typeof SSO_AUDIENCE_WBT | typeof SSO_AUDIENCE_EQUIPMENT | typeof SSO_AUDIENCE_JSA;
 export declare const SSO_AUDIENCES: readonly SsoAudience[];
 export declare function isSsoAudience(v: unknown): v is SsoAudience;
 /**
@@ -60,6 +69,8 @@ export declare function isSsoAudience(v: unknown): v is SsoAudience;
 export declare const SSO_SESSION_APP_CLAIM: "app";
 export declare const SSO_SESSION_APP_WBT: "wbt";
 export declare const SSO_SESSION_APP_EQUIPMENT: "equipment";
+/** Matches the established 'wbjsa' switcher alias family; claim stays short. */
+export declare const SSO_SESSION_APP_JSA: "jsa";
 /**
  * Audience → per-session app claim. A map rather than a conditional so a
  * new audience cannot be added without deciding what it is called in the
@@ -103,6 +114,8 @@ export declare const SSO_CALLBACK_SCHEME: "wellbuilt-tickets";
 export declare const SSO_CALLBACK_HOST: "sso-callback";
 /** vc51.9AE — eQuipment's fixed callback identity. Same host, own scheme. */
 export declare const SSO_CALLBACK_SCHEME_EQUIPMENT: "wbequipment";
+/** JSA addendum — WB-JSA's registered scheme. Same fixed host, own scheme. */
+export declare const SSO_CALLBACK_SCHEME_JSA: "jsaapp";
 /**
  * Audience → fixed callback route. Still constants, never a client-supplied
  * redirect URI: the destination is chosen by the audience the code was
@@ -141,15 +154,64 @@ export interface SsoShiftBinding {
 }
 export declare const SSO_SHIFT_ID_MAX = 128;
 export declare function isSsoShiftBinding(v: unknown): v is SsoShiftBinding;
-/** Shift binding is mandatory for equipment and forbidden for every other audience. */
+/**
+ * Shift binding is mandatory for equipment and forbidden for every other
+ * audience. WB-JSA deliberately does NOT take a client-proposed binding:
+ * the SERVER derives the authoritative shift state itself at issuance (see
+ * SsoJsaBinding below), so there is nothing a client could propose that
+ * the server would not have to discard.
+ */
 export declare function audienceRequiresShiftBinding(audience: SsoAudience): boolean;
+/**
+ * Textually identical to the shift-authority formats in the backend's
+ * shiftAuthority module (PERIOD_ID_PATTERN / LOCAL_DATE_PATTERN).
+ * Deliberately NOT imported — this module documents itself as having no
+ * runtime imports — and the conformance test asserts the two agree, so a
+ * change to either is caught rather than silently tolerated.
+ */
+export declare const SSO_JSA_PERIOD_ID_PATTERN = "^\\d{4}-\\d{2}-\\d{2}_\\d{6}$";
+export declare const SSO_JSA_LOCAL_DATE_PATTERN = "^\\d{4}-\\d{2}-\\d{2}$";
+/**
+ * The authoritative binding a JSA exchange returns.
+ *
+ * AUTHORED BY THE SERVER at issuance, from the driver's shift-authority
+ * record and the company's effective plan + app configuration — never from
+ * the request, a launch URI, a cached client value, or a clock-derived
+ * date. This is what makes WB-JSA a governed destination: the app binds
+ * its records to a server-verified period (or to none), so a stale local
+ * session cannot resurrect a June shift in August.
+ *
+ *  - shiftState 'open'  → periodId + originLocalDate are REQUIRED and name
+ *    the exact authoritative open period. originLocalDate is the period's
+ *    frozen origin day — never a UTC-derived date.
+ *  - shiftState 'none'  → both period fields are ABSENT. Legal only when
+ *    the effective policy does not require an active shift (the
+ *    owner-operator / free-plan case) — a shift-required company with no
+ *    open period is refused at issuance, not represented here.
+ *  - requiresActiveShift / jsaEnabled describe the effective company
+ *    policy the server decided under, so the app renders the right
+ *    experience without re-deriving policy from unverified data.
+ */
+export interface SsoJsaBinding {
+    shiftState: 'open' | 'none';
+    periodId?: string;
+    originLocalDate?: string;
+    requiresActiveShift: boolean;
+    jsaEnabled: boolean;
+}
+export declare function isSsoJsaBinding(v: unknown): v is SsoJsaBinding;
+/** The JSA audience returns a server-authored binding; no other audience does. */
+export declare function audienceCarriesJsaBinding(audience: SsoAudience): boolean;
 /** Upper bound on an authoritative display name carried in a response. */
 export declare const SSO_DISPLAY_NAME_MAX = 120;
 /**
- * The tickets app persists a local identity and therefore needs a name;
- * no other audience does. Keeping this a predicate rather than an inline
- * comparison means the server and the client cannot disagree about which
- * audiences carry the field.
+ * Audiences whose apps persist a local identity and therefore need a name.
+ * WB-JSA joins WB-T here: it supports governed DIRECT start (no Suite hop)
+ * on later launches, which requires a persisted identity — and that
+ * identity needs a server-resolved name, never one from a launch URI.
+ * Keeping this a predicate rather than an inline comparison means the
+ * server and the client cannot disagree about which audiences carry the
+ * field.
  */
 export declare function audienceCarriesDisplayName(audience: SsoAudience): boolean;
 /**
@@ -236,6 +298,13 @@ export interface SsoExchangeResponse {
      * received in a deep link.
      */
     shiftBinding?: SsoShiftBinding;
+    /**
+     * Present only for the jsa audience: the SERVER-AUTHORED authority
+     * binding decided at issuance (see SsoJsaBinding). WB-JSA scopes its
+     * records to this — never to a launch URI, a cached shift id, or a
+     * UTC-derived date.
+     */
+    jsaBinding?: SsoJsaBinding;
     /**
      * Present only for the tickets audience: the driver's authoritative display
      * name, resolved SERVER-SIDE from the same canonical profile the exchange

@@ -56,3 +56,17 @@ Deployed those four targets from ac11ee4f on September 12 at 20:26 UTC. Each is
 ACTIVE and returns HTTP 401 UNAUTHENTICATED to a valid unauthenticated probe.
 Downloaded deployment archives match committed recovery/SSO TypeScript and compiled
 JavaScript on all four functions. No rules or Hosting targets were deployed.
+
+Shared-source compatibility correction: the local audit base contained contracts
+0.4 and pre-JSA SSO issuance, while the unchanged live exchange function's August
+23 source archive contains contracts 0.5 and server-authored JSA bindings. The
+20:26 issuance update therefore omitted that existing audience support. Restored
+the deployed immutable 0.5 mirror, its verifier, JSA authorization and shared SSO
+source; reapplied only the Equipment Post-Trip recovery exception to that source.
+The exchange source is now aligned locally but its live function is unchanged.
+
+The full SSO tests now include the restored JSA spine: 115 entitlement checks and
+14 JSA issuance/exchange checks pass, including off-shift owner-operator policy,
+shift-required customers, inconsistent/absent authority, exclusions and exact
+server binding round-trip. The mirror verifier confirms 59 immutable files.
+Redeploy only ssoIssueAuthorizationCode for this compatibility correction.

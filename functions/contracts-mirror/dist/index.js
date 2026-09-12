@@ -31,7 +31,14 @@ export { SSO_PROTOCOL_VERSION, SUPPORTED_SSO_PROTOCOL_VERSIONS, assertSsoProtoco
 // vc51.9AE — equipment audience (additive)
 SSO_AUDIENCE_EQUIPMENT, SSO_SESSION_APP_EQUIPMENT, SSO_SESSION_APP_BY_AUDIENCE, SSO_CALLBACK_SCHEME_EQUIPMENT, SSO_CALLBACK_BY_AUDIENCE, isSsoShiftBinding, audienceRequiresShiftBinding, SSO_SHIFT_ID_MAX, 
 // Authoritative display name on the tickets exchange response (additive)
-SSO_DISPLAY_NAME_MAX, audienceCarriesDisplayName, normalizeSsoDisplayName, } from './sso/protocol.js';
+SSO_DISPLAY_NAME_MAX, audienceCarriesDisplayName, normalizeSsoDisplayName, 
+// JSA audience addendum (additive) — governed WB-JSA destination
+SSO_AUDIENCE_JSA, SSO_SESSION_APP_JSA, SSO_CALLBACK_SCHEME_JSA, SSO_JSA_PERIOD_ID_PATTERN, SSO_JSA_LOCAL_DATE_PATTERN, isSsoJsaBinding, audienceCarriesJsaBinding, } from './sso/protocol.js';
+// ── Governed WB-T → WB-JSA launch/return contract (additive) ──────────────
+// Bounded request/return metadata ONLY — replaces the legacy hash/name
+// jsaapp://start launch. No identity, credential, code, or PKCE material
+// may ever ride these routes.
+export { JSA_LAUNCH_VERSION, JSA_LAUNCH_SCHEME, JSA_LAUNCH_HOST, JSA_RETURN_SCHEME, JSA_RETURN_HOST, JSA_HINT_MAX, JSA_REF_MAX, isJsaRequestId, JSA_RETURN_STATUSES, isJsaReturnStatus, JSA_FORBIDDEN_LAUNCH_KEYS, validateJsaLaunchRequest, validateJsaReturnMessage, buildJsaLaunchUrl, parseJsaLaunchUrl, buildJsaReturnUrl, parseJsaReturnUrl, } from './sso/jsaLaunch.js';
 // ── Optional session audience for driver auth (0.3.0-dev, additive) ───────
 export { SESSION_AUDIENCE_WBT, SESSION_AUDIENCES, SESSION_APP_CLAIM, isSessionAudience, readSessionAudience, CLIENT_FORBIDDEN_CLAIM_KEYS, containsClientClaimMaterial, sessionClaimsForAudience, } from './auth/sessionAudience.js';
 // ── Per-app commercial entitlement (0.3.0-dev, additive) ─────────────────
