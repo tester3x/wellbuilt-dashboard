@@ -12,10 +12,10 @@ import {
   WellNavItem,
   fetchWellHistoryUnified,
   fetchEditHistory,
-  editPull,
   subscribeToWellNavList,
 } from '@/lib/wells';
 import { deletePull, describeDeleteError } from '@/lib/pullDelete';
+import { editPull, describeEditError } from '@/lib/pullEdit';
 import {
   packetShowsEditBadge,
   formatEditSourceLabel,
@@ -101,6 +101,7 @@ function WellDetailPage() {
   const [editDateTime, setEditDateTime] = useState('');
   const [editWellDown, setEditWellDown] = useState(false);
   const [editSubmitting, setEditSubmitting] = useState(false);
+  const [editError, setEditError] = useState<string | null>(null);
 
   // Correction trail (badge expand) — packets/editHistory/{packetId}
   const [trailOpenId, setTrailOpenId] = useState<string | null>(null);
@@ -370,18 +371,24 @@ function WellDetailPage() {
       setEditDateTime('');
     }
     setEditWellDown(pull.wellDown || false);
+    setEditError(null);
   };
 
   const submitEdit = async () => {
     if (!editingPull) return;
+    if (editSubmitting) return; // idempotency: ignore double-clicks while in flight
 
     setEditSubmitting(true);
+    setEditError(null);
     try {
       // Check if date/time was changed
       const origDt = new Date(editingPull.timestamp);
       const newDt = editDateTime ? new Date(editDateTime) : null;
       const dateTimeChanged = newDt && !isNaN(newDt.getTime()) && newDt.getTime() !== origDt.getTime();
 
+      // Governed edit: addressed only by the immutable originalPacketId; the
+      // server writes the edit packet under admin (client writes to
+      // packets/incoming are rules-denied). No new pull packet is minted.
       await editPull(
         editingPull.packetId,
         editingPull.wellName,
@@ -390,13 +397,16 @@ function WellDetailPage() {
         dateTimeChanged ? newDt.toISOString() : undefined,
         editWellDown
       );
-      // Refresh data
+      // Success → refresh the projection and close the modal.
       const history = await fetchWellHistoryUnified(wellName);
       setPulls(history);
       setEditingPull(null);
+      setEditError(null);
     } catch (err) {
+      // Failure MUST stay visible: keep the modal open and show the reason.
+      // The edit did not apply; nothing was changed.
       console.error('Error editing pull:', err);
-      setError('Failed to edit pull');
+      setEditError(describeEditError(err));
     } finally {
       setEditSubmitting(false);
     }
@@ -897,10 +907,20 @@ function WellDetailPage() {
               <label htmlFor="editWellDown" className="text-sm font-medium text-red-400">Well DOWN</label>
             </div>
 
+            {editError && (
+              <div
+                role="alert"
+                className="mt-4 rounded border border-red-500/50 bg-red-500/10 px-3 py-2 text-sm text-red-300"
+              >
+                {editError}
+              </div>
+            )}
+
             <div className="flex justify-end gap-3 mt-6">
               <button
-                onClick={() => setEditingPull(null)}
-                className="px-4 py-2 bg-gray-600 hover:bg-gray-500 text-white rounded transition-colors"
+                onClick={() => { setEditingPull(null); setEditError(null); }}
+                disabled={editSubmitting}
+                className="px-4 py-2 bg-gray-600 hover:bg-gray-500 disabled:bg-gray-700 text-white rounded transition-colors"
               >
                 Cancel
               </button>

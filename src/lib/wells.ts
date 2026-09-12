@@ -1,5 +1,5 @@
 // Well data utilities - fetches from Firebase
-import { ref, get, onValue, query, orderByChild, equalTo, set } from 'firebase/database';
+import { ref, get, onValue, query, orderByChild, equalTo } from 'firebase/database';
 import { getFirebaseDatabase } from './firebase';
 import { adminGetWellHistory, adminGetWellPerformance, adminGetWellPerformanceForWell, adminGetWellPool } from './adminDashboardCatalog';
 import { fetchWellPerformanceWithFallback, wellKeyFromName } from './wellPerformanceRead';
@@ -1250,41 +1250,13 @@ export async function fetchWellPerformance(wellName: string): Promise<Performanc
 // newLevelInches: tank top level in inches
 // newBbls: BBLs taken
 // newDateTimeUTC: optional new date/time in ISO format
-export async function editPull(
-  originalPacketId: string,
-  wellName: string,
-  newLevelInches: number,
-  newBbls: number,
-  newDateTimeUTC?: string,
-  wellDown?: boolean
-): Promise<void> {
-  const db = getFirebaseDatabase();
-  const timestamp = Date.now();
-  const cleanWellName = wellName.replace(/\s/g, '');
-  const editPacketId = `edit_${timestamp}_${cleanWellName}`;
-
-  const editPacket: Record<string, any> = {
-    requestType: 'edit',
-    originalPacketId: originalPacketId,
-    wellName: wellName,
-    tankTopInches: newLevelInches,
-    bblsTaken: newBbls,
-    timestamp: new Date().toISOString(),
-    source: 'dashboard',
-    wellDown: wellDown || false,
-    // 5/8/2026 — explicit authority signal: a dashboard edit IS an
-    // authoritative statement about wellDown. CF respects this.
-    wellDownIsAuthoritative: true,
-  };
-
-  if (newDateTimeUTC) {
-    editPacket.dateTimeUTC = newDateTimeUTC;
-    editPacket.dateTime = new Date(newDateTimeUTC).toLocaleString();
-  }
-
-  const editRef = ref(db, `packets/incoming/${editPacketId}`);
-  await set(editRef, editPacket);
-}
+// editPull moved to src/lib/pullEdit.ts. The legacy version wrote the edit
+// packet directly to packets/incoming, which the deployed secure rules refuse
+// (packets/incoming is {".read":false,".write":false}) — a client write there
+// is PERMISSION_DENIED, so no packet landed, processEditRequest never fired, and
+// the dashboard edit failed silently. Edits now go through the authenticated
+// adminSubmitPullEdit callable (see pullEdit.ts), mirroring the governed delete
+// path (pullDelete.ts / staffDeletePull).
 
 /** Immutable correction trail for a processed packet (packets/editHistory/{id}). */
 export async function fetchEditHistory(
