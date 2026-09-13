@@ -2109,12 +2109,17 @@ function DispatchPageInner() {
         </div>
 
         {/* ═══════════════════════════════════════════════════════════════════════
-            MAIN WORKSPACE — 50/50. Left: PW+SW top, Well Queue below. Right: Active Jobs full height.
+            MAIN WORKSPACE (Checkpoint 2). Desktop grid, right-biased:
+              ┌──────────┬───────────────┐
+              │ Builder  │               │  Builder pinned upper-left (natural height)
+              ├──────────┤   Well Queue  │  Active Jobs scroll below the builder
+              │ Active   │  (full height,│  Well Queue owns the full-height right column
+              │ Jobs ↕   │   scroll ↕)   │  Builder + Queue always simultaneously visible
+              └──────────┴───────────────┘
+            Each column owns its own internal scroll (min-height:0). Short / narrow
+            / Fold: stacked document flow (jobs-first) with page-level scroll.
             ═══════════════════════════════════════════════════════════════════════ */}
         <div className="dispatch-workspace">
-
-          {/* ═══════ LEFT: dispatch cards + well queue ═══════ */}
-          <div className="dispatch-pane">
 
             {/* ── Tabbed Dispatch Builder (PW / SW / Projects) ── */}
             <div className={`dispatch-builder bg-gray-800 border rounded-lg p-4 flex flex-col ${
@@ -2893,7 +2898,7 @@ function DispatchPageInner() {
                         <th className="px-2 py-2 text-left text-[11px] font-medium text-gray-300">Last Level</th>
                         <th className="px-2 py-2 text-left text-[11px] font-medium text-gray-300">Flow</th>
                         <th className="px-2 py-2 text-left text-[11px] font-medium text-gray-300">TTP</th>
-                        <th className="px-2 py-2 text-left text-[11px] font-medium text-gray-300">Pulls/Day</th>
+                        <th className="dispatch-queue-col-pulls px-2 py-2 text-left text-[11px] font-medium text-gray-300">Pulls/Day</th>
                         <th className="px-2 py-2 text-right text-[11px] font-medium text-gray-300 w-28">
                           <div className="flex items-center justify-end gap-1.5">
                             <span>Action</span>
@@ -2958,7 +2963,7 @@ function DispatchPageInner() {
                             </td>
                             <td className="px-2 py-1.5 text-white font-mono text-[10px]">{well.flowRate || '--'}</td>
                             <td className="px-2 py-1.5 text-white font-mono text-[10px]">{formatTTP(well)}</td>
-                            <td className="px-2 py-1.5"><PullsPredictionCell well={well} /></td>
+                            <td className="dispatch-queue-col-pulls px-2 py-1.5"><PullsPredictionCell well={well} /></td>
                             <td className="px-2 py-1.5 text-right">
                               <div className="flex items-center justify-end gap-2">
                                 {isSelected ? (
@@ -2997,9 +3002,8 @@ function DispatchPageInner() {
               </div>
             </div>
 
-          </div>{/* end left half */}
-
-          {/* ═══════ RIGHT: Active Jobs / Projects (jobs-first on Fold) ═══════ */}
+          {/* ═══════ Active Jobs / Projects — left column, below the builder
+                     (jobs-first on Fold/narrow via order) ═══════ */}
           <div className="dispatch-pane dispatch-pane-jobs">
             <div className="dispatch-jobs bg-gray-800 rounded-lg border border-gray-700 flex flex-col">
               {/* Panel header with tabs */}
@@ -3102,8 +3106,8 @@ function DispatchPageInner() {
                   })}
                 </div>
               )}
-              {/* Scrollable content */}
-              <div className="p-3">
+              {/* Scrollable content (owns internal scroll in the CP2 desktop grid) */}
+              <div className="dispatch-jobs-body p-3">
                 {rightPanelTab === 'jobs' && (
                   <ActiveDispatchPanel
                     dispatches={dispatches.filter(d => d.status !== 'completed' && d.status !== 'dismissed')}

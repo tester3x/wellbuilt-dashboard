@@ -58,6 +58,9 @@ body {
   padding-bottom: max(1.5rem, env(safe-area-inset-bottom, 0px));
 }
 
+/* Mobile / narrow / short: stacked document flow; the page (.dispatch-scroll-main)
+   owns vertical scroll. Jobs (activity) first so the well list is not a touch
+   trap on the way to a job card. */
 .dispatch-workspace {
   display: flex;
   flex-direction: column;
@@ -80,8 +83,14 @@ body {
   min-width: 0;
 }
 
-/* Fold / narrow / short: jobs (activity) first so the well list is not a
-   touch trap on the way to a job card. Desktop split restores left/right. */
+/* The Well Queue is a size container in EVERY layout (grid column, stacked
+   mobile, or a detached CP3 window) so its table can condense to its own width
+   rather than the viewport's. */
+.dispatch-queue {
+  container-type: inline-size;
+  container-name: wellqueue;
+}
+
 .dispatch-pane-jobs {
   order: -1;
 }
@@ -114,23 +123,68 @@ body {
   display: none;
 }
 
+/* ── Checkpoint 2 desktop workspace ──────────────────────────────────────
+   Tall + wide desktop: a fixed-height, right-biased two-column grid. The page
+   scroller stops scrolling (overflow hidden) and hands its height to the grid,
+   so each column owns its own internal scroll (min-height:0). Builder is pinned
+   upper-left at natural height; Active Jobs scrolls below it; the Well Queue
+   fills the full-height right column and scrolls its own body. Builder and Queue
+   are therefore always simultaneously visible. */
 @media (min-width: 1280px) and (min-height: 900px) {
+  .dispatch-scroll-main {
+    display: flex;
+    flex-direction: column;
+    overflow: hidden;              /* the columns scroll, not the page */
+  }
   .dispatch-workspace {
-    flex-direction: row;
-    align-items: flex-start;
-  }
-  .dispatch-pane {
-    width: 50%;
+    display: grid;
     flex: 1 1 0%;
+    min-height: 0;                 /* allow the grid (and its columns) to shrink */
+    grid-template-columns: minmax(0, 1fr) minmax(0, 1.55fr); /* right-biased */
+    grid-template-rows: auto minmax(0, 1fr);
+    grid-template-areas:
+      "builder queue"
+      "jobs    queue";
+    align-items: stretch;
   }
+  .dispatch-builder { grid-area: builder; }
   .dispatch-pane-jobs {
+    grid-area: jobs;
     order: 0;
+    min-height: 0;                 /* internal scroll owner */
+    overflow: hidden;             /* the inner .dispatch-jobs card scrolls */
   }
-  .dispatch-queue-toggle {
-    display: none;
+  .dispatch-pane-jobs .dispatch-jobs {
+    min-height: 0;
+    height: 100%;
   }
+  .dispatch-jobs-body {
+    flex: 1 1 0%;
+    min-height: 0;
+    overflow-y: auto;
+    overscroll-behavior-y: contain;
+  }
+  .dispatch-queue {
+    grid-area: queue;
+    min-height: 0;                 /* internal scroll owner */
+    align-self: stretch;
+  }
+  /* The queue toolbar/header stay put; only the body scrolls. */
+  .dispatch-queue { display: flex; flex-direction: column; }
   .dispatch-queue .dispatch-queue-body,
   .dispatch-queue:not(.is-expanded):not(.has-search) .dispatch-queue-body {
     display: block;
+    flex: 1 1 0%;
+    min-height: 0;
+    overflow-y: auto;
+    overscroll-behavior-y: contain;
   }
+  .dispatch-queue-toggle { display: none; }
+}
+
+/* Column condensing: when the Well Queue column itself gets narrow, drop the
+   lowest-priority column (Pulls/Day) FIRST; never wrap/split a Priority badge.
+   Priority / Well / Last Level / TTP / Action are always preserved. */
+@container wellqueue (max-width: 620px) {
+  .dispatch-queue-col-pulls { display: none; }
 }
