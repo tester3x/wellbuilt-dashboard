@@ -4,7 +4,7 @@ import { useEffect, useState, useMemo, useCallback, Suspense } from 'react';
 import { useRouter, useSearchParams } from 'next/navigation';
 import { useAuth } from '@/contexts/AuthContext';
 import { WellResponse, subscribeToWellStatusesUnified, wellResponsesFromCatalog } from '@/lib/wells';
-import { getPriority, getWellPrediction, formatTTP, matchesView, wellBucket, assessLevel, formatAge, type PriorityLevel, type QueueView } from '@/lib/dispatchPriority';
+import { getPriority, getWellPrediction, formatTTP, matchesView, wellBucket, classifyWell, inchesToLevel, formatAge, type QueueView } from '@/lib/dispatchPriority';
 // Z Fold recovery — layout helpers only (collapsed queue / stacked layout).
 // The realtime gate helpers from this module are intentionally NOT used:
 // 3ea36d84's subscribeToWellStatusesUnified realtime path is preserved.
@@ -264,11 +264,13 @@ function DispatchPageInner() {
   const [dataLoading, setDataLoading] = useState(true);
   const [driversLoading, setDriversLoading] = useState(true);
   const [readErrors, setReadErrors] = useState<{ drivers?: string; wells?: string; dispatches?: string }>({});
+  // Cold-start guard: do not show counts (which would falsely read 0 / all
+  // Needs-Data) until authentication resolved AND the first well load completed.
+  const queueReady = !loading && !dataLoading && wells.length > 0;
 
   // UI state
   const [search, setSearch] = useState('');
   const [routeFilter, setRouteFilter] = useState<string>('all');
-  const [priorityFilter, setPriorityFilter] = useState<PriorityLevel | 'all'>('all');
   // Primary actionable-queue view (default: wells that need pulling now).
   const [queueView, setQueueView] = useState<QueueView>('needs-pull');
   // Z Fold recovery — collapsed-queue + stacked-layout UI state.
@@ -842,15 +844,8 @@ function DispatchPageInner() {
   // ─── PW Queue (sorted by priority) ──────────────────────────────────────────
 
   const pwQueue = useMemo(() => {
-    // Drop DOWN wells (handled/marked separately); KEEP no-prediction wells so the
-    // "Needs Data" view can surface them instead of a well silently vanishing.
-    let filtered = wells.filter(w => !(w.isDown || w.currentLevel === 'DOWN'));
-
-    // Primary actionable view (Needs Pull / Next 24h / All / Needs Data) — the
-    // single source of truth is wellBucket() over the canonical prediction.
-    filtered = filtered.filter(w => matchesView(w, queueView));
-
-    // Already-dispatched wells → list of assigned driver first names
+    // Already-dispatched wells → list of assigned driver first names (computed
+    // first so the view filter + classification can exclude/mark them).
     const dispatchedWellDrivers = new Map<string, string[]>();
     dispatches
       .filter(d => d.jobType === 'pw' && ['pending', 'accepted', 'in_progress', 'paused'].includes(d.status))
@@ -859,8 +854,14 @@ function DispatchPageInner() {
         driversList.push(d.driverFirstName || d.driverName || '?');
         dispatchedWellDrivers.set(d.wellName, driversList);
       });
+    const isAssigned = (w: WellResponse) => dispatchedWellDrivers.has(w.wellName);
 
-    // Apply search filter
+    // Drop DOWN wells; KEEP no-prediction wells so the "Needs Data" view can
+    // surface them instead of a well silently vanishing. HEIGHT-FIRST view is the
+    // single source of truth; assigned wells are excluded from actionable views.
+    let filtered = wells.filter(w => !(w.isDown || w.currentLevel === 'DOWN'));
+    filtered = filtered.filter(w => matchesView(w, queueView, Date.now(), { assigned: isAssigned(w) }));
+
     if (search.trim()) {
       const q = search.trim().toLowerCase();
       filtered = filtered.filter(w =>
@@ -868,31 +869,24 @@ function DispatchPageInner() {
         (w.route || '').toLowerCase().includes(q)
       );
     }
-
-    // Apply route filter
     if (routeFilter !== 'all') {
       filtered = filtered.filter(w => w.route === routeFilter);
     }
 
-    // Apply priority filter
-    if (priorityFilter !== 'all') {
-      filtered = filtered.filter(w => getPriority(w).level === priorityFilter);
-    }
-
-    // Sort by priority: overdue first (sorted by most overdue), then soonest pull time
+    // Sort height-first: PULL NOW, then APPROACHING by soonest validated TTP, then
+    // the rest; assigned/down fall to the bottom (via classification sortOrder).
     return filtered
-      .map(w => ({ well: w, priority: getPriority(w), dispatched: dispatchedWellDrivers.has(w.wellName), assignedDrivers: dispatchedWellDrivers.get(w.wellName) || [] }))
+      .map(w => {
+        const dispatched = isAssigned(w);
+        return { well: w, priority: classifyWell(w, Date.now(), { assigned: dispatched }), dispatched, assignedDrivers: dispatchedWellDrivers.get(w.wellName) || [] };
+      })
       .sort((a, b) => {
-        // Already-dispatched go to bottom
-        if (a.dispatched !== b.dispatched) return a.dispatched ? 1 : -1;
-        // Then by priority level
         if (a.priority.sortOrder !== b.priority.sortOrder) return a.priority.sortOrder - b.priority.sortOrder;
-        // Within same priority, sort by hours until pull (null = last)
-        const aH = a.priority.hoursUntilPull ?? 99999;
-        const bH = b.priority.hoursUntilPull ?? 99999;
+        const aH = a.priority.ttpHours ?? 99999;
+        const bH = b.priority.ttpHours ?? 99999;
         return aH - bH;
       });
-  }, [wells, dispatches, search, routeFilter, priorityFilter, queueView]);
+  }, [wells, dispatches, search, routeFilter, queueView]);
 
   // Counts per primary view (all routes) so Dispatch sees the actionable load
   // without opening each route. Down wells are excluded from every view.
@@ -928,12 +922,14 @@ function DispatchPageInner() {
         if (routeFilter !== 'all' && w.route !== routeFilter) return false;
         return true;
       })
-      .map(w => ({ well: w, priority: getPriority(w), dispatched: dispatchedWellDrivers.has(w.wellName), assignedDrivers: dispatchedWellDrivers.get(w.wellName) || [] }))
+      .map(w => {
+        const dispatched = dispatchedWellDrivers.has(w.wellName);
+        return { well: w, priority: classifyWell(w, Date.now(), { assigned: dispatched }), dispatched, assignedDrivers: dispatchedWellDrivers.get(w.wellName) || [] };
+      })
       .sort((a, b) => {
-        if (a.dispatched !== b.dispatched) return a.dispatched ? 1 : -1;
         if (a.priority.sortOrder !== b.priority.sortOrder) return a.priority.sortOrder - b.priority.sortOrder;
-        const aH = a.priority.hoursUntilPull ?? 99999;
-        const bH = b.priority.hoursUntilPull ?? 99999;
+        const aH = a.priority.ttpHours ?? 99999;
+        const bH = b.priority.ttpHours ?? 99999;
         return aH - bH;
       });
   }, [wells, dispatches, search, routeFilter]);
@@ -942,17 +938,6 @@ function DispatchPageInner() {
   const queueRows = showingSearchHits ? searchHits : pwQueue;
   const searchActive = wellQueueSearchActive(search);
 
-  // Priority summary counts
-  const priorityCounts = useMemo(() => {
-    const counts = { overdue: 0, soon: 0, today: 0, later: 0, unknown: 0 };
-    wells.forEach(w => {
-      if (w.isDown || w.currentLevel === 'DOWN') return;
-      if (w.currentLevel === '--' && !w.nextPullTimeUTC) return;
-      const p = getPriority(w);
-      counts[p.level]++;
-    });
-    return counts;
-  }, [wells]);
 
   // ─── Assign PW Job ─────────────────────────────────────────────────────────
 
@@ -2062,28 +2047,11 @@ function DispatchPageInner() {
           <div className="flex items-center gap-4 mb-3">
             <h2 className="text-lg font-semibold text-white flex-shrink-0">Dispatch</h2>
 
-            {/* Priority badges */}
-            <div className="flex items-center gap-1.5 flex-shrink-0">
-              {(['overdue', 'soon', 'today', 'later'] as const).map(level => {
-                const cfg = {
-                  overdue: { bg: 'bg-red-600', label: 'Overdue' },
-                  soon:    { bg: 'bg-orange-600', label: 'Soon' },
-                  today:   { bg: 'bg-yellow-600', label: 'Today' },
-                  later:   { bg: 'bg-green-700', label: 'Later' },
-                }[level];
-                return (
-                  <button
-                    key={level}
-                    onClick={() => setPriorityFilter(priorityFilter === level ? 'all' : level)}
-                    className={`px-2 py-0.5 text-xs font-bold rounded ${cfg.bg} text-white ${priorityFilter === level ? 'ring-2 ring-white' : ''}`}
-                  >
-                    {priorityCounts[level]} {cfg.label}
-                  </button>
-                );
-              })}
-              {priorityFilter !== 'all' && (
-                <button onClick={() => setPriorityFilter('all')} className="text-gray-400 hover:text-white text-xs">✕</button>
-              )}
+            {/* Height-first actionable counts (time-first Overdue/Soon chips removed). */}
+            <div className="flex items-center gap-1.5 flex-shrink-0 text-xs">
+              <span className="px-2 py-0.5 rounded bg-red-600 text-white font-bold">{queueReady ? viewCounts['needs-pull'] : '—'} Pull Now</span>
+              <span className="px-2 py-0.5 rounded bg-yellow-600 text-black font-bold">{queueReady ? viewCounts['next-24h'] : '—'} Next 24h</span>
+              <span className="px-2 py-0.5 rounded bg-amber-600 text-white font-bold">{queueReady ? viewCounts['needs-data'] : '—'} Needs Data</span>
             </div>
 
             <span className="flex-1" />
@@ -2824,7 +2792,7 @@ function DispatchPageInner() {
                         queueView === v ? 'bg-blue-600 text-white' : 'bg-gray-900 text-gray-400 hover:bg-gray-700'
                       }`}
                     >
-                      {label}{viewCounts[v] > 0 ? ` (${viewCounts[v]})` : ''}
+                      {label}{queueReady && viewCounts[v] > 0 ? ` (${viewCounts[v]})` : ''}
                     </button>
                   ))}
                 </div>
@@ -2898,7 +2866,7 @@ function DispatchPageInner() {
                         const isSelected = selectedWells.has(well.wellName);
                         const loadCount = selectedWells.get(well.wellName) || 1;
                         return (
-                          <tr key={well.responseId || well.wellName} className={`hover:bg-gray-750 transition-colors ${priority.level === 'overdue' ? 'bg-red-900/10' : ''} ${isSelected ? 'bg-blue-900/20' : ''}`}>
+                          <tr key={well.responseId || well.wellName} className={`hover:bg-gray-750 transition-colors ${priority.state === 'pull-now' ? 'bg-red-900/10' : ''} ${isSelected ? 'bg-blue-900/20' : ''}`}>
                             <td className="px-2 py-1.5">
                               <span className={`px-1.5 py-0.5 text-[10px] font-bold rounded ${priority.color} ${priority.textColor}`}>{priority.label}</span>
                             </td>
@@ -2915,18 +2883,25 @@ function DispatchPageInner() {
                             </td>
                             <td className="px-2 py-1.5 font-mono text-[10px]">
                               {(() => {
-                                const lv = assessLevel(well);
-                                if (lv.estNow === 'NEEDS DATA' && !lv.lastLevel) {
-                                  return <span className="text-gray-500">NEEDS DATA</span>;
-                                }
+                                const c = classifyWell(well);
+                                const staleReading = c.fresh === false;
                                 return (
                                   <>
-                                    <span className={lv.isHistoricalOnly ? 'text-gray-400' : 'text-white'}>{lv.lastLevel || '--'}</span>
-                                    {lv.lastLevelAgeHours !== null && (
-                                      <span className="text-gray-500"> · {formatAge(lv.lastLevelAgeHours)}</span>
+                                    {/* Last verified level + age (dimmed when stale/untrusted) */}
+                                    <span className={staleReading ? 'text-gray-500' : 'text-white'}>{c.lastLevel || '--'}</span>
+                                    {c.lastLevelAgeHours !== null && (
+                                      <span className="text-gray-500"> · {formatAge(c.lastLevelAgeHours)}</span>
                                     )}
-                                    {lv.estNow !== '--' && lv.estNow !== 'NEEDS DATA' && (
-                                      <span className={`block ${lv.estNow === 'OVER' ? 'text-red-400 font-bold' : 'text-blue-300'}`}>Est: {lv.estNow}</span>
+                                    {/* Target + remaining to pull height */}
+                                    {c.targetInches !== null && (
+                                      <span className="block text-gray-500">tgt {inchesToLevel(c.targetInches)}{c.remainingInches !== null && c.remainingInches > 0 ? ` · ${inchesToLevel(c.remainingInches)} to go` : ''}</span>
+                                    )}
+                                    {/* Trustworthy estimated current level — only when gain-supported */}
+                                    {c.state === 'approaching' && c.estInches !== null && (
+                                      <span className="block text-blue-300">est {inchesToLevel(c.estInches)}</span>
+                                    )}
+                                    {(c.state === 'verify' || c.state === 'no-gain') && (
+                                      <span className={`block font-bold ${c.state === 'no-gain' ? 'text-gray-400' : 'text-amber-400'}`}>{c.label}</span>
                                     )}
                                   </>
                                 );

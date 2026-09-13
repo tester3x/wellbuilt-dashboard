@@ -420,32 +420,39 @@ test('5A: CompaniesTab routes platform company-field writes through adminUpdateC
 });
 
 // ── Dispatch priority/TTP consistency (fix/dashboard-dispatch-priority-ttp) ───
-test('Dispatch TTP column uses live formatTTP (not the stale server snapshot string)', () => {
+test('Dispatch TTP is height-first (no OVERDUE; via classifyWell)', () => {
   const page = read('../../app/dispatch/page.tsx');
   assert.match(page, /from '@\/lib\/dispatchPriority'/, 'priority helpers extracted to a testable lib');
-  assert.match(page, /\{formatTTP\(well\)\}/, 'TTP cell renders live formatTTP(well)');
-  // the raw stale-string cell must be gone
-  assert.ok(!/\{well\.timeTillPull \|\| well\.etaToMax \|\| '--'\}/.test(page), 'no raw stale timeTillPull cell remains');
-  // lib exports the pure helpers
+  assert.match(page, /\{formatTTP\(well\)\}/, 'TTP cell renders formatTTP(well)');
   const lib = read('../dispatchPriority.ts');
-  for (const fn of ['getPriority', 'formatTTP', 'getWellPrediction', 'formatNextPull']) {
+  // formatTTP must NOT emit OVERDUE and must derive from classifyWell.
+  const ft = lib.slice(lib.indexOf('export function formatTTP'), lib.indexOf('// ─── Prediction Model'));
+  assert.ok(!/OVERDUE/.test(ft), 'formatTTP must not emit OVERDUE');
+  assert.match(ft, /classifyWell\(/, 'formatTTP derives from classifyWell');
+  for (const fn of ['classifyWell', 'formatTTP', 'getWellPrediction', 'formatNextPull']) {
     assert.match(lib, new RegExp(`export function ${fn}`), `${fn} exported from dispatchPriority`);
   }
 });
 
-// ── Actionable queue wiring (fix/dashboard-actionable-queue) ──────────────────
-test('Dispatch actionable queue: view control + honest Last Level wired', () => {
+// ── HEIGHT-FIRST actionable queue wiring (fix/dashboard-height-first-queue) ────
+test('Dispatch actionable queue is HEIGHT-FIRST (classifyWell) + honest Last Level', () => {
   const page = read('../../app/dispatch/page.tsx');
-  assert.match(page, /matchesView|wellBucket|assessLevel/, 'canonical queue helpers imported');
+  assert.match(page, /matchesView|wellBucket|classifyWell/, 'height-first helpers imported');
   assert.match(page, /const \[queueView, setQueueView\] = useState<QueueView>\('needs-pull'\)/, 'default view = needs-pull');
-  assert.match(page, /matchesView\(w, queueView\)/, 'queue filtered by primary view');
+  assert.match(page, /matchesView\(w, queueView/, 'queue filtered by primary view');
+  assert.match(page, /classifyWell\(w, Date\.now\(\), \{ assigned/, 'rows classified height-first with assignment');
   assert.match(page, />Last Level<\/th>/, 'Level column relabeled Last Level');
-  assert.match(page, /assessLevel\(well\)/, 'Level cell uses honest assessment');
+  assert.match(page, /const c = classifyWell\(well\)/, 'Level cell uses classifyWell');
+  // cold-start guard: counts gated on readiness
+  assert.match(page, /const queueReady = !loading && !dataLoading && wells\.length > 0/, 'cold-auth count guard present');
+  assert.match(page, /queueReady \? viewCounts/, 'counts hidden until ready');
+  // no time-first OVERDUE badge / priority-chip filter remains
+  assert.ok(!/priorityFilter/.test(page), 'legacy time-first priority filter removed');
   for (const label of ['Needs Pull', 'Next 24h', 'All Wells', 'Needs Data']) {
     assert.ok(page.includes(label), `view control has ${label}`);
   }
   const lib = read('../dispatchPriority.ts');
-  for (const fn of ['wellBucket', 'matchesView', 'assessLevel', 'hasValidPrediction', 'formatAge']) {
+  for (const fn of ['classifyWell', 'wellBucket', 'matchesView', 'targetInches', 'hasValidPrediction', 'formatAge', 'inchesToLevel']) {
     assert.match(lib, new RegExp(`export function ${fn}`), `${fn} exported`);
   }
 });

@@ -87,18 +87,24 @@ export function getPriority(well: WellResponse, nowMs: number = Date.now()): Pri
  * it falls back to the server snapshot string (same staleness as before, never
  * worse) or '--'.
  */
+/**
+ * TTP text — HEIGHT-FIRST. Never an elapsed deadline. TTP is only shown when the
+ * well is APPROACHING with validated positive flow; otherwise the honest state.
+ */
 export function formatTTP(well: WellResponse, nowMs: number = Date.now()): string {
-  const p = getPriority(well, nowMs);
-  if (p.hoursUntilPull !== null) {
-    const h = p.hoursUntilPull;
-    if (h <= 0) return 'OVERDUE';
-    if (h < 24) return `${Math.round(h)}h`;
-    const days = Math.floor(h / 24);
-    const rem = Math.round(h % 24);
-    return rem > 0 ? `${days}d ${rem}h` : `${days}d`;
+  const c = classifyWell(well, nowMs);
+  switch (c.state) {
+    case 'pull-now': return 'PULL NOW';
+    case 'approaching':
+      if (c.ttpHours === null) return 'rising';
+      if (c.ttpHours < 24) return `${Math.round(c.ttpHours)}h`;
+      { const d = Math.floor(c.ttpHours / 24); const r = Math.round(c.ttpHours % 24); return r > 0 ? `${d}d ${r}h` : `${d}d`; }
+    case 'no-gain': return 'NO GAIN';
+    case 'verify': return 'VERIFY';
+    case 'assigned': return 'ASSIGNED';
+    case 'down': return 'DOWN';
+    default: return '--';
   }
-  // No live/parsed time (DOWN or unknown) — preserve the prior raw fallback.
-  return well.timeTillPull || well.etaToMax || '--';
 }
 
 // ─── Prediction Model ────────────────────────────────────────────────────────
@@ -160,89 +166,170 @@ export function formatNextPull(well: WellResponse): string {
   }
 }
 
-// ─── Actionable queue model (single source of truth) ──────────────────────────
-// Views, "needs data" detection, and an honest Level assessment all derive from
-// the SAME canonical record (nextPullTimeUTC / lastPullDateTimeUTC) + injected now.
 
-export type QueueBucket = 'needs-pull' | 'next-24h' | 'later' | 'needs-data' | 'down';
+// ===========================================================================
+// HEIGHT-FIRST classification (Mike's governing rule)
+//
+// A well is pullable because its TRUSTWORTHY level has reached its configured
+// pull-height target -- NOT because time elapsed. Time is only an input to a
+// BOUNDED height estimate, and only while a positive-gain model remains valid.
+// The absence of wellDown=true is NOT evidence of active flow. "OVERDUE" is
+// never used for an unassigned prediction.
+// ===========================================================================
+
+/** A level reading older than this (without other evidence) is untrusted -> VERIFY. */
+export const TRUST_WINDOW_HOURS = 48;
+
+export type WellState = 'pull-now' | 'approaching' | 'no-gain' | 'verify' | 'assigned' | 'down';
 export type QueueView = 'needs-pull' | 'next-24h' | 'all' | 'needs-data';
 
-/** The one canonical bucket a well belongs to right now. */
-export function wellBucket(well: WellResponse, nowMs: number = Date.now()): QueueBucket {
-  if (well.isDown || well.currentLevel === 'DOWN') return 'down';
-  const p = getPriority(well, nowMs);
-  if (p.level === 'unknown') return 'needs-data';      // no valid prediction input
-  if (p.level === 'overdue') return 'needs-pull';       // ready / overdue → act now
-  if (p.level === 'soon' || p.level === 'today') return 'next-24h';
-  return 'later';                                        // days away
-}
-
-/** True when the well has a usable prediction (else the row shows NEEDS DATA). */
-export function hasValidPrediction(well: WellResponse, nowMs: number = Date.now()): boolean {
-  const b = wellBucket(well, nowMs);
-  return b !== 'needs-data' && b !== 'down';
-}
-
-/** Does this well match the selected primary view? (down wells never match.) */
-export function matchesView(well: WellResponse, view: QueueView, nowMs: number = Date.now()): boolean {
-  const b = wellBucket(well, nowMs);
-  if (b === 'down') return false;
-  switch (view) {
-    case 'needs-pull': return b === 'needs-pull';
-    case 'next-24h': return b === 'next-24h';
-    case 'needs-data': return b === 'needs-data';
-    case 'all': return true; // every non-down well
-  }
-}
-
-export interface LevelAssessment {
-  lastLevel: string | null;       // last MEASURED post-pull level (historical)
+export interface WellClassification {
+  state: WellState;
+  label: string;
+  color: string;
+  textColor: string;
+  sortOrder: number;
+  targetInches: number | null;
+  lastLevel: string | null;
+  lastLevelInches: number | null;
   lastLevelAgeHours: number | null;
-  estNow: string;                 // 'OVER' | '~NN%' | 'NEEDS DATA' | '--'
-  isHistoricalOnly: boolean;      // true → do not present lastLevel as current
+  estInches: number | null;
+  remainingInches: number | null;
+  ttpHours: number | null;
+  gainValid: boolean;
+  fresh: boolean;
 }
 
-/**
- * Honest level assessment. `lastLevel` is the last measured post-pull reading
- * (with age); `estNow` is a live projection from the canonical fill cycle
- * (lastPull→nextPull): 'OVER' once the predicted-ready time has passed, else the
- * % of the cycle elapsed. Never presents a historical reading as the current tank.
- */
-export function assessLevel(well: WellResponse, nowMs: number = Date.now()): LevelAssessment {
-  if (well.isDown || well.currentLevel === 'DOWN') {
-    return { lastLevel: null, lastLevelAgeHours: null, estNow: '--', isHistoricalOnly: false };
+/** Parse a feet/inches level string to inches. Handles 1'3", 7'6", 15, 15". */
+export function parseLevelInches(str: string | null | undefined): number | null {
+  if (!str || typeof str !== 'string') return null;
+  const s = str.trim();
+  if (!s || s === '--' || s.toUpperCase() === 'DOWN') return null;
+  const fi = s.match(/(\d+)\s*'\s*(\d+)?/);
+  if (fi) return parseInt(fi[1], 10) * 12 + (fi[2] ? parseInt(fi[2], 10) : 0);
+  const n = parseFloat(s.replace(/["]/g, ''));
+  return isNaN(n) ? null : n;
+}
+
+/** Configured pull-height target in inches (from tankAtLevel "N @ F'I""). */
+export function targetInches(well: WellResponse): number | null {
+  if (well.tankAtLevel && well.tankAtLevel.includes('@')) {
+    return parseLevelInches(well.tankAtLevel.split('@')[1]);
   }
-  const lastTsStr = well.lastPullDateTimeUTC || well.timestampUTC || '';
+  return null;
+}
+
+function bblsPerDay(well: WellResponse): number {
+  const v = parseFloat(well.windowBblsDay || well.bbls24hrs || well.overnightBblsDay || '');
+  return isNaN(v) ? 0 : v;
+}
+
+/** Inches/hour of level gain from validated production (needs bbls/day + bbl/ft). */
+function riseInchesPerHour(well: WellResponse): number | null {
+  const bd = bblsPerDay(well);
+  if (bd <= 0 || !well.bblPerFoot || well.bblPerFoot <= 0) return null;
+  return (bd / 24) / well.bblPerFoot * 12;
+}
+
+export interface ClassifyOpts { assigned?: boolean; }
+
+export function classifyWell(well: WellResponse, nowMs: number = Date.now(), opts: ClassifyOpts = {}): WellClassification {
+  const base = {
+    targetInches: null as number | null, lastLevel: null as string | null, lastLevelInches: null as number | null,
+    lastLevelAgeHours: null as number | null, estInches: null as number | null, remainingInches: null as number | null,
+    ttpHours: null as number | null, gainValid: false, fresh: false,
+  };
+
+  if (well.isDown || well.wellDown || well.currentLevel === 'DOWN') {
+    return { ...base, state: 'down', label: 'DOWN', color: 'bg-gray-600', textColor: 'text-gray-300', sortOrder: 90 };
+  }
+  if (opts.assigned) {
+    return { ...base, state: 'assigned', label: 'ASSIGNED', color: 'bg-slate-600', textColor: 'text-white', sortOrder: 80 };
+  }
+
+  const target = targetInches(well);
+  const lastLevel = (well.currentLevel && well.currentLevel !== '--') ? well.currentLevel : null;
+  const lastIn = (typeof well.currentLevelInches === 'number' ? well.currentLevelInches : parseLevelInches(lastLevel));
+  const lastTsStr = well.timestampUTC || well.lastPullDateTimeUTC || '';
   const lastTs = lastTsStr ? new Date(lastTsStr).getTime() : NaN;
-  const ageHours = !isNaN(lastTs) ? (nowMs - lastTs) / 3600_000 : null;
-  const lastLevel =
-    (well.lastPullBottomLevel && well.lastPullBottomLevel.trim()) ? well.lastPullBottomLevel.trim()
-    : (well.currentLevel && well.currentLevel !== '--') ? well.currentLevel
-    : null;
+  const ageHours = !isNaN(lastTs) ? (nowMs - lastTs) / 3600000 : null;
+  const gainValid = bblsPerDay(well) > 0;
+  const fresh = ageHours !== null && ageHours >= 0 && ageHours <= TRUST_WINDOW_HOURS;
 
-  const p = getPriority(well, nowMs);
-  let estNow = '--';
-  if (p.level === 'unknown') {
-    estNow = 'NEEDS DATA';
-  } else if (p.hoursUntilPull !== null && p.hoursUntilPull <= 0) {
-    estNow = 'OVER';
-  } else if (well.nextPullTimeUTC && !isNaN(lastTs)) {
-    const t1 = new Date(well.nextPullTimeUTC).getTime();
-    if (!isNaN(t1) && t1 > lastTs) {
-      const frac = Math.min(1, Math.max(0, (nowMs - lastTs) / (t1 - lastTs)));
-      estNow = `~${Math.round(frac * 100)}%`;
-    }
+  const withCommon = (c: Partial<WellClassification>): WellClassification => ({
+    ...base, targetInches: target, lastLevel, lastLevelInches: lastIn, lastLevelAgeHours: ageHours,
+    gainValid, fresh, state: 'verify', label: 'VERIFY', color: 'bg-amber-600', textColor: 'text-white', sortOrder: 50, ...c,
+  });
+
+  if (target === null || lastIn === null) {
+    return withCommon({ state: 'verify', label: 'NEEDS DATA', color: 'bg-amber-600', textColor: 'text-white', sortOrder: 55 });
   }
-  // Historical-only when the reading is stale relative to the prediction: overdue,
-  // or the last reading is older than ~6h (a post-pull snapshot no longer "current").
-  const isHistoricalOnly = estNow === 'OVER' || (ageHours !== null && ageHours >= 6);
-  return { lastLevel, lastLevelAgeHours: ageHours, estNow, isHistoricalOnly };
+
+  // Reading too old to trust as current -- elapsed time never makes it pullable.
+  // (Barbarian: 1'3", 136 days old -> VERIFY, never PULL/OVER.)
+  if (!fresh) {
+    return withCommon({ state: 'verify', label: 'VERIFY', color: 'bg-amber-600', textColor: 'text-white', sortOrder: 50 });
+  }
+
+  if (lastIn >= target) {
+    return withCommon({ state: 'pull-now', label: 'PULL NOW', color: 'bg-red-600', textColor: 'text-white', sortOrder: 1, estInches: lastIn, remainingInches: 0 });
+  }
+
+  const remaining = target - lastIn;
+  if (gainValid) {
+    const rate = riseInchesPerHour(well);
+    const ttpHours = rate ? remaining / rate : null;
+    return withCommon({
+      state: 'approaching', label: 'APPROACHING', color: 'bg-yellow-600', textColor: 'text-black', sortOrder: 2,
+      estInches: lastIn, remainingInches: remaining, ttpHours,
+    });
+  }
+
+  // Below target and NOT gaining -- not pullable regardless of Well-Down flag.
+  return withCommon({ state: 'no-gain', label: 'NO GAIN', color: 'bg-gray-500', textColor: 'text-white', sortOrder: 40, estInches: lastIn, remainingInches: remaining });
 }
 
-/** Compact age label, e.g. "18h ago", "3d ago", "45m ago". */
+export function matchesView(well: WellResponse, view: QueueView, nowMs: number = Date.now(), opts: ClassifyOpts = {}): boolean {
+  const c = classifyWell(well, nowMs, opts);
+  if (c.state === 'down') return false;
+  switch (view) {
+    case 'needs-pull': return c.state === 'pull-now';
+    case 'next-24h': return c.state === 'approaching' && c.ttpHours !== null && c.ttpHours <= 24;
+    case 'needs-data': return c.state === 'verify' || c.state === 'no-gain';
+    case 'all': return true;
+  }
+}
+
+export type QueueBucket = 'needs-pull' | 'next-24h' | 'later' | 'needs-data' | 'down' | 'assigned';
+
+/** The one canonical bucket a well belongs to (derived from classifyWell). */
+export function wellBucket(well: WellResponse, nowMs: number = Date.now(), opts: ClassifyOpts = {}): QueueBucket {
+  const c = classifyWell(well, nowMs, opts);
+  switch (c.state) {
+    case 'pull-now': return 'needs-pull';
+    case 'approaching': return c.ttpHours !== null && c.ttpHours <= 24 ? 'next-24h' : 'later';
+    case 'no-gain':
+    case 'verify': return 'needs-data';
+    case 'assigned': return 'assigned';
+    case 'down': return 'down';
+  }
+}
+
+export function hasValidPrediction(well: WellResponse, nowMs: number = Date.now()): boolean {
+  const s = classifyWell(well, nowMs).state;
+  return s === 'pull-now' || s === 'approaching';
+}
+
 export function formatAge(hours: number | null): string {
   if (hours === null || isNaN(hours)) return '';
   if (hours < 1) return `${Math.max(1, Math.round(hours * 60))}m ago`;
   if (hours < 48) return `${Math.round(hours)}h ago`;
   return `${Math.floor(hours / 24)}d ago`;
+}
+
+export function inchesToLevel(inches: number | null): string {
+  if (inches === null || isNaN(inches)) return '--';
+  const ft = Math.floor(inches / 12);
+  const inch = Math.round(inches - ft * 12);
+  return `${ft}'${inch}"`;
 }
