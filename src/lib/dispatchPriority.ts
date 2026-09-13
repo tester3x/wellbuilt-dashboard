@@ -159,3 +159,90 @@ export function formatNextPull(well: WellResponse): string {
     return well.nextPullTime || '--';
   }
 }
+
+// ─── Actionable queue model (single source of truth) ──────────────────────────
+// Views, "needs data" detection, and an honest Level assessment all derive from
+// the SAME canonical record (nextPullTimeUTC / lastPullDateTimeUTC) + injected now.
+
+export type QueueBucket = 'needs-pull' | 'next-24h' | 'later' | 'needs-data' | 'down';
+export type QueueView = 'needs-pull' | 'next-24h' | 'all' | 'needs-data';
+
+/** The one canonical bucket a well belongs to right now. */
+export function wellBucket(well: WellResponse, nowMs: number = Date.now()): QueueBucket {
+  if (well.isDown || well.currentLevel === 'DOWN') return 'down';
+  const p = getPriority(well, nowMs);
+  if (p.level === 'unknown') return 'needs-data';      // no valid prediction input
+  if (p.level === 'overdue') return 'needs-pull';       // ready / overdue → act now
+  if (p.level === 'soon' || p.level === 'today') return 'next-24h';
+  return 'later';                                        // days away
+}
+
+/** True when the well has a usable prediction (else the row shows NEEDS DATA). */
+export function hasValidPrediction(well: WellResponse, nowMs: number = Date.now()): boolean {
+  const b = wellBucket(well, nowMs);
+  return b !== 'needs-data' && b !== 'down';
+}
+
+/** Does this well match the selected primary view? (down wells never match.) */
+export function matchesView(well: WellResponse, view: QueueView, nowMs: number = Date.now()): boolean {
+  const b = wellBucket(well, nowMs);
+  if (b === 'down') return false;
+  switch (view) {
+    case 'needs-pull': return b === 'needs-pull';
+    case 'next-24h': return b === 'next-24h';
+    case 'needs-data': return b === 'needs-data';
+    case 'all': return true; // every non-down well
+  }
+}
+
+export interface LevelAssessment {
+  lastLevel: string | null;       // last MEASURED post-pull level (historical)
+  lastLevelAgeHours: number | null;
+  estNow: string;                 // 'OVER' | '~NN%' | 'NEEDS DATA' | '--'
+  isHistoricalOnly: boolean;      // true → do not present lastLevel as current
+}
+
+/**
+ * Honest level assessment. `lastLevel` is the last measured post-pull reading
+ * (with age); `estNow` is a live projection from the canonical fill cycle
+ * (lastPull→nextPull): 'OVER' once the predicted-ready time has passed, else the
+ * % of the cycle elapsed. Never presents a historical reading as the current tank.
+ */
+export function assessLevel(well: WellResponse, nowMs: number = Date.now()): LevelAssessment {
+  if (well.isDown || well.currentLevel === 'DOWN') {
+    return { lastLevel: null, lastLevelAgeHours: null, estNow: '--', isHistoricalOnly: false };
+  }
+  const lastTsStr = well.lastPullDateTimeUTC || well.timestampUTC || '';
+  const lastTs = lastTsStr ? new Date(lastTsStr).getTime() : NaN;
+  const ageHours = !isNaN(lastTs) ? (nowMs - lastTs) / 3600_000 : null;
+  const lastLevel =
+    (well.lastPullBottomLevel && well.lastPullBottomLevel.trim()) ? well.lastPullBottomLevel.trim()
+    : (well.currentLevel && well.currentLevel !== '--') ? well.currentLevel
+    : null;
+
+  const p = getPriority(well, nowMs);
+  let estNow = '--';
+  if (p.level === 'unknown') {
+    estNow = 'NEEDS DATA';
+  } else if (p.hoursUntilPull !== null && p.hoursUntilPull <= 0) {
+    estNow = 'OVER';
+  } else if (well.nextPullTimeUTC && !isNaN(lastTs)) {
+    const t1 = new Date(well.nextPullTimeUTC).getTime();
+    if (!isNaN(t1) && t1 > lastTs) {
+      const frac = Math.min(1, Math.max(0, (nowMs - lastTs) / (t1 - lastTs)));
+      estNow = `~${Math.round(frac * 100)}%`;
+    }
+  }
+  // Historical-only when the reading is stale relative to the prediction: overdue,
+  // or the last reading is older than ~6h (a post-pull snapshot no longer "current").
+  const isHistoricalOnly = estNow === 'OVER' || (ageHours !== null && ageHours >= 6);
+  return { lastLevel, lastLevelAgeHours: ageHours, estNow, isHistoricalOnly };
+}
+
+/** Compact age label, e.g. "18h ago", "3d ago", "45m ago". */
+export function formatAge(hours: number | null): string {
+  if (hours === null || isNaN(hours)) return '';
+  if (hours < 1) return `${Math.max(1, Math.round(hours * 60))}m ago`;
+  if (hours < 48) return `${Math.round(hours)}h ago`;
+  return `${Math.floor(hours / 24)}d ago`;
+}

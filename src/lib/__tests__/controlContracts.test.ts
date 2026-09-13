@@ -432,3 +432,20 @@ test('Dispatch TTP column uses live formatTTP (not the stale server snapshot str
     assert.match(lib, new RegExp(`export function ${fn}`), `${fn} exported from dispatchPriority`);
   }
 });
+
+// ── Actionable queue wiring (fix/dashboard-actionable-queue) ──────────────────
+test('Dispatch actionable queue: view control + honest Last Level wired', () => {
+  const page = read('../../app/dispatch/page.tsx');
+  assert.match(page, /matchesView|wellBucket|assessLevel/, 'canonical queue helpers imported');
+  assert.match(page, /const \[queueView, setQueueView\] = useState<QueueView>\('needs-pull'\)/, 'default view = needs-pull');
+  assert.match(page, /matchesView\(w, queueView\)/, 'queue filtered by primary view');
+  assert.match(page, />Last Level<\/th>/, 'Level column relabeled Last Level');
+  assert.match(page, /assessLevel\(well\)/, 'Level cell uses honest assessment');
+  for (const label of ['Needs Pull', 'Next 24h', 'All Wells', 'Needs Data']) {
+    assert.ok(page.includes(label), `view control has ${label}`);
+  }
+  const lib = read('../dispatchPriority.ts');
+  for (const fn of ['wellBucket', 'matchesView', 'assessLevel', 'hasValidPrediction', 'formatAge']) {
+    assert.match(lib, new RegExp(`export function ${fn}`), `${fn} exported`);
+  }
+});

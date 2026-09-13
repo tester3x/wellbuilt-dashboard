@@ -4,7 +4,7 @@ import { useEffect, useState, useMemo, useCallback, Suspense } from 'react';
 import { useRouter, useSearchParams } from 'next/navigation';
 import { useAuth } from '@/contexts/AuthContext';
 import { WellResponse, subscribeToWellStatusesUnified, wellResponsesFromCatalog } from '@/lib/wells';
-import { getPriority, getWellPrediction, formatTTP, type PriorityLevel } from '@/lib/dispatchPriority';
+import { getPriority, getWellPrediction, formatTTP, matchesView, wellBucket, assessLevel, formatAge, type PriorityLevel, type QueueView } from '@/lib/dispatchPriority';
 // Z Fold recovery — layout helpers only (collapsed queue / stacked layout).
 // The realtime gate helpers from this module are intentionally NOT used:
 // 3ea36d84's subscribeToWellStatusesUnified realtime path is preserved.
@@ -269,6 +269,8 @@ function DispatchPageInner() {
   const [search, setSearch] = useState('');
   const [routeFilter, setRouteFilter] = useState<string>('all');
   const [priorityFilter, setPriorityFilter] = useState<PriorityLevel | 'all'>('all');
+  // Primary actionable-queue view (default: wells that need pulling now).
+  const [queueView, setQueueView] = useState<QueueView>('needs-pull');
   // Z Fold recovery — collapsed-queue + stacked-layout UI state.
   const [wellQueueExpanded, setWellQueueExpanded] = useState(false);
   const [stackedLayout, setStackedLayout] = useState(isStackedDispatchLayout);
@@ -840,13 +842,13 @@ function DispatchPageInner() {
   // ─── PW Queue (sorted by priority) ──────────────────────────────────────────
 
   const pwQueue = useMemo(() => {
-    // Filter out DOWN wells and wells with no data
-    let filtered = wells.filter(w => {
-      const isDown = w.isDown || w.currentLevel === 'DOWN';
-      if (isDown) return false;
-      if (w.currentLevel === '--' && !w.nextPullTimeUTC) return false;
-      return true;
-    });
+    // Drop DOWN wells (handled/marked separately); KEEP no-prediction wells so the
+    // "Needs Data" view can surface them instead of a well silently vanishing.
+    let filtered = wells.filter(w => !(w.isDown || w.currentLevel === 'DOWN'));
+
+    // Primary actionable view (Needs Pull / Next 24h / All / Needs Data) — the
+    // single source of truth is wellBucket() over the canonical prediction.
+    filtered = filtered.filter(w => matchesView(w, queueView));
 
     // Already-dispatched wells → list of assigned driver first names
     const dispatchedWellDrivers = new Map<string, string[]>();
@@ -890,7 +892,19 @@ function DispatchPageInner() {
         const bH = b.priority.hoursUntilPull ?? 99999;
         return aH - bH;
       });
-  }, [wells, dispatches, search, routeFilter, priorityFilter]);
+  }, [wells, dispatches, search, routeFilter, priorityFilter, queueView]);
+
+  // Counts per primary view (all routes) so Dispatch sees the actionable load
+  // without opening each route. Down wells are excluded from every view.
+  const viewCounts = useMemo(() => {
+    const live = wells.filter(w => !(w.isDown || w.currentLevel === 'DOWN'));
+    return {
+      'needs-pull': live.filter(w => wellBucket(w) === 'needs-pull').length,
+      'next-24h': live.filter(w => wellBucket(w) === 'next-24h').length,
+      'needs-data': live.filter(w => wellBucket(w) === 'needs-data').length,
+      'all': live.length,
+    } as Record<QueueView, number>;
+  }, [wells]);
 
   // Z Fold recovery — when the queue is collapsed (stacked + not expanded), a
   // search still surfaces matching wells so the list is reachable on the Fold.
@@ -2793,8 +2807,27 @@ function DispatchPageInner() {
             {/* ═══════ Well Queue (fills remaining left half) ═══════ */}
             <div className={`dispatch-queue bg-gray-800 rounded-lg border border-gray-700 flex flex-col${wellQueueExpanded ? ' is-expanded' : ''}${searchActive ? ' has-search' : ''}`}>
               {/* Panel header with filters */}
-              <div className="flex items-center gap-2 px-4 py-2.5 border-b border-gray-700 flex-shrink-0">
+              <div className="flex items-center gap-2 px-4 py-2.5 border-b border-gray-700 flex-shrink-0 flex-wrap">
                 <h3 className="text-sm font-semibold text-white flex-shrink-0">Well Queue</h3>
+                {/* Primary actionable views (route is a secondary filter below) */}
+                <div className="flex rounded-md overflow-hidden border border-gray-600 flex-shrink-0">
+                  {([
+                    ['needs-pull', 'Needs Pull'],
+                    ['next-24h', 'Next 24h'],
+                    ['all', 'All Wells'],
+                    ['needs-data', 'Needs Data'],
+                  ] as [QueueView, string][]).map(([v, label]) => (
+                    <button
+                      key={v}
+                      onClick={() => setQueueView(v)}
+                      className={`px-2.5 py-1 text-xs font-medium transition-colors ${
+                        queueView === v ? 'bg-blue-600 text-white' : 'bg-gray-900 text-gray-400 hover:bg-gray-700'
+                      }`}
+                    >
+                      {label}{viewCounts[v] > 0 ? ` (${viewCounts[v]})` : ''}
+                    </button>
+                  ))}
+                </div>
                 <input
                   type="text"
                   placeholder="Search wells..."
@@ -2848,7 +2881,7 @@ function DispatchPageInner() {
                       <tr>
                         <th className="px-2 py-2 text-left text-[11px] font-medium text-gray-300 w-14">Priority</th>
                         <th className="px-2 py-2 text-left text-[11px] font-medium text-gray-300">Well</th>
-                        <th className="px-2 py-2 text-left text-[11px] font-medium text-gray-300">Level</th>
+                        <th className="px-2 py-2 text-left text-[11px] font-medium text-gray-300">Last Level</th>
                         <th className="px-2 py-2 text-left text-[11px] font-medium text-gray-300">Flow</th>
                         <th className="px-2 py-2 text-left text-[11px] font-medium text-gray-300">TTP</th>
                         <th className="px-2 py-2 text-left text-[11px] font-medium text-gray-300">Pulls/Day</th>
@@ -2880,7 +2913,25 @@ function DispatchPageInner() {
                                 </div>
                               )}
                             </td>
-                            <td className="px-2 py-1.5 text-white font-mono text-xs">{well.currentLevel || '--'}</td>
+                            <td className="px-2 py-1.5 font-mono text-[10px]">
+                              {(() => {
+                                const lv = assessLevel(well);
+                                if (lv.estNow === 'NEEDS DATA' && !lv.lastLevel) {
+                                  return <span className="text-gray-500">NEEDS DATA</span>;
+                                }
+                                return (
+                                  <>
+                                    <span className={lv.isHistoricalOnly ? 'text-gray-400' : 'text-white'}>{lv.lastLevel || '--'}</span>
+                                    {lv.lastLevelAgeHours !== null && (
+                                      <span className="text-gray-500"> · {formatAge(lv.lastLevelAgeHours)}</span>
+                                    )}
+                                    {lv.estNow !== '--' && lv.estNow !== 'NEEDS DATA' && (
+                                      <span className={`block ${lv.estNow === 'OVER' ? 'text-red-400 font-bold' : 'text-blue-300'}`}>Est: {lv.estNow}</span>
+                                    )}
+                                  </>
+                                );
+                              })()}
+                            </td>
                             <td className="px-2 py-1.5 text-white font-mono text-[10px]">{well.flowRate || '--'}</td>
                             <td className="px-2 py-1.5 text-white font-mono text-[10px]">{formatTTP(well)}</td>
                             <td className="px-2 py-1.5"><PullsPredictionCell well={well} /></td>

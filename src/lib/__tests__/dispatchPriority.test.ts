@@ -51,3 +51,65 @@ test('formatTTP falls back to the raw string only when there is no live/parsed t
   assert.equal(formatTTP(w({ isDown: true, timeTillPull: 'n/a' }), NOW), 'n/a');
   assert.equal(formatTTP(w({}), NOW), '--');
 });
+
+// ─── Actionable queue fixtures (fixed clock; the contradictions observed live) ─
+import { wellBucket, matchesView, assessLevel, hasValidPrediction } from '../dispatchPriority.ts';
+
+test('FIXTURE: historical 1\'3" last level + elapsed nextPullTimeUTC → overdue, level labeled historical (not current)', () => {
+  const well = w({ nextPullTimeUTC: iso(-10), lastPullDateTimeUTC: iso(-30), lastPullBottomLevel: "1'3\"" });
+  assert.equal(getPriority(well, NOW).level, 'overdue');
+  assert.equal(formatTTP(well, NOW), 'OVERDUE');
+  const lv = assessLevel(well, NOW);
+  assert.equal(lv.lastLevel, "1'3\"", 'last measured reading preserved');
+  assert.equal(lv.estNow, 'OVER', 'estimated-now is OVER, never presents 1\'3" as current');
+  assert.equal(lv.isHistoricalOnly, true);
+  assert.equal(wellBucket(well, NOW), 'needs-pull');
+});
+
+test('FIXTURE: ~232h TTP must NOT show overdue', () => {
+  const well = w({ nextPullTimeUTC: iso(232) });
+  assert.equal(getPriority(well, NOW).level, 'later');
+  assert.notEqual(formatTTP(well, NOW), 'OVERDUE');
+  assert.equal(formatTTP(well, NOW), '9d 16h');
+  assert.equal(wellBucket(well, NOW), 'later');
+});
+
+test('FIXTURE: TTP and badge never disagree about whether ready-time passed', () => {
+  for (const off of [-100, -1, -0.1, 0.1, 3, 12, 48, 232]) {
+    const well = w({ nextPullTimeUTC: iso(off) });
+    const overduBadge = getPriority(well, NOW).level === 'overdue';
+    const overdueTTP = formatTTP(well, NOW) === 'OVERDUE';
+    assert.equal(overduBadge, overdueTTP, `offset ${off}h: badge/TTP agree on overdue`);
+  }
+});
+
+test('FIXTURE: missing prediction data → NEEDS DATA (never a stale snapshot)', () => {
+  const well = w({ currentLevel: '--' });
+  assert.equal(wellBucket(well, NOW), 'needs-data');
+  assert.equal(hasValidPrediction(well, NOW), false);
+  assert.equal(assessLevel(well, NOW).estNow, 'NEEDS DATA');
+});
+
+test('FIXTURE: default Needs Pull excludes wells days away; includes overdue', () => {
+  const daysAway = w({ nextPullTimeUTC: iso(72) });
+  const overdue = w({ nextPullTimeUTC: iso(-2) });
+  assert.equal(matchesView(daysAway, 'needs-pull', NOW), false);
+  assert.equal(matchesView(overdue, 'needs-pull', NOW), true);
+});
+
+test('FIXTURE: Next 24h includes upcoming wells across different routes', () => {
+  const a = w({ nextPullTimeUTC: iso(5), route: 'Route A' });
+  const b = w({ nextPullTimeUTC: iso(20), route: 'Route B' });
+  const far = w({ nextPullTimeUTC: iso(48), route: 'Route C' });
+  assert.equal(matchesView(a, 'next-24h', NOW), true);
+  assert.equal(matchesView(b, 'next-24h', NOW), true);
+  assert.equal(matchesView(far, 'next-24h', NOW), false, 'a 48h well is not "next 24h"');
+});
+
+test('FIXTURE: DOWN wells never appear as freely assignable in any view', () => {
+  const down = w({ isDown: true, nextPullTimeUTC: iso(-5) });
+  assert.equal(wellBucket(down, NOW), 'down');
+  for (const v of ['needs-pull', 'next-24h', 'all', 'needs-data'] as const) {
+    assert.equal(matchesView(down, v, NOW), false, `down excluded from ${v}`);
+  }
+});
