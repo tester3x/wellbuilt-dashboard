@@ -349,3 +349,55 @@ test('AUDIT: every mutation settings card has a canEdit gate + is passed one', (
     );
   }
 });
+
+// ── AUDIT Phase 4C — closing repairs (gates before adapter, honest errors) ────
+test('AUDIT-4C: billing projection + config mutations all guard editBilling before writing', () => {
+  const p = read('../../app/billing/page.tsx');
+  const guards = (p.match(/if \(!canEditBilling\) return;/g) || []).length;
+  assert.ok(guards >= 7, `region/save/delete/generate/markSent/recordPayment/backfill all guarded (found ${guards})`);
+});
+
+test('AUDIT-4C: chat mutations gated (viewChat surface, sendChat sends, manageCompany profiles)', () => {
+  const page = read('../../app/chat/page.tsx');
+  assert.ok(page.includes("const canViewChat = hasCapability(user, 'viewChat'"));
+  assert.ok(page.includes("const canSendChat = hasCapability(user, 'sendChat'"));
+  assert.ok(page.includes("const canManageProfiles = hasCapability(user, 'manageCompany'"));
+  assert.ok(page.includes('if (!canViewChat)'), 'page-level view gate');
+  // handler guards call hasCapability inline; render gates use the derived consts
+  assert.ok((page.match(/if \(!hasCapability\(user, 'sendChat'/g) || []).length >= 4, 'send/DM/group/archive guarded');
+  assert.ok((page.match(/if \(!hasCapability\(user, 'manageCompany'/g) || []).length >= 5, 'monitor-profile CRUD guarded');
+  assert.ok(page.includes('&& canSendChat'), 'send affordances render-gated');
+  const sidebar = read('../../components/chat/ChatSidebar.tsx');
+  assert.ok(sidebar.includes("const canSendChat = hasCapability(user, 'sendChat'"));
+  assert.ok(sidebar.includes('if (!canViewChat)'), 'sidebar view gate');
+});
+
+test('AUDIT-4C: admin destructive well/route writes guard capability + no longer silently fail', () => {
+  const p = read('../../app/admin/page.tsx');
+  assert.ok(p.includes("const canManageWells = hasCapability(user, 'manageWells'"));
+  assert.ok(p.includes("const canManageRoutes = hasCapability(user, 'manageRoutes'"));
+  // delete-well handler: capability guard + a try/catch (was silent)
+  const delWell = p.slice(p.indexOf('const executeDeleteWellWithAction'));
+  const delWellBody = delWell.slice(0, delWell.indexOf('\n  };') + 4);
+  assert.ok(/if \(!canManageWells\)/.test(delWellBody), 'delete-well guarded');
+  assert.ok(/catch/.test(delWellBody), 'delete-well has try/catch');
+  const delRoute = p.slice(p.indexOf('const executeDeleteRouteWithAction'));
+  const delRouteBody = delRoute.slice(0, delRoute.indexOf('\n  };') + 4);
+  assert.ok(/if \(!canManageRoutes\)/.test(delRouteBody), 'delete-route guarded');
+  assert.ok(/catch/.test(delRouteBody), 'delete-route has try/catch');
+});
+
+test('AUDIT-4C: GPS recording + equipment + branding + seed controls gated', () => {
+  const gps = read('../../components/admin/GpsRoutesTab.tsx');
+  assert.ok(gps.includes("const canManageRoutes = hasCapability(user, 'manageRoutes'"));
+  assert.ok((gps.match(/if \(!canManageRoutes\)/g) || []).length >= 1);
+  const equip = read('../../components/admin/EquipmentTab.tsx');
+  assert.ok(equip.includes("const canManageEquipment = hasCapability(user, 'manageEquipment'"));
+  assert.ok(/if \(!canManageEquipment\)/.test(equip), 'equipment mutations guarded');
+  const comp = read('../../components/admin/CompaniesTab.tsx');
+  assert.ok(comp.includes("const canManageCompany = hasCapability(user, 'manageCompany'"));
+  assert.ok(/if \(!canManageCompany\)/.test(comp), 'branding save guarded');
+  const seed = read('../../components/settings/JobTypeRnDCard.tsx');
+  assert.ok(/const canSeed = isPlatformAdmin\(user\)/.test(seed), 'seed gated to platform admin');
+  assert.ok(/if \(!canSeed\)/.test(seed) && /confirm\(/.test(seed), 'seed guarded + confirm');
+});

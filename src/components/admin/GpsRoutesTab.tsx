@@ -6,6 +6,8 @@
 'use client';
 
 import { useState, useEffect, useCallback } from 'react';
+import { useAuth } from '@/contexts/AuthContext';
+import { hasCapability } from '@/lib/auth';
 import { getFirestoreDb } from '@/lib/firebase';
 import { getFirebaseDatabase } from '@/lib/firebase';
 import { ref, onValue, update } from 'firebase/database';
@@ -36,6 +38,16 @@ interface WellRouteStatus {
 }
 
 export default function GpsRoutesTab() {
+  // Capability gate (audit 2026-09-13) — GPS route recording edits the global
+  // well_config pool; require manageRoutes for every write here. The parent
+  // admin page is already role-gated; this is defense-in-depth (RTDB rules
+  // re-decide server-side).
+  const { user, userCompany } = useAuth();
+  const canManageRoutes = hasCapability(user, 'manageRoutes', userCompany);
+
+  // Deterministic busy flag so the recording toggle cannot be double-fired.
+  const [togglingWell, setTogglingWell] = useState<string | null>(null);
+
   const [wells, setWells] = useState<WellRouteStatus[]>([]);
   const [allConfigs, setAllConfigs] = useState<Record<string, any>>({});
   const [loading, setLoading] = useState(true);
@@ -207,78 +219,96 @@ export default function GpsRoutesTab() {
   // Auto-detect nearby wells and group them when adding a well to recording.
   // If the well already belongs to a pad group, re-activates ALL members.
   const handleAutoAdd = useCallback(async (wellName: string) => {
+    // Handler guard — capability required (RTDB rules re-decide too).
+    if (!canManageRoutes) {
+      setAddMessage('You do not have permission to manage routes.');
+      return;
+    }
     setAddingWell(true);
     setAddMessage('');
 
-    const config = allConfigs[wellName];
-    const db = getFirebaseDatabase();
-
-    // Check if this well already belongs to a pad group (from a previous session)
-    if (config?.routeGroupWell) {
-      const groupId = config.routeGroupWell;
-      const groupMembers = Object.entries(allConfigs)
-        .filter(([, cfg]) => cfg.routeGroupWell === groupId)
-        .map(([name]) => name);
-
-      const updates: Record<string, any> = {};
-      for (const w of groupMembers) {
-        updates[`well_config/${w}/routeRecording`] = true;
-      }
-      await update(ref(db), updates);
-      setAddMessage(`Pad group reactivated! ${groupMembers.length} wells: ${groupMembers.join(', ')}`);
-      setAddingWell(false);
-      return;
-    }
-
-    // New well — auto-detect nearby wells on the same pad
-    // Try ndicName first, then fall back to wellName (covers disposals + custom locations)
-    let nearby: string[] = [];
-    const lookupName = config?.ndicName || wellName;
     try {
-      const selectedNdic = await findWellByName(lookupName);
-      if (selectedNdic?.latitude && selectedNdic?.longitude) {
-        const promises = Object.entries(allConfigs)
-          .filter(([name, cfg]) => name !== wellName && !cfg.routeRecording && !cfg.routeGroupWell)
-          .map(async ([name, cfg]) => {
-            try {
-              const ndic = await findWellByName(cfg.ndicName || name);
-              if (ndic?.latitude && ndic?.longitude) {
-                const dist = haversineMeters(
-                  selectedNdic.latitude!, selectedNdic.longitude!,
-                  ndic.latitude!, ndic.longitude!,
-                );
-                if (dist <= PAD_RADIUS_METERS) return name;
-              }
-            } catch { /* skip */ }
-            return null;
-          });
+      const config = allConfigs[wellName];
+      const db = getFirebaseDatabase();
 
-        const results = await Promise.all(promises);
-        nearby = results.filter((n): n is string => n !== null);
+      // Check if this well already belongs to a pad group (from a previous session)
+      if (config?.routeGroupWell) {
+        const groupId = config.routeGroupWell;
+        const groupMembers = Object.entries(allConfigs)
+          .filter(([, cfg]) => cfg.routeGroupWell === groupId)
+          .map(([name]) => name);
+
+        const updates: Record<string, any> = {};
+        for (const w of groupMembers) {
+          updates[`well_config/${w}/routeRecording`] = true;
+        }
+        await update(ref(db), updates);
+        setAddMessage(`Pad group reactivated! ${groupMembers.length} wells: ${groupMembers.join(', ')}`);
+        return;
+      }
+
+      // New well — auto-detect nearby wells on the same pad
+      // Try ndicName first, then fall back to wellName (covers disposals + custom locations)
+      let nearby: string[] = [];
+      const lookupName = config?.ndicName || wellName;
+      try {
+        const selectedNdic = await findWellByName(lookupName);
+        if (selectedNdic?.latitude && selectedNdic?.longitude) {
+          const promises = Object.entries(allConfigs)
+            .filter(([name, cfg]) => name !== wellName && !cfg.routeRecording && !cfg.routeGroupWell)
+            .map(async ([name, cfg]) => {
+              try {
+                const ndic = await findWellByName(cfg.ndicName || name);
+                if (ndic?.latitude && ndic?.longitude) {
+                  const dist = haversineMeters(
+                    selectedNdic.latitude!, selectedNdic.longitude!,
+                    ndic.latitude!, ndic.longitude!,
+                  );
+                  if (dist <= PAD_RADIUS_METERS) return name;
+                }
+              } catch { /* skip */ }
+              return null;
+            });
+
+          const results = await Promise.all(promises);
+          nearby = results.filter((n): n is string => n !== null);
+        }
+      } catch (err) {
+        console.error('[GpsRoutesTab] Nearby detection failed:', err);
+      }
+
+      // Auto-add and group
+      if (nearby.length > 0) {
+        const updates: Record<string, any> = {};
+        const padWells = [wellName, ...nearby];
+        for (const w of padWells) {
+          updates[`well_config/${w}/routeRecording`] = true;
+          updates[`well_config/${w}/routeGroupWell`] = wellName;
+        }
+        await update(ref(db), updates);
+        setAddMessage(`Pad detected! Added ${padWells.length} wells: ${padWells.join(', ')}`);
+      } else {
+        await update(ref(db, `well_config/${wellName}`), { routeRecording: true, routeGroupWell: wellName });
+        setAddMessage(`Recording enabled for ${wellName}`);
       }
     } catch (err) {
-      console.error('[GpsRoutesTab] Nearby detection failed:', err);
+      // The RTDB writes had no try/catch before — a denied/failed write
+      // failed silently. Surface it so the operator knows nothing was saved.
+      console.error('[GpsRoutesTab] Add to recording failed:', err);
+      setAddMessage('Failed to add well to recording. Check console for details.');
+    } finally {
+      setAddingWell(false);
     }
-
-    // Auto-add and group
-    if (nearby.length > 0) {
-      const updates: Record<string, any> = {};
-      const padWells = [wellName, ...nearby];
-      for (const w of padWells) {
-        updates[`well_config/${w}/routeRecording`] = true;
-        updates[`well_config/${w}/routeGroupWell`] = wellName;
-      }
-      await update(ref(db), updates);
-      setAddMessage(`Pad detected! Added ${padWells.length} wells: ${padWells.join(', ')}`);
-    } else {
-      await update(ref(db, `well_config/${wellName}`), { routeRecording: true, routeGroupWell: wellName });
-      setAddMessage(`Recording enabled for ${wellName}`);
-    }
-    setAddingWell(false);
-  }, [allConfigs]);
+  }, [allConfigs, canManageRoutes]);
 
   // Find and group nearby pad wells for an EXISTING well already in the list
   const handleFindPadWells = useCallback(async (wellName: string) => {
+    // Handler guard — capability required (RTDB rules re-decide too).
+    if (!canManageRoutes) {
+      setPadMessage({ well: wellName, text: 'You do not have permission to manage routes.' });
+      setTimeout(() => setPadMessage(null), 3000);
+      return;
+    }
     setPadSearchingWell(wellName);
     setPadMessage(null);
 
@@ -342,30 +372,49 @@ export default function GpsRoutesTab() {
       setTimeout(() => setPadMessage(null), 3000);
     }
     setPadSearchingWell(null);
-  }, [allConfigs]);
+  }, [allConfigs, canManageRoutes]);
 
   // Toggle recording on/off for a well (or whole pad group) — keeps grouping + approved routes
   // Sanitize RTDB-illegal chars (. # $ [ ]) from well names used as RTDB keys
   const sanitizeRtdbKey = (name: string) => name.replace(/[.#$[\]]/g, '').trim();
 
   const handleToggleRecording = useCallback(async (well: WellRouteStatus) => {
-    const db = getFirebaseDatabase();
-    const updates: Record<string, any> = {};
-    const allMembers = [well.wellName, ...(well.groupMembers || [])];
-    const newState = !well.isRecording;
-    const safeGroupWell = sanitizeRtdbKey(well.routeGroupWell || well.wellName);
-    for (const w of allMembers) {
-      const safeKey = sanitizeRtdbKey(w);
-      if (!safeKey) continue;
-      updates[`well_config/${safeKey}/routeRecording`] = newState ? true : null;
-      // Ensure routeGroupWell is set — keeps well in GPS Routes list after recording stops.
-      // Wells added before this fix may not have it, so set it retroactively.
-      if (!allConfigs[w]?.routeGroupWell) {
-        updates[`well_config/${safeKey}/routeGroupWell`] = safeGroupWell;
-      }
+    // Handler guard — capability required (RTDB rules re-decide too).
+    if (!canManageRoutes) {
+      setPadMessage({ well: well.wellName, text: 'You do not have permission to manage routes.' });
+      setTimeout(() => setPadMessage(null), 3000);
+      return;
     }
-    await update(ref(db), updates);
-  }, []);
+    // Deterministic busy guard — the toggle can otherwise be double-fired.
+    if (togglingWell) return;
+    setTogglingWell(well.wellName);
+    try {
+      const db = getFirebaseDatabase();
+      const updates: Record<string, any> = {};
+      const allMembers = [well.wellName, ...(well.groupMembers || [])];
+      const newState = !well.isRecording;
+      const safeGroupWell = sanitizeRtdbKey(well.routeGroupWell || well.wellName);
+      for (const w of allMembers) {
+        const safeKey = sanitizeRtdbKey(w);
+        if (!safeKey) continue;
+        updates[`well_config/${safeKey}/routeRecording`] = newState ? true : null;
+        // Ensure routeGroupWell is set — keeps well in GPS Routes list after recording stops.
+        // Wells added before this fix may not have it, so set it retroactively.
+        if (!allConfigs[w]?.routeGroupWell) {
+          updates[`well_config/${safeKey}/routeGroupWell`] = safeGroupWell;
+        }
+      }
+      await update(ref(db), updates);
+    } catch (err) {
+      // The toggle write had no try/catch before — a denied/failed write
+      // failed silently. Surface it so the operator knows the state didn't change.
+      console.error('[GpsRoutesTab] Toggle recording failed:', err);
+      setPadMessage({ well: well.wellName, text: 'Failed to update recording. Check console.' });
+      setTimeout(() => setPadMessage(null), 3000);
+    } finally {
+      setTogglingWell(null);
+    }
+  }, [allConfigs, canManageRoutes, togglingWell]);
 
   // Wells available to add (not already in GPS Routes — no recording AND no group membership)
   const availableWells = Object.entries(allConfigs)
@@ -433,12 +482,14 @@ export default function GpsRoutesTab() {
           Has Routes ({totalApproved})
         </button>
 
-        <button
-          onClick={() => { setShowAddModal(true); setAddMessage(''); setAddWellSearch(''); }}
-          className="px-3 py-1.5 rounded-full text-sm font-medium bg-orange-600 hover:bg-orange-500 text-white transition"
-        >
-          + Add Destination
-        </button>
+        {canManageRoutes && (
+          <button
+            onClick={() => { setShowAddModal(true); setAddMessage(''); setAddWellSearch(''); }}
+            className="px-3 py-1.5 rounded-full text-sm font-medium bg-orange-600 hover:bg-orange-500 text-white transition"
+          >
+            + Add Destination
+          </button>
+        )}
 
         <div className="ml-auto text-xs text-gray-500">
           {wells.length} wells &middot; {wells.filter(w => w.isRecording).length} recording &middot; {totalTrips} trips &middot; {totalApproved} approved routes
@@ -486,16 +537,28 @@ export default function GpsRoutesTab() {
             {addWellSearch.trim().length >= 2 && !filteredAvailable.some(n => n.toLowerCase() === addWellSearch.trim().toLowerCase()) && (
               <button
                 onClick={async () => {
+                  // Handler guard — capability required (RTDB rules re-decide too).
+                  if (!canManageRoutes) {
+                    setAddMessage('You do not have permission to manage routes.');
+                    return;
+                  }
                   const name = addWellSearch.trim();
                   setAddingWell(true);
                   setAddMessage('');
-                  const db = getFirebaseDatabase();
-                  const safeKey = sanitizeRtdbKey(name);
-                  if (safeKey) {
-                    await update(ref(db, `well_config/${safeKey}`), { routeRecording: true, routeGroupWell: safeKey });
+                  try {
+                    const db = getFirebaseDatabase();
+                    const safeKey = sanitizeRtdbKey(name);
+                    if (safeKey) {
+                      await update(ref(db, `well_config/${safeKey}`), { routeRecording: true, routeGroupWell: safeKey });
+                    }
+                    setAddMessage(`Recording enabled for ${name}`);
+                  } catch (err) {
+                    // Previously no try/catch — a denied write failed silently.
+                    console.error('[GpsRoutesTab] Add custom destination failed:', err);
+                    setAddMessage('Failed to add destination. Check console for details.');
+                  } finally {
+                    setAddingWell(false);
                   }
-                  setAddMessage(`Recording enabled for ${name}`);
-                  setAddingWell(false);
                 }}
                 disabled={addingWell}
                 className="w-full mb-3 px-3 py-2.5 bg-green-900/50 hover:bg-green-800/50 border border-green-700 text-green-300 text-sm rounded flex items-center gap-2 disabled:opacity-50"
@@ -592,18 +655,21 @@ export default function GpsRoutesTab() {
               </div>
 
               <div className="flex items-center gap-2">
-                <button
-                  onClick={(e) => { e.stopPropagation(); handleToggleRecording(well); }}
-                  className={`text-xs px-2 py-0.5 rounded border transition whitespace-nowrap ${
-                    well.isRecording
-                      ? 'bg-red-900/50 text-red-300 border-red-800 hover:bg-red-800/50'
-                      : 'bg-gray-700 text-gray-400 border-gray-600 hover:bg-gray-600'
-                  }`}
-                  title={well.isRecording ? 'Stop recording new trips' : 'Start recording trips'}
-                >
-                  {well.isRecording ? '● Recording' : '○ Record'}
-                </button>
-                {!well.routeGroupWell && !well.groupMembers && (
+                {canManageRoutes && (
+                  <button
+                    onClick={(e) => { e.stopPropagation(); handleToggleRecording(well); }}
+                    disabled={togglingWell === well.wellName}
+                    className={`text-xs px-2 py-0.5 rounded border transition whitespace-nowrap disabled:opacity-50 ${
+                      well.isRecording
+                        ? 'bg-red-900/50 text-red-300 border-red-800 hover:bg-red-800/50'
+                        : 'bg-gray-700 text-gray-400 border-gray-600 hover:bg-gray-600'
+                    }`}
+                    title={well.isRecording ? 'Stop recording new trips' : 'Start recording trips'}
+                  >
+                    {togglingWell === well.wellName ? '…' : well.isRecording ? '● Recording' : '○ Record'}
+                  </button>
+                )}
+                {canManageRoutes && !well.routeGroupWell && !well.groupMembers && (
                   <button
                     onClick={(e) => { e.stopPropagation(); handleFindPadWells(well.wellName); }}
                     disabled={padSearchingWell === well.wellName}

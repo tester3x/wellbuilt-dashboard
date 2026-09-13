@@ -1,6 +1,8 @@
 'use client';
 
 import { useEffect, useState, useRef } from 'react';
+import { useAuth } from '@/contexts/AuthContext';
+import { hasCapability } from '@/lib/auth';
 import { getFirestoreDb, getFirebaseDatabase } from '@/lib/firebase';
 import { collection, getDocs, getDoc, doc, setDoc, deleteDoc, updateDoc } from 'firebase/firestore';
 import { createAdminContractService, AdminServiceError } from '@/lib/adminContractService';
@@ -36,6 +38,13 @@ interface PendingSignup {
 }
 
 export function CompaniesTab({ scopeCompanyId, isWbAdmin = false }: CompaniesTabProps) {
+  const { user, userCompany } = useAuth();
+  // Capability gate (audit 2026-09-13) — branding writes company config;
+  // require manageCompany. NOTE: the logo upload's unauthenticated Storage
+  // POST target is a Storage-rules dependency and is intentionally left as-is
+  // here (out of lane) — this only gates the control and surfaces failures.
+  const canManageCompany = hasCapability(user, 'manageCompany', userCompany);
+
   const [companies, setCompanies] = useState<CompanyConfig[]>([]);
   const [loading, setLoading] = useState(true);
   const [message, setMessage] = useState('');
@@ -605,6 +614,11 @@ export function CompaniesTab({ scopeCompanyId, isWbAdmin = false }: CompaniesTab
 
   const saveBranding = async () => {
     if (!brandingCompany) return;
+    // Handler guard — capability required (server rules re-decide too).
+    if (!canManageCompany) {
+      setMessage('You do not have permission to manage company branding.');
+      return;
+    }
     setBrandingSaving(true);
 
     try {
@@ -1064,12 +1078,14 @@ export function CompaniesTab({ scopeCompanyId, isWbAdmin = false }: CompaniesTab
                         <h4 className="text-purple-400 text-sm font-medium">
                           Branding
                         </h4>
-                        <button
-                          onClick={(e) => { e.stopPropagation(); openBrandingEditor(company); }}
-                          className="px-2 py-1 text-xs rounded bg-purple-600 hover:bg-purple-500 text-white"
-                        >
-                          {company.logoUrl || company.primaryColor ? 'Edit Branding' : '+ Set Up Branding'}
-                        </button>
+                        {canManageCompany && (
+                          <button
+                            onClick={(e) => { e.stopPropagation(); openBrandingEditor(company); }}
+                            className="px-2 py-1 text-xs rounded bg-purple-600 hover:bg-purple-500 text-white"
+                          >
+                            {company.logoUrl || company.primaryColor ? 'Edit Branding' : '+ Set Up Branding'}
+                          </button>
+                        )}
                       </div>
                       <div className="flex items-center gap-4 text-sm">
                         {company.logoUrl ? (
@@ -1470,7 +1486,7 @@ export function CompaniesTab({ scopeCompanyId, isWbAdmin = false }: CompaniesTab
             <div className="flex gap-2">
               <button
                 onClick={saveBranding}
-                disabled={brandingSaving}
+                disabled={brandingSaving || !canManageCompany}
                 className="flex-1 px-4 py-2 bg-purple-600 hover:bg-purple-500 text-white rounded disabled:opacity-50"
               >
                 {brandingSaving ? 'Saving...' : 'Save Branding'}

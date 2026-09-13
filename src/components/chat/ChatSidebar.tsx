@@ -14,6 +14,8 @@ import {
   limit,
 } from 'firebase/firestore';
 import { getFirestoreDb } from '@/lib/firebase';
+import { useAuth } from '@/contexts/AuthContext';
+import { hasCapability } from '@/lib/auth';
 import {
   ChatThread,
   ChatMessage,
@@ -92,10 +94,18 @@ interface ChatSidebarProps {
 // ── Component ───────────────────────────────────────────────────────────────
 
 export function ChatSidebar({ visible, onClose, userId, companyId, onUnreadChange }: ChatSidebarProps) {
+  // Capability gates (UI CONTAINED; server rules stay the authority). The
+  // sidebar renders inside AuthProvider, so read the user directly rather than
+  // threading new props through AppHeader.
+  const { user, userCompany } = useAuth();
+  const canViewChat = hasCapability(user, 'viewChat', userCompany);
+  const canSendChat = hasCapability(user, 'sendChat', userCompany);
+
   const [threads, setThreads] = useState<ChatThread[]>([]);
   const [selectedThreadId, setSelectedThreadId] = useState<string | null>(null);
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [inputText, setInputText] = useState('');
+  const [sendError, setSendError] = useState<string | null>(null);
   const [filter, setFilter] = useState<FilterKey>('all');
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLInputElement>(null);
@@ -225,33 +235,46 @@ export function ChatSidebar({ visible, onClose, userId, companyId, onUnreadChang
     const text = inputText.trim();
     if (!text || !selectedThreadId) return;
 
+    if (!hasCapability(user, 'sendChat', userCompany)) {
+      setSendError('You do not have permission to send messages.');
+      return;
+    }
+    setSendError(null);
+
     setInputText('');
     const firestore = getFirestoreDb();
     const now = Timestamp.now();
 
-    // Write message to subcollection
-    await addDoc(collection(firestore, 'chat_threads', selectedThreadId, 'messages'), {
-      text,
-      senderId: myParticipantId,
-      senderName: 'Admin', // Dashboard users are admin
-      timestamp: now,
-      type: 'text',
-    });
-
-    // Update thread's lastMessage + updatedAt
-    const threadRef = doc(firestore, 'chat_threads', selectedThreadId);
-    await updateDoc(threadRef, {
-      lastMessage: {
+    try {
+      // Write message to subcollection
+      await addDoc(collection(firestore, 'chat_threads', selectedThreadId, 'messages'), {
         text,
         senderId: myParticipantId,
-        senderName: 'Admin',
+        senderName: 'Admin', // Dashboard users are admin
         timestamp: now,
         type: 'text',
-      },
-      updatedAt: now,
-      [`lastRead.${myParticipantId}`]: now,
-    });
-  }, [inputText, selectedThreadId, myParticipantId]);
+      });
+
+      // Update thread's lastMessage + updatedAt
+      const threadRef = doc(firestore, 'chat_threads', selectedThreadId);
+      await updateDoc(threadRef, {
+        lastMessage: {
+          text,
+          senderId: myParticipantId,
+          senderName: 'Admin',
+          timestamp: now,
+          type: 'text',
+        },
+        updatedAt: now,
+        [`lastRead.${myParticipantId}`]: now,
+      });
+    } catch (err) {
+      console.error('[Chat] send failed', err);
+      // Restore the unsent text so it isn't silently lost.
+      setInputText(text);
+      setSendError('Message failed to send. Check your access.');
+    }
+  }, [inputText, selectedThreadId, myParticipantId, user, userCompany]);
 
   const handleKeyDown = (e: React.KeyboardEvent) => {
     if (e.key === 'Enter' && !e.shiftKey) {
@@ -268,6 +291,27 @@ export function ChatSidebar({ visible, onClose, userId, companyId, onUnreadChang
   const selectedThread = threads.find((t) => t.id === selectedThreadId) || null;
 
   if (!visible) return null;
+
+  // Capability gate: user opened the panel but isn't entitled to chat. Show a
+  // notice instead of the interactive surface (mirrors the tab-level viewChat gate).
+  if (!canViewChat) {
+    return (
+      <div
+        ref={panelRef}
+        className="fixed top-0 right-0 h-full w-[420px] bg-[#0a0a0a] border-l border-gray-700 shadow-2xl z-50 flex flex-col items-center justify-center px-6 text-center"
+        style={{ animation: 'slideInRight 0.2s ease-out' }}
+      >
+        <p className="text-gray-300 text-sm mb-1">Chat unavailable</p>
+        <p className="text-gray-500 text-xs">You do not have permission to view chat.</p>
+        <button
+          onClick={onClose}
+          className="mt-4 text-xs text-gray-400 hover:text-white underline"
+        >
+          Close
+        </button>
+      </div>
+    );
+  }
 
   return (
     <div
@@ -464,19 +508,24 @@ export function ChatSidebar({ visible, onClose, userId, companyId, onUnreadChang
           </div>
 
           {/* Input */}
-          <div className="border-t border-gray-700 px-3 py-2 bg-[#111] flex items-center gap-2 flex-shrink-0">
+          <div className="border-t border-gray-700 px-3 py-2 bg-[#111] flex flex-col gap-1 flex-shrink-0">
+            {sendError && (
+              <p className="text-[11px] text-red-400 px-1">{sendError}</p>
+            )}
+            <div className="flex items-center gap-2">
             <input
               ref={inputRef}
               type="text"
               value={inputText}
               onChange={(e) => setInputText(e.target.value)}
               onKeyDown={handleKeyDown}
-              placeholder="Type a message..."
-              className="flex-1 bg-[#1a1a1a] border border-gray-700 rounded-full px-4 py-2 text-sm text-white placeholder-gray-500 focus:outline-none focus:border-[#FFD700] transition-colors"
+              disabled={!canSendChat}
+              placeholder={canSendChat ? 'Type a message...' : 'You do not have permission to send messages'}
+              className="flex-1 bg-[#1a1a1a] border border-gray-700 rounded-full px-4 py-2 text-sm text-white placeholder-gray-500 focus:outline-none focus:border-[#FFD700] transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
             />
             <button
               onClick={sendMessage}
-              disabled={!inputText.trim()}
+              disabled={!inputText.trim() || !canSendChat}
               className="w-9 h-9 rounded-full bg-[#FFD700] hover:bg-[#ffe44d] disabled:bg-gray-700 disabled:text-gray-500 text-black flex items-center justify-center transition-colors flex-shrink-0"
               title="Send"
             >
@@ -484,6 +533,7 @@ export function ChatSidebar({ visible, onClose, userId, companyId, onUnreadChang
                 <path strokeLinecap="round" strokeLinejoin="round" d="M5 12h14M12 5l7 7-7 7" />
               </svg>
             </button>
+            </div>
           </div>
         </>
       )}

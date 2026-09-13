@@ -7,6 +7,8 @@
 
 import { useState, useEffect } from 'react';
 import { collection, getDocs, doc, updateDoc, arrayUnion, deleteDoc } from 'firebase/firestore';
+import { useAuth } from '@/contexts/AuthContext';
+import { isPlatformAdmin } from '@/lib/auth';
 import { getFirestoreDb } from '@/lib/firebase';
 import {
   loadAllUsage,
@@ -20,9 +22,17 @@ import {
 } from '@/lib/jobTypeUsage';
 
 export function JobTypeRnDCard() {
+  // WB-platform-admin gate (audit 2026-09-13). "Seed Test Data" writes
+  // fabricated docs to production; restrict it to platform admins (the page
+  // already renders this card only for WB admins — this is defense-in-depth),
+  // require an explicit confirm, and surface any failure.
+  const { user } = useAuth();
+  const canSeed = isPlatformAdmin(user);
+
   const [entries, setEntries] = useState<JobTypeUsageEntry[]>([]);
   const [loading, setLoading] = useState(true);
   const [seeding, setSeeding] = useState(false);
+  const [seedError, setSeedError] = useState<string | null>(null);
   const [promoting, setPromoting] = useState<string | null>(null);
   const [dismissing, setDismissing] = useState<string | null>(null);
 
@@ -46,10 +56,26 @@ export function JobTypeRnDCard() {
   const builtinEntries = entries.filter(e => !e.isCustom);
 
   const handleSeed = async () => {
+    // Handler guard — platform admins only.
+    if (!canSeed) {
+      setSeedError('You do not have permission to seed test data.');
+      return;
+    }
+    // Confirm before writing fabricated docs to production.
+    if (!window.confirm(
+      'Seed Test Data writes fabricated job-type usage docs to PRODUCTION Firestore. Continue?'
+    )) {
+      return;
+    }
+    setSeedError(null);
     setSeeding(true);
     try {
       await seedTestData();
       await load();
+    } catch (err) {
+      // Previously no catch — a failed seed failed silently.
+      console.error('Failed to seed test data:', err);
+      setSeedError('Failed to seed test data. Check console for details.');
     } finally {
       setSeeding(false);
     }
@@ -154,15 +180,22 @@ export function JobTypeRnDCard() {
             Thresholds: {PROMOTE_THRESHOLD_COMPANIES} companies / {PROMOTE_THRESHOLD_DISPATCHES} dispatches to promote, {PRUNE_THRESHOLD_DAYS}d inactivity to prune.
           </p>
         </div>
-        <button
-          onClick={handleSeed}
-          disabled={seeding}
-          className="px-3 py-1 bg-gray-700 hover:bg-gray-600 text-gray-300 text-xs font-medium rounded transition-colors"
-          title="Seed test data for R&D pipeline testing"
-        >
-          {seeding ? 'Seeding...' : 'Seed Test Data'}
-        </button>
+        {canSeed && (
+          <button
+            onClick={handleSeed}
+            disabled={seeding}
+            className="px-3 py-1 bg-gray-700 hover:bg-gray-600 text-gray-300 text-xs font-medium rounded transition-colors"
+            title="Seed test data for R&D pipeline testing (writes to production)"
+          >
+            {seeding ? 'Seeding...' : 'Seed Test Data'}
+          </button>
+        )}
       </div>
+      {seedError && (
+        <div className="px-4 py-2 bg-red-950/40 border-b border-red-700/40 text-red-300 text-xs">
+          {seedError}
+        </div>
+      )}
 
       {loading ? (
         <div className="text-gray-500 text-center py-8 text-sm">Loading usage data...</div>

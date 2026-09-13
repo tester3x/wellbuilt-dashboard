@@ -227,6 +227,7 @@ export default function BillingPage() {
 
   const handleGenerateBill = async (summary: OperatorBillingSummary) => {
     if (!user) return;
+    if (!canEditBilling) return; // capability guard (not merely a route gate)
     const companyId = summary.companyId || user.companyId || '';
     if (!companyId) return;
     try {
@@ -241,6 +242,7 @@ export default function BillingPage() {
   };
 
   const handleMarkSent = async (record: BillingRecord) => {
+    if (!canEditBilling) return; // capability guard
     try {
       await updateBillingStatus(record.id, 'sent');
       await loadData();
@@ -251,6 +253,7 @@ export default function BillingPage() {
 
   const handleRecordPayment = async () => {
     if (!paymentModal) return;
+    if (!canEditBilling) return; // capability guard
     const amount = parseFloat(paymentAmount);
     if (isNaN(amount) || amount <= 0) return;
     try {
@@ -373,6 +376,7 @@ export default function BillingPage() {
   };
 
   const handleBackfillHistory = async () => {
+    if (!canEditBilling) return; // capability guard (server callable also governs)
     // Duplicate-submit guard (button is also disabled while fetchingEia).
     if (!effectiveCompanyId || fetchingEia) return;
     try {

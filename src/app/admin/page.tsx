@@ -21,7 +21,7 @@ import {
 import { DriversTab } from '@/components/admin/DriversTab';
 import { CompaniesTab } from '@/components/admin/CompaniesTab';
 import { canViewGlobalWellPool } from '@/lib/tenantScope';
-import { isPlatformAdmin } from '@/lib/auth';
+import { isPlatformAdmin, hasCapability } from '@/lib/auth';
 import GpsRoutesTab from '@/components/admin/GpsRoutesTab';
 import { EquipmentTab } from '@/components/admin/EquipmentTab';
 import dynamic from 'next/dynamic';
@@ -79,8 +79,16 @@ interface RouteWells {
 }
 
 export default function AdminPage() {
-  const { user, loading } = useAuth();
+  const { user, loading, userCompany } = useAuth();
   const router = useRouter();
+
+  // Capability gates (audit 2026-09-13) — the admin page is role-gated to
+  // admin/it (see redirect + render guard below), but these destructive /
+  // rename / write surfaces edit the GLOBAL well pool and must additionally
+  // respect the manageWells / manageRoutes capabilities. Defense-in-depth:
+  // the server callables / rules re-decide authority regardless.
+  const canManageWells = hasCapability(user, 'manageWells', userCompany);
+  const canManageRoutes = hasCapability(user, 'manageRoutes', userCompany);
   const [configs, setConfigs] = useState<Record<string, WellConfig>>({});
   const [catalogError, setCatalogError] = useState<string | null>(null);
   const [routes, setRoutes] = useState<string[]>([]);
@@ -271,6 +279,9 @@ export default function AdminPage() {
   const [showDeleteRouteModal, setShowDeleteRouteModal] = useState(false);
   const [deleteRouteAction, setDeleteRouteAction] = useState<'unassign' | 'delete' | null>(null);
   const [showDeleteWellModal, setShowDeleteWellModal] = useState(false);
+  // Deterministic busy flags for the destructive deletes (prevent double-fire).
+  const [isDeletingRoute, setIsDeletingRoute] = useState(false);
+  const [isDeletingWell, setIsDeletingWell] = useState(false);
 
   // Redirect if not admin/IT
   useEffect(() => {
@@ -636,73 +647,95 @@ export default function AdminPage() {
   // Execute the actual route deletion based on user choice
   const executeDeleteRouteWithAction = async (action: 'unassign' | 'delete') => {
     if (!selectedRoute) return;
-
-    const db = getFirebaseDatabase();
-    const wellsInRoute = routeWells[selectedRoute] || [];
-
-    if (action === 'unassign') {
-      // Move all wells to Unassigned
-      const updates: Record<string, string> = {};
-      for (const wellName of wellsInRoute) {
-        updates[`well_config/${wellName}/route`] = 'Unrouted';
-      }
-      if (Object.keys(updates).length > 0) {
-        await update(ref(db), updates);
-      }
-      showMessage(`Route "${selectedRoute}" deleted, ${wellsInRoute.length} wells moved to Unrouted`);
-    } else if (action === 'delete') {
-      // Permanently delete wells and their history
-      for (const wellName of wellsInRoute) {
-        // Delete well config
-        await remove(ref(db, `well_config/${wellName}`));
-
-        // Delete all processed packets for this well
-        const processedRef = ref(db, 'packets/processed');
-        const snapshot = await get(processedRef);
-        if (snapshot.exists()) {
-          const deleteUpdates: Record<string, null> = {};
-          snapshot.forEach((child) => {
-            const data = child.val();
-            if (data.wellName?.toLowerCase().replace(/\s/g, '') === wellName.toLowerCase().replace(/\s/g, '')) {
-              deleteUpdates[`packets/processed/${child.key}`] = null;
-            }
-          });
-          if (Object.keys(deleteUpdates).length > 0) {
-            await update(ref(db), deleteUpdates);
-          }
-        }
-
-        // Delete outgoing status
-        const outgoingRef = ref(db, 'packets/outgoing');
-        const outSnapshot = await get(outgoingRef);
-        if (outSnapshot.exists()) {
-          const outDeleteUpdates: Record<string, null> = {};
-          outSnapshot.forEach((child) => {
-            const data = child.val();
-            if (data.wellName?.toLowerCase().replace(/\s/g, '') === wellName.toLowerCase().replace(/\s/g, '')) {
-              outDeleteUpdates[`packets/outgoing/${child.key}`] = null;
-            }
-          });
-          if (Object.keys(outDeleteUpdates).length > 0) {
-            await update(ref(db), outDeleteUpdates);
-          }
-        }
-
-        // Delete performance data
-        await remove(ref(db, `performance/${wellName}`));
-      }
-      showMessage(`Route "${selectedRoute}" and ${wellsInRoute.length} wells permanently deleted`);
+    // Handler guard — capability required (server rules re-decide too).
+    if (!canManageRoutes) {
+      showMessage('You do not have permission to manage routes.');
+      return;
     }
+    // Deterministic busy guard — prevents double-fire of a destructive delete.
+    if (isDeletingRoute) return;
+    setIsDeletingRoute(true);
 
-    setShowDeleteRouteModal(false);
-    setDeleteRouteAction(null);
-    setSelectedRoute('');
+    try {
+      const db = getFirebaseDatabase();
+      const wellsInRoute = routeWells[selectedRoute] || [];
+
+      if (action === 'unassign') {
+        // Move all wells to Unassigned
+        const updates: Record<string, string> = {};
+        for (const wellName of wellsInRoute) {
+          updates[`well_config/${wellName}/route`] = 'Unrouted';
+        }
+        if (Object.keys(updates).length > 0) {
+          await update(ref(db), updates);
+        }
+        showMessage(`Route "${selectedRoute}" deleted, ${wellsInRoute.length} wells moved to Unrouted`);
+      } else if (action === 'delete') {
+        // Permanently delete wells and their history
+        for (const wellName of wellsInRoute) {
+          // Delete well config
+          await remove(ref(db, `well_config/${wellName}`));
+
+          // Delete all processed packets for this well
+          const processedRef = ref(db, 'packets/processed');
+          const snapshot = await get(processedRef);
+          if (snapshot.exists()) {
+            const deleteUpdates: Record<string, null> = {};
+            snapshot.forEach((child) => {
+              const data = child.val();
+              if (data.wellName?.toLowerCase().replace(/\s/g, '') === wellName.toLowerCase().replace(/\s/g, '')) {
+                deleteUpdates[`packets/processed/${child.key}`] = null;
+              }
+            });
+            if (Object.keys(deleteUpdates).length > 0) {
+              await update(ref(db), deleteUpdates);
+            }
+          }
+
+          // Delete outgoing status
+          const outgoingRef = ref(db, 'packets/outgoing');
+          const outSnapshot = await get(outgoingRef);
+          if (outSnapshot.exists()) {
+            const outDeleteUpdates: Record<string, null> = {};
+            outSnapshot.forEach((child) => {
+              const data = child.val();
+              if (data.wellName?.toLowerCase().replace(/\s/g, '') === wellName.toLowerCase().replace(/\s/g, '')) {
+                outDeleteUpdates[`packets/outgoing/${child.key}`] = null;
+              }
+            });
+            if (Object.keys(outDeleteUpdates).length > 0) {
+              await update(ref(db), outDeleteUpdates);
+            }
+          }
+
+          // Delete performance data
+          await remove(ref(db, `performance/${wellName}`));
+        }
+        showMessage(`Route "${selectedRoute}" and ${wellsInRoute.length} wells permanently deleted`);
+      }
+
+      setShowDeleteRouteModal(false);
+      setDeleteRouteAction(null);
+      setSelectedRoute('');
+    } catch (error) {
+      // Destructive deletes had NO try/catch before — a failed delete failed
+      // silently. Surface it so the operator knows nothing was removed.
+      console.error('Error deleting route:', error);
+      showMessage('Error deleting route. Nothing was removed — check console for details.');
+    } finally {
+      setIsDeletingRoute(false);
+    }
   };
 
   // Rename route
   const handleRenameRoute = async () => {
     if (!selectedRoute || selectedRoute === 'Unrouted') {
       showMessage('Select a route to rename');
+      return;
+    }
+    // Handler guard — capability required (server rules re-decide too).
+    if (!canManageRoutes) {
+      showMessage('You do not have permission to manage routes.');
       return;
     }
 
@@ -752,6 +785,11 @@ export default function AdminPage() {
 
   // Add new well — governed callable. Client RTDB well_config writes are denied.
   const handleAddWell = async () => {
+    // Handler guard — capability required (server callable re-decides too).
+    if (!canManageWells) {
+      showMessage('You do not have permission to manage wells.');
+      return;
+    }
     const click = decideAddWellClick({
       form: {
         wellName: newWellName,
@@ -840,6 +878,12 @@ export default function AdminPage() {
   const handleUpdateWell = async () => {
     if (!selectedWell) {
       showMessage('Select a well first');
+      return;
+    }
+    // Handler guard — covers the rename branch (direct RTDB well_config writes)
+    // and the governed-save branch; capability required (server re-decides too).
+    if (!canManageWells) {
+      showMessage('You do not have permission to manage wells.');
       return;
     }
 
@@ -1010,60 +1054,77 @@ export default function AdminPage() {
   // Execute the actual well deletion based on user choice
   const executeDeleteWellWithAction = async (action: 'unassign' | 'delete') => {
     if (!selectedWell) return;
-
-    const db = getFirebaseDatabase();
-
-    if (action === 'unassign') {
-      // Just move to Unassigned route, keep all data
-      await set(ref(db, `well_config/${selectedWell}/route`), 'Unrouted');
-      showMessage(`Well "${selectedWell}" moved to Unrouted`);
-    } else if (action === 'delete') {
-      // Permanently delete well and all its history
-      const wellName = selectedWell;
-
-      // Delete well config
-      await remove(ref(db, `well_config/${wellName}`));
-
-      // Delete all processed packets for this well
-      const processedRef = ref(db, 'packets/processed');
-      const snapshot = await get(processedRef);
-      if (snapshot.exists()) {
-        const deleteUpdates: Record<string, null> = {};
-        snapshot.forEach((child) => {
-          const data = child.val();
-          if (data.wellName?.toLowerCase().replace(/\s/g, '') === wellName.toLowerCase().replace(/\s/g, '')) {
-            deleteUpdates[`packets/processed/${child.key}`] = null;
-          }
-        });
-        if (Object.keys(deleteUpdates).length > 0) {
-          await update(ref(db), deleteUpdates);
-        }
-      }
-
-      // Delete outgoing status
-      const outgoingRef = ref(db, 'packets/outgoing');
-      const outSnapshot = await get(outgoingRef);
-      if (outSnapshot.exists()) {
-        const outDeleteUpdates: Record<string, null> = {};
-        outSnapshot.forEach((child) => {
-          const data = child.val();
-          if (data.wellName?.toLowerCase().replace(/\s/g, '') === wellName.toLowerCase().replace(/\s/g, '')) {
-            outDeleteUpdates[`packets/outgoing/${child.key}`] = null;
-          }
-        });
-        if (Object.keys(outDeleteUpdates).length > 0) {
-          await update(ref(db), outDeleteUpdates);
-        }
-      }
-
-      // Delete performance data
-      await remove(ref(db, `performance/${wellName}`));
-
-      showMessage(`Well "${wellName}" and all history permanently deleted`);
+    // Handler guard — capability required (server rules re-decide too).
+    if (!canManageWells) {
+      showMessage('You do not have permission to manage wells.');
+      return;
     }
+    // Deterministic busy guard — prevents double-fire of a destructive delete.
+    if (isDeletingWell) return;
+    setIsDeletingWell(true);
 
-    setShowDeleteWellModal(false);
-    setSelectedWell('');
+    try {
+      const db = getFirebaseDatabase();
+
+      if (action === 'unassign') {
+        // Just move to Unassigned route, keep all data
+        await set(ref(db, `well_config/${selectedWell}/route`), 'Unrouted');
+        showMessage(`Well "${selectedWell}" moved to Unrouted`);
+      } else if (action === 'delete') {
+        // Permanently delete well and all its history
+        const wellName = selectedWell;
+
+        // Delete well config
+        await remove(ref(db, `well_config/${wellName}`));
+
+        // Delete all processed packets for this well
+        const processedRef = ref(db, 'packets/processed');
+        const snapshot = await get(processedRef);
+        if (snapshot.exists()) {
+          const deleteUpdates: Record<string, null> = {};
+          snapshot.forEach((child) => {
+            const data = child.val();
+            if (data.wellName?.toLowerCase().replace(/\s/g, '') === wellName.toLowerCase().replace(/\s/g, '')) {
+              deleteUpdates[`packets/processed/${child.key}`] = null;
+            }
+          });
+          if (Object.keys(deleteUpdates).length > 0) {
+            await update(ref(db), deleteUpdates);
+          }
+        }
+
+        // Delete outgoing status
+        const outgoingRef = ref(db, 'packets/outgoing');
+        const outSnapshot = await get(outgoingRef);
+        if (outSnapshot.exists()) {
+          const outDeleteUpdates: Record<string, null> = {};
+          outSnapshot.forEach((child) => {
+            const data = child.val();
+            if (data.wellName?.toLowerCase().replace(/\s/g, '') === wellName.toLowerCase().replace(/\s/g, '')) {
+              outDeleteUpdates[`packets/outgoing/${child.key}`] = null;
+            }
+          });
+          if (Object.keys(outDeleteUpdates).length > 0) {
+            await update(ref(db), outDeleteUpdates);
+          }
+        }
+
+        // Delete performance data
+        await remove(ref(db, `performance/${wellName}`));
+
+        showMessage(`Well "${wellName}" and all history permanently deleted`);
+      }
+
+      setShowDeleteWellModal(false);
+      setSelectedWell('');
+    } catch (error) {
+      // Destructive deletes had NO try/catch before — a failed delete failed
+      // silently. Surface it so the operator knows nothing was removed.
+      console.error('Error deleting well:', error);
+      showMessage('Error deleting well. Nothing was removed — check console for details.');
+    } finally {
+      setIsDeletingWell(false);
+    }
   };
 
   if (loading) {
@@ -1268,23 +1329,26 @@ export default function AdminPage() {
                     </div>
                   </div>
 
-                  {selectedRoute !== 'Unrouted' && (
+                  {selectedRoute !== 'Unrouted' && canManageRoutes && (
                     <div className="flex gap-2">
                       <button
                         onClick={handleRenameRoute}
-                        disabled={isRenamingRoute || editRouteName === selectedRoute}
+                        disabled={isRenamingRoute || isDeletingRoute || editRouteName === selectedRoute}
                         className="flex-1 px-4 py-2 bg-blue-600 hover:bg-blue-700 text-white rounded disabled:opacity-50"
                       >
                         {isRenamingRoute ? 'Renaming...' : 'Save'}
                       </button>
                       <button
                         onClick={handleDeleteRoute}
-                        disabled={isRenamingRoute}
+                        disabled={isRenamingRoute || isDeletingRoute}
                         className="px-4 py-2 bg-red-600 hover:bg-red-700 text-white rounded disabled:opacity-50"
                       >
                         Delete
                       </button>
                     </div>
+                  )}
+                  {selectedRoute !== 'Unrouted' && !canManageRoutes && (
+                    <p className="text-gray-500 text-xs">You do not have permission to manage routes.</p>
                   )}
                 </div>
               )}
@@ -1565,14 +1629,16 @@ export default function AdminPage() {
                   </div>
                   {(() => {
                     const isDuplicate = newWellName.trim().length > 0 && Object.keys(configs).some(k => k.toLowerCase() === newWellName.trim().toLowerCase());
-                    const canSubmit = !!ndicSelectedWell && !isDuplicate && !isAddingWell;
-                    const label = isAddingWell
-                      ? 'Adding Well…'
-                      : isDuplicate
-                        ? 'Well Already Exists'
-                        : ndicSelectedWell
-                          ? 'Add Well'
-                          : 'Link Well First';
+                    const canSubmit = !!ndicSelectedWell && !isDuplicate && !isAddingWell && canManageWells;
+                    const label = !canManageWells
+                      ? 'No Permission'
+                      : isAddingWell
+                        ? 'Adding Well…'
+                        : isDuplicate
+                          ? 'Well Already Exists'
+                          : ndicSelectedWell
+                            ? 'Add Well'
+                            : 'Link Well First';
                     return (
                       <div
                         id="add-well-action"
@@ -1582,7 +1648,7 @@ export default function AdminPage() {
                         <button
                           type="button"
                           onClick={handleAddWell}
-                          disabled={isAddingWell}
+                          disabled={isAddingWell || !canManageWells}
                           data-add-well-click="decideAddWellClick"
                           data-add-well-adapter="staffCreateWellConfig"
                           data-add-well-callable="staffWriteWellConfig"
@@ -1590,6 +1656,11 @@ export default function AdminPage() {
                         >
                           {label}
                         </button>
+                        {!canManageWells && (
+                          <div className="mt-2 text-sm text-red-400">
+                            You do not have permission to manage wells.
+                          </div>
+                        )}
                         {addWellStatus.kind === 'submitting' && (
                           <div className="mt-2 text-sm text-blue-300">
                             Creating “{addWellStatus.wellName}”…
@@ -1850,25 +1921,29 @@ export default function AdminPage() {
                     <div className="text-xs text-gray-600 mt-1">
                       Fresh water ≈ 8.34 lbs/gal · Produced water ≈ 8.5–10+ lbs/gal
                     </div>
-                    <div className="flex gap-2 mt-2">
-                      <button
-                        type="button"
-                        onClick={handleUpdateWell}
-                        disabled={isRenaming || isUpdatingWell}
-                        data-edit-well-save="staffUpdateWellConfig"
-                        data-edit-well-callable="staffWriteWellConfig"
-                        className="flex-1 px-4 py-2 bg-blue-600 hover:bg-blue-700 text-white rounded disabled:opacity-50"
-                      >
-                        {isRenaming ? 'Renaming...' : isUpdatingWell ? 'Saving…' : 'Save Changes'}
-                      </button>
-                      <button
-                        onClick={handleDeleteWell}
-                        disabled={isRenaming || isUpdatingWell}
-                        className="px-4 py-2 bg-red-600 hover:bg-red-700 text-white rounded disabled:opacity-50"
-                      >
-                        Delete
-                      </button>
-                    </div>
+                    {canManageWells ? (
+                      <div className="flex gap-2 mt-2">
+                        <button
+                          type="button"
+                          onClick={handleUpdateWell}
+                          disabled={isRenaming || isUpdatingWell || isDeletingWell}
+                          data-edit-well-save="staffUpdateWellConfig"
+                          data-edit-well-callable="staffWriteWellConfig"
+                          className="flex-1 px-4 py-2 bg-blue-600 hover:bg-blue-700 text-white rounded disabled:opacity-50"
+                        >
+                          {isRenaming ? 'Renaming...' : isUpdatingWell ? 'Saving…' : 'Save Changes'}
+                        </button>
+                        <button
+                          onClick={handleDeleteWell}
+                          disabled={isRenaming || isUpdatingWell || isDeletingWell}
+                          className="px-4 py-2 bg-red-600 hover:bg-red-700 text-white rounded disabled:opacity-50"
+                        >
+                          Delete
+                        </button>
+                      </div>
+                    ) : (
+                      <p className="text-gray-500 text-xs mt-2">You do not have permission to manage wells.</p>
+                    )}
                     {editWellSaveStatus.kind === 'submitting' && (
                       <div className="mt-2 text-sm text-blue-300">Saving “{editWellSaveStatus.wellName}”…</div>
                     )}
@@ -1904,17 +1979,19 @@ export default function AdminPage() {
               <div className="space-y-3">
                 <button
                   onClick={() => executeDeleteRouteWithAction('unassign')}
-                  className="w-full px-4 py-3 bg-yellow-600 hover:bg-yellow-700 text-white rounded text-left"
+                  disabled={isDeletingRoute}
+                  className="w-full px-4 py-3 bg-yellow-600 hover:bg-yellow-700 text-white rounded text-left disabled:opacity-50"
                 >
-                  <div className="font-medium">Move to Unrouted</div>
+                  <div className="font-medium">{isDeletingRoute ? 'Working…' : 'Move to Unrouted'}</div>
                   <div className="text-sm text-yellow-200">Keep wells and history, just remove from this route</div>
                 </button>
 
                 <button
                   onClick={() => executeDeleteRouteWithAction('delete')}
-                  className="w-full px-4 py-3 bg-red-600 hover:bg-red-700 text-white rounded text-left"
+                  disabled={isDeletingRoute}
+                  className="w-full px-4 py-3 bg-red-600 hover:bg-red-700 text-white rounded text-left disabled:opacity-50"
                 >
-                  <div className="font-medium">Permanently Delete Everything</div>
+                  <div className="font-medium">{isDeletingRoute ? 'Working…' : 'Permanently Delete Everything'}</div>
                   <div className="text-sm text-red-200">Delete wells, all pull history, and performance data forever</div>
                 </button>
 
@@ -1923,7 +2000,8 @@ export default function AdminPage() {
                     setShowDeleteRouteModal(false);
                     setDeleteRouteAction(null);
                   }}
-                  className="w-full px-4 py-2 bg-gray-600 hover:bg-gray-500 text-white rounded"
+                  disabled={isDeletingRoute}
+                  className="w-full px-4 py-2 bg-gray-600 hover:bg-gray-500 text-white rounded disabled:opacity-50"
                 >
                   Cancel
                 </button>
@@ -1944,23 +2022,26 @@ export default function AdminPage() {
               <div className="space-y-3">
                 <button
                   onClick={() => executeDeleteWellWithAction('unassign')}
-                  className="w-full px-4 py-3 bg-yellow-600 hover:bg-yellow-700 text-white rounded text-left"
+                  disabled={isDeletingWell}
+                  className="w-full px-4 py-3 bg-yellow-600 hover:bg-yellow-700 text-white rounded text-left disabled:opacity-50"
                 >
-                  <div className="font-medium">Move to Unrouted</div>
+                  <div className="font-medium">{isDeletingWell ? 'Working…' : 'Move to Unrouted'}</div>
                   <div className="text-sm text-yellow-200">Keep well and all history, just remove from current route</div>
                 </button>
 
                 <button
                   onClick={() => executeDeleteWellWithAction('delete')}
-                  className="w-full px-4 py-3 bg-red-600 hover:bg-red-700 text-white rounded text-left"
+                  disabled={isDeletingWell}
+                  className="w-full px-4 py-3 bg-red-600 hover:bg-red-700 text-white rounded text-left disabled:opacity-50"
                 >
-                  <div className="font-medium">Permanently Delete Everything</div>
+                  <div className="font-medium">{isDeletingWell ? 'Working…' : 'Permanently Delete Everything'}</div>
                   <div className="text-sm text-red-200">Delete well config, all pull history, and performance data forever</div>
                 </button>
 
                 <button
                   onClick={() => setShowDeleteWellModal(false)}
-                  className="w-full px-4 py-2 bg-gray-600 hover:bg-gray-500 text-white rounded"
+                  disabled={isDeletingWell}
+                  className="w-full px-4 py-2 bg-gray-600 hover:bg-gray-500 text-white rounded disabled:opacity-50"
                 >
                   Cancel
                 </button>

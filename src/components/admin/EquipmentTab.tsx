@@ -2,6 +2,7 @@
 
 import { useEffect, useState, useRef, useMemo } from 'react';
 import { useAuth } from '@/contexts/AuthContext';
+import { hasCapability } from '@/lib/auth';
 import { loadAllCompanies, type CompanyConfig } from '@/lib/companySettings';
 import {
   fetchVehicleDocuments, uploadVehicleDocument, deleteVehicleDocument,
@@ -88,7 +89,11 @@ interface Props {
 }
 
 export function EquipmentTab({ scopeCompanyId, isWbAdmin }: Props) {
-  const { user } = useAuth();
+  const { user, userCompany } = useAuth();
+  // Capability gate (audit 2026-09-13) — these controls write the governed
+  // eQuipment* callable paths; require manageEquipment. Previously they relied
+  // only on the admin-page role gate. Server callables re-decide authority.
+  const canManageEquipment = hasCapability(user, 'manageEquipment', userCompany);
 
   // Company selection (WB admin can pick any company)
   const [companies, setCompanies] = useState<CompanyConfig[]>([]);
@@ -222,6 +227,7 @@ export function EquipmentTab({ scopeCompanyId, isWbAdmin }: Props) {
   // Upload document
   const handleUpload = async () => {
     if (!uploadTarget || !uploadFile || !effectiveCompanyId) return;
+    if (!canManageEquipment) { setMessage('You do not have permission to manage equipment.'); return; }
     setUploading(true);
     try {
       await uploadVehicleDocument(
@@ -253,6 +259,7 @@ export function EquipmentTab({ scopeCompanyId, isWbAdmin }: Props) {
 
   // Delete document
   const handleDelete = async (doc: VehicleDocument) => {
+    if (!canManageEquipment) { setMessage('You do not have permission to manage equipment.'); return; }
     if (!confirm(`Delete "${doc.label}" from ${doc.equipmentType} ${doc.equipmentNumber}?`)) return;
     try {
       await deleteVehicleDocument(doc.id, effectiveCompanyId);
@@ -267,6 +274,7 @@ export function EquipmentTab({ scopeCompanyId, isWbAdmin }: Props) {
   // Add equipment — create specs entry so it appears in the list (no doc required)
   const handleAddEquipment = async () => {
     if (!addNumber.trim() || !effectiveCompanyId) return;
+    if (!canManageEquipment) { setMessage('You do not have permission to manage equipment.'); return; }
     const number = addNumber.trim().toUpperCase();
     try {
       await saveEquipmentSpecs(effectiveCompanyId, {
@@ -288,6 +296,7 @@ export function EquipmentTab({ scopeCompanyId, isWbAdmin }: Props) {
       setMessage('No company selected');
       return;
     }
+    if (!canManageEquipment) { setMessage('You do not have permission to manage equipment.'); return; }
     setSavingSpecs(true);
     console.log('[EquipmentTab] Saving specs for', group.equipmentType, group.equipmentNumber, 'company:', effectiveCompanyId);
     try {
@@ -386,12 +395,14 @@ export function EquipmentTab({ scopeCompanyId, isWbAdmin }: Props) {
           placeholder="Search equipment #..."
           className="px-3 py-1.5 bg-gray-700 text-white rounded text-sm w-48"
         />
-        <button
-          onClick={() => setShowAddForm(!showAddForm)}
-          className="px-3 py-1.5 bg-green-700 text-white rounded text-sm hover:bg-green-600"
-        >
-          + Add Equipment
-        </button>
+        {canManageEquipment && (
+          <button
+            onClick={() => setShowAddForm(!showAddForm)}
+            className="px-3 py-1.5 bg-green-700 text-white rounded text-sm hover:bg-green-600"
+          >
+            + Add Equipment
+          </button>
+        )}
       </div>
 
       {/* Add equipment inline form */}
@@ -506,7 +517,7 @@ export function EquipmentTab({ scopeCompanyId, isWbAdmin }: Props) {
                       <div className="mb-4 pb-4 border-b border-gray-700/50">
                         <div className="flex items-center justify-between mb-2">
                           <span className="text-gray-400 text-xs font-bold uppercase tracking-wider">Vehicle Specs</span>
-                          {!isEditing && (
+                          {!isEditing && canManageEquipment && (
                             <button
                               onClick={() => startEditSpecs(group)}
                               className="text-xs text-blue-400 hover:text-blue-300"
@@ -675,18 +686,22 @@ export function EquipmentTab({ scopeCompanyId, isWbAdmin }: Props) {
                       <div className="flex items-center gap-2">
                         {expirationBadge(d.expirationDate)}
                         <a href={d.storageUrl} target="_blank" rel="noopener" className="text-blue-400 hover:text-blue-300 text-sm">View</a>
-                        <button onClick={() => handleDelete(d)} className="text-red-400 hover:text-red-300 text-sm">Delete</button>
+                        {canManageEquipment && (
+                          <button onClick={() => handleDelete(d)} className="text-red-400 hover:text-red-300 text-sm">Delete</button>
+                        )}
                       </div>
                     </div>
                   ))}
 
                   {/* Upload button */}
-                  <button
-                    onClick={() => setUploadTarget({ type: group.equipmentType, number: group.equipmentNumber })}
-                    className="mt-3 w-full py-2 border border-dashed border-gray-600 rounded text-gray-400 hover:text-white hover:border-gray-400 text-sm"
-                  >
-                    + Upload Document
-                  </button>
+                  {canManageEquipment && (
+                    <button
+                      onClick={() => setUploadTarget({ type: group.equipmentType, number: group.equipmentNumber })}
+                      className="mt-3 w-full py-2 border border-dashed border-gray-600 rounded text-gray-400 hover:text-white hover:border-gray-400 text-sm"
+                    >
+                      + Upload Document
+                    </button>
+                  )}
                 </div>
               )}
             </div>
@@ -823,7 +838,7 @@ export function EquipmentTab({ scopeCompanyId, isWbAdmin }: Props) {
               <div className="flex gap-3">
                 <button
                   onClick={handleUpload}
-                  disabled={!uploadFile || uploading}
+                  disabled={!uploadFile || uploading || !canManageEquipment}
                   className="flex-1 py-2 bg-blue-600 text-white rounded font-semibold hover:bg-blue-500 disabled:opacity-40"
                 >
                   {uploading ? 'Uploading...' : 'Upload'}

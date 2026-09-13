@@ -6,6 +6,7 @@
 
 import React, { useEffect, useState, useRef, useCallback, useMemo } from 'react';
 import { useAuth } from '@/contexts/AuthContext';
+import { hasCapability } from '@/lib/auth';
 import { getFirestoreDb } from '@/lib/firebase';
 import {
   collection,
@@ -174,7 +175,7 @@ export default function ChatPage() {
 }
 
 function ChatPageInner() {
-  const { user, loading: authLoading } = useAuth();
+  const { user, userCompany, loading: authLoading } = useAuth();
   // One-shot log when auth resolves — helps pin down whether a crash happens
   // before or after authentication completes.
   const authLoggedRef = useRef(false);
@@ -191,6 +192,14 @@ function ChatPageInner() {
   // we only subscribe once authentication has resolved to a real uid.
   const myParticipantId = user?.uid ? userParticipantId(user.uid) : '';
   const companyId = user?.companyId || '';
+
+  // --- Capability gates (UI CONTAINED; server rules remain the authority) ---
+  // viewChat  → may see the chat surface at all
+  // sendChat  → may participate (send, DM, group, archive, broadcast)
+  // manageCompany → may edit shared monitor-profile config (chat_monitors CRUD)
+  const canViewChat = hasCapability(user, 'viewChat', userCompany);
+  const canSendChat = hasCapability(user, 'sendChat', userCompany);
+  const canManageProfiles = hasCapability(user, 'manageCompany', userCompany);
 
   // --- State ---
   const [threads, setThreads] = useState<ChatThread[]>([]);
@@ -491,62 +500,116 @@ function ChatPageInner() {
 
   // --- Profile CRUD ---
   const createProfile = useCallback(async (name: string, layout: string) => {
+    if (!hasCapability(user, 'manageCompany', userCompany)) {
+      setToastMsg('You do not have permission to manage monitor profiles.');
+      return;
+    }
     const db = getFirestoreDb();
     if (!db || !name.trim()) return;
     const layoutObj = GRID_LAYOUTS.find((l) => l.label === layout) || GRID_LAYOUTS[3];
     const slotCount = layoutObj.cols * layoutObj.rows;
-    const docRef = await addDoc(collection(db, 'chat_monitors'), {
-      name: name.trim(),
-      companyId: companyId || '',
-      gridLayout: layout,
-      threadType: 'direct',
-      slots: Array(slotCount).fill(null),
-      createdBy: myParticipantId,
-    });
-    // Push new profile onto stack
-    setProfileStack(prev => [...prev.filter(id => id !== docRef.id), docRef.id]);
-    setNewProfileName('');
-    setSetupMode(true);
-  }, [companyId, myParticipantId]);
+    try {
+      const docRef = await addDoc(collection(db, 'chat_monitors'), {
+        name: name.trim(),
+        companyId: companyId || '',
+        gridLayout: layout,
+        threadType: 'direct',
+        slots: Array(slotCount).fill(null),
+        createdBy: myParticipantId,
+      });
+      // Push new profile onto stack
+      setProfileStack(prev => [...prev.filter(id => id !== docRef.id), docRef.id]);
+      setNewProfileName('');
+      setSetupMode(true);
+    } catch (err) {
+      console.error('[ChatPage] createProfile failed', err);
+      setToastMsg('Could not create profile. Check your access.');
+    }
+  }, [companyId, myParticipantId, user, userCompany]);
 
   const saveProfileType = useCallback(async (type: FilterKey) => {
+    if (!hasCapability(user, 'manageCompany', userCompany)) {
+      setToastMsg('You do not have permission to manage monitor profiles.');
+      return;
+    }
     if (!activeProfile) return;
     const db = getFirestoreDb();
     if (!db) return;
-    await updateDoc(doc(db, 'chat_monitors', activeProfile.id), { threadType: type });
-    // Firestore onSnapshot will update profiles → re-derives activeProfile
-  }, [activeProfile]);
+    try {
+      await updateDoc(doc(db, 'chat_monitors', activeProfile.id), { threadType: type });
+      // Firestore onSnapshot will update profiles → re-derives activeProfile
+    } catch (err) {
+      console.error('[ChatPage] saveProfileType failed', err);
+      setToastMsg('Could not update profile. Check your access.');
+    }
+  }, [activeProfile, user, userCompany]);
 
   const saveProfileSlots = useCallback(async (newSlots: (SlotAssignment | null)[]) => {
+    if (!hasCapability(user, 'manageCompany', userCompany)) {
+      setToastMsg('You do not have permission to manage monitor profiles.');
+      return;
+    }
     if (!activeProfile) return;
     const db = getFirestoreDb();
     if (!db) return;
-    await updateDoc(doc(db, 'chat_monitors', activeProfile.id), { slots: newSlots });
-  }, [activeProfile]);
+    try {
+      await updateDoc(doc(db, 'chat_monitors', activeProfile.id), { slots: newSlots });
+    } catch (err) {
+      console.error('[ChatPage] saveProfileSlots failed', err);
+      setToastMsg('Could not update profile layout. Check your access.');
+    }
+  }, [activeProfile, user, userCompany]);
 
   const saveProfileLayout = useCallback(async (layout: string) => {
+    if (!hasCapability(user, 'manageCompany', userCompany)) {
+      setToastMsg('You do not have permission to manage monitor profiles.');
+      return;
+    }
     if (!activeProfile) return;
     const db = getFirestoreDb();
     if (!db) return;
     const layoutObj = GRID_LAYOUTS.find((l) => l.label === layout) || GRID_LAYOUTS[3];
     const slotCount = layoutObj.cols * layoutObj.rows;
     const newSlots = Array(slotCount).fill(null).map((_, i) => activeProfile.slots[i] || null);
-    await updateDoc(doc(db, 'chat_monitors', activeProfile.id), { gridLayout: layout, slots: newSlots });
-  }, [activeProfile]);
+    try {
+      await updateDoc(doc(db, 'chat_monitors', activeProfile.id), { gridLayout: layout, slots: newSlots });
+    } catch (err) {
+      console.error('[ChatPage] saveProfileLayout failed', err);
+      setToastMsg('Could not update profile layout. Check your access.');
+    }
+  }, [activeProfile, user, userCompany]);
 
   const toggleProfileLock = useCallback(async () => {
+    if (!hasCapability(user, 'manageCompany', userCompany)) {
+      setToastMsg('You do not have permission to manage monitor profiles.');
+      return;
+    }
     if (!activeProfile) return;
     const db = getFirestoreDb();
     if (!db) return;
-    await updateDoc(doc(db, 'chat_monitors', activeProfile.id), { locked: !activeProfile.locked });
-  }, [activeProfile]);
+    try {
+      await updateDoc(doc(db, 'chat_monitors', activeProfile.id), { locked: !activeProfile.locked });
+    } catch (err) {
+      console.error('[ChatPage] toggleProfileLock failed', err);
+      setToastMsg('Could not update profile. Check your access.');
+    }
+  }, [activeProfile, user, userCompany]);
 
   const deleteProfile = useCallback(async (profileId: string) => {
+    if (!hasCapability(user, 'manageCompany', userCompany)) {
+      setToastMsg('You do not have permission to manage monitor profiles.');
+      return;
+    }
     const db = getFirestoreDb();
     if (!db) return;
-    await deleteDoc(doc(db, 'chat_monitors', profileId));
-    setProfileStack(prev => prev.filter(id => id !== profileId));
-  }, []);
+    try {
+      await deleteDoc(doc(db, 'chat_monitors', profileId));
+      setProfileStack(prev => prev.filter(id => id !== profileId));
+    } catch (err) {
+      console.error('[ChatPage] deleteProfile failed', err);
+      setToastMsg('Could not delete profile. Check your access.');
+    }
+  }, [user, userCompany]);
 
   // --- Assign driver or thread to slot ---
   const assignSlot = useCallback((index: number, assignment: SlotAssignment | null) => {
@@ -559,15 +622,28 @@ function ChatPageInner() {
 
   // --- Archive thread ---
   const archiveThread = useCallback(async (threadId: string) => {
+    if (!hasCapability(user, 'sendChat', userCompany)) {
+      setToastMsg('You do not have permission to modify chats.');
+      return;
+    }
     const db = getFirestoreDb();
     if (!db) return;
-    await updateDoc(doc(db, 'chat_threads', threadId), { status: 'archived' });
-  }, []);
+    try {
+      await updateDoc(doc(db, 'chat_threads', threadId), { status: 'archived' });
+    } catch (err) {
+      console.error('[ChatPage] archiveThread failed', err);
+      setToastMsg('Could not archive chat. Check your access.');
+    }
+  }, [user, userCompany]);
 
   // --- Send message ---
   const sendInPane = useCallback(async (threadId: string) => {
     const text = (paneInputs[threadId] || '').trim();
     if (!text) return;
+    if (!hasCapability(user, 'sendChat', userCompany)) {
+      setToastMsg('You do not have permission to send messages.');
+      return;
+    }
     setPaneInputs((prev) => ({ ...prev, [threadId]: '' }));
     const db = getFirestoreDb();
     if (!db) return;
@@ -580,47 +656,68 @@ function ChatPageInner() {
       lastMessage: { text: text.substring(0, 100), senderId: myParticipantId, senderName, timestamp: serverTimestamp(), type: 'text' },
       updatedAt: serverTimestamp(),
     });
-    await batch.commit();
-  }, [paneInputs, myParticipantId, user]);
+    try {
+      await batch.commit();
+    } catch (err) {
+      console.error('[ChatPage] sendInPane failed', err);
+      // Restore the unsent text so it isn't silently lost.
+      setPaneInputs((prev) => ({ ...prev, [threadId]: text }));
+      setToastMsg('Message failed to send. Check your access.');
+    }
+  }, [paneInputs, myParticipantId, user, userCompany]);
 
   // --- Start chat with driver (creates thread if needed, returns thread ID) ---
   const ensureDriverThread = useCallback(async (driverHash: string, driverName: string, driverCompanyId?: string): Promise<string | null> => {
+    if (!hasCapability(user, 'sendChat', userCompany)) {
+      setToastMsg('You do not have permission to start conversations.');
+      return null;
+    }
     const db = getFirestoreDb();
     if (!db) return null;
     const driverPid = `driver:${driverHash}`;
     const pair = [myParticipantId, driverPid].sort().join('_');
-    const existing = await getDocs(query(
-      collection(db, 'chat_threads'),
-      where('type', '==', 'direct'),
-      where('directPair', '==', pair),
-    ));
-    if (!existing.empty) {
-      const existingDoc = existing.docs[0];
-      // Reactivate if archived
-      if (existingDoc.data().status === 'archived') {
-        await updateDoc(doc(db, 'chat_threads', existingDoc.id), { status: 'active', updatedAt: serverTimestamp() });
+    try {
+      const existing = await getDocs(query(
+        collection(db, 'chat_threads'),
+        where('type', '==', 'direct'),
+        where('directPair', '==', pair),
+      ));
+      if (!existing.empty) {
+        const existingDoc = existing.docs[0];
+        // Reactivate if archived
+        if (existingDoc.data().status === 'archived') {
+          await updateDoc(doc(db, 'chat_threads', existingDoc.id), { status: 'active', updatedAt: serverTimestamp() });
+        }
+        return existingDoc.id;
       }
-      return existingDoc.id;
+      const senderName = user?.displayName || 'Dispatch';
+      const now = serverTimestamp();
+      const threadRef = await addDoc(collection(db, 'chat_threads'), {
+        type: 'direct',
+        companyId: companyId || driverCompanyId || '',
+        directPair: pair,
+        title: driverName,
+        participants: [myParticipantId, driverPid],
+        participantNames: { [myParticipantId]: senderName, [driverPid]: driverName },
+        status: 'active',
+        createdAt: now,
+        updatedAt: now,
+        lastRead: {},
+      });
+      return threadRef.id;
+    } catch (err) {
+      console.error('[ChatPage] ensureDriverThread failed', err);
+      setToastMsg('Could not open conversation. Check your access.');
+      return null;
     }
-    const senderName = user?.displayName || 'Dispatch';
-    const now = serverTimestamp();
-    const threadRef = await addDoc(collection(db, 'chat_threads'), {
-      type: 'direct',
-      companyId: companyId || driverCompanyId || '',
-      directPair: pair,
-      title: driverName,
-      participants: [myParticipantId, driverPid],
-      participantNames: { [myParticipantId]: senderName, [driverPid]: driverName },
-      status: 'active',
-      createdAt: now,
-      updatedAt: now,
-      lastRead: {},
-    });
-    return threadRef.id;
-  }, [myParticipantId, companyId, user]);
+  }, [myParticipantId, companyId, user, userCompany]);
 
   // --- Create group thread ---
   const createGroupThread = useCallback(async () => {
+    if (!hasCapability(user, 'sendChat', userCompany)) {
+      setToastMsg('You do not have permission to create group chats.');
+      return;
+    }
     const db = getFirestoreDb();
     if (!db || !groupName.trim() || groupMembers.length === 0) return;
     const senderName = user?.displayName || 'Dispatch';
@@ -629,33 +726,38 @@ function ChatPageInner() {
     groupMembers.forEach((m) => { participantNames[`driver:${m.hash}`] = m.name; });
     const now = serverTimestamp();
     const systemText = `${senderName} created "${groupName.trim()}" with ${groupMembers.map((m) => m.name.split(' ')[0]).join(', ')}`;
-    const threadRef = await addDoc(collection(db, 'chat_threads'), {
-      type: groupType,
-      companyId: companyId || '',
-      title: groupName.trim(),
-      participants,
-      participantNames,
-      broadcast: groupBroadcast,
-      status: 'active',
-      createdAt: now,
-      updatedAt: now,
-      lastRead: {},
-      lastMessage: { text: systemText, senderId: 'system', senderName: 'System', timestamp: now, type: 'system' },
-    });
-    // Send system message
-    await addDoc(collection(db, 'chat_threads', threadRef.id, 'messages'), {
-      text: systemText,
-      senderId: 'system',
-      senderName: 'System',
-      timestamp: now,
-      type: 'system',
-    });
-    setShowGroupCreator(false);
-    setGroupName('');
-    setGroupMembers([]);
-    setGroupType('service_group');
-    setGroupBroadcast(false);
-  }, [groupName, groupType, groupMembers, myParticipantId, companyId, user]);
+    try {
+      const threadRef = await addDoc(collection(db, 'chat_threads'), {
+        type: groupType,
+        companyId: companyId || '',
+        title: groupName.trim(),
+        participants,
+        participantNames,
+        broadcast: groupBroadcast,
+        status: 'active',
+        createdAt: now,
+        updatedAt: now,
+        lastRead: {},
+        lastMessage: { text: systemText, senderId: 'system', senderName: 'System', timestamp: now, type: 'system' },
+      });
+      // Send system message
+      await addDoc(collection(db, 'chat_threads', threadRef.id, 'messages'), {
+        text: systemText,
+        senderId: 'system',
+        senderName: 'System',
+        timestamp: now,
+        type: 'system',
+      });
+      setShowGroupCreator(false);
+      setGroupName('');
+      setGroupMembers([]);
+      setGroupType('service_group');
+      setGroupBroadcast(false);
+    } catch (err) {
+      console.error('[ChatPage] createGroupThread failed', err);
+      setToastMsg('Could not create group chat. Check your access.');
+    }
+  }, [groupName, groupType, groupMembers, myParticipantId, companyId, user, userCompany]);
 
   // --- Load drivers ---
   const loadDrivers = useCallback(async () => {
@@ -750,6 +852,20 @@ function ChatPageInner() {
     );
   }
 
+  // Page-level capability gate: auth has resolved to a real identity, but this
+  // user may not be entitled to the chat surface. Mirror how tabs gate on
+  // viewChat — deny the surface entirely rather than render inert controls.
+  if (!canViewChat) {
+    return (
+      <div className="h-dvh bg-[#0a0a0a] text-white flex items-center justify-center">
+        <div className="text-center px-6">
+          <p className="text-lg text-gray-300 mb-1">Chat unavailable</p>
+          <p className="text-sm text-gray-500">You do not have permission to view chat.</p>
+        </div>
+      </div>
+    );
+  }
+
   // --- Render ---
   return (
     <div className="h-dvh bg-[#0a0a0a] text-white flex">
@@ -760,6 +876,9 @@ function ChatPageInner() {
           <div className="flex items-center justify-between">
             <h1 className="text-xl font-bold text-[#FFD700] tracking-wide">WB Chat</h1>
             <div className="flex items-center gap-2">
+              {/* Setup mode is the monitor-profile CRUD surface (shared display
+                  config) — gate on manageCompany so only managers can enter it. */}
+              {canManageProfiles && (
               <button
                 onClick={() => { setSetupMode(!setupMode); if (!setupMode) loadDrivers(); }}
                 className={`text-xs px-2 py-1 rounded border transition-colors ${
@@ -771,6 +890,7 @@ function ChatPageInner() {
               >
                 {setupMode ? 'Done' : '⚙'}
               </button>
+              )}
               {profiles.length > 0 && (
                 <div className="relative">
                   <button
@@ -926,7 +1046,8 @@ function ChatPageInner() {
           })}
         </div>
 
-        {/* New Direct Message button */}
+        {/* New Direct Message button — starting a DM is a sendChat action */}
+        {canSendChat && (
         <div className="px-3 py-2 border-b border-gray-800">
           <button
             onClick={() => { setShowDriverPicker(!showDriverPicker); if (!showDriverPicker) loadDrivers(); }}
@@ -937,6 +1058,7 @@ function ChatPageInner() {
             New Direct Message
           </button>
         </div>
+        )}
 
         {/* Direct driver picker */}
         {showDriverPicker ? (
@@ -1031,13 +1153,22 @@ function ChatPageInner() {
                     <span className="text-[9px] text-gray-600 uppercase tracking-wider">
                       {threadTypeLabel(thread.type)}
                     </span>
-                    {thread.type !== 'direct' && (
+                    {thread.type !== 'direct' && canSendChat && (
                       <button
                         onClick={async (e) => {
                           e.stopPropagation();
+                          if (!hasCapability(user, 'sendChat', userCompany)) {
+                            setToastMsg('You do not have permission to change broadcast.');
+                            return;
+                          }
                           const db = getFirestoreDb();
                           if (!db) return;
-                          await updateDoc(doc(db, 'chat_threads', thread.id), { broadcast: !(thread as any).broadcast });
+                          try {
+                            await updateDoc(doc(db, 'chat_threads', thread.id), { broadcast: !(thread as any).broadcast });
+                          } catch (err) {
+                            console.error('[ChatPage] broadcast toggle failed', err);
+                            setToastMsg('Could not change broadcast. Check your access.');
+                          }
                         }}
                         className={`text-[9px] px-1.5 py-0.5 rounded transition-colors ${
                           (thread as any).broadcast
@@ -1073,7 +1204,7 @@ function ChatPageInner() {
                   <span onClick={() => bringProfileToTop(pid)}>
                     {p.locked ? '🔒 ' : ''}{p.name}
                   </span>
-                  {isTop && (
+                  {isTop && canManageProfiles && (
                     <button
                       onClick={toggleProfileLock}
                       className={`ml-1 text-[10px] transition-colors ${p.locked ? 'text-[#FFD700]' : 'text-gray-600 hover:text-gray-400'}`}
@@ -1100,6 +1231,7 @@ function ChatPageInner() {
         {profileStack.length === 1 && activeProfile && (
           <div className="flex items-center justify-between bg-[#0d0d0d] border-b border-gray-800 px-3 py-1 shrink-0">
             <span className="text-xs text-gray-500">{activeProfile.name}</span>
+            {canManageProfiles && (
             <button
               onClick={toggleProfileLock}
               className={`text-xs transition-colors ${activeProfile.locked ? 'text-[#FFD700]' : 'text-gray-600 hover:text-gray-400'}`}
@@ -1107,6 +1239,7 @@ function ChatPageInner() {
             >
               {activeProfile.locked ? '🔒 Locked' : '🔓 Unlocked'}
             </button>
+            )}
           </div>
         )}
 
@@ -1262,6 +1395,10 @@ function ChatPageInner() {
                               <button
                                 onClick={async () => {
                                   if (!groupName.trim() || groupMembers.length === 0) return;
+                                  if (!hasCapability(user, 'sendChat', userCompany)) {
+                                    setToastMsg('You do not have permission to create group chats.');
+                                    return;
+                                  }
                                   setGroupType(profileType as ThreadType);
                                   const db = getFirestoreDb();
                                   if (!db) return;
@@ -1271,27 +1408,32 @@ function ChatPageInner() {
                                   groupMembers.forEach((m) => { participantNames[`driver:${m.hash}`] = m.name; });
                                   const now = serverTimestamp();
                                   const systemText = `${senderName} created "${groupName.trim()}" with ${groupMembers.map((m) => m.name.split(' ')[0]).join(', ')}`;
-                                  const threadRef = await addDoc(collection(db, 'chat_threads'), {
-                                    type: profileType,
-                                    companyId: companyId || '',
-                                    title: groupName.trim(),
-                                    participants,
-                                    participantNames,
-                                    broadcast: groupBroadcast,
-                                    status: 'active',
-                                    createdAt: now,
-                                    updatedAt: now,
-                                    lastRead: {},
-                                    lastMessage: { text: systemText, senderId: 'system', senderName: 'System', timestamp: now, type: 'system' },
-                                  });
-                                  await addDoc(collection(db, 'chat_threads', threadRef.id, 'messages'), {
-                                    text: systemText, senderId: 'system', senderName: 'System', timestamp: now, type: 'system',
-                                  });
-                                  assignSlot(index, { threadId: threadRef.id, threadTitle: groupName.trim() });
+                                  try {
+                                    const threadRef = await addDoc(collection(db, 'chat_threads'), {
+                                      type: profileType,
+                                      companyId: companyId || '',
+                                      title: groupName.trim(),
+                                      participants,
+                                      participantNames,
+                                      broadcast: groupBroadcast,
+                                      status: 'active',
+                                      createdAt: now,
+                                      updatedAt: now,
+                                      lastRead: {},
+                                      lastMessage: { text: systemText, senderId: 'system', senderName: 'System', timestamp: now, type: 'system' },
+                                    });
+                                    await addDoc(collection(db, 'chat_threads', threadRef.id, 'messages'), {
+                                      text: systemText, senderId: 'system', senderName: 'System', timestamp: now, type: 'system',
+                                    });
+                                    assignSlot(index, { threadId: threadRef.id, threadTitle: groupName.trim() });
+                                  } catch (err) {
+                                    console.error('[ChatPage] inline createGroup failed', err);
+                                    setToastMsg('Could not create group chat. Check your access.');
+                                  }
                                 }}
-                                disabled={!groupName.trim() || groupMembers.length === 0}
+                                disabled={!groupName.trim() || groupMembers.length === 0 || !canSendChat}
                                 className={`flex-1 py-1 rounded text-xs font-semibold ${
-                                  groupName.trim() && groupMembers.length > 0 ? 'bg-[#FFD700] text-black' : 'bg-gray-800 text-gray-600'
+                                  groupName.trim() && groupMembers.length > 0 && canSendChat ? 'bg-[#FFD700] text-black' : 'bg-gray-800 text-gray-600'
                                 }`}
                               >
                                 Create + Assign ({groupMembers.length})
@@ -1404,6 +1546,10 @@ function ChatPageInner() {
                     };
                     return (
                       <>
+                        {/* Locking/unlocking a slot persists shared profile config
+                            (chat_monitors) — gate on manageCompany. removeTemp is
+                            local-only state, so it stays available to anyone. */}
+                        {canManageProfiles && (
                         <button
                           onClick={isTemp ? lockSlot : unlockSlot}
                           className={`text-xs px-1 py-0.5 rounded transition-colors ${
@@ -1413,6 +1559,7 @@ function ChatPageInner() {
                         >
                           {isTemp ? '🔓' : '🔒'}
                         </button>
+                        )}
                         {isTemp && (
                           <button
                             onClick={removeTemp}
@@ -1425,7 +1572,7 @@ function ChatPageInner() {
                       </>
                     );
                   })()}
-                  {thread && thread.type !== 'direct' && (
+                  {thread && thread.type !== 'direct' && canSendChat && (
                     <button
                       onClick={() => { setManagingThreadId(managingThreadId === threadId ? null : threadId); loadDrivers(); }}
                       className={`text-xs px-1.5 py-0.5 rounded transition-colors ${
@@ -1436,12 +1583,21 @@ function ChatPageInner() {
                       {thread.participants?.length || 0}
                     </button>
                   )}
-                  {thread && thread.type !== 'direct' && (
+                  {thread && thread.type !== 'direct' && canSendChat && (
                     <button
                       onClick={async () => {
+                        if (!hasCapability(user, 'sendChat', userCompany)) {
+                          setToastMsg('You do not have permission to change broadcast.');
+                          return;
+                        }
                         const db = getFirestoreDb();
                         if (!db) return;
-                        await updateDoc(doc(db, 'chat_threads', threadId), { broadcast: !(thread as any).broadcast });
+                        try {
+                          await updateDoc(doc(db, 'chat_threads', threadId), { broadcast: !(thread as any).broadcast });
+                        } catch (err) {
+                          console.error('[ChatPage] broadcast toggle failed', err);
+                          setToastMsg('Could not change broadcast. Check your access.');
+                        }
                       }}
                       className={`text-xs px-1 py-0.5 rounded transition-colors ${
                         (thread as any).broadcast ? 'text-[#FFD700] bg-[#FFD700]/10' : 'text-gray-600 hover:text-gray-400'
@@ -1474,12 +1630,21 @@ function ChatPageInner() {
                           {name.split(' ')[0]}
                           <button
                             onClick={async () => {
+                              if (!hasCapability(user, 'sendChat', userCompany)) {
+                                setToastMsg('You do not have permission to edit members.');
+                                return;
+                              }
                               const db = getFirestoreDb();
                               if (!db) return;
                               const newParticipants = (thread.participants || []).filter((p: string) => p !== pid);
                               const newNames = { ...(thread.participantNames || {}) };
                               delete newNames[pid];
-                              await updateDoc(doc(db, 'chat_threads', threadId), { participants: newParticipants, participantNames: newNames });
+                              try {
+                                await updateDoc(doc(db, 'chat_threads', threadId), { participants: newParticipants, participantNames: newNames });
+                              } catch (err) {
+                                console.error('[ChatPage] remove member failed', err);
+                                setToastMsg('Could not remove member. Check your access.');
+                              }
                             }}
                             className="text-gray-600 hover:text-red-400"
                           >✕</button>
@@ -1493,14 +1658,23 @@ function ChatPageInner() {
                     onChange={async (e) => {
                       const d = drivers.find((dr) => dr.hash === e.target.value);
                       if (!d) return;
+                      if (!hasCapability(user, 'sendChat', userCompany)) {
+                        setToastMsg('You do not have permission to edit members.');
+                        return;
+                      }
                       const db = getFirestoreDb();
                       if (!db) return;
                       const pid = `driver:${d.hash}`;
                       if ((thread.participants || []).includes(pid)) return;
-                      await updateDoc(doc(db, 'chat_threads', threadId), {
-                        participants: [...(thread.participants || []), pid],
-                        [`participantNames.${pid}`]: d.name,
-                      });
+                      try {
+                        await updateDoc(doc(db, 'chat_threads', threadId), {
+                          participants: [...(thread.participants || []), pid],
+                          [`participantNames.${pid}`]: d.name,
+                        });
+                      } catch (err) {
+                        console.error('[ChatPage] add member failed', err);
+                        setToastMsg('Could not add member. Check your access.');
+                      }
                     }}
                   >
                     <option value="">+ Add driver...</option>
@@ -1562,10 +1736,11 @@ function ChatPageInner() {
                   <textarea
                     value={inputText}
                     onChange={(e) => setPaneInputs((prev) => ({ ...prev, [threadId]: e.target.value }))}
-                    onKeyDown={(e) => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); sendInPane(threadId); } }}
-                    placeholder="Shift+Enter for new line"
+                    onKeyDown={(e) => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); if (canSendChat) sendInPane(threadId); } }}
+                    placeholder={canSendChat ? 'Shift+Enter for new line' : 'You do not have permission to send messages'}
                     rows={1}
-                    className="flex-1 bg-[#1a1a1a] border border-gray-700 rounded-2xl px-3 py-1.5 text-sm text-white placeholder-gray-500 focus:outline-none focus:border-[#FFD700]/50 resize-none overflow-y-auto"
+                    disabled={!canSendChat}
+                    className="flex-1 bg-[#1a1a1a] border border-gray-700 rounded-2xl px-3 py-1.5 text-sm text-white placeholder-gray-500 focus:outline-none focus:border-[#FFD700]/50 resize-none overflow-y-auto disabled:opacity-50 disabled:cursor-not-allowed"
                     style={{ minHeight: '32px', maxHeight: '110px', fieldSizing: 'content' } as React.CSSProperties}
                   />
                   {inputText && (
@@ -1580,9 +1755,9 @@ function ChatPageInner() {
                 </div>
                 <button
                   onClick={() => sendInPane(threadId)}
-                  disabled={!inputText.trim()}
+                  disabled={!inputText.trim() || !canSendChat}
                   className={`w-7 h-7 rounded-full flex items-center justify-center transition-colors flex-shrink-0 ${
-                    inputText.trim() ? 'bg-[#FFD700] text-black' : 'bg-gray-700 text-gray-500'
+                    inputText.trim() && canSendChat ? 'bg-[#FFD700] text-black' : 'bg-gray-700 text-gray-500'
                   }`}
                 >
                   ➤
