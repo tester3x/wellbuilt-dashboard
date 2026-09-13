@@ -3,7 +3,7 @@
 import { useEffect, useState, useMemo, useCallback, Suspense } from 'react';
 import { useRouter, useSearchParams } from 'next/navigation';
 import { useAuth } from '@/contexts/AuthContext';
-import { WellResponse, subscribeToWellStatusesUnified, wellResponsesFromCatalog } from '@/lib/wells';
+import { WellResponse, subscribeToWellStatusesUnified, wellResponsesFromCatalog, mergeWellPool } from '@/lib/wells';
 import { getPriority, getWellPrediction, formatTTP, matchesView, wellBucket, classifyWell, inchesToLevel, formatAge, type QueueView } from '@/lib/dispatchPriority';
 // Z Fold recovery — layout helpers only (collapsed queue / stacked layout).
 // The realtime gate helpers from this module are intentionally NOT used:
@@ -13,7 +13,7 @@ import {
   wellQueueSearchActive,
   wellQueueUsesSearchHits,
 } from '@/lib/dispatchWellQueueLive';
-import { adminGetDashboardCatalog, classifiedReadFailure } from '@/lib/adminDashboardCatalog';
+import { adminGetDashboardCatalog, adminGetWellPool, classifiedReadFailure } from '@/lib/adminDashboardCatalog';
 import { canViewGlobalWellPool, docBelongsToTenant } from '@/lib/tenantScope';
 import { AppHeader } from '@/components/AppHeader';
 import { getFirestoreDb } from '@/lib/firebase';
@@ -264,9 +264,14 @@ function DispatchPageInner() {
   const [dataLoading, setDataLoading] = useState(true);
   const [driversLoading, setDriversLoading] = useState(true);
   const [readErrors, setReadErrors] = useState<{ drivers?: string; wells?: string; dispatches?: string }>({});
+  // True when the authoritative live-status read failed for the whole queue.
+  // A failed read is a QUEUE-LEVEL UNAVAILABLE state — never 80 individual
+  // Needs-Data classifications.
+  const [statusUnavailable, setStatusUnavailable] = useState(false);
   // Cold-start guard: do not show counts (which would falsely read 0 / all
-  // Needs-Data) until authentication resolved AND the first well load completed.
-  const queueReady = !loading && !dataLoading && wells.length > 0;
+  // Needs-Data) until authentication resolved, the first well load completed,
+  // and the authoritative status source is available.
+  const queueReady = !loading && !dataLoading && !statusUnavailable && wells.length > 0;
 
   // UI state
   const [search, setSearch] = useState('');
@@ -471,42 +476,74 @@ function DispatchPageInner() {
   // the global (Liquid Gold) pool with no tenancy dimension. Scoped
   // non-liquid-gold companies get an empty queue (see lib/tenantScope.ts).
   useEffect(() => {
-    if (!user) return;
+    // Wait for Firebase Auth persistence + token/claims to restore before
+    // subscribing — a cold hard-reload must not read against an unready token.
+    if (loading) return;
+    if (!user) { setDataLoading(false); return; }
     if (!canViewGlobalWellPool(user)) {
       setWells([]);
       setRoutes([]);
+      setStatusUnavailable(false);
       setDataLoading(false);
       return;
     }
     let cancelled = false;
-    const unsubscribe = subscribeToWellStatusesUnified((wellData, routeList) => {
+    let retried = false;
+    let unsubscribe = () => {};
+
+    const applyStatus = (wellData: WellResponse[], routeList: string[]) => {
       if (cancelled) return;
       setWells(wellData);
       setRoutes(routeList.filter(r => r !== 'Unrouted'));
+      setStatusUnavailable(false);
       setReadErrors(prev => ({ ...prev, wells: undefined }));
       setDataLoading(false);
-    }, async (err) => {
+    };
+
+    // Authoritative status via the GOVERNED callable. The direct-client RTDB
+    // packets/outgoing path requires driver/wellbuiltAdmin/staff CLAIMS that
+    // dashboard email users do not hold, so it is denied for them; adminGetWellPool
+    // is the authorized read and returns merged well status.
+    const loadGoverned = async () => {
       try {
-        const catalog = await adminGetDashboardCatalog();
+        const pool = await adminGetWellPool();
         if (cancelled) return;
-        const snapshot = wellResponsesFromCatalog((catalog.wellConfig || {}) as Record<string, unknown>);
-        setWells(snapshot);
-        setRoutes([...new Set(snapshot.map(w => w.route).filter((r): r is string => !!r && r !== 'Unrouted'))]);
-        setReadErrors(prev => ({ ...prev, wells: classifiedReadFailure('well queue live status', err) }));
-      } catch (catalogErr) {
+        const wellsData = mergeWellPool((pool.wellConfig || {}) as Record<string, unknown>, (pool.wellStatus || {}) as Record<string, unknown>);
+        const routeList = [...new Set(wellsData.map(w => w.route).filter((r): r is string => !!r))];
+        applyStatus(wellsData, routeList);
+      } catch (err) {
         if (cancelled) return;
+        // Persistent denial — surface honestly as a QUEUE-LEVEL UNAVAILABLE.
+        // Do NOT fabricate catalog-only wells (which would read as 80 Needs Data).
+        setStatusUnavailable(true);
         setWells([]);
         setRoutes([]);
-        setReadErrors(prev => ({ ...prev, wells: classifiedReadFailure('well queue', catalogErr) }));
-      } finally {
-        if (!cancelled) setDataLoading(false);
+        setReadErrors(prev => ({ ...prev, wells: classifiedReadFailure('well live status', err) }));
+        setDataLoading(false);
       }
-    }, { companyId: user.companyId || null });
+    };
+
+    const handleError = () => {
+      if (cancelled) return;
+      // Load authoritative governed status immediately (fast, correct data)…
+      loadGoverned();
+      // …and allow exactly ONE bounded resubscribe in case the RTDB denial was
+      // a genuinely transitional cold-start token race (realtime then resumes).
+      if (!retried) {
+        retried = true;
+        unsubscribe();
+        setTimeout(() => { if (!cancelled) unsubscribe = subscribe(); }, 2000);
+      }
+    };
+
+    const subscribe = () => subscribeToWellStatusesUnified(applyStatus, handleError, { companyId: user.companyId || null });
+    unsubscribe = subscribe();
+
     return () => {
       cancelled = true;
       unsubscribe();
     };
-  }, [user]);
+  }, [user, loading]);
 
   // Load drivers + disposals
   useEffect(() => {
@@ -2821,7 +2858,7 @@ function DispatchPageInner() {
                 >
                   {wellQueueExpanded ? 'Hide list' : 'Show list'}
                 </button>
-                <span className="text-gray-500 text-xs flex-shrink-0">{queueRows.length} wells</span>
+                <span className="text-gray-500 text-xs flex-shrink-0">{statusUnavailable ? 'status unavailable' : `${queueRows.length} wells`}</span>
               </div>
 
               {/* Selection indicator — shows in Well Queue header area */}
@@ -2841,13 +2878,18 @@ function DispatchPageInner() {
               <div className="overflow-x-auto">
                 {dataLoading ? (
                   <div className="text-gray-400 py-8 text-center">Loading well data...</div>
+                ) : statusUnavailable ? (
+                  <div className="py-8 text-center" role="alert">
+                    <div className="text-amber-400 font-medium">Live well status unavailable</div>
+                    <div className="text-gray-500 text-xs mt-1">{readErrors.wells || 'The authoritative status read failed — pull eligibility cannot be determined. Retrying…'}</div>
+                  </div>
                 ) : queueRows.length === 0 ? (
                   <div className="text-gray-400 py-8 text-center">{showingSearchHits ? 'No wells match search' : 'No wells match filters'}</div>
                 ) : (
                   <table className="w-full">
                     <thead className="bg-gray-700 sticky top-0 z-10">
                       <tr>
-                        <th className="px-2 py-2 text-left text-[11px] font-medium text-gray-300 w-14">Priority</th>
+                        <th className="px-2 py-2 text-left text-[11px] font-medium text-gray-300 w-24 min-w-[88px]">Priority</th>
                         <th className="px-2 py-2 text-left text-[11px] font-medium text-gray-300">Well</th>
                         <th className="px-2 py-2 text-left text-[11px] font-medium text-gray-300">Last Level</th>
                         <th className="px-2 py-2 text-left text-[11px] font-medium text-gray-300">Flow</th>
@@ -2868,7 +2910,7 @@ function DispatchPageInner() {
                         return (
                           <tr key={well.responseId || well.wellName} className={`hover:bg-gray-750 transition-colors ${priority.state === 'pull-now' ? 'bg-red-900/10' : ''} ${isSelected ? 'bg-blue-900/20' : ''}`}>
                             <td className="px-2 py-1.5">
-                              <span className={`px-1.5 py-0.5 text-[10px] font-bold rounded ${priority.color} ${priority.textColor}`}>{priority.label}</span>
+                              <span className={`inline-block whitespace-nowrap px-1.5 py-0.5 text-[10px] font-bold rounded ${priority.color} ${priority.textColor}`}>{priority.label}</span>
                             </td>
                             <td className="px-2 py-1.5">
                               <div className="text-white font-medium text-xs">{well.wellName}</div>

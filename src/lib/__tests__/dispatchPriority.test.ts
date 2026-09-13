@@ -110,3 +110,12 @@ test('inchesToLevel formats feet/inches', () => {
   assert.equal(inchesToLevel(15), "1'3\"");
   assert.equal(inchesToLevel(null), '--');
 });
+
+test('LIFECYCLE: a status-less catalog well classifies as VERIFY (justifies queue-level UNAVAILABLE, not fabricated needs-data)', () => {
+  // What a catalog-only fallback (no live status) would yield per-well:
+  const catalogOnly = w({ wellName: 'X', route: 'R' }); // no target, no level, no gain
+  const c = classifyWell(catalogOnly, NOW);
+  assert.equal(c.state, 'verify');
+  // The page must NOT fabricate 80 of these on a failed read — it shows a
+  // queue-level UNAVAILABLE instead (asserted structurally in controlContracts).
+});

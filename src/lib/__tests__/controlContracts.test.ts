@@ -444,7 +444,7 @@ test('Dispatch actionable queue is HEIGHT-FIRST (classifyWell) + honest Last Lev
   assert.match(page, />Last Level<\/th>/, 'Level column relabeled Last Level');
   assert.match(page, /const c = classifyWell\(well\)/, 'Level cell uses classifyWell');
   // cold-start guard: counts gated on readiness
-  assert.match(page, /const queueReady = !loading && !dataLoading && wells\.length > 0/, 'cold-auth count guard present');
+  assert.match(page, /const queueReady = !loading && !dataLoading && !statusUnavailable && wells\.length > 0/, 'cold-auth count guard present');
   assert.match(page, /queueReady \? viewCounts/, 'counts hidden until ready');
   // no time-first OVERDUE badge / priority-chip filter remains
   assert.ok(!/priorityFilter/.test(page), 'legacy time-first priority filter removed');
@@ -455,4 +455,33 @@ test('Dispatch actionable queue is HEIGHT-FIRST (classifyWell) + honest Last Lev
   for (const fn of ['classifyWell', 'wellBucket', 'matchesView', 'targetInches', 'hasValidPrediction', 'formatAge', 'inchesToLevel']) {
     assert.match(lib, new RegExp(`export function ${fn}`), `${fn} exported`);
   }
+});
+
+// ── Live-status lifecycle + failure semantics (fix/dashboard-livestatus-lifecycle) ─
+test('Dispatch live-status: governed source, cold-auth gate, honest UNAVAILABLE, bounded resubscribe', () => {
+  const page = read('../../app/dispatch/page.tsx');
+  // Authoritative status via the governed callable (RTDB packets/outgoing is
+  // claim-gated and denied for dashboard email users).
+  assert.match(page, /adminGetWellPool\(\)/, 'uses governed adminGetWellPool for status');
+  assert.match(page, /mergeWellPool\(/, 'merges governed well status');
+  // Cold-start: wait for auth before subscribing.
+  assert.match(page, /if \(loading\) return;/, 'subscription waits for auth readiness');
+  assert.match(page, /\}, \[user, loading\]\);/, 'effect depends on user + loading');
+  // Failure semantics: queue-level UNAVAILABLE, never fabricated needs-data.
+  assert.match(page, /const \[statusUnavailable, setStatusUnavailable\] = useState\(false\)/);
+  assert.match(page, /setStatusUnavailable\(true\)/, 'persistent denial → UNAVAILABLE');
+  assert.match(page, /Live well status unavailable/, 'honest unavailable message (not "No wells")');
+  assert.match(page, /!statusUnavailable/, 'counts gated on status availability');
+  // The old catalog-only fallback that produced 80 Needs Data must be gone.
+  assert.ok(!/wellResponsesFromCatalog\(\(catalog\.wellConfig/.test(page), 'no catalog-only fallback in the live-status onError');
+  // Deterministic cleanup + exactly one bounded resubscribe.
+  assert.match(page, /cancelled = true;\s*\n\s*unsubscribe\(\);/, 'deterministic listener cleanup');
+  assert.match(page, /if \(!retried\)/, 'exactly one bounded resubscribe for transitional failure');
+});
+
+test('Dispatch Priority badge stays one line (responsive)', () => {
+  const page = read('../../app/dispatch/page.tsx');
+  assert.match(page, />Priority<\/th>/);
+  assert.match(page, /min-w-\[88px\]/, 'Priority column has a minimum width');
+  assert.match(page, /inline-block whitespace-nowrap px-1\.5 py-0\.5 text-\[10px\] font-bold rounded \$\{priority\.color\}/, 'badge is one-line (whitespace-nowrap)');
 });
