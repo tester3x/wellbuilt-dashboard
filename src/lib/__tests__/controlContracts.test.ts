@@ -527,3 +527,33 @@ test('classifyWell emits reason codes (missing_target/missing_level/stale_level/
   assert.match(src, /reason: 'stale_level'/);
   assert.match(src, /reason: 'no_gain'/);
 });
+
+// ── CP3: detachable panes never leak customer data via the URL ────────────
+test('DetachablePane opens a same-origin BLANK window (no data in URL) and falls back to docked', () => {
+  const c = read('../../components/DetachablePane.tsx');
+  // window.open with an empty URL — the child is about:blank, so no customer
+  // data (well names, selections) is ever placed in a query string.
+  assert.match(c, /window\.open\(\s*''/, 'child window opened with an empty URL');
+  assert.ok(!/window\.open\([^)]*\?/.test(c), 'no query string passed to window.open');
+  // Popup blocked → do not lose the pane; revert to docked.
+  assert.match(c, /if \(!child\)/, 'guards a blocked/failed popup');
+  assert.match(c, /onDock\(\)/, 'blocked popup reattaches (docks)');
+  // Shared React subtree via a portal → selection stays wired to the Builder.
+  assert.match(c, /createPortal\(children, container\)/, 'portals the live subtree (shared state)');
+  assert.match(c, /copyStyles\(/, 'copies stylesheets into the child window');
+});
+
+test('Dispatch wires detachable Well Queue + Active Jobs with a persisted dock preference', () => {
+  const page = read('../../app/dispatch/page.tsx');
+  assert.match(page, /import \{ DetachablePane \} from '@\/components\/DetachablePane'/);
+  // Both panes are detachable.
+  assert.match(page, /title="Well Queue"/, 'Well Queue is detachable');
+  assert.match(page, /title="Active Jobs"/, 'Active Jobs is detachable');
+  // Dock preference persisted locally (per-viewer convenience, never customer data).
+  assert.match(page, /wb\.dispatch\.queueDetached/, 'queue dock preference key');
+  assert.match(page, /wb\.dispatch\.jobsDetached/, 'jobs dock preference key');
+  assert.match(page, /localStorage\.setItem\('wb\.dispatch\.queueDetached'/, 'persists queue dock preference');
+  // Pop Out / Reattach affordances present.
+  assert.match(page, /Pop Out/, 'Pop Out control present');
+  assert.match(page, /Reattach/, 'Reattach control present');
+});

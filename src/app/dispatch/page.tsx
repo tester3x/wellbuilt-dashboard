@@ -16,6 +16,7 @@ import {
 import { adminGetDashboardCatalog, adminGetWellPool, classifiedReadFailure } from '@/lib/adminDashboardCatalog';
 import { canViewGlobalWellPool, docBelongsToTenant } from '@/lib/tenantScope';
 import { AppHeader } from '@/components/AppHeader';
+import { DetachablePane } from '@/components/DetachablePane';
 import { getFirestoreDb } from '@/lib/firebase';
 import { AddPullModal } from '@/components/AddPullModal';
 import { collection, addDoc, getDocs, getDoc, setDoc, query, where, orderBy, Timestamp, doc, updateDoc, onSnapshot, deleteDoc } from 'firebase/firestore';
@@ -259,6 +260,25 @@ function DispatchPageInner() {
   // Data state
   const [wells, setWells] = useState<WellResponse[]>([]);
   const [routes, setRoutes] = useState<string[]>([]);
+  // Checkpoint 3: detachable panes. Dock preference is a per-viewer convenience
+  // persisted to localStorage (never customer data). Start docked on the server
+  // render, then restore the saved preference on the client (avoids SSR mismatch).
+  const [queueDetached, setQueueDetached] = useState(false);
+  const [jobsDetached, setJobsDetached] = useState(false);
+  useEffect(() => {
+    try {
+      setQueueDetached(localStorage.getItem('wb.dispatch.queueDetached') === '1');
+      setJobsDetached(localStorage.getItem('wb.dispatch.jobsDetached') === '1');
+    } catch { /* storage unavailable — stay docked */ }
+  }, []);
+  const dockQueue = useCallback((v: boolean) => {
+    setQueueDetached(v);
+    try { localStorage.setItem('wb.dispatch.queueDetached', v ? '1' : '0'); } catch { /* ignore */ }
+  }, []);
+  const dockJobs = useCallback((v: boolean) => {
+    setJobsDetached(v);
+    try { localStorage.setItem('wb.dispatch.jobsDetached', v ? '1' : '0'); } catch { /* ignore */ }
+  }, []);
   const [drivers, setDrivers] = useState<ApprovedDriver[]>([]);
   const [dispatches, setDispatches] = useState<DispatchJob[]>([]);
   const [dataLoading, setDataLoading] = useState(true);
@@ -2813,8 +2833,23 @@ function DispatchPageInner() {
               )}{/* end Projects tab */}
             </div>{/* end Tabbed Builder panel */}
 
-            {/* ═══════ Well Queue (fills remaining left half) ═══════ */}
+            {/* ═══════ Well Queue (right column; detachable — CP3) ═══════ */}
             <div className={`dispatch-queue bg-gray-800 rounded-lg border border-gray-700 flex flex-col${wellQueueExpanded ? ' is-expanded' : ''}${searchActive ? ' has-search' : ''}`}>
+            <DetachablePane
+              detached={queueDetached}
+              onDock={() => dockQueue(false)}
+              title="Well Queue"
+              mountClassName="detached-pane detached-pane-queue"
+              placeholder={
+                <div className="flex flex-1 min-h-0 items-center justify-center p-8 text-center">
+                  <div>
+                    <div className="text-gray-300 text-sm font-medium mb-1">Well Queue is in its own window</div>
+                    <div className="text-gray-500 text-xs mb-3">Selecting a well there still fills the Job Builder here.</div>
+                    <button onClick={() => dockQueue(false)} className="px-3 py-1.5 text-xs font-medium rounded bg-blue-600 hover:bg-blue-500 text-white">⧉ Reattach</button>
+                  </div>
+                </div>
+              }
+            >
               {/* Panel header with filters */}
               <div className="flex items-center gap-2 px-4 py-2.5 border-b border-gray-700 flex-shrink-0 flex-wrap">
                 <h3 className="text-sm font-semibold text-white flex-shrink-0">Well Queue</h3>
@@ -2853,6 +2888,12 @@ function DispatchPageInner() {
                   {routes.map(r => <option key={r} value={r}>{r}</option>)}
                 </select>
                 <span className="flex-1" />
+                <button
+                  type="button"
+                  onClick={() => dockQueue(!queueDetached)}
+                  title={queueDetached ? 'Return the Well Queue to the dashboard' : 'Open the Well Queue in its own window'}
+                  className="hidden xl:inline-flex items-center gap-1 px-2 py-1 text-[11px] font-medium rounded text-gray-300 bg-gray-900 border border-gray-700 hover:bg-gray-700 flex-shrink-0"
+                >{queueDetached ? '⧉ Reattach' : '⧉ Pop Out'}</button>
                 <button
                   type="button"
                   className="dispatch-queue-toggle"
@@ -3000,12 +3041,27 @@ function DispatchPageInner() {
                 )}
               </div>
               </div>
+            </DetachablePane>
             </div>
 
           {/* ═══════ Active Jobs / Projects — left column, below the builder
-                     (jobs-first on Fold/narrow via order) ═══════ */}
+                     (jobs-first on Fold/narrow via order); detachable — CP3 ═══════ */}
           <div className="dispatch-pane dispatch-pane-jobs">
             <div className="dispatch-jobs bg-gray-800 rounded-lg border border-gray-700 flex flex-col">
+            <DetachablePane
+              detached={jobsDetached}
+              onDock={() => dockJobs(false)}
+              title="Active Jobs"
+              mountClassName="detached-pane detached-pane-jobs"
+              placeholder={
+                <div className="flex flex-1 min-h-0 items-center justify-center p-8 text-center">
+                  <div>
+                    <div className="text-gray-300 text-sm font-medium mb-1">Active Jobs is in its own window</div>
+                    <button onClick={() => dockJobs(false)} className="mt-2 px-3 py-1.5 text-xs font-medium rounded bg-blue-600 hover:bg-blue-500 text-white">⧉ Reattach</button>
+                  </div>
+                </div>
+              }
+            >
               {/* Panel header with tabs */}
               <div className="flex items-center justify-between px-4 py-2.5 border-b border-gray-700 flex-shrink-0">
                 <div className="flex items-center gap-1">
@@ -3059,6 +3115,12 @@ function DispatchPageInner() {
                   </button>
                 </div>
                 <div className="flex items-center gap-1.5">
+                  <button
+                    type="button"
+                    onClick={() => dockJobs(!jobsDetached)}
+                    title={jobsDetached ? 'Return Active Jobs to the dashboard' : 'Open Active Jobs in its own window'}
+                    className="hidden xl:inline-flex items-center gap-1 px-2 py-1 text-[11px] font-medium rounded text-gray-300 bg-gray-900 border border-gray-700 hover:bg-gray-700 flex-shrink-0"
+                  >{jobsDetached ? '⧉ Reattach' : '⧉ Pop Out'}</button>
                   {rightPanelTab === 'jobs' && (
                     <>
                       {(() => { const pw = dispatches.filter(d => d.jobType === 'pw' && d.status !== 'completed'); const pwLoads = pw.reduce((s, d) => s + ((d as any).loadCount || 1), 0); return pwLoads > 0 ? (
@@ -3164,6 +3226,7 @@ function DispatchPageInner() {
                   />
                 )}
               </div>
+            </DetachablePane>
             </div>
           </div>
         </div>

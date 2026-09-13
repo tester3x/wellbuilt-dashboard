@@ -188,3 +188,34 @@ body {
 @container wellqueue (max-width: 620px) {
   .dispatch-queue-col-pulls { display: none; }
 }
+
+/* ── Checkpoint 3: detached pane windows ─────────────────────────────────
+   The Well Queue / Active Jobs subtree is portaled into a same-origin child
+   window; this mount fills that window and owns its own scroll, independent of
+   the main viewport's media queries. A narrow (portrait) popout auto-condenses
+   its columns via the same @container rule above. */
+.detached-pane {
+  display: flex;
+  flex-direction: column;
+  height: 100vh;
+  min-height: 0;
+  background: #111827;
+  color: #e5e7eb;
+}
+.detached-pane-queue {
+  container-type: inline-size;
+  container-name: wellqueue;
+}
+.detached-pane-queue .dispatch-queue-body {
+  display: block;
+  flex: 1 1 0%;
+  min-height: 0;
+  overflow-y: auto;
+  overscroll-behavior-y: contain;
+}
+.detached-pane-jobs .dispatch-jobs-body {
+  flex: 1 1 0%;
+  min-height: 0;
+  overflow-y: auto;
+  overscroll-behavior-y: contain;
+}
