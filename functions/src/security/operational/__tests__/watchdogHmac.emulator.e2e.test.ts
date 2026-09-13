@@ -106,6 +106,13 @@ describeE2E('WATCHDOG BRIDGE: End-to-End HMAC Emulator Acceptance', () => {
     });
   });
 
+  afterAll(async () => {
+    if (db) {
+      db.goOffline();
+    }
+    await Promise.all(admin.apps.map((app) => app?.delete()));
+  });
+
   beforeEach(async () => {
     await db.ref('packets/incoming').remove();
     await db.ref('packets/processed').remove();
