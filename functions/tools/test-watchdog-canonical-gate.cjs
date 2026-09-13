@@ -23,7 +23,7 @@ async function read(path) {
  const results=[];
  for(const e of events){
   const packet={packetId:e.packetId,idempotencyKey:e.packetId,requestType:'pull',wellName:'Kahuna 5',dateTimeUTC:e.dateTimeUTC,
-   timezone:'America/Chicago',tankLevelFeet:e.top,bblsTaken:e.bbl,companyId:'liquid-gold',source:'whatsapp_watchdog'};
+   timezone:'America/Chicago',tankLevelFeet:e.top,bottomLevelFeet:e.bottom,bottom:e.bottom,bblsTaken:e.bbl,companyId:'liquid-gold',source:'whatsapp_watchdog'};
   const ref=db.ref('packets/incoming/'+e.packetId); await ref.set(packet);
   let error=null;
   let timer;
@@ -44,7 +44,7 @@ async function read(path) {
  for(const collection of ['tickets','invoices','payroll','billing','billing_invoices','dispatches','jsa_day_status']) {
   assert.equal((await admin.firestore().collection(collection).get()).size,0,collection+' must remain empty');
  }
- console.log(JSON.stringify({processorChanged:false,eventsAttempted:results.length,results,commercialAndJsaCollectionsEmpty:true,productionWrites:0},null,2));
+ console.log(JSON.stringify({processorChanged:true,eventsAttempted:results.length,results,commercialAndJsaCollectionsEmpty:true,productionWrites:0},null,2));
  // This is a diagnostic gate, not a passing acceptance suite.
  process.exitCode=results.length===2 && results.every(r=>!r.error&&r.canonicalProcessingComplete&&Math.abs(r.currentWellLevelInches-r.expectedBottomInches)<1e-8)?0:2;
  process.exit(process.exitCode || 0);

@@ -408,7 +408,7 @@ interface WellStatus {
     bottomLevel: string;  // "5'2\"" format
     bottomLevelInches: number;
     bblsTaken: number;
-    driverName?: string;
+    driverName?: string | null;
     packetId: string;
   };
   calculated: {
@@ -1078,7 +1078,19 @@ export const processIncomingPull = functionsV1.database
     }
 
     const bblsInInches = data.bblsTaken > 0 ? (data.bblsTaken / 20 / tanks) * 12 : 0;
-    const tankAfterInches = tankTopInches - bblsInInches;
+    const isWatchdog = (data as any).source === 'whatsapp_watchdog' || (data as any).source === 'watchdog';
+    const reportedBottomFeet =
+      typeof (data as any).bottomLevelFeet === 'number' && Number.isFinite((data as any).bottomLevelFeet)
+        ? (data as any).bottomLevelFeet
+        : typeof (data as any).bottom === 'number' && Number.isFinite((data as any).bottom)
+        ? (data as any).bottom
+        : typeof (data as any).tankAfterFeet === 'number' && Number.isFinite((data as any).tankAfterFeet)
+        ? (data as any).tankAfterFeet
+        : null;
+    const tankAfterInches =
+      isWatchdog && reportedBottomFeet !== null
+        ? Math.round(reportedBottomFeet * 12 * 1000) / 1000
+        : tankTopInches - bblsInInches;
 
     // Time Dif
     let timeDifDays = 0;
@@ -1290,7 +1302,7 @@ export const processIncomingPull = functionsV1.database
         bottomLevel: inchesToFeetInches(tankAfterInches),
         bottomLevelInches: tankAfterInches,
         bblsTaken: data.bblsTaken,
-        driverName: data.driverName,
+        driverName: data.driverName || null,
         packetId,
       },
       calculated: {
@@ -1350,7 +1362,7 @@ export const processIncomingPull = functionsV1.database
     // below (canonical_jobs / Firestore back-patch) is best-effort and advisory.
     await db.ref(`packets/processed/${packetId}`).update({
       canonicalProcessingComplete: true,
-      canonicalProcessingCompletedAt: admin.database.ServerValue.TIMESTAMP,
+      canonicalProcessingCompletedAt: (admin.database as any)?.ServerValue?.TIMESTAMP || { '.sv': 'timestamp' },
     });
     // Signal only after current-state projection actually reconciled. A delayed
     // older pull that lost high-water must not overwrite a newer well signal.
@@ -4994,3 +5006,7 @@ export { scheduledWellCatalogRefresh, triggerWellCatalogRefresh } from './wellCa
 // with the client producer via functions:dashboard:recordWellEvent /
 // functions:dashboard:voidWellEvent.
 export { recordWellEvent, voidWellEvent } from './wellEvents';
+
+// ── Watchdog HTTPS HMAC Endpoints ──────────────────────────────────────────
+export { ingestWatchdogPull, getWatchdogPullReceipt } from './security/watchdogHmacEndpoints';
+
