@@ -4,7 +4,7 @@ import { useEffect, useState, useMemo, useCallback, Suspense } from 'react';
 import { useRouter, useSearchParams } from 'next/navigation';
 import { useAuth } from '@/contexts/AuthContext';
 import { WellResponse, mergeWellPool } from '@/lib/wells';
-import { getPriority, getWellPrediction, formatTTP, matchesView, wellBucket, classifyWell, inchesToLevel, formatAge, type QueueView } from '@/lib/dispatchPriority';
+import { getPriority, getWellPrediction, formatTTP, matchesView, wellBucket, classifyWell, inchesToLevel, formatAge, verifyReasonText, type QueueView } from '@/lib/dispatchPriority';
 // Z Fold recovery — layout helpers only (collapsed queue / stacked layout).
 // Live status is read via the governed adminGetWellPool callable (see effect
 // below); the direct-client RTDB status path is claim-gated and not attempted.
@@ -3019,13 +3019,28 @@ function DispatchPageInner() {
                                       className="w-10 px-1 py-0.5 bg-gray-900 border border-blue-600 rounded text-white text-[10px] text-center focus:outline-none" />
                                   </div>
                                 ) : (
-                                  <button onClick={() => openAssignModal(well)}
+                                  <button
+                                    onClick={() => {
+                                      if (assignOverride) {
+                                        // Manual override: this well has no pull prediction. Explain the
+                                        // exact verification reason and require confirmation before assigning.
+                                        const reason = verifyReasonText(priority.reason);
+                                        const ok = window.confirm(
+                                          `${well.wellName} is not confirmed ready to pull — ${reason}.\n\n` +
+                                          `The queue can't verify this well needs a pull right now. Assign a driver anyway?`
+                                        );
+                                        if (!ok) return;
+                                      }
+                                      openAssignModal(well);
+                                    }}
                                     disabled={selectedWells.size > 0 || assignBlocked}
-                                    title={assignBlocked ? 'Well is DOWN — not dispatchable' : assignOverride ? `No pull prediction (${priority.label}) — manual override dispatch` : undefined}
-                                    className={`px-2 py-1 text-white text-[10px] font-medium rounded transition-colors ${
+                                    title={assignBlocked
+                                      ? 'Well is DOWN — not dispatchable'
+                                      : assignOverride ? `${priority.label}: ${verifyReasonText(priority.reason)} — manual override (confirmation required)` : undefined}
+                                    className={`px-2 py-1 text-white text-[10px] font-medium rounded transition-colors whitespace-nowrap ${
                                       selectedWells.size > 0 || assignBlocked ? 'bg-gray-600 cursor-not-allowed opacity-50'
                                         : assignOverride ? 'bg-amber-700 hover:bg-amber-600 ring-1 ring-amber-400/60'
-                                        : 'bg-blue-600 hover:bg-blue-500'}`}>{assignOverride ? 'Assign*' : 'Assign'}</button>
+                                        : 'bg-blue-600 hover:bg-blue-500'}`}>{assignOverride ? 'Assign anyway' : 'Assign'}</button>
                                 )}
                                 <input type="checkbox" checked={isSelected}
                                   disabled={!!assignTarget || assignBlocked}

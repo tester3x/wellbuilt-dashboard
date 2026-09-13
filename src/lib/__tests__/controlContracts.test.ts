@@ -510,13 +510,25 @@ test('Well-pool merge carries the height-first classifier inputs (target/level/g
 });
 
 // ── Assign gating agrees with the documented eligibility policy ───────────
-test('Row Assign gating: DOWN not dispatchable; NEEDS DATA / NO GAIN are visible manual overrides', () => {
+test('Row Assign gating: DOWN not dispatchable; NEEDS DATA / NO GAIN require an explained "Assign anyway" confirmation', () => {
   const page = read('../../app/dispatch/page.tsx');
   assert.match(page, /const assignBlocked = priority\.state === 'down';/, 'DOWN blocks assignment');
   assert.match(page, /const assignOverride = priority\.state === 'verify' \|\| priority\.state === 'no-gain';/, 'verify/no-gain are overrides');
   assert.match(page, /disabled=\{selectedWells\.size > 0 \|\| assignBlocked\}/, 'Assign button disabled for DOWN');
-  assert.match(page, /assignOverride \? 'Assign\*' : 'Assign'/, 'override assign is visibly distinct');
-  assert.match(page, /manual override dispatch/, 'override carries an explanatory title');
+  // Understandable override treatment — not a bare "Assign*".
+  assert.match(page, /assignOverride \? 'Assign anyway' : 'Assign'/, 'override reads "Assign anyway"');
+  assert.ok(!/'Assign\*'/.test(page), 'no bare Assign* label remains');
+  // The exact verification reason is surfaced, and assignment requires confirmation.
+  assert.match(page, /verifyReasonText\(priority\.reason\)/, 'shows the exact verification reason');
+  assert.match(page, /window\.confirm\(/, 'override assignment requires confirmation');
+});
+
+test('verifyReasonText maps every classifier reason code to human text', () => {
+  const src = read('../../lib/dispatchPriority.ts');
+  assert.match(src, /export function verifyReasonText/);
+  for (const code of ['missing_target', 'missing_level', 'stale_level', 'no_gain']) {
+    assert.match(src, new RegExp(`case '${code}':`), `${code} has explanatory text`);
+  }
 });
 
 // ── Classifier exposes reason codes for the genuinely-incomplete states ───

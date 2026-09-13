@@ -294,6 +294,17 @@ export function classifyWell(well: WellResponse, nowMs: number = Date.now(), opt
   return withCommon({ state: 'no-gain', label: 'NO GAIN', color: 'bg-gray-500', textColor: 'text-white', sortOrder: 40, estInches: lastIn, remainingInches: remaining, reason: 'no_gain' });
 }
 
+/** Human-readable explanation for a verify/no-gain classification reason code. */
+export function verifyReasonText(reason: string | undefined): string {
+  switch (reason) {
+    case 'missing_target': return 'no configured pull-height target';
+    case 'missing_level': return 'no recent level reading';
+    case 'stale_level': return 'level reading is stale (older than the 48h trust window)';
+    case 'no_gain': return 'below target and not filling (no positive gain)';
+    default: return 'no pull prediction available';
+  }
+}
+
 export function matchesView(well: WellResponse, view: QueueView, nowMs: number = Date.now(), opts: ClassifyOpts = {}): boolean {
   const c = classifyWell(well, nowMs, opts);
   if (c.state === 'down') return false;
