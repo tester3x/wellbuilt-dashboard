@@ -89,11 +89,19 @@ export function DetachablePane({
     child.document.body.appendChild(mount);
     setContainer(mount);
 
+    // Close detection: `beforeunload`/`pagehide` on a popup are unreliable (they
+    // do not fire on a programmatic close and are flaky on user close), which
+    // would strand the pane in the popped-out placeholder forever. Poll
+    // `child.closed` — the only cross-browser-reliable signal — and reattach.
     const reattach = () => onDock();
-    child.addEventListener('beforeunload', reattach);
+    child.addEventListener('pagehide', reattach); // best-effort, fast path
+    const poll = window.setInterval(() => {
+      if (child.closed) onDock();
+    }, 400);
 
     return () => {
-      child.removeEventListener('beforeunload', reattach);
+      window.clearInterval(poll);
+      child.removeEventListener('pagehide', reattach);
       stopCopy();
       setContainer(null);
       try { child.close(); } catch { /* already closed */ }
