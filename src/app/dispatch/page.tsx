@@ -22,8 +22,9 @@ import { loadDisposals, searchDisposals, type NdicWell, loadOperators, searchOpe
 import { calculateDriverETAs, applyDeadline, type DriverEtaResult } from '@/lib/driverEta';
 import { loadCompanyById } from '@/lib/companySettings';
 import { trackJobTypeUsage } from '@/lib/jobTypeUsage';
-import { dismissDispatch } from '@/lib/dismissDispatch';
-import { staffCancelDispatch, staffCreateDispatch, staffUpdateDispatch } from '@/lib/staffWriteDispatch';
+import { dismissDispatch as _dismissDispatch } from '@/lib/dismissDispatch';
+import { staffCancelDispatch as _staffCancelDispatch, staffCreateDispatch as _staffCreateDispatch, staffUpdateDispatch as _staffUpdateDispatch } from '@/lib/staffWriteDispatch';
+import { hasCapability } from '@/lib/auth';
 import {
   filterTicketsForCompany,
   invoiceBelongsToCompany,
@@ -350,6 +351,35 @@ function timeAgo(ts: any): string {
 function DispatchPageInner() {
   const { user, loading } = useAuth();
   const router = useRouter();
+
+  // Capability gate for ALL dispatch mutations. The Dispatch tab is visible to
+  // any role with `viewDispatch` (e.g. `viewer`), but only `createDispatch`
+  // roles may write. Rather than gate dozens of scattered buttons, every
+  // mutation is funneled through these guarded wrappers: a view-only user gets
+  // a clear message and the callable is never invoked. The server enforces the
+  // same rule; this removes the misleading always-failing buttons in the UI.
+  const canCreateDispatch = hasCapability(user, 'createDispatch');
+  const DISPATCH_VIEW_ONLY_MSG =
+    'You have view-only dispatch access — ask an admin for dispatch permissions to make changes.';
+  const ensureCanCreateDispatch = () => {
+    if (!canCreateDispatch) throw new Error(DISPATCH_VIEW_ONLY_MSG);
+  };
+  const staffCreateDispatch = (record: Record<string, unknown>) => {
+    ensureCanCreateDispatch();
+    return _staffCreateDispatch(record);
+  };
+  const staffUpdateDispatch = (dispatchId: string, record: Record<string, unknown>) => {
+    ensureCanCreateDispatch();
+    return _staffUpdateDispatch(dispatchId, record);
+  };
+  const staffCancelDispatch = (dispatchId: string) => {
+    ensureCanCreateDispatch();
+    return _staffCancelDispatch(dispatchId);
+  };
+  const dismissDispatch = (dispatchId: string) => {
+    ensureCanCreateDispatch();
+    return _dismissDispatch(dispatchId);
+  };
 
   // Data state
   const [wells, setWells] = useState<WellResponse[]>([]);
@@ -3131,6 +3161,7 @@ function DispatchPageInner() {
                     highlightJobId={highlightJobId}
                     onHighlightClear={() => setHighlightJobId(null)}
                     authenticatedCompanyId={user?.companyId || null}
+                    updateCompletedJob={staffUpdateDispatch}
                   />
                 )}
                 {rightPanelTab === 'projects' && !selectedProject && (
@@ -4299,7 +4330,7 @@ function ActiveDispatchPanel({ dispatches, cancelDispatch, drivers, assignTransf
 
 // ─── Completed Jobs Panel (own tab) ──────────────────────────────────────────
 
-function CompletedJobsPanel({ jobs, drivers, allWells, allDisposals, highlightJobId, onHighlightClear, authenticatedCompanyId }: {
+function CompletedJobsPanel({ jobs, drivers, allWells, allDisposals, highlightJobId, onHighlightClear, authenticatedCompanyId, updateCompletedJob }: {
   jobs: DispatchJob[];
   drivers?: { key: string; displayName: string; legalName?: string }[];
   allWells?: NdicWell[];
@@ -4307,6 +4338,8 @@ function CompletedJobsPanel({ jobs, drivers, allWells, allDisposals, highlightJo
   highlightJobId?: string | null;
   onHighlightClear?: () => void;
   authenticatedCompanyId?: string | null;
+  // Capability-guarded update supplied by the parent (blocks view-only users).
+  updateCompletedJob: (dispatchId: string, record: Record<string, unknown>) => Promise<void>;
 }) {
   const [driverFilter, setDriverFilter] = useState<string>('all');
   const [searchQuery, setSearchQuery] = useState('');
@@ -4442,7 +4475,7 @@ function CompletedJobsPanel({ jobs, drivers, allWells, allDisposals, highlightJo
       if (editForm.notes !== undefined) updates.notes = editForm.notes;
       if (editForm.operator !== undefined) updates.operator = editForm.operator;
       if (editForm.invoiceNumber !== undefined) updates.invoiceNumber = editForm.invoiceNumber;
-      await staffUpdateDispatch(jobId, updates);
+      await updateCompletedJob(jobId, updates);
       setEditingJobId(null);
     } catch (err: unknown) {
       console.error('Failed to save completed job edit:', err);

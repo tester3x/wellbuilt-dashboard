@@ -97,8 +97,26 @@ test('BASELINE: governed pull edit wired to adminSubmitPullEdit; no client packe
   assert.ok(!/set\s*\(\s*ref\s*\(/.test(wrap) && !/packets\/incoming\/\$\{/.test(wrap), 'pullEdit must not direct-write packets/incoming');
 });
 
-test('BASELINE: governed pull delete wired to staffDeletePull', () => {
-  assert.match(read('../pullDelete.ts'), /httpsCallable\([^,]+,\s*'staffDeletePull'\)/);
+test('BASELINE: governed pull delete wired to staffDeletePull (via core constant)', () => {
+  assert.match(read('../pullDeleteCore.ts'), /DELETE_PULL_CALLABLE\s*=\s*'staffDeletePull'/);
+  assert.match(read('../pullDelete.ts'), /DELETE_PULL_CALLABLE/, 'wrapper uses the core constant');
+  // no direct-database fallback in the wrapper
+  assert.ok(!/set\s*\(\s*ref\s*\(/.test(read('../pullDelete.ts')), 'pullDelete must not direct-write RTDB');
+});
+
+test('Phase-2 adapter cores target DEPLOYED callables (delete/dispatch/dismiss)', () => {
+  const grab = (rel: string, re: RegExp): string => {
+    const m = re.exec(read(rel));
+    assert.ok(m, `${rel} must declare its callable constant`);
+    return m![1];
+  };
+  const names = [
+    grab('../pullDeleteCore.ts', /DELETE_PULL_CALLABLE\s*=\s*'([^']+)'/),
+    grab('../staffWriteDispatchCore.ts', /STAFF_WRITE_DISPATCH_CALLABLE\s*=\s*'([^']+)'/),
+    grab('../dismissDispatchCore.ts', /DISMISS_DISPATCH_CALLABLE\s*=\s*'([^']+)'/),
+  ];
+  assert.deepEqual(names, ['staffDeletePull', 'staffWriteDispatch', 'dismissDispatch']);
+  for (const n of names) assert.ok(deployedSet.has(n), `${n} must be in the deployed inventory`);
 });
 
 test('BASELINE: Photo Review approve wired to reviewDispatchPhoto; tab present', () => {
