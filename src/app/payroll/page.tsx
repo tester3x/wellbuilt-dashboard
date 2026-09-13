@@ -3,6 +3,7 @@
 import { useEffect, useState, useMemo } from 'react';
 import { useRouter } from 'next/navigation';
 import { useAuth } from '@/contexts/AuthContext';
+import { hasCapability } from '@/lib/auth';
 import { docBelongsToTenant } from '@/lib/tenantScope';
 import { AppHeader } from '@/components/AppHeader';
 import {
@@ -295,7 +296,11 @@ function getStatusBadge(status: TimesheetStatus) {
 // ─── Main Page ───────────────────────────────────────────────────────────────
 
 export default function PayrollPage() {
-  const { user, loading } = useAuth();
+  const { user, loading, userCompany } = useAuth();
+  // Payroll money mutations (deductions/bonuses) require approvePayroll. These
+  // write directly to Firestore (deductions/additions); the deployed rules do
+  // not enforce capability, so this UI gate is the client-side containment.
+  const canApprovePayroll = hasCapability(user, 'approvePayroll', userCompany);
   const router = useRouter();
 
   // State
@@ -480,10 +485,12 @@ export default function PayrollPage() {
   };
 
   const handleSaveDeduction = async () => {
+    if (!canApprovePayroll) return;
     const reason = dedReason === 'Other' ? dedCustomReason.trim() : dedReason;
     if (!dedDriver || !reason || !dedAmount) return;
 
     setDedSaving(true);
+    setError(null);
     try {
       const amount = parseFloat(dedAmount);
       const totalOwed = dedType === 'recurring' ? parseFloat(dedTotal) || amount : amount;
@@ -508,18 +515,21 @@ export default function PayrollPage() {
       await loadDeductions();
     } catch (err) {
       console.error('Failed to save deduction:', err);
+      setError(err instanceof Error ? err.message : 'Failed to save deduction — it was not applied.');
     } finally {
       setDedSaving(false);
     }
   };
 
   const handleRemoveDeduction = async (id: string) => {
+    if (!canApprovePayroll) return;
     if (!confirm('Remove this deduction?')) return;
     try {
       await deactivateDeduction(id);
       await loadDeductions();
     } catch (err) {
       console.error('Failed to remove deduction:', err);
+      setError(err instanceof Error ? err.message : 'Failed to remove deduction.');
     }
   };
 
@@ -544,10 +554,12 @@ export default function PayrollPage() {
   };
 
   const handleSaveAddition = async () => {
+    if (!canApprovePayroll) return;
     const reason = addReason === 'Other' ? addCustomReason.trim() : addReason;
     if (!addDriver || !reason || !addAmount) return;
 
     setAddSaving(true);
+    setError(null);
     try {
       const amount = parseFloat(addAmount);
       const totalOwed = addType === 'recurring' ? parseFloat(addTotal) || amount : amount;
@@ -572,18 +584,21 @@ export default function PayrollPage() {
       await loadAdditions();
     } catch (err) {
       console.error('Failed to save addition:', err);
+      setError(err instanceof Error ? err.message : 'Failed to save bonus/reimbursement — it was not applied.');
     } finally {
       setAddSaving(false);
     }
   };
 
   const handleRemoveAddition = async (id: string) => {
+    if (!canApprovePayroll) return;
     if (!confirm('Remove this bonus/reimbursement?')) return;
     try {
       await deactivateAddition(id);
       await loadAdditions();
     } catch (err) {
       console.error('Failed to remove addition:', err);
+      setError(err instanceof Error ? err.message : 'Failed to remove bonus/reimbursement.');
     }
   };
 
@@ -710,16 +725,19 @@ export default function PayrollPage() {
               ))}
             </select>
 
-            {/* Bulk Actions */}
+            {/* Bulk Actions — not yet implemented; disabled so they don't
+                present as working (was: empty TODO onClick = silent no-op). */}
             <button
-              onClick={() => {/* TODO: Send all timesheets to drivers */}}
-              className="bg-blue-600 hover:bg-blue-700 text-white px-4 py-2 rounded-lg text-sm font-medium transition-colors"
+              disabled
+              title="Not yet available"
+              className="bg-blue-600/40 text-white/60 px-4 py-2 rounded-lg text-sm font-medium cursor-not-allowed"
             >
               Send All
             </button>
             <button
-              onClick={() => {/* TODO: Lock pay period */}}
-              className="bg-gray-700 hover:bg-gray-600 text-white px-4 py-2 rounded-lg text-sm font-medium transition-colors"
+              disabled
+              title="Not yet available"
+              className="bg-gray-700/50 text-white/60 px-4 py-2 rounded-lg text-sm font-medium cursor-not-allowed"
             >
               Lock Period
             </button>
@@ -884,12 +902,14 @@ export default function PayrollPage() {
           <div className="mt-6 bg-gray-800 rounded-lg border border-gray-700 overflow-hidden">
             <div className="flex items-center justify-between px-4 py-3 border-b border-gray-700">
               <h3 className="text-white font-medium">Active Deductions</h3>
+              {canApprovePayroll && (
               <button
                 onClick={() => openAddDeduction()}
                 className="bg-red-600 hover:bg-red-500 text-white px-3 py-1.5 rounded text-xs font-medium"
               >
                 + Add Deduction
               </button>
+              )}
             </div>
 
             {deductions.length === 0 ? (
@@ -977,12 +997,14 @@ export default function PayrollPage() {
           <div className="mt-6 bg-gray-800 rounded-lg border border-gray-700 overflow-hidden">
             <div className="flex items-center justify-between px-4 py-3 border-b border-gray-700">
               <h3 className="text-white font-medium">Active Bonuses &amp; Reimbursements</h3>
+              {canApprovePayroll && (
               <button
                 onClick={() => openAddAddition()}
                 className="bg-green-600 hover:bg-green-500 text-white px-3 py-1.5 rounded text-xs font-medium"
               >
                 + Add Bonus
               </button>
+              )}
             </div>
 
             {additions.length === 0 ? (
@@ -1546,7 +1568,11 @@ function DriverTimesheetDetail({ summary, legalNameMap = {}, selectedPeriod, act
           </p>
         </div>
         <div className="flex gap-2">
-          <button className="bg-blue-600 hover:bg-blue-700 text-white px-3 py-1.5 rounded text-xs font-medium transition-colors">
+          <button
+            disabled
+            title="Not yet available"
+            className="bg-blue-600/40 text-white/60 px-3 py-1.5 rounded text-xs font-medium cursor-not-allowed"
+          >
             Send to Driver
           </button>
           <button onClick={() => exportDriverPDF(summary, legalNameMap, selectedPeriod, activeColumns)} className="bg-gray-700 hover:bg-gray-600 text-white px-3 py-1.5 rounded text-xs font-medium transition-colors">
@@ -1663,7 +1689,7 @@ function TimesheetRow({ row, columns }: { row: DriverTimesheetRow; columns: Payr
             ⚑
           </span>
         ) : (
-          <span className="text-gray-600 hover:text-yellow-400 cursor-pointer" title="Flag this row">
+          <span className="text-gray-700" title="Flagging not yet available">
             ⚐
           </span>
         )}

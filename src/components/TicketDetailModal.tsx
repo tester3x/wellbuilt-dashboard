@@ -15,10 +15,12 @@ export function TicketDetailModal({ ticket, onClose, onNavigateTicket }: Props) 
   const [invoice, setInvoice] = useState<InvoiceDetail | null>(null);
   const [siblings, setSiblings] = useState<Ticket[]>([]);
   const [loading, setLoading] = useState(true);
+  const [loadError, setLoadError] = useState<string | null>(null);
 
   useEffect(() => {
     let cancelled = false;
     setLoading(true);
+    setLoadError(null);
     Promise.all([
       fetchInvoiceForTicket(ticket),
       fetchSiblingTickets(ticket.invoiceNumber, ticket.id, {
@@ -29,6 +31,13 @@ export function TicketDetailModal({ ticket, onClose, onNavigateTicket }: Props) 
       if (cancelled) return;
       setInvoice(inv);
       setSiblings(sibs);
+      setLoading(false);
+    }).catch((err) => {
+      // Without this catch a rejected fetch left the modal stuck on "Loading…"
+      // forever with an unhandled rejection. Clear the spinner and record it.
+      console.error('Failed to load ticket detail:', err);
+      if (cancelled) return;
+      setLoadError('Could not load ticket details. Close and try again.');
       setLoading(false);
     });
     return () => { cancelled = true; };
@@ -58,6 +67,8 @@ export function TicketDetailModal({ ticket, onClose, onNavigateTicket }: Props) 
 
         {loading ? (
           <div className="bg-[#FAFAF8] rounded-lg p-8 text-center text-gray-500">Loading...</div>
+        ) : loadError ? (
+          <div className="bg-[#FAFAF8] rounded-lg p-8 text-center text-red-600" role="alert">{loadError}</div>
         ) : (
           /* Paper card */
           <div className={`bg-[#FAFAF8] rounded-lg shadow-lg ${isVoid ? 'border-l-4 border-red-500' : 'border-l-4 border-yellow-500'}`}>

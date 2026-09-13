@@ -3,6 +3,7 @@
 import { useEffect, useState } from 'react';
 import { useRouter } from 'next/navigation';
 import { useAuth } from '@/contexts/AuthContext';
+import { hasCapability } from '@/lib/auth';
 import { AppHeader } from '@/components/AppHeader';
 import { subscribeToWellStatusesUnified, WellResponse } from '@/lib/wells';
 import { canViewGlobalWellPool } from '@/lib/tenantScope';
@@ -11,7 +12,7 @@ import { fetchInvoices, DashboardInvoice, getStatusColor } from '@/lib/invoices'
 import Link from 'next/link';
 
 export default function HomePage() {
-  const { user, loading } = useAuth();
+  const { user, loading, userCompany } = useAuth();
   const router = useRouter();
 
   // Summary stats
@@ -97,6 +98,7 @@ export default function HomePage() {
 
         <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-4 gap-6 items-stretch">
           {/* WB Mobile Card */}
+          {hasCapability(user, 'viewMobile', userCompany) && (
           <Link href="/mobile" className="block h-full">
             <div className="bg-gray-800 rounded-lg border border-gray-700 p-6 hover:border-blue-500 transition-colors cursor-pointer h-full">
               <h3 className="text-lg font-semibold text-white mb-2">WB Mobile</h3>
@@ -115,8 +117,10 @@ export default function HomePage() {
               </div>
             </div>
           </Link>
+          )}
 
           {/* WB Tickets Card */}
+          {hasCapability(user, 'viewTickets', userCompany) && (
           <Link href="/tickets" className="block h-full">
             <div className="bg-gray-800 rounded-lg border border-gray-700 p-6 hover:border-blue-500 transition-colors cursor-pointer h-full">
               <h3 className="text-lg font-semibold text-white mb-2">WB Tickets</h3>
@@ -129,8 +133,10 @@ export default function HomePage() {
               </div>
             </div>
           </Link>
+          )}
 
           {/* WB Billing Card */}
+          {hasCapability(user, 'viewBilling', userCompany) && (
           <Link href="/billing" className="block h-full">
             <div className="bg-gray-800 rounded-lg border border-gray-700 p-6 hover:border-blue-500 transition-colors cursor-pointer h-full">
               <div className="flex items-center gap-3 mb-2">
@@ -152,8 +158,10 @@ export default function HomePage() {
               </div>
             </div>
           </Link>
+          )}
 
           {/* WB Payroll Card */}
+          {hasCapability(user, 'viewPayroll', userCompany) && (
           <Link href="/payroll" className="block h-full">
             <div className="bg-gray-800 rounded-lg border border-gray-700 p-6 hover:border-blue-500 transition-colors cursor-pointer h-full">
               <div className="flex items-center gap-3 mb-2">
@@ -169,6 +177,7 @@ export default function HomePage() {
               </div>
             </div>
           </Link>
+          )}
         </div>
       </main>
     </div>

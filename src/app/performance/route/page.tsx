@@ -38,6 +38,8 @@ function RoutePerformancePage() {
   const [improving, setImproving] = useState(0);
   const [declining, setDeclining] = useState(0);
   const [dataLoading, setDataLoading] = useState(true);
+  const [loadError, setLoadError] = useState<string | null>(null);
+  const [reloadToken, setReloadToken] = useState(0);
   const [sortField, setSortField] = useState<SortField>('accuracy');
   const [sortAsc, setSortAsc] = useState(true);
 
@@ -64,13 +66,16 @@ function RoutePerformancePage() {
         }
       } catch (err) {
         console.error('Error fetching route performance:', err);
+        const { classifiedReadFailure } = await import('@/lib/adminDashboardCatalog');
+        setLoadError(classifiedReadFailure('route performance', err));
       } finally {
         setDataLoading(false);
       }
     };
 
+    setLoadError(null);
     loadData();
-  }, [user, routeName]);
+  }, [user, routeName, reloadToken]);
 
   // Sort wells
   const sortedWells = [...wells].sort((a, b) => {
@@ -202,6 +207,16 @@ function RoutePerformancePage() {
         {/* Well List */}
         {dataLoading ? (
           <div className="text-gray-400">Loading...</div>
+        ) : loadError ? (
+          <div className="bg-red-900/20 border border-red-500/40 rounded-lg p-4" role="alert">
+            <div className="text-red-400 text-sm mb-2">{loadError}</div>
+            <button
+              onClick={() => setReloadToken((n) => n + 1)}
+              className="px-3 py-1 bg-gray-700 hover:bg-gray-600 text-white rounded text-sm"
+            >
+              Retry
+            </button>
+          </div>
         ) : wells.length === 0 ? (
           <div className="text-gray-400">No performance data for this route</div>
         ) : (

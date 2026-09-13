@@ -33,12 +33,13 @@ export default function PhotoReviewPage() {
   const router = useRouter();
 
   const canView = hasCapability(user, 'viewDispatch', userCompany);
-  const canMutate =
-    canView &&
-    !!user &&
-    user.role !== 'viewer' &&
-    user.role !== 'driver' &&
-    user.role !== 'payroll';
+  // Mutating a photo review (approve/reject/address) is a dispatch write action,
+  // so gate on the createDispatch capability rather than a single-role denylist.
+  // The denylist ignored multi-role union (a payroll+dispatch user was wrongly
+  // blocked when payroll resolved as the primary role) and let safety/lead —
+  // which carry no dispatch write authority — through. reviewDispatchPhoto is the
+  // real server authority; this keeps the UI gate consistent with that model.
+  const canMutate = canView && hasCapability(user, 'createDispatch', userCompany);
 
   // Company context resolution:
   // Tenant-scoped users have user.companyId set.
@@ -209,6 +210,7 @@ export default function PhotoReviewPage() {
         }
 
         const data = await listDispatchPhotoReviews(payload);
+        const serverCount = (data.items || []).length;
         let fetched = data.items || [];
 
         // When searching by driver name, filter client results strictly by canonical legal name
@@ -221,7 +223,10 @@ export default function PhotoReviewPage() {
         }
 
         setItems(fetched);
-        setHasMore(fetched.length >= limit);
+        // hasMore must reflect what the SERVER returned, not the client-filtered
+        // count — otherwise an active driver filter that drops rows below `limit`
+        // hides "Load More" and silently truncates results.
+        setHasMore(serverCount >= limit);
         setPageLimit(limit);
         setLastQueryType(queryType);
         setLoadState('ready');

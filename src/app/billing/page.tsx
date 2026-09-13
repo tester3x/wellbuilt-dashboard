@@ -266,6 +266,7 @@ export default function BillingPage() {
   };
 
   const handleSavePrice = async () => {
+    if (!canEditBilling) return; // capability gate (button also disabled)
     const price = parseFloat(newPrice);
     if (isNaN(price) || price <= 0) return;
     if (!effectiveCompanyId) {
@@ -756,7 +757,7 @@ export default function BillingPage() {
                 </select>
                 <button
                   onClick={handleSavePrice}
-                  disabled={savingPrice || !newPrice}
+                  disabled={savingPrice || !newPrice || !canEditBilling}
                   className="px-4 py-2 bg-green-600 hover:bg-green-500 text-white rounded-lg transition-colors text-sm disabled:opacity-50"
                 >
                   {savingPrice ? 'Saving...' : 'Save Price'}
@@ -803,18 +804,25 @@ export default function BillingPage() {
                         <td className="px-4 py-2 text-gray-400 text-sm">{entry.source}</td>
                         <td className="px-4 py-2 text-gray-400 text-sm">{entry.updatedBy}</td>
                         <td className="px-4 py-1">
+                          {canEditBilling && (
                           <button
                             onClick={async () => {
+                              if (!canEditBilling) return;
                               if (!confirm(`Delete price entry for ${entry.date}?`)) return;
-                              await deleteDieselPrice(entry.id);
-                              const history = await fetchDieselPriceHistory(effectiveCompanyId || undefined);
-                              setDieselHistory(history);
+                              try {
+                                await deleteDieselPrice(entry.id);
+                                const history = await fetchDieselPriceHistory(effectiveCompanyId || undefined);
+                                setDieselHistory(history);
+                              } catch (err: any) {
+                                setError(err?.message || 'Failed to delete price entry');
+                              }
                             }}
                             className="text-red-500 hover:text-red-400 text-xs opacity-40 hover:opacity-100 transition-opacity"
                             title="Delete"
                           >
                             &times;
                           </button>
+                          )}
                         </td>
                       </tr>
                       );
