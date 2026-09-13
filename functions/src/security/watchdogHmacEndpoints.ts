@@ -16,7 +16,7 @@ import {
 } from './operational/watchdogHmac';
 
 export const ingestWatchdogPull = httpsV2.onRequest(
-  { cors: true, region: 'us-central1', timeoutSeconds: 30, memory: '256MiB' },
+  { cors: true, region: 'us-central1', timeoutSeconds: 30, memory: '256MiB', secrets: ['WATCHDOG_HMAC_KEY_V1'] },
   async (req, res) => {
     try {
       if (req.method !== 'POST') {
@@ -159,7 +159,7 @@ export const ingestWatchdogPull = httpsV2.onRequest(
 );
 
 export const getWatchdogPullReceipt = httpsV2.onRequest(
-  { cors: true, region: 'us-central1', timeoutSeconds: 15, memory: '256MiB' },
+  { cors: true, region: 'us-central1', timeoutSeconds: 15, memory: '256MiB', secrets: ['WATCHDOG_HMAC_KEY_V1'] },
   async (req, res) => {
     try {
       if (req.method !== 'GET' && req.method !== 'POST') {
