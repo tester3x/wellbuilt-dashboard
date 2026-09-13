@@ -198,6 +198,8 @@ export interface WellClassification {
   ttpHours: number | null;
   gainValid: boolean;
   fresh: boolean;
+  /** For verify/no-gain: why it is not actionable. missing_target | missing_level | stale_level | no_gain */
+  reason?: string;
 }
 
 /** Parse a feet/inches level string to inches. Handles 1'3", 7'6", 15, 15". */
@@ -262,13 +264,16 @@ export function classifyWell(well: WellResponse, nowMs: number = Date.now(), opt
   });
 
   if (target === null || lastIn === null) {
-    return withCommon({ state: 'verify', label: 'NEEDS DATA', color: 'bg-amber-600', textColor: 'text-white', sortOrder: 55 });
+    return withCommon({
+      state: 'verify', label: 'NEEDS DATA', color: 'bg-amber-600', textColor: 'text-white', sortOrder: 55,
+      reason: target === null ? 'missing_target' : 'missing_level',
+    });
   }
 
   // Reading too old to trust as current -- elapsed time never makes it pullable.
   // (Barbarian: 1'3", 136 days old -> VERIFY, never PULL/OVER.)
   if (!fresh) {
-    return withCommon({ state: 'verify', label: 'VERIFY', color: 'bg-amber-600', textColor: 'text-white', sortOrder: 50 });
+    return withCommon({ state: 'verify', label: 'VERIFY', color: 'bg-amber-600', textColor: 'text-white', sortOrder: 50, reason: 'stale_level' });
   }
 
   if (lastIn >= target) {
@@ -286,7 +291,7 @@ export function classifyWell(well: WellResponse, nowMs: number = Date.now(), opt
   }
 
   // Below target and NOT gaining -- not pullable regardless of Well-Down flag.
-  return withCommon({ state: 'no-gain', label: 'NO GAIN', color: 'bg-gray-500', textColor: 'text-white', sortOrder: 40, estInches: lastIn, remainingInches: remaining });
+  return withCommon({ state: 'no-gain', label: 'NO GAIN', color: 'bg-gray-500', textColor: 'text-white', sortOrder: 40, estInches: lastIn, remainingInches: remaining, reason: 'no_gain' });
 }
 
 export function matchesView(well: WellResponse, view: QueueView, nowMs: number = Date.now(), opts: ClassifyOpts = {}): boolean {

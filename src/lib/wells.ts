@@ -3,46 +3,18 @@ import { ref, get, onValue, query, orderByChild, equalTo } from 'firebase/databa
 import { getFirebaseDatabase } from './firebase';
 import { adminGetWellHistory, adminGetWellPerformance, adminGetWellPerformanceForWell, adminGetWellPool } from './adminDashboardCatalog';
 import { fetchWellPerformanceWithFallback, wellKeyFromName } from './wellPerformanceRead';
-
-export interface WellResponse {
-  wellName: string;
-  currentLevel: string;
-  etaToMax: string;
-  flowRate: string;
-  timestamp: string;
-  timestampUTC?: string;     // ISO 8601 UTC timestamp for calculations
-  bbls?: number;
-  maxLevel?: number;
-  bottomLevel?: number;
-  isDown?: boolean;
-  wellDown?: boolean;        // From Cloud Function response
-  responseId?: string;
-  route?: string;
-  // Additional fields from outgoing packets (TankResponse from VBA)
-  tanks?: number;
-  tankAtLevel?: string;      // "Tank @ Level" — target height for pullBbls (e.g. "2 @ 7'6\"")
-  pullBbls?: number;         // Configured pull BBLs for this well
-  timeTillPull?: string;     // Time Till Pull (H:M format) - from outgoing packets
-  nextPullTime?: string;     // Next Pull Time (datetime string) - from outgoing packets
-  nextPullTimeUTC?: string;  // ISO 8601 UTC timestamp
-  bbls24hrs?: string;        // BBLs produced in 24 hours (AFR-based)
-  windowBblsDay?: string;    // Window-averaged bbls/day (more accurate, from Cloud Function)
-  overnightBblsDay?: string; // Overnight bbls/day from Cloud Function
-  status?: string;           // Status from VBA
-  location?: string;         // GPS/address placeholder for future
-  // Last pull info from Cloud Function
-  lastPullDateTime?: string;
-  lastPullDateTimeUTC?: string;
-  lastPullBbls?: string;
-  lastPullTopLevel?: string;
-  lastPullBottomLevel?: string;
-  // NDIC linkage from well_config
-  ndicName?: string;           // Full NDIC well name (e.g. "GABRIEL 1-36-25H")
-  // Raw numeric level for precision (avoids parsing formatted string)
-  currentLevelInches?: number; // Total inches — used by Add Pull modal
-  // Tank dimensions from well_config
-  bblPerFoot?: number;         // Stored BBL/ft (overrides numTanks * 20 default)
-}
+// Firebase-free data-contract core. The pull-pool merge + geometry helpers live
+// there so they can be unit-tested without the Firebase SDK; re-exported here so
+// existing `@/lib/wells` import sites keep working.
+import {
+  parseFeetInchesStr,
+  calcTankAtLevel,
+  wellResponsesFromCatalog,
+  mergeWellPool,
+} from './wellPoolCore';
+import type { WellResponse } from './wellPoolCore';
+export type { WellResponse } from './wellPoolCore';
+export { wellResponsesFromCatalog, mergeWellPool };
 
 export interface WellConfig {
   route?: string;
@@ -53,52 +25,6 @@ export interface WellConfig {
   tankCapacity?: number;  // BBL per tank (default 400)
   tankHeight?: number;    // feet per tank (default 20)
   bblPerFoot?: number;    // (tankCapacity / tankHeight) * numTanks
-}
-
-/** Snapshot well list from the admin catalog when RTDB parent reads are denied. */
-export function wellResponsesFromCatalog(wellConfig: Record<string, unknown>): WellResponse[] {
-  return Object.entries(wellConfig).map(([wellName, raw]) => {
-    const config = (raw && typeof raw === 'object' ? raw : {}) as Record<string, unknown>;
-    const tanks = typeof config.tanks === 'number'
-      ? config.tanks
-      : typeof config.numTanks === 'number' ? config.numTanks : 1;
-    return {
-      wellName,
-      currentLevel: '--',
-      etaToMax: '',
-      flowRate: typeof config.avgFlowRate === 'string' ? config.avgFlowRate : 'Unknown',
-      timestamp: '',
-      route: typeof config.route === 'string' ? config.route : 'Unrouted',
-      tanks,
-      pullBbls: typeof config.pullBbls === 'number' ? config.pullBbls : 140,
-      ndicName: typeof config.ndicName === 'string' ? config.ndicName : '',
-      isDown: config.isDown === true,
-    };
-  });
-}
-
-export function mergeWellPool(
-  wellConfig: Record<string, unknown>,
-  wellStatus: Record<string, unknown> = {},
-): WellResponse[] {
-  return wellResponsesFromCatalog(wellConfig).map((well) => {
-    const st = (wellStatus[well.wellName] && typeof wellStatus[well.wellName] === 'object')
-      ? wellStatus[well.wellName] as Record<string, unknown>
-      : {};
-    return {
-      ...well,
-      currentLevel: typeof st.currentLevel === 'string' ? st.currentLevel : well.currentLevel,
-      flowRate: typeof st.flowRate === 'string' ? st.flowRate : well.flowRate,
-      timestamp: typeof st.timestamp === 'string' ? st.timestamp : well.timestamp,
-      timeTillPull: typeof st.timeTillPull === 'string' ? st.timeTillPull : well.timeTillPull,
-      nextPullTime: typeof st.nextPullTime === 'string' ? st.nextPullTime : well.nextPullTime,
-      nextPullTimeUTC: typeof st.nextPullTimeUTC === 'string' ? st.nextPullTimeUTC : well.nextPullTimeUTC,
-      lastPullDateTimeUTC: typeof st.lastPullDateTimeUTC === 'string' ? st.lastPullDateTimeUTC : well.lastPullDateTimeUTC,
-      lastPullBbls: st.lastPullBbls != null ? String(st.lastPullBbls) : well.lastPullBbls,
-      isDown: st.wellDown === true || st.isDown === true || well.isDown,
-      status: typeof st.status === 'string' ? st.status : well.status,
-    };
-  });
 }
 
 async function wellPoolResponses(): Promise<{ wells: WellResponse[]; routes: string[] }> {
@@ -303,22 +229,6 @@ export async function fetchAllWellStatuses(): Promise<WellResponse[]> {
 }
 
 // Helper: Parse "X'Y\"" to inches
-function parseFeetInchesStr(str: string): number {
-  if (!str) return 0;
-  const match = str.match(/(\d+)'(\d+)"/);
-  if (match) return parseInt(match[1]) * 12 + parseInt(match[2]);
-  return 0;
-}
-
-// Helper: Calculate Tank @ Level from config values
-// bblPerFootPerTank: per-tank BBL/ft (default 20 for standard 400BBL/20' tanks)
-function calcTankAtLevel(tanks: number, pullBbls: number, bottomInches: number, bblPerFootPerTank: number = 20): { tankAtInches: number; tankAtLevel: string } {
-  const bblsPerTank = pullBbls / tanks;
-  const tankAtInches = ((bblsPerTank / bblPerFootPerTank) * 12) + bottomInches;
-  const tankAtFeet = Math.floor(tankAtInches / 12);
-  const tankAtRemainder = Math.round(tankAtInches - (tankAtFeet * 12));
-  return { tankAtInches, tankAtLevel: `${tanks} @ ${tankAtFeet}'${tankAtRemainder}"` };
-}
 
 // Helper: Estimate current level from bottom level + elapsed time + flow rate
 function estimateCurrentLevel(

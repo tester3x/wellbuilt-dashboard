@@ -2906,6 +2906,14 @@ function DispatchPageInner() {
                       {queueRows.map(({ well, priority, dispatched, assignedDrivers: wellAssignedDrivers }) => {
                         const isSelected = selectedWells.has(well.wellName);
                         const loadCount = selectedWells.get(well.wellName) || 1;
+                        // Assignment eligibility (documented policy — does NOT blindly
+                        // track "actionable"): a DOWN well is never dispatchable; a
+                        // predicted well (PULL NOW / APPROACHING) assigns normally; a
+                        // NEEDS DATA / NO GAIN well has no pull prediction, so Assign is
+                        // a visible manual OVERRIDE (dispatcher may send a driver to
+                        // physically verify) — never presented as an agreeing prediction.
+                        const assignBlocked = priority.state === 'down';
+                        const assignOverride = priority.state === 'verify' || priority.state === 'no-gain';
                         return (
                           <tr key={well.responseId || well.wellName} className={`hover:bg-gray-750 transition-colors ${priority.state === 'pull-now' ? 'bg-red-900/10' : ''} ${isSelected ? 'bg-blue-900/20' : ''}`}>
                             <td className="px-2 py-1.5">
@@ -2966,13 +2974,17 @@ function DispatchPageInner() {
                                   </div>
                                 ) : (
                                   <button onClick={() => openAssignModal(well)}
-                                    disabled={selectedWells.size > 0}
-                                    className={`px-2 py-1 text-white text-[10px] font-medium rounded transition-colors ${selectedWells.size > 0 ? 'bg-gray-600 cursor-not-allowed opacity-50' : 'bg-blue-600 hover:bg-blue-500'}`}>Assign</button>
+                                    disabled={selectedWells.size > 0 || assignBlocked}
+                                    title={assignBlocked ? 'Well is DOWN — not dispatchable' : assignOverride ? `No pull prediction (${priority.label}) — manual override dispatch` : undefined}
+                                    className={`px-2 py-1 text-white text-[10px] font-medium rounded transition-colors ${
+                                      selectedWells.size > 0 || assignBlocked ? 'bg-gray-600 cursor-not-allowed opacity-50'
+                                        : assignOverride ? 'bg-amber-700 hover:bg-amber-600 ring-1 ring-amber-400/60'
+                                        : 'bg-blue-600 hover:bg-blue-500'}`}>{assignOverride ? 'Assign*' : 'Assign'}</button>
                                 )}
                                 <input type="checkbox" checked={isSelected}
-                                  disabled={!!assignTarget}
+                                  disabled={!!assignTarget || assignBlocked}
                                   onChange={() => toggleWellSelection(well.wellName)}
-                                  className={`w-4 h-4 rounded border-gray-600 bg-gray-800 text-blue-600 focus:ring-blue-500 focus:ring-offset-0 ${assignTarget ? 'opacity-30 cursor-not-allowed' : 'cursor-pointer'}`} />
+                                  className={`w-4 h-4 rounded border-gray-600 bg-gray-800 text-blue-600 focus:ring-blue-500 focus:ring-offset-0 ${assignTarget || assignBlocked ? 'opacity-30 cursor-not-allowed' : 'cursor-pointer'}`} />
                               </div>
                             </td>
                           </tr>

@@ -487,3 +487,43 @@ test('Dispatch Priority badge stays one line (responsive)', () => {
   assert.match(page, /min-w-\[88px\]/, 'Priority column has a minimum width');
   assert.match(page, /inline-block whitespace-nowrap px-1\.5 py-0\.5 text-\[10px\] font-bold rounded \$\{priority\.color\}/, 'badge is one-line (whitespace-nowrap)');
 });
+
+// ── Data-contract: governed merge enriches the classifier inputs ──────────
+test('Well-pool merge carries the height-first classifier inputs (target/level/gain/timestamp)', () => {
+  const core = read('../../lib/wellPoolCore.ts');
+  // The pull-height target must be derived on the governed path (its absence
+  // made every well VERIFY:missing_target in production).
+  assert.match(core, /calcTankAtLevel\(/, 'derives pull-height target from geometry');
+  assert.match(core, /tankAtLevel,/, 'roster rows carry the derived target');
+  // Level, gain and observation timestamp overlaid from outgoing status.
+  assert.match(core, /currentLevelInches:/, 'numeric level for the classifier');
+  assert.match(core, /windowBblsDay:/, 'validated gain carried');
+  assert.match(core, /bbls24hrs:/, 'AFR gain carried');
+  assert.match(core, /timestampUTC:/, 'observation timestamp for freshness');
+  // Left-join base is the full configured catalog (roster preserved).
+  assert.match(core, /wellResponsesFromCatalog\(wellConfig\)\.map/, 'merge left-joins over full catalog');
+  // wells.ts must NOT re-declare the merge (single source of truth in the core).
+  const wells = read('../../lib/wells.ts');
+  assert.ok(!/export function mergeWellPool/.test(wells), 'mergeWellPool lives only in the firebase-free core');
+  assert.match(wells, /from '\.\/wellPoolCore'/, 'wells imports from the core');
+  assert.match(wells, /export \{ wellResponsesFromCatalog, mergeWellPool \};/, 'wells re-exports the core merge');
+});
+
+// ── Assign gating agrees with the documented eligibility policy ───────────
+test('Row Assign gating: DOWN not dispatchable; NEEDS DATA / NO GAIN are visible manual overrides', () => {
+  const page = read('../../app/dispatch/page.tsx');
+  assert.match(page, /const assignBlocked = priority\.state === 'down';/, 'DOWN blocks assignment');
+  assert.match(page, /const assignOverride = priority\.state === 'verify' \|\| priority\.state === 'no-gain';/, 'verify/no-gain are overrides');
+  assert.match(page, /disabled=\{selectedWells\.size > 0 \|\| assignBlocked\}/, 'Assign button disabled for DOWN');
+  assert.match(page, /assignOverride \? 'Assign\*' : 'Assign'/, 'override assign is visibly distinct');
+  assert.match(page, /manual override dispatch/, 'override carries an explanatory title');
+});
+
+// ── Classifier exposes reason codes for the genuinely-incomplete states ───
+test('classifyWell emits reason codes (missing_target/missing_level/stale_level/no_gain)', () => {
+  const src = read('../../lib/dispatchPriority.ts');
+  assert.match(src, /reason\?: string;/, 'WellClassification carries a reason');
+  assert.match(src, /reason: target === null \? 'missing_target' : 'missing_level'/);
+  assert.match(src, /reason: 'stale_level'/);
+  assert.match(src, /reason: 'no_gain'/);
+});
