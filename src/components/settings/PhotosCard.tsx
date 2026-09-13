@@ -11,16 +11,19 @@ interface Props {
 
 export function PhotosCard({ company, onSave }: Props) {
   const [saving, setSaving] = useState<string | null>(null);
+  const [error, setError] = useState<string | null>(null);
   const [minCount, setMinCount] = useState(String(company.minPhotoCount || 1));
   const [retentionDays, setRetentionDays] = useState(String(company.photoRetentionDays || 30));
 
   const toggleRequire = async () => {
     setSaving('requirePhotos');
+    setError(null);
     try {
       await updateCompanyFields(company.id, { requirePhotos: !company.requirePhotos });
       onSave();
     } catch (err) {
       console.error('Failed to toggle requirePhotos:', err);
+      setError('Could not save that change — it was not applied. Please try again.');
     } finally {
       setSaving(null);
     }
@@ -30,11 +33,13 @@ export function PhotosCard({ company, onSave }: Props) {
     const val = parseInt(minCount, 10);
     if (isNaN(val) || val < 1) return;
     setSaving('minPhotoCount');
+    setError(null);
     try {
       await updateCompanyFields(company.id, { minPhotoCount: val });
       onSave();
     } catch (err) {
       console.error('Failed to save minPhotoCount:', err);
+      setError('Could not save the minimum photo count — it was not applied. Please try again.');
     } finally {
       setSaving(null);
     }
@@ -44,11 +49,13 @@ export function PhotosCard({ company, onSave }: Props) {
     const val = parseInt(retentionDays, 10);
     if (isNaN(val) || val < 1) return;
     setSaving('photoRetentionDays');
+    setError(null);
     try {
       await updateCompanyFields(company.id, { photoRetentionDays: val });
       onSave();
     } catch (err) {
       console.error('Failed to save photoRetentionDays:', err);
+      setError('Could not save the retention setting — it was not applied. Please try again.');
     } finally {
       setSaving(null);
     }
@@ -59,6 +66,10 @@ export function PhotosCard({ company, onSave }: Props) {
       <div className="px-4 py-3 border-b border-orange-500/30 bg-orange-900/20">
         <h3 className="text-orange-400 font-medium text-sm">Photo Capture</h3>
       </div>
+
+      {error && (
+        <div className="px-4 pt-3 text-red-400 text-xs" role="alert">{error}</div>
+      )}
 
       <div className="p-4 space-y-3">
         {/* Require Photos toggle */}

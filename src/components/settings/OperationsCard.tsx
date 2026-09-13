@@ -11,36 +11,41 @@ interface Props {
 
 export function OperationsCard({ company, onSave }: Props) {
   const [saving, setSaving] = useState<string | null>(null);
+  const [error, setError] = useState<string | null>(null);
 
-  const toggle = async (field: 'splitTickets' | 'transferRequiresApproval' | 'liveDispatchSync', current: boolean) => {
-    setSaving(field);
+  // Single write path for every control in this card. A failed write is
+  // SURFACED (not swallowed to console) so the operator learns the setting
+  // did not change — the deployed rules allow these company field-merges, so
+  // a failure is a real, actionable problem.
+  const saveField = async (key: string, fields: Record<string, unknown>) => {
+    setSaving(key);
+    setError(null);
     try {
-      await updateCompanyFields(company.id, { [field]: !current });
+      await updateCompanyFields(company.id, fields);
       onSave();
     } catch (err) {
-      console.error(`Failed to toggle ${field}:`, err);
+      console.error(`Failed to save ${key}:`, err);
+      setError('Could not save that change — it was not applied. Please try again.');
     } finally {
       setSaving(null);
     }
   };
 
-  const setCancelMode = async (mode: 'recycle' | 'void') => {
-    setSaving('cancelledNumberHandling');
-    try {
-      await updateCompanyFields(company.id, { cancelledNumberHandling: mode });
-      onSave();
-    } catch (err) {
-      console.error('Failed to update cancel mode:', err);
-    } finally {
-      setSaving(null);
-    }
-  };
+  const toggle = (field: 'splitTickets' | 'transferRequiresApproval' | 'liveDispatchSync', current: boolean) =>
+    saveField(field, { [field]: !current });
+
+  const setCancelMode = (mode: 'recycle' | 'void') =>
+    saveField('cancelledNumberHandling', { cancelledNumberHandling: mode });
 
   return (
     <div className="bg-gray-800 rounded-lg overflow-hidden">
       <div className="px-4 py-3 border-b border-orange-500/30 bg-orange-900/20">
         <h3 className="text-orange-400 font-medium text-sm">Operations</h3>
       </div>
+
+      {error && (
+        <div className="px-4 pt-3 text-red-400 text-xs" role="alert">{error}</div>
+      )}
 
       <div className="p-4 space-y-3">
         {/* Split Tickets toggle */}
@@ -97,13 +102,7 @@ export function OperationsCard({ company, onSave }: Props) {
           </div>
           <div className={`flex rounded-md overflow-hidden border border-gray-600 ${saving === 'liveDispatchSync' ? 'opacity-50' : ''}`}>
             <button
-              onClick={async () => {
-                setSaving('liveDispatchSync');
-                try {
-                  await updateCompanyFields(company.id, { liveDispatchSync: deleteField() as any });
-                  onSave();
-                } catch (err) { console.error(err); } finally { setSaving(null); }
-              }}
+              onClick={() => saveField('liveDispatchSync', { liveDispatchSync: deleteField() as unknown })}
               disabled={saving === 'liveDispatchSync'}
               className={`px-3 py-1 text-xs font-medium transition-colors ${
                 company.liveDispatchSync === undefined || company.liveDispatchSync === null
@@ -114,13 +113,7 @@ export function OperationsCard({ company, onSave }: Props) {
               Off
             </button>
             <button
-              onClick={async () => {
-                setSaving('liveDispatchSync');
-                try {
-                  await updateCompanyFields(company.id, { liveDispatchSync: true });
-                  onSave();
-                } catch (err) { console.error(err); } finally { setSaving(null); }
-              }}
+              onClick={() => saveField('liveDispatchSync', { liveDispatchSync: true })}
               disabled={saving === 'liveDispatchSync'}
               className={`px-3 py-1 text-xs font-medium transition-colors ${
                 company.liveDispatchSync === true
@@ -131,13 +124,7 @@ export function OperationsCard({ company, onSave }: Props) {
               Sync
             </button>
             <button
-              onClick={async () => {
-                setSaving('liveDispatchSync');
-                try {
-                  await updateCompanyFields(company.id, { liveDispatchSync: false });
-                  onSave();
-                } catch (err) { console.error(err); } finally { setSaving(null); }
-              }}
+              onClick={() => saveField('liveDispatchSync', { liveDispatchSync: false })}
               disabled={saving === 'liveDispatchSync'}
               className={`px-3 py-1 text-xs font-medium transition-colors ${
                 company.liveDispatchSync === false
@@ -166,13 +153,7 @@ export function OperationsCard({ company, onSave }: Props) {
           </div>
           <div className={`flex rounded-md overflow-hidden border border-gray-600 ${saving === 'invoicingMode' ? 'opacity-50' : ''}`}>
             <button
-              onClick={async () => {
-                setSaving('invoicingMode');
-                try {
-                  await updateCompanyFields(company.id, { invoicingMode: 'invoice_tickets' });
-                  onSave();
-                } catch (err) { console.error(err); } finally { setSaving(null); }
-              }}
+              onClick={() => saveField('invoicingMode', { invoicingMode: 'invoice_tickets' })}
               disabled={saving === 'invoicingMode'}
               className={`flex-1 px-3 py-1 text-xs font-medium transition-colors ${
                 (company.invoicingMode || 'invoice_tickets') === 'invoice_tickets'
@@ -183,13 +164,7 @@ export function OperationsCard({ company, onSave }: Props) {
               Invoice + Tickets
             </button>
             <button
-              onClick={async () => {
-                setSaving('invoicingMode');
-                try {
-                  await updateCompanyFields(company.id, { invoicingMode: 'ticket_only' });
-                  onSave();
-                } catch (err) { console.error(err); } finally { setSaving(null); }
-              }}
+              onClick={() => saveField('invoicingMode', { invoicingMode: 'ticket_only' })}
               disabled={saving === 'invoicingMode'}
               className={`flex-1 px-3 py-1 text-xs font-medium transition-colors ${
                 company.invoicingMode === 'ticket_only'
@@ -200,13 +175,7 @@ export function OperationsCard({ company, onSave }: Props) {
               Ticket Only
             </button>
             <button
-              onClick={async () => {
-                setSaving('invoicingMode');
-                try {
-                  await updateCompanyFields(company.id, { invoicingMode: 'hybrid' });
-                  onSave();
-                } catch (err) { console.error(err); } finally { setSaving(null); }
-              }}
+              onClick={() => saveField('invoicingMode', { invoicingMode: 'hybrid' })}
               disabled={saving === 'invoicingMode'}
               className={`flex-1 px-3 py-1 text-xs font-medium transition-colors ${
                 company.invoicingMode === 'hybrid'

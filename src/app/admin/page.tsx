@@ -616,12 +616,12 @@ export default function AdminPage() {
       showMessage('Route already exists');
       return;
     }
-    // Routes are created implicitly when wells are assigned
-    // For now, just add to local state
+    // Routes are implicit — a route only persists once a well is assigned to it.
+    // Stage it locally and tell the operator the truth (no fake "created").
     setRoutes([...routes, routeName].sort());
     setRouteWells({ ...routeWells, [routeName]: [] });
     setNewRouteName('');
-    showMessage(`Route "${routeName}" created`);
+    showMessage(`Route "${routeName}" staged — assign a well to it to save it.`);
   };
 
   // Delete route - show modal for choice

@@ -146,3 +146,53 @@ test('+Add Pull is a known rules-denied direct write (BLOCKED — no governed da
   // Neither ingestDriverPacket nor ingestWbmPull is dashboard-callable (both requireSecureDriver);
   // a governed staff add-pull callable is the backend dependency.
 });
+
+// ── REPAIRED this branch (fix/dashboard-button-runtime-20260913) ─────────────
+// These controls write company fields the DEPLOYED firestore.rules allow
+// (companies update permitted for authenticated callers on non-protected keys;
+// doeRegion + the settings toggles are NOT in protectedCompanyKeys()). The
+// defect was UI-side: failures were swallowed to console / a fake success was
+// shown. Each guard below pins the honest behavior so it cannot regress. A
+// passing guard is SOURCE-VERIFIED, not a WORKING claim — full click-through
+// needs a live callable (= production) and a DOM runner, neither available here.
+
+function sliceHandler(body: string, startMarker: string, endMarker: string): string {
+  const start = body.indexOf(startMarker);
+  assert.ok(start >= 0, `handler ${startMarker} must exist`);
+  const end = body.indexOf(endMarker, start + startMarker.length);
+  return body.slice(start, end > start ? end : body.length);
+}
+
+test('REPAIR: billing DOE region change surfaces failures (no swallow)', () => {
+  const billing = read('../../app/billing/page.tsx');
+  const h = sliceHandler(billing, 'const handleRegionChange', '\n  };');
+  assert.match(h, /updateCompanyFields\(/, 'writes via updateCompanyFields (rules-allowed field-merge)');
+  assert.match(h, /setError\(/, 'a failed region save must be surfaced via setError, not swallowed');
+});
+
+test('REPAIR: admin "Add Route" no longer fakes a persisted create', () => {
+  const admin = read('../../app/admin/page.tsx');
+  const h = sliceHandler(admin, 'const handleAddRoute', '\n  };');
+  assert.ok(!/"[^"]*"\s*\+\s*['"] created['"]/.test(h) && !/`Route "\$\{routeName\}" created`/.test(h),
+    'must not claim the route was "created" — routes persist only when a well is assigned');
+  assert.match(h, /staged/, 'must tell the operator the route is staged until a well is assigned');
+});
+
+test('REPAIR: OperationsCard surfaces write failures for every control', () => {
+  const card = read('../../components/settings/OperationsCard.tsx');
+  // Single governed write path + a visible error surface.
+  assert.match(card, /const saveField\s*=/, 'all controls route through one saveField helper');
+  assert.match(card, /setError\(/, 'failures set an error message');
+  assert.match(card, /role="alert"/, 'the error message is rendered');
+  // No control may swallow to console with no user-visible surface.
+  assert.ok(!/catch\s*\(\s*err\s*\)\s*\{\s*console\.error\([^)]*\);\s*\}/.test(card),
+    'no bare catch→console.error-only remains');
+});
+
+test('REPAIR: PhotosCard surfaces write failures for every control', () => {
+  const card = read('../../components/settings/PhotosCard.tsx');
+  assert.match(card, /role="alert"/, 'the error message is rendered');
+  // three write handlers, each must set the error state in its catch
+  const setErrCount = (card.match(/setError\(/g) || []).length;
+  assert.ok(setErrCount >= 3, `each of the 3 write handlers must surface errors (found ${setErrCount} setError calls)`);
+});

@@ -343,6 +343,7 @@ export default function BillingPage() {
       setCompanies(map);
     } catch (err) {
       console.error('Failed to save DOE region:', err);
+      setError('Could not save the DOE region. It was not changed — try again.');
     }
   };
 
