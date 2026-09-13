@@ -458,25 +458,27 @@ test('Dispatch actionable queue is HEIGHT-FIRST (classifyWell) + honest Last Lev
 });
 
 // ── Live-status lifecycle + failure semantics (fix/dashboard-livestatus-lifecycle) ─
-test('Dispatch live-status: governed source, cold-auth gate, honest UNAVAILABLE, bounded resubscribe', () => {
+test('Dispatch live-status: governed-primary source-selection (zero forbidden RTDB), cold-auth gate, honest UNAVAILABLE', () => {
   const page = read('../../app/dispatch/page.tsx');
-  // Authoritative status via the governed callable (RTDB packets/outgoing is
-  // claim-gated and denied for dashboard email users).
+  // Governed callable is the chosen source; the direct-client RTDB status
+  // subscription (claim-gated, denied for dashboard email users) is NOT attempted.
   assert.match(page, /adminGetWellPool\(\)/, 'uses governed adminGetWellPool for status');
   assert.match(page, /mergeWellPool\(/, 'merges governed well status');
-  // Cold-start: wait for auth before subscribing.
-  assert.match(page, /if \(loading\) return;/, 'subscription waits for auth readiness');
+  assert.ok(!/subscribeToWellStatusesUnified/.test(page), 'no direct-client RTDB status subscription attempted');
+  // Cold-start: wait for auth before any read.
+  assert.match(page, /if \(loading\) return;/, 'read waits for auth readiness');
   assert.match(page, /\}, \[user, loading\]\);/, 'effect depends on user + loading');
   // Failure semantics: queue-level UNAVAILABLE, never fabricated needs-data.
   assert.match(page, /const \[statusUnavailable, setStatusUnavailable\] = useState\(false\)/);
-  assert.match(page, /setStatusUnavailable\(true\)/, 'persistent denial → UNAVAILABLE');
+  assert.match(page, /setStatusUnavailable\(true\)/, 'governed-source failure → UNAVAILABLE');
   assert.match(page, /Live well status unavailable/, 'honest unavailable message (not "No wells")');
   assert.match(page, /!statusUnavailable/, 'counts gated on status availability');
-  // The old catalog-only fallback that produced 80 Needs Data must be gone.
-  assert.ok(!/wellResponsesFromCatalog\(\(catalog\.wellConfig/.test(page), 'no catalog-only fallback in the live-status onError');
-  // Deterministic cleanup + exactly one bounded resubscribe.
-  assert.match(page, /cancelled = true;\s*\n\s*unsubscribe\(\);/, 'deterministic listener cleanup');
-  assert.match(page, /if \(!retried\)/, 'exactly one bounded resubscribe for transitional failure');
+  assert.ok(!/wellResponsesFromCatalog\(\(catalog\.wellConfig/.test(page), 'no catalog-only fallback');
+  // Bounded retry only because the governed source can become authorized after
+  // token restoration; deterministic cleanup.
+  assert.match(page, /if \(attempts < 2\)/, 'bounded governed retry (not for a permanently forbidden path)');
+  assert.match(page, /cancelled = true;/, 'deterministic cleanup');
+  assert.match(page, /pool\.canViewWellPool === false/, 'honors server no-entitlement flag');
 });
 
 test('Dispatch Priority badge stays one line (responsive)', () => {

@@ -3,11 +3,11 @@
 import { useEffect, useState, useMemo, useCallback, Suspense } from 'react';
 import { useRouter, useSearchParams } from 'next/navigation';
 import { useAuth } from '@/contexts/AuthContext';
-import { WellResponse, subscribeToWellStatusesUnified, wellResponsesFromCatalog, mergeWellPool } from '@/lib/wells';
+import { WellResponse, mergeWellPool } from '@/lib/wells';
 import { getPriority, getWellPrediction, formatTTP, matchesView, wellBucket, classifyWell, inchesToLevel, formatAge, type QueueView } from '@/lib/dispatchPriority';
 // Z Fold recovery — layout helpers only (collapsed queue / stacked layout).
-// The realtime gate helpers from this module are intentionally NOT used:
-// 3ea36d84's subscribeToWellStatusesUnified realtime path is preserved.
+// Live status is read via the governed adminGetWellPool callable (see effect
+// below); the direct-client RTDB status path is claim-gated and not attempted.
 import {
   isStackedDispatchLayout,
   wellQueueSearchActive,
@@ -476,10 +476,14 @@ function DispatchPageInner() {
   // the global (Liquid Gold) pool with no tenancy dimension. Scoped
   // non-liquid-gold companies get an empty queue (see lib/tenantScope.ts).
   useEffect(() => {
-    // Wait for Firebase Auth persistence + token/claims to restore before
-    // subscribing — a cold hard-reload must not read against an unready token.
+    // Wait for Firebase Auth persistence + token/claims to restore before ANY
+    // read — a cold hard-reload must not read against an unready token.
     if (loading) return;
     if (!user) { setDataLoading(false); return; }
+    // Tenant containment (7/9): the well pool is the global (Liquid Gold) pool.
+    // A non-liquid-gold scoped company has no entitlement to it AND there is no
+    // governed own-company well-status read (backend gap) → empty by design, not
+    // an error. Owner / Liquid Gold / platform admins get the governed pool.
     if (!canViewGlobalWellPool(user)) {
       setWells([]);
       setRoutes([]);
@@ -488,60 +492,55 @@ function DispatchPageInner() {
       return;
     }
     let cancelled = false;
-    let retried = false;
-    let unsubscribe = () => {};
+    let attempts = 0;
+    let retryTimer: ReturnType<typeof setTimeout> | null = null;
+    let refreshTimer: ReturnType<typeof setInterval> | null = null;
 
-    const applyStatus = (wellData: WellResponse[], routeList: string[]) => {
-      if (cancelled) return;
-      setWells(wellData);
-      setRoutes(routeList.filter(r => r !== 'Unrouted'));
-      setStatusUnavailable(false);
-      setReadErrors(prev => ({ ...prev, wells: undefined }));
-      setDataLoading(false);
-    };
-
-    // Authoritative status via the GOVERNED callable. The direct-client RTDB
-    // packets/outgoing path requires driver/wellbuiltAdmin/staff CLAIMS that
-    // dashboard email users do not hold, so it is denied for them; adminGetWellPool
-    // is the authorized read and returns merged well status.
-    const loadGoverned = async () => {
+    // Source selection: dashboard email/password users are NEVER authorized for
+    // the direct-client RTDB packets/outgoing path (it requires driver/staff/
+    // wellbuiltAdmin CLAIMS they do not hold), so we do NOT attempt it and
+    // produce zero expected permission-denied requests. The GOVERNED
+    // adminGetWellPool callable is the authorized live-status source.
+    const load = async () => {
       try {
         const pool = await adminGetWellPool();
         if (cancelled) return;
+        if (pool.canViewWellPool === false) {
+          // Server confirms no entitlement to the global pool for this caller.
+          setWells([]); setRoutes([]); setStatusUnavailable(false);
+          setReadErrors(prev => ({ ...prev, wells: undefined })); setDataLoading(false);
+          return;
+        }
         const wellsData = mergeWellPool((pool.wellConfig || {}) as Record<string, unknown>, (pool.wellStatus || {}) as Record<string, unknown>);
         const routeList = [...new Set(wellsData.map(w => w.route).filter((r): r is string => !!r))];
-        applyStatus(wellsData, routeList);
+        setWells(wellsData);
+        setRoutes(routeList.filter(r => r !== 'Unrouted'));
+        setStatusUnavailable(false);
+        setReadErrors(prev => ({ ...prev, wells: undefined }));
+        setDataLoading(false);
       } catch (err) {
         if (cancelled) return;
-        // Persistent denial — surface honestly as a QUEUE-LEVEL UNAVAILABLE.
-        // Do NOT fabricate catalog-only wells (which would read as 80 Needs Data).
+        attempts += 1;
+        // Bounded retry ONLY because the governed callable CAN become authorized
+        // once a cold-start token finishes restoring — not a permanent denial.
+        if (attempts < 2) { retryTimer = setTimeout(load, 1500); return; }
+        // Genuine governed-source failure → honest QUEUE-LEVEL UNAVAILABLE.
         setStatusUnavailable(true);
-        setWells([]);
-        setRoutes([]);
+        setWells([]); setRoutes([]);
         setReadErrors(prev => ({ ...prev, wells: classifiedReadFailure('well live status', err) }));
         setDataLoading(false);
       }
     };
 
-    const handleError = () => {
-      if (cancelled) return;
-      // Load authoritative governed status immediately (fast, correct data)…
-      loadGoverned();
-      // …and allow exactly ONE bounded resubscribe in case the RTDB denial was
-      // a genuinely transitional cold-start token race (realtime then resumes).
-      if (!retried) {
-        retried = true;
-        unsubscribe();
-        setTimeout(() => { if (!cancelled) unsubscribe = subscribe(); }, 2000);
-      }
-    };
-
-    const subscribe = () => subscribeToWellStatusesUnified(applyStatus, handleError, { companyId: user.companyId || null });
-    unsubscribe = subscribe();
+    load();
+    // Periodic liveness refresh (the governed read is one-shot; no RTDB realtime
+    // is authorized for dashboard users).
+    refreshTimer = setInterval(() => { if (!cancelled) load(); }, 60000);
 
     return () => {
       cancelled = true;
-      unsubscribe();
+      if (retryTimer) clearTimeout(retryTimer);
+      if (refreshTimer) clearInterval(refreshTimer);
     };
   }, [user, loading]);
 
