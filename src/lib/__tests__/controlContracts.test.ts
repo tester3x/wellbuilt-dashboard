@@ -401,3 +401,20 @@ test('AUDIT-4C: GPS recording + equipment + branding + seed controls gated', () 
   assert.ok(/const canSeed = isPlatformAdmin\(user\)/.test(seed), 'seed gated to platform admin');
   assert.ok(/if \(!canSeed\)/.test(seed) && /confirm\(/.test(seed), 'seed guarded + confirm');
 });
+
+// ── Phase 5A — governed company-write migration (platform-admin path) ────────
+test('5A: CompaniesTab routes platform company-field writes through adminUpdateCompanySafe', () => {
+  const c = read('../../components/admin/CompaniesTab.tsx');
+  // helper routes by caller class: platform → governed callable, tenant → direct
+  assert.match(c, /const writeCompanyFields = async \(companyId: string, fields: Record<string, unknown>\) =>/);
+  assert.match(c, /if \(isWbAdmin\) \{\s*await adminService\.updateCompanySafe\(\{ companyId, fields \}\);/);
+  // the 5 migrated controls use the helper (2 operators + rate + pay + tier)
+  assert.ok((c.match(/writeCompanyFields\(/g) || []).length >= 5, 'helper used at 5 migrated call sites');
+  // migrated fields are no longer written by a raw direct updateDoc
+  assert.ok(!/updateDoc\(doc\(firestore, 'companies', companyId\), \{\s*assignedOperators:/.test(c), 'operators not direct-written');
+  assert.ok(!/updateDoc\(doc\(firestore, 'companies', rateSheetCompany\.id\)/.test(c), 'rate sheet not direct-written');
+  assert.ok(!/updateDoc\(doc\(firestore, 'companies', payConfigCompany\.id\)/.test(c), 'pay config not direct-written');
+  assert.ok(!/updateDoc\(doc\(firestore, 'companies', company\.id\), \{ tier \}\)/.test(c), 'tier not direct-written');
+  // saveCompany platform edit still governed
+  assert.match(c, /adminService\.updateCompanySafe\(\{ companyId: id, fields: data \}\)/);
+});

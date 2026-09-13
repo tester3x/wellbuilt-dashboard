@@ -259,3 +259,40 @@ Page gate: role admin/it. Wells/Routes/GPS tabs additionally require `canViewGlo
 - **BLOCKED:** +Add Pull submit, Wells Save Changes, Spill policy + 6 spill actions, Diesel backfill, Add Route, Payroll Send-All/Lock/Send-to-Driver, well/route delete-rename-GPS *governed* path.
 - **DEAD/NO-OP:** Payroll Flag; DriversTab Routes-legacy/Migrate/Create-secure-login.
 - **LEGACY/UNREACHABLE:** DriversTab Delete-driver.
+
+---
+
+# Phase 5A — Governed company-write migration (2026-09-13)
+Branch `fix/dashboard-govern-company-writes-20260913` (from `3aab0ea6`). Frontend-only. No Functions/rules/identity changes. **Not deployed** (AntiGravity owns the active Functions lane; per the release rule, stop after the clean pushed commit when that status is active/unknown).
+
+## Deployed contract proof — `adminUpdateCompanySafe` (source + rebuilt lineage; no production call)
+- **Auth: PLATFORM-ADMIN ONLY.** `updateCompanySafeHandler`→`requireAdmin`→`authorizeAdminCall`: requires custom claim `wellbuiltAdmin === true` AND an enabled `platform_admins/{uid}` record with matching `ADMIN_POLICY_VERSION`. A tenant admin (`manageCompany`/`editBilling`, role it/admin with a companyId) has **none** of these → `missing_admin_claim` / `no_admin_record` / `claim_not_true`.
+- **Tenant boundary:** none needed — platform admins act on any company; there is no tenant-scoped acceptance path.
+- **Operation/payload:** single op; `requireExactKeys(data, ['companyId','fields'])` → exactly `{ companyId, fields }`. `fields` must be a plain object, `1..SAFE_UPDATE_MAX_FIELDS(30)` keys, each defined, no dotted paths, no `__` prefix.
+- **Field allowlist:** any key NOT in `PROTECTED_COMPANY_KEYS` = [`wellbuiltContract`,`contractVersion`,`planId`,`entitlement`,`entitlementOverrides`,`workPeriodMode`,`workPeriodConfiguration`,`effectiveCapabilities`,`configurationVersion`,`contractEnforced`]. (`tier`, `assignedOperators`, `rateSheets`, `payConfig`, company profile fields are all allowed.)
+- **Behavior:** transaction: company must exist → `tx.update` merge → `audit(operation:'company.safeUpdate', changedFields)`. **Success:** `{ companyId, changedFields }`. **Errors** (HttpsError code + adminCode): `unauthenticated`, `permission-denied`(missing_admin_claim/claim_not_true/no_admin_record/admin_record_disabled/protected_field:*), `invalid-argument`(fields_not_object/fields_empty_or_unbounded/invalid_field_name/undefined_value), `not-found`(company_not_found).
+- **Verdict:** usable ONLY by WellBuilt platform admins. **Tenant `manageCompany`/`editBilling`/`manageRoles` controls CANNOT use it.**
+
+## Every direct `companies/{id}` write found + disposition
+| Control | File | Caller | Disposition |
+|---|---|---|---|
+| CompaniesTab Save Company (edit, platform) | CompaniesTab.tsx:~271 | platform (isWbAdmin) | already governed (adminUpdateCompanySafe) — unchanged |
+| CompaniesTab Add/Remove Operator | CompaniesTab.tsx | platform + tenant | **MIGRATED (platform path)** via `writeCompanyFields`→adminUpdateCompanySafe{assignedOperators}; tenant path direct (unchanged) |
+| CompaniesTab Save Rate Sheet | CompaniesTab.tsx | platform + tenant | **MIGRATED (platform path)** {rateSheets} |
+| CompaniesTab Save Pay Config | CompaniesTab.tsx | platform + tenant | **MIGRATED (platform path)** {payConfig} |
+| CompaniesTab Tier buttons | CompaniesTab.tsx:~914 | platform only (isWbAdmin) | **MIGRATED (fully)** {tier} (RTDB driver-tier sync left as non-blocking side effect) |
+| CompaniesTab Save Company (edit, tenant) | CompaniesTab.tsx:~292 | tenant | INCOMPATIBLE (platform-only callable) — unchanged, CE |
+| CompaniesTab Create company / Activate signup | CompaniesTab.tsx:176,304 | platform | INCOMPATIBLE — callable is UPDATE-only (no create); onboarding also writes users/{uid} → needs `adminApproveCompanyOnboarding`/`adminCreateCompanyWithJoinCode` |
+| CompaniesTab Save Branding | CompaniesTab.tsx:674 | platform + tenant | OUT OF SCOPE this phase (Branding Storage) — unchanged |
+| Settings: Operations, Photos, RequiredPhotoSpecs, CompanyProfile, Packages, CustomJobTypes, InvoiceConfig, LevelReports, OilCompanies, RateSheets, BillingConfig, TicketTemplate, PayConfig, PayrollTemplate, Branding, Jsa, SWDDirectory, Roles | src/components/settings/* | tenant (manageCompany/editBilling/manageRoles) | **INCOMPATIBLE** — platform-only callable would break tenant access. Unchanged (client-gated, CE). |
+| Billing DOE Region | billing/page.tsx | tenant (editBilling) | **INCOMPATIBLE** — unchanged, CE |
+
+## Interim classification for migrated platform paths
+**`GOVERNED DASHBOARD PATH / RULES BYPASS STILL OPEN`** — the platform-admin path now flows through the audited callable, but the database remains directly writable while permissive rules stand. Not "fixed" until rules are tightened + emulator-proven.
+
+## Phase 5B requirement (record only — no Functions work here)
+A **tenant-scoped** governed company-update callable is required to close the tenant exposure:
+- **Auth:** accept tenant admins by capability — `manageCompany` (general config), `editBilling` (billing/rate/pay/DOE region), `manageRolesAndCapabilities` (roleLabels/roleCapabilities) — resolved from the caller's role/company, NOT the platform claim.
+- **Tenant boundary:** `companyId` must equal the caller's own `companyId` (reject cross-company).
+- **Field allowlist (per capability):** manageCompany → profile/operations/photos/packages/customJobTypes/invoiceConfig/levelReports/assignedOperators/ticketTemplates/branding/jsa*; editBilling → billingConfig/rateSheets/payConfig/doeRegion/currentDieselPrice; manageRolesAndCapabilities → roleLabels/roleCapabilities. Continue to forbid `PROTECTED_COMPANY_KEYS`.
+- **Then** migrate every INCOMPATIBLE tenant control above to it and tighten Firestore rules to deny direct client `companies/{id}` writes (turns all remaining CE → WORKING).

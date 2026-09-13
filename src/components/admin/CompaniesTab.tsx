@@ -240,6 +240,24 @@ export function CompaniesTab({ scopeCompanyId, isWbAdmin = false }: CompaniesTab
     setShowForm(true);
   };
 
+  // Governed company field-merge. Platform admins (WellBuilt admin claim) go
+  // through the audited, deployed adminUpdateCompanySafe callable (protected
+  // contract keys are unreachable there by construction). Tenant admins keep
+  // their established company-scoped direct write — the callable is
+  // platform-admin-only (proven: requireAdmin → wellbuiltAdmin claim +
+  // platform_admins/{uid} record), so it CANNOT serve tenant admins and must
+  // not be used for them. This routes by caller class exactly like saveCompany;
+  // it is not a try/catch fallback. The tenant branch remains
+  // GOVERNED DASHBOARD PATH (platform) / RULES BYPASS STILL OPEN (tenant),
+  // pending a Phase 5B tenant-scoped company-update callable.
+  const writeCompanyFields = async (companyId: string, fields: Record<string, unknown>) => {
+    if (isWbAdmin) {
+      await adminService.updateCompanySafe({ companyId, fields });
+    } else {
+      await updateDoc(doc(firestore, 'companies', companyId), fields);
+    }
+  };
+
   const saveCompany = async () => {
     const id = editingCompany ? editingCompany.id : formId.trim().toLowerCase().replace(/\s+/g, '-');
     if (!id || !formName.trim()) {
@@ -368,9 +386,7 @@ export function CompaniesTab({ scopeCompanyId, isWbAdmin = false }: CompaniesTab
     const updated = [...existing, operatorName].sort();
 
     try {
-      await updateDoc(doc(firestore, 'companies', companyId), {
-        assignedOperators: updated,
-      });
+      await writeCompanyFields(companyId, { assignedOperators: updated });
       setMessage(`Added: ${operatorName}`);
       setShowOperatorModal(null);
       setOperatorSearch('');
@@ -388,9 +404,7 @@ export function CompaniesTab({ scopeCompanyId, isWbAdmin = false }: CompaniesTab
     const updated = (company.assignedOperators || []).filter(op => op !== operatorName);
 
     try {
-      await updateDoc(doc(firestore, 'companies', companyId), {
-        assignedOperators: updated,
-      });
+      await writeCompanyFields(companyId, { assignedOperators: updated });
       setMessage(`Removed: ${operatorName}`);
       await loadCompanies();
     } catch (err) {
@@ -437,9 +451,7 @@ export function CompaniesTab({ scopeCompanyId, isWbAdmin = false }: CompaniesTab
       } else {
         delete updatedSheets[rateSheetOperator];
       }
-      await updateDoc(doc(firestore, 'companies', rateSheetCompany.id), {
-        rateSheets: updatedSheets,
-      });
+      await writeCompanyFields(rateSheetCompany.id, { rateSheets: updatedSheets });
       setMessage(`Rate sheet saved for ${rateSheetOperator}`);
       setRateSheetCompany(null);
       await loadCompanies();
@@ -476,9 +488,7 @@ export function CompaniesTab({ scopeCompanyId, isWbAdmin = false }: CompaniesTab
           frostSeason: { startDate: payConfigFrostStart, endDate: payConfigFrostEnd || '' },
         } : {}),
       };
-      await updateDoc(doc(firestore, 'companies', payConfigCompany.id), {
-        payConfig: config,
-      });
+      await writeCompanyFields(payConfigCompany.id, { payConfig: config });
       setMessage(`Pay config saved for ${payConfigCompany.name}`);
       setPayConfigCompany(null);
       await loadCompanies();
@@ -911,7 +921,7 @@ export function CompaniesTab({ scopeCompanyId, isWbAdmin = false }: CompaniesTab
                               onClick={async (e) => {
                                 e.stopPropagation();
                                 try {
-                                  await updateDoc(doc(firestore, 'companies', company.id), { tier });
+                                  await writeCompanyFields(company.id, { tier });
                                   // Sync tier to all drivers in this company (RTDB)
                                   try {
                                     const rtdb = getFirebaseDatabase();
