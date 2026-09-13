@@ -1,0 +1,47 @@
+const assert=require('node:assert/strict');
+const {handleStandalone}=require('../lib/jsaReceipt/jsaStandalone');
+const auth={uid:'test-user',claims:{kind:'driver',driverId:'driver-1',companyId:'company-1',app:'jsa'}};
+const contract={contractVersion:1,planId:'free',contractEnforced:true};
+const plan={contractVersion:1,planId:'free',displayName:'Free',capabilities:['jsa'],status:'active',apps:{'wellbuilt-jsa':{included:true}}};
+const deps={getDriver:async()=>({driverId:'driver-1',companyId:'company-1',active:true}),getCompanyContract:async()=>({state:'active',contract}),getPlan:async()=>plan};
+const rows=new Map();let writes=0;
+let store={list:async path=>[...rows.entries()].filter(([k])=>k.startsWith(path+'/')).map(([,v])=>v),transaction:async(path,fn)=>{const old=rows.get(path)||null,next=fn(old);if(next){rows.set(path,next);writes++;}return next||old;}};
+if(process.env.FIRESTORE_EMULATOR_HOST){
+ const admin=require('firebase-admin');admin.initializeApp({projectId:'demo-jsa-standalone'});
+ const db=admin.firestore();
+ const mem=store;
+ store={list:async(path)=> (await db.collection(path).get()).docs.map(d=>d.data()),transaction:async(path,fn)=>db.runTransaction(async tx=>{const ref=db.doc(path),snap=await tx.get(ref),old=snap.exists?snap.data():null,next=fn(old);if(next){tx.set(ref,next);rows.set(path,next);writes++;}return next||old;})};
+}
+const snapshot={prepared:{trained:true},locationAcks:{},locations:['Test location'],stepsAcknowledged:true,stepAcks:{one:true},ppeSelected:{gloves:true},ppeOtherItems:[],notes:'',pusher:'',otherInfo:'',printedName:'Test Driver',signature:{mimeType:'image/png',data:Buffer.from([137,80,78,71,13,10,26,10,1,2,3]).toString('base64')},formDate:'2026-09-13'};
+const recordId='A'.repeat(43),request={operation:'create',recordId,snapshot,job:{activity:'Test service',wells:[{name:'Test location',jobType:'Test service',operator:'',county:''}]}};
+let checks=0;
+const run=(raw,who=auth,d=deps)=>handleStandalone(d,store,who,raw,1000);
+const deny=async(raw,who=auth,d=deps)=>{await assert.rejects(()=>run(raw,who,d));checks++;};
+(async()=>{
+ assert.equal((await run({operation:'access'})).requiresActiveShift,false);checks++;
+ const first=(await run(request)).record;assert.equal(first.shiftId,null);assert.equal(first.workflow,'standalone');checks++;
+ assert.deepEqual((await run(request)).record,first);assert.equal(writes,1);checks++;
+ assert.equal((await run({operation:'list'})).records.length,1);checks++;
+ await deny({...request,snapshot:{...snapshot,notes:'changed'}});
+ for(const field of ['companyId','driverId','shiftId','dayStatus','requestId'])await deny({...request,[field]:'forged'});
+ await deny({operation:'get',recordId},{uid:null});
+ await deny({operation:'get',recordId},{...auth,claims:{...auth.claims,app:'tickets'}});
+ await deny({operation:'get',recordId},auth,{...deps,getDriver:async()=>({driverId:'driver-1',companyId:'other',active:true})});
+ await deny({operation:'access'},auth,{...deps,getDriver:async()=>({driverId:'driver-1',companyId:'company-1',active:false})});
+ await deny({operation:'access'},auth,{...deps,getPlan:async()=>({...plan,apps:{'wellbuilt-jsa':{included:false}}})});
+ await deny({operation:'access'},auth,{...deps,getCompanyContract:async()=>({state:'invalid',contract:null})});
+ await deny({...request,snapshot:{...snapshot,stepsAcknowledged:false}});
+ await deny({...request,job:{...request.job,companyId:'forged'}});
+ const closed=(await run({operation:'close',recordId})).record;
+ assert.equal(closed.state,'closed');assert.deepEqual(closed.snapshot,first.snapshot);checks++;
+ assert.deepEqual((await run({operation:'close',recordId})).record,closed);assert.equal(writes,2);checks++;
+ assert.ok([...rows.keys()].every(k=>k.startsWith('jsa_standalone_companies/')));checks++;
+ const requires={...deps,getCompanyContract:async()=>({state:'active',contract:{...contract,appConfiguration:{'wellbuilt-jsa':{requiresActiveShift:true}}}})};
+ assert.equal((await run({operation:'access'},auth,requires)).allowed,true);checks++;
+ if(process.env.FIRESTORE_EMULATOR_HOST){
+   const key=[...rows.keys()][0];
+   const response=await fetch('http://'+process.env.FIRESTORE_EMULATOR_HOST+'/v1/projects/demo-jsa-standalone/databases/(default)/documents/'+key);
+   assert.equal(response.status,403);checks++;
+ }
+ console.log(checks+' standalone server cases passed; exactly one record, no shift/receipt/commercial writes.');
+})().catch(e=>{console.error(e);process.exitCode=1});

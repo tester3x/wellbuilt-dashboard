@@ -1,0 +1,9 @@
+# Standalone JSA — implementation checkpoint
+
+Branch feat/jsa-standalone-company-access-20260913, base 65683a6b. Compared all 237 archived src files from live jsaPersistGovernedArtifact revision jsapersistgovernedartifact-00002-jas: identical except index.ts new export. Live functions inventory and source archive were read on 2026-09-13. This base is function-specific lineage, not a claim every production function has this version.
+
+New jsaStandalone callable operations: access/create/list/get/close. Requires Firebase driver claims with JSA audience and revalidates active driver/company membership through canonical SSO authority. Uses canonical app entitlement decision; standalone explicitly excludes only shift-required refusal, preserving all other denials. Client identity/shift/day-status fields rejected. Validated signed snapshot reuses deployed artifact parser. Own company/driver-scoped records only; immutable content hash, duplicate reuse, conflict rejection, idempotent closure; no required-work receipt, day-status, or commercial writes.
+
+Build passes. 22 handler checks pass. Firestore emulator 23 checks pass, including direct unauthenticated read denial. Emulator auth identity is supplied by test injection; it does not prove a real phone token/callable request yet. Collection namespace is covered by existing default-deny rules; no rules changes. Test-only data uses demo-jsa-standalone.
+
+Client wiring, production callable verification, read/close UX, local owner scoping, required-flow regression, APK build/install and user-signed device test remain unfinished. No production record created. Deploy only functions:jsaStandalone after rechecking provenance; never deploy other exports from this historical source base.

@@ -4823,3 +4823,5 @@ export {
 // whole-codebase deploy would have pruned them.
 export { validatePhotoCompliance, suggestPhotoCriteria } from './photoCompliance';
 export { scheduledWellCatalogRefresh, triggerWellCatalogRefresh } from './wellCatalogRefresh';
+
+export { jsaStandalone } from './jsaReceipt/jsaStandaloneCallable';
