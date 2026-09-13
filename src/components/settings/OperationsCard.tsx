@@ -3,21 +3,32 @@
 import { useState } from 'react';
 import { deleteField } from 'firebase/firestore';
 import { type CompanyConfig, updateCompanyFields } from '@/lib/companySettings';
+import {
+  buildBooleanToggle,
+  buildCancelledNumberHandling,
+  buildInvoicingMode,
+  buildLiveDispatchSync,
+} from '@/lib/companySettingsCore';
 
 interface Props {
   company: CompanyConfig;
   onSave: () => void;
+  /** Whether the current user may edit company operations (manageCompany). */
+  canEdit: boolean;
 }
 
-export function OperationsCard({ company, onSave }: Props) {
+export function OperationsCard({ company, onSave, canEdit }: Props) {
   const [saving, setSaving] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
 
-  // Single write path for every control in this card. A failed write is
-  // SURFACED (not swallowed to console) so the operator learns the setting
-  // did not change — the deployed rules allow these company field-merges, so
-  // a failure is a real, actionable problem.
+  // Single write path for every control in this card. Two invariants:
+  //  1. Capability gate — a user without manageCompany can never write. The
+  //     controls are also disabled below, but this guards the handler too since
+  //     the deployed rules do NOT enforce capability on these direct writes.
+  //  2. Failures are SURFACED (not swallowed) so the operator learns the change
+  //     did not apply.
   const saveField = async (key: string, fields: Record<string, unknown>) => {
+    if (!canEdit) return;
     setSaving(key);
     setError(null);
     try {
@@ -32,10 +43,12 @@ export function OperationsCard({ company, onSave }: Props) {
   };
 
   const toggle = (field: 'splitTickets' | 'transferRequiresApproval' | 'liveDispatchSync', current: boolean) =>
-    saveField(field, { [field]: !current });
+    saveField(field, buildBooleanToggle(field, current));
 
   const setCancelMode = (mode: 'recycle' | 'void') =>
-    saveField('cancelledNumberHandling', { cancelledNumberHandling: mode });
+    saveField('cancelledNumberHandling', buildCancelledNumberHandling(mode));
+
+  const locked = !canEdit;
 
   return (
     <div className="bg-gray-800 rounded-lg overflow-hidden">
@@ -43,6 +56,9 @@ export function OperationsCard({ company, onSave }: Props) {
         <h3 className="text-orange-400 font-medium text-sm">Operations</h3>
       </div>
 
+      {locked && (
+        <div className="px-4 pt-3 text-gray-400 text-xs">View-only — you do not have permission to change operations settings.</div>
+      )}
       {error && (
         <div className="px-4 pt-3 text-red-400 text-xs" role="alert">{error}</div>
       )}
@@ -56,10 +72,10 @@ export function OperationsCard({ company, onSave }: Props) {
           </div>
           <button
             onClick={() => toggle('splitTickets', company.splitTickets || false)}
-            disabled={saving === 'splitTickets'}
+            disabled={locked || saving === 'splitTickets'}
             className={`relative w-11 h-6 rounded-full transition-colors ${
               company.splitTickets ? 'bg-orange-500' : 'bg-gray-600'
-            } ${saving === 'splitTickets' ? 'opacity-50' : ''}`}
+            } ${saving === 'splitTickets' ? 'opacity-50' : ''} ${locked ? 'opacity-50 cursor-not-allowed' : ''}`}
           >
             <span className={`absolute top-0.5 left-0.5 w-5 h-5 rounded-full bg-white transition-transform ${
               company.splitTickets ? 'translate-x-5' : 'translate-x-0'
@@ -75,10 +91,10 @@ export function OperationsCard({ company, onSave }: Props) {
           </div>
           <button
             onClick={() => toggle('transferRequiresApproval', company.transferRequiresApproval || false)}
-            disabled={saving === 'transferRequiresApproval'}
+            disabled={locked || saving === 'transferRequiresApproval'}
             className={`relative w-11 h-6 rounded-full transition-colors ${
               company.transferRequiresApproval ? 'bg-orange-500' : 'bg-gray-600'
-            } ${saving === 'transferRequiresApproval' ? 'opacity-50' : ''}`}
+            } ${saving === 'transferRequiresApproval' ? 'opacity-50' : ''} ${locked ? 'opacity-50 cursor-not-allowed' : ''}`}
           >
             <span className={`absolute top-0.5 left-0.5 w-5 h-5 rounded-full bg-white transition-transform ${
               company.transferRequiresApproval ? 'translate-x-5' : 'translate-x-0'
@@ -100,10 +116,10 @@ export function OperationsCard({ company, onSave }: Props) {
               </div>
             </div>
           </div>
-          <div className={`flex rounded-md overflow-hidden border border-gray-600 ${saving === 'liveDispatchSync' ? 'opacity-50' : ''}`}>
+          <div className={`flex rounded-md overflow-hidden border border-gray-600 ${saving === 'liveDispatchSync' || locked ? 'opacity-50' : ''}`}>
             <button
-              onClick={() => saveField('liveDispatchSync', { liveDispatchSync: deleteField() as unknown })}
-              disabled={saving === 'liveDispatchSync'}
+              onClick={() => saveField('liveDispatchSync', buildLiveDispatchSync(deleteField()))}
+              disabled={locked || saving === 'liveDispatchSync'}
               className={`px-3 py-1 text-xs font-medium transition-colors ${
                 company.liveDispatchSync === undefined || company.liveDispatchSync === null
                   ? 'bg-orange-500 text-black'
@@ -113,8 +129,8 @@ export function OperationsCard({ company, onSave }: Props) {
               Off
             </button>
             <button
-              onClick={() => saveField('liveDispatchSync', { liveDispatchSync: true })}
-              disabled={saving === 'liveDispatchSync'}
+              onClick={() => saveField('liveDispatchSync', buildLiveDispatchSync(true))}
+              disabled={locked || saving === 'liveDispatchSync'}
               className={`px-3 py-1 text-xs font-medium transition-colors ${
                 company.liveDispatchSync === true
                   ? 'bg-orange-500 text-black'
@@ -124,8 +140,8 @@ export function OperationsCard({ company, onSave }: Props) {
               Sync
             </button>
             <button
-              onClick={() => saveField('liveDispatchSync', { liveDispatchSync: false })}
-              disabled={saving === 'liveDispatchSync'}
+              onClick={() => saveField('liveDispatchSync', buildLiveDispatchSync(false))}
+              disabled={locked || saving === 'liveDispatchSync'}
               className={`px-3 py-1 text-xs font-medium transition-colors ${
                 company.liveDispatchSync === false
                   ? 'bg-orange-500 text-black'
@@ -151,10 +167,10 @@ export function OperationsCard({ company, onSave }: Props) {
               </div>
             </div>
           </div>
-          <div className={`flex rounded-md overflow-hidden border border-gray-600 ${saving === 'invoicingMode' ? 'opacity-50' : ''}`}>
+          <div className={`flex rounded-md overflow-hidden border border-gray-600 ${saving === 'invoicingMode' || locked ? 'opacity-50' : ''}`}>
             <button
-              onClick={() => saveField('invoicingMode', { invoicingMode: 'invoice_tickets' })}
-              disabled={saving === 'invoicingMode'}
+              onClick={() => saveField('invoicingMode', buildInvoicingMode('invoice_tickets'))}
+              disabled={locked || saving === 'invoicingMode'}
               className={`flex-1 px-3 py-1 text-xs font-medium transition-colors ${
                 (company.invoicingMode || 'invoice_tickets') === 'invoice_tickets'
                   ? 'bg-orange-500 text-black'
@@ -164,8 +180,8 @@ export function OperationsCard({ company, onSave }: Props) {
               Invoice + Tickets
             </button>
             <button
-              onClick={() => saveField('invoicingMode', { invoicingMode: 'ticket_only' })}
-              disabled={saving === 'invoicingMode'}
+              onClick={() => saveField('invoicingMode', buildInvoicingMode('ticket_only'))}
+              disabled={locked || saving === 'invoicingMode'}
               className={`flex-1 px-3 py-1 text-xs font-medium transition-colors ${
                 company.invoicingMode === 'ticket_only'
                   ? 'bg-orange-500 text-black'
@@ -175,8 +191,8 @@ export function OperationsCard({ company, onSave }: Props) {
               Ticket Only
             </button>
             <button
-              onClick={() => saveField('invoicingMode', { invoicingMode: 'hybrid' })}
-              disabled={saving === 'invoicingMode'}
+              onClick={() => saveField('invoicingMode', buildInvoicingMode('hybrid'))}
+              disabled={locked || saving === 'invoicingMode'}
               className={`flex-1 px-3 py-1 text-xs font-medium transition-colors ${
                 company.invoicingMode === 'hybrid'
                   ? 'bg-orange-500 text-black'
@@ -194,10 +210,10 @@ export function OperationsCard({ company, onSave }: Props) {
             <div className="text-white text-sm">Cancelled Job Numbers</div>
             <div className="text-gray-500 text-xs">Recycle deletes &amp; reuses numbers. Void keeps for audit trail.</div>
           </div>
-          <div className={`flex rounded-md overflow-hidden border border-gray-600 ${saving === 'cancelledNumberHandling' ? 'opacity-50' : ''}`}>
+          <div className={`flex rounded-md overflow-hidden border border-gray-600 ${saving === 'cancelledNumberHandling' || locked ? 'opacity-50' : ''}`}>
             <button
               onClick={() => setCancelMode('recycle')}
-              disabled={saving === 'cancelledNumberHandling'}
+              disabled={locked || saving === 'cancelledNumberHandling'}
               className={`px-3 py-1 text-xs font-medium transition-colors ${
                 (company.cancelledNumberHandling || 'recycle') === 'recycle'
                   ? 'bg-orange-500 text-black'
@@ -208,7 +224,7 @@ export function OperationsCard({ company, onSave }: Props) {
             </button>
             <button
               onClick={() => setCancelMode('void')}
-              disabled={saving === 'cancelledNumberHandling'}
+              disabled={locked || saving === 'cancelledNumberHandling'}
               className={`px-3 py-1 text-xs font-medium transition-colors ${
                 company.cancelledNumberHandling === 'void'
                   ? 'bg-orange-500 text-black'

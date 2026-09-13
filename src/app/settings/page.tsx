@@ -182,9 +182,9 @@ export default function SettingsPage() {
             <PackagesCard company={company} onSave={handleRefresh} />
             <CustomJobTypesCard company={company} onSave={handleRefresh} />
             <InvoiceConfigCard company={company} onSave={handleRefresh} />
-            <OperationsCard company={company} onSave={handleRefresh} />
+            <OperationsCard company={company} onSave={handleRefresh} canEdit={hasCapability(user, 'manageCompany', userCompany)} />
             <LevelReportsCard company={company} onSave={handleRefresh} />
-            <PhotosCard company={company} onSave={handleRefresh} />
+            <PhotosCard company={company} onSave={handleRefresh} canEdit={hasCapability(user, 'manageCompany', userCompany)} />
             <JsaCard company={company} onSave={handleRefresh} />
             {(hasCapability(user, 'viewSafety', userCompany) || hasCapability(user, 'manageSafety', userCompany) || hasCapability(user, 'viewSettings', userCompany)) && (
               <SpillNotificationCard

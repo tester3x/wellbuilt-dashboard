@@ -214,3 +214,51 @@ test('REPAIR: PhotosCard surfaces write failures for every control', () => {
   const setErrCount = (card.match(/setError\(/g) || []).length;
   assert.ok(setErrCount >= 3, `each of the 3 write handlers must surface errors (found ${setErrCount} setError calls)`);
 });
+
+// ── REPAIRED Phase 3 (fix/dashboard-settings-controls-20260913) ──────────────
+// Company-settings writes go through a DIRECT updateCompanyFields (companies/{id})
+// that the deployed rules allow for ANY authenticated caller on non-protected
+// keys — so the client capability gate is the ONLY capability enforcement. These
+// guards pin that gate. (The absence of server-side capability enforcement on
+// these direct writes is a rules-lane matter, out of Dashboard scope.)
+
+test('GATE: OperationsCard requires canEdit — controls disabled + handler guarded', () => {
+  const card = read('../../components/settings/OperationsCard.tsx');
+  assert.match(card, /canEdit:\s*boolean/, 'canEdit is a required prop');
+  assert.match(card, /const saveField[\s\S]{0,120}if \(!canEdit\) return;/, 'saveField hard-guards on canEdit');
+  assert.match(card, /const locked = !canEdit/, 'derives a locked flag');
+  assert.match(card, /disabled=\{locked \|\|/, 'controls are disabled when locked');
+  assert.match(card, /View-only/, 'shows a view-only notice');
+  assert.match(card, /from '@\/lib\/companySettingsCore'/, 'payloads come from the tested core builders');
+});
+
+test('GATE: PhotosCard requires canEdit — controls disabled + handlers guarded', () => {
+  const card = read('../../components/settings/PhotosCard.tsx');
+  assert.match(card, /canEdit:\s*boolean/, 'canEdit is a required prop');
+  const guards = (card.match(/if \(!canEdit\) return;/g) || []).length;
+  assert.ok(guards >= 3, `all 3 write handlers hard-guard on canEdit (found ${guards})`);
+  assert.match(card, /disabled=\{locked \|\|/, 'inputs/toggle disabled when locked');
+  assert.match(card, /parsePositivePhotoInt/, 'uses the tested int parser');
+});
+
+test('GATE: settings page passes manageCompany to Operations + Photos cards', () => {
+  const page = read('../../app/settings/page.tsx');
+  assert.match(page, /<OperationsCard[^>]*canEdit=\{hasCapability\(user, 'manageCompany'/, 'OperationsCard gated by manageCompany');
+  assert.match(page, /<PhotosCard[^>]*canEdit=\{hasCapability\(user, 'manageCompany'/, 'PhotosCard gated by manageCompany');
+});
+
+test('GATE: billing DOE region requires editBilling — select disabled + handler guarded', () => {
+  const billing = read('../../app/billing/page.tsx');
+  assert.match(billing, /const canEditBilling = hasCapability\(user, 'editBilling'/, 'derives editBilling capability');
+  const h = sliceHandler(billing, 'const handleRegionChange', '\n  };');
+  assert.match(h, /if \(!canEditBilling\) return;/, 'region handler hard-guards on editBilling');
+  assert.match(billing, /disabled=\{!canEditBilling\}/, 'region select disabled without editBilling');
+  assert.match(h, /buildDoeRegion\(/, 'payload comes from the tested core builder');
+});
+
+test('Phase-3 core builders exist and are used by the controls', () => {
+  const core = read('../companySettingsCore.ts');
+  for (const fn of ['runCompanyFieldWrite', 'buildBooleanToggle', 'buildInvoicingMode', 'buildDoeRegion', 'parsePositivePhotoInt', 'buildMinPhotoCount']) {
+    assert.match(core, new RegExp(`export (async )?function ${fn}|export const ${fn}`), `${fn} exported from core`);
+  }
+});

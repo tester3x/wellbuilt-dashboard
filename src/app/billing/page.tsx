@@ -5,6 +5,8 @@ import { useRouter } from 'next/navigation';
 import { useAuth } from '@/contexts/AuthContext';
 import { AppHeader } from '@/components/AppHeader';
 import { loadAllCompanies, updateCompanyFields, type CompanyConfig, type DoeRegion, DOE_REGIONS, STATE_TO_PADD } from '@/lib/companySettings';
+import { hasCapability } from '@/lib/auth';
+import { buildDoeRegion } from '@/lib/companySettingsCore';
 import { adminGetDashboardCatalog, classifiedReadFailure } from '@/lib/adminDashboardCatalog';
 import { backfillDieselPrices, describeBackfillError } from '@/lib/dieselBackfill';
 import { Timestamp } from 'firebase/firestore';
@@ -71,8 +73,12 @@ const RECEIVABLES_SCROLLBAR_CSS = `
 `;
 
 export default function BillingPage() {
-  const { user, loading } = useAuth();
+  const { user, loading, userCompany } = useAuth();
   const router = useRouter();
+  // DOE region is a billing config write — gate it by editBilling (viewer has
+  // viewBilling but NOT editBilling). The deployed rules do not enforce
+  // capability on this direct company-field write, so the UI gate matters.
+  const canEditBilling = hasCapability(user, 'editBilling', userCompany);
 
   // Sub-tab
   const [activeTab, setActiveTab] = useState<SubTab>('receivables');
@@ -335,8 +341,9 @@ export default function BillingPage() {
 
   const handleRegionChange = async (region: DoeRegion) => {
     if (!effectiveCompanyId) return;
+    if (!canEditBilling) return; // capability gate (control is also disabled)
     try {
-      await updateCompanyFields(effectiveCompanyId, { doeRegion: region });
+      await updateCompanyFields(effectiveCompanyId, buildDoeRegion(region));
       const list = await loadAllCompanies();
       const map = new Map<string, CompanyConfig>();
       list.forEach(c => map.set(c.id, c));
@@ -646,10 +653,14 @@ export default function BillingPage() {
                   </span>
                 )}
               </p>
+              {!canEditBilling && (
+                <p className="text-gray-400 text-xs mb-2">View-only — you do not have permission to change the DOE region.</p>
+              )}
               <select
                 value={currentRegion}
+                disabled={!canEditBilling}
                 onChange={e => handleRegionChange(e.target.value as DoeRegion)}
-                className="w-full max-w-md px-3 py-2 bg-gray-700 text-white rounded text-sm border border-gray-600 focus:outline-none focus:border-blue-500"
+                className="w-full max-w-md px-3 py-2 bg-gray-700 text-white rounded text-sm border border-gray-600 focus:outline-none focus:border-blue-500 disabled:opacity-50 disabled:cursor-not-allowed"
               >
                 {DOE_REGIONS.map(r => (
                   <option key={r.value} value={r.value}>
