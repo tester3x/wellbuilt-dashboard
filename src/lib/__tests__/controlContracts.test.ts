@@ -418,3 +418,17 @@ test('5A: CompaniesTab routes platform company-field writes through adminUpdateC
   // saveCompany platform edit still governed
   assert.match(c, /adminService\.updateCompanySafe\(\{ companyId: id, fields: data \}\)/);
 });
+
+// ── Dispatch priority/TTP consistency (fix/dashboard-dispatch-priority-ttp) ───
+test('Dispatch TTP column uses live formatTTP (not the stale server snapshot string)', () => {
+  const page = read('../../app/dispatch/page.tsx');
+  assert.match(page, /from '@\/lib\/dispatchPriority'/, 'priority helpers extracted to a testable lib');
+  assert.match(page, /\{formatTTP\(well\)\}/, 'TTP cell renders live formatTTP(well)');
+  // the raw stale-string cell must be gone
+  assert.ok(!/\{well\.timeTillPull \|\| well\.etaToMax \|\| '--'\}/.test(page), 'no raw stale timeTillPull cell remains');
+  // lib exports the pure helpers
+  const lib = read('../dispatchPriority.ts');
+  for (const fn of ['getPriority', 'formatTTP', 'getWellPrediction', 'formatNextPull']) {
+    assert.match(lib, new RegExp(`export function ${fn}`), `${fn} exported from dispatchPriority`);
+  }
+});

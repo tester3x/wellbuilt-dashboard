@@ -4,6 +4,7 @@ import { useEffect, useState, useMemo, useCallback, Suspense } from 'react';
 import { useRouter, useSearchParams } from 'next/navigation';
 import { useAuth } from '@/contexts/AuthContext';
 import { WellResponse, subscribeToWellStatusesUnified, wellResponsesFromCatalog } from '@/lib/wells';
+import { getPriority, getWellPrediction, formatTTP, type PriorityLevel } from '@/lib/dispatchPriority';
 // Z Fold recovery — layout helpers only (collapsed queue / stacked layout).
 // The realtime gate helpers from this module are intentionally NOT used:
 // 3ea36d84's subscribeToWellStatusesUnified realtime path is preserved.
@@ -173,143 +174,6 @@ interface ProjectInvoice {
   ticketCount?: number;
 }
 
-// Priority levels for PW queue
-type PriorityLevel = 'overdue' | 'soon' | 'today' | 'later' | 'unknown';
-
-interface PriorityInfo {
-  level: PriorityLevel;
-  label: string;
-  color: string;        // badge bg
-  textColor: string;    // badge text
-  sortOrder: number;     // lower = more urgent
-  hoursUntilPull: number | null;
-}
-
-// ─── Priority Calculation ────────────────────────────────────────────────────
-
-function getPriority(well: WellResponse): PriorityInfo {
-  const isDown = well.isDown || well.currentLevel === 'DOWN';
-  if (isDown) {
-    return { level: 'unknown', label: 'DOWN', color: 'bg-gray-600', textColor: 'text-gray-300', sortOrder: 999, hoursUntilPull: null };
-  }
-
-  // Try nextPullTimeUTC first (most accurate)
-  if (well.nextPullTimeUTC) {
-    const pullTime = new Date(well.nextPullTimeUTC).getTime();
-    if (!isNaN(pullTime)) {
-      const now = Date.now();
-      const hoursUntil = (pullTime - now) / (1000 * 60 * 60);
-
-      if (hoursUntil <= 0) {
-        return { level: 'overdue', label: 'OVERDUE', color: 'bg-red-600', textColor: 'text-white', sortOrder: 1, hoursUntilPull: hoursUntil };
-      }
-      if (hoursUntil <= 6) {
-        return { level: 'soon', label: `${Math.round(hoursUntil)}h`, color: 'bg-orange-600', textColor: 'text-white', sortOrder: 2, hoursUntilPull: hoursUntil };
-      }
-      if (hoursUntil <= 24) {
-        return { level: 'today', label: `${Math.round(hoursUntil)}h`, color: 'bg-yellow-600', textColor: 'text-white', sortOrder: 3, hoursUntilPull: hoursUntil };
-      }
-      const days = Math.floor(hoursUntil / 24);
-      return { level: 'later', label: `${days}d+`, color: 'bg-green-700', textColor: 'text-white', sortOrder: 4, hoursUntilPull: hoursUntil };
-    }
-  }
-
-  // Fallback: parse timeTillPull string
-  const ttp = well.timeTillPull || well.etaToMax || '';
-  if (ttp === 'Ready') {
-    return { level: 'overdue', label: 'READY', color: 'bg-red-600', textColor: 'text-white', sortOrder: 1, hoursUntilPull: 0 };
-  }
-
-  // Parse "Xd Yh Zm" or "Yh Zm" format
-  const dayMatch = ttp.match(/(\d+)d/);
-  const hourMatch = ttp.match(/(\d+)h/);
-  const minMatch = ttp.match(/(\d+)m/);
-  let totalHours = 0;
-  if (dayMatch) totalHours += parseInt(dayMatch[1]) * 24;
-  if (hourMatch) totalHours += parseInt(hourMatch[1]);
-  if (minMatch) totalHours += parseInt(minMatch[1]) / 60;
-
-  if (totalHours > 0) {
-    if (totalHours <= 6) {
-      return { level: 'soon', label: `${Math.round(totalHours)}h`, color: 'bg-orange-600', textColor: 'text-white', sortOrder: 2, hoursUntilPull: totalHours };
-    }
-    if (totalHours <= 24) {
-      return { level: 'today', label: `${Math.round(totalHours)}h`, color: 'bg-yellow-600', textColor: 'text-white', sortOrder: 3, hoursUntilPull: totalHours };
-    }
-    const days = Math.floor(totalHours / 24);
-    return { level: 'later', label: `${days}d+`, color: 'bg-green-700', textColor: 'text-white', sortOrder: 4, hoursUntilPull: totalHours };
-  }
-
-  return { level: 'unknown', label: '--', color: 'bg-gray-600', textColor: 'text-gray-300', sortOrder: 5, hoursUntilPull: null };
-}
-
-// ─── Prediction Model ────────────────────────────────────────────────────────
-
-interface WellPrediction {
-  pullsPerDay: number | null;     // how many pulls needed per day
-  hoursPerPull: number | null;    // hours between pulls at current flow rate
-  driverLoad: 'low' | 'normal' | 'high' | 'critical' | null;
-  warning: string | null;         // overflow risk warning text
-}
-
-function getWellPrediction(well: WellResponse): WellPrediction {
-  const isDown = well.isDown || well.currentLevel === 'DOWN';
-  if (isDown) return { pullsPerDay: null, hoursPerPull: null, driverLoad: null, warning: null };
-
-  // Get bbls/day — prefer window average, fall back to 24hr
-  const bblsDayStr = well.windowBblsDay || well.bbls24hrs || '';
-  const bblsDay = parseFloat(bblsDayStr);
-  if (!bblsDay || bblsDay <= 0) return { pullsPerDay: null, hoursPerPull: null, driverLoad: null, warning: null };
-
-  // Get pull capacity
-  const pullBbls = well.pullBbls || 140;
-
-  // Pulls needed per day to keep up with production
-  const pullsPerDay = bblsDay / pullBbls;
-
-  // Hours between pulls (how often a truck needs to show up)
-  const hoursPerPull = 24 / pullsPerDay;
-
-  // Driver load classification
-  let driverLoad: WellPrediction['driverLoad'] = 'low';
-  let warning: string | null = null;
-
-  if (pullsPerDay >= 3) {
-    driverLoad = 'critical';
-    warning = `${pullsPerDay.toFixed(1)} pulls/day — dedicated driver needed`;
-  } else if (pullsPerDay >= 2) {
-    driverLoad = 'high';
-    warning = `${pullsPerDay.toFixed(1)} pulls/day — multiple visits required`;
-  } else if (pullsPerDay >= 1.2) {
-    driverLoad = 'normal';
-    warning = null;  // normal single-pull-per-day range, no warning
-  } else {
-    driverLoad = 'low';
-    warning = null;
-  }
-
-  return { pullsPerDay, hoursPerPull, driverLoad, warning };
-}
-
-// ─── Helpers ─────────────────────────────────────────────────────────────────
-
-function formatNextPull(well: WellResponse): string {
-  if (!well.nextPullTime && !well.nextPullTimeUTC) return '--';
-  try {
-    const dateStr = well.nextPullTimeUTC || well.nextPullTime || '';
-    const date = new Date(dateStr);
-    if (isNaN(date.getTime())) return well.nextPullTime || '--';
-    return date.toLocaleString('en-US', {
-      month: 'numeric',
-      day: 'numeric',
-      hour: 'numeric',
-      minute: '2-digit',
-      hour12: true,
-    });
-  } catch {
-    return well.nextPullTime || '--';
-  }
-}
 
 function formatDispatchTime(ts: any): string {
   if (!ts) return '--';
@@ -3018,7 +2882,7 @@ function DispatchPageInner() {
                             </td>
                             <td className="px-2 py-1.5 text-white font-mono text-xs">{well.currentLevel || '--'}</td>
                             <td className="px-2 py-1.5 text-white font-mono text-[10px]">{well.flowRate || '--'}</td>
-                            <td className="px-2 py-1.5 text-white font-mono text-[10px]">{well.timeTillPull || well.etaToMax || '--'}</td>
+                            <td className="px-2 py-1.5 text-white font-mono text-[10px]">{formatTTP(well)}</td>
                             <td className="px-2 py-1.5"><PullsPredictionCell well={well} /></td>
                             <td className="px-2 py-1.5 text-right">
                               <div className="flex items-center justify-end gap-2">
