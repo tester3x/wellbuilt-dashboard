@@ -1335,7 +1335,7 @@ export const processIncomingPull = functionsV1.database
     // below (canonical_jobs / Firestore back-patch) is best-effort and advisory.
     await db.ref(`packets/processed/${packetId}`).update({
       canonicalProcessingComplete: true,
-      canonicalProcessingCompletedAt: admin.database.ServerValue.TIMESTAMP,
+      canonicalProcessingCompletedAt: (admin.database as any)?.ServerValue?.TIMESTAMP || { '.sv': 'timestamp' },
     });
 
     // ── canonical_jobs + Phase 1.2 server-side back-patch ─────────────────
@@ -4785,6 +4785,8 @@ export {
   staffWriteDriverAssignment,
   staffWriteWellConfig,
   staffSubmitManualPull,
+  ingestWatchdogPull,
+  getWatchdogPullReceipt,
   staffConvertApprovedDriverSecureLogin,
   upgradeOwnLegacyDriverLogin,
   staffHydrateCanonicalIdentity,

@@ -61,3 +61,6 @@ export {
 
 /** Authenticated cold-start secure session verification (side-effect free). */
 export { verifyDriverSession } from './verifyDriverSession';
+
+export { ingestWatchdogPull } from './watchdogPullCallable';
+export { getWatchdogPullReceipt } from './watchdogReceiptCallable';
