@@ -262,3 +262,90 @@ test('Phase-3 core builders exist and are used by the controls', () => {
     assert.match(core, new RegExp(`export (async )?function ${fn}|export const ${fn}`), `${fn} exported from core`);
   }
 });
+
+// ── AUDIT Phase 4B (audit/dashboard-controls-20260913) gate + honesty guards ──
+// Confirmed Dashboard-side defects repaired during the exhaustive audit. These
+// pin the client capability gates / honest-UI states so they cannot regress.
+// They are containment, not closure — the underlying writes remain server-
+// exposed (rules-lane follow-up).
+
+test('AUDIT: photo-review mutate gate is capability-based (not a role denylist)', () => {
+  const p = read('../../app/photo-review/page.tsx');
+  assert.match(p, /canMutate = canView && hasCapability\(user, 'createDispatch'/, 'canMutate uses createDispatch capability');
+  assert.ok(!/user\.role !== 'viewer'/.test(p), 'the old single-role denylist is gone');
+  // pagination uses the raw server count, not the client-filtered count
+  assert.match(p, /const serverCount = \(data\.items \|\| \[\]\)\.length/);
+  assert.match(p, /setHasMore\(serverCount >= limit\)/);
+});
+
+test('AUDIT: performance/route surfaces read failures (no silent empty state)', () => {
+  const p = read('../../app/performance/route/page.tsx');
+  assert.match(p, /const \[loadError, setLoadError\]/);
+  assert.match(p, /classifiedReadFailure\('route performance'/);
+  assert.match(p, /Retry/);
+});
+
+test('AUDIT: TicketDetailModal load has a catch (no permanent spinner)', () => {
+  const p = read('../../components/TicketDetailModal.tsx');
+  assert.match(p, /\}\)\.catch\(\(err\) => \{/, 'Promise.all chain has a .catch');
+  assert.match(p, /setLoadError/);
+});
+
+test('AUDIT: home module cards are capability-gated', () => {
+  const p = read('../../app/page.tsx');
+  for (const cap of ['viewMobile', 'viewTickets', 'viewBilling', 'viewPayroll']) {
+    assert.ok(p.includes(`hasCapability(user, '${cap}'`), `home card gated by ${cap}`);
+  }
+});
+
+test('AUDIT: billing Save/Delete price gated by editBilling', () => {
+  const p = read('../../app/billing/page.tsx');
+  assert.match(p, /const handleSavePrice[\s\S]{0,80}if \(!canEditBilling\) return;/, 'Save Price guarded');
+  assert.match(p, /disabled=\{savingPrice \|\| !newPrice \|\| !canEditBilling\}/, 'Save Price button gated');
+  assert.ok(/if \(!canEditBilling\) return;\s*\n\s*if \(!confirm\(`Delete price entry/.test(p), 'Delete price handler guarded');
+});
+
+test('AUDIT: payroll money mutations gated by approvePayroll + errors surfaced', () => {
+  const p = read('../../app/payroll/page.tsx');
+  assert.match(p, /const canApprovePayroll = hasCapability\(user, 'approvePayroll'/);
+  const guards = (p.match(/if \(!canApprovePayroll\) return;/g) || []).length;
+  assert.ok(guards >= 4, `all 4 deduction/bonus handlers guarded (found ${guards})`);
+  // dead buttons disabled, not silent no-ops
+  assert.ok(!/onClick=\{\(\) => \{\/\* TODO/.test(p), 'no empty TODO onClick remains');
+});
+
+test('AUDIT: dispatch Projects/chat direct-writes gated by createDispatch', () => {
+  const p = read('../../app/dispatch/page.tsx');
+  assert.match(p, /const guardCreateDispatch = \(\) =>/, 'message-returning project guard exists');
+  const guards = (p.match(/if \(!guardCreateDispatch\(\)\) return;/g) || []).length;
+  assert.ok(guards >= 4, `project handlers guarded (found ${guards})`);
+  assert.match(p, /\{canCreateDispatch && \(\s*<button\s+onClick=\{\(\) => setShowAddPullModal\(true\)\}/, '+Add Pull entry gated');
+});
+
+test('AUDIT: mobile +Add Pull entry gated by createDispatch', () => {
+  const p = read('../../app/mobile/page.tsx');
+  assert.match(p, /const canAddPull = hasCapability\(user, 'createDispatch'/);
+  assert.match(p, /\{canAddPull && \(/);
+});
+
+test('AUDIT: every mutation settings card has a canEdit gate + is passed one', () => {
+  const cards = [
+    'CompanyProfileCard', 'PackagesCard', 'CustomJobTypesCard', 'InvoiceConfigCard',
+    'LevelReportsCard', 'OilCompaniesCard', 'RateSheetsCard', 'BillingConfigCard',
+    'TicketTemplateCard', 'PayConfigCard', 'PayrollTemplateCard', 'BrandingCard',
+    'SWDDirectoryCard', 'JsaCard', 'OperationsCard', 'PhotosCard',
+  ];
+  const page = read('../../app/settings/page.tsx');
+  for (const c of cards) {
+    const src = read(`../../components/settings/${c}.tsx`);
+    assert.match(src, /canEdit/, `${c} declares a canEdit gate`);
+    // Find the card's render line and assert it is passed a manageCompany/editBilling gate.
+    const line = page.split('\n').find((l) => l.includes(`<${c} `) || l.includes(`<${c}\n`) || l.trimStart().startsWith(`<${c}`));
+    assert.ok(line, `${c} is rendered on the settings page`);
+    assert.ok(
+      line!.includes(`canEdit={hasCapability(user, 'manageCompany'`) ||
+      line!.includes(`canEdit={hasCapability(user, 'editBilling'`),
+      `${c} is passed a manageCompany/editBilling canEdit gate`,
+    );
+  }
+});

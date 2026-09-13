@@ -7,14 +7,17 @@ import { loadOperators, searchOperators, NdicOperator } from '@/lib/firestoreWel
 interface Props {
   company: CompanyConfig;
   onSave: () => void;
+  /** Whether the current user may edit assigned oil companies (manageCompany). */
+  canEdit: boolean;
 }
 
-export function OilCompaniesCard({ company, onSave }: Props) {
+export function OilCompaniesCard({ company, onSave, canEdit }: Props) {
   const [showModal, setShowModal] = useState(false);
   const [search, setSearch] = useState('');
   const [suggestions, setSuggestions] = useState<NdicOperator[]>([]);
   const [allOperators, setAllOperators] = useState<NdicOperator[]>([]);
   const [saving, setSaving] = useState(false);
+  const [error, setError] = useState<string | null>(null);
   const searchRef = useRef<HTMLInputElement>(null);
 
   useEffect(() => {
@@ -22,6 +25,8 @@ export function OilCompaniesCard({ company, onSave }: Props) {
   }, []);
 
   const openModal = () => {
+    if (!canEdit) return;
+    setError(null);
     setShowModal(true);
     setSearch('');
     setSuggestions([]);
@@ -40,10 +45,12 @@ export function OilCompaniesCard({ company, onSave }: Props) {
   };
 
   const addOperator = async (operatorName: string) => {
+    if (!canEdit) return;
     const existing = company.assignedOperators || [];
     if (existing.includes(operatorName)) return;
 
     setSaving(true);
+    setError(null);
     try {
       await updateCompanyFields(company.id, {
         assignedOperators: [...existing, operatorName].sort(),
@@ -53,19 +60,23 @@ export function OilCompaniesCard({ company, onSave }: Props) {
       onSave();
     } catch (err) {
       console.error('Failed to add operator:', err);
+      setError('Could not add that oil company — it was not applied. Please try again.');
     } finally {
       setSaving(false);
     }
   };
 
   const removeOperator = async (operatorName: string) => {
+    if (!canEdit) return;
     setSaving(true);
+    setError(null);
     try {
       const updated = (company.assignedOperators || []).filter(op => op !== operatorName);
       await updateCompanyFields(company.id, { assignedOperators: updated });
       onSave();
     } catch (err) {
       console.error('Failed to remove operator:', err);
+      setError('Could not remove that oil company — it was not applied. Please try again.');
     } finally {
       setSaving(false);
     }
@@ -80,11 +91,19 @@ export function OilCompaniesCard({ company, onSave }: Props) {
           </h3>
           <button
             onClick={openModal}
-            className="px-3 py-1 text-xs rounded bg-yellow-600 hover:bg-yellow-500 text-white"
+            disabled={!canEdit}
+            className="px-3 py-1 text-xs rounded bg-yellow-600 hover:bg-yellow-500 text-white disabled:opacity-50 disabled:cursor-not-allowed"
           >
             + Add
           </button>
         </div>
+
+        {!canEdit && (
+          <div className="px-4 pt-3 text-gray-400 text-xs">View-only — you do not have permission to change assigned oil companies.</div>
+        )}
+        {error && (
+          <div className="px-4 pt-3 text-red-400 text-xs" role="alert">{error}</div>
+        )}
 
         <div className="p-4">
           {(company.assignedOperators?.length || 0) === 0 ? (
@@ -101,8 +120,8 @@ export function OilCompaniesCard({ company, onSave }: Props) {
                   <span className="text-yellow-200">{op}</span>
                   <button
                     onClick={() => removeOperator(op)}
-                    disabled={saving}
-                    className="text-red-400 hover:text-red-300 text-xs ml-1"
+                    disabled={saving || !canEdit}
+                    className="text-red-400 hover:text-red-300 text-xs ml-1 disabled:opacity-50 disabled:cursor-not-allowed"
                     title="Remove"
                   >
                     ✕

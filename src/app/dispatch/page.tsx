@@ -364,6 +364,17 @@ function DispatchPageInner() {
   const ensureCanCreateDispatch = () => {
     if (!canCreateDispatch) throw new Error(DISPATCH_VIEW_ONLY_MSG);
   };
+  // Early-return guard (with a visible message) for the direct-Firestore project
+  // handlers, which don't go through the dispatch callable wrappers above. Keeps
+  // Projects/driver-disposal writes behind the same createDispatch capability.
+  const guardCreateDispatch = () => {
+    if (!canCreateDispatch) {
+      setMessage(DISPATCH_VIEW_ONLY_MSG);
+      setTimeout(() => setMessage(''), 5000);
+      return false;
+    }
+    return true;
+  };
   const staffCreateDispatch = (record: Record<string, unknown>) => {
     ensureCanCreateDispatch();
     return _staffCreateDispatch(record);
@@ -1339,6 +1350,7 @@ function DispatchPageInner() {
   // ─── Project CRUD ───────────────────────────────────────────────────────
 
   async function createProject() {
+    if (!guardCreateDispatch()) return;
     if (!newProjectName.trim() || newProjectWells.length === 0) return;
     setCreatingProject(true);
     try {
@@ -1476,6 +1488,7 @@ function DispatchPageInner() {
   }
 
   async function updateProjectStatus(projectId: string, status: 'active' | 'paused' | 'completed') {
+    if (!guardCreateDispatch()) return;
     try {
       const firestore = getFirestoreDb();
       const updates: Record<string, any> = { status };
@@ -1493,6 +1506,7 @@ function DispatchPageInner() {
   }
 
   async function addDriverToProjectToday(projectId: string, driverHash: string) {
+    if (!guardCreateDispatch()) return;
     const today = new Date().toISOString().slice(0, 10);
     const project = projects.find(p => p.id === projectId);
     if (!project) return;
@@ -1574,6 +1588,7 @@ function DispatchPageInner() {
   // ─── Batch Dispatch for Project Shift ─────────────────────────────────────
 
   async function batchDispatchShift(projectId: string, shift: 'day' | 'night') {
+    if (!guardCreateDispatch()) return;
     const project = projects.find(p => p.id === projectId);
     if (!project) return;
     const driverHashes = shift === 'day' ? (project.dayDriverHashes || []) : (project.nightDriverHashes || []);
@@ -2240,13 +2255,18 @@ function DispatchPageInner() {
                   </button>
                 ))}
                 <span className="flex-1" />
-                {/* Add Pull — always visible */}
+                {/* Add Pull — dispatch-write capability only (UI containment).
+                    The submit path itself is a recorded BLOCKER pending a
+                    governed staff pull-ingest callable; this only stops
+                    view-only users from reaching it. */}
+                {canCreateDispatch && (
                 <button
                   onClick={() => setShowAddPullModal(true)}
                   className="px-2.5 py-1 text-xs font-medium rounded transition-colors flex items-center gap-1 bg-gray-700 text-green-400 hover:bg-gray-600 border border-gray-600"
                 >
                   <span className="text-sm">+</span> Add Pull
                 </button>
+                )}
               </div>
 
               {/* ── PW Tab ── */}
@@ -3183,11 +3203,14 @@ function DispatchPageInner() {
                     onStatusChange={updateProjectStatus}
                     onAddDriver={(hash) => addDriverToProjectToday(selectedProject.id!, hash)}
                     onUpdateProject={async (id, data) => {
+                      if (!guardCreateDispatch()) return;
                       try {
                         const firestore = getFirestoreDb();
                         await updateDoc(doc(firestore, 'projects', id), data as any);
                       } catch (err) {
                         console.error('Failed to update project:', err);
+                        setMessage('Error: ' + (err instanceof Error ? err.message : 'could not update project'));
+                        setTimeout(() => setMessage(''), 5000);
                       }
                     }}
                     onBatchDispatch={(shift) => batchDispatchShift(selectedProject.id!, shift)}

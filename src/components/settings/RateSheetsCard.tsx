@@ -12,13 +12,16 @@ import {
 interface Props {
   company: CompanyConfig;
   onSave: () => void;
+  /** Whether the current user may edit rate sheets (manageCompany). */
+  canEdit: boolean;
 }
 
-export function RateSheetsCard({ company, onSave }: Props) {
+export function RateSheetsCard({ company, onSave, canEdit }: Props) {
   // Modal state
   const [editOperator, setEditOperator] = useState<string | null>(null);
   const [entries, setEntries] = useState<RateEntry[]>([]);
   const [saving, setSaving] = useState(false);
+  const [error, setError] = useState<string | null>(null);
 
   const operators = company.assignedOperators || [];
   // Counties that have frost zones configured — "All Counties" first
@@ -26,6 +29,8 @@ export function RateSheetsCard({ company, onSave }: Props) {
     .sort((a, b) => a === 'All Counties' ? -1 : b === 'All Counties' ? 1 : a.localeCompare(b));
 
   const openRateSheet = (operator: string) => {
+    if (!canEdit) return;
+    setError(null);
     const existing = company.rateSheets?.[operator] || [];
     setEntries(existing.length > 0 ? [...existing] : [
       { jobType: 'Production %', method: 'per_bbl', rate: 0 },
@@ -61,8 +66,10 @@ export function RateSheetsCard({ company, onSave }: Props) {
   };
 
   const save = async () => {
+    if (!canEdit) return;
     if (!editOperator) return;
     setSaving(true);
+    setError(null);
     try {
       const validEntries = entries.filter(e => e.jobType && e.rate > 0);
       const updatedSheets = { ...(company.rateSheets || {}) };
@@ -76,6 +83,7 @@ export function RateSheetsCard({ company, onSave }: Props) {
       onSave();
     } catch (err) {
       console.error('Failed to save rate sheet:', err);
+      setError('Could not save the rate sheet — it was not applied. Please try again.');
     } finally {
       setSaving(false);
     }
@@ -102,6 +110,13 @@ export function RateSheetsCard({ company, onSave }: Props) {
           <h3 className="text-green-400 font-medium text-sm">Rate Sheets</h3>
         </div>
 
+        {!canEdit && (
+          <div className="px-4 pt-3 text-gray-400 text-xs">View-only — you do not have permission to change rate sheets.</div>
+        )}
+        {error && (
+          <div className="px-4 pt-3 text-red-400 text-xs" role="alert">{error}</div>
+        )}
+
         <div className="p-4 space-y-1">
           {operators.map(op => {
             const rates = company.rateSheets?.[op];
@@ -125,7 +140,8 @@ export function RateSheetsCard({ company, onSave }: Props) {
                 </div>
                 <button
                   onClick={() => openRateSheet(op)}
-                  className="px-2 py-0.5 text-xs rounded bg-green-700 hover:bg-green-600 text-white shrink-0 ml-2"
+                  disabled={!canEdit}
+                  className="px-2 py-0.5 text-xs rounded bg-green-700 hover:bg-green-600 text-white shrink-0 ml-2 disabled:opacity-50 disabled:cursor-not-allowed"
                 >
                   {hasRates ? 'Edit' : '+ Set Rates'}
                 </button>
@@ -234,7 +250,7 @@ export function RateSheetsCard({ company, onSave }: Props) {
             <div className="flex gap-2">
               <button
                 onClick={save}
-                disabled={saving}
+                disabled={saving || !canEdit}
                 className="flex-1 px-4 py-2 bg-green-600 hover:bg-green-500 text-white rounded disabled:opacity-50"
               >
                 {saving ? 'Saving...' : 'Save Rates'}

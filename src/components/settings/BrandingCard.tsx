@@ -13,9 +13,11 @@ import {
 interface Props {
   company: CompanyConfig;
   onSave: () => void;
+  /** Whether the current user may edit company branding (manageCompany). */
+  canEdit: boolean;
 }
 
-export function BrandingCard({ company, onSave }: Props) {
+export function BrandingCard({ company, onSave, canEdit }: Props) {
   const [showModal, setShowModal] = useState(false);
   const [logoFile, setLogoFile] = useState<File | null>(null);
   const [logoPreview, setLogoPreview] = useState<string | null>(null);
@@ -30,6 +32,7 @@ export function BrandingCard({ company, onSave }: Props) {
   const thermalInputRef = useRef<HTMLInputElement>(null);
 
   const openEditor = () => {
+    if (!canEdit) return;
     setLogoFile(null);
     setLogoPreview(company.logoUrl || null);
     setThermalFile(null);
@@ -112,6 +115,7 @@ export function BrandingCard({ company, onSave }: Props) {
   };
 
   const save = async () => {
+    if (!canEdit) return;
     setSaving(true);
     setError('');
     let hasUploadError = false;
@@ -171,11 +175,16 @@ export function BrandingCard({ company, onSave }: Props) {
           <h3 className="text-purple-400 font-medium text-sm">Branding</h3>
           <button
             onClick={openEditor}
-            className="px-3 py-1 text-xs rounded bg-purple-600 hover:bg-purple-500 text-white"
+            disabled={!canEdit}
+            className="px-3 py-1 text-xs rounded bg-purple-600 hover:bg-purple-500 text-white disabled:opacity-50 disabled:cursor-not-allowed"
           >
             {company.logoUrl || company.primaryColor ? 'Edit' : '+ Set Up'}
           </button>
         </div>
+
+        {!canEdit && (
+          <div className="px-4 pt-3 text-gray-400 text-xs">View-only — you do not have permission to change branding.</div>
+        )}
 
         <div className="p-4">
           <div className="flex items-center gap-4 text-sm">
@@ -408,7 +417,7 @@ export function BrandingCard({ company, onSave }: Props) {
             <div className="flex gap-2">
               <button
                 onClick={save}
-                disabled={saving}
+                disabled={saving || !canEdit}
                 className="flex-1 px-4 py-2 bg-purple-600 hover:bg-purple-500 text-white rounded disabled:opacity-50"
               >
                 {saving ? 'Saving...' : 'Save Branding'}

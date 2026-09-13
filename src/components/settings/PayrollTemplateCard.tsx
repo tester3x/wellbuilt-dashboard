@@ -12,16 +12,20 @@ import {
 interface Props {
   company: CompanyConfig;
   onSave: () => void;
+  /** Whether the current user may edit the payroll template (manageCompany). */
+  canEdit: boolean;
 }
 
-export function PayrollTemplateCard({ company, onSave }: Props) {
+export function PayrollTemplateCard({ company, onSave, canEdit }: Props) {
   const saved = company.payConfig?.payrollTemplate;
   const [columns, setColumns] = useState<string[]>(saved?.columns || DEFAULT_PAYROLL_COLUMNS);
   const [editingOrder, setEditingOrder] = useState(false);
   const [saving, setSaving] = useState(false);
   const [dirty, setDirty] = useState(false);
+  const [error, setError] = useState<string | null>(null);
 
   const toggle = (id: string) => {
+    if (!canEdit) return;
     setColumns(prev => {
       const next = prev.includes(id) ? prev.filter(c => c !== id) : [...prev, id];
       setDirty(true);
@@ -30,6 +34,7 @@ export function PayrollTemplateCard({ company, onSave }: Props) {
   };
 
   const move = (id: string, dir: -1 | 1) => {
+    if (!canEdit) return;
     setColumns(prev => {
       const idx = prev.indexOf(id);
       if (idx < 0) return prev;
@@ -43,17 +48,26 @@ export function PayrollTemplateCard({ company, onSave }: Props) {
   };
 
   const handleSave = async () => {
+    if (!canEdit) return;
     if (!company.id) return;
     setSaving(true);
-    await updateCompanyFields(company.id, {
-      'payConfig.payrollTemplate': { columns } as PayrollTemplate,
-    });
-    setSaving(false);
-    setDirty(false);
-    onSave();
+    setError(null);
+    try {
+      await updateCompanyFields(company.id, {
+        'payConfig.payrollTemplate': { columns } as PayrollTemplate,
+      });
+      setDirty(false);
+      onSave();
+    } catch (err) {
+      console.error('Failed to save payroll template:', err);
+      setError('Could not save the payroll template — it was not applied. Please try again.');
+    } finally {
+      setSaving(false);
+    }
   };
 
   const handleReset = () => {
+    if (!canEdit) return;
     setColumns(DEFAULT_PAYROLL_COLUMNS);
     setDirty(true);
   };
@@ -72,13 +86,15 @@ export function PayrollTemplateCard({ company, onSave }: Props) {
         <div className="flex gap-2">
           <button
             onClick={handleReset}
-            className="px-3 py-1.5 rounded text-xs font-medium bg-gray-700 hover:bg-gray-600 text-gray-300 transition-colors"
+            disabled={!canEdit}
+            className="px-3 py-1.5 rounded text-xs font-medium bg-gray-700 hover:bg-gray-600 text-gray-300 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
           >
             Reset
           </button>
           <button
             onClick={() => setEditingOrder(!editingOrder)}
-            className={`px-3 py-1.5 rounded text-xs font-medium transition-colors ${
+            disabled={!canEdit}
+            className={`px-3 py-1.5 rounded text-xs font-medium transition-colors disabled:opacity-50 disabled:cursor-not-allowed ${
               editingOrder ? 'bg-blue-600 text-white' : 'bg-gray-700 hover:bg-gray-600 text-gray-300'
             }`}
           >
@@ -86,6 +102,13 @@ export function PayrollTemplateCard({ company, onSave }: Props) {
           </button>
         </div>
       </div>
+
+      {!canEdit && (
+        <div className="text-gray-400 text-xs mb-3">View-only — you do not have permission to change the payroll template.</div>
+      )}
+      {error && (
+        <div className="text-red-400 text-xs mb-3" role="alert">{error}</div>
+      )}
 
       {/* Checkbox Grid */}
       {!editingOrder && (
@@ -103,7 +126,8 @@ export function PayrollTemplateCard({ company, onSave }: Props) {
                 type="checkbox"
                 checked={columns.includes(col.id)}
                 onChange={() => toggle(col.id)}
-                className="w-4 h-4 rounded border-gray-500 bg-gray-700 text-blue-500 focus:ring-blue-500 focus:ring-offset-0"
+                disabled={!canEdit}
+                className="w-4 h-4 rounded border-gray-500 bg-gray-700 text-blue-500 focus:ring-blue-500 focus:ring-offset-0 disabled:opacity-50"
               />
               <span className="text-sm font-medium">{col.label}</span>
             </label>
@@ -124,15 +148,15 @@ export function PayrollTemplateCard({ company, onSave }: Props) {
               <span className="text-gray-500 text-xs">{col.align === 'right' ? 'Right' : 'Left'}</span>
               <button
                 onClick={() => move(col.id, -1)}
-                disabled={idx === 0}
-                className={`p-1 rounded transition-colors ${idx === 0 ? 'text-gray-600' : 'text-gray-400 hover:text-white hover:bg-gray-600'}`}
+                disabled={idx === 0 || !canEdit}
+                className={`p-1 rounded transition-colors ${idx === 0 || !canEdit ? 'text-gray-600' : 'text-gray-400 hover:text-white hover:bg-gray-600'}`}
               >
                 ▲
               </button>
               <button
                 onClick={() => move(col.id, 1)}
-                disabled={idx === enabledCols.length - 1}
-                className={`p-1 rounded transition-colors ${idx === enabledCols.length - 1 ? 'text-gray-600' : 'text-gray-400 hover:text-white hover:bg-gray-600'}`}
+                disabled={idx === enabledCols.length - 1 || !canEdit}
+                className={`p-1 rounded transition-colors ${idx === enabledCols.length - 1 || !canEdit ? 'text-gray-600' : 'text-gray-400 hover:text-white hover:bg-gray-600'}`}
               >
                 ▼
               </button>
@@ -175,8 +199,8 @@ export function PayrollTemplateCard({ company, onSave }: Props) {
       {dirty && (
         <button
           onClick={handleSave}
-          disabled={saving}
-          className={`w-full py-2 rounded-lg text-sm font-bold transition-colors ${
+          disabled={saving || !canEdit}
+          className={`w-full py-2 rounded-lg text-sm font-bold transition-colors disabled:opacity-50 disabled:cursor-not-allowed ${
             saving ? 'bg-gray-600 text-gray-400' : 'bg-blue-600 hover:bg-blue-700 text-white'
           }`}
         >

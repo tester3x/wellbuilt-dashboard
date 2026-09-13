@@ -14,6 +14,8 @@ import {
 interface Props {
   company: CompanyConfig;
   onSave: () => void;
+  /** Whether the current user may edit billing config (editBilling). */
+  canEdit: boolean;
 }
 
 const DEFAULT_CONFIG: OperatorBillingConfig = {
@@ -21,22 +23,27 @@ const DEFAULT_CONFIG: OperatorBillingConfig = {
   fuelSurchargeMethod: 'none',
 };
 
-export function BillingConfigCard({ company, onSave }: Props) {
+export function BillingConfigCard({ company, onSave, canEdit }: Props) {
   const [editOperator, setEditOperator] = useState<string | null>(null);
   const [config, setConfig] = useState<OperatorBillingConfig>(DEFAULT_CONFIG);
   const [saving, setSaving] = useState(false);
+  const [error, setError] = useState<string | null>(null);
 
   const operators = company.assignedOperators || [];
 
   const openConfig = (operator: string) => {
+    if (!canEdit) return;
+    setError(null);
     const existing = company.billingConfig?.[operator];
     setConfig(existing ? { ...existing } : { ...DEFAULT_CONFIG });
     setEditOperator(operator);
   };
 
   const save = async () => {
+    if (!canEdit) return;
     if (!editOperator) return;
     setSaving(true);
+    setError(null);
     try {
       const updatedConfig = { ...(company.billingConfig || {}) };
       updatedConfig[editOperator] = config;
@@ -45,6 +52,7 @@ export function BillingConfigCard({ company, onSave }: Props) {
       onSave();
     } catch (err) {
       console.error('Failed to save billing config:', err);
+      setError('Could not save the billing config — it was not applied. Please try again.');
     } finally {
       setSaving(false);
     }
@@ -64,6 +72,13 @@ export function BillingConfigCard({ company, onSave }: Props) {
         <div className="px-4 py-3 border-b border-blue-500/30 bg-blue-900/20">
           <h3 className="text-blue-400 font-medium text-sm">Billing Config</h3>
         </div>
+
+        {!canEdit && (
+          <div className="px-4 pt-3 text-gray-400 text-xs">View-only — you do not have permission to change billing config.</div>
+        )}
+        {error && (
+          <div className="px-4 pt-3 text-red-400 text-xs" role="alert">{error}</div>
+        )}
 
         <div className="p-4 space-y-1">
           {operators.map(op => {
@@ -91,7 +106,8 @@ export function BillingConfigCard({ company, onSave }: Props) {
                 </div>
                 <button
                   onClick={() => openConfig(op)}
-                  className="px-2 py-0.5 text-xs rounded bg-blue-700 hover:bg-blue-600 text-white shrink-0 ml-2"
+                  disabled={!canEdit}
+                  className="px-2 py-0.5 text-xs rounded bg-blue-700 hover:bg-blue-600 text-white shrink-0 ml-2 disabled:opacity-50 disabled:cursor-not-allowed"
                 >
                   {cfg ? 'Edit' : '+ Configure'}
                 </button>
@@ -439,7 +455,7 @@ export function BillingConfigCard({ company, onSave }: Props) {
             <div className="flex gap-2">
               <button
                 onClick={save}
-                disabled={saving}
+                disabled={saving || !canEdit}
                 className="flex-1 px-4 py-2 bg-blue-600 hover:bg-blue-500 text-white rounded disabled:opacity-50"
               >
                 {saving ? 'Saving...' : 'Save Config'}

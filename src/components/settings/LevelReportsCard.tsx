@@ -9,14 +9,19 @@ const TEMPLATE_FIELDS = ['{well}', '{top}', '{bottom}', '{date}', '{time}', '{bb
 interface Props {
   company: CompanyConfig;
   onSave: () => void;
+  /** Whether the current user may edit level report settings (manageCompany). */
+  canEdit: boolean;
 }
 
-export function LevelReportsCard({ company, onSave }: Props) {
+export function LevelReportsCard({ company, onSave, canEdit }: Props) {
   const [saving, setSaving] = useState<string | null>(null);
+  const [error, setError] = useState<string | null>(null);
   const [template, setTemplate] = useState(company.levelReportTemplate || DEFAULT_TEMPLATE);
 
   const toggleSendLevel = async () => {
+    if (!canEdit) return;
     setSaving('toggle');
+    setError(null);
     try {
       const updates: Record<string, any> = { sendLevelToDispatch: !company.sendLevelToDispatch };
       // Set default template when enabling for the first time
@@ -28,19 +33,23 @@ export function LevelReportsCard({ company, onSave }: Props) {
       onSave();
     } catch (err) {
       console.error('Failed to toggle sendLevelToDispatch:', err);
+      setError('Could not save that change — it was not applied. Please try again.');
     } finally {
       setSaving(null);
     }
   };
 
   const saveTemplate = async () => {
+    if (!canEdit) return;
     if (!template.trim()) return;
     setSaving('template');
+    setError(null);
     try {
       await updateCompanyFields(company.id, { levelReportTemplate: template });
       onSave();
     } catch (err) {
       console.error('Failed to save levelReportTemplate:', err);
+      setError('Could not save the message template — it was not applied. Please try again.');
     } finally {
       setSaving(null);
     }
@@ -83,6 +92,13 @@ export function LevelReportsCard({ company, onSave }: Props) {
         <h3 className="text-cyan-400 font-medium text-sm">Level Reports</h3>
       </div>
 
+      {!canEdit && (
+        <div className="px-4 pt-3 text-gray-400 text-xs">View-only — you do not have permission to change level report settings.</div>
+      )}
+      {error && (
+        <div className="px-4 pt-3 text-red-400 text-xs" role="alert">{error}</div>
+      )}
+
       <div className="p-4 space-y-4">
         {/* Toggle */}
         <div className="flex items-center justify-between">
@@ -92,10 +108,10 @@ export function LevelReportsCard({ company, onSave }: Props) {
           </div>
           <button
             onClick={toggleSendLevel}
-            disabled={saving === 'toggle'}
+            disabled={saving === 'toggle' || !canEdit}
             className={`relative w-11 h-6 rounded-full transition-colors ${
               company.sendLevelToDispatch ? 'bg-cyan-500' : 'bg-gray-600'
-            } ${saving === 'toggle' ? 'opacity-50' : ''}`}
+            } ${saving === 'toggle' ? 'opacity-50' : ''} ${!canEdit ? 'opacity-50 cursor-not-allowed' : ''}`}
           >
             <span className={`absolute top-0.5 left-0.5 w-5 h-5 rounded-full bg-white transition-transform ${
               company.sendLevelToDispatch ? 'translate-x-5' : 'translate-x-0'
@@ -116,8 +132,9 @@ export function LevelReportsCard({ company, onSave }: Props) {
                 value={template}
                 onChange={e => setTemplate(e.target.value)}
                 onBlur={saveTemplate}
+                disabled={!canEdit}
                 rows={4}
-                className="w-full px-3 py-2 bg-gray-900 border border-gray-600 rounded text-white text-sm font-mono resize-none focus:border-cyan-500 focus:outline-none"
+                className="w-full px-3 py-2 bg-gray-900 border border-gray-600 rounded text-white text-sm font-mono resize-none focus:border-cyan-500 focus:outline-none disabled:opacity-50"
                 placeholder={DEFAULT_TEMPLATE}
               />
 
@@ -127,7 +144,8 @@ export function LevelReportsCard({ company, onSave }: Props) {
                   <button
                     key={field}
                     onClick={() => insertField(field)}
-                    className="px-3 py-1 bg-gray-700 hover:bg-gray-600 text-cyan-300 text-xs rounded border border-gray-600 transition-colors"
+                    disabled={!canEdit}
+                    className="px-3 py-1 bg-gray-700 hover:bg-gray-600 text-cyan-300 text-xs rounded border border-gray-600 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
                   >
                     {field}
                   </button>

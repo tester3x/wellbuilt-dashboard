@@ -3,6 +3,7 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { useRouter } from 'next/navigation';
 import { useAuth } from '@/contexts/AuthContext';
+import { hasCapability } from '@/lib/auth';
 import { canViewGlobalWellPool } from '@/lib/tenantScope';
 import { WellPoolEmptyState } from '@/components/WellPoolEmptyState';
 import { WellResponse, subscribeToWellStatusesUnified } from '@/lib/wells';
@@ -25,7 +26,11 @@ interface RouteSort {
 }
 
 export default function MobilePage() {
-  const { user, loading } = useAuth();
+  const { user, loading, userCompany } = useAuth();
+  // +Add Pull records a load — gate on the dispatch-write capability (same as
+  // the dispatch board's Add Pull). UI containment only; the submit path is a
+  // recorded BLOCKER pending a governed staff pull-ingest callable.
+  const canAddPull = hasCapability(user, 'createDispatch', userCompany);
   const router = useRouter();
   const [wells, setWells] = useState<WellResponse[]>([]);
   const [routes, setRoutes] = useState<string[]>([]);
@@ -317,6 +322,7 @@ export default function MobilePage() {
                 >&times;</button>
               )}
             </div>
+            {canAddPull && (
             <button
               onClick={async () => {
                 setShowAddPull(true);
@@ -355,6 +361,7 @@ export default function MobilePage() {
             >
               <span className="text-sm">+</span> Add Pull
             </button>
+            )}
           </div>
 
           <div className="flex flex-wrap items-center gap-4">

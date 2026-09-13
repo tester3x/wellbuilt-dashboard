@@ -178,14 +178,14 @@ export default function SettingsPage() {
           <div className="text-gray-500 text-center py-12">No company found</div>
         ) : (
           <div className="space-y-4">
-            <CompanyProfileCard company={company} onSave={handleRefresh} />
-            <PackagesCard company={company} onSave={handleRefresh} />
-            <CustomJobTypesCard company={company} onSave={handleRefresh} />
-            <InvoiceConfigCard company={company} onSave={handleRefresh} />
+            <CompanyProfileCard company={company} onSave={handleRefresh} canEdit={hasCapability(user, 'manageCompany', userCompany)} />
+            <PackagesCard company={company} onSave={handleRefresh} canEdit={hasCapability(user, 'manageCompany', userCompany)} />
+            <CustomJobTypesCard company={company} onSave={handleRefresh} canEdit={hasCapability(user, 'manageCompany', userCompany)} />
+            <InvoiceConfigCard company={company} onSave={handleRefresh} canEdit={hasCapability(user, 'manageCompany', userCompany)} />
             <OperationsCard company={company} onSave={handleRefresh} canEdit={hasCapability(user, 'manageCompany', userCompany)} />
-            <LevelReportsCard company={company} onSave={handleRefresh} />
+            <LevelReportsCard company={company} onSave={handleRefresh} canEdit={hasCapability(user, 'manageCompany', userCompany)} />
             <PhotosCard company={company} onSave={handleRefresh} canEdit={hasCapability(user, 'manageCompany', userCompany)} />
-            <JsaCard company={company} onSave={handleRefresh} />
+            <JsaCard company={company} onSave={handleRefresh} canEdit={hasCapability(user, 'manageCompany', userCompany)} />
             {(hasCapability(user, 'viewSafety', userCompany) || hasCapability(user, 'manageSafety', userCompany) || hasCapability(user, 'viewSettings', userCompany)) && (
               <SpillNotificationCard
                 company={company}
@@ -195,14 +195,14 @@ export default function SettingsPage() {
               />
             )}
             <WorkPeriodCard company={company} onSave={handleRefresh} />
-            <OilCompaniesCard company={company} onSave={handleRefresh} />
-            <SWDDirectoryCard company={company} onSave={handleRefresh} />
-            <RateSheetsCard company={company} onSave={handleRefresh} />
-            <BillingConfigCard company={company} onSave={handleRefresh} />
-            <TicketTemplateCard company={company} onSave={handleRefresh} />
-            <PayrollTemplateCard company={company} onSave={handleRefresh} />
-            <PayConfigCard company={company} onSave={handleRefresh} />
-            <BrandingCard company={company} onSave={handleRefresh} />
+            <OilCompaniesCard company={company} onSave={handleRefresh} canEdit={hasCapability(user, 'manageCompany', userCompany)} />
+            <SWDDirectoryCard company={company} onSave={handleRefresh} canEdit={hasCapability(user, 'manageCompany', userCompany)} />
+            <RateSheetsCard company={company} onSave={handleRefresh} canEdit={hasCapability(user, 'manageCompany', userCompany)} />
+            <BillingConfigCard company={company} onSave={handleRefresh} canEdit={hasCapability(user, 'editBilling', userCompany)} />
+            <TicketTemplateCard company={company} onSave={handleRefresh} canEdit={hasCapability(user, 'manageCompany', userCompany)} />
+            <PayrollTemplateCard company={company} onSave={handleRefresh} canEdit={hasCapability(user, 'manageCompany', userCompany)} />
+            <PayConfigCard company={company} onSave={handleRefresh} canEdit={hasCapability(user, 'manageCompany', userCompany)} />
+            <BrandingCard company={company} onSave={handleRefresh} canEdit={hasCapability(user, 'manageCompany', userCompany)} />
             {/* Roles & Permissions — anyone with viewSettings can see it, but only
                 users with manageRolesAndCapabilities can actually edit (default: 'it'). */}
             <RolesCard

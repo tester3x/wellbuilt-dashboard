@@ -146,7 +146,7 @@ export function PhotosCard({ company, onSave, canEdit }: Props) {
         </div>
 
         {/* Required Photo Specs — AI-checked per-customer required photos */}
-        <RequiredPhotoSpecs company={company} />
+        <RequiredPhotoSpecs company={company} canEdit={canEdit} />
       </div>
     </div>
   );

@@ -6,11 +6,14 @@ import { type CompanyConfig, updateCompanyFields } from '@/lib/companySettings';
 interface Props {
   company: CompanyConfig;
   onSave: () => void;
+  /** Whether the current user may edit the company profile (manageCompany). */
+  canEdit: boolean;
 }
 
-export function CompanyProfileCard({ company, onSave }: Props) {
+export function CompanyProfileCard({ company, onSave, canEdit }: Props) {
   const [editing, setEditing] = useState(false);
   const [saving, setSaving] = useState(false);
+  const [error, setError] = useState<string | null>(null);
   const [name, setName] = useState(company.name || '');
   const [address, setAddress] = useState(company.address || '');
   const [city, setCity] = useState(company.city || '');
@@ -19,6 +22,8 @@ export function CompanyProfileCard({ company, onSave }: Props) {
   const [phone, setPhone] = useState(company.phone || '');
 
   const startEdit = () => {
+    if (!canEdit) return;
+    setError(null);
     setName(company.name || '');
     setAddress(company.address || '');
     setCity(company.city || '');
@@ -29,8 +34,10 @@ export function CompanyProfileCard({ company, onSave }: Props) {
   };
 
   const save = async () => {
+    if (!canEdit) return;
     if (!name.trim()) return;
     setSaving(true);
+    setError(null);
     try {
       await updateCompanyFields(company.id, {
         name: name.trim(),
@@ -44,6 +51,7 @@ export function CompanyProfileCard({ company, onSave }: Props) {
       onSave();
     } catch (err) {
       console.error('Failed to save profile:', err);
+      setError('Could not save the company profile — it was not applied. Please try again.');
     } finally {
       setSaving(false);
     }
@@ -63,12 +71,20 @@ export function CompanyProfileCard({ company, onSave }: Props) {
         {!editing && (
           <button
             onClick={startEdit}
-            className="px-3 py-1 text-xs rounded bg-blue-600 hover:bg-blue-500 text-white"
+            disabled={!canEdit}
+            className="px-3 py-1 text-xs rounded bg-blue-600 hover:bg-blue-500 text-white disabled:opacity-50 disabled:cursor-not-allowed"
           >
             Edit
           </button>
         )}
       </div>
+
+      {!canEdit && (
+        <div className="px-4 pt-3 text-gray-400 text-xs">View-only — you do not have permission to change the company profile.</div>
+      )}
+      {error && (
+        <div className="px-4 pt-3 text-red-400 text-xs" role="alert">{error}</div>
+      )}
 
       <div className="p-4">
         {editing ? (
@@ -136,7 +152,7 @@ export function CompanyProfileCard({ company, onSave }: Props) {
             <div className="flex gap-2 pt-1">
               <button
                 onClick={save}
-                disabled={saving || !name.trim()}
+                disabled={saving || !name.trim() || !canEdit}
                 className="px-4 py-2 bg-green-600 hover:bg-green-500 text-white rounded text-sm disabled:opacity-50"
               >
                 {saving ? 'Saving...' : 'Save'}

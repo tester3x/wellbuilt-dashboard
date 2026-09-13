@@ -15,6 +15,8 @@ import {
 interface Props {
   company: CompanyConfig;
   onSave: () => void;
+  /** Whether the current user may edit ticket templates (manageCompany). */
+  canEdit: boolean;
 }
 
 // Groups that have separate "legal" sub-fields with their own size control
@@ -278,17 +280,20 @@ function PreviewPane({ previewHtml }: { previewHtml: string }) {
 
 // ── Component ────────────────────────────────────────────────────────────────
 
-export function TicketTemplateCard({ company, onSave }: Props) {
+export function TicketTemplateCard({ company, onSave, canEdit }: Props) {
   const [editTarget, setEditTarget] = useState<string | null>(null);
   const [template, setTemplate] = useState<TicketTemplate>({ ...DEFAULT_TICKET_TEMPLATE });
   const [fieldSizes, setFieldSizes] = useState<Record<string, FieldSize>>({ ...DEFAULT_FIELD_SIZES });
   const [groupOrder, setGroupOrder] = useState<string[]>([...DEFAULT_GROUP_ORDER]);
   const [reorderMode, setReorderMode] = useState(false);
   const [saving, setSaving] = useState(false);
+  const [error, setError] = useState<string | null>(null);
 
   const operators = company.assignedOperators || [];
 
   const openEditor = (target: string) => {
+    if (!canEdit) return;
+    setError(null);
     const existing = company.ticketTemplates?.[target];
     // Normalize legacy templates that were saved before the BBLs row split
     // (pickupBblsRow / dropoffBblsRow). When undefined, resolve to the
@@ -350,6 +355,7 @@ export function TicketTemplateCard({ company, onSave }: Props) {
   };
 
   const save = async () => {
+    if (!canEdit) return;
     if (!editTarget) return;
     // BBLs safeguard — at least one of the three BBLs rows should be on
     // (Measurements / Pickup / Drop-off). Walk the same fallback chain
@@ -369,6 +375,7 @@ export function TicketTemplateCard({ company, onSave }: Props) {
       if (!proceed) return;
     }
     setSaving(true);
+    setError(null);
     try {
       const updated = { ...(company.ticketTemplates || {}) };
       updated[editTarget] = { ...template, fieldSizes, groupOrder };
@@ -377,6 +384,7 @@ export function TicketTemplateCard({ company, onSave }: Props) {
       onSave();
     } catch (err) {
       console.error('Failed to save ticket template:', err);
+      setError('Could not save the ticket template — it was not applied. Please try again.');
     } finally {
       setSaving(false);
     }
@@ -429,11 +437,19 @@ export function TicketTemplateCard({ company, onSave }: Props) {
           <h3 className="text-purple-400 font-medium text-sm">Ticket Template</h3>
           <button
             onClick={() => openEditor('_default')}
-            className="px-2 py-0.5 text-xs rounded bg-purple-700 hover:bg-purple-600 text-white"
+            disabled={!canEdit}
+            className="px-2 py-0.5 text-xs rounded bg-purple-700 hover:bg-purple-600 text-white disabled:opacity-50 disabled:cursor-not-allowed"
           >
             {company.ticketTemplates?.['_default'] ? 'Edit Default' : '+ Set Default'}
           </button>
         </div>
+
+        {!canEdit && (
+          <div className="px-4 pt-3 text-gray-400 text-xs">View-only — you do not have permission to change ticket templates.</div>
+        )}
+        {error && (
+          <div className="px-4 pt-3 text-red-400 text-xs" role="alert">{error}</div>
+        )}
 
         <div className="p-4 space-y-1">
           {operators.length === 0 && (
@@ -449,7 +465,8 @@ export function TicketTemplateCard({ company, onSave }: Props) {
                 </div>
                 <button
                   onClick={() => openEditor(op)}
-                  className="px-2 py-0.5 text-xs rounded bg-purple-700 hover:bg-purple-600 text-white shrink-0 ml-2"
+                  disabled={!canEdit}
+                  className="px-2 py-0.5 text-xs rounded bg-purple-700 hover:bg-purple-600 text-white shrink-0 ml-2 disabled:opacity-50 disabled:cursor-not-allowed"
                 >
                   {status === 'custom' ? 'Edit' : '+ Configure'}
                 </button>
@@ -626,7 +643,7 @@ export function TicketTemplateCard({ company, onSave }: Props) {
               <div className="flex-1" />
               <button
                 onClick={save}
-                disabled={saving}
+                disabled={saving || !canEdit}
                 className="px-4 py-2 bg-purple-600 hover:bg-purple-500 text-white rounded disabled:opacity-50"
               >
                 {saving ? 'Saving...' : 'Save Template'}

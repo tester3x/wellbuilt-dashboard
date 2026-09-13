@@ -28,11 +28,14 @@ const PACKAGE_ICONS: Record<string, string> = {
 interface Props {
   company: CompanyConfig;
   onSave: () => void;
+  /** Whether the current user may edit custom job types (manageCompany). */
+  canEdit: boolean;
 }
 
-export function CustomJobTypesCard({ company, onSave }: Props) {
+export function CustomJobTypesCard({ company, onSave, canEdit }: Props) {
   const [newType, setNewType] = useState('');
   const [saving, setSaving] = useState(false);
+  const [error, setError] = useState<string | null>(null);
   const [packages, setPackages] = useState<AvailablePackage[]>([]);
   const [selectedPackages, setSelectedPackages] = useState<string[]>([]);
   const [showPackageDropdown, setShowPackageDropdown] = useState(false);
@@ -87,6 +90,7 @@ export function CustomJobTypesCard({ company, onSave }: Props) {
   };
 
   const addType = async () => {
+    if (!canEdit) return;
     const label = newType.trim();
     if (!label || selectedPackages.length === 0) return;
     // Don't allow duplicates (case-insensitive)
@@ -95,6 +99,7 @@ export function CustomJobTypesCard({ company, onSave }: Props) {
       return;
     }
     setSaving(true);
+    setError(null);
     try {
       const newEntry: CustomJobType = { label, packages: [...selectedPackages] };
       await updateCompanyFields(company.id, {
@@ -104,13 +109,16 @@ export function CustomJobTypesCard({ company, onSave }: Props) {
       onSave();
     } catch (err) {
       console.error('Failed to add custom job type:', err);
+      setError('Could not add that job type — it was not applied. Please try again.');
     } finally {
       setSaving(false);
     }
   };
 
   const removeType = async (label: string) => {
+    if (!canEdit) return;
     setSaving(true);
+    setError(null);
     try {
       await updateCompanyFields(company.id, {
         customJobTypes: customTypes.filter(t => t.label !== label),
@@ -118,6 +126,7 @@ export function CustomJobTypesCard({ company, onSave }: Props) {
       onSave();
     } catch (err) {
       console.error('Failed to remove custom job type:', err);
+      setError('Could not remove that job type — it was not applied. Please try again.');
     } finally {
       setSaving(false);
     }
@@ -156,6 +165,13 @@ export function CustomJobTypesCard({ company, onSave }: Props) {
         <span className="text-gray-600 text-xs">{customTypes.length} custom</span>
       </div>
 
+      {!canEdit && (
+        <div className="px-4 pt-3 text-gray-400 text-xs">View-only — you do not have permission to change custom job types.</div>
+      )}
+      {error && (
+        <div className="px-4 pt-3 text-red-400 text-xs" role="alert">{error}</div>
+      )}
+
       <div className="p-4 space-y-3">
         {/* Package selector + input row */}
         <div className="flex gap-2">
@@ -163,7 +179,8 @@ export function CustomJobTypesCard({ company, onSave }: Props) {
           <div className="relative" ref={dropdownRef}>
             <button
               onClick={() => setShowPackageDropdown(!showPackageDropdown)}
-              className="px-3 py-2 bg-gray-700 text-gray-300 text-sm rounded border border-gray-600 hover:border-gray-500 transition-colors whitespace-nowrap flex items-center gap-1.5 min-w-[160px]"
+              disabled={!canEdit}
+              className="px-3 py-2 bg-gray-700 text-gray-300 text-sm rounded border border-gray-600 hover:border-gray-500 transition-colors whitespace-nowrap flex items-center gap-1.5 min-w-[160px] disabled:opacity-50 disabled:cursor-not-allowed"
             >
               <span className="truncate flex-1 text-left">{selectedLabel}</span>
               <span className="text-gray-500 text-xs">▾</span>
@@ -198,11 +215,11 @@ export function CustomJobTypesCard({ company, onSave }: Props) {
             placeholder="e.g. Slickline, Chain Up..."
             className="flex-1 px-3 py-2 bg-gray-700 text-white rounded text-sm placeholder-gray-500 focus:outline-none focus:ring-1 focus:ring-blue-500"
             maxLength={50}
-            disabled={saving}
+            disabled={saving || !canEdit}
           />
           <button
             onClick={addType}
-            disabled={saving || !newType.trim() || selectedPackages.length === 0}
+            disabled={saving || !newType.trim() || selectedPackages.length === 0 || !canEdit}
             className="px-4 py-2 bg-blue-600 hover:bg-blue-500 disabled:bg-gray-600 disabled:text-gray-400 text-white text-sm font-medium rounded transition-colors"
           >
             Add
@@ -234,7 +251,7 @@ export function CustomJobTypesCard({ company, onSave }: Props) {
                 {t.label}
                 <button
                   onClick={() => removeType(t.label)}
-                  disabled={saving}
+                  disabled={saving || !canEdit}
                   className="text-gray-500 hover:text-red-400 transition-colors text-xs font-bold ml-0.5"
                   title="Remove"
                 >

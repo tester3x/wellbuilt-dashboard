@@ -18,6 +18,8 @@ import {
 interface Props {
   company: CompanyConfig;
   onSave: () => void;
+  /** Whether the current user may edit JSA settings (manageCompany). */
+  canEdit: boolean;
 }
 
 import {
@@ -36,8 +38,9 @@ const JSA_MODES = [
 
 type UploadState = 'idle' | 'uploading' | 'parsing' | 'error';
 
-export function JsaCard({ company, onSave }: Props) {
+export function JsaCard({ company, onSave, canEdit }: Props) {
   const [saving, setSaving] = useState(false);
+  const [error, setError] = useState<string | null>(null);
   const currentMode = canonicalizeJsaMode(company.jsaMode);
   // Default true — legacy companies that never had this field still get the
   // per-shift shortcut. Per-job behavior is governed by jsaJobPolicy below;
@@ -111,13 +114,16 @@ export function JsaCard({ company, onSave }: Props) {
   // bulk migration); clicking an already-canonical selected mode stays a
   // no-op.
   const setMode = async (mode: 'off' | 'per_shift' | 'per_job') => {
+    if (!canEdit) return;
     if (mode === currentMode && !isLegacyJsaMode(company.jsaMode)) return;
     setSaving(true);
+    setError(null);
     try {
       await updateCompanyFields(company.id, { jsaMode: mode });
       onSave();
     } catch (err) {
       console.error('Failed to save jsaMode:', err);
+      setError('Could not save the JSA mode — it was not applied. Please try again.');
     } finally {
       setSaving(false);
     }
@@ -128,13 +134,16 @@ export function JsaCard({ company, onSave }: Props) {
   // apps always let an explicit jsaJobPolicy win for per-job behavior, so
   // the hidden legacy value can never contradict this choice.
   const setJobPolicy = async (policy: JsaJobPolicy) => {
+    if (!canEdit) return;
     if (policy === currentPolicy && company.jsaJobPolicy === policy) return;
     setSaving(true);
+    setError(null);
     try {
       await updateCompanyFields(company.id, { jsaJobPolicy: policy });
       onSave();
     } catch (err) {
       console.error('Failed to save jsaJobPolicy:', err);
+      setError('Could not save the per-job requirement — it was not applied. Please try again.');
     } finally {
       setSaving(false);
     }
@@ -143,12 +152,15 @@ export function JsaCard({ company, onSave }: Props) {
   // Allow Acknowledge toggle — PER-SHIFT ONLY: whether the first-close
   // shift gate offers the Acknowledged shortcut next to Read JSA.
   const setAllowAcknowledge = async (next: boolean) => {
+    if (!canEdit) return;
     setSaving(true);
+    setError(null);
     try {
       await updateCompanyFields(company.id, { jsaAllowAcknowledge: next });
       onSave();
     } catch (err) {
       console.error('Failed to save jsaAllowAcknowledge:', err);
+      setError('Could not save that setting — it was not applied. Please try again.');
     } finally {
       setSaving(false);
     }
@@ -164,23 +176,28 @@ export function JsaCard({ company, onSave }: Props) {
 
   // Contact helpers
   const addContact = (type: 'emergency' | 'company') => {
+    if (!canEdit) return;
     const setter = type === 'emergency' ? setEmergencyContacts : setCompanyContacts;
     setter(prev => [...prev, { label: '', phone: '' }]);
     setContactsDirty(true);
   };
   const removeContact = (type: 'emergency' | 'company', idx: number) => {
+    if (!canEdit) return;
     const setter = type === 'emergency' ? setEmergencyContacts : setCompanyContacts;
     setter(prev => prev.filter((_, i) => i !== idx));
     setContactsDirty(true);
   };
   const updateContact = (type: 'emergency' | 'company', idx: number, field: 'label' | 'phone', value: string) => {
+    if (!canEdit) return;
     const setter = type === 'emergency' ? setEmergencyContacts : setCompanyContacts;
     const formatted = field === 'phone' ? formatPhone(value) : value;
     setter(prev => prev.map((c, i) => i === idx ? { ...c, [field]: formatted } : c));
     setContactsDirty(true);
   };
   const saveContacts = async () => {
+    if (!canEdit) return;
     setSaving(true);
+    setError(null);
     try {
       // Filter out empty rows
       const ec = emergencyContacts.filter(c => c.label.trim() || c.phone.trim());
@@ -192,6 +209,7 @@ export function JsaCard({ company, onSave }: Props) {
       onSave();
     } catch (err) {
       console.error('Failed to save contacts:', err);
+      setError('Could not save the JSA contacts — they were not applied. Please try again.');
     } finally {
       setSaving(false);
     }
@@ -205,6 +223,7 @@ export function JsaCard({ company, onSave }: Props) {
 
   // Start editing a template
   const startEdit = (t: JsaTemplate) => {
+    if (!canEdit) return;
     populateEdit(t);
     setEditingId(t.id);
     setExpandedId(t.id);
@@ -217,6 +236,7 @@ export function JsaCard({ company, onSave }: Props) {
 
   // PDF Upload handler — creates a NEW template
   const handleFileUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    if (!canEdit) return;
     const file = e.target.files?.[0];
     if (!file) return;
     if (!file.name.toLowerCase().endsWith('.pdf')) {
@@ -260,8 +280,10 @@ export function JsaCard({ company, onSave }: Props) {
 
   // Save edits
   const handleSave = async () => {
+    if (!canEdit) return;
     if (!editingId) return;
     setSaving(true);
+    setError(null);
     try {
       await saveJsaTemplate(company.id, editingId, {
         name: editName,
@@ -274,6 +296,7 @@ export function JsaCard({ company, onSave }: Props) {
       setEditingId(null);
     } catch (err) {
       console.error('Failed to save template:', err);
+      setError('Could not save the JSA template — it was not applied. Please try again.');
     } finally {
       setSaving(false);
     }
@@ -281,7 +304,9 @@ export function JsaCard({ company, onSave }: Props) {
 
   // Activate
   const handleActivate = async (templateId: string) => {
+    if (!canEdit) return;
     setSaving(true);
+    setError(null);
     try {
       // If currently editing this one, save first
       if (editingId === templateId) {
@@ -299,6 +324,7 @@ export function JsaCard({ company, onSave }: Props) {
       onSave();
     } catch (err) {
       console.error('Failed to activate template:', err);
+      setError('Could not activate that template — it was not applied. Please try again.');
     } finally {
       setSaving(false);
     }
@@ -306,13 +332,16 @@ export function JsaCard({ company, onSave }: Props) {
 
   // Deactivate
   const handleDeactivate = async (templateId: string) => {
+    if (!canEdit) return;
     setSaving(true);
+    setError(null);
     try {
       await deactivateJsaTemplate(company.id, templateId);
       await refreshTemplates();
       onSave();
     } catch (err) {
       console.error('Failed to deactivate template:', err);
+      setError('Could not deactivate that template — it was not applied. Please try again.');
     } finally {
       setSaving(false);
     }
@@ -320,7 +349,9 @@ export function JsaCard({ company, onSave }: Props) {
 
   // Delete
   const handleDelete = async (templateId: string) => {
+    if (!canEdit) return;
     setSaving(true);
+    setError(null);
     try {
       await deleteJsaTemplate(company.id, templateId);
       await refreshTemplates();
@@ -329,6 +360,7 @@ export function JsaCard({ company, onSave }: Props) {
       setConfirmDeleteId(null);
     } catch (err) {
       console.error('Failed to delete template:', err);
+      setError('Could not delete that template — it was not applied. Please try again.');
     } finally {
       setSaving(false);
     }
@@ -336,6 +368,7 @@ export function JsaCard({ company, onSave }: Props) {
 
   // Re-upload PDF for existing template
   const handleReupload = async (templateId: string, e: React.ChangeEvent<HTMLInputElement>) => {
+    if (!canEdit) return;
     const file = e.target.files?.[0];
     if (!file || !file.name.toLowerCase().endsWith('.pdf')) return;
 
@@ -658,43 +691,45 @@ export function JsaCard({ company, onSave }: Props) {
             <div className="flex flex-wrap gap-2 pt-2">
               {isEditing ? (
                 <>
-                  <button onClick={handleSave} disabled={saving}
+                  <button onClick={handleSave} disabled={saving || !canEdit}
                     className="px-4 py-2 bg-gray-600 hover:bg-gray-500 text-white text-sm rounded-lg transition-colors disabled:opacity-50">Save Draft</button>
-                  <button onClick={() => handleActivate(t.id)} disabled={saving}
+                  <button onClick={() => handleActivate(t.id)} disabled={saving || !canEdit}
                     className="px-4 py-2 bg-green-700 hover:bg-green-600 text-white text-sm rounded-lg transition-colors disabled:opacity-50">Activate</button>
                   <button onClick={cancelEdit}
                     className="px-4 py-2 text-gray-400 hover:text-white text-sm transition-colors">Cancel</button>
                 </>
               ) : (
                 <>
-                  <button onClick={() => startEdit(t)} className="px-4 py-2 bg-gray-600 hover:bg-gray-500 text-white text-sm rounded-lg transition-colors">Edit</button>
+                  <button onClick={() => startEdit(t)} disabled={!canEdit} className="px-4 py-2 bg-gray-600 hover:bg-gray-500 text-white text-sm rounded-lg transition-colors disabled:opacity-50 disabled:cursor-not-allowed">Edit</button>
                   {isActive ? (
-                    <button onClick={() => handleDeactivate(t.id)} disabled={saving}
+                    <button onClick={() => handleDeactivate(t.id)} disabled={saving || !canEdit}
                       className="px-4 py-2 bg-red-900/40 hover:bg-red-900/60 text-red-400 text-sm rounded-lg border border-red-500/30 transition-colors disabled:opacity-50">Deactivate</button>
                   ) : (
                     <>
-                      <button onClick={() => handleActivate(t.id)} disabled={saving}
+                      <button onClick={() => handleActivate(t.id)} disabled={saving || !canEdit}
                         className="px-4 py-2 bg-green-700 hover:bg-green-600 text-white text-sm rounded-lg transition-colors disabled:opacity-50">Activate</button>
                       {confirmDeleteId === t.id ? (
                         <div className="flex items-center gap-2">
                           <span className="text-red-400 text-xs">Delete this template?</span>
-                          <button onClick={() => handleDelete(t.id)} disabled={saving}
+                          <button onClick={() => handleDelete(t.id)} disabled={saving || !canEdit}
                             className="px-3 py-1 bg-red-700 hover:bg-red-600 text-white text-xs rounded transition-colors disabled:opacity-50">Yes, Delete</button>
                           <button onClick={() => setConfirmDeleteId(null)}
                             className="px-3 py-1 text-gray-400 hover:text-white text-xs transition-colors">No</button>
                         </div>
                       ) : (
-                        <button onClick={() => setConfirmDeleteId(t.id)}
-                          className="px-4 py-2 text-red-500 hover:text-red-400 text-sm transition-colors">Delete</button>
+                        <button onClick={() => setConfirmDeleteId(t.id)} disabled={!canEdit}
+                          className="px-4 py-2 text-red-500 hover:text-red-400 text-sm transition-colors disabled:opacity-50 disabled:cursor-not-allowed">Delete</button>
                       )}
                     </>
                   )}
                 </>
               )}
-              <label className="px-4 py-2 text-gray-400 hover:text-white text-sm cursor-pointer transition-colors ml-auto">
-                Re-upload PDF
-                <input type="file" accept=".pdf" onChange={(e) => handleReupload(t.id, e)} className="hidden" />
-              </label>
+              {canEdit && (
+                <label className="px-4 py-2 text-gray-400 hover:text-white text-sm cursor-pointer transition-colors ml-auto">
+                  Re-upload PDF
+                  <input type="file" accept=".pdf" onChange={(e) => handleReupload(t.id, e)} className="hidden" />
+                </label>
+              )}
             </div>
           </div>
         )}
@@ -708,6 +743,13 @@ export function JsaCard({ company, onSave }: Props) {
         <h3 className="text-red-400 font-medium text-sm">Job Safety Analysis (JSA)</h3>
       </div>
 
+      {!canEdit && (
+        <div className="px-4 pt-3 text-gray-400 text-xs">View-only — you do not have permission to change JSA settings.</div>
+      )}
+      {error && (
+        <div className="px-4 pt-3 text-red-400 text-xs" role="alert">{error}</div>
+      )}
+
       {/* Section A: JSA Mode */}
       <div className="p-4 space-y-3 border-b border-gray-700">
         <div className="text-gray-400 text-xs mb-2">
@@ -720,8 +762,8 @@ export function JsaCard({ company, onSave }: Props) {
           <button
             key={mode.value}
             onClick={() => setMode(mode.value)}
-            disabled={saving}
-            className={`w-full text-left px-3 py-3 rounded-lg border transition-colors ${
+            disabled={saving || !canEdit}
+            className={`w-full text-left px-3 py-3 rounded-lg border transition-colors disabled:opacity-50 disabled:cursor-not-allowed ${
               currentMode === mode.value
                 ? 'border-red-500/50 bg-red-900/20'
                 : 'border-gray-700 hover:border-gray-500'
@@ -757,8 +799,8 @@ export function JsaCard({ company, onSave }: Props) {
               <button
                 key={policy.value}
                 onClick={() => setJobPolicy(policy.value)}
-                disabled={saving}
-                className={`w-full text-left px-3 py-2.5 rounded-lg border transition-colors ${
+                disabled={saving || !canEdit}
+                className={`w-full text-left px-3 py-2.5 rounded-lg border transition-colors disabled:opacity-50 disabled:cursor-not-allowed ${
                   currentPolicy === policy.value
                     ? 'border-red-500/50 bg-red-900/20'
                     : 'border-gray-700 hover:border-gray-500'
@@ -791,8 +833,8 @@ export function JsaCard({ company, onSave }: Props) {
                 type="checkbox"
                 checked={allowAcknowledge}
                 onChange={(e) => setAllowAcknowledge(e.target.checked)}
-                disabled={saving}
-                className="mt-0.5 w-4 h-4 accent-red-500"
+                disabled={saving || !canEdit}
+                className="mt-0.5 w-4 h-4 accent-red-500 disabled:opacity-50"
               />
               <div className="flex-1">
                 <div className="text-sm text-white font-medium">Allow Acknowledge shortcut</div>
@@ -823,19 +865,21 @@ export function JsaCard({ company, onSave }: Props) {
                 placeholder="Name / Label"
                 value={c.label}
                 onChange={e => updateContact('emergency', i, 'label', e.target.value)}
-                className="flex-1 bg-gray-900 border border-gray-700 rounded px-2 py-1.5 text-sm text-white placeholder-gray-600 focus:border-red-500 outline-none"
+                disabled={!canEdit}
+                className="flex-1 bg-gray-900 border border-gray-700 rounded px-2 py-1.5 text-sm text-white placeholder-gray-600 focus:border-red-500 outline-none disabled:opacity-50"
               />
               <input
                 type="text"
                 placeholder="Phone"
                 value={c.phone}
                 onChange={e => updateContact('emergency', i, 'phone', e.target.value)}
-                className="w-36 bg-gray-900 border border-gray-700 rounded px-2 py-1.5 text-sm text-white placeholder-gray-600 focus:border-red-500 outline-none"
+                disabled={!canEdit}
+                className="w-36 bg-gray-900 border border-gray-700 rounded px-2 py-1.5 text-sm text-white placeholder-gray-600 focus:border-red-500 outline-none disabled:opacity-50"
               />
-              <button onClick={() => removeContact('emergency', i)} className="text-gray-600 hover:text-red-400 text-lg px-1">×</button>
+              <button onClick={() => removeContact('emergency', i)} disabled={!canEdit} className="text-gray-600 hover:text-red-400 text-lg px-1 disabled:opacity-50 disabled:cursor-not-allowed">×</button>
             </div>
           ))}
-          <button onClick={() => addContact('emergency')} className="text-red-400 text-xs hover:underline">
+          <button onClick={() => addContact('emergency')} disabled={!canEdit} className="text-red-400 text-xs hover:underline disabled:opacity-50 disabled:cursor-not-allowed">
             + Add Emergency Contact
           </button>
         </div>
@@ -850,19 +894,21 @@ export function JsaCard({ company, onSave }: Props) {
                 placeholder="Name / Label"
                 value={c.label}
                 onChange={e => updateContact('company', i, 'label', e.target.value)}
-                className="flex-1 bg-gray-900 border border-gray-700 rounded px-2 py-1.5 text-sm text-white placeholder-gray-600 focus:border-red-500 outline-none"
+                disabled={!canEdit}
+                className="flex-1 bg-gray-900 border border-gray-700 rounded px-2 py-1.5 text-sm text-white placeholder-gray-600 focus:border-red-500 outline-none disabled:opacity-50"
               />
               <input
                 type="text"
                 placeholder="Phone"
                 value={c.phone}
                 onChange={e => updateContact('company', i, 'phone', e.target.value)}
-                className="w-36 bg-gray-900 border border-gray-700 rounded px-2 py-1.5 text-sm text-white placeholder-gray-600 focus:border-red-500 outline-none"
+                disabled={!canEdit}
+                className="w-36 bg-gray-900 border border-gray-700 rounded px-2 py-1.5 text-sm text-white placeholder-gray-600 focus:border-red-500 outline-none disabled:opacity-50"
               />
-              <button onClick={() => removeContact('company', i)} className="text-gray-600 hover:text-red-400 text-lg px-1">×</button>
+              <button onClick={() => removeContact('company', i)} disabled={!canEdit} className="text-gray-600 hover:text-red-400 text-lg px-1 disabled:opacity-50 disabled:cursor-not-allowed">×</button>
             </div>
           ))}
-          <button onClick={() => addContact('company')} className="text-red-400 text-xs hover:underline">
+          <button onClick={() => addContact('company')} disabled={!canEdit} className="text-red-400 text-xs hover:underline disabled:opacity-50 disabled:cursor-not-allowed">
             + Add Company Contact
           </button>
         </div>
@@ -871,8 +917,8 @@ export function JsaCard({ company, onSave }: Props) {
         {contactsDirty && (
           <button
             onClick={saveContacts}
-            disabled={saving}
-            className="bg-red-600 hover:bg-red-500 text-white text-sm font-medium px-4 py-2 rounded-lg transition-colors disabled:opacity-50"
+            disabled={saving || !canEdit}
+            className="bg-red-600 hover:bg-red-500 text-white text-sm font-medium px-4 py-2 rounded-lg transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
           >
             {saving ? 'Saving...' : 'Save Contacts'}
           </button>
@@ -917,7 +963,7 @@ export function JsaCard({ company, onSave }: Props) {
         )}
 
         {/* Upload new JSA button — always visible */}
-        {!templateLoading && uploadState === 'idle' && (
+        {!templateLoading && uploadState === 'idle' && canEdit && (
           <label className="block w-full border-2 border-dashed border-gray-600 rounded-lg py-4 text-center cursor-pointer hover:border-gray-400 transition-colors">
             <span className="text-gray-400 text-sm">
               {templates.length === 0

@@ -19,6 +19,8 @@ interface JobPackage {
 interface Props {
   company: CompanyConfig;
   onSave: () => void;
+  /** Whether the current user may edit company packages (manageCompany). */
+  canEdit: boolean;
 }
 
 const PACKAGE_ICONS: Record<string, string> = {
@@ -49,7 +51,7 @@ function getIndustryColor(industry: string): string {
   return INDUSTRY_COLORS[industry] || 'text-gray-400';
 }
 
-export function PackagesCard({ company, onSave }: Props) {
+export function PackagesCard({ company, onSave, canEdit }: Props) {
   const [packages, setPackages] = useState<JobPackage[]>([]);
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState<string | null>(null);
@@ -81,28 +83,34 @@ export function PackagesCard({ company, onSave }: Props) {
   }, []);
 
   const installPackage = async (packageId: string) => {
+    if (!canEdit) return;
     if (activePackages.includes(packageId)) return;
     setSaving(packageId);
+    setError(null);
     try {
       const updated = [...activePackages, packageId];
       await updateCompanyFields(company.id, { activePackages: updated });
       onSave();
     } catch (err) {
       console.error('Failed to install package:', err);
+      setError('Could not install that package — it was not applied. Please try again.');
     } finally {
       setSaving(null);
     }
   };
 
   const removePackage = async (packageId: string) => {
+    if (!canEdit) return;
     if (activePackages.length <= 1) return;
     setSaving(packageId);
+    setError(null);
     try {
       const updated = activePackages.filter(id => id !== packageId);
       await updateCompanyFields(company.id, { activePackages: updated });
       onSave();
     } catch (err) {
       console.error('Failed to remove package:', err);
+      setError('Could not remove that package — it was not applied. Please try again.');
     } finally {
       setSaving(null);
     }
@@ -127,11 +135,16 @@ export function PackagesCard({ company, onSave }: Props) {
         </div>
       </div>
 
+      {!canEdit && (
+        <div className="px-4 pt-3 text-gray-400 text-xs">View-only — you do not have permission to change packages.</div>
+      )}
+      {error && (
+        <div className="px-4 pt-3 text-red-400 text-xs" role="alert">{error}</div>
+      )}
+
       <div className="p-4">
         {loading ? (
           <div className="text-gray-500 text-sm text-center py-4">Loading packages...</div>
-        ) : error ? (
-          <div className="text-red-400 text-sm text-center py-4">{error}</div>
         ) : (
           <>
             {/* ── Add Package Dropdown ── */}
@@ -143,7 +156,7 @@ export function PackagesCard({ company, onSave }: Props) {
                   onChange={e => {
                     if (e.target.value) installPackage(e.target.value);
                   }}
-                  disabled={saving !== null}
+                  disabled={saving !== null || !canEdit}
                   className="w-full px-3 py-2 bg-gray-900 border border-gray-700 rounded text-sm text-white focus:outline-none focus:border-cyan-500"
                 >
                   <option value="">Select a package to install...</option>
@@ -211,7 +224,7 @@ export function PackagesCard({ company, onSave }: Props) {
 
                       <button
                         onClick={() => removePackage(pkg.id)}
-                        disabled={isSaving || isLastActive}
+                        disabled={isSaving || isLastActive || !canEdit}
                         title={isLastActive ? 'At least one package must remain active' : 'Remove package'}
                         className={`text-xs px-2 py-1 rounded transition-colors flex-shrink-0 ${
                           isLastActive

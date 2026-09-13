@@ -34,12 +34,14 @@ export interface SWDEntry {
 interface Props {
   company: CompanyConfig;
   onSave: () => void;
+  /** Whether the current user may edit the SWD directory (manageCompany). */
+  canEdit: boolean;
 }
 
 type SectionKey = 'renamed' | 'custom' | 'blacklisted';
 type FormMode = 'alias' | 'custom' | 'blacklist';
 
-export function SWDDirectoryCard({ company, onSave }: Props) {
+export function SWDDirectoryCard({ company, onSave, canEdit }: Props) {
   const [entries, setEntries] = useState<SWDEntry[]>([]);
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState<string | null>(null);
@@ -115,6 +117,7 @@ export function SWDDirectoryCard({ company, onSave }: Props) {
   };
 
   const startEdit = (entry: SWDEntry) => {
+    if (!canEdit) return;
     setEditingId(entry.id);
     setFormMode(entry.isBlacklisted ? 'blacklist' : entry.isCustom ? 'custom' : 'alias');
     setFormDisplayName(entry.displayName);
@@ -129,6 +132,7 @@ export function SWDDirectoryCard({ company, onSave }: Props) {
   };
 
   const handleSave = async () => {
+    if (!canEdit) return;
     if (formMode === 'blacklist') {
       if (!formNdicName.trim() && !formDisplayName.trim()) return;
     } else {
@@ -181,8 +185,10 @@ export function SWDDirectoryCard({ company, onSave }: Props) {
   };
 
   const handleDelete = async (entryId: string) => {
+    if (!canEdit) return;
     if (!confirm('Remove this SWD entry?')) return;
     setSaving(entryId);
+    setError(null);
     try {
       const firestore = getFirestoreDb();
       await deleteDoc(doc(firestore, 'companies', company.id, 'swd_directory', entryId));
@@ -190,6 +196,7 @@ export function SWDDirectoryCard({ company, onSave }: Props) {
       onSave();
     } catch (err) {
       console.error('Failed to delete SWD entry:', err);
+      setError('Could not remove that entry — it was not applied. Please try again.');
     } finally {
       setSaving(null);
     }
@@ -215,11 +222,16 @@ export function SWDDirectoryCard({ company, onSave }: Props) {
         </div>
       </div>
 
+      {!canEdit && (
+        <div className="px-4 pt-3 text-gray-400 text-xs">View-only — you do not have permission to change the SWD directory.</div>
+      )}
+      {error && (
+        <div className="px-4 pt-3 text-red-400 text-xs" role="alert">{error}</div>
+      )}
+
       <div className="p-4">
         {loading ? (
           <div className="text-gray-500 text-sm text-center py-4">Loading...</div>
-        ) : error ? (
-          <div className="text-red-400 text-sm text-center py-4">{error}</div>
         ) : (
           <>
             {/* Explanation */}
@@ -230,7 +242,7 @@ export function SWDDirectoryCard({ company, onSave }: Props) {
             </p>
 
             {/* Add button */}
-            {!showForm && (
+            {!showForm && canEdit && (
               <button
                 onClick={() => { resetForm(); setShowForm(true); }}
                 className="w-full py-2 mb-4 rounded border border-dashed border-violet-500/40 text-violet-400 text-sm hover:bg-violet-900/20 transition-colors"
@@ -452,6 +464,7 @@ export function SWDDirectoryCard({ company, onSave }: Props) {
                   disabled={
                     (formMode === 'blacklist' ? !formNdicName.trim() && !formDisplayName.trim() : !formDisplayName.trim())
                     || saving === 'form'
+                    || !canEdit
                   }
                   className={`w-full py-2 rounded text-sm font-medium transition-colors ${
                     (formMode === 'blacklist'
@@ -489,6 +502,7 @@ export function SWDDirectoryCard({ company, onSave }: Props) {
                     key={entry.id}
                     entry={entry}
                     saving={saving}
+                    canEdit={canEdit}
                     onEdit={() => startEdit(entry)}
                     onDelete={() => handleDelete(entry.id)}
                   />
@@ -507,6 +521,7 @@ export function SWDDirectoryCard({ company, onSave }: Props) {
                     key={entry.id}
                     entry={entry}
                     saving={saving}
+                    canEdit={canEdit}
                     onEdit={() => startEdit(entry)}
                     onDelete={() => handleDelete(entry.id)}
                   />
@@ -525,6 +540,7 @@ export function SWDDirectoryCard({ company, onSave }: Props) {
                     key={entry.id}
                     entry={entry}
                     saving={saving}
+                    canEdit={canEdit}
                     onDelete={() => handleDelete(entry.id)}
                   />
                 ))}
@@ -584,11 +600,13 @@ function SectionHeader({
 function EntryRow({
   entry,
   saving,
+  canEdit,
   onEdit,
   onDelete,
 }: {
   entry: SWDEntry;
   saving: string | null;
+  canEdit: boolean;
   onEdit: () => void;
   onDelete: () => void;
 }) {
@@ -636,15 +654,15 @@ function EntryRow({
       <div className="flex items-center gap-1 opacity-0 group-hover:opacity-100 transition-opacity flex-shrink-0">
         <button
           onClick={onEdit}
-          disabled={isSaving}
-          className="text-xs px-2 py-1 rounded text-gray-400 hover:text-violet-400 hover:bg-violet-900/20 transition-colors"
+          disabled={isSaving || !canEdit}
+          className="text-xs px-2 py-1 rounded text-gray-400 hover:text-violet-400 hover:bg-violet-900/20 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
         >
           Edit
         </button>
         <button
           onClick={onDelete}
-          disabled={isSaving}
-          className="text-xs px-2 py-1 rounded text-gray-400 hover:text-red-400 hover:bg-red-900/20 transition-colors"
+          disabled={isSaving || !canEdit}
+          className="text-xs px-2 py-1 rounded text-gray-400 hover:text-red-400 hover:bg-red-900/20 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
         >
           {isSaving ? '...' : '✕'}
         </button>
@@ -658,10 +676,12 @@ function EntryRow({
 function BlacklistRow({
   entry,
   saving,
+  canEdit,
   onDelete,
 }: {
   entry: SWDEntry;
   saving: string | null;
+  canEdit: boolean;
   onDelete: () => void;
 }) {
   const isSaving = saving === entry.id;
@@ -682,8 +702,8 @@ function BlacklistRow({
 
       <button
         onClick={onDelete}
-        disabled={isSaving}
-        className="text-xs px-2 py-1 rounded text-gray-500 hover:text-red-400 hover:bg-red-900/20 transition-colors opacity-0 group-hover:opacity-100 flex-shrink-0"
+        disabled={isSaving || !canEdit}
+        className="text-xs px-2 py-1 rounded text-gray-500 hover:text-red-400 hover:bg-red-900/20 transition-colors opacity-0 group-hover:opacity-100 flex-shrink-0 disabled:cursor-not-allowed"
       >
         {isSaving ? '...' : 'Remove'}
       </button>
