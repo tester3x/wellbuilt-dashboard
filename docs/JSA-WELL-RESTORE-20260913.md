@@ -19,3 +19,9 @@ Reviewed/reused commit 5cd438f1558b4a30aac2be0bf0617bc3014a1110, applied as 8d36
 Deployment scope: ONLY functions:dashboard:jsaGetReadRequest. Recheck live revision immediately before deployment and verify deployed source/revision and unchanged peer revisions afterward. No rules, Hosting, other Functions, shift records, or commercial writes are authorized by this restoration.
 
 This restores job display for existing governed requests. It does not implement Suite's separate end-of-shift JSA closure/recovery contract. Phone vc28 presentation refresh is a separate repository/build. Actual read/sign/close device testing remains pending under Liquid Gold.
+
+## Deployment verified
+
+Deployed from b38e14e7 using the explicit single-function list above. Target is ACTIVE at revision jsagetreadrequest-00004-nob, updated 2026-09-13T14:38:35.161613289Z. Downloaded deployed source: all three changed TypeScript modules and their compiled JavaScript match the reviewed local build byte-for-byte. A live unauthenticated request returned 401 UNAUTHENTICATED.
+
+Register, complete, consume, and current-shift-read-evidence peer revisions remained identical to the predeployment inventory. CLI reported only the target function update. No rules or other resources deployed; no production JSA, job, invoice, payroll, or shift record was created/changed by verification.
