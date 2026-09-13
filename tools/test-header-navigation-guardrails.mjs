@@ -248,7 +248,11 @@ export async function runHeaderNavigationGuardrails() {
     const html = `<style>${css}</style>${renderToStaticMarkup(React.createElement(AppHeader))}`;
     await page.setContent(html);
 
-    const testWidths = [344, 390, 412, 768, 800, 1024, 1280, 1440, 1920];
+    // Widths cover: folded Z Fold cover (344), phones (390/412), Z Fold UNFOLDED
+    // inner display (768 = Fold3/4, 884 = Fold5/6 target), tablet (800/1024), and
+    // normal desktop (1280/1440/1920). Each asserts centered admin controls + nav,
+    // wrapping (no overflow), and no clipping/old-layout reappearance.
+    const testWidths = [344, 390, 412, 768, 800, 884, 1024, 1280, 1440, 1920];
 
     for (const width of testWidths) {
       await page.setViewportSize({ width, height: 900 });
