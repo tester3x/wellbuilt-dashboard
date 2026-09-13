@@ -1,5 +1,41 @@
 # Watchdog ingestion assessment — stopped at scope boundary
 
+## Consolidated R&D request recheck (supersedes prior identity proposal)
+
+On 2026-09-13 at 00:30 UTC, downloaded the live wellbuilt-sync rules again and
+reran ten emulator assertions using synthetic UID wb-rnd-watchdog with claims:
+kind=internal_integration, principalOwner=wellbuilt,
+integrationId=wb-rnd-watchdog, environment=rnd,
+capabilities=[wbm.pull.ingest,wbm.pull.receipt]. No driver, employee, customer,
+staff or administrator claims or records were supplied. These are emulator-only
+claims, not a provisioned production identity or a finalized endpoint contract.
+
+The same three direct reads below are permitted. Seven prohibited/unauthenticated
+operations were denied. Thus the literal zero-direct-database-access gate FAILS.
+Changing identity type or adding narrower callable checks cannot subtract these
+existing rules permissions. The consolidated request prohibits security-rule
+deployments during this task, including narrowing changes. Stop before endpoint
+deployment and identity/credential provisioning.
+
+Preferred design remains a separate ingestWatchdogPull wrapper and own-packet
+receipt callable (proposed name getWatchdogPullReceipt), using the existing
+canonical WB-M incoming path with server-controlled liquid-gold targeting and
+distinct integration provenance. Neither function was implemented or deployed.
+Full pipeline/outgoing/current-well/duplicate tests were not run or claimed.
+No production UID exists from this task. Renewable unattended Firebase auth with
+a DPAPI/Windows Credential Manager protected refresh credential is the intended
+storage model, but no credential mechanism was installed or provisioned.
+
+Evidence: test-rnd-current-rules.cjs, rnd-rule-test-results.json, rnd-emulator.log
+and freshly read lineage.json under C:/dev/output/watchdog-wbm-20260912.
+Zero production pull writes; both specified Kahuna 5 observations remain unsent.
+No WB-E source, installed build, account, inspection or shift state changed during
+this recheck. Watchdog work is stopped at the requested gate; return to the WB-E
+combined-report follow-up before JSA.
+
+The original assessment below is retained as history; its proposed Watchdog
+identity is superseded by the internal_integration identity above.
+
 Isolated branch: assess/watchdog-wbm-ingest-20260912, based on
 origin/security/database-containment at ca4afa497f2514087c1f0003e3852b890928605a.
 No application or security implementation files changed.
