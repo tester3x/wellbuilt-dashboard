@@ -15,18 +15,15 @@
  */
 import type { WellResponse } from './wells';
 import {
-  parseFeetDecimal,
-  parseFlowMinutesPerFoot,
   formatFeetWBM,
   estimateCurrentFeet,
   readyLevelFeet,
   availableLoadsAt,
   predictedReadyAtMs,
-  isWbmDownToken,
   WBM_DEFAULT_LOAD_BBLS,
-  MIN_VALID_PULL_MS,
   type EstimatorInputs,
 } from './wbmLevelEstimator.ts';
+import { wbmInputsFromWell } from './wellLevelProjection.ts';
 
 export type PriorityLevel = 'overdue' | 'soon' | 'today' | 'later' | 'unknown';
 
@@ -253,15 +250,9 @@ export interface ClassifyOpts { assigned?: boolean; }
  * basis stays actionable regardless of age (it just estimates and caps at 20').
  */
 export function classifyWell(well: WellResponse, nowMs: number = Date.now(), opts: ClassifyOpts = {}): WellClassification {
-  const startingBottomFeet = parseFeetDecimal(well.lastPullBottomLevel)
-    ?? parseFeetDecimal(well.currentLevel && well.currentLevel !== '--' ? well.currentLevel : null);
-  // Pull timestamp: prefer lastPullDateTimeUTC, else timestampUTC; reject invalid
-  // OR pre-2020 (WB‑M Excel-epoch corruption guard) → treated as no timestamp.
-  const rawTs = (well.lastPullDateTimeUTC && !isNaN(Date.parse(well.lastPullDateTimeUTC))) ? Date.parse(well.lastPullDateTimeUTC)
-    : (well.timestampUTC && !isNaN(Date.parse(well.timestampUTC)) ? Date.parse(well.timestampUTC) : null);
-  const pullTimeMs = (rawTs != null && rawTs >= MIN_VALID_PULL_MS) ? rawTs : null;
-  const flowMinutesPerFoot = parseFlowMinutesPerFoot(well.flowRate);
-  const wellDown = well.wellDown === true || well.isDown === true || isWbmDownToken(well.currentLevel);
+  // Level inputs come from the ONE shared resolver so Dispatch, the aggregate
+  // Well Status page, and the individual card all estimate identically.
+  const { startingBottomFeet, pullTimeMs, flowMinutesPerFoot, wellDown } = wbmInputsFromWell(well);
   const allowedBottomFeet = typeof well.bottomLevel === 'number' ? well.bottomLevel : null;
   // WB‑M loadBbls = the driver's local load size (default 140), NOT config.pullBbls
   // (see wbmLevelEstimator.WBM_DEFAULT_LOAD_BBLS). The Dashboard has no per-driver

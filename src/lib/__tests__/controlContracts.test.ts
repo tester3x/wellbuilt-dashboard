@@ -443,8 +443,10 @@ test('Dispatch actionable queue is WB‑M-parity (classifyWell) + Current Level 
   assert.match(page, /classifyWell\(w, asOfMs, \{ assigned/, 'rows classified at the shared asOfMs with assignment');
   assert.match(page, />Current Level \(Est\.\)<\/th>/, 'Level column relabeled Current Level (Est.)');
   assert.match(page, /const c = classifyWell\(well, asOfMs\)/, 'Level cell uses classifyWell at asOfMs');
-  // one shared 30-second client clock; no per-30s Firebase writeback
-  assert.match(page, /setInterval\(\(\) => setAsOfMs\(Date\.now\(\)\), 30000\)/, '30s client clock present');
+  // ONE shared client clock via the shared ticker (foreground/resume-aware); the
+  // level projection advances off this single asOfMs with no per-30s Firebase writeback.
+  assert.match(page, /const asOfMs = useSharedNow\(\)/, 'shared client clock (useSharedNow) present');
+  assert.match(page, /import \{ useSharedNow \} from '@\/lib\/useSharedNow'/, 'shared ticker imported');
   // absolute predicted ready time drives the sort (not raw height/age)
   assert.match(page, /predictedReadyAtMs \?\? Number\.POSITIVE_INFINITY/, 'sorted by absolute predicted ready time');
   // cold-start guard: counts gated on readiness

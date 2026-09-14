@@ -34,15 +34,14 @@ export function pwLifecycle(status: string | null | undefined): PwLifecycle {
 export function isStaleCompletedReentry(args: {
   basisMs: number | null;            // well's level basis time (lastPullDateTimeUTC || timestampUTC)
   completedAssignedMs: number | null; // assignedAt of the completed dispatch
-  completedMs: number | null;         // completedAt (or fallback) of the completed dispatch
-  nowMs: number;
-  windowMs?: number;                  // only guard recent completions (default 6h)
 }): boolean {
-  const { basisMs, completedAssignedMs, completedMs, nowMs, windowMs = 6 * 3600_000 } = args;
-  if (completedAssignedMs == null || completedMs == null) return false; // nothing completed to guard
-  if (nowMs - completedMs > windowMs) return false;                     // stale guard expired → trust the level
-  if (basisMs == null) return true;                                     // no fresh basis yet → hold (never invent)
-  return basisMs < completedAssignedMs;                                 // basis predates the assignment → still stale
+  const { basisMs, completedAssignedMs } = args;
+  if (completedAssignedMs == null) return false;   // nothing completed to guard
+  // Release ONLY when a level/pull NEWER than the assignment has actually landed.
+  // Elapsed time alone never releases: a missing fresh level stays stale/unavailable
+  // (held out of Needs Pull), it does not become a duplicate pull opportunity.
+  if (basisMs == null) return true;                // no fresh basis at all → hold
+  return basisMs < completedAssignedMs;            // basis predates the assignment → still stale → hold
 }
 
 export interface PwQueueItem {

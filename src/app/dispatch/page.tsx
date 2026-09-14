@@ -6,6 +6,8 @@ import { useAuth } from '@/contexts/AuthContext';
 import { WellResponse, mergeWellPool } from '@/lib/wells';
 import { getPriority, getWellPrediction, formatTTP, matchesView, wellBucket, classifyWell, inchesToLevel, formatAge, verifyReasonText, type QueueView } from '@/lib/dispatchPriority';
 import { pwLifecycle, PW_ACTIVE_STATUSES, isStaleCompletedReentry } from '@/lib/dispatchAssignmentGroups';
+import { useSharedNow } from '@/lib/useSharedNow';
+import { projectWellLevel } from '@/lib/wellLevelProjection';
 // Z Fold recovery — layout helpers only (collapsed queue / stacked layout).
 // Live status is read via the governed adminGetWellPool callable (see effect
 // below); the direct-client RTDB status path is claim-gated and not attempted.
@@ -266,15 +268,12 @@ function DispatchPageInner() {
   // Data state
   const [wells, setWells] = useState<WellResponse[]>([]);
   const [routes, setRoutes] = useState<string[]>([]);
-  // WB‑M vc58 parity: ONE shared 30-second client clock. Every surface
-  // (badge / Current Level (Est.) column / view filters / TTP / counts / sort)
-  // recomputes the estimate at this single `asOfMs` so they always agree. This
-  // is a client-only recompute — it never writes changing levels back to Firebase.
-  const [asOfMs, setAsOfMs] = useState<number>(() => Date.now());
-  useEffect(() => {
-    const id = setInterval(() => setAsOfMs(Date.now()), 30000);
-    return () => clearInterval(id);
-  }, []);
+  // WB‑M vc58 parity: ONE shared client clock (useSharedNow). Every surface
+  // (badge / Current Level (Est.) column / view filters / TTP / counts / sort / the
+  // Assign & Reassign modals) recomputes the estimate at this single `asOfMs` so they
+  // always agree. Foreground/resume recomputes immediately. Client-only recompute — it
+  // never writes changing levels back to Firebase.
+  const asOfMs = useSharedNow();
   // Checkpoint 3: detachable panes. Dock preference is a per-viewer convenience
   // persisted to localStorage (never customer data). Start docked on the server
   // render, then restore the saved preference on the client (avoids SSR mismatch).
@@ -956,11 +955,11 @@ function DispatchPageInner() {
   };
   // Hold a just-completed, NOT-actively-assigned well out of Needs Pull while its
   // level basis is still stale (pre-pull) — prevents the completed→reappear flash.
-  const suppressCompletedReentry = (w: WellResponse, nowMs: number): boolean => {
+  const suppressCompletedReentry = (w: WellResponse): boolean => {
     if (pwAssignmentByWell.has(w.wellName)) return false; // active assignment takes precedence
     const c = pwCompletedByWell.get(w.wellName);
     if (!c) return false;
-    return isStaleCompletedReentry({ basisMs: wellBasisMs(w), completedAssignedMs: c.assignedMs, completedMs: c.completedMs, nowMs });
+    return isStaleCompletedReentry({ basisMs: wellBasisMs(w), completedAssignedMs: c.assignedMs });
   };
 
   const pwQueue = useMemo(() => {
@@ -983,7 +982,7 @@ function DispatchPageInner() {
     //   2) Assigned but not started — dimmed, stable by assigned-time, Reassign.
     // Started wells are excluded (Active Jobs represents them).
     if (queueView === 'needs-pull') {
-      const candidates = applyText(live.filter(w => !started(w) && classifyWell(w, asOfMs).state === 'pull-now' && !suppressCompletedReentry(w, asOfMs)));
+      const candidates = applyText(live.filter(w => !started(w) && classifyWell(w, asOfMs).state === 'pull-now' && !suppressCompletedReentry(w)));
       const unassigned = candidates
         .filter(w => !notStarted(w))
         .map(w => ({ well: w, priority: classifyWell(w, asOfMs), assignment: null as RowAssignment }))
@@ -1015,7 +1014,7 @@ function DispatchPageInner() {
       const a = pwAssignmentByWell.get(w.wellName);
       if (a && pwLifecycle(a.status) === 'started') continue;          // started → Active Jobs
       if (classifyWell(w, asOfMs).state !== 'pull-now') continue;         // physical demand only
-      if (suppressCompletedReentry(w, asOfMs)) continue;                 // stale post-completion → hold
+      if (suppressCompletedReentry(w)) continue;                        // stale post-completion → hold
       if (a && pwLifecycle(a.status) === 'not_started') assigned++; else unassigned++;
     }
     return { total: unassigned + assigned, unassigned, assigned };
@@ -2345,16 +2344,25 @@ function DispatchPageInner() {
                     </div>
                     {/* Well info box — static height, content shows when well selected */}
                     <div className="bg-gray-900 rounded px-2 py-1.5 min-h-[44px]">
-                      {assignTarget && selectedWells.size === 0 ? (
+                      {assignTarget && selectedWells.size === 0 ? (() => {
+                        // Source the LIVE pool well by name (never a frozen copy) and
+                        // project at the shared clock — the modal's Current Level (Est.)
+                        // matches the queue exactly. The raw last-pull bottom is shown
+                        // separately, labeled honestly.
+                        const liveWell = wells.find(w => w.wellName === assignTarget.wellName) ?? assignTarget;
+                        const proj = projectWellLevel(liveWell, asOfMs);
+                        return (
                         <div className="grid grid-cols-3 gap-x-3 gap-y-1 text-xs">
-                          <span className="text-gray-400">Level: <span className="text-white font-mono">{assignTarget.currentLevel || '--'}</span></span>
+                          <span className="text-gray-400">Current Level (Est.): <span className="text-white font-mono">{proj.available ? proj.estDisplay : '--'}</span></span>
+                          <span className="text-gray-400">Last Pull: <span className="text-white font-mono">{liveWell.lastPullBottomLevel || '--'}</span></span>
                           <span className="text-gray-400">Flow: <span className="text-white font-mono">{assignTarget.flowRate || '--'}</span></span>
                           <span className="text-gray-400">TTP: <span className="text-white font-mono">{assignTarget.timeTillPull || '--'}</span></span>
                           <span className="text-gray-400">Route: <span className="text-white">{assignTarget.route || '--'}</span></span>
                           <span className="text-gray-400">BBL/day: <span className="text-white font-mono">{assignTarget.windowBblsDay || assignTarget.bbls24hrs || '--'}</span></span>
                           <span className="text-gray-400">ETA Max: <span className="text-white font-mono">{assignTarget.etaToMax || '--'}</span></span>
                         </div>
-                      ) : (
+                        );
+                      })() : (
                         <div className="text-gray-600 text-xs italic">Select a well to see info</div>
                       )}
                     </div>
@@ -3429,10 +3437,26 @@ function DispatchPageInner() {
 
             {/* Job summary */}
             <div className="bg-gray-900 rounded-lg p-3 mb-4 grid grid-cols-2 gap-2 text-sm">
-              <div>
-                <span className="text-gray-500">Level:</span>
-                <span className="text-white ml-2 font-mono">{reassignJob.currentLevel || '--'}</span>
-              </div>
+              {(() => {
+                // The reassign job only carries a copied currentLevel — resolve the LIVE
+                // pool well by name and project at the shared clock so this Current Level
+                // (Est.) equals the queue's, never the stale copied value. The recorded
+                // last-pull bottom is shown separately and labeled.
+                const liveWell = wells.find(w => w.wellName === reassignJob.wellName);
+                const proj = liveWell ? projectWellLevel(liveWell, asOfMs) : null;
+                return (
+                  <>
+                    <div>
+                      <span className="text-gray-500">Current Level (Est.):</span>
+                      <span className="text-white ml-2 font-mono">{proj?.available ? proj.estDisplay : '--'}</span>
+                    </div>
+                    <div>
+                      <span className="text-gray-500">Last Pull:</span>
+                      <span className="text-white ml-2 font-mono">{liveWell?.lastPullBottomLevel || '--'}</span>
+                    </div>
+                  </>
+                );
+              })()}
               <div>
                 <span className="text-gray-500">Flow Rate:</span>
                 <span className="text-white ml-2 font-mono">{reassignJob.flowRate || '--'}</span>

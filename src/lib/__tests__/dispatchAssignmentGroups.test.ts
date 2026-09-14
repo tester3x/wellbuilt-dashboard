@@ -50,20 +50,22 @@ test('only physical demand counts (a non-pull-now assigned well is not in Needs 
   assert.deepEqual(counts, { total: 1, unassigned: 0, assigned: 1 });
 });
 
-test('completed job does NOT reappear from a stale pre-pull level; releases when fresh pull lands', () => {
+test('completed job releases ONLY when a level newer than the assignment lands — never on elapsed time', () => {
   const NOW = 1_000_000_000_000;
   const assigned = NOW - 30 * 60_000;   // assigned 30m ago
-  const completed = NOW - 60_000;       // completed 1m ago (within window)
   // Stale: basis predates the assignment (pre-pull level) → suppress.
-  assert.equal(isStaleCompletedReentry({ basisMs: assigned - 60_000, completedAssignedMs: assigned, completedMs: completed, nowMs: NOW }), true);
+  assert.equal(isStaleCompletedReentry({ basisMs: assigned - 60_000, completedAssignedMs: assigned }), true);
   // Fresh: a pull newer than the assignment landed → release.
-  assert.equal(isStaleCompletedReentry({ basisMs: assigned + 5_000, completedAssignedMs: assigned, completedMs: completed, nowMs: NOW }), false);
-  // No basis yet → hold (never invent a level).
-  assert.equal(isStaleCompletedReentry({ basisMs: null, completedAssignedMs: assigned, completedMs: completed, nowMs: NOW }), true);
-  // Old completion (beyond window) → trust the level, do not suppress.
-  assert.equal(isStaleCompletedReentry({ basisMs: assigned - 60_000, completedAssignedMs: assigned, completedMs: NOW - 12 * 3600_000, nowMs: NOW }), false);
+  assert.equal(isStaleCompletedReentry({ basisMs: assigned + 5_000, completedAssignedMs: assigned }), false);
+  // Exactly at the assignment instant counts as fresh (>=) → release.
+  assert.equal(isStaleCompletedReentry({ basisMs: assigned, completedAssignedMs: assigned }), false);
+  // No basis yet → hold (never invent a level, never release on absence).
+  assert.equal(isStaleCompletedReentry({ basisMs: null, completedAssignedMs: assigned }), true);
+  // A missing fresh level stays held no matter how much time has passed since the
+  // completion — elapsed time alone must NOT create a duplicate pull opportunity.
+  assert.equal(isStaleCompletedReentry({ basisMs: assigned - 60_000, completedAssignedMs: assigned }), true);
   // Nothing completed → not applicable.
-  assert.equal(isStaleCompletedReentry({ basisMs: 1, completedAssignedMs: null, completedMs: null, nowMs: NOW }), false);
+  assert.equal(isStaleCompletedReentry({ basisMs: 1, completedAssignedMs: null }), false);
 });
 
 test('assigned group is STABLE — ordering does not depend on live level / ready time', () => {

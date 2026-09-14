@@ -1,9 +1,12 @@
 'use client';
 
-import { Suspense, useEffect, useState } from 'react';
+import { Suspense, useEffect, useMemo, useState } from 'react';
 import { useRouter, useSearchParams } from 'next/navigation';
 import { useAuth } from '@/contexts/AuthContext';
 import { canViewGlobalWellPool } from '@/lib/tenantScope';
+import { useGovernedWellPool } from '@/lib/useGovernedWellPool';
+import { useSharedNow } from '@/lib/useSharedNow';
+import { projectWellLevel } from '@/lib/wellLevelProjection';
 import { WellPoolEmptyState } from '@/components/WellPoolEmptyState';
 import { canEditPull, canDeletePull } from '@/lib/auth';
 import {
@@ -22,12 +25,9 @@ import {
   formatFieldLabel,
   formatChangeValue,
 } from '@/lib/editMarkers';
-import { getDatabase, ref, onValue, get } from 'firebase/database';
-import { getFirebaseApp } from '@/lib/firebase';
 import Link from 'next/link';
 import { AppHeader } from '@/components/AppHeader';
 import { AddPullModal, type ApprovedDriver } from '@/components/AddPullModal';
-import { getFirebaseDatabase } from '@/lib/firebase';
 import { loadDisposals, type NdicWell } from '@/lib/firestoreWells';
 
 // Format inches to feet'inches" display
@@ -89,10 +89,23 @@ function WellDetailPage() {
   const wellName = searchParams.get('name') || '';
 
   const [pulls, setPulls] = useState<PullPacket[]>([]);
-  const [wellStatus, setWellStatus] = useState<WellResponse | null>(null);
-  const [wellTanks, setWellTanks] = useState<number>(1);
   const [dataLoading, setDataLoading] = useState(true);
   const [error, setError] = useState('');
+
+  // Current well status comes from the SAME governed pool Dispatch and /mobile use —
+  // never the forbidden packets/outgoing RTDB subscription. Derive this well's row and
+  // its tank count from that one authorized response.
+  const { wells: poolWells, statusUnavailable: statusReadUnavailable } = useGovernedWellPool();
+  const wellStatus = useMemo<WellResponse | null>(
+    () => poolWells.find(w => w.wellName === wellName) ?? null,
+    [poolWells, wellName],
+  );
+  const wellTanks = wellStatus?.tanks ?? 1;
+  // ONE shared clock instant for the live level projection (foreground-resume aware).
+  const asOfMs = useSharedNow();
+  // The shared WB-M projection — identical inputs/formula to /mobile and Dispatch, so
+  // the same governed response yields the same current level at the same instant.
+  const levelProjection = wellStatus ? projectWellLevel(wellStatus, asOfMs) : null;
 
   // Edit modal state
   const [editingPull, setEditingPull] = useState<PullPacket | null>(null);
@@ -153,50 +166,11 @@ function WellDetailPage() {
   const swCount = pulls.filter(p => p.noLevel).length;
   const filteredPulls = showServiceWork ? pulls : pulls.filter(p => !p.noLevel);
 
-  // Current time tick for live level estimation
-  const [currentTime, setCurrentTime] = useState(Date.now());
-
-  // Tick every 30 seconds for live level updates
-  useEffect(() => {
-    const interval = setInterval(() => {
-      setCurrentTime(Date.now());
-    }, 30000);
-    return () => clearInterval(interval);
-  }, []);
-
-  // Calculate estimated current level based on time elapsed + flow rate
-  // Use lastPullDateTimeUTC (actual pull time), NOT timestampUTC (response generation time)
-  const estimatedCurrentLevel = (() => {
-    if (!wellStatus || wellStatus.isDown || wellStatus.wellDown) return null;
-
-    // Parse timestamp — use last pull time, not response timestamp
-    const lastPullTimeStr = wellStatus.lastPullDateTimeUTC || wellStatus.timestampUTC;
-    const lastPullTime = lastPullTimeStr
-      ? new Date(lastPullTimeStr).getTime()
-      : null;
-
-    if (!lastPullTime || isNaN(lastPullTime)) return null;
-
-    // Parse flow rate from H:M:S format
-    const flowRateMinutes = parseFlowRateToMinutes(wellStatus.flowRate);
-    if (!flowRateMinutes || flowRateMinutes <= 0) return null;
-
-    // Parse current level (which is bottom level after pull) from feet'inches" format
-    const levelMatch = wellStatus.currentLevel?.match(/(\d+)'(\d+)"/);
-    if (!levelMatch) return null;
-    const bottomLevelInches = parseInt(levelMatch[1]) * 12 + parseInt(levelMatch[2]);
-
-    // Calculate inches risen since last pull
-    // flowRateMinutes is minutes per FOOT, so divide by 12 to get minutes per inch
-    const minutesElapsed = (currentTime - lastPullTime) / (1000 * 60);
-    const minutesPerInch = flowRateMinutes / 12;
-    const inchesRisen = minutesElapsed / minutesPerInch;
-
-    // Current estimated level (cap at 20 feet = 240 inches)
-    const estimatedInches = Math.min(bottomLevelInches + inchesRisen, 240);
-
-    return estimatedInches;
-  })();
+  // NOTE: the previous local estimate parsed wellStatus.currentLevel as its baseline.
+  // That is a compounding hazard — currentLevel is a server reading already advanced
+  // past the pull, so pairing it with the pull time double-counts recovery. The shared
+  // projectWellLevel anchors ONLY on the raw last-pull bottom + pull time + flow, so it
+  // is refactored away in favor of `levelProjection` (defined above).
 
   // Subscribe to well nav list for prev/next navigation
   useEffect(() => {
@@ -211,61 +185,9 @@ function WellDetailPage() {
   const prevWell = currentIndex > 0 ? allWells[currentIndex - 1] : null;
   const nextWell = currentIndex < allWells.length - 1 ? allWells[currentIndex + 1] : null;
 
-  // Subscribe to well status for real-time current level updates
-  // Reads from packets/outgoing which is where Cloud Functions write responses
-  useEffect(() => {
-    if (!wellName) return;
-
-    const app = getFirebaseApp();
-    const db = getDatabase(app);
-    const outgoingRef = ref(db, 'packets/outgoing');
-
-    const unsubscribe = onValue(outgoingRef, (snapshot) => {
-      if (snapshot.exists()) {
-        // Find the response for this well (response keys include well name)
-        const wellNameClean = wellName.replace(/\s/g, '');
-        snapshot.forEach((child) => {
-          const key = child.key || '';
-          const data = child.val();
-          // Match response_*_{wellName} pattern
-          if (key.startsWith('response_') && data.wellName === wellName) {
-            setWellStatus(data as WellResponse);
-          }
-        });
-      }
-    }, () => {
-      import('@/lib/adminDashboardCatalog').then(({ adminGetWellPool }) =>
-        adminGetWellPool().then((pool) => {
-          const st = pool.wellStatus?.[wellName];
-          if (st && typeof st === 'object') setWellStatus(st as WellResponse);
-        })
-      ).catch(() => {});
-    });
-
-    return () => unsubscribe();
-  }, [wellName]);
-
-  // Fetch well_config for tanks count
-  useEffect(() => {
-    if (!wellName) return;
-    const app = getFirebaseApp();
-    const db = getDatabase(app);
-    const configRef = ref(db, `well_config/${wellName}`);
-    const unsubscribe = onValue(configRef, (snapshot) => {
-      if (snapshot.exists()) {
-        const config = snapshot.val();
-        setWellTanks(config.tanks || config.numTanks || 1);
-      }
-    }, () => {
-      import('@/lib/adminDashboardCatalog').then(({ adminGetWellPool }) =>
-        adminGetWellPool().then((pool) => {
-          const config = pool.wellConfig?.[wellName] as { tanks?: number; numTanks?: number } | undefined;
-          if (config) setWellTanks(config.tanks || config.numTanks || 1);
-        })
-      ).catch(() => {});
-    });
-    return () => unsubscribe();
-  }, [wellName]);
+  // (Well status + tank count now derive from the governed pool row above; the direct
+  // packets/outgoing and well_config RTDB subscriptions are removed — dashboard users
+  // hold no claim for them and they were the permission-denied path.)
 
   // Redirect to login if not authenticated
   useEffect(() => {
@@ -578,17 +500,22 @@ function WellDetailPage() {
           </div>
         )}
 
+        {/* Honest read-failure notice — governed status unavailable, not empty. */}
+        {statusReadUnavailable && !wellStatus && (
+          <div className="mb-6 rounded-lg border border-yellow-700/50 bg-yellow-900/20 px-4 py-3 text-yellow-300">
+            Current well status is temporarily unavailable (governed read failed). This is a read failure, not an empty status.
+          </div>
+        )}
+
         {/* Current Status Card - Forward-looking predictions */}
         {wellStatus && (
           <div className="bg-gray-800 rounded-lg border border-gray-700 p-4 mb-6">
             <h2 className="text-lg font-semibold text-white mb-3">Current Status</h2>
             <div className="grid grid-cols-2 md:grid-cols-4 lg:grid-cols-7 gap-4">
               <div className="text-center">
-                <div className="text-xs text-gray-400">Current Level (Est)</div>
+                <div className="text-xs text-gray-400">Current Level (Est.)</div>
                 <div className="text-xl font-mono text-white">
-                  {estimatedCurrentLevel !== null
-                    ? formatLevelFtIn(estimatedCurrentLevel)
-                    : wellStatus.currentLevel}
+                  {levelProjection?.available ? levelProjection.estDisplay : '--'}
                 </div>
               </div>
               <div className="text-center">
@@ -597,6 +524,12 @@ function WellDetailPage() {
                   {wellStatus.lastPullDateTimeUTC
                     ? formatDateTime(wellStatus.lastPullDateTimeUTC)
                     : wellStatus.lastPullDateTime || wellStatus.timestamp || '--'}
+                </div>
+              </div>
+              <div className="text-center">
+                <div className="text-xs text-gray-400">Last Pull Level</div>
+                <div className="text-lg font-mono text-white">
+                  {wellStatus.lastPullBottomLevel || '--'}
                 </div>
               </div>
               <div className="text-center">

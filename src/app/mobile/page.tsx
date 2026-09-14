@@ -1,19 +1,25 @@
 'use client';
 
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { createContext, useContext, useEffect, useMemo, useState } from 'react';
 import { useRouter } from 'next/navigation';
 import { useAuth } from '@/contexts/AuthContext';
 import { hasCapability } from '@/lib/auth';
 import { canViewGlobalWellPool } from '@/lib/tenantScope';
 import { WellPoolEmptyState } from '@/components/WellPoolEmptyState';
-import { WellResponse, subscribeToWellStatusesUnified } from '@/lib/wells';
+import { WellResponse } from '@/lib/wells';
+import { useGovernedWellPool } from '@/lib/useGovernedWellPool';
+import { useSharedNow } from '@/lib/useSharedNow';
+import { projectWellLevel } from '@/lib/wellLevelProjection';
+
+// One shared wall-clock instant for the whole page (useSharedNow drives it). Leaf
+// rows read it via context so the live level projection advances off ONE ticker,
+// never a timer per row.
+const NowContext = createContext<number>(0);
 import Link from 'next/link';
 import { AppHeader } from '@/components/AppHeader';
 import { AddPullModal, type ApprovedDriver } from '@/components/AddPullModal';
 import { fetchTickets, type Ticket } from '@/lib/tickets';
-import { assignRouteColors, getRouteColor } from '@/lib/routeColor';
-import { ref, get } from 'firebase/database';
-import { getFirebaseDatabase } from '@/lib/firebase';
+import { assignRouteColors } from '@/lib/routeColor';
 import { loadDisposals, type NdicWell } from '@/lib/firestoreWells';
 
 type ViewMode = 'cards' | 'table';
@@ -32,8 +38,16 @@ export default function MobilePage() {
   // recorded BLOCKER pending a governed staff pull-ingest callable.
   const canAddPull = hasCapability(user, 'createDispatch', userCompany);
   const router = useRouter();
-  const [wells, setWells] = useState<WellResponse[]>([]);
-  const [routes, setRoutes] = useState<string[]>([]);
+  // Governed well pool — the SAME authorized source Dispatch uses (adminGetWellPool
+  // + mergeWellPool). Never the forbidden packets/outgoing RTDB subscription.
+  const { wells, routes: entitledRoutes, dataLoading, statusUnavailable, readError } = useGovernedWellPool();
+  // Always surface an Unrouted bucket (matches prior behavior) so unrouted wells show.
+  const routes = useMemo(
+    () => (entitledRoutes.includes('Unrouted') ? entitledRoutes : [...entitledRoutes, 'Unrouted']),
+    [entitledRoutes],
+  );
+  // ONE shared clock instant for every row's live level projection.
+  const asOfMs = useSharedNow();
   const [expandedRoutes, setExpandedRoutes] = useState<Set<string>>(() => {
     if (typeof window !== 'undefined') {
       try {
@@ -43,7 +57,6 @@ export default function MobilePage() {
     }
     return new Set();
   });
-  const [dataLoading, setDataLoading] = useState(true);
   const [viewMode, setViewMode] = useState<ViewMode>('table');
   const [wellSearch, setWellSearch] = useState('');
 
@@ -73,60 +86,28 @@ export default function MobilePage() {
     }
   }, [user, loading, router]);
 
-  // Track if we've done initial setup (don't reset state on every Firebase update).
-  // Ref — not useState — so the listener is not torn down on first snapshot
-  // (that resubscribe was dropping in-flight outgoing events).
-  const initialSetupDoneRef = useRef(false);
-
-  // Subscribe to well data from packets/outgoing (company-scoped, like native WB-M)
+  // Initialize per-route sort + pullBbls defaults as routes arrive from the governed
+  // pool. Idempotent and additive — only fills entries for routes not seen yet, so it
+  // never clobbers a user's sort/override on a 60s governed refresh.
   useEffect(() => {
-    if (!user) return;
-    const unsubscribe = subscribeToWellStatusesUnified((wellData, routeList) => {
-      // Always update wells and routes - this is the data that changes
-      setWells(wellData);
-      // Always include "Unrouted" even if no wells have it yet
-      const routesWithUnrouted = routeList.includes('Unrouted')
-        ? routeList
-        : [...routeList, 'Unrouted'];
-      setRoutes(routesWithUnrouted);
-
-      // Only do initial setup ONCE, not on every Firebase update
-      if (!initialSetupDoneRef.current) {
-        initialSetupDoneRef.current = true;
-        // expandedRoutes already restored from localStorage in useState init
-
-        // Initialize sort state for each route
-        const initialSorts: Record<string, RouteSort> = {};
-        routeList.forEach(route => {
-          initialSorts[route] = { field: 'wellName', dir: 'asc' };
-        });
-        setRouteSorts(initialSorts);
-
-        // Initialize pull BBLs from first well in each route (they're usually the same)
-        const initialPullBbls: Record<string, number> = {};
-        routeList.forEach(route => {
-          const firstWell = wellData.find(w => w.route === route && w.pullBbls);
-          initialPullBbls[route] = firstWell?.pullBbls || 140;
-        });
-        setRoutePullBbls(initialPullBbls);
-      } else {
-        // On subsequent updates, only add sort state for NEW routes
-        setRouteSorts(prev => {
-          const updated = { ...prev };
-          routeList.forEach(route => {
-            if (!updated[route]) {
-              updated[route] = { field: 'wellName', dir: 'asc' };
-            }
-          });
-          return updated;
-        });
+    if (dataLoading) return;
+    setRouteSorts(prev => {
+      const updated = { ...prev };
+      let changed = false;
+      for (const route of routes) if (!updated[route]) { updated[route] = { field: 'wellName', dir: 'asc' }; changed = true; }
+      return changed ? updated : prev;
+    });
+    setRoutePullBbls(prev => {
+      const updated = { ...prev };
+      let changed = false;
+      for (const route of routes) if (updated[route] == null) {
+        const firstWell = wells.find(w => w.route === route && w.pullBbls);
+        updated[route] = firstWell?.pullBbls || 140;
+        changed = true;
       }
-
-      setDataLoading(false);
-    }, undefined, { companyId: user.companyId || null });
-
-    return unsubscribe;
-  }, [user]);
+      return changed ? updated : prev;
+    });
+  }, [routes, wells, dataLoading]);
 
   // Load edge case tickets (submitted for wells not in well_config)
   useEffect(() => {
@@ -206,11 +187,16 @@ export default function MobilePage() {
           const nextB = b.nextPullTime ? new Date(b.nextPullTime).getTime() : 99999999999999;
           comparison = nextA - nextB;
           break;
-        case 'level':
-          const levelA = parseLevelToInches(a.currentLevel);
-          const levelB = parseLevelToInches(b.currentLevel);
+        case 'level': {
+          // Sort by the LIVE projected level (same projection the row displays),
+          // not the stale stored currentLevel. Unavailable/down sort low (-1).
+          const pa = projectWellLevel(a, asOfMs);
+          const pb = projectWellLevel(b, asOfMs);
+          const levelA = pa.available && pa.estFeet != null ? pa.estFeet * 12 : -1;
+          const levelB = pb.available && pb.estFeet != null ? pb.estFeet * 12 : -1;
           comparison = levelA - levelB;
           break;
+        }
         case 'flowRate':
           const flowA = parseFlowRateToSeconds(a.flowRate);
           const flowB = parseFlowRateToSeconds(b.flowRate);
@@ -247,9 +233,15 @@ export default function MobilePage() {
     }
     const overrideBbls = routePullBbls[route];
 
-    // Apply pullBbls override if set (recalculates Tank @ Level and Time Till Pull)
+    // Apply pullBbls override if set (recalculates Tank @ Level and Time Till Pull).
+    // The recompute anchors on the LIVE projected level (shared projection), never
+    // the stale stored currentLevel — so the planning tool reflects current recovery.
     const adjustedWells = overrideBbls
-      ? routeWells.map(w => recalcWellForPullBbls(w, overrideBbls))
+      ? routeWells.map(w => {
+          const proj = projectWellLevel(w, asOfMs);
+          const liveInches = proj.available && proj.estFeet != null ? proj.estFeet * 12 : -1;
+          return recalcWellForPullBbls(w, overrideBbls, liveInches);
+        })
       : routeWells;
 
     const sortState = routeSorts[route] || { field: 'wellName', dir: 'asc' };
@@ -293,6 +285,7 @@ export default function MobilePage() {
   }
 
   return (
+    <NowContext.Provider value={asOfMs}>
     <div className="min-h-screen bg-gray-900">
       <AppHeader />
 
@@ -418,6 +411,10 @@ export default function MobilePage() {
 
         {dataLoading ? (
           <div className="text-gray-400">Loading well data...</div>
+        ) : statusUnavailable ? (
+          <div className="rounded-lg border border-yellow-700/50 bg-yellow-900/20 px-4 py-3 text-yellow-300">
+            {readError || 'Well live status is temporarily unavailable. This is a read failure, not an empty list.'}
+          </div>
         ) : routes.length === 0 ? (
           <div className="text-gray-400">No well data available</div>
         ) : viewMode === 'cards' ? (
@@ -545,6 +542,7 @@ export default function MobilePage() {
         />
       )}
     </div>
+    </NowContext.Provider>
   );
 }
 
@@ -584,7 +582,7 @@ function getStatusPriority(well: WellResponse): number {
 
 // Recalculate Tank @ Level and Time Till Pull for a different pullBbls amount
 // Visual-only planning tool — doesn't change saved config
-function recalcWellForPullBbls(well: WellResponse, overridePullBbls: number): WellResponse {
+function recalcWellForPullBbls(well: WellResponse, overridePullBbls: number, liveInches: number): WellResponse {
   if (well.isDown || well.currentLevel === 'DOWN' || well.currentLevel === '--') return well;
 
   const tanks = well.tanks || 1;
@@ -599,8 +597,10 @@ function recalcWellForPullBbls(well: WellResponse, overridePullBbls: number): We
   const tankAtRemainder = Math.round(tankAtInches - (tankAtFeet * 12));
   const tankAtLevel = `${tanks} @ ${tankAtFeet}'${tankAtRemainder}"`;
 
-  // Recalculate timeTillPull based on new target height
-  const currentInches = parseLevelToInches(well.currentLevel);
+  // Recalculate timeTillPull from the LIVE projected level passed in (falls back to
+  // the stored reading only when the projection is unavailable), NOT a re-parse of
+  // the possibly-stale stored currentLevel.
+  const currentInches = liveInches >= 0 ? liveInches : parseLevelToInches(well.currentLevel);
   let timeTillPull = well.timeTillPull;
 
   if (currentInches >= 0 && well.flowRate && well.flowRate !== '--') {
@@ -770,7 +770,7 @@ function RouteTable({
                 <th className="px-4 py-2 text-left text-sm font-medium text-gray-400">Location</th>
                 <SortHeader label="Tank @ Level" field="tanks" sortState={sortState} onSort={onSort} />
                 <SortHeader label="Next Pull" field="nextPull" sortState={sortState} onSort={onSort} />
-                <SortHeader label="Level" field="level" sortState={sortState} onSort={onSort} />
+                <SortHeader label="Current Level (Est.)" field="level" sortState={sortState} onSort={onSort} />
                 <SortHeader label="Flow Rate" field="flowRate" sortState={sortState} onSort={onSort} />
                 <SortHeader label="Time Till Pull" field="timeTillPull" sortState={sortState} onSort={onSort} />
                 <SortHeader label="Down" field="status" sortState={sortState} onSort={onSort} />
@@ -790,6 +790,13 @@ function RouteTable({
 
 function WellRow({ well }: { well: WellResponse }) {
   const isDown = well.isDown || well.currentLevel === 'DOWN';
+  const asOfMs = useContext(NowContext);
+  const proj = projectWellLevel(well, asOfMs);
+  // Live current-level display: the shared WB-M projection at the shared clock.
+  // Identical to /well, Dispatch queue and the modals for the same governed row.
+  // Down wells FREEZE at their baseline (estimator handles it; the status column
+  // flags DOWN separately). Genuinely unavailable → '--', never zero.
+  const levelDisplay = proj.estDisplay;
 
   // Format tank @ level — target height when ready to pull (from VBA formula)
   const formatTankLevel = () => {
@@ -827,7 +834,7 @@ function WellRow({ well }: { well: WellResponse }) {
       <td className="px-4 py-3 text-gray-500 font-mono">--</td>
       <td className="px-4 py-3 text-white font-mono">{formatTankLevel()}</td>
       <td className="px-4 py-3 text-white font-mono text-sm">{formatNextPull()}</td>
-      <td className="px-4 py-3 text-white font-mono">{well.currentLevel || '--'}</td>
+      <td className="px-4 py-3 text-white font-mono">{levelDisplay}</td>
       <td className="px-4 py-3 text-white font-mono">{well.flowRate || '--'}</td>
       <td className="px-4 py-3 text-white font-mono">{well.timeTillPull || well.etaToMax || '--'}</td>
       <td className="px-4 py-3">
@@ -907,6 +914,9 @@ function RouteSection({
 function WellCard({ well }: { well: WellResponse }) {
   const isDown = well.isDown || well.currentLevel === 'DOWN';
   const tanks = well.tanks || 1;
+  const asOfMs = useContext(NowContext);
+  const proj = projectWellLevel(well, asOfMs);
+  const levelDisplay = proj.estDisplay;
 
   // Format next pull datetime
   const formatNextPull = () => {
@@ -960,6 +970,12 @@ function WellCard({ well }: { well: WellResponse }) {
         </div>
 
         <div className="mt-3 pt-3 border-t border-gray-600 space-y-1">
+          <div className="flex justify-between text-sm">
+            <span className="text-gray-400">Current Level (Est.)</span>
+            <span className={`font-mono ${isDown ? 'text-red-300/50' : 'text-white'}`}>
+              {levelDisplay}
+            </span>
+          </div>
           <div className="flex justify-between text-sm">
             <span className="text-gray-400">Next Pull</span>
             <span className={`font-mono text-xs ${isDown ? 'text-red-300/50' : 'text-white'}`}>
