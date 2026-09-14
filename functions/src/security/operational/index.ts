@@ -30,3 +30,6 @@ export {
   sendChatMessage,
 } from './invoiceOps';
 export { getPublicClientMeta } from './publicMeta';
+
+export { createDriverTransferRequest } from './transferRequestOps';
+

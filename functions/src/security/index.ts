@@ -57,6 +57,7 @@ export {
   bootstrapWbmSession,
   requestStorageUploadPath,
   upsertDriverInvoice,
+  createDriverTransferRequest,
   patchDriverInvoicePhotos,
   mergeDurablePhotos,
   upsertDriverDispatch,
@@ -66,3 +67,4 @@ export {
 
 /** Authenticated cold-start secure session verification (side-effect free). */
 export { verifyDriverSession } from './verifyDriverSession';
+
