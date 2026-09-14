@@ -18,7 +18,6 @@ export {
  * NOT deployed yet; selector: --only functions:adminBindDriverCompany
  */
 export { adminBindDriverCompany } from './companyBindingCallable';
-export { adminEditDriverProfile } from './adminEditDriverProfile';
 export {
   requestCompanyOnboarding,
   adminListCompanyOnboardingRequests,
@@ -26,8 +25,6 @@ export {
   adminCreateCompanyWithJoinCode,
   getCompanyJoinCode,
 } from './companyOnboarding';
-export { adminCreateEmployee } from './adminCreateEmployee';
-export { adminEmployeeDashboardAccess } from './adminEmployeeDashboardAccess';
 export {
   adminGetDashboardCatalog,
   adminGetWellPool,
