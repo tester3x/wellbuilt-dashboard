@@ -32,9 +32,25 @@ const deny=async(raw,who=auth,d=deps)=>{await assert.rejects(()=>run(raw,who,d))
  await deny({operation:'access'},auth,{...deps,getCompanyContract:async()=>({state:'invalid',contract:null})});
  await deny({...request,snapshot:{...snapshot,stepsAcknowledged:false}});
  await deny({...request,job:{...request.job,companyId:'forged'}});
+ const append={operation:'append',recordId,additionId:'B'.repeat(43),addition:{location:'Second location',operator:'Test operator',activity:'Service',hazards:'Moving equipment',controls:'Establish exclusion zone',ppe:'Hard hat, safety glasses',acknowledged:true,baseContentHash:first.contentHash,expectedAdditionCount:0}};
+ const added=(await run(append)).record;
+ assert.equal(added.additions.length,1);assert.deepEqual(added.snapshot,first.snapshot);assert.deepEqual(added.job,first.job);assert.equal(added.contentHash,first.contentHash);checks++;
+ assert.equal(added.additions[0].acknowledgedByUid,auth.uid);assert.equal(added.additions[0].acknowledgedAtMs,1000);checks++;
+ assert.deepEqual((await run(append)).record,added);assert.equal(writes,2);checks++;
+ await deny({...append,addition:{...append.addition,controls:'Changed'}});
+ await deny({...append,additionId:'C'.repeat(43)}); // stale review of original list
+ await deny({...append,additionId:'C'.repeat(43),addition:{...append.addition,expectedAdditionCount:1,acknowledged:false}});
+ for(const field of ['companyId','driverId','acknowledgedAtMs','snapshot'])await deny({...append,addition:{...append.addition,[field]:'forged'}});
+ await deny({...append,addition:{...append.addition,location:''}});
+ await deny(append,{uid:null});
+ await deny(append,{uid:'other',claims:{kind:'driver',driverId:'other',companyId:'company-1',app:'jsa'}},{...deps,getDriver:async()=>({driverId:'other',companyId:'company-1',active:true})});
+ const second=(await run({...append,additionId:'C'.repeat(43),addition:{...append.addition,location:'Third location',expectedAdditionCount:1}})).record;
+ assert.equal(second.additions.length,2);assert.deepEqual(second.additions[0],added.additions[0]);assert.deepEqual(second.snapshot,first.snapshot);checks++;
  const closed=(await run({operation:'close',recordId})).record;
  assert.equal(closed.state,'closed');assert.deepEqual(closed.snapshot,first.snapshot);checks++;
- assert.deepEqual((await run({operation:'close',recordId})).record,closed);assert.equal(writes,2);checks++;
+ assert.deepEqual((await run({operation:'close',recordId})).record,closed);assert.equal(writes,4);checks++;
+ assert.deepEqual((await run(append)).record,closed);checks++;
+ await deny({...append,additionId:'D'.repeat(43),addition:{...append.addition,expectedAdditionCount:2}});
  assert.ok([...rows.keys()].every(k=>k.startsWith('jsa_standalone_companies/')));checks++;
  const requires={...deps,getCompanyContract:async()=>({state:'active',contract:{...contract,appConfiguration:{'wellbuilt-jsa':{requiresActiveShift:true}}}})};
  assert.equal((await run({operation:'access'},auth,requires)).allowed,true);checks++;

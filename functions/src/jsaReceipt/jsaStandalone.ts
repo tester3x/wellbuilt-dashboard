@@ -31,7 +31,7 @@ export async function handleStandalone(deps:Pick<SsoDeps,'getDriver'|'getCompany
  if(!access.ok&&access.refusal!=='active_shift_required')throw new StandaloneError('permission-denied','company_permission');
  if(!object(raw))bad();
  const op=raw.operation;
- const allowed=op==='create'?['operation','recordId','snapshot','job']:op==='list'?['operation','after']:op==='access'?['operation']:['operation','recordId'];
+ const allowed=op==='append'?['operation','recordId','additionId','addition']:op==='create'?['operation','recordId','snapshot','job']:op==='list'?['operation','after']:op==='access'?['operation']:['operation','recordId'];
  if(Object.keys(raw).some(k=>!allowed.includes(k)))bad();
  if(op==='access')return {allowed:true,companyId:p.companyId,driverId:p.driverId,requiresActiveShift:false};
  const path=`jsa_standalone_companies/${hash(p.companyId)}/drivers/${hash(p.driverId)}/records`;
@@ -41,7 +41,18 @@ export async function handleStandalone(deps:Pick<SsoDeps,'getDriver'|'getCompany
    return {records:await store.list(path,after)};
  }
  const id=text(raw.recordId,43,true);
- if(!/^[A-Za-z0-9_-]{43}$/.test(id)||!['create','get','close'].includes(String(op)))bad();
+ if(!/^[A-Za-z0-9_-]{43}$/.test(id)||!['create','get','close','append'].includes(String(op)))bad();
+ let addition:Record<string,unknown>|null=null;
+ if(op==='append'){
+   const additionId=text(raw.additionId,43,true);
+   if(!/^[A-Za-z0-9_-]{43}$/.test(additionId)||!object(raw.addition))bad();
+   const a=raw.addition;
+   if(Object.keys(a).some(k=>!['location','operator','activity','hazards','controls','ppe','acknowledged','baseContentHash','expectedAdditionCount'].includes(k)))bad();
+   if(a.acknowledged!==true||!Number.isInteger(a.expectedAdditionCount)||Number(a.expectedAdditionCount)<0)bad();
+   const content={location:text(a.location,300,true),operator:text(a.operator,300),activity:text(a.activity,200,true),hazards:text(a.hazards,2000,true),controls:text(a.controls,2000,true),ppe:text(a.ppe,1000,true),acknowledged:true,baseContentHash:text(a.baseContentHash,64,true),expectedAdditionCount:a.expectedAdditionCount};
+   addition={...content,id:additionId,contentHash:hash(JSON.stringify(content)),acknowledgedAtMs:now,acknowledgedByUid:auth.uid,driverId:p.driverId,
+     acknowledgement:'I have reviewed this location and activity, assessed its hazards, and understand the controls and PPE needed before starting work.'};
+ }
  let authored:Record<string,unknown>|null=null;
  if(op==='create'){
    // Reuse the deployed immutable-artifact validator; id is only a validation key.
@@ -61,6 +72,16 @@ export async function handleStandalone(deps:Pick<SsoDeps,'getDriver'|'getCompany
      return old?null:authored;
    }
    if(!old)throw new StandaloneError('not-found','record');
+   if(op==='append'){
+     const additions=Array.isArray(old.additions)?old.additions as Record<string,unknown>[]:[];
+     const existing=additions.find(a=>a.id===addition!.id);
+     // Retry after close still returns the original acknowledgement, never a new write.
+     if(existing){if(existing.contentHash!==addition!.contentHash)throw new StandaloneError('already-exists','conflicting_addition');return null;}
+     if(old.state!=='open')throw new StandaloneError('permission-denied','record_closed');
+     if(old.contentHash!==addition!.baseContentHash||additions.length!==addition!.expectedAdditionCount)throw new StandaloneError('already-exists','review_latest_record');
+     if(additions.length>=40)throw new StandaloneError('invalid-argument','addition_limit');
+     return {...old,additions:[...additions,addition!]};
+   }
    return op==='close'&&old.state!=='closed'?{...old,state:'closed',closedAtMs:now}:null;
  });
  return {record};
