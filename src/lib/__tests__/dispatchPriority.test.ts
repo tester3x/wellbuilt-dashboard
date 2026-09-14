@@ -32,12 +32,15 @@ test('VECTOR A: bottom 5\', pull 16:00Z, AFR 0:30:00, asOf 18:00Z → est 9\', t
   assert.equal(matchesView(well, 'next-24h', ms(18)), true);
 });
 
-test('VECTOR B: bottom 18\'6", pull 17:00Z, AFR 0:15:00, asOf 18:00Z → capped 20\', ready now, PULL NOW (target 17\')', () => {
-  const well = w({ lastPullBottomLevel: "18'6\"", lastPullDateTimeUTC: at(17), flowRate: '0:15:00', bottomLevel: 3, pullBbls: 280, bblPerFoot: 20 });
+test('VECTOR B (corrected): bottom 18\'6", 0:15:00, asOf 18:00Z, 140/20/3 → capped 20\', target 10\', TWO loads, PULL NOW', () => {
+  // 140 bbls / 20 bbl-ft / 3' bottom → readyLevel = 3 + 140/20 = 10' (NOT 17').
+  // At 20': loads = floor(((20-3)*20)/140) = floor(340/140) = 2.
+  const well = w({ lastPullBottomLevel: "18'6\"", lastPullDateTimeUTC: at(17), flowRate: '0:15:00', bottomLevel: 3, bblPerFoot: 20 });
   const c = classifyWell(well, ms(18));
   assert.equal(c.estDisplay, "20'");       // 18.5 + 60/15 = 22.5 → cap 20
   assert.equal(c.estFeet, 20);
-  assert.equal(c.readyFeet, 17);           // 3 + 280/20 (two 140-bbl loads over a 3' bottom at 20 bbl/ft)
+  assert.equal(c.readyFeet, 10);           // corrected target
+  assert.equal(c.availableLoads, 2);       // two pullable 140-bbl loads at 20'
   assert.equal(c.state, 'pull-now');
   assert.equal(matchesView(well, 'needs-pull', ms(18)), true);
   assert.ok(c.predictedReadyAtMs !== null && c.predictedReadyAtMs <= ms(18), 'ready time is now/past');
@@ -136,6 +139,63 @@ test('badge, column, filter, TTP, bucket, and prediction all consume the SAME es
   // assigned overrides to ASSIGNED and drops from actionable views
   assert.equal(classifyWell(well, ms(18), { assigned: true }).state, 'assigned');
   assert.equal(matchesView(well, 'needs-pull', ms(18), { assigned: true }), false);
+});
+
+// ── Parity-review corrections: validation regressions ──────────────────────
+test('Vector A remains 9\' at 18:00 and ready at 18:30 (unchanged by corrections)', () => {
+  const well = w({ lastPullBottomLevel: "5'", lastPullDateTimeUTC: at(16), flowRate: '0:30:00', bottomLevel: 3, bblPerFoot: 20 });
+  assert.equal(classifyWell(well, ms(18)).estDisplay, "9'");
+  assert.equal(classifyWell(well, ms(18)).predictedReadyAtMs, ms(18, 30));
+  assert.equal(classifyWell(well, ms(18)).readyFeet, 10);
+});
+
+test('sub-minute AFR (below 1 min/foot) cannot create urgency — rejected, frozen', () => {
+  // 0:00:30 = 0.5 min/ft (implausible). Baseline 4' < target 10'.
+  const well = w({ lastPullBottomLevel: "4'", lastPullDateTimeUTC: at(10), flowRate: '0:00:30', bottomLevel: 3, bblPerFoot: 20 });
+  const c = classifyWell(well, ms(18));
+  assert.equal(c.hasFlow, false);
+  assert.equal(c.state, 'no-gain');            // NOT pull-now / approaching
+  assert.equal(c.estDisplay, "4'");            // frozen at baseline
+  assert.equal(c.predictedReadyAtMs, null);
+});
+
+test('invalid / pre-2020 pull timestamp cannot create urgency — unavailable, not zero', () => {
+  for (const bad of ['2019-12-31T23:59:00Z', '1899-12-30T00:00:00Z', 'not-a-date']) {
+    const well = w({ lastPullBottomLevel: "9'", lastPullDateTimeUTC: bad, flowRate: '0:30:00', bottomLevel: 3, bblPerFoot: 20 });
+    const c = classifyWell(well, ms(18));
+    assert.equal(c.reason, 'missing_timestamp', `ts=${bad}`);
+    assert.equal(c.estDisplay, '--');           // never zero, never a fabricated rise
+    assert.notEqual(c.state, 'pull-now');
+  }
+});
+
+test('missing capacity cannot use 20×tanks unless tanks is present', () => {
+  // No bblPerFoot AND no tanks → capacity undeterminable → target unavailable.
+  const noCap = w({ lastPullBottomLevel: "9'", lastPullDateTimeUTC: at(17), flowRate: '0:30:00', bottomLevel: 3 });
+  const cNo = classifyWell(noCap, ms(18));
+  assert.equal(cNo.readyFeet, null);
+  assert.equal(cNo.reason, 'missing_target');
+  // WB‑M's proven fallback IS used when tanks IS present (bblPerFoot absent).
+  const withTanks = w({ lastPullBottomLevel: "9'", lastPullDateTimeUTC: at(17), flowRate: '0:30:00', bottomLevel: 3, tanks: 1 });
+  const cT = classifyWell(withTanks, ms(18));
+  assert.equal(cT.readyFeet, 10);              // 3 + 140/(20*1)
+  assert.notEqual(cT.state, 'verify');
+});
+
+test('all WB‑M down aliases (down/offline/shut in, any case) freeze the estimate', () => {
+  for (const tok of ['DOWN', 'down', 'Offline', 'OFFLINE', 'Shut In', 'shut in']) {
+    const well = w({ currentLevel: tok, lastPullBottomLevel: "4'", lastPullDateTimeUTC: at(0), flowRate: '0:05:00', bottomLevel: 3, bblPerFoot: 20 });
+    const c = classifyWell(well, ms(23));
+    assert.equal(c.state, 'down', `token=${tok}`);
+    assert.equal(c.predictedReadyAtMs, null);
+  }
+});
+
+test('a changed pull basis re-evaluates; unchanged inputs stay deterministic', () => {
+  const a = w({ lastPullBottomLevel: "5'", lastPullDateTimeUTC: at(16), flowRate: '0:30:00', bottomLevel: 3, bblPerFoot: 20 });
+  const b = w({ lastPullBottomLevel: "3'", lastPullDateTimeUTC: at(17, 30), flowRate: '0:30:00', bottomLevel: 3, bblPerFoot: 20 });
+  assert.notEqual(classifyWell(a, ms(18)).estFeet, classifyWell(b, ms(18)).estFeet);   // re-evaluates
+  assert.deepEqual(classifyWell(a, ms(18)), classifyWell(a, ms(18)));                    // deterministic
 });
 
 test('inchesToLevel unchanged (legacy helper)', () => {

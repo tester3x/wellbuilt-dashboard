@@ -20,7 +20,11 @@ import {
   formatFeetWBM,
   estimateCurrentFeet,
   readyLevelFeet,
+  availableLoadsAt,
   predictedReadyAtMs,
+  isWbmDownToken,
+  WBM_DEFAULT_LOAD_BBLS,
+  MIN_VALID_PULL_MS,
   type EstimatorInputs,
 } from './wbmLevelEstimator.ts';
 
@@ -224,6 +228,8 @@ export interface WellClassification {
   predictedReadyAtMs: number | null;
   /** True only when a positive flow is driving a live rise (not frozen/down). */
   hasFlow: boolean;
+  /** Loads currently available at the estimate (WB‑M floor((est-bottom)*bbl/ft / load)). */
+  availableLoads: number;
 }
 
 /** Parse a feet/inches level string to inches. Handles 1'3", 7'6", 15, 15". */
@@ -249,21 +255,30 @@ export interface ClassifyOpts { assigned?: boolean; }
 export function classifyWell(well: WellResponse, nowMs: number = Date.now(), opts: ClassifyOpts = {}): WellClassification {
   const startingBottomFeet = parseFeetDecimal(well.lastPullBottomLevel)
     ?? parseFeetDecimal(well.currentLevel && well.currentLevel !== '--' ? well.currentLevel : null);
-  const tsStr = (well.lastPullDateTimeUTC && !isNaN(Date.parse(well.lastPullDateTimeUTC))) ? well.lastPullDateTimeUTC
-    : (well.timestampUTC && !isNaN(Date.parse(well.timestampUTC)) ? well.timestampUTC : null);
-  const pullTimeMs = tsStr ? Date.parse(tsStr) : null;
+  // Pull timestamp: prefer lastPullDateTimeUTC, else timestampUTC; reject invalid
+  // OR pre-2020 (WB‑M Excel-epoch corruption guard) → treated as no timestamp.
+  const rawTs = (well.lastPullDateTimeUTC && !isNaN(Date.parse(well.lastPullDateTimeUTC))) ? Date.parse(well.lastPullDateTimeUTC)
+    : (well.timestampUTC && !isNaN(Date.parse(well.timestampUTC)) ? Date.parse(well.timestampUTC) : null);
+  const pullTimeMs = (rawTs != null && rawTs >= MIN_VALID_PULL_MS) ? rawTs : null;
   const flowMinutesPerFoot = parseFlowMinutesPerFoot(well.flowRate);
-  const wellDown = well.wellDown === true || well.isDown === true || well.currentLevel === 'DOWN';
+  const wellDown = well.wellDown === true || well.isDown === true || isWbmDownToken(well.currentLevel);
   const allowedBottomFeet = typeof well.bottomLevel === 'number' ? well.bottomLevel : null;
-  const loadBbls = typeof well.pullBbls === 'number' ? well.pullBbls : null;
+  // WB‑M loadBbls = the driver's local load size (default 140), NOT config.pullBbls
+  // (see wbmLevelEstimator.WBM_DEFAULT_LOAD_BBLS). The Dashboard has no per-driver
+  // value, so it uses the WB‑M default for a driver-agnostic parity threshold.
+  const loadBbls = WBM_DEFAULT_LOAD_BBLS;
+  // bblsPerFoot = configured effective bbl/ft, else WB‑M's proven fallback 20×numTanks
+  // (getBblPerFootSync, wellConfig.ts:397/410). If tanks is absent too → undeterminable
+  // capacity → target unavailable (do NOT invent a tank count).
   const bblsPerFoot = (typeof well.bblPerFoot === 'number' && well.bblPerFoot > 0)
     ? well.bblPerFoot
-    : 20 * (typeof well.tanks === 'number' && well.tanks > 0 ? well.tanks : 1);
+    : (typeof well.tanks === 'number' && well.tanks > 0 ? 20 * well.tanks : null);
   const readyFeet = readyLevelFeet({ allowedBottomFeet, loadBbls, bblsPerFoot });
 
   const inputs: EstimatorInputs = { startingBottomFeet, pullTimeMs, flowMinutesPerFoot, wellDown };
   const est = estimateCurrentFeet(inputs, nowMs);
   const readyAt = predictedReadyAtMs(inputs, readyFeet);
+  const availableLoads = availableLoadsAt({ estFeet: est.feet, allowedBottomFeet, loadBbls, bblsPerFoot });
   const ageHours = pullTimeMs != null ? (nowMs - pullTimeMs) / 3600000 : null;
 
   const common = {
@@ -281,6 +296,7 @@ export function classifyWell(well: WellResponse, nowMs: number = Date.now(), opt
     readyFeet,
     predictedReadyAtMs: readyAt,
     hasFlow: est.hasFlow,
+    availableLoads,
   };
   const make = (c: Partial<WellClassification>): WellClassification => ({
     ...common, state: 'verify', label: 'VERIFY', color: 'bg-amber-600', textColor: 'text-white', sortOrder: 50, ...c,

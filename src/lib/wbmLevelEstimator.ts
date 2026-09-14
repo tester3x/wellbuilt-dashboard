@@ -22,7 +22,22 @@
  * inches ("7'" not "7'0\""), cap at 20 feet.
  */
 
-export const MAX_LEVEL_FEET = 20;
+export const MAX_LEVEL_FEET = 20;            // WB‑M FULL_TANK_FEET (app/(tabs)/index.tsx:106)
+export const MIN_LEVEL_FEET = 0;             // estimate clamp floor
+/** WB‑M `loadBbls` is the DRIVER-LOCAL load size (STORAGE_KEY_LOAD_SIZE, default 140),
+ *  NOT the well's `config.pullBbls`. The Dashboard has no per-driver load size, so it
+ *  uses WB‑M's default 140 for a driver-agnostic parity threshold. Source:
+ *  app/(tabs)/index.tsx:298 (loadBbls = 140), :1830 (STORAGE_KEY_LOAD_SIZE). */
+export const WBM_DEFAULT_LOAD_BBLS = 140;
+/** WB‑M rejects pull timestamps before 2020 as Excel-epoch corruption. Source:
+ *  src/services/backgroundSync.ts:133, src/services/wellHistory.ts:311. */
+export const MIN_VALID_PULL_MS = Date.UTC(2020, 0, 1);
+
+/** WB‑M down tokens (src/services/downSnapshot.ts:20; app/(tabs)/index.tsx:179). */
+export function isWbmDownToken(raw: string | null | undefined): boolean {
+  const s = (raw ?? '').trim().toLowerCase();
+  return s === 'down' || s === 'offline' || s === 'shut in';
+}
 
 /** Parse a level string to DECIMAL FEET. Handles "5'", "18'6\"", "6'7\"", "9", "20", "7'6". */
 export function parseFeetDecimal(str: string | null | undefined): number | null {
@@ -35,14 +50,20 @@ export function parseFeetDecimal(str: string | null | undefined): number | null 
   return isNaN(n) ? null : n; // bare number = feet
 }
 
-/** Parse "H:MM:SS" (minutes per foot) → minutes per foot. Invalid / non-positive → null. */
+/**
+ * Parse "H:MM:SS" (minutes per FOOT) → minutes/foot. Requires three numeric
+ * components (WB‑M rejects non-3-part / N/A / Unknown → 0, index.tsx:276). Per
+ * the parity review, a rate BELOW 1 minute/foot is rejected (implausibly fast
+ * rise / data error) so it cannot manufacture urgency; invalid → null (freeze).
+ */
 export function parseFlowMinutesPerFoot(flowRate: string | null | undefined): number | null {
   if (flowRate == null) return null;
   const s = String(flowRate).trim();
   const m = s.match(/^(\d+):(\d{1,2}):(\d{1,2})$/);
   if (!m) return null;
   const minutes = parseInt(m[1], 10) * 60 + parseInt(m[2], 10) + parseInt(m[3], 10) / 60;
-  return minutes > 0 ? minutes : null;
+  if (!Number.isFinite(minutes) || minutes < 1) return null; // reject sub-minute/foot
+  return minutes;
 }
 
 /**
@@ -82,24 +103,41 @@ export function estimateCurrentFeet(inp: EstimatorInputs, asOfMs: number): Estim
   const base = inp.startingBottomFeet;
   if (base == null) return { feet: null, hasFlow: false, capped: false, frozen: false };
 
-  const flowOk = inp.flowMinutesPerFoot != null && inp.flowMinutesPerFoot > 0;
+  const clamp = (v: number) => Math.max(MIN_LEVEL_FEET, Math.min(v, MAX_LEVEL_FEET));
+  const flowOk = inp.flowMinutesPerFoot != null && inp.flowMinutesPerFoot >= 1;
   if (inp.wellDown || !flowOk || inp.pullTimeMs == null) {
     // Freeze at the starting bottom — no fake rise, no urgency from time alone.
-    return { feet: Math.min(base, MAX_LEVEL_FEET), hasFlow: false, capped: base >= MAX_LEVEL_FEET, frozen: true };
+    return { feet: clamp(base), hasFlow: false, capped: base >= MAX_LEVEL_FEET, frozen: true };
   }
 
   const minutesSincePull = (asOfMs - inp.pullTimeMs) / 60000;
   const rise = minutesSincePull > 0 ? minutesSincePull / (inp.flowMinutesPerFoot as number) : 0;
   const raw = base + rise;
-  const feet = Math.min(raw, MAX_LEVEL_FEET);
+  const feet = clamp(raw);                          // WB‑M: min(.,20); review adds 0 floor
   return { feet, hasFlow: true, capped: raw >= MAX_LEVEL_FEET, frozen: false };
 }
 
-/** readyLevel = allowedBottom + loadBbls / bblsPerFoot (decimal feet), or null. */
+/** readyLevel = allowedBottom + loadBbls / bblsPerFoot (decimal feet), or null.
+ *  (WB‑M app/(tabs)/index.tsx:983: `readyLevel = allowedBottom + feetPerLoad`.) */
 export function readyLevelFeet(args: { allowedBottomFeet: number | null; loadBbls: number | null; bblsPerFoot: number | null }): number | null {
   const { allowedBottomFeet, loadBbls, bblsPerFoot } = args;
-  if (allowedBottomFeet == null || loadBbls == null || !bblsPerFoot || bblsPerFoot <= 0) return null;
+  if (allowedBottomFeet == null || !loadBbls || loadBbls <= 0 || !bblsPerFoot || bblsPerFoot <= 0) return null;
   return allowedBottomFeet + loadBbls / bblsPerFoot;
+}
+
+/**
+ * Loads currently available at the estimated level (WB‑M calculateNextPullReady,
+ * index.tsx:988-990): `floor((current - allowedBottom) * bblsPerFoot / loadBbls)`.
+ * Returns 0 when below the ready level or when capacity is undeterminable.
+ */
+export function availableLoadsAt(args: {
+  estFeet: number | null; allowedBottomFeet: number | null; loadBbls: number | null; bblsPerFoot: number | null;
+}): number {
+  const { estFeet, allowedBottomFeet, loadBbls, bblsPerFoot } = args;
+  if (estFeet == null || allowedBottomFeet == null || !loadBbls || loadBbls <= 0 || !bblsPerFoot || bblsPerFoot <= 0) return 0;
+  const bblsAvailable = (estFeet - allowedBottomFeet) * bblsPerFoot;
+  const loads = Math.floor(bblsAvailable / loadBbls);
+  return loads > 0 ? loads : 0;
 }
 
 /**
@@ -113,7 +151,7 @@ export function predictedReadyAtMs(inp: EstimatorInputs, readyFeet: number | nul
   if (inp.wellDown) return null;
   if (inp.startingBottomFeet == null || inp.pullTimeMs == null) return null;
   const flow = inp.flowMinutesPerFoot;
-  if (flow == null || flow <= 0) return null;
+  if (flow == null || flow < 1) return null;
   const feetToGo = readyFeet - inp.startingBottomFeet;
   return inp.pullTimeMs + feetToGo * flow * 60000;
 }

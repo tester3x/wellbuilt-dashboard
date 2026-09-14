@@ -6,7 +6,8 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import {
   parseFeetDecimal, parseFlowMinutesPerFoot, formatFeetWBM,
-  estimateCurrentFeet, readyLevelFeet, predictedReadyAtMs, MAX_LEVEL_FEET,
+  estimateCurrentFeet, readyLevelFeet, availableLoadsAt, predictedReadyAtMs,
+  isWbmDownToken, MAX_LEVEL_FEET,
 } from '../wbmLevelEstimator.ts';
 
 test('parseFeetDecimal', () => {
@@ -19,13 +20,33 @@ test('parseFeetDecimal', () => {
   assert.equal(parseFeetDecimal(null), null);
 });
 
-test('parseFlowMinutesPerFoot (H:MM:SS = minutes per foot)', () => {
+test('parseFlowMinutesPerFoot (H:MM:SS = minutes/foot; reject <1 and invalid)', () => {
   assert.equal(parseFlowMinutesPerFoot('0:30:00'), 30);
   assert.equal(parseFlowMinutesPerFoot('0:15:00'), 15);
   assert.equal(parseFlowMinutesPerFoot('1:16:00'), 76);
-  assert.equal(parseFlowMinutesPerFoot('0:00:00'), null); // non-positive → invalid
+  assert.equal(parseFlowMinutesPerFoot('0:01:00'), 1);   // exactly 1 min/ft ok
+  assert.equal(parseFlowMinutesPerFoot('0:00:30'), null); // 0.5 min/ft → rejected
+  assert.equal(parseFlowMinutesPerFoot('0:00:00'), null);
+  assert.equal(parseFlowMinutesPerFoot('0:30'), null);    // not 3 components
   assert.equal(parseFlowMinutesPerFoot('Unknown'), null);
   assert.equal(parseFlowMinutesPerFoot(''), null);
+});
+
+test('isWbmDownToken: down/offline/shut in (any case)', () => {
+  for (const t of ['down', 'DOWN', 'Offline', 'shut in', 'SHUT IN']) assert.equal(isWbmDownToken(t), true, t);
+  for (const t of ['5\'', '', null, 'up']) assert.equal(isWbmDownToken(t as never), false);
+});
+
+test('availableLoadsAt = floor((est-bottom)*bblsPerFoot/loadBbls)', () => {
+  assert.equal(availableLoadsAt({ estFeet: 20, allowedBottomFeet: 3, loadBbls: 140, bblsPerFoot: 20 }), 2); // 340/140
+  assert.equal(availableLoadsAt({ estFeet: 10, allowedBottomFeet: 3, loadBbls: 140, bblsPerFoot: 20 }), 1); // exactly ready
+  assert.equal(availableLoadsAt({ estFeet: 8, allowedBottomFeet: 3, loadBbls: 140, bblsPerFoot: 20 }), 0);  // below ready
+  assert.equal(availableLoadsAt({ estFeet: 20, allowedBottomFeet: 3, loadBbls: 140, bblsPerFoot: null }), 0); // no capacity
+});
+
+test('estimate clamps to 0..20', () => {
+  // negative baseline clamps to 0
+  assert.equal(estimateCurrentFeet({ startingBottomFeet: -5, pullTimeMs: Date.UTC(2026,8,14,16), flowMinutesPerFoot: null, wellDown: false }, Date.UTC(2026,8,14,18)).feet, 0);
 });
 
 test('formatFeetWBM: floor(feet*12+0.0001), omit zero inches, cap 20', () => {

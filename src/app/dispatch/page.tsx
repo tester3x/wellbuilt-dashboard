@@ -3001,9 +3001,9 @@ function DispatchPageInner() {
                                     {c.lastLevelAgeHours !== null && (
                                       <span className="text-gray-500"> · {formatAge(c.lastLevelAgeHours)}</span>
                                     )}
-                                    {/* Pull-ready target */}
+                                    {/* Pull-ready target + WB‑M loads available at the estimate */}
                                     {c.readyFeet !== null && (
-                                      <span className="block text-gray-500">ready {inchesToLevel(c.readyFeet * 12)}{c.remainingInches !== null && c.remainingInches > 0 ? ` · ${inchesToLevel(c.remainingInches)} to go` : ''}</span>
+                                      <span className="block text-gray-500">ready {inchesToLevel(c.readyFeet * 12)}{c.state === 'pull-now' && c.availableLoads > 0 ? ` · ${c.availableLoads} load${c.availableLoads !== 1 ? 's' : ''}` : c.remainingInches !== null && c.remainingInches > 0 ? ` · ${inchesToLevel(c.remainingInches)} to go` : ''}</span>
                                     )}
                                     {(c.state === 'verify' || c.state === 'no-gain') && (
                                       <span className={`block font-bold ${c.state === 'no-gain' ? 'text-gray-400' : 'text-amber-400'}`}>{c.label}</span>
