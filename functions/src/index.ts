@@ -7,6 +7,7 @@ import { logCanonicalDiag } from './canonical-jobs/diag';
 import { ANTHROPIC_API_KEY, logRedacted, toSafeProviderError } from './secrets';
 import { createAnthropicClient } from './ai/anthropicClient';
 import { buildProcessedRecord } from './processedRecord';
+import { resolveLevelChatDriver, levelReportMessageId, driverIdForm, LEVEL_CHAT_REASON } from './levelChatIdentity';
 import {
   ambiguousEditVerdict,
   comparePullEquivalence,
@@ -3163,35 +3164,33 @@ async function sendLevelToChat(
   computed?: { tankAfterInches: number; tanks: number },
 ): Promise<void> {
   try {
-    const driverHash = data.driverId;
-    if (!driverHash) {
-      console.log('[LevelChat] No driverId on packet, skipping');
-      return;
-    }
+    const packetDriverId = data.driverId;
 
-    // Get driver info from RTDB
-    const driverSnap = await db.ref(`drivers/approved/${driverHash}`).once('value');
-    if (!driverSnap.exists()) {
-      console.log('[LevelChat] Driver not found in approved:', driverHash.slice(0, 8));
+    // Deterministic, server-authoritative, company-scoped identity resolution.
+    // The pull packet's driverId may be the CANONICAL id (a drivers/profiles
+    // key); the thin drivers/approved/{canonicalId} record carries no companyId,
+    // which was the original silent skip. Resolve approved→profiles with KEYED
+    // reads only (no scans, no name/email/phone guessing).
+    const resolved = await resolveLevelChatDriver(
+      packetDriverId,
+      {
+        readApproved: async (id) => (await db.ref(`drivers/approved/${id}`).once('value')).val(),
+        readProfile: async (id) => (await db.ref(`drivers/profiles/${id}`).once('value')).val(),
+      },
+      { fallbackName: data.driverName },
+    );
+    if (!resolved.ok) {
+      await recordLevelChatDiag(packetId, resolved.reason, { wellName: data.wellName, driverId: packetDriverId });
       return;
     }
-    const driverData = driverSnap.val();
-    const companyId = driverData.companyId;
-    if (!companyId) {
-      console.log('[LevelChat] No companyId on driver, skipping');
-      return;
-    }
-    const driverName = driverData.legalName || driverData.displayName || data.driverName || 'Driver';
+    const { companyId, driverName, participantIds } = resolved.driver;
 
-    // Check company config for sendLevelToDispatch toggle
+    // Check company config for sendLevelToDispatch toggle (kept as an explicit gate).
     const companyDoc = await firestoreDb.collection('companies').doc(companyId).get();
-    if (!companyDoc.exists) {
-      console.log('[LevelChat] Company doc not found:', companyId);
-      return;
-    }
-    const companyConfig = companyDoc.data() || {};
+    const companyConfig = companyDoc.exists ? (companyDoc.data() || {}) : {};
     if (!companyConfig.sendLevelToDispatch) {
-      return; // Feature not enabled for this company
+      await recordLevelChatDiag(packetId, LEVEL_CHAT_REASON.FEATURE_DISABLED, { wellName: data.wellName, driverId: packetDriverId, companyId });
+      return; // Feature not enabled for this company (or company doc absent)
     }
 
     // Build message from template or default
@@ -3259,47 +3258,56 @@ async function sendLevelToChat(
     message = message.replace(/\{time\}/gi, timeOnlyStr);
     message = message.replace(/\{driverName\}/gi, driverName);
 
-    // Find driver's direct chat threads with dispatch users
-    const driverPid = `driver:${driverHash}`;
-    const threadsSnap = await firestoreDb.collection('chat_threads')
-      .where('type', '==', 'direct')
-      .where('participants', 'array-contains', driverPid)
-      .get();
-
-    if (threadsSnap.empty) {
-      console.log('[LevelChat] No direct threads for driver:', driverHash.slice(0, 8));
-      return;
+    // Find the driver's DIRECT chat threads that have a dispatch (user:*)
+    // participant, matching ANY resolved participant id (canonical id + any
+    // explicit legacy alias). Union across the small alias set — no scans.
+    const now = admin.firestore.Timestamp.now();
+    const seenThreads = new Set<string>();
+    const dispatchThreads: FirebaseFirestore.QueryDocumentSnapshot[] = [];
+    for (const pid of participantIds) {
+      const snap = await firestoreDb.collection('chat_threads')
+        .where('type', '==', 'direct')
+        .where('participants', 'array-contains', pid)
+        .get();
+      for (const d of snap.docs) {
+        if (seenThreads.has(d.id)) continue;
+        const participants: string[] = d.data().participants || [];
+        if (participants.some(p => p.startsWith('user:'))) {
+          seenThreads.add(d.id);
+          dispatchThreads.push(d);
+        }
+      }
     }
-
-    // Filter to threads where the other participant is a Dashboard user (user:*)
-    const dispatchThreads = threadsSnap.docs.filter(d => {
-      const participants: string[] = d.data().participants || [];
-      return participants.some(p => p.startsWith('user:') && p !== driverPid);
-    });
 
     if (dispatchThreads.length === 0) {
-      console.log('[LevelChat] No dispatch threads for driver:', driverHash.slice(0, 8));
+      await recordLevelChatDiag(packetId, LEVEL_CHAT_REASON.NO_DISPATCH_THREADS, { wellName: data.wellName, driverId: packetDriverId, companyId });
       return;
     }
 
-    // Send to each dispatch thread
-    const now = admin.firestore.Timestamp.now();
+    // Send to each dispatch thread with a DETERMINISTIC message id: a reprocessed
+    // pull cannot create a duplicate (same doc id), and a thread already carrying
+    // this packet's report is skipped (idempotent — prevents duplicate sends).
+    const senderPid = `driver:${packetDriverId}`;
+    let sent = 0;
+    let already = 0;
     for (const threadDoc of dispatchThreads) {
       try {
+        const msgId = levelReportMessageId(packetId, threadDoc.id);
+        const msgRef = firestoreDb.collection('chat_threads').doc(threadDoc.id).collection('messages').doc(msgId);
+        if ((await msgRef.get()).exists) { already++; continue; }
         const batch = firestoreDb.batch();
-        const msgRef = firestoreDb.collection('chat_threads').doc(threadDoc.id).collection('messages').doc();
         batch.set(msgRef, {
           text: message,
-          senderId: driverPid,
+          senderId: senderPid,
           senderName: driverName,
           timestamp: now,
           type: 'level_report',
-          clientId: `level_${Date.now()}_${threadDoc.id.slice(0, 6)}`,
+          clientId: msgId,
         });
         batch.update(firestoreDb.collection('chat_threads').doc(threadDoc.id), {
           lastMessage: {
             text: message.length > 100 ? message.substring(0, 100) + '...' : message,
-            senderId: driverPid,
+            senderId: senderPid,
             senderName: 'Level Report',
             timestamp: now,
             type: 'system',
@@ -3307,15 +3315,43 @@ async function sendLevelToChat(
           updatedAt: now,
         });
         await batch.commit();
-        console.log('[LevelChat] Level sent to thread:', threadDoc.id);
+        sent++;
       } catch (threadErr) {
         console.warn('[LevelChat] Failed to send to thread', threadDoc.id, threadErr);
       }
     }
 
-    console.log(`[LevelChat] Sent level report for ${data.wellName} to ${dispatchThreads.length} thread(s)`);
+    await recordLevelChatDiag(packetId, sent > 0 ? LEVEL_CHAT_REASON.SENT : LEVEL_CHAT_REASON.ALREADY_SENT, { wellName: data.wellName, driverId: packetDriverId, companyId, threadCount: dispatchThreads.length, sent, already });
+    console.log(`[LevelChat] ${data.wellName}: sent=${sent} already=${already} of ${dispatchThreads.length} thread(s) [company=${companyId}]`);
   } catch (err) {
     console.error('[LevelChat] Error (non-blocking):', err);
+  }
+}
+
+/**
+ * Durable, sanitized reason-code sink for the level-report pipeline so a
+ * non-send is observable (queryable) instead of a silent return. Keyed by
+ * packetId (overwrites on reprocess). Never stores the full driver id.
+ */
+async function recordLevelChatDiag(
+  packetId: string,
+  reason: string,
+  ctx: { wellName?: string; driverId?: string | null; companyId?: string; threadCount?: number; sent?: number; already?: number },
+): Promise<void> {
+  try {
+    await db.ref(`diagnostics/levelChat/${packetId}`).set({
+      reason,
+      wellName: ctx.wellName || null,
+      companyId: ctx.companyId || null,
+      driverIdForm: driverIdForm(ctx.driverId),
+      driverIdPrefix: ctx.driverId ? String(ctx.driverId).slice(0, 8) : null,
+      threadCount: ctx.threadCount ?? null,
+      sent: ctx.sent ?? null,
+      already: ctx.already ?? null,
+      at: admin.database.ServerValue.TIMESTAMP,
+    });
+  } catch (e) {
+    console.warn('[LevelChat] diag write failed:', e);
   }
 }
 
