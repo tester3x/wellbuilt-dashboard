@@ -297,3 +297,136 @@ export function validateObservationPayload(raw: unknown, nowMs: number): { ok: t
     },
   };
 }
+
+export function resolveWatchdogWellIdentity(input: {
+  wellName: string;
+  wellConfig?: Record<string, unknown> | null;
+}): { ok: true; wellName: string; wellKey: string; companyId: string } | { ok: false; reason: string } {
+  const wellName = String(input.wellName || '').trim();
+  if (!wellName) return { ok: false, reason: 'missing_well_name' };
+  const cfg = input.wellConfig && typeof input.wellConfig === 'object' ? input.wellConfig : null;
+  const cfgName = typeof cfg?.wellName === 'string' ? cfg.wellName.trim() : '';
+  if (cfgName && cfgName !== wellName) {
+    return { ok: false, reason: 'well_config_name_mismatch' };
+  }
+  const cfgCo = typeof cfg?.companyId === 'string' ? cfg.companyId.trim() : '';
+  if (cfgCo && cfgCo !== WATCHDOG_COMPANY_ID) {
+    return { ok: false, reason: 'cross_company_well' };
+  }
+  return {
+    ok: true,
+    wellName,
+    wellKey: wellName.replace(/\s+/g, ''),
+    companyId: WATCHDOG_COMPANY_ID,
+  };
+}
+
+/**
+ * Receipt is successful only when the packet completed canonical processing
+ * AND the same Current Level record adminGetWellPool reads (packets/outgoing
+ * projected by wellName) was updated for THIS packet. wells/{name}/status is
+ * a second copy; outgoing is the Dashboard pool source.
+ */
+export function evaluateWatchdogReceipt(input: {
+  packetId: string;
+  wellName: string;
+  processed?: Record<string, unknown> | null;
+  wellStatus?: Record<string, unknown> | null;
+  /** Allowlisted adminGetWellPool wellStatus row (no lastPullPacketId). */
+  poolProjection?: Record<string, unknown> | null;
+  /** Raw outgoing lastPullPacketId for this well (not shown in the pool allowlist). */
+  outgoingPacketId?: string | null;
+  wellConfig?: Record<string, unknown> | null;
+}): {
+  ok: boolean;
+  status: string;
+  canonicalCurrentLevelUpdated: boolean;
+  wellName: string;
+  wellKey: string;
+  companyId: string;
+  reason?: string;
+  poolCurrentLevel?: string | null;
+  poolLastPullDateTimeUTC?: string | null;
+  poolLastPullPacketId?: string | null;
+} {
+  const identity = resolveWatchdogWellIdentity({ wellName: input.wellName, wellConfig: input.wellConfig });
+  if (!identity.ok) {
+    return {
+      ok: false,
+      status: 'identity_failed',
+      canonicalCurrentLevelUpdated: false,
+      wellName: input.wellName,
+      wellKey: '',
+      companyId: WATCHDOG_COMPANY_ID,
+      reason: identity.reason,
+    };
+  }
+  const processed = input.processed || null;
+  if (!processed) {
+    return {
+      ok: false,
+      status: 'not_processed',
+      canonicalCurrentLevelUpdated: false,
+      wellName: identity.wellName,
+      wellKey: identity.wellKey,
+      companyId: identity.companyId,
+      reason: 'processed_missing',
+    };
+  }
+  if (processed.canonicalProcessingComplete !== true) {
+    return {
+      ok: false,
+      status: 'processed_incomplete',
+      canonicalCurrentLevelUpdated: false,
+      wellName: identity.wellName,
+      wellKey: identity.wellKey,
+      companyId: identity.companyId,
+      reason: 'canonicalProcessingComplete_missing',
+    };
+  }
+  const pool = input.poolProjection || null;
+  const outPacket = typeof input.outgoingPacketId === 'string' ? input.outgoingPacketId : '';
+  const poolLevel = pool && typeof pool.currentLevel === 'string' ? pool.currentLevel : null;
+  const poolUtc = pool && typeof pool.lastPullDateTimeUTC === 'string' ? pool.lastPullDateTimeUTC : null;
+  const processedUtc = typeof processed.dateTimeUTC === 'string' ? processed.dateTimeUTC : '';
+  if (!outPacket || outPacket !== input.packetId || !poolLevel || !poolUtc || poolUtc !== processedUtc) {
+    return {
+      ok: false,
+      status: 'processed_incomplete',
+      canonicalCurrentLevelUpdated: false,
+      wellName: identity.wellName,
+      wellKey: identity.wellKey,
+      companyId: identity.companyId,
+      reason: 'adminGetWellPool_current_level_not_this_packet',
+      poolCurrentLevel: poolLevel,
+      poolLastPullDateTimeUTC: poolUtc,
+      poolLastPullPacketId: outPacket || null,
+    };
+  }
+  const lastPull = input.wellStatus && typeof input.wellStatus.lastPull === 'object' && input.wellStatus.lastPull
+    ? (input.wellStatus.lastPull as Record<string, unknown>)
+    : null;
+  const statusPacket = lastPull && typeof lastPull.packetId === 'string' ? lastPull.packetId : '';
+  if (statusPacket && statusPacket !== input.packetId) {
+    return {
+      ok: false,
+      status: 'processed_incomplete',
+      canonicalCurrentLevelUpdated: false,
+      wellName: identity.wellName,
+      wellKey: identity.wellKey,
+      companyId: identity.companyId,
+      reason: 'wells_status_lastPull_not_this_packet',
+    };
+  }
+  return {
+    ok: true,
+    status: 'processed',
+    canonicalCurrentLevelUpdated: true,
+    wellName: identity.wellName,
+    wellKey: identity.wellKey,
+    companyId: identity.companyId,
+    poolCurrentLevel: poolLevel,
+    poolLastPullDateTimeUTC: poolUtc,
+    poolLastPullPacketId: outPacket,
+  };
+}

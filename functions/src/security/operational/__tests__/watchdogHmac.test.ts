@@ -4,9 +4,12 @@ import {
   buildStringToSign,
   validateObservationPayload,
   computeBodySha256,
+  evaluateWatchdogReceipt,
+  resolveWatchdogWellIdentity,
   WATCHDOG_PRINCIPAL_ID,
   WATCHDOG_COMPANY_ID,
 } from '../watchdogHmac';
+import { projectWellStatus } from '../../dashboardCatalogProjection';
 
 describe('Watchdog HMAC Verification & Validation Unit Tests', () => {
   const secret = 'demo-watchdog-hmac-secret-key-32chars!';
@@ -178,5 +181,119 @@ describe('Watchdog HMAC Verification & Validation Unit Tests', () => {
       expect(typeof res.value.observationDigest).toBe('string');
       expect(res.value.observationDigest.length).toBe(64);
     }
+  });
+});
+
+describe('Watchdog canonical Current Level / adminGetWellPool receipt gate', () => {
+  const packetId = '20260914_180100_Kahuna5_c0ffee';
+  const wellName = 'Kahuna 5';
+  const dateTimeUTC = '2026-09-14T18:01:00.000Z';
+
+  test('well/company resolve deterministically to Kahuna 5 / liquid-gold', () => {
+    const id = resolveWatchdogWellIdentity({
+      wellName,
+      wellConfig: { wellName: 'Kahuna 5', companyId: 'liquid-gold', tanks: 10 },
+    });
+    expect(id.ok).toBe(true);
+    if (id.ok) {
+      expect(id.wellName).toBe('Kahuna 5');
+      expect(id.wellKey).toBe('Kahuna5');
+      expect(id.companyId).toBe(WATCHDOG_COMPANY_ID);
+    }
+  });
+
+  test('rejects well_config bound to another company', () => {
+    const id = resolveWatchdogWellIdentity({
+      wellName,
+      wellConfig: { wellName, companyId: 'other-co' },
+    });
+    expect(id.ok).toBe(false);
+  });
+
+  test('receipt fails until adminGetWellPool outgoing Current Level is this packet', () => {
+    const processed = { canonicalProcessingComplete: true, dateTimeUTC, wellName };
+    const fail = evaluateWatchdogReceipt({
+      packetId,
+      wellName,
+      processed,
+      poolProjection: { currentLevel: '7\'2"', lastPullDateTimeUTC: dateTimeUTC },
+      outgoingPacketId: 'someone-else',
+      wellConfig: { wellName, companyId: 'liquid-gold' },
+    });
+    expect(fail.ok).toBe(false);
+    expect(fail.canonicalCurrentLevelUpdated).toBe(false);
+    expect(fail.reason).toBe('adminGetWellPool_current_level_not_this_packet');
+  });
+
+  test('receipt succeeds only when outgoing Current Level + timestamp match this packet', () => {
+    const processed = { canonicalProcessingComplete: true, dateTimeUTC, wellName, tankAfterInches: 86.4 };
+    const ok = evaluateWatchdogReceipt({
+      packetId,
+      wellName,
+      processed,
+      wellStatus: { lastPull: { packetId, dateTimeUTC } },
+      poolProjection: { currentLevel: '7\'2"', lastPullDateTimeUTC: dateTimeUTC, lastPullBottomLevel: '7\'2"' },
+      outgoingPacketId: packetId,
+      wellConfig: { wellName, companyId: 'liquid-gold' },
+    });
+    expect(ok.ok).toBe(true);
+    expect(ok.canonicalCurrentLevelUpdated).toBe(true);
+    expect(ok.companyId).toBe('liquid-gold');
+    expect(ok.poolCurrentLevel).toBe('7\'2"');
+    expect(ok.poolLastPullDateTimeUTC).toBe(dateTimeUTC);
+  });
+
+  test('duplicate processed row is idempotent: same outgoing still satisfies receipt', () => {
+    const processed = { canonicalProcessingComplete: true, dateTimeUTC, wellName };
+    const first = evaluateWatchdogReceipt({
+      packetId,
+      wellName,
+      processed,
+      poolProjection: { currentLevel: '7\'2"', lastPullDateTimeUTC: dateTimeUTC },
+      outgoingPacketId: packetId,
+      wellConfig: { wellName, companyId: 'liquid-gold' },
+    });
+    const replay = evaluateWatchdogReceipt({
+      packetId,
+      wellName,
+      processed,
+      poolProjection: { currentLevel: '7\'2"', lastPullDateTimeUTC: dateTimeUTC },
+      outgoingPacketId: packetId,
+      wellConfig: { wellName, companyId: 'liquid-gold' },
+    });
+    expect(first.ok).toBe(true);
+    expect(replay.ok).toBe(true);
+    expect(replay.poolLastPullPacketId).toBe(first.poolLastPullPacketId);
+  });
+
+  test('delayed older outgoing cannot satisfy a newer packet receipt', () => {
+    const newer = '20260914_181500_Kahuna5_d11ecd';
+    const res = evaluateWatchdogReceipt({
+      packetId: newer,
+      wellName,
+      processed: { canonicalProcessingComplete: true, dateTimeUTC: '2026-09-14T18:15:00.000Z', wellName },
+      poolProjection: { currentLevel: '8\'0"', lastPullDateTimeUTC: '2026-09-14T17:40:00.000Z' },
+      outgoingPacketId: '20260914_174000_Kahuna5_aa0001',
+      wellConfig: { wellName, companyId: 'liquid-gold' },
+    });
+    expect(res.ok).toBe(false);
+    expect(res.canonicalCurrentLevelUpdated).toBe(false);
+  });
+
+  test('adminGetWellPool projection keys Current Level by wellName from packets/outgoing', () => {
+    const outgoing = {
+      response_20260914_180100_Kahuna5: {
+        wellName: 'Kahuna 5',
+        currentLevel: '7\'2"',
+        lastPullDateTimeUTC: dateTimeUTC,
+        lastPullPacketId: packetId,
+        timestampUTC: dateTimeUTC,
+        companyId: 'liquid-gold',
+      },
+    };
+    const pool = projectWellStatus(outgoing);
+    expect(pool['Kahuna 5'].currentLevel).toBe('7\'2"');
+    expect(pool['Kahuna 5'].lastPullDateTimeUTC).toBe(dateTimeUTC);
+    expect(pool['Kahuna 5'].lastPullPacketId).toBeUndefined();
   });
 });
