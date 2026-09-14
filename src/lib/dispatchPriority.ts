@@ -14,6 +14,15 @@
  * `nowMs` is injectable for deterministic tests; it defaults to Date.now().
  */
 import type { WellResponse } from './wells';
+import {
+  parseFeetDecimal,
+  parseFlowMinutesPerFoot,
+  formatFeetWBM,
+  estimateCurrentFeet,
+  readyLevelFeet,
+  predictedReadyAtMs,
+  type EstimatorInputs,
+} from './wbmLevelEstimator.ts';
 
 export type PriorityLevel = 'overdue' | 'soon' | 'today' | 'later' | 'unknown';
 
@@ -95,12 +104,16 @@ export function formatTTP(well: WellResponse, nowMs: number = Date.now()): strin
   const c = classifyWell(well, nowMs);
   switch (c.state) {
     case 'pull-now': return 'PULL NOW';
-    case 'approaching':
-      if (c.ttpHours === null) return 'rising';
-      if (c.ttpHours < 24) return `${Math.round(c.ttpHours)}h`;
-      { const d = Math.floor(c.ttpHours / 24); const r = Math.round(c.ttpHours % 24); return r > 0 ? `${d}d ${r}h` : `${d}d`; }
-    case 'no-gain': return 'NO GAIN';
-    case 'verify': return 'VERIFY';
+    case 'approaching': {
+      // Time until the deterministic predictedReadyAt (absolute), not an elapsed deadline.
+      const h = c.ttpHours;
+      if (h === null) return 'rising';
+      if (h <= 0) return 'PULL NOW';
+      if (h < 24) return `${Math.round(h)}h`;
+      const d = Math.floor(h / 24); const r = Math.round(h % 24); return r > 0 ? `${d}d ${r}h` : `${d}d`;
+    }
+    case 'no-gain': return 'NO FLOW';
+    case 'verify': return 'NEEDS DATA';
     case 'assigned': return 'ASSIGNED';
     case 'down': return 'DOWN';
     default: return '--';
@@ -198,8 +211,19 @@ export interface WellClassification {
   ttpHours: number | null;
   gainValid: boolean;
   fresh: boolean;
-  /** For verify/no-gain: why it is not actionable. missing_target | missing_level | stale_level | no_gain */
+  /** For verify/no-gain: why it is not actionable. missing_baseline | missing_timestamp | missing_target | no_flow_data */
   reason?: string;
+  // ── WB‑M vc58 live-level parity fields (the single shared estimate) ──
+  /** Estimated current level in decimal feet at the shared asOfMs (capped 20). */
+  estFeet: number | null;
+  /** WB‑M-formatted display of estFeet ("7'", "7'6\"", "20'", or "--"). */
+  estDisplay: string;
+  /** Pull-ready target = allowedBottom + loadBbls/bblsPerFoot (decimal feet). */
+  readyFeet: number | null;
+  /** Absolute predicted ready time (ms); may be in the past ("ready now"). */
+  predictedReadyAtMs: number | null;
+  /** True only when a positive flow is driving a live rise (not frozen/down). */
+  hasFlow: boolean;
 }
 
 /** Parse a feet/inches level string to inches. Handles 1'3", 7'6", 15, 15". */
@@ -213,94 +237,83 @@ export function parseLevelInches(str: string | null | undefined): number | null 
   return isNaN(n) ? null : n;
 }
 
-/** Configured pull-height target in inches (from tankAtLevel "N @ F'I""). */
-export function targetInches(well: WellResponse): number | null {
-  if (well.tankAtLevel && well.tankAtLevel.includes('@')) {
-    return parseLevelInches(well.tankAtLevel.split('@')[1]);
-  }
-  return null;
-}
-
-function bblsPerDay(well: WellResponse): number {
-  const v = parseFloat(well.windowBblsDay || well.bbls24hrs || well.overnightBblsDay || '');
-  return isNaN(v) ? 0 : v;
-}
-
-/** Inches/hour of level gain from validated production (needs bbls/day + bbl/ft). */
-function riseInchesPerHour(well: WellResponse): number | null {
-  const bd = bblsPerDay(well);
-  if (bd <= 0 || !well.bblPerFoot || well.bblPerFoot <= 0) return null;
-  return (bd / 24) / well.bblPerFoot * 12;
-}
-
 export interface ClassifyOpts { assigned?: boolean; }
 
+/**
+ * WB‑M vc58 live-level parity classifier. The estimated current level is the
+ * SINGLE source of truth for the badge, the "Current Level (Est.)" column, the
+ * view filters, TTP, counts, and sorting — computed at one shared `nowMs`
+ * (asOfMs) so every surface agrees. NO 48h freshness rejection: a valid forecast
+ * basis stays actionable regardless of age (it just estimates and caps at 20').
+ */
 export function classifyWell(well: WellResponse, nowMs: number = Date.now(), opts: ClassifyOpts = {}): WellClassification {
-  const base = {
-    targetInches: null as number | null, lastLevel: null as string | null, lastLevelInches: null as number | null,
-    lastLevelAgeHours: null as number | null, estInches: null as number | null, remainingInches: null as number | null,
-    ttpHours: null as number | null, gainValid: false, fresh: false,
+  const startingBottomFeet = parseFeetDecimal(well.lastPullBottomLevel)
+    ?? parseFeetDecimal(well.currentLevel && well.currentLevel !== '--' ? well.currentLevel : null);
+  const tsStr = (well.lastPullDateTimeUTC && !isNaN(Date.parse(well.lastPullDateTimeUTC))) ? well.lastPullDateTimeUTC
+    : (well.timestampUTC && !isNaN(Date.parse(well.timestampUTC)) ? well.timestampUTC : null);
+  const pullTimeMs = tsStr ? Date.parse(tsStr) : null;
+  const flowMinutesPerFoot = parseFlowMinutesPerFoot(well.flowRate);
+  const wellDown = well.wellDown === true || well.isDown === true || well.currentLevel === 'DOWN';
+  const allowedBottomFeet = typeof well.bottomLevel === 'number' ? well.bottomLevel : null;
+  const loadBbls = typeof well.pullBbls === 'number' ? well.pullBbls : null;
+  const bblsPerFoot = (typeof well.bblPerFoot === 'number' && well.bblPerFoot > 0)
+    ? well.bblPerFoot
+    : 20 * (typeof well.tanks === 'number' && well.tanks > 0 ? well.tanks : 1);
+  const readyFeet = readyLevelFeet({ allowedBottomFeet, loadBbls, bblsPerFoot });
+
+  const inputs: EstimatorInputs = { startingBottomFeet, pullTimeMs, flowMinutesPerFoot, wellDown };
+  const est = estimateCurrentFeet(inputs, nowMs);
+  const readyAt = predictedReadyAtMs(inputs, readyFeet);
+  const ageHours = pullTimeMs != null ? (nowMs - pullTimeMs) / 3600000 : null;
+
+  const common = {
+    targetInches: readyFeet != null ? readyFeet * 12 : null,
+    lastLevel: (well.currentLevel && well.currentLevel !== '--') ? well.currentLevel : (well.lastPullBottomLevel || null),
+    lastLevelInches: startingBottomFeet != null ? startingBottomFeet * 12 : null,
+    lastLevelAgeHours: ageHours,
+    estInches: est.feet != null ? est.feet * 12 : null,
+    remainingInches: (readyFeet != null && est.feet != null) ? Math.max(0, (readyFeet - est.feet) * 12) : null,
+    ttpHours: readyAt != null ? (readyAt - nowMs) / 3600000 : null,
+    gainValid: est.hasFlow,
+    fresh: pullTimeMs != null,
+    estFeet: est.feet,
+    estDisplay: formatFeetWBM(est.feet),
+    readyFeet,
+    predictedReadyAtMs: readyAt,
+    hasFlow: est.hasFlow,
   };
+  const make = (c: Partial<WellClassification>): WellClassification => ({
+    ...common, state: 'verify', label: 'VERIFY', color: 'bg-amber-600', textColor: 'text-white', sortOrder: 50, ...c,
+  } as WellClassification);
 
-  if (well.isDown || well.wellDown || well.currentLevel === 'DOWN') {
-    return { ...base, state: 'down', label: 'DOWN', color: 'bg-gray-600', textColor: 'text-gray-300', sortOrder: 90 };
+  // 1. Well Down — freeze at baseline, remain DOWN.
+  if (wellDown) return make({ state: 'down', label: 'DOWN', color: 'bg-gray-600', textColor: 'text-gray-300', sortOrder: 90 });
+  // 2. Already assigned to a driver.
+  if (opts.assigned) return make({ state: 'assigned', label: 'ASSIGNED', color: 'bg-slate-600', textColor: 'text-white', sortOrder: 80 });
+  // 3. Genuinely unavailable — never substitute zero.
+  if (startingBottomFeet == null) return make({ state: 'verify', label: 'NEEDS DATA', color: 'bg-amber-600', textColor: 'text-white', sortOrder: 55, reason: 'missing_baseline' });
+  if (pullTimeMs == null) return make({ state: 'verify', label: 'NEEDS DATA', color: 'bg-amber-600', textColor: 'text-white', sortOrder: 55, reason: 'missing_timestamp', estFeet: null, estDisplay: '--', estInches: null });
+  if (readyFeet == null) return make({ state: 'verify', label: 'NEEDS DATA', color: 'bg-amber-600', textColor: 'text-white', sortOrder: 55, reason: 'missing_target' });
+
+  // 4. Estimated current level at/above the pull-ready target → PULL NOW.
+  if (est.feet != null && est.feet >= readyFeet) {
+    return make({ state: 'pull-now', label: 'PULL NOW', color: 'bg-red-600', textColor: 'text-white', sortOrder: 1 });
   }
-  if (opts.assigned) {
-    return { ...base, state: 'assigned', label: 'ASSIGNED', color: 'bg-slate-600', textColor: 'text-white', sortOrder: 80 };
+  // 5. Rising with valid flow → APPROACHING with a deterministic ready time.
+  if (est.hasFlow) {
+    return make({ state: 'approaching', label: 'APPROACHING', color: 'bg-yellow-600', textColor: 'text-black', sortOrder: 2 });
   }
-
-  const target = targetInches(well);
-  const lastLevel = (well.currentLevel && well.currentLevel !== '--') ? well.currentLevel : null;
-  const lastIn = (typeof well.currentLevelInches === 'number' ? well.currentLevelInches : parseLevelInches(lastLevel));
-  const lastTsStr = well.timestampUTC || well.lastPullDateTimeUTC || '';
-  const lastTs = lastTsStr ? new Date(lastTsStr).getTime() : NaN;
-  const ageHours = !isNaN(lastTs) ? (nowMs - lastTs) / 3600000 : null;
-  const gainValid = bblsPerDay(well) > 0;
-  const fresh = ageHours !== null && ageHours >= 0 && ageHours <= TRUST_WINDOW_HOURS;
-
-  const withCommon = (c: Partial<WellClassification>): WellClassification => ({
-    ...base, targetInches: target, lastLevel, lastLevelInches: lastIn, lastLevelAgeHours: ageHours,
-    gainValid, fresh, state: 'verify', label: 'VERIFY', color: 'bg-amber-600', textColor: 'text-white', sortOrder: 50, ...c,
-  });
-
-  if (target === null || lastIn === null) {
-    return withCommon({
-      state: 'verify', label: 'NEEDS DATA', color: 'bg-amber-600', textColor: 'text-white', sortOrder: 55,
-      reason: target === null ? 'missing_target' : 'missing_level',
-    });
-  }
-
-  // Reading too old to trust as current -- elapsed time never makes it pullable.
-  // (Barbarian: 1'3", 136 days old -> VERIFY, never PULL/OVER.)
-  if (!fresh) {
-    return withCommon({ state: 'verify', label: 'VERIFY', color: 'bg-amber-600', textColor: 'text-white', sortOrder: 50, reason: 'stale_level' });
-  }
-
-  if (lastIn >= target) {
-    return withCommon({ state: 'pull-now', label: 'PULL NOW', color: 'bg-red-600', textColor: 'text-white', sortOrder: 1, estInches: lastIn, remainingInches: 0 });
-  }
-
-  const remaining = target - lastIn;
-  if (gainValid) {
-    const rate = riseInchesPerHour(well);
-    const ttpHours = rate ? remaining / rate : null;
-    return withCommon({
-      state: 'approaching', label: 'APPROACHING', color: 'bg-yellow-600', textColor: 'text-black', sortOrder: 2,
-      estInches: lastIn, remainingInches: remaining, ttpHours,
-    });
-  }
-
-  // Below target and NOT gaining -- not pullable regardless of Well-Down flag.
-  return withCommon({ state: 'no-gain', label: 'NO GAIN', color: 'bg-gray-500', textColor: 'text-white', sortOrder: 40, estInches: lastIn, remainingInches: remaining, reason: 'no_gain' });
+  // 6. No flow data — freeze; below target and cannot forecast (no fake urgency).
+  return make({ state: 'no-gain', label: 'NO FLOW', color: 'bg-gray-500', textColor: 'text-white', sortOrder: 40, reason: 'no_flow_data' });
 }
 
-/** Human-readable explanation for a verify/no-gain classification reason code. */
+/** Human-readable explanation for a verify/no-flow classification reason code. */
 export function verifyReasonText(reason: string | undefined): string {
   switch (reason) {
-    case 'missing_target': return 'no configured pull-height target';
-    case 'missing_level': return 'no recent level reading';
-    case 'stale_level': return 'level reading is stale (older than the 48h trust window)';
-    case 'no_gain': return 'below target and not filling (no positive gain)';
+    case 'missing_baseline': return 'no last-pull bottom level or reading available';
+    case 'missing_timestamp': return 'no valid pull/observation timestamp';
+    case 'missing_target': return 'no configured pull-ready target (bottom / load / bbl-per-ft)';
+    case 'no_flow_data': return 'no flow data — level frozen at last reading';
     default: return 'no pull prediction available';
   }
 }

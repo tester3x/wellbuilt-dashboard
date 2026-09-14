@@ -260,6 +260,15 @@ function DispatchPageInner() {
   // Data state
   const [wells, setWells] = useState<WellResponse[]>([]);
   const [routes, setRoutes] = useState<string[]>([]);
+  // WB‑M vc58 parity: ONE shared 30-second client clock. Every surface
+  // (badge / Current Level (Est.) column / view filters / TTP / counts / sort)
+  // recomputes the estimate at this single `asOfMs` so they always agree. This
+  // is a client-only recompute — it never writes changing levels back to Firebase.
+  const [asOfMs, setAsOfMs] = useState<number>(() => Date.now());
+  useEffect(() => {
+    const id = setInterval(() => setAsOfMs(Date.now()), 30000);
+    return () => clearInterval(id);
+  }, []);
   // Checkpoint 3: detachable panes. Dock preference is a per-viewer convenience
   // persisted to localStorage (never customer data). Start docked on the server
   // render, then restore the saved preference on the client (avoids SSR mismatch).
@@ -916,7 +925,7 @@ function DispatchPageInner() {
     // surface them instead of a well silently vanishing. HEIGHT-FIRST view is the
     // single source of truth; assigned wells are excluded from actionable views.
     let filtered = wells.filter(w => !(w.isDown || w.currentLevel === 'DOWN'));
-    filtered = filtered.filter(w => matchesView(w, queueView, Date.now(), { assigned: isAssigned(w) }));
+    filtered = filtered.filter(w => matchesView(w, queueView, asOfMs, { assigned: isAssigned(w) }));
 
     if (search.trim()) {
       const q = search.trim().toLowerCase();
@@ -934,27 +943,29 @@ function DispatchPageInner() {
     return filtered
       .map(w => {
         const dispatched = isAssigned(w);
-        return { well: w, priority: classifyWell(w, Date.now(), { assigned: dispatched }), dispatched, assignedDrivers: dispatchedWellDrivers.get(w.wellName) || [] };
+        return { well: w, priority: classifyWell(w, asOfMs, { assigned: dispatched }), dispatched, assignedDrivers: dispatchedWellDrivers.get(w.wellName) || [] };
       })
       .sort((a, b) => {
         if (a.priority.sortOrder !== b.priority.sortOrder) return a.priority.sortOrder - b.priority.sortOrder;
-        const aH = a.priority.ttpHours ?? 99999;
-        const bH = b.priority.ttpHours ?? 99999;
-        return aH - bH;
+        // WB‑M parity: forecast candidates ordered by ABSOLUTE predicted ready
+        // time (soonest first), not raw height or age. Nulls sink to the bottom.
+        const aR = a.priority.predictedReadyAtMs ?? Number.POSITIVE_INFINITY;
+        const bR = b.priority.predictedReadyAtMs ?? Number.POSITIVE_INFINITY;
+        return aR - bR;
       });
-  }, [wells, dispatches, search, routeFilter, queueView]);
+  }, [wells, dispatches, search, routeFilter, queueView, asOfMs]);
 
   // Counts per primary view (all routes) so Dispatch sees the actionable load
   // without opening each route. Down wells are excluded from every view.
   const viewCounts = useMemo(() => {
     const live = wells.filter(w => !(w.isDown || w.currentLevel === 'DOWN'));
     return {
-      'needs-pull': live.filter(w => wellBucket(w) === 'needs-pull').length,
-      'next-24h': live.filter(w => wellBucket(w) === 'next-24h').length,
-      'needs-data': live.filter(w => wellBucket(w) === 'needs-data').length,
+      'needs-pull': live.filter(w => wellBucket(w, asOfMs) === 'needs-pull').length,
+      'next-24h': live.filter(w => wellBucket(w, asOfMs) === 'next-24h').length,
+      'needs-data': live.filter(w => wellBucket(w, asOfMs) === 'needs-data').length,
       'all': live.length,
     } as Record<QueueView, number>;
-  }, [wells]);
+  }, [wells, asOfMs]);
 
   // Z Fold recovery — when the queue is collapsed (stacked + not expanded), a
   // search still surfaces matching wells so the list is reachable on the Fold.
@@ -980,15 +991,15 @@ function DispatchPageInner() {
       })
       .map(w => {
         const dispatched = dispatchedWellDrivers.has(w.wellName);
-        return { well: w, priority: classifyWell(w, Date.now(), { assigned: dispatched }), dispatched, assignedDrivers: dispatchedWellDrivers.get(w.wellName) || [] };
+        return { well: w, priority: classifyWell(w, asOfMs, { assigned: dispatched }), dispatched, assignedDrivers: dispatchedWellDrivers.get(w.wellName) || [] };
       })
       .sort((a, b) => {
         if (a.priority.sortOrder !== b.priority.sortOrder) return a.priority.sortOrder - b.priority.sortOrder;
-        const aH = a.priority.ttpHours ?? 99999;
-        const bH = b.priority.ttpHours ?? 99999;
-        return aH - bH;
+        const aR = a.priority.predictedReadyAtMs ?? Number.POSITIVE_INFINITY;
+        const bR = b.priority.predictedReadyAtMs ?? Number.POSITIVE_INFINITY;
+        return aR - bR;
       });
-  }, [wells, dispatches, search, routeFilter]);
+  }, [wells, dispatches, search, routeFilter, asOfMs]);
 
   const showingSearchHits = wellQueueUsesSearchHits(stackedLayout, wellQueueExpanded, search);
   const queueRows = showingSearchHits ? searchHits : pwQueue;
@@ -2936,7 +2947,7 @@ function DispatchPageInner() {
                       <tr>
                         <th className="px-2 py-2 text-left text-[11px] font-medium text-gray-300 w-24 min-w-[88px]">Priority</th>
                         <th className="px-2 py-2 text-left text-[11px] font-medium text-gray-300">Well</th>
-                        <th className="px-2 py-2 text-left text-[11px] font-medium text-gray-300">Last Level</th>
+                        <th className="px-2 py-2 text-left text-[11px] font-medium text-gray-300">Current Level (Est.)</th>
                         <th className="px-2 py-2 text-left text-[11px] font-medium text-gray-300">Flow</th>
                         <th className="px-2 py-2 text-left text-[11px] font-medium text-gray-300">TTP</th>
                         <th className="dispatch-queue-col-pulls px-2 py-2 text-left text-[11px] font-medium text-gray-300">Pulls/Day</th>
@@ -2978,22 +2989,21 @@ function DispatchPageInner() {
                             </td>
                             <td className="px-2 py-1.5 font-mono text-[10px]">
                               {(() => {
-                                const c = classifyWell(well);
-                                const staleReading = c.fresh === false;
+                                const c = classifyWell(well, asOfMs);
+                                const hasEst = c.estFeet !== null;
                                 return (
                                   <>
-                                    {/* Last verified level + age (dimmed when stale/untrusted) */}
-                                    <span className={staleReading ? 'text-gray-500' : 'text-white'}>{c.lastLevel || '--'}</span>
+                                    {/* WB‑M vc58 estimated CURRENT level (the shared estimate) */}
+                                    <span className={hasEst ? 'text-white font-bold' : 'text-gray-500'}>{c.estDisplay}</span>
+                                    {!c.hasFlow && c.state !== 'down' && hasEst && (
+                                      <span className="text-gray-500"> · frozen</span>
+                                    )}
                                     {c.lastLevelAgeHours !== null && (
                                       <span className="text-gray-500"> · {formatAge(c.lastLevelAgeHours)}</span>
                                     )}
-                                    {/* Target + remaining to pull height */}
-                                    {c.targetInches !== null && (
-                                      <span className="block text-gray-500">tgt {inchesToLevel(c.targetInches)}{c.remainingInches !== null && c.remainingInches > 0 ? ` · ${inchesToLevel(c.remainingInches)} to go` : ''}</span>
-                                    )}
-                                    {/* Trustworthy estimated current level — only when gain-supported */}
-                                    {c.state === 'approaching' && c.estInches !== null && (
-                                      <span className="block text-blue-300">est {inchesToLevel(c.estInches)}</span>
+                                    {/* Pull-ready target */}
+                                    {c.readyFeet !== null && (
+                                      <span className="block text-gray-500">ready {inchesToLevel(c.readyFeet * 12)}{c.remainingInches !== null && c.remainingInches > 0 ? ` · ${inchesToLevel(c.remainingInches)} to go` : ''}</span>
                                     )}
                                     {(c.state === 'verify' || c.state === 'no-gain') && (
                                       <span className={`block font-bold ${c.state === 'no-gain' ? 'text-gray-400' : 'text-amber-400'}`}>{c.label}</span>
@@ -3003,7 +3013,7 @@ function DispatchPageInner() {
                               })()}
                             </td>
                             <td className="px-2 py-1.5 text-white font-mono text-[10px]">{well.flowRate || '--'}</td>
-                            <td className="px-2 py-1.5 text-white font-mono text-[10px]">{formatTTP(well)}</td>
+                            <td className="px-2 py-1.5 text-white font-mono text-[10px]">{formatTTP(well, asOfMs)}</td>
                             <td className="dispatch-queue-col-pulls px-2 py-1.5"><PullsPredictionCell well={well} /></td>
                             <td className="px-2 py-1.5 text-right">
                               <div className="flex items-center justify-end gap-2">

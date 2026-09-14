@@ -423,7 +423,7 @@ test('5A: CompaniesTab routes platform company-field writes through adminUpdateC
 test('Dispatch TTP is height-first (no OVERDUE; via classifyWell)', () => {
   const page = read('../../app/dispatch/page.tsx');
   assert.match(page, /from '@\/lib\/dispatchPriority'/, 'priority helpers extracted to a testable lib');
-  assert.match(page, /\{formatTTP\(well\)\}/, 'TTP cell renders formatTTP(well)');
+  assert.match(page, /\{formatTTP\(well, asOfMs\)\}/, 'TTP cell renders formatTTP(well, asOfMs)');
   const lib = read('../dispatchPriority.ts');
   // formatTTP must NOT emit OVERDUE and must derive from classifyWell.
   const ft = lib.slice(lib.indexOf('export function formatTTP'), lib.indexOf('// ─── Prediction Model'));
@@ -434,25 +434,28 @@ test('Dispatch TTP is height-first (no OVERDUE; via classifyWell)', () => {
   }
 });
 
-// ── HEIGHT-FIRST actionable queue wiring (fix/dashboard-height-first-queue) ────
-test('Dispatch actionable queue is HEIGHT-FIRST (classifyWell) + honest Last Level', () => {
+// ── WB‑M vc58 parity actionable queue wiring (one shared asOfMs estimate) ────
+test('Dispatch actionable queue is WB‑M-parity (classifyWell) + Current Level (Est.) on one 30s clock', () => {
   const page = read('../../app/dispatch/page.tsx');
-  assert.match(page, /matchesView|wellBucket|classifyWell/, 'height-first helpers imported');
+  assert.match(page, /matchesView|wellBucket|classifyWell/, 'parity helpers imported');
   assert.match(page, /const \[queueView, setQueueView\] = useState<QueueView>\('needs-pull'\)/, 'default view = needs-pull');
-  assert.match(page, /matchesView\(w, queueView/, 'queue filtered by primary view');
-  assert.match(page, /classifyWell\(w, Date\.now\(\), \{ assigned/, 'rows classified height-first with assignment');
-  assert.match(page, />Last Level<\/th>/, 'Level column relabeled Last Level');
-  assert.match(page, /const c = classifyWell\(well\)/, 'Level cell uses classifyWell');
+  assert.match(page, /matchesView\(w, queueView, asOfMs/, 'queue filtered by primary view at the shared asOfMs');
+  assert.match(page, /classifyWell\(w, asOfMs, \{ assigned/, 'rows classified at the shared asOfMs with assignment');
+  assert.match(page, />Current Level \(Est\.\)<\/th>/, 'Level column relabeled Current Level (Est.)');
+  assert.match(page, /const c = classifyWell\(well, asOfMs\)/, 'Level cell uses classifyWell at asOfMs');
+  // one shared 30-second client clock; no per-30s Firebase writeback
+  assert.match(page, /setInterval\(\(\) => setAsOfMs\(Date\.now\(\)\), 30000\)/, '30s client clock present');
+  // absolute predicted ready time drives the sort (not raw height/age)
+  assert.match(page, /predictedReadyAtMs \?\? Number\.POSITIVE_INFINITY/, 'sorted by absolute predicted ready time');
   // cold-start guard: counts gated on readiness
   assert.match(page, /const queueReady = !loading && !dataLoading && !statusUnavailable && wells\.length > 0/, 'cold-auth count guard present');
   assert.match(page, /queueReady \? viewCounts/, 'counts hidden until ready');
-  // no time-first OVERDUE badge / priority-chip filter remains
   assert.ok(!/priorityFilter/.test(page), 'legacy time-first priority filter removed');
   for (const label of ['Needs Pull', 'Next 24h', 'All Wells', 'Needs Data']) {
     assert.ok(page.includes(label), `view control has ${label}`);
   }
   const lib = read('../dispatchPriority.ts');
-  for (const fn of ['classifyWell', 'wellBucket', 'matchesView', 'targetInches', 'hasValidPrediction', 'formatAge', 'inchesToLevel']) {
+  for (const fn of ['classifyWell', 'wellBucket', 'matchesView', 'hasValidPrediction', 'formatAge', 'inchesToLevel']) {
     assert.match(lib, new RegExp(`export function ${fn}`), `${fn} exported`);
   }
 });
@@ -523,21 +526,22 @@ test('Row Assign gating: DOWN not dispatchable; NEEDS DATA / NO GAIN require an 
   assert.match(page, /window\.confirm\(/, 'override assignment requires confirmation');
 });
 
-test('verifyReasonText maps every classifier reason code to human text', () => {
+test('verifyReasonText maps every WB‑M-parity reason code to human text', () => {
   const src = read('../../lib/dispatchPriority.ts');
   assert.match(src, /export function verifyReasonText/);
-  for (const code of ['missing_target', 'missing_level', 'stale_level', 'no_gain']) {
+  for (const code of ['missing_baseline', 'missing_timestamp', 'missing_target', 'no_flow_data']) {
     assert.match(src, new RegExp(`case '${code}':`), `${code} has explanatory text`);
   }
 });
 
-// ── Classifier exposes reason codes for the genuinely-incomplete states ───
-test('classifyWell emits reason codes (missing_target/missing_level/stale_level/no_gain)', () => {
+// ── Classifier exposes WB‑M-parity reason codes for genuinely-incomplete states ───
+test('classifyWell emits reason codes (missing_baseline/missing_timestamp/missing_target/no_flow_data)', () => {
   const src = read('../../lib/dispatchPriority.ts');
   assert.match(src, /reason\?: string;/, 'WellClassification carries a reason');
-  assert.match(src, /reason: target === null \? 'missing_target' : 'missing_level'/);
-  assert.match(src, /reason: 'stale_level'/);
-  assert.match(src, /reason: 'no_gain'/);
+  assert.match(src, /reason: 'missing_baseline'/);
+  assert.match(src, /reason: 'missing_timestamp'/);
+  assert.match(src, /reason: 'missing_target'/);
+  assert.match(src, /reason: 'no_flow_data'/);
 });
 
 // ── CP3: detachable panes never leak customer data via the URL ────────────
