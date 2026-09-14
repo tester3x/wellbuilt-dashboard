@@ -5,6 +5,7 @@ import { useRouter, useSearchParams } from 'next/navigation';
 import { useAuth } from '@/contexts/AuthContext';
 import { WellResponse, mergeWellPool } from '@/lib/wells';
 import { getPriority, getWellPrediction, formatTTP, matchesView, wellBucket, classifyWell, inchesToLevel, formatAge, verifyReasonText, type QueueView } from '@/lib/dispatchPriority';
+import { pwLifecycle, PW_ACTIVE_STATUSES } from '@/lib/dispatchAssignmentGroups';
 // Z Fold recovery — layout helpers only (collapsed queue / stacked layout).
 // Live status is read via the governed adminGetWellPool callable (see effect
 // below); the direct-client RTDB status path is claim-gated and not attempted.
@@ -210,6 +211,11 @@ function timeAgo(ts: any): string {
     return '';
   }
 }
+
+/** Per-row assignment presentation for the Well Queue. */
+type RowAssignment =
+  | { state: 'assigned_not_started'; driver: string; job: DispatchJob; status: string }
+  | null;
 
 // ─── Main Component ──────────────────────────────────────────────────────────
 
@@ -440,6 +446,10 @@ function DispatchPageInner() {
   const [reassignDriverHash, setReassignDriverHash] = useState('');
   const [reassigning, setReassigning] = useState(false);
   const [reassignLoads, setReassignLoads] = useState(0); // 0 = all loads
+  // 'declined' = classic reassign of a declined/cancelled job (new dispatch);
+  // 'in_place' = reassign an assigned-but-not-started dispatch by UPDATING the
+  // SAME dispatch identity (never mint a duplicate dispatch/invoice/job).
+  const [reassignMode, setReassignMode] = useState<'declined' | 'in_place'>('declined');
 
   // Right panel tab
   const searchParams = useSearchParams();
@@ -908,78 +918,96 @@ function DispatchPageInner() {
 
   // ─── PW Queue (sorted by priority) ──────────────────────────────────────────
 
+  // Latest ACTIVE pw dispatch per well. Only pending/accepted/in_progress/paused
+  // count as an assignment; declined/cancelled/dismissed/completed do NOT, so the
+  // well is free to re-enter Needs Pull the instant the classifier still needs it.
+  const pwAssignmentByWell = useMemo(() => {
+    const m = new Map<string, { job: DispatchJob; status: string; driver: string; assignedMs: number }>();
+    for (const d of dispatches) {
+      if (d.jobType !== 'pw' || !(PW_ACTIVE_STATUSES as readonly string[]).includes(d.status)) continue;
+      const assignedMs = (d.assignedAt as { toMillis?: () => number } | undefined)?.toMillis?.() ?? 0;
+      const prev = m.get(d.wellName);
+      if (!prev || assignedMs >= prev.assignedMs) {
+        m.set(d.wellName, { job: d, status: d.status, driver: d.driverFirstName || d.driverName || '?', assignedMs });
+      }
+    }
+    return m;
+  }, [dispatches]);
+
   const pwQueue = useMemo(() => {
-    // Already-dispatched wells → list of assigned driver first names (computed
-    // first so the view filter + classification can exclude/mark them).
-    const dispatchedWellDrivers = new Map<string, string[]>();
-    dispatches
-      .filter(d => d.jobType === 'pw' && ['pending', 'accepted', 'in_progress', 'paused'].includes(d.status))
-      .forEach(d => {
-        const driversList = dispatchedWellDrivers.get(d.wellName) || [];
-        driversList.push(d.driverFirstName || d.driverName || '?');
-        dispatchedWellDrivers.set(d.wellName, driversList);
-      });
-    const isAssigned = (w: WellResponse) => dispatchedWellDrivers.has(w.wellName);
+    const live = wells.filter(w => !(w.isDown || w.currentLevel === 'DOWN'));
+    const applyText = (list: WellResponse[]) => {
+      let f = list;
+      if (search.trim()) {
+        const q = search.trim().toLowerCase();
+        f = f.filter(w => w.wellName.toLowerCase().includes(q) || (w.route || '').toLowerCase().includes(q));
+      }
+      if (routeFilter !== 'all') f = f.filter(w => w.route === routeFilter);
+      return f;
+    };
+    const asgn = (w: WellResponse) => pwAssignmentByWell.get(w.wellName);
+    const started = (w: WellResponse) => pwLifecycle(asgn(w)?.status) === 'started';
+    const notStarted = (w: WellResponse) => pwLifecycle(asgn(w)?.status) === 'not_started';
 
-    // Drop DOWN wells; KEEP no-prediction wells so the "Needs Data" view can
-    // surface them instead of a well silently vanishing. HEIGHT-FIRST view is the
-    // single source of truth; assigned wells are excluded from actionable views.
-    let filtered = wells.filter(w => !(w.isDown || w.currentLevel === 'DOWN'));
-    filtered = filtered.filter(w => matchesView(w, queueView, asOfMs, { assigned: isAssigned(w) }));
-
-    if (search.trim()) {
-      const q = search.trim().toLowerCase();
-      filtered = filtered.filter(w =>
-        w.wellName.toLowerCase().includes(q) ||
-        (w.route || '').toLowerCase().includes(q)
-      );
+    // ── Needs Pull: two ordered groups on PHYSICAL demand (assigned:false) ──
+    //   1) Unassigned/actionable — live classifier order, Assign action.
+    //   2) Assigned but not started — dimmed, stable by assigned-time, Reassign.
+    // Started wells are excluded (Active Jobs represents them).
+    if (queueView === 'needs-pull') {
+      const candidates = applyText(live.filter(w => !started(w) && classifyWell(w, asOfMs).state === 'pull-now'));
+      const unassigned = candidates
+        .filter(w => !notStarted(w))
+        .map(w => ({ well: w, priority: classifyWell(w, asOfMs), assignment: null as RowAssignment }))
+        .sort((a, b) => (a.priority.predictedReadyAtMs ?? Number.POSITIVE_INFINITY) - (b.priority.predictedReadyAtMs ?? Number.POSITIVE_INFINITY));
+      const assigned = candidates
+        .filter(w => notStarted(w))
+        .map(w => { const a = asgn(w)!; return { well: w, priority: classifyWell(w, asOfMs), assignment: { state: 'assigned_not_started' as const, driver: a.driver, job: a.job, status: a.status } }; })
+        .sort((a, b) => (asgn(a.well)!.assignedMs) - (asgn(b.well)!.assignedMs)); // stable, not level-reactive
+      return [...unassigned, ...assigned];
     }
-    if (routeFilter !== 'all') {
-      filtered = filtered.filter(w => w.route === routeFilter);
-    }
 
-    // Sort height-first: PULL NOW, then APPROACHING by soonest validated TTP, then
-    // the rest; assigned/down fall to the bottom (via classification sortOrder).
+    // ── Other views: unchanged (assigned wells classify to ASSIGNED) ──
+    const filtered = applyText(live.filter(w => matchesView(w, queueView, asOfMs, { assigned: !!asgn(w) })));
     return filtered
-      .map(w => {
-        const dispatched = isAssigned(w);
-        return { well: w, priority: classifyWell(w, asOfMs, { assigned: dispatched }), dispatched, assignedDrivers: dispatchedWellDrivers.get(w.wellName) || [] };
-      })
+      .map(w => ({ well: w, priority: classifyWell(w, asOfMs, { assigned: !!asgn(w) }), assignment: null as RowAssignment }))
       .sort((a, b) => {
         if (a.priority.sortOrder !== b.priority.sortOrder) return a.priority.sortOrder - b.priority.sortOrder;
-        // WB‑M parity: forecast candidates ordered by ABSOLUTE predicted ready
-        // time (soonest first), not raw height or age. Nulls sink to the bottom.
-        const aR = a.priority.predictedReadyAtMs ?? Number.POSITIVE_INFINITY;
-        const bR = b.priority.predictedReadyAtMs ?? Number.POSITIVE_INFINITY;
-        return aR - bR;
+        return (a.priority.predictedReadyAtMs ?? Number.POSITIVE_INFINITY) - (b.priority.predictedReadyAtMs ?? Number.POSITIVE_INFINITY);
       });
-  }, [wells, dispatches, search, routeFilter, queueView, asOfMs]);
+  }, [wells, dispatches, search, routeFilter, queueView, asOfMs, pwAssignmentByWell]);
 
-  // Counts per primary view (all routes) so Dispatch sees the actionable load
-  // without opening each route. Down wells are excluded from every view.
+  // Needs Pull physical-demand split: total = both groups; also the actionable
+  // (unassigned) vs already-assigned counts so the primary number never implies
+  // every listed well still needs a driver.
+  const needsPullSplit = useMemo(() => {
+    let unassigned = 0, assigned = 0;
+    for (const w of wells) {
+      if (w.isDown || w.currentLevel === 'DOWN') continue;
+      const a = pwAssignmentByWell.get(w.wellName);
+      if (a && pwLifecycle(a.status) === 'started') continue;          // started → Active Jobs
+      if (classifyWell(w, asOfMs).state !== 'pull-now') continue;         // physical demand only
+      if (a && pwLifecycle(a.status) === 'not_started') assigned++; else unassigned++;
+    }
+    return { total: unassigned + assigned, unassigned, assigned };
+  }, [wells, asOfMs, pwAssignmentByWell]);
+
+  // Counts per primary view (all routes). Needs Pull = physical demand (both
+  // groups, started excluded); other views unchanged.
   const viewCounts = useMemo(() => {
     const live = wells.filter(w => !(w.isDown || w.currentLevel === 'DOWN'));
     return {
-      'needs-pull': live.filter(w => wellBucket(w, asOfMs) === 'needs-pull').length,
+      'needs-pull': needsPullSplit.total,
       'next-24h': live.filter(w => wellBucket(w, asOfMs) === 'next-24h').length,
       'needs-data': live.filter(w => wellBucket(w, asOfMs) === 'needs-data').length,
       'all': live.length,
     } as Record<QueueView, number>;
-  }, [wells, asOfMs]);
+  }, [wells, asOfMs, needsPullSplit]);
 
   // Z Fold recovery — when the queue is collapsed (stacked + not expanded), a
   // search still surfaces matching wells so the list is reachable on the Fold.
   const searchHits = useMemo(() => {
     const q = search.trim().toLowerCase();
     if (!q) return [];
-    const dispatchedWellDrivers = new Map<string, string[]>();
-    dispatches
-      .filter(d => d.jobType === 'pw' && ['pending', 'accepted', 'in_progress', 'paused'].includes(d.status))
-      .forEach(d => {
-        const driversList = dispatchedWellDrivers.get(d.wellName) || [];
-        driversList.push(d.driverFirstName || d.driverName || '?');
-        dispatchedWellDrivers.set(d.wellName, driversList);
-      });
     return wells
       .filter(w => {
         const isDown = w.isDown || w.currentLevel === 'DOWN';
@@ -990,8 +1018,13 @@ function DispatchPageInner() {
         return true;
       })
       .map(w => {
-        const dispatched = dispatchedWellDrivers.has(w.wellName);
-        return { well: w, priority: classifyWell(w, asOfMs, { assigned: dispatched }), dispatched, assignedDrivers: dispatchedWellDrivers.get(w.wellName) || [] };
+        const a = pwAssignmentByWell.get(w.wellName);
+        // Assigned-but-not-started → dimmed Reassign presentation (physical badge);
+        // otherwise the existing classify(assigned) behavior.
+        if (a && pwLifecycle(a.status) === 'not_started') {
+          return { well: w, priority: classifyWell(w, asOfMs), assignment: { state: 'assigned_not_started' as const, driver: a.driver, job: a.job, status: a.status } };
+        }
+        return { well: w, priority: classifyWell(w, asOfMs, { assigned: !!a }), assignment: null as RowAssignment };
       })
       .sort((a, b) => {
         if (a.priority.sortOrder !== b.priority.sortOrder) return a.priority.sortOrder - b.priority.sortOrder;
@@ -999,7 +1032,7 @@ function DispatchPageInner() {
         const bR = b.priority.predictedReadyAtMs ?? Number.POSITIVE_INFINITY;
         return aR - bR;
       });
-  }, [wells, dispatches, search, routeFilter, asOfMs]);
+  }, [wells, search, routeFilter, asOfMs, pwAssignmentByWell]);
 
   const showingSearchHits = wellQueueUsesSearchHits(stackedLayout, wellQueueExpanded, search);
   const queueRows = showingSearchHits ? searchHits : pwQueue;
@@ -1637,7 +1670,24 @@ function DispatchPageInner() {
 
   // ─── Reassign Declined Job ────────────────────────────────────────────────
 
+  // Reassign an assigned-but-not-started well from the Needs Pull queue. Updates
+  // the existing dispatch in place (no duplicate). Accepted → explicit confirm.
+  function openReassignInPlace(job: DispatchJob) {
+    if (job.status === 'accepted') {
+      const ok = window.confirm(
+        `${job.ndicWellName || job.wellName} is already accepted by ${job.driverFirstName || job.driverName || 'the driver'}.\n\n` +
+        `Reassign it to a different driver?`,
+      );
+      if (!ok) return;
+    }
+    setReassignMode('in_place');
+    setReassignJob(job);
+    setReassignDriverHash('');
+    setReassignLoads(0);
+  }
+
   function openReassignModal(job: DispatchJob) {
+    setReassignMode('declined');
     setReassignJob(job);
     setReassignDriverHash('');
     setReassignLoads(0); // default: all remaining loads
@@ -1652,6 +1702,27 @@ function DispatchPageInner() {
 
       const firestore = getFirestoreDb();
       const driverFirstName = driver.legalName ? driver.legalName.split(' ')[0] : driver.displayName;
+
+      // ── In-place reassign (assigned-but-not-started): update the SAME dispatch
+      // identity with the new driver — never mint a duplicate dispatch/invoice/job. ──
+      if (reassignMode === 'in_place') {
+        if (reassignJob.id) {
+          await staffUpdateDispatch(reassignJob.id, {
+            driverHash: reassignDriverHash,
+            driverName: driver.displayName,
+            driverFirstName,
+            assignedAt: Timestamp.now(),
+            assignedBy: user?.email || 'dashboard',
+            status: 'pending', // hand the same job to the new driver
+          });
+        }
+        setMessage(`Reassigned ${reassignJob.ndicWellName || reassignJob.wellName} to ${driverFirstName}`);
+        setReassignJob(null);
+        setReassignDriverHash('');
+        setReassignMode('declined');
+        setReassigning(false);
+        return;
+      }
 
       // Create a new dispatch with the same job details but new driver
       const newJob: Record<string, any> = {
@@ -1767,7 +1838,9 @@ function DispatchPageInner() {
 
   function toggleSelectAll() {
     setAssignTarget(null); // Clear single-well mode
-    const selectableWells = queueRows.map(q => q.well.wellName);
+    // Only actionable (unassigned, dispatchable) rows are bulk-selectable — the
+    // assigned-but-not-started group has no Assign/checkbox.
+    const selectableWells = queueRows.filter(q => !q.assignment && q.priority.state !== 'down').map(q => q.well.wellName);
 
     if (selectableWells.every(w => selectedWells.has(w))) {
       setSelectedWells(new Map());
@@ -2116,7 +2189,12 @@ function DispatchPageInner() {
 
             {/* Height-first actionable counts (time-first Overdue/Soon chips removed). */}
             <div className="flex items-center gap-1.5 flex-shrink-0 text-xs">
-              <span className="px-2 py-0.5 rounded bg-red-600 text-white font-bold">{queueReady ? viewCounts['needs-pull'] : '—'} Pull Now</span>
+              <span className="px-2 py-0.5 rounded bg-red-600 text-white font-bold whitespace-nowrap">
+                {queueReady ? needsPullSplit.total : '—'} Pull Now
+                {queueReady && needsPullSplit.assigned > 0 && (
+                  <span className="font-medium opacity-90"> · {needsPullSplit.unassigned} Unassigned · {needsPullSplit.assigned} Assigned</span>
+                )}
+              </span>
               <span className="px-2 py-0.5 rounded bg-yellow-600 text-black font-bold">{queueReady ? viewCounts['next-24h'] : '—'} Next 24h</span>
               <span className="px-2 py-0.5 rounded bg-amber-600 text-white font-bold">{queueReady ? viewCounts['needs-data'] : '—'} Needs Data</span>
             </div>
@@ -2954,15 +3032,20 @@ function DispatchPageInner() {
                         <th className="px-2 py-2 text-right text-[11px] font-medium text-gray-300 w-28">
                           <div className="flex items-center justify-end gap-1.5">
                             <span>Action</span>
-                            <input type="checkbox" checked={queueRows.length > 0 && queueRows.every(q => selectedWells.has(q.well.wellName))} onChange={toggleSelectAll} className="w-4 h-4 rounded border-gray-600 bg-gray-800 text-blue-600 focus:ring-blue-500 focus:ring-offset-0 cursor-pointer" />
+                            {(() => { const sel = queueRows.filter(q => !q.assignment && q.priority.state !== 'down'); return (
+                            <input type="checkbox" checked={sel.length > 0 && sel.every(q => selectedWells.has(q.well.wellName))} onChange={toggleSelectAll} className="w-4 h-4 rounded border-gray-600 bg-gray-800 text-blue-600 focus:ring-blue-500 focus:ring-offset-0 cursor-pointer" />
+                            ); })()}
                           </div>
                         </th>
                       </tr>
                     </thead>
                     <tbody className="divide-y divide-gray-700/50">
-                      {queueRows.map(({ well, priority, dispatched, assignedDrivers: wellAssignedDrivers }) => {
+                      {queueRows.map(({ well, priority, assignment }) => {
                         const isSelected = selectedWells.has(well.wellName);
                         const loadCount = selectedWells.get(well.wellName) || 1;
+                        // Assigned-but-not-started → dimmed bottom group: 'Assigned • driver'
+                        // + Reassign (no Assign / no checkbox). Text stays fully legible.
+                        const assignedNotStarted = assignment?.state === 'assigned_not_started';
                         // Assignment eligibility (documented policy — does NOT blindly
                         // track "actionable"): a DOWN well is never dispatchable; a
                         // predicted well (PULL NOW / APPROACHING) assigns normally; a
@@ -2972,20 +3055,13 @@ function DispatchPageInner() {
                         const assignBlocked = priority.state === 'down';
                         const assignOverride = priority.state === 'verify' || priority.state === 'no-gain';
                         return (
-                          <tr key={well.responseId || well.wellName} className={`hover:bg-gray-750 transition-colors ${priority.state === 'pull-now' ? 'bg-red-900/10' : ''} ${isSelected ? 'bg-blue-900/20' : ''}`}>
+                          <tr key={well.responseId || well.wellName} className={`transition-colors ${assignedNotStarted ? 'bg-gray-800/40 opacity-70 hover:opacity-100' : `hover:bg-gray-750 ${priority.state === 'pull-now' ? 'bg-red-900/10' : ''}`} ${isSelected ? 'bg-blue-900/20' : ''}`}>
                             <td className="px-2 py-1.5">
                               <span className={`inline-block whitespace-nowrap px-1.5 py-0.5 text-[10px] font-bold rounded ${priority.color} ${priority.textColor}`}>{priority.label}</span>
                             </td>
                             <td className="px-2 py-1.5">
                               <div className="text-white font-medium text-xs">{well.wellName}</div>
                               <div className="text-gray-500 text-[10px]">{well.route || 'Unrouted'}</div>
-                              {wellAssignedDrivers.length > 0 && (
-                                <div className="flex gap-1 mt-0.5">
-                                  {wellAssignedDrivers.map((name, i) => (
-                                    <span key={i} className="px-1 py-0 bg-blue-900/50 text-blue-300 text-[9px] font-medium rounded">{name}</span>
-                                  ))}
-                                </div>
-                              )}
                             </td>
                             <td className="px-2 py-1.5 font-mono text-[10px]">
                               {(() => {
@@ -3016,6 +3092,17 @@ function DispatchPageInner() {
                             <td className="px-2 py-1.5 text-white font-mono text-[10px]">{formatTTP(well, asOfMs)}</td>
                             <td className="dispatch-queue-col-pulls px-2 py-1.5"><PullsPredictionCell well={well} /></td>
                             <td className="px-2 py-1.5 text-right">
+                              {assignedNotStarted ? (
+                                <div className="flex items-center justify-end gap-2">
+                                  <span className="text-[10px] whitespace-nowrap text-gray-300">Assigned <span className="text-gray-500">•</span> <span className="text-white font-medium">{assignment!.driver}</span></span>
+                                  <button
+                                    type="button"
+                                    onClick={() => openReassignInPlace(assignment!.job)}
+                                    aria-label={`Reassign ${well.wellName} to another driver`}
+                                    title={`Reassign ${well.wellName} to another driver`}
+                                    className="px-2 py-1 text-[10px] font-medium rounded whitespace-nowrap bg-purple-700 hover:bg-purple-600 text-white">💃 Reassign</button>
+                                </div>
+                              ) : (
                               <div className="flex items-center justify-end gap-2">
                                 {isSelected ? (
                                   <div className="flex items-center gap-1">
@@ -3057,6 +3144,7 @@ function DispatchPageInner() {
                                   onChange={() => toggleWellSelection(well.wellName)}
                                   className={`w-4 h-4 rounded border-gray-600 bg-gray-800 text-blue-600 focus:ring-blue-500 focus:ring-offset-0 ${assignTarget || assignBlocked ? 'opacity-30 cursor-not-allowed' : 'cursor-pointer'}`} />
                               </div>
+                              )}
                             </td>
                           </tr>
                         );
@@ -3333,8 +3421,9 @@ function DispatchPageInner() {
               )}
             </div>
 
-            {/* Load count picker — only for multi-load jobs */}
-            {(() => {
+            {/* Load count picker — only for multi-load jobs; not for in-place
+                reassign (which keeps the same single dispatch under a new driver). */}
+            {reassignMode !== 'in_place' && (() => {
               const remaining = (reassignJob.loadCount || 1) - (reassignJob.loadsCompleted || 0);
               if (remaining <= 1) return null;
               return (

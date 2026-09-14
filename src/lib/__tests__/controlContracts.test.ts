@@ -573,3 +573,26 @@ test('Dispatch wires detachable Well Queue + Active Jobs with a persisted dock p
   assert.match(page, /Pop Out/, 'Pop Out control present');
   assert.match(page, /Reattach/, 'Reattach control present');
 });
+
+// ── Needs Pull two-group assigned-well visibility + decline realignment ──────
+test('Dispatch Needs Pull: two ordered groups, in-place reassign, physical-demand split', () => {
+  const page = read('../../app/dispatch/page.tsx');
+  // Assigned-but-not-started rows are muted + carry Assigned • driver + a Reassign
+  // control (no disabled Assign, no checkbox).
+  assert.match(page, /assignment\?\.state === 'assigned_not_started'/, 'row detects assigned-not-started');
+  assert.match(page, /openReassignInPlace\(assignment!\.job\)/, 'assigned row uses in-place Reassign');
+  assert.match(page, /Assigned <span[^>]*>•<\/span>/, "shows 'Assigned • driver'");
+  assert.match(page, /Reassign \$\{well\.wellName\} to another driver/, 'accessible Reassign label/title');
+  // Two ordered groups for the needs-pull view (unassigned first, then assigned).
+  assert.match(page, /queueView === 'needs-pull'/, 'needs-pull view has dedicated grouping');
+  assert.match(page, /return \[\.\.\.unassigned, \.\.\.assigned\]/, 'unassigned group precedes assigned group');
+  assert.match(page, /pwLifecycle/, 'uses the shared lifecycle helper');
+  // In-place reassign updates the SAME dispatch (never mints a duplicate) + accepted confirm.
+  assert.match(page, /reassignMode === 'in_place'/, 'in-place reassign branch');
+  assert.match(page, /staffUpdateDispatch\(reassignJob\.id,\s*\{/, 'in-place updates existing dispatch id');
+  assert.match(page, /job\.status === 'accepted'/, 'accepted reassign requires confirmation');
+  // Counts: physical-demand total + Unassigned/Assigned split.
+  assert.match(page, /needsPullSplit\.total/, 'primary count = physical demand (both groups)');
+  assert.match(page, /needsPullSplit\.unassigned\} Unassigned/, 'exposes Unassigned split');
+  assert.match(page, /needsPullSplit\.assigned\} Assigned/, 'exposes Assigned split');
+});
