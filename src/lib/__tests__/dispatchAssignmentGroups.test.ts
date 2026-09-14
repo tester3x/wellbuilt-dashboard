@@ -4,7 +4,7 @@
  */
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { pwLifecycle, partitionNeedsPull, type PwQueueItem } from '../dispatchAssignmentGroups.ts';
+import { pwLifecycle, partitionNeedsPull, isStaleCompletedReentry, type PwQueueItem } from '../dispatchAssignmentGroups.ts';
 
 test('pwLifecycle maps statuses to lifecycle buckets', () => {
   for (const s of ['pending', 'pending_approval', 'accepted']) assert.equal(pwLifecycle(s), 'not_started', s);
@@ -48,6 +48,22 @@ test('only physical demand counts (a non-pull-now assigned well is not in Needs 
     item({ key: 'assigned-ready', assignedStatus: 'pending', isPullNow: true, assignedMs: 5 }),
   ]);
   assert.deepEqual(counts, { total: 1, unassigned: 0, assigned: 1 });
+});
+
+test('completed job does NOT reappear from a stale pre-pull level; releases when fresh pull lands', () => {
+  const NOW = 1_000_000_000_000;
+  const assigned = NOW - 30 * 60_000;   // assigned 30m ago
+  const completed = NOW - 60_000;       // completed 1m ago (within window)
+  // Stale: basis predates the assignment (pre-pull level) → suppress.
+  assert.equal(isStaleCompletedReentry({ basisMs: assigned - 60_000, completedAssignedMs: assigned, completedMs: completed, nowMs: NOW }), true);
+  // Fresh: a pull newer than the assignment landed → release.
+  assert.equal(isStaleCompletedReentry({ basisMs: assigned + 5_000, completedAssignedMs: assigned, completedMs: completed, nowMs: NOW }), false);
+  // No basis yet → hold (never invent a level).
+  assert.equal(isStaleCompletedReentry({ basisMs: null, completedAssignedMs: assigned, completedMs: completed, nowMs: NOW }), true);
+  // Old completion (beyond window) → trust the level, do not suppress.
+  assert.equal(isStaleCompletedReentry({ basisMs: assigned - 60_000, completedAssignedMs: assigned, completedMs: NOW - 12 * 3600_000, nowMs: NOW }), false);
+  // Nothing completed → not applicable.
+  assert.equal(isStaleCompletedReentry({ basisMs: 1, completedAssignedMs: null, completedMs: null, nowMs: NOW }), false);
 });
 
 test('assigned group is STABLE — ordering does not depend on live level / ready time', () => {

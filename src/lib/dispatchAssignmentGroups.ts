@@ -18,6 +18,33 @@ export function pwLifecycle(status: string | null | undefined): PwLifecycle {
   return 'inactive';
 }
 
+/**
+ * Guard against a just-completed job briefly REAPPEARING in Needs Pull from a
+ * STALE pre-pull level. At the Dashboard, a dispatch `completed` (realtime) can
+ * arrive BEFORE the fresh post-pull level (governed 60s poll), so a well whose
+ * level basis still predates the assignment would flash back as PULL NOW.
+ *
+ * Suppress re-entry ONLY while the level basis is older than the (completed)
+ * assignment — i.e. no pull/level newer than the assignment has landed yet — and
+ * only within a recent completion window. This invents NO level: it merely holds
+ * the well out of Needs Pull until real fresh data exists, then releases.
+ *
+ * Returns true = suppress this well from Needs Pull.
+ */
+export function isStaleCompletedReentry(args: {
+  basisMs: number | null;            // well's level basis time (lastPullDateTimeUTC || timestampUTC)
+  completedAssignedMs: number | null; // assignedAt of the completed dispatch
+  completedMs: number | null;         // completedAt (or fallback) of the completed dispatch
+  nowMs: number;
+  windowMs?: number;                  // only guard recent completions (default 6h)
+}): boolean {
+  const { basisMs, completedAssignedMs, completedMs, nowMs, windowMs = 6 * 3600_000 } = args;
+  if (completedAssignedMs == null || completedMs == null) return false; // nothing completed to guard
+  if (nowMs - completedMs > windowMs) return false;                     // stale guard expired → trust the level
+  if (basisMs == null) return true;                                     // no fresh basis yet → hold (never invent)
+  return basisMs < completedAssignedMs;                                 // basis predates the assignment → still stale
+}
+
 export interface PwQueueItem {
   /** stable identity (well name) */
   key: string;

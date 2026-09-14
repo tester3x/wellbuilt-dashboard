@@ -5,7 +5,7 @@ import { useRouter, useSearchParams } from 'next/navigation';
 import { useAuth } from '@/contexts/AuthContext';
 import { WellResponse, mergeWellPool } from '@/lib/wells';
 import { getPriority, getWellPrediction, formatTTP, matchesView, wellBucket, classifyWell, inchesToLevel, formatAge, verifyReasonText, type QueueView } from '@/lib/dispatchPriority';
-import { pwLifecycle, PW_ACTIVE_STATUSES } from '@/lib/dispatchAssignmentGroups';
+import { pwLifecycle, PW_ACTIVE_STATUSES, isStaleCompletedReentry } from '@/lib/dispatchAssignmentGroups';
 // Z Fold recovery — layout helpers only (collapsed queue / stacked layout).
 // Live status is read via the governed adminGetWellPool callable (see effect
 // below); the direct-client RTDB status path is claim-gated and not attempted.
@@ -934,6 +934,35 @@ function DispatchPageInner() {
     return m;
   }, [dispatches]);
 
+  // Most recent COMPLETED pw dispatch per well — used only to suppress a stale
+  // pre-pull re-entry into Needs Pull until the fresh post-pull level lands.
+  const pwCompletedByWell = useMemo(() => {
+    const m = new Map<string, { assignedMs: number; completedMs: number }>();
+    for (const d of dispatches) {
+      if (d.jobType !== 'pw' || d.status !== 'completed') continue;
+      const assignedMs = (d.assignedAt as { toMillis?: () => number } | undefined)?.toMillis?.() ?? 0;
+      const completedMs = (d.completedAt as { toMillis?: () => number } | undefined)?.toMillis?.() ?? assignedMs;
+      const prev = m.get(d.wellName);
+      if (!prev || completedMs >= prev.completedMs) m.set(d.wellName, { assignedMs, completedMs });
+    }
+    return m;
+  }, [dispatches]);
+
+  // Parse a well's level-basis time (the reading the estimate is anchored to).
+  const wellBasisMs = (w: WellResponse): number | null => {
+    const t = w.lastPullDateTimeUTC || w.timestampUTC;
+    const ms = t ? Date.parse(t) : NaN;
+    return isNaN(ms) ? null : ms;
+  };
+  // Hold a just-completed, NOT-actively-assigned well out of Needs Pull while its
+  // level basis is still stale (pre-pull) — prevents the completed→reappear flash.
+  const suppressCompletedReentry = (w: WellResponse, nowMs: number): boolean => {
+    if (pwAssignmentByWell.has(w.wellName)) return false; // active assignment takes precedence
+    const c = pwCompletedByWell.get(w.wellName);
+    if (!c) return false;
+    return isStaleCompletedReentry({ basisMs: wellBasisMs(w), completedAssignedMs: c.assignedMs, completedMs: c.completedMs, nowMs });
+  };
+
   const pwQueue = useMemo(() => {
     const live = wells.filter(w => !(w.isDown || w.currentLevel === 'DOWN'));
     const applyText = (list: WellResponse[]) => {
@@ -954,7 +983,7 @@ function DispatchPageInner() {
     //   2) Assigned but not started — dimmed, stable by assigned-time, Reassign.
     // Started wells are excluded (Active Jobs represents them).
     if (queueView === 'needs-pull') {
-      const candidates = applyText(live.filter(w => !started(w) && classifyWell(w, asOfMs).state === 'pull-now'));
+      const candidates = applyText(live.filter(w => !started(w) && classifyWell(w, asOfMs).state === 'pull-now' && !suppressCompletedReentry(w, asOfMs)));
       const unassigned = candidates
         .filter(w => !notStarted(w))
         .map(w => ({ well: w, priority: classifyWell(w, asOfMs), assignment: null as RowAssignment }))
@@ -974,7 +1003,7 @@ function DispatchPageInner() {
         if (a.priority.sortOrder !== b.priority.sortOrder) return a.priority.sortOrder - b.priority.sortOrder;
         return (a.priority.predictedReadyAtMs ?? Number.POSITIVE_INFINITY) - (b.priority.predictedReadyAtMs ?? Number.POSITIVE_INFINITY);
       });
-  }, [wells, dispatches, search, routeFilter, queueView, asOfMs, pwAssignmentByWell]);
+  }, [wells, dispatches, search, routeFilter, queueView, asOfMs, pwAssignmentByWell, pwCompletedByWell]);
 
   // Needs Pull physical-demand split: total = both groups; also the actionable
   // (unassigned) vs already-assigned counts so the primary number never implies
@@ -986,10 +1015,11 @@ function DispatchPageInner() {
       const a = pwAssignmentByWell.get(w.wellName);
       if (a && pwLifecycle(a.status) === 'started') continue;          // started → Active Jobs
       if (classifyWell(w, asOfMs).state !== 'pull-now') continue;         // physical demand only
+      if (suppressCompletedReentry(w, asOfMs)) continue;                 // stale post-completion → hold
       if (a && pwLifecycle(a.status) === 'not_started') assigned++; else unassigned++;
     }
     return { total: unassigned + assigned, unassigned, assigned };
-  }, [wells, asOfMs, pwAssignmentByWell]);
+  }, [wells, asOfMs, pwAssignmentByWell, pwCompletedByWell]);
 
   // Counts per primary view (all routes). Needs Pull = physical demand (both
   // groups, started excluded); other views unchanged.
