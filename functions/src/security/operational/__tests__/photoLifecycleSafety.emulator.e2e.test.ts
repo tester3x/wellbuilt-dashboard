@@ -568,6 +568,8 @@ describeE2E('Photo/Lifecycle Safety — 9-scenario emulator proof', () => {
         invoiceId: docId,
         invoice: {
           status: 'closed',
+          totalBBL: 180,
+          intent: 'close',
         },
         idempotencyKey: `close_${docId}`,
       },
@@ -589,5 +591,144 @@ describeE2E('Photo/Lifecycle Safety — 9-scenario emulator proof', () => {
     expect(data.closedAt).toBeDefined();
     expect(data.photos).toHaveLength(1);
     expect(data.photos[0].photoId).toBe('concurrent_photo');
+  });
+
+  // ── Scenario 10: Installed vc103 backward containment ────────────────
+  it('10. Installed vc103 backward containment: malformed legacy photo request does not close active invoice or poison idempotency', async () => {
+    const docId = 'inv_test_scen10_vc103_legacy';
+    await db.collection('invoices').doc(docId).set({
+      ticketNumber: 20310,
+      status: 'in_progress',
+      driverId: DRIVER_ID,
+      companyId: COMPANY,
+    });
+
+    // 1. Installed vc103 sends photo via legacy applyInvoiceCloseAtId:
+    // normal upsert path, { photos, status: 'closed' }, close_${docId} key, NO intent field!
+    const malformedLegacyResult: any = await runCall(
+      upsertDriverInvoice,
+      {
+        invoiceId: docId,
+        invoice: {
+          photos: [{ photoId: 'vc103_p1', remoteUrl: 'https://storage/vc103_p1.jpg' }],
+          status: 'closed',
+        },
+        mode: 'upsert',
+        idempotencyKey: `close_${docId}`,
+      },
+      driverAuth,
+    );
+
+    expect(malformedLegacyResult.ok).toBe(true);
+
+    const snap1 = await db.collection('invoices').doc(docId).get();
+    const data1 = snap1.data()!;
+
+    // REQUIRED RESULT:
+    // Invoice remains active!
+    expect(data1.status).toBe('in_progress');
+    // closedAt remains absent!
+    expect(data1.closedAt).toBeUndefined();
+    // Photos were successfully merged!
+    expect(data1.photos).toHaveLength(1);
+    expect(data1.photos[0].photoId).toBe('vc103_p1');
+
+    // 2. Later, legitimate driver Close arrives with the same close_${docId} key:
+    const genuineCloseResult: any = await runCall(
+      upsertDriverInvoice,
+      {
+        invoiceId: docId,
+        invoice: {
+          status: 'closed',
+          totalBBL: 200,
+          totalHours: 5,
+          stopTime: '17:30',
+          timeline: [{ type: 'depart', time: '17:30' }],
+          intent: 'close',
+        },
+        mode: 'upsert',
+        idempotencyKey: `close_${docId}`,
+      },
+      driverAuth,
+    );
+
+    expect(genuineCloseResult.ok).toBe(true);
+
+    const snap2 = await db.collection('invoices').doc(docId).get();
+    const data2 = snap2.data()!;
+
+    // Legitimate Close successfully transitioned invoice to closed!
+    expect(data2.status).toBe('closed');
+    // closedAt is now stamped!
+    expect(data2.closedAt).toBeDefined();
+    // Photos remain intact!
+    expect(data2.photos).toHaveLength(1);
+    expect(data2.photos[0].photoId).toBe('vc103_p1');
+    expect(data2.totalBBL).toBe(200);
+  });
+
+  // ── Scenario 11: Photo idempotency with updated accepted metadata and remote URL ──
+  it('11. Photo idempotency accepts same photo ID when legitimate metadata or remote URL updates', async () => {
+    const docId = 'inv_test_scen11_photo_idem';
+    await db.collection('invoices').doc(docId).set({
+      ticketNumber: 20311,
+      status: 'in_progress',
+      driverId: DRIVER_ID,
+      companyId: COMPANY,
+    });
+
+    // 1. Initial photo patch with pending compliance and local/temporary storage URL
+    const res1: any = await runCall(
+      patchDriverInvoicePhotos,
+      {
+        invoiceId: docId,
+        photos: [
+          {
+            photoId: 'photo_idem_test',
+            remoteUrl: 'https://storage/initial_v1.jpg',
+            compliance: { status: 'pending' },
+            type: 'pickup',
+          },
+        ],
+        idempotencyKey: `photo_${docId}_1_photo_idem_test`,
+      },
+      driverAuth,
+    );
+    expect(res1.ok).toBe(true);
+
+    const snap1 = await db.collection('invoices').doc(docId).get();
+    expect(snap1.data()!.photos).toHaveLength(1);
+    expect(snap1.data()!.photos[0].remoteUrl).toBe('https://storage/initial_v1.jpg');
+    expect(snap1.data()!.photos[0].compliance.status).toBe('pending');
+
+    // 2. Updated photo patch with final remote URL and settled AI pass verdict
+    const res2: any = await runCall(
+      patchDriverInvoicePhotos,
+      {
+        invoiceId: docId,
+        photos: [
+          {
+            photoId: 'photo_idem_test',
+            remoteUrl: 'https://storage/final_v2.jpg',
+            compliance: { status: 'pass', score: 98 },
+            type: 'pickup',
+          },
+        ],
+        idempotencyKey: `photo_${docId}_1_photo_idem_test_v2`,
+      },
+      driverAuth,
+    );
+    expect(res2.ok).toBe(true);
+
+    const snap2 = await db.collection('invoices').doc(docId).get();
+    const photos2 = snap2.data()!.photos;
+
+    // Must NOT duplicate the photo entry
+    expect(photos2).toHaveLength(1);
+    // Must update the remoteUrl to the final URL
+    expect(photos2[0].remoteUrl).toBe('https://storage/final_v2.jpg');
+    // Must update the compliance metadata
+    expect(photos2[0].compliance.status).toBe('pass');
+    expect(photos2[0].compliance.score).toBe(98);
   });
 });

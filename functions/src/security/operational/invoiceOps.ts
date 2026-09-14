@@ -62,6 +62,64 @@ const FORBIDDEN_LIFECYCLE_FIELDS = new Set([
   'authSource',
 ]);
 
+const OPERATIONAL_CLOSE_FIELDS = new Set([
+  'totalBBL',
+  'totalHours',
+  'jobDurationMs',
+  'pausedDurationMs',
+  'startTime',
+  'stopTime',
+  'timeline',
+  'closedEvent',
+  'tickets',
+  'ticketSummaries',
+  'truckNumber',
+  'trailer',
+  'operator',
+  'wellName',
+  'hauledTo',
+  'commodityType',
+  'driveDistanceMiles',
+  'swdWaitMinutes',
+  'county',
+  'notes',
+]);
+
+/**
+ * Distinguish a genuine driver Close ceremony from a legacy photo delivery payload
+ * (which in vc103 only passed { photos, status: 'closed' } without close evidence).
+ */
+export function isGenuineCloseRequest(
+  invoice: Record<string, unknown>,
+  intent?: string,
+): boolean {
+  const normIntent = String(intent || invoice?.intent || '').toLowerCase().trim();
+  if (normIntent === 'close') return true;
+  if (normIntent === 'photo_patch') return false;
+
+  const hasPhotos =
+    'photos' in invoice && Array.isArray(invoice.photos) && invoice.photos.length > 0;
+  // If no photos are present in this mutation, caller is not doing a photo delivery
+  if (!hasPhotos) return true;
+
+  // When photos are present with a terminal status (e.g. 'closed'), verify that genuine
+  // operational close evidence is present so a photo upload cannot masquerade as a close.
+  for (const field of OPERATIONAL_CLOSE_FIELDS) {
+    if (field in invoice && invoice[field] !== undefined && invoice[field] !== null) {
+      if (Array.isArray(invoice[field])) {
+        if ((invoice[field] as unknown[]).length > 0) return true;
+      } else if (typeof invoice[field] === 'string') {
+        if ((invoice[field] as string).trim() !== '') return true;
+      } else if (typeof invoice[field] === 'number') {
+        return true;
+      } else if (typeof invoice[field] === 'object') {
+        return true;
+      }
+    }
+  }
+  return false;
+}
+
 /**
  * Merge photos monotonically by durable photo ID / path / URL.
  * Preserves existing photos not present in incoming, merges metadata on match,
@@ -282,17 +340,38 @@ export const upsertDriverInvoice = httpsV2.onCall(
         const prevStatus = String(prev.status || '').toLowerCase();
         const hasCallerStatus = 'status' in data.invoice && typeof data.invoice.status === 'string';
         const callerStatus = hasCallerStatus ? String(data.invoice.status).toLowerCase().trim() : undefined;
-        const nextStatus = callerStatus || prevStatus;
+
+        // Backward containment for vc103 & genuine close verification:
+        // A transition to terminal ('closed') is ONLY accepted if it is a genuine Close
+        // (explicit intent: 'close' or operational close fields present).
+        const callerWantsTerminal = hasCallerStatus && TERMINAL_STATUSES.has(callerStatus!);
+        const isRealClose = callerWantsTerminal ? isGenuineCloseRequest(data.invoice, intent) : false;
+
+        let nextStatus: string;
+        if (callerWantsTerminal && !isRealClose) {
+          // Suppress accidental close from legacy photo delivery payload ({ photos, status: 'closed' })
+          // Invoice status remains active, closedAt remains absent!
+          nextStatus = prevStatus;
+          delete inv.status;
+          delete inv.closedAt;
+        } else if (callerWantsTerminal && isRealClose) {
+          nextStatus = callerStatus!;
+          inv.status = nextStatus;
+          if (!TERMINAL_STATUSES.has(prevStatus)) {
+            inv.closedAt = FieldValue.serverTimestamp();
+          } else {
+            delete inv.closedAt;
+          }
+        } else {
+          nextStatus = callerStatus || prevStatus;
+          delete inv.closedAt;
+          if (!hasCallerStatus) {
+            delete inv.status;
+          }
+        }
+
         if (TERMINAL_STATUSES.has(prevStatus) && !TERMINAL_STATUSES.has(nextStatus)) {
           throw new httpsV2.HttpsError('failed-precondition', 'Cannot reopen terminal invoice');
-        }
-        if (hasCallerStatus && TERMINAL_STATUSES.has(nextStatus) && !TERMINAL_STATUSES.has(prevStatus)) {
-          inv.closedAt = FieldValue.serverTimestamp();
-        } else {
-          delete inv.closedAt;
-        }
-        if (!hasCallerStatus) {
-          delete inv.status;
         }
         if (prev.packetId) delete inv.packetId;
         if (prev.canonicalJobId) delete inv.canonicalJobId;
@@ -307,10 +386,16 @@ export const upsertDriverInvoice = httpsV2.onCall(
         inv.createdAt = FieldValue.serverTimestamp();
         const hasCallerStatus = 'status' in data.invoice && typeof data.invoice.status === 'string';
         const callerStatus = hasCallerStatus ? String(data.invoice.status).toLowerCase().trim() : undefined;
-        if (hasCallerStatus && TERMINAL_STATUSES.has(callerStatus!)) {
+        const callerWantsTerminal = hasCallerStatus && TERMINAL_STATUSES.has(callerStatus!);
+        const isRealClose = callerWantsTerminal ? isGenuineCloseRequest(data.invoice, intent) : false;
+        if (callerWantsTerminal && isRealClose) {
           inv.closedAt = FieldValue.serverTimestamp();
+          inv.status = callerStatus;
         } else {
           delete inv.closedAt;
+          if (callerWantsTerminal && !isRealClose) {
+            inv.status = 'in_progress';
+          }
         }
         await ref.set(inv);
       }
