@@ -58,11 +58,26 @@ export async function handleStandalone(deps:Pick<SsoDeps,'getDriver'|'getCompany
    // Reuse the deployed immutable-artifact validator; id is only a validation key.
    const a=parseArtifactInput({requestId:id,snapshot:raw.snapshot});
    if(!a.ok||!a.value.snapshot.stepsAcknowledged||!Object.keys(a.value.snapshot.stepAcks).length||Object.values(a.value.snapshot.stepAcks).some(v=>!v))bad();
-   if(!object(raw.job)||Object.keys(raw.job).some(k=>!['activity','wells'].includes(k)))bad();
+   if(!object(raw.job)||Object.keys(raw.job).some(k=>!['activity','wells','operator','assessmentSteps'].includes(k)))bad();
    const activity=text(raw.job.activity,200,true);
    if(!Array.isArray(raw.job.wells)||raw.job.wells.length>100)bad();
    const wells=raw.job.wells.map(w=>{if(!object(w)||Object.keys(w).some(k=>!['name','jobType','operator','county'].includes(k)))bad();return {name:text(w.name,300,true),jobType:text(w.jobType,200),operator:text(w.operator,300),county:text(w.county,100)};});
-   const content={snapshot:a.value.snapshot,job:{activity,wells}};
+   const extra:Record<string,unknown>={};
+   if(raw.job.operator!==undefined)extra.operator=text(raw.job.operator,300,true);
+   if(raw.job.assessmentSteps!==undefined){
+     if(!Array.isArray(raw.job.assessmentSteps)||!raw.job.assessmentSteps.length||raw.job.assessmentSteps.length>40)bad();
+     const stepIds=new Set<string>();
+     extra.assessmentSteps=raw.job.assessmentSteps.map(s=>{
+       if(!object(s)||Object.keys(s).some(k=>!['id','title','items'].includes(k))||!Array.isArray(s.items)||s.items.length>30)bad();
+       const id=text(s.id,64,true);if(a.value.snapshot.stepAcks[id]!==true||stepIds.has(id))bad();stepIds.add(id);
+       return {id,title:text(s.title,300,true),items:s.items.map(i=>{
+         if(!object(i)||Object.keys(i).some(k=>!['hazard','controls'].includes(k)))bad();
+         return {hazard:text(i.hazard,2000,true),controls:text(i.controls,4000,true)};
+       })};
+     });
+     if(stepIds.size!==Object.keys(a.value.snapshot.stepAcks).length||JSON.stringify(extra.assessmentSteps).length>100000)bad();
+   }
+   const content={snapshot:a.value.snapshot,job:{activity,wells,...extra}};
    authored={...content,contentHash:hash(JSON.stringify(content)),id,companyId:p.companyId,driverId:p.driverId,workflow:'standalone',shiftId:null,state:'open',signedAtMs:now};
  }
  const record=await store.transaction(`${path}/${id}`,old=>{
@@ -78,6 +93,8 @@ export async function handleStandalone(deps:Pick<SsoDeps,'getDriver'|'getCompany
      // Retry after close still returns the original acknowledgement, never a new write.
      if(existing){if(existing.contentHash!==addition!.contentHash)throw new StandaloneError('already-exists','conflicting_addition');return null;}
      if(old.state!=='open')throw new StandaloneError('permission-denied','record_closed');
+     const job=old.job as Record<string,unknown>;
+     if(job.operator && addition!.operator!==job.operator)throw new StandaloneError('invalid-argument','different_customer_requires_new_jsa');
      if(old.contentHash!==addition!.baseContentHash||additions.length!==addition!.expectedAdditionCount)throw new StandaloneError('already-exists','review_latest_record');
      if(additions.length>=40)throw new StandaloneError('invalid-argument','addition_limit');
      return {...old,additions:[...additions,addition!]};

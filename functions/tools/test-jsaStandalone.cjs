@@ -59,5 +59,17 @@ const deny=async(raw,who=auth,d=deps)=>{await assert.rejects(()=>run(raw,who,d))
    const response=await fetch('http://'+process.env.FIRESTORE_EMULATOR_HOST+'/v1/projects/demo-jsa-standalone/databases/(default)/documents/'+key);
    assert.equal(response.status,403);checks++;
  }
- console.log(checks+' standalone server cases passed; exactly one record, no shift/receipt/commercial writes.');
+ const archive=[{id:'one',title:'Original step',items:[{hazard:'Example hazard',controls:'Example control'}]}];
+ const archivedRequest={...request,recordId:'Z'.repeat(43),job:{...request.job,operator:'Example customer',assessmentSteps:archive}};
+ const archived=(await run(archivedRequest)).record;
+ assert.deepEqual(archived.job.assessmentSteps,archive);assert.deepEqual((await run(archivedRequest)).record,archived);checks++;
+ assert.deepEqual((await run({operation:'get',recordId:archived.id})).record.job,archived.job);checks++;
+ await deny({...archivedRequest,job:{...archivedRequest.job,assessmentSteps:[...archive,...archive]}});
+ await deny({...archivedRequest,snapshot:{...snapshot,stepAcks:{one:true,two:true}}});
+ await deny({...archivedRequest,job:{...archivedRequest.job,assessmentSteps:[{...archive[0],id:'not_read'}]}});
+ await deny({...append,recordId:archived.id,addition:{...append.addition,baseContentHash:archived.contentHash,operator:'Different customer'}});
+ const appendedArchive=(await run({...append,recordId:archived.id,addition:{...append.addition,baseContentHash:archived.contentHash,operator:'Example customer'}})).record;
+ assert.deepEqual(appendedArchive.job,archived.job);assert.equal(appendedArchive.additions.length,1);checks++;
+ assert.ok([...rows.keys()].every(k=>k.startsWith('jsa_standalone_companies/')));checks++;
+ console.log(checks+' standalone server cases passed; original and archived fixtures only, no shift/receipt/commercial writes.');
 })().catch(e=>{console.error(e);process.exitCode=1});
