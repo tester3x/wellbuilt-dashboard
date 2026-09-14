@@ -57,6 +57,8 @@ export {
   bootstrapWbmSession,
   requestStorageUploadPath,
   upsertDriverInvoice,
+  patchDriverInvoicePhotos,
+  mergeDurablePhotos,
   upsertDriverDispatch,
   sendChatMessage,
   getPublicClientMeta,

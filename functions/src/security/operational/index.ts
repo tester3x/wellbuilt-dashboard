@@ -24,6 +24,8 @@ export { decideTrustedHistoryKeys } from './trustedHistoryAlias';
 export { requestStorageUploadPath } from './storageTokens';
 export {
   upsertDriverInvoice,
+  patchDriverInvoicePhotos,
+  mergeDurablePhotos,
   upsertDriverDispatch,
   sendChatMessage,
 } from './invoiceOps';

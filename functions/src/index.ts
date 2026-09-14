@@ -4952,6 +4952,7 @@ export {
   bootstrapWbmSession,
   requestStorageUploadPath,
   upsertDriverInvoice,
+  patchDriverInvoicePhotos,
   upsertDriverDispatch,
   sendChatMessage,
   getPublicClientMeta,
