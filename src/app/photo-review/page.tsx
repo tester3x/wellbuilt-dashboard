@@ -29,7 +29,7 @@ type StatusFilter = 'all' | 'unreviewed' | 'approved' | 'rejected' | 'addressed'
 const PAGE_SIZE = 25;
 
 export default function PhotoReviewPage() {
-  const { user, loading: authLoading, userCompany } = useAuth();
+  const { user, loading: authLoading, userCompany, authResolved } = useAuth();
   const router = useRouter();
 
   const canView = hasCapability(user, 'viewDispatch', userCompany);
@@ -86,7 +86,9 @@ export default function PhotoReviewPage() {
 
   // Authentication & authorization redirect
   useEffect(() => {
-    if (authLoading) return;
+    // Gate on authResolved (auth AND company hydration) so a deep-linked Photo
+    // Review screen is never bounced to home while the company config still loads.
+    if (!authResolved) return;
     if (!user) {
       router.push('/login');
       return;
@@ -94,7 +96,7 @@ export default function PhotoReviewPage() {
     if (!canView) {
       router.push('/');
     }
-  }, [user, authLoading, canView, router]);
+  }, [user, authResolved, canView, router]);
 
   // Load company catalog for platform administrator context selector
   useEffect(() => {

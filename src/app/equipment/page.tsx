@@ -57,7 +57,7 @@ function resultBadge(result: string) {
 }
 
 export default function EquipmentPage() {
-  const { user, userCompany, loading } = useAuth();
+  const { user, userCompany, loading, authResolved } = useAuth();
   const router = useRouter();
   const [section, setSection] = useState<Section>('overview');
   const [companies, setCompanies] = useState<CompanyConfig[]>([]);
@@ -98,9 +98,12 @@ export default function EquipmentPage() {
   }, [user, userCompany]);
 
   useEffect(() => {
-    if (!loading && !user) router.push('/login');
-    if (!loading && user && !hasEQuipmentAccess(user, userCompany)) router.push('/');
-  }, [user, loading, userCompany, router]);
+    // Wait for BOTH auth AND company hydration before any fallback nav, so a slow
+    // company-config load can't bounce a deep-linked screen to home (authResolved).
+    if (!authResolved) return;
+    if (!user) { router.push('/login'); return; }
+    if (!hasEQuipmentAccess(user, userCompany)) router.push('/');
+  }, [user, authResolved, userCompany, router]);
 
   useEffect(() => {
     if (!user || !isPlatformAdmin(user)) return;

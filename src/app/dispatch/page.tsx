@@ -1,8 +1,10 @@
 'use client';
 
 import { useEffect, useState, useMemo, useCallback, Suspense } from 'react';
-import { useRouter, useSearchParams } from 'next/navigation';
+import { useRouter, useSearchParams, usePathname } from 'next/navigation';
 import { useAuth } from '@/contexts/AuthContext';
+import { useSessionDeepLinkState } from '@/lib/useSessionDeepLinkState';
+import { useScrollRestore } from '@/lib/useScrollRestore';
 import { WellResponse, mergeWellPool, matchWellInPool } from '@/lib/wells';
 import { getPriority, getWellPrediction, formatTTP, matchesView, wellBucket, classifyWell, compareQueueRows, inchesToLevel, formatAge, verifyReasonText, type QueueView } from '@/lib/dispatchPriority';
 import { pwLifecycle, PW_ACTIVE_STATUSES, isStaleCompletedReentry } from '@/lib/dispatchAssignmentGroups';
@@ -237,6 +239,12 @@ type RowAssignment =
 function DispatchPageInner() {
   const { user, loading } = useAuth();
   const router = useRouter();
+  const dispatchPathname = usePathname();
+  // Restore scroll position across refresh (session-scoped; restores after data lays out).
+  useScrollRestore(
+    { uid: user?.uid ?? null, companyId: user?.companyId ?? null, pathname: dispatchPathname },
+    { elementSelector: '[data-dashboard-scroll="dispatch"]', ready: !loading && !!user },
+  );
 
   // Capability gate for ALL dispatch mutations. The Dispatch tab is visible to
   // any role with `viewDispatch` (e.g. `viewer`), but only `createDispatch`
@@ -4288,7 +4296,21 @@ function ActiveDispatchPanel({ dispatches, cancelDispatch, drivers, assignTransf
   onReassignDeclined?: (job: DispatchJob) => void;
   onDismissDeclined?: (jobId: string) => Promise<void> | void;
 }) {
-  const [expandedDrivers, setExpandedDrivers] = useState<Set<string>>(new Set());
+  // Expanded driver groups persist across refresh — session-scoped by uid+companyId+
+  // pathname, keyed by the canonical group id the Active Jobs render groups on
+  // (dispatchDriverGroupKey — canonical driverId), never a display name or list index.
+  const { user: expandedUser } = useAuth();
+  const expandedPathname = usePathname();
+  const expandedScope = useMemo(
+    () => ({ uid: expandedUser?.uid ?? null, companyId: expandedUser?.companyId ?? null, pathname: expandedPathname }),
+    [expandedUser?.uid, expandedUser?.companyId, expandedPathname],
+  );
+  const [expandedList, setExpandedList] = useSessionDeepLinkState<string[]>(
+    expandedScope,
+    'activeJobs.expandedDrivers',
+    [],
+  );
+  const expandedDrivers = useMemo(() => new Set(expandedList), [expandedList]);
   const [confirmDismissJob, setConfirmDismissJob] = useState<DispatchJob | null>(null);
   const [dismissSubmitting, setDismissSubmitting] = useState(false);
   const [dismissError, setDismissError] = useState<string | null>(null);
@@ -4375,12 +4397,7 @@ function ActiveDispatchPanel({ dispatches, cancelDispatch, drivers, assignTransf
   }, [assigned, drivers]);
 
   function toggleDriver(hash: string) {
-    setExpandedDrivers(prev => {
-      const next = new Set(prev);
-      if (next.has(hash)) next.delete(hash);
-      else next.add(hash);
-      return next;
-    });
+    setExpandedList(prev => (prev.includes(hash) ? prev.filter(h => h !== hash) : [...prev, hash]));
   }
 
   if (dispatches.length === 0) {
