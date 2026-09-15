@@ -26,6 +26,10 @@ import {
   type RecoveryRejectCode,
 } from './recoverRejectedPull.js';
 
+import { resolveAuthoritativeWellConfig } from './security/resolveAuthoritativeWellConfig.js';
+import { outgoingCompositeKey } from './security/outgoingCompositeKey.js';
+import { canonicalWellId } from './security/dashboardCatalogProjection.js';
+
 const REJECT_CODE_TO_HTTPS: Record<RecoveryRejectCode, httpsV2.FunctionsErrorCode> = {
   INVALID_ARGUMENT: 'invalid-argument',
   REJECTED_RECORD_NOT_FOUND: 'not-found',
@@ -41,15 +45,24 @@ const REJECT_CODE_TO_HTTPS: Record<RecoveryRejectCode, httpsV2.FunctionsErrorCod
   RECOVERED_UNDER_DIFFERENT_ID: 'already-exists',
 };
 
-async function readWatermark(db: admin.database.Database, wellName: string): Promise<string | null> {
-  const snap = await db.ref('packets/outgoing').orderByChild('wellName').equalTo(wellName).once('value');
-  let watermark: string | null = null;
-  snap.forEach((child) => {
-    const v = child.val() as { lastPullDateTimeUTC?: string } | null;
-    const t = v && typeof v.lastPullDateTimeUTC === 'string' ? v.lastPullDateTimeUTC : null;
-    if (t && (!watermark || new Date(t).getTime() > new Date(watermark).getTime())) watermark = t;
-  });
-  return watermark;
+async function readCanonicalWatermark(
+  db: admin.database.Database,
+  companyId: string,
+  wellId: string,
+): Promise<string | null> {
+  const compositeKey = outgoingCompositeKey(companyId, wellId);
+  const snap = await db.ref(`packets/outgoing/${compositeKey}`).once('value');
+  if (!snap.exists()) return null;
+  const row = (snap.val() || {}) as Record<string, unknown>;
+  const rowCompany = typeof row.companyId === 'string' ? row.companyId.trim() : '';
+  const rowWellId = canonicalWellId(row);
+  if (rowCompany !== companyId || rowWellId !== wellId) {
+    return null;
+  }
+  const t = typeof row.lastPullDateTimeUTC === 'string'
+    ? row.lastPullDateTimeUTC
+    : (typeof row.timestampUTC === 'string' ? row.timestampUTC : null);
+  return t;
 }
 
 export const recoverRejectedPull = httpsV2.onCall(
@@ -86,14 +99,33 @@ export const recoverRejectedPull = httpsV2.onCall(
       async readState(): Promise<RecoveryState> {
         const rejectedSnap = await db.ref(`packets/rejected/${rejectedPacketId}`).once('value');
         const rejected = (rejectedSnap.val() as RejectedRecord | null) ?? null;
+        const pkt = ((rejected?.packet ?? {}) as Record<string, unknown>);
         const wellName =
-          (rejected?.packet && typeof rejected.packet.wellName === 'string' && rejected.packet.wellName) ||
-          (typeof rejected?.wellName === 'string' ? rejected.wellName : '') || '';
-        const [processedSnap, incomingSnap, replRejSnap, watermark] = await Promise.all([
+          (typeof pkt.wellName === 'string' && pkt.wellName.trim()) ||
+          (typeof rejected?.wellName === 'string' ? rejected.wellName.trim() : '') || '';
+        const candidateWellId = typeof pkt.wellId === 'string' ? pkt.wellId.trim() : '';
+
+        let watermark: string | null = null;
+        if (wellName && driver.companyId) {
+          const resolvedBinding = await resolveAuthoritativeWellConfig({
+            db,
+            wellName,
+            targetCompanyId: driver.companyId,
+            candidateWellId,
+          });
+          if (resolvedBinding.ok) {
+            watermark = await readCanonicalWatermark(
+              db,
+              resolvedBinding.resolved.companyId,
+              resolvedBinding.resolved.wellId,
+            );
+          }
+        }
+
+        const [processedSnap, incomingSnap, replRejSnap] = await Promise.all([
           db.ref(`packets/processed/${replacementPacketId}`).once('value'),
           db.ref(`packets/incoming/${replacementPacketId}`).once('value'),
           db.ref(`packets/rejected/${replacementPacketId}`).once('value'),
-          wellName ? readWatermark(db, wellName) : Promise.resolve<string | null>(null),
         ]);
         return {
           rejected,
@@ -125,6 +157,7 @@ export const recoverRejectedPull = httpsV2.onCall(
         const ref = db.ref(`packets/incoming/${replId}`);
         const enriched = {
           ...packet,
+          companyId: driver.companyId,
           ingestedBy: `recovery_${driver.driverId}`.slice(0, 128),
           ingestedAt: admin.database.ServerValue.TIMESTAMP,
         };

@@ -24,6 +24,9 @@ export function collectLatestOutgoingByWell(
     return latest;
   }
   const targetCompany = typeof driverCompanyId === 'string' ? driverCompanyId.trim() : '';
+  const ambiguousNames = new Set<string>();
+  const seenIdentities = new Map<string, string>(); // wellName -> identity key
+
   for (const [key, raw] of Object.entries(outgoingTree as Record<string, unknown>)) {
     if (!key.startsWith('response_')) continue;
     if (!raw || typeof raw !== 'object' || Array.isArray(raw)) continue;
@@ -31,13 +34,23 @@ export function collectLatestOutgoingByWell(
     const wellName = typeof row.wellName === 'string' ? row.wellName.trim() : '';
     if (!wellName) continue;
 
+    const rowCompany = typeof row.companyId === 'string' ? row.companyId.trim() : '';
+    const rowWellId = typeof row.wellId === 'string' ? row.wellId.trim() : '';
+
     // When company scoping is active, require matching companyId and canonical wellId
     if (targetCompany) {
-      const rowCompany = typeof row.companyId === 'string' ? row.companyId.trim() : '';
-      const rowWellId = typeof row.wellId === 'string' ? row.wellId.trim() : '';
       if (!rowCompany || rowCompany !== targetCompany || !rowWellId) {
         // Missing canonical identity or foreign company: must never be cross-attached
         continue;
+      }
+    } else {
+      // Unscoped mode: track identity collision across tenants / wells for the same wellName
+      const identityKey = `${rowCompany || 'anon'}__${rowWellId || 'anon'}`;
+      const prevIdentity = seenIdentities.get(wellName);
+      if (prevIdentity && prevIdentity !== identityKey) {
+        ambiguousNames.add(wellName);
+      } else {
+        seenIdentities.set(wellName, identityKey);
       }
     }
 
@@ -46,6 +59,14 @@ export function collectLatestOutgoingByWell(
       latest.set(wellName, { ...row, wellName });
     }
   }
+
+  // In unscoped mode, duplicate / conflicting names across identities must remain unavailable
+  if (!targetCompany && ambiguousNames.size > 0) {
+    for (const ambig of ambiguousNames) {
+      latest.delete(ambig);
+    }
+  }
+
   return latest;
 }
 

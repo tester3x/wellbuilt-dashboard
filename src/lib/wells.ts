@@ -94,7 +94,28 @@ export function mergeWellPool(
   wellConfig: Record<string, unknown>,
   wellStatus: Record<string, unknown> = {},
 ): WellResponse[] {
-  return wellResponsesFromCatalog(wellConfig).map((well) => {
+  const catalog = wellResponsesFromCatalog(wellConfig);
+
+  // Frequency of well names in config to detect ambiguity across tenants/records
+  const configNameCounts = new Map<string, number>();
+  for (const w of catalog) {
+    if (w.wellName) {
+      configNameCounts.set(w.wellName, (configNameCounts.get(w.wellName) || 0) + 1);
+    }
+  }
+
+  // Frequency of well names in status to detect ambiguity in status tree
+  const statusNameCounts = new Map<string, number>();
+  for (const [key, val] of Object.entries(wellStatus)) {
+    if (!val || typeof val !== 'object') continue;
+    const row = val as Record<string, unknown>;
+    const name = typeof row.wellName === 'string' ? row.wellName.trim() : (key.startsWith('response_') ? '' : key);
+    if (name) {
+      statusNameCounts.set(name, (statusNameCounts.get(name) || 0) + 1);
+    }
+  }
+
+  return catalog.map((well) => {
     let st: Record<string, unknown> = {};
     // 1. Try match by canonical composite key (companyId__wellId)
     if (well.companyId && well.wellId) {
@@ -126,8 +147,13 @@ export function mergeWellPool(
           st = candidate;
         }
       } else if (!candCompany && !candWellId) {
-        // Unscoped legacy pool fallback only when neither well nor status carries company identity
-        st = candidate;
+        // Unscoped legacy pool fallback only when neither well nor status carries company identity,
+        // and both config name and status name are uniquely unambiguous. Duplicate names remain unavailable.
+        const isConfigUnique = (configNameCounts.get(well.wellName) || 0) === 1;
+        const isStatusUnique = (statusNameCounts.get(well.wellName) || 0) === 1;
+        if (isConfigUnique && isStatusUnique) {
+          st = candidate;
+        }
       }
     }
     return {

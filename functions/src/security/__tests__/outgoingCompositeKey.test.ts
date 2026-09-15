@@ -59,12 +59,60 @@ describe('Injective Composite Key Encoding & Decoding', () => {
     expect(parsed).toEqual({ companyId: company, wellId: well });
   });
 
-  it('enforces length limit of 128 characters on raw segments', () => {
-    const exact = 'x'.repeat(128);
-    expect(decodeSegment(encodeSegment(exact))).toBe(exact);
+  it('accepts the exact largest possible RTDB child key (768 UTF-8 bytes)', () => {
+    // Prefix 'response_' (9 bytes) + 'c' (1 byte) + '__' (2 bytes) = 12 bytes overhead.
+    // 768 - 12 = 756 bytes for wellId.
+    const company = 'c';
+    const well = 'w'.repeat(756);
+    const key = outgoingCompositeKey(company, well);
+    expect(Buffer.byteLength(key, 'utf8')).toBe(768);
+    expect(key.length).toBe(768);
+    const parsed = parseOutgoingCompositeKey(key);
+    expect(parsed).toEqual({ companyId: company, wellId: well });
+  });
 
-    const over = 'x'.repeat(129);
-    expect(() => encodeSegment(over)).toThrow(/maximum supported length/);
+  it('fails closed when final composite key is exactly one byte beyond the limit (769 UTF-8 bytes)', () => {
+    // 768 - 12 + 1 = 757 bytes for wellId -> 769 total bytes
+    const company = 'c';
+    const well = 'w'.repeat(757);
+    expect(() => outgoingCompositeKey(company, well)).toThrow(
+      /exceeds Firebase RTDB maximum key limit of 768 UTF-8 bytes \(actual: 769 bytes\)/
+    );
+  });
+
+  it('fails closed for two long forbidden-character IDs that expand beyond 768 bytes', () => {
+    // '#' expands to '~23' (3 bytes).
+    // 128 '#' chars expand to 384 bytes each.
+    // 'response_' (9) + 384 + '__' (2) + 384 = 779 bytes > 768.
+    const longForbiddenCompany = '#'.repeat(128);
+    const longForbiddenWell = '#'.repeat(128);
+    expect(() => outgoingCompositeKey(longForbiddenCompany, longForbiddenWell)).toThrow(
+      /exceeds Firebase RTDB maximum key limit of 768 UTF-8 bytes/
+    );
+  });
+
+  it('handles multibyte Unicode and emoji safely, failing closed if expansion exceeds limit', () => {
+    const emojiCompany = '🛢️-corp'; // multi-byte UTF-8 + variation selector
+    const emojiWell = 'well-🌊-123';
+    const key = outgoingCompositeKey(emojiCompany, emojiWell);
+    expect(key).not.toMatch(/[.#$\[\]/]/);
+    const parsed = parseOutgoingCompositeKey(key);
+    expect(parsed).toEqual({ companyId: emojiCompany, wellId: emojiWell });
+
+    // 128 4-byte characters expand to 128 * 4 * 3 = 1536 bytes -> must fail closed
+    const hugeEmoji = '🛢'.repeat(128);
+    expect(() => outgoingCompositeKey(hugeEmoji, 'well-1')).toThrow(
+      /exceeds Firebase RTDB maximum key limit of 768 UTF-8 bytes/
+    );
+  });
+
+  it('produces strictly deterministic repeat encoding across iterations', () => {
+    const company = 'test-co-alpha';
+    const well = 'well-beta-456';
+    const first = outgoingCompositeKey(company, well);
+    for (let i = 0; i < 100; i++) {
+      expect(outgoingCompositeKey(company, well)).toBe(first);
+    }
   });
 
   it('rejects empty or whitespace-only inputs', () => {

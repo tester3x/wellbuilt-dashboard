@@ -6,6 +6,10 @@
  * that filter on key.startsWith('response_').
  */
 
+export const COMPOSITE_KEY_PREFIX = 'response_';
+export const COMPOSITE_KEY_DELIMITER = '__';
+export const MAX_RTDB_KEY_BYTES = 768;
+
 /**
  * Injective, collision-resistant, reversible RTDB-safe segment encoding.
  * 
@@ -14,16 +18,13 @@
  * - Escapes every other UTF-8 byte as '~' + 2-digit lowercase hex (e.g. '_' -> '~5f', '.' -> '~2e', '/' -> '~2f')
  * - Because '_' is always escaped as '~5f', the delimiter '__' NEVER appears within an encoded segment.
  * - Injective and strictly collision-resistant for all strings, Unicode, and RTDB-forbidden characters.
- * - Maximum supported raw segment length: 128 characters (well within RTDB 768-byte key limit).
+ * - Enforces Firebase RTDB maximum key limit of 768 UTF-8 bytes on the final child key.
  */
 export function encodeSegment(segment: string): string {
   if (typeof segment !== 'string' || !segment.trim()) {
     throw new Error('Segment must be a non-empty string');
   }
   const str = segment.trim();
-  if (str.length > 128) {
-    throw new Error(`Segment exceeds maximum supported length of 128 characters: "${str.slice(0, 32)}..."`);
-  }
   const buf = Buffer.from(str, 'utf8');
   let out = '';
   for (let i = 0; i < buf.length; i++) {
@@ -39,6 +40,9 @@ export function encodeSegment(segment: string): string {
     } else {
       out += '~' + b.toString(16).padStart(2, '0');
     }
+  }
+  if (Buffer.byteLength(out, 'utf8') > MAX_RTDB_KEY_BYTES) {
+    throw new Error(`Encoded segment exceeds Firebase RTDB maximum key limit of ${MAX_RTDB_KEY_BYTES} UTF-8 bytes`);
   }
   return out;
 }
@@ -69,11 +73,22 @@ export const rtdbSafeSegment = encodeSegment;
 /**
  * Builds the deterministic, collision-resistant composite key for a well's status under packets/outgoing.
  * Format: response_${encodeSegment(companyId)}__${encodeSegment(wellId)}
+ *
+ * Enforces Firebase RTDB maximum child key limit of 768 UTF-8 bytes on the entire final key:
+ * prefix ('response_') + encoded companyId + delimiter ('__') + encoded wellId.
+ * Fails closed before constructing or writing any RTDB reference if the limit is exceeded.
  */
 export function outgoingCompositeKey(companyId: string, wellId: string): string {
   const safeCompany = encodeSegment(companyId);
   const safeWell = encodeSegment(wellId);
-  return `response_${safeCompany}__${safeWell}`;
+  const key = `${COMPOSITE_KEY_PREFIX}${safeCompany}${COMPOSITE_KEY_DELIMITER}${safeWell}`;
+  const byteLength = Buffer.byteLength(key, 'utf8');
+  if (byteLength > MAX_RTDB_KEY_BYTES) {
+    throw new Error(
+      `Composite key exceeds Firebase RTDB maximum key limit of ${MAX_RTDB_KEY_BYTES} UTF-8 bytes (actual: ${byteLength} bytes)`
+    );
+  }
+  return key;
 }
 
 /**

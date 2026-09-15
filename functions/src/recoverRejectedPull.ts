@@ -313,6 +313,7 @@ export function buildReplacementIncomingPacket(
     driverId: norm(src.driverId),
     driverName: norm(src.driverName),
     companyId: norm(src.companyId),
+    ...(norm(src.wellId) ? { wellId: norm(src.wellId) } : {}),
     ...(timezone ? { timezone } : {}),
     ...(src.wellDownIsAuthoritative === true ? { wellDownIsAuthoritative: true } : {}),
     recoveredFromPacketId: input.rejectedPacketId,

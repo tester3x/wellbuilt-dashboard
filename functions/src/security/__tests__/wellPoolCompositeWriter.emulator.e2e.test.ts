@@ -36,6 +36,7 @@ import {
   processEditRequest,
   processDeleteRequest,
 } from '../../index';
+import { recoverRejectedPull } from '../../recoverRejectedPullCallable';
 
 const describeE2E = RTDB && FS ? describe : describe.skip;
 
@@ -639,11 +640,10 @@ describeE2E('Well-Pool Containment + Composite Writer Migration (Emulator E2E)',
     const parsedUnicode = parseOutgoingCompositeKey(unicodeKey);
     expect(parsedUnicode).toEqual({ companyId: unicodeCompany, wellId: unicodeWell });
 
-    // 5. Length bounding (128 char limit)
-    const exact128 = 'a'.repeat(128);
-    expect(decodeSegment(encodeSegment(exact128))).toBe(exact128);
-    const over128 = 'a'.repeat(129);
-    expect(() => encodeSegment(over128)).toThrow(/maximum supported length/);
+    // 5. Length bounding (RTDB 768 UTF-8 byte limit on final key)
+    const maxKey = outgoingCompositeKey('c', 'w'.repeat(756));
+    expect(Buffer.byteLength(maxKey, 'utf8')).toBe(768);
+    expect(() => outgoingCompositeKey('c', 'w'.repeat(757))).toThrow(/768 UTF-8 bytes/);
   });
 
   it('Scenario 14: Server-authoritative incoming identity binding (wellName-only pull resolves by company; ambiguous/spoofed fails closed)', async () => {
@@ -855,5 +855,303 @@ describeE2E('Well-Pool Containment + Composite Writer Migration (Emulator E2E)',
     expect(drvResB.ok).toBe(true);
     expect(drvResB.responses).toHaveLength(0);
     expect(drvResB.unavailableWells).toContain('Shared Well');
+  });
+
+  it('Scenario 16: Canonical recovery callable isolation and watermark recognition', async () => {
+    // 1. Two companies configure "Shared Well"
+    await db.ref('well_config').set({
+      'well-a': {
+        companyId: 'company-a',
+        wellId: 'well-a',
+        wellName: 'Shared Well',
+        route: 'Route A',
+        tanks: 1,
+        pullBbls: 140,
+        bottomLevel: 3,
+      },
+      'well-b': {
+        companyId: 'company-b',
+        wellId: 'well-b',
+        wellName: 'Shared Well',
+        route: 'Route B',
+        tanks: 1,
+        pullBbls: 140,
+        bottomLevel: 3,
+      },
+    });
+
+    // 2. Setup driver profiles
+    await db.ref('drivers/profiles/driver-b').set({ active: true, companyId: 'company-b' });
+    await db.ref('drivers/profiles/driver-a').set({ active: true, companyId: 'company-a' });
+    await db.ref('drivers/profiles/driver-c').set({ active: true, companyId: 'company-c' });
+
+    const now = Date.now();
+    const tMinus6h = new Date(now - 6 * 3600 * 1000).toISOString();
+    const tMinus5h = new Date(now - 5 * 3600 * 1000).toISOString();
+    const tMinus4h = new Date(now - 4 * 3600 * 1000).toISOString();
+    const tMinus3h = new Date(now - 3 * 3600 * 1000).toISOString();
+
+    // 3. Only Company A has an outgoing composite status at tMinus3h
+    const keyA = outgoingCompositeKey('company-a', 'well-a');
+    const keyB = outgoingCompositeKey('company-b', 'well-b');
+    await db.ref(`packets/outgoing/${keyA}`).set({
+      wellName: 'Shared Well',
+      companyId: 'company-a',
+      wellId: 'well-a',
+      lastPullDateTimeUTC: tMinus3h,
+      currentLevel: "5'0\"",
+    });
+
+    // 4. Company B has a rejected pull in packets/rejected
+    const rejIdB = 'rej-b-stale-01';
+    await db.ref(`packets/rejected/${rejIdB}`).set({
+      packetId: rejIdB,
+      reason: 'STALE_PULL_TIME',
+      wellName: 'Shared Well',
+      requestType: 'pull',
+      packet: {
+        packetId: rejIdB,
+        wellName: 'Shared Well',
+        companyId: 'company-b',
+        wellId: 'well-b',
+        driverId: 'driver-b',
+        driverName: 'Driver B',
+        requestType: 'pull',
+        dateTimeUTC: tMinus6h,
+        tankLevelFeet: 6,
+        bblsTaken: 60,
+        wellDown: false,
+        timezone: 'America/Chicago',
+      },
+    });
+
+    // 5. Recovering Company B's rejected pull with corrected time tMinus4h
+    // (Older than Company A's tMinus3h status).
+    // Must NOT match Company A's status or watermark!
+    const replIdB = '20260915_100000_SharedWell_replB';
+
+    // Hook to execute processIncomingPull when recovery writes replacement to packets/incoming
+    const incomingListener = async (snapshot: admin.database.DataSnapshot) => {
+      if (snapshot.key === replIdB) {
+        await (processIncomingPull as any).run(snapshot, { params: { packetId: replIdB } });
+      }
+    };
+    db.ref('packets/incoming').on('child_added', incomingListener);
+
+    try {
+      const recRes = (await (recoverRejectedPull as any).run({
+        data: {
+          rejectedPacketId: rejIdB,
+          replacementPacketId: replIdB,
+          corrected: {
+            dateTimeUTC: tMinus4h,
+            tankLevelFeet: 6,
+            bblsTaken: 60,
+            wellDown: false,
+          },
+        },
+        auth: {
+          uid: 'uid-drv-b',
+          token: { kind: 'driver', driverId: 'driver-b', companyId: 'company-b' },
+        },
+      })) as any;
+
+      expect(recRes.status).toBe('recovered');
+      expect(recRes.replacementPacketId).toBe(replIdB);
+
+      // Company B's composite status was created
+      const outBSnap = await db.ref(`packets/outgoing/${keyB}`).once('value');
+      expect(outBSnap.exists()).toBe(true);
+      expect(outBSnap.val().companyId).toBe('company-b');
+      expect(outBSnap.val().lastPullDateTimeUTC).toBe(tMinus4h);
+
+      // Company A's composite row was untouched
+      const outASnap = await db.ref(`packets/outgoing/${keyA}`).once('value');
+      expect(outASnap.val().lastPullDateTimeUTC).toBe(tMinus3h);
+      expect(outASnap.val().currentLevel).toBe("5'0\"");
+
+      // 6. A spoofed company identity must fail
+      await expect(
+        (recoverRejectedPull as any).run({
+          data: {
+            rejectedPacketId: rejIdB,
+            replacementPacketId: '20260915_110000_SharedWell_spoofC',
+            corrected: {
+              dateTimeUTC: tMinus3h,
+              tankLevelFeet: 6,
+              bblsTaken: 60,
+              wellDown: false,
+            },
+          },
+          auth: {
+            uid: 'uid-drv-c',
+            token: { kind: 'driver', driverId: 'driver-c', companyId: 'company-c' },
+          },
+        })
+      ).rejects.toThrow();
+
+      // 7. The correct Company B composite row must be recognized after Company B owns one
+      // Now Company B owns outgoing composite status at tMinus4h.
+      // Setup second rejected packet for Company B
+      const rejIdB2 = 'rej-b-stale-02';
+      await db.ref(`packets/rejected/${rejIdB2}`).set({
+        packetId: rejIdB2,
+        reason: 'STALE_PULL_TIME',
+        wellName: 'Shared Well',
+        requestType: 'pull',
+        packet: {
+          packetId: rejIdB2,
+          wellName: 'Shared Well',
+          companyId: 'company-b',
+          wellId: 'well-b',
+          driverId: 'driver-b',
+          requestType: 'pull',
+          dateTimeUTC: tMinus6h,
+          tankLevelFeet: 5,
+          bblsTaken: 50,
+          wellDown: false,
+        },
+      });
+
+      // Attempt recovery with corrected time tMinus5h (older than Company B's watermark tMinus4h)
+      // Must fail closed with REPLACEMENT_NOT_NEWER
+      await expect(
+        (recoverRejectedPull as any).run({
+          data: {
+            rejectedPacketId: rejIdB2,
+            replacementPacketId: '20260915_090000_SharedWell_replB2',
+            corrected: {
+              dateTimeUTC: tMinus5h,
+              tankLevelFeet: 5,
+              bblsTaken: 50,
+              wellDown: false,
+            },
+          },
+          auth: {
+            uid: 'uid-drv-b',
+            token: { kind: 'driver', driverId: 'driver-b', companyId: 'company-b' },
+          },
+        })
+      ).rejects.toThrow(/REPLACEMENT_NOT_NEWER/);
+    } finally {
+      db.ref('packets/incoming').off('child_added', incomingListener);
+    }
+  });
+
+  it('Scenario 17: Identityless legacy row does not block incoming pull or influence edit', async () => {
+    // 1. Two companies configure "Shared Well"
+    await db.ref('well_config').set({
+      'well-a': {
+        companyId: 'company-a',
+        wellId: 'well-a',
+        wellName: 'Shared Well',
+        route: 'Route A',
+        tanks: 2,
+        pullBbls: 140,
+        bottomLevel: 1,
+      },
+      'well-b': {
+        companyId: 'company-b',
+        wellId: 'well-b',
+        wellName: 'Shared Well',
+        route: 'Route B',
+        tanks: 2,
+        pullBbls: 140,
+        bottomLevel: 1,
+      },
+    });
+
+    const keyA = outgoingCompositeKey('company-a', 'well-a');
+    const keyB = outgoingCompositeKey('company-b', 'well-b');
+
+    const now = Date.now();
+    const tMinus5h = new Date(now - 5 * 3600 * 1000).toISOString();
+    const tMinus3h = new Date(now - 3 * 3600 * 1000).toISOString();
+    const tMinus2h30m = new Date(now - 2.5 * 3600 * 1000).toISOString();
+    const tMinus2h = new Date(now - 2 * 3600 * 1000).toISOString();
+
+    // 2. Company A has composite status at tMinus5h
+    await db.ref(`packets/outgoing/${keyA}`).set({
+      wellName: 'Shared Well',
+      companyId: 'company-a',
+      wellId: 'well-a',
+      lastPullDateTimeUTC: tMinus5h,
+      currentLevel: "4'0\"",
+      lastPullBbls: '80',
+    });
+
+    // 3. An identityless legacy row exists with a newer timestamp (tMinus2h)
+    // Under the old bug, this row matched any company and blocked incoming pulls
+    await db.ref('packets/outgoing/response_Shared Well').set({
+      wellName: 'Shared Well',
+      // Explicitly NO companyId, NO wellId
+      lastPullDateTimeUTC: tMinus2h,
+      currentLevel: "14'0\"",
+      flowRate: '1:00:00',
+    });
+
+    // 4. Company B submits a valid incoming pull at tMinus3h
+    // (Older than legacy row's tMinus2h, but valid for Company B)
+    const pullIdB = 'pull-b-legacy-fixture';
+    await triggerPull(pullIdB, {
+      packetId: pullIdB,
+      wellName: 'Shared Well',
+      companyId: 'company-b',
+      wellId: 'well-b',
+      driverId: 'drv-b',
+      driverName: 'Driver B',
+      dateTimeUTC: tMinus3h,
+      tankLevelFeet: 8,
+      bblsTaken: 100,
+      tanks: 2,
+    });
+
+    // 5. B's valid incoming pull must still create B's composite status
+    const outBSnap = await db.ref(`packets/outgoing/${keyB}`).once('value');
+    expect(outBSnap.exists()).toBe(true);
+    expect(outBSnap.val().companyId).toBe('company-b');
+    expect(outBSnap.val().wellId).toBe('well-b');
+    expect(outBSnap.val().lastPullDateTimeUTC).toBe(tMinus3h);
+    expect(outBSnap.val().lastPullBbls).toBe('100');
+
+    // 6. Company A and the legacy row remain untouched
+    const outASnap = await db.ref(`packets/outgoing/${keyA}`).once('value');
+    expect(outASnap.val().lastPullDateTimeUTC).toBe(tMinus5h);
+    expect(outASnap.val().currentLevel).toBe("4'0\"");
+
+    const legacySnap = await db.ref('packets/outgoing/response_Shared Well').once('value');
+    expect(legacySnap.exists()).toBe(true);
+    expect(legacySnap.val().lastPullDateTimeUTC).toBe(tMinus2h);
+    expect(legacySnap.val().currentLevel).toBe("14'0\"");
+    expect(legacySnap.val().companyId).toBeUndefined();
+
+    // 7. B's edit affects only B
+    const editIdB = 'edit-b-legacy-fixture';
+    await triggerEdit(editIdB, {
+      packetId: editIdB,
+      originalPacketId: pullIdB,
+      requestType: 'edit',
+      wellName: 'Shared Well',
+      companyId: 'company-b',
+      wellId: 'well-b',
+      driverId: 'drv-b',
+      dateTimeUTC: tMinus2h30m,
+      bblsTaken: 110,
+      tankLevelFeet: 9,
+    });
+
+    // B's composite row updated
+    const outBAfterEdit = await db.ref(`packets/outgoing/${keyB}`).once('value');
+    expect(outBAfterEdit.val().lastPullBbls).toBe('110');
+    expect(outBAfterEdit.val().companyId).toBe('company-b');
+
+    // Company A and legacy row still untouched
+    const outAAfterEdit = await db.ref(`packets/outgoing/${keyA}`).once('value');
+    expect(outAAfterEdit.val().lastPullDateTimeUTC).toBe(tMinus5h);
+    expect(outAAfterEdit.val().lastPullBbls).toBe('80');
+
+    const legacyAfterEdit = await db.ref('packets/outgoing/response_Shared Well').once('value');
+    expect(legacyAfterEdit.exists()).toBe(true);
+    expect(legacyAfterEdit.val().lastPullDateTimeUTC).toBe(tMinus2h);
   });
 });
