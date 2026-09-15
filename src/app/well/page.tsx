@@ -86,7 +86,13 @@ function WellDetailPage() {
   const { user, loading } = useAuth();
   const router = useRouter();
   const searchParams = useSearchParams();
-  const wellName = searchParams.get('name') || '';
+  // Canonical identity (company + NDIC API) takes precedence over wellName. Dispatch
+  // links here canonically so two same-named wells across companies never collide;
+  // legacy /mobile links still pass ?name=.
+  const companyParam = (searchParams.get('company') || '').trim();
+  const apiParam = (searchParams.get('api') || '').trim();
+  const isCanonical = !!(companyParam && apiParam);
+  const nameParam = searchParams.get('name') || '';
 
   const [pulls, setPulls] = useState<PullPacket[]>([]);
   const [dataLoading, setDataLoading] = useState(true);
@@ -95,11 +101,18 @@ function WellDetailPage() {
   // Current well status comes from the SAME governed pool Dispatch and /mobile use —
   // never the forbidden packets/outgoing RTDB subscription. Derive this well's row and
   // its tank count from that one authorized response.
-  const { wells: poolWells, statusUnavailable: statusReadUnavailable } = useGovernedWellPool();
-  const wellStatus = useMemo<WellResponse | null>(
-    () => poolWells.find(w => w.wellName === wellName) ?? null,
-    [poolWells, wellName],
-  );
+  const { wells: poolWells, dataLoading: poolLoading, statusUnavailable: statusReadUnavailable } = useGovernedWellPool();
+  const wellStatus = useMemo<WellResponse | null>(() => {
+    if (isCanonical) {
+      // Exact canonical match ONLY — no wellName fuzzy fallback (fail closed).
+      return poolWells.find(w => (w.companyId || '').trim() === companyParam && (w.ndicApiNo || '').trim() === apiParam) ?? null;
+    }
+    return poolWells.find(w => w.wellName === nameParam) ?? null;
+  }, [poolWells, isCanonical, companyParam, apiParam, nameParam]);
+  // Effective well name for history/title: the resolved row when canonical, else the param.
+  const wellName = isCanonical ? (wellStatus?.wellName ?? '') : nameParam;
+  // Canonical link that resolves to nothing the pool carries → unavailable, no guess.
+  const canonicalUnavailable = isCanonical && !poolLoading && !wellStatus;
   const wellTanks = wellStatus?.tanks ?? 1;
   // ONE shared clock instant for the live level projection (foreground-resume aware).
   const asOfMs = useSharedNow();
@@ -504,6 +517,13 @@ function WellDetailPage() {
         {statusReadUnavailable && !wellStatus && (
           <div className="mb-6 rounded-lg border border-yellow-700/50 bg-yellow-900/20 px-4 py-3 text-yellow-300">
             Current well status is temporarily unavailable (governed read failed). This is a read failure, not an empty status.
+          </div>
+        )}
+
+        {/* Canonical link resolved to no authorized well — fail closed, no name guess. */}
+        {canonicalUnavailable && !statusReadUnavailable && (
+          <div className="mb-6 rounded-lg border border-gray-700 bg-gray-800 px-4 py-3 text-gray-300">
+            This well is unavailable — no well matching the requested canonical identity is in your authorized pool.
           </div>
         )}
 

@@ -49,6 +49,8 @@ export interface WellResponse {
   lastPullBottomLevel?: string;
   // NDIC linkage from well_config
   ndicName?: string;           // Full NDIC well name (e.g. "GABRIEL 1-36-25H")
+  ndicApiNo?: string;          // Canonical NDIC API number — stable per-well identity
+  companyId?: string;          // Owning company (tenant) — governed identity, not a name
   // Raw numeric level for precision (avoids parsing formatted string)
   currentLevelInches?: number; // Total inches — used by Add Pull modal
   // Tank dimensions from well_config
@@ -119,6 +121,12 @@ export function wellResponsesFromCatalog(wellConfig: Record<string, unknown>): W
       maxLevel: typeof config.maxLevel === 'number' ? config.maxLevel : undefined,
       bblPerFoot,
       ndicName: typeof config.ndicName === 'string' ? config.ndicName : '',
+      // Canonical identity carried from the governed config (already in the
+      // WELL_CONFIG_ALLOWLIST). Enables canonical (company + API) linking instead
+      // of ambiguous wellName matching; absent here ⇒ callers fail closed.
+      ndicApiNo: typeof config.ndicApiNo === 'string' ? config.ndicApiNo
+        : (config.ndicApiNo != null ? String(config.ndicApiNo) : undefined),
+      companyId: typeof config.companyId === 'string' ? config.companyId : undefined,
       isDown: config.isDown === true,
     };
   });

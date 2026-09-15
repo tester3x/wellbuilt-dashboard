@@ -83,6 +83,15 @@ body {
   min-width: 0;
 }
 
+/* CP3 reflow: a popped-out pane occupies NO docked space (no blank placeholder);
+   the remaining panes reflow to fill it. The pane's subtree stays mounted (it is
+   portaled into the child window), so this only removes it from the docked layout.
+   The desktop grid additionally drops the vacated grid area (see the media query). */
+.dispatch-queue.is-detached,
+.dispatch-pane-jobs.is-detached {
+  display: none;
+}
+
 /* The Well Queue is a size container in EVERY layout (grid column, stacked
    mobile, or a detached CP3 window) so its table can condense to its own width
    rather than the viewport's. */
@@ -168,6 +177,23 @@ body {
     grid-area: queue;
     min-height: 0;                 /* internal scroll owner */
     align-self: stretch;
+  }
+  /* CP3 reflow (desktop grid): drop the vacated area so builder/jobs/queue fill
+     the freed space instead of leaving a blank column/row. */
+  .dispatch-workspace.is-queue-detached {
+    grid-template-columns: minmax(0, 1fr);
+    grid-template-areas:
+      "builder"
+      "jobs";
+  }
+  .dispatch-workspace.is-jobs-detached {
+    grid-template-rows: minmax(0, 1fr);
+    grid-template-areas: "builder queue";
+  }
+  .dispatch-workspace.is-queue-detached.is-jobs-detached {
+    grid-template-columns: minmax(0, 1fr);
+    grid-template-rows: minmax(0, 1fr);
+    grid-template-areas: "builder";
   }
   /* The queue toolbar/header stay put; only the body scrolls. */
   .dispatch-queue { display: flex; flex-direction: column; }

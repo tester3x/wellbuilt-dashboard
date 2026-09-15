@@ -438,7 +438,9 @@ test('Dispatch TTP is height-first (no OVERDUE; via classifyWell)', () => {
 test('Dispatch actionable queue is WB‑M-parity (classifyWell) + Current Level (Est.) on one 30s clock', () => {
   const page = read('../../app/dispatch/page.tsx');
   assert.match(page, /matchesView|wellBucket|classifyWell/, 'parity helpers imported');
-  assert.match(page, /const \[queueView, setQueueView\] = useState<QueueView>\('needs-pull'\)/, 'default view = needs-pull');
+  // queueView initializes from the URL (reload restoration) but DEFAULTS to needs-pull.
+  assert.match(page, /const \[queueView, setQueueView\] = useState<QueueView>\(\(\) => \{/, 'queueView has an initializer');
+  assert.match(page, /\? v : 'needs-pull'/, 'default view = needs-pull');
   assert.match(page, /matchesView\(w, queueView, asOfMs/, 'queue filtered by primary view at the shared asOfMs');
   assert.match(page, /classifyWell\(w, asOfMs, \{ assigned/, 'rows classified at the shared asOfMs with assignment');
   assert.match(page, />Current Level \(Est\.\)<\/th>/, 'Level column relabeled Current Level (Est.)');

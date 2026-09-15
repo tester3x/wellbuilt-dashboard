@@ -8,6 +8,7 @@ import { getPriority, getWellPrediction, formatTTP, matchesView, wellBucket, cla
 import { pwLifecycle, PW_ACTIVE_STATUSES, isStaleCompletedReentry } from '@/lib/dispatchAssignmentGroups';
 import { useSharedNow } from '@/lib/useSharedNow';
 import { projectWellLevel } from '@/lib/wellLevelProjection';
+import { wellDetailHref } from '@/lib/wellDetailLink';
 // Z Fold recovery — layout helpers only (collapsed queue / stacked layout).
 // Live status is read via the governed adminGetWellPool callable (see effect
 // below); the direct-client RTDB status path is claim-gated and not attempted.
@@ -179,6 +180,14 @@ interface ProjectInvoice {
 }
 
 
+/** Read a navigable-state param from the CURRENT url on first client render, so a
+ *  reload restores the exact location instead of the default. SSR-safe (null on server). */
+function readInitialParam(key: string): string | null {
+  if (typeof window === 'undefined') return null;
+  const v = new URLSearchParams(window.location.search).get(key);
+  return v && v.length ? v : null;
+}
+
 function formatDispatchTime(ts: any): string {
   if (!ts) return '--';
   try {
@@ -307,11 +316,15 @@ function DispatchPageInner() {
   // and the authoritative status source is available.
   const queueReady = !loading && !dataLoading && !statusUnavailable && wells.length > 0;
 
-  // UI state
-  const [search, setSearch] = useState('');
-  const [routeFilter, setRouteFilter] = useState<string>('all');
+  // UI state — initialized from the URL so a browser reload restores the exact
+  // authorized location (Well Queue tab/filter/search), never the default view.
+  const [search, setSearch] = useState(() => readInitialParam('q') ?? '');
+  const [routeFilter, setRouteFilter] = useState<string>(() => readInitialParam('route') ?? 'all');
   // Primary actionable-queue view (default: wells that need pulling now).
-  const [queueView, setQueueView] = useState<QueueView>('needs-pull');
+  const [queueView, setQueueView] = useState<QueueView>(() => {
+    const v = readInitialParam('view');
+    return (v === 'needs-pull' || v === 'next-24h' || v === 'all' || v === 'needs-data') ? v : 'needs-pull';
+  });
   // Z Fold recovery — collapsed-queue + stacked-layout UI state.
   const [wellQueueExpanded, setWellQueueExpanded] = useState(false);
   const [stackedLayout, setStackedLayout] = useState(isStackedDispatchLayout);
@@ -494,12 +507,28 @@ function DispatchPageInner() {
   // Map job type label → packageId (for stamping dispatch docs)
   const [jobTypeToPackageId, setJobTypeToPackageId] = useState<Record<string, string>>({});
 
-  // Auth redirect
+  // Auth redirect — gated on auth resolution (no premature default redirect).
   useEffect(() => {
     if (!loading && !user) {
       router.push('/login');
     }
   }, [user, loading, router]);
+
+  // Persist navigable Well Queue state (view / route / search) into the URL WITHOUT
+  // navigating, so a reload restores it. Only applied once auth is resolved and the
+  // user is present, so it never rewrites the URL during the pre-auth/login redirect.
+  useEffect(() => {
+    if (loading || !user || typeof window === 'undefined') return;
+    const params = new URLSearchParams(window.location.search);
+    const setOrDel = (k: string, val: string, dflt: string) => {
+      if (val && val !== dflt) params.set(k, val); else params.delete(k);
+    };
+    setOrDel('view', queueView, 'needs-pull');
+    setOrDel('route', routeFilter, 'all');
+    setOrDel('q', search.trim(), '');
+    const qs = params.toString();
+    window.history.replaceState(window.history.state, '', qs ? `${window.location.pathname}?${qs}` : window.location.pathname);
+  }, [queueView, routeFilter, search, loading, user]);
 
   // Z Fold recovery — track stacked (Fold/narrow/short) vs desktop-split layout.
   useEffect(() => {
@@ -2257,7 +2286,7 @@ function DispatchPageInner() {
             Each column owns its own internal scroll (min-height:0). Short / narrow
             / Fold: stacked document flow (jobs-first) with page-level scroll.
             ═══════════════════════════════════════════════════════════════════════ */}
-        <div className="dispatch-workspace">
+        <div className={`dispatch-workspace${queueDetached ? ' is-queue-detached' : ''}${jobsDetached ? ' is-jobs-detached' : ''}`}>
 
             {/* ── Tabbed Dispatch Builder (PW / SW / Projects) ── */}
             <div className={`dispatch-builder bg-gray-800 border rounded-lg p-4 flex flex-col ${
@@ -2962,21 +2991,12 @@ function DispatchPageInner() {
             </div>{/* end Tabbed Builder panel */}
 
             {/* ═══════ Well Queue (right column; detachable — CP3) ═══════ */}
-            <div className={`dispatch-queue bg-gray-800 rounded-lg border border-gray-700 flex flex-col${wellQueueExpanded ? ' is-expanded' : ''}${searchActive ? ' has-search' : ''}`}>
+            <div className={`dispatch-queue bg-gray-800 rounded-lg border border-gray-700 flex flex-col${wellQueueExpanded ? ' is-expanded' : ''}${searchActive ? ' has-search' : ''}${queueDetached ? ' is-detached' : ''}`}>
             <DetachablePane
               detached={queueDetached}
               onDock={() => dockQueue(false)}
               title="Well Queue"
               mountClassName="detached-pane detached-pane-queue"
-              placeholder={
-                <div className="flex flex-1 min-h-0 items-center justify-center p-8 text-center">
-                  <div>
-                    <div className="text-gray-300 text-sm font-medium mb-1">Well Queue is in its own window</div>
-                    <div className="text-gray-500 text-xs mb-3">Selecting a well there still fills the Job Builder here.</div>
-                    <button onClick={() => dockQueue(false)} className="px-3 py-1.5 text-xs font-medium rounded bg-blue-600 hover:bg-blue-500 text-white">⧉ Reattach</button>
-                  </div>
-                </div>
-              }
             >
               {/* Panel header with filters */}
               <div className="flex items-center gap-2 px-4 py-2.5 border-b border-gray-700 flex-shrink-0 flex-wrap">
@@ -3093,13 +3113,22 @@ function DispatchPageInner() {
                         // physically verify) — never presented as an agreeing prediction.
                         const assignBlocked = priority.state === 'down';
                         const assignOverride = priority.state === 'verify' || priority.state === 'no-gain';
+                        const wbmHref = wellDetailHref(well);
                         return (
-                          <tr key={well.responseId || well.wellName} className={`transition-colors ${assignedNotStarted ? 'bg-gray-800/40 opacity-70 hover:opacity-100' : `hover:bg-gray-750 ${priority.state === 'pull-now' ? 'bg-red-900/10' : ''}`} ${isSelected ? 'bg-blue-900/20' : ''}`}>
+                          <tr
+                            key={well.responseId || well.wellName}
+                            onClick={wbmHref ? () => router.push(wbmHref) : undefined}
+                            className={`transition-colors ${wbmHref ? 'cursor-pointer' : ''} ${assignedNotStarted ? 'bg-gray-800/40 opacity-70 hover:opacity-100' : `hover:bg-gray-750 ${priority.state === 'pull-now' ? 'bg-red-900/10' : ''}`} ${isSelected ? 'bg-blue-900/20' : ''}`}
+                          >
                             <td className="px-2 py-1.5">
                               <span className={`inline-block whitespace-nowrap px-1.5 py-0.5 text-[10px] font-bold rounded ${priority.color} ${priority.textColor}`}>{priority.label}</span>
                             </td>
                             <td className="px-2 py-1.5">
-                              <div className="text-white font-medium text-xs">{well.wellName}</div>
+                              {wbmHref ? (
+                                <div className="text-blue-300 hover:text-blue-200 font-medium text-xs underline decoration-dotted underline-offset-2" title="Open the exact well in WB-M">{well.wellName}</div>
+                              ) : (
+                                <div className="text-white font-medium text-xs" title="Open in WB-M unavailable — no canonical company/well identity">{well.wellName}</div>
+                              )}
                               <div className="text-gray-500 text-[10px]">{well.route || 'Unrouted'}</div>
                             </td>
                             <td className="px-2 py-1.5 font-mono text-[10px]">
@@ -3130,7 +3159,7 @@ function DispatchPageInner() {
                             <td className="px-2 py-1.5 text-white font-mono text-[10px]">{well.flowRate || '--'}</td>
                             <td className="px-2 py-1.5 text-white font-mono text-[10px]">{formatTTP(well, asOfMs)}</td>
                             <td className="dispatch-queue-col-pulls px-2 py-1.5"><PullsPredictionCell well={well} /></td>
-                            <td className="px-2 py-1.5 text-right">
+                            <td className="px-2 py-1.5 text-right" onClick={(e) => e.stopPropagation()}>
                               {assignedNotStarted ? (
                                 <div className="flex items-center justify-end gap-2">
                                   <span className="text-[10px] whitespace-nowrap text-gray-300">Assigned <span className="text-gray-500">•</span> <span className="text-white font-medium">{assignment!.driver}</span></span>
@@ -3198,21 +3227,13 @@ function DispatchPageInner() {
 
           {/* ═══════ Active Jobs / Projects — left column, below the builder
                      (jobs-first on Fold/narrow via order); detachable — CP3 ═══════ */}
-          <div className="dispatch-pane dispatch-pane-jobs">
+          <div className={`dispatch-pane dispatch-pane-jobs${jobsDetached ? ' is-detached' : ''}`}>
             <div className="dispatch-jobs bg-gray-800 rounded-lg border border-gray-700 flex flex-col">
             <DetachablePane
               detached={jobsDetached}
               onDock={() => dockJobs(false)}
               title="Active Jobs"
               mountClassName="detached-pane detached-pane-jobs"
-              placeholder={
-                <div className="flex flex-1 min-h-0 items-center justify-center p-8 text-center">
-                  <div>
-                    <div className="text-gray-300 text-sm font-medium mb-1">Active Jobs is in its own window</div>
-                    <button onClick={() => dockJobs(false)} className="mt-2 px-3 py-1.5 text-xs font-medium rounded bg-blue-600 hover:bg-blue-500 text-white">⧉ Reattach</button>
-                  </div>
-                </div>
-              }
             >
               {/* Panel header with tabs */}
               <div className="flex items-center justify-between px-4 py-2.5 border-b border-gray-700 flex-shrink-0">
