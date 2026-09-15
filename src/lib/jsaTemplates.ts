@@ -4,7 +4,7 @@
 import { getFirestoreDb, getFirebaseFunctions } from './firebase';
 import {
   doc, getDoc, setDoc,
-  collection, getDocs, runTransaction,
+  collection, getDocs, runTransaction, type Transaction,
 } from 'firebase/firestore';
 import { httpsCallable } from 'firebase/functions';
 import {assignActiveJsaTemplate, normalizeJsaTasks, type ActiveJsaTaskTemplate} from './jsaTaskTemplates';
@@ -187,6 +187,19 @@ async function initialActive(companyId: string): Promise<ActiveJsaTaskTemplate[]
   }));
 }
 
+async function legacyRevisionWrites(tx: Transaction, companyId: string, initial: ActiveJsaTaskTemplate[]) {
+  const writes = [];
+  for (const entry of initial) {
+    const live = await tx.get(templateDoc(companyId, entry.id));
+    if (!live.exists() || live.data().status !== 'active' || live.data().version !== entry.version)
+      throw new Error('Templates changed. Reload before publishing.');
+    const ref = templateDoc(companyId, entry.id + '--published-v' + entry.version);
+    const archived = await tx.get(ref);
+    if (!archived.exists()) writes.push({ref, data:{...live.data(),tasks:normalizeJsaTasks(live.data().tasks),companyId,templateId:entry.id,recordType:'revision'}});
+  }
+  return writes;
+}
+
 /** Publish a task template without disabling unrelated task assessments. */
 export async function activateJsaTemplate(companyId: string, templateId: string, userId: string): Promise<void> {
   const initial = await initialActive(companyId);
@@ -205,6 +218,8 @@ export async function activateJsaTemplate(companyId: string, templateId: string,
     const revisionRef = templateDoc(companyId, templateId + '--published-v' + version);
     const existingRevision = await tx.get(revisionRef);
     if (existingRevision.exists()) throw new Error('Published version already exists. Reload templates.');
+    const legacy = mirror.data()?.activeTemplates ? [] : await legacyRevisionWrites(tx,companyId,initial);
+    for (const archived of legacy) tx.set(archived.ref,archived.data);
     tx.set(revisionRef, {...published, recordType:'revision', templateId});
     tx.set(targetRef,published);
     // Keep the legacy mirror on its explicit default. A task-specific activation
@@ -228,6 +243,8 @@ export async function deactivateJsaTemplate(companyId: string, templateId: strin
     if (!target.exists() || target.data().recordType === 'revision') throw new Error('Template not found.');
     const active: ActiveJsaTaskTemplate[] = mirror.data()?.activeTemplates || initial;
     const legacyId = mirror.data()?.legacyTemplateId || initial.find(t=>!t.tasks.length)?.id;
+    const legacy = mirror.data()?.activeTemplates ? [] : await legacyRevisionWrites(tx,companyId,initial);
+    for (const archived of legacy) tx.set(archived.ref,archived.data);
     tx.update(targetRef,{status:'draft',updatedAt:new Date().toISOString()});
     tx.set(mirrorRef, {
       ...(mirror.data() || {}), schemaVersion:2,
