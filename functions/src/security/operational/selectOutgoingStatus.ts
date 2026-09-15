@@ -15,17 +15,32 @@ export function packetTimestampMs(row: Record<string, unknown>): number {
   return 0;
 }
 
-export function collectLatestOutgoingByWell(outgoingTree: unknown): Map<string, OutgoingStatusRecord> {
+export function collectLatestOutgoingByWell(
+  outgoingTree: unknown,
+  driverCompanyId?: string,
+): Map<string, OutgoingStatusRecord> {
   const latest = new Map<string, OutgoingStatusRecord>();
   if (!outgoingTree || typeof outgoingTree !== 'object' || Array.isArray(outgoingTree)) {
     return latest;
   }
+  const targetCompany = typeof driverCompanyId === 'string' ? driverCompanyId.trim() : '';
   for (const [key, raw] of Object.entries(outgoingTree as Record<string, unknown>)) {
     if (!key.startsWith('response_')) continue;
     if (!raw || typeof raw !== 'object' || Array.isArray(raw)) continue;
     const row = raw as Record<string, unknown>;
     const wellName = typeof row.wellName === 'string' ? row.wellName.trim() : '';
     if (!wellName) continue;
+
+    // When company scoping is active, require matching companyId and canonical wellId
+    if (targetCompany) {
+      const rowCompany = typeof row.companyId === 'string' ? row.companyId.trim() : '';
+      const rowWellId = typeof row.wellId === 'string' ? row.wellId.trim() : '';
+      if (!rowCompany || rowCompany !== targetCompany || !rowWellId) {
+        // Missing canonical identity or foreign company: must never be cross-attached
+        continue;
+      }
+    }
+
     const prev = latest.get(wellName);
     if (!prev || packetTimestampMs(row) >= packetTimestampMs(prev)) {
       latest.set(wellName, { ...row, wellName });

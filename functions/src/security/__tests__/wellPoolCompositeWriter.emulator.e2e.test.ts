@@ -28,7 +28,7 @@ if (!admin.apps.length) {
   });
 }
 
-import { outgoingCompositeKey } from '../outgoingCompositeKey';
+import { outgoingCompositeKey, encodeSegment, decodeSegment, parseOutgoingCompositeKey } from '../outgoingCompositeKey';
 import { adminGetWellPool } from '../adminDashboardCatalog';
 import { getDriverOutgoingStatus } from '../operational/getDriverOutgoingStatus';
 import {
@@ -602,5 +602,258 @@ describeE2E('Well-Pool Containment + Composite Writer Migration (Emulator E2E)',
     expect(res.responses.length).toBe(1);
     expect(res.responses[0].wellName).toBe('Shared Well');
     expect(res.responses[0].currentLevel).toBe("6'6\"");
+  });
+
+  it('Scenario 13: Injective composite key encoding proof (forbidden chars, underscores, Unicode, length limits, and collision resistance)', () => {
+    // 1. Distinct raw IDs that would collide under naive replacement
+    const encDot = encodeSegment('alpha.beta');
+    const encUnderscore = encodeSegment('alpha_beta');
+    const encSlash = encodeSegment('alpha/beta');
+    const encHyphen = encodeSegment('alpha-beta');
+    expect(encDot).not.toBe(encUnderscore);
+    expect(encSlash).not.toBe(encHyphen);
+    expect(encDot).toBe('alpha~2ebeta');
+    expect(encUnderscore).toBe('alpha~5fbeta');
+    expect(encSlash).toBe('alpha~2fbeta');
+    expect(encHyphen).toBe('alpha-beta');
+
+    // 2. RTDB forbidden characters: . # $ [ ] /
+    const forbiddenRaw = 'well.#$[test]/1';
+    const forbiddenEnc = encodeSegment(forbiddenRaw);
+    expect(forbiddenEnc).not.toMatch(/[.#$\[\]/]/);
+    expect(decodeSegment(forbiddenEnc)).toBe(forbiddenRaw);
+
+    // 3. Separators and underscores: __ does not collide with single _ or boundary
+    const compWithDelim = 'tenant__alpha';
+    const wellWithDelim = 'well__beta';
+    const compKey = outgoingCompositeKey(compWithDelim, wellWithDelim);
+    expect(compKey).toBe('response_tenant~5f~5falpha__well~5f~5fbeta');
+    const parsed = parseOutgoingCompositeKey(compKey);
+    expect(parsed).toEqual({ companyId: compWithDelim, wellId: wellWithDelim });
+
+    // 4. Unicode support
+    const unicodeCompany = '公司-alpha';
+    const unicodeWell = '井#1-Café';
+    const unicodeKey = outgoingCompositeKey(unicodeCompany, unicodeWell);
+    expect(unicodeKey).not.toMatch(/[.#$\[\]/]/);
+    const parsedUnicode = parseOutgoingCompositeKey(unicodeKey);
+    expect(parsedUnicode).toEqual({ companyId: unicodeCompany, wellId: unicodeWell });
+
+    // 5. Length bounding (128 char limit)
+    const exact128 = 'a'.repeat(128);
+    expect(decodeSegment(encodeSegment(exact128))).toBe(exact128);
+    const over128 = 'a'.repeat(129);
+    expect(() => encodeSegment(over128)).toThrow(/maximum supported length/);
+  });
+
+  it('Scenario 14: Server-authoritative incoming identity binding (wellName-only pull resolves by company; ambiguous/spoofed fails closed)', async () => {
+    await db.ref('well_config').set({
+      'well-a': {
+        companyId: 'company-a',
+        wellId: 'well-a',
+        wellName: 'Shared Well',
+        route: 'Route A',
+        tanks: 1,
+        pullBbls: 140,
+        bottomLevel: 3,
+      },
+      'well-b': {
+        companyId: 'company-b',
+        wellId: 'well-b',
+        wellName: 'Shared Well',
+        route: 'Route B',
+        tanks: 1,
+        pullBbls: 140,
+        bottomLevel: 3,
+      },
+    });
+
+    const keyA = outgoingCompositeKey('company-a', 'well-a');
+    const keyB = outgoingCompositeKey('company-b', 'well-b');
+
+    // A. Company A driver submits pull with wellName ONLY (NO wellId in packet)
+    const pullA = {
+      requestType: 'pull',
+      wellName: 'Shared Well',
+      companyId: 'company-a',
+      driverId: 'driver-a',
+      dateTimeUTC: '2026-09-15T04:00:00.000Z',
+      tankLevelFeet: 8,
+      bblsTaken: 100,
+    };
+    await triggerPull('pull-authoritative-a', pullA);
+
+    const outASnap = await db.ref(`packets/outgoing/${keyA}`).once('value');
+    expect(outASnap.exists()).toBe(true);
+    expect(outASnap.val().companyId).toBe('company-a');
+    expect(outASnap.val().wellId).toBe('well-a');
+    expect(outASnap.val().lastPullPacketId).toBe('pull-authoritative-a');
+
+    // B. Company B driver submits pull with wellName ONLY (NO wellId in packet)
+    const pullB = {
+      requestType: 'pull',
+      wellName: 'Shared Well',
+      companyId: 'company-b',
+      driverId: 'driver-b',
+      dateTimeUTC: '2026-09-15T04:30:00.000Z',
+      tankLevelFeet: 7,
+      bblsTaken: 110,
+    };
+    await triggerPull('pull-authoritative-b', pullB);
+
+    const outBSnap = await db.ref(`packets/outgoing/${keyB}`).once('value');
+    expect(outBSnap.exists()).toBe(true);
+    expect(outBSnap.val().companyId).toBe('company-b');
+    expect(outBSnap.val().wellId).toBe('well-b');
+    expect(outBSnap.val().lastPullPacketId).toBe('pull-authoritative-b');
+
+    // C. Ambiguous pull: packet lacks companyId entirely -> fails closed into quarantine
+    const ambiguousPull = {
+      requestType: 'pull',
+      wellName: 'Shared Well',
+      // NO companyId
+      driverId: 'driver-anon',
+      dateTimeUTC: '2026-09-15T05:00:00.000Z',
+      tankLevelFeet: 9,
+      bblsTaken: 90,
+    };
+    await triggerPull('pull-ambiguous-anon', ambiguousPull);
+
+    // Verify it was quarantined in packets/rejected
+    const qSnap = await db.ref('packets/rejected/pull-ambiguous-anon').once('value');
+    expect(qSnap.exists()).toBe(true);
+    expect(qSnap.val().reason).toBe('STRANDED_INCOMING_PACKET');
+
+    // D. Spoof attempt: Company B driver passes untrusted wellId pointing to Company A's well
+    const spoofPull = {
+      requestType: 'pull',
+      wellName: 'Shared Well',
+      companyId: 'company-b',
+      wellId: 'well-a', // Belongs to Company A!
+      driverId: 'driver-b',
+      dateTimeUTC: '2026-09-15T05:30:00.000Z',
+      tankLevelFeet: 5,
+      bblsTaken: 80,
+    };
+    await triggerPull('pull-spoof-a', spoofPull);
+
+    // Company A's outgoing status was NOT mutated or overwritten by the spoof
+    const outASnapAfterSpoof = await db.ref(`packets/outgoing/${keyA}`).once('value');
+    expect(outASnapAfterSpoof.val().lastPullPacketId).toBe('pull-authoritative-a');
+  });
+
+  it('Scenario 15: Legacy identity-missing status safety (two companies, identical wellName, one complete, one legacy — neither tenant receives the other or legacy status)', async () => {
+    // 1. Two companies configure "Shared Well"
+    await db.ref('well_config').set({
+      'well-a': {
+        companyId: 'company-a',
+        wellId: 'well-a',
+        wellName: 'Shared Well',
+        route: 'Route A',
+        tanks: 1,
+        pullBbls: 140,
+      },
+      'well-b': {
+        companyId: 'company-b',
+        wellId: 'well-b',
+        wellName: 'Shared Well',
+        route: 'Route B',
+        tanks: 1,
+        pullBbls: 140,
+      },
+    });
+
+    // 2. Company A has identity-complete status row
+    const keyA = outgoingCompositeKey('company-a', 'well-a');
+    await db.ref(`packets/outgoing/${keyA}`).set({
+      wellName: 'Shared Well',
+      companyId: 'company-a',
+      wellId: 'well-a',
+      currentLevel: "5'0\"",
+      flowRate: '6:00:00',
+      timestampUTC: '2026-09-15T01:00:00Z',
+    });
+
+    // 3. Legacy identity-missing status row exists in packets/outgoing
+    await db.ref('packets/outgoing/response_SharedWell_legacy').set({
+      wellName: 'Shared Well',
+      // NO companyId, NO wellId
+      currentLevel: "12'0\"",
+      flowRate: '1:00:00',
+      timestampUTC: '2026-09-15T03:00:00Z',
+    });
+
+    // 4. Test adminGetWellPool in Company B mode:
+    //    Company B has configured "Shared Well", but NO owned status.
+    //    It must receive status UNAVAILABLE (0 status rows returned).
+    //    It must NEVER receive Company A's "5'0\"" row or the legacy "12'0\"" row!
+    const resB = (await adminGetWellPool.run({
+      data: { companyId: 'company-b' },
+      auth: {
+        uid: 'user-b-admin',
+        token: {
+          roles: ['manager'],
+          companyId: 'company-b',
+          roleCapabilities: ['viewWellPool'],
+        },
+      },
+      rawRequest: {},
+    } as any)) as any;
+
+    expect(resB.ok).toBe(true);
+    expect(resB.canViewWellPool).toBe(true);
+    expect(Object.keys(resB.wellConfig)).toEqual(['well-b']);
+    // Outgoing status for Company B MUST be empty (unavailable)
+    expect(Object.keys(resB.wellStatus)).toEqual([]);
+    expect(resB.counts.wellStatus).toBe(0);
+
+    // 5. Test adminGetWellPool in Company A mode:
+    //    Company A receives ONLY its owned status, NEVER the legacy "12'0\"" row
+    const resA = (await adminGetWellPool.run({
+      data: { companyId: 'company-a' },
+      auth: {
+        uid: 'user-a-admin',
+        token: {
+          roles: ['manager'],
+          companyId: 'company-a',
+          roleCapabilities: ['viewWellPool'],
+        },
+      },
+      rawRequest: {},
+    } as any)) as any;
+
+    expect(resA.ok).toBe(true);
+    expect(resA.canViewWellPool).toBe(true);
+    expect(Object.keys(resA.wellConfig)).toEqual(['well-a']);
+    expect(resA.counts.wellStatus).toBe(1);
+    expect(resA.wellStatus['well-a'].currentLevel).toBe("5'0\"");
+    expect(resA.wellStatus['well-a'].companyId).toBe('company-a');
+
+    // 6. Test WB-M getDriverOutgoingStatus for Driver B:
+    //    Must report "Shared Well" in unavailableWells, and 0 responses
+    const driverIdB = 'drv-beta';
+    await fs.collection('driver_credentials').doc(driverIdB).set({ active: true });
+    await db.ref(`drivers/profiles/${driverIdB}`).set({
+      active: true,
+      companyId: 'company-b',
+      assignedWells: ['Shared Well'],
+    });
+
+    const drvResB = (await getDriverOutgoingStatus.run({
+      data: {},
+      auth: {
+        uid: 'drv-uid-beta',
+        token: {
+          kind: 'driver',
+          driverId: driverIdB,
+          companyId: 'company-b',
+        },
+      },
+      rawRequest: {},
+    } as any)) as any;
+
+    expect(drvResB.ok).toBe(true);
+    expect(drvResB.responses).toHaveLength(0);
+    expect(drvResB.unavailableWells).toContain('Shared Well');
   });
 });

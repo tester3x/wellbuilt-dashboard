@@ -52,7 +52,10 @@ export const getDriverOutgoingStatus = httpsV2.onCall(
 
     const authorizedWells = Object.keys(snap.wells);
     const outgoingSnap = await admin.database().ref('packets/outgoing').once('value');
-    const latest = collectLatestOutgoingByWell(outgoingSnap.exists() ? outgoingSnap.val() : {});
+    const latest = collectLatestOutgoingByWell(
+      outgoingSnap.exists() ? outgoingSnap.val() : {},
+      authority.companyId,
+    );
     const { responses, unavailableWells } = partitionAuthorizedOutgoing({
       latestByWell: latest,
       authorizedWells,

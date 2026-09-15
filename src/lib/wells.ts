@@ -107,18 +107,26 @@ export function mergeWellPool(
     if (Object.keys(st).length === 0 && well.wellId && wellStatus[well.wellId] && typeof wellStatus[well.wellId] === 'object') {
       const candidate = wellStatus[well.wellId] as Record<string, unknown>;
       const candCompany = typeof candidate.companyId === 'string' ? candidate.companyId.trim() : '';
-      if (!candCompany || !well.companyId || candCompany === well.companyId) {
+      if (well.companyId) {
+        if (candCompany === well.companyId) {
+          st = candidate;
+        }
+      } else if (!candCompany) {
         st = candidate;
       }
     }
-    // 3. Fallback: match by wellName, but ONLY if companyId / wellId match or status lacks identity
+    // 3. Fallback: match by wellName, strictly enforcing companyId and wellId containment
     if (Object.keys(st).length === 0 && wellStatus[well.wellName] && typeof wellStatus[well.wellName] === 'object') {
       const candidate = wellStatus[well.wellName] as Record<string, unknown>;
       const candCompany = typeof candidate.companyId === 'string' ? candidate.companyId.trim() : '';
       const candWellId = candidate.wellId != null ? String(candidate.wellId).trim() : '';
-      const companyMatches = !candCompany || !well.companyId || candCompany === well.companyId;
-      const wellIdMatches = !candWellId || !well.wellId || candWellId === well.wellId;
-      if (companyMatches && wellIdMatches) {
+      if (well.companyId) {
+        // Company-scoped reads must NEVER attach an identity-missing legacy row or another tenant's row
+        if (candCompany === well.companyId && candWellId === well.wellId) {
+          st = candidate;
+        }
+      } else if (!candCompany && !candWellId) {
+        // Unscoped legacy pool fallback only when neither well nor status carries company identity
         st = candidate;
       }
     }

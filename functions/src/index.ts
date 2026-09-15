@@ -334,6 +334,8 @@ interface PullPacket {
   wellDown?: boolean;
   predictedLevelInches?: number;
   jobType?: string; // Commodity type from WB T (e.g. "Production Water", "Fresh Water")
+  companyId?: string;
+  wellId?: string;
   /** Recovery provenance: when a corrected replacement pull is submitted to
    *  recover a losslessly-quarantined original (Mechanism A), this carries the
    *  ORIGINAL rejected packetId. It is a passthrough field — preserved onto the
@@ -802,6 +804,112 @@ async function calculateAFR(
   return result.afr;
 }
 
+interface ResolvedWellConfig {
+  key: string;
+  config: Record<string, any>;
+  companyId: string;
+  wellId: string;
+  wellName: string;
+}
+
+/**
+ * Server-authoritative well configuration binding.
+ *
+ * Rules:
+ * 1. If targetCompanyId is specified (from authenticated driver credentials on ingest):
+ *    - All candidates belonging to another company are strictly disqualified.
+ *    - Untrusted client packet fields pointing to other tenants are ignored/rejected.
+ * 2. If targetCompanyId is absent (wellName-only ambiguous packet):
+ *    - If multiple companies configure this wellName, it is strictly ambiguous and fails closed.
+ *    - Insertion order cannot select the company.
+ * 3. Requires authoritative companyId and canonical wellId on the resolved well_config.
+ */
+async function resolveAuthoritativeWellConfig(input: {
+  db: admin.database.Database;
+  wellName: string;
+  targetCompanyId?: string;
+  candidateWellId?: string;
+}): Promise<{ ok: true; resolved: ResolvedWellConfig } | { ok: false; reason: string }> {
+  const wellName = (input.wellName || '').trim();
+  const cleanName = wellName.replace(/\s/g, '');
+  const targetCompany = (input.targetCompanyId || '').trim();
+  const candId = (input.candidateWellId || '').trim();
+
+  const allConfigSnap = await input.db.ref('well_config').once('value');
+  const allConfigs: Record<string, any> = allConfigSnap.val() || {};
+
+  interface MatchItem {
+    key: string;
+    config: any;
+    companyId: string;
+    wellId: string;
+    wellName: string;
+  }
+
+  const allMatches: MatchItem[] = [];
+  for (const [cfgKey, val] of Object.entries(allConfigs)) {
+    if (!val || typeof val !== 'object' || Array.isArray(val)) continue;
+    const cfg = val as Record<string, any>;
+    const cfgWellName = typeof cfg.wellName === 'string' ? cfg.wellName.trim() : '';
+    const cfgClean = cfgWellName.replace(/\s/g, '');
+    const cfgCompany = typeof cfg.companyId === 'string' ? cfg.companyId.trim() : '';
+    const wid = canonicalWellId(cfg) || cfgKey;
+
+    const nameMatches =
+      (wellName && (cfgWellName === wellName || cfgClean === cleanName)) ||
+      cfgKey === wellName ||
+      cfgKey === cleanName;
+
+    const idMatches = candId ? (wid === candId || cfgKey === candId) : false;
+
+    if (nameMatches || idMatches) {
+      allMatches.push({
+        key: cfgKey,
+        config: cfg,
+        companyId: cfgCompany,
+        wellId: wid,
+        wellName: cfgWellName || wellName,
+      });
+    }
+  }
+
+  let candidates: MatchItem[] = [];
+  if (targetCompany) {
+    candidates = allMatches.filter((m) => m.companyId === targetCompany);
+    if (candId && candidates.length > 1) {
+      const idMatch = candidates.filter((m) => m.wellId === candId || m.key === candId);
+      if (idMatch.length > 0) candidates = idMatch;
+    }
+  } else {
+    // Missing companyId on packet: if multiple companies configure this wellName, it is strictly ambiguous
+    const distinctCompanies = new Set(allMatches.map((m) => m.companyId).filter(Boolean));
+    if (distinctCompanies.size > 1 || allMatches.length !== 1) {
+      return {
+        ok: false,
+        reason: `Ambiguous incoming packet lacks authoritative companyId (${distinctCompanies.size} companies match for "${wellName}")`,
+      };
+    }
+    candidates = allMatches;
+  }
+
+  if (candidates.length === 0) {
+    return { ok: false, reason: `No well configuration found for "${wellName}" (company="${targetCompany}")` };
+  }
+  if (candidates.length > 1) {
+    return { ok: false, reason: `Multiple well configurations found for "${wellName}" in company "${targetCompany}"` };
+  }
+
+  const chosen = candidates[0];
+  if (!chosen.companyId || !chosen.wellId) {
+    return {
+      ok: false,
+      reason: `Bound configuration lacks authoritative companyId or canonical wellId (companyId="${chosen.companyId}", wellId="${chosen.wellId}")`,
+    };
+  }
+
+  return { ok: true, resolved: chosen };
+}
+
 // Main function: Process incoming pull packets
 export const processIncomingPull = functionsV1.database
   .ref('packets/incoming/{packetId}')
@@ -816,50 +924,40 @@ export const processIncomingPull = functionsV1.database
       return null;
     }
 
-    const wellName = data.wellName;
-    const cleanName = wellName.replace(/\s/g, '');
-
+    const wellName = (data.wellName || '').trim();
     console.log(`Processing pull for ${wellName}: ${packetId}`);
 
-    // Get well config - try with spaces first (dashboard format), candidate key, fall back to no spaces (legacy)
-    let wellConfigKey = wellName;
-    let configSnap = await db.ref(`well_config/${wellName}`).once('value');
-    if (!configSnap.exists() && (data as any).wellConfigKey) {
-      configSnap = await db.ref(`well_config/${(data as any).wellConfigKey}`).once('value');
-      if (configSnap.exists()) wellConfigKey = (data as any).wellConfigKey;
-    }
-    if (!configSnap.exists() && (data as any).wellId) {
-      configSnap = await db.ref(`well_config/${(data as any).wellId}`).once('value');
-      if (configSnap.exists()) wellConfigKey = (data as any).wellId;
-    }
-    if (!configSnap.exists()) {
-      // Try legacy format without spaces
-      configSnap = await db.ref(`well_config/${cleanName}`).once('value');
-      if (configSnap.exists()) wellConfigKey = cleanName;
-    }
-    const config = configSnap.val() || {};
+    const packetCompanyId = typeof data.companyId === 'string' ? data.companyId.trim() : '';
+    const candidateWellId = typeof (data as any).wellId === 'string' ? (data as any).wellId.trim() : '';
 
-    // Authoritatively derive tenant and canonical well identity from bound well_config
-    const boundCompanyId = typeof config.companyId === 'string' ? config.companyId.trim() : '';
-    const boundWellId = canonicalWellId(config);
-    const boundWellName = typeof config.wellName === 'string' && config.wellName.trim()
-      ? config.wellName.trim()
-      : (wellName || '');
+    const resolvedBinding = await resolveAuthoritativeWellConfig({
+      db,
+      wellName,
+      targetCompanyId: packetCompanyId,
+      candidateWellId,
+    });
 
-    if (!boundCompanyId || !boundWellId) {
-      console.warn(`[GOVERNED_WRITE_BLOCKED] ${wellName}: missing authoritative companyId or canonical wellId on well_config — failing closed`);
+    if (!resolvedBinding.ok) {
+      console.warn(`[GOVERNED_WRITE_BLOCKED] ${wellName}: ${resolvedBinding.reason} — failing closed`);
       await quarantineIncomingPacket(db.ref(), {
         packetId,
         packet: data,
         verdict: {
           action: 'quarantine',
           reason: 'STRANDED_INCOMING_PACKET',
-          readableReason: `Well configuration lacks authoritative companyId or canonical wellId (companyId="${boundCompanyId}", wellId="${boundWellId}")`,
+          readableReason: resolvedBinding.reason,
         },
         nowMs: Date.now(),
       });
       return null;
     }
+
+    const bound = resolvedBinding.resolved;
+    const wellConfigKey = bound.key;
+    const config = bound.config;
+    const boundCompanyId = bound.companyId;
+    const boundWellId = bound.wellId;
+    const boundWellName = bound.wellName;
 
     const bottomInches = (config.bottomLevel || config.allowedBottom || DEFAULTS.bottomLevel) * 12;
     const tanks = config.tanks || config.numTanks || DEFAULTS.tanks;
@@ -1900,41 +1998,38 @@ export const processEditRequest = functionsV1.database
     const sequence = nextEditCount(origPacket as Record<string, unknown>);
     const editedAtIso = new Date(nowMs).toISOString();
 
-    // Get well config
-    const cleanName = wellName.replace(/\s/g, '');
-    let wellConfigKey = wellName;
-    let configSnap = await db.ref(`well_config/${wellName}`).once('value');
-    const candKey = (data as any).wellConfigKey || (data as any).wellId || (origPacket as any).wellConfigKey || (origPacket as any).wellId;
-    if (!configSnap.exists() && candKey) {
-      configSnap = await db.ref(`well_config/${candKey}`).once('value');
-      if (configSnap.exists()) wellConfigKey = candKey;
-    }
-    if (!configSnap.exists()) {
-      configSnap = await db.ref(`well_config/${cleanName}`).once('value');
-      if (configSnap.exists()) wellConfigKey = cleanName;
-    }
-    const config = configSnap.val() || {};
+    // Resolve authoritative well config binding
+    const editCompanyId = typeof origPacket.companyId === 'string' ? origPacket.companyId.trim() : (typeof data.companyId === 'string' ? data.companyId.trim() : '');
+    const editCandWellId = typeof origPacket.wellId === 'string' ? origPacket.wellId.trim() : (typeof (data as any).wellId === 'string' ? (data as any).wellId.trim() : '');
 
-    const boundCompanyId = typeof config.companyId === 'string' ? config.companyId.trim() : '';
-    const boundWellId = canonicalWellId(config);
-    const boundWellName = typeof config.wellName === 'string' && config.wellName.trim()
-      ? config.wellName.trim()
-      : (wellName || '');
+    const resolvedBinding = await resolveAuthoritativeWellConfig({
+      db,
+      wellName,
+      targetCompanyId: editCompanyId,
+      candidateWellId: editCandWellId,
+    });
 
-    if (!boundCompanyId || !boundWellId) {
-      console.warn(`[GOVERNED_WRITE_BLOCKED] ${wellName}: missing authoritative companyId or canonical wellId on well_config — failing closed`);
+    if (!resolvedBinding.ok) {
+      console.warn(`[GOVERNED_WRITE_BLOCKED] ${wellName}: ${resolvedBinding.reason} — failing closed`);
       await quarantineIncomingPacket(db.ref(), {
         packetId: context.params.packetId,
         packet: data,
         verdict: {
           action: 'quarantine',
           reason: 'STRANDED_INCOMING_PACKET',
-          readableReason: `Well configuration lacks authoritative companyId or canonical wellId (companyId="${boundCompanyId}", wellId="${boundWellId}")`,
+          readableReason: resolvedBinding.reason,
         },
         nowMs: Date.now(),
       });
       return null;
     }
+
+    const bound = resolvedBinding.resolved;
+    const wellConfigKey = bound.key;
+    const config = bound.config;
+    const boundCompanyId = bound.companyId;
+    const boundWellId = bound.wellId;
+    const boundWellName = bound.wellName;
     const tanks = config.tanks || config.numTanks || DEFAULTS.tanks;
     // Effective bbl/ft (override / derived); legacy 20×tanks fallback only.
     const bblPerFoot = Number(config.bblPerFoot) > 0 ? Number(config.bblPerFoot) : 20 * tanks;
@@ -2705,17 +2800,26 @@ export const processDeleteRequest = functionsV1.database
     if (deletedPacket) {
       const cleanName = wellName.replace(/\s/g, '');
 
-      // Get well config (track the key it was found under so the namespaced
-      // high-water reconcile targets the SAME node processIncomingPull created).
+      // Resolve authoritative well config binding using deleted packet's tenant identity
+      const delTargetCompany = typeof deletedPacket?.companyId === 'string' ? deletedPacket.companyId.trim() : '';
+      const delCandidateWellId = typeof deletedPacket?.wellId === 'string' ? deletedPacket.wellId.trim() : '';
+      const resolvedBinding = await resolveAuthoritativeWellConfig({
+        db,
+        wellName,
+        targetCompanyId: delTargetCompany,
+        candidateWellId: delCandidateWellId,
+      });
+
       let wellConfigKey = wellName;
-      let configSnap = await db.ref(`well_config/${wellName}`).once('value');
-      if (!configSnap.exists()) {
-        configSnap = await db.ref(`well_config/${cleanName}`).once('value');
-        if (configSnap.exists()) wellConfigKey = cleanName;
+      let config: Record<string, any> = {};
+      let delCompanyId = delTargetCompany;
+      let delWellId = delCandidateWellId;
+      if (resolvedBinding.ok) {
+        wellConfigKey = resolvedBinding.resolved.key;
+        config = resolvedBinding.resolved.config;
+        delCompanyId = resolvedBinding.resolved.companyId;
+        delWellId = resolvedBinding.resolved.wellId;
       }
-      const config = configSnap.val() || {};
-      const delCompanyId = typeof config.companyId === 'string' ? config.companyId.trim() : (deletedPacket?.companyId || '');
-      const delWellId = canonicalWellId(config) || (deletedPacket?.wellId || '');
       deleteCompanyId = delCompanyId;
       const tanks = config.tanks || config.numTanks || DEFAULTS.tanks;
       const pullBbls = config.pullBbls || DEFAULTS.pullBbls;
