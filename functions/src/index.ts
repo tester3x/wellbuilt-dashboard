@@ -5078,6 +5078,7 @@ export {
   upsertDriverDispatch,
   sendChatMessage,
   getPublicClientMeta,
+  getDriverRouteMe,
   // Secure cold-start session verification (side-effect free)
   verifyDriverSession,
 } from './security';

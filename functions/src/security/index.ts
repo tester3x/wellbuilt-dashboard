@@ -65,6 +65,7 @@ export {
   upsertDriverDispatch,
   sendChatMessage,
   getPublicClientMeta,
+  getDriverRouteMe,
 } from './operational';
 
 /** Authenticated cold-start secure session verification (side-effect free). */
