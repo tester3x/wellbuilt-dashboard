@@ -4,6 +4,8 @@ import { useEffect, useState, useMemo, useCallback, Suspense } from 'react';
 import { useRouter, useSearchParams, usePathname } from 'next/navigation';
 import { useAuth } from '@/contexts/AuthContext';
 import { useSessionDeepLinkState } from '@/lib/useSessionDeepLinkState';
+import { pruneExpandedGroups } from '@/lib/expandedGroupsRestoreCore';
+import { operationalDriverName } from '@/lib/operationalDriverName';
 import { useScrollRestore } from '@/lib/useScrollRestore';
 import { WellResponse, mergeWellPool, matchWellInPool } from '@/lib/wells';
 import { getPriority, getWellPrediction, formatTTP, matchesView, wellBucket, classifyWell, compareQueueRows, inchesToLevel, formatAge, verifyReasonText, type QueueView } from '@/lib/dispatchPriority';
@@ -51,6 +53,7 @@ interface ApprovedDriver {
   legacyAliases?: string[]; // governed legacy hashes/ids bound to this driver
   displayName: string;
   legalName?: string;    // Real name from registration (e.g. "Michael Burger")
+  loginAlias?: string;   // Login/username (drivers/approved `name`) — NEVER displayed; used only to guard displayName against login leakage
   active?: boolean;
   companyId?: string;
   companyName?: string;
@@ -316,6 +319,10 @@ function DispatchPageInner() {
   }, []);
   const [drivers, setDrivers] = useState<ApprovedDriver[]>([]);
   const [dispatches, setDispatches] = useState<DispatchJob[]>([]);
+  // True once the Active Jobs dispatch subscription has delivered its first real
+  // dataset. Distinguishes "no jobs yet loaded" (initial []) from "loaded, zero
+  // jobs" so expanded-group restore never prunes against a still-loading empty set.
+  const [dispatchesLoaded, setDispatchesLoaded] = useState(false);
   const [dataLoading, setDataLoading] = useState(true);
   const [driversLoading, setDriversLoading] = useState(true);
   const [readErrors, setReadErrors] = useState<{ drivers?: string; wells?: string; dispatches?: string }>({});
@@ -737,6 +744,7 @@ function DispatchPageInner() {
         jobs.push({ id: d.id, ...d.data() } as DispatchJob);
       });
       setDispatches(jobs.filter(j => docBelongsToTenant(j.companyId, user.companyId)));
+      setDispatchesLoaded(true);
       setReadErrors(prev => ({ ...prev, dispatches: undefined }));
     }, (err) => {
       console.error('Dispatch listener error:', err);
@@ -857,6 +865,7 @@ function DispatchPageInner() {
                 legacyAliases: [val.migratedToDriverId].filter(Boolean),
                 displayName: val.displayName,
                 legalName: val.legalName || val.profile?.legalName || '',
+                loginAlias: val.name || val.profile?.name || undefined,
                 active: val.active,
                 companyId: val.companyId,
                 companyName: val.companyName,
@@ -876,6 +885,7 @@ function DispatchPageInner() {
                   legacyAliases: [first.migratedToDriverId].filter(Boolean),
                   displayName: first.displayName,
                   legalName: first.legalName || first.profile?.legalName || '',
+                  loginAlias: first.name || first.profile?.name || undefined,
                   active: first.active,
                   companyId: first.companyId,
                   companyName: first.companyName,
@@ -894,42 +904,22 @@ function DispatchPageInner() {
       setDrivers(scoped);
       setReadErrors(prev => ({ ...prev, drivers: undefined }));
 
-      // Fetch shift status for each driver (fire-and-forget — UI updates when ready)
-      (async () => {
-        try {
-          const firestore = getFirestoreDb();
-          // Use local date (not UTC) to match WB S which writes shift docs with device local date
-          const now = new Date();
-          const today = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-${String(now.getDate()).padStart(2, '0')}`;
-          const statusMap = new Map<string, boolean>();
-
-          // Batch fetch shift docs for all drivers
-          await Promise.all(scoped.map(async (d) => {
-            try {
-              const shiftDoc = await getDoc(doc(firestore, 'driver_shifts', `${d.key}_${today}`));
-              if (shiftDoc.exists()) {
-                const events = shiftDoc.data()?.events || [];
-                if (events.length > 0) {
-                  const lastEvent = events[events.length - 1];
-                  // On shift if last event is login or depart_return (not logout)
-                  statusMap.set(d.key, lastEvent.type !== 'logout');
-                }
-              }
-            } catch {}
-          }));
-
-          // Always update shift status — even if no docs found (all drivers off shift)
-          setDrivers(prev => prev.map(d => ({
-            ...d,
-            onShift: statusMap.get(d.key) ?? false,
-          })).sort((a, b) => {
-            // On-shift drivers first, then alphabetical
-            if (a.onShift && !b.onShift) return -1;
-            if (!a.onShift && b.onShift) return 1;
-            return (a.legalName || a.displayName).localeCompare(b.legalName || b.displayName);
-          }));
-        } catch {}
-      })();
+      // Shift status dot: intentionally NOT fetched here anymore.
+      //
+      // ROOT CAUSE of the "every driver red" defect: the prior code read
+      // driver_shifts/{d.key}_{today} (the drivers/approved ROSTER KEY + TODAY's
+      // local date) and set onShift = (last event !== 'logout'). Wrong on two axes:
+      //   1. it keys by the roster key, not the canonical driverId;
+      //   2. it inspects only TODAY's day document, so an open shift whose ORIGIN
+      //      day is earlier (e.g. Mike ZFold7 Burger's open period 2026-09-13,
+      //      viewed on 2026-09-15) is never found — the dot fell to red for everyone.
+      // The authoritative state lives in the server-owned, client-DENIED
+      // `driver_shift_authority/{canonicalDriverId}` record (decideResolve), which a
+      // browser cannot read. Correct truth therefore requires a governed staff-/
+      // company-scoped resolve callable (see report: staffResolveCompanyDriverShifts).
+      // Until that callable is deployed the selector shows a gray "Shift status
+      // unavailable" dot (shiftDotCore) rather than a FALSE red. Do NOT reintroduce a
+      // shadow driver_shifts read or derive the dot from HOS/presence/GPS/dispatch.
     } catch (err) {
       console.error('Failed to load drivers:', err);
       setDrivers([]);
@@ -978,8 +968,11 @@ function DispatchPageInner() {
       const canonicalName = matched?.wellName || d.wellName;
 
       // Real driver name via the canonical resolver (never the login/stamped name).
+      // Central identity policy for human-facing OPERATIONAL screens: prefer displayName,
+      // fall back to legalName — but never the login (operationalDriverName guards the
+      // case where a profile's displayName IS the login, e.g. "Mikezfold").
       const rd = resolveDispatchDriver(d, drivers || []);
-      const driverLabel = rd ? (rd.legalName || rd.displayName || 'Driver') : (d.driverFirstName || d.driverName || 'Assigned');
+      const driverLabel = rd ? operationalDriverName(rd) : (d.driverFirstName || d.driverName || 'Assigned');
       const entry = { job: d, status: d.status, driver: driverLabel, assignedMs };
 
       const prev = m.get(canonicalName);
@@ -2457,12 +2450,12 @@ function DispatchPageInner() {
                         {assignTarget?.route && drivers.filter(d => d.assignedRoutes?.includes(assignTarget.route!)).length > 0 && (
                           <optgroup label={`Route: ${assignTarget.route}`}>
                             {drivers.filter(d => d.assignedRoutes?.includes(assignTarget.route!)).map(d => (
-                              <option key={d.key} value={d.key}>{d.onShift ? '🟢 ' : '🔴 '}{d.legalName || d.displayName}</option>
+                              <option key={d.key} value={d.key} title="Shift status unavailable">{'⚪ '}{operationalDriverName(d)}</option>
                             ))}
                           </optgroup>
                         )}
                         <optgroup label="All Drivers">
-                          {drivers.map(d => (<option key={d.key} value={d.key}>{d.onShift ? '🟢 ' : '🔴 '}{d.legalName || d.displayName}</option>))}
+                          {drivers.map(d => (<option key={d.key} value={d.key} title="Shift status unavailable">{'⚪ '}{operationalDriverName(d)}</option>))}
                         </optgroup>
                       </select>
                     </div>
@@ -3259,6 +3252,31 @@ function DispatchPageInner() {
                                 </div>
                               ) : (
                               <div className="flex items-center justify-end gap-2">
+                                {/* View is UNCONDITIONAL — beside Assign on unassigned rows, exactly as it is
+                                    beside Reassign on assigned rows. Previously it lived only in the assigned
+                                    branch, so unassigned (e.g. Stock Yards) rows rendered no View affordance. */}
+                                {wbmHref ? (
+                                  <button
+                                    type="button"
+                                    onClick={() => router.push(wbmHref)}
+                                    aria-label={`View ${well.wellName} in WB-M`}
+                                    title={`View ${well.wellName} in WB-M`}
+                                    className="px-2 py-1 text-[10px] font-medium rounded whitespace-nowrap bg-gray-700 hover:bg-gray-600 text-gray-200"
+                                  >
+                                    View
+                                  </button>
+                                ) : (
+                                  <button
+                                    type="button"
+                                    disabled
+                                    aria-disabled="true"
+                                    aria-label={`View ${well.wellName} (detail unavailable)`}
+                                    title="Well detail unavailable (missing canonical company or NDIC API number)"
+                                    className="px-2 py-1 text-[10px] font-medium rounded whitespace-nowrap bg-gray-800/60 text-gray-500 cursor-not-allowed border border-gray-700/50"
+                                  >
+                                    View
+                                  </button>
+                                )}
                                 {isSelected ? (
                                   <div className="flex items-center gap-1">
                                     <input type="text" inputMode="numeric" pattern="[0-9]*" value={loadCount}
@@ -3439,6 +3457,7 @@ function DispatchPageInner() {
                     onEditServiceWork={openEditSwModal}
                     onReassignDeclined={openReassignModal}
                     onDismissDeclined={dismissDeclinedDispatch}
+                    activeJobsReady={!driversLoading && dispatchesLoaded}
                   />
                 )}
                 {rightPanelTab === 'completed' && (
@@ -3623,7 +3642,7 @@ function DispatchPageInner() {
               >
                 <option value="">Select driver...</option>
                 {drivers.map(d => (
-                  <option key={d.key} value={d.key}>{d.onShift ? '🟢 ' : '🔴 '}{d.legalName || d.displayName}</option>
+                  <option key={d.key} value={d.key} title="Shift status unavailable">{'⚪ '}{operationalDriverName(d)}</option>
                 ))}
               </select>
             </div>
@@ -3808,7 +3827,7 @@ function DispatchPageInner() {
                           {drivers
                             .filter(d => d.key !== editSwJob.driverHash)
                             .map(d => (
-                              <option key={d.key} value={d.key}>{d.onShift ? '🟢 ' : '🔴 '}{d.legalName || d.displayName}</option>
+                              <option key={d.key} value={d.key} title="Shift status unavailable">{'⚪ '}{operationalDriverName(d)}</option>
                             ))
                           }
                         </select>
@@ -4315,7 +4334,7 @@ function DispatchJobRow({ job, cancelDispatch, compact, onClickServiceWork, onRe
 
 // Driver-centric active dispatch panel — groups ALL jobs by driver
 // Multi-driver SW jobs shown separately at bottom with all crew visible
-function ActiveDispatchPanel({ dispatches, cancelDispatch, drivers, assignTransfer, onEditServiceWork, onReassignDeclined, onDismissDeclined }: {
+function ActiveDispatchPanel({ dispatches, cancelDispatch, drivers, assignTransfer, onEditServiceWork, onReassignDeclined, onDismissDeclined, activeJobsReady = true }: {
   dispatches: DispatchJob[];
   cancelDispatch: (id: string) => void;
   drivers?: { key: string; driverId?: string; legacyAliases?: string[]; companyId?: string; displayName: string; legalName?: string; assignedRoutes?: string[] }[];
@@ -4323,6 +4342,8 @@ function ActiveDispatchPanel({ dispatches, cancelDispatch, drivers, assignTransf
   onEditServiceWork?: (job: DispatchJob) => void;
   onReassignDeclined?: (job: DispatchJob) => void;
   onDismissDeclined?: (jobId: string) => Promise<void> | void;
+  /** True once auth/company resolved AND the first real Active Jobs dataset loaded. */
+  activeJobsReady?: boolean;
 }) {
   // Expanded driver groups persist across refresh — session-scoped by uid+companyId+
   // pathname, keyed by the canonical group id the Active Jobs render groups on
@@ -4423,6 +4444,20 @@ function ActiveDispatchPanel({ dispatches, cancelDispatch, drivers, assignTransf
       })
     );
   }, [assigned, drivers]);
+
+  // Prune stored expanded groups to the live canonical group set — but ONLY once
+  // the dataset is ready (auth/company resolved + first real Active Jobs dataset +
+  // canonical group keys available). While loading, hold the restored set verbatim
+  // so a still-empty live set never collapses Mike's restored group or persists [].
+  useEffect(() => {
+    if (!activeJobsReady) return;
+    const liveKeys = new Set(grouped.keys());
+    const { next, changed } = pruneExpandedGroups(expandedList, liveKeys, true);
+    if (changed) setExpandedList(next);
+    // expandedList intentionally omitted from deps — this reconciles against the
+    // live group set when data/readiness change, not on every expand/collapse.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [activeJobsReady, grouped]);
 
   function toggleDriver(hash: string) {
     setExpandedList(prev => (prev.includes(hash) ? prev.filter(h => h !== hash) : [...prev, hash]));
@@ -5609,7 +5644,7 @@ function CompletedJobsPanel({ jobs, drivers, allWells, allDisposals, highlightJo
 // Row for unassigned transfer requests — pulsing orange, driver dropdown for dispatch to assign
 function UnassignedTransferRow({ job, drivers, assignTransfer, cancelDispatch }: {
   job: DispatchJob;
-  drivers: { key: string; displayName: string; legalName?: string; onShift?: boolean }[];
+  drivers: { key: string; displayName: string; legalName?: string; loginAlias?: string; onShift?: boolean }[];
   assignTransfer?: (jobId: string, driverHash: string, driverName: string) => void;
   cancelDispatch: (id: string) => void;
 }) {
@@ -5664,7 +5699,7 @@ function UnassignedTransferRow({ job, drivers, assignTransfer, cancelDispatch }:
         >
           <option value="">Select driver...</option>
           {drivers.map(d => (
-            <option key={d.key} value={d.key}>{d.onShift ? '🟢 ' : '🔴 '}{d.legalName || d.displayName}</option>
+            <option key={d.key} value={d.key} title="Shift status unavailable">{'⚪ '}{operationalDriverName(d)}</option>
           ))}
         </select>
         <button
