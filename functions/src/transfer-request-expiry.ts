@@ -125,6 +125,9 @@ export async function runTransferRequestExpiry(
           return { ok: false as const, reason: `status_already_${currentReq.status}` };
         }
 
+        const invRef = db.collection('invoices').doc(sourceInvoiceDocId);
+        const invSnap = await tx.get(invRef);
+
         // Mark request expired
         tx.update(reqDoc.ref, {
           status: 'expired',
@@ -136,8 +139,6 @@ export async function runTransferRequestExpiry(
 
         // Clear sender's invoice lock (idempotent — if already cleared,
         // no harm; if still set, this releases it).
-        const invRef = db.collection('invoices').doc(sourceInvoiceDocId);
-        const invSnap = await tx.get(invRef);
         if (invSnap.exists) {
           const invData = invSnap.data();
           // Only clear if THIS request is the active lock. Defensive: if

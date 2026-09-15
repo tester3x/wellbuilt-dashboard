@@ -515,7 +515,14 @@ export const resolveTransferRequest = httpsV2.onCall(
           throw new httpsV2.HttpsError('permission-denied', 'Only sender can cancel this transfer request');
         }
       } else if (action === 'decline') {
-        // decline: direct recipient only. For approval mode: trace and enforce authorization contract
+        // decline: direct recipient only.
+        // Approval mode: fails closed with failed-precondition (driver cannot decline; requires governed dispatch workflow or sender cancel)
+        if (reqData.mode === 'approval') {
+          throw new httpsV2.HttpsError(
+            'failed-precondition',
+            'Approval-mode transfer requests cannot be declined by driver; only direct transfers or sender cancellation are supported',
+          );
+        }
         if (reqData.mode === 'direct') {
           const isDirectRecipient =
             (reqData.toDriverHash && callerAliases.has(reqData.toDriverHash)) ||
@@ -524,32 +531,35 @@ export const resolveTransferRequest = httpsV2.onCall(
           if (!isDirectRecipient) {
             throw new httpsV2.HttpsError('permission-denied', 'Only requested recipient can decline this transfer');
           }
-        } else if (reqData.mode === 'approval') {
-          const isPrivileged = (driver.roles || []).some((r) => ['admin', 'dispatcher', 'manager', 'staff'].includes(r));
-          const isTarget =
-            (reqData.toDriverHash && callerAliases.has(reqData.toDriverHash)) ||
-            (reqData.toDriverId && callerAliases.has(reqData.toDriverId)) ||
-            reqData.toDriverHash === driver.driverId;
-          if (!isPrivileged && !isTarget) {
-            throw new httpsV2.HttpsError('permission-denied', 'Unauthorized to decline approval-mode transfer request');
-          }
         }
       } else if (action === 'expire') {
-        // expire: must not be a general driver action. Privileged staff or verified TTL expiry
-        const isPrivileged = (driver.roles || []).some((r) => ['admin', 'dispatcher', 'manager', 'staff'].includes(r));
+        // expire: strictly privileged staff only (ordinary drivers cannot expire, before or after TTL)
+        const isPrivileged = (driver.roles || []).some((r) =>
+          ['admin', 'dispatcher', 'manager', 'staff'].includes(r)
+        );
         if (!isPrivileged) {
-          const nowMillis = Date.now();
-          let ttlMillis = 0;
-          if (reqData.ttlExpiresAt?.toMillis) {
-            ttlMillis = reqData.ttlExpiresAt.toMillis();
-          } else if (typeof reqData.ttlExpiresAt === 'number') {
-            ttlMillis = reqData.ttlExpiresAt;
-          } else if (reqData.ttlExpiresAt) {
-            ttlMillis = new Date(reqData.ttlExpiresAt).getTime();
-          }
-          if (!ttlMillis || nowMillis < ttlMillis) {
-            throw new httpsV2.HttpsError('permission-denied', 'Unauthorized or premature transfer request expiration');
-          }
+          throw new httpsV2.HttpsError(
+            'permission-denied',
+            'Ordinary drivers are not authorized to expire transfer requests; use governed scheduled expiry',
+          );
+        }
+
+        // Explicit conversion using Timestamp.toMillis()
+        let ttlMillis: number | null = null;
+        if (reqData.ttlExpiresAt instanceof Timestamp) {
+          ttlMillis = reqData.ttlExpiresAt.toMillis();
+        } else if (reqData.ttlExpiresAt && typeof reqData.ttlExpiresAt.toMillis === 'function') {
+          ttlMillis = reqData.ttlExpiresAt.toMillis();
+        } else if (typeof reqData.ttlExpiresAt === 'number' && Number.isFinite(reqData.ttlExpiresAt)) {
+          ttlMillis = reqData.ttlExpiresAt;
+        }
+
+        const nowMillis = Timestamp.now().toMillis();
+        if (ttlMillis === null || nowMillis < ttlMillis) {
+          throw new httpsV2.HttpsError(
+            'failed-precondition',
+            'Transfer request TTL has not expired yet',
+          );
         }
       }
 
@@ -744,6 +754,14 @@ export const acceptTransferRequest = httpsV2.onCall(
       }
 
       // 4. RECIPIENT AUTHORIZATION
+      if (reqData.mode === 'approval') {
+        // Approval-mode fails closed with clear failed-precondition until authoritative approval workflow is deployed
+        throw new httpsV2.HttpsError(
+          'failed-precondition',
+          'Approval-mode transfer requests are pending governed dispatch approval workflow and cannot be accepted directly',
+        );
+      }
+
       if (reqData.mode === 'direct') {
         const isTarget =
           (reqData.toDriverHash && callerAliases.has(reqData.toDriverHash)) ||
@@ -751,25 +769,6 @@ export const acceptTransferRequest = httpsV2.onCall(
           reqData.toDriverHash === driver.driverId;
         if (!isTarget) {
           throw new httpsV2.HttpsError('permission-denied', 'Only requested recipient can accept this transfer');
-        }
-      } else if (reqData.mode === 'approval') {
-        const isPrivileged = (driver.roles || []).some((r) => ['admin', 'dispatcher', 'manager', 'staff'].includes(r));
-        const isTarget =
-          (reqData.toDriverHash && callerAliases.has(reqData.toDriverHash)) ||
-          (reqData.toDriverId && callerAliases.has(reqData.toDriverId)) ||
-          reqData.toDriverHash === driver.driverId;
-        const isAssignedOnDisp =
-          dispData &&
-          ((dispData.driverId && callerAliases.has(dispData.driverId)) ||
-            (dispData.driverHash && callerAliases.has(dispData.driverHash)) ||
-            dispData.driverId === driver.driverId);
-
-        if (!isPrivileged && !isTarget && !isAssignedOnDisp) {
-          throw new httpsV2.HttpsError('permission-denied', 'Unauthorized to accept approval-mode transfer request');
-        }
-
-        if (dispData && dispData.status === 'pending_approval' && !isPrivileged) {
-          throw new httpsV2.HttpsError('failed-precondition', 'Approval-mode transfer is awaiting dispatcher approval');
         }
       }
 
@@ -837,12 +836,65 @@ export const acceptTransferRequest = httpsV2.onCall(
 
       const updatedTimeline = [...(invData.timeline || []), handoffStartEvent];
 
-      // 7a. Reassign source invoice to receiver
+      // 7b. Transfer dispatch or create target dispatch via governed dispatch schema
+      let targetDispatchId: string;
+      if (dispRef && dispSnap && dispSnap.exists) {
+        targetDispatchId = dispRef.id;
+        tx.update(dispRef, {
+          driverId: driver.driverId,
+          driverHash: driver.driverId,
+          driverName: receiverName,
+          status: 'assigned',
+          transferredFromHash: reqData.fromDriverHash,
+          transferredFrom: reqData.fromDriverName,
+          transferFromDriver: reqData.fromDriverName,
+          transferFromDriverHash: reqData.fromDriverHash,
+          transferAcceptedAt: FieldValue.serverTimestamp(),
+          updatedAt: FieldValue.serverTimestamp(),
+        });
+      } else {
+        // Governed dispatch creation preserving canonical identity
+        const newDispRef = db.collection('dispatches').doc();
+        targetDispatchId = newDispRef.id;
+        tx.set(newDispRef, {
+          id: newDispRef.id,
+          type: 'transfer',
+          driverId: driver.driverId,
+          driverHash: driver.driverId,
+          driverName: receiverName,
+          status: 'assigned',
+          jobType: (invData.jobType || 'pw') as 'pw' | 'service',
+          wellName: reqData.wellName || invData.wellName || '',
+          operator: reqData.operator || invData.operator || '',
+          companyId: driver.companyId,
+          sourceInvoiceDocId,
+          sourceInvoiceNumber: invData.invoiceNumber || invData.ticketNumber || null,
+          transferRequestId: requestId,
+          canonicalJobId: reqData.canonicalJobId || invData.canonicalJobId || null,
+          sourceMultiHaulId: reqData.sourceMultiHaulId || invData.haulGroupId || null,
+          sourcePacketId: reqData.sourcePacketId || invData.packetId || null,
+          ticketDocIds: reqData.sourceTicketDocIds || invData.tickets || [],
+          ticketNumber: reqData.sourceTicketNumber || invData.ticketNumber || null,
+          invoicingMode: reqData.sourceInvoicingMode || invData.invoicingMode || null,
+          transferredFromHash: reqData.fromDriverHash,
+          transferredFrom: reqData.fromDriverName,
+          transferFromDriver: reqData.fromDriverName,
+          transferFromDriverHash: reqData.fromDriverHash,
+          transferAcceptedAt: FieldValue.serverTimestamp(),
+          assignedAt: FieldValue.serverTimestamp(),
+          assignedBy: 'transfer',
+          createdAt: FieldValue.serverTimestamp(),
+          updatedAt: FieldValue.serverTimestamp(),
+        });
+      }
+
+      // 7a. Reassign source invoice to receiver and link canonical dispatchId
       tx.update(invRef, {
         driver: receiverName,
         driverId: driver.driverId,
         driverHash: driver.driverId,
         driverLoginName: receiverName,
+        dispatchId: targetDispatchId, // Canonical dispatch ID persisted on invoice
         ...(truckNumber ? { truckNumber } : {}),
         ...(trailer ? { trailer } : {}),
         timeline: updatedTimeline,
@@ -858,53 +910,10 @@ export const acceptTransferRequest = httpsV2.onCall(
         updatedAt: FieldValue.serverTimestamp(),
       });
 
-      // 7b. Transfer dispatch or create target dispatch via governed dispatch factory
-      let targetDispatchId: string;
-      if (dispRef && dispSnap && dispSnap.exists) {
-        targetDispatchId = dispRef.id;
-        tx.update(dispRef, {
-          driverId: driver.driverId,
-          driverHash: driver.driverId,
-          driverName: receiverName,
-          status: 'assigned',
-          transferredFromHash: reqData.fromDriverHash,
-          transferredFrom: reqData.fromDriverName,
-          transferAcceptedAt: FieldValue.serverTimestamp(),
-          updatedAt: FieldValue.serverTimestamp(),
-        });
-      } else {
-        // Governed dispatch creation preserving canonical identity
-        const newDispRef = db.collection('dispatches').doc();
-        targetDispatchId = newDispRef.id;
-        tx.set(newDispRef, {
-          id: newDispRef.id,
-          driverId: driver.driverId,
-          driverHash: driver.driverId,
-          driverName: receiverName,
-          status: 'assigned',
-          wellName: reqData.wellName || invData.wellName || '',
-          operator: reqData.operator || invData.operator || '',
-          companyId: driver.companyId,
-          sourceInvoiceDocId,
-          transferRequestId: requestId,
-          canonicalJobId: reqData.canonicalJobId || invData.canonicalJobId || null,
-          sourceMultiHaulId: reqData.sourceMultiHaulId || invData.haulGroupId || null,
-          sourcePacketId: reqData.sourcePacketId || invData.packetId || null,
-          ticketDocIds: reqData.sourceTicketDocIds || invData.tickets || [],
-          ticketNumber: reqData.sourceTicketNumber || invData.ticketNumber || null,
-          invoicingMode: reqData.sourceInvoicingMode || invData.invoicingMode || null,
-          transferredFromHash: reqData.fromDriverHash,
-          transferredFrom: reqData.fromDriverName,
-          transferAcceptedAt: FieldValue.serverTimestamp(),
-          createdAt: FieldValue.serverTimestamp(),
-          updatedAt: FieldValue.serverTimestamp(),
-        });
-      }
-
-      // 7c. Mark transfer request accepted
+      // 7c. Mark transfer request accepted and link canonical targetDispatchId
       tx.update(requestRef, {
         status: 'accepted',
-        targetDispatchId,
+        targetDispatchId, // Canonical dispatch ID persisted on request
         terminalAt: FieldValue.serverTimestamp(),
         terminalBy: driver.driverId,
         updatedAt: FieldValue.serverTimestamp(),

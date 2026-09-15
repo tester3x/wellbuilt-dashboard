@@ -1,9 +1,10 @@
 /**
  * Real Firestore + RTDB emulator test suite for governed transfer request lifecycle.
  * Exercises createDriverTransferRequest, resolveTransferRequest, and acceptTransferRequest
- * against real emulator boundaries across all 15+ required safety scenarios.
+ * against real emulator boundaries across all required safety scenarios.
  */
 import * as admin from 'firebase-admin';
+import { runTransferRequestExpiry } from '../../../transfer-request-expiry';
 
 const FS = process.env.FIRESTORE_EMULATOR_HOST;
 const RTDB = process.env.FIREBASE_DATABASE_EMULATOR_HOST;
@@ -36,6 +37,8 @@ describeE2E('Governed Transfer Request Operations — Real Emulator E2E Suite', 
   let createDriverTransferRequest: any;
   let resolveTransferRequest: any;
   let acceptTransferRequest: any;
+  let upsertDriverInvoice: any;
+  let upsertDriverDispatch: any;
 
   const authDriverA = {
     uid: 'uid-drv-a',
@@ -74,6 +77,10 @@ describeE2E('Governed Transfer Request Operations — Real Emulator E2E Suite', 
     createDriverTransferRequest = transferOps.createDriverTransferRequest;
     resolveTransferRequest = transferOps.resolveTransferRequest;
     acceptTransferRequest = transferOps.acceptTransferRequest;
+
+    const invoiceOps = require('../invoiceOps');
+    upsertDriverInvoice = invoiceOps.upsertDriverInvoice;
+    upsertDriverDispatch = invoiceOps.upsertDriverDispatch;
   });
 
   afterAll(async () => {
@@ -201,6 +208,7 @@ describeE2E('Governed Transfer Request Operations — Real Emulator E2E Suite', 
     expect(invData.driverId).toBe(DRIVER_B_ID);
     expect(invData.driverHash).toBe(DRIVER_B_ID);
     expect(invData.driver).toBe('Driver B Receiver');
+    expect(invData.dispatchId).toBe(dispId);
     expect(invData.truckNumber).toBe('TRK-101');
     expect(invData.trailer).toBe('TRL-202');
     expect(invData.driverState).toBe('en_route_handoff');
@@ -223,8 +231,8 @@ describeE2E('Governed Transfer Request Operations — Real Emulator E2E Suite', 
     expect(reqSnap.data()!.targetDispatchId).toBe(dispId);
   });
 
-  // Scenario 2: Canonical dispatch creation
-  test('2. Canonical dispatch creation when accepting transfer without existing dispatch', async () => {
+  // Scenario 2: Canonical dispatch creation & downstream lifecycle
+  test('2. Canonical dispatch creation when accepting transfer without existing dispatch and downstream lifecycle verification', async () => {
     const invId = 'inv-scen-2';
     const reqId = 'tr-scen-2';
 
@@ -262,17 +270,30 @@ describeE2E('Governed Transfer Request Operations — Real Emulator E2E Suite', 
       authDriverB,
     );
     expect(acceptRes.ok).toBe(true);
-    expect(acceptRes.targetDispatchId).toBeDefined();
+    const targetDispatchId = acceptRes.targetDispatchId;
+    expect(targetDispatchId).toBeDefined();
+
+    // Verify canonical dispatch ID is persisted on request doc
+    const reqSnap = await db.collection('transfer_requests').doc(reqId).get();
+    expect(reqSnap.data()!.targetDispatchId).toBe(targetDispatchId);
+
+    // Verify canonical dispatch ID is persisted on invoice doc
+    const invSnap = await db.collection('invoices').doc(invId).get();
+    expect(invSnap.data()!.dispatchId).toBe(targetDispatchId);
+    expect(invSnap.data()!.driverId).toBe(DRIVER_B_ID);
 
     // Verify newly created dispatch in Firestore
-    const newDispSnap = await db.collection('dispatches').doc(acceptRes.targetDispatchId).get();
+    const newDispSnap = await db.collection('dispatches').doc(targetDispatchId).get();
     expect(newDispSnap.exists).toBe(true);
     const d = newDispSnap.data()!;
+    expect(d.id).toBe(targetDispatchId);
+    expect(d.type).toBe('transfer');
     expect(d.driverId).toBe(DRIVER_B_ID);
     expect(d.driverHash).toBe(DRIVER_B_ID);
     expect(d.driverName).toBe('Driver B Receiver');
     expect(d.companyId).toBe(COMPANY);
     expect(d.status).toBe('assigned');
+    expect(d.assignedBy).toBe('transfer');
     expect(d.wellName).toBe('BULLDOG 12-1H');
     expect(d.operator).toBe('Devon Energy');
     expect(d.canonicalJobId).toBe('job-can-99');
@@ -282,8 +303,46 @@ describeE2E('Governed Transfer Request Operations — Real Emulator E2E Suite', 
     expect(d.ticketNumber).toBe('TK-445566');
     expect(d.invoicingMode).toBe('split_haul');
     expect(d.transferredFromHash).toBe(DRIVER_A_ID);
+    expect(d.transferFromDriverHash).toBe(DRIVER_A_ID);
     expect(d.sourceInvoiceDocId).toBe(invId);
     expect(d.transferRequestId).toBe(reqId);
+
+    // Downstream lifecycle verification:
+    // Driver B updates the invoice via upsertDriverInvoice
+    const invUpdateRes = await runCall(
+      upsertDriverInvoice,
+      {
+        invoiceId: invId,
+        invoice: {
+          currentStage: 'loading',
+          notes: 'Driver B proceeding with load',
+        },
+      },
+      authDriverB,
+    );
+    expect(invUpdateRes.ok).toBe(true);
+
+    // Driver B updates the dispatch via upsertDriverDispatch
+    const dispUpdateRes = await runCall(
+      upsertDriverDispatch,
+      {
+        dispatchId: targetDispatchId,
+        dispatch: {
+          status: 'in_progress',
+        },
+      },
+      authDriverB,
+    );
+    expect(dispUpdateRes.ok).toBe(true);
+
+    // Assert that no second dispatch/job was manufactured
+    const matchingDispatches = await db
+      .collection('dispatches')
+      .where('sourceInvoiceDocId', '==', invId)
+      .get();
+    expect(matchingDispatches.docs.length).toBe(1);
+    expect(matchingDispatches.docs[0].id).toBe(targetDispatchId);
+    expect(matchingDispatches.docs[0].data()!.status).toBe('in_progress');
   });
 
   // Scenario 3: Read-before-write compliance
@@ -319,7 +378,7 @@ describeE2E('Governed Transfer Request Operations — Real Emulator E2E Suite', 
     ).resolves.toMatchObject({ ok: true });
   });
 
-  // Scenario 4: Wrong driver accept/decline
+  // Scenario 4: Wrong driver accept/decline in direct mode
   test('4. Wrong driver accept, decline, or cancel fails closed with permission-denied', async () => {
     const invId = 'inv-scen-4';
     const reqId = 'tr-scen-4';
@@ -341,6 +400,11 @@ describeE2E('Governed Transfer Request Operations — Real Emulator E2E Suite', 
       runCall(acceptTransferRequest, { requestId: reqId }, authDriverC),
     ).rejects.toThrow(/Only requested recipient can accept this transfer/);
 
+    // Privileged staff who is not Driver B tries to accept: must fail closed, staff does not become owner!
+    await expect(
+      runCall(acceptTransferRequest, { requestId: reqId }, authDispatcher),
+    ).rejects.toThrow(/Only requested recipient can accept this transfer/);
+
     // Driver C tries to decline
     await expect(
       runCall(resolveTransferRequest, { requestId: reqId, action: 'decline' }, authDriverC),
@@ -351,66 +415,84 @@ describeE2E('Governed Transfer Request Operations — Real Emulator E2E Suite', 
       runCall(resolveTransferRequest, { requestId: reqId, action: 'cancel' }, authDriverB),
     ).rejects.toThrow(/Only sender can cancel this transfer request/);
 
-    // Request is still pending and invoice is still locked
+    // Request is still pending and invoice is still locked by Driver A
     const reqSnap = await db.collection('transfer_requests').doc(reqId).get();
     expect(reqSnap.data()!.status).toBe('pending');
     const invSnap = await db.collection('invoices').doc(invId).get();
     expect(invSnap.data()!.lockedForTransfer).toBe(true);
+    expect(invSnap.data()!.driverId).toBe(DRIVER_A_ID);
   });
 
-  // Scenario 5: Approval-mode unauthorized accept/decline
-  test('5. Approval-mode rejects unauthorized accept or decline by non-privileged drivers', async () => {
+  // Scenario 5: Approval-mode fail-closed authority matrix
+  test('5. Approval-mode authority matrix: fails closed on accept/decline; sender cancel succeeds; owner remains Driver A', async () => {
     const invId = 'inv-scen-5';
     const reqId = 'tr-scen-5';
-    const dispId = 'disp-scen-5';
-
-    await db.collection('dispatches').doc(dispId).set({
-      id: dispId,
-      driverId: DRIVER_A_ID,
-      companyId: COMPANY,
-      status: 'pending_approval',
-    });
 
     await db.collection('invoices').doc(invId).set({
       driverId: DRIVER_A_ID,
       companyId: COMPANY,
       status: 'open',
-      dispatchId: dispId,
     });
 
-    // Create approval-mode transfer request without specific recipient
     await runCall(
       createDriverTransferRequest,
       { requestId: reqId, sourceInvoiceDocId: invId, mode: 'approval' },
       authDriverA,
     );
 
-    // Unassigned Driver C tries to decline
+    // Matrix test 1: Driver B tries to accept -> fails closed with failed-precondition
     await expect(
-      runCall(resolveTransferRequest, { requestId: reqId, action: 'decline' }, authDriverC),
-    ).rejects.toThrow(/Unauthorized to decline approval-mode transfer request/);
+      runCall(acceptTransferRequest, { requestId: reqId }, authDriverB),
+    ).rejects.toThrow(/Approval-mode transfer requests are pending governed dispatch approval workflow and cannot be accepted directly/);
 
-    // Unassigned Driver C tries to accept
+    // Matrix test 2: Driver C (unrelated peer) tries to accept -> fails closed
     await expect(
       runCall(acceptTransferRequest, { requestId: reqId }, authDriverC),
-    ).rejects.toThrow(/Unauthorized to accept approval-mode transfer request/);
+    ).rejects.toThrow(/Approval-mode transfer requests are pending governed dispatch approval workflow and cannot be accepted directly/);
 
-    // Privileged dispatcher CAN decline
-    const declineRes = await runCall(
+    // Matrix test 3: Privileged staff tries to accept -> fails closed (staff does NOT become owner!)
+    await expect(
+      runCall(acceptTransferRequest, { requestId: reqId }, authDispatcher),
+    ).rejects.toThrow(/Approval-mode transfer requests are pending governed dispatch approval workflow and cannot be accepted directly/);
+
+    // Matrix test 4: Driver B tries to decline -> fails closed
+    await expect(
+      runCall(resolveTransferRequest, { requestId: reqId, action: 'decline' }, authDriverB),
+    ).rejects.toThrow(/Approval-mode transfer requests cannot be declined by driver/);
+
+    // Matrix test 5: Privileged staff tries to decline -> fails closed
+    await expect(
+      runCall(resolveTransferRequest, { requestId: reqId, action: 'decline' }, authDispatcher),
+    ).rejects.toThrow(/Approval-mode transfer requests cannot be declined by driver/);
+
+    // Verify invoice remains locked and owned by Driver A
+    const midInv = await db.collection('invoices').doc(invId).get();
+    expect(midInv.data()!.driverId).toBe(DRIVER_A_ID);
+    expect(midInv.data()!.lockedForTransfer).toBe(true);
+
+    // Matrix test 6: Sender Driver A cancels approval request -> SUCCEEDS
+    const cancelRes = await runCall(
       resolveTransferRequest,
-      { requestId: reqId, action: 'decline', reason: 'Rejected by dispatch' },
-      authDispatcher,
+      { requestId: reqId, action: 'cancel', reason: 'Sender cancelled approval transfer' },
+      authDriverA,
     );
-    expect(declineRes.ok).toBe(true);
-    expect(declineRes.status).toBe('declined');
+    expect(cancelRes.ok).toBe(true);
+    expect(cancelRes.status).toBe('cancelled');
+
+    // Resulting owner remains Driver A and invoice lock is released
+    const finalInv = await db.collection('invoices').doc(invId).get();
+    expect(finalInv.data()!.driverId).toBe(DRIVER_A_ID);
+    expect(finalInv.data()!.lockedForTransfer).toBe(false);
+    expect(finalInv.data()!.activeTransferRequestId).toBeUndefined();
   });
 
-  // Scenario 6: Unauthorized and premature expiry
-  test('6. Premature expiry by driver rejected; privileged staff or elapsed TTL succeeds', async () => {
-    const invId = 'inv-scen-6';
-    const reqId = 'tr-scen-6';
+  // Scenario 6: Strict expiry authorization matrix
+  test('6. Expiry authorization: unrelated driver before/after TTL denied; privileged staff before TTL denied; privileged staff after TTL succeeds; scheduled expiry succeeds', async () => {
+    // Part A: Request with future TTL
+    const invIdFuture = 'inv-scen-6-future';
+    const reqIdFuture = 'tr-scen-6-future';
 
-    await db.collection('invoices').doc(invId).set({
+    await db.collection('invoices').doc(invIdFuture).set({
       driverId: DRIVER_A_ID,
       companyId: COMPANY,
       status: 'open',
@@ -418,58 +500,104 @@ describeE2E('Governed Transfer Request Operations — Real Emulator E2E Suite', 
 
     await runCall(
       createDriverTransferRequest,
-      { requestId: reqId, sourceInvoiceDocId: invId, toDriverHash: DRIVER_B_ID, mode: 'direct' },
+      { requestId: reqIdFuture, sourceInvoiceDocId: invIdFuture, toDriverHash: DRIVER_B_ID, mode: 'direct' },
       authDriverA,
     );
 
-    // Driver A attempts premature expiry (TTL is 4 hours in the future)
+    // Test 6.1: Unrelated same-company driver before TTL -> denied, zero mutation
     await expect(
-      runCall(resolveTransferRequest, { requestId: reqId, action: 'expire' }, authDriverA),
-    ).rejects.toThrow(/Unauthorized or premature transfer request expiration/);
+      runCall(resolveTransferRequest, { requestId: reqIdFuture, action: 'expire' }, authDriverC),
+    ).rejects.toThrow(/Ordinary drivers are not authorized to expire transfer requests/);
 
-    // Dispatcher staff CAN expire at any time
-    const staffExpire = await runCall(
-      resolveTransferRequest,
-      { requestId: reqId, action: 'expire', reason: 'Expired by staff' },
-      authDispatcher,
-    );
-    expect(staffExpire.ok).toBe(true);
-    expect(staffExpire.status).toBe('expired');
+    // Test 6.2: Privileged staff before TTL -> denied, zero mutation
+    await expect(
+      runCall(resolveTransferRequest, { requestId: reqIdFuture, action: 'expire' }, authDispatcher),
+    ).rejects.toThrow(/Transfer request TTL has not expired yet/);
 
-    // Verify invoice unlocked
-    const invSnap = await db.collection('invoices').doc(invId).get();
-    expect(invSnap.data()!.lockedForTransfer).toBe(false);
+    // Verify zero mutation on future request
+    let reqSnap = await db.collection('transfer_requests').doc(reqIdFuture).get();
+    expect(reqSnap.data()!.status).toBe('pending');
+    let invSnap = await db.collection('invoices').doc(invIdFuture).get();
+    expect(invSnap.data()!.lockedForTransfer).toBe(true);
 
-    // Now test elapsed TTL branch:
-    const invId2 = 'inv-scen-6-elapsed';
-    const reqId2 = 'tr-scen-6-elapsed';
-    await db.collection('invoices').doc(invId2).set({
+    // Part B: Request with expired TTL (set 10 seconds in past)
+    const invIdPast = 'inv-scen-6-past';
+    const reqIdPast = 'tr-scen-6-past';
+
+    await db.collection('invoices').doc(invIdPast).set({
       driverId: DRIVER_A_ID,
       companyId: COMPANY,
       status: 'open',
-      activeTransferRequestId: reqId2,
+      activeTransferRequestId: reqIdPast,
       lockedForTransfer: true,
     });
-    // Write request doc with past ttlExpiresAt
-    await db.collection('transfer_requests').doc(reqId2).set({
-      id: reqId2,
-      sourceInvoiceDocId: invId2,
+
+    const pastTimestamp = admin.firestore.Timestamp.fromMillis(Date.now() - 10000);
+    await db.collection('transfer_requests').doc(reqIdPast).set({
+      id: reqIdPast,
+      sourceInvoiceDocId: invIdPast,
       fromDriverHash: DRIVER_A_ID,
       toDriverHash: DRIVER_B_ID,
       mode: 'direct',
       status: 'pending',
       companyId: COMPANY,
-      ttlExpiresAt: admin.firestore.Timestamp.fromMillis(Date.now() - 10000), // in the past
+      ttlExpiresAt: pastTimestamp,
     });
 
-    // Driver A can now expire because TTL has passed
-    const driverExpire = await runCall(
+    // Test 6.3: Unrelated same-company driver after TTL -> still denied, zero mutation!
+    await expect(
+      runCall(resolveTransferRequest, { requestId: reqIdPast, action: 'expire' }, authDriverC),
+    ).rejects.toThrow(/Ordinary drivers are not authorized to expire transfer requests/);
+
+    // Test 6.4: Privileged staff after TTL -> SUCCEEDS!
+    const staffExpireRes = await runCall(
       resolveTransferRequest,
-      { requestId: reqId2, action: 'expire' },
-      authDriverA,
+      { requestId: reqIdPast, action: 'expire', reason: 'Expired by staff after TTL' },
+      authDispatcher,
     );
-    expect(driverExpire.ok).toBe(true);
-    expect(driverExpire.status).toBe('expired');
+    expect(staffExpireRes.ok).toBe(true);
+    expect(staffExpireRes.status).toBe('expired');
+
+    // Verify request marked expired and invoice unlocked
+    reqSnap = await db.collection('transfer_requests').doc(reqIdPast).get();
+    expect(reqSnap.data()!.status).toBe('expired');
+    expect(reqSnap.data()!.terminalBy).toBe(DRIVER_DISP_ID);
+    invSnap = await db.collection('invoices').doc(invIdPast).get();
+    expect(invSnap.data()!.lockedForTransfer).toBe(false);
+    expect(invSnap.data()!.activeTransferRequestId).toBeUndefined();
+
+    // Part C: Governed scheduled expiry cron (transfer-request-expiry.ts)
+    const invIdCron = 'inv-scen-6-cron';
+    const reqIdCron = 'tr-scen-6-cron';
+    await db.collection('invoices').doc(invIdCron).set({
+      driverId: DRIVER_A_ID,
+      companyId: COMPANY,
+      status: 'open',
+      activeTransferRequestId: reqIdCron,
+      lockedForTransfer: true,
+    });
+    await db.collection('transfer_requests').doc(reqIdCron).set({
+      id: reqIdCron,
+      sourceInvoiceDocId: invIdCron,
+      fromDriverHash: DRIVER_A_ID,
+      toDriverHash: DRIVER_B_ID,
+      mode: 'direct',
+      status: 'pending',
+      companyId: COMPANY,
+      ttlExpiresAt: admin.firestore.Timestamp.fromMillis(Date.now() - 20000),
+    });
+
+    // Run scheduled expiry
+    const cronResult = await runTransferRequestExpiry(10);
+    expect(cronResult.expired.some((e) => e.requestId === reqIdCron)).toBe(true);
+
+    // Verify cron expired request and cleared invoice lock
+    reqSnap = await db.collection('transfer_requests').doc(reqIdCron).get();
+    expect(reqSnap.data()!.status).toBe('expired');
+    expect(reqSnap.data()!.terminalBy).toBe('system');
+    invSnap = await db.collection('invoices').doc(invIdCron).get();
+    expect(invSnap.data()!.lockedForTransfer).toBe(false);
+    expect(invSnap.data()!.activeTransferRequestId).toBeNull();
   });
 
   // Scenario 7: Missing and cross-company request/invoice/dispatch
@@ -585,7 +713,7 @@ describeE2E('Governed Transfer Request Operations — Real Emulator E2E Suite', 
   });
 
   // Scenario 10: Wrong active lock ID
-  test('10. Invoice locked by different request ID cannot be accepted or re-requested', async () => {
+  test('10. Invoice locked by different request ID cannot be accepted or re-requested; lock ownership is strictly preserved', async () => {
     const invId = 'inv-scen-10-lock';
     const reqId = 'tr-scen-10-req';
 
