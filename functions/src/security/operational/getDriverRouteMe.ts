@@ -1,15 +1,20 @@
 /**
  * Shared self-scoped Route Me routing callable: getDriverRouteMe.
  *
- * Implements ONE routing core with two entry modes:
+ * Implements driver-self mode for Phase 1:
  * - WB-M / WB-T self mode: Authenticated driver via requireSecureDriver. Client supplies
  *   NO driverId or companyId; server derives canonical scope.
- * - Dashboard staff mode: Privileged staff with authorized targetDriverId.
- *
- * Mandatory projection rule:
- * Route Me never consumes frozen Level, Time Till Pull, or copied currentLevel.
- * At one immutable asOfMs, calculates live state strictly from raw post-pull baseline,
- * authoritative observation timestamp, governed flow rate, and config trigger.
+ * - Caller location validation: Caller supplies device origin (latitude, longitude, capturedAt, accuracy)
+ *   strictly as routing data. If missing, stale (>15m), or inaccurate (>500m), returns LOCATION_REQUIRED.
+ * - Dynamic projection rule (Gabriel-5):
+ *   Route Me never consumes frozen Level, Time Till Pull, or copied currentLevel.
+ *   At one immutable asOfMs, calculates live state strictly from raw post-pull baseline,
+ *   authoritative observation timestamp, governed flow rate, and config trigger.
+ * - Assisted routing leg sequencing:
+ *   Evaluates Origin -> Pickup Well -> Disposal Site.
+ *   In production, when governed road closures, approved corridors, and driver travel history
+ *   are absent, returns honest fail-safe status ROUTE_UNVERIFIED / ROUTING_DATA_UNAVAILABLE
+ *   with full per-leg contract.
  */
 
 import * as httpsV2 from 'firebase-functions/v2/https';
@@ -29,9 +34,18 @@ import {
   calculateTargetFeet,
   RouteMeProjectionInputs,
 } from './routeMeProjection';
-import { recommendDisposal, DisposalRecord } from './routeMeDisposal';
+import { recommendDisposal, DisposalRecord, NO_VERIFIED_DROPOFF } from './routeMeDisposal';
 import { resolveWellAssignment, DispatchLike, RouteMeAssignmentState } from './routeMeAssignment';
-import { requireManageDrivers } from '../adminAuth';
+import {
+  validateDeviceLocation,
+  sequencePickupAndDisposalLegs,
+  RouteLeg,
+  RouteVerificationStatus,
+  CycleTimeEstimate,
+  DeviceLocationInput,
+  CandidateDisposal,
+  WellRoutingContext,
+} from './routeMeAssistedRouting';
 
 export const DEFAULT_DDJD_PILOT_REASON = 'WB-T assignment not enabled yet';
 
@@ -48,6 +62,12 @@ export interface RouteMeWell {
   assignee?: string;
   muted: boolean;
   recommendedDisposal: string;
+  routeVerificationStatus: RouteVerificationStatus;
+  legs?: {
+    originToPickup: RouteLeg;
+    pickupToDisposal: RouteLeg;
+  };
+  cycleTimeEstimate?: CycleTimeEstimate;
 }
 
 export interface RouteMeCapabilities {
@@ -62,10 +82,12 @@ export interface RouteMeResult {
   capabilities: RouteMeCapabilities;
   wells: RouteMeWell[];
   asOfMs: number | null;
+  routeVerificationStatus?: RouteVerificationStatus;
   unavailableReason?: string;
+  locationFailureReason?: string;
 }
 
-export function deniedRouteMeResult(reason: string): RouteMeResult {
+export function deniedRouteMeResult(reason: string, locationFailureReason?: string): RouteMeResult {
   return {
     ok: false,
     capabilities: {
@@ -77,6 +99,7 @@ export function deniedRouteMeResult(reason: string): RouteMeResult {
     wells: [],
     asOfMs: null,
     unavailableReason: reason,
+    locationFailureReason,
   };
 }
 
@@ -88,66 +111,43 @@ export const getDriverRouteMe = httpsV2.onCall(
 
     const rawData = (request.data || {}) as Record<string, unknown>;
 
-    // 1. Resolve Entry Mode (Driver Self Mode vs Dashboard Staff Mode)
-    // Check if caller is a driver first
-    const isDriverAuth = Boolean(
-      (request.auth?.token as Record<string, unknown> | undefined)?.driver === true ||
-      (request.auth?.token as Record<string, unknown> | undefined)?.driverId,
-    );
-
-    if (isDriverAuth || !rawData.targetDriverId) {
-      // Driver self mode — client supplies NO driverId or companyId
-      try {
-        const driver = await requireSecureDriver(request, { allowLegacyHash: false });
-        resolvedDriverId = driver.driverId;
-      } catch (err: any) {
-        return deniedRouteMeResult(err?.message || 'Driver unauthenticated');
-      }
-
-      const authority = await loadCanonicalDriverAuthority(
-        resolvedDriverId,
-        productionCanonicalDriverReaders(),
-      );
-      if (!authority || !authority.active) {
-        return deniedRouteMeResult('driver_inactive');
-      }
-      if (!authority.companyId) {
-        return deniedRouteMeResult('company_required');
-      }
-      resolvedCompanyId = authority.companyId;
-    } else {
-      // Dashboard Staff Mode: requires dashboard staff user with callerCanManageDrivers
-      let caller;
-      try {
-        caller = await requireManageDrivers(
-          request.auth?.uid,
-          request.auth?.token as Record<string, unknown> | undefined,
-        );
-      } catch (err: any) {
-        return deniedRouteMeResult(err?.message || 'Dashboard user unauthenticated or lacks manageDrivers');
-      }
-
-      resolvedDriverId = String(rawData.targetDriverId).trim();
-      if (!resolvedDriverId) {
-        return deniedRouteMeResult('targetDriverId required');
-      }
-
-      const targetAuth = await loadCanonicalDriverAuthority(
-        resolvedDriverId,
-        productionCanonicalDriverReaders(),
-      );
-      if (!targetAuth || !targetAuth.active || !targetAuth.companyId) {
-        return deniedRouteMeResult('Target driver inactive or unassigned');
-      }
-
-      // If caller is company-scoped, target must belong to caller's company
-      if (caller.companyId && caller.companyId !== targetAuth.companyId) {
-        return deniedRouteMeResult('Target driver belongs to another company');
-      }
-      resolvedCompanyId = targetAuth.companyId;
+    // 1. Resolve Driver Self Mode (Phase 1 exposes driver-self mode only)
+    try {
+      const driver = await requireSecureDriver(request, { allowLegacyHash: false });
+      resolvedDriverId = driver.driverId;
+    } catch (err: any) {
+      return deniedRouteMeResult(err?.message || 'Driver unauthenticated');
     }
 
-    // 2. Load Driver Profile and Evaluate Scope
+    const authority = await loadCanonicalDriverAuthority(
+      resolvedDriverId,
+      productionCanonicalDriverReaders(),
+    );
+    if (!authority || !authority.active) {
+      return deniedRouteMeResult('driver_inactive');
+    }
+    if (!authority.companyId) {
+      return deniedRouteMeResult('company_required');
+    }
+    resolvedCompanyId = authority.companyId;
+
+    // 2. Capture one immutable asOfMs for all wells and location checks in this evaluation
+    const asOfMs = Date.now();
+
+    // 3. Caller Device Origin Validation
+    // Location is validated strictly as routing origin data. Scope remains 100% server-derived.
+    const rawLoc = (rawData.location || rawData.deviceLocation) as DeviceLocationInput | undefined;
+    const locValidation = validateDeviceLocation(rawLoc, asOfMs);
+    if (!locValidation.valid) {
+      return deniedRouteMeResult('LOCATION_REQUIRED', locValidation.reason);
+    }
+    const deviceOrigin = {
+      lat: locValidation.latitude!,
+      lng: locValidation.longitude!,
+      label: 'Device Location',
+    };
+
+    // 4. Load Driver Profile and Evaluate Well Scope
     const db = admin.database();
     const profSnap = await db.ref(`drivers/profiles/${resolvedDriverId}`).once('value');
     if (!profSnap.exists()) {
@@ -180,11 +180,13 @@ export const getDriverRouteMe = httpsV2.onCall(
           ddjdUnavailableReason: DEFAULT_DDJD_PILOT_REASON,
         },
         wells: [],
-        asOfMs: Date.now(),
+        asOfMs,
+        routeVerificationStatus: 'ROUTE_UNVERIFIED',
+        unavailableReason: 'ROUTING_DATA_UNAVAILABLE',
       };
     }
 
-    // 3. Load Outgoing Status, Active Dispatches, and Disposals in Parallel
+    // 5. Load Outgoing Status, Active Dispatches, and Disposals in Parallel
     const fs = admin.firestore();
     const [outgoingSnap, dispatchesSnap, disposalsSnap] = await Promise.all([
       db.ref('packets/outgoing').once('value'),
@@ -214,10 +216,27 @@ export const getDriverRouteMe = httpsV2.onCall(
       });
     }
 
-    // 4. Capture one immutable asOfMs for all wells in this response
-    const asOfMs = Date.now();
+    const candidateDisposals: CandidateDisposal[] = disposalsList.map((d) => ({
+      id: d.id,
+      name: d.name,
+      well_name: d.well_name,
+      companyId: d.companyId,
+      operator: d.operator,
+      waterType: d.waterType,
+      lat: d.lat,
+      lng: d.lng,
+      isBlacklisted: d.isBlacklisted || d.blacklisted,
+      unavailable: d.unavailable || d.active === false,
+    }));
 
-    // 5. Project each authorized well (deduplicated by canonical wellId)
+    // Filter candidate disposals by company/tenant eligibility
+    const eligibleDisposals = candidateDisposals.filter((cd) => {
+      if (cd.isBlacklisted || cd.unavailable) return false;
+      if (cd.companyId && cd.companyId !== resolvedCompanyId) return false;
+      return true;
+    });
+
+    // 6. Project and Route Each Authorized Well
     const wells: RouteMeWell[] = [];
     const seenWellIds = new Set<string>();
 
@@ -296,7 +315,7 @@ export const getDriverRouteMe = httpsV2.onCall(
         resolvedDriverId,
       );
 
-      // Disposal recommendation
+      // Disposal recommendation (5-rule engine)
       const recommendedDisposal = recommendDisposal(
         disposalsList,
         {
@@ -307,6 +326,28 @@ export const getDriverRouteMe = httpsV2.onCall(
           waterType: typeof conf.waterType === 'string' ? conf.waterType : undefined,
           preferredDisposal: typeof conf.preferredDisposal === 'string' ? conf.preferredDisposal : undefined,
         },
+      );
+
+      // Assisted routing leg sequencing & cycle time
+      const wellRoutingCtx: WellRoutingContext = {
+        wellName,
+        wellId,
+        companyId: resolvedCompanyId,
+        lat: typeof conf.latitude === 'number' ? conf.latitude : undefined,
+        lng: typeof conf.longitude === 'number' ? conf.longitude : undefined,
+        predictedReadyAtMs: proj.predictedReadyAtMs,
+        priorityState: proj.priorityState,
+      };
+
+      // In production, governed routing sources (closures, corridors, travel history) do not exist yet.
+      // Pass undefined repo so it safely evaluates to the honest fail-safe contract (ROUTE_UNVERIFIED).
+      const seqResult = sequencePickupAndDisposalLegs(
+        deviceOrigin,
+        wellRoutingCtx,
+        eligibleDisposals,
+        recommendedDisposal !== NO_VERIFIED_DROPOFF ? recommendedDisposal : null,
+        asOfMs,
+        undefined,
       );
 
       wells.push({
@@ -321,13 +362,18 @@ export const getDriverRouteMe = httpsV2.onCall(
         assignmentState: assign.assignmentState,
         assignee: assign.assignee,
         muted: assign.muted,
-        recommendedDisposal,
+        recommendedDisposal: seqResult.selectedDisposalName || recommendedDisposal,
+        routeVerificationStatus: seqResult.routeVerificationStatus,
+        legs: {
+          originToPickup: seqResult.originToPickupLeg,
+          pickupToDisposal: seqResult.pickupToDisposalLeg,
+        },
+        cycleTimeEstimate: seqResult.cycleTime,
       });
     }
 
-    // 6. Ordering: Order by predictedReadyAtMs ascending (earliest ready / ready now first, nulls at end)
+    // 7. Ordering: Order by predictedReadyAtMs ascending (earliest ready / ready now first, nulls at end)
     wells.sort((a, b) => {
-      // Pull-now or past predicted times first
       if (a.predictedReadyAtMs !== null && b.predictedReadyAtMs !== null) {
         return a.predictedReadyAtMs - b.predictedReadyAtMs;
       }
@@ -346,6 +392,8 @@ export const getDriverRouteMe = httpsV2.onCall(
       },
       wells,
       asOfMs,
+      routeVerificationStatus: 'ROUTE_UNVERIFIED',
+      unavailableReason: 'ROUTING_DATA_UNAVAILABLE',
     };
   },
 );

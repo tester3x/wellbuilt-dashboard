@@ -37,4 +37,5 @@ export {
   acceptTransferRequest,
 } from './transferRequestOps';
 export { getDriverRouteMe } from './getDriverRouteMe';
+export * from './routeMeAssistedRouting';
 

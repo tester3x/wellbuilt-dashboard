@@ -8,6 +8,9 @@
  * 4. Priority states and predictedReadyAtMs ordering.
  * 5. Down wells remain frozen.
  * 6. Tenant isolation and inactive driver fail-closed.
+ * 7. Caller location validation (missing/stale/inaccurate -> LOCATION_REQUIRED).
+ * 8. Driver-self mode only in Phase 1 (rejects non-driver session).
+ * 9. Honest fail-safe contract (ROUTE_UNVERIFIED / ROUTING_DATA_UNAVAILABLE) with per-leg contract.
  */
 import * as admin from 'firebase-admin';
 
@@ -33,6 +36,13 @@ describeE2E('getDriverRouteMe — Shared Routing Core (Emulator E2E)', () => {
   let db: admin.database.Database;
   let fs: admin.firestore.Firestore;
 
+  const validLocation = () => ({
+    latitude: 47.8012,
+    longitude: -103.2845,
+    capturedAt: Date.now(),
+    accuracy: 25,
+  });
+
   beforeAll(async () => {
     db = admin.database();
     fs = admin.firestore();
@@ -57,7 +67,7 @@ describeE2E('getDriverRouteMe — Shared Routing Core (Emulator E2E)', () => {
     }
   });
 
-  it('Scenario 1: Dynamic level & TTP projection (Gabriel-5) ignores frozen outgoing values', async () => {
+  it('Scenario 1: Dynamic level & TTP projection (Gabriel-5) ignores frozen outgoing values and returns honest ROUTE_UNVERIFIED contract', async () => {
     const driverId = 'drv-gabriel';
     const companyId = 'company-a';
 
@@ -104,9 +114,9 @@ describeE2E('getDriverRouteMe — Shared Routing Core (Emulator E2E)', () => {
       flowRate: '3:20:24',
     });
 
-    // 4. Call getDriverRouteMe as the driver
+    // 4. Call getDriverRouteMe as the driver with valid device location
     const res = (await getDriverRouteMe.run({
-      data: {},
+      data: { location: validLocation() },
       auth: {
         uid: 'uid-gabriel',
         token: { kind: 'driver', driverId, companyId } as any,
@@ -117,6 +127,8 @@ describeE2E('getDriverRouteMe — Shared Routing Core (Emulator E2E)', () => {
     expect(res.ok).toBe(true);
     expect(res.capabilities.canViewRouteMe).toBe(true);
     expect(res.capabilities.canCreateDdjd).toBe(false);
+    expect(res.routeVerificationStatus).toBe('ROUTE_UNVERIFIED');
+    expect(res.unavailableReason).toBe('ROUTING_DATA_UNAVAILABLE');
     expect(res.wells).toHaveLength(1);
 
     const well = res.wells[0];
@@ -134,6 +146,25 @@ describeE2E('getDriverRouteMe — Shared Routing Core (Emulator E2E)', () => {
     expect(well.priorityState).toBe('verify');
     expect(well.assignmentState).toBe('unassigned');
     expect(well.muted).toBe(false);
+
+    // Verify per-leg and cycle time contract:
+    expect(well.routeVerificationStatus).toBe('ROUTE_UNVERIFIED');
+    expect(well.legs).toBeDefined();
+    expect(well.legs.originToPickup.travelBasis).toBe('unverified');
+    expect(well.legs.originToPickup.confidence).toBe(0);
+    expect(well.legs.originToPickup.sampleCount).toBe(0);
+    expect(well.legs.originToPickup.estimatedTravelMinutes).toBeNull();
+    expect(well.legs.originToPickup.reasonCode).toBe('ROUTING_DATA_UNAVAILABLE');
+
+    expect(well.legs.pickupToDisposal.travelBasis).toBe('unverified');
+    expect(well.legs.pickupToDisposal.estimatedTravelMinutes).toBeNull();
+
+    expect(well.cycleTimeEstimate).toBeDefined();
+    expect(well.cycleTimeEstimate.travelToPickupMinutes).toBeNull();
+    expect(well.cycleTimeEstimate.travelToDisposalMinutes).toBeNull();
+    expect(well.cycleTimeEstimate.totalCycleMinutes).toBeNull();
+    expect(well.cycleTimeEstimate.loadingMinutes).toBe(30);
+    expect(well.cycleTimeEstimate.unloadingMinutes).toBe(30);
   });
 
   it('Scenario 2: Active dispatches resolve assignment states (self, other, unassigned)', async () => {
@@ -194,7 +225,7 @@ describeE2E('getDriverRouteMe — Shared Routing Core (Emulator E2E)', () => {
     });
 
     const res = (await getDriverRouteMe.run({
-      data: {},
+      data: { location: validLocation() },
       auth: { uid: 'uid-main', token: { kind: 'driver', driverId, companyId } as any },
       rawRequest: {} as any,
     } as any)) as any;
@@ -268,7 +299,7 @@ describeE2E('getDriverRouteMe — Shared Routing Core (Emulator E2E)', () => {
     });
 
     const res = (await getDriverRouteMe.run({
-      data: {},
+      data: { location: validLocation() },
       auth: { uid: 'uid-disp', token: { kind: 'driver', driverId, companyId } as any },
       rawRequest: {} as any,
     } as any)) as any;
@@ -314,7 +345,7 @@ describeE2E('getDriverRouteMe — Shared Routing Core (Emulator E2E)', () => {
     });
 
     const res = (await getDriverRouteMe.run({
-      data: {},
+      data: { location: validLocation() },
       auth: { uid: 'uid-down', token: { kind: 'driver', driverId, companyId } as any },
       rawRequest: {} as any,
     } as any)) as any;
@@ -336,7 +367,7 @@ describeE2E('getDriverRouteMe — Shared Routing Core (Emulator E2E)', () => {
     });
 
     const res = (await getDriverRouteMe.run({
-      data: {},
+      data: { location: validLocation() },
       auth: { uid: 'uid-inactive', token: { kind: 'driver', driverId, companyId: 'company-a' } as any },
       rawRequest: {} as any,
     } as any)) as any;
@@ -344,5 +375,71 @@ describeE2E('getDriverRouteMe — Shared Routing Core (Emulator E2E)', () => {
     expect(res.ok).toBe(false);
     expect(res.capabilities.canViewRouteMe).toBe(false);
     expect(res.wells).toHaveLength(0);
+  });
+
+  it('Scenario 6: Caller location validation rejects missing, stale, or inaccurate location', async () => {
+    const driverId = 'drv-loc-test';
+    const companyId = 'company-a';
+
+    await fs.collection('driver_credentials').doc(driverId).set({ active: true });
+    await db.ref(`drivers/profiles/${driverId}`).set({
+      active: true,
+      companyId,
+      assignedRoutes: ['Route A'],
+      assignedWells: ['Well Loc'],
+    });
+
+    const callWithData = async (data: any) => {
+      return (await getDriverRouteMe.run({
+        data,
+        auth: { uid: 'uid-loc', token: { kind: 'driver', driverId, companyId } as any },
+        rawRequest: {} as any,
+      } as any)) as any;
+    };
+
+    // A. Missing location
+    const resMissing = await callWithData({});
+    expect(resMissing.ok).toBe(false);
+    expect(resMissing.unavailableReason).toBe('LOCATION_REQUIRED');
+    expect(resMissing.locationFailureReason).toBe('missing');
+
+    // B. Stale location (>15 minutes)
+    const twentyMinutesAgo = Date.now() - 20 * 60 * 1000;
+    const resStale = await callWithData({
+      location: { latitude: 47.8, longitude: -103.28, capturedAt: twentyMinutesAgo, accuracy: 10 },
+    });
+    expect(resStale.ok).toBe(false);
+    expect(resStale.unavailableReason).toBe('LOCATION_REQUIRED');
+    expect(resStale.locationFailureReason).toBe('stale');
+
+    // C. Inaccurate location (>500 meters)
+    const resInaccurate = await callWithData({
+      location: { latitude: 47.8, longitude: -103.28, capturedAt: Date.now(), accuracy: 600 },
+    });
+    expect(resInaccurate.ok).toBe(false);
+    expect(resInaccurate.unavailableReason).toBe('LOCATION_REQUIRED');
+    expect(resInaccurate.locationFailureReason).toBe('inaccurate');
+  });
+
+  it('Scenario 7: Driver-self mode only in Phase 1 (rejects unauthenticated or non-driver sessions)', async () => {
+    // Non-driver / unauthenticated session
+    const resUnauth = (await getDriverRouteMe.run({
+      data: { location: validLocation() },
+      auth: null,
+      rawRequest: {} as any,
+    } as any)) as any;
+
+    expect(resUnauth.ok).toBe(false);
+    expect(resUnauth.capabilities.canViewRouteMe).toBe(false);
+
+    // Staff session without driver claim is rejected (staff mode not exposed in Phase 1)
+    const resStaff = (await getDriverRouteMe.run({
+      data: { location: validLocation(), targetDriverId: 'some-drv' },
+      auth: { uid: 'uid-staff', token: { kind: 'staff', companyId: 'company-a' } as any },
+      rawRequest: {} as any,
+    } as any)) as any;
+
+    expect(resStaff.ok).toBe(false);
+    expect(resStaff.capabilities.canViewRouteMe).toBe(false);
   });
 });
