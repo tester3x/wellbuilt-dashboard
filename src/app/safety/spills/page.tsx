@@ -1,8 +1,8 @@
 'use client';
 
-import { useCallback, useEffect, useState } from 'react';
+import { Suspense, useCallback, useEffect, useState } from 'react';
 import Link from 'next/link';
-import { useParams, useRouter, useSearchParams } from 'next/navigation';
+import { useRouter, useSearchParams } from 'next/navigation';
 import { useAuth } from '@/contexts/AuthContext';
 import { AppHeader } from '@/components/AppHeader';
 import { loadCompanyById } from '@/lib/companySettings';
@@ -13,11 +13,14 @@ import { SpillIncidentDetail } from '@/components/safety/SpillIncidentDetail';
 import type { SpillDetailView, SpillLoadState } from '@/lib/spill/spillIncidentProjection';
 
 export default function SpillIncidentPage() {
+  return <Suspense fallback={<div className="min-h-screen bg-gray-900 p-8 text-white">Loading spill incident…</div>}><SpillIncidentContent /></Suspense>;
+}
+
+function SpillIncidentContent() {
   const { user, loading: authLoading, userCompany } = useAuth();
   const router = useRouter();
-  const params = useParams<{ incidentId: string }>();
   const search = useSearchParams();
-  const incidentId = decodeURIComponent(params.incidentId || '');
+  const incidentId = search.get('incidentId') || '';
   const requestedCompany = search.get('companyId') || user?.companyId || '';
   const access = decideSafetyAccess(user, requestedCompany, {
     canView: hasCapability(user, 'viewSafety', userCompany),
@@ -31,6 +34,11 @@ export default function SpillIncidentPage() {
     });
     if (!decided.ok || !decided.companyId) {
       setState({ kind: 'denied' });
+      setDetail(null);
+      return;
+    }
+    if (!incidentId || incidentId.includes('/')) {
+      setState({kind:'error', message:'Select a valid spill incident from Safety.'});
       setDetail(null);
       return;
     }
