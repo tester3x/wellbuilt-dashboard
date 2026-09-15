@@ -2347,14 +2347,15 @@ function DispatchPageInner() {
                       {assignTarget && selectedWells.size === 0 ? (() => {
                         // Source the LIVE pool well by name (never a frozen copy) and
                         // project at the shared clock — the modal's Current Level (Est.)
-                        // matches the queue exactly. The raw last-pull bottom is shown
-                        // separately, labeled honestly.
-                        const liveWell = wells.find(w => w.wellName === assignTarget.wellName) ?? assignTarget;
-                        const proj = projectWellLevel(liveWell, asOfMs);
+                        // matches the queue exactly. When the governed pool no longer
+                        // carries this well, show '--' (unavailable) rather than a stale
+                        // copy. The raw last-pull bottom is shown separately, labeled.
+                        const liveWell = wells.find(w => w.wellName === assignTarget.wellName) ?? null;
+                        const proj = liveWell ? projectWellLevel(liveWell, asOfMs) : null;
                         return (
                         <div className="grid grid-cols-3 gap-x-3 gap-y-1 text-xs">
-                          <span className="text-gray-400">Current Level (Est.): <span className="text-white font-mono">{proj.available ? proj.estDisplay : '--'}</span></span>
-                          <span className="text-gray-400">Last Pull: <span className="text-white font-mono">{liveWell.lastPullBottomLevel || '--'}</span></span>
+                          <span className="text-gray-400">Current Level (Est.): <span className="text-white font-mono">{proj?.available ? proj.estDisplay : '--'}</span></span>
+                          <span className="text-gray-400">Last Pull: <span className="text-white font-mono">{liveWell?.lastPullBottomLevel || '--'}</span></span>
                           <span className="text-gray-400">Flow: <span className="text-white font-mono">{assignTarget.flowRate || '--'}</span></span>
                           <span className="text-gray-400">TTP: <span className="text-white font-mono">{assignTarget.timeTillPull || '--'}</span></span>
                           <span className="text-gray-400">Route: <span className="text-white">{assignTarget.route || '--'}</span></span>

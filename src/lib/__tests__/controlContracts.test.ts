@@ -598,3 +598,68 @@ test('Dispatch Needs Pull: two ordered groups, in-place reassign, physical-deman
   assert.match(page, /needsPullSplit\.unassigned\} Unassigned/, 'exposes Unassigned split');
   assert.match(page, /needsPullSplit\.assigned\} Assigned/, 'exposes Assigned split');
 });
+
+// ── Shared well-level projection contract (fix/dashboard-wbm-well-status-live-levels) ──
+test('one shared bounded clock (useSharedNow): interval + foreground/resume recompute + clean teardown', () => {
+  const hook = read('../useSharedNow.ts');
+  assert.match(hook, /setInterval\(tick, intervalMs\)/, 'single interval ticker');
+  assert.match(hook, /addEventListener\('visibilitychange'/, 'recomputes on visibility change');
+  assert.match(hook, /window\.addEventListener\('focus', tick\)/, 'recomputes on focus/resume');
+  assert.match(hook, /tick\(\);\s*\n\s*return \(\) => \{/, 'catches up immediately on mount');
+  assert.match(hook, /clearInterval\(id\)/, 'clears the interval on unmount');
+  assert.match(hook, /removeEventListener\('visibilitychange'/, 'removes visibility listener');
+  assert.match(hook, /removeEventListener\('focus', tick\)/, 'removes focus listener');
+});
+
+test('the ONE shared projection is the only current-level source (no compounding baseline)', () => {
+  const proj = read('../wellLevelProjection.ts');
+  // Baseline is the raw last-pull bottom ONLY — never a fallback to currentLevel.
+  assert.match(proj, /parseFeetDecimal\(well\.lastPullBottomLevel\)/, 'baseline = raw last-pull bottom');
+  assert.ok(!/parseFeetDecimal\(well\.currentLevel/.test(proj), 'never baselines on currentLevel (no compounding)');
+  // classifyWell and projectWellLevel share the SAME input resolver.
+  assert.match(read('../dispatchPriority.ts'), /wbmInputsFromWell\(well\)/, 'queue uses shared input resolver');
+});
+
+test('one shared timer per page, NONE per row (/mobile + /well)', () => {
+  for (const rel of ['../../app/mobile/page.tsx', '../../app/well/page.tsx']) {
+    const page = read(rel);
+    const calls = (page.match(/useSharedNow\(/g) || []).length;
+    assert.equal(calls, 1, `${rel}: exactly one shared ticker`);
+    assert.ok(!/setInterval\(/.test(page), `${rel}: no ad-hoc per-page/per-row setInterval`);
+  }
+  const mobile = read('../../app/mobile/page.tsx');
+  // Leaf rows read the shared instant via context — they do NOT run their own timer.
+  assert.match(mobile, /const asOfMs = useContext\(NowContext\)/, 'rows consume the shared clock via context');
+});
+
+test('/mobile + /well read the governed pool, never the forbidden RTDB path', () => {
+  for (const rel of ['../../app/mobile/page.tsx', '../../app/well/page.tsx']) {
+    const page = read(rel);
+    assert.match(page, /useGovernedWellPool\(\)/, `${rel}: governed source`);
+    assert.ok(!/subscribeToWellStatusesUnified/.test(page), `${rel}: no unified RTDB subscription`);
+    assert.ok(!/onValue\(/.test(page), `${rel}: no direct RTDB onValue read`);
+    assert.match(page, /projectWellLevel\(/, `${rel}: renders the shared projection`);
+  }
+});
+
+test('Assign + Reassign modals project the LIVE pool well and show "--" when governed data is absent', () => {
+  const page = read('../../app/dispatch/page.tsx');
+  // Reassign: resolve live well by name; null → '--' (not the copied reassignJob.currentLevel).
+  assert.match(page, /wells\.find\(w => w\.wellName === reassignJob\.wellName\)/, 'reassign resolves live well');
+  assert.match(page, /const proj = liveWell \? projectWellLevel\(liveWell, asOfMs\) : null/, 'reassign projects live or null');
+  // Assign: resolve live well by name; null → '--'.
+  assert.match(page, /wells\.find\(w => w\.wellName === assignTarget\.wellName\) \?\? null/, 'assign resolves live well or null');
+  // Neither modal renders the raw copied currentLevel as the "current" value anymore.
+  assert.ok(!/reassignJob\.currentLevel \|\| '--'/.test(page), 'reassign no longer shows copied currentLevel as level');
+  assert.ok(!/assignTarget\.currentLevel \|\| '--'/.test(page), 'assign no longer shows stored currentLevel as level');
+});
+
+test('governed well-pool hook: authorized source only, honest unavailable, bounded refresh', () => {
+  const hook = read('../useGovernedWellPool.ts');
+  assert.match(hook, /adminGetWellPool\(\)/, 'governed callable');
+  assert.match(hook, /mergeWellPool\(/, 'governed merge contract');
+  assert.match(hook, /canViewGlobalWellPool\(user\)/, 'tenant entitlement gate');
+  assert.match(hook, /setStatusUnavailable\(true\)/, 'honest UNAVAILABLE on genuine failure');
+  assert.ok(!/onValue\(/.test(hook), 'no forbidden RTDB onValue read');
+  assert.ok(!/subscribeToWellStatusesUnified/.test(hook), 'no unified RTDB subscription fallback');
+});

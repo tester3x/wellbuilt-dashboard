@@ -175,3 +175,55 @@ test('the estimate caps at 20 feet (WB-M FULL_TANK_FEET)', () => {
   assert.equal(proj.capped, true);
   assert.equal(proj.estDisplay, "20'");
 });
+
+test('numeric and string flow-rate inputs produce identical estimates (string is canonical)', () => {
+  // The governed row carries flow as the "H:MM:SS" STRING. Prove the string parse
+  // (parseFlowMinutesPerFoot) yields the same minutes/foot a numeric config field
+  // (avgFlowRateMinutes) would, and that the estimate equals the hand-computed
+  // numeric result — so migrating off the numeric-only builder changes nothing.
+  const NUMERIC_MIN_PER_FT = 360; // what avgFlowRateMinutes would have held
+  const w = row({ status: { flowRate: '6:00:00' } });
+  assert.equal(wbmInputsFromWell(w).flowMinutesPerFoot, NUMERIC_MIN_PER_FT);
+  const asOf = PULL_MS + 240 * MIN;
+  const expectedFeet = 4.0 + 240 / NUMERIC_MIN_PER_FT; // base + elapsed/(min per ft)
+  assert.equal(projectWellLevel(w, asOf).estFeet, expectedFeet);
+});
+
+test('missing FLOW → frozen at the last reading (never zero, never a fake rise)', () => {
+  for (const flowRate of [undefined, '--', 'Unknown', '0:00:00']) {
+    // Neutralize the catalog avgFlowRate fallback so `undefined` truly means no flow.
+    const w = row({ config: { avgFlowRate: 'Unknown' }, status: { flowRate } });
+    const proj = projectWellLevel(w, PULL_MS + 5000 * MIN);
+    assert.equal(proj.available, true, String(flowRate));   // baseline is known
+    assert.equal(proj.hasFlow, false, String(flowRate));    // cannot forecast a rise
+    assert.equal(proj.frozen, true, String(flowRate));
+    assert.equal(proj.estFeet, 4.0, String(flowRate));      // frozen at baseline, NOT 0
+    assert.notEqual(proj.estDisplay, "0'", String(flowRate));
+  }
+});
+
+test('DOWN wells are frozen identically on the queue (classifyWell) and pages (projectWellLevel)', () => {
+  const w = row({ status: { wellDown: true } });
+  const asOf = PULL_MS + 5000 * MIN;
+  const proj = projectWellLevel(w, asOf);
+  const cls = classifyWell(w, asOf, classifyOpts);
+  assert.equal(cls.state, 'down');
+  assert.equal(proj.estDisplay, cls.estDisplay); // same frozen baseline string
+  assert.equal(proj.estDisplay, "4'");
+});
+
+test('clock passage does not reorder absolute predicted-ready results', () => {
+  // Two wells with different pull times / flows → different absolute ready times.
+  // Their relative order must be identical at any asOfMs (ordering is by the
+  // deterministic predictedReadyAtMs, not by anything the clock changes).
+  const slow = row({ status: { flowRate: '9:00:00' } }); // slower rise → later ready
+  const fast = row({ status: { flowRate: '3:00:00' } }); // faster rise → earlier ready
+  const at = (t: number) => [slow, fast]
+    .map(w => ({ w, r: classifyWell(w, t, classifyOpts).predictedReadyAtMs }))
+    .sort((a, b) => (a.r ?? Infinity) - (b.r ?? Infinity))
+    .map(x => x.w);
+  const orderEarly = at(PULL_MS + 1 * MIN);
+  const orderLate = at(PULL_MS + 100000 * MIN);
+  assert.equal(orderEarly[0], fast);              // fast is ready first, always
+  assert.deepEqual(orderEarly, orderLate);        // order stable across the clock
+});
