@@ -497,10 +497,22 @@ service cloud.firestore {
     }
 
     // JSA templates — company-specific JSA configurations (BYOJSA)
+    function canReadJsaTemplate(cid) {
+      return request.auth != null && (
+        (request.auth.token.kind == 'driver' && request.auth.token.companyId == cid)
+        || (request.auth.token.wellbuiltAdmin == true
+          && get(/databases/$(database)/documents/platform_admins/$(request.auth.uid)).data.enabled == true)
+        || (get(/databases/$(database)/documents/staff/$(request.auth.uid)).data.enabled == true
+          && get(/databases/$(database)/documents/staff/$(request.auth.uid)).data.companyId == cid
+          && get(/databases/$(database)/documents/staff/$(request.auth.uid)).data.role in ['admin','it','manager','dispatch'])
+      );
+    }
     match /jsa_templates/{companyId} {
-      allow read, write: if true;
+      allow read: if canReadJsaTemplate(companyId);
+      allow write: if false;
       match /templates/{templateId} {
-        allow read, write: if true;
+        allow read: if canReadJsaTemplate(companyId);
+        allow write: if false;
       }
     }
 
