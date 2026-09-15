@@ -8,7 +8,7 @@
  */
 import * as httpsV2 from 'firebase-functions/v2/https';
 import * as admin from 'firebase-admin';
-import { requireManageDrivers, requireRegisteredDashboardUser } from './adminAuth';
+import { requireManageDrivers, requireRegisteredDashboardUser, type DashboardCaller } from './adminAuth';
 import {
   callerCanViewGlobalWellPool,
   pickAllowlisted,
@@ -53,7 +53,32 @@ export const adminGetDashboardCatalog = httpsV2.onCall(
   },
 );
 
-/** Well pool for any registered Dashboard user (home / mobile / well / dispatch). */
+/**
+ * Well-pool-SPECIFIC deny-by-default global-access gate.
+ *
+ * Deliberately NOT the shared `callerCanViewGlobalWellPool` (which also gates
+ * adminGetDashboardCatalog / adminGetWellHistory / adminGetWellPerformance /
+ * deletePull / staffWriteWellConfig and is intentionally left UNCHANGED by this
+ * containment — see the audit for the full caller inventory). Global well-pool
+ * access requires a server-authoritative PLATFORM administrator (unscoped admin/it,
+ * i.e. `isPlatformAdmin === true`) who ALSO holds an explicit global-privilege
+ * capability. It grants on NEITHER:
+ *   - a bare missing companyId (a no-companyId non-admin is denied), NOR
+ *   - Liquid Gold company membership (company NAME is never a grant), NOR
+ *   - a company-scoped role — a tenant cannot self-escalate via company
+ *     roleCapabilities because isPlatformAdmin requires the absence of a companyId.
+ * Fails closed on any missing identity.
+ */
+export const GLOBAL_WELL_POOL_PRIVILEGES = ['viewAllCompanies', 'viewWellPool'] as const;
+export function callerHasGlobalWellPoolAccess(
+  caller: Pick<DashboardCaller, 'isPlatformAdmin' | 'caps'>,
+): boolean {
+  if (!caller || caller.isPlatformAdmin !== true) return false;
+  const caps = Array.isArray(caller.caps) ? caller.caps : [];
+  return GLOBAL_WELL_POOL_PRIVILEGES.some((p) => caps.includes(p));
+}
+
+/** Well pool — GLOBAL data, gated deny-by-default (see callerHasGlobalWellPoolAccess). */
 export const adminGetWellPool = httpsV2.onCall(
   { timeoutSeconds: 30, memory: '256MiB', enforceAppCheck: false },
   async (request) => {
@@ -61,14 +86,15 @@ export const adminGetWellPool = httpsV2.onCall(
       request.auth?.uid,
       request.auth?.token as Record<string, unknown> | undefined,
     );
-    const projected = projectDashboardCatalog({
-      approved: {},
-      users: {},
-      wellConfig: {},
-      outgoing: {},
-      caller,
-    });
-    if (!projected.canViewWellPool) {
+    // CONTAINMENT: adminGetWellPool returns the GLOBAL well_config + packets/outgoing
+    // pool. Deny by default — only a platform admin holding an explicit global
+    // privilege is served. Every other persona (ordinary tenant admin/dispatcher/
+    // viewer, Liquid Gold member, no-companyId non-admin) receives an IDENTICAL honest
+    // empty result with no cross-tenant metadata. A safe tenant-scoped source does not
+    // exist yet: packets/outgoing status rows carry no companyId, so a wellName-keyed
+    // join would cross-associate same-named wells across tenants. We therefore do NOT
+    // expose the global pool to scoped callers as a convenience fallback.
+    if (!callerHasGlobalWellPoolAccess(caller)) {
       return {
         ok: true as const,
         canViewWellPool: false,
