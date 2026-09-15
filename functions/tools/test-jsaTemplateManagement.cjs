@@ -15,6 +15,7 @@ const col='jsa_templates/company/templates/';
  await test('unauthenticated denied',()=>assert.rejects(()=>authorizeTemplateStaff(async()=>null,undefined,'company')));
  await test('wrong-company staff denied',()=>assert.rejects(()=>authorizeTemplateStaff(async()=>({enabled:true,role:'manager',companyId:'other'}),{uid:'u',token:{}},'company')));
  await test('disabled staff denied',()=>assert.rejects(()=>authorizeTemplateStaff(async()=>({enabled:false,role:'manager',companyId:'company'}),{uid:'u',token:{}},'company')));
+ await test('non-boolean enabled flag denied',()=>assert.rejects(()=>authorizeTemplateStaff(async()=>({enabled:'true',role:'manager',companyId:'company'}),{uid:'u',token:{}},'company')));
  await test('driver claims cannot publish',()=>assert.rejects(()=>authorizeTemplateStaff(async()=>null,{uid:'u',token:{kind:'driver',companyId:'company'}},'company')));
  await test('company manager allowed',()=>authorizeTemplateStaff(async()=>({enabled:true,role:'manager',companyId:'company'}),{uid:'u',token:{}},'company'));
  await test('platform claim alone denied',()=>assert.rejects(()=>authorizeTemplateStaff(async()=>null,{uid:'u',token:{wellbuiltAdmin:true}},'company')));

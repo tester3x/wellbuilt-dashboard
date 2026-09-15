@@ -10,7 +10,7 @@ App: authenticated template fetch; a new standalone read verifies the catalog ra
 
 Verification:
 - Backend TypeScript passed.
-- Publication permissions/lifecycle: 18 fixture cases passed.
+- Publication permissions/lifecycle: 19 fixture cases passed (including a malformed enabled flag).
 - Standalone server: 46 fixture cases; 47 with Firestore emulator passed.
 - Full standalone publication/sign/add-task/retirement-retry/close flow: 14 checks passed against backend source rules, and 14 against Dashboard source rules. Demo emulator only.
 - Existing governed receipt suite: 114 passed, 0 failed after explicit deny blocks were added. Previously missing explicit block is covered by a catch-all deny in this backend source. No statement about deployed rules is implied.

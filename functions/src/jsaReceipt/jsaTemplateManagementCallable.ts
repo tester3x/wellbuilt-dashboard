@@ -7,7 +7,7 @@ export async function authorizeTemplateStaff(get:(path:string)=>Promise<Record<s
   if(typeof companyId!=='string'||!/^[A-Za-z0-9_-]{1,120}$/.test(companyId))throw new HttpsError('invalid-argument','Invalid company');
   if(auth.token.wellbuiltAdmin===true && (await get(`platform_admins/${auth.uid}`))?.enabled===true)return;
   const staff=await get(`staff/${auth.uid}`);
-  if(!staff?.enabled||staff.companyId!==companyId||!['admin','it','manager'].includes(staff.role))throw new HttpsError('permission-denied','Company template management permission required');
+  if(staff?.enabled!==true||staff.companyId!==companyId||!['admin','it','manager'].includes(staff.role))throw new HttpsError('permission-denied','Company template management permission required');
 }
 export const jsaManageTemplate=onCall({timeoutSeconds:30,memory:'256MiB'},async request=>{
   const db=admin.firestore();
