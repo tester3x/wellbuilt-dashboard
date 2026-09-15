@@ -1,0 +1,27 @@
+const assert=require('node:assert/strict');
+const {handleStandalone}=require('../lib/jsaReceipt/jsaStandalone');
+const {readJsaTaskCatalog,selectJsaTaskTemplates}=require('../lib/jsaReceipt/jsaTaskCatalog');
+const auth={uid:'test-user',claims:{kind:'driver',driverId:'driver-1',companyId:'company-1',app:'jsa'}};
+const contract={contractVersion:1,planId:'free',contractEnforced:true};
+const plan={contractVersion:1,planId:'free',displayName:'Free',capabilities:['jsa'],status:'active',apps:{'wellbuilt-jsa':{included:true}}};
+const deps={getDriver:async()=>({driverId:'driver-1',companyId:'company-1',active:true}),getCompanyContract:async()=>({state:'active',contract}),getPlan:async()=>plan};
+const docs=new Map(),reads=[];const store={readTemplate:async p=>{reads.push(p);return docs.get(p)||null},list:async()=>[],transaction:async()=>{throw Error('unexpected write')}};
+const root='jsa_templates/company-1';
+const revision=(id,task)=>({companyId:'company-1',templateId:id,recordType:'revision',version:1,name:task,tasks:[task.toLowerCase()],steps:[{id:'one',title:'Exact '+task,items:[{hazard:'Hazard',controls:'Original control'}]}],ppeItems:[],preparedItems:[]});
+(async()=>{
+ assert.equal((await readJsaTaskCatalog(store,'company-1')).schemaVersion,1);
+ docs.set(root,{schemaVersion:2,activeTemplates:[{id:'load',version:1},{id:'unload',version:1}]});
+ docs.set(root+'/templates/load--published-v1',revision('load','Loading'));docs.set(root+'/templates/unload--published-v1',revision('unload','Unloading'));
+ const result=await handleStandalone(deps,store,auth,{operation:'templates'},1);assert.equal(result.templates.length,2);assert.equal(result.templates[0].steps[0].title,'Exact Loading');assert.match(result.templates[0].contentHash,/^[a-f0-9]{64}$/);
+ const refs=result.templates.map(({id,version,contentHash})=>({id,version,contentHash}));
+ const assembled=selectJsaTaskTemplates(result,refs);assert.equal(assembled.steps.length,2);assert.notEqual(assembled.steps[0].id,assembled.steps[1].id);
+ assert.throws(()=>selectJsaTaskTemplates(result,[{...refs[0],contentHash:'x'}]));
+ const count=reads.length;
+ await assert.rejects(()=>handleStandalone(deps,store,{uid:null},{operation:'templates'},1));
+ await assert.rejects(()=>handleStandalone(deps,store,auth,{operation:'templates',companyId:'other'},1));
+ await assert.rejects(()=>handleStandalone(deps,store,{...auth,claims:{...auth.claims,app:'tickets'}},{operation:'templates'},1));
+ assert.equal(reads.length,count);
+ docs.delete(root+'/templates/unload--published-v1');await assert.rejects(()=>readJsaTaskCatalog(store,'company-1'),/unavailable/);
+ docs.set(root,{schemaVersion:2,activeTemplates:[{id:'../other',version:1}]});await assert.rejects(()=>readJsaTaskCatalog(store,'company-1'),/reference/);
+ console.log('PASS: authenticated company catalog, task versions, stable hashes, missing revision failure, audience and cross-company rejection without writes');
+})().catch(e=>{console.error(e);process.exitCode=1});

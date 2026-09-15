@@ -4,10 +4,12 @@ import { parseAuthPrincipal, requireAudience, JSA_APP_JSA } from './jsaReceiptCo
 import { parseArtifactInput } from './jsaArtifactCore';
 import { decideAppEntitlementAuthorization } from '../sso/appEntitlementAuthorization';
 import type { SsoDeps } from '../sso/ssoDeps';
+import { readJsaTaskCatalog, selectJsaTaskTemplates } from './jsaTaskCatalog';
 export class StandaloneError extends Error {
   constructor(public code: 'unauthenticated'|'permission-denied'|'invalid-argument'|'not-found'|'already-exists',message:string){super(message);}
 }
 export interface StandaloneStore {
+  readTemplate?(path:string):Promise<Record<string,unknown>|null>;
   list(path:string,after:string|null):Promise<Record<string,unknown>[]>;
   transaction(path:string,update:(old:Record<string,unknown>|null)=>Record<string,unknown>|null):Promise<Record<string,unknown>>;
 }
@@ -31,9 +33,14 @@ export async function handleStandalone(deps:Pick<SsoDeps,'getDriver'|'getCompany
  if(!access.ok&&access.refusal!=='active_shift_required')throw new StandaloneError('permission-denied','company_permission');
  if(!object(raw))bad();
  const op=raw.operation;
- const allowed=op==='append'?['operation','recordId','additionId','addition']:op==='create'?['operation','recordId','snapshot','job']:op==='list'?['operation','after']:op==='access'?['operation']:['operation','recordId'];
+ const allowed=op==='append'?['operation','recordId','additionId','addition']:op==='create'?['operation','recordId','snapshot','job']:op==='list'?['operation','after']:op==='access'||op==='templates'?['operation']:['operation','recordId'];
  if(Object.keys(raw).some(k=>!allowed.includes(k)))bad();
  if(op==='access')return {allowed:true,companyId:p.companyId,driverId:p.driverId,requiresActiveShift:false};
+ if(op==='templates'){
+   if(!store.readTemplate)throw new StandaloneError('not-found','template_reader_unavailable');
+   const catalog=await readJsaTaskCatalog({readTemplate:path=>store.readTemplate!(path)},p.companyId);
+   return {...catalog,companyId:p.companyId,driverId:p.driverId};
+ }
  const path=`jsa_standalone_companies/${hash(p.companyId)}/drivers/${hash(p.driverId)}/records`;
  if(op==='list'){
    const after=raw.after===undefined?null:text(raw.after,43,true);
@@ -58,11 +65,22 @@ export async function handleStandalone(deps:Pick<SsoDeps,'getDriver'|'getCompany
    // Reuse the deployed immutable-artifact validator; id is only a validation key.
    const a=parseArtifactInput({requestId:id,snapshot:raw.snapshot});
    if(!a.ok||!a.value.snapshot.stepsAcknowledged||!Object.keys(a.value.snapshot.stepAcks).length||Object.values(a.value.snapshot.stepAcks).some(v=>!v))bad();
-   if(!object(raw.job)||Object.keys(raw.job).some(k=>!['activity','wells','operator','assessmentSteps'].includes(k)))bad();
+   if(!object(raw.job)||Object.keys(raw.job).some(k=>!['activity','wells','operator','assessmentSteps','templateRefs'].includes(k)))bad();
    const activity=text(raw.job.activity,200,true);
    if(!Array.isArray(raw.job.wells)||raw.job.wells.length>100)bad();
    const wells=raw.job.wells.map(w=>{if(!object(w)||Object.keys(w).some(k=>!['name','jobType','operator','county'].includes(k)))bad();return {name:text(w.name,300,true),jobType:text(w.jobType,200),operator:text(w.operator,300),county:text(w.county,100)};});
    const extra:Record<string,unknown>={};
+   if(raw.job.templateRefs!==undefined){
+     if(!store.readTemplate)throw new StandaloneError('not-found','template_reader_unavailable');
+     const catalog=await readJsaTaskCatalog({readTemplate:path=>store.readTemplate!(path)},p.companyId);
+     const selected=selectJsaTaskTemplates(catalog,raw.job.templateRefs);
+     if(JSON.stringify(raw.job.assessmentSteps)!==JSON.stringify(selected.steps))bad();
+     const ppeIds=new Set(selected.ppeItems.map(p=>p.id)),preparedIds=new Set(selected.preparedItems.map(p=>p.id));
+     if(Object.keys(a.value.snapshot.ppeSelected).some(k=>!ppeIds.has(k))||Object.keys(a.value.snapshot.prepared).some(k=>!preparedIds.has(k)))bad();
+     extra.assessmentTemplates=selected.templates;
+     extra.assessmentPpeItems=selected.ppeItems;
+     extra.assessmentPreparedItems=selected.preparedItems;
+   }
    if(raw.job.operator!==undefined)extra.operator=text(raw.job.operator,300,true);
    if(raw.job.assessmentSteps!==undefined){
      if(!Array.isArray(raw.job.assessmentSteps)||!raw.job.assessmentSteps.length||raw.job.assessmentSteps.length>40)bad();
