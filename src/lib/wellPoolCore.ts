@@ -175,3 +175,70 @@ export function mergeWellPool(
     };
   });
 }
+
+/**
+ * Resolves a well from the pool by matching against either its short wellName
+ * (e.g. "Gabriel 3") or its canonical NDIC name (e.g. "GABRIEL 3-36-25H"), with
+ * normalized case and whitespace fallback. Used to link phone- and dashboard-created
+ * dispatches to their canonical well record.
+ */
+export function matchWellInPool(
+  wells: readonly WellResponse[],
+  queryName: string | null | undefined,
+): WellResponse | undefined {
+  if (!queryName || typeof queryName !== 'string') return undefined;
+  const raw = queryName.trim();
+  if (!raw) return undefined;
+  const lower = raw.toLowerCase();
+
+  // 1. Exact match on wellName or ndicName
+  const exact = wells.find((w) => w.wellName === raw || (w.ndicName && w.ndicName === raw));
+  if (exact) return exact;
+
+  // 2. Case-insensitive match on wellName or ndicName
+  const caseMatch = wells.find(
+    (w) => w.wellName.toLowerCase() === lower || (w.ndicName && w.ndicName.toLowerCase() === lower),
+  );
+  if (caseMatch) return caseMatch;
+
+  // 3. Whitespace-collapsed match (e.g. "THOR  1" vs "Thor 1")
+  const collapse = (s: string) => s.toLowerCase().replace(/\s+/g, ' ').trim();
+  const collapsedQuery = collapse(raw);
+  const wsMatch = wells.find(
+    (w) => collapse(w.wellName) === collapsedQuery || (w.ndicName && collapse(w.ndicName) === collapsedQuery),
+  );
+  if (wsMatch) return wsMatch;
+
+  // 4. Normalized alphanumeric match (strips punctuation, spaces, dashes)
+  const norm = lower.replace(/[^a-z0-9]/g, '');
+  if (norm.length >= 3) {
+    const normMatch = wells.find((w) => {
+      const wNorm = w.wellName.toLowerCase().replace(/[^a-z0-9]/g, '');
+      if (wNorm === norm) return true;
+      if (w.ndicName) {
+        const nNorm = w.ndicName.toLowerCase().replace(/[^a-z0-9]/g, '');
+        if (nNorm === norm) return true;
+      }
+      return false;
+    });
+    if (normMatch) return normMatch;
+  }
+
+  // 5. Prefix match: e.g. "GABRIEL 3-36-25H" starts with "gabriel 3" followed by '-' or space
+  const prefixMatch = wells.find((w) => {
+    const wLower = collapse(w.wellName);
+    if (collapsedQuery.startsWith(wLower + '-') || collapsedQuery.startsWith(wLower + ' ')) {
+      return true;
+    }
+    const wNorm = w.wellName.toLowerCase().replace(/[^a-z0-9]/g, '');
+    if (wNorm.length >= 3 && norm.startsWith(wNorm)) {
+      const rest = norm.slice(wNorm.length);
+      if (/^\d/.test(rest)) return true;
+    }
+    return false;
+  });
+  if (prefixMatch) return prefixMatch;
+
+  return undefined;
+}
+

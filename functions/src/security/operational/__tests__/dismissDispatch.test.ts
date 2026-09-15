@@ -116,6 +116,109 @@ describe('evaluateDismissDispatch', () => {
       preserveDecline: true,
     });
   });
+
+  describe('Phase 2 regression: pending dispatch removal (Dashboard and driver-created)', () => {
+    it('allows same-company dispatcher to remove a Dashboard-created pending dispatch', () => {
+      const dashboardPending = {
+        id: 'W0Om3TsAHAJ4bu8d8K49',
+        status: 'pending',
+        companyId: 'liquid-gold',
+        assignedBy: 'testerxxx@comcast.net',
+        source: undefined,
+      };
+      const result = evaluateDismissDispatch({
+        job: dashboardPending,
+        siblings: [],
+        callerCompanyId: 'liquid-gold',
+        isPlatformAdmin: false,
+      });
+      expect(result).toEqual({
+        ok: true,
+        idempotent: false,
+        dispatchIds: ['W0Om3TsAHAJ4bu8d8K49'],
+        preserveDecline: true,
+      });
+    });
+
+    it('allows same-company dispatcher to remove a driver-created pending dispatch (provenance is not ownership)', () => {
+      const driverPending = {
+        id: 'dplan_mu360zoo2paignsw_01',
+        status: 'pending',
+        companyId: 'liquid-gold',
+        assignedBy: 'driver',
+        source: 'driver',
+      };
+      const result = evaluateDismissDispatch({
+        job: driverPending,
+        siblings: [],
+        callerCompanyId: 'liquid-gold',
+        isPlatformAdmin: false,
+      });
+      expect(result).toEqual({
+        ok: true,
+        idempotent: false,
+        dispatchIds: ['dplan_mu360zoo2paignsw_01'],
+        preserveDecline: true,
+      });
+    });
+
+    it('denies cross-company removal of a pending dispatch', () => {
+      const pendingJob = {
+        id: 'dplan_mu360zoo2paignsw_01',
+        status: 'pending',
+        companyId: 'liquid-gold',
+        source: 'driver',
+      };
+      const result = evaluateDismissDispatch({
+        job: pendingJob,
+        siblings: [],
+        callerCompanyId: 'other-company',
+        isPlatformAdmin: false,
+      });
+      expect(result).toEqual({
+        ok: false,
+        reason: 'cross_company',
+      });
+    });
+
+    it('denies removal if caller has no companyId and is not platform admin', () => {
+      const pendingJob = {
+        id: 'dplan_mu360zoo2paignsw_01',
+        status: 'pending',
+        companyId: 'liquid-gold',
+      };
+      const result = evaluateDismissDispatch({
+        job: pendingJob,
+        siblings: [],
+        callerCompanyId: '',
+        isPlatformAdmin: false,
+      });
+      expect(result).toEqual({
+        ok: false,
+        reason: 'cross_company',
+      });
+    });
+
+    it('is idempotent on repeated removal requests for an already-dismissed job', () => {
+      const dismissedJob = {
+        id: 'W0Om3TsAHAJ4bu8d8K49',
+        status: 'dismissed',
+        companyId: 'liquid-gold',
+      };
+      const result = evaluateDismissDispatch({
+        job: dismissedJob,
+        siblings: [],
+        callerCompanyId: 'liquid-gold',
+        isPlatformAdmin: false,
+      });
+      expect(result).toEqual({
+        ok: true,
+        idempotent: true,
+        dispatchIds: ['W0Om3TsAHAJ4bu8d8K49'],
+        preserveDecline: true,
+      });
+    });
+  });
 });
 
 describe('dismissDispatch callable source', () => {

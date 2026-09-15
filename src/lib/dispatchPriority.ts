@@ -369,3 +369,49 @@ export function inchesToLevel(inches: number | null): string {
   const inch = Math.round(inches - ft * 12);
   return `${ft}'${inch}"`;
 }
+
+export interface QueueRowItem {
+  well: WellResponse;
+  priority: WellClassification;
+  assignment?: {
+    state: 'assigned_not_started' | 'assigned_started';
+    driver: string;
+    job?: unknown;
+    status?: string;
+  } | null;
+}
+
+/**
+ * Global queue sort comparator:
+ * 1. Overdue / Needs Pull (Tier 1: pull-now, ascending predictedReadyAtMs)
+ * 2. Approaching (Tier 2: approaching, ascending predictedReadyAtMs / TTP globally)
+ * 3. Needs Data / No Flow (Tier 3: no-gain / verify)
+ * 4. Down (Tier 4: down)
+ *
+ * Assignment is a secondary badge and does NOT demote an urgent well.
+ * Stable alphabetical tiebreaker on wellName.
+ */
+export function compareQueueRows(a: QueueRowItem, b: QueueRowItem): number {
+  const tier = (p: WellClassification) => {
+    if (p.state === 'pull-now') return 1;
+    if (p.state === 'approaching') return 2;
+    if (p.state === 'no-gain' || p.state === 'verify') return 3;
+    if (p.state === 'down') return 4;
+    return 5;
+  };
+  const tierA = tier(a.priority);
+  const tierB = tier(b.priority);
+  if (tierA !== tierB) return tierA - tierB;
+
+  if (tierA === 1 || tierA === 2) {
+    const readyA = a.priority.predictedReadyAtMs ?? Number.POSITIVE_INFINITY;
+    const readyB = b.priority.predictedReadyAtMs ?? Number.POSITIVE_INFINITY;
+    if (readyA !== readyB) return readyA - readyB;
+  }
+
+  return (a.well.wellName || '').localeCompare(b.well.wellName || '');
+}
+
+export function sortQueueRows<T extends QueueRowItem>(items: T[]): T[] {
+  return [...items].sort(compareQueueRows);
+}

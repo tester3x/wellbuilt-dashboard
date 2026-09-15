@@ -3,8 +3,8 @@
 import { useEffect, useState, useMemo, useCallback, Suspense } from 'react';
 import { useRouter, useSearchParams } from 'next/navigation';
 import { useAuth } from '@/contexts/AuthContext';
-import { WellResponse, mergeWellPool } from '@/lib/wells';
-import { getPriority, getWellPrediction, formatTTP, matchesView, wellBucket, classifyWell, inchesToLevel, formatAge, verifyReasonText, type QueueView } from '@/lib/dispatchPriority';
+import { WellResponse, mergeWellPool, matchWellInPool } from '@/lib/wells';
+import { getPriority, getWellPrediction, formatTTP, matchesView, wellBucket, classifyWell, compareQueueRows, inchesToLevel, formatAge, verifyReasonText, type QueueView } from '@/lib/dispatchPriority';
 import { pwLifecycle, PW_ACTIVE_STATUSES, isStaleCompletedReentry } from '@/lib/dispatchAssignmentGroups';
 import { useSharedNow } from '@/lib/useSharedNow';
 import { projectWellLevel } from '@/lib/wellLevelProjection';
@@ -229,7 +229,7 @@ function timeAgo(ts: any): string {
 
 /** Per-row assignment presentation for the Well Queue. */
 type RowAssignment =
-  | { state: 'assigned_not_started'; driver: string; job: DispatchJob; status: string }
+  | { state: 'assigned_not_started' | 'assigned_started'; driver: string; job: DispatchJob; status: string }
   | null;
 
 // ─── Main Component ──────────────────────────────────────────────────────────
@@ -957,35 +957,57 @@ function DispatchPageInner() {
   // Latest ACTIVE pw dispatch per well. Only pending/accepted/in_progress/paused
   // count as an assignment; declined/cancelled/dismissed/completed do NOT, so the
   // well is free to re-enter Needs Pull the instant the classifier still needs it.
+  // Uses canonical well matching (matchWellInPool) so phone-created dispatches with
+  // NDIC names (e.g. Gabriel 3-36-25H) link properly to the queue's well records.
   const pwAssignmentByWell = useMemo(() => {
     const m = new Map<string, { job: DispatchJob; status: string; driver: string; assignedMs: number }>();
     for (const d of dispatches) {
-      if (d.jobType !== 'pw' || !(PW_ACTIVE_STATUSES as readonly string[]).includes(d.status)) continue;
+      if ((d.jobType && d.jobType !== 'pw') || !(PW_ACTIVE_STATUSES as readonly string[]).includes(d.status)) continue;
       const assignedMs = (d.assignedAt as { toMillis?: () => number } | undefined)?.toMillis?.() ?? 0;
-      const prev = m.get(d.wellName);
+
+      // Canonical well matching (matches by wellName, ndicName, or normalized name)
+      const matched = matchWellInPool(wells, d.wellName) || (d.ndicWellName ? matchWellInPool(wells, d.ndicWellName) : undefined);
+      const canonicalName = matched?.wellName || d.wellName;
+
+      // Real driver name via the canonical resolver (never the login/stamped name).
+      const rd = resolveDispatchDriver(d, drivers || []);
+      const driverLabel = rd ? (rd.legalName || rd.displayName || 'Driver').split(' ')[0] : (d.driverFirstName || d.driverName || 'Assigned');
+      const entry = { job: d, status: d.status, driver: driverLabel, assignedMs };
+
+      const prev = m.get(canonicalName);
       if (!prev || assignedMs >= prev.assignedMs) {
-        // Real driver name via the canonical resolver (never the login/stamped name).
-        const rd = resolveDispatchDriver(d, drivers);
-        const driverLabel = rd ? (rd.legalName || rd.displayName || 'Driver').split(' ')[0] : 'Assigned';
-        m.set(d.wellName, { job: d, status: d.status, driver: driverLabel, assignedMs });
+        m.set(canonicalName, entry);
+        m.set(d.wellName, entry);
+        if (d.ndicWellName) m.set(d.ndicWellName, entry);
+        if (matched?.ndicName) m.set(matched.ndicName, entry);
       }
     }
     return m;
-  }, [dispatches, drivers]);
+  }, [dispatches, drivers, wells]);
 
   // Most recent COMPLETED pw dispatch per well — used only to suppress a stale
   // pre-pull re-entry into Needs Pull until the fresh post-pull level lands.
   const pwCompletedByWell = useMemo(() => {
     const m = new Map<string, { assignedMs: number; completedMs: number }>();
     for (const d of dispatches) {
-      if (d.jobType !== 'pw' || d.status !== 'completed') continue;
+      if ((d.jobType && d.jobType !== 'pw') || d.status !== 'completed') continue;
       const assignedMs = (d.assignedAt as { toMillis?: () => number } | undefined)?.toMillis?.() ?? 0;
       const completedMs = (d.completedAt as { toMillis?: () => number } | undefined)?.toMillis?.() ?? assignedMs;
-      const prev = m.get(d.wellName);
-      if (!prev || completedMs >= prev.completedMs) m.set(d.wellName, { assignedMs, completedMs });
+
+      const matched = matchWellInPool(wells, d.wellName) || (d.ndicWellName ? matchWellInPool(wells, d.ndicWellName) : undefined);
+      const canonicalName = matched?.wellName || d.wellName;
+      const entry = { assignedMs, completedMs };
+
+      const prev = m.get(canonicalName);
+      if (!prev || completedMs >= prev.completedMs) {
+        m.set(canonicalName, entry);
+        m.set(d.wellName, entry);
+        if (d.ndicWellName) m.set(d.ndicWellName, entry);
+        if (matched?.ndicName) m.set(matched.ndicName, entry);
+      }
     }
     return m;
-  }, [dispatches]);
+  }, [dispatches, wells]);
 
   // Parse a well's level-basis time (the reading the estimate is anchored to).
   const wellBasisMs = (w: WellResponse): number | null => {
@@ -996,8 +1018,8 @@ function DispatchPageInner() {
   // Hold a just-completed, NOT-actively-assigned well out of Needs Pull while its
   // level basis is still stale (pre-pull) — prevents the completed→reappear flash.
   const suppressCompletedReentry = (w: WellResponse): boolean => {
-    if (pwAssignmentByWell.has(w.wellName)) return false; // active assignment takes precedence
-    const c = pwCompletedByWell.get(w.wellName);
+    if (pwAssignmentByWell.has(w.wellName) || (w.ndicName && pwAssignmentByWell.has(w.ndicName))) return false; // active assignment takes precedence
+    const c = pwCompletedByWell.get(w.wellName) || (w.ndicName ? pwCompletedByWell.get(w.ndicName) : undefined);
     if (!c) return false;
     return isStaleCompletedReentry({ basisMs: wellBasisMs(w), completedAssignedMs: c.assignedMs });
   };
@@ -1008,50 +1030,50 @@ function DispatchPageInner() {
       let f = list;
       if (search.trim()) {
         const q = search.trim().toLowerCase();
-        f = f.filter(w => w.wellName.toLowerCase().includes(q) || (w.route || '').toLowerCase().includes(q));
+        f = f.filter(w => (w.wellName || '').toLowerCase().includes(q) || (w.route || '').toLowerCase().includes(q) || (w.ndicName || '').toLowerCase().includes(q));
       }
-      if (routeFilter !== 'all') f = f.filter(w => w.route === routeFilter);
+      if (routeFilter && routeFilter !== 'all') f = f.filter(w => w.route === routeFilter);
       return f;
     };
-    const asgn = (w: WellResponse) => pwAssignmentByWell.get(w.wellName);
+    const asgn = (w: WellResponse) => pwAssignmentByWell.get(w.wellName) || (w.ndicName ? pwAssignmentByWell.get(w.ndicName) : undefined);
     const started = (w: WellResponse) => pwLifecycle(asgn(w)?.status) === 'started';
     const notStarted = (w: WellResponse) => pwLifecycle(asgn(w)?.status) === 'not_started';
 
-    // ── Needs Pull: two ordered groups on PHYSICAL demand (assigned:false) ──
-    //   1) Unassigned/actionable — live classifier order, Assign action.
-    //   2) Assigned but not started — dimmed, stable by assigned-time, Reassign.
-    // Started wells are excluded (Active Jobs represents them).
-    if (queueView === 'needs-pull') {
-      const candidates = applyText(live.filter(w => !started(w) && classifyWell(w, asOfMs).state === 'pull-now' && !suppressCompletedReentry(w)));
-      const unassigned = candidates
-        .filter(w => !notStarted(w))
-        .map(w => ({ well: w, priority: classifyWell(w, asOfMs), assignment: null as RowAssignment }))
-        .sort((a, b) => (a.priority.predictedReadyAtMs ?? Number.POSITIVE_INFINITY) - (b.priority.predictedReadyAtMs ?? Number.POSITIVE_INFINITY));
-      const assigned = candidates
-        .filter(w => notStarted(w))
-        .map(w => { const a = asgn(w)!; return { well: w, priority: classifyWell(w, asOfMs), assignment: { state: 'assigned_not_started' as const, driver: a.driver, job: a.job, status: a.status } }; })
-        .sort((a, b) => (asgn(a.well)!.assignedMs) - (asgn(b.well)!.assignedMs)); // stable, not level-reactive
-      return [...unassigned, ...assigned];
-    }
+    const candidates = live.filter(w => {
+      if (queueView === 'needs-pull') {
+        // Needs Pull: physically pull-now, started wells excluded, stale completed re-entry held
+        return !started(w) && classifyWell(w, asOfMs).state === 'pull-now' && !suppressCompletedReentry(w);
+      }
+      return matchesView(w, queueView, asOfMs);
+    });
 
-    // ── Other views: unchanged (assigned wells classify to ASSIGNED) ──
-    const filtered = applyText(live.filter(w => matchesView(w, queueView, asOfMs, { assigned: !!asgn(w) })));
+    const filtered = applyText(candidates);
+
     return filtered
-      .map(w => ({ well: w, priority: classifyWell(w, asOfMs, { assigned: !!asgn(w) }), assignment: null as RowAssignment }))
-      .sort((a, b) => {
-        if (a.priority.sortOrder !== b.priority.sortOrder) return a.priority.sortOrder - b.priority.sortOrder;
-        return (a.priority.predictedReadyAtMs ?? Number.POSITIVE_INFINITY) - (b.priority.predictedReadyAtMs ?? Number.POSITIVE_INFINITY);
-      });
+      .map(w => {
+        const a = asgn(w);
+        // Physical urgency is independent of assignment state (never pass { assigned: true }).
+        const priority = classifyWell(w, asOfMs);
+        const assignment: RowAssignment = a ? {
+          state: notStarted(w) ? 'assigned_not_started' : 'assigned_started',
+          driver: a.driver,
+          job: a.job,
+          status: a.status,
+        } : null;
+        return { well: w, priority, assignment };
+      })
+      .sort(compareQueueRows);
   }, [wells, dispatches, search, routeFilter, queueView, asOfMs, pwAssignmentByWell, pwCompletedByWell]);
 
   // Needs Pull physical-demand split: total = both groups; also the actionable
   // (unassigned) vs already-assigned counts so the primary number never implies
   // every listed well still needs a driver.
   const needsPullSplit = useMemo(() => {
+    const asgn = (w: WellResponse) => pwAssignmentByWell.get(w.wellName) || (w.ndicName ? pwAssignmentByWell.get(w.ndicName) : undefined);
     let unassigned = 0, assigned = 0;
     for (const w of wells) {
       if (w.isDown || w.currentLevel === 'DOWN') continue;
-      const a = pwAssignmentByWell.get(w.wellName);
+      const a = asgn(w);
       if (a && pwLifecycle(a.status) === 'started') continue;          // started → Active Jobs
       if (classifyWell(w, asOfMs).state !== 'pull-now') continue;         // physical demand only
       if (suppressCompletedReentry(w)) continue;                        // stale post-completion → hold
@@ -1366,6 +1388,7 @@ function DispatchPageInner() {
       const msg = err instanceof Error ? err.message : 'Dismiss failed';
       setMessage(`Dismiss failed: ${msg.replace(/^FirebaseError:\s*/i, '')}`);
       setTimeout(() => setMessage(''), 5000);
+      throw err;
     }
   }
 
@@ -3114,8 +3137,9 @@ function DispatchPageInner() {
                         const isSelected = selectedWells.has(well.wellName);
                         const loadCount = selectedWells.get(well.wellName) || 1;
                         // Assigned-but-not-started → dimmed bottom group: 'Assigned • driver'
-                        // + Reassign (no Assign / no checkbox). Text stays fully legible.
-                        const assignedNotStarted = assignment?.state === 'assigned_not_started';
+                        // Assignment state: secondary badge and status, never demoting physical urgency.
+                        // Assigned rows show 'Assigned • driver', View (if wbmHref), and Reassign (never Assign).
+                        const isAssigned = !!assignment;
                         // Assignment eligibility (documented policy — does NOT blindly
                         // track "actionable"): a DOWN well is never dispatchable; a
                         // predicted well (PULL NOW / APPROACHING) assigns normally; a
@@ -3129,10 +3153,15 @@ function DispatchPageInner() {
                           <tr
                             key={well.responseId || well.wellName}
                             onClick={wbmHref ? () => router.push(wbmHref) : undefined}
-                            className={`transition-colors ${wbmHref ? 'cursor-pointer' : ''} ${assignedNotStarted ? 'bg-gray-800/40 opacity-70 hover:opacity-100' : `hover:bg-gray-750 ${priority.state === 'pull-now' ? 'bg-red-900/10' : ''}`} ${isSelected ? 'bg-blue-900/20' : ''}`}
+                            className={`transition-colors ${wbmHref ? 'cursor-pointer' : ''} ${isAssigned ? 'bg-gray-800/40 hover:bg-gray-750' : `hover:bg-gray-750 ${priority.state === 'pull-now' ? 'bg-red-900/10' : ''}`} ${isSelected ? 'bg-blue-900/20' : ''}`}
                           >
                             <td className="px-2 py-1.5">
-                              <span className={`inline-block whitespace-nowrap px-1.5 py-0.5 text-[10px] font-bold rounded ${priority.color} ${priority.textColor}`}>{priority.label}</span>
+                              <div className="flex items-center gap-1.5 flex-wrap">
+                                <span className={`inline-block whitespace-nowrap px-1.5 py-0.5 text-[10px] font-bold rounded ${priority.color} ${priority.textColor}`}>{priority.label}</span>
+                                {isAssigned && (
+                                  <span className="inline-block whitespace-nowrap px-1.5 py-0.5 text-[10px] font-bold rounded bg-slate-600 text-white">ASSIGNED</span>
+                                )}
+                              </div>
                             </td>
                             <td className="px-2 py-1.5">
                               {wbmHref ? (
@@ -3171,9 +3200,20 @@ function DispatchPageInner() {
                             <td className="px-2 py-1.5 text-white font-mono text-[10px]">{formatTTP(well, asOfMs)}</td>
                             <td className="dispatch-queue-col-pulls px-2 py-1.5"><PullsPredictionCell well={well} /></td>
                             <td className="px-2 py-1.5 text-right" onClick={(e) => e.stopPropagation()}>
-                              {assignedNotStarted ? (
+                              {isAssigned ? (
                                 <div className="flex items-center justify-end gap-2">
                                   <span className="text-[10px] whitespace-nowrap text-gray-300">Assigned <span className="text-gray-500">•</span> <span className="text-white font-medium">{assignment!.driver}</span></span>
+                                  {wbmHref && (
+                                    <button
+                                      type="button"
+                                      onClick={() => router.push(wbmHref)}
+                                      aria-label={`View ${well.wellName} in WB-M`}
+                                      title={`View ${well.wellName} in WB-M`}
+                                      className="px-2 py-1 text-[10px] font-medium rounded whitespace-nowrap bg-gray-700 hover:bg-gray-600 text-gray-200"
+                                    >
+                                      View
+                                    </button>
+                                  )}
                                   <button
                                     type="button"
                                     onClick={() => openReassignInPlace(assignment!.job)}
@@ -4095,7 +4135,7 @@ function DispatchJobRow({ job, cancelDispatch, compact, onClickServiceWork, onRe
   compact?: boolean;
   onClickServiceWork?: (job: DispatchJob) => void;
   onReassign?: (job: DispatchJob) => void;
-  onDismiss?: (jobId: string) => void;
+  onDismiss?: (job: DispatchJob) => void;
 }) {
   const dropoff = job.hauledTo || job.disposal;
   const isClickable = !!onClickServiceWork;
@@ -4205,10 +4245,11 @@ function DispatchJobRow({ job, cancelDispatch, compact, onClickServiceWork, onRe
               window.alert('Dismiss is not wired. This is a control failure, not an empty action.');
               return;
             }
-            onDismiss(job.id);
+            onDismiss(job);
           }}
-          className="text-red-400/60 hover:text-red-300 text-xs flex-shrink-0 transition-colors"
+          className="text-red-400/60 hover:text-red-300 text-xs flex-shrink-0 transition-colors p-1"
           title="Remove dispatch"
+          aria-label={`Remove dispatch for ${job.ndicWellName || job.wellName}`}
         >&#10005;</button>
       </div>
 
@@ -4245,9 +4286,29 @@ function ActiveDispatchPanel({ dispatches, cancelDispatch, drivers, assignTransf
   assignTransfer?: (jobId: string, driverHash: string, driverName: string) => void;
   onEditServiceWork?: (job: DispatchJob) => void;
   onReassignDeclined?: (job: DispatchJob) => void;
-  onDismissDeclined?: (jobId: string) => void;
+  onDismissDeclined?: (jobId: string) => Promise<void> | void;
 }) {
   const [expandedDrivers, setExpandedDrivers] = useState<Set<string>>(new Set());
+  const [confirmDismissJob, setConfirmDismissJob] = useState<DispatchJob | null>(null);
+  const [dismissSubmitting, setDismissSubmitting] = useState(false);
+  const [dismissError, setDismissError] = useState<string | null>(null);
+
+  async function handleExecuteDismiss() {
+    if (!confirmDismissJob?.id) return;
+    setDismissSubmitting(true);
+    setDismissError(null);
+    try {
+      if (onDismissDeclined) {
+        await onDismissDeclined(confirmDismissJob.id);
+      }
+      setConfirmDismissJob(null);
+    } catch (err: unknown) {
+      const msg = err instanceof Error ? err.message : 'Dismiss failed';
+      setDismissError(msg.replace(/^FirebaseError:\s*/i, ''));
+    } finally {
+      setDismissSubmitting(false);
+    }
+  }
 
   // Separate declined/cancelled jobs from active (completed filtered out before passing to this component)
   const declinedJobs = dispatches.filter(d => d.status === 'declined' || d.status === 'cancelled');
@@ -4355,7 +4416,10 @@ function ActiveDispatchPanel({ dispatches, cancelDispatch, drivers, assignTransf
                     className="px-3 py-1 bg-blue-600 hover:bg-blue-500 text-white text-xs font-medium rounded transition-colors"
                   >Reassign</button>
                   <button
-                    onClick={() => job.id && onDismissDeclined?.(job.id)}
+                    onClick={() => {
+                      setConfirmDismissJob(job);
+                      setDismissError(null);
+                    }}
                     className="px-3 py-1 bg-gray-700 hover:bg-gray-600 text-gray-300 text-xs font-medium rounded transition-colors"
                     title="Accept decline and dismiss"
                   >Dismiss</button>
@@ -4478,7 +4542,10 @@ function ActiveDispatchPanel({ dispatches, cancelDispatch, drivers, assignTransf
                     compact={jobs.length > 2}
                     onClickServiceWork={onEditServiceWork}
                     onReassign={onReassignDeclined}
-                    onDismiss={onDismissDeclined}
+                    onDismiss={(j) => {
+                      setConfirmDismissJob(j);
+                      setDismissError(null);
+                    }}
                   />
                 ))}
               </div>
@@ -4560,6 +4627,66 @@ function ActiveDispatchPanel({ dispatches, cancelDispatch, drivers, assignTransf
             );
           })}
         </>
+      )}
+
+      {/* Remove / Dismiss Confirmation Modal */}
+      {confirmDismissJob && (
+        <div className="fixed inset-0 bg-black/60 flex items-center justify-center z-50 p-4" onClick={(e) => e.stopPropagation()}>
+          <div className="bg-gray-800 rounded-lg p-6 max-w-md w-full border border-gray-700 shadow-xl text-white">
+            <h3 className="text-lg font-semibold text-white mb-2">Remove Dispatch</h3>
+            <p className="text-gray-300 text-sm mb-3">
+              Are you sure you want to remove this dispatch? This will dismiss the dispatch record from active operations.
+            </p>
+            <div className="bg-gray-900/60 border border-gray-700/60 rounded p-3 mb-4 space-y-1.5 text-xs">
+              <div className="flex items-center justify-between">
+                <span className="text-gray-400">Well:</span>
+                <span className="text-white font-medium">{confirmDismissJob.ndicWellName || confirmDismissJob.wellName}</span>
+              </div>
+              <div className="flex items-center justify-between">
+                <span className="text-gray-400">Driver:</span>
+                <span className="text-white">{dispatchDriverDisplayName(confirmDismissJob, drivers || []) || confirmDismissJob.driverName || 'Unassigned'}</span>
+              </div>
+              <div className="flex items-center justify-between">
+                <span className="text-gray-400">Status:</span>
+                <span className="text-gray-200 capitalize">{confirmDismissJob.status.replace('_', ' ')}</span>
+              </div>
+              {(confirmDismissJob.invoiceNumber || confirmDismissJob.ticketNumber) && (
+                <div className="flex items-center justify-between">
+                  <span className="text-gray-400">Ticket/Invoice:</span>
+                  <span className="text-gray-200">{confirmDismissJob.invoiceNumber || confirmDismissJob.ticketNumber}</span>
+                </div>
+              )}
+            </div>
+
+            {dismissError && (
+              <div className="mb-4 p-2.5 rounded bg-red-900/50 border border-red-700 text-red-200 text-xs">
+                Removal failed: {dismissError}
+              </div>
+            )}
+
+            <div className="flex items-center justify-end gap-3">
+              <button
+                type="button"
+                disabled={dismissSubmitting}
+                onClick={() => {
+                  setConfirmDismissJob(null);
+                  setDismissError(null);
+                }}
+                className="px-4 py-2 bg-gray-700 hover:bg-gray-600 text-gray-200 text-xs font-medium rounded transition-colors disabled:opacity-50"
+              >
+                Cancel
+              </button>
+              <button
+                type="button"
+                disabled={dismissSubmitting}
+                onClick={handleExecuteDismiss}
+                className="px-4 py-2 bg-red-600 hover:bg-red-500 text-white text-xs font-medium rounded transition-colors disabled:opacity-50 flex items-center gap-1.5"
+              >
+                {dismissSubmitting ? 'Removing...' : 'Remove Dispatch'}
+              </button>
+            </div>
+          </div>
+        </div>
       )}
 
     </div>

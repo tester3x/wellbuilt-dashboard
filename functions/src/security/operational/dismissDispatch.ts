@@ -1,4 +1,4 @@
-export const DISMISSABLE_STATUSES = ['declined', 'cancelled'] as const;
+export const DISMISSABLE_STATUSES = ['declined', 'cancelled', 'pending', 'pending_approval'] as const;
 export const STARTED_STATUSES = ['accepted', 'in_progress', 'paused'] as const;
 
 export type DispatchDismissView = {

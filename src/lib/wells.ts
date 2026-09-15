@@ -11,10 +11,11 @@ import {
   calcTankAtLevel,
   wellResponsesFromCatalog,
   mergeWellPool,
+  matchWellInPool,
 } from './wellPoolCore';
 import type { WellResponse } from './wellPoolCore';
 export type { WellResponse } from './wellPoolCore';
-export { wellResponsesFromCatalog, mergeWellPool };
+export { wellResponsesFromCatalog, mergeWellPool, matchWellInPool };
 
 export interface WellConfig {
   route?: string;
