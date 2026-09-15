@@ -513,7 +513,7 @@ test('Well-pool merge carries the height-first classifier inputs (target/level/g
   const wells = read('../../lib/wells.ts');
   assert.ok(!/export function mergeWellPool/.test(wells), 'mergeWellPool lives only in the firebase-free core');
   assert.match(wells, /from '\.\/wellPoolCore'/, 'wells imports from the core');
-  assert.match(wells, /export \{ wellResponsesFromCatalog, mergeWellPool \};/, 'wells re-exports the core merge');
+  assert.match(wells, /export \{[^}]*\bwellResponsesFromCatalog\b[^}]*\bmergeWellPool\b[^}]*\};/, 'wells re-exports the core merge');
 });
 
 // ── Assign gating agrees with the documented eligibility policy ───────────
@@ -578,18 +578,15 @@ test('Dispatch wires detachable Well Queue + Active Jobs with a persisted dock p
   assert.match(page, /Reattach/, 'Reattach control present');
 });
 
-// ── Needs Pull two-group assigned-well visibility + decline realignment ──────
-test('Dispatch Needs Pull: two ordered groups, in-place reassign, physical-demand split', () => {
+// ── Needs Pull global physical priority, in-place reassign, physical-demand split ──────
+test('Dispatch Needs Pull: global physical priority sort, in-place reassign, physical-demand split', () => {
   const page = read('../../app/dispatch/page.tsx');
-  // Assigned-but-not-started rows are muted + carry Assigned • driver + a Reassign
-  // control (no disabled Assign, no checkbox).
-  assert.match(page, /assignment\?\.state === 'assigned_not_started'/, 'row detects assigned-not-started');
+  // Assigned rows are detected, carry in-place Reassign control (no disabled Assign, no checkbox).
+  assert.match(page, /const isAssigned = !!assignment;/, 'row detects assignment');
   assert.match(page, /openReassignInPlace\(assignment!\.job\)/, 'assigned row uses in-place Reassign');
-  assert.match(page, /Assigned <span[^>]*>•<\/span>/, "shows 'Assigned • driver'");
   assert.match(page, /Reassign \$\{well\.wellName\} to another driver/, 'accessible Reassign label/title');
-  // Two ordered groups for the needs-pull view (unassigned first, then assigned).
-  assert.match(page, /queueView === 'needs-pull'/, 'needs-pull view has dedicated grouping');
-  assert.match(page, /return \[\.\.\.unassigned, \.\.\.assigned\]/, 'unassigned group precedes assigned group');
+  // Unified global physical sort (compareQueueRows) — physical urgency is never demoted by assignment.
+  assert.match(page, /\.sort\(compareQueueRows\)/, 'queue sorted by global physical priority');
   assert.match(page, /pwLifecycle/, 'uses the shared lifecycle helper');
   // In-place reassign updates the SAME dispatch (never mints a duplicate) + accepted confirm.
   assert.match(page, /reassignMode === 'in_place'/, 'in-place reassign branch');

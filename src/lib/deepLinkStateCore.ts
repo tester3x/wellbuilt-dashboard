@@ -39,9 +39,19 @@ export function buildDeepLinkStateKey(scope: DeepLinkScope, slot: string): strin
   return ['dl', STATE_VERSION, seg(scope.uid), seg(scope.companyId), seg(scope.pathname), seg(slot)].join(':');
 }
 
-/** True only when the scope is complete enough to safely persist/restore. */
+/** True only when the scope is complete enough to safely persist/restore (both UID and companyId resolved, neither '-'). */
 export function scopeReady(scope: DeepLinkScope): boolean {
-  return !!(scope && typeof scope.pathname === 'string' && scope.pathname.length > 0 && (scope.uid ?? null) !== null);
+  return !!(
+    scope &&
+    typeof scope.pathname === 'string' &&
+    scope.pathname.length > 0 &&
+    typeof scope.uid === 'string' &&
+    scope.uid.trim().length > 0 &&
+    scope.uid.trim() !== '-' &&
+    typeof scope.companyId === 'string' &&
+    scope.companyId.trim().length > 0 &&
+    scope.companyId.trim() !== '-'
+  );
 }
 
 export interface PersistedEnvelope<T> {
@@ -70,10 +80,10 @@ export function serializeState<T>(scope: DeepLinkScope, slot: string, data: T, n
 /**
  * Parse a stored envelope, returning its data ONLY when it belongs to the current
  * scope+slot (defence in depth beyond the key). Cross-company/user/route mismatch,
- * version drift, or corruption ⇒ null (fall through to defaults).
+ * version drift, placeholder '-' envelope, or corruption ⇒ null (fall through to defaults).
  */
 export function parseState<T>(raw: string | null | undefined, scope: DeepLinkScope, slot: string): T | null {
-  if (!raw) return null;
+  if (!raw || !scopeReady(scope)) return null;
   let env: PersistedEnvelope<T>;
   try {
     env = JSON.parse(raw);
@@ -81,6 +91,7 @@ export function parseState<T>(raw: string | null | undefined, scope: DeepLinkSco
     return null;
   }
   if (!env || env.v !== STATE_VERSION) return null;
+  if (env.uid === '-' || env.companyId === '-') return null;
   if (env.uid !== seg(scope.uid)) return null;
   if (env.companyId !== seg(scope.companyId)) return null;
   if (env.pathname !== seg(scope.pathname)) return null;

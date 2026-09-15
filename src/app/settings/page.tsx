@@ -32,7 +32,7 @@ import { JobTypeRnDCard } from '@/components/settings/JobTypeRnDCard';
 import { RolesCard } from '@/components/settings/RolesCard';
 
 export default function SettingsPage() {
-  const { user, loading: authLoading, userCompany } = useAuth();
+  const { user, loading: authLoading, userCompany, authResolved } = useAuth();
   const router = useRouter();
 
   const [company, setCompany] = useState<CompanyConfig | null>(null);
@@ -44,12 +44,17 @@ export default function SettingsPage() {
   // Determine if WB admin (no companyId = sees all companies)
   const isWbAdmin = user ? !user.companyId : false;
 
-  // Auth guard — redirect if not authorized
+  // Auth guard — redirect if not authorized (waits for authResolved to prevent bounce on refresh)
   useEffect(() => {
-    if (!authLoading && user && !hasCapability(user, 'viewSettings', userCompany)) {
+    if (!authResolved) return;
+    if (!user) {
+      router.push('/login');
+      return;
+    }
+    if (!hasCapability(user, 'viewSettings', userCompany)) {
       router.push('/');
     }
-  }, [user, authLoading, router]);
+  }, [user, authResolved, userCompany, router]);
 
   // Load companies
   useEffect(() => {

@@ -34,9 +34,12 @@ test('scope isolation: different user or company yields a different key', () => 
   assert.notEqual(a, c);
 });
 
-test('scopeReady requires a pathname and a resolved uid', () => {
+test('scopeReady requires a pathname and resolved uid + companyId (never -)', () => {
   assert.equal(scopeReady(mike), true);
-  assert.equal(scopeReady({ uid: null, companyId: 'x', pathname: '/dispatch' }), false);
+  assert.equal(scopeReady({ uid: null, companyId: 'liquid-gold', pathname: '/dispatch' }), false);
+  assert.equal(scopeReady({ uid: 'uid-mike', companyId: null, pathname: '/dispatch' }), false);
+  assert.equal(scopeReady({ uid: '-', companyId: 'liquid-gold', pathname: '/dispatch' }), false);
+  assert.equal(scopeReady({ uid: 'uid-mike', companyId: '-', pathname: '/dispatch' }), false);
   assert.equal(scopeReady({ uid: 'u', companyId: 'x', pathname: '' }), false);
 });
 

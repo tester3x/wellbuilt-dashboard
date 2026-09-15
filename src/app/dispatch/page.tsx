@@ -237,12 +237,12 @@ type RowAssignment =
 // ─── Main Component ──────────────────────────────────────────────────────────
 
 function DispatchPageInner() {
-  const { user, loading } = useAuth();
+  const { user, loading, userCompany } = useAuth();
   const router = useRouter();
   const dispatchPathname = usePathname();
   // Restore scroll position across refresh (session-scoped; restores after data lays out).
   useScrollRestore(
-    { uid: user?.uid ?? null, companyId: user?.companyId ?? null, pathname: dispatchPathname },
+    { uid: user?.uid ?? null, companyId: user?.companyId || userCompany?.id || null, pathname: dispatchPathname },
     { elementSelector: '[data-dashboard-scroll="dispatch"]', ready: !loading && !!user },
   );
 
@@ -979,7 +979,7 @@ function DispatchPageInner() {
 
       // Real driver name via the canonical resolver (never the login/stamped name).
       const rd = resolveDispatchDriver(d, drivers || []);
-      const driverLabel = rd ? (rd.legalName || rd.displayName || 'Driver').split(' ')[0] : (d.driverFirstName || d.driverName || 'Assigned');
+      const driverLabel = rd ? (rd.legalName || rd.displayName || 'Driver') : (d.driverFirstName || d.driverName || 'Assigned');
       const entry = { job: d, status: d.status, driver: driverLabel, assignedMs };
 
       const prev = m.get(canonicalName);
@@ -1032,15 +1032,21 @@ function DispatchPageInner() {
     return isStaleCompletedReentry({ basisMs: wellBasisMs(w), completedAssignedMs: c.assignedMs });
   };
 
+  // Route-scoped well collection: all tab counts and queue views derive from this
+  // collection when a route filter is active; 'all' yields the full company catalog.
+  const routeWells = useMemo(() => {
+    if (!routeFilter || routeFilter === 'all') return wells;
+    return wells.filter(w => w.route === routeFilter);
+  }, [wells, routeFilter]);
+
   const pwQueue = useMemo(() => {
-    const live = wells.filter(w => !(w.isDown || w.currentLevel === 'DOWN'));
+    const live = routeWells.filter(w => !(w.isDown || w.currentLevel === 'DOWN'));
     const applyText = (list: WellResponse[]) => {
       let f = list;
       if (search.trim()) {
         const q = search.trim().toLowerCase();
         f = f.filter(w => (w.wellName || '').toLowerCase().includes(q) || (w.route || '').toLowerCase().includes(q) || (w.ndicName || '').toLowerCase().includes(q));
       }
-      if (routeFilter && routeFilter !== 'all') f = f.filter(w => w.route === routeFilter);
       return f;
     };
     const asgn = (w: WellResponse) => pwAssignmentByWell.get(w.wellName) || (w.ndicName ? pwAssignmentByWell.get(w.ndicName) : undefined);
@@ -1071,15 +1077,15 @@ function DispatchPageInner() {
         return { well: w, priority, assignment };
       })
       .sort(compareQueueRows);
-  }, [wells, dispatches, search, routeFilter, queueView, asOfMs, pwAssignmentByWell, pwCompletedByWell]);
+  }, [routeWells, dispatches, search, queueView, asOfMs, pwAssignmentByWell, pwCompletedByWell]);
 
   // Needs Pull physical-demand split: total = both groups; also the actionable
   // (unassigned) vs already-assigned counts so the primary number never implies
-  // every listed well still needs a driver.
+  // every listed well still needs a driver. Scoped to the active route filter.
   const needsPullSplit = useMemo(() => {
     const asgn = (w: WellResponse) => pwAssignmentByWell.get(w.wellName) || (w.ndicName ? pwAssignmentByWell.get(w.ndicName) : undefined);
     let unassigned = 0, assigned = 0;
-    for (const w of wells) {
+    for (const w of routeWells) {
       if (w.isDown || w.currentLevel === 'DOWN') continue;
       const a = asgn(w);
       if (a && pwLifecycle(a.status) === 'started') continue;          // started → Active Jobs
@@ -1088,32 +1094,31 @@ function DispatchPageInner() {
       if (a && pwLifecycle(a.status) === 'not_started') assigned++; else unassigned++;
     }
     return { total: unassigned + assigned, unassigned, assigned };
-  }, [wells, asOfMs, pwAssignmentByWell, pwCompletedByWell]);
+  }, [routeWells, asOfMs, pwAssignmentByWell, pwCompletedByWell]);
 
-  // Counts per primary view (all routes). Needs Pull = physical demand (both
-  // groups, started excluded); other views unchanged.
+  // Counts per primary view, scoped to the selected route ('all' = company-wide totals).
+  // Needs Pull = physical demand (both groups, started excluded); other views scoped identically.
   const viewCounts = useMemo(() => {
-    const live = wells.filter(w => !(w.isDown || w.currentLevel === 'DOWN'));
+    const live = routeWells.filter(w => !(w.isDown || w.currentLevel === 'DOWN'));
     return {
       'needs-pull': needsPullSplit.total,
       'next-24h': live.filter(w => wellBucket(w, asOfMs) === 'next-24h').length,
       'needs-data': live.filter(w => wellBucket(w, asOfMs) === 'needs-data').length,
       'all': live.length,
     } as Record<QueueView, number>;
-  }, [wells, asOfMs, needsPullSplit]);
+  }, [routeWells, asOfMs, needsPullSplit]);
 
   // Z Fold recovery — when the queue is collapsed (stacked + not expanded), a
   // search still surfaces matching wells so the list is reachable on the Fold.
   const searchHits = useMemo(() => {
     const q = search.trim().toLowerCase();
     if (!q) return [];
-    return wells
+    return routeWells
       .filter(w => {
         const isDown = w.isDown || w.currentLevel === 'DOWN';
         if (isDown) return false;
         if (w.currentLevel === '--' && !w.nextPullTimeUTC) return false;
         if (!(w.wellName.toLowerCase().includes(q) || (w.route || '').toLowerCase().includes(q))) return false;
-        if (routeFilter !== 'all' && w.route !== routeFilter) return false;
         return true;
       })
       .map(w => {
@@ -1131,7 +1136,7 @@ function DispatchPageInner() {
         const bR = b.priority.predictedReadyAtMs ?? Number.POSITIVE_INFINITY;
         return aR - bR;
       });
-  }, [wells, search, routeFilter, asOfMs, pwAssignmentByWell]);
+  }, [routeWells, search, asOfMs, pwAssignmentByWell]);
 
   const showingSearchHits = wellQueueUsesSearchHits(stackedLayout, wellQueueExpanded, search);
   const queueRows = showingSearchHits ? searchHits : pwQueue;
@@ -3093,7 +3098,13 @@ function DispatchPageInner() {
                 >
                   {wellQueueExpanded ? 'Hide list' : 'Show list'}
                 </button>
-                <span className="text-gray-500 text-xs flex-shrink-0">{statusUnavailable ? 'status unavailable' : `${queueRows.length} wells`}</span>
+                <span className="text-gray-500 text-xs flex-shrink-0">
+                  {statusUnavailable
+                    ? 'status unavailable'
+                    : search.trim()
+                      ? `${queueRows.length} matching of ${routeWells.filter(w => !(w.isDown || w.currentLevel === 'DOWN')).length} route wells`
+                      : `${queueRows.length} wells`}
+                </span>
               </div>
 
               {/* Selection indicator — shows in Well Queue header area */}
@@ -3125,12 +3136,13 @@ function DispatchPageInner() {
                     <thead className="bg-gray-700 sticky top-0 z-10">
                       <tr>
                         <th className="px-2 py-2 text-left text-[11px] font-medium text-gray-300 w-24 min-w-[88px]">Priority</th>
+                        <th className="px-2 py-2 text-left text-[11px] font-medium text-gray-300 min-w-[130px]">Coverage</th>
                         <th className="px-2 py-2 text-left text-[11px] font-medium text-gray-300">Well</th>
                         <th className="px-2 py-2 text-left text-[11px] font-medium text-gray-300">Current Level (Est.)</th>
                         <th className="px-2 py-2 text-left text-[11px] font-medium text-gray-300">Flow</th>
                         <th className="px-2 py-2 text-left text-[11px] font-medium text-gray-300">TTP</th>
                         <th className="dispatch-queue-col-pulls px-2 py-2 text-left text-[11px] font-medium text-gray-300">Pulls/Day</th>
-                        <th className="px-2 py-2 text-right text-[11px] font-medium text-gray-300 w-28">
+                        <th className="px-2 py-2 text-right text-[11px] font-medium text-gray-300 w-36">
                           <div className="flex items-center justify-end gap-1.5">
                             <span>Action</span>
                             {(() => { const sel = queueRows.filter(q => !q.assignment && q.priority.state !== 'down'); return (
@@ -3144,9 +3156,8 @@ function DispatchPageInner() {
                       {queueRows.map(({ well, priority, assignment }) => {
                         const isSelected = selectedWells.has(well.wellName);
                         const loadCount = selectedWells.get(well.wellName) || 1;
-                        // Assigned-but-not-started → dimmed bottom group: 'Assigned • driver'
-                        // Assignment state: secondary badge and status, never demoting physical urgency.
-                        // Assigned rows show 'Assigned • driver', View (if wbmHref), and Reassign (never Assign).
+                        // Assignment state: rendered in dedicated Coverage column, never demoting physical urgency.
+                        // Assigned rows show 'ASSIGNED — driver', visible View affordance, and Reassign (never Assign).
                         const isAssigned = !!assignment;
                         // Assignment eligibility (documented policy — does NOT blindly
                         // track "actionable"): a DOWN well is never dispatchable; a
@@ -3164,12 +3175,19 @@ function DispatchPageInner() {
                             className={`transition-colors ${wbmHref ? 'cursor-pointer' : ''} ${isAssigned ? 'bg-gray-800/40 hover:bg-gray-750' : `hover:bg-gray-750 ${priority.state === 'pull-now' ? 'bg-red-900/10' : ''}`} ${isSelected ? 'bg-blue-900/20' : ''}`}
                           >
                             <td className="px-2 py-1.5">
-                              <div className="flex items-center gap-1.5 flex-wrap">
-                                <span className={`inline-block whitespace-nowrap px-1.5 py-0.5 text-[10px] font-bold rounded ${priority.color} ${priority.textColor}`}>{priority.label}</span>
-                                {isAssigned && (
-                                  <span className="inline-block whitespace-nowrap px-1.5 py-0.5 text-[10px] font-bold rounded bg-slate-600 text-white">ASSIGNED</span>
-                                )}
-                              </div>
+                              <span className={`inline-block whitespace-nowrap px-1.5 py-0.5 text-[10px] font-bold rounded ${priority.color} ${priority.textColor}`}>{priority.label}</span>
+                            </td>
+                            <td className="px-2 py-1.5">
+                              {isAssigned ? (
+                                <span className="inline-flex items-center gap-1 whitespace-nowrap px-1.5 py-0.5 text-[10px] font-medium rounded bg-blue-900/40 text-blue-200 border border-blue-700/50">
+                                  <span>ASSIGNED —</span>
+                                  <span className="font-semibold text-white">{assignment!.driver}</span>
+                                </span>
+                              ) : (
+                                <span className="inline-block whitespace-nowrap px-1.5 py-0.5 text-[10px] font-medium rounded bg-gray-700/50 text-gray-400 border border-gray-600/40">
+                                  UNASSIGNED
+                                </span>
+                              )}
                             </td>
                             <td className="px-2 py-1.5">
                               {wbmHref ? (
@@ -3209,15 +3227,25 @@ function DispatchPageInner() {
                             <td className="dispatch-queue-col-pulls px-2 py-1.5"><PullsPredictionCell well={well} /></td>
                             <td className="px-2 py-1.5 text-right" onClick={(e) => e.stopPropagation()}>
                               {isAssigned ? (
-                                <div className="flex items-center justify-end gap-2">
-                                  <span className="text-[10px] whitespace-nowrap text-gray-300">Assigned <span className="text-gray-500">•</span> <span className="text-white font-medium">{assignment!.driver}</span></span>
-                                  {wbmHref && (
+                                <div className="flex items-center justify-end gap-1.5">
+                                  {wbmHref ? (
                                     <button
                                       type="button"
                                       onClick={() => router.push(wbmHref)}
                                       aria-label={`View ${well.wellName} in WB-M`}
                                       title={`View ${well.wellName} in WB-M`}
                                       className="px-2 py-1 text-[10px] font-medium rounded whitespace-nowrap bg-gray-700 hover:bg-gray-600 text-gray-200"
+                                    >
+                                      View
+                                    </button>
+                                  ) : (
+                                    <button
+                                      type="button"
+                                      disabled
+                                      aria-disabled="true"
+                                      aria-label={`View ${well.wellName} (detail unavailable)`}
+                                      title="Well detail unavailable (missing canonical company or NDIC API number)"
+                                      className="px-2 py-1 text-[10px] font-medium rounded whitespace-nowrap bg-gray-800/60 text-gray-500 cursor-not-allowed border border-gray-700/50"
                                     >
                                       View
                                     </button>

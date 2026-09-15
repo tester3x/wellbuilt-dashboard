@@ -25,7 +25,7 @@ test('Active Jobs group header resolves via canonical resolver + REAL name (no l
 });
 
 test('Well Queue assignment attribution uses the resolver (real name, never stamped login)', () => {
-  assert.match(page, /const rd = resolveDispatchDriver\(d, drivers\)/);
+  assert.match(page, /const rd = resolveDispatchDriver\(d, drivers(\s*\|\|\s*\[\])?\)/);
   assert.ok(!/driver: d\.driverFirstName \|\| d\.driverName \|\| '\?'/.test(page), 'no stamped-name attribution');
 });
 

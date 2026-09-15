@@ -259,7 +259,7 @@ function todayIso(): string {
 }
 
 export default function TruthDebugPage() {
-  const { user, loading, userCompany } = useAuth();
+  const { user, loading, userCompany, authResolved } = useAuth();
   const router = useRouter();
   const [date, setDate] = useState(todayIso());
   const [companyId, setCompanyId] = useState('');
@@ -268,7 +268,7 @@ export default function TruthDebugPage() {
   const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
-    if (loading) return;
+    if (!authResolved) return;
     if (!user) {
       router.push('/login');
       return;
@@ -276,7 +276,7 @@ export default function TruthDebugPage() {
     if (user.companyId || !hasCapability(user, 'viewTruthDebug', userCompany)) { // tenant containment (7/9): platform-admin-only tool
       router.push('/');
     }
-  }, [user, loading, userCompany, router]);
+  }, [user, authResolved, userCompany, router]);
 
   async function runShadow() {
     setBusy(true);

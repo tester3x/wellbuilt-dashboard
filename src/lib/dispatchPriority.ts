@@ -409,6 +409,14 @@ export function compareQueueRows(a: QueueRowItem, b: QueueRowItem): number {
     if (readyA !== readyB) return readyA - readyB;
   }
 
+  // Deterministic tie-breaker: unassigned wells sort ahead of assigned wells
+  // ONLY when exact physical readiness time is identical (or within same tier).
+  const isAssignedA = !!a.assignment;
+  const isAssignedB = !!b.assignment;
+  if (isAssignedA !== isAssignedB) {
+    return isAssignedA ? 1 : -1;
+  }
+
   return (a.well.wellName || '').localeCompare(b.well.wellName || '');
 }
 
