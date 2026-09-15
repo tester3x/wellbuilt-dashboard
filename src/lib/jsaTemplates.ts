@@ -3,10 +3,11 @@
 // Supports multiple templates per company with package assignment.
 import { getFirestoreDb, getFirebaseFunctions } from './firebase';
 import {
-  doc, getDoc, setDoc, deleteDoc,
-  collection, getDocs, query, where, writeBatch,
+  doc, getDoc, setDoc,
+  collection, getDocs, runTransaction,
 } from 'firebase/firestore';
 import { httpsCallable } from 'firebase/functions';
+import {assignActiveJsaTemplate, normalizeJsaTasks, type ActiveJsaTaskTemplate} from './jsaTaskTemplates';
 
 // ── Types ──────────────────────────────────────────────────────────────────
 
@@ -35,7 +36,9 @@ export interface JsaTemplate {
   id: string;           // Firestore doc ID
   companyId: string;
   name: string;
-  packageId?: string;   // assigned job package (e.g. 'water-hauling'), undefined = default/unassigned
+  packageId?: string | null;   // assigned job package (e.g. 'water-hauling'), undefined = default/unassigned
+  tasks?: string[]; // empty = default assessment; otherwise applicable task names
+  recordType?: 'revision';
   steps: JsaTemplateStep[];
   ppeItems: JsaPpeItem[];
   preparedItems: JsaPreparedItem[];
@@ -106,7 +109,7 @@ function mirrorDoc(companyId: string) {
 /** Load ALL templates for a company. Auto-migrates legacy single-doc format. */
 export async function loadJsaTemplates(companyId: string): Promise<JsaTemplate[]> {
   const snap = await getDocs(templatesCol(companyId));
-  let templates = snap.docs.map(d => ({ ...d.data(), id: d.id, companyId } as JsaTemplate));
+  let templates = snap.docs.filter(d => d.data().recordType !== 'revision').map(d => ({ ...d.data(), id: d.id, companyId } as JsaTemplate));
 
   // Migrate legacy single-doc if subcollection is empty
   if (templates.length === 0) {
@@ -146,84 +149,93 @@ export async function saveJsaTemplate(
   const now = new Date().toISOString();
   const id = templateId || `jsa-${Date.now()}`;
   const ref = templateDoc(companyId, id);
-  const existing = templateId ? await getDoc(ref) : null;
 
-  await setDoc(ref, {
-    ...data,
-    companyId,
-    packageId: data.packageId || null,  // explicit null for "default/all packages"
-    updatedAt: now,
-    updatedBy: userId,
-    ...(existing?.exists() ? {} : { createdAt: now, version: 1, status: data.status || 'draft' }),
-  }, { merge: true });
+
+  await runTransaction(getFirestoreDb(), async tx => {
+    const current = await tx.get(ref);
+    if (current.exists() && (current.data().status === 'active' || current.data().recordType === 'revision')) {
+      throw new Error('Deactivate this template before editing. Published versions remain preserved.');
+    }
+    const {id: ignoredId, companyId: ignoredCompany, recordType: ignoredType, version: ignoredVersion, status: ignoredStatus, ...fields} = data;
+    tx.set(ref, {
+      ...fields, companyId,
+      ...(data.packageId !== undefined || !current.exists() ? {packageId: data.packageId || null} : {}),
+      ...(data.tasks !== undefined || !current.exists() ? {tasks: normalizeJsaTasks(data.tasks)} : {}),
+      updatedAt: now, updatedBy: userId,
+      ...(current.exists() ? {} : {createdAt: now, version: 0, status: 'draft'}),
+    }, {merge: true});
+  });
 
   return id;
 }
 
-/** Delete a template (must be draft, not active) */
+/** Delete only an unpublished draft. Published source remains available for audit. */
 export async function deleteJsaTemplate(companyId: string, templateId: string): Promise<void> {
-  await deleteDoc(templateDoc(companyId, templateId));
-}
-
-/**
- * Activate a template. Deactivates all others first.
- * Mirrors the active template to the top-level doc for JSA app compatibility.
- */
-export async function activateJsaTemplate(
-  companyId: string,
-  templateId: string,
-  userId: string,
-): Promise<void> {
-  const db = getFirestoreDb();
-  const now = new Date().toISOString();
-
-  // Deactivate all others
-  const allSnap = await getDocs(templatesCol(companyId));
-  const batch = writeBatch(db);
-  for (const d of allSnap.docs) {
-    if (d.id !== templateId && d.data().status === 'active') {
-      batch.update(d.ref, { status: 'draft', updatedAt: now });
-    }
-  }
-
-  // Activate target
-  const targetRef = templateDoc(companyId, templateId);
-  const targetSnap = await getDoc(targetRef);
-  const currentVersion = targetSnap.exists() ? (targetSnap.data().version || 0) : 0;
-  batch.update(targetRef, {
-    status: 'active',
-    version: currentVersion + 1,
-    updatedAt: now,
-    updatedBy: userId,
+  await runTransaction(getFirestoreDb(), async tx => {
+    const ref = templateDoc(companyId, templateId), current = await tx.get(ref);
+    if (!current.exists()) return;
+    if (current.data().status === 'active' || current.data().recordType === 'revision' || current.data().version > 0)
+      throw new Error('Published templates cannot be deleted. Deactivate them instead.');
+    tx.delete(ref);
   });
-  await batch.commit();
-
-  // Mirror to top-level doc for JSA phone app
-  const fresh = await getDoc(targetRef);
-  if (fresh.exists()) {
-    const mirrorData = { ...fresh.data(), status: 'active' };
-    delete (mirrorData as any).id; // don't duplicate id field
-    await setDoc(mirrorDoc(companyId), mirrorData);
-  }
 }
 
-/** Deactivate a template. Clears the mirror doc. */
-export async function deactivateJsaTemplate(
-  companyId: string,
-  templateId: string,
-): Promise<void> {
-  const now = new Date().toISOString();
-  await setDoc(templateDoc(companyId, templateId), {
-    status: 'draft',
-    updatedAt: now,
-  }, { merge: true });
+/** Migrate the current active set on the first catalog write, under the mirror transaction lock. */
+async function initialActive(companyId: string): Promise<ActiveJsaTaskTemplate[]> {
+  return (await loadJsaTemplates(companyId)).filter(t => t.status === 'active').map(t => ({
+    id:t.id, name:t.name, version:t.version, packageId:t.packageId || null, tasks:normalizeJsaTasks(t.tasks),
+  }));
+}
 
-  // Check if any other template is active — if not, clear mirror
-  const allSnap = await getDocs(templatesCol(companyId));
-  const anyActive = allSnap.docs.some(d => d.id !== templateId && d.data().status === 'active');
-  if (!anyActive) {
-    await deleteDoc(mirrorDoc(companyId));
-  }
+/** Publish a task template without disabling unrelated task assessments. */
+export async function activateJsaTemplate(companyId: string, templateId: string, userId: string): Promise<void> {
+  const initial = await initialActive(companyId);
+  await runTransaction(getFirestoreDb(), async tx => {
+    const mirrorRef = mirrorDoc(companyId), targetRef = templateDoc(companyId, templateId);
+    const mirror = await tx.get(mirrorRef), target = await tx.get(targetRef);
+    if (!target.exists() || target.data().recordType === 'revision') throw new Error('Template not found.');
+    if (target.data().status === 'active') return;
+    const source = target.data();
+    if (!source.steps?.length) throw new Error('Review the parsed assessment before activating it.');
+    const version = (source.version || 0) + 1;
+    const published = {...source, tasks:normalizeJsaTasks(source.tasks), version, status:'active', updatedBy:userId, updatedAt:new Date().toISOString()};
+    const active: ActiveJsaTaskTemplate[] = mirror.data()?.activeTemplates || initial;
+    const next = assignActiveJsaTemplate(active, {id:templateId,name:source.name,version,packageId:source.packageId || null,tasks:published.tasks});
+    // Snapshot each publication separately; edits to the draft never replace it.
+    const revisionRef = templateDoc(companyId, templateId + '--published-v' + version);
+    const existingRevision = await tx.get(revisionRef);
+    if (existingRevision.exists()) throw new Error('Published version already exists. Reload templates.');
+    tx.set(revisionRef, {...published, recordType:'revision', templateId});
+    tx.set(targetRef,published);
+    // Keep the legacy mirror on its explicit default. A task-specific activation
+    // must not silently replace the assessment used by installed older apps.
+    const useDefault = !published.tasks.length;
+    tx.set(mirrorRef, {
+      ...(mirror.exists() ? mirror.data() : {status:'draft'}),
+      ...(useDefault ? published : {}),
+      schemaVersion:2, activeTemplates:next,
+      legacyTemplateId:useDefault ? templateId : (mirror.data()?.legacyTemplateId || initial.find(t=>!t.tasks.length)?.id || null),
+      catalogUpdatedAt:published.updatedAt,
+    });
+  });
+}
+
+export async function deactivateJsaTemplate(companyId: string, templateId: string): Promise<void> {
+  const initial = await initialActive(companyId);
+  await runTransaction(getFirestoreDb(), async tx => {
+    const mirrorRef = mirrorDoc(companyId), targetRef = templateDoc(companyId,templateId);
+    const mirror = await tx.get(mirrorRef), target = await tx.get(targetRef);
+    if (!target.exists() || target.data().recordType === 'revision') throw new Error('Template not found.');
+    const active: ActiveJsaTaskTemplate[] = mirror.data()?.activeTemplates || initial;
+    const legacyId = mirror.data()?.legacyTemplateId || initial.find(t=>!t.tasks.length)?.id;
+    tx.update(targetRef,{status:'draft',updatedAt:new Date().toISOString()});
+    tx.set(mirrorRef, {
+      ...(mirror.data() || {}), schemaVersion:2,
+      activeTemplates:active.filter(t=>t.id!==templateId),
+      ...(legacyId===templateId ? {status:'draft',legacyTemplateId:null} : {}),
+      catalogUpdatedAt:new Date().toISOString(),
+    });
+  });
 }
 
 // ── Legacy compat: load single template (old API) ────────────────────────

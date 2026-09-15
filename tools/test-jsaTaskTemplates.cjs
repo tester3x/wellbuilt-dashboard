@@ -1,0 +1,12 @@
+const fs=require('fs'),ts=require('typescript'),assert=require('node:assert/strict');
+const api={};new Function('exports',ts.transpileModule(fs.readFileSync('src/lib/jsaTaskTemplates.ts','utf8'),{compilerOptions:{module:ts.ModuleKind.CommonJS,target:ts.ScriptTarget.ES2020}}).outputText)(api);
+const loading={id:'loading',name:'Loading',version:1,packageId:null,tasks:['Loading']};
+const unloading={...loading,id:'unloading',name:'Unloading',tasks:['Unloading']};
+assert.deepEqual(api.normalizeJsaTasks(['Loading',' loading ','Unloading']),['loading','unloading']);
+const both=api.assignActiveJsaTemplate([loading],unloading);assert.equal(both.length,2);
+assert.throws(()=>api.assignActiveJsaTemplate(both,{...loading,id:'conflict'}),/conflicts/);
+const combined=api.assignActiveJsaTemplate([],{...loading,tasks:['Loading','Unloading']});assert.equal(combined[0].tasks.length,2);
+const updated=api.assignActiveJsaTemplate(both,{...loading,version:2});assert.equal(updated.length,2);assert.equal(updated.find(t=>t.id==='loading').version,2);
+assert.equal(loading.tasks[0],'Loading');
+assert.throws(()=>api.assignActiveJsaTemplate([{...loading,tasks:[]}],{...unloading,tasks:[]}),/conflicts/);
+console.log('PASS: distinct task coexistence, normalized conflicts, shared wording assignments, version replacement and default uniqueness');

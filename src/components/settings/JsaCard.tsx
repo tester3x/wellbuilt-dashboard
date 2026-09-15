@@ -69,6 +69,7 @@ export function JsaCard({ company, onSave }: Props) {
   // Editing state (local copy for whichever template is being edited)
   const [editName, setEditName] = useState('');
   const [editPackageId, setEditPackageId] = useState<string>('');
+  const [editTasks, setEditTasks] = useState('');
   const [editSteps, setEditSteps] = useState<JsaTemplateStep[]>([]);
   const [editPpe, setEditPpe] = useState<JsaPpeItem[]>([]);
   const [editPrepared, setEditPrepared] = useState<JsaPreparedItem[]>([]);
@@ -100,6 +101,7 @@ export function JsaCard({ company, onSave }: Props) {
   const populateEdit = useCallback((t: JsaTemplate) => {
     setEditName(t.name);
     setEditPackageId(t.packageId || '');
+    setEditTasks((t.tasks || []).join(', '));
     setEditSteps(JSON.parse(JSON.stringify(t.steps)));
     setEditPpe(JSON.parse(JSON.stringify(t.ppeItems)));
     setEditPrepared(JSON.parse(JSON.stringify(t.preparedItems)));
@@ -205,6 +207,7 @@ export function JsaCard({ company, onSave }: Props) {
 
   // Start editing a template
   const startEdit = (t: JsaTemplate) => {
+    if (t.status === 'active') { setErrorMessage('Deactivate this template before editing. Its published version remains preserved.'); return; }
     populateEdit(t);
     setEditingId(t.id);
     setExpandedId(t.id);
@@ -265,7 +268,8 @@ export function JsaCard({ company, onSave }: Props) {
     try {
       await saveJsaTemplate(company.id, editingId, {
         name: editName,
-        packageId: editPackageId || undefined,
+        packageId: editPackageId || null,
+        tasks: editTasks.split(',').map(task => task.trim()).filter(Boolean),
         steps: editSteps,
         ppeItems: editPpe,
         preparedItems: editPrepared,
@@ -274,6 +278,7 @@ export function JsaCard({ company, onSave }: Props) {
       setEditingId(null);
     } catch (err) {
       console.error('Failed to save template:', err);
+      setErrorMessage(err instanceof Error ? err.message : 'Template update failed.');
     } finally {
       setSaving(false);
     }
@@ -287,7 +292,8 @@ export function JsaCard({ company, onSave }: Props) {
       if (editingId === templateId) {
         await saveJsaTemplate(company.id, templateId, {
           name: editName,
-          packageId: editPackageId || undefined,
+          packageId: editPackageId || null,
+        tasks: editTasks.split(',').map(task => task.trim()).filter(Boolean),
           steps: editSteps,
           ppeItems: editPpe,
           preparedItems: editPrepared,
@@ -299,6 +305,7 @@ export function JsaCard({ company, onSave }: Props) {
       onSave();
     } catch (err) {
       console.error('Failed to activate template:', err);
+      setErrorMessage(err instanceof Error ? err.message : 'Template update failed.');
     } finally {
       setSaving(false);
     }
@@ -313,6 +320,7 @@ export function JsaCard({ company, onSave }: Props) {
       onSave();
     } catch (err) {
       console.error('Failed to deactivate template:', err);
+      setErrorMessage(err instanceof Error ? err.message : 'Template update failed.');
     } finally {
       setSaving(false);
     }
@@ -329,6 +337,7 @@ export function JsaCard({ company, onSave }: Props) {
       setConfirmDeleteId(null);
     } catch (err) {
       console.error('Failed to delete template:', err);
+      setErrorMessage(err instanceof Error ? err.message : 'Template update failed.');
     } finally {
       setSaving(false);
     }
@@ -459,7 +468,7 @@ export function JsaCard({ company, onSave }: Props) {
           <span className="text-white text-sm font-medium flex-1 truncate">{t.name}</span>
           {t.packageId && (
             <span className="px-2 py-0.5 text-[10px] rounded bg-blue-900/40 text-blue-400 border border-blue-500/30">
-              {packageLabel(t.packageId)}
+              {packageLabel(t.packageId || undefined)}
             </span>
           )}
           {!t.packageId && (
@@ -512,10 +521,18 @@ export function JsaCard({ company, onSave }: Props) {
                   ))}
                 </select>
               ) : (
-                <div className="text-gray-300 text-sm">{packageLabel(t.packageId)}</div>
+                <div className="text-gray-300 text-sm">{packageLabel(t.packageId || undefined)}</div>
               )}
             </div>
 
+            <div>
+              <label className="text-gray-400 text-xs block mb-1">Applies to tasks</label>
+              {isEditing ? <input value={editTasks} onChange={e=>setEditTasks(e.target.value)}
+                placeholder="Loading, Unloading"
+                className="w-full bg-gray-700 text-white text-sm rounded px-3 py-2 border border-gray-600" />
+                : <div className="text-gray-300 text-sm">{t.tasks?.length ? t.tasks.join(', ') : 'Default assessment'}</div>}
+              <p className="text-gray-400 text-xs mt-1">Separate task names with commas. Use one template for tasks with identical wording; upload separate templates when wording differs. Leave blank for the default assessment.</p>
+            </div>
             {/* Source file */}
             {t.sourceFile && (
               <div className="text-gray-500 text-xs">Source: {t.sourceFile.fileName}</div>
@@ -931,3 +948,4 @@ export function JsaCard({ company, onSave }: Props) {
     </div>
   );
 }
+
