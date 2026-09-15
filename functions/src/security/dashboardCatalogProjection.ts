@@ -389,3 +389,83 @@ export function projectDashboardCatalog(input: {
     },
   };
 }
+
+/** Canonical well identity (config.wellId, else config.id). '' when absent. */
+export function canonicalWellId(rec: Record<string, unknown>): string {
+  const raw = rec.wellId ?? rec.id;
+  if (typeof raw === 'string' && raw.trim()) return raw.trim();
+  if (typeof raw === 'number' && Number.isFinite(raw)) return String(raw);
+  return '';
+}
+
+export type CompanyWellPool = {
+  wellConfig: Record<string, Record<string, unknown>>;
+  wellStatus: Record<string, Record<string, unknown>>;
+  counts: { wellConfig: number; wellStatus: number };
+};
+
+/**
+ * COMPANY-SCOPED governed well pool. Returns ONLY wells positively proven to belong
+ * to `companyId`. Filtering happens BEFORE projection; there is NO global wellName
+ * join and NO `companyId || 'liquid-gold'` default — every tenant identity must be
+ * explicit and exact, and anything missing fails CLOSED.
+ *
+ * A configured well is included only when config.companyId === companyId (exact).
+ * A status row is attached to that well ONLY when ALL of the following are proven on
+ * the RAW outgoing row (not the wellName-deduped global projection):
+ *   1. status.companyId === companyId (exact; missing → rejected),
+ *   2. status carries a canonical wellId, and
+ *   3. that wellId === the configuration's canonical wellId for the same well.
+ * A configured well with no provably-owned status is returned with NO status row —
+ * the client renders it unavailable. If the global writer's wellName dedupe left only
+ * another company's row for a well name this company owns, that foreign row fails the
+ * companyId/wellId proofs and is rejected: the owner gets its configuration with
+ * status unavailable, NEVER the surviving foreign row, NEVER a zero.
+ */
+export function projectCompanyWellPool(
+  companyId: string,
+  wellConfig: unknown,
+  outgoing: unknown,
+): CompanyWellPool {
+  const cid = typeof companyId === 'string' ? companyId.trim() : '';
+  const outConfig: Record<string, Record<string, unknown>> = {};
+  const outStatus: Record<string, Record<string, unknown>> = {};
+  if (!cid) return { wellConfig: outConfig, wellStatus: outStatus, counts: { wellConfig: 0, wellStatus: 0 } };
+
+  // 1. Configuration: exact, explicit company only (fail closed on missing companyId).
+  const rawConfig = asRecord(wellConfig);
+  const configWellId = new Map<string, string>();
+  for (const [wellName, val] of Object.entries(rawConfig)) {
+    const cfg = asRecord(val);
+    const cfgCompany = typeof cfg.companyId === 'string' ? cfg.companyId.trim() : '';
+    if (!cfgCompany || cfgCompany !== cid) continue;
+    outConfig[wellName] = pickAllowlisted(cfg, WELL_CONFIG_ALLOWLIST);
+    const wid = canonicalWellId(cfg);
+    if (wid) configWellId.set(wellName, wid);
+  }
+
+  // 2. Status: attach ONLY when company AND canonical wellId both prove out, read from
+  //    the RAW outgoing rows so a same-name row from another company cannot be joined.
+  const rawOut = asRecord(outgoing);
+  for (const [key, val] of Object.entries(rawOut)) {
+    if (!key.startsWith('response_') || key.includes('delete')) continue;
+    const row = asRecord(val);
+    const wellName = typeof row.wellName === 'string' ? row.wellName.trim() : '';
+    if (!wellName || !(wellName in outConfig)) continue;             // not this company's configured well
+    const rowCompany = typeof row.companyId === 'string' ? row.companyId.trim() : '';
+    if (!rowCompany || rowCompany !== cid) continue;                 // status company must be explicit + exact
+    const rowWellId = canonicalWellId(row);
+    const cfgWellId = configWellId.get(wellName);
+    if (!rowWellId || !cfgWellId || rowWellId !== cfgWellId) continue; // canonical wellId must match config
+    const picked = pickAllowlisted(row, WELL_STATUS_ALLOWLIST);
+    picked.responseId = key;
+    const prev = outStatus[wellName];
+    if (!prev || newerStatus(picked, prev)) outStatus[wellName] = picked;
+  }
+
+  return {
+    wellConfig: outConfig,
+    wellStatus: outStatus,
+    counts: { wellConfig: Object.keys(outConfig).length, wellStatus: Object.keys(outStatus).length },
+  };
+}

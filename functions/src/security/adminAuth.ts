@@ -1,13 +1,19 @@
 import * as httpsV2 from 'firebase-functions/v2/https';
 import * as admin from 'firebase-admin';
 
+// `viewWellPool` = COMPANY-SCOPED Well Status / Dispatch viewing. Granted by default
+// to the dashboard roles already intended to view those surfaces (it, admin, manager,
+// dispatch, viewer). It is NEVER a global grant — global access is `viewAllCompanies`
+// held by a platform admin (see callerHasGlobalWellPoolAccess). payroll/driver do not
+// view the well pool. A company may override these via companies/{id}.roleCapabilities
+// to grant or REVOKE company-scoped viewing, but can never confer global authority.
 const DEFAULT_ROLE_CAPABILITIES: Record<string, string[]> = {
-  it: ['manageDrivers', 'viewAllCompanies', 'manageEquipment'],
-  admin: ['manageDrivers', 'manageEquipment'],
-  manager: ['manageDrivers'],
-  dispatch: [],
+  it: ['manageDrivers', 'viewAllCompanies', 'manageEquipment', 'viewWellPool'],
+  admin: ['manageDrivers', 'manageEquipment', 'viewWellPool'],
+  manager: ['manageDrivers', 'viewWellPool'],
+  dispatch: ['viewWellPool'],
   payroll: [],
-  viewer: [],
+  viewer: ['viewWellPool'],
   driver: [],
 };
 
