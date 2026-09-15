@@ -1,4 +1,5 @@
 import { createHash } from 'crypto';
+import { validateAssessment } from './jsaTemplateManagement';
 
 export interface JsaTemplateReader { readTemplate(path: string): Promise<Record<string, unknown> | null> }
 const object = (v: unknown): v is Record<string, unknown> => !!v && typeof v === 'object' && !Array.isArray(v);
@@ -17,6 +18,7 @@ export async function readJsaTaskCatalog(store: JsaTemplateReader, companyId: st
     seen.add(entry.id);
     const raw = await store.readTemplate(`jsa_templates/${companyId}/templates/${entry.id}--published-v${entry.version}`);
     if (!raw || raw.companyId !== companyId || raw.templateId !== entry.id || raw.version !== entry.version || raw.recordType !== 'revision') throw new Error('Published template unavailable');
+    validateAssessment(raw);
     if (!Array.isArray(raw.steps) || !raw.steps.length || raw.steps.length > 40 || !Array.isArray(raw.ppeItems) || !Array.isArray(raw.preparedItems) || !Array.isArray(raw.tasks)) throw new Error('Malformed published template');
     if (typeof raw.name !== 'string' || raw.tasks.some(t => typeof t !== 'string' || !t.trim()) || JSON.stringify(raw.steps).length > 100000) throw new Error('Malformed template content');
     const content = {name:raw.name,tasks:raw.tasks,packageId:raw.packageId || null,steps:raw.steps,ppeItems:raw.ppeItems,preparedItems:raw.preparedItems};

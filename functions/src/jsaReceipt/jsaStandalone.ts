@@ -9,6 +9,7 @@ export class StandaloneError extends Error {
   constructor(public code: 'unauthenticated'|'permission-denied'|'invalid-argument'|'not-found'|'already-exists',message:string){super(message);}
 }
 export interface StandaloneStore {
+  readCatalog?(companyId:string):Promise<Awaited<ReturnType<typeof readJsaTaskCatalog>>>;
   readRecord?(path:string):Promise<Record<string,unknown>|null>;
   readTemplate?(path:string):Promise<Record<string,unknown>|null>;
   list(path:string,after:string|null):Promise<Record<string,unknown>[]>;
@@ -16,6 +17,7 @@ export interface StandaloneStore {
 }
 const hash=(s:string)=>createHash('sha256').update(s).digest('hex');
 const object=(v:unknown):v is Record<string,unknown>=>!!v&&typeof v==='object'&&!Array.isArray(v);
+const catalogFor=(store:StandaloneStore,companyId:string)=>store.readCatalog?store.readCatalog(companyId):readJsaTaskCatalog({readTemplate:path=>store.readTemplate!(path)},companyId);
 function bad():never{throw new StandaloneError('invalid-argument','malformed');}
 // Hash the submitted JSON independently of the mutable catalog. Object key order
 // is irrelevant, but array order and every submitted value remain significant.
@@ -51,7 +53,7 @@ export async function handleStandalone(deps:Pick<SsoDeps,'getDriver'|'getCompany
  if(op==='access')return {allowed:true,companyId:p.companyId,driverId:p.driverId,requiresActiveShift:false};
  if(op==='templates'){
    if(!store.readTemplate)throw new StandaloneError('not-found','template_reader_unavailable');
-   const catalog=await readJsaTaskCatalog({readTemplate:path=>store.readTemplate!(path)},p.companyId);
+   const catalog=await catalogFor(store,p.companyId);
    return {...catalog,companyId:p.companyId,driverId:p.driverId};
  }
  const path=`jsa_standalone_companies/${hash(p.companyId)}/drivers/${hash(p.driverId)}/records`;
@@ -88,7 +90,7 @@ export async function handleStandalone(deps:Pick<SsoDeps,'getDriver'|'getCompany
    let taskAssessment:Record<string,unknown>|null=null;
    if(a.taskReview!==undefined){
      if(!object(a.taskReview)||Object.keys(a.taskReview).some(k=>!['templateRefs','stepAcks'].includes(k))||!object(a.taskReview.stepAcks)||!store.readTemplate)bad();
-     const catalog=await readJsaTaskCatalog({readTemplate:path=>store.readTemplate!(path)},p.companyId);
+     const catalog=await catalogFor(store,p.companyId);
      const selected=selectJsaTaskTemplates(catalog,a.taskReview.templateRefs);
      const acks=a.taskReview.stepAcks;
      if(Object.keys(acks).length!==selected.steps.length||selected.steps.some(s=>acks[s.id]!==true))bad();
@@ -110,7 +112,7 @@ export async function handleStandalone(deps:Pick<SsoDeps,'getDriver'|'getCompany
    const extra:Record<string,unknown>={};
    if(raw.job.templateRefs!==undefined){
      if(!store.readTemplate)throw new StandaloneError('not-found','template_reader_unavailable');
-     const catalog=await readJsaTaskCatalog({readTemplate:path=>store.readTemplate!(path)},p.companyId);
+     const catalog=await catalogFor(store,p.companyId);
      const selected=selectJsaTaskTemplates(catalog,raw.job.templateRefs);
      if(JSON.stringify(raw.job.assessmentSteps)!==JSON.stringify(selected.steps))bad();
      const ppeIds=new Set(selected.ppeItems.map(p=>p.id)),preparedIds=new Set(selected.preparedItems.map(p=>p.id));

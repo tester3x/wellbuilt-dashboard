@@ -1,3 +1,5 @@
+import { authorizeTemplateStaff } from './jsaReceipt/jsaTemplateManagementCallable';
+import { randomUUID as jsaUploadId } from 'crypto';
 import * as functionsV1 from 'firebase-functions/v1';
 import * as functionsV2 from 'firebase-functions/v2/scheduler';
 import * as httpsV2 from 'firebase-functions/v2/https';
@@ -4187,12 +4189,14 @@ export const parseJsaPdf = httpsV2.onCall(
       pdfBase64?: string; fileName?: string; companyId?: string;
     };
 
-    if (!pdfBase64 || !companyId) {
+    if (typeof pdfBase64 !== 'string' || !pdfBase64 || typeof companyId !== 'string' || !companyId || (fileName !== undefined && typeof fileName !== 'string')) {
       throw new httpsV2.HttpsError('invalid-argument', 'pdfBase64 and companyId are required');
     }
 
-    // Save PDF to Storage using admin SDK (no client-side auth needed)
-    const storagePath = `jsa_templates/${companyId}/${fileName || 'jsa.pdf'}`;
+    await authorizeTemplateStaff(async path=>{const snap=await admin.firestore().doc(path).get();return snap.exists?snap.data()!:null;},request.auth,companyId);
+    if(pdfBase64.length>14000000 || (fileName && (fileName.length>180 || /[\\/]/.test(fileName))))throw new httpsV2.HttpsError('invalid-argument','Invalid PDF upload');
+    // Unique source paths prevent a later upload replacing a published source.
+    const storagePath = `jsa_templates/${companyId}/${jsaUploadId()}/${fileName || 'jsa.pdf'}`;
     try {
       const bucket = admin.storage().bucket();
       const file = bucket.file(storagePath);
@@ -4825,3 +4829,5 @@ export { validatePhotoCompliance, suggestPhotoCriteria } from './photoCompliance
 export { scheduledWellCatalogRefresh, triggerWellCatalogRefresh } from './wellCatalogRefresh';
 
 export { jsaStandalone } from './jsaReceipt/jsaStandaloneCallable';
+
+export { jsaManageTemplate } from './jsaReceipt/jsaTemplateManagementCallable';

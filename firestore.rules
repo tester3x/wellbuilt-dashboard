@@ -151,6 +151,15 @@ service cloud.firestore {
       allow read: if isDashboardScoped(resource.data) || ownsDriver(resource.data);
       allow write: if false;
     }
+    match /jsa_governed_requests/{requestId} {
+      allow read, write: if false;
+    }
+    match /jsa_governed_artifacts/{requestId} {
+      allow read, write: if false;
+    }
+    match /jsa_standalone_companies/{company}/drivers/{driver}/records/{recordId} {
+      allow read, write: if false;
+    }
     match /jsa_templates/{cid} {
       allow read: if isDashboardCompanyDoc(cid) || (isDriver() && cid == companyId());
       allow write: if false;

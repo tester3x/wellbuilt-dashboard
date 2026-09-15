@@ -1,0 +1,34 @@
+const assert=require('node:assert/strict');
+const {manageJsaTemplate}=require('../lib/jsaReceipt/jsaTemplateManagement');
+const {authorizeTemplateStaff}=require('../lib/jsaReceipt/jsaTemplateManagementCallable');
+const rows=new Map();let count=0;
+const clone=v=>v?structuredClone(v):null;
+const run=async(operation,templateId,data)=>{
+ const pending=[];let writing=false;
+ const tx={get:async p=>{assert.equal(writing,false);return clone(rows.get(p))},list:async p=>{assert.equal(writing,false);return [...rows].filter(([k])=>k.startsWith(p+'/')).map(([k,v])=>({id:k.slice(p.length+1),data:clone(v)}))},set:(p,v)=>{writing=true;pending.push(()=>rows.set(p,clone(v)))},delete:p=>{writing=true;pending.push(()=>rows.delete(p))}};
+ const r=await manageJsaTemplate(tx,{operation,templateId,companyId:'company',...(data?{data}:{})},'staff-user','2026-09-15T00:00:00Z');pending.forEach(f=>f());return r;
+};
+const test=async(name,fn)=>{await fn();count++;console.log('PASS '+name)};
+const template=(name,tasks)=>({name,tasks,steps:[{id:'s1',title:'Exact '+name,items:[{hazard:'Exact hazard',controls:'Exact control'}]}],ppeItems:[{id:'p1',label:'Gloves'}],preparedItems:[{id:'r1',label:'Trained'}]});
+const col='jsa_templates/company/templates/';
+(async()=>{
+ await test('unauthenticated denied',()=>assert.rejects(()=>authorizeTemplateStaff(async()=>null,undefined,'company')));
+ await test('wrong-company staff denied',()=>assert.rejects(()=>authorizeTemplateStaff(async()=>({enabled:true,role:'manager',companyId:'other'}),{uid:'u',token:{}},'company')));
+ await test('disabled staff denied',()=>assert.rejects(()=>authorizeTemplateStaff(async()=>({enabled:false,role:'manager',companyId:'company'}),{uid:'u',token:{}},'company')));
+ await test('driver claims cannot publish',()=>assert.rejects(()=>authorizeTemplateStaff(async()=>null,{uid:'u',token:{kind:'driver',companyId:'company'}},'company')));
+ await test('company manager allowed',()=>authorizeTemplateStaff(async()=>({enabled:true,role:'manager',companyId:'company'}),{uid:'u',token:{}},'company'));
+ await test('platform claim alone denied',()=>assert.rejects(()=>authorizeTemplateStaff(async()=>null,{uid:'u',token:{wellbuiltAdmin:true}},'company')));
+ await test('enabled platform admin allowed',()=>authorizeTemplateStaff(async p=>p.startsWith('platform_admins/')?{enabled:true}:null,{uid:'u',token:{wellbuiltAdmin:true}},'company'));
+ await test('publish loading and unloading separately',async()=>{await run('save','load',template('Loading',['loading']));await run('publish','load');await run('save','unload',template('Unloading',['unloading']));await run('publish','unload');assert.equal(rows.get('jsa_templates/company').activeTemplates.length,2)});
+ await test('active editing denied',()=>assert.rejects(()=>run('save','load',{name:'Changed'}),/Deactivate/));
+ await test('overlapping tasks rejected',async()=>{await run('save','other',template('Other',['Loading']));await assert.rejects(()=>run('publish','other'),/conflicts/)});
+ await test('revisions preserve exact wording',async()=>{await run('deactivate','load');await run('save','load',template('Revised loading',['loading']));await run('publish','load');assert.equal(rows.get(col+'load--published-v1').steps[0].title,'Exact Loading');assert.equal(rows.get(col+'load--published-v2').steps[0].title,'Exact Revised loading');assert.equal(rows.get(col+'unload').status,'active')});
+ await test('publication retry does not increment version',async()=>{await run('publish','load');assert.equal(rows.get(col+'load').version,2)});
+ await test('published deletion denied',()=>assert.rejects(()=>run('delete','load')));
+ await test('draft deletion allowed',async()=>{await run('delete','other');assert.equal(rows.has(col+'other'),false)});
+ await test('revision edits denied',()=>assert.rejects(()=>run('save','load--published-v1',template('Wrong',[]))));
+ await test('invalid assessment denied',()=>assert.rejects(()=>run('save','bad',{...template('Bad',[]),steps:[{id:'s',title:'Oops',items:[{hazard:'h'}]}]})));
+ await test('server owns version and user metadata',async()=>{assert.equal(rows.get(col+'load').updatedBy,'staff-user');await assert.rejects(()=>run('save','bad',{...template('Bad',[]),version:100}))});
+ await test('unrelated package may use same task',async()=>{await run('save','package',{...template('Package',['loading']),packageId:'another'});await run('publish','package');assert.equal(rows.get('jsa_templates/company').activeTemplates.length,3)});
+ console.log(`${count} template management cases passed; fixtures only`);
+})().catch(e=>{console.error(e);process.exitCode=1});
