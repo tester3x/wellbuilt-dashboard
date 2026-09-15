@@ -1,0 +1,13 @@
+{
+  "fixture": "gabriel2-blank-dropoff",
+  "recordedUtc": "2026-09-15",
+  "context": "WB-T VC105 Job Builder resolved SLAWSON / GABRIEL 2-36-25H / Production Water but supplied NO suggested drop-off.",
+  "rootCause": "recommendation_never_requested",
+  "evidence": "WB-T Job Builder has no recommend/suggest-disposal call; only getCompanySwdDirectory (manual picker load, utils/wellData.ts:607). No disposal-recommendation engine exists (Dashboard disposal audit: all eligibility/most-common rules unmet).",
+  "acceptanceContract_forFutureDisposalEngine": {
+    "input": { "companyId": "liquid-gold", "operator": "SLAWSON EXPLORATION COMPANY, INC.", "well": "GABRIEL 2-36-25H", "waterType": "Production Water", "driverId": "2cad521c-13ac-4b6c-b1ab-07843c6bf06f" },
+    "requiredResult": "one of: (a) the driver's usual eligible drop-off when it remains the best approved choice; (b) another VERIFIED eligible recommendation; (c) an explicit unavailable reason ('No verified drop-off').",
+    "prohibited": "silently choosing the geographically closest SWD before eligibility filtering."
+  },
+  "scopeNote": "This is a Route Me / disposal-engine lane item (checkpoint f16feae9, parked, undeployed). It is NOT implemented as part of the DDJD↔Dashboard identity correction and must not be combined with it."
+}

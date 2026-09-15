@@ -9,6 +9,8 @@ import { pwLifecycle, PW_ACTIVE_STATUSES, isStaleCompletedReentry } from '@/lib/
 import { useSharedNow } from '@/lib/useSharedNow';
 import { projectWellLevel } from '@/lib/wellLevelProjection';
 import { wellDetailHref } from '@/lib/wellDetailLink';
+import { resolveDispatchDriver, dispatchDriverDisplayName, dispatchDriverGroupKey } from '@/lib/dispatchDriverIdentity';
+import { assignmentIdentityForDriver, driverRealName } from '@/lib/dispatchWriterIdentity';
 // Z Fold recovery — layout helpers only (collapsed queue / stacked layout).
 // Live status is read via the governed adminGetWellPool callable (see effect
 // below); the direct-client RTDB status path is claim-gated and not attempted.
@@ -42,7 +44,9 @@ import {
 // ─── Types ───────────────────────────────────────────────────────────────────
 
 interface ApprovedDriver {
-  key: string;           // passcodeHash
+  key: string;           // drivers/approved record key (canonical UUID OR legacy passcodeHash)
+  driverId?: string;     // immutable canonical driver id (preferred join key)
+  legacyAliases?: string[]; // governed legacy hashes/ids bound to this driver
   displayName: string;
   legalName?: string;    // Real name from registration (e.g. "Michael Burger")
   active?: boolean;
@@ -841,6 +845,8 @@ function DispatchPageInner() {
             if (val.active !== false) {
               approved.push({
                 key: hash,
+                driverId: val.driverId || (typeof hash === 'string' && hash.includes('-') ? hash : undefined),
+                legacyAliases: [val.migratedToDriverId].filter(Boolean),
                 displayName: val.displayName,
                 legalName: val.legalName || val.profile?.legalName || '',
                 active: val.active,
@@ -858,6 +864,8 @@ function DispatchPageInner() {
               if (first.active !== false && first.displayName) {
                 approved.push({
                   key: hash,
+                  driverId: first.driverId || (typeof hash === 'string' && hash.includes('-') ? hash : undefined),
+                  legacyAliases: [first.migratedToDriverId].filter(Boolean),
                   displayName: first.displayName,
                   legalName: first.legalName || first.profile?.legalName || '',
                   active: first.active,
@@ -956,11 +964,14 @@ function DispatchPageInner() {
       const assignedMs = (d.assignedAt as { toMillis?: () => number } | undefined)?.toMillis?.() ?? 0;
       const prev = m.get(d.wellName);
       if (!prev || assignedMs >= prev.assignedMs) {
-        m.set(d.wellName, { job: d, status: d.status, driver: d.driverFirstName || d.driverName || '?', assignedMs });
+        // Real driver name via the canonical resolver (never the login/stamped name).
+        const rd = resolveDispatchDriver(d, drivers);
+        const driverLabel = rd ? (rd.legalName || rd.displayName || 'Driver').split(' ')[0] : 'Assigned';
+        m.set(d.wellName, { job: d, status: d.status, driver: driverLabel, assignedMs });
       }
     }
     return m;
-  }, [dispatches]);
+  }, [dispatches, drivers]);
 
   // Most recent COMPLETED pw dispatch per well — used only to suppress a stale
   // pre-pull re-entry into Needs Pull until the fresh post-pull level lands.
@@ -1130,8 +1141,8 @@ function DispatchPageInner() {
         || assignTarget.wellName;
 
       const job: Omit<DispatchJob, 'id'> = {
-        driverHash: assignDriverHash,
-        driverName: driver.displayName,
+        // Canonical driver identity contract (driverId + canonical driverHash + real name).
+        ...assignmentIdentityForDriver(driver),
         driverFirstName,
         wellName: assignTarget.wellName,
         ndicWellName: resolvedNdicName,
@@ -1217,8 +1228,8 @@ function DispatchPageInner() {
 
       const promises = selectedDrivers.map(driver => {
         const baseJob: Omit<DispatchJob, 'id'> = {
-          driverHash: driver.key,
-          driverName: driver.displayName,
+          // Canonical driver identity contract (driverId + canonical driverHash + real name).
+          ...assignmentIdentityForDriver(driver),
           ...(driver.legalName ? { driverFirstName: getFirstName(driver) } : {}),
           wellName: matchedWell?.wellName || swWellName.trim(),
           ndicWellName: swNdicName,
@@ -1429,8 +1440,8 @@ function DispatchPageInner() {
             // above. Optional string fields: null. Optional structured
             // groups: spread-omit. Firestore never sees `undefined`.
             await staffCreateDispatch({
-              driverHash,
-              driverName: driver.displayName,
+              // Canonical driver identity contract (driverId + canonical driverHash + real name).
+              ...assignmentIdentityForDriver(driver),
               driverFirstName,
               wellName,
               ndicWellName: wellData?.ndicName || wellName,
@@ -1548,8 +1559,8 @@ function DispatchPageInner() {
           const wellData = wells.find(w => w.wellName === wellName);
           const driverDisposal = project.driverDisposals?.[driverHash];
           await staffCreateDispatch({
-            driverHash,
-            driverName: driver.displayName,
+            // Canonical driver identity contract (driverId + canonical driverHash + real name).
+            ...assignmentIdentityForDriver(driver),
             driverFirstName,
             wellName,
             ndicWellName: wellData?.ndicName || wellName,
@@ -1638,8 +1649,8 @@ function DispatchPageInner() {
           const driverFirstName = driver.legalName ? driver.legalName.split(' ')[0] : driver.displayName;
           const driverDisposal = project.driverDisposals?.[driverHash];
           await staffCreateDispatch({
-            driverHash,
-            driverName: driver.displayName,
+            // Canonical driver identity contract (driverId + canonical driverHash + real name).
+            ...assignmentIdentityForDriver(driver),
             driverFirstName,
             wellName,
             ndicWellName: wellData?.ndicName || wellName,
@@ -1766,8 +1777,8 @@ function DispatchPageInner() {
       if (reassignMode === 'in_place') {
         if (reassignJob.id) {
           await staffUpdateDispatch(reassignJob.id, {
-            driverHash: reassignDriverHash,
-            driverName: driver.displayName,
+            // Reassign moves the SAME dispatch to the destination driver's canonical identity.
+            ...assignmentIdentityForDriver(driver),
             driverFirstName,
             assignedAt: Timestamp.now(),
             assignedBy: user?.email || 'dashboard',
@@ -1784,8 +1795,8 @@ function DispatchPageInner() {
 
       // Create a new dispatch with the same job details but new driver
       const newJob: Record<string, any> = {
-        driverHash: reassignDriverHash,
-        driverName: driver.displayName,
+        // Canonical driver identity contract (driverId + canonical driverHash + real name).
+        ...assignmentIdentityForDriver(driver),
         driverFirstName,
         wellName: reassignJob.wellName,
         ndicWellName: reassignJob.ndicWellName || reassignJob.wellName,
@@ -1857,8 +1868,8 @@ function DispatchPageInner() {
       const driver = drivers.find(d => d.key === driverHash);
       const driverFirstName = driver?.legalName ? driver.legalName.split(' ')[0] : driverName;
       await staffUpdateDispatch(jobId, {
-        driverHash,
-        driverName,
+        // Canonical driver identity when the driver resolves; compat fallback otherwise.
+        ...(driver ? assignmentIdentityForDriver(driver) : { driverHash, driverName }),
         driverFirstName,
         status: 'pending', // Approve: move from pending_approval → pending so driver sees it
       });
@@ -1940,8 +1951,8 @@ function DispatchPageInner() {
 
         const driverFirstName = driver.legalName ? driver.legalName.split(' ')[0] : driver.displayName;
         const job: Omit<DispatchJob, 'id'> = {
-          driverHash: assignDriverHash,
-          driverName: driver.displayName,
+          // Canonical driver identity contract (driverId + canonical driverHash + real name).
+          ...assignmentIdentityForDriver(driver),
           driverFirstName,
           wellName,
           ndicWellName: resolvedNdic,
@@ -2097,8 +2108,8 @@ function DispatchPageInner() {
         // Create new dispatch docs for added drivers
         const addPromises = newDrivers.map(driver => {
           const job: Omit<DispatchJob, 'id'> = {
-            driverHash: driver.key,
-            driverName: driver.displayName,
+            // Canonical driver identity contract (driverId + canonical driverHash + real name).
+            ...assignmentIdentityForDriver(driver),
             ...(driver.legalName ? { driverFirstName: getFirstName(driver) } : {}),
             wellName: editSwJob.wellName,
             ndicWellName: editSwJob.ndicWellName || editSwJob.wellName,
@@ -2165,8 +2176,8 @@ function DispatchPageInner() {
       const loadsKept = remaining - loadsToGive;
 
       const newJob: Record<string, any> = {
-        driverHash: editPwSplitDriver,
-        driverName: driver.displayName,
+        // Canonical driver identity contract (driverId + canonical driverHash + real name).
+        ...assignmentIdentityForDriver(driver),
         driverFirstName,
         wellName: editSwJob.wellName,
         ndicWellName: editSwJob.ndicWellName || editSwJob.wellName,
@@ -4230,7 +4241,7 @@ function DispatchJobRow({ job, cancelDispatch, compact, onClickServiceWork, onRe
 function ActiveDispatchPanel({ dispatches, cancelDispatch, drivers, assignTransfer, onEditServiceWork, onReassignDeclined, onDismissDeclined }: {
   dispatches: DispatchJob[];
   cancelDispatch: (id: string) => void;
-  drivers?: { key: string; displayName: string; legalName?: string; assignedRoutes?: string[] }[];
+  drivers?: { key: string; driverId?: string; legacyAliases?: string[]; companyId?: string; displayName: string; legalName?: string; assignedRoutes?: string[] }[];
   assignTransfer?: (jobId: string, driverHash: string, driverName: string) => void;
   onEditServiceWork?: (job: DispatchJob) => void;
   onReassignDeclined?: (job: DispatchJob) => void;
@@ -4271,7 +4282,9 @@ function ActiveDispatchPanel({ dispatches, cancelDispatch, drivers, assignTransf
   const grouped = useMemo(() => {
     const map = new Map<string, DispatchJob[]>();
     assigned.forEach(d => {
-      const key = d.driverHash;
+      // Group by the CANONICAL driver identity (driverId preferred; governed legacy-hash
+      // fallback) so a driver's jobs consolidate even when driverHash is stale/legacy.
+      const key = dispatchDriverGroupKey(d, drivers || []);
       if (!map.has(key)) map.set(key, []);
       map.get(key)!.push(d);
     });
@@ -4298,7 +4311,7 @@ function ActiveDispatchPanel({ dispatches, cancelDispatch, drivers, assignTransf
         return bActive - aActive;
       })
     );
-  }, [assigned]);
+  }, [assigned, drivers]);
 
   function toggleDriver(hash: string) {
     setExpandedDrivers(prev => {
@@ -4381,8 +4394,10 @@ function ActiveDispatchPanel({ dispatches, cancelDispatch, drivers, assignTransf
       {/* Driver cards (solo jobs + single-driver SW) */}
       {Array.from(grouped.entries()).map(([driverHash, jobs]) => {
         const isExpanded = expandedDrivers.has(driverHash);
-        const driverRecord = drivers?.find(d => d.key === driverHash);
-        const driverName = driverRecord?.legalName || jobs[0].driverName || jobs[0].driverFirstName || 'Unknown';
+        // Resolve by canonical driverId (legacy-hash fallback), NOT driverHash===key, and
+        // show the driver's REAL profile name — never the login/stamped name.
+        const driverRecord = resolveDispatchDriver(jobs[0], drivers || []);
+        const driverName = dispatchDriverDisplayName(jobs[0], drivers || []);
         const pwCount = jobs.filter(j => j.jobType === 'pw').reduce((s, j) => s + ((j as any).loadCount || 1), 0);
         const swCount = jobs.filter(j => j.jobType === 'service').reduce((s, j) => s + ((j as any).loadCount || 1), 0);
 

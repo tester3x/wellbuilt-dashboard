@@ -3,6 +3,7 @@ import { LEGACY_WELL_POOL_COMPANY_ID } from '../dashboardCatalogProjection';
 /** Every business field the Dispatch UI actually sends on create/update. */
 export const DISPATCH_CREATE_ALLOWLIST = [
   'companyId',
+  'driverId',
   'driverHash',
   'driverName',
   'driverFirstName',
@@ -274,6 +275,93 @@ export function evaluateStaffWriteDispatch(input: {
     }
   }
   return { ok: true, op: 'update', companyId: resolvedCompany, status: next || current };
+}
+
+/**
+ * A canonical driver id is the immutable UUID (dash-bearing) — never a 64-hex
+ * passcode hash or a drivers/approved record key that happens to be a hash.
+ */
+export function isCanonicalDriverId(id: unknown): boolean {
+  const s = asString(id);
+  return s.length > 0 && s.includes('-');
+}
+
+/** Authoritative driver profile fields the server resolves against (never client-supplied). */
+export interface DispatchDriverProfile {
+  companyId: string | null;
+  legalName: string | null;
+  displayName: string | null;
+  active: boolean;
+  exists: boolean;
+}
+
+/**
+ * SERVER-AUTHORITATIVE dispatch identity resolution.
+ *
+ * The Dashboard client is not trusted for the driver's stored identity. Given the
+ * client-supplied driver keys and the driver's canonical profile (resolved by the
+ * caller from drivers/profiles/{driverId}), this returns the identity fields the
+ * server will STAMP:
+ *   - driverId   : canonical UUID
+ *   - driverHash : canonical UUID (temporary compatibility value)
+ *   - driverName : the driver's REAL name (legalName → displayName), never the login
+ *
+ * Rules:
+ *   - A canonical driverId is required to store a canonical identity; it is taken from
+ *     the client driverId (UUID) or, failing that, a client driverHash that is itself a
+ *     canonical UUID.
+ *   - When the profile resolves and declares a companyId that differs from this
+ *     dispatch's company, the write is REJECTED (no cross-company assignment) — unless
+ *     the dispatch company is the legacy well pool (platform-admin unscoped path).
+ *   - When no canonical id exists (legacy driver), the client driverHash/driverName pass
+ *     through as a compatibility fallback and no driverId is stamped.
+ */
+export function resolveServerAssignmentIdentity(input: {
+  clientDriverId?: unknown;
+  clientDriverHash?: unknown;
+  clientDriverName?: unknown;
+  profile?: DispatchDriverProfile | null;
+  dispatchCompanyId: string;
+  legacyWellPoolCompanyId: string;
+}):
+  | { ok: true; fields: { driverId?: string; driverHash?: string; driverName?: string } }
+  | { ok: false; reason: string; field?: string } {
+  const clientId = asString(input.clientDriverId);
+  const clientHash = asString(input.clientDriverHash);
+  const clientName = asString(input.clientDriverName);
+  const canonical = isCanonicalDriverId(clientId)
+    ? clientId
+    : isCanonicalDriverId(clientHash)
+      ? clientHash
+      : '';
+
+  if (!canonical) {
+    // Legacy driver with no canonical UUID — compatibility passthrough.
+    const fields: { driverHash?: string; driverName?: string } = {};
+    if (clientHash) fields.driverHash = clientHash;
+    if (clientName) fields.driverName = clientName;
+    return { ok: true, fields };
+  }
+
+  const profile = input.profile;
+  if (profile && profile.exists) {
+    const profileCompany = asString(profile.companyId);
+    const dispatchCompany = asString(input.dispatchCompanyId);
+    const legacyPool = asString(input.legacyWellPoolCompanyId);
+    if (
+      profileCompany &&
+      dispatchCompany &&
+      dispatchCompany !== legacyPool &&
+      profileCompany !== dispatchCompany
+    ) {
+      return { ok: false, reason: 'driver_company_mismatch', field: profileCompany };
+    }
+    const realName = asString(profile.legalName) || asString(profile.displayName) || clientName;
+    return { ok: true, fields: { driverId: canonical, driverHash: canonical, driverName: realName } };
+  }
+
+  // Canonical id but no resolvable profile — stamp canonical ids, keep client name (compat).
+  return { ok: true, fields: { driverId: canonical, driverHash: canonical, driverName: clientName } };
 }
 
 export function materializeStaffCreate(
