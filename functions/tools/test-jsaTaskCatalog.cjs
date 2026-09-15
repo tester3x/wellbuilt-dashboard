@@ -21,7 +21,17 @@ const revision=(id,task)=>({companyId:'company-1',templateId:id,recordType:'revi
  await assert.rejects(()=>handleStandalone(deps,store,auth,{operation:'templates',companyId:'other'},1));
  await assert.rejects(()=>handleStandalone(deps,store,{...auth,claims:{...auth.claims,app:'tickets'}},{operation:'templates'},1));
  assert.equal(reads.length,count);
+ const original={id:'A'.repeat(43),companyId:'company-1',driverId:'driver-1',workflow:'standalone',state:'open',contentHash:'f'.repeat(64),snapshot:{signature:'fixture unchanged'},job:{operator:'Operator',assessmentTemplates:[result.templates[0]]}};
+ let saved=JSON.parse(JSON.stringify(original));
+ const appendStore={...store,transaction:async(path,fn)=>{const next=fn(saved);if(next)saved=next;return saved}};
+ const newRef=refs.find(r=>r.id==='unload');const extra=selectJsaTaskTemplates(result,[newRef]);
+ const request={operation:'append',recordId:original.id,additionId:'B'.repeat(43),addition:{location:'Disposal',operator:'Operator',activity:'Unloading',hazards:'Fixture hazard',controls:'Fixture control',ppe:'Fixture PPE',acknowledged:true,baseContentHash:original.contentHash,expectedAdditionCount:0,taskReview:{templateRefs:[newRef],stepAcks:Object.fromEntries(extra.steps.map(s=>[s.id,true]))}}};
+ await assert.rejects(()=>handleStandalone(deps,appendStore,auth,{...request,addition:{...request.addition,taskReview:{...request.addition.taskReview,stepAcks:{}}}},2));
+ await handleStandalone(deps,appendStore,auth,request,2);
+ assert.deepEqual(saved.snapshot,original.snapshot);assert.deepEqual(saved.job,original.job);assert.equal(saved.additions[0].taskAssessment.steps[0].title,'Exact Unloading');
+ await handleStandalone(deps,appendStore,auth,request,3);assert.equal(saved.additions.length,1);
+ await assert.rejects(()=>handleStandalone(deps,appendStore,auth,{...request,additionId:'C'.repeat(43),addition:{...request.addition,expectedAdditionCount:1}},4),/already_reviewed/);
  docs.delete(root+'/templates/unload--published-v1');await assert.rejects(()=>readJsaTaskCatalog(store,'company-1'),/unavailable/);
  docs.set(root,{schemaVersion:2,activeTemplates:[{id:'../other',version:1}]});await assert.rejects(()=>readJsaTaskCatalog(store,'company-1'),/reference/);
- console.log('PASS: authenticated company catalog, task versions, stable hashes, missing revision failure, audience and cross-company rejection without writes');
+ console.log('PASS: authenticated company catalog, task versions, stable hashes, missing revision failure, audience and cross-company rejection; new-task acknowledgement, original preservation and duplicate retry');
 })().catch(e=>{console.error(e);process.exitCode=1});
