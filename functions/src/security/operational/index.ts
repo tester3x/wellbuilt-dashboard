@@ -31,5 +31,9 @@ export {
 } from './invoiceOps';
 export { getPublicClientMeta } from './publicMeta';
 
-export { createDriverTransferRequest } from './transferRequestOps';
+export {
+  createDriverTransferRequest,
+  resolveTransferRequest,
+  acceptTransferRequest,
+} from './transferRequestOps';
 

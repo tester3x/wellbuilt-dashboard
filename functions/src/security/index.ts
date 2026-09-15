@@ -58,6 +58,8 @@ export {
   requestStorageUploadPath,
   upsertDriverInvoice,
   createDriverTransferRequest,
+  resolveTransferRequest,
+  acceptTransferRequest,
   patchDriverInvoicePhotos,
   mergeDurablePhotos,
   upsertDriverDispatch,

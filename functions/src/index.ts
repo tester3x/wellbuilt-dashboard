@@ -4953,6 +4953,8 @@ export {
   requestStorageUploadPath,
   upsertDriverInvoice,
   createDriverTransferRequest,
+  resolveTransferRequest,
+  acceptTransferRequest,
   patchDriverInvoicePhotos,
   upsertDriverDispatch,
   sendChatMessage,
