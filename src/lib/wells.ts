@@ -41,7 +41,9 @@ export interface WellResponse {
   // Raw numeric level for precision (avoids parsing formatted string)
   currentLevelInches?: number; // Total inches — used by Add Pull modal
   // Tank dimensions from well_config
-  bblPerFoot?: number;         // Stored BBL/ft (overrides numTanks * 20 default)
+  bblPerFoot?: number;
+  companyId?: string;
+  wellId?: string;
 }
 
 export interface WellConfig {
@@ -53,6 +55,8 @@ export interface WellConfig {
   tankCapacity?: number;  // BBL per tank (default 400)
   tankHeight?: number;    // feet per tank (default 20)
   bblPerFoot?: number;    // (tankCapacity / tankHeight) * numTanks
+  companyId?: string;
+  wellId?: string;
 }
 
 /** Snapshot well list from the admin catalog when RTDB parent reads are denied. */
@@ -62,8 +66,17 @@ export function wellResponsesFromCatalog(wellConfig: Record<string, unknown>): W
     const tanks = typeof config.tanks === 'number'
       ? config.tanks
       : typeof config.numTanks === 'number' ? config.numTanks : 1;
+    const companyId = typeof config.companyId === 'string' && config.companyId.trim()
+      ? config.companyId.trim()
+      : undefined;
+    const rawWid = config.wellId ?? config.id;
+    const wellId = typeof rawWid === 'string' && rawWid.trim()
+      ? rawWid.trim()
+      : typeof rawWid === 'number' && Number.isFinite(rawWid) ? String(rawWid) : undefined;
     return {
       wellName,
+      companyId,
+      wellId,
       currentLevel: '--',
       etaToMax: '',
       flowRate: typeof config.avgFlowRate === 'string' ? config.avgFlowRate : 'Unknown',
@@ -82,9 +95,33 @@ export function mergeWellPool(
   wellStatus: Record<string, unknown> = {},
 ): WellResponse[] {
   return wellResponsesFromCatalog(wellConfig).map((well) => {
-    const st = (wellStatus[well.wellName] && typeof wellStatus[well.wellName] === 'object')
-      ? wellStatus[well.wellName] as Record<string, unknown>
-      : {};
+    let st: Record<string, unknown> = {};
+    // 1. Try match by canonical composite key (companyId__wellId)
+    if (well.companyId && well.wellId) {
+      const canonicalKey = `${well.companyId}__${well.wellId}`;
+      if (wellStatus[canonicalKey] && typeof wellStatus[canonicalKey] === 'object') {
+        st = wellStatus[canonicalKey] as Record<string, unknown>;
+      }
+    }
+    // 2. Try match by canonical wellId directly (e.g. company-scoped pool indexed by wellId)
+    if (Object.keys(st).length === 0 && well.wellId && wellStatus[well.wellId] && typeof wellStatus[well.wellId] === 'object') {
+      const candidate = wellStatus[well.wellId] as Record<string, unknown>;
+      const candCompany = typeof candidate.companyId === 'string' ? candidate.companyId.trim() : '';
+      if (!candCompany || !well.companyId || candCompany === well.companyId) {
+        st = candidate;
+      }
+    }
+    // 3. Fallback: match by wellName, but ONLY if companyId / wellId match or status lacks identity
+    if (Object.keys(st).length === 0 && wellStatus[well.wellName] && typeof wellStatus[well.wellName] === 'object') {
+      const candidate = wellStatus[well.wellName] as Record<string, unknown>;
+      const candCompany = typeof candidate.companyId === 'string' ? candidate.companyId.trim() : '';
+      const candWellId = candidate.wellId != null ? String(candidate.wellId).trim() : '';
+      const companyMatches = !candCompany || !well.companyId || candCompany === well.companyId;
+      const wellIdMatches = !candWellId || !well.wellId || candWellId === well.wellId;
+      if (companyMatches && wellIdMatches) {
+        st = candidate;
+      }
+    }
     return {
       ...well,
       currentLevel: typeof st.currentLevel === 'string' ? st.currentLevel : well.currentLevel,

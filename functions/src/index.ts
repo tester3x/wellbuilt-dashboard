@@ -45,9 +45,13 @@ import { deleteOpId, editOpId, pullOpId } from './materializedSignal';
 import { runOwnerMaterializeTxn } from './pullMaterialize';
 import { reconcileWellAfterDelete, type ReconcileDb } from './deleteReconcile';
 import { applyOutgoingAfterDelete, type OutgoingDb } from './outgoingReconcile';
+import { outgoingCompositeKey } from './security/outgoingCompositeKey';
+import { canonicalWellId } from './security/dashboardCatalogProjection';
 
 
-admin.initializeApp();
+if (!admin.apps.length) {
+  admin.initializeApp();
+}
 admin.firestore().settings({ ignoreUndefinedProperties: true });
 const db = admin.database();
 
@@ -379,11 +383,11 @@ interface OutgoingResponse {
   lastPullDriverName?: string | null;
   lastPullPacketId?: string | null;
   companyId?: string;
+  wellId?: string;
 }
 
 function outgoingCompanyId(config: { companyId?: unknown } | null | undefined): string {
-  const cid = typeof config?.companyId === 'string' ? config.companyId.trim() : '';
-  return cid || 'liquid-gold';
+  return typeof config?.companyId === 'string' ? config.companyId.trim() : '';
 }
 
 // NEW UNIFIED STRUCTURE - Single source of truth
@@ -408,7 +412,7 @@ interface WellStatus {
     bottomLevel: string;  // "5'2\"" format
     bottomLevelInches: number;
     bblsTaken: number;
-    driverName?: string;
+    driverName?: string | null;
     packetId: string;
   };
   calculated: {
@@ -817,36 +821,86 @@ export const processIncomingPull = functionsV1.database
 
     console.log(`Processing pull for ${wellName}: ${packetId}`);
 
-    // Get well config - try with spaces first (dashboard format), fall back to no spaces (legacy)
+    // Get well config - try with spaces first (dashboard format), candidate key, fall back to no spaces (legacy)
     let wellConfigKey = wellName;
     let configSnap = await db.ref(`well_config/${wellName}`).once('value');
+    if (!configSnap.exists() && (data as any).wellConfigKey) {
+      configSnap = await db.ref(`well_config/${(data as any).wellConfigKey}`).once('value');
+      if (configSnap.exists()) wellConfigKey = (data as any).wellConfigKey;
+    }
+    if (!configSnap.exists() && (data as any).wellId) {
+      configSnap = await db.ref(`well_config/${(data as any).wellId}`).once('value');
+      if (configSnap.exists()) wellConfigKey = (data as any).wellId;
+    }
     if (!configSnap.exists()) {
       // Try legacy format without spaces
       configSnap = await db.ref(`well_config/${cleanName}`).once('value');
       if (configSnap.exists()) wellConfigKey = cleanName;
     }
     const config = configSnap.val() || {};
+
+    // Authoritatively derive tenant and canonical well identity from bound well_config
+    const boundCompanyId = typeof config.companyId === 'string' ? config.companyId.trim() : '';
+    const boundWellId = canonicalWellId(config);
+    const boundWellName = typeof config.wellName === 'string' && config.wellName.trim()
+      ? config.wellName.trim()
+      : (wellName || '');
+
+    if (!boundCompanyId || !boundWellId) {
+      console.warn(`[GOVERNED_WRITE_BLOCKED] ${wellName}: missing authoritative companyId or canonical wellId on well_config — failing closed`);
+      await quarantineIncomingPacket(db.ref(), {
+        packetId,
+        packet: data,
+        verdict: {
+          action: 'quarantine',
+          reason: 'STRANDED_INCOMING_PACKET',
+          readableReason: `Well configuration lacks authoritative companyId or canonical wellId (companyId="${boundCompanyId}", wellId="${boundWellId}")`,
+        },
+        nowMs: Date.now(),
+      });
+      return null;
+    }
+
     const bottomInches = (config.bottomLevel || config.allowedBottom || DEFAULTS.bottomLevel) * 12;
     const tanks = config.tanks || config.numTanks || DEFAULTS.tanks;
     const pullBbls = config.pullBbls || DEFAULTS.pullBbls;
 
-    // Get current outgoing response (previous row data)
-    const outgoingSnap = await db.ref('packets/outgoing')
-      .orderByChild('wellName')
-      .equalTo(wellName)
-      .limitToLast(1)
-      .once('value');
-
+    // Get current outgoing response for this exact (boundCompanyId, boundWellId)
+    const compositeKey = outgoingCompositeKey(boundCompanyId, boundWellId);
     let prevTankAfterInches = 0;
     let prevTimestamp = '';
     let prevResponse: any = null;
 
-    outgoingSnap.forEach((child) => {
-      const prev = child.val();
+    const outgoingSnap = await db.ref(`packets/outgoing/${compositeKey}`).once('value');
+    if (outgoingSnap.exists()) {
+      const prev = outgoingSnap.val();
       prevTankAfterInches = feetInchesToInches(prev.lastPullBottomLevel);
       prevTimestamp = prev.lastPullDateTimeUTC;
       prevResponse = prev;
-    });
+    } else {
+      // Transition fallback: check legacy row for this well matching bound company and wellId
+      const legacySnap = await db.ref('packets/outgoing')
+        .orderByChild('wellName')
+        .equalTo(wellName)
+        .once('value');
+      let newestLegacyTime = 0;
+      legacySnap.forEach((child) => {
+        const row = child.val() || {};
+        const rowCompany = typeof row.companyId === 'string' ? row.companyId.trim() : '';
+        const rowWellId = canonicalWellId(row);
+        const matchesCo = !rowCompany || rowCompany === boundCompanyId;
+        const matchesWid = !rowWellId || rowWellId === boundWellId;
+        if (matchesCo && matchesWid) {
+          const t = Date.parse(row.lastPullDateTimeUTC || row.timestampUTC || '') || 0;
+          if (t >= newestLegacyTime) {
+            newestLegacyTime = t;
+            prevTankAfterInches = feetInchesToInches(row.lastPullBottomLevel);
+            prevTimestamp = row.lastPullDateTimeUTC;
+            prevResponse = row;
+          }
+        }
+      });
+    }
 
         // ─── Exact-ID idempotency — BEFORE every future/stale guard ─────────
     // WB-M retries with STABLE ids: a replay of an id already in
@@ -892,21 +946,8 @@ export const processIncomingPull = functionsV1.database
       .ref(`wells/${wellName}/status/lastPull/dateTimeUTC`)
       .once('value');
     const wellStatusLastPullUTC = wellStatusLastPullSnap.val();
-    let hwCompanyId =
-      (typeof (data as any).companyId === 'string' && (data as any).companyId.trim()) ||
-      (typeof config.companyId === 'string' && config.companyId.trim()) ||
-      '';
-    if (!hwCompanyId && data.driverId) {
-      try {
-        const driverCo = await db.ref(`drivers/approved/${data.driverId}/companyId`).once('value');
-        if (driverCo.exists()) hwCompanyId = String(driverCo.val() || '').trim();
-      } catch { /* best-effort */ }
-    }
-    if (!hwCompanyId) hwCompanyId = outgoingCompanyId(config);
-    const wellKey = canonicalWellKey({
-      wellId: (data as any).wellId || config.wellId || config.id,
-      wellConfigKey,
-    }) || wellConfigKey;
+    const hwCompanyId = boundCompanyId;
+    const wellKey = boundWellId;
     const wellStatePath = namespacedWellStatePath(hwCompanyId, wellKey);
     const highWaterSnap = await db.ref(`${wellStatePath}/pullHighWater`).once('value');
     const highWaterVal = highWaterSnap.val() || null;
@@ -1192,7 +1233,7 @@ export const processIncomingPull = functionsV1.database
     // Build outgoing response
     const timestamp = new Date();
     const outgoingResponse: OutgoingResponse = {
-      wellName,
+      wellName: boundWellName,
       currentLevel: inchesToFeetInches(currentLevelInches),
       flowRate: afr > 0 ? daysToHMMSS(afr) : 'Unknown',
       bbls24hrs,
@@ -1208,7 +1249,8 @@ export const processIncomingPull = functionsV1.database
       lastPullDriverName: data.driverName || null,
       lastPullPacketId: packetId,
       wellDown: nextIsDown,
-      companyId: outgoingCompanyId(config),
+      companyId: boundCompanyId,
+      wellId: boundWellId,
       status: 'success',
       timestamp: timestamp.toISOString(),
       timestampUTC: timestamp.toISOString(),
@@ -1216,7 +1258,7 @@ export const processIncomingPull = functionsV1.database
       overnightBblsDay: overnightBblsDay > 0 ? overnightBblsDay.toString() : null,
     };
 
-    const responseId = `response_${timestamp.toISOString().replace(/[-:]/g, '').replace('T', '_').split('.')[0]}_${cleanName}`;
+    const responseId = compositeKey;
 
     // Write performance data for Performance screen
     // Format: performance/{wellKey}/rows/{timestamp} = { d, a, p }
@@ -1290,7 +1332,7 @@ export const processIncomingPull = functionsV1.database
         bottomLevel: inchesToFeetInches(tankAfterInches),
         bottomLevelInches: tankAfterInches,
         bblsTaken: data.bblsTaken,
-        driverName: data.driverName,
+        driverName: data.driverName || null,
         packetId,
       },
       calculated: {
@@ -1315,16 +1357,44 @@ export const processIncomingPull = functionsV1.database
         .once('value');
       const deletePromises: Promise<void>[] = [];
       oldResponses.forEach((child) => {
-        deletePromises.push(child.ref.remove());
+        if (child.key === responseId) return;
+        const row = child.val() || {};
+        const rowCompany = typeof row.companyId === 'string' ? row.companyId.trim() : '';
+        const rowWellId = canonicalWellId(row);
+        const isSameCompany = rowCompany === boundCompanyId;
+        const isSameWell = !rowWellId || rowWellId === boundWellId;
+        if (isSameCompany && isSameWell) {
+          deletePromises.push(child.ref.remove());
+        }
       });
       await Promise.all(deletePromises);
-      await db.ref(`packets/outgoing/${responseId}`).set(outgoingResponse);
+
+      // Watermark check: do not overwrite if existing composite row has newer lastPullDateTimeUTC
+      const existingCompositeSnap = await db.ref(`packets/outgoing/${responseId}`).once('value');
+      let shouldWrite = true;
+      if (existingCompositeSnap.exists()) {
+        const existingRow = existingCompositeSnap.val() || {};
+        const existingUtc = existingRow.lastPullDateTimeUTC || existingRow.timestampUTC || '';
+        const incomingUtc = data.dateTimeUTC || '';
+        if (existingUtc && incomingUtc) {
+          const existingTime = Date.parse(existingUtc) || 0;
+          const incomingTime = Date.parse(incomingUtc) || 0;
+          if (existingTime > incomingTime) {
+            console.log(`[PULL] ${wellName}: existing outgoing row is newer (${existingUtc} > ${incomingUtc}) — preserving newer row`);
+            shouldWrite = false;
+          }
+        }
+      }
+
+      if (shouldWrite) {
+        await db.ref(`packets/outgoing/${responseId}`).set(outgoingResponse);
+      }
       if (afr > 0) {
-        await db.ref(`well_config/${wellName}`).update({
+        await db.ref(`well_config/${wellConfigKey}`).update({
           avgFlowRate: daysToHMMSS(afr),
           avgFlowRateMinutes: Math.round(afrMinutes * 100) / 100,
         });
-        console.log(`Updated well_config/${wellName} avgFlowRate: ${daysToHMMSS(afr)} (${afrMinutes.toFixed(2)} min)`);
+        console.log(`Updated well_config/${wellConfigKey} avgFlowRate: ${daysToHMMSS(afr)} (${afrMinutes.toFixed(2)} min)`);
       }
       await db.ref(`wells/${wellName}/status`).set(wellStatus);
       console.log(`[NEW] Wrote wells/${wellName}/status`);
@@ -1356,7 +1426,7 @@ export const processIncomingPull = functionsV1.database
     // older pull that lost high-water must not overwrite a newer well signal.
     if (holdsHighWater) {
       await notifyMaterializedBestEffort(db.ref(), {
-        companyId: outgoingCompanyId(config),
+        companyId: boundCompanyId,
         wellName,
         kind: 'pull',
         opId: pullOpId(packetId),
@@ -1832,11 +1902,39 @@ export const processEditRequest = functionsV1.database
 
     // Get well config
     const cleanName = wellName.replace(/\s/g, '');
+    let wellConfigKey = wellName;
     let configSnap = await db.ref(`well_config/${wellName}`).once('value');
+    const candKey = (data as any).wellConfigKey || (data as any).wellId || (origPacket as any).wellConfigKey || (origPacket as any).wellId;
+    if (!configSnap.exists() && candKey) {
+      configSnap = await db.ref(`well_config/${candKey}`).once('value');
+      if (configSnap.exists()) wellConfigKey = candKey;
+    }
     if (!configSnap.exists()) {
       configSnap = await db.ref(`well_config/${cleanName}`).once('value');
+      if (configSnap.exists()) wellConfigKey = cleanName;
     }
     const config = configSnap.val() || {};
+
+    const boundCompanyId = typeof config.companyId === 'string' ? config.companyId.trim() : '';
+    const boundWellId = canonicalWellId(config);
+    const boundWellName = typeof config.wellName === 'string' && config.wellName.trim()
+      ? config.wellName.trim()
+      : (wellName || '');
+
+    if (!boundCompanyId || !boundWellId) {
+      console.warn(`[GOVERNED_WRITE_BLOCKED] ${wellName}: missing authoritative companyId or canonical wellId on well_config — failing closed`);
+      await quarantineIncomingPacket(db.ref(), {
+        packetId: context.params.packetId,
+        packet: data,
+        verdict: {
+          action: 'quarantine',
+          reason: 'STRANDED_INCOMING_PACKET',
+          readableReason: `Well configuration lacks authoritative companyId or canonical wellId (companyId="${boundCompanyId}", wellId="${boundWellId}")`,
+        },
+        nowMs: Date.now(),
+      });
+      return null;
+    }
     const tanks = config.tanks || config.numTanks || DEFAULTS.tanks;
     // Effective bbl/ft (override / derived); legacy 20×tanks fallback only.
     const bblPerFoot = Number(config.bblPerFoot) > 0 ? Number(config.bblPerFoot) : 20 * tanks;
@@ -2082,24 +2180,40 @@ export const processEditRequest = functionsV1.database
     const editWindowBblsDay = calculateWindowBblsPerDay(editHistoricalPulls, editBblPerFoot, editPullTimeMs);
     const editOvernightBblsDay = calculateOvernightBblsPerDay(editHistoricalPulls, editBblPerFoot, editPullTimeMs);
 
+    const compositeKey = outgoingCompositeKey(boundCompanyId, boundWellId);
+
     // Check if this is the most recent pull for the well
-    const outgoingSnap = await db.ref('packets/outgoing')
-      .orderByChild('wellName')
-      .equalTo(wellName)
-      .limitToLast(1)
-      .once('value');
+    const outgoingSnap = await db.ref(`packets/outgoing/${compositeKey}`).once('value');
 
     let isLatestPull = false;
-    let hasOutgoing = false;
-    outgoingSnap.forEach((child) => {
-      hasOutgoing = true;
-      const resp = child.val();
+    let hasOutgoing = outgoingSnap.exists();
+    if (hasOutgoing) {
+      const resp = outgoingSnap.val();
       // If the outgoing response points to this packet's timestamp, it's the latest
       // Check both original and new dateTimeUTC in case date was edited
       if (resp.lastPullDateTimeUTC === origPacket.dateTimeUTC || resp.lastPullDateTimeUTC === newDateTimeUTC) {
         isLatestPull = true;
       }
-    });
+    } else {
+      // Transition fallback: check legacy row for this well matching bound company and wellId
+      const legacySnap = await db.ref('packets/outgoing')
+        .orderByChild('wellName')
+        .equalTo(wellName)
+        .once('value');
+      legacySnap.forEach((child) => {
+        const row = child.val() || {};
+        const rowCompany = typeof row.companyId === 'string' ? row.companyId.trim() : '';
+        const rowWellId = canonicalWellId(row);
+        const matchesCo = !rowCompany || rowCompany === boundCompanyId;
+        const matchesWid = !rowWellId || rowWellId === boundWellId;
+        if (matchesCo && matchesWid) {
+          hasOutgoing = true;
+          if (row.lastPullDateTimeUTC === origPacket.dateTimeUTC || row.lastPullDateTimeUTC === newDateTimeUTC) {
+            isLatestPull = true;
+          }
+        }
+      });
+    }
 
     // If no outgoing response exists for this well at all, treat as latest
     // (fixes wells that never got an outgoing response due to requestType bug)
@@ -2107,7 +2221,7 @@ export const processEditRequest = functionsV1.database
       isLatestPull = true;
     }
 
-    if (isLatestPull && afr > 0) {
+    if (isLatestPull) {
       // Recalculate outgoing response fields
       const pullHeightInches = (pullBbls / bblPerFoot) * 12;
       const targetLevel = bottomInches + pullHeightInches;
@@ -2115,87 +2229,82 @@ export const processEditRequest = functionsV1.database
 
       let estTimeToPull = '';
       let estDateTimePull = '';
-      if (recoveryNeeded > 0) {
+      if (afr > 0 && recoveryNeeded > 0) {
         const estDays = (recoveryNeeded / 12) * afr;
         estTimeToPull = daysToHMM(estDays);
         const pullDate = new Date(newDateTimeUTC);
         const estDate = new Date(pullDate.getTime() + estDays * 24 * 60 * 60 * 1000);
         estDateTimePull = estDate.toISOString();
-      } else {
+      } else if (recoveryNeeded === 0) {
         estTimeToPull = '0:00';
         estDateTimePull = newDateTimeUTC;
       }
 
-      const bbls24 = (1 / afr) * bblPerFoot;
-      const bbls24hrs = Math.round(bbls24).toString();
-
-      if (hasOutgoing) {
-        // Update existing outgoing response
-        outgoingSnap.forEach((child) => {
-          child.ref.update({
-            currentLevel: inchesToFeetInches(newTankAfterInches),
-            flowRate: daysToHMMSS(afr),
-            bbls24hrs,
-            lastPullTopLevel: inchesToFeetInches(newTankTopInches),
-            lastPullBottomLevel: inchesToFeetInches(newTankAfterInches),
-            lastPullBbls: newBblsTaken.toString(),
-            lastPullDateTime: newDateTime || formatLocalDateTime(new Date(newDateTimeUTC)),
-            lastPullDateTimeUTC: newDateTimeUTC,
-            timeTillPull: nextEditIsDown ? 'Down' : (estTimeToPull || 'Calculating...'),
-            nextPullTime: estDateTimePull ? formatLocalDateTime(new Date(estDateTimePull)) : 'Unknown',
-            nextPullTimeUTC: estDateTimePull,
-            isEdit: true,
-            originalPacketId,
-            wellDown: nextEditIsDown,
-            lastPullDriverId: origPacket.driverId || null,
-            lastPullDriverName: origPacket.driverName || null,
-            lastPullPacketId: originalPacketId,
-            windowBblsDay: editWindowBblsDay > 0 ? editWindowBblsDay.toString() : null,
-            overnightBblsDay: editOvernightBblsDay > 0 ? editOvernightBblsDay.toString() : null,
-            companyId: outgoingCompanyId(config),
-          });
-        });
-      } else {
-        // No outgoing response exists — create one
-        const responseTimestamp = new Date();
-        const responseId = `response_${responseTimestamp.toISOString().replace(/[-:]/g, '').replace('T', '_').split('.')[0]}_${cleanName}`;
-        await db.ref(`packets/outgoing/${responseId}`).set({
-          wellName,
-          currentLevel: inchesToFeetInches(newTankAfterInches),
-          flowRate: daysToHMMSS(afr),
-          bbls24hrs,
-          lastPullTopLevel: inchesToFeetInches(newTankTopInches),
-          lastPullBottomLevel: inchesToFeetInches(newTankAfterInches),
-          lastPullBbls: newBblsTaken.toString(),
-          lastPullDateTime: newDateTime || formatLocalDateTime(new Date(newDateTimeUTC)),
-          lastPullDateTimeUTC: newDateTimeUTC,
-          timeTillPull: nextEditIsDown ? 'Down' : (estTimeToPull || 'Calculating...'),
-          nextPullTime: estDateTimePull ? formatLocalDateTime(new Date(estDateTimePull)) : 'Unknown',
-          nextPullTimeUTC: estDateTimePull,
-          wellDown: nextEditIsDown,
-          status: 'success',
-          timestamp: responseTimestamp.toISOString(),
-          timestampUTC: responseTimestamp.toISOString(),
-          isEdit: true,
-          originalPacketId,
-          lastPullDriverId: origPacket.driverId || null,
-          lastPullDriverName: origPacket.driverName || null,
-          lastPullPacketId: originalPacketId,
-          windowBblsDay: editWindowBblsDay > 0 ? editWindowBblsDay.toString() : null,
-          overnightBblsDay: editOvernightBblsDay > 0 ? editOvernightBblsDay.toString() : null,
-          companyId: outgoingCompanyId(config),
-        });
-        console.log(`Edit: Created new outgoing response for ${wellName} (none existed)`);
+      let bbls24hrs = '0';
+      if (afr > 0) {
+        const bbls24 = (1 / afr) * bblPerFoot;
+        bbls24hrs = Math.round(bbls24).toString();
       }
 
-      // Update well_config AFR
-      const afrMinutes = afr * 24 * 60;
-      await db.ref(`well_config/${wellName}`).update({
-        avgFlowRate: daysToHMMSS(afr),
-        avgFlowRateMinutes: Math.round(afrMinutes * 100) / 100,
-      });
+      const editOutgoingResponse: OutgoingResponse = {
+        wellName: boundWellName,
+        currentLevel: inchesToFeetInches(newTankAfterInches),
+        flowRate: afr > 0 ? daysToHMMSS(afr) : 'Unknown',
+        bbls24hrs,
+        lastPullTopLevel: inchesToFeetInches(newTankTopInches),
+        lastPullBottomLevel: inchesToFeetInches(newTankAfterInches),
+        lastPullBbls: newBblsTaken.toString(),
+        lastPullDateTime: newDateTime || formatLocalDateTime(new Date(newDateTimeUTC)),
+        lastPullDateTimeUTC: newDateTimeUTC,
+        timeTillPull: nextEditIsDown ? 'Down' : (estTimeToPull || 'Calculating...'),
+        nextPullTime: estDateTimePull ? formatLocalDateTime(new Date(estDateTimePull)) : 'Unknown',
+        nextPullTimeUTC: estDateTimePull,
+        wellDown: nextEditIsDown,
+        status: 'success',
+        timestamp: new Date().toISOString(),
+        timestampUTC: new Date().toISOString(),
+        isEdit: true,
+        originalPacketId,
+        lastPullDriverId: origPacket.driverId || null,
+        lastPullDriverName: origPacket.driverName || null,
+        lastPullPacketId: originalPacketId,
+        windowBblsDay: editWindowBblsDay > 0 ? editWindowBblsDay.toString() : null,
+        overnightBblsDay: editOvernightBblsDay > 0 ? editOvernightBblsDay.toString() : null,
+        companyId: boundCompanyId,
+        wellId: boundWellId,
+      };
 
-      console.log(`Edit: Updated outgoing + AFR for ${wellName}`);
+      await db.ref(`packets/outgoing/${compositeKey}`).set(editOutgoingResponse);
+
+      // Clean up legacy rows for that exact well/company pair only, leaving other tenants' same-named rows untouched
+      const oldLegacySnap = await db.ref('packets/outgoing')
+        .orderByChild('wellName')
+        .equalTo(wellName)
+        .once('value');
+      const deletePromises: Promise<void>[] = [];
+      oldLegacySnap.forEach((child) => {
+        if (child.key === compositeKey) return;
+        const row = child.val() || {};
+        const rowCompany = typeof row.companyId === 'string' ? row.companyId.trim() : '';
+        const rowWellId = canonicalWellId(row);
+        const isSameCompany = rowCompany === boundCompanyId;
+        const isSameWell = !rowWellId || rowWellId === boundWellId;
+        if (isSameCompany && isSameWell) {
+          deletePromises.push(child.ref.remove());
+        }
+      });
+      await Promise.all(deletePromises);
+      console.log(`Edit: Wrote composite outgoing response and cleaned up legacy rows for ${wellName}`);
+
+      // Update well_config AFR
+      if (afr > 0) {
+        const afrMinutes = afr * 24 * 60;
+        await db.ref(`well_config/${wellConfigKey}`).update({
+          avgFlowRate: daysToHMMSS(afr),
+          avgFlowRateMinutes: Math.round(afrMinutes * 100) / 100,
+        });
+        console.log(`Edit: Updated outgoing + AFR for ${wellName}`);
+      }
     }
 
     // Update performance/ row (WB M reads from here)
@@ -2500,7 +2609,7 @@ export const processEditRequest = functionsV1.database
     // Historical edits update processed history but not current outgoing.
     if (isLatestPull) {
       await notifyMaterializedBestEffort(db.ref(), {
-        companyId: outgoingCompanyId(config),
+        companyId: boundCompanyId,
         wellName,
         kind: 'edit',
         opId: editOpId(context.params.packetId, originalPacketId),
@@ -2605,7 +2714,9 @@ export const processDeleteRequest = functionsV1.database
         if (configSnap.exists()) wellConfigKey = cleanName;
       }
       const config = configSnap.val() || {};
-      deleteCompanyId = outgoingCompanyId(config);
+      const delCompanyId = typeof config.companyId === 'string' ? config.companyId.trim() : (deletedPacket?.companyId || '');
+      const delWellId = canonicalWellId(config) || (deletedPacket?.wellId || '');
+      deleteCompanyId = delCompanyId;
       const tanks = config.tanks || config.numTanks || DEFAULTS.tanks;
       const pullBbls = config.pullBbls || DEFAULTS.pullBbls;
       const bottomInches = (config.bottomLevel || config.allowedBottom || DEFAULTS.bottomLevel) * 12;
@@ -2704,7 +2815,8 @@ export const processDeleteRequest = functionsV1.database
             isDeleteRebuild: true,
             windowBblsDay: windowBblsDay > 0 ? windowBblsDay.toString() : null,
             overnightBblsDay: overnightBblsDay > 0 ? overnightBblsDay.toString() : null,
-            companyId: outgoingCompanyId(config),
+            companyId: delCompanyId,
+            wellId: delWellId,
           };
 
           // Owner-scoped outgoing reconcile: remove ONLY the deleted packet's
@@ -2720,6 +2832,8 @@ export const processDeleteRequest = functionsV1.database
             survivorRow: outgoingResponse,
             survivorId: latestPacket.packetId || null,
             survivorUtc: latestPacket.dateTimeUTC || null,
+            companyId: delCompanyId || undefined,
+            wellId: delWellId || undefined,
           });
           console.log(`Delete: outgoing owner-scoped for ${wellName} — removed=${outRes.removed} wroteSurvivor=${outRes.wroteSurvivor}`);
 
@@ -2798,6 +2912,8 @@ export const processDeleteRequest = functionsV1.database
             survivorRow: null,
             survivorId: null,
             survivorUtc: null,
+            companyId: delCompanyId || undefined,
+            wellId: delWellId || undefined,
           });
           console.log(`Delete: No remaining pulls for ${wellName}, removed ${outRes.removed} owned outgoing row(s)`);
 
@@ -2850,11 +2966,11 @@ export const processDeleteRequest = functionsV1.database
         dateTimeUTC: deletedPacket.dateTimeUTC,
         tankLevelFeet: deletedPacket.tankLevelFeet,
         bblsTaken: deletedPacket.bblsTaken,
-        driverName: deletedPacket.driverName,
+        driverName: deletedPacket.driverName || null,
       } : null,
       result: deletedPacket ? 'rebuilt_from_previous' : 'packet_not_found',
     };
-    await db.ref(`packets/processed/delete_${targetPacketId}`).set(auditData);
+    await db.ref(`packets/processed/delete_${targetPacketId}`).set(JSON.parse(JSON.stringify(auditData)));
     await snapshot.ref.remove();
 
     await notifyIncomingVersionBestEffort(db.ref('packets/incoming_version'), {

@@ -118,6 +118,8 @@ export const WELL_CONFIG_ALLOWLIST = [
 /** Bounded live-status fields from packets/outgoing. Never a raw packet tree. */
 export const WELL_STATUS_ALLOWLIST = [
   'wellName',
+  'wellId',
+  'companyId',
   'currentLevel',
   'status',
   'timestamp',
@@ -321,6 +323,19 @@ export function projectWellStatus(outgoing: unknown): Record<string, Record<stri
     if (!wellName) continue;
     const picked = pickAllowlisted(rec, WELL_STATUS_ALLOWLIST);
     picked.responseId = key;
+
+    // Retain distinct same-named wells across companies under canonical composite identity
+    const companyId = typeof rec.companyId === 'string' ? rec.companyId.trim() : '';
+    const wellId = canonicalWellId(rec);
+    if (companyId && wellId) {
+      const canonicalKey = `${companyId}__${wellId}`;
+      const prevCanonical = out[canonicalKey];
+      if (!prevCanonical || newerStatus(picked, prevCanonical)) {
+        out[canonicalKey] = picked;
+      }
+    }
+
+    // Display-name lookup (backward-compatible)
     const prev = out[wellName];
     if (!prev || newerStatus(picked, prev)) out[wellName] = picked;
   }
@@ -434,14 +449,18 @@ export function projectCompanyWellPool(
 
   // 1. Configuration: exact, explicit company only (fail closed on missing companyId).
   const rawConfig = asRecord(wellConfig);
-  const configWellId = new Map<string, string>();
-  for (const [wellName, val] of Object.entries(rawConfig)) {
+  const wellIdToConfigKeys = new Map<string, string[]>();
+  for (const [cfgKey, val] of Object.entries(rawConfig)) {
     const cfg = asRecord(val);
     const cfgCompany = typeof cfg.companyId === 'string' ? cfg.companyId.trim() : '';
     if (!cfgCompany || cfgCompany !== cid) continue;
-    outConfig[wellName] = pickAllowlisted(cfg, WELL_CONFIG_ALLOWLIST);
-    const wid = canonicalWellId(cfg);
-    if (wid) configWellId.set(wellName, wid);
+    outConfig[cfgKey] = pickAllowlisted(cfg, WELL_CONFIG_ALLOWLIST);
+    const wid = canonicalWellId(cfg) || cfgKey;
+    if (wid) {
+      const list = wellIdToConfigKeys.get(wid) || [];
+      list.push(cfgKey);
+      wellIdToConfigKeys.set(wid, list);
+    }
   }
 
   // 2. Status: attach ONLY when company AND canonical wellId both prove out, read from
@@ -450,17 +469,23 @@ export function projectCompanyWellPool(
   for (const [key, val] of Object.entries(rawOut)) {
     if (!key.startsWith('response_') || key.includes('delete')) continue;
     const row = asRecord(val);
-    const wellName = typeof row.wellName === 'string' ? row.wellName.trim() : '';
-    if (!wellName || !(wellName in outConfig)) continue;             // not this company's configured well
     const rowCompany = typeof row.companyId === 'string' ? row.companyId.trim() : '';
     if (!rowCompany || rowCompany !== cid) continue;                 // status company must be explicit + exact
     const rowWellId = canonicalWellId(row);
-    const cfgWellId = configWellId.get(wellName);
-    if (!rowWellId || !cfgWellId || rowWellId !== cfgWellId) continue; // canonical wellId must match config
+    if (!rowWellId) continue;
+    const matchingConfigKeys = wellIdToConfigKeys.get(rowWellId);
+    if (!matchingConfigKeys || matchingConfigKeys.length === 0) continue;
     const picked = pickAllowlisted(row, WELL_STATUS_ALLOWLIST);
     picked.responseId = key;
-    const prev = outStatus[wellName];
-    if (!prev || newerStatus(picked, prev)) outStatus[wellName] = picked;
+    for (const targetKey of matchingConfigKeys) {
+      const prev = outStatus[targetKey];
+      if (!prev || newerStatus(picked, prev)) outStatus[targetKey] = picked;
+    }
+    const wellName = typeof row.wellName === 'string' ? row.wellName.trim() : '';
+    if (wellName && (wellName in outConfig)) {
+      const prev = outStatus[wellName];
+      if (!prev || newerStatus(picked, prev)) outStatus[wellName] = picked;
+    }
   }
 
   return {

@@ -67,6 +67,8 @@ export interface OutgoingDb {
   };
 }
 
+import { outgoingCompositeKey } from './security/outgoingCompositeKey';
+
 export async function applyOutgoingAfterDelete(deps: {
   db: OutgoingDb;
   wellName: string;
@@ -75,6 +77,8 @@ export async function applyOutgoingAfterDelete(deps: {
   survivorRow: Record<string, unknown> | null;
   survivorId: string | null;
   survivorUtc: string | null;
+  companyId?: string;
+  wellId?: string;
   /** Test hook: fired after owner-scoped removal, before the survivor write. */
   afterRemovalHook?: () => Promise<void>;
 }): Promise<{ removed: number; wroteSurvivor: boolean; survivorKey: string | null }> {
@@ -83,19 +87,25 @@ export async function applyOutgoingAfterDelete(deps: {
     .orderByChild('wellName')
     .equalTo(deps.wellName)
     .once('value');
-  const rows: Array<{ key: string; ownerId: string; ownerUtc: string | null }> = [];
+  const rows: Array<{ key: string; ownerId: string; ownerUtc: string | null; companyId: string | null; wellId: string | null }> = [];
   snap.forEach((c) => {
     const v = (c.val() || {}) as Record<string, unknown>;
     rows.push({
       key: String(c.key || ''),
       ownerId: typeof v.lastPullPacketId === 'string' ? v.lastPullPacketId : '',
       ownerUtc: typeof v.lastPullDateTimeUTC === 'string' ? v.lastPullDateTimeUTC : null,
+      companyId: typeof v.companyId === 'string' ? v.companyId.trim() : null,
+      wellId: typeof v.wellId === 'string' ? v.wellId.trim() : null,
     });
   });
 
-  // Owner-scoped removal: ONLY rows owned by the deleted packet.
-  const toRemove = rows.filter((r) => r.ownerId === deps.deletedPacketId && r.key);
-  const remaining = rows.filter((r) => r.ownerId !== deps.deletedPacketId);
+  // Owner-scoped removal: ONLY rows owned by the deleted packet (and matching company if provided).
+  const toRemove = rows.filter((r) => {
+    if (r.ownerId !== deps.deletedPacketId || !r.key) return false;
+    if (deps.companyId && r.companyId && r.companyId !== deps.companyId) return false;
+    return true;
+  });
+  const remaining = rows.filter((r) => !toRemove.includes(r));
   await Promise.all(toRemove.map((r) => deps.db.ref(`packets/outgoing/${r.key}`).remove()));
 
   if (deps.afterRemovalHook) await deps.afterRemovalHook();
@@ -104,7 +114,9 @@ export async function applyOutgoingAfterDelete(deps: {
   let survivorKey: string | null = null;
   if (decideOutgoingWrite({ remaining, survivorId: deps.survivorId, survivorUtc: deps.survivorUtc })
       && deps.survivorRow && deps.survivorUtc) {
-    survivorKey = outgoingResponseKey(deps.survivorUtc, deps.cleanName);
+    survivorKey = deps.companyId && deps.wellId
+      ? outgoingCompositeKey(deps.companyId, deps.wellId)
+      : outgoingResponseKey(deps.survivorUtc, deps.cleanName);
     await deps.db.ref(`packets/outgoing/${survivorKey}`).set(deps.survivorRow);
     wroteSurvivor = true;
   }

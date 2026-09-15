@@ -239,15 +239,21 @@ describe('projectCompanyWellPool — company-safe filtering (pure)', () => {
   });
 });
 
-describe('same-well-name collision proof (why a global wellName join is unsafe)', () => {
-  it('status rows carry NO tenant identity through the wellName-keyed global projection', () => {
+describe('same-well-name collision resolution (composite identity in global projection)', () => {
+  it('status rows carry canonical tenant identity through composite keys and allowlist', () => {
     const projected = projectWellStatus({
       response_A: { wellName: 'Gabriel 4', companyId: 'a', wellId: 'A', currentLevel: "4'0\"", timestampUTC: '2026-09-14T00:00:00Z' },
       response_B: { wellName: 'Gabriel 4', companyId: 'b', wellId: 'B', currentLevel: "9'0\"", timestampUTC: '2026-09-13T00:00:00Z' },
     });
-    expect(Object.keys(projected)).toEqual(['Gabriel 4']);          // two tenants collapse to one key
-    expect('companyId' in projected['Gabriel 4']).toBe(false);      // and identity is stripped by the allowlist
-    expect((WELL_STATUS_ALLOWLIST as readonly string[]).includes('companyId')).toBe(false);
+    // Distinct composite keys retain both tenants' status
+    expect(projected['a__A']?.companyId).toBe('a');
+    expect(projected['a__A']?.wellId).toBe('A');
+    expect(projected['b__B']?.companyId).toBe('b');
+    expect(projected['b__B']?.wellId).toBe('B');
+    // Display name alias also present
+    expect('Gabriel 4' in projected).toBe(true);
+    expect((WELL_STATUS_ALLOWLIST as readonly string[]).includes('companyId')).toBe(true);
+    expect((WELL_STATUS_ALLOWLIST as readonly string[]).includes('wellId')).toBe(true);
   });
 });
 

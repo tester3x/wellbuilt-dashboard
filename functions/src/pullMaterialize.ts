@@ -33,12 +33,13 @@ export async function runOwnerMaterializeTxn(input: {
    *  and once with the final outcome. */
   onEvent?: (event: MaterializeOutcome | 'retry') => void;
 }): Promise<{ materialized: boolean; outcome: MaterializeOutcome }> {
+  const cleanCurrent = JSON.parse(JSON.stringify(input.current ?? {}));
   const box: { outcome: MaterializeOutcome } = { outcome: 'no_owner' };
   const txn = await input.ref.transaction((node) => {
     const decision = applyCurrentStateIfOwner({
       node: node as never,
       packetId: input.packetId,
-      current: input.current,
+      current: cleanCurrent,
     });
     if (decision.action === 'retry') {
       // Keep the transaction alive so the SDK re-runs against the server node.

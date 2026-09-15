@@ -52,11 +52,15 @@ export function wellBelongsToDriverCompany(
 }
 
 export function wellMatchesWbmScope(
-  wellName: string,
+  wellKey: string,
   well: Record<string, unknown>,
   scope: Extract<WbmScope, { ok: true }>,
 ): boolean {
-  if (scope.wells.includes(wellName)) return true;
+  const displayName = typeof well.wellName === 'string' ? well.wellName.trim() : '';
+  const canonicalId = typeof well.wellId === 'string' ? well.wellId.trim() : '';
+  if (scope.wells.includes(wellKey)) return true;
+  if (displayName && scope.wells.includes(displayName)) return true;
+  if (canonicalId && scope.wells.includes(canonicalId)) return true;
   const wellRoute = typeof well.route === 'string' ? well.route : '';
   return scope.routes.some((assigned) => {
     if (assigned === 'Unrouted') return wellRoute.startsWith('Unrouted');
@@ -70,13 +74,19 @@ export function projectWbmWells(
   scope: Extract<WbmScope, { ok: true }>,
 ): Record<string, Record<string, unknown>> {
   const out: Record<string, Record<string, unknown>> = {};
-  for (const [wellName, raw] of Object.entries(wellConfig || {})) {
+  for (const [wellKey, raw] of Object.entries(wellConfig || {})) {
     const well = raw && typeof raw === 'object' && !Array.isArray(raw)
       ? raw as Record<string, unknown>
       : {};
     if (!wellBelongsToDriverCompany(well, driverCompanyId)) continue;
-    if (!wellMatchesWbmScope(wellName, well, scope)) continue;
-    out[wellName] = pickAllowlisted(well, WELL_CONFIG_ALLOWLIST);
+    if (!wellMatchesWbmScope(wellKey, well, scope)) continue;
+    const displayName = typeof well.wellName === 'string' && well.wellName.trim()
+      ? well.wellName.trim()
+      : wellKey;
+    out[displayName] = pickAllowlisted(well, WELL_CONFIG_ALLOWLIST);
+    if (wellKey !== displayName) {
+      out[wellKey] = pickAllowlisted(well, WELL_CONFIG_ALLOWLIST);
+    }
   }
   return out;
 }
