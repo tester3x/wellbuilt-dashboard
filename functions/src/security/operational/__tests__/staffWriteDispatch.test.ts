@@ -10,7 +10,14 @@ import {
   serializeStaffDispatchRecord,
   DISPATCH_CREATE_ALLOWLIST,
   DISPATCH_UPDATE_ALLOWLIST,
+  isCanonicalDriverId,
+  resolveServerAssignmentIdentity,
 } from '../staffWriteDispatch';
+
+const CANON = '2cad521c-13ac-4b6c-b1ab-07843c6bf06f';
+const OTHER_CANON = 'ffffffff-0000-0000-0000-ffffffffffff';
+const LEGACY_HASH = 'a'.repeat(64);
+const POOL = 'legacy-well-pool';
 
 const lg = { callerCompanyId: 'liquid-gold', isPlatformAdmin: false };
 
@@ -309,5 +316,93 @@ describe('staffWriteDispatch callable transactions', () => {
     expect(callable).toMatch(/runTransaction/);
     expect(callable).toMatch(/tx\.get\(ref\)/);
     expect(callable).toMatch(/evaluateStaffWriteDispatch/);
+  });
+  it('resolves server-authoritative driver identity on both create and update', () => {
+    expect(callable).toMatch(/stampServerAuthoritativeIdentity/);
+    expect(callable).toMatch(/drivers\/profiles\//);
+    // applied on the create path AND the reassign (update) path
+    expect((callable.match(/stampServerAuthoritativeIdentity\(fields/g) || []).length).toBeGreaterThanOrEqual(2);
+  });
+});
+
+describe('canonical assignment identity (server-authoritative)', () => {
+  it('driverId is added to the create allowlist so it can be stored', () => {
+    expect([...DISPATCH_CREATE_ALLOWLIST]).toContain('driverId');
+    expect([...DISPATCH_UPDATE_ALLOWLIST]).toContain('driverId');
+  });
+
+  it('isCanonicalDriverId: UUID yes, passcode hash no', () => {
+    expect(isCanonicalDriverId(CANON)).toBe(true);
+    expect(isCanonicalDriverId(LEGACY_HASH)).toBe(false);
+    expect(isCanonicalDriverId('')).toBe(false);
+  });
+
+  it('stamps canonical driverId + driverHash + REAL name (legalName) from the profile', () => {
+    const r = resolveServerAssignmentIdentity({
+      clientDriverId: CANON,
+      clientDriverHash: 'stale-hash',
+      clientDriverName: 'Mikezfold', // client-supplied login — must be ignored
+      profile: { exists: true, active: true, companyId: 'liquid-gold', legalName: 'Mike ZFold7 Burger', displayName: 'Mikezfold' },
+      dispatchCompanyId: 'liquid-gold',
+      legacyWellPoolCompanyId: POOL,
+    });
+    expect(r).toEqual({ ok: true, fields: { driverId: CANON, driverHash: CANON, driverName: 'Mike ZFold7 Burger' } });
+  });
+
+  it('rejects a driver whose profile company differs from the dispatch company', () => {
+    const r = resolveServerAssignmentIdentity({
+      clientDriverId: CANON,
+      profile: { exists: true, active: true, companyId: 'acme', legalName: 'Al', displayName: 'al' },
+      dispatchCompanyId: 'liquid-gold',
+      legacyWellPoolCompanyId: POOL,
+    });
+    expect(r.ok).toBe(false);
+    expect((r as { reason: string }).reason).toBe('driver_company_mismatch');
+  });
+
+  it('does not reject cross-company when the dispatch company is the legacy well pool (platform-admin path)', () => {
+    const r = resolveServerAssignmentIdentity({
+      clientDriverId: CANON,
+      profile: { exists: true, active: true, companyId: 'liquid-gold', legalName: 'Mike ZFold7 Burger', displayName: 'Mikezfold' },
+      dispatchCompanyId: POOL,
+      legacyWellPoolCompanyId: POOL,
+    });
+    expect(r).toEqual({ ok: true, fields: { driverId: CANON, driverHash: CANON, driverName: 'Mike ZFold7 Burger' } });
+  });
+
+  it('canonical id with no resolvable profile stamps canonical ids and keeps the client name (compat)', () => {
+    const r = resolveServerAssignmentIdentity({
+      clientDriverId: CANON,
+      clientDriverName: 'Some Name',
+      profile: { exists: false, active: false, companyId: null, legalName: null, displayName: null },
+      dispatchCompanyId: 'liquid-gold',
+      legacyWellPoolCompanyId: POOL,
+    });
+    expect(r).toEqual({ ok: true, fields: { driverId: CANON, driverHash: CANON, driverName: 'Some Name' } });
+  });
+
+  it('legacy driver with no canonical UUID passes hash/name through with no driverId', () => {
+    const r = resolveServerAssignmentIdentity({
+      clientDriverHash: LEGACY_HASH,
+      clientDriverName: 'Legacy Guy',
+      profile: null,
+      dispatchCompanyId: 'liquid-gold',
+      legacyWellPoolCompanyId: POOL,
+    });
+    expect(r).toEqual({ ok: true, fields: { driverHash: LEGACY_HASH, driverName: 'Legacy Guy' } });
+  });
+
+  it('a passcode-hash driverId is never promoted to the canonical id (falls to legacy passthrough)', () => {
+    const r = resolveServerAssignmentIdentity({
+      clientDriverId: LEGACY_HASH,
+      clientDriverHash: LEGACY_HASH,
+      clientDriverName: 'Legacy Guy',
+      profile: null,
+      dispatchCompanyId: 'liquid-gold',
+      legacyWellPoolCompanyId: POOL,
+    });
+    expect(r.ok).toBe(true);
+    expect((r as { fields: Record<string, unknown> }).fields.driverId).toBeUndefined();
+    expect((r as { fields: Record<string, unknown> }).fields.driverHash).toBe(LEGACY_HASH);
   });
 });

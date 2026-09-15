@@ -96,10 +96,14 @@ export function dispatchDriverGroupKey(dispatch: DispatchIdentity, drivers: Driv
   return `unresolved:${t(dispatch.driverId) || t(dispatch.driverHash) || 'none'}`;
 }
 
-/** Real driver name for display — profile displayName/legalName only, NEVER the login/hash. */
+/**
+ * Real driver name for display — legalName preferred, then displayName, NEVER the login/hash.
+ * (A profile's displayName can literally be the login string, e.g. "Mikezfold", while
+ * legalName holds the real "Mike ZFold7 Burger" — so legalName wins.)
+ */
 export function dispatchDriverDisplayName(dispatch: DispatchIdentity, drivers: DriverIdentity[]): string {
   const d = resolveDispatchDriver(dispatch, drivers);
-  if (d) return t(d.displayName) || t(d.legalName) || 'Driver';
+  if (d) return t(d.legalName) || t(d.displayName) || 'Driver';
   return 'Unassigned driver';
 }
 

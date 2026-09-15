@@ -14,8 +14,9 @@ import {
 
 const CANON = '2cad521c-13ac-4b6c-b1ab-07843c6bf06f';
 const LEGACY_HASH = '7413cd7d106a0f49c2a670064bc049e3260a522a09a6a5a7fad0c53522e63c27';
-// Mikezfold: approved-record keyed by canonical UUID; real display name "Mike Z".
-const mike: DriverIdentity = { key: CANON, driverId: CANON, companyId: 'liquid-gold', displayName: 'Mike Z', legalName: 'Michael Z', legacyAliases: [LEGACY_HASH] };
+// Mikezfold: approved-record keyed by canonical UUID. The profile's displayName is
+// literally the login ("Mikezfold"); the real human name lives in legalName.
+const mike: DriverIdentity = { key: CANON, driverId: CANON, companyId: 'liquid-gold', displayName: 'Mikezfold', legalName: 'Mike ZFold7 Burger', legacyAliases: [LEGACY_HASH] };
 const other: DriverIdentity = { key: 'other-uuid', driverId: 'other-uuid', companyId: 'acme', displayName: 'Al A' };
 const drivers = [mike, other];
 
@@ -64,8 +65,8 @@ test('8. dismissed/completed/cancelled/declined leave the active surface', () =>
 test('9. display uses the REAL profile name, never the login/hash', () => {
   const job = { driverId: CANON, companyId: 'liquid-gold', driverName: 'Mikezfold' };
   const shown = dispatchDriverDisplayName(job, drivers);
-  assert.equal(shown, 'Mike Z');
-  assert.notEqual(shown, 'Mikezfold');           // never the login
+  assert.equal(shown, 'Mike ZFold7 Burger');     // legalName — the real human name
+  assert.notEqual(shown, 'Mikezfold');           // never the login (which is the profile displayName!)
   assert.notEqual(shown, CANON);                 // never the id/hash
   // unresolved → safe placeholder, still never the login
   const unresolved = dispatchDriverDisplayName({ driverHash: 'ghost', companyId: 'liquid-gold', driverName: 'Mikezfold' }, drivers);
