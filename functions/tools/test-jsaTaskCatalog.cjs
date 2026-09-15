@@ -23,7 +23,8 @@ const revision=(id,task)=>({companyId:'company-1',templateId:id,recordType:'revi
  assert.equal(reads.length,count);
  const original={id:'A'.repeat(43),companyId:'company-1',driverId:'driver-1',workflow:'standalone',state:'open',contentHash:'f'.repeat(64),snapshot:{signature:'fixture unchanged'},job:{operator:'Operator',assessmentTemplates:[result.templates[0]]}};
  let saved=JSON.parse(JSON.stringify(original));
- const appendStore={...store,transaction:async(path,fn)=>{const next=fn(saved);if(next)saved=next;return saved}};
+ let writes=0;
+ const appendStore={...store,readRecord:async()=>saved,transaction:async(path,fn)=>{const next=fn(saved);if(next){saved=next;writes++;}return saved}};
  const newRef=refs.find(r=>r.id==='unload');const extra=selectJsaTaskTemplates(result,[newRef]);
  const request={operation:'append',recordId:original.id,additionId:'B'.repeat(43),addition:{location:'Disposal',operator:'Operator',activity:'Unloading',hazards:'Fixture hazard',controls:'Fixture control',ppe:'Fixture PPE',acknowledged:true,baseContentHash:original.contentHash,expectedAdditionCount:0,taskReview:{templateRefs:[newRef],stepAcks:Object.fromEntries(extra.steps.map(s=>[s.id,true]))}}};
  await assert.rejects(()=>handleStandalone(deps,appendStore,auth,{...request,addition:{...request.addition,taskReview:{...request.addition.taskReview,stepAcks:{}}}},2));
@@ -31,7 +32,37 @@ const revision=(id,task)=>({companyId:'company-1',templateId:id,recordType:'revi
  assert.deepEqual(saved.snapshot,original.snapshot);assert.deepEqual(saved.job,original.job);assert.equal(saved.additions[0].taskAssessment.steps[0].title,'Exact Unloading');
  await handleStandalone(deps,appendStore,auth,request,3);assert.equal(saved.additions.length,1);
  await assert.rejects(()=>handleStandalone(deps,appendStore,auth,{...request,additionId:'C'.repeat(43),addition:{...request.addition,expectedAdditionCount:1}},4),/already_reviewed/);
+ // A response lost after commit is recoverable even after retirement/close.
+ const accepted=structuredClone(saved);
+ docs.set(root,{schemaVersion:2,activeTemplates:[]});
+ saved={...saved,state:'closed',closedAtMs:5};
+ const beforeReads=reads.length;
+ const reordered={addition:request.addition,additionId:request.additionId,recordId:request.recordId,operation:'append'};
+ assert.deepEqual((await handleStandalone(deps,appendStore,auth,reordered,6)).record,saved);
+ assert.deepEqual(saved.additions,accepted.additions);assert.equal(writes,1);assert.equal(reads.length,beforeReads);
+ await assert.rejects(()=>handleStandalone(deps,appendStore,auth,{...request,addition:{...request.addition,controls:'Changed'}},7),/conflicting_addition/);
+ await assert.rejects(()=>handleStandalone(deps,appendStore,{uid:null},request,7));
+ const actual=saved;saved={...saved,driverId:'other'};
+ await assert.rejects(()=>handleStandalone(deps,appendStore,auth,request,7),/owner/);saved=actual;
+ await assert.rejects(()=>handleStandalone(deps,appendStore,auth,{...request,additionId:'D'.repeat(43)},7));
+ // Initial submission has the same recovery guarantee, including the signature.
+ docs.set(root,{schemaVersion:2,activeTemplates:[{id:'load',version:1},{id:'unload',version:1}]});
+ const selected=selectJsaTaskTemplates(result,[refs[0]]);
+ const snapshot={prepared:{},locationAcks:{},locations:['Fixture'],stepsAcknowledged:true,stepAcks:Object.fromEntries(selected.steps.map(s=>[s.id,true])),ppeSelected:{},ppeOtherItems:[],notes:'',pusher:'',otherInfo:'',printedName:'Fixture Driver',signature:{mimeType:'image/png',data:Buffer.from([137,80,78,71,13,10,26,10,1,2,3]).toString('base64')},formDate:'2026-09-15'};
+ const create={operation:'create',recordId:'E'.repeat(43),snapshot,job:{activity:'Loading',wells:[],templateRefs:[refs[0]],assessmentSteps:selected.steps}};
+ saved=null;writes=0;
+ await handleStandalone(deps,appendStore,auth,create,10);
+ const created=structuredClone(saved);
+ docs.set(root,{schemaVersion:2,activeTemplates:[]});
+ assert.deepEqual((await handleStandalone(deps,appendStore,auth,create,20)).record,created);assert.equal(writes,1);
+ await assert.rejects(()=>handleStandalone(deps,appendStore,auth,{...create,snapshot:{...snapshot,notes:'Changed'}},21),/conflicting_record/);
+ const deniedDeps={...deps,getDriver:async()=>({driverId:'driver-1',companyId:'company-1',active:false})};
+ await assert.rejects(()=>handleStandalone(deniedDeps,appendStore,auth,create,21),/membership/);
+ assert.equal(writes,1);
+ // A first submission using a retired reference still fails validation.
+ saved=null;await assert.rejects(()=>handleStandalone(deps,appendStore,auth,create,22));assert.equal(writes,1);
+ docs.set(root,{schemaVersion:2,activeTemplates:[{id:'load',version:1},{id:'unload',version:1}]});
  docs.delete(root+'/templates/unload--published-v1');await assert.rejects(()=>readJsaTaskCatalog(store,'company-1'),/unavailable/);
  docs.set(root,{schemaVersion:2,activeTemplates:[{id:'../other',version:1}]});await assert.rejects(()=>readJsaTaskCatalog(store,'company-1'),/reference/);
- console.log('PASS: authenticated company catalog, task versions, stable hashes, missing revision failure, audience and cross-company rejection; new-task acknowledgement, original preservation and duplicate retry');
+ console.log('PASS: authenticated catalog and new-task review; create/append retries after retirement, close and lost response preserve signatures/timestamps without writes; altered requests, revoked access and first-time retired references rejected');
 })().catch(e=>{console.error(e);process.exitCode=1});

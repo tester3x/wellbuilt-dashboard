@@ -9,6 +9,7 @@ export class StandaloneError extends Error {
   constructor(public code: 'unauthenticated'|'permission-denied'|'invalid-argument'|'not-found'|'already-exists',message:string){super(message);}
 }
 export interface StandaloneStore {
+  readRecord?(path:string):Promise<Record<string,unknown>|null>;
   readTemplate?(path:string):Promise<Record<string,unknown>|null>;
   list(path:string,after:string|null):Promise<Record<string,unknown>[]>;
   transaction(path:string,update:(old:Record<string,unknown>|null)=>Record<string,unknown>|null):Promise<Record<string,unknown>>;
@@ -16,6 +17,18 @@ export interface StandaloneStore {
 const hash=(s:string)=>createHash('sha256').update(s).digest('hex');
 const object=(v:unknown):v is Record<string,unknown>=>!!v&&typeof v==='object'&&!Array.isArray(v);
 function bad():never{throw new StandaloneError('invalid-argument','malformed');}
+// Hash the submitted JSON independently of the mutable catalog. Object key order
+// is irrelevant, but array order and every submitted value remain significant.
+function requestHash(value:unknown):string{
+ const canonical=(v:unknown,depth=0):string=>{
+   if(depth>32)bad();
+   if(v===null||typeof v==='string'||typeof v==='boolean'||(typeof v==='number'&&Number.isFinite(v)))return JSON.stringify(v);
+   if(Array.isArray(v))return '['+v.map(x=>canonical(x,depth+1)).join(',')+']';
+   if(object(v))return '{'+Object.keys(v).sort().map(k=>JSON.stringify(k)+':'+canonical(v[k],depth+1)).join(',')+'}';
+   return bad();
+ };
+ const encoded=canonical(value);if(encoded.length>500000)bad();return hash(encoded);
+}
 function text(v:unknown,max:number,required=false):string{if(typeof v!=='string'||v.length>max||v!==v.trim()||(required&&!v))bad();return v;}
 /** Independent record authoring: no shift, day-status or required-job receipt. */
 export async function handleStandalone(deps:Pick<SsoDeps,'getDriver'|'getCompanyContract'|'getPlan'>,store:StandaloneStore,auth:{uid?:string|null;claims?:Record<string,unknown>|null},raw:unknown,now:number):Promise<Record<string,unknown>>{
@@ -49,6 +62,22 @@ export async function handleStandalone(deps:Pick<SsoDeps,'getDriver'|'getCompany
  }
  const id=text(raw.recordId,43,true);
  if(!/^[A-Za-z0-9_-]{43}$/.test(id)||!['create','get','close','append'].includes(String(op)))bad();
+ const submittedHash=op==='create'||op==='append'?requestHash(raw):null;
+ const checkOwner=(old:Record<string,unknown>)=>{
+   if(old.companyId!==p.companyId||old.driverId!==p.driverId||old.workflow!=='standalone')throw new StandaloneError('permission-denied','owner');
+ };
+ const matchesSavedRequest=(old:Record<string,unknown>):boolean=>{
+   const saved=op==='create'?old:(Array.isArray(old.additions)?old.additions:[]).find(a=>a.id===raw.additionId);
+   if(!saved?.submittedRequestHash)return false; // Legacy records retain content-hash validation below.
+   if(saved.submittedRequestHash!==submittedHash)throw new StandaloneError('already-exists',op==='create'?'conflicting_record':'conflicting_addition');
+   return true;
+ };
+ // Recover an already accepted write before consulting today's task catalog.
+ // Authentication, membership and entitlement have still been checked above.
+ if(submittedHash&&store.readRecord){
+   const saved=await store.readRecord(`${path}/${id}`);
+   if(saved){checkOwner(saved);if(matchesSavedRequest(saved))return {record:saved};}
+ }
  let addition:Record<string,unknown>|null=null;
  if(op==='append'){
    const additionId=text(raw.additionId,43,true);
@@ -66,7 +95,7 @@ export async function handleStandalone(deps:Pick<SsoDeps,'getDriver'|'getCompany
      taskAssessment={...selected,stepAcks:acks};
    }
    const content={location:text(a.location,300,true),operator:text(a.operator,300),activity:text(a.activity,200,true),hazards:text(a.hazards,2000,true),controls:text(a.controls,2000,true),ppe:text(a.ppe,1000,true),acknowledged:true,baseContentHash:text(a.baseContentHash,64,true),expectedAdditionCount:a.expectedAdditionCount,...(taskAssessment?{taskAssessment}: {})};
-   addition={...content,id:additionId,contentHash:hash(JSON.stringify(content)),acknowledgedAtMs:now,acknowledgedByUid:auth.uid,driverId:p.driverId,
+   addition={...content,id:additionId,submittedRequestHash:submittedHash,contentHash:hash(JSON.stringify(content)),acknowledgedAtMs:now,acknowledgedByUid:auth.uid,driverId:p.driverId,
      acknowledgement:'I have reviewed this location and activity, assessed its hazards, and understand the controls and PPE needed before starting work.'};
  }
  let authored:Record<string,unknown>|null=null;
@@ -105,10 +134,10 @@ export async function handleStandalone(deps:Pick<SsoDeps,'getDriver'|'getCompany
      if(stepIds.size!==Object.keys(a.value.snapshot.stepAcks).length||JSON.stringify(extra.assessmentSteps).length>100000)bad();
    }
    const content={snapshot:a.value.snapshot,job:{activity,wells,...extra}};
-   authored={...content,contentHash:hash(JSON.stringify(content)),id,companyId:p.companyId,driverId:p.driverId,workflow:'standalone',shiftId:null,state:'open',signedAtMs:now};
+   authored={...content,submittedRequestHash:submittedHash,contentHash:hash(JSON.stringify(content)),id,companyId:p.companyId,driverId:p.driverId,workflow:'standalone',shiftId:null,state:'open',signedAtMs:now};
  }
  const record=await store.transaction(`${path}/${id}`,old=>{
-   if(old&&(old.companyId!==p.companyId||old.driverId!==p.driverId||old.workflow!=='standalone'))throw new StandaloneError('permission-denied','owner');
+   if(old){checkOwner(old);if(submittedHash&&matchesSavedRequest(old))return null;}
    if(op==='create'){
      if(old&&old.contentHash!==authored!.contentHash)throw new StandaloneError('already-exists','conflicting_record');
      return old?null:authored;

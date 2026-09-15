@@ -8,6 +8,7 @@ export const jsaStandalone=https.onCall({timeoutSeconds:30,memory:'512MiB',enfor
  if(!await checkRateLimit({bucket:'jsa_standalone',key:request.auth.uid,limit:60,windowMs:600000}))throw new https.HttpsError('resource-exhausted','retry_later');
  const db=admin.firestore();
  const store:StandaloneStore={
+  async readRecord(path){const doc=await db.doc(path).get();return doc.exists?doc.data()!:null;},
   async readTemplate(path){const doc=await db.doc(path).get();return doc.exists?doc.data()!:null;},
   async list(path,after){let q=db.collection(path).orderBy(admin.firestore.FieldPath.documentId()).limit(50);if(after)q=q.startAfter(after);return(await q.get()).docs.map(d=>d.data());},
   async transaction(path,update){return db.runTransaction(async tx=>{const ref=db.doc(path),doc=await tx.get(ref),old=doc.exists?doc.data()!:null,next=update(old);if(next)tx.set(ref,next);return next||old!;});},
