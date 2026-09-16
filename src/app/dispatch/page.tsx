@@ -1,6 +1,6 @@
 'use client';
 
-import { useEffect, useState, useMemo, useCallback, Suspense } from 'react';
+import { useEffect, useState, useMemo, useCallback, Suspense, type ReactNode } from 'react';
 import { useRouter, useSearchParams, usePathname } from 'next/navigation';
 import { useAuth } from '@/contexts/AuthContext';
 import { useSessionDeepLinkState } from '@/lib/useSessionDeepLinkState';
@@ -4169,7 +4169,16 @@ function ModalPredictionBanner({ well }: { well: WellResponse }) {
   );
 }
 
-function StageBadge({ job }: { job: DispatchJob }) {
+function StageBadge({ job, slot }: { job: DispatchJob; slot?: boolean }) {
+  // `slot` renders the categorical stage/status in the standardized Active-Job slot
+  // (fixed width/height, centered); without it the original compact pill is used, so
+  // shared surfaces (modals, history, crew panels) are unchanged.
+  const Pill = ({ className, title, children }: { className: string; title?: string; children: ReactNode }) =>
+    slot ? (
+      <CategoryBadge className={className} title={title}>{children}</CategoryBadge>
+    ) : (
+      <span className={`px-2 py-0.5 text-xs font-medium rounded whitespace-nowrap ${className}`} title={title}>{children}</span>
+    );
   const stageConfig: Record<string, { bg: string; text: string; icon: string; label: string }> = {
     en_route_pickup:  { bg: 'bg-blue-600/30',    text: 'text-blue-300',    icon: '>', label: 'To Pickup' },
     on_site_pickup:   { bg: 'bg-emerald-600/30',  text: 'text-emerald-300', icon: '*', label: 'At Pickup' },
@@ -4194,9 +4203,11 @@ function StageBadge({ job }: { job: DispatchJob }) {
     const dest = job.driverDest;
     return (
       <div className="flex items-center gap-1.5">
-        <span className={`px-2 py-0.5 text-xs font-medium rounded ${cfg.bg} ${cfg.text}`}>
+        {/* Categorical stage → standardized slot (when in an Active Job row). */}
+        <Pill className={`${cfg.bg} ${cfg.text}`}>
           {cfg.label}
-        </span>
+        </Pill>
+        {/* Destination is informational, not categorical → separate truncated chip. */}
         {dest && (job.driverStage === 'en_route_pickup' || job.driverStage === 'en_route_dropoff') && (
           <span className="text-gray-500 text-xs truncate max-w-[140px]" title={dest}>{dest}</span>
         )}
@@ -4207,27 +4218,48 @@ function StageBadge({ job }: { job: DispatchJob }) {
   const fb = statusFallback[job.status] || statusFallback.pending;
   const pendingAge = job.status === 'pending' ? timeAgo(job.assignedAt) : '';
   return (
-    <span
-      className={`px-2 py-0.5 text-xs font-medium rounded ${fb.bg} ${fb.text} ${job.status === 'pending_approval' ? 'animate-pulse' : ''}`}
+    <Pill
+      className={`${fb.bg} ${fb.text} ${job.status === 'pending_approval' ? 'animate-pulse' : ''}`}
       title={pendingAge ? `Pending for ${pendingAge} since assignment` : undefined}
     >
       {fb.label}{pendingAge ? ` · ${pendingAge}` : ''}
+    </Pill>
+  );
+}
+
+// Fixed-size categorical badge slot — ONE reusable treatment so every categorical
+// pill in an Active Job row (PW/SW, load count, Ticket A/B, ★ Next, ⚠ DOWN, Heavy,
+// Driver Started, Pending·age, and stage/status) shares an IDENTICAL width and
+// height with centered content. A short label such as "PW" intentionally sits
+// centered with empty slack inside the standardized slot. Long INFORMATIONAL text
+// (transfer reason, driver name, stage destination) is not a category — it stays a
+// separately constrained/truncated info chip and must NOT use this slot.
+// min-w-[6.5rem] (104px) is sized to the widest categorical label the row can show
+// (measured against the app font at 10px bold: "Needs Approval" ~89px, "Driver
+// Started" ~79px, "Pending · 12h" ~78px, transient "Pending · just now" ~101px), so
+// every categorical badge clamps to one identical width; short labels ("PW") center
+// with slack. h-5 fixes the height. whitespace-nowrap guarantees no wrap/clip.
+const CATEGORY_BADGE_SLOT =
+  'inline-flex items-center justify-center text-center h-5 min-w-[6.5rem] px-1.5 text-[10px] font-bold leading-none rounded whitespace-nowrap flex-shrink-0';
+function CategoryBadge({ className = '', title, children }: { className?: string; title?: string; children: ReactNode }) {
+  return (
+    <span title={title} className={`${CATEGORY_BADGE_SLOT} ${className}`}>
+      {children}
     </span>
   );
 }
 
-// Job type badge — small colored tag
-function JobTypeBadge({ type, serviceType }: { type: 'pw' | 'service'; serviceType?: string }) {
-  if (type === 'service') {
-    return (
-      <span className="px-1.5 py-0.5 bg-purple-600/30 text-purple-300 text-[10px] font-bold rounded uppercase tracking-wider flex-shrink-0">
-        SW{serviceType ? ` · ${serviceType}` : ''}
-      </span>
-    );
+// Job type badge — categorical PW/SW. `slot` uses the standardized Active-Job slot;
+// otherwise the original compact pill (shared modals/history/crew stay unchanged).
+function JobTypeBadge({ type, serviceType, slot }: { type: 'pw' | 'service'; serviceType?: string; slot?: boolean }) {
+  const color = type === 'service' ? 'bg-purple-600/30 text-purple-300' : 'bg-blue-600/30 text-blue-300';
+  const label = type === 'service' ? `SW${serviceType ? ` · ${serviceType}` : ''}` : 'PW';
+  if (slot) {
+    return <CategoryBadge className={`${color} uppercase tracking-wider`}>{label}</CategoryBadge>;
   }
   return (
-    <span className="px-1.5 py-0.5 bg-blue-600/30 text-blue-300 text-[10px] font-bold rounded uppercase tracking-wider flex-shrink-0">
-      PW
+    <span className={`px-1.5 py-0.5 ${color} text-[10px] font-bold rounded uppercase tracking-wider flex-shrink-0`}>
+      {label}
     </span>
   );
 }
@@ -4263,22 +4295,22 @@ function DispatchJobRow({ job, cancelDispatch, compact, onClickServiceWork, onRe
       <div className="flex items-center gap-2">
         {/* Identity: type, well, quantity, and linked-ticket facts always stay together. */}
         <div className="flex items-center gap-2 min-w-0">
-          <JobTypeBadge type={job.jobType} serviceType={job.serviceType} />
+          <JobTypeBadge type={job.jobType} serviceType={job.serviceType} slot />
           <span className="text-white font-medium text-sm truncate" style={{ minWidth: 100 }}>
             {job.ndicWellName || job.wellName}
           </span>
           {(() => {
             const remaining = (job.loadCount || 1) - (job.loadsCompleted || 0);
             return remaining > 1 ? (
-              <span className="px-1.5 py-0.5 bg-yellow-600/30 text-yellow-300 text-[10px] rounded font-bold flex-shrink-0">
+              <CategoryBadge className="bg-yellow-600/30 text-yellow-300">
                 x{remaining}
-              </span>
+              </CategoryBadge>
             ) : null;
           })()}
           {job.splitGroupId && (
-            <span className="px-1.5 py-0.5 bg-purple-600/30 text-purple-300 text-[10px] rounded font-bold flex-shrink-0">
+            <CategoryBadge className="bg-purple-600/30 text-purple-300">
               {job.splitSequence === 1 ? 'TICKET A' : job.splitSequence === 2 ? 'TICKET B' : `TICKET ${String.fromCharCode(64 + (job.splitSequence || 1))}`}
-            </span>
+            </CategoryBadge>
           )}
         </div>
 
@@ -4287,37 +4319,39 @@ function DispatchJobRow({ job, cancelDispatch, compact, onClickServiceWork, onRe
         {/* Operational flags: recommendations, warnings, and special handling. */}
         <div className="flex items-center gap-1.5 flex-shrink-0">
           {isRecommendedNext && (
-            <span
-              className="px-1.5 py-0.5 bg-emerald-600/30 text-emerald-300 text-[10px] rounded font-bold whitespace-nowrap"
+            <CategoryBadge
+              className="bg-emerald-600/30 text-emerald-300"
               title="Recommended next job (first physically-ready assigned job)"
             >
               ★ Next
-            </span>
+            </CategoryBadge>
           )}
           {isWellDown && (
-            <span
-              className="px-1.5 py-0.5 bg-red-600 text-white text-[10px] rounded font-bold whitespace-nowrap"
+            <CategoryBadge
+              className="bg-red-600 text-white"
               title="Canonical well state is DOWN — job remains actionable (may still hold pullable water)"
             >
-              ⚠ WELL DOWN
-            </span>
+              ⚠ DOWN
+            </CategoryBadge>
           )}
+          {(job as any).isHeavyWater && (
+            <CategoryBadge className="bg-amber-600/30 text-amber-300">
+              HEAVY
+            </CategoryBadge>
+          )}
+          {/* Informational (not categorical): driver name / transfer reason stay as
+              separately constrained, truncated chips — never forced into the slot. */}
           {job.type === 'transfer' && job.transferFromDriver && (
-            <span className="px-1.5 py-0.5 bg-orange-600/30 text-orange-300 text-[10px] rounded font-medium whitespace-nowrap">
+            <span className="px-1.5 py-0.5 bg-orange-600/30 text-orange-300 text-[10px] rounded font-medium whitespace-nowrap max-w-[160px] truncate flex-shrink-0" title={`from ${job.transferFromDriver}`}>
               from {job.transferFromDriver}
             </span>
           )}
           {job.type === 'transfer' && job.transferReason && (
             <span
-              className="px-1.5 py-0.5 bg-amber-700/30 text-amber-200 text-[10px] rounded font-medium max-w-[220px] truncate"
+              className="px-1.5 py-0.5 bg-amber-700/30 text-amber-200 text-[10px] rounded font-medium max-w-[220px] truncate flex-shrink-0"
               title={job.transferReason}
             >
               Reason: {job.transferReason}
-            </span>
-          )}
-          {(job as any).isHeavyWater && (
-            <span className="px-1.5 py-0.5 bg-amber-600/30 text-amber-300 text-[10px] rounded font-bold">
-              HEAVY
             </span>
           )}
         </div>
@@ -4325,11 +4359,11 @@ function DispatchJobRow({ job, cancelDispatch, compact, onClickServiceWork, onRe
         {/* Job state: origin/progress followed by the current stage and its age. */}
         <div className="flex items-center gap-1.5 flex-shrink-0">
           {job.source === 'driver' && (
-            <span className="px-1.5 py-0.5 bg-emerald-600/30 text-emerald-300 text-[10px] rounded font-medium whitespace-nowrap">
+            <CategoryBadge className="bg-emerald-600/30 text-emerald-300">
               Driver Started
-            </span>
+            </CategoryBadge>
           )}
-          <StageBadge job={job} />
+          <StageBadge job={job} slot />
         </div>
 
         {/* Controls always remain the final group. */}
