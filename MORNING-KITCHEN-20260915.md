@@ -33,3 +33,9 @@ Increased water highlight speed/contrast and dust size/drift; added left-plant s
 Built-in image edit added the TicketTime pink piggy bank, Rascal beside the mug, a fish bowl on the right counter, and the ETC digital host in the wall frame. Edit target was the breeze kitchen; references were ETC `rascal_sprites_v2.png`, `etc_digital_host_v1.png`, and TicketTime `tickettime-pig-icon-1024.png`. Prompt required exact kitchen framing/faucet/plant geometry, naturally sized scattered objects in matching morning light, one hamster without a wheel, and the recognizable host portrait inside the existing frame. Saved `public/kitchen/morning-kitchen-friends.png`; prior versions retained. Animation code unchanged.
 
 Published version `f0f4a0619817a86c`, release `1789517717493000`. Changed only kitchen HTML and added the new plate; all other deployed file hashes/config retained. Current source must accompany the next full Dashboard deployment.
+
+## Motion refinement
+
+Smaller dust motes (0.55–1.09 source pixels), stronger descending water highlights, and three small individually masked leaf tips replace full-plant rotation. JavaScript syntax passed. Live version `adb8f6f2f5caa3db`.
+
+A concurrent full Dashboard release `06b9cf178a26e8e9` omitted the kitchen files. The initial deployment check stopped without releasing; kitchen HTML/art were then added to that latest release, preserving all 304 existing Dashboard file hashes/config. The Dashboard release owner must include this branch's `public/kitchen/` in subsequent builds to keep the page online.
