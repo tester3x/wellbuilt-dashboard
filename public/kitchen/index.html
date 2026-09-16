@@ -1,0 +1,34 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<meta name="theme-color" content="#393629"><title>A quiet morning · WellBuilt</title>
+<style>
+*{box-sizing:border-box}html,body{margin:0;width:100%;height:100%;overflow:hidden;background:#393629;color:#fff9eb;font-family:Georgia,serif}#scene{position:fixed;inset:0;overflow:hidden}#plate,canvas{position:absolute;width:100%;height:100%;inset:0}#plate{object-fit:cover;object-position:60% 50%}canvas{pointer-events:none}.shade{position:absolute;inset:0;background:linear-gradient(180deg,rgba(21,24,16,.24),transparent 25%,transparent 72%,rgba(21,24,16,.4));pointer-events:none}.caption{position:absolute;left:max(32px,env(safe-area-inset-left));bottom:max(38px,env(safe-area-inset-bottom));text-shadow:0 2px 20px #26291c80;pointer-events:none}.eyebrow{font:10px/1.5 system-ui,sans-serif;letter-spacing:.28em;text-transform:uppercase;opacity:.85}h1{font-size:clamp(27px,3vw,45px);font-weight:400;letter-spacing:-.025em;margin:7px 0}nav{position:absolute;right:max(24px,env(safe-area-inset-right));top:max(24px,env(safe-area-inset-top));display:flex;gap:8px}button{border:1px solid #fff5;border-radius:30px;padding:11px 15px;background:#24291e55;backdrop-filter:blur(14px);color:inherit;font:12px system-ui,sans-serif;cursor:pointer;min-height:44px}button:hover{background:#24291e99}button:focus-visible{outline:2px solid #fff;outline-offset:4px}.hidden .caption{opacity:0}.caption{transition:opacity .5s} @media(max-width:600px){.caption{left:24px;bottom:28px}nav{right:16px;top:16px}}@media(prefers-reduced-motion:reduce){*{transition:none!important}}
+</style>
+</head>
+<body>
+<main id="scene" aria-label="A peaceful sunlit kitchen with a gently running faucet and drifting dust">
+<img id="plate" src="morning-kitchen.png" alt="Morning sunshine through a kitchen window, leafy plants, a brass faucet and a mug on an oak counter">
+<canvas aria-hidden="true"></canvas><div class="shade"></div>
+<div class="caption"><div class="eyebrow">Take a little time</div><h1>A quiet morning.</h1></div>
+<nav aria-label="Scene controls"><button id="motion" aria-pressed="false">Pause motion</button><button id="quiet" aria-pressed="false">Hide words</button><button id="full">Full screen</button></nav>
+</main>
+<script>
+const img=document.querySelector('#plate'),canvas=document.querySelector('canvas'),ctx=canvas.getContext('2d'),reduce=matchMedia('(prefers-reduced-motion: reduce)');
+let running=!reduce.matches,frame=0,last=0,time=0,w=0,h=0,scale=1,ox=0,oy=0;
+let leaves;
+function makeLeaves(){leaves=document.createElement("canvas");leaves.width=260;leaves.height=230;const g=leaves.getContext("2d");g.drawImage(img,1210,155,260,230,0,0,260,230);g.globalCompositeOperation="destination-in";const m=g.createRadialGradient(130,115,55,130,115,125);m.addColorStop(0,"#000");m.addColorStop(1,"transparent");g.fillStyle=m;g.fillRect(0,0,260,230)}
+const particles=Array.from({length:55},(_,i)=>({x:(Math.sin(i*127.1)*43758.5453)%1,y:(i*.61803398875)%1,r:.35+(i%4)*.23,s:.005+(i%7)*.001}));
+function resize(){w=innerWidth;h=innerHeight;const d=Math.min(devicePixelRatio||1,2);canvas.width=w*d;canvas.height=h*d;ctx.setTransform(d,0,0,d,0,0);scale=Math.max(w/img.naturalWidth,h/img.naturalHeight);ox=(w-img.naturalWidth*scale)*.6;oy=(h-img.naturalHeight*scale)*.5;}
+function draw(now){frame=0;if(!running||document.hidden)return;time+=last?Math.min((now-last)/1000,.1):0;last=now;ctx.clearRect(0,0,w,h);ctx.save();ctx.translate(ox,oy);ctx.scale(scale,scale);const W=img.naturalWidth,H=img.naturalHeight;
+if(leaves){ctx.save();ctx.translate(1340,370);ctx.rotate(Math.sin(time*.65)*.003);ctx.drawImage(leaves,-130,-215);ctx.restore()}
+// Tiny highlights descend along the photographed stream; camera and architecture stay still.
+for(let i=0;i<18;i++){const p=(time*.6+i/18)%1,y=H*(.365+p*.31),x=W*(.601-.004*p);ctx.fillStyle=`rgba(255,250,225,${.07+.12*Math.sin(p*Math.PI)})`;ctx.fillRect(x,y,.75,2+(i%4));}
+// Airborne motes, strongest near the sunlit window; no repeated whole-scene crossfade.
+for(const p of particles){const x=W*(.24+((Math.abs(p.x)+time*p.s*.15)%1)*.6),y=H*(.12+((p.y-time*p.s*.07+100)%1)*.64);const glow=Math.max(0,1-Math.abs(x/W+y/H*.5-.87)*3);ctx.beginPath();ctx.fillStyle=`rgba(255,245,208,${glow*(.15+.14*Math.sin(time*.45+p.y*20))})`;ctx.arc(x+Math.sin(time*.2+p.y*15)*6,y,p.r,0,Math.PI*2);ctx.fill();}
+ctx.restore();frame=requestAnimationFrame(draw);}
+function sync(){cancelAnimationFrame(frame);last=0;document.querySelector('#motion').textContent=running?'Pause motion':'Play motion';document.querySelector('#motion').setAttribute('aria-pressed',String(!running));if(running&&!document.hidden)frame=requestAnimationFrame(draw);else if(!running)ctx.clearRect(0,0,w,h);}
+img.onload=()=>{makeLeaves();resize();sync()};if(img.complete&&img.naturalWidth){makeLeaves();resize();sync()}addEventListener('resize',resize);document.addEventListener('visibilitychange',sync);reduce.addEventListener('change',()=>{running=!reduce.matches;sync()});document.querySelector('#motion').onclick=()=>{running=!running;sync()};document.querySelector('#quiet').onclick=e=>{document.body.classList.toggle('hidden');const hidden=document.body.classList.contains('hidden');e.target.textContent=hidden?'Show words':'Hide words';e.target.setAttribute('aria-pressed',String(hidden))};document.querySelector('#full').onclick=async()=>{try{if(document.fullscreenElement)await document.exitFullscreen();else await document.documentElement.requestFullscreen()}catch{document.querySelector('#full').textContent='Full screen unavailable'}};
+</script>
+</body></html>
