@@ -44,6 +44,22 @@ const VIEW: Record<ShiftDot, ShiftDotView> = {
   gray: { dot: 'gray', title: 'Shift status unavailable', symbol: '⚪' },
 };
 
+interface ShiftWireResult { driverId: string; state: ShiftResolveState; asOf?: string }
+
+/**
+ * Pure parse of the staffResolveCompanyDriverShifts response envelope into a map
+ * keyed by canonical driverId. Kept here (pure, no Firebase) so it is node-testable.
+ */
+export function parseShiftResolveEnvelope(
+  data: { results?: ShiftWireResult[]; companyId?: string | null; asOf?: string } | null | undefined,
+): { resultsByDriverId: Map<string, ShiftResolveResult>; companyId: string | null; asOf: string | null } {
+  const map = new Map<string, ShiftResolveResult>();
+  for (const r of data?.results || []) {
+    if (r && typeof r.driverId === 'string' && r.driverId) map.set(r.driverId, { state: r.state });
+  }
+  return { resultsByDriverId: map, companyId: data?.companyId ?? null, asOf: data?.asOf ?? null };
+}
+
 /** Map a governed resolve result (or absence) to a dot. Absence/unknown ⇒ gray. */
 export function shiftDotFromResolve(result: ShiftResolveResult | null | undefined): ShiftDotView {
   if (!result) return VIEW.gray;

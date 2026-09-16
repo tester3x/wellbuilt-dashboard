@@ -6,6 +6,9 @@ import { useAuth } from '@/contexts/AuthContext';
 import { useSessionDeepLinkState } from '@/lib/useSessionDeepLinkState';
 import { pruneExpandedGroups } from '@/lib/expandedGroupsRestoreCore';
 import { operationalDriverName } from '@/lib/operationalDriverName';
+import { shiftDotForDriver, type ShiftResolveResult } from '@/lib/shiftDotCore';
+import { resolveCompanyDriverShifts } from '@/lib/resolveCompanyDriverShifts';
+import { comparePhysicalJobs, recommendedNextJobId, type PhysicalJobRankInput } from '@/lib/physicalJobOrder';
 import { useScrollRestore } from '@/lib/useScrollRestore';
 import { WellResponse, mergeWellPool, matchWellInPool } from '@/lib/wells';
 import { getPriority, getWellPrediction, formatTTP, matchesView, wellBucket, classifyWell, compareQueueRows, inchesToLevel, formatAge, verifyReasonText, type QueueView } from '@/lib/dispatchPriority';
@@ -325,6 +328,11 @@ function DispatchPageInner() {
   const [dispatchesLoaded, setDispatchesLoaded] = useState(false);
   const [dataLoading, setDataLoading] = useState(true);
   const [driversLoading, setDriversLoading] = useState(true);
+  // Governed shift-dot state (green/red/gray) via the staff batched resolve callable.
+  const [shiftResults, setShiftResults] = useState<Map<string, ShiftResolveResult>>(new Map());
+  const [shiftResolvedCompany, setShiftResolvedCompany] = useState<string | null>(null);
+  const [shiftLoading, setShiftLoading] = useState(true);
+  const [shiftError, setShiftError] = useState(false);
   const [readErrors, setReadErrors] = useState<{ drivers?: string; wells?: string; dispatches?: string }>({});
   // True when the authoritative live-status read failed for the whole queue.
   // A failed read is a QUEUE-LEVEL UNAVAILABLE state — never 80 individual
@@ -532,6 +540,40 @@ function DispatchPageInner() {
       router.push('/login');
     }
   }, [user, loading, router]);
+
+  // Governed shift dots: batch-resolve loaded drivers' canonical shift state via
+  // staffResolveCompanyDriverShifts (server reads the client-denied authority). Refresh
+  // on load, when the driver set changes, and every 60s so shift start/end reflects
+  // without a logout. Error/absence → gray (never a false red).
+  const driverCanonicalIds = useMemo(
+    () => drivers.map(d => d.driverId || (typeof d.key === 'string' && d.key.includes('-') ? d.key : '')).filter(Boolean),
+    [drivers],
+  );
+  useEffect(() => {
+    if (!user || driversLoading) return;
+    if (driverCanonicalIds.length === 0) { setShiftLoading(false); return; }
+    let cancelled = false;
+    const run = async () => {
+      const r = await resolveCompanyDriverShifts(driverCanonicalIds);
+      if (cancelled) return;
+      setShiftResults(r.resultsByDriverId);
+      setShiftResolvedCompany(r.companyId);
+      setShiftError(r.error);
+      setShiftLoading(false);
+    };
+    run();
+    const timer = setInterval(run, 60000);
+    return () => { cancelled = true; clearInterval(timer); };
+  }, [user, driversLoading, driverCanonicalIds]);
+
+  const driverShiftDot = useCallback((d: { driverId?: string; key?: string; companyId?: string }) => shiftDotForDriver({
+    canonicalDriverId: d.driverId || (typeof d.key === 'string' && d.key.includes('-') ? d.key : ''),
+    companyId: d.companyId,
+    resultsByDriverId: shiftResults,
+    resolvedCompanyId: shiftResolvedCompany,
+    loading: shiftLoading,
+    error: shiftError,
+  }), [shiftResults, shiftResolvedCompany, shiftLoading, shiftError]);
 
   // Persist navigable Well Queue state (view / route / search) into the URL WITHOUT
   // navigating, so a reload restores it. Only applied once auth is resolved and the
@@ -2450,12 +2492,12 @@ function DispatchPageInner() {
                         {assignTarget?.route && drivers.filter(d => d.assignedRoutes?.includes(assignTarget.route!)).length > 0 && (
                           <optgroup label={`Route: ${assignTarget.route}`}>
                             {drivers.filter(d => d.assignedRoutes?.includes(assignTarget.route!)).map(d => (
-                              <option key={d.key} value={d.key} title="Shift status unavailable">{'⚪ '}{operationalDriverName(d)}</option>
+                              <option key={d.key} value={d.key} title={driverShiftDot(d).title}>{driverShiftDot(d).symbol + ' '}{operationalDriverName(d)}</option>
                             ))}
                           </optgroup>
                         )}
                         <optgroup label="All Drivers">
-                          {drivers.map(d => (<option key={d.key} value={d.key} title="Shift status unavailable">{'⚪ '}{operationalDriverName(d)}</option>))}
+                          {drivers.map(d => (<option key={d.key} value={d.key} title={driverShiftDot(d).title}>{driverShiftDot(d).symbol + ' '}{operationalDriverName(d)}</option>))}
                         </optgroup>
                       </select>
                     </div>
@@ -3458,6 +3500,8 @@ function DispatchPageInner() {
                     onReassignDeclined={openReassignModal}
                     onDismissDeclined={dismissDeclinedDispatch}
                     activeJobsReady={!driversLoading && dispatchesLoaded}
+                    wells={wells}
+                    nowMs={asOfMs}
                   />
                 )}
                 {rightPanelTab === 'completed' && (
@@ -3642,7 +3686,7 @@ function DispatchPageInner() {
               >
                 <option value="">Select driver...</option>
                 {drivers.map(d => (
-                  <option key={d.key} value={d.key} title="Shift status unavailable">{'⚪ '}{operationalDriverName(d)}</option>
+                  <option key={d.key} value={d.key} title={driverShiftDot(d).title}>{driverShiftDot(d).symbol + ' '}{operationalDriverName(d)}</option>
                 ))}
               </select>
             </div>
@@ -3827,7 +3871,7 @@ function DispatchPageInner() {
                           {drivers
                             .filter(d => d.key !== editSwJob.driverHash)
                             .map(d => (
-                              <option key={d.key} value={d.key} title="Shift status unavailable">{'⚪ '}{operationalDriverName(d)}</option>
+                              <option key={d.key} value={d.key} title={driverShiftDot(d).title}>{driverShiftDot(d).symbol + ' '}{operationalDriverName(d)}</option>
                             ))
                           }
                         </select>
@@ -4184,13 +4228,17 @@ function JobTypeBadge({ type, serviceType }: { type: 'pw' | 'service'; serviceTy
 }
 
 // Single job row — shows all info a dispatcher needs
-function DispatchJobRow({ job, cancelDispatch, compact, onClickServiceWork, onReassign, onDismiss }: {
+function DispatchJobRow({ job, cancelDispatch, compact, onClickServiceWork, onReassign, onDismiss, isRecommendedNext, isWellDown }: {
   job: DispatchJob;
   cancelDispatch: (id: string) => void;
   compact?: boolean;
   onClickServiceWork?: (job: DispatchJob) => void;
   onReassign?: (job: DispatchJob) => void;
   onDismiss?: (job: DispatchJob) => void;
+  /** Marks the existing card as the Recommended next job (never a duplicate card). */
+  isRecommendedNext?: boolean;
+  /** Canonical live well state is DOWN — show a prominent warning; the job stays actionable. */
+  isWellDown?: boolean;
 }) {
   const dropoff = job.hauledTo || job.disposal;
   const isClickable = !!onClickServiceWork;
@@ -4211,6 +4259,26 @@ function DispatchJobRow({ job, cancelDispatch, compact, onClickServiceWork, onRe
       <div className="flex items-center gap-2">
         {/* Job type badge */}
         <JobTypeBadge type={job.jobType} serviceType={job.serviceType} />
+
+        {/* WELL DOWN — prominent warning from canonical live well state. Job stays actionable. */}
+        {isWellDown && (
+          <span
+            className="px-1.5 py-0.5 bg-red-600 text-white text-[10px] rounded font-bold flex-shrink-0 whitespace-nowrap"
+            title="Canonical well state is DOWN — job remains actionable (may still hold pullable water)"
+          >
+            ⚠ WELL DOWN
+          </span>
+        )}
+
+        {/* Recommended-next marker — highlights this EXISTING card; never a duplicate card. */}
+        {isRecommendedNext && (
+          <span
+            className="px-1.5 py-0.5 bg-emerald-600/30 text-emerald-300 text-[10px] rounded font-bold flex-shrink-0 whitespace-nowrap"
+            title="Recommended next job (first physically-ready assigned job)"
+          >
+            ★ Next
+          </span>
+        )}
 
         {/* Well name — primary info */}
         <span className="text-white font-medium text-sm truncate" style={{ minWidth: 100 }}>
@@ -4334,7 +4402,7 @@ function DispatchJobRow({ job, cancelDispatch, compact, onClickServiceWork, onRe
 
 // Driver-centric active dispatch panel — groups ALL jobs by driver
 // Multi-driver SW jobs shown separately at bottom with all crew visible
-function ActiveDispatchPanel({ dispatches, cancelDispatch, drivers, assignTransfer, onEditServiceWork, onReassignDeclined, onDismissDeclined, activeJobsReady = true }: {
+function ActiveDispatchPanel({ dispatches, cancelDispatch, drivers, assignTransfer, onEditServiceWork, onReassignDeclined, onDismissDeclined, activeJobsReady = true, wells, nowMs }: {
   dispatches: DispatchJob[];
   cancelDispatch: (id: string) => void;
   drivers?: { key: string; driverId?: string; legacyAliases?: string[]; companyId?: string; displayName: string; legalName?: string; assignedRoutes?: string[] }[];
@@ -4344,6 +4412,9 @@ function ActiveDispatchPanel({ dispatches, cancelDispatch, drivers, assignTransf
   onDismissDeclined?: (jobId: string) => Promise<void> | void;
   /** True once auth/company resolved AND the first real Active Jobs dataset loaded. */
   activeJobsReady?: boolean;
+  /** Canonical well pool + shared clock — for the SAME physical-readiness order + live DOWN state as the Well Queue. */
+  wells?: WellResponse[];
+  nowMs?: number;
 }) {
   // Expanded driver groups persist across refresh — session-scoped by uid+companyId+
   // pathname, keyed by the canonical group id the Active Jobs render groups on
@@ -4409,6 +4480,39 @@ function ActiveDispatchPanel({ dispatches, cancelDispatch, drivers, assignTransf
     return crews;
   }, [assigned]);
 
+  // ONE canonical live-priority source: rank every well by the SAME comparator the Well
+  // Queue uses (compareQueueRows over classifyWell at the SAME nowMs), so Active Jobs and
+  // the Well Queue consume identical readiness. A job joins its well via matchWellInPool
+  // (canonical NDIC identity, NOT display-name equality) — never a stale dispatch snapshot.
+  const physicalWellRank = useMemo(() => {
+    const rows = (wells || []).map(w => ({ well: w, priority: classifyWell(w, nowMs), assignment: undefined }));
+    rows.sort(compareQueueRows);
+    const m = new Map<string, number>();
+    rows.forEach((r, i) => { if (r.well.wellName) m.set(r.well.wellName, i); });
+    return m;
+  }, [wells, nowMs]);
+  const jobWell = useCallback(
+    (j: DispatchJob) => (wells ? (matchWellInPool(wells, j.ndicWellName) || matchWellInPool(wells, j.wellName)) : undefined),
+    [wells],
+  );
+  const rankOf = useCallback((j: DispatchJob): PhysicalJobRankInput => {
+    const w = jobWell(j);
+    const cls = w ? classifyWell(w, nowMs) : null;
+    return {
+      id: j.id || '',
+      // "Current operational job" = the SAME authoritative signal the group header's
+      // Driver Started badge uses: a live driverStage (not completed/paused), or an
+      // in_progress lifecycle status. That card is pinned first.
+      inProgress: (!!j.driverStage && !['completed', 'paused'].includes(j.driverStage)) || j.status === 'in_progress',
+      down: cls?.state === 'down',
+      // Physical order = the well's index in the Well-Queue ordering. No canonical well →
+      // sort last (9999) rather than falling back to a stale dispatch TTP/assignedAt.
+      sortOrder: w ? (physicalWellRank.get(w.wellName) ?? 9998) : 9999,
+      hoursUntilPull: null,
+      assignedAtMs: j.assignedAt?.toMillis?.() || 0,
+    };
+  }, [jobWell, physicalWellRank, nowMs]);
+
   // Group ALL jobs by driver — every dispatch shows in the driver's personal list
   // (multi-driver SW jobs also appear in Crew Jobs section for at-a-glance crew view)
   const grouped = useMemo(() => {
@@ -4420,21 +4524,13 @@ function ActiveDispatchPanel({ dispatches, cancelDispatch, drivers, assignTransf
       if (!map.has(key)) map.set(key, []);
       map.get(key)!.push(d);
     });
-    // Sort each driver's jobs: split tickets grouped (A before B), then by assignedAt
+    // Sort each driver's jobs by the SHARED physical-readiness contract, so the assigned
+    // subset matches the Well Queue: in-progress pinned, then by the well's Well-Queue
+    // rank, deterministic ties. Assignment status never alters physical priority.
     map.forEach((jobs, key) => {
-      jobs.sort((a, b) => {
-        // Split ticket jobs sort together by splitGroupId, then by sequence
-        if (a.splitGroupId && b.splitGroupId && a.splitGroupId === b.splitGroupId) {
-          return (a.splitSequence || 0) - (b.splitSequence || 0);
-        }
-        // Split ticket groups sort before non-split (so they stay visually grouped)
-        if (a.splitGroupId && !b.splitGroupId) return -1;
-        if (!a.splitGroupId && b.splitGroupId) return 1;
-        // Otherwise sort by assigned time (newest first)
-        const aTime = a.assignedAt?.toMillis?.() || 0;
-        const bTime = b.assignedAt?.toMillis?.() || 0;
-        return bTime - aTime;
-      });
+      const rankById = new Map(jobs.map(jb => [jb.id, rankOf(jb)]));
+      const ordered = [...jobs].sort((a, b) => comparePhysicalJobs(rankById.get(a.id)!, rankById.get(b.id)!));
+      map.set(key, ordered);
     });
     return new Map(
       Array.from(map.entries()).sort(([, a], [, b]) => {
@@ -4443,7 +4539,23 @@ function ActiveDispatchPanel({ dispatches, cancelDispatch, drivers, assignTransf
         return bActive - aActive;
       })
     );
-  }, [assigned, drivers]);
+  }, [assigned, drivers, rankOf]);
+
+  // Recommended-next per driver group: first non-in-progress job in physical order (DOWN
+  // is NOT categorically excluded — a DOWN well may hold pullable water — it just sorts to
+  // the DOWN tier, so a ready well wins first). Marks an existing card; never a duplicate.
+  const recommendedByGroup = useMemo(() => {
+    const m = new Map<string, string | null>();
+    grouped.forEach((jobs, key) => m.set(key, recommendedNextJobId(jobs.map(rankOf))));
+    return m;
+  }, [grouped, rankOf]);
+
+  // Live canonical DOWN state per job (joined via matchWellInPool, not a stale snapshot).
+  const downByJobId = useMemo(() => {
+    const s = new Set<string>();
+    grouped.forEach(jobs => jobs.forEach(j => { if (rankOf(j).down && j.id) s.add(j.id); }));
+    return s;
+  }, [grouped, rankOf]);
 
   // Prune stored expanded groups to the live canonical group set — but ONLY once
   // the dataset is ready (auth/company resolved + first real Active Jobs dataset +
@@ -4622,6 +4734,8 @@ function ActiveDispatchPanel({ dispatches, cancelDispatch, drivers, assignTransf
                     compact={jobs.length > 2}
                     onClickServiceWork={onEditServiceWork}
                     onReassign={onReassignDeclined}
+                    isRecommendedNext={recommendedByGroup.get(driverHash) === job.id}
+                    isWellDown={!!job.id && downByJobId.has(job.id)}
                     onDismiss={(j) => {
                       setConfirmDismissJob(j);
                       setDismissError(null);
@@ -5698,8 +5812,9 @@ function UnassignedTransferRow({ job, drivers, assignTransfer, cancelDispatch }:
           className="flex-1 px-2 py-1 bg-gray-900 border border-gray-700 rounded text-white text-xs focus:outline-none focus:border-orange-500"
         >
           <option value="">Select driver...</option>
+          {/* Transfer-approval sub-row: shift dot not resolved in this component's context. */}
           {drivers.map(d => (
-            <option key={d.key} value={d.key} title="Shift status unavailable">{'⚪ '}{operationalDriverName(d)}</option>
+            <option key={d.key} value={d.key} title="Shift status unavailable (transfer picker)">{'⚪ '}{operationalDriverName(d)}</option>
           ))}
         </select>
         <button

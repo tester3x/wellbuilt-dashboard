@@ -13,9 +13,14 @@
  *     by getPriority sortOrder, then hoursUntilPull (earliest ready first; unknown
  *     last), independent of assignment status.
  *   - Deterministic canonical tie-breakers (assignedAt, then id) so order is stable.
- *   - DOWN jobs remain VISIBLE when already assigned, but are HELD from recommendation.
- *   - Recommended-next = the first eligible (not in-progress, not DOWN) job. It marks
- *     an existing card; it never spawns a duplicate recommendation card.
+ *   - DOWN jobs remain VISIBLE and fully actionable (a DOWN well may still hold pullable
+ *     water); they are NOT blocked or removed. They sort to the DOWN tier (last) by the
+ *     well classification — never ranked by a stale production TTP — and carry a WELL DOWN
+ *     warning on the card. Recommendation is NOT categorically withheld from a DOWN job.
+ *   - Recommended-next = the first non-in-progress job in physical order (a ready,
+ *     non-DOWN well naturally sorts ahead of DOWN ones, so it is picked first; a DOWN job
+ *     is only recommended when nothing better is available). It marks an existing card;
+ *     it never spawns a duplicate recommendation card.
  */
 
 export interface PhysicalJobRankInput {
@@ -48,12 +53,14 @@ export function orderPhysicalJobs<T extends PhysicalJobRankInput>(jobs: readonly
 }
 
 /**
- * The id of the Recommended-next job: the FIRST eligible job in physical order that
- * is neither in-progress nor DOWN. Returns null when nothing is eligible. This marks
- * an existing card — callers must NOT render a separate recommendation card.
+ * The id of the Recommended-next job: the FIRST non-in-progress job in physical order.
+ * DOWN is NOT categorically excluded (a DOWN well may still hold pullable water), but
+ * DOWN wells sort to the DOWN tier, so a ready non-DOWN job is naturally chosen first;
+ * a DOWN job is only recommended when nothing better is available. Returns null when the
+ * only job(s) are in-progress. Marks an existing card — never a separate recommendation card.
  */
 export function recommendedNextJobId(jobs: readonly PhysicalJobRankInput[]): string | null {
   const ordered = orderPhysicalJobs(jobs);
-  const pick = ordered.find((j) => !j.inProgress && !j.down);
+  const pick = ordered.find((j) => !j.inProgress);
   return pick ? pick.id : null;
 }

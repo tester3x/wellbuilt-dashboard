@@ -3,9 +3,11 @@ import { join } from 'path';
 import {
   MAX_STAFF_SHIFT_DRIVER_IDS,
   normalizeDriverIds,
-  resolveStaffScopeCompany,
+  callerMayViewCompany,
   buildStaffShiftResult,
 } from '../staffShiftResolveCore';
+
+const POOL = 'legacy-well-pool';
 import { decideResolve, type ShiftAuthorityRecord } from '../shiftAuthority';
 
 const MIKE = '2cad521c-13ac-4b6c-b1ab-07843c6bf06f';
@@ -33,18 +35,20 @@ describe('staff shift resolve — input validation', () => {
   });
 });
 
-describe('staff shift resolve — company scope (never trust the client)', () => {
-  it('company-scoped staff use their OWN company; client companyId is ignored', () => {
-    const r = resolveStaffScopeCompany({ companyId: 'liquid-gold', isPlatformAdmin: false, caps: [] }, 'acme');
-    expect(r).toEqual({ ok: true, companyId: 'liquid-gold' });
+describe('staff shift resolve — per-driver tenancy (mirrors client docBelongsToTenant)', () => {
+  it('company-scoped dispatcher sees ONLY their own company drivers', () => {
+    const caller = { companyId: 'liquid-gold', isPlatformAdmin: false, caps: [] };
+    expect(callerMayViewCompany(caller, 'liquid-gold', POOL)).toBe(true);
+    expect(callerMayViewCompany(caller, 'acme', POOL)).toBe(false);
   });
-  it('platform admin WITH viewAllCompanies may target a company', () => {
-    const r = resolveStaffScopeCompany({ isPlatformAdmin: true, caps: ['viewAllCompanies'] }, 'acme');
-    expect(r).toEqual({ ok: true, companyId: 'acme' });
+  it('no-company (unscoped/platform-admin) caller sees ALL — matches docBelongsToTenant(!userCompanyId)', () => {
+    const caller = { isPlatformAdmin: false, caps: [] };
+    expect(callerMayViewCompany(caller, 'liquid-gold', POOL)).toBe(true);
+    expect(callerMayViewCompany(caller, 'acme', POOL)).toBe(true);
   });
-  it('unauthorized/unscoped caller is rejected', () => {
-    expect(resolveStaffScopeCompany({ isPlatformAdmin: false, caps: [] }, 'acme').ok).toBe(false);
-    expect(resolveStaffScopeCompany({ isPlatformAdmin: true, caps: [] }, 'acme').ok).toBe(false); // no viewAllCompanies
+  it('legacy-well-pool caller may view company-less legacy records', () => {
+    expect(callerMayViewCompany({ companyId: POOL, isPlatformAdmin: false, caps: [] }, '', POOL)).toBe(true);
+    expect(callerMayViewCompany({ companyId: POOL, isPlatformAdmin: false, caps: [] }, 'acme', POOL)).toBe(false);
   });
 });
 
@@ -90,7 +94,7 @@ describe('staff shift resolve — callable is read-only and correctly wired', ()
     expect(defStart).toBeGreaterThan(-1);
     expect(src).toMatch(/export const staffResolveCompanyDriverShifts = httpsV2\.onCall/);
     expect(body).toMatch(/requireRegisteredDashboardUser/);
-    expect(body).toMatch(/resolveStaffScopeCompany/);
+    expect(body).toMatch(/callerMayViewCompany/);
     expect(body).toMatch(/decideResolve/);
     // Read-only: no set/update/add/delete/FieldValue write in the staff-resolve body.
     expect(body).not.toMatch(/\.set\(|\.update\(|\.add\(|\.delete\(|FieldValue\./);

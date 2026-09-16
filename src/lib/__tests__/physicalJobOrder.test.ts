@@ -53,8 +53,14 @@ test('recommended-next is the first eligible job; in-progress is never the recom
   assert.equal(recommendedNextJobId(jobs), 'G5'); // not 'cur'
 });
 
-test('recommended-next is null when only in-progress and/or DOWN jobs exist', () => {
-  assert.equal(recommendedNextJobId([j({ id: 'cur', inProgress: true }), j({ id: 'd', down: true })]), null);
+test('DOWN is NOT categorically excluded from recommendation (a DOWN well may hold pullable water)', () => {
+  // Only an in-progress job + a DOWN job → the DOWN job IS the recommendation (not null),
+  // since DOWN no longer blocks recommendation; it just sorts to the DOWN tier.
+  assert.equal(recommendedNextJobId([j({ id: 'cur', inProgress: true }), j({ id: 'd', down: true, sortOrder: 999 })]), 'd');
+  // Only in-progress jobs → null.
+  assert.equal(recommendedNextJobId([j({ id: 'cur', inProgress: true })]), null);
+  // A ready non-DOWN job still wins over a DOWN one.
+  assert.equal(recommendedNextJobId([j({ id: 'd', down: true, sortOrder: 999 }), j({ id: 'G5', sortOrder: 2, hoursUntilPull: 7.5 })]), 'G5');
 });
 
 test('a DOWN job that is already in progress is kept pinned (alert, not replaced)', () => {

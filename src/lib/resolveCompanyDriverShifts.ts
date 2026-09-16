@@ -6,7 +6,7 @@
  */
 import { httpsCallable } from 'firebase/functions';
 import { getFirebaseFunctions } from './firebase';
-import type { ShiftResolveResult } from './shiftDotCore';
+import { parseShiftResolveEnvelope, type ShiftResolveResult } from './shiftDotCore';
 
 export const STAFF_RESOLVE_SHIFTS_CALLABLE = 'staffResolveCompanyDriverShifts';
 
@@ -36,11 +36,8 @@ export async function resolveCompanyDriverShifts(
     const payload: Record<string, unknown> = { driverIds: ids };
     if (companyId) payload.companyId = companyId;
     const res = (await fn(payload)) as { data: { results?: WireResult[]; companyId?: string; asOf?: string } };
-    const map = new Map<string, ShiftResolveResult>();
-    for (const r of res.data?.results || []) {
-      if (r && typeof r.driverId === 'string') map.set(r.driverId, { state: r.state });
-    }
-    return { resultsByDriverId: map, companyId: res.data?.companyId ?? null, asOf: res.data?.asOf ?? null, error: false };
+    const parsed = parseShiftResolveEnvelope(res.data);
+    return { ...parsed, error: false };
   } catch {
     // Missing/undeployed callable, permission failure, or network error → gray.
     return { ...empty, error: true };

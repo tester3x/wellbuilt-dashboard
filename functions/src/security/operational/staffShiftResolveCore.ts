@@ -37,28 +37,27 @@ export interface StaffScopeCaller {
   caps: string[];
 }
 
-export type ScopeCompanyResult =
-  | { ok: true; companyId: string }
-  | { ok: false; reason: 'unscoped_caller' };
-
 /**
- * The company whose drivers this caller may read.
- *   - Company-scoped staff → their own companyId (any client-supplied companyId is IGNORED).
- *   - Platform admin WITH viewAllCompanies → the client-supplied companyId (legitimate
- *     cross-company view); without a target, unscoped.
- *   - Anyone else with no company → unscoped (rejected).
+ * May this caller view a given driver's shift status? This MIRRORS the client's
+ * `docBelongsToTenant` exactly, so the dots resolve for precisely the drivers the
+ * dispatch page already shows this caller — and tightens scoping so a company
+ * dispatcher only ever sees their OWN company's dots:
+ *   - caller with NO companyId (platform admin / unscoped staff) → sees all;
+ *   - caller company === the driver's company → yes;
+ *   - legacy-well-pool caller may view company-less (legacy) driver records;
+ *   - otherwise → no (that driver resolves 'unverifiable' — never leaked).
  */
-export function resolveStaffScopeCompany(
+export function callerMayViewCompany(
   caller: StaffScopeCaller,
-  clientCompanyId: unknown,
-): ScopeCompanyResult {
+  driverCompanyId: string | null | undefined,
+  legacyWellPoolCompanyId: string,
+): boolean {
   const own = typeof caller.companyId === 'string' ? caller.companyId.trim() : '';
-  if (own) return { ok: true, companyId: own };
-  const client = typeof clientCompanyId === 'string' ? clientCompanyId.trim() : '';
-  if (caller.isPlatformAdmin && caller.caps.includes('viewAllCompanies') && client) {
-    return { ok: true, companyId: client };
-  }
-  return { ok: false, reason: 'unscoped_caller' };
+  const dc = typeof driverCompanyId === 'string' ? driverCompanyId.trim() : '';
+  if (!own) return true; // see-all (matches docBelongsToTenant(!userCompanyId) === true)
+  if (dc && dc === own) return true;
+  if (own === legacyWellPoolCompanyId && !dc) return true;
+  return false;
 }
 
 export type ShiftDriverState = 'open' | 'none' | 'unverifiable';
