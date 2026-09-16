@@ -4261,118 +4261,106 @@ function DispatchJobRow({ job, cancelDispatch, compact, onClickServiceWork, onRe
       onClick={isClickable ? () => onClickServiceWork!(job) : undefined}
     >
       <div className="flex items-center gap-2">
-        {/* Job type badge */}
-        <JobTypeBadge type={job.jobType} serviceType={job.serviceType} />
-
-        {/* WELL DOWN — prominent warning from canonical live well state. Job stays actionable. */}
-        {isWellDown && (
-          <span
-            className="px-1.5 py-0.5 bg-red-600 text-white text-[10px] rounded font-bold flex-shrink-0 whitespace-nowrap"
-            title="Canonical well state is DOWN — job remains actionable (may still hold pullable water)"
-          >
-            ⚠ WELL DOWN
+        {/* Identity: type, well, quantity, and linked-ticket facts always stay together. */}
+        <div className="flex items-center gap-2 min-w-0">
+          <JobTypeBadge type={job.jobType} serviceType={job.serviceType} />
+          <span className="text-white font-medium text-sm truncate" style={{ minWidth: 100 }}>
+            {job.ndicWellName || job.wellName}
           </span>
-        )}
-
-        {/* Recommended-next marker — highlights this EXISTING card; never a duplicate card. */}
-        {isRecommendedNext && (
-          <span
-            className="px-1.5 py-0.5 bg-emerald-600/30 text-emerald-300 text-[10px] rounded font-bold flex-shrink-0 whitespace-nowrap"
-            title="Recommended next job (first physically-ready assigned job)"
-          >
-            ★ Next
-          </span>
-        )}
-
-        {/* Well name — primary info */}
-        <span className="text-white font-medium text-sm truncate" style={{ minWidth: 100 }}>
-          {job.ndicWellName || job.wellName}
-        </span>
-
-        {/* Load count — show remaining loads */}
-        {(() => {
-          const remaining = (job.loadCount || 1) - (job.loadsCompleted || 0);
-          return remaining > 1 ? (
-            <span className="px-1.5 py-0.5 bg-yellow-600/30 text-yellow-300 text-[10px] rounded font-bold flex-shrink-0">
-              x{remaining}
+          {(() => {
+            const remaining = (job.loadCount || 1) - (job.loadsCompleted || 0);
+            return remaining > 1 ? (
+              <span className="px-1.5 py-0.5 bg-yellow-600/30 text-yellow-300 text-[10px] rounded font-bold flex-shrink-0">
+                x{remaining}
+              </span>
+            ) : null;
+          })()}
+          {job.splitGroupId && (
+            <span className="px-1.5 py-0.5 bg-purple-600/30 text-purple-300 text-[10px] rounded font-bold flex-shrink-0">
+              {job.splitSequence === 1 ? 'TICKET A' : job.splitSequence === 2 ? 'TICKET B' : `TICKET ${String.fromCharCode(64 + (job.splitSequence || 1))}`}
             </span>
-          ) : null;
-        })()}
-
-        {/* Transfer badge */}
-        {job.type === 'transfer' && job.transferFromDriver && (
-          <span className="px-1.5 py-0.5 bg-orange-600/30 text-orange-300 text-[10px] rounded font-medium flex-shrink-0">
-            from {job.transferFromDriver}
-          </span>
-        )}
-
-        {/* Transfer reason — sender's stated reason for requesting transfer */}
-        {job.type === 'transfer' && job.transferReason && (
-          <span
-            className="px-1.5 py-0.5 bg-amber-700/30 text-amber-200 text-[10px] rounded font-medium flex-shrink-0 max-w-[220px] truncate"
-            title={job.transferReason}
-          >
-            Reason: {job.transferReason}
-          </span>
-        )}
-
-        {/* Driver-initiated badge (liveDispatchSync) */}
-        {job.source === 'driver' && (
-          <span className="px-1.5 py-0.5 bg-emerald-600/30 text-emerald-300 text-[10px] rounded font-medium flex-shrink-0">
-            Driver Started
-          </span>
-        )}
-
-        {/* Split ticket badge */}
-        {job.splitGroupId && (
-          <span className="px-1.5 py-0.5 bg-purple-600/30 text-purple-300 text-[10px] rounded font-bold flex-shrink-0">
-            {job.splitSequence === 1 ? 'TICKET A' : job.splitSequence === 2 ? 'TICKET B' : `TICKET ${String.fromCharCode(64 + (job.splitSequence || 1))}`}
-          </span>
-        )}
-
-        {/* Heavy water badge */}
-        {(job as any).isHeavyWater && (
-          <span className="px-1.5 py-0.5 bg-amber-600/30 text-amber-300 text-[10px] rounded font-bold flex-shrink-0">
-            HEAVY
-          </span>
-        )}
+          )}
+        </div>
 
         <span className="flex-1" />
 
-        {/* Stage badge */}
-        <StageBadge job={job} />
+        {/* Operational flags: recommendations, warnings, and special handling. */}
+        <div className="flex items-center gap-1.5 flex-shrink-0">
+          {isRecommendedNext && (
+            <span
+              className="px-1.5 py-0.5 bg-emerald-600/30 text-emerald-300 text-[10px] rounded font-bold whitespace-nowrap"
+              title="Recommended next job (first physically-ready assigned job)"
+            >
+              ★ Next
+            </span>
+          )}
+          {isWellDown && (
+            <span
+              className="px-1.5 py-0.5 bg-red-600 text-white text-[10px] rounded font-bold whitespace-nowrap"
+              title="Canonical well state is DOWN — job remains actionable (may still hold pullable water)"
+            >
+              ⚠ WELL DOWN
+            </span>
+          )}
+          {job.type === 'transfer' && job.transferFromDriver && (
+            <span className="px-1.5 py-0.5 bg-orange-600/30 text-orange-300 text-[10px] rounded font-medium whitespace-nowrap">
+              from {job.transferFromDriver}
+            </span>
+          )}
+          {job.type === 'transfer' && job.transferReason && (
+            <span
+              className="px-1.5 py-0.5 bg-amber-700/30 text-amber-200 text-[10px] rounded font-medium max-w-[220px] truncate"
+              title={job.transferReason}
+            >
+              Reason: {job.transferReason}
+            </span>
+          )}
+          {(job as any).isHeavyWater && (
+            <span className="px-1.5 py-0.5 bg-amber-600/30 text-amber-300 text-[10px] rounded font-bold">
+              HEAVY
+            </span>
+          )}
+        </div>
 
-        {/* Edit icon */}
-        {isClickable && (
-          <span className="text-gray-500 hover:text-gray-300 text-xs flex-shrink-0" title="Edit dispatch">
-            &#9998;
-          </span>
-        )}
+        {/* Job state: origin/progress followed by the current stage and its age. */}
+        <div className="flex items-center gap-1.5 flex-shrink-0">
+          {job.source === 'driver' && (
+            <span className="px-1.5 py-0.5 bg-emerald-600/30 text-emerald-300 text-[10px] rounded font-medium whitespace-nowrap">
+              Driver Started
+            </span>
+          )}
+          <StageBadge job={job} />
+        </div>
 
-        {/* Reassign button — for pending/accepted jobs */}
-        {onReassign && (job.status === 'pending' || job.status === 'accepted') && (
+        {/* Controls always remain the final group. */}
+        <div className="flex items-center gap-1 flex-shrink-0">
+          {isClickable && (
+            <span className="text-gray-500 hover:text-gray-300 text-xs" title="Edit dispatch">
+              &#9998;
+            </span>
+          )}
+          {onReassign && (job.status === 'pending' || job.status === 'accepted') && (
+            <button
+              onClick={(e) => { e.stopPropagation(); onReassign(job); }}
+              className="text-blue-400/60 hover:text-blue-300 text-xs transition-colors"
+              title="Reassign to another driver"
+            >👯</button>
+          )}
           <button
-            onClick={(e) => { e.stopPropagation(); onReassign(job); }}
-            className="text-blue-400/60 hover:text-blue-300 text-xs flex-shrink-0 transition-colors"
-            title="Reassign to another driver"
-          >👯</button>
-        )}
-
-        {/* Remove button — dispatcher dismissing, not driver canceling */}
-        <button
-          onClick={(e) => {
-            e.stopPropagation();
-            if (!job.id) return;
-            if (!onDismiss) {
-              window.alert('Dismiss is not wired. This is a control failure, not an empty action.');
-              return;
-            }
-            onDismiss(job);
-          }}
-          className="text-red-400/60 hover:text-red-300 text-xs flex-shrink-0 transition-colors p-1"
-          title="Remove dispatch"
-          aria-label={`Remove dispatch for ${job.ndicWellName || job.wellName}`}
-        >&#10005;</button>
+            onClick={(e) => {
+              e.stopPropagation();
+              if (!job.id) return;
+              if (!onDismiss) {
+                window.alert('Dismiss is not wired. This is a control failure, not an empty action.');
+                return;
+              }
+              onDismiss(job);
+            }}
+            className="text-red-400/60 hover:text-red-300 text-xs transition-colors p-1"
+            title="Remove dispatch"
+            aria-label={`Remove dispatch for ${job.ndicWellName || job.wellName}`}
+          >&#10005;</button>
+        </div>
       </div>
 
       {/* Detail row — invoice #, drop-off, notes */}
