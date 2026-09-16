@@ -47,3 +47,5 @@ Added local mesh deformation: fish hovering/tail flicking inside a fixed bowl an
 ## Rascal expression update
 
 Increased sniff displacement and added short eyelid blinks, including an occasional double blink. Eyelid overlay follows the sniff displacement. Fish movement unchanged. Syntax passed; published Hosting version `1cb456baa6308bd0` with only kitchen HTML changed.
+
+Blink removed after visual feedback: overlay was misaligned and artificial. Sniffing and other animation retained. Published version c76142ebfcf6944c; syntax passed.
