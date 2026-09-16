@@ -86,7 +86,7 @@ test('2. Malformed stored configurations fail safely to in-memory defaults', () 
   const recovered = resolveDispatchJobTypes({
     version: 1,
     items: [
-      { code: 'dw', name: 'Disposal Water', workClass: 'pw', enabled: true },
+      { code: 'dw', name: 'Dirty Water', workClass: 'pw', enabled: true },
       null,
       { code: 'fw', name: 'Fresh Water', workClass: 'sw', enabled: false },
     ],
@@ -115,7 +115,7 @@ test('3. Add, rename, enable/disable, and stable ID preservation', () => {
     {
       id: newId,
       code: 'DW',
-      name: 'Disposal Water',
+      name: 'Dirty Water',
       workClass: 'pw',
       enabled: true,
       order: 2,
@@ -231,7 +231,7 @@ test('7. WorkClass flexibility: does not require both PW and SW', () => {
   // Only PW-side choices
   const onlyPw: DispatchJobTypeEntry[] = [
     { id: '1', code: 'PW', name: 'Production Water', workClass: 'pw', enabled: true, order: 0 },
-    { id: '2', code: 'DW', name: 'Disposal Water', workClass: 'pw', enabled: true, order: 1 },
+    { id: '2', code: 'DW', name: 'Dirty Water', workClass: 'pw', enabled: true, order: 1 },
     { id: '3', code: 'FW', name: 'Flowback Water', workClass: 'pw', enabled: true, order: 2 },
   ];
   assert.equal(validateDispatchJobTypes(onlyPw).valid, true);
@@ -248,7 +248,7 @@ test('8. Move Up and Move Down reordering is deterministic and bounded', () => {
   const items: DispatchJobTypeEntry[] = [
     { id: '1', code: 'PW', name: 'Production Water', workClass: 'pw', enabled: true, order: 0 },
     { id: '2', code: 'SW', name: 'Service Work', workClass: 'sw', enabled: true, order: 1 },
-    { id: '3', code: 'DW', name: 'Disposal Water', workClass: 'pw', enabled: true, order: 2 },
+    { id: '3', code: 'DW', name: 'Dirty Water', workClass: 'pw', enabled: true, order: 2 },
   ];
 
   // Moving top item up does nothing

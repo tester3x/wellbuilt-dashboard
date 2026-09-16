@@ -133,7 +133,7 @@ const htmlContent = `
                 </div>
               </div>
               <div class="flex-1 min-w-[140px]">
-                <input type="text" value="Disposal Water" class="w-full px-3 py-1.5 text-sm rounded bg-gray-700 text-white border border-gray-600" />
+                <input type="text" value="Dirty Water" class="w-full px-3 py-1.5 text-sm rounded bg-gray-700 text-white border border-gray-600" />
               </div>
               <div class="shrink-0">
                 <select class="px-2.5 py-1.5 text-xs rounded bg-gray-700 text-gray-200 border border-gray-600">
@@ -191,7 +191,7 @@ const htmlContent = `
               <input type="text" placeholder="Code" maxlength="2" class="w-full px-2 py-1.5 text-center font-mono font-bold text-sm rounded bg-gray-700 text-white placeholder-gray-500 uppercase border border-gray-600" />
             </div>
             <div class="flex-1">
-              <input type="text" placeholder="e.g. Disposal Water, Flowback..." class="w-full px-3 py-1.5 text-sm rounded bg-gray-700 text-white placeholder-gray-500 border border-gray-600" />
+              <input type="text" placeholder="e.g. Dirty Water, Flowback..." class="w-full px-3 py-1.5 text-sm rounded bg-gray-700 text-white placeholder-gray-500 border border-gray-600" />
             </div>
             <div class="w-full sm:w-auto">
               <select class="w-full sm:w-auto px-2.5 py-1.5 text-xs rounded bg-gray-700 text-gray-200 border border-gray-600">

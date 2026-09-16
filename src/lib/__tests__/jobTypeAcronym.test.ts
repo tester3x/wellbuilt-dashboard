@@ -21,7 +21,7 @@ test('recognized related tokens map canonically (PW / SW / DW / FW)', () => {
   assert.equal(jobTypeCode('sw'), 'SW');
   assert.equal(jobTypeCode('dw'), 'DW');
   assert.equal(jobTypeCode('fw'), 'FW');
-  assert.equal(jobTypeAcronym('dw').full, 'Disposal Water');
+  assert.equal(jobTypeAcronym('dw').full, 'Dirty Water');
   assert.equal(jobTypeAcronym('fw').full, 'Fresh Water');
 });
 
