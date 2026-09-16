@@ -4205,9 +4205,13 @@ function StageBadge({ job }: { job: DispatchJob }) {
   }
 
   const fb = statusFallback[job.status] || statusFallback.pending;
+  const pendingAge = job.status === 'pending' ? timeAgo(job.assignedAt) : '';
   return (
-    <span className={`px-2 py-0.5 text-xs font-medium rounded ${fb.bg} ${fb.text} ${job.status === 'pending_approval' ? 'animate-pulse' : ''}`}>
-      {fb.label}
+    <span
+      className={`px-2 py-0.5 text-xs font-medium rounded ${fb.bg} ${fb.text} ${job.status === 'pending_approval' ? 'animate-pulse' : ''}`}
+      title={pendingAge ? `Pending for ${pendingAge} since assignment` : undefined}
+    >
+      {fb.label}{pendingAge ? ` · ${pendingAge}` : ''}
     </span>
   );
 }
@@ -4243,7 +4247,6 @@ function DispatchJobRow({ job, cancelDispatch, compact, onClickServiceWork, onRe
 }) {
   const dropoff = job.hauledTo || job.disposal;
   const isClickable = !!onClickServiceWork;
-  const ago = timeAgo(job.assignedAt);
 
   // Split ticket visual — light tint so linked jobs stand out
   const splitBg = job.splitGroupId
@@ -4332,11 +4335,6 @@ function DispatchJobRow({ job, cancelDispatch, compact, onClickServiceWork, onRe
           <span className="px-1.5 py-0.5 bg-amber-600/30 text-amber-300 text-[10px] rounded font-bold flex-shrink-0">
             HEAVY
           </span>
-        )}
-
-        {/* Time since assigned */}
-        {ago && (
-          <span className="text-gray-600 text-[10px] flex-shrink-0">{ago}</span>
         )}
 
         <span className="flex-1" />
@@ -4646,14 +4644,6 @@ function ActiveDispatchPanel({ dispatches, cancelDispatch, drivers, assignTransf
         const isPaused = jobs.some(j => j.driverStage === 'paused' || j.status === 'paused');
         const allPending = jobs.every(j => j.status === 'pending');
 
-        const earliestAssigned = jobs.reduce((earliest, j) => {
-          if (!j.assignedAt) return earliest;
-          const ts = j.assignedAt.toDate ? j.assignedAt.toDate() : (j.assignedAt.seconds ? new Date(j.assignedAt.seconds * 1000) : new Date(j.assignedAt));
-          if (!earliest || ts < earliest) return ts;
-          return earliest;
-        }, null as Date | null);
-        const driverTimeAgo = earliestAssigned ? timeAgo({ toDate: () => earliestAssigned }) : '';
-
         return (
           <div key={driverHash} className="border border-gray-700/50 rounded-lg overflow-hidden">
             <button
@@ -4677,7 +4667,6 @@ function ActiveDispatchPanel({ dispatches, cancelDispatch, drivers, assignTransf
                   {swCount > 0 && (
                     <span className="px-1.5 py-0.5 bg-purple-600/20 text-purple-400 text-[10px] rounded font-bold">{swCount} SW</span>
                   )}
-                  {driverTimeAgo && <span className="text-gray-600 text-[10px]">{driverTimeAgo}</span>}
                 </div>
                 {/* Active job detail line — shows what the driver is currently doing */}
                 {!isExpanded && activeJob && (
