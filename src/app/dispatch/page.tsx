@@ -11,6 +11,8 @@ import { resolveCompanyDriverShifts } from '@/lib/resolveCompanyDriverShifts';
 import { comparePhysicalJobs, recommendedNextJobId, type PhysicalJobRankInput } from '@/lib/physicalJobOrder';
 import { buildWellQueueRankIndex, rankJob } from '@/lib/activeJobsRank';
 import { jobTypeAcronym, jobTypeCode } from '@/lib/jobTypeAcronym';
+import { BuilderAutocomplete } from '@/components/BuilderAutocomplete';
+import { combinedLocationResults } from '@/lib/builderWellSearch';
 import { useScrollRestore } from '@/lib/useScrollRestore';
 import { WellResponse, mergeWellPool, matchWellInPool } from '@/lib/wells';
 import { getPriority, getWellPrediction, formatTTP, matchesView, wellBucket, classifyWell, compareQueueRows, inchesToLevel, formatAge, verifyReasonText, type QueueView } from '@/lib/dispatchPriority';
@@ -2421,38 +2423,36 @@ function DispatchPageInner() {
                           {selectedWells.size} well{selectedWells.size !== 1 ? 's' : ''} checked
                           {totalSelectedLoads !== selectedWells.size && <span className="text-blue-400 ml-1">({totalSelectedLoads} loads)</span>}
                         </div>
-                      ) : (
+                      ) : assignTarget ? (
                         <>
+                          {/* A well is selected — show it (bold) with a clear (✕) control. */}
                           <input type="text"
-                            value={assignTarget ? (assignTarget.ndicName || assignTarget.wellName) : assignWellSearch}
-                            onChange={(e) => {
-                              if (assignTarget) { setAssignTarget(null); setAssignDriverHash(''); }
-                              setAssignWellSearch(e.target.value);
-                            }}
+                            value={assignTarget.ndicName || assignTarget.wellName}
+                            onChange={(e) => { setAssignTarget(null); setAssignDriverHash(''); setAssignWellSearch(e.target.value); }}
                             placeholder="Search wells or click Assign below..."
-                            className={`w-full px-3 py-1.5 bg-gray-900 border rounded text-white text-sm focus:outline-none ${assignTarget ? 'border-blue-500 font-bold' : 'border-gray-700 focus:border-blue-500'}`}
+                            aria-label="Selected well"
+                            className="w-full px-3 py-1.5 bg-gray-900 border rounded text-white text-sm focus:outline-none border-blue-500 font-bold"
                           />
-                          {assignTarget && (
-                            <button onClick={() => { setAssignTarget(null); setAssignDriverHash(''); setAssignWellSearch(''); }}
-                              className="absolute right-2 top-7 text-gray-400 hover:text-white text-xs">✕</button>
-                          )}
-                          {!assignTarget && assignWellSearch.length >= 2 && (
-                            <div className="absolute z-10 w-full bg-gray-900 border border-gray-700 rounded mt-0.5 max-h-32 overflow-y-auto">
-                              {wells
-                                .filter(w => (w.ndicName || w.wellName).toLowerCase().includes(assignWellSearch.toLowerCase()))
-                                .slice(0, 8)
-                                .map(w => (
-                                  <button key={w.wellName} onClick={() => { setAssignTarget(w); setAssignWellSearch(''); }}
-                                    className="wb-option-row px-3 py-1.5 text-white text-xs border-b border-gray-800 last:border-0">
-                                    {w.ndicName || w.wellName} <span className="wb-option-sub text-gray-500">{w.route}</span>
-                                  </button>
-                                ))}
-                              {wells.filter(w => (w.ndicName || w.wellName).toLowerCase().includes(assignWellSearch.toLowerCase())).length === 0 && (
-                                <div className="px-3 py-1.5 text-gray-500 text-xs">No wells found</div>
-                              )}
-                            </div>
-                          )}
+                          <button onClick={() => { setAssignTarget(null); setAssignDriverHash(''); setAssignWellSearch(''); }}
+                            className="absolute right-2 top-7 text-gray-400 hover:text-white text-xs">✕</button>
                         </>
+                      ) : (
+                        <BuilderAutocomplete
+                          value={assignWellSearch}
+                          onValueChange={setAssignWellSearch}
+                          items={assignWellSearch.length >= 2
+                            ? wells.filter(w => (w.ndicName || w.wellName).toLowerCase().includes(assignWellSearch.toLowerCase())).slice(0, 8)
+                            : []}
+                          onSelect={(w) => { setAssignTarget(w); setAssignWellSearch(''); }}
+                          getItemKey={(w) => w.wellName}
+                          renderItem={(w) => (<>{w.ndicName || w.wellName} <span className="wb-option-sub text-gray-500">{w.route}</span></>)}
+                          placeholder="Search wells or click Assign below..."
+                          ariaLabel="Search wells"
+                          minChars={2}
+                          inputClassName="w-full px-3 py-1.5 bg-gray-900 border rounded text-white text-sm focus:outline-none border-gray-700 focus:border-blue-500"
+                          listClassName="absolute z-10 w-full bg-gray-900 border border-gray-700 rounded mt-0.5 max-h-32 overflow-y-auto"
+                          optionClassName="wb-option-row px-3 py-1.5 text-white text-xs border-b border-gray-800 last:border-0"
+                        />
                       )}
                     </div>
                     {/* Well info box — static height, content shows when well selected */}
@@ -2512,19 +2512,19 @@ function DispatchPageInner() {
                           <button onClick={() => { setAssignDisposal(''); setAssignDisposalWell(null); setDisposalSearch(''); }} className="text-gray-400 hover:text-white text-xs">✕</button>
                         </div>
                       ) : (
-                        <input type="text" value={disposalSearch}
-                          onChange={(e) => { setDisposalSearch(e.target.value); setDisposalResults(e.target.value.length >= 2 ? searchDisposals(e.target.value, allDisposals) : []); }}
-                          placeholder="Search SWD..." className="w-full px-3 py-1.5 bg-gray-900 border border-gray-700 rounded text-white text-sm placeholder-gray-500 focus:outline-none focus:border-blue-500" />
-                      )}
-                      {disposalResults.length > 0 && !assignDisposalWell && (
-                        <div className="absolute z-50 w-full mt-1 bg-gray-800 border border-gray-600 rounded max-h-36 overflow-y-auto shadow-lg">
-                          {disposalResults.map((d, i) => (
-                            <button key={d.api_no || i} onClick={() => { setAssignDisposal(d.well_name); setAssignDisposalWell(d); setDisposalSearch(''); setDisposalResults([]); }}
-                              className="wb-option-row px-3 py-1.5 border-b border-gray-700/50 last:border-0 text-white text-sm">
-                              {d.well_name} <span className="wb-option-sub text-gray-400 text-xs ml-1">{d.county || ''}</span>
-                            </button>
-                          ))}
-                        </div>
+                        <BuilderAutocomplete
+                          value={disposalSearch}
+                          onValueChange={(v) => { setDisposalSearch(v); setDisposalResults(v.length >= 2 ? searchDisposals(v, allDisposals) : []); }}
+                          items={assignDisposalWell ? [] : disposalResults}
+                          onSelect={(d) => { setAssignDisposal(d.well_name); setAssignDisposalWell(d); setDisposalSearch(''); setDisposalResults([]); }}
+                          getItemKey={(d, i) => d.api_no || String(i)}
+                          renderItem={(d) => (<>{d.well_name} <span className="wb-option-sub text-gray-400 text-xs ml-1">{d.county || ''}</span></>)}
+                          placeholder="Search SWD..."
+                          ariaLabel="Search SWD disposal"
+                          inputClassName="w-full px-3 py-1.5 bg-gray-900 border border-gray-700 rounded text-white text-sm placeholder-gray-500 focus:outline-none focus:border-blue-500"
+                          listClassName="absolute z-50 w-full mt-1 bg-gray-800 border border-gray-600 rounded max-h-36 overflow-y-auto shadow-lg"
+                          optionClassName="wb-option-row px-3 py-1.5 border-b border-gray-700/50 last:border-0 text-white text-sm"
+                        />
                       )}
                     </div>
                     {/* Loads + Notes — loads greyed in multi-well mode */}
@@ -2574,85 +2574,37 @@ function DispatchPageInner() {
                       <div className="flex-1 space-y-2">
                         <div className="relative">
                           <label className="block text-xs text-gray-400 mb-1">Well / Location</label>
-                          <input
-                            type="text"
+                          <BuilderAutocomplete
                             value={swWellName}
-                            onChange={(e) => setSwWellName(e.target.value)}
+                            onValueChange={setSwWellName}
+                            items={combinedLocationResults(swWellName, { wells, operatorWells: allOperatorWells, disposalMatches: searchDisposals(swWellName.trim().toLowerCase(), allDisposals) })}
+                            onSelect={(item) => setSwWellName(item.value)}
+                            getItemKey={(item, i) => `${item.value}-${i}`}
+                            renderItem={(item) => (<>{item.label}{item.sub && <span className="wb-option-sub text-gray-500 text-xs ml-2">{item.sub}</span>}</>)}
                             placeholder="Type to search..."
-                            className="w-full px-3 py-1.5 bg-gray-900 border border-gray-700 rounded text-white text-sm placeholder-gray-500 focus:outline-none focus:border-purple-500"
+                            ariaLabel="Well / location"
+                            minChars={2}
+                            inputClassName="w-full px-3 py-1.5 bg-gray-900 border border-gray-700 rounded text-white text-sm placeholder-gray-500 focus:outline-none focus:border-purple-500"
+                            listClassName="absolute z-50 w-full mt-1 bg-gray-800 border border-gray-600 rounded max-h-48 overflow-y-auto shadow-lg"
+                            optionClassName="wb-option-row px-3 py-1.5 border-b border-gray-700/50 last:border-0 text-white text-sm"
                           />
-                          {(() => {
-                            const q = swWellName.trim().toLowerCase();
-                            if (q.length < 2) return null;
-                            const exactMatch = wells.some(w => (w.ndicName || w.wellName).toLowerCase() === q) ||
-                              allOperatorWells.some(w => w.well_name.toLowerCase() === q) ||
-                              allDisposals.some(d => d.well_name.toLowerCase() === q);
-                            if (exactMatch) return null;
-                            const seen = new Set<string>();
-                            const wellMatches = wells
-                              .filter(w => (w.ndicName || w.wellName).toLowerCase().includes(q))
-                              .map(w => { seen.add((w.ndicName || w.wellName).toLowerCase()); return { label: w.ndicName || w.wellName, sub: w.route || '', value: w.ndicName || w.wellName }; });
-                            const operatorMatches = allOperatorWells
-                              .filter(w => w.well_name.toLowerCase().includes(q) && !seen.has(w.well_name.toLowerCase()))
-                              .map(w => { seen.add(w.well_name.toLowerCase()); return { label: w.well_name, sub: w.operator || 'NDIC', value: w.well_name }; });
-                            const disposalMatches = searchDisposals(q, allDisposals)
-                              .filter(d => !seen.has(d.well_name.toLowerCase()))
-                              .map(d => ({ label: d.well_name, sub: 'SWD', value: d.well_name }));
-                            const combined = [...wellMatches, ...operatorMatches, ...disposalMatches].slice(0, 15);
-                            if (combined.length === 0) return null;
-                            return (
-                              <div className="absolute z-50 w-full mt-1 bg-gray-800 border border-gray-600 rounded max-h-48 overflow-y-auto shadow-lg">
-                                {combined.map((item, i) => (
-                                  <button key={`${item.value}-${i}`} type="button" onClick={() => setSwWellName(item.value)}
-                                    className="wb-option-row px-3 py-1.5 border-b border-gray-700/50 last:border-0 text-white text-sm">
-                                    {item.label}
-                                    {item.sub && <span className="wb-option-sub text-gray-500 text-xs ml-2">{item.sub}</span>}
-                                  </button>
-                                ))}
-                              </div>
-                            );
-                          })()}
                         </div>
                         <div className="relative">
                           <label className="block text-xs text-gray-400 mb-1">Drop-off (optional)</label>
-                          <input
-                            type="text"
+                          <BuilderAutocomplete
                             value={swDropoff}
-                            onChange={(e) => setSwDropoff(e.target.value)}
+                            onValueChange={setSwDropoff}
+                            items={combinedLocationResults(swDropoff, { wells, operatorWells: allOperatorWells, disposalMatches: searchDisposals(swDropoff.trim().toLowerCase(), allDisposals) })}
+                            onSelect={(item) => setSwDropoff(item.value)}
+                            getItemKey={(item, i) => `${item.value}-${i}`}
+                            renderItem={(item) => (<>{item.label}{item.sub && <span className="wb-option-sub text-gray-500 text-xs ml-2">{item.sub}</span>}</>)}
                             placeholder="SWD or well..."
-                            className="w-full px-3 py-1.5 bg-gray-900 border border-gray-700 rounded text-white text-sm placeholder-gray-500 focus:outline-none focus:border-purple-500"
+                            ariaLabel="Drop-off (optional)"
+                            minChars={2}
+                            inputClassName="w-full px-3 py-1.5 bg-gray-900 border border-gray-700 rounded text-white text-sm placeholder-gray-500 focus:outline-none focus:border-purple-500"
+                            listClassName="absolute z-50 w-full mt-1 bg-gray-800 border border-gray-600 rounded max-h-48 overflow-y-auto shadow-lg"
+                            optionClassName="wb-option-row px-3 py-1.5 border-b border-gray-700/50 last:border-0 text-white text-sm"
                           />
-                          {(() => {
-                            const q = swDropoff.trim().toLowerCase();
-                            if (q.length < 2) return null;
-                            const exactMatch = wells.some(w => (w.ndicName || w.wellName).toLowerCase() === q) ||
-                              allOperatorWells.some(w => w.well_name.toLowerCase() === q) ||
-                              allDisposals.some(d => d.well_name.toLowerCase() === q);
-                            if (exactMatch) return null;
-                            const seen2 = new Set<string>();
-                            const wellMatches = wells
-                              .filter(w => (w.ndicName || w.wellName).toLowerCase().includes(q))
-                              .map(w => { seen2.add((w.ndicName || w.wellName).toLowerCase()); return { label: w.ndicName || w.wellName, sub: w.route || '', value: w.ndicName || w.wellName }; });
-                            const operatorMatches = allOperatorWells
-                              .filter(w => w.well_name.toLowerCase().includes(q) && !seen2.has(w.well_name.toLowerCase()))
-                              .map(w => { seen2.add(w.well_name.toLowerCase()); return { label: w.well_name, sub: w.operator || 'NDIC', value: w.well_name }; });
-                            const disposalMatches = searchDisposals(q, allDisposals)
-                              .filter(d => !seen2.has(d.well_name.toLowerCase()))
-                              .map(d => ({ label: d.well_name, sub: 'SWD', value: d.well_name }));
-                            const combined = [...wellMatches, ...operatorMatches, ...disposalMatches].slice(0, 15);
-                            if (combined.length === 0) return null;
-                            return (
-                              <div className="absolute z-50 w-full mt-1 bg-gray-800 border border-gray-600 rounded max-h-48 overflow-y-auto shadow-lg">
-                                {combined.map((item, i) => (
-                                  <button key={`${item.value}-${i}`} type="button" onClick={() => setSwDropoff(item.value)}
-                                    className="wb-option-row px-3 py-1.5 border-b border-gray-700/50 last:border-0 text-white text-sm">
-                                    {item.label}
-                                    {item.sub && <span className="wb-option-sub text-gray-500 text-xs ml-2">{item.sub}</span>}
-                                  </button>
-                                ))}
-                              </div>
-                            );
-                          })()}
                         </div>
                       </div>{/* end left: Well + Drop-off */}
                       {/* Right: Service Type + Onsite By stacked */}
@@ -2895,25 +2847,39 @@ function DispatchPageInner() {
                       </div>
                       <div className="flex-1 relative">
                         <label className="block text-xs text-gray-400 mb-1">Operator</label>
-                        <input type="text" value={newProjectOperator}
-                          onChange={(e) => { setNewProjectOperator(e.target.value); setOperatorSuggestions(searchOperators(e.target.value, allOperators)); }}
+                        <BuilderAutocomplete
+                          value={newProjectOperator}
+                          onValueChange={(v) => { setNewProjectOperator(v); setOperatorSuggestions(searchOperators(v, allOperators)); }}
+                          items={operatorSuggestions}
+                          onSelect={(op) => { setNewProjectOperator(op.name); setOperatorSuggestions([]); }}
+                          getItemKey={(op) => op.name}
+                          renderItem={(op) => op.name}
                           placeholder="e.g. Hess, Slawson"
-                          className="w-full px-3 py-1.5 bg-gray-900 border border-gray-700 rounded text-white text-sm placeholder-gray-500 focus:outline-none focus:border-emerald-500" />
-                        {operatorSuggestions.length > 0 && (
-                          <div className="absolute z-10 w-full bg-gray-900 border border-gray-700 rounded mt-0.5 max-h-32 overflow-y-auto">
-                            {operatorSuggestions.map(op => (
-                              <button key={op.name} onClick={() => { setNewProjectOperator(op.name); setOperatorSuggestions([]); }}
-                                className="wb-option-row px-3 py-1.5 text-white text-xs border-b border-gray-800 last:border-0">{op.name}</button>
-                            ))}
-                          </div>
-                        )}
+                          ariaLabel="Operator / customer"
+                          inputClassName="w-full px-3 py-1.5 bg-gray-900 border border-gray-700 rounded text-white text-sm placeholder-gray-500 focus:outline-none focus:border-emerald-500"
+                          listClassName="absolute z-10 w-full bg-gray-900 border border-gray-700 rounded mt-0.5 max-h-32 overflow-y-auto"
+                          optionClassName="wb-option-row px-3 py-1.5 text-white text-xs border-b border-gray-800 last:border-0"
+                        />
                       </div>
                     </div>
                     <div>
                       <label className="block text-xs text-gray-400 mb-1">Wells ({newProjectWells.length} selected)</label>
-                      <input type="text" value={projectWellSearch} onChange={(e) => setProjectWellSearch(e.target.value)}
+                      <BuilderAutocomplete
+                        value={projectWellSearch}
+                        onValueChange={setProjectWellSearch}
+                        items={projectWellSearch.length >= 2
+                          ? wells.filter(w => w.wellName.toLowerCase().includes(projectWellSearch.toLowerCase()) && !newProjectWells.includes(w.wellName)).slice(0, 10)
+                          : []}
+                        onSelect={(w) => { setNewProjectWells(prev => [...prev, w.wellName]); setProjectWellSearch(''); }}
+                        getItemKey={(w) => w.wellName}
+                        renderItem={(w) => (<>{w.ndicName || w.wellName} <span className="wb-option-sub text-gray-500">{w.route}</span></>)}
                         placeholder="Search wells..."
-                        className="w-full px-3 py-1.5 bg-gray-900 border border-gray-700 rounded text-white text-sm placeholder-gray-500 focus:outline-none focus:border-emerald-500" />
+                        ariaLabel="Search wells to add to the project"
+                        minChars={2}
+                        inputClassName="w-full px-3 py-1.5 bg-gray-900 border border-gray-700 rounded text-white text-sm placeholder-gray-500 focus:outline-none focus:border-emerald-500"
+                        listClassName="bg-gray-900 border border-gray-700 rounded max-h-24 overflow-y-auto mt-1"
+                        optionClassName="wb-option-row px-3 py-1.5 text-white text-xs border-b border-gray-800 last:border-0"
+                      />
                       {newProjectWells.length > 0 && (
                         <div className="flex flex-wrap gap-1 mt-1">
                           {newProjectWells.map(w => (
@@ -2922,19 +2888,6 @@ function DispatchPageInner() {
                               <button onClick={() => setNewProjectWells(prev => prev.filter(n => n !== w))} className="text-emerald-400 hover:text-white">×</button>
                             </span>
                           ))}
-                        </div>
-                      )}
-                      {projectWellSearch.length >= 2 && (
-                        <div className="bg-gray-900 border border-gray-700 rounded max-h-24 overflow-y-auto mt-1">
-                          {wells
-                            .filter(w => w.wellName.toLowerCase().includes(projectWellSearch.toLowerCase()) && !newProjectWells.includes(w.wellName))
-                            .slice(0, 10)
-                            .map(w => (
-                              <button key={w.wellName} onClick={() => { setNewProjectWells(prev => [...prev, w.wellName]); setProjectWellSearch(''); }}
-                                className="wb-option-row px-3 py-1.5 text-white text-xs border-b border-gray-800 last:border-0">
-                                {w.ndicName || w.wellName} <span className="wb-option-sub text-gray-500">{w.route}</span>
-                              </button>
-                            ))}
                         </div>
                       )}
                     </div>

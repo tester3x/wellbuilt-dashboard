@@ -257,11 +257,15 @@ body {
 :root {
   --wb-option-active-bg: #2563eb; /* blue-600 — WCAG AA vs #ffffff (8.6:1) */
   --wb-option-active-fg: #ffffff;
+  --wb-option-hover-bg: #1e3a8a;  /* blue-900 — mouse hover, distinct from keyboard-active */
+  --wb-option-active-ring: rgba(255, 255, 255, 0.85);
 }
 @media (prefers-color-scheme: dark) {
   :root {
     --wb-option-active-bg: #2563eb;
     --wb-option-active-fg: #ffffff;
+    --wb-option-hover-bg: #1e3a8a;
+    --wb-option-active-ring: rgba(255, 255, 255, 0.85);
   }
 }
 .wb-option-row {
@@ -269,17 +273,24 @@ body {
   width: 100%;
   text-align: left;
   cursor: pointer;
-  transition: background-color 0.12s ease, color 0.12s ease;
+  transition: background-color 0.12s ease, color 0.12s ease, box-shadow 0.12s ease;
 }
 .wb-option-row:focus {
   outline: none;
 }
-.wb-option-row:hover,
+/* Mouse hover: a filled background (distinct, softer blue). */
+.wb-option-row:hover {
+  background-color: var(--wb-option-hover-bg);
+  color: var(--wb-option-active-fg);
+}
+/* Keyboard-active (arrow-navigated) OR focus-visible: brighter fill PLUS an inset
+   ring, so the keyboard-active row is clearly distinct from a mouse-hovered row. */
 .wb-option-row:focus-visible,
 .wb-option-row[aria-selected="true"],
 .wb-option-row[data-active="true"] {
   background-color: var(--wb-option-active-bg);
   color: var(--wb-option-active-fg);
+  box-shadow: inset 0 0 0 2px var(--wb-option-active-ring);
 }
 /* Keep any nested muted sub-label readable once the row is filled. */
 .wb-option-row:hover .wb-option-sub,
