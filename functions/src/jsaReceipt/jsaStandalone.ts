@@ -85,7 +85,7 @@ export async function handleStandalone(deps:Pick<SsoDeps,'getDriver'|'getCompany
    const additionId=text(raw.additionId,43,true);
    if(!/^[A-Za-z0-9_-]{43}$/.test(additionId)||!object(raw.addition))bad();
    const a=raw.addition;
-   if(Object.keys(a).some(k=>!['location','operator','activity','hazards','controls','ppe','acknowledged','baseContentHash','expectedAdditionCount','taskReview'].includes(k)))bad();
+   if(Object.keys(a).some(k=>!['location','operator','activity','hazards','controls','ppe','conditionsDiffer','acknowledged','baseContentHash','expectedAdditionCount','taskReview'].includes(k)))bad();
    if(a.acknowledged!==true||!Number.isInteger(a.expectedAdditionCount)||Number(a.expectedAdditionCount)<0)bad();
    let taskAssessment:Record<string,unknown>|null=null;
    if(a.taskReview!==undefined){
@@ -96,7 +96,9 @@ export async function handleStandalone(deps:Pick<SsoDeps,'getDriver'|'getCompany
      if(Object.keys(acks).length!==selected.steps.length||selected.steps.some(s=>acks[s.id]!==true))bad();
      taskAssessment={...selected,stepAcks:acks};
    }
-   const content={location:text(a.location,300,true),operator:text(a.operator,300),activity:text(a.activity,200,true),hazards:text(a.hazards,2000,true),controls:text(a.controls,2000,true),ppe:text(a.ppe,1000,true),acknowledged:true,baseContentHash:text(a.baseContentHash,64,true),expectedAdditionCount:a.expectedAdditionCount,...(taskAssessment?{taskAssessment}: {})};
+   if(a.conditionsDiffer!==undefined&&typeof a.conditionsDiffer!=='boolean')bad();
+   const conditionsDiffer=a.conditionsDiffer===true;
+   const content={location:text(a.location,300,true),operator:text(a.operator,300),activity:text(a.activity,200,true),hazards:text(a.hazards,2000,true),controls:text(a.controls,2000,true),ppe:text(a.ppe,1000,true),conditionsDiffer,acknowledged:true,baseContentHash:text(a.baseContentHash,64,true),expectedAdditionCount:a.expectedAdditionCount,...(taskAssessment?{taskAssessment}: {})};
    addition={...content,id:additionId,submittedRequestHash:submittedHash,contentHash:hash(JSON.stringify(content)),acknowledgedAtMs:now,acknowledgedByUid:auth.uid,driverId:p.driverId,
      acknowledgement:'I have reviewed this location and activity, assessed its hazards, and understand the controls and PPE needed before starting work.'};
  }
@@ -120,6 +122,7 @@ export async function handleStandalone(deps:Pick<SsoDeps,'getDriver'|'getCompany
      extra.assessmentTemplates=selected.templates;
      extra.assessmentPpeItems=selected.ppeItems;
      extra.assessmentPreparedItems=selected.preparedItems;
+     if(selected.locationLayout)extra.locationLayout=selected.locationLayout;
    }
    if(raw.job.operator!==undefined)extra.operator=text(raw.job.operator,300,true);
    if(raw.job.assessmentSteps!==undefined){

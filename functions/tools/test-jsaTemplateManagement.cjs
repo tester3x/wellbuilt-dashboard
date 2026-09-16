@@ -10,6 +10,7 @@ const run=async(operation,templateId,data)=>{
 };
 const test=async(name,fn)=>{await fn();count++;console.log('PASS '+name)};
 const template=(name,tasks)=>({name,tasks,steps:[{id:'s1',title:'Exact '+name,items:[{hazard:'Exact hazard',controls:'Exact control'}]}],ppeItems:[{id:'p1',label:'Gloves'}],preparedItems:[{id:'r1',label:'Trained'}]});
+const locationLayout={schemaVersion:1,locationsCoveredPlacement:'after-job-details',locationDifferencesPlacement:'after-assessment'};
 const col='jsa_templates/company/templates/';
 (async()=>{
  await test('unauthenticated denied',()=>assert.rejects(()=>authorizeTemplateStaff(async()=>null,undefined,'company')));
@@ -31,5 +32,7 @@ const col='jsa_templates/company/templates/';
  await test('invalid assessment denied',()=>assert.rejects(()=>run('save','bad',{...template('Bad',[]),steps:[{id:'s',title:'Oops',items:[{hazard:'h'}]}]})));
  await test('server owns version and user metadata',async()=>{assert.equal(rows.get(col+'load').updatedBy,'staff-user');await assert.rejects(()=>run('save','bad',{...template('Bad',[]),version:100}))});
  await test('unrelated package may use same task',async()=>{await run('save','package',{...template('Package',['loading']),packageId:'another'});await run('publish','package');assert.equal(rows.get('jsa_templates/company').activeTemplates.length,3)});
+ await test('published revision preserves customer location block placement',async()=>{await run('save','layout',{...template('Layout',['inspection']),locationLayout});await run('publish','layout');assert.deepEqual(rows.get(col+'layout--published-v1').locationLayout,locationLayout)});
+ await test('invalid location placement denied',()=>assert.rejects(()=>run('save','bad-layout',{...template('Bad layout',['bad']),locationLayout:{...locationLayout,locationsCoveredPlacement:'inside-signature'}}),/location layout/));
  console.log(`${count} template management cases passed; fixtures only`);
 })().catch(e=>{console.error(e);process.exitCode=1});

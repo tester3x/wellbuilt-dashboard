@@ -7,6 +7,16 @@ export interface TemplateTransaction {
   set(path:string,data:Row):void;
   delete(path:string):void;
 }
+const COVERED_PLACEMENTS=new Set(['after-job-details','after-assessment','after-signature']);
+const DIFFERENCE_PLACEMENTS=new Set(['after-assessment','after-signature']);
+export function validateLocationLayout(value:unknown):void {
+  if(value===undefined)return; // Published legacy templates use the standard addendum.
+  if(!value||typeof value!=='object'||Array.isArray(value))throw new HttpsError('invalid-argument','Invalid location layout');
+  const layout=value as Row;
+  if(Object.keys(layout).some(k=>!['schemaVersion','locationsCoveredPlacement','locationDifferencesPlacement'].includes(k))||
+    layout.schemaVersion!==1||!COVERED_PLACEMENTS.has(layout.locationsCoveredPlacement)||!DIFFERENCE_PLACEMENTS.has(layout.locationDifferencesPlacement))
+    throw new HttpsError('invalid-argument','Invalid location layout');
+}
 export function validateAssessment(raw:Row) {
   const text=(v:unknown,max:number)=>{if(typeof v!=='string'||!v.trim()||v.length>max)throw new HttpsError('invalid-argument','Invalid assessment text');};
   text(raw.name,300);
@@ -21,6 +31,7 @@ export function validateAssessment(raw:Row) {
     if(!Array.isArray(list)||list.length>40)throw new HttpsError('invalid-argument','Invalid checklist');
     const seen=new Set<string>();for(const p of list){text(p?.id,64);text(p?.label,300);if(seen.has(p.id))throw new HttpsError('invalid-argument','Duplicate checklist item');seen.add(p.id);}
   }
+  validateLocationLayout(raw.locationLayout);
   if(JSON.stringify({steps:raw.steps,ppeItems:raw.ppeItems,preparedItems:raw.preparedItems}).length>100000)throw new HttpsError('invalid-argument','Assessment too large');
 }
 const idOk=(v:unknown):v is string=>typeof v==='string'&&/^[A-Za-z0-9_-]{1,120}$/.test(v);
@@ -42,7 +53,7 @@ export async function manageJsaTemplate(tx:TemplateTransaction,raw:Row,uid:strin
   if(raw.operation==='save'){
     if(old?.status==='active')throw new HttpsError('failed-precondition','Deactivate before editing');
     const d=raw.data;
-    if(!d||typeof d!=='object'||Array.isArray(d)||Object.keys(d).some(k=>!['name','tasks','packageId','steps','ppeItems','preparedItems','sourceFile'].includes(k)))throw new HttpsError('invalid-argument','Invalid template fields');
+    if(!d||typeof d!=='object'||Array.isArray(d)||Object.keys(d).some(k=>!['name','tasks','packageId','steps','ppeItems','preparedItems','locationLayout','sourceFile'].includes(k)))throw new HttpsError('invalid-argument','Invalid template fields');
     if(d.packageId!==undefined&&d.packageId!==null&&!idOk(d.packageId))throw new HttpsError('invalid-argument','Invalid package');
     if(d.sourceFile && (typeof d.sourceFile!=='object'||Object.keys(d.sourceFile).some(k=>!['storageUrl','storagePath','fileName'].includes(k))||Object.values(d.sourceFile).some(v=>typeof v!=='string'||v.length>2048)))throw new HttpsError('invalid-argument','Invalid source file');
     const next={...old,...d,companyId:raw.companyId,packageId:d.packageId===undefined?(old?.packageId||null):d.packageId,tasks:tasks(d.tasks===undefined?old?.tasks:d.tasks),version:old?.version||0,status:'draft',createdAt:old?.createdAt||now,updatedAt:now,updatedBy:uid};

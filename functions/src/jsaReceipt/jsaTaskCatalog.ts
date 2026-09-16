@@ -21,7 +21,8 @@ export async function readJsaTaskCatalog(store: JsaTemplateReader, companyId: st
     validateAssessment(raw);
     if (!Array.isArray(raw.steps) || !raw.steps.length || raw.steps.length > 40 || !Array.isArray(raw.ppeItems) || !Array.isArray(raw.preparedItems) || !Array.isArray(raw.tasks)) throw new Error('Malformed published template');
     if (typeof raw.name !== 'string' || raw.tasks.some(t => typeof t !== 'string' || !t.trim()) || JSON.stringify(raw.steps).length > 100000) throw new Error('Malformed template content');
-    const content = {name:raw.name,tasks:raw.tasks,packageId:raw.packageId || null,steps:raw.steps,ppeItems:raw.ppeItems,preparedItems:raw.preparedItems};
+    const content = {name:raw.name,tasks:raw.tasks,packageId:raw.packageId || null,steps:raw.steps,ppeItems:raw.ppeItems,preparedItems:raw.preparedItems,
+      ...(raw.locationLayout?{locationLayout:raw.locationLayout}:{})};
     templates.push({id:entry.id,version:entry.version,contentHash:createHash('sha256').update(JSON.stringify(content)).digest('hex'),...content});
   }
   return {schemaVersion:2,templates};
@@ -41,5 +42,7 @@ export function selectJsaTaskTemplates(catalog: Awaited<ReturnType<typeof readJs
   const ppeItems = selected.flatMap(t=>t.ppeItems.map((p:any,i:number)=>({...p,id:`${t.contentHash.slice(0,12)}_p${i}`})));
   const preparedItems = selected.flatMap(t=>t.preparedItems.map((p:any,i:number)=>({...p,id:`${t.contentHash.slice(0,12)}_r${i}`})));
   if (steps.length>40 || JSON.stringify(steps).length>100000) throw new Error('Too many assessment steps in one JSA');
-  return {steps,ppeItems,preparedItems,templates:selected.map(({id,version,contentHash,name,tasks})=>({id,version,contentHash,name,tasks}))};
+  const layouts=selected.map(t=>t.locationLayout).filter(Boolean);
+  const locationLayout=layouts.length===selected.length&&layouts.every(layout=>JSON.stringify(layout)===JSON.stringify(layouts[0]))?layouts[0]:undefined;
+  return {steps,ppeItems,preparedItems,...(locationLayout?{locationLayout}:{}),templates:selected.map(({id,version,contentHash,name,tasks})=>({id,version,contentHash,name,tasks}))};
 }

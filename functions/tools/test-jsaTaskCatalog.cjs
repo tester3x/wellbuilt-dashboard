@@ -7,14 +7,15 @@ const plan={contractVersion:1,planId:'free',displayName:'Free',capabilities:['js
 const deps={getDriver:async()=>({driverId:'driver-1',companyId:'company-1',active:true}),getCompanyContract:async()=>({state:'active',contract}),getPlan:async()=>plan};
 const docs=new Map(),reads=[];const store={readTemplate:async p=>{reads.push(p);return docs.get(p)||null},list:async()=>[],transaction:async()=>{throw Error('unexpected write')}};
 const root='jsa_templates/company-1';
-const revision=(id,task)=>({companyId:'company-1',templateId:id,recordType:'revision',version:1,name:task,tasks:[task.toLowerCase()],steps:[{id:'one',title:'Exact '+task,items:[{hazard:'Hazard',controls:'Original control'}]}],ppeItems:[],preparedItems:[]});
+const locationLayout={schemaVersion:1,locationsCoveredPlacement:'after-job-details',locationDifferencesPlacement:'after-assessment'};
+const revision=(id,task)=>({companyId:'company-1',templateId:id,recordType:'revision',version:1,name:task,tasks:[task.toLowerCase()],steps:[{id:'one',title:'Exact '+task,items:[{hazard:'Hazard',controls:'Original control'}]}],ppeItems:[],preparedItems:[],locationLayout});
 (async()=>{
  assert.equal((await readJsaTaskCatalog(store,'company-1')).schemaVersion,1);
  docs.set(root,{schemaVersion:2,activeTemplates:[{id:'load',version:1},{id:'unload',version:1}]});
  docs.set(root+'/templates/load--published-v1',revision('load','Loading'));docs.set(root+'/templates/unload--published-v1',revision('unload','Unloading'));
  const result=await handleStandalone(deps,store,auth,{operation:'templates'},1);assert.equal(result.templates.length,2);assert.equal(result.templates[0].steps[0].title,'Exact Loading');assert.match(result.templates[0].contentHash,/^[a-f0-9]{64}$/);
  const refs=result.templates.map(({id,version,contentHash})=>({id,version,contentHash}));
- const assembled=selectJsaTaskTemplates(result,refs);assert.equal(assembled.steps.length,2);assert.notEqual(assembled.steps[0].id,assembled.steps[1].id);
+ const assembled=selectJsaTaskTemplates(result,refs);assert.equal(assembled.steps.length,2);assert.notEqual(assembled.steps[0].id,assembled.steps[1].id);assert.deepEqual(assembled.locationLayout,locationLayout);
  assert.throws(()=>selectJsaTaskTemplates(result,[{...refs[0],contentHash:'x'}]));
  const count=reads.length;
  await assert.rejects(()=>handleStandalone(deps,store,{uid:null},{operation:'templates'},1));
@@ -26,7 +27,7 @@ const revision=(id,task)=>({companyId:'company-1',templateId:id,recordType:'revi
  let writes=0;
  const appendStore={...store,readRecord:async()=>saved,transaction:async(path,fn)=>{const next=fn(saved);if(next){saved=next;writes++;}return saved}};
  const newRef=refs.find(r=>r.id==='unload');const extra=selectJsaTaskTemplates(result,[newRef]);
- const request={operation:'append',recordId:original.id,additionId:'B'.repeat(43),addition:{location:'Disposal',operator:'Operator',activity:'Unloading',hazards:'Fixture hazard',controls:'Fixture control',ppe:'Fixture PPE',acknowledged:true,baseContentHash:original.contentHash,expectedAdditionCount:0,taskReview:{templateRefs:[newRef],stepAcks:Object.fromEntries(extra.steps.map(s=>[s.id,true]))}}};
+ const request={operation:'append',recordId:original.id,additionId:'B'.repeat(43),addition:{location:'Disposal',operator:'Operator',activity:'Unloading',hazards:'Fixture hazard',controls:'Fixture control',ppe:'Fixture PPE',conditionsDiffer:true,acknowledged:true,baseContentHash:original.contentHash,expectedAdditionCount:0,taskReview:{templateRefs:[newRef],stepAcks:Object.fromEntries(extra.steps.map(s=>[s.id,true]))}}};
  await assert.rejects(()=>handleStandalone(deps,appendStore,auth,{...request,addition:{...request.addition,taskReview:{...request.addition.taskReview,stepAcks:{}}}},2));
  await handleStandalone(deps,appendStore,auth,request,2);
  assert.deepEqual(saved.snapshot,original.snapshot);assert.deepEqual(saved.job,original.job);assert.equal(saved.additions[0].taskAssessment.steps[0].title,'Exact Unloading');
@@ -52,7 +53,7 @@ const revision=(id,task)=>({companyId:'company-1',templateId:id,recordType:'revi
  const create={operation:'create',recordId:'E'.repeat(43),snapshot,job:{activity:'Loading',wells:[],templateRefs:[refs[0]],assessmentSteps:selected.steps}};
  saved=null;writes=0;
  await handleStandalone(deps,appendStore,auth,create,10);
- const created=structuredClone(saved);
+ const created=structuredClone(saved);assert.deepEqual(created.job.locationLayout,locationLayout);
  docs.set(root,{schemaVersion:2,activeTemplates:[]});
  assert.deepEqual((await handleStandalone(deps,appendStore,auth,create,20)).record,created);assert.equal(writes,1);
  await assert.rejects(()=>handleStandalone(deps,appendStore,auth,{...create,snapshot:{...snapshot,notes:'Changed'}},21),/conflicting_record/);
