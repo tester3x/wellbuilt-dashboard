@@ -3123,7 +3123,10 @@ function DispatchPageInner() {
                   type="button"
                   onClick={() => dockQueue(!queueDetached)}
                   title={queueDetached ? 'Return the Well Queue to the dashboard' : 'Open the Well Queue in its own window'}
-                  className="hidden xl:inline-flex items-center gap-1 px-2 py-1 text-[11px] font-medium rounded text-gray-300 bg-gray-900 border border-gray-700 hover:bg-gray-700 flex-shrink-0"
+                  // Pop-Out is a wide-screen convenience (xl only); once detached, the
+                  // pop-out window is narrow (~560px) so Reattach must ALWAYS be visible
+                  // there — otherwise there is no way to dock back from inside the window.
+                  className={`${queueDetached ? 'inline-flex' : 'hidden xl:inline-flex'} items-center gap-1 px-2 py-1 text-[11px] font-medium rounded text-gray-300 bg-gray-900 border border-gray-700 hover:bg-gray-700 flex-shrink-0`}
                 >{queueDetached ? '⧉ Reattach' : '⧉ Pop Out'}</button>
                 <button
                   type="button"
@@ -3382,9 +3385,13 @@ function DispatchPageInner() {
               onDock={() => dockJobs(false)}
               title="Active Jobs"
               mountClassName="detached-pane detached-pane-jobs"
+              width={1100}
+              height={800}
             >
-              {/* Panel header with tabs */}
-              <div className="flex items-center justify-between px-4 py-2.5 border-b border-gray-700 flex-shrink-0">
+              {/* Panel header with tabs. flex-wrap so at narrow widths the controls
+                  (including Reattach) wrap cleanly onto a second line instead of the
+                  Reattach button being pushed off / hidden. */}
+              <div className="flex flex-wrap items-center justify-between gap-y-1 px-4 py-2.5 border-b border-gray-700 flex-shrink-0">
                 <div className="flex items-center gap-1">
                   <button
                     onClick={() => { setRightPanelTab('jobs'); setSelectedProject(null); }}
@@ -3440,7 +3447,10 @@ function DispatchPageInner() {
                     type="button"
                     onClick={() => dockJobs(!jobsDetached)}
                     title={jobsDetached ? 'Return Active Jobs to the dashboard' : 'Open Active Jobs in its own window'}
-                    className="hidden xl:inline-flex items-center gap-1 px-2 py-1 text-[11px] font-medium rounded text-gray-300 bg-gray-900 border border-gray-700 hover:bg-gray-700 flex-shrink-0"
+                    // Same rule as the Well Queue: Pop-Out is xl-only, but the Reattach
+                    // control MUST be visible in the narrow detached window so Active Jobs
+                    // can always be docked back. (Fixes the missing-Reattach pop-out bug.)
+                    className={`${jobsDetached ? 'inline-flex' : 'hidden xl:inline-flex'} items-center gap-1 px-2 py-1 text-[11px] font-medium rounded text-gray-300 bg-gray-900 border border-gray-700 hover:bg-gray-700 flex-shrink-0`}
                   >{jobsDetached ? '⧉ Reattach' : '⧉ Pop Out'}</button>
                   {rightPanelTab === 'jobs' && (
                     <>

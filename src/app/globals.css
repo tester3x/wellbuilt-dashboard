@@ -225,6 +225,7 @@ body {
   flex-direction: column;
   height: 100vh;
   min-height: 0;
+  overflow: hidden;                 /* the inner pane body is the SOLE scroll owner */
   background: #111827;
   color: #e5e7eb;
 }
