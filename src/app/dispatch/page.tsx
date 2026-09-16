@@ -9,6 +9,7 @@ import { operationalDriverName } from '@/lib/operationalDriverName';
 import { shiftDotForDriver, type ShiftResolveResult } from '@/lib/shiftDotCore';
 import { resolveCompanyDriverShifts } from '@/lib/resolveCompanyDriverShifts';
 import { comparePhysicalJobs, recommendedNextJobId, type PhysicalJobRankInput } from '@/lib/physicalJobOrder';
+import { buildWellQueueRankIndex, rankJob } from '@/lib/activeJobsRank';
 import { useScrollRestore } from '@/lib/useScrollRestore';
 import { WellResponse, mergeWellPool, matchWellInPool } from '@/lib/wells';
 import { getPriority, getWellPrediction, formatTTP, matchesView, wellBucket, classifyWell, compareQueueRows, inchesToLevel, formatAge, verifyReasonText, type QueueView } from '@/lib/dispatchPriority';
@@ -4484,34 +4485,18 @@ function ActiveDispatchPanel({ dispatches, cancelDispatch, drivers, assignTransf
   // Queue uses (compareQueueRows over classifyWell at the SAME nowMs), so Active Jobs and
   // the Well Queue consume identical readiness. A job joins its well via matchWellInPool
   // (canonical NDIC identity, NOT display-name equality) — never a stale dispatch snapshot.
-  const physicalWellRank = useMemo(() => {
-    const rows = (wells || []).map(w => ({ well: w, priority: classifyWell(w, nowMs), assignment: undefined }));
-    rows.sort(compareQueueRows);
-    const m = new Map<string, number>();
-    rows.forEach((r, i) => { if (r.well.wellName) m.set(r.well.wellName, i); });
-    return m;
-  }, [wells, nowMs]);
-  const jobWell = useCallback(
-    (j: DispatchJob) => (wells ? (matchWellInPool(wells, j.ndicWellName) || matchWellInPool(wells, j.wellName)) : undefined),
-    [wells],
+  const rankNowMs = nowMs ?? Date.now();
+  const physicalWellRank = useMemo(() => buildWellQueueRankIndex(wells || [], rankNowMs), [wells, rankNowMs]);
+  const rankOf = useCallback(
+    (j: DispatchJob): PhysicalJobRankInput =>
+      rankJob(
+        { id: j.id, wellName: j.wellName, ndicWellName: j.ndicWellName, status: j.status, driverStage: j.driverStage, assignedAtMs: j.assignedAt?.toMillis?.() || 0 },
+        wells || [],
+        physicalWellRank,
+        rankNowMs,
+      ),
+    [wells, physicalWellRank, rankNowMs],
   );
-  const rankOf = useCallback((j: DispatchJob): PhysicalJobRankInput => {
-    const w = jobWell(j);
-    const cls = w ? classifyWell(w, nowMs) : null;
-    return {
-      id: j.id || '',
-      // "Current operational job" = the SAME authoritative signal the group header's
-      // Driver Started badge uses: a live driverStage (not completed/paused), or an
-      // in_progress lifecycle status. That card is pinned first.
-      inProgress: (!!j.driverStage && !['completed', 'paused'].includes(j.driverStage)) || j.status === 'in_progress',
-      down: cls?.state === 'down',
-      // Physical order = the well's index in the Well-Queue ordering. No canonical well →
-      // sort last (9999) rather than falling back to a stale dispatch TTP/assignedAt.
-      sortOrder: w ? (physicalWellRank.get(w.wellName) ?? 9998) : 9999,
-      hoursUntilPull: null,
-      assignedAtMs: j.assignedAt?.toMillis?.() || 0,
-    };
-  }, [jobWell, physicalWellRank, nowMs]);
 
   // Group ALL jobs by driver — every dispatch shows in the driver's personal list
   // (multi-driver SW jobs also appear in Crew Jobs section for at-a-glance crew view)
