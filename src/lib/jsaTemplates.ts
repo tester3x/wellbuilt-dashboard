@@ -31,6 +31,40 @@ export interface JsaPreparedItem {
   label: string;
 }
 
+export type JsaLocationsCoveredPlacement = 'after-job-details' | 'after-assessment' | 'after-signature';
+export type JsaLocationDifferencesPlacement = 'after-assessment' | 'after-signature';
+
+/**
+ * Repeatable, data-backed blocks in the customer's published JSA layout.
+ * They control presentation only; location evidence remains structured.
+ */
+export interface JsaLocationLayout {
+  schemaVersion: 1;
+  locationsCoveredPlacement: JsaLocationsCoveredPlacement;
+  locationDifferencesPlacement: JsaLocationDifferencesPlacement;
+}
+
+export const DEFAULT_JSA_LOCATION_LAYOUT: JsaLocationLayout = {
+  schemaVersion: 1,
+  locationsCoveredPlacement: 'after-job-details',
+  locationDifferencesPlacement: 'after-assessment',
+};
+
+export function normalizeJsaLocationLayout(value: unknown): JsaLocationLayout {
+  const candidate = value as Partial<JsaLocationLayout> | null;
+  const covered = candidate?.locationsCoveredPlacement;
+  const differences = candidate?.locationDifferencesPlacement;
+  return {
+    schemaVersion: 1,
+    locationsCoveredPlacement: covered === 'after-job-details' || covered === 'after-assessment' || covered === 'after-signature'
+      ? covered
+      : DEFAULT_JSA_LOCATION_LAYOUT.locationsCoveredPlacement,
+    locationDifferencesPlacement: differences === 'after-assessment' || differences === 'after-signature'
+      ? differences
+      : DEFAULT_JSA_LOCATION_LAYOUT.locationDifferencesPlacement,
+  };
+}
+
 export interface JsaTemplate {
   id: string;           // Firestore doc ID
   companyId: string;
@@ -41,6 +75,7 @@ export interface JsaTemplate {
   steps: JsaTemplateStep[];
   ppeItems: JsaPpeItem[];
   preparedItems: JsaPreparedItem[];
+  locationLayout?: JsaLocationLayout;
   sourceFile?: {
     storageUrl: string;
     storagePath: string;
@@ -135,7 +170,7 @@ async function manage(companyId:string, templateId:string, operation:string, dat
 export async function saveJsaTemplate(companyId:string,templateId:string|null,data:Partial<JsaTemplate>,_userId:string):Promise<string> {
   const id=!templateId?'jsa-'+crypto.randomUUID():templateId;
   const fields:Partial<JsaTemplate>={};
-  for(const key of ['name','packageId','tasks','steps','ppeItems','preparedItems','sourceFile'] as const)
+  for(const key of ['name','packageId','tasks','steps','ppeItems','preparedItems','locationLayout','sourceFile'] as const)
     if(data[key]!==undefined) Object.assign(fields,{[key]:data[key]});
   return (await manage(companyId,id,'save',fields)).id;
 }

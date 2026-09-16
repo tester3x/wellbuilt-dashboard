@@ -7,6 +7,9 @@ import {
   type JsaTemplateStep,
   type JsaPpeItem,
   type JsaPreparedItem,
+  type JsaLocationLayout,
+  DEFAULT_JSA_LOCATION_LAYOUT,
+  normalizeJsaLocationLayout,
   uploadAndParseJsaPdf,
   saveJsaTemplate,
   loadJsaTemplates,
@@ -73,6 +76,7 @@ export function JsaCard({ company, onSave }: Props) {
   const [editSteps, setEditSteps] = useState<JsaTemplateStep[]>([]);
   const [editPpe, setEditPpe] = useState<JsaPpeItem[]>([]);
   const [editPrepared, setEditPrepared] = useState<JsaPreparedItem[]>([]);
+  const [editLocationLayout, setEditLocationLayout] = useState<JsaLocationLayout>(DEFAULT_JSA_LOCATION_LAYOUT);
 
   const activePackages = company.activePackages || ['water-hauling'];
 
@@ -105,6 +109,7 @@ export function JsaCard({ company, onSave }: Props) {
     setEditSteps(JSON.parse(JSON.stringify(t.steps)));
     setEditPpe(JSON.parse(JSON.stringify(t.ppeItems)));
     setEditPrepared(JSON.parse(JSON.stringify(t.preparedItems)));
+    setEditLocationLayout(normalizeJsaLocationLayout(t.locationLayout));
   }, []);
 
   // JSA Mode handler. Deliberate-save normalization: clicking the mode a
@@ -240,6 +245,7 @@ export function JsaCard({ company, onSave }: Props) {
         steps: parsed.steps,
         ppeItems: parsed.ppeItems,
         preparedItems: parsed.preparedItems,
+        locationLayout: DEFAULT_JSA_LOCATION_LAYOUT,
         sourceFile: { storagePath: parsed.storagePath, storageUrl: parsed.storageUrl, fileName: file.name },
         status: 'draft',
       }, 'admin');
@@ -273,6 +279,7 @@ export function JsaCard({ company, onSave }: Props) {
         steps: editSteps,
         ppeItems: editPpe,
         preparedItems: editPrepared,
+        locationLayout: editLocationLayout,
       }, 'admin');
       await refreshTemplates();
       setEditingId(null);
@@ -297,6 +304,7 @@ export function JsaCard({ company, onSave }: Props) {
           steps: editSteps,
           ppeItems: editPpe,
           preparedItems: editPrepared,
+          locationLayout: editLocationLayout,
         }, 'admin');
       }
       await activateJsaTemplate(company.id, templateId, 'admin');
@@ -532,6 +540,35 @@ export function JsaCard({ company, onSave }: Props) {
                 className="w-full bg-gray-700 text-white text-sm rounded px-3 py-2 border border-gray-600" />
                 : <div className="text-gray-300 text-sm">{t.tasks?.length ? t.tasks.join(', ') : 'Default assessment'}</div>}
               <p className="text-gray-400 text-xs mt-1">Separate task names with commas. Use one template for tasks with identical wording; upload separate templates when wording differs. Leave blank for the default assessment.</p>
+            </div>
+            <div>
+              <div className="text-gray-400 text-xs mb-2">Repeatable location blocks</div>
+              <div className="bg-gray-700 rounded-lg p-3 space-y-3">
+                <p className="text-gray-300 text-xs">These blocks expand automatically for every location. Older layouts without them receive the standard WellBuilt addendum.</p>
+                <label className="block">
+                  <span className="text-gray-400 text-xs block mb-1">Locations Covered</span>
+                  {isEditing ? (
+                    <select value={editLocationLayout.locationsCoveredPlacement}
+                      onChange={e=>setEditLocationLayout(old=>({...old,locationsCoveredPlacement:e.target.value as JsaLocationLayout['locationsCoveredPlacement']}))}
+                      className="w-full bg-gray-600 text-white text-xs rounded px-2 py-2 border border-gray-500">
+                      <option value="after-job-details">After job details</option>
+                      <option value="after-assessment">After steps, hazards and controls</option>
+                      <option value="after-signature">After the original signature</option>
+                    </select>
+                  ) : <div className="text-gray-300 text-xs">{normalizeJsaLocationLayout(t.locationLayout).locationsCoveredPlacement.replaceAll('-', ' ')}</div>}
+                </label>
+                <label className="block">
+                  <span className="text-gray-400 text-xs block mb-1">Location-Specific Differences</span>
+                  {isEditing ? (
+                    <select value={editLocationLayout.locationDifferencesPlacement}
+                      onChange={e=>setEditLocationLayout(old=>({...old,locationDifferencesPlacement:e.target.value as JsaLocationLayout['locationDifferencesPlacement']}))}
+                      className="w-full bg-gray-600 text-white text-xs rounded px-2 py-2 border border-gray-500">
+                      <option value="after-assessment">After steps, hazards and controls</option>
+                      <option value="after-signature">After the original signature</option>
+                    </select>
+                  ) : <div className="text-gray-300 text-xs">{normalizeJsaLocationLayout(t.locationLayout).locationDifferencesPlacement.replaceAll('-', ' ')}</div>}
+                </label>
+              </div>
             </div>
             {/* Source file */}
             {t.sourceFile && (
