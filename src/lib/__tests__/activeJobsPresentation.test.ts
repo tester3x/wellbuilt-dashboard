@@ -42,12 +42,40 @@ test('there is ONE reusable FIXED-size categorical badge slot (identical width/h
   assert.match(slot, /flex-shrink-0/, 'never shrinks below the fixed width');
 });
 
-test('categorical pills in the Active Job row use the shared slot (CategoryBadge / slot props)', () => {
-  // The row renders its own categorical pills through the shared slot component…
+test('the larger operational/state pills use the shared 104px slot; stage/status keeps it', () => {
+  // The row renders its operational/state pills through the shared 104px slot…
   assert.match(rowSource, /<CategoryBadge/, 'row uses the shared CategoryBadge slot');
-  // …and passes `slot` to the shared type/stage badges so they adopt the same slot.
-  assert.match(rowSource, /<JobTypeBadge[^/]*\bslot\b[^>]*\/>/, 'PW/SW badge uses the slot');
-  assert.match(rowSource, /<StageBadge job=\{job\} slot \/>/, 'stage/status badge uses the slot');
+  // …and the stage/status badge adopts that same 104px slot.
+  assert.match(rowSource, /<StageBadge job=\{job\} slot \/>/, 'stage/status badge uses the 104px slot');
+});
+
+test('job-type badges are their OWN compact ~40x20 group — NOT the 104px categorical slot', () => {
+  // A dedicated compact slot, sized ~40x20 (w-10 h-5), centered.
+  const jt = source.match(/const JOB_TYPE_BADGE_SLOT =\s*\n?\s*'([^']+)'/);
+  assert.ok(jt, 'JOB_TYPE_BADGE_SLOT exists');
+  const slot = jt![1];
+  assert.match(slot, /\bw-10\b/, 'fixed ~40px width (w-10)');
+  assert.match(slot, /\bh-5\b/, 'fixed 20px height (h-5)');
+  assert.match(slot, /justify-center/, 'centered horizontally');
+  assert.match(slot, /items-center/, 'centered vertically');
+  assert.doesNotMatch(slot, /min-w-\[6\.5rem\]|\bw-\[6\.5rem\]/, 'job type is NOT the 104px categorical slot');
+  // The badge renders a canonical two-letter code and preserves the full name.
+  const fn = source.slice(source.indexOf('function JobTypeBadge'), source.indexOf('function JobTypeBadge') + 700);
+  assert.match(fn, /jobTypeAcronym\(type\)/, 'code + full name come from the canonical mapping');
+  assert.match(fn, /className=\{`\$\{JOB_TYPE_BADGE_SLOT\}/, 'uses the compact job-type slot');
+  assert.doesNotMatch(fn, /<CategoryBadge/, 'job-type badge never uses the 104px CategoryBadge');
+  assert.match(fn, /title=\{title\}/, 'full name in tooltip');
+  assert.match(fn, /aria-label=\{title\}/, 'full name in accessibility label');
+  // The Active Job row uses JobTypeBadge WITHOUT the 104px slot prop.
+  assert.match(rowSource, /<JobTypeBadge type=\{job\.jobType\} serviceType=\{job\.serviceType\} \/>/, 'row job-type badge takes no 104px slot');
+  assert.doesNotMatch(rowSource, /<JobTypeBadge[^/]*\bslot\b/, 'job-type badge is not put in the 104px slot');
+});
+
+test('driver-group and header job-type summaries use the same two-letter mapping', () => {
+  assert.match(source, /\{pwLoads\} \{jobTypeCode\('pw'\)\}/, 'header PW load count uses the mapping');
+  assert.match(source, /\{swLoads\} \{jobTypeCode\('service'\)\}/, 'header SW load count uses the mapping');
+  assert.match(source, /\{pwCount\} \{jobTypeCode\('pw'\)\}/, 'driver-group PW summary uses the mapping');
+  assert.match(source, /\{swCount\} \{jobTypeCode\('service'\)\}/, 'driver-group SW summary uses the mapping');
 });
 
 test('the DOWN warning is shortened to "⚠ DOWN" but keeps its actionable meaning', () => {

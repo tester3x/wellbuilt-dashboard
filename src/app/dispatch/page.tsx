@@ -10,6 +10,7 @@ import { shiftDotForDriver, type ShiftResolveResult } from '@/lib/shiftDotCore';
 import { resolveCompanyDriverShifts } from '@/lib/resolveCompanyDriverShifts';
 import { comparePhysicalJobs, recommendedNextJobId, type PhysicalJobRankInput } from '@/lib/physicalJobOrder';
 import { buildWellQueueRankIndex, rankJob } from '@/lib/activeJobsRank';
+import { jobTypeAcronym, jobTypeCode } from '@/lib/jobTypeAcronym';
 import { useScrollRestore } from '@/lib/useScrollRestore';
 import { WellResponse, mergeWellPool, matchWellInPool } from '@/lib/wells';
 import { getPriority, getWellPrediction, formatTTP, matchesView, wellBucket, classifyWell, compareQueueRows, inchesToLevel, formatAge, verifyReasonText, type QueueView } from '@/lib/dispatchPriority';
@@ -3456,12 +3457,12 @@ function DispatchPageInner() {
                     <>
                       {(() => { const pw = dispatches.filter(d => d.jobType === 'pw' && d.status !== 'completed'); const pwLoads = pw.reduce((s, d) => s + ((d as any).loadCount || 1), 0); return pwLoads > 0 ? (
                         <span className="px-1.5 py-0.5 bg-blue-600/20 text-blue-400 text-[10px] rounded font-bold">
-                          {pwLoads} PW
+                          {pwLoads} {jobTypeCode('pw')}
                         </span>
                       ) : null; })()}
                       {(() => { const sw = dispatches.filter(d => d.jobType === 'service' && d.status !== 'completed'); const swLoads = sw.reduce((s, d) => s + ((d as any).loadCount || 1), 0); return swLoads > 0 ? (
                         <span className="px-1.5 py-0.5 bg-purple-600/20 text-purple-400 text-[10px] rounded font-bold">
-                          {swLoads} SW
+                          {swLoads} {jobTypeCode('service')}
                         </span>
                       ) : null; })()}
                     </>
@@ -4261,17 +4262,23 @@ function CategoryBadge({ className = '', title, children }: { className?: string
   );
 }
 
-// Job type badge — categorical PW/SW. `slot` uses the standardized Active-Job slot;
-// otherwise the original compact pill (shared modals/history/crew stay unchanged).
-function JobTypeBadge({ type, serviceType, slot }: { type: 'pw' | 'service'; serviceType?: string; slot?: boolean }) {
-  const color = type === 'service' ? 'bg-purple-600/30 text-purple-300' : 'bg-blue-600/30 text-blue-300';
-  const label = type === 'service' ? `SW${serviceType ? ` · ${serviceType}` : ''}` : 'PW';
-  if (slot) {
-    return <CategoryBadge className={`${color} uppercase tracking-wider`}>{label}</CategoryBadge>;
-  }
+// Job-type badge — its OWN compact identity group (~40x20), centered, ONE small
+// shared size. Every job type renders as a canonical two-letter acronym (PW/SW/…);
+// the full job-type name (and any service sub-type) is preserved in the tooltip /
+// aria-label. This is deliberately NOT the larger 104px categorical slot — that slot
+// stays for Next / DOWN / Heavy / Driver Started / stage-status badges.
+const JOB_TYPE_BADGE_SLOT =
+  'inline-flex items-center justify-center text-center w-10 h-5 text-[10px] font-bold leading-none rounded uppercase tracking-wider flex-shrink-0';
+function JobTypeBadge({ type, serviceType }: { type: string; serviceType?: string }) {
+  const { code, full } = jobTypeAcronym(type);
+  const color =
+    code === 'SW' ? 'bg-purple-600/30 text-purple-300'
+    : code === 'PW' ? 'bg-blue-600/30 text-blue-300'
+    : 'bg-slate-600/40 text-slate-200';
+  const title = serviceType ? `${full} · ${serviceType}` : full;
   return (
-    <span className={`px-1.5 py-0.5 ${color} text-[10px] font-bold rounded uppercase tracking-wider flex-shrink-0`}>
-      {label}
+    <span className={`${JOB_TYPE_BADGE_SLOT} ${color}`} title={title} aria-label={title}>
+      {code}
     </span>
   );
 }
@@ -4307,7 +4314,7 @@ function DispatchJobRow({ job, cancelDispatch, compact, onClickServiceWork, onRe
       <div className="flex items-center gap-2">
         {/* Identity: type, well, quantity, and linked-ticket facts always stay together. */}
         <div className="flex items-center gap-2 min-w-0">
-          <JobTypeBadge type={job.jobType} serviceType={job.serviceType} slot />
+          <JobTypeBadge type={job.jobType} serviceType={job.serviceType} />
           <span className="text-white font-medium text-sm truncate" style={{ minWidth: 100 }}>
             {job.ndicWellName || job.wellName}
           </span>
@@ -4696,10 +4703,10 @@ function ActiveDispatchPanel({ dispatches, cancelDispatch, drivers, assignTransf
                 <div className="flex items-center gap-2">
                   <span className="text-white font-semibold text-sm">{driverName}</span>
                   {pwCount > 0 && (
-                    <span className="px-1.5 py-0.5 bg-blue-600/20 text-blue-400 text-[10px] rounded font-bold">{pwCount} PW</span>
+                    <span className="px-1.5 py-0.5 bg-blue-600/20 text-blue-400 text-[10px] rounded font-bold">{pwCount} {jobTypeCode('pw')}</span>
                   )}
                   {swCount > 0 && (
-                    <span className="px-1.5 py-0.5 bg-purple-600/20 text-purple-400 text-[10px] rounded font-bold">{swCount} SW</span>
+                    <span className="px-1.5 py-0.5 bg-purple-600/20 text-purple-400 text-[10px] rounded font-bold">{swCount} {jobTypeCode('service')}</span>
                   )}
                 </div>
                 {/* Active job detail line — shows what the driver is currently doing */}
