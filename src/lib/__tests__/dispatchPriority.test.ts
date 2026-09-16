@@ -32,6 +32,17 @@ test('VECTOR A: bottom 5\', pull 16:00Z, AFR 0:30:00, asOf 18:00Z → est 9\', t
   assert.equal(matchesView(well, 'next-24h', ms(18)), true);
 });
 
+test('TTP display preserves WB-M / Well Status minute precision', () => {
+  const well = w({ lastPullBottomLevel: "5'", lastPullDateTimeUTC: at(16), flowRate: '0:30:00', bottomLevel: 3, bblPerFoot: 20 });
+  assert.equal(formatTTP(well, ms(17, 15)), '1h 15m');
+  assert.equal(formatTTP(well, ms(18)), '0h 30m');
+});
+
+test('TTP display includes days, hours, and minutes without whole-hour rounding', () => {
+  const well = w({ lastPullBottomLevel: "5'", lastPullDateTimeUTC: at(16), flowRate: '6:03:00', bottomLevel: 3, bblPerFoot: 20 });
+  assert.equal(formatTTP(well, ms(18)), '1d 4h 15m');
+});
+
 test('VECTOR B (corrected): bottom 18\'6", 0:15:00, asOf 18:00Z, 140/20/3 → capped 20\', target 10\', TWO loads, PULL NOW', () => {
   // 140 bbls / 20 bbl-ft / 3' bottom → readyLevel = 3 + 140/20 = 10' (NOT 17').
   // At 20': loads = floor(((20-3)*20)/140) = floor(340/140) = 2.
