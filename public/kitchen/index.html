@@ -34,7 +34,12 @@ function animateFriends(){
  movePatch(1470,468,99,65,(x,y)=>{const tail=Math.max(0,(x-1523)/46);return [Math.sin(time*1.3)*1.5,Math.sin(time*5.5)*tail*4+Math.sin(time*1.3)*.6]});
  // Two quick nose twitches toward the cup, then a long relaxed pause.
  const phase=time%11,sniff=phase<2.6?Math.pow(Math.sin(phase/2.6*Math.PI),2)*(1+.3*Math.sin(phase*13)):0;
- if(sniff>.001)movePatch(479,400,82,65,(x,y)=>{const nose=Math.max(0,Math.min(1,(x-486)/63));return [sniff*3.5*nose,-sniff*.9*nose]});
+ const headShift=(x,y)=>{const nose=Math.max(0,Math.min(1,(x-486)/63));return [sniff*9*nose,-sniff*2*nose]};
+ if(sniff>.001)movePatch(479,400,82,65,headShift);
+ // A quick blink every few seconds, with an occasional second blink.
+ const cycle=time%8.3;
+ const blink=Math.max(...[1.5,5.7,6.05].map(start=>{const p=(cycle-start)/.24;return p>0&&p<1?Math.sin(p*Math.PI):0}));
+ if(blink>0){const ex=518,ey=426,edge=Math.sin(Math.PI*(ex-479)/82)*Math.sin(Math.PI*(ey-400)/65),shift=headShift(ex,ey);ctx.save();ctx.translate(ex+shift[0]*edge,ey+shift[1]*edge);ctx.rotate(-.2);ctx.beginPath();ctx.ellipse(0,0,6.1,4.6,0,0,Math.PI*2);ctx.clip();const lid=ctx.createLinearGradient(-5,-5,5,5);lid.addColorStop(0,'#a77940');lid.addColorStop(.55,'#9e6d34');lid.addColorStop(1,'#805426');ctx.fillStyle=lid;ctx.fillRect(-7,-5,14,10*blink);if(blink>.8){ctx.strokeStyle='#4d321c';ctx.lineWidth=.8;ctx.beginPath();ctx.moveTo(-4,0);ctx.quadraticCurveTo(0,2,4,0);ctx.stroke()}ctx.restore()}
 }
 const particles=Array.from({length:48},(_,i)=>({x:Math.abs((Math.sin(i*127.1)*43758.5453)%1),y:(i*.61803398875)%1,r:.55+(i%4)*.18,s:5+i%7}));
 function resize(){w=innerWidth;h=innerHeight;const d=Math.min(devicePixelRatio||1,2);canvas.width=w*d;canvas.height=h*d;ctx.setTransform(d,0,0,d,0,0);scale=Math.max(w/img.naturalWidth,h/img.naturalHeight);ox=(w-img.naturalWidth*scale)*.6;oy=(h-img.naturalHeight*scale)*.5;}

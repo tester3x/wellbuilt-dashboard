@@ -43,3 +43,7 @@ A concurrent full Dashboard release `06b9cf178a26e8e9` omitted the kitchen files
 ## Rascal and fish animation
 
 Added local mesh deformation: fish hovering/tail flicking inside a fixed bowl and Rascal's nose approaching the mug in a brief double-sniff every eleven seconds. Surroundings remain fixed; pause/reduced-motion controls apply. Script syntax and browser error checks passed. Hosting version `33b935d6b58e3dc5`, release `1789518428582000`, kitchen HTML only changed.
+
+## Rascal expression update
+
+Increased sniff displacement and added short eyelid blinks, including an occasional double blink. Eyelid overlay follows the sniff displacement. Fish movement unchanged. Syntax passed; published Hosting version `1cb456baa6308bd0` with only kitchen HTML changed.
