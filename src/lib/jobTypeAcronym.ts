@@ -27,7 +27,7 @@ export const JOB_TYPE_ACRONYMS: Record<string, JobTypeBadgeInfo> = {
   service: { code: 'SW', full: 'Service Work' },
   // Recognized related tokens (legacy / imported data), mapped canonically:
   sw: { code: 'SW', full: 'Service Work' },
-  dw: { code: 'DW', full: 'Disposal Water' },
+  dw: { code: 'DW', full: 'Dirty Water' },
   fw: { code: 'FW', full: 'Fresh Water' },
 };
 

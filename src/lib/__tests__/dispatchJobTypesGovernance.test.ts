@@ -46,7 +46,7 @@ test('1. Company isolation: distinct companies resolve their own custom job type
     dispatchJobTypes: {
       version: 1,
       items: [
-        { id: 'lg-1', code: 'DW', name: 'Disposal Water', workClass: 'pw', enabled: true, order: 0 },
+        { id: 'lg-1', code: 'DW', name: 'Dirty Water', workClass: 'pw', enabled: true, order: 0 },
         { id: 'lg-2', code: 'FW', name: 'Fresh Water', workClass: 'pw', enabled: true, order: 1 },
       ],
     },
@@ -94,7 +94,7 @@ test('2. Save persists ONLY { dispatchJobTypes } field targeting the exact compa
 
   const entries: DispatchJobTypeEntry[] = [
     { id: '1', code: 'PW', name: 'Production Water', workClass: 'pw', enabled: true, order: 0 },
-    { id: '2', code: 'DW', name: 'Disposal Water', workClass: 'pw', enabled: true, order: 1 },
+    { id: '2', code: 'DW', name: 'Dirty Water', workClass: 'pw', enabled: true, order: 1 },
   ];
 
   const payload = buildDispatchJobTypesPayload(entries, 'admin-user-uid');

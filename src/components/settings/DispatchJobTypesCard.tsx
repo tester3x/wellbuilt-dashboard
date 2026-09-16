@@ -439,7 +439,7 @@ export function DispatchJobTypesCard({ company, onSave, canEdit, actorUid }: Pro
                   value={newName}
                   onChange={e => setNewName(e.target.value)}
                   onKeyDown={e => e.key === 'Enter' && handleAddJobType()}
-                  placeholder="e.g. Disposal Water, Flowback..."
+                  placeholder="e.g. Dirty Water, Flowback..."
                   className="w-full px-3 py-1.5 text-sm rounded bg-gray-700 text-white placeholder-gray-500 border border-gray-600 focus:outline-none focus:ring-1 focus:ring-blue-500"
                 />
               </div>
