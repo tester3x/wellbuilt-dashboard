@@ -3,6 +3,17 @@
 
 import { getFirestoreDb } from '@/lib/firebase';
 import { collection, getDocs, doc, getDoc, updateDoc } from 'firebase/firestore';
+import type { DispatchJobTypeConfig, DispatchJobTypeEntry } from './dispatchJobTypesCore';
+
+export type { DispatchJobTypeConfig, DispatchJobTypeEntry };
+export {
+  DEFAULT_DISPATCH_JOB_TYPES,
+  getDefaultDispatchJobTypes,
+  resolveDispatchJobTypes,
+  parseDispatchJobTypesConfig,
+  validateDispatchJobTypes,
+  buildDispatchJobTypesPayload,
+} from './dispatchJobTypesCore';
 
 // ── Types ──────────────────────────────────────────────────────────────────────
 
@@ -415,6 +426,8 @@ export interface CompanyConfig {
   activePackages?: string[];
   // Custom job types added by the company (R&D pipeline — popular ones get promoted to official)
   customJobTypes?: CustomJobType[];
+  // Flat dispatch job types vocabulary defined by the company (manages dispatcher/driver vocabulary)
+  dispatchJobTypes?: DispatchJobTypeConfig;
   // Invoicing mode — how invoices and tickets relate
   // invoice_tickets (default): Invoice wraps 1+ tickets. Full billing docs.
   // ticket_only: No invoice wrapper. Ticket = billing doc. Driver skips invoice screen.
