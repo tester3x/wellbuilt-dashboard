@@ -129,6 +129,14 @@ try {
   fatal('Job Builder autocomplete scroll verification FAILED. Deployment aborted.');
 }
 
+try {
+  console.log('Executing: node tools/test-project-wells-layout.mjs ...');
+  execSync('node tools/test-project-wells-layout.mjs', { stdio: 'inherit' });
+  console.log('✓ Projects Selected-Well Chips Layout (real-DOM) Verification: PASSED');
+} catch (err) {
+  fatal('Projects selected-well chips layout verification FAILED. Deployment aborted.');
+}
+
 console.log('\n================================================================');
 console.log('✅ [ALL PREFLIGHT SAFETY GATES PASSED] Hosting Release Certified.');
 console.log('================================================================\n');

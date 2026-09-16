@@ -2880,15 +2880,35 @@ function DispatchPageInner() {
                         listClassName="bg-gray-900 border border-gray-700 rounded max-h-24 overflow-y-auto mt-1"
                         optionClassName="wb-option-row px-3 py-1.5 text-white text-xs border-b border-gray-800 last:border-0"
                       />
-                      {newProjectWells.length > 0 && (
-                        <div className="flex flex-wrap gap-1 mt-1">
+                      {newProjectWells.length > 0 ? (
+                        <div
+                          role="list"
+                          aria-label={`Selected wells (${newProjectWells.length})`}
+                          className="mt-2 flex flex-wrap content-start gap-2 max-h-48 overflow-y-auto"
+                        >
                           {newProjectWells.map(w => (
-                            <span key={w} className="px-2 py-0.5 bg-emerald-600/30 text-emerald-300 text-[10px] rounded flex items-center gap-1">
-                              {w}
-                              <button onClick={() => setNewProjectWells(prev => prev.filter(n => n !== w))} className="text-emerald-400 hover:text-white">×</button>
+                            <span
+                              key={w}
+                              role="listitem"
+                              className="inline-flex max-w-full items-center gap-2 rounded-lg border border-emerald-500/60 bg-emerald-600/20 py-1.5 pl-3 pr-1 text-sm text-emerald-50"
+                            >
+                              {/* ✓ icon = a non-color-alone selected indicator */}
+                              <span aria-hidden="true" className="flex-shrink-0 text-emerald-400">✓</span>
+                              <span className="truncate font-medium" title={w}>{w}</span>
+                              <button
+                                type="button"
+                                onClick={() => setNewProjectWells(prev => prev.filter(n => n !== w))}
+                                aria-label={`Remove ${w}`}
+                                title={`Remove ${w}`}
+                                className="flex h-6 w-6 flex-shrink-0 items-center justify-center rounded text-emerald-300 transition-colors hover:bg-emerald-500/40 hover:text-white focus:outline-none focus:ring-2 focus:ring-emerald-400"
+                              >
+                                <span aria-hidden="true" className="text-base leading-none">×</span>
+                              </button>
                             </span>
                           ))}
                         </div>
+                      ) : (
+                        <p className="mt-2 text-xs italic text-gray-500">No wells selected yet — search above to add one or more wells to this project.</p>
                       )}
                     </div>
                     <div className="flex gap-3">
