@@ -27,10 +27,10 @@ import {
   nextActiveIndex,
   reconcileActiveIndex,
   resetActiveIndex,
-  scrollTopForOption,
   isSelectableIndex,
   optionDomId,
 } from './autocompleteNavigation';
+import { scrollActiveOptionIntoView } from './scrollActiveOption';
 
 export interface UseAutocompleteKeyboardOptions {
   /** Number of selectable result rows currently rendered. */
@@ -68,16 +68,14 @@ export function useAutocompleteKeyboard({ count, open, query, onSelect, onClose 
   }, [count]);
 
   // Keep the active option fully visible — scroll the CONTAINER only, nearest-edge.
+  // Uses rect math (offsetParent-independent) so it works even when the list
+  // container is not positioned (e.g. the Projects Well list).
   useEffect(() => {
     if (activeIndex < 0) return;
     const list = listRef.current;
     const optEl = optionRefs.current[activeIndex];
     if (!list || !optEl) return;
-    const desired = scrollTopForOption(
-      { scrollTop: list.scrollTop, clientHeight: list.clientHeight },
-      { offsetTop: optEl.offsetTop, offsetHeight: optEl.offsetHeight },
-    );
-    if (desired !== list.scrollTop) list.scrollTop = desired; // container scroll ONLY
+    scrollActiveOptionIntoView(list, optEl); // container scroll ONLY
   }, [activeIndex]);
 
   const reset = useCallback(() => setActiveIndex(resetActiveIndex()), []);

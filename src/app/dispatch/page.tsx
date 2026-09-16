@@ -3020,7 +3020,7 @@ function DispatchPageInner() {
                     <label className="block text-xs text-gray-400 mb-1">Job Description & Instructions</label>
                     <textarea value={newProjectNotes} onChange={(e) => setNewProjectNotes(e.target.value)}
                       placeholder={"Be on location loaded at 7:00am\n\nEmpty truck to Pad 379. Suck up rain water by the Recycle pump. Haul to SWD.\n\nYou will meet the roustabout crew around 1:30-2:00pm to clear the Recycle line at Pad 379.\n\nOnce finished follow the crew to Atlas Pad."}
-                      className="w-full flex-1 px-3 py-2 bg-gray-900 border border-gray-700 rounded text-white text-sm placeholder-gray-500 focus:outline-none focus:border-emerald-500 resize-none" />
+                      className="w-full flex-1 min-h-[180px] sm:min-h-[240px] px-3 py-2 bg-gray-900 border border-gray-700 rounded text-white text-sm placeholder-gray-500 focus:outline-none focus:border-emerald-500 resize-y" />
                   </div>
                 )}
                 </div>

@@ -34,10 +34,19 @@ test('the hook implements the full keyboard contract', () => {
   assert.match(hook, /case 'Tab'/);
 });
 
-test('scroll is CONTAINER-only (never the page/modal) and nearest-edge', () => {
-  assert.match(hook, /list\.scrollTop = desired/, 'sets the container scrollTop only');
-  assert.match(hook, /scrollTopForOption/, 'uses the nearest-edge helper');
-  assert.doesNotMatch(hook, /window\.scroll|scrollIntoView/, 'never scrolls the window/page');
+test('scroll is CONTAINER-only (never the page/modal), nearest-edge, offsetParent-independent', () => {
+  const scroll = readFileSync(new URL('../scrollActiveOption.ts', import.meta.url), 'utf8');
+  // The hook delegates to the shared scroll helper.
+  assert.match(hook, /scrollActiveOptionIntoView\(list, optEl\)/, 'hook calls the shared scroll helper');
+  // The helper sets the container scrollTop ONLY and uses rect math (not offsetTop),
+  // so it works for a non-positioned container (the Projects Well bug).
+  assert.match(scroll, /list\.scrollTop = desired/, 'sets the container scrollTop only');
+  assert.match(scroll, /getBoundingClientRect\(\)/, 'rect math — independent of offsetParent');
+  assert.match(scroll, /optRect\.top - listRect\.top/, 'position derived from rects, not offsetTop');
+  // Check the EXECUTABLE code only (comments legitimately mention the old approach).
+  const scrollCode = scroll.replace(/\/\*[\s\S]*?\*\//g, '').replace(/\/\/[^\n]*/g, '');
+  assert.doesNotMatch(scrollCode, /\.offsetTop/, 'no offsetTop access (that was the Projects Well bug)');
+  assert.doesNotMatch(scrollCode, /window\.scroll|scrollIntoView/, 'never scrolls the window/page');
 });
 
 test('combobox/listbox ARIA semantics are present', () => {

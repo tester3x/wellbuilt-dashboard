@@ -121,6 +121,14 @@ try {
   fatal('Authenticated route rendering verification FAILED. Deployment aborted.');
 }
 
+try {
+  console.log('Executing: node tools/test-projects-well-scroll.mjs ...');
+  execSync('node tools/test-projects-well-scroll.mjs', { stdio: 'inherit' });
+  console.log('✓ Job Builder Autocomplete Scroll (real-DOM) Verification: PASSED');
+} catch (err) {
+  fatal('Job Builder autocomplete scroll verification FAILED. Deployment aborted.');
+}
+
 console.log('\n================================================================');
 console.log('✅ [ALL PREFLIGHT SAFETY GATES PASSED] Hosting Release Certified.');
 console.log('================================================================\n');
