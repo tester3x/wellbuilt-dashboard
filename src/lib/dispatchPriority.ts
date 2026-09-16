@@ -110,8 +110,15 @@ export function formatTTP(well: WellResponse, nowMs: number = Date.now()): strin
       const h = c.ttpHours;
       if (h === null) return 'rising';
       if (h <= 0) return 'PULL NOW';
-      if (h < 24) return `${Math.round(h)}h`;
-      const d = Math.floor(h / 24); const r = Math.round(h % 24); return r > 0 ? `${d}d ${r}h` : `${d}d`;
+      // Match WB-M / Dashboard Well Status: preserve live minute precision
+      // instead of rounding the countdown to a whole hour.
+      const totalMinutes = Math.max(0, Math.floor(h * 60));
+      const days = Math.floor(totalMinutes / 1440);
+      const hours = Math.floor((totalMinutes % 1440) / 60);
+      const minutes = totalMinutes % 60;
+      return days > 0
+        ? `${days}d ${hours}h ${minutes}m`
+        : `${hours}h ${minutes}m`;
     }
     case 'no-gain': return 'NO FLOW';
     case 'verify': return 'NEEDS DATA';
