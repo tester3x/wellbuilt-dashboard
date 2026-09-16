@@ -23,7 +23,7 @@ const css = `
   .truncate { overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
   .font-medium { font-weight:500; }
   .flex-shrink-0 { flex-shrink:0; }
-  .rm { display:flex; height:24px; width:24px; align-items:center; justify-content:center; border-radius:4px; background:none; border:0; color:#6ee7b7; }
+  .rm { display:flex; height:32px; width:32px; align-items:center; justify-content:center; border-radius:4px; background:none; border:0; color:#6ee7b7; }
 `;
 
 const WELLS = [
@@ -78,7 +78,7 @@ const run = async () => {
     if (r.tooWide) fail(`${c.name}: a chip is wider than its container (long name not truncated)`);
     if (r.listScrollW > r.listClientW + 1) fail(`${c.name}: the list overflows horizontally instead of wrapping`);
     if (r.rows < 2) fail(`${c.name}: ${WELLS.length} chips did not wrap onto multiple rows (rows=${r.rows})`);
-    if (r.minRm < 22) fail(`${c.name}: Remove hit target too small (${r.minRm}px)`);
+    if (r.minRm < 32) fail(`${c.name}: Remove hit target too small (${r.minRm}px)`);
     console.log(`  ✓ ${c.name}: ${WELLS.length} chips wrapped onto ${r.rows} rows, no overflow, Remove target ${r.minRm}px.`);
     await page.close();
   }

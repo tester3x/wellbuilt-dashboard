@@ -23,20 +23,26 @@ test('selected state does not rely on color alone (✓ indicator + border)', () 
 
 test('each well has an accessible Remove control with a real hit target + distinct focus/hover', () => {
   assert.match(region, /aria-label=\{`Remove \$\{w\}`\}/, 'accessible per-well Remove label');
-  assert.match(region, /h-6 w-6/, 'usable pointer/touch target (24px)');
+  assert.match(region, /h-8 w-8/, 'usable pointer/touch target (>=32px)');
+  assert.doesNotMatch(region, /flex h-6 w-6 flex-shrink-0/, 'the small 24px target is gone');
   assert.match(region, /focus:ring-2 focus:ring-emerald-400/, 'distinct keyboard focus state');
   assert.match(region, /hover:bg-emerald-500\/40/, 'distinct hover state');
 });
 
 test('Remove affects ONLY the chosen well; duplicate selection stays prevented', () => {
-  assert.match(region, /setNewProjectWells\(prev => prev\.filter\(n => n !== w\)\)/, 'remove filters out only that well');
-  // Dedup: the autocomplete excludes already-selected wells from its results.
+  assert.match(region, /setNewProjectWells\(prev => removeProjectWell\(prev, w\)\)/, 'remove uses the pure remove helper (only that well)');
+  // Dedup: the autocomplete excludes already-selected wells + the add helper is idempotent.
   assert.match(region, /!newProjectWells\.includes\(w\.wellName\)/, 'already-selected wells cannot be re-added');
+  assert.match(region, /setNewProjectWells\(prev => addProjectWell\(prev, w\.wellName\)\)/, 'add uses the dedup helper');
 });
 
 test('multiple selections wrap and stay contained (no horizontal overflow)', () => {
   assert.match(region, /flex flex-wrap content-start gap-2 max-h-48 overflow-y-auto/, 'wrapping, contained list');
   assert.match(region, /role="list"/, 'the selected-well area is a list container');
+});
+
+test('the selected-well area reserves breathing room (taller Projects card), Projects-only', () => {
+  assert.match(region, /wb-selected-wells-area mt-2 min-h-\[4\.5rem\]/, 'min-height reserves ~one extra row');
 });
 
 test('an empty selection shows a restrained hint (area does not feel squeezed)', () => {
@@ -48,7 +54,19 @@ test('selection SEMANTICS unchanged: multi-well payload + autocomplete behavior 
   assert.match(page, /wellNames: newProjectWells,/, 'project payload still an array of wellNames');
   assert.match(page, /const \[newProjectWells, setNewProjectWells\] = useState<string\[\]>\(\[\]\)/, 'still string[] draft state');
   // The project-well field still uses the shared autocomplete with the same select action.
-  assert.match(region, /onSelect=\{\(w\) => \{ setNewProjectWells\(prev => \[\.\.\.prev, w\.wellName\]\); setProjectWellSearch\(''\); \}\}/, 'select appends a wellName');
+  assert.match(region, /onSelect=\{\(w\) => \{ setNewProjectWells\(prev => addProjectWell\(prev, w\.wellName\)\); setProjectWellSearch\(''\); \}\}/, 'select appends a wellName');
+});
+
+test('N×M dispatch generation is preserved at all three sites (source-contract; generation not refactored)', () => {
+  // Multi-well fan-out: every generator loops all wellNames and, per driver, creates a dispatch.
+  // (Documented testability limit: these loops call the Firebase staffCreateDispatch callable
+  //  inline, so they are not unit-testable without refactoring the generation path — out of scope.)
+  const createLoop = /for \(const wellName of newProjectWells\)[\s\S]{0,400}?for \(const driverHash of newProjectDriverHashes\)[\s\S]{0,600}?staffCreateDispatch\(/;
+  const addDriverLoop = /for \(const wellName of project\.wellNames\)[\s\S]{0,600}?staffCreateDispatch\(/;
+  assert.match(page, createLoop, 'createProject: wells × drivers → staffCreateDispatch');
+  assert.match(page, addDriverLoop, 'addDriverToProjectToday / batchDispatchShift: per-well staffCreateDispatch');
+  // wellNames array is never reduced to a single well anywhere operative.
+  assert.doesNotMatch(page, /wellNames\.slice\(0, ?1\)|wellNames\[0\]\)?\s*[;,)]\s*\/\/ ?operative/, 'no first-well-only operative use');
 });
 
 test('the enlarged Notes textarea from the base is preserved', () => {

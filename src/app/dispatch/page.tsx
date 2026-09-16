@@ -13,6 +13,7 @@ import { buildWellQueueRankIndex, rankJob } from '@/lib/activeJobsRank';
 import { jobTypeAcronym, jobTypeCode } from '@/lib/jobTypeAcronym';
 import { BuilderAutocomplete } from '@/components/BuilderAutocomplete';
 import { combinedLocationResults } from '@/lib/builderWellSearch';
+import { addProjectWell, removeProjectWell } from '@/lib/projectWellSelection';
 import { useScrollRestore } from '@/lib/useScrollRestore';
 import { WellResponse, mergeWellPool, matchWellInPool } from '@/lib/wells';
 import { getPriority, getWellPrediction, formatTTP, matchesView, wellBucket, classifyWell, compareQueueRows, inchesToLevel, formatAge, verifyReasonText, type QueueView } from '@/lib/dispatchPriority';
@@ -2870,7 +2871,7 @@ function DispatchPageInner() {
                         items={projectWellSearch.length >= 2
                           ? wells.filter(w => w.wellName.toLowerCase().includes(projectWellSearch.toLowerCase()) && !newProjectWells.includes(w.wellName)).slice(0, 10)
                           : []}
-                        onSelect={(w) => { setNewProjectWells(prev => [...prev, w.wellName]); setProjectWellSearch(''); }}
+                        onSelect={(w) => { setNewProjectWells(prev => addProjectWell(prev, w.wellName)); setProjectWellSearch(''); }}
                         getItemKey={(w) => w.wellName}
                         renderItem={(w) => (<>{w.ndicName || w.wellName} <span className="wb-option-sub text-gray-500">{w.route}</span></>)}
                         placeholder="Search wells..."
@@ -2880,11 +2881,15 @@ function DispatchPageInner() {
                         listClassName="bg-gray-900 border border-gray-700 rounded max-h-24 overflow-y-auto mt-1"
                         optionClassName="wb-option-row px-3 py-1.5 text-white text-xs border-b border-gray-800 last:border-0"
                       />
+                      {/* Selected-well area reserves ~one extra row of breathing room
+                          (min-h) so the Projects card is visibly taller; Projects-only,
+                          so PW/SW and the Notes textarea are unaffected. */}
+                      <div className="wb-selected-wells-area mt-2 min-h-[4.5rem]">
                       {newProjectWells.length > 0 ? (
                         <div
                           role="list"
                           aria-label={`Selected wells (${newProjectWells.length})`}
-                          className="mt-2 flex flex-wrap content-start gap-2 max-h-48 overflow-y-auto"
+                          className="flex flex-wrap content-start gap-2 max-h-48 overflow-y-auto"
                         >
                           {newProjectWells.map(w => (
                             <span
@@ -2897,19 +2902,20 @@ function DispatchPageInner() {
                               <span className="truncate font-medium" title={w}>{w}</span>
                               <button
                                 type="button"
-                                onClick={() => setNewProjectWells(prev => prev.filter(n => n !== w))}
+                                onClick={() => setNewProjectWells(prev => removeProjectWell(prev, w))}
                                 aria-label={`Remove ${w}`}
                                 title={`Remove ${w}`}
-                                className="flex h-6 w-6 flex-shrink-0 items-center justify-center rounded text-emerald-300 transition-colors hover:bg-emerald-500/40 hover:text-white focus:outline-none focus:ring-2 focus:ring-emerald-400"
+                                className="flex h-8 w-8 flex-shrink-0 items-center justify-center rounded text-emerald-300 transition-colors hover:bg-emerald-500/40 hover:text-white focus:outline-none focus:ring-2 focus:ring-emerald-400"
                               >
-                                <span aria-hidden="true" className="text-base leading-none">×</span>
+                                <span aria-hidden="true" className="text-lg leading-none">×</span>
                               </button>
                             </span>
                           ))}
                         </div>
                       ) : (
-                        <p className="mt-2 text-xs italic text-gray-500">No wells selected yet — search above to add one or more wells to this project.</p>
+                        <p className="text-xs italic text-gray-500">No wells selected yet — search above to add one or more wells to this project.</p>
                       )}
+                      </div>
                     </div>
                     <div className="flex gap-3">
                       <div className="flex-1">
