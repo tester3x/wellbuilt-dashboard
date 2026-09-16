@@ -26,16 +26,20 @@ test('active-job badges have stable semantic zones before the controls', () => {
   assert.ok(controls > state, 'controls remain the final group');
 });
 
-test('there is ONE reusable fixed-size categorical badge slot (uniform width/height, centered)', () => {
+test('there is ONE reusable FIXED-size categorical badge slot (identical width/height, centered)', () => {
   const slotMatch = source.match(/const CATEGORY_BADGE_SLOT =\s*\n?\s*'([^']+)'/);
   assert.ok(slotMatch, 'CATEGORY_BADGE_SLOT constant exists');
   const slot = slotMatch![1];
   assert.match(slot, /\bh-5\b/, 'fixed height');
-  assert.match(slot, /min-w-\[6\.5rem\]/, 'fixed minimum width so short badges share the slot');
+  // FIXED width, not a minimum: every badge is exactly the same size.
+  assert.match(slot, /\bw-\[6\.5rem\]/, 'fixed width w-[6.5rem]');
+  assert.doesNotMatch(slot, /min-w-\[/, 'must NOT use a minimum width (that is not a fixed width)');
+  assert.doesNotMatch(slot, /\bmax-w-\[/, 'no competing max-width');
   assert.match(slot, /justify-center/, 'content horizontally centered');
   assert.match(slot, /items-center/, 'content vertically centered');
   assert.match(slot, /text-center/, 'text centered');
   assert.match(slot, /whitespace-nowrap/, 'never wraps (no clipping into two lines)');
+  assert.match(slot, /flex-shrink-0/, 'never shrinks below the fixed width');
 });
 
 test('categorical pills in the Active Job row use the shared slot (CategoryBadge / slot props)', () => {

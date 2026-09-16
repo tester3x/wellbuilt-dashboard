@@ -4234,13 +4234,15 @@ function StageBadge({ job, slot }: { job: DispatchJob; slot?: boolean }) {
 // centered with empty slack inside the standardized slot. Long INFORMATIONAL text
 // (transfer reason, driver name, stage destination) is not a category — it stays a
 // separately constrained/truncated info chip and must NOT use this slot.
-// min-w-[6.5rem] (104px) is sized to the widest categorical label the row can show
-// (measured against the app font at 10px bold: "Needs Approval" ~89px, "Driver
-// Started" ~79px, "Pending · 12h" ~78px, transient "Pending · just now" ~101px), so
-// every categorical badge clamps to one identical width; short labels ("PW") center
-// with slack. h-5 fixes the height. whitespace-nowrap guarantees no wrap/clip.
+// w-[6.5rem] (104px) is a FIXED width — not a minimum — so every categorical badge
+// is exactly the same size regardless of label length; short labels ("PW") center
+// with empty slack, as requested. The width is sized to the widest categorical label
+// the row can show (measured against the app font at 10px bold: "Needs Approval"
+// ~89px, "Driver Started" ~79px, "Pending · 12h" ~78px, transient "Pending · just
+// now" ~101px — all within the 104px box). h-5 fixes the height, text is centered,
+// and whitespace-nowrap guarantees no wrap/clip.
 const CATEGORY_BADGE_SLOT =
-  'inline-flex items-center justify-center text-center h-5 min-w-[6.5rem] px-1.5 text-[10px] font-bold leading-none rounded whitespace-nowrap flex-shrink-0';
+  'inline-flex items-center justify-center text-center h-5 w-[6.5rem] px-1.5 text-[10px] font-bold leading-none rounded whitespace-nowrap flex-shrink-0';
 function CategoryBadge({ className = '', title, children }: { className?: string; title?: string; children: ReactNode }) {
   return (
     <span title={title} className={`${CATEGORY_BADGE_SLOT} ${className}`}>
