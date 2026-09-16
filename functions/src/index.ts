@@ -4789,6 +4789,7 @@ export {
   staffHydrateCanonicalIdentity,
   staffRetireLegacyDriverLogin,
   getOwnDriverHydration,
+  tenantUpdateDispatchJobTypes,
   // Operational path hardening
   ingestDriverPacket,
   ingestWbmPull,

@@ -33,6 +33,7 @@ export { upgradeOwnLegacyDriverLogin } from './upgradeOwnLegacyDriverLogin';
 export { staffHydrateCanonicalIdentity } from './staffHydrateCanonicalIdentity';
 export { staffRetireLegacyDriverLogin } from './staffRetireLegacyDriverLogin';
 export { getOwnDriverHydration } from './getOwnDriverHydration';
+export { tenantUpdateDispatchJobTypes } from './tenantUpdateDispatchJobTypesCallable';
 
 export {
   ingestDriverPacket,

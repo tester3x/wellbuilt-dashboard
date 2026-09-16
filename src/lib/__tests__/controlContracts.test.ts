@@ -330,7 +330,7 @@ test('AUDIT: mobile +Add Pull entry gated by createDispatch', () => {
 
 test('AUDIT: every mutation settings card has a canEdit gate + is passed one', () => {
   const cards = [
-    'CompanyProfileCard', 'PackagesCard', 'CustomJobTypesCard', 'InvoiceConfigCard',
+    'CompanyProfileCard', 'PackagesCard', 'DispatchJobTypesCard', 'InvoiceConfigCard',
     'LevelReportsCard', 'OilCompaniesCard', 'RateSheetsCard', 'BillingConfigCard',
     'TicketTemplateCard', 'PayConfigCard', 'PayrollTemplateCard', 'BrandingCard',
     'SWDDirectoryCard', 'JsaCard', 'OperationsCard', 'PhotosCard',

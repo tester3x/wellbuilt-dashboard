@@ -1,17 +1,21 @@
 'use client';
 
 /**
- * Dispatch Job Types Settings Card (Phase 1)
+ * Dispatch Job Types Settings Card (Phase 2A - Governed Tenant Write Path)
  *
  * Allows each hauler to define the flat list of job-type terms its dispatchers
  * and drivers see, while mapping each internally to canonical parent workClass: 'pw' | 'sw'.
  *
- * Vocabulary management only — pay rates, billing basis, rates, percentages,
- * hourly rules, and barrel rules remain strictly in Pay Rate Settings.
+ * Persists via governed Cloud Function callable `tenantUpdateDispatchJobTypes`.
+ * Direct client Firestore writes are denied by security rules.
+ *
+ * Surfaces legacy `customJobTypes` as "Needs Classification" without guessing codes
+ * or workClass, keeping them disabled until explicitly classified by an administrator.
  */
 
 import { useState, useEffect, useId, useMemo } from 'react';
-import { type CompanyConfig, updateCompanyFields } from '@/lib/companySettings';
+import type { CompanyConfig, CustomJobType } from '@/lib/companySettings';
+import { tenantUpdateDispatchJobTypes } from '@/lib/tenantDispatchJobTypes';
 import {
   type DispatchJobTypeEntry,
   type WorkClass,
@@ -56,6 +60,10 @@ export function DispatchJobTypesCard({ company, onSave, canEdit, actorUid }: Pro
   const [newWorkClass, setNewWorkClass] = useState<WorkClass>('pw');
   const [addError, setAddError] = useState<string | null>(null);
 
+  // Legacy customJobTypes classification state
+  const [legacyInputs, setLegacyInputs] = useState<Record<string, { code: string; workClass: WorkClass | '' }>>({});
+  const [legacyErrors, setLegacyErrors] = useState<Record<string, string>>({});
+
   // Re-sync when company doc changes from upstream save/refresh
   useEffect(() => {
     const items = resolveDispatchJobTypes(company.dispatchJobTypes);
@@ -63,6 +71,25 @@ export function DispatchJobTypesCard({ company, onSave, canEdit, actorUid }: Pro
     setSavedIds(new Set(items.map(i => i.id)));
     setSaveError(null);
   }, [company.dispatchJobTypes]);
+
+  // Extract unique legacy custom job type labels
+  const legacyLabels = useMemo(() => {
+    const rawList: (CustomJobType | string)[] = company.customJobTypes || [];
+    const labels: string[] = [];
+    for (const item of rawList) {
+      const label = typeof item === 'string' ? item.trim() : (item?.label || '').trim();
+      if (label && !labels.includes(label)) {
+        labels.push(label);
+      }
+    }
+    return labels;
+  }, [company.customJobTypes]);
+
+  // Find legacy items that have NOT yet been classified (i.e. not in draftItems by name)
+  const unclassifiedLegacyLabels = useMemo(() => {
+    const activeNames = new Set(draftItems.map(i => i.name.trim().toLowerCase()));
+    return legacyLabels.filter(label => !activeNames.has(label.toLowerCase()));
+  }, [legacyLabels, draftItems]);
 
   // Validation
   const validation = useMemo(() => validateDispatchJobTypes(draftItems), [draftItems]);
@@ -174,7 +201,49 @@ export function DispatchJobTypesCard({ company, onSave, canEdit, actorUid }: Pro
     setNewWorkClass('pw');
   };
 
-  // Remove unsaved row (or alert if trying to remove previously saved)
+  // Classify a legacy custom job type
+  const handleClassifyLegacy = (label: string) => {
+    if (!canEdit) return;
+    setSaveSuccess(false);
+    setLegacyErrors(prev => ({ ...prev, [label]: '' }));
+
+    const currentInput = legacyInputs[label] || { code: '', workClass: '' };
+    const code = normalizeJobTypeCode(currentInput.code);
+    const workClass = currentInput.workClass;
+
+    if (!code || !/^[A-Z]{2}$/.test(code)) {
+      setLegacyErrors(prev => ({ ...prev, [label]: 'Code must be exactly 2 uppercase letters.' }));
+      return;
+    }
+
+    if (!workClass || (workClass !== 'pw' && workClass !== 'sw')) {
+      setLegacyErrors(prev => ({ ...prev, [label]: 'Please select a parent class (PW or SW).' }));
+      return;
+    }
+
+    if (draftItems.some(i => i.code.toUpperCase() === code)) {
+      setLegacyErrors(prev => ({ ...prev, [label]: `Code "${code}" is already in use.` }));
+      return;
+    }
+
+    const newEntry: DispatchJobTypeEntry = {
+      id: generateJobTypeId(),
+      code,
+      name: label,
+      workClass,
+      enabled: true,
+      order: draftItems.length,
+    };
+
+    setDraftItems(prev => [...prev, newEntry]);
+    setLegacyInputs(prev => {
+      const next = { ...prev };
+      delete next[label];
+      return next;
+    });
+  };
+
+  // Remove unsaved row
   const handleRemoveRow = (entry: DispatchJobTypeEntry) => {
     if (!canEdit) return;
     setSaveSuccess(false);
@@ -194,7 +263,7 @@ export function DispatchJobTypesCard({ company, onSave, canEdit, actorUid }: Pro
     setSaveSuccess(false);
   };
 
-  // Save changes
+  // Save changes via governed callable
   const handleSave = async () => {
     if (!canEdit || !isDirty || !validation.valid) return;
     setSaving(true);
@@ -203,17 +272,16 @@ export function DispatchJobTypesCard({ company, onSave, canEdit, actorUid }: Pro
 
     try {
       const payload = buildDispatchJobTypesPayload(draftItems, actorUid);
-      // Governed narrow update: updates only dispatchJobTypes field on companies/{id}
-      await updateCompanyFields(company.id, {
-        dispatchJobTypes: payload,
-      });
+      // Governed callable write path: updates only dispatchJobTypes field on companies/{id}
+      await tenantUpdateDispatchJobTypes(company.id, payload);
 
       setSavedIds(new Set(payload.items.map(i => i.id)));
       setSaveSuccess(true);
       onSave();
-    } catch (err) {
-      console.error('Failed to save dispatch job types:', err);
-      setSaveError('Could not save dispatch job types — changes were not applied. Please try again.');
+    } catch (err: any) {
+      console.error('Failed to save dispatch job types via callable:', err);
+      const message = err?.message || 'Could not save dispatch job types — changes were not applied. Please try again.';
+      setSaveError(`Governed save error: ${message}`);
     } finally {
       setSaving(false);
     }
@@ -264,7 +332,7 @@ export function DispatchJobTypesCard({ company, onSave, canEdit, actorUid }: Pro
 
       {saveSuccess && !isDirty && (
         <div className="px-4 py-2 bg-emerald-900/30 border-b border-emerald-800/50 text-emerald-300 text-xs">
-          ✓ Dispatch job types successfully saved.
+          ✓ Dispatch job types successfully saved via governed write path.
         </div>
       )}
 
@@ -413,6 +481,97 @@ export function DispatchJobTypesCard({ company, onSave, canEdit, actorUid }: Pro
             );
           })}
         </div>
+
+        {/* Legacy Custom Job Types — Needs Classification */}
+        {unclassifiedLegacyLabels.length > 0 && (
+          <div className="p-3 bg-amber-950/20 border border-amber-800/40 rounded-lg space-y-3">
+            <div className="flex items-center justify-between">
+              <div>
+                <h4 className="text-amber-300 text-xs font-semibold flex items-center gap-2">
+                  <span>Legacy Job Types</span>
+                  <span className="px-2 py-0.5 rounded text-2xs font-bold uppercase tracking-wider bg-amber-500/20 text-amber-300 border border-amber-500/30">
+                    Needs Classification
+                  </span>
+                </h4>
+                <p className="text-gray-400 text-2xs mt-0.5">
+                  Previous custom job types remain disabled until you assign a unique 2-letter uppercase code and internal work class (PW or SW).
+                </p>
+              </div>
+              <span className="text-amber-400 text-xs font-mono">{unclassifiedLegacyLabels.length} pending</span>
+            </div>
+
+            <div className="space-y-2">
+              {unclassifiedLegacyLabels.map(label => {
+                const currentInput = legacyInputs[label] || { code: '', workClass: '' };
+                const error = legacyErrors[label];
+
+                return (
+                  <div
+                    key={label}
+                    className="p-2.5 bg-gray-800/90 rounded border border-gray-700 flex flex-col sm:flex-row sm:items-center justify-between gap-2.5"
+                  >
+                    <div className="flex items-center gap-2 min-w-[140px]">
+                      <span className="text-white text-xs font-medium">{label}</span>
+                      <span className="text-2xs text-gray-400 italic">(Disabled)</span>
+                    </div>
+
+                    <div className="flex flex-wrap items-center gap-2">
+                      <input
+                        type="text"
+                        value={currentInput.code}
+                        onChange={e => {
+                          const val = e.target.value.toUpperCase().slice(0, 2);
+                          setLegacyInputs(prev => ({
+                            ...prev,
+                            [label]: { ...(prev[label] || { code: '', workClass: '' }), code: val },
+                          }));
+                        }}
+                        placeholder="Code"
+                        maxLength={2}
+                        disabled={!canEdit}
+                        aria-label={`Code for legacy ${label}`}
+                        className="w-16 px-2 py-1 text-center font-mono font-bold text-xs rounded bg-gray-700 text-white placeholder-gray-500 uppercase border border-gray-600 focus:outline-none focus:ring-1 focus:ring-blue-500 disabled:opacity-50"
+                      />
+
+                      <select
+                        value={currentInput.workClass}
+                        onChange={e => {
+                          const val = e.target.value as WorkClass | '';
+                          setLegacyInputs(prev => ({
+                            ...prev,
+                            [label]: { ...(prev[label] || { code: '', workClass: '' }), workClass: val },
+                          }));
+                        }}
+                        disabled={!canEdit}
+                        aria-label={`Parent class for legacy ${label}`}
+                        className="px-2 py-1 text-xs rounded bg-gray-700 text-gray-200 border border-gray-600 focus:outline-none focus:ring-1 focus:ring-blue-500 disabled:opacity-50"
+                      >
+                        <option value="">Select Parent Class...</option>
+                        <option value="pw">PW (Production Water)</option>
+                        <option value="sw">SW (Service Work)</option>
+                      </select>
+
+                      <button
+                        type="button"
+                        onClick={() => handleClassifyLegacy(label)}
+                        disabled={!canEdit || !currentInput.code || !currentInput.workClass}
+                        className="px-3 py-1 bg-amber-600 hover:bg-amber-500 disabled:bg-gray-700 disabled:text-gray-500 text-white text-xs font-medium rounded transition-colors"
+                      >
+                        Classify & Add
+                      </button>
+                    </div>
+
+                    {error && (
+                      <div className="w-full text-2xs text-red-400" role="alert">
+                        • {error}
+                      </div>
+                    )}
+                  </div>
+                );
+              })}
+            </div>
+          </div>
+        )}
 
         {/* Add Job Type Row */}
         {canEdit && (

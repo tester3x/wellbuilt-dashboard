@@ -183,6 +183,44 @@ const htmlContent = `
           </div>
         </div>
 
+        <!-- Legacy Custom Job Types — Needs Classification -->
+        <div class="p-3 bg-amber-950/20 border border-amber-800/40 rounded-lg space-y-3">
+          <div class="flex items-center justify-between">
+            <div>
+              <h4 class="text-amber-300 text-xs font-semibold flex items-center gap-2">
+                <span>Legacy Job Types</span>
+                <span class="px-2 py-0.5 rounded text-2xs font-bold uppercase tracking-wider bg-amber-500/20 text-amber-300 border border-amber-500/30">
+                  Needs Classification
+                </span>
+              </h4>
+              <p class="text-gray-400 text-2xs mt-0.5">
+                Previous custom job types remain disabled until you assign a unique 2-letter uppercase code and internal work class (PW or SW).
+              </p>
+            </div>
+            <span class="text-amber-400 text-xs font-mono">1 pending</span>
+          </div>
+
+          <div class="space-y-2">
+            <div class="p-2.5 bg-gray-800/90 rounded border border-gray-700 flex flex-col sm:flex-row sm:items-center justify-between gap-2.5">
+              <div class="flex items-center gap-2 min-w-[140px]">
+                <span class="text-white text-xs font-medium">ground water</span>
+                <span class="text-2xs text-gray-400 italic">(Disabled)</span>
+              </div>
+              <div class="flex flex-wrap items-center gap-2">
+                <input type="text" placeholder="Code" maxlength="2" class="w-16 px-2 py-1 text-center font-mono font-bold text-xs rounded bg-gray-700 text-white placeholder-gray-500 uppercase border border-gray-600" />
+                <select class="px-2 py-1 text-xs rounded bg-gray-700 text-gray-200 border border-gray-600">
+                  <option selected>Select Parent Class...</option>
+                  <option>PW (Production Water)</option>
+                  <option>SW (Service Work)</option>
+                </select>
+                <button type="button" class="px-3 py-1 bg-amber-600 hover:bg-amber-500 text-white text-xs font-medium rounded">
+                  Classify & Add
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
+
         <!-- Add Job Type Row -->
         <div class="p-3 bg-gray-850 rounded-lg border border-dashed border-gray-700 space-y-2">
           <div class="text-xs font-medium text-gray-300">Add New Job Type</div>

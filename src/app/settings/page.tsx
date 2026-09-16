@@ -22,7 +22,6 @@ import { TicketTemplateCard } from '@/components/settings/TicketTemplateCard';
 import { PayrollTemplateCard } from '@/components/settings/PayrollTemplateCard';
 import { PackagesCard } from '@/components/settings/PackagesCard';
 import { SWDDirectoryCard } from '@/components/settings/SWDDirectoryCard';
-import { CustomJobTypesCard } from '@/components/settings/CustomJobTypesCard';
 import { DispatchJobTypesCard } from '@/components/settings/DispatchJobTypesCard';
 import { PhotosCard } from '@/components/settings/PhotosCard';
 import { JsaCard } from '@/components/settings/JsaCard';
@@ -186,13 +185,7 @@ export default function SettingsPage() {
           <div className="space-y-4">
             <CompanyProfileCard company={company} onSave={handleRefresh} canEdit={hasCapability(user, 'manageCompany', userCompany)} />
             <PackagesCard company={company} onSave={handleRefresh} canEdit={hasCapability(user, 'manageCompany', userCompany)} />
-            <CustomJobTypesCard company={company} onSave={handleRefresh} canEdit={hasCapability(user, 'manageCompany', userCompany)} />
-            <DispatchJobTypesCard
-              company={company}
-              onSave={handleRefresh}
-              canEdit={hasCapability(user, 'manageCompany', userCompany)}
-              actorUid={user.uid}
-            />
+            <DispatchJobTypesCard company={company} onSave={handleRefresh} canEdit={hasCapability(user, 'manageCompany', userCompany)} actorUid={user.uid} />
             <InvoiceConfigCard company={company} onSave={handleRefresh} canEdit={hasCapability(user, 'manageCompany', userCompany)} />
             <OperationsCard company={company} onSave={handleRefresh} canEdit={hasCapability(user, 'manageCompany', userCompany)} />
             <LevelReportsCard company={company} onSave={handleRefresh} canEdit={hasCapability(user, 'manageCompany', userCompany)} />

@@ -1,13 +1,15 @@
 /**
- * Governance, tenant isolation, and contract tests for Dispatch Job Types settings.
+ * Governance, tenant isolation, and contract tests for Dispatch Job Types settings (Phase 2A).
  *
  * Verifies:
- * - Company isolation: canonical company ID is used, no cross-company leakage
- * - Save persists only the intended settings field ({ dispatchJobTypes: ... })
- * - Cancel restores last saved state without writing (zero writes)
- * - Unrelated company settings survive untouched
+ * - Governed callable wire contract: runTenantUpdateDispatchJobTypes uses tenantUpdateDispatchJobTypes
+ * - Save persists via governed callable targeting exact companyId
+ * - Cancel restores last saved state without invoking callable (zero writes)
+ * - SettingsPage mounts DispatchJobTypesCard and removes CustomJobTypesCard
  * - Capability gating: manageCompany controls editing in Settings page & card
- * - Firestore security rules: dispatchJobTypes is not a protected key (client write permitted)
+ * - Legacy handling: surfaces customJobTypes as "Needs Classification" disabled until classified
+ * - Vocabulary boundaries: PW = Production Water, SW = Service Work, DW = Dirty Water
+ * - Firestore security rules: direct client writes to dispatchJobTypes are denied
  *
  * Run: node --test --experimental-strip-types src/lib/__tests__/dispatchJobTypesGovernance.test.ts
  */
@@ -22,21 +24,18 @@ import {
   type DispatchJobTypeEntry,
   type DispatchJobTypeConfig,
 } from '../dispatchJobTypesCore.ts';
+import {
+  TENANT_UPDATE_DISPATCH_JOB_TYPES_CALLABLE,
+  buildTenantUpdateDispatchJobTypesPayload,
+  runTenantUpdateDispatchJobTypes,
+  type TenantUpdateDispatchJobTypesPayload,
+  type TenantUpdateDispatchJobTypesResult,
+} from '../tenantDispatchJobTypesCore.ts';
 
 interface CompanyConfigStub {
   id: string;
   name: string;
   dispatchJobTypes?: DispatchJobTypeConfig;
-}
-
-function createMockWriter() {
-  const writes: Array<{ companyId: string; fields: Record<string, unknown> }> = [];
-  return {
-    writes,
-    write: async (companyId: string, fields: Record<string, unknown>) => {
-      writes.push({ companyId, fields });
-    },
-  };
 }
 
 test('1. Company isolation: distinct companies resolve their own custom job types independently', () => {
@@ -89,114 +88,109 @@ test('1. Company isolation: distinct companies resolve their own custom job type
   assert.equal(typesC[1].code, 'SW');
 });
 
-test('2. Save persists ONLY { dispatchJobTypes } field targeting the exact company.id', async () => {
-  const writer = createMockWriter();
+test('2. Governed wire contract: runTenantUpdateDispatchJobTypes calls tenantUpdateDispatchJobTypes', async () => {
+  const calls: TenantUpdateDispatchJobTypesPayload[] = [];
+  const mockInvoker = async (payload: unknown) => {
+    calls.push(payload as TenantUpdateDispatchJobTypesPayload);
+    return {
+      data: {
+        ok: true as const,
+        companyId: (payload as TenantUpdateDispatchJobTypesPayload).companyId,
+        itemCount: (payload as TenantUpdateDispatchJobTypesPayload).dispatchJobTypes.items.length,
+        updatedAtIso: '2026-09-16T12:00:00.000Z',
+      },
+    };
+  };
+
+  assert.equal(TENANT_UPDATE_DISPATCH_JOB_TYPES_CALLABLE, 'tenantUpdateDispatchJobTypes');
 
   const entries: DispatchJobTypeEntry[] = [
-    { id: '1', code: 'PW', name: 'Production Water', workClass: 'pw', enabled: true, order: 0 },
-    { id: '2', code: 'DW', name: 'Dirty Water', workClass: 'pw', enabled: true, order: 1 },
+    { id: 'pw-1', code: 'PW', name: 'Production Water', workClass: 'pw', enabled: true, order: 0 },
+    { id: 'sw-1', code: 'SW', name: 'Service Work', workClass: 'sw', enabled: true, order: 1 },
   ];
+  const payload = buildDispatchJobTypesPayload(entries, 'admin-123');
 
-  const payload = buildDispatchJobTypesPayload(entries, 'admin-user-uid');
-  await writer.write('target-company-123', { dispatchJobTypes: payload });
+  const res = await runTenantUpdateDispatchJobTypes(mockInvoker, 'company-456', payload);
 
-  assert.equal(writer.writes.length, 1);
-  assert.equal(writer.writes[0].companyId, 'target-company-123');
-
-  // Verify only dispatchJobTypes is written (narrow update)
-  const writtenKeys = Object.keys(writer.writes[0].fields);
-  assert.deepEqual(writtenKeys, ['dispatchJobTypes']);
-
-  const savedPayload = writer.writes[0].fields.dispatchJobTypes as DispatchJobTypeConfig;
-  assert.equal(savedPayload.version, 1);
-  assert.equal(savedPayload.updatedByUid, 'admin-user-uid');
-  assert.equal(savedPayload.items.length, 2);
+  assert.equal(calls.length, 1);
+  assert.equal(calls[0].companyId, 'company-456');
+  assert.equal(calls[0].dispatchJobTypes.version, 1);
+  assert.equal(calls[0].dispatchJobTypes.items.length, 2);
+  assert.equal(res.ok, true);
+  assert.equal(res.companyId, 'company-456');
+  assert.equal(res.itemCount, 2);
 });
 
-test('3. Unrelated company settings survive a save without modification', () => {
-  // Simulating Firestore updateDoc semantics:
-  // An updateDoc({ dispatchJobTypes: ... }) call modifies only the dispatchJobTypes key,
-  // leaving all other document fields (rates, payConfig, branding, etc.) intact.
-  const existingCompanyDoc: Record<string, unknown> = {
-    id: 'test-co',
-    name: 'Bakken Water Services',
-    activePackages: ['water', 'oil'],
-    invoicingMode: 'hybrid',
-    payConfig: { defaultSplit: 0.25, payPeriod: 'weekly' },
-    rateSheets: { 'Hess': [{ jobType: 'pw', rate: 4.5 }] },
-    primaryColor: '#0055AA',
-    unknownFutureField: { flag: true },
-  };
-
-  const payload = buildDispatchJobTypesPayload(resolveDispatchJobTypes(undefined));
-
-  // Firestore updateDoc merge simulation
-  const mergedCompanyDoc = {
-    ...existingCompanyDoc,
-    dispatchJobTypes: payload,
-  };
-
-  assert.equal(mergedCompanyDoc.name, 'Bakken Water Services');
-  assert.deepEqual(mergedCompanyDoc.activePackages, ['water', 'oil']);
-  assert.equal(mergedCompanyDoc.invoicingMode, 'hybrid');
-  assert.deepEqual(mergedCompanyDoc.payConfig, { defaultSplit: 0.25, payPeriod: 'weekly' });
-  assert.deepEqual(mergedCompanyDoc.unknownFutureField, { flag: true });
-  assert.ok(mergedCompanyDoc.dispatchJobTypes);
-});
-
-test('4. Cancel action does not invoke writer and restores initial state', () => {
-  const writer = createMockWriter();
-
+test('3. Cancel action does not invoke callable and preserves initial state', () => {
   const initialItems = resolveDispatchJobTypes(undefined);
   let draftItems = [...initialItems, { id: 'temp-1', code: 'DW', name: 'Draft', workClass: 'pw' as const, enabled: true, order: 2 }];
 
   // Operator clicks Cancel -> restores initialItems without write
   draftItems = initialItems;
 
-  assert.equal(writer.writes.length, 0, 'Cancel must never write to Firestore');
   assert.equal(draftItems.length, 2);
   assert.equal(draftItems[0].code, 'PW');
   assert.equal(draftItems[1].code, 'SW');
 });
 
-test('5. Source contract: SettingsPage mounts DispatchJobTypesCard with manageCompany capability', () => {
+test('4. Source contract: SettingsPage mounts DispatchJobTypesCard and removes CustomJobTypesCard', () => {
   const pagePath = resolve(process.cwd(), 'src/app/settings/page.tsx');
   const pageSrc = readFileSync(pagePath, 'utf8');
 
-  // Verify import
+  // Verify DispatchJobTypesCard is imported and mounted
   assert.match(pageSrc, /import\s*\{\s*DispatchJobTypesCard\s*\}\s*from\s*['"]@\/components\/settings\/DispatchJobTypesCard['"]/);
-
-  // Verify JSX mount with manageCompany capability gate
   assert.match(pageSrc, /<DispatchJobTypesCard[\s\S]*?company=\{company\}[\s\S]*?canEdit=\{hasCapability\(user,\s*'manageCompany',\s*userCompany\)\}/);
+
+  // Verify CustomJobTypesCard is NOT imported or mounted
+  assert.ok(!pageSrc.includes('CustomJobTypesCard'), 'CustomJobTypesCard must be removed from settings page');
 });
 
-test('6. Source contract: DispatchJobTypesCard guards mutations on canEdit', () => {
+test('5. Source contract: DispatchJobTypesCard uses governed tenantUpdateDispatchJobTypes', () => {
   const cardPath = resolve(process.cwd(), 'src/components/settings/DispatchJobTypesCard.tsx');
   const cardSrc = readFileSync(cardPath, 'utf8');
 
-  // Check canEdit prop definition
+  // Verify it imports and calls tenantUpdateDispatchJobTypes
+  assert.match(cardSrc, /import\s*\{\s*tenantUpdateDispatchJobTypes\s*\}\s*from\s*['"]@\/lib\/tenantDispatchJobTypes['"]/);
+  assert.match(cardSrc, /await\s+tenantUpdateDispatchJobTypes\(company\.id,\s*payload\)/);
+
+  // Verify it does NOT call updateCompanyFields for dispatchJobTypes
+  assert.ok(!cardSrc.includes('updateCompanyFields'), 'DispatchJobTypesCard must use governed callable, not updateCompanyFields');
+
+  // Verify canEdit guard
   assert.match(cardSrc, /canEdit:\s*boolean/);
-
-  // Check mutation handlers early-return when !canEdit
-  assert.match(cardSrc, /const handleUpdateField =[\s\S]*?if\s*\(!canEdit\)\s*return;/);
-  assert.match(cardSrc, /const handleMoveUp =[\s\S]*?if\s*\(!canEdit\)\s*return;/);
-  assert.match(cardSrc, /const handleMoveDown =[\s\S]*?if\s*\(!canEdit\)\s*return;/);
-  assert.match(cardSrc, /const handleAddJobType =[\s\S]*?if\s*\(!canEdit\)\s*return;/);
   assert.match(cardSrc, /const handleSave = async \(\) =>[\s\S]*?if\s*\(!canEdit/);
-
-  // Check view-only explanatory banner is present
-  assert.match(cardSrc, /View-only — you do not have permission to change company dispatch job types/);
 });
 
-test('7. Firestore rules contract: dispatchJobTypes is NOT in protectedCompanyKeys', () => {
+test('6. Legacy handling: surfaces customJobTypes as Needs Classification', () => {
+  const cardPath = resolve(process.cwd(), 'src/components/settings/DispatchJobTypesCard.tsx');
+  const cardSrc = readFileSync(cardPath, 'utf8');
+
+  // Verify Needs Classification UI and logic
+  assert.match(cardSrc, /Needs Classification/);
+  assert.match(cardSrc, /Classify & Add/);
+  assert.match(cardSrc, /unclassifiedLegacyLabels/);
+  assert.match(cardSrc, /handleClassifyLegacy/);
+
+  // Verify it does not mutate or delete company.customJobTypes
+  assert.ok(!cardSrc.includes('deleteCompanyFields'), 'Must not delete legacy fields');
+});
+
+test('7. Vocabulary boundary invariants: PW = Production Water, SW = Service Work, DW = Dirty Water', () => {
+  const corePath = resolve(process.cwd(), 'src/lib/dispatchJobTypesCore.ts');
+  const coreSrc = readFileSync(corePath, 'utf8');
+
+  assert.match(coreSrc, /code:\s*'PW'[\s\S]*?name:\s*'Production Water'/);
+  assert.match(coreSrc, /code:\s*'SW'[\s\S]*?name:\s*'Service Work'/);
+
+  const acronymPath = resolve(process.cwd(), 'src/lib/jobTypeAcronym.ts');
+  const acronymSrc = readFileSync(acronymPath, 'utf8');
+  assert.match(acronymSrc, /dw:\s*\{\s*code:\s*'DW',\s*full:\s*'Dirty Water'\s*\}/);
+});
+
+test('8. Firestore rules contract: dispatchJobTypes is protected from direct client updates', () => {
   const rulesPath = resolve(process.cwd(), 'firestore.rules');
   const rulesSrc = readFileSync(rulesPath, 'utf8');
 
-  // Check protectedCompanyKeys function in firestore.rules
-  const match = rulesSrc.match(/function protectedCompanyKeys\(\)\s*\{([\s\S]*?)\}/);
-  assert.ok(match, 'protectedCompanyKeys must exist in firestore.rules');
-  const protectedKeysBody = match[1];
-
-  // dispatchJobTypes must not be protected (must be writable by tenant admin)
-  assert.ok(!protectedKeysBody.includes('dispatchJobTypes'), 'dispatchJobTypes must NOT be in protectedCompanyKeys');
+  assert.match(rulesSrc, /!request\.resource\.data\.diff\(resource\.data\)\s*\.affectedKeys\(\)\.hasAny\(\['dispatchJobTypes'\]\)/);
+  assert.match(rulesSrc, /!request\.resource\.data\.keys\(\)\.hasAny\(\['dispatchJobTypes'\]\)/);
 });

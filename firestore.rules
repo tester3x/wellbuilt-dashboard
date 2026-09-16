@@ -145,7 +145,8 @@ service cloud.firestore {
       // activatePendingSignup) — authenticated, protected keys cannot
       // be supplied at birth in any form (any value, incl. null).
       allow create: if request.auth != null
-        && !request.resource.data.keys().hasAny(protectedCompanyKeys());
+        && !request.resource.data.keys().hasAny(protectedCompanyKeys())
+        && !request.resource.data.keys().hasAny(['dispatchJobTypes']);
 
       // Update covers updateDoc field-merges AND whole-document
       // replacement (setDoc without merge on an existing doc). The
@@ -156,7 +157,9 @@ service cloud.firestore {
       // field-merge updates pass untouched, configured or not.
       allow update: if request.auth != null
         && !request.resource.data.diff(resource.data)
-              .affectedKeys().hasAny(protectedCompanyKeys());
+              .affectedKeys().hasAny(protectedCompanyKeys())
+        && !request.resource.data.diff(resource.data)
+              .affectedKeys().hasAny(['dispatchJobTypes']);
 
       // Delete: legacy Dashboard deleteCompany flow preserved for
       // UNCONFIGURED docs only. A company carrying protected contract
