@@ -27,3 +27,9 @@ Use case: photorealistic-natural. Create a wide 16:9 full-screen webpage backgro
 Window edit generated with the built-in image tool, saved as `public/kitchen/morning-kitchen-breeze.png`; original retained. Prompt: preserve exact kitchen framing and objects, change only the left casement behind the plant to crack inward a few inches with a narrow visible gap. Plant stays positioned for browser animation.
 
 Increased water highlight speed/contrast and dust size/drift; added left-plant sway. Checked responsive appearance and pause/play controls. Published Hosting version `db88bd5dbcc9ae21`, release `1789517391058000`. Changed only `/kitchen/index.html`, added the new artwork, retained all other prior file hashes and Hosting configuration.
+
+## Character details
+
+Built-in image edit added the TicketTime pink piggy bank, Rascal beside the mug, a fish bowl on the right counter, and the ETC digital host in the wall frame. Edit target was the breeze kitchen; references were ETC `rascal_sprites_v2.png`, `etc_digital_host_v1.png`, and TicketTime `tickettime-pig-icon-1024.png`. Prompt required exact kitchen framing/faucet/plant geometry, naturally sized scattered objects in matching morning light, one hamster without a wheel, and the recognizable host portrait inside the existing frame. Saved `public/kitchen/morning-kitchen-friends.png`; prior versions retained. Animation code unchanged.
+
+Published version `f0f4a0619817a86c`, release `1789517717493000`. Changed only kitchen HTML and added the new plate; all other deployed file hashes/config retained. Current source must accompany the next full Dashboard deployment.
