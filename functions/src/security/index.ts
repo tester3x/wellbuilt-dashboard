@@ -40,6 +40,7 @@ export {
   ingestWbmEdit,
   upsertDriverShift,
   resolveActiveDriverShift,
+  staffResolveCompanyDriverShifts,
   claimDriverShift,
   closeDriverShift,
   recordDepartReturn,

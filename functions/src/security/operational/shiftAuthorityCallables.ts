@@ -35,6 +35,12 @@ import {
   productionCanonicalDriverReaders,
   type CanonicalDriverRecordReaders,
 } from '../canonicalDriverAuthority';
+import { requireRegisteredDashboardUser } from '../adminAuth';
+import {
+  normalizeDriverIds,
+  resolveStaffScopeCompany,
+  buildStaffShiftResult,
+} from './staffShiftResolveCore';
 import {
   buildLifecycleEvent,
   decideClaim,
@@ -144,6 +150,51 @@ export const resolveActiveDriverShift = httpsV2.onCall(
     // Side-effect free by construction: resolve NEVER writes, so a login or a
     // cold-start check cannot mint a shift.
     return { ...result, protocolVersion: 1 as const };
+  },
+);
+
+// ── staff batched resolve (Dashboard driver shift dots) ─────────────────────
+
+const STAFF_RESOLVE_KEYS = ['driverIds', 'companyId'];
+
+/**
+ * Read-only, batched shift status for a Dashboard STAFF viewer.
+ *
+ * - Authorizes ANY registered Dashboard user (a company-scoped dispatcher/viewer
+ *   keeps their dots — this deliberately does NOT require manageDrivers).
+ * - Company scope is derived from the authenticated staff caller; a non-platform
+ *   caller's client-supplied companyId is IGNORED (platform admin + viewAllCompanies
+ *   may target a company). decideResolve additionally enforces companyId + driverId,
+ *   so a driverId from another company resolves 'unverifiable' — never leaked.
+ * - Returns per driverId: open | none | unverifiable, plus a shared asOf timestamp.
+ * - NEVER writes, no shadow flag, no HOS/presence/GPS inference. Canonical driverId only.
+ */
+export const staffResolveCompanyDriverShifts = httpsV2.onCall(
+  SHIFT_AUTHORITY_OPTIONS,
+  async (request) => {
+    const data = requireExactKeys(request.data ?? {}, STAFF_RESOLVE_KEYS);
+    const caller = await requireRegisteredDashboardUser(
+      request.auth?.uid,
+      request.auth?.token as Record<string, unknown> | undefined,
+    );
+    const scope = resolveStaffScopeCompany(caller, data.companyId);
+    if (!scope.ok) throw new httpsV2.HttpsError('permission-denied', scope.reason);
+    const ids = normalizeDriverIds(data.driverIds);
+    if (!ids.ok) throw new httpsV2.HttpsError('invalid-argument', `driver_ids_${ids.reason}`);
+
+    const asOf = new Date().toISOString();
+    const companyId = scope.companyId;
+    const results = await Promise.all(
+      ids.ids.map(async (driverId) => {
+        const snap = await db().doc(shiftAuthorityPath(driverId)).get();
+        const resolved = decideResolve(
+          snap.exists ? readRecord(snap.data()) : null,
+          { driverId, companyId },
+        );
+        return buildStaffShiftResult(driverId, resolved, asOf);
+      }),
+    );
+    return { results, companyId, asOf, protocolVersion: 1 as const };
   },
 );
 
