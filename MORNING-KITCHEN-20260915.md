@@ -39,3 +39,7 @@ Published version `f0f4a0619817a86c`, release `1789517717493000`. Changed only k
 Smaller dust motes (0.55–1.09 source pixels), stronger descending water highlights, and three small individually masked leaf tips replace full-plant rotation. JavaScript syntax passed. Live version `adb8f6f2f5caa3db`.
 
 A concurrent full Dashboard release `06b9cf178a26e8e9` omitted the kitchen files. The initial deployment check stopped without releasing; kitchen HTML/art were then added to that latest release, preserving all 304 existing Dashboard file hashes/config. The Dashboard release owner must include this branch's `public/kitchen/` in subsequent builds to keep the page online.
+
+## Rascal and fish animation
+
+Added local mesh deformation: fish hovering/tail flicking inside a fixed bowl and Rascal's nose approaching the mug in a brief double-sniff every eleven seconds. Surroundings remain fixed; pause/reduced-motion controls apply. Script syntax and browser error checks passed. Hosting version `33b935d6b58e3dc5`, release `1789518428582000`, kitchen HTML only changed.

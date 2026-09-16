@@ -20,10 +20,27 @@ let running=!reduce.matches,frame=0,last=0,time=0,w=0,h=0,scale=1,ox=0,oy=0;
 let leaves=[];
 // Three isolated leaf tips; pots, stems and the rest of each plant stay still.
 function makeLeaves(){leaves=[[946,306,40,57,957,309,.045],[696,373,35,47,723,380,.05],[901,253,38,38,906,282,.045]].map(([x,y,w,h,px,py,angle])=>{const c=document.createElement('canvas');c.width=w;c.height=h;const g=c.getContext('2d');g.drawImage(img,x,y,w,h,0,0,w,h);g.globalCompositeOperation='destination-in';g.translate(w/2,h/2);g.scale(w/2,h/2);const m=g.createRadialGradient(0,0,.52,0,0,1);m.addColorStop(0,'#000');m.addColorStop(1,'transparent');g.fillStyle=m;g.fillRect(-1,-1,2,2);return{c,x,y,px,py,angle}})}
+// Local image deformation keeps the surrounding cup and bowl fixed. No second
+// copy of the character is overlaid, so a moving nose or tail leaves no ghost.
+function movePatch(x,y,width,height,shift){
+ const cols=8,rows=6;
+ function point(ix,iy){const sx=x+width*ix/cols,sy=y+height*iy/rows,u=ix/cols,v=iy/rows;const edge=Math.sin(Math.PI*u)*Math.sin(Math.PI*v),d=shift(sx,sy);return {sx,sy,x:sx+d[0]*edge,y:sy+d[1]*edge}}
+ function triangle(a,b,c){const den=(b.sx-a.sx)*(c.sy-a.sy)-(c.sx-a.sx)*(b.sy-a.sy);const A=((b.x-a.x)*(c.sy-a.sy)-(c.x-a.x)*(b.sy-a.sy))/den,B=((b.y-a.y)*(c.sy-a.sy)-(c.y-a.y)*(b.sy-a.sy))/den,C=((c.x-a.x)*(b.sx-a.sx)-(b.x-a.x)*(c.sx-a.sx))/den,D=((c.y-a.y)*(b.sx-a.sx)-(b.y-a.y)*(c.sx-a.sx))/den;
+ ctx.save();ctx.beginPath();ctx.moveTo(a.x,a.y);ctx.lineTo(b.x,b.y);ctx.lineTo(c.x,c.y);ctx.closePath();ctx.clip();ctx.transform(A,B,C,D,a.x-A*a.sx-C*a.sy,a.y-B*a.sx-D*a.sy);ctx.drawImage(img,0,0);ctx.restore()}
+ for(let j=0;j<rows;j++)for(let i=0;i<cols;i++){const a=point(i,j),b=point(i+1,j),c=point(i+1,j+1),d=point(i,j+1);triangle(a,b,c);triangle(a,c,d)}
+}
+function animateFriends(){
+ // The fish hovers in its bowl with a tail flick; glass and waterline stay still.
+ movePatch(1470,468,99,65,(x,y)=>{const tail=Math.max(0,(x-1523)/46);return [Math.sin(time*1.3)*1.5,Math.sin(time*5.5)*tail*4+Math.sin(time*1.3)*.6]});
+ // Two quick nose twitches toward the cup, then a long relaxed pause.
+ const phase=time%11,sniff=phase<2.6?Math.pow(Math.sin(phase/2.6*Math.PI),2)*(1+.3*Math.sin(phase*13)):0;
+ if(sniff>.001)movePatch(479,400,82,65,(x,y)=>{const nose=Math.max(0,Math.min(1,(x-486)/63));return [sniff*3.5*nose,-sniff*.9*nose]});
+}
 const particles=Array.from({length:48},(_,i)=>({x:Math.abs((Math.sin(i*127.1)*43758.5453)%1),y:(i*.61803398875)%1,r:.55+(i%4)*.18,s:5+i%7}));
 function resize(){w=innerWidth;h=innerHeight;const d=Math.min(devicePixelRatio||1,2);canvas.width=w*d;canvas.height=h*d;ctx.setTransform(d,0,0,d,0,0);scale=Math.max(w/img.naturalWidth,h/img.naturalHeight);ox=(w-img.naturalWidth*scale)*.6;oy=(h-img.naturalHeight*scale)*.5;}
 function draw(now){frame=0;if(!running||document.hidden)return;time+=last?Math.min((now-last)/1000,.1):0;last=now;ctx.clearRect(0,0,w,h);ctx.save();ctx.translate(ox,oy);ctx.scale(scale,scale);const W=img.naturalWidth,H=img.naturalHeight;
 for(const [i,leaf] of leaves.entries()){ctx.save();ctx.translate(leaf.px,leaf.py);ctx.rotate(Math.sin(time*.72+i*1.8)*leaf.angle);ctx.drawImage(leaf.c,leaf.x-leaf.px,leaf.y-leaf.py);ctx.restore()}
+animateFriends();
 // Flowing highlights follow the faucet's thin stream and stay inside the sink.
 for(let i=0;i<18;i++){const p=(time*.85+i/18)%1,y=H*(.362+p*.319),x=W*(.601-.004*p)+Math.sin(time*9+p*32)*.6;ctx.beginPath();ctx.strokeStyle='rgba(255,253,232,'+(.45+.5*Math.sin(p*Math.PI))+')';ctx.lineWidth=2.1;ctx.moveTo(x,y);ctx.lineTo(x+.3,y+8+i%6);ctx.stroke()}
 // Dust drifts a few pixels each second, with fade-in/out at the beam edges.
