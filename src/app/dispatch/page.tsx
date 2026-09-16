@@ -2442,8 +2442,8 @@ function DispatchPageInner() {
                                 .slice(0, 8)
                                 .map(w => (
                                   <button key={w.wellName} onClick={() => { setAssignTarget(w); setAssignWellSearch(''); }}
-                                    className="w-full text-left px-3 py-1.5 hover:bg-gray-700 text-white text-xs border-b border-gray-800 last:border-0">
-                                    {w.ndicName || w.wellName} <span className="text-gray-500">{w.route}</span>
+                                    className="wb-option-row px-3 py-1.5 text-white text-xs border-b border-gray-800 last:border-0">
+                                    {w.ndicName || w.wellName} <span className="wb-option-sub text-gray-500">{w.route}</span>
                                   </button>
                                 ))}
                               {wells.filter(w => (w.ndicName || w.wellName).toLowerCase().includes(assignWellSearch.toLowerCase())).length === 0 && (
@@ -2519,8 +2519,8 @@ function DispatchPageInner() {
                         <div className="absolute z-50 w-full mt-1 bg-gray-800 border border-gray-600 rounded max-h-36 overflow-y-auto shadow-lg">
                           {disposalResults.map((d, i) => (
                             <button key={d.api_no || i} onClick={() => { setAssignDisposal(d.well_name); setAssignDisposalWell(d); setDisposalSearch(''); setDisposalResults([]); }}
-                              className="w-full text-left px-3 py-1.5 hover:bg-gray-700 border-b border-gray-700/50 last:border-0 text-white text-sm">
-                              {d.well_name} <span className="text-gray-400 text-xs ml-1">{d.county || ''}</span>
+                              className="wb-option-row px-3 py-1.5 border-b border-gray-700/50 last:border-0 text-white text-sm">
+                              {d.well_name} <span className="wb-option-sub text-gray-400 text-xs ml-1">{d.county || ''}</span>
                             </button>
                           ))}
                         </div>
@@ -2603,9 +2603,9 @@ function DispatchPageInner() {
                               <div className="absolute z-50 w-full mt-1 bg-gray-800 border border-gray-600 rounded max-h-48 overflow-y-auto shadow-lg">
                                 {combined.map((item, i) => (
                                   <button key={`${item.value}-${i}`} type="button" onClick={() => setSwWellName(item.value)}
-                                    className="w-full text-left px-3 py-1.5 hover:bg-gray-700 border-b border-gray-700/50 last:border-0 text-white text-sm">
+                                    className="wb-option-row px-3 py-1.5 border-b border-gray-700/50 last:border-0 text-white text-sm">
                                     {item.label}
-                                    {item.sub && <span className="text-gray-500 text-xs ml-2">{item.sub}</span>}
+                                    {item.sub && <span className="wb-option-sub text-gray-500 text-xs ml-2">{item.sub}</span>}
                                   </button>
                                 ))}
                               </div>
@@ -2644,9 +2644,9 @@ function DispatchPageInner() {
                               <div className="absolute z-50 w-full mt-1 bg-gray-800 border border-gray-600 rounded max-h-48 overflow-y-auto shadow-lg">
                                 {combined.map((item, i) => (
                                   <button key={`${item.value}-${i}`} type="button" onClick={() => setSwDropoff(item.value)}
-                                    className="w-full text-left px-3 py-1.5 hover:bg-gray-700 border-b border-gray-700/50 last:border-0 text-white text-sm">
+                                    className="wb-option-row px-3 py-1.5 border-b border-gray-700/50 last:border-0 text-white text-sm">
                                     {item.label}
-                                    {item.sub && <span className="text-gray-500 text-xs ml-2">{item.sub}</span>}
+                                    {item.sub && <span className="wb-option-sub text-gray-500 text-xs ml-2">{item.sub}</span>}
                                   </button>
                                 ))}
                               </div>
@@ -2902,7 +2902,7 @@ function DispatchPageInner() {
                           <div className="absolute z-10 w-full bg-gray-900 border border-gray-700 rounded mt-0.5 max-h-32 overflow-y-auto">
                             {operatorSuggestions.map(op => (
                               <button key={op.name} onClick={() => { setNewProjectOperator(op.name); setOperatorSuggestions([]); }}
-                                className="w-full text-left px-3 py-1.5 hover:bg-gray-700 text-white text-xs border-b border-gray-800 last:border-0">{op.name}</button>
+                                className="wb-option-row px-3 py-1.5 text-white text-xs border-b border-gray-800 last:border-0">{op.name}</button>
                             ))}
                           </div>
                         )}
@@ -2930,8 +2930,8 @@ function DispatchPageInner() {
                             .slice(0, 10)
                             .map(w => (
                               <button key={w.wellName} onClick={() => { setNewProjectWells(prev => [...prev, w.wellName]); setProjectWellSearch(''); }}
-                                className="w-full text-left px-3 py-1.5 hover:bg-gray-700 text-white text-xs border-b border-gray-800 last:border-0">
-                                {w.ndicName || w.wellName} <span className="text-gray-500">{w.route}</span>
+                                className="wb-option-row px-3 py-1.5 text-white text-xs border-b border-gray-800 last:border-0">
+                                {w.ndicName || w.wellName} <span className="wb-option-sub text-gray-500">{w.route}</span>
                               </button>
                             ))}
                         </div>
@@ -3768,9 +3768,9 @@ function DispatchPageInner() {
                           .slice(0, 10)
                           .map(w => (
                             <button key={w.wellName} type="button" onClick={() => setEditSwWellName(w.ndicName || w.wellName)}
-                              className="w-full text-left px-3 py-1.5 hover:bg-gray-700 border-b border-gray-700/50 last:border-0 text-white text-sm">
+                              className="wb-option-row px-3 py-1.5 border-b border-gray-700/50 last:border-0 text-white text-sm">
                               {w.ndicName || w.wellName}
-                              {w.route && <span className="text-gray-500 text-xs ml-2">{w.route}</span>}
+                              {w.route && <span className="wb-option-sub text-gray-500 text-xs ml-2">{w.route}</span>}
                             </button>
                           ))
                         }
@@ -3803,10 +3803,10 @@ function DispatchPageInner() {
                           key={`${d.well_name}-${i}`}
                           onMouseDown={(e) => e.preventDefault()}
                           onClick={() => { setEditPwDisposal(d.well_name); setEditPwShowDisposalDropdown(false); }}
-                          className="w-full text-left px-3 py-2 text-sm text-white hover:bg-gray-700 transition-colors"
+                          className="wb-option-row px-3 py-2 text-sm text-white"
                         >
                           <span>{d.well_name}</span>
-                          {d.operator && <span className="text-gray-500 ml-2 text-xs">{d.operator}</span>}
+                          {d.operator && <span className="wb-option-sub text-gray-500 ml-2 text-xs">{d.operator}</span>}
                         </button>
                       ))}
                     </div>
@@ -4019,10 +4019,10 @@ function DispatchPageInner() {
                           key={`${d.well_name}-${i}`}
                           onMouseDown={(e) => e.preventDefault()}
                           onClick={() => { setEditSwDisposal(d.well_name); setEditSwShowDisposalDropdown(false); }}
-                          className="w-full text-left px-3 py-2 text-sm text-white hover:bg-gray-700 transition-colors"
+                          className="wb-option-row px-3 py-2 text-sm text-white"
                         >
                           <span>{d.well_name}</span>
-                          {d.operator && <span className="text-gray-500 ml-2 text-xs">{d.operator}</span>}
+                          {d.operator && <span className="wb-option-sub text-gray-500 ml-2 text-xs">{d.operator}</span>}
                         </button>
                       ))}
                     </div>

@@ -245,3 +245,45 @@ body {
   overflow-y: auto;
   overscroll-behavior-y: contain;
 }
+
+/* ─────────────────────────────────────────────────────────────────────────
+   Shared autocomplete option-row treatment (Driver / Well / Disposal / Operator
+   result lists). ONE contract so every dropdown highlights identically: the
+   hovered row AND the keyboard-active row (focus-visible, or aria-selected /
+   data-active when a list drives selection programmatically) get a clearly
+   FILLED full-width background with accessible contrast — never a 1px border.
+   Semantic tokens so the treatment is themed in one place. */
+:root {
+  --wb-option-active-bg: #2563eb; /* blue-600 — WCAG AA vs #ffffff (8.6:1) */
+  --wb-option-active-fg: #ffffff;
+}
+@media (prefers-color-scheme: dark) {
+  :root {
+    --wb-option-active-bg: #2563eb;
+    --wb-option-active-fg: #ffffff;
+  }
+}
+.wb-option-row {
+  display: block;
+  width: 100%;
+  text-align: left;
+  cursor: pointer;
+  transition: background-color 0.12s ease, color 0.12s ease;
+}
+.wb-option-row:focus {
+  outline: none;
+}
+.wb-option-row:hover,
+.wb-option-row:focus-visible,
+.wb-option-row[aria-selected="true"],
+.wb-option-row[data-active="true"] {
+  background-color: var(--wb-option-active-bg);
+  color: var(--wb-option-active-fg);
+}
+/* Keep any nested muted sub-label readable once the row is filled. */
+.wb-option-row:hover .wb-option-sub,
+.wb-option-row:focus-visible .wb-option-sub,
+.wb-option-row[aria-selected="true"] .wb-option-sub,
+.wb-option-row[data-active="true"] .wb-option-sub {
+  color: rgba(255, 255, 255, 0.8);
+}

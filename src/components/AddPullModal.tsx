@@ -405,7 +405,7 @@ export function AddPullModal({
                 .slice(0, 10)
                 .map(w => (
                   <button key={w} onClick={() => { setPullWell(w); setPullWellSearch(w); setShowWellDropdown(false); }}
-                    className="w-full text-left px-3 py-2 text-sm text-white hover:bg-gray-700 transition-colors">
+                    className="wb-option-row px-3 py-2 text-sm text-white">
                     {w}
                   </button>
                 ))
@@ -570,10 +570,10 @@ export function AddPullModal({
                           key={`${d.well_name}-${i}`}
                           onMouseDown={(e) => e.preventDefault()}
                           onClick={() => { setHauledTo(d.well_name); setShowHauledToDropdown(false); }}
-                          className="w-full text-left px-3 py-2 text-sm text-white hover:bg-gray-700 transition-colors"
+                          className="wb-option-row px-3 py-2 text-sm text-white"
                         >
                           <span>{d.well_name}</span>
-                          {d.operator && <span className="text-gray-500 ml-2 text-xs">{d.operator}</span>}
+                          {d.operator && <span className="wb-option-sub text-gray-500 ml-2 text-xs">{d.operator}</span>}
                         </button>
                       ))}
                     </div>
