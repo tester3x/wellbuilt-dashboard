@@ -21,3 +21,9 @@ Release: `1789517027302000`.
 Built-in image_gen tool, copied into the project from its generated output. Final generation prompt:
 
 Use case: photorealistic-natural. Create a wide 16:9 full-screen webpage background photograph of a calm comfortable lived-in kitchen in morning sun. Static camera, eye-level, natural oak counter, cream cabinets, ceramic mug, deep farmhouse sink, graceful brass faucet centered slightly right, a tall window just behind the sink throwing warm diagonal rays into the room, two small leafy plants on the sill, soft linen curtain. Cozy understated real home, tactile materials, cinematic natural exposure, no people, text, logos or UI. Faucet spout and sink fully visible near the center so mobile cropping preserves them. A very thin trickle of water from the faucet. Sparse dust catching the light. This is a still plate for subtle browser animation; keep architectural lines crisp, no motion blur. Landscape 1536x864 or similar wide aspect ratio.
+
+## Breeze update
+
+Window edit generated with the built-in image tool, saved as `public/kitchen/morning-kitchen-breeze.png`; original retained. Prompt: preserve exact kitchen framing and objects, change only the left casement behind the plant to crack inward a few inches with a narrow visible gap. Plant stays positioned for browser animation.
+
+Increased water highlight speed/contrast and dust size/drift; added left-plant sway. Checked responsive appearance and pause/play controls. Published Hosting version `db88bd5dbcc9ae21`, release `1789517391058000`. Changed only `/kitchen/index.html`, added the new artwork, retained all other prior file hashes and Hosting configuration.
