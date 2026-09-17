@@ -5,7 +5,7 @@
  *
  * Self-contained, drop into an expanded company row. Calls the deployed,
  * governed getCompanyJoinCode callable via adminGetCompanyJoinCode — it
- * retrieves the company's existing 8-character code or allocates one on first
+ * retrieves the company's existing join code (displayed as XXXX-XXXX) or allocates one on first
  * use, and NEVER replaces an existing code. Company admins are server-scoped to
  * their own company; platform admins target the row's company by id.
  *
@@ -91,8 +91,8 @@ export function CompanyJoinCodeCard({ companyId }: { companyId: string }) {
       </div>
 
       <p className="text-gray-400 text-xs mb-2">
-        New employees enter this 8-character code when registering in WB Mobile to join your
-        company. It is generated once and reused — share it privately with each new hire. Anyone
+        New employees enter this join code (format XXXX-XXXX) when registering in WB Mobile to join
+        your company. It is generated once and reused — share it privately with each new hire. Anyone
         with the code can request to join (you still approve every registration).
       </p>
 
