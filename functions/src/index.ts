@@ -4781,6 +4781,7 @@ export {
   adminApproveCompanyOnboarding,
   adminCreateCompanyWithJoinCode,
   getCompanyJoinCode,
+  rotateCompanyJoinCode,
   adminGetDashboardCatalog,
   adminGetWellPool,
   adminGetWellHistory,

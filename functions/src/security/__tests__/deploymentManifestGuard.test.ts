@@ -33,4 +33,8 @@ describe('deployment manifest guard — prevent silent pruning of deployed calla
       }
     }
   });
+
+  test('functions/src/index.ts exports new callable rotateCompanyJoinCode', () => {
+    expect(indexSource).toMatch(/\brotateCompanyJoinCode\b/);
+  });
 });

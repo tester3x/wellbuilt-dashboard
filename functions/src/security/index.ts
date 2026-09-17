@@ -24,6 +24,10 @@ export {
   adminApproveCompanyOnboarding,
   adminCreateCompanyWithJoinCode,
   getCompanyJoinCode,
+  rotateCompanyJoinCode,
+  rotateJoinCode,
+  executeRotateJoinCode,
+  decideRotateCompanyJoinCodeTenantAccess,
 } from './companyOnboarding';
 export {
   adminGetDashboardCatalog,

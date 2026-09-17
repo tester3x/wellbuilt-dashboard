@@ -240,3 +240,157 @@ export const getCompanyJoinCode = httpsV2.onCall(async request => {
   if (!code) code = await allocateJoinCode(companyId, caller.uid);
   return { companyId, joinCode: code };
 });
+
+export interface JoinCodeStoreOps {
+  getPointer(companyId: string): Promise<{ digest?: string } | null>;
+  getJoinCode(digest: string): Promise<{ exists: boolean; active?: boolean; companyId?: string; code?: string } | null>;
+  runTransaction<T>(fn: (tx: JoinCodeTransactionOps) => Promise<T>): Promise<T>;
+  writeAudit(audit: { action: string; actorUid: string; detail: Record<string, unknown> }): Promise<void>;
+  generateCode?: () => string;
+}
+
+export interface JoinCodeTransactionOps {
+  getPointer(companyId: string): Promise<{ digest?: string } | null>;
+  getJoinCode(digest: string): Promise<{ exists: boolean; active?: boolean; companyId?: string; code?: string } | null>;
+  deactivateCode(digest: string, actorUid: string): void;
+  createCode(digest: string, code: string, companyId: string, actorUid: string): void;
+  setPointer(companyId: string, digest: string, actorUid: string): void;
+}
+
+export function decideRotateCompanyJoinCodeTenantAccess(
+  caller: { uid: string; companyId?: string | null; isPlatformAdmin: boolean; caps?: string[] },
+  requestedCompanyId?: string,
+): { ok: boolean; companyId?: string; error?: string; status?: string } {
+  if (!caller.uid) {
+    return { ok: false, error: 'Must be signed in', status: 'unauthenticated' };
+  }
+  if (caller.caps && !caller.caps.includes('manageDrivers')) {
+    return { ok: false, error: 'Caller lacks manageDrivers capability', status: 'permission-denied' };
+  }
+  const requested = String(requestedCompanyId || '').trim();
+  if (requested && !caller.isPlatformAdmin && caller.companyId && requested !== caller.companyId) {
+    return { ok: false, error: 'Cross-tenant join code rotation denied', status: 'permission-denied' };
+  }
+  const target = caller.isPlatformAdmin ? requested : caller.companyId || '';
+  if (!target) {
+    return { ok: false, error: 'companyId required', status: 'invalid-argument' };
+  }
+  return { ok: true, companyId: target };
+}
+
+export async function executeRotateJoinCode(
+  companyId: string,
+  actorUid: string,
+  store: JoinCodeStoreOps,
+): Promise<string> {
+  const codeGen = store.generateCode || newJoinCode;
+  for (let attempt = 0; attempt < 12; attempt += 1) {
+    const newCode = codeGen();
+    const newDigest = companyJoinCodeDigest(newCode);
+    try {
+      await store.runTransaction(async tx => {
+        const pointer = await tx.getPointer(companyId);
+        const oldDigest = pointer?.digest;
+
+        const newExisting = await tx.getJoinCode(newDigest);
+        if (newExisting?.exists) throw new Error('join_code_collision');
+
+        let oldExists = false;
+        if (typeof oldDigest === 'string') {
+          const oldRecord = await tx.getJoinCode(oldDigest);
+          oldExists = !!oldRecord?.exists;
+        }
+
+        // Writes after all transaction reads
+        if (oldDigest && oldExists) {
+          tx.deactivateCode(oldDigest, actorUid);
+        }
+        tx.createCode(newDigest, newCode, companyId, actorUid);
+        tx.setPointer(companyId, newDigest, actorUid);
+      });
+
+      await store.writeAudit({
+        action: 'rotateCompanyJoinCode',
+        actorUid,
+        detail: { companyId },
+      });
+      return newCode;
+    } catch (error) {
+      if ((error as Error).message !== 'join_code_collision') throw error;
+    }
+  }
+  throw new httpsV2.HttpsError('internal', 'Could not allocate a unique company join code during rotation');
+}
+
+export async function rotateJoinCode(companyId: string, actorUid: string, storeOps?: JoinCodeStoreOps): Promise<string> {
+  if (storeOps) {
+    return executeRotateJoinCode(companyId, actorUid, storeOps);
+  }
+  const db = admin.firestore();
+  for (let attempt = 0; attempt < 12; attempt += 1) {
+    const newCode = newJoinCode();
+    const newDigest = companyJoinCodeDigest(newCode);
+    try {
+      await db.runTransaction(async tx => {
+        const pointerRef = db.collection('company_join_codes_by_company').doc(companyId);
+        const pointerSnap = await tx.get(pointerRef);
+        const oldDigest = pointerSnap.data()?.digest;
+
+        const newRef = db.collection('company_join_codes').doc(newDigest);
+        const newExisting = await tx.get(newRef);
+        if (newExisting.exists) throw new Error('join_code_collision');
+
+        let oldRef: admin.firestore.DocumentReference | null = null;
+        let oldExists = false;
+        if (typeof oldDigest === 'string') {
+          oldRef = db.collection('company_join_codes').doc(oldDigest);
+          const oldSnap = await tx.get(oldRef);
+          oldExists = oldSnap.exists;
+        }
+
+        // Writes after all transaction reads
+        if (oldRef && oldExists) {
+          tx.update(oldRef, {
+            active: false,
+            revokedAt: admin.firestore.FieldValue.serverTimestamp(),
+            revokedBy: actorUid,
+          });
+        }
+        tx.create(newRef, {
+          companyId,
+          code: newCode,
+          active: true,
+          createdAt: admin.firestore.FieldValue.serverTimestamp(),
+          createdBy: actorUid,
+        });
+        tx.set(pointerRef, {
+          digest: newDigest,
+          updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+          updatedBy: actorUid,
+        }, { merge: true });
+      });
+
+      await writeSecurityAudit({
+        action: 'rotateCompanyJoinCode',
+        actorUid,
+        detail: { companyId },
+      });
+      return newCode;
+    } catch (error) {
+      if ((error as Error).message !== 'join_code_collision') throw error;
+    }
+  }
+  throw new httpsV2.HttpsError('internal', 'Could not allocate a unique company join code during rotation');
+}
+
+export const rotateCompanyJoinCode = httpsV2.onCall(async request => {
+  const caller = await requireManageDrivers(request.auth?.uid, request.auth?.token as Record<string, unknown> | undefined);
+  const requested = String((request.data as any)?.companyId || '').trim();
+  if (requested && !caller.isPlatformAdmin && caller.companyId && requested !== caller.companyId) {
+    throw new httpsV2.HttpsError('permission-denied', 'Cross-tenant join code rotation denied');
+  }
+  const companyId = caller.isPlatformAdmin ? requested : caller.companyId || '';
+  if (!companyId) throw new httpsV2.HttpsError('invalid-argument', 'companyId required');
+  const code = await rotateJoinCode(companyId, caller.uid);
+  return { companyId, joinCode: code };
+});
