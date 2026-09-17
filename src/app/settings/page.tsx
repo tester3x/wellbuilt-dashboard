@@ -11,6 +11,7 @@ import {
   loadAllCompanies,
 } from '@/lib/companySettings';
 import { CompanyProfileCard } from '@/components/settings/CompanyProfileCard';
+import { CompanyJoinCodeCard } from '@/components/admin/CompanyJoinCodeCard';
 import { InvoiceConfigCard } from '@/components/settings/InvoiceConfigCard';
 import { OperationsCard } from '@/components/settings/OperationsCard';
 import { OilCompaniesCard } from '@/components/settings/OilCompaniesCard';
@@ -184,6 +185,10 @@ export default function SettingsPage() {
         ) : (
           <div className="space-y-4">
             <CompanyProfileCard company={company} onSave={handleRefresh} canEdit={hasCapability(user, 'manageCompany', userCompany)} />
+            {/* Employee Registration — the company's own join code (self-gated to
+                manageDrivers/platform; the card sends no companyId for a tenant user,
+                so the server resolves their OWN company). */}
+            <CompanyJoinCodeCard companyId={company.id} />
             <PackagesCard company={company} onSave={handleRefresh} canEdit={hasCapability(user, 'manageCompany', userCompany)} />
             <CustomJobTypesCard company={company} onSave={handleRefresh} canEdit={hasCapability(user, 'manageCompany', userCompany)} />
             <InvoiceConfigCard company={company} onSave={handleRefresh} canEdit={hasCapability(user, 'manageCompany', userCompany)} />
