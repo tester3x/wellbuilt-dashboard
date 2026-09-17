@@ -206,14 +206,35 @@ async function main() {
   const rejected = results.filter(r => r.status === 'rejected');
   console.log(`Outcomes: ${fulfilled.length} fulfilled, ${rejected.length} rejected.`);
 
-  if (fulfilled.length > 0) {
-    ok(`At least one concurrent replacement succeeded (got ${fulfilled.length}/${CONCURRENCY})`);
+  if (fulfilled.length === 1) {
+    ok(`Exactly ONE concurrent replacement succeeded (${fulfilled.length}/${CONCURRENCY})`);
   } else {
-    fail('All concurrent replacements failed', JSON.stringify(results));
+    fail(`Expected exactly 1 fulfilled replacement`, `got ${fulfilled.length}`);
+  }
+
+  if (rejected.length === CONCURRENCY - 1) {
+    ok(`All other ${rejected.length} concurrent attempts rejected as conflicts`);
+  } else {
+    fail(`Expected ${CONCURRENCY - 1} rejected conflicts`, `got ${rejected.length}`);
+  }
+
+  let allTypedConflicts = true;
+  for (const r of rejected) {
+    const reasonStr = String(r.reason?.message || r.reason || '');
+    const code = r.reason?.code;
+    if (code !== 'aborted' && !reasonStr.includes('concurrent_join_code_replacement_conflict')) {
+      allTypedConflicts = false;
+      console.error('Unexpected rejection error format:', r.reason);
+    }
+  }
+  if (allTypedConflicts) {
+    ok('All rejected concurrent attempts returned typed aborted conflict response');
+  } else {
+    fail('Some rejected attempts did not have typed aborted conflict error');
   }
 
   const generatedCodes = fulfilled.map(r => r.value);
-  console.log(`Generated codes count: ${generatedCodes.length}`);
+  console.log(`Generated winning code count: ${generatedCodes.length}`);
 
   // ─────────────────────────────────────────────────────────────────────────
   // PART 3: Invariant Assertions on Firestore Emulator State
@@ -236,6 +257,12 @@ async function main() {
 
   const totalCodesCount = allCompanyCodesSnap.docs.length;
   console.log(`Total join code docs created for ${COMPANY_ID}: ${totalCodesCount}`);
+
+  if (totalCodesCount === 2) {
+    ok(`Total codes count is 2 (1 initial + 1 winning replacement)`);
+  } else {
+    fail(`Expected 2 total codes`, `found ${totalCodesCount}`);
+  }
 
   const activeCodes = allCompanyCodesSnap.docs.filter(d => d.data().active === true);
   const inactiveCodes = allCompanyCodesSnap.docs.filter(d => d.data().active === false);

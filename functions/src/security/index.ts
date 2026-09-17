@@ -29,6 +29,8 @@ export {
   executeRotateJoinCode,
   decideRotateCompanyJoinCodeTenantAccess,
   decideRotateCompanyJoinCodeAccess,
+  decideGetCompanyJoinCodeTenantAccess,
+  decideGetCompanyJoinCodeAccess,
 } from './companyOnboarding';
 export {
   adminGetDashboardCatalog,

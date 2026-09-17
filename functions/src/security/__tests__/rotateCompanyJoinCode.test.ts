@@ -4,6 +4,7 @@ import {
   companyJoinCodeDigest,
   normalizeCompanyJoinCode,
   decideRotateCompanyJoinCodeTenantAccess,
+  decideGetCompanyJoinCodeTenantAccess,
   executeRotateJoinCode,
   type JoinCodeStoreOps,
   type JoinCodeTransactionOps,
@@ -239,6 +240,73 @@ describe('rotateCompanyJoinCode — Tenant Boundary & Authorization', () => {
   });
 });
 
+describe('getCompanyJoinCode — Tenant Boundary & Authorization', () => {
+  it('denies cross-tenant retrieval when tenant admin requests a different company', () => {
+    const caller = { uid: 'tenant-admin-1', companyId: 'company-a', isPlatformAdmin: false, caps: ['manageDrivers'] };
+    const decision = decideGetCompanyJoinCodeTenantAccess(caller, 'company-b');
+    expect(decision.ok).toBe(false);
+    expect(decision.status).toBe('permission-denied');
+    expect(decision.error).toContain('platform_admin_required');
+  });
+
+  it('allows tenant admin to retrieve their own company join code when companyId is specified', () => {
+    const caller = { uid: 'tenant-admin-1', companyId: 'company-a', isPlatformAdmin: false, caps: ['manageDrivers'] };
+    const decision = decideGetCompanyJoinCodeTenantAccess(caller, 'company-a');
+    expect(decision.ok).toBe(true);
+    expect(decision.companyId).toBe('company-a');
+  });
+
+  it('allows tenant admin to retrieve when companyId is omitted (defaults to caller tenant)', () => {
+    const caller = { uid: 'tenant-admin-1', companyId: 'company-a', isPlatformAdmin: false, caps: ['manageDrivers'] };
+    const decision = decideGetCompanyJoinCodeTenantAccess(caller, undefined);
+    expect(decision.ok).toBe(true);
+    expect(decision.companyId).toBe('company-a');
+  });
+
+  it('allows verified platform admin to retrieve join code for any target company', () => {
+    const caller = { uid: 'pa-1', companyId: null, isPlatformAdmin: true, caps: ['manageDrivers'] };
+    const decision = decideGetCompanyJoinCodeTenantAccess(caller, 'liquid-gold', { ok: true });
+    expect(decision.ok).toBe(true);
+    expect(decision.companyId).toBe('liquid-gold');
+  });
+
+  it('denies platform admin when no target companyId is provided', () => {
+    const caller = { uid: 'pa-1', companyId: null, isPlatformAdmin: true, caps: ['manageDrivers'] };
+    const decision = decideGetCompanyJoinCodeTenantAccess(caller, '', { ok: true });
+    expect(decision.ok).toBe(false);
+    expect(decision.status).toBe('invalid-argument');
+    expect(decision.error).toBe('companyId required for platform admin join code access');
+  });
+
+  it('never authorizes cross-company retrieval from an unscoped admin or it role string alone', () => {
+    // Caller has role 'admin' in RTDB, but lacks verified platform_admins record
+    const caller = { uid: 'fake-admin-1', companyId: null, isPlatformAdmin: false, caps: ['manageDrivers'] };
+    const decision = decideGetCompanyJoinCodeTenantAccess(caller, 'liquid-gold', {
+      ok: false,
+      reason: 'missing_admin_record',
+    });
+    expect(decision.ok).toBe(false);
+    expect(decision.status).toBe('permission-denied');
+    expect(decision.error).toBe('platform_admin_required:missing_admin_record');
+  });
+
+  it('denies unauthenticated caller', () => {
+    const caller = { uid: '', companyId: 'company-a', isPlatformAdmin: false, caps: ['manageDrivers'] };
+    const decision = decideGetCompanyJoinCodeTenantAccess(caller, 'company-a');
+    expect(decision.ok).toBe(false);
+    expect(decision.status).toBe('unauthenticated');
+    expect(decision.error).toBe('Must be signed in');
+  });
+
+  it('denies caller lacking manageDrivers capability', () => {
+    const caller = { uid: 'viewer-1', companyId: 'company-a', isPlatformAdmin: false, caps: ['viewer'] };
+    const decision = decideGetCompanyJoinCodeTenantAccess(caller, 'company-a');
+    expect(decision.ok).toBe(false);
+    expect(decision.status).toBe('permission-denied');
+  });
+});
+
+
 describe('rotateCompanyJoinCode — Atomic Pointer Replacement, Deactivation, & Rejection', () => {
   let store: InMemoryJoinCodeStore;
   const COMPANY_ID = 'liquid-gold';
@@ -384,6 +452,43 @@ describe('rotateCompanyJoinCode — Concurrency & Collision Handling', () => {
     // Pointer points to latest code
     const pointer = await store.getPointer(COMPANY_ID);
     expect(pointer?.digest).toBe(companyJoinCodeDigest(codes[2]));
+  });
+
+  it('rejects concurrent same-generation replacement with typed conflict/aborted error', async () => {
+    const store = new InMemoryJoinCodeStore();
+    const COMPANY_ID = 'liquid-gold';
+    store.companies.set(COMPANY_ID, { name: 'Liquid Gold', status: 'active' });
+    const OLD_CODE = 'ORIG-1234';
+    const OLD_DIGEST = companyJoinCodeDigest(OLD_CODE);
+
+    store.codes.set(OLD_DIGEST, {
+      companyId: COMPANY_ID,
+      code: OLD_CODE,
+      active: true,
+      createdBy: 'init',
+    });
+    store.pointers.set(COMPANY_ID, {
+      digest: OLD_DIGEST,
+      updatedBy: 'init',
+    });
+
+    // Winner replacement based on OLD_DIGEST succeeds
+    const winnerCode = await executeRotateJoinCode(COMPANY_ID, 'winner-user', store, OLD_DIGEST);
+    expect(winnerCode).toBeDefined();
+
+    // Loser replacement also based on stale OLD_DIGEST must be rejected immediately as aborted conflict
+    await expect(
+      executeRotateJoinCode(COMPANY_ID, 'loser-user', store, OLD_DIGEST),
+    ).rejects.toThrow(/concurrent_join_code_replacement_conflict/);
+
+    // Verify only winner's code is active and pointer matches winner
+    const winnerDigest = companyJoinCodeDigest(winnerCode);
+    const pointer = await store.getPointer(COMPANY_ID);
+    expect(pointer?.digest).toBe(winnerDigest);
+
+    // Loser's audit was never committed (only 1 audit log exists)
+    expect(store.auditLogs).toHaveLength(1);
+    expect(store.auditLogs[0].actorUid).toBe('winner-user');
   });
 });
 

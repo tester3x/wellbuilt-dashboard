@@ -16,6 +16,23 @@ export function companyJoinCodeDigest(value: unknown): string {
   return createHash('sha256').update(normalizeCompanyJoinCode(value)).digest('hex');
 }
 
+export function decideCompanyJoinCodeResolution(input: {
+  matchExists: boolean;
+  mapping?: Record<string, unknown>;
+  companyExists: boolean;
+  company?: Record<string, unknown>;
+}): { ok: true; companyId: string; companyName: string } | { ok: false; reason: 'unknown' | 'unavailable' } {
+  const companyId = input.mapping?.companyId;
+  if (!input.matchExists || input.mapping?.active !== true || typeof companyId !== 'string') {
+    return { ok: false, reason: 'unknown' };
+  }
+  const companyName = input.company?.name;
+  if (!input.companyExists || input.company?.status === 'archived' || typeof companyName !== 'string') {
+    return { ok: false, reason: 'unavailable' };
+  }
+  return { ok: true, companyId, companyName };
+}
+
 export function slugifyCompanyName(value: unknown): string {
   return String(value || '').trim().toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '').slice(0, 60);
 }
@@ -96,11 +113,16 @@ export async function resolveCompanyJoinCode(code: unknown): Promise<{ companyId
     throw new httpsV2.HttpsError('not-found', 'Company join code was not found');
   }
   const company = await admin.firestore().collection('companies').doc(data.companyId).get();
-  const companyName = company.data()?.name;
-  if (!company.exists || company.data()?.status === 'archived' || typeof companyName !== 'string') {
+  const decision = decideCompanyJoinCodeResolution({
+    matchExists: match.exists,
+    mapping: data,
+    companyExists: company.exists,
+    company: company.data(),
+  });
+  if (!decision.ok) {
     throw new httpsV2.HttpsError('failed-precondition', 'Company is not available for employee registration');
   }
-  return { companyId: data.companyId, companyName };
+  return { companyId: decision.companyId, companyName: decision.companyName };
 }
 
 export const requestCompanyOnboarding = httpsV2.onCall(
@@ -232,13 +254,42 @@ export const adminCreateCompanyWithJoinCode = httpsV2.onCall(async request => {
 });
 
 export const getCompanyJoinCode = httpsV2.onCall(async request => {
-  const caller = await requireManageDrivers(request.auth?.uid, request.auth?.token as Record<string, unknown> | undefined);
+  if (!request.auth?.uid) {
+    throw new httpsV2.HttpsError('unauthenticated', 'Must be signed in');
+  }
+
   const requested = String((request.data as any)?.companyId || '').trim();
-  const companyId = caller.isPlatformAdmin ? requested : caller.companyId || '';
-  if (!companyId) throw new httpsV2.HttpsError('invalid-argument', 'companyId required');
-  let code = await joinCodeForCompany(companyId);
-  if (!code) code = await allocateJoinCode(companyId, caller.uid);
-  return { companyId, joinCode: code };
+
+  // 1. Attempt tenant caller path via requireManageDrivers
+  let tenantCaller: import('./adminAuth').DashboardCaller | null = null;
+  try {
+    tenantCaller = await requireManageDrivers(
+      request.auth.uid,
+      request.auth.token as Record<string, unknown> | undefined,
+    );
+  } catch {
+    // Caller may lack tenant manageDrivers; could still be a platform admin
+  }
+
+  // 2. Tenant manageDrivers callers may act ONLY on their own company
+  if (tenantCaller && tenantCaller.companyId && (!requested || requested === tenantCaller.companyId)) {
+    const companyId = tenantCaller.companyId;
+    let code = await joinCodeForCompany(companyId);
+    if (!code) code = await allocateJoinCode(companyId, tenantCaller.uid);
+    return { companyId, joinCode: code };
+  }
+
+  // 3. Platform-targeted path requires requireVerifiedPlatformAdmin and verified platform_admins membership.
+  // Never authorize cross-company actions from an unscoped admin or it role string.
+  await requireVerifiedPlatformAdmin(request);
+
+  if (!requested) {
+    throw new httpsV2.HttpsError('invalid-argument', 'companyId required for platform admin join code access');
+  }
+
+  let code = await joinCodeForCompany(requested);
+  if (!code) code = await allocateJoinCode(requested, request.auth.uid);
+  return { companyId: requested, joinCode: code };
 });
 
 export interface JoinCodeStoreOps {
@@ -255,6 +306,55 @@ export interface JoinCodeTransactionOps {
   createCode(digest: string, code: string, companyId: string, actorUid: string): void;
   setPointer(companyId: string, digest: string, actorUid: string): void;
   writeAudit(audit: { action: string; actorUid: string; detail: Record<string, unknown> }): void;
+}
+
+export function decideGetCompanyJoinCodeAccess(params: {
+  authUid?: string | null;
+  tenantCaller?: { companyId?: string | null; caps: string[] } | null;
+  platformAdminDecision?: { ok: boolean; reason?: string } | null;
+  requestedCompanyId?: string;
+}): { ok: boolean; companyId?: string; error?: string; status?: string } {
+  if (!params.authUid) {
+    return { ok: false, error: 'Must be signed in', status: 'unauthenticated' };
+  }
+  const requested = String(params.requestedCompanyId || '').trim();
+
+  // Tenant manageDrivers callers may act ONLY on their own company
+  if (params.tenantCaller?.caps?.includes('manageDrivers') && params.tenantCaller.companyId) {
+    if (!requested || requested === params.tenantCaller.companyId) {
+      return { ok: true, companyId: params.tenantCaller.companyId };
+    }
+  }
+
+  // Platform-targeted path requires requireVerifiedPlatformAdmin and verified platform_admins membership.
+  // Never authorize cross-company actions from an unscoped admin or it role string.
+  if (!params.platformAdminDecision?.ok) {
+    const reason = params.platformAdminDecision?.reason || 'permission-denied';
+    return {
+      ok: false,
+      error: `platform_admin_required:${reason}`,
+      status: reason === 'unauthenticated' ? 'unauthenticated' : 'permission-denied',
+    };
+  }
+
+  if (!requested) {
+    return { ok: false, error: 'companyId required for platform admin join code access', status: 'invalid-argument' };
+  }
+
+  return { ok: true, companyId: requested };
+}
+
+export function decideGetCompanyJoinCodeTenantAccess(
+  caller: { uid: string; companyId?: string | null; isPlatformAdmin: boolean; caps?: string[] },
+  requestedCompanyId?: string,
+  platformAdminDecision?: { ok: boolean; reason?: string } | null,
+): { ok: boolean; companyId?: string; error?: string; status?: string } {
+  return decideGetCompanyJoinCodeAccess({
+    authUid: caller.uid,
+    tenantCaller: { companyId: caller.companyId, caps: caller.caps || [] },
+    platformAdminDecision: platformAdminDecision ?? (caller.isPlatformAdmin ? { ok: true } : { ok: false, reason: 'missing_admin_record' }),
+    requestedCompanyId,
+  });
 }
 
 export function decideRotateCompanyJoinCodeAccess(params: {
@@ -310,15 +410,27 @@ export async function executeRotateJoinCode(
   companyId: string,
   actorUid: string,
   store: JoinCodeStoreOps,
+  expectedDigest?: string | null,
 ): Promise<string> {
   const codeGen = store.generateCode || newJoinCode;
+  const initialPointer = await store.getPointer(companyId);
+  const targetExpected = expectedDigest !== undefined ? expectedDigest : (initialPointer?.digest ?? null);
+
   for (let attempt = 0; attempt < 12; attempt += 1) {
     const newCode = codeGen();
     const newDigest = companyJoinCodeDigest(newCode);
     try {
       await store.runTransaction(async tx => {
         const pointer = await tx.getPointer(companyId);
-        const oldDigest = pointer?.digest;
+        const oldDigest = pointer?.digest ?? null;
+
+        // Concurrent replacement semantics: exactly ONE same-generation replacement succeeds
+        if (oldDigest !== targetExpected) {
+          throw new httpsV2.HttpsError(
+            'aborted',
+            'concurrent_join_code_replacement_conflict: Code was already replaced by another request',
+          );
+        }
 
         const newExisting = await tx.getJoinCode(newDigest);
         if (newExisting?.exists) throw new Error('join_code_collision');
@@ -347,17 +459,26 @@ export async function executeRotateJoinCode(
 
       return newCode;
     } catch (error) {
-      if ((error as Error).message !== 'join_code_collision') throw error;
+      if ((error as Error).message === 'join_code_collision') continue;
+      throw error;
     }
   }
   throw new httpsV2.HttpsError('internal', 'Could not allocate a unique company join code during rotation');
 }
 
-export async function rotateJoinCode(companyId: string, actorUid: string, storeOps?: JoinCodeStoreOps): Promise<string> {
+export async function rotateJoinCode(
+  companyId: string,
+  actorUid: string,
+  storeOps?: JoinCodeStoreOps,
+  expectedDigest?: string | null,
+): Promise<string> {
   if (storeOps) {
-    return executeRotateJoinCode(companyId, actorUid, storeOps);
+    return executeRotateJoinCode(companyId, actorUid, storeOps, expectedDigest);
   }
   const db = admin.firestore();
+  const initialPointer = await db.collection('company_join_codes_by_company').doc(companyId).get();
+  const targetExpected = expectedDigest !== undefined ? expectedDigest : (initialPointer.data()?.digest ?? null);
+
   for (let attempt = 0; attempt < 12; attempt += 1) {
     const newCode = newJoinCode();
     const newDigest = companyJoinCodeDigest(newCode);
@@ -365,7 +486,15 @@ export async function rotateJoinCode(companyId: string, actorUid: string, storeO
       await db.runTransaction(async tx => {
         const pointerRef = db.collection('company_join_codes_by_company').doc(companyId);
         const pointerSnap = await tx.get(pointerRef);
-        const oldDigest = pointerSnap.data()?.digest;
+        const oldDigest = pointerSnap.data()?.digest ?? null;
+
+        // Concurrent replacement semantics: exactly ONE same-generation replacement succeeds
+        if (oldDigest !== targetExpected) {
+          throw new httpsV2.HttpsError(
+            'aborted',
+            'concurrent_join_code_replacement_conflict: Code was already replaced by another request',
+          );
+        }
 
         const newRef = db.collection('company_join_codes').doc(newDigest);
         const newExisting = await tx.get(newRef);
@@ -413,7 +542,8 @@ export async function rotateJoinCode(companyId: string, actorUid: string, storeO
 
       return newCode;
     } catch (error) {
-      if ((error as Error).message !== 'join_code_collision') throw error;
+      if ((error as Error).message === 'join_code_collision') continue;
+      throw error;
     }
   }
   throw new httpsV2.HttpsError('internal', 'Could not allocate a unique company join code during rotation');
@@ -425,6 +555,8 @@ export const rotateCompanyJoinCode = httpsV2.onCall(async request => {
   }
 
   const requested = String((request.data as any)?.companyId || '').trim();
+  const suppliedExpected = (request.data as any)?.expectedDigest;
+  const expectedDigest = typeof suppliedExpected === 'string' ? suppliedExpected : undefined;
 
   // 1. Attempt tenant caller path via requireManageDrivers
   let tenantCaller: import('./adminAuth').DashboardCaller | null = null;
@@ -439,7 +571,7 @@ export const rotateCompanyJoinCode = httpsV2.onCall(async request => {
 
   // 2. Tenant manageDrivers callers may act ONLY on their own company
   if (tenantCaller && tenantCaller.companyId && (!requested || requested === tenantCaller.companyId)) {
-    const code = await rotateJoinCode(tenantCaller.companyId, tenantCaller.uid);
+    const code = await rotateJoinCode(tenantCaller.companyId, tenantCaller.uid, undefined, expectedDigest);
     return { companyId: tenantCaller.companyId, joinCode: code };
   }
 
@@ -451,6 +583,6 @@ export const rotateCompanyJoinCode = httpsV2.onCall(async request => {
     throw new httpsV2.HttpsError('invalid-argument', 'companyId required for platform admin rotation');
   }
 
-  const code = await rotateJoinCode(requested, request.auth.uid);
+  const code = await rotateJoinCode(requested, request.auth.uid, undefined, expectedDigest);
   return { companyId: requested, joinCode: code };
 });
