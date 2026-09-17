@@ -327,6 +327,83 @@ check('ADMIN (owner) writes a protected field — succeeds outside client rules'
 check('after Admin configures it, client replacement is now denied (erase-protection engages)',
   await patchDoc(USER, 'companies/legacy-two', { name: s('Wipe Attempt') }), 403);
 
+// ══ public_companies Phase 1A ═════════════════════════════════════════════
+// Server-owned projection: exact unauth GET allowed; list/query/write denied.
+const publicFields = {
+  name: s('Public Co'),
+  status: s('active'),
+  tier: s('field'),
+  logoUrl: s('https://example.test/logo.png'),
+  thermalLogoUrl: s('https://example.test/thermal.png'),
+  primaryColor: s('#C8A415'),
+  updatedAt: s('2026-09-17T00:00:00Z'),
+};
+check('ADMIN fixture: public_companies/public-co created (owner bypasses rules)',
+  await patchDoc(OWNER, 'public_companies/public-co', publicFields), 200);
+
+check('public_companies exact get UNAUTH allowed',
+  await getDoc(UNAUTH, 'public_companies/public-co'), 200);
+check('public_companies exact get USER allowed',
+  await getDoc(USER, 'public_companies/public-co'), 200);
+check('public_companies exact get CLAIM allowed',
+  await getDoc(CLAIM, 'public_companies/public-co'), 200);
+check('public_companies unknown id → ordinary 404',
+  await getDoc(UNAUTH, 'public_companies/does-not-exist'), 404);
+
+{
+  const r = await fetch(`${BASE}/public_companies/public-co`, { headers: hdrs(UNAUTH) });
+  const body = await r.json();
+  const keys = Object.keys(body.fields || {});
+  const sensitive = [
+    'address', 'phone', 'rateSheet', 'rateSheets', 'payConfig', 'billingConfig',
+    'roleCapabilities', 'wellbuiltContract', 'emergencyContacts', 'assignedOperators',
+    'ticketTemplates', 'invoicingMode', 'jsaMode', 'liveDispatchSync', 'city', 'state', 'zip',
+  ];
+  const leak = keys.filter((k) => sensitive.includes(k));
+  check('public_companies GET body has no sensitive fields', leak.length === 0 ? 200 : 500, 200);
+  const allowed = ['name', 'status', 'tier', 'logoUrl', 'thermalLogoUrl', 'primaryColor', 'updatedAt'];
+  const extra = keys.filter((k) => !allowed.includes(k));
+  check('public_companies GET body is whitelist-only', extra.length === 0 ? 200 : 500, 200);
+}
+
+check('public_companies list UNAUTH denied', await listCol(UNAUTH, 'public_companies'), 403);
+check('public_companies list USER denied', await listCol(USER, 'public_companies'), 403);
+check('public_companies list CLAIM denied', await listCol(CLAIM, 'public_companies'), 403);
+check('public_companies unfiltered query denied', await runQuery(UNAUTH, 'public_companies'), 403);
+check('public_companies filtered query denied', await runQuery(CLAIM, 'public_companies'), 403);
+{
+  const q = async (body) => (await fetch(`${BASE.replace(/\/documents$/, '/documents')}:runQuery`, {
+    method: 'POST', headers: hdrs(UNAUTH), body: JSON.stringify(body),
+  })).status;
+  check('public_companies limit-1 query denied', await q({
+    structuredQuery: { from: [{ collectionId: 'public_companies' }], limit: 1 },
+  }), 403);
+}
+
+check('public_companies create UNAUTH denied',
+  await patchDoc(UNAUTH, 'public_companies/intruder', { name: s('Nope') }), 403);
+check('public_companies create USER denied',
+  await patchDoc(USER, 'public_companies/intruder', { name: s('Nope') }), 403);
+check('public_companies create CLAIM denied',
+  await patchDoc(CLAIM, 'public_companies/intruder', { name: s('Nope') }), 403);
+check('public_companies update UNAUTH denied',
+  await patchDoc(UNAUTH, 'public_companies/public-co', { tier: s('god') }, ['tier']), 403);
+check('public_companies update USER denied',
+  await patchDoc(USER, 'public_companies/public-co', { tier: s('god') }, ['tier']), 403);
+check('public_companies update CLAIM denied',
+  await patchDoc(CLAIM, 'public_companies/public-co', { name: s('Hacked') }, ['name']), 403);
+check('public_companies replace CLAIM denied',
+  await patchDoc(CLAIM, 'public_companies/public-co', { name: s('Replace') }), 403);
+check('public_companies delete UNAUTH denied',
+  await delDoc(UNAUTH, 'public_companies/public-co'), 403);
+check('public_companies delete USER denied',
+  await delDoc(USER, 'public_companies/public-co'), 403);
+check('public_companies delete CLAIM denied',
+  await delDoc(CLAIM, 'public_companies/public-co'), 403);
+
+check('companies root GET still unauthenticated this phase',
+  await getDoc(UNAUTH, 'companies/legacy-co'), 200);
+
 console.log(`\n${pass} passed, ${fail} failed`);
 console.log(`expected-ALLOWED cases: ${allowedTotal}; expected-DENIED cases: ${deniedTotal}`);
 console.log(`protected key set (${PROTECTED_COMPANY_KEYS.length}): ${PROTECTED_COMPANY_KEYS.join(', ')}`);

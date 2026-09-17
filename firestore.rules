@@ -102,6 +102,18 @@ service cloud.firestore {
       allow write: if false;
     }
 
+    // Public company projection (Phase 1A) — server-owned allowlist
+    // (name, status, tier, branding). Exact unauthenticated GET so
+    // AppSwitcher can read tier without the full companies/{id} document.
+    // List and every client write are denied. Admin SDK (the projection
+    // writer) bypasses these rules. companies/{id} stays world-readable
+    // until a later phase; this block does not restrict it.
+    match /public_companies/{companyId} {
+      allow get: if true;
+      allow list: if false;
+      allow write: if false;
+    }
+
     // Platform-admin audit trail (canonical name pinned for Part B) —
     // callable/Admin SDK only.
     match /platform_admin_audit/{docId} {

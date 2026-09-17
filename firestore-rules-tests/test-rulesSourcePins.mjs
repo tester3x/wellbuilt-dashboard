@@ -159,6 +159,18 @@ for (const col of ['platform_admins', 'platform_admin_audit']) {
     /allow\s+write\s*:\s*if\s+false/.test(body) &&
     !/allow\s+(read|create|update|delete)\s*:/.test(body));
 }
+{
+  const block = matchBlock(rules, 'match /public_companies/');
+  check('public_companies block exists', !!block);
+  const body = block ? stripComments(block) : '';
+  check('public_companies allows exact get only',
+    /allow\s+get\s*:\s*if\s+true/.test(body) &&
+    /allow\s+list\s*:\s*if\s+false/.test(body) &&
+    /allow\s+write\s*:\s*if\s+false/.test(body) &&
+    !/allow\s+(read|create|update|delete)\s*:/.test(body));
+  check('companies root remains world-readable this phase',
+    /allow\s+read\s*:\s*if\s+true/.test(companiesRoot));
+}
 
 // 7. Exactly one catch-all, and it is deny-only — no overlapping
 //    catch-all can restore protected writes.

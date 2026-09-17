@@ -4821,6 +4821,11 @@ export {
 // it runs before WB-T has any session. See sso/ssoCallables.ts.
 export { ssoIssueAuthorizationCode, ssoExchangeAuthorizationCode } from './sso/ssoCallables';
 
+// Phase 1A: server-owned public_companies projection. Source-only this
+// packet — not deployed. Selector when approved:
+//   --only functions:projectPublicCompanyOnWrite
+export { projectPublicCompanyOnWrite } from './security/publicCompanyWriter';
+
 // ── vc51.9A6-B: protected platform-admin callables ─────────────────────────
 // Dual-gated (verified wellbuiltAdmin claim + enabled platform_admins
 // record) via functions/src/admin/authority.ts. See admin/callables.ts.
