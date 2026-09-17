@@ -19,6 +19,13 @@ export {
  */
 export { adminBindDriverCompany } from './companyBindingCallable';
 export {
+  requestCompanyOnboarding,
+  adminListCompanyOnboardingRequests,
+  adminApproveCompanyOnboarding,
+  adminCreateCompanyWithJoinCode,
+  getCompanyJoinCode,
+} from './companyOnboarding';
+export {
   adminGetDashboardCatalog,
   adminGetWellPool,
   adminGetWellHistory,
