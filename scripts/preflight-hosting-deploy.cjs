@@ -129,6 +129,14 @@ try {
   fatal('Job Builder autocomplete scroll verification FAILED. Deployment aborted.');
 }
 
+try {
+  console.log('Executing: node tools/test-forgot-password-dom.mjs ...');
+  execSync('node tools/test-forgot-password-dom.mjs', { stdio: 'inherit' });
+  console.log('✓ Forgot-Password Flow (real-DOM, mocked Firebase) Verification: PASSED');
+} catch (err) {
+  fatal('Forgot-password flow verification FAILED. Deployment aborted.');
+}
+
 console.log('\n================================================================');
 console.log('✅ [ALL PREFLIGHT SAFETY GATES PASSED] Hosting Release Certified.');
 console.log('================================================================\n');

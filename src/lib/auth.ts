@@ -2,6 +2,7 @@
 import {
   signInWithEmailAndPassword,
   createUserWithEmailAndPassword,
+  sendPasswordResetEmail,
   signOut as firebaseSignOut,
   onAuthStateChanged,
   User
@@ -293,6 +294,25 @@ export async function registerWithEmail(
 export async function signOut(): Promise<void> {
   const auth = getFirebaseAuth();
   await firebaseSignOut(auth);
+}
+
+/**
+ * Send a password-reset email via Firebase's hosted reset flow. NON-ENUMERATING:
+ * a missing account resolves as success (the caller always shows the generic ack).
+ * Only invalid-email / network / rate-limit re-throw (as a bare {code}) so the UI can
+ * message them distinctly. Never logs the email, reset link, action code, or the raw
+ * Firebase error payload.
+ */
+export async function sendDashboardPasswordReset(email: string): Promise<void> {
+  const auth = getFirebaseAuth();
+  try {
+    await sendPasswordResetEmail(auth, email.trim());
+  } catch (err) {
+    const code = (err as { code?: string })?.code;
+    if (code === 'auth/user-not-found') return; // do not reveal non-existence
+    // Strip the payload — propagate only the non-sensitive error code.
+    throw { code } as { code?: string };
+  }
 }
 
 // Get user with role from database
