@@ -23,14 +23,15 @@ describe('deployment manifest guard — prevent silent pruning of deployed calla
     },
   );
 
-  test('cross-references against wbt-fn-list-20260906.json manifest if present', () => {
-    const manifestPath = path.join(__dirname, '../../../../../_captures/wbt-fn-list-20260906.json');
-    if (fs.existsSync(manifestPath)) {
-      const manifest = JSON.parse(fs.readFileSync(manifestPath, 'utf8'));
-      const deployedIds = new Set((manifest.result || []).map((fn: any) => fn.id));
-      for (const required of REQUIRED_DEPLOYED_ENDPOINTS) {
-        expect(deployedIds.has(required)).toBe(true);
-      }
+  test('cross-references against repo-tracked deployedCallables.json manifest', () => {
+    const manifestPath = path.join(__dirname, '../../../../src/lib/__tests__/deployedCallables.json');
+    if (!fs.existsSync(manifestPath)) {
+      throw new Error(`Repo-tracked deployedCallables.json missing at: ${manifestPath}`);
+    }
+    const manifest = JSON.parse(fs.readFileSync(manifestPath, 'utf8'));
+    const deployedNames = new Set(Array.isArray(manifest.names) ? manifest.names : []);
+    for (const required of REQUIRED_DEPLOYED_ENDPOINTS) {
+      expect(deployedNames.has(required)).toBe(true);
     }
   });
 

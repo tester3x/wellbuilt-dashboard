@@ -28,6 +28,7 @@ export {
   rotateJoinCode,
   executeRotateJoinCode,
   decideRotateCompanyJoinCodeTenantAccess,
+  decideRotateCompanyJoinCodeAccess,
 } from './companyOnboarding';
 export {
   adminGetDashboardCatalog,

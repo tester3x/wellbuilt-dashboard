@@ -245,7 +245,6 @@ export interface JoinCodeStoreOps {
   getPointer(companyId: string): Promise<{ digest?: string } | null>;
   getJoinCode(digest: string): Promise<{ exists: boolean; active?: boolean; companyId?: string; code?: string } | null>;
   runTransaction<T>(fn: (tx: JoinCodeTransactionOps) => Promise<T>): Promise<T>;
-  writeAudit(audit: { action: string; actorUid: string; detail: Record<string, unknown> }): Promise<void>;
   generateCode?: () => string;
 }
 
@@ -255,27 +254,56 @@ export interface JoinCodeTransactionOps {
   deactivateCode(digest: string, actorUid: string): void;
   createCode(digest: string, code: string, companyId: string, actorUid: string): void;
   setPointer(companyId: string, digest: string, actorUid: string): void;
+  writeAudit(audit: { action: string; actorUid: string; detail: Record<string, unknown> }): void;
+}
+
+export function decideRotateCompanyJoinCodeAccess(params: {
+  authUid?: string | null;
+  tenantCaller?: { companyId?: string | null; caps: string[] } | null;
+  platformAdminDecision?: { ok: boolean; reason?: string } | null;
+  requestedCompanyId?: string;
+}): { ok: boolean; companyId?: string; error?: string; status?: string } {
+  if (!params.authUid) {
+    return { ok: false, error: 'Must be signed in', status: 'unauthenticated' };
+  }
+  const requested = String(params.requestedCompanyId || '').trim();
+
+  // Tenant manageDrivers callers may act ONLY on their own company
+  if (params.tenantCaller?.caps?.includes('manageDrivers') && params.tenantCaller.companyId) {
+    if (!requested || requested === params.tenantCaller.companyId) {
+      return { ok: true, companyId: params.tenantCaller.companyId };
+    }
+  }
+
+  // Cross-company replacement requires requireVerifiedPlatformAdmin and verified platform_admins membership.
+  // Never authorize cross-company actions from an unscoped admin or it role string.
+  if (!params.platformAdminDecision?.ok) {
+    const reason = params.platformAdminDecision?.reason || 'permission-denied';
+    return {
+      ok: false,
+      error: `platform_admin_required:${reason}`,
+      status: reason === 'unauthenticated' ? 'unauthenticated' : 'permission-denied',
+    };
+  }
+
+  if (!requested) {
+    return { ok: false, error: 'companyId required for platform admin rotation', status: 'invalid-argument' };
+  }
+
+  return { ok: true, companyId: requested };
 }
 
 export function decideRotateCompanyJoinCodeTenantAccess(
   caller: { uid: string; companyId?: string | null; isPlatformAdmin: boolean; caps?: string[] },
   requestedCompanyId?: string,
+  platformAdminDecision?: { ok: boolean; reason?: string } | null,
 ): { ok: boolean; companyId?: string; error?: string; status?: string } {
-  if (!caller.uid) {
-    return { ok: false, error: 'Must be signed in', status: 'unauthenticated' };
-  }
-  if (caller.caps && !caller.caps.includes('manageDrivers')) {
-    return { ok: false, error: 'Caller lacks manageDrivers capability', status: 'permission-denied' };
-  }
-  const requested = String(requestedCompanyId || '').trim();
-  if (requested && !caller.isPlatformAdmin && caller.companyId && requested !== caller.companyId) {
-    return { ok: false, error: 'Cross-tenant join code rotation denied', status: 'permission-denied' };
-  }
-  const target = caller.isPlatformAdmin ? requested : caller.companyId || '';
-  if (!target) {
-    return { ok: false, error: 'companyId required', status: 'invalid-argument' };
-  }
-  return { ok: true, companyId: target };
+  return decideRotateCompanyJoinCodeAccess({
+    authUid: caller.uid,
+    tenantCaller: { companyId: caller.companyId, caps: caller.caps || [] },
+    platformAdminDecision: platformAdminDecision ?? (caller.isPlatformAdmin ? { ok: true } : { ok: false, reason: 'missing_admin_record' }),
+    requestedCompanyId,
+  });
 }
 
 export async function executeRotateJoinCode(
@@ -307,13 +335,16 @@ export async function executeRotateJoinCode(
         }
         tx.createCode(newDigest, newCode, companyId, actorUid);
         tx.setPointer(companyId, newDigest, actorUid);
+
+        // Security audit written atomically INSIDE the same transaction
+        // Audit records MUST NEVER contain plaintext codes
+        tx.writeAudit({
+          action: 'rotateCompanyJoinCode',
+          actorUid,
+          detail: { companyId },
+        });
       });
 
-      await store.writeAudit({
-        action: 'rotateCompanyJoinCode',
-        actorUid,
-        detail: { companyId },
-      });
       return newCode;
     } catch (error) {
       if ((error as Error).message !== 'join_code_collision') throw error;
@@ -368,13 +399,18 @@ export async function rotateJoinCode(companyId: string, actorUid: string, storeO
           updatedAt: admin.firestore.FieldValue.serverTimestamp(),
           updatedBy: actorUid,
         }, { merge: true });
+
+        // Security audit written atomically INSIDE the same transaction
+        // Audit records MUST NEVER contain plaintext codes
+        const auditRef = db.collection('security_audit').doc();
+        tx.set(auditRef, {
+          action: 'rotateCompanyJoinCode',
+          actorUid,
+          detail: { companyId },
+          ts: admin.firestore.FieldValue.serverTimestamp(),
+        });
       });
 
-      await writeSecurityAudit({
-        action: 'rotateCompanyJoinCode',
-        actorUid,
-        detail: { companyId },
-      });
       return newCode;
     } catch (error) {
       if ((error as Error).message !== 'join_code_collision') throw error;
@@ -384,13 +420,37 @@ export async function rotateJoinCode(companyId: string, actorUid: string, storeO
 }
 
 export const rotateCompanyJoinCode = httpsV2.onCall(async request => {
-  const caller = await requireManageDrivers(request.auth?.uid, request.auth?.token as Record<string, unknown> | undefined);
-  const requested = String((request.data as any)?.companyId || '').trim();
-  if (requested && !caller.isPlatformAdmin && caller.companyId && requested !== caller.companyId) {
-    throw new httpsV2.HttpsError('permission-denied', 'Cross-tenant join code rotation denied');
+  if (!request.auth?.uid) {
+    throw new httpsV2.HttpsError('unauthenticated', 'Must be signed in');
   }
-  const companyId = caller.isPlatformAdmin ? requested : caller.companyId || '';
-  if (!companyId) throw new httpsV2.HttpsError('invalid-argument', 'companyId required');
-  const code = await rotateJoinCode(companyId, caller.uid);
-  return { companyId, joinCode: code };
+
+  const requested = String((request.data as any)?.companyId || '').trim();
+
+  // 1. Attempt tenant caller path via requireManageDrivers
+  let tenantCaller: import('./adminAuth').DashboardCaller | null = null;
+  try {
+    tenantCaller = await requireManageDrivers(
+      request.auth.uid,
+      request.auth.token as Record<string, unknown> | undefined,
+    );
+  } catch {
+    // Caller may lack tenant manageDrivers; could still be a platform admin
+  }
+
+  // 2. Tenant manageDrivers callers may act ONLY on their own company
+  if (tenantCaller && tenantCaller.companyId && (!requested || requested === tenantCaller.companyId)) {
+    const code = await rotateJoinCode(tenantCaller.companyId, tenantCaller.uid);
+    return { companyId: tenantCaller.companyId, joinCode: code };
+  }
+
+  // 3. Cross-company replacement requires requireVerifiedPlatformAdmin and verified platform_admins membership.
+  // Never authorize cross-company actions from an unscoped admin or it role string.
+  await requireVerifiedPlatformAdmin(request);
+
+  if (!requested) {
+    throw new httpsV2.HttpsError('invalid-argument', 'companyId required for platform admin rotation');
+  }
+
+  const code = await rotateJoinCode(requested, request.auth.uid);
+  return { companyId: requested, joinCode: code };
 });

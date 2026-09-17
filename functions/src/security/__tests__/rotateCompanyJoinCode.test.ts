@@ -57,11 +57,13 @@ class InMemoryJoinCodeStore implements JoinCodeStoreOps {
     // Take snapshot of current state
     const snapshotCodes = new Map(this.codes);
     const snapshotPointers = new Map(this.pointers);
+    const snapshotAudits = [...this.auditLogs];
 
     // Staged mutations
     const stagedDeactivations = new Map<string, { actorUid: string }>();
     const stagedCreations = new Map<string, JoinCodeDoc>();
     const stagedPointers = new Map<string, PointerDoc>();
+    const stagedAudits: Array<{ action: string; actorUid: string; detail: Record<string, unknown> }> = [];
 
     const tx: JoinCodeTransactionOps = {
       getPointer: async (companyId: string) => {
@@ -91,6 +93,9 @@ class InMemoryJoinCodeStore implements JoinCodeStoreOps {
           updatedBy: actorUid,
           updatedAt: Date.now(),
         });
+      },
+      writeAudit: (audit) => {
+        stagedAudits.push(audit);
       },
     };
 
@@ -122,12 +127,16 @@ class InMemoryJoinCodeStore implements JoinCodeStoreOps {
       for (const [companyId, ptr] of stagedPointers.entries()) {
         this.pointers.set(companyId, ptr);
       }
+      for (const a of stagedAudits) {
+        this.auditLogs.push(a);
+      }
 
       return result;
     } catch (err) {
       // Rollback: restore snapshots, discard staged
       this.codes = snapshotCodes;
       this.pointers = snapshotPointers;
+      this.auditLogs = snapshotAudits;
       throw err;
     }
   }
@@ -159,7 +168,7 @@ describe('rotateCompanyJoinCode — Tenant Boundary & Authorization', () => {
     const decision = decideRotateCompanyJoinCodeTenantAccess(caller, 'company-b');
     expect(decision.ok).toBe(false);
     expect(decision.status).toBe('permission-denied');
-    expect(decision.error).toBe('Cross-tenant join code rotation denied');
+    expect(decision.error).toContain('platform_admin_required');
   });
 
   it('allows tenant admin to rotate their own company when companyId is specified', () => {
@@ -178,17 +187,29 @@ describe('rotateCompanyJoinCode — Tenant Boundary & Authorization', () => {
 
   it('allows verified platform admin to rotate any target company', () => {
     const caller = { uid: 'pa-1', companyId: null, isPlatformAdmin: true, caps: ['manageDrivers'] };
-    const decision = decideRotateCompanyJoinCodeTenantAccess(caller, 'liquid-gold');
+    const decision = decideRotateCompanyJoinCodeTenantAccess(caller, 'liquid-gold', { ok: true });
     expect(decision.ok).toBe(true);
     expect(decision.companyId).toBe('liquid-gold');
   });
 
   it('denies platform admin when no target companyId is provided', () => {
     const caller = { uid: 'pa-1', companyId: null, isPlatformAdmin: true, caps: ['manageDrivers'] };
-    const decision = decideRotateCompanyJoinCodeTenantAccess(caller, '');
+    const decision = decideRotateCompanyJoinCodeTenantAccess(caller, '', { ok: true });
     expect(decision.ok).toBe(false);
     expect(decision.status).toBe('invalid-argument');
-    expect(decision.error).toBe('companyId required');
+    expect(decision.error).toBe('companyId required for platform admin rotation');
+  });
+
+  it('never authorizes cross-company actions from an unscoped admin or it role string alone', () => {
+    // Caller has role 'admin' in RTDB, but lacks verified platform_admins record
+    const caller = { uid: 'fake-admin-1', companyId: null, isPlatformAdmin: false, caps: ['manageDrivers'] };
+    const decision = decideRotateCompanyJoinCodeTenantAccess(caller, 'liquid-gold', {
+      ok: false,
+      reason: 'missing_admin_record',
+    });
+    expect(decision.ok).toBe(false);
+    expect(decision.status).toBe('permission-denied');
+    expect(decision.error).toBe('platform_admin_required:missing_admin_record');
   });
 
   it('denies unauthenticated caller', () => {
@@ -204,15 +225,17 @@ describe('rotateCompanyJoinCode — Tenant Boundary & Authorization', () => {
     const decision = decideRotateCompanyJoinCodeTenantAccess(caller, 'company-a');
     expect(decision.ok).toBe(false);
     expect(decision.status).toBe('permission-denied');
-    expect(decision.error).toBe('Caller lacks manageDrivers capability');
   });
 
-  it('denies caller without companyId who is not a platform admin', () => {
+  it('denies caller without companyId who is not a verified platform admin', () => {
     const caller = { uid: 'unassigned-user', companyId: null, isPlatformAdmin: false, caps: ['manageDrivers'] };
-    const decision = decideRotateCompanyJoinCodeTenantAccess(caller, 'liquid-gold');
+    const decision = decideRotateCompanyJoinCodeTenantAccess(caller, 'liquid-gold', {
+      ok: false,
+      reason: 'missing_admin_record',
+    });
     expect(decision.ok).toBe(false);
-    expect(decision.status).toBe('invalid-argument');
-    expect(decision.error).toBe('companyId required');
+    expect(decision.status).toBe('permission-denied');
+    expect(decision.error).toContain('platform_admin_required');
   });
 });
 
