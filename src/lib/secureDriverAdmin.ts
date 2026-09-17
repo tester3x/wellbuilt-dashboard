@@ -5,6 +5,19 @@
 import { httpsCallable } from 'firebase/functions';
 import { getFirebaseFunctions } from './firebase';
 
+/**
+ * Company employee-onboarding join code via the deployed governed
+ * getCompanyJoinCode callable (retrieve-or-allocate; never rotates). A company
+ * admin passes NO companyId so the server resolves their OWN company; only a
+ * platform admin targets a company by id. The 8-char code is returned for
+ * display only — never persisted or logged by this wrapper.
+ */
+export async function adminGetCompanyJoinCode(params?: { companyId?: string }) {
+  const fn = httpsCallable(getFirebaseFunctions(), 'getCompanyJoinCode');
+  const res = await fn(params?.companyId ? { companyId: params.companyId } : {});
+  return res.data as { companyId: string; joinCode: string };
+}
+
 export async function adminListPending() {
   const fn = httpsCallable(getFirebaseFunctions(), 'adminListPendingRegistrations');
   const res = await fn({});

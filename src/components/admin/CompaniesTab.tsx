@@ -8,6 +8,7 @@ import { collection, getDocs, getDoc, doc, setDoc, deleteDoc, updateDoc } from '
 import { createAdminContractService, AdminServiceError } from '@/lib/adminContractService';
 import { companyMutationRoute, errorGuidance } from '@/lib/adminUiLogic';
 import { CompanyContractPanel } from './CompanyContractPanel';
+import { CompanyJoinCodeCard } from './CompanyJoinCodeCard';
 import { ref as dbRef, get as dbGet, update as dbUpdate } from 'firebase/database';
 import { loadOperators, searchOperators, NdicOperator } from '@/lib/firestoreWells';
 import {
@@ -852,6 +853,8 @@ export function CompaniesTab({ scopeCompanyId, isWbAdmin = false }: CompaniesTab
                 {/* Expanded details */}
                 {expandedCompany === company.id && (
                   <div className="border-t border-gray-600 p-3 space-y-3">
+                    {/* ── Employee onboarding join code (platform-admin support) ── */}
+                    <CompanyJoinCodeCard companyId={company.id} />
                     {/* ── Company Details ── */}
                     <div className="border-b border-gray-600 pb-3">
                       <div className="flex items-center justify-between mb-2">
