@@ -941,10 +941,61 @@ export const adminSetDriverPasscode = httpsV2.onCall(
       keepLegacyActive?: boolean;
     };
 
+    let driverId = (data.driverId || '').trim();
+    const isReset = Boolean(driverId || (!data.approvedKey && !data.legacyHash));
+
+    let resetTargetDisplayName = '';
+    if (isReset) {
+      const {
+        CANONICAL_DRIVER_ID,
+        evaluateAdminSetDriverPasscodeTarget,
+        loadTargetState,
+      } = await import('./operational/adminSetDriverPasscodeTarget');
+
+      if (!driverId) {
+        throw new httpsV2.HttpsError(
+          'invalid-argument',
+          'Canonical driver UUID required for passcode reset; name-only resets are not allowed',
+        );
+      }
+
+      if (!CANONICAL_DRIVER_ID.test(driverId)) {
+        throw new httpsV2.HttpsError(
+          'invalid-argument',
+          'driverId must be a valid canonical UUID',
+        );
+      }
+
+      // Load authoritative driver credential/profile before mutation
+      const targetState = await loadTargetState(fs(), rtdb(), driverId);
+      const evalResult = evaluateAdminSetDriverPasscodeTarget({
+        caller,
+        requestedDriverId: driverId,
+        requestDisplayName: data.displayName,
+        requestCompanyId: data.companyId,
+        credentials: targetState.credentials,
+        profile: targetState.profile,
+        userRecordExists: targetState.userRecordExists,
+        approvedRowExists: targetState.approvedRowExists,
+        isAuthUserEmail: targetState.isAuthUserEmail,
+      });
+
+      if (!evalResult.ok) {
+        throw new httpsV2.HttpsError(evalResult.code, evalResult.reason);
+      }
+
+      resetTargetDisplayName = evalResult.displayName;
+    }
+
+    const effectiveDisplayName =
+      typeof data.displayName === 'string' && data.displayName.trim()
+        ? data.displayName.trim()
+        : resetTargetDisplayName;
+
     let fields: ReturnType<typeof validateRegistrationFields>;
     try {
       fields = validateRegistrationFields({
-        displayName: data.displayName,
+        displayName: effectiveDisplayName,
         passcode: data.passcode,
         legalName: data.legalName,
         companyName: data.companyName,
@@ -978,7 +1029,6 @@ export const adminSetDriverPasscode = httpsV2.onCall(
     const opId = randomUUID();
     const nameNorm = normalizeDisplayName(fields.displayName);
     const passcodeRecord = await hashPasscodeScrypt(fields.passcode);
-    let driverId = (data.driverId || '').trim();
 
     /**
      * Durable UUID selection for THIS provisioning attempt.

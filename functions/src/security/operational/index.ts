@@ -47,3 +47,12 @@ export {
   CanonicalAddSplitLegRequest,
 } from './splitOps';
 export { getPublicClientMeta } from './publicMeta';
+export {
+  evaluateAdminSetDriverPasscodeTarget,
+  loadTargetState,
+  CANONICAL_DRIVER_ID as CANONICAL_DRIVER_UUID,
+  CallerContext,
+  TargetEvaluationContext,
+  TargetEvaluationResult,
+} from './adminSetDriverPasscodeTarget';
+
