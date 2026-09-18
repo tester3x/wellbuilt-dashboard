@@ -129,6 +129,7 @@ export function productionConversionStore(
           displayName: input.displayName,
           passcode: input.passcodeRecord,
           active: true,
+          companyId: input.companyId || null,
           mustResetPasscode: input.temporary,
           updatedAt: FieldValue.serverTimestamp(),
           createdAt: FieldValue.serverTimestamp(),

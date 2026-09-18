@@ -66,6 +66,7 @@ describeEmulator('Multi-Emulator Integration: adminSetDriverPasscode & driverCha
   async function seedTestDriver(params: {
     driverId: string;
     companyId: string;
+    profileCompanyId?: string;
     displayName: string;
     passcode: string;
     active?: boolean;
@@ -102,7 +103,7 @@ describeEmulator('Multi-Emulator Integration: adminSetDriverPasscode & driverCha
     await rtdb.ref(`drivers/profiles/${params.driverId}`).set({
       displayName: params.displayName,
       legalName: `${params.displayName} Legal`,
-      companyId: params.companyId,
+      companyId: params.profileCompanyId || params.companyId,
       active,
       roles: ['driver'],
       schemaVersion: 1,
@@ -164,6 +165,8 @@ describeEmulator('Multi-Emulator Integration: adminSetDriverPasscode & driverCha
       companyId: COMPANY_A,
       roles: ['admin'],
     });
+
+    await fs.collection('companies').doc(COMPANY_A).delete().catch(() => {});
   });
 
   const callerManagerA = {
@@ -624,5 +627,380 @@ describeEmulator('Multi-Emulator Integration: adminSetDriverPasscode & driverCha
     expect(TEMPORARY_PASSCODE).not.toBe('');
     expect(PERMANENT_PASSCODE).not.toBe('');
     expect(SELF_SERVICE_PASSCODE).not.toBe('');
+  });
+
+  // ── PROOF 15: Cross-company approvedKey conversion denied before hashing ──
+  it('15. cross-company approvedKey conversion denied with zero mutation', async () => {
+    const foreignKey = 'approved_row_bravo_foreign_001';
+    await rtdb.ref(`drivers/approved/${foreignKey}`).set({
+      displayName: 'Bravo Row Driver',
+      companyId: COMPANY_B,
+      active: true,
+      roles: ['driver'],
+    });
+
+    let error: any = null;
+    try {
+      await (adminSetDriverPasscode as any).run({
+        data: {
+          approvedKey: foreignKey,
+          displayName: 'Bravo Row Driver',
+          passcode: TEMPORARY_PASSCODE,
+        },
+        auth: callerManagerA,
+      });
+    } catch (err) {
+      error = err;
+    }
+
+    expect(error?.code).toBe('permission-denied');
+    expect(error?.message).toMatch(/cross-company/i);
+
+    // Verify row remains unlinked
+    const approvedSnap = await rtdb.ref(`drivers/approved/${foreignKey}`).once('value');
+    expect(approvedSnap.val()?.migratedToDriverId).toBeUndefined();
+  });
+
+  // ── PROOF 16: Cross-company legacyHash conversion denied before hashing ──
+  it('16. cross-company legacyHash conversion denied with zero mutation', async () => {
+    const foreignHash = 'legacy_bravo_hash_001';
+    await rtdb.ref(`drivers/approved/${foreignHash}`).set({
+      displayName: 'Bravo Legacy Driver',
+      companyId: COMPANY_B,
+      active: true,
+      roles: ['driver'],
+    });
+
+    let error: any = null;
+    try {
+      await (adminSetDriverPasscode as any).run({
+        data: {
+          legacyHash: foreignHash,
+          displayName: 'Bravo Legacy Driver',
+          passcode: TEMPORARY_PASSCODE,
+        },
+        auth: callerManagerA,
+      });
+    } catch (err) {
+      error = err;
+    }
+
+    expect(error?.code).toBe('permission-denied');
+    expect(error?.message).toMatch(/cross-company/i);
+  });
+
+  // ── PROOF 17: Inactive manager denied ──────────────────────────────────────
+  it('17. inactive manager denied', async () => {
+    const inactiveMgrUid = 'mgr-inactive';
+    await rtdb.ref(`users/${inactiveMgrUid}`).set({
+      active: false,
+      companyId: COMPANY_A,
+    });
+
+    let error: any = null;
+    try {
+      await (adminSetDriverPasscode as any).run({
+        data: {
+          driverId: DRIVER_A_ID,
+          passcode: TEMPORARY_PASSCODE,
+        },
+        auth: {
+          uid: inactiveMgrUid,
+          token: { uid: inactiveMgrUid, companyId: COMPANY_A, roles: ['manager'] },
+        },
+      });
+    } catch (err) {
+      error = err;
+    }
+
+    expect(error?.code).toBe('permission-denied');
+    expect(error?.message).toMatch(/Caller account is inactive/i);
+  });
+
+  // ── PROOF 18: Stale manageDrivers token plus revoked current capability denied ─
+  it('18. stale manageDrivers token plus revoked current capability denied', async () => {
+    const revokedMgrUid = 'mgr-revoked';
+    await rtdb.ref(`users/${revokedMgrUid}`).set({
+      active: true,
+      companyId: COMPANY_A,
+    });
+    // Set company role capability override that strips manageDrivers from manager
+    await fs.collection('companies').doc(COMPANY_A).set({
+      roleCapabilities: {
+        manager: [], // empty capabilities!
+      },
+    });
+
+    let error: any = null;
+    try {
+      await (adminSetDriverPasscode as any).run({
+        data: {
+          driverId: DRIVER_A_ID,
+          passcode: TEMPORARY_PASSCODE,
+        },
+        auth: {
+          uid: revokedMgrUid,
+          token: { uid: revokedMgrUid, companyId: COMPANY_A, roles: ['manager'], manageDrivers: true },
+        },
+      });
+    } catch (err) {
+      error = err;
+    } finally {
+      await fs.collection('companies').doc(COMPANY_A).delete().catch(() => {});
+    }
+
+    expect(error?.code).toBe('permission-denied');
+    expect(error?.message).toMatch(/(?:manageDrivers required|Caller lacks manageDrivers capability)/i);
+  });
+
+  // ── PROOF 19: Correct driverAuthUid lookup ────────────────────────────────
+  it('19. correct driverAuthUid lookup', async () => {
+    await seedTestDriver({
+      driverId: DRIVER_A_ID,
+      companyId: COMPANY_A,
+      displayName: 'Alpha Driver One',
+      passcode: INITIAL_PASSCODE,
+    });
+    const authSpy = jest.spyOn(auth, 'getUser');
+    try {
+      await (adminSetDriverPasscode as any).run({
+        data: {
+          driverId: DRIVER_A_ID,
+          passcode: TEMPORARY_PASSCODE,
+        },
+        auth: callerManagerA,
+      });
+    } catch {
+      /* ignore */
+    } finally {
+      const calls = authSpy.mock.calls.map((c) => c[0]);
+      authSpy.mockRestore();
+      expect(calls).toContain(driverAuthUid(DRIVER_A_ID));
+    }
+  });
+
+  // ── PROOF 20: Auth lookup service failure fails closed with zero mutation ──
+  it('20. auth lookup service failure fails closed with zero mutation', async () => {
+    await seedTestDriver({
+      driverId: DRIVER_A_ID,
+      companyId: COMPANY_A,
+      displayName: 'Alpha Driver One',
+      passcode: INITIAL_PASSCODE,
+    });
+    const authSpy = jest.spyOn(auth, 'getUser').mockRejectedValueOnce(new Error('Internal Auth network error'));
+    let error: any = null;
+    try {
+      await (adminSetDriverPasscode as any).run({
+        data: {
+          driverId: DRIVER_A_ID,
+          passcode: TEMPORARY_PASSCODE,
+        },
+        auth: callerManagerA,
+      });
+    } catch (err) {
+      error = err;
+    } finally {
+      authSpy.mockRestore();
+    }
+
+    expect(error?.code).toBe('unavailable');
+    expect(error?.message).toMatch(/Auth lookup service failure/i);
+  });
+
+  // ── PROOF 21: Empty hash rejected ─────────────────────────────────────────
+  it('21. empty hash rejected', async () => {
+    const badHashId = '77777777-aaaa-4777-8777-777777777777';
+    await seedTestDriver({
+      driverId: badHashId,
+      companyId: COMPANY_A,
+      displayName: 'Bad Hash Driver',
+      passcode: INITIAL_PASSCODE,
+    });
+    // Corrupt passcode hash to empty
+    await fs.collection('driver_credentials').doc(badHashId).update({
+      passcode: { algo: 'scrypt', hashB64: '', saltB64: 'abc' },
+    });
+
+    let error: any = null;
+    try {
+      await (adminSetDriverPasscode as any).run({
+        data: { driverId: badHashId, passcode: TEMPORARY_PASSCODE },
+        auth: callerManagerA,
+      });
+    } catch (err) {
+      error = err;
+    }
+
+    expect(error?.code).toBe('failed-precondition');
+    expect(error?.message).toMatch(/not passcode-authenticated/i);
+  });
+
+  // ── PROOF 22: Missing active state rejected ───────────────────────────────
+  it('22. missing active state rejected', async () => {
+    const missingActiveId = '88888888-aaaa-4888-8888-888888888888';
+    await seedTestDriver({
+      driverId: missingActiveId,
+      companyId: COMPANY_A,
+      displayName: 'Missing Active Driver',
+      passcode: INITIAL_PASSCODE,
+    });
+    // Remove active field from Firestore credential
+    await fs.collection('driver_credentials').doc(missingActiveId).update({
+      active: admin.firestore.FieldValue.delete(),
+    });
+
+    let error: any = null;
+    try {
+      await (adminSetDriverPasscode as any).run({
+        data: { driverId: missingActiveId, passcode: TEMPORARY_PASSCODE },
+        auth: callerManagerA,
+      });
+    } catch (err) {
+      error = err;
+    }
+
+    expect(error?.code).toBe('failed-precondition');
+    expect(error?.message).toMatch(/inactive/i);
+  });
+
+  // ── PROOF 23: Conflicting credential/profile company IDs rejected ─────────
+  it('23. conflicting credential/profile company IDs rejected', async () => {
+    const conflictId = '99999999-aaaa-4999-8999-aaaaaaaaaaaa';
+    await seedTestDriver({
+      driverId: conflictId,
+      companyId: COMPANY_A,
+      profileCompanyId: COMPANY_B,
+      displayName: 'Conflict Driver',
+      passcode: INITIAL_PASSCODE,
+    });
+
+    let error: any = null;
+    try {
+      await (adminSetDriverPasscode as any).run({
+        data: { driverId: conflictId, passcode: TEMPORARY_PASSCODE },
+        auth: callerManagerA,
+      });
+    } catch (err) {
+      error = err;
+    }
+
+    expect(error?.code).toBe('failed-precondition');
+    expect(error?.message).toMatch(/Conflicting target company identity/i);
+  });
+
+  // ── PROOF 24: Deactivation between validation and mutation aborts safely ──
+  it('24. deactivation between validation and mutation aborts safely', async () => {
+    const deactId = 'aaaa1111-2222-4333-8444-555566667777';
+    await seedTestDriver({
+      driverId: deactId,
+      companyId: COMPANY_A,
+      displayName: 'Concurrent Deact Driver',
+      passcode: INITIAL_PASSCODE,
+    });
+
+    const cryptoModule = await import('../passcode');
+    const origHash = cryptoModule.hashPasscodeScrypt;
+    const hashSpy = jest.spyOn(cryptoModule, 'hashPasscodeScrypt').mockImplementationOnce(async (passcode) => {
+      await rtdb.ref(`drivers/profiles/${deactId}`).update({ active: false });
+      return origHash(passcode);
+    });
+
+    let error: any = null;
+    try {
+      await (adminSetDriverPasscode as any).run({
+        data: { driverId: deactId, passcode: TEMPORARY_PASSCODE },
+        auth: callerManagerA,
+      });
+    } catch (err) {
+      error = err;
+    } finally {
+      hashSpy.mockRestore();
+    }
+
+    expect(error?.code).toBe('failed-precondition');
+    expect(error?.message).toMatch(/inactive or was deactivated/i);
+  });
+
+  // ── PROOF 25: Company movement between validation and mutation aborts safely ──
+  it('25. company movement between validation and mutation aborts safely', async () => {
+    const moveId = 'bbbb1111-2222-4333-8444-555566667777';
+    await seedTestDriver({
+      driverId: moveId,
+      companyId: COMPANY_A,
+      displayName: 'Concurrent Move Driver',
+      passcode: INITIAL_PASSCODE,
+    });
+
+    const cryptoModule = await import('../passcode');
+    const origHash = cryptoModule.hashPasscodeScrypt;
+    const hashSpy = jest.spyOn(cryptoModule, 'hashPasscodeScrypt').mockImplementationOnce(async (passcode) => {
+      await rtdb.ref(`drivers/profiles/${moveId}`).update({ companyId: COMPANY_B });
+      return origHash(passcode);
+    });
+
+    let error: any = null;
+    try {
+      await (adminSetDriverPasscode as any).run({
+        data: { driverId: moveId, passcode: TEMPORARY_PASSCODE },
+        auth: callerManagerA,
+      });
+    } catch (err) {
+      error = err;
+    } finally {
+      hashSpy.mockRestore();
+    }
+
+    expect(error?.code).toBe('permission-denied');
+    expect(error?.message).toMatch(/driver company was modified/i);
+  });
+
+  // ── PROOF 26: Profile-write failure followed by retry recovers and restores prior credential ──
+  it('26. profile-write failure followed by retry recovers and restores prior credential', async () => {
+    const retryId = 'cccc1111-2222-4333-8444-555566667777';
+    await seedTestDriver({
+      driverId: retryId,
+      companyId: COMPANY_A,
+      displayName: 'Retry Driver',
+      passcode: INITIAL_PASSCODE,
+    });
+
+    const priorCred = (await fs.collection('driver_credentials').doc(retryId).get()).data();
+
+    const rtdbProto = Object.getPrototypeOf(rtdb.ref());
+    const rtdbSpy = jest
+      .spyOn(rtdbProto, 'update')
+      .mockRejectedValueOnce(new Error('Simulated RTDB network disconnect'));
+
+    let error: any = null;
+    try {
+      await (adminSetDriverPasscode as any).run({
+        data: { driverId: retryId, passcode: TEMPORARY_PASSCODE },
+        auth: callerManagerA,
+      });
+    } catch (err) {
+      error = err;
+    } finally {
+      rtdbSpy.mockRestore();
+    }
+
+    expect(error?.code).toBe('internal');
+    expect(error?.message).toMatch(/prior credential state restored/i);
+
+    // Verify compensation restored exact prior credential state
+    const credAfterFail = (await fs.collection('driver_credentials').doc(retryId).get()).data();
+    expect(credAfterFail?.passcode).toEqual(priorCred?.passcode);
+    expect(credAfterFail?.mustResetPasscode).toBe(false);
+
+    // Retry should now cleanly succeed!
+    const retryRes = await (adminSetDriverPasscode as any).run({
+      data: { driverId: retryId, passcode: TEMPORARY_PASSCODE, temporary: true },
+      auth: callerManagerA,
+    });
+
+    expect(retryRes.driverId).toBe(retryId);
+    expect(retryRes.mustChangePasscode).toBe(true);
+
+    const credAfterSuccess = (await fs.collection('driver_credentials').doc(retryId).get()).data();
+    expect(credAfterSuccess?.mustResetPasscode).toBe(true);
   });
 });

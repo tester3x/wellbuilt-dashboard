@@ -30,7 +30,6 @@ import {
 } from './registrationLifecycle';
 import {
   claimRefusalMessage,
-  decideCompensation,
   decideNameIndexClaim,
   readIncumbentCredential,
   readIndexOwner,
@@ -912,10 +911,36 @@ export const adminRejectDriverRegistration = httpsV2.onCall(
 export const adminSetDriverPasscode = httpsV2.onCall(
   { timeoutSeconds: 30, memory: '256MiB' },
   async (request) => {
+    /**
+     * Cross-store consistency strategy (Firestore / Realtime Database / Auth):
+     * 1. Authorization: The caller's authoritative manageDrivers capability and
+     *    companyId are resolved against server-side user/company records.
+     * 2. Pre-Mutation Target Guard: Evaluated before expensive hashing. Verifies
+     *    caller authority, target eligibility, active state, password provider
+     *    exclusion, and strict tenant matching across all routes (reset, approvedKey, legacyHash).
+     * 3. Hashing: Scrypt hashing occurs only after target eligibility is established.
+     * 4. Transactional Revalidation: Inside the Firestore transaction boundary,
+     *    authoritative credential state is re-read. Deactivation or cross-company
+     *    movement occurring between validation and mutation immediately aborts.
+     * 5. Two-Phase Commitment with Safe Compensation: Firestore credentials and
+     *    name index are committed first. Deferred RTDB profile writes follow. On
+     *    downstream failure, compensation inspects opId ownership: resets restore
+     *    the exact prior credential snapshot, creations delete the new credential,
+     *    and newer superseded writes are strictly preserved.
+     */
     const caller = await requireManageDrivers(
       request.auth?.uid,
       request.auth?.token as Record<string, unknown> | undefined,
     );
+
+    const callerCo = String(caller.companyId || '').trim().toLowerCase();
+    if (!callerCo) {
+      throw new httpsV2.HttpsError(
+        'permission-denied',
+        'Cross-company driver access denied: caller lacks matching company authority',
+      );
+    }
+
     const data = (request.data || {}) as {
       driverId?: string;
       displayName?: string;
@@ -942,23 +967,19 @@ export const adminSetDriverPasscode = httpsV2.onCall(
     };
 
     let driverId = (data.driverId || '').trim();
-    const isReset = Boolean(driverId || (!data.approvedKey && !data.legacyHash));
+    const approvedKey = (data.approvedKey || '').trim();
+    const legacyHash = (data.legacyHash || '').trim();
+    const isReset = Boolean(driverId);
 
-    let resetTargetDisplayName = '';
+    const {
+      CANONICAL_DRIVER_ID,
+      evaluateAdminSetDriverPasscodeTarget,
+      loadTargetState,
+    } = await import('./operational/adminSetDriverPasscodeTarget');
+
+    let effectiveDisplayName = '';
+
     if (isReset) {
-      const {
-        CANONICAL_DRIVER_ID,
-        evaluateAdminSetDriverPasscodeTarget,
-        loadTargetState,
-      } = await import('./operational/adminSetDriverPasscodeTarget');
-
-      if (!driverId) {
-        throw new httpsV2.HttpsError(
-          'invalid-argument',
-          'Canonical driver UUID required for passcode reset; name-only resets are not allowed',
-        );
-      }
-
       if (!CANONICAL_DRIVER_ID.test(driverId)) {
         throw new httpsV2.HttpsError(
           'invalid-argument',
@@ -969,6 +990,7 @@ export const adminSetDriverPasscode = httpsV2.onCall(
       // Load authoritative driver credential/profile before mutation
       const targetState = await loadTargetState(fs(), rtdb(), driverId);
       const evalResult = evaluateAdminSetDriverPasscodeTarget({
+        route: 'reset',
         caller,
         requestedDriverId: driverId,
         requestDisplayName: data.displayName,
@@ -978,19 +1000,73 @@ export const adminSetDriverPasscode = httpsV2.onCall(
         userRecordExists: targetState.userRecordExists,
         approvedRowExists: targetState.approvedRowExists,
         isAuthUserEmail: targetState.isAuthUserEmail,
+        authUser: targetState.authUser,
+        authLookupStatus: targetState.authLookupStatus,
       });
 
       if (!evalResult.ok) {
         throw new httpsV2.HttpsError(evalResult.code, evalResult.reason);
       }
 
-      resetTargetDisplayName = evalResult.displayName;
+      effectiveDisplayName =
+        typeof data.displayName === 'string' && data.displayName.trim()
+          ? data.displayName.trim()
+          : evalResult.displayName;
+    } else if (approvedKey) {
+      const approvedSnap = await rtdb()
+        .ref(`drivers/approved/${approvedKey}`)
+        .once('value');
+      if (!approvedSnap.exists()) {
+        throw new httpsV2.HttpsError(
+          'not-found',
+          'Approved driver row not found',
+        );
+      }
+      const approvedRow = approvedSnap.val() as Record<string, unknown>;
+      const evalResult = evaluateAdminSetDriverPasscodeTarget({
+        route: 'approvedKey',
+        caller,
+        approvedKey,
+        approvedRow,
+        requestDisplayName: data.displayName,
+        requestCompanyId: data.companyId,
+      });
+      if (!evalResult.ok) {
+        throw new httpsV2.HttpsError(evalResult.code, evalResult.reason);
+      }
+      effectiveDisplayName =
+        typeof data.displayName === 'string' && data.displayName.trim()
+          ? data.displayName.trim()
+          : evalResult.displayName;
+    } else if (legacyHash) {
+      const legacySnap = await rtdb()
+        .ref(`drivers/approved/${legacyHash}`)
+        .once('value');
+      if (!legacySnap.exists()) {
+        throw new httpsV2.HttpsError('not-found', 'Legacy driver not found');
+      }
+      const legacyRow = legacySnap.val() as Record<string, unknown>;
+      const evalResult = evaluateAdminSetDriverPasscodeTarget({
+        route: 'legacyHash',
+        caller,
+        legacyHash,
+        legacyRow,
+        requestDisplayName: data.displayName,
+        requestCompanyId: data.companyId,
+      });
+      if (!evalResult.ok) {
+        throw new httpsV2.HttpsError(evalResult.code, evalResult.reason);
+      }
+      effectiveDisplayName =
+        typeof data.displayName === 'string' && data.displayName.trim()
+          ? data.displayName.trim()
+          : evalResult.displayName;
+    } else {
+      throw new httpsV2.HttpsError(
+        'invalid-argument',
+        'Canonical driver UUID required for passcode reset; name-only resets are not allowed',
+      );
     }
-
-    const effectiveDisplayName =
-      typeof data.displayName === 'string' && data.displayName.trim()
-        ? data.displayName.trim()
-        : resetTargetDisplayName;
 
     let fields: ReturnType<typeof validateRegistrationFields>;
     try {
@@ -1013,103 +1089,25 @@ export const adminSetDriverPasscode = httpsV2.onCall(
     }
 
     const temporary = data.temporary !== false; // default true
-    /**
-     * Cleanup-ownership marker for THIS invocation.
-     *
-     * Random, non-secret, and never consulted when authenticating — its
-     * only job is to let compensation prove the credential it is about to
-     * delete is still the one this invocation wrote. Any later legitimate
-     * write (admin reset, approval, or the driver changing their own
-     * passcode) replaces or clears it, so a stale compensation no longer
-     * matches and leaves the newer credential alone.
-     *
-     * Generated once here, outside the transaction, so Firestore retries
-     * reuse it exactly as the candidate driverId does.
-     */
     const opId = randomUUID();
     const nameNorm = normalizeDisplayName(fields.displayName);
     const passcodeRecord = await hashPasscodeScrypt(fields.passcode);
 
-    /**
-     * Durable UUID selection for THIS provisioning attempt.
-     *
-     * Both branches below used to call randomUUID() directly, so a retry
-     * that omitted driverId minted a SECOND canonical identity after a
-     * partial success. The journal keys the attempt by its stable target —
-     * the legacy row being migrated, or the normalized name being created —
-     * and returns the same UUID on every retry. A name whose index is owned
-     * by an ACTIVE unrelated credential is refused, never adopted.
-     */
-    const { firestoreProvisioningJournal } = await import('./operational/provisioningJournalStore');
-    const { resolveProvisioningUuid } = await import('./operational/provisioningJournal');
-    const provJournal = firestoreProvisioningJournal(fs());
-    const idxNow = await fs().collection('driver_name_index').doc(nameNorm).get();
-    const idxOwner = (idxNow.exists ? idxNow.data()?.driverId : null) as string | null;
-    let idxOwnerActive = false;
-    if (idxOwner) {
-      const c = await fs().collection('driver_credentials').doc(idxOwner).get();
-      idxOwnerActive = c.exists && c.data()?.active !== false;
-    }
-    let provAttemptId: string | null = null;
-    let setPasscodeAuthorityLabel = 'not_attempted';
-    const claimProvisioningUuid = async (key: Parameters<typeof resolveProvisioningUuid>[1]) => {
-      const r = await resolveProvisioningUuid(provJournal, key, {
-        requestedDriverId: driverId || null,
-        nameNorm,
-        companyId: (typeof data.companyId === 'string' && data.companyId.trim())
-          ? data.companyId.trim().toLowerCase() : null,
-        indexOwnerDriverId: idxOwner,
-        indexOwnerActive: idxOwnerActive,
-        isReset: !!driverId,
-      });
-      if (r.decision.action === 'refuse') {
-        throw new httpsV2.HttpsError(
-          'failed-precondition',
-          `provisioning_refused:${r.decision.reason}`,
-        );
-      }
-      provAttemptId = r.attemptId;
-      return r.driverId!;
-    };
-
-    /**
-     * RTDB writes deferred until the Firestore ownership claim commits.
-     *
-     * Firestore transactions cannot span the Realtime Database, so true
-     * single-transaction atomicity across both is impossible. Writing the
-     * profile FIRST (as this did) meant a refused name claim left an
-     * orphaned profile — and, on the migration path, mutated the legacy
-     * record — for an identity that was never created. Building the
-     * payloads here and applying them only after the claim commits makes a
-     * refusal leave nothing behind.
-     */
-    let pendingProfile: Record<string, unknown> | null = null;
-    let pendingLegacyLink: Record<string, unknown> | null = null;
-
-    const { decideCreateSecureLoginLink } = await import('./operational/legacySecureLink');
-    const linkDecision = decideCreateSecureLoginLink({
-      driverId,
-      approvedKey: data.approvedKey,
-      legacyHash: data.legacyHash,
-    });
-    if (linkDecision.action === 'refuse') {
-      throw new httpsV2.HttpsError(
-        linkDecision.reason === 'approved_key_malformed' ? 'invalid-argument' : 'failed-precondition',
-        linkDecision.reason,
+    if (!driverId && approvedKey) {
+      const { runApprovedRowConversion } = await import(
+        './operational/approvedRowConversion'
       );
-    }
-    const approvedKey = linkDecision.action === 'create_from_approved' ? linkDecision.approvedKey : '';
-
-    if (linkDecision.action === 'create_from_approved') {
-      const { runApprovedRowConversion } = await import('./operational/approvedRowConversion');
-      const { productionConversionStore } = await import('./operational/approvedRowConversionStore');
+      const { productionConversionStore } = await import(
+        './operational/approvedRowConversionStore'
+      );
       const converted = await runApprovedRowConversion(
         productionConversionStore(fs(), rtdb()),
         {
           approvedKey,
           displayName: fields.displayName,
           legalName: fields.legalName,
-          companyId: data.companyId,
+          companyId: callerCo,
+          callerCompanyId: callerCo,
           companyName: data.companyName,
           passcodeRecord,
           temporary,
@@ -1117,10 +1115,14 @@ export const adminSetDriverPasscode = httpsV2.onCall(
           opId,
         },
       );
-      const { clientOutcomeFor } = await import('./operational/approvedRowConversion');
+      const { clientOutcomeFor } = await import(
+        './operational/approvedRowConversion'
+      );
       const outcome = clientOutcomeFor(converted);
       await writeSecurityAudit({
-        action: outcome.success ? 'approvedRowConversion' : 'approvedRowConversion_fail',
+        action: outcome.success
+          ? 'approvedRowConversion'
+          : 'approvedRowConversion_fail',
         actorUid: caller.uid,
         driverId: converted.driverId,
         detail: {
@@ -1146,17 +1148,60 @@ export const adminSetDriverPasscode = httpsV2.onCall(
       };
     }
 
-    if (!driverId && data.legacyHash) {
-      // Migrate PROFILE shell only — never use legacy SHA-256 as the new credential
-      const legacy = await rtdb().ref(`drivers/approved/${data.legacyHash}`).once('value');
+    const { firestoreProvisioningJournal } = await import(
+      './operational/provisioningJournalStore'
+    );
+    const { resolveProvisioningUuid } = await import(
+      './operational/provisioningJournal'
+    );
+    const provJournal = firestoreProvisioningJournal(fs());
+    const idxNow = await fs().collection('driver_name_index').doc(nameNorm).get();
+    const idxOwner = (idxNow.exists ? idxNow.data()?.driverId : null) as
+      | string
+      | null;
+    let idxOwnerActive = false;
+    if (idxOwner) {
+      const c = await fs().collection('driver_credentials').doc(idxOwner).get();
+      idxOwnerActive = c.exists && c.data()?.active !== false;
+    }
+    let provAttemptId: string | null = null;
+    let setPasscodeAuthorityLabel = 'not_attempted';
+    const claimProvisioningUuid = async (
+      key: Parameters<typeof resolveProvisioningUuid>[1],
+    ) => {
+      const r = await resolveProvisioningUuid(provJournal, key, {
+        requestedDriverId: driverId || null,
+        nameNorm,
+        companyId: callerCo,
+        indexOwnerDriverId: idxOwner,
+        indexOwnerActive: idxOwnerActive,
+        isReset: !!driverId,
+      });
+      if (r.decision.action === 'refuse') {
+        throw new httpsV2.HttpsError(
+          'failed-precondition',
+          `provisioning_refused:${r.decision.reason}`,
+        );
+      }
+      provAttemptId = r.attemptId;
+      return r.driverId!;
+    };
+
+    let pendingProfile: Record<string, unknown> | null = null;
+    let pendingLegacyLink: Record<string, unknown> | null = null;
+
+    if (!driverId && legacyHash) {
+      const legacy = await rtdb()
+        .ref(`drivers/approved/${legacyHash}`)
+        .once('value');
       if (!legacy.exists()) {
         throw new httpsV2.HttpsError('not-found', 'Legacy driver not found');
       }
       const L = legacy.val();
-      // Keyed by the legacy row, so a retry migrating the SAME legacy
-      // driver reuses its canonical UUID — never the approved hash.
-      driverId = await claimProvisioningUuid({ kind: 'legacy', legacyHash: String(data.legacyHash) });
-      // DEFERRED: written only after the ownership claim commits.
+      driverId = await claimProvisioningUuid({
+        kind: 'legacy',
+        legacyHash: String(legacyHash),
+      });
       pendingProfile = {
         displayName: fields.displayName || L.displayName,
         legalName: fields.legalName || L.legalName || L.displayName,
@@ -1164,20 +1209,17 @@ export const adminSetDriverPasscode = httpsV2.onCall(
         active: L.active !== false,
         isAdmin: L.isAdmin === true,
         isViewer: L.isViewer === true,
-        companyId: data.companyId || L.companyId || null,
+        companyId: callerCo,
         companyName: data.companyName || L.companyName || null,
         assignedCustomers: L.assignedCustomers || null,
         assignedRoutes: L.assignedRoutes || null,
         assignedWells: L.assignedWells || null,
         roles: L.roles || ['driver'],
         approvedAt: L.approvedAt || Date.now(),
-        migratedFromLegacyHashPrefix: String(data.legacyHash).slice(0, 8),
+        migratedFromLegacyHashPrefix: String(legacyHash).slice(0, 8),
         schemaVersion: 1,
         mustUseSecureAuth: true,
       };
-      // Dual-run default: keep legacy active so old APKs still work until
-      // cutover. DEFERRED with the profile — a refused claim must not
-      // rewrite the legacy record for an identity that never existed.
       pendingLegacyLink =
         data.keepLegacyActive === false
           ? {
@@ -1191,44 +1233,86 @@ export const adminSetDriverPasscode = httpsV2.onCall(
             };
     }
 
-    if (!driverId) {
-      // Brand-new admin-provisioned driver. Keyed by normalized name; an
-      // active unrelated owner of that name is refused, not adopted.
-      driverId = await claimProvisioningUuid({ kind: 'name', nameNorm });
-      // DEFERRED: written only after the ownership claim commits.
-      pendingProfile = {
-        displayName: fields.displayName,
-        legalName: fields.legalName || fields.displayName,
-        name: fields.displayName,
-        active: true,
-        isAdmin: false,
-        isViewer: false,
-        companyId: data.companyId || caller.companyId || null,
-        companyName: data.companyName || null,
-        roles: ['driver'],
-        approvedAt: Date.now(),
-        approvedBy: caller.uid,
-        schemaVersion: 1,
-      };
+    if (isReset) {
+      // Revalidate RTDB profile before transaction
+      const profSnapNow = await rtdb()
+        .ref(`drivers/profiles/${driverId}`)
+        .once('value');
+      if (!profSnapNow.exists()) {
+        throw new httpsV2.HttpsError('not-found', 'Driver profile not found');
+      }
+      const profValNow = (profSnapNow.val() || {}) as Record<string, unknown>;
+      if (profValNow.active !== true) {
+        throw new httpsV2.HttpsError(
+          'failed-precondition',
+          'Driver account is inactive or was deactivated',
+        );
+      }
+      if (
+        String(profValNow.companyId || '').trim().toLowerCase() !== callerCo
+      ) {
+        throw new httpsV2.HttpsError(
+          'permission-denied',
+          'Cross-company driver access denied: driver company was modified',
+        );
+      }
     }
 
-    // Claim the name index BEFORE writing the credential, and only if this
-    // driver may hold it. The previous unconditional `set` let an authorized
-    // reset for one name silently repoint another ACTIVE secure driver's
-    // index, sending that driver's next authenticateDriver to a different
-    // credential record. Same rule adminApproveDriverRegistration already
-    // enforces; the transaction makes check-and-claim atomic so two
-    // concurrent admins cannot both win.
     const idxRef = fs().collection('driver_name_index').doc(nameNorm);
+    const credRef = fs().collection('driver_credentials').doc(driverId);
+    let priorCredentialData: Record<string, unknown> | null = null;
+
     await fs().runTransaction(async (tx) => {
+      const credSnap = await tx.get(credRef);
+      if (isReset) {
+        if (!credSnap.exists) {
+          throw new httpsV2.HttpsError(
+            'not-found',
+            'Driver credentials not found',
+          );
+        }
+        const credData = credSnap.data() || {};
+        // Revalidate active state inside transaction boundary
+        if (credData.active !== true) {
+          throw new httpsV2.HttpsError(
+            'failed-precondition',
+            'Driver account is inactive or was deactivated',
+          );
+        }
+        // Revalidate company inside transaction boundary
+        if (
+          String(credData.companyId || '').trim().toLowerCase() !== callerCo
+        ) {
+          throw new httpsV2.HttpsError(
+            'permission-denied',
+            'Cross-company driver access denied: driver company was modified',
+          );
+        }
+        // Revalidate passcode record exists
+        if (!credData.passcode || typeof credData.passcode !== 'object') {
+          throw new httpsV2.HttpsError(
+            'failed-precondition',
+            'Driver is not passcode-authenticated',
+          );
+        }
+        priorCredentialData = { ...credData };
+      } else {
+        if (credSnap.exists) {
+          throw new httpsV2.HttpsError(
+            'already-exists',
+            'Driver credentials already exist',
+          );
+        }
+      }
+
       const existing = await tx.get(idxRef);
       const existingDriverId = readIndexOwner(existing.exists, existing.data());
 
       let incumbentCredential: IncumbentCredentialState = 'absent';
       if (
-        existingDriverId
-        && existingDriverId !== 'malformed'
-        && existingDriverId !== driverId
+        existingDriverId &&
+        existingDriverId !== 'malformed' &&
+        existingDriverId !== driverId
       ) {
         try {
           const otherCred = await tx.get(
@@ -1239,8 +1323,6 @@ export const adminSetDriverPasscode = httpsV2.onCall(
             otherCred.data(),
           );
         } catch {
-          // Status unknown — refuse rather than guess about someone
-          // else's login name.
           incumbentCredential = 'unreadable';
         }
       }
@@ -1258,74 +1340,83 @@ export const adminSetDriverPasscode = httpsV2.onCall(
       }
 
       tx.set(idxRef, { driverId });
-      tx.set(
-        fs().collection('driver_credentials').doc(driverId),
-        {
-          displayNameNorm: nameNorm,
-          displayName: fields.displayName,
-          passcode: passcodeRecord,
-          active: true,
-          mustResetPasscode: temporary,
-          updatedAt: FieldValue.serverTimestamp(),
-          createdAt: FieldValue.serverTimestamp(),
-          setBy: caller.uid,
-          temporaryAssigned: temporary,
-          // Cleanup ownership only — see opId above. Not an authenticator.
-          opId,
-        },
-        { merge: true },
-      );
+
+      if (isReset && priorCredentialData) {
+        tx.set(
+          credRef,
+          {
+            displayNameNorm: nameNorm,
+            displayName: fields.displayName,
+            passcode: passcodeRecord,
+            active: (priorCredentialData as any).active,
+            companyId: (priorCredentialData as any).companyId,
+            mustResetPasscode: temporary,
+            updatedAt: FieldValue.serverTimestamp(),
+            setBy: caller.uid,
+            temporaryAssigned: temporary,
+            opId,
+          },
+          { merge: true },
+        );
+      } else {
+        tx.set(
+          credRef,
+          {
+            displayNameNorm: nameNorm,
+            displayName: fields.displayName,
+            passcode: passcodeRecord,
+            active: true,
+            companyId: callerCo,
+            mustResetPasscode: temporary,
+            updatedAt: FieldValue.serverTimestamp(),
+            createdAt: FieldValue.serverTimestamp(),
+            setBy: caller.uid,
+            temporaryAssigned: temporary,
+            opId,
+          },
+          { merge: true },
+        );
+      }
     });
 
-    // Ownership is now ours and the credential is committed. Apply the
-    // deferred RTDB writes.
-    //
-    // If any of them fails we COMPENSATE: the Firestore credential and our
-    // index claim are removed so the caller is left with no partial
-    // identity, matching the all-or-nothing guarantee the transaction gives
-    // within Firestore. The index is released only if it is still ours, so
-    // a concurrent legitimate owner is never disturbed.
+    // Apply deferred RTDB writes with safe compensation
     try {
       if (pendingProfile) {
         await rtdb().ref(`drivers/profiles/${driverId}`).set(pendingProfile);
       }
-      if (pendingLegacyLink && data.legacyHash) {
-        await rtdb().ref(`drivers/approved/${data.legacyHash}`).update(pendingLegacyLink);
+      if (pendingLegacyLink && legacyHash) {
+        await rtdb()
+          .ref(`drivers/approved/${legacyHash}`)
+          .update(pendingLegacyLink);
       }
-      if (pendingLegacyLink && approvedKey && !data.legacyHash) {
-        await rtdb().ref(`drivers/approved/${approvedKey}`).update(pendingLegacyLink);
+      if (isReset) {
+        await rtdb().ref(`drivers/profiles/${driverId}`).update({
+          displayName: fields.displayName,
+          legalName: fields.legalName || fields.displayName,
+        });
       }
-      // Keep display fields current for pre-existing profiles (reset path).
-      await rtdb().ref(`drivers/profiles/${driverId}`).update({
-        displayName: fields.displayName,
-        legalName: fields.legalName || fields.displayName,
-      });
     } catch (profileErr) {
       let compensated = true;
       let superseded = false;
       try {
-        // ONE transaction reads both documents and decides, so a
-        // concurrent invocation cannot slip between the checks. An
-        // unconditional delete here would destroy a newer credential
-        // written by a legitimate reset that landed while our RTDB write
-        // was failing.
-        const credRef = fs().collection('driver_credentials').doc(driverId);
         await fs().runTransaction(async (tx) => {
-          const [credSnap, idxSnap] = await Promise.all([
-            tx.get(credRef),
-            tx.get(idxRef),
-          ]);
-          const decision = decideCompensation({
-            credentialExists: credSnap.exists,
-            credentialOpId: credSnap.data()?.opId,
-            myOpId: opId,
-            indexExists: idxSnap.exists,
-            indexDriverId: idxSnap.data()?.driverId,
-            myDriverId: driverId,
-          });
-          superseded = decision.superseded;
-          if (decision.deleteCredential) tx.delete(credRef);
-          if (decision.releaseIndex) tx.delete(idxRef);
+          const credSnap = await tx.get(credRef);
+          if (!credSnap.exists) return;
+          const currentOp = credSnap.data()?.opId;
+          if (currentOp !== opId) {
+            superseded = true;
+            return;
+          }
+          if (isReset && priorCredentialData) {
+            // RESTORE exact prior credential state; do not delete!
+            tx.set(credRef, priorCredentialData);
+          } else {
+            tx.delete(credRef);
+            const idxSnap = await tx.get(idxRef);
+            if (idxSnap.exists && idxSnap.data()?.driverId === driverId) {
+              tx.delete(idxRef);
+            }
+          }
         });
       } catch {
         compensated = false;
@@ -1334,39 +1425,43 @@ export const adminSetDriverPasscode = httpsV2.onCall(
         action: 'adminSetDriverPasscode_fail',
         actorUid: caller.uid,
         driverId,
-        detail: { reason: 'profile_write_failed', compensated, superseded },
+        detail: {
+          reason: 'profile_write_failed',
+          compensated,
+          superseded,
+        },
       });
       throw new httpsV2.HttpsError(
         'internal',
         !compensated
-          ? // Say so plainly rather than report a clean failure we did not achieve.
-            'Driver profile write failed AND cleanup failed; identity may be partially created'
+          ? 'Driver profile write failed AND cleanup failed; identity may be partially created'
           : superseded
-            ? 'Could not create the driver profile; another change to this driver landed first and was left intact'
-            : 'Could not create the driver profile; no identity was created',
+            ? 'Could not update the driver profile; another change to this driver landed first and was left intact'
+            : isReset
+              ? 'Driver profile write failed; prior credential state restored'
+              : 'Could not create the driver profile; no identity was created',
       );
     }
 
-    // Resolve company for authority ensure: never invent; prefer request /
-    // pending create payload, else profile. Skip when unbound (standalone).
-    let authorityCompanyId: string | null =
-      (typeof data.companyId === 'string' && data.companyId.trim())
-        ? data.companyId.trim().toLowerCase()
-        : null;
-    if (!authorityCompanyId && pendingProfile && typeof pendingProfile.companyId === 'string') {
-      authorityCompanyId = String(pendingProfile.companyId).trim().toLowerCase() || null;
-    }
-    if (!authorityCompanyId) {
+    // Auth claims update on reset
+    if (isReset) {
       try {
-        const profSnap = await rtdb().ref(`drivers/profiles/${driverId}/companyId`).once('value');
-        const cid = profSnap.val();
-        if (typeof cid === 'string' && cid.trim()) {
-          authorityCompanyId = cid.trim().toLowerCase();
+        const { driverAuthUid } = await import('./tokenMint');
+        const synUid = driverAuthUid(driverId);
+        const authUser = await admin.auth().getUser(synUid);
+        const existingClaims = authUser.customClaims || {};
+        await admin.auth().setCustomUserClaims(synUid, {
+          ...existingClaims,
+          mustChangePasscode: temporary,
+        });
+      } catch (err: any) {
+        if (err?.code !== 'auth/user-not-found') {
+          /* ignore non-existing auth user */
         }
-      } catch {
-        /* leave null — ensure will skip */
       }
     }
+
+    // Ensure shift authority
     {
       const {
         ensureInitializedEmptyShiftAuthority,
@@ -1374,7 +1469,7 @@ export const adminSetDriverPasscode = httpsV2.onCall(
       } = await import('./operational/ensureEmptyShiftAuthority');
       const ensure = await ensureInitializedEmptyShiftAuthority(fs(), {
         driverId,
-        companyId: authorityCompanyId,
+        companyId: callerCo,
       });
       try {
         assertEnsureAuthorityOk(ensure);
@@ -1384,20 +1479,21 @@ export const adminSetDriverPasscode = httpsV2.onCall(
           'shift_authority_ensure_refused',
         );
       }
-      // Company-bound and authority skipped is a FAILURE, not a success.
       const { decideProvisioningOutcome, authorityAuditLabel } =
         await import('./operational/provisioningJournal');
       const outcome = decideProvisioningOutcome({
         identityWritten: true,
         profileWritten: true,
         authorityAction: ensure.decision.action,
-        companyId: authorityCompanyId,
+        companyId: callerCo,
       });
       if (!outcome.ok) {
-        throw new httpsV2.HttpsError('failed-precondition', `provisioning_incomplete:${outcome.reason}`);
+        throw new httpsV2.HttpsError(
+          'failed-precondition',
+          `provisioning_incomplete:${outcome.reason}`,
+        );
       }
       setPasscodeAuthorityLabel = authorityAuditLabel(outcome);
-      // Finalize the attempt only now that the required state exists.
       if (provAttemptId) await provJournal.markCompleted(provAttemptId);
     }
 
@@ -1406,7 +1502,7 @@ export const adminSetDriverPasscode = httpsV2.onCall(
       actorUid: caller.uid,
       driverId,
       detail: {
-        legacyHashPrefix: data.legacyHash ? String(data.legacyHash).slice(0, 8) : null,
+        legacyHashPrefix: legacyHash ? String(legacyHash).slice(0, 8) : null,
         temporary,
         shiftAuthority: setPasscodeAuthorityLabel,
         // never log passcode

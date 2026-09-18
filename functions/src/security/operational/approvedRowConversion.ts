@@ -84,6 +84,7 @@ export interface ConversionInput {
   displayName: string;
   legalName?: string;
   companyId?: string;
+  callerCompanyId?: string;
   companyName?: string;
   passcodeRecord: PasscodeRecord;
   temporary: boolean;
@@ -116,6 +117,13 @@ export function clientOutcomeFor(result: ConversionResult): {
     }
     if (result.reason === 'approved_key_malformed') {
       return { success: false, code: 'invalid-argument', reason: result.reason };
+    }
+    if (result.reason === 'cross_company_conversion_denied') {
+      return {
+        success: false,
+        code: 'permission-denied' as any,
+        reason: 'Cross-company driver access denied: approved row belongs to another company',
+      };
     }
     return { success: false, code: 'failed-precondition', reason: result.reason };
   }
@@ -391,6 +399,7 @@ export interface ConversionStore {
     opId: string;
     temporary: boolean;
     callerUid: string;
+    companyId?: string | null;
   }): Promise<void>;
   compensateIdentity(input: {
     driverId: string;
@@ -491,6 +500,14 @@ export async function runApprovedRowConversion(
     (typeof row.companyId === 'string' && row.companyId.trim()
       ? row.companyId.trim().toLowerCase()
       : null);
+
+  const callerCompany =
+    typeof input.callerCompanyId === 'string' && input.callerCompanyId.trim()
+      ? input.callerCompanyId.trim().toLowerCase()
+      : null;
+  if (callerCompany && (!companyId || companyId !== callerCompany)) {
+    return refuse('cross_company_conversion_denied' as ConversionRefusal, writes);
+  }
 
   // Read the journal WITHOUT claiming so an already-linked foreign row
   // refuses with zero writes. Resume only when the durable UUID matches.
@@ -599,6 +616,7 @@ export async function runApprovedRowConversion(
         opId: input.opId,
         temporary: input.temporary,
         callerUid: input.callerUid,
+        companyId,
       });
       wroteIdentity = true;
       writes.credential = true;
@@ -830,6 +848,7 @@ export function createMemoryConversionStore(): ConversionStore & {
       opId: string;
       temporary: boolean;
       callerUid: string;
+      companyId?: string | null;
     }) {
       const idx = index.get(input.nameNorm);
       const existingDriverId = readIndexOwner(!!idx, idx);
@@ -864,6 +883,7 @@ export function createMemoryConversionStore(): ConversionStore & {
         displayName: input.displayName,
         passcode: input.passcodeRecord,
         active: true,
+        companyId: input.companyId || null,
         opId: input.opId,
         setBy: input.callerUid,
         mustResetPasscode: input.temporary,

@@ -38,40 +38,86 @@ export interface DashboardCaller {
 async function loadDashboardCaller(
   authUid: string | undefined,
   authToken?: Record<string, unknown> | null,
-): Promise<DashboardCaller> {
+): Promise<DashboardCaller & { serverAuthoritative?: boolean }> {
   if (!authUid) {
     throw new httpsV2.HttpsError('unauthenticated', 'Must be signed in');
   }
 
   // Prefer RTDB profile (source of truth for Dashboard)
-  if (process.env.FIREBASE_DATABASE_EMULATOR_HOST || !process.env.FIRESTORE_EMULATOR_HOST) {
-    try {
-      const snap = await admin.database().ref(`users/${authUid}`).once('value');
-      if (snap.exists()) {
-        const userData = snap.val() as Record<string, unknown>;
-        const roles = resolveRoles(userData);
-        const companyId = typeof userData.companyId === 'string' ? userData.companyId : undefined;
+  let userSnap: admin.database.DataSnapshot | null = null;
+  try {
+    userSnap = await admin.database().ref(`users/${authUid}`).once('value');
+  } catch {
+    /* fallback to custom claims if RTDB is unavailable or not running */
+  }
 
-        let overrides: Record<string, string[]> = {};
-        if (companyId) {
-          try {
-            const cSnap = await admin.firestore().collection('companies').doc(companyId).get();
-            overrides = (cSnap.data()?.roleCapabilities || {}) as Record<string, string[]>;
-          } catch {
-            /* best-effort */
-          }
-        }
-        const caps = resolveCaps(roles, overrides);
-        const isPlatformAdmin = !companyId && roles.some((r) => r === 'admin' || r === 'it');
-        return { uid: authUid, roles, companyId, caps, isPlatformAdmin };
-      }
-    } catch {
-      /* fallback to custom claims */
+  if (userSnap && userSnap.exists()) {
+    const userData = userSnap.val() as Record<string, unknown>;
+    // Inactive manager records must deny
+    if (
+      userData.active === false ||
+      userData.disabled === true ||
+      userData.status === 'inactive'
+    ) {
+      throw new httpsV2.HttpsError(
+        'permission-denied',
+        'Caller account is inactive',
+      );
     }
+
+    const roles = resolveRoles(userData);
+    const companyId =
+      typeof userData.companyId === 'string' && userData.companyId.trim()
+        ? userData.companyId.trim()
+        : undefined;
+
+    let overrides: Record<string, string[]> = {};
+    if (companyId) {
+      try {
+        const cSnap = await admin
+          .firestore()
+          .collection('companies')
+          .doc(companyId)
+          .get();
+        if (cSnap.exists) {
+          overrides = (cSnap.data()?.roleCapabilities || {}) as Record<
+            string,
+            string[]
+          >;
+        }
+      } catch (err: any) {
+        throw new httpsV2.HttpsError(
+          'unavailable',
+          'Company authority state unavailable',
+        );
+      }
+    }
+    const caps = resolveCaps(roles, overrides);
+    const isPlatformAdmin =
+      !companyId && roles.some((r) => r === 'admin' || r === 'it');
+    return {
+      uid: authUid,
+      roles,
+      companyId,
+      caps,
+      isPlatformAdmin,
+      serverAuthoritative: true,
+    };
   }
 
   // Fallback: Auth custom claims (emulator + optional claim-based admin)
   if (authToken && typeof authToken === 'object') {
+    if (
+      authToken.active === false ||
+      authToken.disabled === true ||
+      authToken.status === 'inactive'
+    ) {
+      throw new httpsV2.HttpsError(
+        'permission-denied',
+        'Caller account is inactive',
+      );
+    }
+
     const claimRoles: string[] = [];
     if (typeof authToken.role === 'string') claimRoles.push(authToken.role);
     if (Array.isArray(authToken.roles)) {
@@ -79,15 +125,50 @@ async function loadDashboardCaller(
         if (typeof r === 'string') claimRoles.push(r);
       }
     }
-    const claimCaps = resolveCaps(claimRoles, {});
-    if (Array.isArray((authToken as any).caps)) {
-      for (const c of (authToken as any).caps) {
-        if (typeof c === 'string' && !claimCaps.includes(c)) claimCaps.push(c);
+    const companyId =
+      typeof authToken.companyId === 'string' && authToken.companyId.trim()
+        ? authToken.companyId.trim()
+        : undefined;
+
+    let overrides: Record<string, string[]> = {};
+    if (companyId) {
+      try {
+        const cSnap = await admin
+          .firestore()
+          .collection('companies')
+          .doc(companyId)
+          .get();
+        if (cSnap.exists) {
+          overrides = (cSnap.data()?.roleCapabilities || {}) as Record<
+            string,
+            string[]
+          >;
+        }
+      } catch (err: any) {
+        throw new httpsV2.HttpsError(
+          'unavailable',
+          'Company authority state unavailable',
+        );
       }
     }
-    const companyId =
-      typeof authToken.companyId === 'string' ? authToken.companyId : undefined;
-    const isPlatformAdmin = !companyId && claimRoles.some((r) => r === 'admin' || r === 'it');
+
+    const claimCaps = resolveCaps(claimRoles, overrides);
+    if (Array.isArray((authToken as any).caps)) {
+      for (const c of (authToken as any).caps) {
+        if (typeof c === 'string' && !claimCaps.includes(c)) {
+          // A revoked capability in company overrides cannot be added by custom claim
+          const isRevoked = claimRoles.some(
+            (r) => overrides[r] && !overrides[r].includes(c),
+          );
+          if (!isRevoked) {
+            claimCaps.push(c);
+          }
+        }
+      }
+    }
+
+    const isPlatformAdmin =
+      !companyId && claimRoles.some((r) => r === 'admin' || r === 'it');
     return {
       uid: authUid,
       roles: claimRoles.length ? claimRoles : ['viewer'],
@@ -97,7 +178,10 @@ async function loadDashboardCaller(
     };
   }
 
-  throw new httpsV2.HttpsError('permission-denied', 'Caller is not a registered dashboard user');
+  throw new httpsV2.HttpsError(
+    'permission-denied',
+    'Caller is not a registered dashboard user',
+  );
 }
 
 /**
@@ -125,10 +209,49 @@ export async function requireManageDrivers(
 ): Promise<DashboardCaller> {
   const caller = await loadDashboardCaller(authUid, authToken);
   if (caller.caps.includes('manageDrivers')) return caller;
-  if (authToken && (authToken.manageDrivers === true || authToken.manageDrivers === 'true')) {
-    return { ...caller, caps: [...caller.caps, 'manageDrivers'] };
+
+  // Stale token manageDrivers claim cannot restore authority when revoked by server-side state
+  if (
+    !(caller as any).serverAuthoritative &&
+    authToken &&
+    (authToken.manageDrivers === true || authToken.manageDrivers === 'true')
+  ) {
+    let revoked = false;
+    if (caller.companyId) {
+      try {
+        const cSnap = await admin
+          .firestore()
+          .collection('companies')
+          .doc(caller.companyId)
+          .get();
+        if (cSnap.exists) {
+          const overrides = (cSnap.data()?.roleCapabilities || {}) as Record<
+            string,
+            string[]
+          >;
+          for (const role of caller.roles) {
+            if (overrides[role] && !overrides[role].includes('manageDrivers')) {
+              revoked = true;
+              break;
+            }
+          }
+        }
+      } catch {
+        throw new httpsV2.HttpsError(
+          'unavailable',
+          'Company authority state unavailable',
+        );
+      }
+    }
+    if (!revoked) {
+      return { ...caller, caps: [...caller.caps, 'manageDrivers'] };
+    }
   }
-  throw new httpsV2.HttpsError('permission-denied', 'Caller lacks manageDrivers capability');
+
+  throw new httpsV2.HttpsError(
+    'permission-denied',
+    'Caller lacks manageDrivers capability',
+  );
 }
 
 /**
