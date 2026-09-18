@@ -21,8 +21,92 @@
  */
 import * as httpsV2 from 'firebase-functions/v2/https';
 import * as admin from 'firebase-admin';
+import * as crypto from 'crypto';
 import { requireRegisteredDashboardUser } from '../adminAuth';
 import { writeSecurityAudit } from '../audit';
+
+// ── Command ID Validation & Safe Identity ───────────────────────────────────
+export const COMMAND_ID_REGEX = /^[a-zA-Z0-9_-]{1,128}$/;
+
+export function validateCommandId(untrusted: unknown): string {
+  if (typeof untrusted !== 'string') {
+    throw new httpsV2.HttpsError('invalid-argument', 'commandId must be a string');
+  }
+  const trimmed = untrusted.trim();
+  if (!trimmed) {
+    throw new httpsV2.HttpsError('invalid-argument', 'commandId cannot be empty');
+  }
+  if (trimmed.length > 128) {
+    throw new httpsV2.HttpsError('invalid-argument', 'commandId exceeds maximum length of 128 characters');
+  }
+  if (!COMMAND_ID_REGEX.test(trimmed)) {
+    throw new httpsV2.HttpsError(
+      'invalid-argument',
+      'commandId contains invalid characters; must be alphanumeric, hyphen, or underscore without slashes or path separators',
+    );
+  }
+  return trimmed;
+}
+
+/**
+ * Collision-safe, fixed-length document ID for tenant- and job-scoped idempotency.
+ * Avoids raw concatenation issues and delimiter collisions.
+ */
+export function computeSplitIdempotencyDocId(
+  companyId: string,
+  parentDispatchId: string,
+  commandId: string,
+): string {
+  const tuple = JSON.stringify([companyId.trim(), parentDispatchId.trim(), commandId.trim()]);
+  const hash = crypto.createHash('sha256').update(tuple).digest('hex');
+  return `idem_${hash}`;
+}
+
+// ── Deterministic Request Canonicalization & Fingerprint ────────────────────
+export interface CanonicalAddSplitLegRequest {
+  bbls: number | null;
+  destinationType: string | null;
+  disposal: string;
+  disposalLat: number | null;
+  disposalLng: number | null;
+  jobType: string | null;
+  notes: string | null;
+  parentDispatchId: string;
+  serviceType: string | null;
+}
+
+export function canonicalizeAddSplitLegRequest(
+  parentDispatchId: string,
+  legSpec: Record<string, unknown>,
+): { canonicalJson: string; requestDigest: string; canonicalObj: CanonicalAddSplitLegRequest } {
+  const norm: CanonicalAddSplitLegRequest = {
+    bbls: typeof legSpec.bbls === 'number' && isFinite(legSpec.bbls) ? legSpec.bbls : null,
+    destinationType:
+      typeof legSpec.destinationType === 'string' && legSpec.destinationType.trim()
+        ? legSpec.destinationType.trim()
+        : null,
+    disposal: typeof legSpec.disposal === 'string' ? legSpec.disposal.trim() : '',
+    disposalLat:
+      typeof legSpec.disposalLat === 'number' && isFinite(legSpec.disposalLat)
+        ? legSpec.disposalLat
+        : null,
+    disposalLng:
+      typeof legSpec.disposalLng === 'number' && isFinite(legSpec.disposalLng)
+        ? legSpec.disposalLng
+        : null,
+    jobType: typeof legSpec.jobType === 'string' && legSpec.jobType.trim() ? legSpec.jobType.trim() : null,
+    notes: typeof legSpec.notes === 'string' && legSpec.notes.trim() ? legSpec.notes.trim() : null,
+    parentDispatchId: parentDispatchId.trim(),
+    serviceType:
+      typeof legSpec.serviceType === 'string' && legSpec.serviceType.trim()
+        ? legSpec.serviceType.trim()
+        : null,
+  };
+  // Alphabetically sorted keys for deterministic serialization
+  const canonicalJson = JSON.stringify(norm, Object.keys(norm).sort());
+  const requestDigest = crypto.createHash('sha256').update(canonicalJson).digest('hex');
+  return { canonicalJson, requestDigest, canonicalObj: norm };
+}
 
 // ── Status Sets ─────────────────────────────────────────────────────────────
 export const SPLIT_TERMINAL_STATUSES = new Set([
@@ -111,19 +195,17 @@ export const defaultLegacySplitCapabilityCompatibilityAdapter: LegacySplitCapabi
 /** Backwards compatibility alias for defaultLegacySplitCapabilityCompatibilityAdapter. */
 export const defaultSplitCapabilityAuthorizer = defaultLegacySplitCapabilityCompatibilityAdapter;
 
-// ── Authorized Staff Roles & Capabilities ───────────────────────────────────
-export const AUTHORIZED_SPLIT_STAFF_ROLES = new Set([
-  'admin',
-  'it',
-  'manager',
-  'dispatch',
-]);
-
-export const AUTHORIZED_SPLIT_STAFF_CAPS = new Set([
+// ── Operational Authority ───────────────────────────────────────────────────
+// The it role and isPlatformAdmin flag must NOT independently grant operational split authority.
+// They may act only when they also possess an explicit operational capability.
+export const AUTHORIZED_SPLIT_OPERATIONAL_CAPS = new Set([
   'dispatch',
   'manageDispatches',
   'manageJobs',
 ]);
+
+export const AUTHORIZED_SPLIT_STAFF_CAPS = AUTHORIZED_SPLIT_OPERATIONAL_CAPS;
+export const AUTHORIZED_SPLIT_STAFF_ROLES = new Set(['admin', 'manager', 'dispatch']);
 
 // ── Server-side Actor Resolution ────────────────────────────────────────────
 export type SplitActorReaders = {
@@ -250,18 +332,34 @@ export async function resolveSplitActor(
     const staffCaller = readers?.getDashboardUser
       ? await readers.getDashboardUser(uid, token)
       : await requireRegisteredDashboardUser(uid, token);
-    const isAuthorizedRole = staffCaller.roles.some((r: string) =>
-      AUTHORIZED_SPLIT_STAFF_ROLES.has(r),
-    );
-    const isAuthorizedCap = staffCaller.caps.some((c: string) =>
-      AUTHORIZED_SPLIT_STAFF_CAPS.has(c),
-    );
-    // Explicitly reject callers who only have manageDrivers without dispatch/manager/admin authority
-    if (!isAuthorizedRole && !isAuthorizedCap && !staffCaller.isPlatformAdmin) {
-      throw new httpsV2.HttpsError(
-        'permission-denied',
-        'Caller lacks required dispatch/staff permissions for split operations',
+
+    // Operational Split Authority:
+    // The `it` role and `isPlatformAdmin` flag must NOT independently grant operational split authority.
+    // Callers with IT role or platform admin status may act only when they explicitly possess
+    // an operational capability (dispatch, manageDispatches, manageJobs) or the direct dispatch role.
+    const isBroadSupport = Boolean(staffCaller.isPlatformAdmin || staffCaller.roles.includes('it'));
+
+    const hasOperationalCap =
+      staffCaller.roles.includes('dispatch') ||
+      staffCaller.caps.some((c: string) => AUTHORIZED_SPLIT_OPERATIONAL_CAPS.has(c));
+
+    if (isBroadSupport) {
+      if (!hasOperationalCap) {
+        throw new httpsV2.HttpsError(
+          'permission-denied',
+          'Caller lacks required dispatch/staff permissions for split operations',
+        );
+      }
+    } else {
+      const isAuthorizedRole = staffCaller.roles.some((r: string) =>
+        AUTHORIZED_SPLIT_STAFF_ROLES.has(r),
       );
+      if (!isAuthorizedRole && !hasOperationalCap) {
+        throw new httpsV2.HttpsError(
+          'permission-denied',
+          'Caller lacks required dispatch/staff permissions for split operations',
+        );
+      }
     }
     return {
       kind: 'staff',
@@ -356,7 +454,8 @@ export function evaluateAddSplitLeg(input: EvaluateAddSplitLegInput): EvaluateAd
       return { ok: false, code: 'permission-denied', reason: 'Caller is not assigned to this dispatch' };
     }
   } else {
-    if (!actor.isPlatformAdmin && actor.companyId !== parentCompanyId) {
+    // Staff caller must have matching tenant companyId — no broad platform-admin bypass
+    if (!actor.companyId || actor.companyId !== parentCompanyId) {
       return { ok: false, code: 'permission-denied', reason: 'Cross-company access denied' };
     }
   }
@@ -580,7 +679,8 @@ export function evaluateRemoveSplitLeg(input: EvaluateRemoveSplitLegInput): Eval
       return { ok: false, code: 'permission-denied', reason: 'Caller is not assigned to this dispatch' };
     }
   } else {
-    if (!actor.isPlatformAdmin && actor.companyId !== legCompanyId) {
+    // Staff caller must have matching tenant companyId — no broad platform-admin bypass
+    if (!actor.companyId || actor.companyId !== legCompanyId) {
       return { ok: false, code: 'permission-denied', reason: 'Cross-company access denied' };
     }
   }
@@ -755,7 +855,8 @@ export function evaluateResequenceSplitFamily(
       }
     }
   } else {
-    if (!actor.isPlatformAdmin && actor.companyId !== firstDocCompany) {
+    // Staff caller must have matching tenant companyId — no broad platform-admin bypass
+    if (!actor.companyId || actor.companyId !== firstDocCompany) {
       return { ok: false, code: 'permission-denied', reason: 'Cross-company access denied' };
     }
   }
@@ -861,11 +962,23 @@ export const addSplitLeg = httpsV2.onCall(
       throw new httpsV2.HttpsError('invalid-argument', 'legSpec.disposal is required');
     }
 
-    const stableCommandId =
-      (typeof data.commandId === 'string' && data.commandId.trim()) ||
-      (typeof data.idempotencyKey === 'string' && data.idempotencyKey.trim()) ||
-      (typeof data.operationId === 'string' && data.operationId.trim()) ||
-      null;
+    // Safe command identifier resolution & validation
+    const rawCommandId =
+      data.commandId !== undefined
+        ? data.commandId
+        : data.idempotencyKey !== undefined
+        ? data.idempotencyKey
+        : data.operationId;
+    let stableCommandId: string | null = null;
+    let requestDigest: string | null = null;
+    let canonicalObj: CanonicalAddSplitLegRequest | null = null;
+
+    if (rawCommandId !== undefined && rawCommandId !== null) {
+      stableCommandId = validateCommandId(rawCommandId);
+      const canon = canonicalizeAddSplitLegRequest(parentDispatchId, legSpec);
+      requestDigest = canon.requestDigest;
+      canonicalObj = canon.canonicalObj;
+    }
 
     const fs = admin.firestore();
     const now = admin.firestore.Timestamp.now();
@@ -885,21 +998,28 @@ export const addSplitLeg = httpsV2.onCall(
 
       // ── Transactional Tenant & Job Scoped Idempotency Check ───────────────
       let idemRef: FirebaseFirestore.DocumentReference | null = null;
-      if (stableCommandId) {
-        idemRef = fs
-          .collection('split_idempotency')
-          .doc(`${parentCompanyId}_${parentDispatchId}_${stableCommandId}`);
+      if (stableCommandId && requestDigest) {
+        const docId = computeSplitIdempotencyDocId(parentCompanyId, parentDispatchId, stableCommandId);
+        idemRef = fs.collection('split_idempotency').doc(docId);
         const idemSnap = await tx.get(idemRef);
         if (idemSnap.exists) {
           const rec = (idemSnap.data() || {}) as Record<string, unknown>;
+          // Request Fingerprint Verification: same commandId + different payload fails closed
+          if (rec.requestDigest !== requestDigest) {
+            throw new httpsV2.HttpsError(
+              'failed-precondition',
+              'Idempotency conflict: commandId was previously executed with a different request payload',
+            );
+          }
+          const resObj = (rec.result || {}) as Record<string, unknown>;
           return {
             idempotent: true,
-            newDispatchId: String(rec.newDispatchId || ''),
-            splitGroupId: String(rec.splitGroupId || ''),
-            splitSequence: typeof rec.splitSequence === 'number' ? rec.splitSequence : 1,
-            splitTotal: typeof rec.splitTotal === 'number' ? rec.splitTotal : 1,
-            parentBblsBefore: typeof rec.parentBblsBefore === 'number' ? rec.parentBblsBefore : null,
-            parentBblsAfter: typeof rec.parentBblsAfter === 'number' ? rec.parentBblsAfter : null,
+            newDispatchId: String(rec.newDispatchId || resObj.newDispatchId || ''),
+            splitGroupId: String(rec.splitGroupId || resObj.splitGroupId || ''),
+            splitSequence: typeof rec.splitSequence === 'number' ? rec.splitSequence : (typeof resObj.splitSequence === 'number' ? resObj.splitSequence : 1),
+            splitTotal: typeof rec.splitTotal === 'number' ? rec.splitTotal : (typeof resObj.splitTotal === 'number' ? resObj.splitTotal : 1),
+            parentBblsBefore: typeof rec.parentBblsBefore === 'number' ? rec.parentBblsBefore : (typeof resObj.parentBblsBefore === 'number' ? resObj.parentBblsBefore : null),
+            parentBblsAfter: typeof rec.parentBblsAfter === 'number' ? rec.parentBblsAfter : (typeof resObj.parentBblsAfter === 'number' ? resObj.parentBblsAfter : null),
             companyId: parentCompanyId,
           };
         }
@@ -982,11 +1102,27 @@ export const addSplitLeg = httpsV2.onCall(
       }
 
       // Atomically record idempotency doc in the exact same transaction
-      if (idemRef && stableCommandId) {
+      if (idemRef && stableCommandId && requestDigest) {
         tx.set(idemRef, {
           companyId: parentCompanyId,
           parentDispatchId,
           commandId: stableCommandId,
+          requestDigest,
+          canonicalRequest: canonicalObj,
+          result: {
+            newDispatchId: newDispatchRef.id,
+            splitGroupId: evaluation.splitGroupId,
+            splitSequence: evaluation.nextSequence,
+            splitTotal: evaluation.newTotal,
+            parentBblsBefore: evaluation.parentBblsBefore,
+            parentBblsAfter: evaluation.parentBblsAfter,
+          },
+          actor: {
+            uid: actor.uid,
+            kind: actor.kind,
+            ...(actor.kind === 'driver' ? { driverId: actor.driverId } : {}),
+            ...(actor.kind === 'staff' ? { roles: actor.roles, caps: actor.caps } : {}),
+          },
           newDispatchId: newDispatchRef.id,
           splitGroupId: evaluation.splitGroupId,
           splitSequence: evaluation.nextSequence,
@@ -1047,6 +1183,12 @@ export const addSplitLeg = httpsV2.onCall(
       actorUid: actor.uid,
       driverId: actor.kind === 'driver' ? actor.driverId : undefined,
       detail: {
+        actor: {
+          uid: actor.uid,
+          kind: actor.kind,
+          companyId: actor.companyId,
+          ...(actor.kind === 'staff' ? { roles: actor.roles, caps: actor.caps, isPlatformAdmin: actor.isPlatformAdmin } : {}),
+        },
         parentDispatchId,
         newDispatchId: result.newDispatchId,
         splitGroupId: result.splitGroupId,
@@ -1071,13 +1213,15 @@ export const removeSplitLeg = httpsV2.onCall(
   async (request) => {
     const data = (request.data || {}) as {
       legDispatchId?: string;
+      dispatchId?: string;
       callerDriverHash?: string;
       reason?: string;
     };
 
     const actor = await resolveSplitActor(request, data.callerDriverHash);
 
-    const legDispatchId = typeof data.legDispatchId === 'string' ? data.legDispatchId.trim() : '';
+    const rawLegId = data.legDispatchId || data.dispatchId;
+    const legDispatchId = typeof rawLegId === 'string' ? rawLegId.trim() : '';
     if (!legDispatchId) {
       throw new httpsV2.HttpsError('invalid-argument', 'legDispatchId is required');
     }
@@ -1117,8 +1261,8 @@ export const removeSplitLeg = httpsV2.onCall(
 
       const evaluation = evaluateRemoveSplitLeg({
         actor,
-        legDispatchId,
         leg: legData,
+        legDispatchId,
         family,
         reason: data.reason,
       });
@@ -1131,12 +1275,9 @@ export const removeSplitLeg = httpsV2.onCall(
         return evaluation;
       }
 
-      // Mark cancelled
+      // Mark leg removed
       tx.update(legRef, {
         ...evaluation.cancelFields,
-        cancelledAt: now,
-        declinedAt: now,
-        splitRemovedAt: now,
         updatedAt: now,
       });
 
@@ -1156,6 +1297,7 @@ export const removeSplitLeg = httpsV2.onCall(
     if (result.idempotent) {
       return {
         idempotent: true,
+        removed: true,
         splitGroupId: result.splitGroupId,
         removedId: result.removedId,
         newTotal: result.newTotal,
@@ -1171,16 +1313,27 @@ export const removeSplitLeg = httpsV2.onCall(
         .where('companyId', '==', actor.companyId)
         .where('dispatchSplitGroupId', '==', result.splitGroupId)
         .get();
+
       if (!invSnap.empty) {
         const invBatch = fs.batch();
         invSnap.forEach((d) => {
-          const upd: Record<string, unknown> = {
-            dispatchSplitTotal: result.newTotal,
-            updatedAt: now,
-          };
           const sid = (d.data() as any).dispatchId;
-          if (sid && seqById.has(sid)) upd.dispatchSplitSequence = seqById.get(sid);
-          invBatch.update(d.ref, upd);
+          if (sid === legDispatchId) {
+            invBatch.update(d.ref, {
+              status: 'cancelled',
+              cancelReason: 'Split leg removed',
+              dispatchSplitLegRemoved: true,
+              dispatchSplitTotal: result.newTotal,
+              updatedAt: now,
+            });
+          } else {
+            const upd: Record<string, unknown> = {
+              dispatchSplitTotal: result.newTotal,
+              updatedAt: now,
+            };
+            if (sid && seqById.has(sid)) upd.dispatchSplitSequence = seqById.get(sid);
+            invBatch.update(d.ref, upd);
+          }
         });
         await invBatch.commit();
       }
@@ -1193,6 +1346,12 @@ export const removeSplitLeg = httpsV2.onCall(
       actorUid: actor.uid,
       driverId: actor.kind === 'driver' ? actor.driverId : undefined,
       detail: {
+        actor: {
+          uid: actor.uid,
+          kind: actor.kind,
+          companyId: actor.companyId,
+          ...(actor.kind === 'staff' ? { roles: actor.roles, caps: actor.caps, isPlatformAdmin: actor.isPlatformAdmin } : {}),
+        },
         legDispatchId,
         splitGroupId: result.splitGroupId,
         newTotal: result.newTotal,
@@ -1200,6 +1359,7 @@ export const removeSplitLeg = httpsV2.onCall(
     });
 
     return {
+      removed: true,
       splitGroupId: result.splitGroupId,
       removedId: result.removedId,
       newTotal: result.newTotal,
@@ -1232,18 +1392,14 @@ export const resequenceSplitFamily = httpsV2.onCall(
     const now = admin.firestore.Timestamp.now();
 
     const result = await fs.runTransaction(async (tx) => {
-      // Tenant-scoped query
-      let famQuery: FirebaseFirestore.Query;
-      if (actor.companyId) {
-        famQuery = fs
-          .collection('dispatches')
-          .where('companyId', '==', actor.companyId)
-          .where('splitGroupId', '==', splitGroupId);
-      } else if (actor.kind === 'staff' && actor.isPlatformAdmin) {
-        famQuery = fs.collection('dispatches').where('splitGroupId', '==', splitGroupId);
-      } else {
-        throw new httpsV2.HttpsError('permission-denied', 'Actor has no companyId');
+      // Tenant-scoped query — requires valid actor companyId (no unscoped platform-admin bypass)
+      if (!actor.companyId) {
+        throw new httpsV2.HttpsError('permission-denied', 'Actor has no assigned companyId');
       }
+      const famQuery = fs
+        .collection('dispatches')
+        .where('companyId', '==', actor.companyId)
+        .where('splitGroupId', '==', splitGroupId);
 
       const famSnap = await tx.get(famQuery);
       const family = famSnap.docs.map((d) => ({ id: d.id, ...d.data() }));
@@ -1328,12 +1484,21 @@ export const resequenceSplitFamily = httpsV2.onCall(
       actorUid: actor.uid,
       driverId: actor.kind === 'driver' ? actor.driverId : undefined,
       detail: {
+        actor: {
+          uid: actor.uid,
+          kind: actor.kind,
+          companyId: actor.companyId,
+          ...(actor.kind === 'staff' ? { roles: actor.roles, caps: actor.caps, isPlatformAdmin: actor.isPlatformAdmin } : {}),
+        },
         splitGroupId: result.splitGroupId,
         newTotal: result.newTotal,
+        order: result.order,
+        companyId: actor.companyId,
       },
     });
 
     return {
+      resequenced: true,
       splitGroupId: result.splitGroupId,
       newTotal: result.newTotal,
       base: result.base,

@@ -10,9 +10,15 @@ import {
   defaultLegacySplitCapabilityCompatibilityAdapter,
   AUTHORIZED_SPLIT_STAFF_ROLES,
   AUTHORIZED_SPLIT_STAFF_CAPS,
+  AUTHORIZED_SPLIT_OPERATIONAL_CAPS,
+  COMMAND_ID_REGEX,
+  validateCommandId,
+  computeSplitIdempotencyDocId,
+  canonicalizeAddSplitLegRequest,
   type SplitActor,
   type SplitCapabilityAuthorizer,
   type LegacySplitCapabilityCompatibilityAdapter,
+  type CanonicalAddSplitLegRequest,
 } from '../splitOps';
 
 describe('splitOps module', () => {
@@ -172,9 +178,29 @@ describe('splitOps module', () => {
       ).toMatchObject({ ok: false, code: 'permission-denied', reason: 'Cross-company access denied' });
     });
 
-    it('allows platform admin caller even with undefined companyId', () => {
+    it('rejects platform admin caller without matching tenant companyId (no broad platform-support bypass)', () => {
       const res = evaluateAddSplitLeg({
         actor: platformAdminActor,
+        parent: validParentDispatch,
+        parentDispatchId: 'disp-parent-1',
+        siblings: [],
+        legSpec: { disposal: 'SWD #1' },
+      });
+      expect(res).toMatchObject({
+        ok: false,
+        code: 'permission-denied',
+        reason: 'Cross-company access denied',
+      });
+    });
+
+    it('allows platform admin caller when matching tenant companyId is provided', () => {
+      const scopedAdminActor: SplitActor = {
+        ...platformAdminActor,
+        companyId: 'acme-hauling',
+        caps: ['manageDispatches'],
+      };
+      const res = evaluateAddSplitLeg({
+        actor: scopedAdminActor,
         parent: validParentDispatch,
         parentDispatchId: 'disp-parent-1',
         siblings: [],
@@ -1024,6 +1050,14 @@ describe('splitOps module', () => {
       }
     });
 
+    it('verifies splitOps.ts implements safe idempotency helpers and operational authority', () => {
+      const splitOpsSrc = fs.readFileSync(path.join(__dirname, '../splitOps.ts'), 'utf8');
+      expect(splitOpsSrc).toContain('computeSplitIdempotencyDocId');
+      expect(splitOpsSrc).toContain('canonicalizeAddSplitLegRequest');
+      expect(splitOpsSrc).toContain('validateCommandId');
+      expect(splitOpsSrc).toContain('AUTHORIZED_SPLIT_OPERATIONAL_CAPS');
+    });
+
     it('omits commandId when not provided (legacy caller contract)', () => {
       const evalRes = evaluateAddSplitLeg({
         actor: driverActor,
@@ -1036,6 +1070,210 @@ describe('splitOps module', () => {
       if (evalRes.ok) {
         expect(evalRes.newDispatchFields.commandId).toBeUndefined();
         expect(evalRes.newDispatchFields.idempotencyKey).toBeUndefined();
+      }
+    });
+  });
+
+  // ── Command ID Validation ─────────────────────────────────────────────────
+  describe('validateCommandId', () => {
+    it('accepts valid alphanumeric, hyphens, underscores, and UUIDs up to 128 chars', () => {
+      expect(validateCommandId('cmd-12345')).toBe('cmd-12345');
+      expect(validateCommandId('f47ac10b-58cc-4372-a567-0e02b2c3d479')).toBe(
+        'f47ac10b-58cc-4372-a567-0e02b2c3d479',
+      );
+      expect(validateCommandId('split_op_alpha_1')).toBe('split_op_alpha_1');
+      const maxLenStr = 'a'.repeat(128);
+      expect(validateCommandId(maxLenStr)).toBe(maxLenStr);
+    });
+
+    it('rejects empty or whitespace-only strings', () => {
+      expect(() => validateCommandId('')).toThrow('commandId cannot be empty');
+      expect(() => validateCommandId('   ')).toThrow('commandId cannot be empty');
+    });
+
+    it('rejects non-string values', () => {
+      expect(() => validateCommandId(12345)).toThrow('commandId must be a string');
+      expect(() => validateCommandId({})).toThrow('commandId must be a string');
+      expect(() => validateCommandId(null)).toThrow('commandId must be a string');
+      expect(() => validateCommandId(undefined)).toThrow('commandId must be a string');
+    });
+
+    it('rejects oversized strings exceeding 128 characters', () => {
+      const oversized = 'a'.repeat(129);
+      expect(() => validateCommandId(oversized)).toThrow(
+        'commandId exceeds maximum length of 128 characters',
+      );
+    });
+
+    it('rejects path injection, slashes, and illegal characters', () => {
+      expect(() => validateCommandId('cmd/with/slashes')).toThrow('invalid characters');
+      expect(() => validateCommandId('../path/traversal')).toThrow('invalid characters');
+      expect(() => validateCommandId('cmd with spaces')).toThrow('invalid characters');
+      expect(() => validateCommandId('cmd.with.dots')).toThrow('invalid characters');
+      expect(() => validateCommandId('cmd:with:colons')).toThrow('invalid characters');
+    });
+  });
+
+  // ── Safe Idempotency Identity ─────────────────────────────────────────────
+  describe('computeSplitIdempotencyDocId', () => {
+    it('produces a deterministic, collision-safe SHA-256 prefixed doc ID', () => {
+      const id1 = computeSplitIdempotencyDocId('company-a', 'parent-1', 'cmd-1');
+      const id2 = computeSplitIdempotencyDocId('company-a', 'parent-1', 'cmd-1');
+      expect(id1).toBe(id2);
+      expect(id1).toMatch(/^idem_[0-9a-f]{64}$/);
+      expect(id1.length).toBe(69);
+    });
+
+    it('prevents raw delimiter collisions across tuple members', () => {
+      // In raw concatenation: 'a_b' + 'c' == 'a' + 'b_c'
+      const idA = computeSplitIdempotencyDocId('a_b', 'c', 'cmd');
+      const idB = computeSplitIdempotencyDocId('a', 'b_c', 'cmd');
+      expect(idA).not.toBe(idB);
+    });
+  });
+
+  // ── Request Fingerprint & Canonicalization ────────────────────────────────
+  describe('canonicalizeAddSplitLegRequest', () => {
+    it('produces identical canonicalJson and digest regardless of property order', () => {
+      const spec1 = {
+        disposal: 'SWD Central',
+        bbls: 50,
+        destinationType: 'SWD',
+        notes: 'Priority run',
+      };
+      const spec2 = {
+        notes: 'Priority run',
+        destinationType: 'SWD',
+        bbls: 50,
+        disposal: 'SWD Central',
+      };
+
+      const canon1 = canonicalizeAddSplitLegRequest('disp-parent-1', spec1);
+      const canon2 = canonicalizeAddSplitLegRequest('disp-parent-1', spec2);
+
+      expect(canon1.canonicalJson).toBe(canon2.canonicalJson);
+      expect(canon1.requestDigest).toBe(canon2.requestDigest);
+      expect(canon1.requestDigest).toMatch(/^[0-9a-f]{64}$/);
+    });
+
+    it('produces distinct digests when mutation-defining inputs change', () => {
+      const baseSpec = { disposal: 'SWD Central', bbls: 50 };
+      const canonBase = canonicalizeAddSplitLegRequest('disp-parent-1', baseSpec);
+
+      const diffDisposal = canonicalizeAddSplitLegRequest('disp-parent-1', {
+        ...baseSpec,
+        disposal: 'SWD Other',
+      });
+      const diffBbls = canonicalizeAddSplitLegRequest('disp-parent-1', {
+        ...baseSpec,
+        bbls: 60,
+      });
+      const diffParent = canonicalizeAddSplitLegRequest('disp-parent-2', baseSpec);
+      const diffDest = canonicalizeAddSplitLegRequest('disp-parent-1', {
+        ...baseSpec,
+        destinationType: 'Refinery',
+      });
+
+      expect(diffDisposal.requestDigest).not.toBe(canonBase.requestDigest);
+      expect(diffBbls.requestDigest).not.toBe(canonBase.requestDigest);
+      expect(diffParent.requestDigest).not.toBe(canonBase.requestDigest);
+      expect(diffDest.requestDigest).not.toBe(canonBase.requestDigest);
+    });
+  });
+
+  // ── Broad Support Authority Matrix ────────────────────────────────────────
+  describe('resolveSplitActor: Broad Support Authority', () => {
+    it('rejects caller with IT role lacking operational dispatch capability', async () => {
+      const request = {
+        auth: {
+          uid: 'staff-it-support',
+          token: {},
+        },
+      } as any;
+      const readers = {
+        getDriverProfile: async () => ({ exists: false }),
+        getDashboardUser: async () => ({
+          uid: 'staff-it-support',
+          roles: ['it'],
+          companyId: 'acme-hauling',
+          caps: ['manageUsers', 'viewSystemLogs'],
+          isPlatformAdmin: false,
+        }),
+      };
+      await expect(resolveSplitActor(request, null, readers)).rejects.toThrow(
+        'Caller lacks required dispatch/staff permissions for split operations',
+      );
+    });
+
+    it('accepts caller with IT role who also possesses explicit operational capability', async () => {
+      const request = {
+        auth: {
+          uid: 'staff-it-ops',
+          token: {},
+        },
+      } as any;
+      const readers = {
+        getDriverProfile: async () => ({ exists: false }),
+        getDashboardUser: async () => ({
+          uid: 'staff-it-ops',
+          roles: ['it'],
+          companyId: 'acme-hauling',
+          caps: ['manageDispatches'],
+          isPlatformAdmin: false,
+        }),
+      };
+      const actor = await resolveSplitActor(request, null, readers);
+      expect(actor.kind).toBe('staff');
+      if (actor.kind === 'staff') {
+        expect(actor.roles).toContain('it');
+        expect(actor.caps).toContain('manageDispatches');
+      }
+    });
+
+    it('rejects platform admin without explicit operational capability', async () => {
+      const request = {
+        auth: {
+          uid: 'platform-admin-unprivileged',
+          token: {},
+        },
+      } as any;
+      const readers = {
+        getDriverProfile: async () => ({ exists: false }),
+        getDashboardUser: async () => ({
+          uid: 'platform-admin-unprivileged',
+          roles: ['admin'],
+          companyId: 'acme-hauling',
+          caps: ['viewAllCompanies'],
+          isPlatformAdmin: true,
+        }),
+      };
+      await expect(resolveSplitActor(request, null, readers)).rejects.toThrow(
+        'Caller lacks required dispatch/staff permissions for split operations',
+      );
+    });
+
+    it('accepts platform admin who possesses explicit operational capability (manageJobs)', async () => {
+      const request = {
+        auth: {
+          uid: 'platform-admin-ops',
+          token: {},
+        },
+      } as any;
+      const readers = {
+        getDriverProfile: async () => ({ exists: false }),
+        getDashboardUser: async () => ({
+          uid: 'platform-admin-ops',
+          roles: ['admin'],
+          companyId: 'acme-hauling',
+          caps: ['manageJobs'],
+          isPlatformAdmin: true,
+        }),
+      };
+      const actor = await resolveSplitActor(request, null, readers);
+      expect(actor.kind).toBe('staff');
+      if (actor.kind === 'staff') {
+        expect(actor.isPlatformAdmin).toBe(true);
+        expect(actor.caps).toContain('manageJobs');
       }
     });
   });

@@ -83,6 +83,12 @@ export {
   SplitCapabilityAuthorizer,
   AUTHORIZED_SPLIT_STAFF_ROLES,
   AUTHORIZED_SPLIT_STAFF_CAPS,
+  AUTHORIZED_SPLIT_OPERATIONAL_CAPS,
+  COMMAND_ID_REGEX,
+  validateCommandId,
+  computeSplitIdempotencyDocId,
+  canonicalizeAddSplitLegRequest,
+  CanonicalAddSplitLegRequest,
   getPublicClientMeta,
 } from './operational';
 
