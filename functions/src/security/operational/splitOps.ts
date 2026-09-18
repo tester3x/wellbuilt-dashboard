@@ -69,17 +69,61 @@ export interface CapabilityEnforcementContext {
   actor: SplitActor;
 }
 
-export interface SplitCapabilityAuthorizer {
+/**
+ * LEGACY COMPATIBILITY ADAPTER — NOT ACTUAL PACKET CAPABILITY ENFORCEMENT.
+ *
+ * Architectural Note:
+ * This adapter serves as a transitional compatibility bridge during the migration
+ * to declarative Job Packets. It currently returns `{ allowed: true }` when
+ * packet metadata is absent or unconfigured, ensuring legacy dispatch workflows
+ * continue without interruption while the packet capability engine is deployed.
+ *
+ * THIS DOES NOT CONSTITUTE ACTUAL PACKET CAPABILITY ENFORCEMENT.
+ * In a true declarative packet model, missing capability metadata must NOT be
+ * interpreted as a grant; instead, operations must be denied unless explicitly
+ * permitted by the resolved job packet definition.
+ *
+ * Required Upstream Dependency (Codex):
+ * To achieve true packet capability enforcement, Codex / Platform Architecture must supply:
+ * 1. Packet Capability Schema Token: A formal capability token (e.g. `splitTicket`,
+ *    `multiLegDisposal`, or `canSplit`) declared in the company's job packet schemas.
+ * 2. Packet Resolver: A server-side service that resolves a dispatch's `packageId`
+ *    (or jobType/serviceType) against the company's declarative packet configuration.
+ * 3. Authoritative Evaluator: A strict enforcement evaluator that rejects split
+ *    mutations if the packet capability token is absent, false, or expired, replacing
+ *    this permissive legacy bridge.
+ */
+export interface LegacySplitCapabilityCompatibilityAdapter {
   authorizeSplitOperation(
     context: CapabilityEnforcementContext,
   ): Promise<{ allowed: boolean; reason?: string }>;
 }
 
-export const defaultSplitCapabilityAuthorizer: SplitCapabilityAuthorizer = {
+/** Backwards compatibility alias for LegacySplitCapabilityCompatibilityAdapter. */
+export type SplitCapabilityAuthorizer = LegacySplitCapabilityCompatibilityAdapter;
+
+export const defaultLegacySplitCapabilityCompatibilityAdapter: LegacySplitCapabilityCompatibilityAdapter = {
   async authorizeSplitOperation(_context) {
     return { allowed: true };
   },
 };
+
+/** Backwards compatibility alias for defaultLegacySplitCapabilityCompatibilityAdapter. */
+export const defaultSplitCapabilityAuthorizer = defaultLegacySplitCapabilityCompatibilityAdapter;
+
+// ── Authorized Staff Roles & Capabilities ───────────────────────────────────
+export const AUTHORIZED_SPLIT_STAFF_ROLES = new Set([
+  'admin',
+  'it',
+  'manager',
+  'dispatch',
+]);
+
+export const AUTHORIZED_SPLIT_STAFF_CAPS = new Set([
+  'dispatch',
+  'manageDispatches',
+  'manageJobs',
+]);
 
 // ── Server-side Actor Resolution ────────────────────────────────────────────
 export type SplitActorReaders = {
@@ -119,6 +163,10 @@ export async function resolveSplitActor(
   const readProfile = async (id: string) => {
     if (readers?.getDriverProfile) {
       return readers.getDriverProfile(id);
+    }
+    // In emulator environment without RTDB emulator running, avoid hanging on RTDB connection
+    if (!process.env.FIREBASE_DATABASE_EMULATOR_HOST && process.env.FIRESTORE_EMULATOR_HOST) {
+      return { exists: false };
     }
     const snap = await admin.database().ref(`drivers/profiles/${id}`).once('value');
     if (!snap.exists()) {
@@ -202,12 +250,18 @@ export async function resolveSplitActor(
     const staffCaller = readers?.getDashboardUser
       ? await readers.getDashboardUser(uid, token)
       : await requireRegisteredDashboardUser(uid, token);
-    const isStaffRole = staffCaller.roles.some((r: string) =>
-      ['admin', 'it', 'manager', 'dispatch'].includes(r),
+    const isAuthorizedRole = staffCaller.roles.some((r: string) =>
+      AUTHORIZED_SPLIT_STAFF_ROLES.has(r),
     );
-    const hasManageDrivers = staffCaller.caps.includes('manageDrivers');
-    if (!isStaffRole && !hasManageDrivers && !staffCaller.isPlatformAdmin) {
-      throw new httpsV2.HttpsError('permission-denied', 'Caller lacks required staff permissions');
+    const isAuthorizedCap = staffCaller.caps.some((c: string) =>
+      AUTHORIZED_SPLIT_STAFF_CAPS.has(c),
+    );
+    // Explicitly reject callers who only have manageDrivers without dispatch/manager/admin authority
+    if (!isAuthorizedRole && !isAuthorizedCap && !staffCaller.isPlatformAdmin) {
+      throw new httpsV2.HttpsError(
+        'permission-denied',
+        'Caller lacks required dispatch/staff permissions for split operations',
+      );
     }
     return {
       kind: 'staff',
@@ -241,7 +295,9 @@ export type EvaluateAddSplitLegInput = {
     destinationType?: unknown;
   };
   nowMillis?: number;
+  commandId?: string;
   idempotencyKey?: string;
+  operationId?: string;
 };
 
 export type EvaluateAddSplitLegResult =
@@ -441,7 +497,10 @@ export function evaluateAddSplitLeg(input: EvaluateAddSplitLegInput): EvaluateAd
     assignedBy: actor.kind === 'driver' ? `driver:${actor.driverId}` : actor.uid,
     loadCount: 1,
     loadsCompleted: 0,
-    ...(input.idempotencyKey ? { idempotencyKey: input.idempotencyKey } : {}),
+    ...(input.commandId ? { commandId: input.commandId } : {}),
+    ...(input.idempotencyKey || input.commandId || input.operationId
+      ? { idempotencyKey: input.idempotencyKey || input.commandId || input.operationId }
+      : {}),
   };
 
   return {
@@ -776,7 +835,9 @@ export const addSplitLeg = httpsV2.onCall(
     const data = (request.data || {}) as {
       parentDispatchId?: string;
       callerDriverHash?: string;
+      commandId?: string;
       idempotencyKey?: string;
+      operationId?: string;
       legSpec?: {
         disposal?: string;
         disposalLat?: number | null;
@@ -800,44 +861,55 @@ export const addSplitLeg = httpsV2.onCall(
       throw new httpsV2.HttpsError('invalid-argument', 'legSpec.disposal is required');
     }
 
+    const stableCommandId =
+      (typeof data.commandId === 'string' && data.commandId.trim()) ||
+      (typeof data.idempotencyKey === 'string' && data.idempotencyKey.trim()) ||
+      (typeof data.operationId === 'string' && data.operationId.trim()) ||
+      null;
+
     const fs = admin.firestore();
-
-    // Idempotency check if key supplied
-    const idemKey = typeof data.idempotencyKey === 'string' ? data.idempotencyKey.trim() : '';
-    if (idemKey) {
-      const exQuery = await fs
-        .collection('dispatches')
-        .where('idempotencyKey', '==', idemKey)
-        .limit(1)
-        .get();
-      if (!exQuery.empty) {
-        const exDoc = exQuery.docs[0];
-        const exData = exDoc.data() || {};
-        return {
-          idempotent: true,
-          newDispatchId: exDoc.id,
-          splitGroupId: exData.splitGroupId,
-          splitSequence: exData.splitSequence,
-          splitTotal: exData.splitTotal,
-          parentBblsBefore: exData.bbls ?? null,
-          parentBblsAfter: exData.bbls ?? null,
-        };
-      }
-    }
-
     const now = admin.firestore.Timestamp.now();
     const newDispatchRef = fs.collection('dispatches').doc();
 
     const result = await fs.runTransaction(async (tx) => {
       const parentRef = fs.collection('dispatches').doc(parentDispatchId);
       const parentSnap = await tx.get(parentRef);
-      const parentData = parentSnap.exists ? (parentSnap.data() as Record<string, unknown>) : null;
+      if (!parentSnap.exists) {
+        throw new httpsV2.HttpsError('not-found', `Parent dispatch ${parentDispatchId} not found`);
+      }
+      const parentData = parentSnap.data() as Record<string, unknown>;
+      const parentCompanyId = typeof parentData.companyId === 'string' ? parentData.companyId.trim() : '';
+      if (!parentCompanyId) {
+        throw new httpsV2.HttpsError('failed-precondition', 'Parent dispatch has no companyId');
+      }
+
+      // ── Transactional Tenant & Job Scoped Idempotency Check ───────────────
+      let idemRef: FirebaseFirestore.DocumentReference | null = null;
+      if (stableCommandId) {
+        idemRef = fs
+          .collection('split_idempotency')
+          .doc(`${parentCompanyId}_${parentDispatchId}_${stableCommandId}`);
+        const idemSnap = await tx.get(idemRef);
+        if (idemSnap.exists) {
+          const rec = (idemSnap.data() || {}) as Record<string, unknown>;
+          return {
+            idempotent: true,
+            newDispatchId: String(rec.newDispatchId || ''),
+            splitGroupId: String(rec.splitGroupId || ''),
+            splitSequence: typeof rec.splitSequence === 'number' ? rec.splitSequence : 1,
+            splitTotal: typeof rec.splitTotal === 'number' ? rec.splitTotal : 1,
+            parentBblsBefore: typeof rec.parentBblsBefore === 'number' ? rec.parentBblsBefore : null,
+            parentBblsAfter: typeof rec.parentBblsAfter === 'number' ? rec.parentBblsAfter : null,
+            companyId: parentCompanyId,
+          };
+        }
+      }
 
       // Capability enforcement seam
-      const capCheck = await defaultSplitCapabilityAuthorizer.authorizeSplitOperation({
+      const capCheck = await defaultLegacySplitCapabilityCompatibilityAdapter.authorizeSplitOperation({
         operation: 'add',
-        dispatch: parentData || undefined,
-        splitGroupId: parentData?.splitGroupId as string | undefined,
+        dispatch: parentData,
+        splitGroupId: parentData.splitGroupId as string | undefined,
         actor,
       });
       if (!capCheck.allowed) {
@@ -845,10 +917,9 @@ export const addSplitLeg = httpsV2.onCall(
       }
 
       let siblings: Array<{ id: string; [key: string]: unknown }> = [];
-      const parentSplitGroupId = parentData?.splitGroupId as string | undefined;
-      const parentCompanyId = parentData?.companyId as string | undefined;
+      const parentSplitGroupId = parentData.splitGroupId as string | undefined;
 
-      if (parentSplitGroupId && parentCompanyId) {
+      if (parentSplitGroupId) {
         const sibSnap = await tx.get(
           fs
             .collection('dispatches')
@@ -865,7 +936,8 @@ export const addSplitLeg = httpsV2.onCall(
         siblings,
         legSpec,
         nowMillis: now.toMillis(),
-        idempotencyKey: idemKey || undefined,
+        commandId: stableCommandId || undefined,
+        idempotencyKey: stableCommandId || undefined,
       });
 
       if (!evaluation.ok) {
@@ -909,21 +981,58 @@ export const addSplitLeg = httpsV2.onCall(
         }
       }
 
-      return evaluation;
+      // Atomically record idempotency doc in the exact same transaction
+      if (idemRef && stableCommandId) {
+        tx.set(idemRef, {
+          companyId: parentCompanyId,
+          parentDispatchId,
+          commandId: stableCommandId,
+          newDispatchId: newDispatchRef.id,
+          splitGroupId: evaluation.splitGroupId,
+          splitSequence: evaluation.nextSequence,
+          splitTotal: evaluation.newTotal,
+          parentBblsBefore: evaluation.parentBblsBefore,
+          parentBblsAfter: evaluation.parentBblsAfter,
+          createdAt: now,
+        });
+      }
+
+      return {
+        idempotent: false,
+        newDispatchId: newDispatchRef.id,
+        splitGroupId: evaluation.splitGroupId,
+        splitSequence: evaluation.nextSequence,
+        splitTotal: evaluation.newTotal,
+        parentBblsBefore: evaluation.parentBblsBefore,
+        parentBblsAfter: evaluation.parentBblsAfter,
+        companyId: parentCompanyId,
+      };
     });
+
+    if (result.idempotent) {
+      return {
+        idempotent: true,
+        newDispatchId: result.newDispatchId,
+        splitGroupId: result.splitGroupId,
+        splitSequence: result.splitSequence,
+        splitTotal: result.splitTotal,
+        parentBblsBefore: result.parentBblsBefore,
+        parentBblsAfter: result.parentBblsAfter ?? result.parentBblsBefore,
+      };
+    }
 
     // Mirror to invoices (matching company & splitGroupId)
     try {
       const invSnap = await fs
         .collection('invoices')
-        .where('companyId', '==', result.newDispatchFields.companyId)
+        .where('companyId', '==', result.companyId)
         .where('dispatchSplitGroupId', '==', result.splitGroupId)
         .get();
       if (!invSnap.empty) {
         const invBatch = fs.batch();
         invSnap.forEach((d) => {
           invBatch.update(d.ref, {
-            dispatchSplitTotal: result.newTotal,
+            dispatchSplitTotal: result.splitTotal,
             updatedAt: now,
           });
         });
@@ -939,18 +1048,18 @@ export const addSplitLeg = httpsV2.onCall(
       driverId: actor.kind === 'driver' ? actor.driverId : undefined,
       detail: {
         parentDispatchId,
-        newDispatchId: newDispatchRef.id,
+        newDispatchId: result.newDispatchId,
         splitGroupId: result.splitGroupId,
-        splitSequence: result.nextSequence,
-        companyId: result.newDispatchFields.companyId,
+        splitSequence: result.splitSequence,
+        companyId: result.companyId,
       },
     });
 
     return {
-      newDispatchId: newDispatchRef.id,
+      newDispatchId: result.newDispatchId,
       splitGroupId: result.splitGroupId,
-      splitSequence: result.nextSequence,
-      splitTotal: result.newTotal,
+      splitSequence: result.splitSequence,
+      splitTotal: result.splitTotal,
       parentBblsBefore: result.parentBblsBefore,
       parentBblsAfter: result.parentBblsAfter ?? result.parentBblsBefore,
     };
@@ -996,7 +1105,7 @@ export const removeSplitLeg = httpsV2.onCall(
       }
 
       // Capability enforcement seam
-      const capCheck = await defaultSplitCapabilityAuthorizer.authorizeSplitOperation({
+      const capCheck = await defaultLegacySplitCapabilityCompatibilityAdapter.authorizeSplitOperation({
         operation: 'remove',
         dispatch: legData || undefined,
         splitGroupId,
@@ -1140,7 +1249,7 @@ export const resequenceSplitFamily = httpsV2.onCall(
       const family = famSnap.docs.map((d) => ({ id: d.id, ...d.data() }));
 
       // Capability enforcement seam
-      const capCheck = await defaultSplitCapabilityAuthorizer.authorizeSplitOperation({
+      const capCheck = await defaultLegacySplitCapabilityCompatibilityAdapter.authorizeSplitOperation({
         operation: 'resequence',
         splitGroupId,
         actor,

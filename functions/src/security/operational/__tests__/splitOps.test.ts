@@ -7,8 +7,12 @@ import {
   evaluateResequenceSplitFamily,
   resolveSplitActor,
   defaultSplitCapabilityAuthorizer,
+  defaultLegacySplitCapabilityCompatibilityAdapter,
+  AUTHORIZED_SPLIT_STAFF_ROLES,
+  AUTHORIZED_SPLIT_STAFF_CAPS,
   type SplitActor,
   type SplitCapabilityAuthorizer,
+  type LegacySplitCapabilityCompatibilityAdapter,
 } from '../splitOps';
 
 describe('splitOps module', () => {
@@ -838,20 +842,65 @@ describe('splitOps module', () => {
       });
     });
 
-    it('resolves dashboard staff caller with manageDrivers capability', async () => {
+    it('rejects caller with only manageDrivers capability (not dispatch authority)', async () => {
       const request = {
         auth: {
-          uid: 'staff-manager-1',
+          uid: 'staff-driver-admin-1',
           token: {},
         },
       } as any;
       const readers = {
-        getDriverProfile: async () => ({
-          exists: false,
-        }),
+        getDriverProfile: async () => ({ exists: false }),
         getDashboardUser: async () => ({
-          uid: 'staff-manager-1',
-          roles: ['custom_role'],
+          uid: 'staff-driver-admin-1',
+          roles: ['driver_recruiter'],
+          companyId: 'acme',
+          caps: ['manageDrivers'],
+          isPlatformAdmin: false,
+        }),
+      };
+      await expect(resolveSplitActor(request, null, readers)).rejects.toThrow(
+        'Caller lacks required dispatch/staff permissions for split operations',
+      );
+    });
+
+    it('accepts staff with dispatch/manageDispatches capability', async () => {
+      const request = {
+        auth: {
+          uid: 'staff-custom-dispatcher-1',
+          token: {},
+        },
+      } as any;
+      const readers = {
+        getDriverProfile: async () => ({ exists: false }),
+        getDashboardUser: async () => ({
+          uid: 'staff-custom-dispatcher-1',
+          roles: ['custom_ops'],
+          companyId: 'acme',
+          caps: ['manageDispatches'],
+          isPlatformAdmin: false,
+        }),
+      };
+      const actor = await resolveSplitActor(request, null, readers);
+      expect(actor.kind).toBe('staff');
+      if (actor.kind === 'staff') {
+        expect(actor.roles).toEqual(['custom_ops']);
+        expect(actor.caps).toEqual(['manageDispatches']);
+      }
+    });
+
+    it('accepts manager role', async () => {
+      const request = {
+        auth: {
+          uid: 'staff-mgr-1',
+          token: {},
+        },
+      } as any;
+      const readers = {
+        getDriverProfile: async () => ({ exists: false }),
+        getDashboardUser: async () => ({
+          uid: 'staff-mgr-1',
+          roles: ['manager'],
           companyId: 'acme',
           caps: ['manageDrivers'],
           isPlatformAdmin: false,
@@ -859,6 +908,28 @@ describe('splitOps module', () => {
       };
       const actor = await resolveSplitActor(request, null, readers);
       expect(actor.kind).toBe('staff');
+    });
+
+    it('rejects dashboard user with unprivileged payroll role', async () => {
+      const request = {
+        auth: {
+          uid: 'payroll-uid',
+          token: {},
+        },
+      } as any;
+      const readers = {
+        getDriverProfile: async () => ({ exists: false }),
+        getDashboardUser: async () => ({
+          uid: 'payroll-uid',
+          roles: ['payroll'],
+          companyId: 'acme',
+          caps: [],
+          isPlatformAdmin: false,
+        }),
+      };
+      await expect(resolveSplitActor(request, null, readers)).rejects.toThrow(
+        'Caller lacks required dispatch/staff permissions for split operations',
+      );
     });
 
     it('rejects dashboard user with unprivileged viewer role', async () => {
@@ -878,7 +949,9 @@ describe('splitOps module', () => {
           isPlatformAdmin: false,
         }),
       };
-      await expect(resolveSplitActor(request, null, readers)).rejects.toThrow('Caller lacks required staff permissions');
+      await expect(resolveSplitActor(request, null, readers)).rejects.toThrow(
+        'Caller lacks required dispatch/staff permissions for split operations',
+      );
     });
   });
 
@@ -908,7 +981,7 @@ describe('splitOps module', () => {
       expect(opSrc).toMatch(/\bresequenceSplitFamily\b/);
     });
 
-    it('verifies splitOps.ts implements transactional tenant-scoped updates', () => {
+    it('verifies splitOps.ts implements transactional tenant-scoped updates and split_idempotency', () => {
       const splitOpsSrc = fs.readFileSync(path.join(__dirname, '../splitOps.ts'), 'utf8');
       // Transaction check
       expect(splitOpsSrc).toContain('runTransaction');
@@ -919,6 +992,51 @@ describe('splitOps module', () => {
       expect(splitOpsSrc).toContain('resolveSplitActor');
       // Audit log check
       expect(splitOpsSrc).toContain('writeSecurityAudit');
+      // Tenant/job scoped idempotency doc check
+      expect(splitOpsSrc).toContain("collection('split_idempotency')");
+      // Legacy compatibility adapter check
+      expect(splitOpsSrc).toContain('LegacySplitCapabilityCompatibilityAdapter');
+      expect(splitOpsSrc).toContain('AUTHORIZED_SPLIT_STAFF_ROLES');
+      expect(splitOpsSrc).toContain('AUTHORIZED_SPLIT_STAFF_CAPS');
+    });
+
+    it('verifies defaultLegacySplitCapabilityCompatibilityAdapter returns allowed', async () => {
+      const res = await defaultLegacySplitCapabilityCompatibilityAdapter.authorizeSplitOperation({
+        operation: 'add',
+        actor: driverActor,
+      });
+      expect(res.allowed).toBe(true);
+    });
+
+    it('stamps commandId and idempotencyKey when provided to evaluateAddSplitLeg', () => {
+      const evalRes = evaluateAddSplitLeg({
+        actor: driverActor,
+        parent: validParentDispatch,
+        parentDispatchId: 'disp-parent-1',
+        siblings: [],
+        legSpec: { disposal: 'SWD #1', bbls: 50 },
+        commandId: 'cmd-stable-uuid-42',
+      });
+      expect(evalRes.ok).toBe(true);
+      if (evalRes.ok) {
+        expect(evalRes.newDispatchFields.commandId).toBe('cmd-stable-uuid-42');
+        expect(evalRes.newDispatchFields.idempotencyKey).toBe('cmd-stable-uuid-42');
+      }
+    });
+
+    it('omits commandId when not provided (legacy caller contract)', () => {
+      const evalRes = evaluateAddSplitLeg({
+        actor: driverActor,
+        parent: validParentDispatch,
+        parentDispatchId: 'disp-parent-1',
+        siblings: [],
+        legSpec: { disposal: 'SWD #1', bbls: 50 },
+      });
+      expect(evalRes.ok).toBe(true);
+      if (evalRes.ok) {
+        expect(evalRes.newDispatchFields.commandId).toBeUndefined();
+        expect(evalRes.newDispatchFields.idempotencyKey).toBeUndefined();
+      }
     });
   });
 });

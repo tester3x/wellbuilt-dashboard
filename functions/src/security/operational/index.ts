@@ -34,5 +34,10 @@ export {
   evaluateRemoveSplitLeg,
   evaluateResequenceSplitFamily,
   defaultSplitCapabilityAuthorizer,
+  defaultLegacySplitCapabilityCompatibilityAdapter,
+  LegacySplitCapabilityCompatibilityAdapter,
+  SplitCapabilityAuthorizer,
+  AUTHORIZED_SPLIT_STAFF_ROLES,
+  AUTHORIZED_SPLIT_STAFF_CAPS,
 } from './splitOps';
 export { getPublicClientMeta } from './publicMeta';

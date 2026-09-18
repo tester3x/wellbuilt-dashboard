@@ -12,8 +12,12 @@ export async function writeSecurityAudit(entry: {
   detail?: Record<string, unknown>;
 }): Promise<void> {
   try {
+    const cleanEntry: Record<string, unknown> = {};
+    for (const [k, v] of Object.entries(entry)) {
+      if (v !== undefined) cleanEntry[k] = v;
+    }
     await admin.firestore().collection('security_audit').add({
-      ...entry,
+      ...cleanEntry,
       ts: FieldValue.serverTimestamp(),
     });
   } catch (err) {

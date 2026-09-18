@@ -44,24 +44,30 @@ async function loadDashboardCaller(
   }
 
   // Prefer RTDB profile (source of truth for Dashboard)
-  const snap = await admin.database().ref(`users/${authUid}`).once('value');
-  if (snap.exists()) {
-    const userData = snap.val() as Record<string, unknown>;
-    const roles = resolveRoles(userData);
-    const companyId = typeof userData.companyId === 'string' ? userData.companyId : undefined;
+  if (process.env.FIREBASE_DATABASE_EMULATOR_HOST || !process.env.FIRESTORE_EMULATOR_HOST) {
+    try {
+      const snap = await admin.database().ref(`users/${authUid}`).once('value');
+      if (snap.exists()) {
+        const userData = snap.val() as Record<string, unknown>;
+        const roles = resolveRoles(userData);
+        const companyId = typeof userData.companyId === 'string' ? userData.companyId : undefined;
 
-    let overrides: Record<string, string[]> = {};
-    if (companyId) {
-      try {
-        const cSnap = await admin.firestore().collection('companies').doc(companyId).get();
-        overrides = (cSnap.data()?.roleCapabilities || {}) as Record<string, string[]>;
-      } catch {
-        /* best-effort */
+        let overrides: Record<string, string[]> = {};
+        if (companyId) {
+          try {
+            const cSnap = await admin.firestore().collection('companies').doc(companyId).get();
+            overrides = (cSnap.data()?.roleCapabilities || {}) as Record<string, string[]>;
+          } catch {
+            /* best-effort */
+          }
+        }
+        const caps = resolveCaps(roles, overrides);
+        const isPlatformAdmin = !companyId && roles.some((r) => r === 'admin' || r === 'it');
+        return { uid: authUid, roles, companyId, caps, isPlatformAdmin };
       }
+    } catch {
+      /* fallback to custom claims */
     }
-    const caps = resolveCaps(roles, overrides);
-    const isPlatformAdmin = !companyId && roles.some((r) => r === 'admin' || r === 'it');
-    return { uid: authUid, roles, companyId, caps, isPlatformAdmin };
   }
 
   // Fallback: Auth custom claims (emulator + optional claim-based admin)
@@ -74,6 +80,11 @@ async function loadDashboardCaller(
       }
     }
     const claimCaps = resolveCaps(claimRoles, {});
+    if (Array.isArray((authToken as any).caps)) {
+      for (const c of (authToken as any).caps) {
+        if (typeof c === 'string' && !claimCaps.includes(c)) claimCaps.push(c);
+      }
+    }
     const companyId =
       typeof authToken.companyId === 'string' ? authToken.companyId : undefined;
     const isPlatformAdmin = !companyId && claimRoles.some((r) => r === 'admin' || r === 'it');
