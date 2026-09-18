@@ -19,8 +19,8 @@ The initial implementation attempt (`64c5271`) and rejected Phase-0 foundation s
 ### Hardened Trust Boundary Principles
 - **Dedicated Single-Purpose Control Plane**: The future `resetDriverPasscode` service performs exactly one operation: updating the authentication credentials of an existing canonical driver under strict tenant governance. It never registers drivers, converts legacy hashes, or resolves drivers by display name alone.
 - **Strict Separation of Authority Planes**: A global staff authentication identity alone carries ZERO tenant mutation power. Reset authority requires independent validation of tenant membership, tenant role capabilities, company security policy, and target driver ownership.
-- **Authoritative Transaction Read Set**: Pre-transaction snapshots are insufficient for mutation authorization. The Firestore transaction MUST re-read authoritative tenant membership, security policy, target driver ownership, driver liveness, and stored credential version inside its atomic read set.
-- **Plain Data Only**: Validators accept only supported plain data objects (prototypes `Object.prototype` or `null`), inspect own properties only, reject accessors/getters without invocation, reject symbols and non-enumerable fields, and return static error codes from a bounded enum without echoing attacker input.
+- **Authoritative Transaction Read Set**: Pre-transaction snapshots are insufficient for mutation authorization. The future Firestore transaction MUST re-read current tenant membership, role/capability authority, tenant policy, target binding, credential/version, and the operation journal inside its atomic read set.
+- **Plain Data Only**: Validators never validate-then-reread attacker input. They take one own-data-descriptor snapshot, copy validated values into a fresh detached object, and freeze only that copy. Accessors, symbols, hidden properties, holes, exotic prototypes, custom iterators, cycles, and unknown fields are rejected. Proxy/revoked-proxy trap failures return one static bounded error and never echo attacker messages.
 - **Secrets Boundary**: Plaintext passcodes exist solely in the wire request and the internal `ValidatedSecretBearingResetRequest` type. Secrets NEVER appear in receipts, cleanup effects, logs, errors, or public results.
 
 ---
@@ -37,7 +37,7 @@ To avoid architectural confusion, the platform's current production state is rig
 | **Liveness Check** | Production evaluates `active !== false` (missing `active` is treated as active). | Strict boolean `active: true` required for reset eligibility. Migration gate required before enforcement. |
 | **Passcode Format** | Registration (`passcode.ts`) accepts any string of 6..128 characters (letters, numbers, symbols, spaces). | Numeric-only digits (6..128 digits) is a future administrative reset-command policy for temporary codes. |
 | **Version CAS** | Does NOT exist today. Credential documents have no `credentialVersion` field. | Compare-and-swap on `credentialVersion` (positive safe integer, 1..1,000,000). |
-| **Self-Change** | Does NOT exist today. Drivers cannot self-reset from temporary to permanent passcode. | Future mobile/client flow with forced change on first login. |
+| **Self-Change** | `driverChangeOwnPasscode` already exists. It hashes a new passcode and updates `driver_credentials` but does **not** perform transactional version/CAS. | Keep the callable; add version CAS and journal reread in a later phase. |
 | **Auth Cleanup** | In-band, synchronous attempts with compensation hazards. | Asynchronous, durable, forward-only background worker (`AuthCleanupEffect`). |
 
 ---
@@ -85,26 +85,29 @@ Authority is partitioned into six distinct contracts across independent planes:
 ```
 
 ### Authoritative Transaction Read Set
-When Phase 3 executes the mutation transaction:
+When **Phase 2B** executes the mutation transaction:
 1. The transaction **MUST NOT** trust claims or pre-computed snapshots blindly.
 2. The transaction read set **MUST** fetch and re-validate:
-   - `companies/{companyId}` (policy still permits reset)
-   - `company_memberships/{membershipId}` (staff member still active in tenant)
-   - `driver_credentials/{driverId}` (driver still active, version equals `expectedCredentialVersion`)
-   - Driver tenant ownership binding (driver still owned by `companyId`)
+   - current tenant membership
+   - current role/capability authority
+   - current tenant security policy
+   - target driver binding
+   - current credential document and `credentialVersion`
+   - operation journal / existing commitment
 3. If any read-set record has changed or been revoked concurrently, the transaction aborts with zero side effects.
 
 ---
 
 ## 4. Plain Data & Input Sanitization Model
 
-All incoming and internal objects pass through `validatePlainDataObject`:
-- **Prototype Whitelist**: Only `Object.prototype` and `null` prototypes accepted. Rejects `Date`, `RegExp`, `Map`, `Set`, `Array`, functions, and custom class instances.
-- **Own Properties Only**: Inspects own properties via `Object.getOwnPropertyNames` and `Object.prototype.hasOwnProperty`. Rejects prototype-poisoned or inherited values.
-- **Accessor Rejection Without Invocation**: Inspects `PropertyDescriptor.get` and `.set`. If either is present, rejects with `accessor_property_rejected` without executing the getter or setter.
-- **Symbol & Non-Enumerable Rejection**: Any symbol property or non-enumerable property triggers immediate rejection.
-- **Bounded Inputs**: Maximum 32 own properties per object. Identifiers bounded by domain regexes.
-- **Zero Reflection of Attacker Input**: Error codes and messages are strictly static values from `VALIDATION_ERROR_CODES`. Attacker-controlled key names, values, or exception strings are never echoed.
+All incoming and internal objects are snapshotted before validation:
+- Obtain one own-property descriptor snapshot (bounded exception handling around every reflection).
+- Use own enumerable data descriptors only. Reject accessors, symbols, hidden properties, holes, exotic prototypes, custom iterators, malformed arrays, and unknown fields.
+- Validate descriptor values, then build a fresh detached copy. Freeze only the copy and the success/error wrapper. Never spread, destructure, iterate, stringify, or deep-freeze the original input.
+- Reject cycles, excessive depth, excessive keys, oversized strings, and oversized arrays before expensive allocation.
+- Polluted `Object.prototype` / inherited `staffUid` / inherited membership never authorize. Role/capability arrays are dense bounded strings only.
+- Policy fields require exact validated numbers and booleans. Invalid reset modes are rejected, never defaulted to temporary. Permanent reset is forbidden when policy requires temporary reset.
+- Commitment hashes must match `hmac-sha256:<64 lowercase hex>`. Phase 0 does not hash. Plaintext and low-entropy hashes are not stored or exposed.
 
 ---
 
@@ -133,7 +136,7 @@ Cryptographic constraints are derived strictly from `functions/src/security/pass
 ### Secret Handling Boundary
 - **`CanonicalResetRequest`**: Wire contract containing `newPasscode`.
 - **`ValidatedSecretBearingResetRequest`**: Explicitly named internal type containing `newPasscode` and commitment hash.
-- **`CanonicalResetOperationCommitment`**: Sanitized public representation replacing `newPasscode` with `passcodeDigitCount` and `commitmentHash`.
+- **`CanonicalResetOperationCommitment`**: Sanitized public representation replacing `newPasscode` with `passcodeDigitCount` and a server-keyed `commitmentHash` (`hmac-sha256:<64 lowercase hex>`). Phase 0 validates format only.
 - **Receipts & Effects**: `ResetReceipt` and `AuthCleanupEffect` NEVER contain passcode or credential secrets.
 - **Runtime Immutability**: All validator return values are recursively frozen via `deepFreeze()`.
 

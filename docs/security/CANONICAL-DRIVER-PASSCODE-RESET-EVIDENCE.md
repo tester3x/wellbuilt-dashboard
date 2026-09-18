@@ -1,95 +1,63 @@
-# Canonical Driver Reset Phase 0 Hardening: Verification Evidence
+# Canonical Driver Reset Phase 0 Hardening V2: Verification Evidence
 
 ## Baseline & Target Metadata
 - **Repository**: `tester3x/wellbuilt-dashboard`
-- **Frozen Repair Parent**: `696ec92deea6c3b4e6fe8fb0518a2c0ccb1f56c0`
-- **Target Branch**: `fix/canonical-reset-phase0-hardening-20260918`
-- **Isolated Worktree**: `D:\dev\_dash_canonical_reset_hardening`
-- **Candidate Commit Scope**: Atomic repair commit directly on `696ec92deea6c3b4e6fe8fb0518a2c0ccb1f56c0`
+- **Frozen Repair Parent**: `23f1e69081467b1b9825e21e34dde08f1aa063d0`
+- **Target Branch**: `fix/canonical-reset-phase0-hardening-v2-20260918`
+- **Candidate Commit Scope**: One atomic documentation+validator repair on parent `23f1e690`. Prior commit is not amended.
+
+No universal safety guarantee is claimed beyond the executable tests in this suite.
 
 ---
 
 ## Strict Six-File Inventory
-This hardening repair strictly modifies exactly the six Phase-0 files specified in the assignment:
+This v2 repair modifies exactly the six logical Phase-0 artifacts:
 
-1. `functions/src/security/resetDesign/contracts.ts` (Distinct authority planes, scrypt profile bounds, sanitized commitments, lifecycle state machines)
-2. `functions/src/security/resetDesign/validate.ts` (Plain data inspection, accessor descriptor rejection, scrypt bounds, operand validation, deep freeze immutability)
-3. `functions/src/security/__tests__/resetDesignContracts.test.ts` (Exhaustive unit test suite covering baseline categories and all Desktop Codex counterexamples)
-4. `docs/security/CANONICAL-DRIVER-PASSCODE-RESET.md` (Hardened architectural design specification)
-5. `docs/security/CANONICAL-DRIVER-PASSCODE-RESET-PHASES.md` (Authoritative sequential phase gates)
-6. `docs/security/CANONICAL-DRIVER-PASSCODE-RESET-EVIDENCE.md` (Verification evidence, audit mapping, and test execution logs)
+1. `functions/src/security/resetDesign/contracts.ts`
+2. `functions/src/security/resetDesign/validate.ts`
+3. `functions/src/security/__tests__/resetDesignContracts.test.ts`
+4. `docs/security/CANONICAL-DRIVER-PASSCODE-RESET.md`
+5. `docs/security/CANONICAL-DRIVER-PASSCODE-RESET-PHASES.md`
+6. `docs/security/CANONICAL-DRIVER-PASSCODE-RESET-EVIDENCE.md`
+
+The prior hardening commit `23f1e690` described six logical artifacts but Git recorded **nine** changed paths: three documentation adds, three documentation deletes (rename), and three code mods.
 
 ---
 
-## Audit Findings to Corrections Mapping
+## Codex HOLD F1–F10 and P2 mapping
 
-| # | Desktop Codex Audit Finding | Implemented Hardening Correction |
-| :- | :--- | :--- |
-| **1** | **Conflated Authority Planes** | Defined 6 distinct contracts: `StaffPrincipal`, `TenantMembership`, `TenantRoleCapabilities`, `TenantSecurityPolicy`, `TargetDriverBinding`, `ResetAuthzSnapshot`. Enforced that a global staff UID carries zero tenant authority. Documented mandatory transaction read-set re-validation. |
-| **2** | **Unrestricted Object Inspection & Prototype Traps** | Created `validatePlainDataObject` verifying `Object.prototype` or `null` prototype, rejecting `Date`, `RegExp`, `Map`, `Set`, `Array`, and custom classes. Catches prototype/descriptor exceptions and returns static error. |
-| **3** | **Accessor Descriptors / Getter Execution** | Inspects `PropertyDescriptor.get` and `.set` without invoking them. Rejects with `accessor_property_rejected`. Proved getters are never executed during validation. |
-| **4** | **Attacker Input Echoing in Errors** | Replaced dynamic key/value string interpolation with static error codes from bounded `VALIDATION_ERROR_CODES` enum. Attacker-controlled keys and values are never reflected. |
-| **5** | **Composite Operand Assumption** | `validateSessionVersionMatch`, `validateReceiptEffectAlignment`, `validateEffectLifecycleTransition`, and `validateOperationRetryCommitment` validate all operands first before inspecting properties. |
-| **6** | **Mismatched Scrypt Fixtures & Resource DoS** | Grounded parameters in `functions/src/security/passcode.ts`. Salt bounded to 16..32 bytes. Decoded hash byte length must strictly equal `keyLen` (32 bytes). Implemented 32 MB memory ceiling (`128 * N * r <= 32 MB`). Enforced strict canonical base64 via decode/re-encode equality check. |
-| **7** | **Runtime Immutability** | Implemented recursive `deepFreeze()` on all validator return values. Verified that property mutation attempts throw `TypeError`. |
-| **8** | **Secret-Bearing Type Separation** | Established internal `ValidatedSecretBearingResetRequest` (contains `newPasscode`) and sanitized `CanonicalResetOperationCommitment` (strips `newPasscode`). Secrets strictly barred from receipts, effects, logs, and errors. |
-| **9** | **Unsafe Counters & Chronology Violations** | Enforced safe integer counters (`0 <= count <= 1,000,000`), rejecting `Number.MAX_SAFE_INTEGER`. Enforced strict ISO 8601 timestamps and chronology (`createdAt <= lastAttemptAt <= completedAt / failedAt`). |
-| **10**| **Domain Identifiers & Path Traversal** | Document ID regex rejects path traversal (`.` and `..`), slashes, and whitespace. Auth UID regex permits colons (`:`) for federated providers (e.g. `auth0:...`) while rejecting path traversal and slashes. |
-| **11**| **Forward-Only Effect Transitions & Fencing** | Enforced `ALLOWED_EFFECT_TRANSITIONS`. Completed effects are terminal and cannot be replayed or regressed to pending. Bounded retries (`max 5`) and non-regressing `fenceGeneration`. |
-| **12**| **Reconciliation of Current Source vs Target Design** | Documented current Firestore schema (`passcode` nested under document ID = `driverId`, missing `companyId` on credential doc, `active !== false` evaluation, 6..128 char arbitrary registration passcodes) vs future target schema (`CanonicalCredential` with `credentialVersion` CAS, `active: true`, and numeric reset policy). |
+| ID | Finding | Correction |
+| :--- | :--- | :--- |
+| **F1** | Validate-then-reread attacker input; freeze original | Own-data-descriptor snapshot, detached copy, freeze copy/wrapper only |
+| **F2** | Inherited authority / prototype pollution | Snapshot copies own enumerable data descriptors only; inherited `staffUid` / `canResetDriverPasscode` never authorize |
+| **F3** | Policy defaults and silent temporary mode | Exact numeric/boolean policy fields; invalid `resetMode` rejected; permanent forbidden when `requireTemporaryOnReset` |
+| **F4** | Incomplete idempotency / low-entropy hash | Full commitment validation; bind op/actor/tenant/driver/mode/version/creation/hash; `hmac-sha256:<64 hex>` format only |
+| **F5** | Retry fence/lifecycle holes | Attempts cannot decrease; max retries; increment on new attempt; fence advances; createdAt immutable; completed terminal |
+| **F6** | Cleanup secret/status schema holes | Status-specific exact fields; no unknown/secret fields on effects/receipts/commitments |
+| **F7** | Current credential writer fields omitted | Allow `pendingId`, `setBy`, `temporaryAssigned`, `opId`, `passcodeChangedAt`; return detached copy |
+| **F8** | Bounds/chronology/wrapper freeze | Pre-decode base64 size; calendar-valid UTC round-trip; incrementable versions; freeze result wrappers |
+| **F9** | Docs: missing self-change, wrong phase, 6 vs 9 paths, universal safety | `driverChangeOwnPasscode` exists (missing CAS); Phase 2B is the transaction; nine Git paths noted; no universal guarantee |
+| **F10** | Missing executable Codex counterexamples | V2 tests execute production validators for proxies, inherited authority, sparse arrays, policy, retry, credentials, dates, versions |
+| **P2** | Nested getters/iterators, malformed arrays, contradictory cleanup, actor/hash validation, oversized arrays/depth | Snapshot rejects accessors/symbols/holes/exotic arrays/iterators; status schemas; bounded arrays/depth; static inspect errors |
+
+---
+
+## Migration and rollback (Phase 0)
+
+- **Migration**: none. Phase 0 is inert. No Firestore/RTDB writes.
+- **Rollback**: revert this single commit. Production entrypoints do not import `resetDesign`.
+- **Later phases**: credential backfill of `companyId`/`credentialVersion` remains locked behind Gate 1 read-only audit.
+
+---
+
+## Numeric reset policy scope
+
+- Temporary administrative reset: `resetMode: 'temporary'`, `requireTemporaryOnReset` may be true, `allowPermanentPasscodeReset` must be false in that combination.
+- Permanent administrative reset: `resetMode: 'permanent'` requires `allowPermanentPasscodeReset`, `canIssuePermanentPasscode`, and `requireTemporaryOnReset === false`.
+- Length bounds `requiredPasscodeMinLength` / `maxPasscodeLength` must be exact integers in `6..128` with min <= max.
 
 ---
 
 ## Validation Execution Logs
 
-### 1. Focused Contract & Validator Unit Suite
-- **Command**: `npm --prefix functions test -- resetDesignContracts.test.ts`
-- **Exit Code**: `0`
-- **Results**:
-  - Test Suites: 1 passed, 1 total
-  - Tests: 172 passed, 172 total
-  - Delta: +50 new adversarial counterexample tests over baseline
-  - Time: ~2.2s
-
-### 2. TypeScript Compilation Check
-- **Command**: `npm --prefix functions run build`
-- **Exit Code**: `0`
-- **Output**: Clean compilation (`tsc` exited 0 with no errors).
-
-### 3. Full Functions Test Suite (Baseline Parity)
-- **Command**: `npm --prefix functions test`
-- **Baseline Failures (on parent 696ec92d)**: Exactly 4 known failures across 3 test suites:
-  1. `src/security/__tests__/dashboardReadWriteClosure.test.ts` (1 UI dispatch expectation failure)
-  2. `src/security/__tests__/adminDashboardCatalog.test.ts` (1 UI dispatch expectation failure)
-  3. `src/security/__tests__/dashboardWriteInventory.test.ts` (2 UI inventory expectation failures)
-- **Hardening Candidate Results**:
-  - Test Suites: 3 failed, 3 skipped, 50 passed, 53 of 56 total
-  - Tests: 4 failed, 35 skipped, 967 passed, 1006 total (+50 tests passed)
-  - Exit Code: `1`
-  - Failed Tests: Exactly the same 4 baseline failures above.
-- **Delta**:
-  - Zero new failures.
-  - Zero candidate regressions.
-  - Exactly the 4 pre-existing baseline failures remain.
-
----
-
-## Boundary, Lineage & Reachability Audits
-
-### 1. Git Status & Lineage
-- Working directory: Clean.
-- Exactly six Phase-0 files tracked.
-- Parent commit verified: `696ec92deea6c3b4e6fe8fb0518a2c0ccb1f56c0`.
-
-### 2. Zero Production Reachability
-- Searches across production entrypoints confirm:
-  - `functions/src/index.ts`: Zero imports of `resetDesign`.
-  - `functions/src/security/index.ts`: Zero imports of `resetDesign`.
-  - Zero callable registrations.
-  - Zero export to external bundles or packages.
-
-### 3. Isolation from Live Environment
-- Complete isolation from live Firebase infrastructure:
-  - Zero imports of `firebase-admin` or `firebase-functions` in `contracts.ts` and `validate.ts`.
-  - Zero real driver identities referenced (Adan or any live user).
-  - Zero database mutations, network requests, or cryptographic operations performed.
+Recorded in the v2 return packet: focused suite, independent adversarial probes, TypeScript build, full Functions suite vs parent baseline (967 passed / 4 baseline failures / 35 skipped).

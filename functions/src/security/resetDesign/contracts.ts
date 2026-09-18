@@ -51,6 +51,25 @@ export const VERSION_MAX_SAFE = 1_000_000;
 
 export const MAX_RETRY_ATTEMPTS = 5;
 
+/** Versions must remain incrementable (receipts require previous + 1). */
+export const VERSION_MAX_INCREMENTABLE = VERSION_MAX_SAFE - 1;
+
+export const SNAPSHOT_MAX_DEPTH = 6;
+export const SNAPSHOT_MAX_KEYS = 32;
+export const SNAPSHOT_MAX_ARRAY_LENGTH = 32;
+export const SNAPSHOT_MAX_STRING_LENGTH = 4096;
+export const MAX_BASE64_CHARS = 256;
+export const MAX_ROLE_STRING_LENGTH = 64;
+export const MAX_ROLE_ARRAY_LENGTH = 16;
+
+/**
+ * Server-keyed credential request commitment format.
+ * Produced by a future protected server adapter. Phase 0 validates format only;
+ * it never hashes, HMACs, or stores plaintext / low-entropy hashes.
+ */
+export const COMMITMENT_HASH_PREFIX = 'hmac-sha256:';
+export const COMMITMENT_HASH_REGEX = /^hmac-sha256:[0-9a-f]{64}$/;
+
 // ── Scrypt Parameters (Derived strictly from functions/src/security/passcode.ts)
 
 export const CANONICAL_SCRYPT_ALGO = 'scrypt' as const;
@@ -184,6 +203,21 @@ export const VALIDATION_ERROR_CODES = [
   'unauthorized_actor',
   'policy_violation',
   'membership_inactive',
+  'invalid_reset_mode',
+  'invalid_array',
+  'sparse_array_rejected',
+  'excessive_depth',
+  'excessive_array_length',
+  'string_too_long',
+  'cycle_rejected',
+  'invalid_commitment_hash',
+  'retry_exhausted',
+  'attempts_regressed',
+  'fence_not_advanced',
+  'immutable_field_changed',
+  'invalid_calendar_date',
+  'invalid_policy_bound',
+  'oversized_base64',
 ] as const;
 
 export type ValidationErrorCode = typeof VALIDATION_ERROR_CODES[number];
@@ -328,7 +362,7 @@ export interface ValidatedSecretBearingResetRequest {
   readonly temporary: boolean;
   readonly newPasscode: string;
   readonly passcodeDigitCount: number;
-  readonly commitmentHash: string; // SHA-256 of canonical op parameters + passcode
+  readonly commitmentHash: string; // hmac-sha256:<64 lowercase hex>; format only in Phase 0
 }
 
 /**
@@ -374,6 +408,11 @@ export interface CurrentDriverCredentialDoc {
   readonly updatedAt?: unknown;
   readonly tier?: string;
   readonly source?: string;
+  readonly pendingId?: string;
+  readonly setBy?: string;
+  readonly temporaryAssigned?: boolean;
+  readonly opId?: string;
+  readonly passcodeChangedAt?: unknown;
 }
 
 /**

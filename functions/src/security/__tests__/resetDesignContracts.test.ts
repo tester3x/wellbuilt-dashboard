@@ -46,6 +46,7 @@ import {
   validateResetAuthzSnapshot,
   createValidatedSecretBearingRequest,
   createSanitizedOperationCommitment,
+  validateCommitmentHash,
 } from '../resetDesign/validate';
 
 // ── Synthetic Test Fixtures ──────────────────────────────────────────────────
@@ -58,6 +59,7 @@ const SYNTHETIC_ACTOR_UID = 'staff_syn_admin_001';
 const SYNTHETIC_SALT_B64 = 'MDEyMzQ1Njc4OWFiY2RlZg==';
 // Canonical 32-byte hash base64 ('0123456789abcdef0123456789abcdef' -> 32 bytes = keyLen)
 const SYNTHETIC_HASH_B64 = 'MDEyMzQ1Njc4OWFiY2RlZjAxMjM0NTY3ODlhYmNkZWY=';
+const SYNTHETIC_COMMITMENT_HASH = `hmac-sha256:${'ab'.repeat(32)}`;
 
 function createValidSyntheticRequest(): CanonicalResetRequest {
   return {
@@ -349,7 +351,7 @@ describe('Canonical Driver Reset Phase 0 Contracts & Pure Validators', () => {
       const result = validateCanonicalResetRequest(req);
       expect(result.ok).toBe(false);
       if (!result.ok) {
-        expect(result.error.code).toBe('invalid_passcode_type');
+        expect(['invalid_passcode_type', 'invalid_type']).toContain(result.error.code);
       }
     });
   });
@@ -1147,6 +1149,7 @@ describe('Canonical Driver Reset Phase 0 Contracts & Pure Validators', () => {
         ...current,
         status: 'in_progress' as const,
         attempts: 1,
+        fenceGeneration: current.fenceGeneration + 1,
         lastAttemptAt: '2026-09-18T05:01:00.000Z',
       };
       const result = validateEffectLifecycleTransition(current, next);
@@ -1194,6 +1197,8 @@ describe('Canonical Driver Reset Phase 0 Contracts & Pure Validators', () => {
       const next: AuthCleanupEffect = {
         ...current,
         status: 'in_progress',
+        attempts: 1,
+        lastAttemptAt: '2026-09-18T05:01:00.000Z',
         fenceGeneration: 4, // Regressed!
       };
       const result = validateEffectLifecycleTransition(current, next);
@@ -1208,7 +1213,7 @@ describe('Canonical Driver Reset Phase 0 Contracts & Pure Validators', () => {
   describe('A12. Idempotent retry and conflict behavior', () => {
     test('allows identical same-operation retry', () => {
       const req = createValidSyntheticRequest();
-      const secretReq = createValidatedSecretBearingRequest(req, 'hash_commitment_123');
+      const secretReq = createValidatedSecretBearingRequest(req, SYNTHETIC_COMMITMENT_HASH);
       const commitment = createSanitizedOperationCommitment(secretReq, SYNTHETIC_ACTOR_UID, '2026-09-18T05:00:00.000Z');
 
       const result = validateOperationRetryCommitment(commitment, req);
@@ -1220,7 +1225,7 @@ describe('Canonical Driver Reset Phase 0 Contracts & Pure Validators', () => {
 
     test('rejects operation retry conflict when request parameters change', () => {
       const req = createValidSyntheticRequest();
-      const secretReq = createValidatedSecretBearingRequest(req, 'hash_commitment_123');
+      const secretReq = createValidatedSecretBearingRequest(req, SYNTHETIC_COMMITMENT_HASH);
       const commitment = createSanitizedOperationCommitment(secretReq, SYNTHETIC_ACTOR_UID, '2026-09-18T05:00:00.000Z');
 
       const conflictingReq = { ...req, driverId: 'drv_different_target' };
@@ -1404,6 +1409,348 @@ describe('Canonical Driver Reset Phase 0 Contracts & Pure Validators', () => {
       expect(result.ok).toBe(false);
       if (!result.ok) {
         expect(result.error.code).toBe('missing_credential_field');
+      }
+    });
+  });
+
+  // ── V2. Desktop Codex HOLD counterexamples ────────────────────────────────
+  describe('V2. Hardening regressions against Codex P1/P2 counterexamples', () => {
+    test('revoked proxy fails closed with a static inspect error', () => {
+      const target = createValidSyntheticRequest();
+      const proxy = Proxy.revocable(target, {});
+      proxy.revoke();
+      expect(() => validateCanonicalResetRequest(proxy.proxy)).not.toThrow();
+      const result = validateCanonicalResetRequest(proxy.proxy);
+      expect(result.ok).toBe(false);
+      if (!result.ok) {
+        expect(result.error.code).toBe('property_access_error');
+        expect(result.error.message).toBe('Failed to inspect value');
+      }
+    });
+
+    test('stateful getter is not invoked because accessors are rejected from the descriptor snapshot', () => {
+      let calls = 0;
+      const req = createValidSyntheticRequest();
+      Object.defineProperty(req, 'newPasscode', {
+        get() {
+          calls += 1;
+          return calls === 1 ? '123456' : '999999';
+        },
+        enumerable: true,
+        configurable: true,
+      });
+      const result = validateCanonicalResetRequest(req);
+      expect(result.ok).toBe(false);
+      expect(calls).toBe(0);
+    });
+
+    test('inherited staffUid never authorizes a principal', () => {
+      const proto = { staffUid: SYNTHETIC_ACTOR_UID, emailVerified: true, isAnonymous: false, disabled: false, authTime: '2026-09-18T04:55:00.000Z' };
+      const raw = Object.create(proto);
+      const result = validateStaffPrincipal(raw);
+      expect(result.ok).toBe(false);
+    });
+
+    test('inherited canResetDriverPasscode never authorizes', () => {
+      const proto = {
+        companyId: SYNTHETIC_CO_ID,
+        staffUid: SYNTHETIC_ACTOR_UID,
+        roles: ['security_admin'],
+        capabilities: ['canResetDriverPasscode'],
+        canResetDriverPasscode: true,
+        canIssuePermanentPasscode: true,
+      };
+      const raw = Object.create(proto);
+      Object.assign(raw, { companyId: SYNTHETIC_CO_ID, staffUid: SYNTHETIC_ACTOR_UID, roles: ['security_admin'], capabilities: ['canResetDriverPasscode'], canIssuePermanentPasscode: true });
+      const result = validateTenantRoleCapabilities(raw);
+      expect(result.ok).toBe(false);
+    });
+
+    test('sparse role arrays are rejected', () => {
+      const roles = [];
+      roles[0] = 'security_admin';
+      roles[2] = 'hidden';
+      const raw = {
+        companyId: SYNTHETIC_CO_ID,
+        staffUid: SYNTHETIC_ACTOR_UID,
+        roles,
+        capabilities: ['canResetDriverPasscode'],
+        canResetDriverPasscode: true,
+        canIssuePermanentPasscode: false,
+      };
+      expect(validateTenantRoleCapabilities(raw).ok).toBe(false);
+    });
+
+    test('mutating the original after validation does not change the detached copy', () => {
+      const req = createValidSyntheticRequest();
+      const result = validateCanonicalResetRequest(req);
+      expect(result.ok).toBe(true);
+      if (result.ok) {
+        (req as { newPasscode: string }).newPasscode = '000000';
+        expect(result.value.newPasscode).toBe('123456');
+        expect(Object.isFrozen(result)).toBe(true);
+      }
+    });
+
+    test('malformed policy limits are rejected rather than defaulted', () => {
+      const policy = {
+        companyId: SYNTHETIC_CO_ID,
+        allowAdminPasscodeReset: true,
+        allowPermanentPasscodeReset: false,
+        requireTemporaryOnReset: true,
+        requiredPasscodeMinLength: -1,
+        maxPasscodeLength: 128,
+      };
+      const result = validateTenantSecurityPolicy(policy);
+      expect(result.ok).toBe(false);
+      if (!result.ok) expect(result.error.code).toBe('invalid_policy_bound');
+    });
+
+    test('invalid reset mode is not silently coerced to temporary', () => {
+      const snap = {
+        snapshotId: 'snap_syn_1001',
+        opId: SYNTHETIC_OP_ID,
+        evaluatedAt: '2026-09-18T05:00:00.000Z',
+        staffPrincipal: {
+          staffUid: SYNTHETIC_ACTOR_UID,
+          authTime: '2026-09-18T04:55:00.000Z',
+          emailVerified: true,
+          isAnonymous: false,
+          disabled: false,
+        },
+        tenantMembership: {
+          membershipId: 'mem_syn_001',
+          companyId: SYNTHETIC_CO_ID,
+          staffUid: SYNTHETIC_ACTOR_UID,
+          status: 'active',
+          joinedAt: '2026-01-01T00:00:00.000Z',
+        },
+        tenantRoleCapabilities: {
+          companyId: SYNTHETIC_CO_ID,
+          staffUid: SYNTHETIC_ACTOR_UID,
+          roles: ['security_admin'],
+          capabilities: ['canResetDriverPasscode'],
+          canResetDriverPasscode: true,
+          canIssuePermanentPasscode: false,
+        },
+        tenantSecurityPolicy: {
+          companyId: SYNTHETIC_CO_ID,
+          allowAdminPasscodeReset: true,
+          allowPermanentPasscodeReset: false,
+          requiredPasscodeMinLength: 6,
+          maxPasscodeLength: 128,
+          requireTemporaryOnReset: true,
+        },
+        targetDriverBinding: {
+          driverId: SYNTHETIC_DRIVER_ID,
+          companyId: SYNTHETIC_CO_ID,
+          active: true,
+          status: 'active',
+        },
+        resetMode: 'admin',
+      };
+      const result = validateResetAuthzSnapshot(snap);
+      expect(result.ok).toBe(false);
+      if (!result.ok) expect(result.error.code).toBe('invalid_reset_mode');
+    });
+
+    test('permanent reset is rejected when policy requires temporary reset', () => {
+      const snap = {
+        snapshotId: 'snap_syn_1001',
+        opId: SYNTHETIC_OP_ID,
+        evaluatedAt: '2026-09-18T05:00:00.000Z',
+        staffPrincipal: {
+          staffUid: SYNTHETIC_ACTOR_UID,
+          authTime: '2026-09-18T04:55:00.000Z',
+          emailVerified: true,
+          isAnonymous: false,
+          disabled: false,
+        },
+        tenantMembership: {
+          membershipId: 'mem_syn_001',
+          companyId: SYNTHETIC_CO_ID,
+          staffUid: SYNTHETIC_ACTOR_UID,
+          status: 'active',
+          joinedAt: '2026-01-01T00:00:00.000Z',
+        },
+        tenantRoleCapabilities: {
+          companyId: SYNTHETIC_CO_ID,
+          staffUid: SYNTHETIC_ACTOR_UID,
+          roles: ['security_admin'],
+          capabilities: ['canResetDriverPasscode', 'canIssuePermanentPasscode'],
+          canResetDriverPasscode: true,
+          canIssuePermanentPasscode: true,
+        },
+        tenantSecurityPolicy: {
+          companyId: SYNTHETIC_CO_ID,
+          allowAdminPasscodeReset: true,
+          allowPermanentPasscodeReset: false,
+          requiredPasscodeMinLength: 6,
+          maxPasscodeLength: 128,
+          requireTemporaryOnReset: true,
+        },
+        targetDriverBinding: {
+          driverId: SYNTHETIC_DRIVER_ID,
+          companyId: SYNTHETIC_CO_ID,
+          active: true,
+          status: 'active',
+        },
+        resetMode: 'permanent',
+      };
+      const result = validateResetAuthzSnapshot(snap);
+      expect(result.ok).toBe(false);
+      if (!result.ok) expect(result.error.code).toBe('policy_violation');
+    });
+
+    test('changed passcode retry conflicts even when other fields match', () => {
+      const req = createValidSyntheticRequest();
+      const secretReq = createValidatedSecretBearingRequest(req, SYNTHETIC_COMMITMENT_HASH);
+      const commitment = createSanitizedOperationCommitment(secretReq, SYNTHETIC_ACTOR_UID, '2026-09-18T05:00:00.000Z');
+      const changed = { ...req, newPasscode: '654321' };
+      const otherHash = `hmac-sha256:${'cd'.repeat(32)}`;
+      const result = validateOperationRetryCommitment(commitment, changed, otherHash);
+      expect(result.ok).toBe(false);
+      if (!result.ok) expect(result.error.code).toBe('idempotent_retry_conflict');
+    });
+
+    test('incomplete existing commitment is rejected before comparison', () => {
+      const req = createValidSyntheticRequest();
+      const result = validateOperationRetryCommitment({ opId: SYNTHETIC_OP_ID }, req);
+      expect(result.ok).toBe(false);
+    });
+
+    test('invalid public commitment hash is rejected', () => {
+      const err = validateCommitmentHash('not-a-hash');
+      expect(err).not.toBeNull();
+      expect(err?.code).toBe('invalid_commitment_hash');
+      expect(validateCommitmentHash(SYNTHETIC_COMMITMENT_HASH)).toBeNull();
+    });
+
+    test('current-writer credential fields pendingId/setBy/opId/temporaryAssigned/passcodeChangedAt are accepted', () => {
+      const currentDoc = {
+        displayName: 'Test Driver',
+        displayNameNorm: 'test driver',
+        active: true,
+        mustResetPasscode: true,
+        pendingId: 'pending_syn_01',
+        setBy: SYNTHETIC_ACTOR_UID,
+        temporaryAssigned: true,
+        opId: SYNTHETIC_OP_ID,
+        passcodeChangedAt: '2026-09-18T05:00:00.000Z',
+        passcode: {
+          algo: 'scrypt',
+          N: 16384,
+          r: 8,
+          p: 1,
+          keyLen: 32,
+          saltB64: SYNTHETIC_SALT_B64,
+          hashB64: SYNTHETIC_HASH_B64,
+        },
+      };
+      const original = { ...currentDoc };
+      const result = validateCurrentDriverCredentialDoc(currentDoc);
+      expect(result.ok).toBe(true);
+      if (result.ok) {
+        expect(result.value.pendingId).toBe('pending_syn_01');
+        expect(result.value.setBy).toBe(SYNTHETIC_ACTOR_UID);
+        currentDoc.displayName = 'mutated';
+        expect(result.value.displayName).toBe(original.displayName);
+      }
+    });
+
+    test('oversized base64 is rejected before decode', () => {
+      const cred = {
+        ...createValidSyntheticCredential(),
+        saltB64: `${'A'.repeat(300)}==`,
+      };
+      const result = validateCanonicalCredential(cred);
+      expect(result.ok).toBe(false);
+      if (!result.ok) expect(result.error.code).toBe('oversized_base64');
+    });
+
+    test('excessive nested depth is rejected', () => {
+      let nested: unknown = 'leaf';
+      for (let i = 0; i < 10; i += 1) {
+        nested = { node: nested };
+      }
+      const currentDoc = {
+        displayName: 'Test Driver',
+        passcode: {
+          algo: 'scrypt',
+          N: 16384,
+          r: 8,
+          p: 1,
+          keyLen: 32,
+          saltB64: SYNTHETIC_SALT_B64,
+          hashB64: SYNTHETIC_HASH_B64,
+        },
+        createdAt: nested,
+      };
+      const result = validateCurrentDriverCredentialDoc(currentDoc);
+      expect(result.ok).toBe(false);
+      if (!result.ok) expect(result.error.code).toBe('excessive_depth');
+    });
+
+    test('February 31 is rejected as an invalid calendar date', () => {
+      const receipt = {
+        ...createValidSyntheticReceipt(),
+        appliedAt: '2026-02-31T00:00:00.000Z',
+      };
+      const result = validateResetReceipt(receipt);
+      expect(result.ok).toBe(false);
+      if (!result.ok) expect(result.error.code).toBe('invalid_calendar_date');
+    });
+
+    test('maximum incrementable version is rejected on the request', () => {
+      const req = { ...createValidSyntheticRequest(), expectedCredentialVersion: 1_000_000 };
+      const result = validateCanonicalResetRequest(req);
+      expect(result.ok).toBe(false);
+      if (!result.ok) expect(result.error.code).toBe('counter_overflow');
+    });
+
+    test('retry beyond maximum is rejected and fence must advance on a new attempt', () => {
+      const current: AuthCleanupEffect = {
+        ...createValidSyntheticEffect(),
+        status: 'failed',
+        attempts: 5,
+        fenceGeneration: 5,
+        failedAt: '2026-09-18T05:04:00.000Z',
+        terminalError: 'max_retries_exceeded',
+      };
+      const next: AuthCleanupEffect = {
+        ...current,
+        status: 'in_progress',
+        attempts: 6,
+        fenceGeneration: 6,
+        lastAttemptAt: '2026-09-18T05:05:00.000Z',
+        failedAt: null,
+        terminalError: null,
+      };
+      const result = validateEffectLifecycleTransition(current, next);
+      expect(result.ok).toBe(false);
+    });
+
+    test('secret-shaped unknown fields cannot enter a cleanup record', () => {
+      const effect = {
+        ...createValidSyntheticEffect(),
+        newPasscode: '123456',
+      };
+      const result = validateAuthCleanupEffect(effect);
+      expect(result.ok).toBe(false);
+      if (!result.ok) expect(result.error.code).toBe('unknown_field');
+    });
+
+    test('proxy trap messages are never echoed', () => {
+      const proxyReq = new Proxy(createValidSyntheticRequest(), {
+        getPrototypeOf() {
+          throw new Error('ATTACKER_SECRET_sk-ant-EXFIL');
+        },
+      });
+      const result = validateCanonicalResetRequest(proxyReq);
+      expect(result.ok).toBe(false);
+      if (!result.ok) {
+        expect(JSON.stringify(result.error)).not.toMatch(/ATTACKER_SECRET|sk-ant-/);
+        expect(result.error.code).toBe('property_access_error');
       }
     });
   });

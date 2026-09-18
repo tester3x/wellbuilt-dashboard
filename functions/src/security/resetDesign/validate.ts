@@ -27,9 +27,18 @@ import {
   SCRYPT_BOUNDS,
   VERSION_MIN,
   VERSION_MAX_SAFE,
+  VERSION_MAX_INCREMENTABLE,
   COUNTER_MIN,
   COUNTER_MAX_SAFE,
   MAX_RETRY_ATTEMPTS,
+  SNAPSHOT_MAX_DEPTH,
+  SNAPSHOT_MAX_KEYS,
+  SNAPSHOT_MAX_ARRAY_LENGTH,
+  SNAPSHOT_MAX_STRING_LENGTH,
+  MAX_BASE64_CHARS,
+  MAX_ROLE_STRING_LENGTH,
+  MAX_ROLE_ARRAY_LENGTH,
+  COMMITMENT_HASH_REGEX,
   TERMINAL_ERROR_CODES,
   ALLOWED_EFFECT_TRANSITIONS,
   type TerminalErrorCode,
@@ -59,13 +68,34 @@ import {
  * Recursively freeze an object and all its plain-object/array child properties.
  * Provides runtime immutability guarantees beyond TypeScript's compile-time `readonly`.
  */
+const STATIC_INSPECT_ERROR: ValidationError = Object.freeze({
+  code: 'property_access_error',
+  message: 'Failed to inspect value',
+});
+
+function fail(error: ValidationError): { readonly ok: false; readonly error: ValidationError } {
+  const frozen: ValidationError = Object.freeze({
+    code: error.code,
+    message: error.message,
+    ...(error.path ? { path: error.path } : {}),
+  });
+  return Object.freeze({ ok: false as const, error: frozen });
+}
+
+function ok<T>(value: T): { readonly ok: true; readonly value: T } {
+  return Object.freeze({ ok: true as const, value: deepFreeze(value) });
+}
+
+/** Recursively freeze a *fresh* object/array. Never call on attacker input. */
 export function deepFreeze<T>(obj: T): Readonly<T> {
   if (obj === null || typeof obj !== 'object') {
     return obj;
   }
   Object.freeze(obj);
   for (const key of Object.getOwnPropertyNames(obj)) {
-    const prop = (obj as Record<string, unknown>)[key];
+    const desc = Object.getOwnPropertyDescriptor(obj, key);
+    if (!desc || desc.get || desc.set) continue;
+    const prop = desc.value;
     if (prop !== null && typeof prop === 'object' && !Object.isFrozen(prop)) {
       deepFreeze(prop);
     }
@@ -88,103 +118,191 @@ export function deepFreeze<T>(obj: T): Readonly<T> {
  * 7. Catches prototype/descriptor/proxy exceptions and returns static failure.
  * 8. Never echoes attacker keys, values, or exception details.
  */
-export function validatePlainDataObject(raw: unknown): ValidationError | null {
-  if (typeof raw !== 'object' || raw === null || Array.isArray(raw)) {
-    return {
-      code: 'invalid_type',
-      message: 'Value must be a plain object',
-    };
+function snapshotValue(raw: unknown, depth: number, seen: WeakSet<object>): ValidationResult<unknown> {
+  try {
+    if (raw === null || typeof raw === 'boolean' || typeof raw === 'number' || typeof raw === 'bigint' || typeof raw === 'undefined') {
+      return { ok: true, value: raw };
+    }
+    if (typeof raw === 'string') {
+      if (raw.length > SNAPSHOT_MAX_STRING_LENGTH) {
+        return fail({ code: 'string_too_long', message: 'String exceeds maximum permitted length' });
+      }
+      return { ok: true, value: raw };
+    }
+    if (typeof raw !== 'object') {
+      return fail({ code: 'invalid_type', message: 'Value must be a plain object' });
+    }
+    if (depth > SNAPSHOT_MAX_DEPTH) {
+      return fail({ code: 'excessive_depth', message: 'Object nesting exceeds maximum depth' });
+    }
+    if (seen.has(raw)) {
+      return fail({ code: 'cycle_rejected', message: 'Cyclic structures are prohibited' });
+    }
+    seen.add(raw);
+    if (Array.isArray(raw)) {
+      return snapshotArray(raw, depth, seen);
+    }
+    return snapshotPlainObject(raw, depth, seen);
+  } catch {
+    return fail(STATIC_INSPECT_ERROR);
   }
+}
 
-  // Trap-safe prototype verification
+function snapshotArray(raw: unknown[], depth: number, seen: WeakSet<object>): ValidationResult<unknown[]> {
   let proto: unknown;
   try {
     proto = Object.getPrototypeOf(raw);
   } catch {
-    return {
-      code: 'property_access_error',
-      message: 'Failed to inspect object prototype',
-    };
+    return fail(STATIC_INSPECT_ERROR);
   }
-
-  if (proto !== Object.prototype && proto !== null) {
-    return {
-      code: 'invalid_object_prototype',
-      message: 'Only plain objects with standard or null prototype are supported',
-    };
+  if (proto !== Array.prototype) {
+    return fail({ code: 'invalid_object_prototype', message: 'Only standard arrays are supported' });
   }
-
-  // Trap-safe symbol property rejection
   let symbols: symbol[];
   try {
     symbols = Object.getOwnPropertySymbols(raw);
   } catch {
-    return {
-      code: 'property_access_error',
-      message: 'Failed to inspect symbol properties',
-    };
+    return fail(STATIC_INSPECT_ERROR);
   }
   if (symbols.length > 0) {
-    return {
-      code: 'symbol_property_rejected',
-      message: 'Symbol properties are strictly prohibited',
-    };
+    return fail({ code: 'symbol_property_rejected', message: 'Symbol properties are strictly prohibited' });
   }
-
-  // Trap-safe own property names inspection
+  let lengthDesc: PropertyDescriptor | undefined;
+  try {
+    lengthDesc = Object.getOwnPropertyDescriptor(raw, 'length');
+  } catch {
+    return fail(STATIC_INSPECT_ERROR);
+  }
+  if (!lengthDesc || lengthDesc.get !== undefined || lengthDesc.set !== undefined || typeof lengthDesc.value !== 'number') {
+    return fail({ code: 'invalid_array', message: 'Array length must be an own data property' });
+  }
+  const length = lengthDesc.value;
+  if (!Number.isSafeInteger(length) || length < 0) {
+    return fail({ code: 'invalid_array', message: 'Array length must be a safe non-negative integer' });
+  }
+  if (length > SNAPSHOT_MAX_ARRAY_LENGTH) {
+    return fail({ code: 'excessive_array_length', message: 'Array exceeds maximum permitted length' });
+  }
   let ownNames: string[];
   try {
     ownNames = Object.getOwnPropertyNames(raw);
   } catch {
-    return {
-      code: 'property_access_error',
-      message: 'Failed to inspect own properties',
-    };
+    return fail(STATIC_INSPECT_ERROR);
   }
-
-  if (ownNames.length > 32) {
-    return {
-      code: 'too_many_keys',
-      message: 'Object exceeds maximum permitted property count',
-    };
+  const allowed = new Set<string>(['length']);
+  for (let i = 0; i < length; i += 1) allowed.add(String(i));
+  for (const name of ownNames) {
+    if (!allowed.has(name)) {
+      return fail({ code: 'unknown_field', message: 'Unknown or unexpected property rejected' });
+    }
   }
+  const copy: unknown[] = [];
+  for (let i = 0; i < length; i += 1) {
+    let desc: PropertyDescriptor | undefined;
+    try {
+      desc = Object.getOwnPropertyDescriptor(raw, String(i));
+    } catch {
+      return fail(STATIC_INSPECT_ERROR);
+    }
+    if (!desc) {
+      return fail({ code: 'sparse_array_rejected', message: 'Sparse arrays are prohibited' });
+    }
+    if (!desc.enumerable) {
+      return fail({ code: 'non_enumerable_property_rejected', message: 'Non-enumerable properties are strictly prohibited' });
+    }
+    if (desc.get !== undefined || desc.set !== undefined) {
+      return fail({ code: 'accessor_property_rejected', message: 'Getter and setter accessors are strictly prohibited' });
+    }
+    const child = snapshotValue(desc.value, depth + 1, seen);
+    if (!child.ok) return child;
+    copy.push(child.value);
+  }
+  return { ok: true, value: copy };
+}
 
-  // Inspect each property descriptor without invoking getters/setters
+function snapshotPlainObject(
+  raw: object,
+  depth: number,
+  seen: WeakSet<object>,
+): ValidationResult<Record<string, unknown>> {
+  let proto: unknown;
+  try {
+    proto = Object.getPrototypeOf(raw);
+  } catch {
+    return fail(STATIC_INSPECT_ERROR);
+  }
+  if (proto !== Object.prototype && proto !== null) {
+    return fail({
+      code: 'invalid_object_prototype',
+      message: 'Only plain objects with standard or null prototype are supported',
+    });
+  }
+  let symbols: symbol[];
+  try {
+    symbols = Object.getOwnPropertySymbols(raw);
+  } catch {
+    return fail(STATIC_INSPECT_ERROR);
+  }
+  if (symbols.length > 0) {
+    return fail({ code: 'symbol_property_rejected', message: 'Symbol properties are strictly prohibited' });
+  }
+  let ownNames: string[];
+  try {
+    ownNames = Object.getOwnPropertyNames(raw);
+  } catch {
+    return fail(STATIC_INSPECT_ERROR);
+  }
+  if (ownNames.length > SNAPSHOT_MAX_KEYS) {
+    return fail({ code: 'too_many_keys', message: 'Object exceeds maximum permitted property count' });
+  }
+  const copy: Record<string, unknown> = Object.create(null);
   for (const key of ownNames) {
     let desc: PropertyDescriptor | undefined;
     try {
       desc = Object.getOwnPropertyDescriptor(raw, key);
     } catch {
-      return {
-        code: 'property_access_error',
-        message: 'Failed to retrieve property descriptor',
-      };
+      return fail(STATIC_INSPECT_ERROR);
     }
-
     if (!desc) {
-      return {
-        code: 'property_access_error',
-        message: 'Missing property descriptor',
-      };
+      return fail(STATIC_INSPECT_ERROR);
     }
-
     if (!desc.enumerable) {
-      return {
+      return fail({
         code: 'non_enumerable_property_rejected',
         message: 'Non-enumerable properties are strictly prohibited',
-      };
+      });
     }
-
-    // Reject accessors without invoking them
     if (desc.get !== undefined || desc.set !== undefined) {
-      return {
+      return fail({
         code: 'accessor_property_rejected',
         message: 'Getter and setter accessors are strictly prohibited',
-      };
+      });
     }
+    const child = snapshotValue(desc.value, depth + 1, seen);
+    if (!child.ok) return child;
+    copy[key] = child.value;
   }
+  return { ok: true, value: copy };
+}
 
-  return null;
+function takeObjectSnapshot(raw: unknown): ValidationResult<Record<string, unknown>> {
+  try {
+    if (typeof raw !== 'object' || raw === null || Array.isArray(raw)) {
+      return fail({ code: 'invalid_type', message: 'Value must be a plain object' });
+    }
+    return snapshotPlainObject(raw, 0, new WeakSet<object>());
+  } catch {
+    return fail(STATIC_INSPECT_ERROR);
+  }
+}
+
+export function validatePlainDataObject(raw: unknown): ValidationError | null {
+  const snapped = takeObjectSnapshot(raw);
+  return snapped.ok ? null : snapped.error;
+}
+
+function beginObject(raw: unknown): ValidationResult<Record<string, unknown>> {
+  return takeObjectSnapshot(raw);
 }
 
 /**
@@ -307,6 +425,15 @@ export function validatePositiveSafeVersion(value: unknown, fieldName: string): 
   return null;
 }
 
+export function validateIncrementableVersion(value: unknown, fieldName: string): ValidationError | null {
+  const base = validatePositiveSafeVersion(value, fieldName);
+  if (base) return base;
+  if ((value as number) > VERSION_MAX_INCREMENTABLE) {
+    return { code: 'counter_overflow', message: 'Version cannot be incremented safely', path: fieldName };
+  }
+  return null;
+}
+
 export function validateSafeCounter(value: unknown, fieldName: string, maxBound: number): ValidationError | null {
   if (typeof value !== 'number') {
     return { code: 'invalid_integer_type', message: 'Counter must be a number', path: fieldName };
@@ -325,22 +452,42 @@ export function validateSafeCounter(value: unknown, fieldName: string, maxBound:
 
 // ── Timestamp & Chronology Validators (Requirement 6) ────────────────────────
 
-const STRICT_ISO_REGEX = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d{1,3})?Z$/;
+const STRICT_ISO_REGEX = /^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2}):(\d{2})(?:\.(\d{3}))?Z$/;
 
 export function validateStrictIsoTimestamp(value: unknown, fieldName: string): ValidationError | null {
   if (typeof value !== 'string' || value.length === 0) {
     return { code: 'invalid_timestamp', message: 'Timestamp must be a non-empty ISO string', path: fieldName };
   }
-  if (!STRICT_ISO_REGEX.test(value)) {
+  const match = STRICT_ISO_REGEX.exec(value);
+  if (!match) {
     return { code: 'malformed_timestamp', message: 'Timestamp must match strict ISO 8601 UTC format', path: fieldName };
   }
-  const parsed = Date.parse(value);
-  if (Number.isNaN(parsed)) {
-    return { code: 'malformed_timestamp', message: 'Timestamp is not a valid date', path: fieldName };
+  const year = Number(match[1]);
+  const month = Number(match[2]);
+  const day = Number(match[3]);
+  const hour = Number(match[4]);
+  const minute = Number(match[5]);
+  const second = Number(match[6]);
+  const millis = match[7] !== undefined ? Number(match[7]) : 0;
+  const dt = new Date(Date.UTC(year, month - 1, day, hour, minute, second, millis));
+  if (
+    dt.getUTCFullYear() !== year ||
+    dt.getUTCMonth() !== month - 1 ||
+    dt.getUTCDate() !== day ||
+    dt.getUTCHours() !== hour ||
+    dt.getUTCMinutes() !== minute ||
+    dt.getUTCSeconds() !== second ||
+    dt.getUTCMilliseconds() !== millis
+  ) {
+    return { code: 'invalid_calendar_date', message: 'Timestamp is not a real UTC calendar date', path: fieldName };
   }
-  const year = new Date(parsed).getUTCFullYear();
   if (year < 2020 || year > 2100) {
     return { code: 'malformed_timestamp', message: 'Timestamp year is out of valid operational range', path: fieldName };
+  }
+  const canonical = dt.toISOString();
+  const expected = match[7] !== undefined ? canonical : canonical.replace('.000Z', 'Z');
+  if (expected !== value) {
+    return { code: 'malformed_timestamp', message: 'Timestamp must be a canonical UTC round-trip string', path: fieldName };
   }
   return null;
 }
@@ -356,6 +503,9 @@ export function isStrictCanonicalBase64(str: string): boolean {
   if (typeof str !== 'string' || str.length === 0 || str.length % 4 !== 0) {
     return false;
   }
+  if (str.length > MAX_BASE64_CHARS) {
+    return false;
+  }
   if (!/^[A-Za-z0-9+/]+={0,2}$/.test(str)) {
     return false;
   }
@@ -365,6 +515,16 @@ export function isStrictCanonicalBase64(str: string): boolean {
   } catch {
     return false;
   }
+}
+
+export function validateCommitmentHash(value: unknown, fieldName = 'commitmentHash'): ValidationError | null {
+  if (typeof value !== 'string') {
+    return { code: 'invalid_commitment_hash', message: 'Commitment hash must be a string', path: fieldName };
+  }
+  if (!COMMITMENT_HASH_REGEX.test(value)) {
+    return { code: 'invalid_commitment_hash', message: 'Commitment hash must use hmac-sha256 hex format', path: fieldName };
+  }
+  return null;
 }
 
 /**
@@ -429,6 +589,9 @@ function validateScryptParameters(raw: Record<string, unknown>): ValidationError
   if (raw.saltB64.length === 0) {
     return { code: 'empty_salt', message: 'saltB64 must not be empty', path: 'saltB64' };
   }
+  if (raw.saltB64.length > MAX_BASE64_CHARS) {
+    return { code: 'oversized_base64', message: 'saltB64 exceeds maximum encoded length', path: 'saltB64' };
+  }
   if (!isStrictCanonicalBase64(raw.saltB64)) {
     return { code: 'invalid_salt', message: 'saltB64 must be strict canonical base64', path: 'saltB64' };
   }
@@ -446,6 +609,9 @@ function validateScryptParameters(raw: Record<string, unknown>): ValidationError
   }
   if (raw.hashB64.length === 0) {
     return { code: 'empty_hash', message: 'hashB64 must not be empty', path: 'hashB64' };
+  }
+  if (raw.hashB64.length > MAX_BASE64_CHARS) {
+    return { code: 'oversized_base64', message: 'hashB64 exceeds maximum encoded length', path: 'hashB64' };
   }
   if (!isStrictCanonicalBase64(raw.hashB64)) {
     return { code: 'invalid_hash', message: 'hashB64 must be strict canonical base64', path: 'hashB64' };
@@ -486,10 +652,9 @@ const REQUEST_REQUIRED_KEYS = [
 export function validateCanonicalResetRequest(
   raw: unknown,
 ): ValidationResult<CanonicalResetRequest> {
-  const plainObjError = validatePlainDataObject(raw);
-  if (plainObjError) return { ok: false, error: plainObjError };
-
-  const obj = raw as Record<string, unknown>;
+  const snapped = beginObject(raw);
+  if (!snapped.ok) return snapped;
+  const obj = snapped.value;
 
   const unknownError = checkUnknownKeys(obj, REQUEST_ALLOWED_KEYS);
   if (unknownError) return { ok: false, error: unknownError };
@@ -506,7 +671,7 @@ export function validateCanonicalResetRequest(
   const driverIdError = validateDocIdentifier(obj.driverId, 'driverId');
   if (driverIdError) return { ok: false, error: driverIdError };
 
-  const versionError = validatePositiveSafeVersion(obj.expectedCredentialVersion, 'expectedCredentialVersion');
+  const versionError = validateIncrementableVersion(obj.expectedCredentialVersion, 'expectedCredentialVersion');
   if (versionError) return { ok: false, error: versionError };
 
   if (typeof obj.temporary !== 'boolean') {
@@ -556,17 +721,17 @@ export function validateCanonicalResetRequest(
     newPasscode: obj.newPasscode as string,
   };
 
-  return { ok: true, value: deepFreeze(result) };
+  return ok(result);
 }
 
-/**
- * Validates and converts a wire request into the internal secret-bearing validated type.
- * Secrets exist ONLY in this explicitly named type.
- */
 export function createValidatedSecretBearingRequest(
   request: CanonicalResetRequest,
   commitmentHash: string,
 ): ValidatedSecretBearingResetRequest {
+  const hashError = validateCommitmentHash(commitmentHash);
+  if (hashError) {
+    throw new TypeError('Invalid commitment hash');
+  }
   return deepFreeze({
     __secretBearing: true as const,
     opId: request.opId,
@@ -636,10 +801,9 @@ export function validateCanonicalCredential(
   raw: unknown,
   expectedBinding?: { driverId: string; companyId: string },
 ): ValidationResult<CanonicalCredential> {
-  const plainObjError = validatePlainDataObject(raw);
-  if (plainObjError) return { ok: false, error: plainObjError };
-
-  const obj = raw as Record<string, unknown>;
+  const snapped = beginObject(raw);
+  if (!snapped.ok) return snapped;
+  const obj = snapped.value;
 
   const unknownError = checkUnknownKeys(obj, CREDENTIAL_ALLOWED_KEYS);
   if (unknownError) return { ok: false, error: unknownError };
@@ -696,7 +860,7 @@ export function validateCanonicalCredential(
     active: true,
   };
 
-  return { ok: true, value: deepFreeze(result) };
+  return ok(result);
 }
 
 // ── 3. Current Source Driver Credential Validator (Requirement 7) ────────────
@@ -711,6 +875,11 @@ const CURRENT_CRED_DOC_ALLOWED_KEYS = new Set<string>([
   'updatedAt',
   'tier',
   'source',
+  'pendingId',
+  'setBy',
+  'temporaryAssigned',
+  'opId',
+  'passcodeChangedAt',
 ]);
 
 /**
@@ -720,10 +889,9 @@ const CURRENT_CRED_DOC_ALLOWED_KEYS = new Set<string>([
 export function validateCurrentDriverCredentialDoc(
   raw: unknown,
 ): ValidationResult<CurrentDriverCredentialDoc> {
-  const plainObjError = validatePlainDataObject(raw);
-  if (plainObjError) return { ok: false, error: plainObjError };
-
-  const obj = raw as Record<string, unknown>;
+  const snapped = beginObject(raw);
+  if (!snapped.ok) return snapped;
+  const obj = snapped.value;
 
   const unknownError = checkUnknownKeys(obj, CURRENT_CRED_DOC_ALLOWED_KEYS);
   if (unknownError) return { ok: false, error: unknownError };
@@ -738,13 +906,54 @@ export function validateCurrentDriverCredentialDoc(
   const passcodeObjError = validatePlainDataObject(obj.passcode);
   if (passcodeObjError) return { ok: false, error: passcodeObjError };
 
-  const scryptError = validateScryptParameters(obj.passcode as Record<string, unknown>);
+  const passcode = obj.passcode as Record<string, unknown>;
+  const scryptError = validateScryptParameters(passcode);
   if (scryptError) return { ok: false, error: scryptError };
 
-  return {
-    ok: true,
-    value: deepFreeze(obj as unknown as CurrentDriverCredentialDoc),
+  if (obj.setBy !== undefined) {
+    const setByError = validateAuthUid(obj.setBy, 'setBy');
+    if (setByError) return { ok: false, error: setByError };
+  }
+  if (obj.opId !== undefined) {
+    const opIdError = validateDocIdentifier(obj.opId, 'opId');
+    if (opIdError) return { ok: false, error: opIdError };
+  }
+  if (obj.pendingId !== undefined) {
+    const pendingError = validateDocIdentifier(obj.pendingId, 'pendingId');
+    if (pendingError) return { ok: false, error: pendingError };
+  }
+  if (obj.temporaryAssigned !== undefined && typeof obj.temporaryAssigned !== 'boolean') {
+    return fail({ code: 'invalid_temporary_type', message: 'temporaryAssigned must be a boolean', path: 'temporaryAssigned' });
+  }
+  if (obj.active !== undefined && typeof obj.active !== 'boolean') {
+    return fail({ code: 'invalid_active_type', message: 'Field active must be an explicit boolean', path: 'active' });
+  }
+
+  const detached: CurrentDriverCredentialDoc = {
+    passcode: {
+      algo: 'scrypt',
+      saltB64: passcode.saltB64 as string,
+      hashB64: passcode.hashB64 as string,
+      N: passcode.N as number,
+      r: passcode.r as number,
+      p: passcode.p as number,
+      keyLen: passcode.keyLen as number,
+    },
+    ...(typeof obj.displayNameNorm === 'string' ? { displayNameNorm: obj.displayNameNorm } : {}),
+    ...(typeof obj.displayName === 'string' ? { displayName: obj.displayName } : {}),
+    ...(typeof obj.active === 'boolean' ? { active: obj.active } : {}),
+    ...(typeof obj.mustResetPasscode === 'boolean' ? { mustResetPasscode: obj.mustResetPasscode } : {}),
+    ...(obj.createdAt !== undefined ? { createdAt: obj.createdAt } : {}),
+    ...(obj.updatedAt !== undefined ? { updatedAt: obj.updatedAt } : {}),
+    ...(typeof obj.tier === 'string' ? { tier: obj.tier } : {}),
+    ...(typeof obj.source === 'string' ? { source: obj.source } : {}),
+    ...(typeof obj.pendingId === 'string' ? { pendingId: obj.pendingId } : {}),
+    ...(typeof obj.setBy === 'string' ? { setBy: obj.setBy } : {}),
+    ...(typeof obj.temporaryAssigned === 'boolean' ? { temporaryAssigned: obj.temporaryAssigned } : {}),
+    ...(typeof obj.opId === 'string' ? { opId: obj.opId } : {}),
+    ...(obj.passcodeChangedAt !== undefined ? { passcodeChangedAt: obj.passcodeChangedAt } : {}),
   };
+  return ok(detached);
 }
 
 // ── 4. Driver Session Binding Validator ─────────────────────────────────────
@@ -766,10 +975,9 @@ const SESSION_REQUIRED_KEYS = [
 export function validateDriverSessionBinding(
   raw: unknown,
 ): ValidationResult<DriverSessionBinding> {
-  const plainObjError = validatePlainDataObject(raw);
-  if (plainObjError) return { ok: false, error: plainObjError };
-
-  const obj = raw as Record<string, unknown>;
+  const snapped = beginObject(raw);
+  if (!snapped.ok) return snapped;
+  const obj = snapped.value;
 
   const unknownError = checkUnknownKeys(obj, SESSION_ALLOWED_KEYS);
   if (unknownError) return { ok: false, error: unknownError };
@@ -796,7 +1004,7 @@ export function validateDriverSessionBinding(
     credentialVersion: obj.credentialVersion as number,
   };
 
-  return { ok: true, value: deepFreeze(result) };
+  return ok(result);
 }
 
 /**
@@ -885,10 +1093,9 @@ const RECEIPT_REQUIRED_KEYS = [
 ] as const;
 
 export function validateResetReceipt(raw: unknown): ValidationResult<ResetReceipt> {
-  const plainObjError = validatePlainDataObject(raw);
-  if (plainObjError) return { ok: false, error: plainObjError };
-
-  const obj = raw as Record<string, unknown>;
+  const snapped = beginObject(raw);
+  if (!snapped.ok) return snapped;
+  const obj = snapped.value;
 
   const unknownError = checkUnknownKeys(obj, RECEIPT_ALLOWED_KEYS);
   if (unknownError) return { ok: false, error: unknownError };
@@ -911,7 +1118,7 @@ export function validateResetReceipt(raw: unknown): ValidationResult<ResetReceip
   const actorUidError = validateAuthUid(obj.actorUid, 'actorUid');
   if (actorUidError) return { ok: false, error: actorUidError };
 
-  const prevVersionError = validatePositiveSafeVersion(obj.previousCredentialVersion, 'previousCredentialVersion');
+  const prevVersionError = validateIncrementableVersion(obj.previousCredentialVersion, 'previousCredentialVersion');
   if (prevVersionError) return { ok: false, error: prevVersionError };
 
   const newVersionError = validatePositiveSafeVersion(obj.newCredentialVersion, 'newCredentialVersion');
@@ -962,7 +1169,7 @@ export function validateResetReceipt(raw: unknown): ValidationResult<ResetReceip
     authCleanupStatus: obj.authCleanupStatus as 'pending' | 'enqueued',
   };
 
-  return { ok: true, value: deepFreeze(result) };
+  return ok(result);
 }
 
 // ── 6. Auth Cleanup Effect Validator ─────────────────────────────────────────
@@ -1003,10 +1210,9 @@ const VALID_EFFECT_STATUSES = new Set<EffectStatus>([
 ]);
 
 export function validateAuthCleanupEffect(raw: unknown): ValidationResult<AuthCleanupEffect> {
-  const plainObjError = validatePlainDataObject(raw);
-  if (plainObjError) return { ok: false, error: plainObjError };
-
-  const obj = raw as Record<string, unknown>;
+  const snapped = beginObject(raw);
+  if (!snapped.ok) return snapped;
+  const obj = snapped.value;
 
   const unknownError = checkUnknownKeys(obj, EFFECT_ALLOWED_KEYS);
   if (unknownError) return { ok: false, error: unknownError };
@@ -1046,88 +1252,104 @@ export function validateAuthCleanupEffect(raw: unknown): ValidationResult<AuthCl
   if (createdAtError) return { ok: false, error: createdAtError };
 
   const createdTime = Date.parse(obj.createdAt as string);
+  const status = obj.status as EffectStatus;
 
-  // Chronology on lastAttemptAt
-  if (obj.lastAttemptAt !== undefined && obj.lastAttemptAt !== null) {
+  const hasTerminalFailure = obj.failedAt != null || obj.terminalError != null;
+  const hasCompletion = obj.completedAt != null;
+
+  if (status === 'pending') {
+    if ((obj.attempts as number) !== 0) {
+      return fail({ code: 'invalid_attempts', message: 'Pending effect attempts must be 0', path: 'attempts' });
+    }
+    if (obj.lastAttemptAt != null || hasCompletion || hasTerminalFailure) {
+      return fail({
+        code: 'contradictory_effect_status',
+        message: 'Pending effect must not carry attempt or terminal fields',
+        path: 'status',
+      });
+    }
+  }
+
+  if (status === 'in_progress') {
+    if ((obj.attempts as number) < 1) {
+      return fail({ code: 'invalid_attempts', message: 'In-progress effect requires a started attempt', path: 'attempts' });
+    }
+    if (obj.lastAttemptAt == null) {
+      return fail({
+        code: 'contradictory_effect_status',
+        message: 'In-progress effect requires lastAttemptAt',
+        path: 'lastAttemptAt',
+      });
+    }
     const lastAttemptError = validateStrictIsoTimestamp(obj.lastAttemptAt, 'lastAttemptAt');
     if (lastAttemptError) return { ok: false, error: lastAttemptError };
-    const attemptTime = Date.parse(obj.lastAttemptAt as string);
-    if (attemptTime < createdTime) {
-      return {
-        ok: false,
-        error: { code: 'chronology_violation', message: 'lastAttemptAt cannot precede createdAt', path: 'lastAttemptAt' },
-      };
+    if (Date.parse(obj.lastAttemptAt as string) < createdTime) {
+      return fail({ code: 'chronology_violation', message: 'lastAttemptAt cannot precede createdAt', path: 'lastAttemptAt' });
+    }
+    if (hasCompletion || hasTerminalFailure) {
+      return fail({
+        code: 'contradictory_effect_status',
+        message: 'In-progress effect must not carry terminal fields',
+        path: 'status',
+      });
     }
   }
 
-  // Status-specific invariants & Chronology
-  if (obj.status === 'pending') {
-    if (obj.completedAt != null || obj.failedAt != null || obj.terminalError != null) {
-      return {
-        ok: false,
-        error: { code: 'contradictory_effect_status', message: 'Pending effect must not have completion, failure, or terminal error', path: 'status' },
-      };
-    }
-  }
-
-  if (obj.status === 'completed') {
+  if (status === 'completed') {
     if (obj.completedAt == null) {
-      return {
-        ok: false,
-        error: { code: 'contradictory_effect_status', message: 'Completed effect must have completedAt set', path: 'completedAt' },
-      };
+      return fail({ code: 'contradictory_effect_status', message: 'Completed effect must have completedAt set', path: 'completedAt' });
     }
     const completedError = validateStrictIsoTimestamp(obj.completedAt, 'completedAt');
     if (completedError) return { ok: false, error: completedError };
-
     const completedTime = Date.parse(obj.completedAt as string);
     if (completedTime < createdTime) {
-      return {
-        ok: false,
-        error: { code: 'chronology_violation', message: 'completedAt cannot precede createdAt', path: 'completedAt' },
-      };
+      return fail({ code: 'chronology_violation', message: 'completedAt cannot precede createdAt', path: 'completedAt' });
     }
     if (obj.lastAttemptAt != null) {
-      const lastAttemptTime = Date.parse(obj.lastAttemptAt as string);
-      if (completedTime < lastAttemptTime) {
-        return {
-          ok: false,
-          error: { code: 'chronology_violation', message: 'completedAt cannot precede lastAttemptAt', path: 'completedAt' },
-        };
+      const lastAttemptError = validateStrictIsoTimestamp(obj.lastAttemptAt, 'lastAttemptAt');
+      if (lastAttemptError) return { ok: false, error: lastAttemptError };
+      if (completedTime < Date.parse(obj.lastAttemptAt as string)) {
+        return fail({ code: 'chronology_violation', message: 'completedAt cannot precede lastAttemptAt', path: 'completedAt' });
       }
     }
-
-    if (obj.terminalError != null || obj.failedAt != null) {
-      return {
-        ok: false,
-        error: { code: 'contradictory_effect_status', message: 'Completed effect must not have terminalError or failedAt set', path: 'terminalError' },
-      };
+    if (hasTerminalFailure) {
+      return fail({
+        code: 'contradictory_effect_status',
+        message: 'Completed effect must not have terminalError or failedAt set',
+        path: 'terminalError',
+      });
     }
   }
 
-  if (obj.status === 'failed') {
+  if (status === 'failed') {
     if (obj.terminalError == null) {
-      return {
-        ok: false,
-        error: { code: 'missing_terminal_error', message: 'Failed effect must provide a terminalError code', path: 'terminalError' },
-      };
+      return fail({ code: 'missing_terminal_error', message: 'Failed effect must provide a terminalError code', path: 'terminalError' });
     }
     if (!TERMINAL_ERROR_CODES.includes(obj.terminalError as TerminalErrorCode)) {
-      return {
-        ok: false,
-        error: { code: 'invalid_terminal_error', message: 'Unknown terminal error code', path: 'terminalError' },
-      };
+      return fail({ code: 'invalid_terminal_error', message: 'Unknown terminal error code', path: 'terminalError' });
     }
-    if (obj.failedAt != null) {
-      const failedAtError = validateStrictIsoTimestamp(obj.failedAt, 'failedAt');
-      if (failedAtError) return { ok: false, error: failedAtError };
-      const failedTime = Date.parse(obj.failedAt as string);
-      if (failedTime < createdTime) {
-        return {
-          ok: false,
-          error: { code: 'chronology_violation', message: 'failedAt cannot precede createdAt', path: 'failedAt' },
-        };
-      }
+    if (obj.failedAt == null) {
+      return fail({ code: 'contradictory_effect_status', message: 'Failed effect must have failedAt set', path: 'failedAt' });
+    }
+    const failedAtError = validateStrictIsoTimestamp(obj.failedAt, 'failedAt');
+    if (failedAtError) return { ok: false, error: failedAtError };
+    if (Date.parse(obj.failedAt as string) < createdTime) {
+      return fail({ code: 'chronology_violation', message: 'failedAt cannot precede createdAt', path: 'failedAt' });
+    }
+    if (hasCompletion) {
+      return fail({
+        code: 'contradictory_effect_status',
+        message: 'Failed effect must not have completedAt set',
+        path: 'completedAt',
+      });
+    }
+  }
+
+  if (status !== 'pending' && status !== 'in_progress' && obj.lastAttemptAt !== undefined && obj.lastAttemptAt !== null) {
+    const lastAttemptError = validateStrictIsoTimestamp(obj.lastAttemptAt, 'lastAttemptAt');
+    if (lastAttemptError) return { ok: false, error: lastAttemptError };
+    if (Date.parse(obj.lastAttemptAt as string) < createdTime) {
+      return fail({ code: 'chronology_violation', message: 'lastAttemptAt cannot precede createdAt', path: 'lastAttemptAt' });
     }
   }
 
@@ -1147,7 +1369,7 @@ export function validateAuthCleanupEffect(raw: unknown): ValidationResult<AuthCl
     terminalError: (obj.terminalError as TerminalErrorCode | null | undefined) ?? null,
   };
 
-  return { ok: true, value: deepFreeze(result) };
+  return ok(result);
 }
 
 // ── 7. Composite Alignment & Transition Helpers (Requirement 3 & 5) ──────────
@@ -1209,7 +1431,7 @@ export function validateReceiptEffectAlignment(
     };
   }
 
-  return { ok: true, value: true };
+  return ok(true as const);
 }
 
 /**
@@ -1243,32 +1465,56 @@ export function validateEffectLifecycleTransition(
     };
   }
 
-  // Fence generation must not regress
+  if (next.createdAt !== current.createdAt) {
+    return fail({ code: 'immutable_field_changed', message: 'Creation time is immutable', path: 'createdAt' });
+  }
+
   if (next.fenceGeneration < current.fenceGeneration) {
-    return {
-      ok: false,
-      error: { code: 'forbidden_backward_transition', message: 'Fence generation cannot regress', path: 'fenceGeneration' },
-    };
+    return fail({ code: 'forbidden_backward_transition', message: 'Fence generation cannot regress', path: 'fenceGeneration' });
   }
 
-  // Completed status is terminal
+  if (next.attempts < current.attempts) {
+    return fail({ code: 'attempts_regressed', message: 'Retry count cannot decrease', path: 'attempts' });
+  }
+
   if (current.status === 'completed') {
-    return {
-      ok: false,
-      error: { code: 'forbidden_backward_transition', message: 'Completed effect is terminal and cannot be transitioned or replayed', path: 'status' },
-    };
+    return fail({
+      code: 'forbidden_backward_transition',
+      message: 'Completed effect is terminal and cannot be transitioned or replayed',
+      path: 'status',
+    });
   }
 
-  // Check allowed transitions
   const allowed = ALLOWED_EFFECT_TRANSITIONS[current.status];
   if (!allowed.includes(next.status)) {
-    return {
-      ok: false,
-      error: { code: 'unsupported_transition', message: 'State transition not allowed by forward-only lifecycle model', path: 'status' },
-    };
+    return fail({
+      code: 'unsupported_transition',
+      message: 'State transition not allowed by forward-only lifecycle model',
+      path: 'status',
+    });
   }
 
-  return { ok: true, value: true };
+  const startingAttempt = next.status === 'in_progress' && current.status !== 'in_progress';
+  if (startingAttempt) {
+    if (current.attempts >= MAX_RETRY_ATTEMPTS) {
+      return fail({ code: 'retry_exhausted', message: 'Retry beyond maximum is rejected', path: 'attempts' });
+    }
+    if (next.attempts !== current.attempts + 1) {
+      return fail({ code: 'invalid_attempts', message: 'A retry must increment attempts exactly once', path: 'attempts' });
+    }
+    if (next.fenceGeneration <= current.fenceGeneration) {
+      return fail({ code: 'fence_not_advanced', message: 'Fence generation must advance for a new attempt', path: 'fenceGeneration' });
+    }
+  } else {
+    if (next.attempts !== current.attempts) {
+      return fail({ code: 'invalid_attempts', message: 'Attempts change only when starting a new attempt', path: 'attempts' });
+    }
+    if (next.fenceGeneration !== current.fenceGeneration) {
+      return fail({ code: 'forbidden_backward_transition', message: 'Fence generation cannot change except on a new attempt', path: 'fenceGeneration' });
+    }
+  }
+
+  return ok(true as const);
 }
 
 /**
@@ -1277,40 +1523,116 @@ export function validateEffectLifecycleTransition(
  * - Identical parameters: idempotent replay allowed.
  * - Any parameter changed: CONFLICT error returned.
  */
+const COMMITMENT_ALLOWED_KEYS = new Set<string>([
+  'opId',
+  'companyId',
+  'driverId',
+  'expectedCredentialVersion',
+  'temporary',
+  'passcodeDigitCount',
+  'commitmentHash',
+  'actorUid',
+  'createdAt',
+]);
+
+const COMMITMENT_REQUIRED_KEYS = [
+  'opId',
+  'companyId',
+  'driverId',
+  'expectedCredentialVersion',
+  'temporary',
+  'passcodeDigitCount',
+  'commitmentHash',
+  'actorUid',
+  'createdAt',
+] as const;
+
+export function validateCanonicalResetOperationCommitment(
+  raw: unknown,
+): ValidationResult<CanonicalResetOperationCommitment> {
+  const snapped = beginObject(raw);
+  if (!snapped.ok) return snapped;
+  const obj = snapped.value;
+  const unknownError = checkUnknownKeys(obj, COMMITMENT_ALLOWED_KEYS);
+  if (unknownError) return fail(unknownError);
+  const missingError = checkRequiredKeys(obj, COMMITMENT_REQUIRED_KEYS, 'missing_field');
+  if (missingError) return fail(missingError);
+  const opIdError = validateDocIdentifier(obj.opId, 'opId');
+  if (opIdError) return fail(opIdError);
+  const companyIdError = validateCompanyIdentifier(obj.companyId, 'companyId');
+  if (companyIdError) return fail(companyIdError);
+  const driverIdError = validateDocIdentifier(obj.driverId, 'driverId');
+  if (driverIdError) return fail(driverIdError);
+  const versionError = validateIncrementableVersion(obj.expectedCredentialVersion, 'expectedCredentialVersion');
+  if (versionError) return fail(versionError);
+  if (typeof obj.temporary !== 'boolean') {
+    return fail({ code: 'invalid_temporary_type', message: 'Field temporary must be an explicit boolean', path: 'temporary' });
+  }
+  if (typeof obj.passcodeDigitCount !== 'number' || !Number.isSafeInteger(obj.passcodeDigitCount)) {
+    return fail({ code: 'invalid_integer_type', message: 'passcodeDigitCount must be a safe integer', path: 'passcodeDigitCount' });
+  }
+  if (obj.passcodeDigitCount < PASSCODE_DIGIT_MIN_LEN || obj.passcodeDigitCount > PASSCODE_DIGIT_MAX_LEN) {
+    return fail({ code: 'invalid_integer_type', message: 'passcodeDigitCount out of bounds', path: 'passcodeDigitCount' });
+  }
+  const hashError = validateCommitmentHash(obj.commitmentHash);
+  if (hashError) return fail(hashError);
+  const actorError = validateAuthUid(obj.actorUid, 'actorUid');
+  if (actorError) return fail(actorError);
+  const createdError = validateStrictIsoTimestamp(obj.createdAt, 'createdAt');
+  if (createdError) return fail(createdError);
+  return ok({
+    opId: obj.opId as string,
+    companyId: obj.companyId as string,
+    driverId: obj.driverId as string,
+    expectedCredentialVersion: obj.expectedCredentialVersion as number,
+    temporary: obj.temporary as boolean,
+    passcodeDigitCount: obj.passcodeDigitCount as number,
+    commitmentHash: obj.commitmentHash as string,
+    actorUid: obj.actorUid as string,
+    createdAt: obj.createdAt as string,
+  });
+}
+
 export function validateOperationRetryCommitment(
   existingCommitmentRaw: unknown,
   incomingRequestRaw: unknown,
+  incomingCommitmentHash?: string,
 ): ValidationResult<{ isIdempotentRetry: boolean }> {
-  const plainCommitment = validatePlainDataObject(existingCommitmentRaw);
-  if (plainCommitment) return { ok: false, error: plainCommitment };
+  const existingValidation = validateCanonicalResetOperationCommitment(existingCommitmentRaw);
+  if (!existingValidation.ok) return existingValidation;
 
   const requestValidation = validateCanonicalResetRequest(incomingRequestRaw);
-  if (!requestValidation.ok) return { ok: false, error: requestValidation.error };
+  if (!requestValidation.ok) return requestValidation;
 
-  const existing = existingCommitmentRaw as CanonicalResetOperationCommitment;
+  const existing = existingValidation.value;
   const incoming = requestValidation.value;
 
   if (existing.opId !== incoming.opId) {
-    return {
-      ok: false,
-      error: { code: 'op_id_mismatch', message: 'Operation ID does not match existing commitment', path: 'opId' },
-    };
+    return fail({ code: 'op_id_mismatch', message: 'Operation ID does not match existing commitment', path: 'opId' });
   }
 
-  // Check bound operational parameters for conflict
+  const incomingHash = incomingCommitmentHash !== undefined
+    ? incomingCommitmentHash
+    : existing.commitmentHash;
+  const incomingHashError = validateCommitmentHash(incomingHash);
+  if (incomingHashError) return fail(incomingHashError);
+
   if (
     existing.companyId !== incoming.companyId ||
     existing.driverId !== incoming.driverId ||
     existing.expectedCredentialVersion !== incoming.expectedCredentialVersion ||
-    existing.temporary !== incoming.temporary
+    existing.temporary !== incoming.temporary ||
+    existing.passcodeDigitCount !== incoming.newPasscode.length ||
+    existing.commitmentHash !== incomingHash
   ) {
-    return {
-      ok: false,
-      error: { code: 'idempotent_retry_conflict', message: 'Operation ID reused with conflicting request parameters', path: 'opId' },
-    };
+    return fail({
+      code: 'idempotent_retry_conflict',
+      message: 'Operation ID reused with conflicting request parameters',
+      path: 'opId',
+    });
   }
 
-  return { ok: true, value: { isIdempotentRetry: true } };
+  return ok({ isIdempotentRetry: true });
 }
 
 // ── 8. Separate Authority Planes Validators (Requirement 1) ──────────────────
@@ -1325,10 +1647,9 @@ const PRINCIPAL_ALLOWED_KEYS = new Set<string>([
 ]);
 
 export function validateStaffPrincipal(raw: unknown): ValidationResult<StaffPrincipal> {
-  const plainError = validatePlainDataObject(raw);
-  if (plainError) return { ok: false, error: plainError };
-
-  const obj = raw as Record<string, unknown>;
+  const snapped = beginObject(raw);
+  if (!snapped.ok) return snapped;
+  const obj = snapped.value;
   const unknownError = checkUnknownKeys(obj, PRINCIPAL_ALLOWED_KEYS);
   if (unknownError) return { ok: false, error: unknownError };
 
@@ -1372,10 +1693,9 @@ const MEMBERSHIP_ALLOWED_KEYS = new Set<string>([
 ]);
 
 export function validateTenantMembership(raw: unknown): ValidationResult<TenantMembership> {
-  const plainError = validatePlainDataObject(raw);
-  if (plainError) return { ok: false, error: plainError };
-
-  const obj = raw as Record<string, unknown>;
+  const snapped = beginObject(raw);
+  if (!snapped.ok) return snapped;
+  const obj = snapped.value;
   const unknownError = checkUnknownKeys(obj, MEMBERSHIP_ALLOWED_KEYS);
   if (unknownError) return { ok: false, error: unknownError };
 
@@ -1417,10 +1737,9 @@ const CAPABILITIES_ALLOWED_KEYS = new Set<string>([
 ]);
 
 export function validateTenantRoleCapabilities(raw: unknown): ValidationResult<TenantRoleCapabilities> {
-  const plainError = validatePlainDataObject(raw);
-  if (plainError) return { ok: false, error: plainError };
-
-  const obj = raw as Record<string, unknown>;
+  const snapped = beginObject(raw);
+  if (!snapped.ok) return snapped;
+  const obj = snapped.value;
   const unknownError = checkUnknownKeys(obj, CAPABILITIES_ALLOWED_KEYS);
   if (unknownError) return { ok: false, error: unknownError };
 
@@ -1430,25 +1749,47 @@ export function validateTenantRoleCapabilities(raw: unknown): ValidationResult<T
   const uidError = validateAuthUid(obj.staffUid, 'staffUid');
   if (uidError) return { ok: false, error: uidError };
 
-  if (!Array.isArray(obj.roles) || !Array.isArray(obj.capabilities)) {
-    return { ok: false, error: { code: 'invalid_type', message: 'Roles and capabilities must be arrays', path: 'roles' } };
-  }
+  const rolesResult = validateBoundedStringArray(obj.roles, 'roles');
+  if (!rolesResult.ok) return rolesResult;
+  const capsArrayResult = validateBoundedStringArray(obj.capabilities, 'capabilities');
+  if (!capsArrayResult.ok) return capsArrayResult;
 
   if (obj.canResetDriverPasscode !== true) {
-    return { ok: false, error: { code: 'unauthorized_actor', message: 'Actor lacks canResetDriverPasscode capability in this company', path: 'canResetDriverPasscode' } };
+    return fail({ code: 'unauthorized_actor', message: 'Actor lacks canResetDriverPasscode capability in this company', path: 'canResetDriverPasscode' });
+  }
+  if (typeof obj.canIssuePermanentPasscode !== 'boolean') {
+    return fail({ code: 'missing_capabilities_field', message: 'canIssuePermanentPasscode must be an own boolean', path: 'canIssuePermanentPasscode' });
   }
 
-  return {
-    ok: true,
-    value: deepFreeze({
-      companyId: obj.companyId as string,
-      staffUid: obj.staffUid as string,
-      roles: Object.freeze([...(obj.roles as string[])]),
-      capabilities: Object.freeze([...(obj.capabilities as string[])]),
-      canResetDriverPasscode: true as const,
-      canIssuePermanentPasscode: obj.canIssuePermanentPasscode === true,
-    }),
-  };
+  return ok({
+    companyId: obj.companyId as string,
+    staffUid: obj.staffUid as string,
+    roles: rolesResult.value,
+    capabilities: capsArrayResult.value,
+    canResetDriverPasscode: true as const,
+    canIssuePermanentPasscode: obj.canIssuePermanentPasscode,
+  });
+}
+
+function validateBoundedStringArray(raw: unknown, fieldName: string): ValidationResult<readonly string[]> {
+  if (!Array.isArray(raw)) {
+    return fail({ code: 'invalid_array', message: 'Value must be an array', path: fieldName });
+  }
+  if (raw.length > MAX_ROLE_ARRAY_LENGTH) {
+    return fail({ code: 'excessive_array_length', message: 'Array exceeds maximum permitted length', path: fieldName });
+  }
+  const copy: string[] = [];
+  for (let i = 0; i < raw.length; i += 1) {
+    const item = raw[i];
+    if (typeof item !== 'string') {
+      return fail({ code: 'invalid_array', message: 'Array elements must be strings', path: fieldName });
+    }
+    if (item.length < 1 || item.length > MAX_ROLE_STRING_LENGTH || !/^[A-Za-z0-9_-]+$/.test(item)) {
+      return fail({ code: 'malformed_id', message: 'Array element is not a bounded identifier', path: fieldName });
+    }
+    copy.push(item);
+  }
+  return { ok: true, value: copy };
 }
 
 const POLICY_ALLOWED_KEYS = new Set<string>([
@@ -1461,10 +1802,9 @@ const POLICY_ALLOWED_KEYS = new Set<string>([
 ]);
 
 export function validateTenantSecurityPolicy(raw: unknown): ValidationResult<TenantSecurityPolicy> {
-  const plainError = validatePlainDataObject(raw);
-  if (plainError) return { ok: false, error: plainError };
-
-  const obj = raw as Record<string, unknown>;
+  const snapped = beginObject(raw);
+  if (!snapped.ok) return snapped;
+  const obj = snapped.value;
   const unknownError = checkUnknownKeys(obj, POLICY_ALLOWED_KEYS);
   if (unknownError) return { ok: false, error: unknownError };
 
@@ -1472,24 +1812,44 @@ export function validateTenantSecurityPolicy(raw: unknown): ValidationResult<Ten
   if (companyIdError) return { ok: false, error: companyIdError };
 
   if (obj.allowAdminPasscodeReset !== true) {
-    return { ok: false, error: { code: 'policy_violation', message: 'Company policy does not allow administrative passcode resets', path: 'allowAdminPasscodeReset' } };
+    return fail({ code: 'policy_violation', message: 'Company policy does not allow administrative passcode resets', path: 'allowAdminPasscodeReset' });
   }
 
   if (typeof obj.allowPermanentPasscodeReset !== 'boolean' || typeof obj.requireTemporaryOnReset !== 'boolean') {
-    return { ok: false, error: { code: 'policy_violation', message: 'Policy flags must be boolean', path: 'allowPermanentPasscodeReset' } };
+    return fail({ code: 'policy_violation', message: 'Policy flags must be boolean', path: 'allowPermanentPasscodeReset' });
   }
 
-  return {
-    ok: true,
-    value: deepFreeze({
-      companyId: obj.companyId as string,
-      allowAdminPasscodeReset: true as const,
-      allowPermanentPasscodeReset: obj.allowPermanentPasscodeReset as boolean,
-      requiredPasscodeMinLength: (obj.requiredPasscodeMinLength as number) || PASSCODE_DIGIT_MIN_LEN,
-      maxPasscodeLength: (obj.maxPasscodeLength as number) || PASSCODE_DIGIT_MAX_LEN,
-      requireTemporaryOnReset: obj.requireTemporaryOnReset as boolean,
-    }),
-  };
+  if (
+    typeof obj.requiredPasscodeMinLength !== 'number' ||
+    !Number.isSafeInteger(obj.requiredPasscodeMinLength) ||
+    obj.requiredPasscodeMinLength < PASSCODE_DIGIT_MIN_LEN ||
+    obj.requiredPasscodeMinLength > PASSCODE_DIGIT_MAX_LEN
+  ) {
+    return fail({ code: 'invalid_policy_bound', message: 'requiredPasscodeMinLength must be an exact in-range integer', path: 'requiredPasscodeMinLength' });
+  }
+  if (
+    typeof obj.maxPasscodeLength !== 'number' ||
+    !Number.isSafeInteger(obj.maxPasscodeLength) ||
+    obj.maxPasscodeLength < PASSCODE_DIGIT_MIN_LEN ||
+    obj.maxPasscodeLength > PASSCODE_DIGIT_MAX_LEN
+  ) {
+    return fail({ code: 'invalid_policy_bound', message: 'maxPasscodeLength must be an exact in-range integer', path: 'maxPasscodeLength' });
+  }
+  if (obj.requiredPasscodeMinLength > obj.maxPasscodeLength) {
+    return fail({ code: 'invalid_policy_bound', message: 'Passcode length bounds are contradictory', path: 'requiredPasscodeMinLength' });
+  }
+  if (obj.requireTemporaryOnReset && obj.allowPermanentPasscodeReset) {
+    return fail({ code: 'policy_violation', message: 'Policy cannot require temporary reset while allowing permanent reset', path: 'requireTemporaryOnReset' });
+  }
+
+  return ok({
+    companyId: obj.companyId as string,
+    allowAdminPasscodeReset: true as const,
+    allowPermanentPasscodeReset: obj.allowPermanentPasscodeReset,
+    requiredPasscodeMinLength: obj.requiredPasscodeMinLength,
+    maxPasscodeLength: obj.maxPasscodeLength,
+    requireTemporaryOnReset: obj.requireTemporaryOnReset,
+  });
 }
 
 const BINDING_ALLOWED_KEYS = new Set<string>([
@@ -1500,10 +1860,9 @@ const BINDING_ALLOWED_KEYS = new Set<string>([
 ]);
 
 export function validateTargetDriverBinding(raw: unknown): ValidationResult<TargetDriverBinding> {
-  const plainError = validatePlainDataObject(raw);
-  if (plainError) return { ok: false, error: plainError };
-
-  const obj = raw as Record<string, unknown>;
+  const snapped = beginObject(raw);
+  if (!snapped.ok) return snapped;
+  const obj = snapped.value;
   const unknownError = checkUnknownKeys(obj, BINDING_ALLOWED_KEYS);
   if (unknownError) return { ok: false, error: unknownError };
 
@@ -1534,10 +1893,19 @@ export function validateTargetDriverBinding(raw: unknown): ValidationResult<Targ
  * capabilities, security policy, and target driver binding.
  */
 export function validateResetAuthzSnapshot(raw: unknown): ValidationResult<ResetAuthzSnapshot> {
-  const plainError = validatePlainDataObject(raw);
-  if (plainError) return { ok: false, error: plainError };
-
-  const obj = raw as Record<string, unknown>;
+  const snapped = beginObject(raw);
+  if (!snapped.ok) return snapped;
+  const obj = snapped.value;
+  const authzUnknown = checkUnknownKeys(obj, new Set([
+    'snapshotId', 'opId', 'evaluatedAt', 'staffPrincipal', 'tenantMembership',
+    'tenantRoleCapabilities', 'tenantSecurityPolicy', 'targetDriverBinding', 'resetMode',
+  ]));
+  if (authzUnknown) return fail(authzUnknown);
+  const authzMissing = checkRequiredKeys(obj, [
+    'snapshotId', 'opId', 'evaluatedAt', 'staffPrincipal', 'tenantMembership',
+    'tenantRoleCapabilities', 'tenantSecurityPolicy', 'targetDriverBinding', 'resetMode',
+  ], 'missing_snapshot_field');
+  if (authzMissing) return fail(authzMissing);
 
   const principalValidation = validateStaffPrincipal(obj.staffPrincipal);
   if (!principalValidation.ok) return { ok: false, error: principalValidation.error };
@@ -1573,13 +1941,19 @@ export function validateResetAuthzSnapshot(raw: unknown): ValidationResult<Reset
     return { ok: false, error: { code: 'company_binding_mismatch', message: 'Company ID mismatch across authority planes', path: 'companyId' } };
   }
 
-  const resetMode = obj.resetMode === 'permanent' ? 'permanent' : 'temporary';
+  if (obj.resetMode !== 'temporary' && obj.resetMode !== 'permanent') {
+    return fail({ code: 'invalid_reset_mode', message: 'resetMode must be exactly temporary or permanent', path: 'resetMode' });
+  }
+  const resetMode = obj.resetMode;
   if (resetMode === 'permanent') {
+    if (policy.requireTemporaryOnReset) {
+      return fail({ code: 'policy_violation', message: 'Permanent reset is forbidden when policy requires temporary reset', path: 'resetMode' });
+    }
     if (!caps.canIssuePermanentPasscode) {
-      return { ok: false, error: { code: 'unauthorized_actor', message: 'Actor lacks capability to issue permanent passcodes', path: 'resetMode' } };
+      return fail({ code: 'unauthorized_actor', message: 'Actor lacks capability to issue permanent passcodes', path: 'resetMode' });
     }
     if (!policy.allowPermanentPasscodeReset) {
-      return { ok: false, error: { code: 'policy_violation', message: 'Company security policy prohibits permanent passcode issuance', path: 'resetMode' } };
+      return fail({ code: 'policy_violation', message: 'Company security policy prohibits permanent passcode issuance', path: 'resetMode' });
     }
   }
 
@@ -1592,18 +1966,15 @@ export function validateResetAuthzSnapshot(raw: unknown): ValidationResult<Reset
   const evalTimeError = validateStrictIsoTimestamp(obj.evaluatedAt, 'evaluatedAt');
   if (evalTimeError) return { ok: false, error: evalTimeError };
 
-  return {
-    ok: true,
-    value: deepFreeze({
-      snapshotId: obj.snapshotId as string,
-      opId: obj.opId as string,
-      evaluatedAt: obj.evaluatedAt as string,
-      staffPrincipal: principal,
-      tenantMembership: membership,
-      tenantRoleCapabilities: caps,
-      tenantSecurityPolicy: policy,
-      targetDriverBinding: targetDriver,
-      resetMode,
-    }),
-  };
+  return ok({
+    snapshotId: obj.snapshotId as string,
+    opId: obj.opId as string,
+    evaluatedAt: obj.evaluatedAt as string,
+    staffPrincipal: principal,
+    tenantMembership: membership,
+    tenantRoleCapabilities: caps,
+    tenantSecurityPolicy: policy,
+    targetDriverBinding: targetDriver,
+    resetMode,
+  });
 }

@@ -30,14 +30,15 @@ This document defines the strict, sequential Stop/Go phase gates governing the C
   - Any Firebase SDK import in contract or validator code.
   - Any export of reset contracts or validators to production entrypoints (`functions/src/index.ts`).
   - Any network, database, or cryptographic hashing side effects.
-  - Any failure in the 172-test pure validator suite.
+  - Any failure in the focused pure validator suite.
   - Any regression in the repository's 4 known baseline test failures.
   - Any mutation of production driver data or Adan's identity.
 - **Go Conditions**:
   - Independent acceptance and audit clearance by Desktop Codex.
   - Clean TypeScript compilation (`tsc`).
-  - 172 passing pure validator tests covering all adversarial counterexamples.
-  - Exactly six Phase-0 files modified/tracked in the candidate commit.
+  - Focused pure validator tests covering all adversarial counterexamples, including Codex HOLD cases.
+  - Exactly six logical Phase-0 artifacts modified. The prior hardening commit `23f1e690` described six artifacts but Git recorded nine paths (three adds, three deletes from the doc rename, three mods).
+  - No universal safety guarantee is claimed beyond the tested validator behavior.
 
 ---
 
@@ -92,7 +93,7 @@ This document defines the strict, sequential Stop/Go phase gates governing the C
   - Transmitting plaintext passcodes in unsecured logs or analytics.
 - **Go Conditions**:
   - Mobile client intercepts `mustResetPasscode: true` or `temporary: true` custom claims/session response and immediately gates driver into change-passcode UI.
-  - Driver successfully self-sets permanent passcode through authenticated self-change callable.
+  - Driver successfully self-sets permanent passcode through the existing `driverChangeOwnPasscode` callable once that callable gains transactional version/CAS protection.
 
 ---
 
