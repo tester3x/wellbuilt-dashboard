@@ -91,7 +91,9 @@ export function filterTestWells(
       ...summary,
       lineItems: filtered,
       loads: filtered.length,
-      totalBBLs: filtered.reduce((s, i) => s + i.bbls, 0),
+      totalBBLs: filtered.reduce((s, i) => s + (i.qtyUnit === 'bbl' && i.qtyValue != null ? i.qtyValue : 0), 0),
+      totalTons: filtered.reduce((s, i) => s + (i.qtyUnit === 'ton' && i.qtyValue != null ? i.qtyValue : 0), 0),
+      unresolvedCount: filtered.filter(i => i.amountUnresolved || i.qtyState === 'unresolved').length,
       totalHours: Math.round(filtered.reduce((s, i) => s + i.hours, 0) * 10) / 10,
       subtotal: Math.round(subtotal * 100) / 100,
       totalFuelSurcharge: Math.round(totalFuelSurcharge * 100) / 100,
@@ -124,7 +126,7 @@ function buildGroup(
     totalFuelSurcharge: Math.round(totalFuelSurcharge * 100) / 100,
     totalDetentionPay: Math.round(totalDetentionPay * 100) / 100,
     grandTotal: Math.round((subtotal + totalFuelSurcharge + totalDetentionPay) * 100) / 100,
-    totalBBLs: items.reduce((s, i) => s + i.bbls, 0),
+    totalBBLs: items.reduce((s, i) => s + (i.qtyUnit === 'bbl' && i.qtyValue != null ? i.qtyValue : 0), 0),
     totalHours: Math.round(items.reduce((s, i) => s + i.hours, 0) * 10) / 10,
     loads: items.length,
   };
@@ -382,8 +384,10 @@ function renderInvoicePage(
     { header: 'WB Inv #', dataKey: 'invoiceNumber' },
     { header: 'Drop-off', dataKey: 'hauledTo' },
     { header: 'Driver', dataKey: 'driver' },
-    { header: 'BBLs', dataKey: 'bbls' },
+    { header: 'Qty', dataKey: 'qty' },
+    { header: 'Unit', dataKey: 'unit' },
     { header: 'Hours', dataKey: 'hours' },
+    { header: 'Hours source', dataKey: 'hoursSource' },
     { header: 'Amount', dataKey: 'amount' },
   );
 
@@ -393,9 +397,13 @@ function renderInvoicePage(
       invoiceNumber: item.invoiceNumber,
       hauledTo: item.hauledTo || '--',
       driver: legalNameMap[item.driver] || item.driver,
-      bbls: item.bbls || '--',
+      qty: item.amountUnresolved || item.qtyState === 'unresolved'
+        ? (item.qtyDisplay || 'UNRESOLVED')
+        : (item.qtyValue != null ? String(item.qtyValue) : '--'),
+      unit: item.qtyUnit === 'ton' ? 'ton' : item.qtyUnit === 'bbl' ? 'BBL' : '--',
       hours: item.hours || '--',
-      amount: formatCurrency(item.baseAmount),
+      hoursSource: item.hoursProvenance || 'legacy/unknown',
+      amount: item.amountUnresolved ? `UNRESOLVED (${item.amountUnresolved})` : formatCurrency(item.baseAmount),
     };
     if (isOperatorSummary) row.wellName = item.wellName;
     return row;
@@ -494,8 +502,8 @@ export function generateInvoiceCSV(
 ): string {
   const headers = [
     'Billing Invoice #', 'Date', 'Operator', 'Well', 'Drop-off', 'Driver',
-    'Job Type', 'BBLs', 'Hours', 'Rate', 'Rate Method', 'Base Amount',
-    'Fuel Surcharge', 'Detention', 'Total',
+    'Job Type', 'Qty', 'Unit', 'Hours', 'Hours source', 'Rate', 'Rate Method', 'Base Amount',
+    'Fuel Surcharge', 'Detention', 'Total', 'Qty/Rate state',
   ];
 
   const rows: string[][] = [];
@@ -509,14 +517,17 @@ export function generateInvoiceCSV(
         item.hauledTo || '',
         legalNameMap[item.driver] || item.driver,
         item.jobType || '',
-        String(item.bbls || 0),
+        item.qtyValue != null ? String(item.qtyValue) : '',
+        item.qtyUnit === 'ton' ? 'ton' : item.qtyUnit === 'bbl' ? 'BBL' : '',
         String(item.hours || 0),
-        String(item.rate || 0),
+        item.hoursProvenance || 'legacy/unknown',
+        item.amountUnresolved ? '' : String(item.rate || 0),
         item.rateMethod || '',
-        item.baseAmount.toFixed(2),
-        item.fuelSurcharge.toFixed(2),
-        item.detentionPay.toFixed(2),
-        item.total.toFixed(2),
+        item.amountUnresolved ? '' : item.baseAmount.toFixed(2),
+        item.amountUnresolved ? '' : item.fuelSurcharge.toFixed(2),
+        item.amountUnresolved ? '' : item.detentionPay.toFixed(2),
+        item.amountUnresolved ? '' : item.total.toFixed(2),
+        item.amountUnresolved || item.qtyDisplay || '',
       ]);
     });
   });
@@ -565,14 +576,16 @@ export function generateQuickBooksCSV(
       const desc = [
         item.wellName,
         item.hauledTo ? `-> ${item.hauledTo}` : '',
-        `${item.bbls} BBLs`,
+        item.qtyDisplay || (item.qtyUnit === 'ton' ? `${item.qtyValue} ton` : item.qtyUnit === 'bbl' ? `${item.qtyValue} BBL` : 'UNRESOLVED'),
         driver,
         item.date,
       ].filter(Boolean).join(' | ');
 
       rows.push([
         invNum, group.operator, today, dueDate, termsLabel,
-        desc, '1', item.baseAmount.toFixed(2), item.baseAmount.toFixed(2),
+        desc, '1',
+        item.amountUnresolved ? 'UNRESOLVED' : item.baseAmount.toFixed(2),
+        item.amountUnresolved ? 'UNRESOLVED' : item.baseAmount.toFixed(2),
         `${item.wellName} - ${item.date}`,
       ]);
     });
@@ -645,8 +658,14 @@ export function generateInvoiceJSON(
         dropOff: item.hauledTo || undefined,
         driver: legalNameMap[item.driver] || item.driver,
         jobType: item.jobType || undefined,
-        bbls: item.bbls,
+        qty: item.qtyValue,
+        qtyUnit: item.qtyUnit,
+        qtyDisplay: item.qtyDisplay,
         hours: item.hours,
+        observedHours: item.observedHours,
+        allocatedHours: item.allocatedHours,
+        hoursProvenance: item.hoursProvenance,
+        amountUnresolved: item.amountUnresolved,
         rateMethod: item.rateMethod,
         rate: item.rate,
         baseAmount: item.baseAmount,

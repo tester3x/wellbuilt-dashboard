@@ -1,7 +1,10 @@
 import { getFirestoreDb } from './firebase';
 import { collection, getDocs, query, where, orderBy, Timestamp, doc, setDoc, updateDoc, getDoc, deleteDoc } from 'firebase/firestore';
 import { type CompanyConfig, type OperatorBillingConfig } from './companySettings';
-import { lookupRate, getEffectiveRate, formatCurrency, type PayPeriod, type CompanyRateSheets } from './payroll';
+import { getEffectiveRate, formatCurrency, type PayPeriod, type RateEntry } from './payroll';
+import { hoursDisplay, isFinanciallyEligibleStatus, mixedQuantitySummary, projectFinancialLine, quantityDisplay, resolveFinancialRate, type CompanyRateSheets as CanonicalRateSheets } from './financialCorrectnessCore';
+
+export { mixedQuantitySummary, hoursDisplay };
 
 // Re-export for convenience
 export { formatCurrency, type PayPeriod };
@@ -28,6 +31,15 @@ export interface BillingLineItem {
   detentionPay: number;
   swdWaitMinutes: number;
   total: number;
+  qtyUnit?: 'bbl' | 'ton' | null;
+  qtyValue?: number | null;
+  qtyDisplay?: string;
+  qtyState?: string;
+  observedHours?: number | null;
+  allocatedHours?: number | null;
+  hoursProvenance?: string;
+  hoursDisplay?: string;
+  amountUnresolved?: string | null;
 }
 
 export interface OperatorBillingSummary {
@@ -35,6 +47,8 @@ export interface OperatorBillingSummary {
   companyId: string;
   loads: number;
   totalBBLs: number;
+  totalTons: number;
+  unresolvedCount: number;
   totalHours: number;
   totalFuelMinutes: number;
   subtotal: number;
@@ -302,10 +316,8 @@ export async function fetchBillingData(
 
   snapshot.docs.forEach(docSnap => {
     const d = docSnap.data();
-    // 5/20 (B2) — Also skip 'cancelled' and 'void' so terminalized
-    // cancel-orphans don't surface as $0/0-BBL billing rows.
-    const status = d.status || 'open';
-    if (status === 'open' || status === 'cancelled' || status === 'void') return;
+    const eligibility = isFinanciallyEligibleStatus(d.status);
+    if (!eligibility.eligible) return;
 
     const operator = d.operator || '';
     if (!operator) return;
@@ -315,8 +327,6 @@ export async function fetchBillingData(
     if (companyId && invoiceCompanyId && invoiceCompanyId !== companyId) return;
 
     const jobType = d.commodityType || d.jobType || '';
-    const bbls = d.totalBBL || 0;
-    const hours = d.totalHours || 0;
     const fuelMinutes = d.fuelMinutes || 0;
     const driveDistanceMiles = d.driveDistanceMiles || 0;
 
@@ -330,16 +340,53 @@ export async function fetchBillingData(
     const timeline = invoiceCompanyId ? dieselTimelines.get(invoiceCompanyId) : undefined;
     const currentDiesel = (timeline && invoiceDate ? getDieselPriceForDate(timeline, invoiceDate) : undefined) ?? company?.currentDieselPrice;
 
-    const rateEntry = lookupRate(rateSheets, operator, jobType);
-    const rateMethod = rateEntry?.method || 'per_bbl';
+    const observedHours = typeof d.observedHours === 'number'
+      ? d.observedHours
+      : (typeof d.actualDriveMinutes === 'number' ? d.actualDriveMinutes / 60 : undefined);
+    const line = projectFinancialLine({
+      status: d.status,
+      operator,
+      jobType,
+      commodityType: d.commodityType,
+      quantity: {
+        totalBBL: typeof d.totalBBL === 'number' ? d.totalBBL : undefined,
+        bbls: typeof d.bbls === 'number' ? d.bbls : undefined,
+        qty: d.qty,
+        qtyUnit: d.qtyUnit || d.unit,
+        unit: d.unit,
+        tons: typeof d.tons === 'number' ? d.tons : undefined,
+        netWeight: typeof d.netWeight === 'number' ? d.netWeight : undefined,
+      },
+      time: {
+        totalHours: typeof d.totalHours === 'number' ? d.totalHours : undefined,
+        allocatedHours: typeof d.allocatedHours === 'number' ? d.allocatedHours : undefined,
+        observedHours,
+        allocationMethod: d.splitTimeAllocation || d.allocationMethod || null,
+        allocationVersion: d.allocationVersion || null,
+      },
+      rateSheets,
+      defaultSplit: company?.payConfig?.defaultSplit,
+    });
+    const bbls = line.qtyForBblColumn ?? 0;
+    const hours = line.hoursForMoney ?? 0;
+    const hoursLabel = hoursDisplay(line.time);
     const wellName = d.wellName || '';
     const county = d.county || wellCountyMap?.get(wellName.toLowerCase()) || '';
-    const rate = rateEntry
-      ? getEffectiveRate(rateEntry, invoiceDate, county, company?.payConfig?.frostZones, company?.payConfig?.frostSeason, bbls)
-      : 0;
-    const baseAmount = rateMethod === 'per_bbl'
-      ? Math.round(bbls * rate * 100) / 100
-      : Math.round(hours * rate * 100) / 100;
+    let rate = 0;
+    let rateMethod: 'per_bbl' | 'hourly' = 'per_bbl';
+    let baseAmount = 0;
+    if (line.rate.state === 'resolved' || line.rate.state === 'explicit_zero') {
+      rateMethod = line.rate.entry.method;
+      const invoiceDateForFrost = invoiceDate;
+      rate = getEffectiveRate(line.rate.entry as RateEntry, invoiceDateForFrost, county, company?.payConfig?.frostZones, company?.payConfig?.frostSeason, bbls);
+      if (line.amountBilled !== null) {
+        if (rateMethod === 'per_bbl' && line.qtyForBblColumn != null) {
+          baseAmount = Math.round(line.qtyForBblColumn * rate * 100) / 100;
+        } else if (rateMethod === 'hourly' && line.hoursForMoney != null) {
+          baseAmount = Math.round(line.hoursForMoney * rate * 100) / 100;
+        }
+      }
+    }
 
     const fuelSurcharge = calculateFuelSurcharge(
       billingConfig, baseAmount, hours, driveDistanceMiles, currentDiesel
@@ -348,20 +395,23 @@ export async function fetchBillingData(
     // Detention pay: for per_bbl jobs where driver waited at SWD past threshold
     const swdWaitMinutes = d.swdWaitMinutes || 0;
     let detentionPay = 0;
-    if (rateMethod === 'per_bbl' && billingConfig?.detentionEnabled && swdWaitMinutes > 0) {
+    if (rateMethod === 'per_bbl' && billingConfig?.detentionEnabled && swdWaitMinutes > 0 && line.amountBilled !== null) {
       const threshold = billingConfig.detentionThresholdMinutes || 60;
       if (swdWaitMinutes > threshold) {
         const billableMinutes = swdWaitMinutes - threshold;
-        // Rate: use configured detention rate, or fall back to operator's hourly rate from rate sheet
         let detentionRate = billingConfig.detentionHourlyRate || 0;
         if (!detentionRate) {
-          const hourlyEntry = rateSheets[operator]?.find(r => r.method === 'hourly');
-          detentionRate = hourlyEntry?.rate || 0;
+          const hourlyResolved = resolveFinancialRate(rateSheets as CanonicalRateSheets, operator, 'Service Work');
+          if (hourlyResolved.state === 'resolved' && hourlyResolved.entry.method === 'hourly') {
+            detentionRate = hourlyResolved.entry.rate;
+          }
         }
         detentionPay = Math.round((billableMinutes / 60) * detentionRate * 100) / 100;
       }
     }
 
+    const unresolved = line.amountBilled === null ? line.amountReason : null;
+    const fuelSurchargeResolved = unresolved ? 0 : fuelSurcharge;
     const item: BillingLineItem = {
       invoiceId: docSnap.id,
       invoiceNumber: d.invoiceNumber || (d.tickets?.length ? d.tickets[0] : ''),
@@ -377,10 +427,19 @@ export async function fetchBillingData(
       rateMethod,
       rate,
       baseAmount,
-      fuelSurcharge,
-      detentionPay,
+      fuelSurcharge: fuelSurchargeResolved,
+      detentionPay: unresolved ? 0 : detentionPay,
       swdWaitMinutes,
-      total: Math.round((baseAmount + fuelSurcharge + detentionPay) * 100) / 100,
+      total: unresolved ? 0 : Math.round((baseAmount + fuelSurchargeResolved + detentionPay) * 100) / 100,
+      qtyUnit: line.quantity.state === 'unresolved' ? null : line.quantity.unit,
+      qtyValue: line.quantity.state === 'unresolved' ? null : line.quantity.value,
+      qtyDisplay: quantityDisplay(line.quantity),
+      qtyState: line.quantity.state,
+      observedHours: line.time.observedHours,
+      allocatedHours: line.time.allocatedHours,
+      hoursProvenance: line.time.label,
+      hoursDisplay: hoursLabel,
+      amountUnresolved: unresolved,
     };
 
     if (!operatorMap.has(operator)) {
@@ -412,7 +471,9 @@ export async function fetchBillingData(
       companyId: opCompanyId,
       dieselPriceUsed: summaryDiesel,
       loads: items.length,
-      totalBBLs: Math.round(items.reduce((s, i) => s + i.bbls, 0)),
+      totalBBLs: Math.round(items.reduce((s, i) => s + (i.qtyUnit === 'bbl' && i.qtyValue != null ? i.qtyValue : 0), 0)),
+      totalTons: Math.round(items.reduce((s, i) => s + (i.qtyUnit === 'ton' && i.qtyValue != null ? i.qtyValue : 0), 0) * 100) / 100,
+      unresolvedCount: items.filter(i => i.amountUnresolved || i.qtyState === 'unresolved').length,
       totalHours: Math.round(items.reduce((s, i) => s + i.hours, 0) * 100) / 100,
       totalFuelMinutes: items.reduce((s, i) => s + i.fuelMinutes, 0),
       subtotal: Math.round(items.reduce((s, i) => s + i.baseAmount, 0) * 100) / 100,

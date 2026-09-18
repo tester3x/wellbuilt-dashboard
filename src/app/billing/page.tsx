@@ -44,6 +44,7 @@ import {
   getPayPeriods,
   formatCurrency,
   formatPeriodRange,
+  mixedQuantitySummary,
   type OperatorBillingSummary,
   type BillingRecord,
   type BillingStatus,
@@ -586,7 +587,7 @@ export default function BillingPage() {
                         <tr>
                           <td className="px-4 py-2 text-white font-semibold">Totals</td>
                           <td className="px-4 py-2 text-center text-white font-mono">{summaries.reduce((s, o) => s + o.loads, 0)}</td>
-                          <td className="px-4 py-2 text-right text-white font-mono">{summaries.reduce((s, o) => s + o.totalBBLs, 0).toLocaleString()}</td>
+                          <td className="px-4 py-2 text-right text-white font-mono">{mixedQuantitySummary(summaries.reduce((s, o) => s + o.totalBBLs, 0), summaries.reduce((s, o) => s + o.totalTons, 0))}</td>
                           <td className="px-4 py-2 text-right text-white font-mono">{summaries.reduce((s, o) => s + o.totalHours, 0).toFixed(1)}</td>
                           <td className="px-4 py-2 text-right text-white font-mono">{formatCurrency(summaries.reduce((s, o) => s + o.subtotal, 0))}</td>
                           <td className="px-4 py-2 text-right text-yellow-400 font-mono">{formatCurrency(summaries.reduce((s, o) => s + o.totalFuelSurcharge, 0))}</td>
@@ -1157,7 +1158,7 @@ function OperatorColHead({ showDetention }: { showDetention: boolean }) {
       <tr>
         <th className="px-4 py-2 text-left text-sm font-medium text-gray-300">Operator</th>
         <th className="px-4 py-2 text-center text-sm font-medium text-gray-300">Loads</th>
-        <th className="px-4 py-2 text-right text-sm font-medium text-gray-300">BBLs</th>
+        <th className="px-4 py-2 text-right text-sm font-medium text-gray-300">Qty</th>
         <th className="px-4 py-2 text-right text-sm font-medium text-gray-300">Hours</th>
         <th className="px-4 py-2 text-right text-sm font-medium text-gray-300">Base Amount</th>
         <th className="px-4 py-2 text-right text-sm font-medium text-gray-300 whitespace-nowrap">Fuel Surcharge</th>
@@ -1195,7 +1196,7 @@ function OperatorSummaryRow({
     <tr className="hover:bg-gray-750 cursor-pointer" onClick={onToggle}>
       <td className="px-4 py-3 text-white font-medium whitespace-nowrap">{summary.operator}</td>
       <td className="px-4 py-3 text-center text-white font-mono">{summary.loads}</td>
-      <td className="px-4 py-3 text-right text-white font-mono">{summary.totalBBLs.toLocaleString()}</td>
+      <td className="px-4 py-3 text-right text-white font-mono">{mixedQuantitySummary(summary.totalBBLs, summary.totalTons)}</td>
       <td className="px-4 py-3 text-right text-white font-mono">{summary.totalHours.toFixed(1)}</td>
       <td className="px-4 py-3 text-right text-white font-mono">{formatCurrency(summary.subtotal)}</td>
       <td className="px-4 py-3 text-right text-yellow-400 font-mono">{formatCurrency(summary.totalFuelSurcharge)}</td>
@@ -1244,8 +1245,9 @@ function TicketLineList({
           <th className="px-3 py-1 text-left font-medium bg-gray-800">Well</th>
           <th className="px-3 py-1 text-left font-medium bg-gray-800">Drop-off</th>
           <th className="px-3 py-1 text-left font-medium bg-gray-800">Driver</th>
-          <th className="px-3 py-1 text-right font-medium bg-gray-800">BBLs</th>
+          <th className="px-3 py-1 text-right font-medium bg-gray-800">Qty</th>
           <th className="px-3 py-1 text-right font-medium bg-gray-800">Hours</th>
+          <th className="px-3 py-1 text-left font-medium bg-gray-800">Hours source</th>
           <th className="px-3 py-1 text-right font-medium bg-gray-800">Fuel Min</th>
           <th className="px-3 py-1 text-right font-medium bg-gray-800">Base</th>
           <th className="px-3 py-1 text-right font-medium bg-gray-800">FSC</th>
@@ -1261,13 +1263,14 @@ function TicketLineList({
             <td className="px-3 py-1.5 text-gray-300">{item.wellName}</td>
             <td className="px-3 py-1.5 text-gray-400">{item.hauledTo || '--'}</td>
             <td className="px-3 py-1.5 text-gray-400">{legalNameMap[item.driver] || item.driver}</td>
-            <td className="px-3 py-1.5 text-right text-white font-mono">{item.bbls || '--'}</td>
-            <td className="px-3 py-1.5 text-right text-white font-mono">{item.hours || '--'}</td>
+            <td className="px-3 py-1.5 text-right text-white font-mono">{item.qtyDisplay || '--'}</td>
+            <td className="px-3 py-1.5 text-right text-white font-mono">{item.hoursDisplay || (item.hours ? String(item.hours) : '--')}</td>
+            <td className="px-3 py-1.5 text-left text-gray-400 text-xs">{item.hoursProvenance || 'legacy/unknown'}</td>
             <td className="px-3 py-1.5 text-right text-gray-400 font-mono">{item.fuelMinutes || '--'}</td>
-            <td className="px-3 py-1.5 text-right text-white font-mono">{formatCurrency(item.baseAmount)}</td>
-            <td className="px-3 py-1.5 text-right text-yellow-400 font-mono">{item.fuelSurcharge > 0 ? formatCurrency(item.fuelSurcharge) : '--'}</td>
-            {showDetention && <td className="px-3 py-1.5 text-right text-orange-400 font-mono">{item.detentionPay > 0 ? formatCurrency(item.detentionPay) : '--'}</td>}
-            <td className="px-3 py-1.5 text-right text-green-400 font-mono">{formatCurrency(item.total)}</td>
+            <td className="px-3 py-1.5 text-right text-white font-mono">{item.amountUnresolved ? `UNRESOLVED (${item.amountUnresolved})` : formatCurrency(item.baseAmount)}</td>
+            <td className="px-3 py-1.5 text-right text-yellow-400 font-mono">{item.amountUnresolved ? '--' : (item.fuelSurcharge > 0 ? formatCurrency(item.fuelSurcharge) : '--')}</td>
+            {showDetention && <td className="px-3 py-1.5 text-right text-orange-400 font-mono">{item.amountUnresolved ? '--' : (item.detentionPay > 0 ? formatCurrency(item.detentionPay) : '--')}</td>}
+            <td className="px-3 py-1.5 text-right text-green-400 font-mono">{item.amountUnresolved ? `UNRESOLVED (${item.amountUnresolved})` : formatCurrency(item.total)}</td>
           </tr>
         ))}
       </tbody>

@@ -1,0 +1,75 @@
+{
+  "contractVersion": "1.0.0",
+  "fixtureVersion": "1.0.0",
+  "statuses": [
+    { "id": "open", "status": "open", "expectEligible": false },
+    { "id": "in_progress", "status": "in_progress", "expectEligible": false },
+    { "id": "paused", "status": "paused", "expectEligible": false },
+    { "id": "closed", "status": "closed", "expectEligible": true },
+    { "id": "completed", "status": "completed", "expectEligible": true },
+    { "id": "submitted", "status": "submitted", "expectEligible": true },
+    { "id": "approved", "status": "approved", "expectEligible": true },
+    { "id": "paid", "status": "paid", "expectEligible": true },
+    { "id": "cancelled", "status": "cancelled", "expectEligible": false },
+    { "id": "void", "status": "void", "expectEligible": false },
+    { "id": "in-progress", "status": "in-progress", "expectEligible": false },
+    { "id": "transferred", "status": "transferred", "expectEligible": false },
+    { "id": "transfer_pending", "status": "transfer_pending", "expectEligible": false },
+    { "id": "missing", "status": null, "expectEligible": false },
+    { "id": "unknown", "status": "mystery", "expectEligible": false }
+  ],
+  "rateSheet": {
+    "Acme": [
+      { "jobType": "Production Water", "method": "per_bbl", "rate": 2.4 },
+      { "jobType": "Service Work", "method": "hourly", "rate": 150 }
+    ]
+  },
+  "rateSheetZero": {
+    "Acme": [
+      { "jobType": "Production Water", "method": "per_bbl", "rate": 0 }
+    ]
+  },
+  "rateSheetDuplicate": {
+    "Acme": [
+      { "jobType": "Production Water", "method": "per_bbl", "rate": 2.4 },
+      { "jobType": "Production Water", "method": "per_bbl", "rate": 9.9 }
+    ]
+  },
+  "rateSheetReordered": {
+    "Acme": [
+      { "jobType": "Service Work", "method": "hourly", "rate": 150 },
+      { "jobType": "Production Water", "method": "per_bbl", "rate": 2.4 }
+    ]
+  },
+  "rateCases": [
+    { "id": "exact", "operator": "Acme", "jobType": "Production Water", "sheet": "rateSheet", "expectState": "resolved", "expectRate": 2.4 },
+    { "id": "no_match_nonempty", "operator": "Acme", "jobType": "Skim Oil", "sheet": "rateSheet", "expectState": "unresolved", "expectReason": "no_match" },
+    { "id": "empty", "operator": "Acme", "jobType": "Production Water", "sheet": "empty", "expectState": "unresolved", "expectReason": "empty" },
+    { "id": "reordered", "operator": "Acme", "jobType": "Production Water", "sheet": "rateSheetReordered", "expectState": "resolved", "expectRate": 2.4 },
+    { "id": "explicit_zero", "operator": "Acme", "jobType": "Production Water", "sheet": "rateSheetZero", "expectState": "explicit_zero", "expectRate": 0 },
+    { "id": "ambiguous", "operator": "Acme", "jobType": "Production Water", "sheet": "rateSheetDuplicate", "expectState": "unresolved", "expectReason": "ambiguous" }
+  ],
+  "splitCases": [
+    { "id": "configured", "raw": 0.25, "expectState": "resolved", "expectSplit": 0.25 },
+    { "id": "explicit_zero", "raw": 0, "expectState": "explicit_zero", "expectSplit": 0 },
+    { "id": "missing", "raw": null, "expectState": "unresolved" }
+  ],
+  "quantityCases": [
+    { "id": "typed_bbl", "facts": { "qty": 100, "qtyUnit": "bbl" }, "expectState": "resolved", "expectUnit": "bbl", "expectValue": 100 },
+    { "id": "totalBBL", "facts": { "totalBBL": 185 }, "expectState": "resolved", "expectUnit": "bbl", "expectValue": 185 },
+    { "id": "bbls", "facts": { "bbls": 90 }, "expectState": "resolved", "expectUnit": "bbl", "expectValue": 90 },
+    { "id": "typed_generic_bbl", "facts": { "qty": 40, "unit": "BBL" }, "expectState": "resolved", "expectUnit": "bbl", "expectValue": 40 },
+    { "id": "untyped_qty", "facts": { "qty": 40 }, "expectState": "unresolved", "expectReason": "untyped_qty" },
+    { "id": "tons", "facts": { "tons": 22.5 }, "expectState": "resolved", "expectUnit": "ton", "expectValue": 22.5 },
+    { "id": "netWeight", "facts": { "netWeight": 18 }, "expectState": "resolved", "expectUnit": "ton", "expectValue": 18 },
+    { "id": "conflict", "facts": { "totalBBL": 100, "bbls": 80 }, "expectState": "unresolved", "expectReason": "conflict" },
+    { "id": "mixed", "facts": { "totalBBL": 100, "tons": 12 }, "expectState": "unresolved", "expectReason": "mixed" },
+    { "id": "explicit_zero", "facts": { "totalBBL": 0 }, "expectState": "explicit_zero", "expectUnit": "bbl", "expectValue": 0 },
+    { "id": "missing", "facts": {}, "expectState": "unresolved", "expectReason": "missing" }
+  ],
+  "timeCases": [
+    { "id": "raw_only", "facts": { "observedHours": 10 }, "expectProvenance": "observed", "expectObserved": 10, "expectAllocated": null, "expectFinancial": null },
+    { "id": "ten_allocated_five", "facts": { "observedHours": 10, "allocatedHours": 5, "allocationMethod": "equal" }, "expectProvenance": "allocated", "expectObserved": 10, "expectAllocated": 5, "expectFinancial": 5 },
+    { "id": "legacy_unknown", "facts": { "totalHours": 8 }, "expectProvenance": "legacy_unknown", "expectObserved": null, "expectAllocated": null, "expectFinancial": 8 }
+  ]
+}

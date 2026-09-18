@@ -30,6 +30,7 @@ import {
   calculatePeriodAddition,
   formatCurrency,
   formatPeriodRange,
+  mixedQuantitySummary,
 } from '@/lib/payroll';
 import { type CompanyConfig, loadAllCompanies, ALL_PAYROLL_COLUMNS, DEFAULT_PAYROLL_COLUMNS, type PayrollColumn } from '@/lib/companySettings';
 import { Timestamp } from 'firebase/firestore';
@@ -68,6 +69,12 @@ function escapeCSV(val: string | number): string {
 
 // Format a cell value based on column definition
 function formatCellValue(row: DriverTimesheetRow, col: PayrollColumn): string {
+  if ((col.id === 'amountBilled' || col.id === 'employeeTake' || col.id === 'rate' || col.id === 'detentionPay') && row.amountUnresolved) {
+    return `UNRESOLVED (${row.amountUnresolved})`;
+  }
+  if (col.id === 'hours') {
+    return row.hoursDisplay || (row.hours ? row.hours.toFixed(2) : '');
+  }
   const val = (row as any)[col.field];
   if (val == null) return '';
   switch (col.format) {
@@ -79,6 +86,12 @@ function formatCellValue(row: DriverTimesheetRow, col: PayrollColumn): string {
 }
 
 function formatCellRaw(row: DriverTimesheetRow, col: PayrollColumn): string {
+  if ((col.id === 'amountBilled' || col.id === 'employeeTake' || col.id === 'rate' || col.id === 'detentionPay') && row.amountUnresolved) {
+    return `UNRESOLVED (${row.amountUnresolved})`;
+  }
+  if (col.id === 'hours') {
+    return row.hoursDisplay || (row.hours ? row.hours.toFixed(2) : '');
+  }
   const val = (row as any)[col.field];
   if (val == null) return '';
   switch (col.format) {
@@ -92,7 +105,7 @@ function formatCellRaw(row: DriverTimesheetRow, col: PayrollColumn): string {
 // Totals value for a column
 function totalsCellValue(summary: DriverTimesheetSummary, col: PayrollColumn): string {
   switch (col.id) {
-    case 'bbls': return summary.totalBBLs.toLocaleString();
+    case 'bbls': return mixedQuantitySummary(summary.totalBBLs, summary.totalTons);
     case 'hours': return summary.totalHours > 0 ? summary.totalHours.toFixed(2) : '';
     case 'amountBilled': return summary.grossBilled > 0 ? formatCurrency(summary.grossBilled) : '';
     case 'employeeTake': return summary.employeePay > 0 ? formatCurrency(summary.employeePay) : '';
@@ -152,7 +165,7 @@ function exportAllCSV(
   legalNameMap: Record<string, string>,
   period: PayPeriod
 ) {
-  const headers = ['Driver', 'Loads', 'Hours', 'BBLs', 'Gross Billed', 'Employee Pay', 'Bonuses', 'Deductions', 'Net Pay'];
+  const headers = ['Driver', 'Loads', 'Hours', 'Qty', 'Gross Billed', 'Employee Pay', 'Bonuses', 'Deductions', 'Net Pay'];
 
   const rows: string[][] = [];
   for (const s of filtered) {
@@ -161,7 +174,7 @@ function exportAllCSV(
       escapeCSV(name),
       String(s.totalLoads),
       s.totalHours.toFixed(2),
-      String(s.totalBBLs),
+      mixedQuantitySummary(s.totalBBLs, s.totalTons),
       s.grossBilled.toFixed(2),
       s.employeePay.toFixed(2),
       s.additions.toFixed(2),
@@ -176,19 +189,20 @@ function exportAllCSV(
       loads: acc.loads + ts.totalLoads,
       hours: acc.hours + ts.totalHours,
       bbls: acc.bbls + ts.totalBBLs,
+      tons: acc.tons + ts.totalTons,
       billed: acc.billed + ts.grossBilled,
       pay: acc.pay + ts.employeePay,
       additions: acc.additions + ts.additions,
       deductions: acc.deductions + ts.deductions,
       net: acc.net + ts.netPay,
     }),
-    { loads: 0, hours: 0, bbls: 0, billed: 0, pay: 0, additions: 0, deductions: 0, net: 0 }
+    { loads: 0, hours: 0, bbls: 0, tons: 0, billed: 0, pay: 0, additions: 0, deductions: 0, net: 0 }
   );
   rows.push([
     'TOTALS',
     String(totals.loads),
     totals.hours.toFixed(2),
-    String(totals.bbls),
+    mixedQuantitySummary(totals.bbls, totals.tons),
     totals.billed.toFixed(2),
     totals.pay.toFixed(2),
     totals.additions.toFixed(2),
@@ -663,13 +677,14 @@ export default function PayrollPage() {
         loads: acc.loads + ts.totalLoads,
         hours: acc.hours + ts.totalHours,
         bbls: acc.bbls + ts.totalBBLs,
+        tons: acc.tons + ts.totalTons,
         billed: acc.billed + ts.grossBilled,
         pay: acc.pay + ts.employeePay,
         additions: acc.additions + ts.additions,
         deductions: acc.deductions + ts.deductions,
         net: acc.net + ts.netPay,
       }),
-      { loads: 0, hours: 0, bbls: 0, billed: 0, pay: 0, additions: 0, deductions: 0, net: 0 }
+      { loads: 0, hours: 0, bbls: 0, tons: 0, billed: 0, pay: 0, additions: 0, deductions: 0, net: 0 }
     );
   }, [filtered]);
 
@@ -842,7 +857,7 @@ export default function PayrollPage() {
                     <th className="text-left text-gray-400 font-medium px-4 py-3">Driver</th>
                     <th className="text-right text-gray-400 font-medium px-4 py-3">Loads</th>
                     <th className="text-right text-gray-400 font-medium px-4 py-3">Hours</th>
-                    <th className="text-right text-gray-400 font-medium px-4 py-3">BBLs</th>
+                    <th className="text-right text-gray-400 font-medium px-4 py-3">Qty</th>
                     <th className="text-right text-gray-400 font-medium px-4 py-3">Gross Billed</th>
                     <th className="text-right text-gray-400 font-medium px-4 py-3">Employee Pay</th>
                     <th className="text-right text-gray-400 font-medium px-4 py-3">Bonuses</th>
@@ -878,7 +893,7 @@ export default function PayrollPage() {
                     </td>
                     <td className="text-right px-4 py-3 text-white">{totals.loads}</td>
                     <td className="text-right px-4 py-3 text-white">{totals.hours.toFixed(2)}</td>
-                    <td className="text-right px-4 py-3 text-white">{totals.bbls.toLocaleString()}</td>
+                    <td className="text-right px-4 py-3 text-white">{mixedQuantitySummary(totals.bbls, totals.tons)}</td>
                     <td className="text-right px-4 py-3 text-white">{formatCurrency(totals.billed)}</td>
                     <td className="text-right px-4 py-3 text-white">{formatCurrency(totals.pay)}</td>
                     <td className="text-right px-4 py-3 text-green-400">
@@ -1512,7 +1527,7 @@ function DriverRow({
         </td>
         <td className="text-right px-4 py-3 text-gray-300">{summary.totalLoads}</td>
         <td className="text-right px-4 py-3 text-gray-300">{summary.totalHours.toFixed(2)}</td>
-        <td className="text-right px-4 py-3 text-gray-300">{summary.totalBBLs.toLocaleString()}</td>
+        <td className="text-right px-4 py-3 text-gray-300">{mixedQuantitySummary(summary.totalBBLs, summary.totalTons)}</td>
         <td className="text-right px-4 py-3 text-gray-300">
           {summary.grossBilled > 0 ? formatCurrency(summary.grossBilled) : '—'}
         </td>
@@ -1563,7 +1578,10 @@ function DriverTimesheetDetail({ summary, legalNameMap = {}, selectedPeriod, act
             <p className="text-gray-500 text-xs">Login: {summary.driverName}</p>
           )}
           <p className="text-gray-400 text-sm">
-            {summary.totalLoads} loads &middot; {summary.totalBBLs.toLocaleString()} BBL
+            {summary.totalLoads} loads
+            {summary.totalBBLs ? ` · ${summary.totalBBLs.toLocaleString()} BBL` : ''}
+            {summary.totalTons ? ` · ${summary.totalTons.toLocaleString()} ton` : ''}
+            {summary.unresolvedCount ? ` · ${summary.unresolvedCount} unresolved` : ''}
             {summary.totalHours > 0 && ` · ${summary.totalHours.toFixed(2)} hrs`}
           </p>
         </div>
@@ -1668,7 +1686,11 @@ function TimesheetRow({ row, columns }: { row: DriverTimesheetRow; columns: Payr
         const val = (row as any)[col.field];
         const isOrange = col.id === 'detentionPay';
         let display: string;
-        if (col.format === 'currency') {
+        if ((col.id === 'amountBilled' || col.id === 'employeeTake' || col.id === 'rate' || col.id === 'detentionPay') && row.amountUnresolved) {
+          display = `UNRESOLVED (${row.amountUnresolved})`;
+        } else if (col.id === 'hours') {
+          display = row.hoursDisplay || (val ? Number(val).toFixed(2) : '');
+        } else if (col.format === 'currency') {
           display = val > 0 ? formatCurrency(val) : '—';
         } else if (col.format === 'decimal') {
           display = val ? Number(val).toFixed(2) : '';

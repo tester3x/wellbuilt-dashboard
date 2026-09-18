@@ -2,6 +2,16 @@ import { getFirestoreDb } from './firebase';
 import { docBelongsToTenant } from './tenantScope';
 import { collection, getDocs, query, where, orderBy, Timestamp, doc, setDoc, updateDoc, deleteDoc } from 'firebase/firestore';
 import { type CompanyConfig, type PayConfig, type FrostSeason, type FrostZone, JOB_TYPE_ALIASES } from './companySettings';
+import {
+  hoursDisplay,
+  isFinanciallyEligibleStatus,
+  mixedQuantitySummary,
+  projectFinancialLine,
+  resolveFinancialRate,
+  type CompanyRateSheets as CanonicalRateSheets,
+} from './financialCorrectnessCore';
+
+export { mixedQuantitySummary, hoursDisplay };
 
 // ─── Types ───────────────────────────────────────────────────────────────────
 
@@ -144,6 +154,15 @@ export interface DriverTimesheetRow {
   tickets: string[];
   flagged?: boolean;
   flagNote?: string;
+  qtyUnit?: 'bbl' | 'ton' | null;
+  qtyValue?: number | null;
+  qtyState?: string;
+  qtyDisplay?: string;
+  observedHours?: number | null;
+  allocatedHours?: number | null;
+  hoursProvenance?: string;
+  hoursDisplay?: string;
+  amountUnresolved?: string | null;
 }
 
 export interface DriverTimesheetSummary {
@@ -156,6 +175,8 @@ export interface DriverTimesheetSummary {
   totalLoads: number;
   totalHours: number;
   totalBBLs: number;
+  totalTons: number;
+  unresolvedCount: number;
   grossBilled: number;
   employeePay: number;
   deductions: number;
@@ -246,24 +267,10 @@ export function lookupRate(
   operator: string,
   jobType: string
 ): RateEntry | null {
-  const operatorRates = rateSheets[operator];
-  if (!operatorRates) return null;
-
-  // Direct match first
-  const direct = operatorRates.find(r => r.jobType === jobType);
-  if (direct) return direct;
-
-  // Try alias match (legacy rate sheet entries → current commodity types)
-  // Check both directions: invoice jobType might match an alias key, or
-  // rate sheet entry might use a legacy name that aliases to the invoice jobType
-  for (const entry of operatorRates) {
-    const normalizedEntry = JOB_TYPE_ALIASES[entry.jobType] || entry.jobType;
-    const normalizedJob = JOB_TYPE_ALIASES[jobType] || jobType;
-    if (normalizedEntry === jobType || entry.jobType === normalizedJob || normalizedEntry === normalizedJob) {
-      return entry;
-    }
+  const resolved = resolveFinancialRate(rateSheets as CanonicalRateSheets, operator, jobType, JOB_TYPE_ALIASES);
+  if (resolved.state === 'resolved' || resolved.state === 'explicit_zero') {
+    return resolved.entry as RateEntry;
   }
-
   return null;
 }
 
@@ -297,12 +304,8 @@ export async function fetchPayrollInvoices(
   snapshot.docs.forEach(docSnap => {
     const d = docSnap.data();
 
-    // Skip open/in-progress invoices — only count closed+
-    // 5/20 (B2) — Also skip 'cancelled' and 'void' so terminalized
-    // cancel-orphans (FlowController.cancelJob writes status='cancelled')
-    // don't surface as blank/moneyless payroll rows.
-    const status = d.status || 'open';
-    if (status === 'open' || status === 'cancelled' || status === 'void') return;
+    const eligibility = isFinanciallyEligibleStatus(d.status);
+    if (!eligibility.eligible) return;
 
     // Tenant containment (7/9): scoped callers receive only their own
     // company's invoices (liquid-gold also owns legacy unstamped docs).
@@ -319,42 +322,75 @@ export async function fetchPayrollInvoices(
     // Look up county from well name (for frost rate calculation)
     const county = d.county || wellCountyMap?.get(wellName.toLowerCase()) || '';
 
-    // Look up rate from the driver's company rate sheet
-    let rate = 0;
-    let amountBilled = 0;
-    let employeeTake = 0;
     const company = invoiceCompanyId ? companyConfigs.get(invoiceCompanyId) : null;
     const rateSheets = company?.rateSheets || {};
-    const split = company?.payConfig?.defaultSplit || 0;
+    const splitRaw = company?.payConfig?.defaultSplit;
 
-    const rateEntry = lookupRate(rateSheets, operator, jobType);
+    const observedHours = typeof d.observedHours === 'number'
+      ? d.observedHours
+      : (typeof d.actualDriveMinutes === 'number' ? d.actualDriveMinutes / 60 : undefined);
+    const line = projectFinancialLine({
+      status: d.status,
+      operator,
+      jobType,
+      commodityType: d.commodityType,
+      quantity: {
+        totalBBL: typeof d.totalBBL === 'number' ? d.totalBBL : undefined,
+        bbls: typeof d.bbls === 'number' ? d.bbls : (d.bbls != null ? parseFloat(String(d.bbls)) : undefined),
+        qty: d.qty,
+        qtyUnit: d.qtyUnit || d.unit,
+        unit: d.unit,
+        tons: typeof d.tons === 'number' ? d.tons : undefined,
+        netWeight: typeof d.netWeight === 'number' ? d.netWeight : undefined,
+      },
+      time: {
+        totalHours: typeof d.totalHours === 'number' ? d.totalHours : undefined,
+        allocatedHours: typeof d.allocatedHours === 'number' ? d.allocatedHours : undefined,
+        observedHours,
+        allocationMethod: d.splitTimeAllocation || d.allocationMethod || null,
+        allocationVersion: d.allocationVersion || null,
+      },
+      rateSheets,
+      defaultSplit: splitRaw,
+    });
+
+    let rate = 0;
+    let amountBilled = line.amountBilled ?? 0;
+    let employeeTake = line.employeeTake ?? 0;
     const swdWaitMinutes = d.swdWaitMinutes || 0;
     let detentionPay = 0;
-    // BBLs: try totalBBL first, then fall back to ticket-level fields (s_t mode may not write totalBBL)
-    const bbls = d.totalBBL || parseFloat(d.bbls || '0') || parseFloat(d.qty || '0') || 0;
-    if (rateEntry) {
+    const bbls = line.qtyForBblColumn ?? 0;
+    if ((line.rate.state === 'resolved' || line.rate.state === 'explicit_zero') && line.amountBilled !== null) {
       const invoiceDate = d.date || '';
-      rate = getEffectiveRate(rateEntry, invoiceDate, county, company?.payConfig?.frostZones, company?.payConfig?.frostSeason, bbls);
-      const hours = d.totalHours || 0;
-      amountBilled = rateEntry.method === 'per_bbl' ? bbls * rate : hours * rate;
-      amountBilled = Math.round(amountBilled * 100) / 100;
-
-      // Detention pay: for per_bbl jobs where driver waited at SWD past threshold
+      rate = getEffectiveRate(line.rate.entry as RateEntry, invoiceDate, county, company?.payConfig?.frostZones, company?.payConfig?.frostSeason, bbls);
+      if (rate !== line.rate.entry.rate && line.rate.entry.method === 'per_bbl' && line.qtyForBblColumn != null) {
+        amountBilled = Math.round(line.qtyForBblColumn * rate * 100) / 100;
+        if (line.split.state !== 'unresolved') {
+          employeeTake = Math.round(amountBilled * line.split.split * 100) / 100;
+        }
+      } else if (line.rate.entry.method === 'hourly') {
+        rate = line.rate.entry.rate;
+      } else {
+        rate = line.rate.entry.rate;
+      }
       const billingConfig = company?.billingConfig?.[operator];
-      if (rateEntry.method === 'per_bbl' && billingConfig?.detentionEnabled && swdWaitMinutes > 0) {
+      if (line.rate.entry.method === 'per_bbl' && billingConfig?.detentionEnabled && swdWaitMinutes > 0) {
         const threshold = billingConfig.detentionThresholdMinutes || 60;
         if (swdWaitMinutes > threshold) {
           const billableMinutes = swdWaitMinutes - threshold;
           let detentionRate = billingConfig.detentionHourlyRate || 0;
           if (!detentionRate) {
-            const hourlyEntry = rateSheets[operator]?.find(r => r.method === 'hourly');
-            detentionRate = hourlyEntry?.rate || 0;
+            const hourlyResolved = resolveFinancialRate(rateSheets as CanonicalRateSheets, operator, 'Service Work');
+            if (hourlyResolved.state === 'resolved' && hourlyResolved.entry.method === 'hourly') {
+              detentionRate = hourlyResolved.entry.rate;
+            }
           }
           detentionPay = Math.round((billableMinutes / 60) * detentionRate * 100) / 100;
         }
       }
-
-      employeeTake = Math.round((amountBilled + detentionPay) * split * 100) / 100;
+      if (line.split.state !== 'unresolved') {
+        employeeTake = Math.round((amountBilled + detentionPay) * line.split.split * 100) / 100;
+      }
     }
 
     const row: DriverTimesheetRow = {
@@ -365,13 +401,24 @@ export async function fetchPayrollInvoices(
       wellName: d.wellName || '',
       jobType,
       bbls,
-      hours: d.totalHours || 0,
+      qtyValue: line.quantity.state === 'unresolved' ? null : line.quantity.value,
+      hours: line.hoursForMoney ?? 0,
       rate,
       amountBilled,
       detentionPay,
       swdWaitMinutes,
       employeeTake,
       tickets: d.tickets || [],
+      qtyUnit: line.quantity.state === 'unresolved' ? null : line.quantity.unit,
+      qtyState: line.quantity.state,
+      qtyDisplay: line.quantity.state === 'unresolved'
+        ? `UNRESOLVED (${line.quantity.reason})`
+        : `${line.quantity.value} ${line.quantity.unit === 'bbl' ? 'BBL' : 'ton'}`,
+      observedHours: line.time.observedHours,
+      allocatedHours: line.time.allocatedHours,
+      hoursProvenance: line.time.label,
+      hoursDisplay: hoursDisplay(line.time),
+      amountUnresolved: line.amountBilled === null ? line.amountReason : null,
     };
 
     if (!driverMap.has(driverName)) {
@@ -393,9 +440,11 @@ export async function fetchPayrollInvoices(
 
     const totalLoads = rows.length;
     const totalHours = rows.reduce((sum, r) => sum + r.hours, 0);
-    const totalBBLs = rows.reduce((sum, r) => sum + r.bbls, 0);
-    const grossBilled = rows.reduce((sum, r) => sum + r.amountBilled + r.detentionPay, 0);
-    const employeePay = rows.reduce((sum, r) => sum + r.employeeTake, 0);
+    const totalBBLs = rows.reduce((sum, r) => sum + (r.qtyUnit === 'bbl' && r.qtyValue != null ? r.qtyValue : 0), 0);
+    const totalTons = rows.reduce((sum, r) => sum + (r.qtyUnit === 'ton' && r.qtyValue != null ? r.qtyValue : 0), 0);
+    const unresolvedCount = rows.filter(r => r.amountUnresolved || r.qtyState === 'unresolved').length;
+    const grossBilled = rows.reduce((sum, r) => sum + (r.amountUnresolved ? 0 : r.amountBilled + r.detentionPay), 0);
+    const employeePay = rows.reduce((sum, r) => sum + (r.amountUnresolved ? 0 : r.employeeTake), 0);
 
     const company = driverCompanyId ? companyConfigs.get(driverCompanyId) : null;
 
@@ -407,6 +456,8 @@ export async function fetchPayrollInvoices(
       totalLoads,
       totalHours: Math.round(totalHours * 100) / 100,
       totalBBLs: Math.round(totalBBLs),
+      totalTons: Math.round(totalTons * 100) / 100,
+      unresolvedCount,
       grossBilled: Math.round(grossBilled * 100) / 100,
       employeePay: Math.round(employeePay * 100) / 100,
       deductions: 0,
@@ -434,13 +485,19 @@ export function applyRatesToTimesheet(
   wellCountyMap?: Map<string, string>
 ): DriverTimesheetSummary {
   const updatedRows = summary.rows.map(row => {
+    if (row.amountUnresolved || row.qtyState === 'unresolved') return row;
     const rateEntry = lookupRate(rateSheets, row.operator, row.jobType);
-    if (!rateEntry) return row;
+    if (!rateEntry) {
+      return { ...row, amountUnresolved: 'rate:no_match', amountBilled: 0, employeeTake: 0 };
+    }
+    if (rateEntry.method === 'per_bbl' && row.qtyUnit && row.qtyUnit !== 'bbl') {
+      return { ...row, amountUnresolved: 'qty:unsupported_unit_for_per_bbl', amountBilled: 0, employeeTake: 0 };
+    }
 
     const county = wellCountyMap?.get(row.wellName.toLowerCase()) || '';
     const rate = getEffectiveRate(rateEntry, row.date, county, frostZones, legacyFrostSeason, row.bbls);
     const amountBilled = rateEntry.method === 'per_bbl'
-      ? row.bbls * rate
+      ? (row.qtyValue ?? row.bbls) * rate
       : row.hours * rate;
     const employeeTake = amountBilled * employeeSplit;
 
@@ -452,8 +509,8 @@ export function applyRatesToTimesheet(
     };
   });
 
-  const grossBilled = updatedRows.reduce((sum, r) => sum + r.amountBilled, 0);
-  const employeePay = updatedRows.reduce((sum, r) => sum + r.employeeTake, 0);
+  const grossBilled = updatedRows.reduce((sum, r) => sum + (r.amountUnresolved ? 0 : r.amountBilled), 0);
+  const employeePay = updatedRows.reduce((sum, r) => sum + (r.amountUnresolved ? 0 : r.employeeTake), 0);
 
   return {
     ...summary,
