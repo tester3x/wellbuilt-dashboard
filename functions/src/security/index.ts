@@ -70,6 +70,14 @@ export {
   upsertDriverInvoice,
   upsertDriverDispatch,
   sendChatMessage,
+  addSplitLeg,
+  removeSplitLeg,
+  resequenceSplitFamily,
+  resolveSplitActor,
+  evaluateAddSplitLeg,
+  evaluateRemoveSplitLeg,
+  evaluateResequenceSplitFamily,
+  defaultSplitCapabilityAuthorizer,
   getPublicClientMeta,
 } from './operational';
 

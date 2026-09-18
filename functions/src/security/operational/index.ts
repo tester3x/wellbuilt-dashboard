@@ -25,4 +25,14 @@ export {
   upsertDriverDispatch,
   sendChatMessage,
 } from './invoiceOps';
+export {
+  addSplitLeg,
+  removeSplitLeg,
+  resequenceSplitFamily,
+  resolveSplitActor,
+  evaluateAddSplitLeg,
+  evaluateRemoveSplitLeg,
+  evaluateResequenceSplitFamily,
+  defaultSplitCapabilityAuthorizer,
+} from './splitOps';
 export { getPublicClientMeta } from './publicMeta';

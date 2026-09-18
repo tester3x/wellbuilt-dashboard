@@ -12,6 +12,9 @@ describe('deployment manifest guard — prevent silent pruning of deployed calla
     'adminApproveCompanyOnboarding',
     'adminListCompanyOnboardingRequests',
     'requestCompanyOnboarding',
+    'addSplitLeg',
+    'removeSplitLeg',
+    'resequenceSplitFamily',
   ];
 
   test.each(REQUIRED_DEPLOYED_ENDPOINTS)(
