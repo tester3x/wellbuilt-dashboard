@@ -3,6 +3,13 @@ import { collection, doc, getDoc, getDocs, setDoc, query, where, orderBy, limit,
 import { type CompanyConfig, type OperatorBillingConfig } from './companySettings';
 import { type OperatorBillingSummary, type BillingLineItem, calculateDueDate, getFuelSurchargeRate, getFuelSurchargeLabel } from './billing';
 import { formatCurrency, type PayPeriod } from './payroll';
+import { moneyContribution } from './financialCorrectnessCore';
+import {
+  generateInvoiceCSV as generateMappedInvoiceCSV,
+  jsonLineExport,
+  pdfLinePresentment,
+  quickBooksAmountCells,
+} from './financialInvoiceMapping';
 import jsPDF from 'jspdf';
 import autoTable from 'jspdf-autotable';
 
@@ -84,9 +91,9 @@ export function filterTestWells(
       return realWellNames.has(norm);
     });
     if (filtered.length === 0) return null;
-    const subtotal = filtered.reduce((s, i) => s + i.baseAmount, 0);
-    const totalFuelSurcharge = filtered.reduce((s, i) => s + i.fuelSurcharge, 0);
-    const totalDetentionPay = filtered.reduce((s, i) => s + i.detentionPay, 0);
+    const subtotal = filtered.reduce((s, i) => s + moneyContribution(i.baseAmount, i.amountUnresolved), 0);
+    const totalFuelSurcharge = filtered.reduce((s, i) => s + moneyContribution(i.fuelSurcharge, i.amountUnresolved), 0);
+    const totalDetentionPay = filtered.reduce((s, i) => s + moneyContribution(i.detentionPay, i.amountUnresolved), 0);
     return {
       ...summary,
       lineItems: filtered,
@@ -112,9 +119,9 @@ function buildGroup(
   date?: string,
   dateRange?: string,
 ): GroupedInvoice {
-  const subtotal = items.reduce((s, i) => s + i.baseAmount, 0);
-  const totalFuelSurcharge = items.reduce((s, i) => s + i.fuelSurcharge, 0);
-  const totalDetentionPay = items.reduce((s, i) => s + i.detentionPay, 0);
+  const subtotal = items.reduce((s, i) => s + moneyContribution(i.baseAmount, i.amountUnresolved), 0);
+  const totalFuelSurcharge = items.reduce((s, i) => s + moneyContribution(i.fuelSurcharge, i.amountUnresolved), 0);
+  const totalDetentionPay = items.reduce((s, i) => s + moneyContribution(i.detentionPay, i.amountUnresolved), 0);
   return {
     groupKey: `${operator}|||${wellName || 'ALL'}|||${date || 'PERIOD'}`,
     operator,
@@ -391,23 +398,7 @@ function renderInvoicePage(
     { header: 'Amount', dataKey: 'amount' },
   );
 
-  const rows = group.lineItems.map(item => {
-    const row: any = {
-      date: item.date,
-      invoiceNumber: item.invoiceNumber,
-      hauledTo: item.hauledTo || '--',
-      driver: legalNameMap[item.driver] || item.driver,
-      qty: item.amountUnresolved || item.qtyState === 'unresolved'
-        ? (item.qtyDisplay || 'UNRESOLVED')
-        : (item.qtyValue != null ? String(item.qtyValue) : '--'),
-      unit: item.qtyUnit === 'ton' ? 'ton' : item.qtyUnit === 'bbl' ? 'BBL' : '--',
-      hours: item.hours || '--',
-      hoursSource: item.hoursProvenance || 'legacy/unknown',
-      amount: item.amountUnresolved ? `UNRESOLVED (${item.amountUnresolved})` : formatCurrency(item.baseAmount),
-    };
-    if (isOperatorSummary) row.wellName = item.wellName;
-    return row;
-  });
+  const rows = group.lineItems.map(item => pdfLinePresentment(item, legalNameMap, isOperatorSummary));
 
   autoTable(pdf, {
     startY: y,
@@ -500,44 +491,7 @@ export function generateInvoiceCSV(
   invoiceNumbers: string[],
   legalNameMap: Record<string, string>,
 ): string {
-  const headers = [
-    'Billing Invoice #', 'Date', 'Operator', 'Well', 'Drop-off', 'Driver',
-    'Job Type', 'Qty', 'Unit', 'Hours', 'Hours source', 'Rate', 'Rate Method', 'Base Amount',
-    'Fuel Surcharge', 'Detention', 'Total', 'Qty/Rate state',
-  ];
-
-  const rows: string[][] = [];
-  groups.forEach((group, gi) => {
-    group.lineItems.forEach(item => {
-      rows.push([
-        invoiceNumbers[gi],
-        item.date,
-        group.operator,
-        item.wellName,
-        item.hauledTo || '',
-        legalNameMap[item.driver] || item.driver,
-        item.jobType || '',
-        item.qtyValue != null ? String(item.qtyValue) : '',
-        item.qtyUnit === 'ton' ? 'ton' : item.qtyUnit === 'bbl' ? 'BBL' : '',
-        String(item.hours || 0),
-        item.hoursProvenance || 'legacy/unknown',
-        item.amountUnresolved ? '' : String(item.rate || 0),
-        item.rateMethod || '',
-        item.amountUnresolved ? '' : item.baseAmount.toFixed(2),
-        item.amountUnresolved ? '' : item.fuelSurcharge.toFixed(2),
-        item.amountUnresolved ? '' : item.detentionPay.toFixed(2),
-        item.amountUnresolved ? '' : item.total.toFixed(2),
-        item.amountUnresolved || item.qtyDisplay || '',
-      ]);
-    });
-  });
-
-  const csvContent = [
-    headers.join(','),
-    ...rows.map(r => r.map(cell => `"${String(cell).replace(/"/g, '""')}"`).join(',')),
-  ].join('\n');
-
-  return csvContent;
+  return generateMappedInvoiceCSV(groups, invoiceNumbers, legalNameMap);
 }
 
 // ─── QuickBooks CSV Generation ───────────────────────────────────────────────
@@ -581,11 +535,12 @@ export function generateQuickBooksCSV(
         item.date,
       ].filter(Boolean).join(' | ');
 
+      const qb = quickBooksAmountCells(item);
       rows.push([
         invNum, group.operator, today, dueDate, termsLabel,
         desc, '1',
-        item.amountUnresolved ? 'UNRESOLVED' : item.baseAmount.toFixed(2),
-        item.amountUnresolved ? 'UNRESOLVED' : item.baseAmount.toFixed(2),
+        qb.rate,
+        qb.amount,
         `${item.wellName} - ${item.date}`,
       ]);
     });
@@ -651,29 +606,7 @@ export function generateInvoiceJSON(
       },
       well: group.wellName || undefined,
       period: group.dateRange,
-      lineItems: group.lineItems.map(item => ({
-        date: item.date,
-        wbInvoiceNumber: item.invoiceNumber,
-        wellName: item.wellName,
-        dropOff: item.hauledTo || undefined,
-        driver: legalNameMap[item.driver] || item.driver,
-        jobType: item.jobType || undefined,
-        qty: item.qtyValue,
-        qtyUnit: item.qtyUnit,
-        qtyDisplay: item.qtyDisplay,
-        hours: item.hours,
-        observedHours: item.observedHours,
-        allocatedHours: item.allocatedHours,
-        hoursProvenance: item.hoursProvenance,
-        amountUnresolved: item.amountUnresolved,
-        rateMethod: item.rateMethod,
-        rate: item.rate,
-        baseAmount: item.baseAmount,
-        fuelSurcharge: item.fuelSurcharge,
-        detentionPay: item.detentionPay,
-        swdWaitMinutes: item.swdWaitMinutes || undefined,
-        total: item.total,
-      })),
+      lineItems: group.lineItems.map(item => jsonLineExport(item, legalNameMap)),
       subtotal: group.subtotal,
       fuelSurcharge: group.totalFuelSurcharge,
       detentionPay: group.totalDetentionPay,

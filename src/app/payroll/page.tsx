@@ -29,6 +29,7 @@ import {
   calculatePeriodDeduction,
   calculatePeriodAddition,
   formatCurrency,
+  formatPayrollMoneyCell,
   formatPeriodRange,
   mixedQuantitySummary,
 } from '@/lib/payroll';
@@ -70,7 +71,7 @@ function escapeCSV(val: string | number): string {
 // Format a cell value based on column definition
 function formatCellValue(row: DriverTimesheetRow, col: PayrollColumn): string {
   if ((col.id === 'amountBilled' || col.id === 'employeeTake' || col.id === 'rate' || col.id === 'detentionPay') && row.amountUnresolved) {
-    return `UNRESOLVED (${row.amountUnresolved})`;
+    return formatPayrollMoneyCell((row as any)[col.field], row.amountUnresolved);
   }
   if (col.id === 'hours') {
     return row.hoursDisplay || (row.hours ? row.hours.toFixed(2) : '');
@@ -87,7 +88,7 @@ function formatCellValue(row: DriverTimesheetRow, col: PayrollColumn): string {
 
 function formatCellRaw(row: DriverTimesheetRow, col: PayrollColumn): string {
   if ((col.id === 'amountBilled' || col.id === 'employeeTake' || col.id === 'rate' || col.id === 'detentionPay') && row.amountUnresolved) {
-    return `UNRESOLVED (${row.amountUnresolved})`;
+    return formatPayrollMoneyCell((row as any)[col.field], row.amountUnresolved);
   }
   if (col.id === 'hours') {
     return row.hoursDisplay || (row.hours ? row.hours.toFixed(2) : '');
@@ -1687,7 +1688,7 @@ function TimesheetRow({ row, columns }: { row: DriverTimesheetRow; columns: Payr
         const isOrange = col.id === 'detentionPay';
         let display: string;
         if ((col.id === 'amountBilled' || col.id === 'employeeTake' || col.id === 'rate' || col.id === 'detentionPay') && row.amountUnresolved) {
-          display = `UNRESOLVED (${row.amountUnresolved})`;
+          display = formatPayrollMoneyCell(val, row.amountUnresolved);
         } else if (col.id === 'hours') {
           display = row.hoursDisplay || (val ? Number(val).toFixed(2) : '');
         } else if (col.format === 'currency') {

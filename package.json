@@ -6,7 +6,8 @@
     "dev": "next dev",
     "build": "next build --webpack",
     "start": "next start",
-    "lint": "eslint"
+    "lint": "eslint",
+    "test": "node --test --experimental-strip-types src/lib/__tests__/financialCorrectnessCore.test.ts src/lib/__tests__/financialConsumers.test.ts"
   },
   "dependencies": {
     "@tester3x/wellbuilt-contracts": "0.4.0",

@@ -18,7 +18,9 @@ import {
   projectFinancialLine,
   quantityColumnHeader,
   quantityDisplay,
+  moneyContribution,
   resolveEmployeeSplit,
+  selectConfiguredSplit,
   resolveFinancialQuantity,
   resolveFinancialRate,
   resolveFinancialTime,
@@ -141,6 +143,36 @@ test('golden splits', () => {
       assert.equal(got.split, row.expectSplit, row.id);
     }
   }
+});
+
+test('selectConfiguredSplit is explicit-zero-safe and prefers employeeSplit', () => {
+  assert.equal(selectConfiguredSplit({ employeeSplit: 0, defaultSplit: 0.25 }), 0);
+  assert.equal(selectConfiguredSplit({ defaultSplit: 0 }), 0);
+  assert.equal(selectConfiguredSplit({ employeeSplit: 0.3, defaultSplit: 0.25 }), 0.3);
+  assert.equal(selectConfiguredSplit({ defaultSplit: 0.25 }), 0.25);
+  assert.equal(selectConfiguredSplit({}), undefined);
+  assert.equal(selectConfiguredSplit(null), undefined);
+  assert.equal(selectConfiguredSplit({ employeeSplit: 'bad', defaultSplit: 0.25 }), 'bad');
+  const unresolvedZero = resolveEmployeeSplit(selectConfiguredSplit({ employeeSplit: 0 }));
+  assert.equal(unresolvedZero.state, 'explicit_zero');
+  const missing = resolveEmployeeSplit(selectConfiguredSplit({}));
+  assert.equal(missing.state, 'unresolved');
+});
+
+test('moneyContribution never treats unresolved placeholders as billable zero', () => {
+  const rows = [
+    { amountBilled: 0, amountUnresolved: 'rate:no_match' },
+    { amountBilled: 240, amountUnresolved: null },
+    { amountBilled: 0, amountUnresolved: null },
+  ];
+  const naive = rows.reduce((s, r) => s + (r.amountBilled ?? 0), 0);
+  const guarded = rows.reduce((s, r) => s + moneyContribution(r.amountBilled, r.amountUnresolved), 0);
+  assert.equal(naive, 240);
+  assert.equal(guarded, 240);
+  assert.equal(moneyContribution(0, 'rate:no_match'), 0);
+  assert.equal(moneyContribution(null, 'rate:no_match'), 0);
+  assert.equal(moneyContribution(0, null), 0);
+  assert.notEqual(moneyContribution(0, null), moneyContribution(0, 'x') + 1);
 });
 
 test('golden quantities', () => {

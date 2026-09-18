@@ -76,6 +76,7 @@ export interface PayrollTemplate {
 }
 
 export interface PayConfig {
+  employeeSplit?: number;     // optional stored alias; explicit 0 is kept
   defaultSplit: number;       // e.g. 0.25 for 25%
   payrollRounding: 'match_billing' | 'none' | 'quarter_hour' | 'half_hour';
   payPeriod: 'weekly' | 'biweekly' | 'monthly';

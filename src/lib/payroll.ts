@@ -6,12 +6,66 @@ import {
   hoursDisplay,
   isFinanciallyEligibleStatus,
   mixedQuantitySummary,
+  moneyContribution,
+  moneyDisplay,
   projectFinancialLine,
   resolveFinancialRate,
   type CompanyRateSheets as CanonicalRateSheets,
 } from './financialCorrectnessCore';
+import {
+  assembleInvoiceFacts,
+  formatPayrollMoneyCell,
+  payrollRowFromInvoiceRecord as mapPayrollRow,
+} from './financialInvoiceMapping';
 
-export { mixedQuantitySummary, hoursDisplay };
+export { mixedQuantitySummary, hoursDisplay, moneyDisplay, formatPayrollMoneyCell };
+
+export function payrollRowFromInvoiceRecord(
+  d: Record<string, unknown>,
+  invoiceId: string,
+  company: CompanyConfig | null | undefined,
+  wellCountyMap?: Map<string, string>,
+): DriverTimesheetRow | null {
+  const row = mapPayrollRow(d, invoiceId, company);
+  if (!row) return null;
+  const mapped = row as DriverTimesheetRow;
+  if (mapped.amountUnresolved) return mapped;
+  const wellName = String(d.wellName || '');
+  const county = String(d.county || wellCountyMap?.get(wellName.toLowerCase()) || '');
+  const operator = String(d.operator || '');
+  const rateSheets = company?.rateSheets || {};
+  const line = projectFinancialLine(assembleInvoiceFacts(d, company));
+  let rate = mapped.rate;
+  let amountBilled = mapped.amountBilled;
+  let employeeTake = mapped.employeeTake;
+  let detentionPay = 0;
+  if ((line.rate.state === 'resolved' || line.rate.state === 'explicit_zero') && line.amountBilled !== null) {
+    rate = getEffectiveRate(line.rate.entry as RateEntry, String(d.date || ''), county, company?.payConfig?.frostZones, company?.payConfig?.frostSeason, mapped.bbls);
+    if (rate !== line.rate.entry.rate && line.rate.entry.method === 'per_bbl' && line.qtyForBblColumn != null) {
+      amountBilled = Math.round(line.qtyForBblColumn * rate * 100) / 100;
+    }
+    const swdWaitMinutes = Number(d.swdWaitMinutes || 0);
+    const billingConfig = company?.billingConfig?.[operator];
+    if (line.rate.entry.method === 'per_bbl' && billingConfig?.detentionEnabled && swdWaitMinutes > 0) {
+      const threshold = billingConfig.detentionThresholdMinutes || 60;
+      if (swdWaitMinutes > threshold) {
+        const billableMinutes = swdWaitMinutes - threshold;
+        let detentionRate = billingConfig.detentionHourlyRate || 0;
+        if (!detentionRate) {
+          const hourlyResolved = resolveFinancialRate(rateSheets as CanonicalRateSheets, operator, 'Service Work');
+          if (hourlyResolved.state === 'resolved' && hourlyResolved.entry.method === 'hourly') {
+            detentionRate = hourlyResolved.entry.rate;
+          }
+        }
+        detentionPay = Math.round((billableMinutes / 60) * detentionRate * 100) / 100;
+      }
+    }
+    if (line.split.state !== 'unresolved') {
+      employeeTake = Math.round((amountBilled + detentionPay) * line.split.split * 100) / 100;
+    }
+  }
+  return { ...mapped, rate, amountBilled, detentionPay, employeeTake };
+}
 
 // ─── Types ───────────────────────────────────────────────────────────────────
 
@@ -315,117 +369,14 @@ export async function fetchPayrollInvoices(
     // Group by legal name so all logins for the same person merge into one row
     const driverName = legalNameMap?.[rawDriverName] || rawDriverName;
     const invoiceCompanyId = d.companyId || '';
-    const operator = d.operator || '';
-    const jobType = d.commodityType || d.jobType || '';
-    const wellName = d.wellName || '';
-
-    // Look up county from well name (for frost rate calculation)
-    const county = d.county || wellCountyMap?.get(wellName.toLowerCase()) || '';
-
     const company = invoiceCompanyId ? companyConfigs.get(invoiceCompanyId) : null;
-    const rateSheets = company?.rateSheets || {};
-    const splitRaw = company?.payConfig?.defaultSplit;
-
-    const observedHours = typeof d.observedHours === 'number'
-      ? d.observedHours
-      : (typeof d.actualDriveMinutes === 'number' ? d.actualDriveMinutes / 60 : undefined);
-    const line = projectFinancialLine({
-      status: d.status,
-      operator,
-      jobType,
-      commodityType: d.commodityType,
-      quantity: {
-        totalBBL: typeof d.totalBBL === 'number' ? d.totalBBL : undefined,
-        bbls: typeof d.bbls === 'number' ? d.bbls : (d.bbls != null ? parseFloat(String(d.bbls)) : undefined),
-        qty: d.qty,
-        qtyUnit: d.qtyUnit || d.unit,
-        unit: d.unit,
-        tons: typeof d.tons === 'number' ? d.tons : undefined,
-        netWeight: typeof d.netWeight === 'number' ? d.netWeight : undefined,
-      },
-      time: {
-        totalHours: typeof d.totalHours === 'number' ? d.totalHours : undefined,
-        allocatedHours: typeof d.allocatedHours === 'number' ? d.allocatedHours : undefined,
-        observedHours,
-        allocationMethod: d.splitTimeAllocation || d.allocationMethod || null,
-        allocationVersion: d.allocationVersion || null,
-      },
-      rateSheets,
-      defaultSplit: splitRaw,
-    });
-
-    let rate = 0;
-    let amountBilled = line.amountBilled ?? 0;
-    let employeeTake = line.employeeTake ?? 0;
-    const swdWaitMinutes = d.swdWaitMinutes || 0;
-    let detentionPay = 0;
-    const bbls = line.qtyForBblColumn ?? 0;
-    if ((line.rate.state === 'resolved' || line.rate.state === 'explicit_zero') && line.amountBilled !== null) {
-      const invoiceDate = d.date || '';
-      rate = getEffectiveRate(line.rate.entry as RateEntry, invoiceDate, county, company?.payConfig?.frostZones, company?.payConfig?.frostSeason, bbls);
-      if (rate !== line.rate.entry.rate && line.rate.entry.method === 'per_bbl' && line.qtyForBblColumn != null) {
-        amountBilled = Math.round(line.qtyForBblColumn * rate * 100) / 100;
-        if (line.split.state !== 'unresolved') {
-          employeeTake = Math.round(amountBilled * line.split.split * 100) / 100;
-        }
-      } else if (line.rate.entry.method === 'hourly') {
-        rate = line.rate.entry.rate;
-      } else {
-        rate = line.rate.entry.rate;
-      }
-      const billingConfig = company?.billingConfig?.[operator];
-      if (line.rate.entry.method === 'per_bbl' && billingConfig?.detentionEnabled && swdWaitMinutes > 0) {
-        const threshold = billingConfig.detentionThresholdMinutes || 60;
-        if (swdWaitMinutes > threshold) {
-          const billableMinutes = swdWaitMinutes - threshold;
-          let detentionRate = billingConfig.detentionHourlyRate || 0;
-          if (!detentionRate) {
-            const hourlyResolved = resolveFinancialRate(rateSheets as CanonicalRateSheets, operator, 'Service Work');
-            if (hourlyResolved.state === 'resolved' && hourlyResolved.entry.method === 'hourly') {
-              detentionRate = hourlyResolved.entry.rate;
-            }
-          }
-          detentionPay = Math.round((billableMinutes / 60) * detentionRate * 100) / 100;
-        }
-      }
-      if (line.split.state !== 'unresolved') {
-        employeeTake = Math.round((amountBilled + detentionPay) * line.split.split * 100) / 100;
-      }
-    }
-
-    const row: DriverTimesheetRow = {
-      id: docSnap.id,
-      date: d.date || '',
-      invoiceNumber: d.invoiceNumber || (d.tickets?.length ? d.tickets[0] : ''),
-      operator,
-      wellName: d.wellName || '',
-      jobType,
-      bbls,
-      qtyValue: line.quantity.state === 'unresolved' ? null : line.quantity.value,
-      hours: line.hoursForMoney ?? 0,
-      rate,
-      amountBilled,
-      detentionPay,
-      swdWaitMinutes,
-      employeeTake,
-      tickets: d.tickets || [],
-      qtyUnit: line.quantity.state === 'unresolved' ? null : line.quantity.unit,
-      qtyState: line.quantity.state,
-      qtyDisplay: line.quantity.state === 'unresolved'
-        ? `UNRESOLVED (${line.quantity.reason})`
-        : `${line.quantity.value} ${line.quantity.unit === 'bbl' ? 'BBL' : 'ton'}`,
-      observedHours: line.time.observedHours,
-      allocatedHours: line.time.allocatedHours,
-      hoursProvenance: line.time.label,
-      hoursDisplay: hoursDisplay(line.time),
-      amountUnresolved: line.amountBilled === null ? line.amountReason : null,
-    };
+    const row = payrollRowFromInvoiceRecord(d, docSnap.id, company, wellCountyMap);
+    if (!row) return;
 
     if (!driverMap.has(driverName)) {
       driverMap.set(driverName, { rows: [], companyId: invoiceCompanyId });
     }
     driverMap.get(driverName)!.rows.push(row);
-    // Keep the companyId from the most recent invoice
     if (invoiceCompanyId) {
       driverMap.get(driverName)!.companyId = invoiceCompanyId;
     }
@@ -443,8 +394,8 @@ export async function fetchPayrollInvoices(
     const totalBBLs = rows.reduce((sum, r) => sum + (r.qtyUnit === 'bbl' && r.qtyValue != null ? r.qtyValue : 0), 0);
     const totalTons = rows.reduce((sum, r) => sum + (r.qtyUnit === 'ton' && r.qtyValue != null ? r.qtyValue : 0), 0);
     const unresolvedCount = rows.filter(r => r.amountUnresolved || r.qtyState === 'unresolved').length;
-    const grossBilled = rows.reduce((sum, r) => sum + (r.amountUnresolved ? 0 : r.amountBilled + r.detentionPay), 0);
-    const employeePay = rows.reduce((sum, r) => sum + (r.amountUnresolved ? 0 : r.employeeTake), 0);
+    const grossBilled = rows.reduce((sum, r) => sum + moneyContribution(r.amountBilled, r.amountUnresolved) + moneyContribution(r.detentionPay, r.amountUnresolved), 0);
+    const employeePay = rows.reduce((sum, r) => sum + moneyContribution(r.employeeTake, r.amountUnresolved), 0);
 
     const company = driverCompanyId ? companyConfigs.get(driverCompanyId) : null;
 

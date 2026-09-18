@@ -43,6 +43,7 @@ import {
   getBillingStatusColor,
   getPayPeriods,
   formatCurrency,
+  formatPayrollMoneyCell,
   formatPeriodRange,
   mixedQuantitySummary,
   type OperatorBillingSummary,
@@ -1267,10 +1268,10 @@ function TicketLineList({
             <td className="px-3 py-1.5 text-right text-white font-mono">{item.hoursDisplay || (item.hours ? String(item.hours) : '--')}</td>
             <td className="px-3 py-1.5 text-left text-gray-400 text-xs">{item.hoursProvenance || 'legacy/unknown'}</td>
             <td className="px-3 py-1.5 text-right text-gray-400 font-mono">{item.fuelMinutes || '--'}</td>
-            <td className="px-3 py-1.5 text-right text-white font-mono">{item.amountUnresolved ? `UNRESOLVED (${item.amountUnresolved})` : formatCurrency(item.baseAmount)}</td>
+            <td className="px-3 py-1.5 text-right text-white font-mono">{item.amountUnresolved ? formatPayrollMoneyCell(item.baseAmount, item.amountUnresolved) : formatCurrency(item.baseAmount)}</td>
             <td className="px-3 py-1.5 text-right text-yellow-400 font-mono">{item.amountUnresolved ? '--' : (item.fuelSurcharge > 0 ? formatCurrency(item.fuelSurcharge) : '--')}</td>
             {showDetention && <td className="px-3 py-1.5 text-right text-orange-400 font-mono">{item.amountUnresolved ? '--' : (item.detentionPay > 0 ? formatCurrency(item.detentionPay) : '--')}</td>}
-            <td className="px-3 py-1.5 text-right text-green-400 font-mono">{item.amountUnresolved ? `UNRESOLVED (${item.amountUnresolved})` : formatCurrency(item.total)}</td>
+            <td className="px-3 py-1.5 text-right text-green-400 font-mono">{item.amountUnresolved ? formatPayrollMoneyCell(item.total, item.amountUnresolved) : formatCurrency(item.total)}</td>
           </tr>
         ))}
       </tbody>

@@ -314,6 +314,27 @@ export function resolveEmployeeSplit(raw: unknown): SplitResolution {
   return { state: 'resolved', split: raw };
 }
 
+export interface SplitConfigSource {
+  employeeSplit?: unknown;
+  defaultSplit?: unknown;
+}
+
+/**
+ * Identical Dashboard / WB-S precedence. `??` keeps explicit 0.
+ * Writers persist `defaultSplit`; `employeeSplit` is an optional stored alias.
+ * Malformed non-null employeeSplit is not skipped in favor of defaultSplit.
+ */
+export function selectConfiguredSplit(payConfig: SplitConfigSource | null | undefined): unknown {
+  if (payConfig == null || typeof payConfig !== 'object') return undefined;
+  return payConfig.employeeSplit ?? payConfig.defaultSplit;
+}
+
+/** Unresolved or missing money never enters a total. Explicit 0 does. */
+export function moneyContribution(amount: number | null | undefined, unresolved: string | null | undefined): number {
+  if (unresolved || amount == null) return 0;
+  return amount;
+}
+
 // ── Time provenance ──────────────────────────────────────────────────────────
 
 export type HoursProvenance = 'allocated' | 'observed' | 'legacy_unknown';
@@ -504,6 +525,7 @@ export function projectFinancialLine(facts: InvoiceFinancialFacts): FinancialLin
 }
 
 export function moneyDisplay(amount: number | null, reason: string | null): string {
-  if (amount === null) return reason ? `UNRESOLVED (${reason})` : 'UNRESOLVED';
+  if (reason) return `UNRESOLVED (${reason})`;
+  if (amount === null) return 'UNRESOLVED';
   return String(amount);
 }
