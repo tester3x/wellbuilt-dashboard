@@ -280,7 +280,8 @@ describe('idempotent birth and binding immutability', () => {
     const store = new MemoryStore();
     const rev = await publishRevision(store);
     const binding = stampDispatchBinding(rev);
-    const identity = { companyId: COMPANY, driverId: DRIVER, jobTypeId: 'pw', binding };
+    const well = { wellName: 'Python', ndicWellName: 'PYTHON 1' };
+    const identity = { companyId: COMPANY, driverId: DRIVER, jobTypeId: 'pw', binding, well };
     const first = evaluateCreateIfAbsent({ existing: null, expected: identity });
     expect(first.ok && first.result === 'create').toBe(true);
     const existing = {
@@ -288,16 +289,144 @@ describe('idempotent birth and binding immutability', () => {
       driverId: DRIVER,
       jobType: 'pw',
       status: 'accepted',
+      assignedAt: 't0',
+      acceptedAt: 't1',
+      wellName: 'Python',
+      ndicWellName: 'PYTHON 1',
       ...binding,
     };
     const replay = evaluateCreateIfAbsent({ existing, expected: identity });
     expect(replay.ok && replay.result === 'already_exists').toBe(true);
     expect(existing.status).toBe('accepted');
+    expect(existing.assignedAt).toBe('t0');
+    expect(existing.acceptedAt).toBe('t1');
     const conflict = evaluateCreateIfAbsent({
       existing: { ...existing, contentHash: 'd'.repeat(64) },
       expected: identity,
     });
     expect(conflict.ok).toBe(false);
+  });
+  it('F2. identical canonical well returns already_exists', async () => {
+    const store = new MemoryStore();
+    const rev = await publishRevision(store);
+    const binding = stampDispatchBinding(rev);
+    const well = { wellName: 'Python', ndicWellName: 'PYTHON 1' };
+    const identity = { companyId: COMPANY, driverId: DRIVER, jobTypeId: 'pw', binding, well };
+    const existing = {
+      companyId: COMPANY,
+      driverId: DRIVER,
+      jobType: 'pw',
+      status: 'in_progress',
+      wellName: 'Python',
+      ndicWellName: 'PYTHON 1',
+      ...binding,
+    };
+    const replay = evaluateCreateIfAbsent({ existing, expected: identity });
+    expect(replay.ok && replay.result === 'already_exists').toBe(true);
+    expect(existing.status).toBe('in_progress');
+  });
+  it('F2. different wellName conflicts', async () => {
+    const store = new MemoryStore();
+    const rev = await publishRevision(store);
+    const binding = stampDispatchBinding(rev);
+    const identity = {
+      companyId: COMPANY, driverId: DRIVER, jobTypeId: 'pw', binding,
+      well: { wellName: 'Python', ndicWellName: 'PYTHON 1' },
+    };
+    const r = evaluateCreateIfAbsent({
+      existing: {
+        companyId: COMPANY, driverId: DRIVER, jobType: 'pw',
+        wellName: 'Gabriel 1', ndicWellName: 'PYTHON 1', ...binding,
+      },
+      expected: identity,
+    });
+    expect(r.ok).toBe(false);
+    if (r.ok) return;
+    expect(r.reason).toBe('conflict');
+    expect(r.field).toBe('wellName');
+  });
+  it('F2. different ndicWellName conflicts', async () => {
+    const store = new MemoryStore();
+    const rev = await publishRevision(store);
+    const binding = stampDispatchBinding(rev);
+    const identity = {
+      companyId: COMPANY, driverId: DRIVER, jobTypeId: 'pw', binding,
+      well: { wellName: 'Python', ndicWellName: 'PYTHON 1' },
+    };
+    const r = evaluateCreateIfAbsent({
+      existing: {
+        companyId: COMPANY, driverId: DRIVER, jobType: 'pw',
+        wellName: 'Python', ndicWellName: 'GABRIEL 1', ...binding,
+      },
+      expected: identity,
+    });
+    expect(r.ok).toBe(false);
+    if (r.ok) return;
+    expect(r.reason).toBe('conflict');
+    expect(r.field).toBe('ndicWellName');
+  });
+  it('F2. missing existing well identity conflicts', async () => {
+    const store = new MemoryStore();
+    const rev = await publishRevision(store);
+    const binding = stampDispatchBinding(rev);
+    const identity = {
+      companyId: COMPANY, driverId: DRIVER, jobTypeId: 'pw', binding,
+      well: { wellName: 'Python', ndicWellName: 'PYTHON 1' },
+    };
+    const missingBoth = evaluateCreateIfAbsent({
+      existing: { companyId: COMPANY, driverId: DRIVER, jobType: 'pw', ...binding },
+      expected: identity,
+    });
+    expect(missingBoth.ok).toBe(false);
+    const missingNdic = evaluateCreateIfAbsent({
+      existing: { companyId: COMPANY, driverId: DRIVER, jobType: 'pw', wellName: 'Python', ...binding },
+      expected: identity,
+    });
+    expect(missingNdic.ok).toBe(false);
+  });
+  it('F2. changed packet binding conflicts', async () => {
+    const store = new MemoryStore();
+    const rev = await publishRevision(store);
+    const binding = stampDispatchBinding(rev);
+    const identity = {
+      companyId: COMPANY, driverId: DRIVER, jobTypeId: 'pw', binding,
+      well: { wellName: 'Python', ndicWellName: 'PYTHON 1' },
+    };
+    const r = evaluateCreateIfAbsent({
+      existing: {
+        companyId: COMPANY, driverId: DRIVER, jobType: 'pw',
+        wellName: 'Python', ndicWellName: 'PYTHON 1',
+        ...binding, packetRevision: 2,
+      },
+      expected: identity,
+    });
+    expect(r.ok).toBe(false);
+  });
+  it('F2. legitimate replay does not reset status, assignment, or timestamps', async () => {
+    const store = new MemoryStore();
+    const rev = await publishRevision(store);
+    const binding = stampDispatchBinding(rev);
+    const identity = {
+      companyId: COMPANY, driverId: DRIVER, jobTypeId: 'pw', binding,
+      well: { wellName: 'Python', ndicWellName: 'PYTHON 1' },
+    };
+    const existing = {
+      companyId: COMPANY,
+      driverId: DRIVER,
+      jobType: 'pw',
+      status: 'accepted',
+      assignedAt: 'keep-assigned',
+      acceptedAt: 'keep-accepted',
+      wellName: 'Python',
+      ndicWellName: 'PYTHON 1',
+      ...binding,
+    };
+    const replay = evaluateCreateIfAbsent({ existing, expected: identity });
+    expect(replay.ok && replay.result === 'already_exists').toBe(true);
+    expect(existing.status).toBe('accepted');
+    expect(existing.driverId).toBe(DRIVER);
+    expect(existing.assignedAt).toBe('keep-assigned');
+    expect(existing.acceptedAt).toBe('keep-accepted');
   });
   it('27-29. staff update/cancel cannot mutate binding', () => {
     const existing = {

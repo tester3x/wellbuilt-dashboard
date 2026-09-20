@@ -2,12 +2,13 @@ import * as httpsV2 from 'firebase-functions/v2/https';
 import * as admin from 'firebase-admin';
 import { FieldValue } from 'firebase-admin/firestore';
 import { requireSecureDriver } from './requireDriverAuth';
-import { ACCEPT_REQUEST_KEYS, evaluateAcceptDriverDispatch } from './operational/acceptDriverDispatch';
+import { ACCEPT_REQUEST_KEYS, runAcceptDriverDispatch } from './operational/acceptDriverDispatch';
 import { DISPATCH_BINDING_KEYS } from './operational/dispatchPacketPin';
+import { REVISION_COLLECTION } from './operational/jobPacketRevisionStore';
 
 function throwFail(decided: { ok: false; reason: string; field?: string }): never {
   const msg = decided.field ? `${decided.reason}:${decided.field}` : decided.reason;
-  const code = decided.reason === 'not_found' ? 'not-found'
+  const code = decided.reason === 'not_found' || decided.reason === 'revision_not_found' ? 'not-found'
     : decided.reason === 'other_driver' || decided.reason === 'wrong_company' ? 'permission-denied'
       : decided.reason === 'unauthenticated_driver' ? 'unauthenticated'
         : 'failed-precondition';
@@ -26,36 +27,42 @@ export const acceptDriverDispatch = httpsV2.onCall(
       }
     }
     const fs = admin.firestore();
-    const dispatchId = typeof raw.dispatchId === 'string' ? raw.dispatchId.trim() : '';
     const outcome = await fs.runTransaction(async (tx) => {
-      const ref = fs.collection('dispatches').doc(dispatchId);
-      const snap = await tx.get(ref);
-      const existing = snap.exists ? (snap.data() as Record<string, unknown>) : null;
-      const decided = evaluateAcceptDriverDispatch({
-        dispatchId,
+      const decided = await runAcceptDriverDispatch({
+        dispatchId: raw.dispatchId,
         caller: { driverId: driver.driverId, companyId: driver.companyId as string },
-        existing,
         invoiceDocId: raw.invoiceDocId,
         invoiceNumber: raw.invoiceNumber,
         targetStatus: raw.targetStatus,
+        getDispatch: async (id) => {
+          const snap = await tx.get(fs.collection('dispatches').doc(id));
+          return snap.exists ? (snap.data() as Record<string, unknown>) : null;
+        },
+        getRevision: async (id) => {
+          const snap = await tx.get(fs.collection(REVISION_COLLECTION).doc(id));
+          return { exists: snap.exists, data: snap.data() as Record<string, unknown> | undefined };
+        },
+        applyUpdate: (id, patch) => {
+          const mapped: Record<string, unknown> = { ...patch };
+          if (mapped.acceptedAt === true) mapped.acceptedAt = FieldValue.serverTimestamp();
+          if (mapped.startedAt === true) mapped.startedAt = FieldValue.serverTimestamp();
+          for (const key of DISPATCH_BINDING_KEYS) {
+            delete mapped[key];
+          }
+          delete mapped.companyId;
+          delete mapped.driverId;
+          delete mapped.jobType;
+          delete mapped.wellName;
+          delete mapped.ndicWellName;
+          tx.update(fs.collection('dispatches').doc(id), mapped);
+        },
       });
       if (!decided.ok) throwFail(decided);
-      if (decided.result === 'already_accepted') {
-        return { result: 'already_accepted' as const, status: decided.status, dispatchId };
-      }
-      const patch: Record<string, unknown> = {
+      return {
+        result: decided.result,
         status: decided.status,
-        loadsCompleted: decided.loadsCompleted,
+        dispatchId: decided.dispatchId,
       };
-      if (decided.stampAcceptedAt) patch.acceptedAt = FieldValue.serverTimestamp();
-      if (decided.stampStartedAt) patch.startedAt = FieldValue.serverTimestamp();
-      if (decided.invoiceDocId) patch.invoiceDocId = decided.invoiceDocId;
-      if (decided.invoiceNumber) patch.invoiceNumber = decided.invoiceNumber;
-      for (const key of DISPATCH_BINDING_KEYS) {
-        if (key in patch) delete patch[key];
-      }
-      tx.update(ref, patch);
-      return { result: 'accepted' as const, status: decided.status, dispatchId };
     });
     return { ok: true as const, ...outcome };
   },

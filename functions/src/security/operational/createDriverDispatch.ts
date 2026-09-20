@@ -1,5 +1,6 @@
 import { fail, type StoreResult } from './jobPacketRevisionStore';
 import {
+  canonicalWellFromRecord,
   evaluateCreateIfAbsent,
   parseDispatchId,
   rejectCallerAuthorityFields,
@@ -78,11 +79,13 @@ export function evaluateDriverDispatchBirth(input: {
   const jobType = resolveCanonicalJobType(picked.fields.jobType, input.envelope.jobTypes);
   if (!jobType.ok) return jobType;
   const binding = stampDispatchBinding(input.envelope);
+  const well = canonicalWellFromRecord(picked.fields);
   const identity: BirthIdentity = {
     companyId: input.caller.companyId,
     driverId: input.caller.driverId,
     jobTypeId: jobType.jobTypeId,
     binding,
+    well,
   };
   const replay = evaluateCreateIfAbsent({ existing: input.existing, expected: identity });
   if (!replay.ok) return replay;

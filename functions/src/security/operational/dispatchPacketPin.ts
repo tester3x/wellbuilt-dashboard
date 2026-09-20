@@ -6,7 +6,9 @@ import {
   PACKAGE_ID_RE,
   canonicalJson,
   fail,
+  revisionDocId,
   snapshotPlain,
+  validateStoredRevisionForBinding,
   type ImmutableRevisionEnvelope,
   type JobTypeEntry,
   type StoreResult,
@@ -42,6 +44,23 @@ export type DispatchBinding = {
   contentHash: string;
   policyHash: string;
 };
+
+export async function loadVerifiedRevisionFromData(
+  exists: boolean,
+  data: Record<string, unknown> | undefined,
+  companyId: string,
+  packetRef: PacketRef,
+): Promise<StoreResult<{ envelope: ImmutableRevisionEnvelope; revisionDocId: string }>> {
+  const docId = revisionDocId(companyId, packetRef.packageId, packetRef.revision);
+  if (!exists) return fail('revision_not_found', 'packetRef');
+  const validated = validateStoredRevisionForBinding(data || {}, {
+    companyId,
+    packageId: packetRef.packageId,
+    revision: packetRef.revision,
+  });
+  if (!validated.ok) return validated;
+  return { ok: true, envelope: validated.envelope, revisionDocId: docId };
+}
 
 export function parsePacketRef(raw: unknown): StoreResult<{ packetRef: PacketRef }> {
   if (raw === undefined || raw === null) return fail('packet_ref_required', 'packetRef');
@@ -147,12 +166,39 @@ export function evaluateWellAuthorized(
   return { ok: true, wellName: well || ndic };
 }
 
+export type WellIdentity = {
+  wellName: string;
+  ndicWellName: string;
+};
+
 export type BirthIdentity = {
   companyId: string;
   driverId: string;
   jobTypeId: string;
   binding: DispatchBinding;
+  well: WellIdentity;
 };
+
+export function readCanonicalWell(job: Record<string, unknown> | null): StoreResult<{ well: WellIdentity }> {
+  if (!job) return fail('missing_well_identity', 'wellName');
+  if (typeof job.wellName !== 'string') return fail('missing_well_identity', 'wellName');
+  if (typeof job.ndicWellName !== 'string') return fail('missing_well_identity', 'ndicWellName');
+  return {
+    ok: true,
+    well: { wellName: job.wellName.trim(), ndicWellName: job.ndicWellName.trim() },
+  };
+}
+
+export function wellsEqual(a: WellIdentity, b: WellIdentity): boolean {
+  return a.wellName === b.wellName && a.ndicWellName === b.ndicWellName;
+}
+
+export function canonicalWellFromRecord(record: Record<string, unknown>): WellIdentity {
+  return {
+    wellName: typeof record.wellName === 'string' ? record.wellName.trim() : '',
+    ndicWellName: typeof record.ndicWellName === 'string' ? record.ndicWellName.trim() : '',
+  };
+}
 
 export function evaluateCreateIfAbsent(input: {
   existing: Record<string, unknown> | null;
@@ -170,7 +216,35 @@ export function evaluateCreateIfAbsent(input: {
   if (company !== input.expected.companyId) return fail('conflict', 'companyId');
   if (driver !== input.expected.driverId) return fail('conflict', 'driverId');
   if (jobType !== input.expected.jobTypeId) return fail('conflict', 'jobType');
+  const existingWell = readCanonicalWell(existing);
+  if (!existingWell.ok) return fail('conflict', existingWell.field || 'well');
+  if (!wellsEqual(existingWell.well, input.expected.well)) {
+    const field = existingWell.well.wellName !== input.expected.well.wellName ? 'wellName' : 'ndicWellName';
+    return fail('conflict', field);
+  }
   return { ok: true, result: 'already_exists' };
+}
+
+export function verifyDispatchPinsAgainstEnvelope(
+  dispatch: Record<string, unknown>,
+  envelope: ImmutableRevisionEnvelope,
+  expectedCompanyId: string,
+): StoreResult<{ binding: DispatchBinding }> {
+  const bound = requireCompleteBinding(dispatch);
+  if (!bound.ok) return bound;
+  const company = typeof dispatch.companyId === 'string' ? dispatch.companyId.trim() : '';
+  if (!company || company !== expectedCompanyId) return fail('revision_tenant_mismatch', 'companyId');
+  if (envelope.companyId !== expectedCompanyId) return fail('revision_tenant_mismatch', 'companyId');
+  const expected = stampDispatchBinding(envelope);
+  if (!dispatchBindingsEqual(bound.binding, expected)) {
+    if (bound.binding.packageId !== expected.packageId) return fail('revision_package_mismatch', 'packageId');
+    if (bound.binding.packetRevision !== expected.packetRevision) return fail('revision_mismatch', 'packetRevision');
+    if (bound.binding.contentHash !== expected.contentHash) return fail('content_hash_mismatch', 'contentHash');
+    return fail('policy_hash_mismatch', 'policyHash');
+  }
+  const jobType = resolveCanonicalJobType(dispatch.jobType, envelope.jobTypes);
+  if (!jobType.ok) return jobType;
+  return { ok: true, binding: bound.binding };
 }
 
 export function rejectBindingMutation(

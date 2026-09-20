@@ -1,5 +1,12 @@
-import { fail } from './jobPacketRevisionStore';
-import { parseDispatchId, requireCompleteBinding } from './dispatchPacketPin';
+import { fail, revisionDocId, type StoreResult } from './jobPacketRevisionStore';
+import {
+  DISPATCH_BINDING_KEYS,
+  loadVerifiedRevisionFromData,
+  parseDispatchId,
+  parsePacketRef,
+  requireCompleteBinding,
+  verifyDispatchPinsAgainstEnvelope,
+} from './dispatchPacketPin';
 
 export const ACCEPT_DRIVER_DISPATCH_CALLABLE = 'acceptDriverDispatch';
 export const ACCEPTABLE_FROM = Object.freeze(['pending', 'paused', 'accepted', 'in_progress'] as const);
@@ -90,3 +97,80 @@ export const ACCEPT_REQUEST_KEYS = Object.freeze([
   'invoiceNumber',
   'targetStatus',
 ] as const);
+
+export async function runAcceptDriverDispatch(input: {
+  dispatchId: unknown;
+  caller: { driverId: string; companyId: string } | null;
+  invoiceDocId?: unknown;
+  invoiceNumber?: unknown;
+  targetStatus?: unknown;
+  getDispatch: (id: string) => Promise<Record<string, unknown> | null>;
+  getRevision: (id: string) => Promise<{ exists: boolean; data?: Record<string, unknown> }>;
+  applyUpdate: (id: string, patch: Record<string, unknown>) => void;
+}): Promise<StoreResult<{ result: 'accepted' | 'already_accepted'; status: string; dispatchId: string; revisionDocId: string }>> {
+  const id = parseDispatchId(input.dispatchId);
+  if (!id.ok) return id;
+  if (!input.caller?.driverId || !input.caller.companyId) return fail('unauthenticated_driver');
+  const existing = await input.getDispatch(id.dispatchId);
+  const decided = evaluateAcceptDriverDispatch({
+    dispatchId: id.dispatchId,
+    caller: input.caller,
+    existing,
+    invoiceDocId: input.invoiceDocId,
+    invoiceNumber: input.invoiceNumber,
+    targetStatus: input.targetStatus,
+  });
+  if (!decided.ok) return decided;
+  if (!existing) return fail('not_found');
+  const bound = requireCompleteBinding(existing);
+  if (!bound.ok) return bound;
+  const selector = parsePacketRef({
+    packageId: bound.binding.packageId,
+    revision: bound.binding.packetRevision,
+  });
+  if (!selector.ok) return selector;
+  const revId = revisionDocId(input.caller.companyId, selector.packetRef.packageId, selector.packetRef.revision);
+  const revSnap = await input.getRevision(revId);
+  const loaded = await loadVerifiedRevisionFromData(
+    revSnap.exists,
+    revSnap.data,
+    input.caller.companyId,
+    selector.packetRef,
+  );
+  if (!loaded.ok) return loaded;
+  const pins = verifyDispatchPinsAgainstEnvelope(existing, loaded.envelope, input.caller.companyId);
+  if (!pins.ok) return pins;
+  if (decided.result === 'already_accepted') {
+    return {
+      ok: true,
+      result: 'already_accepted',
+      status: decided.status,
+      dispatchId: id.dispatchId,
+      revisionDocId: loaded.revisionDocId,
+    };
+  }
+  const patch: Record<string, unknown> = {
+    status: decided.status,
+    loadsCompleted: decided.loadsCompleted,
+  };
+  if (decided.stampAcceptedAt) patch.acceptedAt = true;
+  if (decided.stampStartedAt) patch.startedAt = true;
+  if (decided.invoiceDocId) patch.invoiceDocId = decided.invoiceDocId;
+  if (decided.invoiceNumber) patch.invoiceNumber = decided.invoiceNumber;
+  for (const key of DISPATCH_BINDING_KEYS) {
+    delete patch[key];
+  }
+  delete patch.companyId;
+  delete patch.driverId;
+  delete patch.jobType;
+  delete patch.wellName;
+  delete patch.ndicWellName;
+  input.applyUpdate(id.dispatchId, patch);
+  return {
+    ok: true,
+    result: 'accepted',
+    status: decided.status,
+    dispatchId: id.dispatchId,
+    revisionDocId: loaded.revisionDocId,
+  };
+}

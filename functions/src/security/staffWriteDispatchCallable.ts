@@ -155,6 +155,10 @@ export const staffWriteDispatch = httpsV2.onCall(
         driverId: typeof fields.driverId === 'string' ? fields.driverId : '',
         jobTypeId: jobType.jobTypeId,
         binding,
+        well: {
+          wellName: typeof fields.wellName === 'string' ? fields.wellName.trim() : '',
+          ndicWellName: typeof fields.ndicWellName === 'string' ? fields.ndicWellName.trim() : '',
+        },
       };
       const outcome = await fs.runTransaction(async (tx) => {
         const ref = fs.collection('dispatches').doc(id.dispatchId);

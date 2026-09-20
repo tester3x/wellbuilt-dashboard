@@ -1,28 +1,45 @@
 import * as admin from 'firebase-admin';
 import {
   REVISION_COLLECTION,
-  fail,
   revisionDocId,
-  validateStoredRevisionForBinding,
   type ImmutableRevisionEnvelope,
   type StoreResult,
 } from './jobPacketRevisionStore';
-import { evaluateWellAuthorized, parsePacketRef, type PacketRef } from './dispatchPacketPin';
+import {
+  evaluateWellAuthorized,
+  loadVerifiedRevisionFromData,
+  parsePacketRef,
+  type PacketRef,
+} from './dispatchPacketPin';
+
+export function packetRefFromDispatch(job: Record<string, unknown>): StoreResult<{ packetRef: PacketRef }> {
+  const packageId = typeof job.packageId === 'string' ? job.packageId : '';
+  const revision = typeof job.packetRevision === 'number' ? job.packetRevision : NaN;
+  return parsePacketRef({ packageId, revision });
+}
+
+export async function loadVerifiedRevisionWithGet(
+  get: (docId: string) => Promise<{ exists: boolean; data?: Record<string, unknown> }>,
+  companyId: string,
+  packetRef: PacketRef,
+): Promise<StoreResult<{ envelope: ImmutableRevisionEnvelope; revisionDocId: string }>> {
+  const docId = revisionDocId(companyId, packetRef.packageId, packetRef.revision);
+  const snap = await get(docId);
+  return loadVerifiedRevisionFromData(snap.exists, snap.data, companyId, packetRef);
+}
 
 export async function loadVerifiedRevision(
   companyId: string,
   packetRef: PacketRef,
-): Promise<StoreResult<{ envelope: ImmutableRevisionEnvelope }>> {
-  const docId = revisionDocId(companyId, packetRef.packageId, packetRef.revision);
-  const snap = await admin.firestore().collection(REVISION_COLLECTION).doc(docId).get();
-  if (!snap.exists) return fail('revision_not_found', 'packetRef');
-  const validated = validateStoredRevisionForBinding(snap.data() || {}, {
+): Promise<StoreResult<{ envelope: ImmutableRevisionEnvelope; revisionDocId: string }>> {
+  return loadVerifiedRevisionWithGet(
+    async (id) => {
+      const snap = await admin.firestore().collection(REVISION_COLLECTION).doc(id).get();
+      return { exists: snap.exists, data: snap.data() as Record<string, unknown> | undefined };
+    },
     companyId,
-    packageId: packetRef.packageId,
-    revision: packetRef.revision,
-  });
-  if (!validated.ok) return validated;
-  return { ok: true, envelope: validated.envelope };
+    packetRef,
+  );
 }
 
 export async function loadAuthorizedWellNames(): Promise<string[]> {
