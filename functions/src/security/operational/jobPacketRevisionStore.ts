@@ -3,7 +3,6 @@
  * No live dispatch, catalog, or company-config path reads these documents.
  */
 import { createHash } from 'crypto';
-import { authorizeAdminCall, type ServerAdminAuthorization } from '../../admin/authority';
 
 export const REVISION_COLLECTION = 'job_packet_revisions';
 export const CLAIM_COLLECTION = 'job_packet_content_claims';
@@ -63,7 +62,6 @@ export const CALLER_ALLOWED_KEYS = Object.freeze([
   'policyRefs',
   'definition',
   'supersedes',
-  'targetCompanyId',
 ] as const);
 
 export const CALLER_FORBIDDEN_AUTHORITY_KEYS = Object.freeze([
@@ -161,12 +159,36 @@ export interface RevisionStoreTx {
   createClaim(docId: string, data: Record<string, unknown>): void;
 }
 
+/** Firestore document ID limit (UTF-8 bytes). */
+export const FIRESTORE_MAX_DOCUMENT_ID_BYTES = 1500;
+
+/**
+ * Length-prefixed encoding. `.` is outside the accepted identifier alphabet
+ * `[A-Za-z0-9_-]`, and each field is `{decimalLength}.{exactPayload}`, so
+ * component boundaries cannot alias.
+ */
+export function encodeLengthPrefixedParts(parts: readonly string[]): string {
+  for (const part of parts) {
+    if (part.includes('/')) {
+      throw new Error('doc_id_contains_slash');
+    }
+  }
+  const id = parts.map((part) => `${part.length}.${part}`).join('.');
+  if (id === '.' || id === '..') {
+    throw new Error('doc_id_reserved');
+  }
+  if (Buffer.byteLength(id, 'utf8') > FIRESTORE_MAX_DOCUMENT_ID_BYTES) {
+    throw new Error('doc_id_too_long');
+  }
+  return id;
+}
+
 export function revisionDocId(companyId: string, packageId: string, revision: number): string {
-  return `${companyId}__${packageId}__${revision}`;
+  return encodeLengthPrefixedParts([companyId, packageId, String(revision)]);
 }
 
 export function claimDocId(companyId: string, packageId: string, contentHash: string): string {
-  return `${companyId}__${packageId}__${contentHash}`;
+  return encodeLengthPrefixedParts([companyId, packageId, contentHash]);
 }
 
 export function fail(reason: string, field?: string): StoreFailure {
@@ -501,62 +523,10 @@ function parseDefinition(
   return { ok: true, value: rec.value };
 }
 
-export function decidePublishAccess(params: {
-  authUid?: string | null;
-  tenantCaller?: { companyId?: string | null; caps: string[] } | null;
-  platformAdminDecision?: Pick<ServerAdminAuthorization, 'ok'> & { reason?: string } | null;
-  requestedTargetCompanyId?: string;
-}): StoreResult<{ companyId: string; via: 'tenant' | 'platform_admin' }> {
-  if (!params.authUid) return fail('unauthenticated');
-  const tenantCompany = (params.tenantCaller?.companyId || '').trim();
-  const caps = params.tenantCaller?.caps || [];
-  const canPublishTenant = caps.includes('manageDrivers') || caps.includes('manageCompany');
-  const requested = (params.requestedTargetCompanyId || '').trim();
-
-  if (tenantCompany && canPublishTenant) {
-    if (requested && requested !== tenantCompany) {
-      if (!params.platformAdminDecision || params.platformAdminDecision.ok !== true) {
-        return fail('platform_admin_required');
-      }
-      if (!ID_RE.test(requested)) return fail('malformed_id', 'targetCompanyId');
-      return { ok: true, companyId: requested, via: 'platform_admin' };
-    }
-    if (!ID_RE.test(tenantCompany)) return fail('malformed_id', 'companyId');
-    return { ok: true, companyId: tenantCompany, via: 'tenant' };
-  }
-
-  if (!params.platformAdminDecision || params.platformAdminDecision.ok !== true) {
-    const reason = params.platformAdminDecision && 'reason' in params.platformAdminDecision
-      ? String(params.platformAdminDecision.reason || 'platform_admin_required')
-      : 'platform_admin_required';
-    return fail(reason === 'unauthenticated' ? 'unauthenticated' : 'platform_admin_required');
-  }
-  if (!requested) return fail('target_company_required', 'targetCompanyId');
-  if (!ID_RE.test(requested)) return fail('malformed_id', 'targetCompanyId');
-  return { ok: true, companyId: requested, via: 'platform_admin' };
-}
-
-export function tenantPublishCapsFromRoles(
-  roles: string[],
-  overrides: Record<string, string[]>,
-): string[] {
-  const DEFAULTS: Record<string, string[]> = {
-    it: ['manageDrivers', 'viewAllCompanies', 'manageEquipment'],
-    admin: ['manageDrivers', 'manageEquipment'],
-    manager: ['manageDrivers'],
-  };
-  const caps = new Set<string>();
-  for (const role of roles) {
-    const list = overrides[role] ?? DEFAULTS[role] ?? [];
-    for (const c of list) caps.add(c);
-  }
-  return [...caps];
-}
-
 export function validatePublishInput(
   raw: unknown,
   ctx: { companyId: string; publishedByUid: string },
-): StoreResult<{ envelope: Omit<ImmutableRevisionEnvelope, 'contentHash'>; contentHash: string; targetCompanyId?: string }> {
+): StoreResult<{ envelope: Omit<ImmutableRevisionEnvelope, 'contentHash'>; contentHash: string }> {
   const snapped = snapshotPlain(raw, '$');
   if (!snapped.ok) return snapped;
   const rec = asRecord(snapped.value, '$');
@@ -644,13 +614,6 @@ export function validatePublishInput(
     if (supersedes.value.revision >= revision.value) return fail('supersedes_not_advancing', 'supersedes.revision');
   }
 
-  let targetCompanyId: string | undefined;
-  if (obj.targetCompanyId !== undefined) {
-    const t = requireId(obj.targetCompanyId, 'targetCompanyId');
-    if (!t.ok) return t;
-    targetCompanyId = t.value;
-  }
-
   const policyCanon = canonicalJson({ hashSchemaVersion: HASH_SCHEMA_VERSION, policyRefs });
   if (!policyCanon.ok) return policyCanon;
   const policyHash = sha256Hex(policyCanon.json);
@@ -679,7 +642,7 @@ export function validatePublishInput(
   const materialCanon = canonicalJson(contentHashMaterial(envelope));
   if (!materialCanon.ok) return materialCanon;
   const contentHash = sha256Hex(materialCanon.json);
-  return { ok: true, envelope, contentHash, targetCompanyId };
+  return { ok: true, envelope, contentHash };
 }
 
 function storedAsRevision(raw: Record<string, unknown>): StoreResult<{ envelope: ImmutableRevisionEnvelope; publishedAt: unknown }> {
@@ -822,11 +785,4 @@ export async function persistJobPacketRevision(
   tx.createRevision(revId, persisted);
   tx.createClaim(claimId, JSON.parse(JSON.stringify(claim)) as ContentClaim);
   return { ok: true, publication: 'created', revision: persisted };
-}
-
-export function evaluatePlatformAdminRecord(
-  auth: { uid?: string | null; token?: Record<string, unknown> | null } | null,
-  record: Record<string, unknown> | null,
-): ServerAdminAuthorization {
-  return authorizeAdminCall(auth, record);
 }

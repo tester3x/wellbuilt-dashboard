@@ -4788,7 +4788,6 @@ export {
   adminGetWellPerformance,
   dismissDispatch,
   staffWriteDispatch,
-  publishJobPacketRevision,
   staffWriteDriverAssignment,
   staffWriteWellConfig,
   staffConvertApprovedDriverSecureLogin,

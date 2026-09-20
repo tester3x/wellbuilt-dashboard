@@ -1,18 +1,15 @@
 import * as fs from 'fs';
 import * as path from 'path';
-import { authorizeAdminCall } from '../../../admin/authority';
 import {
   CALLER_FORBIDDEN_AUTHORITY_KEYS,
   CLAIM_COLLECTION,
+  FIRESTORE_MAX_DOCUMENT_ID_BYTES,
   INDEX_COLLECTION,
   REVISION_COLLECTION,
   SERVER_IMPLEMENTED_EFFECTS,
   claimDocId,
-  decidePublishAccess,
-  evaluatePlatformAdminRecord,
   persistJobPacketRevision,
   revisionDocId,
-  tenantPublishCapsFromRoles,
   validatePublishInput,
   type RevisionStoreTx,
 } from '../jobPacketRevisionStore';
@@ -20,7 +17,6 @@ import {
 const COMPANY = 'liquid-gold';
 const OTHER = 'other-hauler';
 const PUBLISHER = 'uid-staff-1';
-const PLATFORM = 'uid-platform-1';
 
 function validPayload(overrides: Record<string, unknown> = {}): Record<string, unknown> {
   return {
@@ -85,9 +81,6 @@ async function publish(
     publishedAt,
   );
 }
-
-const enabledAdmin = { enabled: true, policyVersion: 1 };
-const adminAuth = { uid: PLATFORM, token: { wellbuiltAdmin: true, email: 'admin@wellbuilt' } };
 
 describe('1. first publication creates revision and matching content claim', () => {
   it('creates both documents with matching hash and server fields', async () => {
@@ -190,65 +183,24 @@ describe('6. tenant cannot be selected or changed by ordinary caller input', () 
     expect(result.field).toBe('companyId');
   });
 
-  it('stamps the server-resolved company, not a payload target, for tenant publishers', () => {
-    const access = decidePublishAccess({
-      authUid: PUBLISHER,
-      tenantCaller: { companyId: COMPANY, caps: ['manageDrivers'] },
-      platformAdminDecision: { ok: false, reason: 'missing_admin_claim' },
-      requestedTargetCompanyId: OTHER,
+  it('stamps only the server-provided ctx.companyId onto the envelope', () => {
+    const result = validatePublishInput(validPayload(), {
+      companyId: COMPANY,
+      publishedByUid: PUBLISHER,
     });
-    expect(access.ok).toBe(false);
-    if (access.ok) return;
-    expect(access.reason).toBe('platform_admin_required');
-  });
-
-  it('uses the server tenant company when no target is supplied', () => {
-    const access = decidePublishAccess({
-      authUid: PUBLISHER,
-      tenantCaller: { companyId: COMPANY, caps: ['manageDrivers'] },
-      platformAdminDecision: { ok: false, reason: 'missing_admin_claim' },
-    });
-    expect(access.ok).toBe(true);
-    if (!access.ok) return;
-    expect(access.companyId).toBe(COMPANY);
-    expect(access.via).toBe('tenant');
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    expect(result.envelope.companyId).toBe(COMPANY);
+    expect(result.envelope.publishedByUid).toBe(PUBLISHER);
   });
 });
 
-describe('7. cross-company publication requires verified platform authority', () => {
-  it('denies unscoped admin/it without dual-source platform_admins + claim', () => {
-    const access = decidePublishAccess({
-      authUid: PLATFORM,
-      tenantCaller: { companyId: null, caps: ['manageDrivers', 'viewAllCompanies'] },
-      platformAdminDecision: { ok: false, reason: 'no_admin_record' },
-      requestedTargetCompanyId: COMPANY,
-    });
-    expect(access.ok).toBe(false);
-    if (access.ok) return;
-    expect(access.reason).toBe('platform_admin_required');
-  });
-
-  it('reuses authorizeAdminCall dual-source verification', () => {
-    expect(authorizeAdminCall(adminAuth, enabledAdmin).ok).toBe(true);
-    expect(evaluatePlatformAdminRecord(adminAuth, null).ok).toBe(false);
-    expect(evaluatePlatformAdminRecord({ uid: PLATFORM, token: { wellbuiltAdmin: true } }, {
-      enabled: true,
-      policyVersion: 1,
-    }).ok).toBe(true);
-    expect(evaluatePlatformAdminRecord({ uid: PLATFORM, token: { role: 'it' } }, enabledAdmin).ok).toBe(false);
-  });
-
-  it('allows cross-company only after verified platform admin + targetCompanyId', () => {
-    const access = decidePublishAccess({
-      authUid: PLATFORM,
-      tenantCaller: { companyId: null, caps: [] },
-      platformAdminDecision: authorizeAdminCall(adminAuth, enabledAdmin),
-      requestedTargetCompanyId: COMPANY,
-    });
-    expect(access.ok).toBe(true);
-    if (!access.ok) return;
-    expect(access.via).toBe('platform_admin');
-    expect(access.companyId).toBe(COMPANY);
+describe('7. no live packet-publication endpoint', () => {
+  it('does not treat manageDrivers as a publication authority in this checkpoint', () => {
+    const src = fs.readFileSync(path.join(__dirname, '..', 'jobPacketRevisionStore.ts'), 'utf8');
+    expect(src).not.toMatch(/manageDrivers/);
+    expect(src).not.toMatch(/decidePublishAccess/);
+    expect(src).not.toMatch(/httpsV2\.onCall/);
   });
 });
 
@@ -481,13 +433,7 @@ describe('14. no getLatest, fallback, overwrite, update, delete, or repair path'
     expect(src).not.toMatch(/merge\s*:/);
     expect(src).toMatch(/createRevision/);
     expect(src).toMatch(/createClaim/);
-    const callable = fs.readFileSync(
-      path.join(__dirname, '..', '..', 'jobPacketRevisionPublishCallable.ts'),
-      'utf8',
-    );
-    expect(callable).not.toMatch(/\bgetLatest\s*\(/);
-    expect(callable).toMatch(/\.create\s*\(/);
-    expect(callable).not.toMatch(/\.(set|update|delete)\s*\(/);
+    expect(fs.existsSync(path.join(__dirname, '..', '..', 'jobPacketRevisionPublishCallable.ts'))).toBe(false);
   });
 
   it('does not repair a missing claim', async () => {
@@ -507,13 +453,8 @@ describe('15. staffWriteDispatch surface remains the dispatch writer', () => {
       path.join(__dirname, '..', 'jobPacketRevisionStore.ts'),
       'utf8',
     );
-    const callable = fs.readFileSync(
-      path.join(__dirname, '..', '..', 'jobPacketRevisionPublishCallable.ts'),
-      'utf8',
-    );
     expect(src).not.toMatch(/staffWriteDispatch/);
-    expect(callable).not.toMatch(/staffWriteDispatch/);
-    expect(callable).not.toMatch(/upsertDriverDispatch/);
+    expect(src).not.toMatch(/upsertDriverDispatch/);
   });
 });
 
@@ -539,11 +480,134 @@ describe('16. firestore rules deny all client access to the dormant collections'
   });
 });
 
-describe('caps are not minted from token booleans', () => {
-  it('uses role tables only', () => {
-    expect(tenantPublishCapsFromRoles(['viewer'], {})).toEqual([]);
-    expect(tenantPublishCapsFromRoles(['admin'], {})).toEqual(
-      expect.arrayContaining(['manageDrivers']),
+describe('document IDs are length-prefixed and injective', () => {
+  const hashA = 'a'.repeat(64);
+  const hashB = 'b'.repeat(64);
+
+  it('separates prior __ collision pairs', () => {
+    expect(revisionDocId('a_', 'b', 1)).not.toBe(revisionDocId('a', '_b', 1));
+    expect(revisionDocId('a__', 'b', 1)).not.toBe(revisionDocId('a', '__b', 1));
+    expect(revisionDocId('a-b', 'c', 1)).not.toBe(revisionDocId('a', 'b-c', 1));
+    expect(claimDocId('a_', 'b', hashA)).not.toBe(claimDocId('a', '_b', hashA));
+    expect(claimDocId('a__', 'b', hashA)).not.toBe(claimDocId('a', '__b', hashA));
+    expect(claimDocId('a-b', 'c', hashA)).not.toBe(claimDocId('a', 'b-c', hashA));
+  });
+
+  it('distinguishes remaining component-boundary permutations of the old __ format', () => {
+    const pairs: Array<[string, string]> = [
+      ['a_', 'b'], ['a', '_b'], ['a__', 'b'], ['a', '__b'],
+      ['a___', 'b'], ['a', '___b'], ['_a', 'b'], ['a', 'b_'],
+      ['a-b', 'c'], ['a', 'b-c'], ['a-b', 'c-d'],
+    ];
+    const revIds = pairs.map(([c, p]) => revisionDocId(c, p, 1));
+    expect(new Set(revIds).size).toBe(revIds.length);
+    const claimIds = pairs.map(([c, p]) => claimDocId(c, p, hashA));
+    expect(new Set(claimIds).size).toBe(claimIds.length);
+  });
+
+  it('distinguishes revision digit lengths and content hashes', () => {
+    expect(revisionDocId('a', 'b', 1)).not.toBe(revisionDocId('a', 'b', 10));
+    expect(revisionDocId('a', 'b', 10)).not.toBe(revisionDocId('a', 'b', 100));
+    expect(claimDocId('a', 'b', hashA)).not.toBe(claimDocId('a', 'b', hashB));
+  });
+
+  it('encodes maximum-length identifiers under the Firestore ID limit', () => {
+    const company = 'C'.repeat(64);
+    const pkg = 'P'.repeat(64);
+    const revId = revisionDocId(company, pkg, Number.MAX_SAFE_INTEGER);
+    const claimId = claimDocId(company, pkg, hashA);
+    for (const id of [revId, claimId]) {
+      expect(id.includes('/')).toBe(false);
+      expect(id).not.toBe('.');
+      expect(id).not.toBe('..');
+      expect(Buffer.byteLength(id, 'utf8')).toBeLessThanOrEqual(FIRESTORE_MAX_DOCUMENT_ID_BYTES);
+    }
+  });
+
+  it('is deterministic', () => {
+    expect(revisionDocId('liquid-gold', 'water-hauling', 1)).toBe(
+      revisionDocId('liquid-gold', 'water-hauling', 1),
     );
+    expect(claimDocId('liquid-gold', 'water-hauling', hashA)).toBe(
+      claimDocId('liquid-gold', 'water-hauling', hashA),
+    );
+  });
+});
+
+function compiledExportNames(filePath: string): string[] {
+  const src = fs.readFileSync(filePath, 'utf8');
+  const names = new Set<string>();
+  for (const match of src.matchAll(/exports\.([A-Za-z0-9_]+)\s*=/g)) {
+    names.add(match[1]);
+  }
+  for (const match of src.matchAll(/export\s*\{([^}]+)\}/g)) {
+    for (const part of match[1].split(',')) {
+      const name = part.trim().split(/\s+as\s+/).pop();
+      if (name) names.add(name.replace(/[^\w]/g, ''));
+    }
+  }
+  return [...names];
+}
+
+function walkFiles(dir: string, acc: string[] = []): string[] {
+  if (!fs.existsSync(dir)) return acc;
+  for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
+    if (entry.name === 'node_modules' || entry.name === 'lib' || entry.name === '.git') continue;
+    const full = path.join(dir, entry.name);
+    if (entry.isDirectory()) walkFiles(full, acc);
+    else if (/\.(ts|tsx|js|mjs|cjs)$/.test(entry.name)) acc.push(full);
+  }
+  return acc;
+}
+
+describe('root export surface has no packet-revision publisher', () => {
+  const functionsRoot = path.join(__dirname, '..', '..', '..', '..');
+  const srcIndex = path.join(functionsRoot, 'src', 'index.ts');
+  const securityIndex = path.join(functionsRoot, 'src', 'security', 'index.ts');
+  const libIndex = path.join(functionsRoot, 'lib', 'index.js');
+  const libSecurity = path.join(functionsRoot, 'lib', 'security', 'index.js');
+
+  it('does not export publishJobPacketRevision from TypeScript entrypoints', () => {
+    const rootNames = compiledExportNames(srcIndex);
+    const securityNames = compiledExportNames(securityIndex);
+    expect(rootNames).not.toContain('publishJobPacketRevision');
+    expect(securityNames).not.toContain('publishJobPacketRevision');
+    expect(fs.existsSync(path.join(functionsRoot, 'src', 'security', 'jobPacketRevisionPublishCallable.ts'))).toBe(false);
+    expect(fs.readFileSync(srcIndex, 'utf8')).not.toMatch(/\bpublishJobPacketRevision\b/);
+    expect(fs.readFileSync(securityIndex, 'utf8')).not.toMatch(/\bpublishJobPacketRevision\b/);
+  });
+
+  it('does not register publishJobPacketRevision in compiled output', () => {
+    expect(fs.existsSync(libIndex)).toBe(true);
+    expect(fs.existsSync(libSecurity)).toBe(true);
+    const rootJs = fs.readFileSync(libIndex, 'utf8');
+    const securityJs = fs.readFileSync(libSecurity, 'utf8');
+    expect(rootJs).not.toMatch(/\bpublishJobPacketRevision\b/);
+    expect(securityJs).not.toMatch(/\bpublishJobPacketRevision\b/);
+    expect(compiledExportNames(libIndex)).not.toContain('publishJobPacketRevision');
+    expect(compiledExportNames(libSecurity)).not.toContain('publishJobPacketRevision');
+    expect(rootJs).not.toMatch(/onCall\([^)]*publishJobPacketRevision/);
+  });
+
+  it('has no live callable importing the store and no app consumer of the new collections', () => {
+    const storeFile = path.normalize(path.join(__dirname, '..', 'jobPacketRevisionStore.ts'));
+    const testFile = path.normalize(__filename);
+    const functionsSrc = path.join(functionsRoot, 'src');
+    const dashboardSrc = path.join(functionsRoot, '..', 'src');
+    const hits: string[] = [];
+    for (const file of [...walkFiles(functionsSrc), ...walkFiles(dashboardSrc)]) {
+      const norm = path.normalize(file);
+      if (norm === storeFile || norm === testFile) continue;
+      const text = fs.readFileSync(file, 'utf8');
+      if (
+        text.includes('job_packet_revisions')
+        || text.includes('job_packet_content_claims')
+        || text.includes('persistJobPacketRevision')
+        || text.includes('publishJobPacketRevision')
+      ) {
+        hits.push(path.relative(functionsRoot, file));
+      }
+    }
+    expect(hits).toEqual([]);
   });
 });
