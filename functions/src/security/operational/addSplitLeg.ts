@@ -13,6 +13,7 @@ import {
   verifyDispatchPinsAgainstEnvelope,
   type BirthIdentity,
   type DispatchBinding,
+  type WellIdentity,
 } from './dispatchPacketPin';
 
 export const ADD_SPLIT_LEG_CALLABLE = 'addSplitLeg';
@@ -103,6 +104,100 @@ function parentOwnedByCaller(
   return { ok: true };
 }
 
+export type SplitLegBirthIdentity = {
+  parentDispatchId: string;
+  splitGroupId: string;
+  companyId: string;
+  driverId: string;
+  jobTypeId: string;
+  binding: DispatchBinding;
+  well: WellIdentity;
+  disposal: string;
+  destinationType: string;
+  serviceType: string;
+  disposalLat: number | null;
+  disposalLng: number | null;
+};
+
+function optCoord(v: unknown): number | null {
+  return typeof v === 'number' && Number.isFinite(v) ? v : null;
+}
+
+export function readSplitLegBirthIdentity(
+  job: Record<string, unknown> | null,
+): StoreResult<{ identity: SplitLegBirthIdentity; splitSequence: number }> {
+  if (!job) return fail('conflict', 'parentDispatchId');
+  const parentDispatchId = str(job.parentDispatchId);
+  if (!parentDispatchId) return fail('conflict', 'parentDispatchId');
+  const splitGroupId = str(job.splitGroupId);
+  if (!splitGroupId) return fail('conflict', 'splitGroupId');
+  const disposal = str(job.disposal);
+  if (!disposal) return fail('conflict', 'disposal');
+  if (typeof job.splitSequence !== 'number' || !Number.isInteger(job.splitSequence) || job.splitSequence < 1) {
+    return fail('conflict', 'splitSequence');
+  }
+  const companyId = str(job.companyId);
+  const driverId = str(job.driverId);
+  const jobTypeId = str(job.jobType);
+  if (!companyId) return fail('conflict', 'companyId');
+  if (!driverId) return fail('conflict', 'driverId');
+  if (!jobTypeId) return fail('conflict', 'jobType');
+  const well = readCanonicalWell(job);
+  if (!well.ok) return fail('conflict', well.field || 'well');
+  const bound = requireCompleteBinding(job);
+  if (!bound.ok) return fail('conflict', bound.field || 'binding');
+  return {
+    ok: true,
+    splitSequence: job.splitSequence,
+    identity: {
+      parentDispatchId,
+      splitGroupId,
+      companyId,
+      driverId,
+      jobTypeId,
+      binding: bound.binding,
+      well: well.well,
+      disposal,
+      destinationType: str(job.destinationType),
+      serviceType: str(job.serviceType),
+      disposalLat: optCoord(job.disposalLat),
+      disposalLng: optCoord(job.disposalLng),
+    },
+  };
+}
+
+export function evaluateSplitLegCreateIfAbsent(input: {
+  existing: Record<string, unknown> | null;
+  expected: SplitLegBirthIdentity;
+  expectedSequence?: number;
+}): StoreResult<{ result: 'create' | 'already_exists' }> {
+  if (!input.existing) return { ok: true, result: 'create' };
+  const generic: BirthIdentity = {
+    companyId: input.expected.companyId,
+    driverId: input.expected.driverId,
+    jobTypeId: input.expected.jobTypeId,
+    binding: input.expected.binding,
+    well: input.expected.well,
+  };
+  const base = evaluateCreateIfAbsent({ existing: input.existing, expected: generic });
+  if (!base.ok) return base;
+  const read = readSplitLegBirthIdentity(input.existing);
+  if (!read.ok) return read;
+  const got = read.identity;
+  const exp = input.expected;
+  if (got.parentDispatchId !== exp.parentDispatchId) return fail('conflict', 'parentDispatchId');
+  if (got.splitGroupId !== exp.splitGroupId) return fail('conflict', 'splitGroupId');
+  if (got.disposal !== exp.disposal) return fail('conflict', 'disposal');
+  if (got.destinationType !== exp.destinationType) return fail('conflict', 'destinationType');
+  if (got.serviceType !== exp.serviceType) return fail('conflict', 'serviceType');
+  if (got.disposalLat !== exp.disposalLat) return fail('conflict', 'disposalLat');
+  if (got.disposalLng !== exp.disposalLng) return fail('conflict', 'disposalLng');
+  if (input.expectedSequence !== undefined && read.splitSequence !== input.expectedSequence) {
+    return fail('conflict', 'splitSequence');
+  }
+  return { ok: true, result: 'already_exists' };
+}
+
 function materializeChild(input: {
   caller: { driverId: string; companyId: string };
   parent: Record<string, unknown>;
@@ -113,7 +208,6 @@ function materializeChild(input: {
   splitGroupId: string;
   splitSequence: number;
   splitTotal: number;
-  rootParentId: string;
   fields: Record<string, unknown>;
 }): Record<string, unknown> {
   return {
@@ -133,7 +227,7 @@ function materializeChild(input: {
     splitGroupId: input.splitGroupId,
     splitSequence: input.splitSequence,
     splitTotal: input.splitTotal,
-    parentDispatchId: input.rootParentId,
+    parentDispatchId: input.parentDispatchId,
     splitOriginatedAt: 'field',
     splitOriginatedBy: `driver:${input.caller.driverId}`,
     status: 'pending',
@@ -220,22 +314,30 @@ export async function runAddSplitLeg(input: {
   const splitGroupId = str(parent.splitGroupId);
   if (!splitGroupId) return fail('parent_not_split_chain', 'splitGroupId');
 
-  const identity: BirthIdentity = {
+  const identity: SplitLegBirthIdentity = {
+    parentDispatchId: parentId.dispatchId,
+    splitGroupId,
     companyId: input.caller.companyId,
     driverId: input.caller.driverId,
     jobTypeId: jobType.jobTypeId,
     binding: stampDispatchBinding(loaded.envelope),
     well: parentWell.well,
+    disposal: spec.disposal,
+    destinationType: str(spec.fields.destinationType),
+    serviceType: str(spec.fields.serviceType),
+    disposalLat: optCoord(spec.fields.disposalLat),
+    disposalLng: optCoord(spec.fields.disposalLng),
   };
-  const replay = evaluateCreateIfAbsent({ existing: childExisting, expected: identity });
+  const replay = evaluateSplitLegCreateIfAbsent({ existing: childExisting, expected: identity });
   if (!replay.ok) return replay;
   if (replay.result === 'already_exists') {
+    const persisted = readSplitLegBirthIdentity(childExisting);
     return {
       ok: true,
       result: 'already_exists',
       dispatchId: childId.dispatchId,
       splitGroupId,
-      splitSequence: typeof childExisting?.splitSequence === 'number' ? childExisting.splitSequence : 0,
+      splitSequence: persisted.ok ? persisted.splitSequence : 0,
       splitTotal: typeof childExisting?.splitTotal === 'number' ? childExisting.splitTotal : 0,
       revisionDocId: loaded.revisionDocId,
     };
@@ -248,11 +350,9 @@ export async function runAddSplitLeg(input: {
     : [...siblings, { id: parentId.dispatchId, data: parent }];
   if (!sibs.length) return fail('split_siblings_missing', 'splitGroupId');
   let maxSequence = 0;
-  let leg1Id: string | null = null;
   for (const sib of sibs) {
     const seq = typeof sib.data.splitSequence === 'number' ? sib.data.splitSequence : 0;
     if (seq > maxSequence) maxSequence = seq;
-    if (seq === 1) leg1Id = sib.id;
   }
   const splitSequence = maxSequence + 1;
   const splitTotal = sibs.length + 1;
@@ -266,7 +366,6 @@ export async function runAddSplitLeg(input: {
     splitGroupId,
     splitSequence,
     splitTotal,
-    rootParentId: leg1Id || parentId.dispatchId,
     fields: spec.fields,
   });
   input.applyCreate(childId.dispatchId, fields);

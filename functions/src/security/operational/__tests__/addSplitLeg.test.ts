@@ -9,6 +9,7 @@ import {
 import {
   CHILD_DISPATCH_ID_REQUIRED,
   FUTURE_WBT_SPLIT_LEG_WIRING,
+  evaluateSplitLegCreateIfAbsent,
   matchOptionalCallerDriverHash,
   runAddSplitLeg,
 } from '../addSplitLeg';
@@ -113,6 +114,7 @@ function io(opts: {
 }) {
   const creates: Array<{ id: string; data: Record<string, unknown> }> = [];
   const updates: Array<{ id: string; total: number }> = [];
+  const invoiceUpdates: Array<{ id: string; total: number }> = [];
   const requested: string[] = [];
   const parentId = opts.parentId || 'parent-1';
   const childId = opts.childId || 'child-1';
@@ -122,6 +124,7 @@ function io(opts: {
   return {
     creates,
     updates,
+    invoiceUpdates,
     requested,
     run: (args: Partial<Parameters<typeof runAddSplitLeg>[0]> = {}) => runAddSplitLeg({
       caller: { driverId: DRIVER, companyId: COMPANY },
@@ -145,6 +148,7 @@ function io(opts: {
         dispatches.set(id, data);
       },
       applySiblingTotal: (id, total) => { updates.push({ id, total }); },
+      applyInvoiceTotal: (id, total) => { invoiceUpdates.push({ id, total }); },
       ...args,
     }),
   };
@@ -356,6 +360,10 @@ describe('F3 addSplitLeg governance', () => {
     expect(child.ndicWellName).toBe('PYTHON 1');
     expect(child.jobType).toBe('pw');
     expect(child.status).toBe('pending');
+    expect(child.parentDispatchId).toBe('parent-1');
+    expect(child.splitGroupId).toBe('sg-1');
+    expect(child.disposal).toBe('SWD-1');
+    expect(child.splitSequence).toBe(2);
   });
 
   it('child preserves canonical tenant/driver/well identity', async () => {
@@ -406,8 +414,11 @@ describe('F3 addSplitLeg governance', () => {
       wellName: 'Python',
       ndicWellName: 'PYTHON 1',
       status: 'pending',
+      splitGroupId: 'sg-1',
       splitSequence: 2,
       splitTotal: 2,
+      parentDispatchId: 'parent-1',
+      disposal: 'SWD-1',
       ...binding,
     };
     const harness = io({ parent, child, store });
@@ -416,6 +427,7 @@ describe('F3 addSplitLeg governance', () => {
     if (!r.ok) return;
     expect(r.result).toBe('already_exists');
     expect(harness.creates).toEqual([]);
+    expect(harness.updates).toEqual([]);
     expect(child.status).toBe('pending');
     expect(child.splitSequence).toBe(2);
   });
@@ -445,5 +457,305 @@ describe('F3 addSplitLeg governance', () => {
     expect(split).toMatch(/enforceAppCheck:\s*false/);
     expect(accept).toMatch(/enforceAppCheck:\s*false/);
     expect(create).toMatch(/enforceAppCheck:\s*false/);
+  });
+});
+
+function completeChild(
+  rev: { packageId: string; revision: number; contentHash: string; policyHash: string },
+  extra: Record<string, unknown> = {},
+) {
+  return {
+    companyId: COMPANY,
+    driverId: DRIVER,
+    jobType: 'pw',
+    wellName: 'Python',
+    ndicWellName: 'PYTHON 1',
+    status: 'pending',
+    assignedAt: 't-assigned',
+    createdAt: 't-created',
+    splitGroupId: 'sg-1',
+    splitSequence: 2,
+    splitTotal: 2,
+    parentDispatchId: 'parent-1',
+    disposal: 'SWD-1',
+    packageId: rev.packageId,
+    packetRevision: rev.revision,
+    contentHash: rev.contentHash,
+    policyHash: rev.policyHash,
+    ...extra,
+  };
+}
+
+function expectedFrom(
+  rev: { packageId: string; revision: number; contentHash: string; policyHash: string },
+  extra: Partial<{
+    parentDispatchId: string;
+    splitGroupId: string;
+    disposal: string;
+    destinationType: string;
+    serviceType: string;
+    disposalLat: number | null;
+    disposalLng: number | null;
+    jobTypeId: string;
+    wellName: string;
+    ndicWellName: string;
+  }> = {},
+) {
+  return {
+    parentDispatchId: extra.parentDispatchId || 'parent-1',
+    splitGroupId: extra.splitGroupId || 'sg-1',
+    companyId: COMPANY,
+    driverId: DRIVER,
+    jobTypeId: extra.jobTypeId || 'pw',
+    binding: {
+      packageId: rev.packageId,
+      packetRevision: rev.revision,
+      contentHash: rev.contentHash,
+      policyHash: rev.policyHash,
+    },
+    well: {
+      wellName: extra.wellName || 'Python',
+      ndicWellName: extra.ndicWellName || 'PYTHON 1',
+    },
+    disposal: extra.disposal || 'SWD-1',
+    destinationType: extra.destinationType || '',
+    serviceType: extra.serviceType || '',
+    disposalLat: extra.disposalLat === undefined ? null : extra.disposalLat,
+    disposalLng: extra.disposalLng === undefined ? null : extra.disposalLng,
+  };
+}
+
+describe('F4 split-leg replay identity', () => {
+  it('exact retry returns already_exists and performs no writes or total updates', async () => {
+    const store = new MemoryStore();
+    const rev = await publishRevision(store);
+    const child = completeChild(rev);
+    const harness = io({ parent: parentJob(rev), child, store });
+    const r = await harness.run();
+    expect(r.ok).toBe(true);
+    if (!r.ok) return;
+    expect(r.result).toBe('already_exists');
+    expect(r.splitSequence).toBe(2);
+    expect(harness.creates).toEqual([]);
+    expect(harness.updates).toEqual([]);
+    expect(harness.invoiceUpdates).toEqual([]);
+    expect(child.status).toBe('pending');
+    expect(child.assignedAt).toBe('t-assigned');
+    expect(child.createdAt).toBe('t-created');
+    expect(child.splitTotal).toBe(2);
+  });
+
+  it('Claude probe: same child ID + different valid parent + same company/driver/binding/well/job type → conflict', async () => {
+    const store = new MemoryStore();
+    const rev = await publishRevision(store);
+    const parentA = parentJob(rev, { splitGroupId: 'sg-A' });
+    const parentB = parentJob(rev, { splitGroupId: 'sg-B' });
+    const child = completeChild(rev, { parentDispatchId: 'parent-A', splitGroupId: 'sg-A' });
+    const creates: unknown[] = [];
+    const siblingUpdates: unknown[] = [];
+    const invoiceUpdates: unknown[] = [];
+    const r = await runAddSplitLeg({
+      caller: { driverId: DRIVER, companyId: COMPANY },
+      parentDispatchId: 'parent-B',
+      dispatchId: 'child-1',
+      legSpec: { disposal: 'SWD-1', jobType: 'pw' },
+      authorizedWells: WELLS,
+      getDispatch: async (id) => {
+        if (id === 'parent-B') return parentB;
+        if (id === 'parent-A') return parentA;
+        if (id === 'child-1') return child;
+        return null;
+      },
+      getRevision: async (id) => {
+        const data = store.revisions.get(id);
+        return data ? { exists: true, data: { ...data } } : { exists: false };
+      },
+      listSiblings: async () => [{ id: 'parent-B', data: parentB }],
+      listInvoices: async () => [{ id: 'inv-1' }],
+      applyCreate: () => { creates.push(1); },
+      applySiblingTotal: () => { siblingUpdates.push(1); },
+      applyInvoiceTotal: () => { invoiceUpdates.push(1); },
+    });
+    expect(r.ok).toBe(false);
+    if (r.ok) return;
+    expect(r.reason).toBe('conflict');
+    expect(r.field).toBe('parentDispatchId');
+    expect(creates).toEqual([]);
+    expect(siblingUpdates).toEqual([]);
+    expect(invoiceUpdates).toEqual([]);
+  });
+
+  it('different split group with same generic identity conflicts', async () => {
+    const store = new MemoryStore();
+    const rev = await publishRevision(store);
+    const child = completeChild(rev, { splitGroupId: 'sg-other', parentDispatchId: 'parent-1' });
+    const harness = io({ parent: parentJob(rev), child, store });
+    const r = await harness.run();
+    expect(r.ok).toBe(false);
+    if (r.ok) return;
+    expect(r.reason).toBe('conflict');
+    expect(r.field).toBe('splitGroupId');
+    expect(harness.creates).toEqual([]);
+    expect(harness.updates).toEqual([]);
+  });
+
+  it('different disposal/destination conflicts', async () => {
+    const store = new MemoryStore();
+    const rev = await publishRevision(store);
+    const child = completeChild(rev, { disposal: 'SWD-OTHER' });
+    const harness = io({ parent: parentJob(rev), child, store });
+    const r = await harness.run();
+    expect(r.ok).toBe(false);
+    if (r.ok) return;
+    expect(r.reason).toBe('conflict');
+    expect(r.field).toBe('disposal');
+    expect(harness.creates).toEqual([]);
+  });
+
+  it('different immutable sequence/ordinal conflicts', async () => {
+    const store = new MemoryStore();
+    const rev = await publishRevision(store);
+    const existing = completeChild(rev, { splitSequence: 3 });
+    const r = evaluateSplitLegCreateIfAbsent({
+      existing,
+      expected: expectedFrom(rev),
+      expectedSequence: 2,
+    });
+    expect(r.ok).toBe(false);
+    if (r.ok) return;
+    expect(r.reason).toBe('conflict');
+    expect(r.field).toBe('splitSequence');
+  });
+
+  it('missing persisted parentDispatchId conflicts', async () => {
+    const store = new MemoryStore();
+    const rev = await publishRevision(store);
+    const child = completeChild(rev);
+    Reflect.deleteProperty(child, 'parentDispatchId');
+    const harness = io({ parent: parentJob(rev), child, store });
+    const r = await harness.run();
+    expect(r.ok).toBe(false);
+    if (r.ok) return;
+    expect(r.reason).toBe('conflict');
+    expect(r.field).toBe('parentDispatchId');
+    expect(harness.creates).toEqual([]);
+  });
+
+  it('missing persisted splitGroupId conflicts', async () => {
+    const store = new MemoryStore();
+    const rev = await publishRevision(store);
+    const child = completeChild(rev);
+    Reflect.deleteProperty(child, 'splitGroupId');
+    const harness = io({ parent: parentJob(rev), child, store });
+    const r = await harness.run();
+    expect(r.ok).toBe(false);
+    if (r.ok) return;
+    expect(r.reason).toBe('conflict');
+    expect(r.field).toBe('splitGroupId');
+    expect(harness.creates).toEqual([]);
+  });
+
+  it('partial split-leg identity conflicts', async () => {
+    const store = new MemoryStore();
+    const rev = await publishRevision(store);
+    const child = completeChild(rev);
+    Reflect.deleteProperty(child, 'disposal');
+    const harness = io({ parent: parentJob(rev), child, store });
+    const r = await harness.run();
+    expect(r.ok).toBe(false);
+    if (r.ok) return;
+    expect(r.reason).toBe('conflict');
+    expect(harness.creates).toEqual([]);
+  });
+
+  it('different generic binding/well/job type remains conflict', async () => {
+    const store = new MemoryStore();
+    const rev = await publishRevision(store);
+    const well = await runAddSplitLeg({
+      caller: { driverId: DRIVER, companyId: COMPANY },
+      parentDispatchId: 'parent-1',
+      dispatchId: 'child-1',
+      legSpec: { disposal: 'SWD-1', jobType: 'pw' },
+      authorizedWells: WELLS,
+      getDispatch: async (id) => {
+        if (id === 'parent-1') return parentJob(rev);
+        if (id === 'child-1') return completeChild(rev, { wellName: 'Gabriel 1', ndicWellName: 'GABRIEL 1' });
+        return null;
+      },
+      getRevision: async (id) => {
+        const data = store.revisions.get(id);
+        return data ? { exists: true, data: { ...data } } : { exists: false };
+      },
+      listSiblings: async () => [],
+      applyCreate: () => { throw new Error('must not create'); },
+    });
+    expect(well.ok).toBe(false);
+    if (!well.ok) expect(well.reason).toBe('conflict');
+    const jobType = evaluateSplitLegCreateIfAbsent({
+      existing: completeChild(rev, { jobType: 'service' }),
+      expected: expectedFrom(rev),
+    });
+    expect(jobType.ok).toBe(false);
+    const binding = evaluateSplitLegCreateIfAbsent({
+      existing: completeChild(rev, { contentHash: 'd'.repeat(64) }),
+      expected: expectedFrom(rev),
+    });
+    expect(binding.ok).toBe(false);
+  });
+
+  it('legitimate retry after another sibling was added keeps original sequence and does not update totals', async () => {
+    const store = new MemoryStore();
+    const rev = await publishRevision(store);
+    const parent = parentJob(rev);
+    const laterSibling = parentJob(rev, { splitSequence: 3, splitTotal: 3, parentDispatchId: 'parent-1' });
+    const child = completeChild(rev, { splitSequence: 2, splitTotal: 2 });
+    const harness = io({ parent, child, store });
+    const r = await harness.run({
+      listSiblings: async () => [
+        { id: 'parent-1', data: parent },
+        { id: 'later-3', data: laterSibling },
+      ],
+      listInvoices: async () => [{ id: 'inv-1' }],
+    });
+    expect(r.ok).toBe(true);
+    if (!r.ok) return;
+    expect(r.result).toBe('already_exists');
+    expect(r.splitSequence).toBe(2);
+    expect(child.splitSequence).toBe(2);
+    expect(child.splitTotal).toBe(2);
+    expect(child.status).toBe('pending');
+    expect(harness.creates).toEqual([]);
+    expect(harness.updates).toEqual([]);
+    expect(harness.invoiceUpdates).toEqual([]);
+  });
+
+  it('new child creation stamps authoritative parent, split family, disposal, and four-field pin', async () => {
+    const store = new MemoryStore();
+    const rev = await publishRevision(store);
+    const harness = io({ parent: parentJob(rev), store });
+    const r = await harness.run({
+      legSpec: { disposal: 'SWD-9', jobType: 'pw', destinationType: 'SWD', serviceType: 'water' },
+    });
+    expect(r.ok).toBe(true);
+    if (!r.ok) return;
+    expect(r.result).toBe('created');
+    expect(harness.creates).toHaveLength(1);
+    const child = harness.creates[0].data;
+    expect(child.parentDispatchId).toBe('parent-1');
+    expect(child.splitGroupId).toBe('sg-1');
+    expect(child.disposal).toBe('SWD-9');
+    expect(child.destinationType).toBe('SWD');
+    expect(child.serviceType).toBe('water');
+    expect(typeof child.splitSequence).toBe('number');
+    expect(child.splitSequence).toBeGreaterThanOrEqual(1);
+    expect(child.packageId).toBe(rev.packageId);
+    expect(child.packetRevision).toBe(rev.revision);
+    expect(child.contentHash).toBe(rev.contentHash);
+    expect(child.policyHash).toBe(rev.policyHash);
+    expect(child.companyId).toBe(COMPANY);
+    expect(child.driverId).toBe(DRIVER);
+    expect(child.wellName).toBe('Python');
+    expect(child.ndicWellName).toBe('PYTHON 1');
+    expect(child.jobType).toBe('pw');
   });
 });
