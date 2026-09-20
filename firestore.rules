@@ -572,6 +572,18 @@ service cloud.firestore {
       allow create, update, delete: if request.auth != null;
     }
 
+    // Dormant Trusted Binding packet revision store — Admin SDK only.
+    // No client reads or writes. No live dispatch path uses these collections.
+    match /job_packet_revisions/{revisionId} {
+      allow read, write: if false;
+    }
+    match /job_packet_content_claims/{claimId} {
+      allow read, write: if false;
+    }
+    match /job_packet_package_index/{packageId} {
+      allow read, write: if false;
+    }
+
     // Everything else — deny (Cloud Functions use Admin SDK which bypasses rules)
     match /{document=**} {
       allow read, write: if false;
