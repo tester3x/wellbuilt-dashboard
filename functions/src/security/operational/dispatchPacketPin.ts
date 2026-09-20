@@ -1,0 +1,251 @@
+/**
+ * Exact packet-revision pinning for governed dispatch birth.
+ * Selectors are not authority. Binding fields are an inseparable group.
+ */
+import {
+  PACKAGE_ID_RE,
+  canonicalJson,
+  fail,
+  snapshotPlain,
+  type ImmutableRevisionEnvelope,
+  type JobTypeEntry,
+  type StoreResult,
+} from './jobPacketRevisionStore';
+
+export const PACKET_REF_KEYS = Object.freeze(['packageId', 'revision'] as const);
+
+export const DISPATCH_BINDING_KEYS = Object.freeze([
+  'packageId',
+  'packetRevision',
+  'contentHash',
+  'policyHash',
+] as const);
+
+export const CALLER_REJECT_AUTHORITY_KEYS = Object.freeze([
+  'companyId',
+  'contentHash',
+  'policyHash',
+  'packetRevision',
+  'implementedEffects',
+  'schemaVersion',
+  'hashSchemaVersion',
+  'hashAlgorithm',
+  'publishedByUid',
+  'status',
+] as const);
+
+export type PacketRef = { packageId: string; revision: number };
+
+export type DispatchBinding = {
+  packageId: string;
+  packetRevision: number;
+  contentHash: string;
+  policyHash: string;
+};
+
+export function parsePacketRef(raw: unknown): StoreResult<{ packetRef: PacketRef }> {
+  if (raw === undefined || raw === null) return fail('packet_ref_required', 'packetRef');
+  const snapped = snapshotPlain(raw, 'packetRef');
+  if (!snapped.ok) return snapped;
+  if (snapped.value === null || typeof snapped.value !== 'object' || Array.isArray(snapped.value)) {
+    return fail('packet_ref_must_be_object', 'packetRef');
+  }
+  const obj = snapped.value as Record<string, unknown>;
+  for (const key of Object.keys(obj)) {
+    if (!(PACKET_REF_KEYS as readonly string[]).includes(key)) return fail('unknown_field', `packetRef.${key}`);
+  }
+  if (typeof obj.packageId !== 'string' || !PACKAGE_ID_RE.test(obj.packageId)) {
+    return fail('malformed_id', 'packetRef.packageId');
+  }
+  if (obj.revision === 'latest') return fail('latest_rejected', 'packetRef.revision');
+  if (typeof obj.revision !== 'number' || !Number.isInteger(obj.revision) || obj.revision < 1 || obj.revision > Number.MAX_SAFE_INTEGER) {
+    return fail('invalid_revision', 'packetRef.revision');
+  }
+  return { ok: true, packetRef: { packageId: obj.packageId, revision: obj.revision } };
+}
+
+export function rejectCallerAuthorityFields(record: Record<string, unknown>): StoreResult<{ ok: true }> {
+  const snapped = snapshotPlain(record, 'record');
+  if (!snapped.ok) return snapped;
+  if (snapped.value === null || typeof snapped.value !== 'object' || Array.isArray(snapped.value)) {
+    return fail('record_must_be_object', 'record');
+  }
+  const obj = snapped.value as Record<string, unknown>;
+  for (const key of CALLER_REJECT_AUTHORITY_KEYS) {
+    if (Object.prototype.hasOwnProperty.call(obj, key) && obj[key] !== undefined) {
+      return fail('caller_authority_field', key);
+    }
+  }
+  if (Object.prototype.hasOwnProperty.call(obj, 'packageId') && obj.packageId !== undefined) {
+    return fail('caller_package_id_not_authority', 'packageId');
+  }
+  if (Object.prototype.hasOwnProperty.call(obj, 'packetRef')) {
+    return fail('packet_ref_not_in_record', 'packetRef');
+  }
+  return { ok: true };
+}
+
+export function stampDispatchBinding(envelope: ImmutableRevisionEnvelope): DispatchBinding {
+  return {
+    packageId: envelope.packageId,
+    packetRevision: envelope.revision,
+    contentHash: envelope.contentHash,
+    policyHash: envelope.policyHash,
+  };
+}
+
+export function readDispatchBinding(job: Record<string, unknown> | null): {
+  complete: boolean;
+  partial: boolean;
+  binding: Partial<DispatchBinding>;
+} {
+  if (!job) return { complete: false, partial: false, binding: {} };
+  const binding: Partial<DispatchBinding> = {};
+  if (typeof job.packageId === 'string' && job.packageId.trim()) binding.packageId = job.packageId.trim();
+  if (typeof job.packetRevision === 'number' && Number.isInteger(job.packetRevision)) {
+    binding.packetRevision = job.packetRevision;
+  }
+  if (typeof job.contentHash === 'string' && job.contentHash.trim()) binding.contentHash = job.contentHash.trim();
+  if (typeof job.policyHash === 'string' && job.policyHash.trim()) binding.policyHash = job.policyHash.trim();
+  const present = DISPATCH_BINDING_KEYS.filter((k) => binding[k] !== undefined).length;
+  return { complete: present === DISPATCH_BINDING_KEYS.length, partial: present > 0 && present < DISPATCH_BINDING_KEYS.length, binding };
+}
+
+export function dispatchBindingsEqual(a: DispatchBinding, b: DispatchBinding): boolean {
+  const ca = canonicalJson(a);
+  const cb = canonicalJson(b);
+  return ca.ok && cb.ok && ca.json === cb.json;
+}
+
+export function resolveCanonicalJobType(
+  requested: unknown,
+  jobTypes: readonly JobTypeEntry[],
+): StoreResult<{ jobTypeId: string }> {
+  if (typeof requested !== 'string' || !requested.trim()) return fail('job_type_required', 'jobType');
+  const id = requested.trim();
+  const matches = jobTypes.filter((jt) => jt.jobTypeId === id);
+  if (matches.length === 1) return { ok: true, jobTypeId: matches[0].jobTypeId };
+  if (matches.length > 1) return fail('ambiguous_job_type', 'jobType');
+  const labelHits = jobTypes.filter((jt) => jt.label === id);
+  if (labelHits.length) return fail('job_type_label_only', 'jobType');
+  return fail('unknown_job_type', 'jobType');
+}
+
+export function evaluateWellAuthorized(
+  wellName: string,
+  ndicWellName: string,
+  authorizedNames: readonly string[],
+): StoreResult<{ wellName: string }> {
+  const well = wellName.trim();
+  const ndic = ndicWellName.trim();
+  if (!well && !ndic) return fail('well_required', 'wellName');
+  if (!authorizedNames.length) return fail('well_scope_unavailable', 'wellName');
+  const wanted = [well, ndic].filter(Boolean).map((n) => n.toLowerCase());
+  const scope = authorizedNames.map((n) => n.trim().toLowerCase()).filter(Boolean);
+  const ok = wanted.some((n) => scope.includes(n));
+  if (!ok) return fail('well_unauthorized', 'wellName');
+  return { ok: true, wellName: well || ndic };
+}
+
+export type BirthIdentity = {
+  companyId: string;
+  driverId: string;
+  jobTypeId: string;
+  binding: DispatchBinding;
+};
+
+export function evaluateCreateIfAbsent(input: {
+  existing: Record<string, unknown> | null;
+  expected: BirthIdentity;
+}): StoreResult<{ result: 'create' | 'already_exists' }> {
+  if (!input.existing) return { ok: true, result: 'create' };
+  const existing = input.existing;
+  const bind = readDispatchBinding(existing);
+  if (!bind.complete || bind.partial) return fail('conflict', 'binding');
+  const existingBind = bind.binding as DispatchBinding;
+  if (!dispatchBindingsEqual(existingBind, input.expected.binding)) return fail('conflict', 'binding');
+  const company = typeof existing.companyId === 'string' ? existing.companyId.trim() : '';
+  const driver = typeof existing.driverId === 'string' ? existing.driverId.trim() : '';
+  const jobType = typeof existing.jobType === 'string' ? existing.jobType.trim() : '';
+  if (company !== input.expected.companyId) return fail('conflict', 'companyId');
+  if (driver !== input.expected.driverId) return fail('conflict', 'driverId');
+  if (jobType !== input.expected.jobTypeId) return fail('conflict', 'jobType');
+  return { ok: true, result: 'already_exists' };
+}
+
+export function rejectBindingMutation(
+  existing: Record<string, unknown>,
+  record: Record<string, unknown>,
+): StoreResult<{ ok: true }> {
+  const current = readDispatchBinding(existing);
+  if (current.partial) return fail('partial_authority_group', 'binding');
+  for (const key of DISPATCH_BINDING_KEYS) {
+    if (Object.prototype.hasOwnProperty.call(record, key) && record[key] !== undefined) {
+      return fail('binding_immutable', key);
+    }
+  }
+  if (current.complete) {
+    for (const key of DISPATCH_BINDING_KEYS) {
+      if (existing[key] === undefined || existing[key] === null) return fail('partial_authority_group', key);
+    }
+  }
+  return { ok: true };
+}
+
+export function requireCompleteBinding(existing: Record<string, unknown> | null): StoreResult<{ binding: DispatchBinding }> {
+  const read = readDispatchBinding(existing);
+  if (read.partial) return fail('partial_authority_group', 'binding');
+  if (!read.complete) return fail('unbound_dispatch', 'binding');
+  return { ok: true, binding: read.binding as DispatchBinding };
+}
+
+export const DRIVER_DISPATCH_UPDATE_ALLOWLIST = Object.freeze([
+  'status',
+  'notes',
+  'loadsCompleted',
+  'invoiceDocId',
+  'invoiceNumber',
+] as const);
+
+const DRIVER_UPDATE_TRANSITIONS: Record<string, readonly string[]> = {
+  accepted: ['in_progress', 'paused', 'completed'],
+  in_progress: ['paused', 'completed'],
+  paused: ['in_progress', 'completed'],
+};
+
+export function evaluateExistingDispatchDriverUpdate(input: {
+  existing: Record<string, unknown> | null;
+  caller: { driverId: string; companyId: string };
+  patch: Record<string, unknown>;
+}): StoreResult<{ ok: true }> {
+  if (!input.existing) return fail('cannot_create', 'dispatchId');
+  const bound = requireCompleteBinding(input.existing);
+  if (!bound.ok) return bound;
+  const company = typeof input.existing.companyId === 'string' ? input.existing.companyId.trim() : '';
+  const driver = typeof input.existing.driverId === 'string' ? input.existing.driverId.trim() : '';
+  if (company !== input.caller.companyId) return fail('wrong_company');
+  if (driver !== input.caller.driverId) return fail('other_driver');
+  const bindGate = rejectBindingMutation(input.existing, input.patch);
+  if (!bindGate.ok) return bindGate;
+  for (const key of Object.keys(input.patch)) {
+    if (input.patch[key] === undefined) continue;
+    if (!(DRIVER_DISPATCH_UPDATE_ALLOWLIST as readonly string[]).includes(key)) {
+      return fail('unexpected_field', key);
+    }
+  }
+  const prev = typeof input.existing.status === 'string' ? input.existing.status.trim().toLowerCase() : '';
+  if (['completed', 'cancelled', 'canceled', 'void'].includes(prev)) return fail('terminal_state', prev);
+  if (typeof input.patch.status === 'string') {
+    const next = input.patch.status.trim().toLowerCase();
+    const allowed = DRIVER_UPDATE_TRANSITIONS[prev] || [];
+    if (next !== prev && !allowed.includes(next)) return fail('invalid_transition', `${prev}->${next}`);
+  }
+  return { ok: true };
+}
+
+export function parseDispatchId(raw: unknown): StoreResult<{ dispatchId: string }> {
+  if (typeof raw !== 'string' || !raw.trim()) return fail('dispatch_id_required', 'dispatchId');
+  const dispatchId = raw.trim();
+  if (dispatchId.length > 128 || dispatchId.includes('/')) return fail('malformed_dispatch_id', 'dispatchId');
+  return { ok: true, dispatchId };
+}

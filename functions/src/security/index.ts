@@ -40,6 +40,8 @@ export {
 } from './adminDashboardCatalog';
 export { dismissDispatch } from './dismissDispatchCallable';
 export { staffWriteDispatch } from './staffWriteDispatchCallable';
+export { createDriverDispatchIfAbsent } from './createDriverDispatchCallable';
+export { acceptDriverDispatch } from './acceptDriverDispatchCallable';
 export { staffWriteDriverAssignment } from './staffWriteDriverAssignmentCallable';
 export { staffWriteWellConfig } from './staffWriteWellConfigCallable';
 export { staffConvertApprovedDriverSecureLogin } from './staffConvertApprovedDriverSecureLogin';

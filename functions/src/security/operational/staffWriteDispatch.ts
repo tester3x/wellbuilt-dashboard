@@ -51,7 +51,7 @@ export const DISPATCH_CREATE_ALLOWLIST = [
 ] as const;
 
 export const DISPATCH_UPDATE_ALLOWLIST = [
-  ...DISPATCH_CREATE_ALLOWLIST,
+  ...DISPATCH_CREATE_ALLOWLIST.filter((k) => k !== 'packageId'),
   'totalBBL',
   'invoiceNumber',
   'reassignedTo',
@@ -218,13 +218,17 @@ export function evaluateStaffWriteDispatch(input: {
     if (unknown.length) return { ok: false, reason: 'unexpected_field', field: unknown[0] };
     const wellName = asString(record.wellName) || asString(record.ndicWellName);
     if (!wellName) return { ok: false, reason: 'well_required' };
-    let companyId = asString(record.companyId);
+    const requestedCompany = asString(record.companyId);
+    let companyId = '';
     if (input.isPlatformAdmin) {
-      companyId = companyId || LEGACY_WELL_POOL_COMPANY_ID;
+      companyId = LEGACY_WELL_POOL_COMPANY_ID;
+      if (requestedCompany && requestedCompany !== companyId) {
+        return { ok: false, reason: 'caller_company_not_authority', field: 'companyId' };
+      }
     } else {
       const caller = (input.callerCompanyId || '').trim();
       if (!caller) return { ok: false, reason: 'unscoped_caller' };
-      if (companyId && companyId !== caller) return { ok: false, reason: 'cross_company' };
+      if (requestedCompany && requestedCompany !== caller) return { ok: false, reason: 'cross_company' };
       companyId = caller;
     }
     const status = asString(record.status) || 'pending';
@@ -328,7 +332,6 @@ export function resolveServerAssignmentIdentity(input: {
   | { ok: false; reason: string; field?: string } {
   const clientId = asString(input.clientDriverId);
   const clientHash = asString(input.clientDriverHash);
-  const clientName = asString(input.clientDriverName);
   const canonical = isCanonicalDriverId(clientId)
     ? clientId
     : isCanonicalDriverId(clientHash)
@@ -336,32 +339,31 @@ export function resolveServerAssignmentIdentity(input: {
       : '';
 
   if (!canonical) {
-    // Legacy driver with no canonical UUID — compatibility passthrough.
-    const fields: { driverHash?: string; driverName?: string } = {};
-    if (clientHash) fields.driverHash = clientHash;
-    if (clientName) fields.driverName = clientName;
-    return { ok: true, fields };
+    if (clientId || clientHash) return { ok: false, reason: 'driver_not_canonical' };
+    return { ok: true, fields: {} };
   }
 
   const profile = input.profile;
-  if (profile && profile.exists) {
-    const profileCompany = asString(profile.companyId);
-    const dispatchCompany = asString(input.dispatchCompanyId);
-    const legacyPool = asString(input.legacyWellPoolCompanyId);
-    if (
-      profileCompany &&
-      dispatchCompany &&
-      dispatchCompany !== legacyPool &&
-      profileCompany !== dispatchCompany
-    ) {
-      return { ok: false, reason: 'driver_company_mismatch', field: profileCompany };
-    }
-    const realName = asString(profile.legalName) || asString(profile.displayName) || clientName;
-    return { ok: true, fields: { driverId: canonical, driverHash: canonical, driverName: realName } };
+  if (!profile || !profile.exists) {
+    return { ok: false, reason: 'driver_not_found' };
   }
-
-  // Canonical id but no resolvable profile — stamp canonical ids, keep client name (compat).
-  return { ok: true, fields: { driverId: canonical, driverHash: canonical, driverName: clientName } };
+  if (profile.active === false) {
+    return { ok: false, reason: 'driver_inactive' };
+  }
+  const profileCompany = asString(profile.companyId);
+  const dispatchCompany = asString(input.dispatchCompanyId);
+  const legacyPool = asString(input.legacyWellPoolCompanyId);
+  if (
+    profileCompany &&
+    dispatchCompany &&
+    dispatchCompany !== legacyPool &&
+    profileCompany !== dispatchCompany
+  ) {
+    return { ok: false, reason: 'driver_company_mismatch', field: profileCompany };
+  }
+  const realName = asString(profile.legalName) || asString(profile.displayName);
+  if (!realName) return { ok: false, reason: 'driver_name_unresolved' };
+  return { ok: true, fields: { driverId: canonical, driverHash: canonical, driverName: realName } };
 }
 
 export function materializeStaffCreate(
@@ -380,6 +382,11 @@ export function materializeStaffCreate(
   });
   if (!decided.ok) return decided;
   const fields = pickDispatchFields(body, DISPATCH_CREATE_ALLOWLIST);
+  delete fields.packageId;
+  delete fields.packetRevision;
+  delete fields.contentHash;
+  delete fields.policyHash;
+  delete fields.companyId;
   fields.companyId = decided.companyId;
   fields.status = decided.status || 'pending';
   fields.assignedAt = { _serverTimestamp: true };

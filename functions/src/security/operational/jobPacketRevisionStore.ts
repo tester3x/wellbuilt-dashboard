@@ -786,3 +786,95 @@ export async function persistJobPacketRevision(
   tx.createClaim(claimId, JSON.parse(JSON.stringify(claim)) as ContentClaim);
   return { ok: true, publication: 'created', revision: persisted };
 }
+
+export const PERSISTED_REVISION_KEYS = Object.freeze([
+  'schemaVersion',
+  'hashSchemaVersion',
+  'companyId',
+  'packageId',
+  'revision',
+  'displayVersion',
+  'status',
+  'hashAlgorithm',
+  'contentHash',
+  'industryId',
+  'segmentId',
+  'jobTypes',
+  'capabilities',
+  'policyRefs',
+  'policyHash',
+  'implementedEffects',
+  'definition',
+  'publishedByUid',
+  'supersedes',
+  'publishedAt',
+] as const);
+
+/**
+ * Binding-time validation of a stored immutable revision.
+ * Recomputes policyHash and contentHash. Does not change persist schema.
+ */
+export function validateStoredRevisionForBinding(
+  raw: unknown,
+  expected: { companyId: string; packageId: string; revision: number },
+): StoreResult<{ envelope: ImmutableRevisionEnvelope; publishedAt: unknown }> {
+  const snapped = snapshotPlain(raw, '$');
+  if (!snapped.ok) return snapped;
+  const rec = asRecord(snapped.value, '$');
+  if (!rec.ok) return rec;
+  const obj = rec.value;
+  const unknown = exactKeys(obj, PERSISTED_REVISION_KEYS, '$');
+  if (unknown) return unknown;
+  for (const key of PERSISTED_REVISION_KEYS) {
+    if (!Object.prototype.hasOwnProperty.call(obj, key)) return fail('missing_field', key);
+  }
+  if (obj.schemaVersion !== SCHEMA_VERSION) return fail('unsupported_schema_version', 'schemaVersion');
+  if (obj.hashSchemaVersion !== HASH_SCHEMA_VERSION) return fail('unsupported_hash_schema_version', 'hashSchemaVersion');
+  if (obj.hashAlgorithm !== HASH_ALGORITHM) return fail('unsupported_hash_algorithm', 'hashAlgorithm');
+  if (obj.status !== PUBLISHED_STATUS) return fail('unpublished_revision', 'status');
+
+  const companyId = requireId(obj.companyId, 'companyId');
+  if (!companyId.ok) return companyId;
+  if (companyId.value !== expected.companyId) return fail('revision_tenant_mismatch', 'companyId');
+  const packageId = requireId(obj.packageId, 'packageId');
+  if (!packageId.ok) return packageId;
+  if (packageId.value !== expected.packageId) return fail('revision_package_mismatch', 'packageId');
+  const revision = requireRevision(obj.revision, 'revision');
+  if (!revision.ok) return revision;
+  if (revision.value !== expected.revision) return fail('revision_mismatch', 'revision');
+
+  const publisher = requireId(obj.publishedByUid, 'publishedByUid');
+  if (!publisher.ok) return publisher;
+  const storedContentHash = requireHash(obj.contentHash, 'contentHash');
+  if (!storedContentHash.ok) return storedContentHash;
+  const storedPolicyHash = requireHash(obj.policyHash, 'policyHash');
+  if (!storedPolicyHash.ok) return storedPolicyHash;
+
+  const rebuilt = validatePublishInput({
+    packageId: obj.packageId,
+    revision: obj.revision,
+    displayVersion: obj.displayVersion,
+    industryId: obj.industryId,
+    segmentId: obj.segmentId,
+    jobTypes: obj.jobTypes,
+    capabilities: obj.capabilities,
+    policyRefs: obj.policyRefs,
+    definition: obj.definition,
+    supersedes: obj.supersedes,
+  }, { companyId: expected.companyId, publishedByUid: publisher.value });
+  if (!rebuilt.ok) return rebuilt;
+  if (rebuilt.envelope.policyHash !== storedPolicyHash.value) return fail('policy_hash_mismatch', 'policyHash');
+  if (rebuilt.contentHash !== storedContentHash.value) return fail('content_hash_mismatch', 'contentHash');
+
+  const effectsCanon = canonicalJson(obj.implementedEffects);
+  const expectedEffects = canonicalJson(SERVER_IMPLEMENTED_EFFECTS);
+  if (!effectsCanon.ok || !expectedEffects.ok || effectsCanon.json !== expectedEffects.json) {
+    return fail('implemented_effects_mismatch', 'implementedEffects');
+  }
+
+  return {
+    ok: true,
+    envelope: { ...rebuilt.envelope, contentHash: rebuilt.contentHash },
+    publishedAt: obj.publishedAt,
+  };
+}

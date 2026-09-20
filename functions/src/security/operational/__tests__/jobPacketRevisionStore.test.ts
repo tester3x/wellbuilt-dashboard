@@ -555,7 +555,7 @@ function walkFiles(dir: string, acc: string[] = []): string[] {
     if (entry.name === 'node_modules' || entry.name === 'lib' || entry.name === '.git') continue;
     const full = path.join(dir, entry.name);
     if (entry.isDirectory()) walkFiles(full, acc);
-    else if (/\.(ts|tsx|js|mjs|cjs)$/.test(entry.name)) acc.push(full);
+    else if (/\.(ts|tsx|js|mjs|cjs)$/.test(entry.name) && !entry.name.includes('.test.')) acc.push(full);
   }
   return acc;
 }

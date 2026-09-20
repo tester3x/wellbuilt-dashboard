@@ -4788,6 +4788,8 @@ export {
   adminGetWellPerformance,
   dismissDispatch,
   staffWriteDispatch,
+  createDriverDispatchIfAbsent,
+  acceptDriverDispatch,
   staffWriteDriverAssignment,
   staffWriteWellConfig,
   staffConvertApprovedDriverSecureLogin,

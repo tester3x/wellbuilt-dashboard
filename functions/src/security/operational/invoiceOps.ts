@@ -8,6 +8,7 @@ import * as admin from 'firebase-admin';
 import { FieldValue } from 'firebase-admin/firestore';
 import { requireSecureDriver, assertSameCompany } from '../requireDriverAuth';
 import { writeSecurityAudit } from '../audit';
+import { evaluateExistingDispatchDriverUpdate } from './dispatchPacketPin';
 
 const MAX_JSON = 400_000;
 
@@ -108,6 +109,12 @@ export const upsertDriverInvoice = httpsV2.onCall(
   },
 );
 
+const DRIVER_DISPATCH_STATUS_TRANSITIONS: Record<string, readonly string[]> = {
+  accepted: ['in_progress', 'paused', 'completed'],
+  in_progress: ['paused', 'completed'],
+  paused: ['in_progress', 'completed'],
+};
+
 export const upsertDriverDispatch = httpsV2.onCall(
   { timeoutSeconds: 30, memory: '256MiB', enforceAppCheck: false },
   async (request) => {
@@ -116,44 +123,66 @@ export const upsertDriverDispatch = httpsV2.onCall(
       dispatch?: Record<string, unknown>;
       driverHash?: string;
     };
-    if (!data.dispatch || typeof data.dispatch !== 'object') {
+    if (!data.dispatch || typeof data.dispatch !== 'object' || Array.isArray(data.dispatch)) {
       throw new httpsV2.HttpsError('invalid-argument', 'dispatch required');
     }
     const driver = await requireSecureDriver(request, {
-      allowLegacyHash: true,
-      legacyDriverHash: data.driverHash,
+      allowLegacyHash: false,
     });
-    const d = { ...data.dispatch };
-    stripPrivilege(d);
-    d.driverId = driver.driverId;
-    if (data.driverHash) d.driverHash = data.driverHash;
-    if (driver.companyId) d.companyId = driver.companyId;
-    d.updatedAt = FieldValue.serverTimestamp();
-
+    if (!driver.companyId) {
+      throw new httpsV2.HttpsError('failed-precondition', 'unscoped_driver');
+    }
     const dispatchId = (data.dispatchId || '').trim();
     if (!dispatchId) {
       throw new httpsV2.HttpsError('invalid-argument', 'dispatchId required');
     }
     const ref = admin.firestore().collection('dispatches').doc(dispatchId);
     const ex = await ref.get();
-    if (ex.exists) {
-      const prev = ex.data() || {};
-      const assigned =
-        prev.driverId === driver.driverId ||
-        prev.driverHash === data.driverHash ||
-        prev.assignedDriverId === driver.driverId ||
-        prev.assignedDriverHash === data.driverHash;
-      // Allow create-path assignment updates only if already assigned to self or unassigned
-      if (prev.driverId && !assigned && prev.driverHash && prev.driverHash !== data.driverHash) {
-        throw new httpsV2.HttpsError('permission-denied', 'Dispatch assigned to another driver');
+    const prev = ex.exists ? (ex.data() || {}) : null;
+    const decided = evaluateExistingDispatchDriverUpdate({
+      existing: prev,
+      caller: { driverId: driver.driverId, companyId: driver.companyId },
+      patch: data.dispatch,
+    });
+    if (!decided.ok) {
+      const msg = decided.field ? `${decided.reason}:${decided.field}` : decided.reason;
+      if (decided.reason === 'cannot_create') throw new httpsV2.HttpsError('not-found', msg);
+      if (decided.reason === 'wrong_company' || decided.reason === 'other_driver') {
+        throw new httpsV2.HttpsError('permission-denied', msg);
       }
+      throw new httpsV2.HttpsError('failed-precondition', msg);
     }
-    await ref.set(d, { merge: true });
+    const prevStatus = String((prev || {}).status || '').toLowerCase();
+    if (TERMINAL_STATUSES.has(prevStatus)) {
+      throw new httpsV2.HttpsError('failed-precondition', 'Cannot reopen terminal dispatch');
+    }
+    const patch: Record<string, unknown> = { updatedAt: FieldValue.serverTimestamp() };
+    if (typeof data.dispatch.notes === 'string') patch.notes = data.dispatch.notes;
+    if (typeof data.dispatch.loadsCompleted === 'number' && Number.isFinite(data.dispatch.loadsCompleted)) {
+      patch.loadsCompleted = Math.max(0, Math.trunc(data.dispatch.loadsCompleted));
+    }
+    if (typeof data.dispatch.invoiceDocId === 'string') patch.invoiceDocId = data.dispatch.invoiceDocId.trim();
+    if (typeof data.dispatch.invoiceNumber === 'string') patch.invoiceNumber = data.dispatch.invoiceNumber.trim();
+    if (typeof data.dispatch.status === 'string') {
+      const next = data.dispatch.status.trim().toLowerCase();
+      const allowed = DRIVER_DISPATCH_STATUS_TRANSITIONS[prevStatus] || [];
+      if (next !== prevStatus && !allowed.includes(next)) {
+        throw new httpsV2.HttpsError('failed-precondition', `invalid_transition:${prevStatus}->${next}`);
+      }
+      patch.status = next;
+    }
+    delete patch.packageId;
+    delete patch.packetRevision;
+    delete patch.contentHash;
+    delete patch.policyHash;
+    delete patch.companyId;
+    delete patch.driverId;
+    await ref.update(patch);
     await writeSecurityAudit({
       action: 'upsertDriverDispatch',
       actorUid: driver.uid,
       driverId: driver.driverId,
-      detail: { dispatchId },
+      detail: { dispatchId, mode: 'update_only' },
     });
     return { ok: true, dispatchId };
   },

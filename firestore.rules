@@ -243,9 +243,10 @@ service cloud.firestore {
       allow read, write: if true;
     }
 
-    // Dispatches — dashboard creates, WB T app reads/updates
+    // Dispatches — client reads remain open; all writes are Admin SDK callables.
     match /dispatches/{jobId} {
-      allow read, write: if true;
+      allow read: if true;
+      allow create, update, delete: if false;
     }
 
     // Load transfers — driver-to-driver handoff

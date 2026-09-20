@@ -14,8 +14,19 @@ import {
   type DispatchDriverProfile,
   type StaffWriteOp,
 } from './operational/staffWriteDispatch';
+import {
+  evaluateCreateIfAbsent,
+  parseDispatchId,
+  parsePacketRef,
+  rejectBindingMutation,
+  rejectCallerAuthorityFields,
+  resolveCanonicalJobType,
+  stampDispatchBinding,
+  type BirthIdentity,
+} from './operational/dispatchPacketPin';
+import { checkWell, loadAuthorizedWellNames, loadVerifiedRevision } from './operational/dispatchPinRuntime';
 
-const ALLOWED_KEYS = new Set(['op', 'dispatchId', 'record']);
+const ALLOWED_KEYS = new Set(['op', 'dispatchId', 'record', 'packetRef']);
 
 /**
  * Read a driver's AUTHORITATIVE profile from RTDB drivers/profiles/{canonicalId}.
@@ -114,6 +125,12 @@ export const staffWriteDispatch = httpsV2.onCall(
     const fs = admin.firestore();
 
     if (op === 'create') {
+      const id = parseDispatchId(dispatchId);
+      if (!id.ok) throwDecided(id);
+      const packet = parsePacketRef(raw.packetRef);
+      if (!packet.ok) throwDecided(packet);
+      const authority = rejectCallerAuthorityFields(incoming);
+      if (!authority.ok) throwDecided(authority);
       const decided = evaluateStaffWriteDispatch({
         op,
         job: null,
@@ -122,17 +139,44 @@ export const staffWriteDispatch = httpsV2.onCall(
         isPlatformAdmin: caller.isPlatformAdmin,
       });
       if (!decided.ok) throwDecided(decided);
+      const wells = await loadAuthorizedWellNames();
+      const well = checkWell(record, wells);
+      if (!well.ok) throwDecided(well);
+      const revision = await loadVerifiedRevision(decided.companyId, packet.packetRef);
+      if (!revision.ok) throwDecided(revision);
+      const jobType = resolveCanonicalJobType(record.jobType, revision.envelope.jobTypes);
+      if (!jobType.ok) throwDecided(jobType);
       const fields = pickDispatchFields(record, DISPATCH_CREATE_ALLOWLIST);
-      // Server-authoritative driver identity (canonical driverId + driverHash + real name).
+      delete fields.packageId;
       await stampServerAuthoritativeIdentity(fields, decided.companyId);
-      const docRef = await fs.collection('dispatches').add({
-        ...fields,
+      const binding = stampDispatchBinding(revision.envelope);
+      const identity: BirthIdentity = {
         companyId: decided.companyId,
-        status: decided.status || 'pending',
-        assignedAt: FieldValue.serverTimestamp(),
-        assignedBy: fields.assignedBy || caller.uid,
+        driverId: typeof fields.driverId === 'string' ? fields.driverId : '',
+        jobTypeId: jobType.jobTypeId,
+        binding,
+      };
+      const outcome = await fs.runTransaction(async (tx) => {
+        const ref = fs.collection('dispatches').doc(id.dispatchId);
+        const snap = await tx.get(ref);
+        const existing = snap.exists ? (snap.data() as Record<string, unknown>) : null;
+        const replay = evaluateCreateIfAbsent({ existing, expected: identity });
+        if (!replay.ok) throwDecided(replay);
+        if (replay.result === 'already_exists') {
+          return { result: 'already_exists' as const, dispatchId: id.dispatchId };
+        }
+        tx.create(ref, {
+          ...fields,
+          ...binding,
+          jobType: jobType.jobTypeId,
+          companyId: decided.companyId,
+          status: decided.status || 'pending',
+          assignedAt: FieldValue.serverTimestamp(),
+          assignedBy: fields.assignedBy || caller.uid,
+        });
+        return { result: 'created' as const, dispatchId: id.dispatchId };
       });
-      return { ok: true as const, op, dispatchId: docRef.id };
+      return { ok: true as const, op, ...outcome };
     }
 
     if (!dispatchId) throw new httpsV2.HttpsError('invalid-argument', 'dispatchId required');
@@ -152,6 +196,8 @@ export const staffWriteDispatch = httpsV2.onCall(
       if (decided.idempotent) {
         return { idempotent: true as const, dispatchId };
       }
+      const bindGate = rejectBindingMutation(job || {}, incoming);
+      if (!bindGate.ok) throwDecided(bindGate);
       if (op === 'cancel') {
         tx.update(ref, {
           status: 'cancelled',
@@ -162,6 +208,10 @@ export const staffWriteDispatch = httpsV2.onCall(
       }
       const fields = pickDispatchFields(record, DISPATCH_UPDATE_ALLOWLIST);
       delete fields.companyId;
+      delete fields.packageId;
+      delete fields.packetRevision;
+      delete fields.contentHash;
+      delete fields.policyHash;
       // Reassign carries new driver identity — resolve it server-authoritatively too.
       await stampServerAuthoritativeIdentity(fields, decided.companyId);
       if (typeof record.status === 'string' && record.status.trim()) {
