@@ -76,6 +76,15 @@ service cloud.firestore {
       allow read, write: if false;
     }
 
+    // Company-scoped trusted staff authority — server-owned. Ordinary
+    // clients cannot create, change, delete, merge, or substitute these
+    // records. G-008 publication and the governed role-capability editor
+    // read them via the Admin SDK only. No client-callable provisioning
+    // path exists in this checkpoint.
+    match /trusted_staff_authority/{uid} {
+      allow read, write: if false;
+    }
+
     // Per-driver active-shift authority — server-owned, exactly like
     // platform_admins. The catch-all at the bottom of this file already
     // denies it; this rule is stated explicitly so an audit reading the

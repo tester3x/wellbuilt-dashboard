@@ -13,19 +13,16 @@ import {
   runPublishJobPacketRevision,
   type PublishStoreTx,
 } from '../jobPacketPublish';
-import type { DashboardCaller } from '../../adminAuth';
+import type { TrustedCompanyAuthority } from '../../trustedStaffAuthority';
 
 const COMPANY = 'liquid-gold';
 const OTHER = 'other-hauler';
 const PUBLISHER = 'uid-staff-1';
 
-function staff(over: Partial<DashboardCaller> = {}): DashboardCaller {
+function trusted(over: Partial<TrustedCompanyAuthority> = {}): TrustedCompanyAuthority {
   return {
     uid: PUBLISHER,
-    roles: ['admin'],
     companyId: COMPANY,
-    caps: ['manageDrivers', 'manageEquipment'],
-    isPlatformAdmin: false,
     ...over,
   };
 }
@@ -140,7 +137,7 @@ function req(over: Record<string, unknown> = {}) {
   };
 }
 
-async function publish(store: MemoryPublishStore, over: Record<string, unknown> = {}, caller: DashboardCaller | null = staff()) {
+async function publish(store: MemoryPublishStore, over: Record<string, unknown> = {}, caller: TrustedCompanyAuthority | null = trusted()) {
   return runPublishJobPacketRevision({
     caller,
     request: req(over),
@@ -155,18 +152,13 @@ describe('authority', () => {
     expect(r.ok).toBe(false);
     if (!r.ok) expect(r.reason).toBe('unauthenticated');
   });
-  it('driver rejects', () => {
-    const r = decidePublishStaffAccess(staff({ roles: ['driver'], caps: [] }));
+  it('missing uid rejects', () => {
+    const r = decidePublishStaffAccess(trusted({ uid: '' }));
     expect(r.ok).toBe(false);
-    if (!r.ok) expect(r.reason).toBe('driver_forbidden');
+    if (!r.ok) expect(r.reason).toBe('unauthenticated');
   });
-  it('unprivileged staff rejects', () => {
-    const r = decidePublishStaffAccess(staff({ roles: ['dispatch'], caps: [] }));
-    expect(r.ok).toBe(false);
-    if (!r.ok) expect(r.reason).toBe('unprivileged_staff');
-  });
-  it('authorized company staff is accepted', () => {
-    const r = decidePublishStaffAccess(staff());
+  it('authorized trusted company staff is accepted', () => {
+    const r = decidePublishStaffAccess(trusted());
     expect(r.ok).toBe(true);
     if (r.ok) {
       expect(r.companyId).toBe(COMPANY);
@@ -174,14 +166,26 @@ describe('authority', () => {
     }
   });
   it('missing company rejects', () => {
-    const r = decidePublishStaffAccess(staff({ companyId: undefined }));
+    const r = decidePublishStaffAccess(trusted({ companyId: '' }));
     expect(r.ok).toBe(false);
     if (!r.ok) expect(r.reason).toBe('missing_company');
   });
-  it('cross-tenant platform-admin shortcut rejects', () => {
-    const r = decidePublishStaffAccess(staff({ companyId: undefined, isPlatformAdmin: true, roles: ['it'] }));
+  it('leftover RTDB role/cap fields do not grant or substitute company', () => {
+    const r = decidePublishStaffAccess({
+      uid: PUBLISHER,
+      companyId: '',
+      ...({ roles: ['it'], caps: ['manageDrivers'], isPlatformAdmin: true } as object),
+    } as TrustedCompanyAuthority);
     expect(r.ok).toBe(false);
-    if (!r.ok) expect(r.reason).toBe('cross_tenant_forbidden');
+    if (!r.ok) expect(r.reason).toBe('missing_company');
+  });
+  it('cross-tenant platform-admin leftover does not bypass missing company', () => {
+    const r = decidePublishStaffAccess({
+      uid: PUBLISHER,
+      companyId: '',
+    });
+    expect(r.ok).toBe(false);
+    if (!r.ok) expect(r.reason).toBe('missing_company');
   });
 });
 
@@ -291,6 +295,11 @@ describe('publication', () => {
     expect(resolveCanonicalJobType('pw', bound.envelope.jobTypes).ok).toBe(true);
     const head = [...store.heads.values()][0];
     expect(head.latestRevision).toBe(1);
+    expect(head.companyId).toBe(COMPANY);
+    expect(head.updatedByUid).toBe(PUBLISHER);
+    const receipt = [...store.receipts.values()][0];
+    expect(receipt.companyId).toBe(COMPANY);
+    expect(receipt.publishedByUid).toBe(PUBLISHER);
     expect(store.receipts.size).toBe(1);
   });
 
@@ -475,9 +484,14 @@ describe('truth and reachability', () => {
     expect(raw.implementedEffects).toEqual([]);
     expect([...SERVER_IMPLEMENTED_EFFECTS]).toEqual([]);
   });
-  it('callable uses company-scoped staff auth and App Check stays unenforced', () => {
+  it('callable uses trusted company-scoped staff auth and App Check stays unenforced', () => {
     const callable = readFileSync(join(__dirname, '..', '..', 'jobPacketPublishCallable.ts'), 'utf8');
-    expect(callable).toMatch(/requireManageDrivers/);
+    expect(callable).toMatch(/requireTrustedCompanyCapability/);
+    expect(callable).toMatch(/TRUSTED_CAPABILITY_MANAGE_DRIVERS/);
+    expect(callable).not.toMatch(/requireManageDrivers/);
+    expect(callable).not.toMatch(/adminAuth/);
+    expect(callable).not.toMatch(/users\/\$\{/);
+    expect(callable).not.toMatch(/roleCapabilities/);
     expect(callable).toMatch(/enforceAppCheck:\s*false/);
     expect(callable).not.toMatch(/authorizeAdminCall/);
     expect(callable).not.toMatch(/targetCompanyId/);

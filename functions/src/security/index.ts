@@ -43,6 +43,7 @@ export { staffWriteDispatch } from './staffWriteDispatchCallable';
 export { createDriverDispatchIfAbsent } from './createDriverDispatchCallable';
 export { acceptDriverDispatch } from './acceptDriverDispatchCallable';
 export { publishJobPacketRevision } from './jobPacketPublishCallable';
+export { staffWriteRoleCapabilities } from './staffWriteRoleCapabilitiesCallable';
 export { staffWriteDriverAssignment } from './staffWriteDriverAssignmentCallable';
 export { staffWriteWellConfig } from './staffWriteWellConfigCallable';
 export { staffConvertApprovedDriverSecureLogin } from './staffConvertApprovedDriverSecureLogin';

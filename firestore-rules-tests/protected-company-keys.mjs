@@ -54,5 +54,6 @@ export const PROTECTED_COMPANY_KEYS = Object.freeze([
 ]);
 
 export const PLATFORM_ADMINS_COLLECTION = 'platform_admins';
+export const TRUSTED_STAFF_AUTHORITY_COLLECTION = 'trusted_staff_authority';
 export const PLANS_COLLECTION = 'plans';
 export const ADMIN_AUDIT_COLLECTION = 'platform_admin_audit';

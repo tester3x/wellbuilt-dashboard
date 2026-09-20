@@ -24,20 +24,27 @@ describe('roleCapabilities cannot self-grant manageDrivers', () => {
     }
   });
 
-  it('G-008 publisher remains gated by requireManageDrivers', () => {
+  it('G-008 publisher is gated by trusted company-scoped authority, not RTDB roleCapabilities', () => {
     const callable = readFileSync(
       join(ROOT, 'functions', 'src', 'security', 'jobPacketPublishCallable.ts'),
       'utf8',
     );
-    expect(callable).toMatch(/requireManageDrivers/);
+    expect(callable).toMatch(/requireTrustedCompanyCapability/);
+    expect(callable).not.toMatch(/requireManageDrivers/);
     expect(callable).not.toMatch(/roleCapabilities/);
+    expect(callable).not.toMatch(/users\/\$\{/);
   });
 
-  it('requireManageDrivers still resolves caps from companies.roleCapabilities overrides', () => {
+  it('requireManageDrivers still exists for unrelated paths and still reads RTDB roleCapabilities', () => {
     const auth = readFileSync(join(ROOT, 'functions', 'src', 'security', 'adminAuth.ts'), 'utf8');
     expect(auth).toMatch(/roleCapabilities/);
     expect(auth).toMatch(/requireManageDrivers/);
     expect(auth).toMatch(/users\/\$\{authUid\}/);
+    const publisher = readFileSync(
+      join(ROOT, 'functions', 'src', 'security', 'jobPacketPublishCallable.ts'),
+      'utf8',
+    );
+    expect(publisher).not.toMatch(/from '\.\/adminAuth'/);
   });
 
   it('no alternate Firestore company field remains client-writable for manageDrivers', () => {
@@ -48,9 +55,11 @@ describe('roleCapabilities cannot self-grant manageDrivers', () => {
     expect(rules).toMatch(/allow update: if request\.auth != null\s*&& !request\.resource\.data\.diff\(resource\.data\)\s*\.affectedKeys\(\)\.hasAny\(protectedCompanyKeys\(\)\)/);
   });
 
-  it('reachable RolesCard writer still names roleCapabilities (now rules-denied)', () => {
+  it('reachable RolesCard writer uses the governed callable, not updateDoc', () => {
     const card = readFileSync(join(ROOT, 'src', 'components', 'settings', 'RolesCard.tsx'), 'utf8');
-    expect(card).toMatch(/updateCompanyFields\(company\.id,/);
+    expect(card).toMatch(/staffWriteRoleCapabilities\(/);
+    expect(card).not.toMatch(/updateCompanyFields/);
+    expect(card).not.toMatch(/updateDoc/);
     expect(card).toMatch(/roleCapabilities:/);
   });
 

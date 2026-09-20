@@ -16,7 +16,7 @@ import {
   type RevisionStoreTx,
   type StoreResult,
 } from './jobPacketRevisionStore';
-import type { DashboardCaller } from '../adminAuth';
+import type { TrustedCompanyAuthority } from '../trustedStaffAuthority';
 
 export const PUBLISH_JOB_PACKET_REVISION_CALLABLE = 'publishJobPacketRevision';
 export const RECEIPT_COLLECTION = 'job_packet_publication_receipts';
@@ -109,15 +109,9 @@ export function publicationReceiptDocId(companyId: string, packageId: string, re
 }
 
 export function decidePublishStaffAccess(
-  caller: DashboardCaller | null,
+  caller: TrustedCompanyAuthority | null,
 ): StoreResult<{ companyId: string; publisherUid: string }> {
   if (!caller?.uid) return fail('unauthenticated');
-  const roles = caller.roles || [];
-  if (roles.includes('driver') && !(caller.caps || []).includes('manageDrivers')) {
-    return fail('driver_forbidden');
-  }
-  if (!(caller.caps || []).includes('manageDrivers')) return fail('unprivileged_staff');
-  if (caller.isPlatformAdmin) return fail('cross_tenant_forbidden');
   const companyId = typeof caller.companyId === 'string' ? caller.companyId.trim() : '';
   if (!companyId) return fail('missing_company');
   if (!PACKAGE_ID_RE.test(companyId)) return fail('malformed_id', 'companyId');
@@ -322,7 +316,7 @@ function readReceipt(
 }
 
 export async function runPublishJobPacketRevision(input: {
-  caller: DashboardCaller | null;
+  caller: TrustedCompanyAuthority | null;
   request: unknown;
   store: PublishStoreTx;
   publishedAt: unknown;

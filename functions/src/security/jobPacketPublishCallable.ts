@@ -1,7 +1,10 @@
 import * as httpsV2 from 'firebase-functions/v2/https';
 import * as admin from 'firebase-admin';
 import { FieldValue } from 'firebase-admin/firestore';
-import { requireManageDrivers } from './adminAuth';
+import {
+  requireTrustedCompanyCapability,
+  TRUSTED_CAPABILITY_MANAGE_DRIVERS,
+} from './trustedStaffAuthority';
 import {
   CLAIM_COLLECTION,
   INDEX_COLLECTION,
@@ -48,9 +51,9 @@ function throwFail(result: { ok: false; reason: string; field?: string }): never
 export const publishJobPacketRevision = httpsV2.onCall(
   { timeoutSeconds: 30, memory: '256MiB', enforceAppCheck: false },
   async (request) => {
-    const caller = await requireManageDrivers(
+    const caller = await requireTrustedCompanyCapability(
       request.auth?.uid,
-      request.auth?.token as Record<string, unknown> | undefined,
+      TRUSTED_CAPABILITY_MANAGE_DRIVERS,
     );
     const fs = admin.firestore();
     const outcome = await fs.runTransaction(async (tx) => {

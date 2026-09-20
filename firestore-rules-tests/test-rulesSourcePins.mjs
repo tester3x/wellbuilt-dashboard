@@ -157,7 +157,7 @@ check('functions WELLBUILT_CONTRACT_KEY matches canonical root',
 
 // 6. platform_admins + audit are deny-all; plans allows EXACT GET only
 //    (vc51.9A6-B mobile read path) with list and writes denied.
-for (const col of ['platform_admins', 'platform_admin_audit']) {
+for (const col of ['platform_admins', 'platform_admin_audit', 'trusted_staff_authority']) {
   const block = matchBlock(rules, `match /${col}/`);
   check(`${col} block exists`, !!block);
   const body = block ? stripComments(block) : '';
