@@ -62,7 +62,11 @@ service cloud.firestore {
               'contractVersion', 'planId', 'entitlement',
               'entitlementOverrides', 'workPeriodMode',
               'workPeriodConfiguration', 'effectiveCapabilities',
-              'configurationVersion', 'contractEnforced'];
+              'configurationVersion', 'contractEnforced',
+              // authority-control: client-writable overrides would let a
+              // low-privilege user self-grant manageDrivers and publish
+              // immutable packet revisions.
+              'roleCapabilities'];
     }
 
     // Platform admin records — server-owned. ALL direct client access

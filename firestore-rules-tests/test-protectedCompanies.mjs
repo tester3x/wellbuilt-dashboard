@@ -223,6 +223,45 @@ check('set wellbuiltContract null denied (USER)',
 check('add wellbuiltContract denied even for CLAIM bearer',
   await patchDoc(CLAIM, 'companies/legacy-co', { wellbuiltContract: wellbuiltContract() }, ['wellbuiltContract']), 403);
 
+// companies — roleCapabilities is authority-control (G-008R1). A viewer
+// must not be able to write roleCapabilities.viewer=["manageDrivers"]
+// and then pass requireManageDrivers.
+check('ADMIN fixture: caps-co created WITH roleCapabilities',
+  await patchDoc(OWNER, 'companies/caps-co', {
+    name: s('Caps Co'),
+    roleCapabilities: m({ viewer: { arrayValue: { values: [s('viewHome')] } } }),
+  }), 200);
+check('create containing roleCapabilities denied (USER)',
+  await patchDoc(USER, 'companies/new-co-rc', {
+    name: s('RC'),
+    roleCapabilities: m({ viewer: { arrayValue: { values: [s('manageDrivers')] } } }),
+  }), 403);
+check('add roleCapabilities to legacy doc denied (USER)',
+  await patchDoc(USER, 'companies/legacy-co', {
+    roleCapabilities: m({ viewer: { arrayValue: { values: [s('manageDrivers')] } } }),
+  }, ['roleCapabilities']), 403);
+check('replace complete roleCapabilities map denied (USER)',
+  await patchDoc(USER, 'companies/caps-co', {
+    roleCapabilities: m({ viewer: { arrayValue: { values: [s('manageDrivers')] } } }),
+  }, ['roleCapabilities']), 403);
+check('nested roleCapabilities.viewer change denied (USER)',
+  await patchDoc(USER, 'companies/caps-co', {
+    roleCapabilities: m({ viewer: { arrayValue: { values: [s('manageDrivers')] } } }),
+  }, ['roleCapabilities.viewer']), 403);
+check('delete roleCapabilities denied (USER — masked path absent from body)',
+  await patchDoc(USER, 'companies/caps-co', {}, ['roleCapabilities']), 403);
+check('set roleCapabilities null denied (USER)',
+  await patchDoc(USER, 'companies/caps-co', { roleCapabilities: nul() }, ['roleCapabilities']), 403);
+check('merge/update cannot smuggle roleCapabilities beside a permitted field (USER)',
+  await patchDoc(USER, 'companies/legacy-co', {
+    name: s('Sneaky'),
+    roleCapabilities: m({ viewer: { arrayValue: { values: [s('manageDrivers')] } } }),
+  }, ['name', 'roleCapabilities']), 403);
+check('add roleCapabilities denied even for CLAIM bearer',
+  await patchDoc(CLAIM, 'companies/legacy-co', {
+    roleCapabilities: m({ viewer: { arrayValue: { values: [s('manageDrivers')] } } }),
+  }, ['roleCapabilities']), 403);
+
 // companies — reserved Part A flat keys stay permanently denied.
 check('company create containing planId denied (USER)',
   await patchDoc(USER, 'companies/new-co-a', { name: s('A'), planId: s('plan-field') }), 403);

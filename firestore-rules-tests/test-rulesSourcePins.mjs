@@ -125,6 +125,8 @@ check('canonical root is wellbuiltContract and leads the rules list',
 check('all nine reserved Part A keys remain denied',
   RESERVED_COMPANY_KEYS.length === 9 &&
   RESERVED_COMPANY_KEYS.every((k) => rulesKeys.includes(k)));
+check('roleCapabilities is a protected company key',
+  rulesKeys.includes('roleCapabilities') && PROTECTED_COMPANY_KEYS.includes('roleCapabilities'));
 check('rules comment marks the reserved keys as reserved/deprecated',
   /reserved\/deprecated/.test(fnMatch ? rules.slice(rules.indexOf('function protectedCompanyKeys'), rules.indexOf('function protectedCompanyKeys') + 800) : ''));
 
@@ -136,6 +138,19 @@ check('functions RESERVED_COMPANY_KEYS matches canonical reserved list',
   fnReservedKeys.length === RESERVED_COMPANY_KEYS.length &&
   fnReservedKeys.every((k, i) => k === RESERVED_COMPANY_KEYS[i]),
   `functions=[${fnReservedKeys.join(',')}]`);
+const fnProtected = handlersSrc.match(/export const PROTECTED_COMPANY_KEYS[\s\S]*?Object\.freeze\(\[([\s\S]*?)\]\)/);
+const fnProtectedKeys = fnProtected
+  ? [...fnProtected[1].matchAll(/WELLBUILT_CONTRACT_KEY|'([^']+)'|\.\.\.RESERVED_COMPANY_KEYS/g)]
+    .flatMap((m) => {
+      if (m[0] === 'WELLBUILT_CONTRACT_KEY') return [CANONICAL_PROTECTED_ROOT];
+      if (m[0] === '...RESERVED_COMPANY_KEYS') return [...RESERVED_COMPANY_KEYS];
+      return m[1] ? [m[1]] : [];
+    })
+  : [];
+check('functions PROTECTED_COMPANY_KEYS matches canonical protected list',
+  fnProtectedKeys.length === PROTECTED_COMPANY_KEYS.length &&
+  fnProtectedKeys.every((k, i) => k === PROTECTED_COMPANY_KEYS[i]),
+  `functions=[${fnProtectedKeys.join(',')}] canonical=[${PROTECTED_COMPANY_KEYS.join(',')}]`);
 const contractSrc = readFileSync(join(root, 'functions/src/admin/companyContract.ts'), 'utf8');
 check('functions WELLBUILT_CONTRACT_KEY matches canonical root',
   new RegExp(`WELLBUILT_CONTRACT_KEY = '${CANONICAL_PROTECTED_ROOT}'`).test(contractSrc));
