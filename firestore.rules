@@ -584,6 +584,9 @@ service cloud.firestore {
     match /job_packet_package_index/{packageId} {
       allow read, write: if false;
     }
+    match /job_packet_publication_receipts/{receiptId} {
+      allow read, write: if false;
+    }
 
     // Everything else — deny (Cloud Functions use Admin SDK which bypasses rules)
     match /{document=**} {

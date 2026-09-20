@@ -4606,6 +4606,7 @@ export {
   staffWriteDispatch,
   createDriverDispatchIfAbsent,
   acceptDriverDispatch,
+  publishJobPacketRevision,
   staffWriteDriverAssignment,
   staffWriteWellConfig,
   staffConvertApprovedDriverSecureLogin,

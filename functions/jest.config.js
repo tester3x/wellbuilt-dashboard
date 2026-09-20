@@ -4,14 +4,14 @@ module.exports = {
   testEnvironment: 'node',
   roots: ['<rootDir>/src'],
   testMatch: ['**/__tests__/**/*.test.ts'],
-  // The contracts mirror is published as pure ESM ("type": "module") and is
-  // resolved outside node_modules, so nothing transforms it by default and any
-  // suite that transitively imports it dies on `export`. Transforming it to
-  // CommonJS lets tests load the REAL contract constants — a hand-written stub
-  // would let the mirror drift out from under the tests that depend on it.
+  // @tester3x/wellbuilt-contracts@0.7.0 is pure ESM. Transform it to CommonJS
+  // so tests load the published package rather than a stub.
   transform: {
     '^.+\\.[tj]sx?$': ['ts-jest', { tsconfig: 'tsconfig.jest.json' }],
   },
+  transformIgnorePatterns: [
+    'node_modules/(?!@tester3x/wellbuilt-contracts/)',
+  ],
   // Source uses NodeNext-style specifiers ('../admin/companyContract.js')
   // because that is what the Functions build emits. Jest resolves from the
   // TypeScript sources, where no such .js file exists, so the extension is
@@ -19,5 +19,7 @@ module.exports = {
   // this cannot shadow a real .js module; package specifiers are untouched.
   moduleNameMapper: {
     '^(\\.{1,2}/.*)\\.js$': '$1',
+    '^@tester3x/wellbuilt-contracts/transport$':
+      '<rootDir>/node_modules/@tester3x/wellbuilt-contracts/dist/transport/index.js',
   },
 };

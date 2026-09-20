@@ -560,36 +560,41 @@ function walkFiles(dir: string, acc: string[] = []): string[] {
   return acc;
 }
 
-describe('root export surface has no packet-revision publisher', () => {
+describe('root export surface registers the governed publisher', () => {
   const functionsRoot = path.join(__dirname, '..', '..', '..', '..');
   const srcIndex = path.join(functionsRoot, 'src', 'index.ts');
   const securityIndex = path.join(functionsRoot, 'src', 'security', 'index.ts');
   const libIndex = path.join(functionsRoot, 'lib', 'index.js');
   const libSecurity = path.join(functionsRoot, 'lib', 'security', 'index.js');
+  const allowedPublisher = new Set([
+    path.normalize(path.join(__dirname, '..', 'jobPacketPublish.ts')),
+    path.normalize(path.join(__dirname, '..', '..', 'jobPacketPublishCallable.ts')),
+    path.normalize(srcIndex),
+    path.normalize(securityIndex),
+  ]);
 
-  it('does not export publishJobPacketRevision from TypeScript entrypoints', () => {
+  it('exports publishJobPacketRevision from TypeScript entrypoints', () => {
     const rootNames = compiledExportNames(srcIndex);
     const securityNames = compiledExportNames(securityIndex);
-    expect(rootNames).not.toContain('publishJobPacketRevision');
-    expect(securityNames).not.toContain('publishJobPacketRevision');
-    expect(fs.existsSync(path.join(functionsRoot, 'src', 'security', 'jobPacketRevisionPublishCallable.ts'))).toBe(false);
-    expect(fs.readFileSync(srcIndex, 'utf8')).not.toMatch(/\bpublishJobPacketRevision\b/);
-    expect(fs.readFileSync(securityIndex, 'utf8')).not.toMatch(/\bpublishJobPacketRevision\b/);
+    expect(rootNames).toContain('publishJobPacketRevision');
+    expect(securityNames).toContain('publishJobPacketRevision');
+    expect(fs.existsSync(path.join(functionsRoot, 'src', 'security', 'jobPacketPublishCallable.ts'))).toBe(true);
+    expect(fs.readFileSync(srcIndex, 'utf8')).toMatch(/\bpublishJobPacketRevision\b/);
+    expect(fs.readFileSync(securityIndex, 'utf8')).toMatch(/\bpublishJobPacketRevision\b/);
   });
 
-  it('does not register publishJobPacketRevision in compiled output', () => {
+  it('registers publishJobPacketRevision in compiled output', () => {
     expect(fs.existsSync(libIndex)).toBe(true);
     expect(fs.existsSync(libSecurity)).toBe(true);
     const rootJs = fs.readFileSync(libIndex, 'utf8');
     const securityJs = fs.readFileSync(libSecurity, 'utf8');
-    expect(rootJs).not.toMatch(/\bpublishJobPacketRevision\b/);
-    expect(securityJs).not.toMatch(/\bpublishJobPacketRevision\b/);
-    expect(compiledExportNames(libIndex)).not.toContain('publishJobPacketRevision');
-    expect(compiledExportNames(libSecurity)).not.toContain('publishJobPacketRevision');
-    expect(rootJs).not.toMatch(/onCall\([^)]*publishJobPacketRevision/);
+    expect(rootJs).toMatch(/\bpublishJobPacketRevision\b/);
+    expect(securityJs).toMatch(/\bpublishJobPacketRevision\b/);
+    expect(compiledExportNames(libIndex)).toContain('publishJobPacketRevision');
+    expect(compiledExportNames(libSecurity)).toContain('publishJobPacketRevision');
   });
 
-  it('has no live callable importing the store and no app consumer of the new collections', () => {
+  it('confines persist/publish collection strings to the store and governed publisher', () => {
     const storeFile = path.normalize(path.join(__dirname, '..', 'jobPacketRevisionStore.ts'));
     const testFile = path.normalize(__filename);
     const functionsSrc = path.join(functionsRoot, 'src');
@@ -597,7 +602,7 @@ describe('root export surface has no packet-revision publisher', () => {
     const hits: string[] = [];
     for (const file of [...walkFiles(functionsSrc), ...walkFiles(dashboardSrc)]) {
       const norm = path.normalize(file);
-      if (norm === storeFile || norm === testFile) continue;
+      if (norm === storeFile || norm === testFile || allowedPublisher.has(norm)) continue;
       const text = fs.readFileSync(file, 'utf8');
       if (
         text.includes('job_packet_revisions')
