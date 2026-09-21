@@ -6,9 +6,11 @@ import {
   type StoreResult,
 } from './jobPacketRevisionStore';
 import {
+  collectAuthorizedWellNames,
   evaluateWellAuthorized,
   loadVerifiedRevisionFromData,
   parsePacketRef,
+  type AuthorizedWellCatalog,
   type PacketRef,
 } from './dispatchPacketPin';
 
@@ -42,28 +44,31 @@ export async function loadVerifiedRevision(
   );
 }
 
-export async function loadAuthorizedWellNames(): Promise<string[]> {
-  const snap = await admin.database().ref('wellConfig').once('value');
-  const val = snap.val();
-  if (!val || typeof val !== 'object') return [];
-  const names: string[] = [];
-  for (const rec of Object.values(val as Record<string, unknown>)) {
-    if (!rec || typeof rec !== 'object') continue;
-    const wellName = (rec as { wellName?: unknown }).wellName;
-    const ndic = (rec as { ndicName?: unknown }).ndicName;
-    if (typeof wellName === 'string' && wellName.trim()) names.push(wellName.trim());
-    if (typeof ndic === 'string' && ndic.trim()) names.push(ndic.trim());
-  }
-  return names;
+export async function loadAuthorizedWellCatalog(
+  actingCompanyId?: string,
+): Promise<StoreResult<AuthorizedWellCatalog>> {
+  const snap = await admin.database().ref('well_config').once('value');
+  return collectAuthorizedWellNames(snap.exists() ? snap.val() : {}, actingCompanyId);
+}
+
+/** @deprecated Use loadAuthorizedWellCatalog. Kept as a name alias for call-site updates. */
+export async function loadAuthorizedWellNames(actingCompanyId?: string): Promise<string[]> {
+  const collected = await loadAuthorizedWellCatalog(actingCompanyId);
+  if (!collected.ok) return [];
+  return [...collected.names];
 }
 
 export function checkWell(
   record: Record<string, unknown>,
-  authorized: readonly string[],
+  authorized: readonly string[] | AuthorizedWellCatalog,
 ): StoreResult<{ wellName: string }> {
   const wellName = typeof record.wellName === 'string' ? record.wellName : '';
   const ndic = typeof record.ndicWellName === 'string' ? record.ndicWellName : '';
-  return evaluateWellAuthorized(wellName, ndic, authorized);
+  if (Array.isArray(authorized)) {
+    return evaluateWellAuthorized(wellName, ndic, authorized);
+  }
+  const catalog = authorized as AuthorizedWellCatalog;
+  return evaluateWellAuthorized(wellName, ndic, catalog.names, catalog.ambiguous);
 }
 
 export function readPacketRefFromRequest(data: Record<string, unknown>): StoreResult<{ packetRef: PacketRef }> {

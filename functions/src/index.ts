@@ -4610,6 +4610,7 @@ export {
   staffWriteRoleCapabilities,
   staffWriteDriverAssignment,
   staffWriteWellConfig,
+  staffWriteUserRoles,
   staffConvertApprovedDriverSecureLogin,
   upgradeOwnLegacyDriverLogin,
   staffHydrateCanonicalIdentity,

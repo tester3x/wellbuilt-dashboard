@@ -50,3 +50,22 @@ export async function staffUpdateWellConfig(params: {
   });
   return res.data as StaffUpdateWellResult;
 }
+
+export async function staffDeleteWellConfig(params: { wellName: string }): Promise<{ ok: true; wellName: string; deleted: boolean }> {
+  const fn = httpsCallable(getFirebaseFunctions(), 'staffWriteWellConfig');
+  const res = await fn({ op: 'delete', wellName: params.wellName, config: {} });
+  return res.data as { ok: true; wellName: string; deleted: boolean };
+}
+
+export async function staffRenameWellConfig(params: {
+  wellName: string;
+  newName: string;
+}): Promise<{ ok: true; wellName: string; previousName?: string; renamed?: boolean }> {
+  const fn = httpsCallable(getFirebaseFunctions(), 'staffWriteWellConfig');
+  const res = await fn({
+    op: 'rename',
+    wellName: params.wellName,
+    config: { newName: params.newName },
+  });
+  return res.data as { ok: true; wellName: string; previousName?: string; renamed?: boolean };
+}

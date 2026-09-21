@@ -249,6 +249,20 @@ describe('production callable wiring', () => {
     expect(callable).toMatch(/isPlatformAdmin: access\.isPlatformAdmin/);
   });
 
+  it('well allowlist is loaded from well_config, never wellConfig', () => {
+    const runtime = readFileSync(
+      join(ROOT, 'functions', 'src', 'security', 'operational', 'dispatchPinRuntime.ts'),
+      'utf8',
+    );
+    expect(runtime).toMatch(/ref\('well_config'\)/);
+    expect(runtime).not.toMatch(/ref\('wellConfig'\)/);
+    const callable = readFileSync(
+      join(ROOT, 'functions', 'src', 'security', 'staffWriteDispatchCallable.ts'),
+      'utf8',
+    );
+    expect(callable).toMatch(/loadAuthorizedWellCatalog\(access\.companyId\)/);
+  });
+
   it('companyId on create comes from trusted access, not the request', () => {
     expect(callable).toMatch(/callerCompanyId: access\.companyId/);
     expect(callable).toMatch(/companyId: decided\.companyId/);
@@ -298,9 +312,9 @@ describe('remaining RTDB-backed staff callables (not migrated)', () => {
       expect.stringMatching(/companyOnboarding\.ts$/),
       expect.stringMatching(/dismissDispatchCallable\.ts$/),
       expect.stringMatching(/driverAuthCallables\.ts$/),
-      expect.stringMatching(/staffWriteWellConfigCallable\.ts$/),
       expect.stringMatching(/staffWriteDriverAssignmentCallable\.ts$/),
     ]));
     expect(hits.join('\n')).not.toMatch(/staffWriteDispatchCallable/);
+    expect(hits.join('\n')).not.toMatch(/staffWriteWellConfigCallable/);
   });
 });

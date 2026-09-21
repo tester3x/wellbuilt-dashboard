@@ -288,9 +288,10 @@ describe('evaluateStaffWriteWellConfig update', () => {
 });
 
 describe('Add Well wiring pins', () => {
-  it('callable is allowlisted, requireManageDrivers, create set and update merge', () => {
+  it('callable is allowlisted, trusted manageDrivers, create set and update merge', () => {
     const callable = src('functions/src/security/staffWriteWellConfigCallable.ts');
-    expect(callable).toContain('requireManageDrivers');
+    expect(callable).toContain('requireTrustedCompanyCapability');
+    expect(callable).not.toContain('requireManageDrivers');
     expect(callable).toContain('evaluateStaffWriteWellConfig');
     expect(callable).toContain('well_config/${decided.wellName}');
     expect(callable).toContain('.set(decided.payload)');
@@ -313,5 +314,49 @@ describe('Add Well wiring pins', () => {
     expect(add).not.toMatch(/set\(ref\(db,\s*`well_config/);
     expect(add).toContain('classifyAddWellError');
     expect(add).toContain('isAddingWell');
+  });
+
+  it('delete and rename are governed and preserve identity payload', () => {
+    const del = evaluateStaffWriteWellConfig({
+      op: 'delete',
+      wellName: 'Tornado 1',
+      config: {},
+      existingByName: tornadoExisting,
+      existingNameKey: 'Tornado 1',
+      duplicateApiWell: null,
+      ...lg,
+    });
+    expect(del).toMatchObject({ ok: true, action: 'delete', wellName: 'Tornado 1' });
+    const rename = evaluateStaffWriteWellConfig({
+      op: 'rename',
+      wellName: 'Tornado 1',
+      config: { newName: 'Tornado North' },
+      existingByName: tornadoExisting,
+      existingNameKey: 'Tornado 1',
+      duplicateApiWell: null,
+      ...lg,
+    });
+    expect(rename).toMatchObject({ ok: true, action: 'rename', wellName: 'Tornado 1', newName: 'Tornado North' });
+    if (rename.ok && rename.action === 'rename') {
+      expect(rename.payload.ndicName).toBe(tornadoExisting.ndicName);
+      expect(rename.payload.ndicApiNo).toBe(tornadoExisting.ndicApiNo);
+    }
+    const missing = evaluateStaffWriteWellConfig({
+      op: 'delete',
+      wellName: 'Missing',
+      config: {},
+      existingByName: null,
+      existingNameKey: null,
+      duplicateApiWell: null,
+      ...lg,
+    });
+    expect(missing).toMatchObject({ ok: false, reason: 'not_found' });
+    const callable = src('functions/src/security/staffWriteWellConfigCallable.ts');
+    expect(callable).toMatch(/op !== 'delete'/);
+    expect(callable).toMatch(/op !== 'rename'/);
+    expect(callable).toMatch(/rewritePacketWellName/);
+    const page = src('src/app/admin/page.tsx');
+    expect(page).toMatch(/staffRenameWellConfig/);
+    expect(page).toMatch(/staffDeleteWellConfig/);
   });
 });

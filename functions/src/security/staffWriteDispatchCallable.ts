@@ -29,7 +29,7 @@ import {
   stampDispatchBinding,
   type BirthIdentity,
 } from './operational/dispatchPacketPin';
-import { checkWell, loadAuthorizedWellNames, loadVerifiedRevision } from './operational/dispatchPinRuntime';
+import { checkWell, loadAuthorizedWellCatalog, loadVerifiedRevision } from './operational/dispatchPinRuntime';
 
 const ALLOWED_KEYS = new Set(['op', 'dispatchId', 'record', 'packetRef']);
 
@@ -166,7 +166,8 @@ export const staffWriteDispatch = httpsV2.onCall(
         isPlatformAdmin: access.isPlatformAdmin,
       });
       if (!decided.ok) throwDecided(decided);
-      const wells = await loadAuthorizedWellNames();
+      const wells = await loadAuthorizedWellCatalog(access.companyId);
+      if (!wells.ok) throwDecided(wells);
       const well = checkWell(record, wells);
       if (!well.ok) throwDecided(well);
       const revision = await loadVerifiedRevision(decided.companyId, packet.packetRef);

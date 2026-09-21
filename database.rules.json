@@ -1,8 +1,78 @@
 {
   "rules": {
     ".read": true,
-    ".write": true,
+    ".write": false,
+
+    "users": {
+      "$uid": {
+        "email": {
+          ".write": "auth != null && auth.uid === $uid && newData.isString() && newData.val().length > 0 && newData.val().length <= 320"
+        },
+        "displayName": {
+          ".write": "auth != null && auth.uid === $uid && newData.isString() && newData.val().length > 0 && newData.val().length <= 120"
+        }
+      }
+    },
+
+    "drivers": {
+      "profiles": {
+        ".write": false,
+        "$driverId": {
+          ".write": false
+        }
+      },
+      "approved": {
+        "$hash": {
+          ".write": "auth != null"
+        }
+      },
+      "pending": {
+        "$id": {
+          ".write": "auth != null"
+        }
+      },
+      "pending_secure": {
+        ".write": false,
+        "$id": {
+          ".write": false
+        }
+      }
+    },
+
+    "wellConfig": {
+      ".write": false,
+      "$id": {
+        ".write": false
+      }
+    },
+
+    "trusted_staff_authority": {
+      ".write": false,
+      "$id": {
+        ".write": false
+      }
+    },
+
+    "well_config": {
+      "$well": {
+        "route": {
+          ".write": "auth != null && root.child('well_config').child($well).exists() && (newData.isString() || !newData.exists())"
+        },
+        "routeRecording": {
+          ".write": "auth != null && root.child('well_config').child($well).exists() && (newData.isBoolean() || !newData.exists())"
+        },
+        "routeGroupWell": {
+          ".write": "auth != null && root.child('well_config').child($well).exists() && (newData.isString() || !newData.exists())"
+        }
+      }
+    },
+
     "packets": {
+      "incoming": {
+        "$id": {
+          ".write": "auth != null && newData.exists() && newData.hasChildren(['wellName', 'requestType']) && newData.child('requestType').val() === 'pull' && !newData.hasChild('role') && !newData.hasChild('roles') && !newData.hasChild('companyId') && !newData.hasChild('capabilities')"
+        }
+      },
       "processed": {
         ".indexOn": ["driverId", "driverName", "wellName", "invoiceDocId"]
       }

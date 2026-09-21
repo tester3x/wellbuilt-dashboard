@@ -39,7 +39,7 @@ const H2S = new Set(['none', 'low', 'high', 'unknown']);
 const API_RE = /^\d{2}-\d{3}-\d{5}-\d{2}-\d{2}$/;
 const FORBIDDEN_NAME = /[.$#[\]\/]/;
 
-export type StaffWriteWellOp = 'create' | 'update';
+export type StaffWriteWellOp = 'create' | 'update' | 'delete' | 'rename';
 
 export type WellConfigCreateRecord = {
   route: string;
@@ -75,6 +75,8 @@ export type StaffWriteWellDecision =
   | { ok: true; action: 'create'; wellName: string; payload: WellConfigCreateRecord }
   | { ok: true; action: 'already_exact'; wellName: string; payload: WellConfigCreateRecord | Record<string, unknown> }
   | { ok: true; action: 'update'; wellName: string; patch: WellConfigUpdatePatch; payload: Record<string, unknown> }
+  | { ok: true; action: 'delete'; wellName: string }
+  | { ok: true; action: 'rename'; wellName: string; newName: string; payload: Record<string, unknown> }
   | { ok: false; reason: string; message: string };
 
 function positiveNumber(v: unknown): number | null {
@@ -245,8 +247,30 @@ export function evaluateStaffWriteWellConfig(input: {
     }
     return { ok: true, action: 'update', wellName, patch: picked.patch, payload };
   }
+  if (input.op === 'delete') {
+    const nameError = validateWellConfigName(input.wellName);
+    if (nameError) return { ok: false, reason: 'invalid_name', message: nameError };
+    if (!input.existingByName || !input.existingNameKey) {
+      return { ok: false, reason: 'not_found', message: 'Well does not exist.' };
+    }
+    return { ok: true, action: 'delete', wellName: input.existingNameKey };
+  }
+  if (input.op === 'rename') {
+    const nameError = validateWellConfigName(input.wellName);
+    if (nameError) return { ok: false, reason: 'invalid_name', message: nameError };
+    if (!input.existingByName || !input.existingNameKey) {
+      return { ok: false, reason: 'not_found', message: 'Well does not exist.' };
+    }
+    const newName = typeof input.config.newName === 'string' ? input.config.newName.trim() : '';
+    const newErr = validateWellConfigName(newName);
+    if (newErr) return { ok: false, reason: 'invalid_name', message: newErr };
+    if (newName === input.existingNameKey) {
+      return { ok: true, action: 'already_exact', wellName: newName, payload: input.existingByName };
+    }
+    return { ok: true, action: 'rename', wellName: input.existingNameKey, newName, payload: input.existingByName };
+  }
   if (input.op !== 'create') {
-    return { ok: false, reason: 'invalid_op', message: 'Only create is supported.' };
+    return { ok: false, reason: 'invalid_op', message: 'Unsupported well operation.' };
   }
   const nameError = validateWellConfigName(input.wellName);
   if (nameError) return { ok: false, reason: 'invalid_name', message: nameError };

@@ -6,7 +6,8 @@ import { getFirebaseDatabase, getFirestoreDb, getFirebaseFunctions } from '@/lib
 import { ref, get, set, remove, update } from 'firebase/database';
 import { collection, getDocs } from 'firebase/firestore';
 import { fetchRouteNames } from '@/lib/wells';
-import { type UserRole, DEFAULT_ROLE_LABELS, getPrimaryRole } from '@/lib/auth';
+import { type UserRole, DEFAULT_ROLE_LABELS } from '@/lib/auth';
+import { staffWriteUserRoles, classifyUserRolesError } from '@/lib/staffWriteUserRoles';
 import { mergeEmployees, EmployeeRow } from '@/lib/employees';
 import { EmployeePanel } from './EmployeePanel';
 import { useAuth } from '@/contexts/AuthContext';
@@ -867,15 +868,12 @@ export function DriversTab({ scopeCompanyId, isWbAdmin = false }: DriversTabProp
   const saveEmployeeRoles = async (uid: string, roles: UserRole[]) => {
     try {
       const cleaned = roles.length > 0 ? roles : (['viewer'] as UserRole[]);
-      await update(ref(db, `users/${uid}`), {
-        roles: cleaned,
-        role: getPrimaryRole(cleaned),
-      });
+      await staffWriteUserRoles({ targetUid: uid, roles: cleaned });
       setMessage('Roles updated');
       await loadDrivers();
     } catch (err) {
       console.error('Failed to save roles:', err);
-      setMessage('Failed to save roles');
+      setMessage(classifyUserRolesError(err));
     }
   };
 
@@ -920,7 +918,7 @@ export function DriversTab({ scopeCompanyId, isWbAdmin = false }: DriversTabProp
           // Mark the users/{uid} record inactive by clearing role → driver.
           // We keep the auth account so the admin can re-promote without
           // a new invite link cycle.
-          await update(ref(db, `users/${driver.dashboardUid}`), { role: 'driver' });
+          await staffWriteUserRoles({ targetUid: driver.dashboardUid, roles: ['driver'] });
           await update(ref(db, `drivers/approved/${driver.key}`), {
             dashboardUid: null,
             dashboardRole: null,

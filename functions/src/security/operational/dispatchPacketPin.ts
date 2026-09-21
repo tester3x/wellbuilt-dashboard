@@ -150,16 +150,78 @@ export function resolveCanonicalJobType(
   return fail('unknown_job_type', 'jobType');
 }
 
+export type AuthorizedWellCatalog = {
+  names: readonly string[];
+  ambiguous: readonly string[];
+};
+
+/**
+ * Canonical well allowlist from RTDB well_config.
+ * Keys are short names; ndicName / wellName fields are aliases.
+ * well_config is a globally shared Liquid Gold pool and typically has no
+ * companyId; if a record carries a nonempty companyId it is tenant-bound.
+ */
+export function collectAuthorizedWellNames(
+  catalog: unknown,
+  actingCompanyId?: string,
+): StoreResult<AuthorizedWellCatalog> {
+  if (catalog === undefined || catalog === null) {
+    return { ok: true, names: [], ambiguous: [] };
+  }
+  if (typeof catalog !== 'object' || Array.isArray(catalog)) {
+    return fail('malformed_well_catalog', 'well_config');
+  }
+  const proto = Object.getPrototypeOf(catalog);
+  if (proto !== Object.prototype && proto !== null) {
+    return fail('malformed_well_catalog', 'well_config');
+  }
+  const byNorm = new Map<string, string>();
+  const ambiguous = new Set<string>();
+  for (const key of Object.getOwnPropertyNames(catalog)) {
+    if (key === '__proto__' || key === 'constructor' || key === 'prototype') {
+      return fail('malformed_well_catalog', key);
+    }
+    const rec = (catalog as Record<string, unknown>)[key];
+    if (rec === null || typeof rec !== 'object' || Array.isArray(rec)) {
+      return fail('malformed_well_catalog', key);
+    }
+    const obj = rec as Record<string, unknown>;
+    const recordCompany = typeof obj.companyId === 'string' ? obj.companyId.trim() : '';
+    if (recordCompany) {
+      const actor = typeof actingCompanyId === 'string' ? actingCompanyId.trim() : '';
+      if (!actor || recordCompany !== actor) continue;
+    }
+    const label = typeof obj.wellName === 'string' ? obj.wellName.trim() : '';
+    const ndic = typeof obj.ndicName === 'string' ? obj.ndicName.trim() : '';
+    const aliases = [key.trim(), label, ndic].filter(Boolean);
+    if (!aliases.length) return fail('malformed_well_catalog', key);
+    for (const alias of aliases) {
+      const norm = alias.toLowerCase();
+      const owner = byNorm.get(norm);
+      if (owner && owner !== key) ambiguous.add(norm);
+      else byNorm.set(norm, key);
+    }
+  }
+  const names: string[] = [];
+  for (const [norm] of byNorm) {
+    if (!ambiguous.has(norm)) names.push(norm);
+  }
+  return { ok: true, names, ambiguous: [...ambiguous].sort() };
+}
+
 export function evaluateWellAuthorized(
   wellName: string,
   ndicWellName: string,
   authorizedNames: readonly string[],
+  ambiguousNames: readonly string[] = [],
 ): StoreResult<{ wellName: string }> {
   const well = wellName.trim();
   const ndic = ndicWellName.trim();
   if (!well && !ndic) return fail('well_required', 'wellName');
-  if (!authorizedNames.length) return fail('well_scope_unavailable', 'wellName');
   const wanted = [well, ndic].filter(Boolean).map((n) => n.toLowerCase());
+  const ambiguous = new Set(ambiguousNames.map((n) => n.trim().toLowerCase()).filter(Boolean));
+  if (wanted.some((n) => ambiguous.has(n))) return fail('well_alias_ambiguous', 'wellName');
+  if (!authorizedNames.length) return fail('well_scope_unavailable', 'wellName');
   const scope = authorizedNames.map((n) => n.trim().toLowerCase()).filter(Boolean);
   const ok = wanted.some((n) => scope.includes(n));
   if (!ok) return fail('well_unauthorized', 'wellName');

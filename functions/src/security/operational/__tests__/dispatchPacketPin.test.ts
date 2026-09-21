@@ -9,6 +9,7 @@ import {
 import {
   evaluateCreateIfAbsent,
   evaluateExistingDispatchDriverUpdate,
+  collectAuthorizedWellNames,
   evaluateWellAuthorized,
   parsePacketRef,
   readDispatchBinding,
@@ -247,6 +248,72 @@ describe('job type and well', () => {
     expect(evaluateWellAuthorized('Python', '', ['Other']).ok).toBe(false);
     expect(evaluateWellAuthorized('Python', '', ['Python']).ok).toBe(true);
     expect(evaluateWellAuthorized('', '', ['Python']).ok).toBe(false);
+  });
+  it('well_config catalog authorizes key and ndicName; forged wellConfig shape without keys fails', () => {
+    const catalog = collectAuthorizedWellNames({
+      Python: { ndicName: 'PYTHON 1', tanks: 1 },
+    });
+    expect(catalog.ok).toBe(true);
+    if (!catalog.ok) return;
+    expect(evaluateWellAuthorized('Python', '', catalog.names, catalog.ambiguous).ok).toBe(true);
+    expect(evaluateWellAuthorized('', 'PYTHON 1', catalog.names, catalog.ambiguous).ok).toBe(true);
+    expect(evaluateWellAuthorized('Unknown', '', catalog.names, catalog.ambiguous).ok).toBe(false);
+  });
+  it('missing canonical catalog fails closed', () => {
+    const empty = collectAuthorizedWellNames({});
+    expect(empty.ok).toBe(true);
+    if (!empty.ok) return;
+    expect(evaluateWellAuthorized('Python', '', empty.names, empty.ambiguous)).toMatchObject({
+      ok: false,
+      reason: 'well_scope_unavailable',
+    });
+  });
+  it('malformed catalog record fails closed', () => {
+    expect(collectAuthorizedWellNames({ Python: 'nope' }).ok).toBe(false);
+    expect(collectAuthorizedWellNames(['Python']).ok).toBe(false);
+  });
+  it('ambiguous aliases fail closed', () => {
+    const catalog = collectAuthorizedWellNames({
+      Python: { ndicName: 'SHARED' },
+      Other: { ndicName: 'SHARED' },
+    });
+    expect(catalog.ok).toBe(true);
+    if (!catalog.ok) return;
+    expect(evaluateWellAuthorized('SHARED', '', catalog.names, catalog.ambiguous)).toMatchObject({
+      ok: false,
+      reason: 'well_alias_ambiguous',
+    });
+    expect(evaluateWellAuthorized('Python', '', catalog.names, catalog.ambiguous).ok).toBe(true);
+  });
+  it('other-company record is excluded when companyId is present', () => {
+    const catalog = collectAuthorizedWellNames({
+      Python: { ndicName: 'PYTHON 1', companyId: 'liquid-gold' },
+      Foreign: { ndicName: 'FOREIGN 1', companyId: 'other-hauler' },
+      Pool: { ndicName: 'POOL 1' },
+    }, 'liquid-gold');
+    expect(catalog.ok).toBe(true);
+    if (!catalog.ok) return;
+    expect(evaluateWellAuthorized('Python', '', catalog.names, catalog.ambiguous).ok).toBe(true);
+    expect(evaluateWellAuthorized('POOL 1', '', catalog.names, catalog.ambiguous).ok).toBe(true);
+    expect(evaluateWellAuthorized('Foreign', '', catalog.names, catalog.ambiguous).ok).toBe(false);
+  });
+  it('caller cannot inject a well absent from the canonical catalog', () => {
+    const catalog = collectAuthorizedWellNames({
+      Python: { ndicName: 'PYTHON 1' },
+    });
+    expect(catalog.ok).toBe(true);
+    if (!catalog.ok) return;
+    expect(evaluateWellAuthorized('Forged', 'FORGED 1', catalog.names, catalog.ambiguous)).toMatchObject({
+      ok: false,
+      reason: 'well_unauthorized',
+    });
+    const forgedTree = collectAuthorizedWellNames({
+      Python: { ndicName: 'PYTHON 1' },
+      Forged: { ndicName: 'FORGED 1' },
+    });
+    expect(forgedTree.ok).toBe(true);
+    if (!forgedTree.ok) return;
+    expect(evaluateWellAuthorized('Forged', '', catalog.names, catalog.ambiguous).ok).toBe(false);
   });
 });
 

@@ -3,13 +3,14 @@
 import { useEffect, useState, useRef } from 'react';
 import { useAuth } from '@/contexts/AuthContext';
 import { hasCapability } from '@/lib/auth';
-import { getFirestoreDb, getFirebaseDatabase } from '@/lib/firebase';
+import { getFirestoreDb, getFirebaseDatabase, getFirebaseFunctions } from '@/lib/firebase';
 import { collection, getDocs, getDoc, doc, setDoc, deleteDoc, updateDoc } from 'firebase/firestore';
 import { createAdminContractService, AdminServiceError } from '@/lib/adminContractService';
 import { companyMutationRoute, errorGuidance } from '@/lib/adminUiLogic';
 import { CompanyContractPanel } from './CompanyContractPanel';
 import { CompanyJoinCodeCard } from './CompanyJoinCodeCard';
-import { ref as dbRef, get as dbGet, update as dbUpdate } from 'firebase/database';
+import { ref as dbRef, get as dbGet, set as dbSet } from 'firebase/database';
+import { httpsCallable } from 'firebase/functions';
 import { loadOperators, searchOperators, NdicOperator } from '@/lib/firestoreWells';
 import {
   type Tier,
@@ -166,24 +167,8 @@ export function CompaniesTab({ scopeCompanyId, isWbAdmin = false }: CompaniesTab
     if (!window.confirm(`Create customer "${name}" and make ${p.email || p.uid} its owner?`)) return;
     setActivatingUid(p.uid);
     try {
-      // 1. Unique company slug
-      const base = name.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '').slice(0, 60) || 'company';
-      const existing = new Set(companies.map(c => c.id));
-      let slug = base;
-      let n = 2;
-      while (existing.has(slug)) slug = `${base}-${n++}`;
-
-      // 2. Create the company (active)
-      await setDoc(doc(firestore, 'companies', slug), { name, status: 'active' });
-
-      // 3. Activate the user as the company owner
-      await dbUpdate(dbRef(getFirebaseDatabase(), `users/${p.uid}`), {
-        companyId: slug,
-        companyName: name,
-        role: 'it',
-        status: 'active',
-        onboardingStatus: 'active',
-      });
+      const fn = httpsCallable(getFirebaseFunctions(), 'adminApproveCompanyOnboarding');
+      await fn({ uid: p.uid, companyName: name });
 
       setPendingSignups(prev => prev.filter(x => x.uid !== p.uid));
       setMessage(`Created customer "${name}" and assigned ${p.email || p.uid} as owner.`);
@@ -930,15 +915,13 @@ export function CompaniesTab({ scopeCompanyId, isWbAdmin = false }: CompaniesTab
                                     const rtdb = getFirebaseDatabase();
                                     const driversSnap = await dbGet(dbRef(rtdb, 'drivers/approved'));
                                     if (driversSnap.exists()) {
-                                      const updates: Record<string, any> = {};
+                                      const syncs: Promise<void>[] = [];
                                       Object.entries(driversSnap.val()).forEach(([hash, data]: [string, any]) => {
                                         if (data.companyId === company.id) {
-                                          updates[`drivers/approved/${hash}/tier`] = tier;
+                                          syncs.push(dbSet(dbRef(rtdb, `drivers/approved/${hash}/tier`), tier));
                                         }
                                       });
-                                      if (Object.keys(updates).length > 0) {
-                                        await dbUpdate(dbRef(rtdb), updates);
-                                      }
+                                      if (syncs.length > 0) await Promise.all(syncs);
                                     }
                                   } catch (syncErr) {
                                     console.warn('Tier sync to drivers failed (non-blocking):', syncErr);
