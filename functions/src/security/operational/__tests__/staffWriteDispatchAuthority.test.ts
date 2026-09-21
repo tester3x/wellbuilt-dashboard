@@ -307,11 +307,11 @@ describe('remaining RTDB-backed staff callables (not migrated)', () => {
     }
     expect(hits).toEqual(expect.arrayContaining([
       expect.stringMatching(/adminAuth\.ts$/),
-      expect.stringMatching(/adminDashboardCatalog\.ts$/),
       expect.stringMatching(/companyBindingCallable\.ts$/),
       expect.stringMatching(/companyOnboarding\.ts$/),
       expect.stringMatching(/driverAuthCallables\.ts$/),
     ]));
+    expect(hits.join('\n')).not.toMatch(/adminDashboardCatalog\.ts/);
     expect(hits.join('\n')).not.toMatch(/staffWriteDispatchCallable/);
     expect(hits.join('\n')).not.toMatch(/staffWriteWellConfigCallable/);
     expect(hits.join('\n')).not.toMatch(/dismissDispatchCallable/);

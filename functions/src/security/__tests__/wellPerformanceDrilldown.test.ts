@@ -193,7 +193,8 @@ describe('rowsFromSecureWellPayload exact-name fail-closed', () => {
     expect(catalog).toMatch(/requestedAdminWellName\(request\.data\)/);
     expect(catalog).toMatch(/performance\/\$\{wellKey\}/);
     expect(catalog).toMatch(/projectWellPerformance/);
-    expect(catalog).toMatch(/requireRegisteredDashboardUser/);
+    expect(catalog).toMatch(/requireTrustedCatalogCaller/);
+    expect(catalog).not.toMatch(/requireRegisteredDashboardUser/);
     expect(catalog).not.toMatch(/requireSecureDriver/);
     expect(catalog).not.toMatch(/getDriverWellPerformance/);
   });

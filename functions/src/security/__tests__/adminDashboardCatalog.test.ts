@@ -12,15 +12,19 @@ describe('adminGetDashboardCatalog recovery surface', () => {
   const payrollPage = readFileSync(join(__dirname, '../../../../src/app/payroll/page.tsx'), 'utf8');
   const driverLogs = readFileSync(join(__dirname, '../../../../src/app/driverlogs/page.tsx'), 'utf8');
 
-  it('uses Admin SDK parent reads and manageDrivers, not client RTDB', () => {
-    expect(callable).toMatch(/requireManageDrivers/);
+  it('uses Admin SDK parent reads and trusted manageDrivers, not client RTDB', () => {
+    expect(callable).toMatch(/requireTrustedCompanyCapability/);
+    expect(callable).toMatch(/TRUSTED_CAPABILITY_MANAGE_DRIVERS/);
+    expect(callable).not.toMatch(/requireManageDrivers/);
+    expect(callable).not.toMatch(/requireRegisteredDashboardUser/);
+    expect(callable).toMatch(/isPlatformAdmin: false/);
     expect(callable).toMatch(/drivers\/approved/);
     expect(callable).toMatch(/well_config/);
     expect(callable).toMatch(/ref\('users'\)/);
   });
 
   it('captures the caller and projects through the scoped allowlist', () => {
-    expect(callable).toMatch(/const caller = await requireManageDrivers/);
+    expect(callable).toMatch(/requireTrustedCatalogCaller/);
     expect(callable).toMatch(/const projected = projectDashboardCatalog/);
     expect(callable).toMatch(/caller,/);
     expect(callable).toMatch(/\.\.\.projected/);
