@@ -4,7 +4,11 @@
  */
 import * as httpsV2 from 'firebase-functions/v2/https';
 import * as admin from 'firebase-admin';
-import { requireManageDrivers } from './adminAuth';
+import {
+  requireTrustedCompanyCapability,
+  TRUSTED_CAPABILITY_MANAGE_DRIVERS,
+} from './trustedStaffAuthority';
+import { staffWriteDispatchAccessFromTrusted } from './operational/staffWriteDispatch';
 import { writeSecurityAudit } from './audit';
 import {
   assertCanonicalDriverId,
@@ -34,10 +38,17 @@ const ALLOWED = new Set([
 export const staffWriteDriverAssignment = httpsV2.onCall(
   { timeoutSeconds: 30, memory: '256MiB', enforceAppCheck: false },
   async (request) => {
-    const caller = await requireManageDrivers(
+    const trusted = await requireTrustedCompanyCapability(
       request.auth?.uid,
-      request.auth?.token as Record<string, unknown> | undefined,
+      TRUSTED_CAPABILITY_MANAGE_DRIVERS,
     );
+    const access = staffWriteDispatchAccessFromTrusted(trusted);
+    if (!access.ok) {
+      throw new httpsV2.HttpsError(
+        access.reason === 'unauthenticated' ? 'unauthenticated' : 'permission-denied',
+        access.reason,
+      );
+    }
     const raw = (request.data || {}) as Record<string, unknown>;
     for (const key of Object.keys(raw)) {
       if (!ALLOWED.has(key)) throw new httpsV2.HttpsError('invalid-argument', `Unexpected field: ${key}`);
@@ -67,8 +78,8 @@ export const staffWriteDriverAssignment = httpsV2.onCall(
     const decided = evaluateStaffWriteDriverAssignment({
       driverId,
       profile,
-      callerCompanyId: caller.companyId,
-      isPlatformAdmin: caller.isPlatformAdmin,
+      callerCompanyId: access.companyId,
+      isPlatformAdmin: access.isPlatformAdmin,
     });
     if (!decided.ok) {
       throw new httpsV2.HttpsError('failed-precondition', decided.reason);
@@ -138,9 +149,9 @@ export const staffWriteDriverAssignment = httpsV2.onCall(
       expectedPreviewContextDigest: expectedContext,
       proposedRoutes: after.assignedRoutes,
       proposedWells: after.assignedWells,
-      callerCompanyId: caller.companyId,
-      isPlatformAdmin: caller.isPlatformAdmin,
-      callerUid: caller.uid,
+      callerCompanyId: access.companyId,
+      isPlatformAdmin: access.isPlatformAdmin,
+      callerUid: access.uid,
       nowMs: Date.now(),
     });
     if (!applied.ok) {
@@ -148,7 +159,7 @@ export const staffWriteDriverAssignment = httpsV2.onCall(
     }
     await writeSecurityAudit({
       action: 'staffWriteDriverAssignment',
-      actorUid: caller.uid,
+      actorUid: access.uid,
       driverId,
       detail: {
         companyId: decided.companyId,

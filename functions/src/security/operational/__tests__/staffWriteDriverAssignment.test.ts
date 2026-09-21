@@ -47,3 +47,20 @@ describe('staffWriteDriverAssignment identity rules', () => {
     expect(src).not.toMatch(/mirrorLegacy/);
   });
 });
+
+describe('staffWriteDriverAssignment trusted authority', () => {
+  const { readFileSync } = require('fs') as typeof import('fs');
+  const { join } = require('path') as typeof import('path');
+  const callable = readFileSync(join(__dirname, '../../staffWriteDriverAssignmentCallable.ts'), 'utf8');
+
+  it('uses trusted manageDrivers and hard-false platform admin', () => {
+    expect(callable).toMatch(/requireTrustedCompanyCapability/);
+    expect(callable).toMatch(/TRUSTED_CAPABILITY_MANAGE_DRIVERS/);
+    expect(callable).toMatch(/staffWriteDispatchAccessFromTrusted/);
+    expect(callable).not.toMatch(/requireManageDrivers/);
+    expect(callable).not.toMatch(/adminAuth/);
+    expect(callable).toMatch(/callerCompanyId: access\.companyId/);
+    expect(callable).toMatch(/isPlatformAdmin: access\.isPlatformAdmin/);
+    expect(callable).toMatch(/callerUid: access\.uid/);
+  });
+});
