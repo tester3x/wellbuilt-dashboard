@@ -1,14 +1,19 @@
 import * as httpsV2 from 'firebase-functions/v2/https';
 import * as admin from 'firebase-admin';
 import { FieldValue } from 'firebase-admin/firestore';
-import { requireManageDrivers } from './adminAuth';
+import {
+  requireTrustedCompanyCapability,
+  TRUSTED_CAPABILITY_MANAGE_DRIVERS,
+} from './trustedStaffAuthority';
 import { LEGACY_WELL_POOL_COMPANY_ID } from './dashboardCatalogProjection';
 import {
   DISPATCH_CREATE_ALLOWLIST,
   DISPATCH_UPDATE_ALLOWLIST,
+  STAFF_WRITE_DISPATCH_FORBIDDEN_REQUEST_KEYS,
   evaluateStaffWriteDispatch,
   pickDispatchFields,
   serializeStaffDispatchRecord,
+  staffWriteDispatchAccessFromTrusted,
   isCanonicalDriverId,
   resolveServerAssignmentIdentity,
   type DispatchDriverProfile,
@@ -90,7 +95,24 @@ async function stampServerAuthoritativeIdentity(
 
 function throwDecided(decided: { ok: false; reason: string; field?: string }): never {
   const msg = decided.field ? `${decided.reason}:${decided.field}` : decided.reason;
-  const code = decided.reason === 'unexpected_field' || decided.reason === 'unknown_status'
+  if (decided.reason === 'unauthenticated') {
+    throw new httpsV2.HttpsError('unauthenticated', msg);
+  }
+  if (
+    decided.reason === 'missing_company'
+    || decided.reason === 'missing_required_capability'
+    || decided.reason === 'no_trusted_authority_record'
+    || decided.reason === 'trusted_authority_inactive'
+    || decided.reason === 'trusted_authority_malformed'
+    || decided.reason === 'trusted_authority_uid_mismatch'
+    || decided.reason === 'reserved_capability'
+    || decided.reason === 'unknown_capability'
+  ) {
+    throw new httpsV2.HttpsError('permission-denied', msg);
+  }
+  const code = decided.reason === 'unexpected_field'
+    || decided.reason === 'unknown_status'
+    || decided.reason === 'caller_authority_field'
     ? 'invalid-argument'
     : 'failed-precondition';
   throw new httpsV2.HttpsError(code, msg);
@@ -99,12 +121,17 @@ function throwDecided(decided: { ok: false; reason: string; field?: string }): n
 export const staffWriteDispatch = httpsV2.onCall(
   { timeoutSeconds: 30, memory: '256MiB', enforceAppCheck: false },
   async (request) => {
-    const caller = await requireManageDrivers(
+    const trusted = await requireTrustedCompanyCapability(
       request.auth?.uid,
-      request.auth?.token as Record<string, unknown> | undefined,
+      TRUSTED_CAPABILITY_MANAGE_DRIVERS,
     );
+    const access = staffWriteDispatchAccessFromTrusted(trusted);
+    if (!access.ok) throwDecided(access);
     const raw = (request.data || {}) as Record<string, unknown>;
     for (const key of Object.keys(raw)) {
+      if ((STAFF_WRITE_DISPATCH_FORBIDDEN_REQUEST_KEYS as readonly string[]).includes(key)) {
+        throwDecided({ ok: false, reason: 'caller_authority_field', field: key });
+      }
       if (!ALLOWED_KEYS.has(key)) {
         throw new httpsV2.HttpsError('invalid-argument', `Unexpected field: ${key}`);
       }
@@ -135,8 +162,8 @@ export const staffWriteDispatch = httpsV2.onCall(
         op,
         job: null,
         record,
-        callerCompanyId: caller.companyId,
-        isPlatformAdmin: caller.isPlatformAdmin,
+        callerCompanyId: access.companyId,
+        isPlatformAdmin: access.isPlatformAdmin,
       });
       if (!decided.ok) throwDecided(decided);
       const wells = await loadAuthorizedWellNames();
@@ -176,7 +203,7 @@ export const staffWriteDispatch = httpsV2.onCall(
           companyId: decided.companyId,
           status: decided.status || 'pending',
           assignedAt: FieldValue.serverTimestamp(),
-          assignedBy: fields.assignedBy || caller.uid,
+          assignedBy: fields.assignedBy || access.uid,
         });
         return { result: 'created' as const, dispatchId: id.dispatchId };
       });
@@ -193,8 +220,8 @@ export const staffWriteDispatch = httpsV2.onCall(
         op,
         job,
         record,
-        callerCompanyId: caller.companyId,
-        isPlatformAdmin: caller.isPlatformAdmin,
+        callerCompanyId: access.companyId,
+        isPlatformAdmin: access.isPlatformAdmin,
       });
       if (!decided.ok) throwDecided(decided);
       if (decided.idempotent) {
@@ -206,7 +233,7 @@ export const staffWriteDispatch = httpsV2.onCall(
         tx.update(ref, {
           status: 'cancelled',
           cancelledAt: FieldValue.serverTimestamp(),
-          cancelledBy: caller.uid,
+          cancelledBy: access.uid,
         });
         return { idempotent: false as const, dispatchId };
       }
@@ -226,7 +253,7 @@ export const staffWriteDispatch = httpsV2.onCall(
       tx.update(ref, {
         ...fields,
         updatedAt: FieldValue.serverTimestamp(),
-        updatedBy: caller.uid,
+        updatedBy: access.uid,
       });
       return { idempotent: false as const, dispatchId };
     });

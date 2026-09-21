@@ -1,4 +1,8 @@
 import { LEGACY_WELL_POOL_COMPANY_ID } from '../dashboardCatalogProjection';
+import {
+  TRUSTED_CAPABILITY_MANAGE_DRIVERS,
+  type TrustedCompanyAuthority,
+} from '../trustedStaffAuthority';
 
 /** Every business field the Dispatch UI actually sends on create/update. */
 export const DISPATCH_CREATE_ALLOWLIST = [
@@ -105,6 +109,38 @@ export const UPDATE_STATUS_TRANSITIONS: Record<string, readonly string[]> = {
 };
 
 export type StaffWriteOp = 'create' | 'update' | 'cancel';
+
+/** Capability the staffWriteDispatch callable requires on trusted_staff_authority. */
+export const STAFF_WRITE_DISPATCH_REQUIRED_CAPABILITY = TRUSTED_CAPABILITY_MANAGE_DRIVERS;
+
+export const STAFF_WRITE_DISPATCH_FORBIDDEN_REQUEST_KEYS = Object.freeze([
+  'companyId',
+  'targetCompanyId',
+  'publisherUid',
+  'publisher',
+  'publishedByUid',
+  'uid',
+  'role',
+  'roles',
+  'capabilities',
+  'manageDrivers',
+  'isPlatformAdmin',
+  'wellbuiltAdmin',
+  'platformAdmin',
+] as const);
+
+/**
+ * Convert a proven trusted-authority result into the C3 staff caller.
+ * Platform-admin is never true here — companyId is exclusively the trusted record's.
+ */
+export function staffWriteDispatchAccessFromTrusted(
+  authority: TrustedCompanyAuthority | null,
+): { ok: true; uid: string; companyId: string; isPlatformAdmin: false } | { ok: false; reason: string } {
+  if (!authority?.uid) return { ok: false, reason: 'unauthenticated' };
+  const companyId = typeof authority.companyId === 'string' ? authority.companyId.trim() : '';
+  if (!companyId) return { ok: false, reason: 'missing_company' };
+  return { ok: true, uid: authority.uid, companyId, isPlatformAdmin: false };
+}
 
 export type StaffWriteResult =
   | { ok: true; op: StaffWriteOp; companyId: string; idempotent?: boolean; status?: string }

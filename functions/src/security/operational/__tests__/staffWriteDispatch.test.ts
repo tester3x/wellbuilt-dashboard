@@ -323,6 +323,12 @@ describe('staffWriteDispatch callable transactions', () => {
     // applied on the create path AND the reassign (update) path
     expect((callable.match(/stampServerAuthoritativeIdentity\(fields/g) || []).length).toBeGreaterThanOrEqual(2);
   });
+  it('authorizes through trusted staff capability, never RTDB requireManageDrivers', () => {
+    expect(callable).toMatch(/requireTrustedCompanyCapability/);
+    expect(callable).toMatch(/TRUSTED_CAPABILITY_MANAGE_DRIVERS/);
+    expect(callable).not.toMatch(/requireManageDrivers/);
+    expect(callable).not.toMatch(/from '\.\/adminAuth'/);
+  });
 });
 
 describe('canonical assignment identity (server-authoritative)', () => {

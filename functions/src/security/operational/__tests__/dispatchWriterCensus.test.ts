@@ -37,6 +37,8 @@ describe('dispatch writer census after C3 audit repair', () => {
     expect(src).toMatch(/evaluateCreateIfAbsent/);
     expect(src).toMatch(/tx\.create/);
     expect(src).not.toMatch(/\.add\(/);
+    expect(src).toMatch(/requireTrustedCompanyCapability/);
+    expect(src).not.toMatch(/requireManageDrivers/);
   });
 
   it('createDriverDispatchIfAbsent creates only through governed pin birth', () => {
