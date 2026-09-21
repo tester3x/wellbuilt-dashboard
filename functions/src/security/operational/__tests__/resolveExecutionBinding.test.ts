@@ -11,6 +11,7 @@ import { stampDispatchBinding } from '../dispatchPacketPin';
 import {
   EXECUTABLE_DISPATCH_STATUSES,
   parseResolveExecutionBindingRequest,
+  readDispatchExecutionContext,
   RESOLVE_FORBIDDEN_KEYS,
   runResolveExecutionBinding,
 } from '../resolveExecutionBinding';
@@ -122,6 +123,7 @@ describe('resolveExecutionBinding', () => {
     expect(r.companyId).toBe(COMPANY);
     expect(r.driverId).toBe(DRIVER);
     expect(r.binding).toEqual(stampDispatchBinding(rev));
+    expect(r.execution).toEqual({ jobTypeId: 'pw', wellName: 'Python', ndicWellName: 'PYTHON 1' });
     expect(r.definition).toEqual(rev.definition);
     expect(r.implementedEffects).toEqual([]);
     expect(writes).toEqual([]);
@@ -286,5 +288,191 @@ describe('resolveExecutionBinding', () => {
     const barrel = readFileSync(join(ROOT, 'functions', 'src', 'security', 'index.ts'), 'utf8');
     expect(barrel).toMatch(/export \{ resolveExecutionBinding \} from '\.\/resolveExecutionBindingCallable'/);
     expect(barrel.match(/export \{ resolveExecutionBinding \}/g)?.length).toBe(1);
+  });
+});
+
+describe('G-015 authoritative execution context', () => {
+  const fixture = JSON.parse(readFileSync(join(__dirname, '__fixtures__', 'g015-execution-binding-response.json'), 'utf8'));
+
+  it('1. valid response contains the dispatch authoritative execution context', async () => {
+    const store = new MemoryStore();
+    const rev = await publishRevision(store);
+    const job = dispatchFrom(rev);
+    const r = await runResolveExecutionBinding({
+      jobId: JOB,
+      caller: { driverId: DRIVER, companyId: COMPANY },
+      getDispatch: async () => job,
+      getRevision: async (id) => {
+        const data = await store.getRevision(id);
+        return { exists: !!data, data: data || undefined };
+      },
+    });
+    expect(r.ok).toBe(true);
+    if (!r.ok) return;
+    expect(r.execution).toEqual({
+      jobTypeId: 'pw',
+      wellName: 'Python',
+      ndicWellName: 'PYTHON 1',
+    });
+    expect(r.execution.wellName).not.toBe(r.execution.ndicWellName);
+  });
+
+  it('2. request remains exactly { jobId }', () => {
+    expect(parseResolveExecutionBindingRequest({ jobId: JOB })).toEqual({ ok: true, jobId: JOB });
+    expect(Object.keys(parseResolveExecutionBindingRequest({ jobId: JOB }))).toEqual(['ok', 'jobId']);
+  });
+
+  it('3. caller wellName/ndicWellName/jobTypeId fields are rejected', () => {
+    for (const key of ['wellName', 'ndicWellName', 'jobType', 'jobTypeId', 'execution', 'well']) {
+      expect(parseResolveExecutionBindingRequest({ jobId: JOB, [key]: 'Python' })).toMatchObject({
+        ok: false,
+        reason: 'caller_authority_field',
+        field: key,
+      });
+    }
+  });
+
+  it('4. other-driver and other-company lookups fail', async () => {
+    const store = new MemoryStore();
+    const rev = await publishRevision(store);
+    const job = dispatchFrom(rev);
+    const getRev = async (id: string) => {
+      const data = await store.getRevision(id);
+      return { exists: !!data, data: data || undefined };
+    };
+    expect(await runResolveExecutionBinding({
+      jobId: JOB,
+      caller: { driverId: OTHER_DRIVER, companyId: COMPANY },
+      getDispatch: async () => job,
+      getRevision: getRev,
+    })).toMatchObject({ ok: false, reason: 'other_driver' });
+    expect(await runResolveExecutionBinding({
+      jobId: JOB,
+      caller: { driverId: DRIVER, companyId: OTHER },
+      getDispatch: async () => job,
+      getRevision: getRev,
+    })).toMatchObject({ ok: false, reason: 'wrong_company' });
+  });
+
+  it('5. missing well identity fails closed', async () => {
+    const store = new MemoryStore();
+    const rev = await publishRevision(store);
+    const job = dispatchFrom(rev);
+    const { wellName, ...noWell } = job;
+    void wellName;
+    expect(await runResolveExecutionBinding({
+      jobId: JOB,
+      caller: { driverId: DRIVER, companyId: COMPANY },
+      getDispatch: async () => noWell,
+      getRevision: async (id) => {
+        const data = await store.getRevision(id);
+        return { exists: !!data, data: data || undefined };
+      },
+    })).toMatchObject({ ok: false, reason: 'missing_well_identity' });
+  });
+
+  it('6. partial well identity fails closed', async () => {
+    const store = new MemoryStore();
+    const rev = await publishRevision(store);
+    expect(await runResolveExecutionBinding({
+      jobId: JOB,
+      caller: { driverId: DRIVER, companyId: COMPANY },
+      getDispatch: async () => dispatchFrom(rev, { ndicWellName: '   ' }),
+      getRevision: async (id) => {
+        const data = await store.getRevision(id);
+        return { exists: !!data, data: data || undefined };
+      },
+    })).toMatchObject({ ok: false, reason: 'partial_well_identity', field: 'ndicWellName' });
+  });
+
+  it('7. malformed well identity fails closed', async () => {
+    const store = new MemoryStore();
+    const rev = await publishRevision(store);
+    expect(await runResolveExecutionBinding({
+      jobId: JOB,
+      caller: { driverId: DRIVER, companyId: COMPANY },
+      getDispatch: async () => dispatchFrom(rev, { wellName: { name: 'Python' } }),
+      getRevision: async (id) => {
+        const data = await store.getRevision(id);
+        return { exists: !!data, data: data || undefined };
+      },
+    })).toMatchObject({ ok: false, reason: 'malformed_well_identity', field: 'wellName' });
+  });
+
+  it('8. caller cannot redirect the result to another well', async () => {
+    const store = new MemoryStore();
+    const rev = await publishRevision(store);
+    const r = await runResolveExecutionBinding({
+      jobId: { jobId: JOB, wellName: 'Gab 1', ndicWellName: 'GAB 1' },
+      caller: { driverId: DRIVER, companyId: COMPANY },
+      getDispatch: async () => dispatchFrom(rev),
+      getRevision: async (id) => {
+        const data = await store.getRevision(id);
+        return { exists: !!data, data: data || undefined };
+      },
+    });
+    expect(r).toMatchObject({ ok: false, reason: 'caller_authority_field' });
+  });
+
+  it('9. canonical job type comes from the stored dispatch', async () => {
+    const store = new MemoryStore();
+    const rev = await publishRevision(store);
+    const r = await runResolveExecutionBinding({
+      jobId: JOB,
+      caller: { driverId: DRIVER, companyId: COMPANY },
+      getDispatch: async () => dispatchFrom(rev, { jobType: 'pw' }),
+      getRevision: async (id) => {
+        const data = await store.getRevision(id);
+        return { exists: !!data, data: data || undefined };
+      },
+    });
+    expect(r.ok && r.execution.jobTypeId).toBe('pw');
+    expect(readDispatchExecutionContext(dispatchFrom(rev)).ok && (readDispatchExecutionContext(dispatchFrom(rev)) as any).execution.jobTypeId).toBe('pw');
+  });
+
+  it('10. tampered packet/pins still fail', async () => {
+    const store = new MemoryStore();
+    const rev = await publishRevision(store);
+    const job = dispatchFrom(rev);
+    expect(await runResolveExecutionBinding({
+      jobId: JOB,
+      caller: { driverId: DRIVER, companyId: COMPANY },
+      getDispatch: async () => ({ ...job, contentHash: 'a'.repeat(64) }),
+      getRevision: async (id) => {
+        const data = await store.getRevision(id);
+        return { exists: !!data, data: data || undefined };
+      },
+    })).toMatchObject({ ok: false, reason: 'content_hash_mismatch' });
+  });
+
+  it('11. resolver performs no writes', async () => {
+    const store = new MemoryStore();
+    const rev = await publishRevision(store);
+    const writes: unknown[] = ['sentinel'];
+    const r = await runResolveExecutionBinding({
+      jobId: JOB,
+      caller: { driverId: DRIVER, companyId: COMPANY },
+      getDispatch: async () => dispatchFrom(rev),
+      getRevision: async (id) => {
+        const data = await store.getRevision(id);
+        return { exists: !!data, data: data || undefined };
+      },
+      writes,
+    });
+    expect(r.ok).toBe(true);
+    expect(writes).toEqual([]);
+  });
+
+  it('12-13. inventory/effects remain empty; fixture names match the operational API', () => {
+    expect([...SERVER_IMPLEMENTED_EFFECTS]).toEqual([]);
+    expect(Object.keys(fixture)).toEqual([
+      'ok', 'jobId', 'companyId', 'driverId', 'binding', 'execution', 'definition', 'implementedEffects',
+    ]);
+    expect(Object.keys(fixture.binding)).toEqual(['packageId', 'packetRevision', 'contentHash', 'policyHash']);
+    expect(Object.keys(fixture.execution)).toEqual(['jobTypeId', 'wellName', 'ndicWellName']);
+    expect(fixture.implementedEffects).toEqual([]);
+    const callable = readFileSync(join(ROOT, 'functions', 'src', 'security', 'resolveExecutionBindingCallable.ts'), 'utf8');
+    expect(callable).toMatch(/execution: outcome\.execution/);
+    expect(callable).not.toMatch(/\.set\(|\.update\(|\.delete\(/);
   });
 });

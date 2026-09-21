@@ -33,6 +33,12 @@ export const RESOLVE_FORBIDDEN_KEYS = Object.freeze([
   'roles',
   'uid',
   'isPlatformAdmin',
+  'wellName',
+  'ndicWellName',
+  'jobType',
+  'jobTypeId',
+  'execution',
+  'well',
 ] as const);
 
 /** Statuses a WB-T driver may execute after accept. Pending is not executable. */
@@ -42,12 +48,19 @@ export const EXECUTABLE_DISPATCH_STATUSES = Object.freeze([
   'paused',
 ] as const);
 
+export type DispatchExecutionContext = {
+  jobTypeId: string;
+  wellName: string;
+  ndicWellName: string;
+};
+
 export type ExecutionBindingResult = {
   ok: true;
   jobId: string;
   companyId: string;
   driverId: string;
   binding: DispatchBinding;
+  execution: DispatchExecutionContext;
   definition: Record<string, unknown>;
   implementedEffects: string[];
 };
@@ -60,6 +73,36 @@ function isPlainObject(value: unknown): value is Record<string, unknown> {
   if (value === null || typeof value !== 'object' || Array.isArray(value)) return false;
   const proto = Object.getPrototypeOf(value);
   return proto === Object.prototype || proto === null;
+}
+
+/**
+ * Authoritative execution context from the stored dispatch only.
+ * Stored field `jobType` is the canonical job-type id (response `jobTypeId`).
+ * Stored `wellName` and `ndicWellName` are preserved as distinct plain strings.
+ * Caller input, packet text, and catalog guesses are never used.
+ */
+export function readDispatchExecutionContext(
+  job: Record<string, unknown>,
+): StoreResult<{ execution: DispatchExecutionContext }> {
+  if (!Object.prototype.hasOwnProperty.call(job, 'jobType')) {
+    return fail('job_type_required', 'jobType');
+  }
+  if (typeof job.jobType !== 'string') return fail('malformed_execution', 'jobType');
+  const jobTypeId = job.jobType.trim();
+  if (!jobTypeId) return fail('job_type_required', 'jobType');
+  if (!Object.prototype.hasOwnProperty.call(job, 'wellName')) {
+    return fail('missing_well_identity', 'wellName');
+  }
+  if (!Object.prototype.hasOwnProperty.call(job, 'ndicWellName')) {
+    return fail('missing_well_identity', 'ndicWellName');
+  }
+  if (typeof job.wellName !== 'string') return fail('malformed_well_identity', 'wellName');
+  if (typeof job.ndicWellName !== 'string') return fail('malformed_well_identity', 'ndicWellName');
+  const wellName = job.wellName.trim();
+  const ndicWellName = job.ndicWellName.trim();
+  if (!wellName) return fail('partial_well_identity', 'wellName');
+  if (!ndicWellName) return fail('partial_well_identity', 'ndicWellName');
+  return { ok: true, execution: { jobTypeId, wellName, ndicWellName } };
 }
 
 export function parseResolveExecutionBindingRequest(raw: unknown): StoreResult<{ jobId: string }> {
@@ -142,6 +185,25 @@ export async function runResolveExecutionBinding(input: {
   if (!effectsSnap.ok) return effectsSnap;
   if (!Array.isArray(effectsSnap.value)) return fail('effects_must_be_array', 'implementedEffects');
   const implementedEffects = (effectsSnap.value as unknown[]).map((e) => String(e));
+  const executionRead = readDispatchExecutionContext(existing);
+  if (!executionRead.ok) return executionRead;
+  const executionSnap = snapshotPlain(executionRead.execution, 'execution');
+  if (!executionSnap.ok) return executionSnap;
+  if (
+    executionSnap.value === null
+    || typeof executionSnap.value !== 'object'
+    || Array.isArray(executionSnap.value)
+  ) {
+    return fail('malformed_execution', 'execution');
+  }
+  const execution = executionSnap.value as DispatchExecutionContext;
+  if (
+    str(execution.jobTypeId) !== executionRead.execution.jobTypeId
+    || str(execution.wellName) !== executionRead.execution.wellName
+    || str(execution.ndicWellName) !== executionRead.execution.ndicWellName
+  ) {
+    return fail('malformed_execution', 'execution');
+  }
   return {
     ok: true,
     jobId: parsed.jobId,
@@ -152,6 +214,11 @@ export async function runResolveExecutionBinding(input: {
       packetRevision: bound.binding.packetRevision,
       contentHash: bound.binding.contentHash,
       policyHash: bound.binding.policyHash,
+    },
+    execution: {
+      jobTypeId: execution.jobTypeId,
+      wellName: execution.wellName,
+      ndicWellName: execution.ndicWellName,
     },
     definition: definitionSnap.value as Record<string, unknown>,
     implementedEffects,

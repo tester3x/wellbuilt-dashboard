@@ -60,6 +60,7 @@ export const resolveExecutionBinding = httpsV2.onCall(
       companyId: outcome.companyId,
       driverId: outcome.driverId,
       binding: outcome.binding,
+      execution: outcome.execution,
       definition: outcome.definition,
       implementedEffects: outcome.implementedEffects,
     };
