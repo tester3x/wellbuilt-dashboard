@@ -22,13 +22,15 @@
         }
       },
       "approved": {
+        ".write": false,
         "$hash": {
-          ".write": "auth != null"
+          ".write": false
         }
       },
       "pending": {
+        ".write": false,
         "$id": {
-          ".write": "auth != null"
+          ".write": false
         }
       },
       "pending_secure": {

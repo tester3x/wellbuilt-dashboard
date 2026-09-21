@@ -136,8 +136,20 @@ await denied('packets/incoming with companyId', set(ref(user.database(), 'packet
   requestType: 'pull',
   companyId: 'liquid-gold',
 }));
-await allowed('drivers/approved operational write', set(ref(user.database(), 'drivers/approved/hash1/active'), false));
-await allowed('drivers/pending operational write', set(ref(user.database(), 'drivers/pending/p1'), { displayName: 'Pat', status: 'pending' }));
+await denied('drivers/approved create', set(ref(user.database(), 'drivers/approved/hash2'), { displayName: 'Pat' }));
+await denied('drivers/approved update', set(ref(user.database(), 'drivers/approved/hash1/active'), false));
+await denied('drivers/approved delete', remove(ref(user.database(), 'drivers/approved/hash1')));
+await denied('drivers/pending create', set(ref(user.database(), 'drivers/pending/p1'), { displayName: 'Pat', status: 'pending' }));
+await denied('drivers/pending update', set(ref(user.database(), 'drivers/pending/p1/status'), 'approved'));
+await denied('drivers/pending delete', remove(ref(user.database(), 'drivers/pending/p1')));
+await testEnv.withSecurityRulesDisabled(async (ctx) => {
+  try {
+    await set(ref(ctx.database(), 'drivers/approved/admin-write'), { displayName: 'Admin', companyId: 'liquid-gold' });
+    check('Admin SDK / rules-disabled can still write approved', true);
+  } catch (err) {
+    check('Admin SDK / rules-disabled can still write approved', false, err?.message || String(err));
+  }
+});
 await denied('unauthenticated packets/incoming', set(ref(unauth.database(), 'packets/incoming/p0'), {
   wellName: 'Python',
   requestType: 'pull',
