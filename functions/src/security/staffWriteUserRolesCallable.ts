@@ -2,7 +2,7 @@ import * as httpsV2 from 'firebase-functions/v2/https';
 import * as admin from 'firebase-admin';
 import {
   requireTrustedCompanyCapability,
-  TRUSTED_CAPABILITY_MANAGE_DRIVERS,
+  TRUSTED_CAPABILITY_MANAGE_ROLES,
 } from './trustedStaffAuthority';
 import { writeSecurityAudit } from './audit';
 import {
@@ -35,7 +35,7 @@ export const staffWriteUserRoles = httpsV2.onCall(
   async (request) => {
     const authority = await requireTrustedCompanyCapability(
       request.auth?.uid,
-      TRUSTED_CAPABILITY_MANAGE_DRIVERS,
+      TRUSTED_CAPABILITY_MANAGE_ROLES,
     );
     const rtdb = admin.database();
     const store: UserRolesStore = {

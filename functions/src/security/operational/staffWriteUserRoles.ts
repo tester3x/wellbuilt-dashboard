@@ -1,5 +1,6 @@
 /**
  * Governed RTDB users/{uid} role assignment. Never trusts caller company.
+ * Authority is requireTrustedCompanyCapability(manageRolesAndCapabilities).
  */
 import { fail, type StoreResult } from './jobPacketRevisionStore';
 import {
@@ -8,6 +9,37 @@ import {
 } from '../trustedStaffAuthority';
 
 export const STAFF_WRITE_USER_ROLES_CALLABLE = 'staffWriteUserRoles';
+
+/**
+ * Company-local roles this callable may write.
+ *
+ * Excluded: `it` — DEFAULT_ROLE_LABELS calls it Owner; onboarding
+ * (adminApproveCompanyOnboarding) is the company-creator path; default
+ * caps include viewAllCompanies / manageRolesAndCapabilities /
+ * viewTruthDebug / viewDiagnostics (meta + cross-company).
+ *
+ * Included, from DEFAULT_ROLE_CAPABILITIES in src/lib/auth.ts:
+ *   driver   — empty caps; WB-T/WB-S only; employee revoke target
+ *   viewer   — company read surfaces, no manage*
+ *   dispatch — company dispatch/equipment-assignment work
+ *   payroll  — company billing/payroll
+ *   safety   — company safety
+ *   lead     — company safety lead
+ *   manager  — company manageDrivers + assignments; no viewAllCompanies
+ *   admin    — company operational superuser minus meta; no
+ *              viewAllCompanies / manageRolesAndCapabilities /
+ *              viewTruthDebug / viewDiagnostics
+ */
+export const COMPANY_ASSIGNABLE_USER_ROLES = Object.freeze([
+  'driver',
+  'viewer',
+  'dispatch',
+  'payroll',
+  'safety',
+  'lead',
+  'manager',
+  'admin',
+] as const);
 
 export const USER_ROLES_REQUEST_KEYS = Object.freeze(['targetUid', 'roles'] as const);
 
@@ -23,7 +55,8 @@ export const USER_ROLES_FORBIDDEN_KEYS = Object.freeze([
   'manageDrivers',
 ] as const);
 
-const ROLE_SET = new Set<string>(TRUSTED_USER_ROLES);
+const CANONICAL_ROLE_SET = new Set<string>(TRUSTED_USER_ROLES);
+const ASSIGNABLE_ROLE_SET = new Set<string>(COMPANY_ASSIGNABLE_USER_ROLES);
 const ROLE_LEVELS: Record<string, number> = {
   driver: 1,
   viewer: 1,
@@ -37,7 +70,7 @@ const ROLE_LEVELS: Record<string, number> = {
 };
 
 const UID_RE = /^[A-Za-z0-9_-]{1,128}$/;
-const MAX_ROLES = TRUSTED_USER_ROLES.length;
+const MAX_ROLES = COMPANY_ASSIGNABLE_USER_ROLES.length;
 
 export type UserRolesStore = {
   getUser(uid: string): Promise<Record<string, unknown> | null>;
@@ -86,7 +119,8 @@ export function parseUserRolesRequest(raw: unknown): StoreResult<{
     if (!d || d.get !== undefined || d.set !== undefined) return fail('malformed_roles', `roles[${i}]`);
     if (typeof d.value !== 'string') return fail('unknown_role', `roles[${i}]`);
     const role = d.value.trim();
-    if (!ROLE_SET.has(role)) return fail('unknown_role', `roles[${i}]`);
+    if (!CANONICAL_ROLE_SET.has(role)) return fail('unknown_role', `roles[${i}]`);
+    if (!ASSIGNABLE_ROLE_SET.has(role)) return fail('role_not_assignable', `roles[${i}]`);
     if (seen.has(role)) return fail('duplicate_role', `roles[${i}]`);
     seen.add(role);
     out.push(role);

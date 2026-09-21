@@ -1,11 +1,16 @@
 import { readFileSync } from 'fs';
 import { join } from 'path';
 import {
+  COMPANY_ASSIGNABLE_USER_ROLES,
   parseUserRolesRequest,
   runStaffWriteUserRoles,
   USER_ROLES_FORBIDDEN_KEYS,
 } from '../staffWriteUserRoles';
-import type { TrustedCompanyAuthority } from '../../trustedStaffAuthority';
+import {
+  TRUSTED_CAPABILITY_MANAGE_ROLES,
+  TRUSTED_USER_ROLES,
+  type TrustedCompanyAuthority,
+} from '../../trustedStaffAuthority';
 
 const ROOT = join(__dirname, '..', '..', '..', '..', '..');
 const UID = 'uid-staff-1';
@@ -37,10 +42,45 @@ describe('staffWriteUserRoles', () => {
     };
     const self = await runStaffWriteUserRoles({
       authority: authority(),
-      request: { targetUid: UID, roles: ['it'] },
+      request: { targetUid: UID, roles: ['admin'] },
       store,
     });
     expect(self).toMatchObject({ ok: false, reason: 'self_grant_forbidden' });
+  });
+
+  it('rejects it / owner and mixed forbidden roles without writing', async () => {
+    const writes: unknown[] = [];
+    const store = {
+      async getUser() { writes.push('read'); return { companyId: COMPANY, role: 'dispatch' }; },
+      async updateUser() { writes.push('write'); },
+    };
+    expect(parseUserRolesRequest({ targetUid: TARGET, roles: ['it'] })).toMatchObject({
+      ok: false,
+      reason: 'role_not_assignable',
+    });
+    expect(parseUserRolesRequest({ targetUid: TARGET, roles: ['dispatch', 'it'] })).toMatchObject({
+      ok: false,
+      reason: 'role_not_assignable',
+    });
+    const mixed = await runStaffWriteUserRoles({
+      authority: authority(),
+      request: { targetUid: TARGET, roles: ['admin', 'it'] },
+      store,
+    });
+    expect(mixed).toMatchObject({ ok: false, reason: 'role_not_assignable' });
+    expect(writes).toEqual([]);
+  });
+
+  it('company-assignable set is company-local and excludes it', () => {
+    expect([...COMPANY_ASSIGNABLE_USER_ROLES]).toEqual([
+      'driver', 'viewer', 'dispatch', 'payroll', 'safety', 'lead', 'manager', 'admin',
+    ]);
+    expect([...COMPANY_ASSIGNABLE_USER_ROLES]).not.toContain('it');
+    expect([...TRUSTED_USER_ROLES]).toContain('it');
+    expect(TRUSTED_CAPABILITY_MANAGE_ROLES).toBe('manageRolesAndCapabilities');
+    expect(parseUserRolesRequest({ targetUid: TARGET, roles: ['admin'] }).ok).toBe(true);
+    expect(parseUserRolesRequest({ targetUid: TARGET, roles: ['manager'] }).ok).toBe(true);
+    expect(parseUserRolesRequest({ targetUid: TARGET, roles: ['driver'] }).ok).toBe(true);
   });
 
   it('writes only roles/role for the acting company', async () => {
@@ -81,16 +121,28 @@ describe('staffWriteUserRoles', () => {
     expect(writes).toEqual([]);
   });
 
-  it('callable uses trusted manageDrivers and is exported', () => {
+  it('callable uses trusted manageRolesAndCapabilities and is exported', () => {
     const callable = readFileSync(
       join(ROOT, 'functions', 'src', 'security', 'staffWriteUserRolesCallable.ts'),
       'utf8',
     );
     expect(callable).toMatch(/requireTrustedCompanyCapability/);
-    expect(callable).toMatch(/TRUSTED_CAPABILITY_MANAGE_DRIVERS/);
+    expect(callable).toMatch(/TRUSTED_CAPABILITY_MANAGE_ROLES/);
+    expect(callable).not.toMatch(/TRUSTED_CAPABILITY_MANAGE_DRIVERS/);
+    expect(callable).not.toMatch(/manageDrivers/);
     expect(callable).not.toMatch(/requireManageDrivers/);
     expect(callable).not.toMatch(/isPlatformAdmin/);
+    expect(callable).not.toMatch(/roleCapabilities/);
     expect(callable).toMatch(/writeSecurityAudit/);
+    const rolesIdx = callable.indexOf('TRUSTED_CAPABILITY_MANAGE_ROLES');
+    const usersIdx = callable.indexOf('users/${uid}');
+    expect(rolesIdx).toBeGreaterThan(-1);
+    expect(usersIdx).toBeGreaterThan(rolesIdx);
+    const sibling = readFileSync(
+      join(ROOT, 'functions', 'src', 'security', 'staffWriteRoleCapabilitiesCallable.ts'),
+      'utf8',
+    );
+    expect(sibling).toMatch(/TRUSTED_CAPABILITY_MANAGE_ROLES/);
     const root = readFileSync(join(ROOT, 'functions', 'src', 'index.ts'), 'utf8');
     expect(root).toMatch(/staffWriteUserRoles/);
     const audit = readFileSync(join(ROOT, 'functions', 'src', 'security', 'audit.ts'), 'utf8');
