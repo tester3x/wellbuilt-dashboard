@@ -42,6 +42,7 @@ export { dismissDispatch } from './dismissDispatchCallable';
 export { staffWriteDispatch } from './staffWriteDispatchCallable';
 export { createDriverDispatchIfAbsent } from './createDriverDispatchCallable';
 export { acceptDriverDispatch } from './acceptDriverDispatchCallable';
+export { resolveExecutionBinding } from './resolveExecutionBindingCallable';
 export { publishJobPacketRevision } from './jobPacketPublishCallable';
 export { staffWriteRoleCapabilities } from './staffWriteRoleCapabilitiesCallable';
 export { staffWriteDriverAssignment } from './staffWriteDriverAssignmentCallable';

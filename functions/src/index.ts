@@ -4451,6 +4451,7 @@ export {
   staffWriteDispatch,
   createDriverDispatchIfAbsent,
   acceptDriverDispatch,
+  resolveExecutionBinding,
   publishJobPacketRevision,
   staffWriteRoleCapabilities,
   staffWriteDriverAssignment,
