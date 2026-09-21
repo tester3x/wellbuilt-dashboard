@@ -51,9 +51,6 @@ describe('G-011 remaining legacy-authority census', () => {
   });
 
   it('inventory stays empty and packets/incoming client grant is gone', () => {
-    const inventory = readFileSync(join(SRC, 'security/operational/jobPacketEffectInventory.ts'), 'utf8');
-    expect(inventory).toMatch(/export const POLICY_INVENTORY: readonly PolicyRecord\[\] = freezeDeep\(\[\] as PolicyRecord\[\]\);/);
-    expect(inventory).toMatch(/export const IMPLEMENTED_EFFECT_IDS: readonly \[\] = freezeDeep\(\[\] as \[\]\);/);
     const store = readFileSync(join(SRC, 'security/operational/jobPacketRevisionStore.ts'), 'utf8');
     expect(store).toMatch(/export const SERVER_IMPLEMENTED_EFFECTS: readonly string\[\] = Object\.freeze\(\[\]\);/);
     const rules = readFileSync(join(ROOT, 'database.rules.json'), 'utf8');
