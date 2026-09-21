@@ -55,4 +55,25 @@ describe('G-010 users authority writers', () => {
     expect(page).not.toMatch(/set\(ref\(db,\s*`well_config\/\$\{selectedWell\}`\)/);
     expect(page).not.toMatch(/remove\(ref\(db,\s*`well_config\/\$\{/);
   });
+
+  it('DriversTab role save awaits callable, shows error, has no users RTDB fallback', () => {
+    const tab = src('src/components/admin/DriversTab.tsx');
+    const save = tab.slice(tab.indexOf('const saveEmployeeRoles'), tab.indexOf('const toggleDriverActive'));
+    expect(save).toMatch(/await staffWriteUserRoles/);
+    expect(save.indexOf('await staffWriteUserRoles')).toBeGreaterThan(-1);
+    expect(save.indexOf("setMessage('Roles updated')")).toBeGreaterThan(save.indexOf('await staffWriteUserRoles'));
+    expect(save).toMatch(/classifyUserRolesError/);
+    expect(save).not.toMatch(/update\(ref\(db/);
+    expect(save).not.toMatch(/set\(ref\(db/);
+    const revoke = tab.slice(tab.indexOf('const handleRolePick'), tab.indexOf('const handleInviteSubmit'));
+    expect(revoke).toMatch(/staffWriteUserRoles\(\{ targetUid: driver\.dashboardUid, roles: \['driver'\] \}\)/);
+    expect(revoke.indexOf("setMessage(`Dashboard access removed")).toBeGreaterThan(revoke.indexOf('staffWriteUserRoles'));
+    expect(revoke).toMatch(/Failed to remove dashboard access/);
+    const client = src('src/lib/staffWriteUserRoles.ts');
+    expect(client).toMatch(/targetUid: input\.targetUid/);
+    expect(client).toMatch(/roles: input\.roles/);
+    expect(client).not.toMatch(/companyId: input/);
+    expect(client).not.toMatch(/targetCompanyId/);
+    expect(client).not.toMatch(/firebase\/database/);
+  });
 });
