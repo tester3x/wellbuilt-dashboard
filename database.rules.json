@@ -69,8 +69,9 @@
 
     "packets": {
       "incoming": {
+        ".write": false,
         "$id": {
-          ".write": "auth != null && newData.exists() && newData.hasChildren(['wellName', 'requestType']) && newData.child('requestType').val() === 'pull' && !newData.hasChild('role') && !newData.hasChild('roles') && !newData.hasChild('companyId') && !newData.hasChild('capabilities')"
+          ".write": false
         }
       },
       "processed": {

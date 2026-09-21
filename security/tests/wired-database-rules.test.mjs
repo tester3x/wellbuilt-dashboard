@@ -126,7 +126,7 @@ await denied('unknown top-level path', set(ref(other.database(), 'secret/x'), { 
 await denied('trusted_staff_authority write', set(ref(user.database(), 'trusted_staff_authority/staff-1'), { companyId: 'liquid-gold' }));
 await denied('malformed well_config object via client', set(ref(user.database(), 'well_config/Python'), 'nope'));
 
-await allowed('packets/incoming pull create', set(ref(user.database(), 'packets/incoming/p1'), {
+await denied('packets/incoming pull create', set(ref(user.database(), 'packets/incoming/p1'), {
   wellName: 'Python',
   requestType: 'pull',
   bblsTaken: 140,

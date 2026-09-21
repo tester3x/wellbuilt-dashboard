@@ -2,13 +2,13 @@
 
 // Add Pull Modal — shared component for recording a load from the dashboard.
 // Used on: WB Mobile Well Status page, Well History page, Dispatch page.
-// Writes an incoming packet to RTDB packets/incoming — Cloud Function processes it.
+// Submits through staffIngestDashboardPull (Admin SDK). Client incoming writes are denied.
 // Optionally creates Firestore invoice + ticket for billing/payroll.
 
 import { useState, useEffect } from 'react';
-import { ref, set } from 'firebase/database';
 import { collection, addDoc, updateDoc, Timestamp } from 'firebase/firestore';
-import { getFirebaseDatabase, getFirestoreDb, getNextInvoiceNumber, getNextTicketNumber } from '@/lib/firebase';
+import { httpsCallable } from 'firebase/functions';
+import { getFirebaseFunctions, getFirestoreDb, getNextInvoiceNumber, getNextTicketNumber } from '@/lib/firebase';
 import { WellResponse, subscribeToWellStatusesUnified } from '@/lib/wells';
 import { loadCompanyById } from '@/lib/companySettings';
 import { searchDisposals, type NdicWell } from '@/lib/firestoreWells';
@@ -165,31 +165,18 @@ export function AddPullModal({
     setSubmitting(true);
 
     try {
-      const db = getFirebaseDatabase();
       const parsed = parseLevelInput(pullLevel);
       const levelFeet = parsed ?? 0;
       const dt = new Date(pullDateTime);
-      const packetId = `${dt.toISOString().replace(/[-:T.]/g, '').slice(0, 14)}_${pullWell.replace(/\s/g, '')}_dashboard`;
-
-      const packet = {
-        packetId,
+      const ingest = httpsCallable(getFirebaseFunctions(), 'staffIngestDashboardPull');
+      await ingest({
         wellName: pullWell,
         tankLevelFeet: levelFeet,
         bblsTaken: parseInt(pullBbls) || 0,
-        dateTime: dt.toLocaleString(),
         dateTimeUTC: dt.toISOString(),
-        driverName: user?.displayName || user?.email || 'Dashboard',
-        driverId: user?.uid || 'dashboard',
-        requestType: 'pull',
         timezone: Intl.DateTimeFormat().resolvedOptions().timeZone,
         wellDown: pullWellDown,
-        // 5/8/2026 — explicit authority signal so the CF respects this
-        // dashboard-asserted wellDown value. Routine WB T pulls omit this
-        // flag and the CF preserves existing isDown for them.
-        wellDownIsAuthoritative: true,
-      };
-
-      await set(ref(db, `packets/incoming/${packetId}`), packet);
+      });
 
       // Create Firestore ticket + invoice for billing/payroll
       let ticketCreated: { invoiceNumber: string; ticketNumber: number; driverName: string } | null = null;

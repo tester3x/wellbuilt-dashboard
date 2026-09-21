@@ -158,11 +158,10 @@ test('CONTRACT GAP: Save Changes sends op:update but deployed staffWriteWellConf
 
 // ── +Add Pull: rules-denied direct write, no governed dashboard target (BLOCKED) ─
 
-test('+Add Pull is a known rules-denied direct write (BLOCKED — no governed dashboard add-pull callable)', () => {
+test('+Add Pull uses governed staffIngestDashboardPull, not a client RTDB write', () => {
   const modal = read('../../components/AddPullModal.tsx');
-  assert.match(modal, /set\s*\(\s*ref\s*\([^)]*packets\/incoming/, 'AddPullModal still direct-writes packets/incoming (documented BLOCKED)');
-  // Neither ingestDriverPacket nor ingestWbmPull is dashboard-callable (both requireSecureDriver);
-  // a governed staff add-pull callable is the backend dependency.
+  assert.match(modal, /staffIngestDashboardPull/);
+  assert.doesNotMatch(modal, /set\s*\(\s*ref\s*\([^)]*packets\/incoming/);
 });
 
 // ── REPAIRED this branch (fix/dashboard-button-runtime-20260913) ─────────────
