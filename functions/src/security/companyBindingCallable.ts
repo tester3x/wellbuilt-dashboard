@@ -16,7 +16,11 @@
  */
 import * as httpsV2 from 'firebase-functions/v2/https';
 import * as admin from 'firebase-admin';
-import { requireManageDrivers } from './adminAuth';
+import {
+  requireTrustedCompanyCapability,
+  TRUSTED_CAPABILITY_MANAGE_DRIVERS,
+} from './trustedStaffAuthority';
+import { staffWriteDispatchAccessFromTrusted } from './operational/staffWriteDispatch';
 import { writeSecurityAudit } from './audit';
 import {
   executeCompanyBinding,
@@ -131,10 +135,17 @@ const PRECONDITION_REASONS = new Set([
 export const adminBindDriverCompany = httpsV2.onCall(
   { timeoutSeconds: 30, memory: '256MiB' },
   async (request) => {
-    const caller = await requireManageDrivers(
+    const trusted = await requireTrustedCompanyCapability(
       request.auth?.uid,
-      request.auth?.token as Record<string, unknown> | undefined,
+      TRUSTED_CAPABILITY_MANAGE_DRIVERS,
     );
+    const access = staffWriteDispatchAccessFromTrusted(trusted);
+    if (!access.ok) {
+      throw new httpsV2.HttpsError(
+        access.reason === 'unauthenticated' ? 'unauthenticated' : 'permission-denied',
+        access.reason,
+      );
+    }
 
     const raw = (request.data || {}) as Record<string, unknown>;
     for (const key of Object.keys(raw)) {
@@ -143,28 +154,23 @@ export const adminBindDriverCompany = httpsV2.onCall(
       }
     }
     const driverId = String(raw.driverId || '').trim();
-    const companyId = String(raw.companyId || '').trim().toLowerCase();
-    if (!driverId || !companyId) {
-      throw new httpsV2.HttpsError('invalid-argument', 'driverId and companyId are required');
+    const requestedCompany = String(raw.companyId || '').trim().toLowerCase();
+    if (!driverId) {
+      throw new httpsV2.HttpsError('invalid-argument', 'driverId is required');
     }
-
-    // Tenant scope: a company-scoped admin may bind drivers only to its OWN
-    // company. Platform admins (no companyId) may bind to any.
-    if (caller.companyId && caller.companyId !== companyId) {
-      throw new httpsV2.HttpsError(
-        'permission-denied',
-        'Caller may not bind drivers to another company',
-      );
+    if (requestedCompany && requestedCompany !== access.companyId) {
+      throw new httpsV2.HttpsError('permission-denied', 'cross_company');
     }
+    const companyId = access.companyId;
 
-    const result = await executeCompanyBinding(productionIo(caller.uid), {
+    const result = await executeCompanyBinding(productionIo(access.uid), {
       driverId,
       companyId,
     });
 
     await writeSecurityAudit({
       action: 'adminBindDriverCompany',
-      actorUid: caller.uid,
+      actorUid: access.uid,
       driverId,
       detail: {
         companyId,

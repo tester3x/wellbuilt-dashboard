@@ -4,7 +4,11 @@ import { createHash, randomBytes } from 'crypto';
 import { ServerValue } from 'firebase-admin/database';
 import { authorizeAdminCall } from '../admin/authority';
 import { writeSecurityAudit } from './audit';
-import { requireManageDrivers } from './adminAuth';
+import {
+  requireTrustedCompanyCapability,
+  TRUSTED_CAPABILITY_MANAGE_DRIVERS,
+} from './trustedStaffAuthority';
+import { staffWriteDispatchAccessFromTrusted } from './operational/staffWriteDispatch';
 
 const COMPANY_CODE_ALPHABET = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789';
 
@@ -43,6 +47,20 @@ function newJoinCode(): string {
   for (let i = 0; i < 8; i += 1) raw += COMPANY_CODE_ALPHABET[bytes[i] % COMPANY_CODE_ALPHABET.length];
   return `${raw.slice(0, 4)}-${raw.slice(4)}`;
 }
+
+async function requireTrustedTenantCompany(authUid: string | undefined) {
+  const trusted = await requireTrustedCompanyCapability(authUid, TRUSTED_CAPABILITY_MANAGE_DRIVERS);
+  const access = staffWriteDispatchAccessFromTrusted(trusted);
+  if (!access.ok) {
+    throw new httpsV2.HttpsError(
+      access.reason === 'unauthenticated' ? 'unauthenticated' : 'permission-denied',
+      access.reason,
+    );
+  }
+  return access;
+}
+
+const PLATFORM_ONBOARDING_CAPABILITY_UNDEFINED = 'platform_onboarding_capability_undefined';
 
 async function requireVerifiedPlatformAdmin(request: httpsV2.CallableRequest<unknown>) {
   const uid = request.auth?.uid;
@@ -154,6 +172,7 @@ export const requestCompanyOnboarding = httpsV2.onCall(
 );
 
 export const adminListCompanyOnboardingRequests = httpsV2.onCall(async request => {
+  throw new httpsV2.HttpsError('failed-precondition', PLATFORM_ONBOARDING_CAPABILITY_UNDEFINED);
   await requireVerifiedPlatformAdmin(request);
   const snap = await admin.database().ref('users').once('value');
   const requests: Record<string, unknown>[] = [];
@@ -180,6 +199,7 @@ async function uniqueCompanyId(baseName: string): Promise<string> {
 }
 
 export const adminApproveCompanyOnboarding = httpsV2.onCall(async request => {
+  throw new httpsV2.HttpsError('failed-precondition', PLATFORM_ONBOARDING_CAPABILITY_UNDEFINED);
   const actor = await requireVerifiedPlatformAdmin(request);
   const uid = String((request.data as any)?.uid || '').trim();
   if (!uid) throw new httpsV2.HttpsError('invalid-argument', 'uid required');
@@ -233,6 +253,7 @@ export const adminApproveCompanyOnboarding = httpsV2.onCall(async request => {
 });
 
 export const adminCreateCompanyWithJoinCode = httpsV2.onCall(async request => {
+  throw new httpsV2.HttpsError('failed-precondition', PLATFORM_ONBOARDING_CAPABILITY_UNDEFINED);
   const actor = await requireVerifiedPlatformAdmin(request);
   const companyName = String((request.data as any)?.companyName || '').trim();
   const requestedId = slugifyCompanyName((request.data as any)?.companyId);
@@ -254,42 +275,15 @@ export const adminCreateCompanyWithJoinCode = httpsV2.onCall(async request => {
 });
 
 export const getCompanyJoinCode = httpsV2.onCall(async request => {
-  if (!request.auth?.uid) {
-    throw new httpsV2.HttpsError('unauthenticated', 'Must be signed in');
-  }
-
+  const access = await requireTrustedTenantCompany(request.auth?.uid);
   const requested = String((request.data as any)?.companyId || '').trim();
-
-  // 1. Attempt tenant caller path via requireManageDrivers
-  let tenantCaller: import('./adminAuth').DashboardCaller | null = null;
-  try {
-    tenantCaller = await requireManageDrivers(
-      request.auth.uid,
-      request.auth.token as Record<string, unknown> | undefined,
-    );
-  } catch {
-    // Caller may lack tenant manageDrivers; could still be a platform admin
+  if (requested && requested !== access.companyId) {
+    throw new httpsV2.HttpsError('permission-denied', 'cross_company');
   }
-
-  // 2. Tenant manageDrivers callers may act ONLY on their own company
-  if (tenantCaller && tenantCaller.companyId && (!requested || requested === tenantCaller.companyId)) {
-    const companyId = tenantCaller.companyId;
-    let code = await joinCodeForCompany(companyId);
-    if (!code) code = await allocateJoinCode(companyId, tenantCaller.uid);
-    return { companyId, joinCode: code };
-  }
-
-  // 3. Platform-targeted path requires requireVerifiedPlatformAdmin and verified platform_admins membership.
-  // Never authorize cross-company actions from an unscoped admin or it role string.
-  await requireVerifiedPlatformAdmin(request);
-
-  if (!requested) {
-    throw new httpsV2.HttpsError('invalid-argument', 'companyId required for platform admin join code access');
-  }
-
-  let code = await joinCodeForCompany(requested);
-  if (!code) code = await allocateJoinCode(requested, request.auth.uid);
-  return { companyId: requested, joinCode: code };
+  const companyId = access.companyId;
+  let code = await joinCodeForCompany(companyId);
+  if (!code) code = await allocateJoinCode(companyId, access.uid);
+  return { companyId, joinCode: code };
 });
 
 export interface JoinCodeStoreOps {
@@ -550,39 +544,13 @@ export async function rotateJoinCode(
 }
 
 export const rotateCompanyJoinCode = httpsV2.onCall(async request => {
-  if (!request.auth?.uid) {
-    throw new httpsV2.HttpsError('unauthenticated', 'Must be signed in');
-  }
-
+  const access = await requireTrustedTenantCompany(request.auth?.uid);
   const requested = String((request.data as any)?.companyId || '').trim();
   const suppliedExpected = (request.data as any)?.expectedDigest;
   const expectedDigest = typeof suppliedExpected === 'string' ? suppliedExpected : undefined;
-
-  // 1. Attempt tenant caller path via requireManageDrivers
-  let tenantCaller: import('./adminAuth').DashboardCaller | null = null;
-  try {
-    tenantCaller = await requireManageDrivers(
-      request.auth.uid,
-      request.auth.token as Record<string, unknown> | undefined,
-    );
-  } catch {
-    // Caller may lack tenant manageDrivers; could still be a platform admin
+  if (requested && requested !== access.companyId) {
+    throw new httpsV2.HttpsError('permission-denied', 'cross_company');
   }
-
-  // 2. Tenant manageDrivers callers may act ONLY on their own company
-  if (tenantCaller && tenantCaller.companyId && (!requested || requested === tenantCaller.companyId)) {
-    const code = await rotateJoinCode(tenantCaller.companyId, tenantCaller.uid, undefined, expectedDigest);
-    return { companyId: tenantCaller.companyId, joinCode: code };
-  }
-
-  // 3. Cross-company replacement requires requireVerifiedPlatformAdmin and verified platform_admins membership.
-  // Never authorize cross-company actions from an unscoped admin or it role string.
-  await requireVerifiedPlatformAdmin(request);
-
-  if (!requested) {
-    throw new httpsV2.HttpsError('invalid-argument', 'companyId required for platform admin rotation');
-  }
-
-  const code = await rotateJoinCode(requested, request.auth.uid, undefined, expectedDigest);
-  return { companyId: requested, joinCode: code };
+  const code = await rotateJoinCode(access.companyId, access.uid, undefined, expectedDigest);
+  return { companyId: access.companyId, joinCode: code };
 });
