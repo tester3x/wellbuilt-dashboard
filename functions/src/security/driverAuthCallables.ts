@@ -18,7 +18,12 @@ import {
 } from './passcode';
 import { checkRateLimit, hashIp } from './rateLimit';
 import { writeSecurityAudit } from './audit';
-import { requireManageDrivers, requirePlatformAdmin } from './adminAuth';
+import { requirePlatformAdmin } from './adminAuth';
+import {
+  requireTrustedCompanyCapability,
+  TRUSTED_CAPABILITY_MANAGE_DRIVERS,
+} from './trustedStaffAuthority';
+import { staffWriteDispatchAccessFromTrusted } from './operational/staffWriteDispatch';
 import { resolveCompanyJoinCode } from './companyOnboarding';
 import {
   PENDING_REGISTRATION_TTL_MS,
@@ -498,15 +503,24 @@ export const driverChangeOwnPasscode = httpsV2.onCall(
   },
 );
 
+async function requireTrustedDriversStaff(authUid: string | undefined) {
+  const trusted = await requireTrustedCompanyCapability(authUid, TRUSTED_CAPABILITY_MANAGE_DRIVERS);
+  const access = staffWriteDispatchAccessFromTrusted(trusted);
+  if (!access.ok) {
+    throw new httpsV2.HttpsError(
+      access.reason === 'unauthenticated' ? 'unauthenticated' : 'permission-denied',
+      access.reason,
+    );
+  }
+  return access;
+}
+
 // ── Admin ─────────────────────────────────────────────────────────────────
 
 export const adminListPendingRegistrations = httpsV2.onCall(
   { timeoutSeconds: 30, memory: '256MiB' },
   async (request) => {
-    const caller = await requireManageDrivers(
-      request.auth?.uid,
-      request.auth?.token as Record<string, unknown> | undefined,
-    );
+    const caller = await requireTrustedDriversStaff(request.auth?.uid);
     const snap = await rtdb().ref('drivers/pending_secure').once('value');
     const out: any[] = [];
     if (snap.exists()) {
@@ -562,10 +576,7 @@ export const adminListPendingRegistrations = httpsV2.onCall(
 export const adminApproveDriverRegistration = httpsV2.onCall(
   { timeoutSeconds: 30, memory: '256MiB' },
   async (request) => {
-    const caller = await requireManageDrivers(
-      request.auth?.uid,
-      request.auth?.token as Record<string, unknown> | undefined,
-    );
+    const caller = await requireTrustedDriversStaff(request.auth?.uid);
     const data = (request.data || {}) as {
       pendingId?: string;
       companyId?: string;
@@ -655,7 +666,10 @@ export const adminApproveDriverRegistration = httpsV2.onCall(
       throw new httpsV2.HttpsError('failed-precondition', `Already ${pending.status}`);
     }
 
-    let companyId = (pending.companyId || data.companyId || '').trim().toLowerCase() || null;
+    if (data.companyId && String(data.companyId).trim().toLowerCase() !== caller.companyId) {
+      throw new httpsV2.HttpsError('permission-denied', 'cross_company');
+    }
+    let companyId = caller.companyId;
     let companyName = (pending.resolvedCompanyName || data.companyName || pending.companyName || '').trim() || null;
     if (caller.companyId) {
       companyId = caller.companyId;
@@ -839,10 +853,7 @@ export const adminApproveDriverRegistration = httpsV2.onCall(
 export const adminRejectDriverRegistration = httpsV2.onCall(
   { timeoutSeconds: 20, memory: '256MiB' },
   async (request) => {
-    const caller = await requireManageDrivers(
-      request.auth?.uid,
-      request.auth?.token as Record<string, unknown> | undefined,
-    );
+    const caller = await requireTrustedDriversStaff(request.auth?.uid);
     const pendingId = String((request.data as any)?.pendingId || '').trim();
     const legacyKey = String((request.data as any)?.legacyKey || '').trim();
 
@@ -912,10 +923,7 @@ export const adminRejectDriverRegistration = httpsV2.onCall(
 export const adminSetDriverPasscode = httpsV2.onCall(
   { timeoutSeconds: 30, memory: '256MiB' },
   async (request) => {
-    const caller = await requireManageDrivers(
-      request.auth?.uid,
-      request.auth?.token as Record<string, unknown> | undefined,
-    );
+    const caller = await requireTrustedDriversStaff(request.auth?.uid);
     const data = (request.data || {}) as {
       driverId?: string;
       displayName?: string;
@@ -1006,8 +1014,10 @@ export const adminSetDriverPasscode = httpsV2.onCall(
       const r = await resolveProvisioningUuid(provJournal, key, {
         requestedDriverId: driverId || null,
         nameNorm,
-        companyId: (typeof data.companyId === 'string' && data.companyId.trim())
-          ? data.companyId.trim().toLowerCase() : null,
+        companyId: (typeof data.companyId === 'string' && data.companyId.trim()
+          && data.companyId.trim().toLowerCase() !== caller.companyId)
+          ? (() => { throw new httpsV2.HttpsError('permission-denied', 'cross_company'); })()
+          : caller.companyId,
         indexOwnerDriverId: idxOwner,
         indexOwnerActive: idxOwnerActive,
         isReset: !!driverId,
@@ -1299,10 +1309,11 @@ export const adminSetDriverPasscode = httpsV2.onCall(
 
     // Resolve company for authority ensure: never invent; prefer request /
     // pending create payload, else profile. Skip when unbound (standalone).
-    let authorityCompanyId: string | null =
-      (typeof data.companyId === 'string' && data.companyId.trim())
-        ? data.companyId.trim().toLowerCase()
-        : null;
+    if (typeof data.companyId === 'string' && data.companyId.trim()
+      && data.companyId.trim().toLowerCase() !== caller.companyId) {
+      throw new httpsV2.HttpsError('permission-denied', 'cross_company');
+    }
+    let authorityCompanyId: string | null = caller.companyId;
     if (!authorityCompanyId && pendingProfile && typeof pendingProfile.companyId === 'string') {
       authorityCompanyId = String(pendingProfile.companyId).trim().toLowerCase() || null;
     }
@@ -1513,7 +1524,7 @@ export const registerStandaloneDriver = httpsV2.onCall(
 export const adminComputeLegacyHash = httpsV2.onCall(
   { timeoutSeconds: 10, memory: '256MiB' },
   async (request) => {
-    await requireManageDrivers(request.auth?.uid);
+    await requireTrustedDriversStaff(request.auth?.uid);
     const displayName = String((request.data as any)?.displayName || '');
     const passcode = String((request.data as any)?.passcode || '');
     if (!displayName || !passcode) {
