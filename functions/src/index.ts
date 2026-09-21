@@ -4459,6 +4459,7 @@ export {
   staffWriteUserRoles,
   inviteEmployee,
   staffIngestDashboardPull,
+  staffWriteDriverRoster,
   staffConvertApprovedDriverSecureLogin,
   upgradeOwnLegacyDriverLogin,
   staffHydrateCanonicalIdentity,

@@ -9,7 +9,8 @@ import { createAdminContractService, AdminServiceError } from '@/lib/adminContra
 import { companyMutationRoute, errorGuidance } from '@/lib/adminUiLogic';
 import { CompanyContractPanel } from './CompanyContractPanel';
 import { CompanyJoinCodeCard } from './CompanyJoinCodeCard';
-import { ref as dbRef, get as dbGet, set as dbSet } from 'firebase/database';
+import { ref as dbRef, get as dbGet } from 'firebase/database';
+import { staffWriteDriverRoster } from '@/lib/staffWriteDriverRoster';
 import { httpsCallable } from 'firebase/functions';
 import { loadOperators, searchOperators, NdicOperator } from '@/lib/firestoreWells';
 import {
@@ -918,7 +919,11 @@ export function CompaniesTab({ scopeCompanyId, isWbAdmin = false }: CompaniesTab
                                       const syncs: Promise<void>[] = [];
                                       Object.entries(driversSnap.val()).forEach(([hash, data]: [string, any]) => {
                                         if (data.companyId === company.id) {
-                                          syncs.push(dbSet(dbRef(rtdb, `drivers/approved/${hash}/tier`), tier));
+                                          syncs.push(staffWriteDriverRoster({
+                                            op: 'setTier',
+                                            approvedKey: hash,
+                                            tier,
+                                          }).then(() => undefined));
                                         }
                                       });
                                       if (syncs.length > 0) await Promise.all(syncs);

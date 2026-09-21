@@ -3,11 +3,12 @@
 import { useCallback, useEffect, useState, useMemo, useRef } from 'react';
 import { httpsCallable } from 'firebase/functions';
 import { getFirebaseDatabase, getFirestoreDb, getFirebaseFunctions } from '@/lib/firebase';
-import { ref, get, set, remove, update } from 'firebase/database';
+import { ref, get } from 'firebase/database';
 import { collection, getDocs } from 'firebase/firestore';
 import { fetchRouteNames } from '@/lib/wells';
 import { type UserRole, DEFAULT_ROLE_LABELS } from '@/lib/auth';
 import { staffWriteUserRoles, classifyUserRolesError } from '@/lib/staffWriteUserRoles';
+import { staffWriteDriverRoster, classifyRosterError } from '@/lib/staffWriteDriverRoster';
 import { mergeEmployees, EmployeeRow } from '@/lib/employees';
 import { EmployeePanel } from './EmployeePanel';
 import { useAuth } from '@/contexts/AuthContext';
@@ -446,7 +447,9 @@ export function DriversTab({ scopeCompanyId, isWbAdmin = false }: DriversTabProp
   const setDriverDefaultPackage = async () => {
     if (!packageTarget) return;
     try {
-      await update(ref(db, `drivers/approved/${packageTarget.key}`), {
+      await staffWriteDriverRoster({
+        op: 'setDefaultPackage',
+        approvedKey: packageTarget.key,
         defaultPackageId: selectedPackageId || null,
       });
       setMessage(
@@ -554,8 +557,9 @@ export function DriversTab({ scopeCompanyId, isWbAdmin = false }: DriversTabProp
         // profile + authority; the legacy approved row is what this list
         // renders, so reflect the result there. Never authority.
         try {
-          await update(ref(db, `drivers/approved/${companyTarget.key}`), {
-            companyId: res.companyId,
+          await staffWriteDriverRoster({
+            op: 'setDisplayCompany',
+            approvedKey: companyTarget.key,
             companyName: res.companyName || null,
           });
         } catch { /* display mirror is best-effort */ }
@@ -591,32 +595,14 @@ export function DriversTab({ scopeCompanyId, isWbAdmin = false }: DriversTabProp
       return;
     }
 
-    // legacy_staging — pre-existing behavior, now labeled for what it is.
+    // legacy_staging — company identity is stamped from trusted authority.
     try {
-      const updates: Record<string, any> = {
-        companyId: assignCompanyId.trim().toLowerCase() || null,
+      await staffWriteDriverRoster({
+        op: 'stageCompany',
+        approvedKey: companyTarget.key,
+        nestedKey: companyTarget._legacy && companyTarget._legacyDeviceId ? companyTarget._legacyDeviceId : null,
         companyName: assignCompanyName.trim() || null,
-      };
-      // Sync tier from company doc
-      if (assignCompanyId.trim()) {
-        try {
-          const firestore = getFirestoreDb();
-          const { getDoc, doc: firestoreDoc } = await import('firebase/firestore');
-          const companySnap = await getDoc(firestoreDoc(firestore, 'companies', assignCompanyId.trim().toLowerCase()));
-          if (companySnap.exists()) {
-            const tier = companySnap.data().tier;
-            if (tier) updates.tier = tier;
-            else updates.tier = null;
-          }
-        } catch { /* tier sync is non-blocking */ }
-      } else {
-        updates.tier = null;
-      }
-      if (companyTarget._legacy && companyTarget._legacyDeviceId) {
-        await update(ref(db, `drivers/approved/${companyTarget.key}/${companyTarget._legacyDeviceId}`), updates);
-      } else {
-        await update(ref(db, `drivers/approved/${companyTarget.key}`), updates);
-      }
+      });
       setMessage(
         assignCompanyId.trim()
           ? `${companyTarget.displayName} staged for ${assignCompanyName.trim() || assignCompanyId.trim()} (applies when the secure login is created)`
@@ -650,68 +636,17 @@ export function DriversTab({ scopeCompanyId, isWbAdmin = false }: DriversTabProp
           await loadDrivers();
           return;
         } catch (secErr) {
-          console.warn('Secure approve failed, falling back to legacy RTDB:', secErr);
+          throw secErr;
         }
       }
-      // Move from pending to approved
-      // If a company admin is approving, auto-assign to their company
-      // Also carry forward the companyName the driver entered during registration
-      const approvedData: Record<string, any> = {
+      await staffWriteDriverRoster({
+        op: 'approvePending',
+        pendingKey: driver.key,
+        approvedKey: driver.passcodeHash,
         displayName: driver.displayName,
         legalName: driver.legalName || driver.displayName,
-        name: driver.displayName,
-        active: true,
-        isAdmin: false,
-        isViewer: false,
-        approvedAt: Date.now(),
+        companyName: driver.companyName || null,
         roles: ['driver'],
-      };
-      if (scopeCompanyId) {
-        // Company admin approving — assign to their company
-        approvedData.companyId = scopeCompanyId;
-        // Look up company tier
-        try {
-          const firestore = getFirestoreDb();
-          const { getDoc, doc: firestoreDoc } = await import('firebase/firestore');
-          const companySnap = await getDoc(firestoreDoc(firestore, 'companies', scopeCompanyId));
-          if (companySnap.exists()) {
-            const companyData = companySnap.data();
-            if (companyData.tier) approvedData.tier = companyData.tier;
-            if (companyData.name) approvedData.companyName = companyData.name;
-          }
-        } catch (tierErr) {
-          console.warn('Company tier lookup failed (non-blocking):', tierErr);
-        }
-      } else if (driver.companyName) {
-        // WB admin approving — try to auto-match company name to Firestore companies
-        try {
-          const firestore = getFirestoreDb();
-          const companiesSnap = await getDocs(collection(firestore, 'companies'));
-          const driverCoLower = driver.companyName.toLowerCase().trim();
-          companiesSnap.forEach((d) => {
-            const data = d.data();
-            const coNameLower = (data.name || '').toLowerCase().trim();
-            // Match: exact, contains, or contained-in
-            if (coNameLower === driverCoLower ||
-                coNameLower.includes(driverCoLower) ||
-                driverCoLower.includes(coNameLower)) {
-              approvedData.companyId = d.id;
-              approvedData.companyName = data.name;
-              if (data.tier) approvedData.tier = data.tier;
-            }
-          });
-        } catch (matchErr) {
-          console.warn('Company auto-match failed (non-blocking):', matchErr);
-        }
-      }
-      if (driver.companyName) {
-        // Always carry forward the registration company name as a reference
-        approvedData.registrationCompany = driver.companyName;
-      }
-      await set(ref(db, `drivers/approved/${driver.passcodeHash}`), approvedData);
-      // Mark pending as approved (don't delete yet — the client app polls this)
-      await update(ref(db, `drivers/pending/${driver.key}`), {
-        status: 'approved',
       });
       setMessage(`Approved: ${driver.displayName}`);
       await loadDrivers();
@@ -767,49 +702,23 @@ export function DriversTab({ scopeCompanyId, isWbAdmin = false }: DriversTabProp
           await loadDrivers();
           return;
         } catch (secErr) {
-          console.warn('Secure approve-with-assignments failed, falling back to legacy RTDB:', secErr);
+          throw secErr;
         }
       }
 
-      const approvedData: Record<string, any> = {
+      await staffWriteDriverRoster({
+        op: 'approvePending',
+        pendingKey: approvalTarget.key,
+        approvedKey: approvalTarget.passcodeHash,
         displayName: approvalTarget.displayName,
         legalName: approvalTarget.legalName || approvalTarget.displayName,
-        name: approvalTarget.displayName,
-        active: true,
-        isAdmin: approvalRoles.includes('admin'),
-        isViewer: approvalRoles.includes('viewer'),
-        approvedAt: Date.now(),
-        companyId: approvalCompanyId,
-        companyName: approvalCompanyName,
+        companyName: approvalCompanyName || approvalTarget.companyName || null,
         assignedCustomers: approvalCustomers.map(name => ({
           name,
           companyId: approvalCompanyId,
         })),
         assignedRoutes: approvalRoutes,
         roles: approvalRoles,
-      };
-
-      // Sync tier from company doc
-      try {
-        const firestore = getFirestoreDb();
-        const { getDoc, doc: firestoreDoc } = await import('firebase/firestore');
-        const companySnap = await getDoc(firestoreDoc(firestore, 'companies', approvalCompanyId));
-        if (companySnap.exists()) {
-          const tier = companySnap.data().tier;
-          if (tier) approvedData.tier = tier;
-        }
-      } catch { /* tier sync is non-blocking */ }
-
-      if (approvalTarget.companyName) {
-        approvedData.registrationCompany = approvalTarget.companyName;
-      }
-
-      // Single write — complete record at once
-      await set(ref(db, `drivers/approved/${approvalTarget.passcodeHash}`), approvedData);
-
-      // Mark pending as approved
-      await update(ref(db, `drivers/pending/${approvalTarget.key}`), {
-        status: 'approved',
       });
 
       setMessage(`Approved: ${approvalTarget.displayName} with ${approvalCustomers.length} customer(s) and ${approvalRoutes.length} route(s)`);
@@ -840,10 +749,7 @@ export function DriversTab({ scopeCompanyId, isWbAdmin = false }: DriversTabProp
           pendingId: anyDriver.securePendingId || undefined,
         });
       } catch (callableErr) {
-        console.warn('Secure reject callable unavailable, RTDB status only:', callableErr);
-        await update(ref(db, `drivers/pending/${driver.key}`), {
-          status: 'rejected',
-        });
+        throw callableErr;
       }
       setMessage(`Rejected: ${driver.displayName}`);
       await loadDrivers();
@@ -881,16 +787,12 @@ export function DriversTab({ scopeCompanyId, isWbAdmin = false }: DriversTabProp
   const toggleDriverActive = async (driver: ApprovedDriver) => {
     try {
       const newActive = !driver.active;
-      if (driver._legacy && driver._legacyDeviceId) {
-        // Update inside the legacy nested path
-        await update(ref(db, `drivers/approved/${driver.key}/${driver._legacyDeviceId}`), {
-          active: newActive,
-        });
-      } else {
-        await update(ref(db, `drivers/approved/${driver.key}`), {
-          active: newActive,
-        });
-      }
+      await staffWriteDriverRoster({
+        op: 'toggleActive',
+        approvedKey: driver.key,
+        nestedKey: driver._legacy && driver._legacyDeviceId ? driver._legacyDeviceId : null,
+        active: newActive,
+      });
       setMessage(`${driver.displayName} is now ${newActive ? 'active' : 'inactive'}`);
       await loadDrivers();
     } catch (err) {
@@ -919,9 +821,9 @@ export function DriversTab({ scopeCompanyId, isWbAdmin = false }: DriversTabProp
           // We keep the auth account so the admin can re-promote without
           // a new invite link cycle.
           await staffWriteUserRoles({ targetUid: driver.dashboardUid, roles: ['driver'] });
-          await update(ref(db, `drivers/approved/${driver.key}`), {
-            dashboardUid: null,
-            dashboardRole: null,
+          await staffWriteDriverRoster({
+            op: 'unlinkDashboard',
+            approvedKey: driver.key,
           });
           setMessage(`Dashboard access removed for ${driver.legalName || driver.displayName}`);
           await loadDrivers();
@@ -970,17 +872,12 @@ export function DriversTab({ scopeCompanyId, isWbAdmin = false }: DriversTabProp
   const toggleDriverAdmin = async (driver: ApprovedDriver) => {
     try {
       const newAdmin = !driver.isAdmin;
-      if (driver._legacy && driver._legacyDeviceId) {
-        await update(ref(db, `drivers/approved/${driver.key}/${driver._legacyDeviceId}`), {
-          isAdmin: newAdmin,
-          isViewer: newAdmin ? false : driver.isViewer,
-        });
-      } else {
-        await update(ref(db, `drivers/approved/${driver.key}`), {
-          isAdmin: newAdmin,
-          isViewer: newAdmin ? false : driver.isViewer,
-        });
-      }
+      await staffWriteDriverRoster({
+        op: 'setAppAdmin',
+        approvedKey: driver.key,
+        nestedKey: driver._legacy && driver._legacyDeviceId ? driver._legacyDeviceId : null,
+        isAdmin: newAdmin,
+      });
       setMessage(`${driver.displayName} is ${newAdmin ? 'now an admin' : 'no longer an admin'}`);
       await loadDrivers();
     } catch (err) {
@@ -1005,7 +902,11 @@ export function DriversTab({ scopeCompanyId, isWbAdmin = false }: DriversTabProp
     }];
 
     try {
-      await set(ref(db, `drivers/approved/${assignTarget.key}/assignedCustomers`), updated);
+      await staffWriteDriverRoster({
+        op: 'setAssignedCustomers',
+        approvedKey: assignTarget.key,
+        assignedCustomers: updated,
+      });
       setMessage(`Assigned "${newCustomerName.trim()}" to ${assignTarget.displayName}`);
       setShowAssignModal(false);
       setNewCustomerName('');
@@ -1022,7 +923,11 @@ export function DriversTab({ scopeCompanyId, isWbAdmin = false }: DriversTabProp
   const removeCustomer = async (driver: ApprovedDriver, companyId: string) => {
     const updated = (driver.assignedCustomers || []).filter(c => c.companyId !== companyId);
     try {
-      await set(ref(db, `drivers/approved/${driver.key}/assignedCustomers`), updated);
+      await staffWriteDriverRoster({
+        op: 'setAssignedCustomers',
+        approvedKey: driver.key,
+        assignedCustomers: updated,
+      });
       setMessage(`Removed operator assignment from ${driver.displayName}`);
       await loadDrivers();
     } catch (err) {
@@ -1034,7 +939,7 @@ export function DriversTab({ scopeCompanyId, isWbAdmin = false }: DriversTabProp
   const deleteDriver = async (driver: ApprovedDriver) => {
     if (!confirm(`Permanently delete ${driver.displayName}? This cannot be undone.`)) return;
     try {
-      await remove(ref(db, `drivers/approved/${driver.key}`));
+      await staffWriteDriverRoster({ op: 'deleteApproved', approvedKey: driver.key });
       setMessage(`Deleted: ${driver.displayName}`);
       await loadDrivers();
     } catch (err) {
