@@ -305,9 +305,7 @@ describe('remaining RTDB-backed staff callables (not migrated)', () => {
       if (!text.includes('requireManageDrivers')) continue;
       hits.push(relative(join(ROOT, 'functions', 'src'), file).replace(/\\/g, '/'));
     }
-    expect(hits).toEqual(expect.arrayContaining([
-      expect.stringMatching(/adminAuth\.ts$/),
-    ]));
+    expect(hits).toEqual(['security/adminAuth.ts']);
     expect(hits.join('\n')).not.toMatch(/driverAuthCallables/);
     expect(hits.join('\n')).not.toMatch(/companyBindingCallable/);
     expect(hits.join('\n')).not.toMatch(/companyOnboarding\.ts/);
