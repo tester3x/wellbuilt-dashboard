@@ -47,6 +47,7 @@ export { staffWriteRoleCapabilities } from './staffWriteRoleCapabilitiesCallable
 export { staffWriteDriverAssignment } from './staffWriteDriverAssignmentCallable';
 export { staffWriteWellConfig } from './staffWriteWellConfigCallable';
 export { staffWriteUserRoles } from './staffWriteUserRolesCallable';
+export { inviteEmployee } from './inviteEmployeeCallable';
 export { staffConvertApprovedDriverSecureLogin } from './staffConvertApprovedDriverSecureLogin';
 export { upgradeOwnLegacyDriverLogin } from './upgradeOwnLegacyDriverLogin';
 export { staffHydrateCanonicalIdentity } from './staffHydrateCanonicalIdentity';

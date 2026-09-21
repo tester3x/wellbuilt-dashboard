@@ -948,7 +948,6 @@ export function DriversTab({ scopeCompanyId, isWbAdmin = false }: DriversTabProp
         email: inviteEmail.trim(),
         displayName: inviteTarget.legalName || inviteTarget.displayName,
         role: inviteRole,
-        companyId: inviteTarget.companyId || scopeCompanyId || undefined,
         driverHash: inviteTarget.key,
       });
       const data = resp?.data || {};
