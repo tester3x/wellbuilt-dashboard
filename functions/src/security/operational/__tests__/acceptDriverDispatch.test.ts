@@ -455,6 +455,30 @@ describe('F1 acceptDriverDispatch provenance', () => {
     ].includes(k))).toBe(true);
   });
 
+  it('allows acceptance of completely unbound legacy dispatch', async () => {
+    const legacyJob = {
+      companyId: COMPANY,
+      driverId: DRIVER,
+      status: 'pending',
+      jobType: 'pw',
+      wellName: 'Gabriel 1',
+    };
+    const updates: Array<{ id: string; patch: Record<string, unknown> }> = [];
+    const res = await runAcceptDriverDispatch({
+      dispatchId: 'd-legacy-1',
+      caller: { driverId: DRIVER, companyId: COMPANY },
+      getDispatch: async () => legacyJob,
+      getRevision: async () => ({ exists: false }),
+      applyUpdate: (id, patch) => { updates.push({ id, patch }); },
+    });
+    expect(res.ok).toBe(true);
+    if (!res.ok) return;
+    expect(res.result).toBe('accepted');
+    expect(res.status).toBe('accepted');
+    expect(updates).toHaveLength(1);
+    expect(updates[0].patch.status).toBe('accepted');
+  });
+
   it('callable loads the stored revision through the transaction reader', () => {
     const callable = readFileSync(join(__dirname, '..', '..', 'acceptDriverDispatchCallable.ts'), 'utf8');
     expect(callable).toMatch(/runAcceptDriverDispatch/);

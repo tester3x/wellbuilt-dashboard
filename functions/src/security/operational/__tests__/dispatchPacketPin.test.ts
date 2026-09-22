@@ -554,15 +554,22 @@ describe('accept preserves binding', () => {
     if (r.ok) return;
     expect(r.reason).toBe('other_driver');
   });
-  it('unbound dispatch cannot be accepted', () => {
-    const r = evaluateAcceptDriverDispatch({
+  it('partial binding cannot be accepted; completely unbound dispatch can be accepted', () => {
+    const partial = evaluateAcceptDriverDispatch({
+      dispatchId: 'd1',
+      caller: { driverId: DRIVER, companyId: COMPANY },
+      existing: { companyId: COMPANY, driverId: DRIVER, status: 'pending', packageId: 'water-hauling' },
+    });
+    expect(partial.ok).toBe(false);
+    if (!partial.ok) {
+      expect(partial.reason).toBe('partial_authority_group');
+    }
+    const unbound = evaluateAcceptDriverDispatch({
       dispatchId: 'd1',
       caller: { driverId: DRIVER, companyId: COMPANY },
       existing: { companyId: COMPANY, driverId: DRIVER, status: 'pending' },
     });
-    expect(r.ok).toBe(false);
-    if (r.ok) return;
-    expect(r.reason).toBe('unbound_dispatch');
+    expect(unbound.ok).toBe(true);
   });
 });
 

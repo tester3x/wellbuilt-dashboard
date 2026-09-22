@@ -1,3 +1,4 @@
+import { randomUUID } from 'crypto';
 import * as httpsV2 from 'firebase-functions/v2/https';
 import * as admin from 'firebase-admin';
 import { FieldValue } from 'firebase-admin/firestore';
@@ -30,6 +31,8 @@ import {
   type BirthIdentity,
 } from './operational/dispatchPacketPin';
 import { checkWell, loadAuthorizedWellCatalog, loadVerifiedRevision } from './operational/dispatchPinRuntime';
+import { packageIndexDocId } from './operational/jobPacketPublish';
+import { INDEX_COLLECTION } from './operational/jobPacketRevisionStore';
 
 const ALLOWED_KEYS = new Set(['op', 'dispatchId', 'record', 'packetRef']);
 
@@ -142,7 +145,7 @@ export const staffWriteDispatch = httpsV2.onCall(
     }
     const dispatchId = typeof raw.dispatchId === 'string' ? raw.dispatchId.trim() : '';
     const incoming = (raw.record && typeof raw.record === 'object' && !Array.isArray(raw.record))
-      ? (raw.record as Record<string, unknown>)
+      ? { ...(raw.record as Record<string, unknown>) }
       : {};
     const allow = op === 'update' ? DISPATCH_UPDATE_ALLOWLIST : DISPATCH_CREATE_ALLOWLIST;
     const serialized = serializeStaffDispatchRecord(incoming, allow);
@@ -152,9 +155,36 @@ export const staffWriteDispatch = httpsV2.onCall(
     const fs = admin.firestore();
 
     if (op === 'create') {
-      const id = parseDispatchId(dispatchId);
+      const rawDispatchId = dispatchId || randomUUID();
+      const id = parseDispatchId(rawDispatchId);
       if (!id.ok) throwDecided(id);
-      const packet = parsePacketRef(raw.packetRef);
+
+      let resolvedPackageId = 'water-hauling';
+      if (raw.packetRef && typeof raw.packetRef === 'object' && typeof (raw.packetRef as Record<string, unknown>).packageId === 'string') {
+        resolvedPackageId = ((raw.packetRef as Record<string, unknown>).packageId as string).trim() || 'water-hauling';
+      } else if (typeof incoming.packageId === 'string' && incoming.packageId.trim()) {
+        resolvedPackageId = incoming.packageId.trim();
+      }
+
+      if (Object.prototype.hasOwnProperty.call(incoming, 'packageId')) {
+        delete incoming.packageId;
+      }
+      if (Object.prototype.hasOwnProperty.call(record, 'packageId')) {
+        delete record.packageId;
+      }
+
+      let packetRefInput = raw.packetRef;
+      if (!packetRefInput) {
+        let resolvedRevision = 1;
+        const headDocId = packageIndexDocId(access.companyId, resolvedPackageId);
+        const headSnap = await fs.collection(INDEX_COLLECTION).doc(headDocId).get();
+        if (headSnap.exists && typeof headSnap.data()?.latestRevision === 'number' && (headSnap.data()?.latestRevision as number) > 0) {
+          resolvedRevision = headSnap.data()?.latestRevision as number;
+        }
+        packetRefInput = { packageId: resolvedPackageId, revision: resolvedRevision };
+      }
+
+      const packet = parsePacketRef(packetRefInput);
       if (!packet.ok) throwDecided(packet);
       const authority = rejectCallerAuthorityFields(incoming);
       if (!authority.ok) throwDecided(authority);
@@ -177,6 +207,11 @@ export const staffWriteDispatch = httpsV2.onCall(
       const fields = pickDispatchFields(record, DISPATCH_CREATE_ALLOWLIST);
       delete fields.packageId;
       await stampServerAuthoritativeIdentity(fields, decided.companyId);
+      const wellNameStr = typeof fields.wellName === 'string' ? fields.wellName.trim() : '';
+      const ndicWellNameStr = typeof fields.ndicWellName === 'string' && fields.ndicWellName.trim()
+        ? fields.ndicWellName.trim()
+        : wellNameStr;
+      fields.ndicWellName = ndicWellNameStr;
       const binding = stampDispatchBinding(revision.envelope);
       const identity: BirthIdentity = {
         companyId: decided.companyId,
@@ -184,8 +219,8 @@ export const staffWriteDispatch = httpsV2.onCall(
         jobTypeId: jobType.jobTypeId,
         binding,
         well: {
-          wellName: typeof fields.wellName === 'string' ? fields.wellName.trim() : '',
-          ndicWellName: typeof fields.ndicWellName === 'string' ? fields.ndicWellName.trim() : '',
+          wellName: wellNameStr,
+          ndicWellName: ndicWellNameStr,
         },
       };
       const outcome = await fs.runTransaction(async (tx) => {

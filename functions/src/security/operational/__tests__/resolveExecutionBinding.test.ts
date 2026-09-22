@@ -463,6 +463,59 @@ describe('G-015 authoritative execution context', () => {
     expect(writes).toEqual([]);
   });
 
+  it('14. ndicWellName falls back to wellName when omitted from stored dispatch', async () => {
+    const store = new MemoryStore();
+    const rev = await publishRevision(store);
+    const job = dispatchFrom(rev);
+    const { ndicWellName, ...noNdic } = job;
+    void ndicWellName;
+    const r = await runResolveExecutionBinding({
+      jobId: JOB,
+      caller: { driverId: DRIVER, companyId: COMPANY },
+      getDispatch: async () => noNdic,
+      getRevision: async (id) => {
+        const data = await store.getRevision(id);
+        return { exists: !!data, data: data || undefined };
+      },
+    });
+    expect(r.ok).toBe(true);
+    if (!r.ok) return;
+    expect(r.execution.wellName).toBe('Python');
+    expect(r.execution.ndicWellName).toBe('Python');
+  });
+
+  it('15. unbound legacy dispatch resolves against active published packet head', async () => {
+    const store = new MemoryStore();
+    const rev = await publishRevision(store);
+    const legacyJob = {
+      companyId: COMPANY,
+      driverId: DRIVER,
+      status: 'accepted',
+      jobType: 'pw',
+      wellName: 'Gabriel 1',
+    };
+    const r = await runResolveExecutionBinding({
+      jobId: 'd-legacy-1',
+      caller: { driverId: DRIVER, companyId: COMPANY },
+      getDispatch: async () => legacyJob,
+      getRevision: async (id) => {
+        const data = await store.getRevision(id);
+        return { exists: !!data, data: data || undefined };
+      },
+      getHead: async () => ({
+        exists: true,
+        data: { latestRevision: 1 },
+      }),
+    });
+    expect(r.ok).toBe(true);
+    if (!r.ok) return;
+    expect(r.binding.packageId).toBe('water-hauling');
+    expect(r.binding.packetRevision).toBe(1);
+    expect(r.binding.contentHash).toBe(rev.contentHash);
+    expect(r.execution.wellName).toBe('Gabriel 1');
+    expect(r.execution.ndicWellName).toBe('Gabriel 1');
+  });
+
   it('12-13. inventory/effects remain empty; fixture names match the operational API', () => {
     expect([...SERVER_IMPLEMENTED_EFFECTS]).toEqual([]);
     expect(Object.keys(fixture)).toEqual([

@@ -45,7 +45,38 @@ export function jsonSafe(record: Record<string, unknown>): Record<string, unknow
 export type CallableInvoker = (payload: unknown) => Promise<{ data: unknown }>;
 
 export function buildCreatePayload(record: Record<string, unknown>): Record<string, unknown> {
-  return { op: 'create', record: jsonSafe(record) };
+  const safe = jsonSafe(record);
+  let dispatchId = typeof safe.id === 'string' && safe.id.trim()
+    ? safe.id.trim()
+    : (typeof safe.dispatchId === 'string' && safe.dispatchId.trim()
+      ? safe.dispatchId.trim()
+      : '');
+  if (!dispatchId) {
+    if (typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function') {
+      dispatchId = crypto.randomUUID();
+    } else {
+      dispatchId = 'disp_' + Date.now().toString(36) + '_' + Math.random().toString(36).slice(2, 10);
+    }
+  }
+
+  const packageId = typeof safe.packageId === 'string' && safe.packageId.trim()
+    ? safe.packageId.trim()
+    : 'water-hauling';
+  const revision = typeof safe.packetRevision === 'number' && Number.isInteger(safe.packetRevision) && safe.packetRevision > 0
+    ? safe.packetRevision
+    : 1;
+
+  delete safe.id;
+  delete safe.dispatchId;
+  delete safe.packageId;
+  delete safe.packetRevision;
+
+  return {
+    op: 'create',
+    dispatchId,
+    packetRef: { packageId, revision },
+    record: safe,
+  };
 }
 export function buildUpdatePayload(dispatchId: string, record: Record<string, unknown>): Record<string, unknown> {
   return { op: 'update', dispatchId, record: jsonSafe(record) };

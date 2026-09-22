@@ -1,7 +1,7 @@
 import * as httpsV2 from 'firebase-functions/v2/https';
 import * as admin from 'firebase-admin';
 import { requireSecureDriver } from './requireDriverAuth';
-import { REVISION_COLLECTION } from './operational/jobPacketRevisionStore';
+import { INDEX_COLLECTION, REVISION_COLLECTION } from './operational/jobPacketRevisionStore';
 import {
   parseResolveExecutionBindingRequest,
   runResolveExecutionBinding,
@@ -50,6 +50,10 @@ export const resolveExecutionBinding = httpsV2.onCall(
       },
       getRevision: async (id) => {
         const snap = await fs.collection(REVISION_COLLECTION).doc(id).get();
+        return { exists: snap.exists, data: snap.data() as Record<string, unknown> | undefined };
+      },
+      getHead: async (id) => {
+        const snap = await fs.collection(INDEX_COLLECTION).doc(id).get();
         return { exists: snap.exists, data: snap.data() as Record<string, unknown> | undefined };
       },
     });

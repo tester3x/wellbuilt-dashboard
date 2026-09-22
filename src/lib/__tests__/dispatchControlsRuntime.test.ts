@@ -78,8 +78,10 @@ test('Dispatch Create: op=create, record is jsonSafe, returns dispatchId', async
   const out = await runCreateDispatch(m.invoke, {
     wellName: 'W', assignedAt: ts, companyId: ts, scheduledFor: ts, notes: 'hi', skip: undefined,
   });
-  const payload = m.calls[0] as { op: string; record: Record<string, unknown> };
+  const payload = m.calls[0] as { op: string; dispatchId: string; packetRef: unknown; record: Record<string, unknown> };
   assert.equal(payload.op, 'create');
+  assert.ok(typeof payload.dispatchId === 'string' && payload.dispatchId.length > 0, 'auto-mints dispatchId');
+  assert.deepEqual(payload.packetRef, { packageId: 'water-hauling', revision: 1 }, 'supplies packetRef');
   assert.equal(payload.record.wellName, 'W');
   // Server-authoritative fields are omitted ONLY when Timestamp-like (jsonSafe
   // drops them so the server stamps/derives them).
