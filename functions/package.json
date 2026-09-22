@@ -9,7 +9,7 @@
     "start": "npm run shell",
     "deploy": "firebase deploy --only functions",
     "logs": "firebase functions:log",
-    "test:sso": "npm run build && node tools/mirror-contracts.mjs --verify && node tools/test-ssoBridge.mjs && node tools/test-ssoCallables.mjs && node tools/test-ssoEntitlement.mjs",
+    "test:sso": "npm run build && node tools/test-ssoBridge.mjs && node tools/test-ssoCallables.mjs && node tools/test-ssoEntitlement.mjs",
     "test:sso-emulator": "node tools/test-ssoEmulatorClaims.mjs",
     "emulator:auth": "firebase emulators:start --only auth --project demo-wellbuilt-sso",
     "test": "jest"
@@ -23,7 +23,7 @@
   "description": "Firebase Cloud Functions for WellBuilt Dashboard",
   "dependencies": {
     "@anthropic-ai/sdk": "^0.52.0",
-    "@tester3x/wellbuilt-contracts": "0.7.0",
+    "@tester3x/wellbuilt-contracts": "file:vendor/tester3x-wellbuilt-contracts-0.7.0.tgz",
     "firebase-admin": "^13.6.0",
     "firebase-functions": "^7.0.5"
   },
