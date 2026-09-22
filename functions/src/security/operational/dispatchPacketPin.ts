@@ -228,6 +228,163 @@ export function evaluateWellAuthorized(
   return { ok: true, wellName: well || ndic };
 }
 
+export type AuthoritativeWell = {
+  key: string;
+  wellName: string;
+  ndicWellName: string;
+  companyId?: string;
+};
+
+/**
+ * Server-authoritative well resolution against RTDB well_config.
+ *
+ * In well_config:
+ * - key is the short name (e.g. 'Gabriel 5', 'Python', 'Thor 1')
+ * - wellName is display/catalog name (falls back to key if omitted/empty)
+ * - ndicName is the canonical NDIC identity (e.g. 'GABRIEL 5-28-33H', 'PYTHON 1')
+ * - companyId scopes ownership; if absent/empty, well belongs to shared Liquid Gold pool ('liquid-gold')
+ *
+ * Rules:
+ * 1. Caller may provide wellName (short name or catalog name) and/or ndicWellName.
+ * 2. Matches against well_config keys and properties.
+ * 3. Tenant isolation: cross-company wells are excluded; shared Liquid Gold pool wells are accessible across tenants.
+ * 4. If both wellName and ndicWellName provided, must resolve to same record; mismatch fails with well_alias_mismatch:target.
+ * 5. If matched record has no non-empty ndicName, fails closed with missing_ndic_identity:ndicWellName.
+ * 6. If no accessible well matches, fails closed with target_well_not_found:target.
+ */
+export function resolveAuthoritativeWell(
+  catalog: unknown,
+  selector: { wellName?: unknown; ndicWellName?: unknown },
+  actingCompanyId?: string,
+): StoreResult<{ well: AuthoritativeWell }> {
+  if (catalog === undefined || catalog === null) {
+    return fail('target_well_not_found', 'target');
+  }
+  if (typeof catalog !== 'object' || Array.isArray(catalog)) {
+    return fail('malformed_well_catalog', 'well_config');
+  }
+  const proto = Object.getPrototypeOf(catalog);
+  if (proto !== Object.prototype && proto !== null) {
+    return fail('malformed_well_catalog', 'well_config');
+  }
+
+  const reqWell = typeof selector.wellName === 'string' ? selector.wellName.trim() : '';
+  const reqNdic = typeof selector.ndicWellName === 'string' ? selector.ndicWellName.trim() : '';
+  if (!reqWell && !reqNdic) {
+    return fail('target_well_not_found', 'target');
+  }
+
+  type WellEntry = {
+    key: string;
+    wellName: string;
+    ndicWellName: string;
+    companyId: string;
+  };
+
+  const accessible: WellEntry[] = [];
+
+  for (const key of Object.getOwnPropertyNames(catalog)) {
+    if (key === '__proto__' || key === 'constructor' || key === 'prototype') {
+      return fail('malformed_well_catalog', key);
+    }
+    const rec = (catalog as Record<string, unknown>)[key];
+    if (rec === null || typeof rec !== 'object' || Array.isArray(rec)) {
+      return fail('malformed_well_catalog', key);
+    }
+    const obj = rec as Record<string, unknown>;
+    const recordCompany = typeof obj.companyId === 'string' ? obj.companyId.trim() : '';
+    if (recordCompany) {
+      const actor = typeof actingCompanyId === 'string' ? actingCompanyId.trim() : '';
+      if (!actor || recordCompany !== actor) {
+        continue; // Tenant boundary: cross-company well is excluded
+      }
+    }
+
+    const displayWellName = typeof obj.wellName === 'string' && obj.wellName.trim()
+      ? obj.wellName.trim()
+      : key.trim();
+    const ndicName = typeof obj.ndicName === 'string' && obj.ndicName.trim()
+      ? obj.ndicName.trim()
+      : (typeof obj.ndicWellName === 'string' && obj.ndicWellName.trim() ? obj.ndicWellName.trim() : '');
+
+    accessible.push({
+      key: key.trim(),
+      wellName: displayWellName,
+      ndicWellName: ndicName,
+      companyId: recordCompany || 'liquid-gold',
+    });
+  }
+
+  function matchesTerm(entry: WellEntry, term: string): boolean {
+    const norm = term.toLowerCase();
+    if (entry.key.toLowerCase() === norm) return true;
+    if (entry.wellName.toLowerCase() === norm) return true;
+    if (entry.ndicWellName && entry.ndicWellName.toLowerCase() === norm) return true;
+    return false;
+  }
+
+  function findHits(term: string): StoreResult<{ hits: WellEntry[] }> {
+    const hits = accessible.filter((e) => matchesTerm(e, term));
+    const uniqueKeys = new Map<string, WellEntry>();
+    for (const h of hits) {
+      uniqueKeys.set(h.key, h);
+    }
+    const unique = [...uniqueKeys.values()];
+    if (unique.length > 1) {
+      return fail('well_alias_ambiguous', 'target');
+    }
+    return { ok: true, hits: unique };
+  }
+
+  let chosen: WellEntry | null = null;
+
+  if (reqWell && reqNdic) {
+    const wellResult = findHits(reqWell);
+    if (!wellResult.ok) return wellResult;
+    const ndicResult = findHits(reqNdic);
+    if (!ndicResult.ok) return ndicResult;
+
+    const wellHit = wellResult.hits[0] || null;
+    const ndicHit = ndicResult.hits[0] || null;
+
+    if (!wellHit && !ndicHit) {
+      return fail('target_well_not_found', 'target');
+    }
+    if (!wellHit || !ndicHit || wellHit.key !== ndicHit.key) {
+      return fail('well_alias_mismatch', 'target');
+    }
+    chosen = wellHit;
+  } else if (reqWell) {
+    const wellResult = findHits(reqWell);
+    if (!wellResult.ok) return wellResult;
+    if (!wellResult.hits.length) {
+      return fail('target_well_not_found', 'target');
+    }
+    chosen = wellResult.hits[0];
+  } else {
+    const ndicResult = findHits(reqNdic);
+    if (!ndicResult.ok) return ndicResult;
+    if (!ndicResult.hits.length) {
+      return fail('target_well_not_found', 'target');
+    }
+    chosen = ndicResult.hits[0];
+  }
+
+  if (!chosen.ndicWellName) {
+    return fail('missing_ndic_identity', 'ndicWellName');
+  }
+
+  return {
+    ok: true,
+    well: {
+      key: chosen.key,
+      wellName: chosen.wellName,
+      ndicWellName: chosen.ndicWellName,
+      companyId: chosen.companyId,
+    },
+  };
+}
+
 export type WellIdentity = {
   wellName: string;
   ndicWellName: string;
@@ -382,6 +539,6 @@ export function evaluateExistingDispatchDriverUpdate(input: {
 export function parseDispatchId(raw: unknown): StoreResult<{ dispatchId: string }> {
   if (typeof raw !== 'string' || !raw.trim()) return fail('dispatch_id_required', 'dispatchId');
   const dispatchId = raw.trim();
-  if (dispatchId.length > 128 || dispatchId.includes('/')) return fail('malformed_dispatch_id', 'dispatchId');
+  if (dispatchId.length > 128 || dispatchId.includes('/')) return fail('invalid_format', 'dispatchId');
   return { ok: true, dispatchId };
 }

@@ -11,11 +11,13 @@ import {
   evaluateExistingDispatchDriverUpdate,
   collectAuthorizedWellNames,
   evaluateWellAuthorized,
+  parseDispatchId,
   parsePacketRef,
   readDispatchBinding,
   rejectBindingMutation,
   rejectCallerAuthorityFields,
   requireCompleteBinding,
+  resolveAuthoritativeWell,
   resolveCanonicalJobType,
   stampDispatchBinding,
 } from '../dispatchPacketPin';
@@ -317,6 +319,135 @@ describe('job type and well', () => {
   });
 });
 
+describe('authoritative well resolution', () => {
+  const sampleCatalog = {
+    'Gabriel 5': {
+      wellName: 'Gabriel 5-28-33',
+      ndicName: 'GABRIEL 5-28-33H',
+    },
+    'Python': {
+      ndicName: 'PYTHON 1',
+    },
+    'Thor 1': {
+      ndicName: 'THOR 1-31-30H',
+      companyId: 'carrier-alpha',
+    },
+    'Missing NDIC': {
+      wellName: 'No NDIC Here',
+    },
+    'Shared Pool': {
+      ndicName: 'SHARED 1-POOL',
+    },
+  };
+
+  it('valid well with ndicName is successfully resolved and stamped', () => {
+    // Lookup by short name key
+    const r1 = resolveAuthoritativeWell(sampleCatalog, { wellName: 'Gabriel 5' });
+    expect(r1.ok).toBe(true);
+    if (!r1.ok) return;
+    expect(r1.well.key).toBe('Gabriel 5');
+    expect(r1.well.wellName).toBe('Gabriel 5-28-33');
+    expect(r1.well.ndicWellName).toBe('GABRIEL 5-28-33H');
+
+    // Lookup by display wellName
+    const r2 = resolveAuthoritativeWell(sampleCatalog, { wellName: 'Gabriel 5-28-33' });
+    expect(r2.ok).toBe(true);
+    if (!r2.ok) return;
+    expect(r2.well.ndicWellName).toBe('GABRIEL 5-28-33H');
+
+    // Lookup by canonical ndicName
+    const r3 = resolveAuthoritativeWell(sampleCatalog, { ndicWellName: 'GABRIEL 5-28-33H' });
+    expect(r3.ok).toBe(true);
+    if (!r3.ok) return;
+    expect(r3.well.wellName).toBe('Gabriel 5-28-33');
+    expect(r3.well.ndicWellName).toBe('GABRIEL 5-28-33H');
+
+    // Falls back to key when wellName property is omitted
+    const r4 = resolveAuthoritativeWell(sampleCatalog, { wellName: 'Python' });
+    expect(r4.ok).toBe(true);
+    if (!r4.ok) return;
+    expect(r4.well.wellName).toBe('Python');
+    expect(r4.well.ndicWellName).toBe('PYTHON 1');
+  });
+
+  it('well missing ndicName fails closed with missing_ndic_identity', () => {
+    const r = resolveAuthoritativeWell(sampleCatalog, { wellName: 'Missing NDIC' });
+    expect(r.ok).toBe(false);
+    if (r.ok) return;
+    expect(r.reason).toBe('missing_ndic_identity');
+    expect(r.field).toBe('ndicWellName');
+  });
+
+  it('well alias mismatch (caller wellName vs caller ndicWellName) fails closed with well_alias_mismatch', () => {
+    const r = resolveAuthoritativeWell(sampleCatalog, {
+      wellName: 'Python',
+      ndicWellName: 'GABRIEL 5-28-33H',
+    });
+    expect(r.ok).toBe(false);
+    if (r.ok) return;
+    expect(r.reason).toBe('well_alias_mismatch');
+    expect(r.field).toBe('target');
+  });
+
+  it('nonexistent well fails closed with target_well_not_found', () => {
+    const r = resolveAuthoritativeWell(sampleCatalog, { wellName: 'Completely Nonexistent Well' });
+    expect(r.ok).toBe(false);
+    if (r.ok) return;
+    expect(r.reason).toBe('target_well_not_found');
+    expect(r.field).toBe('target');
+  });
+
+  it('cross-company well access fails closed (tenant boundary enforced)', () => {
+    // Carrier beta cannot access Thor 1 (owned by carrier-alpha)
+    const r = resolveAuthoritativeWell(sampleCatalog, { wellName: 'Thor 1' }, 'carrier-beta');
+    expect(r.ok).toBe(false);
+    if (r.ok) return;
+    expect(r.reason).toBe('target_well_not_found');
+    expect(r.field).toBe('target');
+
+    // Carrier alpha can access Thor 1
+    const allowed = resolveAuthoritativeWell(sampleCatalog, { wellName: 'Thor 1' }, 'carrier-alpha');
+    expect(allowed.ok).toBe(true);
+    if (!allowed.ok) return;
+    expect(allowed.well.ndicWellName).toBe('THOR 1-31-30H');
+  });
+
+  it('shared Liquid Gold pool well is accessible across all tenants', () => {
+    // Shared Pool has no companyId -> accessible by any tenant
+    const r1 = resolveAuthoritativeWell(sampleCatalog, { wellName: 'Shared Pool' }, 'carrier-alpha');
+    expect(r1.ok).toBe(true);
+    if (!r1.ok) return;
+    expect(r1.well.ndicWellName).toBe('SHARED 1-POOL');
+
+    const r2 = resolveAuthoritativeWell(sampleCatalog, { wellName: 'Shared Pool' }, 'carrier-beta');
+    expect(r2.ok).toBe(true);
+    if (!r2.ok) return;
+    expect(r2.well.ndicWellName).toBe('SHARED 1-POOL');
+
+    const r3 = resolveAuthoritativeWell(sampleCatalog, { wellName: 'Shared Pool' }, 'liquid-gold');
+    expect(r3.ok).toBe(true);
+  });
+});
+
+describe('parseDispatchId', () => {
+  it('rejects missing or empty dispatchId with dispatch_id_required', () => {
+    expect(parseDispatchId(undefined)).toMatchObject({ ok: false, reason: 'dispatch_id_required', field: 'dispatchId' });
+    expect(parseDispatchId(null)).toMatchObject({ ok: false, reason: 'dispatch_id_required', field: 'dispatchId' });
+    expect(parseDispatchId('')).toMatchObject({ ok: false, reason: 'dispatch_id_required', field: 'dispatchId' });
+    expect(parseDispatchId('   ')).toMatchObject({ ok: false, reason: 'dispatch_id_required', field: 'dispatchId' });
+  });
+
+  it('rejects invalid format dispatchId with invalid_format', () => {
+    expect(parseDispatchId('a/b')).toMatchObject({ ok: false, reason: 'invalid_format', field: 'dispatchId' });
+    expect(parseDispatchId('x'.repeat(129))).toMatchObject({ ok: false, reason: 'invalid_format', field: 'dispatchId' });
+  });
+
+  it('accepts valid dispatchId string', () => {
+    expect(parseDispatchId('W0Om3TsAHAJ4bu8d8K49')).toMatchObject({ ok: true, dispatchId: 'W0Om3TsAHAJ4bu8d8K49' });
+    expect(parseDispatchId('  disp-12345  ')).toMatchObject({ ok: true, dispatchId: 'disp-12345' });
+  });
+});
+
 describe('identity', () => {
   it('20. inactive/revoked driver fails', () => {
     const r = resolveServerAssignmentIdentity({
@@ -554,7 +685,7 @@ describe('accept preserves binding', () => {
     if (r.ok) return;
     expect(r.reason).toBe('other_driver');
   });
-  it('partial binding cannot be accepted; completely unbound dispatch can be accepted', () => {
+  it('partial binding cannot be accepted; completely unbound dispatch fails closed', () => {
     const partial = evaluateAcceptDriverDispatch({
       dispatchId: 'd1',
       caller: { driverId: DRIVER, companyId: COMPANY },
@@ -563,13 +694,18 @@ describe('accept preserves binding', () => {
     expect(partial.ok).toBe(false);
     if (!partial.ok) {
       expect(partial.reason).toBe('partial_authority_group');
+      expect(partial.field).toBe('binding');
     }
     const unbound = evaluateAcceptDriverDispatch({
       dispatchId: 'd1',
       caller: { driverId: DRIVER, companyId: COMPANY },
       existing: { companyId: COMPANY, driverId: DRIVER, status: 'pending' },
     });
-    expect(unbound.ok).toBe(true);
+    expect(unbound.ok).toBe(false);
+    if (!unbound.ok) {
+      expect(unbound.reason).toBe('unbound_dispatch');
+      expect(unbound.field).toBe('binding');
+    }
   });
 });
 

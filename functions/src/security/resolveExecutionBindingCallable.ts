@@ -1,7 +1,7 @@
 import * as httpsV2 from 'firebase-functions/v2/https';
 import * as admin from 'firebase-admin';
 import { requireSecureDriver } from './requireDriverAuth';
-import { INDEX_COLLECTION, REVISION_COLLECTION } from './operational/jobPacketRevisionStore';
+import { REVISION_COLLECTION } from './operational/jobPacketRevisionStore';
 import {
   parseResolveExecutionBindingRequest,
   runResolveExecutionBinding,
@@ -26,6 +26,7 @@ function throwFail(decided: { ok: false; reason: string; field?: string }): neve
     decided.reason === 'unknown_field'
     || decided.reason === 'record_must_be_object'
     || decided.reason === 'dispatch_id_required'
+    || decided.reason === 'invalid_format'
     || decided.reason === 'malformed_dispatch_id'
   ) {
     throw new httpsV2.HttpsError('invalid-argument', msg);
@@ -50,10 +51,6 @@ export const resolveExecutionBinding = httpsV2.onCall(
       },
       getRevision: async (id) => {
         const snap = await fs.collection(REVISION_COLLECTION).doc(id).get();
-        return { exists: snap.exists, data: snap.data() as Record<string, unknown> | undefined };
-      },
-      getHead: async (id) => {
-        const snap = await fs.collection(INDEX_COLLECTION).doc(id).get();
         return { exists: snap.exists, data: snap.data() as Record<string, unknown> | undefined };
       },
     });

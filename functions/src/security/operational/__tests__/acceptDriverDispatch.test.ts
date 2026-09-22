@@ -455,7 +455,7 @@ describe('F1 acceptDriverDispatch provenance', () => {
     ].includes(k))).toBe(true);
   });
 
-  it('allows acceptance of completely unbound legacy dispatch', async () => {
+  it('completely unbound legacy dispatch fails closed on accept', async () => {
     const legacyJob = {
       companyId: COMPANY,
       driverId: DRIVER,
@@ -471,12 +471,12 @@ describe('F1 acceptDriverDispatch provenance', () => {
       getRevision: async () => ({ exists: false }),
       applyUpdate: (id, patch) => { updates.push({ id, patch }); },
     });
-    expect(res.ok).toBe(true);
-    if (!res.ok) return;
-    expect(res.result).toBe('accepted');
-    expect(res.status).toBe('accepted');
-    expect(updates).toHaveLength(1);
-    expect(updates[0].patch.status).toBe('accepted');
+    expect(res.ok).toBe(false);
+    if (!res.ok) {
+      expect(res.reason).toBe('unbound_dispatch');
+      expect(res.field).toBe('binding');
+    }
+    expect(updates).toHaveLength(0);
   });
 
   it('callable loads the stored revision through the transaction reader', () => {

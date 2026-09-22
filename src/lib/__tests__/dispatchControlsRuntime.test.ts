@@ -75,12 +75,14 @@ test('Dispatch Create: op=create, record is jsonSafe, returns dispatchId', async
   assert.equal(STAFF_WRITE_DISPATCH_CALLABLE, 'staffWriteDispatch');
   const m = mock({ dispatchId: 'd_99' });
   const ts = { toMillis: () => 1_700_000_000_000 };
-  const out = await runCreateDispatch(m.invoke, {
+  const inputRecord: Record<string, unknown> = {
     wellName: 'W', assignedAt: ts, companyId: ts, scheduledFor: ts, notes: 'hi', skip: undefined,
-  });
+  };
+  const out = await runCreateDispatch(m.invoke, inputRecord);
   const payload = m.calls[0] as { op: string; dispatchId: string; packetRef: unknown; record: Record<string, unknown> };
   assert.equal(payload.op, 'create');
   assert.ok(typeof payload.dispatchId === 'string' && payload.dispatchId.length > 0, 'auto-mints dispatchId');
+  assert.equal(inputRecord.dispatchId, payload.dispatchId, 'stamps stable dispatchId on caller record for idempotency');
   assert.deepEqual(payload.packetRef, { packageId: 'water-hauling', revision: 1 }, 'supplies packetRef');
   assert.equal(payload.record.wellName, 'W');
   // Server-authoritative fields are omitted ONLY when Timestamp-like (jsonSafe
@@ -90,6 +92,11 @@ test('Dispatch Create: op=create, record is jsonSafe, returns dispatchId', async
   assert.ok(!('skip' in payload.record), 'undefined fields are dropped');
   assert.deepEqual(payload.record.scheduledFor, { seconds: 1_700_000_000, nanoseconds: 0 }, 'Timestamp serialized, not dropped');
   assert.deepEqual(out, { dispatchId: 'd_99' });
+
+  // Idempotent retry reuses the exact same dispatchId
+  await runCreateDispatch(m.invoke, inputRecord);
+  const retryPayload = m.calls[1] as { op: string; dispatchId: string };
+  assert.equal(retryPayload.dispatchId, payload.dispatchId, 'immediate retry reuses identical stable dispatchId');
 });
 
 test('Dispatch Update: op=update carries dispatchId + jsonSafe record', async () => {

@@ -7,13 +7,11 @@ import {
   loadVerifiedRevisionFromData,
   parseDispatchId,
   parsePacketRef,
-  readDispatchBinding,
   requireCompleteBinding,
   stampDispatchBinding,
   verifyDispatchPinsAgainstEnvelope,
   type DispatchBinding,
 } from './dispatchPacketPin';
-import { packageIndexDocId } from './jobPacketPublish';
 
 export const RESOLVE_EXECUTION_BINDING_CALLABLE = 'resolveExecutionBinding';
 
@@ -95,17 +93,15 @@ export function readDispatchExecutionContext(
   if (!Object.prototype.hasOwnProperty.call(job, 'wellName')) {
     return fail('missing_well_identity', 'wellName');
   }
-  if (typeof job.wellName !== 'string') return fail('malformed_well_identity', 'wellName');
-  const wellName = job.wellName.trim();
-  if (!wellName) return fail('partial_well_identity', 'wellName');
-
-  let ndicWellName = wellName;
-  if (Object.prototype.hasOwnProperty.call(job, 'ndicWellName')) {
-    if (typeof job.ndicWellName !== 'string') return fail('malformed_well_identity', 'ndicWellName');
-    const trimmed = job.ndicWellName.trim();
-    if (!trimmed) return fail('partial_well_identity', 'ndicWellName');
-    ndicWellName = trimmed;
+  if (!Object.prototype.hasOwnProperty.call(job, 'ndicWellName')) {
+    return fail('missing_well_identity', 'ndicWellName');
   }
+  if (typeof job.wellName !== 'string') return fail('malformed_well_identity', 'wellName');
+  if (typeof job.ndicWellName !== 'string') return fail('malformed_well_identity', 'ndicWellName');
+  const wellName = job.wellName.trim();
+  const ndicWellName = job.ndicWellName.trim();
+  if (!wellName) return fail('partial_well_identity', 'wellName');
+  if (!ndicWellName) return fail('partial_well_identity', 'ndicWellName');
   return { ok: true, execution: { jobTypeId, wellName, ndicWellName } };
 }
 
@@ -129,7 +125,6 @@ export async function runResolveExecutionBinding(input: {
   caller: { driverId: string; companyId: string } | null;
   getDispatch: (id: string) => Promise<Record<string, unknown> | null>;
   getRevision: (id: string) => Promise<{ exists: boolean; data?: Record<string, unknown> }>;
-  getHead?: (id: string) => Promise<{ exists: boolean; data?: Record<string, unknown> }>;
   writes?: unknown[];
 }): Promise<StoreResult<ExecutionBindingResult>> {
   if (input.writes) input.writes.length = 0;
@@ -152,72 +147,32 @@ export async function runResolveExecutionBinding(input: {
   if (!(EXECUTABLE_DISPATCH_STATUSES as readonly string[]).includes(status)) {
     return fail('invalid_status', 'status');
   }
-
-  const readBinding = readDispatchBinding(existing);
-  if (readBinding.partial) return fail('partial_authority_group', 'binding');
-
-  let envelope: Record<string, unknown> & { definition: unknown; implementedEffects: readonly unknown[] };
-  let binding: DispatchBinding;
-
-  if (readBinding.complete) {
-    const bound = requireCompleteBinding(existing);
-    if (!bound.ok) return bound;
-    const selector = parsePacketRef({
-      packageId: bound.binding.packageId,
-      revision: bound.binding.packetRevision,
-    });
-    if (!selector.ok) return selector;
-    const revId = revisionDocId(companyId, selector.packetRef.packageId, selector.packetRef.revision);
-    const revSnap = await input.getRevision(revId);
-    const loaded = await loadVerifiedRevisionFromData(
-      revSnap.exists,
-      revSnap.data,
-      companyId,
-      selector.packetRef,
-    );
-    if (!loaded.ok) return loaded;
-    const pins = verifyDispatchPinsAgainstEnvelope(existing, loaded.envelope, companyId);
-    if (!pins.ok) return pins;
-    const expected = stampDispatchBinding(loaded.envelope);
-    if (expected.contentHash !== bound.binding.contentHash) {
-      return fail('content_hash_mismatch', 'contentHash');
-    }
-    if (expected.policyHash !== bound.binding.policyHash) {
-      return fail('policy_hash_mismatch', 'policyHash');
-    }
-    envelope = loaded.envelope;
-    binding = {
-      packageId: bound.binding.packageId,
-      packetRevision: bound.binding.packetRevision,
-      contentHash: bound.binding.contentHash,
-      policyHash: bound.binding.policyHash,
-    };
-  } else {
-    const pkg = typeof existing.packageId === 'string' && existing.packageId.trim()
-      ? existing.packageId.trim()
-      : 'water-hauling';
-    let revision = 1;
-    if (input.getHead) {
-      const headId = packageIndexDocId(companyId, pkg);
-      const headSnap = await input.getHead(headId);
-      if (headSnap?.exists && headSnap.data && typeof headSnap.data.latestRevision === 'number' && Number.isInteger(headSnap.data.latestRevision) && headSnap.data.latestRevision > 0) {
-        revision = headSnap.data.latestRevision;
-      }
-    }
-    const revId = revisionDocId(companyId, pkg, revision);
-    const revSnap = await input.getRevision(revId);
-    const loaded = await loadVerifiedRevisionFromData(
-      revSnap.exists,
-      revSnap.data,
-      companyId,
-      { packageId: pkg, revision },
-    );
-    if (!loaded.ok) return loaded;
-    envelope = loaded.envelope;
-    binding = stampDispatchBinding(loaded.envelope);
+  const bound = requireCompleteBinding(existing);
+  if (!bound.ok) return bound;
+  const selector = parsePacketRef({
+    packageId: bound.binding.packageId,
+    revision: bound.binding.packetRevision,
+  });
+  if (!selector.ok) return selector;
+  const revId = revisionDocId(companyId, selector.packetRef.packageId, selector.packetRef.revision);
+  const revSnap = await input.getRevision(revId);
+  const loaded = await loadVerifiedRevisionFromData(
+    revSnap.exists,
+    revSnap.data,
+    companyId,
+    selector.packetRef,
+  );
+  if (!loaded.ok) return loaded;
+  const pins = verifyDispatchPinsAgainstEnvelope(existing, loaded.envelope, companyId);
+  if (!pins.ok) return pins;
+  const expected = stampDispatchBinding(loaded.envelope);
+  if (expected.contentHash !== bound.binding.contentHash) {
+    return fail('content_hash_mismatch', 'contentHash');
   }
-
-  const definitionSnap = snapshotPlain(envelope.definition, 'definition');
+  if (expected.policyHash !== bound.binding.policyHash) {
+    return fail('policy_hash_mismatch', 'policyHash');
+  }
+  const definitionSnap = snapshotPlain(loaded.envelope.definition, 'definition');
   if (!definitionSnap.ok) return definitionSnap;
   if (
     definitionSnap.value === null
@@ -226,7 +181,7 @@ export async function runResolveExecutionBinding(input: {
   ) {
     return fail('definition_must_be_object', 'definition');
   }
-  const effectsSnap = snapshotPlain([...envelope.implementedEffects], 'implementedEffects');
+  const effectsSnap = snapshotPlain([...loaded.envelope.implementedEffects], 'implementedEffects');
   if (!effectsSnap.ok) return effectsSnap;
   if (!Array.isArray(effectsSnap.value)) return fail('effects_must_be_array', 'implementedEffects');
   const implementedEffects = (effectsSnap.value as unknown[]).map((e) => String(e));
@@ -254,7 +209,12 @@ export async function runResolveExecutionBinding(input: {
     jobId: parsed.jobId,
     companyId,
     driverId,
-    binding,
+    binding: {
+      packageId: bound.binding.packageId,
+      packetRevision: bound.binding.packetRevision,
+      contentHash: bound.binding.contentHash,
+      policyHash: bound.binding.policyHash,
+    },
     execution: {
       jobTypeId: execution.jobTypeId,
       wellName: execution.wellName,

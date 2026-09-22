@@ -10,6 +10,8 @@ import {
   evaluateWellAuthorized,
   loadVerifiedRevisionFromData,
   parsePacketRef,
+  resolveAuthoritativeWell,
+  type AuthoritativeWell,
   type AuthorizedWellCatalog,
   type PacketRef,
 } from './dispatchPacketPin';
@@ -49,6 +51,14 @@ export async function loadAuthorizedWellCatalog(
 ): Promise<StoreResult<AuthorizedWellCatalog>> {
   const snap = await admin.database().ref('well_config').once('value');
   return collectAuthorizedWellNames(snap.exists() ? snap.val() : {}, actingCompanyId);
+}
+
+export async function loadAuthoritativeWell(
+  selector: { wellName?: unknown; ndicWellName?: unknown },
+  actingCompanyId?: string,
+): Promise<StoreResult<{ well: AuthoritativeWell }>> {
+  const snap = await admin.database().ref('well_config').once('value');
+  return resolveAuthoritativeWell(snap.exists() ? snap.val() : {}, selector, actingCompanyId);
 }
 
 /** @deprecated Use loadAuthorizedWellCatalog. Kept as a name alias for call-site updates. */

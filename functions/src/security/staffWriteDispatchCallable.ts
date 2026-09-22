@@ -1,4 +1,3 @@
-import { randomUUID } from 'crypto';
 import * as httpsV2 from 'firebase-functions/v2/https';
 import * as admin from 'firebase-admin';
 import { FieldValue } from 'firebase-admin/firestore';
@@ -30,7 +29,11 @@ import {
   stampDispatchBinding,
   type BirthIdentity,
 } from './operational/dispatchPacketPin';
-import { checkWell, loadAuthorizedWellCatalog, loadVerifiedRevision } from './operational/dispatchPinRuntime';
+import {
+  loadAuthoritativeWell,
+  loadAuthorizedWellCatalog,
+  loadVerifiedRevision,
+} from './operational/dispatchPinRuntime';
 import { packageIndexDocId } from './operational/jobPacketPublish';
 import { INDEX_COLLECTION } from './operational/jobPacketRevisionStore';
 
@@ -113,9 +116,15 @@ function throwDecided(decided: { ok: false; reason: string; field?: string }): n
   ) {
     throw new httpsV2.HttpsError('permission-denied', msg);
   }
+  if (decided.reason === 'create_conflict') {
+    throw new httpsV2.HttpsError('already-exists', msg);
+  }
   const code = decided.reason === 'unexpected_field'
     || decided.reason === 'unknown_status'
     || decided.reason === 'caller_authority_field'
+    || decided.reason === 'dispatch_id_required'
+    || decided.reason === 'invalid_format'
+    || decided.reason === 'malformed_dispatch_id'
     ? 'invalid-argument'
     : 'failed-precondition';
   throw new httpsV2.HttpsError(code, msg);
@@ -155,8 +164,7 @@ export const staffWriteDispatch = httpsV2.onCall(
     const fs = admin.firestore();
 
     if (op === 'create') {
-      const rawDispatchId = dispatchId || randomUUID();
-      const id = parseDispatchId(rawDispatchId);
+      const id = parseDispatchId(raw.dispatchId);
       if (!id.ok) throwDecided(id);
 
       let resolvedPackageId = 'water-hauling';
@@ -198,8 +206,8 @@ export const staffWriteDispatch = httpsV2.onCall(
       if (!decided.ok) throwDecided(decided);
       const wells = await loadAuthorizedWellCatalog(access.companyId);
       if (!wells.ok) throwDecided(wells);
-      const well = checkWell(record, wells);
-      if (!well.ok) throwDecided(well);
+      const authWell = await loadAuthoritativeWell(record, decided.companyId);
+      if (!authWell.ok) throwDecided(authWell);
       const revision = await loadVerifiedRevision(decided.companyId, packet.packetRef);
       if (!revision.ok) throwDecided(revision);
       const jobType = resolveCanonicalJobType(record.jobType, revision.envelope.jobTypes);
@@ -207,11 +215,8 @@ export const staffWriteDispatch = httpsV2.onCall(
       const fields = pickDispatchFields(record, DISPATCH_CREATE_ALLOWLIST);
       delete fields.packageId;
       await stampServerAuthoritativeIdentity(fields, decided.companyId);
-      const wellNameStr = typeof fields.wellName === 'string' ? fields.wellName.trim() : '';
-      const ndicWellNameStr = typeof fields.ndicWellName === 'string' && fields.ndicWellName.trim()
-        ? fields.ndicWellName.trim()
-        : wellNameStr;
-      fields.ndicWellName = ndicWellNameStr;
+      fields.wellName = authWell.well.wellName;
+      fields.ndicWellName = authWell.well.ndicWellName;
       const binding = stampDispatchBinding(revision.envelope);
       const identity: BirthIdentity = {
         companyId: decided.companyId,
@@ -219,8 +224,8 @@ export const staffWriteDispatch = httpsV2.onCall(
         jobTypeId: jobType.jobTypeId,
         binding,
         well: {
-          wellName: wellNameStr,
-          ndicWellName: ndicWellNameStr,
+          wellName: authWell.well.wellName,
+          ndicWellName: authWell.well.ndicWellName,
         },
       };
       const outcome = await fs.runTransaction(async (tx) => {
@@ -228,7 +233,9 @@ export const staffWriteDispatch = httpsV2.onCall(
         const snap = await tx.get(ref);
         const existing = snap.exists ? (snap.data() as Record<string, unknown>) : null;
         const replay = evaluateCreateIfAbsent({ existing, expected: identity });
-        if (!replay.ok) throwDecided(replay);
+        if (!replay.ok) {
+          throwDecided({ ok: false, reason: 'create_conflict', field: 'dispatchId' });
+        }
         if (replay.result === 'already_exists') {
           return { result: 'already_exists' as const, dispatchId: id.dispatchId };
         }

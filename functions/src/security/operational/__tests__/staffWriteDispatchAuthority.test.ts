@@ -269,6 +269,18 @@ describe('production callable wiring', () => {
     expect(callable).toMatch(/loadVerifiedRevision\(decided\.companyId/);
     expect(callable).toMatch(/assignedBy: fields\.assignedBy \|\| access\.uid/);
   });
+
+  it('R1: server requires dispatchId on create; zero randomUUID auto-minting', () => {
+    expect(callable).not.toMatch(/randomUUID/);
+    expect(callable).toMatch(/parseDispatchId\(raw\.dispatchId\)/);
+    expect(callable).toMatch(/create_conflict/);
+  });
+
+  it('R1: target well is resolved authoritatively; zero ndicWellName fallback', () => {
+    expect(callable).toMatch(/loadAuthoritativeWell\(record/);
+    expect(callable).not.toMatch(/ndicWellNameStr\s*=\s*.*wellNameStr/);
+    expect(callable).not.toMatch(/ndicWellName\s*=\s*wellName/);
+  });
 });
 
 describe('remaining RTDB-backed staff callables (not migrated)', () => {

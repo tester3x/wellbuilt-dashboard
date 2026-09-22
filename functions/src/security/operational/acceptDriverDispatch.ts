@@ -4,7 +4,6 @@ import {
   loadVerifiedRevisionFromData,
   parseDispatchId,
   parsePacketRef,
-  readDispatchBinding,
   requireCompleteBinding,
   verifyDispatchPinsAgainstEnvelope,
 } from './dispatchPacketPin';
@@ -49,8 +48,8 @@ export function evaluateAcceptDriverDispatch(input: {
   const companyId = str(input.caller?.companyId);
   if (!driverId || !companyId) return fail('unauthenticated_driver');
   if (!input.existing) return fail('not_found');
-  const readBinding = readDispatchBinding(input.existing);
-  if (readBinding.partial) return fail('partial_authority_group', 'binding');
+  const bound = requireCompleteBinding(input.existing);
+  if (!bound.ok) return bound;
   const jobCompany = str(input.existing.companyId);
   if (!jobCompany || jobCompany !== companyId) return fail('wrong_company');
   const assigned = str(input.existing.driverId);
@@ -123,30 +122,25 @@ export async function runAcceptDriverDispatch(input: {
   });
   if (!decided.ok) return decided;
   if (!existing) return fail('not_found');
-  const readBinding = readDispatchBinding(existing);
-  if (readBinding.partial) return fail('partial_authority_group', 'binding');
-  let revisionDocIdStr = '';
-  if (readBinding.complete) {
-    const bound = requireCompleteBinding(existing);
-    if (!bound.ok) return bound;
-    const selector = parsePacketRef({
-      packageId: bound.binding.packageId,
-      revision: bound.binding.packetRevision,
-    });
-    if (!selector.ok) return selector;
-    const revId = revisionDocId(input.caller.companyId, selector.packetRef.packageId, selector.packetRef.revision);
-    const revSnap = await input.getRevision(revId);
-    const loaded = await loadVerifiedRevisionFromData(
-      revSnap.exists,
-      revSnap.data,
-      input.caller.companyId,
-      selector.packetRef,
-    );
-    if (!loaded.ok) return loaded;
-    const pins = verifyDispatchPinsAgainstEnvelope(existing, loaded.envelope, input.caller.companyId);
-    if (!pins.ok) return pins;
-    revisionDocIdStr = loaded.revisionDocId;
-  }
+  const bound = requireCompleteBinding(existing);
+  if (!bound.ok) return bound;
+  const selector = parsePacketRef({
+    packageId: bound.binding.packageId,
+    revision: bound.binding.packetRevision,
+  });
+  if (!selector.ok) return selector;
+  const revId = revisionDocId(input.caller.companyId, selector.packetRef.packageId, selector.packetRef.revision);
+  const revSnap = await input.getRevision(revId);
+  const loaded = await loadVerifiedRevisionFromData(
+    revSnap.exists,
+    revSnap.data,
+    input.caller.companyId,
+    selector.packetRef,
+  );
+  if (!loaded.ok) return loaded;
+  const pins = verifyDispatchPinsAgainstEnvelope(existing, loaded.envelope, input.caller.companyId);
+  if (!pins.ok) return pins;
+  const revisionDocIdStr = loaded.revisionDocId;
   if (decided.result === 'already_accepted') {
     return {
       ok: true,

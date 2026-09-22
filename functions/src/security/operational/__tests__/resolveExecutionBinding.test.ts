@@ -463,7 +463,7 @@ describe('G-015 authoritative execution context', () => {
     expect(writes).toEqual([]);
   });
 
-  it('14. ndicWellName falls back to wellName when omitted from stored dispatch', async () => {
+  it('14. stored dispatch missing ndicWellName fails closed with missing_well_identity', async () => {
     const store = new MemoryStore();
     const rev = await publishRevision(store);
     const job = dispatchFrom(rev);
@@ -478,21 +478,22 @@ describe('G-015 authoritative execution context', () => {
         return { exists: !!data, data: data || undefined };
       },
     });
-    expect(r.ok).toBe(true);
-    if (!r.ok) return;
-    expect(r.execution.wellName).toBe('Python');
-    expect(r.execution.ndicWellName).toBe('Python');
+    expect(r.ok).toBe(false);
+    if (r.ok) return;
+    expect(r.reason).toBe('missing_well_identity');
+    expect(r.field).toBe('ndicWellName');
   });
 
-  it('15. unbound legacy dispatch resolves against active published packet head', async () => {
+  it('15. unbound legacy dispatch fails closed with unbound_dispatch:binding (never resolves against head)', async () => {
     const store = new MemoryStore();
-    const rev = await publishRevision(store);
+    await publishRevision(store);
     const legacyJob = {
       companyId: COMPANY,
       driverId: DRIVER,
       status: 'accepted',
       jobType: 'pw',
       wellName: 'Gabriel 1',
+      ndicWellName: 'GABRIEL 1-36-25H',
     };
     const r = await runResolveExecutionBinding({
       jobId: 'd-legacy-1',
@@ -502,18 +503,11 @@ describe('G-015 authoritative execution context', () => {
         const data = await store.getRevision(id);
         return { exists: !!data, data: data || undefined };
       },
-      getHead: async () => ({
-        exists: true,
-        data: { latestRevision: 1 },
-      }),
     });
-    expect(r.ok).toBe(true);
-    if (!r.ok) return;
-    expect(r.binding.packageId).toBe('water-hauling');
-    expect(r.binding.packetRevision).toBe(1);
-    expect(r.binding.contentHash).toBe(rev.contentHash);
-    expect(r.execution.wellName).toBe('Gabriel 1');
-    expect(r.execution.ndicWellName).toBe('Gabriel 1');
+    expect(r.ok).toBe(false);
+    if (r.ok) return;
+    expect(r.reason).toBe('unbound_dispatch');
+    expect(r.field).toBe('binding');
   });
 
   it('12-13. inventory/effects remain empty; fixture names match the operational API', () => {
@@ -527,5 +521,14 @@ describe('G-015 authoritative execution context', () => {
     const callable = readFileSync(join(ROOT, 'functions', 'src', 'security', 'resolveExecutionBindingCallable.ts'), 'utf8');
     expect(callable).toMatch(/execution: outcome\.execution/);
     expect(callable).not.toMatch(/\.set\(|\.update\(|\.delete\(/);
+  });
+
+  it('R1: zero getHead references exist in resolveExecutionBinding or resolveExecutionBindingCallable', () => {
+    const operational = readFileSync(join(__dirname, '..', 'resolveExecutionBinding.ts'), 'utf8');
+    const callable = readFileSync(join(ROOT, 'functions', 'src', 'security', 'resolveExecutionBindingCallable.ts'), 'utf8');
+    expect(operational).not.toMatch(/getHead/);
+    expect(operational).not.toMatch(/packageIndexDocId/);
+    expect(callable).not.toMatch(/getHead/);
+    expect(callable).not.toMatch(/INDEX_COLLECTION/);
   });
 });

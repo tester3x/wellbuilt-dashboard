@@ -44,6 +44,16 @@ export function jsonSafe(record: Record<string, unknown>): Record<string, unknow
 
 export type CallableInvoker = (payload: unknown) => Promise<{ data: unknown }>;
 
+/**
+ * Build payload for staffCreateDispatch.
+ *
+ * Idempotency Contract:
+ * If the incoming record does not already have an `id` or `dispatchId`, this builder
+ * mints a client-side UUID via `crypto.randomUUID()` and attaches it back onto the
+ * caller's in-memory `record.dispatchId`. Immediate retries (e.g. after a network glitch
+ * or timeout) reuse the exact same stable `dispatchId`, guaranteeing create-if-absent
+ * idempotency on the server transaction reader without duplicating dispatches.
+ */
 export function buildCreatePayload(record: Record<string, unknown>): Record<string, unknown> {
   const safe = jsonSafe(record);
   let dispatchId = typeof safe.id === 'string' && safe.id.trim()
@@ -57,6 +67,8 @@ export function buildCreatePayload(record: Record<string, unknown>): Record<stri
     } else {
       dispatchId = 'disp_' + Date.now().toString(36) + '_' + Math.random().toString(36).slice(2, 10);
     }
+    // Attach back to caller's in-memory record so immediate retries reuse this exact ID.
+    record.dispatchId = dispatchId;
   }
 
   const packageId = typeof safe.packageId === 'string' && safe.packageId.trim()
