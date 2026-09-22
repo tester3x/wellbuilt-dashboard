@@ -1,6 +1,5 @@
 import * as httpsV2 from 'firebase-functions/v2/https';
 import * as admin from 'firebase-admin';
-import { FieldValue } from 'firebase-admin/firestore';
 import {
   requireTrustedCompanyCapability,
   TRUSTED_CAPABILITY_MANAGE_DRIVERS,
@@ -56,6 +55,9 @@ export const publishJobPacketRevision = httpsV2.onCall(
       TRUSTED_CAPABILITY_MANAGE_DRIVERS,
     );
     const fs = admin.firestore();
+    // Canonical revisions are plain JSON. Capture the server clock once per
+    // invocation so transaction retries reuse one revision/receipt/head time.
+    const publishedAt = new Date().toISOString();
     const outcome = await fs.runTransaction(async (tx) => {
       const store: PublishStoreTx = {
         async getRevision(docId: string) {
@@ -94,7 +96,7 @@ export const publishJobPacketRevision = httpsV2.onCall(
         caller,
         request: request.data,
         store,
-        publishedAt: FieldValue.serverTimestamp(),
+        publishedAt,
       });
     });
     if (!outcome.ok) throwFail(outcome);
