@@ -3322,6 +3322,7 @@ function DispatchPageInner() {
                             <td className="px-2 py-1.5 text-white font-mono text-[10px]">{formatTTP(well, asOfMs)}</td>
                             <td className="dispatch-queue-col-pulls px-2 py-1.5"><PullsPredictionCell well={well} /></td>
                             <td className="px-2 py-1.5 text-right" onClick={(e) => e.stopPropagation()}>
+                              <div className="flex items-center justify-end gap-2">
                               {isAssigned ? (
                                 <div className="flex items-center justify-end gap-1.5">
                                   {wbmHref ? (
@@ -3423,12 +3424,15 @@ function DispatchPageInner() {
                                         : assignWarn ? 'bg-amber-700 hover:bg-amber-600 ring-1 ring-amber-400/60'
                                         : 'bg-blue-600 hover:bg-blue-500'}`}>{assignWarn ? 'Assign anyway' : 'Assign'}</button>
                                 )}
-                                <input type="checkbox" checked={isSelected}
-                                  disabled={!!assignTarget || bulkSelectBlocked}
-                                  onChange={() => toggleWellSelection(well.wellName)}
-                                  className={`w-4 h-4 rounded border-gray-600 bg-gray-800 text-blue-600 focus:ring-blue-500 focus:ring-offset-0 ${assignTarget || bulkSelectBlocked ? 'opacity-30 cursor-not-allowed' : 'cursor-pointer'}`} />
                               </div>
                               )}
+                              <input type="checkbox" checked={isSelected}
+                                disabled={isAssigned || !!assignTarget || bulkSelectBlocked}
+                                aria-label={`Select ${well.wellName} for bulk dispatch`}
+                                title={isAssigned ? 'Already assigned' : bulkSelectBlocked ? 'DOWN wells require individual confirmation' : assignTarget ? 'Finish the current assignment first' : 'Select for bulk dispatch'}
+                                onChange={() => toggleWellSelection(well.wellName)}
+                                className={`w-4 h-4 flex-shrink-0 rounded border-gray-600 bg-gray-800 text-blue-600 focus:ring-blue-500 focus:ring-offset-0 ${isAssigned || assignTarget || bulkSelectBlocked ? 'opacity-30 cursor-not-allowed' : 'cursor-pointer'}`} />
+                              </div>
                             </td>
                           </tr>
                         );
