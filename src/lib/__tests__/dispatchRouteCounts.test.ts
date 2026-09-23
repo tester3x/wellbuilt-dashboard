@@ -16,13 +16,11 @@ function computeRouteViewCounts(
     ? wells
     : wells.filter((w) => w.route === routeFilter);
 
-  const live = routeWells.filter((w) => !(w.isDown || w.currentLevel === 'DOWN'));
-
   let unassignedNeedsPull = 0;
   let assignedNeedsPull = 0;
 
   for (const w of routeWells) {
-    if (w.isDown || w.currentLevel === 'DOWN') continue;
+    if (w.isDown || w.currentLevel === 'DOWN') continue; // DOWN out of Needs Pull prediction
     const a = activeAssignments.get(w.wellName);
     if (a && a.status === 'in_progress') continue; // started excluded
     if (classifyWell(w, asOfMs).state !== 'pull-now') continue;
@@ -32,11 +30,14 @@ function computeRouteViewCounts(
 
   const needsPullTotal = unassignedNeedsPull + assignedNeedsPull;
 
+  // ALL counts every route well INCLUDING DOWN (they appear in the ALL view, badged
+  // DOWN). next-24h / needs-data derive from wellBucket, which sorts DOWN into its own
+  // 'down' bucket, so those predictive counts naturally exclude DOWN.
   return {
     'needs-pull': needsPullTotal,
-    'next-24h': live.filter((w) => wellBucket(w, asOfMs) === 'next-24h').length,
-    'needs-data': live.filter((w) => wellBucket(w, asOfMs) === 'needs-data').length,
-    'all': live.length,
+    'next-24h': routeWells.filter((w) => wellBucket(w, asOfMs) === 'next-24h').length,
+    'needs-data': routeWells.filter((w) => wellBucket(w, asOfMs) === 'needs-data').length,
+    'all': routeWells.length,
   } as Record<QueueView, number>;
 }
 
@@ -212,19 +213,21 @@ test('route-scoped tab counts: Stock Yards route counts only Stock Yards wells',
   const nowMs = Date.parse(baseTime) + 3600000;
   const counts = computeRouteViewCounts(mockWells, 'Stock Yards', nowMs);
 
-  // Stock Yards has 3 wells, but Stock Yards 3 is DOWN -> 2 live wells
-  assert.equal(counts.all, 2, 'All Wells for Stock Yards must count only live Stock Yards wells');
-  assert.equal(counts['needs-pull'], 1, 'Stock Yards 1 is pull-now');
-  assert.equal(counts['next-24h'], 1, 'Stock Yards 2 is approaching');
-  assert.equal(counts['needs-data'], 0, 'No needs-data wells in Stock Yards');
+  // Stock Yards has 3 wells; Stock Yards 3 is DOWN. DOWN now appears in the ALL view,
+  // so All Wells = 3, while the predictive buckets still exclude the DOWN well.
+  assert.equal(counts.all, 3, 'All Wells for Stock Yards includes the DOWN well (visible, badged)');
+  assert.equal(counts['needs-pull'], 1, 'Stock Yards 1 is pull-now (DOWN excluded)');
+  assert.equal(counts['next-24h'], 1, 'Stock Yards 2 is approaching (DOWN excluded)');
+  assert.equal(counts['needs-data'], 0, 'No needs-data wells in Stock Yards (DOWN is its own bucket)');
 });
 
 test('route-scoped tab counts: All Routes restores company-wide totals', () => {
   const nowMs = Date.parse(baseTime) + 3600000;
   const counts = computeRouteViewCounts(mockWells, 'all', nowMs);
 
-  // 9 wells total, 1 DOWN -> 8 live wells
-  assert.equal(counts.all, 8, 'All Routes returns company-wide live total');
+  // 9 wells total, 1 DOWN. DOWN now appears in the ALL view, so All = 9; predictive
+  // buckets still exclude the DOWN well.
+  assert.equal(counts.all, 9, 'All Routes returns company-wide total incl. the DOWN well');
   assert.equal(counts['needs-pull'], 5, 'Needs pull includes Gabriels (3) + Stock Yards (1) + Wildcat (1)');
   assert.equal(counts['next-24h'], 2, 'Next 24h includes Gabriel 6 + Stock Yards 2');
   assert.equal(counts['needs-data'], 1, 'Needs data includes Gabriel 7');
@@ -240,8 +243,11 @@ test('source contract: page.tsx derives tab counts from routeWells, not raw well
 
   // needsPullSplit and viewCounts iterate over routeWells
   assert.match(page, /for \(const w of routeWells\)/);
-  assert.match(page, /const live = routeWells\.filter\(w => !\(w\.isDown \|\| w\.currentLevel === 'DOWN'\)\);/);
+  // DOWN wells remain excluded from the automatic Needs Pull prediction...
+  assert.match(page, /if \(w\.isDown \|\| w\.currentLevel === 'DOWN'\) continue;/, 'DOWN excluded from Needs Pull split');
+  // ...but ALL now counts every route well (DOWN appears in the ALL view, badged DOWN).
+  assert.match(page, /'all': routeWells\.length,/, 'ALL counts every route well incl. DOWN');
 
-  // search presentation shows N matching of M route wells
-  assert.match(page, /matching of \$\{routeWells\.filter/);
+  // search presentation shows N matching of M route wells (denominator = all route wells)
+  assert.match(page, /matching of \$\{routeWells\.length\}/);
 });

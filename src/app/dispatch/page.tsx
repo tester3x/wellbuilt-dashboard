@@ -1144,7 +1144,10 @@ function DispatchPageInner() {
   }, [wells, routeFilter]);
 
   const pwQueue = useMemo(() => {
-    const live = routeWells.filter(w => !(w.isDown || w.currentLevel === 'DOWN'));
+    // Include DOWN wells here so they remain visible in the ALL view (and search),
+    // badged DOWN. The needs-pull branch (state === 'pull-now') and matchesView keep
+    // DOWN out of every automatic prediction bucket. Status is never faked.
+    const live = routeWells;
     const applyText = (list: WellResponse[]) => {
       let f = list;
       if (search.trim()) {
@@ -1203,12 +1206,14 @@ function DispatchPageInner() {
   // Counts per primary view, scoped to the selected route ('all' = company-wide totals).
   // Needs Pull = physical demand (both groups, started excluded); other views scoped identically.
   const viewCounts = useMemo(() => {
-    const live = routeWells.filter(w => !(w.isDown || w.currentLevel === 'DOWN'));
+    // ALL counts every route well INCLUDING DOWN (they appear in the ALL view).
+    // next-24h / needs-data derive from wellBucket, which classifies DOWN as its own
+    // 'down' bucket, so those predictive counts naturally exclude DOWN wells.
     return {
       'needs-pull': needsPullSplit.total,
-      'next-24h': live.filter(w => wellBucket(w, asOfMs) === 'next-24h').length,
-      'needs-data': live.filter(w => wellBucket(w, asOfMs) === 'needs-data').length,
-      'all': live.length,
+      'next-24h': routeWells.filter(w => wellBucket(w, asOfMs) === 'next-24h').length,
+      'needs-data': routeWells.filter(w => wellBucket(w, asOfMs) === 'needs-data').length,
+      'all': routeWells.length,
     } as Record<QueueView, number>;
   }, [routeWells, asOfMs, needsPullSplit]);
 
@@ -1220,8 +1225,9 @@ function DispatchPageInner() {
     return routeWells
       .filter(w => {
         const isDown = w.isDown || w.currentLevel === 'DOWN';
-        if (isDown) return false;
-        if (w.currentLevel === '--' && !w.nextPullTimeUTC) return false;
+        // DOWN wells surface in search (badged DOWN) so a dispatcher can deliberately
+        // find and dispatch one; the empty-data guard must not hide them.
+        if (!isDown && w.currentLevel === '--' && !w.nextPullTimeUTC) return false;
         if (!(w.wellName.toLowerCase().includes(q) || (w.route || '').toLowerCase().includes(q))) return false;
         return true;
       })
@@ -3183,7 +3189,7 @@ function DispatchPageInner() {
                   {statusUnavailable
                     ? 'status unavailable'
                     : search.trim()
-                      ? `${queueRows.length} matching of ${routeWells.filter(w => !(w.isDown || w.currentLevel === 'DOWN')).length} route wells`
+                      ? `${queueRows.length} matching of ${routeWells.length} route wells`
                       : `${queueRows.length} wells`}
                 </span>
               </div>
@@ -3241,13 +3247,18 @@ function DispatchPageInner() {
                         // Assigned rows show 'ASSIGNED — driver', visible View affordance, and Reassign (never Assign).
                         const isAssigned = !!assignment;
                         // Assignment eligibility (documented policy — does NOT blindly
-                        // track "actionable"): a DOWN well is never dispatchable; a
-                        // predicted well (PULL NOW / APPROACHING) assigns normally; a
-                        // NEEDS DATA / NO GAIN well has no pull prediction, so Assign is
-                        // a visible manual OVERRIDE (dispatcher may send a driver to
-                        // physically verify) — never presented as an agreeing prediction.
-                        const assignBlocked = priority.state === 'down';
+                        // track "actionable"): a DOWN well is DELIBERATELY dispatchable
+                        // via the Assign button with a required DOWN confirmation (status
+                        // is never changed or faked), but is kept out of bulk select-all /
+                        // checkbox so it is never swept into a batch unwarned; a predicted
+                        // well (PULL NOW / APPROACHING) assigns normally; a NEEDS DATA /
+                        // NO GAIN well has no pull prediction, so Assign is a visible manual
+                        // OVERRIDE (dispatcher may send a driver to physically verify) —
+                        // never presented as an agreeing prediction.
+                        const isDownWell = priority.state === 'down';
                         const assignOverride = priority.state === 'verify' || priority.state === 'no-gain';
+                        const assignWarn = assignOverride || isDownWell;
+                        const bulkSelectBlocked = isDownWell;
                         const wbmHref = wellDetailHref(well);
                         return (
                           <tr
@@ -3379,7 +3390,15 @@ function DispatchPageInner() {
                                 ) : (
                                   <button
                                     onClick={() => {
-                                      if (assignOverride) {
+                                      if (isDownWell) {
+                                        // DOWN is a deliberate override — dispatching does NOT
+                                        // change or clear the well's DOWN status.
+                                        const ok = window.confirm(
+                                          `${well.wellName} is marked DOWN.\n\n` +
+                                          `Dispatching a Production Water or Service Work job will NOT change or clear its DOWN status. Send a driver anyway?`
+                                        );
+                                        if (!ok) return;
+                                      } else if (assignOverride) {
                                         // Manual override: this well has no pull prediction. Explain the
                                         // exact verification reason and require confirmation before assigning.
                                         const reason = verifyReasonText(priority.reason);
@@ -3391,19 +3410,19 @@ function DispatchPageInner() {
                                       }
                                       openAssignModal(well);
                                     }}
-                                    disabled={selectedWells.size > 0 || assignBlocked}
-                                    title={assignBlocked
-                                      ? 'Well is DOWN — not dispatchable'
+                                    disabled={selectedWells.size > 0}
+                                    title={isDownWell
+                                      ? 'Well is DOWN — dispatch is a deliberate override (status is never changed; confirmation required)'
                                       : assignOverride ? `${priority.label}: ${verifyReasonText(priority.reason)} — manual override (confirmation required)` : undefined}
                                     className={`px-2 py-1 text-white text-[10px] font-medium rounded transition-colors whitespace-nowrap ${
-                                      selectedWells.size > 0 || assignBlocked ? 'bg-gray-600 cursor-not-allowed opacity-50'
-                                        : assignOverride ? 'bg-amber-700 hover:bg-amber-600 ring-1 ring-amber-400/60'
-                                        : 'bg-blue-600 hover:bg-blue-500'}`}>{assignOverride ? 'Assign anyway' : 'Assign'}</button>
+                                      selectedWells.size > 0 ? 'bg-gray-600 cursor-not-allowed opacity-50'
+                                        : assignWarn ? 'bg-amber-700 hover:bg-amber-600 ring-1 ring-amber-400/60'
+                                        : 'bg-blue-600 hover:bg-blue-500'}`}>{assignWarn ? 'Assign anyway' : 'Assign'}</button>
                                 )}
                                 <input type="checkbox" checked={isSelected}
-                                  disabled={!!assignTarget || assignBlocked}
+                                  disabled={!!assignTarget || bulkSelectBlocked}
                                   onChange={() => toggleWellSelection(well.wellName)}
-                                  className={`w-4 h-4 rounded border-gray-600 bg-gray-800 text-blue-600 focus:ring-blue-500 focus:ring-offset-0 ${assignTarget || assignBlocked ? 'opacity-30 cursor-not-allowed' : 'cursor-pointer'}`} />
+                                  className={`w-4 h-4 rounded border-gray-600 bg-gray-800 text-blue-600 focus:ring-blue-500 focus:ring-offset-0 ${assignTarget || bulkSelectBlocked ? 'opacity-30 cursor-not-allowed' : 'cursor-pointer'}`} />
                               </div>
                               )}
                             </td>

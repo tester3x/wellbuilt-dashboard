@@ -516,17 +516,27 @@ test('Well-pool merge carries the height-first classifier inputs (target/level/g
 });
 
 // ── Assign gating agrees with the documented eligibility policy ───────────
-test('Row Assign gating: DOWN not dispatchable; NEEDS DATA / NO GAIN require an explained "Assign anyway" confirmation', () => {
+test('Row Assign gating: DOWN is deliberately dispatchable (confirm required, status never faked); NEEDS DATA / NO GAIN require an explained "Assign anyway" confirmation', () => {
   const page = read('../../app/dispatch/page.tsx');
-  assert.match(page, /const assignBlocked = priority\.state === 'down';/, 'DOWN blocks assignment');
+  // DOWN is identified but NOT hard-blocked — the old assignBlocked=down gate is gone.
+  assert.match(page, /const isDownWell = priority\.state === 'down';/, 'DOWN identified (not hard-blocked)');
+  assert.ok(!/const assignBlocked = priority\.state === 'down';/.test(page), 'legacy DOWN hard-block removed');
   assert.match(page, /const assignOverride = priority\.state === 'verify' \|\| priority\.state === 'no-gain';/, 'verify/no-gain are overrides');
-  assert.match(page, /disabled=\{selectedWells\.size > 0 \|\| assignBlocked\}/, 'Assign button disabled for DOWN');
+  assert.match(page, /const assignWarn = assignOverride \|\| isDownWell;/, 'DOWN + overrides both warn');
+  // Assign button only disables during multi-select — never solely because a well is DOWN.
+  assert.match(page, /disabled=\{selectedWells\.size > 0\}/, 'Assign button not disabled for DOWN alone');
+  // DOWN stays out of bulk select-all / checkbox so it is never swept into a batch unwarned.
+  assert.match(page, /const bulkSelectBlocked = isDownWell;/, 'DOWN excluded from bulk selection');
+  assert.match(page, /q\.priority\.state !== 'down'/, 'select-all excludes DOWN');
   // Understandable override treatment — not a bare "Assign*".
-  assert.match(page, /assignOverride \? 'Assign anyway' : 'Assign'/, 'override reads "Assign anyway"');
+  assert.match(page, /assignWarn \? 'Assign anyway' : 'Assign'/, 'warned wells read "Assign anyway"');
   assert.ok(!/'Assign\*'/.test(page), 'no bare Assign* label remains');
-  // The exact verification reason is surfaced, and assignment requires confirmation.
+  // The exact verification reason is surfaced, and DOWN/override assignment requires confirmation.
   assert.match(page, /verifyReasonText\(priority\.reason\)/, 'shows the exact verification reason');
-  assert.match(page, /window\.confirm\(/, 'override assignment requires confirmation');
+  assert.match(page, /is marked DOWN/, 'DOWN confirmation explains the deliberate override');
+  assert.match(page, /window\.confirm\(/, 'DOWN/override assignment requires confirmation');
+  // Requirement #4: dispatch NEVER mutates/falsifies wellDown.
+  assert.ok(!/wellDown\s*[:=]\s*(?:true|false)/.test(page), 'dispatch never writes wellDown');
 });
 
 test('verifyReasonText maps every WB‑M-parity reason code to human text', () => {

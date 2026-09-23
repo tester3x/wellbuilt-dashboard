@@ -334,7 +334,11 @@ export function verifyReasonText(reason: string | undefined): string {
 
 export function matchesView(well: WellResponse, view: QueueView, nowMs: number = Date.now(), opts: ClassifyOpts = {}): boolean {
   const c = classifyWell(well, nowMs, opts);
-  if (c.state === 'down') return false;
+  // DOWN wells stay deliberately dispatchable and remain VISIBLE in the ALL view
+  // (and search), clearly badged DOWN — but are kept OUT of every automatic
+  // prediction bucket unless physical data reclassifies them. Their 'down' state
+  // matches none of the predictive views below, so no explicit exclusion is needed;
+  // only ALL returns them. (Status is never faked to achieve this.)
   switch (view) {
     case 'needs-pull': return c.state === 'pull-now';
     case 'next-24h': return c.state === 'approaching' && c.ttpHours !== null && c.ttpHours <= 24;
