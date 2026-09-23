@@ -96,7 +96,7 @@ test('Dispatch Create: op=create, record is jsonSafe, returns dispatchId', async
   const m = mock({ dispatchId: 'd_99' });
   const ts = { toMillis: () => 1_700_000_000_000 };
   const inputRecord: Record<string, unknown> = {
-    wellName: 'W', assignedAt: ts, companyId: ts, scheduledFor: ts, notes: 'hi', skip: undefined,
+    wellName: 'W', assignedAt: ts, companyId: ts, status: 'pending', scheduledFor: ts, notes: 'hi', skip: undefined,
   };
   const out = await runCreateDispatch(m.invoke, inputRecord);
   const payload = m.calls[0] as { op: string; dispatchId: string; packetRef: unknown; record: Record<string, unknown> };
@@ -107,6 +107,7 @@ test('Dispatch Create: op=create, record is jsonSafe, returns dispatchId', async
   assert.equal(payload.record.wellName, 'W');
   assert.ok(!('assignedAt' in payload.record), 'assignedAt (Timestamp) is omitted for the server to stamp');
   assert.ok(!('companyId' in payload.record), 'companyId (Timestamp) is omitted for the server to derive');
+  assert.ok(!('status' in payload.record), 'create status is server-owned even when the UI displays pending');
   assert.ok(!('skip' in payload.record), 'undefined fields are dropped');
   assert.deepEqual(payload.record.scheduledFor, { seconds: 1_700_000_000, nanoseconds: 0 }, 'Timestamp serialized, not dropped');
   assert.deepEqual(out, { dispatchId: 'd_99' });
@@ -119,8 +120,8 @@ test('Dispatch Create: op=create, record is jsonSafe, returns dispatchId', async
 
 test('Dispatch Update: op=update carries dispatchId + jsonSafe record', async () => {
   const m = mock({});
-  await runUpdateDispatch(m.invoke, 'd_1', { disposal: 'SWD A', notes: 'x' });
-  assert.deepEqual(m.calls[0], { op: 'update', dispatchId: 'd_1', record: { disposal: 'SWD A', notes: 'x' } });
+  await runUpdateDispatch(m.invoke, 'd_1', { disposal: 'SWD A', notes: 'x', status: 'accepted' });
+  assert.deepEqual(m.calls[0], { op: 'update', dispatchId: 'd_1', record: { disposal: 'SWD A', notes: 'x', status: 'accepted' } });
 });
 
 test('Dispatch Cancel: op=cancel carries only dispatchId (no record)', async () => {

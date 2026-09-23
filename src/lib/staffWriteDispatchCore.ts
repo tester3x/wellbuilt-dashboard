@@ -653,6 +653,8 @@ export function buildCreatePayload(record: Record<string, unknown>): Record<stri
   delete safe.dispatchId;
   delete safe.packageId;
   delete safe.packetRevision;
+  // The callable chooses the initial status; client status is an authority field.
+  delete safe.status;
 
   return {
     op: 'create',
