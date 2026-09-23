@@ -42,7 +42,12 @@ import { calculateDriverETAs, applyDeadline, type DriverEtaResult } from '@/lib/
 import { loadCompanyById } from '@/lib/companySettings';
 import { trackJobTypeUsage } from '@/lib/jobTypeUsage';
 import { dismissDispatch as _dismissDispatch } from '@/lib/dismissDispatch';
-import { staffCancelDispatch as _staffCancelDispatch, staffCreateDispatch as _staffCreateDispatch, staffUpdateDispatch as _staffUpdateDispatch } from '@/lib/staffWriteDispatch';
+import {
+  staffCancelDispatch as _staffCancelDispatch,
+  staffCreateDispatch as _staffCreateDispatch,
+  staffUpdateDispatch as _staffUpdateDispatch,
+  cancelRetainedCreation,
+} from '@/lib/staffWriteDispatch';
 import { hasCapability } from '@/lib/auth';
 import {
   filterTicketsForCompany,
@@ -279,9 +284,9 @@ function DispatchPageInner() {
     }
     return true;
   };
-  const staffCreateDispatch = (record: Record<string, unknown>) => {
+  const staffCreateDispatch = (record: Record<string, unknown>, options?: { unitKey?: string }) => {
     ensureCanCreateDispatch();
-    return _staffCreateDispatch(record);
+    return _staffCreateDispatch(record, options);
   };
   const staffUpdateDispatch = (dispatchId: string, record: Record<string, unknown>) => {
     ensureCanCreateDispatch();
@@ -1259,7 +1264,6 @@ function DispatchPageInner() {
       setDisposalResults([]);
       setTimeout(() => setMessage(''), 4000);
     } catch (err: any) {
-      setAssignTarget(null);
       setMessage(`Error: ${err.message}`);
       setTimeout(() => setMessage(''), 5000);
     } finally {
@@ -2433,7 +2437,7 @@ function DispatchPageInner() {
                             aria-label="Selected well"
                             className="w-full px-3 py-1.5 bg-gray-900 border rounded text-white text-sm focus:outline-none border-blue-500 font-bold"
                           />
-                          <button onClick={() => { setAssignTarget(null); setAssignDriverHash(''); setAssignWellSearch(''); }}
+                          <button onClick={() => { cancelRetainedCreation(); setAssignTarget(null); setAssignDriverHash(''); setAssignWellSearch(''); }}
                             className="absolute right-2 top-7 text-gray-400 hover:text-white text-xs">✕</button>
                         </>
                       ) : (
@@ -3108,7 +3112,7 @@ function DispatchPageInner() {
                     {totalSelectedLoads !== selectedWells.size && <span className="text-blue-300 ml-1">({totalSelectedLoads} loads)</span>}
                   </span>
                   <span className="flex-1" />
-                  <button onClick={() => { setSelectedWells(new Map()); setAssignTarget(null); }} className="text-gray-400 hover:text-white text-xs">Clear</button>
+                  <button onClick={() => { cancelRetainedCreation(); setSelectedWells(new Map()); setAssignTarget(null); }} className="text-gray-400 hover:text-white text-xs">Clear</button>
                 </div>
               )}
 
@@ -3659,7 +3663,7 @@ function DispatchPageInner() {
             {/* Buttons */}
             <div className="flex gap-3">
               <button
-                onClick={() => { setReassignJob(null); setReassignDriverHash(''); }}
+                onClick={() => { cancelRetainedCreation(); setReassignJob(null); setReassignDriverHash(''); }}
                 className="flex-1 px-4 py-2 bg-gray-700 hover:bg-gray-600 text-white rounded-lg transition-colors"
               >
                 Cancel
@@ -3687,7 +3691,7 @@ function DispatchPageInner() {
                 Edit {editSwJob.jobType === 'service' ? 'Service Work' : 'Dispatch'}
               </h3>
               <button
-                onClick={() => setEditSwJob(null)}
+                onClick={() => { cancelRetainedCreation(); setEditSwJob(null); }}
                 className="text-gray-400 hover:text-white"
               >&#10005;</button>
             </div>

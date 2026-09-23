@@ -30,12 +30,19 @@ import {
   runCreateDispatch,
   runUpdateDispatch,
   runCancelDispatch,
+  DispatchCreationCoordinator,
+  computeCreationUnitKey,
+  materialBirthFieldsMatch,
+  mintDispatchId,
+  resetGlobalCreationCoordinator,
 } from '../staffWriteDispatchCore.ts';
 import {
   DISMISS_DISPATCH_CALLABLE,
   runDismissDispatch,
   type DismissDispatchResult,
 } from '../dismissDispatchCore.ts';
+import fs from 'node:fs';
+import path from 'node:path';
 
 /** A recording mock invoker. */
 function mock<T>(data: T) {
@@ -127,4 +134,203 @@ test('Dispatch Dismiss: targets dismissDispatch with {dispatchId} and unwraps re
   const out = await runDismissDispatch(m.invoke, 'd_3');
   assert.deepEqual(m.calls, [{ dispatchId: 'd_3' }]);
   assert.deepEqual(out, result);
+});
+
+// ── F-1 Deliberate Creation Action & Idempotency Behavioral Proofs ─────────────
+
+test('F-1 Proof: rapid double submission invokes creation once or uses identical dispatchId', async () => {
+  const coord = new DispatchCreationCoordinator();
+  let calls = 0;
+  let delayResolve: (val: unknown) => void;
+  const delayedInvoker = async (payload: any) => {
+    calls++;
+    await new Promise((resolve) => { delayResolve = resolve; setTimeout(resolve, 25); });
+    return { data: { dispatchId: payload.dispatchId } };
+  };
+
+  const record = { wellName: 'Gabriel 5', driverHash: 'mike_hash', jobType: 'pw' };
+  // Trigger rapid double submission concurrently
+  const [res1, res2] = await Promise.all([
+    coord.executeCreate(delayedInvoker, { ...record }),
+    coord.executeCreate(delayedInvoker, { ...record }),
+  ]);
+
+  assert.equal(calls, 1, 'in-flight request joined: callable invoked only ONCE during double submission');
+  assert.equal(res1.dispatchId, res2.dispatchId, 'both callers receive the identical dispatchId');
+  assert.ok(typeof res1.dispatchId === 'string' && res1.dispatchId.length > 0);
+});
+
+test('F-1 Proof: retry following simulated uncertain network failure resends identical dispatchId', async () => {
+  const coord = new DispatchCreationCoordinator();
+  const capturedPayloads: any[] = [];
+  let attempt = 0;
+  const flakyInvoker = async (payload: any) => {
+    attempt++;
+    capturedPayloads.push(payload);
+    if (attempt === 1) {
+      throw new Error('network timeout / uncertain delivery');
+    }
+    return { data: { dispatchId: payload.dispatchId } };
+  };
+
+  const recordAttempt1 = { wellName: 'Thor 1', driverHash: 'd_1', jobType: 'pw' };
+  // Attempt 1 fails with network timeout
+  await assert.rejects(
+    () => coord.executeCreate(flakyInvoker, recordAttempt1),
+    /network timeout/
+  );
+
+  assert.equal(capturedPayloads.length, 1);
+  const firstDispatchId = capturedPayloads[0].dispatchId;
+  assert.ok(firstDispatchId, 'first attempt minted stable dispatchId');
+
+  // Attempt 2 (retry): caller creates a BRAND NEW object literal without dispatchId
+  const recordAttempt2 = { wellName: 'Thor 1', driverHash: 'd_1', jobType: 'pw' };
+  const res2 = await coord.executeCreate(flakyInvoker, recordAttempt2);
+
+  assert.equal(capturedPayloads.length, 2);
+  const secondDispatchId = capturedPayloads[1].dispatchId;
+  assert.equal(secondDispatchId, firstDispatchId, 'retry resends the identical dispatchId');
+  assert.equal(res2.dispatchId, firstDispatchId, 'caller unwraps the identical dispatchId');
+});
+
+test('F-1 Proof: rerender does not change pending dispatchId', () => {
+  const coord = new DispatchCreationCoordinator();
+  // Rerender 1: component renders form state
+  const p1 = coord.prepareCreation({ wellName: 'Gabriel 5', driverHash: 'mike_hash', jobType: 'pw' });
+  // Rerender 2: another render pass constructs a new object literal with identical state
+  const p2 = coord.prepareCreation({ wellName: 'Gabriel 5', driverHash: 'mike_hash', jobType: 'pw' });
+  // Rerender 3: third render pass
+  const p3 = coord.prepareCreation({ wellName: 'Gabriel 5', driverHash: 'mike_hash', jobType: 'pw' });
+
+  assert.equal(p1.dispatchId, p2.dispatchId, 'rerender 1 and 2 share identical dispatchId');
+  assert.equal(p2.dispatchId, p3.dispatchId, 'rerender 2 and 3 share identical dispatchId');
+});
+
+test('F-1 Proof: reconstructed transport payload retains deliberate action ID', async () => {
+  const coord = new DispatchCreationCoordinator();
+  const { dispatchId, unitKey } = coord.prepareCreation({ wellName: 'Well A', driverHash: 'd_a', jobType: 'pw' });
+
+  const m = mock({ dispatchId });
+  // Handler executes with newly constructed object
+  const newObj = { wellName: 'Well A', driverHash: 'd_a', jobType: 'pw', notes: 'fresh reconstructed' };
+  await coord.executeCreate(m.invoke, newObj);
+
+  const sent = m.calls[0] as { op: string; dispatchId: string; record: Record<string, unknown> };
+  assert.equal(sent.dispatchId, dispatchId, 'reconstructed transport payload retains the deliberate action ID');
+  assert.equal(sent.record.notes, 'fresh reconstructed');
+});
+
+test('F-1 Proof: separate deliberate creation actions receive different IDs', async () => {
+  const coord = new DispatchCreationCoordinator();
+  const m = mock({ dispatchId: 'ok' });
+
+  // Action 1: succeeds definitively
+  const rec1 = { wellName: 'Gabriel 5', driverHash: 'mike_hash', jobType: 'pw' };
+  const res1 = await coord.executeCreate(m.invoke, rec1);
+  const id1 = (m.calls[0] as any).dispatchId;
+
+  // Action 2: Later, user deliberately dispatches Gabriel 5 to Mike again (second load)
+  const rec2 = { wellName: 'Gabriel 5', driverHash: 'mike_hash', jobType: 'pw' };
+  const res2 = await coord.executeCreate(m.invoke, rec2);
+  const id2 = (m.calls[1] as any).dispatchId;
+
+  assert.notEqual(id1, id2, 'separate deliberate creation actions receive distinct dispatch IDs');
+
+  // Material change test: change driver
+  const rec3 = { wellName: 'Gabriel 5', driverHash: 'john_hash', jobType: 'pw' };
+  const res3 = await coord.executeCreate(m.invoke, rec3);
+  const id3 = (m.calls[2] as any).dispatchId;
+
+  assert.notEqual(id3, id2, 'material change (driver change) mints a new distinct dispatch ID');
+});
+
+test('F-1 Proof: multi-leg creation produces stable, unique IDs per intended leg', async () => {
+  const coord = new DispatchCreationCoordinator();
+  const captured: any[] = [];
+  const invoker = async (payload: any) => {
+    captured.push(payload);
+    return { data: { dispatchId: payload.dispatchId } };
+  };
+
+  const splitGroupId = 'sg_fieldtest_1';
+  const leg1 = {
+    wellName: 'Gabriel 5',
+    driverHash: 'mike_hash',
+    jobType: 'service',
+    serviceType: 'Water Transfer',
+    splitGroupId,
+    splitSequence: 1,
+  };
+  const leg2 = {
+    wellName: 'Dropoff SWD',
+    driverHash: 'mike_hash',
+    jobType: 'service',
+    serviceType: 'Water Transfer',
+    splitGroupId,
+    splitSequence: 2,
+  };
+  const leg3 = {
+    wellName: 'Disposal Station B',
+    driverHash: 'mike_hash',
+    jobType: 'service',
+    serviceType: 'Water Transfer',
+    splitGroupId,
+    splitSequence: 3,
+  };
+
+  // Execute all 3 legs
+  await Promise.all([
+    coord.executeCreate(invoker, leg1),
+    coord.executeCreate(invoker, leg2),
+    coord.executeCreate(invoker, leg3),
+  ]);
+
+  assert.equal(captured.length, 3);
+  const idLeg1 = captured[0].dispatchId;
+  const idLeg2 = captured[1].dispatchId;
+  const idLeg3 = captured[2].dispatchId;
+
+  assert.notEqual(idLeg1, idLeg2, 'leg 1 and leg 2 have unique dispatch IDs');
+  assert.notEqual(idLeg2, idLeg3, 'leg 2 and leg 3 have unique dispatch IDs');
+  assert.notEqual(idLeg1, idLeg3, 'leg 1 and leg 3 have unique dispatch IDs');
+});
+
+test('F-1 Proof: static audit confirms all production dispatch creates in dispatch/page.tsx use stable action identity', () => {
+  const pagePath = path.resolve(process.cwd(), 'src/app/dispatch/page.tsx');
+  const content = fs.readFileSync(pagePath, 'utf8');
+
+  // 1. Confirm staffCreateDispatch is imported from @/lib/staffWriteDispatch
+  assert.match(
+    content,
+    /import\s*\{[^}]*staffCreateDispatch as _staffCreateDispatch[^}]*\}\s*from\s*['"]@\/lib\/staffWriteDispatch['"]/,
+    'imports _staffCreateDispatch from @/lib/staffWriteDispatch'
+  );
+
+  // 2. Confirm cancelRetainedCreation is imported
+  assert.match(
+    content,
+    /import\s*\{[^}]*cancelRetainedCreation[^}]*\}\s*from\s*['"]@\/lib\/staffWriteDispatch['"]/,
+    'imports cancelRetainedCreation from @/lib/staffWriteDispatch'
+  );
+
+  // 3. Confirm local staffCreateDispatch delegates to _staffCreateDispatch
+  assert.match(
+    content,
+    /const staffCreateDispatch\s*=\s*\([^)]*\)\s*=>\s*\{[^}]*ensureCanCreateDispatch\(\);[^}]*return _staffCreateDispatch\(record,\s*options\);[^}]*\};/,
+    'local staffCreateDispatch delegates to coordinated _staffCreateDispatch'
+  );
+
+  // 4. Confirm zero raw addDoc(collection(..., 'dispatches')) calls
+  assert.doesNotMatch(
+    content,
+    /addDoc\s*\(\s*collection\s*\([^)]+['"]dispatches['"]/,
+    'zero direct addDoc calls to dispatches collection in page.tsx'
+  );
+
+  // 5. Confirm cancel buttons invoke cancelRetainedCreation
+  assert.match(content, /cancelRetainedCreation\(\);\s*setAssignTarget\(null\)/, 'assign cancel clears retained creation');
+  assert.match(content, /cancelRetainedCreation\(\);\s*setSelectedWells/, 'bulk clear clears retained creation');
+  assert.match(content, /cancelRetainedCreation\(\);\s*setReassignJob\(null\)/, 'reassign cancel clears retained creation');
+  assert.match(content, /cancelRetainedCreation\(\);\s*setEditSwJob\(null\)/, 'editSwJob close clears retained creation');
 });
