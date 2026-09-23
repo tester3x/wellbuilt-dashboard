@@ -21,6 +21,7 @@ import { useSharedNow } from '@/lib/useSharedNow';
 import { projectWellLevel } from '@/lib/wellLevelProjection';
 import { wellDetailHref } from '@/lib/wellDetailLink';
 import { resolveDispatchDriver, dispatchDriverDisplayName, dispatchDriverGroupKey } from '@/lib/dispatchDriverIdentity';
+import { groupDispatchRows } from '@/lib/dispatchJobStacks';
 import { assignmentIdentityForDriver, dispatchCreateTargetForAssignment, driverRealName } from '@/lib/dispatchWriterIdentity';
 // Z Fold recovery — layout helpers only (collapsed queue / stacked layout).
 // Live status is read via the governed adminGetWellPool callable (see effect
@@ -4747,6 +4748,21 @@ function ActiveDispatchPanel({ dispatches, cancelDispatch, drivers, assignTransf
         const activeJob = jobs.find(j => j.driverStage && !['completed', 'paused'].includes(j.driverStage));
         const isPaused = jobs.some(j => j.driverStage === 'paused' || j.status === 'paused');
         const allPending = jobs.every(j => j.status === 'pending');
+        const renderJob = (job: DispatchJob) => (
+          <DispatchJobRow
+            job={job}
+            cancelDispatch={cancelDispatch}
+            compact={jobs.length > 2}
+            onClickServiceWork={onEditServiceWork}
+            onReassign={onReassignDeclined}
+            isRecommendedNext={recommendedByGroup.get(driverHash) === job.id}
+            isWellDown={!!job.id && downByJobId.has(job.id)}
+            onDismiss={(j) => {
+              setConfirmDismissJob(j);
+              setDismissError(null);
+            }}
+          />
+        );
 
         return (
           <div key={driverHash} className="border border-gray-700/50 rounded-lg overflow-hidden">
@@ -4804,21 +4820,39 @@ function ActiveDispatchPanel({ dispatches, cancelDispatch, drivers, assignTransf
 
             {isExpanded && (
               <div className="space-y-1 p-2 bg-gray-900/30">
-                {jobs.map(job => (
-                  <DispatchJobRow
-                    key={job.id}
-                    job={job}
-                    cancelDispatch={cancelDispatch}
-                    compact={jobs.length > 2}
-                    onClickServiceWork={onEditServiceWork}
-                    onReassign={onReassignDeclined}
-                    isRecommendedNext={recommendedByGroup.get(driverHash) === job.id}
-                    isWellDown={!!job.id && downByJobId.has(job.id)}
-                    onDismiss={(j) => {
-                      setConfirmDismissJob(j);
-                      setDismissError(null);
-                    }}
-                  />
+                {groupDispatchRows(jobs).map(row => row.jobs.length === 1 ? (
+                  <div key={row.key}>{renderJob(row.jobs[0])}</div>
+                ) : (
+                  <details key={row.key} className="rounded-lg bg-gray-900/50">
+                    <summary className="flex cursor-pointer list-none items-center gap-2 rounded-lg px-3 py-2 text-left hover:bg-gray-900/80">
+                      <JobTypeBadge type={row.jobs[0].jobType} />
+                      <span className="min-w-0 flex-1 truncate text-sm font-medium text-white" title={row.jobs[0].ndicWellName || row.jobs[0].wellName}>
+                        {row.jobs[0].ndicWellName || row.jobs[0].wellName}
+                      </span>
+                      <CategoryBadge className="bg-yellow-600/30 text-yellow-300">x{row.remainingLoads}</CategoryBadge>
+                      {recommendedByGroup.get(driverHash) && row.jobs.some(j => j.id === recommendedByGroup.get(driverHash)) && (
+                        <CategoryBadge className="bg-emerald-600/30 text-emerald-300">★ Next</CategoryBadge>
+                      )}
+                      {row.jobs.some(j => !!j.id && downByJobId.has(j.id)) && (
+                        <CategoryBadge className="bg-red-600 text-white">⚠ DOWN</CategoryBadge>
+                      )}
+                      {row.jobs[0].source === 'driver' && (
+                        <CategoryBadge className="bg-emerald-600/30 text-emerald-300">Driver Started</CategoryBadge>
+                      )}
+                      <CategoryBadge className={row.jobs[0].status === 'pending' ? 'bg-yellow-600/30 text-yellow-300' : 'bg-blue-600/30 text-blue-300'}>
+                        {row.jobs[0].status === 'pending' ? 'Pending' : 'Accepted'}
+                      </CategoryBadge>
+                      <span className="text-xs text-gray-400">▼</span>
+                    </summary>
+                    {(row.jobs[0].hauledTo || row.jobs[0].disposal || row.jobs[0].disposalName) && (
+                      <div className="truncate px-3 pb-1 text-xs text-cyan-400/70">
+                        → {row.jobs[0].hauledTo || row.jobs[0].disposal || row.jobs[0].disposalName}
+                      </div>
+                    )}
+                    <div className="space-y-1 border-t border-gray-700/50 p-2">
+                      {row.jobs.map(job => <div key={job.id}>{renderJob(job)}</div>)}
+                    </div>
+                  </details>
                 ))}
               </div>
             )}
