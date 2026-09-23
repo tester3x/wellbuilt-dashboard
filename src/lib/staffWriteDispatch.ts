@@ -1,4 +1,4 @@
-﻿import { httpsCallable } from 'firebase/functions';
+import { httpsCallable } from 'firebase/functions';
 import { getFirebaseFunctions } from './firebase';
 import {
   STAFF_WRITE_DISPATCH_CALLABLE,
@@ -9,6 +9,7 @@ import {
   DispatchCreationCoordinator,
   ExecuteUnitOptions,
   BeginActionOptions,
+  CallableInvoker,
 } from './staffWriteDispatchCore';
 
 export {
@@ -38,6 +39,42 @@ export type {
   ExecuteUnitOptions,
   RetainedCreationRequest,
 } from './staffWriteDispatchCore';
+
+export {
+  createServiceWorkWorkflow,
+  ensureServiceWorkGroupIds,
+  executeServiceWorkWorkflow,
+  cancelServiceWorkWorkflow,
+} from './serviceWorkWorkflowCore';
+export type {
+  ServiceWorkWorkflowState,
+  ServiceWorkDriverInput,
+  ExtraSplitLegInput,
+  ExecuteServiceWorkInput,
+  ExecuteServiceWorkResult,
+} from './serviceWorkWorkflowCore';
+
+export {
+  createProjectWorkflow,
+  mintProjectId,
+  projectImmutableIdentityMatches,
+  executeCreateProjectWorkflow,
+  cancelCreateProjectWorkflow,
+} from './projectWorkflowCore';
+export type {
+  CreateProjectWorkflowState,
+  FirestoreProjectSnapshot,
+  FirestoreProjectWriter,
+  ProjectDataInput,
+  ProjectWellInfo,
+  ProjectDriverInput,
+  ExecuteCreateProjectInput,
+  ExecuteCreateProjectResult,
+} from './projectWorkflowCore';
+
+export function getDispatchCallableInvoker(): CallableInvoker {
+  return invoker();
+}
 
 function invoker(): (payload: unknown) => Promise<{ data: unknown }> {
   const fn = httpsCallable(getFirebaseFunctions(), STAFF_WRITE_DISPATCH_CALLABLE);

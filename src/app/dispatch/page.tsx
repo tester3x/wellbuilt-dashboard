@@ -50,6 +50,17 @@ import {
   DispatchCreationCoordinator,
   ExecuteUnitOptions,
   mintDispatchId,
+  getDispatchCallableInvoker,
+  createServiceWorkWorkflow,
+  executeServiceWorkWorkflow,
+  cancelServiceWorkWorkflow,
+  type ServiceWorkWorkflowState,
+  createProjectWorkflow,
+  executeCreateProjectWorkflow,
+  cancelCreateProjectWorkflow,
+  type CreateProjectWorkflowState,
+  type FirestoreProjectWriter,
+  type ProjectDataInput,
 } from '@/lib/staffWriteDispatch';
 import { hasCapability } from '@/lib/auth';
 import {
@@ -446,6 +457,7 @@ function DispatchPageInner() {
   const [swNotes, setSwNotes] = useState('');
   const [swDriverHashes, setSwDriverHashes] = useState<Set<string>>(new Set());
   const [swSubmitting, setSwSubmitting] = useState(false);
+  const [swWorkflow, setSwWorkflow] = useState<ServiceWorkWorkflowState>(() => createServiceWorkWorkflow());
   const [swSplitTicket, setSwSplitTicket] = useState(false);
   const [swHeavyWater, setSwHeavyWater] = useState(false);
   // Pre-dispatch extra split legs (C/D/E…). Companion to swSplitTicket:
@@ -582,6 +594,7 @@ function DispatchPageInner() {
   const [newProjectServiceType, setNewProjectServiceType] = useState('');
   const [npbTab, setNpbTab] = useState<'details' | 'drivers' | 'notes'>('details');
   const [creatingProject, setCreatingProject] = useState(false);
+  const [projectWorkflow, setProjectWorkflow] = useState<CreateProjectWorkflowState>(() => createProjectWorkflow());
   const [projectWellSearch, setProjectWellSearch] = useState('');
 
   // Dynamic service types from job packages (falls back to hardcoded)
@@ -1300,8 +1313,6 @@ function DispatchPageInner() {
         actionScope: 'assign-modal',
         unitId: `${assignTarget.wellName}::${driver.key}`,
       });
-      finalizeAction(actionId);
-
       // Track PW usage for R&D pipeline (non-blocking)
       const compId = user?.companyId || driver.companyId || 'unknown';
       trackJobTypeUsage('Production Water', compId, 'water-hauling');
@@ -1315,6 +1326,7 @@ function DispatchPageInner() {
       setAssignDisposalWell(null);
       setDisposalSearch('');
       setDisposalResults([]);
+      finalizeAction(actionId);
       setTimeout(() => setMessage(''), 4000);
     } catch (err: any) {
       setMessage(`Error: ${err.message}`);
@@ -1334,180 +1346,108 @@ function DispatchPageInner() {
       const selectedDrivers = drivers.filter(d => swDriverHashes.has(d.key));
       if (selectedDrivers.length === 0) throw new Error('No drivers found');
 
-      // Generate a group ID so Dashboard can link related service work dispatches
-      const serviceGroupId = selectedDrivers.length > 1 ? `sg_${Date.now()}_${Math.random().toString(36).slice(2, 8)}` : undefined;
-      // Crew list — first names from legalName so logins stay private
-      const getFirstName = (d: ApprovedDriver) => {
-        if (d.legalName) return d.legalName.split(' ')[0];
-        return d.displayName; // fallback if no legalName
-      };
-      const assignedDrivers = selectedDrivers.length > 1 ? selectedDrivers.map(getFirstName) : undefined;
-
       // Look up NDIC name from wells list
       const matchedWell = wells.find(w => w.wellName === swWellName.trim() || w.ndicName === swWellName.trim());
       const swNdicName = matchedWell?.ndicName || swWellName.trim();
 
-      // Split ticket: generate shared splitGroupId for linked jobs.
-      // splitTotal = 1 (base) + 1 (leg B from swDropoff) + N (extras C/D/E…).
-      // All siblings carry the same splitTotal so the WB T client can show
-      // "Split N of M" badges + the addSplitLeg CF can extend the chain
-      // later without recomputing.
-      const splitGroupId = swSplitTicket ? `split_${Date.now()}_${Math.random().toString(36).slice(2, 8)}` : undefined;
-      const splitTotal = swSplitTicket
-        ? 2 + swExtraSplitLegs.length
-        : undefined;
+      await executeServiceWorkWorkflow({
+        workflow: swWorkflow,
+        coordinator,
+        invoke: getDispatchCallableInvoker(),
+        selectedDrivers,
+        wellName: matchedWell?.wellName || swWellName.trim(),
+        ndicWellName: swNdicName,
+        serviceType: swServiceType.trim(),
+        packageId: jobTypeToPackageId[swServiceType.trim()] || undefined,
+        dropoff: swDropoff.trim() || undefined,
+        onsiteBy: swOnsiteBy || undefined,
+        notes: swNotes || undefined,
+        isSplitTicket: swSplitTicket,
+        isHeavyWater: swHeavyWater,
+        extraSplitLegs: swExtraSplitLegs,
+        assignedBy: user?.email || 'dashboard',
+        userEmail: user?.email || undefined,
+        tenantId: sessionTenantId,
+        userId: sessionUserId,
+        onUiComplete: async () => {
+          // Track job type usage for R&D pipeline (non-blocking)
+          const compId = user?.companyId || selectedDrivers[0]?.companyId || 'unknown';
+          trackJobTypeUsage(swServiceType.trim(), compId, jobTypeToPackageId[swServiceType.trim()] || 'custom');
 
-      const batchActionId = `sw_${serviceGroupId || splitGroupId || mintDispatchId()}`;
-      beginAction('service-work-modal', batchActionId);
+          // Auto-create group chat thread for multi-driver SW jobs
+          if (selectedDrivers.length > 1 && swWorkflow.serviceGroupId) {
+            try {
+              const myPid = user?.uid ? `user:${user.uid}` : '';
+              const participants = [myPid, ...selectedDrivers.map(d => `driver:${d.key}`)].filter(Boolean);
+              const participantNames: Record<string, string> = {};
+              if (myPid) participantNames[myPid] = user?.displayName || 'Dispatch';
+              selectedDrivers.forEach(d => {
+                participantNames[`driver:${d.key}`] = d.legalName || d.displayName;
+              });
+              const threadTitle = `${swServiceType.trim()} — ${matchedWell?.wellName || swWellName.trim()}`;
+              const crewNames = selectedDrivers.map(d => (d.legalName || d.displayName).split(' ')[0]).join(', ');
+              const sysText = `Service work dispatched: ${swServiceType.trim()} at ${matchedWell?.wellName || swWellName.trim()}\nCrew: ${crewNames}${swNotes ? `\nNotes: ${swNotes}` : ''}${swDropoff.trim() ? `\nDrop-off: ${swDropoff.trim()}` : ''}`;
+              const threadRef = await addDoc(collection(firestore, 'chat_threads'), {
+                type: 'service_group',
+                serviceGroupId: swWorkflow.serviceGroupId,
+                companyId: user?.companyId || '',
+                title: threadTitle,
+                participants,
+                participantNames,
+                status: 'active',
+                createdAt: Timestamp.now(),
+                updatedAt: Timestamp.now(),
+                lastRead: {},
+                lastMessage: { text: sysText, senderId: 'system', senderName: 'System', timestamp: Timestamp.now(), type: 'system' },
+              });
+              await addDoc(collection(firestore, 'chat_threads', threadRef.id, 'messages'), {
+                text: sysText, senderId: 'system', senderName: 'System', timestamp: Timestamp.now(), type: 'system',
+                systemType: 'job_assigned',
+              });
+            } catch (chatErr) {
+              console.warn('[Dispatch] Auto-create SW chat failed (non-blocking):', chatErr);
+            }
+          }
 
-      const promises = selectedDrivers.map(driver => {
-        const baseJob: Omit<DispatchJob, 'id'> = {
-          // Canonical driver identity contract (driverId + canonical driverHash + real name).
-          ...assignmentIdentityForDriver(driver),
-          ...(driver.legalName ? { driverFirstName: getFirstName(driver) } : {}),
-          wellName: matchedWell?.wellName || swWellName.trim(),
-          ndicWellName: swNdicName,
-          ...(swDropoff.trim() ? { disposal: swDropoff.trim() } : {}),
-          ...(swOnsiteBy ? { onsiteBy: swOnsiteBy } : {}),
-          jobType: 'service',
-          serviceType: swServiceType.trim(),
-          packageId: jobTypeToPackageId[swServiceType.trim()] || undefined,
-          status: 'pending',
-          notes: swNotes || '',
-          priority: 5,
-          assignedAt: Timestamp.now(),
-          assignedBy: user?.email || 'dashboard',
-          ...(serviceGroupId ? { serviceGroupId } : {}),
-          ...(assignedDrivers ? { assignedDrivers } : {}),
-          ...(swHeavyWater ? { isHeavyWater: true } : {}),
-          ...(splitGroupId ? { splitGroupId, splitSequence: 1, ...(splitTotal != null ? { splitTotal } : {}) } : {}),
-        };
+          const names = selectedDrivers.map(d => d.legalName || d.displayName).join(', ');
+          setMessage(`Service work dispatched to ${names}`);
+          setSwWellName('');
+          setSwDropoff('');
+          setSwServiceType('');
+          setSwOnsiteBy('');
+          setSwNotes('');
+          setSwDriverHashes(new Set());
+          setSwSplitTicket(false);
+          setSwHeavyWater(false);
+          setSwExtraSplitLegs([]);
+          setSwExtraLegDraft(null);
+          setTimeout(() => setMessage(''), 4000);
 
-        const docs = [
-          staffCreateDispatch(baseJob, {
-            actionId: batchActionId,
-            actionScope: 'service-work-modal',
-            unitId: `${driver.key}::leg1`,
-          }),
-        ];
-
-        // Split ticket: create second linked job (drop-off → service work at destination)
-        if (swSplitTicket && swDropoff.trim()) {
-          const job2: Omit<DispatchJob, 'id'> = {
-            ...baseJob,
-            wellName: swDropoff.trim(),
-            ndicWellName: swDropoff.trim(),
-            disposal: swDropoff.trim(),
-            notes: `Split ticket B — ${swNotes || swServiceType.trim()}`,
-            splitGroupId: splitGroupId!,
-            splitSequence: 2,
-            ...(splitTotal != null ? { splitTotal } : {}),
-          };
-          docs.push(
-            staffCreateDispatch(job2, {
-              actionId: batchActionId,
-              actionScope: 'service-work-modal',
-              unitId: `${driver.key}::leg2`,
-            })
-          );
-        }
-
-        // Extra split legs (C/D/E…) — same metadata namespace as leg B, no
-        // Multi-Haul. Each entry becomes a sibling dispatch doc with
-        // monotonic splitSequence and the shared splitTotal. Pre-filled bbls
-        // (optional) carries into the driver's TicketModule prefill on
-        // accept via origin.dispatchBbls (per FlowController 4/29 changelog).
-        if (swSplitTicket && swExtraSplitLegs.length > 0) {
-          swExtraSplitLegs.forEach((extra, idx) => {
-            const letter = String.fromCharCode(67 + idx); // C, D, E…
-            const bblsNum = extra.bbls ? parseFloat(extra.bbls) : NaN;
-            const extraJob: Omit<DispatchJob, 'id'> = {
-              ...baseJob,
-              wellName: extra.disposal,
-              ndicWellName: extra.disposal,
-              disposal: extra.disposal,
-              notes: extra.notes
-                ? `Split ticket ${letter} — ${extra.notes}`
-                : `Split ticket ${letter} — ${swServiceType.trim()}`,
-              splitGroupId: splitGroupId!,
-              splitSequence: 3 + idx,
-              ...(splitTotal != null ? { splitTotal } : {}),
-              ...(isFinite(bblsNum) && bblsNum > 0 ? { bbls: bblsNum } : {}),
-            };
-            docs.push(
-              staffCreateDispatch(extraJob, {
-                actionId: batchActionId,
-                actionScope: 'service-work-modal',
-                unitId: `${driver.key}::leg${3 + idx}`,
-              })
-            );
-          });
-        }
-
-        return Promise.all(docs);
+          // Mint new workflow identity for the next deliberate service job
+          setSwWorkflow(createServiceWorkWorkflow());
+        },
       });
-
-      await Promise.all(promises);
-      finalizeAction(batchActionId);
-
-      // Track job type usage for R&D pipeline (non-blocking)
-      const compId = user?.companyId || selectedDrivers[0]?.companyId || 'unknown';
-      trackJobTypeUsage(swServiceType.trim(), compId, jobTypeToPackageId[swServiceType.trim()] || 'custom');
-
-      // Auto-create group chat thread for multi-driver SW jobs
-      if (selectedDrivers.length > 1 && serviceGroupId) {
-        try {
-          const myPid = user?.uid ? `user:${user.uid}` : '';
-          const participants = [myPid, ...selectedDrivers.map(d => `driver:${d.key}`)].filter(Boolean);
-          const participantNames: Record<string, string> = {};
-          if (myPid) participantNames[myPid] = user?.displayName || 'Dispatch';
-          selectedDrivers.forEach(d => {
-            participantNames[`driver:${d.key}`] = d.legalName || d.displayName;
-          });
-          const threadTitle = `${swServiceType.trim()} — ${matchedWell?.wellName || swWellName.trim()}`;
-          const crewNames = selectedDrivers.map(d => (d.legalName || d.displayName).split(' ')[0]).join(', ');
-          const sysText = `Service work dispatched: ${swServiceType.trim()} at ${matchedWell?.wellName || swWellName.trim()}\nCrew: ${crewNames}${swNotes ? `\nNotes: ${swNotes}` : ''}${swDropoff.trim() ? `\nDrop-off: ${swDropoff.trim()}` : ''}`;
-          const threadRef = await addDoc(collection(firestore, 'chat_threads'), {
-            type: 'service_group',
-            serviceGroupId,
-            companyId: user?.companyId || '',
-            title: threadTitle,
-            participants,
-            participantNames,
-            status: 'active',
-            createdAt: Timestamp.now(),
-            updatedAt: Timestamp.now(),
-            lastRead: {},
-            lastMessage: { text: sysText, senderId: 'system', senderName: 'System', timestamp: Timestamp.now(), type: 'system' },
-          });
-          await addDoc(collection(firestore, 'chat_threads', threadRef.id, 'messages'), {
-            text: sysText, senderId: 'system', senderName: 'System', timestamp: Timestamp.now(), type: 'system',
-            systemType: 'job_assigned',
-          });
-        } catch (chatErr) {
-          console.warn('[Dispatch] Auto-create SW chat failed (non-blocking):', chatErr);
-        }
-      }
-
-      const names = selectedDrivers.map(d => d.legalName || d.displayName).join(', ');
-      setMessage(`Service work dispatched to ${names}`);
-      setSwWellName('');
-      setSwDropoff('');
-      setSwServiceType('');
-      setSwOnsiteBy('');
-      setSwNotes('');
-      setSwDriverHashes(new Set());
-      setSwSplitTicket(false);
-      setSwHeavyWater(false);
-      setSwExtraSplitLegs([]);
-      setSwExtraLegDraft(null);
-      setTimeout(() => setMessage(''), 4000);
     } catch (err: any) {
       setMessage(`Error: ${err.message}`);
       setTimeout(() => setMessage(''), 5000);
     } finally {
       setSwSubmitting(false);
     }
+  }
+
+  function cancelServiceWork() {
+    cancelServiceWorkWorkflow(swWorkflow, coordinator);
+    setSwWellName('');
+    setSwDropoff('');
+    setSwServiceType('');
+    setSwOnsiteBy('');
+    setSwNotes('');
+    setSwDriverHashes(new Set());
+    setSwSplitTicket(false);
+    setSwHeavyWater(false);
+    setSwExtraSplitLegs([]);
+    setSwExtraLegDraft(null);
+    setSwWorkflow(createServiceWorkWorkflow());
   }
 
   // ─── Cancel Dispatch ───────────────────────────────────────────────────────
@@ -1561,7 +1501,7 @@ function DispatchPageInner() {
       // pattern (array-typed optionals + objects). Replaces the prior
       // `|| undefined` form which threw "Unsupported field value: undefined"
       // at addDoc when any optional input was empty.
-      const projectData: Omit<Project, 'id'> = {
+      const projectData: ProjectDataInput = {
         name: newProjectName.trim(),
         wellNames: newProjectWells,
         operatorName: newProjectOperator.trim(),
@@ -1578,106 +1518,110 @@ function DispatchPageInner() {
         ...(dayHashes.length > 0 ? { dayDriverHashes: dayHashes } : {}),
         ...(nightHashes.length > 0 ? { nightDriverHashes: nightHashes } : {}),
         ...(Object.keys(newProjectDriverDisposals).length > 0 ? { driverDisposals: newProjectDriverDisposals } : {}),
-      } as Omit<Project, 'id'>;
-      const docRef = await addDoc(collection(firestore, 'projects'), projectData);
+      };
 
-      // Create dispatches for today's assigned drivers
-      if (newProjectDriverHashes.size > 0) {
-        const batchActionId = `proj_create_${docRef.id}`;
-        beginAction('create-project', batchActionId);
-        for (const wellName of newProjectWells) {
-          const wellData = wells.find(w => w.wellName === wellName);
-          for (const driverHash of newProjectDriverHashes) {
-            const driver = drivers.find(d => d.key === driverHash);
-            if (!driver) continue;
-            const driverFirstName = driver.legalName ? driver.legalName.split(' ')[0] : driver.displayName;
-            const driverDisposal = newProjectDriverDisposals[driverHash];
-            // Same `|| undefined` → `|| null` normalization as projectData
-            // above. Optional string fields: null. Optional structured
-            // groups: spread-omit. Firestore never sees `undefined`.
-            await staffCreateDispatch({
-              // Canonical driver identity contract (driverId + canonical driverHash + real name).
-              ...assignmentIdentityForDriver(driver),
-              driverFirstName,
-              wellName,
-              ndicWellName: wellData?.ndicName || wellName,
-              operator: newProjectOperator.trim(),
-              route: wellData?.route || '',
-              jobType: newProjectJobType,
-              serviceType: newProjectServiceType || null,
-              status: 'pending',
-              priority: 500,
-              assignedAt: Timestamp.now(),
-              assignedBy: user?.email || '',
-              projectId: docRef.id,
-              notes: newProjectNotes.trim() || null,
-              ...(driverDisposal ? { disposal: driverDisposal.name, disposalLat: driverDisposal.lat, disposalLng: driverDisposal.lng } : {}),
-            }, {
-              actionId: batchActionId,
-              actionScope: 'create-project',
-              unitId: `${wellName}::${driverHash}`,
-            });
+      const projectWriter: FirestoreProjectWriter = {
+        getDoc: async (pId: string) => {
+          const snap = await getDoc(doc(firestore, 'projects', pId));
+          return {
+            exists: snap.exists(),
+            data: () => snap.data(),
+          };
+        },
+        setDoc: async (pId: string, data: Record<string, unknown>) => {
+          await setDoc(doc(firestore, 'projects', pId), data);
+        },
+      };
+
+      await executeCreateProjectWorkflow({
+        workflow: projectWorkflow,
+        coordinator,
+        invoke: getDispatchCallableInvoker(),
+        projectWriter,
+        projectData,
+        wells,
+        drivers,
+        assignedBy: user?.email || '',
+        tenantId: sessionTenantId,
+        userId: sessionUserId,
+        onUiComplete: async (pId) => {
+          // Auto-create project chat thread with all assigned drivers
+          if (newProjectDriverHashes.size > 0) {
+            try {
+              const allDriverHashes = Array.from(newProjectDriverHashes);
+              const myPid = user?.uid ? `user:${user.uid}` : '';
+              const participants = [myPid, ...allDriverHashes.map(h => `driver:${h}`)].filter(Boolean);
+              const participantNames: Record<string, string> = {};
+              if (myPid) participantNames[myPid] = user?.displayName || 'Dispatch';
+              allDriverHashes.forEach(h => {
+                const d = drivers.find(dr => dr.key === h);
+                if (d) participantNames[`driver:${h}`] = d.displayName;
+              });
+              const threadTitle = newProjectName.trim() || `Project - ${newProjectWells[0] || 'Unnamed'}`;
+              const crewNames = allDriverHashes.map(h => { const d = drivers.find(dr => dr.key === h); return d ? (d.legalName || d.displayName).split(' ')[0] : h; }).join(', ');
+              const sysText = `Project "${threadTitle}" created\nCrew: ${crewNames}\nWells: ${newProjectWells.join(', ')}${newProjectNotes ? `\nNotes: ${newProjectNotes}` : ''}`;
+              const threadRef = await addDoc(collection(firestore, 'chat_threads'), {
+                type: 'project',
+                projectId: pId,
+                companyId: user?.companyId || '',
+                title: threadTitle,
+                participants,
+                participantNames,
+                status: 'active',
+                createdAt: Timestamp.now(),
+                updatedAt: Timestamp.now(),
+                lastRead: {},
+                lastMessage: { text: sysText, senderId: 'system', senderName: 'System', timestamp: Timestamp.now(), type: 'system' },
+              });
+              await addDoc(collection(firestore, 'chat_threads', threadRef.id, 'messages'), {
+                text: sysText, senderId: 'system', senderName: 'System', timestamp: Timestamp.now(), type: 'system',
+              });
+            } catch (chatErr) {
+              console.warn('[Dispatch] Auto-create project chat failed (non-blocking):', chatErr);
+            }
           }
-        }
-        finalizeAction(batchActionId);
-      }
 
-      // Auto-create project chat thread with all assigned drivers
-      if (newProjectDriverHashes.size > 0) {
-        try {
-          const allDriverHashes = Array.from(newProjectDriverHashes);
-          const myPid = user?.uid ? `user:${user.uid}` : '';
-          const participants = [myPid, ...allDriverHashes.map(h => `driver:${h}`)].filter(Boolean);
-          const participantNames: Record<string, string> = {};
-          if (myPid) participantNames[myPid] = user?.displayName || 'Dispatch';
-          allDriverHashes.forEach(h => {
-            const d = drivers.find(dr => dr.key === h);
-            if (d) participantNames[`driver:${h}`] = d.displayName;
-          });
-          const threadTitle = newProjectName.trim() || `Project - ${newProjectWells[0] || 'Unnamed'}`;
-          const crewNames = allDriverHashes.map(h => { const d = drivers.find(dr => dr.key === h); return d ? (d.legalName || d.displayName).split(' ')[0] : h; }).join(', ');
-          const sysText = `Project "${threadTitle}" created\nCrew: ${crewNames}\nWells: ${newProjectWells.join(', ')}${newProjectNotes ? `\nNotes: ${newProjectNotes}` : ''}`;
-          const threadRef = await addDoc(collection(firestore, 'chat_threads'), {
-            type: 'project',
-            projectId: docRef.id,
-            companyId: user?.companyId || '',
-            title: threadTitle,
-            participants,
-            participantNames,
-            status: 'active',
-            createdAt: Timestamp.now(),
-            updatedAt: Timestamp.now(),
-            lastRead: {},
-            lastMessage: { text: sysText, senderId: 'system', senderName: 'System', timestamp: Timestamp.now(), type: 'system' },
-          });
-          await addDoc(collection(firestore, 'chat_threads', threadRef.id, 'messages'), {
-            text: sysText, senderId: 'system', senderName: 'System', timestamp: Timestamp.now(), type: 'system',
-          });
-        } catch (chatErr) {
-          console.warn('[Dispatch] Auto-create project chat failed (non-blocking):', chatErr);
-        }
-      }
+          // Reset form
+          setNewProjectName('');
+          setNewProjectWells([]);
+          setNewProjectOperator('');
+          setNewProjectNotes('');
+          setNewProjectEndDate('');
+          setNewProjectDriverHashes(new Set());
+          setNewProjectDriverShifts(new Map());
+          setNewProjectDriverDisposals({});
+          setNewProjectJobType('service');
+          setNewProjectServiceType('');
+          setProjectWellSearch('');
+          setMessage('Project created');
+          setTimeout(() => setMessage(''), 3000);
 
-      // Reset form
-      setNewProjectName('');
-      setNewProjectWells([]);
-      setNewProjectOperator('');
-      setNewProjectNotes('');
-      setNewProjectEndDate('');
-      setNewProjectDriverHashes(new Set());
-      setNewProjectDriverShifts(new Map());
-      setNewProjectDriverDisposals({});
-      setNewProjectJobType('service');
-      setNewProjectServiceType('');
-      setProjectWellSearch('');
-      setMessage('Project created');
-      setTimeout(() => setMessage(''), 3000);
+          // Mint new project workflow identity for the next deliberate project
+          setProjectWorkflow(createProjectWorkflow());
+        },
+      });
     } catch (err: any) {
       setMessage(`Error creating project: ${err.message}`);
       setTimeout(() => setMessage(''), 5000);
     } finally {
       setCreatingProject(false);
     }
+  }
+
+  function cancelProject() {
+    cancelCreateProjectWorkflow(projectWorkflow, coordinator);
+    setNewProjectName('');
+    setNewProjectWells([]);
+    setNewProjectOperator('');
+    setNewProjectNotes('');
+    setNewProjectEndDate('');
+    setNewProjectDriverHashes(new Set());
+    setNewProjectDriverShifts(new Map());
+    setNewProjectDriverDisposals({});
+    setNewProjectJobType('service');
+    setNewProjectServiceType('');
+    setProjectWellSearch('');
+    setProjectWorkflow(createProjectWorkflow());
   }
 
   async function updateProjectStatus(projectId: string, status: 'active' | 'paused' | 'completed') {
@@ -1743,10 +1687,7 @@ function DispatchPageInner() {
             unitId: `${projectId}::${driverHash}::${wellName}`,
           });
         }
-        finalizeAction(batchActionId);
-      }
-      // Auto-add driver to existing project chat thread
-      if (driver) {
+        // Auto-add driver to existing project chat thread
         try {
           const firestore2 = getFirestoreDb();
           const threadSnap = await getDocs(query(
@@ -1778,6 +1719,7 @@ function DispatchPageInner() {
         } catch (chatErr) {
           console.warn('[Dispatch] Auto-add driver to project chat failed (non-blocking):', chatErr);
         }
+        finalizeAction(batchActionId);
       }
     } catch (err: any) {
       setMessage(`Error: ${err.message}`);
@@ -1844,7 +1786,6 @@ function DispatchPageInner() {
           created++;
         }
       }
-      finalizeAction(batchActionId);
 
       // Merge drivers into today's schedule
       const currentSchedule = project.driverSchedule || {};
@@ -1900,6 +1841,8 @@ function DispatchPageInner() {
           console.warn('[Dispatch] Auto-add shift drivers to project chat failed (non-blocking):', chatErr);
         }
       }
+
+      finalizeAction(batchActionId);
 
       if (created > 0) {
         setMessage(`Created ${created} ${shift} shift dispatch${created !== 1 ? 'es' : ''}`);
@@ -2013,8 +1956,6 @@ function DispatchPageInner() {
         actionScope: 'reassign-modal',
         unitId: `${reassignJob.id || reassignJob.wellName}::${driver.key}`,
       });
-      finalizeAction(actionId);
-
       // Update the original job
       if (reassignJob.id) {
         if (loadsKept > 0) {
@@ -2035,6 +1976,7 @@ function DispatchPageInner() {
       setMessage(`Reassigned ${reassignJob.ndicWellName || reassignJob.wellName}${loadLabel} to ${driverFirstName}`);
       setReassignJob(null);
       setReassignDriverHash('');
+      finalizeAction(actionId);
       setTimeout(() => setMessage(''), 4000);
     } catch (err: any) {
       setMessage(`Error: ${err.message}`);
@@ -2169,7 +2111,6 @@ function DispatchPageInner() {
       });
 
       await Promise.all(promises);
-      finalizeAction(batchActionId);
       setMessage(`Dispatched ${totalSelectedLoads} load${totalSelectedLoads !== 1 ? 's' : ''} across ${selectedWells.size} well${selectedWells.size !== 1 ? 's' : ''} to ${driver.legalName || driver.displayName}`);
 
       // Reset — clear selections + DPW form
@@ -2182,6 +2123,7 @@ function DispatchPageInner() {
       setAssignDisposalWell(null);
       setDisposalSearch('');
       setDisposalResults([]);
+      finalizeAction(batchActionId);
       setTimeout(() => setMessage(''), 5000);
     } catch (err: any) {
       setMessage(`Error: ${err.message}`);
@@ -2323,7 +2265,6 @@ function DispatchPageInner() {
           });
         });
         await Promise.all(addPromises);
-        finalizeAction(batchActionId);
 
         // Update assignedDrivers on all existing group jobs
         const updateCrewPromises = editSwGroupJobs.map(j => {
@@ -2334,6 +2275,7 @@ function DispatchPageInner() {
           });
         });
         await Promise.all(updateCrewPromises);
+        finalizeAction(batchActionId);
       }
 
       setMessage('Dispatch updated');
@@ -2405,14 +2347,13 @@ function DispatchPageInner() {
         actionScope: 'split-loads',
         unitId: `${editSwJob.id || editSwJob.wellName}::${driver.key}`,
       });
-      finalizeAction(actionId);
-
       await staffUpdateDispatch(editSwJob.id, {
         loadCount: (editSwJob.loadsCompleted || 0) + loadsKept,
       });
 
       setMessage(`Gave ${loadsToGive} load${loadsToGive > 1 ? 's' : ''} to ${driverFirstName}`);
       setEditSwJob(null);
+      finalizeAction(actionId);
       setTimeout(() => setMessage(''), 4000);
     } catch (err: any) {
       setMessage(`Error: ${err.message}`);
@@ -2933,11 +2874,21 @@ function DispatchPageInner() {
                     </div>{/* end bottom row */}
                   </div>{/* end SW body */}
                   {/* Dispatch button */}
-                  <button onClick={submitServiceWork}
-                    disabled={!swWellName.trim() || !swServiceType || swDriverHashes.size === 0 || swSubmitting}
-                    className="w-full mt-2 px-4 py-1.5 bg-purple-600 hover:bg-purple-500 disabled:bg-gray-600 disabled:cursor-not-allowed text-white text-xs font-medium rounded transition-colors flex-shrink-0">
-                    {swSubmitting ? 'Sending...' : 'Dispatch'}
-                  </button>
+                  <div className="flex gap-2 mt-2 flex-shrink-0">
+                    <button
+                      type="button"
+                      onClick={cancelServiceWork}
+                      disabled={swSubmitting}
+                      className="px-3 py-1.5 border border-gray-600 hover:border-gray-500 text-gray-300 text-xs rounded transition-colors"
+                    >
+                      Clear
+                    </button>
+                    <button onClick={submitServiceWork}
+                      disabled={!swWellName.trim() || !swServiceType || swDriverHashes.size === 0 || swSubmitting}
+                      className="flex-1 px-4 py-1.5 bg-purple-600 hover:bg-purple-500 disabled:bg-gray-600 disabled:cursor-not-allowed text-white text-xs font-medium rounded transition-colors">
+                      {swSubmitting ? 'Sending...' : 'Dispatch'}
+                    </button>
+                  </div>
                 </div>
               )}
 
@@ -2958,6 +2909,14 @@ function DispatchPageInner() {
                       </button>
                     ))}
                     <span className="flex-1" />
+                    <button
+                      type="button"
+                      onClick={cancelProject}
+                      disabled={creatingProject}
+                      className="px-3 py-1 border border-gray-600 hover:border-gray-500 text-gray-300 text-xs rounded transition-colors"
+                    >
+                      Clear
+                    </button>
                     <button onClick={createProject}
                       disabled={!newProjectName.trim() || newProjectWells.length === 0 || creatingProject}
                       className="px-4 py-1 bg-emerald-600 hover:bg-emerald-500 disabled:bg-gray-600 disabled:cursor-not-allowed text-white text-xs font-medium rounded transition-colors">

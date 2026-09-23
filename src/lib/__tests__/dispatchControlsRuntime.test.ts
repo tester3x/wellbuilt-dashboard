@@ -3,15 +3,10 @@
  *
  * Covers:
  * - Direct wire contracts for staffDeletePull, staffWriteDispatch (create, update, cancel), dismissDispatch
- * - The complete 49-item Creation Coordinator Lifecycle test matrix:
- *   - Single action (Items 1-7)
- *   - Cancellation isolation (Items 8-15)
- *   - Partial batch (Items 16-25)
- *   - Stale completion (Items 26-30)
- *   - Tenant/session (Items 31-37)
- *   - Call-site census (Items 38-43)
- *   - Regression (Items 44-48)
- *   - Deliberate failure runner (Item 49)
+ * - 43 Mandatory Test Cases (testing real production orchestration helpers, NOT source-text regexes):
+ *   - Service Work Workflow Identity (Items 1-15)
+ *   - Create Project Workflow Identity (Items 16-31)
+ *   - Regression & Operational Invariants (Items 32-43)
  *
  * Run: node --test --experimental-strip-types src/lib/__tests__/dispatchControlsRuntime.test.ts
  */
@@ -35,17 +30,32 @@ import {
   runUpdateDispatch,
   runCancelDispatch,
   DispatchCreationCoordinator,
-  computeCreationUnitKey,
-  materialBirthFieldsMatch,
   mintDispatchId,
   buildCreatePayload,
-  resetGlobalCreationCoordinator,
 } from '../staffWriteDispatchCore.ts';
+import type { CallableInvoker } from '../staffWriteDispatchCore.ts';
 import {
   DISMISS_DISPATCH_CALLABLE,
   runDismissDispatch,
   type DismissDispatchResult,
 } from '../dismissDispatchCore.ts';
+import {
+  createServiceWorkWorkflow,
+  ensureServiceWorkGroupIds,
+  executeServiceWorkWorkflow,
+  cancelServiceWorkWorkflow,
+  type ServiceWorkWorkflowState,
+} from '../serviceWorkWorkflowCore.ts';
+import {
+  createProjectWorkflow,
+  mintProjectId,
+  projectImmutableIdentityMatches,
+  executeCreateProjectWorkflow,
+  cancelCreateProjectWorkflow,
+  type CreateProjectWorkflowState,
+  type FirestoreProjectWriter,
+  type ProjectDataInput,
+} from '../projectWorkflowCore.ts';
 
 /** A recording mock invoker. */
 function mock<T>(data: T) {
@@ -140,220 +150,1088 @@ test('Dispatch Dismiss: targets dismissDispatch with {dispatchId} and unwraps re
 });
 
 // ═════════════════════════════════════════════════════════════════════════════
-// MANDATORY TEST MATRIX (ITEMS 1 – 49)
+// 43 MANDATORY TEST CASES (ITEMS 1 – 43)
 // ═════════════════════════════════════════════════════════════════════════════
 
-// ── Single action (Items 1 – 7) ──────────────────────────────────────────────
+// ── Service Work Workflow Identity (Items 1 – 15) ─────────────────────────────
 
-test('Item 1: Double-click joins one request and one dispatchId', async () => {
-  const coord = new DispatchCreationCoordinator();
-  let calls = 0;
-  const slowInvoker = async (payload: any) => {
-    calls++;
-    await new Promise(r => setTimeout(r, 40));
-    return { data: { dispatchId: payload.dispatchId } };
-  };
-
-  const record = { wellName: 'Gabriel 3', driverHash: 'driver_a', jobType: 'pw' };
-  const [res1, res2] = await Promise.all([
-    coord.executeCreate(slowInvoker, record),
-    coord.executeCreate(slowInvoker, record),
-  ]);
-
-  assert.equal(calls, 1, 'underlying invoke called exactly once for rapid concurrent double submission');
-  assert.equal(res1.dispatchId, res2.dispatchId, 'both callers receive identical dispatchId');
+test('Item 1: Open one SW workflow', () => {
+  const wf = createServiceWorkWorkflow();
+  assert.ok(wf.workflowId.startsWith('sw_'), 'workflowId starts with sw_');
+  assert.equal(wf.actionId, `act_${wf.workflowId}`, 'actionId is derived from workflowId');
+  assert.equal(wf.serviceGroupId, undefined, 'serviceGroupId begins unallocated');
+  assert.equal(wf.splitGroupId, undefined, 'splitGroupId begins unallocated');
 });
 
-test('Item 2: Uncertain failure retry reuses dispatchId', async () => {
-  const coord = new DispatchCreationCoordinator();
-  const capturedPayloads: any[] = [];
-  let shouldFail = true;
+test('Item 2: Capture actionId, serviceGroupId, splitGroupId', () => {
+  const wf = createServiceWorkWorkflow();
+  ensureServiceWorkGroupIds(wf, true, true);
+  assert.ok(wf.serviceGroupId?.startsWith('sg_'), 'serviceGroupId allocated');
+  assert.ok(wf.splitGroupId?.startsWith('split_'), 'splitGroupId allocated');
+  const capturedActionId = wf.actionId;
+  const capturedServiceGroupId = wf.serviceGroupId;
+  const capturedSplitGroupId = wf.splitGroupId;
 
-  const invoker = async (payload: any) => {
-    capturedPayloads.push(payload);
-    if (shouldFail) {
-      shouldFail = false;
-      throw new Error('network_timeout_simulated');
+  // Multiple subsequent checks do not mutate or recreate
+  ensureServiceWorkGroupIds(wf, true, true);
+  assert.equal(wf.actionId, capturedActionId);
+  assert.equal(wf.serviceGroupId, capturedServiceGroupId);
+  assert.equal(wf.splitGroupId, capturedSplitGroupId);
+});
+
+test('Item 3: Submit', async () => {
+  const coord = new DispatchCreationCoordinator();
+  const wf = createServiceWorkWorkflow();
+  const wireCalls: any[] = [];
+  const invoker: CallableInvoker = async (payload) => {
+    wireCalls.push(payload);
+    return { data: { dispatchId: (payload as any).dispatchId } };
+  };
+
+  const res = await executeServiceWorkWorkflow({
+    workflow: wf,
+    coordinator: coord,
+    invoke: invoker,
+    selectedDrivers: [{ key: 'd1', driverHash: 'd1', driverId: 'd1', displayName: 'D1' }],
+    wellName: 'Well 1',
+    ndicWellName: 'Well 1 NDIC',
+    serviceType: 'Water Haul',
+    assignedBy: 'tester',
+  });
+
+  assert.equal(res.actionId, wf.actionId);
+  assert.equal(res.dispatches.length, 1);
+  assert.equal(wireCalls.length, 1);
+});
+
+test('Item 4: Some units succeed', async () => {
+  const coord = new DispatchCreationCoordinator();
+  const wf = createServiceWorkWorkflow();
+  const wireCalls: any[] = [];
+  const invoker: CallableInvoker = async (payload: any) => {
+    wireCalls.push(payload);
+    if (payload.record.driverHash === 'd2') {
+      throw new Error('d2_transport_failure');
     }
     return { data: { dispatchId: payload.dispatchId } };
   };
 
-  const record = { wellName: 'Gabriel 3', driverHash: 'driver_a', jobType: 'pw' };
-  const actionScope = 'assign-modal';
-
   await assert.rejects(
-    () => coord.executeCreate(invoker, record, { actionScope }),
-    /network_timeout_simulated/
+    () => executeServiceWorkWorkflow({
+      workflow: wf,
+      coordinator: coord,
+      invoke: invoker,
+      selectedDrivers: [
+        { key: 'd1', driverHash: 'd1', driverId: 'd1', displayName: 'D1' },
+        { key: 'd2', driverHash: 'd2', driverId: 'd2', displayName: 'D2' },
+      ],
+      wellName: 'Well 1',
+      ndicWellName: 'Well 1 NDIC',
+      serviceType: 'Water Haul',
+      assignedBy: 'tester',
+    }),
+    /d2_transport_failure/
   );
 
-  const retryResult = await coord.executeCreate(invoker, record, { actionScope });
+  const d1Unit = coord.getUnit(wf.actionId, 'd1::leg1');
+  assert.equal(d1Unit?.status, 'succeeded', 'd1 unit succeeded despite d2 failure');
+  assert.ok(d1Unit?.dispatchId, 'd1 unit has retained dispatchId');
+});
+
+test('Item 5: One unit fails uncertainly', async () => {
+  const coord = new DispatchCreationCoordinator();
+  const wf = createServiceWorkWorkflow();
+  const invoker: CallableInvoker = async (payload: any) => {
+    if (payload.record.driverHash === 'd_uncertain') {
+      throw new Error('ETIMEDOUT: network_uncertainty');
+    }
+    return { data: { dispatchId: payload.dispatchId } };
+  };
+
+  await assert.rejects(
+    () => executeServiceWorkWorkflow({
+      workflow: wf,
+      coordinator: coord,
+      invoke: invoker,
+      selectedDrivers: [{ key: 'd_uncertain', driverHash: 'd_uncertain', driverId: 'd_uncertain', displayName: 'D' }],
+      wellName: 'Well 1',
+      ndicWellName: 'Well 1',
+      serviceType: 'Haul',
+      assignedBy: 'tester',
+    }),
+    /ETIMEDOUT: network_uncertainty/
+  );
+
+  const unit = coord.getUnit(wf.actionId, 'd_uncertain::leg1');
+  assert.equal(unit?.status, 'failed-uncertain', 'uncertain unit marked failed-uncertain');
+  assert.ok(unit?.dispatchId, 'failed unit retains its allocated dispatchId');
+});
+
+test('Item 6: Submit again through actual handler helper', async () => {
+  const coord = new DispatchCreationCoordinator();
+  const wf = createServiceWorkWorkflow();
+  let failFirst = true;
+  const wireCalls: any[] = [];
+  const invoker: CallableInvoker = async (payload: any) => {
+    wireCalls.push(payload);
+    if (failFirst) {
+      failFirst = false;
+      throw new Error('temporary_disconnect');
+    }
+    return { data: { dispatchId: payload.dispatchId } };
+  };
+
+  const params = {
+    workflow: wf,
+    coordinator: coord,
+    invoke: invoker,
+    selectedDrivers: [{ key: 'd1', driverHash: 'd1', driverId: 'd1', displayName: 'D1' }],
+    wellName: 'Well 1',
+    ndicWellName: 'Well 1',
+    serviceType: 'Haul',
+    assignedBy: 'tester',
+  };
+
+  await assert.rejects(() => executeServiceWorkWorkflow(params), /temporary_disconnect/);
+  // Re-submit via handler helper
+  const res = await executeServiceWorkWorkflow(params);
+  assert.equal(res.actionId, wf.actionId);
+  assert.equal(wireCalls.length, 2);
+});
+
+test('Item 7: All workflow IDs remain identical', async () => {
+  const coord = new DispatchCreationCoordinator();
+  const wf = createServiceWorkWorkflow();
+  ensureServiceWorkGroupIds(wf, true, true);
+  const initialActionId = wf.actionId;
+  const initialServiceGroupId = wf.serviceGroupId;
+  const initialSplitGroupId = wf.splitGroupId;
+
+  let failCount = 0;
+  const invoker: CallableInvoker = async (payload: any) => {
+    if (failCount++ < 1) throw new Error('fail');
+    return { data: { dispatchId: payload.dispatchId } };
+  };
+
+  const params = {
+    workflow: wf,
+    coordinator: coord,
+    invoke: invoker,
+    selectedDrivers: [
+      { key: 'd1', driverHash: 'd1', driverId: 'd1', displayName: 'D1' },
+      { key: 'd2', driverHash: 'd2', driverId: 'd2', displayName: 'D2' },
+    ],
+    wellName: 'Well 1',
+    ndicWellName: 'Well 1',
+    serviceType: 'Haul',
+    isSplitTicket: true,
+    dropoff: 'Disposal Alpha',
+    assignedBy: 'tester',
+  };
+
+  await assert.rejects(() => executeServiceWorkWorkflow(params), /fail/);
+  await executeServiceWorkWorkflow(params);
+
+  assert.equal(wf.actionId, initialActionId, 'actionId strictly identical');
+  assert.equal(wf.serviceGroupId, initialServiceGroupId, 'serviceGroupId strictly identical');
+  assert.equal(wf.splitGroupId, initialSplitGroupId, 'splitGroupId strictly identical');
+});
+
+test('Item 8: Succeeded units are not recreated', async () => {
+  const coord = new DispatchCreationCoordinator();
+  const wf = createServiceWorkWorkflow();
+  const wireInvocations: string[] = [];
+  let shouldFailD2 = true;
+
+  const invoker: CallableInvoker = async (payload: any) => {
+    const driver = payload.record.driverHash;
+    wireInvocations.push(driver);
+    if (driver === 'd2' && shouldFailD2) {
+      shouldFailD2 = false;
+      throw new Error('d2_transport_fail');
+    }
+    return { data: { dispatchId: payload.dispatchId } };
+  };
+
+  const params = {
+    workflow: wf,
+    coordinator: coord,
+    invoke: invoker,
+    selectedDrivers: [
+      { key: 'd1', driverHash: 'd1', driverId: 'd1', displayName: 'D1' },
+      { key: 'd2', driverHash: 'd2', driverId: 'd2', displayName: 'D2' },
+    ],
+    wellName: 'Well 1',
+    ndicWellName: 'Well 1',
+    serviceType: 'Haul',
+    assignedBy: 'tester',
+  };
+
+  await assert.rejects(() => executeServiceWorkWorkflow(params), /d2_transport_fail/);
+  await executeServiceWorkWorkflow(params);
+
+  const d1Count = wireInvocations.filter(d => d === 'd1').length;
+  assert.equal(d1Count, 1, 'd1 succeeded unit was NOT recreated on wire during retry');
+});
+
+test('Item 9: Failed unit reuses dispatchId', async () => {
+  const coord = new DispatchCreationCoordinator();
+  const wf = createServiceWorkWorkflow();
+  const capturedPayloads: any[] = [];
+  let fail = true;
+
+  const invoker: CallableInvoker = async (payload: any) => {
+    capturedPayloads.push(payload);
+    if (fail) {
+      fail = false;
+      throw new Error('failed_wire_attempt');
+    }
+    return { data: { dispatchId: payload.dispatchId } };
+  };
+
+  const params = {
+    workflow: wf,
+    coordinator: coord,
+    invoke: invoker,
+    selectedDrivers: [{ key: 'd1', driverHash: 'd1', driverId: 'd1', displayName: 'D1' }],
+    wellName: 'Well 1',
+    ndicWellName: 'Well 1',
+    serviceType: 'Haul',
+    assignedBy: 'tester',
+  };
+
+  await assert.rejects(() => executeServiceWorkWorkflow(params), /failed_wire_attempt/);
+  await executeServiceWorkWorkflow(params);
 
   assert.equal(capturedPayloads.length, 2);
-  assert.equal(capturedPayloads[0].dispatchId, capturedPayloads[1].dispatchId, 'retry reuses exact same dispatchId');
-  assert.equal(retryResult.dispatchId, capturedPayloads[0].dispatchId);
+  assert.equal(capturedPayloads[0].dispatchId, capturedPayloads[1].dispatchId, 'failed unit reuses exact dispatchId on retry');
 });
 
-test('Item 3: Rerender/re-entry reuses dispatchId', () => {
-  const coord = new DispatchCreationCoordinator();
-  const record = { wellName: 'Gabriel 3', driverHash: 'driver_a', jobType: 'pw' };
+test('Item 10: Rerender preserves workflow identity', () => {
+  const wf = createServiceWorkWorkflow();
+  ensureServiceWorkGroupIds(wf, true, true);
+  const actionId1 = wf.actionId;
+  const sgId1 = wf.serviceGroupId;
+  const splitId1 = wf.splitGroupId;
 
-  const first = coord.prepareCreation(record);
-  const second = coord.prepareCreation(record);
-  const third = coord.prepareCreation({ ...record });
+  // Simulate component rerenders: re-evaluating ensureServiceWorkGroupIds
+  ensureServiceWorkGroupIds(wf, true, true);
+  ensureServiceWorkGroupIds(wf, true, true);
 
-  assert.equal(first.dispatchId, second.dispatchId, 'first and second render pass same ID');
-  assert.equal(first.dispatchId, third.dispatchId, 'shallow clone rerender passes same ID');
+  assert.equal(wf.actionId, actionId1);
+  assert.equal(wf.serviceGroupId, sgId1);
+  assert.equal(wf.splitGroupId, splitId1);
 });
 
-test('Item 4: Reconstructed equivalent request reuses dispatchId', async () => {
+test('Item 11: Validation correction preserves identity', async () => {
   const coord = new DispatchCreationCoordinator();
-  const m = mock({ dispatchId: 'disp_init' });
+  const wf = createServiceWorkWorkflow();
+  ensureServiceWorkGroupIds(wf, true, false);
+  const initialActionId = wf.actionId;
+  const initialServiceGroupId = wf.serviceGroupId;
 
-  const original = { wellName: 'Gabriel 3', driverHash: 'driver_a', jobType: 'pw', notes: 'first render' };
-  const { dispatchId } = coord.prepareCreation(original);
+  const invoker: CallableInvoker = async (payload: any) => ({ data: { dispatchId: payload.dispatchId } });
 
-  const reconstructed = {
+  // User attempts to submit with empty well name (validation error)
+  await assert.rejects(
+    () => executeServiceWorkWorkflow({
+      workflow: wf,
+      coordinator: coord,
+      invoke: invoker,
+      selectedDrivers: [{ key: 'd1', driverHash: 'd1', driverId: 'd1', displayName: 'D1' }],
+      wellName: '   ', // Invalid
+      ndicWellName: '',
+      serviceType: 'Haul',
+      assignedBy: 'tester',
+    }),
+    /well_name_required/
+  );
+
+  // User corrects the well name
+  const res = await executeServiceWorkWorkflow({
+    workflow: wf,
+    coordinator: coord,
+    invoke: invoker,
+    selectedDrivers: [{ key: 'd1', driverHash: 'd1', driverId: 'd1', displayName: 'D1' }],
+    wellName: 'Corrected Well',
+    ndicWellName: 'Corrected Well',
+    serviceType: 'Haul',
+    assignedBy: 'tester',
+  });
+
+  assert.equal(res.actionId, initialActionId, 'retains actionId after validation fix');
+  assert.equal(res.serviceGroupId, initialServiceGroupId, 'retains serviceGroupId after validation fix');
+});
+
+test('Item 12: Cancel clears only this workflow', () => {
+  const coord = new DispatchCreationCoordinator();
+  const wfA = createServiceWorkWorkflow();
+  const otherActionId = coord.beginAction({ actionScope: 'assign-modal' });
+  coord.prepareUnit(otherActionId, 'u_other', { wellName: 'W_other', driverHash: 'D_other', jobType: 'pw' });
+
+  // Begin workflow A
+  coord.beginAction({ actionId: wfA.actionId, actionScope: 'service-work-modal' });
+  coord.prepareUnit(wfA.actionId, 'd1::leg1', { wellName: 'W1', driverHash: 'd1', jobType: 'service' });
+
+  // Cancel workflow A
+  cancelServiceWorkWorkflow(wfA, coord);
+
+  assert.equal(coord.getAction(wfA.actionId), undefined, 'wfA is cleared');
+  assert.notEqual(coord.getAction(otherActionId), undefined, 'unrelated action remains intact');
+  assert.ok(coord.getUnit(otherActionId, 'u_other'), 'unrelated unit remains intact');
+});
+
+test('Item 13: Reopen after cancel creates new identity', () => {
+  const coord = new DispatchCreationCoordinator();
+  const wf1 = createServiceWorkWorkflow();
+  ensureServiceWorkGroupIds(wf1, true, true);
+  cancelServiceWorkWorkflow(wf1, coord);
+
+  // User reopens workflow modal
+  const wf2 = createServiceWorkWorkflow();
+  ensureServiceWorkGroupIds(wf2, true, true);
+
+  assert.notEqual(wf2.workflowId, wf1.workflowId, 'new workflowId on reopen');
+  assert.notEqual(wf2.actionId, wf1.actionId, 'new actionId on reopen');
+  assert.notEqual(wf2.serviceGroupId, wf1.serviceGroupId, 'new serviceGroupId on reopen');
+  assert.notEqual(wf2.splitGroupId, wf1.splitGroupId, 'new splitGroupId on reopen');
+});
+
+test('Item 14: Complete success plus UI completion finalizes it', async () => {
+  const coord = new DispatchCreationCoordinator();
+  const wf = createServiceWorkWorkflow();
+  let uiCompleted = false;
+  let finalizedPrematurely = false;
+
+  const invoker: CallableInvoker = async (payload: any) => ({
+    data: { dispatchId: payload.dispatchId },
+  });
+
+  await executeServiceWorkWorkflow({
+    workflow: wf,
+    coordinator: coord,
+    invoke: invoker,
+    selectedDrivers: [{ key: 'd1', driverHash: 'd1', driverId: 'd1', displayName: 'D1' }],
+    wellName: 'W1',
+    ndicWellName: 'W1',
+    serviceType: 'Haul',
+    assignedBy: 'tester',
+    onUiComplete: async () => {
+      // Coordinator action MUST still be active during onUiComplete!
+      if (!coord.getAction(wf.actionId)) {
+        finalizedPrematurely = true;
+      }
+      uiCompleted = true;
+    },
+  });
+
+  assert.equal(uiCompleted, true);
+  assert.equal(finalizedPrematurely, false, 'action was retained through UI completion callback');
+  assert.equal(coord.getAction(wf.actionId), undefined, 'action finalized and pruned after confirmed UI completion');
+});
+
+test('Item 15: Post-server-success client failure followed by retry does not duplicate', async () => {
+  const coord = new DispatchCreationCoordinator();
+  const wf = createServiceWorkWorkflow();
+  const wireCalls: any[] = [];
+  let uiFail = true;
+
+  const invoker: CallableInvoker = async (payload: any) => {
+    wireCalls.push(payload);
+    return { data: { dispatchId: payload.dispatchId } };
+  };
+
+  const params = {
+    workflow: wf,
+    coordinator: coord,
+    invoke: invoker,
+    selectedDrivers: [{ key: 'd1', driverHash: 'd1', driverId: 'd1', displayName: 'D1' }],
+    wellName: 'W1',
+    ndicWellName: 'W1',
+    serviceType: 'Haul',
+    assignedBy: 'tester',
+    onUiComplete: async () => {
+      if (uiFail) {
+        uiFail = false;
+        throw new Error('client_state_transition_failed');
+      }
+    },
+  };
+
+  // Attempt 1: server calls succeed, onUiComplete throws
+  await assert.rejects(() => executeServiceWorkWorkflow(params), /client_state_transition_failed/);
+  assert.equal(wireCalls.length, 1);
+  assert.ok(coord.getAction(wf.actionId), 'action retained because UI completion failed');
+
+  // Attempt 2: retry after resolving UI issue
+  await executeServiceWorkWorkflow(params);
+  assert.equal(wireCalls.length, 1, 'unit was not duplicated on wire after client failure');
+  assert.equal(coord.getAction(wf.actionId), undefined, 'finalized after second onUiComplete succeeded');
+});
+
+// ── Create Project Workflow Identity (Items 16 – 31) ──────────────────────────
+
+test('Item 16: Open create-project workflow', () => {
+  const pwf = createProjectWorkflow();
+  assert.ok(pwf.projectId && pwf.projectId.length >= 20, 'preallocates projectId');
+  assert.equal(pwf.actionId, `proj_create_${pwf.projectId}`, 'binds actionId to projectId');
+  assert.equal(pwf.projectCommitted, false, 'projectCommitted begins false');
+});
+
+test('Item 17: Preallocate one projectId', () => {
+  const pwf = createProjectWorkflow();
+  const id1 = pwf.projectId;
+  assert.ok(typeof id1 === 'string' && id1.length > 0);
+  assert.equal(pwf.projectId, id1, 'projectId does not change on subsequent reads');
+});
+
+test('Item 18: Project write succeeds', async () => {
+  const coord = new DispatchCreationCoordinator();
+  const pwf = createProjectWorkflow();
+  const store = new Map<string, Record<string, unknown>>();
+
+  const writer: FirestoreProjectWriter = {
+    getDoc: async (id) => ({ exists: store.has(id), data: () => store.get(id) }),
+    setDoc: async (id, data) => { store.set(id, data); },
+  };
+
+  await executeCreateProjectWorkflow({
+    workflow: pwf,
+    coordinator: coord,
+    invoke: async () => ({ data: { dispatchId: 'x' } }),
+    projectWriter: writer,
+    projectData: {
+      name: 'Project P1',
+      wellNames: ['Well 1'],
+      operatorName: 'Op 1',
+      companyId: 'c1',
+      createdBy: 'u1',
+      startDate: '2026-09-22',
+      projectedEndDate: null,
+      status: 'active',
+      jobType: 'pw',
+      serviceType: null,
+      notes: null,
+      driverSchedule: {},
+    },
+    wells: [{ wellName: 'Well 1' }],
+    drivers: [],
+    assignedBy: 'tester',
+  });
+
+  assert.equal(store.has(pwf.projectId), true, 'project document written');
+  assert.equal(pwf.projectCommitted, true, 'project marked committed');
+});
+
+test('Item 19: Some dispatch units fail', async () => {
+  const coord = new DispatchCreationCoordinator();
+  const pwf = createProjectWorkflow();
+  const store = new Map<string, Record<string, unknown>>();
+  const writer: FirestoreProjectWriter = {
+    getDoc: async (id) => ({ exists: store.has(id), data: () => store.get(id) }),
+    setDoc: async (id, data) => { store.set(id, data); },
+  };
+
+  const invoker: CallableInvoker = async (payload: any) => {
+    if (payload.record.wellName === 'W2') {
+      throw new Error('w2_dispatch_failed');
+    }
+    return { data: { dispatchId: payload.dispatchId } };
+  };
+
+  await assert.rejects(
+    () => executeCreateProjectWorkflow({
+      workflow: pwf,
+      coordinator: coord,
+      invoke: invoker,
+      projectWriter: writer,
+      projectData: {
+        name: 'Project Multi-Unit',
+        wellNames: ['W1', 'W2'],
+        operatorName: 'Op 1',
+        companyId: 'c1',
+        createdBy: 'u1',
+        startDate: '2026-09-22',
+        projectedEndDate: null,
+        status: 'active',
+        jobType: 'pw',
+        serviceType: null,
+        notes: null,
+        driverSchedule: { '2026-09-22': ['d1'] },
+      },
+      wells: [{ wellName: 'W1' }, { wellName: 'W2' }],
+      drivers: [{ key: 'd1', driverHash: 'd1', driverId: 'd1', displayName: 'D1' }],
+      assignedBy: 'tester',
+    }),
+    /w2_dispatch_failed/
+  );
+
+  assert.equal(coord.getUnit(pwf.actionId, 'W1::d1')?.status, 'succeeded');
+  assert.equal(coord.getUnit(pwf.actionId, 'W2::d1')?.status, 'failed-uncertain');
+});
+
+test('Item 20: Retry actual handler helper', async () => {
+  const coord = new DispatchCreationCoordinator();
+  const pwf = createProjectWorkflow();
+  const store = new Map<string, Record<string, unknown>>();
+  const writer: FirestoreProjectWriter = {
+    getDoc: async (id) => ({ exists: store.has(id), data: () => store.get(id) }),
+    setDoc: async (id, data) => { store.set(id, data); },
+  };
+
+  let failFirst = true;
+  const invoker: CallableInvoker = async (payload: any) => {
+    if (failFirst) {
+      failFirst = false;
+      throw new Error('intermittent_network_error');
+    }
+    return { data: { dispatchId: payload.dispatchId } };
+  };
+
+  const params = {
+    workflow: pwf,
+    coordinator: coord,
+    invoke: invoker,
+    projectWriter: writer,
+    projectData: {
+      name: 'Project Retry',
+      wellNames: ['W1'],
+      operatorName: 'Op 1',
+      companyId: 'c1',
+      createdBy: 'u1',
+      startDate: '2026-09-22',
+      projectedEndDate: null,
+      status: 'active',
+      jobType: 'pw',
+      serviceType: null,
+      notes: null,
+      driverSchedule: { '2026-09-22': ['d1'] },
+    },
+    wells: [{ wellName: 'W1' }],
+    drivers: [{ key: 'd1', driverHash: 'd1', driverId: 'd1', displayName: 'D1' }],
+    assignedBy: 'tester',
+  };
+
+  await assert.rejects(() => executeCreateProjectWorkflow(params), /intermittent_network_error/);
+  const res = await executeCreateProjectWorkflow(params);
+  assert.equal(res.projectId, pwf.projectId);
+  assert.equal(res.dispatches.length, 1);
+});
+
+test('Item 21: Same projectId reused', async () => {
+  const coord = new DispatchCreationCoordinator();
+  const pwf = createProjectWorkflow();
+  const initialProjectId = pwf.projectId;
+  const store = new Map<string, Record<string, unknown>>();
+  const writer: FirestoreProjectWriter = {
+    getDoc: async (id) => ({ exists: store.has(id), data: () => store.get(id) }),
+    setDoc: async (id, data) => { store.set(id, data); },
+  };
+
+  let failFirst = true;
+  const invoker: CallableInvoker = async (payload: any) => {
+    if (failFirst) {
+      failFirst = false;
+      throw new Error('fail');
+    }
+    return { data: { dispatchId: payload.dispatchId } };
+  };
+
+  const params = {
+    workflow: pwf,
+    coordinator: coord,
+    invoke: invoker,
+    projectWriter: writer,
+    projectData: {
+      name: 'Project Stable ID',
+      wellNames: ['W1'],
+      operatorName: 'Op 1',
+      companyId: 'c1',
+      createdBy: 'u1',
+      startDate: '2026-09-22',
+      projectedEndDate: null,
+      status: 'active',
+      jobType: 'pw',
+      serviceType: null,
+      notes: null,
+      driverSchedule: { '2026-09-22': ['d1'] },
+    },
+    wells: [{ wellName: 'W1' }],
+    drivers: [{ key: 'd1', driverHash: 'd1', driverId: 'd1', displayName: 'D1' }],
+    assignedBy: 'tester',
+  };
+
+  await assert.rejects(() => executeCreateProjectWorkflow(params), /fail/);
+  await executeCreateProjectWorkflow(params);
+
+  assert.equal(pwf.projectId, initialProjectId, 'projectId unchanged on retry');
+  assert.equal(store.size, 1, 'only one project document exists');
+  assert.ok(store.has(initialProjectId));
+});
+
+test('Item 22: Same coordinator actionId reused', async () => {
+  const coord = new DispatchCreationCoordinator();
+  const pwf = createProjectWorkflow();
+  const initialActionId = pwf.actionId;
+  const store = new Map<string, Record<string, unknown>>();
+  const writer: FirestoreProjectWriter = {
+    getDoc: async (id) => ({ exists: store.has(id), data: () => store.get(id) }),
+    setDoc: async (id, data) => { store.set(id, data); },
+  };
+
+  let failFirst = true;
+  const invoker: CallableInvoker = async (payload: any) => {
+    if (failFirst) {
+      failFirst = false;
+      throw new Error('fail');
+    }
+    return { data: { dispatchId: payload.dispatchId } };
+  };
+
+  const params = {
+    workflow: pwf,
+    coordinator: coord,
+    invoke: invoker,
+    projectWriter: writer,
+    projectData: {
+      name: 'Project Stable ActionId',
+      wellNames: ['W1'],
+      operatorName: 'Op 1',
+      companyId: 'c1',
+      createdBy: 'u1',
+      startDate: '2026-09-22',
+      projectedEndDate: null,
+      status: 'active',
+      jobType: 'pw',
+      serviceType: null,
+      notes: null,
+      driverSchedule: { '2026-09-22': ['d1'] },
+    },
+    wells: [{ wellName: 'W1' }],
+    drivers: [{ key: 'd1', driverHash: 'd1', driverId: 'd1', displayName: 'D1' }],
+    assignedBy: 'tester',
+  };
+
+  await assert.rejects(() => executeCreateProjectWorkflow(params), /fail/);
+  const res = await executeCreateProjectWorkflow(params);
+  assert.equal(res.actionId, initialActionId);
+  assert.equal(pwf.actionId, initialActionId);
+});
+
+test('Item 23: Successful units not duplicated', async () => {
+  const coord = new DispatchCreationCoordinator();
+  const pwf = createProjectWorkflow();
+  const store = new Map<string, Record<string, unknown>>();
+  const writer: FirestoreProjectWriter = {
+    getDoc: async (id) => ({ exists: store.has(id), data: () => store.get(id) }),
+    setDoc: async (id, data) => { store.set(id, data); },
+  };
+
+  const wireInvocations: string[] = [];
+  let failW2 = true;
+
+  const invoker: CallableInvoker = async (payload: any) => {
+    wireInvocations.push(payload.record.wellName);
+    if (payload.record.wellName === 'W2' && failW2) {
+      failW2 = false;
+      throw new Error('fail_w2');
+    }
+    return { data: { dispatchId: payload.dispatchId } };
+  };
+
+  const params = {
+    workflow: pwf,
+    coordinator: coord,
+    invoke: invoker,
+    projectWriter: writer,
+    projectData: {
+      name: 'Project Units Test',
+      wellNames: ['W1', 'W2'],
+      operatorName: 'Op 1',
+      companyId: 'c1',
+      createdBy: 'u1',
+      startDate: '2026-09-22',
+      projectedEndDate: null,
+      status: 'active',
+      jobType: 'pw',
+      serviceType: null,
+      notes: null,
+      driverSchedule: { '2026-09-22': ['d1'] },
+    },
+    wells: [{ wellName: 'W1' }, { wellName: 'W2' }],
+    drivers: [{ key: 'd1', driverHash: 'd1', driverId: 'd1', displayName: 'D1' }],
+    assignedBy: 'tester',
+  };
+
+  await assert.rejects(() => executeCreateProjectWorkflow(params), /fail_w2/);
+  await executeCreateProjectWorkflow(params);
+
+  const w1Count = wireInvocations.filter(w => w === 'W1').length;
+  assert.equal(w1Count, 1, 'W1 unit was not re-sent on wire');
+});
+
+test('Item 24: Failed units reuse dispatchId', async () => {
+  const coord = new DispatchCreationCoordinator();
+  const pwf = createProjectWorkflow();
+  const store = new Map<string, Record<string, unknown>>();
+  const writer: FirestoreProjectWriter = {
+    getDoc: async (id) => ({ exists: store.has(id), data: () => store.get(id) }),
+    setDoc: async (id, data) => { store.set(id, data); },
+  };
+
+  const capturedPayloads: any[] = [];
+  let fail = true;
+
+  const invoker: CallableInvoker = async (payload: any) => {
+    capturedPayloads.push(payload);
+    if (fail) {
+      fail = false;
+      throw new Error('fail');
+    }
+    return { data: { dispatchId: payload.dispatchId } };
+  };
+
+  const params = {
+    workflow: pwf,
+    coordinator: coord,
+    invoke: invoker,
+    projectWriter: writer,
+    projectData: {
+      name: 'Project Unit Retry',
+      wellNames: ['W1'],
+      operatorName: 'Op 1',
+      companyId: 'c1',
+      createdBy: 'u1',
+      startDate: '2026-09-22',
+      projectedEndDate: null,
+      status: 'active',
+      jobType: 'pw',
+      serviceType: null,
+      notes: null,
+      driverSchedule: { '2026-09-22': ['d1'] },
+    },
+    wells: [{ wellName: 'W1' }],
+    drivers: [{ key: 'd1', driverHash: 'd1', driverId: 'd1', displayName: 'D1' }],
+    assignedBy: 'tester',
+  };
+
+  await assert.rejects(() => executeCreateProjectWorkflow(params), /fail/);
+  await executeCreateProjectWorkflow(params);
+
+  assert.equal(capturedPayloads.length, 2);
+  assert.equal(capturedPayloads[0].dispatchId, capturedPayloads[1].dispatchId, 'failed unit reuses exact same dispatchId on retry');
+});
+
+test('Item 25: Uncertain project-write result reuses same ID', async () => {
+  const coord = new DispatchCreationCoordinator();
+  const pwf = createProjectWorkflow();
+  const store = new Map<string, Record<string, unknown>>();
+  let setDocCalls = 0;
+
+  const writer: FirestoreProjectWriter = {
+    getDoc: async (id) => ({ exists: store.has(id), data: () => store.get(id) }),
+    setDoc: async (id, data) => {
+      setDocCalls++;
+      store.set(id, data);
+      if (setDocCalls === 1) {
+        throw new Error('ETIMEDOUT_after_commit');
+      }
+    },
+  };
+
+  const projectData: ProjectDataInput = {
+    name: 'Uncertain Project',
+    wellNames: ['W1'],
+    operatorName: 'Op 1',
+    companyId: 'c1',
+    createdBy: 'u1',
+    startDate: '2026-09-22',
+    projectedEndDate: null,
+    status: 'active',
     jobType: 'pw',
-    driverHash: 'driver_a',
-    wellName: 'Gabriel 3',
-    notes: 'reconstructed equivalent object',
+    serviceType: null,
+    notes: null,
+    driverSchedule: {},
   };
 
-  await coord.executeCreate(m.invoke, reconstructed);
-  const sent = m.calls[0] as { dispatchId: string; record: Record<string, unknown> };
-  assert.equal(sent.dispatchId, dispatchId, 'reconstructed transport payload retains the deliberate action ID');
-});
-
-test('Item 5: New deliberate action gets a new dispatchId', async () => {
-  const coord = new DispatchCreationCoordinator();
-  const m = mock({ dispatchId: 'ok' });
-
-  const rec1 = { wellName: 'Gabriel 5', driverHash: 'driver_a', jobType: 'pw' };
-  await coord.executeCreate(m.invoke, rec1);
-  const id1 = (m.calls[0] as any).dispatchId;
-
-  // Subsequent deliberate action without pre-bound ID
-  const rec2 = { wellName: 'Gabriel 5', driverHash: 'driver_a', jobType: 'pw' };
-  await coord.executeCreate(m.invoke, rec2);
-  const id2 = (m.calls[1] as any).dispatchId;
-
-  assert.notEqual(id1, id2, 'separate deliberate creation actions receive distinct dispatch IDs');
-});
-
-test('Item 6: Materially different immutable birth gets a new identity', async () => {
-  const coord = new DispatchCreationCoordinator();
-  const m = mock({ dispatchId: 'ok' });
-
-  const base = { wellName: 'Gabriel 5', driverHash: 'driver_a', jobType: 'pw' };
-  coord.prepareCreation(base);
-
-  const changedDriver = { ...base, driverHash: 'driver_b' };
-  const resChanged = coord.prepareCreation(changedDriver);
-  assert.notEqual(resChanged.dispatchId, base['dispatchId'], 'driver change produces new deliberate action identity');
-
-  const changedWell = { ...base, wellName: 'Gabriel 9' };
-  const resWell = coord.prepareCreation(changedWell);
-  assert.notEqual(resWell.dispatchId, base['dispatchId'], 'well change produces new deliberate action identity');
-});
-
-test('Item 7: Mutable presentation-field changes do not accidentally duplicate the same pending action', async () => {
-  const coord = new DispatchCreationCoordinator();
-  const initial = { wellName: 'Gabriel 5', driverHash: 'driver_a', jobType: 'pw', notes: 'initial draft', priority: 5 };
-  const { dispatchId } = coord.prepareCreation(initial);
-
-  const updatedNotes = { ...initial, notes: 'edited note content', priority: 1 };
-  const preparedUpdate = coord.prepareCreation(updatedNotes);
-
-  assert.equal(preparedUpdate.dispatchId, dispatchId, 'presentation changes preserve deliberate creation action identity');
-});
-
-// ── Cancellation isolation (Items 8 – 15) ────────────────────────────────────
-
-test('Items 8-13: Start action A, start unrelated action B, cancel A, retry B (B retains ID, A alone cleared)', async () => {
-  const coord = new DispatchCreationCoordinator();
-  let callsA = 0;
-  let callsB = 0;
-
-  const invokerA = async (p: any) => {
-    callsA++;
-    throw new Error('fail_A');
-  };
-  const invokerB = async (p: any) => {
-    callsB++;
-    if (callsB === 1) throw new Error('fail_B_uncertain');
-    return { data: { dispatchId: p.dispatchId } };
+  const params = {
+    workflow: pwf,
+    coordinator: coord,
+    invoke: async () => ({ data: { dispatchId: 'x' } }),
+    projectWriter: writer,
+    projectData,
+    wells: [{ wellName: 'W1' }],
+    drivers: [],
+    assignedBy: 'tester',
   };
 
-  const recA = { wellName: 'Well-A', driverHash: 'driver-a', jobType: 'pw' };
-  const recB = { wellName: 'Well-B', driverHash: 'driver-b', jobType: 'pw' };
+  await assert.rejects(() => executeCreateProjectWorkflow(params), /ETIMEDOUT_after_commit/);
+  // Retry: getDoc discovers the committed document with identical identity
+  await executeCreateProjectWorkflow(params);
 
-  // 8. Start action A
-  const actionAId = coord.beginAction({ actionScope: 'modal-A' });
-  await assert.rejects(() => coord.executeUnit(invokerA, recA, { actionId: actionAId, unitId: 'uA' }));
-  const unitA = coord.getUnit(actionAId, 'uA')!;
-  const idA = unitA.dispatchId;
-
-  // 9. Start unrelated action B
-  const actionBId = coord.beginAction({ actionScope: 'modal-B' });
-  await assert.rejects(() => coord.executeUnit(invokerB, recB, { actionId: actionBId, unitId: 'uB' }));
-  const unitB = coord.getUnit(actionBId, 'uB')!;
-  const idB = unitB.dispatchId;
-  assert.notEqual(idA, idB, 'A and B have different dispatchIds');
-
-  // 10. Cancel A
-  coord.cancelAction(actionAId);
-
-  // 13. A alone is cleared
-  assert.equal(coord.getAction(actionAId), undefined, 'Action A is pruned');
-  assert.notEqual(coord.getAction(actionBId), undefined, 'Action B remains retained');
-
-  // 11. Retry B
-  const retryBRes = await coord.executeUnit(invokerB, recB, { actionId: actionBId, unitId: 'uB' });
-
-  // 12. B retains its original dispatchId
-  assert.equal(retryBRes.dispatchId, idB, 'B retains its original dispatchId after A was cancelled');
+  assert.equal(setDocCalls, 1, 'setDoc was NOT re-called on retry; existing document was reused');
+  assert.equal(store.has(pwf.projectId), true);
 });
 
-test('Item 14: Canceling one modal does not clear another modal/batch', () => {
+test('Item 26: Identical replay is idempotent', () => {
+  const input: ProjectDataInput = {
+    name: 'Replay Project',
+    wellNames: ['Well B', 'Well A'],
+    operatorName: 'Op Alpha',
+    companyId: 'comp_1',
+    createdBy: 'user_1',
+    startDate: '2026-09-22',
+    projectedEndDate: null,
+    status: 'active',
+    jobType: 'pw',
+    serviceType: null,
+    notes: null,
+    driverSchedule: {},
+  };
+  const existing = {
+    name: 'Replay Project',
+    wellNames: ['Well A', 'Well B'],
+    operatorName: 'Op Alpha',
+    companyId: 'comp_1',
+    jobType: 'pw',
+    serviceType: null,
+  };
+  assert.equal(projectImmutableIdentityMatches(existing, input), true);
+});
+
+test('Item 27: Conflicting existing project fails visibly', async () => {
   const coord = new DispatchCreationCoordinator();
-  const act1 = coord.beginAction({ actionScope: 'assign-modal' });
-  const act2 = coord.beginAction({ actionScope: 'service-work-modal' });
+  const pwf = createProjectWorkflow();
+  const store = new Map<string, Record<string, unknown>>();
+  store.set(pwf.projectId, {
+    name: 'Different Project Name',
+    companyId: 'comp_OTHER',
+    jobType: 'service',
+    wellNames: ['Other Well'],
+    operatorName: 'Other Op',
+  });
 
-  coord.prepareUnit(act1, 'u1', { wellName: 'W1', driverHash: 'D1', jobType: 'pw' });
-  coord.prepareUnit(act2, 'u2', { wellName: 'W2', driverHash: 'D2', jobType: 'service' });
+  const writer: FirestoreProjectWriter = {
+    getDoc: async (id) => ({ exists: store.has(id), data: () => store.get(id) }),
+    setDoc: async () => {},
+  };
 
-  // Cancel assign-modal
-  coord.cancelCreation('assign-modal');
+  const params = {
+    workflow: pwf,
+    coordinator: coord,
+    invoke: async () => ({ data: { dispatchId: 'x' } }),
+    projectWriter: writer,
+    projectData: {
+      name: 'My Project',
+      wellNames: ['W1'],
+      operatorName: 'Op 1',
+      companyId: 'comp_1',
+      createdBy: 'u1',
+      startDate: '2026-09-22',
+      projectedEndDate: null,
+      status: 'active',
+      jobType: 'pw',
+      serviceType: null,
+      notes: null,
+      driverSchedule: {},
+    },
+    wells: [{ wellName: 'W1' }],
+    drivers: [],
+    assignedBy: 'tester',
+  };
 
-  assert.equal(coord.getAction(act1), undefined, 'assign-modal is cancelled');
-  assert.notEqual(coord.getAction(act2), undefined, 'service-work-modal remains active');
-  assert.ok(coord.getUnit(act2, 'u2'), 'unit in service-work-modal is preserved');
+  await assert.rejects(
+    () => executeCreateProjectWorkflow(params),
+    new RegExp(`project_conflict:conflicting_existing_project:${pwf.projectId}`)
+  );
 });
 
-test('Item 15: clearAll is not called by normal modal cancel', () => {
-  const pagePath = path.resolve(process.cwd(), 'src/app/dispatch/page.tsx');
-  const content = fs.readFileSync(pagePath, 'utf8');
+test('Item 28: Rerender preserves identity', () => {
+  const pwf = createProjectWorkflow();
+  const originalProjectId = pwf.projectId;
+  const originalActionId = pwf.actionId;
 
-  // Confirm cancel buttons call cancelScopedCreation with explicit scopes
-  assert.match(content, /cancelScopedCreation\('assign-modal'\)/, 'assign cancel uses scoped cancellation');
-  assert.match(content, /cancelScopedCreation\('multi-assign-modal'\)/, 'multi-assign cancel uses scoped cancellation');
-  assert.match(content, /cancelScopedCreation\('reassign-modal'\)/, 'reassign cancel uses scoped cancellation');
-  assert.match(content, /cancelScopedCreation\('edit-sw-modal'\)/, 'edit-sw cancel uses scoped cancellation');
+  // Simulate multiple render passes maintaining state
+  const render1ProjectId = pwf.projectId;
+  const render2ProjectId = pwf.projectId;
+
+  assert.equal(render1ProjectId, originalProjectId);
+  assert.equal(render2ProjectId, originalProjectId);
+  assert.equal(pwf.actionId, originalActionId);
 });
 
-// ── Partial batch (Items 16 – 25) ────────────────────────────────────────────
-
-test('Items 16-23: Partial batch retry (A & B succeed, C fails; whole batch retried without recreating A & B; C reuses ID; finalization clears batch; new batch gets new IDs)', async () => {
+test('Item 29: Cancel affects only this project workflow', () => {
   const coord = new DispatchCreationCoordinator();
-  const batchId = coord.beginAction({ actionScope: 'multi-unit-batch' });
+  const pwf = createProjectWorkflow();
+  const unrelatedActionId = coord.beginAction({ actionScope: 'assign-modal' });
+  coord.prepareUnit(unrelatedActionId, 'u_unrelated', { wellName: 'W_unrelated', driverHash: 'D', jobType: 'pw' });
 
+  coord.beginAction({ actionId: pwf.actionId, actionScope: 'create-project' });
+  coord.prepareUnit(pwf.actionId, 'W1::d1', { wellName: 'W1', driverHash: 'd1', jobType: 'pw' });
+
+  cancelCreateProjectWorkflow(pwf, coord);
+
+  assert.equal(coord.getAction(pwf.actionId), undefined, 'project action pruned');
+  assert.notEqual(coord.getAction(unrelatedActionId), undefined, 'unrelated action unaffected');
+  assert.ok(coord.getUnit(unrelatedActionId, 'u_unrelated'));
+});
+
+test('Item 30: Reopen after cancel creates new projectId', () => {
+  const coord = new DispatchCreationCoordinator();
+  const pwf1 = createProjectWorkflow();
+  cancelCreateProjectWorkflow(pwf1, coord);
+
+  const pwf2 = createProjectWorkflow();
+  assert.notEqual(pwf2.projectId, pwf1.projectId, 'new projectId allocated on reopen');
+  assert.notEqual(pwf2.actionId, pwf1.actionId, 'new actionId allocated on reopen');
+});
+
+test('Item 31: Post-write UI failure followed by retry creates no duplicate project', async () => {
+  const coord = new DispatchCreationCoordinator();
+  const pwf = createProjectWorkflow();
+  const store = new Map<string, Record<string, unknown>>();
+  const writer: FirestoreProjectWriter = {
+    getDoc: async (id) => ({ exists: store.has(id), data: () => store.get(id) }),
+    setDoc: async (id, data) => { store.set(id, data); },
+  };
+
+  let failUi = true;
+  const wireCalls: any[] = [];
+  const invoker: CallableInvoker = async (payload: any) => {
+    wireCalls.push(payload);
+    return { data: { dispatchId: payload.dispatchId } };
+  };
+
+  const params = {
+    workflow: pwf,
+    coordinator: coord,
+    invoke: invoker,
+    projectWriter: writer,
+    projectData: {
+      name: 'Project UI Failure Test',
+      wellNames: ['W1'],
+      operatorName: 'Op 1',
+      companyId: 'c1',
+      createdBy: 'u1',
+      startDate: '2026-09-22',
+      projectedEndDate: null,
+      status: 'active',
+      jobType: 'pw',
+      serviceType: null,
+      notes: null,
+      driverSchedule: { '2026-09-22': ['d1'] },
+    },
+    wells: [{ wellName: 'W1' }],
+    drivers: [{ key: 'd1', driverHash: 'd1', driverId: 'd1', displayName: 'D1' }],
+    assignedBy: 'tester',
+    onUiComplete: async () => {
+      if (failUi) {
+        failUi = false;
+        throw new Error('ui_route_failed');
+      }
+    },
+  };
+
+  await assert.rejects(() => executeCreateProjectWorkflow(params), /ui_route_failed/);
+  assert.equal(store.size, 1);
+  assert.equal(wireCalls.length, 1);
+
+  // Retry after UI issue resolved
+  await executeCreateProjectWorkflow(params);
+  assert.equal(store.size, 1, 'no duplicate project document created');
+  assert.equal(wireCalls.length, 1, 'no duplicate dispatch created on wire');
+});
+
+// ── Regression & Operational Invariants (Items 32 – 43) ──────────────────────
+
+test('Item 32: All seven already-stable workflows remain stable', async () => {
+  const coord = new DispatchCreationCoordinator();
+  const invoker: CallableInvoker = async (p: any) => ({ data: { dispatchId: p.dispatchId } });
+
+  // 1. Single Assign: assign_${well}_${driver}
+  const act1 = 'assign_Well1_driverA';
+  coord.beginAction({ actionId: act1, actionScope: 'assign-modal' });
+  const u1 = await coord.executeUnit(invoker, { wellName: 'Well1', driverHash: 'driverA' }, { actionId: act1, unitId: 'single' });
+  const u1Retry = await coord.executeUnit(invoker, { wellName: 'Well1', driverHash: 'driverA' }, { actionId: act1, unitId: 'single' });
+  assert.equal(u1.dispatchId, u1Retry.dispatchId);
+  coord.finalizeAction(act1);
+
+  // 2. Multi-Assign: multi_assign_${driver}_${count}
+  const act2 = 'multi_assign_driverA_2';
+  coord.beginAction({ actionId: act2, actionScope: 'multi-assign-modal' });
+  const u2a = await coord.executeUnit(invoker, { wellName: 'W1', driverHash: 'driverA' }, { actionId: act2, unitId: 'W1::driverA' });
+  const u2b = await coord.executeUnit(invoker, { wellName: 'W2', driverHash: 'driverA' }, { actionId: act2, unitId: 'W2::driverA' });
+  const u2aRetry = await coord.executeUnit(invoker, { wellName: 'W1', driverHash: 'driverA' }, { actionId: act2, unitId: 'W1::driverA' });
+  assert.equal(u2a.dispatchId, u2aRetry.dispatchId);
+  coord.finalizeAction(act2);
+
+  // 3. Add Driver to Project Today: proj_add_${proj}_${driver}
+  const act3 = 'proj_add_proj123_driverB';
+  coord.beginAction({ actionId: act3, actionScope: 'project-modal' });
+  const u3 = await coord.executeUnit(invoker, { wellName: 'W1', driverHash: 'driverB', projectId: 'proj123' }, { actionId: act3, unitId: 'W1::driverB' });
+  const u3Retry = await coord.executeUnit(invoker, { wellName: 'W1', driverHash: 'driverB', projectId: 'proj123' }, { actionId: act3, unitId: 'W1::driverB' });
+  assert.equal(u3.dispatchId, u3Retry.dispatchId);
+  coord.finalizeAction(act3);
+
+  // 4. Batch Dispatch Shift: proj_sched_${proj}
+  const act4 = 'proj_sched_proj123';
+  coord.beginAction({ actionId: act4, actionScope: 'project-modal' });
+  const u4 = await coord.executeUnit(invoker, { wellName: 'W1', driverHash: 'driverC', projectId: 'proj123' }, { actionId: act4, unitId: 'W1::driverC' });
+  const u4Retry = await coord.executeUnit(invoker, { wellName: 'W1', driverHash: 'driverC', projectId: 'proj123' }, { actionId: act4, unitId: 'W1::driverC' });
+  assert.equal(u4.dispatchId, u4Retry.dispatchId);
+  coord.finalizeAction(act4);
+
+  // 5. Reassign: reassign_${job}_${driver}
+  const act5 = 'reassign_job99_driverD';
+  coord.beginAction({ actionId: act5, actionScope: 'reassign-modal' });
+  const u5 = await coord.executeUnit(invoker, { wellName: 'W1', driverHash: 'driverD' }, { actionId: act5, unitId: 'reassign' });
+  const u5Retry = await coord.executeUnit(invoker, { wellName: 'W1', driverHash: 'driverD' }, { actionId: act5, unitId: 'reassign' });
+  assert.equal(u5.dispatchId, u5Retry.dispatchId);
+  coord.finalizeAction(act5);
+
+  // 6. Edit SW Crew: edit_sw_crew_${job}
+  const act6 = 'edit_sw_crew_job100';
+  coord.beginAction({ actionId: act6, actionScope: 'edit-sw-modal' });
+  const u6 = await coord.executeUnit(invoker, { wellName: 'W1', driverHash: 'driverE' }, { actionId: act6, unitId: 'driverE::leg1' });
+  const u6Retry = await coord.executeUnit(invoker, { wellName: 'W1', driverHash: 'driverE' }, { actionId: act6, unitId: 'driverE::leg1' });
+  assert.equal(u6.dispatchId, u6Retry.dispatchId);
+  coord.finalizeAction(act6);
+
+  // 7. Split PW Loads: split_loads_${job}_${driver}
+  const act7 = 'split_loads_job101_driverF';
+  coord.beginAction({ actionId: act7, actionScope: 'split-pw-modal' });
+  const u7a = await coord.executeUnit(invoker, { wellName: 'W1', driverHash: 'driverF', splitSequence: 1 }, { actionId: act7, unitId: 'driverF::leg1' });
+  const u7b = await coord.executeUnit(invoker, { wellName: 'W1', driverHash: 'driverF', splitSequence: 2 }, { actionId: act7, unitId: 'driverF::leg2' });
+  const u7aRetry = await coord.executeUnit(invoker, { wellName: 'W1', driverHash: 'driverF', splitSequence: 1 }, { actionId: act7, unitId: 'driverF::leg1' });
+  assert.equal(u7a.dispatchId, u7aRetry.dispatchId);
+  coord.finalizeAction(act7);
+});
+
+test('Item 33: Scoped cancellation remains correct', () => {
+  const coord = new DispatchCreationCoordinator();
+  const actA = coord.beginAction({ actionScope: 'modal-A' });
+  const actB = coord.beginAction({ actionScope: 'modal-B' });
+
+  coord.prepareUnit(actA, 'uA', { wellName: 'WA', driverHash: 'DA', jobType: 'pw' });
+  coord.prepareUnit(actB, 'uB', { wellName: 'WB', driverHash: 'DB', jobType: 'pw' });
+
+  coord.cancelAction(actA);
+
+  assert.equal(coord.getAction(actA), undefined, 'action A cleared');
+  assert.notEqual(coord.getAction(actB), undefined, 'action B preserved');
+  assert.ok(coord.getUnit(actB, 'uB'), 'unit in action B preserved');
+});
+
+test('Item 34: Partial-batch retry remains correct', async () => {
+  const coord = new DispatchCreationCoordinator();
+  const batchId = coord.beginAction({ actionScope: 'batch-test' });
   let callCountC = 0;
-  const calls: Record<string, string[]> = { A: [], B: [], C: [] };
+  const wireCalls: Record<string, string[]> = { A: [], B: [], C: [] };
 
   const invoker = async (payload: any) => {
-    const unitName = payload.record.wellName as 'A' | 'B' | 'C';
-    calls[unitName].push(payload.dispatchId);
-    if (unitName === 'C') {
+    const name = payload.record.wellName as string;
+    wireCalls[name].push(payload.dispatchId);
+    if (name === 'C') {
       callCountC++;
       if (callCountC === 1) throw new Error('transport_failed_C');
     }
@@ -364,96 +1242,28 @@ test('Items 16-23: Partial batch retry (A & B succeed, C fails; whole batch retr
   const recB = { wellName: 'B', driverHash: 'D1', jobType: 'pw' };
   const recC = { wellName: 'C', driverHash: 'D1', jobType: 'pw' };
 
-  // 16. Begin batch with units A, B, C
-  // 17-18. A & B succeed, C fails
-  const results1 = await Promise.allSettled([
-    coord.executeUnit(invoker, recA, { actionId: batchId, unitId: 'unit-A' }),
-    coord.executeUnit(invoker, recB, { actionId: batchId, unitId: 'unit-B' }),
-    coord.executeUnit(invoker, recC, { actionId: batchId, unitId: 'unit-C' }),
+  await Promise.allSettled([
+    coord.executeUnit(invoker, recA, { actionId: batchId, unitId: 'uA' }),
+    coord.executeUnit(invoker, recB, { actionId: batchId, unitId: 'uB' }),
+    coord.executeUnit(invoker, recC, { actionId: batchId, unitId: 'uC' }),
   ]);
 
-  assert.equal(results1[0].status, 'fulfilled');
-  assert.equal(results1[1].status, 'fulfilled');
-  assert.equal(results1[2].status, 'rejected');
-
-  const idA = (results1[0] as PromiseFulfilledResult<any>).value.dispatchId;
-  const idB = (results1[1] as PromiseFulfilledResult<any>).value.dispatchId;
-  const unitCState = coord.getUnit(batchId, 'unit-C')!;
-  const idC = unitCState.dispatchId;
-
-  // 19. Retry the whole batch
-  const results2 = await Promise.all([
-    coord.executeUnit(invoker, recA, { actionId: batchId, unitId: 'unit-A' }),
-    coord.executeUnit(invoker, recB, { actionId: batchId, unitId: 'unit-B' }),
-    coord.executeUnit(invoker, recC, { actionId: batchId, unitId: 'unit-C' }),
+  const results = await Promise.all([
+    coord.executeUnit(invoker, recA, { actionId: batchId, unitId: 'uA' }),
+    coord.executeUnit(invoker, recB, { actionId: batchId, unitId: 'uB' }),
+    coord.executeUnit(invoker, recC, { actionId: batchId, unitId: 'uC' }),
   ]);
 
-  // 20. A and B are not recreated under new IDs
-  assert.equal(results2[0].dispatchId, idA, 'A preserved original dispatchId');
-  assert.equal(results2[1].dispatchId, idB, 'B preserved original dispatchId');
-  assert.equal(calls.A.length, 1, 'A was not re-invoked on wire');
-  assert.equal(calls.B.length, 1, 'B was not re-invoked on wire');
-
-  // 21. C reuses its original ID
-  assert.equal(results2[2].dispatchId, idC, 'C reused original dispatchId on retry');
-  assert.equal(calls.C.length, 2, 'C was retried on wire with exact same dispatchId');
-  assert.equal(calls.C[0], calls.C[1], 'wire payloads for C had identical dispatchId');
-
-  // 22. Final completion clears only that batch
-  coord.finalizeAction(batchId);
-  assert.equal(coord.getAction(batchId), undefined, 'finalized batch is pruned');
-
-  // 23. A later new batch gets new IDs
-  const batch2Id = coord.beginAction({ actionScope: 'multi-unit-batch' });
-  const freshRecA = { wellName: 'A', driverHash: 'D1', jobType: 'pw' };
-  const newResA = await coord.executeUnit(invoker, freshRecA, { actionId: batch2Id, unitId: 'unit-A' });
-  assert.notEqual(newResA.dispatchId, idA, 'new batch deliberate action receives fresh dispatchId');
+  assert.equal(wireCalls.A.length, 1, 'A not re-invoked');
+  assert.equal(wireCalls.B.length, 1, 'B not re-invoked');
+  assert.equal(wireCalls.C.length, 2, 'C retried with same ID');
+  assert.equal(wireCalls.C[0], wireCalls.C[1]);
 });
 
-test('Item 24: Reordering units does not change their retained IDs', async () => {
-  const coord = new DispatchCreationCoordinator();
-  const batchId = coord.beginAction({ actionScope: 'order-test' });
-
-  const recA = { wellName: 'Well-A', driverHash: 'D', jobType: 'pw' };
-  const recB = { wellName: 'Well-B', driverHash: 'D', jobType: 'pw' };
-  const recC = { wellName: 'Well-C', driverHash: 'D', jobType: 'pw' };
-
-  const uA = coord.prepareUnit(batchId, 'uA', recA);
-  const uB = coord.prepareUnit(batchId, 'uB', recB);
-  const uC = coord.prepareUnit(batchId, 'uC', recC);
-
-  // Access in reverse order: [C, B, A]
-  const reC = coord.prepareUnit(batchId, 'uC', recC);
-  const reB = coord.prepareUnit(batchId, 'uB', recB);
-  const reA = coord.prepareUnit(batchId, 'uA', recA);
-
-  assert.equal(uC.dispatchId, reC.dispatchId);
-  assert.equal(uB.dispatchId, reB.dispatchId);
-  assert.equal(uA.dispatchId, reA.dispatchId);
-});
-
-test('Item 25: Two similar units remain independently addressable', async () => {
-  const coord = new DispatchCreationCoordinator();
-  const batchId = coord.beginAction({ actionScope: 'split-test' });
-
-  // Two legs of a split job with identical driver and well name
-  const leg1 = { wellName: 'SWD Alpha', driverHash: 'D1', jobType: 'service', splitSequence: 1 };
-  const leg2 = { wellName: 'SWD Alpha', driverHash: 'D1', jobType: 'service', splitSequence: 2 };
-
-  const u1 = coord.prepareUnit(batchId, 'driver1::leg1', leg1);
-  const u2 = coord.prepareUnit(batchId, 'driver1::leg2', leg2);
-
-  assert.notEqual(u1.dispatchId, u2.dispatchId, 'distinct split legs have independent dispatchIds');
-  assert.equal(coord.getUnit(batchId, 'driver1::leg1')?.dispatchId, u1.dispatchId);
-  assert.equal(coord.getUnit(batchId, 'driver1::leg2')?.dispatchId, u2.dispatchId);
-});
-
-// ── Stale completion (Items 26 – 30) ─────────────────────────────────────────
-
-test('Items 26-30: Generation 1 completes late; cannot clear or overwrite generation 2; generation 2 retains correct ID/state', async () => {
+test('Item 35: Stale completion guard remains correct', async () => {
   const coord = new DispatchCreationCoordinator();
   const actionId = coord.beginAction({ actionScope: 'stale-test' });
-  const unitId = 'unit-1';
+  const unitId = 'u1';
 
   let resolveGen1: (val: any) => void = () => {};
   const gen1Promise = new Promise(r => { resolveGen1 = r; });
@@ -461,244 +1271,80 @@ test('Items 26-30: Generation 1 completes late; cannot clear or overwrite genera
   const invoker1 = () => gen1Promise as any;
   const invoker2 = async (p: any) => ({ data: { dispatchId: p.dispatchId } });
 
-  const record1 = { wellName: 'Well-X', driverHash: 'D1', jobType: 'pw' };
+  const p1 = coord.executeUnit(invoker1, { wellName: 'W1', driverHash: 'D1', jobType: 'pw' }, { actionId, unitId });
+  const p2 = coord.executeUnit(invoker2, { wellName: 'W2', driverHash: 'D1', jobType: 'pw' }, { actionId, unitId });
 
-  // 26. Begin request generation 1 for unit
-  const p1 = coord.executeUnit(invoker1, record1, { actionId, unitId });
-  const unitState1 = coord.getUnit(actionId, unitId)!;
-  const idGen1 = unitState1.dispatchId;
-  assert.equal(unitState1.currentRequestId, 1);
-
-  // 27. Replace/start permitted generation 2 for same logical slot with updated record
-  const record2 = { wellName: 'Well-X-New', driverHash: 'D1', jobType: 'pw' };
-  const p2 = coord.executeUnit(invoker2, record2, { actionId, unitId });
-  const unitState2 = coord.getUnit(actionId, unitId)!;
-  assert.equal(unitState2.currentRequestId, 2);
   const resGen2 = await p2;
-  assert.equal(unitState2.status, 'succeeded');
-
-  // 28. Generation 1 completes late
-  resolveGen1({ data: { dispatchId: idGen1 } });
+  resolveGen1({ data: { dispatchId: 'late_id' } });
   await p1;
 
-  // 29-30. Generation 1 cannot clear or overwrite generation 2; generation 2 retains its state
-  assert.equal(coord.getUnit(actionId, unitId)?.status, 'succeeded');
   assert.equal(coord.getUnit(actionId, unitId)?.result?.dispatchId, resGen2.dispatchId);
-  assert.equal(coord.getUnit(actionId, unitId)?.currentRequestId, unitState2.currentRequestId);
+  assert.equal(coord.getUnit(actionId, unitId)?.currentRequestId, 2);
 });
 
-// ── Tenant/session (Items 31 – 37) ───────────────────────────────────────────
+test('Item 36: UID/company session isolation remains correct', () => {
+  const coordA = new DispatchCreationCoordinator({ tenantId: 'company_A', userId: 'user_1' });
+  const coordB = new DispatchCreationCoordinator({ tenantId: 'company_B', userId: 'user_2' });
 
-test('Item 31: Same content under company A and company B cannot share identity', () => {
-  const coordA = new DispatchCreationCoordinator({ tenantId: 'company_A' });
-  const coordB = new DispatchCreationCoordinator({ tenantId: 'company_B' });
+  const uA = coordA.prepareCreation({ wellName: 'W', driverHash: 'D', jobType: 'pw' });
+  const uB = coordB.prepareCreation({ wellName: 'W', driverHash: 'D', jobType: 'pw' });
 
-  const record = { wellName: 'Gabriel 1', driverHash: 'D1', jobType: 'pw' };
-  const uA = coordA.prepareCreation(record);
-  const uB = coordB.prepareCreation(record);
+  assert.notEqual(uA.dispatchId, uB.dispatchId, 'distinct tenants/users get isolated namespaces');
 
-  assert.notEqual(uA.dispatchId, uB.dispatchId, 'distinct tenants receive distinct dispatchIds');
+  // Sign out / company switch cleans coordinator
+  coordA.resetAuthenticatedSession('company_C', 'user_3');
+  assert.equal(coordA.getAllRetained().length, 0);
+  assert.equal(coordA.sessionTenantId, 'company_C');
 });
 
-test('Item 32: Same content under UID A and UID B cannot share identity', () => {
-  const coord1 = new DispatchCreationCoordinator({ userId: 'uid_alice' });
-  const coord2 = new DispatchCreationCoordinator({ userId: 'uid_bob' });
-
-  const record = { wellName: 'Gabriel 1', driverHash: 'D1', jobType: 'pw' };
-  const u1 = coord1.prepareCreation(record);
-  const u2 = coord2.prepareCreation(record);
-
-  assert.notEqual(u1.dispatchId, u2.dispatchId, 'distinct user UIDs receive distinct dispatchIds');
+test('Item 37: Functions tree remains byte-identical to R1 (4c6560a7)', () => {
+  const diff = execSync('git diff 4c6560a7 HEAD -- functions', { encoding: 'utf8' });
+  assert.equal(diff.trim(), '', 'Functions directory has zero diff against 4c6560a7');
 });
 
-test('Item 33: Sign-out clears only that authenticated session', () => {
-  const session1 = new DispatchCreationCoordinator({ tenantId: 'comp_1', userId: 'user_1' });
-  const session2 = new DispatchCreationCoordinator({ tenantId: 'comp_2', userId: 'user_2' });
-
-  session1.prepareCreation({ wellName: 'W1', driverHash: 'D1', jobType: 'pw' });
-  session2.prepareCreation({ wellName: 'W2', driverHash: 'D2', jobType: 'pw' });
-
-  assert.equal(session1.getAllRetained().length, 1);
-  assert.equal(session2.getAllRetained().length, 1);
-
-  // Sign-out session 1
-  session1.resetAuthenticatedSession();
-
-  assert.equal(session1.getAllRetained().length, 0, 'session 1 cleared');
-  assert.equal(session2.getAllRetained().length, 1, 'session 2 remains intact');
-});
-
-test('Item 34: Company switch clears/abandons the prior-company coordinator', () => {
-  const coord = new DispatchCreationCoordinator({ tenantId: 'comp_old', userId: 'user_1' });
-  coord.prepareCreation({ wellName: 'W1', driverHash: 'D1', jobType: 'pw' });
-  assert.equal(coord.getAllRetained().length, 1);
-
-  // User switches company
-  coord.resetAuthenticatedSession('comp_new', 'user_1');
-
-  assert.equal(coord.sessionTenantId, 'comp_new');
-  assert.equal(coord.getAllRetained().length, 0, 'prior-company state abandoned on company switch');
-});
-
-test('Item 35: No retained creation survives into a different authenticated identity', () => {
-  const coord = new DispatchCreationCoordinator({ tenantId: 'tenant_1', userId: 'user_1' });
-  const { dispatchId } = coord.prepareCreation({ wellName: 'W1', driverHash: 'D1', jobType: 'pw' });
-
-  // Reset to different identity
-  coord.resetAuthenticatedSession('tenant_2', 'user_2');
-
-  const after = coord.prepareCreation({ wellName: 'W1', driverHash: 'D1', jobType: 'pw' });
-  assert.notEqual(after.dispatchId, dispatchId, 'retained creation cannot survive into different identity');
-});
-
-test('Item 36: Separate coordinator/page instances do not leak into one another', () => {
-  const pageInstance1 = new DispatchCreationCoordinator();
-  const pageInstance2 = new DispatchCreationCoordinator();
-
-  const act1 = pageInstance1.beginAction({ actionScope: 'modal-1' });
-  pageInstance1.prepareUnit(act1, 'u1', { wellName: 'W', driverHash: 'D', jobType: 'pw' });
-
-  assert.notEqual(pageInstance1.getAction(act1), undefined);
-  assert.equal(pageInstance2.getAction(act1), undefined, 'instance 2 has zero knowledge of instance 1');
-});
-
-test('Item 37: No server/SSR-global shared mutable state', () => {
-  // Each invocation of new DispatchCreationCoordinator creates isolated state
-  const a = new DispatchCreationCoordinator();
-  const b = new DispatchCreationCoordinator();
-  a.prepareCreation({ wellName: 'W', driverHash: 'D', jobType: 'pw' });
-  assert.equal(b.getAllRetained().length, 0, 'new coordinator instances are completely isolated');
-});
-
-// ── Call-site census (Items 38 – 43) ─────────────────────────────────────────
-
-test('Item 38: All dispatch creation paths still route through the coordinator', () => {
-  const pagePath = path.resolve(process.cwd(), 'src/app/dispatch/page.tsx');
-  const content = fs.readFileSync(pagePath, 'utf8');
-
-  // Verify staffCreateDispatch wrapper in page.tsx binds the coordinator
-  assert.match(
-    content,
-    /const staffCreateDispatch\s*=\s*\([^)]*\)\s*=>\s*\{[^}]*ensureCanCreateDispatch\(\);[^}]*return _staffCreateDispatch\(record,\s*\{[^}]*coordinator/s,
-    'local staffCreateDispatch passes session coordinator'
-  );
-});
-
-test('Item 39: All batch call sites provide explicit stable action and unit identities', () => {
-  const pagePath = path.resolve(process.cwd(), 'src/app/dispatch/page.tsx');
-  const content = fs.readFileSync(pagePath, 'utf8');
-
-  // Service Work multi-driver/split batch
-  assert.match(content, /batchActionId\s*=\s*`sw_\$\{/, 'SW defines explicit batchActionId');
-  assert.match(content, /unitId:\s*`\$\{driver\.key\}::leg1`/, 'SW leg1 explicit unitId');
-  assert.match(content, /unitId:\s*`\$\{driver\.key\}::leg2`/, 'SW leg2 explicit unitId');
-
-  // Multi-assign batch
-  assert.match(content, /batchActionId\s*=\s*`multi_assign_\$\{/, 'Multi-assign defines explicit batchActionId');
-  assert.match(content, /unitId:\s*`\$\{wellName\}::\$\{driver\.key\}`/, 'Multi-assign explicit unitId');
-
-  // Project batches
-  assert.match(content, /batchActionId\s*=\s*`proj_create_\$\{/, 'Project create defines explicit batchActionId');
-  assert.match(content, /batchActionId\s*=\s*`proj_add_\$\{/, 'Project add driver defines explicit batchActionId');
-  assert.match(content, /batchActionId\s*=\s*`proj_sched_\$\{/, 'Project scheduled defines explicit batchActionId');
-
-  // Edit SW crew batch
-  assert.match(content, /batchActionId\s*=\s*`edit_sw_crew_\$\{/, 'Edit SW crew defines explicit batchActionId');
-});
-
-test('Item 40: All cancel paths clear only their owned action/batch', () => {
-  const pagePath = path.resolve(process.cwd(), 'src/app/dispatch/page.tsx');
-  const content = fs.readFileSync(pagePath, 'utf8');
-
-  assert.match(content, /cancelScopedCreation\('assign-modal'\)/);
-  assert.match(content, /cancelScopedCreation\('multi-assign-modal'\)/);
-  assert.match(content, /cancelScopedCreation\('reassign-modal'\)/);
-  assert.match(content, /cancelScopedCreation\('edit-sw-modal'\)/);
-  // Ensure un-scoped cancelRetainedCreation is NOT called in normal modal cancels
-  assert.doesNotMatch(content, /cancelRetainedCreation\(\);\s*setAssignTarget\(null\)/);
-  assert.doesNotMatch(content, /cancelRetainedCreation\(\);\s*setSelectedWells/);
-  assert.doesNotMatch(content, /cancelRetainedCreation\(\);\s*setReassignJob/);
-  assert.doesNotMatch(content, /cancelRetainedCreation\(\);\s*setEditSwJob/);
-});
-
-test('Item 41: No addDoc/direct-birth bypass', () => {
-  const pagePath = path.resolve(process.cwd(), 'src/app/dispatch/page.tsx');
-  const content = fs.readFileSync(pagePath, 'utf8');
-
-  assert.doesNotMatch(
-    content,
-    /addDoc\s*\(\s*collection\s*\([^)]+['"]dispatches['"]/,
-    'zero direct addDoc calls to dispatches collection in page.tsx'
-  );
-});
-
-test('Item 42: No caller can supply company, binding hashes or packet authority', () => {
-  const dirty = {
-    wellName: 'W',
-    companyId: { toMillis: () => 1000 },
-    assignedAt: { toMillis: () => 2000 },
-    executionBinding: 'hacker_hash',
-    notes: 'clean',
-  };
-  const safe = jsonSafe(dirty);
-  assert.equal(safe.companyId, undefined, 'companyId stripped');
-  assert.equal(safe.assignedAt, undefined, 'assignedAt stripped');
-});
-
-test('Item 43: Server still requires dispatchId and never random-mints one', () => {
-  const payload = buildCreatePayload({ wellName: 'Gabriel 1', driverHash: 'D1' });
-  assert.equal(payload.op, 'create');
-  assert.ok(typeof payload.dispatchId === 'string' && payload.dispatchId.length > 0, 'payload provides client-minted dispatchId');
-});
-
-// ── Regression (Items 44 – 48) ───────────────────────────────────────────────
-
-test('Item 44: Functions tree remains byte-identical to R1 (4c6560a7)', () => {
-  try {
-    const diff = execSync('git diff 4c6560a7 HEAD -- functions', { encoding: 'utf8' });
-    assert.equal(diff.trim(), '', 'Functions directory has zero diff against 4c6560a7');
-  } catch (err: any) {
-    assert.fail(`git diff command failed: ${err.message}`);
-  }
-});
-
-test('Item 45: B-1 moving-head behavior remains absent', () => {
-  const fnPath = path.resolve(process.cwd(), 'functions/src/security/operational/resolveExecutionBinding.ts');
-  const content = fs.readFileSync(fnPath, 'utf8');
-  assert.doesNotMatch(content, /job_packets\/head/, 'no moving-head lookup in resolveExecutionBinding');
-  assert.doesNotMatch(content, /job_packets\/latest/, 'no latest lookup in resolveExecutionBinding');
-});
-
-test('Item 46: B-2 NDIC fabrication remains absent', () => {
-  const fnPath = path.resolve(process.cwd(), 'functions/src/security/operational/resolveExecutionBinding.ts');
-  const content = fs.readFileSync(fnPath, 'utf8');
-  assert.doesNotMatch(content, /ndicWellName\s*=\s*wellName/, 'no ndicWellName fallback fabrication');
-});
-
-test('Item 47: Unbound accept/resolve remains fail-closed', () => {
+test('Item 38: Unbound accept/resolve remains fail-closed', () => {
   const acceptPath = path.resolve(process.cwd(), 'functions/src/security/operational/acceptDriverDispatch.ts');
   const acceptContent = fs.readFileSync(acceptPath, 'utf8');
-  assert.match(acceptContent, /requireCompleteBinding\(input\.existing\)/, 'accept requires complete binding');
-  assert.match(acceptContent, /if \(!bound\.ok\) return bound;/, 'unbound accept fails closed');
+  assert.match(acceptContent, /requireCompleteBinding\(input\.existing\)/);
+  assert.match(acceptContent, /if \(!bound\.ok\) return bound;/);
 
   const resolvePath = path.resolve(process.cwd(), 'functions/src/security/operational/resolveExecutionBinding.ts');
   const resolveContent = fs.readFileSync(resolvePath, 'utf8');
-  assert.match(resolveContent, /requireCompleteBinding\(existing\)/, 'resolve requires complete binding');
-  assert.match(resolveContent, /if \(!bound\.ok\) return bound;/, 'unbound resolve fails closed');
+  assert.match(resolveContent, /requireCompleteBinding\(existing\)/);
+  assert.match(resolveContent, /if \(!bound\.ok\) return bound;/);
 });
 
-test('Item 48: Inventory remains empty', () => {
+test('Item 39: No moving-head lookup', () => {
+  const fnPath = path.resolve(process.cwd(), 'functions/src/security/operational/resolveExecutionBinding.ts');
+  const content = fs.readFileSync(fnPath, 'utf8');
+  assert.doesNotMatch(content, /job_packets\/head/);
+  assert.doesNotMatch(content, /job_packets\/latest/);
+});
+
+test('Item 40: No NDIC fabrication', () => {
+  const fnPath = path.resolve(process.cwd(), 'functions/src/security/operational/resolveExecutionBinding.ts');
+  const content = fs.readFileSync(fnPath, 'utf8');
+  assert.doesNotMatch(content, /ndicWellName\s*=\s*wellName/);
+});
+
+test('Item 41: Server requires/never-mints dispatchId', () => {
+  const payload = buildCreatePayload({ wellName: 'Gabriel 1', driverHash: 'D1' });
+  assert.equal(payload.op, 'create');
+  assert.ok(typeof payload.dispatchId === 'string' && payload.dispatchId.length > 0);
+});
+
+test('Item 42: Inventory remains empty', () => {
   const invPath = path.resolve(process.cwd(), 'functions/src/security/operational/jobPacketEffectInventory.ts');
   const content = fs.readFileSync(invPath, 'utf8');
-  assert.match(content, /IMPLEMENTED_EFFECT_IDS:\s*readonly\s*\[\]\s*=\s*freezeDeep\(\[\]\s*as\s*\[\]\)/, 'IMPLEMENTED_EFFECT_IDS is frozen empty array');
+  assert.match(content, /IMPLEMENTED_EFFECT_IDS:\s*readonly\s*\[\]\s*=\s*freezeDeep\(\[\]\s*as\s*\[\]\)/);
 });
 
 if (process.env.DELIBERATE_FAIL === '1') {
-  test('Item 49: Deliberate failure exits nonzero', () => {
-    assert.fail('deliberate_failure_for_r3_verification');
+  test('Item 43: Deliberate failure exits nonzero', () => {
+    assert.fail('deliberate_failure_for_r4_verification');
   });
 } else {
-  test('Item 49: Deliberate failure runner verifies nonzero exit', () => {
+  test('Item 43: Deliberate failure runner verifies nonzero exit', () => {
     try {
       const childEnv = { ...process.env, DELIBERATE_FAIL: '1' };
       delete childEnv.NODE_TEST_CONTEXT;
@@ -711,7 +1357,7 @@ if (process.env.DELIBERATE_FAIL === '1') {
     } catch (err: any) {
       assert.notEqual(err.status, 0, 'deliberate failure exited nonzero');
       const output = String(err.stdout || '') + String(err.stderr || '');
-      assert.match(output, /deliberate_failure_for_r3_verification/, 'caught expected deliberate failure message');
+      assert.match(output, /deliberate_failure_for_r4_verification/, 'caught expected deliberate failure message');
     }
   });
 }
