@@ -2,10 +2,13 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import {
   assignmentIdentityForDriver,
+  dispatchCreateTargetForAssignment,
+  dispatchCreateTargetForDriver,
   driverRealName,
   isCanonicalDriverId,
 } from '../dispatchWriterIdentity.ts';
 import type { DriverIdentity } from '../dispatchDriverIdentity.ts';
+import { buildCreatePayload } from '../staffWriteDispatchCore.ts';
 
 const CANON = '2cad521c-13ac-4b6c-b1ab-07843c6bf06f';
 const LEGACY_HASH = 'a'.repeat(64);
@@ -61,4 +64,17 @@ test('a passcode-hash record key is NEVER promoted to the canonical driverId', (
   const id = assignmentIdentityForDriver(d);
   assert.equal(id.driverId, undefined);
   assert.equal(id.driverHash, LEGACY_HASH);
+});
+
+test('PW create resolves the selected driver company for a platform admin and preserves it on the wire', () => {
+  const assignment = assignmentIdentityForDriver(mike);
+  const target = dispatchCreateTargetForAssignment(true, assignment, [
+    { key: 'other-uuid', companyId: 'other-company', displayName: 'Other' }, mike,
+  ]);
+  assert.deepEqual(target, { companyId: 'liquid-gold' });
+  const payload = buildCreatePayload({ ...assignment, ...target, wellName: 'Gabriel 2', jobType: 'pw' });
+  assert.equal((payload.record as Record<string, unknown>).companyId, 'liquid-gold');
+  assert.deepEqual(dispatchCreateTargetForAssignment(false, assignment, []), {});
+  assert.throws(() => dispatchCreateTargetForAssignment(true, assignment, []), /missing from the driver list/);
+  assert.throws(() => dispatchCreateTargetForDriver(true, { companyId: '' }), /Selected driver has no company/);
 });

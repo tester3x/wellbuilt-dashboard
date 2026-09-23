@@ -21,7 +21,7 @@ import { useSharedNow } from '@/lib/useSharedNow';
 import { projectWellLevel } from '@/lib/wellLevelProjection';
 import { wellDetailHref } from '@/lib/wellDetailLink';
 import { resolveDispatchDriver, dispatchDriverDisplayName, dispatchDriverGroupKey } from '@/lib/dispatchDriverIdentity';
-import { assignmentIdentityForDriver, driverRealName } from '@/lib/dispatchWriterIdentity';
+import { assignmentIdentityForDriver, dispatchCreateTargetForAssignment, driverRealName } from '@/lib/dispatchWriterIdentity';
 // Z Fold recovery — layout helpers only (collapsed queue / stacked layout).
 // Live status is read via the governed adminGetWellPool callable (see effect
 // below); the direct-client RTDB status path is claim-gated and not attempted.
@@ -62,7 +62,7 @@ import {
   type FirestoreProjectWriter,
   type ProjectDataInput,
 } from '@/lib/staffWriteDispatch';
-import { hasCapability } from '@/lib/auth';
+import { hasCapability, isPlatformAdmin } from '@/lib/auth';
 import {
   filterTicketsForCompany,
   invoiceBelongsToCompany,
@@ -339,7 +339,10 @@ function DispatchPageInner() {
 
   const staffCreateDispatch = (record: Record<string, unknown>, options?: ExecuteUnitOptions) => {
     ensureCanCreateDispatch();
-    return _staffCreateDispatch(record, {
+    // For platform admins, resolve the target from the selected roster driver.
+    // The callable independently validates company, driver, well and packet.
+    const target = dispatchCreateTargetForAssignment(isPlatformAdmin(user), record, drivers);
+    return _staffCreateDispatch({ ...record, ...target }, {
       ...options,
       coordinator,
       tenantId: sessionTenantId,
