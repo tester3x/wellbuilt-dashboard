@@ -36,8 +36,35 @@ import {
 } from './operational/dispatchPinRuntime';
 import { packageIndexDocId } from './operational/jobPacketPublish';
 import { INDEX_COLLECTION } from './operational/jobPacketRevisionStore';
+import {
+  authorizeAdminCall,
+  PLATFORM_ADMINS_COLLECTION,
+  WELLBUILT_ADMIN_CLAIM,
+} from '../admin/authority';
 
 const ALLOWED_KEYS = new Set(['op', 'dispatchId', 'record', 'packetRef']);
+const COMPANIES_COLLECTION = 'companies';
+
+/**
+ * Platform-admin authorization path (ALONGSIDE the trusted company-staff path).
+ *
+ * Reuses the canonical server gate in admin/authority.ts (authorizeAdminCall):
+ * a caller is a platform admin only when the verified token carries
+ * wellbuiltAdmin===true AND an enabled platform_admins/{uid} record exists — a
+ * server-owned Firestore read, never a bare client claim. The claim is checked
+ * first purely to skip the read for ordinary staff; authorizeAdminCall remains
+ * the sole decision, so a claim without an enabled record is NOT a shortcut.
+ */
+async function resolvePlatformAdmin(
+  auth: { uid?: string | null; token?: Record<string, unknown> | null } | undefined,
+): Promise<{ isAdmin: true; uid: string } | { isAdmin: false }> {
+  const uid = auth?.uid ?? null;
+  const token = auth?.token ?? null;
+  if (!uid || !token || token[WELLBUILT_ADMIN_CLAIM] !== true) return { isAdmin: false };
+  const snap = await admin.firestore().collection(PLATFORM_ADMINS_COLLECTION).doc(uid).get();
+  const authz = authorizeAdminCall({ uid, token }, snap.exists ? (snap.data() as never) : null);
+  return authz.ok ? { isAdmin: true, uid: authz.actorUid } : { isAdmin: false };
+}
 
 /**
  * Read a driver's AUTHORITATIVE profile from RTDB drivers/profiles/{canonicalId}.
@@ -133,12 +160,25 @@ function throwDecided(decided: { ok: false; reason: string; field?: string }): n
 export const staffWriteDispatch = httpsV2.onCall(
   { timeoutSeconds: 30, memory: '256MiB', enforceAppCheck: false },
   async (request) => {
-    const trusted = await requireTrustedCompanyCapability(
-      request.auth?.uid,
-      TRUSTED_CAPABILITY_MANAGE_DRIVERS,
-    );
-    const access = staffWriteDispatchAccessFromTrusted(trusted);
-    if (!access.ok) throwDecided(access);
+    // Authority order: (a) the platform-admin gate (verified wellbuiltAdmin claim
+    // AND an enabled platform_admins/{uid} record) → PLATFORM ADMIN; else (b) the
+    // UNCHANGED trusted company-staff path. A bare claim is never a shortcut.
+    const platform = await resolvePlatformAdmin(request.auth);
+    let access: { ok: true; uid: string; companyId: string; isPlatformAdmin: boolean };
+    if (platform.isAdmin) {
+      // The acting company is resolved+validated per-op below: create takes the
+      // server-validated target company; update/cancel use the existing dispatch's
+      // own companyId. Never the caller's own company (a platform admin has none).
+      access = { ok: true, uid: platform.uid, companyId: '', isPlatformAdmin: true };
+    } else {
+      const trusted = await requireTrustedCompanyCapability(
+        request.auth?.uid,
+        TRUSTED_CAPABILITY_MANAGE_DRIVERS,
+      );
+      const trustedAccess = staffWriteDispatchAccessFromTrusted(trusted);
+      if (!trustedAccess.ok) throwDecided(trustedAccess);
+      access = trustedAccess;
+    }
     const raw = (request.data || {}) as Record<string, unknown>;
     for (const key of Object.keys(raw)) {
       if ((STAFF_WRITE_DISPATCH_FORBIDDEN_REQUEST_KEYS as readonly string[]).includes(key)) {
@@ -164,6 +204,27 @@ export const staffWriteDispatch = httpsV2.onCall(
     const fs = admin.firestore();
 
     if (op === 'create') {
+      if (access.isPlatformAdmin) {
+        // Platform admin selects the customer via record.companyId. Validate the
+        // target company on the server (it must exist and not be archived), set the
+        // acting company to the validated target, then STRIP the field so the shared
+        // caller-authority guard and the stored dispatch never carry a client
+        // companyId. Driver/well/packet are all validated against this target below.
+        const target = typeof incoming.companyId === 'string' ? incoming.companyId.trim() : '';
+        if (!target) {
+          throw new httpsV2.HttpsError('failed-precondition', 'target_company_required');
+        }
+        const companySnap = await fs.collection(COMPANIES_COLLECTION).doc(target).get();
+        if (!companySnap.exists) {
+          throw new httpsV2.HttpsError('failed-precondition', 'target_company_not_found');
+        }
+        if ((companySnap.data() || {}).status === 'archived') {
+          throw new httpsV2.HttpsError('failed-precondition', 'target_company_archived');
+        }
+        delete incoming.companyId;
+        delete record.companyId;
+        access = { ...access, companyId: target };
+      }
       const id = parseDispatchId(raw.dispatchId);
       if (!id.ok) throwDecided(id);
 
@@ -247,6 +308,15 @@ export const staffWriteDispatch = httpsV2.onCall(
           status: decided.status || 'pending',
           assignedAt: FieldValue.serverTimestamp(),
           assignedBy: fields.assignedBy || access.uid,
+          // Attribution for platform-admin (cross-company) creates. Ordinary staff
+          // creates are unchanged (no extra fields).
+          ...(access.isPlatformAdmin
+            ? {
+                assignedByUid: access.uid,
+                actingPlatformAdminUid: access.uid,
+                targetCompanyId: decided.companyId,
+              }
+            : {}),
         });
         return { result: 'created' as const, dispatchId: id.dispatchId };
       });
@@ -277,6 +347,9 @@ export const staffWriteDispatch = httpsV2.onCall(
           status: 'cancelled',
           cancelledAt: FieldValue.serverTimestamp(),
           cancelledBy: access.uid,
+          ...(access.isPlatformAdmin
+            ? { actingPlatformAdminUid: access.uid, targetCompanyId: decided.companyId }
+            : {}),
         });
         return { idempotent: false as const, dispatchId };
       }
@@ -297,6 +370,9 @@ export const staffWriteDispatch = httpsV2.onCall(
         ...fields,
         updatedAt: FieldValue.serverTimestamp(),
         updatedBy: access.uid,
+        ...(access.isPlatformAdmin
+          ? { actingPlatformAdminUid: access.uid, targetCompanyId: decided.companyId }
+          : {}),
       });
       return { idempotent: false as const, dispatchId };
     });

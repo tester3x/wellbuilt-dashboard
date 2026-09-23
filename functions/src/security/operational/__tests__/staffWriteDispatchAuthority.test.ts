@@ -10,14 +10,21 @@ import {
   STAFF_WRITE_DISPATCH_FORBIDDEN_REQUEST_KEYS,
   STAFF_WRITE_DISPATCH_REQUIRED_CAPABILITY,
   evaluateStaffWriteDispatch,
+  resolveServerAssignmentIdentity,
   staffWriteDispatchAccessFromTrusted,
 } from '../staffWriteDispatch';
 import {
   evaluateCreateIfAbsent,
   loadVerifiedRevisionFromData,
   rejectCallerAuthorityFields,
+  resolveAuthoritativeWell,
   type BirthIdentity,
 } from '../dispatchPacketPin';
+import {
+  ADMIN_POLICY_VERSION,
+  WELLBUILT_ADMIN_CLAIM,
+  authorizeAdminCall,
+} from '../../../admin/authority';
 
 const ROOT = join(__dirname, '..', '..', '..', '..', '..');
 const UID = 'uid-staff-1';
@@ -227,6 +234,112 @@ describe('staffWriteDispatch trusted authority', () => {
     }
     expect(dispatches.size).toBe(0);
     expect(writes).toEqual(['create']);
+  });
+});
+
+describe('staffWriteDispatch platform-admin authorization path', () => {
+  const PA_UID = 'EZHWZBlmkPYpHUq860nAo5ZmDDU2';
+  const TARGET = 'atlas-energy';
+  const adminToken = { [WELLBUILT_ADMIN_CLAIM]: true, email: 'admin@wellbuilt.example' };
+  const enabledRecord = { enabled: true, policyVersion: ADMIN_POLICY_VERSION };
+
+  it('a. platform admin (claim + enabled record) authorizes and creates for a validated target company', () => {
+    const authz = authorizeAdminCall({ uid: PA_UID, token: adminToken }, enabledRecord);
+    expect(authz.ok).toBe(true);
+    // The callable resolves + server-validates the target and passes it as callerCompanyId.
+    const decided = evaluateStaffWriteDispatch({
+      op: 'create',
+      job: null,
+      record: { wellName: 'Python', jobType: 'pw' },
+      callerCompanyId: TARGET,
+      isPlatformAdmin: true,
+    });
+    expect(decided).toMatchObject({ ok: true, op: 'create', companyId: TARGET });
+  });
+
+  it('b. claim WITHOUT an enabled platform_admins record is rejected (no bare-claim shortcut)', () => {
+    expect(authorizeAdminCall({ uid: PA_UID, token: adminToken }, null))
+      .toMatchObject({ ok: false, reason: 'no_admin_record' });
+    expect(authorizeAdminCall({ uid: PA_UID, token: adminToken }, { enabled: false, policyVersion: ADMIN_POLICY_VERSION }))
+      .toMatchObject({ ok: false, reason: 'admin_record_disabled' });
+    // and a create cannot select a tenant from record.companyId without a validated target.
+    expect(evaluateStaffWriteDispatch({
+      op: 'create',
+      job: null,
+      record: { wellName: 'Python', jobType: 'pw', companyId: TARGET },
+      isPlatformAdmin: true,
+    })).toMatchObject({ ok: false, reason: 'target_company_required' });
+  });
+
+  it('c. platform admin create still fails when driver / well / packet do not validate for the target', async () => {
+    // Driver whose profile company differs from the target is rejected.
+    expect(resolveServerAssignmentIdentity({
+      clientDriverId: DRIVER,
+      profile: { exists: true, active: true, companyId: COMPANY, legalName: 'Al', displayName: 'al' },
+      dispatchCompanyId: TARGET,
+      legacyWellPoolCompanyId: COMPANY,
+    })).toMatchObject({ ok: false, reason: 'driver_company_mismatch' });
+
+    // A well owned by another company is excluded from the target's authoritative scope.
+    const catalog = {
+      'Gabriel 2': { wellName: 'Gabriel 2', ndicName: 'GABRIEL 2-28-33H', companyId: COMPANY },
+    };
+    expect(resolveAuthoritativeWell(catalog, { wellName: 'Gabriel 2' }, TARGET))
+      .toMatchObject({ ok: false, reason: 'target_well_not_found' });
+
+    // A packet revision published under another company does not verify for the target.
+    const rev = await loadVerifiedRevisionFromData(
+      true,
+      { companyId: COMPANY, packageId: 'water-hauling', revision: 1 },
+      TARGET,
+      { packageId: 'water-hauling', revision: 1 },
+    );
+    expect(rev.ok).toBe(false);
+  });
+
+  it('c2. a shared (no-companyId) well DOES resolve for a platform admin target', () => {
+    const catalog = {
+      Atlas: { wellName: 'Atlas', ndicName: 'ATLAS 1' }, // no companyId → shared pool
+    };
+    const well = resolveAuthoritativeWell(catalog, { wellName: 'Atlas' }, TARGET);
+    expect(well.ok).toBe(true);
+    if (well.ok) expect(well.well.ndicWellName).toBe('ATLAS 1');
+  });
+
+  it('d. ordinary trusted staff remain company-bound; cross-company is rejected', () => {
+    const access = staffWriteDispatchAccessFromTrusted({ uid: UID, companyId: COMPANY });
+    expect(access.ok).toBe(true);
+    if (access.ok) expect(access.isPlatformAdmin).toBe(false);
+    expect(evaluateStaffWriteDispatch({
+      op: 'create',
+      job: null,
+      record: { wellName: 'Python', jobType: 'pw', companyId: OTHER },
+      callerCompanyId: COMPANY,
+      isPlatformAdmin: false,
+    })).toMatchObject({ ok: false, reason: 'cross_company' });
+  });
+
+  it('e. callable stamps acting UID + target company on platform-admin writes and keeps assignedBy', () => {
+    const callable = readFileSync(
+      join(ROOT, 'functions', 'src', 'security', 'staffWriteDispatchCallable.ts'),
+      'utf8',
+    );
+    // Reuses the canonical admin gate (verified claim AND enabled platform_admins record).
+    expect(callable).toMatch(/authorizeAdminCall/);
+    expect(callable).toMatch(/PLATFORM_ADMINS_COLLECTION/);
+    expect(callable).toMatch(/collection\(PLATFORM_ADMINS_COLLECTION\)\.doc\(uid\)/);
+    expect(callable).toMatch(/token\[WELLBUILT_ADMIN_CLAIM\] !== true/);
+    // Target company is server-validated, never trusted from the client.
+    expect(callable).toMatch(/target_company_required/);
+    expect(callable).toMatch(/target_company_not_found/);
+    expect(callable).toMatch(/collection\(COMPANIES_COLLECTION\)\.doc\(target\)/);
+    // Attribution stamped for platform-admin writes; existing assignedBy preserved.
+    expect(callable).toMatch(/assignedByUid: access\.uid/);
+    expect(callable).toMatch(/actingPlatformAdminUid: access\.uid/);
+    expect(callable).toMatch(/targetCompanyId: decided\.companyId/);
+    expect(callable).toMatch(/assignedBy: fields\.assignedBy \|\| access\.uid/);
+    // Gated on platform admin so ordinary-staff writes carry no extra fields.
+    expect(callable).toMatch(/access\.isPlatformAdmin\s*\n?\s*\?\s*\{/);
   });
 });
 

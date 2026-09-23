@@ -221,6 +221,10 @@ describe('caller authority rejection', () => {
     });
     expect(r.ok).toBe(false);
     expect((r as { reason: string }).reason).toBe('cross_company');
+    // New model: a platform-admin create no longer defaults to the legacy pool.
+    // The acting company is a SERVER-VALIDATED target the callable passes as
+    // callerCompanyId; with no validated target, a bare record.companyId cannot
+    // select a tenant and the create is rejected.
     const admin = evaluateStaffWriteDispatch({
       op: 'create',
       job: null,
@@ -228,7 +232,17 @@ describe('caller authority rejection', () => {
       isPlatformAdmin: true,
     });
     expect(admin.ok).toBe(false);
-    expect((admin as { reason: string }).reason).toBe('caller_company_not_authority');
+    expect((admin as { reason: string }).reason).toBe('target_company_required');
+    // And a record.companyId that disagrees with the validated target is rejected.
+    const mismatch = evaluateStaffWriteDispatch({
+      op: 'create',
+      job: null,
+      record: { wellName: 'Python', jobType: 'pw', companyId: OTHER },
+      callerCompanyId: 'atlas-energy',
+      isPlatformAdmin: true,
+    });
+    expect(mismatch.ok).toBe(false);
+    expect((mismatch as { reason: string }).reason).toBe('target_company_mismatch');
   });
 });
 

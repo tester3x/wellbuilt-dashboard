@@ -257,10 +257,17 @@ export function evaluateStaffWriteDispatch(input: {
     const requestedCompany = asString(record.companyId);
     let companyId = '';
     if (input.isPlatformAdmin) {
-      companyId = LEGACY_WELL_POOL_COMPANY_ID;
-      if (requestedCompany && requestedCompany !== companyId) {
-        return { ok: false, reason: 'caller_company_not_authority', field: 'companyId' };
+      // Platform admin: the acting company is the SERVER-VALIDATED target that the
+      // callable resolved (companies/{target} exists / not archived) and passes as
+      // callerCompanyId. A bare record.companyId never selects a tenant — it must
+      // equal that validated target, and a platform-admin create with no validated
+      // target is rejected rather than silently defaulted to the legacy pool.
+      const target = (input.callerCompanyId || '').trim();
+      if (!target) return { ok: false, reason: 'target_company_required', field: 'companyId' };
+      if (requestedCompany && requestedCompany !== target) {
+        return { ok: false, reason: 'target_company_mismatch', field: 'companyId' };
       }
+      companyId = target;
     } else {
       const caller = (input.callerCompanyId || '').trim();
       if (!caller) return { ok: false, reason: 'unscoped_caller' };
