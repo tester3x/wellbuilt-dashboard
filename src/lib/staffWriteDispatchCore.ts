@@ -1,11 +1,14 @@
 /**
  * Firebase-free CORE for governed Dashboard dispatch writes.
  *
- * Holds the payload serialization (jsonSafe), the exact callable name, the
- * op-specific payload builders, and the runners that push a payload through an
- * injected invoker. The thin staffWriteDispatch.ts wrapper supplies the real
- * httpsCallable; tests supply a mock invoker and assert the wire contract by
- * actually executing this code.
+ * Holds payload serialization (jsonSafe), wire payload builders, and the
+ * DispatchCreationCoordinator governing client-side creation lifecycle:
+ * - Explicit action/batch identity (beginAction, finalizeAction, cancelAction)
+ * - Stable logical unit identity per slot/split
+ * - Idempotent partial-batch retry (successful units are never recreated under new IDs)
+ * - Monotonic generation tokens protecting against stale completion overwrite
+ * - Tenant and user session isolation (per-session ownership, reset on auth change)
+ * - Safe memory bounding (never evict pending/uncertain by age/capacity; prune on finalize/cancel)
  */
 
 /** The deployed callable all three dispatch write ops target. */
@@ -99,6 +102,62 @@ export function materialBirthFieldsMatch(a: Record<string, unknown>, b: Record<s
   return true;
 }
 
+export type UnitStatus =
+  | 'pending'
+  | 'in_flight'
+  | 'succeeded'
+  | 'failed-known'
+  | 'failed-uncertain'
+  | 'canceled';
+
+export interface ActionUnitState {
+  actionId: string;
+  unitId: string;
+  dispatchId: string;
+  payloadRecord: Record<string, unknown>;
+  status: UnitStatus;
+  createdAt: number;
+  updatedAt: number;
+  currentRequestId: number;
+  inFlightPromise?: Promise<{ dispatchId: string }>;
+  lastError?: unknown;
+  result?: { dispatchId: string };
+}
+
+export interface ActionBatchState {
+  actionId: string;
+  actionScope: string;
+  tenantId?: string;
+  userId?: string;
+  createdAt: number;
+  finalizedAt?: number;
+  status: 'active' | 'finalized' | 'canceled';
+  units: Map<string, ActionUnitState>;
+}
+
+export interface CoordinatorOptions {
+  tenantId?: string;
+  userId?: string;
+}
+
+export interface BeginActionOptions {
+  actionId?: string;
+  actionScope?: string;
+  tenantId?: string;
+  userId?: string;
+  batchId?: string;
+}
+
+export interface ExecuteUnitOptions {
+  actionId?: string;
+  actionScope?: string;
+  unitId?: string;
+  unitKey?: string;
+  tenantId?: string;
+  userId?: string;
+  forceReplay?: boolean;
+}
+
 export interface RetainedCreationRequest {
   dispatchId: string;
   unitKey: string;
@@ -107,26 +166,103 @@ export interface RetainedCreationRequest {
   status: 'idle' | 'in_flight' | 'uncertain_error' | 'succeeded';
   inFlightPromise?: Promise<{ dispatchId: string }>;
   lastError?: unknown;
+  actionId?: string;
+  unitId?: string;
 }
 
 /**
- * Coordinates creation actions, ensuring exactly one stable dispatchId is minted
- * at the deliberate creation-action boundary, preserved across rerender, double-click,
- * and retry after uncertain transport failure, and cleared upon definitive success or cancellation.
+ * Coordinates creation actions, ensuring explicit action/batch lifecycle,
+ * stable unit identity, idempotency on partial success, and safe memory bounds.
  */
 export class DispatchCreationCoordinator {
-  private retained = new Map<string, RetainedCreationRequest>();
+  public sessionTenantId?: string;
+  public sessionUserId?: string;
+  public sessionKey: string;
+
+  private actions = new Map<string, ActionBatchState>();
+  private unitKeyIndex = new Map<string, { actionId: string; unitId: string }>();
+
+  constructor(options?: CoordinatorOptions) {
+    this.sessionTenantId = options?.tenantId;
+    this.sessionUserId = options?.userId;
+    this.sessionKey = `${this.sessionUserId || 'anon'}::${this.sessionTenantId || 'nocompany'}`;
+  }
 
   /**
-   * Pre-mint or retrieve a stable dispatchId for a creation action unit.
-   * If caller already supplied an explicit dispatchId on record, that ID is bound and preserved.
+   * Resets the coordinator for a new authenticated session (UID / companyId change or sign-out).
+   * Prunes all retained actions and rebinds session keys.
    */
-  prepareCreation(
+  resetAuthenticatedSession(tenantId?: string, userId?: string): void {
+    this.actions.clear();
+    this.unitKeyIndex.clear();
+    this.sessionTenantId = tenantId;
+    this.sessionUserId = userId;
+    this.sessionKey = `${this.sessionUserId || 'anon'}::${this.sessionTenantId || 'nocompany'}`;
+  }
+
+  /**
+   * Begin or register an explicit action/batch.
+   * Assigns a stable actionId and creates an active ActionBatchState.
+   */
+  beginAction(options?: BeginActionOptions): string {
+    const actionId = options?.actionId || options?.batchId || ('act_' + mintDispatchId());
+    const actionScope = options?.actionScope || 'default';
+    const tenantId = options?.tenantId ?? this.sessionTenantId;
+    const userId = options?.userId ?? this.sessionUserId;
+
+    const existing = this.actions.get(actionId);
+    if (existing && existing.status === 'active') {
+      return actionId;
+    }
+
+    const batch: ActionBatchState = {
+      actionId,
+      actionScope,
+      tenantId,
+      userId,
+      createdAt: Date.now(),
+      status: 'active',
+      units: new Map<string, ActionUnitState>(),
+    };
+    this.actions.set(actionId, batch);
+    return actionId;
+  }
+
+  /**
+   * Prepare a unit under an action.
+   * Mints or preserves stable dispatchId, handles re-entry and material change checks.
+   */
+  prepareUnit(
+    actionId: string,
+    unitId: string,
     record: Record<string, unknown>,
-    options?: { unitKey?: string }
-  ): { dispatchId: string; unitKey: string } {
-    const unitKey = computeCreationUnitKey(record, options?.unitKey);
-    const existing = this.retained.get(unitKey);
+    options?: { actionScope?: string; tenantId?: string; userId?: string }
+  ): { dispatchId: string; unitId: string; actionId: string } {
+    // Validate payload (e.g. decline fields) before binding or retaining unit state
+    jsonSafe(record);
+
+    let action = this.actions.get(actionId);
+    if (!action || action.status !== 'active') {
+      this.beginAction({
+        actionId,
+        actionScope: options?.actionScope || 'default',
+        tenantId: options?.tenantId ?? this.sessionTenantId,
+        userId: options?.userId ?? this.sessionUserId,
+      });
+      action = this.actions.get(actionId)!;
+    }
+
+    // Verify tenant and user scope isolation
+    const reqTenant = (typeof record.companyId === 'string' ? record.companyId : options?.tenantId) ?? this.sessionTenantId;
+    if (action.tenantId && reqTenant && action.tenantId !== reqTenant) {
+      throw new Error(`tenant_isolation_violation: action tenant ${action.tenantId} != request tenant ${reqTenant}`);
+    }
+    const reqUser = (typeof record.assignedByUid === 'string' ? record.assignedByUid : options?.userId) ?? this.sessionUserId;
+    if (action.userId && reqUser && action.userId !== reqUser) {
+      throw new Error(`user_isolation_violation: action user ${action.userId} != request user ${reqUser}`);
+    }
+
+    let unit = action.units.get(unitId);
 
     const explicitId = typeof record.id === 'string' && record.id.trim()
       ? record.id.trim()
@@ -134,128 +270,359 @@ export class DispatchCreationCoordinator {
         ? record.dispatchId.trim()
         : '');
 
-    if (existing && existing.status !== 'succeeded') {
-      // Check if material birth fields match the active deliberate creation action
-      if (materialBirthFieldsMatch(existing.payloadRecord, record)) {
-        return { dispatchId: existing.dispatchId, unitKey };
+    if (unit) {
+      // If unit already succeeded, preserve identity
+      if (unit.status === 'succeeded') {
+        return { dispatchId: unit.dispatchId, unitId, actionId };
       }
-      // Material change constitutes a new deliberate action: invalidate previous retained request
-      this.retained.delete(unitKey);
+      // If material birth fields match, preserve existing dispatchId across rerender/re-entry
+      if (materialBirthFieldsMatch(unit.payloadRecord, record)) {
+        // Presentation field update (Requirement 7): update payload without changing dispatchId
+        unit.payloadRecord = { ...unit.payloadRecord, ...record, dispatchId: unit.dispatchId };
+        unit.updatedAt = Date.now();
+        return { dispatchId: unit.dispatchId, unitId, actionId };
+      }
+      // Materially different immutable birth (Requirement 6):
+      // If birth fields changed materially, it's a new deliberate action for this slot.
+      const newDispatchId = explicitId || mintDispatchId();
+      unit.dispatchId = newDispatchId;
+      unit.payloadRecord = { ...record, dispatchId: newDispatchId };
+      unit.status = 'pending';
+      unit.updatedAt = Date.now();
+      return { dispatchId: newDispatchId, unitId, actionId };
     }
 
+    // New unit for this action
     const dispatchId = explicitId || mintDispatchId();
-    const req: RetainedCreationRequest = {
+    unit = {
+      actionId,
+      unitId,
       dispatchId,
-      unitKey,
       payloadRecord: { ...record, dispatchId },
+      status: 'pending',
       createdAt: Date.now(),
-      status: 'idle',
+      updatedAt: Date.now(),
+      currentRequestId: 0,
     };
-    this.retained.set(unitKey, req);
-    return { dispatchId, unitKey };
+    action.units.set(unitId, unit);
+    this.unitKeyIndex.set(`${actionId}::${unitId}`, { actionId, unitId });
+    return { dispatchId, unitId, actionId };
   }
 
   /**
-   * Execute or retry dispatch creation for this action unit.
+   * Execute dispatch creation for an action unit.
    *
-   * In-flight protection (Requirement 6):
-   * If this unit is currently in-flight, returns the active promise (prevents double-click duplicate calls).
-   *
-   * Retry protection (Requirements 2, 3, 7):
-   * If previous attempt failed with uncertain error, reuses the exact same dispatchId and payload.
-   *
-   * Success clearance (Requirement 8):
-   * Upon definitive success, clears the retained request so subsequent actions receive a fresh ID.
+   * Guarantees:
+   * 1. In-flight protection (Req 1): joins existing in-flight promise.
+   * 2. Retry protection (Req 2, 3, 4, 7, 20, 21): reuses exact dispatchId on retry.
+   * 3. Succeeded retention (Req 5, 20): succeeded units in batch are NOT recreated under new IDs;
+   *    they return retained success (or safe replay).
+   * 4. Stale-completion guard (Req F3, 26-30): stale completion generation cannot overwrite or clear newer identity.
    */
-  async executeCreate(
+  async executeUnit(
     invoke: CallableInvoker,
     record: Record<string, unknown>,
-    options?: { unitKey?: string }
+    options?: ExecuteUnitOptions
   ): Promise<{ dispatchId: string }> {
-    const { dispatchId, unitKey } = this.prepareCreation(record, options);
-    const req = this.retained.get(unitKey)!;
-
-    // In-flight guard: if request is already executing, join existing promise
-    if (req.status === 'in_flight' && req.inFlightPromise) {
-      return req.inFlightPromise;
+    if (this.sessionTenantId && record.companyId && record.companyId !== this.sessionTenantId) {
+      throw new Error(`tenant_isolation_violation: coordinator tenant ${this.sessionTenantId} != payload companyId ${record.companyId}`);
     }
 
-    // Merge stable dispatchId into payload without relying on caller mutating temporary object
+    const isExplicitAction = Boolean(options?.actionId || options?.actionScope);
+    const actionScope = options?.actionScope || 'default';
+    const unitKey = computeCreationUnitKey(record, options?.unitKey);
+    const unitId = options?.unitId || unitKey;
+    const actionId = options?.actionId || (options?.actionScope ? `act_${options.actionScope}` : `act_${unitKey}`);
+
+    const { dispatchId } = this.prepareUnit(actionId, unitId, record, {
+      actionScope,
+      tenantId: options?.tenantId,
+      userId: options?.userId,
+    });
+
+    const action = this.actions.get(actionId)!;
+    const unit = action.units.get(unitId)!;
+
+    // Check if already succeeded (Requirement 20: partial batch retry)
+    if (unit.status === 'succeeded' && !options?.forceReplay) {
+      return unit.result || { dispatchId: unit.dispatchId };
+    }
+
+    // In-flight guard (Requirement 1: double-click joins active promise)
+    if (unit.status === 'in_flight' && unit.inFlightPromise) {
+      return unit.inFlightPromise;
+    }
+
+    // Generation token for stale guard (Requirement F3, 26-30)
+    unit.currentRequestId++;
+    const thisRequestId = unit.currentRequestId;
+    unit.status = 'in_flight';
+
+    // Merge stable dispatchId into payload and caller record
     const finalRecord: Record<string, unknown> = {
-      ...req.payloadRecord,
+      ...unit.payloadRecord,
       ...record,
-      dispatchId,
+      dispatchId: unit.dispatchId,
     };
-    req.payloadRecord = finalRecord;
-    // Also write back to caller record for compatibility
-    record.dispatchId = dispatchId;
+    unit.payloadRecord = finalRecord;
+    record.dispatchId = unit.dispatchId;
 
     const payload = buildCreatePayload(finalRecord);
-    req.status = 'in_flight';
 
     const promise = (async () => {
       try {
         const res = await invoke(payload);
-        req.status = 'succeeded';
-        // Definitively successful: clear retained request
-        this.retained.delete(unitKey);
-        return res.data as { dispatchId: string };
-      } catch (err) {
-        req.status = 'uncertain_error';
-        req.lastError = err;
-        req.inFlightPromise = undefined;
+
+        // Stale guard: verify this resolution still matches the active request generation
+        if (unit.currentRequestId === thisRequestId) {
+          unit.status = 'succeeded';
+          unit.result = (res.data as { dispatchId: string }) || { dispatchId: unit.dispatchId };
+          unit.inFlightPromise = undefined;
+          unit.updatedAt = Date.now();
+          if (!isExplicitAction) {
+            this.finalizeAction(actionId);
+          }
+        }
+        return (res.data as { dispatchId: string }) || { dispatchId: unit.dispatchId };
+      } catch (err: any) {
+        // Stale guard: verify error matches current generation
+        if (unit.currentRequestId === thisRequestId) {
+          const isKnown = err && (err.code === 'permission-denied' || err.code === 'invalid-argument' || err.message?.includes('validation') || err.message?.includes('immutable'));
+          unit.status = isKnown ? 'failed-known' : 'failed-uncertain';
+          unit.lastError = err;
+          unit.inFlightPromise = undefined;
+          unit.updatedAt = Date.now();
+        }
         throw err;
       }
     })();
 
-    req.inFlightPromise = promise;
+    unit.inFlightPromise = promise;
     return promise;
   }
 
-  clear(unitKey?: string): void {
-    if (unitKey) {
-      this.retained.delete(unitKey);
-    } else {
-      this.retained.clear();
+  /**
+   * Finalize an action/batch after all units succeed.
+   * Prunes the completed action and its units from memory (Requirement 22, F4).
+   */
+  finalizeAction(actionId: string): void {
+    const action = this.actions.get(actionId);
+    if (!action) return;
+    action.status = 'finalized';
+    action.finalizedAt = Date.now();
+    for (const unitId of action.units.keys()) {
+      this.unitKeyIndex.delete(`${actionId}::${unitId}`);
+    }
+    this.actions.delete(actionId);
+  }
+
+  /**
+   * Cancel an explicit action/batch.
+   * ONLY clears this specific action and its units. Never clears unrelated actions (Requirement F1, 8-15).
+   */
+  cancelAction(actionId: string): void {
+    const action = this.actions.get(actionId);
+    if (!action) return;
+    action.status = 'canceled';
+    for (const unit of action.units.values()) {
+      unit.status = 'canceled';
+      unit.inFlightPromise = undefined;
+      this.unitKeyIndex.delete(`${actionId}::${unit.unitId}`);
+    }
+    this.actions.delete(actionId);
+  }
+
+  /**
+   * Cancel an action by actionId or actionScope.
+   * Preserves all other actions.
+   */
+  cancelCreation(scopeOrActionId: string): void {
+    if (this.actions.has(scopeOrActionId)) {
+      this.cancelAction(scopeOrActionId);
+      return;
+    }
+    const matching = [];
+    for (const [actionId, action] of this.actions.entries()) {
+      if (action.actionScope === scopeOrActionId || actionId === `act_${scopeOrActionId}`) {
+        matching.push(actionId);
+      }
+    }
+    for (const aid of matching) {
+      this.cancelAction(aid);
+    }
+  }
+
+  /**
+   * Retry all non-succeeded units under an action.
+   */
+  async retryAction(actionId: string, invoke: CallableInvoker): Promise<Array<{ dispatchId: string }>> {
+    const action = this.actions.get(actionId);
+    if (!action) throw new Error(`action_not_found:${actionId}`);
+    const results: Array<{ dispatchId: string }> = [];
+    for (const unit of action.units.values()) {
+      const res = await this.executeUnit(invoke, unit.payloadRecord, {
+        actionId,
+        unitId: unit.unitId,
+        actionScope: action.actionScope,
+      });
+      results.push(res);
+    }
+    return results;
+  }
+
+  // --- Backwards Compatibility / Single-Unit Convenience Methods ---
+
+  prepareCreation(
+    record: Record<string, unknown>,
+    options?: { unitKey?: string; actionId?: string; actionScope?: string }
+  ): { dispatchId: string; unitKey: string } {
+    const unitKey = computeCreationUnitKey(record, options?.unitKey);
+    const actionId = options?.actionId || (options?.actionScope ? `act_${options.actionScope}` : `act_${unitKey}`);
+    const unitId = unitKey;
+    const res = this.prepareUnit(actionId, unitId, record, {
+      actionScope: options?.actionScope,
+    });
+    return { dispatchId: res.dispatchId, unitKey };
+  }
+
+  async executeCreate(
+    invoke: CallableInvoker,
+    record: Record<string, unknown>,
+    options?: ExecuteUnitOptions
+  ): Promise<{ dispatchId: string }> {
+    return this.executeUnit(invoke, record, options);
+  }
+
+  clear(unitKeyOrActionId?: string): void {
+    if (!unitKeyOrActionId) {
+      this.actions.clear();
+      this.unitKeyIndex.clear();
+      return;
+    }
+    if (this.actions.has(unitKeyOrActionId)) {
+      this.cancelAction(unitKeyOrActionId);
+      return;
+    }
+    this.cancelCreation(unitKeyOrActionId);
+    for (const [actionId, action] of this.actions.entries()) {
+      if (action.units.has(unitKeyOrActionId)) {
+        action.units.delete(unitKeyOrActionId);
+        this.unitKeyIndex.delete(`${actionId}::${unitKeyOrActionId}`);
+        if (action.units.size === 0) {
+          this.actions.delete(actionId);
+        }
+      }
     }
   }
 
   clearAll(): void {
-    this.retained.clear();
+    this.actions.clear();
+    this.unitKeyIndex.clear();
   }
 
   cancelAll(): void {
-    this.retained.clear();
+    this.actions.clear();
+    this.unitKeyIndex.clear();
   }
 
-  isInFlight(unitKey?: string): boolean {
-    if (unitKey) {
-      return this.retained.get(unitKey)?.status === 'in_flight';
+  isInFlight(unitKeyOrActionId?: string): boolean {
+    if (unitKeyOrActionId) {
+      const action = this.actions.get(unitKeyOrActionId);
+      if (action) {
+        for (const u of action.units.values()) {
+          if (u.status === 'in_flight') return true;
+        }
+      }
+      for (const act of this.actions.values()) {
+        const u = act.units.get(unitKeyOrActionId);
+        if (u && u.status === 'in_flight') return true;
+      }
+      return false;
     }
-    for (const req of this.retained.values()) {
-      if (req.status === 'in_flight') return true;
+    for (const act of this.actions.values()) {
+      for (const u of act.units.values()) {
+        if (u.status === 'in_flight') return true;
+      }
     }
     return false;
   }
 
+  getAction(actionId: string): ActionBatchState | undefined {
+    return this.actions.get(actionId);
+  }
+
+  getUnit(actionId: string, unitId: string): ActionUnitState | undefined {
+    return this.actions.get(actionId)?.units.get(unitId);
+  }
+
   getRetainedRequest(unitKey: string): RetainedCreationRequest | undefined {
-    return this.retained.get(unitKey);
+    for (const action of this.actions.values()) {
+      const unit = action.units.get(unitKey);
+      if (unit) {
+        const statusMap: Record<UnitStatus, 'idle' | 'in_flight' | 'uncertain_error' | 'succeeded'> = {
+          pending: 'idle',
+          in_flight: 'in_flight',
+          'failed-known': 'uncertain_error',
+          'failed-uncertain': 'uncertain_error',
+          succeeded: 'succeeded',
+          canceled: 'idle',
+        };
+        return {
+          dispatchId: unit.dispatchId,
+          unitKey,
+          payloadRecord: unit.payloadRecord,
+          createdAt: unit.createdAt,
+          status: statusMap[unit.status] || 'idle',
+          inFlightPromise: unit.inFlightPromise,
+          lastError: unit.lastError,
+          actionId: unit.actionId,
+          unitId: unit.unitId,
+        };
+      }
+    }
+    return undefined;
   }
 
   getAllRetained(): RetainedCreationRequest[] {
-    return Array.from(this.retained.values());
+    const list: RetainedCreationRequest[] = [];
+    for (const action of this.actions.values()) {
+      for (const [unitKey, unit] of action.units.entries()) {
+        const statusMap: Record<UnitStatus, 'idle' | 'in_flight' | 'uncertain_error' | 'succeeded'> = {
+          pending: 'idle',
+          in_flight: 'in_flight',
+          'failed-known': 'uncertain_error',
+          'failed-uncertain': 'uncertain_error',
+          succeeded: 'succeeded',
+          canceled: 'idle',
+        };
+        list.push({
+          dispatchId: unit.dispatchId,
+          unitKey,
+          payloadRecord: unit.payloadRecord,
+          createdAt: unit.createdAt,
+          status: statusMap[unit.status] || 'idle',
+          inFlightPromise: unit.inFlightPromise,
+          lastError: unit.lastError,
+          actionId: unit.actionId,
+          unitId: unit.unitId,
+        });
+      }
+    }
+    return list;
   }
 }
 
-let globalCoordinator: DispatchCreationCoordinator | null = null;
-export function getGlobalCreationCoordinator(): DispatchCreationCoordinator {
-  if (!globalCoordinator) {
-    globalCoordinator = new DispatchCreationCoordinator();
+let defaultCoordinator: DispatchCreationCoordinator | null = null;
+export function getGlobalCreationCoordinator(options?: CoordinatorOptions): DispatchCreationCoordinator {
+  if (!defaultCoordinator) {
+    defaultCoordinator = new DispatchCreationCoordinator(options);
+  } else if (options?.tenantId && defaultCoordinator.sessionTenantId !== options.tenantId) {
+    defaultCoordinator.resetAuthenticatedSession(options.tenantId, options.userId);
   }
-  return globalCoordinator;
+  return defaultCoordinator;
 }
-export function resetGlobalCreationCoordinator(): void {
-  globalCoordinator = new DispatchCreationCoordinator();
+export function resetGlobalCreationCoordinator(options?: CoordinatorOptions): void {
+  defaultCoordinator = new DispatchCreationCoordinator(options);
 }
 
 /**
@@ -272,7 +639,6 @@ export function buildCreatePayload(record: Record<string, unknown>): Record<stri
       : '');
   if (!dispatchId) {
     dispatchId = mintDispatchId();
-    // Attach back to caller's in-memory record so immediate retries reuse this exact ID.
     record.dispatchId = dispatchId;
   }
 
@@ -307,10 +673,10 @@ export async function runCreateDispatch(
   invoke: CallableInvoker,
   record: Record<string, unknown>,
   coordinator?: DispatchCreationCoordinator,
-  options?: { unitKey?: string }
+  options?: ExecuteUnitOptions
 ): Promise<{ dispatchId: string }> {
   const coord = coordinator || getGlobalCreationCoordinator();
-  return coord.executeCreate(invoke, record, options);
+  return coord.executeUnit(invoke, record, options);
 }
 
 export async function runUpdateDispatch(invoke: CallableInvoker, dispatchId: string, record: Record<string, unknown>): Promise<void> {

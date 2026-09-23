@@ -1,6 +1,6 @@
 'use client';
 
-import { useEffect, useState, useMemo, useCallback, Suspense, type ReactNode } from 'react';
+import { useEffect, useState, useMemo, useCallback, useRef, Suspense, type ReactNode } from 'react';
 import { useRouter, useSearchParams, usePathname } from 'next/navigation';
 import { useAuth } from '@/contexts/AuthContext';
 import { useSessionDeepLinkState } from '@/lib/useSessionDeepLinkState';
@@ -47,6 +47,9 @@ import {
   staffCreateDispatch as _staffCreateDispatch,
   staffUpdateDispatch as _staffUpdateDispatch,
   cancelRetainedCreation,
+  DispatchCreationCoordinator,
+  ExecuteUnitOptions,
+  mintDispatchId,
 } from '@/lib/staffWriteDispatch';
 import { hasCapability } from '@/lib/auth';
 import {
@@ -284,9 +287,53 @@ function DispatchPageInner() {
     }
     return true;
   };
-  const staffCreateDispatch = (record: Record<string, unknown>, options?: { unitKey?: string }) => {
+
+  // Session-owned creation coordinator (per-session/tab isolation, UID + companyId scoped)
+  const sessionTenantId = user?.companyId || userCompany?.id || undefined;
+  const sessionUserId = user?.uid || undefined;
+  const coordinatorRef = useRef<DispatchCreationCoordinator | null>(null);
+  const sessionKey = `${sessionUserId || 'anon'}::${sessionTenantId || 'nocompany'}`;
+
+  if (!coordinatorRef.current || coordinatorRef.current.sessionKey !== sessionKey) {
+    if (coordinatorRef.current) {
+      coordinatorRef.current.resetAuthenticatedSession(sessionTenantId, sessionUserId);
+    }
+    coordinatorRef.current = new DispatchCreationCoordinator({
+      tenantId: sessionTenantId,
+      userId: sessionUserId,
+    });
+  }
+  const coordinator = coordinatorRef.current;
+
+  useEffect(() => {
+    return () => {
+      coordinatorRef.current?.clearAll();
+    };
+  }, []);
+
+  const cancelScopedCreation = (actionScopeOrId?: string) => {
+    cancelRetainedCreation(actionScopeOrId, coordinator);
+  };
+  const beginAction = (scope: string, actionId?: string) => {
+    return coordinator.beginAction({
+      actionId,
+      actionScope: scope,
+      tenantId: sessionTenantId,
+      userId: sessionUserId,
+    });
+  };
+  const finalizeAction = (actionId: string) => {
+    coordinator.finalizeAction(actionId);
+  };
+
+  const staffCreateDispatch = (record: Record<string, unknown>, options?: ExecuteUnitOptions) => {
     ensureCanCreateDispatch();
-    return _staffCreateDispatch(record, options);
+    return _staffCreateDispatch(record, {
+      ...options,
+      coordinator,
+      tenantId: sessionTenantId,
+      userId: sessionUserId,
+    });
   };
   const staffUpdateDispatch = (dispatchId: string, record: Record<string, unknown>) => {
     ensureCanCreateDispatch();
@@ -1247,7 +1294,13 @@ function DispatchPageInner() {
         } : {}),
       };
 
-      await staffCreateDispatch(job);
+      const actionId = `assign_${assignTarget.wellName}_${driver.key}`;
+      await staffCreateDispatch(job, {
+        actionId,
+        actionScope: 'assign-modal',
+        unitId: `${assignTarget.wellName}::${driver.key}`,
+      });
+      finalizeAction(actionId);
 
       // Track PW usage for R&D pipeline (non-blocking)
       const compId = user?.companyId || driver.companyId || 'unknown';
@@ -1304,6 +1357,9 @@ function DispatchPageInner() {
         ? 2 + swExtraSplitLegs.length
         : undefined;
 
+      const batchActionId = `sw_${serviceGroupId || splitGroupId || mintDispatchId()}`;
+      beginAction('service-work-modal', batchActionId);
+
       const promises = selectedDrivers.map(driver => {
         const baseJob: Omit<DispatchJob, 'id'> = {
           // Canonical driver identity contract (driverId + canonical driverHash + real name).
@@ -1327,7 +1383,13 @@ function DispatchPageInner() {
           ...(splitGroupId ? { splitGroupId, splitSequence: 1, ...(splitTotal != null ? { splitTotal } : {}) } : {}),
         };
 
-        const docs = [staffCreateDispatch(baseJob)];
+        const docs = [
+          staffCreateDispatch(baseJob, {
+            actionId: batchActionId,
+            actionScope: 'service-work-modal',
+            unitId: `${driver.key}::leg1`,
+          }),
+        ];
 
         // Split ticket: create second linked job (drop-off → service work at destination)
         if (swSplitTicket && swDropoff.trim()) {
@@ -1341,7 +1403,13 @@ function DispatchPageInner() {
             splitSequence: 2,
             ...(splitTotal != null ? { splitTotal } : {}),
           };
-          docs.push(staffCreateDispatch(job2));
+          docs.push(
+            staffCreateDispatch(job2, {
+              actionId: batchActionId,
+              actionScope: 'service-work-modal',
+              unitId: `${driver.key}::leg2`,
+            })
+          );
         }
 
         // Extra split legs (C/D/E…) — same metadata namespace as leg B, no
@@ -1366,7 +1434,13 @@ function DispatchPageInner() {
               ...(splitTotal != null ? { splitTotal } : {}),
               ...(isFinite(bblsNum) && bblsNum > 0 ? { bbls: bblsNum } : {}),
             };
-            docs.push(staffCreateDispatch(extraJob));
+            docs.push(
+              staffCreateDispatch(extraJob, {
+                actionId: batchActionId,
+                actionScope: 'service-work-modal',
+                unitId: `${driver.key}::leg${3 + idx}`,
+              })
+            );
           });
         }
 
@@ -1374,6 +1448,7 @@ function DispatchPageInner() {
       });
 
       await Promise.all(promises);
+      finalizeAction(batchActionId);
 
       // Track job type usage for R&D pipeline (non-blocking)
       const compId = user?.companyId || selectedDrivers[0]?.companyId || 'unknown';
@@ -1508,6 +1583,8 @@ function DispatchPageInner() {
 
       // Create dispatches for today's assigned drivers
       if (newProjectDriverHashes.size > 0) {
+        const batchActionId = `proj_create_${docRef.id}`;
+        beginAction('create-project', batchActionId);
         for (const wellName of newProjectWells) {
           const wellData = wells.find(w => w.wellName === wellName);
           for (const driverHash of newProjectDriverHashes) {
@@ -1535,9 +1612,14 @@ function DispatchPageInner() {
               projectId: docRef.id,
               notes: newProjectNotes.trim() || null,
               ...(driverDisposal ? { disposal: driverDisposal.name, disposalLat: driverDisposal.lat, disposalLng: driverDisposal.lng } : {}),
+            }, {
+              actionId: batchActionId,
+              actionScope: 'create-project',
+              unitId: `${wellName}::${driverHash}`,
             });
           }
         }
+        finalizeAction(batchActionId);
       }
 
       // Auto-create project chat thread with all assigned drivers
@@ -1633,6 +1715,8 @@ function DispatchPageInner() {
       // Create dispatches for this driver for project wells
       const driver = drivers.find(d => d.key === driverHash);
       if (driver) {
+        const batchActionId = `proj_add_${projectId}_${driverHash}`;
+        beginAction('add-driver-to-project', batchActionId);
         const driverFirstName = driver.legalName ? driver.legalName.split(' ')[0] : driver.displayName;
         for (const wellName of project.wellNames) {
           const wellData = wells.find(w => w.wellName === wellName);
@@ -1653,8 +1737,13 @@ function DispatchPageInner() {
             assignedBy: user?.email || '',
             projectId: projectId,
             ...(driverDisposal ? { disposal: driverDisposal.name, disposalLat: driverDisposal.lat, disposalLng: driverDisposal.lng } : {}),
+          }, {
+            actionId: batchActionId,
+            actionScope: 'add-driver-to-project',
+            unitId: `${projectId}::${driverHash}::${wellName}`,
           });
         }
+        finalizeAction(batchActionId);
       }
       // Auto-add driver to existing project chat thread
       if (driver) {
@@ -1717,6 +1806,9 @@ function DispatchPageInner() {
           .map(d => `${d.driverHash}::${d.wellName}`)
       );
 
+      const batchActionId = `proj_sched_${projectId}`;
+      beginAction('assign-scheduled', batchActionId);
+
       let created = 0;
       for (const wellName of project.wellNames) {
         const wellData = wells.find(w => w.wellName === wellName);
@@ -1744,10 +1836,15 @@ function DispatchPageInner() {
             projectId,
             notes: project.notes || undefined,
             ...(driverDisposal ? { disposal: driverDisposal.name, disposalLat: driverDisposal.lat, disposalLng: driverDisposal.lng } : {}),
+          }, {
+            actionId: batchActionId,
+            actionScope: 'assign-scheduled',
+            unitId: `${projectId}::${driverHash}::${wellName}`,
           });
           created++;
         }
       }
+      finalizeAction(batchActionId);
 
       // Merge drivers into today's schedule
       const currentSchedule = project.driverSchedule || {};
@@ -1910,7 +2007,13 @@ function DispatchPageInner() {
       if (reassignJob.assignedDrivers) newJob.assignedDrivers = reassignJob.assignedDrivers;
       if (reassignJob.disposalLegalDesc) newJob.disposalLegalDesc = reassignJob.disposalLegalDesc;
 
-      await staffCreateDispatch(newJob);
+      const actionId = `reassign_${reassignJob.id || reassignJob.wellName}_${driver.key}`;
+      await staffCreateDispatch(newJob, {
+        actionId,
+        actionScope: 'reassign-modal',
+        unitId: `${reassignJob.id || reassignJob.wellName}::${driver.key}`,
+      });
+      finalizeAction(actionId);
 
       // Update the original job
       if (reassignJob.id) {
@@ -2017,6 +2120,9 @@ function DispatchPageInner() {
       if (!driver) throw new Error('Driver not found');
       const firestore = getFirestoreDb();
 
+      const batchActionId = `multi_assign_${driver.key}_${selectedWells.size}`;
+      beginAction('multi-assign-modal', batchActionId);
+
       // Create one dispatch doc per well with loadCount from Action # boxes
       const promises: Promise<any>[] = [];
       selectedWells.forEach((loadCount, wellName) => {
@@ -2055,10 +2161,15 @@ function DispatchPageInner() {
             ...(assignDisposalWell?.county ? { disposalCounty: assignDisposalWell.county } : {}),
           } : {}),
         };
-        promises.push(staffCreateDispatch(job));
+        promises.push(staffCreateDispatch(job, {
+          actionId: batchActionId,
+          actionScope: 'multi-assign-modal',
+          unitId: `${wellName}::${driver.key}`,
+        }));
       });
 
       await Promise.all(promises);
+      finalizeAction(batchActionId);
       setMessage(`Dispatched ${totalSelectedLoads} load${totalSelectedLoads !== 1 ? 's' : ''} across ${selectedWells.size} well${selectedWells.size !== 1 ? 's' : ''} to ${driver.legalName || driver.displayName}`);
 
       // Reset — clear selections + DPW form
@@ -2184,6 +2295,9 @@ function DispatchPageInner() {
         // Build full crew list
         const allDrivers = [...editSwGroupJobs.map(j => j.driverFirstName || j.driverName), ...newDrivers.map(getFirstName)];
 
+        const batchActionId = `edit_sw_crew_${editSwJob.id || editSwJob.wellName}`;
+        beginAction('edit-sw-modal', batchActionId);
+
         // Create new dispatch docs for added drivers
         const addPromises = newDrivers.map(driver => {
           const job: Omit<DispatchJob, 'id'> = {
@@ -2202,9 +2316,14 @@ function DispatchPageInner() {
             serviceGroupId,
             assignedDrivers: allDrivers,
           };
-          return staffCreateDispatch(job);
+          return staffCreateDispatch(job, {
+            actionId: batchActionId,
+            actionScope: 'edit-sw-modal',
+            unitId: `${editSwJob.id || editSwJob.wellName}::${driver.key}`,
+          });
         });
         await Promise.all(addPromises);
+        finalizeAction(batchActionId);
 
         // Update assignedDrivers on all existing group jobs
         const updateCrewPromises = editSwGroupJobs.map(j => {
@@ -2280,7 +2399,13 @@ function DispatchPageInner() {
       if (editSwJob.disposalLegalDesc) newJob.disposalLegalDesc = editSwJob.disposalLegalDesc;
       if (loadsToGive > 1) newJob.loadCount = loadsToGive;
 
-      await staffCreateDispatch(newJob);
+      const actionId = `split_loads_${editSwJob.id || editSwJob.wellName}_${driver.key}`;
+      await staffCreateDispatch(newJob, {
+        actionId,
+        actionScope: 'split-loads',
+        unitId: `${editSwJob.id || editSwJob.wellName}::${driver.key}`,
+      });
+      finalizeAction(actionId);
 
       await staffUpdateDispatch(editSwJob.id, {
         loadCount: (editSwJob.loadsCompleted || 0) + loadsKept,
@@ -2437,7 +2562,7 @@ function DispatchPageInner() {
                             aria-label="Selected well"
                             className="w-full px-3 py-1.5 bg-gray-900 border rounded text-white text-sm focus:outline-none border-blue-500 font-bold"
                           />
-                          <button onClick={() => { cancelRetainedCreation(); setAssignTarget(null); setAssignDriverHash(''); setAssignWellSearch(''); }}
+                          <button onClick={() => { cancelScopedCreation('assign-modal'); setAssignTarget(null); setAssignDriverHash(''); setAssignWellSearch(''); }}
                             className="absolute right-2 top-7 text-gray-400 hover:text-white text-xs">✕</button>
                         </>
                       ) : (
@@ -3112,7 +3237,7 @@ function DispatchPageInner() {
                     {totalSelectedLoads !== selectedWells.size && <span className="text-blue-300 ml-1">({totalSelectedLoads} loads)</span>}
                   </span>
                   <span className="flex-1" />
-                  <button onClick={() => { cancelRetainedCreation(); setSelectedWells(new Map()); setAssignTarget(null); }} className="text-gray-400 hover:text-white text-xs">Clear</button>
+                  <button onClick={() => { cancelScopedCreation('multi-assign-modal'); setSelectedWells(new Map()); setAssignTarget(null); }} className="text-gray-400 hover:text-white text-xs">Clear</button>
                 </div>
               )}
 
@@ -3663,7 +3788,7 @@ function DispatchPageInner() {
             {/* Buttons */}
             <div className="flex gap-3">
               <button
-                onClick={() => { cancelRetainedCreation(); setReassignJob(null); setReassignDriverHash(''); }}
+                onClick={() => { cancelScopedCreation('reassign-modal'); setReassignJob(null); setReassignDriverHash(''); }}
                 className="flex-1 px-4 py-2 bg-gray-700 hover:bg-gray-600 text-white rounded-lg transition-colors"
               >
                 Cancel
@@ -3691,7 +3816,7 @@ function DispatchPageInner() {
                 Edit {editSwJob.jobType === 'service' ? 'Service Work' : 'Dispatch'}
               </h3>
               <button
-                onClick={() => { cancelRetainedCreation(); setEditSwJob(null); }}
+                onClick={() => { cancelScopedCreation('edit-sw-modal'); setEditSwJob(null); }}
                 className="text-gray-400 hover:text-white"
               >&#10005;</button>
             </div>
@@ -3869,7 +3994,7 @@ function DispatchPageInner() {
                   </button>
                   <span className="flex-1" />
                   <button
-                    onClick={() => setEditSwJob(null)}
+                    onClick={() => { cancelScopedCreation('edit-sw-modal'); setEditSwJob(null); }}
                     className="px-4 py-2 bg-gray-700 hover:bg-gray-600 text-white rounded-lg transition-colors"
                   >
                     Close
@@ -4031,7 +4156,7 @@ function DispatchPageInner() {
                   </button>
                   <span className="flex-1" />
                   <button
-                    onClick={() => setEditSwJob(null)}
+                    onClick={() => { cancelScopedCreation('edit-sw-modal'); setEditSwJob(null); }}
                     className="px-4 py-2 bg-gray-700 hover:bg-gray-600 text-white rounded-lg transition-colors"
                   >
                     Close
