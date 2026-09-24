@@ -30,7 +30,8 @@ test('Well Queue assignment attribution uses the resolver (real name, never stam
 });
 
 test('drivers list stamps canonical driverId + legacy aliases', () => {
-  assert.match(page, /driverId: val\.driverId/);
+  assert.match(page, /driverId: canonicalIdFromApprovedRow\(hash, val\)/);
+  assert.match(page, /driverId: canonicalIdFromApprovedRow\(hash, first\)/);
   assert.match(page, /legacyAliases: \[val\.migratedToDriverId\]\.filter\(Boolean\)/);
   assert.match(page, /interface ApprovedDriver \{[\s\S]*?driverId\?: string;[\s\S]*?legacyAliases\?: string\[\];/);
 });

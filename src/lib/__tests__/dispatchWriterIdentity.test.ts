@@ -2,6 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import {
   assignmentIdentityForDriver,
+  canonicalIdFromApprovedRow,
   dispatchCreateTargetForAssignment,
   dispatchCreateTargetForDriver,
   driverRealName,
@@ -49,6 +50,20 @@ test('canonical id comes from the record key when it is a UUID and driverId is a
   const id = assignmentIdentityForDriver(d);
   assert.equal(id.driverId, CANON);
   assert.equal(id.driverHash, CANON);
+});
+
+test('converted approved row uses its governed migrated UUID for dispatch creation', () => {
+  const migrated = canonicalIdFromApprovedRow(LEGACY_HASH, { migratedToDriverId: CANON });
+  assert.equal(migrated, CANON);
+  const assignment = assignmentIdentityForDriver({
+    key: LEGACY_HASH,
+    driverId: migrated,
+    companyId: 'liquid-gold',
+    displayName: 'Mike S24 Burger',
+  });
+  assert.deepEqual(assignment, { driverId: CANON, driverHash: CANON, driverName: 'Mike S24 Burger' });
+  assert.equal(canonicalIdFromApprovedRow(LEGACY_HASH, { driverId: LEGACY_HASH, migratedToDriverId: CANON }), CANON);
+  assert.equal(canonicalIdFromApprovedRow(LEGACY_HASH, {}), undefined);
 });
 
 test('legacy-hash-keyed driver (no canonical UUID) keeps the key as compat hash, no driverId', () => {
