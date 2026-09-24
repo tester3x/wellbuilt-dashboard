@@ -22,7 +22,7 @@ import { projectWellLevel } from '@/lib/wellLevelProjection';
 import { wellDetailHref } from '@/lib/wellDetailLink';
 import { resolveDispatchDriver, dispatchDriverDisplayName, dispatchDriverGroupKey } from '@/lib/dispatchDriverIdentity';
 import { groupDispatchRows } from '@/lib/dispatchJobStacks';
-import { assignmentIdentityForDriver, dispatchCreateTargetForAssignment, driverRealName } from '@/lib/dispatchWriterIdentity';
+import { assignmentIdentityForDriver, canonicalIdFromApprovedRow, dispatchCreateTargetForAssignment, driverRealName } from '@/lib/dispatchWriterIdentity';
 // Z Fold recovery — layout helpers only (collapsed queue / stacked layout).
 // Live status is read via the governed adminGetWellPool callable (see effect
 // below); the direct-client RTDB status path is claim-gated and not attempted.
@@ -976,7 +976,7 @@ function DispatchPageInner() {
             if (val.active !== false) {
               approved.push({
                 key: hash,
-                driverId: val.driverId || (typeof hash === 'string' && hash.includes('-') ? hash : undefined),
+                driverId: canonicalIdFromApprovedRow(hash, val),
                 legacyAliases: [val.migratedToDriverId].filter(Boolean),
                 displayName: val.displayName,
                 legalName: val.legalName || val.profile?.legalName || '',
@@ -996,7 +996,7 @@ function DispatchPageInner() {
               if (first.active !== false && first.displayName) {
                 approved.push({
                   key: hash,
-                  driverId: first.driverId || (typeof hash === 'string' && hash.includes('-') ? hash : undefined),
+                  driverId: canonicalIdFromApprovedRow(hash, first),
                   legacyAliases: [first.migratedToDriverId].filter(Boolean),
                   displayName: first.displayName,
                   legalName: first.legalName || first.profile?.legalName || '',

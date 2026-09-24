@@ -28,6 +28,18 @@ export function isCanonicalDriverId(id: unknown): boolean {
   return s.length > 0 && s.includes('-');
 }
 
+/** Approved rows can retain a hash key after secure conversion. The governed
+ * migratedToDriverId points to the canonical profile and must be used for writes. */
+export function canonicalIdFromApprovedRow(
+  key: string,
+  row: { driverId?: unknown; migratedToDriverId?: unknown },
+): string | undefined {
+  for (const candidate of [row.driverId, row.migratedToDriverId, key]) {
+    if (isCanonicalDriverId(candidate)) return t(candidate);
+  }
+  return undefined;
+}
+
 /** Real human name for a driver: legalName preferred, then displayName. Never a login-only fallback beyond these. */
 export function driverRealName(d: Pick<DriverIdentity, 'legalName' | 'displayName'>): string {
   return t(d.legalName) || t(d.displayName) || '';
