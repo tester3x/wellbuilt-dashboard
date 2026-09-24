@@ -736,6 +736,28 @@ describe('driver create-if-absent', () => {
     expect(ok.fields?.policyHash).toBe(rev.policyHash);
     expect(ok.fields?.jobType).toBe('pw');
   });
+  it('binds an entered MSA well without a well_config entry, but rejects missing identity', async () => {
+    const rev = await publishRevision(new MemoryStore());
+    const input = {
+      dispatchId: 'dplan_msa_01',
+      caller: { driverId: DRIVER, companyId: COMPANY },
+      existing: null,
+      envelope: rev,
+    };
+    const custom = evaluateDriverDispatchBirth({
+      ...input,
+      record: { wellName: 'Unconfigured Slawson Well', operator: 'SLAWSON EXPLORATION COMPANY, INC.', jobType: 'pw' },
+    });
+    expect(custom.ok).toBe(true);
+    if (custom.ok && custom.result === 'create') {
+      expect(custom.fields?.wellName).toBe('Unconfigured Slawson Well');
+      expect(custom.fields?.companyId).toBe(COMPANY);
+      expect(custom.fields?.packageId).toBe('water-hauling');
+    }
+    const missing = evaluateDriverDispatchBirth({ ...input, record: { wellName: '  ', jobType: 'pw' } });
+    expect(missing.ok).toBe(false);
+    if (!missing.ok) expect(missing.reason).toBe('well_required');
+  });
 });
 
 describe('merge-upsert is update-only', () => {

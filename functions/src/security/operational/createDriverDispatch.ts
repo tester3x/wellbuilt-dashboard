@@ -80,6 +80,7 @@ export function evaluateDriverDispatchBirth(input: {
   if (!jobType.ok) return jobType;
   const binding = stampDispatchBinding(input.envelope);
   const well = canonicalWellFromRecord(picked.fields);
+  if (!well.wellName && !well.ndicWellName) return fail('well_required', 'wellName');
   const identity: BirthIdentity = {
     companyId: input.caller.companyId,
     driverId: input.caller.driverId,

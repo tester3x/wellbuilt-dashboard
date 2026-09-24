@@ -4,7 +4,7 @@ import { FieldValue } from 'firebase-admin/firestore';
 import { requireSecureDriver } from './requireDriverAuth';
 import { evaluateDriverDispatchBirth } from './operational/createDriverDispatch';
 import { parsePacketRef } from './operational/dispatchPacketPin';
-import { checkWell, loadAuthorizedWellNames, loadVerifiedRevision } from './operational/dispatchPinRuntime';
+import { loadVerifiedRevision } from './operational/dispatchPinRuntime';
 
 function throwFail(decided: { ok: false; reason: string; field?: string }): never {
   const msg = decided.field ? `${decided.reason}:${decided.field}` : decided.reason;
@@ -32,9 +32,9 @@ export const createDriverDispatchIfAbsent = httpsV2.onCall(
     const record = (raw.record && typeof raw.record === 'object' && !Array.isArray(raw.record))
       ? (raw.record as Record<string, unknown>)
       : {};
-    const wells = await loadAuthorizedWellNames();
-    const well = checkWell(record, wells);
-    if (!well.ok) throwFail(well);
+    // A driver's company and published packet authorize its own dispatch. The well
+    // is entered job identity and may be absent from Admin Wells & Routes (MSA work).
+    // evaluateDriverDispatchBirth still requires a well name before creating it.
     const revision = await loadVerifiedRevision(driver.companyId, packet.packetRef);
     if (!revision.ok) throwFail(revision);
     const fs = admin.firestore();
