@@ -83,3 +83,33 @@ export function isSelectableIndex(index: number, count: number): boolean {
 export function optionDomId(listId: string, index: number): string {
   return `${listId}-opt-${index}`;
 }
+
+export type TabTarget =
+  | { type: 'option'; index: number }
+  | { type: 'input' }
+  | { type: 'next-field' }
+  | { type: 'prev-field' };
+
+/**
+ * Pure state machine for Tab / Shift+Tab navigation in combobox.
+ * - From input (current < 0): Tab -> option 0; Shift+Tab -> prev-field.
+ * - From option (0 <= current < count):
+ *   - Tab: next option if current < count - 1; next-field if current === count - 1.
+ *   - Shift+Tab: prev option if current > 0; input if current === 0.
+ * - When count <= 0: Tab -> next-field; Shift+Tab -> prev-field.
+ */
+export function tabNavigation(current: number, count: number, shift: boolean): TabTarget {
+  if (count <= 0) {
+    return shift ? { type: 'prev-field' } : { type: 'next-field' };
+  }
+  if (current < 0) {
+    return shift ? { type: 'prev-field' } : { type: 'option', index: 0 };
+  }
+  if (shift) {
+    if (current > 0) return { type: 'option', index: current - 1 };
+    return { type: 'input' };
+  } else {
+    if (current < count - 1) return { type: 'option', index: current + 1 };
+    return { type: 'next-field' };
+  }
+}

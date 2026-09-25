@@ -112,18 +112,31 @@ test('DispatchJobRow moves status/action badges to their own row below well name
   assert.ok(controlsIdx > badgeRowIdx, 'controls sit in status/action badge row');
 });
 
-test('stacked jobs summary gives well name full readability and places badges on their own row', () => {
+test('stacked jobs render a compact tinted header with well name, load count, and expand/collapse arrow', () => {
   const stackedStart = source.indexOf('details key={row.key}');
   assert.ok(stackedStart >= 0, 'stacked details found');
-  const stackedChunk = source.slice(stackedStart, stackedStart + 2200);
+  const stackedChunk = source.slice(stackedStart, stackedStart + 3000);
 
-  const summaryWellIdx = stackedChunk.indexOf('row.jobs[0].ndicWellName || row.jobs[0].wellName');
-  const summaryDestIdx = stackedChunk.indexOf('→ {row.jobs[0].hauledTo');
-  const summaryBadgeIdx = stackedChunk.indexOf('border-t border-gray-800/60');
+  const summaryStart = stackedChunk.indexOf('<summary');
+  const summaryEnd = stackedChunk.indexOf('</summary>');
+  assert.ok(summaryStart >= 0 && summaryEnd > summaryStart, 'summary element found');
+  const summaryChunk = stackedChunk.slice(summaryStart, summaryEnd);
 
-  assert.ok(summaryWellIdx >= 0, 'stacked summary well name present');
-  assert.ok(summaryDestIdx > summaryWellIdx, 'stacked summary destination follows well name');
-  assert.ok(summaryBadgeIdx > summaryDestIdx, 'stacked summary status badges follow destination');
-  assert.match(stackedChunk, /break-words text-sm font-medium text-white/, 'stacked summary well name uses break-words');
+  // Compact tinted header structure
+  assert.match(summaryChunk, /bg-gray-800\/80 hover:bg-gray-800/, 'compact tinted header background');
+  assert.match(summaryChunk, /row\.jobs\[0\]\.ndicWellName \|\| row\.jobs\[0\]\.wellName/, 'header contains well name');
+  assert.match(summaryChunk, /break-words text-sm font-semibold text-white/, 'well name uses break-words font-semibold');
+  assert.match(summaryChunk, /\{row\.remainingLoads\} \{row\.remainingLoads === 1 \? 'load' : 'loads'\}/, 'header displays load count text (e.g. 3 loads)');
+  assert.match(summaryChunk, /group-open:rotate-180/, 'expand/collapse arrow with group-open rotation');
+
+  // Summary header MUST NOT duplicate status badges, destination, or actions (those belong on child cards)
+  assert.doesNotMatch(summaryChunk, /border-t border-gray-800\/60/, 'no badge row separator on header');
+  assert.doesNotMatch(summaryChunk, /→ \{row\.jobs\[0\]\.hauledTo/, 'no destination on header');
+  assert.doesNotMatch(summaryChunk, /<CategoryBadge/, 'no CategoryBadge pills on header');
+  assert.doesNotMatch(summaryChunk, /StageBadge/, 'no StageBadge on header');
+
+  // Child cards container renders each job via renderJob
+  const childrenChunk = stackedChunk.slice(summaryEnd);
+  assert.match(childrenChunk, /row\.jobs\.map\(job => <div key=\{job\.id\}>\{renderJob\(job\)\}<\/div>\)/, 'renders all child jobs individually');
 });
 

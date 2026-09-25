@@ -8,6 +8,7 @@ import {
   isOptionFullyVisible,
   isSelectableIndex,
   optionDomId,
+  tabNavigation,
 } from '../autocompleteNavigation.ts';
 
 // A list long enough to OVERFLOW the container: 20 rows × 30px = 600px content in a
@@ -94,4 +95,31 @@ test('empty / loading / no-result rows are never keyboard-selectable', () => {
 test('option DOM ids are stable and unique per index (for aria-activedescendant)', () => {
   assert.equal(optionDomId('pw-well', 3), 'pw-well-opt-3');
   assert.notEqual(optionDomId('pw-well', 3), optionDomId('pw-well', 4));
+});
+
+test('tabNavigation state machine enforces full keyboard UX contract', () => {
+  const count = 3;
+  // 1. Tab from the search field focuses result 1 (index 0)
+  assert.deepEqual(tabNavigation(-1, count, false), { type: 'option', index: 0 });
+
+  // 2. More Tabs move through visible results (index 0 -> 1 -> 2)
+  assert.deepEqual(tabNavigation(0, count, false), { type: 'option', index: 1 });
+  assert.deepEqual(tabNavigation(1, count, false), { type: 'option', index: 2 });
+
+  // 3. Tab after the last result reaches the next normal form field
+  assert.deepEqual(tabNavigation(2, count, false), { type: 'next-field' });
+
+  // 4. Shift+Tab moves backward through visible results (2 -> 1 -> 0)
+  assert.deepEqual(tabNavigation(2, count, true), { type: 'option', index: 1 });
+  assert.deepEqual(tabNavigation(1, count, true), { type: 'option', index: 0 });
+
+  // 5. Shift+Tab from result 1 (index 0) returns to the search field input
+  assert.deepEqual(tabNavigation(0, count, true), { type: 'input' });
+
+  // 6. Shift+Tab from search field moves backward to previous form field
+  assert.deepEqual(tabNavigation(-1, count, true), { type: 'prev-field' });
+
+  // 7. When there are no results open, Tab / Shift+Tab move normally to next / prev field
+  assert.deepEqual(tabNavigation(-1, 0, false), { type: 'next-field' });
+  assert.deepEqual(tabNavigation(-1, 0, true), { type: 'prev-field' });
 });

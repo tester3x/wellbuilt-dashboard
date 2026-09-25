@@ -59,11 +59,16 @@ test('combobox/listbox ARIA semantics are present', () => {
   assert.match(hook, /'aria-selected'/);
 });
 
-test('mouse selection is preserved (onMouseDown-preventDefault keeps input focus) + Tab does not trap', () => {
+test('mouse selection is preserved (onMouseDown-preventDefault keeps input focus) + keyboard UX navigation', () => {
   assert.match(hook, /onMouseDown:[\s\S]*?preventDefault\(\)/, 'click will not be lost to blur');
-  // Tab branch must NOT call preventDefault (focus moves normally).
-  const tabBranch = hook.slice(hook.indexOf("case 'Tab'"), hook.indexOf("case 'Tab'") + 220);
-  assert.doesNotMatch(tabBranch, /e\.preventDefault\(\)/, 'Tab does not call preventDefault → focus moves normally (no trap)');
+  // Tab from search field enters result 1
+  assert.match(hook, /case 'Tab':[\s\S]*?optionRefs\.current\[0\]\?\.focus\(\)/, 'Tab from search field focuses result 1');
+  // Option Tab past the last result reaches next field without preventDefault (no trap)
+  assert.match(hook, /if \(index < count - 1\) \{[\s\S]*?e\.preventDefault\(\);[\s\S]*?\} else \{[\s\S]*?setActiveIndex\(resetActiveIndex\(\)\);[\s\S]*?\}/, 'Tab after last result does not trap');
+  // Shift+Tab from result 1 returns to input
+  assert.match(hook, /inputRef\.current\?\.focus\(\)/, 'Shift+Tab returns to search field input');
+  // Blur containment is wired in component
+  assert.match(comp, /handleBlur/, 'BuilderAutocomplete contains blur within widget');
 });
 
 test('hover styling is DISTINCT from keyboard-active styling', () => {

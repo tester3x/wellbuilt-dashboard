@@ -73,10 +73,21 @@ export function BuilderAutocomplete<T>({
       if (i >= 0 && i < items.length) {
         onSelect(items[i], i);
         setDismissed(true);
+        setFocused(false);
       }
     },
-    onClose: () => setDismissed(true),
+    onClose: () => {
+      setDismissed(true);
+    },
   });
+
+  const handleBlur = (e: React.FocusEvent) => {
+    if (kb.isInside(e.relatedTarget)) {
+      return;
+    }
+    setFocused(false);
+    setDismissed(false);
+  };
 
   return (
     <>
@@ -92,9 +103,8 @@ export function BuilderAutocomplete<T>({
         }}
         onFocus={() => {
           setFocused(true);
-          setDismissed(false);
         }}
-        onBlur={() => setFocused(false)}
+        onBlur={handleBlur}
         placeholder={placeholder}
         aria-label={ariaLabel}
         className={inputClassName}
@@ -103,7 +113,13 @@ export function BuilderAutocomplete<T>({
       {open && (
         <div className={listClassName} {...kb.listProps}>
           {items.map((item, i) => (
-            <button key={getItemKey(item, i)} type="button" className={optionClassName} {...kb.getOptionProps(i)}>
+            <button
+              key={getItemKey(item, i)}
+              type="button"
+              className={optionClassName}
+              {...kb.getOptionProps(i)}
+              onBlur={handleBlur}
+            >
               {renderItem(item)}
             </button>
           ))}

@@ -49,8 +49,10 @@ export function useAutocompleteKeyboard({ count, open, query, onSelect, onClose 
   const rawId = useId();
   const listId = `wb-ac-${rawId.replace(/[^a-zA-Z0-9_-]/g, '')}`;
   const [activeIndex, setActiveIndex] = useState(-1);
+  const inputRef = useRef<HTMLInputElement | null>(null);
   const listRef = useRef<HTMLElement | null>(null);
   const optionRefs = useRef<Array<HTMLElement | null>>([]);
+  const isNavigatingTabRef = useRef(false);
 
   // Reset when the list closes — never reopen onto a stale highlight.
   useEffect(() => {
@@ -80,9 +82,17 @@ export function useAutocompleteKeyboard({ count, open, query, onSelect, onClose 
 
   const reset = useCallback(() => setActiveIndex(resetActiveIndex()), []);
 
+  const isInside = useCallback((target: EventTarget | null) => {
+    if (isNavigatingTabRef.current) return true;
+    if (!target) return false;
+    if (target === inputRef.current) return true;
+    if (listRef.current?.contains(target as Node)) return true;
+    return false;
+  }, []);
+
   const onKeyDown = useCallback(
     (e: KeyboardEvent<HTMLInputElement>) => {
-      if (!open) return;
+      if (!open || count === 0) return;
       switch (e.key) {
         case 'ArrowDown':
           e.preventDefault();
@@ -104,9 +114,19 @@ export function useAutocompleteKeyboard({ count, open, query, onSelect, onClose 
           onClose?.();
           break;
         case 'Tab':
-          // Do NOT preventDefault: focus must move to the next field normally.
-          setActiveIndex(resetActiveIndex());
-          onClose?.();
+          if (!e.shiftKey) {
+            // Tab from the search field focuses result 1
+            e.preventDefault();
+            setActiveIndex(0);
+            isNavigatingTabRef.current = true;
+            optionRefs.current[0]?.focus();
+            isNavigatingTabRef.current = false;
+          } else {
+            // Shift+Tab moves backward (to previous form field before input).
+            // Results close. Do NOT preventDefault so browser moves focus naturally.
+            setActiveIndex(resetActiveIndex());
+            onClose?.();
+          }
           break;
         default:
           break;
@@ -115,7 +135,91 @@ export function useAutocompleteKeyboard({ count, open, query, onSelect, onClose 
     [open, count, activeIndex, onSelect, onClose],
   );
 
+  const onOptionKeyDown = useCallback(
+    (e: KeyboardEvent<HTMLElement>, index: number) => {
+      switch (e.key) {
+        case 'Tab':
+          if (e.shiftKey) {
+            // Shift+Tab moves backward
+            e.preventDefault();
+            if (index > 0) {
+              const prevIndex = index - 1;
+              setActiveIndex(prevIndex);
+              isNavigatingTabRef.current = true;
+              optionRefs.current[prevIndex]?.focus();
+              isNavigatingTabRef.current = false;
+            } else {
+              // At result 1 (index 0), Shift+Tab moves back to the search field input
+              setActiveIndex(resetActiveIndex());
+              isNavigatingTabRef.current = true;
+              inputRef.current?.focus();
+              isNavigatingTabRef.current = false;
+            }
+          } else {
+            // Tab moves forward through visible results
+            if (index < count - 1) {
+              e.preventDefault();
+              const nextIndex = index + 1;
+              setActiveIndex(nextIndex);
+              isNavigatingTabRef.current = true;
+              optionRefs.current[nextIndex]?.focus();
+              isNavigatingTabRef.current = false;
+            } else {
+              // Tab after the last result reaches the next normal form field!
+              // Do NOT call preventDefault: browser naturally moves to next field.
+              setActiveIndex(resetActiveIndex());
+            }
+          }
+          break;
+        case 'Enter':
+          // Enter selects the focused result
+          e.preventDefault();
+          onSelect(index);
+          break;
+        case 'Escape':
+          // Escape closes the results and returns focus to input
+          e.preventDefault();
+          setActiveIndex(resetActiveIndex());
+          onClose?.();
+          inputRef.current?.focus();
+          break;
+        case 'ArrowDown':
+          e.preventDefault();
+          if (index < count - 1) {
+            const nextIndex = index + 1;
+            setActiveIndex(nextIndex);
+            isNavigatingTabRef.current = true;
+            optionRefs.current[nextIndex]?.focus();
+            isNavigatingTabRef.current = false;
+          }
+          break;
+        case 'ArrowUp':
+          e.preventDefault();
+          if (index > 0) {
+            const prevIndex = index - 1;
+            setActiveIndex(prevIndex);
+            isNavigatingTabRef.current = true;
+            optionRefs.current[prevIndex]?.focus();
+            isNavigatingTabRef.current = false;
+          } else {
+            // At result 1 (index 0), ArrowUp moves focus back to input
+            setActiveIndex(resetActiveIndex());
+            isNavigatingTabRef.current = true;
+            inputRef.current?.focus();
+            isNavigatingTabRef.current = false;
+          }
+          break;
+        default:
+          break;
+      }
+    },
+    [count, onSelect, onClose],
+  );
+
   const inputProps = {
+    ref: (el: HTMLInputElement | null) => {
+      inputRef.current = el;
+    },
     role: 'combobox' as const,
     'aria-expanded': open,
     'aria-controls': listId,
@@ -135,6 +239,7 @@ export function useAutocompleteKeyboard({ count, open, query, onSelect, onClose 
   const getOptionProps = (index: number) => ({
     id: optionDomId(listId, index),
     role: 'option' as const,
+    tabIndex: 0,
     'aria-selected': index === activeIndex,
     'data-active': index === activeIndex ? true : undefined,
     ref: (el: HTMLElement | null) => {
@@ -143,7 +248,22 @@ export function useAutocompleteKeyboard({ count, open, query, onSelect, onClose 
     // Keep input focus so the click selects before any blur closes the list.
     onMouseDown: (e: { preventDefault: () => void }) => e.preventDefault(),
     onClick: () => onSelect(index),
+    onKeyDown: (e: KeyboardEvent<HTMLElement>) => onOptionKeyDown(e, index),
+    onFocus: () => {
+      setActiveIndex(index);
+    },
   });
 
-  return { activeIndex, setActiveIndex, reset, listId, inputProps, listProps, getOptionProps };
+  return {
+    activeIndex,
+    setActiveIndex,
+    reset,
+    listId,
+    inputProps,
+    listProps,
+    getOptionProps,
+    inputRef,
+    listRef,
+    isInside,
+  };
 }

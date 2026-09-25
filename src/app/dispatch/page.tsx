@@ -4831,42 +4831,24 @@ function ActiveDispatchPanel({ dispatches, cancelDispatch, drivers, assignTransf
                 {groupDispatchRows(jobs).map(row => row.jobs.length === 1 ? (
                   <div key={row.key}>{renderJob(row.jobs[0])}</div>
                 ) : (
-                  <details key={row.key} className="rounded-lg bg-gray-900/50">
-                    <summary className="cursor-pointer list-none rounded-lg px-3 py-2 text-left hover:bg-gray-900/80">
-                      {/* Row 1: Identity: type, well name, quantity, toggle */}
-                      <div className="flex items-center gap-2 min-w-0">
+                  <details key={row.key} className="group rounded-lg border border-gray-700/60 bg-gray-900/40 overflow-hidden">
+                    {/* Compact, tinted stack header: clearly a heading for the child loads */}
+                    <summary className="cursor-pointer list-none flex items-center justify-between gap-2 px-3 py-2 bg-gray-800/80 hover:bg-gray-800 transition-colors border-b border-transparent group-open:border-gray-700/50 select-none [&::-webkit-details-marker]:hidden">
+                      <div className="flex items-center gap-2 min-w-0 flex-1">
                         <JobTypeBadge type={row.jobs[0].jobType} />
-                        <span className="min-w-0 flex-1 break-words text-sm font-medium text-white" title={row.jobs[0].ndicWellName || row.jobs[0].wellName}>
+                        <span className="min-w-0 flex-1 break-words text-sm font-semibold text-white" title={row.jobs[0].ndicWellName || row.jobs[0].wellName}>
                           {row.jobs[0].ndicWellName || row.jobs[0].wellName}
                         </span>
-                        <CategoryBadge className="bg-yellow-600/30 text-yellow-300 flex-shrink-0">x{row.remainingLoads}</CategoryBadge>
-                        <span className="text-xs text-gray-400 ml-auto flex-shrink-0">▼</span>
                       </div>
-
-                      {/* Row 2: Destination */}
-                      {(row.jobs[0].hauledTo || row.jobs[0].disposal || row.jobs[0].disposalName) && (
-                        <div className="break-words mt-1.5 ml-[48px] text-xs text-cyan-400/70">
-                          → {row.jobs[0].hauledTo || row.jobs[0].disposal || row.jobs[0].disposalName}
-                        </div>
-                      )}
-
-                      {/* Row 3: Status badges on their own row below well name and destination */}
-                      <div className="flex flex-wrap items-center gap-1.5 mt-2 pt-1.5 border-t border-gray-800/60">
-                        {recommendedByGroup.get(driverHash) && row.jobs.some(j => j.id === recommendedByGroup.get(driverHash)) && (
-                          <CategoryBadge className="bg-emerald-600/30 text-emerald-300">★ Next</CategoryBadge>
-                        )}
-                        {row.jobs.some(j => !!j.id && downByJobId.has(j.id)) && (
-                          <CategoryBadge className="bg-red-600 text-white">⚠ DOWN</CategoryBadge>
-                        )}
-                        {row.jobs[0].source === 'driver' && (
-                          <CategoryBadge className="bg-emerald-600/30 text-emerald-300">Driver Started</CategoryBadge>
-                        )}
-                        <CategoryBadge className={row.jobs[0].status === 'pending' ? 'bg-yellow-600/30 text-yellow-300' : 'bg-blue-600/30 text-blue-300'}>
-                          {row.jobs[0].status === 'pending' ? 'Pending' : 'Accepted'}
-                        </CategoryBadge>
+                      <div className="flex items-center gap-2 flex-shrink-0">
+                        <span className="px-2 py-0.5 bg-gray-700/70 text-gray-300 text-xs font-medium rounded">
+                          {row.remainingLoads} {row.remainingLoads === 1 ? 'load' : 'loads'}
+                        </span>
+                        <span className="text-xs text-gray-400 transition-transform duration-150 group-open:rotate-180">▼</span>
                       </div>
                     </summary>
-                    <div className="space-y-1 border-t border-gray-700/50 p-2">
+                    {/* Child cards: each retains full 3-row layout with its own destination, status badges, and actions */}
+                    <div className="space-y-1.5 p-2 bg-gray-950/20">
                       {row.jobs.map(job => <div key={job.id}>{renderJob(job)}</div>)}
                     </div>
                   </details>
