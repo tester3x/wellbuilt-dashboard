@@ -86,6 +86,7 @@ const DEFINITION_KEYS = Object.freeze([
 const DEFINITION_KEY_SET = new Set<string>(DEFINITION_KEYS);
 
 const POLICY_REF_KEYS = Object.freeze(['kind', 'policyId', 'revision', 'contentHash'] as const);
+const CAPABILITY_POLICY_REF_KEYS = Object.freeze(['policyId', 'revision', 'contentHash'] as const);
 const SUPERSEDES_KEYS = Object.freeze(['packageId', 'revision', 'contentHash'] as const);
 const JOB_TYPE_KEYS = Object.freeze(['jobTypeId', 'label', 'capabilities'] as const);
 const GRANT_KEYS = Object.freeze(['capabilityId', 'moduleVersion', 'configuration'] as const);
@@ -97,6 +98,12 @@ export type StoreResult<T> = StoreSuccess<T> | StoreFailure;
 
 export type PolicyRef = {
   kind: string;
+  policyId: string;
+  revision: number;
+  contentHash: string;
+};
+
+export type CapabilityPolicyRef = {
   policyId: string;
   revision: number;
   contentHash: string;
@@ -372,6 +379,27 @@ function parsePolicyRef(raw: unknown, path: string): StoreResult<{ value: Policy
   };
 }
 
+function parseCapabilityPolicyRef(raw: unknown, path: string): StoreResult<{ value: CapabilityPolicyRef }> {
+  const rec = asRecord(raw, path);
+  if (!rec.ok) return rec;
+  const bad = exactKeys(rec.value, CAPABILITY_POLICY_REF_KEYS, path);
+  if (bad) return bad;
+  const policyId = requireId(rec.value.policyId, `${path}.policyId`);
+  if (!policyId.ok) return policyId;
+  const revision = requireRevision(rec.value.revision, `${path}.revision`);
+  if (!revision.ok) return revision;
+  const contentHash = requireHash(rec.value.contentHash, `${path}.contentHash`);
+  if (!contentHash.ok) return contentHash;
+  return {
+    ok: true,
+    value: {
+      policyId: policyId.value,
+      revision: revision.value,
+      contentHash: contentHash.value,
+    },
+  };
+}
+
 function parseConfig(capabilityId: SupportedCapability, raw: unknown, path: string): StoreResult<{ value: Record<string, unknown> }> {
   const rec = asRecord(raw, path);
   if (!rec.ok) return rec;
@@ -395,7 +423,7 @@ function parseConfig(capabilityId: SupportedCapability, raw: unknown, path: stri
   if (capabilityId === 'multiHaul') {
     const bad = exactKeys(cfg, ['allocationPolicy'], path);
     if (bad) return bad;
-    const pol = parsePolicyRef(cfg.allocationPolicy, `${path}.allocationPolicy`);
+    const pol = parseCapabilityPolicyRef(cfg.allocationPolicy, `${path}.allocationPolicy`);
     if (!pol.ok) return pol;
     return { ok: true, value: { allocationPolicy: pol.value } };
   }
@@ -404,21 +432,21 @@ function parseConfig(capabilityId: SupportedCapability, raw: unknown, path: stri
     if (bad) return bad;
     const u = unit();
     if (!u.ok) return u;
-    const pol = parsePolicyRef(cfg.activationPolicy, `${path}.activationPolicy`);
+    const pol = parseCapabilityPolicyRef(cfg.activationPolicy, `${path}.activationPolicy`);
     if (!pol.ok) return pol;
     return { ok: true, value: { unit: u.value, activationPolicy: pol.value } };
   }
   if (capabilityId === 'transfer') {
     const bad = exactKeys(cfg, ['authorityPolicy'], path);
     if (bad) return bad;
-    const pol = parsePolicyRef(cfg.authorityPolicy, `${path}.authorityPolicy`);
+    const pol = parseCapabilityPolicyRef(cfg.authorityPolicy, `${path}.authorityPolicy`);
     if (!pol.ok) return pol;
     return { ok: true, value: { authorityPolicy: pol.value } };
   }
   if (capabilityId === 'photos' || capabilityId === 'signatures') {
     const bad = exactKeys(cfg, ['evidencePolicy'], path);
     if (bad) return bad;
-    const pol = parsePolicyRef(cfg.evidencePolicy, `${path}.evidencePolicy`);
+    const pol = parseCapabilityPolicyRef(cfg.evidencePolicy, `${path}.evidencePolicy`);
     if (!pol.ok) return pol;
     return { ok: true, value: { evidencePolicy: pol.value } };
   }

@@ -17,6 +17,7 @@ import {
   type StoreResult,
 } from './jobPacketRevisionStore';
 import type { TrustedCompanyAuthority } from '../trustedStaffAuthority';
+import { findRegisteredPolicy } from './jobPacketPolicyRegistry';
 
 export const PUBLISH_JOB_PACKET_REVISION_CALLABLE = 'publishJobPacketRevision';
 export const RECEIPT_COLLECTION = 'job_packet_publication_receipts';
@@ -216,13 +217,20 @@ function rejectNonemptyPolicyRefs(capabilities: unknown[]): StoreResult<{ ok: tr
   for (let i = 0; i < capabilities.length; i++) {
     const cap = capabilities[i];
     if (!cap || typeof cap !== 'object' || Array.isArray(cap)) continue;
+    const capId = typeof (cap as { capabilityId?: unknown }).capabilityId === 'string'
+      ? (cap as { capabilityId: string }).capabilityId
+      : '';
     const cfg = (cap as { configuration?: unknown }).configuration;
     if (!cfg || typeof cfg !== 'object' || Array.isArray(cfg)) continue;
     for (const key of Object.keys(cfg as Record<string, unknown>)) {
-      if ((POLICY_CONFIG_KEYS as readonly string[]).includes(key)) {
-        return fail('policy_refs_not_empty', `packetDraft.capabilities[${i}].configuration.${key}`);
-      }
       const val = (cfg as Record<string, unknown>)[key];
+      if ((POLICY_CONFIG_KEYS as readonly string[]).includes(key)) {
+        const registered = findRegisteredPolicy(capId, key, val);
+        if (!registered) {
+          return fail('policy_refs_not_empty', `packetDraft.capabilities[${i}].configuration.${key}`);
+        }
+        continue;
+      }
       if (val && typeof val === 'object' && !Array.isArray(val) && 'policyId' in (val as object)) {
         return fail('unknown_policy_reference', `packetDraft.capabilities[${i}].configuration.${key}`);
       }
@@ -243,6 +251,29 @@ function storePayload(
   revision: number,
   supersedes: { packageId: string; revision: number; contentHash: string } | null,
 ): Record<string, unknown> {
+  const policyRefs: Array<{ kind: string; policyId: string; revision: number; contentHash: string }> = [];
+  if (Array.isArray(def.capabilities)) {
+    for (const cap of def.capabilities) {
+      if (!cap || typeof cap !== 'object' || Array.isArray(cap)) continue;
+      const capId = typeof (cap as { capabilityId?: unknown }).capabilityId === 'string'
+        ? (cap as { capabilityId: string }).capabilityId
+        : '';
+      const cfg = (cap as { configuration?: Record<string, unknown> }).configuration;
+      if (!cfg || typeof cfg !== 'object' || Array.isArray(cfg)) continue;
+      for (const [key, val] of Object.entries(cfg)) {
+        const reg = findRegisteredPolicy(capId, key, val);
+        if (reg) {
+          policyRefs.push({
+            kind: reg.kind,
+            policyId: reg.policyId,
+            revision: reg.revision,
+            contentHash: reg.contentHash,
+          });
+        }
+      }
+    }
+  }
+
   return {
     packageId: def.packetId,
     revision,
@@ -251,7 +282,7 @@ function storePayload(
     segmentId: def.segmentId,
     jobTypes: def.jobTypes,
     capabilities: def.capabilities,
-    policyRefs: [],
+    policyRefs,
     definition: def.definition,
     supersedes,
   };

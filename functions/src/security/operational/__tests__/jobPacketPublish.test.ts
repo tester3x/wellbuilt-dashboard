@@ -14,6 +14,10 @@ import {
   type PublishStoreTx,
 } from '../jobPacketPublish';
 import type { TrustedCompanyAuthority } from '../../trustedStaffAuthority';
+import {
+  OILFIELD_PRODUCED_WATER_ALLOCATION_V1_HASH,
+  OILFIELD_PRODUCED_WATER_SPLIT_ACTIVATION_V1_HASH,
+} from '../jobPacketPolicyRegistry';
 
 const COMPANY = 'liquid-gold';
 const OTHER = 'other-hauler';
@@ -253,6 +257,63 @@ describe('Contracts 0.7.0 draft validation', () => {
     expect(r.ok).toBe(false);
     if (!r.ok) expect(r.reason).toBe('policy_refs_not_empty');
   });
+  it('accepts registered versioned policies for multiHaul and splitTicket', async () => {
+    const draft = productionWaterDefinition();
+    (draft.jobTypes as { capabilities: string[] }[])[0].capabilities.push('multiHaul', 'splitTicket');
+    (draft.capabilities as unknown[]).push(
+      {
+        capabilityId: 'multiHaul',
+        moduleVersion: 1,
+        configuration: {
+          allocationPolicy: {
+            policyId: 'oilfield-produced-water-allocation',
+            revision: 1,
+            contentHash: OILFIELD_PRODUCED_WATER_ALLOCATION_V1_HASH,
+          },
+        },
+      },
+      {
+        capabilityId: 'splitTicket',
+        moduleVersion: 1,
+        configuration: {
+          unit: 'bbl',
+          activationPolicy: {
+            policyId: 'oilfield-produced-water-split-activation',
+            revision: 1,
+            contentHash: OILFIELD_PRODUCED_WATER_SPLIT_ACTIVATION_V1_HASH,
+          },
+        },
+      },
+    );
+    (draft.commandRules as unknown[]).push(
+      { command: 'multiHaul.join', states: ['planned', 'accepted'] },
+      { command: 'splitTicket.addLeg', states: ['loaded', 'inTransit'] },
+    );
+    const store = new MemoryPublishStore();
+    const r = await publish(store, { packetDraft: draft });
+    expect(r.ok).toBe(true);
+    if (!r.ok) return;
+    expect(r.result).toBe('created');
+    expect(r.revision).toBe(1);
+    expect(r.policyHash).toMatch(/^[a-f0-9]{64}$/);
+
+    const rev = await store.getRevision(revisionDocId('liquid-gold', 'water-hauling', 1));
+    expect(rev).not.toBeNull();
+    expect(rev?.policyRefs).toEqual([
+      {
+        kind: 'allocation',
+        policyId: 'oilfield-produced-water-allocation',
+        revision: 1,
+        contentHash: OILFIELD_PRODUCED_WATER_ALLOCATION_V1_HASH,
+      },
+      {
+        kind: 'splitActivation',
+        policyId: 'oilfield-produced-water-split-activation',
+        revision: 1,
+        contentHash: OILFIELD_PRODUCED_WATER_SPLIT_ACTIVATION_V1_HASH,
+      },
+    ]);
+  });
   it('oversized draft rejects safely', async () => {
     const draft = productionWaterDefinition();
     draft.label = 'x'.repeat(250000);
@@ -316,6 +377,102 @@ describe('publication', () => {
     expect(second.result).toBe('created');
     expect(second.revision).toBe(2);
     expect(second.contentHash).not.toBe([...store.heads.values()][0] && '');
+    expect([...store.heads.values()][0].latestRevision).toBe(2);
+  });
+
+  it('advances revision 1 to revision 2 with multiHaul and splitTicket policies, stamps policyRefs and policyHash, and verifies binding', async () => {
+    const store = new MemoryPublishStore();
+    const first = await publish(store);
+    expect(first.ok).toBe(true);
+    if (!first.ok) return;
+
+    const draft2 = productionWaterDefinition();
+    (draft2.jobTypes as { capabilities: string[] }[])[0].capabilities.push('multiHaul', 'splitTicket');
+    (draft2.capabilities as unknown[]).push(
+      {
+        capabilityId: 'multiHaul',
+        moduleVersion: 1,
+        configuration: {
+          allocationPolicy: {
+            policyId: 'oilfield-produced-water-allocation',
+            revision: 1,
+            contentHash: OILFIELD_PRODUCED_WATER_ALLOCATION_V1_HASH,
+          },
+        },
+      },
+      {
+        capabilityId: 'splitTicket',
+        moduleVersion: 1,
+        configuration: {
+          unit: 'bbl',
+          activationPolicy: {
+            policyId: 'oilfield-produced-water-split-activation',
+            revision: 1,
+            contentHash: OILFIELD_PRODUCED_WATER_SPLIT_ACTIVATION_V1_HASH,
+          },
+        },
+      },
+    );
+    (draft2.commandRules as unknown[]).push(
+      { command: 'multiHaul.join', states: ['planned', 'accepted'] },
+      { command: 'splitTicket.addLeg', states: ['loaded', 'inTransit'] },
+    );
+
+    const second = await publish(store, {
+      requestId: 'req-pw-rev2',
+      expectedLatestRevision: 1,
+      packetDraft: draft2,
+    });
+    expect(second.ok).toBe(true);
+    if (!second.ok) return;
+    expect(second.result).toBe('created');
+    expect(second.revision).toBe(2);
+    expect(second.packetRevision).toBe(2);
+    expect(second.packageId).toBe('water-hauling');
+    expect(second.policyHash).not.toBe(first.policyHash);
+
+    const rev2Doc = await store.getRevision(revisionDocId(COMPANY, 'water-hauling', 2));
+    expect(rev2Doc).not.toBeNull();
+    expect(rev2Doc?.policyRefs).toEqual([
+      {
+        kind: 'allocation',
+        policyId: 'oilfield-produced-water-allocation',
+        revision: 1,
+        contentHash: OILFIELD_PRODUCED_WATER_ALLOCATION_V1_HASH,
+      },
+      {
+        kind: 'splitActivation',
+        policyId: 'oilfield-produced-water-split-activation',
+        revision: 1,
+        contentHash: OILFIELD_PRODUCED_WATER_SPLIT_ACTIVATION_V1_HASH,
+      },
+    ]);
+
+    const bound = validateStoredRevisionForBinding(rev2Doc, {
+      companyId: COMPANY,
+      packageId: 'water-hauling',
+      revision: 2,
+    });
+    expect(bound.ok).toBe(true);
+    if (!bound.ok) return;
+
+    const pin = stampDispatchBinding(bound.envelope);
+    expect(pin.packageId).toBe('water-hauling');
+    expect(pin.packetRevision).toBe(2);
+    expect(pin.contentHash).toBe(second.contentHash);
+    expect(pin.policyHash).toBe(second.policyHash);
+
+    // New request with unchanged draft returns unchanged and does not create revision 3
+    const unchanged = await publish(store, {
+      requestId: 'req-pw-rev2-retry',
+      expectedLatestRevision: 2,
+      packetDraft: draft2,
+    });
+    expect(unchanged.ok).toBe(true);
+    if (!unchanged.ok) return;
+    expect(unchanged.result).toBe('unchanged');
+    expect(unchanged.revision).toBe(2);
+    expect(unchanged.policyHash).toBe(second.policyHash);
     expect([...store.heads.values()][0].latestRevision).toBe(2);
   });
 

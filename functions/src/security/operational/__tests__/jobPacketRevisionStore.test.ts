@@ -241,6 +241,66 @@ describe('9. unknown and reserved capabilities fail closed', () => {
     if (result.ok) return;
     expect(result.reason).toBe('reserved_capability');
   });
+
+  it('accepts multiHaul and splitTicket capability configurations with 3-key policy refs', () => {
+    const result = validatePublishInput(
+      validPayload({
+        capabilities: [
+          { capabilityId: 'lifecycle', moduleVersion: 1, configuration: {} },
+          { capabilityId: 'pickup', moduleVersion: 1, configuration: { unit: 'bbl' } },
+          {
+            capabilityId: 'multiHaul',
+            moduleVersion: 1,
+            configuration: {
+              allocationPolicy: {
+                policyId: 'oilfield-produced-water-allocation',
+                revision: 1,
+                contentHash: '6b160040faa20044f297033b9c62748b4b2647b1878a856fdb6fd8486d3407db',
+              },
+            },
+          },
+          {
+            capabilityId: 'splitTicket',
+            moduleVersion: 1,
+            configuration: {
+              unit: 'bbl',
+              activationPolicy: {
+                policyId: 'oilfield-produced-water-split-activation',
+                revision: 1,
+                contentHash: '64a950746c48a72c537c9b0d0238b76530da3e433d40ba34abc9e06d33d73179',
+              },
+            },
+          },
+        ],
+        jobTypes: [
+          {
+            jobTypeId: 'pw',
+            label: 'Production Water',
+            capabilities: ['lifecycle', 'pickup', 'multiHaul', 'splitTicket'],
+          },
+        ],
+        policyRefs: [
+          {
+            kind: 'allocation',
+            policyId: 'oilfield-produced-water-allocation',
+            revision: 1,
+            contentHash: '6b160040faa20044f297033b9c62748b4b2647b1878a856fdb6fd8486d3407db',
+          },
+          {
+            kind: 'splitActivation',
+            policyId: 'oilfield-produced-water-split-activation',
+            revision: 1,
+            contentHash: '64a950746c48a72c537c9b0d0238b76530da3e433d40ba34abc9e06d33d73179',
+          },
+        ],
+      }),
+      { companyId: COMPANY, publishedByUid: PUBLISHER },
+    );
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    expect(result.envelope.capabilities).toHaveLength(4);
+    expect(result.envelope.policyRefs).toHaveLength(2);
+  });
 });
 
 describe('10. jobType grants cannot exceed packet grants', () => {
