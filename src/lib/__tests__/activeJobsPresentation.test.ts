@@ -94,3 +94,36 @@ test('long informational chips are NOT forced into the fixed slot (kept truncate
   assert.match(reasonChunk, /max-w-\[220px\] truncate/, 'reason stays a truncated info chip');
   assert.doesNotMatch(reasonChunk, /<CategoryBadge/, 'reason is NOT put into the fixed categorical slot');
 });
+
+test('DispatchJobRow moves status/action badges to their own row below well name and destination', () => {
+  // Well name is on Row 1 with break-words and minWidth: 100 removed to prevent compression
+  assert.match(rowSource, /<span className="text-white font-medium text-sm break-words flex-1 min-w-0"/);
+  assert.doesNotMatch(rowSource, /minWidth:\s*100/);
+
+  // Destination sits on Row 2, status/action badges on Row 3
+  const wellIdx = rowSource.indexOf('job.ndicWellName || job.wellName');
+  const destIdx = rowSource.indexOf('→ {dropoff}');
+  const badgeRowIdx = rowSource.indexOf('border-t border-gray-800/60');
+  const controlsIdx = rowSource.indexOf('Controls always remain');
+
+  assert.ok(wellIdx >= 0, 'well name present');
+  assert.ok(destIdx > wellIdx, 'destination row follows well name');
+  assert.ok(badgeRowIdx > destIdx, 'status/action badge row follows destination');
+  assert.ok(controlsIdx > badgeRowIdx, 'controls sit in status/action badge row');
+});
+
+test('stacked jobs summary gives well name full readability and places badges on their own row', () => {
+  const stackedStart = source.indexOf('details key={row.key}');
+  assert.ok(stackedStart >= 0, 'stacked details found');
+  const stackedChunk = source.slice(stackedStart, stackedStart + 2200);
+
+  const summaryWellIdx = stackedChunk.indexOf('row.jobs[0].ndicWellName || row.jobs[0].wellName');
+  const summaryDestIdx = stackedChunk.indexOf('→ {row.jobs[0].hauledTo');
+  const summaryBadgeIdx = stackedChunk.indexOf('border-t border-gray-800/60');
+
+  assert.ok(summaryWellIdx >= 0, 'stacked summary well name present');
+  assert.ok(summaryDestIdx > summaryWellIdx, 'stacked summary destination follows well name');
+  assert.ok(summaryBadgeIdx > summaryDestIdx, 'stacked summary status badges follow destination');
+  assert.match(stackedChunk, /break-words text-sm font-medium text-white/, 'stacked summary well name uses break-words');
+});
+

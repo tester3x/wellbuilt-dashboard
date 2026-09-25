@@ -4379,32 +4379,52 @@ function DispatchJobRow({ job, cancelDispatch, compact, onClickServiceWork, onRe
       className={`${compact ? 'py-2 px-3' : 'py-3 px-4'} ${splitBg} rounded-lg hover:bg-gray-900/80 transition-colors ${isClickable ? 'cursor-pointer' : ''}`}
       onClick={isClickable ? () => onClickServiceWork!(job) : undefined}
     >
-      <div className="flex items-center gap-2">
-        {/* Identity: type, well, quantity, and linked-ticket facts always stay together. */}
-        <div className="flex items-center gap-2 min-w-0">
-          <JobTypeBadge type={job.jobType} serviceType={job.serviceType} />
-          <span className="text-white font-medium text-sm truncate" style={{ minWidth: 100 }}>
-            {job.ndicWellName || job.wellName}
-          </span>
-          {(() => {
-            const remaining = (job.loadCount || 1) - (job.loadsCompleted || 0);
-            return remaining > 1 ? (
-              <CategoryBadge className="bg-yellow-600/30 text-yellow-300">
-                x{remaining}
-              </CategoryBadge>
-            ) : null;
-          })()}
-          {job.splitGroupId && (
-            <CategoryBadge className="bg-purple-600/30 text-purple-300">
-              {job.splitSequence === 1 ? 'TICKET A' : job.splitSequence === 2 ? 'TICKET B' : `TICKET ${String.fromCharCode(64 + (job.splitSequence || 1))}`}
+      {/* Row 1: Identity: type, well, quantity, and linked-ticket facts always stay together. */}
+      <div className="flex items-center gap-2 min-w-0">
+        <JobTypeBadge type={job.jobType} serviceType={job.serviceType} />
+        <span className="text-white font-medium text-sm break-words flex-1 min-w-0" title={job.ndicWellName || job.wellName}>
+          {job.ndicWellName || job.wellName}
+        </span>
+        {(() => {
+          const remaining = (job.loadCount || 1) - (job.loadsCompleted || 0);
+          return remaining > 1 ? (
+            <CategoryBadge className="bg-yellow-600/30 text-yellow-300 flex-shrink-0">
+              x{remaining}
             </CategoryBadge>
+          ) : null;
+        })()}
+        {job.splitGroupId && (
+          <CategoryBadge className="bg-purple-600/30 text-purple-300 flex-shrink-0">
+            {job.splitSequence === 1 ? 'TICKET A' : job.splitSequence === 2 ? 'TICKET B' : `TICKET ${String.fromCharCode(64 + (job.splitSequence || 1))}`}
+          </CategoryBadge>
+        )}
+      </div>
+
+      {/* Detail row — invoice #, drop-off, notes */}
+      {(job.invoiceNumber || job.ticketNumber || dropoff || job.notes) && (
+        <div className="flex flex-wrap items-center gap-x-3 gap-y-1 mt-1.5 ml-[48px] text-xs">
+          {(job.invoiceNumber || job.ticketNumber) && (
+            <span className="text-gray-400 flex-shrink-0">
+              <span className="text-gray-600">#</span>{job.invoiceNumber || job.ticketNumber}
+            </span>
+          )}
+          {dropoff && (
+            <span className="text-cyan-400/70 break-words" title={dropoff}>
+              → {dropoff}
+            </span>
+          )}
+          {job.notes && (
+            <span className="text-gray-500 italic break-words" title={job.notes}>
+              {job.notes}
+            </span>
           )}
         </div>
+      )}
 
-        <span className="flex-1" />
-
+      {/* Row 3: Status & action badges on their own row below well name and destination */}
+      <div className={`flex flex-wrap items-center justify-between gap-1.5 ${compact ? 'mt-1.5 pt-1' : 'mt-2 pt-1.5'} border-t border-gray-800/60`}>
         {/* Operational flags: recommendations, warnings, and special handling. */}
-        <div className="flex items-center gap-1.5 flex-shrink-0">
+        <div className="flex flex-wrap items-center gap-1.5">
           {isRecommendedNext && (
             <CategoryBadge
               className="bg-emerald-600/30 text-emerald-300"
@@ -4441,10 +4461,8 @@ function DispatchJobRow({ job, cancelDispatch, compact, onClickServiceWork, onRe
               Reason: {job.transferReason}
             </span>
           )}
-        </div>
 
-        {/* Job state: origin/progress followed by the current stage and its age. */}
-        <div className="flex items-center gap-1.5 flex-shrink-0">
+          {/* Job state: origin/progress followed by the current stage and its age. */}
           {job.source === 'driver' && (
             <CategoryBadge className="bg-emerald-600/30 text-emerald-300">
               Driver Started
@@ -4454,16 +4472,16 @@ function DispatchJobRow({ job, cancelDispatch, compact, onClickServiceWork, onRe
         </div>
 
         {/* Controls always remain the final group. */}
-        <div className="flex items-center gap-1 flex-shrink-0">
+        <div className="flex items-center gap-1.5 flex-shrink-0 ml-auto">
           {isClickable && (
-            <span className="text-gray-500 hover:text-gray-300 text-xs" title="Edit dispatch">
+            <span className="text-gray-500 hover:text-gray-300 text-xs p-1" title="Edit dispatch">
               &#9998;
             </span>
           )}
           {onReassign && (job.status === 'pending' || job.status === 'accepted') && (
             <button
               onClick={(e) => { e.stopPropagation(); onReassign(job); }}
-              className="text-blue-400/60 hover:text-blue-300 text-xs transition-colors"
+              className="text-blue-400/60 hover:text-blue-300 text-xs transition-colors p-1"
               title="Reassign to another driver"
             >👯</button>
           )}
@@ -4483,27 +4501,6 @@ function DispatchJobRow({ job, cancelDispatch, compact, onClickServiceWork, onRe
           >&#10005;</button>
         </div>
       </div>
-
-      {/* Detail row — invoice #, drop-off, notes */}
-      {(job.invoiceNumber || job.ticketNumber || dropoff || job.notes) && (
-        <div className="flex items-center gap-3 mt-1.5 ml-[42px] text-xs">
-          {(job.invoiceNumber || job.ticketNumber) && (
-            <span className="text-gray-400">
-              <span className="text-gray-600">#</span>{job.invoiceNumber || job.ticketNumber}
-            </span>
-          )}
-          {dropoff && (
-            <span className="text-cyan-400/70 truncate max-w-[200px]" title={dropoff}>
-              → {dropoff}
-            </span>
-          )}
-          {job.notes && (
-            <span className="text-gray-500 truncate max-w-[200px] italic" title={job.notes}>
-              {job.notes}
-            </span>
-          )}
-        </div>
-      )}
     </div>
   );
 }
@@ -4684,33 +4681,26 @@ function ActiveDispatchPanel({ dispatches, cancelDispatch, drivers, assignTransf
           {declinedJobs.map(job => (
             <div key={job.id} className="border border-red-600/30 rounded-lg overflow-hidden bg-red-950/20">
               <div className="px-4 py-3">
-                <div className="flex items-center gap-2">
+                {/* Row 1: Identity */}
+                <div className="flex items-center gap-2 min-w-0">
                   <JobTypeBadge type={job.jobType} serviceType={job.serviceType} />
-                  <span className="text-white font-medium text-sm truncate">{job.ndicWellName || job.wellName}</span>
+                  <span className="text-white font-medium text-sm break-words flex-1 min-w-0" title={job.ndicWellName || job.wellName}>{job.ndicWellName || job.wellName}</span>
                   {(() => {
                     const remaining = (job.loadCount || 1) - (job.loadsCompleted || 0);
                     return remaining > 1 ? (
                       <span className="px-1.5 py-0.5 bg-yellow-600/30 text-yellow-300 text-[10px] rounded font-bold flex-shrink-0">x{remaining}</span>
                     ) : null;
                   })()}
-                  <span className="px-2 py-0.5 bg-red-600/30 text-red-300 text-[10px] font-bold rounded">{job.status === 'cancelled' ? 'CANCELLED' : 'DECLINED'}</span>
-                  <span className="flex-1" />
-                  <button
-                    onClick={() => onReassignDeclined?.(job)}
-                    className="px-3 py-1 bg-blue-600 hover:bg-blue-500 text-white text-xs font-medium rounded transition-colors"
-                  >Reassign</button>
-                  <button
-                    onClick={() => {
-                      setConfirmDismissJob(job);
-                      setDismissError(null);
-                    }}
-                    className="px-3 py-1 bg-gray-700 hover:bg-gray-600 text-gray-300 text-xs font-medium rounded transition-colors"
-                    title="Accept decline and dismiss"
-                  >Dismiss</button>
                 </div>
-                {/* Decline details */}
-                <div className="mt-2 ml-[42px] space-y-1">
-                  <div className="flex items-center gap-2 text-xs">
+                {/* Row 2: Destination & decline details */}
+                <div className="mt-1.5 ml-[48px] space-y-1 text-xs">
+                  {job.disposal && (
+                    <div className="text-cyan-400/70 break-words">→ {job.disposal}</div>
+                  )}
+                  {(job.invoiceNumber || job.ticketNumber) && (
+                    <div className="text-gray-400"><span className="text-gray-600">#</span>{job.invoiceNumber || job.ticketNumber}</div>
+                  )}
+                  <div className="flex items-center gap-2">
                     <span className="text-red-400/80 font-medium">
                       {job.declinedBy || job.driverFirstName || job.driverName}
                     </span>
@@ -4719,14 +4709,28 @@ function ActiveDispatchPanel({ dispatches, cancelDispatch, drivers, assignTransf
                     )}
                   </div>
                   {job.declineReason && (
-                    <div className="text-gray-400 text-xs italic">&ldquo;{job.declineReason}&rdquo;</div>
+                    <div className="text-gray-400 italic break-words">&ldquo;{job.declineReason}&rdquo;</div>
                   )}
-                  {(job.invoiceNumber || job.ticketNumber) && (
-                    <span className="text-gray-400 text-xs"><span className="text-gray-600">#</span>{job.invoiceNumber || job.ticketNumber}</span>
-                  )}
-                  {job.disposal && (
-                    <span className="text-cyan-400/70 text-xs">→ {job.disposal}</span>
-                  )}
+                </div>
+                {/* Row 3: Status & action badges below well name and destination */}
+                <div className="flex flex-wrap items-center justify-between gap-1.5 mt-2 pt-1.5 border-t border-red-900/40">
+                  <span className="px-2 py-0.5 bg-red-600/30 text-red-300 text-[10px] font-bold rounded">
+                    {job.status === 'cancelled' ? 'CANCELLED' : 'DECLINED'}
+                  </span>
+                  <div className="flex items-center gap-2 ml-auto">
+                    <button
+                      onClick={() => onReassignDeclined?.(job)}
+                      className="px-3 py-1 bg-blue-600 hover:bg-blue-500 text-white text-xs font-medium rounded transition-colors"
+                    >Reassign</button>
+                    <button
+                      onClick={() => {
+                        setConfirmDismissJob(job);
+                        setDismissError(null);
+                      }}
+                      className="px-3 py-1 bg-gray-700 hover:bg-gray-600 text-gray-300 text-xs font-medium rounded transition-colors"
+                      title="Accept decline and dismiss"
+                    >Dismiss</button>
+                  </div>
                 </div>
               </div>
             </div>
@@ -4828,31 +4832,40 @@ function ActiveDispatchPanel({ dispatches, cancelDispatch, drivers, assignTransf
                   <div key={row.key}>{renderJob(row.jobs[0])}</div>
                 ) : (
                   <details key={row.key} className="rounded-lg bg-gray-900/50">
-                    <summary className="flex cursor-pointer list-none items-center gap-2 rounded-lg px-3 py-2 text-left hover:bg-gray-900/80">
-                      <JobTypeBadge type={row.jobs[0].jobType} />
-                      <span className="min-w-0 flex-1 truncate text-sm font-medium text-white" title={row.jobs[0].ndicWellName || row.jobs[0].wellName}>
-                        {row.jobs[0].ndicWellName || row.jobs[0].wellName}
-                      </span>
-                      <CategoryBadge className="bg-yellow-600/30 text-yellow-300">x{row.remainingLoads}</CategoryBadge>
-                      {recommendedByGroup.get(driverHash) && row.jobs.some(j => j.id === recommendedByGroup.get(driverHash)) && (
-                        <CategoryBadge className="bg-emerald-600/30 text-emerald-300">★ Next</CategoryBadge>
-                      )}
-                      {row.jobs.some(j => !!j.id && downByJobId.has(j.id)) && (
-                        <CategoryBadge className="bg-red-600 text-white">⚠ DOWN</CategoryBadge>
-                      )}
-                      {row.jobs[0].source === 'driver' && (
-                        <CategoryBadge className="bg-emerald-600/30 text-emerald-300">Driver Started</CategoryBadge>
-                      )}
-                      <CategoryBadge className={row.jobs[0].status === 'pending' ? 'bg-yellow-600/30 text-yellow-300' : 'bg-blue-600/30 text-blue-300'}>
-                        {row.jobs[0].status === 'pending' ? 'Pending' : 'Accepted'}
-                      </CategoryBadge>
-                      <span className="text-xs text-gray-400">▼</span>
-                    </summary>
-                    {(row.jobs[0].hauledTo || row.jobs[0].disposal || row.jobs[0].disposalName) && (
-                      <div className="truncate px-3 pb-1 text-xs text-cyan-400/70">
-                        → {row.jobs[0].hauledTo || row.jobs[0].disposal || row.jobs[0].disposalName}
+                    <summary className="cursor-pointer list-none rounded-lg px-3 py-2 text-left hover:bg-gray-900/80">
+                      {/* Row 1: Identity: type, well name, quantity, toggle */}
+                      <div className="flex items-center gap-2 min-w-0">
+                        <JobTypeBadge type={row.jobs[0].jobType} />
+                        <span className="min-w-0 flex-1 break-words text-sm font-medium text-white" title={row.jobs[0].ndicWellName || row.jobs[0].wellName}>
+                          {row.jobs[0].ndicWellName || row.jobs[0].wellName}
+                        </span>
+                        <CategoryBadge className="bg-yellow-600/30 text-yellow-300 flex-shrink-0">x{row.remainingLoads}</CategoryBadge>
+                        <span className="text-xs text-gray-400 ml-auto flex-shrink-0">▼</span>
                       </div>
-                    )}
+
+                      {/* Row 2: Destination */}
+                      {(row.jobs[0].hauledTo || row.jobs[0].disposal || row.jobs[0].disposalName) && (
+                        <div className="break-words mt-1.5 ml-[48px] text-xs text-cyan-400/70">
+                          → {row.jobs[0].hauledTo || row.jobs[0].disposal || row.jobs[0].disposalName}
+                        </div>
+                      )}
+
+                      {/* Row 3: Status badges on their own row below well name and destination */}
+                      <div className="flex flex-wrap items-center gap-1.5 mt-2 pt-1.5 border-t border-gray-800/60">
+                        {recommendedByGroup.get(driverHash) && row.jobs.some(j => j.id === recommendedByGroup.get(driverHash)) && (
+                          <CategoryBadge className="bg-emerald-600/30 text-emerald-300">★ Next</CategoryBadge>
+                        )}
+                        {row.jobs.some(j => !!j.id && downByJobId.has(j.id)) && (
+                          <CategoryBadge className="bg-red-600 text-white">⚠ DOWN</CategoryBadge>
+                        )}
+                        {row.jobs[0].source === 'driver' && (
+                          <CategoryBadge className="bg-emerald-600/30 text-emerald-300">Driver Started</CategoryBadge>
+                        )}
+                        <CategoryBadge className={row.jobs[0].status === 'pending' ? 'bg-yellow-600/30 text-yellow-300' : 'bg-blue-600/30 text-blue-300'}>
+                          {row.jobs[0].status === 'pending' ? 'Pending' : 'Accepted'}
+                        </CategoryBadge>
+                      </div>
+                    </summary>
                     <div className="space-y-1 border-t border-gray-700/50 p-2">
                       {row.jobs.map(job => <div key={job.id}>{renderJob(job)}</div>)}
                     </div>
