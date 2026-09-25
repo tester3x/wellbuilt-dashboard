@@ -775,7 +775,12 @@ export async function fetchWellHistoryUnified(wellName: string, limit: number = 
     processedSnapshot = await get(processedRef);
   } catch {
     const remote = await adminGetWellHistory(wellName);
-    const pulls = (remote.pulls || []).map((data) => historyPullFromRecord(data, wellName));
+    const pulls = (remote.pulls || [])
+      .filter((data) => {
+        const pid = String(data.packetId || '');
+        return !pid.startsWith('delete_') && !pid.startsWith('edit_') && data.requestType !== 'delete' && data.isDelete !== true && data.action !== 'delete';
+      })
+      .map((data) => historyPullFromRecord(data, wellName));
     return limit > 0 ? pulls.slice(0, limit) : pulls;
   }
 
@@ -789,9 +794,11 @@ export async function fetchWellHistoryUnified(wellName: string, limit: number = 
 
   processedSnapshot.forEach((child) => {
     const key = child.key || '';
-    // Skip edit_ prefixed records — these are raw edit requests, not processed pulls
-    if (key.startsWith('edit_')) return;
+    // Skip edit_ and delete_ prefixed records — these are mutation/audit records, not processed pulls
+    if (key.startsWith('edit_') || key.startsWith('delete_')) return;
     const data = child.val();
+    if (!data) return;
+    if (data.requestType === 'delete' || data.isDelete === true || data.action === 'delete') return;
     if (data.wellName &&
         data.wellName.toLowerCase().replace(/\s/g, '') === cleanWellName) {
       const tankTopInches = data.tankTopInches || (data.tankLevelFeet || 0) * 12;
@@ -991,7 +998,11 @@ export async function fetchWellHistory(wellName: string, limit: number = 0): Pro
   let matchedPackets = 0;
 
   snapshot.forEach((child) => {
+    const key = child.key || '';
+    if (key.startsWith('edit_') || key.startsWith('delete_')) return;
     const data = child.val();
+    if (!data) return;
+    if (data.requestType === 'delete' || data.isDelete === true || data.action === 'delete') return;
 
     // Match well name (normalize: lowercase, no spaces)
     if (data.wellName &&

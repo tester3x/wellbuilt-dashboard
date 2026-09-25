@@ -1,6 +1,6 @@
 'use client';
 
-import { useEffect, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import { useAuth } from '@/contexts/AuthContext';
 import { canViewGlobalWellPool } from '@/lib/tenantScope';
 import { adminGetWellPool, classifiedReadFailure } from '@/lib/adminDashboardCatalog';
@@ -19,6 +19,8 @@ export interface GovernedWellPool {
   statusUnavailable: boolean;
   /** Classified read-failure message when statusUnavailable, else undefined. */
   readError?: string;
+  /** Force an on-demand governed refresh (returns a promise that resolves when complete). */
+  refresh: () => Promise<void>;
 }
 
 /**
@@ -44,13 +46,61 @@ export function useGovernedWellPool(refreshMs = 60000): GovernedWellPool {
   const [notEntitled, setNotEntitled] = useState(false);
   const [statusUnavailable, setStatusUnavailable] = useState(false);
   const [readError, setReadError] = useState<string | undefined>(undefined);
+  const inFlightRefreshRef = useRef<Promise<void> | null>(null);
+
+  const fetchPool = useCallback(async (): Promise<void> => {
+    if (!user) {
+      setDataLoading(false);
+      return;
+    }
+    if (!canViewGlobalWellPool(user)) {
+      setWells([]); setRoutes([]); setNotEntitled(true);
+      setStatusUnavailable(false); setReadError(undefined); setDataLoading(false);
+      return;
+    }
+    setNotEntitled(false);
+    try {
+      const pool = await adminGetWellPool();
+      if (pool.canViewWellPool === false) {
+        setWells([]); setRoutes([]); setNotEntitled(true);
+        setStatusUnavailable(false); setReadError(undefined); setDataLoading(false);
+        return;
+      }
+      const wellsData = mergeWellPool(
+        (pool.wellConfig || {}) as Record<string, unknown>,
+        (pool.wellStatus || {}) as Record<string, unknown>,
+      );
+      const routeList = [...new Set(wellsData.map(w => w.route).filter((r): r is string => !!r))];
+      setWells(wellsData);
+      setRoutes(routeList.filter(r => r !== 'Unrouted'));
+      setStatusUnavailable(false); setReadError(undefined); setDataLoading(false);
+    } catch (err) {
+      setStatusUnavailable(true);
+      setWells([]); setRoutes([]);
+      setReadError(classifiedReadFailure('well live status', err));
+      setDataLoading(false);
+      throw err;
+    }
+  }, [user]);
+
+  const refresh = useCallback(async (): Promise<void> => {
+    if (inFlightRefreshRef.current) return inFlightRefreshRef.current;
+    const task = (async () => {
+      try {
+        await fetchPool();
+      } catch (err) {
+        console.warn('[useGovernedWellPool] On-demand refresh caught error:', err);
+      } finally {
+        inFlightRefreshRef.current = null;
+      }
+    })();
+    inFlightRefreshRef.current = task;
+    return task;
+  }, [fetchPool]);
 
   useEffect(() => {
     if (loading) return;
     if (!user) { setDataLoading(false); return; }
-    // Tenant containment: only Owner / Liquid Gold / platform admins are entitled to
-    // the global pool. A scoped company has no governed own-pool read (backend gap)
-    // → empty by design, not an error and NOT a reason to try the forbidden RTDB path.
     if (!canViewGlobalWellPool(user)) {
       setWells([]); setRoutes([]); setNotEntitled(true);
       setStatusUnavailable(false); setReadError(undefined); setDataLoading(false);
@@ -64,31 +114,13 @@ export function useGovernedWellPool(refreshMs = 60000): GovernedWellPool {
 
     const load = async () => {
       try {
-        const pool = await adminGetWellPool();
-        if (cancelled) return;
-        if (pool.canViewWellPool === false) {
-          setWells([]); setRoutes([]); setNotEntitled(true);
-          setStatusUnavailable(false); setReadError(undefined); setDataLoading(false);
-          return;
-        }
-        const wellsData = mergeWellPool(
-          (pool.wellConfig || {}) as Record<string, unknown>,
-          (pool.wellStatus || {}) as Record<string, unknown>,
-        );
-        const routeList = [...new Set(wellsData.map(w => w.route).filter((r): r is string => !!r))];
-        setWells(wellsData);
-        setRoutes(routeList.filter(r => r !== 'Unrouted'));
-        setStatusUnavailable(false); setReadError(undefined); setDataLoading(false);
-      } catch (err) {
+        await fetchPool();
+      } catch {
         if (cancelled) return;
         attempts += 1;
         // Bounded retry ONLY because a cold-start token can finish restoring and make
         // the governed callable authorized — not a permanent denial.
-        if (attempts < 2) { retryTimer = setTimeout(load, 1500); return; }
-        setStatusUnavailable(true);
-        setWells([]); setRoutes([]);
-        setReadError(classifiedReadFailure('well live status', err));
-        setDataLoading(false);
+        if (attempts < 2) { retryTimer = setTimeout(load, 1500); }
       }
     };
 
@@ -99,7 +131,7 @@ export function useGovernedWellPool(refreshMs = 60000): GovernedWellPool {
       if (retryTimer) clearTimeout(retryTimer);
       if (refreshTimer) clearInterval(refreshTimer);
     };
-  }, [user, loading, refreshMs]);
+  }, [user, loading, refreshMs, fetchPool]);
 
-  return { wells, routes, dataLoading, notEntitled, statusUnavailable, readError };
+  return { wells, routes, dataLoading, notEntitled, statusUnavailable, readError, refresh };
 }
