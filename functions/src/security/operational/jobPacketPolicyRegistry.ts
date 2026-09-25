@@ -26,20 +26,22 @@ export const OILFIELD_PRODUCED_WATER_ALLOCATION_V1: PolicyDefinition = Object.fr
   kind: 'allocation',
   industryId: 'oil-gas',
   segmentId: 'produced-water',
-  title: 'Oilfield Produced Water Multi-Haul Pro-Rata Allocation Policy',
+  title: 'Oilfield Produced Water Multi-Haul Interval Allocation Policy',
   description:
-    'Apportions shared hauling hours, mileage, and disposal fees pro-rata across tickets based on delivered BBL volume. Requires single disposal destination and respects trailer capacity.',
+    'Attributes exclusive pickup intervals directly to their respective jobs with paused jobs accruing zero time, and allocates the post-last-pickup shared transit and disposal interval once across grouped loads sharing a disposal destination. Preserves individual ticket identity, rates, and trailer capacity limits.',
   unit: 'bbl',
   rules: Object.freeze({
     allowNegativeQuantities: false,
-    apportionmentMethod: 'pro_rata_volume',
+    apportionmentMethod: 'exclusive_pickup_plus_shared_interval',
     enforceTrailerCapacity: true,
+    isolatePausedIntervals: true,
     requireUniformDestination: true,
+    sharedIntervalAllocation: 'equal_split',
   }),
 });
 
 export const OILFIELD_PRODUCED_WATER_ALLOCATION_V1_HASH =
-  '6b160040faa20044f297033b9c62748b4b2647b1878a856fdb6fd8486d3407db';
+  '4599f06f82cbea03b3744c3170e006cd86d36ddf08e7eafd22ec73c002a8147b';
 
 export const OILFIELD_PRODUCED_WATER_SPLIT_ACTIVATION_V1: PolicyDefinition = Object.freeze({
   schemaVersion: 1,

@@ -255,7 +255,7 @@ describe('9. unknown and reserved capabilities fail closed', () => {
               allocationPolicy: {
                 policyId: 'oilfield-produced-water-allocation',
                 revision: 1,
-                contentHash: '6b160040faa20044f297033b9c62748b4b2647b1878a856fdb6fd8486d3407db',
+                contentHash: '4599f06f82cbea03b3744c3170e006cd86d36ddf08e7eafd22ec73c002a8147b',
               },
             },
           },
@@ -284,7 +284,7 @@ describe('9. unknown and reserved capabilities fail closed', () => {
             kind: 'allocation',
             policyId: 'oilfield-produced-water-allocation',
             revision: 1,
-            contentHash: '6b160040faa20044f297033b9c62748b4b2647b1878a856fdb6fd8486d3407db',
+            contentHash: '4599f06f82cbea03b3744c3170e006cd86d36ddf08e7eafd22ec73c002a8147b',
           },
           {
             kind: 'splitActivation',
