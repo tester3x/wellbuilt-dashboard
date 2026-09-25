@@ -16,7 +16,7 @@
       ]
     },
     {
-      "jobTypeId": "service",
+      "jobTypeId": "service-work",
       "label": "Service Work",
       "capabilities": [
         "lifecycle",
@@ -26,8 +26,18 @@
       ]
     },
     {
-      "jobTypeId": "service-work",
-      "label": "Service Work",
+      "jobTypeId": "ground-water",
+      "label": "Ground Water",
+      "capabilities": [
+        "lifecycle",
+        "pickup",
+        "multiHaul",
+        "splitTicket"
+      ]
+    },
+    {
+      "jobTypeId": "flow-back",
+      "label": "Flow Back",
       "capabilities": [
         "lifecycle",
         "pickup",
