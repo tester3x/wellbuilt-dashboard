@@ -23,6 +23,7 @@ import { wellDetailHref } from '@/lib/wellDetailLink';
 import { resolveDispatchDriver, dispatchDriverDisplayName, dispatchDriverGroupKey } from '@/lib/dispatchDriverIdentity';
 import { groupDispatchRows } from '@/lib/dispatchJobStacks';
 import { assignmentIdentityForDriver, canonicalIdFromApprovedRow, dispatchCreateTargetForAssignment, driverRealName } from '@/lib/dispatchWriterIdentity';
+import { projectDispatchDriverRoster } from '@/lib/dispatchRosterProjection';
 // Z Fold recovery — layout helpers only (collapsed queue / stacked layout).
 // Live status is read via the governed adminGetWellPool callable (see effect
 // below); the direct-client RTDB status path is claim-gated and not attempted.
@@ -966,56 +967,9 @@ function DispatchPageInner() {
     setDriversLoading(true);
     try {
       const catalog = await adminGetDashboardCatalog();
-      const approved: ApprovedDriver[] = [];
-      const data = (catalog.approved || {}) as Record<string, any>;
-
-      Object.entries(data).forEach(([hash, val]: [string, any]) => {
-          // Handle both flat and legacy nested formats
-          if (val.displayName) {
-            // Flat format
-            if (val.active !== false) {
-              approved.push({
-                key: hash,
-                driverId: canonicalIdFromApprovedRow(hash, val),
-                legacyAliases: [val.migratedToDriverId].filter(Boolean),
-                displayName: val.displayName,
-                legalName: val.legalName || val.profile?.legalName || '',
-                loginAlias: val.name || val.profile?.name || undefined,
-                active: val.active,
-                companyId: val.companyId,
-                companyName: val.companyName,
-                assignedRoutes: val.assignedRoutes || [],
-                phone: val.profile?.phone || '',
-              });
-            }
-          } else {
-            // Legacy nested format — grab first device
-            const deviceKeys = Object.keys(val);
-            if (deviceKeys.length > 0) {
-              const first = val[deviceKeys[0]];
-              if (first.active !== false && first.displayName) {
-                approved.push({
-                  key: hash,
-                  driverId: canonicalIdFromApprovedRow(hash, first),
-                  legacyAliases: [first.migratedToDriverId].filter(Boolean),
-                  displayName: first.displayName,
-                  legalName: first.legalName || first.profile?.legalName || '',
-                  loginAlias: first.name || first.profile?.name || undefined,
-                  active: first.active,
-                  companyId: first.companyId,
-                  companyName: first.companyName,
-                  assignedRoutes: first.assignedRoutes || [],
-                  phone: first.profile?.phone || '',
-                });
-              }
-            }
-          }
-        });
-
-      // Tenant containment (7/9): scoped users see only their own company's
-      // drivers (liquid-gold also owns legacy unstamped records).
-      const scoped = approved.filter(d => docBelongsToTenant(d.companyId, user?.companyId));
-      scoped.sort((a, b) => a.displayName.localeCompare(b.displayName));
+      // Canonical dispatch roster projection: unifies approved rows with modern
+      // canonical profiles (profiles-only drivers) under company containment.
+      const scoped = projectDispatchDriverRoster(catalog, user?.companyId);
       setDrivers(scoped);
       setReadErrors(prev => ({ ...prev, drivers: undefined }));
 

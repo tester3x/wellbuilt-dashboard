@@ -68,6 +68,16 @@ export const staffWriteDriverRoster = httpsV2.onCall(
       async updatePending(key, fields) {
         await rtdb.ref(`drivers/pending/${key}`).update(fields);
       },
+      async setProfile(driverId, fields) {
+        await rtdb.ref(`drivers/profiles/${driverId}`).set(fields);
+      },
+      async updateProfile(driverId, fields) {
+        await rtdb.ref(`drivers/profiles/${driverId}`).update(fields);
+      },
+      async getProfile(driverId) {
+        const snap = await rtdb.ref(`drivers/profiles/${driverId}`).once('value');
+        return snap.exists() ? (snap.val() as Record<string, unknown>) : null;
+      },
     };
     const outcome = await runStaffWriteDriverRoster({
       actingCompanyId: access.companyId,

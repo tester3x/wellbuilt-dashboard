@@ -2,6 +2,7 @@
  * Governed mutations of drivers/approved and drivers/pending.
  * Company comes from trusted authority. No generic path patch.
  */
+import { randomUUID } from 'crypto';
 import { fail, type StoreResult } from './jobPacketRevisionStore';
 
 export const STAFF_WRITE_DRIVER_ROSTER_CALLABLE = 'staffWriteDriverRoster';
@@ -36,6 +37,7 @@ export const ROSTER_REQUEST_KEYS = Object.freeze([
   'legalName',
   'assignedRoutes',
   'roles',
+  'driverId',
 ] as const);
 
 export const ROSTER_FORBIDDEN_KEYS = Object.freeze([
@@ -60,6 +62,9 @@ export type RosterStore = {
   setApproved(path: string, fields: Record<string, unknown>): Promise<void>;
   removeApproved(path: string): Promise<void>;
   updatePending(key: string, fields: Record<string, unknown>): Promise<void>;
+  setProfile?(driverId: string, fields: Record<string, unknown>): Promise<void>;
+  updateProfile?(driverId: string, fields: Record<string, unknown>): Promise<void>;
+  getProfile?(driverId: string): Promise<Record<string, unknown> | null>;
 };
 
 export type RosterRequest = {
@@ -77,6 +82,7 @@ export type RosterRequest = {
   legalName: string | null;
   assignedRoutes: string[] | null;
   roles: string[] | null;
+  driverId: string | null;
 };
 
 function isPlainObject(value: unknown): value is Record<string, unknown> {
@@ -145,6 +151,9 @@ export function parseStaffWriteDriverRoster(raw: unknown): StoreResult<RosterReq
     if (!Array.isArray(raw.roles) || raw.roles.length > 8) return fail('malformed_roles', 'roles');
     roles = raw.roles.map((r) => String(r).trim()).filter(Boolean);
   }
+  const driverId = parseKey(raw.driverId, 'driverId');
+  if (!driverId.ok) return driverId;
+
   return {
     ok: true,
     op: raw.op as RosterOp,
@@ -161,6 +170,7 @@ export function parseStaffWriteDriverRoster(raw: unknown): StoreResult<RosterReq
     legalName,
     assignedRoutes,
     roles,
+    driverId: driverId.value,
   };
 }
 
@@ -194,6 +204,12 @@ export async function runStaffWriteDriverRoster(input: {
     if (!tenantOk(pending, companyId)) return fail('cross_company', 'pendingKey');
     const existing = await input.store.getApproved(req.approvedKey);
     if (existing && !tenantOk(existing, companyId)) return fail('cross_company', 'approvedKey');
+
+    const candidate = req.driverId || pending.driverId || pending.migratedToDriverId;
+    const driverId = (typeof candidate === 'string' && candidate.trim() && candidate.includes('-'))
+      ? candidate.trim()
+      : (req.approvedKey && req.approvedKey.includes('-') ? req.approvedKey : randomUUID());
+
     const payload: Record<string, unknown> = {
       displayName: req.displayName || pending.displayName || '',
       legalName: req.legalName || pending.legalName || pending.displayName || '',
@@ -204,6 +220,8 @@ export async function runStaffWriteDriverRoster(input: {
       approvedAt: Date.now(),
       roles: req.roles && req.roles.length ? req.roles : ['driver'],
       companyId,
+      driverId,
+      migratedToDriverId: driverId,
     };
     if (req.companyName) payload.companyName = req.companyName;
     if (req.assignedCustomers) payload.assignedCustomers = req.assignedCustomers;
@@ -212,7 +230,25 @@ export async function runStaffWriteDriverRoster(input: {
       payload.registrationCompany = pending.companyName;
     }
     await input.store.setApproved(req.approvedKey, payload);
-    await input.store.updatePending(req.pendingKey, { status: 'approved' });
+    if (input.store.setProfile) {
+      const profilePayload: Record<string, unknown> = {
+        displayName: payload.displayName,
+        legalName: payload.legalName,
+        name: payload.name,
+        active: true,
+        isAdmin: payload.isAdmin,
+        isViewer: payload.isViewer,
+        approvedAt: payload.approvedAt,
+        roles: payload.roles,
+        companyId,
+        companyName: payload.companyName || null,
+        schemaVersion: 1,
+      };
+      if (payload.assignedCustomers) profilePayload.assignedCustomers = payload.assignedCustomers;
+      if (payload.assignedRoutes) profilePayload.assignedRoutes = payload.assignedRoutes;
+      await input.store.setProfile(driverId, profilePayload);
+    }
+    await input.store.updatePending(req.pendingKey, { status: 'approved', driverId });
     return { ok: true, op: req.op, path: req.approvedKey };
   }
 
@@ -234,6 +270,12 @@ export async function runStaffWriteDriverRoster(input: {
   } else if (req.op === 'toggleActive') {
     if (req.active === null) return fail('missing_field', 'active');
     patch.active = req.active;
+    if (input.store.updateProfile) {
+      const candidate = existing.driverId || existing.migratedToDriverId || (path.includes('-') ? path : null);
+      if (typeof candidate === 'string' && candidate) {
+        await input.store.updateProfile(candidate, { active: req.active });
+      }
+    }
   } else if (req.op === 'unlinkDashboard') {
     patch.dashboardUid = null;
     patch.dashboardRole = null;

@@ -349,6 +349,25 @@ export function projectDashboardCatalog(input: {
     (val) => pickAllowlisted(asRecord(val), CANONICAL_PROFILE_ALLOWLIST),
     filterCompany,
   );
+
+  // Project canonical profiles into approved for consumers that only read approved
+  for (const [profId, prof] of Object.entries(profiles)) {
+    const isAlreadyPresent = Object.entries(approved).some(
+      ([appKey, app]) =>
+        appKey === profId ||
+        app.driverId === profId ||
+        app.migratedToDriverId === profId,
+    );
+    if (!isAlreadyPresent) {
+      approved[profId] = pickAllowlisted(
+        {
+          ...prof,
+          driverId: profId,
+        },
+        APPROVED_ALLOWLIST,
+      );
+    }
+  }
   const users = projectMap(
     input.users,
     (val) => pickAllowlisted(asRecord(val), USER_ALLOWLIST),
