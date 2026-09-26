@@ -247,6 +247,7 @@ export async function runResolveExecutionBinding(input: {
           : execution.jobTypeId,
         lifecycleShape: pins.resolvedJobType.lifecycleShape || 'pickup_dropoff',
         capabilities: pins.resolvedJobType.capabilities || ['lifecycle', 'pickup'],
+        ...(pins.resolvedJobType.payBasis ? { payBasis: pins.resolvedJobType.payBasis } : {}),
       });
     }
   }

@@ -488,14 +488,34 @@ export interface CompanyConfig {
   roleCapabilities?: Partial<Record<import('./auth').UserRole, import('./auth').Capability[]>>;
 }
 
+export type CustomJobTypeFamily = 'pw' | 'service-work';
+export type CustomJobTypePayBasis = 'per_bbl' | 'hourly';
+export type CustomJobTypeLifecycle = 'pickup_dropoff' | 'onsite_only';
+
 export interface CustomJobType {
   id?: string;                    // company-scoped stable ID (e.g. 'ground-water')
-  label: string;                 // display label (e.g. 'Ground Water')
+  label: string;                 // customer-visible display label (e.g. 'Ground Water')
   packages: string[];            // which packages this type appears in, e.g. ['water-hauling', 'aggregate']
-  baseJobTypeId?: string;        // canonical governed base workflow: 'service-work' | 'fresh-water' | 'flowback-water' | 'pw'
-  lifecycleShape?: 'pickup_dropoff' | 'onsite_only'; // lifecycle shape
-  capabilities?: string[];       // explicit capability grants, e.g. ['lifecycle', 'pickup']
+  baseJobTypeId: CustomJobTypeFamily; // canonical governed base workflow: 'pw' | 'service-work'
+  payBasis?: CustomJobTypePayBasis;   // 'per_bbl' | 'hourly' (optional on legacy entries pending selection)
+  lifecycleShape: CustomJobTypeLifecycle; // 'pickup_dropoff' | 'onsite_only'
+  capabilities: string[];        // explicit capability grants, e.g. ['lifecycle', 'pickup']
 }
+
+export const CUSTOM_JOB_TYPE_FAMILIES: { value: CustomJobTypeFamily; label: string; description: string }[] = [
+  { value: 'pw', label: 'Production Water', description: 'Standard water production hauling' },
+  { value: 'service-work', label: 'Service Work', description: 'General oilfield service work' },
+];
+
+export const CUSTOM_JOB_TYPE_PAY_BASES: { value: CustomJobTypePayBasis; label: string }[] = [
+  { value: 'per_bbl', label: 'Per BBL' },
+  { value: 'hourly', label: 'Hourly' },
+];
+
+export const CUSTOM_JOB_TYPE_LIFECYCLES: { value: CustomJobTypeLifecycle; label: string; description: string }[] = [
+  { value: 'pickup_dropoff', label: 'Pickup -> Drop-off', description: 'Hauling from one location to another' },
+  { value: 'onsite_only', label: 'On Site only', description: 'Onsite tank transfer / vac pipe / roustabout support' },
+];
 
 // Must match WB T's COMMODITY_TYPES + HOURLY_COMMODITY_TYPES in utils/constants.ts
 export const JOB_TYPES = [

@@ -136,12 +136,15 @@ export function dispatchBindingsEqual(a: DispatchBinding, b: DispatchBinding): b
   return ca.ok && cb.ok && ca.json === cb.json;
 }
 
+export const ALLOWED_CUSTOM_FAMILIES: readonly string[] = Object.freeze(['pw', 'service-work']);
+
 export type ResolvedJobTypeInfo = {
   jobTypeId: string;
   baseJobTypeId: string;
   isCustom: boolean;
   capabilities?: readonly string[];
   lifecycleShape?: 'pickup_dropoff' | 'onsite_only';
+  payBasis?: 'per_bbl' | 'hourly';
 };
 
 export function resolveCanonicalJobType(
@@ -183,18 +186,35 @@ export function resolveCanonicalJobType(
       }
 
       if (id === entrySlug) {
+        // Reject if custom job type attempts to impersonate a built-in canonical ID
+        if (jobTypes.some((jt) => jt.jobTypeId === entrySlug)) {
+          return fail('canonical_collision', 'jobType');
+        }
+
         // Matched company custom job type
         const baseId = entryObj && typeof entryObj.baseJobTypeId === 'string' && entryObj.baseJobTypeId.trim()
           ? entryObj.baseJobTypeId.trim()
           : 'service-work';
+
+        // Base family must be an allowed governed family
+        if (!ALLOWED_CUSTOM_FAMILIES.includes(baseId)) {
+          return fail('unknown_job_type', 'baseJobTypeId');
+        }
+
         const baseMatch = jobTypes.find((jt) => jt.jobTypeId === baseId);
         if (!baseMatch) {
           return fail('unknown_job_type', 'baseJobTypeId');
         }
+
         const lifecycleShape: 'pickup_dropoff' | 'onsite_only' = entryObj?.lifecycleShape === 'onsite_only' ? 'onsite_only' : 'pickup_dropoff';
-        const customCaps = Array.isArray(entryObj?.capabilities)
+        const customCaps = Array.isArray(entryObj?.capabilities) && entryObj.capabilities.length > 0
           ? entryObj.capabilities.map((c) => String(c).trim()).filter(Boolean)
-          : ['lifecycle', 'pickup'];
+          : (lifecycleShape === 'onsite_only' ? ['lifecycle'] : ['lifecycle', 'pickup']);
+
+        const payBasis: 'per_bbl' | 'hourly' | undefined =
+          entryObj?.payBasis === 'per_bbl' || entryObj?.payBasis === 'hourly'
+            ? entryObj.payBasis
+            : undefined;
 
         return {
           ok: true,
@@ -203,6 +223,7 @@ export function resolveCanonicalJobType(
           isCustom: true,
           capabilities: customCaps,
           lifecycleShape,
+          ...(payBasis ? { payBasis } : {}),
         };
       }
     }

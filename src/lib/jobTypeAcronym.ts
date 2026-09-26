@@ -29,6 +29,8 @@ export const JOB_TYPE_ACRONYMS: Record<string, JobTypeBadgeInfo> = {
   sw: { code: 'SW', full: 'Service Work' },
   dw: { code: 'DW', full: 'Disposal Water' },
   fw: { code: 'FW', full: 'Fresh Water' },
+  gw: { code: 'GW', full: 'Ground Water' },
+  'ground-water': { code: 'GW', full: 'Ground Water' },
 };
 
 /**
