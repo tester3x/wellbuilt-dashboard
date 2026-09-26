@@ -4791,6 +4791,7 @@ export {
   getOwnDriverHydration,
   // Operational path hardening
   ingestDriverPacket,
+  reconcileDriverPacket,
   ingestWbmPull,
   ingestWbmEdit,
   upsertDriverShift,

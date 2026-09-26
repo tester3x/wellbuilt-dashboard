@@ -69,6 +69,19 @@ export const ingestDriverPacket = httpsV2.onCall(
     delete (packet as any).tier;
 
     const key = packetKey(packet, driver.driverId);
+    // Canonical packet identity the client minted (packetId, mirrored as
+    // idempotencyKey). Returning it lets a successful ingest retire the local
+    // durable queue entry immediately (client decidePullAttempt -> retire),
+    // instead of falling back to the idem_ storage key and being forced into an
+    // eventual-consistency reconcile against packets/processed (empty until
+    // processIncomingPull runs). Server still owns identity stamping above; this
+    // only echoes the client-supplied canonical id, never grants authority.
+    const canonicalPacketId =
+      typeof packet.packetId === 'string' && packet.packetId.trim()
+        ? packet.packetId.trim()
+        : typeof packet.idempotencyKey === 'string' && packet.idempotencyKey.trim()
+          ? packet.idempotencyKey.trim()
+          : undefined;
     const ref = admin.database().ref(`packets/incoming/${key}`);
     const existing = await ref.once('value');
     if (existing.exists()) {
@@ -79,7 +92,7 @@ export const ingestDriverPacket = httpsV2.onCall(
         driverId: driver.driverId,
         detail: { key },
       });
-      return { ok: true, key, duplicate: true };
+      return { ok: true, key, packetId: canonicalPacketId, duplicate: true };
     }
 
     await ref.set(packet);
@@ -89,6 +102,6 @@ export const ingestDriverPacket = httpsV2.onCall(
       driverId: driver.driverId,
       detail: { key, companyId: driver.companyId || null },
     });
-    return { ok: true, key, duplicate: false };
+    return { ok: true, key, packetId: canonicalPacketId, duplicate: false };
   },
 );

@@ -1,4 +1,5 @@
 export { ingestDriverPacket } from './packetIngest';
+export { reconcileDriverPacket } from './reconcileDriverPacket';
 export { ingestWbmPull } from './ingestWbmPull';
 export { ingestWbmEdit } from './ingestWbmEdit';
 export { upsertDriverShift } from './shiftWrite';
