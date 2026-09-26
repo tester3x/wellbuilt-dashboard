@@ -31,6 +31,9 @@ interface ApprovedDriver {
 
 interface DispatchJob {
   id?: string;
+  // 9/26/2026 — company scope for the dispatch. onDispatchCreate early-returns
+  // without it, so a job missing companyId is never announced to the driver.
+  companyId?: string;
   driverHash: string;
   driverName: string;
   driverFirstName?: string;  // First name from legalName (privacy — don't expose logins)
@@ -745,6 +748,16 @@ function DispatchPageInner() {
     };
   }, [selectedProject?.id]);
 
+  // 9/26/2026 — resolve the company scope to stamp on a dispatch doc.
+  // onDispatchCreate bails out unless the job carries companyId, so every
+  // Dashboard-created dispatch must set it or the driver is never notified.
+  // WB admins have no user.companyId, so fall back to the target driver's
+  // company — the same precedence trackJobTypeUsage already uses below.
+  const resolveJobCompanyId = useCallback(
+    (driver?: { companyId?: string }) => user?.companyId || driver?.companyId || '',
+    [user?.companyId],
+  );
+
   async function loadDriversData() {
     setDriversLoading(true);
     try {
@@ -958,6 +971,7 @@ function DispatchPageInner() {
         || assignTarget.wellName;
 
       const job: Omit<DispatchJob, 'id'> = {
+        ...(resolveJobCompanyId(driver) ? { companyId: resolveJobCompanyId(driver) } : {}),
         driverHash: assignDriverHash,
         driverName: driver.displayName,
         driverFirstName,
@@ -1045,6 +1059,7 @@ function DispatchPageInner() {
 
       const promises = selectedDrivers.map(driver => {
         const baseJob: Omit<DispatchJob, 'id'> = {
+          ...(resolveJobCompanyId(driver) ? { companyId: resolveJobCompanyId(driver) } : {}),
           driverHash: driver.key,
           driverName: driver.displayName,
           ...(driver.legalName ? { driverFirstName: getFirstName(driver) } : {}),
@@ -1250,6 +1265,7 @@ function DispatchPageInner() {
             // above. Optional string fields: null. Optional structured
             // groups: spread-omit. Firestore never sees `undefined`.
             await addDoc(collection(firestore, 'dispatches'), {
+              ...(resolveJobCompanyId(driver) ? { companyId: resolveJobCompanyId(driver) } : {}),
               driverHash,
               driverName: driver.displayName,
               driverFirstName,
@@ -1367,6 +1383,9 @@ function DispatchPageInner() {
           const wellData = wells.find(w => w.wellName === wellName);
           const driverDisposal = project.driverDisposals?.[driverHash];
           await addDoc(collection(firestore, 'dispatches'), {
+            ...(project.companyId || resolveJobCompanyId(driver)
+              ? { companyId: project.companyId || resolveJobCompanyId(driver) }
+              : {}),
             driverHash,
             driverName: driver.displayName,
             driverFirstName,
@@ -1456,6 +1475,9 @@ function DispatchPageInner() {
           const driverFirstName = driver.legalName ? driver.legalName.split(' ')[0] : driver.displayName;
           const driverDisposal = project.driverDisposals?.[driverHash];
           await addDoc(collection(firestore, 'dispatches'), {
+            ...(project.companyId || resolveJobCompanyId(driver)
+              ? { companyId: project.companyId || resolveJobCompanyId(driver) }
+              : {}),
             driverHash,
             driverName: driver.displayName,
             driverFirstName,
@@ -1564,6 +1586,9 @@ function DispatchPageInner() {
 
       // Create a new dispatch with the same job details but new driver
       const newJob: Record<string, any> = {
+        ...(reassignJob.companyId || resolveJobCompanyId(driver)
+          ? { companyId: reassignJob.companyId || resolveJobCompanyId(driver) }
+          : {}),
         driverHash: reassignDriverHash,
         driverName: driver.displayName,
         driverFirstName,
@@ -1719,6 +1744,7 @@ function DispatchPageInner() {
 
         const driverFirstName = driver.legalName ? driver.legalName.split(' ')[0] : driver.displayName;
         const job: Omit<DispatchJob, 'id'> = {
+          ...(resolveJobCompanyId(driver) ? { companyId: resolveJobCompanyId(driver) } : {}),
           driverHash: assignDriverHash,
           driverName: driver.displayName,
           driverFirstName,
@@ -1876,6 +1902,9 @@ function DispatchPageInner() {
         // Create new dispatch docs for added drivers
         const addPromises = newDrivers.map(driver => {
           const job: Omit<DispatchJob, 'id'> = {
+            ...(editSwJob.companyId || resolveJobCompanyId(driver)
+              ? { companyId: editSwJob.companyId || resolveJobCompanyId(driver) }
+              : {}),
             driverHash: driver.key,
             driverName: driver.displayName,
             ...(driver.legalName ? { driverFirstName: getFirstName(driver) } : {}),
@@ -1956,6 +1985,9 @@ function DispatchPageInner() {
         route: editSwJob.route || '',
         jobType: 'pw',
         packageId: editSwJob.packageId || 'water-hauling',
+        ...(editSwJob.companyId || resolveJobCompanyId(driver)
+          ? { companyId: editSwJob.companyId || resolveJobCompanyId(driver) }
+          : {}),
         status: 'pending',
         notes: editSwJob.notes || '',
         priority: editSwJob.priority,
