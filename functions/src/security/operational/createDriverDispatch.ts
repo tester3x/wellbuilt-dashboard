@@ -27,6 +27,10 @@ export const DRIVER_DISPATCH_CREATE_ALLOWLIST = Object.freeze([
   'driverPlanCount',
   'priority',
   'notes',
+  'splitGroupId',
+  'splitSequence',
+  'splitTotal',
+  'bbls',
 ] as const);
 
 export function pickDriverCreateFields(record: Record<string, unknown>): StoreResult<{ fields: Record<string, unknown> }> {
