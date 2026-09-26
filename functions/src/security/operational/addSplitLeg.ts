@@ -248,6 +248,7 @@ export async function runAddSplitLeg(input: {
   authorizedWells: readonly string[];
   getDispatch: (id: string) => Promise<Record<string, unknown> | null>;
   getRevision: (id: string) => Promise<{ exists: boolean; data?: Record<string, unknown> }>;
+  getCompany?: (id: string) => Promise<Record<string, unknown> | null>;
   listSiblings: (splitGroupId: string) => Promise<Array<{ id: string; data: Record<string, unknown> }>>;
   listInvoices?: (splitGroupId: string) => Promise<Array<{ id: string }>>;
   applyCreate: (id: string, data: Record<string, unknown>) => void;
@@ -296,7 +297,9 @@ export async function runAddSplitLeg(input: {
     selector.packetRef,
   );
   if (!loaded.ok) return loaded;
-  const pins = verifyDispatchPinsAgainstEnvelope(parent, loaded.envelope, input.caller.companyId);
+  const companyData = input.getCompany ? await input.getCompany(input.caller.companyId) : null;
+  const customJobTypes = Array.isArray(companyData?.customJobTypes) ? companyData!.customJobTypes : undefined;
+  const pins = verifyDispatchPinsAgainstEnvelope(parent, loaded.envelope, input.caller.companyId, customJobTypes);
   if (!pins.ok) return pins;
 
   const parentWell = readCanonicalWell(parent);
@@ -309,7 +312,7 @@ export async function runAddSplitLeg(input: {
   if (!wellGate.ok) return wellGate;
 
   const requestedType = (spec.jobType as string) || str(parent.jobTypeId) || str(parent.jobType);
-  const jobType = resolveCanonicalJobType(requestedType, loaded.envelope.jobTypes);
+  const jobType = resolveCanonicalJobType(requestedType, loaded.envelope.jobTypes, customJobTypes);
   if (!jobType.ok) return jobType;
 
   const splitGroupId = str(parent.splitGroupId);

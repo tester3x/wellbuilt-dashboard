@@ -131,6 +131,7 @@ export async function runResolveExecutionBinding(input: {
   caller: { driverId: string; companyId: string } | null;
   getDispatch: (id: string) => Promise<Record<string, unknown> | null>;
   getRevision: (id: string) => Promise<{ exists: boolean; data?: Record<string, unknown> }>;
+  getCompany?: (id: string) => Promise<Record<string, unknown> | null>;
   writes?: unknown[];
 }): Promise<StoreResult<ExecutionBindingResult>> {
   if (input.writes) input.writes.length = 0;
@@ -169,7 +170,9 @@ export async function runResolveExecutionBinding(input: {
     selector.packetRef,
   );
   if (!loaded.ok) return loaded;
-  const pins = verifyDispatchPinsAgainstEnvelope(existing, loaded.envelope, companyId);
+  const companyData = input.getCompany ? await input.getCompany(companyId) : null;
+  const customJobTypes = Array.isArray(companyData?.customJobTypes) ? companyData!.customJobTypes : undefined;
+  const pins = verifyDispatchPinsAgainstEnvelope(existing, loaded.envelope, companyId, customJobTypes);
   if (!pins.ok) return pins;
   const expected = stampDispatchBinding(loaded.envelope);
   if (expected.contentHash !== bound.binding.contentHash) {
@@ -216,15 +219,35 @@ export async function runResolveExecutionBinding(input: {
     : Array.isArray(loaded.envelope.jobTypes)
       ? (loaded.envelope.jobTypes as Array<Record<string, unknown>>)
       : [];
-  if (jobTypes.length > 0 && Array.isArray(baseDef.capabilities)) {
+  if (Array.isArray(baseDef.capabilities)) {
     const matchingJobType = jobTypes.find(
       (jt) => jt && typeof jt === 'object' && jt.jobTypeId === execution.jobTypeId,
     );
+    let allowedCaps: Set<string> | null = null;
     if (matchingJobType && Array.isArray(matchingJobType.capabilities)) {
-      const allowedCaps = new Set(matchingJobType.capabilities.map((c) => String(c)));
+      allowedCaps = new Set(matchingJobType.capabilities.map((c) => String(c)));
+    } else if (pins.resolvedJobType?.capabilities) {
+      allowedCaps = new Set(pins.resolvedJobType.capabilities.map((c) => String(c)));
+    }
+    if (allowedCaps) {
       baseDef.capabilities = (baseDef.capabilities as Array<Record<string, unknown>>).filter(
-        (cap) => cap && typeof cap === 'object' && allowedCaps.has(String(cap.capabilityId)),
+        (cap) => cap && typeof cap === 'object' && allowedCaps!.has(String(cap.capabilityId)),
       );
+    }
+  }
+  if (pins.resolvedJobType?.isCustom && Array.isArray(baseDef.jobTypes)) {
+    const exists = (baseDef.jobTypes as Array<Record<string, unknown>>).some(
+      (jt) => jt && typeof jt === 'object' && jt.jobTypeId === execution.jobTypeId,
+    );
+    if (!exists) {
+      (baseDef.jobTypes as Array<Record<string, unknown>>).push({
+        jobTypeId: execution.jobTypeId,
+        label: typeof existing.serviceType === 'string' && existing.serviceType.trim()
+          ? existing.serviceType.trim()
+          : execution.jobTypeId,
+        lifecycleShape: pins.resolvedJobType.lifecycleShape || 'pickup_dropoff',
+        capabilities: pins.resolvedJobType.capabilities || ['lifecycle', 'pickup'],
+      });
     }
   }
 

@@ -136,17 +136,78 @@ export function dispatchBindingsEqual(a: DispatchBinding, b: DispatchBinding): b
   return ca.ok && cb.ok && ca.json === cb.json;
 }
 
+export type ResolvedJobTypeInfo = {
+  jobTypeId: string;
+  baseJobTypeId: string;
+  isCustom: boolean;
+  capabilities?: readonly string[];
+  lifecycleShape?: 'pickup_dropoff' | 'onsite_only';
+};
+
 export function resolveCanonicalJobType(
   requested: unknown,
   jobTypes: readonly JobTypeEntry[],
-): StoreResult<{ jobTypeId: string }> {
+  customJobTypes?: unknown[],
+): StoreResult<ResolvedJobTypeInfo> {
   if (typeof requested !== 'string' || !requested.trim()) return fail('job_type_required', 'jobType');
   const id = requested.trim();
   const matches = jobTypes.filter((jt) => jt.jobTypeId === id);
-  if (matches.length === 1) return { ok: true, jobTypeId: matches[0].jobTypeId };
+  if (matches.length === 1) {
+    return {
+      ok: true,
+      jobTypeId: matches[0].jobTypeId,
+      baseJobTypeId: matches[0].jobTypeId,
+      isCustom: false,
+      capabilities: matches[0].capabilities,
+      lifecycleShape: 'pickup_dropoff',
+    };
+  }
   if (matches.length > 1) return fail('ambiguous_job_type', 'jobType');
   const labelHits = jobTypes.filter((jt) => jt.label === id);
   if (labelHits.length) return fail('job_type_label_only', 'jobType');
+
+  // Check company custom job types if provided
+  if (Array.isArray(customJobTypes) && customJobTypes.length > 0) {
+    for (const rawEntry of customJobTypes) {
+      if (!rawEntry) continue;
+      const entryObj = typeof rawEntry === 'object' && !Array.isArray(rawEntry) ? (rawEntry as Record<string, unknown>) : null;
+      const entryLabel = entryObj && typeof entryObj.label === 'string' ? entryObj.label.trim() : (typeof rawEntry === 'string' ? rawEntry.trim() : '');
+      if (!entryLabel) continue;
+      const entrySlug = (entryObj && typeof entryObj.id === 'string' && entryObj.id.trim())
+        ? entryObj.id.trim()
+        : entryLabel.toLowerCase().replace(/[\s_]+/g, '-');
+
+      // Reject if caller supplied the display label directly instead of the canonical slug
+      if (id.toLowerCase() === entryLabel.toLowerCase() && id !== entrySlug) {
+        return fail('job_type_label_only', 'jobType');
+      }
+
+      if (id === entrySlug) {
+        // Matched company custom job type
+        const baseId = entryObj && typeof entryObj.baseJobTypeId === 'string' && entryObj.baseJobTypeId.trim()
+          ? entryObj.baseJobTypeId.trim()
+          : 'service-work';
+        const baseMatch = jobTypes.find((jt) => jt.jobTypeId === baseId);
+        if (!baseMatch) {
+          return fail('unknown_job_type', 'baseJobTypeId');
+        }
+        const lifecycleShape: 'pickup_dropoff' | 'onsite_only' = entryObj?.lifecycleShape === 'onsite_only' ? 'onsite_only' : 'pickup_dropoff';
+        const customCaps = Array.isArray(entryObj?.capabilities)
+          ? entryObj.capabilities.map((c) => String(c).trim()).filter(Boolean)
+          : ['lifecycle', 'pickup'];
+
+        return {
+          ok: true,
+          jobTypeId: entrySlug,
+          baseJobTypeId: baseId,
+          isCustom: true,
+          capabilities: customCaps,
+          lifecycleShape,
+        };
+      }
+    }
+  }
+
   return fail('unknown_job_type', 'jobType');
 }
 
@@ -448,7 +509,8 @@ export function verifyDispatchPinsAgainstEnvelope(
   dispatch: Record<string, unknown>,
   envelope: ImmutableRevisionEnvelope,
   expectedCompanyId: string,
-): StoreResult<{ binding: DispatchBinding }> {
+  companyCustomJobTypes?: unknown[],
+): StoreResult<{ binding: DispatchBinding; resolvedJobType: ResolvedJobTypeInfo }> {
   const bound = requireCompleteBinding(dispatch);
   if (!bound.ok) return bound;
   const company = typeof dispatch.companyId === 'string' ? dispatch.companyId.trim() : '';
@@ -464,9 +526,9 @@ export function verifyDispatchPinsAgainstEnvelope(
   const candidate = typeof dispatch.jobTypeId === 'string' && dispatch.jobTypeId.trim()
     ? dispatch.jobTypeId.trim()
     : dispatch.jobType;
-  const jobType = resolveCanonicalJobType(candidate, envelope.jobTypes);
+  const jobType = resolveCanonicalJobType(candidate, envelope.jobTypes, companyCustomJobTypes);
   if (!jobType.ok) return jobType;
-  return { ok: true, binding: bound.binding };
+  return { ok: true, binding: bound.binding, resolvedJobType: jobType };
 }
 
 export function rejectBindingMutation(

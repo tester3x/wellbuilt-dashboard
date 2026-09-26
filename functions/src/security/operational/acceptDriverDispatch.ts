@@ -106,6 +106,7 @@ export async function runAcceptDriverDispatch(input: {
   targetStatus?: unknown;
   getDispatch: (id: string) => Promise<Record<string, unknown> | null>;
   getRevision: (id: string) => Promise<{ exists: boolean; data?: Record<string, unknown> }>;
+  getCompany?: (id: string) => Promise<Record<string, unknown> | null>;
   applyUpdate: (id: string, patch: Record<string, unknown>) => void;
 }): Promise<StoreResult<{ result: 'accepted' | 'already_accepted'; status: string; dispatchId: string; revisionDocId: string }>> {
   const id = parseDispatchId(input.dispatchId);
@@ -138,7 +139,9 @@ export async function runAcceptDriverDispatch(input: {
     selector.packetRef,
   );
   if (!loaded.ok) return loaded;
-  const pins = verifyDispatchPinsAgainstEnvelope(existing, loaded.envelope, input.caller.companyId);
+  const companyData = input.getCompany ? await input.getCompany(input.caller.companyId) : null;
+  const customJobTypes = Array.isArray(companyData?.customJobTypes) ? companyData!.customJobTypes : undefined;
+  const pins = verifyDispatchPinsAgainstEnvelope(existing, loaded.envelope, input.caller.companyId, customJobTypes);
   if (!pins.ok) return pins;
   const revisionDocIdStr = loaded.revisionDocId;
   if (decided.result === 'already_accepted') {

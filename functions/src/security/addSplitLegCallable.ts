@@ -52,6 +52,10 @@ export const addSplitLeg = httpsV2.onCall(
           const snap = await tx.get(fs.collection(REVISION_COLLECTION).doc(id));
           return { exists: snap.exists, data: snap.data() as Record<string, unknown> | undefined };
         },
+        getCompany: async (id) => {
+          const snap = await tx.get(fs.collection('companies').doc(id));
+          return snap.exists ? (snap.data() as Record<string, unknown>) : null;
+        },
         listSiblings: async (splitGroupId) => {
           const snap = await tx.get(
             fs.collection('dispatches').where('splitGroupId', '==', splitGroupId),

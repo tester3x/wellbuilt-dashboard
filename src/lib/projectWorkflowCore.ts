@@ -231,7 +231,7 @@ export async function executeCreateProjectWorkflow(
           serviceType: projectData.serviceType || null,
           jobTypeId: projectData.jobType === 'pw' ? 'pw' : canonicalJobTypeIdForServiceType(projectData.serviceType),
           packageId: 'water-hauling',
-          packetRevision: 3,
+          packetRevision: 4,
           status: 'pending',
           priority: 500,
           assignedAt: new Date().toISOString(),

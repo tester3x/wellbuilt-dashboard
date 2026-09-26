@@ -489,8 +489,12 @@ export interface CompanyConfig {
 }
 
 export interface CustomJobType {
-  label: string;
-  packages: string[];  // which packages this type appears in, e.g. ['water-hauling', 'aggregate']
+  id?: string;                    // company-scoped stable ID (e.g. 'ground-water')
+  label: string;                 // display label (e.g. 'Ground Water')
+  packages: string[];            // which packages this type appears in, e.g. ['water-hauling', 'aggregate']
+  baseJobTypeId?: string;        // canonical governed base workflow: 'service-work' | 'fresh-water' | 'flowback-water' | 'pw'
+  lifecycleShape?: 'pickup_dropoff' | 'onsite_only'; // lifecycle shape
+  capabilities?: string[];       // explicit capability grants, e.g. ['lifecycle', 'pickup']
 }
 
 // Must match WB T's COMMODITY_TYPES + HOURLY_COMMODITY_TYPES in utils/constants.ts

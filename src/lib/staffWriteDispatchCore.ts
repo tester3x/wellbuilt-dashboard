@@ -628,18 +628,19 @@ export function resetGlobalCreationCoordinator(options?: CoordinatorOptions): vo
 }
 
 /**
- * Canonical jobTypeId mapping for water-hauling packet revision 3.
- * Resolves human-readable labels, legacy tokens, or slugs to one of the 6 canonical IDs:
+ * Canonical jobTypeId mapping for water-hauling packet revision 4.
+ * Resolves human-readable labels, legacy tokens, or slugs:
+ * Built-in global types:
  * - 'pw'
  * - 'service-work'
  * - 'fresh-water'
  * - 'flowback-water'
- * - 'frac-water'
- * - 'ground-water'
+ * Custom job types (e.g. 'ground-water') slugify to their canonical identifier.
  */
 export function canonicalJobTypeIdForServiceType(rawType: string | null | undefined): string {
-  const norm = (rawType || '').trim().toLowerCase().replace(/[\s_-]+/g, '');
-  if (!norm) return 'service-work';
+  const trimmed = (rawType || '').trim();
+  if (!trimmed) return 'service-work';
+  const norm = trimmed.toLowerCase().replace(/[\s_-]+/g, '');
 
   if (norm === 'pw' || norm === 'productionwater' || norm === 'producedwater') {
     return 'pw';
@@ -650,13 +651,11 @@ export function canonicalJobTypeIdForServiceType(rawType: string | null | undefi
   if (norm === 'flowbackwater' || norm === 'flowback') {
     return 'flowback-water';
   }
-  if (norm === 'fracwater' || norm === 'frac') {
-    return 'frac-water';
+  if (norm === 'servicework' || norm === 'service') {
+    return 'service-work';
   }
-  if (norm === 'groundwater' || norm === 'ground') {
-    return 'ground-water';
-  }
-  return 'service-work';
+  // Custom job types slugify to match company.customJobTypes
+  return trimmed.toLowerCase().replace(/[\s_]+/g, '-');
 }
 
 /**
@@ -681,7 +680,7 @@ export function buildCreatePayload(record: Record<string, unknown>): Record<stri
     : 'water-hauling';
   const revision = typeof safe.packetRevision === 'number' && Number.isInteger(safe.packetRevision) && safe.packetRevision > 0
     ? safe.packetRevision
-    : (packageId === 'water-hauling' ? 3 : 1);
+    : (packageId === 'water-hauling' ? 4 : 1);
 
   if (typeof safe.jobTypeId === 'string' && safe.jobTypeId.trim()) {
     safe.jobTypeId = safe.jobTypeId.trim();

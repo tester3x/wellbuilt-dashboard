@@ -43,12 +43,16 @@ export const createDriverDispatchIfAbsent = httpsV2.onCall(
       const ref = fs.collection('dispatches').doc(dispatchId);
       const snap = await tx.get(ref);
       const existing = snap.exists ? (snap.data() as Record<string, unknown>) : null;
+      const compSnap = await tx.get(fs.collection('companies').doc(driver.companyId as string));
+      const compData = compSnap.exists ? (compSnap.data() as Record<string, unknown>) : null;
+      const customJobTypes = Array.isArray(compData?.customJobTypes) ? compData!.customJobTypes : undefined;
       const decided = evaluateDriverDispatchBirth({
         dispatchId,
         caller: { driverId: driver.driverId, companyId: driver.companyId as string },
         existing,
         record,
         envelope: revision.envelope,
+        companyCustomJobTypes: customJobTypes,
       });
       if (!decided.ok) throwFail(decided);
       if (decided.result === 'already_exists') {

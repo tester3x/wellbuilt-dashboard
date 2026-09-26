@@ -53,6 +53,10 @@ export const resolveExecutionBinding = httpsV2.onCall(
         const snap = await fs.collection(REVISION_COLLECTION).doc(id).get();
         return { exists: snap.exists, data: snap.data() as Record<string, unknown> | undefined };
       },
+      getCompany: async (id) => {
+        const snap = await fs.collection('companies').doc(id).get();
+        return snap.exists ? (snap.data() as Record<string, unknown>) : null;
+      },
     });
     if (!outcome.ok) throwFail(outcome);
     return {

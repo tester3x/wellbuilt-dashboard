@@ -42,6 +42,10 @@ export const acceptDriverDispatch = httpsV2.onCall(
           const snap = await tx.get(fs.collection(REVISION_COLLECTION).doc(id));
           return { exists: snap.exists, data: snap.data() as Record<string, unknown> | undefined };
         },
+        getCompany: async (id) => {
+          const snap = await tx.get(fs.collection('companies').doc(id));
+          return snap.exists ? (snap.data() as Record<string, unknown>) : null;
+        },
         applyUpdate: (id, patch) => {
           const mapped: Record<string, unknown> = { ...patch };
           if (mapped.acceptedAt === true) mapped.acceptedAt = FieldValue.serverTimestamp();

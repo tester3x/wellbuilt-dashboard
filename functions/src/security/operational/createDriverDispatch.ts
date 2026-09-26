@@ -72,6 +72,7 @@ export function evaluateDriverDispatchBirth(input: {
   existing: Record<string, unknown> | null;
   record: Record<string, unknown>;
   envelope: ImmutableRevisionEnvelope;
+  companyCustomJobTypes?: unknown[];
 }): StoreResult<{ result: 'create' | 'already_exists'; fields?: Record<string, unknown>; identity?: BirthIdentity }> {
   const id = parseDispatchId(input.dispatchId);
   if (!id.ok) return id;
@@ -81,7 +82,7 @@ export function evaluateDriverDispatchBirth(input: {
   const requestedJobType = (typeof picked.fields.jobTypeId === 'string' && picked.fields.jobTypeId.trim())
     ? picked.fields.jobTypeId.trim()
     : picked.fields.jobType;
-  const jobType = resolveCanonicalJobType(requestedJobType, input.envelope.jobTypes);
+  const jobType = resolveCanonicalJobType(requestedJobType, input.envelope.jobTypes, input.companyCustomJobTypes);
   if (!jobType.ok) return jobType;
   const binding = stampDispatchBinding(input.envelope);
   const well = canonicalWellFromRecord(picked.fields);

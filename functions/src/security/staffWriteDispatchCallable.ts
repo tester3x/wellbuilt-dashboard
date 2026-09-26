@@ -213,7 +213,10 @@ export const staffWriteDispatch = httpsV2.onCall(
       const requestedJobType = (typeof record.jobTypeId === 'string' && record.jobTypeId.trim())
         ? record.jobTypeId.trim()
         : record.jobType;
-      const jobType = resolveCanonicalJobType(requestedJobType, revision.envelope.jobTypes);
+      const compSnap = await fs.collection('companies').doc(decided.companyId).get();
+      const compData = compSnap.exists ? (compSnap.data() as Record<string, unknown>) : null;
+      const customJobTypes = Array.isArray(compData?.customJobTypes) ? compData!.customJobTypes : undefined;
+      const jobType = resolveCanonicalJobType(requestedJobType, revision.envelope.jobTypes, customJobTypes);
       if (!jobType.ok) throwDecided(jobType);
       const fields = pickDispatchFields(record, DISPATCH_CREATE_ALLOWLIST);
       delete fields.packageId;

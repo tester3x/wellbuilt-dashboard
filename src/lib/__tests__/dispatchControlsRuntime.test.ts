@@ -103,7 +103,7 @@ test('Dispatch Create: op=create, record is jsonSafe, returns dispatchId', async
   assert.equal(payload.op, 'create');
   assert.ok(typeof payload.dispatchId === 'string' && payload.dispatchId.length > 0, 'auto-mints dispatchId');
   assert.equal(inputRecord.dispatchId, payload.dispatchId, 'stamps stable dispatchId on caller record for idempotency');
-  assert.deepEqual(payload.packetRef, { packageId: 'water-hauling', revision: 3 }, 'supplies packetRef');
+  assert.deepEqual(payload.packetRef, { packageId: 'water-hauling', revision: 4 }, 'supplies packetRef');
   assert.equal(payload.record.wellName, 'W');
   assert.ok(!('assignedAt' in payload.record), 'assignedAt (Timestamp) is omitted for the server to stamp');
   assert.ok(!('companyId' in payload.record), 'companyId (Timestamp) is omitted for the server to derive');
