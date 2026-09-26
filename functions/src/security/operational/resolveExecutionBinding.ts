@@ -84,12 +84,18 @@ function isPlainObject(value: unknown): value is Record<string, unknown> {
 export function readDispatchExecutionContext(
   job: Record<string, unknown>,
 ): StoreResult<{ execution: DispatchExecutionContext }> {
-  if (!Object.prototype.hasOwnProperty.call(job, 'jobType')) {
+  let jobTypeId = '';
+  if (Object.prototype.hasOwnProperty.call(job, 'jobTypeId') && job.jobTypeId !== undefined && job.jobTypeId !== null) {
+    if (typeof job.jobTypeId !== 'string') return fail('malformed_execution', 'jobTypeId');
+    jobTypeId = job.jobTypeId.trim();
+    if (!jobTypeId) return fail('job_type_required', 'jobTypeId');
+  } else if (Object.prototype.hasOwnProperty.call(job, 'jobType') && job.jobType !== undefined && job.jobType !== null) {
+    if (typeof job.jobType !== 'string') return fail('malformed_execution', 'jobType');
+    jobTypeId = job.jobType.trim();
+    if (!jobTypeId) return fail('job_type_required', 'jobType');
+  } else {
     return fail('job_type_required', 'jobType');
   }
-  if (typeof job.jobType !== 'string') return fail('malformed_execution', 'jobType');
-  const jobTypeId = job.jobType.trim();
-  if (!jobTypeId) return fail('job_type_required', 'jobType');
   if (!Object.prototype.hasOwnProperty.call(job, 'wellName')) {
     return fail('missing_well_identity', 'wellName');
   }
@@ -204,6 +210,24 @@ export async function runResolveExecutionBinding(input: {
   ) {
     return fail('malformed_execution', 'execution');
   }
+  const baseDef = { ...(definitionSnap.value as Record<string, unknown>) };
+  const jobTypes = Array.isArray(baseDef.jobTypes)
+    ? (baseDef.jobTypes as Array<Record<string, unknown>>)
+    : Array.isArray(loaded.envelope.jobTypes)
+      ? (loaded.envelope.jobTypes as Array<Record<string, unknown>>)
+      : [];
+  if (jobTypes.length > 0 && Array.isArray(baseDef.capabilities)) {
+    const matchingJobType = jobTypes.find(
+      (jt) => jt && typeof jt === 'object' && jt.jobTypeId === execution.jobTypeId,
+    );
+    if (matchingJobType && Array.isArray(matchingJobType.capabilities)) {
+      const allowedCaps = new Set(matchingJobType.capabilities.map((c) => String(c)));
+      baseDef.capabilities = (baseDef.capabilities as Array<Record<string, unknown>>).filter(
+        (cap) => cap && typeof cap === 'object' && allowedCaps.has(String(cap.capabilityId)),
+      );
+    }
+  }
+
   return {
     ok: true,
     jobId: parsed.jobId,
@@ -220,7 +244,7 @@ export async function runResolveExecutionBinding(input: {
       wellName: execution.wellName,
       ndicWellName: execution.ndicWellName,
     },
-    definition: definitionSnap.value as Record<string, unknown>,
+    definition: baseDef,
     implementedEffects,
   };
 }

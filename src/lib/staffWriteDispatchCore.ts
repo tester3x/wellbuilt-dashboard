@@ -70,12 +70,13 @@ export function computeCreationUnitKey(record: Record<string, unknown>, unitKeyO
     ? record.driverId.trim().toLowerCase()
     : (typeof record.driverHash === 'string' ? record.driverHash.trim().toLowerCase() : '');
   const jobType = typeof record.jobType === 'string' ? record.jobType.trim().toLowerCase() : '';
+  const jobTypeId = typeof record.jobTypeId === 'string' ? record.jobTypeId.trim().toLowerCase() : '';
   const serviceType = typeof record.serviceType === 'string' ? record.serviceType.trim().toLowerCase() : '';
   const splitGroup = typeof record.splitGroupId === 'string' ? record.splitGroupId.trim() : '';
   const splitSeq = typeof record.splitSequence === 'number' ? String(record.splitSequence) : '';
   const project = typeof record.projectId === 'string' ? record.projectId.trim() : '';
 
-  return [well, driver, jobType, serviceType, splitGroup, splitSeq, project].join('::');
+  return [well, driver, jobType, jobTypeId, serviceType, splitGroup, splitSeq, project].join('::');
 }
 
 /**
@@ -91,6 +92,7 @@ export function materialBirthFieldsMatch(a: Record<string, unknown>, b: Record<s
   if (norm(a.driverHash) !== norm(b.driverHash)) return false;
   if (norm(a.driverId) !== norm(b.driverId)) return false;
   if (norm(a.jobType) !== norm(b.jobType)) return false;
+  if (norm(a.jobTypeId) !== norm(b.jobTypeId)) return false;
   if (norm(a.serviceType) !== norm(b.serviceType)) return false;
   if (norm(a.packageId) !== norm(b.packageId)) return false;
   if (norm(a.splitGroupId) !== norm(b.splitGroupId)) return false;
@@ -626,6 +628,38 @@ export function resetGlobalCreationCoordinator(options?: CoordinatorOptions): vo
 }
 
 /**
+ * Canonical jobTypeId mapping for water-hauling packet revision 3.
+ * Resolves human-readable labels, legacy tokens, or slugs to one of the 6 canonical IDs:
+ * - 'pw'
+ * - 'service-work'
+ * - 'fresh-water'
+ * - 'flowback-water'
+ * - 'frac-water'
+ * - 'ground-water'
+ */
+export function canonicalJobTypeIdForServiceType(rawType: string | null | undefined): string {
+  const norm = (rawType || '').trim().toLowerCase().replace(/[\s_-]+/g, '');
+  if (!norm) return 'service-work';
+
+  if (norm === 'pw' || norm === 'productionwater' || norm === 'producedwater') {
+    return 'pw';
+  }
+  if (norm === 'freshwater' || norm === 'fresh' || norm === 'fw') {
+    return 'fresh-water';
+  }
+  if (norm === 'flowbackwater' || norm === 'flowback') {
+    return 'flowback-water';
+  }
+  if (norm === 'fracwater' || norm === 'frac') {
+    return 'frac-water';
+  }
+  if (norm === 'groundwater' || norm === 'ground') {
+    return 'ground-water';
+  }
+  return 'service-work';
+}
+
+/**
  * Build payload for staffCreateDispatch.
  *
  * Preserves explicit or pre-minted dispatchId. If none provided, mints one via mintDispatchId().
@@ -647,7 +681,15 @@ export function buildCreatePayload(record: Record<string, unknown>): Record<stri
     : 'water-hauling';
   const revision = typeof safe.packetRevision === 'number' && Number.isInteger(safe.packetRevision) && safe.packetRevision > 0
     ? safe.packetRevision
-    : 1;
+    : (packageId === 'water-hauling' ? 3 : 1);
+
+  if (typeof safe.jobTypeId === 'string' && safe.jobTypeId.trim()) {
+    safe.jobTypeId = safe.jobTypeId.trim();
+  } else if (safe.jobType === 'pw') {
+    safe.jobTypeId = 'pw';
+  } else if (safe.jobType === 'service' || safe.serviceType) {
+    safe.jobTypeId = canonicalJobTypeIdForServiceType(safe.serviceType as string);
+  }
 
   delete safe.id;
   delete safe.dispatchId;

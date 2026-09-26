@@ -169,8 +169,20 @@ export function mergeWellPool(
       windowBblsDay: asStr(st.windowBblsDay) ?? well.windowBblsDay,
       bbls24hrs: asStr(st.bbls24hrs) ?? well.bbls24hrs,
       overnightBblsDay: asStr(st.overnightBblsDay) ?? well.overnightBblsDay,
-      isDown: st.wellDown === true || st.isDown === true || well.isDown,
-      wellDown: st.wellDown === true || well.wellDown,
+      // Live operational status (st.wellDown / st.isDown) overrides static
+      // catalog config when explicitly present as a boolean. Static
+      // well_config.isDown acts strictly as a fallback when operational
+      // status is absent — removing the previous irreversible OR-latch bug.
+      isDown: typeof st.wellDown === 'boolean'
+        ? st.wellDown
+        : typeof st.isDown === 'boolean'
+          ? st.isDown
+          : well.isDown === true,
+      wellDown: typeof st.wellDown === 'boolean'
+        ? st.wellDown
+        : typeof st.isDown === 'boolean'
+          ? st.isDown
+          : well.wellDown,
       status: typeof st.status === 'string' ? st.status : well.status,
     };
   });

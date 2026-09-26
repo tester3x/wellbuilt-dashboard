@@ -138,7 +138,7 @@ export function readSplitLegBirthIdentity(
   }
   const companyId = str(job.companyId);
   const driverId = str(job.driverId);
-  const jobTypeId = str(job.jobType);
+  const jobTypeId = str(job.jobTypeId) || str(job.jobType);
   if (!companyId) return fail('conflict', 'companyId');
   if (!driverId) return fail('conflict', 'driverId');
   if (!jobTypeId) return fail('conflict', 'jobType');
@@ -222,7 +222,8 @@ function materializeChild(input: {
     priority: typeof input.parent.priority === 'number' ? input.parent.priority : 5,
     onsiteBy: input.parent.onsiteBy ?? null,
     ...input.fields,
-    jobType: input.jobTypeId,
+    jobTypeId: input.jobTypeId,
+    jobType: input.jobTypeId === 'pw' ? 'pw' : 'service',
     ...input.binding,
     splitGroupId: input.splitGroupId,
     splitSequence: input.splitSequence,
@@ -307,7 +308,7 @@ export async function runAddSplitLeg(input: {
   );
   if (!wellGate.ok) return wellGate;
 
-  const requestedType = spec.jobType || str(parent.jobType);
+  const requestedType = (spec.jobType as string) || str(parent.jobTypeId) || str(parent.jobType);
   const jobType = resolveCanonicalJobType(requestedType, loaded.envelope.jobTypes);
   if (!jobType.ok) return jobType;
 

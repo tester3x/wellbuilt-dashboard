@@ -1023,6 +1023,10 @@ export const processIncomingPull = functionsV1.database
     // Immediately update down/up status so the app reflects the change
     // before the heavy AFR/bbls calculations finish
     await db.ref(`wells/${wellName}/status/isDown`).set(nextIsDown);
+    if (incomingHasAuthoritativeWellDown) {
+      const targetConfigKey = configSnap.key || wellName;
+      await db.ref(`well_config/${targetConfigKey}/isDown`).set(nextIsDown);
+    }
 
     // Calculate all fields
     const tankTopInches = (parseFloat(String(data.tankLevelFeet)) || 0) * 12;
@@ -1910,6 +1914,10 @@ export const processEditRequest = functionsV1.database
         [`packets/incoming/${context.params.packetId}`]: null,
       });
       await db.ref(`wells/${wellName}/status/isDown`).set(nextEditIsDown);
+      if (editIsAuthoritative) {
+        const targetConfigKey = configSnap.key || wellName;
+        await db.ref(`well_config/${targetConfigKey}/isDown`).set(nextEditIsDown);
+      }
       return null;
     }
 
@@ -2008,6 +2016,10 @@ export const processEditRequest = functionsV1.database
 
     // Update well down status if this is the latest packet (authority-gated)
     await db.ref(`wells/${wellName}/status/isDown`).set(nextEditIsDown);
+    if (editIsAuthoritative) {
+      const targetConfigKey = configSnap.key || wellName;
+      await db.ref(`well_config/${targetConfigKey}/isDown`).set(nextEditIsDown);
+    }
 
     // CASCADE: Recalculate flowRateDays on the NEXT packet after the edited one.
     // That packet's recovery was based on our old tankAfterInches — now stale.

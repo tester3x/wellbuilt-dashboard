@@ -16,6 +16,7 @@ export const DISPATCH_CREATE_ALLOWLIST = [
   'operator',
   'route',
   'jobType',
+  'jobTypeId',
   'serviceType',
   'packageId',
   'status',

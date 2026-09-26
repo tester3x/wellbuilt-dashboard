@@ -461,7 +461,10 @@ export function verifyDispatchPinsAgainstEnvelope(
     if (bound.binding.contentHash !== expected.contentHash) return fail('content_hash_mismatch', 'contentHash');
     return fail('policy_hash_mismatch', 'policyHash');
   }
-  const jobType = resolveCanonicalJobType(dispatch.jobType, envelope.jobTypes);
+  const candidate = typeof dispatch.jobTypeId === 'string' && dispatch.jobTypeId.trim()
+    ? dispatch.jobTypeId.trim()
+    : dispatch.jobType;
+  const jobType = resolveCanonicalJobType(candidate, envelope.jobTypes);
   if (!jobType.ok) return jobType;
   return { ok: true, binding: bound.binding };
 }

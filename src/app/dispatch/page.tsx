@@ -56,6 +56,7 @@ import {
   createServiceWorkWorkflow,
   executeServiceWorkWorkflow,
   cancelServiceWorkWorkflow,
+  canonicalJobTypeIdForServiceType,
   type ServiceWorkWorkflowState,
   createProjectWorkflow,
   executeCreateProjectWorkflow,
@@ -103,8 +104,10 @@ interface DispatchJob {
   operator?: string;
   route?: string;
   jobType: 'pw' | 'service';
+  jobTypeId?: string;
   serviceType?: string;
   packageId?: string;  // Job package ID (e.g. 'water-hauling', 'aggregate')
+  packetRevision?: number;
   status: 'pending' | 'pending_approval' | 'accepted' | 'in_progress' | 'paused' | 'completed' | 'cancelled' | 'declined' | 'dismissed';
   notes?: string;
   priority: number;
@@ -1251,7 +1254,9 @@ function DispatchPageInner() {
         ndicWellName: resolvedNdicName,
         route: assignTarget.route || '',
         jobType: 'pw',
+        jobTypeId: 'pw',
         packageId: 'water-hauling',
+        packetRevision: 3,
         status: 'pending',
         notes: assignNotes || '',
         priority: priority.sortOrder,
@@ -1885,7 +1890,9 @@ function DispatchPageInner() {
         ndicWellName: reassignJob.ndicWellName || reassignJob.wellName,
         route: reassignJob.route || '',
         jobType: reassignJob.jobType,
+        jobTypeId: reassignJob.jobTypeId || (reassignJob.jobType === 'pw' ? 'pw' : (reassignJob.serviceType ? canonicalJobTypeIdForServiceType(reassignJob.serviceType) : 'service-work')),
         packageId: reassignJob.packageId || 'water-hauling',
+        packetRevision: reassignJob.packetRevision || 3,
         status: 'pending',
         notes: reassignJob.notes || '',
         priority: reassignJob.priority,
@@ -2049,6 +2056,9 @@ function DispatchPageInner() {
           ndicWellName: resolvedNdic,
           route: well?.route || '',
           jobType: 'pw',
+          jobTypeId: 'pw',
+          packageId: 'water-hauling',
+          packetRevision: 3,
           status: 'pending',
           notes: assignNotes || '',
           priority: priority.sortOrder,
@@ -2287,7 +2297,9 @@ function DispatchPageInner() {
         ndicWellName: editSwJob.ndicWellName || editSwJob.wellName,
         route: editSwJob.route || '',
         jobType: 'pw',
+        jobTypeId: 'pw',
         packageId: editSwJob.packageId || 'water-hauling',
+        packetRevision: 3,
         status: 'pending',
         notes: editSwJob.notes || '',
         priority: editSwJob.priority,

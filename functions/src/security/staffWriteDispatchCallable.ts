@@ -210,7 +210,10 @@ export const staffWriteDispatch = httpsV2.onCall(
       if (!authWell.ok) throwDecided(authWell);
       const revision = await loadVerifiedRevision(decided.companyId, packet.packetRef);
       if (!revision.ok) throwDecided(revision);
-      const jobType = resolveCanonicalJobType(record.jobType, revision.envelope.jobTypes);
+      const requestedJobType = (typeof record.jobTypeId === 'string' && record.jobTypeId.trim())
+        ? record.jobTypeId.trim()
+        : record.jobType;
+      const jobType = resolveCanonicalJobType(requestedJobType, revision.envelope.jobTypes);
       if (!jobType.ok) throwDecided(jobType);
       const fields = pickDispatchFields(record, DISPATCH_CREATE_ALLOWLIST);
       delete fields.packageId;
@@ -242,7 +245,10 @@ export const staffWriteDispatch = httpsV2.onCall(
         tx.create(ref, {
           ...fields,
           ...binding,
-          jobType: jobType.jobTypeId,
+          jobTypeId: jobType.jobTypeId,
+          jobType: typeof fields.jobType === 'string' && fields.jobType.trim()
+            ? fields.jobType.trim()
+            : (jobType.jobTypeId === 'pw' ? 'pw' : 'service'),
           companyId: decided.companyId,
           status: decided.status || 'pending',
           assignedAt: FieldValue.serverTimestamp(),

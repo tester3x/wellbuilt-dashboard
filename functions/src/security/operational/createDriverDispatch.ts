@@ -18,6 +18,7 @@ export const DRIVER_DISPATCH_CREATE_ALLOWLIST = Object.freeze([
   'ndicWellName',
   'operator',
   'jobType',
+  'jobTypeId',
   'disposal',
   'hauledTo',
   'driverFirstName',
@@ -50,7 +51,8 @@ export function materializeDriverCreate(input: {
 }): Record<string, unknown> {
   return {
     ...input.fields,
-    jobType: input.jobTypeId,
+    jobTypeId: input.jobTypeId,
+    jobType: input.jobTypeId === 'pw' ? 'pw' : 'service',
     driverId: input.caller.driverId,
     companyId: input.caller.companyId,
     driverHash: input.caller.driverId,
@@ -76,7 +78,10 @@ export function evaluateDriverDispatchBirth(input: {
   if (!input.caller?.driverId || !input.caller.companyId) return fail('unauthenticated_driver');
   const picked = pickDriverCreateFields(input.record);
   if (!picked.ok) return picked;
-  const jobType = resolveCanonicalJobType(picked.fields.jobType, input.envelope.jobTypes);
+  const requestedJobType = (typeof picked.fields.jobTypeId === 'string' && picked.fields.jobTypeId.trim())
+    ? picked.fields.jobTypeId.trim()
+    : picked.fields.jobType;
+  const jobType = resolveCanonicalJobType(requestedJobType, input.envelope.jobTypes);
   if (!jobType.ok) return jobType;
   const binding = stampDispatchBinding(input.envelope);
   const well = canonicalWellFromRecord(picked.fields);

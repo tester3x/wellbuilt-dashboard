@@ -71,6 +71,38 @@ export interface ExecuteServiceWorkResult {
 }
 
 /**
+ * Canonical jobTypeId mapping for water-hauling packet revision 3.
+ * Resolves human-readable labels, legacy tokens, or slugs to one of the 6 canonical IDs:
+ * - 'pw'
+ * - 'service-work'
+ * - 'fresh-water'
+ * - 'flowback-water'
+ * - 'frac-water'
+ * - 'ground-water'
+ */
+export function canonicalJobTypeIdForServiceType(rawType: string | null | undefined): string {
+  const norm = (rawType || '').trim().toLowerCase().replace(/[\s_-]+/g, '');
+  if (!norm) return 'service-work';
+
+  if (norm === 'pw' || norm === 'productionwater' || norm === 'producedwater') {
+    return 'pw';
+  }
+  if (norm === 'freshwater' || norm === 'fresh' || norm === 'fw') {
+    return 'fresh-water';
+  }
+  if (norm === 'flowbackwater' || norm === 'flowback') {
+    return 'flowback-water';
+  }
+  if (norm === 'fracwater' || norm === 'frac') {
+    return 'frac-water';
+  }
+  if (norm === 'groundwater' || norm === 'ground') {
+    return 'ground-water';
+  }
+  return 'service-work';
+}
+
+/**
  * Creates a stable Service Work workflow identity object when the user enters or resets
  * the service-work workflow.
  */
@@ -163,7 +195,9 @@ export async function executeServiceWorkWorkflow(
       ...(onsiteBy ? { onsiteBy } : {}),
       jobType: 'service',
       serviceType: serviceType.trim(),
-      ...(packageId ? { packageId } : {}),
+      jobTypeId: canonicalJobTypeIdForServiceType(serviceType),
+      packageId: packageId || 'water-hauling',
+      packetRevision: 3,
       status: 'pending',
       notes: notes || '',
       priority: 5,

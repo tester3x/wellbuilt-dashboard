@@ -20,6 +20,7 @@
 
 import {
   DispatchCreationCoordinator,
+  canonicalJobTypeIdForServiceType,
 } from './staffWriteDispatchCore.ts';
 import type { CallableInvoker } from './staffWriteDispatchCore.ts';
 import { assignmentIdentityForDriver } from './dispatchWriterIdentity.ts';
@@ -228,6 +229,9 @@ export async function executeCreateProjectWorkflow(
           route: wellData?.route || '',
           jobType: projectData.jobType,
           serviceType: projectData.serviceType || null,
+          jobTypeId: projectData.jobType === 'pw' ? 'pw' : canonicalJobTypeIdForServiceType(projectData.serviceType),
+          packageId: 'water-hauling',
+          packetRevision: 3,
           status: 'pending',
           priority: 500,
           assignedAt: new Date().toISOString(),

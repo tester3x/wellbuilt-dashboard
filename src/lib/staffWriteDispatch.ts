@@ -45,6 +45,7 @@ export {
   ensureServiceWorkGroupIds,
   executeServiceWorkWorkflow,
   cancelServiceWorkWorkflow,
+  canonicalJobTypeIdForServiceType,
 } from './serviceWorkWorkflowCore';
 export type {
   ServiceWorkWorkflowState,
