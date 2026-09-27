@@ -175,6 +175,7 @@ export function DriversTab({ scopeCompanyId, isWbAdmin = false }: DriversTabProp
     setAssignmentPreview(null);
   };
   const [canonicalDrivers, setCanonicalDrivers] = useState<CanonicalWbmDriver[]>([]);
+  const [canonicalBindBusyDriverId, setCanonicalBindBusyDriverId] = useState<string | null>(null);
 
   // Combined approval modal (forces company + customers + route on approve)
   const [showApprovalModal, setShowApprovalModal] = useState(false);
@@ -513,6 +514,34 @@ export function DriversTab({ scopeCompanyId, isWbAdmin = false }: DriversTabProp
   };
 
   // ── Assign driver to a company (WB admin only) ──
+  // Canonical WB-M profiles can exist without a linked legacy approved row.
+  // Give those profiles the same governed, idempotent binding route instead
+  // of sending an unrelated legacy row through metadata-only staging.
+  const ensureCanonicalCompanyBinding = async (driver: CanonicalWbmDriver) => {
+    if (!isWbAdmin || canonicalBindBusyDriverId || !driver.active || !driver.companyId) return;
+    setCanonicalBindBusyDriverId(driver.driverId);
+    try {
+      const { adminBindCompany } = await import('@/lib/secureDriverAdmin');
+      const result = await adminBindCompany({
+        driverId: driver.driverId,
+        companyId: driver.companyId,
+      });
+      setMessage(
+        `${driver.displayName}: ${result.companyName || result.companyId} binding verified; shift authority ${result.authority}.`,
+      );
+      await loadDrivers();
+    } catch (err) {
+      const code = (err as { code?: string })?.code || '';
+      setMessage(
+        /permission-denied|unauthenticated/.test(code)
+          ? `Could not verify ${driver.displayName}: you are not authorized to bind this driver.`
+          : `Could not verify ${driver.displayName}'s company binding. No success was confirmed.`,
+      );
+    } finally {
+      setCanonicalBindBusyDriverId(null);
+    }
+  };
+
   //
   // TWO ROUTES, decided by the tested companyActionRouteFor:
   //   canonical row  → governed adminBindDriverCompany callable (initial
@@ -1487,18 +1516,30 @@ export function DriversTab({ scopeCompanyId, isWbAdmin = false }: DriversTabProp
                         : ` routes ${d.assignedRoutes?.length ?? 0} / wells ${d.assignedWells?.length ?? 0}`}
                     </div>
                   </div>
-                  <button
-                    onClick={() => {
-                      bumpAssignmentGeneration();
-                      setRouteTarget(d);
-                      setSelectedRoutes(d.assignedRoutes || []);
-                      setSelectedWells(d.assignedWells || []);
-                      setShowRoutesModal(true);
-                    }}
-                    className="px-3 py-1 text-sm rounded bg-blue-600 hover:bg-blue-500 text-white"
-                  >
-                    Preview WB-M routes
-                  </button>
+                  <div className="flex flex-wrap gap-2">
+                    {isWbAdmin && d.active && d.companyId && (
+                      <button
+                        onClick={() => ensureCanonicalCompanyBinding(d)}
+                        disabled={canonicalBindBusyDriverId !== null}
+                        className="px-3 py-1 text-sm rounded bg-teal-700 hover:bg-teal-600 disabled:opacity-50 text-white"
+                        title="Verify this canonical driver's existing company and initialize missing shift authority through the governed server function"
+                      >
+                        {canonicalBindBusyDriverId === d.driverId ? 'Verifying…' : 'Verify company & shift authority'}
+                      </button>
+                    )}
+                    <button
+                      onClick={() => {
+                        bumpAssignmentGeneration();
+                        setRouteTarget(d);
+                        setSelectedRoutes(d.assignedRoutes || []);
+                        setSelectedWells(d.assignedWells || []);
+                        setShowRoutesModal(true);
+                      }}
+                      className="px-3 py-1 text-sm rounded bg-blue-600 hover:bg-blue-500 text-white"
+                    >
+                      Preview WB-M routes
+                    </button>
+                  </div>
                 </div>
               ))}
           </div>
